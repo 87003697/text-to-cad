@@ -2,25 +2,37 @@
 
 This repository is a harness for script-driven CAD generation with coding agents like Codex and Claude Code.
 
-If you are modifying the viewer app itself, go to `viewer/README.md`.
+If you are modifying CAD Explorer itself, go to `.agents/skills/cad/explorer/README.md`.
 
 ## Skill Routing
 
 Use the bundled skills for workflow details:
 
-- `skills/cad/SKILL.md` for STEP, STL, DXF, GLB/topology artifacts, snapshots, and `@cad[...]` prompt references.
-- `skills/urdf/SKILL.md` for generated URDF files, `gen_urdf()`, robot links, joints, limits, and URDF mesh references.
-- `viewer/README.md` for viewer behavior, rendering UI, prompt capture UX, and frontend development. Do not read it just to form final CAD Explorer links; use the Viewer Handoff rules below.
+- `.agents/skills/cad/SKILL.md` for STEP, STL, 3MF, DXF, GLB/topology artifacts, snapshots, and `@cad[...]` prompt references.
+- `.agents/skills/urdf/SKILL.md` for generated URDF files, `gen_urdf()`, robot links, joints, limits, and URDF mesh references.
+- `.agents/skills/robot-motion/SKILL.md` for ROS 2/MoveIt dependency setup, running the motion server, and generating IK/path-planning artifacts for an existing URDF.
 
-`AGENTS.md` is intentionally harness-focused. Reusable CAD and URDF workflow rules live inside the skills.
+Use the URDF skill when generating or editing a robot description. If an existing valid URDF already exists, the robot-motion skill can attach motion artifacts to it directly; use robot-motion for inverse kinematics, path planning, motion artifact generation, and motion-server testing.
+
+`AGENTS.md` is intentionally harness-focused. Reusable CAD, URDF, robot-motion, and vendor-preflight workflow rules live inside the skills.
 
 ## Harness Context
 
-Project CAD files live under `models/`.
+Project CAD files are repo-relative. This harness does not reserve a
+project-file directory; the current robot-arm project keeps generated and source
+CAD entries at the repository root under folders such as `STEP/`, `STL/`,
+`DXF/`, and `3MF/`.
 
-The CAD and URDF skill tools are file-targeted. They do not depend on this harness's `models/` directory; `models/` is this repo's project layout.
+The CAD and URDF skill tools are file-targeted. They do not depend on a harness
+layout or prepend a project root.
 
-Project-specific context may live under `models/`. Keep project-local notes compact and do not copy reusable generator contracts, prompt-ref rules, validation policy, image review policy, or full CLI syntax into them; link to the CAD and URDF skill references instead.
+Project-specific context may live in compact root-level notes such as
+`PROJECT.md`. Do not copy reusable generator contracts, prompt-ref rules,
+validation policy, image review policy, vendor preflight policy, or full CLI
+syntax into them; link to the relevant skill references instead.
+
+CAD Explorer copies `@cad[...]` paths relative to the directory Vite was
+launched from and omits the `.step` or `.stp` suffix.
 
 ## Python Environment
 
@@ -36,8 +48,10 @@ create/install it from the repo root before running CAD tools:
 
 ```bash
 python3.11 -m venv .venv
-./.venv/bin/pip install -r requirements-cad.txt
+./.venv/bin/pip install -r .agents/skills/cad/requirements.txt
 ```
+
+Other bundled skills own their Python dependencies in their skill directories; install them only when using those workflows.
 
 ## Source Of Truth
 
@@ -46,62 +60,15 @@ python3.11 -m venv .venv
 - Do not hand-edit generated artifacts unless explicitly instructed. Edit the owning source file or imported source file first, then regenerate explicit targets with the relevant skill tool.
 - If regenerated output differs from checked-in generated files, the regenerated output is authoritative.
 
-## Prompt Artifacts
-
-The viewer may provide annotated screenshots and `@cad[...]` references. Treat screenshots as supporting context and `@cad[...]` refs as stable handles. If they disagree, trust the ref and source geometry, then use the screenshot to understand intent.
-
-Copied `@cad[...]` paths include the `models/` directory and omit the `.step` or `.stp` suffix. For ref grammar, selector semantics, stale-ref handling, and geometry-fact workflows, read `skills/cad/references/prompt-refs.md` and use `skills/cad/scripts/cadref`.
-
-Do not inspect viewer runtime assets to interpret prompt refs. Resolve refs from source STEP data through the CAD skill.
-
-## Viewer Handoff
-
-After editing or regenerating any viewer-displayable `.step`, `.stp`, `.stl`, `.dxf`, or `.urdf` entry, make CAD Explorer available and include links for the affected entries in the final response.
-
-Ensure the viewer server first:
-
-```bash
-npm --prefix viewer run dev:ensure
-```
-
-Viewer link rule: `file` is always relative to `dir`, and entry links must include `file=`.
-
-- Default scan root: `http://127.0.0.1:4178/?dir=models&file=<path-under-models-with-extension>`
-- Only use another scan root when it is intentional: `http://127.0.0.1:4178/?dir=<repo-relative-scan-dir>&file=<path-relative-to-that-dir-with-extension>`
-
-For CAD prompt refs, keep the entry `file=` and append URL-encoded `refs=` parameters. Python generators are not viewer entries; link their generated outputs. If only viewer app code changed, link the base viewer URL.
-
 ## Repo Policies
 
-- Keep project CAD files under `models/`.
-- Do not store generated review images under `models/`; use `/tmp/...`.
+- Keep project CAD files in explicit repo-relative locations.
 - Use explicit generation targets. Do not run directory-wide generation.
-- Let the split generation tools own viewer-consumed render assets. Do not build or edit separate viewer cache files.
 - Generation tools write and overwrite current configured outputs. They do not delete stale outputs when paths change.
 - Update project-local documentation only when project focus, entry roles, inventory, dependency notes, durable quirks, or preferred rebuild roots change.
-- Do not create per-entry README files.
-
-## Common Harness Commands
-
-Run from the repository root unless you intentionally want paths to resolve from another directory.
-
-```bash
-# Regenerate a CAD source
-./.venv/bin/python skills/cad/scripts/gen_step_part models/path/to/source.py
-
-# Regenerate an assembly source
-./.venv/bin/python skills/cad/scripts/gen_step_assembly models/path/to/assembly.py
-
-# Regenerate a URDF sidecar
-./.venv/bin/python skills/urdf/scripts/gen_urdf models/path/to/source.py
-
-# Inspect a CAD prompt ref
-./.venv/bin/python skills/cad/scripts/cadref inspect '@cad[models/path/to/entry]' --json
-
-# Render a quick review image
-./.venv/bin/python skills/cad/scripts/snapshot models/path/to/source.py \
-  --view isometric --out /tmp/cad-renders/review.png
-```
+- CAD outputs are often LFS-tracked, and broad status checks can invoke LFS clean filters while generated files are changing; prefer path-limited `git status` during CAD work.
+- For bookkeeping-only full status, use `git -c filter.lfs.clean= -c filter.lfs.smudge= -c filter.lfs.process= -c filter.lfs.required=false status --short`.
+- Never disable LFS filters for `git add`, commits, or other object-writing operations.
 
 ## Execution Notes
 
