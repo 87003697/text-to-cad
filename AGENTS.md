@@ -8,31 +8,31 @@ If you are modifying CAD Explorer itself, go to `.agents/skills/cad/explorer/REA
 
 Use the bundled skills for workflow details:
 
-- `.agents/skills/cad/SKILL.md` for STEP, STL, 3MF, DXF, GLB/topology artifacts, snapshots, and `@cad[...]` prompt references.
+- `.agents/skills/cad/SKILL.md` for STEP, STL, 3MF, DXF, GLB/topology artifacts, render images, and `@cad[...]` prompt references.
 - `.agents/skills/urdf/SKILL.md` for generated URDF files, `gen_urdf()`, robot links, joints, limits, and URDF mesh references.
 - `.agents/skills/robot-motion/SKILL.md` for ROS 2/MoveIt dependency setup, running the motion server, and generating IK/path-planning artifacts for an existing URDF.
 
 Use the URDF skill when generating or editing a robot description. If an existing valid URDF already exists, the robot-motion skill can attach motion artifacts to it directly; use robot-motion for inverse kinematics, path planning, motion artifact generation, and motion-server testing.
 
-`AGENTS.md` is intentionally harness-focused. Reusable CAD, URDF, robot-motion, and vendor-preflight workflow rules live inside the skills.
+`AGENTS.md` is intentionally harness-focused. Reusable CAD, URDF, and robot-motion workflow rules live inside the skills.
 
 ## Harness Context
 
 Project CAD files are repo-relative. This harness does not reserve a
-project-file directory; the current robot-arm project keeps generated and source
-CAD entries at the repository root under folders such as `STEP/`, `STL/`,
-`DXF/`, and `3MF/`.
+project-file directory. Project CAD entries may live at the repository root
+under folders such as `STEP/`, `STL/`, `DXF/`, and `3MF/`, or in another
+explicit repo-relative layout chosen by the project.
 
 The CAD and URDF skill tools are file-targeted. They do not depend on a harness
 layout or prepend a project root.
 
 Project-specific context may live in compact root-level notes such as
-`PROJECT.md`. Do not copy reusable generator contracts, prompt-ref rules,
-validation policy, image review policy, vendor preflight policy, or full CLI
-syntax into them; link to the relevant skill references instead.
+`PROJECT.md`. Do not copy reusable generator contracts, prompt-reference rules,
+validation policy, Explorer/link rules, image review policy, or full CLI syntax
+into them; link to the relevant skill references instead.
 
-CAD Explorer copies `@cad[...]` paths relative to the directory Vite was
-launched from and omits the `.step` or `.stp` suffix.
+For CAD Explorer scan-root, link, and `@cad[...]` behavior, defer to
+`.agents/skills/cad/SKILL.md` and its Explorer/rendering references.
 
 ## Python Environment
 
@@ -55,9 +55,8 @@ Other bundled skills own their Python dependencies in their skill directories; i
 
 ## Source Of Truth
 
-- Generated CAD and URDF outputs are derived artifacts.
-- Package-local render, topology, component, and review-image artifacts are derived artifacts.
-- Do not hand-edit generated artifacts unless explicitly instructed. Edit the owning source file or imported source file first, then regenerate explicit targets with the relevant skill tool.
+- Generated CAD, URDF, robot-motion outputs, Explorer sidecars, renders, topology, meshes, and flat-pattern artifacts are derived artifacts.
+- Do not hand-edit derived artifacts unless explicitly instructed. Edit the owning source file or imported source file first, then regenerate explicit targets with the relevant skill tool.
 - If regenerated output differs from checked-in generated files, the regenerated output is authoritative.
 
 ## Repo Policies
@@ -75,5 +74,5 @@ Other bundled skills own their Python dependencies in their skill directories; i
 - Start with the narrowest source-only search that can identify directly affected files.
 - Exclude generated artifacts, binary CAD files, caches, and build outputs from default searches unless the task explicitly targets them.
 - If the first pass makes scope clear, edit the source first and validate after.
-- Do not run generation tools, `cadref`, and `snapshot` in parallel against geometry that is still changing in the same edit loop. Rebuild first, then inspect, then render.
+- Do not run mutable generation, inspection, and render/review steps in parallel against geometry that is still changing in the same edit loop. Rebuild first, then inspect, then review.
 - In cloud or constrained environments, avoid full-repo hydration when affected entries are known. Fetch only the needed inputs, generated outputs, and LFS objects for the entries being edited and explicitly regenerated.

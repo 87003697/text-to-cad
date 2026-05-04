@@ -1,2 +1,2 @@
 [lfs]
-	fetchexclude = .agents/skills/**/assets/*.gif
+	fetchexclude = .assets/**,.agents/skills/**/assets/*.gif

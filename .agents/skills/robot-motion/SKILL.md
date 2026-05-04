@@ -14,11 +14,11 @@ Use this skill after a robot URDF exists and the task needs local motion behavio
 3. Verify the local motion environment with `scripts/check-motion-server.sh` when it may already exist; run `scripts/setup.sh` only when dependencies are missing or stale.
 4. Run the websocket motion server with `scripts/run-motion-server.sh`.
 5. Test protocol, artifact generation, and provider logic before handing off motion behavior.
-6. For CAD Explorer handoff of motion-enabled `.urdf` entries, use the CAD skill's Explorer handoff rules rather than duplicating link syntax here.
+6. For CAD Explorer handoff of motion-enabled `.urdf` entries, defer to the CAD skill and keep motion-specific metadata here.
 
 ## CAD Explorer Handoff
 
-Read `.agents/skills/cad/SKILL.md` for Explorer startup, URL format, and final-response handoff rules; if unavailable, use [cad-skill](https://github.com/earthtojake/cad-skill). Whenever a final response mentions a repo-local `.urdf` used by this skill, ensure CAD Explorer is available and link that URDF, even for check/server-only tasks. Keep motion-specific Explorer metadata and motion-server behavior in this skill.
+Read `.agents/skills/cad/SKILL.md`, then only load its `references/rendering-and-explorer.md` when a task needs an Explorer URL. If unavailable, use [cad-skill](https://github.com/earthtojake/cad-skill). Do not duplicate Explorer startup or URL syntax in this skill. Link the repo-local `.urdf` when motion artifacts or URDF targets were generated or changed, or when the user asks for browser review. Keep motion-specific Explorer metadata and motion-server behavior here.
 
 ## Commands
 
