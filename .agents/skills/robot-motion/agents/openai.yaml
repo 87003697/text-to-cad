@@ -1,4 +1,0 @@
-interface:
-  display_name: "Robot Motion"
-  short_description: "Install, run, and generate robot motion planning assets."
-  default_prompt: "Use $robot-motion to install ROS 2 motion dependencies, run the motion server, or generate IK and path-planning artifacts for a URDF."
