@@ -1,14 +1,14 @@
 <div align="center">
 
-<img src="assets/text-to-cad-demo.gif" alt="Demo of the text-to-cad harness generating and previewing CAD geometry" width="100%">
+<img src="assets/text-to-cad-demo.gif" alt="Demo of the CAD skill generating and previewing CAD geometry" width="100%">
 
 <br>
 
-# ⚙ Open Source CAD Skills And Harnesses ⚙
+# CAD Skills
 
-Open source CAD skills and harnesses for generating 3D models with your favorite coding agent
+A collection of agent skills for CAD, robotics and hardware design
 
-[Demo Explorer](https://demo.cadskills.xyz)
+[Docs](https://www.cadskills.xyz) | [Demo](https://demo.cadskills.xyz)
 
 [![GitHub stars](https://img.shields.io/github/stars/earthtojake/text-to-cad?style=for-the-badge&logo=github&label=Stars)](https://github.com/earthtojake/text-to-cad/stargazers)
 [![GitHub forks](https://img.shields.io/github/forks/earthtojake/text-to-cad?style=for-the-badge&logo=github&label=Forks)](https://github.com/earthtojake/text-to-cad/network/members)
@@ -34,11 +34,9 @@ Open source CAD skills and harnesses for generating 3D models with your favorite
 - **Reference** - Copy stable `@cad[...]` references so agents can make precise follow-up edits.
 - **Review** - Render quick review images for fast checks during an iteration loop.
 - **Reproduce** - Edit source files first, then regenerate explicit targets.
-- **Local** - Run the harness and CAD Explorer locally with no backend to host.
+- **Local** - Run harness, skills and explorer locally with no backend to host.
 
 ## 🧰 Skills
-
-This harness vendors file-targeted skills for CAD, URDF, SDF, SRDF/MoveIt2, and manufacturing-preflight work. Use the bundled copies here for local CAD projects, or use the dedicated repositories when installing the skills outside this harness.
 
 - **CAD Skill** - STEP, STL, 3MF, DXF, GLB/topology, render images, and `@cad[...]` geometry references. [Bundled skill](skills/cad/SKILL.md) · [Standalone repo](https://github.com/earthtojake/cad-skill)
 - **CAD Explorer Skill** - Start or reuse CAD Explorer and return visual review links for generated `.step`, `.stp`, `.stl`, `.3mf`, `.dxf`, `.urdf`, `.srdf`, and `.sdf` files. [Bundled skill](skills/cad-explorer/SKILL.md)
