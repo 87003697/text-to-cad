@@ -48,7 +48,6 @@ const installOptions = [
 const skillGroups = [
   {
     orbitSrc: "/skill-logos/cad-orbit.gif",
-    stillSrc: "/skill-logos/cad-iso.png",
     name: "CAD",
     path: "skills/cad",
     summary:
@@ -58,7 +57,6 @@ const skillGroups = [
   },
   {
     orbitSrc: "/skill-logos/cad-explorer-orbit.gif",
-    stillSrc: "/skill-logos/cad-explorer-iso.png",
     name: "CAD Explorer",
     path: "skills/cad-explorer",
     summary:
@@ -68,7 +66,6 @@ const skillGroups = [
   },
   {
     orbitSrc: "/skill-logos/urdf-orbit.gif",
-    stillSrc: "/skill-logos/urdf-iso.png",
     name: "URDF",
     path: "skills/urdf",
     summary:
@@ -78,7 +75,6 @@ const skillGroups = [
   },
   {
     orbitSrc: "/skill-logos/srdf-orbit.gif",
-    stillSrc: "/skill-logos/srdf-iso.png",
     name: "SRDF",
     path: "skills/srdf",
     summary:
@@ -88,7 +84,6 @@ const skillGroups = [
   },
   {
     orbitSrc: "/skill-logos/sdf-orbit.gif",
-    stillSrc: "/skill-logos/sdf-iso.png",
     name: "SDF",
     path: "skills/sdf",
     summary:
@@ -98,7 +93,6 @@ const skillGroups = [
   },
   {
     orbitSrc: "/skill-logos/sendcutsend-orbit.gif",
-    stillSrc: "/skill-logos/sendcutsend-iso.png",
     name: "SendCutSend",
     path: "skills/sendcutsend",
     summary:
@@ -171,14 +165,7 @@ export default function Home() {
                           width={160}
                           height={160}
                           unoptimized
-                          className="size-full object-contain p-0.5 motion-reduce:hidden"
-                        />
-                        <Image
-                          src={skill.stillSrc}
-                          alt=""
-                          width={160}
-                          height={160}
-                          className="hidden size-full object-contain p-0.5 motion-reduce:block"
+                          className="size-full object-contain p-0.5"
                         />
                       </div>
                       <div className="min-w-0">

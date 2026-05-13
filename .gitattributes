@@ -12,5 +12,3 @@ benchmarks/**/*.md !filter !diff !merge text
 **/.*.step/**/*.glb filter=lfs diff=lfs merge=lfs -text
 **/.*.step/topology.bin filter=lfs diff=lfs merge=lfs -text
 **/.*.step/topology.json filter=lfs diff=lfs merge=lfs -text
-docs/public/skill-logos/*.gif filter=lfs diff=lfs merge=lfs -text
-docs/public/skill-logos/*.png filter=lfs diff=lfs merge=lfs -text

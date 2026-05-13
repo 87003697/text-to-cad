@@ -33,20 +33,12 @@ export function SiteHeader() {
             <span className="relative size-12 shrink-0 overflow-hidden sm:size-16">
               <Image
                 src="/skill-logos/brain-cog-orbit.gif"
-                width={56}
-                height={56}
+                width={160}
+                height={160}
                 unoptimized
                 alt=""
                 aria-hidden="true"
-                className="size-full object-cover motion-reduce:hidden"
-              />
-              <Image
-                src="/skill-logos/brain-cog-iso.png"
-                width={56}
-                height={56}
-                alt=""
-                aria-hidden="true"
-                className="hidden size-full object-cover motion-reduce:block"
+                className="size-full object-cover"
               />
             </span>
             <h1 className="min-w-0 text-3xl font-semibold tracking-normal transition hover:opacity-80 sm:text-5xl">
