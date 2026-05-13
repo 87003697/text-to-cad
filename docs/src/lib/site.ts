@@ -17,7 +17,14 @@ export const siteConfig = {
   name: "CAD Skills",
   title: SITE_TITLE,
   description: SITE_DESCRIPTION,
-  keywords: ["CAD Skills", "text-to-cad", "CAD agents", "agent skills"],
+  keywords: [
+    "CAD Skills",
+    "text-to-cad",
+    "CAD agents",
+    "agent skills",
+    "step.parts",
+    "STEP parts",
+  ],
   origin: normalizeOrigin(process.env.NEXT_PUBLIC_SITE_URL, DEFAULT_SITE_ORIGIN),
 };
 

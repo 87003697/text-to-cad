@@ -31,6 +31,7 @@ A collection of agent skills for CAD, robotics and hardware design
 - **Generate** - Create source-controlled CAD models with coding agents like Codex and Claude Code.
 - **Export** - Produce STEP, STL, 3MF, DXF, GLB, topology data, and URDF/SDF/SRDF robot descriptions.
 - **Browse** - Inspect generated geometry, flat patterns, and robot-description files in CAD Explorer.
+- **Source** - Find and download off-the-shelf STEP parts from the hosted step.parts catalog.
 - **Reference** - Copy stable `@cad[...]` references so agents can make precise follow-up edits.
 - **Review** - Render quick review images for fast checks during an iteration loop.
 - **Reproduce** - Edit source files first, then regenerate explicit targets.
@@ -39,6 +40,7 @@ A collection of agent skills for CAD, robotics and hardware design
 ## 🧰 Skills
 
 - **CAD Skill** - STEP, STL, 3MF, DXF, GLB/topology, render images, and `@cad[...]` geometry references. [Bundled skill](skills/cad/SKILL.md) · [Standalone repo](https://github.com/earthtojake/cad-skill)
+- **step.parts Skill** - Find, evaluate, and download common off-the-shelf STEP models from step.parts, including screws, nuts, washers, bearings, standoffs, electronics parts, motors, and connectors. [Bundled skill](skills/step-parts/SKILL.md)
 - **CAD Explorer Skill** - Start or reuse CAD Explorer and return visual review links for generated `.step`, `.stp`, `.stl`, `.3mf`, `.dxf`, `.urdf`, `.srdf`, and `.sdf` files. [Bundled skill](skills/cad-explorer/SKILL.md)
 - **URDF Skill** - Generated URDF XML, robot links, joints, limits, validation, mesh references, and CAD Explorer URDF visualization. [Bundled skill](skills/urdf/SKILL.md)
 - **SDF Skill** - Generated SDFormat/SDF XML, simulator model/world structure, validation, mesh URIs, plugins, and simulator-specific metadata. [Bundled skill](skills/sdf/SKILL.md)

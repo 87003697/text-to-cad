@@ -56,6 +56,15 @@ const skillGroups = [
       "Use it for mechanical parts, assemblies, fixtures, enclosures, measurements, @cad references, and secondary DXF/STL/3MF/GLB exports.",
   },
   {
+    orbitSrc: "/skill-logos/step-parts-cog-orbit.gif",
+    name: "step.parts",
+    path: "skills/step-parts",
+    summary:
+      "Finds and downloads off-the-shelf STEP models from the hosted step.parts catalog.",
+    details:
+      "Use it for standard screws, nuts, washers, bearings, standoffs, electronics parts, motors, connectors, aliases, dimensions, and checksum-verified downloads.",
+  },
+  {
     orbitSrc: "/skill-logos/cad-explorer-orbit.gif",
     name: "CAD Explorer",
     path: "skills/cad-explorer",
@@ -146,8 +155,8 @@ export default function Home() {
                 Skills
               </h2>
               <p className="mt-4 text-sm leading-6 text-[var(--muted-foreground)]">
-                Agents use CAD skills to generate and render 3D models, robot
-                description files, and more.
+                Agents use CAD skills to generate, source, and render 3D
+                models, robot description files, and more.
               </p>
             </div>
             <ul className="divide-y divide-[color:var(--border)] border-y border-[color:var(--border)]">

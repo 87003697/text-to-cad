@@ -4,8 +4,8 @@ This guide covers installing the bundled agent skills. For CAD runtime setup,
 CAD Explorer dependencies, and sample-model development, see the Local
 Development section in [README.md](README.md).
 
-The bundled skills are `cad`, `cad-explorer`, `urdf`, `sdf`, `srdf`, and
-`sendcutsend`.
+The bundled skills are `cad`, `step-parts`, `cad-explorer`, `urdf`, `sdf`,
+`srdf`, and `sendcutsend`.
 
 ## Quick Start
 
@@ -205,6 +205,7 @@ remove all bundled skills from Codex:
 ```bash
 rm -rf \
   "${CODEX_HOME:-$HOME/.codex}/skills/cad" \
+  "${CODEX_HOME:-$HOME/.codex}/skills/step-parts" \
   "${CODEX_HOME:-$HOME/.codex}/skills/cad-explorer" \
   "${CODEX_HOME:-$HOME/.codex}/skills/urdf" \
   "${CODEX_HOME:-$HOME/.codex}/skills/sdf" \
