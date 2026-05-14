@@ -80,8 +80,7 @@ export function SiteHeader() {
               <Button
                 asChild
                 variant="outline"
-                size="icon"
-                className="h-10 w-10 rounded-md border-[color:var(--border)] bg-[var(--background)] text-[var(--foreground)] hover:bg-[var(--muted)] hover:text-[var(--foreground)]"
+                className="h-10 w-10 rounded-md border-[color:var(--border)] bg-[var(--background)] px-0 text-[var(--foreground)] hover:bg-[var(--muted)] hover:text-[var(--foreground)] sm:w-auto sm:px-3"
               >
                 <a
                   href="https://github.com/earthtojake/text-to-cad"
@@ -90,6 +89,7 @@ export function SiteHeader() {
                   aria-label="Open text-to-cad on GitHub"
                 >
                   <GitHubLogo className="size-4" />
+                  <span className="hidden sm:inline">GitHub</span>
                 </a>
               </Button>
             </TooltipTrigger>
