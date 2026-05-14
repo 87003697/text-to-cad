@@ -4,6 +4,13 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import { siteConfig } from "@/lib/site";
 import "./globals.css";
 
+const socialPreview = {
+  url: "/social-preview.png",
+  width: 1200,
+  height: 630,
+  alt: "CAD Skills docs page showing the agent skills catalog",
+};
+
 const themeScript = `
 (() => {
   try {
@@ -35,12 +42,14 @@ export const metadata: Metadata = {
     description: siteConfig.description,
     url: "/",
     siteName: siteConfig.name,
+    images: [socialPreview],
     type: "website",
   },
   twitter: {
-    card: "summary",
+    card: "summary_large_image",
     title: siteConfig.title,
     description: siteConfig.description,
+    images: [socialPreview],
   },
   icons: {
     icon: [{ url: "/favicon.ico", type: "image/x-icon" }],
