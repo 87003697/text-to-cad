@@ -1,5 +1,40 @@
 import { useEffect } from "react";
 import { isEditableTarget } from "../../../lib/dom";
+import {
+  isWebGlContextCreationError,
+  runtimeErrorMessage
+} from "../../../lib/explorer/webglSupport";
+
+function createWebGlRenderer(THREE) {
+  const preferredAttributes = {
+    antialias: true,
+    powerPreference: "high-performance",
+    alpha: true,
+    preserveDrawingBuffer: false,
+    logarithmicDepthBuffer: true
+  };
+
+  try {
+    return new THREE.WebGLRenderer(preferredAttributes);
+  } catch (error) {
+    if (!isWebGlContextCreationError(error)) {
+      throw error;
+    }
+
+    const fallbackAttributes = {
+      ...preferredAttributes,
+      antialias: false,
+      powerPreference: "default",
+      logarithmicDepthBuffer: false
+    };
+
+    try {
+      return new THREE.WebGLRenderer(fallbackAttributes);
+    } catch (fallbackError) {
+      throw fallbackError;
+    }
+  }
+}
 
 export function useExplorerRuntime({
   mountRef,
@@ -49,6 +84,7 @@ export function useExplorerRuntime({
   floorMode,
   onContextLost,
   onContextRestored,
+  onInitializationError,
   runtimeResetToken = 0
 }) {
   // Runtime setup/teardown should run once per WebGL runtime epoch.
@@ -97,13 +133,7 @@ export function useExplorerRuntime({
       camera.up.set(0, 0, 1);
       camera.position.set(180, -180, 120);
 
-      const renderer = new THREE.WebGLRenderer({
-        antialias: true,
-        powerPreference: "high-performance",
-        alpha: true,
-        preserveDrawingBuffer: false,
-        logarithmicDepthBuffer: true
-      });
+      const renderer = createWebGlRenderer(THREE);
       renderer.outputColorSpace = THREE.SRGBColorSpace;
       renderer.toneMapping = THREE.ACESFilmicToneMapping;
       renderer.toneMappingExposure = getExplorerThemeValue(explorerTheme, "toneMappingExposure", DEFAULT_LIGHTING.toneMappingExposure);
@@ -548,7 +578,8 @@ export function useExplorerRuntime({
 
     initializeExplorer().catch((err) => {
       if (!cancelled) {
-        setError(err instanceof Error ? err.message : String(err));
+        setError(runtimeErrorMessage(err));
+        onInitializationError?.(err);
       }
     });
 

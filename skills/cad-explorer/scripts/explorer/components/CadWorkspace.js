@@ -1904,6 +1904,9 @@ export default function CadWorkspace({
                 ? "Generating CAD assets..."
                 : "Loading CAD...";
   const explorerAlert = useMemo(() => {
+    if (explorerRuntimeAlert?.blocking) {
+      return explorerRuntimeAlert;
+    }
     if (!selectedEntry || explorerLoading) {
       return null;
     }

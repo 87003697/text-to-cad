@@ -258,6 +258,8 @@ npm --prefix skills/cad-explorer/scripts/explorer run dev:ensure -- --workspace-
 
 CAD Explorer supports `.step`, `.stp`, `.stl`, `.3mf`, `.dxf`, `.urdf`, `.srdf`, and `.sdf` files. SRDF reviews can use optional local MoveIt2 controls when the CAD Explorer skill's MoveIt2 server is running.
 
+CAD Explorer renders models with browser WebGL. If Chrome shows "WebGL unavailable" or "Error creating WebGL context" on Linux, check `chrome://gpu`, enable hardware acceleration or software WebGL, and update the system graphics/Mesa drivers before reloading the Explorer URL.
+
 For manual foreground Explorer development:
 
 ```bash

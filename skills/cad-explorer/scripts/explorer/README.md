@@ -76,6 +76,7 @@ Do not hand-edit package-local generated CAD assets during normal CAD or CAD Exp
 - Production builds read `EXPLORER_DEFAULT_FILE`, `EXPLORER_GITHUB_URL`, `EXPLORER_ROOT_DIR`, and `EXPLORER_WORKSPACE_ROOT` at build time. If the build command runs from `explorer`, CAD Explorer falls back to the containing workspace root; set `EXPLORER_WORKSPACE_ROOT=/path/to/workspace` explicitly when your deployment builds from a different directory layout.
 - Regenerate CAD assets outside the CAD Explorer package before these commands when CAD assets need to change.
 - The STEP viewer camera, floor/grid, view cube, and render camera presets are Z-up. If a model appears rotated, fix the display/runtime convention or the source geometry intentionally; do not compensate by rotating the generated STEP/GLB sidecar for Explorer only.
+- CAD Explorer requires browser WebGL. If the canvas reports "WebGL unavailable" or "Error creating WebGL context" on Linux, check the browser GPU status page such as `chrome://gpu`, enable hardware acceleration or software WebGL, and update the system graphics/Mesa drivers before reloading the Explorer URL.
 
 ## Hot Reload
 

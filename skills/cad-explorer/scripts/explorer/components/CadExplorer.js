@@ -19,6 +19,7 @@ import {
   normalizeSceneScaleMode,
   EXPLORER_SCENE_SCALE
 } from "../lib/explorer/sceneScale";
+import { buildRuntimeInitializationAlert } from "../lib/explorer/webglSupport";
 import { DRAWING_TOOL } from "../lib/workbench/constants";
 import { getEnvironmentPresetById, LOOK_FLOOR_MODES } from "../lib/lookSettings";
 import ViewPlaneControl from "./explorer/ViewPlaneControl";
@@ -5318,7 +5319,12 @@ const CadExplorer = forwardRef(function CadExplorer({
   const handleRuntimeContextRestored = useCallback(() => {
     framedModelKeyRef.current = "";
     lastEmittedPerspectiveRef.current = null;
+    explorerAlertChangeRef.current?.(null);
     setRuntimeResetToken((value) => value + 1);
+  }, []);
+
+  const handleRuntimeInitializationError = useCallback((runtimeError) => {
+    explorerAlertChangeRef.current?.(buildRuntimeInitializationAlert(runtimeError));
   }, []);
 
   useExplorerRuntime({
@@ -5367,6 +5373,7 @@ const CadExplorer = forwardRef(function CadExplorer({
     defaultGridRadius,
     sceneScaleMode: normalizedSceneScaleMode,
     floorMode: resolvedFloorMode,
+    onInitializationError: handleRuntimeInitializationError,
     onContextRestored: handleRuntimeContextRestored,
     runtimeResetToken
   });
