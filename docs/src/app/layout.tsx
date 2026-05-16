@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import Script from "next/script";
 import { Analytics } from "@vercel/analytics/next";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { siteConfig } from "@/lib/site";
@@ -13,14 +14,35 @@ const socialPreview = {
 
 const themeScript = `
 (() => {
-  try {
-    const storedTheme = window.localStorage.getItem("cad-skills-theme");
-    const theme = storedTheme === "dark" ? "dark" : "light";
+  const media = window.matchMedia("(prefers-color-scheme: dark)");
+  const applyTheme = (theme) => {
     document.documentElement.classList.toggle("dark", theme === "dark");
     document.documentElement.style.colorScheme = theme;
+  };
+  const resolveSystemTheme = () => (media.matches ? "dark" : "light");
+  const getStoredTheme = () => {
+    try {
+      const storedTheme = window.localStorage.getItem("cad-skills-theme");
+      return storedTheme === "dark" || storedTheme === "light"
+        ? storedTheme
+        : null;
+    } catch {
+      return null;
+    }
+  };
+
+  applyTheme(getStoredTheme() ?? resolveSystemTheme());
+
+  const handleSystemThemeChange = () => {
+    if (!getStoredTheme()) {
+      applyTheme(resolveSystemTheme());
+    }
+  };
+
+  try {
+    media.addEventListener("change", handleSystemThemeChange);
   } catch {
-    document.documentElement.classList.remove("dark");
-    document.documentElement.style.colorScheme = "light";
+    media.addListener(handleSystemThemeChange);
   }
 })();
 `;
@@ -78,7 +100,11 @@ export default function RootLayout({
   return (
     <html lang="en" suppressHydrationWarning>
       <body>
-        <script dangerouslySetInnerHTML={{ __html: themeScript }} />
+        <Script
+          id="theme-script"
+          strategy="beforeInteractive"
+          dangerouslySetInnerHTML={{ __html: themeScript }}
+        />
         <TooltipProvider>{children}</TooltipProvider>
         <Analytics />
       </body>

@@ -37,8 +37,8 @@ export function ThemeToggle() {
           onClick={toggleTheme}
           aria-label="Toggle light and dark mode"
         >
-          <Sun className="size-4 dark:hidden" />
-          <Moon className="hidden size-4 dark:block" />
+          <Sun className="size-4 dark:hidden" strokeWidth={2.75} />
+          <Moon className="hidden size-4 dark:block" strokeWidth={2.75} />
         </Button>
       </TooltipTrigger>
       <TooltipContent side="bottom">Light / dark</TooltipContent>
