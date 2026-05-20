@@ -4,6 +4,7 @@ import path from "node:path";
 const repoRoot = path.resolve(process.cwd(), "..");
 const renderViewerRoot = path.join(repoRoot, "skills/render/scripts/viewer");
 const docsThreeRoot = "./node_modules/three";
+const docsThreeExamplesRoot = "./node_modules/three/examples";
 
 const nextConfig: NextConfig = {
   allowedDevOrigins: ["127.0.0.1"],
@@ -23,6 +24,7 @@ const nextConfig: NextConfig = {
     resolveAlias: {
       "@render-viewer": renderViewerRoot,
       three: docsThreeRoot,
+      "three/examples": docsThreeExamplesRoot,
     },
   },
 };
