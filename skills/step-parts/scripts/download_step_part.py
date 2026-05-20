@@ -120,10 +120,15 @@ def filename_for(part: dict[str, Any], requested_filename: str | None, allow_req
     return f"{part['id']}.step"
 
 
+def step_download_url(part: dict[str, Any], origin: str) -> str:
+    step_url = part.get("stepUrl")
+    if not step_url:
+        raise SystemExit(f"Part {part.get('id', '<unknown>')} does not include stepUrl.")
+    return urllib.parse.urljoin(f"{origin_url(origin)}/", str(step_url))
+
+
 def write_download(part: dict[str, Any], args: argparse.Namespace, allow_requested_filename: bool) -> dict[str, Any]:
-    download_url = part.get("downloadUrl")
-    if not download_url:
-        raise SystemExit(f"Part {part.get('id', '<unknown>')} does not include downloadUrl.")
+    step_url = step_download_url(part, args.origin)
 
     out_dir = Path(args.out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -131,7 +136,7 @@ def write_download(part: dict[str, Any], args: argparse.Namespace, allow_request
     if path.exists() and not args.overwrite:
         raise SystemExit(f"Refusing to overwrite existing file: {path}")
 
-    data = request(str(download_url), args.timeout)
+    data = request(step_url, args.timeout)
     path.write_bytes(data)
 
     actual_sha256 = hashlib.sha256(data).hexdigest()
@@ -146,8 +151,7 @@ def write_download(part: dict[str, Any], args: argparse.Namespace, allow_request
         "id": part.get("id"),
         "name": part.get("name"),
         "path": str(path),
-        "downloadUrl": download_url,
-        "stepUrl": part.get("stepUrl"),
+        "stepUrl": step_url,
         "pageUrl": part.get("pageUrl"),
         "apiUrl": part.get("apiUrl"),
         "byteSize": len(data),
@@ -164,7 +168,6 @@ def compact_part(part: dict[str, Any]) -> dict[str, Any]:
         "family": part.get("family"),
         "standard": part.get("standard"),
         "attributes": part.get("attributes"),
-        "downloadUrl": part.get("downloadUrl"),
         "stepUrl": part.get("stepUrl"),
         "pageUrl": part.get("pageUrl"),
         "apiUrl": part.get("apiUrl"),

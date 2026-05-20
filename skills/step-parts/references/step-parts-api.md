@@ -11,7 +11,6 @@ Default to the API origin `https://api.step.parts`. Use a different origin only 
 | `https://www.step.parts/llms.txt` | Human-readable agent guide with endpoint summary and examples. |
 | `/v1/parts` | Search, filter, paginate, and retrieve absolute asset URLs. |
 | `/v1/parts/{id}` | Fetch one enriched part record by stable id. |
-| `/v1/parts/{id}/download` | Download one STEP file and increment its download count. |
 | `/v1/catalog/schema` | JSON Schema, field semantics, result ordering, and family attribute meanings. |
 | `/v1/catalog/parts.index.json` | Compact id/name/facet discovery index for cheap lookups before fetching details. |
 | `/v1/openapi.json` | OpenAPI 3.1 contract for generating clients/tools. |
@@ -23,7 +22,7 @@ Default to the API origin `https://api.step.parts`. Use a different origin only 
 - `page`: 1-based page number.
 - `pageSize`: default `60`, max `200`.
 
-Results are ordered by deduplicated internal download popularity, then stable source catalog order. Download counts are not exposed in API responses.
+Unfiltered results start with a fixed 60-part showcase, then continue in stable source catalog order. Filtered results are ordered by stable source catalog order.
 
 Examples:
 
@@ -39,7 +38,7 @@ https://api.step.parts/v1/parts?q=lengthMm%2012
 `/v1/parts` returns:
 
 - `catalog`: part count, last modified timestamp, catalog checksum, and URLs for schema/OpenAPI.
-- `items`: enriched part records with absolute `pageUrl`, `apiUrl`, `downloadUrl`, `stepUrl`, `glbUrl`, and `pngUrl`.
+- `items`: enriched part records with absolute `pageUrl`, `apiUrl`, `stepUrl`, `glbUrl`, and `pngUrl`.
 - `page`, `pageSize`, `total`, `totalPages`, `hasNextPage`, `hasPreviousPage`.
 - `facets`: available `tags`, `categories`, `families`, and `standards` with counts.
 - `filters`: parsed active filters.
@@ -50,7 +49,7 @@ Each part record contains:
 - `name`, `description`, `category`, `family`, `tags`, `aliases`.
 - `standard`: optional `{ body, number, designation }`.
 - `attributes`: family-specific scalar facts.
-- `downloadUrl`, `stepUrl`, `glbUrl`, `pngUrl`.
+- `stepUrl`, `glbUrl`, `pngUrl`.
 - `byteSize`, `sha256`.
 
 ## Asset URL Patterns
@@ -61,7 +60,6 @@ Use returned URLs when possible. Patterns are:
 https://www.step.parts/step/{id}.step
 Use the absolute `glbUrl` and `pngUrl` returned by the API record. Preview assets are served from Vercel Blob.
 https://www.step.parts/parts/{id}
-https://api.step.parts/v1/parts/{id}/download
 ```
 
 The `/step/{id}.step` route serves local checked-out STEP bytes in local/dev mode and redirects to commit-pinned GitHub LFS media in production.
@@ -71,6 +69,6 @@ The `/step/{id}.step` route serves local checked-out STEP bytes in local/dev mod
 When downloading a STEP file:
 
 1. Fetch a part record from `/v1/parts` or `/v1/parts/{id}`.
-2. Download `downloadUrl` so the internal download count is updated.
+2. Download `stepUrl`.
 3. Compare the file SHA-256 to the part record's `sha256` when it is not null.
 4. Keep the original `.step` extension and preserve the source id in the filename unless the user asks otherwise.
