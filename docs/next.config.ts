@@ -5,6 +5,8 @@ const repoRoot = path.resolve(process.cwd(), "..");
 const renderViewerRoot = path.join(repoRoot, "skills/render/scripts/viewer");
 const docsThreeRoot = "./node_modules/three";
 const docsThreeExamplesRoot = "./node_modules/three/examples";
+const docsGltfLoader =
+  "./node_modules/three/examples/jsm/loaders/GLTFLoader.js";
 
 const nextConfig: NextConfig = {
   allowedDevOrigins: ["127.0.0.1"],
@@ -25,6 +27,7 @@ const nextConfig: NextConfig = {
       "@render-viewer": renderViewerRoot,
       three: docsThreeRoot,
       "three/examples": docsThreeExamplesRoot,
+      "three/examples/jsm/loaders/GLTFLoader.js": docsGltfLoader,
     },
   },
 };
