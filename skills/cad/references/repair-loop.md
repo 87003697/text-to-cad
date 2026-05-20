@@ -140,17 +140,17 @@ Likely causes:
 
 Fix:
 
-- hand the explicit artifact path to `$cad-explorer`
+- hand the explicit artifact path to `$render`
 - check `EXPLORER_ROOT_DIR` when available
 - return the best documented link format
 - report startup failure if unresolved
 - rely on CLI facts/measurements for validation
 
-### Render failure
+### Explorer render failure
 
 Likely causes:
 
-- attempted to render Python source, STL, or 3MF
+- attempted to render Python source instead of an Explorer-visible artifact
 - target path wrong
 - Explorer/adjacent render artifact missing
 - invalid render flags
@@ -158,9 +158,12 @@ Likely causes:
 Fix:
 
 - generate STEP first
-- render STEP/STP, CAD path, generated GLB/topology artifact, or `@cad[...]` ref
-- use a simple `render view` before advanced wireframe/section renders
-- skip rendering if it is not needed for validation
+- snapshot `.step`, `.stp`, `.glb`, `.stl`, `.3mf`, `.dxf`, `.urdf`, `.srdf`, or `.sdf` with the render skill's snapshot CLI rather than manual viewer or Playwright inspection
+- retry only with simpler supported render jobs, starting with a single `view` output before `wireframe` or `section`
+- for CAD review packets, use still-image modes: `view`, `wireframe`, and `section`
+- generate GIFs only for STEP-module parameter animation review
+- rerender only after a source repair changed visible geometry or a specific visual finding needs confirmation
+- skip saved snapshots when they are not needed under `render-review.md`
 
 ## Diff after repair
 

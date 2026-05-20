@@ -12,7 +12,10 @@ import xml.etree.ElementTree as ET
 if __package__ in {None, ""}:
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from sdf.source import parse_sdf_xml
+from sdf.external import run_gz_sdf_check
+from sdf.findings import Finding, ValidationResult, format_findings
+from sdf.source import SdfSourceError
+from sdf.validation import validate_sdf_xml
 
 
 @dataclass(frozen=True)
@@ -21,11 +24,22 @@ class _TargetSpec:
     output_path: Path
 
 
-def generate_sdf_targets(targets: Sequence[str], *, output: str | Path | None = None) -> int:
+def generate_sdf_targets(
+    targets: Sequence[str],
+    *,
+    output: str | Path | None = None,
+    gz_check: str = "auto",
+    strict: bool = False,
+) -> int:
     target_specs = _resolve_target_specs(targets, output=output)
     _validate_unique_outputs(target_specs)
     for target_spec in target_specs:
-        _generate_target(target_spec.source_path, output_path=target_spec.output_path)
+        _generate_target(
+            target_spec.source_path,
+            output_path=target_spec.output_path,
+            gz_check=gz_check,
+            strict=strict,
+        )
     return 0
 
 
@@ -45,13 +59,24 @@ def main(argv: Sequence[str] | None = None) -> int:
         metavar="PATH",
         help="Write the generated SDF file to this path. Valid only with one plain Python target.",
     )
+    parser.add_argument(
+        "--gz-check",
+        choices=("auto", "required", "never"),
+        default="auto",
+        help="Optionally run 'gz sdf --check' before writing output.",
+    )
+    parser.add_argument(
+        "--strict",
+        action="store_true",
+        help="Treat bundled validation warnings and generator envelope warnings as failures.",
+    )
     args = parser.parse_args(list(argv) if argv is not None else None)
     if args.output is not None:
         if _targets_include_output_pairs(args.targets):
             parser.error("--output cannot be combined with SOURCE=OUTPUT targets")
         if len(args.targets) != 1:
             parser.error("--output can only be used with exactly one target")
-    return generate_sdf_targets(args.targets, output=args.output)
+    return generate_sdf_targets(args.targets, output=args.output, gz_check=args.gz_check, strict=args.strict)
 
 
 def _resolve_target_specs(targets: Sequence[str], *, output: str | Path | None = None) -> list[_TargetSpec]:
@@ -109,7 +134,7 @@ def _validate_unique_outputs(target_specs: Sequence[_TargetSpec]) -> None:
         seen[output_path] = target_spec.output_path
 
 
-def _generate_target(script_path: Path, *, output_path: Path) -> Path:
+def _generate_target(script_path: Path, *, output_path: Path, gz_check: str, strict: bool) -> Path:
     script_path = script_path.resolve()
     if script_path.suffix.lower() != ".py":
         raise ValueError(f"{_display_path(script_path)} must be a Python source file")
@@ -124,8 +149,23 @@ def _generate_target(script_path: Path, *, output_path: Path) -> Path:
         raise ValueError(f"{_display_path(script_path)} gen_sdf() must not accept arguments")
 
     payload = _normalize_sdf_payload(generator(), script_path=script_path)
-    parse_sdf_xml(str(payload["xml"]), source_path=output_path, base_dir=output_path.parent)
+    xml_text = _payload_xml(payload, script_path=script_path)
+
+    validation = validate_sdf_xml(
+        xml_text,
+        source_path=output_path,
+        base_dir=output_path.parent,
+        metadata=payload.get("metadata") if isinstance(payload.get("metadata"), dict) else None,
+    )
+    validation.warnings.extend(_payload_warning_findings(payload, script_path=script_path))
+    _raise_for_failed_generation(validation, strict=strict)
+
+    external = run_gz_sdf_check(xml_text, output_path=output_path, mode=gz_check)
+    validation.extend(external)
+    _raise_for_failed_generation(validation, strict=strict)
+
     _write_sdf_payload(payload, output_path=output_path, script_path=script_path)
+    _print_generation_report(payload, validation)
     if not output_path.exists():
         raise RuntimeError(f"{_display_path(script_path)} did not write {_display_path(output_path)}")
     return output_path
@@ -169,7 +209,7 @@ def _normalize_sdf_payload(raw_payload: object, *, script_path: Path) -> dict[st
             f"{_display_path(script_path)} gen_sdf() must return an SDF XML root element, XML string, "
             "or generator envelope dict"
         )
-    allowed_fields = {"xml", "sdf_output"}
+    allowed_fields = {"xml", "sdf_output", "metadata", "assumptions", "warnings"}
     extra_fields = sorted(str(key) for key in raw_payload if key not in allowed_fields)
     if extra_fields:
         joined = ", ".join(extra_fields)
@@ -178,20 +218,28 @@ def _normalize_sdf_payload(raw_payload: object, *, script_path: Path) -> dict[st
         raise TypeError(f"{_display_path(script_path)} gen_sdf() envelope must define 'xml'")
     payload = dict(raw_payload)
     payload["xml"] = _normalize_xml_value(payload["xml"], script_path=script_path, label="gen_sdf() envelope field 'xml'")
+    payload["metadata"] = _normalize_metadata(payload.get("metadata"), script_path=script_path)
+    payload["assumptions"] = _normalize_report_items(payload.get("assumptions"), field="assumptions", script_path=script_path)
+    payload["warnings"] = _normalize_report_items(payload.get("warnings"), field="warnings", script_path=script_path)
     return payload
 
 
 def _write_sdf_payload(payload: dict[str, object], *, output_path: Path, script_path: Path) -> None:
+    xml = _payload_xml(payload, script_path=script_path)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    text = xml if xml.endswith("\n") else xml + "\n"
+    output_path.write_text(text, encoding="utf-8")
+    print(f"Wrote SDF: {output_path}")
+
+
+def _payload_xml(payload: dict[str, object], *, script_path: Path) -> str:
     xml = payload.get("xml")
     if not isinstance(xml, str):
         raise TypeError(
             f"{_display_path(script_path)} gen_sdf() envelope field 'xml' must be a string, "
             f"got {type(xml).__name__}"
         )
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    text = xml if xml.endswith("\n") else xml + "\n"
-    output_path.write_text(text, encoding="utf-8")
-    print(f"Wrote SDF: {output_path}")
+    return xml
 
 
 def _normalize_xml_value(raw_xml: object, *, script_path: Path, label: str) -> str:
@@ -213,6 +261,88 @@ def _serialize_xml_element(root: ET.Element) -> str:
     ET.indent(root, space="  ")
     body = ET.tostring(root, encoding="unicode", short_empty_elements=True)
     return f'<?xml version="1.0"?>\n{body}'
+
+
+def _normalize_metadata(raw_metadata: object, *, script_path: Path) -> dict[str, object]:
+    if raw_metadata is None:
+        return {}
+    if not isinstance(raw_metadata, dict):
+        raise TypeError(f"{_display_path(script_path)} gen_sdf() envelope field 'metadata' must be a dict")
+    metadata: dict[str, object] = {}
+    for key, value in raw_metadata.items():
+        if not isinstance(value, (str, int, float, bool, type(None))):
+            raise TypeError(
+                f"{_display_path(script_path)} gen_sdf() metadata value for {key!r} must be a scalar"
+            )
+        metadata[str(key)] = value
+    return metadata
+
+
+def _normalize_report_items(raw_items: object, *, field: str, script_path: Path) -> list[dict[str, str]]:
+    if raw_items is None:
+        return []
+    if isinstance(raw_items, (str, bytes)) or not isinstance(raw_items, Sequence):
+        raise TypeError(f"{_display_path(script_path)} gen_sdf() envelope field '{field}' must be a list")
+    normalized: list[dict[str, str]] = []
+    default_code = "generator_assumption" if field == "assumptions" else "generator_warning"
+    for item in raw_items:
+        if isinstance(item, str):
+            message = item.strip()
+            code = default_code
+            source = ""
+        elif isinstance(item, dict):
+            message = str(item.get("message") or "").strip()
+            code = str(item.get("code") or default_code).strip()
+            source = str(item.get("source") or "").strip()
+        else:
+            raise TypeError(
+                f"{_display_path(script_path)} gen_sdf() envelope field '{field}' entries must be strings or dicts"
+            )
+        if not message:
+            raise TypeError(f"{_display_path(script_path)} gen_sdf() envelope field '{field}' has an empty message")
+        normalized.append({"code": code, "message": message, "source": source})
+    return normalized
+
+
+def _payload_warning_findings(payload: dict[str, object], *, script_path: Path) -> list[Finding]:
+    warnings = payload.get("warnings")
+    if not isinstance(warnings, list):
+        return []
+    findings: list[Finding] = []
+    for item in warnings:
+        if not isinstance(item, dict):
+            continue
+        source = item.get("source")
+        findings.append(
+            Finding(
+                severity="warning",
+                code=str(item.get("code") or "generator_warning"),
+                message=str(item.get("message") or ""),
+                path=_display_path(script_path),
+                hint=f"Source: {source}" if source else None,
+            )
+        )
+    return findings
+
+
+def _raise_for_failed_generation(validation: ValidationResult, *, strict: bool) -> None:
+    findings = validation.errors + (validation.warnings if strict else [])
+    if findings:
+        raise SdfSourceError(format_findings(findings))
+
+
+def _print_generation_report(payload: dict[str, object], validation: ValidationResult) -> None:
+    assumptions = payload.get("assumptions")
+    if isinstance(assumptions, list):
+        for item in assumptions:
+            if not isinstance(item, dict):
+                continue
+            source = f" Source: {item['source']}." if item.get("source") else ""
+            message = str(item["message"])
+            ending = "" if message.endswith(".") else "."
+            print(f"Assumption [{item['code']}]: {message}{ending}{source}")
+    for finding in [*validation.warnings, *validation.infos]:
+        print(finding.format())
 
 
 def _display_path(path: Path) -> str:

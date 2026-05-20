@@ -1,42 +1,63 @@
 "use client";
 
-import { Check, Copy } from "lucide-react";
 import { useEffect, useState } from "react";
-import { Button } from "@/components/ui/button";
 
 type CopyButtonProps = {
   text: string;
   label?: string;
+  compact?: boolean;
 };
 
-export function CopyButton({ text, label = "Copy command" }: CopyButtonProps) {
-  const [copied, setCopied] = useState(false);
+type CopyStatus = "idle" | "copied" | "error";
+
+export function CopyButton({
+  text,
+  label = "Copy command",
+  compact = false,
+}: CopyButtonProps) {
+  const [status, setStatus] = useState<CopyStatus>("idle");
 
   useEffect(() => {
-    if (!copied) {
+    if (status === "idle") {
       return;
     }
 
-    const timeout = window.setTimeout(() => setCopied(false), 1400);
+    const timeout = window.setTimeout(() => setStatus("idle"), 1600);
     return () => window.clearTimeout(timeout);
-  }, [copied]);
+  }, [status]);
 
   const copyText = async () => {
-    await window.navigator.clipboard.writeText(text);
-    setCopied(true);
+    setStatus("copied");
+
+    try {
+      await window.navigator.clipboard.writeText(text);
+    } catch {
+      setStatus("error");
+    }
   };
 
+  const isCopied = status === "copied";
+  const isError = status === "error";
+  const buttonLabel = isCopied ? "Copied" : isError ? "Copy failed" : label;
+
   return (
-    <Button
+    <button
       type="button"
-      variant="outline"
-      size="icon-sm"
-      className="h-8 w-8 rounded-md border-[color:var(--border)] bg-[var(--background)] text-[var(--foreground)] hover:bg-[var(--muted)]"
+      className={`min-w-[4.25rem] shrink-0 cursor-pointer border-l border-border py-[7px] text-xs uppercase leading-none tracking-wider transition-colors ${
+        isCopied
+          ? "bg-primary text-primary-foreground hover:text-primary-foreground"
+          : isError
+            ? "bg-destructive text-destructive-foreground hover:text-destructive-foreground"
+            : "bg-secondary text-muted-foreground hover:text-foreground"
+      } ${
+        compact ? "px-2.5" : "px-3"
+      }`}
       onClick={copyText}
-      aria-label={copied ? "Copied" : label}
-      title={copied ? "Copied" : label}
+      aria-label={buttonLabel}
+      title={buttonLabel}
+      aria-live="polite"
     >
-      {copied ? <Check className="size-3.5" /> : <Copy className="size-3.5" />}
-    </Button>
+      {isCopied ? "copied" : isError ? "failed" : "copy"}
+    </button>
   );
 }

@@ -34,4 +34,4 @@ The following remain process requirements and future code-improvement targets:
 - full MoveIt configuration package generation;
 - safer generator execution in a subprocess.
 
-Until those are implemented, rely on the planning ledger, MoveIt Setup Assistant, `$cad-explorer` handoff for visual/MoveIt smoke tests when available, and explicit reporting of skipped checks.
+Until those are implemented, rely on the planning ledger, MoveIt Setup Assistant, `$render` handoff for visual/MoveIt smoke tests when available, and explicit reporting of skipped checks.

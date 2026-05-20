@@ -35,10 +35,10 @@ def gen_step():
 1. Convert the user's prose into a natural-language CAD brief.
 2. Build or validate the `gen_step()` envelope.
 3. Generate STEP with lightweight facts/planes/positioning inspection.
-4. Hand the generated STEP path to `$cad-explorer` when available and return its link.
+4. Hand the generated STEP path to `$render` when available and return its link.
 5. Add or update `gen_dxf()` for the requested projection, layout, or drawing output.
 6. Run `scripts/dxf` on explicit Python source targets.
-7. Report the DXF output plus the primary STEP and Explorer link when available.
+7. Hand the generated DXF path to `$render` when available, then report the DXF output plus the primary STEP and render links.
 
 ## Command
 
@@ -56,7 +56,8 @@ Files:
 - DXF: path/to/output.dxf
 
 CAD Explorer:
-- http://127.0.0.1:4178/?file=path/to/source.step
+- STEP: http://127.0.0.1:4178/?file=path/to/source.step
+- DXF: http://127.0.0.1:4178/?file=path/to/output.dxf
 
 Validation:
 - STEP geometry: checked with facts/planes/positioning

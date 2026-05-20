@@ -38,7 +38,7 @@ For SDF joints:
 - `axis2` is used for multi-axis joints such as `revolute2` and `universal`.
 - Axis vectors should be finite, nonzero, and normalized.
 
-Record the expected positive motion in the design ledger. For example: “positive shoulder_pan rotates the arm counterclockwise when viewed from +Z.”
+Record the expected positive motion in the design ledger. Example: “positive shoulder_pan rotates the arm counterclockwise when viewed from +Z.”
 
 ## Visual and collision poses
 
@@ -58,6 +58,13 @@ Use `<frame>` when a reusable transform is meaningful:
 
 Frames are useful for sensors, plugins, tool frames, nested models, and repeated placement logic. They also make generated SDF more auditable.
 
+`attached_to` and `relative_to` are different:
+
+- `attached_to` says what the frame moves with.
+- `relative_to` says how the frame's pose numbers are represented.
+
+The `attached_to` chain should not cycle and should eventually resolve to a link, model, world, joint, or another valid frame target.
+
 ## LLM guardrails
 
 Do not infer any of the following from prose alone:
@@ -75,6 +82,6 @@ When data is missing, either ask for the source data or write an explicitly labe
 
 ## Useful official references
 
-- SDFormat pose semantics: https://sdformat.org/tutorials?tut=pose_frame_semantics
-- SDFormat pose element fields: https://sdformat.org/spec/1.12/world/
-- SDFormat joint element: https://sdformat.org/spec/1.12/joint/
+- SDFormat pose semantics: `https://sdformat.org/tutorials?tut=pose_frame_semantics`
+- SDFormat pose fields: `https://sdformat.org/spec/1.12/world/`
+- SDFormat joint element: `https://sdformat.org/spec/1.12/joint/`

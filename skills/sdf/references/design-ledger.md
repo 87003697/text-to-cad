@@ -14,30 +14,31 @@ Create or update this ledger before writing SDF XML. The ledger can live in the 
 | Units | meters, kilograms, seconds, radians unless documented otherwise |
 | Coordinate convention | REP-103-like / simulator-specific / documented exception |
 | World support needed | yes/no; reason |
+| Optional external checks | `gz sdf --check`, simulator load, CAD Explorer, other |
 
 ## Model or world scope
 
 | Item | Value |
 |---|---|
-| Model name | |
+| Model/world name | |
 | Static or dynamic | |
 | Canonical link, if relevant | |
-| Model pose | xyz + rpy/quaternion |
-| Model pose `relative_to` | |
+| Model/world pose | xyz + rpy/quaternion |
+| Model/world pose `relative_to` | |
 | Includes | URI + purpose |
 | World physics/lights/plugins | source and target simulator |
 
 ## Frames
 
-| Frame | Scope | Attached to | Pose | `relative_to` | Purpose | Source |
+| Frame | Scope | Attached to | Pose | Pose `relative_to` | Purpose | Source |
 |---|---|---|---|---|---|---|
 | | | | | | | |
 
-Use named frames for clarity when multiple sensors, nested models, tool frames, or plugin frames depend on the same transform.
+Use named frames for clarity when multiple sensors, nested models, tool frames, plugin frames, or repeated transforms depend on the same relationship.
 
 ## Links
 
-| Link | Physical / frame-like | Pose | `relative_to` | Inertial source | Sensor/plugin attached | Notes |
+| Link | Physical / frame-like | Pose | Pose `relative_to` | Inertial source | Sensor/plugin attached | Notes |
 |---|---|---|---|---|---|---|
 | | | | | | | |
 
@@ -53,16 +54,16 @@ For revolute and prismatic joints, record limit units: radians for revolute, met
 
 ## Geometry
 
-| Owner | Visual/collision | Name | Geometry type | Pose | URI or dimensions | Mesh units | Scale | Source |
-|---|---|---|---|---|---|---|---|---|
-| | | | | | | | | |
+| Owner | Visual/collision | Name | Geometry type | Pose | Pose `relative_to` | URI or dimensions | Mesh units | Scale | Source |
+|---|---|---|---|---|---|---|---|---|---|
+| | | | | | | | | | |
 
 Collision geometry should be selected for simulation cost and stability, not just visual similarity.
 
 ## Inertials
 
 | Link | Mass | COM pose | Inertia tensor | Method/source | Confidence |
-|---|---:|---|---|---|---|
+|---|---|---|---|---|---|
 | | | | | | |
 
 Mark approximations clearly. Very small, zero, negative, or guessed inertias are high risk for simulation.
@@ -73,7 +74,7 @@ Mark approximations clearly. Very small, zero, negative, or guessed inertias are
 |---|---|---|---|---|---|---|
 | | | | | | | |
 
-Do not invent plugin filenames, topics, frame names, or controller parameters. Derive them from simulator documentation or user-provided configuration.
+Do not invent plugin filenames, topics, frame names, namespaces, controller parameters, or update rates. Derive them from simulator documentation or user-provided configuration.
 
 ## Mesh URI policy
 
@@ -99,3 +100,16 @@ List every guessed or inferred value:
 - skipped validation or smoke test.
 
 If a value cannot be derived or safely assumed, generate a minimal placeholder only when the user asked for a placeholder, and label it as such.
+
+## Compact response template
+
+```text
+SDF source: path/to/source.py
+Generated target: path/to/output.sdf
+Target consumer: Gazebo Harmonic, SDF 1.12
+Bundled validation: passed with 2 warnings
+External checks: gz sdf --check skipped, gz not installed
+Assumptions:
+- Assumed mesh units are meters.
+- Assumed camera optical frame follows simulator plugin documentation.
+```

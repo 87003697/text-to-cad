@@ -4,12 +4,27 @@ Use smoke tests after generated SDF passes bundled validation. The goal is to ca
 
 ## Recommended checks
 
+### Bundled validation
+
+```bash
+python scripts/sdf path/to/model.py
+python scripts/sdf path/to/model.py --strict
+```
+
+Bundled validation runs during explicit target generation. Use `--strict` when warnings should block handoff.
+
 ### SDFormat parser check
 
 When Gazebo tooling is installed:
 
 ```bash
 gz sdf --check path/to/model.sdf
+```
+
+or through the skill CLI:
+
+```bash
+python scripts/sdf path/to/model.py --gz-check auto
 ```
 
 Use the exact simulator environment that will consume the file when possible.
@@ -33,6 +48,14 @@ For each non-fixed joint:
 - confirm limits stop motion where expected;
 - confirm continuous joints can rotate continuously if intended.
 
+### CAD Explorer static review
+
+After generating or modifying an `.sdf`, hand the explicit path to `$render` for a live viewer link when available. When visual feedback is useful, use `$render` snapshots rather than manual viewer or Playwright inspection.
+
+- confirm direct model links, joints, frames, visuals, and collisions are placed correctly;
+- confirm includes, plugins, sensors, lights, nested models, and unsupported geometry are listed as static metadata;
+- record any simulator-only behavior that CAD Explorer cannot execute.
+
 ### Sensor and plugin check
 
 For each sensor or plugin:
@@ -45,7 +68,7 @@ For each sensor or plugin:
 
 ### Visual review
 
-When `$cad-explorer` or an equivalent viewer is available, render the generated file or related assets. Visual review is useful but not sufficient: it can catch gross placement and mesh problems, but it cannot prove axis frames, inertials, dynamics, or plugin behavior.
+When CAD Explorer or an equivalent viewer is available through `$render`, return the viewer link and use still snapshots when visual feedback is needed. Visual review is useful but insufficient: it can catch gross placement and mesh problems, but it cannot prove axis frames, inertials, dynamics, or plugin behavior. Do not generate GIFs for SDF review.
 
 ## Report format
 
@@ -63,3 +86,13 @@ Assumptions:
 - Assumed mesh units are meters.
 - Assumed lidar frame is coincident with lidar_link.
 ```
+
+## When to stop
+
+Stop and fix the generator when:
+
+- bundled validation has errors;
+- `gz sdf --check` fails under a required external-check policy;
+- the simulator reports invalid inertias or unresolved required assets;
+- a joint moves opposite from the documented positive direction;
+- plugin startup fails for a plugin required by the task.

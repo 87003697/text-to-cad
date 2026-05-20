@@ -1,325 +1,285 @@
 import Image from "next/image";
 import { ExternalLink } from "lucide-react";
 import { CopyButton } from "@/components/copy-button";
+import { HeroSection } from "@/components/hero-section";
 import { SiteFooter } from "@/components/site-footer";
 import { SiteHeader } from "@/components/site-header";
 
-const quickStartCommands = [
-  "git clone https://github.com/earthtojake/text-to-cad.git",
-  "cd text-to-cad",
-  "./scripts/codex-install.sh",
-];
+const skillsCliCommand = "npx skills add earthtojake/text-to-cad";
+const skillsShUrl = "https://www.skills.sh/";
 
-const providerInstalls = [
-  {
-    name: "Codex",
-    command: "./scripts/codex-install.sh",
-    destination: "${CODEX_HOME:-$HOME/.codex}/skills",
-  },
-  {
-    name: "Claude Code",
-    command: "./scripts/claude-install.sh",
-    destination: "${CLAUDE_SKILLS_DIR:-$HOME/.claude/skills}",
-  },
-  {
-    name: "Gemini CLI",
-    command: "./scripts/gemini-install.sh",
-    destination: "${GEMINI_SKILLS_DIR:-.gemini/skills}",
-  },
-  {
-    name: "OpenClaw",
-    command: "./scripts/openclaw-install.sh",
-    destination: "${OPENCLAW_SKILLS_DIR:-$HOME/.openclaw/skills}",
-  },
-  {
-    name: "Universal installer",
-    command: "npx agent-skills-cli add earthtojake/text-to-cad",
-    destination: "Supported local agent skill roots",
-  },
-];
-
-const installOptions = [
-  ["List bundled skills", "./scripts/install.sh --list"],
-  ["Install one skill", "./scripts/install.sh --agent codex --skill cad"],
-  ["Preview changes", "./scripts/install.sh --agent all --dry-run"],
-  ["Use symlinks", "./scripts/install.sh --agent project --link"],
+const supportedAgents = [
+  { name: "Claude Code", slug: "claude-code", icon: "claude-code.svg" },
+  { name: "Cursor", slug: "cursor", icon: "cursor.svg" },
+  { name: "Codex", slug: "codex", icon: "codex.svg" },
+  { name: "GitHub Copilot", slug: "github-copilot", icon: "copilot.svg" },
+  { name: "Windsurf", slug: "windsurf", icon: "windsurf.svg" },
+  { name: "Gemini", slug: "gemini", icon: "gemini.svg" },
+  { name: "Cline", slug: "cline", icon: "cline.svg" },
+  { name: "AMP", slug: "amp", icon: "amp.svg" },
+  { name: "Antigravity", slug: "antigravity", icon: "antigravity.svg" },
+  { name: "ClawdBot", slug: "clawdbot", icon: "clawdbot.svg" },
+  { name: "Droid", slug: "droid", icon: "droid.svg" },
+  { name: "Goose", slug: "goose", icon: "goose.svg" },
+  { name: "Kilo", slug: "kilo", icon: "kilo.svg" },
+  { name: "Kiro CLI", slug: "kiro-cli", icon: "kiro-cli.svg" },
+  { name: "OpenCode", slug: "opencode", icon: "opencode.svg" },
+  { name: "Roo", slug: "roo", icon: "roo.svg" },
+  { name: "Trae", slug: "trae", icon: "trae.svg" },
+  { name: "VS Code", slug: "vscode", icon: "vscode.svg" },
 ];
 
 const skillGroups = [
   {
-    orbitSrc: "/skill-logos/cad-orbit.gif",
     name: "CAD",
     path: "skills/cad",
     summary:
-      "Builds and edits parametric CAD from natural-language requirements, with STEP as the primary checked output.",
-    details:
-      "Use it for mechanical parts, assemblies, fixtures, enclosures, measurements, @cad references, and secondary DXF/STL/3MF/GLB exports.",
+      "Creates and edits CAD models from plain-language requests, with STEP as the main output.",
   },
   {
-    orbitSrc: "/skill-logos/step-parts-cog-orbit.gif",
+    name: "Render",
+    path: "skills/render",
+    summary:
+      "Shows local browser previews and snapshots for CAD and robot files.",
+  },
+  {
     name: "step.parts",
     path: "skills/step-parts",
     summary:
-      "Finds and downloads off-the-shelf STEP models from the hosted step.parts catalog.",
-    details:
-      "Use it for standard screws, nuts, washers, bearings, standoffs, electronics parts, motors, connectors, aliases, dimensions, and checksum-verified downloads.",
+      "Finds off-the-shelf STEP parts like screws, bearings, motors, and connectors.",
   },
   {
-    orbitSrc: "/skill-logos/cad-explorer-orbit.gif",
-    name: "CAD Explorer",
-    path: "skills/cad-explorer",
-    summary:
-      "Opens local visual review links for generated CAD and robot-description files.",
-    details:
-      "Use it when you want to inspect STEP, STP, STL, 3MF, DXF, URDF, SRDF, or SDF outputs in the browser.",
-  },
-  {
-    orbitSrc: "/skill-logos/urdf-orbit.gif",
     name: "URDF",
     path: "skills/urdf",
     summary:
-      "Generates robot structure descriptions from Python gen_urdf() sources.",
-    details:
-      "Use it for links, joints, limits, inertials, mesh references, visual/collision geometry, and frame semantics.",
+      "Writes robot structure files with links, joints, limits, inertials, and meshes.",
   },
   {
-    orbitSrc: "/skill-logos/srdf-orbit.gif",
     name: "SRDF",
     path: "skills/srdf",
     summary:
-      "Adds MoveIt planning semantics on top of an existing valid URDF.",
-    details:
-      "Use it for planning groups, virtual joints, passive joints, end effectors, group states, disabled collisions, IK, and path-planning semantics.",
+      "Adds MoveIt planning groups, end effectors, poses, and collision rules to a URDF.",
   },
   {
-    orbitSrc: "/skill-logos/sdf-orbit.gif",
     name: "SDF",
     path: "skills/sdf",
     summary:
-      "Creates SDFormat models and worlds for simulator-specific behavior.",
-    details:
-      "Use it for poses, frames, physics, sensors, lights, plugins, mesh URIs, and world or model layout.",
+      "Creates simulator models and worlds with frames, physics, sensors, and lights.",
   },
   {
-    orbitSrc: "/skill-logos/sendcutsend-orbit.gif",
     name: "SendCutSend",
     path: "skills/sendcutsend",
-    summary:
-      "Preflights DXF and STEP/STP files for SendCutSend orders.",
-    details:
-      "Use it for laser cutting, CNC routing, bending, tapping, countersinking, hardware insertion, finishing, and upload readiness.",
+    summary: "Checks DXF and STEP files before upload to SendCutSend.",
   },
 ];
 
-function CodeBlock({
-  lines,
-  label,
-}: {
-  lines: string[];
-  label?: string;
-}) {
-  const code = lines.join("\n");
-
+function TryNowCommand() {
   return (
-    <div className="relative min-w-0 max-w-full">
-      <pre className="min-w-0 max-w-full overflow-x-auto rounded-md border border-[color:var(--border)] bg-[var(--muted)] px-4 py-3 pr-14 text-sm leading-6 text-[var(--foreground)]">
-        <code>{code}</code>
-      </pre>
-      <div className="absolute right-2 top-2">
-        <CopyButton text={code} label={label ?? "Copy commands"} />
+    <div className="flex min-h-[54px] min-w-0 max-w-full items-stretch border border-border bg-card">
+      <code className="flex min-w-0 flex-1 items-center overflow-x-auto whitespace-nowrap px-3 text-sm leading-none text-foreground">
+        <span className="mr-[1ch] text-muted-foreground">$</span>
+        {skillsCliCommand}
+      </code>
+      <CopyButton text={skillsCliCommand} label="Copy install command" compact />
+    </div>
+  );
+}
+
+function AgentTile({
+  agent,
+  hidden = false,
+}: {
+  agent: (typeof supportedAgents)[number];
+  hidden?: boolean;
+}) {
+  return (
+    <a
+      aria-hidden={hidden ? "true" : undefined}
+      aria-label={`Skills for ${agent.name}`}
+      className="group flex h-[54px] w-[150px] shrink-0 items-center gap-2.5 border border-border bg-card px-2.5 text-muted-foreground transition hover:bg-secondary hover:text-foreground sm:w-[168px]"
+      href={`https://www.skills.sh/agent/${agent.slug}`}
+      rel="noreferrer"
+      tabIndex={hidden ? -1 : undefined}
+      target="_blank"
+    >
+      <span className="flex size-7 shrink-0 items-center justify-center">
+        <Image
+          alt=""
+          src={`https://www.skills.sh/agents/${agent.icon}`}
+          width={44}
+          height={44}
+          unoptimized
+          className="size-5 object-contain opacity-70 grayscale transition group-hover:opacity-100 group-hover:grayscale-0 dark:invert"
+        />
+      </span>
+      <span className="min-w-0 truncate text-label uppercase tracking-[1.3px]">
+        {agent.name}
+      </span>
+    </a>
+  );
+}
+
+function AgentCarousel() {
+  return (
+    <div className="agent-carousel relative min-h-[54px] min-w-0 overflow-hidden">
+      <div className="pointer-events-none absolute inset-y-0 left-0 z-10 w-12 bg-gradient-to-r from-background to-transparent sm:w-20" />
+      <div className="pointer-events-none absolute inset-y-0 right-0 z-10 w-12 bg-gradient-to-l from-background to-transparent sm:w-20" />
+      <div className="agent-carousel-track flex w-max gap-2">
+        {supportedAgents.map((agent) => (
+          <AgentTile key={agent.slug} agent={agent} />
+        ))}
+        {supportedAgents.map((agent) => (
+          <AgentTile key={`${agent.slug}-duplicate`} agent={agent} hidden />
+        ))}
       </div>
     </div>
   );
 }
 
-function CommandLine({ command }: { command: string }) {
-  return <CodeBlock lines={[command]} label="Copy command" />;
+function SectionIntro({
+  id,
+  title,
+  description,
+}: {
+  id?: string;
+  title: string;
+  description: string;
+}) {
+  return (
+    <div>
+      <h2
+        id={id}
+        className="text-heading font-medium tracking-normal text-foreground"
+      >
+        {title}
+      </h2>
+      <p className="mt-2 max-w-3xl text-sm leading-6 text-muted-foreground">
+        {description}
+      </p>
+    </div>
+  );
+}
+
+function SkillLink({ skill }: { skill: (typeof skillGroups)[number] }) {
+  return (
+    <a
+      className="inline-flex min-w-0 items-center gap-1.5 text-label uppercase tracking-[1.5px] text-primary transition hover:text-primary/80"
+      href={`https://github.com/earthtojake/text-to-cad/blob/main/${skill.path}/SKILL.md`}
+      target="_blank"
+      rel="noreferrer"
+    >
+      <span className="truncate">{skill.path}</span>
+      <ExternalLink className="size-3 shrink-0" />
+    </a>
+  );
 }
 
 export default function Home() {
   return (
-    <main className="min-h-screen bg-[var(--background)] text-[var(--foreground)]">
-      <div className="mx-auto flex min-h-screen w-full max-w-6xl flex-col px-5 py-6 sm:px-8 sm:py-8">
-        <SiteHeader />
-        <div className="flex flex-1 flex-col gap-20 py-14 sm:py-20">
+    <main className="min-h-screen bg-background text-foreground">
+      <SiteHeader />
+
+      <div className="mx-auto w-full max-w-[1200px] px-4 py-4 sm:px-6">
+        <div className="min-w-0 space-y-2">
+          <HeroSection />
+
+          <section
+            aria-label="Install CAD Skills with supported agents"
+            className="grid gap-5 py-6 lg:grid-cols-[minmax(18rem,0.8fr)_minmax(0,1.2fr)] lg:items-center lg:gap-12"
+          >
+            <div className="min-w-0 space-y-3">
+              <h2 className="text-sm font-medium uppercase tracking-[1.5px] text-foreground">
+                Try It Now
+              </h2>
+              <TryNowCommand />
+            </div>
+
+            <div className="min-w-0 space-y-3">
+              <h2 className="text-sm font-medium uppercase tracking-[1.5px] text-foreground">
+                Available For These Agents
+              </h2>
+              <AgentCarousel />
+            </div>
+          </section>
+
           <section
             id="skills"
             aria-labelledby="skills-title"
-            className="space-y-8"
+            className="scroll-mt-20 space-y-3 py-6"
           >
-            <div className="max-w-3xl">
-              <h2
-                id="skills-title"
-                className="text-3xl font-semibold tracking-normal sm:text-4xl"
-              >
-                Skills
-              </h2>
-              <p className="mt-4 text-sm leading-6 text-[var(--muted-foreground)]">
-                Agents use CAD skills to generate, source, and render 3D
-                models, robot description files, and more.
-              </p>
-            </div>
-            <ul className="divide-y divide-[color:var(--border)] border-y border-[color:var(--border)]">
-              {skillGroups.map((skill) => {
-                return (
-                  <li key={skill.name} className="py-6">
-                    <div className="grid gap-4 md:grid-cols-[2.5rem_minmax(0,1fr)_auto]">
-                      <div
-                        aria-hidden="true"
-                        className="relative size-10 overflow-hidden rounded-[12px] border border-primary/30 bg-primary/10"
-                      >
-                        <Image
-                          src={skill.orbitSrc}
-                          alt=""
-                          width={160}
-                          height={160}
-                          unoptimized
-                          className="size-full object-contain p-0.5"
-                        />
-                      </div>
+            <SectionIntro
+              id="skills-title"
+              title="SKILLS"
+              description="Agents use CAD skills to generate, source, and render 3D models, robot description files, and more."
+            />
+
+            <div className="border border-border bg-card">
+              <div className="grid grid-cols-[minmax(0,1fr)] border-b border-border py-2.5 pl-0 pr-3.5 text-xs uppercase tracking-[1.5px] text-muted-foreground md:grid-cols-[minmax(9rem,12rem)_minmax(0,1fr)_max-content] md:gap-5">
+                <span className="pl-3.5">skill</span>
+                <span className="hidden md:block">summary</span>
+                <span className="hidden text-right md:block">source</span>
+              </div>
+              <ul className="divide-y divide-border">
+                {skillGroups.map((skill) => (
+                  <li
+                    key={skill.name}
+                    className="card-glow grid gap-3 py-3 pl-0 pr-3.5 hover:bg-secondary/60 md:grid-cols-[minmax(9rem,12rem)_minmax(0,1fr)_max-content] md:items-center md:gap-5"
+                  >
+                    <div className="flex min-w-0 items-center pl-3.5">
                       <div className="min-w-0">
-                        <h3 className="text-xl font-semibold tracking-normal">
+                        <h3 className="text-sm font-medium text-foreground">
                           {skill.name}
                         </h3>
-                        <p className="mt-3 text-sm leading-6">
-                          {skill.summary}
-                        </p>
-                        <p className="mt-2 text-sm leading-6 text-[var(--muted-foreground)]">
-                          {skill.details}
+                        <p className="mt-0.5 text-label uppercase tracking-wider text-muted-foreground md:hidden">
+                          {skill.path}
                         </p>
                       </div>
-                      <a
-                        className="inline-flex w-fit items-center gap-1.5 self-start text-sm font-semibold text-[var(--foreground)] underline underline-offset-4 transition hover:text-[var(--muted-foreground)] md:justify-self-end"
-                        href={`https://github.com/earthtojake/text-to-cad/blob/main/${skill.path}/SKILL.md`}
-                        target="_blank"
-                        rel="noreferrer"
-                      >
-                        <span>{skill.path}</span>
-                        <ExternalLink className="size-3.5" />
-                      </a>
+                    </div>
+                    <div className="min-w-0 text-sm leading-6 text-muted-foreground">
+                      <p>{skill.summary}</p>
+                    </div>
+                    <div className="min-w-0 md:justify-self-end md:pt-0.5 md:text-right">
+                      <SkillLink skill={skill} />
                     </div>
                   </li>
-                );
-              })}
-            </ul>
+                ))}
+              </ul>
+            </div>
           </section>
 
           <section
             id="installation"
             aria-labelledby="installation-title"
-            className="grid gap-8 lg:grid-cols-[minmax(0,0.85fr)_minmax(0,1.15fr)]"
+            className="scroll-mt-20 space-y-3 py-6"
           >
-            <div>
-              <h2
-                id="installation-title"
-                className="text-3xl font-semibold tracking-normal sm:text-4xl"
-              >
-                Install
-              </h2>
-              <p className="mt-4 text-sm leading-6 text-[var(--muted-foreground)]">
-                Clone the repo once, then run the installer for the agent you
-                use. Restart the agent if newly installed skills do not appear.
-              </p>
-              <p className="mt-4 text-sm leading-6">
-                <a
-                  className="font-semibold underline underline-offset-4 hover:text-[var(--muted-foreground)]"
-                  href="https://github.com/earthtojake/text-to-cad/blob/main/INSTALLATION.md"
-                  target="_blank"
-                  rel="noreferrer"
-                >
-                  Read the full installation guide
-                </a>
-              </p>
-            </div>
-            <div className="min-w-0 space-y-6">
-              <CodeBlock lines={quickStartCommands} />
-              <div className="divide-y divide-[color:var(--border)] border-y border-[color:var(--border)]">
-                {providerInstalls.map((provider) => (
-                  <div
-                    key={provider.name}
-                    className="grid gap-3 py-4 sm:grid-cols-[10rem_1fr]"
-                  >
-                    <div className="font-medium">{provider.name}</div>
-                    <div className="min-w-0 space-y-2">
-                      <CommandLine command={provider.command} />
-                      <p className="text-xs leading-5 text-[var(--muted-foreground)]">
-                        Installs to {provider.destination}.
-                      </p>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            </div>
-          </section>
-
-          <section
-            aria-labelledby="installer-title"
-            className="grid gap-8 lg:grid-cols-[minmax(0,0.85fr)_minmax(0,1.15fr)]"
-          >
-            <div>
-              <p className="text-sm uppercase text-[var(--muted-foreground)]">
-                Installer controls
-              </p>
-              <h2
-                id="installer-title"
-                className="mt-3 text-2xl font-semibold tracking-normal"
-              >
-                Target one skill or one workspace
-              </h2>
-              <p className="mt-4 text-sm leading-6 text-[var(--muted-foreground)]">
-                The shared installer supports specific agents, one-skill
-                installs, dry runs, forced replacement, and symlinked
-                project-local setups.
-              </p>
-            </div>
-            <div className="min-w-0 divide-y divide-[color:var(--border)] border-y border-[color:var(--border)]">
-              {installOptions.map(([label, command]) => (
-                <div
-                  key={label}
-                  className="grid gap-3 py-4 sm:grid-cols-[10rem_1fr]"
-                >
-                  <div className="text-sm text-[var(--muted-foreground)]">
-                    {label}
-                  </div>
-                  <CommandLine command={command} />
-                </div>
-              ))}
-            </div>
-          </section>
-
-          <section
-            id="local-development"
-            aria-labelledby="local-development-title"
-            className="grid gap-8 lg:grid-cols-[minmax(0,0.85fr)_minmax(0,1.15fr)]"
-          >
-            <div>
-              <p className="text-sm uppercase text-[var(--muted-foreground)]">
-                Local development
-              </p>
-              <h2
-                id="local-development-title"
-                className="mt-3 text-2xl font-semibold tracking-normal"
-              >
-                Optional CAD runtime setup
-              </h2>
-              <p className="mt-4 text-sm leading-6 text-[var(--muted-foreground)]">
-                Skill installation gives the agent the workflows. Local CAD
-                generation also needs the Python CAD dependencies and CAD
-                Explorer dependencies installed in this repo.
-              </p>
-            </div>
-            <CodeBlock
-              lines={[
-                "python3.11 -m venv .venv",
-                "./.venv/bin/python -m pip install --upgrade pip",
-                "./.venv/bin/pip install -r skills/cad/requirements.txt",
-                "npm --prefix skills/cad-explorer/scripts/explorer install",
-              ]}
+            <SectionIntro
+              id="installation-title"
+              title="INSTALL"
+              description="Use the Skills CLI to add CAD Skills to supported local agents."
             />
+
+            <div className="max-w-xl space-y-3">
+              <TryNowCommand />
+              <p className="text-sm leading-6 text-muted-foreground">
+                Restart your agent if newly installed skills do not appear. Learn
+                more at{" "}
+                <a
+                  className="inline-flex items-center gap-1 text-primary transition hover:text-primary/80"
+                  href={skillsShUrl}
+                  rel="noreferrer"
+                  target="_blank"
+                >
+                  skills.sh
+                  <ExternalLink className="size-3" aria-hidden="true" />
+                </a>
+                .
+              </p>
+            </div>
           </section>
         </div>
-        <SiteFooter />
       </div>
+
+      <SiteFooter />
     </main>
   );
 }

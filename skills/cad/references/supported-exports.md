@@ -4,7 +4,7 @@ Read this file when the user requests STL, 3MF, or native GLB output from CAD ge
 
 ## Policy
 
-STL, 3MF, and native GLB are mesh sidecars, not substitutes for STEP. Generate and validate STEP first, then export requested sidecars from the same `scripts/step` run. Do not render sidecars directly for CAD validation; render or inspect the STEP when visual review is needed.
+STL, 3MF, and native GLB are mesh sidecars, not substitutes for STEP. Generate and validate STEP first, then export requested sidecars from the same `scripts/step` run. Do not treat sidecar renders as CAD validation; inspect the STEP, return `$render` viewer links for every generated or modified supported artifact, and use `$render` snapshots only when visual feedback is needed.
 
 Native GLB sidecars are ordinary glTF 2.0 binary files for external tools: Y-up, meter-scaled, and free of the CAD Explorer `STEP_topology` extension. Do not confuse them with the hidden `.<name>.step.glb` Explorer topology artifact.
 
@@ -45,13 +45,14 @@ Use tighter tolerances for small curved parts or visual fidelity. Use looser tol
 
 1. Generate STEP from `gen_step()` with the requested sidecar flag(s).
 2. Run facts/planes/positioning inspection on the STEP.
-3. Return the STEP, requested sidecar files, and CAD Explorer link from `$cad-explorer` when available.
+3. Return the STEP, requested sidecar files, and `$render` viewer links for every generated or modified supported artifact when available.
 
 Example:
 
 ```bash
 python scripts/step models/bracket.py \
   --stl meshes/bracket.stl \
+  --glb meshes/bracket.glb \
   --mesh-tolerance 0.2 \
   --mesh-angular-tolerance 0.2
 
@@ -67,9 +68,11 @@ Files:
 - GLB: meshes/bracket.glb
 
 CAD Explorer:
-- http://127.0.0.1:4178/?file=models/bracket.step
+- STEP: http://127.0.0.1:4178/?file=models/bracket.step
+- STL: http://127.0.0.1:4178/?file=meshes/bracket.stl
+- GLB: http://127.0.0.1:4178/?file=meshes/bracket.glb
 
 Validation:
 - STEP geometry validated; STL/3MF/native GLB generated as requested sidecars.
-- Render not run unless requested or needed.
+- Saved snapshot packet run/skipped and why.
 ```

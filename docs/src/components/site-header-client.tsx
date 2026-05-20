@@ -1,6 +1,5 @@
 "use client";
 
-import Image from "next/image";
 import Link from "next/link";
 import { ThemeToggle } from "@/components/theme-toggle";
 import { Button } from "@/components/ui/button";
@@ -46,61 +45,56 @@ export function SiteHeaderClient({
         )} stars`;
 
   return (
-    <header className="border-b border-[color:var(--border)] pb-7">
-      <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
-        <Link href="/" className="min-w-0 focus:outline-none">
-          <div className="flex min-w-0 items-center gap-1">
-            <span className="relative size-12 shrink-0 overflow-hidden sm:size-16">
-              <Image
-                src="/skill-logos/brain-cog-orbit.gif"
-                width={160}
-                height={160}
-                unoptimized
-                alt=""
-                aria-hidden="true"
-                className="size-full object-cover"
-              />
-            </span>
-            <h1 className="min-w-0 text-3xl font-semibold tracking-normal transition hover:opacity-80 sm:text-5xl">
-              CAD Skills
-            </h1>
-          </div>
-          <p className="mt-3 max-w-2xl text-base leading-7 text-[var(--muted-foreground)] sm:text-lg">
-            A collection of agent skills for CAD, robotics and hardware design
-          </p>
+    <header className="sticky top-0 z-40 h-14 shrink-0 overflow-hidden border-b border-border bg-background">
+      <div className="mx-auto flex h-full w-full max-w-[1200px] items-center gap-3 px-4 sm:px-6">
+        <Link
+          href="/"
+          className="flex min-w-0 items-center text-foreground transition hover:text-primary"
+        >
+          <span className="min-w-0 truncate text-sm font-medium">
+            CAD Skills
+          </span>
         </Link>
-        <div className="flex flex-wrap items-center gap-2 sm:shrink-0 sm:justify-end">
-          <nav
-            aria-label="Primary"
-            className="flex flex-wrap items-center gap-2 text-sm font-semibold text-[var(--foreground)]"
+
+        <nav
+          aria-label="Primary"
+          className="ml-auto hidden items-center gap-1 sm:flex"
+        >
+          <a
+            className="px-2.5 py-1.5 text-ui text-muted-foreground transition hover:bg-secondary hover:text-foreground"
+            href="#skills"
+          >
+            SKILLS
+          </a>
+          <a
+            className="px-2.5 py-1.5 text-ui text-muted-foreground transition hover:bg-secondary hover:text-foreground"
+            href="#installation"
+          >
+            INSTALL
+          </a>
+        </nav>
+
+        <div className="ml-auto flex shrink-0 items-center gap-1 sm:ml-0">
+          <Button
+            asChild
+            variant="outline"
+            className="card-glow h-8 border-border bg-card px-2 text-ui text-foreground hover:bg-secondary hover:text-primary"
           >
             <a
-              className="rounded-md border border-[color:var(--border)] px-3 py-2 transition hover:bg-[var(--muted)]"
-              href="#skills"
-            >
-              Skills
-            </a>
-            <a
-              className="rounded-md border border-[color:var(--border)] px-3 py-2 transition hover:bg-[var(--muted)]"
-              href="#installation"
-            >
-              Install
-            </a>
-            <a
-              className="rounded-md border border-[color:var(--border)] px-3 py-2 transition hover:bg-[var(--muted)]"
               href="https://demo.cadskills.xyz"
               target="_blank"
               rel="noreferrer"
+              aria-label="Open demo in a new tab"
             >
-              Demo
+              DEMO
             </a>
-          </nav>
+          </Button>
           <Tooltip>
             <TooltipTrigger asChild>
               <Button
                 asChild
                 variant="outline"
-                className="h-10 rounded-md border-[color:var(--border)] bg-[var(--background)] px-3 text-[var(--foreground)] hover:bg-[var(--muted)] hover:text-[var(--foreground)]"
+                className="card-glow h-8 border-border bg-card px-2 text-foreground hover:bg-secondary hover:text-primary"
               >
                 <a
                   href={GITHUB_REPO_URL}
@@ -108,16 +102,16 @@ export function SiteHeaderClient({
                   rel="noreferrer"
                   aria-label={githubLabel}
                 >
-                  <GitHubLogo className="size-4" />
+                  <GitHubLogo className="size-3.5" />
                   {githubStars !== null ? (
-                    <span className="text-sm font-semibold tabular-nums">
+                    <span className="text-label font-medium tabular-nums tracking-wider">
                       {formatGitHubStars(githubStars)}
                     </span>
                   ) : null}
                 </a>
               </Button>
             </TooltipTrigger>
-            <TooltipContent side="bottom">GitHub stars</TooltipContent>
+            <TooltipContent side="bottom">GitHub</TooltipContent>
           </Tooltip>
           <ThemeToggle />
         </div>

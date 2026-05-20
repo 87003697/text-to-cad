@@ -53,11 +53,11 @@ Direct targets can use sidecar mesh flags, but generator targets remain preferre
 
 ## Adjacent Explorer artifacts
 
-`scripts/step` generates the explicit STEP target and adjacent hidden Explorer GLB/topology artifacts by default. These artifacts support Explorer and render workflows. Do not require a separate validation subcommand for them.
+`scripts/step` generates the explicit STEP target and adjacent hidden Explorer GLB/topology artifacts by default. These artifacts support Explorer GUI review and CAD Explorer render workflows. Do not require a separate validation subcommand for them.
 
 Only ever use `--skip-explorer` when the user explicitly asks to skip Explorer, GLB/topology, or renderable topology output. Do not infer this flag from speed or convenience. When explicitly requested, it skips selector extraction and hidden GLB/topology output; STEP-only runs also avoid loading and meshing the STEP after generation. The command still writes requested STL, 3MF, or native GLB sidecars.
 
-After generation, hand the explicit STEP/STP output path to `$cad-explorer` when available and return the link it prints.
+After generation, hand the explicit STEP/STP output path and any requested render-supported sidecar paths to `$render` when available and return the links it prints.
 
 ## Post-generation inspection
 
@@ -97,5 +97,5 @@ After running the command:
 - Confirm the process succeeded.
 - Confirm the STEP file exists and is non-empty.
 - Run the relevant `scripts/inspect` command and parse its output.
-- Hand off generated STEP/STP paths to `$cad-explorer` when available and return its link(s), or report why they are unavailable.
+- Hand off generated STEP/STP paths and requested render-supported sidecar paths to `$render` when available and return its link(s), or report why they are unavailable.
 - Continue with targeted inspection if facts/planes are insufficient.

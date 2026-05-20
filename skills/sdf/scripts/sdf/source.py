@@ -5,6 +5,8 @@ from pathlib import Path
 from urllib.parse import unquote, urlparse
 import xml.etree.ElementTree as ET
 
+from .validation import raise_for_validation_errors, validate_sdf_root
+
 SDF_SUFFIX = ".sdf"
 EXTERNAL_URI_SCHEMES = {"model", "package", "http", "https", "fuel"}
 
@@ -65,6 +67,8 @@ def parse_sdf_xml(xml_text: str, *, source_path: Path, base_dir: Path | None = N
 def parse_sdf_root(root: ET.Element, *, source_path: Path, base_dir: Path | None = None) -> SdfSource:
     resolved_path = source_path.resolve()
     resolved_base_dir = Path(base_dir).resolve() if base_dir is not None else resolved_path.parent
+    validation = validate_sdf_root(root, source_path=resolved_path, base_dir=resolved_base_dir)
+    raise_for_validation_errors(validation)
 
     if _local_name(root.tag) != "sdf":
         raise SdfSourceError(f"{_relative_to_repo(resolved_path)} root element must be <sdf>")
@@ -79,8 +83,6 @@ def parse_sdf_root(root: ET.Element, *, source_path: Path, base_dir: Path | None
     model_elements = list(_children(root, "model"))
     for world in world_elements:
         model_elements.extend(_children(world, "model"))
-    if not model_elements:
-        raise SdfSourceError(f"{_relative_to_repo(resolved_path)} must define at least one <model>")
 
     model_names: list[str] = []
     links: list[str] = []
@@ -101,8 +103,6 @@ def parse_sdf_root(root: ET.Element, *, source_path: Path, base_dir: Path | None
         joints.extend(model_joints)
         visual_mesh_paths.extend(model_visual_meshes)
         collision_mesh_paths.extend(model_collision_meshes)
-
-    _raise_on_duplicates(model_names, source_path=resolved_path, label="model")
 
     return SdfSource(
         file_ref=file_ref_from_sdf_path(resolved_path),

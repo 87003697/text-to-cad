@@ -8,7 +8,7 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip";
 
-const THEME_STORAGE_KEY = "cad-skills-theme";
+const THEME_STORAGE_KEY = "cad-skills-theme-v2";
 
 export function ThemeToggle() {
   const toggleTheme = () => {
@@ -33,12 +33,12 @@ export function ThemeToggle() {
           type="button"
           variant="outline"
           size="icon"
-          className="h-10 w-10 rounded-md border-[color:var(--border)] bg-[var(--background)] text-[var(--foreground)] hover:bg-[var(--muted)] hover:text-[var(--foreground)]"
+          className="card-glow h-8 w-8 border-border bg-card text-foreground hover:bg-secondary hover:text-primary"
           onClick={toggleTheme}
           aria-label="Toggle light and dark mode"
         >
-          <Sun className="size-4 dark:hidden" strokeWidth={2.75} />
-          <Moon className="hidden size-4 dark:block" strokeWidth={2.75} />
+          <Sun className="size-4 dark:hidden" />
+          <Moon className="hidden size-4 dark:block" />
         </Button>
       </TooltipTrigger>
       <TooltipContent side="bottom">Light / dark</TooltipContent>

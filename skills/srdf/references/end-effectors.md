@@ -1,6 +1,6 @@
 # SRDF end effectors
 
-Use this reference when creating or editing `<end_effector>` entries or preparing MoveIt2 pose-target handoffs for `$cad-explorer`.
+Use this reference when creating or editing `<end_effector>` entries or preparing MoveIt2 pose-target handoffs for `$render`.
 
 ## Concept
 
@@ -47,7 +47,7 @@ The current runtime enforces several of these checks, but target/TCP choice rema
 
 ## CAD Explorer MoveIt2 target link
 
-When handing an SRDF to `$cad-explorer` for optional MoveIt2 controls, make the intended target link explicit when possible:
+When handing an SRDF to `$render` for optional MoveIt2 controls, make the intended target link explicit when possible:
 
 ```json
 {

@@ -15,14 +15,14 @@ const socialPreview = {
 const themeScript = `
 (() => {
   const media = window.matchMedia("(prefers-color-scheme: dark)");
+  const storageKey = "cad-skills-theme-v2";
   const applyTheme = (theme) => {
     document.documentElement.classList.toggle("dark", theme === "dark");
     document.documentElement.style.colorScheme = theme;
   };
-  const resolveSystemTheme = () => (media.matches ? "dark" : "light");
   const getStoredTheme = () => {
     try {
-      const storedTheme = window.localStorage.getItem("cad-skills-theme");
+      const storedTheme = window.localStorage.getItem(storageKey);
       return storedTheme === "dark" || storedTheme === "light"
         ? storedTheme
         : null;
@@ -31,11 +31,11 @@ const themeScript = `
     }
   };
 
-  applyTheme(getStoredTheme() ?? resolveSystemTheme());
+  applyTheme(getStoredTheme() ?? "dark");
 
   const handleSystemThemeChange = () => {
     if (!getStoredTheme()) {
-      applyTheme(resolveSystemTheme());
+      applyTheme("dark");
     }
   };
 
@@ -74,9 +74,15 @@ export const metadata: Metadata = {
     images: [socialPreview],
   },
   icons: {
-    icon: [{ url: "/favicon.ico", type: "image/x-icon" }],
-    shortcut: [{ url: "/favicon.ico", type: "image/x-icon" }],
-    apple: [{ url: "/favicon.png", type: "image/png" }],
+    icon: [
+      { url: "/favicon.ico?v=planetary-gear-technical", type: "image/x-icon" },
+    ],
+    shortcut: [
+      { url: "/favicon.ico?v=planetary-gear-technical", type: "image/x-icon" },
+    ],
+    apple: [
+      { url: "/favicon.png?v=planetary-gear-technical", type: "image/png" },
+    ],
   },
   robots: {
     index: true,

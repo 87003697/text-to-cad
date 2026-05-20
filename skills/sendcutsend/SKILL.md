@@ -13,6 +13,8 @@ Treat SendCutSend's ordering guide, catalog JSON, and specs JSON as evidence fee
 
 Use the active project Python environment for local inspection scripts. If the `$cad` skill is available, use it first for STEP/STP/DXF geometry inspection, measurement, and validation workflows, then add any SendCutSend-specific targeted measurements that are still missing. Use `build123d.import_step` for STEP/STP inspection and `build123d.ezdxf` for DXF inspection when geometry facts are required. Do not use raw text parsing or alternate geometry backends for geometry facts.
 
+If this workflow creates or updates a DXF, STEP, or STP upload candidate, hand the explicit file path to `$render` when available; `$render` checks/reuses a live viewer and returns a link. For visual feedback on CAD/DXF geometry, prefer `$render` snapshots over opening the viewer manually or using Playwright. Use still snapshots only; SendCutSend review should not generate GIFs.
+
 ## Source Refresh
 
 Before each review, download or refresh the three SendCutSend source files:
@@ -71,7 +73,7 @@ Report with restrained status labels:
 
 ## Diagnostic Images
 
-When findings would be easier to understand visually, produce a concise diagnostic diagram proactively if image-generation or image-editing capabilities are available. Do this without waiting for the user to ask whenever there is a `❌ fail`, a spatially ambiguous geometry issue, or a geometry edit that needs a before/after explanation. If image-generation tools are unavailable, state that limitation and describe the intended diagram in the report.
+When findings would be easier to understand visually, produce a concise diagnostic diagram proactively if image-generation or image-editing capabilities are available. Use `$render` snapshots first for CAD/DXF geometry views when available; use generated or edited images for callouts, legends, and before/after explanations. Do this without waiting for the user to ask whenever there is a `❌ fail`, a spatially ambiguous geometry issue, or a geometry edit that needs a before/after explanation. If image-generation tools are unavailable, state that limitation and describe the intended diagram in the report.
 
 Before generating an image, run a layout preflight:
 

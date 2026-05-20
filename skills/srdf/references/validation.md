@@ -2,6 +2,8 @@
 
 Generation validates every `gen_srdf()` result against its linked URDF before writing. This catches many planning-semantics errors, but it is not a substitute for MoveIt Setup Assistant, MoveIt runtime tests, or collision-matrix sampling.
 
+Generated or modified `.srdf` files should be handed to `$render` for live viewer links when available. Use `$render` still snapshots for visual feedback instead of manual viewer or Playwright inspection.
+
 ## Current generation-time checks
 
 The current runtime checks that:
@@ -30,7 +32,7 @@ The current runtime checks that:
 
 ## Optional CAD Explorer MoveIt2 checks
 
-When `$cad-explorer` starts its local MoveIt2 server for SRDF review, the server additionally checks:
+When `$render` starts its local MoveIt2 server for SRDF review, the server additionally checks:
 
 - request `protocolVersion`;
 - request type;
@@ -104,6 +106,8 @@ Use a compact report:
 Checks run:
 - SRDF generation validation: passed
 - linked URDF validation: previously passed with URDF skill
+- render viewer link: returned
+- render snapshot: skipped, no visual ambiguity
 - MoveIt Setup Assistant review: skipped, unavailable
 - CAD Explorer MoveIt2 IK smoke test: passed for manipulator/tool0
 - collision matrix sampling: skipped, no MoveIt environment

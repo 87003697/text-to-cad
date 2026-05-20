@@ -4,7 +4,7 @@ Use this reference when creating or editing Python sources that generate SDForma
 
 ## Source of truth
 
-The Python source that defines `gen_sdf()` is source of truth. The configured `.sdf` output is generated and should not be hand-edited.
+The Python source that defines `gen_sdf()` is the source of truth. The configured `.sdf` output is generated and should not be hand-edited.
 
 ## Required shape
 
@@ -45,10 +45,32 @@ Envelope form:
 
 ```python
 def gen_sdf():
-    return {"xml": sdf_root_element}
+    return {
+        "xml": sdf_root_element,
+        "assumptions": [
+            {"code": "mesh_units", "message": "Assumed mesh units are meters."},
+            "Assumed lidar frame is coincident with lidar_link.",
+        ],
+        "warnings": [
+            {"code": "plugin_unverified", "message": "Camera plugin filename was not verified in the target simulator."}
+        ],
+        "metadata": {
+            "target_consumer": "Gazebo Harmonic",
+            "sdf_version": "1.12",
+        },
+    }
 ```
 
-The envelope field `xml` may be an XML element or XML string. A legacy `sdf_output` field is accepted only as an ignored extra alongside `xml`; it cannot replace `xml`. Do not add unsupported envelope fields; the current runtime rejects fields other than `xml` and legacy `sdf_output`.
+Envelope rules:
+
+- `xml` is required and may be an XML element or XML string.
+- `assumptions`, when present, must be a list of strings or dicts with `code`, `message`, and optional `source`.
+- `warnings`, when present, must be a list of strings or dicts with `code`, `message`, and optional `source`.
+- `metadata`, when present, must be a JSON-serializable dict with scalar values.
+- Legacy `sdf_output` may be accepted as an ignored extra only when `xml` is present.
+- Unsupported envelope fields should fail with a clear error.
+
+Use envelope assumptions to make spatial, physical, simulator, and resource assumptions auditable. Do not hide guesses in XML literals.
 
 ## Output path
 
@@ -75,7 +97,7 @@ For model packages, prefer URI conventions understood by the target simulator, s
 
 ## Pose and frame discipline
 
-Before emitting `<pose>`, `<frame>`, `<joint>`, `<axis>`, `<visual>`, or `<collision>` elements, fill out the design ledger:
+Before emitting `<pose>`, `<frame>`, `<joint>`, `<axis>`, `<visual>`, `<collision>`, sensor, or plugin placement elements, fill out the design ledger:
 
 - pose value;
 - pose frame or `relative_to`;
@@ -121,5 +143,9 @@ def gen_sdf():
     box = ET.SubElement(geometry, "box")
     text(box, "size", "0.4 0.3 0.1")
 
-    return sdf
+    return {
+        "xml": sdf,
+        "assumptions": ["base_link is coincident with the model frame."],
+        "metadata": {"target_consumer": "visualization"},
+    }
 ```

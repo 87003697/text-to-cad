@@ -56,7 +56,7 @@ CAD brief:
 - Holes: four 4.5 mm M4 clearance through-holes, 10 mm in from each corner.
 - Cutout: centered rectangular through-cut, 20 × 12 mm.
 - Validation: one positive-volume solid, bbox 100 × 60 × 6 mm, four holes, one center cutout, label mounting_plate.
-- Explorer: return link to the STEP file.
+- Render: return `$render` viewer link to the STEP file when available.
 ```
 
 ## Example: assembly

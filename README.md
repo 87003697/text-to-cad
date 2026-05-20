@@ -29,23 +29,23 @@ A collection of agent skills for CAD, robotics and hardware design
 ## ✨ Features
 
 - **Generate** - Create source-controlled CAD models with coding agents like Codex and Claude Code.
-- **Export** - Produce STEP, STL, 3MF, DXF, GLB, topology data, and URDF/SDF/SRDF robot descriptions.
+- **Export** - Produce STEP, STL, 3MF, DXF, GLB, topology data, and URDF/SRDF/SDF robot descriptions.
 - **Browse** - Inspect generated geometry, flat patterns, and robot-description files in CAD Explorer.
 - **Source** - Find and download off-the-shelf STEP parts from the hosted step.parts catalog.
 - **Reference** - Copy stable `@cad[...]` references so agents can make precise follow-up edits.
 - **Review** - Render quick review images for fast checks during an iteration loop.
 - **Reproduce** - Edit source files first, then regenerate explicit targets.
-- **Local** - Run harness, skills and explorer locally with no backend to host.
+- **Local** - Run harness, skills, and the render viewer locally with no backend to host.
 
 ## 🧰 Skills
 
-- **CAD Skill** - STEP, STL, 3MF, DXF, GLB/topology, render images, and `@cad[...]` geometry references. [Bundled skill](skills/cad/SKILL.md) · [Standalone repo](https://github.com/earthtojake/cad-skill)
-- **step.parts Skill** - Find, evaluate, and download common off-the-shelf STEP models from step.parts, including screws, nuts, washers, bearings, standoffs, electronics parts, motors, and connectors. [Bundled skill](skills/step-parts/SKILL.md)
-- **CAD Explorer Skill** - Start or reuse CAD Explorer and return visual review links for generated `.step`, `.stp`, `.stl`, `.3mf`, `.dxf`, `.urdf`, `.srdf`, and `.sdf` files. [Bundled skill](skills/cad-explorer/SKILL.md)
-- **URDF Skill** - Generated URDF XML, robot links, joints, limits, validation, mesh references, and CAD Explorer URDF visualization. [Bundled skill](skills/urdf/SKILL.md)
-- **SDF Skill** - Generated SDFormat/SDF XML, simulator model/world structure, validation, mesh URIs, plugins, and simulator-specific metadata. [Bundled skill](skills/sdf/SKILL.md)
-- **SRDF Skill** - MoveIt2 SRDF semantics, direct SRDF-to-URDF Explorer links, inverse kinematics, path planning, and optional MoveIt2-server testing for existing URDFs. [Bundled skill](skills/srdf/SKILL.md)
-- **SendCutSend Skill** - SendCutSend.com-specific DXF and STEP/STP upload preflight reports using its ordering guide, catalog, and specs for selected materials, SKUs, services, and secondary operations. [Bundled skill](skills/sendcutsend/SKILL.md)
+- **CAD** - STEP, STL, 3MF, DXF, GLB/topology, render images, and `@cad[...]` geometry references. [Bundled skill](skills/cad/SKILL.md) · [Standalone repo](https://github.com/earthtojake/cad-skill)
+- **Render** - Start or reuse CAD Explorer, return visual review links, and create snapshots for generated `.step`, `.stp`, `.glb`, `.stl`, `.3mf`, `.dxf`, `.urdf`, `.srdf`, and `.sdf` files. [Bundled skill](skills/render/SKILL.md)
+- **step.parts** - Find, evaluate, and download common off-the-shelf STEP models from step.parts, including screws, nuts, washers, bearings, standoffs, electronics parts, motors, and connectors. [Bundled skill](skills/step-parts/SKILL.md)
+- **URDF** - Generated URDF XML, robot links, joints, limits, validation, mesh references, and CAD Explorer URDF visualization. [Bundled skill](skills/urdf/SKILL.md)
+- **SRDF** - MoveIt2 SRDF semantics, direct SRDF-to-URDF Explorer links, inverse kinematics, path planning, and optional MoveIt2-server testing for existing URDFs. [Bundled skill](skills/srdf/SKILL.md)
+- **SDF** - Generated SDFormat/SDF XML, simulator model/world structure, validation, mesh URIs, plugins, and simulator-specific metadata. [Bundled skill](skills/sdf/SKILL.md)
+- **SendCutSend** - SendCutSend.com-specific DXF and STEP/STP upload preflight reports using its ordering guide, catalog, and specs for selected materials, SKUs, services, and secondary operations. [Bundled skill](skills/sendcutsend/SKILL.md)
 
 ## 🧩 Harness
 
@@ -55,54 +55,14 @@ To use the harness in another CAD project, copy `harness/AGENTS.md` and `harness
 
 ## 💻 Installation
 
-Clone once for script installs, then choose your agent:
+Install CAD Skills with the Skills CLI:
 
 ```bash
-git clone https://github.com/earthtojake/text-to-cad.git
-cd text-to-cad
+npx skills add earthtojake/text-to-cad
 ```
 
-### Codex
-
-```bash
-./scripts/codex-install.sh
-```
-
-Installs to `${CODEX_HOME:-$HOME/.codex}/skills`.
-
-### Claude Code
-
-```bash
-./scripts/claude-install.sh
-```
-
-Installs to `${CLAUDE_SKILLS_DIR:-$HOME/.claude/skills}`.
-
-### Gemini CLI
-
-```bash
-./scripts/gemini-install.sh
-```
-
-Installs to `${GEMINI_SKILLS_DIR:-.gemini/skills}`.
-
-### OpenClaw
-
-```bash
-./scripts/openclaw-install.sh
-```
-
-Installs to `${OPENCLAW_SKILLS_DIR:-$HOME/.openclaw/skills}`.
-
-### Universal Installer
-
-```bash
-npx agent-skills-cli add earthtojake/text-to-cad
-```
-
-This installs the repo's skills into supported agents automatically. Learn more at [agentskills.in](https://www.agentskills.in).
-
-For verification, troubleshooting, manual install, and uninstall steps, see [INSTALLATION.md](INSTALLATION.md). For local CAD generation, also install the CAD runtime dependencies from the setup commands below.
+Restart your agent if newly installed skills do not appear. Learn more about
+the Skills CLI and supported agents at [skills.sh](https://www.skills.sh/).
 
 ## 📸 Screenshots
 
@@ -133,7 +93,7 @@ For verification, troubleshooting, manual install, and uninstall steps, see [INS
 
 1. **Describe** - Tell your agent about the part, assembly, fixture, robot, or mechanism you want.
 2. **Edit** - Let your coding agent update repo-local CAD source files.
-3. **Regenerate** - Create explicit STEP, STL, 3MF, DXF, GLB, URDF, SDF, or SRDF targets.
+3. **Regenerate** - Create explicit STEP, STL, 3MF, DXF, GLB, URDF, SRDF, or SDF targets.
 4. **Inspect** - Open CAD Explorer to review the generated model.
 5. **Reference** - Copy `@cad[...]` handles when you want geometry-aware edits.
 6. **Commit** - Save the source and generated artifacts together once the model is ready.
@@ -236,16 +196,16 @@ python3.11 -m venv .venv
 ./.venv/bin/pip install -r skills/cad/requirements.txt
 ```
 
-Install CAD Explorer dependencies:
+Install the render viewer dependencies:
 
 ```bash
-npm --prefix skills/cad-explorer/scripts/explorer install
+npm --prefix skills/render/scripts/viewer install
 ```
 
-Start or reuse CAD Explorer for the current workspace:
+Start or reuse CAD Explorer through the render skill for the current workspace:
 
 ```bash
-npm --prefix skills/cad-explorer/scripts/explorer run dev:ensure -- --workspace-root "$PWD" --root-dir .
+npm --prefix skills/render/scripts/viewer run dev:ensure -- --workspace-root "$PWD" --root-dir .
 ```
 
 Then open the URL printed by the command.
@@ -253,15 +213,15 @@ Then open the URL printed by the command.
 For a specific file, pass its path explicitly:
 
 ```bash
-npm --prefix skills/cad-explorer/scripts/explorer run dev:ensure -- --workspace-root "$PWD" --root-dir . --file path/to/model.step
+npm --prefix skills/render/scripts/viewer run dev:ensure -- --workspace-root "$PWD" --root-dir . --file path/to/model.step
 ```
 
-CAD Explorer supports `.step`, `.stp`, `.stl`, `.3mf`, `.dxf`, `.urdf`, `.srdf`, and `.sdf` files. SRDF reviews can use optional local MoveIt2 controls when the CAD Explorer skill's MoveIt2 server is running.
+CAD Explorer supports `.step`, `.stp`, `.glb`, `.stl`, `.3mf`, `.dxf`, `.urdf`, `.srdf`, and `.sdf` files. SRDF reviews can use optional local MoveIt2 controls when the render skill's MoveIt2 server is running.
 
 CAD Explorer renders models with browser WebGL. If Chrome shows "WebGL unavailable" or "Error creating WebGL context" on Linux, check `chrome://gpu`, enable hardware acceleration or software WebGL, and update the system graphics/Mesa drivers before reloading the Explorer URL.
 
-For manual foreground Explorer development:
+For manual foreground viewer development:
 
 ```bash
-npm --prefix skills/cad-explorer/scripts/explorer run dev
+npm --prefix skills/render/scripts/viewer run dev
 ```

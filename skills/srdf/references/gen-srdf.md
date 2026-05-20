@@ -27,7 +27,7 @@ The tool:
 6. validates the SRDF against the linked URDF;
 7. writes the requested `.srdf` only after validation passes.
 
-There is no hidden SRDF artifact. The generated `.srdf` is the MoveIt inventory handed to CAD Explorer and its optional MoveIt2 controls.
+There is no hidden SRDF artifact. The generated `.srdf` is the MoveIt inventory handed to `$render` for a live CAD Explorer link and optional MoveIt2 controls.
 
 ## Execution safety
 

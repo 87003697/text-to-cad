@@ -44,8 +44,8 @@ Default validation sequence:
 4. `mate` confirms read-only alignment deltas for assembly interfaces or ref-to-ref positioning; it does not create source-level build123d joints.
 5. `frame` confirms world frame for occurrences or selected references.
 6. `diff` compares before/after geometry for modifications.
-7. Created or modified supported artifacts are handed to `$cad-explorer` for human review when available.
-8. `scripts/render` is used only when it answers a validation question or when Explorer is unavailable.
+7. Created or modified supported artifacts are handed to `$render` for live viewer links when available.
+8. Saved `$render` snapshot packets are run or skipped according to `render-review.md`; when run, every visual concern is followed by a deterministic geometry check before it becomes a validation claim.
 
 ## Reference discovery
 
@@ -128,7 +128,9 @@ Use diff when a repair, feature addition, or source edit could affect unrelated 
 
 ## CAD Explorer handoff
 
-For every final response involving a STEP/STP artifact, hand off the explicit artifact path to `$cad-explorer` when available and return the link it prints. If an important selector was inspected, return the textual `@cad[...]` reference beside the owning Explorer link.
+For every final response involving a generated or modified supported artifact (`.step`, `.stp`, `.stl`, `.3mf`, `.dxf`, or native `.glb`), hand off the explicit artifact path to `$render` when available and return the link it prints. If an important selector was inspected, return the textual `@cad[...]` reference beside the owning Explorer link.
+
+Use `render-review.md` to decide whether a saved snapshot packet is needed after deterministic checks. Prefer snapshots over manual viewer or Playwright inspection for visual feedback. Explorer handoff alone does not require saved snapshots.
 
 ## Validation report content
 
@@ -144,7 +146,7 @@ Validation:
 - Major planes/refs: <summary>
 - Positioning: <frame/measure/mate results if relevant>
 - Feature checks: <holes, cutouts, bosses, etc.>
-- Visual review: Explorer link returned; render run/not run and why
+- Visual review: `$render` viewer link returned; saved snapshot packet run/skipped and why; follow-up geometry checks for any visual findings
 ```
 
 Do not claim:

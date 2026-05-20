@@ -17,6 +17,8 @@ List official SendCutSend URLs used for the checks as Markdown links. Include on
 
 Summarize facts from `$cad` inspection when available and targeted `build123d` scripts: file type, units, extents/bounding box, entity/body counts, layers, unsupported entities, obvious open/duplicate geometry, and parsing limitations.
 
+If the reviewed upload was generated or updated in this workflow, include the `$render` viewer link when available. Use `$render` still snapshots for visual feedback; do not use manual viewer or Playwright inspection as report evidence.
+
 For bent 2D files, include bend geometry facts from the exported file: bend-line count and layers, individual bend line lengths, nearest non-bend cut geometry for each bend line, local flange depths, bend-line span coverage, bend-adjacent cut geometry, insufficient contact/support observations, and any split/interrupted/common-axis bend observations. Use those facts for comparison against the current material/thickness service page.
 
 For bent STEP/STP files, include measured sheet thickness when available and the extracted bend-radius set. Compare bend radii to the selected material/SKU only when that order context is known.

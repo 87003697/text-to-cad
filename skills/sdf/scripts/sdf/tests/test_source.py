@@ -144,6 +144,25 @@ class SdfSourceTests(unittest.TestCase):
         self.assertEqual(("sample_world",), source.world_names)
         self.assertEqual(("sample",), source.model_names)
 
+    def test_read_sdf_source_accepts_world_only_scene(self) -> None:
+        source_path = self._write_sdf(
+            "world_only",
+            """
+            <sdf version="1.12">
+              <world name="sample_world">
+                <include>
+                  <uri>model://sun</uri>
+                </include>
+              </world>
+            </sdf>
+            """,
+        )
+
+        source = read_sdf_source(source_path)
+
+        self.assertEqual(("sample_world",), source.world_names)
+        self.assertEqual((), source.model_names)
+
     def test_read_sdf_source_rejects_missing_root(self) -> None:
         source_path = self._write_sdf(
             "robot",

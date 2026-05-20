@@ -5,31 +5,36 @@ Use this reference when editing SDF robot model structure, world structure, mesh
 ## Edit loop
 
 1. Find the Python source that defines `gen_sdf()`.
-2. Treat that source as authoritative. Do not hand-edit generated `.sdf` output.
-3. Identify the target simulator or consumer and required SDF version.
-4. Decide whether the output is model-level or world-level. Prefer model-level SDF for robot exports. Use world SDF only when the task explicitly needs world, light, physics, include, plugin, or simulator scene setup.
+2. Treat that source as authoritative. Do not hand-edit generated `.sdf` output unless explicitly instructed.
+3. Identify the target consumer and required SDFormat version.
+4. Decide whether the output is model-level, world-level, or model-in-world.
 5. Fill or update the design ledger before writing XML.
 6. For every pose and axis, state the frame in which it is expressed. Use `relative_to` / `expressed_in` where ambiguity would otherwise remain.
-7. Edit the generator source, not the generated `.sdf`.
-8. Regenerate only the explicit target with `scripts/sdf`.
-9. Review validation errors as structural guardrails, not exhaustive simulator proof.
-10. Run available smoke tests: `gz sdf --check`, simulator load, joint-motion checks, plugin/sensor startup, and rendering/link review.
-11. Report assumptions and skipped checks.
+7. Edit the generator source.
+8. Regenerate only the explicit target.
+9. Review bundled validation errors as structural guardrails, not exhaustive simulator proof.
+10. Hand generated or modified `.sdf` files to `$render` for live viewer links when available.
+11. For visual feedback, prefer `$render` snapshots over opening the viewer manually or using Playwright.
+12. Run available smoke tests.
+13. Report assumptions and skipped checks.
 
 ## Model vs world
 
-Use **model-level SDF** when exporting a robot or object model that a simulator can include elsewhere.
+Use **model-level SDF** when exporting a reusable robot or object model that another world can include.
 
-Use **world SDF** when the task includes:
+Use **world-level SDF** when the task includes:
 
 - physics engine settings;
 - lights or scene setup;
 - terrain or ground plane;
-- model `<include>` elements;
+- multiple initial model placements;
 - world plugins;
-- initial world placement of multiple models.
+- includes of external model packages;
+- simulator scene setup.
 
-Current lightweight validation expects at least one `<model>` either at the root or inside a `<world>`. Pure world-only scene files with no inline model may be valid SDFormat but are outside the current runtime's supported validation shape.
+Use **model-in-world SDF** when the task explicitly needs both an inline model and world-specific context.
+
+The lightweight validator should allow pure world-only documents. A world-only document with lights, physics, actors, or includes can be valid SDFormat even when it contains no inline `<model>`.
 
 ## Mesh references
 
@@ -58,10 +63,18 @@ For plugins and sensors, record:
 - expected simulator distribution/version;
 - topics, frames, update rates, namespaces;
 - parameter source;
-- startup smoke test.
+- startup smoke test result.
 
 Do not invent plugin parameters. Incorrect plugin XML can pass lightweight validation and still fail at simulator load time.
 
+CAD Explorer reviews SDF files as static model/world structure through `$render` links and still snapshots. Do not add Explorer-only motion plugins; use simulator-native controllers, plugins, or test harnesses for simulator behavior.
+
 ## Existing SDF inspection
 
-There is no standalone CLI validation command in this skill. In tests or focused checks, use `sdf.source.read_sdf_source()` or `sdf.source.parse_sdf_xml()` from Python. For full compatibility, run the target simulator's own validator.
+When inspecting existing `.sdf` files, separate three questions:
+
+1. Is the XML structurally valid enough for the bundled validator?
+2. Is it compatible with the target SDFormat/libsdformat/simulator version?
+3. Does it satisfy this project's packaging, mesh, and workflow policy?
+
+Do not reject valid SDF solely because it violates a project preference unless the task or repository policy requires that preference.

@@ -2,85 +2,143 @@
 
 Generation validates every `gen_sdf()` result before writing. This validation is dependency-light and intended to catch common structural errors. It is not a replacement for libsdformat, Gazebo, or target-simulator validation.
 
-## Current bundled checks
+## Validation model
 
-The current runtime checks that:
+The validator should produce structured diagnostics with severities:
+
+- `error`: invalid or unsafe enough to block writing output;
+- `warning`: likely problem or unverified simulator behavior; output can be written unless `--strict` is used;
+- `info`: assumption, skipped check, or useful context.
+
+`--strict` treats warnings as failures.
+
+## Bundled checks
+
+### Root and document shape
+
+The runtime should check that:
 
 - the root element is `<sdf>`;
 - the root has a non-empty `version` attribute;
-- at least one `<model>` exists at the root or inside a `<world>`;
-- world names are non-empty and unique;
-- model names are non-empty and unique;
-- each model has unique non-empty link names;
-- each model has unique non-empty joint names;
-- each joint has a non-empty `type` attribute;
-- each joint has non-empty `<parent>` and `<child>` references;
-- unscoped joint parent/child references exist in the same model, except `world` may be a parent;
-- `world` is not accepted as a child reference;
-- mesh `<uri>` values are non-empty when `<mesh>` is used;
+- the version looks like `major.minor`;
+- the document contains meaningful SDF content such as a model, world, actor, light, include, or plugin;
+- structurally valid pure world files are accepted even when they contain no inline model.
+
+### Names and scopes
+
+The runtime should check that:
+
+- world names are non-empty and unique at root scope;
+- root model names are non-empty and unique;
+- model link, joint, frame, sensor, visual, and collision names are non-empty where required and unique within their owner scope;
+- duplicate names are reported with a path and scope.
+
+### Poses
+
+The runtime should check all `<pose>` elements:
+
+- default `rotation_format="euler_rpy"` has exactly six finite values;
+- `rotation_format="quat_xyzw"` has exactly seven finite values;
+- unsupported `rotation_format` is an error;
+- quaternion values are approximately normalized;
+- `degrees="true"` is a warning unless strict mode is enabled;
+- nontrivial omitted `relative_to` is a warning;
+- `relative_to` resolves within local scope when possible;
+- nested `::` references have valid syntax and resolve when the local tree is available.
+
+### Frames
+
+The runtime should check that:
+
+- `<frame name="...">` has a non-empty unique name in its scope;
+- `attached_to`, when present, resolves locally when possible;
+- frame attachment chains do not cycle;
+- unresolved nested or external frame references are reported as warnings when local validation cannot prove them invalid.
+
+### Joints
+
+Known SDF 1.12 joint types:
+
+```text
+continuous, revolute, gearbox, revolute2, prismatic, ball, screw, universal, fixed
+```
+
+The runtime should check that:
+
+- joint type is non-empty and known;
+- `<parent>` and `<child>` text exists;
+- `world` is allowed as parent but not child;
+- unscoped parent/child references exist in the same model;
+- `axis` and `axis2` vectors are finite, nonzero, and normalized;
+- `axis2` is used only where the joint type supports a second axis;
+- `expressed_in` resolves when local resolution is possible;
+- limit and dynamics values are finite or documented infinities where SDFormat permits them;
+- finite lower limits do not exceed finite upper limits;
+- continuous joints with fake finite position limits produce a warning.
+
+### Geometry and mesh URIs
+
+The runtime should check that:
+
+- each visual/collision owner has one geometry element;
+- each geometry has exactly one known primitive or mesh child when possible;
+- box size has 3 positive finite values;
+- cylinder radius and length are positive and finite;
+- sphere radius is positive and finite;
+- plane size has 2 positive finite values;
+- mesh URI values are non-empty;
+- mesh scale has 3 positive finite values when present;
 - local mesh references resolve relative to the generated `.sdf` location;
 - known external URI schemes such as `model://`, `package://`, `fuel://`, `http://`, and `https://` are accepted without local filesystem resolution.
 
-## Important current limitations
+### Inertials
 
-Do not treat a passing bundled validation as proof of simulator correctness. The current lightweight reader does not fully validate:
+The runtime should check that:
 
-- `<pose>` value length, `relative_to`, `rotation_format`, or `degrees` usage;
-- named `<frame>` graphs or frame cycles;
-- nested `::` scope resolution;
-- joint type set beyond non-empty type;
-- joint axis presence, normalization, `expressed_in`, `axis2`, dynamics, or limits;
-- visual/collision primitive dimensions;
-- visual/collision owner names or duplicate names;
-- visual/collision elements that omit geometry;
-- inertial mass, COM, or inertia tensor plausibility;
-- sensor schemas;
-- plugin filenames or parameters;
-- pure world-only scenes without inline models.
+- mass is positive and finite;
+- inertial pose is valid when present;
+- inertia tensor components are finite;
+- inertia matrix is positive semidefinite within tolerance;
+- missing inertial data on dynamic physical links is at least a warning;
+- frame-like or static links can omit inertials when documented.
 
-Scoped references containing `::` are currently accepted without resolution. Treat that as a warning-level gap and verify with simulator tooling.
+### Sensors and plugins
 
-## Manual and simulator checks
+The runtime should check that:
 
-After generation, check the following when relevant:
+- sensor names are non-empty and unique within owner scope;
+- sensor `type` is non-empty;
+- sensor `update_rate`, when present, is finite and non-negative;
+- sensor pose is valid;
+- plugin filename is non-empty;
+- plugin name, when present, is non-empty;
+- arbitrary simulator-specific plugin schemas are not invented by the validator.
 
-### Pose and frame checks
+Plugin filenames and parameters can pass bundled validation and still fail in the target simulator. Use smoke tests.
 
-- Every nontrivial pose has an explicit intended frame.
-- `relative_to` targets exist in the intended scope.
-- Euler angles are radians unless an explicit `degrees="true"` policy is documented.
-- Quaternion poses are normalized.
-- Sensor optical frames follow the expected simulator/ROS convention.
+### CAD Explorer review
 
-### Joint checks
+CAD Explorer treats SDF plugins, sensors, lights, includes, and nested models as static metadata. The bundled validator checks generic structure only; it does not validate Explorer-only motion contracts or execute simulator plugins.
 
-- Joint type is supported by the target simulator.
-- Parent and child frame semantics are correct.
-- Axis vectors are finite, nonzero, and normalized.
-- Axis frame is documented; use `expressed_in` if needed.
-- Revolute limits are radians; prismatic limits are meters.
-- Continuous joints do not use fake finite lower/upper limits unless the simulator requires a separate safety limit.
+After generated `.sdf` files are created or modified, hand explicit paths to `$render` for live viewer links when available. Use `$render` snapshots for visual feedback rather than manual viewer or Playwright inspection; do not generate GIFs for SDF review.
 
-### Geometry checks
+This plugin is for CAD Explorer visualization and review. It is not a Gazebo physics/controller plugin and should not be represented as simulator runtime behavior.
 
-- Each visual/collision has exactly one intended geometry.
-- Primitive dimensions are finite and positive.
-- Mesh scale matches the mesh asset unit convention.
-- Collision geometry is appropriate for simulation cost and stability.
-- Local mesh files exist; external URIs are resolvable in the simulator environment.
+## External checks
 
-### Inertial checks
+When Gazebo tooling is available, run:
 
-- Physical dynamic links have positive finite mass.
-- Inertial pose is in the intended link frame.
-- The inertia matrix is finite, symmetric, and positive semidefinite or positive definite within tolerance.
-- Approximate inertials are documented.
+```bash
+gz sdf --check path/to/file.sdf
+```
 
-### Plugin and sensor checks
+The CLI option should be:
 
-- Plugin filename exists in the target simulator environment.
-- Required topics, frames, namespaces, and update rates are set.
-- Sensor output can be observed in the target simulator.
+```bash
+python scripts/sdf path/to/source.py --gz-check auto
+```
+
+External checks should be recorded in the diagnostics report. A skipped optional check is not a bundled-validation failure unless the user requested `--gz-check required`.
 
 ## SDF validity vs project policy
 
@@ -89,7 +147,8 @@ Separate these categories:
 | Category | Examples |
 |---|---|
 | SDF structural validity | root `<sdf>`, version, legal element shape, non-empty names, references |
+| Numeric plausibility | finite poses, positive dimensions, positive mass, normalized axes, PSD inertia |
 | Simulator compatibility | libsdformat version, supported joint types, plugin availability, sensor support |
 | Project policy | mesh location, preferred URI style, STL/DAE preference, collision simplification, no unresolved external URIs |
 
-Do not reject valid SDF merely because it violates a project policy unless the task or repository requires that policy.
+Do not reject valid SDF merely because it violates a project policy unless the task or repository requires that policy. Prefer warnings and strict-mode controls.
