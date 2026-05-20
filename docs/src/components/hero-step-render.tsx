@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import * as THREE from "@render-viewer/node_modules/three/build/three.module.js";
+import * as THREE from "three";
 import {
   buildCadScene,
   CAD_SCENE_SCALE,

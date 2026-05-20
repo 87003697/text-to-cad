@@ -1,10 +1,9 @@
 declare module "@render-viewer/common/cadScene.js" {
-  type CadSceneRoot = {
-    rotation: {
-      x: number;
-      y: number;
-      z: number;
-    };
+  import type { Group, Vector3 } from "three";
+
+  type CadBounds = {
+    min: number[];
+    max: number[];
   };
 
   export const CAD_SCENE_SCALE: {
@@ -12,25 +11,32 @@ declare module "@render-viewer/common/cadScene.js" {
     URDF: string;
   };
 
+  export type CadSceneApi = {
+    root: Group;
+    modelGroup: Group;
+    edgesGroup: Group;
+    displayRecords: unknown[];
+    records: unknown[];
+    bounds: CadBounds;
+    radius: number;
+    runtime: unknown;
+    dispose: () => void;
+    update: (settings?: Record<string, unknown>) => CadSceneApi;
+  };
+
   export function buildCadScene(
     THREE: unknown,
     meshData: unknown,
     settings?: Record<string, unknown>
-  ): {
-    root: CadSceneRoot;
-    bounds: { min: number[]; max: number[] };
-    radius: number;
-    dispose: () => void;
-    update: (settings?: Record<string, unknown>) => unknown;
-  };
+  ): CadSceneApi;
 
   export function fitCameraToScene(
     THREE: unknown,
     camera: unknown,
-    bounds: { min: number[]; max: number[] },
+    bounds: CadBounds,
     options?: Record<string, unknown>
   ): {
-    center: unknown;
+    center: Vector3;
     radius: number;
     halfHeight: number;
     distance: number;
@@ -92,66 +98,4 @@ declare module "@render-viewer/common/stepModule.js" {
 
 declare module "@render-viewer/lib/render/glbMeshData.js" {
   export function buildMeshDataFromGlbBuffer(buffer: ArrayBuffer): Promise<unknown>;
-}
-
-declare module "@render-viewer/node_modules/three/build/three.module.js" {
-  type ColorValue = string | number;
-  type RendererPowerPreference = "default" | "high-performance" | "low-power";
-
-  export const PCFSoftShadowMap: unknown;
-  export const SRGBColorSpace: unknown;
-
-  export class Color {
-    constructor(color?: ColorValue);
-  }
-
-  export class AmbientLight {
-    constructor(color?: ColorValue, intensity?: number);
-  }
-
-  export class DirectionalLight {
-    position: {
-      set(x: number, y: number, z: number): void;
-    };
-
-    constructor(color?: ColorValue, intensity?: number);
-  }
-
-  export class OrthographicCamera {
-    constructor(
-      left: number,
-      right: number,
-      top: number,
-      bottom: number,
-      near?: number,
-      far?: number
-    );
-  }
-
-  export class Scene {
-    background: Color | null;
-
-    add(object: unknown): void;
-  }
-
-  export class WebGLRenderer {
-    outputColorSpace: unknown;
-    shadowMap: {
-      enabled: boolean;
-      type: unknown;
-    };
-
-    constructor(parameters?: {
-      canvas?: HTMLCanvasElement;
-      alpha?: boolean;
-      antialias?: boolean;
-      powerPreference?: RendererPowerPreference;
-    });
-
-    dispose(): void;
-    render(scene: Scene, camera: OrthographicCamera): void;
-    setClearColor(color: Color, alpha?: number): void;
-    setPixelRatio(value: number): void;
-    setSize(width: number, height: number, updateStyle?: boolean): void;
-  }
 }
