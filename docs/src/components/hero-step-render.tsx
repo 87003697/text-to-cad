@@ -15,8 +15,8 @@ import {
 import { cloneThemeSettings } from "@render-viewer/common/themeSettings.js";
 import { buildMeshDataFromGlbBuffer } from "@render-viewer/lib/render/glbMeshData.js";
 
-const HERO_STEP_URL = "/api/hero-step";
-const HERO_STEP_MODULE_URL = "/api/hero-step-module";
+const HERO_STEP_URL = "/hero/planetary_gear_assembly.step.glb";
+const HERO_STEP_MODULE_URL = "/hero/planetary_gear_assembly.step.js";
 const HERO_STEP_CAD_PATH = "models/fun/planetary_gear_assembly.step";
 const HERO_STEP_DEMO_URL =
   "https://demo.cadskills.xyz/?file=fun%2Fplanetary_gear_assembly.step";
