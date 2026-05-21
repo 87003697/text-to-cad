@@ -214,8 +214,8 @@ export default function Home() {
             />
 
             <div className="border border-border bg-card">
-              <div className="grid grid-cols-[minmax(0,1fr)] border-b border-border py-2.5 pl-0 pr-3.5 text-xs uppercase tracking-[1.5px] text-muted-foreground md:grid-cols-[minmax(9rem,12rem)_minmax(0,1fr)_max-content] md:gap-5">
-                <span className="pl-3.5">skill</span>
+              <div className="grid grid-cols-[minmax(0,1fr)] border-b border-border px-3.5 py-2.5 text-xs uppercase tracking-[1.5px] text-muted-foreground md:grid-cols-[minmax(9rem,12rem)_minmax(0,1fr)_max-content] md:gap-5 md:pl-0 md:pr-3.5">
+                <span className="md:pl-3.5">skill</span>
                 <span className="hidden md:block">summary</span>
                 <span className="hidden text-right md:block">source</span>
               </div>
@@ -223,9 +223,9 @@ export default function Home() {
                 {skillGroups.map((skill) => (
                   <li
                     key={skill.name}
-                    className="card-glow grid gap-3 py-3 pl-0 pr-3.5 hover:bg-secondary/60 md:grid-cols-[minmax(9rem,12rem)_minmax(0,1fr)_max-content] md:items-center md:gap-5"
+                    className="card-glow grid gap-3 px-3.5 py-3 hover:bg-secondary/60 md:grid-cols-[minmax(9rem,12rem)_minmax(0,1fr)_max-content] md:items-center md:gap-5 md:pl-0 md:pr-3.5"
                   >
-                    <div className="flex min-w-0 items-center pl-3.5">
+                    <div className="flex min-w-0 items-center md:pl-3.5">
                       <div className="min-w-0">
                         <h3 className="text-sm font-medium text-foreground">
                           {skill.name}

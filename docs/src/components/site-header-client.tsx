@@ -26,10 +26,7 @@ function GitHubLogo({ className }: { className?: string }) {
 }
 
 function formatGitHubStars(stars: number) {
-  return new Intl.NumberFormat("en-US", {
-    maximumFractionDigits: stars < 10_000 ? 1 : 0,
-    notation: "compact",
-  }).format(stars);
+  return new Intl.NumberFormat("en-US").format(stars);
 }
 
 export function SiteHeaderClient({
