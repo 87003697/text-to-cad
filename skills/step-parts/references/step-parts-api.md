@@ -20,9 +20,9 @@ Default to the API origin `https://api.step.parts`. Use a different origin only 
 - `q`: tokenized metadata search across id, name, description, category, family, stepSource, productPage, tags, aliases, standard fields, attribute keys, and attribute values. Every token must match.
 - `tag`, `category`, `family`, `standard`: repeatable filters. Values may also be comma-separated. Values within one facet are ORed, and selected facet fields are ANDed together.
 - `page`: 1-based page number.
-- `pageSize`: default `60`, max `200`.
+- `pageSize`: default `100`, max `500`.
 
-Unfiltered results start with a fixed 60-part showcase, then continue in stable source catalog order. Filtered results are ordered by stable source catalog order.
+Unfiltered results start with a fixed 100-part showcase, then continue in stable source catalog order. Filtered results are ordered by stable source catalog order.
 
 Examples:
 

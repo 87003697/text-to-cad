@@ -154,6 +154,16 @@ export default function StepFileSheet({
   const updateClipSettings = (patch) => {
     onClipSettingsChange?.(buildStepClipPatch(normalizedClipSettings, patch));
   };
+  const updateClipAxisOffset = (axis, nextOffset) => {
+    const numericOffset = Number(nextOffset);
+    const resolvedOffset = Number.isFinite(numericOffset) ? numericOffset : 0;
+    updateClipSettings({
+      axis,
+      offset: resolvedOffset,
+      offsets: { [axis]: resolvedOffset },
+      ...(!normalizedClipSettings.enabled && resolvedOffset > 0 ? { enabled: true } : {})
+    });
+  };
 
   return (
     <FileSheet
@@ -623,11 +633,7 @@ export default function StepFileSheet({
                         disabled={!axisRange}
                         onValueChange={(value) => {
                           const nextOffset = Array.isArray(value) ? value[0] : value;
-                          updateClipSettings({
-                            axis,
-                            offset: nextOffset,
-                            offsets: { [axis]: nextOffset }
-                          });
+                          updateClipAxisOffset(axis, nextOffset);
                         }}
                         aria-label={`Clip ${axis.toUpperCase()} axis`}
                       />

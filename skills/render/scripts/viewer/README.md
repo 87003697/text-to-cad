@@ -85,9 +85,9 @@ URL query params own shareable selection state:
 - `?refs=` carries copied CAD references into the workspace.
 - `?moveit2Ws=` overrides `EXPLORER_MOVEIT2_WS_URL` for one local browser session.
 
-Browser storage is intentionally narrow. Theme selection and custom themes are stored by `lib/workbench/persistence.js`. The storage key is `cad-explorer:theme` because it belongs to CAD Explorer viewer UI state.
+Browser storage is intentionally narrow. Named custom themes are stored by `lib/workbench/persistence.js` under `cad-explorer:theme`. Per-file viewer state for the current browser tab is stored by `lib/workbench/fileSessionState.js` in `sessionStorage`, namespaced by the active scan root and keyed per file.
 
-Workspace state such as panels, directory expansion, drawing state, active tools, and per-file view state is React/session state, not durable browser storage.
+URL params remain the only shareable selection state. Per-file session state can restore view settings, custom theme overrides, active tools, drawing state, STEP module values, DXF bend settings, and URDF pose/motion controls after a reload in the same tab, but it is not durable browser storage.
 
 ## Snapshot CLI
 

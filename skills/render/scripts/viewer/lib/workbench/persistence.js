@@ -653,6 +653,14 @@ export function writeCustomThemePresets(customPresets, options = {}) {
   }, options);
 }
 
+export function writeCustomThemePresetLibrary(customPresets, options = {}) {
+  const presets = normalizeCustomThemePresetsPayload(customPresets);
+  return writeThemeStorageState({
+    themeId: "",
+    customPresets: presets
+  }, options);
+}
+
 export function saveCustomThemePreset(label, themeSettings, options = {}) {
   const normalizedLabel = normalizeCustomThemePresetLabel(label);
   if (!normalizedLabel) {
@@ -673,6 +681,19 @@ export function saveCustomThemePreset(label, themeSettings, options = {}) {
     return null;
   }
   return preset;
+}
+
+export function deleteCustomThemePreset(presetId, options = {}) {
+  const normalizedPresetId = normalizeCustomThemePresetId(presetId);
+  if (!normalizedPresetId) {
+    return false;
+  }
+  const existingPresets = readCustomThemePresets();
+  const nextPresets = existingPresets.filter((preset) => preset.id !== normalizedPresetId);
+  if (nextPresets.length === existingPresets.length) {
+    return true;
+  }
+  return writeCustomThemePresets(nextPresets, options);
 }
 
 export function buildAvailableThemePresets(customPresets = readCustomThemePresets()) {

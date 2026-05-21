@@ -1,5 +1,6 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useId, useMemo, useRef, useState } from "react";
 import { Box, Contrast, Grid3x3, Plus, RotateCcw, Save, X } from "lucide-react";
+import { Dialog as DialogPrimitive } from "radix-ui";
 import {
   Accordion,
   AccordionContent,
@@ -16,6 +17,7 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger
 } from "../ui/dropdown-menu";
+import { Input } from "../ui/input";
 import { Slider } from "../ui/slider";
 import { Switch } from "../ui/switch";
 import {
@@ -384,6 +386,121 @@ function resolveActiveThemePreset(themePresets, themePresetId, themeSettings) {
   return themePresets.find((preset) => settingsSignature(preset.settings) === currentThemeSettingsSignature) || null;
 }
 
+function ThemeDirtyIndicator({ className }) {
+  return (
+    <span
+      aria-hidden="true"
+      className={cn("h-2 w-2 shrink-0 rounded-full bg-blue-500", className)}
+    />
+  );
+}
+
+function isCustomThemePreset(preset) {
+  return String(preset?.id || "").startsWith("custom:");
+}
+
+function DeleteThemePresetButton({ preset, onDelete }) {
+  if (!isCustomThemePreset(preset) || typeof onDelete !== "function") {
+    return null;
+  }
+  const label = String(preset?.label || "custom theme").trim() || "custom theme";
+  const stopMenuSelection = (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+  };
+  const handleDelete = (event) => {
+    stopMenuSelection(event);
+    onDelete(preset.id);
+  };
+
+  return (
+    <button
+      type="button"
+      aria-label={`Delete ${label}`}
+      title={`Delete ${label}`}
+      className="ml-auto flex size-5 shrink-0 items-center justify-center rounded-sm text-muted-foreground transition-colors hover:bg-destructive/10 hover:text-destructive focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+      onClick={handleDelete}
+      onPointerDown={stopMenuSelection}
+      onKeyDown={(event) => event.stopPropagation()}
+    >
+      <X className="h-3 w-3" strokeWidth={2} aria-hidden="true" />
+    </button>
+  );
+}
+
+function SaveThemeDialog({
+  defaultName,
+  onOpenChange,
+  onSave,
+  open
+}) {
+  const inputId = useId();
+  const [draftName, setDraftName] = useState(defaultName);
+  const normalizedDraftName = draftName.trim();
+
+  useEffect(() => {
+    if (open) {
+      setDraftName(defaultName);
+    }
+  }, [defaultName, open]);
+
+  const handleSubmit = (event) => {
+    event.preventDefault();
+    if (!normalizedDraftName || typeof onSave !== "function") {
+      return;
+    }
+    const savedPreset = onSave(normalizedDraftName);
+    if (savedPreset) {
+      onOpenChange?.(false);
+    }
+  };
+
+  return (
+    <DialogPrimitive.Root open={open} onOpenChange={onOpenChange}>
+      <DialogPrimitive.Portal>
+        <DialogPrimitive.Overlay
+          className="fixed inset-0 z-50 bg-black/50 data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:animate-in data-[state=open]:fade-in-0"
+        />
+        <DialogPrimitive.Content
+          className="cad-glass-popover fixed left-1/2 top-1/2 z-50 grid w-full max-w-[calc(100%-2rem)] -translate-x-1/2 -translate-y-1/2 gap-4 rounded-md border p-5 text-foreground shadow-lg duration-200 data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=closed]:zoom-out-95 data-[state=open]:animate-in data-[state=open]:fade-in-0 data-[state=open]:zoom-in-95 sm:max-w-sm"
+        >
+          <form className="grid gap-4" onSubmit={handleSubmit}>
+            <div className="grid gap-1.5">
+              <DialogPrimitive.Title className="text-base font-semibold">
+                Save Custom Theme
+              </DialogPrimitive.Title>
+              <DialogPrimitive.Description className="sr-only">
+                Enter a name for this custom theme preset.
+              </DialogPrimitive.Description>
+            </div>
+            <div className="grid gap-1.5">
+              <label className={fieldLabelClasses} htmlFor={inputId}>
+                Theme name
+              </label>
+              <Input
+                id={inputId}
+                value={draftName}
+                autoFocus
+                onChange={(event) => setDraftName(event.target.value)}
+              />
+            </div>
+            <div className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
+              <DialogPrimitive.Close asChild>
+                <Button type="button" variant="outline" size="sm">
+                  Cancel
+                </Button>
+              </DialogPrimitive.Close>
+              <Button type="submit" size="sm" disabled={!normalizedDraftName}>
+                Save theme
+              </Button>
+            </div>
+          </form>
+        </DialogPrimitive.Content>
+      </DialogPrimitive.Portal>
+    </DialogPrimitive.Root>
+  );
+}
+
 export function ThemePresetDropdown({
   themePresets = [],
   themeSettings,
@@ -391,9 +508,11 @@ export function ThemePresetDropdown({
   updateThemeSettings,
   handleResetThemeSettings,
   handleSaveCustomThemePreset,
+  handleDeleteCustomThemePreset,
   triggerClassName,
   iconClassName
 }) {
+  const [saveThemeDialogOpen, setSaveThemeDialogOpen] = useState(false);
   const systemDefaultPresetId = useSystemDefaultThemePresetId();
   const orderedPresets = useMemo(
     () => orderedThemePresets(themePresets, systemDefaultPresetId),
@@ -406,6 +525,9 @@ export function ThemePresetDropdown({
   const activeThemePresetId = activeThemePreset?.id || "";
   const themeHasChanged = !activeThemePreset;
   const activeThemeLabel = activeThemePreset?.label || "Custom";
+  const fallbackThemeName = activeThemePreset?.label
+    ? `${activeThemePreset.label} copy`
+    : "Custom theme";
 
   const applyThemePreset = (presetId) => {
     const preset = themePresets.find((candidate) => candidate.id === presetId);
@@ -415,97 +537,112 @@ export function ThemePresetDropdown({
     updateThemeSettings?.(preset.settings);
   };
 
-  const handleSaveTheme = () => {
-    if (typeof window === "undefined" || typeof handleSaveCustomThemePreset !== "function") {
+  const openSaveThemeDialog = () => {
+    if (typeof handleSaveCustomThemePreset !== "function") {
       return;
     }
-    const fallbackName = activeThemePreset?.label
-      ? `${activeThemePreset.label} copy`
-      : "Custom theme";
-    const themeName = window.prompt("Theme name", fallbackName);
-    const normalizedThemeName = String(themeName || "").trim();
-    if (!normalizedThemeName) {
+    setSaveThemeDialogOpen(true);
+  };
+
+  const handleSaveTheme = (themeName) => {
+    if (typeof handleSaveCustomThemePreset !== "function") {
       return;
     }
-    handleSaveCustomThemePreset(normalizedThemeName);
+    return handleSaveCustomThemePreset(themeName);
   };
 
   return (
-    <DropdownMenu>
-      <DropdownMenuTrigger asChild>
-        <Button
-          type="button"
-          variant="ghost"
-          size="icon-sm"
-          aria-label={`Theme: ${activeThemeLabel}`}
-          title={`Theme: ${activeThemeLabel}`}
-          className={triggerClassName}
-        >
-          <Contrast className={iconClassName} strokeWidth={2} aria-hidden="true" />
-          <span className="sr-only">Theme</span>
-        </Button>
-      </DropdownMenuTrigger>
-      <DropdownMenuContent align="end" sideOffset={6} className="w-64">
-        <DropdownMenuLabel className="px-2 py-1.5 text-xs text-muted-foreground">
-          Theme
-        </DropdownMenuLabel>
-        {orderedPresets.map((preset) => {
-          const active = preset.id === activeThemePresetId;
-          return (
+    <>
+      <DropdownMenu>
+        <DropdownMenuTrigger asChild>
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon-sm"
+            aria-label={`Theme: ${activeThemeLabel}${themeHasChanged ? " (unsaved changes)" : ""}`}
+            title={`Theme: ${activeThemeLabel}${themeHasChanged ? " (unsaved changes)" : ""}`}
+            className={cn("relative", triggerClassName)}
+          >
+            <Contrast className={iconClassName} strokeWidth={2} aria-hidden="true" />
+            {themeHasChanged ? (
+              <ThemeDirtyIndicator className="absolute right-1 top-1 ring-2 ring-background" />
+            ) : null}
+            <span className="sr-only">Theme</span>
+          </Button>
+        </DropdownMenuTrigger>
+        <DropdownMenuContent align="end" sideOffset={6} className="w-64">
+          <DropdownMenuLabel className="px-2 py-1.5 text-xs text-muted-foreground">
+            Theme
+          </DropdownMenuLabel>
+          {orderedPresets.map((preset) => {
+            const active = preset.id === activeThemePresetId;
+            return (
+              <DropdownMenuItem
+                key={preset.id}
+                data-active={active}
+                aria-current={active ? "true" : undefined}
+                className={cn(
+                  "min-w-0 text-xs",
+                  "data-[active=true]:bg-sidebar-accent data-[active=true]:font-semibold data-[active=true]:text-sidebar-accent-foreground"
+                )}
+                onSelect={() => applyThemePreset(preset.id)}
+              >
+                <PresetSwatch preset={preset} />
+                <span className="min-w-0 flex-1 truncate">{preset.label}</span>
+                {preset.id === systemDefaultPresetId ? (
+                  <span className="rounded-full border px-1.5 py-0.5 text-[9px] uppercase tracking-[0.08em] text-muted-foreground">
+                    Default
+                  </span>
+                ) : null}
+                <DeleteThemePresetButton
+                  preset={preset}
+                  onDelete={handleDeleteCustomThemePreset}
+                />
+              </DropdownMenuItem>
+            );
+          })}
+          {themeHasChanged ? (
             <DropdownMenuItem
-              key={preset.id}
-              data-active={active}
-              aria-current={active ? "true" : undefined}
+              data-active="true"
+              aria-current="true"
               className={cn(
                 "min-w-0 text-xs",
                 "data-[active=true]:bg-sidebar-accent data-[active=true]:font-semibold data-[active=true]:text-sidebar-accent-foreground"
               )}
-              onSelect={() => applyThemePreset(preset.id)}
             >
-              <PresetSwatch preset={preset} />
-              <span className="min-w-0 flex-1 truncate">{preset.label}</span>
-              {preset.id === systemDefaultPresetId ? (
-                <span className="rounded-full border px-1.5 py-0.5 text-[9px] uppercase tracking-[0.08em] text-muted-foreground">
-                  Default
-                </span>
-              ) : null}
+              <PresetSwatch />
+              <span className="min-w-0 flex-1 truncate">Custom</span>
             </DropdownMenuItem>
-          );
-        })}
-        {themeHasChanged ? (
-          <DropdownMenuItem
-            data-active="true"
-            aria-current="true"
-            className={cn(
-              "min-w-0 text-xs",
-              "data-[active=true]:bg-sidebar-accent data-[active=true]:font-semibold data-[active=true]:text-sidebar-accent-foreground"
-            )}
-          >
-            <PresetSwatch />
-            <span className="min-w-0 flex-1 truncate">Custom</span>
-          </DropdownMenuItem>
-        ) : null}
-        {themeHasChanged ? (
-          <>
-            <DropdownMenuSeparator />
-            <DropdownMenuItem
-              className="text-xs"
-              onSelect={handleSaveTheme}
-            >
-              <Save className="h-3.5 w-3.5" strokeWidth={2} aria-hidden="true" />
-              <span>Save custom theme</span>
-            </DropdownMenuItem>
-            <DropdownMenuItem
-              className="text-xs"
-              onSelect={() => handleResetThemeSettings?.()}
-            >
-              <RotateCcw className="h-3.5 w-3.5" strokeWidth={2} aria-hidden="true" />
-              <span>Reset to default</span>
-            </DropdownMenuItem>
-          </>
-        ) : null}
-      </DropdownMenuContent>
-    </DropdownMenu>
+          ) : null}
+          {themeHasChanged ? (
+            <>
+              <DropdownMenuSeparator />
+              <DropdownMenuItem
+                className="text-xs"
+                onSelect={openSaveThemeDialog}
+              >
+                <Save className="h-3.5 w-3.5" strokeWidth={2} aria-hidden="true" />
+                <span>Save custom theme</span>
+                <ThemeDirtyIndicator className="ml-auto" />
+              </DropdownMenuItem>
+              <DropdownMenuItem
+                className="text-xs"
+                onSelect={() => handleResetThemeSettings?.()}
+              >
+                <RotateCcw className="h-3.5 w-3.5" strokeWidth={2} aria-hidden="true" />
+                <span>Reset to default</span>
+              </DropdownMenuItem>
+            </>
+          ) : null}
+        </DropdownMenuContent>
+      </DropdownMenu>
+      <SaveThemeDialog
+        defaultName={fallbackThemeName}
+        onOpenChange={setSaveThemeDialogOpen}
+        onSave={handleSaveTheme}
+        open={saveThemeDialogOpen}
+      />
+    </>
   );
 }
 

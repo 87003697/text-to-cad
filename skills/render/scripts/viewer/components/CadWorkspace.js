@@ -47,17 +47,25 @@ import {
   cloneDrawingStrokes,
   cloneTabSnapshot,
   createTabRecord,
+  deleteCustomThemePreset,
   drawingStrokesEqual,
   getAvailableThemePresetIdForSettings,
   readCustomThemePresets,
   readThemeSettingsState,
   saveCustomThemePreset,
   THEME_STORAGE_KEY,
-  writeThemeSettings,
+  writeCustomThemePresetLibrary,
   tabSnapshotEqual,
   CAD_WORKSPACE_DEFAULT_SIDEBAR_WIDTH,
   CAD_WORKSPACE_DEFAULT_TAB_TOOLS_WIDTH
 } from "../lib/workbench/persistence";
+import {
+  createFileSessionSnapshot,
+  normalizeFileSessionNamespace,
+  pruneFileSessionState,
+  readFileSessionState,
+  writeFileSessionState
+} from "../lib/workbench/fileSessionState";
 import {
   CAD_WORKSPACE_LAYOUT_MODE,
   getCadWorkspaceLayoutMode,
@@ -1208,17 +1216,13 @@ export default function CadWorkspace({
     token: 0
   });
 
-  useEffect(() => {
-    setThemeState(readThemeSettingsState());
-  }, []);
-
   const handlePersistenceWriteError = useCallback(({ key }) => {
     const failureKey = String(key || "browser-storage");
     if (lastPersistenceFailureKeyRef.current === failureKey) {
       return;
     }
     lastPersistenceFailureKeyRef.current = failureKey;
-    setPersistenceStatus("Browser storage could not save the CAD Explorer theme.");
+    setPersistenceStatus("Browser storage could not save the CAD Explorer session.");
   }, []);
 
   const entryMap = useMemo(() => {
@@ -1228,6 +1232,10 @@ export default function CadWorkspace({
     }
     return map;
   }, [catalogEntries]);
+  const fileSessionNamespace = useMemo(
+    () => normalizeFileSessionNamespace(catalogRootDir || catalogRootName),
+    [catalogRootDir, catalogRootName]
+  );
 
   const {
     meshState,
@@ -1491,15 +1499,32 @@ export default function CadWorkspace({
       if (cancelled) {
         return;
       }
+      const restoredSessionState = readFileSessionState(
+        fileSessionNamespace,
+        fileKey(selectedEntry),
+        selectedEntry
+      );
+      const restoredStepModuleState = restoredSessionState?.slices?.stepModule || null;
+      const defaultAnimationState = buildDefaultStepModuleAnimationState(definition);
       setStepModuleLoadState({
         url: selectedStepModuleUrl,
         status: "ready",
         error: "",
         definition
       });
-      setStepModuleParameterValues(normalizeStepModuleParameterValues(definition, definition.defaultParameterValues));
-      setStepModuleEnabled(true);
-      setStepModuleAnimationState(buildDefaultStepModuleAnimationState(definition));
+      setStepModuleParameterValues(normalizeStepModuleParameterValues(
+        definition,
+        restoredStepModuleState?.parameterValues || definition.defaultParameterValues
+      ));
+      setStepModuleEnabled(restoredStepModuleState ? restoredStepModuleState.enabled !== false : true);
+      setStepModuleAnimationState(restoredStepModuleState?.animationState
+        ? {
+            ...defaultAnimationState,
+            ...restoredStepModuleState.animationState,
+            activeId: restoredStepModuleState.animationState.activeId || defaultAnimationState.activeId,
+            playing: false
+          }
+        : defaultAnimationState);
     }).catch((error) => {
       if (cancelled) {
         return;
@@ -1518,7 +1543,7 @@ export default function CadWorkspace({
     return () => {
       cancelled = true;
     };
-  }, [selectedStepModuleCadPath, selectedStepModuleUrl]);
+  }, [fileSessionNamespace, selectedEntry, selectedStepModuleCadPath, selectedStepModuleUrl]);
 
   const selectedUrdfMotionControls = selectedUrdfMotion;
   const selectedUrdfMoveIt2ActionsEnabled = Boolean(moveit2ServerLive && selectedUrdfMotionControls);
@@ -2168,7 +2193,7 @@ export default function CadWorkspace({
       setDxfBendSettings([]);
       return;
     }
-    setDxfBendSettings(normalizeDxfBendSettings(selectedDxfData));
+    setDxfBendSettings((current) => normalizeDxfBendSettings(selectedDxfData, current));
   }, [selectedDxfData, selectedDxfFileRef]);
   const explorerInAssemblyMode =
     isAssemblyView &&
@@ -2190,6 +2215,7 @@ export default function CadWorkspace({
   const explorerRef = useRef(null);
   const previewUiStateRef = useRef(null);
   const panelResizeStateRef = useRef(null);
+  const fileSessionSaveTimerRef = useRef(0);
   const openTabsRef = useRef(openTabs);
   const activePerspectiveRef = useRef(null);
   const tabToolsResizeStateRef = useRef(null);
@@ -2253,6 +2279,25 @@ export default function CadWorkspace({
     });
     return savedPreset;
   }, [handlePersistenceWriteError, themeSettings]);
+
+  const handleDeleteCustomThemePreset = useCallback((presetId) => {
+    const normalizedPresetId = String(presetId || "").trim();
+    if (!deleteCustomThemePreset(normalizedPresetId, { onWriteError: handlePersistenceWriteError })) {
+      return false;
+    }
+    const nextCustomThemePresets = readCustomThemePresets();
+    setCustomThemePresets(nextCustomThemePresets);
+    setThemeState((current) => {
+      if (current.presetId !== normalizedPresetId) {
+        return current;
+      }
+      return {
+        ...current,
+        presetId: getAvailableThemePresetIdForSettings(current.settings, nextCustomThemePresets) || ""
+      };
+    });
+    return true;
+  }, [handlePersistenceWriteError]);
 
   const handleExplorerAlertChange = useCallback((nextAlert) => {
     setExplorerRuntimeAlert(nextAlert || null);
@@ -2447,6 +2492,160 @@ export default function CadWorkspace({
     tabToolMode,
   ]);
 
+  const readEntrySessionState = useCallback((key, entryOverride = null) => {
+    const normalizedKey = String(key || "").trim();
+    if (!normalizedKey) {
+      return null;
+    }
+    return readFileSessionState(
+      fileSessionNamespace,
+      normalizedKey,
+      entryOverride || entryMap.get(normalizedKey)
+    );
+  }, [entryMap, fileSessionNamespace]);
+
+  const buildActiveFileSessionSnapshot = useCallback((entry) => {
+    const targetEntry = entry || selectedEntry;
+    const targetFileKey = fileKey(targetEntry);
+    const targetUrdfJointValues = targetFileKey && jointValuesByFileRef?.[targetFileKey]
+      ? jointValuesByFileRef[targetFileKey]
+      : {};
+    const targetUrdfMotionState = targetFileKey && urdfMotionStateByFileRef?.[targetFileKey]
+      ? urdfMotionStateByFileRef[targetFileKey]
+      : {};
+    return createFileSessionSnapshot({
+      fileKey: targetFileKey,
+      entry: targetEntry,
+      slices: {
+        theme: {
+          presetId: themePresetId,
+          settings: themeSettings
+        },
+        tab: buildActiveTabSnapshot(),
+        dxf: {
+          thicknessMm: dxfThicknessMm,
+          bendSettings: dxfBendSettings
+        },
+        stepModule: {
+          enabled: stepModuleEnabled,
+          parameterValues: stepModuleParameterValues,
+          animationState: stepModuleAnimationState
+        },
+        urdf: {
+          jointValues: targetUrdfJointValues,
+          motionState: targetUrdfMotionState
+        }
+      }
+    });
+  }, [
+    buildActiveTabSnapshot,
+    dxfBendSettings,
+    dxfThicknessMm,
+    jointValuesByFileRef,
+    selectedEntry,
+    stepModuleAnimationState,
+    stepModuleEnabled,
+    stepModuleParameterValues,
+    themePresetId,
+    themeSettings,
+    urdfMotionStateByFileRef
+  ]);
+
+  const clearFileSessionSaveTimer = useCallback(() => {
+    if (!fileSessionSaveTimerRef.current || typeof window === "undefined") {
+      fileSessionSaveTimerRef.current = 0;
+      return;
+    }
+    window.clearTimeout(fileSessionSaveTimerRef.current);
+    fileSessionSaveTimerRef.current = 0;
+  }, []);
+
+  const writeFileSessionForEntry = useCallback((entry) => {
+    const targetFileKey = fileKey(entry);
+    if (!targetFileKey) {
+      return true;
+    }
+    return writeFileSessionState(
+      fileSessionNamespace,
+      targetFileKey,
+      buildActiveFileSessionSnapshot(entry),
+      { onWriteError: handlePersistenceWriteError }
+    );
+  }, [
+    buildActiveFileSessionSnapshot,
+    fileSessionNamespace,
+    handlePersistenceWriteError
+  ]);
+
+  const flushActiveFileSession = useCallback(() => {
+    clearFileSessionSaveTimer();
+    return selectedEntry ? writeFileSessionForEntry(selectedEntry) : true;
+  }, [clearFileSessionSaveTimer, selectedEntry, writeFileSessionForEntry]);
+
+  const applyEntrySessionState = useCallback((key, fileSessionState = null) => {
+    const normalizedKey = String(key || "").trim();
+    if (!normalizedKey) {
+      return;
+    }
+    const sessionState = fileSessionState || readEntrySessionState(normalizedKey);
+    const themeSlice = sessionState?.slices?.theme || null;
+    if (themeSlice) {
+      setThemeState({
+        presetId: themeSlice.presetId,
+        settings: normalizeThemeSettings(themeSlice.settings)
+      });
+    } else {
+      setThemeState(readSystemDefaultThemeState());
+    }
+
+    const dxfSlice = sessionState?.slices?.dxf || null;
+    setDxfBendSettings(dxfSlice?.bendSettings || []);
+    if (dxfSlice?.thicknessMm > 0) {
+      setDxfThicknessMm(dxfSlice.thicknessMm);
+    }
+
+    const stepModuleSlice = sessionState?.slices?.stepModule || null;
+    if (stepModuleSlice) {
+      setStepModuleEnabled(stepModuleSlice.enabled !== false);
+      setStepModuleParameterValues(stepModuleSlice.parameterValues || {});
+      setStepModuleAnimationState({
+        activeId: String(stepModuleSlice.animationState?.activeId || ""),
+        playing: false,
+        elapsedSec: Math.max(Number(stepModuleSlice.animationState?.elapsedSec) || 0, 0),
+        speed: clampNumber(stepModuleSlice.animationState?.speed, 0.1, 5)
+      });
+    }
+
+    const urdfSlice = sessionState?.slices?.urdf || null;
+    if (urdfSlice) {
+      setJointValuesByFileRef((current) => ({
+        ...current,
+        [normalizedKey]: urdfSlice.jointValues || {}
+      }));
+      setUrdfMotionStateByFileRef((current) => ({
+        ...current,
+        [normalizedKey]: urdfSlice.motionState || {}
+      }));
+    } else {
+      setJointValuesByFileRef((current) => {
+        if (!current?.[normalizedKey]) {
+          return current;
+        }
+        const next = { ...current };
+        delete next[normalizedKey];
+        return next;
+      });
+      setUrdfMotionStateByFileRef((current) => {
+        if (!current?.[normalizedKey]) {
+          return current;
+        }
+        const next = { ...current };
+        delete next[normalizedKey];
+        return next;
+      });
+    }
+  }, [readEntrySessionState, readSystemDefaultThemeState]);
+
   const handleDxfBendSettingChange = useCallback((bendIndex, patch) => {
     setDxfBendSettings((current) => {
       if (!selectedDxfData) {
@@ -2543,11 +2742,18 @@ export default function CadWorkspace({
       return;
     }
 
+    if (selectedKey) {
+      flushActiveFileSession();
+    }
+
     const nextTabs = openTabsRef.current;
     const nextEntry = entryMap.get(key);
+    const restoredSessionState = readEntrySessionState(key, nextEntry);
+    const restoredTabSnapshot = restoredSessionState?.slices?.tab || null;
     const nextTab = nextTabs.find((tab) => tab.key === key) || createTabRecord(key, {
       drawingTool: selectedKey ? drawingTool : DRAWING_TOOL.FREEHAND,
-      tabToolMode: selectedKey ? tabToolMode : TAB_TOOL_MODE.REFERENCES
+      tabToolMode: selectedKey ? tabToolMode : TAB_TOOL_MODE.REFERENCES,
+      ...(restoredTabSnapshot || {})
     });
     const cachedMeshState = nextEntry ? getCachedMeshState(nextEntry) : null;
     const cachedReferenceState = nextEntry ? getCachedReferenceState(nextEntry) : null;
@@ -2604,18 +2810,22 @@ export default function CadWorkspace({
     }
 
     applyTabRecord(nextTab);
+    applyEntrySessionState(key, restoredSessionState);
     if (!selectedKey && shouldCadWorkspaceDefaultFileSettingsOpen(readWorkspaceViewportWidth())) {
       setTabToolsOpen(true);
     }
   }, [
+    applyEntrySessionState,
     applyTabRecord,
     buildActiveTabSnapshot,
     drawingTool,
     entryMap,
+    flushActiveFileSession,
     getCachedDxfState,
     getCachedMeshState,
     getCachedReferenceState,
     getCachedUrdfState,
+    readEntrySessionState,
     selectedKey,
     setTabToolsOpen,
     setDxfError,
@@ -2655,8 +2865,37 @@ export default function CadWorkspace({
     setPendingCadRefQueryParams,
     activateEntryTab,
     resetActiveWorkspace,
-    writeCadParam
+    writeCadParam,
+    readEntrySessionState,
+    applyEntrySessionState
   });
+
+  useEffect(() => {
+    if (!selectedEntry || typeof window === "undefined") {
+      return undefined;
+    }
+    clearFileSessionSaveTimer();
+    fileSessionSaveTimerRef.current = window.setTimeout(() => {
+      fileSessionSaveTimerRef.current = 0;
+      writeFileSessionForEntry(selectedEntry);
+    }, 180);
+    return () => {
+      clearFileSessionSaveTimer();
+    };
+  }, [clearFileSessionSaveTimer, selectedEntry, writeFileSessionForEntry]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") {
+      return undefined;
+    }
+    const handlePageHide = () => {
+      flushActiveFileSession();
+    };
+    window.addEventListener("pagehide", handlePageHide);
+    return () => {
+      window.removeEventListener("pagehide", handlePageHide);
+    };
+  }, [flushActiveFileSession]);
 
   useEffect(() => {
     const colorSchemeQuery = window.matchMedia?.("(prefers-color-scheme: dark)");
@@ -2687,7 +2926,7 @@ export default function CadWorkspace({
           return current;
         }
 
-        const nextState = readThemeSettingsState(customThemePresets);
+        const nextState = readSystemDefaultThemeState();
         return nextState.presetId === current.presetId ? current : nextState;
       });
     };
@@ -2696,15 +2935,13 @@ export default function CadWorkspace({
     return () => {
       colorSchemeQuery.removeEventListener?.("change", applySystemThemePreset);
     };
-  }, [customThemePresets]);
+  }, [readSystemDefaultThemeState]);
 
   useEffect(() => {
-    writeThemeSettings(themeSettings, {
-      presetId: themePresetId,
-      customPresets: customThemePresets,
+    writeCustomThemePresetLibrary(customThemePresets, {
       onWriteError: handlePersistenceWriteError
     });
-  }, [customThemePresets, handlePersistenceWriteError, themePresetId, themeSettings]);
+  }, [customThemePresets, handlePersistenceWriteError]);
 
   useEffect(() => {
     document.documentElement.dataset.glassTone = cadWorkspaceGlassTone;
@@ -2721,7 +2958,6 @@ export default function CadWorkspace({
       try {
         const nextCustomThemePresets = readCustomThemePresets();
         setCustomThemePresets(nextCustomThemePresets);
-        setThemeState(readThemeSettingsState(nextCustomThemePresets));
       } catch (error) {
         console.warn("Failed to sync theme from another tab", error);
       }
@@ -2901,6 +3137,17 @@ export default function CadWorkspace({
   useEffect(() => {
     setCatalogEntries(manifestEntries);
   }, [manifestEntries]);
+
+  useEffect(() => {
+    if (!catalogEntries.length) {
+      return;
+    }
+    pruneFileSessionState(
+      fileSessionNamespace,
+      catalogEntries.map((entry) => fileKey(entry)),
+      { onWriteError: handlePersistenceWriteError }
+    );
+  }, [catalogEntries, fileSessionNamespace, handlePersistenceWriteError]);
 
   useEffect(() => {
     setOpenTabs((current) => {
@@ -5020,6 +5267,7 @@ export default function CadWorkspace({
           updateThemeSettings={updateThemeSettings}
           handleResetThemeSettings={handleResetThemeSettings}
           handleSaveCustomThemePreset={handleSaveCustomThemePreset}
+          handleDeleteCustomThemePreset={handleDeleteCustomThemePreset}
           filenameLoadActivity={filenameLoadActivity}
           fileSheetKind={selectedFileSheetKind}
           fileSheetOpen={fileSheetOpen}

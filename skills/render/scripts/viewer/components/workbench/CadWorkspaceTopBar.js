@@ -521,6 +521,7 @@ export default function CadWorkspaceTopBar({
   updateThemeSettings,
   handleResetThemeSettings,
   handleSaveCustomThemePreset,
+  handleDeleteCustomThemePreset,
   filenameLoadActivity = null,
   fileSheetKind = "",
   fileSheetOpen = false,
@@ -632,6 +633,7 @@ export default function CadWorkspaceTopBar({
           updateThemeSettings={updateThemeSettings}
           handleResetThemeSettings={handleResetThemeSettings}
           handleSaveCustomThemePreset={handleSaveCustomThemePreset}
+          handleDeleteCustomThemePreset={handleDeleteCustomThemePreset}
           triggerClassName={topBarIconButtonClasses}
           iconClassName={topBarIconClasses}
         />

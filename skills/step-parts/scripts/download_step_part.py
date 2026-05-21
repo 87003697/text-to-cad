@@ -35,7 +35,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--out-dir", default=DEFAULT_OUT_DIR, help=f"Directory for downloaded STEP files. Default: {DEFAULT_OUT_DIR}")
     parser.add_argument("--filename", help="Filename to use when downloading one selected part.")
     parser.add_argument("--overwrite", action="store_true", help="Overwrite an existing downloaded file.")
-    parser.add_argument("--limit", type=int, default=10, help="Search page size. The API caps this at 200.")
+    parser.add_argument("--limit", type=int, default=10, help="Search page size. The API caps this at 500.")
     parser.add_argument("--page", type=int, default=1, help="1-based search page.")
     parser.add_argument("--tag", action="append", default=[], help="Repeatable tag filter.")
     parser.add_argument("--category", action="append", default=[], help="Repeatable category filter.")

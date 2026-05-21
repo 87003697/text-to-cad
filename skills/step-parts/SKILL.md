@@ -17,10 +17,7 @@ Use the hosted step.parts machine endpoints instead of scraping HTML or relying 
 2. Search `/v1/parts` and inspect `items`, `total`, and `facets`.
 3. If results are ambiguous, present the best few options with `id`, `name`, `standard`, and key attributes before choosing. If one result clearly matches, return the selected record details without downloading unless the user asked for a local STEP file.
 4. When the user asks to download or save a STEP file, download its `stepUrl`, then verify the file with the record's `sha256` when present.
-5. When a STEP file is downloaded as a local CAD asset, hand its explicit path to `$render` when available; `$render` checks/reuses a live viewer and returns a link.
-6. If the download path is outside the active CAD workspace/root, such as the default `/tmp/step-parts`, either choose a workspace output directory or tell `$render` to use the download directory as its workspace/root so the file is inside the viewer scan root.
-7. For visual feedback, prefer `$render` snapshots over opening the viewer manually or using Playwright. Use still snapshots only; standard-part lookup should not generate GIFs.
-8. Return the local path when downloaded, the render link when available, plus the selected part id and page/API URLs so the user can trace provenance.
+5. Return the local path when downloaded, plus the selected part id and page/API URLs so the user can trace provenance.
 
 ## Bundled Downloader
 

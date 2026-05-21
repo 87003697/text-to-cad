@@ -14,6 +14,16 @@ export function shouldActivateUrlSelection({
   return !selectedKey || !selectedKeyExists;
 }
 
+export function createSessionBackedTabRecord({
+  key = "",
+  createTabRecord,
+  initialSelectedTabSnapshot = null,
+  fileSessionState = null
+} = {}) {
+  const restoredTabSnapshot = fileSessionState?.slices?.tab || null;
+  return createTabRecord(key, restoredTabSnapshot || initialSelectedTabSnapshot || {});
+}
+
 export function useCadWorkspaceSession({
   manifestEntries,
   fileKey,
@@ -36,7 +46,9 @@ export function useCadWorkspaceSession({
   setPendingCadRefQueryParams = () => {},
   activateEntryTab,
   resetActiveWorkspace,
-  writeCadParam
+  writeCadParam,
+  readEntrySessionState = () => null,
+  applyEntrySessionState = () => {}
 }) {
   const initialManifestRevisionRef = useRef(manifestRevision);
   const initialUnresolvedUrlSelectionRef = useRef(false);
@@ -55,16 +67,25 @@ export function useCadWorkspaceSession({
     initialUnresolvedUrlSelectionRef.current = Boolean(readCadParam() || initialCadRefQueryParams.length) && !urlSelectedKey;
 
     if (urlSelectedKey) {
-      const nextTab = createTabRecord(urlSelectedKey, initialSelectedTabSnapshot || {});
+      const fileSessionState = readEntrySessionState(urlSelectedKey);
+      const nextTab = createSessionBackedTabRecord({
+        key: urlSelectedKey,
+        createTabRecord,
+        initialSelectedTabSnapshot,
+        fileSessionState
+      });
       setOpenTabs((current) => upsertTabRecord(current, urlSelectedKey, nextTab));
       applyTabRecord(nextTab);
+      applyEntrySessionState(urlSelectedKey, fileSessionState);
     }
   }, [
+    applyEntrySessionState,
     applyTabRecord,
     createTabRecord,
     manifestEntries,
     readCadRefQueryParams,
     readCadParam,
+    readEntrySessionState,
     selectedEntryKeyFromUrl,
     setOpenTabs,
     setPendingCadRefQueryParams,

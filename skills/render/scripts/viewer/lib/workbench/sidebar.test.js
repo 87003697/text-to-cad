@@ -15,6 +15,8 @@ import {
 } from "./sidebar.js";
 import {
   buildAvailableThemePresets,
+  createTabRecord,
+  deleteCustomThemePreset,
   getAvailableThemePresetIdForSettings,
   readCadWorkspaceGlassTone,
   readCustomThemePresets,
@@ -23,6 +25,7 @@ import {
   saveCustomThemePreset,
   serializeThemeSettingsForStorage,
   THEME_STORAGE_KEY,
+  writeCustomThemePresetLibrary,
   writeThemeSettings
 } from "./persistence.js";
 import {
@@ -37,6 +40,7 @@ import {
   resolveDesktopPanelWidths
 } from "../../components/workbench/hooks/useCadWorkspaceLayout.js";
 import {
+  createSessionBackedTabRecord,
   shouldActivateUrlSelection
 } from "../../components/workbench/hooks/useCadWorkspaceSession.js";
 import {
@@ -355,6 +359,28 @@ test("workspace URL selection does not override a valid sidebar selection", () =
   );
 });
 
+test("workspace initial tab records prefer restored file session tab state", () => {
+  const record = createSessionBackedTabRecord({
+    key: "parts/sample_plate.step",
+    createTabRecord,
+    initialSelectedTabSnapshot: {
+      selectedPartIds: ["fallback"]
+    },
+    fileSessionState: {
+      slices: {
+        tab: {
+          selectedPartIds: ["restored"],
+          hiddenPartIds: ["hidden"]
+        }
+      }
+    }
+  });
+
+  assert.equal(record.key, "parts/sample_plate.step");
+  assert.deepEqual(record.selectedPartIds, ["restored"]);
+  assert.deepEqual(record.hiddenPartIds, ["hidden"]);
+});
+
 test("workspace resize sync preserves wider preferred sidebar widths", () => {
   assert.equal(preferredPanelWidthAfterViewportSync(420, 150), 420);
   assert.equal(preferredPanelWidthAfterViewportSync(120, 150), 150);
@@ -559,6 +585,57 @@ test("custom themes save to local storage and can be selected by id", () => {
       presetId: savedPreset.id,
       settings: savedPreset.settings
     });
+  } finally {
+    if (originalWindow === undefined) {
+      delete globalThis.window;
+    } else {
+      globalThis.window = originalWindow;
+    }
+  }
+});
+
+test("custom themes can be deleted from local storage", () => {
+  const originalWindow = globalThis.window;
+  globalThis.window = {
+    localStorage: createMemoryStorage()
+  };
+
+  try {
+    const shopPreset = saveCustomThemePreset("Shop dark", cloneThemePresetSettings("blue"));
+    const warmPreset = saveCustomThemePreset("Warm bench", cloneThemePresetSettings("clay"));
+    assert.equal(readCustomThemePresets().length, 2);
+    assert.equal(writeThemeSettings(warmPreset.settings, {
+      presetId: warmPreset.id,
+      customPresets: readCustomThemePresets()
+    }), true);
+
+    assert.equal(deleteCustomThemePreset(warmPreset.id), true);
+    const customPresets = readCustomThemePresets();
+    assert.deepEqual(customPresets.map((preset) => preset.id), [shopPreset.id]);
+    const storedTheme = JSON.parse(globalThis.window.localStorage.getItem(THEME_STORAGE_KEY));
+    assert.equal(storedTheme.activeThemeId, undefined);
+    assert.equal(storedTheme.customThemes.length, 1);
+    assert.equal(storedTheme.customThemes[0].id, shopPreset.id);
+    assert.equal(deleteCustomThemePreset("dark"), false);
+  } finally {
+    if (originalWindow === undefined) {
+      delete globalThis.window;
+    } else {
+      globalThis.window = originalWindow;
+    }
+  }
+});
+
+test("custom theme library persistence clears the active global theme id", () => {
+  const originalWindow = globalThis.window;
+  globalThis.window = {
+    localStorage: createMemoryStorage()
+  };
+
+  try {
+    assert.equal(writeThemeSettings(cloneThemePresetSettings("blue")), true);
+    assert.equal(writeCustomThemePresetLibrary([]), true);
+    assert.equal(globalThis.window.localStorage.getItem(THEME_STORAGE_KEY), null);
   } finally {
     if (originalWindow === undefined) {
       delete globalThis.window;
