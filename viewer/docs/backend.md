@@ -133,11 +133,13 @@ Upload a local directory catalog and supported viewer assets with:
 ```bash
 VIEWER_VERCEL_BLOB_READ_WRITE_TOKEN=... \
 VIEWER_VERCEL_BLOB_PREFIX=models2 \
-npm --prefix viewer run upload:blob -- models --exclude "/mechbench/" --exclude "/mechbench2/"
+npm --prefix viewer run upload:blob -- --workspace-root "$PWD" --root-dir models
 ```
 
 The uploader also reads `.vieweruploadignore` from the uploaded directory and
 accepts repeated `--ignore-file` options for gitignore-style exclude patterns.
+It excludes `mechbench/`, `mechbench2/`, `7dof_arm/`, and Python source files
+by default, and public Blob catalogs omit Python source paths and URLs.
 
 For token-free read-only deployments, `VIEWER_VERCEL_BLOB_PREFIX` should be the
 public Blob URL for the prefix directory. The hosted backend always reads

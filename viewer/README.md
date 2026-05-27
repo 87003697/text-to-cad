@@ -140,9 +140,11 @@ Vercel's system environment variables (`VERCEL_PROJECT_PRODUCTION_URL`,
 `VERCEL_URL`, then `VERCEL_BRANCH_URL`).
 
 Upload a catalog and supported viewer assets from a local directory with
-`npm --prefix viewer run upload:blob -- <directory>`. The repo-level
-`scripts/upload-models2-viewer-catalog.sh` command uploads `models/` to the
-`models2` Blob prefix and excludes `mechbench/` and `mechbench2/`.
+`npm --prefix viewer run upload:blob -- --workspace-root "$PWD" --root-dir models`.
+The repo-level `scripts/catalog/upload-models-catalog.sh` command uploads
+`models/` to the configured Blob prefix. Uploads exclude `mechbench/`,
+`mechbench2/`, `7dof_arm/`, and Python source files by default; public Blob
+catalogs omit Python source paths and URLs.
 
 Production builds contain the frontend and initial catalog module only. CAD
 assets are served by a backend and are not copied into `dist/`.

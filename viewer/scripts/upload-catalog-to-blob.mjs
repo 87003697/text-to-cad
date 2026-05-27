@@ -32,6 +32,12 @@ import {
 } from "../src/server/viewerEnv.mjs";
 
 export const DEFAULT_UPLOAD_IGNORE_FILE = ".vieweruploadignore";
+export const DEFAULT_UPLOAD_EXCLUDE_PATTERNS = Object.freeze([
+  "/mechbench/",
+  "/mechbench2/",
+  "/7dof_arm/",
+  "*.py",
+]);
 const DEFAULT_UPLOAD_CONCURRENCY = 4;
 
 function usage() {
@@ -53,7 +59,10 @@ Environment:
   VIEWER_VERCEL_BLOB_READ_WRITE_TOKEN
   VIEWER_ASSET_BACKEND=vercel-blob (optional)
   VIEWER_LOCAL_WORKSPACE_ROOT (optional)
-  VIEWER_LOCAL_ROOT_DIR (optional)`;
+  VIEWER_LOCAL_ROOT_DIR (optional)
+
+Default excludes:
+  ${DEFAULT_UPLOAD_EXCLUDE_PATTERNS.join("\n  ")}`;
 }
 
 function cleanPosixPath(value) {
@@ -252,6 +261,17 @@ function rootRelativePath(rootPath, filePath) {
   return cleanPosixPath(toPosixPath(relativePath));
 }
 
+function isPythonSourceFileRef(fileRef) {
+  const raw = String(fileRef || "").trim().replace(/\\/g, "/");
+  let pathname = raw.split(/[?#]/)[0];
+  try {
+    pathname = new URL(raw).pathname;
+  } catch {
+    // Plain catalog refs are expected here.
+  }
+  return path.posix.extname(cleanPosixPath(pathname)).toLowerCase() === ".py";
+}
+
 function addUploadFile(uploadFiles, { rootPath, filePath }) {
   const fileRef = rootRelativePath(rootPath, filePath);
   if (!fileRef) {
@@ -340,8 +360,8 @@ function resolveExistingFileInsideRoot({ repoRoot, rootPath, fileRef }) {
   return null;
 }
 
-function sourceFileRefsForEntry(entry) {
-  return [
+function sourceFileRefsForEntry(entry, { includeSourceCode = true } = {}) {
+  const refs = [
     entry?.sourceFile,
     entry?.sourceWorkspaceFile,
     entry?.source?.file,
@@ -349,6 +369,7 @@ function sourceFileRefsForEntry(entry) {
     entry?.source?.sourcePath,
     entry?.source?.workspaceFile,
   ].map(cleanPosixPath).filter(Boolean);
+  return includeSourceCode ? refs : refs.filter((ref) => !isPythonSourceFileRef(ref));
 }
 
 function maybeAddCatalogRef(uploadFiles, {
@@ -404,7 +425,7 @@ function addCatalogReferencedFiles(uploadFiles, {
       fileRef: entry?.relations?.urdf?.file,
     });
 
-    for (const sourceRef of sourceFileRefsForEntry(entry)) {
+    for (const sourceRef of sourceFileRefsForEntry(entry, { includeSourceCode: false })) {
       maybeAddCatalogRef(uploadFiles, { repoRoot, rootPath, includePath, fileRef: sourceRef });
     }
   }
@@ -462,6 +483,52 @@ function rewriteAssetFields(target, upload) {
   };
 }
 
+function containsPythonSourceReference(value) {
+  if (typeof value === "string") {
+    return isPythonSourceFileRef(value);
+  }
+  if (Array.isArray(value)) {
+    return value.some(containsPythonSourceReference);
+  }
+  if (value && typeof value === "object") {
+    return Object.values(value).some(containsPythonSourceReference);
+  }
+  return false;
+}
+
+const SOURCE_CODE_CATALOG_KEYS = new Set([
+  "source",
+  "sourceFile",
+  "sourcePath",
+  "sourceStatus",
+  "sourceUrl",
+  "sourceWorkspaceFile",
+]);
+
+function stripSourceCodeReferences(value, key = "") {
+  if (Array.isArray(value)) {
+    return value
+      .map((item) => stripSourceCodeReferences(item))
+      .filter((item) => item !== undefined);
+  }
+  if (!value || typeof value !== "object") {
+    return SOURCE_CODE_CATALOG_KEYS.has(key) && containsPythonSourceReference(value)
+      ? undefined
+      : value;
+  }
+  if (SOURCE_CODE_CATALOG_KEYS.has(key) && containsPythonSourceReference(value)) {
+    return undefined;
+  }
+  const stripped = {};
+  for (const [childKey, childValue] of Object.entries(value)) {
+    const nextValue = stripSourceCodeReferences(childValue, childKey);
+    if (nextValue !== undefined) {
+      stripped[childKey] = nextValue;
+    }
+  }
+  return stripped;
+}
+
 function rewriteCatalogEntry(entry, {
   uploads,
   repoRoot,
@@ -516,7 +583,7 @@ function rewriteCatalogEntry(entry, {
     };
   }
 
-  const sourceRef = sourceFileRefsForEntry(entry)
+  const sourceRef = sourceFileRefsForEntry(entry, { includeSourceCode: false })
     .map((ref) => resolveExistingFileInsideRoot({ repoRoot, rootPath, fileRef: ref }))
     .find(Boolean)?.fileRef || "";
   const sourceUpload = uploadedAssetForRef(uploads, sourceRef);
@@ -528,7 +595,7 @@ function rewriteCatalogEntry(entry, {
     }, sourceUpload);
   }
 
-  return nextEntry;
+  return stripSourceCodeReferences(nextEntry);
 }
 
 export function rewriteCatalogForBlob(catalog, {
@@ -567,7 +634,7 @@ export async function uploadCatalogJsonToBlob({
 }
 
 function resolveIgnorePatterns({ rootPath, ignoreFiles = [], excludePatterns = [], cwd = process.cwd() }) {
-  const patterns = [];
+  const patterns = [...DEFAULT_UPLOAD_EXCLUDE_PATTERNS];
   const defaultIgnoreFile = path.join(rootPath, DEFAULT_UPLOAD_IGNORE_FILE);
   if (fs.existsSync(defaultIgnoreFile)) {
     patterns.push(...readIgnoreFile(defaultIgnoreFile, cwd));
