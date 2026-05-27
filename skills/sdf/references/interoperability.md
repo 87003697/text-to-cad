@@ -1,6 +1,6 @@
 # SDF interoperability notes
 
-Use this reference when SDF work touches upstream geometry, robot-description data, Gazebo/libsdformat, model packages, or CAD Explorer.
+Use this reference when SDF work touches upstream geometry, robot-description data, Gazebo/libsdformat, model packages, or CAD Viewer.
 
 ## Geometry assets
 
@@ -43,13 +43,13 @@ Do not use SDF to paper over a wrong upstream frame tree unless the task explici
 
 SDF should not define planning groups, end-effectors, group states, or disabled-collision matrices. If the task becomes IK or path-planning work, use the planning metadata workflow that owns those semantics.
 
-## CAD Explorer
+## CAD Viewer
 
-CAD Explorer can review `.sdf` files visually through `$render` and help catch gross placement or resource issues. It cannot prove simulator dynamics, inertial validity, plugin loading, sensor topics, or joint-axis semantics.
+CAD Viewer can review `.sdf` files visually through `$cad-viewer` and help catch gross placement or resource issues. It cannot prove simulator dynamics, inertial validity, plugin loading, sensor topics, or joint-axis semantics.
 
-Pass explicit generated or modified `.sdf` paths to `$render` whenever it is available, and return the live viewer link it prints. For visual feedback, prefer `$render` snapshots over opening the viewer manually or using Playwright.
+Pass explicit generated or modified `.sdf` paths to `$cad-viewer` whenever it is available, and return the live viewer link it prints.
 
-CAD Explorer renders SDF as static structure plus direct inspection controls. It lists plugins, sensors, lights, includes, and nested models as metadata, but does not execute plugins or consume file-authored motion contracts.
+CAD Viewer renders SDF as static structure plus direct inspection controls. It lists plugins, sensors, lights, includes, and nested models as metadata, but does not execute plugins or consume file-authored motion contracts.
 
 ## Gazebo / libsdformat
 

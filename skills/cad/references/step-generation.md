@@ -2,12 +2,21 @@
 
 Read this file when generating or regenerating STEP/STP artifacts from build123d Python source or from direct STEP/STP targets.
 
+## Contents
+
+- Tool
+- Generated Python source
+- Direct STEP/STP targets
+- Adjacent CAD Viewer Artifacts
+- Post-generation inspection
+- Generation checklist
+
 ## Tool
 
 The launcher lives in the CAD skill directory:
 
 ```bash
-python scripts/step [--kind {part|assembly}] [--skip-explorer] targets... [flags]
+python scripts/step [--kind {part|assembly}] [--skip-step-write] targets... [flags]
 ```
 
 Use explicit target paths only. Target paths are resolved from the command cwd unless absolute. When running from a workspace root, prefix the launcher path with the CAD skill directory; when running from the skill directory, pass absolute or correctly relative workspace target paths. Do not rely on directory-wide generation.
@@ -28,6 +37,7 @@ Generated Python targets infer their kind from the source metadata and `gen_step
 
 ```bash
 python scripts/step path/to/part.py
+python scripts/step path/to/part.py --skip-step-write
 python scripts/step path/to/part.py -o path/to/custom.step
 python scripts/step path/to/a.py=out/a.step path/to/b.py=out/b.step
 python scripts/inspect refs path/to/part.step --facts --planes --positioning
@@ -51,13 +61,13 @@ python scripts/inspect refs path/to/imported.step --facts --planes --positioning
 
 Direct targets can use sidecar mesh flags, but generator targets remain preferred when a generator exists. Read `supported-exports.md` for STL and 3MF sidecars.
 
-## Adjacent Explorer artifacts
+## Adjacent CAD Viewer Artifacts
 
-`scripts/step` generates the explicit STEP target and adjacent hidden Explorer GLB/topology artifacts by default. These artifacts support Explorer GUI review and CAD Explorer render workflows. Do not require a separate validation subcommand for them.
+`scripts/step` generates adjacent hidden CAD Viewer GLB/topology artifacts as part of the normal part/assembly build. These artifacts support CAD Viewer GUI review, `$cad-viewer` workflows, and CAD `inspect` refs. They are not optional in the STEP workflow.
 
-Only ever use `--skip-explorer` when the user explicitly asks to skip Explorer, GLB/topology, or renderable topology output. Do not infer this flag from speed or convenience. When explicitly requested, it skips selector extraction and hidden GLB/topology output; STEP-only runs also avoid loading and meshing the STEP after generation. The command still writes requested STL, 3MF, or native GLB sidecars.
+For Python `gen_step()` targets, hidden GLB/topology artifacts are Python-backed (`sourceKind: "python"`) whether the command also writes the sibling `.step` file or runs with `--skip-step-write`. `--skip-step-write` skips writing the sibling `.step` file and writes only the hidden GLB/topology artifact using the logical same-stem STEP identity. This mode is valid only for Python generator targets and cannot be combined with STEP output overrides. Direct STEP/STP targets remain STEP-backed (`sourceKind: "step"`).
 
-After generation, hand the explicit STEP/STP output path and any requested render-supported sidecar paths to `$render` when available and return the links it prints.
+After generation, hand the explicit STEP/STP output path and any requested `$cad-viewer`-supported sidecar paths to `$cad-viewer` when available and return the links it prints.
 
 ## Post-generation inspection
 
@@ -95,7 +105,8 @@ Before running the command:
 After running the command:
 
 - Confirm the process succeeded.
-- Confirm the STEP file exists and is non-empty.
+- Confirm the STEP file exists and is non-empty, unless the command intentionally used `--skip-step-write`.
+- When `--skip-step-write` was used, confirm the hidden Python-backed GLB/topology artifact exists instead.
 - Run the relevant `scripts/inspect` command and parse its output.
-- Hand off generated STEP/STP paths and requested render-supported sidecar paths to `$render` when available and return its link(s), or report why they are unavailable.
+- Hand off generated STEP/STP paths and requested `$cad-viewer`-supported sidecar paths to `$cad-viewer` when available and return its link(s), or report why they are unavailable.
 - Continue with targeted inspection if facts/planes are insufficient.

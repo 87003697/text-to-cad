@@ -22,8 +22,34 @@ node_modules
 dist
 dist-verify
 coverage
+!skills/render/scripts/viewer/runtime/dist/
+!skills/render/scripts/viewer/runtime/dist/**
+
+# Local model workspace and generated artifacts
+/models/
+*.step
+*.stp
+*.stl
+*.3mf
+*.gcode
+*.gcode.3mf
+*.dxf
+*.glb
+*.gltf
+*.obj
+*.ply
+*.mp4
+*.step.js
+*.stp.js
+.*.step/
+.*.stp/
 
 # Temporary files
 *.tmp
 *.swp
+*.step.glb.lock
+*.stp.glb.lock
 tmp/
+
+# Local printer credentials
+/bambu-printers.json

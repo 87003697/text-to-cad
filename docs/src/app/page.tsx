@@ -5,28 +5,30 @@ import { HeroSection } from "@/components/hero-section";
 import { SiteFooter } from "@/components/site-footer";
 import { SiteHeader } from "@/components/site-header";
 
-const skillsCliCommand = "npx skills add earthtojake/text-to-cad";
-const skillsShUrl = "https://www.skills.sh/";
+const skillsInstallCommand = "npx skills install earthtojake/text-to-cad";
+
+const pluginInstallCommands = [
+  {
+    agent: "Codex",
+    command:
+      "codex plugin marketplace add earthtojake/text-to-cad\ncodex plugin add cad@text-to-cad",
+  },
+  {
+    agent: "Claude Code",
+    command:
+      "claude plugin marketplace add earthtojake/text-to-cad\nclaude plugin install cad@text-to-cad",
+  },
+  {
+    agent: "Gemini CLI",
+    command:
+      "gemini extensions install https://github.com/earthtojake/text-to-cad",
+  },
+];
 
 const supportedAgents = [
   { name: "Claude Code", slug: "claude-code", icon: "claude-code.svg" },
-  { name: "Cursor", slug: "cursor", icon: "cursor.svg" },
   { name: "Codex", slug: "codex", icon: "codex.svg" },
-  { name: "GitHub Copilot", slug: "github-copilot", icon: "copilot.svg" },
-  { name: "Windsurf", slug: "windsurf", icon: "windsurf.svg" },
   { name: "Gemini", slug: "gemini", icon: "gemini.svg" },
-  { name: "Cline", slug: "cline", icon: "cline.svg" },
-  { name: "AMP", slug: "amp", icon: "amp.svg" },
-  { name: "Antigravity", slug: "antigravity", icon: "antigravity.svg" },
-  { name: "ClawdBot", slug: "clawdbot", icon: "clawdbot.svg" },
-  { name: "Droid", slug: "droid", icon: "droid.svg" },
-  { name: "Goose", slug: "goose", icon: "goose.svg" },
-  { name: "Kilo", slug: "kilo", icon: "kilo.svg" },
-  { name: "Kiro CLI", slug: "kiro-cli", icon: "kiro-cli.svg" },
-  { name: "OpenCode", slug: "opencode", icon: "opencode.svg" },
-  { name: "Roo", slug: "roo", icon: "roo.svg" },
-  { name: "Trae", slug: "trae", icon: "trae.svg" },
-  { name: "VS Code", slug: "vscode", icon: "vscode.svg" },
 ];
 
 const skillGroups = [
@@ -34,13 +36,12 @@ const skillGroups = [
     name: "CAD",
     path: "skills/cad",
     summary:
-      "Creates and edits CAD models from plain-language requests, with STEP as the main output.",
+      "Creates and edits CAD models from plain-language or image requests, with STEP as the main output along with options to export to STL, 3MF and GLB.",
   },
   {
-    name: "Render",
-    path: "skills/render",
-    summary:
-      "Shows local browser previews and snapshots for CAD and robot files.",
+    name: "CAD Viewer",
+    path: "skills/cad-viewer",
+    summary: "Shows local browser previews for CAD, G-code, and robot files.",
   },
   {
     name: "step.parts",
@@ -71,16 +72,67 @@ const skillGroups = [
     path: "skills/sendcutsend",
     summary: "Checks DXF and STEP files before upload to SendCutSend.",
   },
+  {
+    name: "G-code",
+    path: "skills/gcode",
+    summary:
+      "Slices supported mesh files into validated, printer-profiled FDM .gcode with real slicer CLIs.",
+  },
+  {
+    name: "Bambu Labs",
+    path: "skills/bambu-labs",
+    summary:
+      "Dry-runs, uploads, and cautiously starts local Bambu Lab print jobs from validated .gcode.",
+  },
 ];
 
-function TryNowCommand() {
+function InstallCommand({
+  item,
+}: {
+  item: (typeof pluginInstallCommands)[number];
+}) {
   return (
-    <div className="flex min-h-[54px] min-w-0 max-w-full items-stretch border border-border bg-card">
-      <code className="flex min-w-0 flex-1 items-center overflow-x-auto whitespace-nowrap px-3 text-sm leading-none text-foreground">
-        <span className="mr-[1ch] text-muted-foreground">$</span>
-        {skillsCliCommand}
-      </code>
-      <CopyButton text={skillsCliCommand} label="Copy install command" compact />
+    <div className="border border-border bg-card">
+      <div className="border-b border-border px-3 py-2 text-label uppercase tracking-[1.5px] text-muted-foreground">
+        {item.agent}
+      </div>
+      <div className="flex min-h-[54px] min-w-0 max-w-full items-stretch">
+        <code className="flex min-w-0 flex-1 items-center overflow-x-auto whitespace-pre px-3 py-2 text-sm leading-6 text-foreground">
+          {item.command}
+        </code>
+        <CopyButton
+          text={item.command}
+          label={`Copy ${item.agent} install command`}
+          compact
+        />
+      </div>
+    </div>
+  );
+}
+
+function InstallCommands() {
+  return (
+    <div className="grid gap-2">
+      {pluginInstallCommands.map((item) => (
+        <InstallCommand key={item.agent} item={item} />
+      ))}
+    </div>
+  );
+}
+
+function SkillsInstallCommand() {
+  return (
+    <div className="border border-border bg-card">
+      <div className="flex min-h-[54px] min-w-0 max-w-full items-stretch">
+        <code className="flex min-w-0 flex-1 items-center overflow-x-auto whitespace-pre px-3 py-2 text-sm leading-6 text-foreground">
+          {skillsInstallCommand}
+        </code>
+        <CopyButton
+          text={skillsInstallCommand}
+          label="Copy Skills CLI install command"
+          compact
+        />
+      </div>
     </div>
   );
 }
@@ -185,18 +237,18 @@ export default function Home() {
 
           <section
             aria-label="Install CAD Skills with supported agents"
-            className="grid gap-5 py-6 lg:grid-cols-[minmax(18rem,0.8fr)_minmax(0,1.2fr)] lg:items-center lg:gap-12"
+            className="grid gap-5 py-6 lg:grid-cols-[minmax(0,1.2fr)_minmax(18rem,0.8fr)] lg:items-center lg:gap-12"
           >
             <div className="min-w-0 space-y-3">
               <h2 className="text-sm font-medium uppercase tracking-[1.5px] text-foreground">
                 Try It Now
               </h2>
-              <TryNowCommand />
+              <SkillsInstallCommand />
             </div>
 
             <div className="min-w-0 space-y-3">
               <h2 className="text-sm font-medium uppercase tracking-[1.5px] text-foreground">
-                Available For These Agents
+                Supported Agents
               </h2>
               <AgentCarousel />
             </div>
@@ -210,7 +262,7 @@ export default function Home() {
             <SectionIntro
               id="skills-title"
               title="SKILLS"
-              description="Agents use CAD skills to generate, source, and render 3D models, robot description files, and more."
+              description="Install the library to give agents focused workflows for CAD, fabrication, robot description files, simulation, and local review."
             />
 
             <div className="border border-border bg-card">
@@ -255,21 +307,30 @@ export default function Home() {
             <SectionIntro
               id="installation-title"
               title="INSTALL"
-              description="Use the Skills CLI to add CAD Skills to supported local agents."
+              description="Install CAD Skills with the Skills CLI. Provider-native plugin installs are available as a secondary path."
             />
 
-            <div className="max-w-xl space-y-3">
-              <TryNowCommand />
+            <div className="max-w-3xl space-y-3">
+              <SkillsInstallCommand />
+              <div className="pt-3">
+                <h3 className="mb-3 text-sm font-medium uppercase tracking-[1.5px] text-foreground">
+                  Plugin Installs
+                </h3>
+                <InstallCommands />
+              </div>
               <p className="text-sm leading-6 text-muted-foreground">
-                Restart your agent if newly installed skills do not appear. Learn
-                more at{" "}
+                Skills CLI installation is preferred for regular use. Restart
+                your agent if newly installed skills do not appear.
+              </p>
+              <p className="text-sm leading-6 text-muted-foreground">
+                Local development symlink guidance lives in{" "}
                 <a
                   className="inline-flex items-center gap-1 text-primary transition hover:text-primary/80"
-                  href={skillsShUrl}
+                  href="https://github.com/earthtojake/text-to-cad/blob/main/CONTRIBUTING.md"
                   rel="noreferrer"
                   target="_blank"
                 >
-                  skills.sh
+                  CONTRIBUTING.md
                   <ExternalLink className="size-3" aria-hidden="true" />
                 </a>
                 .

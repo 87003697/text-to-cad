@@ -13,9 +13,8 @@ Use this reference when editing robot-description structure, frame placement, me
 7. Regenerate only the explicit URDF target with `scripts/urdf <source-file>`, `scripts/urdf <source-file> -o <output.urdf>`, or `scripts/urdf <source-file>=<output.urdf>`.
 8. Let generation-time validation catch structural and semantic problems. Fix the generator source instead of hand-editing generated XML.
 9. If mesh outputs changed, regenerate only the affected explicit outputs with the owning CAD or mesh workflow.
-10. Hand generated or modified `.urdf` files to `$render` for live viewer links when available.
-11. For visual feedback, prefer `$render` snapshots over opening the viewer manually or using Playwright; use still snapshots only.
-12. When available, run a consumer smoke test and report what was not checked.
+10. Hand generated or modified `.urdf` files to `$cad-viewer` for live viewer links when available.
+11. When available, run a consumer smoke test and report what was not checked.
 
 ## Spatial-Reasoning Guardrails
 

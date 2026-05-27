@@ -8,6 +8,12 @@ if __package__ in {None, ""}:
     scripts_dir = tool_dir.parent
     sys.path.insert(0, str(scripts_dir))
     sys.path.insert(0, str(tool_dir))
+else:
+    tool_dir = Path(__file__).resolve().parent
+
+from common.package_path import ensure_cadpy_package_path
+
+ensure_cadpy_package_path(tool_dir)
 
 from inspect_refs.cli import main
 

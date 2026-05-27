@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import os
+from contextlib import nullcontext
 from pathlib import Path
 from typing import Any
 
 from common.step_scene import LoadedStepScene, load_step_scene_from_xcaf_doc, step_file_hash
+from common.step_metadata import TEXT_TO_CAD_GENERATOR, inject_text_to_cad_step_metadata
 
 
 def create_bin_xcaf_doc() -> Any:
@@ -56,7 +58,7 @@ def _create_bin_xcaf_doc(to_export: Any) -> Any:
 
         node_label = shape_tool.FindShape(node.wrapped, findInstance=False)
         sub_node_labels = []
-        if isinstance(node, Compound) and not node.children:
+        if node.color is not None and isinstance(node, Compound) and not node.children:
             sub_nodes = []
             if isinstance(node, Part):
                 explorer = TopExp_Explorer(node.wrapped, ta.TopAbs_SOLID)
@@ -99,7 +101,40 @@ def export_xcaf_doc_step_scene(
     *,
     label: str | None = None,
     originating_system: str = "build123d",
+    text_to_cad_entry_kind: str | None = None,
+    source_fingerprint: str | None = None,
+    source_hash: str | None = None,
+    logger: object | None = None,
 ) -> LoadedStepScene:
+    step_hash = write_xcaf_doc_step_file(
+        doc,
+        output_path,
+        label=label,
+        originating_system=originating_system,
+        text_to_cad_entry_kind=text_to_cad_entry_kind,
+        source_fingerprint=source_fingerprint,
+        source_hash=source_hash,
+        logger=logger,
+    )
+    with (logger.timed(f"load scene from XCAF {output_path.name}") if logger is not None else nullcontext()):
+        return load_step_scene_from_xcaf_doc(
+            output_path,
+            doc,
+            step_hash=step_hash,
+        )
+
+
+def write_xcaf_doc_step_file(
+    doc: Any,
+    output_path: Path,
+    *,
+    label: str | None = None,
+    originating_system: str = "build123d",
+    text_to_cad_entry_kind: str | None = None,
+    source_fingerprint: str | None = None,
+    source_hash: str | None = None,
+    logger: object | None = None,
+) -> str:
     from build123d.exporters3d import (
         APIHeaderSection_MakeHeader,
         IFSelect_ReturnStatus,
@@ -132,30 +167,62 @@ def export_xcaf_doc_step_scene(
     header = APIHeaderSection_MakeHeader(writer.Writer().Model())
     if label:
         header.SetName(TCollection_HAsciiString(label))
-    header.SetOriginatingSystem(TCollection_HAsciiString(originating_system))
+    header.SetOriginatingSystem(
+        TCollection_HAsciiString(TEXT_TO_CAD_GENERATOR if text_to_cad_entry_kind else originating_system)
+    )
 
     STEPCAFControl_Controller.Init_s()
     STEPControl_Controller.Init_s()
     IGESControl_Controller.Init_s()
     Interface_Static.SetIVal_s("write.surfacecurve.mode", 1)
     Interface_Static.SetIVal_s("write.precision.mode", PrecisionMode.AVERAGE.value)
-    writer.Transfer(doc, STEPControl_StepModelType.STEPControl_AsIs)
+    with (logger.timed(f"transfer XCAF to STEP model {output_path.name}") if logger is not None else nullcontext()):
+        writer.Transfer(doc, STEPControl_StepModelType.STEPControl_AsIs)
 
-    if writer.Write(os.fspath(output_path)) != IFSelect_ReturnStatus.IFSelect_RetDone:
-        raise RuntimeError(f"Failed to write STEP file: {output_path}")
+    with (logger.timed(f"write STEP file {output_path.name}") if logger is not None else nullcontext()):
+        if writer.Write(os.fspath(output_path)) != IFSelect_ReturnStatus.IFSelect_RetDone:
+            raise RuntimeError(f"Failed to write STEP file: {output_path}")
     if not output_path.exists() or output_path.stat().st_size <= 0:
         raise RuntimeError(f"STEP export did not create {output_path}")
-    return load_step_scene_from_xcaf_doc(
-        output_path,
-        doc,
-        step_hash=step_file_hash(output_path),
-    )
+    if text_to_cad_entry_kind:
+        with (logger.timed(f"inject STEP metadata {output_path.name}") if logger is not None else nullcontext()):
+            inject_text_to_cad_step_metadata(
+                output_path,
+                entry_kind=text_to_cad_entry_kind,
+                source_fingerprint=source_fingerprint,
+                source_hash=source_hash,
+            )
+    return step_file_hash(output_path)
 
 
-def export_build123d_step_scene(to_export: Any, output_path: Path) -> LoadedStepScene:
+def export_build123d_step_scene(
+    to_export: Any,
+    output_path: Path,
+    *,
+    text_to_cad_entry_kind: str | None = None,
+    source_hash: str | None = None,
+) -> LoadedStepScene:
     doc = _create_bin_xcaf_doc(to_export)
     return export_xcaf_doc_step_scene(
         doc,
         output_path,
         label=getattr(to_export, "label", None),
+        text_to_cad_entry_kind=text_to_cad_entry_kind,
+        source_hash=source_hash,
+    )
+
+
+def build_build123d_step_scene(
+    to_export: Any,
+    output_path: Path,
+    *,
+    source_kind: str = "step",
+    source_hash: str | None = None,
+) -> LoadedStepScene:
+    doc = _create_bin_xcaf_doc(to_export)
+    return load_step_scene_from_xcaf_doc(
+        output_path,
+        doc,
+        source_kind=source_kind,
+        source_hash=source_hash,
     )

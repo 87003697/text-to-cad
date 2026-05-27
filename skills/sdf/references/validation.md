@@ -116,13 +116,13 @@ The runtime should check that:
 
 Plugin filenames and parameters can pass bundled validation and still fail in the target simulator. Use smoke tests.
 
-### CAD Explorer review
+### CAD Viewer review
 
-CAD Explorer treats SDF plugins, sensors, lights, includes, and nested models as static metadata. The bundled validator checks generic structure only; it does not validate Explorer-only motion contracts or execute simulator plugins.
+CAD Viewer treats SDF plugins, sensors, lights, includes, and nested models as static metadata. The bundled validator checks generic structure only; it does not validate Explorer-only motion contracts or execute simulator plugins.
 
-After generated `.sdf` files are created or modified, hand explicit paths to `$render` for live viewer links when available. Use `$render` snapshots for visual feedback rather than manual viewer or Playwright inspection; do not generate GIFs for SDF review.
+After generated `.sdf` files are created or modified, hand explicit paths to `$cad-viewer` for live viewer links when available.
 
-This plugin is for CAD Explorer visualization and review. It is not a Gazebo physics/controller plugin and should not be represented as simulator runtime behavior.
+This plugin is for CAD Viewer visualization and review. It is not a Gazebo physics/controller plugin and should not be represented as simulator runtime behavior.
 
 ## External checks
 

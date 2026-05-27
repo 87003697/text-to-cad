@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import struct
+import time
 from array import array
 from collections.abc import Mapping
 from pathlib import Path
@@ -18,6 +19,15 @@ from common.glb_mesh_payload import (
     scene_glb_mesh_payload,
     scene_glb_mesh_payload_key,
 )
+from common.glb_topology import (
+    STEP_EDGE_BARYCENTRIC_ATTRIBUTE,
+    STEP_EDGE_CLASS_ATTRIBUTE,
+    STEP_EDGE_SURFACE_CLASS_CODES,
+    STEP_SURFACE_HALF_EDGE_COLUMNS,
+    STEP_TOPOLOGY_EXTENSION,
+    STEP_TOPOLOGY_SCHEMA_VERSION,
+    step_topology_capabilities,
+)
 from common.render import REPO_ROOT, part_glb_path, part_native_glb_path
 from common.step_scene import ColorRGBA, LoadedStepScene, OccurrenceNode, SelectorBundle, occurrence_selector_id
 
@@ -25,10 +35,9 @@ from common.step_scene import ColorRGBA, LoadedStepScene, OccurrenceNode, Select
 ARRAY_BUFFER = 34962
 ELEMENT_ARRAY_BUFFER = 34963
 FLOAT = 5126
+UNSIGNED_BYTE = 5121
 UNSIGNED_INT = 5125
 TRIANGLES = 4
-STEP_TOPOLOGY_EXTENSION = "STEP_topology"
-STEP_TOPOLOGY_SCHEMA_VERSION = 1
 STEP_TOPOLOGY_LEGACY_IDENTITY_KEYS = frozenset({"cadRef", "cadPath"})
 GLB_MAGIC = 0x46546C67
 GLB_VERSION = 2
@@ -117,13 +126,22 @@ def export_native_glb_from_scene(
 
 
 def write_empty_glb(target_path: Path) -> Path:
-    target_path.parent.mkdir(parents=True, exist_ok=True)
     json_chunk = b'{"asset":{"version":"2.0"},"scenes":[{"nodes":[]}],"scene":0,"nodes":[]}'
     json_chunk += b" " * ((4 - (len(json_chunk) % 4)) % 4)
     chunk_header = len(json_chunk).to_bytes(4, "little") + b"JSON"
     payload = b"glTF" + (2).to_bytes(4, "little") + (12 + len(chunk_header) + len(json_chunk)).to_bytes(4, "little")
-    target_path.write_bytes(payload + chunk_header + json_chunk)
+    _atomic_write_bytes(target_path, payload + chunk_header + json_chunk)
     return target_path
+
+
+def _atomic_write_bytes(target_path: Path, payload: bytes) -> None:
+    target_path.parent.mkdir(parents=True, exist_ok=True)
+    temp_path = target_path.with_name(f"{target_path.name}.{os.getpid()}.{time.time_ns()}.tmp")
+    try:
+        temp_path.write_bytes(payload)
+        temp_path.replace(target_path)
+    finally:
+        temp_path.unlink(missing_ok=True)
 
 
 def build_step_topology_index_manifest(
@@ -145,7 +163,7 @@ def build_step_topology_index_manifest(
         "profile": "index",
         "entryKind": resolved_entry_kind,
     }
-    for key in ("stepPath", "stepHash", "bbox", "stats"):
+    for key in ("capabilities", "sourceKind", "sourcePath", "sourceHash", "generatedAt", "stepPath", "stepHash", "bbox", "stats", "edgeRendering", "mesh"):
         value = manifest.get(key)
         if value is not None:
             index[key] = value
@@ -158,6 +176,51 @@ def build_step_topology_index_manifest(
         index["assembly"] = assembly
         index["entryKind"] = "assembly"
     return index
+
+
+def _pick_buffer_views(buffer_views: Mapping[str, Any], names: tuple[str, ...]) -> dict[str, Any]:
+    return {name: buffer_views[name] for name in names if name in buffer_views}
+
+
+def build_step_surface_edge_manifest(
+    manifest: Mapping[str, Any],
+    *,
+    buffer_views: Mapping[str, Any],
+) -> dict[str, Any]:
+    stats = manifest.get("stats") if isinstance(manifest.get("stats"), Mapping) else {}
+    edge_rendering = manifest.get("edgeRendering") if isinstance(manifest.get("edgeRendering"), Mapping) else {}
+    generated_class_counts = (
+        edge_rendering.get("generatedVisibilityClassCounts")
+        if isinstance(edge_rendering.get("generatedVisibilityClassCounts"), Mapping)
+        else {}
+    )
+    return {
+        "schemaVersion": STEP_TOPOLOGY_SCHEMA_VERSION,
+        "profile": "surface-edges",
+        "sourceKind": manifest.get("sourceKind", "step"),
+        "sourcePath": manifest.get("sourcePath"),
+        "sourceHash": manifest.get("sourceHash"),
+        "stepPath": manifest.get("stepPath"),
+        "stepHash": manifest.get("stepHash"),
+        "bbox": manifest.get("bbox"),
+        "classCodes": STEP_EDGE_SURFACE_CLASS_CODES,
+        "primitiveAttributes": {
+            "barycentric": STEP_EDGE_BARYCENTRIC_ATTRIBUTE,
+            "class": STEP_EDGE_CLASS_ATTRIBUTE,
+        },
+        "halfEdgeColumns": list(STEP_SURFACE_HALF_EDGE_COLUMNS),
+        "halfEdgesView": "surfaceHalfEdges",
+        "edgeRendering": edge_rendering,
+        "stats": {
+            "edgeCount": int(stats.get("edgeCount") or 0),
+            "surfaceHalfEdgeCount": int(stats.get("surfaceHalfEdgeCount") or 0),
+            "generatedVisibilityClassCounts": dict(generated_class_counts),
+        },
+        "buffers": {
+            "littleEndian": True,
+            "views": _pick_buffer_views(buffer_views, ("surfaceHalfEdges",)),
+        },
+    }
 
 
 def _gltf_matrix_from_transform(transform: tuple[float, ...]) -> list[float]:
@@ -250,11 +313,99 @@ def _native_y_up_mesh_payload(payload: ShapeGlbMeshPayload) -> ShapeGlbMeshPaylo
     return ShapeGlbMeshPayload(
         positions=positions,
         normals=normals,
+        barycentrics=array("f", payload.barycentrics),
+        edge_classes=array("B", payload.edge_classes),
         primitives=list(payload.primitives),
         minimum=min_values,
         maximum=max_values,
         face_runs_by_hash=dict(payload.face_runs_by_hash),
+        surface_half_edges_by_face_ordinal={
+            int(face_ordinal): list(half_edges)
+            for face_ordinal, half_edges in payload.surface_half_edges_by_face_ordinal.items()
+        },
     )
+
+
+def _selector_occurrence_ids_by_row(selector_bundle: SelectorBundle | None) -> dict[int, str]:
+    if selector_bundle is None:
+        return {}
+    manifest = selector_bundle.manifest if isinstance(selector_bundle.manifest, Mapping) else {}
+    columns = manifest.get("tables", {}).get("occurrenceColumns") if isinstance(manifest.get("tables"), Mapping) else None
+    id_column = columns.index("id") if isinstance(columns, list) and "id" in columns else 0
+    occurrence_ids: dict[int, str] = {}
+    occurrences = manifest.get("occurrences")
+    if not isinstance(occurrences, list):
+        return occurrence_ids
+    for row_index, row in enumerate(occurrences):
+        if not isinstance(row, list) or id_column >= len(row):
+            continue
+        occurrence_id = str(row[id_column] or "").strip()
+        if occurrence_id:
+            occurrence_ids[row_index] = occurrence_id
+    return occurrence_ids
+
+
+def _surface_half_edges_by_occurrence_id(
+    selector_bundle: SelectorBundle | None,
+) -> dict[str, list[tuple[int, int, int, int]]]:
+    if selector_bundle is None:
+        return {}
+    occurrence_ids = _selector_occurrence_ids_by_row(selector_bundle)
+    surface_half_edges = selector_bundle.buffers.get("surfaceHalfEdges")
+    if not surface_half_edges:
+        return {}
+    grouped: dict[str, list[tuple[int, int, int]]] = {}
+    for offset in range(0, len(surface_half_edges) - 6, 7):
+        occurrence_id = occurrence_ids.get(int(surface_half_edges[offset + 2]))
+        if not occurrence_id:
+            continue
+        class_code = int(surface_half_edges[offset + 6])
+        if class_code <= 0:
+            continue
+        grouped.setdefault(occurrence_id, []).append(
+            (
+                int(surface_half_edges[offset + 3]),
+                int(surface_half_edges[offset + 4]),
+                int(surface_half_edges[offset + 5]),
+                class_code,
+            )
+        )
+    return grouped
+
+
+def _surface_edge_class_signature(selector_bundle: SelectorBundle | None) -> tuple[str, ...]:
+    edge_rendering = (
+        selector_bundle.manifest.get("edgeRendering")
+        if selector_bundle is not None and isinstance(selector_bundle.manifest, Mapping)
+        else None
+    )
+    visibility_classes = edge_rendering.get("visibilityClasses") if isinstance(edge_rendering, Mapping) else None
+    if not isinstance(visibility_classes, list):
+        return ()
+    return tuple(str(item or "").strip() for item in visibility_classes if str(item or "").strip())
+
+
+def _apply_surface_edge_classes_to_payload(
+    payload: ShapeGlbMeshPayload,
+    surface_half_edges: list[tuple[int, int, int, int]],
+) -> ShapeGlbMeshPayload:
+    if not surface_half_edges or not payload.edge_classes or len(payload.edge_classes) != len(payload.positions):
+        return payload
+    for primitive_index, triangle_index, side, class_code in surface_half_edges:
+        if primitive_index < 0 or primitive_index >= len(payload.primitives):
+            continue
+        if side < 0 or side > 2:
+            continue
+        indices = payload.primitives[primitive_index][1]
+        index_offset = triangle_index * 3
+        if index_offset < 0 or index_offset + 2 >= len(indices):
+            continue
+        for local_index in range(3):
+            vertex_index = int(indices[index_offset + local_index])
+            component_index = (vertex_index * 3) + side
+            if 0 <= component_index < len(payload.edge_classes):
+                payload.edge_classes[component_index] = max(int(payload.edge_classes[component_index]), int(class_code))
+    return payload
 
 
 class _GlbBuilder:
@@ -343,6 +494,8 @@ class _GlbBuilder:
         minimum: list[float],
         maximum: list[float],
         name: str,
+        barycentrics: array | None = None,
+        edge_classes: array | None = None,
     ) -> int | None:
         vertex_count = len(positions) // 3
         if vertex_count <= 0:
@@ -365,6 +518,24 @@ class _GlbBuilder:
                 target=ARRAY_BUFFER,
                 count=vertex_count,
             )
+        barycentric_accessor = None
+        if barycentrics is not None and len(barycentrics) == len(positions):
+            barycentric_accessor = self.add_accessor(
+                barycentrics,
+                component_type=FLOAT,
+                accessor_type="VEC3",
+                target=ARRAY_BUFFER,
+                count=vertex_count,
+            )
+        edge_class_accessor = None
+        if edge_classes is not None and len(edge_classes) == len(positions):
+            edge_class_accessor = self.add_accessor(
+                edge_classes,
+                component_type=UNSIGNED_BYTE,
+                accessor_type="VEC3",
+                target=ARRAY_BUFFER,
+                count=vertex_count,
+            )
         mesh_primitives = []
         for indices, material in primitives:
             if not indices:
@@ -381,6 +552,16 @@ class _GlbBuilder:
                     "attributes": {
                         "POSITION": position_accessor,
                         **({"NORMAL": normal_accessor} if normal_accessor is not None else {}),
+                        **(
+                            {STEP_EDGE_BARYCENTRIC_ATTRIBUTE: barycentric_accessor}
+                            if barycentric_accessor is not None
+                            else {}
+                        ),
+                        **(
+                            {STEP_EDGE_CLASS_ATTRIBUTE: edge_class_accessor}
+                            if edge_class_accessor is not None
+                            else {}
+                        ),
                     },
                     "indices": index_accessor,
                     "material": material,
@@ -431,22 +612,28 @@ class _GlbBuilder:
         index_payload = json.dumps(index_manifest, separators=(",", ":")).encode("utf-8")
         index_view = self.add_buffer_view(index_payload)
 
+        buffer_views: dict[str, object] = {}
+        if bundle.buffers:
+            for name, values in bundle.buffers.items():
+                buffer_views[name] = {
+                    "dtype": "float32" if values.typecode == "f" else "uint32",
+                    "bufferView": self.add_buffer_view(values.tobytes()),
+                    "byteOffset": 0,
+                    "byteLength": len(values) * values.itemsize,
+                    "count": len(values),
+                    "itemSize": values.itemsize,
+                }
+
+        edge_manifest = build_step_surface_edge_manifest(bundle.manifest, buffer_views=buffer_views)
+        edge_payload = json.dumps(edge_manifest, separators=(",", ":")).encode("utf-8")
+        edge_view = self.add_buffer_view(edge_payload)
+
         selector_view: int | None = None
         if include_selector_topology:
             if bundle.buffers:
                 selector_manifest["buffers"] = {
                     "littleEndian": True,
-                    "views": {
-                        name: {
-                            "dtype": "float32" if values.typecode == "f" else "uint32",
-                            "bufferView": self.add_buffer_view(values.tobytes()),
-                            "byteOffset": 0,
-                            "byteLength": len(values) * values.itemsize,
-                            "count": len(values),
-                            "itemSize": values.itemsize,
-                        }
-                        for name, values in bundle.buffers.items()
-                    },
+                    "views": buffer_views,
                 }
             selector_payload = json.dumps(selector_manifest, separators=(",", ":")).encode("utf-8")
             selector_view = self.add_buffer_view(selector_payload)
@@ -461,8 +648,13 @@ class _GlbBuilder:
             "schemaVersion": STEP_TOPOLOGY_SCHEMA_VERSION,
             "entryKind": index_manifest.get("entryKind", "part"),
             "indexView": index_view,
+            "edgeView": edge_view,
             "encoding": "utf-8",
         }
+        if isinstance(index_manifest.get("capabilities"), Mapping):
+            extension["capabilities"] = index_manifest["capabilities"]
+        else:
+            extension["capabilities"] = step_topology_capabilities()
         if isinstance(index_manifest.get("stats"), Mapping):
             extension["stats"] = index_manifest["stats"]
         if selector_view is not None:
@@ -483,14 +675,14 @@ class _GlbBuilder:
         binary_chunk = bytes(self.binary)
         binary_chunk += b"\0" * ((4 - (len(binary_chunk) % 4)) % 4)
         payload_length = 12 + 8 + len(json_chunk) + 8 + len(binary_chunk)
-        target_path.parent.mkdir(parents=True, exist_ok=True)
-        target_path.write_bytes(
+        _atomic_write_bytes(
+            target_path,
             b"glTF"
             + struct.pack("<II", 2, payload_length)
             + struct.pack("<I4s", len(json_chunk), b"JSON")
             + json_chunk
             + struct.pack("<I4s", len(binary_chunk), b"BIN\0")
-            + binary_chunk
+            + binary_chunk,
         )
         return target_path
 
@@ -513,6 +705,9 @@ class _HierarchicalGlbWriter:
         self.builder = _GlbBuilder()
         self.materials_by_color: dict[tuple[int, int, int, int], int] = {}
         self.meshes_by_key: dict[tuple[object, ...], int | None] = {}
+        self.include_surface_edges = False
+        self.surface_edge_class_signature: tuple[str, ...] = ()
+        self.surface_half_edges_by_occurrence_id: dict[str, list[tuple[int, int, int, int]]] = {}
 
     def write(
         self,
@@ -522,6 +717,9 @@ class _HierarchicalGlbWriter:
         include_selector_topology: bool = True,
         entry_kind: str | None = None,
     ) -> Path:
+        self.include_surface_edges = selector_bundle is not None and not self.native_y_up
+        self.surface_edge_class_signature = _surface_edge_class_signature(selector_bundle)
+        self.surface_half_edges_by_occurrence_id = _surface_half_edges_by_occurrence_id(selector_bundle)
         root_nodes = [self._node_index(root) for root in self.scene.roots]
         self.builder.set_scene_nodes(root_nodes)
         if selector_bundle is not None:
@@ -567,6 +765,8 @@ class _HierarchicalGlbWriter:
             node.prototype_key,
             default_color=color,
             suppress_face_colors=suppress_face_colors,
+            include_surface_edges=self.include_surface_edges,
+            surface_edge_class_signature=self.surface_edge_class_signature,
         )
         if key in self.meshes_by_key:
             return self.meshes_by_key[key]
@@ -575,7 +775,14 @@ class _HierarchicalGlbWriter:
             node.prototype_key,
             default_color=color,
             suppress_face_colors=suppress_face_colors,
+            include_surface_edges=self.include_surface_edges,
+            surface_edge_class_signature=self.surface_edge_class_signature,
         )
+        if self.include_surface_edges:
+            payload = _apply_surface_edge_classes_to_payload(
+                payload,
+                self.surface_half_edges_by_occurrence_id.get(occurrence_selector_id(node), []),
+            )
         if self.native_y_up:
             payload = _native_y_up_mesh_payload(payload)
         mesh = self.builder.add_mesh(
@@ -585,6 +792,8 @@ class _HierarchicalGlbWriter:
             minimum=payload.minimum,
             maximum=payload.maximum,
             name=self.scene.prototype_names.get(node.prototype_key) or occurrence_selector_id(node),
+            barycentrics=payload.barycentrics,
+            edge_classes=payload.edge_classes,
         )
         self.meshes_by_key[key] = mesh
         return mesh
@@ -765,8 +974,6 @@ def _step_topology_extension(gltf: Mapping[str, Any]) -> Mapping[str, Any] | Non
     extension = extensions.get(STEP_TOPOLOGY_EXTENSION) if isinstance(extensions, Mapping) else None
     if not isinstance(extension, Mapping):
         return None
-    if int(extension.get("schemaVersion") or 0) != STEP_TOPOLOGY_SCHEMA_VERSION:
-        return None
     if str(extension.get("encoding") or "utf-8").lower() != "utf-8":
         return None
     return extension
@@ -858,6 +1065,27 @@ def read_step_topology_index_from_glb(glb_path: Path) -> dict[str, Any] | None:
             binary_offset,
             binary_length,
             extension.get("indexView"),
+        )
+        manifest = json.loads(_read_file_range(glb_path, manifest_offset, manifest_length).decode("utf-8"))
+    except (ValueError, UnicodeDecodeError, json.JSONDecodeError, OSError):
+        return None
+    return manifest if isinstance(manifest, dict) else None
+
+
+def read_step_display_edge_manifest_from_glb(glb_path: Path) -> dict[str, Any] | None:
+    try:
+        gltf, binary_offset, binary_length = _read_glb_json_and_bin_location(glb_path)
+    except (OSError, ValueError, json.JSONDecodeError):
+        return None
+    extension = _step_topology_extension(gltf)
+    if extension is None:
+        return None
+    try:
+        manifest_offset, manifest_length = _buffer_view_range(
+            gltf,
+            binary_offset,
+            binary_length,
+            extension.get("edgeView", extension.get("displayEdgeView")),
         )
         manifest = json.loads(_read_file_range(glb_path, manifest_offset, manifest_length).decode("utf-8"))
     except (ValueError, UnicodeDecodeError, json.JSONDecodeError, OSError):

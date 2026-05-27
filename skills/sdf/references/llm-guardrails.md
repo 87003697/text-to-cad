@@ -18,7 +18,7 @@ This skill assumes agents are useful at structuring SDFormat documents and weak 
 - mesh units, mesh scale, or coordinate-system conventions;
 - center of mass or inertia tensors from rendered shape alone;
 - plugin filenames, parameters, topics, namespaces, or sensor schemas;
-- whether a plugin is a simulator runtime plugin or a CAD Explorer visualization-only extension;
+- whether a plugin is a simulator runtime plugin or a CAD Viewer visualization-only extension;
 - target simulator support for a given SDFormat version or extension;
 - whether collision geometry is stable for physics;
 - whether external URIs resolve in the deployment environment.
@@ -56,7 +56,7 @@ return {
 Examples of unacceptable placeholders:
 
 - invented plugin filenames;
-- adding CAD Explorer-only motion plugins to SDF files;
+- adding CAD Viewer-only motion plugins to SDF files;
 - arbitrary inertia values on a dynamic robot without a warning;
 - guessed mesh scale that makes the visual look plausible;
 - silently flipping a joint axis to match an expected screenshot.

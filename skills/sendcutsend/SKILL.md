@@ -7,29 +7,21 @@ description: Review DXF and STEP/STP uploads for SendCutSend.com orders using it
 
 Use this skill to produce conservative, evidence-backed SendCutSend preflight reports for DXF and STEP/STP files.
 
-Treat SendCutSend's ordering guide, catalog JSON, and specs JSON as evidence feeds, not stable APIs. Field names, types, and coverage may vary. Do not turn missing, unparsable, `N/A`, or conflicting source data into a pass or fail. Use scripts only to fetch source files or measure specific file facts; write the final report from explicit comparisons.
+Treat SendCutSend's ordering guide, catalog JSON, and specs JSON as evidence feeds, not stable APIs. Field names, types, and coverage may vary. Do not turn missing, unparsable, `N/A`, or conflicting source data into a pass or fail. Fetch sources directly from official URLs and use local inspection code only to measure specific file facts; write the final report from explicit comparisons.
 
 ## Geometry Inspection
 
-Use the active project Python environment for local inspection scripts. If the `$cad` skill is available, use it first for STEP/STP/DXF geometry inspection, measurement, and validation workflows, then add any SendCutSend-specific targeted measurements that are still missing. Use `build123d.import_step` for STEP/STP inspection and `build123d.ezdxf` for DXF inspection when geometry facts are required. Do not use raw text parsing or alternate geometry backends for geometry facts.
+Use the active project Python environment for local geometry inspection code. If the `$cad` skill is available, use it first for STEP/STP/DXF geometry inspection, measurement, and validation workflows, then add any SendCutSend-specific targeted measurements that are still missing. Use `build123d.import_step` for STEP/STP inspection and `build123d.ezdxf` for DXF inspection when geometry facts are required. Do not use raw text parsing or alternate geometry backends for geometry facts.
 
-If this workflow creates or updates a DXF, STEP, or STP upload candidate, hand the explicit file path to `$render` when available; `$render` checks/reuses a live viewer and returns a link. For visual feedback on CAD/DXF geometry, prefer `$render` snapshots over opening the viewer manually or using Playwright. Use still snapshots only; SendCutSend review should not generate GIFs.
+## CAD Viewer Handoff
 
-## Source Refresh
+After completing SendCutSend work that creates or modifies a `.dxf`, `.step`, or `.stp` upload candidate, you must ALWAYS hand the explicit file path(s) to `$cad-viewer` when that skill is installed. `$cad-viewer` must start CAD Viewer if it is not already running and return link(s) to the relevant created or updated file(s); if `$cad-viewer` is unavailable or startup fails, report that instead of silently omitting the handoff.
 
-Before each review, download or refresh the three SendCutSend source files:
+## Official Sources
 
-```bash
-python scripts/download_sources.py
-```
+Before each review, fetch and inspect the current SendCutSend source documents directly from the official URLs listed in `references/official-sources.md`:
 
-The downloader writes `references/generated/sendcutsend-ordering-guide.md`, `references/generated/sendcutsend-catalog.json`, `references/generated/sendcutsend-specs.json`, and `references/generated/sources-manifest.json`. The cache is fresh for 24 hours. If the user explicitly asks to skip cache, force a fresh fetch:
-
-```bash
-python scripts/download_sources.py --skip-cache
-```
-
-Use the manifest's `fetched_at`, `cache_expires_at`, `sha256`, and JSON `_meta` values in the source bibliography when helpful. If a source cannot be fetched and only stale files are available, report that limitation and avoid ready verdicts for dependent checks.
+Use the source URL, access date, and JSON `_meta` values in the source bibliography when helpful. If a source cannot be fetched, report that current SendCutSend sources were unavailable and avoid ready verdicts for dependent checks.
 
 ## Workflow
 
@@ -38,11 +30,11 @@ Use the manifest's `fetched_at`, `cache_expires_at`, `sha256`, and JSON `_meta` 
    - Prefer STEP/STP for CNC routing and 3D model upload workflows.
    - Record file type, intended process, material/SKU, thickness, quantity, services, finish, and hardware.
    - If order context is missing or ambiguous, inspect enough source data to present concrete options, then ask the user to confirm before writing a readiness verdict. Include candidate SKUs/materials/thicknesses/services with relevant source links; include `photo_url` images and `learn_more_url` links from the specs JSON when available.
-2. Read `references/official-sources.md`, run the source downloader, then inspect the generated source files directly. Normalize source facts defensively: parse numeric strings, size strings, `N/A`, missing fields, mixed types, and absent service arrays into explicit notes.
+2. Read `references/official-sources.md`, fetch the official sources directly, then inspect the returned documents. Normalize source facts defensively: parse numeric strings, size strings, `N/A`, missing fields, mixed types, and absent service arrays into explicit notes.
 3. Inspect the exact upload file with `$cad` when available and with targeted Python/`build123d` for any missing facts. Do not inspect only the source generator, CAD model, or generator console summary.
    - DXF: measure units, bounds, layers, entity types, open/duplicate geometry, unsupported annotations, candidate holes/circles, linework stats, bend-line candidates, bend-to-cut distances, bend-adjacent cut geometry, local flange depths, and degenerate zero-area contours as needed for the selected service.
    - STEP/STP: measure parseability, units hints, solid/surface signals, bounding box, shell/body signals, validity, sheet thickness where available, cylindrical bend-face radii where bending is in scope, and limitations as needed for the selected service.
-   - Keep each inspection script fact-only. It may report measurements, parse errors, and limitations, but it must not emit pass/fail/readiness statuses.
+   - Keep each inspection helper fact-only. It may report measurements, parse errors, and limitations, but it must not emit pass/fail/readiness statuses.
 4. Select source records by evidence quality.
    - Use exact SKU as the only authoritative catalog/spec join.
    - If only material and thickness are provided, use a selected material only when the candidate match is unique and exact enough; otherwise list candidates with links/images from the source records and ask the user to choose.
@@ -73,7 +65,7 @@ Report with restrained status labels:
 
 ## Diagnostic Images
 
-When findings would be easier to understand visually, produce a concise diagnostic diagram proactively if image-generation or image-editing capabilities are available. Use `$render` snapshots first for CAD/DXF geometry views when available; use generated or edited images for callouts, legends, and before/after explanations. Do this without waiting for the user to ask whenever there is a `❌ fail`, a spatially ambiguous geometry issue, or a geometry edit that needs a before/after explanation. If image-generation tools are unavailable, state that limitation and describe the intended diagram in the report.
+When findings would be easier to understand visually, produce a concise diagnostic diagram proactively if image-generation or image-editing capabilities are available. Use generated or edited images for callouts, legends, and before/after explanations. Do this without waiting for the user to ask whenever there is a `❌ fail`, a spatially ambiguous geometry issue, or a geometry edit that needs a before/after explanation. If image-generation tools are unavailable, state that limitation and describe the intended diagram in the report.
 
 Before generating an image, run a layout preflight:
 

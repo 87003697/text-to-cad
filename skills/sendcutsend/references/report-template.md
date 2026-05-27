@@ -11,13 +11,13 @@ Use this structure when the user asks for a review, validation, preflight, or ma
 
 ## Sources Checked
 
-List official SendCutSend URLs used for the checks as Markdown links. Include only sources actually consulted. Include generated source filenames, manifest `fetched_at`, and JSON `_meta.generated_at` values when available. The findings table must also link the specific rule source for each row, so this section is a bibliography, not a substitute for row-level citations.
+List official SendCutSend URLs used for the checks as Markdown links. Include only sources actually consulted. Include the access date and JSON `_meta.generated_at` values when available. The findings table must also link the specific rule source for each row, so this section is a bibliography, not a substitute for row-level citations.
 
 ## Geometry Facts
 
-Summarize facts from `$cad` inspection when available and targeted `build123d` scripts: file type, units, extents/bounding box, entity/body counts, layers, unsupported entities, obvious open/duplicate geometry, and parsing limitations.
+Summarize facts from `$cad` inspection when available and targeted `build123d`/`ezdxf` inspection code: file type, units, extents/bounding box, entity/body counts, layers, unsupported entities, obvious open/duplicate geometry, and parsing limitations.
 
-If the reviewed upload was generated or updated in this workflow, include the `$render` viewer link when available. Use `$render` still snapshots for visual feedback; do not use manual viewer or Playwright inspection as report evidence.
+If the reviewed upload was generated or updated in this workflow, include the `$cad-viewer` viewer link when available.
 
 For bent 2D files, include bend geometry facts from the exported file: bend-line count and layers, individual bend line lengths, nearest non-bend cut geometry for each bend line, local flange depths, bend-line span coverage, bend-adjacent cut geometry, insufficient contact/support observations, and any split/interrupted/common-axis bend observations. Use those facts for comparison against the current material/thickness service page.
 

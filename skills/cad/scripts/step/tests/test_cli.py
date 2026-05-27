@@ -27,7 +27,7 @@ class StepCliTests(unittest.TestCase):
         self.assertIsNone(generate.call_args.kwargs["direct_step_kind"])
         self.assertFalse(generate.call_args.kwargs["step_options"].has_metadata)
         self.assertIsNone(generate.call_args.kwargs["output"])
-        self.assertFalse(generate.call_args.kwargs["skip_explorer"])
+        self.assertFalse(generate.call_args.kwargs["skip_step_write"])
         self.assertFalse(generate.call_args.kwargs["verbose"])
 
     def test_passes_direct_step_kind(self) -> None:
@@ -47,11 +47,11 @@ class StepCliTests(unittest.TestCase):
 
         self.assertTrue(generate.call_args.kwargs["verbose"])
 
-    def test_passes_skip_explorer_flag(self) -> None:
+    def test_passes_skip_step_write_flag(self) -> None:
         with mock.patch.object(cli, "generate_step_targets", return_value=0) as generate:
-            self.assertEqual(0, cli.main(["parts/sample.py", "--skip-explorer"]))
+            self.assertEqual(0, cli.main(["parts/sample.py", "--skip-step-write"]))
 
-        self.assertTrue(generate.call_args.kwargs["skip_explorer"])
+        self.assertTrue(generate.call_args.kwargs["skip_step_write"])
 
     def test_passes_output_flag(self) -> None:
         with mock.patch.object(cli, "generate_step_targets", return_value=0) as generate:
@@ -117,7 +117,7 @@ class StepCliTests(unittest.TestCase):
         self.assertIn("--stl", help_text)
         self.assertIn("--3mf", help_text)
         self.assertIn("--glb", help_text)
-        self.assertIn("--skip-explorer", help_text)
+        self.assertIn("--skip-step-write", help_text)
         self.assertIn("--output", help_text)
         self.assertIn("--mesh-tolerance", help_text)
         self.assertIn("--verbose", help_text)

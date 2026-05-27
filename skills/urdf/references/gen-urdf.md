@@ -34,7 +34,7 @@ This tool runs only `gen_urdf()`. It does not regenerate CAD, mesh/export, GLB/t
 
 If URDF visual/collision mesh references depend on updated CAD or mesh outputs, regenerate those explicit targets separately with the owning CAD or mesh workflow, then regenerate the affected URDF.
 
-After creating or modifying generated `.urdf` files, hand explicit paths to `$render` for live viewer links when available. For visual feedback, prefer `$render` snapshots over manual viewer or Playwright inspection; do not generate GIFs for URDF review.
+After creating or modifying generated `.urdf` files, hand explicit paths to `$cad-viewer` for live viewer links when available.
 
 ## Failure Handling
 

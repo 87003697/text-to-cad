@@ -4,7 +4,7 @@ Use this reference to understand what generated URDFs should satisfy. The `scrip
 
 Validation is a guardrail, not a substitute for a design ledger or visual/consumer smoke test. A URDF can pass structural checks while still having incorrect spatial assumptions.
 
-Generated or modified `.urdf` files should be handed to `$render` for live viewer links when available. Use `$render` still snapshots for visual feedback instead of manual viewer or Playwright inspection.
+Generated or modified `.urdf` files should be handed to `$cad-viewer` for live viewer links when available.
 
 ## Structural Checks
 

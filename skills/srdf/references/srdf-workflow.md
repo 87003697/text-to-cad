@@ -15,10 +15,9 @@ SRDF is the MoveIt semantic companion to a URDF. Keep physical robot structure, 
 9. Define group states in URDF-native units and check them against URDF limits.
 10. Define disabled collisions only from adjacency, sampling, Setup Assistant output, or explicit user evidence.
 11. Regenerate only the explicit SRDF target with `scripts/srdf`.
-12. Hand generated or modified `.srdf` files to `$render` for live viewer links when available.
-13. For visual feedback, prefer `$render` snapshots over opening the viewer manually or using Playwright; use still snapshots only.
-14. Run MoveIt smoke tests when available. Use `$render` for local Explorer-based IK or path-planning controls.
-15. Report assumptions and skipped checks.
+12. Hand generated or modified `.srdf` files to `$cad-viewer` for live viewer links when available.
+13. Run MoveIt smoke tests when available. Use `$cad-viewer` for local Viewer-based IK or path-planning controls.
+14. Report assumptions and skipped checks.
 
 ## Typical SRDF content
 
@@ -68,10 +67,10 @@ An end-effector is usually a separate tool or gripper group attached to a parent
 
 Do not generate broad disabled-collision lists from prose or visual appearance.
 
-## CAD Explorer handoff and MoveIt2 controls
+## CAD Viewer handoff and MoveIt2 controls
 
-After creating or modifying generated `.srdf` files, hand the explicit output path to `$render` for a live viewer link when that skill is available. SRDF does not own Explorer startup.
+After creating or modifying generated `.srdf` files, hand the explicit output path to `$cad-viewer` for a live viewer link when that skill is available. SRDF does not own Viewer startup.
 
-When the user needs local IK or path-planning controls, include that in the `$render` handoff. CAD Explorer owns the local `moveit2_server`, including setup, environment checks, WebSocket URL wiring, and protocol details. Provide the SRDF path plus any known planning group, target/TCP link, target frame, pose, start state, and skipped assumptions.
+When the user needs local IK or path-planning controls, include that in the `$cad-viewer` handoff. CAD Viewer owns the local `moveit2_server`, including setup, environment checks, WebSocket URL wiring, and protocol details. Provide the SRDF path plus any known planning group, target/TCP link, target frame, pose, start state, and skipped assumptions.
 
 The local server is a smoke-test helper, not a replacement for a full MoveIt configuration package.

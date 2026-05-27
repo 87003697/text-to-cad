@@ -50,10 +50,10 @@ The `urdf` field is resolved relative to the generator source file. It must:
 The CLI injects or updates:
 
 ```xml
-<explorer:urdf path="..."/>
+<tcad:urdf path="..."/>
 ```
 
-The injected path is relative from the generated `.srdf` location to the linked URDF. This metadata is a local tool convention for CAD Explorer and its optional MoveIt2 controls; it is not a core SRDF semantic element.
+The `tcad` prefix is emitted with the `https://text-to-cad.dev/srdf` namespace. The injected path is relative from the generated `.srdf` location to the linked URDF. This metadata is a local SRDF convention for downstream tools; it is not a core SRDF semantic element. Readers also accept existing legacy `<explorer:urdf/>` metadata.
 
 ## Supported target forms
 

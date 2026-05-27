@@ -1,6 +1,10 @@
 from __future__ import annotations
 import copy
+from contextlib import nullcontext
+import hashlib
+import json
 from dataclasses import dataclass, field
+from functools import lru_cache
 from pathlib import Path
 from typing import Sequence
 
@@ -25,10 +29,12 @@ from common.catalog import (
 from common.glb import read_step_topology_manifest_from_glb
 from common.render import existing_part_glb_path, part_glb_path
 from common.step_export import create_bin_xcaf_doc, export_xcaf_doc_step_scene
-from common.step_scene import LoadedStepScene, load_step_scene, occurrence_selector_id
+from common.step_scene import LoadedStepScene, load_step_scene, load_step_scene_cached, load_step_scene_from_xcaf_doc, occurrence_selector_id
+from common.step_scene import _shape_hash
 
 
 GIT_LFS_POINTER_PREFIX = b"version https://git-lfs.github.com/spec/v1\n"
+ASSEMBLY_SOURCE_FINGERPRINT_VERSION = 1
 
 
 @dataclass
@@ -143,6 +149,14 @@ def _relative_to_repo(path: Path) -> str:
         return resolved.as_posix()
 
 
+def _file_sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.expanduser().resolve().open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
 def _is_git_lfs_pointer(path: Path) -> bool:
     try:
         with path.open("rb") as handle:
@@ -173,8 +187,27 @@ def _location_from_transform(transform: tuple[float, ...]):
     return build123d.Location(trsf)
 
 
+@lru_cache(maxsize=4096)
 def _toploc_from_transform(transform: tuple[float, ...]):
-    return _location_from_transform(transform).wrapped
+    from OCP.gp import gp_Trsf
+    from OCP.TopLoc import TopLoc_Location
+
+    trsf = gp_Trsf()
+    trsf.SetValues(
+        transform[0],
+        transform[1],
+        transform[2],
+        transform[3],
+        transform[4],
+        transform[5],
+        transform[6],
+        transform[7],
+        transform[8],
+        transform[9],
+        transform[10],
+        transform[11],
+    )
+    return TopLoc_Location(trsf)
 
 
 def _topods_shape_without_location(shape: object) -> object:
@@ -207,10 +240,13 @@ def _load_step_shape(step_path: Path):
         raise RuntimeError(f"Failed to load referenced STEP file: {_relative_to_repo(step_path)}") from exc
 
 
-def _step_has_assembly_artifact(step_path: Path) -> bool:
+def _step_has_assembly_artifact(step_path: Path) -> bool | None:
     payload = read_step_topology_manifest_from_glb(existing_part_glb_path(step_path) or part_glb_path(step_path))
     if payload is None:
-        return False
+        return None
+    step_hash = str(payload.get("stepHash") or "").strip()
+    if not step_hash or step_hash != _file_sha256(step_path):
+        return None
     root = payload.get("assembly", {}).get("root") if isinstance(payload.get("assembly"), dict) else None
     return isinstance(root, dict) and bool(root.get("children"))
 
@@ -233,12 +269,13 @@ def _cached_step_has_assembly_artifact(step_path: Path, *, cache: _AssemblyBuild
     resolved = step_path.resolve()
     cached = cache.step_has_assembly.get(resolved)
     if cached is None:
-        cached = _step_has_assembly_artifact(resolved)
-        if not cached:
+        artifact_has_assembly = _step_has_assembly_artifact(resolved)
+        if artifact_has_assembly is None:
             try:
-                cached = _scene_has_assembly_structure(_cached_step_scene(resolved, cache=cache))
+                artifact_has_assembly = _scene_has_assembly_structure(_cached_step_scene(resolved, cache=cache))
             except Exception:
-                cached = False
+                artifact_has_assembly = False
+        cached = artifact_has_assembly
         cache.step_has_assembly[resolved] = cached
     return cached
 
@@ -247,7 +284,7 @@ def _cached_step_scene(step_path: Path, *, cache: _AssemblyBuildCache) -> Loaded
     resolved = step_path.resolve()
     cached = cache.step_scenes.get(resolved)
     if cached is None:
-        cached = load_step_scene(resolved)
+        cached = load_step_scene_cached(resolved)
         cache.step_scenes[resolved] = cached
     return cached
 
@@ -267,7 +304,6 @@ def _load_step_assembly_shape(step_path: Path, *, label: str):
         if children:
             child_shapes = [build_node(child) for child in children]
             return build123d.Compound(
-                obj=child_shapes,
                 children=child_shapes,
                 label=node_label(node),
             )
@@ -278,7 +314,7 @@ def _load_step_assembly_shape(step_path: Path, *, label: str):
     roots = [build_node(root) for root in scene.roots]
     if not roots:
         return _load_step_shape(step_path)
-    return build123d.Compound(obj=roots, children=roots, label=label)
+    return build123d.Compound(children=roots, label=label)
 
 
 def _cached_source_color_for_cad_ref(cad_ref: str, *, cache: _AssemblyBuildCache) -> tuple[float, float, float, float] | None:
@@ -286,6 +322,129 @@ def _cached_source_color_for_cad_ref(cad_ref: str, *, cache: _AssemblyBuildCache
         color = cache.resolver.source_color_for_cad_ref(cad_ref)
         cache.source_colors[cad_ref] = None if color is None else tuple(float(value) for value in color)
     return cache.source_colors[cad_ref]
+
+
+def _fingerprint_color(color: object) -> list[float] | None:
+    if color is None:
+        return None
+    return [float(value) for value in color]
+
+
+def _fingerprint_transform(transform: tuple[float, ...]) -> list[float]:
+    return [float(value) for value in transform]
+
+
+def assembly_source_fingerprint(
+    assembly_spec: AssemblySpec,
+    *,
+    output_label: str | None = None,
+    text_to_cad_entry_kind: str | None = "assembly",
+    resolver: "_AssemblyCatalogResolver | None" = None,
+) -> str:
+    resolver = resolver or _AssemblyCatalogResolver()
+    root_source = resolver.source_for_path(assembly_spec.assembly_path)
+    root_source_ref = (
+        root_source.source_ref
+        if root_source is not None
+        else _relative_to_repo(assembly_spec.assembly_path)
+    )
+    file_hashes: dict[Path, str] = {}
+
+    def file_hash(path: Path) -> str:
+        resolved = path.resolve()
+        cached = file_hashes.get(resolved)
+        if cached is None:
+            cached = _file_sha256(resolved)
+            file_hashes[resolved] = cached
+        return cached
+
+    def entry_payload(entry: CatalogEntry, *, use_source_colors: bool, stack: tuple[str, ...]) -> dict[str, object]:
+        payload: dict[str, object] = {
+            "kind": entry.kind,
+            "cadRef": entry.cad_ref,
+            "sourceRef": entry.source_ref,
+            "useSourceColors": bool(use_source_colors),
+            "sourceColor": _fingerprint_color(
+                resolver.source_color_for_cad_ref(entry.cad_ref) if use_source_colors else None
+            ),
+        }
+        if entry.kind == "assembly":
+            if entry.assembly_spec is None:
+                raise RuntimeError(f"Assembly source {entry.source_ref} is missing assembly spec data")
+            stack_key = entry.source_ref
+            if stack_key in stack:
+                cycle = " -> ".join((*stack, stack_key))
+                raise RuntimeError(f"Assembly cycle detected while fingerprinting: {cycle}")
+            payload["children"] = nodes_payload(
+                assembly_spec_children(entry.assembly_spec),
+                parent_use_source_colors=use_source_colors,
+                stack=(*stack, stack_key),
+            )
+            return payload
+        if entry.step_path is None:
+            raise RuntimeError(f"Part source {entry.source_ref} is missing STEP source path")
+        payload["stepPath"] = _relative_to_repo(entry.step_path)
+        payload["stepHash"] = file_hash(entry.step_path)
+        return payload
+
+    def node_payload(
+        node: AssemblyNodeSpec,
+        *,
+        parent_use_source_colors: bool,
+        stack: tuple[str, ...],
+    ) -> dict[str, object]:
+        use_source_colors = parent_use_source_colors and node.use_source_colors
+        payload: dict[str, object] = {
+            "instanceId": node.instance_id,
+            "name": node.name,
+            "transform": _fingerprint_transform(node.transform),
+            "useSourceColors": bool(use_source_colors),
+        }
+        if node.children:
+            payload["children"] = nodes_payload(
+                node.children,
+                parent_use_source_colors=use_source_colors,
+                stack=stack,
+            )
+            return payload
+        if node.source_path is None or node.path is None:
+            raise RuntimeError(f"Assembly node {node.instance_id} is missing a STEP source path")
+        child_entry = resolver.entry_for_path(node.source_path)
+        if child_entry is None:
+            raise RuntimeError(f"Assembly node {node.instance_id} references missing CAD source {node.path}")
+        payload["path"] = node.path
+        payload["sourcePath"] = _relative_to_repo(node.source_path)
+        payload["entry"] = entry_payload(child_entry, use_source_colors=use_source_colors, stack=stack)
+        return payload
+
+    def nodes_payload(
+        nodes: Sequence[AssemblyNodeSpec],
+        *,
+        parent_use_source_colors: bool,
+        stack: tuple[str, ...],
+    ) -> list[dict[str, object]]:
+        return [
+            node_payload(
+                node,
+                parent_use_source_colors=parent_use_source_colors,
+                stack=stack,
+            )
+            for node in nodes
+        ]
+
+    payload = {
+        "version": ASSEMBLY_SOURCE_FINGERPRINT_VERSION,
+        "entryKind": text_to_cad_entry_kind,
+        "outputLabel": output_label or "",
+        "rootSourceRef": root_source_ref,
+        "children": nodes_payload(
+            assembly_spec_children(assembly_spec),
+            parent_use_source_colors=True,
+            stack=(root_source_ref,),
+        ),
+    }
+    encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
 
 
 def _clear_shape_colors(shape: object) -> None:
@@ -369,7 +528,7 @@ def _build_node_shape(
             )
             for child in node.children
         ]
-        shape = build123d.Compound(obj=child_shapes, children=child_shapes, label=label)
+        shape = build123d.Compound(children=child_shapes, label=label)
     else:
         if node.source_path is None or node.path is None:
             raise RuntimeError(f"Assembly node {label} is missing a STEP source path")
@@ -433,14 +592,19 @@ def _compound_from_nodes(
     if not children:
         raise RuntimeError(f"Assembly {label} has no resolved STEP instances")
     return build123d.Compound(
-        obj=children,
         children=children,
         label=label,
     )
 
 
 class _DirectXcafAssemblyWriter:
-    def __init__(self, assembly_spec: AssemblySpec, *, label: str) -> None:
+    def __init__(
+        self,
+        assembly_spec: AssemblySpec,
+        *,
+        label: str,
+        resolver: _AssemblyCatalogResolver | None = None,
+    ) -> None:
         from OCP.XCAFDoc import XCAFDoc_DocumentTool
 
         self.assembly_spec = assembly_spec
@@ -448,7 +612,7 @@ class _DirectXcafAssemblyWriter:
         self.doc = create_bin_xcaf_doc()
         self.shape_tool = XCAFDoc_DocumentTool.ShapeTool_s(self.doc.Main())
         self.color_tool = XCAFDoc_DocumentTool.ColorTool_s(self.doc.Main())
-        self.resolver = _AssemblyCatalogResolver()
+        self.resolver = resolver or _AssemblyCatalogResolver()
         self.cache = _AssemblyBuildCache(resolver=self.resolver)
         self.shape_definitions: dict[int, object] = {}
         self.step_scene_definitions: dict[tuple[Path, bool, tuple[float, float, float, float] | None], object] = {}
@@ -460,6 +624,7 @@ class _DirectXcafAssemblyWriter:
             tuple[Path, int, bool, tuple[float, float, float, float] | None],
             object,
         ] = {}
+        self.colors_by_rgba: dict[tuple[float, float, float, float], object] = {}
 
     def build_doc(self):
         root_label = self.shape_tool.NewShape()
@@ -494,13 +659,49 @@ class _DirectXcafAssemblyWriter:
         from OCP.XCAFDoc import XCAFDoc_ColorType
 
         if isinstance(color, tuple):
-            import build123d
-
-            color = build123d.Color(*color)
-        wrapped = getattr(color, "wrapped", None)
-        if wrapped is None:
-            return
+            wrapped = self._quantity_color_rgba(color)
+        else:
+            wrapped = getattr(color, "wrapped", None)
+            if wrapped is None:
+                return
         self.color_tool.SetColor(label, wrapped, XCAFDoc_ColorType.XCAFDoc_ColorSurf)
+
+    def _set_shape_face_colors(
+        self,
+        shape_label: object,
+        shape: object,
+        face_colors: dict[int, tuple[float, float, float, float]],
+    ) -> None:
+        if not face_colors:
+            return
+        from OCP.TopAbs import TopAbs_FACE
+        from OCP.TopExp import TopExp_Explorer
+        from OCP.TopoDS import TopoDS
+
+        explorer = TopExp_Explorer(shape, TopAbs_FACE)
+        while explorer.More():
+            face = TopoDS.Face_s(explorer.Current())
+            color = face_colors.get(_shape_hash(face))
+            if color is not None:
+                face_label = self.shape_tool.AddSubShape(shape_label, face)
+                self._set_label_color(face_label, color)
+            explorer.Next()
+
+    def _quantity_color_rgba(self, color: tuple[float, ...]) -> object:
+        from OCP.Quantity import Quantity_ColorRGBA
+
+        values = tuple(max(0.0, min(1.0, float(component))) for component in color)
+        if len(values) == 3:
+            rgba = (values[0], values[1], values[2], 1.0)
+        elif len(values) >= 4:
+            rgba = (values[0], values[1], values[2], values[3])
+        else:
+            rgba = (0.72, 0.72, 0.72, 1.0)
+        cached = self.colors_by_rgba.get(rgba)
+        if cached is None:
+            cached = Quantity_ColorRGBA(*rgba)
+            self.colors_by_rgba[rgba] = cached
+        return cached
 
     def _part_definition_for_entry(self, entry: CatalogEntry, *, use_source_colors: bool) -> object:
         step_path = entry.step_path.resolve() if entry.step_path is not None else None
@@ -622,6 +823,12 @@ class _DirectXcafAssemblyWriter:
         self._set_label_name(definition_label, scene.prototype_names.get(prototype_key))
         if use_source_colors:
             self._set_label_color(definition_label, source_color or scene.prototype_colors.get(prototype_key))
+            if source_color is None:
+                self._set_shape_face_colors(
+                    definition_label,
+                    definition_shape,
+                    scene.prototype_face_colors.get(prototype_key, {}),
+                )
         return definition_label
 
     def _step_scene_node_name(self, node: object) -> str:
@@ -756,17 +963,54 @@ class _DirectXcafAssemblyWriter:
         return definition_label
 
 
-def export_direct_assembly_step_scene(assembly_spec: AssemblySpec, output_path: Path) -> LoadedStepScene:
+def export_direct_assembly_step_scene(
+    assembly_spec: AssemblySpec,
+    output_path: Path,
+    *,
+    text_to_cad_entry_kind: str | None = "assembly",
+    source_fingerprint: str | None = None,
+    source_hash: str | None = None,
+    resolver: _AssemblyCatalogResolver | None = None,
+    logger: object | None = None,
+) -> LoadedStepScene:
     output_path = output_path.expanduser().resolve()
-    writer = _DirectXcafAssemblyWriter(assembly_spec, label=output_path.stem)
-    doc = writer.build_doc()
-    scene = export_xcaf_doc_step_scene(
-        doc,
-        output_path,
-        label=output_path.stem,
-        originating_system="tom-cad direct XCAF assembly",
-    )
+    writer = _DirectXcafAssemblyWriter(assembly_spec, label=output_path.stem, resolver=resolver)
+    with (logger.timed(f"build assembly XCAF {output_path.name}") if logger is not None else nullcontext()):
+        doc = writer.build_doc()
+    with (logger.timed(f"export assembly STEP {output_path.name}") if logger is not None else nullcontext()):
+        scene = export_xcaf_doc_step_scene(
+            doc,
+            output_path,
+            label=output_path.stem,
+            originating_system="tom-cad direct XCAF assembly",
+            text_to_cad_entry_kind=text_to_cad_entry_kind,
+            source_fingerprint=source_fingerprint,
+            source_hash=source_hash,
+            logger=logger,
+        )
     return scene
+
+
+def build_direct_assembly_step_scene(
+    assembly_spec: AssemblySpec,
+    output_path: Path,
+    *,
+    source_kind: str = "step",
+    source_hash: str | None = None,
+    resolver: _AssemblyCatalogResolver | None = None,
+    logger: object | None = None,
+) -> LoadedStepScene:
+    output_path = output_path.expanduser().resolve()
+    writer = _DirectXcafAssemblyWriter(assembly_spec, label=output_path.stem, resolver=resolver)
+    with (logger.timed(f"build assembly XCAF {output_path.name}") if logger is not None else nullcontext()):
+        doc = writer.build_doc()
+    with (logger.timed(f"load assembly scene from XCAF {output_path.name}") if logger is not None else nullcontext()):
+        return load_step_scene_from_xcaf_doc(
+            output_path,
+            doc,
+            source_kind=source_kind,
+            source_hash=source_hash,
+        )
 
 
 def build_assembly_compound(assembly_spec: AssemblySpec, *, label: str | None = None):
@@ -784,9 +1028,26 @@ def build_assembly_compound(assembly_spec: AssemblySpec, *, label: str | None = 
     )
 
 
-def export_assembly_step_scene(assembly_spec: AssemblySpec, output_path: Path) -> LoadedStepScene:
+def export_assembly_step_scene(
+    assembly_spec: AssemblySpec,
+    output_path: Path,
+    *,
+    text_to_cad_entry_kind: str | None = "assembly",
+    source_fingerprint: str | None = None,
+    source_hash: str | None = None,
+    resolver: _AssemblyCatalogResolver | None = None,
+    logger: object | None = None,
+) -> LoadedStepScene:
     try:
-        scene = export_direct_assembly_step_scene(assembly_spec, output_path)
+        scene = export_direct_assembly_step_scene(
+            assembly_spec,
+            output_path,
+            text_to_cad_entry_kind=text_to_cad_entry_kind,
+            source_fingerprint=source_fingerprint,
+            source_hash=source_hash,
+            resolver=resolver,
+            logger=logger,
+        )
     except Exception as exc:
         raise RuntimeError(f"Failed to write assembly STEP file: {_relative_to_repo(output_path)}") from exc
     return scene
@@ -814,8 +1075,10 @@ def export_assembly_step_scene_from_payload(
     *,
     assembly_path: Path,
     output_path: Path,
+    text_to_cad_entry_kind: str | None = "assembly",
 ) -> LoadedStepScene:
     return export_assembly_step_scene(
         assembly_spec_from_payload(assembly_path, payload),
         output_path,
+        text_to_cad_entry_kind=text_to_cad_entry_kind,
     )

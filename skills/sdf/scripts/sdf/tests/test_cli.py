@@ -20,6 +20,12 @@ def _write_sdf_source(path: Path, body: str) -> None:
     )
 
 
+def _strip_cadpy_metadata_comments(text: str) -> str:
+    return "\n".join(
+        line for line in text.splitlines() if not line.startswith("<!-- cadpy:")
+    ) + "\n"
+
+
 class SdfCliTests(unittest.TestCase):
     def test_requires_explicit_target(self) -> None:
         with self.assertRaises(SystemExit) as cm:
@@ -58,9 +64,11 @@ class SdfCliTests(unittest.TestCase):
 
             self.assertEqual(0, cli.generate_sdf_targets([str(source_path)]))
 
+            output_text = source_path.with_suffix(".sdf").read_text(encoding="utf-8")
+            self.assertIn("<!-- cadpy:sourcePath=", output_text)
             self.assertEqual(
                 '<sdf version="1.12"><model name="sample"><link name="base_link" /></model></sdf>\n',
-                source_path.with_suffix(".sdf").read_text(encoding="utf-8"),
+                _strip_cadpy_metadata_comments(output_text),
             )
 
     def test_validates_generated_sdf_before_writing_output(self) -> None:
@@ -99,6 +107,8 @@ class SdfCliTests(unittest.TestCase):
 
             self.assertEqual(0, cli.generate_sdf_targets([str(source_path)]))
 
+            output_text = source_path.with_suffix(".sdf").read_text(encoding="utf-8")
+            self.assertIn("<!-- cadpy:sourcePath=", output_text)
             self.assertEqual(
                 '<?xml version="1.0"?>\n'
                 '<sdf version="1.12">\n'
@@ -106,7 +116,7 @@ class SdfCliTests(unittest.TestCase):
                 '    <link name="base_link" />\n'
                 '  </model>\n'
                 '</sdf>\n',
-                source_path.with_suffix(".sdf").read_text(encoding="utf-8"),
+                _strip_cadpy_metadata_comments(output_text),
             )
 
     def test_generates_envelope_output_from_element_root(self) -> None:
@@ -193,7 +203,7 @@ class SdfCliTests(unittest.TestCase):
                     [
                         "return {",
                         "    'xml': '<sdf version=\"1.12\"><model name=\"sample\"><link name=\"base_link\" /></model></sdf>',",
-                        "    'metadata': {'target_consumer': 'CAD Explorer'},",
+                        "    'metadata': {'target_consumer': 'CAD Viewer'},",
                         "    'assumptions': [{'code': 'mesh_units', 'message': 'Assumed mesh units are meters'}],",
                         "    'warnings': ['Plugin startup was not smoke-tested'],",
                         "}",

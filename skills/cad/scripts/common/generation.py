@@ -5,6 +5,7 @@ import contextlib
 import io
 import importlib.util
 import json
+import math
 import shutil
 import sys
 from collections.abc import Callable, Mapping
@@ -24,6 +25,7 @@ from common.assembly_composition import (
     component_name,
 )
 from common.assembly_spec import REPO_ROOT, assembly_spec_children, read_assembly_spec
+from common.assembly_spec import assembly_spec_from_payload
 from common.catalog import (
     CAD_ROOT,
     CadSource,
@@ -45,6 +47,10 @@ from common.glb import (
     export_part_glb_from_scene,
 )
 from common.glb import read_step_topology_manifest_from_glb
+from common.glb_topology import (
+    STEP_EDGE_VISIBILITY_CLASSES,
+    normalize_step_edge_render_visibility_classes,
+)
 from common.metadata import (
     DEFAULT_MESH_ANGULAR_TOLERANCE,
     DEFAULT_MESH_TOLERANCE,
@@ -56,8 +62,10 @@ from common.render import (
     part_glb_path,
     relative_to_repo,
 )
+from common.source_hash import PythonSourceHash, python_source_hash
 from common.stl import export_part_stl_from_scene
-from common.step_export import export_build123d_step_scene
+from common.step_export import build_build123d_step_scene, export_build123d_step_scene
+from common.step_metadata import read_text_to_cad_step_metadata
 from common.threemf import export_part_3mf_from_scene
 from common.step_scene import (
     ColorRGBA,
@@ -65,12 +73,15 @@ from common.step_scene import (
     SelectorBundle,
     SelectorOptions,
     SelectorProfile,
+    adaptive_mesh_resolution_from_hints,
+    adaptive_mesh_resolution_for_scene,
     extract_selectors_from_scene,
     load_step_scene,
     mesh_step_scene,
     occurrence_selector_id,
     scene_export_shape,
     scene_leaf_occurrences,
+    step_file_hash,
 )
 
 GIT_LFS_POINTER_PREFIX = b"version https://git-lfs.github.com/spec/v1\n"
@@ -95,6 +106,8 @@ class EntrySpec:
     sdf_path: Path | None = None
     mesh_tolerance: float = DEFAULT_MESH_TOLERANCE
     mesh_angular_tolerance: float = DEFAULT_MESH_ANGULAR_TOLERANCE
+    mesh_tolerance_explicit: bool = False
+    mesh_angular_tolerance_explicit: bool = False
     color: tuple[float, float, float, float] | None = None
 
 
@@ -311,6 +324,10 @@ def _apply_step_options_to_spec(spec: EntrySpec, step_options: StepImportOptions
             if step_options.mesh_angular_tolerance is not None
             else spec.mesh_angular_tolerance
         ),
+        mesh_tolerance_explicit=spec.mesh_tolerance_explicit or step_options.mesh_tolerance is not None,
+        mesh_angular_tolerance_explicit=(
+            spec.mesh_angular_tolerance_explicit or step_options.mesh_angular_tolerance is not None
+        ),
     )
 
 
@@ -512,6 +529,8 @@ def _entry_spec_from_source(source: CadSource) -> EntrySpec:
         native_glb_path=source.native_glb_path,
         mesh_tolerance=mesh_settings.tolerance,
         mesh_angular_tolerance=mesh_settings.angular_tolerance,
+        mesh_tolerance_explicit=source.mesh_tolerance is not None,
+        mesh_angular_tolerance_explicit=source.mesh_angular_tolerance is not None,
         color=source.color,
     )
 
@@ -529,7 +548,7 @@ def _validate_part_render_output_paths(specs: Sequence[EntrySpec]) -> None:
             if existing_source_ref is not None and existing_source_ref != spec.source_ref:
                 raise ValueError(
                     "STL output collision between "
-                    f"{existing_source_ref} and {spec.source_ref}: {stl_path.relative_to(REPO_ROOT)}"
+                    f"{existing_source_ref} and {spec.source_ref}: {_display_path(stl_path)}"
                 )
             sources_by_stl_path[stl_path] = spec.source_ref
         if spec.three_mf_path is not None:
@@ -538,7 +557,7 @@ def _validate_part_render_output_paths(specs: Sequence[EntrySpec]) -> None:
             if existing_source_ref is not None and existing_source_ref != spec.source_ref:
                 raise ValueError(
                     "3MF output collision between "
-                    f"{existing_source_ref} and {spec.source_ref}: {three_mf_path.relative_to(REPO_ROOT)}"
+                    f"{existing_source_ref} and {spec.source_ref}: {_display_path(three_mf_path)}"
                 )
             sources_by_3mf_path[three_mf_path] = spec.source_ref
         if spec.native_glb_path is not None:
@@ -547,13 +566,13 @@ def _validate_part_render_output_paths(specs: Sequence[EntrySpec]) -> None:
             if native_glb_path == topology_glb_path:
                 raise ValueError(
                     "Native GLB output would overwrite the STEP topology GLB artifact for "
-                    f"{spec.source_ref}: {native_glb_path.relative_to(REPO_ROOT)}"
+                    f"{spec.source_ref}: {_display_path(native_glb_path)}"
                 )
             existing_source_ref = sources_by_native_glb_path.get(native_glb_path)
             if existing_source_ref is not None and existing_source_ref != spec.source_ref:
                 raise ValueError(
                     "Native GLB output collision between "
-                    f"{existing_source_ref} and {spec.source_ref}: {native_glb_path.relative_to(REPO_ROOT)}"
+                    f"{existing_source_ref} and {spec.source_ref}: {_display_path(native_glb_path)}"
                 )
             sources_by_native_glb_path[native_glb_path] = spec.source_ref
 
@@ -604,17 +623,86 @@ def _spec_for_source_ref(
     return None
 
 
-def _selector_options_for_part(spec: EntrySpec) -> SelectorOptions:
+def _mesh_tolerance_is_explicit(spec: EntrySpec) -> bool:
+    return bool(spec.mesh_tolerance_explicit) or not math.isclose(
+        float(spec.mesh_tolerance),
+        float(DEFAULT_MESH_TOLERANCE),
+        rel_tol=1e-12,
+        abs_tol=1e-12,
+    )
+
+
+def _mesh_angular_tolerance_is_explicit(spec: EntrySpec) -> bool:
+    return bool(spec.mesh_angular_tolerance_explicit) or not math.isclose(
+        float(spec.mesh_angular_tolerance),
+        float(DEFAULT_MESH_ANGULAR_TOLERANCE),
+        rel_tol=1e-12,
+        abs_tol=1e-12,
+    )
+
+
+def _selector_options_for_part(spec: EntrySpec, *, scene: LoadedStepScene | None = None) -> SelectorOptions:
     defaults = SelectorOptions()
+    linear_deflection = spec.mesh_tolerance
+    angular_deflection = spec.mesh_angular_tolerance
+    resolution: dict[str, object] = {
+        "mode": "explicit",
+        "profile": "custom",
+        "linearExplicit": True,
+        "angularExplicit": True,
+    }
+    linear_explicit = _mesh_tolerance_is_explicit(spec)
+    angular_explicit = _mesh_angular_tolerance_is_explicit(spec)
+    edge_visibility_classes = normalize_step_edge_render_visibility_classes(None)
+    if isinstance(scene, LoadedStepScene):
+        adaptive = adaptive_mesh_resolution_for_scene(scene)
+        if not linear_explicit:
+            linear_deflection = adaptive.settings.tolerance
+        if not angular_explicit:
+            angular_deflection = adaptive.settings.angular_tolerance
+        edge_visibility_classes = _edge_visibility_classes_for_resolution(adaptive.profile, adaptive.hints)
+        resolution = {
+            "mode": "auto",
+            "profile": adaptive.profile,
+            "linearExplicit": linear_explicit,
+            "angularExplicit": angular_explicit,
+            "hints": adaptive.hints,
+        }
     return SelectorOptions(
-        linear_deflection=min(defaults.linear_deflection, spec.mesh_tolerance),
-        angular_deflection=min(defaults.angular_deflection, spec.mesh_angular_tolerance),
+        linear_deflection=linear_deflection,
+        angular_deflection=angular_deflection,
         relative=defaults.relative,
         edge_deflection=defaults.edge_deflection,
         edge_deflection_ratio=defaults.edge_deflection_ratio,
         max_edge_points=defaults.max_edge_points,
         digits=defaults.digits,
+        mesh_resolution=resolution,
+        edge_visibility_classes=edge_visibility_classes,
     )
+
+
+def _edge_visibility_classes_for_resolution(profile: str, hints: Mapping[str, object] | None) -> tuple[str, ...]:
+    normalized_profile = str(profile or "").strip().lower()
+    hint_values = hints if isinstance(hints, Mapping) else {}
+    occurrence_edge_count = _hint_int(hint_values.get("occurrenceEdgeCount"))
+    feature_only = (
+        normalized_profile in {"large-topology", "coarse-assembly"}
+        or occurrence_edge_count >= 8000
+    )
+    if feature_only:
+        return (STEP_EDGE_VISIBILITY_CLASSES["FEATURE"],)
+    return normalize_step_edge_render_visibility_classes(None)
+
+
+def _hint_float(value: object) -> float:
+    try:
+        return float(value or 0.0)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _hint_int(value: object) -> int:
+    return int(_hint_float(value))
 
 
 def _load_generator_module(script_path: Path) -> object:
@@ -632,8 +720,17 @@ def _load_generator_module(script_path: Path) -> object:
     search_paths = [
         str(REPO_ROOT),
         str(CAD_ROOT),
+        str(REPO_ROOT / "skills" / "cad" / "scripts"),
         str(resolved_script_path.parent),
     ]
+    for parent in resolved_script_path.parents:
+        if parent == REPO_ROOT.parent:
+            break
+        if (
+            (parent / "STEP" / "__init__.py").is_file()
+            or (parent / "robot_common" / "__init__.py").is_file()
+        ):
+            search_paths.append(str(parent))
     for candidate in reversed(search_paths):
         if candidate not in sys.path:
             sys.path.insert(0, candidate)
@@ -696,6 +793,7 @@ def _write_part_step_payload(
     output_path: Path,
     script_path: Path,
     logger: CliLogger,
+    skip_step_write: bool = False,
 ) -> LoadedStepScene:
     shape = envelope.get("shape")
     from build123d import Shape as Build123dShape
@@ -705,23 +803,114 @@ def _write_part_step_payload(
             f"{_display_path(script_path)} gen_step() envelope field 'shape' must be a build123d Shape, "
             f"got {type(shape).__name__}"
         )
-    scene = export_build123d_step_scene(shape, output_path)
+    source_identity = python_source_hash(script_path)
+    if skip_step_write:
+        scene = build_build123d_step_scene(
+            shape,
+            output_path,
+            source_kind="python",
+            source_hash=source_identity.digest,
+        )
+        _mark_scene_python_backed(scene, source_identity=source_identity, source_path=script_path)
+        logger.debug(f"built STEP scene without writing STEP: {_display_path(output_path)}")
+        return scene
+    scene = export_build123d_step_scene(
+        shape,
+        output_path,
+        text_to_cad_entry_kind="part",
+        source_hash=source_identity.digest,
+    )
+    _mark_scene_python_backed(scene, source_identity=source_identity, source_path=script_path)
     logger.debug(f"wrote STEP: {_display_path(output_path)}")
     return scene
 
 
-def _write_assembly_step_payload(envelope: dict[str, object], *, output_path: Path, script_path: Path) -> LoadedStepScene:
-    from .assembly_export import export_assembly_step_scene_from_payload
+def _mark_scene_python_backed(
+    scene: LoadedStepScene,
+    *,
+    source_identity: PythonSourceHash,
+    source_path: Path,
+) -> LoadedStepScene:
+    if not isinstance(scene, LoadedStepScene):
+        return scene
+    scene.source_kind = "python"
+    scene.source_hash = source_identity.digest
+    scene.source_path = relative_to_repo(source_path)
+    return scene
+
+
+def _write_assembly_step_payload(
+    envelope: dict[str, object],
+    *,
+    output_path: Path,
+    script_path: Path,
+    logger: CliLogger,
+    force: bool = False,
+    load_current_scene: bool = True,
+    skip_step_write: bool = False,
+) -> LoadedStepScene | None:
+    from .assembly_export import (
+        _AssemblyCatalogResolver,
+        assembly_source_fingerprint,
+        build_direct_assembly_step_scene,
+        export_assembly_step_scene,
+    )
 
     if "instances" not in envelope and "children" not in envelope:
         raise TypeError(
             f"{_display_path(script_path)} gen_step() envelope must define 'instances' or 'children'"
         )
-    return export_assembly_step_scene_from_payload(
-        {key: envelope[key] for key in ("instances", "children") if key in envelope},
-        assembly_path=script_path,
-        output_path=output_path,
-    )
+    payload = {key: envelope[key] for key in ("instances", "children") if key in envelope}
+    assembly_spec = assembly_spec_from_payload(script_path, payload)
+    resolver = _AssemblyCatalogResolver()
+    source_identity = python_source_hash(script_path)
+    if skip_step_write:
+        with logger.timed(f"build assembly scene {relative_to_repo(output_path)}"):
+            scene = build_direct_assembly_step_scene(
+                assembly_spec,
+                output_path=output_path,
+                source_kind="python",
+                source_hash=source_identity.digest,
+                resolver=resolver,
+                logger=logger,
+            )
+            return _mark_scene_python_backed(scene, source_identity=source_identity, source_path=script_path)
+    with logger.timed(f"fingerprint assembly {relative_to_repo(output_path)}"):
+        source_fingerprint = assembly_source_fingerprint(
+            assembly_spec,
+            output_label=output_path.expanduser().resolve().stem,
+            text_to_cad_entry_kind="assembly",
+            resolver=resolver,
+        )
+    if not force and output_path.is_file():
+        try:
+            metadata = read_text_to_cad_step_metadata(output_path)
+        except Exception:
+            metadata = {}
+        if (
+            metadata.get("entryKind") == "assembly"
+            and metadata.get("sourceFingerprint") == source_fingerprint
+        ):
+            logger.debug(f"reused current STEP: {_display_path(output_path)}")
+            if not load_current_scene:
+                return None
+            return _mark_scene_python_backed(
+                load_step_scene(output_path),
+                source_identity=source_identity,
+                source_path=script_path,
+            )
+
+    with logger.timed(f"write assembly STEP {relative_to_repo(output_path)}"):
+        scene = export_assembly_step_scene(
+            assembly_spec,
+            output_path=output_path,
+            text_to_cad_entry_kind="assembly",
+            source_fingerprint=source_fingerprint,
+            source_hash=source_identity.digest,
+            resolver=resolver,
+            logger=logger,
+        )
+    return _mark_scene_python_backed(scene, source_identity=source_identity, source_path=script_path)
 
 
 def _write_dxf_payload(
@@ -748,6 +937,9 @@ def run_script_generator(
     generator_name: str,
     *,
     logger: CliLogger | None = None,
+    force: bool = False,
+    load_current_scene: bool = True,
+    skip_step_write: bool = False,
 ) -> LoadedStepScene | None:
     logger = logger or CliLogger("cad")
     if generator_name not in {"gen_step", "gen_dxf"}:
@@ -773,10 +965,23 @@ def run_script_generator(
                 output_path=spec.step_path,
                 script_path=spec.script_path,
                 logger=logger,
+                skip_step_write=skip_step_write,
             )
         elif spec.kind == "assembly":
-            generated_scene = _write_assembly_step_payload(envelope, output_path=spec.step_path, script_path=spec.script_path)
-            logger.debug(f"wrote STEP: {_display_path(spec.step_path)}")
+            generated_scene = _write_assembly_step_payload(
+                envelope,
+                output_path=spec.step_path,
+                script_path=spec.script_path,
+                logger=logger,
+                force=force,
+                load_current_scene=load_current_scene,
+                skip_step_write=skip_step_write,
+            )
+            logger.debug(
+                f"ready STEP scene: {_display_path(spec.step_path)}"
+                if skip_step_write
+                else f"ready STEP: {_display_path(spec.step_path)}"
+            )
         else:
             raise RuntimeError(f"{spec.source_ref} has unsupported generated kind: {spec.kind}")
     elif generator_name == "gen_dxf":
@@ -784,7 +989,12 @@ def run_script_generator(
         if spec.dxf_path is None:
             raise RuntimeError(f"{spec.source_ref} has no configured DXF output")
         _write_dxf_payload(envelope, output_path=spec.dxf_path, script_path=spec.script_path, logger=logger)
-    if generator_name == "gen_step" and spec.step_path is not None and not spec.step_path.exists():
+    if (
+        generator_name == "gen_step"
+        and spec.step_path is not None
+        and not skip_step_write
+        and not spec.step_path.exists()
+    ):
         raise RuntimeError(
             f"{_display_path(spec.script_path)} did not write {_display_path(spec.step_path)}"
         )
@@ -922,6 +1132,40 @@ def _uniform_source_step_color(step_path: Path) -> ColorRGBA | None:
     return None
 
 
+def _uniform_scene_node_color(scene: LoadedStepScene, node: object | None) -> tuple[bool, ColorRGBA | None]:
+    if node is None:
+        return False, None
+    colors_by_key: dict[tuple[int, int, int, int], ColorRGBA] = {}
+
+    def add_color(raw_color: object) -> None:
+        if raw_color is None:
+            return
+        try:
+            color = tuple(float(value) for value in raw_color)
+        except (TypeError, ValueError):
+            return
+        if len(color) != 4:
+            return
+        colors_by_key[_color_key(color)] = color
+
+    def collect(current: object) -> None:
+        add_color(getattr(current, "color", None))
+        prototype_key = getattr(current, "prototype_key", None)
+        if prototype_key is not None:
+            add_color(scene.prototype_colors.get(int(prototype_key)))
+            for face_color in scene.prototype_face_colors.get(int(prototype_key), {}).values():
+                add_color(face_color)
+        for child in getattr(current, "children", []) or []:
+            collect(child)
+
+    collect(node)
+    if not colors_by_key:
+        return False, None
+    if len(colors_by_key) == 1:
+        return True, next(iter(colors_by_key.values()))
+    return True, None
+
+
 def _generated_assembly_source_occurrence_colors(
     spec: EntrySpec,
     scene: LoadedStepScene,
@@ -941,7 +1185,12 @@ def _generated_assembly_source_occurrence_colors(
     source_color_cache: dict[Path, ColorRGBA | None] = {}
     occurrence_colors: dict[str, ColorRGBA] = {}
 
-    def color_for_source(source_path: Path | None, *, use_source_colors: bool) -> ColorRGBA | None:
+    def color_for_source(
+        source_path: Path | None,
+        *,
+        use_source_colors: bool,
+        scene_node: object | None,
+    ) -> ColorRGBA | None:
         if not use_source_colors or source_path is None:
             return None
         resolved = Path(source_path).resolve()
@@ -952,6 +1201,9 @@ def _generated_assembly_source_occurrence_colors(
         material_color = script_step_colors.get(step_key)
         if material_color is not None:
             return material_color
+        scene_has_colors, scene_color = _uniform_scene_node_color(scene, scene_node)
+        if scene_has_colors:
+            return scene_color
         if resolved not in source_color_cache:
             source_color_cache[resolved] = _uniform_source_step_color(resolved)
         return source_color_cache[resolved]
@@ -1024,6 +1276,7 @@ def _generated_assembly_source_occurrence_colors(
             color = color_for_source(
                 Path(source_path) if source_path is not None else None,
                 use_source_colors=use_source_colors,
+                scene_node=scene_node,
             )
             if color is not None and scene_node is not None:
                 occurrence_colors[occurrence_selector_id(scene_node)] = color
@@ -1059,6 +1312,188 @@ def _run_artifact_jobs(
     return results
 
 
+def _mesh_values_match(
+    mesh: Mapping[str, object],
+    *,
+    linear_deflection: float,
+    angular_deflection: float,
+    relative: bool,
+) -> bool:
+    try:
+        artifact_linear = float(mesh.get("linearDeflection"))
+        artifact_angular = float(mesh.get("angularDeflection"))
+    except (TypeError, ValueError):
+        return False
+    return (
+        math.isclose(artifact_linear, float(linear_deflection), rel_tol=1e-9, abs_tol=1e-12)
+        and math.isclose(artifact_angular, float(angular_deflection), rel_tol=1e-9, abs_tol=1e-12)
+        and bool(mesh.get("relative", True)) == bool(relative)
+    )
+
+
+def _selector_options_from_topology_manifest(spec: EntrySpec, manifest: Mapping[str, object]) -> SelectorOptions | None:
+    mesh = manifest.get("mesh")
+    if not isinstance(mesh, Mapping):
+        return None
+
+    defaults = SelectorOptions()
+    linear_explicit = _mesh_tolerance_is_explicit(spec)
+    angular_explicit = _mesh_angular_tolerance_is_explicit(spec)
+    linear_deflection = spec.mesh_tolerance
+    angular_deflection = spec.mesh_angular_tolerance
+
+    if not linear_explicit or not angular_explicit:
+        resolution = mesh.get("resolution")
+        hints = resolution.get("hints") if isinstance(resolution, Mapping) else None
+        if not isinstance(hints, dict):
+            return None
+        adaptive = adaptive_mesh_resolution_from_hints(hints)
+        if not linear_explicit:
+            linear_deflection = adaptive.settings.tolerance
+        if not angular_explicit:
+            angular_deflection = adaptive.settings.angular_tolerance
+
+    return SelectorOptions(
+        linear_deflection=linear_deflection,
+        angular_deflection=angular_deflection,
+        relative=bool(mesh.get("relative", defaults.relative)),
+        edge_deflection=defaults.edge_deflection,
+        edge_deflection_ratio=defaults.edge_deflection_ratio,
+        max_edge_points=defaults.max_edge_points,
+        digits=defaults.digits,
+        mesh_resolution=mesh.get("resolution") if isinstance(mesh.get("resolution"), dict) else None,
+        edge_visibility_classes=_edge_visibility_classes_from_topology_manifest(manifest),
+    )
+
+
+def _edge_visibility_classes_from_topology_manifest(manifest: Mapping[str, object]) -> tuple[str, ...]:
+    edge_rendering = manifest.get("edgeRendering")
+    if isinstance(edge_rendering, Mapping):
+        classes = edge_rendering.get("visibilityClasses")
+        if classes is not None:
+            return normalize_step_edge_render_visibility_classes(classes)
+    mesh = manifest.get("mesh")
+    resolution = mesh.get("resolution") if isinstance(mesh, Mapping) else None
+    hints = resolution.get("hints") if isinstance(resolution, Mapping) else None
+    profile = resolution.get("profile") if isinstance(resolution, Mapping) else ""
+    if isinstance(hints, Mapping):
+        return _edge_visibility_classes_for_resolution(str(profile or ""), hints)
+    return normalize_step_edge_render_visibility_classes(None)
+
+
+def _edge_visibility_classes_match_manifest(
+    manifest: Mapping[str, object],
+    selector_options: SelectorOptions,
+) -> bool:
+    edge_rendering = manifest.get("edgeRendering")
+    if not isinstance(edge_rendering, Mapping):
+        return False
+    return tuple(edge_rendering.get("visibilityClasses") or ()) == tuple(selector_options.edge_visibility_classes)
+
+
+def _artifact_source_kind_matches_spec(spec: EntrySpec, manifest: Mapping[str, object]) -> bool:
+    source_kind = str(manifest.get("sourceKind") or "step").strip().lower()
+    expected = "python" if spec.source == "generated" and spec.script_path is not None else "step"
+    return source_kind == expected
+
+
+def _artifact_source_identity_matches_spec(spec: EntrySpec, manifest: Mapping[str, object]) -> bool:
+    if spec.source == "generated" and spec.script_path is not None:
+        expected_hash = python_source_hash(spec.script_path).digest
+        return str(manifest.get("sourceHash") or "").strip() == expected_hash
+    if spec.step_path is None or not spec.step_path.is_file():
+        return False
+    expected_hash = step_file_hash(spec.step_path)
+    return str(manifest.get("stepHash") or "").strip() == expected_hash
+
+
+def _existing_topology_artifact_matches_spec_without_scene(
+    spec: EntrySpec,
+    *,
+    require_selector: bool = True,
+) -> bool:
+    if spec.step_path is None or spec.kind not in {"part", "assembly"}:
+        return False
+    from common.step_targets import (
+        ResolvedStepTarget,
+        StepTopologyArtifactError,
+        validate_step_topology_artifact,
+    )
+
+    try:
+        artifact = validate_step_topology_artifact(
+            ResolvedStepTarget(
+                cad_path=spec.cad_ref,
+                kind=spec.kind,
+                source_path=spec.source_path,
+                step_path=spec.step_path,
+            ),
+            glb_path=part_glb_path(spec.step_path),
+            require_selector=require_selector,
+        )
+    except StepTopologyArtifactError:
+        return False
+    if not _artifact_source_kind_matches_spec(spec, artifact.manifest):
+        return False
+    if not _artifact_source_identity_matches_spec(spec, artifact.manifest):
+        return False
+    mesh = artifact.manifest.get("mesh")
+    if not isinstance(mesh, Mapping):
+        return False
+    selector_options = _selector_options_from_topology_manifest(spec, artifact.manifest)
+    if selector_options is None:
+        return False
+    return (
+        _mesh_values_match(
+            mesh,
+            linear_deflection=selector_options.linear_deflection,
+            angular_deflection=selector_options.angular_deflection,
+            relative=selector_options.relative,
+        )
+        and _edge_visibility_classes_match_manifest(artifact.manifest, selector_options)
+    )
+
+
+def _existing_topology_artifact_matches_options(spec: EntrySpec, selector_options: SelectorOptions) -> bool:
+    if spec.step_path is None or spec.kind not in {"part", "assembly"}:
+        return False
+    from common.step_targets import (
+        ResolvedStepTarget,
+        StepTopologyArtifactError,
+        validate_step_topology_artifact,
+    )
+
+    try:
+        artifact = validate_step_topology_artifact(
+            ResolvedStepTarget(
+                cad_path=spec.cad_ref,
+                kind=spec.kind,
+                source_path=spec.source_path,
+                step_path=spec.step_path,
+            ),
+            glb_path=part_glb_path(spec.step_path),
+            require_selector=False,
+        )
+    except StepTopologyArtifactError:
+        return False
+    if not _artifact_source_kind_matches_spec(spec, artifact.manifest):
+        return False
+    if not _artifact_source_identity_matches_spec(spec, artifact.manifest):
+        return False
+    mesh = artifact.manifest.get("mesh")
+    if not isinstance(mesh, Mapping):
+        return False
+    return (
+        _mesh_values_match(
+            mesh,
+            linear_deflection=selector_options.linear_deflection,
+            angular_deflection=selector_options.angular_deflection,
+            relative=selector_options.relative,
+        )
+        and _edge_visibility_classes_match_manifest(artifact.manifest, selector_options)
+    )
+
+
 def _reset_step_artifact_dir(step_path: Path) -> None:
     part_glb_path(step_path).unlink(missing_ok=True)
     legacy_artifact_dir = native_component_glb_dir(step_path).parent
@@ -1071,13 +1506,15 @@ def _generate_part_outputs(
     *,
     entries_by_step_path: dict[Path, EntrySpec],
     preloaded_scene: LoadedStepScene | None = None,
-    skip_explorer: bool = False,
+    require_step_file: bool = True,
+    force: bool = False,
     logger: CliLogger | None = None,
 ) -> GeneratedStepResult:
     logger = logger or CliLogger("cad")
     if spec.kind not in {"part", "assembly"} or spec.step_path is None:
         return GeneratedStepResult(spec=spec, scene=None)
-    _ensure_step_ready(spec.step_path)
+    if require_step_file:
+        _ensure_step_ready(spec.step_path)
     if preloaded_scene is not None:
         if preloaded_scene.step_path != spec.step_path.expanduser().resolve():
             raise RuntimeError(
@@ -1088,21 +1525,38 @@ def _generate_part_outputs(
         path is not None
         for path in (spec.stl_path, spec.three_mf_path, spec.native_glb_path)
     )
-    if skip_explorer and not has_mesh_sidecars:
-        _reset_step_artifact_dir(spec.step_path)
-        return GeneratedStepResult(spec=spec, scene=preloaded_scene)
-
-    previous_manifest: dict[str, object] | None = None
-    if not skip_explorer:
-        glb_path = part_glb_path(spec.step_path)
-        previous_manifest = read_step_topology_manifest_from_glb(glb_path) if glb_path.exists() else None
+    if (
+        preloaded_scene is None
+        and not has_mesh_sidecars
+        and not force
+        and _existing_topology_artifact_matches_spec_without_scene(spec)
+    ):
+        logger.debug(f"reused current GLB/topology: {_display_path(part_glb_path(spec.step_path))}")
+        return GeneratedStepResult(spec=spec, scene=None)
 
     if preloaded_scene is not None:
         scene = preloaded_scene
     else:
         with logger.timed(f"load STEP {spec.cad_ref}"):
             scene = load_step_scene(spec.step_path)
-    selector_options = _selector_options_for_part(spec)
+        if spec.source == "generated" and spec.script_path is not None:
+            _mark_scene_python_backed(
+                scene,
+                source_identity=python_source_hash(spec.script_path),
+                source_path=spec.script_path,
+            )
+    selector_options = _selector_options_for_part(spec, scene=scene)
+    if (
+        not has_mesh_sidecars
+        and not force
+        and _existing_topology_artifact_matches_options(spec, selector_options)
+    ):
+        logger.debug(f"reused current GLB/topology: {_display_path(part_glb_path(spec.step_path))}")
+        return GeneratedStepResult(spec=spec, scene=scene)
+
+    glb_path = part_glb_path(spec.step_path)
+    previous_manifest: dict[str, object] | None = read_step_topology_manifest_from_glb(glb_path) if glb_path.exists() else None
+
     with logger.timed(f"mesh STEP {spec.cad_ref}"):
         mesh_step_scene(
             scene,
@@ -1181,33 +1635,32 @@ def _generate_part_outputs(
 
         jobs.append(_ArtifactJob("native GLB", native_glb_sidecar_job))
 
-    if not skip_explorer:
-        def export_glb_with_topology() -> SelectorBundle:
-            occurrence_colors = assembly_context.occurrence_colors() if assembly_context is not None else {}
-            bundle = extract_selectors_from_scene(
-                scene,
-                cad_ref=spec.cad_ref,
-                profile=SelectorProfile.ARTIFACT,
-                options=selector_options,
-                color=spec.color,
-                occurrence_colors=occurrence_colors,
-            )
-            assembly_composition: dict[str, object] | None = None
-            if assembly_context is not None:
-                try:
-                    assembly_composition = assembly_context.composition_for_topology(bundle.manifest)
-                except AssemblyCompositionError:
-                    raise
-                except Exception as exc:
-                    raise RuntimeError(f"Failed to build assembly composition for {spec.source_ref}") from exc
-                if assembly_composition is not None:
-                    bundle.manifest["assembly"] = assembly_composition
-            next_manifest = build_step_topology_index_manifest(bundle.manifest, entry_kind=spec.kind)
-            export_glb(bundle)
-            _report_selector_manifest_change(spec, previous_manifest, next_manifest, logger=logger)
-            return bundle
+    def export_glb_with_topology() -> SelectorBundle:
+        occurrence_colors = assembly_context.occurrence_colors() if assembly_context is not None else {}
+        bundle = extract_selectors_from_scene(
+            scene,
+            cad_ref=spec.cad_ref,
+            profile=SelectorProfile.ARTIFACT,
+            options=selector_options,
+            color=spec.color,
+            occurrence_colors=occurrence_colors,
+        )
+        assembly_composition: dict[str, object] | None = None
+        if assembly_context is not None:
+            try:
+                assembly_composition = assembly_context.composition_for_topology(bundle.manifest)
+            except AssemblyCompositionError:
+                raise
+            except Exception as exc:
+                raise RuntimeError(f"Failed to build assembly composition for {spec.source_ref}") from exc
+            if assembly_composition is not None:
+                bundle.manifest["assembly"] = assembly_composition
+        next_manifest = build_step_topology_index_manifest(bundle.manifest, entry_kind=spec.kind)
+        export_glb(bundle)
+        _report_selector_manifest_change(spec, previous_manifest, next_manifest, logger=logger)
+        return bundle
 
-        jobs.append(_ArtifactJob("GLB/topology", export_glb_with_topology))
+    jobs.append(_ArtifactJob("GLB/topology", export_glb_with_topology))
 
     artifact_results.update(_run_artifact_jobs(jobs, logger=logger))
     selector_bundle = next(
@@ -1221,21 +1674,44 @@ def _generate_step_outputs(
     spec: EntrySpec,
     *,
     entries_by_step_path: dict[Path, EntrySpec],
-    skip_explorer: bool = False,
+    skip_step_write: bool = False,
+    force: bool = False,
     logger: CliLogger | None = None,
 ) -> GeneratedStepResult:
     preloaded_scene: LoadedStepScene | None = None
+    has_mesh_sidecars = any(
+        path is not None
+        for path in (spec.stl_path, spec.three_mf_path, spec.native_glb_path)
+    )
+    if (
+        spec.source == "generated"
+        and skip_step_write
+        and not force
+        and not has_mesh_sidecars
+        and _existing_topology_artifact_matches_spec_without_scene(spec)
+    ):
+        if logger is not None:
+            logger.debug(f"reused current GLB/topology: {_display_path(part_glb_path(spec.step_path))}")
+        return GeneratedStepResult(spec=spec, scene=None)
     if spec.source == "generated":
-        preloaded_scene = run_script_generator(spec, "gen_step", logger=logger)
-    output_kwargs: dict[str, object] = {
-        "entries_by_step_path": entries_by_step_path,
-        "preloaded_scene": preloaded_scene,
-    }
-    if skip_explorer:
-        output_kwargs["skip_explorer"] = True
-    if logger is not None:
-        output_kwargs["logger"] = logger
-    return _generate_part_outputs(spec, **output_kwargs)
+        preloaded_scene = run_script_generator(
+            spec,
+            "gen_step",
+            logger=logger,
+            force=force,
+            load_current_scene=False,
+            skip_step_write=skip_step_write,
+        )
+        output_kwargs: dict[str, object] = {
+            "entries_by_step_path": entries_by_step_path,
+            "preloaded_scene": preloaded_scene,
+            "force": force,
+        }
+        if skip_step_write:
+            output_kwargs["require_step_file"] = False
+        if logger is not None:
+            output_kwargs["logger"] = logger
+        return _generate_part_outputs(spec, **output_kwargs)
 
 
 def _generate_step_outputs_for_cli(
@@ -1243,13 +1719,16 @@ def _generate_step_outputs_for_cli(
     *,
     entries_by_step_path: dict[Path, EntrySpec],
     logger: CliLogger,
-    skip_explorer: bool = False,
+    skip_step_write: bool = False,
+    force: bool = False,
 ) -> GeneratedStepResult:
     kwargs: dict[str, object] = {
         "entries_by_step_path": entries_by_step_path,
     }
-    if skip_explorer:
-        kwargs["skip_explorer"] = True
+    if skip_step_write:
+        kwargs["skip_step_write"] = True
+    if force:
+        kwargs["force"] = True
     if logger.verbose:
         kwargs["logger"] = logger
     return _generate_step_outputs(spec, **kwargs)
@@ -1318,6 +1797,22 @@ def _expand_specs_with_file_dependencies(specs: Sequence[EntrySpec]) -> list[Ent
     }
     seen_source_refs = {spec.source_ref for spec in expanded}
     queue = list(expanded)
+    source_cache: dict[Path, CadSource | None] = {}
+    discovered_sources_by_path: dict[Path, CadSource] | None = None
+
+    def source_for_path(path: Path) -> CadSource | None:
+        nonlocal discovered_sources_by_path
+        resolved = path.resolve()
+        if resolved in source_cache:
+            return source_cache[resolved]
+        if discovered_sources_by_path is None:
+            discovered_sources_by_path = _source_lookup_by_path()
+        source = discovered_sources_by_path.get(resolved)
+        if source is None:
+            source = source_from_path(resolved)
+        source_cache[resolved] = source
+        return source
+
     while queue:
         spec = queue.pop(0)
         if spec.kind != "assembly" or spec.source_path is None:
@@ -1326,10 +1821,10 @@ def _expand_specs_with_file_dependencies(specs: Sequence[EntrySpec]) -> list[Ent
             assembly_spec = read_assembly_spec(spec.source_path)
         except Exception:
             continue
-        for instance in assembly_spec.instances:
+        for instance in assembly_spec_children(assembly_spec):
             if instance.source_path.resolve() in seen_step_paths:
                 continue
-            source = find_source_by_path(instance.source_path) or source_from_path(instance.source_path)
+            source = source_for_path(instance.source_path)
             if source is None:
                 continue
             child_spec = _entry_spec_from_source(source)
@@ -1341,6 +1836,28 @@ def _expand_specs_with_file_dependencies(specs: Sequence[EntrySpec]) -> list[Ent
             if child_spec.step_path is not None:
                 seen_step_paths.add(child_spec.step_path.resolve())
     return expanded
+
+
+def _source_lookup_by_path() -> dict[Path, CadSource]:
+    sources_by_path: dict[Path, CadSource] = {}
+    for source in iter_cad_sources():
+        candidates = [
+            source.source_path,
+            source.origin_path,
+            source.script_path,
+            source.step_path,
+            source.dxf_path,
+            source.urdf_path,
+            source.sdf_path,
+            source.stl_path,
+            source.three_mf_path,
+            source.native_glb_path,
+            *source.generated_paths,
+        ]
+        for candidate in candidates:
+            if candidate is not None:
+                sources_by_path.setdefault(candidate.resolve(), source)
+    return sources_by_path
 
 
 def _entries_by_step_path(specs: Sequence[EntrySpec]) -> dict[Path, EntrySpec]:
@@ -1406,6 +1923,12 @@ def _validate_dxf_target(spec: EntrySpec) -> None:
 def _generated_output_summary(spec: EntrySpec) -> str:
     if spec.step_path is not None:
         return f"generated {spec.kind} STEP: {_display_path(spec.step_path)}"
+    return f"processed: {spec.source_ref}"
+
+
+def _generated_python_glb_summary(spec: EntrySpec) -> str:
+    if spec.step_path is not None:
+        return f"generated {spec.kind} GLB/topology artifact: {_display_path(part_glb_path(spec.step_path))}"
     return f"processed: {spec.source_ref}"
 
 
@@ -1475,7 +1998,8 @@ def generate_step_targets(
     direct_step_kind: str | None = None,
     step_options: StepImportOptions | None = None,
     output: str | Path | None = None,
-    skip_explorer: bool = False,
+    skip_step_write: bool = False,
+    force: bool = False,
     verbose: bool = False,
 ) -> int:
     tool_name = "scripts/step"
@@ -1512,6 +2036,17 @@ def generate_step_targets(
         all_specs=all_specs,
         tool_name=tool_name,
     )
+    if skip_step_write:
+        if output_path is not None or any(path is not None for path in target_output_paths):
+            raise ValueError(f"{tool_name} --skip-step-write cannot be combined with STEP output overrides")
+        invalid_specs = [
+            spec.source_ref
+            for spec in selected_specs
+            if spec.source != "generated" or spec.script_path is None
+        ]
+        if invalid_specs:
+            joined = ", ".join(invalid_specs)
+            raise ValueError(f"{tool_name} --skip-step-write is valid only for Python gen_step() targets: {joined}")
     if step_options is not None and step_options.has_metadata:
         selected_specs = [_apply_step_options_to_spec(spec, step_options) for spec in selected_specs]
     _validate_part_render_output_paths([*all_specs, *selected_specs])
@@ -1522,9 +2057,11 @@ def generate_step_targets(
             spec,
             entries_by_step_path=entries_by_step_path,
             logger=logger,
-            skip_explorer=skip_explorer,
+            skip_step_write=skip_step_write,
+            force=force,
         ),
         logger=logger,
+        success_message=_generated_python_glb_summary if skip_step_write else _generated_output_summary,
     )
     logger.total()
     return 0

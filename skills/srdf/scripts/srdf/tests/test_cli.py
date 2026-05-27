@@ -32,8 +32,8 @@ SAMPLE_URDF = """\
 
 
 SAMPLE_SRDF = """\
-<robot name="sample" xmlns:explorer="https://text-to-cad.dev/explorer">
-  <explorer:urdf path="robot.urdf"/>
+<robot name="sample" xmlns:tcad="https://text-to-cad.dev/srdf">
+  <tcad:urdf path="robot.urdf"/>
   <group name="arm">
     <joint name="shoulder"/>
     <joint name="elbow"/>
@@ -74,12 +74,12 @@ class SrdfCliTests(unittest.TestCase):
             output_path = root / "robot_srdf.srdf"
             self.assertTrue(output_path.is_file())
             output_text = output_path.read_text(encoding="utf-8")
-            self.assertIn("explorer:urdf", output_text)
+            self.assertIn("tcad:urdf", output_text)
             self.assertIn("path=\"robot.urdf\"", output_text)
             self.assertIn("<group name=\"arm\">", output_text)
             self.assertFalse((root / ".robot.urdf").exists())
 
-    def test_injects_explorer_urdf_link(self) -> None:
+    def test_injects_tcad_urdf_link(self) -> None:
         srdf = """\
         <robot name="sample">
           <group name="arm">
@@ -96,7 +96,25 @@ class SrdfCliTests(unittest.TestCase):
             self.assertEqual(0, cli.generate_srdf_targets([str(source_path)]))
 
             output_text = (root / "robot_srdf.srdf").read_text(encoding="utf-8")
-            self.assertIn("explorer:urdf", output_text)
+            self.assertIn("tcad:urdf", output_text)
+            self.assertIn("path=\"robot.urdf\"", output_text)
+
+    def test_updates_legacy_explorer_urdf_link(self) -> None:
+        legacy_srdf = SAMPLE_SRDF.replace(
+            'xmlns:tcad="https://text-to-cad.dev/srdf"',
+            'xmlns:explorer="https://text-to-cad.dev/explorer"',
+        ).replace("tcad:urdf", "explorer:urdf")
+        with tempfile.TemporaryDirectory(prefix="tmp-gen-srdf-") as tempdir:
+            root = Path(tempdir)
+            (root / "robot.urdf").write_text(SAMPLE_URDF, encoding="utf-8")
+            source_path = root / "robot_srdf.py"
+            write_source(source_path, {"xml": legacy_srdf, "urdf": "robot.urdf"})
+
+            self.assertEqual(0, cli.generate_srdf_targets([str(source_path)]))
+
+            output_text = (root / "robot_srdf.srdf").read_text(encoding="utf-8")
+            self.assertIn("tcad:urdf", output_text)
+            self.assertNotIn("explorer:urdf", output_text)
             self.assertIn("path=\"robot.urdf\"", output_text)
 
     def test_writes_srdf_from_element_root(self) -> None:
@@ -125,7 +143,7 @@ class SrdfCliTests(unittest.TestCase):
 
             output_text = (root / "robot_srdf.srdf").read_text(encoding="utf-8")
             self.assertTrue(output_text.startswith('<?xml version="1.0"?>\n'))
-            self.assertIn("explorer:urdf", output_text)
+            self.assertIn("tcad:urdf", output_text)
             self.assertIn("<group name=\"arm\">", output_text)
             self.assertIn("<joint name=\"shoulder\" />", output_text)
 

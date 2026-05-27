@@ -2,6 +2,23 @@
 
 Read this file when geometry has mating interfaces, repeated features, assembly children, axes, datums, motion, or user-specified alignment. This is the authoritative reference for assembly positioning, build123d joints, explicit `Location` transforms, CLI `inspect mate`, and positioning report content.
 
+## Contents
+
+- Core rule
+- Terminology
+- Preferred assembly structure
+- Part-local positioning
+- Feature placement inside a part
+- When to use build123d joints
+- build123d joint pattern
+- Joint type selection
+- Assembly positioning workflow
+- CLI mating validation
+- Frame validation
+- Measurement validation
+- Source-level positioning corrections
+- Reporting positioning
+
 ## Core rule
 
 Positioning is authored in source and validated after generation. Do not position parts by visually dragging or by editing exported STEP geometry. Use build123d parameters, local coordinate systems, `Location` transforms, `Plane`/`Axis` datums, source-level `Joint` objects when useful, and labeled assembly children.
@@ -118,6 +135,8 @@ base.joints["lid_seat"].connect_to(lid.joints["underside"])
 
 assembly = Compound(label="enclosure", children=[base, lid])
 ```
+
+Directionality matters: call `connect_to()` on the fixed/root joint and pass the moving part's joint as `other`. In the example above, `base.joints["lid_seat"]` stays fixed and build123d repositions the `lid` so `lid.joints["underside"]` matches it.
 
 `connect_to()` is a source-generation operation. It repositions the moving part for the generated model; it is not a persistent external constraint in the exported STEP file.
 

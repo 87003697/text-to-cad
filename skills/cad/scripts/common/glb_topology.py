@@ -12,10 +12,62 @@ from common.selector_types import SelectorBundle
 
 
 STEP_TOPOLOGY_EXTENSION = "STEP_topology"
-STEP_TOPOLOGY_SCHEMA_VERSION = 1
+STEP_TOPOLOGY_SCHEMA_VERSION = 2
+STEP_TOPOLOGY_EDGE_CLASSIFICATION_ALGORITHM = "oc-brep-continuity-v1"
+STEP_TOPOLOGY_SURFACE_EDGE_ALGORITHM = "oc-polygon-on-triangulation-v1"
+STEP_TOPOLOGY_EDGE_ANGULAR_TOLERANCE_DEG = 2
+STEP_TOPOLOGY_EDGE_SAMPLE_COUNT = 3
+STEP_EDGE_BARYCENTRIC_ATTRIBUTE = "_CAD_EDGE_BARYCENTRIC"
+STEP_EDGE_CLASS_ATTRIBUTE = "_CAD_EDGE_CLASS"
+STEP_EDGE_FLAGS = {
+    "DEGENERATE": 1 << 1,
+    "SEAM": 1 << 2,
+    "NOT_REFERENCEABLE": 1 << 3,
+    "BOUNDARY": 1 << 4,
+    "NON_MANIFOLD": 1 << 5,
+    "HARD": 1 << 6,
+    "TANGENT": 1 << 7,
+    "UNKNOWN_CONTINUITY": 1 << 8,
+}
+STEP_EDGE_VISIBILITY_CLASSES = {
+    "FEATURE": "feature",
+    "TANGENT": "tangent",
+    "SEAM": "seam",
+    "DEGENERATE": "degenerate",
+    "BOUNDARY": "boundary",
+    "NON_MANIFOLD": "nonManifold",
+    "UNKNOWN": "unknown",
+}
+STEP_EDGE_RENDER_VISIBILITY_CLASSES = (
+    STEP_EDGE_VISIBILITY_CLASSES["FEATURE"],
+    STEP_EDGE_VISIBILITY_CLASSES["TANGENT"],
+    STEP_EDGE_VISIBILITY_CLASSES["SEAM"],
+    STEP_EDGE_VISIBILITY_CLASSES["DEGENERATE"],
+)
+STEP_EDGE_DEFAULT_RENDER_VISIBILITY_CLASSES = STEP_EDGE_RENDER_VISIBILITY_CLASSES
+STEP_EDGE_SURFACE_CLASS_CODES = {
+    "none": 0,
+    "feature": 1,
+    "tangent": 2,
+    "seam": 3,
+    "degenerate": 4,
+    "boundary": 5,
+    "nonManifold": 6,
+    "unknown": 7,
+}
+STEP_SURFACE_HALF_EDGE_COLUMNS = (
+    "edgeRow",
+    "faceRow",
+    "occurrenceRow",
+    "primitiveIndex",
+    "triangleIndex",
+    "side",
+    "classCode",
+)
 GLB_MAGIC = 0x46546C67
 GLB_VERSION = 2
 REPO_ROOT = Path.cwd().resolve()
+UNSIGNED_BYTE = 5121
 
 
 def _display_path(path: Path) -> str:
@@ -174,11 +226,92 @@ def _step_topology_extension(gltf: Mapping[str, Any]) -> Mapping[str, Any] | Non
     extension = extensions.get(STEP_TOPOLOGY_EXTENSION) if isinstance(extensions, Mapping) else None
     if not isinstance(extension, Mapping):
         return None
-    if int(extension.get("schemaVersion") or 0) != STEP_TOPOLOGY_SCHEMA_VERSION:
-        return None
     if str(extension.get("encoding") or "utf-8").lower() != "utf-8":
         return None
     return extension
+
+
+def normalize_step_edge_render_visibility_classes(value: object) -> tuple[str, ...]:
+    if value is None:
+        return STEP_EDGE_DEFAULT_RENDER_VISIBILITY_CLASSES
+    raw_values = value if isinstance(value, (list, tuple, set, frozenset)) else [value]
+    valid_values = set(STEP_EDGE_VISIBILITY_CLASSES.values())
+    normalized: list[str] = []
+    for raw in raw_values:
+        normalized_value = str(raw or "").strip()
+        if normalized_value in valid_values and normalized_value not in normalized:
+            normalized.append(normalized_value)
+    if STEP_EDGE_VISIBILITY_CLASSES["FEATURE"] not in normalized:
+        normalized.insert(0, STEP_EDGE_VISIBILITY_CLASSES["FEATURE"])
+    ordered = [
+        class_id
+        for class_id in STEP_EDGE_RENDER_VISIBILITY_CLASSES
+        if class_id in normalized
+    ]
+    extras = [
+        class_id
+        for class_id in normalized
+        if class_id not in STEP_EDGE_RENDER_VISIBILITY_CLASSES
+    ]
+    return tuple(ordered + extras)
+
+
+def step_topology_capabilities(
+    edge_visibility_classes: object = None,
+) -> dict[str, Any]:
+    visibility_classes = normalize_step_edge_render_visibility_classes(edge_visibility_classes)
+    return {
+        "edgeClassification": {
+            "algorithm": STEP_TOPOLOGY_EDGE_CLASSIFICATION_ALGORITHM,
+            "angularToleranceDeg": STEP_TOPOLOGY_EDGE_ANGULAR_TOLERANCE_DEG,
+            "samples": STEP_TOPOLOGY_EDGE_SAMPLE_COUNT,
+        },
+        "surfaceEdgeRendering": {
+            "algorithm": STEP_TOPOLOGY_SURFACE_EDGE_ALGORITHM,
+            "primitiveAttributes": {
+                "barycentric": STEP_EDGE_BARYCENTRIC_ATTRIBUTE,
+                "class": STEP_EDGE_CLASS_ATTRIBUTE,
+            },
+            "classCodes": STEP_EDGE_SURFACE_CLASS_CODES,
+            "visibilityClasses": list(visibility_classes),
+        },
+    }
+
+
+def step_edge_surface_class_code(
+    edge: Mapping[str, Any],
+    *,
+    enabled_visibility_classes: object = None,
+) -> int:
+    flags = int(edge.get("flags") or 0)
+    visibility_class = str(edge.get("visibilityClass") or "").strip()
+    if enabled_visibility_classes is not None:
+        enabled = set(normalize_step_edge_render_visibility_classes(enabled_visibility_classes))
+        if visibility_class not in enabled:
+            return STEP_EDGE_SURFACE_CLASS_CODES["none"]
+    if flags & STEP_EDGE_FLAGS["DEGENERATE"] or visibility_class == STEP_EDGE_VISIBILITY_CLASSES["DEGENERATE"]:
+        return STEP_EDGE_SURFACE_CLASS_CODES["degenerate"]
+    if flags & STEP_EDGE_FLAGS["SEAM"] or visibility_class == STEP_EDGE_VISIBILITY_CLASSES["SEAM"]:
+        return STEP_EDGE_SURFACE_CLASS_CODES["seam"]
+    if flags & STEP_EDGE_FLAGS["BOUNDARY"] or visibility_class == STEP_EDGE_VISIBILITY_CLASSES["BOUNDARY"]:
+        return STEP_EDGE_SURFACE_CLASS_CODES["boundary"]
+    if flags & STEP_EDGE_FLAGS["NON_MANIFOLD"] or visibility_class == STEP_EDGE_VISIBILITY_CLASSES["NON_MANIFOLD"]:
+        return STEP_EDGE_SURFACE_CLASS_CODES["nonManifold"]
+    if flags & STEP_EDGE_FLAGS["UNKNOWN_CONTINUITY"] or visibility_class == STEP_EDGE_VISIBILITY_CLASSES["UNKNOWN"]:
+        return STEP_EDGE_SURFACE_CLASS_CODES["unknown"]
+    if flags & STEP_EDGE_FLAGS["TANGENT"] or visibility_class == STEP_EDGE_VISIBILITY_CLASSES["TANGENT"]:
+        return STEP_EDGE_SURFACE_CLASS_CODES["tangent"]
+    if flags & STEP_EDGE_FLAGS["HARD"] or visibility_class == STEP_EDGE_VISIBILITY_CLASSES["FEATURE"]:
+        return STEP_EDGE_SURFACE_CLASS_CODES["feature"]
+    return STEP_EDGE_SURFACE_CLASS_CODES["feature"]
+
+
+def is_displayable_step_edge_surface_class_code(value: object) -> bool:
+    try:
+        code = int(value)
+    except (TypeError, ValueError):
+        return False
+    return code not in {STEP_EDGE_SURFACE_CLASS_CODES["none"], STEP_EDGE_SURFACE_CLASS_CODES["degenerate"]}
 
 
 def _legacy_topology_manifest_path_for_glb(glb_path: Path) -> Path | None:
@@ -274,5 +407,93 @@ def read_step_topology_index_from_glb(glb_path: Path) -> dict[str, Any] | None:
     return manifest if isinstance(manifest, dict) else None
 
 
+def read_step_display_edge_manifest_from_glb(glb_path: Path) -> dict[str, Any] | None:
+    try:
+        gltf, binary_offset, binary_length = _read_glb_json_and_bin_location(glb_path)
+    except (OSError, ValueError, json.JSONDecodeError):
+        return None
+    extension = _step_topology_extension(gltf)
+    if extension is None:
+        return None
+    try:
+        manifest_offset, manifest_length = _buffer_view_range(
+            gltf,
+            binary_offset,
+            binary_length,
+            extension.get("edgeView", extension.get("displayEdgeView")),
+        )
+        manifest = json.loads(_read_file_range(glb_path, manifest_offset, manifest_length).decode("utf-8"))
+    except (ValueError, UnicodeDecodeError, json.JSONDecodeError, OSError):
+        return None
+    return manifest if isinstance(manifest, dict) else None
+
+
 def read_step_topology_manifest_from_glb(glb_path: Path) -> dict[str, Any] | None:
     return read_step_topology_index_from_glb(glb_path)
+
+
+def glb_primitives_have_surface_edge_attributes(glb_path: Path) -> bool:
+    try:
+        gltf, _binary_offset, _binary_length = _read_glb_json_and_bin_location(glb_path)
+    except (OSError, ValueError, json.JSONDecodeError):
+        return False
+    primitive_count = 0
+    meshes = gltf.get("meshes")
+    if not isinstance(meshes, list):
+        return False
+    for mesh in meshes:
+        primitives = mesh.get("primitives") if isinstance(mesh, Mapping) else None
+        if not isinstance(primitives, list):
+            continue
+        for primitive in primitives:
+            primitive_count += 1
+            attributes = primitive.get("attributes") if isinstance(primitive, Mapping) else None
+            if not isinstance(attributes, Mapping):
+                return False
+            if STEP_EDGE_BARYCENTRIC_ATTRIBUTE not in attributes or STEP_EDGE_CLASS_ATTRIBUTE not in attributes:
+                return False
+    return primitive_count > 0
+
+
+def glb_surface_edge_class_has_nonzero_values(glb_path: Path) -> bool:
+    try:
+        gltf, binary_offset, binary_length = _read_glb_json_and_bin_location(glb_path)
+    except (OSError, ValueError, json.JSONDecodeError):
+        return False
+    meshes = gltf.get("meshes")
+    accessors = gltf.get("accessors")
+    if not isinstance(meshes, list) or not isinstance(accessors, list):
+        return False
+    for mesh in meshes:
+        primitives = mesh.get("primitives") if isinstance(mesh, Mapping) else None
+        if not isinstance(primitives, list):
+            continue
+        for primitive in primitives:
+            attributes = primitive.get("attributes") if isinstance(primitive, Mapping) else None
+            accessor_index = attributes.get(STEP_EDGE_CLASS_ATTRIBUTE) if isinstance(attributes, Mapping) else None
+            if not isinstance(accessor_index, int) or accessor_index < 0 or accessor_index >= len(accessors):
+                continue
+            accessor = accessors[accessor_index]
+            if not isinstance(accessor, Mapping):
+                continue
+            if int(accessor.get("componentType") or 0) != UNSIGNED_BYTE or accessor.get("type") != "VEC3":
+                continue
+            try:
+                view_offset, view_length = _buffer_view_range(
+                    gltf,
+                    binary_offset,
+                    binary_length,
+                    accessor.get("bufferView"),
+                )
+            except ValueError:
+                continue
+            byte_offset = int(accessor.get("byteOffset") or 0)
+            count = int(accessor.get("count") or 0) * 3
+            if byte_offset < 0 or count <= 0 or byte_offset + count > view_length:
+                continue
+            try:
+                if any(_read_file_range(glb_path, view_offset + byte_offset, count)):
+                    return True
+            except (OSError, ValueError):
+                continue
+    return False

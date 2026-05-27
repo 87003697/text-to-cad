@@ -1,6 +1,6 @@
 ---
 name: sdf
-description: SDFormat/SDF model and world generation, validation, and simulator handoff. Use for `.sdf` files, SDFormat XML, Python `gen_sdf()` sources, models, worlds, links, joints, poses, frames, inertials, visual/collision geometry, mesh URIs, sensors, lights, physics, plugins, includes, Gazebo, CAD Explorer static SDF review, or simulator-specific metadata. Do not use for signed-distance-field geometry.
+description: SDFormat/SDF model and world generation, validation, and simulator handoff. Use for `.sdf` files, SDFormat XML, Python `gen_sdf()` sources, models, worlds, links, joints, poses, frames, inertials, visual/collision geometry, mesh URIs, sensors, lights, physics, plugins, includes, Gazebo, static SDF review, or simulator-specific metadata. Do not use for signed-distance-field geometry.
 ---
 
 # SDF
@@ -21,12 +21,16 @@ This skill is for **SDFormat**, not signed-distance-field geometry.
 8. Prefer helper functions and named constants over large XML string literals. Hidden numbers are a common SDF failure mode.
 9. Generate only explicit targets with `scripts/sdf` or the repository's existing SDF launcher. Do not run directory-wide generation.
 10. Regenerate upstream geometry, mesh, robot-description, render, topology, or package assets with their owning workflows before regenerating SDF that references them.
-11. After generation, run available checks: bundled validation, optional `gz sdf --check`, simulator load, joint motion, plugin/sensor startup, and `$render` handoff when available.
+11. After generation, run available checks: bundled validation, optional `gz sdf --check`, simulator load, joint motion, and plugin/sensor startup.
 12. Report assumptions, skipped checks, unresolved resource paths, and target-specific compatibility risks.
 
 ## Scope
 
 Use this skill for SDFormat outputs and generators. Do not use it for signed-distance-field modeling, raw geometry generation, planning semantics, or to paper over incorrect upstream robot/source data unless the task is explicitly simulator-only.
+
+## CAD Viewer Handoff
+
+After completing SDF work that creates or modifies a `.sdf`, you must ALWAYS hand the explicit file path to `$cad-viewer` when that skill is installed. `$cad-viewer` must start CAD Viewer if it is not already running and return link(s) to the relevant created or updated file(s); if `$cad-viewer` is unavailable or startup fails, report that instead of silently omitting the handoff.
 
 ## Workflow
 
@@ -38,13 +42,11 @@ Use this skill for SDFormat outputs and generators. Do not use it for signed-dis
 6. Regenerate the explicit target.
 7. Treat bundled validation as a guardrail, not simulator proof.
 8. Run target-consumer smoke tests when available.
-9. After creating or modifying `.sdf` output, always hand the explicit generated path to `$render` when available; `$render` checks/reuses a live viewer and returns a link. CAD Explorer does not execute SDF plugins or read file-authored motion metadata.
-10. For visual feedback during generation review, prefer `$render` snapshots over opening the viewer manually or using Playwright. Use still snapshots only; SDF review should not generate GIFs.
-11. Report checks run, checks skipped, and assumptions.
+9. Report checks run, checks skipped, and assumptions. Static rendering does not execute SDF plugins or read file-authored motion metadata.
 
 ## Commands
 
-Run with the project or workspace Python environment.
+Run with the project or workspace Python environment. Treat `python` in examples as an interpreter placeholder; if bare `python` is unavailable, substitute `python3`, a project virtualenv interpreter, or the configured interpreter path.
 
 ```bash
 python scripts/sdf path/to/source.py
@@ -74,7 +76,7 @@ Checks run:
 - bundled SDF validation: passed
 - gz sdf --check: skipped, gz not installed
 - simulator load: skipped, target simulator unavailable
-- visual review: render viewer link returned; snapshot run/skipped
+- viewer handoff: `$cad-viewer` link returned
 Assumptions:
 - Assumed mesh units are meters.
 - Assumed lidar frame is coincident with lidar_link.

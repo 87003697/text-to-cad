@@ -4,9 +4,16 @@
 
 <br>
 
-# CAD Skills
+<pre>
+ ██████╗ █████╗ ██████╗       ███████╗██╗  ██╗██╗██╗     ██╗     ███████╗
+██╔════╝██╔══██╗██╔══██╗      ██╔════╝██║ ██╔╝██║██║     ██║     ██╔════╝
+██║     ███████║██║  ██║      ███████╗█████╔╝ ██║██║     ██║     ███████╗
+██║     ██╔══██║██║  ██║      ╚════██║██╔═██╗ ██║██║     ██║     ╚════██║
+╚██████╗██║  ██║██████╔╝      ███████║██║  ██╗██║███████╗███████╗███████║
+ ╚═════╝╚═╝  ╚═╝╚═════╝       ╚══════╝╚═╝  ╚═╝╚═╝╚══════╝╚══════╝╚══════╝
+</pre>
 
-A collection of agent skills for CAD, robotics and hardware design
+A skills library for CAD, robotics, and hardware design agents
 
 [Docs](https://www.cadskills.xyz) | [Demo](https://demo.cadskills.xyz)
 
@@ -26,43 +33,65 @@ A collection of agent skills for CAD, robotics and hardware design
 
 </div>
 
-## ✨ Features
+# CAD Skills
 
-- **Generate** - Create source-controlled CAD models with coding agents like Codex and Claude Code.
-- **Export** - Produce STEP, STL, 3MF, DXF, GLB, topology data, and URDF/SRDF/SDF robot descriptions.
-- **Browse** - Inspect generated geometry, flat patterns, and robot-description files in CAD Explorer.
-- **Source** - Find and download off-the-shelf STEP parts from the hosted step.parts catalog.
-- **Reference** - Copy stable `@cad[...]` references so agents can make precise follow-up edits.
-- **Review** - Render quick review images for fast checks during an iteration loop.
-- **Reproduce** - Edit source files first, then regenerate explicit targets.
-- **Local** - Run harness, skills, and the render viewer locally with no backend to host.
+CAD Skills is a library of agent skills for generating, inspecting, sourcing,
+slicing, and handing off CAD and robot-description artifacts from local project
+files.
 
 ## 🧰 Skills
 
-- **CAD** - STEP, STL, 3MF, DXF, GLB/topology, render images, and `@cad[...]` geometry references. [Bundled skill](skills/cad/SKILL.md) · [Standalone repo](https://github.com/earthtojake/cad-skill)
-- **Render** - Start or reuse CAD Explorer, return visual review links, and create snapshots for generated `.step`, `.stp`, `.glb`, `.stl`, `.3mf`, `.dxf`, `.urdf`, `.srdf`, and `.sdf` files. [Bundled skill](skills/render/SKILL.md)
-- **step.parts** - Find, evaluate, and download common off-the-shelf STEP models from step.parts, including screws, nuts, washers, bearings, standoffs, electronics parts, motors, and connectors. [Bundled skill](skills/step-parts/SKILL.md)
-- **URDF** - Generated URDF XML, robot links, joints, limits, validation, mesh references, and CAD Explorer URDF visualization. [Bundled skill](skills/urdf/SKILL.md)
-- **SRDF** - MoveIt2 SRDF semantics, direct SRDF-to-URDF Explorer links, inverse kinematics, path planning, and optional MoveIt2-server testing for existing URDFs. [Bundled skill](skills/srdf/SKILL.md)
-- **SDF** - Generated SDFormat/SDF XML, simulator model/world structure, validation, mesh URIs, plugins, and simulator-specific metadata. [Bundled skill](skills/sdf/SKILL.md)
-- **SendCutSend** - SendCutSend.com-specific DXF and STEP/STP upload preflight reports using its ordering guide, catalog, and specs for selected materials, SKUs, services, and secondary operations. [Bundled skill](skills/sendcutsend/SKILL.md)
+Install the library to give agents focused workflows for CAD, fabrication,
+robot description files, simulation, and local review.
 
-## 🧩 Harness
-
-The `harness/` directory contains optional repo-level instruction files for larger CAD projects that will be edited by coding agents. These files keep project behavior predictable: edit sources before derived artifacts, regenerate explicit targets, avoid broad repo scans, treat CAD outputs as LFS-heavy, and keep reusable workflow details in the skills themselves.
-
-To use the harness in another CAD project, copy `harness/AGENTS.md` and `harness/CLAUDE.md` into that project's root.
+| Skill       | Summary                                                                                                                                            | Source                                            |
+| ----------- | -------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------- |
+| CAD         | Creates and edits CAD models from plain-language or image requests, with STEP as the main output along with options to export to STL, 3MF and GLB. | [skills/cad](skills/cad/SKILL.md)                 |
+| CAD Viewer  | Shows local browser previews for CAD, G-code, and robot files.                                                                                     | [skills/cad-viewer](skills/cad-viewer/SKILL.md)   |
+| step.parts  | Finds off-the-shelf STEP parts like screws, bearings, motors, and connectors.                                                                      | [skills/step-parts](skills/step-parts/SKILL.md)   |
+| URDF        | Writes robot structure files with links, joints, limits, inertials, and meshes.                                                                    | [skills/urdf](skills/urdf/SKILL.md)               |
+| SRDF        | Adds MoveIt planning groups, end effectors, poses, and collision rules to a URDF.                                                                  | [skills/srdf](skills/srdf/SKILL.md)               |
+| SDF         | Creates simulator models and worlds with frames, physics, sensors, and lights.                                                                     | [skills/sdf](skills/sdf/SKILL.md)                 |
+| SendCutSend | Checks DXF and STEP files before upload to SendCutSend.                                                                                            | [skills/sendcutsend](skills/sendcutsend/SKILL.md) |
+| G-code      | Slices supported mesh files into validated, printer-profiled FDM `.gcode` with real slicer CLIs.                                                   | [skills/gcode](skills/gcode/SKILL.md)             |
+| Bambu Labs  | Dry-runs, uploads, and cautiously starts local Bambu Lab print jobs from validated `.gcode`.                                                       | [skills/bambu-labs](skills/bambu-labs/SKILL.md)   |
 
 ## 💻 Installation
+
+### Skills
 
 Install CAD Skills with the Skills CLI:
 
 ```bash
-npx skills add earthtojake/text-to-cad
+npx skills install earthtojake/text-to-cad
 ```
 
-Restart your agent if newly installed skills do not appear. Learn more about
-the Skills CLI and supported agents at [skills.sh](https://www.skills.sh/).
+This is the preferred installation path. It installs the individual skills
+directly for supported agents.
+
+### Plugins
+
+Provider-native plugin installs are also available:
+
+```bash
+# Codex
+codex plugin marketplace add earthtojake/text-to-cad
+codex plugin add cad@text-to-cad
+```
+
+```bash
+# Claude Code
+claude plugin marketplace add earthtojake/text-to-cad
+claude plugin install cad@text-to-cad
+```
+
+```bash
+# Gemini CLI
+gemini extensions install https://github.com/earthtojake/text-to-cad
+```
+
+Restart your agent if newly installed skills do not appear. For local
+development symlink guidance, see [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## 📸 Screenshots
 
@@ -70,33 +99,24 @@ the Skills CLI and supported agents at [skills.sh](https://www.skills.sh/).
   <tr>
     <td width="33%">
       <a href="./assets/text-to-cad-demo.gif">
-        <img src="./assets/text-to-cad-demo.gif" alt="CAD skill demo showing generated geometry in CAD Explorer" width="100%">
+        <img src="./assets/text-to-cad-demo.gif" alt="CAD skill demo showing generated geometry in CAD Viewer" width="100%">
       </a>
       <a href="./skills/cad/SKILL.md"><strong>CAD</strong></a>
     </td>
     <td width="33%">
       <a href="./assets/urdf-demo.gif">
-        <img src="./assets/urdf-demo.gif" alt="URDF skill demo showing robot description output in CAD Explorer" width="100%">
+        <img src="./assets/urdf-demo.gif" alt="URDF skill demo showing robot description output in CAD Viewer" width="100%">
       </a>
       <a href="./skills/urdf/SKILL.md"><strong>URDF</strong></a>
     </td>
     <td width="33%">
       <a href="./assets/srdf-moveit2-demo.gif">
-        <img src="./assets/srdf-moveit2-demo.gif" alt="SRDF MoveIt2 skill demo showing inverse kinematics in CAD Explorer" width="100%">
+        <img src="./assets/srdf-moveit2-demo.gif" alt="SRDF MoveIt2 skill demo showing inverse kinematics in CAD Viewer" width="100%">
       </a>
       <a href="./skills/srdf/SKILL.md"><strong>SRDF / MoveIt2</strong></a>
     </td>
   </tr>
 </table>
-
-## 🔁 Workflow
-
-1. **Describe** - Tell your agent about the part, assembly, fixture, robot, or mechanism you want.
-2. **Edit** - Let your coding agent update repo-local CAD source files.
-3. **Regenerate** - Create explicit STEP, STL, 3MF, DXF, GLB, URDF, SRDF, or SDF targets.
-4. **Inspect** - Open CAD Explorer to review the generated model.
-5. **Reference** - Copy `@cad[...]` handles when you want geometry-aware edits.
-6. **Commit** - Save the source and generated artifacts together once the model is ready.
 
 ## 🧪 Benchmarks
 
@@ -179,49 +199,7 @@ git lfs pull --include="benchmarks/**"
   </tbody>
 </table>
 
-## 🛠️ Local Development
+## 🛠️ Contributing
 
-Clone the repo:
-
-```bash
-git clone https://github.com/earthtojake/text-to-cad.git
-cd text-to-cad
-```
-
-Install Python CAD dependencies:
-
-```bash
-python3.11 -m venv .venv
-./.venv/bin/python -m pip install --upgrade pip
-./.venv/bin/pip install -r skills/cad/requirements.txt
-```
-
-Install the render viewer dependencies:
-
-```bash
-npm --prefix skills/render/scripts/viewer install
-```
-
-Start or reuse CAD Explorer through the render skill for the current workspace:
-
-```bash
-npm --prefix skills/render/scripts/viewer run dev:ensure -- --workspace-root "$PWD" --root-dir .
-```
-
-Then open the URL printed by the command.
-
-For a specific file, pass its path explicitly:
-
-```bash
-npm --prefix skills/render/scripts/viewer run dev:ensure -- --workspace-root "$PWD" --root-dir . --file path/to/model.step
-```
-
-CAD Explorer supports `.step`, `.stp`, `.glb`, `.stl`, `.3mf`, `.dxf`, `.urdf`, `.srdf`, and `.sdf` files. SRDF reviews can use optional local MoveIt2 controls when the render skill's MoveIt2 server is running.
-
-CAD Explorer renders models with browser WebGL. If Chrome shows "WebGL unavailable" or "Error creating WebGL context" on Linux, check `chrome://gpu`, enable hardware acceleration or software WebGL, and update the system graphics/Mesa drivers before reloading the Explorer URL.
-
-For manual foreground viewer development:
-
-```bash
-npm --prefix skills/render/scripts/viewer run dev
-```
+For local development, contribution workflow, local skill linking, and validation guidance, see
+[CONTRIBUTING.md](CONTRIBUTING.md).

@@ -21,14 +21,13 @@ class InspectCliWrapperTests(unittest.TestCase):
         self.assertEqual(0, result.returncode)
         self.assertIn("usage: inspect", result.stdout)
 
-    def test_inspect_help_does_not_import_ocp_or_render(self) -> None:
+    def test_inspect_help_does_not_import_heavy_cad_modules(self) -> None:
         skill_root = Path(__file__).resolve().parents[3]
         code = (
             "import sys; "
             "sys.path[:0]=['scripts','scripts/inspect']; "
             "import inspect_refs.cli; "
             "print('OCP.OCP' in sys.modules); "
-            "print('render.cli' in sys.modules); "
             "print('common.step_scene' in sys.modules)"
         )
         result = subprocess.run(
@@ -41,7 +40,7 @@ class InspectCliWrapperTests(unittest.TestCase):
         )
         self.assertEqual("", result.stderr)
         self.assertEqual(0, result.returncode)
-        self.assertEqual(["False", "False", "False"], result.stdout.strip().splitlines())
+        self.assertEqual(["False", "False"], result.stdout.strip().splitlines())
 
     def test_scripts_inspect_rejects_render_subcommand(self) -> None:
         skill_root = Path(__file__).resolve().parents[3]

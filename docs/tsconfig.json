@@ -21,7 +21,7 @@
     ],
     "paths": {
       "@/*": ["./src/*"],
-      "@render-viewer/*": ["../skills/render/scripts/viewer/*"]
+      "cadjs/*": ["../packages/cadjs/src/*"]
     }
   },
   "include": [

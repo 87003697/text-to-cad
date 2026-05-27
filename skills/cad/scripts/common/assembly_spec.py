@@ -226,6 +226,14 @@ def _run_assembly_generator(assembly_path: Path) -> object:
         str(CAD_ROOT),
         str(assembly_path.parent),
     ]
+    for parent in assembly_path.parents:
+        if parent == REPO_ROOT.parent:
+            break
+        if (
+            (parent / "STEP" / "__init__.py").is_file()
+            or (parent / "robot_common" / "__init__.py").is_file()
+        ):
+            search_paths.append(str(parent))
     for candidate in reversed(search_paths):
         if candidate not in sys.path:
             sys.path.insert(0, candidate)

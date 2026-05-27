@@ -2,21 +2,25 @@
 
 import { useEffect, useRef, useState } from "react";
 import * as THREE from "three";
+import { Line2 } from "three/examples/jsm/lines/Line2.js";
+import { LineGeometry } from "three/examples/jsm/lines/LineGeometry.js";
+import { LineMaterial } from "three/examples/jsm/lines/LineMaterial.js";
+import { LineSegments2 } from "three/examples/jsm/lines/LineSegments2.js";
+import { LineSegmentsGeometry } from "three/examples/jsm/lines/LineSegmentsGeometry.js";
 import {
-  buildCadScene,
   CAD_SCENE_SCALE,
-  fitCameraToScene,
-} from "@render-viewer/common/cadScene.js";
+  buildModel,
+} from "cadjs/common/cadScene.js";
+import { renderModel } from "cadjs/common/renderModel.js";
+import { loadSource } from "cadjs/common/source.js";
 import {
-  loadStepModuleDefinition,
   normalizeParameterValue,
-  normalizeStepModuleParameterValues,
-} from "@render-viewer/common/stepModule.js";
-import { cloneThemeSettings } from "@render-viewer/common/themeSettings.js";
-import { buildMeshDataFromGlbBuffer } from "@render-viewer/lib/render/glbMeshData.js";
+  normalizeStepModuleParameterValues as normalizeStepParameterValues,
+} from "cadjs/common/stepModule.js";
+import { cloneThemeSettings } from "cadjs/common/themeSettings.js";
 
 const HERO_STEP_URL = "/hero/planetary_gear_assembly.step.glb";
-const HERO_STEP_MODULE_URL = "/hero/planetary_gear_assembly.step.js";
+const HERO_STEP_PARAMETER_URL = "/hero/planetary_gear_assembly.step.js";
 const HERO_STEP_CAD_PATH = "models/fun/planetary_gear_assembly.step";
 const HERO_STEP_DEMO_URL =
   "https://demo.cadskills.xyz/?file=fun%2Fplanetary_gear_assembly.step";
@@ -32,12 +36,12 @@ const HERO_STEP_PARAMETER_VALUES = {
 };
 
 type PreviewScheme = "dark" | "light";
-type StepModuleDefinition = Awaited<
-  ReturnType<typeof loadStepModuleDefinition>
->;
-type StepModuleAnimation = StepModuleDefinition["animations"][number];
-type StepModuleRuntime = {
-  animation: StepModuleAnimation | null;
+type StepParameterDefinition = NonNullable<
+  Awaited<ReturnType<typeof loadSource>>["stepParameterSource"]
+>["definition"];
+type StepParameterAnimation = StepParameterDefinition["animations"][number];
+type StepParameterRuntime = {
+  animation: StepParameterAnimation | null;
   animationElapsedSec: number;
   animationState: {
     activeId: string;
@@ -48,7 +52,7 @@ type StepModuleRuntime = {
     speed: number;
   };
   cadPath: string;
-  definition: StepModuleDefinition;
+  definition: StepParameterDefinition;
   parameterValues: Record<string, unknown>;
   selectorRuntime: null;
   sourceUrl: string;
@@ -115,14 +119,50 @@ function buildWorkbenchTheme(scheme: PreviewScheme) {
       clearcoat: 0,
       envMapIntensity: 0,
     },
+    edges: {
+      ...(theme.edges || {}),
+      enabled: true,
+      color: scheme === "dark" ? "#202b38" : "#2f3a4b",
+      contrastMode: "manual",
+      opacity: 1,
+      silhouette: true,
+      thickness: 1,
+    },
+    background: {
+      type: "solid",
+      solidColor: palette.background,
+    },
+    lighting: {
+      ambient: {
+        color: palette.ambientLight,
+        enabled: true,
+        intensity: palette.ambientLightIntensity,
+      },
+      directionalLights: [
+        {
+          color: palette.keyLight,
+          enabled: true,
+          intensity: palette.keyLightIntensity,
+          position: { x: -120, y: 180, z: 240 },
+        },
+        {
+          color: palette.fillLight,
+          enabled: true,
+          intensity: palette.fillLightIntensity,
+          position: { x: 180, y: -120, z: 120 },
+        },
+      ],
+      hemisphere: {
+        enabled: false,
+      },
+    },
   };
 }
 
-async function loadHeroStepModuleRuntime(): Promise<StepModuleRuntime> {
-  const moduleUrl = `${HERO_STEP_MODULE_URL}?v=${Date.now()}`;
-  const definition = await loadStepModuleDefinition(moduleUrl, {
-    cadPath: HERO_STEP_CAD_PATH,
-  });
+function createHeroStepParameterRuntime(
+  definition: StepParameterDefinition,
+  parameterUrl: string
+): StepParameterRuntime {
   const animation =
     definition.animations.find((item) => item.id === "meshCycle") ??
     definition.animations[0] ??
@@ -142,17 +182,17 @@ async function loadHeroStepModuleRuntime(): Promise<StepModuleRuntime> {
     },
     cadPath: HERO_STEP_CAD_PATH,
     definition,
-    parameterValues: normalizeStepModuleParameterValues(
+    parameterValues: normalizeStepParameterValues(
       definition,
       HERO_STEP_PARAMETER_VALUES
     ),
     selectorRuntime: null,
-    sourceUrl: moduleUrl,
+    sourceUrl: parameterUrl,
   };
 }
 
-function advanceStepModuleRuntime(
-  runtime: StepModuleRuntime,
+function advanceStepParameterRuntime(
+  runtime: StepParameterRuntime,
   deltaSeconds: number
 ) {
   const animation = runtime.animation;
@@ -166,7 +206,7 @@ function advanceStepModuleRuntime(
       Math.max(deltaSeconds, 0) * GEAR_MESH_ANIMATION_SPEED) %
     duration;
   const progress = nextElapsed / duration;
-  const currentValues = normalizeStepModuleParameterValues(
+  const currentValues = normalizeStepParameterValues(
     runtime.definition,
     runtime.parameterValues
   );
@@ -193,7 +233,7 @@ function advanceStepModuleRuntime(
   });
 
   runtime.animationElapsedSec = nextElapsed;
-  // The hero drives sidecar params directly; keep time.playing false so
+  // The hero drives sidecar parameter values directly; keep time.playing false so
   // sidecar-only inspection highlights do not override native STEP colors.
   runtime.animationState = {
     activeId: animation.id,
@@ -238,11 +278,9 @@ export function HeroStepRender() {
     }
 
     let disposed = false;
-    let frame = 0;
-    let resizeObserver: ResizeObserver | null = null;
-    let cadScene: ReturnType<typeof buildCadScene> | null = null;
-    let stepModuleRuntime: StepModuleRuntime | null = null;
-    let lastRenderTime = performance.now();
+    let cadModel: ReturnType<typeof buildModel> | null = null;
+    let viewport: ReturnType<typeof renderModel> | null = null;
+    let stepParameterRuntime: StepParameterRuntime | null = null;
     const dragState = {
       active: false,
       lastX: 0,
@@ -252,90 +290,20 @@ export function HeroStepRender() {
       yaw: -0.18,
     };
 
-    const renderer = new THREE.WebGLRenderer({
-      canvas,
-      alpha: false,
-      antialias: true,
-      powerPreference: "high-performance",
-    });
-    renderer.outputColorSpace = THREE.SRGBColorSpace;
-    renderer.shadowMap.enabled = true;
-    renderer.shadowMap.type = THREE.PCFSoftShadowMap;
-    renderer.setClearColor(new THREE.Color(palette.background), 1);
-
-    const scene = new THREE.Scene();
-    scene.background = new THREE.Color(palette.background);
-
-    const camera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0.01, 1000);
-    scene.add(
-      new THREE.AmbientLight(
-        palette.ambientLight,
-        palette.ambientLightIntensity
-      )
-    );
-
-    const keyLight = new THREE.DirectionalLight(
-      palette.keyLight,
-      palette.keyLightIntensity
-    );
-    keyLight.position.set(-120, 180, 240);
-    scene.add(keyLight);
-
-    const fillLight = new THREE.DirectionalLight(
-      palette.fillLight,
-      palette.fillLightIntensity
-    );
-    fillLight.position.set(180, -120, 120);
-    scene.add(fillLight);
-
-    const resize = () => {
-      if (!viewportRef.current || !cadScene) {
+    const beforeRender = ({ deltaSeconds }: { deltaSeconds: number }) => {
+      if (disposed || !cadModel) {
         return;
       }
-      const rect = viewportRef.current.getBoundingClientRect();
-      const width = Math.max(1, Math.floor(rect.width));
-      const height = Math.max(1, Math.floor(rect.height));
-      renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
-      renderer.setSize(width, height, false);
-      const fit = fitCameraToScene(THREE, camera, cadScene.bounds, {
-        direction: [1, -1, 0.65],
-        up: [0, 0, 1],
-        width,
-        height,
-        padding: 0.1,
-        scale: CAD_SCENE_SCALE.CAD,
-      });
-      fitCameraToScene(THREE, camera, cadScene.bounds, {
-        direction: [1, -1, 0.65],
-        lockedHalfHeight: fit.halfHeight * 0.86,
-        up: [0, 0, 1],
-        width,
-        height,
-        padding: 0.1,
-        scale: CAD_SCENE_SCALE.CAD,
-      });
-    };
-
-    const render = () => {
-      if (disposed || !cadScene) {
-        return;
-      }
-      const now = performance.now();
-      const deltaSeconds = Math.min((now - lastRenderTime) / 1000, 0.1);
-      lastRenderTime = now;
-
-      if (stepModuleRuntime) {
-        advanceStepModuleRuntime(stepModuleRuntime, deltaSeconds);
-        cadScene.update({ parameters: stepModuleRuntime });
+      if (stepParameterRuntime) {
+        advanceStepParameterRuntime(stepParameterRuntime, deltaSeconds);
+        cadModel.update({ stepParameters: stepParameterRuntime });
       }
 
       if (!dragState.active) {
         dragState.yaw += 0.0018;
       }
-      cadScene.root.rotation.x = dragState.pitch;
-      cadScene.root.rotation.z = dragState.yaw;
-      renderer.render(scene, camera);
-      frame = window.requestAnimationFrame(render);
+      cadModel.root.rotation.x = dragState.pitch;
+      cadModel.root.rotation.z = dragState.yaw;
     };
 
     const handlePointerDown = (event: PointerEvent) => {
@@ -377,46 +345,56 @@ export function HeroStepRender() {
     const load = async () => {
       try {
         setStatus("loading step");
-        const [response, loadedStepModuleRuntime] = await Promise.all([
-          fetch(HERO_STEP_URL, { cache: "no-store" }),
-          loadHeroStepModuleRuntime(),
-        ]);
-        if (!response.ok) {
-          const message = await response
-            .json()
-            .then((body: { detail?: string; error?: string }) =>
-              String(body.detail || body.error || "").trim()
-            )
-            .catch(() => "");
-
-          throw new Error(message || `HTTP ${response.status}`);
-        }
-
-        const meshData = await buildMeshDataFromGlbBuffer(
-          await response.arrayBuffer()
-        );
+        const parameterUrl = `${HERO_STEP_PARAMETER_URL}?v=${Date.now()}`;
+        const source = await loadSource({
+          kind: "step",
+          glbUrl: HERO_STEP_URL,
+          stepParameterUrl: parameterUrl,
+          cadPath: HERO_STEP_CAD_PATH,
+          stepParameters: HERO_STEP_PARAMETER_VALUES,
+        });
         if (disposed) {
           return;
         }
-        stepModuleRuntime = loadedStepModuleRuntime;
+        if (!source.stepParameterSource?.definition) {
+          throw new Error("missing STEP parameter sidecar");
+        }
+        stepParameterRuntime = createHeroStepParameterRuntime(
+          source.stepParameterSource.definition,
+          parameterUrl
+        );
 
-        cadScene = buildCadScene(THREE, meshData, {
+        cadModel = buildModel(THREE, source, {
           theme: buildWorkbenchTheme(scheme),
           displayMode: "solid",
-          parameters: stepModuleRuntime,
+          stepParameters: stepParameterRuntime,
           scale: CAD_SCENE_SCALE.CAD,
           selection: {
             showEdges: true,
           },
+          edgeRendering: {
+            mode: "screen-space",
+            Line2,
+            LineGeometry,
+            LineMaterial,
+            LineSegments2,
+            LineSegmentsGeometry,
+          },
         });
-        cadScene.root.rotation.x = dragState.pitch;
-        cadScene.root.rotation.z = dragState.yaw;
-        scene.add(cadScene.root);
-        resize();
-        resizeObserver = new ResizeObserver(resize);
-        resizeObserver.observe(viewportRef.current ?? canvas);
+        cadModel.root.rotation.x = dragState.pitch;
+        cadModel.root.rotation.z = dragState.yaw;
+        viewport = renderModel(THREE, cadModel, {
+          autoStart: true,
+          beforeRender,
+          canvas,
+          direction: [1, -1, 0.65],
+          hostElement: viewportRef.current ?? canvas,
+          lockedHalfHeightScale: 0.86,
+          padding: 0.1,
+          scale: CAD_SCENE_SCALE.CAD,
+          theme: buildWorkbenchTheme(scheme),
+        });
         setStatus(HERO_STEP_LABEL);
-        render();
       } catch (error) {
         setStatus(error instanceof Error ? error.message : "render failed");
       }
@@ -434,10 +412,7 @@ export function HeroStepRender() {
       canvas.removeEventListener("pointermove", handlePointerMove);
       canvas.removeEventListener("pointerup", handlePointerEnd);
       canvas.removeEventListener("pointercancel", handlePointerEnd);
-      window.cancelAnimationFrame(frame);
-      resizeObserver?.disconnect();
-      cadScene?.dispose();
-      renderer.dispose();
+      viewport?.dispose();
     };
   }, [palette, scheme]);
 

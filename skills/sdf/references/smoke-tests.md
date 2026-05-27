@@ -48,13 +48,13 @@ For each non-fixed joint:
 - confirm limits stop motion where expected;
 - confirm continuous joints can rotate continuously if intended.
 
-### CAD Explorer static review
+### CAD Viewer static review
 
-After generating or modifying an `.sdf`, hand the explicit path to `$render` for a live viewer link when available. When visual feedback is useful, use `$render` snapshots rather than manual viewer or Playwright inspection.
+After generating or modifying an `.sdf`, hand the explicit path to `$cad-viewer` for a live viewer link when available.
 
 - confirm direct model links, joints, frames, visuals, and collisions are placed correctly;
 - confirm includes, plugins, sensors, lights, nested models, and unsupported geometry are listed as static metadata;
-- record any simulator-only behavior that CAD Explorer cannot execute.
+- record any simulator-only behavior that CAD Viewer cannot execute.
 
 ### Sensor and plugin check
 
@@ -68,7 +68,7 @@ For each sensor or plugin:
 
 ### Visual review
 
-When CAD Explorer or an equivalent viewer is available through `$render`, return the viewer link and use still snapshots when visual feedback is needed. Visual review is useful but insufficient: it can catch gross placement and mesh problems, but it cannot prove axis frames, inertials, dynamics, or plugin behavior. Do not generate GIFs for SDF review.
+When CAD Viewer or an equivalent viewer is available through `$cad-viewer`, return the viewer link. Visual review is useful but insufficient: it can catch gross placement and mesh problems, but it cannot prove axis frames, inertials, dynamics, or plugin behavior.
 
 ## Report format
 

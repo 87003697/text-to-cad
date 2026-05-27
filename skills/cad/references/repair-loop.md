@@ -1,6 +1,22 @@
 # Repair loop
 
-Read this file when generation, export, inspection, positioning, render review, Explorer setup, or documentation validation fails.
+Read this file when generation, export, inspection, positioning, snapshot review, CAD Viewer setup, or documentation validation fails.
+
+## Contents
+
+- Loop
+- Failure classes and fixes
+- Source import or syntax failure
+- Invalid or missing geometry
+- Fillet or chamfer failure
+- Wrong scale or bounding box
+- Missing feature
+- Selector fragility
+- Positioning or joint mismatch
+- CAD Viewer Startup Or Link Failure
+- CAD `scripts/snapshot` failure
+- Diff after repair
+- Reporting failed repairs
 
 ## Loop
 
@@ -120,50 +136,57 @@ Likely causes:
 - rotation applied about wrong axis
 - sign error in symmetric placement
 - mating face selected incorrectly
+- joint location defined in world coordinates when a part-local datum was intended
+- duplicate or incorrect joint labels
+- explicit `Location` not recomputed after a parameter change
+- CLI `inspect mate` delta was treated as an edit instead of a diagnostic
 
 Fix:
 
 - inspect `refs --positioning`
 - run `frame` on relevant selectors or occurrences
 - run `mate` for read-only delta
+- verify the source-level build123d joint labels and `joint_location` definitions
 - apply correction to source build123d joint, `.connect_to()` call, `Location`, datum, or feature offset
-- regenerate and remeasure
+- adjust the smallest joint location, axis, angle, position, explicit transform, or part-local datum
+- regenerate the assembly from the Python source
+- rerun `refs --facts --planes --positioning` plus the failed `measure` or `mate` check
 
-### Explorer startup or link failure
+### CAD Viewer Startup Or Link Failure
 
 Likely causes:
 
 - Node/npm unavailable
-- Explorer app not built or cannot start
+- CAD Viewer app not built or cannot start
 - scan root differs from assumed root
 - returned file path is not relative to active scan root
 
 Fix:
 
-- hand the explicit artifact path to `$render`
-- check `EXPLORER_ROOT_DIR` when available
+- hand the explicit artifact path to `$cad-viewer`
+- check `VIEWER_ROOT_DIR` when available
 - return the best documented link format
 - report startup failure if unresolved
 - rely on CLI facts/measurements for validation
 
-### Explorer render failure
+### CAD `scripts/snapshot` failure
 
 Likely causes:
 
-- attempted to render Python source instead of an Explorer-visible artifact
+- target is outside the CAD Viewer scan root or does not resolve to a STEP/STP file or Python generator
 - target path wrong
-- Explorer/adjacent render artifact missing
+- adjacent CAD Viewer GLB/topology artifact missing
 - invalid render flags
 
 Fix:
 
 - generate STEP first
-- snapshot `.step`, `.stp`, `.glb`, `.stl`, `.3mf`, `.dxf`, `.urdf`, `.srdf`, or `.sdf` with the render skill's snapshot CLI rather than manual viewer or Playwright inspection
-- retry only with simpler supported render jobs, starting with a single `view` output before `wireframe` or `section`
-- for CAD review packets, use still-image modes: `view`, `wireframe`, and `section`
+- snapshot the primary `.step` or `.stp` artifact with CAD `scripts/snapshot` rather than manual viewer or Playwright inspection
+- retry only with simpler supported snapshot jobs, starting with a single `view` output before wireframe display or `section`
+- for CAD review packets, use still-image modes `view` and `section`; set `display.mode` to `wireframe` for wire output
 - generate GIFs only for STEP-module parameter animation review
-- rerender only after a source repair changed visible geometry or a specific visual finding needs confirmation
-- skip saved snapshots when they are not needed under `render-review.md`
+- rerun snapshots only after a source repair changed visible geometry or a specific visual finding needs confirmation
+- skip saved snapshots when they are not needed under `snapshot-review.md`
 
 ## Diff after repair
 
@@ -184,23 +207,3 @@ If a check cannot be repaired in the current environment, report:
 - which validation claims cannot be made
 - what the next source-level correction should be
 ```
-
-
-### Joint or mating mismatch
-
-Likely causes:
-
-- wrong fixed/root component
-- joint location defined in world coordinates when a part-local datum was intended
-- joint orientation flipped
-- duplicate or incorrect joint labels
-- explicit `Location` not recomputed after a parameter change
-- CLI `inspect mate` delta was treated as an edit instead of a diagnostic
-
-Fix:
-
-- inspect `refs --positioning` and `frame` for the affected occurrences
-- verify the source-level build123d joint labels and `joint_location` definitions
-- adjust the smallest joint location, axis, angle, position, or explicit transform
-- regenerate the assembly from the Python source
-- rerun `refs --facts --planes --positioning` plus the failed `measure` or `mate` check

@@ -10,6 +10,7 @@ import build123d
 from common import assembly_export as assembly_export_module
 from common.assembly_export import build_assembly_compound, export_assembly_step_scene
 from common.assembly_spec import AssemblyInstanceSpec, AssemblyNodeSpec, AssemblySpec
+from common.glb_topology import STEP_TOPOLOGY_SCHEMA_VERSION
 from common.glb_mesh_payload import DEFAULT_MATERIAL, scene_glb_mesh_payload
 from common.render import part_glb_path
 from common.step_scene import (
@@ -20,6 +21,7 @@ from common.step_scene import (
     mesh_step_scene,
     occurrence_selector_id,
     scene_occurrence_shape,
+    _shape_hash,
 )
 from common.tests.cad_test_roots import IsolatedCadRoots
 
@@ -35,14 +37,35 @@ def _pad4(payload: bytes, *, byte: bytes = b"\0") -> bytes:
 
 def _write_topology_glb(path: Path, manifest: dict[str, object]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    manifest_payload = json.dumps({"schemaVersion": 1, "profile": "index", **manifest}, separators=(",", ":")).encode("utf-8")
-    binary = _pad4(manifest_payload)
+    manifest_payload = json.dumps({"schemaVersion": STEP_TOPOLOGY_SCHEMA_VERSION, "profile": "index", **manifest}, separators=(",", ":")).encode("utf-8")
+    display_manifest_payload = json.dumps(
+        {
+            "schemaVersion": STEP_TOPOLOGY_SCHEMA_VERSION,
+            "profile": "surface-edges",
+            "stepHash": "",
+            "halfEdgesView": "surfaceHalfEdges",
+            "buffers": {"views": {"surfaceHalfEdges": {"dtype": "uint32", "bufferView": 1, "byteOffset": 0, "byteLength": 0, "count": 0, "itemSize": 4}}},
+        },
+        separators=(",", ":"),
+    ).encode("utf-8")
+    display_offset = len(_pad4(manifest_payload))
+    binary = _pad4(manifest_payload) + _pad4(display_manifest_payload)
     gltf = {
         "asset": {"version": "2.0"},
         "buffers": [{"byteLength": len(binary)}],
-        "bufferViews": [{"buffer": 0, "byteOffset": 0, "byteLength": len(manifest_payload)}],
+        "bufferViews": [
+            {"buffer": 0, "byteOffset": 0, "byteLength": len(manifest_payload)},
+            {"buffer": 0, "byteOffset": display_offset, "byteLength": len(display_manifest_payload)},
+        ],
         "extensionsUsed": ["STEP_topology"],
-        "extensions": {"STEP_topology": {"schemaVersion": 1, "indexView": 0, "encoding": "utf-8"}},
+        "extensions": {
+            "STEP_topology": {
+                "schemaVersion": STEP_TOPOLOGY_SCHEMA_VERSION,
+                "indexView": 0,
+                "edgeView": 1,
+                "encoding": "utf-8",
+            }
+        },
     }
     json_chunk = _pad4(json.dumps(gltf, separators=(",", ":")).encode("utf-8"), byte=b" ")
     path.write_bytes(
@@ -84,7 +107,7 @@ class AssemblyExportTests(unittest.TestCase):
         left.label = "left"
         right = build123d.Box(1, 1, 1).moved(build123d.Location((10, 0, 0)))
         right.label = "right"
-        module = build123d.Compound(obj=[left, right], children=[left, right], label="native_module")
+        module = build123d.Compound(children=[left, right], label="native_module")
         build123d.export_step(module, step_path)
         if write_topology:
             _write_topology_glb(part_glb_path(step_path), {"assembly": {"root": {"children": [{}]}}})
@@ -290,7 +313,7 @@ class AssemblyExportTests(unittest.TestCase):
     def test_cached_compound_copy_preserves_parent_transform(self) -> None:
         leaf = build123d.Box(1, 1, 1)
         leaf.label = "leaf"
-        compound = build123d.Compound(obj=[leaf], children=[leaf], label="module")
+        compound = build123d.Compound(children=[leaf], label="module")
         moved = compound.moved(build123d.Location((10, 0, 0)))
 
         copied = assembly_export_module._copy_cached_shape_tree(moved)
@@ -313,6 +336,49 @@ class AssemblyExportTests(unittest.TestCase):
 
         self.assertEqual(1, iter_cad_sources.call_count)
         self.assertEqual(["leaf_a", "leaf_b"], [child.label for child in assembly.children])
+
+    def test_direct_writer_reuses_quantity_colors_for_tuple_rgba(self) -> None:
+        assembly_spec = self._assembly_spec()
+        writer = assembly_export_module._DirectXcafAssemblyWriter(assembly_spec, label="assembly")
+        captured_colors: list[object] = []
+
+        class FakeColorTool:
+            def SetColor(self, label, wrapped, color_type):
+                captured_colors.append(wrapped)
+
+        writer.color_tool = FakeColorTool()
+
+        writer._set_label_color(object(), (0.1, 0.2, 0.3, 1.0))
+        writer._set_label_color(object(), (0.1, 0.2, 0.3, 1.0))
+
+        self.assertEqual(2, len(captured_colors))
+        self.assertIs(captured_colors[0], captured_colors[1])
+
+    def test_direct_writer_applies_step_scene_face_colors_to_prototype_shapes(self) -> None:
+        assembly_spec = self._assembly_spec()
+        writer = assembly_export_module._DirectXcafAssemblyWriter(assembly_spec, label="assembly")
+        captured_colors: list[object] = []
+
+        class FakeColorTool:
+            def SetColor(self, label, wrapped, color_type):
+                captured_colors.append(wrapped)
+
+        writer.color_tool = FakeColorTool()
+        shape = build123d.Box(1, 1, 1).wrapped
+        shape_label = writer.shape_tool.AddShape(shape, False)
+        face_hashes = []
+        from OCP.TopAbs import TopAbs_FACE
+        from OCP.TopExp import TopExp_Explorer
+        from OCP.TopoDS import TopoDS
+
+        explorer = TopExp_Explorer(shape, TopAbs_FACE)
+        while explorer.More():
+            face_hashes.append(_shape_hash(TopoDS.Face_s(explorer.Current())))
+            explorer.Next()
+
+        writer._set_shape_face_colors(shape_label, shape, {face_hashes[0]: (0.0, 0.0, 1.0, 1.0)})
+
+        self.assertEqual(1, len(captured_colors))
 
 
 if __name__ == "__main__":

@@ -14,7 +14,7 @@ Create or update this ledger before writing SDF XML. The ledger can live in the 
 | Units | meters, kilograms, seconds, radians unless documented otherwise |
 | Coordinate convention | REP-103-like / simulator-specific / documented exception |
 | World support needed | yes/no; reason |
-| Optional external checks | `gz sdf --check`, simulator load, CAD Explorer, other |
+| Optional external checks | `gz sdf --check`, simulator load, CAD Viewer, other |
 
 ## Model or world scope
 

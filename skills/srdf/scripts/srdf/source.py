@@ -7,7 +7,8 @@ from typing import Literal
 import xml.etree.ElementTree as ET
 
 SRDF_SUFFIX = ".srdf"
-EXPLORER_NAMESPACE = "https://text-to-cad.dev/explorer"
+SRDF_METADATA_NAMESPACE = "https://text-to-cad.dev/srdf"
+LEGACY_EXPLORER_NAMESPACE = "https://text-to-cad.dev/explorer"
 
 
 class SrdfSourceError(ValueError):
@@ -101,7 +102,7 @@ def parse_srdf_root(root: ET.Element, *, source_path: Path) -> SrdfSource:
     robot_name = str(root.attrib.get("name") or "").strip()
     if not robot_name:
         raise SrdfSourceError(f"{_relative_to_repo(source_path)} robot name is required")
-    urdf_ref = _explorer_urdf_ref(root)
+    urdf_ref = _linked_urdf_ref(root)
 
     planning_groups: list[SrdfPlanningGroup] = []
     group_names: list[str] = []
@@ -216,11 +217,17 @@ def _local_name(tag: str) -> str:
     return str(tag or "").rsplit("}", 1)[-1].split(":", 1)[-1]
 
 
-def _explorer_urdf_ref(root: ET.Element) -> str:
+def _linked_urdf_ref(root: ET.Element) -> str:
     for child in list(root):
         if _local_name(child.tag) != "urdf":
             continue
-        if str(child.tag or "").startswith(f"{{{EXPLORER_NAMESPACE}}}") or str(child.tag or "").startswith("explorer:"):
+        tag = str(child.tag or "")
+        if (
+            tag.startswith(f"{{{SRDF_METADATA_NAMESPACE}}}")
+            or tag.startswith(f"{{{LEGACY_EXPLORER_NAMESPACE}}}")
+            or tag.startswith("tcad:")
+            or tag.startswith("explorer:")
+        ):
             return str(child.attrib.get("path") or "").strip()
     return ""
 

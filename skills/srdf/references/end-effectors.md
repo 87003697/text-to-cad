@@ -1,6 +1,6 @@
 # SRDF end effectors
 
-Use this reference when creating or editing `<end_effector>` entries or preparing MoveIt2 pose-target handoffs for `$render`.
+Use this reference when creating or editing `<end_effector>` entries or preparing MoveIt2 pose-target handoffs for `$cad-viewer`.
 
 ## Concept
 
@@ -45,9 +45,9 @@ Before generation:
 
 The current runtime enforces several of these checks, but target/TCP choice remains a semantic decision. Do not rely on inference when planning to a tool center point.
 
-## CAD Explorer MoveIt2 target link
+## CAD Viewer MoveIt2 target link
 
-When handing an SRDF to `$render` for optional MoveIt2 controls, make the intended target link explicit when possible:
+When handing an SRDF to `$cad-viewer` for optional MoveIt2 controls, make the intended target link explicit when possible:
 
 ```json
 {
@@ -70,4 +70,4 @@ When handing an SRDF to `$render` for optional MoveIt2 controls, make the intend
 }
 ```
 
-Use position-only IK only when orientation is intentionally unconstrained. CAD Explorer owns the local MoveIt2 server startup and protocol details.
+Use position-only IK only when orientation is intentionally unconstrained. CAD Viewer owns the local MoveIt2 server startup and protocol details.

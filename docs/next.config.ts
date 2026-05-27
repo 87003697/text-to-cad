@@ -2,7 +2,7 @@ import type { NextConfig } from "next";
 import path from "node:path";
 
 const repoRoot = path.resolve(process.cwd(), "..");
-const renderViewerRoot = path.join(repoRoot, "skills/render/scripts/viewer");
+const cadJsPackageRoot = path.join(repoRoot, "packages/cadjs/src");
 const docsThreeRoot = "./node_modules/three";
 const docsThreeExamplesRoot = "./node_modules/three/examples";
 const docsGltfLoader =
@@ -24,7 +24,7 @@ const nextConfig: NextConfig = {
   turbopack: {
     root: repoRoot,
     resolveAlias: {
-      "@render-viewer": renderViewerRoot,
+      "cadjs": cadJsPackageRoot,
       three: docsThreeRoot,
       "three/examples": docsThreeExamplesRoot,
       "three/examples/jsm/loaders/GLTFLoader.js": docsGltfLoader,

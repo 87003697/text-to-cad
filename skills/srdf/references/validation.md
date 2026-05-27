@@ -2,7 +2,7 @@
 
 Generation validates every `gen_srdf()` result against its linked URDF before writing. This catches many planning-semantics errors, but it is not a substitute for MoveIt Setup Assistant, MoveIt runtime tests, or collision-matrix sampling.
 
-Generated or modified `.srdf` files should be handed to `$render` for live viewer links when available. Use `$render` still snapshots for visual feedback instead of manual viewer or Playwright inspection.
+Generated or modified `.srdf` files should be handed to `$cad-viewer` for live viewer links when available.
 
 ## Current generation-time checks
 
@@ -13,7 +13,7 @@ The current runtime checks that:
 - the URDF path is relative to the generator source, uses POSIX separators, ends in `.urdf`, and exists;
 - SRDF XML parses and has root `<robot name="...">`;
 - SRDF robot name matches the URDF robot name;
-- local `explorer:urdf` metadata is injected or updated and matches the linked URDF path relative to the generated SRDF;
+- local `tcad:urdf` metadata is injected or updated and matches the linked URDF path relative to the generated SRDF; legacy `explorer:urdf` metadata remains readable;
 - at least one planning group exists;
 - planning groups are named and unique;
 - each planning group defines joints, links, chains, or subgroups;
@@ -30,14 +30,14 @@ The current runtime checks that:
 - disabled collision pairs have distinct links, valid link references, non-empty reasons, and no reversed duplicates;
 - many manually reasoned disabled collision pairs trigger a warning.
 
-## Optional CAD Explorer MoveIt2 checks
+## Optional CAD Viewer MoveIt2 checks
 
-When `$render` starts its local MoveIt2 server for SRDF review, the server additionally checks:
+When `$cad-viewer` starts its local MoveIt2 server for SRDF review, the server additionally checks:
 
 - request `protocolVersion`;
 - request type;
 - repository-relative SRDF path and traversal safety;
-- linked URDF path from `explorer:urdf` metadata;
+- linked URDF path from `tcad:urdf` metadata;
 - planning group selection;
 - target frame and target link existence;
 - target orientation shape and quaternion normalization;
@@ -106,10 +106,9 @@ Use a compact report:
 Checks run:
 - SRDF generation validation: passed
 - linked URDF validation: previously passed with URDF skill
-- render viewer link: returned
-- render snapshot: skipped, no visual ambiguity
+- CAD Viewer link: returned
 - MoveIt Setup Assistant review: skipped, unavailable
-- CAD Explorer MoveIt2 IK smoke test: passed for manipulator/tool0
+- CAD Viewer MoveIt2 IK smoke test: passed for manipulator/tool0
 - collision matrix sampling: skipped, no MoveIt environment
 
 Assumptions:

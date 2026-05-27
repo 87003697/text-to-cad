@@ -1,6 +1,6 @@
 ---
 name: srdf
-description: MoveIt2 SRDF generation, validation, and planning-semantics workflow. Use when creating, editing, regenerating, inspecting, or validating `.srdf` files, `gen_srdf()` sources, MoveIt planning groups, virtual joints, passive joints, end effectors, group states, disabled collisions, URDF-linked planning semantics, or SRDF handoff to CAD Explorer review. Use the URDF skill for robot structure, the SDF skill for simulator descriptions, and the render skill for rendering, Explorer links, and optional MoveIt2 controls.
+description: MoveIt2 SRDF generation, validation, and planning-semantics workflow. Use when creating, editing, regenerating, inspecting, or validating `.srdf` files, `gen_srdf()` sources, MoveIt planning groups, virtual joints, passive joints, end effectors, group states, disabled collisions, URDF-linked planning semantics, or SRDF handoff for live review. Use the URDF skill for robot structure, the SDF skill for simulator descriptions, and the cad-viewer skill for rendering, live review links, and optional MoveIt2 controls.
 ---
 
 # SRDF
@@ -17,7 +17,9 @@ SRDF correctness is a **planning semantics** problem. The common failure is not 
 
 Do not place geometry, inertials, joint origins, link poses, mesh references, physical joint limits, transmissions, or `ros2_control` interfaces in SRDF.
 
-After creating or modifying generated `.srdf` files, hand the explicit output path to `$render` when that skill is available; `$render` checks/reuses a live viewer and returns a link. If the user needs interactive IK or path-planning controls, make that part of the `$render` handoff; CAD Explorer owns the local `moveit2_server` setup and runtime.
+## CAD Viewer Handoff
+
+After completing SRDF work that creates or modifies a `.srdf`, you must ALWAYS hand the explicit file path to `$cad-viewer` when that skill is installed. `$cad-viewer` must start CAD Viewer if it is not already running and return link(s) to the relevant created or updated file(s); include optional MoveIt2 controls in the handoff only when the user needs interactive IK or path-planning review. If `$cad-viewer` is unavailable or startup fails, report that instead of silently omitting the handoff.
 
 ## Required workflow
 
@@ -30,12 +32,12 @@ After creating or modifying generated `.srdf` files, hand the explicit output pa
 7. **Define group states in URDF-native units.** Revolute and continuous values are radians; prismatic values are meters. Do not store degrees in SRDF.
 8. **Generate disabled collisions from evidence.** Use adjacency, MoveIt Setup Assistant sampling, or explicit user-provided collision matrices. Do not invent broad disable lists.
 9. **Regenerate only explicit SRDF targets.** Generation validates the generated SRDF against the linked URDF before writing.
-10. **Run MoveIt smoke tests when available.** Use MoveIt Setup Assistant or a project MoveIt launch directly. For local Explorer-based IK/path planning, hand the SRDF to `$render`; it owns `moveit2_server` startup and URL wiring.
-11. **Hand off generated artifacts for review.** After creating or modifying generated `.srdf` files, pass the explicit file path to `$render` for live viewer links when available.
-12. **Use snapshots for visual feedback.** Prefer `$render` snapshots over opening the viewer manually or using Playwright. Use still snapshots only; SRDF review should not generate GIFs.
-13. **Report assumptions and skipped checks.** Include incomplete validation, missing MoveIt environment, skipped `$render` handoff/viewer checks, manually reasoned collision disables, and inferred target links.
+10. **Run MoveIt smoke tests when available.** Use MoveIt Setup Assistant or a project MoveIt launch directly.
+11. **Report assumptions and skipped checks.** Include incomplete validation, missing MoveIt environment, manually reasoned collision disables, and inferred target links.
 
 ## Commands
+
+Run with the Python environment for the project or workspace. Treat `python` in examples as an interpreter placeholder; if bare `python` is unavailable, substitute `python3`, a project virtualenv interpreter, or the configured interpreter path.
 
 From this skill directory, the SRDF launcher shape is:
 
@@ -47,8 +49,6 @@ python scripts/srdf path/to/a.py=out/a.srdf path/to/b.py=out/b.srdf
 
 Relative source targets and CLI output overrides are resolved from the current working directory. When running from outside this skill directory, prefix the launcher path so target files still resolve from the intended workspace.
 
-For GUI/rendering review, do not start Explorer from this skill. Hand generated or modified `.srdf` files to `$render` with explicit paths; `$render` owns viewer liveness checks and links. Request optional MoveIt2 controls only when the user needs IK or path-planning review; `$render` owns the server commands and environment guidance.
-
 ## Hard rules
 
 - SRDF must reference an existing valid URDF.
@@ -56,8 +56,8 @@ For GUI/rendering review, do not start Explorer from this skill. Hand generated 
 - Group states use URDF-native units: radians for revolute/continuous, meters for prismatic.
 - Disabled collision pairs require truthful reasons and provenance.
 - End-effector groups should not share links with their parent planning group.
-- `$render` owns CAD Explorer links and the local `moveit2_server`; SRDF should hand off explicit generated/modified `.srdf` paths rather than starting GUI services itself.
-- CAD Explorer or visual rendering review is useful but cannot prove planning correctness.
+- `$cad-viewer` owns optional local `moveit2_server` guidance for interactive planning review.
+- Visual rendering review is useful but cannot prove planning correctness.
 
 ## References
 
@@ -70,4 +70,4 @@ For GUI/rendering review, do not start Explorer from this skill. Hand generated 
 - Disabled collisions: `references/disabled-collisions.md`
 - Runtime notes and current limitations: `references/implementation-notes.md`
 
-For CAD Explorer links or local MoveIt2 controls, use `$render`; in that skill, read `references/moveit2-server.md`.
+For local MoveIt2 controls, use `$cad-viewer`; in that skill, read `references/moveit2-server.md`.

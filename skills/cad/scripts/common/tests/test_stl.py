@@ -6,10 +6,10 @@ from common import render as cad_render
 from common.tests.cad_test_roots import IsolatedCadRoots
 
 
-class CadgenRenderTests(unittest.TestCase):
+class CadpyRenderTests(unittest.TestCase):
     def setUp(self) -> None:
-        self._isolated_roots = IsolatedCadRoots(self, prefix="cad-render-")
-        tempdir = self._isolated_roots.temporary_cad_directory(prefix="tmp-cad-render-")
+        self._isolated_roots = IsolatedCadRoots(self, prefix="cadjs-")
+        tempdir = self._isolated_roots.temporary_cad_directory(prefix="tmp-cadjs-")
         self._tempdir = tempdir
         self.temp_root = Path(tempdir.name)
         self.relative_dir = self.temp_root.relative_to(cad_render.CAD_ROOT).as_posix()

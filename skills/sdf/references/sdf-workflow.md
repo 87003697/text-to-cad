@@ -13,10 +13,9 @@ Use this reference when editing SDF robot model structure, world structure, mesh
 7. Edit the generator source.
 8. Regenerate only the explicit target.
 9. Review bundled validation errors as structural guardrails, not exhaustive simulator proof.
-10. Hand generated or modified `.sdf` files to `$render` for live viewer links when available.
-11. For visual feedback, prefer `$render` snapshots over opening the viewer manually or using Playwright.
-12. Run available smoke tests.
-13. Report assumptions and skipped checks.
+10. Hand generated or modified `.sdf` files to `$cad-viewer` for live viewer links when available.
+11. Run available smoke tests.
+12. Report assumptions and skipped checks.
 
 ## Model vs world
 
@@ -67,7 +66,7 @@ For plugins and sensors, record:
 
 Do not invent plugin parameters. Incorrect plugin XML can pass lightweight validation and still fail at simulator load time.
 
-CAD Explorer reviews SDF files as static model/world structure through `$render` links and still snapshots. Do not add Explorer-only motion plugins; use simulator-native controllers, plugins, or test harnesses for simulator behavior.
+CAD Viewer reviews SDF files as static model/world structure through `$cad-viewer` links. Do not add Explorer-only motion plugins; use simulator-native controllers, plugins, or test harnesses for simulator behavior.
 
 ## Existing SDF inspection
 

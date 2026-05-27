@@ -22,12 +22,12 @@ The tool:
 1. imports the target Python source;
 2. calls `gen_srdf()`;
 3. resolves the linked URDF path relative to the generator source file;
-4. injects or updates local `explorer:urdf` metadata so downstream tools can find the URDF;
+4. injects or updates local `tcad:urdf` metadata so downstream tools can find the URDF;
 5. parses the generated SRDF;
 6. validates the SRDF against the linked URDF;
 7. writes the requested `.srdf` only after validation passes.
 
-There is no hidden SRDF artifact. The generated `.srdf` is the MoveIt inventory handed to `$render` for a live CAD Explorer link and optional MoveIt2 controls.
+There is no hidden SRDF artifact. The generated `.srdf` is the MoveIt inventory handed to `$cad-viewer` for a live CAD Viewer link and optional MoveIt2 controls.
 
 ## Execution safety
 

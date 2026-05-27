@@ -1,6 +1,19 @@
 # CAD parameters
 
-Read this file when designing or reviewing CAD source parameters, STEP sidecar parameters, Explorer controls, or animation controls.
+Read this file when designing or reviewing CAD source parameters, STEP sidecar parameters, CAD Viewer controls, or animation controls.
+
+## Contents
+
+- Principle
+- Parameter Brief
+- Naming
+- Defaults And Bounds
+- Derive, Do Not Drift
+- Features And Refs
+- Animations
+- Controls
+- Validation
+- Common Failure Patterns
 
 ## Principle
 
@@ -75,7 +88,7 @@ Animation parameters should drive the smallest real degrees of freedom and deriv
 - Preserve source STEP/GLB material colors by default. Only override colors, add color controls, or assign viewer-time color styles when the user explicitly asks for recoloring, presentation styling, or diagnostic color coding.
 - Use comments for non-obvious kinematic choices, especially branch selection, sign conventions, datum origin, and derived ratios.
 
-For STEP sidecars, use JavaScript for live Explorer interaction and Three.js hooks. Use Python/build123d as the source of truth for regenerating geometry. Python may generate `.step.js` modules, but Explorer controls should not imply regeneration unless that workflow exists.
+For STEP sidecars, use JavaScript for live CAD Viewer interaction and Three.js hooks. Use Python/build123d as the source of truth for regenerating geometry. Python may generate `.step.js` modules, but CAD Viewer controls should not imply regeneration unless that workflow exists.
 
 ## Controls
 
@@ -106,12 +119,12 @@ Use deterministic checks first:
 - `scripts/inspect frame`, `measure`, or `mate` for pivots, axes, mating faces, and distances.
 - Source-level assertions for derived dimensions or joint limits when practical.
 
-Use CAD Explorer and render review for visual semantics:
+Use CAD Viewer links and CAD `scripts/snapshot` review for visual semantics:
 
-- Use `$render` snapshots to review several parameter poses, not manual viewer or Playwright inspection.
+- Use CAD `scripts/snapshot` to review several parameter poses, not manual viewer or Playwright inspection.
 - Compare sidecar enabled vs disabled when viewer-time presentation is involved.
 - Check for disconnected hinges, drifting pivots, collisions, impossible branch blends, and looping jumps.
-- Generate GIFs only when reviewing STEP-module parameter animation; otherwise use still snapshots.
+- Use PNGs for static parameter reviews and GIFs for motion/animation reviews.
 - Convert visual concerns into measurements or explicit geometric facts before calling them fixed.
 
 ## Common Failure Patterns

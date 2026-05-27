@@ -9,9 +9,23 @@ from dataclasses import dataclass
 from pathlib import Path
 import xml.etree.ElementTree as ET
 
+SCRIPTS_DIR = Path(__file__).resolve().parents[1]
 if __package__ in {None, ""}:
-    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+    sys.path.insert(0, str(SCRIPTS_DIR))
 
+PACKAGES_DIR = SCRIPTS_DIR / "packages"
+CADPY_METADATA_SRC_DIR = PACKAGES_DIR / "cadpy_metadata" / "src"
+if str(PACKAGES_DIR) not in sys.path:
+    sys.path.insert(0, str(PACKAGES_DIR))
+if str(CADPY_METADATA_SRC_DIR) not in sys.path:
+    sys.path.insert(0, str(CADPY_METADATA_SRC_DIR))
+
+from cadpy_metadata import (
+    GenerationOutput,
+    python_source_identity,
+    track_generation_run,
+    xml_with_text_to_cad_metadata,
+)
 from urdf.source import read_urdf_source
 
 
@@ -116,6 +130,16 @@ def _generate_target(script_path: Path, *, output_path: Path) -> Path:
     if not script_path.is_file():
         raise FileNotFoundError(f"Python source not found: {_display_path(script_path)}")
 
+    with track_generation_run(
+        source_path=script_path,
+        generator="gen_urdf",
+        outputs=[GenerationOutput(output_path, "urdf")],
+    ):
+        return _generate_target_inner(script_path, output_path=output_path)
+
+
+def _generate_target_inner(script_path: Path, *, output_path: Path) -> Path:
+
     module = _load_generator_module(script_path)
     generator = getattr(module, "gen_urdf", None)
     if not callable(generator):
@@ -189,6 +213,8 @@ def _write_urdf_payload(payload: dict[str, object], *, output_path: Path, script
             f"got {type(xml).__name__}"
         )
     output_path.parent.mkdir(parents=True, exist_ok=True)
+    identity = python_source_identity(script_path)
+    xml = xml_with_text_to_cad_metadata(xml, identity)
     text = xml if xml.endswith("\n") else xml + "\n"
     output_path.write_text(text, encoding="utf-8")
     print(f"Wrote URDF: {output_path}")

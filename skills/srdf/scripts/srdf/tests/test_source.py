@@ -8,8 +8,8 @@ from srdf.source import SrdfSourceError, read_srdf_source
 
 
 SAMPLE_SRDF = """\
-<robot name="sample" xmlns:explorer="https://text-to-cad.dev/explorer">
-  <explorer:urdf path="robot.urdf"/>
+<robot name="sample" xmlns:tcad="https://text-to-cad.dev/srdf">
+  <tcad:urdf path="robot.urdf"/>
   <group name="arm">
     <joint name="shoulder"/>
     <joint name="elbow"/>
@@ -25,6 +25,11 @@ SAMPLE_SRDF = """\
   <disable_collisions link1="base" link2="shoulder_link" reason="Adjacent"/>
 </robot>
 """
+
+LEGACY_SAMPLE_SRDF = SAMPLE_SRDF.replace(
+    'xmlns:tcad="https://text-to-cad.dev/srdf"',
+    'xmlns:explorer="https://text-to-cad.dev/explorer"',
+).replace("tcad:urdf", "explorer:urdf")
 
 
 class SrdfSourceTests(unittest.TestCase):
@@ -42,6 +47,15 @@ class SrdfSourceTests(unittest.TestCase):
             self.assertEqual(source.end_effectors[0].name, "tcp")
             self.assertEqual(source.group_states[0].joint_values_by_name_rad["elbow"], 1.57)
             self.assertEqual(source.disabled_collision_pairs[0].reason, "Adjacent")
+
+    def test_reads_legacy_explorer_urdf_metadata(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="tmp-srdf-source-") as tempdir:
+            srdf_path = Path(tempdir) / "robot.srdf"
+            srdf_path.write_text(LEGACY_SAMPLE_SRDF, encoding="utf-8")
+
+            source = read_srdf_source(srdf_path)
+
+            self.assertEqual(source.urdf_ref, "robot.urdf")
 
     def test_rejects_non_robot_root(self) -> None:
         with tempfile.TemporaryDirectory(prefix="tmp-srdf-source-") as tempdir:

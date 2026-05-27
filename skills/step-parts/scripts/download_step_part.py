@@ -7,6 +7,7 @@ import argparse
 import hashlib
 import json
 import sys
+import tempfile
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -15,7 +16,7 @@ from typing import Any
 
 
 DEFAULT_ORIGIN = "https://api.step.parts"
-DEFAULT_OUT_DIR = "/tmp/step-parts"
+DEFAULT_OUT_DIR = tempfile.gettempdir()
 USER_AGENT = "step-parts-skill/1.0"
 
 
@@ -32,7 +33,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--origin", default=DEFAULT_ORIGIN, help=f"API origin. Default: {DEFAULT_ORIGIN}")
     parser.add_argument("--download", action="store_true", help="Download the selected STEP file.")
     parser.add_argument("--all", action="store_true", help="With --download, download every result on the returned page.")
-    parser.add_argument("--out-dir", default=DEFAULT_OUT_DIR, help=f"Directory for downloaded STEP files. Default: {DEFAULT_OUT_DIR}")
+    parser.add_argument("--out-dir", default=DEFAULT_OUT_DIR, help="Directory for downloaded STEP files. Default: active temp directory.")
     parser.add_argument("--filename", help="Filename to use when downloading one selected part.")
     parser.add_argument("--overwrite", action="store_true", help="Overwrite an existing downloaded file.")
     parser.add_argument("--limit", type=int, default=10, help="Search page size. The API caps this at 500.")

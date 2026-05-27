@@ -12,10 +12,24 @@ from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 import xml.etree.ElementTree as ET
 
+SCRIPTS_DIR = Path(__file__).resolve().parents[1]
 if __package__ in {None, ""}:
-    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+    sys.path.insert(0, str(SCRIPTS_DIR))
 
-from srdf.source import EXPLORER_NAMESPACE, SrdfSource, SrdfSourceError, parse_srdf_xml
+PACKAGES_DIR = SCRIPTS_DIR / "packages"
+CADPY_METADATA_SRC_DIR = PACKAGES_DIR / "cadpy_metadata" / "src"
+if str(PACKAGES_DIR) not in sys.path:
+    sys.path.insert(0, str(PACKAGES_DIR))
+if str(CADPY_METADATA_SRC_DIR) not in sys.path:
+    sys.path.insert(0, str(CADPY_METADATA_SRC_DIR))
+
+from cadpy_metadata import (
+    GenerationOutput,
+    python_source_identity,
+    track_generation_run,
+    xml_with_text_to_cad_metadata,
+)
+from srdf.source import LEGACY_EXPLORER_NAMESPACE, SRDF_METADATA_NAMESPACE, SrdfSource, SrdfSourceError, parse_srdf_xml
 
 
 @dataclass(frozen=True)
@@ -119,6 +133,16 @@ def _generate_target(script_path: Path, *, output_path: Path) -> Path:
     if not script_path.is_file():
         raise FileNotFoundError(f"Python source not found: {_display_path(script_path)}")
 
+    with track_generation_run(
+        source_path=script_path,
+        generator="gen_srdf",
+        outputs=[GenerationOutput(output_path, "srdf")],
+    ):
+        return _generate_target_inner(script_path, output_path=output_path)
+
+
+def _generate_target_inner(script_path: Path, *, output_path: Path) -> Path:
+
     module = _load_generator_module(script_path)
     generator = getattr(module, "gen_srdf", None)
     if not callable(generator):
@@ -130,14 +154,14 @@ def _generate_target(script_path: Path, *, output_path: Path) -> Path:
     xml = str(payload["xml"])
     urdf_path = _resolve_relative_file(payload["urdf"], source_path=script_path, suffix=".urdf", label="urdf")
     urdf_robot = _read_urdf_robot(urdf_path)
-    xml = _xml_with_explorer_urdf(xml, output_path=output_path, urdf_path=urdf_path)
+    xml = _xml_with_linked_urdf_metadata(xml, output_path=output_path, urdf_path=urdf_path)
     srdf_source = parse_srdf_xml(xml, source_path=output_path)
-    _validate_explorer_urdf_ref(
+    _validate_linked_urdf_ref(
         srdf_source,
         expected_urdf_ref=_relative_posix_path(urdf_path, output_path.parent),
     )
     _validate_srdf_against_urdf(srdf_source, urdf_robot=urdf_robot)
-    _write_srdf_payload(xml, output_path=output_path)
+    _write_srdf_payload(xml, output_path=output_path, script_path=script_path)
     if not output_path.exists():
         raise RuntimeError(f"{_display_path(script_path)} did not write {_display_path(output_path)}")
     return output_path
@@ -573,13 +597,13 @@ def _warn_on_many_manual_disabled_pairs(pairs: object) -> None:
         )
 
 
-def _validate_explorer_urdf_ref(srdf_source: SrdfSource, *, expected_urdf_ref: str) -> None:
+def _validate_linked_urdf_ref(srdf_source: SrdfSource, *, expected_urdf_ref: str) -> None:
     urdf_ref = str(srdf_source.urdf_ref or "").strip()
     if not urdf_ref:
-        raise SrdfSourceError("SRDF must include <explorer:urdf path=\"...\"/> metadata")
+        raise SrdfSourceError("SRDF must include <tcad:urdf path=\"...\"/> metadata")
     if PurePosixPath(urdf_ref) != PurePosixPath(expected_urdf_ref):
         raise SrdfSourceError(
-            f"SRDF explorer:urdf path {urdf_ref!r} must match gen_srdf() envelope urdf {expected_urdf_ref!r}"
+            f"SRDF tcad:urdf path {urdf_ref!r} must match gen_srdf() envelope urdf {expected_urdf_ref!r}"
         )
 
 
@@ -587,28 +611,32 @@ def _relative_posix_path(target_path: Path, start_dir: Path) -> str:
     return Path(os.path.relpath(Path(target_path).resolve(), Path(start_dir).resolve())).as_posix()
 
 
-def _xml_with_explorer_urdf(xml: str, *, output_path: Path, urdf_path: Path) -> str:
+def _xml_with_linked_urdf_metadata(xml: str, *, output_path: Path, urdf_path: Path) -> str:
     try:
         root = ET.fromstring(xml)
     except ET.ParseError as exc:
         raise SrdfSourceError(f"{_display_path(output_path)} could not be parsed as SRDF XML") from exc
     if root.tag != "robot":
         raise SrdfSourceError(f"{_display_path(output_path)} root element must be <robot>")
-    ET.register_namespace("explorer", EXPLORER_NAMESPACE)
-    explorer_tag = f"{{{EXPLORER_NAMESPACE}}}urdf"
-    explorer_element = None
+    ET.register_namespace("tcad", SRDF_METADATA_NAMESPACE)
+    ET.register_namespace("explorer", LEGACY_EXPLORER_NAMESPACE)
+    metadata_tag = f"{{{SRDF_METADATA_NAMESPACE}}}urdf"
+    legacy_metadata_tag = f"{{{LEGACY_EXPLORER_NAMESPACE}}}urdf"
+    metadata_element = None
     for child in list(root):
-        if child.tag == explorer_tag or str(child.tag or "").endswith("}urdf") or str(child.tag or "") == "explorer:urdf":
-            explorer_element = child
+        if child.tag in {metadata_tag, legacy_metadata_tag} or str(child.tag or "") in {"tcad:urdf", "explorer:urdf"}:
+            metadata_element = child
             break
-    if explorer_element is None:
-        explorer_element = ET.Element(explorer_tag)
-        root.insert(0, explorer_element)
-    explorer_element.set("path", _relative_posix_path(urdf_path, output_path.parent))
+    if metadata_element is None:
+        metadata_element = ET.Element(metadata_tag)
+        root.insert(0, metadata_element)
+    else:
+        metadata_element.tag = metadata_tag
+    metadata_element.set("path", _relative_posix_path(urdf_path, output_path.parent))
     if root.text is None:
         root.text = "\n  "
-    if explorer_element.tail is None:
-        explorer_element.tail = "\n  "
+    if metadata_element.tail is None:
+        metadata_element.tail = "\n  "
     return _serialize_xml_element(root)
 
 
@@ -618,8 +646,9 @@ def _validate_names_exist(names: object, allowed: set[str], *, label: str) -> No
             raise SrdfSourceError(f"{label} references missing name {name!r}")
 
 
-def _write_srdf_payload(xml: str, *, output_path: Path) -> None:
+def _write_srdf_payload(xml: str, *, output_path: Path, script_path: Path) -> None:
     output_path.parent.mkdir(parents=True, exist_ok=True)
+    xml = xml_with_text_to_cad_metadata(xml, python_source_identity(script_path))
     text = xml if xml.endswith("\n") else xml + "\n"
     output_path.write_text(text, encoding="utf-8")
     print(f"Wrote SRDF: {output_path}")

@@ -2,6 +2,21 @@
 
 Read this file when writing or repairing build123d Python source.
 
+## Contents
+
+- Modeling objective
+- Topology stack
+- Source envelope
+- Parameters first
+- Coordinate system
+- Builder contexts
+- Primitives
+- Feature operations
+- Selection practices
+- Assemblies and positioning
+- Labels and assemblies
+- Common failure modes
+
 ## Modeling objective
 
 Create a valid STEP-ready BREP model, not a visual mesh. Prefer closed solids, explicit labels, and stable parametric dimensions.

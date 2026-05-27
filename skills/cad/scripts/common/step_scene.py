@@ -1,19 +1,26 @@
 from __future__ import annotations
 
+from datetime import datetime, timezone
 import hashlib
+import json
 import math
+import os
+import shutil
+import tempfile
 import time
 from array import array
 from dataclasses import dataclass, field
+from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
 from OCP.BinXCAFDrivers import BinXCAFDrivers
 from OCP.Bnd import Bnd_Box
 from OCP.BRep import BRep_Builder, BRep_Tool
-from OCP.BRepAdaptor import BRepAdaptor_Curve, BRepAdaptor_Surface
+from OCP.BRepAdaptor import BRepAdaptor_Curve, BRepAdaptor_Curve2d, BRepAdaptor_Surface
 from OCP.BRepBndLib import BRepBndLib
 from OCP.BRepGProp import BRepGProp
+from OCP.BRepLProp import BRepLProp_SLProps
 from OCP.BRepMesh import BRepMesh_IncrementalMesh
 from OCP.GCPnts import GCPnts_QuasiUniformDeflection
 from OCP.GProp import GProp_GProps
@@ -35,8 +42,8 @@ from OCP.TopAbs import (
 )
 from OCP.TopExp import TopExp, TopExp_Explorer
 from OCP.TopLoc import TopLoc_Location
-from OCP.TopTools import TopTools_IndexedMapOfShape
-from OCP.TopoDS import TopoDS, TopoDS_Compound
+from OCP.TopTools import TopTools_FormatVersion, TopTools_IndexedMapOfShape
+from OCP.TopoDS import TopoDS, TopoDS_Compound, TopoDS_Shape
 from OCP.XCAFApp import XCAFApp_Application
 from OCP.XCAFDoc import (
     XCAFDoc_ColorCurv,
@@ -54,22 +61,38 @@ from common.glb_mesh_payload import (
     scene_glb_mesh_payload,
     transform_normal_from_occ as _transform_normal_from_occ,
 )
+from common.glb_topology import (
+    STEP_EDGE_DEFAULT_RENDER_VISIBILITY_CLASSES,
+    STEP_EDGE_FLAGS,
+    STEP_EDGE_VISIBILITY_CLASSES,
+    STEP_TOPOLOGY_EDGE_ANGULAR_TOLERANCE_DEG,
+    STEP_TOPOLOGY_EDGE_SAMPLE_COUNT,
+    STEP_TOPOLOGY_SCHEMA_VERSION,
+    is_displayable_step_edge_surface_class_code,
+    normalize_step_edge_render_visibility_classes,
+    step_edge_surface_class_code,
+    step_topology_capabilities,
+)
+from common.metadata import DEFAULT_MESH_ANGULAR_TOLERANCE, DEFAULT_MESH_TOLERANCE, MeshSettings
 from common.selector_types import SelectorBundle, SelectorProfile
 
 
 REPO_ROOT = Path.cwd().resolve()
 ColorRGBA = tuple[float, float, float, float]
+STEP_SCENE_CACHE_SCHEMA_VERSION = 1
 
 
 @dataclass(frozen=True)
 class SelectorOptions:
-    linear_deflection: float = 0.006
-    angular_deflection: float = 0.6
+    linear_deflection: float = DEFAULT_MESH_TOLERANCE
+    angular_deflection: float = DEFAULT_MESH_ANGULAR_TOLERANCE
     relative: bool = True
     edge_deflection: float | None = None
     edge_deflection_ratio: float = 0.00075
     max_edge_points: int = 96
     digits: int | None = 6
+    mesh_resolution: dict[str, Any] | None = None
+    edge_visibility_classes: tuple[str, ...] = STEP_EDGE_DEFAULT_RENDER_VISIBILITY_CLASSES
 
 
 @dataclass
@@ -82,10 +105,20 @@ class LoadedStepScene:
     prototype_face_colors: dict[int, dict[int, ColorRGBA]] = field(default_factory=dict)
     load_elapsed: float = 0.0
     step_hash: str | None = None
+    source_kind: str = "step"
+    source_path: str | None = None
+    source_hash: str | None = None
     mesh_signature: tuple[float, float, bool] | None = None
     glb_mesh_payloads: dict[tuple[object, ...], Any] = field(default_factory=dict)
     export_shape: Any | None = None
     doc: Any | None = None
+
+
+@dataclass(frozen=True)
+class AdaptiveMeshResolution:
+    settings: MeshSettings
+    profile: str
+    hints: dict[str, Any]
 
 
 @dataclass
@@ -102,11 +135,16 @@ class OccurrenceNode:
     row_index: int = -1
 
 
-def _enum_name(value: Any, prefix: str) -> str:
-    name = str(value).split(".")[-1]
+@lru_cache(maxsize=512)
+def _enum_name_from_text(text: str, prefix: str) -> str:
+    name = text.split(".")[-1]
     if name.startswith(prefix):
         return name[len(prefix) :].lower()
     return name.lower()
+
+
+def _enum_name(value: Any, prefix: str) -> str:
+    return _enum_name_from_text(str(value), prefix)
 
 
 def _round_value(value: float, digits: int | None) -> float:
@@ -116,11 +154,15 @@ def _round_value(value: float, digits: int | None) -> float:
 
 
 def _round_point(point: list[float] | tuple[float, float, float], digits: int | None) -> list[float]:
-    return [_round_value(point[0], digits), _round_value(point[1], digits), _round_value(point[2], digits)]
+    if digits is None:
+        return [float(point[0]), float(point[1]), float(point[2])]
+    return [round(float(point[0]), digits), round(float(point[1]), digits), round(float(point[2]), digits)]
 
 
 def _round_transform(matrix: tuple[float, ...], digits: int | None) -> list[float]:
-    return [_round_value(value, digits) for value in matrix]
+    if digits is None:
+        return [float(value) for value in matrix]
+    return [round(float(value), digits) for value in matrix]
 
 
 def _normalize(vector: tuple[float, float, float] | list[float]) -> list[float] | None:
@@ -150,6 +192,21 @@ def _distance(a: list[float], b: list[float]) -> float:
     dy = a[1] - b[1]
     dz = a[2] - b[2]
     return math.sqrt(dx * dx + dy * dy + dz * dz)
+
+
+def _triangle_side_key(left: int, right: int) -> tuple[int, int]:
+    a = max(0, int(left))
+    b = max(0, int(right))
+    return (a, b) if a < b else (b, a)
+
+
+def _angle_between_vectors_deg(left: list[float] | tuple[float, ...] | None, right: list[float] | tuple[float, ...] | None) -> float | None:
+    left_normal = _normalize(left or (0.0, 0.0, 0.0))
+    right_normal = _normalize(right or (0.0, 0.0, 0.0))
+    if left_normal is None or right_normal is None:
+        return None
+    dot = max(-1.0, min(1.0, sum(left_normal[index] * right_normal[index] for index in range(3))))
+    return math.degrees(math.acos(dot))
 
 
 def _bbox_from_points(points: list[list[float]]) -> dict[str, Any]:
@@ -476,14 +533,22 @@ def _extract_face_geometry(face: Any) -> dict[str, Any]:
     }
 
 
-def _extract_edge_points_from_face_mesh(edge: Any, face_mesh: dict[str, Any], max_points: int) -> list[list[float]]:
+def _edge_polygon_node_indices_from_face_mesh(edge: Any, face_mesh: dict[str, Any]) -> list[int]:
     triangulation = face_mesh["triangulation"]
     if triangulation is None:
         return []
     polygon = BRep_Tool.PolygonOnTriangulation_s(edge, triangulation, face_mesh["location"])
     if polygon is None:
         return []
-    points = [face_mesh["nodes"][polygon.Node(index) - 1] for index in range(1, polygon.NbNodes() + 1)]
+    return [int(polygon.Node(index)) - 1 for index in range(1, polygon.NbNodes() + 1)]
+
+
+def _edge_points_from_face_polygon(face_mesh: dict[str, Any], node_indices: list[int], max_points: int) -> list[list[float]]:
+    points = [
+        face_mesh["nodes"][node_index]
+        for node_index in node_indices
+        if 0 <= node_index < len(face_mesh["nodes"])
+    ]
     points = _dedupe_consecutive(points, 1e-9)
     if points and max_points > 1:
         points = _decimate_polyline(points, max_points)
@@ -537,12 +602,129 @@ def _edge_flags(edge_data: dict[str, Any]) -> int:
     if edge_data.get("closed", False):
         flags |= 1
     if edge_data.get("degenerated", False):
-        flags |= 2
+        flags |= STEP_EDGE_FLAGS["DEGENERATE"]
     if edge_data.get("seam", False):
-        flags |= 4
+        flags |= STEP_EDGE_FLAGS["SEAM"]
     if not edge_data.get("referenceable", True):
-        flags |= 8
+        flags |= STEP_EDGE_FLAGS["NOT_REFERENCEABLE"]
     return flags
+
+
+def _is_smooth_continuity(value: object) -> bool:
+    return str(value or "").lower() in {"g1", "c1", "g2", "c2", "c3", "cn"}
+
+
+def _edge_continuity_name(edge: Any, face_shapes: list[Any]) -> str:
+    if len(face_shapes) != 2:
+        return ""
+    try:
+        if not BRep_Tool.HasContinuity_s(edge, face_shapes[0], face_shapes[1]):
+            return ""
+        return _enum_name(BRep_Tool.Continuity_s(edge, face_shapes[0], face_shapes[1]), "GeomAbs_")
+    except Exception:
+        return ""
+
+
+def _face_normal_at_edge_fraction(edge: Any, face: Any, fraction: float) -> list[float] | None:
+    curve = BRepAdaptor_Curve2d(edge, face)
+    first = float(curve.FirstParameter())
+    last = float(curve.LastParameter())
+    if not math.isfinite(first) or not math.isfinite(last) or abs(last - first) <= 1e-12:
+        return None
+    uv = curve.Value(first + ((last - first) * fraction))
+    surface = BRepAdaptor_Surface(face, True)
+    props = BRepLProp_SLProps(surface, 1, 1e-6)
+    props.SetParameters(float(uv.X()), float(uv.Y()))
+    if not props.IsNormalDefined():
+        return None
+    normal = _point_from_occ(props.Normal())
+    if face.Orientation() == TopAbs_REVERSED:
+        normal = [-normal[0], -normal[1], -normal[2]]
+    return _normalize(normal)
+
+
+def _sampled_edge_dihedral_deg(edge: Any, face_shapes: list[Any], fallback_normals: list[list[float] | None]) -> float | None:
+    if len(face_shapes) != 2:
+        return None
+    max_angle: float | None = None
+    denominator = STEP_TOPOLOGY_EDGE_SAMPLE_COUNT + 1
+    for index in range(1, STEP_TOPOLOGY_EDGE_SAMPLE_COUNT + 1):
+        fraction = index / denominator
+        try:
+            left_normal = _face_normal_at_edge_fraction(edge, face_shapes[0], fraction)
+            right_normal = _face_normal_at_edge_fraction(edge, face_shapes[1], fraction)
+        except Exception:
+            left_normal = None
+            right_normal = None
+        angle = _angle_between_vectors_deg(left_normal, right_normal)
+        if angle is not None and math.isfinite(angle):
+            max_angle = angle if max_angle is None else max(max_angle, angle)
+    if max_angle is not None:
+        return max_angle
+    return _angle_between_vectors_deg(fallback_normals[0], fallback_normals[1]) if len(fallback_normals) == 2 else None
+
+
+def _classify_edge(
+    edge_data: dict[str, Any],
+    *,
+    edge: Any,
+    face_shapes: list[Any],
+    face_normals: list[list[float] | None],
+    face_use_counts: dict[int, int],
+) -> None:
+    flags = _edge_flags(edge_data)
+    adjacent_face_count = len(edge_data.get("faceOrdinals", ()))
+    continuity = ""
+    dihedral_deg: float | None = None
+    visibility_class = STEP_EDGE_VISIBILITY_CLASSES["FEATURE"]
+
+    if edge_data.get("degenerated", False) or len(edge_data.get("points", ())) < 2 or float(edge_data.get("length") or 0.0) <= 1e-9:
+        flags |= STEP_EDGE_FLAGS["DEGENERATE"]
+        visibility_class = STEP_EDGE_VISIBILITY_CLASSES["DEGENERATE"]
+        continuity = "degenerate"
+    elif edge_data.get("seam", False) or any(int(count) > 1 for count in face_use_counts.values()):
+        flags |= STEP_EDGE_FLAGS["SEAM"]
+        visibility_class = STEP_EDGE_VISIBILITY_CLASSES["SEAM"]
+        continuity = "seam"
+    elif adjacent_face_count <= 0:
+        flags |= STEP_EDGE_FLAGS["NOT_REFERENCEABLE"] | STEP_EDGE_FLAGS["UNKNOWN_CONTINUITY"]
+        continuity = "unknown"
+    elif adjacent_face_count == 1:
+        flags |= STEP_EDGE_FLAGS["BOUNDARY"]
+        continuity = "boundary"
+    elif adjacent_face_count > 2:
+        flags |= STEP_EDGE_FLAGS["NON_MANIFOLD"]
+        visibility_class = STEP_EDGE_VISIBILITY_CLASSES["NON_MANIFOLD"]
+        continuity = "non_manifold"
+    else:
+        continuity = _edge_continuity_name(edge, face_shapes)
+        if continuity == "c0":
+            flags |= STEP_EDGE_FLAGS["HARD"]
+            dihedral_deg = _angle_between_vectors_deg(face_normals[0], face_normals[1]) if len(face_normals) == 2 else None
+        elif _is_smooth_continuity(continuity):
+            flags |= STEP_EDGE_FLAGS["TANGENT"]
+            visibility_class = STEP_EDGE_VISIBILITY_CLASSES["TANGENT"]
+            dihedral_deg = _angle_between_vectors_deg(face_normals[0], face_normals[1]) if len(face_normals) == 2 else None
+        else:
+            dihedral_deg = _sampled_edge_dihedral_deg(edge, face_shapes, face_normals)
+            if dihedral_deg is not None:
+                if dihedral_deg > STEP_TOPOLOGY_EDGE_ANGULAR_TOLERANCE_DEG:
+                    flags |= STEP_EDGE_FLAGS["HARD"]
+                    continuity = "sampled_hard"
+                else:
+                    flags |= STEP_EDGE_FLAGS["TANGENT"]
+                    visibility_class = STEP_EDGE_VISIBILITY_CLASSES["TANGENT"]
+                    continuity = "sampled_tangent"
+            else:
+                flags |= STEP_EDGE_FLAGS["UNKNOWN_CONTINUITY"]
+                visibility_class = STEP_EDGE_VISIBILITY_CLASSES["UNKNOWN"]
+                continuity = "unknown"
+
+    edge_data["flags"] = flags
+    edge_data["adjacentFaceCount"] = adjacent_face_count
+    edge_data["continuity"] = continuity
+    edge_data["dihedralDeg"] = None if dihedral_deg is None else _round_value(dihedral_deg, 3)
+    edge_data["visibilityClass"] = visibility_class
 
 
 def _shape_hash(shape: Any) -> int:
@@ -631,6 +813,30 @@ def _location_transform_matrix(location: object | None) -> tuple[float, ...]:
         return _identity_transform_matrix()
     rows.extend((0.0, 0.0, 0.0, 1.0))
     return tuple(rows)
+
+
+@lru_cache(maxsize=8192)
+def _location_from_transform_matrix(transform: tuple[float, ...]) -> TopLoc_Location:
+    from OCP.gp import gp_Trsf
+
+    if len(transform) != 16:
+        return TopLoc_Location()
+    trsf = gp_Trsf()
+    trsf.SetValues(
+        transform[0],
+        transform[1],
+        transform[2],
+        transform[3],
+        transform[4],
+        transform[5],
+        transform[6],
+        transform[7],
+        transform[8],
+        transform[9],
+        transform[10],
+        transform[11],
+    )
+    return TopLoc_Location(trsf)
 
 
 def _normalize_label_name(raw_name: object) -> str | None:
@@ -865,6 +1071,8 @@ def load_step_scene_from_xcaf_doc(
     doc: Any,
     *,
     step_hash: str | None = None,
+    source_kind: str = "step",
+    source_hash: str | None = None,
     load_elapsed: float | None = None,
 ) -> LoadedStepScene:
     resolved_step_path = step_path.expanduser().resolve()
@@ -888,6 +1096,8 @@ def load_step_scene_from_xcaf_doc(
         prototype_face_colors=prototype_face_colors,
         load_elapsed=time.perf_counter() - load_started if load_elapsed is None else load_elapsed,
         step_hash=step_hash,
+        source_kind=source_kind,
+        source_hash=source_hash,
         doc=doc,
     )
 
@@ -946,6 +1156,246 @@ def load_step_scene(step_path: Path) -> LoadedStepScene:
         load_elapsed=time.perf_counter() - load_started,
         doc=doc,
     )
+
+
+def _step_scene_cache_root() -> Path | None:
+    enabled = os.environ.get("TEXT_TO_CAD_STEP_SCENE_CACHE", "1").strip().lower()
+    if enabled in {"0", "false", "no", "off"}:
+        return None
+    configured = os.environ.get("TEXT_TO_CAD_STEP_SCENE_CACHE_DIR")
+    if configured:
+        return Path(configured).expanduser().resolve()
+    init_cwd = str(os.environ.get("INIT_CWD") or "").strip()
+    cache_root = Path(init_cwd).expanduser().resolve() if init_cwd else REPO_ROOT
+    if _path_is_skill_runtime(cache_root):
+        return Path(tempfile.gettempdir()).resolve() / "cadpy-step-scene-cache"
+    return cache_root / "tmp" / "step-scene-cache"
+
+
+def _path_is_skill_runtime(path: Path) -> bool:
+    resolved = path.expanduser().resolve()
+    return any((candidate / "SKILL.md").is_file() for candidate in (resolved, *resolved.parents))
+
+
+def _step_scene_cache_dir(root: Path, step_hash: str) -> Path:
+    return root / f"v{STEP_SCENE_CACHE_SCHEMA_VERSION}" / step_hash[:2] / step_hash
+
+
+def _rgba_to_cache_value(color: ColorRGBA | None) -> list[float] | None:
+    return None if color is None else [float(component) for component in color]
+
+
+def _rgba_from_cache_value(value: object) -> ColorRGBA | None:
+    if not isinstance(value, list) or len(value) < 3:
+        return None
+    rgba = [float(component) for component in value[:4]]
+    if len(rgba) == 3:
+        rgba.append(1.0)
+    return (rgba[0], rgba[1], rgba[2], rgba[3])
+
+
+def _node_to_cache_payload(node: OccurrenceNode) -> dict[str, Any]:
+    return {
+        "path": [int(value) for value in node.path],
+        "name": node.name,
+        "sourceName": node.source_name,
+        "transform": [float(value) for value in node.transform],
+        "localTransform": [float(value) for value in node.local_transform],
+        "prototypeKey": node.prototype_key,
+        "color": _rgba_to_cache_value(node.color),
+        "children": [_node_to_cache_payload(child) for child in node.children],
+    }
+
+
+def _node_from_cache_payload(payload: object) -> OccurrenceNode:
+    if not isinstance(payload, dict):
+        raise ValueError("cached occurrence node must be an object")
+    transform = tuple(float(value) for value in payload.get("transform", _identity_transform_matrix()))
+    local_transform = tuple(float(value) for value in payload.get("localTransform", _identity_transform_matrix()))
+    if len(transform) != 16 or len(local_transform) != 16:
+        raise ValueError("cached occurrence node has an invalid transform")
+    prototype_key = payload.get("prototypeKey")
+    return OccurrenceNode(
+        path=tuple(int(value) for value in payload.get("path", ())),
+        name=payload.get("name") if payload.get("name") is None else str(payload.get("name")),
+        source_name=payload.get("sourceName") if payload.get("sourceName") is None else str(payload.get("sourceName")),
+        transform=transform,
+        local_transform=local_transform,
+        prototype_key=None if prototype_key is None else int(prototype_key),
+        color=_rgba_from_cache_value(payload.get("color")),
+        location=_location_from_transform_matrix(transform),
+        children=[_node_from_cache_payload(child) for child in payload.get("children", [])],
+    )
+
+
+def _face_index_color_payload(shape: object, face_colors: dict[int, ColorRGBA]) -> list[list[object]]:
+    if not face_colors:
+        return []
+    payload: list[list[object]] = []
+    explorer = TopExp_Explorer(shape, TopAbs_FACE)
+    face_index = 0
+    while explorer.More():
+        face_hash = _shape_hash(TopoDS.Face_s(explorer.Current()))
+        color = face_colors.get(face_hash)
+        if color is not None:
+            payload.append([face_index, _rgba_to_cache_value(color)])
+        face_index += 1
+        explorer.Next()
+    return payload
+
+
+def _face_colors_from_index_payload(shape: object, payload: object) -> dict[int, ColorRGBA]:
+    if not isinstance(payload, list) or not payload:
+        return {}
+    colors_by_index: dict[int, ColorRGBA] = {}
+    for raw_item in payload:
+        if not isinstance(raw_item, list) or len(raw_item) != 2:
+            continue
+        color = _rgba_from_cache_value(raw_item[1])
+        if color is None:
+            continue
+        colors_by_index[int(raw_item[0])] = color
+    face_colors: dict[int, ColorRGBA] = {}
+    explorer = TopExp_Explorer(shape, TopAbs_FACE)
+    face_index = 0
+    while explorer.More():
+        color = colors_by_index.get(face_index)
+        if color is not None:
+            face_colors[_shape_hash(TopoDS.Face_s(explorer.Current()))] = color
+        face_index += 1
+        explorer.Next()
+    return face_colors
+
+
+def _read_step_scene_cache(step_path: Path, *, step_hash: str, root: Path) -> LoadedStepScene | None:
+    from OCP.BRepTools import BRepTools
+
+    started = time.perf_counter()
+    cache_dir = _step_scene_cache_dir(root, step_hash)
+    meta_path = cache_dir / "scene.json"
+    if not meta_path.is_file():
+        return None
+    try:
+        metadata = json.loads(meta_path.read_text(encoding="utf-8"))
+        if metadata.get("schemaVersion") != STEP_SCENE_CACHE_SCHEMA_VERSION:
+            return None
+        if metadata.get("stepHash") != step_hash:
+            return None
+        prototypes = metadata.get("prototypes")
+        if not isinstance(prototypes, list):
+            return None
+        prototype_shapes: dict[int, Any] = {}
+        prototype_names: dict[int, str | None] = {}
+        prototype_colors: dict[int, ColorRGBA] = {}
+        prototype_face_colors: dict[int, dict[int, ColorRGBA]] = {}
+        for index, prototype in enumerate(prototypes):
+            if not isinstance(prototype, dict):
+                return None
+            prototype_key = int(prototype["key"])
+            brep_file = str(prototype.get("file") or f"prototype-{index}.brep")
+            if "/" in brep_file or "\\" in brep_file:
+                return None
+            brep_path = cache_dir / brep_file
+            if not brep_path.is_file():
+                return None
+            shape = TopoDS_Shape()
+            if not BRepTools.Read_s(shape, os.fspath(brep_path), BRep_Builder()) or shape.IsNull():
+                return None
+            prototype_shapes[prototype_key] = shape
+            name = prototype.get("name")
+            prototype_names[prototype_key] = None if name is None else str(name)
+            color = _rgba_from_cache_value(prototype.get("color"))
+            if color is not None:
+                prototype_colors[prototype_key] = color
+            face_colors = _face_colors_from_index_payload(shape, prototype.get("faceIndexColors"))
+            if face_colors:
+                prototype_face_colors[prototype_key] = face_colors
+        roots = [_node_from_cache_payload(node) for node in metadata.get("roots", [])]
+        if not roots or not prototype_shapes:
+            return None
+        return LoadedStepScene(
+            step_path=step_path,
+            roots=roots,
+            prototype_shapes=prototype_shapes,
+            prototype_names=prototype_names,
+            prototype_colors=prototype_colors,
+            prototype_face_colors=prototype_face_colors,
+            load_elapsed=time.perf_counter() - started,
+            step_hash=step_hash,
+        )
+    except Exception:
+        return None
+
+
+def _write_step_scene_cache(scene: LoadedStepScene, *, step_hash: str, root: Path) -> None:
+    from OCP.BRepTools import BRepTools
+
+    cache_dir = _step_scene_cache_dir(root, step_hash)
+    if (cache_dir / "scene.json").is_file():
+        return
+    temp_dir = cache_dir.parent / f".{cache_dir.name}.{os.getpid()}.tmp"
+    try:
+        cache_dir.parent.mkdir(parents=True, exist_ok=True)
+        if temp_dir.exists():
+            shutil.rmtree(temp_dir, ignore_errors=True)
+        temp_dir.mkdir(parents=True, exist_ok=False)
+        prototypes: list[dict[str, Any]] = []
+        for index, (prototype_key, shape) in enumerate(scene.prototype_shapes.items()):
+            brep_file = f"prototype-{index}.brep"
+            if not BRepTools.Write_s(
+                shape,
+                os.fspath(temp_dir / brep_file),
+                False,
+                False,
+                TopTools_FormatVersion.TopTools_FormatVersion_VERSION_1,
+            ):
+                raise RuntimeError("failed to write cached BREP prototype")
+            prototypes.append(
+                {
+                    "key": int(prototype_key),
+                    "file": brep_file,
+                    "name": scene.prototype_names.get(prototype_key),
+                    "color": _rgba_to_cache_value(scene.prototype_colors.get(prototype_key)),
+                    "faceIndexColors": _face_index_color_payload(
+                        shape,
+                        scene.prototype_face_colors.get(prototype_key, {}),
+                    ),
+                }
+            )
+        metadata = {
+            "schemaVersion": STEP_SCENE_CACHE_SCHEMA_VERSION,
+            "stepHash": step_hash,
+            "sourcePath": os.fspath(scene.step_path),
+            "roots": [_node_to_cache_payload(root_node) for root_node in scene.roots],
+            "prototypes": prototypes,
+        }
+        (temp_dir / "scene.json").write_text(
+            json.dumps(metadata, sort_keys=True, separators=(",", ":")),
+            encoding="utf-8",
+        )
+        try:
+            temp_dir.rename(cache_dir)
+        except FileExistsError:
+            shutil.rmtree(temp_dir, ignore_errors=True)
+    except Exception:
+        shutil.rmtree(temp_dir, ignore_errors=True)
+
+
+def load_step_scene_cached(step_path: Path) -> LoadedStepScene:
+    resolved_step_path = step_path.expanduser().resolve()
+    if not resolved_step_path.exists():
+        raise FileNotFoundError(f"STEP file does not exist: {resolved_step_path}")
+    step_hash = _step_hash(resolved_step_path)
+    cache_root = _step_scene_cache_root()
+    if cache_root is not None:
+        cached = _read_step_scene_cache(resolved_step_path, step_hash=step_hash, root=cache_root)
+        if cached is not None:
+            return cached
+    scene = load_step_scene(resolved_step_path)
+    scene.step_hash = step_hash
+    if cache_root is not None:
+        _write_step_scene_cache(scene, step_hash=step_hash, root=cache_root)
+    return scene
 
 
 def _scene_step_hash(scene: LoadedStepScene) -> str:
@@ -1027,6 +1477,164 @@ def scene_export_shape(scene: LoadedStepScene) -> Any:
         builder.Add(compound, shape)
     scene.export_shape = compound
     return scene.export_shape
+
+
+def _scene_mesh_resolution_hints(scene: LoadedStepScene) -> dict[str, Any]:
+    prototype_face_counts: dict[int, int] = {}
+    prototype_edge_counts: dict[int, int] = {}
+    prototype_curved_face_counts: dict[int, int] = {}
+    prototype_curved_edge_counts: dict[int, int] = {}
+    for key, shape in scene.prototype_shapes.items():
+        face_map = TopTools_IndexedMapOfShape()
+        edge_map = TopTools_IndexedMapOfShape()
+        TopExp.MapShapes_s(shape, TopAbs_FACE, face_map)
+        TopExp.MapShapes_s(shape, TopAbs_EDGE, edge_map)
+        prototype_face_counts[key] = int(face_map.Extent())
+        prototype_edge_counts[key] = int(edge_map.Extent())
+        curved_faces = 0
+        for face_index in range(1, face_map.Extent() + 1):
+            try:
+                surface = BRepAdaptor_Surface(TopoDS.Face_s(face_map.FindKey(face_index)))
+                if _enum_name(surface.GetType(), "GeomAbs_") != "plane":
+                    curved_faces += 1
+            except Exception:
+                curved_faces += 1
+        curved_edges = 0
+        for edge_index in range(1, edge_map.Extent() + 1):
+            try:
+                curve = BRepAdaptor_Curve(TopoDS.Edge_s(edge_map.FindKey(edge_index)))
+                if _enum_name(curve.GetType(), "GeomAbs_") != "line":
+                    curved_edges += 1
+            except Exception:
+                curved_edges += 1
+        prototype_curved_face_counts[key] = curved_faces
+        prototype_curved_edge_counts[key] = curved_edges
+
+    leaves = scene_leaf_occurrences(scene)
+    occurrence_face_count = sum(
+        prototype_face_counts.get(int(node.prototype_key), 0)
+        for node in leaves
+        if node.prototype_key is not None
+    )
+    occurrence_edge_count = sum(
+        prototype_edge_counts.get(int(node.prototype_key), 0)
+        for node in leaves
+        if node.prototype_key is not None
+    )
+    occurrence_curved_face_count = sum(
+        prototype_curved_face_counts.get(int(node.prototype_key), 0)
+        for node in leaves
+        if node.prototype_key is not None
+    )
+    occurrence_curved_edge_count = sum(
+        prototype_curved_edge_counts.get(int(node.prototype_key), 0)
+        for node in leaves
+        if node.prototype_key is not None
+    )
+    prototype_face_count = sum(prototype_face_counts.values())
+    prototype_edge_count = sum(prototype_edge_counts.values())
+    prototype_curved_face_count = sum(prototype_curved_face_counts.values())
+    prototype_curved_edge_count = sum(prototype_curved_edge_counts.values())
+    complexity_score = (
+        float(occurrence_face_count)
+        + (float(occurrence_edge_count) * 0.35)
+        + (float(prototype_face_count) * 0.5)
+        + (float(len(leaves)) * 24.0)
+    )
+    curvature_pressure_score = (
+        (float(occurrence_curved_face_count) * 1.6)
+        + (float(occurrence_curved_edge_count) * 0.9)
+        + (float(prototype_curved_face_count) * 0.8)
+        + (float(prototype_curved_edge_count) * 0.4)
+    )
+    high_complexity = occurrence_face_count >= 8000 or occurrence_edge_count >= 22000
+    diagonal: float | None = None
+    scale_factor = 1.0
+    if not high_complexity:
+        prototype_boxes = {
+            key: _bbox_from_shape(shape)
+            for key, shape in scene.prototype_shapes.items()
+        }
+        occurrence_boxes = [
+            _transform_bbox(prototype_boxes[int(node.prototype_key)], node.transform)
+            for node in leaves
+            if node.prototype_key is not None and int(node.prototype_key) in prototype_boxes
+        ]
+        bbox = _merge_bbox(occurrence_boxes) if occurrence_boxes else _bbox_from_points([])
+        diagonal = float(bbox.get("diag") or 0.0)
+        if diagonal <= 50.0:
+            scale_factor = 0.65
+        elif diagonal <= 150.0:
+            scale_factor = 0.8
+        elif diagonal <= 500.0:
+            scale_factor = 1.0
+        elif diagonal <= 1500.0:
+            scale_factor = 1.18
+        else:
+            scale_factor = 1.35
+    return {
+        "bboxDiag": None if diagonal is None else round(diagonal, 3),
+        "prototypeFaceCount": prototype_face_count,
+        "prototypeEdgeCount": prototype_edge_count,
+        "prototypeCurvedFaceCount": prototype_curved_face_count,
+        "prototypeCurvedEdgeCount": prototype_curved_edge_count,
+        "occurrenceFaceCount": occurrence_face_count,
+        "occurrenceEdgeCount": occurrence_edge_count,
+        "occurrenceCurvedFaceCount": occurrence_curved_face_count,
+        "occurrenceCurvedEdgeCount": occurrence_curved_edge_count,
+        "leafOccurrenceCount": len(leaves),
+        "complexityScore": round(complexity_score, 3),
+        "effectiveComplexityScore": round(complexity_score * scale_factor, 3),
+        "curvaturePressureScore": round(curvature_pressure_score * scale_factor, 3),
+    }
+
+
+def adaptive_mesh_resolution_from_hints(hints: dict[str, Any]) -> AdaptiveMeshResolution:
+    effective_score = float(hints["effectiveComplexityScore"])
+    curvature_pressure = float(hints["curvaturePressureScore"])
+    leaf_count = int(hints["leafOccurrenceCount"])
+    face_count = int(hints["occurrenceFaceCount"])
+    edge_count = int(hints["occurrenceEdgeCount"])
+
+    if face_count >= 20000 or edge_count >= 55000 or effective_score >= 45000 or curvature_pressure >= 45000:
+        profile = "large-topology"
+        settings = MeshSettings(tolerance=0.025, angular_tolerance=0.75)
+    elif (
+        face_count >= 8000
+        or edge_count >= 22000
+        or effective_score >= 28000
+        or curvature_pressure >= 18000
+        or (leaf_count >= 80 and effective_score >= 22000)
+    ):
+        profile = "coarse-assembly"
+        settings = MeshSettings(tolerance=0.02, angular_tolerance=0.6)
+    elif (
+        face_count >= 2500
+        or edge_count >= 8000
+        or effective_score >= 6000
+        or curvature_pressure >= 9000
+        or (leaf_count >= 80 and effective_score >= 6000)
+        or (leaf_count >= 24 and effective_score >= 3500)
+    ):
+        profile = "balanced-assembly"
+        settings = MeshSettings(tolerance=0.016, angular_tolerance=0.5)
+    elif face_count >= 800 or edge_count >= 2500 or effective_score >= 1800 or curvature_pressure >= 3500:
+        profile = "medium"
+        settings = MeshSettings(tolerance=0.014, angular_tolerance=0.45)
+    elif face_count >= 180 or edge_count >= 600 or effective_score >= 450 or curvature_pressure >= 900:
+        profile = "fine"
+        settings = MeshSettings(tolerance=0.008, angular_tolerance=0.3)
+    else:
+        profile = "extra-fine"
+        settings = MeshSettings(tolerance=0.006, angular_tolerance=0.2)
+
+    hints = dict(hints)
+    hints["profile"] = profile
+    return AdaptiveMeshResolution(settings=settings, profile=profile, hints=hints)
+
+
+def adaptive_mesh_resolution_for_scene(scene: LoadedStepScene) -> AdaptiveMeshResolution:
+    return adaptive_mesh_resolution_from_hints(_scene_mesh_resolution_hints(scene))
 
 
 def _face_ordinals_from_shape(shape: Any, face_ord_by_hash: dict[int, int]) -> list[int]:
@@ -1140,12 +1748,8 @@ def _extract_refs_prototype(
 
     face_edge_ordinals: dict[int, list[int]] = {}
     edge_face_ordinals: dict[int, list[int]] = {}
-    for face_ordinal in range(1, face_map.Extent() + 1):
-        face = TopoDS.Face_s(face_map.FindKey(face_ordinal))
-        edge_ordinals = _edge_ordinals_from_shape(face, edge_ord_by_hash)
-        face_edge_ordinals[face_ordinal] = edge_ordinals
-        for edge_ordinal in edge_ordinals:
-            edge_face_ordinals.setdefault(edge_ordinal, []).append(face_ordinal)
+    edge_face_use_counts: dict[int, dict[int, int]] = {}
+    face_edge_polygon_nodes: dict[int, dict[int, list[int]]] = {}
 
     face_boxes: dict[int, dict[str, Any]] = {}
     face_meshes: dict[int, dict[str, Any]] = {}
@@ -1155,6 +1759,28 @@ def _extract_refs_prototype(
         face = TopoDS.Face_s(face_map.FindKey(face_ordinal))
         surface = BRepAdaptor_Surface(face)
         geometry = _extract_face_geometry(face)
+        raw_edge_ordinals: list[int] = []
+        edge_polygons: dict[int, list[int]] = {}
+        edge_side_ordinals: dict[str, int] = {}
+        edge_explorer = TopExp_Explorer(face, TopAbs_EDGE)
+        while edge_explorer.More():
+            edge = TopoDS.Edge_s(edge_explorer.Current())
+            edge_ordinal = edge_ord_by_hash.get(_shape_hash(edge))
+            if edge_ordinal is not None:
+                raw_edge_ordinals.append(edge_ordinal)
+                use_counts = edge_face_use_counts.setdefault(edge_ordinal, {})
+                use_counts[face_ordinal] = use_counts.get(face_ordinal, 0) + 1
+                polygon_nodes = _edge_polygon_node_indices_from_face_mesh(edge, geometry)
+                if polygon_nodes:
+                    edge_polygons.setdefault(edge_ordinal, polygon_nodes)
+                    for left, right in zip(polygon_nodes, polygon_nodes[1:]):
+                        edge_side_ordinals[_triangle_side_key(left, right)] = edge_ordinal
+            edge_explorer.Next()
+        edge_ordinals = list(dict.fromkeys(raw_edge_ordinals))
+        face_edge_ordinals[face_ordinal] = edge_ordinals
+        for edge_ordinal in edge_ordinals:
+            edge_face_ordinals.setdefault(edge_ordinal, []).append(face_ordinal)
+        face_edge_polygon_nodes[face_ordinal] = edge_polygons
         face_boxes[face_ordinal] = geometry["bbox"]
         face_meshes[face_ordinal] = geometry
         total_face_area += geometry["area"]
@@ -1168,6 +1794,7 @@ def _extract_refs_prototype(
             "normal": geometry["normal"],
             "bbox": geometry["bbox"],
             "edgeOrdinals": tuple(face_edge_ordinals.get(face_ordinal, [])),
+            "edgeSideOrdinals": edge_side_ordinals,
             "triangleNodes": geometry["nodes"],
             "triangleNormals": geometry["normals"],
             "triangles": geometry["triangles"],
@@ -1192,7 +1819,8 @@ def _extract_refs_prototype(
         curve = BRepAdaptor_Curve(edge)
         points: list[list[float]] = []
         for face_ordinal in edge_face_ordinals.get(edge_ordinal, []):
-            points = _extract_edge_points_from_face_mesh(edge, face_meshes[face_ordinal], options.max_edge_points)
+            polygon_nodes = face_edge_polygon_nodes.get(face_ordinal, {}).get(edge_ordinal, [])
+            points = _edge_points_from_face_polygon(face_meshes[face_ordinal], polygon_nodes, options.max_edge_points)
             if points:
                 break
         if not points:
@@ -1225,6 +1853,26 @@ def _extract_refs_prototype(
         params = _curve_params(curve, options.digits)
         if params:
             edge_data["params"] = params
+        face_shapes = [
+            TopoDS.Face_s(face_map.FindKey(face_ordinal))
+            for face_ordinal in edge_face_ordinals.get(edge_ordinal, [])
+            if 1 <= face_ordinal <= face_map.Extent()
+        ]
+        face_normals = [
+            face_meshes.get(face_ordinal, {}).get("normal")
+            for face_ordinal in edge_face_ordinals.get(edge_ordinal, [])
+        ]
+        _classify_edge(
+            edge_data,
+            edge=edge,
+            face_shapes=face_shapes,
+            face_normals=face_normals,
+            face_use_counts=edge_face_use_counts.get(edge_ordinal, {}),
+        )
+        edge_data["surfaceClassCode"] = step_edge_surface_class_code(
+            edge_data,
+            enabled_visibility_classes=options.edge_visibility_classes,
+        )
         edges.append(edge_data)
 
     total_area = max(total_face_area, 1e-12)
@@ -1258,7 +1906,6 @@ def _extract_refs_prototype(
         if not edge_data.get("referenceable", True):
             score = 0.0
         edge_data["relevance"] = max(0, min(100, int(round(score))))
-        edge_data["flags"] = _edge_flags(edge_data)
 
     for shape_entry in shape_entries:
         shape = shape_entry["shape"]
@@ -1323,8 +1970,24 @@ def _normalize_selector_options(options: SelectorOptions | None) -> SelectorOpti
             edge_deflection_ratio=normalized_options.edge_deflection_ratio,
             max_edge_points=normalized_options.max_edge_points,
             digits=None,
+            mesh_resolution=normalized_options.mesh_resolution,
+            edge_visibility_classes=normalize_step_edge_render_visibility_classes(
+                normalized_options.edge_visibility_classes
+            ),
         )
-    return normalized_options
+    return SelectorOptions(
+        linear_deflection=normalized_options.linear_deflection,
+        angular_deflection=normalized_options.angular_deflection,
+        relative=normalized_options.relative,
+        edge_deflection=normalized_options.edge_deflection,
+        edge_deflection_ratio=normalized_options.edge_deflection_ratio,
+        max_edge_points=normalized_options.max_edge_points,
+        digits=normalized_options.digits,
+        mesh_resolution=normalized_options.mesh_resolution,
+        edge_visibility_classes=normalize_step_edge_render_visibility_classes(
+            normalized_options.edge_visibility_classes
+        ),
+    )
 
 
 def _extract_prototype(
@@ -1452,6 +2115,12 @@ def extract_selectors_from_scene(
         "params",
         "segmentStart",
         "segmentCount",
+        "adjacentFaceCount",
+        "continuity",
+        "dihedralDeg",
+        "visibilityClass",
+        "surfaceHalfEdgeStart",
+        "surfaceHalfEdgeCount",
     ]
 
     occurrence_rows: list[list[Any]] = []
@@ -1465,12 +2134,16 @@ def extract_selectors_from_scene(
     edge_proxy_positions = array("f")
     edge_proxy_indices = array("I")
     edge_proxy_ids = array("I")
+    surface_half_edges = array("I")
 
     entry_bbox_boxes: list[dict[str, Any]] = []
     leaf_occurrence_count = 0
     summary_shape_count = 0
     summary_face_count = 0
     summary_edge_count = 0
+    unmapped_surface_edges: list[str] = []
+    edge_visibility_class_counts: dict[str, int] = {}
+    generated_edge_visibility_class_counts: dict[str, int] = {}
 
     def append_occurrence_row(node: OccurrenceNode) -> str:
         occurrence_id = _selector_id(node.path)
@@ -1520,9 +2193,9 @@ def extract_selectors_from_scene(
         node: OccurrenceNode,
         occurrence_id: str,
         prototype: dict[str, Any],
-    ) -> dict[int, tuple[int, int, int]]:
+    ) -> tuple[dict[int, tuple[int, int, int]], Any | None]:
         if node.prototype_key is None:
-            return {}
+            return {}, None
         default_color, suppress_face_colors = glb_default_color_for_node(node, occurrence_id)
         payload = scene_glb_mesh_payload(
             scene,
@@ -1530,12 +2203,14 @@ def extract_selectors_from_scene(
             default_color=default_color,
             suppress_face_colors=suppress_face_colors,
             prototype=prototype,
+            include_surface_edges=(profile == SelectorProfile.ARTIFACT),
+            surface_edge_class_signature=normalized_options.edge_visibility_classes,
         )
         runs: dict[int, tuple[int, int, int]] = {}
         for face_entry in prototype.get("faces", []):
             face_hash = int(face_entry.get("shapeHash") or 0)
             runs[int(face_entry["ordinal"])] = payload.face_runs_by_hash.get(face_hash, (0, 0, 0))
-        return runs
+        return runs, payload
 
     def emit_leaf(node: OccurrenceNode, occurrence_id: str, prototype: dict[str, Any]) -> dict[str, Any]:
         nonlocal leaf_occurrence_count, summary_shape_count, summary_face_count, summary_edge_count
@@ -1613,6 +2288,12 @@ def extract_selectors_from_scene(
         local_edge_index_to_global_row: dict[int, int] = {}
         for edge_entry in prototype.get("edges", []):
             local_edge_index_to_global_row[int(edge_entry["ordinal"])] = len(edge_rows)
+            visibility_class = str(edge_entry.get("visibilityClass") or STEP_EDGE_VISIBILITY_CLASSES["FEATURE"])
+            edge_visibility_class_counts[visibility_class] = edge_visibility_class_counts.get(visibility_class, 0) + 1
+            if int(edge_entry.get("surfaceClassCode") or 0) > 0:
+                generated_edge_visibility_class_counts[visibility_class] = (
+                    generated_edge_visibility_class_counts.get(visibility_class, 0) + 1
+                )
             face_start = len(edge_face_rows)
             edge_rows.append(
                 [
@@ -1631,6 +2312,12 @@ def extract_selectors_from_scene(
                     None
                     if edge_entry.get("params") is None
                     else _transform_param_dict(edge_entry["params"], node.transform, normalized_options.digits),
+                    0,
+                    0,
+                    int(edge_entry.get("adjacentFaceCount") or 0),
+                    str(edge_entry.get("continuity") or ""),
+                    edge_entry.get("dihedralDeg"),
+                    visibility_class,
                     0,
                     0,
                 ]
@@ -1664,7 +2351,7 @@ def extract_selectors_from_scene(
                 edge_face_rows.append(local_face_index_to_global_row[int(face_ordinal)])
 
         if profile == SelectorProfile.ARTIFACT:
-            face_runs = glb_face_runs_for_node(node, occurrence_id, prototype)
+            face_runs, glb_payload = glb_face_runs_for_node(node, occurrence_id, prototype)
             for face_entry in prototype.get("faces", []):
                 global_face_row = local_face_index_to_global_row[int(face_entry["ordinal"])]
                 primitive_index, triangle_start, triangle_count = face_runs.get(int(face_entry["ordinal"]), (0, 0, 0))
@@ -1678,6 +2365,41 @@ def extract_selectors_from_scene(
                         int(triangle_count),
                         int(global_face_row),
                     ])
+
+            for face_ordinal, half_edges in (getattr(glb_payload, "surface_half_edges_by_face_ordinal", {}) or {}).items():
+                global_face_row = local_face_index_to_global_row.get(int(face_ordinal))
+                if not isinstance(global_face_row, int):
+                    continue
+                for edge_ordinal, primitive_index, triangle_index, side, class_code in half_edges:
+                    global_edge_row = local_edge_index_to_global_row.get(int(edge_ordinal))
+                    if not isinstance(global_edge_row, int):
+                        continue
+                    current_count = int(edge_rows[global_edge_row][20] or 0)
+                    if current_count == 0:
+                        edge_rows[global_edge_row][19] = len(surface_half_edges) // 7
+                    edge_rows[global_edge_row][20] = current_count + 1
+                    surface_half_edges.extend(
+                        [
+                            int(global_edge_row),
+                            int(global_face_row),
+                            int(node.row_index),
+                            int(primitive_index),
+                            int(triangle_index),
+                            int(side),
+                            int(class_code),
+                        ]
+                    )
+
+            unmapped_edges = []
+            for edge_entry in prototype.get("edges", []):
+                class_code = int(edge_entry.get("surfaceClassCode") or 0)
+                if not is_displayable_step_edge_surface_class_code(class_code):
+                    continue
+                global_edge_row = local_edge_index_to_global_row.get(int(edge_entry["ordinal"]))
+                if isinstance(global_edge_row, int) and int(edge_rows[global_edge_row][20] or 0) <= 0:
+                    unmapped_edges.append(f"{occurrence_id}.e{edge_entry['ordinal']}")
+            if unmapped_edges:
+                unmapped_surface_edges.extend(unmapped_edges)
 
             for edge_entry in prototype.get("edges", []):
                 global_edge_row = local_edge_index_to_global_row[int(edge_entry["ordinal"])]
@@ -1761,20 +2483,56 @@ def extract_selectors_from_scene(
         "faceProxyRunCount": len(face_proxy_runs) // 5 if profile == SelectorProfile.ARTIFACT else 0,
         "edgeProxyPointCount": len(edge_proxy_positions) // 3 if profile == SelectorProfile.ARTIFACT else 0,
         "edgeProxySegmentCount": len(edge_proxy_ids) if profile == SelectorProfile.ARTIFACT else 0,
+        "surfaceHalfEdgeCount": len(surface_half_edges) // 7 if profile == SelectorProfile.ARTIFACT else 0,
+        "unmappedSurfaceEdgeCount": (
+            len(unmapped_surface_edges) if profile == SelectorProfile.ARTIFACT else 0
+        ),
         "timingMs": {
             "load": round(load_elapsed * 1000.0, 1),
             "extract": round(prototype_elapsed * 1000.0, 1),
             "total": round(elapsed * 1000.0, 1),
         },
     }
+    if unmapped_surface_edges and profile == SelectorProfile.ARTIFACT:
+        stats["unmappedSurfaceEdgePreview"] = unmapped_surface_edges[:20]
+    edge_rendering_manifest: dict[str, Any] = {
+        "visibilityClasses": list(normalized_options.edge_visibility_classes),
+        "generatedVisibilityClasses": [
+            class_id
+            for class_id in normalized_options.edge_visibility_classes
+            if generated_edge_visibility_class_counts.get(class_id, 0) > 0
+        ],
+        "visibilityClassCounts": dict(sorted(edge_visibility_class_counts.items())),
+        "generatedVisibilityClassCounts": dict(sorted(generated_edge_visibility_class_counts.items())),
+    }
+    mesh_manifest: dict[str, Any] = {
+        "linearDeflection": float(normalized_options.linear_deflection),
+        "angularDeflection": float(normalized_options.angular_deflection),
+        "relative": bool(normalized_options.relative),
+    }
+    if isinstance(normalized_options.mesh_resolution, dict):
+        mesh_manifest["resolution"] = normalized_options.mesh_resolution
+
+    source_kind = str(getattr(scene, "source_kind", "step") or "step").strip().lower()
+    if source_kind not in {"step", "python"}:
+        source_kind = "step"
+    source_path = str(getattr(scene, "source_path", "") or "").strip()
+    if not source_path and source_kind != "python":
+        source_path = _relative_step_path(resolved_step_path)
+    if not source_path:
+        raise RuntimeError(f"STEP_topology artifact sourcePath is required for {resolved_step_path}")
 
     manifest: dict[str, Any] = {
-        "schemaVersion": 1 if profile == SelectorProfile.ARTIFACT else 2,
+        "schemaVersion": STEP_TOPOLOGY_SCHEMA_VERSION,
         "profile": profile.value,
+        "capabilities": step_topology_capabilities(normalized_options.edge_visibility_classes),
+        "sourceKind": source_kind,
+        "sourcePath": source_path,
         "stepPath": _relative_step_path(resolved_step_path),
-        "stepHash": _scene_step_hash(scene),
         "bbox": _compact_bbox(overall_bbox, normalized_options.digits),
         "stats": stats,
+        "edgeRendering": edge_rendering_manifest,
+        "mesh": mesh_manifest,
         "tables": {
             "occurrenceColumns": occurrence_columns,
             "shapeColumns": shape_columns,
@@ -1786,6 +2544,13 @@ def extract_selectors_from_scene(
         "faces": face_rows,
         "edges": edge_rows,
     }
+    if source_kind == "python":
+        source_hash = str(getattr(scene, "source_hash", "") or "").strip()
+        if source_hash:
+            manifest["sourceHash"] = source_hash
+        manifest["generatedAt"] = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    else:
+        manifest["stepHash"] = _scene_step_hash(scene)
 
     if profile != SelectorProfile.SUMMARY:
         if profile == SelectorProfile.ARTIFACT:
@@ -1810,6 +2575,7 @@ def extract_selectors_from_scene(
                 "edgeIds": edge_proxy_ids,
                 "faceEdgeRows": face_edge_rows,
                 "edgeFaceRows": edge_face_rows,
+                "surfaceHalfEdges": surface_half_edges,
             }
             return SelectorBundle(manifest=manifest, buffers=buffers)
 

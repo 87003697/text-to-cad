@@ -1,15 +1,15 @@
-import tempfile
 import unittest
 from pathlib import Path
 
 import ezdxf
 
+from common.tests.tmp_root import temporary_directory
 from dxf.render_payload import build_dxf_render_payload
 
 
-class CadgenDxfTests(unittest.TestCase):
+class CadpyDxfTests(unittest.TestCase):
     def test_build_dxf_render_payload_supports_straight_lwpolyline(self) -> None:
-        with tempfile.TemporaryDirectory(prefix="tmp-cad-dxf-") as tmpdir:
+        with temporary_directory(prefix="tmp-cad-dxf-") as tmpdir:
             dxf_path = Path(tmpdir) / "outline.dxf"
             doc = ezdxf.new("R2010")
             modelspace = doc.modelspace()

@@ -1,6 +1,5 @@
 import json
 import struct
-import tempfile
 import unittest
 from array import array
 from pathlib import Path
@@ -15,10 +14,22 @@ from common.glb import (
     export_assembly_glb_from_scene,
     export_native_glb_from_scene,
     export_part_glb_from_scene,
+    read_step_display_edge_manifest_from_glb,
     read_step_topology_bundle_from_glb,
     read_step_topology_manifest_from_glb,
 )
-from common.step_scene import LoadedStepScene, OccurrenceNode, SelectorBundle, _shape_hash
+from common.glb_topology import STEP_TOPOLOGY_SCHEMA_VERSION, glb_surface_edge_class_has_nonzero_values
+from common.step_scene import (
+    LoadedStepScene,
+    OccurrenceNode,
+    SelectorBundle,
+    SelectorOptions,
+    SelectorProfile,
+    _shape_hash,
+    extract_selectors_from_scene,
+    load_step_scene,
+)
+from common.tests.tmp_root import temporary_directory
 
 
 def _identity_transform() -> tuple[float, ...]:
@@ -82,7 +93,7 @@ def _read_glb_json(path: Path) -> dict[str, object]:
 
 class GlbExportTests(unittest.TestCase):
     def test_part_glb_embeds_step_topology_extension(self) -> None:
-        with tempfile.TemporaryDirectory(prefix="cad-glb-test-") as temp_dir:
+        with temporary_directory(prefix="cad-glb-test-") as temp_dir:
             step_path = Path(temp_dir) / "fixture.step"
             scene, _prototype_key = _single_leaf_scene(_meshed_box())
             bundle = SelectorBundle(
@@ -97,7 +108,7 @@ class GlbExportTests(unittest.TestCase):
                     "faces": [],
                     "edges": [],
                 },
-                buffers={"edgeIds": array("I", [7, 11])},
+                buffers={"edgeIds": array("I", [7, 11]), "surfaceHalfEdges": array("I")},
             )
 
             glb_path = export_part_glb_from_scene(
@@ -113,6 +124,7 @@ class GlbExportTests(unittest.TestCase):
             self.assertIn("STEP_topology", gltf.get("extensions", {}))
             extension = gltf.get("extensions", {}).get("STEP_topology", {})
             self.assertIn("indexView", extension)
+            self.assertIn("edgeView", extension)
             self.assertIn("selectorView", extension)
             index = read_step_topology_manifest_from_glb(glb_path)
             self.assertIsNotNone(index)
@@ -121,16 +133,46 @@ class GlbExportTests(unittest.TestCase):
             self.assertEqual("part", index.get("entryKind"))
             self.assertNotIn("cadRef", index)
             self.assertNotIn("cadPath", index)
+            surface_edges = read_step_display_edge_manifest_from_glb(glb_path)
+            self.assertIsNotNone(surface_edges)
+            assert surface_edges is not None
+            self.assertEqual("surface-edges", surface_edges.get("profile"))
+            self.assertEqual(STEP_TOPOLOGY_SCHEMA_VERSION, surface_edges.get("schemaVersion"))
+            self.assertEqual("surfaceHalfEdges", surface_edges.get("halfEdgesView"))
+            self.assertIn("surfaceHalfEdges", surface_edges.get("buffers", {}).get("views", {}))
+            self.assertNotIn("faces", surface_edges)
+            self.assertNotIn("relations", surface_edges)
             embedded = read_step_topology_bundle_from_glb(glb_path)
             self.assertIsNotNone(embedded)
             assert embedded is not None
-            self.assertEqual(1, embedded.manifest["schemaVersion"])
+            self.assertEqual(STEP_TOPOLOGY_SCHEMA_VERSION, embedded.manifest["schemaVersion"])
             self.assertNotIn("cadRef", embedded.manifest)
             self.assertNotIn("cadPath", embedded.manifest)
             self.assertEqual([7, 11], list(embedded.buffers["edgeIds"]))
 
+    def test_step_glb_surface_edge_class_attribute_is_populated_from_selector_topology(self) -> None:
+        with temporary_directory(prefix="cad-glb-surface-edges-") as temp_dir:
+            step_path = Path(temp_dir) / "cylinder.step"
+            build123d.export_step(build123d.Cylinder(5, 10), step_path)
+            scene = load_step_scene(step_path)
+            bundle = extract_selectors_from_scene(
+                scene,
+                profile=SelectorProfile.ARTIFACT,
+                options=SelectorOptions(linear_deflection=0.2, angular_deflection=0.2),
+            )
+
+            glb_path = export_part_glb_from_scene(
+                step_path,
+                scene,
+                linear_deflection=0.2,
+                angular_deflection=0.2,
+                selector_bundle=bundle,
+            )
+
+            self.assertTrue(glb_surface_edge_class_has_nonzero_values(glb_path))
+
     def test_legacy_topology_json_and_bin_bundle_is_read_when_glb_lacks_extension(self) -> None:
-        with tempfile.TemporaryDirectory(prefix="cad-glb-test-") as temp_dir:
+        with temporary_directory(prefix="cad-glb-test-") as temp_dir:
             artifact_dir = Path(temp_dir) / ".fixture.step"
             artifact_dir.mkdir()
             glb_path = artifact_dir / "model.glb"
@@ -175,7 +217,7 @@ class GlbExportTests(unittest.TestCase):
             self.assertEqual([19, 23], list(bundle.buffers["edgeIds"]))
 
     def test_assembly_glb_preserves_face_colors_as_material_primitives(self) -> None:
-        with tempfile.TemporaryDirectory(prefix="cad-glb-test-") as temp_dir:
+        with temporary_directory(prefix="cad-glb-test-") as temp_dir:
             step_path = Path(temp_dir) / "fixture.step"
             shape = _meshed_box()
             face_hashes: list[int] = []
@@ -215,7 +257,7 @@ class GlbExportTests(unittest.TestCase):
             self.assertTrue(all("NORMAL" in attributes for attributes in primitive_attributes))
 
     def test_assembly_glb_applies_occurrence_color_to_descendant_meshes(self) -> None:
-        with tempfile.TemporaryDirectory(prefix="cad-glb-test-") as temp_dir:
+        with temporary_directory(prefix="cad-glb-test-") as temp_dir:
             step_path = Path(temp_dir) / "fixture.step"
             shape = _meshed_box()
             prototype_key = _shape_hash(shape)
@@ -261,7 +303,7 @@ class GlbExportTests(unittest.TestCase):
             self.assertIn([0.1, 0.2, 0.3, 1.0], colors)
 
     def test_part_glb_uses_scene_material_colors(self) -> None:
-        with tempfile.TemporaryDirectory(prefix="cad-glb-test-") as temp_dir:
+        with temporary_directory(prefix="cad-glb-test-") as temp_dir:
             step_path = Path(temp_dir) / "fixture.step"
             shape = _meshed_box()
             scene, prototype_key = _single_leaf_scene(
@@ -285,7 +327,7 @@ class GlbExportTests(unittest.TestCase):
             self.assertIn([0.168627, 0.184314, 0.2, 1.0], colors)
 
     def test_native_glb_is_y_up_without_step_topology_or_cad_extras(self) -> None:
-        with tempfile.TemporaryDirectory(prefix="cad-glb-test-") as temp_dir:
+        with temporary_directory(prefix="cad-glb-test-") as temp_dir:
             step_path = Path(temp_dir) / "fixture.step"
             shape = _meshed_box(width=10, depth=20, height=30)
             scene, _prototype_key = _single_leaf_scene(
@@ -315,7 +357,7 @@ class GlbExportTests(unittest.TestCase):
             self.assertIn([0.168627, 0.184314, 0.2, 1.0], colors)
 
     def test_native_glb_converts_assembly_transforms_to_y_up(self) -> None:
-        with tempfile.TemporaryDirectory(prefix="cad-glb-test-") as temp_dir:
+        with temporary_directory(prefix="cad-glb-test-") as temp_dir:
             step_path = Path(temp_dir) / "fixture.step"
             shape = _meshed_box()
             prototype_key = _shape_hash(shape)

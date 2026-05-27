@@ -8,9 +8,7 @@ Use these sources as live evidence, not as a stable API. Field coverage, value t
 - Catalog JSON: https://cdn.sendcutsend.com/specs/sendcutsend-catalog.json
 - Engineering specs JSON: https://cdn.sendcutsend.com/specs/sendcutsend-specs.json
 
-Run `python scripts/download_sources.py` from the skill directory before review. It stores refreshed copies in `references/generated/` and writes `references/generated/sources-manifest.json`.
-
-Default cache policy: reuse generated source files for 24 hours, then refetch. If the user explicitly asks to skip cache or force fresh sources, run `python scripts/download_sources.py --skip-cache`.
+Fetch these URLs directly before each review. Use the current response bodies as the evidence for material/service checks, and cite the URL plus the access date in the report.
 
 ## Source Roles
 
@@ -21,9 +19,7 @@ Default cache policy: reuse generated source files for 24 hours, then refetch. I
 ## Provenance To Capture
 
 - Source URL
-- Access date or manifest `fetched_at`
-- Manifest `cache_expires_at`
-- Manifest `sha256`
+- Access date
 - JSON `_meta.schema_version`
 - JSON `_meta.generated_at`
 - JSON `_meta.source_data_generated_at` when present

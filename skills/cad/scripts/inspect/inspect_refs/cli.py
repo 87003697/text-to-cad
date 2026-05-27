@@ -20,6 +20,9 @@ if __package__ in {None, ""}:
     ]
     sys.path.insert(0, str(scripts_dir))
     sys.path.insert(0, str(inspect_dir))
+    from common.package_path import ensure_cadpy_package_path
+
+    ensure_cadpy_package_path(inspect_dir)
     from inspect_refs.inspect import (
         CadRefError,
         cad_path_from_target,
@@ -44,7 +47,11 @@ else:
         measure_targets,
     )
 
-from common.cli_logging import CliLogger
+    from common.package_path import ensure_cadpy_package_path
+
+    ensure_cadpy_package_path(Path(__file__).resolve().parent.parent)
+
+from cadpy.cli_logging import CliLogger
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -472,12 +479,66 @@ def _format_refs_text(result: dict[str, object], *, quiet: bool, verbose: bool) 
         lines.append(headline)
         if quiet:
             continue
+        entry_facts = token.get("entryFacts") if isinstance(token.get("entryFacts"), dict) else {}
+        if entry_facts:
+            lines.append(f"  facts: {_format_entry_facts_text(entry_facts)}")
+        entry_positioning = token.get("entryPositioning") if isinstance(token.get("entryPositioning"), dict) else {}
+        if entry_positioning:
+            bbox_facts = entry_positioning.get("bboxFacts") if isinstance(entry_positioning.get("bboxFacts"), dict) else {}
+            if bbox_facts and bbox_facts != entry_facts:
+                lines.append(f"  positioning: {_format_entry_facts_text(bbox_facts)}")
+        planes = token.get("planes") if isinstance(token.get("planes"), list) else []
+        if planes:
+            lines.extend(_format_planes_text(planes))
         for selection in token.get("selections", []):
             if isinstance(selection, dict):
                 lines.append(f"  {selection.get('displaySelector')}: {selection.get('summary')}")
                 if verbose and selection.get("copyText"):
                     lines.append(f"    {selection.get('copyText')}")
     return "\n".join(lines)
+
+
+def _format_number(value: object) -> str:
+    if isinstance(value, float):
+        return f"{value:.6g}"
+    return str(value)
+
+
+def _format_vector(value: object) -> str:
+    if not isinstance(value, list):
+        return str(value)
+    return "[" + ", ".join(_format_number(component) for component in value) + "]"
+
+
+def _format_entry_facts_text(facts: dict[str, object]) -> str:
+    parts: list[str] = []
+    for key in ("size", "center", "extentAxis", "diag", "kind"):
+        if key not in facts:
+            continue
+        value = facts.get(key)
+        if isinstance(value, list):
+            parts.append(f"{key}={_format_vector(value)}")
+        else:
+            parts.append(f"{key}={_format_number(value)}")
+    return " ".join(parts)
+
+
+def _format_planes_text(planes: list[object], *, limit: int = 3) -> list[str]:
+    lines = [f"  planes: {len(planes)} major groups"]
+    for plane in planes[:limit]:
+        if not isinstance(plane, dict):
+            continue
+        axis = plane.get("axis")
+        coordinate = _format_number(plane.get("coordinate"))
+        normal_sign = plane.get("normalSign")
+        face_count = plane.get("faceCount")
+        area = _format_number(plane.get("totalArea"))
+        lines.append(
+            f"    {axis}={coordinate} normalSign={normal_sign} faces={face_count} area={area}"
+        )
+    if len(planes) > limit:
+        lines.append(f"    ... {len(planes) - limit} more")
+    return lines
 
 
 def _format_diff_text(result: dict[str, object], *, quiet: bool, verbose: bool) -> str:

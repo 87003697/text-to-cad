@@ -42,7 +42,13 @@ class _MaterialRegistry:
 
     @staticmethod
     def color_key(color: ColorRGBA) -> tuple[int, int, int, int]:
-        return tuple(max(0, min(255, int(round(channel * 255.0)))) for channel in _normalize_rgba(color))
+        red, green, blue, alpha = _normalize_rgba(color)
+        return (
+            _srgb_byte_from_linear(red),
+            _srgb_byte_from_linear(green),
+            _srgb_byte_from_linear(blue),
+            _byte_from_unit_channel(alpha),
+        )
 
     def index(self, color: ColorRGBA, *, name: str | None = None) -> int:
         normalized = _normalize_rgba(color)
@@ -104,6 +110,18 @@ def _normalize_rgba(color: ColorRGBA | tuple[float, float, float] | None) -> Col
         max(0.0, min(1.0, float(blue))),
         max(0.0, min(1.0, float(alpha))),
     )
+
+
+def _byte_from_unit_channel(channel: float) -> int:
+    return max(0, min(255, int(round(channel * 255.0))))
+
+
+def _srgb_byte_from_linear(channel: float) -> int:
+    if channel <= 0.0031308:
+        encoded = 12.92 * channel
+    else:
+        encoded = 1.055 * math.pow(channel, 1.0 / 2.4) - 0.055
+    return _byte_from_unit_channel(encoded)
 
 
 def _display_color(color: ColorRGBA) -> str:

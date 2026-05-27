@@ -14,17 +14,18 @@ sys.path.insert(0, str(INSPECT_DIR))
 
 from inspect_refs import cli as inspect_cli
 from inspect_refs import inspect as refs_inspect
-from common import cad_ref_syntax as refs_syntax
-from common import assembly_spec
-from common import step_targets
-from common.render import part_glb_path
-from common.selector_types import SelectorBundle, SelectorProfile
+from cadpy import cad_ref_syntax as refs_syntax
+from cadpy import assembly_spec
+from cadpy import step_targets
+from cadpy.render import part_glb_path
+from cadpy.selector_types import SelectorBundle, SelectorProfile
+from cadpy.source_hash import python_source_hash
 from common.tests.cad_test_roots import IsolatedCadRoots
 
 
 def _refs_manifest(cad_ref: str) -> dict[str, object]:
     return {
-        "schemaVersion": 2,
+        "schemaVersion": 3,
         "profile": "refs",
         "cadPath": cad_ref,
         "stepPath": f"{cad_ref}.step",
@@ -279,7 +280,7 @@ def _refs_manifest(cad_ref: str) -> dict[str, object]:
 
 def _summary_manifest(cad_ref: str) -> dict[str, object]:
     return {
-        "schemaVersion": 2,
+        "schemaVersion": 3,
         "profile": "summary",
         "cadPath": cad_ref,
         "stepPath": f"{cad_ref}.step",
@@ -383,7 +384,45 @@ class InspectRefsTests(unittest.TestCase):
         current_hash: str | None = None,
     ):
         resolved_step_path = step_path or self.step_path
-        topology_manifest = {**manifest, "schemaVersion": 1}
+        edge_rendering = {
+            "visibilityClasses": ["feature", "tangent", "seam", "degenerate"],
+            "generatedVisibilityClasses": ["feature"],
+            "visibilityClassCounts": {"feature": 1},
+            "generatedVisibilityClassCounts": {"feature": 1},
+        }
+        mesh = {
+            "linearDeflection": 0.006,
+            "angularDeflection": 0.2,
+            "relative": True,
+            "resolution": {
+                "profile": "extra-fine",
+                "hints": {
+                    "effectiveComplexityScore": 2,
+                    "curvaturePressureScore": 2,
+                    "leafOccurrenceCount": 1,
+                    "occurrenceFaceCount": 2,
+                    "occurrenceEdgeCount": 2,
+                },
+            },
+        }
+        topology_manifest = {"schemaVersion": 3, **manifest}
+        topology_manifest.setdefault("edgeRendering", edge_rendering)
+        topology_manifest.setdefault("mesh", mesh)
+        edge_manifest = {
+            "schemaVersion": 3,
+            "profile": "surface-edges",
+            "edgeRendering": edge_rendering,
+            "primitiveAttributes": {
+                "barycentric": "_CAD_EDGE_BARYCENTRIC",
+                "class": "_CAD_EDGE_CLASS",
+            },
+            "buffers": {"views": {"surfaceHalfEdges": {}}},
+        }
+        if str(topology_manifest.get("sourceKind") or "").strip().lower() == "python":
+            edge_manifest["sourceKind"] = "python"
+            edge_manifest["sourceHash"] = topology_manifest.get("sourceHash")
+        else:
+            edge_manifest["stepHash"] = topology_manifest.get("stepHash")
         self._touch_glb(resolved_step_path)
         stack = contextlib.ExitStack()
         with stack:
@@ -400,6 +439,14 @@ class InspectRefsTests(unittest.TestCase):
                     return_value=topology_manifest if include_index else None,
                 )
             )
+            stack.enter_context(
+                mock.patch.object(
+                    step_targets,
+                    "read_step_display_edge_manifest_from_glb",
+                    return_value=edge_manifest,
+                )
+            )
+            stack.enter_context(mock.patch.object(step_targets, "glb_primitives_have_surface_edge_attributes", return_value=True))
             stack.enter_context(
                 mock.patch.object(
                     step_targets,
@@ -422,6 +469,26 @@ class InspectRefsTests(unittest.TestCase):
         self.assertEqual(1, token["summary"]["occurrenceCount"])
         self.assertEqual(2, token["summary"]["faceCount"])
         self.assertEqual([], token["selections"])
+
+    def test_python_backed_glb_only_entry_inspects_without_step_file(self) -> None:
+        self.step_path.unlink()
+        script_path = self.step_path.with_suffix(".py")
+        script_path.write_text("def gen_step():\n    return object()\n", encoding="utf-8")
+        source_identity = python_source_hash(script_path)
+        manifest = {
+            **_summary_manifest(self.cad_ref),
+            "sourceKind": "python",
+            "sourceHash": source_identity.digest,
+            "sourceFiles": source_identity.manifest_files(),
+        }
+
+        with self._mock_glb_topology(manifest, include_selector=False):
+            result = refs_inspect.inspect_cad_refs(f"@cad[{self.cad_ref}]")
+
+        self.assertTrue(result["ok"])
+        token = result["tokens"][0]
+        self.assertEqual(refs_inspect._relative_to_repo(self.step_path), token["stepPath"])
+        self.assertEqual(1, token["summary"]["occurrenceCount"])
 
     def test_context_provider_can_supply_in_memory_entry_context(self) -> None:
         requested_profiles = []
@@ -545,7 +612,7 @@ class InspectRefsTests(unittest.TestCase):
 
         self.assertFalse(result["ok"])
         error = result["errors"][0]
-        self.assertEqual("missing_glb", error["code"])
+        self.assertEqual("glb_regeneration_failed", error["code"])
         self.assertIn("\nRegenerate STEP artifacts with the following command using the CAD skill:", error["message"])
         self.assertNotIn("scripts.step", error["message"])
         self.assertIn("regenerateCommand", error)
@@ -557,7 +624,7 @@ class InspectRefsTests(unittest.TestCase):
 
         self.assertFalse(result["ok"])
         error = result["errors"][0]
-        self.assertEqual("missing_selector_topology", error["code"])
+        self.assertEqual("glb_regeneration_failed", error["code"])
         self.assertIn("\nRegenerate STEP artifacts with the following command using the CAD skill:", error["message"])
 
     def test_missing_step_topology_is_an_inspect_error(self) -> None:
@@ -566,7 +633,7 @@ class InspectRefsTests(unittest.TestCase):
 
         self.assertFalse(result["ok"])
         error = result["errors"][0]
-        self.assertEqual("missing_step_topology", error["code"])
+        self.assertEqual("glb_regeneration_failed", error["code"])
         self.assertIn("\nRegenerate STEP artifacts with the following command using the CAD skill:", error["message"])
 
     def test_unsupported_step_topology_is_an_inspect_error(self) -> None:
@@ -582,7 +649,7 @@ class InspectRefsTests(unittest.TestCase):
 
         self.assertFalse(result["ok"])
         error = result["errors"][0]
-        self.assertEqual("unsupported_step_topology", error["code"])
+        self.assertEqual("glb_regeneration_failed", error["code"])
         self.assertIn("\nRegenerate STEP artifacts with the following command using the CAD skill:", error["message"])
 
     def test_stale_glb_topology_is_an_inspect_error(self) -> None:
@@ -591,7 +658,7 @@ class InspectRefsTests(unittest.TestCase):
 
         self.assertFalse(result["ok"])
         error = result["errors"][0]
-        self.assertEqual("stale_step_topology", error["code"])
+        self.assertEqual("glb_regeneration_failed", error["code"])
         self.assertIn("\nRegenerate STEP artifacts with the following command using the CAD skill:", error["message"])
 
     def test_legacy_cad_ref_mismatch_is_accepted_when_hash_matches(self) -> None:
@@ -621,12 +688,22 @@ class InspectRefsTests(unittest.TestCase):
             "    return {'instances': [], 'step_output': 'sample-assembly.step'}\n",
             encoding="utf-8",
         )
+        assembly_step_path.write_text("ISO-10303-21; END-ISO-10303-21;\n", encoding="utf-8")
+        source_identity = python_source_hash(assembly_path)
 
         with mock.patch.object(
             step_targets,
             "resolve_cad_source_path",
             return_value=("assembly", assembly_path),
-        ), self._mock_glb_topology(_refs_manifest(assembly_cad_ref), step_path=assembly_step_path):
+        ), self._mock_glb_topology(
+            {
+                **_refs_manifest(assembly_cad_ref),
+                "sourceKind": "python",
+                "sourceHash": source_identity.digest,
+                "sourceFiles": source_identity.manifest_files(),
+            },
+            step_path=assembly_step_path,
+        ):
             result = refs_inspect.inspect_cad_refs(f"@cad[{assembly_cad_ref}#o1.2.f1]", detail=True)
 
         self.assertTrue(result["ok"])
@@ -663,6 +740,41 @@ class InspectRefsTests(unittest.TestCase):
         planes = result["tokens"][0]["planes"]
         self.assertEqual(1, len(planes))
         self.assertEqual("z", planes[0]["axis"])
+
+    def test_refs_text_format_includes_entry_reports(self) -> None:
+        result = {
+            "ok": True,
+            "tokens": [
+                {
+                    "cadPath": self.cad_ref,
+                    "summary": {"faceCount": 2, "edgeCount": 2},
+                    "entryFacts": {
+                        "size": [10.0, 10.0, 10.0],
+                        "center": [5.0, 5.0, 5.0],
+                        "extentAxis": "x",
+                        "diag": 17.320508,
+                        "kind": "part",
+                    },
+                    "planes": [
+                        {
+                            "axis": "z",
+                            "coordinate": 0.0,
+                            "normalSign": 1,
+                            "faceCount": 1,
+                            "totalArea": 100.0,
+                        }
+                    ],
+                    "selections": [],
+                }
+            ],
+            "errors": [],
+        }
+
+        text = inspect_cli._format_refs_text(result, quiet=False, verbose=False)
+
+        self.assertIn("facts: size=[10, 10, 10]", text)
+        self.assertIn("planes: 1 major groups", text)
+        self.assertIn("z=0", text)
 
     def test_diff_planes_returns_entry_planes(self) -> None:
         with self._mock_glb_topology(_refs_manifest(self.cad_ref)):

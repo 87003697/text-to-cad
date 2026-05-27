@@ -4,9 +4,9 @@ Read this file when the user requests STL, 3MF, or native GLB output from CAD ge
 
 ## Policy
 
-STL, 3MF, and native GLB are mesh sidecars, not substitutes for STEP. Generate and validate STEP first, then export requested sidecars from the same `scripts/step` run. Do not treat sidecar renders as CAD validation; inspect the STEP, return `$render` viewer links for every generated or modified supported artifact, and use `$render` snapshots only when visual feedback is needed.
+STL, 3MF, and native GLB are mesh sidecars, not substitutes for STEP. Generate and validate STEP first, then export requested sidecars from the same `scripts/step` run. Do not treat sidecar renders as CAD validation; inspect the STEP, verify the primary STEP/STP with CAD `scripts/snapshot` when snapshot review applies, and return `$cad-viewer` viewer links for every generated or modified supported artifact.
 
-Native GLB sidecars are ordinary glTF 2.0 binary files for external tools: Y-up, meter-scaled, and free of the CAD Explorer `STEP_topology` extension. Do not confuse them with the hidden `.<name>.step.glb` Explorer topology artifact.
+Native GLB sidecars are ordinary glTF 2.0 binary files for external tools: Y-up, meter-scaled, and free of the CAD Viewer `STEP_topology` extension. Do not confuse them with the hidden `.<name>.step.glb` CAD Viewer topology artifact.
 
 ## Tool
 
@@ -32,6 +32,8 @@ Sidecar paths must be relative `.stl`, `.3mf`, or `.glb` paths and are resolved 
 
 ## Mesh tolerance
 
+The default mesh density is `0.02` linear deflection and `0.05` angular deflection.
+
 Use these flags when the default mesh density is wrong for the part:
 
 ```bash
@@ -45,7 +47,7 @@ Use tighter tolerances for small curved parts or visual fidelity. Use looser tol
 
 1. Generate STEP from `gen_step()` with the requested sidecar flag(s).
 2. Run facts/planes/positioning inspection on the STEP.
-3. Return the STEP, requested sidecar files, and `$render` viewer links for every generated or modified supported artifact when available.
+3. Return the STEP, requested sidecar files, and `$cad-viewer` viewer links for every generated or modified supported artifact when available.
 
 Example:
 
@@ -67,12 +69,12 @@ Files:
 - STL: meshes/bracket.stl
 - GLB: meshes/bracket.glb
 
-CAD Explorer:
+CAD Viewer:
 - STEP: http://127.0.0.1:4178/?file=models/bracket.step
 - STL: http://127.0.0.1:4178/?file=meshes/bracket.stl
 - GLB: http://127.0.0.1:4178/?file=meshes/bracket.glb
 
 Validation:
 - STEP geometry validated; STL/3MF/native GLB generated as requested sidecars.
-- Saved snapshot packet run/skipped and why.
+- Primary STEP/STP snapshot packet run/skipped and why.
 ```

@@ -2,9 +2,23 @@
 
 Read this file for every generated STEP artifact and whenever the user asks for geometry facts, references, dimensions, mating, diffing, or frame inspection.
 
+## Contents
+
+- Principle
+- Tool
+- Relationship to build123d joints
+- Validation hierarchy
+- Reference discovery
+- Measurement checks
+- Mating checks
+- Frame inspection
+- Diff checks
+- CAD Viewer handoff
+- Validation report content
+
 ## Principle
 
-Use programmatic geometry checks as the validation source of truth. Use CAD Explorer and renders for visual review, not as substitutes for measurements, facts, planes, labels, or positioning checks.
+Use programmatic geometry checks as the validation source of truth. Use CAD Viewer links and CAD `scripts/snapshot` outputs for visual review, not as substitutes for measurements, facts, planes, labels, or positioning checks.
 
 ## Tool
 
@@ -16,7 +30,7 @@ python scripts/inspect {refs|diff|frame|measure|mate|worker|batch} ...
 
 Inspection targets are resolved from the command cwd unless absolute. Keep the root model in `SKILL.md` explicit when choosing whether to run from the workspace root or the skill directory.
 
-Common data-output flags on most non-render commands:
+Common data-output flags on inspection commands:
 
 - `--format json|text`; default is machine-readable output.
 - `--quiet`
@@ -44,8 +58,8 @@ Default validation sequence:
 4. `mate` confirms read-only alignment deltas for assembly interfaces or ref-to-ref positioning; it does not create source-level build123d joints.
 5. `frame` confirms world frame for occurrences or selected references.
 6. `diff` compares before/after geometry for modifications.
-7. Created or modified supported artifacts are handed to `$render` for live viewer links when available.
-8. Saved `$render` snapshot packets are run or skipped according to `render-review.md`; when run, every visual concern is followed by a deterministic geometry check before it becomes a validation claim.
+7. Created or modified supported artifacts are handed to `$cad-viewer` for live viewer links when available.
+8. Saved CAD `scripts/snapshot` packets are ALWAYS run for visible created or updated primary STEP/STP artifacts unless `snapshot-review.md` documents that no visible geometry changed or no valid artifact exists; when run, every visual concern is followed by a deterministic geometry check before it becomes a validation claim.
 
 ## Reference discovery
 
@@ -126,11 +140,11 @@ python scripts/inspect diff path/to/before.step path/to/after.step --planes
 
 Use diff when a repair, feature addition, or source edit could affect unrelated geometry.
 
-## CAD Explorer handoff
+## CAD Viewer handoff
 
-For every final response involving a generated or modified supported artifact (`.step`, `.stp`, `.stl`, `.3mf`, `.dxf`, or native `.glb`), hand off the explicit artifact path to `$render` when available and return the link it prints. If an important selector was inspected, return the textual `@cad[...]` reference beside the owning Explorer link.
+For every final response involving a generated or modified supported artifact (`.step`, `.stp`, `.stl`, `.3mf`, `.dxf`, or native `.glb`), hand off the explicit artifact path to `$cad-viewer` when available and return the link it prints. If an important selector was inspected, return the textual `@cad[...]` reference beside the owning CAD Viewer link.
 
-Use `render-review.md` to decide whether a saved snapshot packet is needed after deterministic checks. Prefer snapshots over manual viewer or Playwright inspection for visual feedback. Explorer handoff alone does not require saved snapshots.
+Use `snapshot-review.md` to choose packet size and documented skip cases after deterministic checks. For visible created or updated primary STEP/STP artifacts, ALWAYS prefer CAD `scripts/snapshot` over manual viewer or Playwright inspection for visual feedback. Viewer handoff alone does not count as saved snapshot review.
 
 ## Validation report content
 
@@ -146,7 +160,7 @@ Validation:
 - Major planes/refs: <summary>
 - Positioning: <frame/measure/mate results if relevant>
 - Feature checks: <holes, cutouts, bosses, etc.>
-- Visual review: `$render` viewer link returned; saved snapshot packet run/skipped and why; follow-up geometry checks for any visual findings
+- Visual review: `$cad-viewer` viewer link returned; CAD `scripts/snapshot` PNG/GIF included or skipped with reason; follow-up geometry checks for any visual findings
 ```
 
 Do not claim:

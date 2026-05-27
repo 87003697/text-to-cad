@@ -20,6 +20,12 @@ def _write_urdf_source(path: Path, body: str) -> None:
     )
 
 
+def _strip_cadpy_metadata_comments(text: str) -> str:
+    return "\n".join(
+        line for line in text.splitlines() if not line.startswith("<!-- cadpy:")
+    ) + "\n"
+
+
 class UrdfCliTests(unittest.TestCase):
     def test_requires_explicit_target(self) -> None:
         with self.assertRaises(SystemExit) as cm:
@@ -59,9 +65,11 @@ class UrdfCliTests(unittest.TestCase):
 
             self.assertEqual(0, cli.generate_urdf_targets([str(source_path)]))
 
+            output_text = source_path.with_suffix(".urdf").read_text(encoding="utf-8")
+            self.assertIn("<!-- cadpy:sourcePath=", output_text)
             self.assertEqual(
                 '<robot name="sample"><link name="base_link" /></robot>\n',
-                source_path.with_suffix(".urdf").read_text(encoding="utf-8"),
+                _strip_cadpy_metadata_comments(output_text),
             )
 
     def test_generates_default_sibling_output_from_element_root(self) -> None:
@@ -84,9 +92,11 @@ class UrdfCliTests(unittest.TestCase):
 
             self.assertEqual(0, cli.generate_urdf_targets([str(source_path)]))
 
+            output_text = source_path.with_suffix(".urdf").read_text(encoding="utf-8")
+            self.assertIn("<!-- cadpy:sourcePath=", output_text)
             self.assertEqual(
                 '<?xml version="1.0"?>\n<robot name="sample">\n  <link name="base_link" />\n</robot>\n',
-                source_path.with_suffix(".urdf").read_text(encoding="utf-8"),
+                _strip_cadpy_metadata_comments(output_text),
             )
 
     def test_generates_envelope_output_from_element_root(self) -> None:

@@ -9,9 +9,13 @@ SCRIPTS_DIR = Path(__file__).resolve().parents[1]
 if str(SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPTS_DIR))
 
-from common.catalog import StepImportOptions
-from common.generation import generate_step_targets, targets_include_output_pairs
-from common.metadata import normalize_mesh_numeric
+from common.package_path import ensure_cadpy_package_path
+
+ensure_cadpy_package_path()
+
+from cadpy.catalog import StepImportOptions
+from cadpy.generation import generate_step_targets, targets_include_output_pairs
+from cadpy.metadata import normalize_mesh_numeric
 
 
 def _normalize_cli_numeric(value: object, *, field_name: str, parser: argparse.ArgumentParser) -> float | None:
@@ -56,9 +60,14 @@ def _add_step_arguments(parser: argparse.ArgumentParser) -> None:
         help="Export a native Y-up GLB sidecar to this relative .glb path.",
     )
     parser.add_argument(
-        "--skip-explorer",
+        "--skip-step-write",
         action="store_true",
-        help="Skip the adjacent hidden CAD Explorer GLB/topology artifact.",
+        help="For Python gen_step() targets, generate the hidden GLB/topology artifact without writing STEP.",
+    )
+    parser.add_argument(
+        "--force",
+        action="store_true",
+        help="Regenerate STEP and hidden CAD Viewer GLB/topology outputs even when current artifacts match.",
     )
     parser.add_argument(
         "--mesh-tolerance",
@@ -98,7 +107,7 @@ def _step_import_options_from_args(args: argparse.Namespace, *, parser: argparse
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="scripts/step",
-        description="Generate explicit CAD STEP targets and their explorer artifacts.",
+        description="Generate explicit CAD STEP targets and their CAD Viewer artifacts.",
     )
     _add_step_arguments(parser)
     return parser
@@ -117,7 +126,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         direct_step_kind=args.kind,
         step_options=_step_import_options_from_args(args, parser=parser),
         output=args.output,
-        skip_explorer=bool(args.skip_explorer),
+        skip_step_write=bool(args.skip_step_write),
+        force=bool(args.force),
         verbose=bool(args.verbose),
     )
 

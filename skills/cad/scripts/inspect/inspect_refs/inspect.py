@@ -4,9 +4,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
 
-from common.assembly_spec import REPO_ROOT
-from common import cad_ref_syntax as syntax
-from common.reporting import (
+from cadpy import cad_ref_syntax as syntax
+from cadpy.reporting import (
     EntryReportOptions,
     entry_facts_payload,
     entry_positioning_payload,
@@ -14,8 +13,8 @@ from common.reporting import (
     entry_summary_payload,
     major_planes_payload,
 )
-from common.selector_types import SelectorProfile
-from common.step_targets import (
+from cadpy.selector_types import SelectorProfile
+from cadpy.step_targets import (
     CadRefError,
     ResolvedStepTarget,
     cad_path_from_target,
@@ -23,11 +22,11 @@ from common.step_targets import (
     entry_target_from_target,
     resolve_step_target,
     step_path_from_target,
-    validate_step_topology_artifact,
 )
+from cadpy import analysis
+from cadpy import lookup
 
-from . import analysis
-from . import lookup
+REPO_ROOT = Path.cwd().resolve()
 
 
 @dataclass
@@ -210,7 +209,9 @@ def _load_step_context(
     *,
     profile: SelectorProfile,
 ) -> EntryContext:
-    artifact = validate_step_topology_artifact(
+    from cadpy.step_artifacts import ensure_step_topology_artifact
+
+    artifact = ensure_step_topology_artifact(
         target,
         require_selector=(profile != SelectorProfile.SUMMARY),
     )

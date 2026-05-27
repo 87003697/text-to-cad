@@ -5,8 +5,20 @@ from pathlib import Path
 
 from common.assembly_spec import REPO_ROOT, find_step_path, resolve_cad_source_path
 from common.cad_ref_syntax import normalize_cad_path, parse_cad_tokens
-from common.glb_topology import read_step_topology_bundle_from_glb, read_step_topology_manifest_from_glb
-from common.render import existing_part_glb_path, part_glb_path, sha256_file
+from common.catalog import find_source_by_cad_ref
+from common.glb_topology import (
+    STEP_EDGE_BARYCENTRIC_ATTRIBUTE,
+    STEP_EDGE_CLASS_ATTRIBUTE,
+    STEP_EDGE_VISIBILITY_CLASSES,
+    STEP_TOPOLOGY_SCHEMA_VERSION,
+    glb_primitives_have_surface_edge_attributes,
+    glb_surface_edge_class_has_nonzero_values,
+    normalize_step_edge_render_visibility_classes,
+    read_step_display_edge_manifest_from_glb,
+    read_step_topology_bundle_from_glb,
+    read_step_topology_manifest_from_glb,
+)
+from common.render import existing_part_glb_path, part_glb_path
 from common.selector_types import SelectorBundle
 
 
@@ -115,15 +127,16 @@ def step_path_from_target(target: str) -> Path:
         return raw_step_path
 
     entry_target = entry_target_from_target(target)
+    lookup_cad_path = _lookup_cad_path(entry_target.cad_path)
+    step_path = find_step_path(lookup_cad_path)
+    if step_path is not None:
+        return step_path
+
     direct_step_path = _direct_step_path(entry_target.cad_path)
     if direct_step_path is not None:
         return direct_step_path
 
-    lookup_cad_path = _lookup_cad_path(entry_target.cad_path)
-    step_path = find_step_path(lookup_cad_path)
-    if step_path is None:
-        raise CadRefError(f"STEP file not found for target '{target}'.")
-    return step_path
+    raise CadRefError(f"STEP file not found for target '{target}'.")
 
 
 def resolve_step_target(target: str) -> ResolvedStepTarget:
@@ -132,14 +145,13 @@ def resolve_step_target(target: str) -> ResolvedStepTarget:
     raw_step_path = _raw_step_path(str(target or "").strip())
     if raw_step_path is not None:
         lookup_cad_path = _lookup_cad_path(cad_path)
-        resolved = resolve_cad_source_path(lookup_cad_path)
-        resolved_step_path = find_step_path(lookup_cad_path) if resolved is not None else None
-        if resolved is not None and resolved_step_path is not None and resolved_step_path.resolve() == raw_step_path.resolve():
-            kind, source_path = resolved
+        source = find_source_by_cad_ref(lookup_cad_path)
+        resolved_step_path = source.step_path if source is not None else None
+        if source is not None and resolved_step_path is not None and resolved_step_path.resolve() == raw_step_path.resolve():
             return ResolvedStepTarget(
                 cad_path=cad_path,
-                kind=kind,
-                source_path=source_path,
+                kind=source.kind,
+                source_path=source.source_path,
                 step_path=raw_step_path,
             )
         return ResolvedStepTarget(
@@ -148,6 +160,20 @@ def resolve_step_target(target: str) -> ResolvedStepTarget:
             source_path=raw_step_path,
             step_path=raw_step_path,
         )
+
+    lookup_cad_path = _lookup_cad_path(cad_path)
+    source = find_source_by_cad_ref(lookup_cad_path)
+    if source is not None and source.kind in {"part", "assembly"}:
+        if source.step_path is None:
+            raise CadRefError(f"STEP file not found for ref '{cad_path}'.")
+        return ResolvedStepTarget(
+            cad_path=cad_path,
+            kind=source.kind,
+            source_path=source.source_path,
+            step_path=source.step_path.resolve(),
+        )
+    if source is not None:
+        raise CadRefError(f"CAD ref '{cad_path}' is not STEP-backed.")
 
     direct_step_path = _direct_step_path(cad_path)
     if direct_step_path is not None:
@@ -158,23 +184,7 @@ def resolve_step_target(target: str) -> ResolvedStepTarget:
             step_path=direct_step_path,
         )
 
-    lookup_cad_path = _lookup_cad_path(cad_path)
-    resolved = resolve_cad_source_path(lookup_cad_path)
-    if resolved is None:
-        raise CadRefError(f"CAD STEP ref not found for '{cad_path}'.")
-    kind, source_path = resolved
-    if kind in {"part", "assembly"}:
-        step_path = find_step_path(lookup_cad_path)
-        if step_path is None:
-            raise CadRefError(f"STEP file not found for ref '{cad_path}'.")
-        return ResolvedStepTarget(
-            cad_path=cad_path,
-            kind=kind,
-            source_path=source_path,
-            step_path=step_path,
-        )
-
-    raise CadRefError(f"CAD ref '{cad_path}' is not STEP-backed.")
+    raise CadRefError(f"CAD STEP ref not found for '{cad_path}'.")
 
 
 def validate_step_topology_artifact(
@@ -210,21 +220,154 @@ def validate_step_topology_artifact(
         schema_version = int(manifest.get("schemaVersion") or 0)
     except (TypeError, ValueError):
         schema_version = 0
-    if schema_version != 1:
+    if schema_version != STEP_TOPOLOGY_SCHEMA_VERSION:
         raise _topology_artifact_error(
             code="unsupported_step_topology",
-            reason="STEP topology validation requires STEP_topology schemaVersion 1 in the GLB",
+            reason=f"STEP topology validation requires STEP_topology schemaVersion {STEP_TOPOLOGY_SCHEMA_VERSION} in the GLB",
             cad_path=target.cad_path,
             kind=target.kind,
             source_path=target.source_path,
             step_path=target.step_path,
             glb_path=resolved_glb_path,
         )
-    step_hash = str(manifest.get("stepHash") or "").strip()
-    if not step_hash or step_hash != sha256_file(target.step_path):
+    source_kind = str(manifest.get("sourceKind") or "step").strip().lower()
+    manifest_source_path = _source_path_from_manifest(manifest)
+    if manifest_source_path is None:
         raise _topology_artifact_error(
-            code="stale_step_topology",
-            reason="GLB STEP_topology is stale for the current STEP file",
+            code="missing_source_path",
+            reason="GLB STEP_topology is missing required sourcePath identity",
+            cad_path=target.cad_path,
+            kind=target.kind,
+            source_path=target.source_path,
+            step_path=target.step_path,
+            glb_path=resolved_glb_path,
+        )
+    if source_kind == "python":
+        if manifest_source_path.suffix.lower() != ".py":
+            raise _topology_artifact_error(
+                code="missing_source_path",
+                reason="GLB STEP_topology Python sourcePath must point at a Python generator",
+                cad_path=target.cad_path,
+                kind=target.kind,
+                source_path=target.source_path,
+                step_path=target.step_path,
+                glb_path=resolved_glb_path,
+            )
+        source_hash = str(manifest.get("sourceHash") or "").strip()
+        if not source_hash:
+            raise _topology_artifact_error(
+                code="missing_source_identity",
+                reason="GLB STEP_topology is missing Python generator identity",
+                cad_path=target.cad_path,
+                kind=target.kind,
+                source_path=target.source_path,
+                step_path=target.step_path,
+                glb_path=resolved_glb_path,
+            )
+    else:
+        step_hash = str(manifest.get("stepHash") or "").strip()
+        if not step_hash:
+            raise _topology_artifact_error(
+                code="missing_source_identity",
+                reason="GLB STEP_topology is missing STEP file identity",
+                cad_path=target.cad_path,
+                kind=target.kind,
+                source_path=target.source_path,
+                step_path=target.step_path,
+                glb_path=resolved_glb_path,
+            )
+
+    edge_manifest = read_step_display_edge_manifest_from_glb(resolved_glb_path)
+    if edge_manifest is None:
+        raise _topology_artifact_error(
+            code="missing_edge_topology",
+            reason="STEP topology validation requires readable STEP_topology edgeView in the GLB",
+            cad_path=target.cad_path,
+            kind=target.kind,
+            source_path=target.source_path,
+            step_path=target.step_path,
+            glb_path=resolved_glb_path,
+        )
+    try:
+        edge_schema_version = int(edge_manifest.get("schemaVersion") or 0)
+    except (TypeError, ValueError):
+        edge_schema_version = 0
+    primitive_attributes = edge_manifest.get("primitiveAttributes")
+    edge_rendering = edge_manifest.get("edgeRendering")
+    index_edge_rendering = manifest.get("edgeRendering")
+    edge_visibility_classes = (
+        normalize_step_edge_render_visibility_classes(edge_rendering.get("visibilityClasses"))
+        if isinstance(edge_rendering, dict)
+        else ()
+    )
+    index_edge_visibility_classes = (
+        normalize_step_edge_render_visibility_classes(index_edge_rendering.get("visibilityClasses"))
+        if isinstance(index_edge_rendering, dict)
+        else ()
+    )
+    edge_matches_source = False
+    if source_kind == "python":
+        edge_matches_source = (
+            str(edge_manifest.get("sourceKind") or "").strip().lower() == "python"
+            and str(edge_manifest.get("sourceHash") or "").strip() == str(manifest.get("sourceHash") or "").strip()
+        )
+    else:
+        step_hash = str(manifest.get("stepHash") or "").strip()
+        edge_matches_source = str(edge_manifest.get("stepHash") or "").strip() == step_hash
+    if (
+        edge_schema_version != STEP_TOPOLOGY_SCHEMA_VERSION
+        or edge_manifest.get("profile") != "surface-edges"
+        or str(edge_manifest.get("sourcePath") or "").strip() != str(manifest.get("sourcePath") or "").strip()
+        or not edge_matches_source
+        or not edge_visibility_classes
+        or edge_visibility_classes != index_edge_visibility_classes
+        or STEP_EDGE_VISIBILITY_CLASSES["FEATURE"] not in edge_visibility_classes
+        or not isinstance(edge_manifest.get("buffers"), dict)
+        or not isinstance(edge_manifest.get("buffers", {}).get("views"), dict)
+        or "surfaceHalfEdges" not in edge_manifest.get("buffers", {}).get("views", {})
+    ):
+        raise _topology_artifact_error(
+            code="missing_edge_topology",
+            reason=f"STEP topology validation requires STEP_topology edgeView schemaVersion {STEP_TOPOLOGY_SCHEMA_VERSION} in the GLB",
+            cad_path=target.cad_path,
+            kind=target.kind,
+            source_path=target.source_path,
+            step_path=target.step_path,
+            glb_path=resolved_glb_path,
+        )
+    if not (
+        isinstance(primitive_attributes, dict)
+        and primitive_attributes.get("barycentric") == STEP_EDGE_BARYCENTRIC_ATTRIBUTE
+        and primitive_attributes.get("class") == STEP_EDGE_CLASS_ATTRIBUTE
+        and glb_primitives_have_surface_edge_attributes(resolved_glb_path)
+    ):
+        raise _topology_artifact_error(
+            code="missing_surface_edge_attributes",
+            reason=f"STEP topology validation requires {STEP_EDGE_BARYCENTRIC_ATTRIBUTE} and {STEP_EDGE_CLASS_ATTRIBUTE} on STEP mesh primitives",
+            cad_path=target.cad_path,
+            kind=target.kind,
+            source_path=target.source_path,
+            step_path=target.step_path,
+            glb_path=resolved_glb_path,
+        )
+    edge_stats = edge_manifest.get("stats")
+    surface_half_edge_count = (
+        int(edge_stats.get("surfaceHalfEdgeCount") or 0)
+        if isinstance(edge_stats, dict)
+        else 0
+    )
+    generated_counts = (
+        edge_rendering.get("generatedVisibilityClassCounts")
+        if isinstance(edge_rendering, dict) and isinstance(edge_rendering.get("generatedVisibilityClassCounts"), dict)
+        else {}
+    )
+    expects_surface_edge_classes = surface_half_edge_count > 0 or any(
+        int(value or 0) > 0 for value in generated_counts.values()
+    )
+    if expects_surface_edge_classes and not glb_surface_edge_class_has_nonzero_values(resolved_glb_path):
+        raise _topology_artifact_error(
+            code="missing_surface_edge_attributes",
+            reason=f"STEP topology validation requires nonzero {STEP_EDGE_CLASS_ATTRIBUTE} values for generated surface edges",
             cad_path=target.cad_path,
             kind=target.kind,
             source_path=target.source_path,
@@ -273,6 +416,23 @@ def _raw_step_path(target: str) -> Path | None:
         return None
     resolved = path.resolve() if path.is_absolute() else (REPO_ROOT / path).resolve()
     return resolved if resolved.is_file() else None
+
+
+def _resolved_repo_manifest_path(raw_path: str) -> Path | None:
+    if not raw_path:
+        return None
+    path = Path(raw_path)
+    resolved = path.resolve() if path.is_absolute() else (REPO_ROOT / path).resolve()
+    try:
+        resolved.relative_to(REPO_ROOT)
+    except ValueError:
+        return None
+    return resolved if resolved.is_file() else None
+
+
+def _source_path_from_manifest(manifest: dict[str, object] | None) -> Path | None:
+    raw_path = str((manifest or {}).get("sourcePath") or "").strip()
+    return _resolved_repo_manifest_path(raw_path) if raw_path else None
 
 
 def _topology_artifact_error(

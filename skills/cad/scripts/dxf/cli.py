@@ -9,7 +9,11 @@ if __package__ in {None, ""}:
     if str(scripts_dir) not in sys.path:
         sys.path.insert(0, str(scripts_dir))
 
-from common.generation import generate_dxf_targets, run_tool_cli
+from common.package_path import ensure_cadpy_package_path
+
+ensure_cadpy_package_path()
+
+from cadpy.generation import generate_dxf_targets, run_tool_cli
 
 
 def main(argv: Sequence[str] | None = None) -> int:

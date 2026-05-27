@@ -16,6 +16,8 @@ from common.render import existing_part_glb_path, part_glb_path, relative_to_rep
 
 ASSEMBLY_COMPOSITION_SCHEMA_VERSION = 1
 TOPOLOGY_COUNT_KEYS = ("shapeCount", "faceCount", "edgeCount")
+_SOURCE_TOPOLOGY_COUNTS_CACHE: dict[tuple[str, int, int], dict[str, int]] = {}
+_SOURCE_ASSEMBLY_PAYLOAD_CACHE: dict[tuple[str, int, int], dict[str, Any] | None] = {}
 
 
 class AssemblyCompositionError(ValueError):
@@ -367,14 +369,20 @@ def _linked_instance_node(
 
 def _source_assembly_payload(step_path: Path) -> dict[str, Any] | None:
     source_topology_path = existing_part_glb_path(step_path) or part_glb_path(step_path)
+    cache_key = _file_cache_key(source_topology_path)
+    if cache_key in _SOURCE_ASSEMBLY_PAYLOAD_CACHE:
+        return _SOURCE_ASSEMBLY_PAYLOAD_CACHE[cache_key]
     payload = read_step_topology_manifest_from_glb(source_topology_path)
     if payload is None:
+        _SOURCE_ASSEMBLY_PAYLOAD_CACHE[cache_key] = None
         return None
     assembly = payload.get("assembly")
     root = assembly.get("root") if isinstance(assembly, dict) else None
     if isinstance(root, dict) and root.get("children"):
+        _SOURCE_ASSEMBLY_PAYLOAD_CACHE[cache_key] = assembly
         return assembly
     if not _manifest_has_native_assembly_structure(payload):
+        _SOURCE_ASSEMBLY_PAYLOAD_CACHE[cache_key] = None
         return None
     native_payload = build_native_assembly_composition(
         cad_ref=relative_to_repo(step_path.with_suffix("")),
@@ -384,7 +392,9 @@ def _source_assembly_payload(step_path: Path) -> dict[str, Any] | None:
     )
     native_root = native_payload.get("root")
     if not isinstance(native_root, dict) or not native_root.get("children"):
+        _SOURCE_ASSEMBLY_PAYLOAD_CACHE[cache_key] = None
         return None
+    _SOURCE_ASSEMBLY_PAYLOAD_CACHE[cache_key] = native_payload
     return native_payload
 
 
@@ -1074,7 +1084,20 @@ def _read_json(path: Path) -> dict[str, Any]:
     return payload
 
 
+def _file_cache_key(path: Path) -> tuple[str, int, int]:
+    resolved = path.resolve()
+    try:
+        stat = resolved.stat()
+    except OSError:
+        return (resolved.as_posix(), -1, -1)
+    return (resolved.as_posix(), int(stat.st_size), int(stat.st_mtime_ns))
+
+
 def _source_topology_counts(topology_manifest_path: Path) -> dict[str, int]:
+    cache_key = _file_cache_key(topology_manifest_path)
+    cached = _SOURCE_TOPOLOGY_COUNTS_CACHE.get(cache_key)
+    if cached is not None:
+        return dict(cached)
     manifest = read_step_topology_manifest_from_glb(topology_manifest_path)
     if manifest is None:
         raise AssemblyCompositionError(
@@ -1094,6 +1117,7 @@ def _source_topology_counts(topology_manifest_path: Path) -> dict[str, int]:
         raise AssemblyCompositionError(
             f"Source topology has invalid counts in {relative_to_repo(topology_manifest_path)}: {counts}"
         )
+    _SOURCE_TOPOLOGY_COUNTS_CACHE[cache_key] = counts
     return counts
 
 

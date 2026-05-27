@@ -1,5 +1,4 @@
 import os
-import tempfile
 import unittest
 import zipfile
 from pathlib import Path
@@ -13,6 +12,7 @@ from OCP.TopExp import TopExp_Explorer
 from OCP.TopoDS import TopoDS
 
 from common.step_scene import LoadedStepScene, OccurrenceNode, _shape_hash
+from common.tests.tmp_root import temporary_directory
 from common.threemf import export_scene_3mf, export_shape_3mf
 
 
@@ -95,7 +95,7 @@ def _read_model(path: Path) -> ET.Element:
 
 class ThreeMfExportTests(unittest.TestCase):
     def test_export_shape_3mf_writes_loadable_package(self) -> None:
-        with tempfile.TemporaryDirectory(prefix="cad-3mf-test-") as temp_dir:
+        with temporary_directory(prefix="cad-3mf-test-") as temp_dir:
             output_path = Path(temp_dir) / "box.3mf"
             shape = build123d.Box(10, 20, 30).wrapped
             BRepMesh_IncrementalMesh(shape, 0.1, True, 0.1, True).Perform()
@@ -123,7 +123,7 @@ class ThreeMfExportTests(unittest.TestCase):
             self.assertTrue(len(geometry) if geometry is not None else len(loaded.faces))
 
     def test_scene_export_emits_component_objects_and_transforms(self) -> None:
-        with tempfile.TemporaryDirectory(prefix="cad-3mf-test-") as temp_dir:
+        with temporary_directory(prefix="cad-3mf-test-") as temp_dir:
             output_path = Path(temp_dir) / "assembly.3mf"
             shape = _meshed_box()
             prototype_key = _shape_hash(shape)
@@ -175,7 +175,7 @@ class ThreeMfExportTests(unittest.TestCase):
             self.assertTrue(any("25" in transform.split() for transform in transforms))
 
     def test_uniform_color_uses_object_level_material(self) -> None:
-        with tempfile.TemporaryDirectory(prefix="cad-3mf-test-") as temp_dir:
+        with temporary_directory(prefix="cad-3mf-test-") as temp_dir:
             output_path = Path(temp_dir) / "red.3mf"
             shape = _meshed_box()
             scene, prototype_key = _single_leaf_scene(
@@ -195,9 +195,21 @@ class ThreeMfExportTests(unittest.TestCase):
             self.assertIsNotNone(mesh_object.attrib.get("pindex"))
             self.assertFalse(any("p1" in triangle.attrib for triangle in triangles))
 
+    def test_display_colors_are_srgb_encoded_from_scene_colors(self) -> None:
+        with temporary_directory(prefix="cad-3mf-test-") as temp_dir:
+            output_path = Path(temp_dir) / "rail.3mf"
+            shape = _meshed_box()
+            scene, _prototype_key = _single_leaf_scene(shape)
+
+            export_scene_3mf(scene, output_path, occurrence_colors={"o1": (0.22, 0.28, 0.34, 1.0)})
+
+            root = _read_model(output_path)
+            bases = root.findall("./m:resources/m:basematerials/m:base", NS)
+            self.assertIn("#81909EFF", [base.attrib.get("displaycolor") for base in bases])
+
     def test_occurrence_color_overrides_default_material(self) -> None:
-        with tempfile.TemporaryDirectory(prefix="cad-3mf-test-") as temp_dir:
-            output_path = Path(temp_dir) / "black.3mf"
+        with temporary_directory(prefix="cad-3mf-test-") as temp_dir:
+            output_path = Path(temp_dir) / "dark.3mf"
             shape = _meshed_box()
             scene, _prototype_key = _single_leaf_scene(shape)
 
@@ -206,15 +218,15 @@ class ThreeMfExportTests(unittest.TestCase):
             root = _read_model(output_path)
             bases = root.findall("./m:resources/m:basematerials/m:base", NS)
             mesh_object = next(obj for obj in root.findall("./m:resources/m:object", NS) if obj.find("m:mesh", NS) is not None)
-            black_index = next(
+            dark_index = next(
                 str(index)
                 for index, base in enumerate(bases)
-                if base.attrib.get("displaycolor") == "#2B2F33FF"
+                if base.attrib.get("displaycolor") == "#72777CFF"
             )
-            self.assertEqual(black_index, mesh_object.attrib.get("pindex"))
+            self.assertEqual(dark_index, mesh_object.attrib.get("pindex"))
 
     def test_parent_occurrence_color_applies_to_descendant_meshes(self) -> None:
-        with tempfile.TemporaryDirectory(prefix="cad-3mf-test-") as temp_dir:
+        with temporary_directory(prefix="cad-3mf-test-") as temp_dir:
             output_path = Path(temp_dir) / "child.3mf"
             shape = _meshed_box()
             prototype_key = _shape_hash(shape)
@@ -248,15 +260,15 @@ class ThreeMfExportTests(unittest.TestCase):
             root = _read_model(output_path)
             bases = root.findall("./m:resources/m:basematerials/m:base", NS)
             mesh_object = next(obj for obj in root.findall("./m:resources/m:object", NS) if obj.find("m:mesh", NS) is not None)
-            black_index = next(
+            dark_index = next(
                 str(index)
                 for index, base in enumerate(bases)
-                if base.attrib.get("displaycolor") == "#2B2F33FF"
+                if base.attrib.get("displaycolor") == "#72777CFF"
             )
-            self.assertEqual(black_index, mesh_object.attrib.get("pindex"))
+            self.assertEqual(dark_index, mesh_object.attrib.get("pindex"))
 
     def test_mixed_face_colors_use_triangle_material_indices(self) -> None:
-        with tempfile.TemporaryDirectory(prefix="cad-3mf-test-") as temp_dir:
+        with temporary_directory(prefix="cad-3mf-test-") as temp_dir:
             output_path = Path(temp_dir) / "mixed.3mf"
             shape = _meshed_box()
             face_hashes: list[int] = []
@@ -291,7 +303,7 @@ class ThreeMfExportTests(unittest.TestCase):
 @unittest.skipUnless(os.environ.get("CAD_3MF_HEAVY_TESTS") == "1", "set CAD_3MF_HEAVY_TESTS=1 to run fixture exports")
 class ThreeMfFixtureExportTests(unittest.TestCase):
     def test_sample_assembly_exports_native_components(self) -> None:
-        with tempfile.TemporaryDirectory(prefix="cad-3mf-fixture-") as temp_dir:
+        with temporary_directory(prefix="cad-3mf-fixture-") as temp_dir:
             output_path = Path(temp_dir) / "sample_assembly.3mf"
             shape_a = _meshed_box()
             shape_b = _meshed_box(6, 8, 10)
@@ -362,7 +374,7 @@ class ThreeMfFixtureExportTests(unittest.TestCase):
             self.assertGreater(len(getattr(loaded, "geometry", {}) or []), 1)
 
     def test_sample_components_export_material_assignments(self) -> None:
-        with tempfile.TemporaryDirectory(prefix="cad-3mf-fixture-") as temp_dir:
+        with temporary_directory(prefix="cad-3mf-fixture-") as temp_dir:
             output_path = Path(temp_dir) / "sample_components.3mf"
             shape_a = _meshed_box()
             shape_b = _meshed_box(6, 8, 10)
