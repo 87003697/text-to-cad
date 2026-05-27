@@ -92,7 +92,7 @@ function InstallCommand({
   item: (typeof pluginInstallCommands)[number];
 }) {
   return (
-    <div className="border border-border bg-card">
+    <div className="min-w-0 max-w-full overflow-hidden border border-border bg-card">
       <div className="border-b border-border px-3 py-2 text-label uppercase tracking-[1.5px] text-muted-foreground">
         {item.agent}
       </div>
@@ -112,7 +112,7 @@ function InstallCommand({
 
 function InstallCommands() {
   return (
-    <div className="grid gap-2">
+    <div className="grid min-w-0 gap-2">
       {pluginInstallCommands.map((item) => (
         <InstallCommand key={item.agent} item={item} />
       ))}
@@ -122,7 +122,7 @@ function InstallCommands() {
 
 function SkillsInstallCommand() {
   return (
-    <div className="border border-border bg-card">
+    <div className="min-w-0 max-w-full overflow-hidden border border-border bg-card">
       <div className="flex min-h-[54px] min-w-0 max-w-full items-stretch">
         <code className="flex min-w-0 flex-1 items-center overflow-x-auto whitespace-pre px-3 py-2 text-sm leading-6 text-foreground">
           {skillsInstallCommand}
