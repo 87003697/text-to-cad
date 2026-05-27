@@ -9,6 +9,9 @@
   "installCommand": "npm --prefix viewer ci",
   "buildCommand": "npm --prefix viewer run build",
   "outputDirectory": "viewer/dist",
+  "env": {
+    "VIEWER_VERCEL_BLOB_PREFIX": "models"
+  },
   "rewrites": [
     {
       "source": "/__cad/server",
