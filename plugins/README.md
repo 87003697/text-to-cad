@@ -12,6 +12,8 @@ and bundles every supported CAD Skills skill through symlinks into the canonical
 
 The plugin is intentionally thin:
 
+- `plugins/.claude-plugin/marketplace.json` describes the Claude Code
+  marketplace package list.
 - `plugins/cad/.codex-plugin/plugin.json` describes the Codex plugin.
 - `plugins/cad/.claude-plugin/plugin.json` describes the Claude Code plugin.
 - `plugins/cad/gemini-extension.json` describes the Gemini CLI extension.
