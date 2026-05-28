@@ -71,7 +71,7 @@ directly for supported agents.
 
 ### Plugins
 
-Provider-native plugin installs are also available:
+Provider-native plugin installs are also available for Codex and Claude Code:
 
 ```bash
 # Codex
@@ -83,11 +83,6 @@ codex plugin add cad@text-to-cad
 # Claude Code
 claude plugin marketplace add earthtojake/text-to-cad
 claude plugin install cad@text-to-cad
-```
-
-```bash
-# Gemini CLI
-gemini extensions install https://github.com/earthtojake/text-to-cad
 ```
 
 Restart your agent if newly installed skills do not appear. For local

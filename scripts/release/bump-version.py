@@ -58,8 +58,7 @@ JSON_TARGETS = (
     JsonTarget(Path("skills/cad-viewer/scripts/viewer/package.json"), (("version",),)),
     JsonTarget(Path("plugins/cad/.claude-plugin/plugin.json"), (("version",),)),
     JsonTarget(Path("plugins/cad/.codex-plugin/plugin.json"), (("version",),)),
-    JsonTarget(Path("plugins/cad/gemini-extension.json"), (("version",),)),
-    JsonTarget(Path("plugins/.claude-plugin/marketplace.json"), (("version",),), plugin_entries=("cad",)),
+    JsonTarget(Path(".claude-plugin/marketplace.json"), (("version",),), plugin_entries=("cad",)),
     JsonTarget(Path("viewer/packages/cadjs/package.json"), (("version",),), required=False),
     JsonTarget(
         Path("viewer/packages/cadjs/package-lock.json"),

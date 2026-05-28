@@ -47,6 +47,23 @@ function filenameFromUrl(value) {
   }
 }
 
+function cleanUrl(value) {
+  const text = String(value || "").trim();
+  if (!text) {
+    return "";
+  }
+  try {
+    const url = new URL(text);
+    return url.protocol === "http:" || url.protocol === "https:" ? url.toString() : "";
+  } catch {
+    return "";
+  }
+}
+
+function hostedBlobDownloadsAvailable(viewerServerInfo = {}) {
+  return String(viewerServerInfo?.backend || "").trim().toLowerCase() === "vercel-blob";
+}
+
 function explicitSourceFileRef(entry) {
   return (
     normalizedRelativePath(entry?.sourceFile) ||
@@ -66,6 +83,27 @@ function explicitSourceWorkspaceFileRef(entry) {
 
 function artifactFileRef(entry, viewerServerInfo = {}) {
   return viewerRootRelativePath(entry?.url, viewerServerInfo, { anchorFile: entry?.file });
+}
+
+function sourceUrlFromEntry(entry) {
+  return cleanUrl(entry?.sourceUrl || entry?.source?.url);
+}
+
+function stepUrlFromEntry(entry) {
+  const explicitStepUrl = cleanUrl(entry?.stepUrl || entry?.step?.url);
+  if (explicitStepUrl) {
+    return explicitStepUrl;
+  }
+  return String(entry?.sourceKind || entry?.stepSourceKind || "").trim().toLowerCase() === "python"
+    ? ""
+    : sourceUrlFromEntry(entry);
+}
+
+function outputUrlFromEntry(entry, outputFileRef) {
+  if (isStepFileRef(outputFileRef)) {
+    return stepUrlFromEntry(entry);
+  }
+  return cleanUrl(entry?.outputUrl || entry?.output?.url || entry?.url);
 }
 
 function localPathSeparator(basePath) {
@@ -120,6 +158,9 @@ export function fileAccessAssetsForEntry(entry, {
   const outputFilename = basenameFromFileRef(outputFileRef);
   const artifactRef = artifactFileRef(entry, viewerServerInfo);
   const artifactFilename = basenameFromFileRef(artifactRef);
+  const directDownloads = hostedBlobDownloadsAvailable(viewerServerInfo);
+  const outputDownloadUrl = directDownloads ? outputUrlFromEntry(entry, outputFileRef) : "";
+  const artifactDownloadUrl = directDownloads ? cleanUrl(entry?.url) : "";
   const sourceKind = String(stepSourceStatus?.sourceKind || entryStepSourceKind(entry)).trim().toLowerCase();
   const stepSourcePath = normalizedRelativePath(stepSourceStatus?.sourcePath);
   const explicitSourceRef = explicitSourceFileRef(entry);
@@ -150,6 +191,7 @@ export function fileAccessAssetsForEntry(entry, {
       filename: artifactFilename,
       label: artifactFilename,
       rootRelativePath: artifactRef,
+      ...(artifactDownloadUrl ? { downloadUrl: artifactDownloadUrl } : {}),
     } : null,
     output: {
       asset: "output",
@@ -157,6 +199,7 @@ export function fileAccessAssetsForEntry(entry, {
       filename: outputFilename || "download",
       label: outputFilename || "download",
       rootRelativePath: outputFileRef,
+      ...(outputDownloadUrl ? { downloadUrl: outputDownloadUrl } : {}),
     },
     source: sourceFilename ? {
       asset: "source",

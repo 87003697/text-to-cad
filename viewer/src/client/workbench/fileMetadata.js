@@ -133,7 +133,7 @@ function downloadActionOptionsForAsset(asset) {
     return {};
   }
   return {
-    href: downloadUrlForFileAsset(asset.fileRef, asset.asset),
+    href: cleanText(asset.downloadUrl) || downloadUrlForFileAsset(asset.fileRef, asset.asset),
     action: "download",
     asset
   };

@@ -16,7 +16,7 @@ from pathlib import Path
 repo_root = Path(sys.argv[1])
 
 plugin_name = "cad"
-version = "0.1.4"
+version = "0.1.5"
 skills = [
     "bambu-labs",
     "cad",
@@ -32,10 +32,8 @@ skills = [
 plugin_root = repo_root / "plugins" / plugin_name
 codex_manifest_path = plugin_root / ".codex-plugin" / "plugin.json"
 claude_manifest_path = plugin_root / ".claude-plugin" / "plugin.json"
-claude_marketplace_path = repo_root / "plugins" / ".claude-plugin" / "marketplace.json"
-gemini_manifest_path = plugin_root / "gemini-extension.json"
-gemini_context_path = plugin_root / "GEMINI.md"
-codex_marketplace_path = repo_root / ".agents" / "plugins" / "marketplace.json"
+claude_marketplace_path = repo_root / ".claude-plugin" / "marketplace.json"
+codex_marketplace_path = repo_root / ".codex-plugin" / "marketplace.json"
 version_path = plugin_root / "VERSION"
 errors: list[str] = []
 
@@ -49,8 +47,7 @@ require(plugin_root.is_dir(), f"missing plugin directory: {plugin_root}")
 require(codex_manifest_path.is_file(), f"missing Codex plugin manifest: {codex_manifest_path}")
 require(claude_manifest_path.is_file(), f"missing Claude plugin manifest: {claude_manifest_path}")
 require(claude_marketplace_path.is_file(), f"missing Claude marketplace: {claude_marketplace_path}")
-require(gemini_manifest_path.is_file(), f"missing Gemini extension manifest: {gemini_manifest_path}")
-require(gemini_context_path.is_file(), f"missing Gemini extension context: {gemini_context_path}")
+require(codex_marketplace_path.is_file(), f"missing Codex marketplace: {codex_marketplace_path}")
 require(version_path.is_file(), f"missing plugin version file: {version_path}")
 
 
@@ -79,12 +76,6 @@ def validate_plugin_manifest(path: Path, provider: str) -> None:
 
 validate_plugin_manifest(codex_manifest_path, "Codex")
 validate_plugin_manifest(claude_manifest_path, "Claude")
-
-gemini_manifest = load_json_object(gemini_manifest_path)
-if gemini_manifest:
-    require(gemini_manifest.get("name") == plugin_name, "Gemini extension manifest name is stale")
-    require(gemini_manifest.get("version") == version, "Gemini extension manifest version is stale")
-    require(gemini_manifest.get("contextFileName") == "GEMINI.md", "Gemini extension contextFileName is stale")
 
 codex_marketplace = load_json_object(codex_marketplace_path)
 if codex_marketplace:
@@ -132,14 +123,14 @@ for skill in skills:
     bundled_skill = skills_root / skill
     require(root_skill.is_dir(), f"missing source skill: {root_skill}")
     require((root_skill / "SKILL.md").is_file(), f"missing source skill manifest: {root_skill / 'SKILL.md'}")
-    require(bundled_skill.is_symlink(), f"plugin skill must be a symlink: {bundled_skill}")
-    if bundled_skill.exists():
-        try:
-            resolved = bundled_skill.resolve(strict=True)
-        except FileNotFoundError:
-            errors.append(f"plugin skill symlink is broken: {bundled_skill}")
-        else:
-            require(resolved == root_skill.resolve(strict=True), f"plugin skill points at wrong target: {bundled_skill} -> {resolved}")
+    require(bundled_skill.is_dir(), f"plugin skill copy must be a directory: {bundled_skill}")
+    require(not bundled_skill.is_symlink(), f"plugin skill copy must not be a symlink: {bundled_skill}")
+    require((bundled_skill / "SKILL.md").is_file(), f"missing plugin skill manifest: {bundled_skill / 'SKILL.md'}")
+
+if skills_root.is_dir():
+    for path in skills_root.rglob("*"):
+        if path.is_symlink():
+            errors.append(f"plugin skill copy must not contain symlinks: {path}")
 
 if skills_root.is_dir():
     bundled_names = sorted(path.name for path in skills_root.iterdir() if not path.name.startswith("."))

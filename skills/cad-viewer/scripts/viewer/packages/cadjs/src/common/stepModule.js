@@ -133,6 +133,44 @@ function inferCadPathFromStepModuleUrl(url) {
   return normalizeCadPath([directory, match[1]].filter(Boolean).join("/"));
 }
 
+function normalizeRelativeStepPath(value) {
+  const rawPath = normalizeString(value).replace(/\\/g, "/");
+  if (!rawPath || rawPath.startsWith("/") || /^[A-Za-z]:\//.test(rawPath) || /^[a-z][a-z0-9+.-]*:/i.test(rawPath)) {
+    return "";
+  }
+  const parts = rawPath.split("/").filter((part) => part && part !== ".");
+  if (!parts.length || parts.some((part) => part === "..")) {
+    return "";
+  }
+  const normalizedPath = parts.join("/");
+  return /\.(step|stp)$/i.test(normalizedPath) ? normalizedPath : "";
+}
+
+function cadPathFromStepPath(stepPath) {
+  return normalizeCadPath(String(stepPath || "").replace(/\.(step|stp)$/i, ""));
+}
+
+function normalizeStepLink(value) {
+  const raw = isObject(value) ? value : {};
+  return {
+    ...raw,
+    path: normalizeRelativeStepPath(raw.path)
+  };
+}
+
+function normalizeManifestStep(value, normalizedStep) {
+  if (!isObject(value) && !normalizedStep.path) {
+    return null;
+  }
+  const step = isObject(value) ? { ...value } : {};
+  if (normalizedStep.path) {
+    step.path = normalizedStep.path;
+  } else {
+    delete step.path;
+  }
+  return Object.keys(step).length ? step : null;
+}
+
 function normalizeFeatureRef(rawFeature, cadPath = "") {
   const raw = isObject(rawFeature) ? rawFeature : {};
   const ref = normalizeString(raw.ref);
@@ -220,25 +258,40 @@ export function normalizeStepModuleDefinition(rawModule, { url = "", cadPath = "
   if (!isObject(rawModule)) {
     throw new Error("STEP runtime module must export an object");
   }
-  const normalizedCadPath = normalizeCadPath(cadPath) || inferCadPathFromStepModuleUrl(url);
   const manifest = isObject(rawModule.manifest) ? rawModule.manifest : rawModule;
   const schemaVersion = Number(manifest.schemaVersion || rawModule.schemaVersion || 1);
   if (schemaVersion !== STEP_MODULE_SCHEMA_VERSION) {
     throw new Error(`Unsupported STEP runtime module schemaVersion ${schemaVersion || "unknown"}`);
   }
+  const step = normalizeStepLink(manifest.step);
+  const stepCadPath = cadPathFromStepPath(step.path);
+  const normalizedCadPath = stepCadPath || normalizeCadPath(cadPath) || inferCadPathFromStepModuleUrl(url);
   const parameters = normalizeParameters(manifest.parameters);
   const parameterMap = Object.fromEntries(parameters.map((definition) => [definition.id, definition]));
   const defaultParameterValues = Object.fromEntries(
     parameters.map((definition) => [definition.id, definition.defaultValue])
   );
+  const normalizedManifestStep = normalizeManifestStep(manifest.step, step);
+  const normalizedManifest = {
+    ...manifest,
+    schemaVersion: STEP_MODULE_SCHEMA_VERSION
+  };
+  if (normalizedManifestStep) {
+    normalizedManifest.step = normalizedManifestStep;
+  } else {
+    delete normalizedManifest.step;
+  }
   return {
     url: normalizeString(url),
     cadPath: normalizedCadPath,
-    module: rawModule,
-    manifest: {
-      ...manifest,
-      schemaVersion: STEP_MODULE_SCHEMA_VERSION
+    step: {
+      path: step.path,
+      cadPath: stepCadPath || normalizedCadPath,
+      explicit: Boolean(step.path),
+      inferred: !step.path && Boolean(normalizedCadPath)
     },
+    module: rawModule,
+    manifest: normalizedManifest,
     features: normalizeFeatures(manifest.features, { cadPath: normalizedCadPath }),
     parameters,
     parameterMap,

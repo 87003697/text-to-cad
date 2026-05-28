@@ -18,17 +18,11 @@ const pluginInstallCommands = [
     command:
       "claude plugin marketplace add earthtojake/text-to-cad\nclaude plugin install cad@text-to-cad",
   },
-  {
-    agent: "Gemini CLI",
-    command:
-      "gemini extensions install https://github.com/earthtojake/text-to-cad",
-  },
 ];
 
 const supportedAgents = [
   { name: "Claude Code", slug: "claude-code", icon: "claude-code.svg" },
   { name: "Codex", slug: "codex", icon: "codex.svg" },
-  { name: "Gemini", slug: "gemini", icon: "gemini.svg" },
 ];
 
 const skillGroups = [

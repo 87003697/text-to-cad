@@ -14,6 +14,12 @@ const viewerServerInfo = {
   rootPath: "/workspace/text-to-cad/models",
 };
 
+const hostedViewerServerInfo = {
+  backend: "vercel-blob",
+  rootDir: "",
+  url: "https://demo.example.test",
+};
+
 test("file access assets always include output filename", () => {
   const assets = fileAccessAssetsForEntry({
     file: "assemblies/robot-arm/robot-arm.step",
@@ -45,6 +51,29 @@ test("file access assets include generated artifact URLs when present", () => {
     label: ".robot-arm.step.glb",
     rootRelativePath: "assemblies/robot-arm/.robot-arm.step.glb",
   });
+});
+
+test("file access assets expose direct Blob download URLs for hosted catalogs", () => {
+  const assets = fileAccessAssetsForEntry({
+    file: "assemblies/robot-arm/robot-arm.step",
+    kind: "assembly",
+    url: "https://blob.example.test/models2/assemblies/robot-arm/.robot-arm.step.glb",
+    sourceKind: "step",
+    step: {
+      url: "https://blob.example.test/models2/assemblies/robot-arm/robot-arm.step",
+    },
+  }, {
+    viewerServerInfo: hostedViewerServerInfo,
+  });
+
+  assert.equal(
+    assets.output.downloadUrl,
+    "https://blob.example.test/models2/assemblies/robot-arm/robot-arm.step"
+  );
+  assert.equal(
+    assets.artifact.downloadUrl,
+    "https://blob.example.test/models2/assemblies/robot-arm/.robot-arm.step.glb"
+  );
 });
 
 test("file access assets infer same-stem Python source filenames for Python-backed STEP entries", () => {

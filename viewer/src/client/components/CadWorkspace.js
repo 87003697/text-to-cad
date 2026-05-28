@@ -5357,7 +5357,8 @@ export default function CadWorkspace({
     if (!fileRef || typeof window === "undefined") {
       return;
     }
-    const downloadUrl = downloadUrlForFileAsset(fileRef, assetKind);
+    const directDownloadUrl = String(assetInfo?.downloadUrl || "").trim();
+    const downloadUrl = directDownloadUrl || downloadUrlForFileAsset(fileRef, assetKind);
     setCopyStatus("");
     setScreenshotStatus("");
     const filename = String(assetInfo?.filename || "").trim();
@@ -5384,7 +5385,7 @@ export default function CadWorkspace({
       let copyText = "";
       let statusLabel = "Copied file reference";
       if (kind === "link") {
-        copyText = downloadUrlForFileAsset(
+        copyText = String(assetInfo?.downloadUrl || "").trim() || downloadUrlForFileAsset(
           fileRef,
           assetKind,
           typeof window === "undefined" ? viewerServerInfo?.url : window.location.href

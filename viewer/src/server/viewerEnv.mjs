@@ -88,12 +88,17 @@ export function vercelBlobPrefixFromEnv(env = process.env) {
   }
   try {
     const url = new URL(prefix);
-    if (url.hostname.toLowerCase().endsWith(".public.blob.vercel-storage.com")) {
+    const hostname = url.hostname.toLowerCase();
+    if (
+      hostname.endsWith(".public.blob.vercel-storage.com") ||
+      hostname === "blob.vercel-storage.com"
+    ) {
       url.hostname = `${storeId}.public.blob.vercel-storage.com`;
       return url.toString();
     }
   } catch {
-    // Non-URL prefixes are valid for SDK-only paths.
+    const pathname = prefix.replace(/^\/+|\/+$/g, "");
+    return `https://${storeId}.public.blob.vercel-storage.com${pathname ? `/${pathname}` : ""}`;
   }
   return prefix;
 }

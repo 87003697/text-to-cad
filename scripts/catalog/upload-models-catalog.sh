@@ -16,11 +16,11 @@ The uploader excludes mechbench/, mechbench2/, 7dof_arm/, and Python source
 files by default.
 
 Environment:
-  VIEWER_VERCEL_BLOB_PREFIX            Required. Blob path prefix, for example: models2
-  BLOB_READ_WRITE_TOKEN                Required. Vercel Blob read/write token.
-  VIEWER_VERCEL_BLOB_READ_WRITE_TOKEN  Optional override for BLOB_READ_WRITE_TOKEN.
-  VIEWER_LOCAL_ROOT_DIR                Optional upload root. Defaults to models/.
-  VIEWER_ASSET_BACKEND                 Optional. Defaults to vercel-blob.
+  VIEWER_VERCEL_BLOB_PREFIX                 Required. Blob path prefix, for example: models2
+  BLOB_READ_WRITE_TOKEN                     Vercel Blob read/write token.
+  VIEWER_VERCEL_BLOB_READ_WRITE_TOKEN       Alternate Vercel Blob read/write token.
+  VIEWER_LOCAL_ROOT_DIR                     Optional upload root. Defaults to models/.
+  VIEWER_ASSET_BACKEND                      Optional. Defaults to vercel-blob.
 
 Options are passed through to npm --prefix viewer run upload:blob.
 EOF
@@ -34,7 +34,7 @@ case "${1:-}" in
 esac
 
 : "${VIEWER_VERCEL_BLOB_PREFIX:?Set VIEWER_VERCEL_BLOB_PREFIX before uploading to Vercel Blob.}"
-if [[ -z "${VIEWER_VERCEL_BLOB_READ_WRITE_TOKEN:-}" && -z "${BLOB_READ_WRITE_TOKEN:-}" ]]; then
+if [ -z "${BLOB_READ_WRITE_TOKEN:-}" ] && [ -z "${VIEWER_VERCEL_BLOB_READ_WRITE_TOKEN:-}" ]; then
   echo "Set BLOB_READ_WRITE_TOKEN or VIEWER_VERCEL_BLOB_READ_WRITE_TOKEN before uploading to Vercel Blob." >&2
   exit 1
 fi

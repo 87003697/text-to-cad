@@ -115,6 +115,7 @@ export function createCadViewerApiMiddleware({
   serverInfo = () => ({}),
   enableStepArtifactBackend = false,
   claimDisabledStepArtifactRoute = false,
+  preferFileDownloadRedirects = false,
   onCatalogChanged = () => {},
   rootDir,
 } = {}) {
@@ -166,6 +167,17 @@ export function createCadViewerApiMiddleware({
       try {
         const catalog = await backend.readCatalog({ rootDir });
         const request = fileAssetRequest(backend, requestUrl, { rootDir, catalog });
+
+        if (preferFileDownloadRedirects && typeof backend.resolveFileAssetAccess === "function") {
+          const access = await backend.resolveFileAssetAccess(request);
+          if (access?.url) {
+            res.statusCode = 302;
+            res.setHeader("location", access.url);
+            res.setHeader("cache-control", "no-store");
+            res.end("");
+            return;
+          }
+        }
 
         if (typeof backend.readFileAsset === "function") {
           const result = await backend.readFileAsset(request);

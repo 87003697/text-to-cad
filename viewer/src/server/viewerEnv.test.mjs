@@ -79,6 +79,24 @@ test("viewer env can derive the Blob store ID from the server token", () => {
   );
 });
 
+test("viewer env builds public Blob URLs from path-only prefixes and store IDs", () => {
+  assert.equal(
+    vercelBlobPrefixFromEnv({
+      VIEWER_VERCEL_BLOB_PREFIX: "models2",
+      BLOB_STORE_ID: "store_TbC5QQRyTrzKnlQZ",
+    }),
+    "https://tbc5qqrytrzknlqz.public.blob.vercel-storage.com/models2"
+  );
+  assert.equal(
+    vercelBlobConfigFromEnv({
+      VIEWER_VERCEL_BLOB_PREFIX: "models2",
+      VIEWER_VERCEL_BLOB_CATALOG_PATH: "catalog-0.1.3.json",
+      BLOB_STORE_ID: "store_TbC5QQRyTrzKnlQZ",
+    }).catalogUrl,
+    "https://tbc5qqrytrzknlqz.public.blob.vercel-storage.com/models2/catalog-0.1.3.json"
+  );
+});
+
 test("viewer env derives catalog URL only from public Blob URL prefixes", () => {
   assert.equal(
     vercelBlobCatalogUrlFromPrefix("https://blob.example/models2", "catalog-0.1.3.json"),

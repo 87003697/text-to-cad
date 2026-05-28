@@ -9,13 +9,14 @@ CAD_VIEWER_ARGS=()
 URDF_ARGS=()
 SRDF_ARGS=()
 SDF_ARGS=()
+PLUGIN_ARGS=()
 
 usage() {
   cat <<'EOF'
 Usage:
   scripts/build/build-skills.sh [--check] [--clean] [--no-install] [--no-build]
 
-Builds all generated skill runtimes.
+Builds all generated skill runtimes and plugin package copies.
 
 Options:
   --check       Build into tmp/ and fail if checked-in skill runtimes are stale.
@@ -35,6 +36,7 @@ while [ "$#" -gt 0 ]; do
       URDF_ARGS+=("--check")
       SRDF_ARGS+=("--check")
       SDF_ARGS+=("--check")
+      PLUGIN_ARGS+=("--check")
       ;;
     --clean)
       CAD_ARGS+=("--clean")
@@ -42,6 +44,7 @@ while [ "$#" -gt 0 ]; do
       URDF_ARGS+=("--clean")
       SRDF_ARGS+=("--clean")
       SDF_ARGS+=("--clean")
+      PLUGIN_ARGS+=("--clean")
       ;;
     --no-install)
       CAD_ARGS+=("--no-install")
@@ -115,6 +118,17 @@ if [ "${#CAD_VIEWER_ARGS[@]}" -gt 0 ]; then
   "$SCRIPT_DIR/build-cad-viewer-skill.sh" "${CAD_VIEWER_ARGS[@]}"
 else
   "$SCRIPT_DIR/build-cad-viewer-skill.sh"
+fi
+
+if [ "$MODE" = "check" ]; then
+  echo "Checking plugin package skill copy..."
+else
+  echo "Building plugin package skill copy..."
+fi
+if [ "${#PLUGIN_ARGS[@]}" -gt 0 ]; then
+  "$SCRIPT_DIR/build-plugin.sh" "${PLUGIN_ARGS[@]}"
+else
+  "$SCRIPT_DIR/build-plugin.sh"
 fi
 
 if [ "$MODE" = "check" ]; then

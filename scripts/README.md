@@ -4,7 +4,7 @@ Durable repository commands are grouped by purpose:
 
 - `build.sh`: universal generated-runtime build wrapper.
 - `test.sh`: universal repo validation wrapper.
-- `build/`: generated skill runtime builds and checks.
+- `build/`: generated skill runtime and plugin package builds/checks.
 - `catalog/`: model catalog upload and download helpers.
 - `check/`: repo validation suites.
 - `dev/`: local skill install/uninstall wiring.

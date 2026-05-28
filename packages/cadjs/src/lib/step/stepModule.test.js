@@ -152,6 +152,63 @@ test("STEP module local feature refs resolve against the sidecar parent CAD path
   assert.equal(definition.features[2].ref, "@cad[models/mechanisms/box#o1.5]");
 });
 
+test("STEP module local feature refs prefer explicit relative STEP path", () => {
+  const definition = normalizeStepModuleDefinition({
+    manifest: {
+      schemaVersion: 1,
+      step: {
+        path: "models/mechanisms/actual-box.step"
+      },
+      features: {
+        lid: {
+          ref: "#o1.2"
+        }
+      }
+    }
+  }, {
+    url: "/models/mechanisms/.legacy-name.step.js?v=abc",
+    cadPath: "models/mechanisms/legacy-name"
+  });
+
+  assert.deepEqual(definition.step, {
+    path: "models/mechanisms/actual-box.step",
+    cadPath: "models/mechanisms/actual-box",
+    explicit: true,
+    inferred: false
+  });
+  assert.equal(definition.manifest.step.path, "models/mechanisms/actual-box.step");
+  assert.equal(definition.cadPath, "models/mechanisms/actual-box");
+  assert.equal(definition.features[0].ref, "@cad[models/mechanisms/actual-box#o1.2]");
+});
+
+test("STEP module invalid explicit STEP paths fall back to sidecar URL inference", () => {
+  const definition = normalizeStepModuleDefinition({
+    manifest: {
+      schemaVersion: 1,
+      step: {
+        path: "/models/mechanisms/box.step"
+      },
+      features: {
+        lid: {
+          ref: "#o1.2"
+        }
+      }
+    }
+  }, {
+    url: "/models/mechanisms/.box.step.js?v=abc"
+  });
+
+  assert.deepEqual(definition.step, {
+    path: "",
+    cadPath: "models/mechanisms/box",
+    explicit: false,
+    inferred: true
+  });
+  assert.equal(definition.manifest.step, undefined);
+  assert.equal(definition.cadPath, "models/mechanisms/box");
+  assert.equal(definition.features[0].ref, "@cad[models/mechanisms/box#o1.2]");
+});
+
 test("STEP module CAD path can be inferred from sidecar URL", () => {
   const definition = normalizeStepModuleDefinition({
     manifest: {

@@ -9,7 +9,7 @@ if [ "${1:-}" = "-h" ] || [ "${1:-}" = "--help" ]; then
 Usage:
   scripts/build.sh [--check] [--clean] [--no-install] [--no-build]
 
-Universal generated-runtime build wrapper.
+Universal generated-runtime and plugin package build wrapper.
 
 Options are forwarded to scripts/build/build-skills.sh.
 EOF

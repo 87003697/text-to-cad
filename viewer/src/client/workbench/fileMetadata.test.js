@@ -22,6 +22,12 @@ const viewerServerInfo = {
   rootPath: "/workspace/text-to-cad/models",
 };
 
+const hostedViewerServerInfo = {
+  backend: "vercel-blob",
+  rootDir: "",
+  url: "https://demo.example.test",
+};
+
 test("file metadata groups summarize catalog entry fields", () => {
   const hash = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
   const groups = fileMetadataGroupsForEntry({
@@ -96,6 +102,26 @@ test("file metadata downloads path and artifact rows when hosted file downloads 
   assert.equal(assetRow.asset?.asset, "artifact");
   assert.equal(rowByLabel(groups, "Python source"), null);
   assert.equal(rowByLabel(groups, "Source hash"), null);
+});
+
+test("file metadata uses direct Blob download URLs for hosted catalogs", () => {
+  const groups = fileMetadataGroupsForEntry({
+    file: "parts/example.step",
+    kind: "part",
+    url: "https://blob.example.test/models2/parts/.example.step.glb",
+    sourceKind: "step",
+    step: {
+      url: "https://blob.example.test/models2/parts/example.step",
+    },
+  }, {
+    includeFileDownloadActions: true,
+    viewerServerInfo: hostedViewerServerInfo
+  });
+
+  const pathRow = rowByLabel(groups, "Path");
+  const assetRow = rowByLabel(groups, "Asset");
+  assert.equal(pathRow.href, "https://blob.example.test/models2/parts/example.step");
+  assert.equal(assetRow.href, "https://blob.example.test/models2/parts/.example.step.glb");
 });
 
 test("file metadata opens path and artifact rows when local opening is available", () => {

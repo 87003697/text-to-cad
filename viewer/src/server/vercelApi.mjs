@@ -86,6 +86,16 @@ export async function handleHostedCadApi(req, res, {
     return;
   }
 
+  const blobConfig = vercelBlobConfigFromEnv(env);
+  if (req.method === "GET" && normalizedCadPath === "/__cad/catalog" && blobConfig.catalogUrl) {
+    res.statusCode = 307;
+    res.setHeader("location", blobConfig.catalogUrl);
+    res.setHeader("cache-control", "no-store");
+    res.setHeader("access-control-allow-origin", "*");
+    res.end("");
+    return;
+  }
+
   const assetBackend = normalizeViewerAssetBackend(
     envValue(env, "VIEWER_ASSET_BACKEND"),
     VIEWER_ASSET_BACKENDS.VERCEL_BLOB
@@ -100,6 +110,7 @@ export async function handleHostedCadApi(req, res, {
       rootDir,
       enableStepArtifactBackend: false,
       claimDisabledStepArtifactRoute: true,
+      preferFileDownloadRedirects: true,
       serverInfo: () => buildHostedViewerServerInfo({ backend, env, rootDir }),
     });
     await middleware(req, res, () => {

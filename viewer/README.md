@@ -144,8 +144,9 @@ but do not regenerate STEP artifacts or require a Blob read/write token at
 runtime. The hosted backend always reads `catalog.json` at the root of
 `VIEWER_VERCEL_BLOB_PREFIX`; for the example above, that is
 `https://<store-id>.public.blob.vercel-storage.com/models2/catalog.json`. Use
-`VIEWER_VERCEL_BLOB_READ_WRITE_TOKEN` only for trusted local upload or
-maintenance scripts. Hosted server metadata derives the viewer URL from
+`VIEWER_VERCEL_BLOB_READ_WRITE_TOKEN` or `BLOB_READ_WRITE_TOKEN` only for
+trusted local upload or maintenance scripts. Hosted server metadata derives the
+viewer URL from
 Vercel's system environment variables (`VERCEL_PROJECT_PRODUCTION_URL`,
 `VERCEL_URL`, then `VERCEL_BRANCH_URL`).
 

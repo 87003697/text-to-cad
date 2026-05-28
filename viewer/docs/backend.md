@@ -138,6 +138,10 @@ VIEWER_VERCEL_BLOB_PREFIX=models2 \
 npm --prefix viewer run upload:blob -- models
 ```
 
+`BLOB_READ_WRITE_TOKEN` may be used instead of
+`VIEWER_VERCEL_BLOB_READ_WRITE_TOKEN`, matching the environment variable Vercel
+Blob integrations create.
+
 The uploader also reads `.vieweruploadignore` from the uploaded directory and
 accepts repeated `--ignore-file` options for gitignore-style exclude patterns.
 It excludes `mechbench/`, `mechbench2/`, `7dof_arm/`, and Python source files

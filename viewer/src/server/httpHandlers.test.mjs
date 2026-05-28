@@ -247,6 +247,34 @@ test("CAD Viewer API middleware downloads file asset bytes from hosted backends"
 });
 
 
+test("CAD Viewer API middleware can redirect hosted downloads to direct asset URLs", async () => {
+  const middleware = createCadViewerApiMiddleware({
+    backend: {
+      readCatalog: async () => ({ schemaVersion: 4, entries: [{ file: "part.step" }] }),
+      resolveFileAssetAccess: async ({ fileRef, asset }) => ({
+        file: fileRef,
+        asset,
+        filename: "part.step",
+        url: "https://blob.example.test/models2/part.step",
+      }),
+      readFileAsset: async () => {
+        throw new Error("hosted direct downloads should not proxy Blob bytes");
+      },
+    },
+    preferFileDownloadRedirects: true,
+  });
+  const req = { method: "GET", url: "/__cad/download?file=part.step&asset=output" };
+  const res = createResponse();
+
+  await middleware(req, res, () => {});
+
+  assert.equal(res.statusCode, 302);
+  assert.equal(res.getHeader("location"), "https://blob.example.test/models2/part.step");
+  assert.equal(res.getHeader("cache-control"), "no-store");
+  assert.equal(res.body, "");
+});
+
+
 test("CAD Viewer API middleware rejects hosted reveal requests", async () => {
   const middleware = createCadViewerApiMiddleware({
     backend: {

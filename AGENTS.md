@@ -31,11 +31,17 @@ product and `models/` as the shared fixture/artifact area.
   of truth and be vendored/generated from there into each consuming skill
   runtime; do not keep shared helper modules directly under `skills/`.
 - Edit sources first, then regenerate explicit derived outputs. Do not hand-edit generated skill runtimes or bundled package copies.
-- Write test, sample, and durable CAD/robot-description artifacts under `models/`; do not create ad hoc artifact directories elsewhere.
+- Write all test, sample, permanent, and generated CAD/robot-description
+  artifacts under `models/`, including STEP/STP, STL, GLB, DXF, URDF, SRDF,
+  SDF, and G-code outputs. Do not create ad hoc artifact directories elsewhere.
 - Reserve `scripts/` for durable repo commands. Do not write temporary,
   one-off, or local-only helper scripts there; use `tmp/` or `/tmp` instead.
 - `viewer/`, `packages` are the source of truth for CAD Viewer and shared CAD runtime behavior. Duplicate files under skills such as `skills/cad-viewer/scripts/viewer`, `skills/cad-viewer/scripts/packages/`, `skills/cad/scripts/packages/`, and snapshot runtimes are generated copies that should not be edited.
 - When changing skill behavior that uses `packages/cadjs`, `packages/cadpy`, or `skills/cad-viewer/scripts/viewer`, edit the root source in `packages/*` or `viewer/*`, then rebuild the generated skill copies. Never patch the copies as the lasting fix.
+- `plugins/cad/skills/` is a generated, materialized plugin package copy of
+  the root `skills/` sources. Edit `skills/*` first, then run
+  `scripts/build/build-plugin.sh` to refresh the plugin copy; do not hand-edit
+  plugin skill copies.
 - `viewer/packages/*` contains generated viewer-local package copies for
   standalone viewer deployments. Edit `packages/*` first, then run
   `scripts/build/build-viewer.sh` to refresh the copies.
@@ -46,7 +52,7 @@ product and `models/` as the shared fixture/artifact area.
 - Keep release versioning in lockstep: the git tag, plugin manifests and
   `plugins/*/VERSION`, package manifests/locks, Python `pyproject.toml` files,
   and any other repo-owned release version numbers should all match. The
-  current release version is `0.1.1`.
+  current release version is `0.1.5`.
 
 ## Environments
 
@@ -66,7 +72,8 @@ when touching shared surfaces or before handoff:
 - Root Viewer package copies: `scripts/build/build-viewer.sh --check`
 - CAD Viewer or `packages/cadjs`: `npm --prefix packages/cadjs test`, `npm --prefix viewer run test`, `npm --prefix viewer run build`, `scripts/build/build-cad-viewer-skill.sh --check`
 - URDF/SRDF/SDF `cadpy_metadata` runtimes: `scripts/build/build-urdf-skill.sh --check`, `scripts/build/build-srdf-skill.sh --check`, `scripts/build/build-sdf-skill.sh --check`
-- Plugin packages: `scripts/check/validate-plugins.sh`
+- Plugin packages: `scripts/build/build-plugin.sh --check`, then
+  `scripts/check/validate-plugins.sh`
 - Docs site: `npm --prefix docs run check`
 - Python skill scripts: `./.venv/bin/python -m pytest <changed test paths>`
 
@@ -75,20 +82,24 @@ When changing generated outputs, run the matching build script without
 
 ## CAD Viewer
 
+Always start CAD Viewer against the repo `models/` directory. From the repo root,
+pass `--root-dir models/`; keep any permanent or generated CAD/robot-description
+files in `models/` so the viewer catalog and artifacts stay in one place.
+
 Use the URL printed by Viewer commands; do not assume a fixed port.
 
 When modifying Viewer behavior, always run the root source app in dev mode for iteration;
 do not run the generated viewer from the cad-viewer skill while developing.
 
 ```bash
-npm --prefix viewer run dev:ensure -- --root-dir "$PWD"
+npm --prefix viewer run dev:ensure -- --root-dir models/
 ```
 
 For packaged skill runtime review:
 
 ```bash
 npm --prefix skills/cad-viewer/scripts/viewer run serve:ensure -- \
-  --root-dir "$PWD"
+  --root-dir models/
 ```
 
 ## Git And LFS

@@ -69,6 +69,38 @@ test("hosted CAD API serves catalog through an injected Blob backend", async () 
 });
 
 
+test("hosted CAD API redirects catalog reads to public Blob URLs when configured", async () => {
+  const backend = {
+    kind: "vercel-blob",
+    catalogPath: "models2/catalog-0.1.3.json",
+    readCatalog: async () => {
+      throw new Error("catalog should be served by public Blob redirect");
+    },
+  };
+  const req = { method: "GET", url: "/api/cad/catalog" };
+  const res = createResponse();
+
+  await handleHostedCadApi(req, res, {
+    cadPath: "/__cad/catalog",
+    backend,
+    env: {
+      VIEWER_ASSET_BACKEND: "vercel-blob",
+      VIEWER_VERCEL_BLOB_PREFIX: "models2",
+      VIEWER_VERCEL_BLOB_CATALOG_PATH: "catalog-0.1.3.json",
+      BLOB_STORE_ID: "store_TbC5QQRyTrzKnlQZ",
+    },
+  });
+
+  assert.equal(res.statusCode, 307);
+  assert.equal(
+    res.getHeader("location"),
+    "https://tbc5qqrytrzknlqz.public.blob.vercel-storage.com/models2/catalog-0.1.3.json"
+  );
+  assert.equal(res.getHeader("cache-control"), "no-store");
+  assert.equal(res.getHeader("access-control-allow-origin"), "*");
+});
+
+
 test("hosted CAD API reports disabled STEP generation as a handled backend response", async () => {
   const backend = {
     kind: "vercel-blob",
