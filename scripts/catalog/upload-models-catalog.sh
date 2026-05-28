@@ -8,7 +8,7 @@ function usage() {
   cat <<'EOF'
 Usage:
   VIEWER_VERCEL_BLOB_PREFIX=<prefix> \
-  VIEWER_VERCEL_BLOB_READ_WRITE_TOKEN=<token> \
+  BLOB_READ_WRITE_TOKEN=<token> \
   scripts/catalog/upload-models-catalog.sh [upload options]
 
 Uploads the models catalog and CAD Viewer-supported assets to Vercel Blob.
@@ -17,7 +17,8 @@ files by default.
 
 Environment:
   VIEWER_VERCEL_BLOB_PREFIX            Required. Blob path prefix, for example: models2
-  VIEWER_VERCEL_BLOB_READ_WRITE_TOKEN  Required. Vercel Blob read/write token.
+  BLOB_READ_WRITE_TOKEN                Required. Vercel Blob read/write token.
+  VIEWER_VERCEL_BLOB_READ_WRITE_TOKEN  Optional override for BLOB_READ_WRITE_TOKEN.
   VIEWER_LOCAL_ROOT_DIR                Optional upload root. Defaults to models/.
   VIEWER_ASSET_BACKEND                 Optional. Defaults to vercel-blob.
 
@@ -33,7 +34,10 @@ case "${1:-}" in
 esac
 
 : "${VIEWER_VERCEL_BLOB_PREFIX:?Set VIEWER_VERCEL_BLOB_PREFIX before uploading to Vercel Blob.}"
-: "${VIEWER_VERCEL_BLOB_READ_WRITE_TOKEN:?Set VIEWER_VERCEL_BLOB_READ_WRITE_TOKEN before uploading to Vercel Blob.}"
+if [[ -z "${VIEWER_VERCEL_BLOB_READ_WRITE_TOKEN:-}" && -z "${BLOB_READ_WRITE_TOKEN:-}" ]]; then
+  echo "Set BLOB_READ_WRITE_TOKEN or VIEWER_VERCEL_BLOB_READ_WRITE_TOKEN before uploading to Vercel Blob." >&2
+  exit 1
+fi
 
 export VIEWER_ASSET_BACKEND="${VIEWER_ASSET_BACKEND:-vercel-blob}"
 export VIEWER_LOCAL_ROOT_DIR="${VIEWER_LOCAL_ROOT_DIR:-$REPO_ROOT/models}"

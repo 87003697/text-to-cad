@@ -6,6 +6,8 @@ import {
   rootDirForAssetBackend,
   vercelBlobCatalogUrlFromPrefix,
   vercelBlobConfigFromEnv,
+  vercelBlobPrefixFromEnv,
+  vercelBlobStoreIdFromEnv,
   VIEWER_ASSET_BACKENDS,
 } from "./viewerEnv.mjs";
 
@@ -40,6 +42,40 @@ test("viewer env reads Blob settings", () => {
       BLOB_READ_WRITE_TOKEN: "blob-token",
     }).token,
     "blob-token"
+  );
+});
+
+test("viewer env canonicalizes public Blob prefixes from BLOB_STORE_ID", () => {
+  assert.equal(
+    vercelBlobPrefixFromEnv({
+      VIEWER_VERCEL_BLOB_PREFIX: "https://TbC5QQRyTrzKn1QZ.public.blob.vercel-storage.com/models2",
+      BLOB_STORE_ID: "store_TbC5QQRyTrzKnlQZ",
+    }),
+    "https://tbc5qqrytrzknlqz.public.blob.vercel-storage.com/models2"
+  );
+  assert.equal(
+    vercelBlobConfigFromEnv({
+      VIEWER_VERCEL_BLOB_PREFIX: "https://TbC5QQRyTrzKn1QZ.public.blob.vercel-storage.com/models2",
+      VIEWER_VERCEL_BLOB_CATALOG_PATH: "catalog-0.1.3.json",
+      BLOB_STORE_ID: "store_TbC5QQRyTrzKnlQZ",
+    }).catalogUrl,
+    "https://tbc5qqrytrzknlqz.public.blob.vercel-storage.com/models2/catalog-0.1.3.json"
+  );
+});
+
+test("viewer env can derive the Blob store ID from the server token", () => {
+  assert.equal(
+    vercelBlobStoreIdFromEnv({
+      BLOB_READ_WRITE_TOKEN: "vercel_blob_rw_TbC5QQRyTrzKnlQZ_fakeSecret",
+    }),
+    "tbc5qqrytrzknlqz"
+  );
+  assert.equal(
+    vercelBlobPrefixFromEnv({
+      VIEWER_VERCEL_BLOB_PREFIX: "https://TbC5QQRyTrzKn1QZ.public.blob.vercel-storage.com/models2",
+      BLOB_READ_WRITE_TOKEN: "vercel_blob_rw_TbC5QQRyTrzKnlQZ_fakeSecret",
+    }),
+    "https://tbc5qqrytrzknlqz.public.blob.vercel-storage.com/models2"
   );
 });
 

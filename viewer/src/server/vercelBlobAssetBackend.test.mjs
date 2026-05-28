@@ -14,7 +14,7 @@ test("Vercel Blob backend uses browser-safe MIME types for served modules", () =
   assert.equal(contentTypeForFileRef("models/catalog.json"), "application/json; charset=utf-8");
 });
 
-test("Vercel Blob backend falls back to authenticated Blob SDK when public catalog reads fail", async () => {
+test("Vercel Blob backend reports public catalog URL failures instead of falling back to the SDK", async () => {
   const getCalls = [];
   const fetchCalls = [];
   const backend = createVercelBlobAssetBackend({
@@ -44,11 +44,38 @@ test("Vercel Blob backend falls back to authenticated Blob SDK when public catal
     token: "test-token",
   });
 
+  await assert.rejects(
+    () => backend.readCatalog(),
+    /Failed to read Vercel Blob catalog: 403 Forbidden/
+  );
+  assert.deepEqual(fetchCalls, ["https://blob.test/demo/catalog.json"]);
+  assert.deepEqual(getCalls, []);
+});
+
+test("Vercel Blob backend can use the Blob SDK when no public catalog URL is configured", async () => {
+  const getCalls = [];
+  const backend = createVercelBlobAssetBackend({
+    prefix: "demo",
+    client: {
+      get: async (pathname, options) => {
+        getCalls.push({ pathname, options });
+        return {
+          statusCode: 200,
+          stream: new Response(JSON.stringify({
+            schemaVersion: 4,
+            entries: [{ file: "parts/bracket.step" }],
+          })).body,
+          blob: { pathname },
+        };
+      },
+    },
+    token: "test-token",
+  });
+
   assert.deepEqual(await backend.readCatalog(), {
     schemaVersion: 4,
     entries: [{ file: "parts/bracket.step" }],
   });
-  assert.deepEqual(fetchCalls, ["https://blob.test/demo/catalog.json"]);
   assert.deepEqual(getCalls, [{
     pathname: "demo/catalog.json",
     options: {

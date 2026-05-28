@@ -256,7 +256,7 @@ export function createVercelBlobAssetBackend({
   fetchImpl = globalThis.fetch,
   artifactCompiler = ensureStepTopologyArtifact,
   stepArtifactGenerator = undefined,
-  token = process.env.VIEWER_VERCEL_BLOB_READ_WRITE_TOKEN,
+  token = process.env.VIEWER_VERCEL_BLOB_READ_WRITE_TOKEN || process.env.BLOB_READ_WRITE_TOKEN,
   readOnly = false,
 } = {}) {
   const normalizedPrefix = normalizePrefix(prefix);
@@ -271,13 +271,8 @@ export function createVercelBlobAssetBackend({
   }
 
   async function readCatalog() {
-    let publicCatalogError = null;
     if (resolvedCatalogUrl) {
-      try {
-        return await readJsonFromUrl(resolvedCatalogUrl, { fetchImpl });
-      } catch (error) {
-        publicCatalogError = error;
-      }
+      return readJsonFromUrl(resolvedCatalogUrl, { fetchImpl });
     }
     if (hasBlobSdkReadCredentials(token)) {
       const blob = await blobClient();
@@ -291,9 +286,6 @@ export function createVercelBlobAssetBackend({
           normalizedCatalogPath
         );
       }
-    }
-    if (publicCatalogError) {
-      throw publicCatalogError;
     }
     const blob = await blobClient();
     const listing = await blob.list({ prefix: normalizedCatalogPath, token });

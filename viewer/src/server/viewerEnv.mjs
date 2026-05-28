@@ -56,8 +56,50 @@ export function vercelBlobCatalogUrlFromPrefix(prefix, catalogPath = "catalog.js
   }
 }
 
-export function vercelBlobConfigFromEnv(env = process.env) {
+function normalizeVercelBlobStoreId(value) {
+  const normalized = String(value || "").trim().replace(/^store_/i, "");
+  return /^[a-z0-9]+$/i.test(normalized) ? normalized.toLowerCase() : "";
+}
+
+function vercelBlobStoreIdFromToken(value) {
+  const token = String(value || "").trim();
+  const parts = token.split("_");
+  if (parts[0] !== "vercel" || parts[1] !== "blob") {
+    return "";
+  }
+  const tokenKindLength = parts[2] === "read" && parts[3] === "write" ? 2 : 1;
+  return normalizeVercelBlobStoreId(parts[2 + tokenKindLength]);
+}
+
+export function vercelBlobStoreIdFromEnv(env = process.env) {
+  return (
+    normalizeVercelBlobStoreId(envValue(env, "VIEWER_VERCEL_BLOB_STORE_ID")) ||
+    normalizeVercelBlobStoreId(envValue(env, "BLOB_STORE_ID")) ||
+    vercelBlobStoreIdFromToken(envValue(env, "VIEWER_VERCEL_BLOB_READ_WRITE_TOKEN")) ||
+    vercelBlobStoreIdFromToken(envValue(env, "BLOB_READ_WRITE_TOKEN"))
+  );
+}
+
+export function vercelBlobPrefixFromEnv(env = process.env) {
   const prefix = envValue(env, "VIEWER_VERCEL_BLOB_PREFIX");
+  const storeId = vercelBlobStoreIdFromEnv(env);
+  if (!prefix || !storeId) {
+    return prefix;
+  }
+  try {
+    const url = new URL(prefix);
+    if (url.hostname.toLowerCase().endsWith(".public.blob.vercel-storage.com")) {
+      url.hostname = `${storeId}.public.blob.vercel-storage.com`;
+      return url.toString();
+    }
+  } catch {
+    // Non-URL prefixes are valid for SDK-only paths.
+  }
+  return prefix;
+}
+
+export function vercelBlobConfigFromEnv(env = process.env) {
+  const prefix = vercelBlobPrefixFromEnv(env);
   const catalogPath = envValue(env, "VIEWER_VERCEL_BLOB_CATALOG_PATH", "catalog.json") || "catalog.json";
   return {
     prefix,

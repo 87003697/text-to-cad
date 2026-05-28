@@ -55,7 +55,7 @@ Options:
 
 Environment:
   VIEWER_VERCEL_BLOB_PREFIX
-  VIEWER_VERCEL_BLOB_READ_WRITE_TOKEN
+  VIEWER_VERCEL_BLOB_READ_WRITE_TOKEN or BLOB_READ_WRITE_TOKEN
   VIEWER_ASSET_BACKEND=vercel-blob (optional)
   VIEWER_LOCAL_ROOT_DIR (optional)
 
@@ -701,7 +701,7 @@ function assertVercelUploadEnv(env = process.env) {
     throw new Error("VIEWER_VERCEL_BLOB_PREFIX is required.");
   }
   if (!config.token) {
-    throw new Error("VIEWER_VERCEL_BLOB_READ_WRITE_TOKEN is required for Blob uploads.");
+    throw new Error("VIEWER_VERCEL_BLOB_READ_WRITE_TOKEN or BLOB_READ_WRITE_TOKEN is required for Blob uploads.");
   }
   return config;
 }

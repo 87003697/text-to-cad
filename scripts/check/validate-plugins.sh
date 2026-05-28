@@ -16,7 +16,7 @@ from pathlib import Path
 repo_root = Path(sys.argv[1])
 
 plugin_name = "cad"
-version = "0.1.3"
+version = "0.1.4"
 skills = [
     "bambu-labs",
     "cad",
@@ -51,7 +51,6 @@ require(claude_manifest_path.is_file(), f"missing Claude plugin manifest: {claud
 require(claude_marketplace_path.is_file(), f"missing Claude marketplace: {claude_marketplace_path}")
 require(gemini_manifest_path.is_file(), f"missing Gemini extension manifest: {gemini_manifest_path}")
 require(gemini_context_path.is_file(), f"missing Gemini extension context: {gemini_context_path}")
-require(codex_marketplace_path.is_file(), f"missing Codex marketplace: {codex_marketplace_path}")
 require(version_path.is_file(), f"missing plugin version file: {version_path}")
 
 
