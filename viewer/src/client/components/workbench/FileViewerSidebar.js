@@ -20,6 +20,13 @@ import {
 } from "@/components/ui/collapsible";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import {
+  Sheet,
+  SheetContent,
+  SheetDescription,
+  SheetHeader as SheetHeaderPrimitive,
+  SheetTitle
+} from "@/components/ui/sheet";
+import {
   SidebarContent,
   SidebarGroup,
   SidebarGroupContent,
@@ -353,12 +360,17 @@ function FileViewerContents({
   onRevealFileAsset,
   onRevealInExplorerView,
   onCopyFileAssetReference,
+  catalogHydrated = false,
+  catalogRefreshing = false,
+  catalogError = "",
   resizable = true,
   onStartResize
 }) {
   const queryActive = query.trim().length > 0;
   const hasMatches = filteredEntries.length > 0;
   const hasEntries = catalogEntries.length > 0;
+  const catalogErrorMessage = String(catalogError || "").trim();
+  const catalogLoading = !catalogHydrated || (catalogRefreshing && !hasEntries);
 
   return (
     <>
@@ -438,6 +450,10 @@ function FileViewerContents({
                     );
                   })}
                 </SidebarMenu>
+              ) : catalogErrorMessage && !hasEntries ? (
+                <p className="px-2 py-3 text-xs text-muted-foreground">CAD catalog unavailable: {catalogErrorMessage}</p>
+              ) : catalogLoading ? (
+                <p className="px-2 py-3 text-xs text-muted-foreground">Loading CAD catalog...</p>
               ) : hasEntries ? (
                 <p className="px-2 py-3 text-xs text-muted-foreground">No CAD entries match this filter.</p>
               ) : (
@@ -479,10 +495,13 @@ export default function FileViewerSidebar({
   onRevealFileAsset,
   onRevealInExplorerView,
   onCopyFileAssetReference,
+  catalogHydrated = false,
+  catalogRefreshing = false,
+  catalogError = "",
   resizable = true,
   onStartResize
 }) {
-  const { isMobile, state } = useSidebar();
+  const { isMobile, state, openMobile, setOpenMobile } = useSidebar();
 
   if (previewMode) {
     return null;
@@ -515,10 +534,37 @@ export default function FileViewerSidebar({
       onRevealFileAsset={onRevealFileAsset}
       onRevealInExplorerView={onRevealInExplorerView}
       onCopyFileAssetReference={onCopyFileAssetReference}
+      catalogHydrated={catalogHydrated}
+      catalogRefreshing={catalogRefreshing}
+      catalogError={catalogError}
       resizable={resizable}
       onStartResize={onStartResize}
     />
   );
+
+  if (isMobile) {
+    return (
+      <Sheet open={openMobile} onOpenChange={setOpenMobile}>
+        <SheetContent
+          side="left"
+          showCloseButton={false}
+          className="cad-glass-surface gap-0 p-0 text-sidebar-foreground"
+          style={{
+            width: MOBILE_FILE_VIEWER_WIDTH,
+            maxWidth: DESKTOP_FILE_VIEWER_MAX_WIDTH
+          }}
+        >
+          <SheetHeaderPrimitive className="sr-only">
+            <SheetTitle>CAD Viewer</SheetTitle>
+            <SheetDescription>Browse files in the CAD catalog.</SheetDescription>
+          </SheetHeaderPrimitive>
+          <div className="flex h-full min-h-0 w-full flex-col" aria-label="CAD Viewer">
+            {content}
+          </div>
+        </SheetContent>
+      </Sheet>
+    );
+  }
 
   if (state !== "expanded") {
     return null;

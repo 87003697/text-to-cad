@@ -59,7 +59,8 @@ import {
   FILE_SHEET_SECTION_IDS,
   defaultOpenFileSheetSectionIds,
   normalizeFileSheetOpenSectionIds,
-  renderedFileSheetSectionIds
+  renderedFileSheetSectionIds,
+  shouldOpenFileSheetForSelectionReveal
 } from "@/workbench/fileSheetSections";
 import {
   entrySourceFormat,
@@ -2268,13 +2269,15 @@ export default function CadWorkspace({
     );
   }, [renderedSelectedFileSheetSectionIds]);
 
-  const openFileSheetSection = useCallback((sectionId) => {
+  const openFileSheetSection = useCallback((sectionId, { openSheet = true } = {}) => {
     const normalizedSectionId = String(sectionId || "").trim();
     if (!normalizedSectionId || !renderedSelectedFileSheetSectionIds.includes(normalizedSectionId)) {
       return false;
     }
 
-    setTabToolsOpen(true);
+    if (openSheet) {
+      setTabToolsOpen(true);
+    }
     setFileSheetOpenSectionIds((current) => {
       const baseSectionIds = normalizeFileSheetOpenSectionIds(
         Array.isArray(current) ? current : effectiveFileSheetOpenSectionIds,
@@ -4831,15 +4834,18 @@ export default function CadWorkspace({
     setExpandedStepTreeNodeIds((current) => uniqueStringList([...current, ...idsToExpand]));
   }, [assemblyPartMap, stepTreeRoot]);
 
-  const revealStepTreeNode = useCallback((nodeId, { expandSelf = false } = {}) => {
+  const revealStepTreeNode = useCallback((nodeId, { expandSelf = false, source = "viewer" } = {}) => {
     const normalizedNodeId = String(nodeId || "").trim();
     if (!normalizedNodeId || selectedFileSheetKind !== "step") {
       return;
     }
-    openFileSheetSection(FILE_SHEET_SECTION_IDS.STEP_TREE);
+    openFileSheetSection(FILE_SHEET_SECTION_IDS.STEP_TREE, {
+      openSheet: shouldOpenFileSheetForSelectionReveal({ isDesktop, source })
+    });
     expandStepTreeAroundNode(normalizedNodeId, { expandSelf });
   }, [
     expandStepTreeAroundNode,
+    isDesktop,
     openFileSheetSection,
     selectedFileSheetKind
   ]);
@@ -4974,7 +4980,7 @@ export default function CadWorkspace({
     return nextSelectedPartIds;
   }, []);
 
-  const inspectAssemblyNode = useCallback((nodeId, { toggle = false } = {}) => {
+  const inspectAssemblyNode = useCallback((nodeId, { toggle = false, source = "viewer" } = {}) => {
     if (!isAssemblyView || !assemblyRoot) {
       return;
     }
@@ -4992,7 +4998,8 @@ export default function CadWorkspace({
       removeSelectedAssemblyNode(normalizedNodeId);
       const inspectedNode = findAssemblyNode(assemblyRoot, normalizedNodeId);
       revealStepTreeNode(normalizedNodeId, {
-        expandSelf: stepTreeNodeChildren(inspectedNode).length > 0
+        expandSelf: stepTreeNodeChildren(inspectedNode).length > 0,
+        source
       });
     }
   }, [
@@ -5056,7 +5063,7 @@ export default function CadWorkspace({
     selectedPartIdsRef.current = next;
     setSelectedPartIds(next);
     if (next.includes(normalizedPartId)) {
-      revealStepTreeNode(normalizedPartId, { expandSelf: true });
+      revealStepTreeNode(normalizedPartId, { expandSelf: true, source });
     }
     setSelectedRenderPartIdByAssemblyPartId((current) => {
       const nextMap = {};
@@ -5095,7 +5102,7 @@ export default function CadWorkspace({
       if (nextSelection.includes(normalizedNodeId)) {
         const ancestorIds = collectStepTreeAncestorIds(assemblyRoot, normalizedNodeId);
         const parentNodeId = ancestorIds[ancestorIds.length - 1] || assemblyRootNodeId;
-        inspectAssemblyNode(parentNodeId);
+        inspectAssemblyNode(parentNodeId, { source: "tree" });
       }
     }
     togglePartSelection(normalizedNodeId, { multiSelect, source: "tree" });
@@ -5109,7 +5116,7 @@ export default function CadWorkspace({
   ]);
 
   const inspectStepTreeNode = useCallback((nodeId) => {
-    inspectAssemblyNode(nodeId, { toggle: true });
+    inspectAssemblyNode(nodeId, { toggle: true, source: "tree" });
   }, [inspectAssemblyNode]);
 
   const clearAssemblySelection = useCallback(() => {
@@ -5889,6 +5896,9 @@ export default function CadWorkspace({
               onRevealFileAsset={handleRevealFileAsset}
               onRevealInExplorerView={handleRevealEntryInExplorerView}
               onCopyFileAssetReference={handleCopyFileAssetReference}
+              catalogHydrated={catalogHydrated}
+              catalogRefreshing={catalogRefreshing}
+              catalogError={catalogError}
               resizable={isDesktop}
               onStartResize={handleStartSidebarResize}
             />
@@ -5929,6 +5939,9 @@ export default function CadWorkspace({
                 <CadWorkspaceHome
                   entries={catalogEntries}
                   onSelectEntry={handleSelectEntry}
+                  catalogHydrated={catalogHydrated}
+                  catalogRefreshing={catalogRefreshing}
+                  catalogError={catalogError}
                 />
               ) : null}
 
@@ -5944,6 +5957,7 @@ export default function CadWorkspace({
                 open={fileSheetOpen}
                 isDesktop={isDesktop}
                 width={activeSheetWidth || tabToolsWidth}
+                onOpenChange={setTabToolsOpen}
                 selectedEntry={selectedEntry}
                 onStartResize={handleStartFileSheetResize}
                 valueMm={effectiveDxfThicknessMm}
@@ -5972,6 +5986,7 @@ export default function CadWorkspace({
                 open={fileSheetOpen}
                 isDesktop={isDesktop}
                 width={activeSheetWidth || tabToolsWidth}
+                onOpenChange={setTabToolsOpen}
                 selectedEntry={selectedEntry}
                 onStartResize={handleStartFileSheetResize}
                 gcodeData={selectedGcodeData}
@@ -6003,6 +6018,7 @@ export default function CadWorkspace({
                 open={fileSheetOpen}
                 isDesktop={isDesktop}
                 width={activeSheetWidth || tabToolsWidth}
+                onOpenChange={setTabToolsOpen}
                 onStartResize={handleStartFileSheetResize}
                 selectedEntry={selectedEntry}
                 viewerLoading={viewerLoading || assemblySidebarLoading}
@@ -6069,6 +6085,7 @@ export default function CadWorkspace({
                 isDesktop={isDesktop}
                 width={activeSheetWidth || tabToolsWidth}
                 selectedEntry={selectedEntry}
+                onOpenChange={setTabToolsOpen}
                 onStartResize={handleStartFileSheetResize}
                 joints={movableUrdfJoints}
                 groupStates={selectedUrdfGroupStates}
@@ -6126,6 +6143,7 @@ export default function CadWorkspace({
                 isDesktop={isDesktop}
                 width={activeSheetWidth || tabToolsWidth}
                 selectedEntry={selectedEntry}
+                onOpenChange={setTabToolsOpen}
                 onStartResize={handleStartFileSheetResize}
                 fileDownloadAvailable={fileLinkCopyAvailable}
                 viewerServerInfo={viewerServerInfo}

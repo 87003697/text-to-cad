@@ -141,6 +141,7 @@ export default function GcodeFileSheet({
   isDesktop,
   width,
   selectedEntry = null,
+  onOpenChange,
   onStartResize,
   gcodeData = null,
   previewMetadata = null,
@@ -201,6 +202,7 @@ export default function GcodeFileSheet({
       title="G-code"
       isDesktop={isDesktop}
       width={width}
+      onOpenChange={onOpenChange}
       onStartResize={onStartResize}
     >
       <Accordion

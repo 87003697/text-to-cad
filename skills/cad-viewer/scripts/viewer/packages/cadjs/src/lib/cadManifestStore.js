@@ -1,4 +1,5 @@
 const CAD_CATALOG_REFRESH_INTERVAL_MS = 2_000;
+const CAD_CATALOG_FETCH_TIMEOUT_MS = 10_000;
 const CAD_GENERATION_STATUS_REFRESH_INTERVAL_MS = 750;
 
 function normalizeCadManifest(manifest) {
@@ -129,6 +130,29 @@ async function readJsonError(response, fallback) {
   }
 }
 
+async function fetchWithTimeout(url, options, timeoutMs, timeoutMessage) {
+  if (typeof AbortController !== "function") {
+    return fetch(url, options);
+  }
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => {
+    controller.abort();
+  }, timeoutMs);
+  try {
+    return await fetch(url, {
+      ...options,
+      signal: controller.signal,
+    });
+  } catch (error) {
+    if (error?.name === "AbortError") {
+      throw new Error(timeoutMessage);
+    }
+    throw error;
+  } finally {
+    clearTimeout(timeoutId);
+  }
+}
+
 export async function refreshCadCatalog({ markRefreshing = !currentSnapshot.catalogHydrated } = {}) {
   if (typeof window === "undefined") {
     return;
@@ -142,11 +166,17 @@ export async function refreshCadCatalog({ markRefreshing = !currentSnapshot.cata
   }
   refreshInFlight = (async () => {
     try {
-      const response = await fetch("/__cad/catalog", {
-        cache: "no-store",
-      });
+      const response = await fetchWithTimeout(
+        "/__cad/catalog",
+        { cache: "no-store" },
+        CAD_CATALOG_FETCH_TIMEOUT_MS,
+        `Timed out loading CAD catalog after ${CAD_CATALOG_FETCH_TIMEOUT_MS / 1000}s`
+      );
       if (!response.ok) {
-        throw new Error(`Failed to scan CAD Viewer root: ${response.status} ${response.statusText}`);
+        throw new Error(await readJsonError(
+          response,
+          `Failed to read CAD catalog: ${response.status} ${response.statusText}`
+        ));
       }
       const catalog = await response.json();
       if (requestId === refreshRequestId) {

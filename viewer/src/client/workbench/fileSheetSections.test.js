@@ -3,7 +3,8 @@ import test from "node:test";
 
 import {
   defaultOpenFileSheetSectionIds,
-  renderedFileSheetSectionIds
+  renderedFileSheetSectionIds,
+  shouldOpenFileSheetForSelectionReveal
 } from "./fileSheetSections.js";
 
 test("file sheet section defaults match current sheet behavior", () => {
@@ -37,4 +38,10 @@ test("rendered file sheet sections include closed-by-default sections", () => {
     "metadata"
   ]);
   assert.deepEqual(renderedFileSheetSectionIds("mesh"), ["display", "appearance", "metadata"]);
+});
+
+test("viewer-origin selection reveals do not open the file sheet on mobile", () => {
+  assert.equal(shouldOpenFileSheetForSelectionReveal({ isDesktop: true, source: "viewer" }), true);
+  assert.equal(shouldOpenFileSheetForSelectionReveal({ isDesktop: false, source: "viewer" }), false);
+  assert.equal(shouldOpenFileSheetForSelectionReveal({ isDesktop: false, source: "tree" }), true);
 });

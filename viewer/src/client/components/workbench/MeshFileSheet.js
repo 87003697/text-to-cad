@@ -11,6 +11,7 @@ export default function MeshFileSheet({
   isDesktop,
   width,
   selectedEntry = null,
+  onOpenChange,
   onStartResize,
   fileDownloadAvailable = false,
   viewerServerInfo = null,
@@ -29,6 +30,7 @@ export default function MeshFileSheet({
       title={title}
       isDesktop={isDesktop}
       width={width}
+      onOpenChange={onOpenChange}
       onStartResize={onStartResize}
     >
       <Accordion

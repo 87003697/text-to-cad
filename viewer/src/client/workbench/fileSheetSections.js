@@ -132,3 +132,7 @@ export function normalizeFileSheetOpenSectionIds(sectionIds, renderedSectionIds)
   }
   return normalizeSectionIds(sectionIds).filter((sectionId) => rendered.has(sectionId));
 }
+
+export function shouldOpenFileSheetForSelectionReveal({ isDesktop = true, source = "viewer" } = {}) {
+  return isDesktop || normalizeString(source) !== "viewer";
+}

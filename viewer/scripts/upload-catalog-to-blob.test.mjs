@@ -140,6 +140,7 @@ test("uploadCatalogDirectoryToVercelBlob applies default catalog exclusions", as
   const repoRoot = makeTempRepo();
   writeFile(path.join(repoRoot, "models/keep.stl"), "solid keep\nendsolid keep\n");
   writeFile(path.join(repoRoot, "models/part.step"), "ISO-10303-21;\nEND-ISO-10303-21;\n");
+  writeFile(path.join(repoRoot, "models/.part.step.js"), "export default { manifest: { schemaVersion: 1 } };\n");
   writeFile(path.join(repoRoot, "models/mechbench/skipped.stl"), "solid skip\nendsolid skip\n");
   writeFile(path.join(repoRoot, "models/mechbench2/skipped.stl"), "solid skip\nendsolid skip\n");
   writeFile(path.join(repoRoot, "models/7dof_arm/skipped.step"), "ISO-10303-21;\nEND-ISO-10303-21;\n");
@@ -164,12 +165,17 @@ test("uploadCatalogDirectoryToVercelBlob applies default catalog exclusions", as
   });
 
   assert.deepEqual(putCalls.map((call) => call.pathname).sort(), [
+    "models2/.part.step.js",
     "models2/catalog.json",
     "models2/keep.stl",
     "models2/part.step",
   ]);
+  assert.equal(
+    putCalls.find((call) => call.pathname === "models2/.part.step.js").options.contentType,
+    "text/javascript; charset=utf-8",
+  );
   assert.equal(putCalls.find((call) => call.pathname === "models2/keep.stl").options.contentType, "model/stl");
-  assert.equal(result.uploadedFiles, 2);
+  assert.equal(result.uploadedFiles, 3);
   assert.equal(result.catalogEntries, 2);
   assert.equal(result.rootDir, "");
   assert.equal(result.rootPath, path.join(repoRoot, "models"));
@@ -179,6 +185,7 @@ test("uploadCatalogDirectoryToVercelBlob applies default catalog exclusions", as
   assert.deepEqual(uploadedCatalog.entries.map((entry) => entry.file), ["keep.stl", "part.step"]);
   assert.equal(uploadedCatalog.entries[0].url, "https://blob.test/models2/keep.stl");
   assert.equal(uploadedCatalog.entries[1].step.url, "https://blob.test/models2/part.step");
+  assert.equal(uploadedCatalog.entries[1].moduleUrl, "https://blob.test/models2/.part.step.js");
   assert.deepEqual(result.ignoredPatterns.slice(0, DEFAULT_UPLOAD_EXCLUDE_PATTERNS.length), DEFAULT_UPLOAD_EXCLUDE_PATTERNS);
 });
 

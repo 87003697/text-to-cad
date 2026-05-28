@@ -281,6 +281,7 @@ export default function UrdfFileSheet({
   isDesktop,
   width,
   selectedEntry = null,
+  onOpenChange,
   onStartResize,
   joints,
   groupStates,
@@ -353,6 +354,7 @@ export default function UrdfFileSheet({
       title={title}
       isDesktop={isDesktop}
       width={width}
+      onOpenChange={onOpenChange}
       onStartResize={onStartResize}
     >
       <Accordion

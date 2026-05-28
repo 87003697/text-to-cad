@@ -118,10 +118,15 @@ export function selectHomeEntries(entries) {
 
 export default function CadWorkspaceHome({
   entries,
-  onSelectEntry
+  onSelectEntry,
+  catalogHydrated = false,
+  catalogRefreshing = false,
+  catalogError = ""
 }) {
   const homeEntries = selectHomeEntries(entries);
   const hasEntries = homeEntries.length > 0;
+  const catalogErrorMessage = String(catalogError || "").trim();
+  const catalogLoading = !catalogHydrated || (catalogRefreshing && !hasEntries);
 
   return (
     <div className="pointer-events-none absolute inset-0 z-20 flex min-w-0 items-center justify-center px-4 py-6">
@@ -179,7 +184,15 @@ export default function CadWorkspaceHome({
                 <ChevronRight className="size-4 shrink-0 text-muted-foreground transition-transform group-hover:translate-x-0.5 group-hover:text-foreground" aria-hidden="true" />
               </Button>
             );
-          }) : (
+          }) : catalogErrorMessage ? (
+            <p className="break-words px-5 py-5 text-sm text-muted-foreground sm:px-6" role="status">
+              CAD catalog unavailable: {catalogErrorMessage}
+            </p>
+          ) : catalogLoading ? (
+            <p className="px-5 py-5 text-sm text-muted-foreground sm:px-6" role="status">
+              Loading CAD catalog...
+            </p>
+          ) : (
             <p className="px-5 py-5 text-sm text-muted-foreground sm:px-6">
               No CAD entries found.
             </p>

@@ -134,6 +134,7 @@ export default function DxfFileSheet({
   isDesktop,
   width,
   selectedEntry = null,
+  onOpenChange,
   valueMm,
   bendSettings,
   hasDxfData,
@@ -171,6 +172,7 @@ export default function DxfFileSheet({
       title="DXF"
       isDesktop={isDesktop}
       width={width}
+      onOpenChange={onOpenChange}
       onStartResize={onStartResize}
     >
       <Accordion

@@ -6,6 +6,13 @@ import {
   AccordionTrigger
 } from "../ui/accordion";
 import { ScrollArea } from "../ui/scroll-area";
+import {
+  Sheet,
+  SheetContent,
+  SheetDescription,
+  SheetHeader,
+  SheetTitle
+} from "../ui/sheet";
 import { Switch } from "../ui/switch";
 
 const DEFAULT_FILE_SHEET_WIDTH = 365;
@@ -450,14 +457,11 @@ export default function FileSheet({
   title,
   isDesktop,
   width,
+  onOpenChange,
   onStartResize,
   bodyClassName,
   children
 }) {
-  if (!open) {
-    return null;
-  }
-
   const desktopWidth = `min(${normalizeFileSheetWidth(width)}px, ${DESKTOP_FILE_SHEET_MAX_WIDTH})`;
   const sheetStyle = isDesktop
     ? {
@@ -470,6 +474,39 @@ export default function FileSheet({
       width: MOBILE_FILE_SHEET_WIDTH,
       maxWidth: DESKTOP_FILE_SHEET_MAX_WIDTH
     };
+  const sheetBody = (
+    <ScrollArea
+      className={cn("min-h-0 flex-1", FILE_SHEET_CONTROL_TEXT_CLASSES, bodyClassName)}
+      type="auto"
+      viewportClassName="h-full"
+    >
+      {children}
+    </ScrollArea>
+  );
+
+  if (!isDesktop) {
+    return (
+      <Sheet open={open} onOpenChange={onOpenChange}>
+        <SheetContent
+          side="right"
+          showCloseButton={false}
+          className="cad-glass-surface gap-0 p-0 text-sidebar-foreground"
+          style={sheetStyle}
+          aria-label={title}
+        >
+          <SheetHeader className="sr-only">
+            <SheetTitle>{title}</SheetTitle>
+            <SheetDescription>Inspect and adjust the selected file.</SheetDescription>
+          </SheetHeader>
+          {sheetBody}
+        </SheetContent>
+      </Sheet>
+    );
+  }
+
+  if (!open) {
+    return null;
+  }
 
   return (
     <aside
@@ -493,13 +530,7 @@ export default function FileSheet({
           <span className="my-2 w-px rounded-full bg-transparent transition-colors group-hover/file-sheet-resize:bg-sidebar-border group-focus-visible/file-sheet-resize:bg-ring" />
         </button>
       ) : null}
-      <ScrollArea
-        className={cn("min-h-0 flex-1", FILE_SHEET_CONTROL_TEXT_CLASSES, bodyClassName)}
-        type="auto"
-        viewportClassName="h-full"
-      >
-        {children}
-      </ScrollArea>
+      {sheetBody}
     </aside>
   );
 }

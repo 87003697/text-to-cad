@@ -114,6 +114,7 @@ export default function StepFileSheet({
   open,
   isDesktop,
   width,
+  onOpenChange,
   onStartResize,
   selectedEntry,
   viewerLoading,
@@ -231,6 +232,7 @@ export default function StepFileSheet({
       title="STEP"
       isDesktop={isDesktop}
       width={width}
+      onOpenChange={onOpenChange}
       onStartResize={onStartResize}
     >
       <Accordion

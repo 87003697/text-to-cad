@@ -3,7 +3,53 @@ import fs from "node:fs";
 import path from "node:path";
 import test from "node:test";
 
-import { createVercelBlobAssetBackend } from "./vercelBlobAssetBackend.mjs";
+import {
+  contentTypeForFileRef,
+  createVercelBlobAssetBackend,
+} from "./vercelBlobAssetBackend.mjs";
+
+test("Vercel Blob backend uses browser-safe MIME types for served modules", () => {
+  assert.equal(contentTypeForFileRef("models/.part.step.js"), "text/javascript; charset=utf-8");
+  assert.equal(contentTypeForFileRef("models/.part.step.mjs"), "text/javascript; charset=utf-8");
+  assert.equal(contentTypeForFileRef("models/catalog.json"), "application/json; charset=utf-8");
+});
+
+test("Vercel Blob backend reads catalog through authenticated Blob SDK when credentials are available", async () => {
+  const getCalls = [];
+  const backend = createVercelBlobAssetBackend({
+    prefix: "demo",
+    catalogUrl: "https://blob.test/demo/catalog.json",
+    client: {
+      get: async (pathname, options) => {
+        getCalls.push({ pathname, options });
+        return {
+          statusCode: 200,
+          stream: new Response(JSON.stringify({
+            schemaVersion: 4,
+            entries: [{ file: "parts/bracket.step" }],
+          })).body,
+          blob: { pathname },
+        };
+      },
+    },
+    fetchImpl: async () => {
+      throw new Error("public catalog URL should not be fetched when authenticated Blob reads are available");
+    },
+    token: "test-token",
+  });
+
+  assert.deepEqual(await backend.readCatalog(), {
+    schemaVersion: 4,
+    entries: [{ file: "parts/bracket.step" }],
+  });
+  assert.deepEqual(getCalls, [{
+    pathname: "demo/catalog.json",
+    options: {
+      access: "public",
+      token: "test-token",
+    },
+  }]);
+});
 
 test("Vercel Blob backend reads catalog and writes deterministic asset paths", async () => {
   const putCalls = [];

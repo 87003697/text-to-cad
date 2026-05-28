@@ -24552,6 +24552,12 @@ function contentTypeForFileRef(fileRef, fallback = "") {
   if (extension === ".gcode") {
     return "text/plain; charset=utf-8";
   }
+  if (extension === ".js" || extension === ".mjs") {
+    return "text/javascript; charset=utf-8";
+  }
+  if (extension === ".json") {
+    return "application/json; charset=utf-8";
+  }
   if (extension === ".urdf" || extension === ".srdf" || extension === ".sdf") {
     return "application/xml; charset=utf-8";
   }
@@ -24617,6 +24623,20 @@ async function readJsonFromUrl(url, { fetchImpl = globalThis.fetch } = {}) {
   }
   return response.json();
 }
+async function readJsonFromBlobGetResult(result, pathname) {
+  if (!result) {
+    throw new Error(`Vercel Blob catalog not found: ${pathname}`);
+  }
+  if (!result.stream) {
+    throw new Error(`Vercel Blob catalog response had no body: ${pathname}`);
+  }
+  return new Response(result.stream).json();
+}
+function hasBlobSdkReadCredentials(token) {
+  return Boolean(
+    normalizeString(token) || normalizeString(process.env.BLOB_READ_WRITE_TOKEN) || normalizeString(process.env.VERCEL_OIDC_TOKEN) && normalizeString(process.env.BLOB_STORE_ID)
+  );
+}
 function createVercelBlobAssetBackend({
   prefix = "",
   catalogPath = "catalog.json",
@@ -24636,6 +24656,19 @@ function createVercelBlobAssetBackend({
     return loadBlobClient(client);
   }
   async function readCatalog() {
+    if (hasBlobSdkReadCredentials(token)) {
+      const blob2 = await blobClient();
+      if (typeof blob2.get === "function") {
+        const getOptions = { access: "public" };
+        if (token) {
+          getOptions.token = token;
+        }
+        return readJsonFromBlobGetResult(
+          await blob2.get(normalizedCatalogPath, getOptions),
+          normalizedCatalogPath
+        );
+      }
+    }
     if (resolvedCatalogUrl) {
       return readJsonFromUrl(resolvedCatalogUrl, { fetchImpl });
     }
