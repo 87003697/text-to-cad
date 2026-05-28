@@ -256,6 +256,8 @@ def parse_snapshot_args(argv: Sequence[str]) -> SnapshotOptions:
         else:
             raise SnapshotError(f"Unknown argument: {arg}")
         index += 1
+    if options.focus and options.hide:
+        raise SnapshotError("--focus and --hide cannot be used in the same snapshot command")
     return options
 
 
@@ -296,6 +298,8 @@ def option_focus_hide_specified(options: SnapshotOptions) -> bool:
 def merge_focus_hide_options(job: dict[str, object], options: SnapshotOptions) -> None:
     if not option_focus_hide_specified(options):
         return
+    if options.focus and options.hide:
+        raise SnapshotError("--focus and --hide cannot be used in the same snapshot command")
     selection = dict(job.get("selection") if is_plain_object(job.get("selection")) else {})
     if options.focus:
         selection["focus"] = list(options.focus)
@@ -808,6 +812,10 @@ def normalize_render_job_selection(
     selection = job.get("selection") if is_plain_object(job.get("selection")) else None
     if selection is None:
         return None
+    if any(selection_value_list(selection.get(key)) for key in ("focus", "refs")) and selection_value_list(
+        selection.get("hide")
+    ):
+        raise SnapshotError("selection.focus/refs and selection.hide cannot be used in the same snapshot job")
     normalized = dict(selection)
     for key in ("focus", "refs", "hide"):
         if key not in selection:

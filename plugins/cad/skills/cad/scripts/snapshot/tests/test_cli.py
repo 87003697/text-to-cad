@@ -70,7 +70,21 @@ class SnapshotCliTests(unittest.TestCase):
         self.assertEqual(job["display"], {"mode": "wireframe"})
         self.assertEqual(job["render"]["sizeProfile"], "simple")
 
-    def test_shortcut_focus_and_hide_flags_apply_selection(self) -> None:
+    def test_shortcut_focus_and_hide_flags_are_mutually_exclusive(self) -> None:
+        with self.assertRaisesRegex(SnapshotError, "--focus and --hide cannot be used"):
+            parse_snapshot_args(
+                [
+                    "--input",
+                    "models/assembly.step",
+                    "--output",
+                    "tmp/assembly.png",
+                    "--focus",
+                    "@cad[models/assembly#o1.2]",
+                    "--hide=@cad[models/assembly#o1.3.1]",
+                ]
+            )
+
+    def test_shortcut_focus_flags_apply_selection(self) -> None:
         options = parse_snapshot_args(
             [
                 "--input",
@@ -80,7 +94,6 @@ class SnapshotCliTests(unittest.TestCase):
                 "--focus",
                 "@cad[models/assembly#o1.2]",
                 "@cad[models/assembly#o1.3]",
-                "--hide=@cad[models/assembly#o1.3.1]",
             ]
         )
 
@@ -90,7 +103,6 @@ class SnapshotCliTests(unittest.TestCase):
             job["selection"],
             {
                 "focus": ["@cad[models/assembly#o1.2]", "@cad[models/assembly#o1.3]"],
-                "hide": ["@cad[models/assembly#o1.3.1]"],
             },
         )
 
@@ -174,7 +186,7 @@ class SnapshotCliTests(unittest.TestCase):
         self.assertEqual(job["resolved"]["inputUrl"], "/__render_asset/part.step")
         self.assertEqual(job["resolved"]["glbUrl"], "/__render_asset/.part.step.glb")
 
-    def test_render_job_normalizes_focus_and_hide_cad_refs(self) -> None:
+    def test_render_job_normalizes_focus_cad_refs(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             root = Path(temporary_directory).resolve()
             models = root / "models"
@@ -195,7 +207,6 @@ class SnapshotCliTests(unittest.TestCase):
                         "input": "models/assembly.step",
                         "selection": {
                             "focus": ["@cad[models/assembly#o1.2,o1.3]"],
-                            "hide": ["@cad[models/assembly.step#o1.2.1]"],
                         },
                         "outputs": [{"path": "tmp/iso.png", "camera": "iso"}],
                     },
@@ -206,6 +217,35 @@ class SnapshotCliTests(unittest.TestCase):
 
         selection = packet["jobs"][0]["selection"]
         self.assertEqual(selection["focus"], ["o1.2", "o1.3"])
+
+    def test_render_job_normalizes_hide_cad_refs(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory).resolve()
+            models = root / "models"
+            models.mkdir()
+            (models / "assembly.step").write_text("ISO-10303-21;\nEND-ISO-10303-21;\n", encoding="utf-8")
+            (models / ".assembly.step.glb").write_bytes(b"glb")
+
+            original_ensure = snapshot_main.ensure_step_topology_artifact
+            try:
+                snapshot_main.ensure_step_topology_artifact = lambda *args, **kwargs: _selector_artifact(
+                    "o1",
+                    "o1.2",
+                    "o1.2.1",
+                    "o1.3",
+                )
+                packet = resolve_render_job_packet(
+                    {
+                        "input": "models/assembly.step",
+                        "selection": {"hide": ["@cad[models/assembly.step#o1.2.1]"]},
+                        "outputs": [{"path": "tmp/iso.png", "camera": "iso"}],
+                    },
+                    cwd=root,
+                )
+            finally:
+                snapshot_main.ensure_step_topology_artifact = original_ensure
+
+        selection = packet["jobs"][0]["selection"]
         self.assertEqual(selection["hide"], ["o1.2.1"])
 
     def test_render_job_rejects_face_focus_refs(self) -> None:
@@ -224,6 +264,36 @@ class SnapshotCliTests(unittest.TestCase):
                         {
                             "input": "models/assembly.step",
                             "selection": {"focus": ["@cad[models/assembly#o1.2.f1]"]},
+                            "outputs": [{"path": "tmp/iso.png", "camera": "iso"}],
+                        },
+                        cwd=root,
+                    )
+            finally:
+                snapshot_main.ensure_step_topology_artifact = original_ensure
+
+    def test_render_job_rejects_mixed_focus_and_hide_selection(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory).resolve()
+            models = root / "models"
+            models.mkdir()
+            (models / "assembly.step").write_text("ISO-10303-21;\nEND-ISO-10303-21;\n", encoding="utf-8")
+            (models / ".assembly.step.glb").write_bytes(b"glb")
+
+            original_ensure = snapshot_main.ensure_step_topology_artifact
+            try:
+                snapshot_main.ensure_step_topology_artifact = lambda *args, **kwargs: _selector_artifact(
+                    "o1",
+                    "o1.2",
+                    "o1.3",
+                )
+                with self.assertRaisesRegex(SnapshotError, "selection.focus/refs and selection.hide cannot be used"):
+                    resolve_render_job_packet(
+                        {
+                            "input": "models/assembly.step",
+                            "selection": {
+                                "focus": ["@cad[models/assembly#o1.2]"],
+                                "hide": ["@cad[models/assembly#o1.3]"],
+                            },
                             "outputs": [{"path": "tmp/iso.png", "camera": "iso"}],
                         },
                         cwd=root,
