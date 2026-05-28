@@ -64,8 +64,10 @@ if ! command -v rsync >/dev/null 2>&1; then
 fi
 
 sync_cadjs_package() {
-  mkdir -p "$VIEWER_CADJS_DIR"
+  local target_dir="${1:-$VIEWER_CADJS_DIR}"
+  mkdir -p "$target_dir"
   rsync -a --delete \
+    --prune-empty-dirs \
     --delete-excluded \
     --exclude node_modules \
     --exclude dist \
@@ -73,7 +75,7 @@ sync_cadjs_package() {
     --exclude tmp \
     --exclude .vite \
     --exclude .DS_Store \
-    "$CADJS_PACKAGE_DIR/" "$VIEWER_CADJS_DIR/"
+    "$CADJS_PACKAGE_DIR/" "$target_dir/"
 }
 
 sync_cadpy_package() {
@@ -81,6 +83,7 @@ sync_cadpy_package() {
   local target_dir="$2"
   mkdir -p "$target_dir"
   rsync -a --delete \
+    --prune-empty-dirs \
     --delete-excluded \
     --exclude __pycache__ \
     --exclude .pytest_cache \
@@ -96,11 +99,14 @@ sync_cadpy_package() {
 check_cadjs_package() {
   local label="${VIEWER_CADJS_DIR#$REPO_ROOT/}"
   local diff_path="${TMPDIR:-/tmp}/viewer-cadjs-package-diff.txt"
+  local expected_dir="${TMPDIR:-/tmp}/viewer-cadjs-package-check"
   if [ ! -d "$VIEWER_CADJS_DIR" ]; then
     echo "Missing generated viewer cadjs package: $label" >&2
     echo "Run scripts/build/build-viewer.sh and commit the generated copy." >&2
     exit 1
   fi
+  rm -rf "$expected_dir"
+  sync_cadjs_package "$expected_dir"
   if ! diff -qr \
     -x node_modules \
     -x dist \
@@ -108,7 +114,7 @@ check_cadjs_package() {
     -x tmp \
     -x .vite \
     -x .DS_Store \
-    "$CADJS_PACKAGE_DIR" "$VIEWER_CADJS_DIR" >"$diff_path"; then
+    "$expected_dir" "$VIEWER_CADJS_DIR" >"$diff_path"; then
     cat "$diff_path" >&2
     echo "" >&2
     echo "Viewer cadjs package is stale." >&2
@@ -121,11 +127,14 @@ check_cadjs_package() {
 check_cadpy_package() {
   local label="${VIEWER_CADPY_DIR#$REPO_ROOT/}"
   local diff_path="${TMPDIR:-/tmp}/viewer-cadpy-package-diff.txt"
+  local expected_dir="${TMPDIR:-/tmp}/viewer-cadpy-package-check"
   if [ ! -d "$VIEWER_CADPY_DIR" ]; then
     echo "Missing generated viewer cadpy package: $label" >&2
     echo "Run scripts/build/build-viewer.sh and commit the generated copy." >&2
     exit 1
   fi
+  rm -rf "$expected_dir"
+  sync_cadpy_package "$CADPY_PACKAGE_DIR" "$expected_dir"
   if ! diff -qr \
     -x __pycache__ \
     -x .pytest_cache \
@@ -135,7 +144,7 @@ check_cadpy_package() {
     -x build \
     -x dist \
     -x tests \
-    "$CADPY_PACKAGE_DIR" "$VIEWER_CADPY_DIR" >"$diff_path"; then
+    "$expected_dir" "$VIEWER_CADPY_DIR" >"$diff_path"; then
     cat "$diff_path" >&2
     echo "" >&2
     echo "Viewer cadpy package is stale." >&2

@@ -120,6 +120,7 @@ sync_dir() {
   local target_dir="$2"
   mkdir -p "$target_dir"
   rsync -a --delete \
+    --prune-empty-dirs \
     --delete-excluded \
     --exclude node_modules \
     --exclude build \
