@@ -21,11 +21,14 @@ Usage:
   scripts/build/build-cad-viewer-skill.sh [--check] [--clean] [--no-build]
 
 Builds the self-contained production CAD Viewer runtime used by skills/cad-viewer.
+Client sourcemaps are included so installed skill runtimes can be debugged from
+browser DevTools.
 
 Options:
   --check     Build into tmp/ and fail if skills/cad-viewer/scripts/viewer is stale.
   --clean     Remove the temporary check directory first.
   --no-build  Reuse the current viewer/dist instead of running npm run build.
+              The existing dist must already include client sourcemaps.
   -h, --help  Show this help.
 EOF
 }
@@ -70,6 +73,21 @@ require_command() {
   fi
 }
 
+require_client_sourcemaps() {
+  local dist_dir="$1"
+  local map_count
+  if [ ! -d "$dist_dir/assets" ]; then
+    echo "Missing Viewer dist assets directory: $dist_dir/assets" >&2
+    exit 1
+  fi
+  map_count="$(find "$dist_dir/assets" -type f -name '*.map' | wc -l | tr -d '[:space:]')"
+  if [ "$map_count" -eq 0 ]; then
+    echo "Missing Viewer client sourcemaps in $dist_dir/assets." >&2
+    echo "Run scripts/build/build-cad-viewer-skill.sh without --no-build to regenerate viewer/dist with sourcemaps." >&2
+    exit 1
+  fi
+}
+
 write_runtime_package_json() {
   local target_dir="$1"
   cat > "$target_dir/package.json" <<'EOF'
@@ -77,7 +95,7 @@ write_runtime_package_json() {
   "name": "cad-viewer-runtime",
   "private": true,
   "type": "module",
-  "version": "0.1.6",
+  "version": "0.1.7",
   "scripts": {
     "serve": "node backend/server.mjs",
     "serve:ensure": "node scripts/ensure-serve.mjs",
@@ -218,10 +236,11 @@ if [ "$CLEAN" -eq 1 ]; then
 fi
 
 if [ "$BUILD" -eq 1 ]; then
-  npm --prefix "$VIEWER_DIR" run build
+  npm --prefix "$VIEWER_DIR" run build -- --sourcemap true
 fi
 
 require_path "$VIEWER_DIR/dist/index.html" "viewer production build"
+require_client_sourcemaps "$VIEWER_DIR/dist"
 
 if [ "$MODE" = "check" ]; then
   build_runtime "$CHECK_DIR"

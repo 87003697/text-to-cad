@@ -4713,6 +4713,14 @@ export default function CadWorkspace({
     () => buildSelectionCopyButtonLabel(copySelectionPayload.lines, { count: copySelectionPayload.copiedCount }),
     [copySelectionPayload.copiedCount, copySelectionPayload.lines]
   );
+  const cadRefQueryParamsForUrlSignature = useMemo(() => (
+    selectedEntry
+      ? [
+          ...(selectedWholeEntryCadRefToken ? [selectedWholeEntryCadRefToken] : []),
+          ...copySelectionPayload.lines
+        ].join("\n")
+      : ""
+  ), [copySelectionPayload.lines, selectedEntry, selectedWholeEntryCadRefToken]);
 
   useEffect(() => {
     if (!pendingCadRefQueryParams.length) {
@@ -4721,7 +4729,7 @@ export default function CadWorkspace({
 
     if (!selectedEntry) {
       if (!cadRefQueryHasKnownEntry(pendingCadRefQueryParams, catalogEntries)) {
-        setPendingCadRefQueryParams([]);
+        setPendingCadRefQueryParams((current) => Array.isArray(current) && current.length ? [] : current);
       }
       return;
     }
@@ -4729,7 +4737,7 @@ export default function CadWorkspace({
     const selectionRequest = collectCadRefSelectionRequest(pendingCadRefQueryParams, selectedEntry);
     if (!selectionRequest.hasMatchingToken) {
       if (!cadRefQueryHasKnownEntry(pendingCadRefQueryParams, catalogEntries)) {
-        setPendingCadRefQueryParams([]);
+        setPendingCadRefQueryParams((current) => Array.isArray(current) && current.length ? [] : current);
       }
       return;
     }
@@ -4757,17 +4765,19 @@ export default function CadWorkspace({
       selectedPartIdsRef.current = resolvedSelection.selectedPartIds;
       setSelectedPartIds(resolvedSelection.selectedPartIds);
     }
-    setSelectedRenderPartIdByAssemblyPartId({});
-    setSelectedWholeEntryCadRefToken(
-      resolvedSelection.hasWholeEntryToken
-        ? buildCadRefToken({ cadPath: cadPathForEntry(selectedEntry) })
-        : ""
-    );
-    setInspectedAssemblyNodeId(
-      isAssemblyView && resolvedSelection.inspectedAssemblyNodeId !== assemblyRootNodeId
-        ? resolvedSelection.inspectedAssemblyNodeId
-        : ""
-    );
+    setSelectedRenderPartIdByAssemblyPartId((current) => Object.keys(current || {}).length ? {} : current);
+    const nextWholeEntryCadRefToken = resolvedSelection.hasWholeEntryToken
+      ? buildCadRefToken({ cadPath: cadPathForEntry(selectedEntry) })
+      : "";
+    setSelectedWholeEntryCadRefToken((current) => (
+      current === nextWholeEntryCadRefToken ? current : nextWholeEntryCadRefToken
+    ));
+    const nextInspectedAssemblyNodeId = isAssemblyView && resolvedSelection.inspectedAssemblyNodeId !== assemblyRootNodeId
+      ? resolvedSelection.inspectedAssemblyNodeId
+      : "";
+    setInspectedAssemblyNodeId((current) => (
+      current === nextInspectedAssemblyNodeId ? current : nextInspectedAssemblyNodeId
+    ));
     const resolvedTreeNodeIds = uniqueStringList([
       ...resolvedSelection.selectedPartIds.flatMap((id) => collectStepTreeAncestorIds(stepTreeRoot, id)),
       ...(resolvedSelection.inspectedAssemblyNodeId
@@ -4779,13 +4789,13 @@ export default function CadWorkspace({
       setExpandedStepTreeNodeIds((current) => uniqueStringList([...current, ...resolvedTreeNodeIds]));
       openFileSheetSection(FILE_SHEET_SECTION_IDS.STEP_TREE);
     }
-    setHoveredListReferenceId("");
-    setHoveredModelReferenceId("");
-    setHoveredListPartId("");
-    setHoveredModelPartId("");
-    setCopyStatus("");
-    setTabToolMode(TAB_TOOL_MODE.REFERENCES);
-    setPendingCadRefQueryParams([]);
+    setHoveredListReferenceId((current) => current ? "" : current);
+    setHoveredModelReferenceId((current) => current ? "" : current);
+    setHoveredListPartId((current) => current ? "" : current);
+    setHoveredModelPartId((current) => current ? "" : current);
+    setCopyStatus((current) => current ? "" : current);
+    setTabToolMode((current) => current === TAB_TOOL_MODE.REFERENCES ? current : TAB_TOOL_MODE.REFERENCES);
+    setPendingCadRefQueryParams((current) => Array.isArray(current) && current.length ? [] : current);
   }, [
     assemblyPartsLoaded,
     assemblyNodes,
@@ -4807,15 +4817,10 @@ export default function CadWorkspace({
     if (!cadWorkspaceSessionBootstrappedRef.current || pendingCadRefQueryParams.length) {
       return;
     }
-    writeCadRefQueryParams(selectedEntry ? [
-      ...(selectedWholeEntryCadRefToken ? [selectedWholeEntryCadRefToken] : []),
-      ...copySelectionPayload.lines
-    ] : []);
+    writeCadRefQueryParams(cadRefQueryParamsForUrlSignature ? cadRefQueryParamsForUrlSignature.split("\n") : []);
   }, [
-    copySelectionPayload.lines,
+    cadRefQueryParamsForUrlSignature,
     pendingCadRefQueryParams,
-    selectedEntry,
-    selectedWholeEntryCadRefToken,
     cadWorkspaceSessionBootstrappedRef
   ]);
 

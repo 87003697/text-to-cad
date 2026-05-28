@@ -23,6 +23,8 @@ product and `models/` as the shared fixture/artifact area.
 - Keep relevant Markdown docs current when changing behavior, commands, or repo
   layout, but do not bloat `AGENTS.md`; use it only for durable repo-level
   rules and pointers.
+- Read `COMMIT.md` before committing, rebasing, resolving generated-file
+  conflicts, or bumping release versions.
 - Each skill must be self-contained and independent at runtime. A skill must
   not refer to or import or depend on code from another skill, from `skills/` root, or from
   repository-root modules. Do not add `skills/`, the repository root, or sibling
@@ -52,7 +54,8 @@ product and `models/` as the shared fixture/artifact area.
 - Keep release versioning in lockstep: the git tag, plugin manifests and
   `plugins/*/VERSION`, package manifests/locks, Python `pyproject.toml` files,
   and any other repo-owned release version numbers should all match. The
-  current release version is `0.1.5`.
+  current release version is `0.1.7`. Use `scripts/release/bump-version.sh`
+  for version bumps as described in `COMMIT.md`.
 
 ## Environments
 

@@ -14,7 +14,9 @@ import {
   sidebarDirectoryPath,
   sidebarDirectoryIdForEntry,
   sidebarLabelForEntry,
-  shouldDeferFileParamSelection
+  shouldDeferFileParamSelection,
+  writeCadParam,
+  writeCadRefQueryParams
 } from "./sidebar.js";
 import {
   buildAvailableThemePresets,
@@ -1999,6 +2001,68 @@ test("selectedEntryKeyFromUrl restores the selected canonical ref query param", 
       ]),
       "parts/sample_plate.step"
     );
+  } finally {
+    if (originalWindow === undefined) {
+      delete globalThis.window;
+    } else {
+      globalThis.window = originalWindow;
+    }
+  }
+});
+
+test("writeCadParam skips unchanged URL replacements", () => {
+  const originalWindow = globalThis.window;
+  const calls = [];
+  globalThis.window = {
+    location: {
+      href: "http://viewer.test/?file=parts%2Fsample_plate.step&refs=parts%2Fsample_plate%23f2",
+      pathname: "/",
+      search: "?file=parts%2Fsample_plate.step&refs=parts%2Fsample_plate%23f2",
+      hash: ""
+    },
+    history: {
+      replaceState: (...args) => calls.push(args)
+    }
+  };
+
+  try {
+    writeCadParam("parts/sample_plate.step");
+    assert.equal(calls.length, 0);
+
+    writeCadParam("parts/sample_base.step");
+    assert.equal(calls.length, 1);
+    assert.equal(calls[0][2], "/?file=parts%2Fsample_base.step&refs=parts%2Fsample_plate%23f2");
+  } finally {
+    if (originalWindow === undefined) {
+      delete globalThis.window;
+    } else {
+      globalThis.window = originalWindow;
+    }
+  }
+});
+
+test("writeCadRefQueryParams skips unchanged URL replacements", () => {
+  const originalWindow = globalThis.window;
+  const calls = [];
+  globalThis.window = {
+    location: {
+      href: "http://viewer.test/?file=parts%2Fsample_plate.step&refs=parts%2Fsample_plate%23f2",
+      pathname: "/",
+      search: "?file=parts%2Fsample_plate.step&refs=parts%2Fsample_plate%23f2",
+      hash: ""
+    },
+    history: {
+      replaceState: (...args) => calls.push(args)
+    }
+  };
+
+  try {
+    writeCadRefQueryParams(["@cad[parts/sample_plate#f2]"]);
+    assert.equal(calls.length, 0);
+
+    writeCadRefQueryParams(["@cad[parts/sample_plate#e1]"]);
+    assert.equal(calls.length, 1);
+    assert.equal(calls[0][2], "/?file=parts%2Fsample_plate.step&refs=parts%2Fsample_plate%23e1");
   } finally {
     if (originalWindow === undefined) {
       delete globalThis.window;
