@@ -231,7 +231,7 @@ export default function Home() {
 
           <section
             aria-label="Install CAD Skills with supported agents"
-            className="grid gap-5 py-6 lg:grid-cols-[minmax(0,1.2fr)_minmax(18rem,0.8fr)] lg:items-center lg:gap-12"
+            className="grid gap-5 py-6 lg:grid-cols-2 lg:items-center lg:gap-12"
           >
             <div className="min-w-0 space-y-3">
               <h2 className="text-sm font-medium uppercase tracking-[1.5px] text-foreground">

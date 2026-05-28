@@ -1,6 +1,5 @@
 "use client";
 
-import { useEffect, useState } from "react";
 import Link from "next/link";
 import { ThemeToggle } from "@/components/theme-toggle";
 import { Button } from "@/components/ui/button";
@@ -30,50 +29,24 @@ function formatGitHubStars(stars: number) {
   return new Intl.NumberFormat("en-US").format(stars);
 }
 
-type CopyStatus = "idle" | "copied" | "error";
-
-function VersionCopyButton({ version }: { version: string }) {
-  const [copyStatus, setCopyStatus] = useState<CopyStatus>("idle");
+function VersionLink({ version }: { version: string }) {
   const normalizedVersion = version.trim();
-
-  useEffect(() => {
-    if (copyStatus === "idle") {
-      return;
-    }
-
-    const timeout = window.setTimeout(() => setCopyStatus("idle"), 1400);
-    return () => window.clearTimeout(timeout);
-  }, [copyStatus]);
 
   if (!normalizedVersion) {
     return null;
   }
 
-  const handleCopyVersion = async () => {
-    try {
-      await window.navigator.clipboard.writeText(normalizedVersion);
-      setCopyStatus("copied");
-    } catch {
-      setCopyStatus("error");
-    }
-  };
-  const label = copyStatus === "copied"
-    ? "Copied version"
-    : copyStatus === "error"
-      ? "Version copy failed"
-      : `Copy version ${normalizedVersion}`;
-
   return (
-    <button
-      type="button"
-      className="hidden h-8 cursor-pointer items-center rounded-md px-2 text-label font-medium tabular-nums tracking-wider text-muted-foreground transition hover:bg-secondary hover:text-foreground md:inline-flex"
-      onClick={handleCopyVersion}
-      aria-label={label}
-      title={label}
-      aria-live="polite"
+    <a
+      className="hidden px-2.5 py-1.5 text-ui text-muted-foreground transition hover:bg-secondary hover:text-foreground md:inline-flex"
+      href={`${GITHUB_REPO_URL}/releases`}
+      target="_blank"
+      rel="noreferrer"
+      aria-label={`Open GitHub releases for version ${normalizedVersion}`}
+      title={`Open GitHub releases for version ${normalizedVersion}`}
     >
       v{normalizedVersion}
-    </button>
+    </a>
   );
 }
 
@@ -119,10 +92,10 @@ export function SiteHeaderClient({
           >
             INSTALL
           </a>
+          <VersionLink version={version} />
         </nav>
 
         <div className="ml-auto flex shrink-0 items-center gap-1 sm:ml-0">
-          <VersionCopyButton version={version} />
           <Button
             asChild
             variant="outline"
