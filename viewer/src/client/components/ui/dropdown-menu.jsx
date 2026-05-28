@@ -12,20 +12,21 @@ function DropdownMenu({
   return <DropdownMenuPrimitive.Root data-slot="dropdown-menu" {...props} />;
 }
 
-function DropdownMenuTrigger({
+const DropdownMenuTrigger = React.forwardRef(function DropdownMenuTrigger({
   ...props
-}) {
-  return <DropdownMenuPrimitive.Trigger data-slot="dropdown-menu-trigger" {...props} />;
-}
+}, ref) {
+  return <DropdownMenuPrimitive.Trigger ref={ref} data-slot="dropdown-menu-trigger" {...props} />;
+});
 
-function DropdownMenuContent({
+const DropdownMenuContent = React.forwardRef(function DropdownMenuContent({
   className,
   sideOffset = 4,
   ...props
-}) {
+}, ref) {
   return (
     <DropdownMenuPrimitive.Portal>
       <DropdownMenuPrimitive.Content
+        ref={ref}
         data-slot="dropdown-menu-content"
         sideOffset={sideOffset}
         className={cn(
@@ -36,7 +37,7 @@ function DropdownMenuContent({
       />
     </DropdownMenuPrimitive.Portal>
   );
-}
+});
 
 function DropdownMenuItem({
   className,

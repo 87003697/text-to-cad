@@ -12,17 +12,17 @@ function Sheet({
   return <SheetPrimitive.Root data-slot="sheet" {...props} />;
 }
 
-function SheetTrigger({
+const SheetTrigger = React.forwardRef(function SheetTrigger({
   ...props
-}) {
-  return <SheetPrimitive.Trigger data-slot="sheet-trigger" {...props} />;
-}
+}, ref) {
+  return <SheetPrimitive.Trigger ref={ref} data-slot="sheet-trigger" {...props} />;
+});
 
-function SheetClose({
+const SheetClose = React.forwardRef(function SheetClose({
   ...props
-}) {
-  return <SheetPrimitive.Close data-slot="sheet-close" {...props} />;
-}
+}, ref) {
+  return <SheetPrimitive.Close ref={ref} data-slot="sheet-close" {...props} />;
+});
 
 function SheetPortal({
   ...props
@@ -46,18 +46,19 @@ const SheetOverlay = React.forwardRef(function SheetOverlay({
   );
 });
 
-function SheetContent({
+const SheetContent = React.forwardRef(function SheetContent({
   className,
   overlayClassName,
   children,
   side = "right",
   showCloseButton = true,
   ...props
-}) {
+}, ref) {
   return (
     <SheetPortal>
       <SheetOverlay className={overlayClassName} />
       <SheetPrimitive.Content
+        ref={ref}
         data-slot="sheet-content"
         className={cn(
           "cad-glass-popover fixed z-50 flex flex-col gap-4 shadow-lg transition ease-in-out data-[state=closed]:animate-out data-[state=closed]:duration-300 data-[state=open]:animate-in data-[state=open]:duration-500",
@@ -83,7 +84,7 @@ function SheetContent({
       </SheetPrimitive.Content>
     </SheetPortal>
   );
-}
+});
 
 function SheetHeader({
   className,

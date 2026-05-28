@@ -18,6 +18,10 @@ compatibility wrappers at the root of `scripts/`.
 Release version bumps:
 
 ```bash
-scripts/release/bump-version.py patch --dry-run
-scripts/release/bump-version.py patch
+scripts/release/bump-version.sh patch --dry-run
+scripts/release/bump-version.sh patch
+scripts/release/bump-version.sh patch --amend
 ```
+
+The shell wrapper writes the bump, commits the changed release metadata, and
+creates a local release tag by default. Use `--no-commit` to only edit files.
