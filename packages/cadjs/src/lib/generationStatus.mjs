@@ -55,7 +55,7 @@ function isGenerationLockFileName(name) {
   return String(name || "").startsWith(".") && String(name || "").endsWith(GENERATION_LOCK_SUFFIX);
 }
 
-function resolveStatusPath(repoRoot, value) {
+function resolveStatusPath(repoRoot, value, { statusPath = "", rootPath = "" } = {}) {
   const raw = String(value || "").trim();
   if (!raw) {
     return "";
@@ -63,9 +63,27 @@ function resolveStatusPath(repoRoot, value) {
   if (raw.includes("\0")) {
     return "";
   }
-  return path.isAbsolute(raw)
-    ? path.resolve(raw)
-    : path.resolve(repoRoot, raw);
+  if (path.isAbsolute(raw)) {
+    return path.resolve(raw);
+  }
+  const normalized = raw.replace(/\\/g, "/");
+  const statusDir = statusPath ? path.dirname(statusPath) : "";
+  const repoCandidate = path.resolve(repoRoot, normalized);
+  const shouldPreferStatusDir = (
+    statusDir &&
+    (
+      normalized.startsWith("../") ||
+      normalized.startsWith("./") ||
+      !normalized.includes("/")
+    )
+  );
+  if (shouldPreferStatusDir) {
+    return path.resolve(statusDir, normalized);
+  }
+  if (rootPath && pathIsInside(repoCandidate, rootPath)) {
+    return repoCandidate;
+  }
+  return repoCandidate;
 }
 
 function processIsAlive(pid) {
@@ -174,14 +192,17 @@ export function readGenerationStatus({
         pid: Number(payload.pid) || 0,
         startedAt: String(payload.startedAt || ""),
         updatedAt: String(payload.updatedAt || ""),
-        sourcePath: String(payload.sourcePath || ""),
+        sourcePath: sourcePathFromStatusPayload(resolvedRepoRoot, payload.sourcePath, statusPath),
         generator: String(payload.generator || ""),
         files: [],
       };
       runsById.set(runId, run);
     }
     for (const output of outputEntries(payload)) {
-      const outputPath = resolveStatusPath(resolvedRepoRoot, output.path);
+      const outputPath = resolveStatusPath(resolvedRepoRoot, output.path, {
+        statusPath,
+        rootPath: resolvedRoot.rootPath,
+      });
       if (!outputPath || !pathIsInside(outputPath, resolvedRoot.rootPath)) {
         continue;
       }
@@ -208,6 +229,17 @@ export function readGenerationStatus({
 
   status.runs = Array.from(runsById.values()).filter((run) => run.files.length);
   return status;
+}
+
+function sourcePathFromStatusPayload(repoRoot, value, statusPath) {
+  const raw = String(value || "").trim();
+  if (!raw) {
+    return "";
+  }
+  const resolved = resolveStatusPath(repoRoot, raw, { statusPath, rootPath: repoRoot });
+  return resolved && pathIsInside(resolved, repoRoot)
+    ? toPosixPath(path.relative(path.resolve(repoRoot), resolved))
+    : raw.replace(/\\/g, "/");
 }
 
 export function isGenerationStatusPath(filePath, repoRoot) {

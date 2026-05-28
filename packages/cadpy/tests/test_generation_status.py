@@ -38,7 +38,8 @@ class GenerationStatusTests(unittest.TestCase):
                 payload = json.loads(lock_paths[0].read_text(encoding="utf-8"))
                 self.assertEqual("running", payload["status"])
                 self.assertEqual("gen_step", payload["generator"])
-                self.assertEqual(str(step_path.resolve()), payload["outputs"][0]["path"])
+                self.assertEqual("part.py", payload["sourcePath"])
+                self.assertEqual("part.step", payload["outputs"][0]["path"])
                 self.assertFalse(tuple(skill_dir.rglob("*.generation.lock.json")))
 
             self.assertFalse(lock_paths[0].exists())

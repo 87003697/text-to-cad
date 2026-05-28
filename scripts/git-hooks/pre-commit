@@ -12,7 +12,7 @@ if ! git diff --cached --quiet -- \
   packages/cadjs/src/lib/viewer/topologyDisplayEdgeLine.js \
   packages/cadpy \
   skills/cad/scripts/packages/cadpy \
-  skills/cad/scripts/snapshot \
+  skills/cad/scripts/cadpy_snapshot \
   scripts/build/build-cad-skill.sh
 then
   scripts/build/build-cad-skill.sh --check

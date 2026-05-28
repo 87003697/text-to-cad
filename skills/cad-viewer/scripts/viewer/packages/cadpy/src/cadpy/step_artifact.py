@@ -122,8 +122,8 @@ def _result_payload(
 ) -> dict[str, object]:
     payload: dict[str, object] = {
         "ok": True,
-        "stepPath": str(spec.step_path.resolve()),
-        "glbPath": str(glb_path.resolve()),
+        "stepPath": relative_to_repo(spec.step_path),
+        "glbPath": relative_to_repo(glb_path),
         "entryKind": entry_kind,
         "sourceKind": source_kind,
         "stats": stats or {},

@@ -166,8 +166,8 @@ test("buildProductionSpawnOptions passes default and explicit shutdown lifetimes
     },
   });
   assert.equal(defaultOptions.options.env.VIEWER_ASSET_BACKEND, "local-fs");
-  assert.equal("VIEWER_LOCAL_WORKSPACE_ROOT" in defaultOptions.options.env, false);
-  assert.equal(defaultOptions.options.env.VIEWER_LOCAL_ROOT_DIR, "/tmp/workspace-root/models");
+  assert.equal(defaultOptions.options.env.VIEWER_LOCAL_WORKSPACE_ROOT, "/tmp/workspace-root/models");
+  assert.equal(defaultOptions.options.env.VIEWER_LOCAL_ROOT_DIR, "");
   assert.equal(defaultOptions.options.env.VIEWER_PORT, "4182");
   assert.equal(defaultOptions.options.env.VIEWER_SERVER_LIFETIME_MS, String(DEFAULT_SERVER_LIFETIME_MS));
 

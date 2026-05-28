@@ -34,34 +34,50 @@ import {
   normalizeServerLifetimeMs,
   scheduleProcessShutdown,
 } from "./serverLifetime.mjs";
+import {
+  applyServerArgsToEnv,
+  serverHelpText,
+} from "./serverArgs.mjs";
 
 const serverModuleDir = path.dirname(fileURLToPath(import.meta.url));
 const viewerAppRoot = path.basename(path.dirname(serverModuleDir)) === "src"
   ? path.resolve(serverModuleDir, "..", "..")
   : path.resolve(serverModuleDir, "..");
 const defaultWorkspaceRoot = path.resolve(viewerAppRoot, "..");
+let runtime;
+try {
+  runtime = applyServerArgsToEnv({ argv: process.argv.slice(2), env: process.env, cwd: process.cwd() });
+} catch (error) {
+  process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
+  process.exit(1);
+}
+if (runtime.args.help) {
+  process.stdout.write(serverHelpText());
+  process.exit(0);
+}
+const runtimeEnv = runtime.env;
 const workspaceRoot = resolveWorkspaceRoot({
-  env: process.env,
+  env: runtimeEnv,
   cwd: process.cwd(),
   appRoot: viewerAppRoot,
   defaultWorkspaceRoot,
 });
-const backendKind = normalizeViewerAssetBackend(process.env.VIEWER_ASSET_BACKEND);
-const rootDir = rootDirForAssetBackend(backendKind, process.env);
-const port = normalizeViewerPort(process.env.VIEWER_PORT, DEFAULT_VIEWER_PORT);
-const host = process.env.VIEWER_HOST || "127.0.0.1";
-const serverLifetimeMs = normalizeServerLifetimeMs(process.env.VIEWER_SERVER_LIFETIME_MS);
+const backendKind = normalizeViewerAssetBackend(runtimeEnv.VIEWER_ASSET_BACKEND);
+const rootDir = rootDirForAssetBackend(backendKind, runtimeEnv);
+const port = normalizeViewerPort(runtimeEnv.VIEWER_PORT, DEFAULT_VIEWER_PORT);
+const host = runtimeEnv.VIEWER_HOST || "127.0.0.1";
+const serverLifetimeMs = normalizeServerLifetimeMs(runtimeEnv.VIEWER_SERVER_LIFETIME_MS);
 const distRoot = path.resolve(viewerAppRoot, "dist");
 const backend = backendKind === VIEWER_ASSET_BACKENDS.VERCEL_BLOB
   ? createVercelBlobAssetBackend({
-      ...vercelBlobConfigFromEnv(process.env),
+      ...vercelBlobConfigFromEnv(runtimeEnv),
       readOnly: true,
     })
   : createLocalAssetBackend({
       workspaceRoot,
       rootDir,
-      defaultFile: normalizeViewerDefaultFile(process.env.VIEWER_DEFAULT_FILE || ""),
-      githubUrl: normalizeViewerGithubUrl(process.env.VIEWER_GITHUB_URL || ""),
+      defaultFile: normalizeViewerDefaultFile(runtimeEnv.VIEWER_DEFAULT_FILE || ""),
+      githubUrl: normalizeViewerGithubUrl(runtimeEnv.VIEWER_GITHUB_URL || ""),
     });
 const localAssetBackendEnabled = backend.kind === "local-fs";
 const stepArtifactBackendEnabled = localAssetBackendEnabled && typeof backend.generateStepArtifact === "function";
@@ -84,7 +100,7 @@ const middlewares = [
             port,
             pid: process.pid,
           })
-        : buildHostedViewerServerInfo({ backend, env: process.env, rootDir })
+        : buildHostedViewerServerInfo({ backend, env: runtimeEnv, rootDir })
     ),
   }),
   ...(localAssetBackendEnabled ? [createLocalAssetMiddleware({ backend, rootDir })] : []),

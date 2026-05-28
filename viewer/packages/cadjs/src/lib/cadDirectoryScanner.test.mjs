@@ -438,6 +438,45 @@ test("scanCadDirectory reads split Python source hash and fingerprint from GLB a
   assert.equal(entry.source.sourceFingerprint, sourceFingerprint);
 });
 
+test("scanCadDirectory accepts Python STEP topology generated from a nested project root", () => {
+  const repoRoot = makeTempRepo();
+  const projectRoot = path.join(repoRoot, "workspace/arm7");
+  const stepPath = path.join(projectRoot, "STEP/assembly.step");
+  const generatorPath = path.join(projectRoot, "STEP/assembly.py");
+  writeStep(stepPath);
+  writeFile(generatorPath, "from armkit import SIZE\n\ndef gen_step():\n    return None\n");
+  writeFile(path.join(projectRoot, "armkit.py"), "SIZE = 1\n");
+  const sourceHash = sha256Buffer(fs.readFileSync(generatorPath));
+  const sourceFingerprint = pythonSourceIdentity(projectRoot, [
+    "STEP/assembly.py",
+    "armkit.py",
+  ]).sourceHash;
+  writeFile(path.join(projectRoot, "STEP/.assembly.step.glb"), topologyGlb({
+    sourceKind: "python",
+    sourcePath: "assembly.py",
+    sourceHash,
+    sourceFingerprint,
+    stepPath: "assembly.step",
+    entryKind: "assembly",
+  }));
+
+  const catalog = scanCadDirectory({ repoRoot, rootDir: "workspace" });
+  const entry = entryByFile(catalog, "arm7/STEP/assembly.step");
+  const validation = validateStepTopologyArtifact({
+    repoRoot,
+    sourcePath: stepPath,
+    cadPath: "workspace/arm7/STEP/assembly",
+  });
+
+  assert.equal(validation.stepArtifact.ok, true);
+  assert.equal(validation.stepArtifact.sourcePath, "workspace/arm7/STEP/assembly.py");
+  assert.equal(entry.artifact, undefined);
+  assert.equal(entry.sourceKind, "python");
+  assert.equal(entry.source.file, "workspace/arm7/STEP/assembly.py");
+  assert.equal(entry.source.sourceHash, sourceHash);
+  assert.equal(entry.source.sourceFingerprint, sourceFingerprint);
+});
+
 test("scanCadDirectory marks non-STEP files as Python-backed from metadata comments", () => {
   const repoRoot = makeTempRepo();
   const generatorPath = path.join(repoRoot, "workspace/robots/robot_urdf.py");
@@ -445,7 +484,7 @@ test("scanCadDirectory marks non-STEP files as Python-backed from metadata comme
   const sourceHash = sha256Buffer(fs.readFileSync(generatorPath));
   const sourceFingerprint = pythonSourceIdentity(repoRoot, ["workspace/robots/robot_urdf.py"]).sourceHash;
   writeFile(path.join(repoRoot, "workspace/robots/robot.urdf"), [
-    `<!-- cadpy:sourcePath=workspace/robots/robot_urdf.py -->`,
+    `<!-- cadpy:sourcePath=robot_urdf.py -->`,
     `<!-- cadpy:sourceHash=${sourceHash} -->`,
     `<!-- cadpy:sourceFingerprint=${sourceFingerprint} -->`,
     "<robot name=\"sample\" />",
@@ -491,7 +530,7 @@ test("scanCadDirectory treats missing GLBs for STEP files with Python metadata a
   const repoRoot = makeTempRepo();
   writeFile(path.join(repoRoot, "workspace/generated/generated.py"), "def gen_step():\n    return None\n");
   writeStepWithSourceMetadata(path.join(repoRoot, "workspace/generated/generated.step"), {
-    sourcePath: "workspace/generated/generated.py",
+    sourcePath: "generated.py",
     sourceHash: "direct-source-hash",
     sourceFingerprint: "aggregate-source-fingerprint",
   });
@@ -661,12 +700,12 @@ test("readStepSourceStatus infers non-same-stem Python source paths from stale a
     writeStepWithSourceFingerprint(stepPath, previous.sourceHash);
     writeFile(generatorPath, "def gen_step():\n    return None\n\nSIZE = 2\n");
     const current = pythonSourceIdentity(repoRoot, ["workspace/sources/assembly.py"]);
-    writeFile(path.join(repoRoot, "workspace/generated/.robot.step.glb"), topologyGlb({
-      sourceKind: "python",
-      sourcePath: "workspace/sources/assembly.py",
-      sourceHash: previous.sourceHash,
-      sourceFingerprint: previous.sourceHash,
-      entryKind: "part",
+  writeFile(path.join(repoRoot, "workspace/generated/.robot.step.glb"), topologyGlb({
+    sourceKind: "python",
+    sourcePath: "../sources/assembly.py",
+    sourceHash: previous.sourceHash,
+    sourceFingerprint: previous.sourceHash,
+    entryKind: "part",
     }));
 
     const validation = validateStepTopologyArtifact({

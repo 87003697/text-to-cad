@@ -174,7 +174,7 @@ class SdfCliTests(unittest.TestCase):
             self.assertTrue(second_output.exists())
             self.assertFalse(second_path.with_suffix(".sdf").exists())
 
-    def test_legacy_sdf_output_field_is_ignored(self) -> None:
+    def test_rejects_legacy_sdf_output_field(self) -> None:
         with tempfile.TemporaryDirectory(prefix="tmp-sdf-") as tempdir:
             source_path = Path(tempdir) / "sample_robot.py"
             _write_sdf_source(
@@ -189,9 +189,10 @@ class SdfCliTests(unittest.TestCase):
                 ),
             )
 
-            self.assertEqual(0, cli.generate_sdf_targets([str(source_path)]))
+            with self.assertRaisesRegex(TypeError, "unsupported field\\(s\\): sdf_output"):
+                cli.generate_sdf_targets([str(source_path)])
 
-            self.assertTrue(source_path.with_suffix(".sdf").exists())
+            self.assertFalse(source_path.with_suffix(".sdf").exists())
             self.assertFalse((Path(tempdir) / "legacy" / "ignored.sdf").exists())
 
     def test_envelope_prints_assumptions_and_warnings(self) -> None:

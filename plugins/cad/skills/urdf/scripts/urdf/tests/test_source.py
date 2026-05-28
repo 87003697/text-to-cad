@@ -39,10 +39,10 @@ class UrdfSourceTests(unittest.TestCase):
                 "\n".join(
                     [
                         "def gen_step():",
-                        f"    return {{'instances': [], 'step_output': {f'{name}.step'!r}}}",
+                        "    return {'instances': []}",
                         "",
                         "def gen_urdf():",
-                        f"    return {{'xml': '', 'urdf_output': {f'{name}.urdf'!r}}}",
+                        "    return {'xml': ''}",
                         "",
                     ]
                 ),

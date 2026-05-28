@@ -40,7 +40,7 @@ def normalize_text_to_cad_source_path(value: object) -> str | None:
     if not raw or raw.startswith("/") or re.match(r"^[A-Za-z]:/", raw):
         return None
     normalized = posixpath.normpath(raw)
-    if normalized in {"", "."} or normalized.startswith("../") or "/../" in f"/{normalized}/":
+    if normalized in {"", ".", ".."}:
         return None
     return normalized
 

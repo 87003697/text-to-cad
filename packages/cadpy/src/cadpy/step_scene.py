@@ -1366,7 +1366,7 @@ def _write_step_scene_cache(scene: LoadedStepScene, *, step_hash: str, root: Pat
         metadata = {
             "schemaVersion": STEP_SCENE_CACHE_SCHEMA_VERSION,
             "stepHash": step_hash,
-            "sourcePath": os.fspath(scene.step_path),
+            "sourcePath": _relative_path_from_directory(scene.step_path, temp_dir),
             "roots": [_node_to_cache_payload(root_node) for root_node in scene.roots],
             "prototypes": prototypes,
         }
@@ -1940,12 +1940,29 @@ def _selector_id(path: tuple[int, ...]) -> str:
     return "o" + ".".join(str(segment) for segment in path)
 
 
-def _relative_step_path(step_path: Path) -> str:
-    resolved = step_path.resolve()
+def _relative_path_from_directory(path: Path, base_dir: Path) -> str:
+    return os.path.relpath(
+        path.expanduser().resolve(),
+        start=base_dir.expanduser().resolve(),
+    ).replace(os.sep, "/")
+
+
+def _artifact_relative_manifest_path(raw_path: str, artifact_dir: Path) -> str:
+    value = str(raw_path or "").strip().replace("\\", "/")
+    if not value:
+        return ""
+    path = Path(value)
+    if path.is_absolute():
+        return _relative_path_from_directory(path, artifact_dir)
+    artifact_candidate = (artifact_dir / path).resolve()
+    repo_candidate = (REPO_ROOT / path).resolve()
     try:
-        return resolved.relative_to(REPO_ROOT).as_posix()
+        repo_candidate.relative_to(REPO_ROOT)
     except ValueError:
-        return resolved.as_posix()
+        return value
+    if repo_candidate.exists() and repo_candidate != artifact_candidate:
+        return _relative_path_from_directory(repo_candidate, artifact_dir)
+    return value
 
 
 def _step_hash(step_path: Path) -> str:
@@ -2517,9 +2534,10 @@ def extract_selectors_from_scene(
     source_kind = str(getattr(scene, "source_kind", "step") or "step").strip().lower()
     if source_kind not in {"step", "python"}:
         source_kind = "step"
-    source_path = str(getattr(scene, "source_path", "") or "").strip()
+    artifact_dir = resolved_step_path.parent
+    source_path = _artifact_relative_manifest_path(str(getattr(scene, "source_path", "") or ""), artifact_dir)
     if not source_path and source_kind != "python":
-        source_path = _relative_step_path(resolved_step_path)
+        source_path = _relative_path_from_directory(resolved_step_path, artifact_dir)
     if not source_path:
         raise RuntimeError(f"STEP_topology artifact sourcePath is required for {resolved_step_path}")
 
@@ -2529,7 +2547,7 @@ def extract_selectors_from_scene(
         "capabilities": step_topology_capabilities(normalized_options.edge_visibility_classes),
         "sourceKind": source_kind,
         "sourcePath": source_path,
-        "stepPath": _relative_step_path(resolved_step_path),
+        "stepPath": _relative_path_from_directory(resolved_step_path, artifact_dir),
         "bbox": _compact_bbox(overall_bbox, normalized_options.digits),
         "stats": stats,
         "edgeRendering": edge_rendering_manifest,

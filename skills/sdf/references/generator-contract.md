@@ -67,7 +67,7 @@ Envelope rules:
 - `assumptions`, when present, must be a list of strings or dicts with `code`, `message`, and optional `source`.
 - `warnings`, when present, must be a list of strings or dicts with `code`, `message`, and optional `source`.
 - `metadata`, when present, must be a JSON-serializable dict with scalar values.
-- Legacy `sdf_output` may be accepted as an ignored extra only when `xml` is present.
+- Output-path fields such as `sdf_output` are unsupported; select output paths with CLI targets.
 - Unsupported envelope fields should fail with a clear error.
 
 Use envelope assumptions to make spatial, physical, simulator, and resource assumptions auditable. Do not hide guesses in XML literals.

@@ -1142,14 +1142,14 @@ var require_util = __commonJS({
         }
         const port2 = url.port != null ? url.port : url.protocol === "https:" ? 443 : 80;
         let origin = url.origin != null ? url.origin : `${url.protocol || ""}//${url.hostname || ""}:${port2}`;
-        let path12 = url.path != null ? url.path : `${url.pathname || ""}${url.search || ""}`;
+        let path13 = url.path != null ? url.path : `${url.pathname || ""}${url.search || ""}`;
         if (origin[origin.length - 1] === "/") {
           origin = origin.slice(0, origin.length - 1);
         }
-        if (path12 && path12[0] !== "/") {
-          path12 = `/${path12}`;
+        if (path13 && path13[0] !== "/") {
+          path13 = `/${path13}`;
         }
-        return new URL(`${origin}${path12}`);
+        return new URL(`${origin}${path13}`);
       }
       if (!isHttpOrHttpsPrefixed(url.origin || url.protocol)) {
         throw new InvalidArgumentError("Invalid URL protocol: the URL must start with `http:` or `https:`.");
@@ -1600,39 +1600,39 @@ var require_diagnostics = __commonJS({
       });
       diagnosticsChannel.channel("undici:client:sendHeaders").subscribe((evt) => {
         const {
-          request: { method, path: path12, origin }
+          request: { method, path: path13, origin }
         } = evt;
-        debuglog("sending request to %s %s/%s", method, origin, path12);
+        debuglog("sending request to %s %s/%s", method, origin, path13);
       });
       diagnosticsChannel.channel("undici:request:headers").subscribe((evt) => {
         const {
-          request: { method, path: path12, origin },
+          request: { method, path: path13, origin },
           response: { statusCode }
         } = evt;
         debuglog(
           "received response to %s %s/%s - HTTP %d",
           method,
           origin,
-          path12,
+          path13,
           statusCode
         );
       });
       diagnosticsChannel.channel("undici:request:trailers").subscribe((evt) => {
         const {
-          request: { method, path: path12, origin }
+          request: { method, path: path13, origin }
         } = evt;
-        debuglog("trailers received from %s %s/%s", method, origin, path12);
+        debuglog("trailers received from %s %s/%s", method, origin, path13);
       });
       diagnosticsChannel.channel("undici:request:error").subscribe((evt) => {
         const {
-          request: { method, path: path12, origin },
+          request: { method, path: path13, origin },
           error
         } = evt;
         debuglog(
           "request to %s %s/%s errored - %s",
           method,
           origin,
-          path12,
+          path13,
           error.message
         );
       });
@@ -1681,9 +1681,9 @@ var require_diagnostics = __commonJS({
         });
         diagnosticsChannel.channel("undici:client:sendHeaders").subscribe((evt) => {
           const {
-            request: { method, path: path12, origin }
+            request: { method, path: path13, origin }
           } = evt;
-          debuglog("sending request to %s %s/%s", method, origin, path12);
+          debuglog("sending request to %s %s/%s", method, origin, path13);
         });
       }
       diagnosticsChannel.channel("undici:websocket:open").subscribe((evt) => {
@@ -1746,7 +1746,7 @@ var require_request = __commonJS({
     var kHandler = /* @__PURE__ */ Symbol("handler");
     var Request2 = class {
       constructor(origin, {
-        path: path12,
+        path: path13,
         method,
         body,
         headers,
@@ -1761,11 +1761,11 @@ var require_request = __commonJS({
         expectContinue,
         servername
       }, handler) {
-        if (typeof path12 !== "string") {
+        if (typeof path13 !== "string") {
           throw new InvalidArgumentError("path must be a string");
-        } else if (path12[0] !== "/" && !(path12.startsWith("http://") || path12.startsWith("https://")) && method !== "CONNECT") {
+        } else if (path13[0] !== "/" && !(path13.startsWith("http://") || path13.startsWith("https://")) && method !== "CONNECT") {
           throw new InvalidArgumentError("path must be an absolute URL or start with a slash");
-        } else if (invalidPathRegex.test(path12)) {
+        } else if (invalidPathRegex.test(path13)) {
           throw new InvalidArgumentError("invalid request path");
         }
         if (typeof method !== "string") {
@@ -1831,7 +1831,7 @@ var require_request = __commonJS({
         this.completed = false;
         this.aborted = false;
         this.upgrade = upgrade || null;
-        this.path = query ? buildURL(path12, query) : path12;
+        this.path = query ? buildURL(path13, query) : path13;
         this.origin = origin;
         this.idempotent = idempotent == null ? method === "HEAD" || method === "GET" : idempotent;
         this.blocking = blocking == null ? false : blocking;
@@ -6395,7 +6395,7 @@ var require_client_h1 = __commonJS({
       return method !== "GET" && method !== "HEAD" && method !== "OPTIONS" && method !== "TRACE" && method !== "CONNECT";
     }
     function writeH1(client, request) {
-      const { method, path: path12, host: host2, upgrade, blocking, reset } = request;
+      const { method, path: path13, host: host2, upgrade, blocking, reset } = request;
       let { body, headers, contentLength } = request;
       const expectsPayload = method === "PUT" || method === "POST" || method === "PATCH" || method === "QUERY" || method === "PROPFIND" || method === "PROPPATCH";
       if (util.isFormDataLike(body)) {
@@ -6461,7 +6461,7 @@ var require_client_h1 = __commonJS({
       if (blocking) {
         socket[kBlocking] = true;
       }
-      let header = `${method} ${path12} HTTP/1.1\r
+      let header = `${method} ${path13} HTTP/1.1\r
 `;
       if (typeof host2 === "string") {
         header += `host: ${host2}\r
@@ -6987,7 +6987,7 @@ var require_client_h2 = __commonJS({
     }
     function writeH2(client, request) {
       const session = client[kHTTP2Session];
-      const { method, path: path12, host: host2, upgrade, expectContinue, signal, headers: reqHeaders } = request;
+      const { method, path: path13, host: host2, upgrade, expectContinue, signal, headers: reqHeaders } = request;
       let { body } = request;
       if (upgrade) {
         util.errorRequest(client, request, new Error("Upgrade not supported for H2"));
@@ -7054,7 +7054,7 @@ var require_client_h2 = __commonJS({
         });
         return true;
       }
-      headers[HTTP2_HEADER_PATH] = path12;
+      headers[HTTP2_HEADER_PATH] = path13;
       headers[HTTP2_HEADER_SCHEME] = "https";
       const expectsPayload = method === "PUT" || method === "POST" || method === "PATCH";
       if (body && typeof body.read === "function") {
@@ -7407,9 +7407,9 @@ var require_redirect_handler = __commonJS({
           return this.handler.onHeaders(statusCode, headers, resume, statusText);
         }
         const { origin, pathname, search } = util.parseURL(new URL(this.location, this.opts.origin && new URL(this.opts.path, this.opts.origin)));
-        const path12 = search ? `${pathname}${search}` : pathname;
+        const path13 = search ? `${pathname}${search}` : pathname;
         this.opts.headers = cleanRequestHeaders(this.opts.headers, statusCode === 303, this.opts.origin !== origin);
-        this.opts.path = path12;
+        this.opts.path = path13;
         this.opts.origin = origin;
         this.opts.maxRedirections = 0;
         this.opts.query = null;
@@ -8644,10 +8644,10 @@ var require_proxy_agent = __commonJS({
         };
         const {
           origin,
-          path: path12 = "/",
+          path: path13 = "/",
           headers = {}
         } = opts;
-        opts.path = origin + path12;
+        opts.path = origin + path13;
         if (!("host" in headers) && !("Host" in headers)) {
           const { host: host2 } = new URL2(origin);
           headers.host = host2;
@@ -10568,20 +10568,20 @@ var require_mock_utils = __commonJS({
       }
       return true;
     }
-    function safeUrl(path12) {
-      if (typeof path12 !== "string") {
-        return path12;
+    function safeUrl(path13) {
+      if (typeof path13 !== "string") {
+        return path13;
       }
-      const pathSegments = path12.split("?");
+      const pathSegments = path13.split("?");
       if (pathSegments.length !== 2) {
-        return path12;
+        return path13;
       }
       const qp = new URLSearchParams(pathSegments.pop());
       qp.sort();
       return [...pathSegments, qp.toString()].join("?");
     }
-    function matchKey(mockDispatch2, { path: path12, method, body, headers }) {
-      const pathMatch = matchValue(mockDispatch2.path, path12);
+    function matchKey(mockDispatch2, { path: path13, method, body, headers }) {
+      const pathMatch = matchValue(mockDispatch2.path, path13);
       const methodMatch = matchValue(mockDispatch2.method, method);
       const bodyMatch = typeof mockDispatch2.body !== "undefined" ? matchValue(mockDispatch2.body, body) : true;
       const headersMatch = matchHeaders(mockDispatch2, headers);
@@ -10603,7 +10603,7 @@ var require_mock_utils = __commonJS({
     function getMockDispatch(mockDispatches, key) {
       const basePath = key.query ? buildURL(key.path, key.query) : key.path;
       const resolvedPath = typeof basePath === "string" ? safeUrl(basePath) : basePath;
-      let matchedMockDispatches = mockDispatches.filter(({ consumed }) => !consumed).filter(({ path: path12 }) => matchValue(safeUrl(path12), resolvedPath));
+      let matchedMockDispatches = mockDispatches.filter(({ consumed }) => !consumed).filter(({ path: path13 }) => matchValue(safeUrl(path13), resolvedPath));
       if (matchedMockDispatches.length === 0) {
         throw new MockNotMatchedError(`Mock dispatch not matched for path '${resolvedPath}'`);
       }
@@ -10641,9 +10641,9 @@ var require_mock_utils = __commonJS({
       }
     }
     function buildKey(opts) {
-      const { path: path12, method, body, headers, query } = opts;
+      const { path: path13, method, body, headers, query } = opts;
       return {
-        path: path12,
+        path: path13,
         method,
         body,
         headers,
@@ -11106,10 +11106,10 @@ var require_pending_interceptors_formatter = __commonJS({
       }
       format(pendingInterceptors) {
         const withPrettyHeaders = pendingInterceptors.map(
-          ({ method, path: path12, data: { statusCode }, persist, times, timesInvoked, origin }) => ({
+          ({ method, path: path13, data: { statusCode }, persist, times, timesInvoked, origin }) => ({
             Method: method,
             Origin: origin,
-            Path: path12,
+            Path: path13,
             "Status code": statusCode,
             Persistent: persist ? PERSISTENT : NOT_PERSISTENT,
             Invocations: timesInvoked,
@@ -15990,9 +15990,9 @@ var require_util6 = __commonJS({
         }
       }
     }
-    function validateCookiePath(path12) {
-      for (let i = 0; i < path12.length; ++i) {
-        const code = path12.charCodeAt(i);
+    function validateCookiePath(path13) {
+      for (let i = 0; i < path13.length; ++i) {
+        const code = path13.charCodeAt(i);
         if (code < 32 || // exclude CTLs (0-31)
         code === 127 || // DEL
         code === 59) {
@@ -18669,11 +18669,11 @@ var require_undici = __commonJS({
           if (typeof opts.path !== "string") {
             throw new InvalidArgumentError("invalid opts.path");
           }
-          let path12 = opts.path;
+          let path13 = opts.path;
           if (!opts.path.startsWith("/")) {
-            path12 = `/${path12}`;
+            path13 = `/${path13}`;
           }
-          url = new URL(util.parseOrigin(url).origin + path12);
+          url = new URL(util.parseOrigin(url).origin + path13);
         } else {
           if (!opts) {
             opts = typeof url === "object" ? url : {};
@@ -21089,7 +21089,7 @@ var init_dist = __esm({
 
 // viewer/src/server/server.mjs
 import http from "node:http";
-import path11 from "node:path";
+import path12 from "node:path";
 import { fileURLToPath as fileURLToPath3 } from "node:url";
 
 // viewer/src/server/localAssetBackend.mjs
@@ -21685,27 +21685,175 @@ function pythonSourceIdentity(repoRoot, scriptPath) {
     files: manifestFiles
   };
 }
-function resolveManifestSourcePath(repoRoot, manifestPath) {
+function normalizeManifestPath(manifestPath) {
   const value = String(manifestPath || "").trim();
+  if (!value || value.includes("\0")) {
+    return "";
+  }
+  return value.replace(/\\/g, "/");
+}
+function resolveManifestSourcePath(repoRoot, manifestPath, baseDir = repoRoot) {
+  const value = normalizeManifestPath(manifestPath);
   if (!value) {
     return null;
   }
-  const resolved = path3.isAbsolute(value) ? path3.resolve(value) : path3.resolve(repoRoot, value);
-  const relative = path3.relative(path3.resolve(repoRoot), resolved);
-  if (!relativePathStaysInsideRoot2(relative)) {
+  const resolved = path3.isAbsolute(value) ? path3.resolve(value) : path3.resolve(baseDir, value);
+  if (!pathIsInside2(resolved, repoRoot)) {
     return null;
   }
   return resolved;
 }
-function sourcePathFromManifest(repoRoot, manifestPath) {
+function normalizeManifestRelativePath(manifestPath) {
   const value = String(manifestPath || "").trim().replace(/\\/g, "/").replace(/^\/+/, "");
   if (!value || value === "." || value.startsWith("../")) {
-    return { sourcePath: "", filePath: null };
+    return "";
   }
-  const filePath = resolveManifestSourcePath(repoRoot, value);
+  return value;
+}
+function manifestIdentityRootForStep(repoRoot, actualStepPath, manifestStepPath) {
+  const resolvedRepoRoot = path3.resolve(repoRoot);
+  const normalizedStepPath = normalizeManifestRelativePath(manifestStepPath);
+  if (!normalizedStepPath || !actualStepPath) {
+    return resolvedRepoRoot;
+  }
+  const actualRepoPath = repoRelativePath(resolvedRepoRoot, actualStepPath);
+  if (actualRepoPath === normalizedStepPath) {
+    return resolvedRepoRoot;
+  }
+  if (!actualRepoPath.endsWith(`/${normalizedStepPath}`)) {
+    return resolvedRepoRoot;
+  }
+  const prefix = actualRepoPath.slice(0, actualRepoPath.length - normalizedStepPath.length).replace(/\/+$/, "");
+  if (!prefix) {
+    return resolvedRepoRoot;
+  }
+  const resolvedPrefix = path3.resolve(resolvedRepoRoot, ...prefix.split("/").filter(Boolean));
+  return pathIsInside2(resolvedPrefix, resolvedRepoRoot) ? resolvedPrefix : resolvedRepoRoot;
+}
+function sourcePathFromManifest(repoRoot, manifestPath, { identityRoot = null, baseDir = null } = {}) {
+  const value = normalizeManifestPath(manifestPath);
+  if (!value) {
+    return { sourcePath: "", manifestSourcePath: "", filePath: null, identityRoot: path3.resolve(repoRoot) };
+  }
+  const resolvedRepoRoot = path3.resolve(repoRoot);
+  const resolvedIdentityRoot = identityRoot && pathIsInside2(identityRoot, resolvedRepoRoot) ? path3.resolve(identityRoot) : resolvedRepoRoot;
+  const roots = dedupePaths([
+    baseDir ? path3.resolve(baseDir) : null,
+    resolvedIdentityRoot,
+    resolvedRepoRoot
+  ].filter(Boolean));
+  const candidates = [];
+  for (const root of roots) {
+    if (!pathIsInside2(root, resolvedRepoRoot)) {
+      continue;
+    }
+    const filePath2 = resolveManifestSourcePath(resolvedRepoRoot, value, root);
+    if (!filePath2) {
+      continue;
+    }
+    candidates.push({
+      sourcePath: repoRelativePath(resolvedRepoRoot, filePath2),
+      manifestSourcePath: value,
+      filePath: filePath2,
+      identityRoot: resolvedIdentityRoot
+    });
+  }
+  const candidate = candidates.find((entry) => fileStats(entry.filePath)) || candidates[0];
+  if (candidate) {
+    return candidate;
+  }
+  const filePath = resolveManifestSourcePath(resolvedRepoRoot, value, resolvedRepoRoot);
   return {
     sourcePath: value,
-    filePath
+    manifestSourcePath: value,
+    filePath,
+    identityRoot: resolvedIdentityRoot
+  };
+}
+function commonAncestorPath(paths) {
+  const resolvedPaths = paths.filter(Boolean).map((entry) => path3.resolve(entry));
+  if (!resolvedPaths.length) {
+    return "";
+  }
+  let current = path3.dirname(resolvedPaths[0]);
+  for (; ; ) {
+    if (resolvedPaths.every((entry) => pathIsInside2(entry, current))) {
+      return current;
+    }
+    const parent = path3.dirname(current);
+    if (parent === current) {
+      return current;
+    }
+    current = parent;
+  }
+}
+function pythonIdentityRootCandidates({ repoRoot, sourceFilePath, anchorPath = "", preferredRoot = null }) {
+  const resolvedRepoRoot = path3.resolve(repoRoot);
+  const commonRoot = commonAncestorPath([sourceFilePath, anchorPath || sourceFilePath]);
+  const roots = [];
+  if (preferredRoot) {
+    roots.push(path3.resolve(preferredRoot));
+  }
+  if (commonRoot) {
+    let current = path3.resolve(commonRoot);
+    for (; ; ) {
+      roots.push(current);
+      if (current === resolvedRepoRoot || !pathIsInside2(current, resolvedRepoRoot)) {
+        break;
+      }
+      const parent = path3.dirname(current);
+      if (parent === current) {
+        break;
+      }
+      current = parent;
+    }
+  }
+  roots.push(resolvedRepoRoot);
+  return dedupePaths(roots).filter((root) => pathIsInside2(root, resolvedRepoRoot) && pathIsInside2(sourceFilePath, root));
+}
+function pythonSourceIdentityForArtifact({
+  repoRoot,
+  sourceFilePath,
+  anchorPath = "",
+  preferredRoot = null,
+  artifactFingerprint = ""
+}) {
+  let fallback = null;
+  for (const root of pythonIdentityRootCandidates({ repoRoot, sourceFilePath, anchorPath, preferredRoot })) {
+    try {
+      const identity = pythonSourceIdentity(root, sourceFilePath);
+      const result = { identity, identityRoot: root };
+      if (!fallback) {
+        fallback = result;
+      }
+      if (artifactFingerprint && identity.sourceFingerprint === artifactFingerprint) {
+        return result;
+      }
+    } catch {
+    }
+  }
+  return fallback || { identity: null, identityRoot: path3.resolve(repoRoot) };
+}
+function sourceIdentityWithCurrentPythonFingerprint({
+  repoRoot,
+  sourceIdentity,
+  anchorPath,
+  artifactFingerprint
+}) {
+  if (!sourceIdentity?.filePath) {
+    return { currentIdentity: null, currentHash: "", currentSourceHash: "" };
+  }
+  const { identity } = pythonSourceIdentityForArtifact({
+    repoRoot,
+    sourceFilePath: sourceIdentity.filePath,
+    anchorPath,
+    preferredRoot: sourceIdentity.identityRoot,
+    artifactFingerprint
+  });
+  return {
+    currentIdentity: identity,
+    currentHash: identity?.sourceFingerprint || "",
+    currentSourceHash: identity?.sourceHash || ""
   };
 }
 function fileHasGenStep(filePath) {
@@ -21715,12 +21863,17 @@ function fileHasGenStep(filePath) {
     return false;
   }
 }
-function generatorSourcePathFromManifest(repoRoot, manifestPath) {
-  const candidate = sourcePathFromManifest(repoRoot, manifestPath);
+function generatorSourcePathFromManifest(repoRoot, manifestPath, { identityRoot = null, baseDir = null } = {}) {
+  const candidate = sourcePathFromManifest(repoRoot, manifestPath, { identityRoot, baseDir });
   if (candidate.sourcePath && candidate.filePath && path3.extname(candidate.filePath).toLowerCase() === ".py" && path3.basename(candidate.filePath) !== "__init__.py" && fileHasGenStep(candidate.filePath)) {
     return candidate;
   }
-  return { sourcePath: "", filePath: null };
+  return {
+    sourcePath: "",
+    manifestSourcePath: candidate.manifestSourcePath || "",
+    filePath: null,
+    identityRoot: candidate.identityRoot || path3.resolve(repoRoot)
+  };
 }
 function fileHasPythonGenerator(filePath, generatorName) {
   if (!generatorName) {
@@ -21733,8 +21886,8 @@ function fileHasPythonGenerator(filePath, generatorName) {
     return false;
   }
 }
-function generatorSourcePathFromMetadata(repoRoot, manifestPath, generatorName) {
-  const candidate = sourcePathFromManifest(repoRoot, manifestPath);
+function generatorSourcePathFromMetadata(repoRoot, manifestPath, generatorName, { baseDir = null } = {}) {
+  const candidate = sourcePathFromManifest(repoRoot, manifestPath, { baseDir });
   if (candidate.sourcePath && candidate.filePath && path3.extname(candidate.filePath).toLowerCase() === ".py" && path3.basename(candidate.filePath) !== "__init__.py" && fileHasPythonGenerator(candidate.filePath, generatorName)) {
     return candidate;
   }
@@ -21805,7 +21958,12 @@ function generatedSourceStatusForFile({ repoRoot, sourcePath, kind }) {
   if (!metadataSourcePath) {
     return null;
   }
-  const sourceIdentity = generatorSourcePathFromMetadata(repoRoot, metadataSourcePath, generatorName);
+  const sourceIdentity = generatorSourcePathFromMetadata(
+    repoRoot,
+    metadataSourcePath,
+    generatorName,
+    { baseDir: path3.dirname(sourcePath) }
+  );
   const base = {
     sourceKind: "python",
     source: {
@@ -21828,8 +21986,16 @@ function generatedSourceStatusForFile({ repoRoot, sourcePath, kind }) {
       }
     };
   }
-  const currentIdentity = pythonSourceIdentity(repoRoot, sourceIdentity.filePath);
   const artifactFingerprint = String(metadata.sourceFingerprint || "").trim();
+  const {
+    currentHash,
+    currentSourceHash
+  } = sourceIdentityWithCurrentPythonFingerprint({
+    repoRoot,
+    sourceIdentity,
+    anchorPath: sourcePath,
+    artifactFingerprint
+  });
   if (!artifactFingerprint) {
     return {
       ...base,
@@ -21847,13 +22013,13 @@ function generatedSourceStatusForFile({ repoRoot, sourcePath, kind }) {
         sourceKind: "python",
         sourcePath: sourceIdentity.sourcePath,
         sourceHash: String(metadata.sourceHash || ""),
-        currentSourceHash: currentIdentity.sourceHash,
-        currentHash: currentIdentity.sourceFingerprint,
+        currentSourceHash,
+        currentHash,
         message: "Generated file is missing Python sourceFingerprint metadata."
       }
     };
   }
-  const stale = Boolean(artifactFingerprint && artifactFingerprint !== currentIdentity.sourceFingerprint);
+  const stale = Boolean(artifactFingerprint && artifactFingerprint !== currentHash);
   return {
     ...base,
     source: {
@@ -21870,9 +22036,9 @@ function generatedSourceStatusForFile({ repoRoot, sourcePath, kind }) {
       sourceKind: "python",
       sourcePath: sourceIdentity.sourcePath,
       artifactHash: artifactFingerprint,
-      currentHash: currentIdentity.sourceFingerprint,
+      currentHash,
       sourceHash: String(metadata.sourceHash || ""),
-      currentSourceHash: currentIdentity.sourceHash,
+      currentSourceHash,
       message: stale ? "Generated file doesn't match the Python generator fingerprint." : ""
     }
   };
@@ -22104,7 +22270,14 @@ function validateStepTopologyArtifact({ repoRoot, sourcePath, cadPath }) {
       sourceKind: artifactNormalizedSourceKind,
       ...artifactSourcePath ? { sourcePath: artifactSourcePath } : {}
     });
-    const sourceIdentity = artifactUsesPythonSource ? generatorSourcePathFromManifest(repoRoot, manifest.sourcePath) : sourcePathFromManifest(repoRoot, manifest.sourcePath);
+    const manifestIdentityRoot = manifestIdentityRootForStep(repoRoot, sourcePath, manifest.stepPath);
+    const sourceIdentity = artifactUsesPythonSource ? generatorSourcePathFromManifest(repoRoot, manifest.sourcePath, {
+      identityRoot: manifestIdentityRoot,
+      baseDir: path3.dirname(glbPath)
+    }) : sourcePathFromManifest(repoRoot, manifest.sourcePath, {
+      identityRoot: manifestIdentityRoot,
+      baseDir: path3.dirname(glbPath)
+    });
     artifactSourcePath = sourceIdentity.sourcePath;
     if (!artifactSourcePath || !sourceIdentity.filePath) {
       return {
@@ -22147,8 +22320,14 @@ function validateStepTopologyArtifact({ repoRoot, sourcePath, cadPath }) {
         sourceFingerprint
       };
     }
-    const currentSourceIdentity = artifactUsesPythonSource ? pythonSourceIdentity(repoRoot, sourceIdentity.filePath) : null;
-    const currentSourceFingerprint = artifactUsesPythonSource ? currentSourceIdentity?.sourceFingerprint || "" : fileStats(sourcePath) ? sha256File(sourcePath) : "";
+    const currentSourceIdentity = artifactUsesPythonSource ? pythonSourceIdentityForArtifact({
+      repoRoot,
+      sourceFilePath: sourceIdentity.filePath,
+      anchorPath: sourcePath,
+      preferredRoot: sourceIdentity.identityRoot || manifestIdentityRoot,
+      artifactFingerprint: sourceFingerprint
+    }).identity : null;
+    const currentSourceFingerprint = artifactUsesPythonSource ? currentSourceIdentity?.sourceFingerprint || "" : fileStats(sourceIdentity.filePath || sourcePath) ? sha256File(sourceIdentity.filePath || sourcePath) : "";
     const artifactSourceFingerprint = artifactUsesPythonSource ? sourceFingerprint : stepHash;
     if (currentSourceFingerprint && artifactSourceFingerprint !== currentSourceFingerprint) {
       return {
@@ -22405,7 +22584,15 @@ function readStepSourceStatus({
       }
     };
   }
-  const currentIdentity = pythonSourceIdentity(resolvedRepoRoot, resolvedPythonSourcePath);
+  const manifestIdentityRoot = artifactSourceKind === "python" ? manifestIdentityRootForStep(resolvedRepoRoot, resolvedStepPath, validation.topology?.index?.stepPath) : "";
+  const resolvedIdentityRoot = manifestIdentityRoot && pathIsInside2(manifestIdentityRoot, resolvedRepoRoot) ? path3.resolve(manifestIdentityRoot) : resolvedRepoRoot;
+  const currentIdentity = pythonSourceIdentityForArtifact({
+    repoRoot: resolvedRepoRoot,
+    sourceFilePath: resolvedPythonSourcePath,
+    anchorPath: resolvedStepPath,
+    preferredRoot: resolvedIdentityRoot,
+    artifactFingerprint: String(validation.topology?.index?.sourceFingerprint || "")
+  }).identity || pythonSourceIdentity(resolvedIdentityRoot, resolvedPythonSourcePath);
   const currentHash = currentIdentity.sourceFingerprint;
   let metadata = {};
   try {
@@ -22537,7 +22724,7 @@ function catalogArtifactFromValidation(stepArtifact) {
     ...message ? { message } : {}
   };
 }
-function readStepCatalogMetadata({ repoRoot, glbPath } = {}) {
+function readStepCatalogMetadata({ repoRoot, glbPath, sourcePath = "" } = {}) {
   if (!fileStats(glbPath)) {
     return {};
   }
@@ -22560,7 +22747,14 @@ function readStepCatalogMetadata({ repoRoot, glbPath } = {}) {
       extension.encoding
     );
     const sourceKind = String(manifest?.sourceKind || "step").trim().toLowerCase() === "python" ? "python" : "step";
-    const sourceIdentity = sourceKind === "python" ? generatorSourcePathFromManifest(repoRoot, manifest?.sourcePath) : sourcePathFromManifest(repoRoot, manifest?.sourcePath);
+    const manifestIdentityRoot = manifestIdentityRootForStep(repoRoot, sourcePathForInlineStepGlbArtifact(glbPath) || sourcePath, manifest?.stepPath);
+    const sourceIdentity = sourceKind === "python" ? generatorSourcePathFromManifest(repoRoot, manifest?.sourcePath, {
+      identityRoot: manifestIdentityRoot,
+      baseDir: path3.dirname(glbPath)
+    }) : sourcePathFromManifest(repoRoot, manifest?.sourcePath, {
+      identityRoot: manifestIdentityRoot,
+      baseDir: path3.dirname(glbPath)
+    });
     return {
       topology: {
         index: manifest,
@@ -22591,7 +22785,7 @@ function pythonStepSourceFromStepMetadata(repoRoot, stepPath) {
   if (!metadataSourcePath) {
     return null;
   }
-  const sourceIdentity = sourcePathFromManifest(repoRoot, metadataSourcePath);
+  const sourceIdentity = sourcePathFromManifest(repoRoot, metadataSourcePath, { baseDir: path3.dirname(stepPath) });
   if (!sourceIdentity.sourcePath) {
     return null;
   }
@@ -22613,7 +22807,7 @@ function createStepEntry({ repoRoot, rootPath, sourcePath, extension, includeArt
     cadPath
   }) : null;
   const glbPath = validation?.glbPath || inlineStepGlbArtifactPathForSource(sourcePath);
-  const catalogMetadata = includeArtifactStatus ? {} : readStepCatalogMetadata({ repoRoot, glbPath });
+  const catalogMetadata = includeArtifactStatus ? {} : readStepCatalogMetadata({ repoRoot, glbPath, sourcePath });
   const topology = validation?.topology || catalogMetadata.topology || null;
   const stepArtifact = validation?.stepArtifact || {};
   const glbAsset = assetForPath(repoRoot, glbPath);
@@ -22960,7 +23154,7 @@ function pathIsInside3(filePath, rootPath) {
 function isGenerationLockFileName(name) {
   return String(name || "").startsWith(".") && String(name || "").endsWith(GENERATION_LOCK_SUFFIX);
 }
-function resolveStatusPath(repoRoot, value) {
+function resolveStatusPath(repoRoot, value, { statusPath = "", rootPath = "" } = {}) {
   const raw = String(value || "").trim();
   if (!raw) {
     return "";
@@ -22968,7 +23162,20 @@ function resolveStatusPath(repoRoot, value) {
   if (raw.includes("\0")) {
     return "";
   }
-  return path4.isAbsolute(raw) ? path4.resolve(raw) : path4.resolve(repoRoot, raw);
+  if (path4.isAbsolute(raw)) {
+    return path4.resolve(raw);
+  }
+  const normalized = raw.replace(/\\/g, "/");
+  const statusDir = statusPath ? path4.dirname(statusPath) : "";
+  const repoCandidate = path4.resolve(repoRoot, normalized);
+  const shouldPreferStatusDir = statusDir && (normalized.startsWith("../") || normalized.startsWith("./") || !normalized.includes("/"));
+  if (shouldPreferStatusDir) {
+    return path4.resolve(statusDir, normalized);
+  }
+  if (rootPath && pathIsInside3(repoCandidate, rootPath)) {
+    return repoCandidate;
+  }
+  return repoCandidate;
 }
 function processIsAlive(pid) {
   const normalizedPid = Number(pid);
@@ -23067,14 +23274,17 @@ function readGenerationStatus({
         pid: Number(payload.pid) || 0,
         startedAt: String(payload.startedAt || ""),
         updatedAt: String(payload.updatedAt || ""),
-        sourcePath: String(payload.sourcePath || ""),
+        sourcePath: sourcePathFromStatusPayload(resolvedRepoRoot, payload.sourcePath, statusPath),
         generator: String(payload.generator || ""),
         files: []
       };
       runsById.set(runId, run);
     }
     for (const output of outputEntries(payload)) {
-      const outputPath = resolveStatusPath(resolvedRepoRoot, output.path);
+      const outputPath = resolveStatusPath(resolvedRepoRoot, output.path, {
+        statusPath,
+        rootPath: resolvedRoot.rootPath
+      });
       if (!outputPath || !pathIsInside3(outputPath, resolvedRoot.rootPath)) {
         continue;
       }
@@ -23100,6 +23310,14 @@ function readGenerationStatus({
   }
   status.runs = Array.from(runsById.values()).filter((run) => run.files.length);
   return status;
+}
+function sourcePathFromStatusPayload(repoRoot, value, statusPath) {
+  const raw = String(value || "").trim();
+  if (!raw) {
+    return "";
+  }
+  const resolved = resolveStatusPath(repoRoot, raw, { statusPath, rootPath: repoRoot });
+  return resolved && pathIsInside3(resolved, repoRoot) ? toPosixPath(path4.relative(path4.resolve(repoRoot), resolved)) : raw.replace(/\\/g, "/");
 }
 function isGenerationStatusPath(filePath, repoRoot) {
   if (!repoRoot) {
@@ -25192,30 +25410,134 @@ function scheduleProcessShutdown({
   return timer;
 }
 
+// viewer/src/server/serverArgs.mjs
+import path11 from "node:path";
+function requiredValue(argv, index, flag) {
+  const value = argv[index + 1];
+  if (!value || value.startsWith("--")) {
+    throw new Error(`${flag} requires a value`);
+  }
+  return value;
+}
+function parsePort(value, flag) {
+  const parsed = Number.parseInt(String(value ?? ""), 10);
+  if (!Number.isInteger(parsed) || parsed <= 0 || parsed > 65535) {
+    throw new Error(`${flag} must be a TCP port from 1 to 65535`);
+  }
+  return parsed;
+}
+function parseServerArgs(argv = []) {
+  const options = {
+    rootDir: "",
+    port: null,
+    host: "",
+    help: false
+  };
+  for (let index = 0; index < argv.length; index += 1) {
+    const arg = argv[index];
+    if (arg === "--help" || arg === "-h") {
+      options.help = true;
+      continue;
+    }
+    if (arg.startsWith("--root-dir=")) {
+      options.rootDir = arg.slice("--root-dir=".length);
+      continue;
+    }
+    if (arg === "--root-dir") {
+      options.rootDir = requiredValue(argv, index, arg);
+      index += 1;
+      continue;
+    }
+    if (arg.startsWith("--port=")) {
+      options.port = parsePort(arg.slice("--port=".length), "--port");
+      continue;
+    }
+    if (arg === "--port") {
+      options.port = parsePort(requiredValue(argv, index, arg), arg);
+      index += 1;
+      continue;
+    }
+    if (arg.startsWith("--host=")) {
+      options.host = arg.slice("--host=".length).trim();
+      continue;
+    }
+    if (arg === "--host") {
+      options.host = requiredValue(argv, index, arg).trim();
+      index += 1;
+      continue;
+    }
+    throw new Error(`Unknown argument: ${arg}`);
+  }
+  return options;
+}
+function serverHelpText() {
+  return `Usage: node backend/server.mjs [options]
+
+Options:
+  --root-dir <path>  Local Viewer root directory to serve. Overrides VIEWER_LOCAL_* env roots.
+  --port <number>    Port to bind. Overrides VIEWER_PORT.
+  --host <host>      Host to bind. Overrides VIEWER_HOST.
+  -h, --help         Show this help.
+`;
+}
+function applyServerArgsToEnv({
+  argv = [],
+  env = process.env,
+  cwd = process.cwd()
+} = {}) {
+  const args = parseServerArgs(argv);
+  const nextEnv = { ...env };
+  if (args.rootDir) {
+    nextEnv.VIEWER_ASSET_BACKEND = "local-fs";
+    nextEnv.VIEWER_LOCAL_WORKSPACE_ROOT = path11.resolve(cwd, args.rootDir);
+    nextEnv.VIEWER_LOCAL_ROOT_DIR = "";
+  }
+  if (args.port !== null) {
+    nextEnv.VIEWER_PORT = String(args.port);
+  }
+  if (args.host) {
+    nextEnv.VIEWER_HOST = args.host;
+  }
+  return { args, env: nextEnv };
+}
+
 // viewer/src/server/server.mjs
-var serverModuleDir = path11.dirname(fileURLToPath3(import.meta.url));
-var viewerAppRoot = path11.basename(path11.dirname(serverModuleDir)) === "src" ? path11.resolve(serverModuleDir, "..", "..") : path11.resolve(serverModuleDir, "..");
-var defaultWorkspaceRoot = path11.resolve(viewerAppRoot, "..");
+var serverModuleDir = path12.dirname(fileURLToPath3(import.meta.url));
+var viewerAppRoot = path12.basename(path12.dirname(serverModuleDir)) === "src" ? path12.resolve(serverModuleDir, "..", "..") : path12.resolve(serverModuleDir, "..");
+var defaultWorkspaceRoot = path12.resolve(viewerAppRoot, "..");
+var runtime;
+try {
+  runtime = applyServerArgsToEnv({ argv: process.argv.slice(2), env: process.env, cwd: process.cwd() });
+} catch (error) {
+  process.stderr.write(`${error instanceof Error ? error.message : String(error)}
+`);
+  process.exit(1);
+}
+if (runtime.args.help) {
+  process.stdout.write(serverHelpText());
+  process.exit(0);
+}
+var runtimeEnv = runtime.env;
 var workspaceRoot = resolveWorkspaceRoot({
-  env: process.env,
+  env: runtimeEnv,
   cwd: process.cwd(),
   appRoot: viewerAppRoot,
   defaultWorkspaceRoot
 });
-var backendKind = normalizeViewerAssetBackend(process.env.VIEWER_ASSET_BACKEND);
-var rootDir = rootDirForAssetBackend(backendKind, process.env);
-var port = normalizeViewerPort(process.env.VIEWER_PORT, DEFAULT_VIEWER_PORT);
-var host = process.env.VIEWER_HOST || "127.0.0.1";
-var serverLifetimeMs = normalizeServerLifetimeMs(process.env.VIEWER_SERVER_LIFETIME_MS);
-var distRoot = path11.resolve(viewerAppRoot, "dist");
+var backendKind = normalizeViewerAssetBackend(runtimeEnv.VIEWER_ASSET_BACKEND);
+var rootDir = rootDirForAssetBackend(backendKind, runtimeEnv);
+var port = normalizeViewerPort(runtimeEnv.VIEWER_PORT, DEFAULT_VIEWER_PORT);
+var host = runtimeEnv.VIEWER_HOST || "127.0.0.1";
+var serverLifetimeMs = normalizeServerLifetimeMs(runtimeEnv.VIEWER_SERVER_LIFETIME_MS);
+var distRoot = path12.resolve(viewerAppRoot, "dist");
 var backend = backendKind === VIEWER_ASSET_BACKENDS.VERCEL_BLOB ? createVercelBlobAssetBackend({
-  ...vercelBlobConfigFromEnv(process.env),
+  ...vercelBlobConfigFromEnv(runtimeEnv),
   readOnly: true
 }) : createLocalAssetBackend({
   workspaceRoot,
   rootDir,
-  defaultFile: normalizeViewerDefaultFile(process.env.VIEWER_DEFAULT_FILE || ""),
-  githubUrl: normalizeViewerGithubUrl(process.env.VIEWER_GITHUB_URL || "")
+  defaultFile: normalizeViewerDefaultFile(runtimeEnv.VIEWER_DEFAULT_FILE || ""),
+  githubUrl: normalizeViewerGithubUrl(runtimeEnv.VIEWER_GITHUB_URL || "")
 });
 var localAssetBackendEnabled = backend.kind === "local-fs";
 var stepArtifactBackendEnabled = localAssetBackendEnabled && typeof backend.generateStepArtifact === "function";
@@ -25233,7 +25555,7 @@ var middlewares = [
       rootDir,
       port,
       pid: process.pid
-    }) : buildHostedViewerServerInfo({ backend, env: process.env, rootDir })
+    }) : buildHostedViewerServerInfo({ backend, env: runtimeEnv, rootDir })
   }),
   ...localAssetBackendEnabled ? [createLocalAssetMiddleware({ backend, rootDir })] : [],
   serveDistAsset({ distRoot })

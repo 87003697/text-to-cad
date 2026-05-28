@@ -231,7 +231,7 @@ def validate_step_topology_artifact(
             glb_path=resolved_glb_path,
         )
     source_kind = str(manifest.get("sourceKind") or "step").strip().lower()
-    manifest_source_path = _source_path_from_manifest(manifest)
+    manifest_source_path = _source_path_from_manifest(manifest, glb_path=resolved_glb_path)
     if manifest_source_path is None:
         raise _topology_artifact_error(
             code="missing_source_path",
@@ -420,23 +420,34 @@ def _raw_step_path(target: str) -> Path | None:
     return resolved if resolved.is_file() else None
 
 
-def _source_path_from_manifest(manifest: dict[str, object] | None) -> Path | None:
+def _source_path_from_manifest(manifest: dict[str, object] | None, *, glb_path: Path) -> Path | None:
     raw_path = str((manifest or {}).get("sourcePath") or "").strip()
     if not raw_path:
         return None
-    return _resolved_repo_manifest_path(raw_path)
+    return _resolved_manifest_path(raw_path, base_dir=glb_path.parent)
 
 
-def _resolved_repo_manifest_path(raw_path: str) -> Path | None:
+def _resolved_manifest_path(raw_path: str, *, base_dir: Path) -> Path | None:
     if not raw_path:
         return None
-    path = Path(raw_path)
-    resolved = path.resolve() if path.is_absolute() else (REPO_ROOT / path).resolve()
+    candidates = (
+        _resolve_manifest_path_from_base(raw_path, base_dir),
+        _resolve_manifest_path_from_base(raw_path, REPO_ROOT),
+    )
+    existing = next((candidate for candidate in candidates if candidate is not None and candidate.is_file()), None)
+    if existing is not None:
+        return existing
+    return next((candidate for candidate in candidates if candidate is not None), None)
+
+
+def _resolve_manifest_path_from_base(raw_path: str, base_dir: Path) -> Path | None:
+    path = Path(str(raw_path).replace("\\", "/"))
+    resolved = path.resolve() if path.is_absolute() else (base_dir / path).resolve()
     try:
         resolved.relative_to(REPO_ROOT)
     except ValueError:
         return None
-    return resolved if resolved.is_file() else None
+    return resolved
 
 
 def _topology_artifact_error(

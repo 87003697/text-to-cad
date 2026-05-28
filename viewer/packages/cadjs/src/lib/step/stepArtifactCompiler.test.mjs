@@ -89,7 +89,8 @@ test("ensureStepArtifactsForCatalog discovers Python generators without fixture 
 
   const indexTopology = readStepTopologyIndexManifest(inlineStepGlbArtifactPathForSource(stepPath));
   assert.equal(indexTopology.sourceKind, "python");
-  assert.equal(indexTopology.sourcePath, "workspace/generated/block.py");
+  assert.equal(indexTopology.sourcePath, "block.py");
+  assert.equal(indexTopology.stepPath, "block.step");
   assert.equal(indexTopology.sourceFiles, undefined);
 
   const catalog = scanCadDirectory({ repoRoot, rootDir: "workspace" });
@@ -123,9 +124,10 @@ test("ensureStepTopologyArtifact records explicit non-same-stem Python sourcePat
   const indexTopology = readStepTopologyIndexManifest(inlineStepGlbArtifactPathForSource(stepPath));
   const edgeView = readStepEdgeManifest(inlineStepGlbArtifactPathForSource(stepPath));
   assert.equal(indexTopology.sourceKind, "python");
-  assert.equal(indexTopology.sourcePath, "workspace/sources/assembly.py");
+  assert.equal(indexTopology.sourcePath, "../sources/assembly.py");
+  assert.equal(indexTopology.stepPath, "robot.step");
   assert.equal(edgeView.sourceKind, "python");
-  assert.equal(edgeView.sourcePath, "workspace/sources/assembly.py");
+  assert.equal(edgeView.sourcePath, "../sources/assembly.py");
 
   const catalog = scanCadDirectory({ repoRoot, rootDir: "workspace" });
   assert.equal(catalog.entries.length, 1);
@@ -165,7 +167,8 @@ test("ensureStepTopologyArtifact rebuilds stale non-same-stem Python artifacts f
 
   const nextManifest = readStepTopologyIndexManifest(glbPath);
   assert.equal(nextManifest.sourceKind, "python");
-  assert.equal(nextManifest.sourcePath, "workspace/sources/assembly.py");
+  assert.equal(nextManifest.sourcePath, "../sources/assembly.py");
+  assert.equal(nextManifest.stepPath, "robot.step");
   assert.notEqual(nextManifest.sourceFingerprint, previousManifest.sourceFingerprint);
 });
 
@@ -193,6 +196,7 @@ test("ensureStepTopologyArtifact can write Python STEP after the GLB is ready", 
   assert.equal(indexTopology.sourceKind, "python");
   await waitForFile(stepPath);
   const metadata = readTextToCadStepMetadataFile(stepPath);
+  assert.equal(metadata.sourcePath, "../sources/robot.py");
   assert.equal(metadata.sourceHash, indexTopology.sourceHash);
   assert.equal(metadata.sourceFingerprint, indexTopology.sourceFingerprint);
 });
