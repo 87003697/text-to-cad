@@ -25,3 +25,4 @@ playwright
 # Extra third-party requirements used by repo tests.
 networkx
 lxml
+pytest

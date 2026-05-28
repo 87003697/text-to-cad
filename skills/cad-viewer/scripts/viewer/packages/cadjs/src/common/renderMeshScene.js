@@ -752,7 +752,7 @@ export function renderModel(_THREE, model, viewportOptions = {}) {
     LineMaterial
   });
   scene.add(model.root);
-  addFloor(scene, context.bounds, context.theme, context.sceneScale);
+  addFloor(scene, model.bounds || context.bounds, context.theme, context.sceneScale);
   const orthographicCamera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0.001, 10000);
   const perspectiveCamera = new THREE.PerspectiveCamera(48, firstSize.width / Math.max(firstSize.height, 1), 0.1, 50000);
   return {
@@ -772,8 +772,17 @@ export function renderModel(_THREE, model, viewportOptions = {}) {
   };
 }
 
+function displayRecordPartIds(displayRecords = []) {
+  return Array.from(new Set(
+    toArray(displayRecords)
+      .map((record) => String(record?.partId || "").trim())
+      .filter((partId) => partId && partId !== "__model__")
+  ));
+}
+
 function syncViewportTopologyDisplayEdges(viewport) {
   const { context, model } = viewport;
+  const renderedPartIds = displayRecordPartIds(model.displayRecords);
   const baseEdgeRuntimes = resolveTopologyDisplayEdgeRuntimes({
     selectorRuntime: context.selectorRuntime,
     displayEdgeRuntime: context.displayEdgeRuntime,
@@ -798,7 +807,12 @@ function syncViewportTopologyDisplayEdges(viewport) {
     transformByRecord ? context.displayEdgeRuntime : edgeRuntimes.topologyRuntime,
     {
       visible: context.topologyDisplayEdgesVisible,
-      edgeSettings: context.edgeSettings,
+      edgeSettings: renderedPartIds.length
+        ? {
+            ...context.edgeSettings,
+            includePartIds: renderedPartIds
+          }
+        : context.edgeSettings,
       viewerTheme: model.runtime?.baseTheme,
       transformByRecord,
       displayRecords: model.displayRecords
