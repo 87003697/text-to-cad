@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import os
 from pathlib import Path
 
 from cadpy.catalog import (
@@ -75,6 +76,17 @@ def relative_to_repo(path: Path) -> str:
         return resolved.relative_to(REPO_ROOT).as_posix()
     except ValueError:
         return resolved.as_posix()
+
+
+def relative_to_directory(path: Path, base_dir: Path) -> str:
+    return os.path.relpath(
+        path.expanduser().resolve(),
+        start=base_dir.expanduser().resolve(),
+    ).replace(os.sep, "/")
+
+
+def relative_to_file(path: Path, owner_path: Path) -> str:
+    return relative_to_directory(path, owner_path.expanduser().resolve().parent)
 
 
 def sha256_file(path: Path) -> str:

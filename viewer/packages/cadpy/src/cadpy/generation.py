@@ -58,6 +58,7 @@ from cadpy.metadata import (
 from cadpy.render import (
     native_component_glb_dir,
     part_glb_path,
+    relative_to_file,
     relative_to_repo,
 )
 from cadpy.source_hash import PythonSourceHash, python_source_hash
@@ -754,7 +755,7 @@ def _normalize_step_payload(
     if isinstance(result, list):
         return {"children": result}
     if isinstance(result, dict):
-        allowed_fields = {"shape", "instances", "children", "step_output", "stl", "3mf", "mesh_tolerance", "mesh_angular_tolerance"}
+        allowed_fields = {"shape", "instances", "children", "stl", "3mf", "mesh_tolerance", "mesh_angular_tolerance"}
         extra_fields = sorted(str(key) for key in result if key not in allowed_fields)
         if extra_fields:
             joined = ", ".join(extra_fields)
@@ -774,7 +775,7 @@ def _normalize_step_payload(
 
 def _normalize_dxf_payload(result: object, *, script_path: Path) -> dict[str, object]:
     if isinstance(result, dict):
-        allowed_fields = {"document", "dxf_output"}
+        allowed_fields = {"document"}
         extra_fields = sorted(str(key) for key in result if key not in allowed_fields)
         if extra_fields:
             joined = ", ".join(extra_fields)
@@ -896,7 +897,7 @@ def _write_shape_step_payload(
         shape,
         output_path,
         text_to_cad_entry_kind=entry_kind,
-        source_path=relative_to_repo(script_path),
+        source_path=relative_to_file(script_path, output_path),
         source_fingerprint=source_identity.source_fingerprint,
         source_hash=source_identity.source_hash,
     )
@@ -917,7 +918,7 @@ def _mark_scene_python_backed(
     scene.source_kind = "python"
     scene.source_hash = source_identity.source_hash
     scene.source_fingerprint = source_identity.source_fingerprint
-    scene.source_path = relative_to_repo(source_path)
+    scene.source_path = relative_to_file(source_path, scene.step_path)
     return scene
 
 
@@ -980,7 +981,7 @@ def _write_assembly_step_payload(
             assembly_spec,
             output_path=output_path,
             text_to_cad_entry_kind="assembly",
-            source_path=relative_to_repo(script_path),
+            source_path=relative_to_file(script_path, output_path),
             source_fingerprint=source_identity.source_fingerprint,
             source_hash=source_identity.source_hash,
             resolver=resolver,
@@ -1011,7 +1012,7 @@ def _write_dxf_payload(
     write_dxf_text_to_cad_metadata(
         output_path,
         text_to_cad_identity_metadata(
-            source_path=relative_to_repo(script_path),
+            source_path=relative_to_file(script_path, output_path),
             source_hash=source_identity.source_hash,
             source_fingerprint=source_identity.source_fingerprint,
         ),
@@ -2123,16 +2124,11 @@ def _run_selected_specs(
     if logger is not None:
         for spec in selected_specs:
             logger.debug(f"{action_status} {spec.source_ref}")
-            stdout_target = (
-                (action_stdout if action_stdout is not None else logger.stream)
-                if logger.verbose
-                else io.StringIO()
-            )
             with logger.timed(f"{done_status.lower()} {spec.source_ref}"):
-                if stdout_target is None:
+                if action_stdout is None:
                     result = action(spec)
                 else:
-                    with contextlib.redirect_stdout(stdout_target):
+                    with contextlib.redirect_stdout(action_stdout):
                         result = action(spec)
             results.append(result)
             if success_message is not None:
@@ -2319,7 +2315,7 @@ def run_tool_cli(
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="CAD generation support library.")
     parser.parse_args(list(argv) if argv is not None else None)
-    parser.error("common.generation is a library module.")
+    parser.error("cadpy.generation is a library module.")
     return 2
 
 

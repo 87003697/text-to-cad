@@ -140,8 +140,8 @@ function writeViewerServerRegistry(serverInfo, {
 }
 
 // viewer/scripts/ensure-serve.mjs
-var DEFAULT_PORT_END = 4198;
-var DEFAULT_ADAPTIVE_PORT_COUNT = 80;
+var DEFAULT_PORT_END = 4298;
+var DEFAULT_ADAPTIVE_PORT_COUNT = 120;
 var DEFAULT_PROBE_TIMEOUT_MS = 200;
 var DEFAULT_START_TIMEOUT_MS = 3e4;
 var DEFAULT_READY_INTERVAL_MS = 100;
@@ -600,14 +600,15 @@ function buildViewerProcessEnv({
   shutdownAfterMs = DEFAULT_SERVER_LIFETIME_MS,
   env = process.env
 } = {}) {
+  const workspaceRoot = rootDir ? path3.resolve(rootDir) : "";
   const nextEnv = {
     ...env,
     VIEWER_ASSET_BACKEND: "local-fs",
-    VIEWER_LOCAL_ROOT_DIR: rootDir || "",
+    VIEWER_LOCAL_WORKSPACE_ROOT: workspaceRoot,
+    VIEWER_LOCAL_ROOT_DIR: "",
     VIEWER_PORT: String(port),
     VIEWER_SERVER_LIFETIME_MS: String(shutdownAfterMs)
   };
-  delete nextEnv.VIEWER_LOCAL_WORKSPACE_ROOT;
   return nextEnv;
 }
 function buildProductionSpawnOptions({
@@ -673,8 +674,8 @@ Options:
   --root-dir <path>        Required. Viewer root directory to scan.
   --file <path>            File to open; pass one --file per command.
   --port <number>          First port to probe. Defaults to 4178 or VIEWER_PORT.
-  --port-end <number>      Last port to probe. Defaults to 4198, then auto-expands
-                           to 80 more ports unless VIEWER_PORT_END is set.
+  --port-end <number>      Last port to probe. Defaults to 4298, then auto-expands
+                           to 120 more ports unless VIEWER_PORT_END is set.
   --shutdown-after <time>  Server lifetime before automatic shutdown. Defaults
                            to 12h. Accepts ms, s, m, or h suffixes.
   --json                   Print structured JSON instead of just the Viewer URL.

@@ -23,6 +23,8 @@ Use explicit target paths only. Target paths are resolved from the command cwd u
 
 Plain generated Python targets write sibling `.step` outputs. Use `-o`/`--output` only with one plain generated Python target, or use `SOURCE.py=OUTPUT.step` positional pairs for per-target custom outputs. Paired output paths resolve from the command cwd and are valid only for generated Python sources, not direct STEP/STP inputs.
 
+Do not put output-path fields such as `step_output` in the `gen_step()` return envelope. The supported path controls are the sibling default, `-o`/`--output`, and `SOURCE.py=OUTPUT.step`.
+
 ## Generated Python source
 
 Generated build123d sources should define:

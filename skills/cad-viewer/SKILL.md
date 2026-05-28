@@ -48,17 +48,29 @@ Use only the URL printed by `serve:ensure`; do not assume a fixed port. By
 default, `serve:ensure` starts probing at port `4178` and scans the configured
 port range for a reusable server before binding a new port. It reuses a matching
 root directory when possible, and otherwise starts the packaged production
-server at the requested root directory. In sandboxed agent environments, local
+server at the requested root directory. Pass `--port <number>` to start probing
+at a known port, or `--port-end <number>` to widen or cap the scan. In sandboxed
+agent environments, local
 binding/probing failures such as `EPERM` or `EACCES` can be expected; rerun the
 same command with the needed permission/escalation instead of choosing an
 arbitrary port or changing the root directory.
 
 Pass exactly one `--file` per `serve:ensure` invocation. For multiple requested files, run the command once per file and return each printed URL.
 
+If `serve:ensure` cannot be used, the packaged backend also accepts direct CLI
+flags. CLI flags take priority over matching environment variables:
+
+```bash
+npm --prefix scripts/viewer run serve -- \
+  --root-dir /path/to/root \
+  --port 4190
+```
+
 ## Links
 
 - Return the printed Viewer link for each requested file.
 - If a server is already running for the same root directory, reuse its port and vary the `?file=` query only when that points at the requested file.
+- Per-file URLs use `?file=<root-relative-path>`; URL-encode each path segment while preserving `/` separators.
 - Do not stop an existing Viewer server unless the user asks.
 - If Viewer startup fails, report the failure and continue with the owning skill's non-GUI validation or artifacts.
 

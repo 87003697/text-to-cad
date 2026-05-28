@@ -439,8 +439,8 @@ test("buildViteSpawnOptions starts native Vite with explicit CAD Viewer environm
   assert.equal(spawnOptions.command, process.execPath);
   assert.equal(spawnOptions.args.at(-1), "dev");
   assert.equal(spawnOptions.options.env.VIEWER_ASSET_BACKEND, "local-fs");
-  assert.equal("VIEWER_LOCAL_WORKSPACE_ROOT" in spawnOptions.options.env, false);
-  assert.equal(spawnOptions.options.env.VIEWER_LOCAL_ROOT_DIR, "/tmp/workspace-root/models");
+  assert.equal(spawnOptions.options.env.VIEWER_LOCAL_WORKSPACE_ROOT, "/tmp/workspace-root/models");
+  assert.equal(spawnOptions.options.env.VIEWER_LOCAL_ROOT_DIR, "");
   assert.equal(spawnOptions.options.env.VIEWER_PORT, "4182");
   assert.equal(spawnOptions.options.env.VIEWER_SERVER_LIFETIME_MS, String(DEFAULT_SERVER_LIFETIME_MS));
   assert.equal(spawnOptions.options.detached, true);

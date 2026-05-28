@@ -184,32 +184,36 @@ class _GenerationStatusTracker:
         status: str = "running",
         status_paths: Sequence[Path] | None = None,
     ) -> None:
-        payload = {
+        for status_path in tuple(status_paths or self.status_paths):
+            try:
+                status_path.parent.mkdir(parents=True, exist_ok=True)
+                tmp_path = status_path.with_name(f"{status_path.name}.{os.getpid()}.tmp")
+                payload = self._status_payload(status=status, status_path=status_path)
+                tmp_path.write_text(json.dumps(payload, sort_keys=True) + "\n", encoding="utf-8")
+                tmp_path.replace(status_path)
+            except OSError:
+                pass
+
+    def _status_payload(self, *, status: str, status_path: Path) -> dict[str, object]:
+        base_dir = status_path.parent
+        return {
             "schemaVersion": GENERATION_STATUS_SCHEMA_VERSION,
             "id": self.run_id,
             "status": status,
             "pid": os.getpid(),
             "startedAt": self.started_at,
             "updatedAt": _now_iso(),
-            "sourcePath": _display_generation_path(self.source_path, self.repo_root),
+            "sourcePath": _display_generation_path(self.source_path, base_dir),
             "generator": self.generator,
             "outputs": [
                 {
-                    "path": _display_generation_path(output.path, self.repo_root),
+                    "path": _display_generation_path(output.path, base_dir),
                     "kind": output.kind,
                 }
                 for output in self.outputs
                 if output.path is not None
             ],
         }
-        for status_path in tuple(status_paths or self.status_paths):
-            try:
-                status_path.parent.mkdir(parents=True, exist_ok=True)
-                tmp_path = status_path.with_name(f"{status_path.name}.{os.getpid()}.tmp")
-                tmp_path.write_text(json.dumps(payload, sort_keys=True) + "\n", encoding="utf-8")
-                tmp_path.replace(status_path)
-            except OSError:
-                pass
 
 
 def _source_search_paths(repo_root: Path, script_path: Path) -> list[Path]:
@@ -225,12 +229,21 @@ def _source_search_paths(repo_root: Path, script_path: Path) -> list[Path]:
     return _dedupe_paths(search_paths)
 
 
-def xml_with_text_to_cad_metadata(xml_text: str, identity: PythonSourceIdentity) -> str:
+def xml_with_text_to_cad_metadata(
+    xml_text: str,
+    identity: PythonSourceIdentity,
+    *,
+    output_path: Path | None = None,
+    source_path: Path | None = None,
+) -> str:
     text = _strip_text_to_cad_metadata_comments(str(xml_text or ""))
+    metadata_source_path = identity.source_path
+    if output_path is not None and source_path is not None:
+        metadata_source_path = _display_generation_path(source_path, Path(output_path).expanduser().resolve().parent)
     comment_block = "".join(
         f"<!-- {TEXT_TO_CAD_PREFIX}{key}={value} -->\n"
         for key, value in (
-            ("sourcePath", identity.source_path),
+            ("sourcePath", metadata_source_path),
             ("sourceHash", identity.source_hash),
             ("sourceFingerprint", identity.source_fingerprint),
         )
@@ -265,10 +278,7 @@ def _display_generation_path(path: Path | None, repo_root: Path) -> str:
     if path is None:
         return ""
     resolved = path.expanduser().resolve()
-    try:
-        return resolved.relative_to(repo_root).as_posix()
-    except ValueError:
-        return resolved.as_posix()
+    return os.path.relpath(resolved, start=repo_root.expanduser().resolve()).replace(os.sep, "/")
 
 
 def _now_iso() -> str:

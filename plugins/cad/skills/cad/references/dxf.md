@@ -14,6 +14,8 @@ python scripts/dxf targets... [flags]
 
 Plain generated Python targets write sibling `.dxf` outputs. Use `-o`/`--output` only with one plain generated Python target, or use `SOURCE.py=OUTPUT.dxf` positional pairs for per-target custom outputs. Paired output paths resolve from the command cwd.
 
+Do not put output-path fields such as `dxf_output` in the `gen_dxf()` return envelope. The supported path controls are the sibling default, `-o`/`--output`, and `SOURCE.py=OUTPUT.dxf`.
+
 ## Source requirements
 
 A DXF target must be a Python source defining:

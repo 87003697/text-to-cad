@@ -28,12 +28,8 @@ class GeneratorMetadata:
     has_gen_dxf: bool
     has_gen_urdf: bool
     has_gen_sdf: bool
-    step_output: str | None
     stl: str | None
     three_mf: str | None
-    dxf_output: str | None
-    urdf_output: str | None
-    sdf_output: str | None
     mesh_tolerance: float | None
     mesh_angular_tolerance: float | None
 
@@ -42,15 +38,14 @@ STEP_ENVELOPE_FIELDS = {
     "shape",
     "instances",
     "children",
-    "step_output",
     "stl",
     "3mf",
     "mesh_tolerance",
     "mesh_angular_tolerance",
 }
-DXF_ENVELOPE_FIELDS = {"document", "dxf_output"}
-URDF_ENVELOPE_FIELDS = {"xml", "urdf_output", "explorer_metadata"}
-SDF_ENVELOPE_FIELDS = {"xml", "sdf_output"}
+DXF_ENVELOPE_FIELDS = {"document"}
+URDF_ENVELOPE_FIELDS = {"xml"}
+SDF_ENVELOPE_FIELDS = {"xml"}
 
 
 DEFAULT_MESH_SETTINGS = MeshSettings(
@@ -112,10 +107,6 @@ def parse_generator_metadata(script_path: Path) -> GeneratorMetadata | None:
     has_gen_urdf = False
     has_gen_sdf = False
     generator_names: list[str] = []
-    dxf_output: str | None = None
-    urdf_output: str | None = None
-    sdf_output: str | None = None
-
     for node in tree.body:
         target: ast.expr | None = None
         value: ast.AST | None = None
@@ -155,19 +146,19 @@ def parse_generator_metadata(script_path: Path) -> GeneratorMetadata | None:
             )
             has_gen_step = True
         elif node.name == "gen_dxf":
-            dxf_output = _parse_dxf_envelope_metadata(
+            _parse_dxf_envelope_metadata(
                 script_path=script_path,
                 function=node,
             )
             has_gen_dxf = True
         elif node.name == "gen_urdf":
-            urdf_output = _parse_urdf_envelope_metadata(
+            _parse_urdf_envelope_metadata(
                 script_path=script_path,
                 function=node,
             )
             has_gen_urdf = True
         else:
-            sdf_output = _parse_sdf_envelope_metadata(
+            _parse_sdf_envelope_metadata(
                 script_path=script_path,
                 function=node,
             )
@@ -189,12 +180,8 @@ def parse_generator_metadata(script_path: Path) -> GeneratorMetadata | None:
         has_gen_dxf=has_gen_dxf,
         has_gen_urdf=has_gen_urdf,
         has_gen_sdf=has_gen_sdf,
-        step_output=None,
         stl=None,
         three_mf=None,
-        dxf_output=dxf_output,
-        urdf_output=urdf_output,
-        sdf_output=sdf_output,
         mesh_tolerance=None,
         mesh_angular_tolerance=None,
     )

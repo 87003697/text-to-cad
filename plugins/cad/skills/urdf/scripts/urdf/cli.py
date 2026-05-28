@@ -214,7 +214,7 @@ def _write_urdf_payload(payload: dict[str, object], *, output_path: Path, script
         )
     output_path.parent.mkdir(parents=True, exist_ok=True)
     identity = python_source_identity(script_path)
-    xml = xml_with_text_to_cad_metadata(xml, identity)
+    xml = xml_with_text_to_cad_metadata(xml, identity, output_path=output_path, source_path=script_path)
     text = xml if xml.endswith("\n") else xml + "\n"
     output_path.write_text(text, encoding="utf-8")
     print(f"Wrote URDF: {output_path}")

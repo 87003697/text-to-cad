@@ -233,7 +233,7 @@ def _normalize_sdf_payload(raw_payload: object, *, script_path: Path) -> dict[st
             f"{_display_path(script_path)} gen_sdf() must return an SDF XML root element, XML string, "
             "or generator envelope dict"
         )
-    allowed_fields = {"xml", "sdf_output", "metadata", "assumptions", "warnings"}
+    allowed_fields = {"xml", "metadata", "assumptions", "warnings"}
     extra_fields = sorted(str(key) for key in raw_payload if key not in allowed_fields)
     if extra_fields:
         joined = ", ".join(extra_fields)
@@ -251,7 +251,12 @@ def _normalize_sdf_payload(raw_payload: object, *, script_path: Path) -> dict[st
 def _write_sdf_payload(payload: dict[str, object], *, output_path: Path, script_path: Path) -> None:
     xml = _payload_xml(payload, script_path=script_path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    xml = xml_with_text_to_cad_metadata(xml, python_source_identity(script_path))
+    xml = xml_with_text_to_cad_metadata(
+        xml,
+        python_source_identity(script_path),
+        output_path=output_path,
+        source_path=script_path,
+    )
     text = xml if xml.endswith("\n") else xml + "\n"
     output_path.write_text(text, encoding="utf-8")
     print(f"Wrote SDF: {output_path}")

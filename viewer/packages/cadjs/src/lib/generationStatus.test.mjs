@@ -62,6 +62,32 @@ test("readGenerationStatus reports running generator outputs relative to the vie
   assert.deepEqual(status.runs[0].files.sort(), [".part.step.glb", "part.step"]);
 });
 
+test("readGenerationStatus resolves status-local relative paths", () => {
+  const repoRoot = makeTempRepo();
+  const updatedAt = new Date().toISOString();
+  const payload = {
+    schemaVersion: 1,
+    id: "run-local",
+    status: "running",
+    pid: process.pid,
+    startedAt: updatedAt,
+    updatedAt,
+    sourcePath: "../sources/part.py",
+    generator: "gen_step",
+    outputs: [
+      { path: "part.step", kind: "step" },
+      { path: ".part.step.glb", kind: "glb" },
+    ],
+  };
+  writeStatus(repoRoot, "models/part.step", "run-local", payload);
+
+  const status = readGenerationStatus({ repoRoot, rootDir: "models" });
+
+  assert.deepEqual(Object.keys(status.files).sort(), [".part.step.glb", "part.step"]);
+  assert.equal(status.files["part.step"].sourcePath, "sources/part.py");
+  assert.deepEqual(status.runs[0].files.sort(), [".part.step.glb", "part.step"]);
+});
+
 test("readGenerationStatus ignores finished, dead, and stale generator markers", () => {
   const repoRoot = makeTempRepo();
   const nowMs = Date.parse("2026-05-27T10:00:00.000Z");

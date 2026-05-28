@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import contextlib
+import io
 import sys
 import tempfile
 import unittest
@@ -27,6 +29,61 @@ from cadpy.step_scene import LoadedStepScene, _bbox_from_shape, scene_leaf_occur
 
 
 class CompoundAssemblyGenerationTests(unittest.TestCase):
+    def test_step_payload_rejects_legacy_output_field(self) -> None:
+        with self.assertRaisesRegex(TypeError, "unsupported field\\(s\\): step_output"):
+            generation._normalize_step_payload(
+                {"shape": object(), "step_output": "legacy.step"},
+                script_path=Path("part.py"),
+            )
+
+    def test_dxf_payload_rejects_legacy_output_field(self) -> None:
+        with self.assertRaisesRegex(TypeError, "unsupported field\\(s\\): dxf_output"):
+            generation._normalize_dxf_payload(
+                {"document": object(), "dxf_output": "legacy.dxf"},
+                script_path=Path("part.py"),
+            )
+
+    def test_metadata_rejects_legacy_output_fields(self) -> None:
+        cases = [
+            ("gen_step", "return {'shape': object(), 'step_output': 'legacy.step'}", "step_output"),
+            ("gen_dxf", "return {'document': object(), 'dxf_output': 'legacy.dxf'}", "dxf_output"),
+            ("gen_urdf", "return {'xml': '<robot />', 'urdf_output': 'legacy.urdf'}", "urdf_output"),
+            ("gen_sdf", "return {'xml': '<sdf version=\"1.12\" />', 'sdf_output': 'legacy.sdf'}", "sdf_output"),
+        ]
+        for function_name, return_line, field_name in cases:
+            with self.subTest(function_name=function_name), tempfile.TemporaryDirectory(prefix="cadpy-output-field-") as tempdir:
+                script_path = Path(tempdir) / "part.py"
+                script_path.write_text(
+                    "\n".join(
+                        [
+                            "def gen_step():",
+                            "    return {'shape': object()}",
+                            "",
+                            f"def {function_name}():",
+                            f"    {return_line}",
+                            "",
+                        ]
+                    ),
+                    encoding="utf-8",
+                )
+
+                with self.assertRaisesRegex(ValueError, f"unsupported field\\(s\\): {field_name}"):
+                    parse_generator_metadata(script_path)
+
+    def test_run_selected_specs_preserves_action_stdout(self) -> None:
+        spec = SimpleNamespace(source_ref="part.py")
+        stdout = io.StringIO()
+
+        with contextlib.redirect_stdout(stdout):
+            generation._run_selected_specs(
+                [spec],
+                action=lambda _spec: print("generator summary"),
+                logger=generation.CliLogger("test", stream=io.StringIO()),
+                success_message=None,
+            )
+
+        self.assertEqual("generator summary\n", stdout.getvalue())
+
     def test_compound_with_explicit_children_is_discovered_as_assembly(self) -> None:
         with tempfile.TemporaryDirectory(prefix="cadpy-compound-") as tempdir:
             script_path = Path(tempdir) / "robot_arm.py"
