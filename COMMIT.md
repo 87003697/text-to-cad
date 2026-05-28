@@ -12,12 +12,24 @@ or bumping release versions.
    git status --short
    ```
 
-2. Confirm every changed file belongs to the current task. Do not revert or
+2. If the branch will open or update a PR, fetch the latest base branch before
+   the final version bump:
+
+   ```bash
+   git fetch origin main --tags
+   git show origin/main:plugins/cad/VERSION
+   ```
+
+   Rebase or merge `origin/main` before bumping release metadata when the base
+   branch has advanced. Resolve source files first, regenerate generated
+   outputs, then run the version bump wrapper.
+
+3. Confirm every changed file belongs to the current task. Do not revert or
    include unrelated user changes. Prefer path-targeted staging; use
    `git add -A` only after reviewing the full status and confirming all
    additions, deletions, and generated renames belong in the commit.
 
-3. Edit sources first, then regenerate generated outputs. Common source to
+4. Edit sources first, then regenerate generated outputs. Common source to
    generated-output paths:
 
    - `packages/cadjs` or `viewer`: run `scripts/build/build-viewer.sh`, and for
@@ -31,7 +43,7 @@ or bumping release versions.
    - `plugins/cad/skills/*`: generated from root `skills/*`; run
      `scripts/build/build-plugin.sh` after changing skill runtimes.
 
-4. Run the smallest checks that cover the change. Useful defaults:
+5. Run the smallest checks that cover the change. Useful defaults:
 
    ```bash
    git diff --check
@@ -46,7 +58,7 @@ or bumping release versions.
    shared package behavior, multiple skills, CI, release tooling, or generated
    runtime contracts.
 
-5. Commit only after generated copies are fresh and checks have passed or their
+6. Commit only after generated copies are fresh and checks have passed or their
    failures are understood and reported. If a hook updates or rejects files,
    inspect `git status --short`, regenerate/check as needed, then amend or
    recommit intentionally.
