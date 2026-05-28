@@ -1,14 +1,14 @@
 # CAD Viewer
 
 CAD Viewer is a browser workbench for inspecting CAD files, robot-description
-files, and generated CAD artifacts from a local workspace or hosted catalog. It
+files, and generated CAD artifacts from a local root directory or hosted catalog. It
 is built for engineering review loops where a developer or agent needs to open
 a model quickly, understand the source tree, copy stable `@cad[...]`
 references, and verify generated assets without leaving the browser.
 
 ## Features
 
-- Scans a configured workspace root and mirrors its folder structure in the
+- Scans a configured root directory and mirrors its folder structure in the
   sidebar.
 - Opens `.step`, `.stp`, `.stl`, `.3mf`, `.glb`, `.gcode`, `.dxf`, `.urdf`,
   `.srdf`, and `.sdf` entries.
@@ -33,21 +33,28 @@ npm run build
 npm run serve
 ```
 
-For a reusable local development link that points at a specific workspace root:
+For a reusable local development link, pass the required root directory:
 
 ```bash
 npm run dev:ensure -- \
-  --workspace-root /path/to/workspace \
-  --root-dir models \
+  --root-dir /path/to/root \
   --file assemblies/robot-arm/robot-arm.step
 ```
 
 Use the URL printed by `dev:ensure`; local tools should not assume a fixed port.
+Detached servers started by `dev:ensure` and `serve:ensure` shut down
+automatically after 12 hours. Pass `--shutdown-after <duration>` only when a
+different lifetime is needed, for example `--shutdown-after 30m` or
+`--shutdown-after 2h`; reused servers keep their existing shutdown timer.
 
-This workbench links `cadjs` with `file:../packages/cadjs`, so local edits to the
-shared render package are picked up immediately. If the viewer is split into a
-standalone repository, keep that dependency pointed at the packaged or sibling
-`cadjs` source used by the target checkout.
+This workbench keeps a generated `cadjs` package copy under `packages/cadjs` so
+the viewer can build from a standalone `viewer/` deploy root. Edit the source of
+truth in `../packages/cadjs`, then refresh the viewer-local copy before
+handoff:
+
+```bash
+../scripts/build/build-viewer.sh
+```
 
 Refresh and install the viewer-local Python artifact package when iterating on
 local STEP regeneration:
@@ -74,9 +81,9 @@ python -m pip install -r requirements.txt
   and MoveIt2.
 - `moveit2_server/`: optional Python websocket backend for SRDF controls.
 
-The shared non-React CAD runtime lives in `../packages/cadjs` in this workbench.
-Keep reusable parsing, rendering, sidecar, selector, and topology logic there
-instead of duplicating it in the viewer app.
+The shared non-React CAD runtime source lives in `../packages/cadjs` in this
+workbench. Keep reusable parsing, rendering, sidecar, selector, and topology
+logic there instead of editing generated viewer-local package copies.
 
 ## Common Commands
 
@@ -103,10 +110,13 @@ Important environment variables:
 
 - `VIEWER_ASSET_BACKEND`: `local-fs` for local files or `vercel-blob` for hosted
   Blob assets.
-- `VIEWER_DEFAULT_FILE`: scan-root-relative file opened when `?file=` is absent.
+- `VIEWER_DEFAULT_FILE`: root-directory-relative file opened when `?file=` is absent.
 - `VIEWER_PORT`: preferred dev or production port, default `4178`.
 - `VIEWER_PORT_END`: optional end of the `dev:ensure` / `serve:ensure` port
   search range.
+- `VIEWER_SERVER_LIFETIME_MS`: optional server lifetime in milliseconds for
+  detached servers. `dev:ensure` and `serve:ensure` set this to 12 hours by
+  default, or to the value passed with `--shutdown-after`.
 - `VIEWER_GITHUB_URL`: top-bar GitHub link target.
 - `VIEWER_ALLOWED_HOSTS`: extra hostnames accepted by local Vite dev and
   production servers.
@@ -118,9 +128,9 @@ Important environment variables:
 
 Local filesystem backend variables:
 
-- `VIEWER_LOCAL_WORKSPACE_ROOT`: base workspace path.
-- `VIEWER_LOCAL_ROOT_DIR`: scan root relative to the workspace root, or an
-  absolute scan root inside it.
+- `VIEWER_LOCAL_ROOT_DIR`: local filesystem root path used by the backend.
+  `dev:ensure` and `serve:ensure` set this from the required `--root-dir`
+  argument.
 
 Vercel Blob backend variables:
 
@@ -140,7 +150,7 @@ Vercel's system environment variables (`VERCEL_PROJECT_PRODUCTION_URL`,
 `VERCEL_URL`, then `VERCEL_BRANCH_URL`).
 
 Upload a catalog and supported viewer assets from a local directory with
-`npm --prefix viewer run upload:blob -- --workspace-root "$PWD" --root-dir models`.
+`npm --prefix viewer run upload:blob -- models`.
 The repo-level `scripts/catalog/upload-models-catalog.sh` command uploads
 `models/` to the configured Blob prefix. Uploads exclude `mechbench/`,
 `mechbench2/`, `7dof_arm/`, and Python source files by default; public Blob

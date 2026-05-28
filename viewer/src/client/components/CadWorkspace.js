@@ -352,6 +352,40 @@ function buildDxfCacheKey(entry) {
   return fileRef && dxfHash ? `${fileRef}:${dxfHash}` : "";
 }
 
+function ownProperty(object, key) {
+  return Object.prototype.hasOwnProperty.call(object || {}, key);
+}
+
+function mergeStepSourceStatusIntoEntry(entry, stepSourceStatus) {
+  if (!entry || !stepSourceStatus || typeof stepSourceStatus !== "object") {
+    return entry;
+  }
+  const nextEntry = { ...entry };
+  if (ownProperty(stepSourceStatus, "artifact")) {
+    if (stepSourceStatus.artifact && typeof stepSourceStatus.artifact === "object") {
+      nextEntry.artifact = stepSourceStatus.artifact;
+    } else {
+      delete nextEntry.artifact;
+    }
+  }
+
+  const sourceKind = String(stepSourceStatus.sourceKind || "").trim().toLowerCase();
+  if (sourceKind) {
+    nextEntry.sourceKind = sourceKind;
+  }
+  const sourcePath = String(stepSourceStatus.sourcePath || "").trim();
+  if (sourceKind === "python" && sourcePath) {
+    nextEntry.source = {
+      ...(entry.source && typeof entry.source === "object" ? entry.source : {}),
+      file: sourcePath,
+      sourcePath,
+    };
+  } else if (sourceKind === "step" && ownProperty(nextEntry, "source")) {
+    delete nextEntry.source;
+  }
+  return nextEntry;
+}
+
 export default function CadWorkspace({
   manifestEntries: manifestEntriesProp = [],
   generationStatus = null,
@@ -370,7 +404,20 @@ export default function CadWorkspace({
   ), [generationStatus]);
   const catalogRootDir = catalogRootDirFromEnv();
   const [query, setQuery] = useState("");
-  const [expandedDirectoryIds, setExpandedDirectoryIds] = useState(() => new Set());
+  const initialFileViewerDirectoryStateRef = useRef(null);
+  if (!initialFileViewerDirectoryStateRef.current) {
+    const storedExpandedDirectoryIds = readWorkspaceSessionState().fileViewerExpandedDirectoryIds;
+    initialFileViewerDirectoryStateRef.current = {
+      hasStoredState: Array.isArray(storedExpandedDirectoryIds),
+      expandedDirectoryIds: Array.isArray(storedExpandedDirectoryIds) ? storedExpandedDirectoryIds : []
+    };
+  }
+  const [expandedDirectoryIds, setExpandedDirectoryIds] = useState(() => (
+    new Set(initialFileViewerDirectoryStateRef.current.expandedDirectoryIds)
+  ));
+  const [fileViewerDirectoryStateInitialized, setFileViewerDirectoryStateInitialized] = useState(() => (
+    initialFileViewerDirectoryStateRef.current.hasStoredState
+  ));
   const [openTabs, setOpenTabs] = useState([]);
   const [viewerServerInfo, setViewerServerInfo] = useState(null);
   const [selectedKey, setSelectedKey] = useState("");
@@ -599,23 +646,53 @@ export default function CadWorkspace({
   );
   const allDirectoryIds = useMemo(() => collectSidebarDirectoryIds(allEntriesTree), [allEntriesTree]);
 
-  const selectedEntry = entryMap.get(selectedKey) ?? null;
+  const catalogSelectedEntry = entryMap.get(selectedKey) ?? null;
   const explicitFileParam = readCadParam();
   const explicitFileEntry = explicitFileParam ? findEntryByUrlPath(catalogEntries, explicitFileParam) : null;
   const fileParamSelectionPending = shouldDeferFileParamSelection({
     explicitFileParam,
     matchingEntry: explicitFileEntry,
-    selectedEntry,
+    selectedEntry: catalogSelectedEntry,
     catalogHydrated,
     catalogRefreshing
   });
   const missingFileRef = missingFileRefForCatalog({
     explicitFileParam,
     matchingEntry: explicitFileEntry,
-    selectedEntry,
+    selectedEntry: catalogSelectedEntry,
     catalogHydrated,
     catalogRefreshing
   });
+  const catalogSelectedEntrySourceFormat = entrySourceFormat(catalogSelectedEntry);
+  const activeStepArtifactGenerationFiles = useMemo(() => {
+    const files = Object.values(stepArtifactGenerationStateByKey)
+      .filter((state) => state?.status === "loading" && state?.file)
+      .map((state) => String(state.file).trim())
+      .filter(Boolean);
+    return [...new Set(files)];
+  }, [stepArtifactGenerationStateByKey]);
+  const selectedGeneratorRunning = Boolean(
+    catalogSelectedEntry &&
+    activeGeneratorFiles.includes(fileKey(catalogSelectedEntry))
+  );
+  const selectedStepSourceStatusFile = catalogSelectedEntrySourceFormat === RENDER_FORMAT.STEP && catalogSelectedEntry
+    ? fileKey(catalogSelectedEntry)
+    : "";
+  const selectedStepSourceStatusKey = selectedStepSourceStatusFile
+    ? [
+        selectedStepSourceStatusFile,
+        catalogSelectedEntry?.hash || "",
+        manifestRevision
+      ].join(":")
+    : "";
+  const selectedStepSourceStatus =
+    !selectedGeneratorRunning && selectedStepSourceStatusKey && stepSourceStatusState.key === selectedStepSourceStatusKey
+      ? stepSourceStatusState.status
+      : null;
+  const selectedEntry = useMemo(
+    () => mergeStepSourceStatusIntoEntry(catalogSelectedEntry, selectedStepSourceStatus),
+    [catalogSelectedEntry, selectedStepSourceStatus]
+  );
   const selectedEntrySourceFormat = entrySourceFormat(selectedEntry);
   const selectedFileSheetKind = fileSheetKindForEntry(selectedEntry);
   const viewerServerBackend = String(viewerServerInfo?.backend || "").trim();
@@ -678,32 +755,6 @@ export default function CadWorkspace({
     selectedStepArtifactGenerationStatus !== "error" &&
     selectedStepArtifactGenerationStatus !== "ready"
   );
-  const activeStepArtifactGenerationFiles = useMemo(() => {
-    const files = Object.values(stepArtifactGenerationStateByKey)
-      .filter((state) => state?.status === "loading" && state?.file)
-      .map((state) => String(state.file).trim())
-      .filter(Boolean);
-    return [...new Set(files)];
-  }, [stepArtifactGenerationStateByKey]);
-  const selectedGeneratorRunning = Boolean(
-    selectedEntry &&
-    activeGeneratorFiles.includes(fileKey(selectedEntry))
-  );
-  const selectedStepSourceStatusFile = selectedEntrySourceFormat === RENDER_FORMAT.STEP && selectedEntry
-    ? fileKey(selectedEntry)
-    : "";
-  const selectedStepSourceStatusKey = selectedStepSourceStatusFile
-    ? [
-        selectedStepSourceStatusFile,
-        selectedEntry?.hash || "",
-        selectedEntry?.artifact?.error || "",
-        selectedStepArtifactGenerationStatus
-      ].join(":")
-    : "";
-  const selectedStepSourceStatus =
-    !selectedGeneratorRunning && selectedStepSourceStatusKey && stepSourceStatusState.key === selectedStepSourceStatusKey
-      ? stepSourceStatusState.status
-      : null;
   const selectedMeshHash = entryMeshAssetSignature(selectedEntry);
   const selectedMeshMatches =
     !!meshState &&
@@ -1792,6 +1843,12 @@ export default function CadWorkspace({
   }, [openTabs]);
 
   const tabToolsOpen = fileSheetOpenIntent;
+  const fileViewerExpandedDirectoryIdList = useMemo(() => (
+    [...expandedDirectoryIds].sort((a, b) => a.localeCompare(b, undefined, {
+      numeric: true,
+      sensitivity: "base"
+    }))
+  ), [expandedDirectoryIds]);
   const defaultFileSheetWidth = useMemo(
     () => cadWorkspaceDefaultFileSheetWidthForViewport(layoutViewportWidth),
     [layoutViewportWidth]
@@ -1809,6 +1866,7 @@ export default function CadWorkspace({
   useEffect(() => {
     writeCadWorkspaceSessionState({
       fileViewerOpen: sidebarOpen,
+      fileViewerExpandedDirectoryIds: fileViewerDirectoryStateInitialized ? fileViewerExpandedDirectoryIdList : null,
       fileViewerWidthPx: sidebarWidth,
       fileSheetOpen: tabToolsOpen,
       fileSheetWidthPx: fileSheetWidthIsCustom ? tabToolsWidth : defaultFileSheetWidth,
@@ -1819,6 +1877,8 @@ export default function CadWorkspace({
     });
   }, [
     defaultFileSheetWidth,
+    fileViewerDirectoryStateInitialized,
+    fileViewerExpandedDirectoryIdList,
     fileSheetWidthIsCustom,
     handlePersistenceWriteError,
     sidebarOpen,
@@ -2982,25 +3042,8 @@ export default function CadWorkspace({
     });
   }, [entryMap]);
 
-  useEffect(() => {
-    setExpandedDirectoryIds((current) => {
-      const next = new Set(current);
-      const knownDirectoryIds = new Set(allDirectoryIds);
-      let changed = false;
-
-      for (const directoryId of current) {
-        if (!knownDirectoryIds.has(directoryId)) {
-          next.delete(directoryId);
-          changed = true;
-        }
-      }
-
-      return changed ? next : current;
-    });
-  }, [allDirectoryIds]);
-
-  useEffect(() => {
-    const directoryId = sidebarDirectoryIdForEntry(selectedEntry);
+  const expandFileViewerTreeToEntry = useCallback((entry) => {
+    const directoryId = sidebarDirectoryIdForEntry(entry);
     if (!directoryId) {
       return;
     }
@@ -3023,7 +3066,41 @@ export default function CadWorkspace({
 
       return changed ? next : current;
     });
-  }, [selectedEntry]);
+  }, []);
+
+  useEffect(() => {
+    if (!catalogHydrated && !catalogEntries.length) {
+      return;
+    }
+    setExpandedDirectoryIds((current) => {
+      const next = new Set(current);
+      const knownDirectoryIds = new Set(allDirectoryIds);
+      let changed = false;
+
+      for (const directoryId of current) {
+        if (!knownDirectoryIds.has(directoryId)) {
+          next.delete(directoryId);
+          changed = true;
+        }
+      }
+
+      return changed ? next : current;
+    });
+  }, [allDirectoryIds, catalogEntries.length, catalogHydrated]);
+
+  useEffect(() => {
+    if (
+      initialFileViewerDirectoryStateRef.current.hasStoredState ||
+      initialFileViewerDirectoryStateRef.current.initialRevealDone ||
+      !selectedEntry
+    ) {
+      return;
+    }
+
+    initialFileViewerDirectoryStateRef.current.initialRevealDone = true;
+    setFileViewerDirectoryStateInitialized(true);
+    expandFileViewerTreeToEntry(selectedEntry);
+  }, [expandFileViewerTreeToEntry, selectedEntry]);
 
   useEffect(() => {
     selectedStepArtifactBuildKeyRef.current = selectedStepArtifactBuildKey;
@@ -5206,6 +5283,29 @@ export default function CadWorkspace({
     }
   }, [activateEntryTab, entryMap, isDesktop, writeCadParam]);
 
+  const handleRevealEntryInExplorerView = useCallback((entry) => {
+    const targetKey = fileKey(entry);
+    if (!targetKey || !entryMap.has(targetKey)) {
+      return;
+    }
+
+    setQuery("");
+    setFileViewerDirectoryStateInitialized(true);
+    expandFileViewerTreeToEntry(entry);
+    if (targetKey !== selectedKey) {
+      writeCadParam(targetKey);
+      activateEntryTab(targetKey);
+    }
+    handleSidebarOpenChange(true);
+  }, [
+    activateEntryTab,
+    entryMap,
+    expandFileViewerTreeToEntry,
+    handleSidebarOpenChange,
+    selectedKey,
+    writeCadParam
+  ]);
+
   const handleSelectTabToolMode = useCallback((mode) => {
     setViewerAlertOpen(false);
     const normalizedMode = mode === TAB_TOOL_MODE.DRAW ? TAB_TOOL_MODE.DRAW : TAB_TOOL_MODE.REFERENCES;
@@ -5504,6 +5604,7 @@ export default function CadWorkspace({
   ]);
 
   const toggleDirectory = (directoryId) => {
+    setFileViewerDirectoryStateInitialized(true);
     setExpandedDirectoryIds((current) => {
       const next = new Set(current);
       if (next.has(directoryId)) {
@@ -5752,6 +5853,7 @@ export default function CadWorkspace({
           fileAccessBusyKey={fileAccessBusyKey}
           onDownloadFileAsset={handleDownloadFileAsset}
           onRevealFileAsset={handleRevealFileAsset}
+          onRevealInExplorerView={handleRevealEntryInExplorerView}
           onCopyFileAssetReference={handleCopyFileAssetReference}
           fileSheetKind={selectedFileSheetKind}
           fileSheetOpen={fileSheetOpen}
@@ -5785,6 +5887,7 @@ export default function CadWorkspace({
               fileAccessBusyKey={fileAccessBusyKey}
               onDownloadFileAsset={handleDownloadFileAsset}
               onRevealFileAsset={handleRevealFileAsset}
+              onRevealInExplorerView={handleRevealEntryInExplorerView}
               onCopyFileAssetReference={handleCopyFileAssetReference}
               resizable={isDesktop}
               onStartResize={handleStartSidebarResize}

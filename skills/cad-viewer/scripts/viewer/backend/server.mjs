@@ -21097,13 +21097,13 @@ import fs6 from "node:fs";
 import path7 from "node:path";
 import { spawn as spawn2 } from "node:child_process";
 
-// packages/cadjs/src/lib/cadDirectoryScanner.mjs
+// viewer/packages/cadjs/src/lib/cadDirectoryScanner.mjs
 import crypto from "node:crypto";
 import fs2 from "node:fs";
 import path3 from "node:path";
 import { fileURLToPath } from "node:url";
 
-// packages/cadjs/src/common/stepSidecars.mjs
+// viewer/packages/cadjs/src/common/stepSidecars.mjs
 import path from "node:path";
 function isPerStepViewerDirectoryName(name) {
   const normalized = String(name || "").toLowerCase();
@@ -21128,7 +21128,7 @@ function stepParameterPathForStepSource(sourcePath) {
   return path.join(path.dirname(sourcePath), `.${stem}.step.js`);
 }
 
-// packages/cadjs/src/common/stepTopology.mjs
+// viewer/packages/cadjs/src/common/stepTopology.mjs
 var STEP_TOPOLOGY_EXTENSION = "STEP_topology";
 var STEP_TOPOLOGY_SCHEMA_VERSION = 2;
 var STEP_EDGE_BARYCENTRIC_ATTRIBUTE = "_CAD_EDGE_BARYCENTRIC";
@@ -21172,7 +21172,7 @@ function isCurrentStepTopologySchemaVersion(value) {
   return Number(value) === STEP_TOPOLOGY_SCHEMA_VERSION;
 }
 
-// packages/cadjs/src/lib/pathUtils.mjs
+// viewer/packages/cadjs/src/lib/pathUtils.mjs
 import path2 from "node:path";
 function toPosixPath(value) {
   return String(value || "").split(path2.sep).join("/");
@@ -21208,7 +21208,7 @@ function resolveWorkspaceRoot({
   return defaultWorkspaceRoot2 ? path2.resolve(defaultWorkspaceRoot2) : path2.resolve(cwd);
 }
 
-// packages/cadjs/src/lib/step/stepMetadata.mjs
+// viewer/packages/cadjs/src/lib/step/stepMetadata.mjs
 import fs from "node:fs";
 var TEXT_TO_CAD_GENERATOR_PROPERTY = "cadpy:generator";
 var TEXT_TO_CAD_ENTRY_KIND_PROPERTY = "cadpy:entryKind";
@@ -21291,7 +21291,7 @@ function readTextToCadStepMetadataFile(stepPath) {
   return readTextToCadStepMetadataText(fs.readFileSync(stepPath, "utf-8"));
 }
 
-// packages/cadjs/src/lib/cadDirectoryScanner.mjs
+// viewer/packages/cadjs/src/lib/cadDirectoryScanner.mjs
 var DEFAULT_VIEWER_ROOT_DIR = "";
 var CAD_CATALOG_SCHEMA_VERSION = 4;
 var SOURCE_EXTENSIONS = /* @__PURE__ */ new Set([".step", ".stp", ".stl", ".3mf", ".glb", ".gcode", ".dxf", ".urdf", ".srdf", ".sdf"]);
@@ -22346,6 +22346,7 @@ function readStepSourceStatus({
   });
   const stepArtifact = validation.stepArtifact || {};
   const stepArtifactError2 = stepArtifact.error && typeof stepArtifact.error === "object" ? stepArtifact.error : {};
+  const artifact = catalogArtifactFromValidation(stepArtifact) || null;
   let resolvedPythonSourcePath = pythonSourcePath ? path3.resolve(pythonSourcePath) : "";
   const artifactSourceKind = String(
     stepArtifact.sourceKind || stepArtifactError2.sourceKind || ""
@@ -22365,6 +22366,7 @@ function readStepSourceStatus({
     file,
     stepPath: file,
     sourceKind,
+    artifact,
     ...resolvedPythonSourcePath ? { sourcePath: repoRelativePath(resolvedRepoRoot, resolvedPythonSourcePath) } : {}
   };
   if (!fileStats(resolvedStepPath)) {
@@ -22495,6 +22497,13 @@ function sourcePathForInlineStepGlbArtifact(glbPath) {
   }
   return path3.join(path3.dirname(glbPath), name.slice(1, -".glb".length));
 }
+function sourcePathForInlineStepParameter(parameterPath) {
+  const name = path3.basename(parameterPath);
+  if (!isInlineStepParameterPath(parameterPath)) {
+    return null;
+  }
+  return path3.join(path3.dirname(parameterPath), name.slice(1, -".js".length));
+}
 function catalogArtifactFromValidation(stepArtifact) {
   if (!stepArtifact || typeof stepArtifact !== "object") {
     return void 0;
@@ -22510,10 +22519,16 @@ function catalogArtifactFromValidation(stepArtifact) {
   const currentHash = String(rawError.currentHash || "").trim();
   const sourceHash = String(rawError.sourceHash || "").trim();
   const sourceFingerprint = String(rawError.sourceFingerprint || "").trim();
+  const stepPath = String(rawError.stepPath || "").trim();
+  const glbPath = String(rawError.glbPath || "").trim();
+  const cadPath = String(rawError.cadPath || "").trim();
   return {
     ok: false,
     error,
     ...rawError.stale ? { stale: true } : {},
+    ...stepPath ? { stepPath } : {},
+    ...glbPath ? { glbPath } : {},
+    ...cadPath ? { cadPath } : {},
     ...sourceKind ? { sourceKind } : {},
     ...sourceHash ? { sourceHash } : {},
     ...sourceFingerprint ? { sourceFingerprint } : {},
@@ -22521,6 +22536,54 @@ function catalogArtifactFromValidation(stepArtifact) {
     ...currentHash ? { currentHash } : {},
     ...message ? { message } : {}
   };
+}
+function readStepCatalogMetadata({ repoRoot, glbPath } = {}) {
+  if (!fileStats(glbPath)) {
+    return {};
+  }
+  let container = null;
+  try {
+    container = readGlbTopologyContainer(glbPath);
+    const extension = container.gltf?.extensions?.[STEP_TOPOLOGY_EXTENSION];
+    if (!extension || typeof extension !== "object" || Array.isArray(extension)) {
+      return {};
+    }
+    if (!isCurrentStepTopologySchemaVersion(extension.schemaVersion)) {
+      return {};
+    }
+    const manifest = parseJsonBufferView(
+      container.fd,
+      container.gltf,
+      container.binOffset,
+      container.binLength,
+      extension.indexView,
+      extension.encoding
+    );
+    const sourceKind = String(manifest?.sourceKind || "step").trim().toLowerCase() === "python" ? "python" : "step";
+    const sourceIdentity = sourceKind === "python" ? generatorSourcePathFromManifest(repoRoot, manifest?.sourcePath) : sourcePathFromManifest(repoRoot, manifest?.sourcePath);
+    return {
+      topology: {
+        index: manifest,
+        entryKind: String(extension.entryKind || manifest?.entryKind || "").trim().toLowerCase(),
+        hasSelector: Boolean(extension.selectorView),
+        hasDisplayEdges: Boolean(extension.edgeView)
+      },
+      sourceKind,
+      sourcePath: sourceIdentity.sourcePath,
+      sourceHash: String(manifest?.sourceHash || ""),
+      sourceFingerprint: String(manifest?.sourceFingerprint || ""),
+      stepHash: String(manifest?.stepHash || "")
+    };
+  } catch {
+    return {};
+  } finally {
+    if (container?.fd !== null && container?.fd !== void 0) {
+      try {
+        fs2.closeSync(container.fd);
+      } catch {
+      }
+    }
+  }
 }
 function pythonStepSourceFromStepMetadata(repoRoot, stepPath) {
   const metadata = readGeneratedFileMetadata(stepPath, "step");
@@ -22542,22 +22605,28 @@ function pythonStepSourceFromStepMetadata(repoRoot, stepPath) {
     sourceFingerprint: String(metadata.sourceFingerprint || "")
   };
 }
-function createStepEntry({ repoRoot, rootPath, sourcePath, extension }) {
+function createStepEntry({ repoRoot, rootPath, sourcePath, extension, includeArtifactStatus = true }) {
   const cadPath = cadPathForStepSource(repoRoot, sourcePath, extension);
-  const { topology, stepArtifact, glbPath } = validateStepTopologyArtifact({
+  const validation = includeArtifactStatus ? validateStepTopologyArtifact({
     repoRoot,
     sourcePath,
     cadPath
-  });
+  }) : null;
+  const glbPath = validation?.glbPath || inlineStepGlbArtifactPathForSource(sourcePath);
+  const catalogMetadata = includeArtifactStatus ? {} : readStepCatalogMetadata({ repoRoot, glbPath });
+  const topology = validation?.topology || catalogMetadata.topology || null;
+  const stepArtifact = validation?.stepArtifact || {};
   const glbAsset = assetForPath(repoRoot, glbPath);
   const stepModuleAsset = assetForPath(repoRoot, stepParameterPathForStepSource(sourcePath));
-  const artifact = catalogArtifactFromValidation(stepArtifact);
+  const artifact = includeArtifactStatus ? catalogArtifactFromValidation(stepArtifact) : void 0;
   const artifactSourceKind = String(
-    stepArtifact.sourceKind || stepArtifact.error?.sourceKind || artifact?.sourceKind || ""
+    stepArtifact.sourceKind || stepArtifact.error?.sourceKind || catalogMetadata.sourceKind || artifact?.sourceKind || ""
   ).trim().toLowerCase();
-  const metadataPythonSource = artifact && artifactSourceKind !== "python" ? pythonStepSourceFromStepMetadata(repoRoot, sourcePath) : null;
+  const metadataPythonSource = (!includeArtifactStatus || artifact) && artifactSourceKind !== "python" ? pythonStepSourceFromStepMetadata(repoRoot, sourcePath) : null;
   const sourceKind = artifactSourceKind === "python" || metadataPythonSource ? "python" : "step";
-  const artifactSourcePath = String(stepArtifact.sourcePath || stepArtifact.error?.sourcePath || "").trim();
+  const artifactSourcePath = String(
+    stepArtifact.sourcePath || stepArtifact.error?.sourcePath || catalogMetadata.sourcePath || ""
+  ).trim();
   const pythonSourcePath = artifactSourcePath || metadataPythonSource?.sourcePath || "";
   return {
     file: fileRefForSource(rootPath, sourcePath),
@@ -22570,8 +22639,8 @@ function createStepEntry({ repoRoot, rootPath, sourcePath, extension }) {
       source: {
         file: pythonSourcePath,
         sourcePath: pythonSourcePath,
-        ...stepArtifact.sourceHash || metadataPythonSource?.sourceHash ? { sourceHash: stepArtifact.sourceHash || metadataPythonSource.sourceHash } : {},
-        ...stepArtifact.sourceFingerprint || metadataPythonSource?.sourceFingerprint ? { sourceFingerprint: stepArtifact.sourceFingerprint || metadataPythonSource.sourceFingerprint } : {}
+        ...stepArtifact.sourceHash || catalogMetadata.sourceHash || metadataPythonSource?.sourceHash ? { sourceHash: stepArtifact.sourceHash || catalogMetadata.sourceHash || metadataPythonSource.sourceHash } : {},
+        ...stepArtifact.sourceFingerprint || catalogMetadata.sourceFingerprint || metadataPythonSource?.sourceFingerprint ? { sourceFingerprint: stepArtifact.sourceFingerprint || catalogMetadata.sourceFingerprint || metadataPythonSource.sourceFingerprint } : {}
       }
     } : {},
     ...stepModuleAsset ? { moduleUrl: stepModuleAsset.url } : {},
@@ -22683,7 +22752,118 @@ function compareEntries(a, b) {
     sensitivity: "base"
   });
 }
-function scanCadDirectory({ repoRoot, rootDir: rootDir2 = DEFAULT_VIEWER_ROOT_DIR, includePath = null } = {}) {
+function pathHasSkippedDirectory(rootPath, filePath) {
+  const relativePath = scanRelativePath(rootPath, filePath);
+  if (!relativePathStaysInsideRoot2(relativePath)) {
+    return true;
+  }
+  const parts = relativePath.split("/").filter(Boolean);
+  return parts.slice(0, -1).some((part) => shouldSkipDirectory(part));
+}
+function logicalStepSourcePathForInlineArtifactPath(filePath) {
+  if (isInlineStepGlbArtifactPath(filePath)) {
+    return sourcePathForInlineStepGlbArtifact(filePath);
+  }
+  if (isInlineStepParameterPath(filePath)) {
+    return sourcePathForInlineStepParameter(filePath);
+  }
+  return null;
+}
+function logicalStepSourceExistsForSidecar(sourcePath) {
+  return Boolean(
+    sourcePath && (fileStats(sourcePath) || fileStats(inlineStepGlbArtifactPathForSource(sourcePath)) || fileStats(stepParameterPathForStepSource(sourcePath)))
+  );
+}
+function catalogFileRefForPath({ repoRoot, rootDir: rootDir2 = DEFAULT_VIEWER_ROOT_DIR, filePath } = {}) {
+  if (!repoRoot) {
+    throw new Error("repoRoot is required");
+  }
+  if (!filePath) {
+    throw new Error("filePath is required");
+  }
+  const resolved = resolveViewerRoot(repoRoot, rootDir2);
+  const resolvedFilePath = path3.resolve(filePath);
+  if (!pathIsInside2(resolvedFilePath, resolved.rootPath) || pathHasSkippedDirectory(resolved.rootPath, resolvedFilePath)) {
+    return "";
+  }
+  const logicalStepSourcePath = logicalStepSourcePathForInlineArtifactPath(resolvedFilePath);
+  if (logicalStepSourcePath) {
+    return fileRefForSource(resolved.rootPath, logicalStepSourcePath);
+  }
+  if (isPathInsidePerStepViewerDirectory(resolvedFilePath) || isPathInsidePerUrdfViewerDirectory(resolvedFilePath)) {
+    return "";
+  }
+  const extension = path3.extname(resolvedFilePath).toLowerCase();
+  return SOURCE_EXTENSIONS.has(extension) ? fileRefForSource(resolved.rootPath, resolvedFilePath) : "";
+}
+function scanCadFile({
+  repoRoot,
+  rootDir: rootDir2 = DEFAULT_VIEWER_ROOT_DIR,
+  filePath,
+  includeArtifactStatus = true
+} = {}) {
+  if (!repoRoot) {
+    throw new Error("repoRoot is required");
+  }
+  if (!filePath) {
+    throw new Error("filePath is required");
+  }
+  const resolved = resolveViewerRoot(repoRoot, rootDir2);
+  const resolvedFilePath = path3.resolve(filePath);
+  if (!pathIsInside2(resolvedFilePath, resolved.rootPath) || pathHasSkippedDirectory(resolved.rootPath, resolvedFilePath)) {
+    return null;
+  }
+  const logicalStepSourcePath = logicalStepSourcePathForInlineArtifactPath(resolvedFilePath);
+  if (logicalStepSourcePath) {
+    if (!logicalStepSourceExistsForSidecar(logicalStepSourcePath)) {
+      return null;
+    }
+    return createStepEntry({
+      repoRoot,
+      rootPath: resolved.rootPath,
+      sourcePath: logicalStepSourcePath,
+      extension: path3.extname(logicalStepSourcePath).toLowerCase(),
+      includeArtifactStatus
+    });
+  }
+  if (isPathInsidePerStepViewerDirectory(resolvedFilePath) || isPathInsidePerUrdfViewerDirectory(resolvedFilePath)) {
+    return null;
+  }
+  const extension = path3.extname(resolvedFilePath).toLowerCase();
+  if (!SOURCE_EXTENSIONS.has(extension) || !fileStats(resolvedFilePath)) {
+    if ((extension === ".step" || extension === ".stp") && fileStats(inlineStepGlbArtifactPathForSource(resolvedFilePath))) {
+      return createStepEntry({
+        repoRoot,
+        rootPath: resolved.rootPath,
+        sourcePath: resolvedFilePath,
+        extension,
+        includeArtifactStatus
+      });
+    }
+    return null;
+  }
+  if (extension === ".step" || extension === ".stp") {
+    return createStepEntry({
+      repoRoot,
+      rootPath: resolved.rootPath,
+      sourcePath: resolvedFilePath,
+      extension,
+      includeArtifactStatus
+    });
+  }
+  return createSingleAssetEntry({
+    repoRoot,
+    rootPath: resolved.rootPath,
+    sourcePath: resolvedFilePath,
+    extension
+  });
+}
+function scanCadDirectory({
+  repoRoot,
+  rootDir: rootDir2 = DEFAULT_VIEWER_ROOT_DIR,
+  includePath = null,
+  includeArtifactStatus = true
+} = {}) {
   if (!repoRoot) {
     throw new Error("repoRoot is required");
   }
@@ -22699,7 +22879,8 @@ function scanCadDirectory({ repoRoot, rootDir: rootDir2 = DEFAULT_VIEWER_ROOT_DI
         repoRoot,
         rootPath: resolved.rootPath,
         sourcePath: logicalSourcePath,
-        extension
+        extension,
+        includeArtifactStatus
       });
     }
     return createSingleAssetEntry({
@@ -22713,6 +22894,9 @@ function scanCadDirectory({ repoRoot, rootDir: rootDir2 = DEFAULT_VIEWER_ROOT_DI
     schemaVersion: CAD_CATALOG_SCHEMA_VERSION,
     entries
   };
+}
+function sortCatalogEntries(entries) {
+  return [...Array.isArray(entries) ? entries : []].sort(compareEntries);
 }
 function isServedCadAsset(filePath) {
   const extension = path3.extname(filePath).toLowerCase();
@@ -22734,7 +22918,7 @@ function isServedCadAsset(filePath) {
   return false;
 }
 
-// packages/cadjs/src/lib/generationStatus.mjs
+// viewer/packages/cadjs/src/lib/generationStatus.mjs
 import fs3 from "node:fs";
 import path4 from "node:path";
 var GENERATION_STATUS_SCHEMA_VERSION = 1;
@@ -22925,11 +23109,11 @@ function isGenerationStatusPath(filePath, repoRoot) {
   return pathIsInside3(resolved, path4.resolve(repoRoot)) && isGenerationLockFileName(path4.basename(resolved));
 }
 
-// packages/cadjs/src/lib/step/stepArtifactCompiler.mjs
+// viewer/packages/cadjs/src/lib/step/stepArtifactCompiler.mjs
 import fs5 from "node:fs";
 import path6 from "node:path";
 
-// packages/cadjs/src/lib/step/pythonStepArtifact.mjs
+// viewer/packages/cadjs/src/lib/step/pythonStepArtifact.mjs
 import { spawn } from "node:child_process";
 import fs4 from "node:fs";
 import path5 from "node:path";
@@ -23145,7 +23329,7 @@ function ensurePythonStepTopologyArtifact({
   });
 }
 
-// packages/cadjs/src/lib/step/stepArtifactCompiler.mjs
+// viewer/packages/cadjs/src/lib/step/stepArtifactCompiler.mjs
 var STEP_SUFFIXES = /* @__PURE__ */ new Set([".step", ".stp"]);
 function sameStemPythonGeneratorPath(stepPath) {
   const extension = path6.extname(stepPath).toLowerCase();
@@ -23456,11 +23640,16 @@ function createLocalAssetBackend({
   }
   const repoRoot = path7.resolve(workspaceRoot2);
   const defaultRootDir = normalizeViewerRootDir(rootDir2);
+  const catalogCache = /* @__PURE__ */ new Map();
   function resolveRoot(nextRootDir = defaultRootDir) {
     return resolveViewerRoot(repoRoot, nextRootDir);
   }
   function readCatalog({ rootDir: nextRootDir = defaultRootDir } = {}) {
-    return refreshCatalog({ rootDir: nextRootDir });
+    const normalizedDir = normalizeViewerRootDir(nextRootDir);
+    if (!catalogCache.has(normalizedDir)) {
+      return refreshCatalog({ rootDir: normalizedDir });
+    }
+    return catalogCache.get(normalizedDir);
   }
   function readCatalogSafe({ rootDir: nextRootDir = defaultRootDir } = {}) {
     try {
@@ -23471,7 +23660,94 @@ function createLocalAssetBackend({
   }
   function refreshCatalog({ rootDir: nextRootDir = defaultRootDir } = {}) {
     const normalizedDir = normalizeViewerRootDir(nextRootDir);
-    return normalizeCatalog(scanCadDirectory({ repoRoot, rootDir: normalizedDir }));
+    const catalog = normalizeCatalog(scanCadDirectory({
+      repoRoot,
+      rootDir: normalizedDir,
+      includeArtifactStatus: false
+    }));
+    catalogCache.set(normalizedDir, catalog);
+    return catalog;
+  }
+  function replaceCatalogEntry(catalog, fileRef, nextEntry) {
+    const normalizedRef = normalizedFileRef(fileRef);
+    if (!normalizedRef) {
+      return normalizeCatalog(catalog);
+    }
+    const previousEntries = Array.isArray(catalog?.entries) ? catalog.entries : [];
+    const entries = previousEntries.filter((entry) => normalizedFileRef(entry?.file) !== normalizedRef);
+    if (nextEntry) {
+      entries.push(nextEntry);
+    }
+    return normalizeCatalog({
+      ...catalog,
+      entries: sortCatalogEntries(entries)
+    });
+  }
+  function refreshCatalogEntryForFile({ rootDir: nextRootDir = defaultRootDir, filePath } = {}) {
+    const normalizedDir = normalizeViewerRootDir(nextRootDir);
+    const currentCatalog = readCatalog({ rootDir: normalizedDir });
+    const nextEntry = scanCadFile({
+      repoRoot,
+      rootDir: normalizedDir,
+      filePath,
+      includeArtifactStatus: false
+    });
+    const fileRef = nextEntry?.file || catalogFileRefForPath({ repoRoot, rootDir: normalizedDir, filePath });
+    if (!fileRef) {
+      return currentCatalog;
+    }
+    const nextCatalog = replaceCatalogEntry(currentCatalog, fileRef, nextEntry);
+    catalogCache.set(normalizedDir, nextCatalog);
+    return nextCatalog;
+  }
+  function refreshCatalogForPythonSource({ rootDir: nextRootDir = defaultRootDir, filePath } = {}) {
+    const normalizedDir = normalizeViewerRootDir(nextRootDir);
+    const resolvedRoot = resolveRoot(normalizedDir);
+    const resolvedFilePath = path7.resolve(filePath);
+    const sourcePath = repoRelativePath(repoRoot, resolvedFilePath);
+    const currentCatalog = readCatalog({ rootDir: normalizedDir });
+    const matchingFileRefs = new Set(
+      currentCatalog.entries.filter((entry) => normalizedFileRef(entry?.source?.sourcePath || entry?.source?.file) === sourcePath).map((entry) => normalizedFileRef(entry.file)).filter(Boolean)
+    );
+    const sameStemStepPath = path7.join(path7.dirname(resolvedFilePath), `${path7.basename(resolvedFilePath, ".py")}.step`);
+    if (sameStemStepPath === resolvedRoot.rootPath || pathIsInside(sameStemStepPath, resolvedRoot.rootPath)) {
+      const sameStemEntry = scanCadFile({
+        repoRoot,
+        rootDir: normalizedDir,
+        filePath: sameStemStepPath,
+        includeArtifactStatus: false
+      });
+      const sameStemFileRef = sameStemEntry?.file || catalogFileRefForPath({ repoRoot, rootDir: normalizedDir, filePath: sameStemStepPath });
+      if (sameStemEntry || catalogEntryForFileRef(currentCatalog, sameStemFileRef)) {
+        matchingFileRefs.add(sameStemFileRef);
+      }
+    }
+    if (!matchingFileRefs.size) {
+      return refreshCatalog({ rootDir: normalizedDir });
+    }
+    let nextCatalog = currentCatalog;
+    for (const fileRef of matchingFileRefs) {
+      const outputPath = path7.resolve(resolvedRoot.rootPath, fileRef);
+      nextCatalog = replaceCatalogEntry(
+        nextCatalog,
+        fileRef,
+        scanCadFile({
+          repoRoot,
+          rootDir: normalizedDir,
+          filePath: outputPath,
+          includeArtifactStatus: false
+        })
+      );
+    }
+    catalogCache.set(normalizedDir, nextCatalog);
+    return nextCatalog;
+  }
+  function refreshCatalogForPath({ rootDir: nextRootDir = defaultRootDir, filePath } = {}) {
+    const extension = path7.extname(String(filePath || "")).toLowerCase();
+    if (extension === ".py") {
+      return refreshCatalogForPythonSource({ rootDir: nextRootDir, filePath });
+    }
+    return refreshCatalogEntryForFile({ rootDir: nextRootDir, filePath });
   }
   function resolveStepSource(fileRef, { resolvedRoot = resolveRoot(), catalog = null } = {}) {
     const relativeFileRef = normalizedFileRef(fileRef);
@@ -23759,6 +24035,7 @@ function createLocalAssetBackend({
     readCatalog,
     readCatalogSafe,
     refreshCatalog,
+    refreshCatalogForPath,
     resolveStepSource,
     readStepSourceStatus: readStepSourceStatusForFile,
     resolveFileAssetAccess,
@@ -24709,7 +24986,7 @@ function buildHostedViewerServerInfo({
   };
 }
 
-// packages/cadjs/src/lib/viewerServerInfo.mjs
+// viewer/packages/cadjs/src/lib/viewerServerInfo.mjs
 import path10 from "node:path";
 var VIEWER_SERVER_INFO_SCHEMA_VERSION = 1;
 var VIEWER_SERVER_APP_ID = "cad-viewer";
@@ -24748,7 +25025,7 @@ function buildViewerServerInfo({
   };
 }
 
-// packages/cadjs/src/lib/viewerConfig.mjs
+// viewer/packages/cadjs/src/lib/viewerConfig.mjs
 var DEFAULT_VIEWER_GITHUB_URL = "";
 function normalizeViewerDefaultFile(value = "") {
   const rawValue = String(value ?? "").trim();
@@ -24771,6 +25048,66 @@ function normalizeViewerGithubUrlCandidate(value = "") {
   }
 }
 
+// viewer/src/server/serverLifetime.mjs
+var DEFAULT_SERVER_LIFETIME_MS = 12 * 60 * 60 * 1e3;
+var MAX_SERVER_LIFETIME_MS = 2147483647;
+function normalizeServerLifetimeMs(value, defaultMs = null) {
+  const rawValue = String(value ?? "").trim();
+  if (!rawValue) {
+    return defaultMs;
+  }
+  const parsed = Number.parseInt(rawValue, 10);
+  if (!Number.isInteger(parsed) || parsed <= 0 || parsed > MAX_SERVER_LIFETIME_MS) {
+    return defaultMs;
+  }
+  return parsed;
+}
+function formatServerLifetime(ms) {
+  if (ms % (60 * 60 * 1e3) === 0) {
+    return `${ms / (60 * 60 * 1e3)}h`;
+  }
+  if (ms % (60 * 1e3) === 0) {
+    return `${ms / (60 * 1e3)}m`;
+  }
+  if (ms % 1e3 === 0) {
+    return `${ms / 1e3}s`;
+  }
+  return `${ms}ms`;
+}
+function closeHttpServer(server2) {
+  return new Promise((resolve, reject) => {
+    server2.close((error) => {
+      if (error) {
+        reject(error);
+        return;
+      }
+      resolve();
+    });
+  });
+}
+function scheduleProcessShutdown({
+  lifetimeMs = DEFAULT_SERVER_LIFETIME_MS,
+  label = "CAD Viewer server",
+  close = async () => {
+  }
+} = {}) {
+  const normalizedLifetimeMs = normalizeServerLifetimeMs(lifetimeMs, DEFAULT_SERVER_LIFETIME_MS);
+  const timer = setTimeout(() => {
+    console.log(`${label} reached ${formatServerLifetime(normalizedLifetimeMs)} lifetime; shutting down.`);
+    const forceExit = setTimeout(() => process.exit(0), 5e3);
+    forceExit.unref?.();
+    Promise.resolve().then(() => close()).then(
+      () => process.exit(0),
+      (error) => {
+        console.error(`${label} shutdown failed: ${error instanceof Error ? error.message : String(error)}`);
+        process.exit(1);
+      }
+    );
+  }, normalizedLifetimeMs);
+  timer.unref?.();
+  return timer;
+}
+
 // viewer/src/server/server.mjs
 var serverModuleDir = path11.dirname(fileURLToPath3(import.meta.url));
 var viewerAppRoot = path11.basename(path11.dirname(serverModuleDir)) === "src" ? path11.resolve(serverModuleDir, "..", "..") : path11.resolve(serverModuleDir, "..");
@@ -24785,6 +25122,7 @@ var backendKind = normalizeViewerAssetBackend(process.env.VIEWER_ASSET_BACKEND);
 var rootDir = rootDirForAssetBackend(backendKind, process.env);
 var port = normalizeViewerPort(process.env.VIEWER_PORT, DEFAULT_VIEWER_PORT);
 var host = process.env.VIEWER_HOST || "127.0.0.1";
+var serverLifetimeMs = normalizeServerLifetimeMs(process.env.VIEWER_SERVER_LIFETIME_MS);
 var distRoot = path11.resolve(viewerAppRoot, "dist");
 var backend = backendKind === VIEWER_ASSET_BACKENDS.VERCEL_BLOB ? createVercelBlobAssetBackend({
   ...vercelBlobConfigFromEnv(process.env),
@@ -24828,4 +25166,11 @@ function runMiddleware(index, req, res) {
 var server = http.createServer((req, res) => runMiddleware(0, req, res));
 server.listen(port, host, () => {
   console.log(`CAD Viewer backend listening on http://${host}:${port}/ (${backend.kind})`);
+  if (serverLifetimeMs !== null) {
+    scheduleProcessShutdown({
+      lifetimeMs: serverLifetimeMs,
+      label: "CAD Viewer backend",
+      close: () => closeHttpServer(server)
+    });
+  }
 });

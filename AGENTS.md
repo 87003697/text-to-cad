@@ -36,6 +36,9 @@ product and `models/` as the shared fixture/artifact area.
   one-off, or local-only helper scripts there; use `tmp/` or `/tmp` instead.
 - `viewer/`, `packages` are the source of truth for CAD Viewer and shared CAD runtime behavior. Duplicate files under skills such as `skills/cad-viewer/scripts/viewer`, `skills/cad-viewer/scripts/packages/`, `skills/cad/scripts/packages/`, and snapshot runtimes are generated copies that should not be edited.
 - When changing skill behavior that uses `packages/cadjs`, `packages/cadpy`, or `skills/cad-viewer/scripts/viewer`, edit the root source in `packages/*` or `viewer/*`, then rebuild the generated skill copies. Never patch the copies as the lasting fix.
+- `viewer/packages/*` contains generated viewer-local package copies for
+  standalone viewer deployments. Edit `packages/*` first, then run
+  `scripts/build/build-viewer.sh` to refresh the copies.
 - `packages/cadjs` must stay reusable/non-React; app UI and workflow state belong in `viewer/`.
 - `packages/cadpy` owns reusable Python artifact generation; skills should use bundled package code, not sibling skill imports.
 - Create new packages like `packages/cadpy_metadata` when it doesn't make sense to bundle heavy requirements of other cadpy skills (prefix new packages with `cadpy_*`).
@@ -43,7 +46,7 @@ product and `models/` as the shared fixture/artifact area.
 - Keep release versioning in lockstep: the git tag, plugin manifests and
   `plugins/*/VERSION`, package manifests/locks, Python `pyproject.toml` files,
   and any other repo-owned release version numbers should all match. The
-  current release version is `0.1.0`.
+  current release version is `0.1.1`.
 
 ## Environments
 
@@ -60,7 +63,7 @@ when touching shared surfaces or before handoff:
 - Full repo validation: `scripts/test.sh`
 - All generated runtime freshness: `scripts/build.sh --check`
 - CAD skill or `packages/cadpy`: `scripts/build/build-cad-skill.sh --check`
-- Root Viewer Python package copy: `scripts/build/build-viewer.sh --check`
+- Root Viewer package copies: `scripts/build/build-viewer.sh --check`
 - CAD Viewer or `packages/cadjs`: `npm --prefix packages/cadjs test`, `npm --prefix viewer run test`, `npm --prefix viewer run build`, `scripts/build/build-cad-viewer-skill.sh --check`
 - URDF/SRDF/SDF `cadpy_metadata` runtimes: `scripts/build/build-urdf-skill.sh --check`, `scripts/build/build-srdf-skill.sh --check`, `scripts/build/build-sdf-skill.sh --check`
 - Plugin packages: `scripts/check/validate-plugins.sh`
@@ -78,14 +81,14 @@ When modifying Viewer behavior, always run the root source app in dev mode for i
 do not run the generated viewer from the cad-viewer skill while developing.
 
 ```bash
-npm --prefix viewer run dev:ensure -- --workspace-root "$PWD" --root-dir models
+npm --prefix viewer run dev:ensure -- --root-dir "$PWD"
 ```
 
 For packaged skill runtime review:
 
 ```bash
 npm --prefix skills/cad-viewer/scripts/viewer run serve:ensure -- \
-  --workspace-root "$PWD" --root-dir models
+  --root-dir "$PWD"
 ```
 
 ## Git And LFS

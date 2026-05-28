@@ -61,11 +61,59 @@ test("local backend serves catalog from an in-memory scan without writing catalo
       bytes: "solid sample\nendsolid sample\n".length,
     }]);
     fs.writeFileSync(path.join(modelRoot, "late.stl"), "solid late\nendsolid late\n");
-    assert.equal(backend.readCatalog().entries.some((entry) => entry.file === "late.stl"), true);
+    assert.equal(backend.readCatalog().entries.some((entry) => entry.file === "late.stl"), false);
+    assert.equal(backend.refreshCatalog().entries.some((entry) => entry.file === "late.stl"), true);
     assert.equal(fs.existsSync(hiddenCatalogPath), false);
     assert.equal(fs.existsSync(visibleCatalogPath), false);
     assert.equal(fs.existsSync(modelCatalogPath), false);
     assert.equal("writeCatalog" in backend, false);
+  });
+});
+
+test("local backend incrementally refreshes changed CAD catalog entries", async () => {
+  await withTempWorkspace((workspaceRoot) => {
+    const modelRoot = path.join(workspaceRoot, "models");
+    fs.mkdirSync(modelRoot, { recursive: true });
+    const firstPath = path.join(modelRoot, "first.stl");
+    const secondPath = path.join(modelRoot, "second.stl");
+    fs.writeFileSync(firstPath, "solid first\nendsolid first\n");
+    const backend = createLocalAssetBackend({ workspaceRoot, rootDir: "models" });
+
+    assert.deepEqual(backend.readCatalog().entries.map((entry) => entry.file), ["first.stl"]);
+
+    fs.writeFileSync(secondPath, "solid second\nendsolid second\n");
+    assert.deepEqual(backend.readCatalog().entries.map((entry) => entry.file), ["first.stl"]);
+    assert.deepEqual(
+      backend.refreshCatalogForPath({ filePath: secondPath }).entries.map((entry) => entry.file),
+      ["first.stl", "second.stl"]
+    );
+
+    fs.unlinkSync(firstPath);
+    assert.deepEqual(
+      backend.refreshCatalogForPath({ filePath: firstPath }).entries.map((entry) => entry.file),
+      ["second.stl"]
+    );
+  });
+});
+
+test("local backend incrementally refreshes STEP entries when sidecars change", async () => {
+  await withTempWorkspace((workspaceRoot) => {
+    const modelRoot = path.join(workspaceRoot, "models");
+    const stepPath = path.join(modelRoot, "part.step");
+    const modulePath = path.join(modelRoot, ".part.step.js");
+    fs.mkdirSync(modelRoot, { recursive: true });
+    fs.writeFileSync(stepPath, "ISO-10303-21;\nEND-ISO-10303-21;\n");
+    const backend = createLocalAssetBackend({ workspaceRoot, rootDir: "models" });
+
+    assert.equal(backend.readCatalog().entries[0].moduleUrl, undefined);
+
+    fs.writeFileSync(modulePath, "export default { manifest: { schemaVersion: 1 } };\n");
+    const withModule = backend.refreshCatalogForPath({ filePath: modulePath });
+    assert.ok(withModule.entries[0].moduleUrl.startsWith("/models/.part.step.js?v="));
+
+    fs.unlinkSync(modulePath);
+    const withoutModule = backend.refreshCatalogForPath({ filePath: modulePath });
+    assert.equal(withoutModule.entries[0].moduleUrl, undefined);
   });
 });
 
@@ -207,6 +255,23 @@ test("local backend reports missing Python-backed STEP files dynamically", async
     assert.equal(status.sourceKind, "python");
     assert.equal(status.step.status, "missing");
     assert.equal(status.step.missing, true);
+  });
+});
+
+test("local backend defers STEP artifact status to current-file status reads", async () => {
+  await withTempWorkspace((workspaceRoot) => {
+    const modelRoot = path.join(workspaceRoot, "models");
+    fs.mkdirSync(modelRoot, { recursive: true });
+    fs.writeFileSync(path.join(modelRoot, "part.step"), "ISO-10303-21;\nEND-ISO-10303-21;\n");
+    const backend = createLocalAssetBackend({ workspaceRoot, rootDir: "models" });
+
+    const catalogEntry = backend.readCatalog().entries[0];
+    const status = backend.readStepSourceStatus({ fileRef: "part.step" });
+
+    assert.equal(catalogEntry.file, "part.step");
+    assert.equal(catalogEntry.artifact, undefined);
+    assert.equal(status.artifact.error, "missing_glb");
+    assert.equal(status.artifact.glbPath, "models/.part.step.glb");
   });
 });
 

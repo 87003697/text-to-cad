@@ -2,7 +2,7 @@
   "name": "cad-viewer",
   "private": true,
   "type": "module",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "scripts": {
     "dev": "vite dev",
     "dev:ensure": "node scripts/ensure-dev.mjs",
@@ -22,7 +22,7 @@
   },
   "dependencies": {
     "@vercel/blob": "^2.4.0",
-    "cadjs": "file:../packages/cadjs",
+    "cadjs": "file:./packages/cadjs",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
     "lucide-react": "^1.8.0",

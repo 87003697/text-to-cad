@@ -37,8 +37,6 @@ class SnapshotCliTests(unittest.TestCase):
                 "models/simple/cylindrical_cap.step",
                 "--output",
                 "tmp/cap.png",
-                "--root-dir",
-                "models",
                 "--display",
                 "wireframe",
                 "--size-profile",
@@ -49,7 +47,8 @@ class SnapshotCliTests(unittest.TestCase):
         job = load_job_from_options(options, stdin=_TtyStringIO(), cwd=Path.cwd())
 
         self.assertEqual(job["input"], "models/simple/cylindrical_cap.step")
-        self.assertEqual(job["rootDir"], "models")
+        self.assertNotIn("workspaceRoot", job)
+        self.assertNotIn("rootDir", job)
         self.assertEqual(job["outputs"][0]["path"], "tmp/cap.png")
         self.assertEqual(job["display"], {"mode": "wireframe"})
         self.assertEqual(job["render"]["sizeProfile"], "simple")
@@ -72,18 +71,14 @@ class SnapshotCliTests(unittest.TestCase):
                     {
                         "jobs": [
                             {
-                                "input": "part.step",
-                                "workspaceRoot": str(root),
-                                "rootDir": "models",
+                                "input": "models/part.step",
                                 "outputs": [
                                     {"path": "tmp/iso.png", "camera": "iso"},
                                     {"path": "tmp/front.png", "camera": "front"},
                                 ],
                             },
                             {
-                                "input": "part.step",
-                                "workspaceRoot": str(root),
-                                "rootDir": "models",
+                                "input": "models/part.step",
                                 "mode": "orbit",
                                 "outputs": [{"path": "tmp/orbit.gif"}],
                             },
@@ -109,6 +104,49 @@ class SnapshotCliTests(unittest.TestCase):
                 "tmp/orbit_20260527T163012Z.gif",
             ],
         )
+
+    def test_render_job_derives_asset_root_from_input_path(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory).resolve()
+            models = root / "models"
+            models.mkdir()
+            (models / "part.step").write_text("ISO-10303-21;\nEND-ISO-10303-21;\n", encoding="utf-8")
+            (models / ".part.step.glb").write_bytes(b"glb")
+
+            original_ensure = snapshot_main.ensure_step_topology_artifact
+            try:
+                snapshot_main.ensure_step_topology_artifact = lambda *args, **kwargs: None
+                packet = resolve_render_job_packet(
+                    {
+                        "input": "models/part.step",
+                        "outputs": [{"path": "tmp/iso.png", "camera": "iso"}],
+                    },
+                    cwd=root,
+                )
+            finally:
+                snapshot_main.ensure_step_topology_artifact = original_ensure
+
+        job = packet["jobs"][0]
+        self.assertNotIn("workspaceRoot", job)
+        self.assertNotIn("rootDir", job)
+        self.assertEqual(job["resolved"]["rootPath"], str(models))
+        self.assertEqual(job["resolved"]["inputUrl"], "/__render_asset/part.step")
+        self.assertEqual(job["resolved"]["glbUrl"], "/__render_asset/.part.step.glb")
+
+    def test_snapshot_root_flags_and_job_fields_are_removed(self) -> None:
+        with self.assertRaisesRegex(SnapshotError, "Unknown argument: --workspace-root"):
+            parse_snapshot_args(["--workspace-root", "/tmp"])
+        with self.assertRaisesRegex(SnapshotError, "Unknown argument: --root-dir"):
+            parse_snapshot_args(["--root-dir", "models"])
+        with self.assertRaisesRegex(SnapshotError, "no longer accept workspaceRoot or rootDir"):
+            resolve_render_job_packet(
+                {
+                    "input": "part.step",
+                    "workspaceRoot": "/tmp",
+                    "outputs": [{"path": "tmp/iso.png"}],
+                },
+                cwd=Path.cwd(),
+            )
 
     def test_timestamp_output_path_preserves_extension(self) -> None:
         self.assertEqual(

@@ -12,7 +12,7 @@ import time
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from pathlib import Path, PurePosixPath
+from pathlib import Path
 from typing import Any
 from urllib.parse import quote, unquote, urlparse
 
@@ -34,7 +34,6 @@ SNAPSHOT_RENDER_URL = f"{SNAPSHOT_ORIGIN}/render.html"
 SNAPSHOT_ROUTE_GLOB = f"{SNAPSHOT_ORIGIN}/**"
 RUNTIME_DIR = Path(__file__).resolve().parent / "runtime"
 RENDER_HTML_PATH = RUNTIME_DIR / "render.html"
-DEFAULT_VIEWER_ROOT_DIR = ""
 DEFAULT_RENDER_THEME_ID = "workbench"
 DEFAULT_TIMEOUT_SECONDS = 300
 RENDER_BROWSER_STARTUP_TIMEOUT_MS = 15_000
@@ -88,8 +87,6 @@ class SnapshotOptions:
     size_profile: str = ""
     params: object = None
     params_specified: bool = False
-    workspace_root: str = ""
-    root_dir: str = ""
     view_labels: bool = False
     json: bool = False
     help: bool = False
@@ -111,7 +108,7 @@ def help_text() -> str:
   python scripts/snapshot --job -
   python scripts/snapshot --input models/part.step --output /tmp/part.png --appearance workbench
 
-Shortcut flags are for common STEP/STP snapshots. --job accepts one render job, an array of render jobs, or { "jobs": [...] }. Every job input must be .step, .stp, or a same-stem Python generator; direct GLB/STL/3MF/DXF/G-code/robot-description inputs are unsupported. The default appearance is the workbench saved theme. --appearance accepts a saved theme name, an inline JSON appearance settings object, or a JSON appearance settings file path. --display accepts solid, wireframe, an inline JSON display settings object, or a JSON display settings file path. --camera accepts a preset, azimuth:elevation pair, or JSON object with preset, position, target, up, and zoom fields. Option JSON is direct settings JSON, not a wrapped job fragment. Full JSON jobs use top-level appearance and display. Use --view-labels to burn the camera/view label into shortcut outputs. Use --params with STEP parameter sidecar JSON values, and --size-profile for default dimensions such as simple, diagnostic, labeled, assembly, presentation, orbit, or contact-sheet. Output file names are saved with a shared UTC seconds timestamp before the extension.
+Shortcut flags are for common STEP/STP snapshots. --job accepts one render job, an array of render jobs, or { "jobs": [...] }. Every job input must be a relative or absolute .step/.stp path, or a same-stem Python generator; direct GLB/STL/3MF/DXF/G-code/robot-description inputs are unsupported. The default appearance is the workbench saved theme. --appearance accepts a saved theme name, an inline JSON appearance settings object, or a JSON appearance settings file path. --display accepts solid, wireframe, an inline JSON display settings object, or a JSON display settings file path. --camera accepts a preset, azimuth:elevation pair, or JSON object with preset, position, target, up, and zoom fields. Option JSON is direct settings JSON, not a wrapped job fragment. Full JSON jobs use top-level appearance and display. Use --view-labels to burn the camera/view label into shortcut outputs. Use --params with STEP parameter sidecar JSON values, and --size-profile for default dimensions such as simple, diagnostic, labeled, assembly, presentation, orbit, or contact-sheet. Output file names are saved with a shared UTC seconds timestamp before the extension.
 """
 
 
@@ -216,16 +213,6 @@ def parse_snapshot_args(argv: Sequence[str]) -> SnapshotOptions:
             index += 1
         elif arg.startswith("--height="):
             options.height = positive_integer(arg[len("--height=") :], "--height")
-        elif arg == "--workspace-root":
-            options.workspace_root = parse_required_value(argv, index, arg)
-            index += 1
-        elif arg.startswith("--workspace-root="):
-            options.workspace_root = arg[len("--workspace-root=") :]
-        elif arg == "--root-dir":
-            options.root_dir = parse_required_value(argv, index, arg)
-            index += 1
-        elif arg.startswith("--root-dir="):
-            options.root_dir = arg[len("--root-dir=") :]
         else:
             raise SnapshotError(f"Unknown argument: {arg}")
         index += 1
@@ -417,8 +404,6 @@ def load_job_from_options(
 
     job: dict[str, object] = {
         "input": options.input,
-        "workspaceRoot": options.workspace_root or "",
-        "rootDir": options.root_dir or "",
         "mode": options.mode,
         "outputs": [] if options.mode == "list" else [output],
         "appearance": load_appearance_option(options.appearance, cwd=resolved_cwd),
@@ -433,17 +418,6 @@ def load_job_from_options(
     return job
 
 
-def normalize_viewer_root_dir(value: object = DEFAULT_VIEWER_ROOT_DIR) -> str:
-    raw_value = str(value if value is not None else "").strip()
-    slash_normalized = raw_value.replace("\\", "/")
-    normalized = str(PurePosixPath(slash_normalized))
-    if not normalized or normalized == ".":
-        return DEFAULT_VIEWER_ROOT_DIR
-    if normalized == ".." or normalized.startswith("../"):
-        raise SnapshotError(f"CAD Viewer root directory must stay inside the workspace: {raw_value}")
-    return normalized.rstrip("/")
-
-
 def path_is_inside_or_equal(child: Path, parent: Path) -> bool:
     resolved_child = child.resolve()
     resolved_parent = parent.resolve()
@@ -452,28 +426,6 @@ def path_is_inside_or_equal(child: Path, parent: Path) -> bool:
         return True
     except ValueError:
         return False
-
-
-def resolve_workspace_root(
-    *,
-    workspace_root: object = "",
-    env: Mapping[str, str] = os.environ,
-    cwd: Path | None = None,
-) -> Path:
-    resolved_cwd = (cwd or Path.cwd()).resolve()
-    explicit_root = str(workspace_root or env.get("VIEWER_WORKSPACE_ROOT") or "").strip()
-    if explicit_root:
-        return (resolved_cwd / explicit_root).resolve() if not Path(explicit_root).is_absolute() else Path(explicit_root).resolve()
-    init_cwd = str(env.get("INIT_CWD") or "").strip()
-    return Path(init_cwd).resolve() if init_cwd else resolved_cwd
-
-
-def resolve_viewer_root(workspace_root: Path, root_dir: object = DEFAULT_VIEWER_ROOT_DIR) -> tuple[str, Path]:
-    normalized_dir = normalize_viewer_root_dir(root_dir)
-    root_path = (workspace_root / normalized_dir).resolve() if normalized_dir else workspace_root.resolve()
-    if not path_is_inside_or_equal(root_path, workspace_root):
-        raise SnapshotError(f"CAD Viewer root directory must stay inside the workspace: {normalized_dir}")
-    return normalized_dir, root_path
 
 
 def input_kind(file_path: Path) -> str:
@@ -499,25 +451,12 @@ def same_stem_python_generator_path(step_path: Path) -> Path | None:
         return None
 
 
-def resolve_input_path(raw_input: object, *, workspace_root: Path, root_path: Path, cwd: Path) -> Path:
+def resolve_input_path(raw_input: object, *, cwd: Path) -> Path:
     input_text = str(raw_input or "").strip()
+    if not input_text:
+        raise SnapshotError("render job is missing input")
     raw_path = Path(input_text)
-    if raw_path.is_absolute():
-        candidates = [raw_path.resolve()]
-    else:
-        candidates = [
-            (workspace_root / input_text).resolve(),
-            (root_path / input_text).resolve(),
-            (cwd / input_text).resolve(),
-        ]
-
-    unique_candidates: list[Path] = []
-    for candidate in candidates:
-        if candidate not in unique_candidates:
-            unique_candidates.append(candidate)
-    selected = next((candidate for candidate in unique_candidates if candidate.exists()), unique_candidates[0])
-    if not path_is_inside_or_equal(selected, root_path):
-        raise SnapshotError(f"Render input must be inside the CAD Viewer scan root: {input_text}")
+    selected = raw_path.resolve() if raw_path.is_absolute() else (cwd / raw_path).resolve()
     if not selected.exists():
         if selected.suffix.lower() in {".step", ".stp"} and same_stem_python_generator_path(selected):
             return selected
@@ -531,7 +470,7 @@ def encode_path_param(value: str) -> str:
 
 def asset_url_for_path(file_path: Path, root_path: Path) -> str:
     if not path_is_inside_or_equal(file_path, root_path):
-        raise SnapshotError(f"Render asset must be inside the CAD Viewer scan root: {file_path}")
+        raise SnapshotError(f"Render asset must be inside the snapshot render root: {file_path}")
     return f"/__render_asset/{encode_path_param(file_path.resolve().relative_to(root_path.resolve()).as_posix())}"
 
 
@@ -623,9 +562,13 @@ def normalize_snapshot_job_packet(raw_payload: object) -> tuple[bool, list[objec
     return True, [raw_payload]
 
 
-def ensure_render_job_step_artifact(job: Mapping[str, object], *, workspace_root: Path, input_path: Path, step_path: Path) -> None:
+def reference_root_for_input(input_path: Path, cwd: Path) -> Path:
+    return cwd if path_is_inside_or_equal(input_path, cwd) else input_path.parent
+
+
+def ensure_render_job_step_artifact(job: Mapping[str, object], *, reference_root: Path, input_path: Path, step_path: Path) -> None:
     target = ResolvedStepTarget(
-        cad_path=cad_ref_for_step_path(workspace_root, step_path),
+        cad_path=cad_ref_for_step_path(reference_root, step_path),
         kind="part",
         source_path=input_path,
         step_path=step_path,
@@ -639,7 +582,6 @@ def ensure_render_job_step_artifact(job: Mapping[str, object], *, workspace_root
 def resolve_render_job(
     raw_job: object,
     *,
-    env: Mapping[str, str] = os.environ,
     cwd: Path | None = None,
     timestamp: str | None = None,
 ) -> dict[str, object]:
@@ -650,24 +592,30 @@ def resolve_render_job(
         raise SnapshotError("render jobs use appearance; theme is reserved for saved appearance settings")
     if "params" in job:
         raise SnapshotError("render jobs use stepParameters; params is reserved for shortcut --params parsing")
+    forbidden_root_fields = [field for field in ("workspaceRoot", "rootDir") if field in job]
+    if forbidden_root_fields:
+        raise SnapshotError(
+            "snapshot jobs no longer accept workspaceRoot or rootDir; pass a relative or absolute input path instead"
+        )
 
     resolved_cwd = (cwd or Path.cwd()).resolve()
-    workspace_root = resolve_workspace_root(workspace_root=job.get("workspaceRoot"), env=env, cwd=resolved_cwd)
-    root_dir, root_path = resolve_viewer_root(workspace_root, job.get("rootDir") or env.get("VIEWER_ROOT_DIR") or "")
     raw_input = str(job.get("input") or "").strip()
     if not raw_input:
         raise SnapshotError("render job is missing input")
 
-    input_path = resolve_input_path(raw_input, workspace_root=workspace_root, root_path=root_path, cwd=resolved_cwd)
+    input_path = resolve_input_path(raw_input, cwd=resolved_cwd)
+    root_path = input_path.parent.resolve()
+    reference_root = reference_root_for_input(input_path, resolved_cwd)
     kind = input_kind(input_path)
     source_path = input_path
     if kind == "python":
         input_path = logical_step_path_for_python_source(input_path)
+        root_path = input_path.parent.resolve()
         kind = "step"
     if kind not in {"step", "stp"}:
         raise SnapshotError("Snapshot supports only STEP/STP inputs or same-stem Python generators")
 
-    ensure_render_job_step_artifact(job, workspace_root=workspace_root, input_path=source_path, step_path=input_path)
+    ensure_render_job_step_artifact(job, reference_root=reference_root, input_path=source_path, step_path=input_path)
 
     glb_path = existing_part_glb_path(input_path) or part_glb_path(input_path)
     if not glb_path.exists():
@@ -727,8 +675,6 @@ def resolve_render_job(
     job.pop("clip", None)
     job.pop("clipSettings", None)
     resolved: dict[str, object] = {
-        "workspaceRoot": str(workspace_root),
-        "rootDir": root_dir,
         "rootPath": str(root_path),
         "inputPath": str(input_path),
         "inputUrl": asset_url_for_path(input_path, root_path),
@@ -745,19 +691,17 @@ def resolve_render_job(
         "mode": mode,
         "display": job.get("display") if is_plain_object(job.get("display")) else {"mode": "solid"},
         "render": normalized_render,
-        "workspaceRoot": str(workspace_root),
-        "rootDir": root_dir,
         "outputs": normalized_outputs,
         "resolved": resolved,
     }
 
 
-def resolve_render_job_packet(raw_payload: object, *, env: Mapping[str, str] = os.environ, cwd: Path | None = None) -> dict[str, object]:
+def resolve_render_job_packet(raw_payload: object, *, cwd: Path | None = None) -> dict[str, object]:
     single, jobs = normalize_snapshot_job_packet(raw_payload)
     timestamp = snapshot_timestamp()
     return {
         "single": single,
-        "jobs": [resolve_render_job(job, env=env, cwd=cwd, timestamp=timestamp) for job in jobs],
+        "jobs": [resolve_render_job(job, cwd=cwd, timestamp=timestamp) for job in jobs],
     }
 
 
@@ -1000,7 +944,6 @@ def print_render_result(result: Mapping[str, object], *, json_output: bool = Fal
 async def run_render_cli_async(
     argv: Sequence[str],
     *,
-    env: Mapping[str, str] = os.environ,
     cwd: Path | None = None,
     stdout: Any = sys.stdout,
     stdin: Any = sys.stdin,
@@ -1010,7 +953,7 @@ async def run_render_cli_async(
         stdout.write(help_text())
         return 0
     raw_payload = load_job_from_options(options, stdin=stdin, cwd=cwd)
-    packet = resolve_render_job_packet(raw_payload, env=env, cwd=cwd)
+    packet = resolve_render_job_packet(raw_payload, cwd=cwd)
     result = await render_resolved_job_packet(packet)
     write_render_outputs(result)
     print_render_result(result, json_output=options.json, stdout=stdout)
@@ -1020,14 +963,13 @@ async def run_render_cli_async(
 def run_render_cli(
     argv: Sequence[str],
     *,
-    env: Mapping[str, str] = os.environ,
     cwd: Path | None = None,
     stdout: Any = sys.stdout,
     stderr: Any = sys.stderr,
     stdin: Any = sys.stdin,
 ) -> int:
     try:
-        return asyncio.run(run_render_cli_async(argv, env=env, cwd=cwd, stdout=stdout, stdin=stdin))
+        return asyncio.run(run_render_cli_async(argv, cwd=cwd, stdout=stdout, stdin=stdin))
     except SnapshotError as exc:
         stderr.write(f"{exc}\n")
         return 1

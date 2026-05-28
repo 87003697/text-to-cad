@@ -5,11 +5,15 @@ import { spawn } from "node:child_process";
 import {
   CAD_CATALOG_SCHEMA_VERSION,
   DEFAULT_VIEWER_ROOT_DIR,
+  catalogFileRefForPath,
   isServedCadAsset,
   normalizeViewerRootDir,
   readStepSourceStatus,
+  repoRelativePath,
   resolveViewerRoot,
   scanCadDirectory,
+  scanCadFile,
+  sortCatalogEntries,
 } from "cadjs/lib/cadDirectoryScanner.mjs";
 import {
   generationStatusDir as resolveGenerationStatusDir,
@@ -196,13 +200,18 @@ export function createLocalAssetBackend({
   }
   const repoRoot = path.resolve(workspaceRoot);
   const defaultRootDir = normalizeViewerRootDir(rootDir);
+  const catalogCache = new Map();
 
   function resolveRoot(nextRootDir = defaultRootDir) {
     return resolveViewerRoot(repoRoot, nextRootDir);
   }
 
   function readCatalog({ rootDir: nextRootDir = defaultRootDir } = {}) {
-    return refreshCatalog({ rootDir: nextRootDir });
+    const normalizedDir = normalizeViewerRootDir(nextRootDir);
+    if (!catalogCache.has(normalizedDir)) {
+      return refreshCatalog({ rootDir: normalizedDir });
+    }
+    return catalogCache.get(normalizedDir);
   }
 
   function readCatalogSafe({ rootDir: nextRootDir = defaultRootDir } = {}) {
@@ -215,7 +224,102 @@ export function createLocalAssetBackend({
 
   function refreshCatalog({ rootDir: nextRootDir = defaultRootDir } = {}) {
     const normalizedDir = normalizeViewerRootDir(nextRootDir);
-    return normalizeCatalog(scanCadDirectory({ repoRoot, rootDir: normalizedDir }));
+    const catalog = normalizeCatalog(scanCadDirectory({
+      repoRoot,
+      rootDir: normalizedDir,
+      includeArtifactStatus: false,
+    }));
+    catalogCache.set(normalizedDir, catalog);
+    return catalog;
+  }
+
+  function replaceCatalogEntry(catalog, fileRef, nextEntry) {
+    const normalizedRef = normalizedFileRef(fileRef);
+    if (!normalizedRef) {
+      return normalizeCatalog(catalog);
+    }
+    const previousEntries = Array.isArray(catalog?.entries) ? catalog.entries : [];
+    const entries = previousEntries.filter((entry) => normalizedFileRef(entry?.file) !== normalizedRef);
+    if (nextEntry) {
+      entries.push(nextEntry);
+    }
+    return normalizeCatalog({
+      ...catalog,
+      entries: sortCatalogEntries(entries),
+    });
+  }
+
+  function refreshCatalogEntryForFile({ rootDir: nextRootDir = defaultRootDir, filePath } = {}) {
+    const normalizedDir = normalizeViewerRootDir(nextRootDir);
+    const currentCatalog = readCatalog({ rootDir: normalizedDir });
+    const nextEntry = scanCadFile({
+      repoRoot,
+      rootDir: normalizedDir,
+      filePath,
+      includeArtifactStatus: false,
+    });
+    const fileRef = nextEntry?.file || catalogFileRefForPath({ repoRoot, rootDir: normalizedDir, filePath });
+    if (!fileRef) {
+      return currentCatalog;
+    }
+    const nextCatalog = replaceCatalogEntry(currentCatalog, fileRef, nextEntry);
+    catalogCache.set(normalizedDir, nextCatalog);
+    return nextCatalog;
+  }
+
+  function refreshCatalogForPythonSource({ rootDir: nextRootDir = defaultRootDir, filePath } = {}) {
+    const normalizedDir = normalizeViewerRootDir(nextRootDir);
+    const resolvedRoot = resolveRoot(normalizedDir);
+    const resolvedFilePath = path.resolve(filePath);
+    const sourcePath = repoRelativePath(repoRoot, resolvedFilePath);
+    const currentCatalog = readCatalog({ rootDir: normalizedDir });
+    const matchingFileRefs = new Set(
+      currentCatalog.entries
+        .filter((entry) => normalizedFileRef(entry?.source?.sourcePath || entry?.source?.file) === sourcePath)
+        .map((entry) => normalizedFileRef(entry.file))
+        .filter(Boolean)
+    );
+    const sameStemStepPath = path.join(path.dirname(resolvedFilePath), `${path.basename(resolvedFilePath, ".py")}.step`);
+    if (sameStemStepPath === resolvedRoot.rootPath || pathIsInside(sameStemStepPath, resolvedRoot.rootPath)) {
+      const sameStemEntry = scanCadFile({
+        repoRoot,
+        rootDir: normalizedDir,
+        filePath: sameStemStepPath,
+        includeArtifactStatus: false,
+      });
+      const sameStemFileRef = sameStemEntry?.file || catalogFileRefForPath({ repoRoot, rootDir: normalizedDir, filePath: sameStemStepPath });
+      if (sameStemEntry || catalogEntryForFileRef(currentCatalog, sameStemFileRef)) {
+        matchingFileRefs.add(sameStemFileRef);
+      }
+    }
+    if (!matchingFileRefs.size) {
+      return refreshCatalog({ rootDir: normalizedDir });
+    }
+
+    let nextCatalog = currentCatalog;
+    for (const fileRef of matchingFileRefs) {
+      const outputPath = path.resolve(resolvedRoot.rootPath, fileRef);
+      nextCatalog = replaceCatalogEntry(
+        nextCatalog,
+        fileRef,
+        scanCadFile({
+          repoRoot,
+          rootDir: normalizedDir,
+          filePath: outputPath,
+          includeArtifactStatus: false,
+        })
+      );
+    }
+    catalogCache.set(normalizedDir, nextCatalog);
+    return nextCatalog;
+  }
+
+  function refreshCatalogForPath({ rootDir: nextRootDir = defaultRootDir, filePath } = {}) {
+    const extension = path.extname(String(filePath || "")).toLowerCase();
+    if (extension === ".py") {
+      return refreshCatalogForPythonSource({ rootDir: nextRootDir, filePath });
+    }
+    return refreshCatalogEntryForFile({ rootDir: nextRootDir, filePath });
   }
 
   function resolveStepSource(fileRef, { resolvedRoot = resolveRoot(), catalog = null } = {}) {
@@ -554,6 +658,7 @@ export function createLocalAssetBackend({
     readCatalog,
     readCatalogSafe,
     refreshCatalog,
+    refreshCatalogForPath,
     resolveStepSource,
     readStepSourceStatus: readStepSourceStatusForFile,
     resolveFileAssetAccess,

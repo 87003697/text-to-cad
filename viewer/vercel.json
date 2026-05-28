@@ -9,9 +9,6 @@
   "installCommand": "npm ci",
   "buildCommand": "npm run build",
   "outputDirectory": "dist",
-  "env": {
-    "VIEWER_VERCEL_BLOB_PREFIX": "models"
-  },
   "rewrites": [
     {
       "source": "/__cad/server",

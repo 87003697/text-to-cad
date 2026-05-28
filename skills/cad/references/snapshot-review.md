@@ -35,6 +35,7 @@ Use a small packet first. Prefer a single `view` JSON job with these outputs:
 
 ```json
 {
+  "input": "models/part.step",
   "mode": "view",
   "outputs": [
     { "path": "/tmp/render/iso_shaded_edges.png", "camera": "iso", "width": 1600, "height": 1200 },
@@ -46,7 +47,7 @@ Use a small packet first. Prefer a single `view` JSON job with these outputs:
 }
 ```
 
-Set `input`, `workspaceRoot`, and `rootDir` for the primary STEP/STP artifact. The snapshot CLI defaults to `appearance: "workbench"` and `display.mode: "solid"`, matching CAD Viewer; labeled/section views default to 1600x1200 when dimensions are omitted. Use `render.sizeProfile: "assembly"` or `"assembly-large"` for complex assemblies that need 1800x1200 or 1920x1440. For CAD review packets, use still-image render modes `view` and `section`; set `display.mode` to `wireframe` for wire output.
+Set `input` to the primary STEP/STP artifact using a relative or absolute path. The snapshot CLI derives its internal render root from that input path. It defaults to `appearance: "workbench"` and `display.mode: "solid"`, matching CAD Viewer; labeled/section views default to 1600x1200 when dimensions are omitted. Use `render.sizeProfile: "assembly"` or `"assembly-large"` for complex assemblies that need 1800x1200 or 1920x1440. For CAD review packets, use still-image render modes `view` and `section`; set `display.mode` to `wireframe` for wire output.
 
 The snapshot CLI appends one shared UTC seconds timestamp before each output file extension when saving a packet, so readable paths like `iso_shaded_edges.png` become names such as `iso_shaded_edges_20260527T163012Z.png`.
 

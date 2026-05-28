@@ -87,6 +87,7 @@ function FileEntryButton({
   fileAccessBusyKey = "",
   onDownloadFileAsset,
   onRevealFileAsset,
+  onRevealInExplorerView,
   onCopyFileAssetReference,
   nested = false
 }) {
@@ -166,6 +167,7 @@ function FileEntryButton({
       busyKey={fileAccessBusyKey}
       onDownloadFileAsset={onDownloadFileAsset}
       onRevealFileAsset={onRevealFileAsset}
+      onRevealInExplorerView={onRevealInExplorerView}
       onCopyFileAssetReference={onCopyFileAssetReference}
     >
       {button}
@@ -195,6 +197,7 @@ function DirectoryNode({
   fileAccessBusyKey = "",
   onDownloadFileAsset,
   onRevealFileAsset,
+  onRevealInExplorerView,
   onCopyFileAssetReference,
   nested = false
 }) {
@@ -261,6 +264,7 @@ function DirectoryNode({
                     fileAccessBusyKey={fileAccessBusyKey}
                     onDownloadFileAsset={onDownloadFileAsset}
                     onRevealFileAsset={onRevealFileAsset}
+                    onRevealInExplorerView={onRevealInExplorerView}
                     onCopyFileAssetReference={onCopyFileAssetReference}
                     nested={true}
                   />
@@ -287,6 +291,7 @@ function DirectoryNode({
                     fileAccessBusyKey={fileAccessBusyKey}
                     onDownloadFileAsset={onDownloadFileAsset}
                     onRevealFileAsset={onRevealFileAsset}
+                    onRevealInExplorerView={onRevealInExplorerView}
                     onCopyFileAssetReference={onCopyFileAssetReference}
                     nested={true}
                   />
@@ -346,6 +351,7 @@ function FileViewerContents({
   fileAccessBusyKey = "",
   onDownloadFileAsset,
   onRevealFileAsset,
+  onRevealInExplorerView,
   onCopyFileAssetReference,
   resizable = true,
   onStartResize
@@ -399,6 +405,7 @@ function FileViewerContents({
                           fileAccessBusyKey={fileAccessBusyKey}
                           onDownloadFileAsset={onDownloadFileAsset}
                           onRevealFileAsset={onRevealFileAsset}
+                          onRevealInExplorerView={onRevealInExplorerView}
                           onCopyFileAssetReference={onCopyFileAssetReference}
                         />
                       );
@@ -424,6 +431,7 @@ function FileViewerContents({
                           fileAccessBusyKey={fileAccessBusyKey}
                           onDownloadFileAsset={onDownloadFileAsset}
                           onRevealFileAsset={onRevealFileAsset}
+                          onRevealInExplorerView={onRevealInExplorerView}
                           onCopyFileAssetReference={onCopyFileAssetReference}
                         />
                       </SidebarMenuItem>
@@ -469,6 +477,7 @@ export default function FileViewerSidebar({
   fileAccessBusyKey = "",
   onDownloadFileAsset,
   onRevealFileAsset,
+  onRevealInExplorerView,
   onCopyFileAssetReference,
   resizable = true,
   onStartResize
@@ -504,6 +513,7 @@ export default function FileViewerSidebar({
       fileAccessBusyKey={fileAccessBusyKey}
       onDownloadFileAsset={onDownloadFileAsset}
       onRevealFileAsset={onRevealFileAsset}
+      onRevealInExplorerView={onRevealInExplorerView}
       onCopyFileAssetReference={onCopyFileAssetReference}
       resizable={resizable}
       onStartResize={onStartResize}

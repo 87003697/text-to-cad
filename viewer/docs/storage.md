@@ -29,7 +29,7 @@ Current intended use:
   appearance settings.
 
 Avoid adding file-specific state to `localStorage`. If the value depends on the
-selected file, the active scan root, a generated asset hash, or a tab
+selected file, the active root directory, a generated asset hash, or a tab
 interaction, it belongs in per-file session state instead.
 
 ## Workspace sessionStorage
@@ -48,6 +48,9 @@ cad-viewer:workspace-session:v1
 Current fields:
 
 - `fileViewerOpen`: app-wide file viewer open/closed state.
+- `fileViewerExpandedDirectoryIds`: app-wide open folder ids for the file
+  viewer tree. When absent, the first selected file on page load seeds the
+  initial expanded folder tree; an empty array means all folders are closed.
 - `fileViewerWidthPx`: app-wide custom file viewer width, stored only when it
   differs from the default.
 - `fileSheetOpen`: app-wide file sheet open/closed state.
@@ -67,7 +70,7 @@ the same browser tab without becoming a durable global preference. Use
 `src/client/workbench/fileSessionState.js` rather than creating one-off storage
 keys.
 
-Per-file state is namespaced by the active scan root and keyed by file:
+Per-file state is namespaced by the active root directory and keyed by file:
 
 ```text
 cad-viewer:file-session:v1:<namespace>:<fileKey>

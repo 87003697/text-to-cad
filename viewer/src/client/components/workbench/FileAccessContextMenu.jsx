@@ -1,4 +1,3 @@
-import { Copy, Download, FolderOpen, Link, LoaderCircle } from "lucide-react";
 import {
   ContextMenu,
   ContextMenuContent,
@@ -6,6 +5,26 @@ import {
   ContextMenuTrigger
 } from "@/components/ui/context-menu";
 import { fileAccessAssetsForEntry } from "@/workbench/fileAccessAssets";
+
+function ExplorerViewSection({
+  entry,
+  onRevealInExplorerView
+}) {
+  if (typeof onRevealInExplorerView !== "function") {
+    return null;
+  }
+
+  return (
+    <ContextMenuItem
+      className="text-xs"
+      onSelect={() => {
+        onRevealInExplorerView(entry);
+      }}
+    >
+      <span className="min-w-0 truncate">Reveal in Explorer View</span>
+    </ContextMenuItem>
+  );
+}
 
 function FileAccessSection({
   entry,
@@ -16,6 +35,7 @@ function FileAccessSection({
   busyKey = "",
   onDownloadFileAsset,
   onRevealFileAsset,
+  onRevealInExplorerView,
   onCopyFileAssetReference
 }) {
   if (!asset) {
@@ -24,34 +44,25 @@ function FileAccessSection({
 
   const key = `${asset.fileRef}:${asset.asset}`;
   const revealBusy = busyKey === key;
-  const RevealIcon = revealBusy ? LoaderCircle : FolderOpen;
   const canCopyFileAssetReference = typeof onCopyFileAssetReference === "function";
 
   return (
     <>
-      <ContextMenuItem
-        className="text-xs"
-        onSelect={(event) => {
-          event.preventDefault();
-          onDownloadFileAsset(entry, asset.asset, asset);
-        }}
-      >
-        <Download className="size-3.5 shrink-0" aria-hidden="true" />
-        <span className="min-w-0 truncate">Download</span>
-      </ContextMenuItem>
       {canRevealFileAssets ? (
         <ContextMenuItem
           className="text-xs"
           disabled={revealBusy}
-          onSelect={(event) => {
-            event.preventDefault();
+          onSelect={() => {
             onRevealFileAsset(entry, asset.asset, asset);
           }}
         >
-          <RevealIcon className={revealBusy ? "size-3.5 shrink-0 animate-spin" : "size-3.5 shrink-0"} aria-hidden="true" />
-          <span className="min-w-0 truncate">Reveal in folder</span>
+          <span className="min-w-0 truncate">Reveal in Folder</span>
         </ContextMenuItem>
       ) : null}
+      <ExplorerViewSection
+        entry={entry}
+        onRevealInExplorerView={onRevealInExplorerView}
+      />
       {canCopyFileAssetPaths && canCopyFileAssetReference ? (
         <>
           <ContextMenuItem
@@ -60,7 +71,6 @@ function FileAccessSection({
               onCopyFileAssetReference(entry, asset.asset, asset, "path");
             }}
           >
-            <Copy className="size-3.5 shrink-0" aria-hidden="true" />
             <span className="min-w-0 truncate">Copy Path</span>
           </ContextMenuItem>
           <ContextMenuItem
@@ -69,7 +79,6 @@ function FileAccessSection({
               onCopyFileAssetReference(entry, asset.asset, asset, "relativePath");
             }}
           >
-            <Copy className="size-3.5 shrink-0" aria-hidden="true" />
             <span className="min-w-0 truncate">Copy Relative Path</span>
           </ContextMenuItem>
         </>
@@ -81,10 +90,17 @@ function FileAccessSection({
             onCopyFileAssetReference(entry, asset.asset, asset, "link");
           }}
         >
-          <Link className="size-3.5 shrink-0" aria-hidden="true" />
           <span className="min-w-0 truncate">Copy Link</span>
         </ContextMenuItem>
       ) : null}
+      <ContextMenuItem
+        className="text-xs"
+        onSelect={() => {
+          onDownloadFileAsset(entry, asset.asset, asset);
+        }}
+      >
+        <span className="min-w-0 truncate">Download</span>
+      </ContextMenuItem>
     </>
   );
 }
@@ -97,16 +113,18 @@ export default function FileAccessContextMenu({
   busyKey = "",
   onDownloadFileAsset,
   onRevealFileAsset,
+  onRevealInExplorerView,
   onCopyFileAssetReference,
   children
 }) {
-  const actionsAvailable = entry && typeof onDownloadFileAsset === "function";
-  if (!actionsAvailable) {
+  const revealInExplorerViewAvailable = entry && typeof onRevealInExplorerView === "function";
+  const assetActionsAvailable = entry && typeof onDownloadFileAsset === "function";
+  if (!revealInExplorerViewAvailable && !assetActionsAvailable) {
     return children;
   }
 
   const assets = fileAccessAssetsForEntry(entry);
-  if (!assets.output) {
+  if (!revealInExplorerViewAvailable && !assets.output) {
     return children;
   }
 
@@ -116,17 +134,26 @@ export default function FileAccessContextMenu({
         {children}
       </ContextMenuTrigger>
       <ContextMenuContent className="w-64">
-        <FileAccessSection
-          entry={entry}
-          asset={assets.output}
-          canRevealFileAssets={canRevealFileAssets && typeof onRevealFileAsset === "function"}
-          canCopyFileAssetLinks={canCopyFileAssetLinks}
-          canCopyFileAssetPaths={canCopyFileAssetPaths}
-          busyKey={busyKey}
-          onDownloadFileAsset={onDownloadFileAsset}
-          onRevealFileAsset={onRevealFileAsset}
-          onCopyFileAssetReference={onCopyFileAssetReference}
-        />
+        {!assets.output || !assetActionsAvailable ? (
+          <ExplorerViewSection
+            entry={entry}
+            onRevealInExplorerView={onRevealInExplorerView}
+          />
+        ) : null}
+        {assets.output && assetActionsAvailable ? (
+          <FileAccessSection
+            entry={entry}
+            asset={assets.output}
+            canRevealFileAssets={canRevealFileAssets && typeof onRevealFileAsset === "function"}
+            canCopyFileAssetLinks={canCopyFileAssetLinks}
+            canCopyFileAssetPaths={canCopyFileAssetPaths}
+            busyKey={busyKey}
+            onDownloadFileAsset={onDownloadFileAsset}
+            onRevealFileAsset={onRevealFileAsset}
+            onRevealInExplorerView={onRevealInExplorerView}
+            onCopyFileAssetReference={onCopyFileAssetReference}
+          />
+        ) : null}
       </ContextMenuContent>
     </ContextMenu>
   );

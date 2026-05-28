@@ -7,13 +7,15 @@ import test from "node:test";
 import {
   DEFAULT_ADAPTIVE_PORT_COUNT,
   DEFAULT_PORT_END,
+  DEFAULT_SERVER_LIFETIME_MS,
   buildViewerUrl,
   buildViteSpawnOptions,
   catalogHasFile,
   formatEnsureDevResult,
   parseEnsureDevArgs,
+  parseServerLifetimeMs,
   resolveEnsureDevRequest,
-  resolveWorkspaceRoot,
+  resolveRootDir,
   selectViewerServer,
   waitForMatchingServer,
 } from "./ensure-dev.mjs";
@@ -31,23 +33,39 @@ function makeTempWorkspace() {
 test("parseEnsureDevArgs accepts launcher options", () => {
   assert.deepEqual(
     parseEnsureDevArgs([
-      "--workspace-root", "/tmp/work",
-      "--root-dir=models",
+      "--root-dir", "/tmp/viewer-root",
       "--file", "sample.step",
       "--port=4180",
       "--port-end", "4188",
+      "--shutdown-after=30m",
       "--json",
     ]),
     {
-      workspaceRoot: "/tmp/work",
-      rootDir: "models",
+      rootDir: "/tmp/viewer-root",
       file: "sample.step",
       port: 4180,
       portEnd: 4188,
+      shutdownAfterMs: 30 * 60 * 1000,
       json: true,
       help: false,
     }
   );
+});
+
+test("parseServerLifetimeMs accepts explicit durations and rejects invalid values", () => {
+  assert.equal(parseServerLifetimeMs("750"), 750);
+  assert.equal(parseServerLifetimeMs("45s"), 45_000);
+  assert.equal(parseServerLifetimeMs("1.5h"), 90 * 60 * 1000);
+  assert.throws(() => parseServerLifetimeMs("0"), /between 1ms/);
+  assert.throws(() => parseServerLifetimeMs("forever"), /positive duration/);
+});
+
+test("parseEnsureDevArgs requires root-dir", () => {
+  assert.throws(
+    () => parseEnsureDevArgs(["--file", "sample.step"]),
+    /--root-dir is required/
+  );
+  assert.doesNotThrow(() => parseEnsureDevArgs(["--help"]));
 });
 
 test("parseEnsureDevArgs rejects repeated file flags", () => {
@@ -61,19 +79,28 @@ test("parseEnsureDevArgs rejects repeated file flags", () => {
   );
 });
 
-test("resolveWorkspaceRoot prefers explicit root, then INIT_CWD outside the app root", () => {
+test("resolveRootDir prefers explicit root, then INIT_CWD outside the app root", () => {
   const appRoot = path.join(os.tmpdir(), "cad-viewer-app");
   assert.equal(
-    resolveWorkspaceRoot({
-      workspaceRoot: "explicit",
+    resolveRootDir({
+      rootDir: "explicit",
       cwd: "/tmp",
       appRoot,
       env: { INIT_CWD: "/tmp/from-init" },
     }),
+    path.resolve("/tmp/from-init", "explicit")
+  );
+  assert.equal(
+    resolveRootDir({
+      rootDir: "explicit",
+      cwd: "/tmp",
+      appRoot,
+      env: {},
+    }),
     path.resolve("/tmp", "explicit")
   );
   assert.equal(
-    resolveWorkspaceRoot({
+    resolveRootDir({
       cwd: appRoot,
       appRoot,
       env: { INIT_CWD: "/tmp/from-init" },
@@ -82,41 +109,40 @@ test("resolveWorkspaceRoot prefers explicit root, then INIT_CWD outside the app 
   );
 });
 
-test("resolveEnsureDevRequest maps workspace-relative files inside root directories", () => {
-  const workspaceRoot = makeTempWorkspace();
-  fs.mkdirSync(path.join(workspaceRoot, "models"), { recursive: true });
-  fs.writeFileSync(path.join(workspaceRoot, "models", "sample.step"), "ISO-10303-21;\nEND-ISO-10303-21;\n");
+test("resolveEnsureDevRequest maps root-relative files inside the viewer root", () => {
+  const rootDir = makeTempWorkspace();
+  fs.mkdirSync(path.join(rootDir, "models"), { recursive: true });
+  fs.writeFileSync(path.join(rootDir, "models", "sample.step"), "ISO-10303-21;\nEND-ISO-10303-21;\n");
 
   const request = resolveEnsureDevRequest({
     options: {
-      workspaceRoot,
-      rootDir: "models",
+      rootDir,
       file: "models/sample.step",
       port: 4180,
       portEnd: 4182,
     },
-    cwd: workspaceRoot,
+    cwd: rootDir,
     env: {},
   });
 
-  assert.equal(request.workspaceRoot, workspaceRoot);
-  assert.equal(request.rootDir, "models");
-  assert.equal(request.rootPath, path.join(workspaceRoot, "models"));
-  assert.equal(request.fileParam, "sample.step");
+  assert.equal(request.workspaceRoot, rootDir);
+  assert.equal(request.rootDir, rootDir);
+  assert.equal(request.rootPath, rootDir);
+  assert.equal(request.fileParam, "models/sample.step");
   assert.equal(request.port, 4180);
   assert.equal(request.portEnd, 4182);
+  assert.equal(request.shutdownAfterMs, DEFAULT_SERVER_LIFETIME_MS);
 });
 
 test("resolveEnsureDevRequest expands the default port search window", () => {
-  const workspaceRoot = makeTempWorkspace();
-  fs.mkdirSync(path.join(workspaceRoot, "models"), { recursive: true });
+  const rootDir = makeTempWorkspace();
+  fs.mkdirSync(path.join(rootDir, "models"), { recursive: true });
 
   const request = resolveEnsureDevRequest({
     options: {
-      workspaceRoot,
-      rootDir: "models",
+      rootDir,
     },
-    cwd: workspaceRoot,
+    cwd: rootDir,
     env: {},
   });
 
@@ -125,59 +151,76 @@ test("resolveEnsureDevRequest expands the default port search window", () => {
 
   const configured = resolveEnsureDevRequest({
     options: {
-      workspaceRoot,
-      rootDir: "models",
+      rootDir,
     },
-    cwd: workspaceRoot,
+    cwd: rootDir,
     env: { VIEWER_PORT_END: "4180" },
   });
   assert.equal(configured.portEnd, 4180);
 });
 
-test("resolveEnsureDevRequest maps scan-root-relative and absolute file paths", () => {
+test("resolveEnsureDevRequest maps viewer-root-relative and absolute file paths", () => {
+  const rootDir = makeTempWorkspace();
+  const filePath = path.join(rootDir, "models", "nested", "sample part.step");
+  fs.mkdirSync(path.dirname(filePath), { recursive: true });
+  fs.writeFileSync(filePath, "ISO-10303-21;\nEND-ISO-10303-21;\n");
+
+  const rootRelative = resolveEnsureDevRequest({
+    options: {
+      rootDir,
+      file: "models/nested/sample part.step",
+    },
+    cwd: rootDir,
+    env: {},
+  });
+  assert.equal(rootRelative.fileParam, "models/nested/sample part.step");
+
+  const absolute = resolveEnsureDevRequest({
+    options: {
+      rootDir,
+      file: filePath,
+    },
+    cwd: rootDir,
+    env: {},
+  });
+  assert.equal(absolute.fileParam, "models/nested/sample part.step");
+});
+
+test("resolveEnsureDevRequest keeps relative roots under the caller workspace", () => {
   const workspaceRoot = makeTempWorkspace();
   const filePath = path.join(workspaceRoot, "models", "nested", "sample part.step");
   fs.mkdirSync(path.dirname(filePath), { recursive: true });
   fs.writeFileSync(filePath, "ISO-10303-21;\nEND-ISO-10303-21;\n");
 
-  const scanRelative = resolveEnsureDevRequest({
+  const request = resolveEnsureDevRequest({
     options: {
-      workspaceRoot,
       rootDir: "models",
-      file: "nested/sample part.step",
+      file: "models/nested/sample part.step",
     },
-    cwd: workspaceRoot,
-    env: {},
+    cwd: path.join(workspaceRoot, "viewer"),
+    env: { INIT_CWD: workspaceRoot },
   });
-  assert.equal(scanRelative.fileParam, "nested/sample part.step");
 
-  const absolute = resolveEnsureDevRequest({
-    options: {
-      workspaceRoot,
-      rootDir: "models",
-      file: filePath,
-    },
-    cwd: workspaceRoot,
-    env: {},
-  });
-  assert.equal(absolute.fileParam, "nested/sample part.step");
+  assert.equal(request.workspaceRoot, workspaceRoot);
+  assert.equal(request.rootDir, path.join(workspaceRoot, "models"));
+  assert.equal(request.rootPath, path.join(workspaceRoot, "models"));
+  assert.equal(request.fileParam, "nested/sample part.step");
 });
 
-test("resolveEnsureDevRequest rejects files outside the scan root", () => {
-  const workspaceRoot = makeTempWorkspace();
-  fs.mkdirSync(path.join(workspaceRoot, "models"), { recursive: true });
+test("resolveEnsureDevRequest rejects files outside the viewer root", () => {
+  const rootDir = makeTempWorkspace();
+  fs.mkdirSync(path.join(rootDir, "models"), { recursive: true });
   assert.throws(() => resolveEnsureDevRequest({
     options: {
-      workspaceRoot,
-      rootDir: "models",
+      rootDir,
       file: "../outside.step",
     },
-    cwd: workspaceRoot,
+    cwd: rootDir,
     env: {},
-  }), /inside the scan root/);
+  }), /inside the viewer root/);
 });
 
-test("buildViewerUrl adds scan-root-relative file params", () => {
+test("buildViewerUrl adds viewer-root-relative file params", () => {
   assert.equal(
     buildViewerUrl(
       { url: "http://127.0.0.1:4180", port: 4180 },
@@ -265,16 +308,14 @@ test("selectViewerServer scans the full range for reusable viewers before bindin
   assert.equal(selection.port, 4180);
 });
 
-test("selectViewerServer reuses registered viewers when live probes are blocked", async () => {
+test("selectViewerServer reuses registered viewers when probes and binding are permission-blocked", async () => {
   const rootPath = path.resolve("/tmp/work-a");
   const selection = await selectViewerServer({
     rootPath,
     port: 4178,
     portEnd: 4180,
     probeServer: async () => null,
-    canBind: async () => {
-      throw new Error("canBind should not be called when a registered CAD Viewer matches");
-    },
+    canBind: async () => ({ canBind: false, errorCode: "EPERM" }),
     registeredServers: [
       { app: "cad-viewer", rootPath, port: 4180, pid: process.pid, url: "http://127.0.0.1:4180" }
     ],
@@ -282,6 +323,23 @@ test("selectViewerServer reuses registered viewers when live probes are blocked"
 
   assert.equal(selection.action, "reuse");
   assert.equal(selection.port, 4180);
+});
+
+test("selectViewerServer does not reuse stale registry-only matches when another port can bind", async () => {
+  const rootPath = path.resolve("/tmp/work-a");
+  const selection = await selectViewerServer({
+    rootPath,
+    port: 4178,
+    portEnd: 4179,
+    probeServer: async () => null,
+    canBind: async (port) => port === 4179,
+    registeredServers: [
+      { app: "cad-viewer", rootPath, port: 4178, pid: process.pid, url: "http://127.0.0.1:4178" }
+    ],
+  });
+
+  assert.equal(selection.action, "start");
+  assert.equal(selection.port, 4179);
 });
 
 test("selectViewerServer skips different roots and starts on the first free port", async () => {
@@ -307,7 +365,7 @@ test("waitForMatchingServer waits until the requested file is cataloged", async 
     rootPath,
     fileParam: "arm.step",
     port: 4178,
-    timeoutMs: 100,
+    timeoutMs: 1000,
     intervalMs: 1,
     probeServer: async () => ({
       app: "cad-viewer",
@@ -343,9 +401,8 @@ test("viewer server registry records live servers and removes stale entries", ()
   const liveServer = {
     schemaVersion: 1,
     app: "cad-viewer",
-    workspaceRoot: "/tmp/workspace",
-    rootDir: "models",
-    rootPath: "/tmp/workspace/models",
+    rootDir: "",
+    rootPath: "/tmp/viewer-root",
     port: 4178,
     pid: process.pid,
     url: "http://127.0.0.1:4178",
@@ -370,19 +427,34 @@ test("viewer server registry records live servers and removes stale entries", ()
 
 test("buildViteSpawnOptions starts native Vite with explicit CAD Viewer environment", () => {
   const spawnOptions = buildViteSpawnOptions({
-    workspaceRoot: "/tmp/workspace",
-    rootDir: "models",
+    rootDir: "/tmp/workspace-root/models",
     port: 4182,
-    env: { PATH: "/bin" },
+    env: {
+      PATH: "/bin",
+      VIEWER_LOCAL_WORKSPACE_ROOT: "/tmp/legacy-root",
+      VIEWER_SERVER_LIFETIME_MS: "1",
+    },
   });
 
   assert.equal(spawnOptions.command, process.execPath);
   assert.equal(spawnOptions.args.at(-1), "dev");
   assert.equal(spawnOptions.options.env.VIEWER_ASSET_BACKEND, "local-fs");
-  assert.equal(spawnOptions.options.env.VIEWER_LOCAL_WORKSPACE_ROOT, "/tmp/workspace");
-  assert.equal(spawnOptions.options.env.VIEWER_LOCAL_ROOT_DIR, "models");
+  assert.equal("VIEWER_LOCAL_WORKSPACE_ROOT" in spawnOptions.options.env, false);
+  assert.equal(spawnOptions.options.env.VIEWER_LOCAL_ROOT_DIR, "/tmp/workspace-root/models");
   assert.equal(spawnOptions.options.env.VIEWER_PORT, "4182");
+  assert.equal(spawnOptions.options.env.VIEWER_SERVER_LIFETIME_MS, String(DEFAULT_SERVER_LIFETIME_MS));
   assert.equal(spawnOptions.options.detached, true);
+});
+
+test("buildViteSpawnOptions passes explicit shutdown lifetime", () => {
+  const spawnOptions = buildViteSpawnOptions({
+    rootDir: "/tmp/workspace-root/models",
+    port: 4182,
+    shutdownAfterMs: 60_000,
+    env: { PATH: "/bin" },
+  });
+
+  assert.equal(spawnOptions.options.env.VIEWER_SERVER_LIFETIME_MS, "60000");
 });
 
 test("formatEnsureDevResult can print JSON payloads", () => {

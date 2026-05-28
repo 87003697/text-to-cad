@@ -33,6 +33,10 @@ import {
   normalizeViewerAssetBackend,
   rootDirForAssetBackend,
 } from "./src/server/viewerEnv.mjs";
+import {
+  normalizeServerLifetimeMs,
+  scheduleProcessShutdown,
+} from "./src/server/serverLifetime.mjs";
 
 const viewerPort = normalizeViewerPort(process.env.VIEWER_PORT, DEFAULT_VIEWER_PORT);
 const viewerAppRoot = path.dirname(fileURLToPath(import.meta.url));
@@ -47,6 +51,7 @@ const buildViewerRootDir = rootDirForAssetBackend(buildViewerAssetBackend, proce
 const buildViewerDefaultFile = normalizeViewerDefaultFile(process.env.VIEWER_DEFAULT_FILE ?? "");
 const buildViewerGithubUrl = normalizeViewerGithubUrl(process.env.VIEWER_GITHUB_URL ?? "");
 const viewerAllowedHosts = normalizeViewerAllowedHosts(process.env.VIEWER_ALLOWED_HOSTS ?? "");
+const viewerServerLifetimeMs = normalizeServerLifetimeMs(process.env.VIEWER_SERVER_LIFETIME_MS);
 const localAssetBackend = createLocalAssetBackend({
   workspaceRoot,
   rootDir: localRootDirFromEnv(process.env),
@@ -107,6 +112,7 @@ function viteServerPort(server) {
 function cadCatalogPlugin({ enableStepArtifactBackend = false } = {}) {
   const activeDirectories = new Map();
   const refreshTimers = new Map();
+  const pendingRefreshes = new Map();
 
   function activateDirectory(server, rootDir) {
     const resolved = localAssetBackend.resolveRoot(rootDir);
@@ -118,21 +124,48 @@ function cadCatalogPlugin({ enableStepArtifactBackend = false } = {}) {
     return resolved;
   }
 
-  function scheduleCatalogRefresh(server, rootPath, dir) {
+  function scheduleCatalogRefresh(server, rootPath, dir, changedPath = "") {
     if (refreshTimers.has(rootPath)) {
       clearTimeout(refreshTimers.get(rootPath));
     }
+    const pending = pendingRefreshes.get(rootPath) || {
+      dir,
+      paths: new Set(),
+      full: false,
+    };
+    pending.dir = dir;
+    if (changedPath) {
+      pending.paths.add(path.resolve(changedPath));
+    } else {
+      pending.full = true;
+    }
+    pendingRefreshes.set(rootPath, pending);
     refreshTimers.set(rootPath, setTimeout(() => {
       refreshTimers.delete(rootPath);
+      const nextRefresh = pendingRefreshes.get(rootPath) || {
+        dir,
+        paths: new Set(),
+        full: true,
+      };
+      pendingRefreshes.delete(rootPath);
       try {
-        localAssetBackend.refreshCatalog({ rootDir: dir });
+        if (nextRefresh.full || typeof localAssetBackend.refreshCatalogForPath !== "function") {
+          localAssetBackend.refreshCatalog({ rootDir: nextRefresh.dir });
+        } else {
+          for (const filePath of nextRefresh.paths) {
+            localAssetBackend.refreshCatalogForPath({
+              rootDir: nextRefresh.dir,
+              filePath,
+            });
+          }
+        }
       } catch (error) {
         console.warn("Failed to refresh CAD catalog", error);
       }
       server.ws.send({
         type: "custom",
         event: "cad-catalog:changed",
-        data: { dir },
+        data: { dir: nextRefresh.dir },
       });
     }, 150));
   }
@@ -151,7 +184,7 @@ function cadCatalogPlugin({ enableStepArtifactBackend = false } = {}) {
     }
     for (const [rootPath, dir] of activeDirectories.entries()) {
       if (resolvedChangedPath === rootPath || pathIsInside(resolvedChangedPath, rootPath)) {
-        scheduleCatalogRefresh(server, rootPath, dir);
+        scheduleCatalogRefresh(server, rootPath, dir, resolvedChangedPath);
       }
     }
   }
@@ -203,10 +236,43 @@ function cadCatalogPlugin({ enableStepArtifactBackend = false } = {}) {
   };
 }
 
+function serverLifetimePlugin() {
+  return {
+    name: "cad-viewer-server-lifetime",
+    configureServer(server) {
+      if (viewerServerLifetimeMs === null) {
+        return;
+      }
+      let shutdownTimer = null;
+      const scheduleShutdown = () => {
+        shutdownTimer = scheduleProcessShutdown({
+          lifetimeMs: viewerServerLifetimeMs,
+          label: "CAD Viewer dev server",
+          close: () => server.close(),
+        });
+      };
+      if (server.httpServer?.listening) {
+        scheduleShutdown();
+      } else {
+        server.httpServer?.once("listening", scheduleShutdown);
+      }
+      server.httpServer?.once("close", () => {
+        if (shutdownTimer) {
+          clearTimeout(shutdownTimer);
+        }
+      });
+    },
+  };
+}
+
 export default defineConfig(({ command }) => ({
   root: viewerAppRoot,
   envPrefix: "VIEWER_",
-  plugins: [react(), cadCatalogPlugin({ enableStepArtifactBackend: command === "serve" })],
+  plugins: [
+    react(),
+    cadCatalogPlugin({ enableStepArtifactBackend: command === "serve" }),
+    serverLifetimePlugin(),
+  ],
   resolve: {
     alias: {
       "@": viewerClientRoot,

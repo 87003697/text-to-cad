@@ -147,13 +147,75 @@ test("stepFileStatusItems marks missing STEP artifacts as errors", () => {
   assert.equal(items[0].details.find((item) => item.label === "GLB artifact")?.value, "tom/STEP/.robot_arm.step.glb");
 });
 
-test("stepFileStatusItems keeps renderable STEP artifact metadata issues as warnings", () => {
+test("stepFileStatusItems reads artifact warnings from current-file status", () => {
+  const items = stepFileStatusItems({
+    entry: {
+      file: "tom/STEP/robot_arm.step",
+      kind: "assembly"
+    },
+    stepSourceStatus: {
+      artifact: {
+        ok: false,
+        error: "missing_glb",
+        sourceKind: "step",
+        stepPath: "models/tom/STEP/robot_arm.step",
+        glbPath: "models/tom/STEP/.robot_arm.step.glb"
+      },
+      step: {
+        ok: true,
+        status: "current",
+        missing: false,
+        stale: false
+      }
+    },
+    viewerServerInfo
+  });
+
+  assert.equal(items.length, 1);
+  assert.equal(items[0].title, "STEP artifact missing");
+  assert.equal(items[0].details.find((item) => item.label === "GLB artifact")?.value, "tom/STEP/.robot_arm.step.glb");
+});
+
+test("stepFileStatusItems keeps renderable STEP artifact issues as warnings", () => {
+  const renderableArtifactCases = [
+    ["stale_source_identity", true, "STEP artifact stale", "Generated GLB doesn't match the hash of the STEP file."],
+    ["missing_glb", false, "STEP artifact missing", "Generated GLB is missing."],
+    ["missing_step_topology", false, "STEP artifact metadata warning", "Generated GLB is missing STEP topology metadata."],
+    ["missing_selector_topology", false, "STEP artifact metadata warning", "Generated GLB is missing selector topology metadata."],
+    ["missing_edge_topology", false, "STEP artifact metadata warning", "Generated GLB is missing surface edge topology metadata."],
+    ["missing_surface_edge_attributes", false, "STEP artifact metadata warning", "Generated GLB is missing surface edge render attributes."],
+    ["unsupported_step_topology", false, "STEP artifact metadata warning", "Generated GLB topology metadata is unsupported."],
+    ["missing_source_path", false, "STEP artifact metadata warning", "Generated GLB metadata is missing its source path."],
+    ["missing_source_identity", false, "STEP artifact metadata warning", "Generated GLB is missing the hash of the STEP file."]
+  ];
+
+  for (const [error, stale, title, message] of renderableArtifactCases) {
+    const items = stepFileStatusItems({
+      entry: {
+        file: "simple/part.step",
+        kind: "part",
+        url: "/models/simple/.part.step.glb?v=hash",
+        hash: "glb-hash",
+        artifact: {
+          ok: false,
+          error,
+          stale
+        }
+      }
+    });
+
+    assert.equal(items.length, 1);
+    assert.equal(items[0].level, FILE_STATUS_LEVELS.WARNING);
+    assert.equal(items[0].title, title);
+    assert.equal(items[0].message, message);
+  }
+});
+
+test("stepFileStatusItems marks non-renderable STEP artifact issues as errors", () => {
   const items = stepFileStatusItems({
     entry: {
       file: "simple/part.step",
       kind: "part",
-      url: "/models/simple/.part.step.glb?v=hash",
-      hash: "glb-hash",
       artifact: {
         ok: false,
         error: "missing_source_path",
@@ -163,7 +225,7 @@ test("stepFileStatusItems keeps renderable STEP artifact metadata issues as warn
   });
 
   assert.equal(items.length, 1);
-  assert.equal(items[0].level, FILE_STATUS_LEVELS.WARNING);
+  assert.equal(items[0].level, FILE_STATUS_LEVELS.ERROR);
   assert.equal(items[0].title, "STEP artifact unavailable");
   assert.equal(items[0].message, "Generated GLB metadata is missing its source path.");
 });

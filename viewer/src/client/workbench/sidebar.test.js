@@ -855,6 +855,7 @@ test("workspace global session state stores global panel open state and only cus
 
   assert.deepEqual(readCadWorkspaceSessionState({ storage }), {
     fileViewerOpen: false,
+    fileViewerExpandedDirectoryIds: null,
     fileViewerWidthPx: null,
     fileSheetOpen: null,
     fileSheetWidthPx: null,
@@ -893,6 +894,7 @@ test("workspace global session state stores global panel open state and only cus
     defaultFileSheetWidthPx: CAD_WORKSPACE_COMPACT_TAB_TOOLS_WIDTH
   }), {
     fileViewerOpen: false,
+    fileViewerExpandedDirectoryIds: null,
     fileViewerWidthPx: null,
     fileSheetOpen: null,
     fileSheetWidthPx: CAD_WORKSPACE_DEFAULT_TAB_TOOLS_WIDTH,
@@ -913,6 +915,7 @@ test("workspace global session state stores global panel open state and only cus
   );
   assert.deepEqual(readCadWorkspaceSessionState({ storage }), {
     fileViewerOpen: false,
+    fileViewerExpandedDirectoryIds: null,
     fileViewerWidthPx: customFileViewerWidth,
     fileSheetOpen: null,
     fileSheetWidthPx: customFileSheetWidth,
@@ -937,6 +940,7 @@ test("workspace global session state stores global panel open state and only cus
   );
   assert.deepEqual(readCadWorkspaceSessionState({ storage }), {
     fileViewerOpen: true,
+    fileViewerExpandedDirectoryIds: null,
     fileViewerWidthPx: customFileViewerWidth,
     fileSheetOpen: false,
     fileSheetWidthPx: customFileSheetWidth,
@@ -959,8 +963,47 @@ test("workspace global session state stores global panel open state and only cus
   );
   assert.deepEqual(readCadWorkspaceSessionState({ storage }), {
     fileViewerOpen: false,
+    fileViewerExpandedDirectoryIds: null,
     fileViewerWidthPx: null,
     fileSheetOpen: true,
+    fileSheetWidthPx: null,
+    theme: null
+  });
+
+  assert.equal(writeCadWorkspaceSessionState({
+    fileViewerExpandedDirectoryIds: ["assemblies", "parts/servo", "assemblies"]
+  }, { storage }), true);
+  assert.deepEqual(
+    JSON.parse(storage.getItem(CAD_WORKSPACE_SESSION_STORAGE_KEY)),
+    {
+      version: 1,
+      fileViewerExpandedDirectoryIds: ["assemblies", "parts/servo"]
+    }
+  );
+  assert.deepEqual(readCadWorkspaceSessionState({ storage }), {
+    fileViewerOpen: false,
+    fileViewerExpandedDirectoryIds: ["assemblies", "parts/servo"],
+    fileViewerWidthPx: null,
+    fileSheetOpen: null,
+    fileSheetWidthPx: null,
+    theme: null
+  });
+
+  assert.equal(writeCadWorkspaceSessionState({
+    fileViewerExpandedDirectoryIds: []
+  }, { storage }), true);
+  assert.deepEqual(
+    JSON.parse(storage.getItem(CAD_WORKSPACE_SESSION_STORAGE_KEY)),
+    {
+      version: 1,
+      fileViewerExpandedDirectoryIds: []
+    }
+  );
+  assert.deepEqual(readCadWorkspaceSessionState({ storage }), {
+    fileViewerOpen: false,
+    fileViewerExpandedDirectoryIds: [],
+    fileViewerWidthPx: null,
+    fileSheetOpen: null,
     fileSheetWidthPx: null,
     theme: null
   });

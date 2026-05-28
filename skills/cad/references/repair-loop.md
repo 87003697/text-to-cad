@@ -158,13 +158,13 @@ Likely causes:
 
 - Node/npm unavailable
 - CAD Viewer app not built or cannot start
-- scan root differs from assumed root
-- returned file path is not relative to active scan root
+- root directory differs from assumed root
+- returned file path is not relative to the active root directory
 
 Fix:
 
 - hand the explicit artifact path to `$cad-viewer`
-- check `VIEWER_ROOT_DIR` when available
+- rerun `$cad-viewer` with the same `--root-dir` for the project
 - return the best documented link format
 - report startup failure if unresolved
 - rely on CLI facts/measurements for validation
@@ -173,8 +173,7 @@ Fix:
 
 Likely causes:
 
-- target is outside the CAD Viewer scan root or does not resolve to a STEP/STP file or Python generator
-- target path wrong
+- target input path is wrong, missing, or not a STEP/STP file or same-stem Python generator
 - adjacent CAD Viewer GLB/topology artifact missing
 - invalid render flags
 

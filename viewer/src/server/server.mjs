@@ -29,6 +29,11 @@ import {
   vercelBlobConfigFromEnv,
   VIEWER_ASSET_BACKENDS,
 } from "./viewerEnv.mjs";
+import {
+  closeHttpServer,
+  normalizeServerLifetimeMs,
+  scheduleProcessShutdown,
+} from "./serverLifetime.mjs";
 
 const serverModuleDir = path.dirname(fileURLToPath(import.meta.url));
 const viewerAppRoot = path.basename(path.dirname(serverModuleDir)) === "src"
@@ -45,6 +50,7 @@ const backendKind = normalizeViewerAssetBackend(process.env.VIEWER_ASSET_BACKEND
 const rootDir = rootDirForAssetBackend(backendKind, process.env);
 const port = normalizeViewerPort(process.env.VIEWER_PORT, DEFAULT_VIEWER_PORT);
 const host = process.env.VIEWER_HOST || "127.0.0.1";
+const serverLifetimeMs = normalizeServerLifetimeMs(process.env.VIEWER_SERVER_LIFETIME_MS);
 const distRoot = path.resolve(viewerAppRoot, "dist");
 const backend = backendKind === VIEWER_ASSET_BACKENDS.VERCEL_BLOB
   ? createVercelBlobAssetBackend({
@@ -99,4 +105,11 @@ const server = http.createServer((req, res) => runMiddleware(0, req, res));
 
 server.listen(port, host, () => {
   console.log(`CAD Viewer backend listening on http://${host}:${port}/ (${backend.kind})`);
+  if (serverLifetimeMs !== null) {
+    scheduleProcessShutdown({
+      lifetimeMs: serverLifetimeMs,
+      label: "CAD Viewer backend",
+      close: () => closeHttpServer(server),
+    });
+  }
 });

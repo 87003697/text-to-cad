@@ -143,7 +143,7 @@ export default function CadRenderPane({
   const viewportHasRenderableContent = dxfMode && !dxfMeshPreviewReady
     ? !!selectedDxfData
     : !!activeMeshData;
-  const blockingViewerAlert = viewerAlert && (
+  const blockingViewerAlert = viewerAlert && viewerAlert.blocking !== false && (
     viewerAlert.blocking ||
     viewerAlert.severity !== "warning" ||
     !viewportHasRenderableContent

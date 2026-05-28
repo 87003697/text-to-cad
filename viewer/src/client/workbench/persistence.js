@@ -503,6 +503,7 @@ function browserSessionStorage() {
 export function createCadWorkspaceSessionState(overrides = {}, options = {}) {
   return {
     fileViewerOpen: normalizeBoolean(overrides?.fileViewerOpen, false),
+    fileViewerExpandedDirectoryIds: normalizeNullableUniqueStringList(overrides?.fileViewerExpandedDirectoryIds),
     fileViewerWidthPx: fileViewerWidthPxForSessionState(
       overrides?.fileViewerWidthPx,
       options.defaultFileViewerWidthPx
@@ -523,6 +524,9 @@ function buildCadWorkspaceSessionStoragePayload(state = {}, options = {}) {
   };
   if (normalizedState.fileViewerOpen || hasOwn(state || {}, "fileViewerOpen")) {
     payload.fileViewerOpen = normalizedState.fileViewerOpen;
+  }
+  if (Array.isArray(normalizedState.fileViewerExpandedDirectoryIds)) {
+    payload.fileViewerExpandedDirectoryIds = normalizedState.fileViewerExpandedDirectoryIds;
   }
   if (normalizedState.fileViewerWidthPx) {
     payload.fileViewerWidthPx = normalizedState.fileViewerWidthPx;

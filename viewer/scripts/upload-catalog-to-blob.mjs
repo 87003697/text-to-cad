@@ -12,7 +12,6 @@ import {
   CAD_CATALOG_SCHEMA_VERSION,
   isServedCadAsset,
   scanCadDirectory,
-  resolveViewerRoot,
   VIEWER_SKIPPED_DIRECTORIES,
 } from "cadjs/lib/cadDirectoryScanner.mjs";
 import {
@@ -42,13 +41,12 @@ const DEFAULT_UPLOAD_CONCURRENCY = 4;
 
 function usage() {
   return `Usage:
-  npm --prefix viewer run upload:blob -- [directory] [options]
+  npm --prefix viewer run upload:blob -- [root-dir] [options]
 
 Uploads a CAD Viewer catalog and viewer-supported assets to Vercel Blob.
 
 Options:
-  --workspace-root <dir>  Workspace root for catalog generation.
-  --root-dir <dir>        Viewer root directory relative to the workspace root.
+  --root-dir <dir>        Viewer root directory to upload. Overrides [directory].
   --ignore-file <file>    Gitignore-style exclude file. May be repeated.
   --exclude <pattern>     Gitignore-style exclude pattern. May be repeated.
   --concurrency <n>       Concurrent uploads. Defaults to ${DEFAULT_UPLOAD_CONCURRENCY}.
@@ -58,7 +56,6 @@ Environment:
   VIEWER_VERCEL_BLOB_PREFIX
   VIEWER_VERCEL_BLOB_READ_WRITE_TOKEN
   VIEWER_ASSET_BACKEND=vercel-blob (optional)
-  VIEWER_LOCAL_WORKSPACE_ROOT (optional)
   VIEWER_LOCAL_ROOT_DIR (optional)
 
 Default excludes:
@@ -210,34 +207,16 @@ function readIgnoreFile(ignoreFile, cwd) {
 
 function resolveUploadRoot({
   directory = "",
-  workspaceRoot = "",
   rootDir = "",
   env = process.env,
   cwd = process.cwd(),
 } = {}) {
-  const resolvedWorkspaceRoot = path.resolve(cwd, workspaceRoot || env.VIEWER_LOCAL_WORKSPACE_ROOT || cwd);
-  const explicitRootDir = rootDir || (!directory ? env.VIEWER_LOCAL_ROOT_DIR || "" : "");
-  if (explicitRootDir) {
-    const resolved = resolveViewerRoot(resolvedWorkspaceRoot, explicitRootDir);
-    return {
-      repoRoot: resolvedWorkspaceRoot,
-      rootDir: resolved.dir,
-      rootPath: resolved.rootPath,
-    };
+  if (directory && rootDir) {
+    throw new Error("Pass either a positional upload root or --root-dir, not both.");
   }
-
-  const rawDirectory = directory || env.VIEWER_LOCAL_ROOT_DIR || ".";
-  const resolvedDirectory = path.resolve(cwd, rawDirectory);
-  if (pathIsInsideOrEqual(resolvedDirectory, resolvedWorkspaceRoot)) {
-    const inferredRootDir = toPosixPath(path.relative(resolvedWorkspaceRoot, resolvedDirectory));
-    const resolved = resolveViewerRoot(resolvedWorkspaceRoot, inferredRootDir);
-    return {
-      repoRoot: resolvedWorkspaceRoot,
-      rootDir: resolved.dir,
-      rootPath: resolved.rootPath,
-    };
-  }
-
+  const callerRoot = path.resolve(env.INIT_CWD || cwd);
+  const rawRootDir = rootDir || directory || env.VIEWER_LOCAL_ROOT_DIR || ".";
+  const resolvedDirectory = path.resolve(callerRoot, rawRootDir);
   return {
     repoRoot: resolvedDirectory,
     rootDir: "",
@@ -649,7 +628,6 @@ function resolveIgnorePatterns({ rootPath, ignoreFiles = [], excludePatterns = [
 export function parseUploadArgs(argv, env = process.env) {
   const options = {
     directory: "",
-    workspaceRoot: env.VIEWER_LOCAL_WORKSPACE_ROOT || "",
     rootDir: "",
     ignoreFiles: [],
     excludePatterns: [],
@@ -667,10 +645,6 @@ export function parseUploadArgs(argv, env = process.env) {
     };
     if (arg === "-h" || arg === "--help") {
       return { ...options, help: true };
-    }
-    if (arg === "--workspace-root") {
-      options.workspaceRoot = readValue();
-      continue;
     }
     if (arg === "--root-dir") {
       options.rootDir = readValue();
@@ -720,7 +694,6 @@ function assertVercelUploadEnv(env = process.env) {
 
 export async function uploadCatalogDirectoryToVercelBlob({
   directory = "",
-  workspaceRoot = "",
   rootDir = "",
   ignoreFiles = [],
   excludePatterns = [],
@@ -730,7 +703,7 @@ export async function uploadCatalogDirectoryToVercelBlob({
   client = null,
   logger = console,
 } = {}) {
-  const uploadRoot = resolveUploadRoot({ directory, workspaceRoot, rootDir, env, cwd });
+  const uploadRoot = resolveUploadRoot({ directory, rootDir, env, cwd });
   const ignorePatterns = resolveIgnorePatterns({
     rootPath: uploadRoot.rootPath,
     ignoreFiles,

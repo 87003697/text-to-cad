@@ -195,8 +195,7 @@ behavior:
 
 ```bash
 npm --prefix viewer run dev:ensure -- \
-  --workspace-root "$PWD" \
-  --root-dir models
+  --root-dir "$PWD"
 ```
 
 Use the printed URL; do not assume a fixed port. After changing Viewer source or

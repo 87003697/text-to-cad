@@ -18,8 +18,7 @@ files by default.
 Environment:
   VIEWER_VERCEL_BLOB_PREFIX            Required. Blob path prefix, for example: models2
   VIEWER_VERCEL_BLOB_READ_WRITE_TOKEN  Required. Vercel Blob read/write token.
-  VIEWER_LOCAL_WORKSPACE_ROOT          Optional. Defaults to the repository root.
-  VIEWER_LOCAL_ROOT_DIR                Optional. Defaults to models.
+  VIEWER_LOCAL_ROOT_DIR                Optional upload root. Defaults to models/.
   VIEWER_ASSET_BACKEND                 Optional. Defaults to vercel-blob.
 
 Options are passed through to npm --prefix viewer run upload:blob.
@@ -37,10 +36,8 @@ esac
 : "${VIEWER_VERCEL_BLOB_READ_WRITE_TOKEN:?Set VIEWER_VERCEL_BLOB_READ_WRITE_TOKEN before uploading to Vercel Blob.}"
 
 export VIEWER_ASSET_BACKEND="${VIEWER_ASSET_BACKEND:-vercel-blob}"
-export VIEWER_LOCAL_WORKSPACE_ROOT="${VIEWER_LOCAL_WORKSPACE_ROOT:-$REPO_ROOT}"
-export VIEWER_LOCAL_ROOT_DIR="${VIEWER_LOCAL_ROOT_DIR:-models}"
+export VIEWER_LOCAL_ROOT_DIR="${VIEWER_LOCAL_ROOT_DIR:-$REPO_ROOT/models}"
 
 npm --prefix "$REPO_ROOT/viewer" run upload:blob -- \
-  --workspace-root "$VIEWER_LOCAL_WORKSPACE_ROOT" \
   --root-dir "$VIEWER_LOCAL_ROOT_DIR" \
   "$@"

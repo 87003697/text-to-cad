@@ -42,6 +42,10 @@ function sourceKindLabel(value) {
   return cleanText(value).toLowerCase() === "python" ? "python" : "step";
 }
 
+function ownProperty(object, key) {
+  return Object.prototype.hasOwnProperty.call(object || {}, key);
+}
+
 export function normalizeFileStatusLevel(value, fallback = FILE_STATUS_LEVELS.INFO) {
   const normalized = cleanText(value).toLowerCase();
   if (normalized === FILE_STATUS_LEVELS.ERROR) {
@@ -153,7 +157,11 @@ export function mostIntenseFileStatusItem(items) {
   ), null);
 }
 
-function artifactStatusTitle(artifact) {
+export function stepArtifactHasRenderableGlb(entry) {
+  return entryHasMesh(entry);
+}
+
+function artifactStatusTitle(artifact, entry) {
   const code = cleanText(artifact?.error);
   if (artifact?.stale === true || code === "stale_source_identity") {
     return "STEP artifact stale";
@@ -161,14 +169,16 @@ function artifactStatusTitle(artifact) {
   if (code === "missing_glb") {
     return "STEP artifact missing";
   }
+  if (stepArtifactHasRenderableGlb(entry)) {
+    return "STEP artifact metadata warning";
+  }
   return "STEP artifact unavailable";
 }
 
 function artifactStatusLevel(artifact, entry) {
-  const code = cleanText(artifact?.error);
-  return code === "missing_glb" || !entryHasMesh(entry)
-    ? FILE_STATUS_LEVELS.ERROR
-    : FILE_STATUS_LEVELS.WARNING;
+  return stepArtifactHasRenderableGlb(entry)
+    ? FILE_STATUS_LEVELS.WARNING
+    : FILE_STATUS_LEVELS.ERROR;
 }
 
 export function stepArtifactStatusMessage(artifact) {
@@ -184,6 +194,15 @@ export function stepArtifactStatusMessage(artifact) {
   }
   if (code === "missing_step_topology") {
     return "Generated GLB is missing STEP topology metadata.";
+  }
+  if (code === "missing_selector_topology") {
+    return "Generated GLB is missing selector topology metadata.";
+  }
+  if (code === "missing_edge_topology") {
+    return "Generated GLB is missing surface edge topology metadata.";
+  }
+  if (code === "missing_surface_edge_attributes") {
+    return "Generated GLB is missing surface edge render attributes.";
   }
   if (code === "unsupported_step_topology") {
     return "Generated GLB topology metadata is unsupported.";
@@ -286,14 +305,16 @@ export function stepFileStatusItems({
   viewerServerInfo = {},
 } = {}) {
   const items = [];
-  const artifact = entry?.artifact;
+  const artifact = ownProperty(stepSourceStatus, "artifact")
+    ? stepSourceStatus?.artifact
+    : entry?.artifact;
   if (artifact?.ok === false) {
     items.push({
       id: "step-artifact",
       level: artifactStatusLevel(artifact, entry),
       source: "catalog",
       code: cleanText(artifact.error) || "step_artifact_unavailable",
-      title: artifactStatusTitle(artifact),
+      title: artifactStatusTitle(artifact, entry),
       message: stepArtifactStatusMessage(artifact),
       details: [
         detail("Code", artifact.error),

@@ -45,9 +45,12 @@ local CAD generation.
 
 `src/server/localAssetBackend.mjs` is the development and local deployment
 implementation. `readCatalog()` and `refreshCatalog()` scan
-`VIEWER_LOCAL_ROOT_DIR` under `VIEWER_LOCAL_WORKSPACE_ROOT`, keep the catalog as
-an in-memory object for the current request, and return schema v4 entries. The
-local backend does not write `catalog.json` or any hidden catalog cache file.
+the configured local root, keep the catalog as an in-memory object for the
+current request, and return schema v4 entries. `dev:ensure` and `serve:ensure`
+set `VIEWER_LOCAL_ROOT_DIR` from the required `--root-dir` argument. Direct
+backend use should set `VIEWER_LOCAL_ROOT_DIR` to the full Viewer root
+directory. The local backend does not write `catalog.json` or any hidden catalog
+cache file.
 
 The local backend serves asset bytes from the active root and writes regenerated
 artifacts back into it. It rejects path traversal and only serves or writes
@@ -80,8 +83,7 @@ The local production server uses the same backend:
 ```bash
 npm run build
 VIEWER_ASSET_BACKEND=local-fs \
-VIEWER_LOCAL_WORKSPACE_ROOT=/path/to/workspace \
-VIEWER_LOCAL_ROOT_DIR=models \
+VIEWER_LOCAL_ROOT_DIR=/path/to/root \
 npm run serve
 ```
 
@@ -133,7 +135,7 @@ Upload a local directory catalog and supported viewer assets with:
 ```bash
 VIEWER_VERCEL_BLOB_READ_WRITE_TOKEN=... \
 VIEWER_VERCEL_BLOB_PREFIX=models2 \
-npm --prefix viewer run upload:blob -- --workspace-root "$PWD" --root-dir models
+npm --prefix viewer run upload:blob -- models
 ```
 
 The uploader also reads `.vieweruploadignore` from the uploaded directory and

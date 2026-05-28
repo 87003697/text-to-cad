@@ -437,6 +437,7 @@ function BreadcrumbNodeDropdown({
   fileAccessBusyKey = "",
   onDownloadFileAsset,
   onRevealFileAsset,
+  onRevealInExplorerView,
   onCopyFileAssetReference,
   filenameLoadActivity
 }) {
@@ -446,43 +447,6 @@ function BreadcrumbNodeDropdown({
     ? node?.menuDirectory || null
     : null;
   const canBrowse = !!menuDirectory && listSidebarItems(menuDirectory).length > 0;
-  const breadcrumbEntry = node?.type === "entry" ? node?.entry || null : null;
-  const breadcrumbStatus = breadcrumbEntry
-    ? entryStatusForMenu(breadcrumbEntry, {
-      entrySourceFormat,
-      entryHasMesh,
-      entryHasDxf,
-      entryHasGcode,
-      entryHasUrdf,
-      activeGenerationFiles,
-      activeStepArtifactGenerationFile,
-      stepArtifactGenerationAvailable
-    })
-    : null;
-  const filenameActivityLoading = Boolean(
-    current &&
-    node?.type === "entry" &&
-    filenameLoadActivity?.loading
-  );
-  const breadcrumbIconStatus = filenameActivityLoading && breadcrumbStatus
-    ? {
-      ...breadcrumbStatus,
-      artifactGenerating: false,
-      loading: false
-    }
-    : breadcrumbStatus;
-  const BreadcrumbEntryIcon = breadcrumbEntry
-    ? iconForEntry(breadcrumbEntry, breadcrumbIconStatus?.sourceFormat, breadcrumbIconStatus)
-    : null;
-  const breadcrumbEntryIcon = BreadcrumbEntryIcon ? (
-    <BreadcrumbEntryIcon
-      className={cn(
-        "size-3.5 shrink-0",
-        breadcrumbIconStatus?.loading && "animate-spin"
-      )}
-      aria-hidden="true"
-    />
-  ) : null;
 
   if (!canBrowse) {
     const labelNode = (
@@ -493,7 +457,6 @@ function BreadcrumbNodeDropdown({
         )}
         title={title}
       >
-        {breadcrumbEntryIcon}
         <span className="block min-w-0 truncate">{label}</span>
         {current && node?.type === "entry" ? (
           <FilenameLoadStatus activity={filenameLoadActivity} />
@@ -515,6 +478,7 @@ function BreadcrumbNodeDropdown({
         busyKey={fileAccessBusyKey}
         onDownloadFileAsset={onDownloadFileAsset}
         onRevealFileAsset={onRevealFileAsset}
+        onRevealInExplorerView={onRevealInExplorerView}
         onCopyFileAssetReference={onCopyFileAssetReference}
       >
         {labelNode}
@@ -537,7 +501,6 @@ function BreadcrumbNodeDropdown({
           aria-current={current ? "page" : undefined}
           title={title}
         >
-          {breadcrumbEntryIcon}
           <span className="block min-w-0 truncate">{label}</span>
           {current && node?.type === "entry" ? (
             <FilenameLoadStatus activity={filenameLoadActivity} />
@@ -756,6 +719,7 @@ export default function CadWorkspaceTopBar({
   fileAccessBusyKey = "",
   onDownloadFileAsset,
   onRevealFileAsset,
+  onRevealInExplorerView,
   onCopyFileAssetReference,
   fileSheetKind = "",
   fileSheetOpen = false,
@@ -778,6 +742,7 @@ export default function CadWorkspaceTopBar({
     selectedFileTitle
   });
   const breadcrumbItems = collapsedBreadcrumbNodes(breadcrumbNodes);
+  const mobileBreadcrumbNode = breadcrumbNodes[breadcrumbNodes.length - 1] || null;
   const activeIconButtonClasses = "bg-accent text-accent-foreground";
   const showFileSheetToggle = !!fileSheetKind && typeof onToggleFileSheet === "function";
   const fileSheetToggleLabel = fileSheetOpen
@@ -818,7 +783,38 @@ export default function CadWorkspaceTopBar({
           viewportClassName="overflow-y-hidden"
           scrollbars="horizontal"
         >
-          <BreadcrumbList className="min-w-full w-max translate-y-2 flex-nowrap gap-1.5 pr-2 text-xs sm:gap-1.5">
+          {mobileBreadcrumbNode ? (
+            <BreadcrumbList className="flex h-8 min-w-full flex-nowrap gap-1.5 pr-2 text-xs sm:hidden">
+              <BreadcrumbItem className="min-w-0">
+                <BreadcrumbNodeDropdown
+                  node={mobileBreadcrumbNode}
+                  current
+                  selectedKey={selectedKey}
+                  onSelectEntry={onSelectEntry}
+                  sidebarLabelForEntry={sidebarLabelForEntry}
+                  entrySourceFormat={entrySourceFormat}
+                  entryHasMesh={entryHasMesh}
+                  entryHasDxf={entryHasDxf}
+                  entryHasGcode={entryHasGcode}
+                  entryHasUrdf={entryHasUrdf}
+                  activeGenerationFiles={activeGenerationFiles}
+                  activeStepArtifactGenerationFile={activeStepArtifactGenerationFile}
+                  stepArtifactGenerationAvailable={stepArtifactGenerationAvailable}
+                  selectedStepSourceStatus={selectedStepSourceStatus}
+                  canRevealFileAssets={canRevealFileAssets}
+                  canCopyFileAssetLinks={canCopyFileAssetLinks}
+                  canCopyFileAssetPaths={canCopyFileAssetPaths}
+                  fileAccessBusyKey={fileAccessBusyKey}
+                  onDownloadFileAsset={onDownloadFileAsset}
+                  onRevealFileAsset={onRevealFileAsset}
+                  onRevealInExplorerView={onRevealInExplorerView}
+                  onCopyFileAssetReference={onCopyFileAssetReference}
+                  filenameLoadActivity={filenameLoadActivity}
+                />
+              </BreadcrumbItem>
+            </BreadcrumbList>
+          ) : null}
+          <BreadcrumbList className="hidden h-8 min-w-full w-max flex-nowrap gap-1.5 pr-2 text-xs sm:flex sm:gap-1.5">
             {breadcrumbItems.map((item, index) => (
               <Fragment key={`${item.type}:${item.node?.type || ""}:${item.node?.id || item.node?.label || index}:${index}`}>
                 <BreadcrumbItem className="min-w-0">
@@ -867,6 +863,7 @@ export default function CadWorkspaceTopBar({
                       fileAccessBusyKey={fileAccessBusyKey}
                       onDownloadFileAsset={onDownloadFileAsset}
                       onRevealFileAsset={onRevealFileAsset}
+                      onRevealInExplorerView={onRevealInExplorerView}
                       onCopyFileAssetReference={onCopyFileAssetReference}
                       filenameLoadActivity={filenameLoadActivity}
                     />

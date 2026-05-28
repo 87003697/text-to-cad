@@ -42,8 +42,6 @@ test("parseUploadArgs accepts a directory and repeated ignore options", () => {
   assert.deepEqual(
     parseUploadArgs([
       "models",
-      "--workspace-root",
-      "/repo",
       "--ignore-file",
       ".vieweruploadignore",
       "--exclude",
@@ -55,12 +53,28 @@ test("parseUploadArgs accepts a directory and repeated ignore options", () => {
     ], {}),
     {
       directory: "models",
-      workspaceRoot: "/repo",
       rootDir: "",
       ignoreFiles: [".vieweruploadignore"],
       excludePatterns: ["/mechbench/", "/mechbench2/"],
       concurrency: 2,
     }
+  );
+});
+
+test("parseUploadArgs accepts root-dir and rejects workspace-root", () => {
+  assert.deepEqual(
+    parseUploadArgs(["--root-dir", "/repo/models"], {}),
+    {
+      directory: "",
+      rootDir: "/repo/models",
+      ignoreFiles: [],
+      excludePatterns: [],
+      concurrency: 4,
+    }
+  );
+  assert.throws(
+    () => parseUploadArgs(["--workspace-root", "/repo"], {}),
+    /Unknown option: --workspace-root/
   );
 });
 
@@ -134,7 +148,6 @@ test("uploadCatalogDirectoryToVercelBlob applies default catalog exclusions", as
 
   const result = await uploadCatalogDirectoryToVercelBlob({
     directory: "models",
-    workspaceRoot: repoRoot,
     env: {
       VIEWER_ASSET_BACKEND: "vercel-blob",
       VIEWER_VERCEL_BLOB_PREFIX: "models2",
@@ -158,6 +171,8 @@ test("uploadCatalogDirectoryToVercelBlob applies default catalog exclusions", as
   assert.equal(putCalls.find((call) => call.pathname === "models2/keep.stl").options.contentType, "model/stl");
   assert.equal(result.uploadedFiles, 2);
   assert.equal(result.catalogEntries, 2);
+  assert.equal(result.rootDir, "");
+  assert.equal(result.rootPath, path.join(repoRoot, "models"));
 
   const catalogUpload = putCalls.find((call) => call.pathname === "models2/catalog.json");
   const uploadedCatalog = JSON.parse(catalogUpload.body);
@@ -167,16 +182,16 @@ test("uploadCatalogDirectoryToVercelBlob applies default catalog exclusions", as
   assert.deepEqual(result.ignoredPatterns.slice(0, DEFAULT_UPLOAD_EXCLUDE_PATTERNS.length), DEFAULT_UPLOAD_EXCLUDE_PATTERNS);
 });
 
-test("uploadCatalogDirectoryToVercelBlob honors rootDir from npm prefix cwd", async () => {
+test("uploadCatalogDirectoryToVercelBlob honors rootDir from npm caller cwd", async () => {
   const repoRoot = makeTempRepo();
   writeFile(path.join(repoRoot, "models/keep.stl"), "solid keep\nendsolid keep\n");
   writeFile(path.join(repoRoot, "viewer/package.json"), "{}\n");
   const putCalls = [];
 
   const result = await uploadCatalogDirectoryToVercelBlob({
-    workspaceRoot: repoRoot,
     rootDir: "models",
     env: {
+      INIT_CWD: repoRoot,
       VIEWER_ASSET_BACKEND: "vercel-blob",
       VIEWER_VERCEL_BLOB_PREFIX: "models2",
       VIEWER_VERCEL_BLOB_READ_WRITE_TOKEN: "test-token",
@@ -196,5 +211,6 @@ test("uploadCatalogDirectoryToVercelBlob honors rootDir from npm prefix cwd", as
     "models2/keep.stl",
   ]);
   assert.equal(result.catalogEntries, 1);
-  assert.equal(result.rootDir, "models");
+  assert.equal(result.rootDir, "");
+  assert.equal(result.rootPath, path.join(repoRoot, "models"));
 });

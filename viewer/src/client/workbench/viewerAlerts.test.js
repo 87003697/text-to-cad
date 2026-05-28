@@ -108,6 +108,53 @@ test("buildViewerMeshAlert reports STEP artifact errors only when no mesh render
 
   assert.deepEqual(
     buildViewerMeshAlert({
+      file: "fun/renderable-stale.step",
+      kind: "part",
+      url: "/models/fun/.renderable-stale.step.glb?v=hash",
+      hash: "glb-hash",
+      artifact: {
+        ok: false,
+        error: "stale_source_identity",
+        stale: true,
+        message: "STEP artifact is stale."
+      }
+    }, false, ""),
+    {
+      severity: "warning",
+      blocking: false,
+      compact: true,
+      summary: "STEP artifact stale",
+      title: "STEP artifact stale",
+      message: "Generated GLB doesn't match the hash of the STEP file.",
+      command: `${CAD_BUILD_COMMANDS.step} fun/renderable-stale.step`
+    }
+  );
+
+  assert.deepEqual(
+    buildViewerMeshAlert({
+      file: "fun/renderable-stale.step",
+      kind: "part",
+      url: "/models/fun/.renderable-stale.step.glb?v=hash",
+      hash: "glb-hash",
+      artifact: {
+        ok: false,
+        error: "stale_source_identity",
+        stale: true,
+        message: "STEP artifact is stale."
+      }
+    }, false, "GLB parser failed"),
+    {
+      severity: "error",
+      summary: "Mesh load failed",
+      title: "Failed to load render mesh",
+      message: "GLB parser failed",
+      resolution: "Try reloading the page. If the problem persists, rebuild the render assets for this entry.",
+      command: `${CAD_BUILD_COMMANDS.step} fun/renderable-stale.step`
+    }
+  );
+
+  assert.deepEqual(
+    buildViewerMeshAlert({
       file: "fun/generated.step",
       kind: "part",
       sourceKind: "python",

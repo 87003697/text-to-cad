@@ -77,7 +77,7 @@ write_runtime_package_json() {
   "name": "cad-viewer-runtime",
   "private": true,
   "type": "module",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "scripts": {
     "serve": "node backend/server.mjs",
     "serve:ensure": "node scripts/ensure-serve.mjs",

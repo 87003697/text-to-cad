@@ -1,16 +1,12 @@
 #!/usr/bin/env node
 import { spawn } from "node:child_process";
+import fs from "node:fs";
 import http from "node:http";
 import net from "node:net";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { createRequire } from "node:module";
 
-import {
-  DEFAULT_VIEWER_ROOT_DIR,
-  normalizeViewerRootDir,
-  resolveViewerRoot,
-} from "cadjs/lib/cadDirectoryScanner.mjs";
 import {
   DEFAULT_VIEWER_HOST,
   DEFAULT_VIEWER_PORT,
@@ -33,6 +29,8 @@ export const DEFAULT_ADAPTIVE_PORT_COUNT = 80;
 export const DEFAULT_PROBE_TIMEOUT_MS = 200;
 export const DEFAULT_START_TIMEOUT_MS = 30_000;
 export const DEFAULT_READY_INTERVAL_MS = 100;
+export const DEFAULT_SERVER_LIFETIME_MS = 12 * 60 * 60 * 1000;
+export const MAX_SERVER_LIFETIME_MS = 2_147_483_647;
 
 const require = createRequire(import.meta.url);
 const scriptPath = fileURLToPath(import.meta.url);
@@ -59,13 +57,41 @@ function parsePort(value, flag) {
   return parsed;
 }
 
+export function parseServerLifetimeMs(value, flag = "--shutdown-after") {
+  const rawValue = String(value ?? "").trim().toLowerCase();
+  const match = /^(\d+(?:\.\d+)?)(ms|s|m|h)?$/.exec(rawValue);
+  if (!match) {
+    throw new Error(`${flag} must be a positive duration such as 30m, 2h, or 43200000.`);
+  }
+
+  const amount = Number.parseFloat(match[1]);
+  const unit = match[2] || "ms";
+  const multiplier = {
+    ms: 1,
+    s: 1000,
+    m: 60 * 1000,
+    h: 60 * 60 * 1000,
+  }[unit];
+  const parsed = Math.round(amount * multiplier);
+  if (!Number.isFinite(parsed) || parsed <= 0 || parsed > MAX_SERVER_LIFETIME_MS) {
+    throw new Error(`${flag} must be between 1ms and ${MAX_SERVER_LIFETIME_MS}ms.`);
+  }
+  return parsed;
+}
+
+function requireRootDirOption(options) {
+  if (!options.help && !String(options.rootDir || "").trim()) {
+    throw new Error("--root-dir is required; pass the project root directory that owns the model files.");
+  }
+}
+
 export function parseEnsureDevArgs(argv = []) {
   const options = {
-    workspaceRoot: "",
     rootDir: "",
     file: "",
     port: null,
     portEnd: null,
+    shutdownAfterMs: DEFAULT_SERVER_LIFETIME_MS,
     json: false,
     help: false,
   };
@@ -87,15 +113,6 @@ export function parseEnsureDevArgs(argv = []) {
     }
     if (arg === "--help" || arg === "-h") {
       options.help = true;
-      continue;
-    }
-    if (arg.startsWith("--workspace-root=")) {
-      options.workspaceRoot = arg.slice("--workspace-root=".length);
-      continue;
-    }
-    if (arg === "--workspace-root") {
-      options.workspaceRoot = parseRequiredValue(argv, index, arg);
-      index += 1;
       continue;
     }
     if (arg.startsWith("--root-dir=")) {
@@ -134,44 +151,82 @@ export function parseEnsureDevArgs(argv = []) {
       index += 1;
       continue;
     }
+    if (arg.startsWith("--shutdown-after=")) {
+      options.shutdownAfterMs = parseServerLifetimeMs(arg.slice("--shutdown-after=".length), "--shutdown-after");
+      continue;
+    }
+    if (arg === "--shutdown-after") {
+      options.shutdownAfterMs = parseServerLifetimeMs(parseRequiredValue(argv, index, arg), arg);
+      index += 1;
+      continue;
+    }
     throw new Error(`Unknown argument: ${arg}`);
   }
 
+  requireRootDirOption(options);
   return options;
 }
 
-export function resolveWorkspaceRoot({
-  workspaceRoot = "",
+export function resolveRootDir({
+  rootDir = "",
   env = process.env,
   cwd = process.cwd(),
   appRoot = viewerAppRoot,
 } = {}) {
-  return resolveViewerWorkspaceRoot({
-    workspaceRoot,
-    env,
+  return resolveRootSelection({ rootDir, env, cwd, appRoot }).rootPath;
+}
+
+function resolveRootSelection({
+  rootDir = "",
+  env = process.env,
+  cwd = process.cwd(),
+  appRoot = viewerAppRoot,
+} = {}) {
+  const effectiveEnv = { ...env };
+  delete effectiveEnv.VIEWER_LOCAL_WORKSPACE_ROOT;
+  const workspaceRoot = resolveViewerWorkspaceRoot({
+    env: effectiveEnv,
     cwd,
     appRoot,
     defaultWorkspaceRoot,
   });
+  if (!rootDir) {
+    return {
+      workspaceRoot,
+      rootDir: "",
+      rootPath: workspaceRoot,
+    };
+  }
+
+  const rootPath = path.resolve(env.INIT_CWD || cwd, rootDir);
+  return {
+    workspaceRoot,
+    rootDir: rootPath,
+    rootPath,
+  };
 }
 
-function chooseFileCandidate(rawFile, { workspaceRoot, rootPath, cwd }) {
+function callerRoot(env = process.env, cwd = process.cwd()) {
+  return env.INIT_CWD || cwd;
+}
+
+function chooseFileCandidate(rawFile, { rootPath, cwd, callerCwd }) {
   const candidates = [];
   if (path.isAbsolute(rawFile)) {
     candidates.push(path.resolve(rawFile));
   } else {
-    candidates.push(path.resolve(workspaceRoot, rawFile));
     candidates.push(path.resolve(rootPath, rawFile));
+    candidates.push(path.resolve(callerCwd, rawFile));
     candidates.push(path.resolve(cwd, rawFile));
   }
 
   const uniqueCandidates = [...new Set(candidates)];
   const insideCandidates = uniqueCandidates.filter((candidate) => pathIsInsideOrEqual(candidate, rootPath));
   if (!insideCandidates.length) {
-    throw new Error(`CAD Viewer file must be inside the scan root: ${rawFile}`);
+    throw new Error(`CAD Viewer file must be inside the viewer root: ${rawFile}`);
   }
 
-  return insideCandidates[0];
+  return insideCandidates.find((candidate) => fs.existsSync(candidate)) || insideCandidates[0];
 }
 
 export function resolveEnsureDevRequest({
@@ -180,24 +235,21 @@ export function resolveEnsureDevRequest({
   cwd = process.cwd(),
   appRoot = viewerAppRoot,
 } = {}) {
-  const workspaceRoot = resolveWorkspaceRoot({
-    workspaceRoot: options.workspaceRoot,
+  const rootSelection = resolveRootSelection({
+    rootDir: options.rootDir,
     env,
     cwd,
     appRoot,
   });
-  const rootDir = normalizeViewerRootDir(
-    options.rootDir || env.VIEWER_LOCAL_ROOT_DIR || DEFAULT_VIEWER_ROOT_DIR
-  );
-  const resolvedRoot = resolveViewerRoot(workspaceRoot, rootDir);
+  const rootPath = rootSelection.rootPath;
   let fileParam = "";
   if (options.file) {
     const filePath = chooseFileCandidate(options.file, {
-      workspaceRoot,
-      rootPath: resolvedRoot.rootPath,
+      rootPath,
       cwd,
+      callerCwd: callerRoot(env, cwd),
     });
-    fileParam = toPosixPath(path.relative(resolvedRoot.rootPath, filePath));
+    fileParam = toPosixPath(path.relative(rootPath, filePath));
   }
 
   const port = options.port || normalizeViewerPort(env.VIEWER_PORT, DEFAULT_VIEWER_PORT);
@@ -214,12 +266,13 @@ export function resolveEnsureDevRequest({
   }
 
   return {
-    workspaceRoot,
-    rootDir,
-    rootPath: resolvedRoot.rootPath,
+    workspaceRoot: rootSelection.workspaceRoot,
+    rootDir: rootSelection.rootDir,
+    rootPath,
     fileParam,
     port,
     portEnd,
+    shutdownAfterMs: options.shutdownAfterMs ?? DEFAULT_SERVER_LIFETIME_MS,
   };
 }
 
@@ -370,6 +423,10 @@ function normalizeBindResult(result) {
   };
 }
 
+function bindFailureIsPermissionDenied(errorCode) {
+  return errorCode === "EPERM" || errorCode === "EACCES";
+}
+
 function summarizeBindFailures(bindFailures) {
   const byCode = new Map();
   for (const failure of bindFailures) {
@@ -419,7 +476,7 @@ export async function selectViewerServer({
     .filter((server) => isViewerServerInfo(server))
     .sort((a, b) => a.port - b.port);
   const bindFailures = [];
-  let registeredMatch = null;
+  const registeredMatchesByPort = new Map();
 
   for (let candidatePort = port; candidatePort <= portEnd; candidatePort += 1) {
     const serverInfo = await probeServer(candidatePort);
@@ -438,21 +495,17 @@ export async function selectViewerServer({
     }
 
     if (!normalizedCatalogFileRef(fileParam)) {
-      registeredMatch ??= normalizedRegisteredServers.find((server) => (
+      const registeredMatch = normalizedRegisteredServers.find((server) => (
         server.port === candidatePort &&
         path.resolve(server.rootPath) === resolvedRootPath
       )) || null;
+      if (registeredMatch) {
+        registeredMatchesByPort.set(candidatePort, registeredMatch);
+      }
     }
   }
 
-  if (registeredMatch) {
-    return {
-      action: "reuse",
-      port: registeredMatch.port,
-      serverInfo: registeredMatch,
-    };
-  }
-
+  let permissionDeniedRegisteredMatch = null;
   for (let candidatePort = port; candidatePort <= portEnd; candidatePort += 1) {
     const bindResult = normalizeBindResult(await canBind(candidatePort));
     if (bindResult.canBind) {
@@ -464,12 +517,48 @@ export async function selectViewerServer({
     }
     if (bindResult.errorCode) {
       bindFailures.push({ port: candidatePort, ...bindResult });
+      const registeredMatch = registeredMatchesByPort.get(candidatePort) || null;
+      if (
+        registeredMatch &&
+        bindFailureIsPermissionDenied(bindResult.errorCode)
+      ) {
+        permissionDeniedRegisteredMatch ??= registeredMatch;
+      }
     }
+  }
+  if (permissionDeniedRegisteredMatch) {
+    return {
+      action: "reuse",
+      port: permissionDeniedRegisteredMatch.port,
+      serverInfo: permissionDeniedRegisteredMatch,
+    };
   }
   throw buildNoAvailablePortError({ port, portEnd, bindFailures });
 }
 
-export function buildViteSpawnOptions({ workspaceRoot, rootDir, port, env = process.env } = {}) {
+function buildViewerProcessEnv({
+  rootDir,
+  port,
+  shutdownAfterMs = DEFAULT_SERVER_LIFETIME_MS,
+  env = process.env,
+} = {}) {
+  const nextEnv = {
+    ...env,
+    VIEWER_ASSET_BACKEND: "local-fs",
+    VIEWER_LOCAL_ROOT_DIR: rootDir || "",
+    VIEWER_PORT: String(port),
+    VIEWER_SERVER_LIFETIME_MS: String(shutdownAfterMs),
+  };
+  delete nextEnv.VIEWER_LOCAL_WORKSPACE_ROOT;
+  return nextEnv;
+}
+
+export function buildViteSpawnOptions({
+  rootDir,
+  port,
+  shutdownAfterMs = DEFAULT_SERVER_LIFETIME_MS,
+  env = process.env,
+} = {}) {
   const viteBin = path.join(path.dirname(require.resolve("vite/package.json")), "bin", "vite.js");
   return {
     command: process.execPath,
@@ -478,13 +567,7 @@ export function buildViteSpawnOptions({ workspaceRoot, rootDir, port, env = proc
       cwd: viewerAppRoot,
       detached: true,
       stdio: "ignore",
-      env: {
-        ...env,
-        VIEWER_ASSET_BACKEND: "local-fs",
-        VIEWER_LOCAL_WORKSPACE_ROOT: workspaceRoot,
-        VIEWER_LOCAL_ROOT_DIR: rootDir,
-        VIEWER_PORT: String(port),
-      },
+      env: buildViewerProcessEnv({ rootDir, port, shutdownAfterMs, env }),
     },
   };
 }
@@ -537,12 +620,13 @@ export function helpText() {
   return `Usage: npm run dev:ensure -- [options]
 
 Options:
-  --workspace-root <path>  Workspace root to scan. Defaults to INIT_CWD.
-  --root-dir <path>        Scan subdirectory inside the workspace root.
+  --root-dir <path>        Required. Viewer root directory to scan.
   --file <path>            File to open; pass one --file per command.
   --port <number>          First port to probe. Defaults to 4178 or VIEWER_PORT.
   --port-end <number>      Last port to probe. Defaults to 4198, then auto-expands
                            to 80 more ports unless VIEWER_PORT_END is set.
+  --shutdown-after <time>  Server lifetime before automatic shutdown. Defaults
+                           to 12h. Accepts ms, s, m, or h suffixes.
   --json                   Print structured JSON instead of just the Viewer URL.
 `;
 }
@@ -565,9 +649,9 @@ export async function runEnsureDev(argv = process.argv.slice(2), {
   let serverInfo = selection.serverInfo;
   if (selection.action === "start") {
     startViteDevServer({
-      workspaceRoot: request.workspaceRoot,
       rootDir: request.rootDir,
       port: selection.port,
+      shutdownAfterMs: request.shutdownAfterMs,
       env,
     }, spawnImpl);
     serverInfo = await waitForMatchingServer({

@@ -1,6 +1,9 @@
 import { entrySourceFormat } from "cadjs/lib/fileFormats.js";
 import { RENDER_FORMAT } from "./constants.js";
-import { stepArtifactStatusMessage } from "./fileStatusItems.js";
+import {
+  stepArtifactHasRenderableGlb,
+  stepArtifactStatusMessage
+} from "./fileStatusItems.js";
 import { entryStepSourceKind } from "./entryIconStatus.js";
 import { fileKey } from "./sidebar.js";
 
@@ -83,14 +86,18 @@ export function buildViewerMeshAlert(entry, hasMeshData, loadError) {
       : missingGlb
         ? "STEP artifact missing"
         : "STEP artifact unavailable";
-    return {
-      severity: "error",
-      compact: true,
-      summary,
-      title: summary,
-      message: stepArtifactStatusMessage(stepArtifactError),
-      command
-    };
+    const renderableGlb = stepArtifactHasRenderableGlb(entry);
+    if (!renderableGlb || !loadError) {
+      return {
+        severity: renderableGlb ? "warning" : "error",
+        ...(renderableGlb ? { blocking: false } : {}),
+        compact: true,
+        summary,
+        title: summary,
+        message: stepArtifactStatusMessage(stepArtifactError),
+        command
+      };
+    }
   }
 
   if (loadError) {
