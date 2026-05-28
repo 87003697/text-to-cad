@@ -185,6 +185,29 @@ test("local backend refreshes requested files against a cached dynamic root cata
   });
 });
 
+test("local backend can auto-refresh cached catalogs on reads", async () => {
+  await withTempWorkspace((workspaceRoot) => {
+    const modelRoot = path.join(workspaceRoot, "models");
+    fs.mkdirSync(modelRoot, { recursive: true });
+    fs.writeFileSync(path.join(modelRoot, "first.stl"), "solid first\nendsolid first\n");
+    let currentTime = 1000;
+    const backend = createLocalAssetBackend({
+      workspaceRoot,
+      rootDir: "models",
+      catalogRefreshIntervalMs: 100,
+      now: () => currentTime,
+    });
+
+    assert.deepEqual(backend.readCatalog().entries.map((entry) => entry.file), ["first.stl"]);
+
+    fs.writeFileSync(path.join(modelRoot, "second.stl"), "solid second\nendsolid second\n");
+    assert.deepEqual(backend.readCatalog().entries.map((entry) => entry.file), ["first.stl"]);
+
+    currentTime = 1100;
+    assert.deepEqual(backend.readCatalog().entries.map((entry) => entry.file), ["first.stl", "second.stl"]);
+  });
+});
+
 test("local backend incrementally refreshes STEP entries when sidecars change", async () => {
   await withTempWorkspace((workspaceRoot) => {
     const modelRoot = path.join(workspaceRoot, "models");

@@ -46,7 +46,13 @@ const PYTHON_SOURCE_HASH_SKIPPED_PATH_PARTS = new Set([
   "site-packages",
   "venv",
 ]);
-const CADJS_PACKAGE_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
+const LOCAL_MODULE_DIR = path.dirname(fileURLToPath(import.meta.url));
+const CADJS_PACKAGE_ROOT = path.resolve(LOCAL_MODULE_DIR, "..", "..", "..");
+const CADPY_RUNTIME_PACKAGE_ROOTS = Object.freeze([
+  path.join("skills", "cad", "scripts", "packages", "cadpy", "src"),
+  path.join("packages", "cadpy", "src"),
+  path.join("plugins", "cad", "skills", "cad", "scripts", "packages", "cadpy", "src"),
+]);
 export const VIEWER_SKIPPED_DIRECTORIES = new Set([
   ".agents",
   ".cache",
@@ -194,14 +200,24 @@ function dedupePaths(paths) {
   return result;
 }
 
-function pythonSourceSearchPaths(repoRoot, scriptPath) {
+function pythonRuntimePackageRoots(repoRoot) {
+  const resolvedRepoRoot = path.resolve(repoRoot);
+  return dedupePaths([
+    ...CADPY_RUNTIME_PACKAGE_ROOTS.map((relativePath) => path.resolve(resolvedRepoRoot, relativePath)),
+    path.resolve(LOCAL_MODULE_DIR, "..", "packages", "cadpy", "src"),
+    path.resolve(CADJS_PACKAGE_ROOT, "..", "cadpy", "src"),
+    CADJS_PACKAGE_ROOT,
+  ]);
+}
+
+function pythonSourceSearchPaths(repoRoot, scriptPath, { packageRoot = CADJS_PACKAGE_ROOT } = {}) {
   const resolvedRepoRoot = path.resolve(repoRoot);
   const cadRoot = path.resolve(resolvedRepoRoot, "cad");
   const resolvedScriptPath = path.resolve(scriptPath);
   const paths = [
     resolvedRepoRoot,
     cadRoot,
-    CADJS_PACKAGE_ROOT,
+    packageRoot,
     path.resolve(resolvedRepoRoot, "skills", "cad", "scripts"),
     path.dirname(resolvedScriptPath),
   ];
@@ -226,11 +242,12 @@ function pythonSourceSearchPaths(repoRoot, scriptPath) {
   return dedupePaths(paths);
 }
 
-function pythonSourceManifestRoots(repoRoot) {
+function pythonSourceManifestRoots(repoRoot, { packageRoot = CADJS_PACKAGE_ROOT } = {}) {
   const resolvedRepoRoot = path.resolve(repoRoot);
   return dedupePaths([
     path.resolve(resolvedRepoRoot, "cad"),
     resolvedRepoRoot,
+    packageRoot,
     CADJS_PACKAGE_ROOT,
   ]);
 }
@@ -411,9 +428,9 @@ function pythonImportDependencies(filePath, searchPaths, allowedRoots) {
   return [...dependencies].sort();
 }
 
-function pythonSourceManifestPath(repoRoot, filePath) {
+function pythonSourceManifestPath(repoRoot, filePath, { packageRoot = CADJS_PACKAGE_ROOT } = {}) {
   const resolved = path.resolve(filePath);
-  for (const root of pythonSourceManifestRoots(repoRoot)) {
+  for (const root of pythonSourceManifestRoots(repoRoot, { packageRoot })) {
     if (pathIsInside(resolved, root)) {
       return toPosixPath(path.relative(root, resolved));
     }
@@ -425,9 +442,9 @@ function comparePythonSourceManifestPath(left, right) {
   return Buffer.compare(Buffer.from(left, "utf8"), Buffer.from(right, "utf8"));
 }
 
-function pythonSourceIdentity(repoRoot, scriptPath) {
+function pythonSourceIdentity(repoRoot, scriptPath, { packageRoot = CADJS_PACKAGE_ROOT } = {}) {
   const resolvedScriptPath = path.resolve(scriptPath);
-  const searchPaths = pythonSourceSearchPaths(repoRoot, resolvedScriptPath);
+  const searchPaths = pythonSourceSearchPaths(repoRoot, resolvedScriptPath, { packageRoot });
   const allowedRoots = searchPaths.map((entry) => path.resolve(entry));
   const queue = [resolvedScriptPath];
   const seen = new Set();
@@ -446,7 +463,7 @@ function pythonSourceIdentity(repoRoot, scriptPath) {
     }
   }
   const manifestFiles = [...files.entries()]
-    .map(([filePath, hash]) => ({ path: pythonSourceManifestPath(repoRoot, filePath), hash }))
+    .map(([filePath, hash]) => ({ path: pythonSourceManifestPath(repoRoot, filePath, { packageRoot }), hash }))
     .sort((a, b) => comparePythonSourceManifestPath(a.path, b.path));
   const digest = crypto.createHash("sha256");
   for (const file of manifestFiles) {
@@ -456,7 +473,7 @@ function pythonSourceIdentity(repoRoot, scriptPath) {
     digest.update("\0");
   }
   return {
-    sourcePath: pythonSourceManifestPath(repoRoot, resolvedScriptPath),
+    sourcePath: pythonSourceManifestPath(repoRoot, resolvedScriptPath, { packageRoot }),
     sourceHash: files.get(resolvedScriptPath) || "",
     sourceFingerprint: digest.digest("hex"),
     files: manifestFiles,
@@ -617,18 +634,21 @@ function pythonSourceIdentityForArtifact({
   artifactFingerprint = "",
 }) {
   let fallback = null;
+  const packageRoots = pythonRuntimePackageRoots(repoRoot);
   for (const root of pythonIdentityRootCandidates({ repoRoot, sourceFilePath, anchorPath, preferredRoot })) {
-    try {
-      const identity = pythonSourceIdentity(root, sourceFilePath);
-      const result = { identity, identityRoot: root };
-      if (!fallback) {
-        fallback = result;
+    for (const packageRoot of packageRoots) {
+      try {
+        const identity = pythonSourceIdentity(root, sourceFilePath, { packageRoot });
+        const result = { identity, identityRoot: root };
+        if (!fallback) {
+          fallback = result;
+        }
+        if (artifactFingerprint && identity.sourceFingerprint === artifactFingerprint) {
+          return result;
+        }
+      } catch {
+        // Try the next plausible identity root/runtime package combination.
       }
-      if (artifactFingerprint && identity.sourceFingerprint === artifactFingerprint) {
-        return result;
-      }
-    } catch {
-      // Try the next plausible identity root.
     }
   }
   return fallback || { identity: null, identityRoot: path.resolve(repoRoot) };
