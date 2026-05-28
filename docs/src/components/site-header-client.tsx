@@ -29,10 +29,33 @@ function formatGitHubStars(stars: number) {
   return new Intl.NumberFormat("en-US").format(stars);
 }
 
+function VersionLink({ version }: { version: string }) {
+  const normalizedVersion = version.trim();
+
+  if (!normalizedVersion) {
+    return null;
+  }
+
+  return (
+    <a
+      className="hidden px-2.5 py-1.5 text-ui text-muted-foreground transition hover:bg-secondary hover:text-foreground md:inline-flex"
+      href={`${GITHUB_REPO_URL}/releases`}
+      target="_blank"
+      rel="noreferrer"
+      aria-label={`Open GitHub releases for version ${normalizedVersion}`}
+      title={`Open GitHub releases for version ${normalizedVersion}`}
+    >
+      v{normalizedVersion}
+    </a>
+  );
+}
+
 export function SiteHeaderClient({
   githubStars,
+  version,
 }: {
   githubStars: number | null;
+  version: string;
 }) {
   const githubLabel =
     githubStars === null
@@ -69,6 +92,7 @@ export function SiteHeaderClient({
           >
             INSTALL
           </a>
+          <VersionLink version={version} />
         </nav>
 
         <div className="ml-auto flex shrink-0 items-center gap-1 sm:ml-0">

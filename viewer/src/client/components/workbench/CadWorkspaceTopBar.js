@@ -1,4 +1,4 @@
-import { Fragment } from "react";
+import { Fragment, useEffect, useState } from "react";
 import {
   Bot,
   Boxes,
@@ -55,6 +55,8 @@ import {
   sidebarDirectoryIdForEntry,
   sidebarDirectoryPath
 } from "@/workbench/sidebar";
+import viewerPackage from "../../../../package.json";
+import { copyTextToClipboard } from "@/ui/clipboard";
 
 function collapsedBreadcrumbNodes(nodes) {
   if (nodes.length <= 4) {
@@ -683,6 +685,53 @@ function nextColorMode(currentColorMode) {
     : DARK_COLOR_SCHEME_ID;
 }
 
+function VersionCopyButton() {
+  const [copyStatus, setCopyStatus] = useState("");
+  const version = String(viewerPackage.version || "").trim();
+
+  useEffect(() => {
+    if (!copyStatus) {
+      return undefined;
+    }
+    const timeout = globalThis.setTimeout(() => setCopyStatus(""), 1400);
+    return () => globalThis.clearTimeout(timeout);
+  }, [copyStatus]);
+
+  if (!version) {
+    return null;
+  }
+
+  const copyLabel = copyStatus === "copied"
+    ? "Copied version"
+    : copyStatus === "error"
+      ? "Version copy failed"
+      : `Copy version ${version}`;
+
+  const handleCopyVersion = async () => {
+    try {
+      await copyTextToClipboard(version);
+      setCopyStatus("copied");
+    } catch {
+      setCopyStatus("error");
+    }
+  };
+
+  return (
+    <Button
+      type="button"
+      variant="ghost"
+      size="xs"
+      className="hidden h-7 rounded-sm px-2 text-[10px] font-medium leading-none text-muted-foreground tabular-nums hover:text-sidebar-foreground md:inline-flex"
+      onClick={handleCopyVersion}
+      aria-label={copyLabel}
+      title={copyLabel}
+      aria-live="polite"
+    >
+      v{version}
+    </Button>
+  );
+}
+
 export default function CadWorkspaceTopBar({
   previewMode,
   sidebarLabelForEntry,
@@ -879,6 +928,7 @@ export default function CadWorkspaceTopBar({
       </Breadcrumb>
 
       <div className="flex shrink-0 items-center gap-0.5">
+        <VersionCopyButton />
         {githubUrl ? (
           <Button
             asChild

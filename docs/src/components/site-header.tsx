@@ -1,4 +1,5 @@
 import { SiteHeaderClient } from "@/components/site-header-client";
+import packageJson from "../../package.json";
 
 const GITHUB_REPO_API_URL =
   "https://api.github.com/repos/earthtojake/text-to-cad";
@@ -28,5 +29,10 @@ async function getGitHubStars() {
 
 export async function SiteHeader() {
   const githubStars = await getGitHubStars();
-  return <SiteHeaderClient githubStars={githubStars} />;
+  return (
+    <SiteHeaderClient
+      githubStars={githubStars}
+      version={packageJson.version}
+    />
+  );
 }

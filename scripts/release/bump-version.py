@@ -492,6 +492,8 @@ def main(argv: list[str]) -> int:
             print(f"Would {action}.")
         if args.tag:
             print(f"Would create release tag: {next_version}")
+        if not args.commit and not args.amend and not args.tag:
+            print(f"Release prep command: scripts/release/create-github-release.sh --set-version {next_version}")
         return 0
 
     for path, text in updates.items():
@@ -515,7 +517,7 @@ def main(argv: list[str]) -> int:
     elif committed:
         print(f"Release tag to create separately: {next_version}")
     else:
-        print(f"Release tag to create separately after commit: {next_version}")
+        print(f"Release prep command: scripts/release/create-github-release.sh --set-version {next_version}")
     return 0
 
 

@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { ChevronDown } from "lucide-react";
 import { Badge } from "../ui/badge";
 import { Button } from "../ui/button";
 import { copyTextToClipboard } from "@/ui/clipboard";
@@ -134,9 +135,13 @@ export default function FileStatusSection({
                   <div className="min-w-0 flex-1 truncate font-medium leading-4 text-sidebar-foreground" title={item.title}>{item.title}</div>
                   <span className="ml-auto inline-flex h-5 shrink-0 items-center gap-1">
                     {hasDetails ? (
-                      <span className="inline-flex h-5 items-center px-1 text-[10px] font-normal text-muted-foreground">
-                        {expanded ? "Hide" : "Details"}
-                      </span>
+                      <ChevronDown
+                        className={cn(
+                          "size-3.5 text-muted-foreground transition-transform",
+                          expanded && "rotate-180"
+                        )}
+                        aria-hidden="true"
+                      />
                     ) : null}
                     <Button
                       type="button"
