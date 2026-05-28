@@ -16,7 +16,9 @@ from inspect_refs import cli as inspect_cli
 from inspect_refs import inspect as refs_inspect
 from cadpy import cad_ref_syntax as refs_syntax
 from cadpy import assembly_spec
+from cadpy import generation as cad_generation
 from cadpy import step_targets
+from cadpy.glb_topology import STEP_TOPOLOGY_SCHEMA_VERSION
 from cadpy.render import part_glb_path
 from cadpy.selector_types import SelectorBundle, SelectorProfile
 from cadpy.source_hash import python_source_hash
@@ -25,7 +27,7 @@ from common.tests.cad_test_roots import IsolatedCadRoots
 
 def _refs_manifest(cad_ref: str) -> dict[str, object]:
     return {
-        "schemaVersion": 3,
+        "schemaVersion": STEP_TOPOLOGY_SCHEMA_VERSION,
         "profile": "refs",
         "cadPath": cad_ref,
         "stepPath": f"{cad_ref}.step",
@@ -280,7 +282,7 @@ def _refs_manifest(cad_ref: str) -> dict[str, object]:
 
 def _summary_manifest(cad_ref: str) -> dict[str, object]:
     return {
-        "schemaVersion": 3,
+        "schemaVersion": STEP_TOPOLOGY_SCHEMA_VERSION,
         "profile": "summary",
         "cadPath": cad_ref,
         "stepPath": f"{cad_ref}.step",
@@ -405,11 +407,16 @@ class InspectRefsTests(unittest.TestCase):
                 },
             },
         }
-        topology_manifest = {"schemaVersion": 3, **manifest}
+        topology_manifest = {"schemaVersion": STEP_TOPOLOGY_SCHEMA_VERSION, **manifest}
+        source_kind = str(topology_manifest.get("sourceKind") or "step").strip().lower()
+        source_path = resolved_step_path.with_suffix(".py") if source_kind == "python" else resolved_step_path
+        topology_manifest.setdefault("sourceKind", source_kind)
+        topology_manifest.setdefault("sourcePath", self._manifest_path(source_path))
+        topology_manifest.setdefault("stepPath", self._manifest_path(resolved_step_path))
         topology_manifest.setdefault("edgeRendering", edge_rendering)
         topology_manifest.setdefault("mesh", mesh)
         edge_manifest = {
-            "schemaVersion": 3,
+            "schemaVersion": STEP_TOPOLOGY_SCHEMA_VERSION,
             "profile": "surface-edges",
             "edgeRendering": edge_rendering,
             "primitiveAttributes": {
@@ -418,19 +425,23 @@ class InspectRefsTests(unittest.TestCase):
             },
             "buffers": {"views": {"surfaceHalfEdges": {}}},
         }
-        if str(topology_manifest.get("sourceKind") or "").strip().lower() == "python":
+        if source_kind == "python":
             edge_manifest["sourceKind"] = "python"
+            edge_manifest["sourcePath"] = topology_manifest.get("sourcePath")
             edge_manifest["sourceHash"] = topology_manifest.get("sourceHash")
+            edge_manifest["sourceFingerprint"] = topology_manifest.get("sourceFingerprint")
         else:
+            edge_manifest["sourceKind"] = "step"
+            edge_manifest["sourcePath"] = topology_manifest.get("sourcePath")
             edge_manifest["stepHash"] = topology_manifest.get("stepHash")
         self._touch_glb(resolved_step_path)
         stack = contextlib.ExitStack()
         with stack:
             stack.enter_context(mock.patch.object(step_targets, "find_step_path", return_value=resolved_step_path))
             stack.enter_context(
-                mock.patch.object(step_targets, "sha256_file", return_value=str(topology_manifest.get("stepHash") or ""))
+                mock.patch.object(cad_generation, "step_file_hash", return_value=str(topology_manifest.get("stepHash") or ""))
                 if current_hash is None
-                else mock.patch.object(step_targets, "sha256_file", return_value=current_hash)
+                else mock.patch.object(cad_generation, "step_file_hash", return_value=current_hash)
             )
             stack.enter_context(
                 mock.patch.object(
@@ -447,6 +458,7 @@ class InspectRefsTests(unittest.TestCase):
                 )
             )
             stack.enter_context(mock.patch.object(step_targets, "glb_primitives_have_surface_edge_attributes", return_value=True))
+            stack.enter_context(mock.patch.object(step_targets, "glb_surface_edge_class_has_nonzero_values", return_value=True))
             stack.enter_context(
                 mock.patch.object(
                     step_targets,
@@ -459,6 +471,13 @@ class InspectRefsTests(unittest.TestCase):
                 )
             )
             yield
+
+    def _manifest_path(self, path: Path) -> str:
+        resolved = path.resolve()
+        try:
+            return resolved.relative_to(assembly_spec.REPO_ROOT).as_posix()
+        except ValueError:
+            return resolved.as_posix()
 
     def test_whole_entry_summary_uses_glb_index(self) -> None:
         with self._mock_glb_topology(_summary_manifest(self.cad_ref), include_selector=False):
@@ -478,8 +497,8 @@ class InspectRefsTests(unittest.TestCase):
         manifest = {
             **_summary_manifest(self.cad_ref),
             "sourceKind": "python",
-            "sourceHash": source_identity.digest,
-            "sourceFiles": source_identity.manifest_files(),
+            "sourceHash": source_identity.source_hash,
+            "sourceFingerprint": source_identity.source_fingerprint,
         }
 
         with self._mock_glb_topology(manifest, include_selector=False):
@@ -638,7 +657,7 @@ class InspectRefsTests(unittest.TestCase):
 
     def test_unsupported_step_topology_is_an_inspect_error(self) -> None:
         self._touch_glb()
-        manifest = {**_summary_manifest(self.cad_ref), "schemaVersion": 2}
+        manifest = {**_summary_manifest(self.cad_ref), "schemaVersion": STEP_TOPOLOGY_SCHEMA_VERSION + 1}
 
         with mock.patch.object(step_targets, "find_step_path", return_value=self.step_path), mock.patch.object(
             step_targets,
@@ -699,8 +718,8 @@ class InspectRefsTests(unittest.TestCase):
             {
                 **_refs_manifest(assembly_cad_ref),
                 "sourceKind": "python",
-                "sourceHash": source_identity.digest,
-                "sourceFiles": source_identity.manifest_files(),
+                "sourceHash": source_identity.source_hash,
+                "sourceFingerprint": source_identity.source_fingerprint,
             },
             step_path=assembly_step_path,
         ):

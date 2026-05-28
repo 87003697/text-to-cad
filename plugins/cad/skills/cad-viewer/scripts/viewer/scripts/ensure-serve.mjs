@@ -8,7 +8,7 @@ import net from "node:net";
 import path3 from "node:path";
 import { fileURLToPath } from "node:url";
 
-// ../../../Users/jakefitzgerald/robots/text-to-cad/viewer/packages/cadjs/src/lib/pathUtils.mjs
+// viewer/packages/cadjs/src/lib/pathUtils.mjs
 import path from "node:path";
 function toPosixPath(value) {
   return String(value || "").split(path.sep).join("/");
@@ -51,7 +51,7 @@ function resolveWorkspaceRoot({
   return defaultWorkspaceRoot2 ? path.resolve(defaultWorkspaceRoot2) : path.resolve(cwd);
 }
 
-// ../../../Users/jakefitzgerald/robots/text-to-cad/viewer/packages/cadjs/src/lib/viewerServerInfo.mjs
+// viewer/packages/cadjs/src/lib/viewerServerInfo.mjs
 var VIEWER_SERVER_APP_ID = "cad-viewer";
 var DEFAULT_VIEWER_HOST = "127.0.0.1";
 var DEFAULT_VIEWER_PORT = 4178;
@@ -68,7 +68,7 @@ function isViewerServerInfo(value) {
   );
 }
 
-// ../../../Users/jakefitzgerald/robots/text-to-cad/viewer/packages/cadjs/src/lib/viewerServerRegistry.mjs
+// viewer/packages/cadjs/src/lib/viewerServerRegistry.mjs
 import fs from "node:fs";
 import os from "node:os";
 import path2 from "node:path";
