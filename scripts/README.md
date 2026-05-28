@@ -21,3 +21,17 @@ Release version bumps:
 scripts/release/bump-version.py patch --dry-run
 scripts/release/bump-version.py patch
 ```
+
+Release prep with GitHub Releases:
+
+```bash
+scripts/release/create-github-release.sh patch --dry-run
+scripts/release/create-github-release.sh patch
+```
+
+`create-github-release.sh` wraps the version bump, refreshes generated
+skill/plugin outputs, runs generated-output checks and plugin validation,
+commits the release metadata, tags it, pushes the current branch and tag, and
+creates a draft GitHub Release with generated notes. Use `--publish` to publish
+the release immediately, `--run-tests` to include `scripts/test.sh`, or
+`--skip-release` when preparing only the commit and tag.

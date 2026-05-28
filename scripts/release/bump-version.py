@@ -315,13 +315,13 @@ def main(argv: list[str]) -> int:
 
     if args.dry_run:
         print("Dry run only; no files changed.")
-        print(f"Release tag to create separately: {next_version}")
+        print(f"Release prep command: scripts/release/create-github-release.sh --set-version {next_version}")
         return 0
 
     for path, text in updates.items():
         path.write_text(text, encoding="utf-8")
     print(f"Updated {len(updates)} file(s).")
-    print(f"Release tag to create separately: {next_version}")
+    print(f"Release prep command: scripts/release/create-github-release.sh --set-version {next_version}")
     return 0
 
 
