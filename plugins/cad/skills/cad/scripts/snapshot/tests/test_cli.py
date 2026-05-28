@@ -5,6 +5,7 @@ import tempfile
 import unittest
 from pathlib import Path
 import sys
+from types import SimpleNamespace
 
 
 SCRIPTS_DIR = Path(__file__).resolve().parents[2]
@@ -27,6 +28,22 @@ from snapshot.__main__ import (
 class _TtyStringIO(io.StringIO):
     def isatty(self) -> bool:
         return True
+
+
+def _selector_artifact(*occurrence_ids: str) -> SimpleNamespace:
+    return SimpleNamespace(
+        selector_bundle=SimpleNamespace(
+            manifest={
+                "tables": {
+                    "occurrenceColumns": ["id"],
+                    "shapeColumns": ["id", "occurrenceId"],
+                },
+                "occurrences": [[occurrence_id] for occurrence_id in occurrence_ids],
+                "shapes": [],
+            },
+            buffers={},
+        )
+    )
 
 
 class SnapshotCliTests(unittest.TestCase):
@@ -52,6 +69,30 @@ class SnapshotCliTests(unittest.TestCase):
         self.assertEqual(job["outputs"][0]["path"], "tmp/cap.png")
         self.assertEqual(job["display"], {"mode": "wireframe"})
         self.assertEqual(job["render"]["sizeProfile"], "simple")
+
+    def test_shortcut_focus_and_hide_flags_apply_selection(self) -> None:
+        options = parse_snapshot_args(
+            [
+                "--input",
+                "models/assembly.step",
+                "--output",
+                "tmp/assembly.png",
+                "--focus",
+                "@cad[models/assembly#o1.2]",
+                "@cad[models/assembly#o1.3]",
+                "--hide=@cad[models/assembly#o1.3.1]",
+            ]
+        )
+
+        job = load_job_from_options(options, stdin=_TtyStringIO(), cwd=Path.cwd())
+
+        self.assertEqual(
+            job["selection"],
+            {
+                "focus": ["@cad[models/assembly#o1.2]", "@cad[models/assembly#o1.3]"],
+                "hide": ["@cad[models/assembly#o1.3.1]"],
+            },
+        )
 
     def test_output_paths_are_timestamped_when_jobs_are_resolved(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
@@ -132,6 +173,63 @@ class SnapshotCliTests(unittest.TestCase):
         self.assertEqual(job["resolved"]["rootPath"], str(models))
         self.assertEqual(job["resolved"]["inputUrl"], "/__render_asset/part.step")
         self.assertEqual(job["resolved"]["glbUrl"], "/__render_asset/.part.step.glb")
+
+    def test_render_job_normalizes_focus_and_hide_cad_refs(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory).resolve()
+            models = root / "models"
+            models.mkdir()
+            (models / "assembly.step").write_text("ISO-10303-21;\nEND-ISO-10303-21;\n", encoding="utf-8")
+            (models / ".assembly.step.glb").write_bytes(b"glb")
+
+            original_ensure = snapshot_main.ensure_step_topology_artifact
+            try:
+                snapshot_main.ensure_step_topology_artifact = lambda *args, **kwargs: _selector_artifact(
+                    "o1",
+                    "o1.2",
+                    "o1.2.1",
+                    "o1.3",
+                )
+                packet = resolve_render_job_packet(
+                    {
+                        "input": "models/assembly.step",
+                        "selection": {
+                            "focus": ["@cad[models/assembly#o1.2,o1.3]"],
+                            "hide": ["@cad[models/assembly.step#o1.2.1]"],
+                        },
+                        "outputs": [{"path": "tmp/iso.png", "camera": "iso"}],
+                    },
+                    cwd=root,
+                )
+            finally:
+                snapshot_main.ensure_step_topology_artifact = original_ensure
+
+        selection = packet["jobs"][0]["selection"]
+        self.assertEqual(selection["focus"], ["o1.2", "o1.3"])
+        self.assertEqual(selection["hide"], ["o1.2.1"])
+
+    def test_render_job_rejects_face_focus_refs(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory).resolve()
+            models = root / "models"
+            models.mkdir()
+            (models / "assembly.step").write_text("ISO-10303-21;\nEND-ISO-10303-21;\n", encoding="utf-8")
+            (models / ".assembly.step.glb").write_bytes(b"glb")
+
+            original_ensure = snapshot_main.ensure_step_topology_artifact
+            try:
+                snapshot_main.ensure_step_topology_artifact = lambda *args, **kwargs: _selector_artifact("o1", "o1.2")
+                with self.assertRaisesRegex(SnapshotError, "part/subassembly occurrence refs"):
+                    resolve_render_job_packet(
+                        {
+                            "input": "models/assembly.step",
+                            "selection": {"focus": ["@cad[models/assembly#o1.2.f1]"]},
+                            "outputs": [{"path": "tmp/iso.png", "camera": "iso"}],
+                        },
+                        cwd=root,
+                    )
+            finally:
+                snapshot_main.ensure_step_topology_artifact = original_ensure
 
     def test_snapshot_root_flags_and_job_fields_are_removed(self) -> None:
         with self.assertRaisesRegex(SnapshotError, "Unknown argument: --workspace-root"):
