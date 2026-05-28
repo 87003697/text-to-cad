@@ -9,6 +9,36 @@ on:
       - main
 
 jobs:
+  version-check:
+    name: Version Check
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Check release versions are consistent
+        run: scripts/release/bump-version.sh --check
+
+      - name: Check release version is incremented from main
+        env:
+          PULL_REQUEST_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          PUSH_BEFORE_SHA: ${{ github.event.before }}
+        run: |
+          if [ "$GITHUB_EVENT_NAME" = "pull_request" ]; then
+            base_ref="$PULL_REQUEST_BASE_SHA"
+          else
+            base_ref="$PUSH_BEFORE_SHA"
+          fi
+          scripts/release/bump-version.sh --check-incremented-from "$base_ref"
+
   test-suite:
     name: Test Suite
     runs-on: ubuntu-latest

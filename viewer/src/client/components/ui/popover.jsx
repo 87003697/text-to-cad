@@ -9,21 +9,22 @@ function Popover({
   return <PopoverPrimitive.Root data-slot="popover" {...props} />
 }
 
-function PopoverTrigger({
+const PopoverTrigger = React.forwardRef(function PopoverTrigger({
   ...props
-}) {
-  return <PopoverPrimitive.Trigger data-slot="popover-trigger" {...props} />
-}
+}, ref) {
+  return <PopoverPrimitive.Trigger ref={ref} data-slot="popover-trigger" {...props} />
+});
 
-function PopoverContent({
+const PopoverContent = React.forwardRef(function PopoverContent({
   className,
   align = "center",
   sideOffset = 4,
   ...props
-}) {
+}, ref) {
   return (
     <PopoverPrimitive.Portal>
       <PopoverPrimitive.Content
+        ref={ref}
         data-slot="popover-content"
         align={align}
         sideOffset={sideOffset}
@@ -35,6 +36,6 @@ function PopoverContent({
       />
     </PopoverPrimitive.Portal>
   )
-}
+});
 
 export { Popover, PopoverContent, PopoverTrigger }

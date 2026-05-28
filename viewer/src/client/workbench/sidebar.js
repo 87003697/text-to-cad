@@ -15,7 +15,13 @@ export function cadPathForEntry(entry) {
 
 function replaceUrl(url) {
   const nextSearch = url.searchParams.toString();
-  window.history.replaceState({}, "", `${url.pathname}${nextSearch ? `?${nextSearch}` : ""}${url.hash}`);
+  const nextUrl = `${url.pathname}${nextSearch ? `?${nextSearch}` : ""}${url.hash}`;
+  const currentUrl = `${window.location.pathname}${window.location.search}${window.location.hash}`;
+  if (nextUrl === currentUrl) {
+    return false;
+  }
+  window.history.replaceState({}, "", nextUrl);
+  return true;
 }
 
 function normalizeUrlPath(value) {

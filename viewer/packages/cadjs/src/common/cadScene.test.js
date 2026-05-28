@@ -59,6 +59,67 @@ function sampleMeshData() {
   };
 }
 
+function nestedAssemblyMeshData() {
+  return {
+    vertices: new Float32Array([
+      0, 0, 0,
+      1, 0, 0,
+      0, 1, 0,
+      2, 0, 0,
+      3, 0, 0,
+      2, 1, 0,
+      10, 0, 0,
+      11, 0, 0,
+      10, 1, 0
+    ]),
+    indices: new Uint32Array([0, 1, 2, 3, 4, 5, 6, 7, 8]),
+    normals: new Float32Array([
+      0, 0, 1,
+      0, 0, 1,
+      0, 0, 1,
+      0, 0, 1,
+      0, 0, 1,
+      0, 0, 1,
+      0, 0, 1,
+      0, 0, 1,
+      0, 0, 1
+    ]),
+    bounds: {
+      min: [0, 0, 0],
+      max: [11, 1, 0]
+    },
+    parts: [
+      {
+        id: "o1.2.1",
+        occurrenceId: "o1.2.1",
+        vertexOffset: 0,
+        vertexCount: 3,
+        triangleOffset: 0,
+        triangleCount: 1,
+        bounds: { min: [0, 0, 0], max: [1, 1, 0] }
+      },
+      {
+        id: "o1.2.2",
+        occurrenceId: "o1.2.2",
+        vertexOffset: 3,
+        vertexCount: 3,
+        triangleOffset: 1,
+        triangleCount: 1,
+        bounds: { min: [2, 0, 0], max: [3, 1, 0] }
+      },
+      {
+        id: "o1.3",
+        occurrenceId: "o1.3",
+        vertexOffset: 6,
+        vertexCount: 3,
+        triangleOffset: 2,
+        triangleCount: 1,
+        bounds: { min: [10, 0, 0], max: [11, 1, 0] }
+      }
+    ]
+  };
+}
+
 function createDisplayRecord(partId, {
   baseOpacity = 1
 } = {}) {
@@ -187,6 +248,38 @@ test("buildModel renders solid part records and updates theme without rebuilding
   assert.equal(scene.displayRecords[0].mesh.geometry, firstGeometry);
   assert.equal(scene.displayRecords[0].material.color.getHexString(), "ff0000");
   scene.dispose();
+});
+
+test("buildModel selection can focus and hide subassembly occurrence descendants", () => {
+  const focused = buildModel(THREE, nestedAssemblyMeshData(), {
+    theme: cloneThemeSettings("workbench"),
+    renderPartsIndividually: true,
+    selection: {
+      focus: ["@cad[models/assembly#o1.2]"]
+    }
+  });
+
+  assert.deepEqual(focused.displayRecords.map((record) => record.partId), ["o1.2.1", "o1.2.2"]);
+  assert.deepEqual(focused.bounds, {
+    min: [0, 0, 0],
+    max: [3, 1, 0]
+  });
+  focused.dispose();
+
+  const hidden = buildModel(THREE, nestedAssemblyMeshData(), {
+    theme: cloneThemeSettings("workbench"),
+    renderPartsIndividually: true,
+    selection: {
+      hide: ["o1.2"]
+    }
+  });
+
+  assert.deepEqual(hidden.displayRecords.map((record) => record.partId), ["o1.3"]);
+  assert.deepEqual(hidden.bounds, {
+    min: [10, 0, 0],
+    max: [11, 1, 0]
+  });
+  hidden.dispose();
 });
 
 test("buildModel renders STEP surface-owned edges from mesh attributes without line objects", () => {
