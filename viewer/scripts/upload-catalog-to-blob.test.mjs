@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import crypto from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -20,6 +21,10 @@ function makeTempRepo() {
 function writeFile(filePath, content = "") {
   fs.mkdirSync(path.dirname(filePath), { recursive: true });
   fs.writeFileSync(filePath, content);
+}
+
+function shortHash(value) {
+  return crypto.createHash("sha256").update(value).digest("hex").slice(0, 16);
 }
 
 test("upload ignore patterns support comments, directory patterns, globs, and negation", () => {
@@ -140,7 +145,8 @@ test("uploadCatalogDirectoryToVercelBlob applies default catalog exclusions", as
   const repoRoot = makeTempRepo();
   writeFile(path.join(repoRoot, "models/keep.stl"), "solid keep\nendsolid keep\n");
   writeFile(path.join(repoRoot, "models/part.step"), "ISO-10303-21;\nEND-ISO-10303-21;\n");
-  writeFile(path.join(repoRoot, "models/.part.step.js"), "export default { manifest: { schemaVersion: 1 } };\n");
+  const stepModuleBody = "export default { manifest: { schemaVersion: 1 } };\n";
+  writeFile(path.join(repoRoot, "models/.part.step.js"), stepModuleBody);
   writeFile(path.join(repoRoot, "models/mechbench/skipped.stl"), "solid skip\nendsolid skip\n");
   writeFile(path.join(repoRoot, "models/mechbench2/skipped.stl"), "solid skip\nendsolid skip\n");
   writeFile(path.join(repoRoot, "models/7dof_arm/skipped.step"), "ISO-10303-21;\nEND-ISO-10303-21;\n");
@@ -165,13 +171,13 @@ test("uploadCatalogDirectoryToVercelBlob applies default catalog exclusions", as
   });
 
   assert.deepEqual(putCalls.map((call) => call.pathname).sort(), [
-    "models2/.part.step.js",
+    `models2/.part.step.${shortHash(stepModuleBody)}.js`,
     "models2/catalog.json",
     "models2/keep.stl",
     "models2/part.step",
   ]);
   assert.equal(
-    putCalls.find((call) => call.pathname === "models2/.part.step.js").options.contentType,
+    putCalls.find((call) => call.pathname === `models2/.part.step.${shortHash(stepModuleBody)}.js`).options.contentType,
     "text/javascript; charset=utf-8",
   );
   assert.equal(putCalls.find((call) => call.pathname === "models2/keep.stl").options.contentType, "model/stl");
@@ -185,7 +191,10 @@ test("uploadCatalogDirectoryToVercelBlob applies default catalog exclusions", as
   assert.deepEqual(uploadedCatalog.entries.map((entry) => entry.file), ["keep.stl", "part.step"]);
   assert.equal(uploadedCatalog.entries[0].url, "https://blob.test/models2/keep.stl");
   assert.equal(uploadedCatalog.entries[1].step.url, "https://blob.test/models2/part.step");
-  assert.equal(uploadedCatalog.entries[1].moduleUrl, "https://blob.test/models2/.part.step.js");
+  assert.equal(
+    uploadedCatalog.entries[1].moduleUrl,
+    `https://blob.test/models2/.part.step.${shortHash(stepModuleBody)}.js`
+  );
   assert.deepEqual(result.ignoredPatterns.slice(0, DEFAULT_UPLOAD_EXCLUDE_PATTERNS.length), DEFAULT_UPLOAD_EXCLUDE_PATTERNS);
 });
 

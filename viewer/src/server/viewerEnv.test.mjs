@@ -24,21 +24,29 @@ test("viewer env reads Blob settings", () => {
   assert.deepEqual(
     vercelBlobConfigFromEnv({
       VIEWER_VERCEL_BLOB_PREFIX: "https://blob.example/models2/",
+      VIEWER_VERCEL_BLOB_CATALOG_PATH: "catalog-0.1.3.json",
       VIEWER_VERCEL_BLOB_READ_WRITE_TOKEN: "test-token",
     }),
     {
       prefix: "https://blob.example/models2/",
-      catalogPath: "catalog.json",
-      catalogUrl: "https://blob.example/models2/catalog.json",
+      catalogPath: "catalog-0.1.3.json",
+      catalogUrl: "https://blob.example/models2/catalog-0.1.3.json",
       token: "test-token",
     }
+  );
+  assert.equal(
+    vercelBlobConfigFromEnv({
+      VIEWER_VERCEL_BLOB_PREFIX: "https://blob.example/models2/",
+      BLOB_READ_WRITE_TOKEN: "blob-token",
+    }).token,
+    "blob-token"
   );
 });
 
 test("viewer env derives catalog URL only from public Blob URL prefixes", () => {
   assert.equal(
-    vercelBlobCatalogUrlFromPrefix("https://blob.example/models2"),
-    "https://blob.example/models2/catalog.json"
+    vercelBlobCatalogUrlFromPrefix("https://blob.example/models2", "catalog-0.1.3.json"),
+    "https://blob.example/models2/catalog-0.1.3.json"
   );
   assert.equal(vercelBlobCatalogUrlFromPrefix("models2"), "");
 });

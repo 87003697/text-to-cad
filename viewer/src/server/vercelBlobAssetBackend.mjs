@@ -271,6 +271,14 @@ export function createVercelBlobAssetBackend({
   }
 
   async function readCatalog() {
+    let publicCatalogError = null;
+    if (resolvedCatalogUrl) {
+      try {
+        return await readJsonFromUrl(resolvedCatalogUrl, { fetchImpl });
+      } catch (error) {
+        publicCatalogError = error;
+      }
+    }
     if (hasBlobSdkReadCredentials(token)) {
       const blob = await blobClient();
       if (typeof blob.get === "function") {
@@ -284,8 +292,8 @@ export function createVercelBlobAssetBackend({
         );
       }
     }
-    if (resolvedCatalogUrl) {
-      return readJsonFromUrl(resolvedCatalogUrl, { fetchImpl });
+    if (publicCatalogError) {
+      throw publicCatalogError;
     }
     const blob = await blobClient();
     const listing = await blob.list({ prefix: normalizedCatalogPath, token });

@@ -38,6 +38,7 @@ export const DEFAULT_UPLOAD_EXCLUDE_PATTERNS = Object.freeze([
   "*.py",
 ]);
 const DEFAULT_UPLOAD_CONCURRENCY = 4;
+const CACHE_BUSTED_UPLOAD_EXTENSIONS = new Set([".js", ".mjs"]);
 
 function usage() {
   return `Usage:
@@ -103,6 +104,16 @@ function fileAssetMetadata(filePath) {
     hash: sha256File(filePath),
     bytes: Number(stats.size),
   };
+}
+
+function cacheBustedUploadFileRef({ fileRef, hash }) {
+  const normalizedRef = cleanPosixPath(fileRef);
+  const extension = path.posix.extname(normalizedRef).toLowerCase();
+  const normalizedHash = String(hash || "").trim().replace(/[^a-fA-F0-9]/g, "").slice(0, 16);
+  if (!normalizedRef || !normalizedHash || !CACHE_BUSTED_UPLOAD_EXTENSIONS.has(extension)) {
+    return normalizedRef;
+  }
+  return `${normalizedRef.slice(0, -extension.length)}.${normalizedHash}${extension}`;
 }
 
 function escapeRegExp(value) {
@@ -412,8 +423,9 @@ function addCatalogReferencedFiles(uploadFiles, {
 }
 
 async function uploadOneFile(backend, uploadFile) {
+  const blobFileRef = cacheBustedUploadFileRef(uploadFile);
   return backend.writeAsset({
-    fileRef: uploadFile.fileRef,
+    fileRef: blobFileRef,
     body: fs.createReadStream(uploadFile.filePath),
     contentType: contentTypeForFileRef(uploadFile.fileRef),
   });
@@ -433,9 +445,11 @@ async function uploadFilesToBlob({ backend, uploadFiles, concurrency = DEFAULT_U
         return;
       }
       logger.log?.(`Uploading ${uploadFile.fileRef}`);
+      const blobFileRef = cacheBustedUploadFileRef(uploadFile);
       const upload = await uploadOneFile(backend, uploadFile);
       uploads.set(uploadFile.fileRef, {
         ...uploadFile,
+        blobFileRef,
         url: upload?.url || "",
         pathname: upload?.pathname || "",
       });

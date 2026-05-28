@@ -24656,6 +24656,14 @@ function createVercelBlobAssetBackend({
     return loadBlobClient(client);
   }
   async function readCatalog() {
+    let publicCatalogError = null;
+    if (resolvedCatalogUrl) {
+      try {
+        return await readJsonFromUrl(resolvedCatalogUrl, { fetchImpl });
+      } catch (error) {
+        publicCatalogError = error;
+      }
+    }
     if (hasBlobSdkReadCredentials(token)) {
       const blob2 = await blobClient();
       if (typeof blob2.get === "function") {
@@ -24669,8 +24677,8 @@ function createVercelBlobAssetBackend({
         );
       }
     }
-    if (resolvedCatalogUrl) {
-      return readJsonFromUrl(resolvedCatalogUrl, { fetchImpl });
+    if (publicCatalogError) {
+      throw publicCatalogError;
     }
     const blob = await blobClient();
     const listing = await blob.list({ prefix: normalizedCatalogPath, token });
@@ -24946,15 +24954,19 @@ function localRootDirFromEnv(env = process.env) {
 function rootDirForAssetBackend(assetBackend, env = process.env) {
   return assetBackend === VIEWER_ASSET_BACKENDS.LOCAL_FS ? localRootDirFromEnv(env) : DEFAULT_VIEWER_ROOT_DIR;
 }
-function vercelBlobCatalogUrlFromPrefix(prefix) {
+function vercelBlobCatalogUrlFromPrefix(prefix, catalogPath = "catalog.json") {
   const rawPrefix = envValue({ prefix }, "prefix");
   if (!rawPrefix) {
+    return "";
+  }
+  const normalizedCatalogPath = String(catalogPath || "catalog.json").trim().replace(/^\/+/, "");
+  if (!normalizedCatalogPath) {
     return "";
   }
   try {
     const url = new URL(rawPrefix);
     const pathname = url.pathname.replace(/^\/+|\/+$/g, "");
-    url.pathname = `/${[pathname, "catalog.json"].filter(Boolean).join("/")}`;
+    url.pathname = `/${[pathname, normalizedCatalogPath].filter(Boolean).join("/")}`;
     url.search = "";
     url.hash = "";
     return url.toString();
@@ -24964,11 +24976,12 @@ function vercelBlobCatalogUrlFromPrefix(prefix) {
 }
 function vercelBlobConfigFromEnv(env = process.env) {
   const prefix = envValue(env, "VIEWER_VERCEL_BLOB_PREFIX");
+  const catalogPath = envValue(env, "VIEWER_VERCEL_BLOB_CATALOG_PATH", "catalog.json") || "catalog.json";
   return {
     prefix,
-    catalogPath: "catalog.json",
-    catalogUrl: vercelBlobCatalogUrlFromPrefix(prefix),
-    token: envValue(env, "VIEWER_VERCEL_BLOB_READ_WRITE_TOKEN") || void 0
+    catalogPath,
+    catalogUrl: vercelBlobCatalogUrlFromPrefix(prefix, catalogPath),
+    token: envValue(env, "VIEWER_VERCEL_BLOB_READ_WRITE_TOKEN") || envValue(env, "BLOB_READ_WRITE_TOKEN") || void 0
   };
 }
 

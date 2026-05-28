@@ -14,8 +14,9 @@ test("Vercel Blob backend uses browser-safe MIME types for served modules", () =
   assert.equal(contentTypeForFileRef("models/catalog.json"), "application/json; charset=utf-8");
 });
 
-test("Vercel Blob backend reads catalog through authenticated Blob SDK when credentials are available", async () => {
+test("Vercel Blob backend falls back to authenticated Blob SDK when public catalog reads fail", async () => {
   const getCalls = [];
+  const fetchCalls = [];
   const backend = createVercelBlobAssetBackend({
     prefix: "demo",
     catalogUrl: "https://blob.test/demo/catalog.json",
@@ -32,8 +33,13 @@ test("Vercel Blob backend reads catalog through authenticated Blob SDK when cred
         };
       },
     },
-    fetchImpl: async () => {
-      throw new Error("public catalog URL should not be fetched when authenticated Blob reads are available");
+    fetchImpl: async (url) => {
+      fetchCalls.push(url);
+      return {
+        ok: false,
+        status: 403,
+        statusText: "Forbidden",
+      };
     },
     token: "test-token",
   });
@@ -42,6 +48,7 @@ test("Vercel Blob backend reads catalog through authenticated Blob SDK when cred
     schemaVersion: 4,
     entries: [{ file: "parts/bracket.step" }],
   });
+  assert.deepEqual(fetchCalls, ["https://blob.test/demo/catalog.json"]);
   assert.deepEqual(getCalls, [{
     pathname: "demo/catalog.json",
     options: {
@@ -49,6 +56,28 @@ test("Vercel Blob backend reads catalog through authenticated Blob SDK when cred
       token: "test-token",
     },
   }]);
+});
+
+test("Vercel Blob backend prefers public catalog URLs when available", async () => {
+  const backend = createVercelBlobAssetBackend({
+    prefix: "demo",
+    catalogUrl: "https://blob.test/demo/catalog.json",
+    client: {
+      get: async () => {
+        throw new Error("authenticated Blob SDK should not be used when public catalog reads work");
+      },
+    },
+    fetchImpl: async (url) => ({
+      ok: true,
+      json: async () => ({ schemaVersion: 4, url }),
+    }),
+    token: "test-token",
+  });
+
+  assert.deepEqual(await backend.readCatalog(), {
+    schemaVersion: 4,
+    url: "https://blob.test/demo/catalog.json",
+  });
 });
 
 test("Vercel Blob backend reads catalog and writes deterministic asset paths", async () => {
