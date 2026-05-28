@@ -21,3 +21,6 @@
 # - skills/cad/requirements.txt
 ezdxf
 playwright
+
+# Extra third-party requirements used by repo tests.
+networkx
