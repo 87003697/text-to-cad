@@ -1405,12 +1405,38 @@ function normalizeSelection(selection = {}) {
   return selection && typeof selection === "object" ? selection : {};
 }
 
-function normalizedSelectorValues(value) {
-  return (Array.isArray(value) ? value : String(value || "").split(","))
-    .map((entry) => String(entry || "").trim())
-    .filter(Boolean)
-    .map((entry) => entry.replace(/^@cad\[[^\]#]*(?:#([^\]]+))?\]$/, "$1").trim())
+function selectorEntries(value) {
+  if (Array.isArray(value)) {
+    return value;
+  }
+  const text = String(value || "").trim();
+  return text.startsWith("@cad[") ? [text] : text.split(",");
+}
+
+function selectorValuesFromEntry(value) {
+  const text = String(value || "").trim();
+  if (!text) {
+    return [];
+  }
+  const cadRefMatch = text.match(/^@cad\[[^\]#]*(?:#([^\]]+))?\]$/);
+  const selectorText = cadRefMatch ? cadRefMatch[1] || "" : text;
+  return selectorText.split(",")
+    .map((entry) => entry.trim())
     .filter(Boolean);
+}
+
+function normalizedSelectorValues(value) {
+  return selectorEntries(value).flatMap(selectorValuesFromEntry);
+}
+
+function valueMatchesSelector(value, selector, { descendants = false } = {}) {
+  const normalizedValue = String(value || "").trim();
+  const normalizedSelector = String(selector || "").trim();
+  if (!normalizedValue || !normalizedSelector) {
+    return false;
+  }
+  return normalizedValue === normalizedSelector ||
+    (descendants && normalizedValue.startsWith(`${normalizedSelector}.`));
 }
 
 function partMatchesSelector(part, selector) {
@@ -1418,13 +1444,17 @@ function partMatchesSelector(part, selector) {
   if (!normalized) {
     return false;
   }
-  return [
+  if ([
     part?.id,
-    part?.occurrenceId,
+    part?.occurrenceId
+  ].some((value) => valueMatchesSelector(value, normalized, { descendants: true }))) {
+    return true;
+  }
+  return [
     part?.name,
     part?.label,
     part?.linkName
-  ].some((value) => String(value || "").trim() === normalized);
+  ].some((value) => valueMatchesSelector(value, normalized));
 }
 
 function mergePartBounds(parts) {

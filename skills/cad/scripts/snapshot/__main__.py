@@ -19,14 +19,16 @@ from urllib.parse import quote, unquote, urlparse
 
 SCRIPTS_DIR = Path(__file__).resolve().parents[1]
 PACKAGES_DIR = SCRIPTS_DIR / "packages"
-for runtime_path in (SCRIPTS_DIR, PACKAGES_DIR):
+CADPY_SRC_DIR = PACKAGES_DIR / "cadpy" / "src"
+for runtime_path in (SCRIPTS_DIR, CADPY_SRC_DIR, PACKAGES_DIR):
     runtime_path_text = str(runtime_path)
     if runtime_path_text not in sys.path:
         sys.path.insert(0, runtime_path_text)
 
+import cadpy.cad_ref_syntax as cad_ref_syntax
+import cadpy.lookup as lookup
 from cadpy.render import existing_part_glb_path, part_glb_path
-from cadpy.step_artifacts import cad_ref_for_step_path, ensure_step_topology_artifact
-from cadpy.step_targets import ResolvedStepTarget, StepTopologyArtifactError
+from cadpy.step_targets import ResolvedStepTarget, StepTopologyArtifact, StepTopologyArtifactError
 
 
 SNAPSHOT_ORIGIN = "http://snapshot.local"
@@ -70,6 +72,9 @@ APPEARANCE_OPTION_KEYS = {
 }
 
 
+ensure_step_topology_artifact = None
+
+
 @dataclass
 class SnapshotOptions:
     job: str = ""
@@ -87,6 +92,8 @@ class SnapshotOptions:
     size_profile: str = ""
     params: object = None
     params_specified: bool = False
+    focus: list[str] | None = None
+    hide: list[str] | None = None
     view_labels: bool = False
     json: bool = False
     help: bool = False
@@ -108,7 +115,7 @@ def help_text() -> str:
   python scripts/snapshot --job -
   python scripts/snapshot --input models/part.step --output /tmp/part.png --appearance workbench
 
-Shortcut flags are for common STEP/STP snapshots. --job accepts one render job, an array of render jobs, or { "jobs": [...] }. Every job input must be a relative or absolute .step/.stp path, or a same-stem Python generator; direct GLB/STL/3MF/DXF/G-code/robot-description inputs are unsupported. The default appearance is the workbench saved theme. --appearance accepts a saved theme name, an inline JSON appearance settings object, or a JSON appearance settings file path. --display accepts solid, wireframe, an inline JSON display settings object, or a JSON display settings file path. --camera accepts a preset, azimuth:elevation pair, or JSON object with preset, position, target, up, and zoom fields. Option JSON is direct settings JSON, not a wrapped job fragment. Full JSON jobs use top-level appearance and display. Use --view-labels to burn the camera/view label into shortcut outputs. Use --params with STEP parameter sidecar JSON values, and --size-profile for default dimensions such as simple, diagnostic, labeled, assembly, presentation, orbit, or contact-sheet. Output file names are saved with a shared UTC seconds timestamp before the extension.
+Shortcut flags are for common STEP/STP snapshots. --job accepts one render job, an array of render jobs, or { "jobs": [...] }. Every job input must be a relative or absolute .step/.stp path, or a same-stem Python generator; direct GLB/STL/3MF/DXF/G-code/robot-description inputs are unsupported. The default appearance is the workbench saved theme. --appearance accepts a saved theme name, an inline JSON appearance settings object, or a JSON appearance settings file path. --display accepts solid, wireframe, an inline JSON display settings object, or a JSON display settings file path. --camera accepts a preset, azimuth:elevation pair, or JSON object with preset, position, target, up, and zoom fields. --focus and --hide accept one or more @cad[...] occurrence refs to parts or subassemblies; pass the flag repeatedly or list refs after the flag. Option JSON is direct settings JSON, not a wrapped job fragment. Full JSON jobs use top-level appearance and display. Use --view-labels to burn the camera/view label into shortcut outputs. Use --params with STEP parameter sidecar JSON values, and --size-profile for default dimensions such as simple, diagnostic, labeled, assembly, presentation, orbit, or contact-sheet. Output file names are saved with a shared UTC seconds timestamp before the extension.
 """
 
 
@@ -130,6 +137,21 @@ def parse_required_value(argv: Sequence[str], index: int, flag: str) -> str:
     if not value or value.startswith("--"):
         raise SnapshotError(f"{flag} requires a value")
     return value
+
+
+def parse_required_values(argv: Sequence[str], index: int, flag: str) -> tuple[list[str], int]:
+    values: list[str] = []
+    cursor = index + 1
+    while cursor < len(argv):
+        value = argv[cursor]
+        if value.startswith("--"):
+            break
+        if value:
+            values.append(value)
+        cursor += 1
+    if not values:
+        raise SnapshotError(f"{flag} requires at least one value")
+    return values, cursor - index - 1
 
 
 def parse_snapshot_args(argv: Sequence[str]) -> SnapshotOptions:
@@ -191,6 +213,24 @@ def parse_snapshot_args(argv: Sequence[str]) -> SnapshotOptions:
         elif arg.startswith("--params="):
             options.params = arg[len("--params=") :]
             options.params_specified = True
+        elif arg == "--focus":
+            values, consumed = parse_required_values(argv, index, arg)
+            options.focus = [*(options.focus or []), *values]
+            index += consumed
+        elif arg.startswith("--focus="):
+            value = arg[len("--focus=") :]
+            if not value:
+                raise SnapshotError("--focus requires at least one value")
+            options.focus = [*(options.focus or []), value]
+        elif arg == "--hide":
+            values, consumed = parse_required_values(argv, index, arg)
+            options.hide = [*(options.hide or []), *values]
+            index += consumed
+        elif arg.startswith("--hide="):
+            value = arg[len("--hide=") :]
+            if not value:
+                raise SnapshotError("--hide requires at least one value")
+            options.hide = [*(options.hide or []), value]
         elif arg == "--size-profile":
             options.size_profile = parse_required_value(argv, index, arg)
             index += 1
@@ -247,6 +287,21 @@ def parse_params_option(raw_params: object) -> dict[str, object]:
     if not is_plain_object(parsed):
         raise SnapshotError("--params must be a STEP parameter JSON object")
     return parsed
+
+
+def option_focus_hide_specified(options: SnapshotOptions) -> bool:
+    return bool(options.focus or options.hide)
+
+
+def merge_focus_hide_options(job: dict[str, object], options: SnapshotOptions) -> None:
+    if not option_focus_hide_specified(options):
+        return
+    selection = dict(job.get("selection") if is_plain_object(job.get("selection")) else {})
+    if options.focus:
+        selection["focus"] = list(options.focus)
+    if options.hide:
+        selection["hide"] = list(options.hide)
+    job["selection"] = selection
 
 
 def validate_direct_settings_payload(
@@ -335,10 +390,12 @@ def apply_option_overrides_to_job(job: object, options: SnapshotOptions, *, cwd:
             options.display_specified,
             options.appearance_specified,
             options.camera_specified,
+            option_focus_hide_specified(options),
         ]
     ):
         return job
     next_job = copy.deepcopy(job)
+    merge_focus_hide_options(next_job, options)
     if options.appearance_specified:
         next_job["appearance"] = load_appearance_option(options.appearance, cwd=cwd)
     if options.params_specified:
@@ -415,6 +472,7 @@ def load_job_from_options(
         job["display"] = load_display_option(options.display, cwd=resolved_cwd)
     if options.params_specified:
         job["stepParameters"] = parse_params_option(options.params)
+    merge_focus_hide_options(job, options)
     return job
 
 
@@ -566,7 +624,68 @@ def reference_root_for_input(input_path: Path, cwd: Path) -> Path:
     return cwd if path_is_inside_or_equal(input_path, cwd) else input_path.parent
 
 
-def ensure_render_job_step_artifact(job: Mapping[str, object], *, reference_root: Path, input_path: Path, step_path: Path) -> None:
+def cad_ref_for_step_path(repo_root: Path, step_path: Path) -> str:
+    try:
+        relative = step_path.resolve().relative_to(repo_root.resolve()).as_posix()
+    except ValueError:
+        relative = step_path.resolve().as_posix()
+    suffix = step_path.suffix
+    return relative[: -len(suffix)] if suffix else relative
+
+
+def load_ensure_step_topology_artifact():
+    global ensure_step_topology_artifact
+    if ensure_step_topology_artifact is None:
+        from cadpy.step_artifacts import ensure_step_topology_artifact as imported_ensure
+
+        ensure_step_topology_artifact = imported_ensure
+    return ensure_step_topology_artifact
+
+
+def selection_value_list(value: object) -> list[str]:
+    if isinstance(value, list):
+        values: list[str] = []
+        for item in value:
+            values.extend(selection_value_list(item))
+        return values
+    text = str(value or "").strip()
+    if not text:
+        return []
+    if text.startswith("@cad["):
+        return [text]
+    return [entry.strip() for entry in text.split(",") if entry.strip()]
+
+
+def selection_filter_values(job: Mapping[str, object]) -> list[str]:
+    selection = job.get("selection") if is_plain_object(job.get("selection")) else {}
+    values: list[str] = []
+    for key in ("focus", "refs", "hide"):
+        values.extend(selection_value_list(selection.get(key)))
+    return values
+
+
+def selector_value_requires_topology(value: str) -> bool:
+    text = str(value or "").strip()
+    if not text:
+        return False
+    if text.startswith("@cad["):
+        return True
+    parsed = cad_ref_syntax.parse_selector(text)
+    return parsed is not None and parsed.selector_type != "opaque"
+
+
+def selection_requires_selector_topology(job: Mapping[str, object]) -> bool:
+    return any(selector_value_requires_topology(value) for value in selection_filter_values(job))
+
+
+def ensure_render_job_step_artifact(
+    job: Mapping[str, object],
+    *,
+    reference_root: Path,
+    input_path: Path,
+    step_path: Path,
+    require_selector: bool = False,
+) -> StepTopologyArtifact:
     target = ResolvedStepTarget(
         cad_path=cad_ref_for_step_path(reference_root, step_path),
         kind="part",
@@ -574,9 +693,132 @@ def ensure_render_job_step_artifact(job: Mapping[str, object], *, reference_root
         step_path=step_path,
     )
     try:
-        ensure_step_topology_artifact(target, owner="cad-snapshot")
+        ensure_artifact = load_ensure_step_topology_artifact()
+        return ensure_artifact(target, owner="cad-snapshot", require_selector=require_selector)
     except StepTopologyArtifactError as exc:
         raise SnapshotError(str(exc)) from exc
+
+
+def artifact_selector_index(artifact: StepTopologyArtifact | None) -> lookup.SelectorIndex | None:
+    selector_bundle = artifact.selector_bundle if artifact is not None else None
+    if selector_bundle is None:
+        return None
+    manifest = selector_bundle.manifest if isinstance(selector_bundle.manifest, dict) else None
+    if manifest is None:
+        return None
+    buffers = selector_bundle.buffers if isinstance(selector_bundle.buffers, Mapping) else None
+    return lookup.build_selector_index(manifest, buffers=buffers)
+
+
+def validate_occurrence_selector(selector: str, *, selector_index: lookup.SelectorIndex | None, source_label: str) -> None:
+    if selector_index is None:
+        return
+    if selector not in selector_index.occurrence_by_id:
+        raise SnapshotError(f"{source_label} references unknown part/subassembly occurrence selector: {selector}")
+
+
+def normalize_selection_cad_ref(
+    raw_value: str,
+    *,
+    expected_cad_path: str,
+    selector_index: lookup.SelectorIndex | None,
+    source_label: str,
+) -> list[str]:
+    text = str(raw_value or "").strip()
+    tokens = cad_ref_syntax.parse_cad_tokens(text)
+    if len(tokens) != 1 or tokens[0].token.strip() != text:
+        raise SnapshotError(f"{source_label} must be a single @cad[...] occurrence ref: {text}")
+    token = tokens[0]
+    if token.cad_path != expected_cad_path:
+        raise SnapshotError(
+            f"{source_label} ref targets {token.cad_path}, but snapshot input is {expected_cad_path}"
+        )
+    if not token.selectors:
+        raise SnapshotError(f"{source_label} refs must include a part/subassembly occurrence selector")
+
+    selectors: list[str] = []
+    for selector in token.selectors:
+        parsed = cad_ref_syntax.parse_selector(selector)
+        if parsed is None or parsed.selector_type != "occurrence":
+            kind = parsed.selector_type if parsed is not None else "empty"
+            raise SnapshotError(
+                f"{source_label} supports only part/subassembly occurrence refs; "
+                f"got {kind} selector {selector!r}"
+            )
+        validate_occurrence_selector(parsed.canonical, selector_index=selector_index, source_label=source_label)
+        selectors.append(parsed.canonical)
+    return selectors
+
+
+def normalize_selection_selector(
+    raw_value: str,
+    *,
+    selector_index: lookup.SelectorIndex | None,
+    source_label: str,
+) -> list[str]:
+    text = str(raw_value or "").strip()
+    if not text:
+        return []
+    parsed = cad_ref_syntax.parse_selector(text)
+    if parsed is None:
+        return []
+    if parsed.selector_type == "opaque":
+        return [parsed.canonical]
+    if parsed.selector_type != "occurrence":
+        raise SnapshotError(
+            f"{source_label} supports only part/subassembly occurrence refs; "
+            f"got {parsed.selector_type} selector {text!r}"
+        )
+    validate_occurrence_selector(parsed.canonical, selector_index=selector_index, source_label=source_label)
+    return [parsed.canonical]
+
+
+def normalize_selection_filter_values(
+    value: object,
+    *,
+    expected_cad_path: str,
+    selector_index: lookup.SelectorIndex | None,
+    source_label: str,
+) -> list[str]:
+    selectors: list[str] = []
+    for raw_value in selection_value_list(value):
+        text = str(raw_value or "").strip()
+        if text.startswith("@cad["):
+            selectors.extend(
+                normalize_selection_cad_ref(
+                    text,
+                    expected_cad_path=expected_cad_path,
+                    selector_index=selector_index,
+                    source_label=source_label,
+                )
+            )
+            continue
+        selectors.extend(
+            normalize_selection_selector(text, selector_index=selector_index, source_label=source_label)
+        )
+    return selectors
+
+
+def normalize_render_job_selection(
+    job: Mapping[str, object],
+    *,
+    expected_cad_path: str,
+    selector_index: lookup.SelectorIndex | None,
+) -> dict[str, object] | None:
+    selection = job.get("selection") if is_plain_object(job.get("selection")) else None
+    if selection is None:
+        return None
+    normalized = dict(selection)
+    for key in ("focus", "refs", "hide"):
+        if key not in selection:
+            continue
+        normalized[key] = normalize_selection_filter_values(
+            selection.get(key),
+            expected_cad_path=expected_cad_path,
+            selector_index=selector_index,
+            source_label=f"selection.{key}",
+        )
+    return normalized
 
 
 def resolve_render_job(
@@ -615,7 +857,19 @@ def resolve_render_job(
     if kind not in {"step", "stp"}:
         raise SnapshotError("Snapshot supports only STEP/STP inputs or same-stem Python generators")
 
-    ensure_render_job_step_artifact(job, reference_root=reference_root, input_path=source_path, step_path=input_path)
+    artifact = ensure_render_job_step_artifact(
+        job,
+        reference_root=reference_root,
+        input_path=source_path,
+        step_path=input_path,
+        require_selector=selection_requires_selector_topology(job),
+    )
+    expected_cad_path = cad_ref_for_step_path(reference_root, input_path)
+    normalized_selection = normalize_render_job_selection(
+        job,
+        expected_cad_path=expected_cad_path,
+        selector_index=artifact_selector_index(artifact),
+    )
 
     glb_path = existing_part_glb_path(input_path) or part_glb_path(input_path)
     if not glb_path.exists():
@@ -685,6 +939,9 @@ def resolve_render_job(
     if step_parameter_path.exists():
         resolved["stepParameterPath"] = str(step_parameter_path)
         resolved["stepParameterUrl"] = asset_url_for_path(step_parameter_path, root_path)
+
+    if normalized_selection is not None:
+        job["selection"] = normalized_selection
 
     return {
         **job,
