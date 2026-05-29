@@ -56,12 +56,12 @@ python scripts/dxf path/to/a.py=out/a.dxf path/to/b.py=out/b.dxf
 
 ```text
 Files:
-- STEP: path/to/source.step
-- DXF: path/to/output.dxf
+- STEP: /absolute/project/models/path/to/source.step
+- DXF: /absolute/project/models/path/to/output.dxf
 
 CAD Viewer:
-- STEP: http://127.0.0.1:4178/?file=path/to/source.step
-- DXF: http://127.0.0.1:4178/?file=path/to/output.dxf
+- STEP: http://127.0.0.1:4178/?dir=/absolute/project/models&file=/absolute/project/models/path/to/source.step
+- DXF: http://127.0.0.1:4178/?dir=/absolute/project/models&file=/absolute/project/models/path/to/output.dxf
 
 Validation:
 - STEP geometry: checked with facts/planes/positioning

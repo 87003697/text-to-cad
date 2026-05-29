@@ -194,13 +194,17 @@ not run the generated viewer from the cad-viewer skill while modifying Viewer
 behavior:
 
 ```bash
-npm --prefix viewer run dev:ensure -- \
-  --root-dir "$PWD"
+npm --prefix viewer run dev -- --host 127.0.0.1
 ```
 
-Use the printed URL; do not assume a fixed port. After changing Viewer source or
-shared render code, rebuild the packaged cad-viewer skill runtime only when
-those changes need to be reflected in the production skill runtime:
+Use the printed URL with an absolute `?dir=/path/to/root` and any absolute
+`?file=/path/to/model.step`. Do not assume a fixed dev port unless you pass
+Vite's standard `--port` flag. For packaged cad-viewer skill runtime checks,
+use `npm --prefix skills/cad-viewer/scripts/viewer run serve -- --host
+127.0.0.1 --port 4178 --shutdown-after 12h` and include `?dir=` in every
+returned handoff link. After changing Viewer source or shared render code,
+rebuild the packaged cad-viewer skill runtime only when those changes need to be
+reflected in the production skill runtime:
 
 ```bash
 scripts/build/build-cad-viewer-skill.sh

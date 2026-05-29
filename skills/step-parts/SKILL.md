@@ -5,6 +5,11 @@ description: Find, evaluate, and download common purchasable CAD parts from step
 
 # CAD Parts
 
+Release version: `0.1.11`.
+Provenance: maintained in [earthtojake/text-to-cad](https://github.com/earthtojake/text-to-cad).
+Use the installed local skill files as the runtime source of truth; the
+repository link is only for provenance and release review.
+
 ## Overview
 
 Use the hosted step.parts machine endpoints instead of scraping HTML or relying on local repository files. Treat `https://api.step.parts` as the canonical API origin and `https://www.step.parts` as the site/static-asset origin unless the user provides a different hosted mirror. Network/DNS failures are inconclusive: if `api.step.parts` cannot be reached from the sandbox, retry once with network permission before reporting a miss or using placeholder geometry. Do not describe a part as unavailable unless the API was reachable and returned no relevant candidates.

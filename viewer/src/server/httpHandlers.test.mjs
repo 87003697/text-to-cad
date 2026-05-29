@@ -8,6 +8,7 @@ import { Writable } from "node:stream";
 import {
   contentTypeForStaticAsset,
   createCadViewerApiMiddleware,
+  createLocalAssetMiddleware,
   serveDistAsset,
 } from "./httpHandlers.mjs";
 
@@ -73,6 +74,57 @@ test("CAD Viewer API middleware awaits async backend catalog reads", async () =>
     schemaVersion: 4,
     entries: [{ file: "part.step" }],
   });
+});
+
+test("CAD Viewer API middleware activates direct file roots", async () => {
+  const calls = [];
+  const resolvedRoots = [];
+  const activatedRoots = [];
+  const activatedRequests = [];
+  const resolvedRoot = {
+    dir: "/tmp/file-root",
+    rootPath: "/tmp/file-root",
+    rootName: "file-root",
+  };
+  const middleware = createCadViewerApiMiddleware({
+    backend: {
+      readCatalog: async (request) => {
+        calls.push(request);
+        return { schemaVersion: 4, entries: [] };
+      },
+      resolveRequestRoot: (request) => {
+        resolvedRoots.push(request);
+        return resolvedRoot;
+      },
+    },
+    onCatalogActivated: (root, request) => {
+      activatedRoots.push(root);
+      activatedRequests.push(request);
+    },
+  });
+  const req = {
+    method: "GET",
+    url: "/__cad/catalog?file=%2Ftmp%2Ffile-root%2Fpart.step",
+  };
+  const res = createResponse();
+  let nextCalled = false;
+
+  await middleware(req, res, () => {
+    nextCalled = true;
+  });
+
+  assert.equal(nextCalled, false);
+  assert.equal(res.statusCode, 200);
+  assert.deepEqual(calls, [
+    { rootDir: "", fileRef: "/tmp/file-root/part.step" },
+  ]);
+  assert.deepEqual(resolvedRoots, [
+    { rootDir: "", fileRef: "/tmp/file-root/part.step" },
+  ]);
+  assert.deepEqual(activatedRoots, [resolvedRoot]);
+  assert.deepEqual(activatedRequests, [
+    { rootDir: "", fileRef: "/tmp/file-root/part.step" },
+  ]);
 });
 
 
@@ -184,6 +236,44 @@ test("CAD Viewer API middleware serves local generation status", async () => {
     runs: [{ id: "run-1", files: ["part.step"] }],
     files: { "part.step": { running: true } },
   });
+});
+
+test("local asset middleware resolves legacy URDF mesh URLs from referrer file", async () => {
+  const rootDir = await fs.mkdtemp(path.join(os.tmpdir(), "cad-viewer-assets-"));
+  const robotDir = path.join(rootDir, "robots", "so101");
+  const meshPath = path.join(robotDir, "meshes", "base.stl");
+  await fs.mkdir(path.dirname(meshPath), { recursive: true });
+  await fs.writeFile(meshPath, "solid base\nendsolid base\n");
+  const calls = [];
+  const middleware = createLocalAssetMiddleware({
+    backend: {
+      resolveRequestRoot: ({ rootDir: requestedRootDir, fileRef }) => {
+        calls.push({ requestedRootDir, fileRef });
+        return { dir: requestedRootDir, rootPath: requestedRootDir, rootName: path.basename(requestedRootDir) };
+      },
+      assetPathForFileRef: (fileRef) => fileRef,
+      contentTypeForPath: () => "model/stl",
+    },
+  });
+  const referrer = `http://127.0.0.1:4183/?dir=${encodeURIComponent(rootDir)}&file=${encodeURIComponent(path.join(robotDir, "so101.urdf"))}`;
+  const req = {
+    method: "GET",
+    url: "/__cad/meshes/base.stl",
+    headers: { referer: referrer },
+  };
+  const res = createWritableResponse();
+
+  middleware(req, res, () => {
+    assert.fail("expected legacy mesh path to be served");
+  });
+  await res.finished;
+
+  assert.equal(res.statusCode, 200);
+  assert.equal(res.getHeader("content-type"), "model/stl");
+  assert.equal(res.bodyText(), "solid base\nendsolid base\n");
+  assert.deepEqual(calls, [
+    { requestedRootDir: rootDir, fileRef: meshPath },
+  ]);
 });
 
 

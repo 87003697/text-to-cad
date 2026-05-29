@@ -5,6 +5,11 @@ description: Create, modify, inspect, and validate STEP-first build123d/Python C
 
 # CAD generation, inspection, and validation
 
+Release version: `0.1.11`.
+Provenance: maintained in [earthtojake/text-to-cad](https://github.com/earthtojake/text-to-cad).
+Use the installed local skill files as the runtime source of truth; the
+repository link is only for provenance and release review.
+
 ## Purpose
 
 Create or modify parametric CAD models from natural-language requirements, generate validated STEP/STP artifacts, inspect geometry references, and return checked outputs. Treat STEP as the primary CAD artifact. Treat DXF, STL, 3MF, and native GLB as secondary workflows that branch from, or accompany, a STEP-first process. For assemblies, prefer source-level build123d joints and named mating datums when the parts have functional assembly relationships.

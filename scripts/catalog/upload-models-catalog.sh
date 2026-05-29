@@ -9,7 +9,7 @@ function usage() {
 Usage:
   VIEWER_VERCEL_BLOB_PREFIX=<prefix> \
   BLOB_READ_WRITE_TOKEN=<token> \
-  scripts/catalog/upload-models-catalog.sh [upload options]
+  scripts/catalog/upload-models-catalog.sh [directory] [upload options]
 
 Uploads the models catalog and CAD Viewer-supported assets to Vercel Blob.
 The uploader excludes mechbench/, mechbench2/, 7dof_arm/, and Python source
@@ -19,10 +19,10 @@ Environment:
   VIEWER_VERCEL_BLOB_PREFIX                 Required. Blob path prefix, for example: models2
   BLOB_READ_WRITE_TOKEN                     Vercel Blob read/write token.
   VIEWER_VERCEL_BLOB_READ_WRITE_TOKEN       Alternate Vercel Blob read/write token.
-  VIEWER_LOCAL_ROOT_DIR                     Optional upload root. Defaults to models/.
   VIEWER_ASSET_BACKEND                      Optional. Defaults to vercel-blob.
 
 Options are passed through to npm --prefix viewer run upload:blob.
+If no directory is passed, models/ is uploaded.
 EOF
 }
 
@@ -40,8 +40,13 @@ if [ -z "${BLOB_READ_WRITE_TOKEN:-}" ] && [ -z "${VIEWER_VERCEL_BLOB_READ_WRITE_
 fi
 
 export VIEWER_ASSET_BACKEND="${VIEWER_ASSET_BACKEND:-vercel-blob}"
-export VIEWER_LOCAL_ROOT_DIR="${VIEWER_LOCAL_ROOT_DIR:-$REPO_ROOT/models}"
+
+UPLOAD_DIR="$REPO_ROOT/models"
+if [ "$#" -gt 0 ] && [[ "${1:-}" != --* ]]; then
+  UPLOAD_DIR="$1"
+  shift
+fi
 
 npm --prefix "$REPO_ROOT/viewer" run upload:blob -- \
-  --root-dir "$VIEWER_LOCAL_ROOT_DIR" \
+  "$UPLOAD_DIR" \
   "$@"

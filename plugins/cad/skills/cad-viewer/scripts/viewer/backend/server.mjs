@@ -1142,14 +1142,14 @@ var require_util = __commonJS({
         }
         const port2 = url.port != null ? url.port : url.protocol === "https:" ? 443 : 80;
         let origin = url.origin != null ? url.origin : `${url.protocol || ""}//${url.hostname || ""}:${port2}`;
-        let path13 = url.path != null ? url.path : `${url.pathname || ""}${url.search || ""}`;
+        let path12 = url.path != null ? url.path : `${url.pathname || ""}${url.search || ""}`;
         if (origin[origin.length - 1] === "/") {
           origin = origin.slice(0, origin.length - 1);
         }
-        if (path13 && path13[0] !== "/") {
-          path13 = `/${path13}`;
+        if (path12 && path12[0] !== "/") {
+          path12 = `/${path12}`;
         }
-        return new URL(`${origin}${path13}`);
+        return new URL(`${origin}${path12}`);
       }
       if (!isHttpOrHttpsPrefixed(url.origin || url.protocol)) {
         throw new InvalidArgumentError("Invalid URL protocol: the URL must start with `http:` or `https:`.");
@@ -1600,39 +1600,39 @@ var require_diagnostics = __commonJS({
       });
       diagnosticsChannel.channel("undici:client:sendHeaders").subscribe((evt) => {
         const {
-          request: { method, path: path13, origin }
+          request: { method, path: path12, origin }
         } = evt;
-        debuglog("sending request to %s %s/%s", method, origin, path13);
+        debuglog("sending request to %s %s/%s", method, origin, path12);
       });
       diagnosticsChannel.channel("undici:request:headers").subscribe((evt) => {
         const {
-          request: { method, path: path13, origin },
+          request: { method, path: path12, origin },
           response: { statusCode }
         } = evt;
         debuglog(
           "received response to %s %s/%s - HTTP %d",
           method,
           origin,
-          path13,
+          path12,
           statusCode
         );
       });
       diagnosticsChannel.channel("undici:request:trailers").subscribe((evt) => {
         const {
-          request: { method, path: path13, origin }
+          request: { method, path: path12, origin }
         } = evt;
-        debuglog("trailers received from %s %s/%s", method, origin, path13);
+        debuglog("trailers received from %s %s/%s", method, origin, path12);
       });
       diagnosticsChannel.channel("undici:request:error").subscribe((evt) => {
         const {
-          request: { method, path: path13, origin },
+          request: { method, path: path12, origin },
           error
         } = evt;
         debuglog(
           "request to %s %s/%s errored - %s",
           method,
           origin,
-          path13,
+          path12,
           error.message
         );
       });
@@ -1681,9 +1681,9 @@ var require_diagnostics = __commonJS({
         });
         diagnosticsChannel.channel("undici:client:sendHeaders").subscribe((evt) => {
           const {
-            request: { method, path: path13, origin }
+            request: { method, path: path12, origin }
           } = evt;
-          debuglog("sending request to %s %s/%s", method, origin, path13);
+          debuglog("sending request to %s %s/%s", method, origin, path12);
         });
       }
       diagnosticsChannel.channel("undici:websocket:open").subscribe((evt) => {
@@ -1746,7 +1746,7 @@ var require_request = __commonJS({
     var kHandler = /* @__PURE__ */ Symbol("handler");
     var Request2 = class {
       constructor(origin, {
-        path: path13,
+        path: path12,
         method,
         body,
         headers,
@@ -1761,11 +1761,11 @@ var require_request = __commonJS({
         expectContinue,
         servername
       }, handler) {
-        if (typeof path13 !== "string") {
+        if (typeof path12 !== "string") {
           throw new InvalidArgumentError("path must be a string");
-        } else if (path13[0] !== "/" && !(path13.startsWith("http://") || path13.startsWith("https://")) && method !== "CONNECT") {
+        } else if (path12[0] !== "/" && !(path12.startsWith("http://") || path12.startsWith("https://")) && method !== "CONNECT") {
           throw new InvalidArgumentError("path must be an absolute URL or start with a slash");
-        } else if (invalidPathRegex.test(path13)) {
+        } else if (invalidPathRegex.test(path12)) {
           throw new InvalidArgumentError("invalid request path");
         }
         if (typeof method !== "string") {
@@ -1831,7 +1831,7 @@ var require_request = __commonJS({
         this.completed = false;
         this.aborted = false;
         this.upgrade = upgrade || null;
-        this.path = query ? buildURL(path13, query) : path13;
+        this.path = query ? buildURL(path12, query) : path12;
         this.origin = origin;
         this.idempotent = idempotent == null ? method === "HEAD" || method === "GET" : idempotent;
         this.blocking = blocking == null ? false : blocking;
@@ -6395,7 +6395,7 @@ var require_client_h1 = __commonJS({
       return method !== "GET" && method !== "HEAD" && method !== "OPTIONS" && method !== "TRACE" && method !== "CONNECT";
     }
     function writeH1(client, request) {
-      const { method, path: path13, host: host2, upgrade, blocking, reset } = request;
+      const { method, path: path12, host: host2, upgrade, blocking, reset } = request;
       let { body, headers, contentLength } = request;
       const expectsPayload = method === "PUT" || method === "POST" || method === "PATCH" || method === "QUERY" || method === "PROPFIND" || method === "PROPPATCH";
       if (util.isFormDataLike(body)) {
@@ -6461,7 +6461,7 @@ var require_client_h1 = __commonJS({
       if (blocking) {
         socket[kBlocking] = true;
       }
-      let header = `${method} ${path13} HTTP/1.1\r
+      let header = `${method} ${path12} HTTP/1.1\r
 `;
       if (typeof host2 === "string") {
         header += `host: ${host2}\r
@@ -6987,7 +6987,7 @@ var require_client_h2 = __commonJS({
     }
     function writeH2(client, request) {
       const session = client[kHTTP2Session];
-      const { method, path: path13, host: host2, upgrade, expectContinue, signal, headers: reqHeaders } = request;
+      const { method, path: path12, host: host2, upgrade, expectContinue, signal, headers: reqHeaders } = request;
       let { body } = request;
       if (upgrade) {
         util.errorRequest(client, request, new Error("Upgrade not supported for H2"));
@@ -7054,7 +7054,7 @@ var require_client_h2 = __commonJS({
         });
         return true;
       }
-      headers[HTTP2_HEADER_PATH] = path13;
+      headers[HTTP2_HEADER_PATH] = path12;
       headers[HTTP2_HEADER_SCHEME] = "https";
       const expectsPayload = method === "PUT" || method === "POST" || method === "PATCH";
       if (body && typeof body.read === "function") {
@@ -7407,9 +7407,9 @@ var require_redirect_handler = __commonJS({
           return this.handler.onHeaders(statusCode, headers, resume, statusText);
         }
         const { origin, pathname, search } = util.parseURL(new URL(this.location, this.opts.origin && new URL(this.opts.path, this.opts.origin)));
-        const path13 = search ? `${pathname}${search}` : pathname;
+        const path12 = search ? `${pathname}${search}` : pathname;
         this.opts.headers = cleanRequestHeaders(this.opts.headers, statusCode === 303, this.opts.origin !== origin);
-        this.opts.path = path13;
+        this.opts.path = path12;
         this.opts.origin = origin;
         this.opts.maxRedirections = 0;
         this.opts.query = null;
@@ -8644,10 +8644,10 @@ var require_proxy_agent = __commonJS({
         };
         const {
           origin,
-          path: path13 = "/",
+          path: path12 = "/",
           headers = {}
         } = opts;
-        opts.path = origin + path13;
+        opts.path = origin + path12;
         if (!("host" in headers) && !("Host" in headers)) {
           const { host: host2 } = new URL2(origin);
           headers.host = host2;
@@ -10568,20 +10568,20 @@ var require_mock_utils = __commonJS({
       }
       return true;
     }
-    function safeUrl(path13) {
-      if (typeof path13 !== "string") {
-        return path13;
+    function safeUrl(path12) {
+      if (typeof path12 !== "string") {
+        return path12;
       }
-      const pathSegments = path13.split("?");
+      const pathSegments = path12.split("?");
       if (pathSegments.length !== 2) {
-        return path13;
+        return path12;
       }
       const qp = new URLSearchParams(pathSegments.pop());
       qp.sort();
       return [...pathSegments, qp.toString()].join("?");
     }
-    function matchKey(mockDispatch2, { path: path13, method, body, headers }) {
-      const pathMatch = matchValue(mockDispatch2.path, path13);
+    function matchKey(mockDispatch2, { path: path12, method, body, headers }) {
+      const pathMatch = matchValue(mockDispatch2.path, path12);
       const methodMatch = matchValue(mockDispatch2.method, method);
       const bodyMatch = typeof mockDispatch2.body !== "undefined" ? matchValue(mockDispatch2.body, body) : true;
       const headersMatch = matchHeaders(mockDispatch2, headers);
@@ -10603,7 +10603,7 @@ var require_mock_utils = __commonJS({
     function getMockDispatch(mockDispatches, key) {
       const basePath = key.query ? buildURL(key.path, key.query) : key.path;
       const resolvedPath = typeof basePath === "string" ? safeUrl(basePath) : basePath;
-      let matchedMockDispatches = mockDispatches.filter(({ consumed }) => !consumed).filter(({ path: path13 }) => matchValue(safeUrl(path13), resolvedPath));
+      let matchedMockDispatches = mockDispatches.filter(({ consumed }) => !consumed).filter(({ path: path12 }) => matchValue(safeUrl(path12), resolvedPath));
       if (matchedMockDispatches.length === 0) {
         throw new MockNotMatchedError(`Mock dispatch not matched for path '${resolvedPath}'`);
       }
@@ -10641,9 +10641,9 @@ var require_mock_utils = __commonJS({
       }
     }
     function buildKey(opts) {
-      const { path: path13, method, body, headers, query } = opts;
+      const { path: path12, method, body, headers, query } = opts;
       return {
-        path: path13,
+        path: path12,
         method,
         body,
         headers,
@@ -11106,10 +11106,10 @@ var require_pending_interceptors_formatter = __commonJS({
       }
       format(pendingInterceptors) {
         const withPrettyHeaders = pendingInterceptors.map(
-          ({ method, path: path13, data: { statusCode }, persist, times, timesInvoked, origin }) => ({
+          ({ method, path: path12, data: { statusCode }, persist, times, timesInvoked, origin }) => ({
             Method: method,
             Origin: origin,
-            Path: path13,
+            Path: path12,
             "Status code": statusCode,
             Persistent: persist ? PERSISTENT : NOT_PERSISTENT,
             Invocations: timesInvoked,
@@ -15990,9 +15990,9 @@ var require_util6 = __commonJS({
         }
       }
     }
-    function validateCookiePath(path13) {
-      for (let i = 0; i < path13.length; ++i) {
-        const code = path13.charCodeAt(i);
+    function validateCookiePath(path12) {
+      for (let i = 0; i < path12.length; ++i) {
+        const code = path12.charCodeAt(i);
         if (code < 32 || // exclude CTLs (0-31)
         code === 127 || // DEL
         code === 59) {
@@ -18669,11 +18669,11 @@ var require_undici = __commonJS({
           if (typeof opts.path !== "string") {
             throw new InvalidArgumentError("invalid opts.path");
           }
-          let path13 = opts.path;
+          let path12 = opts.path;
           if (!opts.path.startsWith("/")) {
-            path13 = `/${path13}`;
+            path12 = `/${path12}`;
           }
-          url = new URL(util.parseOrigin(url).origin + path13);
+          url = new URL(util.parseOrigin(url).origin + path12);
         } else {
           if (!opts) {
             opts = typeof url === "object" ? url : {};
@@ -21088,8 +21088,9 @@ var init_dist = __esm({
 });
 
 // viewer/src/server/server.mjs
+import fs9 from "node:fs";
 import http from "node:http";
-import path12 from "node:path";
+import path11 from "node:path";
 import { fileURLToPath as fileURLToPath3 } from "node:url";
 
 // viewer/src/server/localAssetBackend.mjs
@@ -21191,7 +21192,7 @@ function resolveWorkspaceRoot({
   appRoot = "",
   defaultWorkspaceRoot: defaultWorkspaceRoot2 = ""
 } = {}) {
-  const explicitRoot = workspaceRoot2 || env.VIEWER_LOCAL_WORKSPACE_ROOT || "";
+  const explicitRoot = workspaceRoot2 || "";
   if (explicitRoot) {
     return path2.resolve(cwd, explicitRoot);
   }
@@ -21377,8 +21378,8 @@ function normalizeViewerRootDir(value = DEFAULT_VIEWER_ROOT_DIR) {
   }
   return normalized.replace(/(?!^\/)\/+$/, "");
 }
-function resolveViewerRoot(repoRoot, rootDir2 = DEFAULT_VIEWER_ROOT_DIR) {
-  const normalizedDir = normalizeViewerRootDir(rootDir2);
+function resolveViewerRoot(repoRoot, rootDir = DEFAULT_VIEWER_ROOT_DIR) {
+  const normalizedDir = normalizeViewerRootDir(rootDir);
   const resolvedRepoRoot = path3.resolve(repoRoot);
   const rootPath = normalizedDir ? path3.resolve(resolvedRepoRoot, normalizedDir) : resolvedRepoRoot;
   const relativePath = path3.relative(resolvedRepoRoot, rootPath);
@@ -22968,14 +22969,14 @@ function logicalStepSourceExistsForSidecar(sourcePath) {
     sourcePath && (fileStats(sourcePath) || fileStats(inlineStepGlbArtifactPathForSource(sourcePath)) || fileStats(stepParameterPathForStepSource(sourcePath)))
   );
 }
-function catalogFileRefForPath({ repoRoot, rootDir: rootDir2 = DEFAULT_VIEWER_ROOT_DIR, filePath } = {}) {
+function catalogFileRefForPath({ repoRoot, rootDir = DEFAULT_VIEWER_ROOT_DIR, filePath } = {}) {
   if (!repoRoot) {
     throw new Error("repoRoot is required");
   }
   if (!filePath) {
     throw new Error("filePath is required");
   }
-  const resolved = resolveViewerRoot(repoRoot, rootDir2);
+  const resolved = resolveViewerRoot(repoRoot, rootDir);
   const resolvedFilePath = path3.resolve(filePath);
   if (!pathIsInside2(resolvedFilePath, resolved.rootPath) || pathHasSkippedDirectory(resolved.rootPath, resolvedFilePath)) {
     return "";
@@ -22992,7 +22993,7 @@ function catalogFileRefForPath({ repoRoot, rootDir: rootDir2 = DEFAULT_VIEWER_RO
 }
 function scanCadFile({
   repoRoot,
-  rootDir: rootDir2 = DEFAULT_VIEWER_ROOT_DIR,
+  rootDir = DEFAULT_VIEWER_ROOT_DIR,
   filePath,
   includeArtifactStatus = true
 } = {}) {
@@ -23002,7 +23003,7 @@ function scanCadFile({
   if (!filePath) {
     throw new Error("filePath is required");
   }
-  const resolved = resolveViewerRoot(repoRoot, rootDir2);
+  const resolved = resolveViewerRoot(repoRoot, rootDir);
   const resolvedFilePath = path3.resolve(filePath);
   if (!pathIsInside2(resolvedFilePath, resolved.rootPath) || pathHasSkippedDirectory(resolved.rootPath, resolvedFilePath)) {
     return null;
@@ -23054,14 +23055,14 @@ function scanCadFile({
 }
 function scanCadDirectory({
   repoRoot,
-  rootDir: rootDir2 = DEFAULT_VIEWER_ROOT_DIR,
+  rootDir = DEFAULT_VIEWER_ROOT_DIR,
   includePath = null,
   includeArtifactStatus = true
 } = {}) {
   if (!repoRoot) {
     throw new Error("repoRoot is required");
   }
-  const resolved = resolveViewerRoot(repoRoot, rootDir2);
+  const resolved = resolveViewerRoot(repoRoot, rootDir);
   const entries = collectCadSourceFiles(resolved.rootPath, {
     scanRootPath: resolved.rootPath,
     includePath
@@ -23143,9 +23144,9 @@ function emptyGenerationStatus() {
     files: {}
   };
 }
-function generationStatusDir(repoRoot, rootDir2 = DEFAULT_VIEWER_ROOT_DIR) {
+function generationStatusDir(repoRoot, rootDir = DEFAULT_VIEWER_ROOT_DIR) {
   const resolvedRepoRoot = path4.resolve(repoRoot);
-  return resolveViewerRoot(resolvedRepoRoot, normalizeViewerRootDir(rootDir2)).rootPath;
+  return resolveViewerRoot(resolvedRepoRoot, normalizeViewerRootDir(rootDir)).rootPath;
 }
 function pathIsInside3(filePath, rootPath) {
   const relative = path4.relative(path4.resolve(rootPath), path4.resolve(filePath));
@@ -23211,8 +23212,8 @@ function readStatusPayload(statusPath) {
     return null;
   }
 }
-function listStatusFiles(repoRoot, rootDir2 = DEFAULT_VIEWER_ROOT_DIR) {
-  const statusRoot = generationStatusDir(repoRoot, rootDir2);
+function listStatusFiles(repoRoot, rootDir = DEFAULT_VIEWER_ROOT_DIR) {
+  const statusRoot = generationStatusDir(repoRoot, rootDir);
   const statusFiles = [];
   const visit = (directory) => {
     let entries = [];
@@ -23250,7 +23251,7 @@ function outputEntries(payload) {
 }
 function readGenerationStatus({
   repoRoot,
-  rootDir: rootDir2 = DEFAULT_VIEWER_ROOT_DIR,
+  rootDir = DEFAULT_VIEWER_ROOT_DIR,
   nowMs = Date.now(),
   maxAgeMs = DEFAULT_ACTIVE_STATUS_MAX_AGE_MS
 } = {}) {
@@ -23258,10 +23259,10 @@ function readGenerationStatus({
     throw new Error("repoRoot is required");
   }
   const resolvedRepoRoot = path4.resolve(repoRoot);
-  const resolvedRoot = resolveViewerRoot(resolvedRepoRoot, normalizeViewerRootDir(rootDir2));
+  const resolvedRoot = resolveViewerRoot(resolvedRepoRoot, normalizeViewerRootDir(rootDir));
   const status = emptyGenerationStatus();
   const runsById = /* @__PURE__ */ new Map();
-  for (const statusPath of listStatusFiles(resolvedRepoRoot, rootDir2)) {
+  for (const statusPath of listStatusFiles(resolvedRepoRoot, rootDir)) {
     const payload = readStatusPayload(statusPath);
     if (!payload || !statusIsActive(payload, { nowMs, maxAgeMs })) {
       continue;
@@ -23318,13 +23319,6 @@ function sourcePathFromStatusPayload(repoRoot, value, statusPath) {
   }
   const resolved = resolveStatusPath(repoRoot, raw, { statusPath, rootPath: repoRoot });
   return resolved && pathIsInside3(resolved, repoRoot) ? toPosixPath(path4.relative(path4.resolve(repoRoot), resolved)) : raw.replace(/\\/g, "/");
-}
-function isGenerationStatusPath(filePath, repoRoot) {
-  if (!repoRoot) {
-    return false;
-  }
-  const resolved = path4.resolve(filePath);
-  return pathIsInside3(resolved, path4.resolve(repoRoot)) && isGenerationLockFileName(path4.basename(resolved));
 }
 
 // viewer/packages/cadjs/src/lib/step/stepArtifactCompiler.mjs
@@ -23695,15 +23689,59 @@ async function ensureStepTopologyArtifact({
 }
 
 // viewer/src/server/localAssetBackend.mjs
+function toPosixPath2(value) {
+  return String(value || "").split(path7.sep).join("/");
+}
+function absoluteFileRef(filePath) {
+  return toPosixPath2(path7.resolve(filePath));
+}
+function relativeFileRef(rootPath, filePath) {
+  return toPosixPath2(path7.relative(path7.resolve(rootPath), path7.resolve(filePath)));
+}
+function pathIsInsideOrEqual(childPath, parentPath) {
+  const relativePath = path7.relative(path7.resolve(parentPath), path7.resolve(childPath));
+  return relativePath === "" || relativePath !== ".." && !relativePath.startsWith(`..${path7.sep}`) && !path7.isAbsolute(relativePath);
+}
 function normalizedFileRef(value) {
-  return String(value || "").trim().replace(/\\/g, "/").replace(/^\/+/, "");
+  const raw = String(value || "").trim().replace(/\\/g, "/");
+  if (!raw) {
+    return "";
+  }
+  if (raw.includes("\0")) {
+    throw new Error("File path contains an invalid null byte");
+  }
+  return path7.isAbsolute(raw) ? absoluteFileRef(raw) : raw.replace(/^\/+/, "");
+}
+function normalizedAbsoluteDir(value) {
+  const raw = String(value || "").trim();
+  if (!raw) {
+    return "";
+  }
+  if (raw.includes("\0")) {
+    throw new Error("CAD Viewer directory contains an invalid null byte");
+  }
+  if (!path7.isAbsolute(raw)) {
+    throw new Error("CAD Viewer ?dir= must be an absolute filesystem path");
+  }
+  return path7.resolve(raw);
+}
+function requireDirectory(rootPath) {
+  let stats = null;
+  try {
+    stats = fs6.statSync(rootPath);
+  } catch {
+    throw new Error(`CAD Viewer directory not found: ${rootPath}`);
+  }
+  if (!stats.isDirectory()) {
+    throw new Error(`CAD Viewer directory is not a directory: ${rootPath}`);
+  }
 }
 function catalogEntryForFileRef(catalog, fileRef) {
   const normalized = normalizedFileRef(fileRef);
   if (!normalized || !Array.isArray(catalog?.entries)) {
     return null;
   }
-  return catalog.entries.find((entry) => normalizedFileRef(entry?.file) === normalized) || null;
+  return catalog.entries.find((entry) => normalizedFileRef(entry?.file) === normalized || normalizedFileRef(entry?.rootRelativeFile) === normalized) || null;
 }
 function ensurePathInsideRoot(filePath, resolvedRoot) {
   if (!(filePath === resolvedRoot.rootPath || pathIsInside(filePath, resolvedRoot.rootPath))) {
@@ -23845,45 +23883,254 @@ function normalizeCatalog(catalog) {
     entries: Array.isArray(catalog?.entries) ? catalog.entries : []
   };
 }
+function queryValueFromAssetUrl(rawUrl, name) {
+  try {
+    return new URL(String(rawUrl || ""), "http://cad.local").searchParams.get(name) || "";
+  } catch {
+    return "";
+  }
+}
+function assetPathFromCatalogUrl(scanRepoRoot, rawUrl) {
+  const text = String(rawUrl || "").trim();
+  if (!text) {
+    return "";
+  }
+  try {
+    const url = new URL(text, "http://cad.local");
+    const explicitFile = url.searchParams.get("file");
+    if (explicitFile) {
+      return path7.resolve(explicitFile);
+    }
+    return path7.resolve(scanRepoRoot, decodeURIComponent(url.pathname).replace(/^\/+/, ""));
+  } catch {
+    return path7.resolve(scanRepoRoot, text.replace(/[?#].*$/, "").replace(/^\/+/, ""));
+  }
+}
+function localAssetUrlForPath(filePath, rawUrl = "") {
+  const url = new URL("/__cad/asset", "http://cad.local");
+  url.searchParams.set("file", absoluteFileRef(filePath));
+  const version = queryValueFromAssetUrl(rawUrl, "v");
+  if (version) {
+    url.searchParams.set("v", version);
+  }
+  return `${url.pathname}${url.search}`;
+}
+function absolutePathFromCatalogValue(scanRepoRoot, value) {
+  const text = String(value || "").trim();
+  if (!text) {
+    return "";
+  }
+  if (path7.isAbsolute(text)) {
+    return path7.resolve(text);
+  }
+  return path7.resolve(scanRepoRoot, text);
+}
+function absolutizeArtifact(artifact, scanRepoRoot) {
+  if (!artifact || typeof artifact !== "object") {
+    return artifact;
+  }
+  const next = { ...artifact };
+  for (const key of ["stepPath", "glbPath", "sourcePath", "cadPath"]) {
+    if (next[key]) {
+      next[key] = absoluteFileRef(absolutePathFromCatalogValue(scanRepoRoot, next[key]));
+    }
+  }
+  return next;
+}
+function absolutizeSource(source, scanRepoRoot) {
+  if (!source || typeof source !== "object") {
+    return source;
+  }
+  const next = { ...source };
+  for (const key of ["file", "path", "sourcePath"]) {
+    if (next[key]) {
+      next[key] = absoluteFileRef(absolutePathFromCatalogValue(scanRepoRoot, next[key]));
+    }
+  }
+  return next;
+}
+function absolutizeSourceStatus(sourceStatus, scanRepoRoot) {
+  if (!sourceStatus || typeof sourceStatus !== "object") {
+    return sourceStatus;
+  }
+  const next = { ...sourceStatus };
+  for (const key of ["sourcePath", "stepPath", "glbPath"]) {
+    if (next[key]) {
+      next[key] = absoluteFileRef(absolutePathFromCatalogValue(scanRepoRoot, next[key]));
+    }
+  }
+  return next;
+}
+function absolutizeCatalogEntry(entry, { rootPath, scanRepoRoot }) {
+  if (!entry || typeof entry !== "object") {
+    return entry;
+  }
+  const outputPath = path7.resolve(rootPath, String(entry.file || ""));
+  const next = {
+    ...entry,
+    file: absoluteFileRef(outputPath),
+    rootRelativeFile: relativeFileRef(rootPath, outputPath)
+  };
+  if (entry.url) {
+    const assetPath = assetPathFromCatalogUrl(scanRepoRoot, entry.url);
+    next.url = localAssetUrlForPath(assetPath, entry.url);
+    next.assetFile = absoluteFileRef(assetPath);
+  }
+  if (entry.moduleUrl) {
+    const modulePath = assetPathFromCatalogUrl(scanRepoRoot, entry.moduleUrl);
+    next.moduleUrl = localAssetUrlForPath(modulePath, entry.moduleUrl);
+    next.moduleFile = absoluteFileRef(modulePath);
+  }
+  if (entry.source) {
+    next.source = absolutizeSource(entry.source, scanRepoRoot);
+  }
+  if (entry.sourceStatus) {
+    next.sourceStatus = absolutizeSourceStatus(entry.sourceStatus, scanRepoRoot);
+  }
+  if (entry.artifact) {
+    next.artifact = absolutizeArtifact(entry.artifact, scanRepoRoot);
+  }
+  if (entry.relations && typeof entry.relations === "object") {
+    next.relations = { ...entry.relations };
+    for (const [key, relation] of Object.entries(entry.relations)) {
+      if (!relation || typeof relation !== "object") {
+        continue;
+      }
+      const relationFilePath = path7.resolve(rootPath, String(relation.file || ""));
+      const nextRelation = {
+        ...relation,
+        file: absoluteFileRef(relationFilePath),
+        rootRelativeFile: relativeFileRef(rootPath, relationFilePath)
+      };
+      if (relation.url) {
+        const relationAssetPath = assetPathFromCatalogUrl(scanRepoRoot, relation.url);
+        nextRelation.url = localAssetUrlForPath(relationAssetPath, relation.url);
+        nextRelation.assetFile = absoluteFileRef(relationAssetPath);
+      }
+      next.relations[key] = nextRelation;
+    }
+  }
+  return next;
+}
+function absolutizeCatalog(catalog, context) {
+  return normalizeCatalog({
+    ...catalog,
+    entries: (Array.isArray(catalog?.entries) ? catalog.entries : []).map((entry) => absolutizeCatalogEntry(entry, context)).filter(Boolean)
+  });
+}
+function absolutizeGenerationStatus(status, rootPath) {
+  const files = {};
+  for (const [file, value] of Object.entries(status?.files || {})) {
+    const absolute = absoluteFileRef(path7.resolve(rootPath, String(file || "")));
+    files[absolute] = {
+      ...value,
+      file: absolute,
+      rootRelativeFile: relativeFileRef(rootPath, absolute)
+    };
+  }
+  return {
+    schemaVersion: 1,
+    runs: (Array.isArray(status?.runs) ? status.runs : []).map((run) => ({
+      ...run,
+      files: (Array.isArray(run?.files) ? run.files : []).map((file) => absoluteFileRef(path7.resolve(rootPath, String(file || "")))).filter(Boolean)
+    })),
+    files
+  };
+}
 function createLocalAssetBackend({
-  workspaceRoot: workspaceRoot2,
-  rootDir: rootDir2 = DEFAULT_VIEWER_ROOT_DIR,
+  workspaceRoot: workspaceRoot2 = process.cwd(),
+  rootDir = "",
   defaultFile = "",
   githubUrl = "",
   stepArtifactGenerator = ensureStepTopologyArtifact,
   sourceFileOpener = defaultSourceFileOpener
 } = {}) {
-  if (!workspaceRoot2) {
-    throw new Error("createLocalAssetBackend requires workspaceRoot");
-  }
-  const repoRoot = path7.resolve(workspaceRoot2);
-  const defaultRootDir = normalizeViewerRootDir(rootDir2);
+  const baseWorkspaceRoot = path7.resolve(workspaceRoot2 || process.cwd());
+  const defaultRootDir = rootDir ? absoluteFileRef(path7.isAbsolute(String(rootDir)) ? rootDir : path7.resolve(baseWorkspaceRoot, String(rootDir))) : "";
   const catalogCache = /* @__PURE__ */ new Map();
-  function resolveRoot(nextRootDir = defaultRootDir) {
-    return resolveViewerRoot(repoRoot, nextRootDir);
-  }
-  function readCatalog({ rootDir: nextRootDir = defaultRootDir } = {}) {
-    const normalizedDir = normalizeViewerRootDir(nextRootDir);
-    if (!catalogCache.has(normalizedDir)) {
-      return refreshCatalog({ rootDir: normalizedDir });
+  function resolveRoot(rootDir2 = defaultRootDir) {
+    const rootPath = normalizedAbsoluteDir(rootDir2 || defaultRootDir);
+    if (!rootPath) {
+      throw new Error("CAD Viewer local filesystem requests must include an absolute ?dir= path");
     }
-    return catalogCache.get(normalizedDir);
+    requireDirectory(rootPath);
+    return {
+      dir: absoluteFileRef(rootPath),
+      rootPath,
+      rootName: path7.basename(rootPath)
+    };
   }
-  function readCatalogSafe({ rootDir: nextRootDir = defaultRootDir } = {}) {
+  function resolveRootForFile(fileRef = "") {
+    const normalized = normalizedFileRef(fileRef);
+    if (!normalized || !path7.isAbsolute(normalized)) {
+      throw new Error("CAD Viewer requests without ?dir= must include an absolute ?file= path");
+    }
+    const rootPath = path7.dirname(path7.resolve(normalized));
+    return {
+      dir: "",
+      rootPath,
+      rootName: path7.basename(rootPath)
+    };
+  }
+  function resolveRequestRoot({ rootDir: rootDir2 = defaultRootDir, fileRef = "" } = {}) {
+    return rootDir2 || defaultRootDir ? resolveRoot(rootDir2 || defaultRootDir) : resolveRootForFile(fileRef);
+  }
+  function scanContextForRoot(resolvedRoot) {
+    const rootPath = path7.resolve(resolvedRoot.rootPath);
+    const scanRepoRoot = pathIsInsideOrEqual(rootPath, baseWorkspaceRoot) ? baseWorkspaceRoot : rootPath;
+    const scanRootDir = scanRepoRoot === rootPath ? "" : toPosixPath2(path7.relative(scanRepoRoot, rootPath));
+    return {
+      rootPath,
+      scanRepoRoot,
+      scanRootDir
+    };
+  }
+  function readCatalog({ rootDir: nextRootDir = defaultRootDir, fileRef = "" } = {}) {
+    const normalizedDir = nextRootDir ? absoluteFileRef(normalizedAbsoluteDir(nextRootDir)) : "";
+    const normalizedFile = normalizedFileRef(fileRef);
+    const cacheKey = normalizedDir ? `dir:${normalizedDir}` : normalizedFile ? `file:${normalizedFile}` : "empty";
+    if (!catalogCache.has(cacheKey)) {
+      return refreshCatalog({ rootDir: normalizedDir, fileRef: normalizedFile });
+    }
+    if (normalizedDir && normalizedFile) {
+      const resolvedRoot = resolveRoot(normalizedDir);
+      const requestedPath = filePathFromRef(normalizedFile, resolvedRoot);
+      if (requestedPath === resolvedRoot.rootPath || pathIsInside(requestedPath, resolvedRoot.rootPath)) {
+        return refreshCatalogForPath({ rootDir: resolvedRoot.dir, filePath: requestedPath });
+      }
+    }
+    return catalogCache.get(cacheKey);
+  }
+  function readCatalogSafe({ rootDir: nextRootDir = defaultRootDir, fileRef = "" } = {}) {
     try {
-      return readCatalog({ rootDir: nextRootDir });
+      return readCatalog({ rootDir: nextRootDir, fileRef });
     } catch {
       return emptyCatalog();
     }
   }
-  function refreshCatalog({ rootDir: nextRootDir = defaultRootDir } = {}) {
-    const normalizedDir = normalizeViewerRootDir(nextRootDir);
-    const catalog = normalizeCatalog(scanCadDirectory({
-      repoRoot,
-      rootDir: normalizedDir,
+  function refreshCatalog({ rootDir: nextRootDir = defaultRootDir, fileRef = "" } = {}) {
+    if (!nextRootDir && !fileRef) {
+      catalogCache.set("empty", emptyCatalog());
+      return catalogCache.get("empty");
+    }
+    const resolvedRoot = nextRootDir ? resolveRoot(nextRootDir) : resolveRootForFile(fileRef);
+    const context = scanContextForRoot(resolvedRoot);
+    const rawCatalog = nextRootDir ? scanCadDirectory({
+      repoRoot: context.scanRepoRoot,
+      rootDir: context.scanRootDir,
       includeArtifactStatus: false
-    }));
-    catalogCache.set(normalizedDir, catalog);
+    }) : normalizeCatalog({
+      entries: [
+        scanCadFile({
+          repoRoot: context.scanRepoRoot,
+          rootDir: context.scanRootDir,
+          filePath: path7.resolve(normalizedFileRef(fileRef)),
+          includeArtifactStatus: false
+        })
+      ].filter(Boolean)
+    });
+    const catalog = absolutizeCatalog(rawCatalog, context);
+    catalogCache.set(nextRootDir ? `dir:${resolvedRoot.dir}` : `file:${normalizedFileRef(fileRef)}`, catalog);
     return catalog;
   }
   function replaceCatalogEntry(catalog, fileRef, nextEntry) {
@@ -23902,62 +24149,69 @@ function createLocalAssetBackend({
     });
   }
   function refreshCatalogEntryForFile({ rootDir: nextRootDir = defaultRootDir, filePath } = {}) {
-    const normalizedDir = normalizeViewerRootDir(nextRootDir);
-    const currentCatalog = readCatalog({ rootDir: normalizedDir });
-    const nextEntry = scanCadFile({
-      repoRoot,
-      rootDir: normalizedDir,
+    const resolvedRoot = resolveRoot(nextRootDir);
+    const context = scanContextForRoot(resolvedRoot);
+    const currentCatalog = readCatalog({ rootDir: resolvedRoot.dir });
+    const rawEntry = scanCadFile({
+      repoRoot: context.scanRepoRoot,
+      rootDir: context.scanRootDir,
       filePath,
       includeArtifactStatus: false
     });
-    const fileRef = nextEntry?.file || catalogFileRefForPath({ repoRoot, rootDir: normalizedDir, filePath });
-    if (!fileRef) {
-      return currentCatalog;
-    }
+    const nextEntry = rawEntry ? absolutizeCatalogEntry(rawEntry, context) : null;
+    const rawFileRef = rawEntry?.file || catalogFileRefForPath({
+      repoRoot: context.scanRepoRoot,
+      rootDir: context.scanRootDir,
+      filePath
+    });
+    const fileRef = nextEntry?.file || (rawFileRef ? absoluteFileRef(path7.resolve(resolvedRoot.rootPath, rawFileRef)) : absoluteFileRef(filePath));
     const nextCatalog = replaceCatalogEntry(currentCatalog, fileRef, nextEntry);
-    catalogCache.set(normalizedDir, nextCatalog);
+    catalogCache.set(`dir:${resolvedRoot.dir}`, nextCatalog);
     return nextCatalog;
   }
   function refreshCatalogForPythonSource({ rootDir: nextRootDir = defaultRootDir, filePath } = {}) {
-    const normalizedDir = normalizeViewerRootDir(nextRootDir);
-    const resolvedRoot = resolveRoot(normalizedDir);
+    const resolvedRoot = resolveRoot(nextRootDir);
     const resolvedFilePath = path7.resolve(filePath);
-    const sourcePath = repoRelativePath(repoRoot, resolvedFilePath);
-    const currentCatalog = readCatalog({ rootDir: normalizedDir });
+    const sourcePath = absoluteFileRef(resolvedFilePath);
+    const currentCatalog = readCatalog({ rootDir: resolvedRoot.dir });
     const matchingFileRefs = new Set(
       currentCatalog.entries.filter((entry) => normalizedFileRef(entry?.source?.sourcePath || entry?.source?.file) === sourcePath).map((entry) => normalizedFileRef(entry.file)).filter(Boolean)
     );
     const sameStemStepPath = path7.join(path7.dirname(resolvedFilePath), `${path7.basename(resolvedFilePath, ".py")}.step`);
     if (sameStemStepPath === resolvedRoot.rootPath || pathIsInside(sameStemStepPath, resolvedRoot.rootPath)) {
-      const sameStemEntry = scanCadFile({
-        repoRoot,
-        rootDir: normalizedDir,
+      const context2 = scanContextForRoot(resolvedRoot);
+      const rawSameStemEntry = scanCadFile({
+        repoRoot: context2.scanRepoRoot,
+        rootDir: context2.scanRootDir,
         filePath: sameStemStepPath,
         includeArtifactStatus: false
       });
-      const sameStemFileRef = sameStemEntry?.file || catalogFileRefForPath({ repoRoot, rootDir: normalizedDir, filePath: sameStemStepPath });
+      const sameStemEntry = rawSameStemEntry ? absolutizeCatalogEntry(rawSameStemEntry, context2) : null;
+      const sameStemFileRef = sameStemEntry?.file || absoluteFileRef(sameStemStepPath);
       if (sameStemEntry || catalogEntryForFileRef(currentCatalog, sameStemFileRef)) {
         matchingFileRefs.add(sameStemFileRef);
       }
     }
     if (!matchingFileRefs.size) {
-      return refreshCatalog({ rootDir: normalizedDir });
+      return refreshCatalog({ rootDir: resolvedRoot.dir });
     }
     let nextCatalog = currentCatalog;
+    const context = scanContextForRoot(resolvedRoot);
     for (const fileRef of matchingFileRefs) {
-      const outputPath = path7.resolve(resolvedRoot.rootPath, fileRef);
+      const outputPath = path7.resolve(fileRef);
+      const rawEntry = scanCadFile({
+        repoRoot: context.scanRepoRoot,
+        rootDir: context.scanRootDir,
+        filePath: outputPath,
+        includeArtifactStatus: false
+      });
       nextCatalog = replaceCatalogEntry(
         nextCatalog,
         fileRef,
-        scanCadFile({
-          repoRoot,
-          rootDir: normalizedDir,
-          filePath: outputPath,
-          includeArtifactStatus: false
-        })
+        rawEntry ? absolutizeCatalogEntry(rawEntry, context) : null
       );
     }
-    catalogCache.set(normalizedDir, nextCatalog);
+    catalogCache.set(`dir:${resolvedRoot.dir}`, nextCatalog);
     return nextCatalog;
   }
   function refreshCatalogForPath({ rootDir: nextRootDir = defaultRootDir, filePath } = {}) {
@@ -23967,26 +24221,30 @@ function createLocalAssetBackend({
     }
     return refreshCatalogEntryForFile({ rootDir: nextRootDir, filePath });
   }
-  function resolveStepSource(fileRef, { resolvedRoot = resolveRoot(), catalog = null } = {}) {
-    const relativeFileRef = normalizedFileRef(fileRef);
-    if (!relativeFileRef) {
+  function filePathFromRef(fileRef, resolvedRoot) {
+    const normalized = normalizedFileRef(fileRef);
+    if (!normalized) {
+      return "";
+    }
+    return path7.isAbsolute(normalized) ? path7.resolve(normalized) : path7.resolve(resolvedRoot.rootPath, normalized);
+  }
+  function resolveStepSource(fileRef, { resolvedRoot = resolveRequestRoot({ fileRef }), catalog = null } = {}) {
+    const normalizedRef = normalizedFileRef(fileRef);
+    if (!normalizedRef) {
       throw new Error("Missing STEP file");
     }
-    const rawRef = String(fileRef || "").trim().replace(/\\/g, "/");
-    const candidates = path7.isAbsolute(rawRef) ? [
-      path7.resolve(rawRef),
-      path7.resolve(resolvedRoot.rootPath, relativeFileRef),
-      path7.resolve(repoRoot, relativeFileRef)
+    const candidates = path7.isAbsolute(normalizedRef) ? [
+      path7.resolve(normalizedRef),
+      path7.resolve(resolvedRoot.rootPath, normalizedRef.replace(/^\/+/, ""))
     ] : [
-      path7.resolve(resolvedRoot.rootPath, relativeFileRef),
-      path7.resolve(repoRoot, relativeFileRef)
+      path7.resolve(resolvedRoot.rootPath, normalizedRef)
     ];
     for (const candidatePath2 of [...new Set(candidates)]) {
       if ((candidatePath2 === resolvedRoot.rootPath || pathIsInside(candidatePath2, resolvedRoot.rootPath)) && fs6.existsSync(candidatePath2)) {
         const extension = path7.extname(candidatePath2).toLowerCase();
         if (extension === ".py") {
           if (!fileHasGenStep2(candidatePath2)) {
-            throw new Error(`Python generator is not a gen_step() source: ${relativeFileRef}`);
+            throw new Error(`Python generator is not a gen_step() source: ${normalizedRef}`);
           }
           return {
             stepPath: path7.join(path7.dirname(candidatePath2), `${path7.basename(candidatePath2, extension)}.step`),
@@ -24012,29 +24270,20 @@ function createLocalAssetBackend({
       if ((extension === ".step" || extension === ".stp") && generatorPath) {
         return { stepPath: candidatePath, sourcePath: generatorPath, skipStepWrite: true };
       }
-      throw new Error(`STEP file not found: ${relativeFileRef}`);
+      throw new Error(`STEP file not found: ${normalizedRef}`);
     }
     throw new Error("Requested STEP file is outside the active CAD Viewer root");
   }
-  function resolveStepSourceStatus(fileRef, { resolvedRoot = resolveRoot(), catalog = null } = {}) {
+  function resolveStepSourceStatus(fileRef, { resolvedRoot = resolveRequestRoot({ fileRef }), catalog = null } = {}) {
     try {
       return resolveStepSource(fileRef, { resolvedRoot, catalog });
     } catch (error) {
-      const relativeFileRef = normalizedFileRef(fileRef);
-      if (!relativeFileRef) {
+      const normalizedRef = normalizedFileRef(fileRef);
+      if (!normalizedRef) {
         throw error;
       }
-      const rawRef = String(fileRef || "").trim().replace(/\\/g, "/");
-      const candidates = path7.isAbsolute(rawRef) ? [
-        path7.resolve(rawRef),
-        path7.resolve(resolvedRoot.rootPath, relativeFileRef),
-        path7.resolve(repoRoot, relativeFileRef)
-      ] : [
-        path7.resolve(resolvedRoot.rootPath, relativeFileRef),
-        path7.resolve(repoRoot, relativeFileRef)
-      ];
-      const candidatePath = candidates.find((candidate) => candidate === resolvedRoot.rootPath || pathIsInside(candidate, resolvedRoot.rootPath));
-      if (!candidatePath) {
+      const candidatePath = filePathFromRef(normalizedRef, resolvedRoot);
+      if (!(candidatePath === resolvedRoot.rootPath || pathIsInside(candidatePath, resolvedRoot.rootPath))) {
         throw error;
       }
       const extension = path7.extname(candidatePath).toLowerCase();
@@ -24050,55 +24299,50 @@ function createLocalAssetBackend({
     }
   }
   function requireCatalogEntryForFileRef(fileRef, {
-    resolvedRoot = resolveRoot(),
+    resolvedRoot = resolveRequestRoot({ fileRef }),
     rootDir: nextRootDir = defaultRootDir,
     catalog = null
   } = {}) {
-    const relativeFileRef = normalizedFileRef(fileRef);
-    if (!relativeFileRef) {
+    const normalizedRef = normalizedFileRef(fileRef);
+    if (!normalizedRef) {
       throw new Error("Missing file");
     }
-    const currentCatalog = catalog || readCatalogSafe({ rootDir: nextRootDir });
-    const entry = catalogEntryForFileRef(currentCatalog, relativeFileRef);
+    const currentCatalog = catalog || readCatalogSafe({ rootDir: nextRootDir, fileRef: normalizedRef });
+    const entry = catalogEntryForFileRef(currentCatalog, normalizedRef);
     if (!entry) {
-      throw new Error(`CAD catalog entry not found: ${relativeFileRef}`);
+      throw new Error(`CAD catalog entry not found: ${normalizedRef}`);
     }
-    return { entry, relativeFileRef, currentCatalog, resolvedRoot };
+    return { entry, relativeFileRef: normalizedRef, currentCatalog, resolvedRoot };
   }
   function resolveOutputFilePath(fileRef, options = {}) {
-    const { entry, relativeFileRef, resolvedRoot } = requireCatalogEntryForFileRef(fileRef, options);
-    const outputRef = normalizedFileRef(entry?.file || relativeFileRef);
-    const outputPath = path7.resolve(resolvedRoot.rootPath, outputRef);
+    const { entry, relativeFileRef: relativeFileRef2, resolvedRoot } = requireCatalogEntryForFileRef(fileRef, options);
+    const outputRef = normalizedFileRef(entry?.file || relativeFileRef2);
+    const outputPath = filePathFromRef(outputRef, resolvedRoot);
     ensurePathInsideRoot(outputPath, resolvedRoot);
     if (!fs6.existsSync(outputPath) || !fs6.statSync(outputPath).isFile()) {
-      throw new Error(`Output file not found: ${outputRef || relativeFileRef}`);
+      throw new Error(`Output file not found: ${outputRef || relativeFileRef2}`);
     }
     return outputPath;
   }
-  function artifactFileRefFromEntry2(entry, rootDir3) {
+  function artifactFileRefFromEntry2(entry) {
+    const explicitAssetFile = normalizedFileRef(entry?.assetFile || entry?.asset?.file || entry?.artifactFile || entry?.artifact?.file);
+    if (explicitAssetFile) {
+      return explicitAssetFile;
+    }
     const rawUrl = String(entry?.url || "").trim();
     if (!rawUrl) {
       throw new Error("Artifact asset is not available for this file");
     }
-    let artifactRef = "";
-    try {
-      artifactRef = normalizedFileRef(new URL(rawUrl, "http://cad.local").pathname);
-    } catch {
-      artifactRef = normalizedFileRef(rawUrl.split("?")[0]);
-    }
-    const normalizedRootDir = normalizedFileRef(rootDir3);
-    if (normalizedRootDir && artifactRef.startsWith(`${normalizedRootDir}/`)) {
-      artifactRef = artifactRef.slice(normalizedRootDir.length + 1);
-    }
-    return artifactRef;
+    const assetPath = assetPathFromCatalogUrl("/", rawUrl);
+    return absoluteFileRef(assetPath);
   }
   function resolveArtifactFilePath(fileRef, options = {}) {
-    const { entry, relativeFileRef, resolvedRoot } = requireCatalogEntryForFileRef(fileRef, options);
-    const artifactRef = artifactFileRefFromEntry2(entry, options.rootDir || defaultRootDir);
+    const { entry, relativeFileRef: relativeFileRef2, resolvedRoot } = requireCatalogEntryForFileRef(fileRef, options);
+    const artifactRef = artifactFileRefFromEntry2(entry);
     if (!artifactRef) {
-      throw new Error(`Artifact asset is not available for ${relativeFileRef}`);
+      throw new Error(`Artifact asset is not available for ${relativeFileRef2}`);
     }
-    const artifactPath = path7.resolve(resolvedRoot.rootPath, artifactRef);
+    const artifactPath = filePathFromRef(artifactRef, resolvedRoot);
     ensurePathInsideRoot(artifactPath, resolvedRoot);
     if (!fs6.existsSync(artifactPath) || !fs6.statSync(artifactPath).isFile()) {
       throw new Error(`Artifact file not found: ${artifactRef}`);
@@ -24106,43 +24350,43 @@ function createLocalAssetBackend({
     return artifactPath;
   }
   function resolveSourceCodeFilePath(fileRef, options = {}) {
-    const { entry, relativeFileRef, currentCatalog, resolvedRoot } = requireCatalogEntryForFileRef(fileRef, options);
+    const { entry, relativeFileRef: relativeFileRef2, currentCatalog, resolvedRoot } = requireCatalogEntryForFileRef(fileRef, options);
     const explicitSourceRef = normalizedFileRef(entry?.source?.file || entry?.sourceFile || "");
     if (explicitSourceRef) {
-      const candidatePaths = [
-        path7.resolve(resolvedRoot.rootPath, explicitSourceRef),
-        path7.resolve(repoRoot, explicitSourceRef)
+      const sourceCandidates = [
+        filePathFromRef(explicitSourceRef, resolvedRoot),
+        path7.resolve(baseWorkspaceRoot, explicitSourceRef)
       ];
-      for (const sourcePath of [...new Set(candidatePaths)]) {
+      for (const sourcePath of [...new Set(sourceCandidates)]) {
         if ((sourcePath === resolvedRoot.rootPath || pathIsInside(sourcePath, resolvedRoot.rootPath)) && fs6.existsSync(sourcePath) && fs6.statSync(sourcePath).isFile()) {
           return sourcePath;
         }
       }
     }
-    const extension = path7.extname(relativeFileRef).toLowerCase();
+    const extension = path7.extname(relativeFileRef2).toLowerCase();
     if (extension === ".step" || extension === ".stp") {
-      const { stepPath, sourcePath } = resolveStepSourceStatus(relativeFileRef, { resolvedRoot, catalog: currentCatalog });
+      const { stepPath, sourcePath } = resolveStepSourceStatus(relativeFileRef2, { resolvedRoot, catalog: currentCatalog });
       if (sourcePath && fs6.existsSync(sourcePath) && fs6.statSync(sourcePath).isFile()) {
         ensurePathInsideRoot(sourcePath, resolvedRoot);
         return sourcePath;
       }
       ensurePathInsideRoot(stepPath, resolvedRoot);
     }
-    throw new Error(`Source code is not available for ${relativeFileRef}`);
+    throw new Error(`Source code is not available for ${relativeFileRef2}`);
   }
   function resolveFileAssetAccess({
     fileRef,
     asset = "output",
-    resolvedRoot = resolveRoot(),
+    resolvedRoot = resolveRequestRoot({ fileRef }),
     rootDir: nextRootDir = defaultRootDir,
     catalog = null
   } = {}) {
     const assetKind = normalizedFileAssetKind(asset);
     const filePath = assetKind === "source" ? resolveSourceCodeFilePath(fileRef, { resolvedRoot, rootDir: nextRootDir, catalog }) : assetKind === "artifact" ? resolveArtifactFilePath(fileRef, { resolvedRoot, rootDir: nextRootDir, catalog }) : resolveOutputFilePath(fileRef, { resolvedRoot, rootDir: nextRootDir, catalog });
-    const file = path7.relative(resolvedRoot.rootPath, filePath).split(path7.sep).join("/");
     return {
       asset: assetKind,
-      file,
+      file: absoluteFileRef(filePath),
+      rootRelativeFile: relativeFileRef(resolvedRoot.rootPath, filePath),
       path: filePath,
       filename: path7.basename(filePath),
       contentType: contentTypeForPath(filePath)
@@ -24164,18 +24408,19 @@ function createLocalAssetBackend({
   async function openSourceFile(request = {}) {
     return openFileAsset({ ...request, asset: "source" });
   }
-  async function generateStepArtifact({ fileRef, force = false, resolvedRoot = resolveRoot(), catalog = null } = {}) {
+  async function generateStepArtifact({ fileRef, force = false, resolvedRoot = resolveRequestRoot({ fileRef }), catalog = null } = {}) {
     const { stepPath, sourcePath, skipStepWrite } = resolveStepSource(fileRef, { resolvedRoot, catalog });
-    const relativeFileRef = normalizedFileRef(fileRef);
-    const currentCatalog = catalog || readCatalogSafe();
-    const entry = catalogEntryForFileRef(currentCatalog, relativeFileRef);
+    const normalizedRef = normalizedFileRef(fileRef);
+    const currentCatalog = catalog || readCatalogSafe({ rootDir: resolvedRoot.dir, fileRef: normalizedRef });
+    const entry = catalogEntryForFileRef(currentCatalog, normalizedRef);
     if (sourcePath || entryIsPythonBackedStep(entry) || stepFileHasPythonSourceMetadata(stepPath)) {
       throw new Error(
         "CAD Viewer only regenerates GLB artifacts for imported STEP files. Regenerate Python-backed STEP files with their generator script."
       );
     }
+    const context = scanContextForRoot(resolvedRoot);
     const result = await stepArtifactGenerator({
-      repoRoot,
+      repoRoot: context.scanRepoRoot,
       stepPath,
       sourcePath,
       force,
@@ -24189,51 +24434,80 @@ function createLocalAssetBackend({
       stepPath
     };
   }
-  function readStepSourceStatusForFile({ fileRef, resolvedRoot = resolveRoot(), catalog = null } = {}) {
+  function readStepSourceStatusForFile({ fileRef, resolvedRoot = resolveRequestRoot({ fileRef }), catalog = null } = {}) {
     const { stepPath, sourcePath } = resolveStepSourceStatus(fileRef, { resolvedRoot, catalog });
-    return readStepSourceStatus({
-      repoRoot,
+    const context = scanContextForRoot(resolvedRoot);
+    const status = readStepSourceStatus({
+      repoRoot: context.scanRepoRoot,
       stepPath,
       pythonSourcePath: sourcePath
     });
+    return absolutizeSourceStatus({
+      ...status,
+      ...status?.artifact ? { artifact: absolutizeArtifact(status.artifact, context.scanRepoRoot) } : {}
+    }, context.scanRepoRoot);
   }
   function readGeneratorStatus({ rootDir: nextRootDir = defaultRootDir } = {}) {
-    return readGenerationStatus({
-      repoRoot,
-      rootDir: nextRootDir
-    });
+    if (!nextRootDir) {
+      return {
+        schemaVersion: 1,
+        runs: [],
+        files: {}
+      };
+    }
+    const resolvedRoot = resolveRoot(nextRootDir);
+    const context = scanContextForRoot(resolvedRoot);
+    return absolutizeGenerationStatus(readGenerationStatus({
+      repoRoot: context.scanRepoRoot,
+      rootDir: context.scanRootDir
+    }), resolvedRoot.rootPath);
   }
-  function generatorStatusDir() {
-    return generationStatusDir(repoRoot, defaultRootDir);
+  function generationStatusDir2(rootDir2 = defaultRootDir) {
+    const resolvedRoot = resolveRoot(rootDir2);
+    const context = scanContextForRoot(resolvedRoot);
+    return generationStatusDir(context.scanRepoRoot, context.scanRootDir);
+  }
+  function isGenerationStatusPath(filePath, rootDir2 = defaultRootDir) {
+    if (!rootDir2) {
+      return false;
+    }
+    const resolvedRoot = resolveRoot(rootDir2);
+    const resolvedPath = path7.resolve(filePath);
+    const name = path7.basename(resolvedPath);
+    return (resolvedPath === resolvedRoot.rootPath || pathIsInside(resolvedPath, resolvedRoot.rootPath)) && name.startsWith(".") && name.endsWith(".generation.lock.json");
   }
   function entryForSourcePath(catalog, resolvedRoot, sourcePath) {
-    const fileRef = path7.relative(resolvedRoot.rootPath, sourcePath).split(path7.sep).join("/");
-    return Array.isArray(catalog?.entries) ? catalog.entries.find((entry) => String(entry?.file || "") === fileRef) || null : null;
+    const fileRef = absoluteFileRef(sourcePath);
+    return Array.isArray(catalog?.entries) ? catalog.entries.find((entry) => normalizedFileRef(entry?.file) === fileRef) || null : null;
   }
-  function assetPathForRequestPath(requestPath, { resolvedRoot = resolveRoot() } = {}) {
-    const decodedPath = decodeURIComponent(String(requestPath || "").replace(/\?.*$/, ""));
-    const candidatePath = path7.resolve(repoRoot, decodedPath.replace(/^\/+/, ""));
+  function assetPathForFileRef(fileRef, { resolvedRoot = null, rootDir: rootDir2 = "" } = {}) {
+    const normalizedRef = normalizedFileRef(fileRef);
+    if (!normalizedRef || !path7.isAbsolute(normalizedRef)) {
+      return null;
+    }
+    const candidatePath = path7.resolve(normalizedRef);
     if (!isServedCadAsset(candidatePath)) {
       return null;
     }
-    if (!(candidatePath === resolvedRoot.rootPath || pathIsInside(candidatePath, resolvedRoot.rootPath))) {
+    const activeRoot = resolvedRoot || (rootDir2 ? resolveRoot(rootDir2) : null);
+    if (activeRoot && !(candidatePath === activeRoot.rootPath || pathIsInside(candidatePath, activeRoot.rootPath))) {
       const error = new Error("Forbidden");
       error.statusCode = 403;
       throw error;
     }
     return candidatePath;
   }
-  async function writeAsset({ fileRef, body, resolvedRoot = resolveRoot() } = {}) {
-    const relativeFileRef = normalizedFileRef(fileRef);
-    if (!relativeFileRef) {
+  async function writeAsset({ fileRef, body, resolvedRoot = resolveRequestRoot({ fileRef }) } = {}) {
+    const normalizedRef = normalizedFileRef(fileRef);
+    if (!normalizedRef) {
       throw new Error("Missing asset path");
     }
-    const filePath = path7.resolve(resolvedRoot.rootPath, relativeFileRef);
+    const filePath = filePathFromRef(normalizedRef, resolvedRoot);
     if (!(filePath === resolvedRoot.rootPath || pathIsInside(filePath, resolvedRoot.rootPath))) {
       throw new Error("Asset writes must stay inside the active CAD Viewer root");
     }
     if (!isServedCadAsset(filePath)) {
-      throw new Error(`Unsupported CAD Viewer asset write: ${relativeFileRef}`);
+      throw new Error(`Unsupported CAD Viewer asset write: ${normalizedRef}`);
     }
     const bytes2 = Buffer.isBuffer(body) ? body : Buffer.from(body || "");
     fs6.mkdirSync(path7.dirname(filePath), { recursive: true });
@@ -24247,9 +24521,12 @@ function createLocalAssetBackend({
   return {
     kind: "local-fs",
     canGenerateStepArtifacts: true,
-    repoRoot,
-    rootDir: defaultRootDir,
+    repoRoot: baseWorkspaceRoot,
+    rootDir: "",
+    defaultFile,
+    githubUrl,
     resolveRoot,
+    resolveRequestRoot,
     readCatalog,
     readCatalogSafe,
     refreshCatalog,
@@ -24261,11 +24538,11 @@ function createLocalAssetBackend({
     resolveSourceFileAccess,
     openSourceFile,
     readGenerationStatus: readGeneratorStatus,
-    generationStatusDir: generatorStatusDir,
-    isGenerationStatusPath: (filePath) => isGenerationStatusPath(filePath, repoRoot),
+    generationStatusDir: generationStatusDir2,
+    isGenerationStatusPath,
     generateStepArtifact,
     entryForSourcePath,
-    assetPathForRequestPath,
+    assetPathForFileRef,
     writeAsset,
     contentTypeForPath
   };
@@ -24308,18 +24585,66 @@ function attachmentContentDisposition(filename) {
 function errorMessage(error) {
   return error instanceof Error ? error.message : String(error);
 }
+function requestRootDir(requestUrl) {
+  return String(requestUrl?.searchParams?.get("dir") || "").trim();
+}
+function requestFileRef(requestUrl) {
+  return String(requestUrl?.searchParams?.get("file") || "").trim();
+}
+function requestHeader(req, name) {
+  const headers = req?.headers || {};
+  const value = headers[String(name || "").toLowerCase()];
+  return Array.isArray(value) ? value[0] : String(value || "");
+}
+function requestRefererUrl(req) {
+  const value = requestHeader(req, "referer") || requestHeader(req, "referrer");
+  if (!value) {
+    return null;
+  }
+  try {
+    return new URL(value, "http://localhost");
+  } catch {
+    return null;
+  }
+}
+function siblingFileRef(sourceFileRef, relativeFileRef2) {
+  const source = String(sourceFileRef || "").replace(/\\/g, "/");
+  const relative = String(relativeFileRef2 || "").replace(/\\/g, "/").replace(/^\/+/g, "");
+  if (!source || !relative) {
+    return "";
+  }
+  if (path8.isAbsolute(source)) {
+    return path8.resolve(path8.dirname(source), relative);
+  }
+  const sourceDir = path8.posix.dirname(source);
+  return path8.posix.normalize(path8.posix.join(sourceDir === "." ? "" : sourceDir, relative));
+}
+function legacyCadAssetFileRef(requestUrl, req) {
+  if (!requestUrl.pathname.startsWith("/__cad/") || requestUrl.pathname === "/__cad/asset") {
+    return "";
+  }
+  const relativePath = decodeURIComponent(requestUrl.pathname.slice("/__cad/".length));
+  if (!relativePath || !path8.extname(relativePath)) {
+    return "";
+  }
+  const refererUrl = requestRefererUrl(req);
+  return siblingFileRef(requestFileRef(refererUrl), relativePath);
+}
 function fileAssetRequest(backend2, requestUrl, {
-  rootDir: rootDir2,
+  rootDir,
   catalog
 } = {}) {
+  const fileRef = requestFileRef(requestUrl);
   const request = {
-    fileRef: requestUrl.searchParams.get("file"),
+    fileRef,
     asset: requestUrl.searchParams.get("asset") || "output",
-    rootDir: rootDir2,
+    rootDir,
     catalog
   };
-  if (typeof backend2.resolveRoot === "function") {
-    request.resolvedRoot = backend2.resolveRoot(rootDir2);
+  if (typeof backend2.resolveRequestRoot === "function") {
+    request.resolvedRoot = backend2.resolveRequestRoot({ rootDir, fileRef });
+  } else if (typeof backend2.resolveRoot === "function" && rootDir) {
+    request.resolvedRoot = backend2.resolveRoot(rootDir);
   }
   return request;
 }
@@ -24379,20 +24704,33 @@ function createCadViewerApiMiddleware({
   preferFileDownloadRedirects = false,
   onCatalogChanged = () => {
   },
-  rootDir: rootDir2
+  onCatalogActivated = () => {
+  },
+  rootDir
 } = {}) {
   if (!backend2) {
     throw new Error("createCadViewerApiMiddleware requires backend");
   }
   return async function cadViewerApiMiddleware(req, res, next) {
     const requestUrl = new URL(req.url || "/", "http://localhost");
+    const activeRootDir = requestRootDir(requestUrl) || rootDir || "";
+    const activeFileRef = requestFileRef(requestUrl);
     if (requestUrl.pathname === "/__cad/server") {
-      sendJson(res, 200, serverInfo());
+      sendJson(res, 200, serverInfo({ rootDir: activeRootDir, fileRef: activeFileRef }));
       return;
     }
     if (requestUrl.pathname === "/__cad/catalog") {
       try {
-        sendJson(res, 200, await backend2.readCatalog({ rootDir: rootDir2 }));
+        const catalog = await backend2.readCatalog({ rootDir: activeRootDir, fileRef: activeFileRef });
+        if (typeof backend2.resolveRequestRoot === "function" && (activeRootDir || activeFileRef)) {
+          onCatalogActivated(
+            backend2.resolveRequestRoot({ rootDir: activeRootDir, fileRef: activeFileRef }),
+            { rootDir: activeRootDir, fileRef: activeFileRef }
+          );
+        } else if (activeRootDir && typeof backend2.resolveRoot === "function") {
+          onCatalogActivated(backend2.resolveRoot(activeRootDir), { rootDir: activeRootDir, fileRef: activeFileRef });
+        }
+        sendJson(res, 200, catalog);
       } catch (error) {
         sendJson(res, 400, {
           error: errorMessage(error)
@@ -24408,7 +24746,7 @@ function createCadViewerApiMiddleware({
         return;
       }
       try {
-        sendJson(res, 200, await backend2.readGenerationStatus({ rootDir: rootDir2 }));
+        sendJson(res, 200, await backend2.readGenerationStatus({ rootDir: activeRootDir }));
       } catch (error) {
         sendJson(res, 400, {
           error: errorMessage(error)
@@ -24426,8 +24764,8 @@ function createCadViewerApiMiddleware({
         return;
       }
       try {
-        const catalog = await backend2.readCatalog({ rootDir: rootDir2 });
-        const request = fileAssetRequest(backend2, requestUrl, { rootDir: rootDir2, catalog });
+        const catalog = await backend2.readCatalog({ rootDir: activeRootDir, fileRef: activeFileRef });
+        const request = fileAssetRequest(backend2, requestUrl, { rootDir: activeRootDir, catalog });
         if (preferFileDownloadRedirects && typeof backend2.resolveFileAssetAccess === "function") {
           const access2 = await backend2.resolveFileAssetAccess(request);
           if (access2?.url) {
@@ -24481,6 +24819,52 @@ function createCadViewerApiMiddleware({
       }
       return;
     }
+    if (requestUrl.pathname === "/__cad/asset") {
+      const method = String(req.method || "GET").toUpperCase();
+      if (method !== "GET") {
+        res.setHeader("allow", "GET");
+        sendJson(res, 405, {
+          error: "Use GET to read a CAD Viewer asset"
+        });
+        return;
+      }
+      try {
+        if (typeof backend2.assetPathForFileRef !== "function") {
+          sendJson(res, 501, {
+            error: "Direct CAD Viewer assets are not available for this backend"
+          });
+          return;
+        }
+        const assetPath = backend2.assetPathForFileRef(activeFileRef, {
+          rootDir: activeRootDir,
+          ...typeof backend2.resolveRequestRoot === "function" && (activeRootDir || activeFileRef) ? { resolvedRoot: backend2.resolveRequestRoot({ rootDir: activeRootDir, fileRef: activeFileRef }) } : {}
+        });
+        if (!assetPath) {
+          sendJson(res, 404, {
+            error: "CAD Viewer asset not found"
+          });
+          return;
+        }
+        serveStaticFile(assetPath, req, res, () => {
+          sendJson(res, 404, {
+            error: "CAD Viewer asset not found"
+          });
+        }, {
+          contentType: backend2.contentTypeForPath?.(assetPath) || "application/octet-stream"
+        });
+      } catch (error) {
+        if (Number(error?.statusCode) === 403) {
+          sendJson(res, 403, {
+            error: "Forbidden"
+          });
+          return;
+        }
+        sendJson(res, 400, {
+          error: errorMessage(error)
+        });
+      }
+      return;
+    }
     if (requestUrl.pathname === "/__cad/reveal") {
       const method = String(req.method || "GET").toUpperCase();
       if (method !== "POST") {
@@ -24497,8 +24881,8 @@ function createCadViewerApiMiddleware({
           });
           return;
         }
-        const catalog = await backend2.readCatalog({ rootDir: rootDir2 });
-        const request = fileAssetRequest(backend2, requestUrl, { rootDir: rootDir2, catalog });
+        const catalog = await backend2.readCatalog({ rootDir: activeRootDir, fileRef: activeFileRef });
+        const request = fileAssetRequest(backend2, requestUrl, { rootDir: activeRootDir, catalog });
         const result = await backend2.openFileAsset(request);
         sendJson(res, 200, {
           ok: true,
@@ -24520,14 +24904,16 @@ function createCadViewerApiMiddleware({
         return;
       }
       try {
-        const catalog = await backend2.readCatalog({ rootDir: rootDir2 });
+        const catalog = await backend2.readCatalog({ rootDir: activeRootDir, fileRef: activeFileRef });
         const request = {
-          fileRef: requestUrl.searchParams.get("file"),
-          rootDir: rootDir2,
+          fileRef: activeFileRef,
+          rootDir: activeRootDir,
           catalog
         };
-        if (typeof backend2.resolveRoot === "function") {
-          request.resolvedRoot = backend2.resolveRoot(rootDir2);
+        if (typeof backend2.resolveRequestRoot === "function") {
+          request.resolvedRoot = backend2.resolveRequestRoot({ rootDir: activeRootDir, fileRef: activeFileRef });
+        } else if (typeof backend2.resolveRoot === "function" && activeRootDir) {
+          request.resolvedRoot = backend2.resolveRoot(activeRootDir);
         }
         sendJson(res, 200, await backend2.readStepSourceStatus(request));
       } catch (error) {
@@ -24555,15 +24941,15 @@ function createCadViewerApiMiddleware({
         return;
       }
       try {
-        const catalog = await backend2.readCatalog({ rootDir: rootDir2 });
+        const catalog = await backend2.readCatalog({ rootDir: activeRootDir, fileRef: activeFileRef });
         if (typeof backend2.resolveRoot !== "function") {
           const result2 = await backend2.generateStepArtifact({
-            fileRef: requestUrl.searchParams.get("file"),
+            fileRef: activeFileRef,
             force: requestUrl.searchParams.get("force") === "1",
-            rootDir: rootDir2,
+            rootDir: activeRootDir,
             catalog
           });
-          const nextCatalog2 = result2?.catalog || (typeof backend2.refreshCatalog === "function" ? await backend2.refreshCatalog({ rootDir: rootDir2 }) : await backend2.readCatalog({ rootDir: rootDir2 }));
+          const nextCatalog2 = result2?.catalog || (typeof backend2.refreshCatalog === "function" ? await backend2.refreshCatalog({ rootDir: activeRootDir, fileRef: activeFileRef }) : await backend2.readCatalog({ rootDir: activeRootDir, fileRef: activeFileRef }));
           sendJson(res, result2?.ok ? 200 : 500, {
             ok: Boolean(result2?.ok),
             error: result2?.ok ? "" : String(result2?.error || "STEP artifact generation failed."),
@@ -24573,14 +24959,14 @@ function createCadViewerApiMiddleware({
           });
           return;
         }
-        const resolvedRoot = backend2.resolveRoot(rootDir2);
+        const resolvedRoot = typeof backend2.resolveRequestRoot === "function" ? backend2.resolveRequestRoot({ rootDir: activeRootDir, fileRef: activeFileRef }) : backend2.resolveRoot(activeRootDir);
         const result = await backend2.generateStepArtifact({
-          fileRef: requestUrl.searchParams.get("file"),
+          fileRef: activeFileRef,
           force: requestUrl.searchParams.get("force") === "1",
           resolvedRoot,
           catalog
         });
-        const nextCatalog = typeof backend2.refreshCatalog === "function" ? await backend2.refreshCatalog({ rootDir: rootDir2 }) : await backend2.readCatalog({ rootDir: rootDir2 });
+        const nextCatalog = typeof backend2.refreshCatalog === "function" ? await backend2.refreshCatalog({ rootDir: activeRootDir, fileRef: activeFileRef }) : await backend2.readCatalog({ rootDir: activeRootDir, fileRef: activeFileRef });
         onCatalogChanged(resolvedRoot);
         sendJson(res, result.ok ? 200 : 500, {
           ok: result.ok,
@@ -24599,15 +24985,25 @@ function createCadViewerApiMiddleware({
     next();
   };
 }
-function createLocalAssetMiddleware({ backend: backend2, rootDir: rootDir2 } = {}) {
+function createLocalAssetMiddleware({ backend: backend2, rootDir } = {}) {
   if (!backend2) {
     throw new Error("createLocalAssetMiddleware requires backend");
   }
   return function localAssetMiddleware(req, res, next) {
+    const requestUrl = new URL(req.url || "/", "http://localhost");
+    const fallbackFileRef = legacyCadAssetFileRef(requestUrl, req);
+    if (requestUrl.pathname !== "/__cad/asset" && !fallbackFileRef || typeof backend2.assetPathForFileRef !== "function") {
+      next();
+      return;
+    }
     let assetPath = null;
     try {
-      assetPath = backend2.assetPathForRequestPath(req.url || "/", {
-        resolvedRoot: backend2.resolveRoot(rootDir2)
+      const refererUrl = requestRefererUrl(req);
+      const activeRootDir = requestRootDir(requestUrl) || requestRootDir(refererUrl) || rootDir || "";
+      const activeFileRef = requestFileRef(requestUrl) || fallbackFileRef;
+      assetPath = backend2.assetPathForFileRef(activeFileRef, {
+        rootDir: activeRootDir,
+        ...typeof backend2.resolveRequestRoot === "function" && (activeRootDir || activeFileRef) ? { resolvedRoot: backend2.resolveRequestRoot({ rootDir: activeRootDir, fileRef: activeFileRef }) } : {}
       });
     } catch (error) {
       if (Number(error?.statusCode) === 403) {
@@ -25156,6 +25552,10 @@ var VIEWER_ASSET_BACKENDS = Object.freeze({
   LOCAL_FS: "local-fs",
   VERCEL_BLOB: "vercel-blob"
 });
+var DEPRECATED_LOCAL_ROOT_ENV_VARS = Object.freeze([
+  "VIEWER_LOCAL_ROOT_DIR",
+  "VIEWER_LOCAL_WORKSPACE_ROOT"
+]);
 var VALID_VIEWER_ASSET_BACKENDS = new Set(Object.values(VIEWER_ASSET_BACKENDS));
 function envValue(env, name, fallback = "") {
   return String(env?.[name] ?? fallback).trim();
@@ -25169,11 +25569,13 @@ function normalizeViewerAssetBackend(value, fallback = VIEWER_ASSET_BACKENDS.LOC
     `Unsupported VIEWER_ASSET_BACKEND: ${normalized || "(missing)"}. Expected one of: ${[...VALID_VIEWER_ASSET_BACKENDS].join(", ")}.`
   );
 }
-function localRootDirFromEnv(env = process.env) {
-  return normalizeViewerRootDir(envValue(env, "VIEWER_LOCAL_ROOT_DIR", DEFAULT_VIEWER_ROOT_DIR));
-}
-function rootDirForAssetBackend(assetBackend, env = process.env) {
-  return assetBackend === VIEWER_ASSET_BACKENDS.LOCAL_FS ? localRootDirFromEnv(env) : DEFAULT_VIEWER_ROOT_DIR;
+function assertNoDeprecatedLocalRootEnv(env = process.env) {
+  const configured = DEPRECATED_LOCAL_ROOT_ENV_VARS.filter((name) => String(env?.[name] || "").trim());
+  if (configured.length) {
+    throw new Error(
+      `${configured.join(", ")} ${configured.length === 1 ? "is" : "are"} no longer supported. Pass an absolute ?dir= path in the Viewer URL instead.`
+    );
+  }
 }
 function vercelBlobCatalogUrlFromPrefix(prefix, catalogPath = "catalog.json") {
   const rawPrefix = envValue({ prefix }, "prefix");
@@ -25272,16 +25674,13 @@ function hostedViewerPublicUrlFromEnv(env = process.env) {
 function buildHostedViewerServerInfo({
   backend: backend2,
   env = process.env,
-  rootDir: rootDir2 = rootDirForAssetBackend(
-    normalizeViewerAssetBackend(envValue(env, "VIEWER_ASSET_BACKEND"), VIEWER_ASSET_BACKENDS.VERCEL_BLOB),
-    env
-  )
+  rootDir = ""
 } = {}) {
   return {
     schemaVersion: 1,
     app: "cad-viewer",
     backend: backend2?.kind || "vercel-blob",
-    rootDir: rootDir2,
+    rootDir,
     catalogPath: backend2?.catalogPath || vercelBlobConfigFromEnv(env).catalogPath,
     stepArtifactGenerationAvailable: false,
     url: hostedViewerPublicUrlFromEnv(env)
@@ -25291,6 +25690,7 @@ function buildHostedViewerServerInfo({
 // viewer/packages/cadjs/src/lib/viewerServerInfo.mjs
 import path10 from "node:path";
 var VIEWER_SERVER_INFO_SCHEMA_VERSION = 1;
+var VIEWER_SERVER_API_VERSION = 2;
 var VIEWER_SERVER_APP_ID = "cad-viewer";
 var DEFAULT_VIEWER_HOST = "127.0.0.1";
 var DEFAULT_VIEWER_PORT = 4178;
@@ -25303,32 +25703,52 @@ function normalizeViewerPort(value, fallback = DEFAULT_VIEWER_PORT) {
 }
 function buildViewerServerInfo({
   workspaceRoot: workspaceRoot2,
-  rootDir: rootDir2 = DEFAULT_VIEWER_ROOT_DIR,
+  rootDir = DEFAULT_VIEWER_ROOT_DIR,
   port: port2 = DEFAULT_VIEWER_PORT,
   pid = process.pid,
-  host: host2 = DEFAULT_VIEWER_HOST
+  host: host2 = DEFAULT_VIEWER_HOST,
+  backend: backend2 = "local-fs",
+  dynamicRoot = false,
+  stepArtifactGenerationAvailable = true,
+  viewerVersion: viewerVersion2 = "",
+  serverFeatures = []
 } = {}) {
   if (!workspaceRoot2) {
     throw new Error("workspaceRoot is required");
   }
   const resolvedWorkspaceRoot = path10.resolve(workspaceRoot2);
-  const normalizedRootDir = normalizeViewerRootDir(rootDir2);
-  const resolvedViewerRoot = resolveViewerRoot(resolvedWorkspaceRoot, normalizedRootDir);
+  const rawRootDir = String(rootDir || "").trim();
+  const resolvedViewerRoot = rawRootDir ? path10.isAbsolute(rawRootDir) ? {
+    dir: path10.resolve(rawRootDir),
+    rootPath: path10.resolve(rawRootDir),
+    rootName: path10.basename(path10.resolve(rawRootDir))
+  } : resolveViewerRoot(resolvedWorkspaceRoot, normalizeViewerRootDir(rawRootDir)) : {
+    dir: DEFAULT_VIEWER_ROOT_DIR,
+    rootPath: "",
+    rootName: ""
+  };
   const normalizedPort = normalizeViewerPort(port2);
   return {
     schemaVersion: VIEWER_SERVER_INFO_SCHEMA_VERSION,
+    serverApiVersion: VIEWER_SERVER_API_VERSION,
     app: VIEWER_SERVER_APP_ID,
+    viewerVersion: String(viewerVersion2 || ""),
+    serverFeatures: Array.isArray(serverFeatures) ? serverFeatures.map((feature) => String(feature || "").trim()).filter(Boolean) : [],
+    backend: backend2,
+    dynamicRoot: Boolean(dynamicRoot),
     workspaceRoot: resolvedWorkspaceRoot,
     rootDir: resolvedViewerRoot.dir,
     rootPath: resolvedViewerRoot.rootPath,
+    rootName: resolvedViewerRoot.rootName,
     port: normalizedPort,
     pid: Number.isInteger(pid) ? pid : process.pid,
+    stepArtifactGenerationAvailable: stepArtifactGenerationAvailable !== false,
     url: `http://${host2}:${normalizedPort}`
   };
 }
 
 // viewer/packages/cadjs/src/lib/viewerConfig.mjs
-var DEFAULT_VIEWER_GITHUB_URL = "";
+var DEFAULT_VIEWER_GITHUB_URL = "https://github.com/earthtojake/text-to-cad";
 function normalizeViewerDefaultFile(value = "") {
   const rawValue = String(value ?? "").trim();
   return rawValue.replace(/\\/g, "/").replace(/^\/+/, "").replace(/\/+$/, "");
@@ -25351,8 +25771,27 @@ function normalizeViewerGithubUrlCandidate(value = "") {
 }
 
 // viewer/src/server/serverLifetime.mjs
-var DEFAULT_SERVER_LIFETIME_MS = 12 * 60 * 60 * 1e3;
 var MAX_SERVER_LIFETIME_MS = 2147483647;
+function parseServerLifetimeMs(value, flag = "--shutdown-after") {
+  const rawValue = String(value ?? "").trim().toLowerCase();
+  const match = /^(\d+(?:\.\d+)?)(ms|s|m|h)?$/.exec(rawValue);
+  if (!match) {
+    throw new Error(`${flag} must be a positive duration such as 30m, 2h, or 43200000.`);
+  }
+  const amount = Number.parseFloat(match[1]);
+  const unit = match[2] || "ms";
+  const multiplier = {
+    ms: 1,
+    s: 1e3,
+    m: 60 * 1e3,
+    h: 60 * 60 * 1e3
+  }[unit];
+  const parsed = Math.round(amount * multiplier);
+  if (!Number.isFinite(parsed) || parsed <= 0 || parsed > MAX_SERVER_LIFETIME_MS) {
+    throw new Error(`${flag} must be between 1ms and ${MAX_SERVER_LIFETIME_MS}ms.`);
+  }
+  return parsed;
+}
 function normalizeServerLifetimeMs(value, defaultMs = null) {
   const rawValue = String(value ?? "").trim();
   if (!rawValue) {
@@ -25388,12 +25827,15 @@ function closeHttpServer(server2) {
   });
 }
 function scheduleProcessShutdown({
-  lifetimeMs = DEFAULT_SERVER_LIFETIME_MS,
+  lifetimeMs,
   label = "CAD Viewer server",
   close = async () => {
   }
 } = {}) {
-  const normalizedLifetimeMs = normalizeServerLifetimeMs(lifetimeMs, DEFAULT_SERVER_LIFETIME_MS);
+  const normalizedLifetimeMs = normalizeServerLifetimeMs(lifetimeMs);
+  if (normalizedLifetimeMs === null) {
+    return null;
+  }
   const timer = setTimeout(() => {
     console.log(`${label} reached ${formatServerLifetime(normalizedLifetimeMs)} lifetime; shutting down.`);
     const forceExit = setTimeout(() => process.exit(0), 5e3);
@@ -25411,7 +25853,6 @@ function scheduleProcessShutdown({
 }
 
 // viewer/src/server/serverArgs.mjs
-import path11 from "node:path";
 function requiredValue(argv, index, flag) {
   const value = argv[index + 1];
   if (!value || value.startsWith("--")) {
@@ -25428,9 +25869,9 @@ function parsePort(value, flag) {
 }
 function parseServerArgs(argv = []) {
   const options = {
-    rootDir: "",
     port: null,
     host: "",
+    shutdownAfterMs: null,
     help: false
   };
   for (let index = 0; index < argv.length; index += 1) {
@@ -25440,13 +25881,10 @@ function parseServerArgs(argv = []) {
       continue;
     }
     if (arg.startsWith("--root-dir=")) {
-      options.rootDir = arg.slice("--root-dir=".length);
-      continue;
+      throw new Error("--root-dir has been removed; pass an absolute ?dir= path in the Viewer URL.");
     }
     if (arg === "--root-dir") {
-      options.rootDir = requiredValue(argv, index, arg);
-      index += 1;
-      continue;
+      throw new Error("--root-dir has been removed; pass an absolute ?dir= path in the Viewer URL.");
     }
     if (arg.startsWith("--port=")) {
       options.port = parsePort(arg.slice("--port=".length), "--port");
@@ -25466,6 +25904,15 @@ function parseServerArgs(argv = []) {
       index += 1;
       continue;
     }
+    if (arg.startsWith("--shutdown-after=")) {
+      options.shutdownAfterMs = parseServerLifetimeMs(arg.slice("--shutdown-after=".length), "--shutdown-after");
+      continue;
+    }
+    if (arg === "--shutdown-after") {
+      options.shutdownAfterMs = parseServerLifetimeMs(requiredValue(argv, index, arg), arg);
+      index += 1;
+      continue;
+    }
     throw new Error(`Unknown argument: ${arg}`);
   }
   return options;
@@ -25474,9 +25921,10 @@ function serverHelpText() {
   return `Usage: node backend/server.mjs [options]
 
 Options:
-  --root-dir <path>  Local Viewer root directory to serve. Overrides VIEWER_LOCAL_* env roots.
-  --port <number>    Port to bind. Overrides VIEWER_PORT.
-  --host <host>      Host to bind. Overrides VIEWER_HOST.
+  --port <number>    Port to bind. Defaults to 4178.
+  --host <host>      Host to bind. Defaults to 127.0.0.1.
+  --shutdown-after <time>
+                     Shut down after a duration such as 12h, 30m, or 60000.
   -h, --help         Show this help.
 `;
 }
@@ -25487,24 +25935,27 @@ function applyServerArgsToEnv({
 } = {}) {
   const args = parseServerArgs(argv);
   const nextEnv = { ...env };
-  if (args.rootDir) {
-    nextEnv.VIEWER_ASSET_BACKEND = "local-fs";
-    nextEnv.VIEWER_LOCAL_WORKSPACE_ROOT = path11.resolve(cwd, args.rootDir);
-    nextEnv.VIEWER_LOCAL_ROOT_DIR = "";
-  }
-  if (args.port !== null) {
-    nextEnv.VIEWER_PORT = String(args.port);
-  }
-  if (args.host) {
-    nextEnv.VIEWER_HOST = args.host;
-  }
   return { args, env: nextEnv };
 }
 
 // viewer/src/server/server.mjs
-var serverModuleDir = path12.dirname(fileURLToPath3(import.meta.url));
-var viewerAppRoot = path12.basename(path12.dirname(serverModuleDir)) === "src" ? path12.resolve(serverModuleDir, "..", "..") : path12.resolve(serverModuleDir, "..");
-var defaultWorkspaceRoot = path12.resolve(viewerAppRoot, "..");
+var serverModuleDir = path11.dirname(fileURLToPath3(import.meta.url));
+var viewerAppRoot = path11.basename(path11.dirname(serverModuleDir)) === "src" ? path11.resolve(serverModuleDir, "..", "..") : path11.resolve(serverModuleDir, "..");
+var defaultWorkspaceRoot = path11.resolve(viewerAppRoot, "..");
+function readViewerPackageVersion(appRoot) {
+  try {
+    const packageJson = JSON.parse(fs9.readFileSync(path11.join(appRoot, "package.json"), "utf8"));
+    return String(packageJson.version || "");
+  } catch {
+    return "";
+  }
+}
+var viewerVersion = readViewerPackageVersion(viewerAppRoot);
+var localServerFeatures = [
+  "dynamic-root",
+  "absolute-file-query",
+  "session-dir-cache"
+];
 var runtime;
 try {
   runtime = applyServerArgsToEnv({ argv: process.argv.slice(2), env: process.env, cwd: process.cwd() });
@@ -25518,6 +25969,13 @@ if (runtime.args.help) {
   process.exit(0);
 }
 var runtimeEnv = runtime.env;
+try {
+  assertNoDeprecatedLocalRootEnv(runtimeEnv);
+} catch (error) {
+  process.stderr.write(`${error instanceof Error ? error.message : String(error)}
+`);
+  process.exit(1);
+}
 var workspaceRoot = resolveWorkspaceRoot({
   env: runtimeEnv,
   cwd: process.cwd(),
@@ -25525,39 +25983,44 @@ var workspaceRoot = resolveWorkspaceRoot({
   defaultWorkspaceRoot
 });
 var backendKind = normalizeViewerAssetBackend(runtimeEnv.VIEWER_ASSET_BACKEND);
-var rootDir = rootDirForAssetBackend(backendKind, runtimeEnv);
-var port = normalizeViewerPort(runtimeEnv.VIEWER_PORT, DEFAULT_VIEWER_PORT);
-var host = runtimeEnv.VIEWER_HOST || "127.0.0.1";
-var serverLifetimeMs = normalizeServerLifetimeMs(runtimeEnv.VIEWER_SERVER_LIFETIME_MS);
-var distRoot = path12.resolve(viewerAppRoot, "dist");
+var port = normalizeViewerPort(runtime.args.port, DEFAULT_VIEWER_PORT);
+var host = runtime.args.host || "127.0.0.1";
+var serverLifetimeMs = runtime.args.shutdownAfterMs ?? normalizeServerLifetimeMs(runtimeEnv.VIEWER_SERVER_LIFETIME_MS);
+var distRoot = path11.resolve(viewerAppRoot, "dist");
 var backend = backendKind === VIEWER_ASSET_BACKENDS.VERCEL_BLOB ? createVercelBlobAssetBackend({
   ...vercelBlobConfigFromEnv(runtimeEnv),
   readOnly: true
 }) : createLocalAssetBackend({
   workspaceRoot,
-  rootDir,
   defaultFile: normalizeViewerDefaultFile(runtimeEnv.VIEWER_DEFAULT_FILE || ""),
   githubUrl: normalizeViewerGithubUrl(runtimeEnv.VIEWER_GITHUB_URL || "")
 });
 var localAssetBackendEnabled = backend.kind === "local-fs";
 var stepArtifactBackendEnabled = localAssetBackendEnabled && typeof backend.generateStepArtifact === "function";
-if (localAssetBackendEnabled && typeof backend.refreshCatalog === "function") {
-  backend.refreshCatalog({ rootDir });
-}
 var middlewares = [
   createCadViewerApiMiddleware({
     backend,
-    rootDir,
     enableStepArtifactBackend: stepArtifactBackendEnabled,
     claimDisabledStepArtifactRoute: true,
-    serverInfo: () => localAssetBackendEnabled ? buildViewerServerInfo({
-      workspaceRoot,
-      rootDir,
-      port,
-      pid: process.pid
-    }) : buildHostedViewerServerInfo({ backend, env: runtimeEnv, rootDir })
+    serverInfo: ({ rootDir = "", fileRef = "" } = {}) => {
+      if (!localAssetBackendEnabled) {
+        return buildHostedViewerServerInfo({ backend, env: runtimeEnv, rootDir: "" });
+      }
+      const infoRootDir = rootDir || (path11.isAbsolute(String(fileRef || "")) ? path11.dirname(path11.resolve(fileRef)) : "");
+      return buildViewerServerInfo({
+        workspaceRoot,
+        rootDir: infoRootDir,
+        port,
+        pid: process.pid,
+        backend: "local-fs",
+        dynamicRoot: true,
+        stepArtifactGenerationAvailable: stepArtifactBackendEnabled,
+        viewerVersion,
+        serverFeatures: localServerFeatures
+      });
+    }
   }),
-  ...localAssetBackendEnabled ? [createLocalAssetMiddleware({ backend, rootDir })] : [],
+  ...localAssetBackendEnabled ? [createLocalAssetMiddleware({ backend })] : [],
   serveDistAsset({ distRoot })
 ];
 function runMiddleware(index, req, res) {

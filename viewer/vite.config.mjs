@@ -13,7 +13,6 @@ import {
 import {
   DEFAULT_VIEWER_PORT,
   buildViewerServerInfo,
-  normalizeViewerPort,
 } from "cadjs/lib/viewerServerInfo.mjs";
 import {
   removeViewerServerRegistryEntry,
@@ -29,16 +28,14 @@ import {
   createLocalAssetMiddleware,
 } from "./src/server/httpHandlers.mjs";
 import {
-  localRootDirFromEnv,
+  assertNoDeprecatedLocalRootEnv,
   normalizeViewerAssetBackend,
-  rootDirForAssetBackend,
 } from "./src/server/viewerEnv.mjs";
 import {
   normalizeServerLifetimeMs,
   scheduleProcessShutdown,
 } from "./src/server/serverLifetime.mjs";
 
-const viewerPort = normalizeViewerPort(process.env.VIEWER_PORT, DEFAULT_VIEWER_PORT);
 const viewerAppRoot = path.dirname(fileURLToPath(import.meta.url));
 const viewerClientRoot = path.join(viewerAppRoot, "src", "client");
 const cadJsPackageRoot = resolveCadJsPackageRoot();
@@ -46,15 +43,20 @@ const viewerNodeModulesRoot = path.join(viewerAppRoot, "node_modules");
 const defaultWorkspaceRoot = path.resolve(viewerAppRoot, "..");
 const workspaceRoot = resolveWorkspaceRoot();
 const repoRoot = workspaceRoot;
-const buildViewerAssetBackend = normalizeViewerAssetBackend(process.env.VIEWER_ASSET_BACKEND);
-const buildViewerRootDir = rootDirForAssetBackend(buildViewerAssetBackend, process.env);
+normalizeViewerAssetBackend(process.env.VIEWER_ASSET_BACKEND);
 const buildViewerDefaultFile = normalizeViewerDefaultFile(process.env.VIEWER_DEFAULT_FILE ?? "");
 const buildViewerGithubUrl = normalizeViewerGithubUrl(process.env.VIEWER_GITHUB_URL ?? "");
 const viewerAllowedHosts = normalizeViewerAllowedHosts(process.env.VIEWER_ALLOWED_HOSTS ?? "");
 const viewerServerLifetimeMs = normalizeServerLifetimeMs(process.env.VIEWER_SERVER_LIFETIME_MS);
+assertNoDeprecatedLocalRootEnv(process.env);
+const viewerVersion = readViewerPackageVersion(viewerAppRoot);
+const localServerFeatures = [
+  "dynamic-root",
+  "absolute-file-query",
+  "session-dir-cache",
+];
 const localAssetBackend = createLocalAssetBackend({
   workspaceRoot,
-  rootDir: localRootDirFromEnv(process.env),
   defaultFile: buildViewerDefaultFile,
   githubUrl: buildViewerGithubUrl,
 });
@@ -64,6 +66,15 @@ function normalizeViewerAllowedHosts(value) {
     .split(",")
     .map((host) => host.trim())
     .filter(Boolean);
+}
+
+function readViewerPackageVersion(appRoot) {
+  try {
+    const packageJson = JSON.parse(fs.readFileSync(path.join(appRoot, "package.json"), "utf8"));
+    return String(packageJson.version || "");
+  } catch {
+    return "";
+  }
 }
 
 function findRootPackageSrc(packageDirName) {
@@ -106,7 +117,12 @@ function viteServerPort(server) {
   const address = server?.httpServer?.address?.();
   return address && typeof address === "object" && Number.isInteger(address.port)
     ? address.port
-    : viewerPort;
+    : DEFAULT_VIEWER_PORT;
+}
+
+function isGenerationStatusFilePath(filePath) {
+  const name = path.basename(String(filePath || ""));
+  return name.startsWith(".") && name.endsWith(".generation.lock.json");
 }
 
 function cadCatalogPlugin({ enableStepArtifactBackend = false } = {}) {
@@ -114,26 +130,39 @@ function cadCatalogPlugin({ enableStepArtifactBackend = false } = {}) {
   const refreshTimers = new Map();
   const pendingRefreshes = new Map();
 
-  function activateDirectory(server, rootDir) {
-    const resolved = localAssetBackend.resolveRoot(rootDir);
+  function activateDirectory(server, resolvedRoot, { fileRef = "" } = {}) {
+    const resolved = resolvedRoot && typeof resolvedRoot === "object"
+      ? resolvedRoot
+      : localAssetBackend.resolveRoot(resolvedRoot);
     const wasActive = activeDirectories.has(resolved.rootPath);
-    activeDirectories.set(resolved.rootPath, resolved.dir);
+    activeDirectories.set(resolved.rootPath, {
+      dir: resolved.dir || "",
+      fileRef: resolved.dir ? "" : String(fileRef || ""),
+    });
     if (!wasActive) {
       server.watcher.add(resolved.rootPath);
     }
     return resolved;
   }
 
-  function scheduleCatalogRefresh(server, rootPath, dir, changedPath = "") {
+  function scheduleCatalogRefresh(server, rootPath, activeRoot = {}, changedPath = "") {
+    const rootState = typeof activeRoot === "string"
+      ? { dir: activeRoot, fileRef: "" }
+      : {
+          dir: String(activeRoot?.dir || ""),
+          fileRef: String(activeRoot?.fileRef || ""),
+        };
     if (refreshTimers.has(rootPath)) {
       clearTimeout(refreshTimers.get(rootPath));
     }
     const pending = pendingRefreshes.get(rootPath) || {
-      dir,
+      dir: rootState.dir,
+      fileRef: rootState.fileRef,
       paths: new Set(),
       full: false,
     };
-    pending.dir = dir;
+    pending.dir = rootState.dir;
+    pending.fileRef = rootState.fileRef;
     if (changedPath) {
       pending.paths.add(path.resolve(changedPath));
     } else {
@@ -143,13 +172,16 @@ function cadCatalogPlugin({ enableStepArtifactBackend = false } = {}) {
     refreshTimers.set(rootPath, setTimeout(() => {
       refreshTimers.delete(rootPath);
       const nextRefresh = pendingRefreshes.get(rootPath) || {
-        dir,
+        dir: rootState.dir,
+        fileRef: rootState.fileRef,
         paths: new Set(),
         full: true,
       };
       pendingRefreshes.delete(rootPath);
       try {
-        if (nextRefresh.full || typeof localAssetBackend.refreshCatalogForPath !== "function") {
+        if (nextRefresh.fileRef && !nextRefresh.dir) {
+          localAssetBackend.refreshCatalog({ fileRef: nextRefresh.fileRef });
+        } else if (nextRefresh.full || typeof localAssetBackend.refreshCatalogForPath !== "function") {
           localAssetBackend.refreshCatalog({ rootDir: nextRefresh.dir });
         } else {
           for (const filePath of nextRefresh.paths) {
@@ -172,19 +204,19 @@ function cadCatalogPlugin({ enableStepArtifactBackend = false } = {}) {
 
   function notifyChangedPath(server, changedPath) {
     const resolvedChangedPath = path.resolve(changedPath);
-    if (localAssetBackend.isGenerationStatusPath?.(resolvedChangedPath)) {
-      server.ws.send({
-        type: "custom",
-        event: "cad-generation-status:changed",
-      });
-      return;
-    }
-    if (!isCatalogRelevantPath(resolvedChangedPath)) {
-      return;
-    }
-    for (const [rootPath, dir] of activeDirectories.entries()) {
+    for (const [rootPath, activeRoot] of activeDirectories.entries()) {
       if (resolvedChangedPath === rootPath || pathIsInside(resolvedChangedPath, rootPath)) {
-        scheduleCatalogRefresh(server, rootPath, dir, resolvedChangedPath);
+        if (isGenerationStatusFilePath(resolvedChangedPath)) {
+          server.ws.send({
+            type: "custom",
+            event: "cad-generation-status:changed",
+            data: { dir: activeRoot.dir },
+          });
+          continue;
+        }
+        if (isCatalogRelevantPath(resolvedChangedPath)) {
+          scheduleCatalogRefresh(server, rootPath, activeRoot, resolvedChangedPath);
+        }
       }
     }
   }
@@ -192,16 +224,19 @@ function cadCatalogPlugin({ enableStepArtifactBackend = false } = {}) {
   return {
     name: "cad-catalog",
     configureServer(server) {
-      const servedViewerRoot = activateDirectory(server, buildViewerRootDir);
-      server.watcher.add(localAssetBackend.generationStatusDir());
-      localAssetBackend.refreshCatalog({ rootDir: buildViewerRootDir });
       let activeServerInfo = null;
-      const currentServerInfo = () => {
+      const currentServerInfo = ({ rootDir = "", fileRef = "" } = {}) => {
+        const infoRootDir = rootDir || (path.isAbsolute(String(fileRef || "")) ? path.dirname(path.resolve(fileRef)) : "");
         activeServerInfo = buildViewerServerInfo({
           workspaceRoot: repoRoot,
-          rootDir: buildViewerRootDir,
+          rootDir: infoRootDir,
           port: viteServerPort(server),
           pid: process.pid,
+          backend: "local-fs",
+          dynamicRoot: true,
+          stepArtifactGenerationAvailable: enableStepArtifactBackend,
+          viewerVersion,
+          serverFeatures: localServerFeatures,
         });
         return activeServerInfo;
       };
@@ -218,16 +253,17 @@ function cadCatalogPlugin({ enableStepArtifactBackend = false } = {}) {
       });
       server.middlewares.use(createCadViewerApiMiddleware({
         backend: localAssetBackend,
-        rootDir: buildViewerRootDir,
         enableStepArtifactBackend,
         serverInfo: currentServerInfo,
+        onCatalogActivated: (resolvedRoot, request = {}) => {
+          activateDirectory(server, resolvedRoot, request);
+        },
         onCatalogChanged: (resolvedRoot) => {
-          scheduleCatalogRefresh(server, resolvedRoot.rootPath, resolvedRoot.dir);
+          scheduleCatalogRefresh(server, resolvedRoot.rootPath, { dir: resolvedRoot.dir });
         },
       }));
       server.middlewares.use(createLocalAssetMiddleware({
         backend: localAssetBackend,
-        rootDir: servedViewerRoot.dir,
       }));
       for (const eventName of ["add", "change", "unlink"]) {
         server.watcher.on(eventName, (changedPath) => notifyChangedPath(server, changedPath));
@@ -326,14 +362,10 @@ export default defineConfig(({ command }) => ({
   },
   server: {
     host: "127.0.0.1",
-    port: viewerPort,
-    strictPort: true,
     allowedHosts: viewerAllowedHosts,
   },
   preview: {
     host: "127.0.0.1",
-    port: viewerPort,
-    strictPort: true,
     allowedHosts: viewerAllowedHosts,
   },
 }));

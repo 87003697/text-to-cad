@@ -98,7 +98,64 @@ function normalizeAbsoluteUrl(url) {
   return new URL(url, globalThis.window?.location?.href || "http://localhost/").toString();
 }
 
+function normalizeFileRefSegments(value) {
+  const rawValue = String(value || "").replace(/\\/g, "/");
+  const absolute = rawValue.startsWith("/");
+  const parts = [];
+  for (const part of rawValue.split("/")) {
+    if (!part || part === ".") {
+      continue;
+    }
+    if (part === "..") {
+      if (parts.length && parts[parts.length - 1] !== "..") {
+        parts.pop();
+      } else if (!absolute) {
+        parts.push(part);
+      }
+      continue;
+    }
+    parts.push(part);
+  }
+  return `${absolute ? "/" : ""}${parts.join("/")}`;
+}
+
+function dirnameFileRef(value) {
+  const normalized = String(value || "").replace(/\\/g, "/");
+  const index = normalized.lastIndexOf("/");
+  return index >= 0 ? normalized.slice(0, index + 1) : "";
+}
+
+function resolveLocalAssetFileRef(sourceFileRef, filename) {
+  const rawFilename = String(filename || "").trim();
+  if (!rawFilename || /^[a-z][a-z0-9+.-]*:/i.test(rawFilename)) {
+    return "";
+  }
+  if (rawFilename.startsWith("/")) {
+    return normalizeFileRefSegments(rawFilename);
+  }
+  return normalizeFileRefSegments(`${dirnameFileRef(sourceFileRef)}${rawFilename}`);
+}
+
+function resolveCadAssetMeshUrl(filename, sourceUrl) {
+  const source = new URL(normalizeAbsoluteUrl(sourceUrl));
+  if (source.pathname !== "/__cad/asset") {
+    return "";
+  }
+  const sourceFileRef = source.searchParams.get("file") || "";
+  const meshFileRef = resolveLocalAssetFileRef(sourceFileRef, filename);
+  if (!meshFileRef) {
+    return "";
+  }
+  const resolved = new URL("/__cad/asset", source);
+  resolved.searchParams.set("file", meshFileRef);
+  return `${resolved.pathname}${resolved.search}`;
+}
+
 function resolveMeshUrl(filename, sourceUrl) {
+  const assetUrl = resolveCadAssetMeshUrl(filename, sourceUrl);
+  if (assetUrl) {
+    return assetUrl;
+  }
   const normalizedSourceUrl = normalizeAbsoluteUrl(sourceUrl);
   let resolvedUrl;
   if (filename.startsWith("package://")) {

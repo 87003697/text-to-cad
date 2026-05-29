@@ -57,7 +57,7 @@ product and `models/` as the shared fixture/artifact area.
 - Keep release versioning in lockstep: the git tag, plugin manifests and
   `plugins/*/VERSION`, package manifests/locks, Python `pyproject.toml` files,
   and any other repo-owned release version numbers should all match. The
-  current release version is `0.1.10`. Use `scripts/release/bump-version.sh`
+  current release version is `0.1.11`. Use `scripts/release/bump-version.sh`
   for version bumps as described in `COMMIT.md`.
 
 ## Environments
@@ -88,25 +88,33 @@ When changing generated outputs, run the matching build script without
 
 ## CAD Viewer
 
-Always start CAD Viewer against the repo `models/` directory. From the repo root,
-pass `--root-dir models/`; keep any permanent or generated CAD/robot-description
-files in `models/` so the viewer catalog and artifacts stay in one place.
+When reviewing repo fixtures in CAD Viewer, point the Viewer at the repo
+`models/` directory with an absolute `?dir=` path; keep any permanent or
+generated CAD/robot-description files in `models/` so the viewer catalog and
+artifacts stay in one place.
 
-Use the URL printed by Viewer commands; do not assume a fixed port.
+For root dev-server iteration, use the URL printed by Viewer commands; do not
+assume a fixed dev port unless you pass Vite's standard `--port` flag.
 
 When modifying Viewer behavior, always run the root source app in dev mode for iteration;
 do not run the generated viewer from the cad-viewer skill while developing.
 
 ```bash
-npm --prefix viewer run dev:ensure -- --root-dir models/
+npm --prefix viewer run dev -- --host 127.0.0.1
 ```
 
 For packaged skill runtime review:
 
 ```bash
-npm --prefix skills/cad-viewer/scripts/viewer run serve:ensure -- \
-  --root-dir models/
+npm --prefix skills/cad-viewer/scripts/viewer run serve -- --host 127.0.0.1 --port 4178 --shutdown-after 12h
 ```
+
+For cad-viewer skill handoffs, probe port `4178` first and reuse it when
+`/__cad/server` reports `app: "cad-viewer"`, `dynamicRoot: true`, and
+`serverApiVersion >= 2`; use `viewerVersion` in that response to sanity-check
+the running build. If a legacy root-bound Viewer or non-Viewer process occupies
+the port, try the next port. Return links with an absolute `?dir=` on every URL
+and an absolute `?file=...` for each requested file.
 
 ## Git And LFS
 

@@ -36,7 +36,7 @@ export function resolveWorkspaceRoot({
   appRoot = "",
   defaultWorkspaceRoot = "",
 } = {}) {
-  const explicitRoot = workspaceRoot || env.VIEWER_LOCAL_WORKSPACE_ROOT || "";
+  const explicitRoot = workspaceRoot || "";
   if (explicitRoot) {
     return path.resolve(cwd, explicitRoot);
   }

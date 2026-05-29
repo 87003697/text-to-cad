@@ -121,12 +121,15 @@ export default function CadWorkspaceHome({
   onSelectEntry,
   catalogHydrated = false,
   catalogRefreshing = false,
-  catalogError = ""
+  catalogError = "",
+  directoryCatalogActive = true,
+  explicitFileParam = ""
 }) {
   const homeEntries = selectHomeEntries(entries);
   const hasEntries = homeEntries.length > 0;
   const catalogErrorMessage = String(catalogError || "").trim();
   const catalogLoading = !catalogHydrated || (catalogRefreshing && !hasEntries);
+  const showDirectUrlPrompt = !directoryCatalogActive && !String(explicitFileParam || "").trim();
 
   return (
     <div className="pointer-events-none absolute inset-0 z-20 flex min-w-0 items-center justify-center px-4 py-6">
@@ -136,12 +139,16 @@ export default function CadWorkspaceHome({
       >
         <div className="border-b border-sidebar-border px-5 py-4 sm:px-6">
           <h1 className="text-lg font-medium leading-6 text-foreground sm:text-xl">
-            Select a file
+            {showDirectUrlPrompt ? "Open a CAD file" : "Select a file"}
           </h1>
         </div>
 
         <div className="divide-y divide-sidebar-border/70">
-          {hasEntries ? homeEntries.map((entry) => {
+          {showDirectUrlPrompt ? (
+            <p className="px-5 py-5 text-sm leading-6 text-muted-foreground sm:px-6">
+              Add an absolute <code className="rounded-md bg-muted px-1.5 py-0.5 text-xs text-foreground">?file=</code> path to render one file, or an absolute <code className="rounded-md bg-muted px-1.5 py-0.5 text-xs text-foreground">?dir=</code> path to scan a directory.
+            </p>
+          ) : hasEntries ? homeEntries.map((entry) => {
             const key = fileKey(entry);
             const sourceFormat = entrySourceFormat(entry);
             const EntryIcon = iconForEntry(entry, sourceFormat);

@@ -12,6 +12,10 @@ GLB/topology artifacts, and hosted Blob uploads are backend concerns; use
 Use query params only for shareable state that should survive copying a URL:
 
 - `file`: active catalog entry.
+- `dir`: absolute local filesystem directory to scan. The value is copied into
+  tab-local `sessionStorage` when present so future navigation can omit it.
+  Agent handoff links should still include `dir` explicitly on every returned
+  URL.
 - `refs`: copied CAD references and selection targets.
 - `moveit2Ws`: explicit MoveIt2 websocket override for local or hosted sessions.
 
@@ -39,13 +43,14 @@ survive reloads in the same browser tab, should not become a durable global
 preference, and should not vary by selected file. Use
 `src/client/workbench/persistence.js` rather than creating one-off storage keys.
 
-Current key:
+Current keys:
 
 ```text
 cad-viewer:workspace-session:v1
+__cadViewerDir
 ```
 
-Current fields:
+Current `cad-viewer:workspace-session:v1` fields:
 
 - `fileViewerOpen`: app-wide file viewer open/closed state.
 - `fileViewerExpandedDirectoryIds`: app-wide open folder ids for the file
@@ -58,6 +63,9 @@ Current fields:
   differs from the default.
 - `theme`: app-wide unsaved theme settings for the current tab. Saved theme
   presets and the active saved preset id still belong to `localStorage`.
+- `__cadViewerDir`: the last absolute `?dir=` value seen by the tab. This key is
+  deliberately global to the tab rather than per file so same-tab navigation can
+  continue using the same scanned directory during a review session.
 
 Do not put selected-file state, model controls, drawing state, or
 generated-asset decisions in workspace session state. Those belong in per-file

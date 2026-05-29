@@ -2,8 +2,8 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  assertNoDeprecatedLocalRootEnv,
   normalizeViewerAssetBackend,
-  rootDirForAssetBackend,
   vercelBlobCatalogUrlFromPrefix,
   vercelBlobConfigFromEnv,
   vercelBlobPrefixFromEnv,
@@ -11,14 +11,15 @@ import {
   VIEWER_ASSET_BACKENDS,
 } from "./viewerEnv.mjs";
 
-test("viewer env forks root configuration by asset backend", () => {
-  assert.equal(
-    rootDirForAssetBackend(VIEWER_ASSET_BACKENDS.LOCAL_FS, { VIEWER_LOCAL_ROOT_DIR: "models" }),
-    "models"
+test("viewer env rejects deprecated local root environment variables", () => {
+  assert.doesNotThrow(() => assertNoDeprecatedLocalRootEnv({}));
+  assert.throws(
+    () => assertNoDeprecatedLocalRootEnv({ VIEWER_LOCAL_ROOT_DIR: "models" }),
+    /no longer supported/
   );
-  assert.equal(
-    rootDirForAssetBackend(VIEWER_ASSET_BACKENDS.VERCEL_BLOB, { VIEWER_LOCAL_ROOT_DIR: "models" }),
-    ""
+  assert.throws(
+    () => assertNoDeprecatedLocalRootEnv({ VIEWER_LOCAL_WORKSPACE_ROOT: "/tmp/workspace" }),
+    /no longer supported/
   );
 });
 

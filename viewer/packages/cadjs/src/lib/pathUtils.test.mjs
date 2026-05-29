@@ -4,12 +4,12 @@ import test from "node:test";
 
 import { resolveWorkspaceRoot } from "./pathUtils.mjs";
 
-test("resolveWorkspaceRoot uses the local filesystem workspace env var", () => {
+test("resolveWorkspaceRoot ignores deprecated local filesystem workspace env var", () => {
   assert.equal(
     resolveWorkspaceRoot({
       env: { VIEWER_LOCAL_WORKSPACE_ROOT: "models-workspace" },
       cwd: "/tmp",
     }),
-    path.resolve("/tmp/models-workspace")
+    path.resolve("/tmp")
   );
 });

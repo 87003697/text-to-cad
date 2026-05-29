@@ -66,6 +66,27 @@ test("parseUrdf resolves referenced robot material colors from rgba", () => {
   );
 });
 
+test("parseUrdf resolves relative mesh paths through local CAD asset URLs", () => {
+  const robot = new FakeElement("robot", { name: "sample_robot" }, [
+    new FakeElement("link", { name: "base_link" }, [
+      new FakeElement("visual", {}, [
+        new FakeElement("geometry", {}, [
+          new FakeElement("mesh", { filename: "meshes/sample_part.stl" })
+        ])
+      ])
+    ])
+  ]);
+
+  const urdfData = withFakeDomParser(new FakeDocument(robot), () => parseUrdf("<robot />", {
+    sourceUrl: "/__cad/asset?file=%2Fworkspace%2Frobots%2Fsample_robot.urdf&v=abc123"
+  }));
+
+  assert.equal(
+    urdfData.links[0].visuals[0].meshUrl,
+    "/__cad/asset?file=%2Fworkspace%2Frobots%2Fmeshes%2Fsample_part.stl"
+  );
+});
+
 test("parseUrdf accepts primitive box visuals", () => {
   const robot = new FakeElement("robot", { name: "primitive_robot" }, [
     new FakeElement("material", { name: "aluminum" }, [

@@ -3,7 +3,6 @@ import { createVercelBlobAssetBackend } from "./vercelBlobAssetBackend.mjs";
 import {
   envValue,
   normalizeViewerAssetBackend,
-  rootDirForAssetBackend,
   vercelBlobConfigFromEnv,
   VIEWER_ASSET_BACKENDS,
 } from "./viewerEnv.mjs";
@@ -58,10 +57,7 @@ export function createHostedCadBackendFromEnv(env = process.env) {
 export function buildHostedViewerServerInfo({
   backend,
   env = process.env,
-  rootDir = rootDirForAssetBackend(
-    normalizeViewerAssetBackend(envValue(env, "VIEWER_ASSET_BACKEND"), VIEWER_ASSET_BACKENDS.VERCEL_BLOB),
-    env
-  ),
+  rootDir = "",
 } = {}) {
   return {
     schemaVersion: 1,
@@ -96,22 +92,17 @@ export async function handleHostedCadApi(req, res, {
     return;
   }
 
-  const assetBackend = normalizeViewerAssetBackend(
-    envValue(env, "VIEWER_ASSET_BACKEND"),
-    VIEWER_ASSET_BACKENDS.VERCEL_BLOB
-  );
-  const rootDir = rootDirForAssetBackend(assetBackend, env);
   const originalUrl = req.url || "/";
   const originalRequestUrl = new URL(originalUrl, "http://localhost");
   req.url = `${normalizedCadPath}${originalRequestUrl.search}`;
   try {
     const middleware = createCadViewerApiMiddleware({
       backend,
-      rootDir,
+      rootDir: "",
       enableStepArtifactBackend: false,
       claimDisabledStepArtifactRoute: true,
       preferFileDownloadRedirects: true,
-      serverInfo: () => buildHostedViewerServerInfo({ backend, env, rootDir }),
+      serverInfo: () => buildHostedViewerServerInfo({ backend, env, rootDir: "" }),
     });
     await middleware(req, res, () => {
       sendJson(res, 404, { error: "CAD API route not found" });

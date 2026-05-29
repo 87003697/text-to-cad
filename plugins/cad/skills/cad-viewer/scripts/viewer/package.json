@@ -2,10 +2,9 @@
   "name": "cad-viewer-runtime",
   "private": true,
   "type": "module",
-  "version": "0.1.10",
+  "version": "0.1.11",
   "scripts": {
     "serve": "node backend/server.mjs",
-    "serve:ensure": "node scripts/ensure-serve.mjs",
     "start": "node backend/server.mjs",
     "moveit2:setup": "moveit2_server/setup.sh",
     "moveit2:check": "moveit2_server/check-moveit2-server.sh",

@@ -11,6 +11,13 @@ function basenameFromFileRef(value) {
   return normalized.split("/").filter(Boolean).pop() || "";
 }
 
+function normalizedFilePath(value) {
+  const normalized = String(value || "").trim().replace(/\\/g, "/").replace(/\/+$/, "");
+  return normalized.startsWith("/")
+    ? normalized
+    : normalized.replace(/^\/+/, "");
+}
+
 function dirnameFromFileRef(value) {
   const parts = normalizedRelativePath(value).split("/").filter(Boolean);
   parts.pop();
@@ -66,23 +73,26 @@ function hostedBlobDownloadsAvailable(viewerServerInfo = {}) {
 
 function explicitSourceFileRef(entry) {
   return (
-    normalizedRelativePath(entry?.sourceFile) ||
-    normalizedRelativePath(entry?.source?.file) ||
-    normalizedRelativePath(entry?.source?.path) ||
+    normalizedFilePath(entry?.sourceFile) ||
+    normalizedFilePath(entry?.source?.file) ||
+    normalizedFilePath(entry?.source?.path) ||
     filenameFromUrl(entry?.sourceUrl || entry?.source?.url)
   );
 }
 
 function explicitSourceWorkspaceFileRef(entry) {
   return (
-    normalizedRelativePath(entry?.sourceWorkspaceFile) ||
-    normalizedRelativePath(entry?.source?.workspaceFile) ||
-    normalizedRelativePath(entry?.source?.sourcePath)
+    normalizedFilePath(entry?.sourceWorkspaceFile) ||
+    normalizedFilePath(entry?.source?.workspaceFile) ||
+    normalizedFilePath(entry?.source?.sourcePath)
   );
 }
 
 function artifactFileRef(entry, viewerServerInfo = {}) {
-  return viewerRootRelativePath(entry?.url, viewerServerInfo, { anchorFile: entry?.file });
+  return (
+    viewerRootRelativePath(entry?.assetFile || entry?.artifactFile || entry?.artifact?.file, viewerServerInfo, { anchorFile: entry?.file }) ||
+    viewerRootRelativePath(entry?.url, viewerServerInfo, { anchorFile: entry?.file })
+  );
 }
 
 function sourceUrlFromEntry(entry) {
@@ -162,7 +172,7 @@ export function fileAccessAssetsForEntry(entry, {
   const outputDownloadUrl = directDownloads ? outputUrlFromEntry(entry, outputFileRef) : "";
   const artifactDownloadUrl = directDownloads ? cleanUrl(entry?.url) : "";
   const sourceKind = String(stepSourceStatus?.sourceKind || entryStepSourceKind(entry)).trim().toLowerCase();
-  const stepSourcePath = normalizedRelativePath(stepSourceStatus?.sourcePath);
+  const stepSourcePath = normalizedFilePath(stepSourceStatus?.sourcePath);
   const explicitSourceRef = explicitSourceFileRef(entry);
   const explicitSourceWorkspaceRef = explicitSourceWorkspaceFileRef(entry);
   const inferredSourceRootRef = sourceKind === "python" && isStepFileRef(outputFileRef)

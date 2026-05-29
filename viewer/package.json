@@ -2,12 +2,10 @@
   "name": "cad-viewer",
   "private": true,
   "type": "module",
-  "version": "0.1.10",
+  "version": "0.1.11",
   "scripts": {
     "dev": "vite dev",
-    "dev:ensure": "node scripts/ensure-dev.mjs",
     "serve": "node src/server/server.mjs",
-    "serve:ensure": "node scripts/ensure-serve.mjs",
     "upload:blob": "node scripts/upload-catalog-to-blob.mjs",
     "start": "node src/server/server.mjs",
     "moveit2:setup": "moveit2_server/setup.sh",

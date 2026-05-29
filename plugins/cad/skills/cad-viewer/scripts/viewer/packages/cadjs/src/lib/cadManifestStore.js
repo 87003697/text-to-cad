@@ -1,6 +1,9 @@
 const CAD_CATALOG_REFRESH_INTERVAL_MS = 2_000;
 const CAD_CATALOG_FETCH_TIMEOUT_MS = 10_000;
 const CAD_GENERATION_STATUS_REFRESH_INTERVAL_MS = 750;
+const CAD_DIR_QUERY_PARAM = "dir";
+const CAD_FILE_QUERY_PARAM = "file";
+const CAD_DIR_SESSION_STORAGE_KEY = "__cadViewerDir";
 
 function normalizeCadManifest(manifest) {
   if (!manifest || typeof manifest !== "object") {
@@ -40,6 +43,7 @@ let currentSnapshot = {
   catalogHydrated: false,
   catalogRefreshing: typeof window !== "undefined",
   catalogError: "",
+  activeDir: "",
 };
 let refreshRequestId = 0;
 let refreshInFlight = null;
@@ -49,7 +53,7 @@ let refreshLoopStarted = false;
 
 currentManifestSignature = JSON.stringify(currentSnapshot.manifest);
 
-function publishCadManifest(nextManifest, { hydrated = true, refreshing = false, error = "" } = {}) {
+function publishCadManifest(nextManifest, { hydrated = true, refreshing = false, error = "", activeDir = currentSnapshot.activeDir } = {}) {
   const manifest = normalizeCadManifest(nextManifest);
   const manifestSignature = JSON.stringify(manifest);
   const manifestChanged = manifestSignature !== currentManifestSignature;
@@ -60,12 +64,14 @@ function publishCadManifest(nextManifest, { hydrated = true, refreshing = false,
     catalogHydrated: hydrated,
     catalogRefreshing: refreshing,
     catalogError: error,
+    activeDir,
   };
   if (
     !manifestChanged &&
     nextSnapshot.catalogHydrated === currentSnapshot.catalogHydrated &&
     nextSnapshot.catalogRefreshing === currentSnapshot.catalogRefreshing &&
-    nextSnapshot.catalogError === currentSnapshot.catalogError
+    nextSnapshot.catalogError === currentSnapshot.catalogError &&
+    nextSnapshot.activeDir === currentSnapshot.activeDir
   ) {
     return;
   }
@@ -97,10 +103,11 @@ function publishCadGenerationStatus(nextGenerationStatus) {
   }
 }
 
-function publishCadRefreshState({ refreshing = currentSnapshot.catalogRefreshing, error = currentSnapshot.catalogError } = {}) {
+function publishCadRefreshState({ refreshing = currentSnapshot.catalogRefreshing, error = currentSnapshot.catalogError, activeDir = currentSnapshot.activeDir } = {}) {
   if (
     refreshing === currentSnapshot.catalogRefreshing &&
-    error === currentSnapshot.catalogError
+    error === currentSnapshot.catalogError &&
+    activeDir === currentSnapshot.activeDir
   ) {
     return;
   }
@@ -109,10 +116,120 @@ function publishCadRefreshState({ refreshing = currentSnapshot.catalogRefreshing
     revision: currentSnapshot.revision + 1,
     catalogRefreshing: refreshing,
     catalogError: error,
+    activeDir,
   };
   for (const listener of listeners) {
     listener();
   }
+}
+
+function readSearchParam(name) {
+  if (typeof window === "undefined") {
+    return "";
+  }
+  try {
+    return String(new URL(window.location.href).searchParams.get(name) || "").trim();
+  } catch {
+    return "";
+  }
+}
+
+function normalizePathForContainment(value) {
+  const normalized = String(value || "").trim().replace(/\\/g, "/").replace(/\/+/g, "/");
+  if (!normalized || normalized === "/") {
+    return normalized;
+  }
+  if (/^[a-z]:\/?$/i.test(normalized)) {
+    return normalized.endsWith("/") ? normalized : `${normalized}/`;
+  }
+  return normalized.replace(/\/+$/g, "");
+}
+
+function isAbsoluteFileParam(value) {
+  const normalized = normalizePathForContainment(value);
+  return normalized.startsWith("/") || /^[a-z]:\//i.test(normalized);
+}
+
+function directoryContainsFile(directory, file) {
+  const normalizedDirectory = normalizePathForContainment(directory);
+  const normalizedFile = normalizePathForContainment(file);
+  if (!normalizedDirectory || !normalizedFile) {
+    return false;
+  }
+  if (normalizedDirectory === "/") {
+    return normalizedFile.startsWith("/");
+  }
+  if (/^[a-z]:\/$/i.test(normalizedDirectory)) {
+    return normalizedFile.toLowerCase().startsWith(normalizedDirectory.toLowerCase());
+  }
+  return normalizedFile === normalizedDirectory || normalizedFile.startsWith(`${normalizedDirectory}/`);
+}
+
+function activeDirForFile(candidateDir, fileParam) {
+  const normalizedCandidate = String(candidateDir || "").trim();
+  if (!normalizedCandidate) {
+    return "";
+  }
+  const normalizedFile = String(fileParam || "").trim();
+  if (isAbsoluteFileParam(normalizedFile) && !directoryContainsFile(normalizedCandidate, normalizedFile)) {
+    return "";
+  }
+  return normalizedCandidate;
+}
+
+export function readActiveCadDir() {
+  if (typeof window === "undefined") {
+    return "";
+  }
+  let url = null;
+  try {
+    url = new URL(window.location.href);
+  } catch {
+    return "";
+  }
+  const fileParam = String(url.searchParams.get(CAD_FILE_QUERY_PARAM) || "").trim();
+  if (url.searchParams.has(CAD_DIR_QUERY_PARAM)) {
+    const queryDir = String(url.searchParams.get(CAD_DIR_QUERY_PARAM) || "").trim();
+    try {
+      if (queryDir) {
+        window.sessionStorage?.setItem(CAD_DIR_SESSION_STORAGE_KEY, queryDir);
+      } else {
+        window.sessionStorage?.removeItem(CAD_DIR_SESSION_STORAGE_KEY);
+      }
+    } catch {
+      // Session storage is only a convenience; URL params remain authoritative.
+    }
+    return activeDirForFile(queryDir, fileParam);
+  }
+  try {
+    return activeDirForFile(window.sessionStorage?.getItem(CAD_DIR_SESSION_STORAGE_KEY) || "", fileParam);
+  } catch {
+    return "";
+  }
+}
+
+function cadApiUrl(path, {
+  activeDir = readActiveCadDir(),
+  includeFile = false,
+  params = {},
+} = {}) {
+  const url = new URL(path, "http://cad.local");
+  if (activeDir) {
+    url.searchParams.set(CAD_DIR_QUERY_PARAM, activeDir);
+  }
+  if (includeFile) {
+    const file = readSearchParam(CAD_FILE_QUERY_PARAM);
+    if (file) {
+      url.searchParams.set(CAD_FILE_QUERY_PARAM, file);
+    }
+  }
+  for (const [key, value] of Object.entries(params)) {
+    const text = String(value ?? "").trim();
+    if (text) {
+      url.searchParams.set(key, text);
+    }
+  }
+  return `${url.pathname}${url.search}`;
 }
 
 async function readJsonError(response, fallback) {
@@ -161,13 +278,14 @@ export async function refreshCadCatalog({ markRefreshing = !currentSnapshot.cata
     return refreshInFlight;
   }
   const requestId = ++refreshRequestId;
+  const activeDir = readActiveCadDir();
   if (markRefreshing) {
-    publishCadRefreshState({ refreshing: true, error: "" });
+    publishCadRefreshState({ refreshing: true, error: "", activeDir });
   }
   refreshInFlight = (async () => {
     try {
       const response = await fetchWithTimeout(
-        "/__cad/catalog",
+        cadApiUrl("/__cad/catalog", { activeDir, includeFile: true }),
         { cache: "no-store" },
         CAD_CATALOG_FETCH_TIMEOUT_MS,
         `Timed out loading CAD catalog after ${CAD_CATALOG_FETCH_TIMEOUT_MS / 1000}s`
@@ -180,7 +298,7 @@ export async function refreshCadCatalog({ markRefreshing = !currentSnapshot.cata
       }
       const catalog = await response.json();
       if (requestId === refreshRequestId) {
-        publishCadManifest(catalog, { hydrated: true, refreshing: false, error: "" });
+        publishCadManifest(catalog, { hydrated: true, refreshing: false, error: "", activeDir });
       }
     } catch (error) {
       if (requestId === refreshRequestId) {
@@ -188,6 +306,7 @@ export async function refreshCadCatalog({ markRefreshing = !currentSnapshot.cata
           hydrated: true,
           refreshing: false,
           error: error instanceof Error ? error.message : String(error),
+          activeDir,
         });
       }
       throw error;
@@ -204,12 +323,17 @@ export async function refreshCadGenerationStatus() {
   if (typeof window === "undefined" || generationStatusUnavailable) {
     return;
   }
+  const activeDir = readActiveCadDir();
+  if (!activeDir) {
+    publishCadGenerationStatus(null);
+    return;
+  }
   if (generationRefreshInFlight) {
     return generationRefreshInFlight;
   }
   generationRefreshInFlight = (async () => {
     try {
-      const response = await fetch("/__cad/generation-status", {
+      const response = await fetch(cadApiUrl("/__cad/generation-status", { activeDir }), {
         cache: "no-store",
       });
       const contentType = String(response.headers?.get?.("content-type") || "");
@@ -241,7 +365,9 @@ export async function requestStepArtifactGeneration(fileRef, { signal } = {}) {
   if (!normalizedFileRef) {
     throw new Error("Missing STEP file");
   }
-  const response = await fetch(`/__cad/step-artifact?file=${encodeURIComponent(normalizedFileRef)}`, {
+  const response = await fetch(cadApiUrl("/__cad/step-artifact", {
+    params: { file: normalizedFileRef },
+  }), {
     method: "POST",
     cache: "no-store",
     signal,
@@ -267,7 +393,9 @@ export async function requestStepSourceStatus(fileRef, { signal } = {}) {
   if (!normalizedFileRef) {
     throw new Error("Missing STEP file");
   }
-  const response = await fetch(`/__cad/step-source-status?file=${encodeURIComponent(normalizedFileRef)}`, {
+  const response = await fetch(cadApiUrl("/__cad/step-source-status", {
+    params: { file: normalizedFileRef },
+  }), {
     method: "GET",
     cache: "no-store",
     signal,
@@ -293,12 +421,22 @@ export function subscribeCadManifest(listener) {
 }
 
 if (import.meta.hot) {
-  import.meta.hot.on("cad-catalog:changed", () => {
+  import.meta.hot.on("cad-catalog:changed", (data = {}) => {
+    const changedDir = String(data?.dir || "").trim();
+    const activeDir = readActiveCadDir();
+    if (changedDir && activeDir && changedDir !== activeDir) {
+      return;
+    }
     refreshCadCatalog().catch((error) => {
       console.warn("Failed to refresh CAD catalog", error);
     });
   });
-  import.meta.hot.on("cad-generation-status:changed", () => {
+  import.meta.hot.on("cad-generation-status:changed", (data = {}) => {
+    const changedDir = String(data?.dir || "").trim();
+    const activeDir = readActiveCadDir();
+    if (changedDir && activeDir && changedDir !== activeDir) {
+      return;
+    }
     refreshCadGenerationStatus().catch((error) => {
       console.warn("Failed to refresh CAD generation status", error);
     });

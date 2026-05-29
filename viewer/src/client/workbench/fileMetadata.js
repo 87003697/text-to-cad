@@ -190,7 +190,7 @@ function generatedRowsForEntry(entry, {
 } = {}) {
   const artifact = entry?.artifact && typeof entry.artifact === "object" ? entry.artifact : {};
   const moduleUrl = cleanText(entry?.moduleUrl);
-  const modulePath = viewerRootRelativePath(moduleUrl, viewerServerInfo, { anchorFile: entry?.file }) || moduleUrl;
+  const modulePath = viewerRootRelativePath(entry?.moduleFile || moduleUrl, viewerServerInfo, { anchorFile: entry?.file }) || moduleUrl;
   if (suppressDynamicStatus) {
     return compactRows([
       metadataRow("Module", modulePath, { href: moduleUrl, mono: true, title: modulePath })
@@ -247,7 +247,7 @@ export function fileMetadataGroupsForEntry(entry, options = {}) {
   const assets = fileAccessAssetsForEntry(entry, { viewerServerInfo });
   const entryFile = viewerRootRelativePath(entry.file, viewerServerInfo) || entry.file;
   const assetPath = assets.artifact?.rootRelativePath ||
-    viewerRootRelativePath(entry.url, viewerServerInfo, { anchorFile: entry.file }) ||
+    viewerRootRelativePath(entry.assetFile || entry.url, viewerServerInfo, { anchorFile: entry.file }) ||
     entry.url;
 
   const fileRows = compactRows([

@@ -1,12 +1,12 @@
-import {
-  DEFAULT_VIEWER_ROOT_DIR,
-  normalizeViewerRootDir,
-} from "cadjs/lib/cadDirectoryScanner.mjs";
-
 export const VIEWER_ASSET_BACKENDS = Object.freeze({
   LOCAL_FS: "local-fs",
   VERCEL_BLOB: "vercel-blob",
 });
+
+export const DEPRECATED_LOCAL_ROOT_ENV_VARS = Object.freeze([
+  "VIEWER_LOCAL_ROOT_DIR",
+  "VIEWER_LOCAL_WORKSPACE_ROOT",
+]);
 
 const VALID_VIEWER_ASSET_BACKENDS = new Set(Object.values(VIEWER_ASSET_BACKENDS));
 
@@ -25,14 +25,14 @@ export function normalizeViewerAssetBackend(value, fallback = VIEWER_ASSET_BACKE
   );
 }
 
-export function localRootDirFromEnv(env = process.env) {
-  return normalizeViewerRootDir(envValue(env, "VIEWER_LOCAL_ROOT_DIR", DEFAULT_VIEWER_ROOT_DIR));
-}
-
-export function rootDirForAssetBackend(assetBackend, env = process.env) {
-  return assetBackend === VIEWER_ASSET_BACKENDS.LOCAL_FS
-    ? localRootDirFromEnv(env)
-    : DEFAULT_VIEWER_ROOT_DIR;
+export function assertNoDeprecatedLocalRootEnv(env = process.env) {
+  const configured = DEPRECATED_LOCAL_ROOT_ENV_VARS.filter((name) => String(env?.[name] || "").trim());
+  if (configured.length) {
+    throw new Error(
+      `${configured.join(", ")} ${configured.length === 1 ? "is" : "are"} no longer supported. ` +
+      "Pass an absolute ?dir= path in the Viewer URL instead."
+    );
+  }
 }
 
 export function vercelBlobCatalogUrlFromPrefix(prefix, catalogPath = "catalog.json") {

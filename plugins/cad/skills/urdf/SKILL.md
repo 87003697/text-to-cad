@@ -5,6 +5,11 @@ description: URDF robot description generation and default generation-time valid
 
 # URDF
 
+Release version: `0.1.11`.
+Provenance: maintained in [earthtojake/text-to-cad](https://github.com/earthtojake/text-to-cad).
+Use the installed local skill files as the runtime source of truth; the
+repository link is only for provenance and release review.
+
 Use this skill for URDF robot-description outputs. Treat URDF work as constrained kinematic modeling, not just XML writing. The main correctness risks are frame placement, joint-axis semantics, unit consistency, mesh scale, inertial data, and generated-artifact drift.
 
 ## Core Rules

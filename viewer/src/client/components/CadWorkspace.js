@@ -214,7 +214,7 @@ import {
   validateUrdfMotionJointValues
 } from "cadjs/lib/urdf/motion";
 import { checkMoveIt2ServerLive, moveit2ServerEnabled, requestMoveIt2Server } from "cadjs/lib/urdf/moveit2ServerClient";
-import { requestStepArtifactGeneration, requestStepSourceStatus } from "cadjs/lib/cadManifestStore";
+import { readActiveCadDir, requestStepArtifactGeneration, requestStepSourceStatus } from "cadjs/lib/cadManifestStore";
 import { stepArtifactCanGenerate } from "@/workbench/stepArtifactStatus";
 import {
   buildFileStatusItems,
@@ -278,12 +278,6 @@ const DEFAULT_LARGE_FILE_STATE = Object.freeze({
 
 function viewerAssetBackendFromEnv() {
   return String(import.meta.env?.VIEWER_ASSET_BACKEND || LOCAL_ASSET_BACKEND).trim().toLowerCase();
-}
-
-function catalogRootDirFromEnv() {
-  return viewerAssetBackendFromEnv() === LOCAL_ASSET_BACKEND
-    ? String(import.meta.env?.VIEWER_LOCAL_ROOT_DIR || "").trim()
-    : "";
 }
 
 function normalizeLargeFileState(value = {}) {
@@ -393,7 +387,8 @@ export default function CadWorkspace({
   manifestRevision = 0,
   catalogHydrated = false,
   catalogRefreshing = false,
-  catalogError = ""
+  catalogError = "",
+  activeDir = ""
 }) {
   const manifestEntries = Array.isArray(manifestEntriesProp) ? manifestEntriesProp : [];
   const catalogEntries = manifestEntries;
@@ -403,7 +398,8 @@ export default function CadWorkspace({
       .map(([file]) => String(file || "").trim())
       .filter(Boolean)
   ), [generationStatus]);
-  const catalogRootDir = catalogRootDirFromEnv();
+  const catalogRootDir = String(activeDir || "").trim();
+  const directoryCatalogActive = Boolean(catalogRootDir);
   const [query, setQuery] = useState("");
   const initialFileViewerDirectoryStateRef = useRef(null);
   if (!initialFileViewerDirectoryStateRef.current) {
@@ -867,7 +863,16 @@ export default function CadWorkspace({
     }
     const controller = new AbortController();
     let active = true;
-    fetch("/__cad/server", {
+    const url = new URL("/__cad/server", window.location.href);
+    const activeViewerDir = readActiveCadDir();
+    const activeFile = readCadParam();
+    if (activeViewerDir) {
+      url.searchParams.set("dir", activeViewerDir);
+    }
+    if (activeFile) {
+      url.searchParams.set("file", activeFile);
+    }
+    fetch(`${url.pathname}${url.search}`, {
       cache: "no-store",
       signal: controller.signal,
     }).then(async (response) => {
@@ -888,7 +893,7 @@ export default function CadWorkspace({
       active = false;
       controller.abort();
     };
-  }, []);
+  }, [catalogRootDir, explicitFileParam]);
 
   useEffect(() => {
     let active = true;
@@ -1896,7 +1901,7 @@ export default function CadWorkspace({
     setTabToolsWidth(defaultFileSheetWidth);
   }, [defaultFileSheetWidth, fileSheetWidthIsCustom]);
   const desktopFileSheetOpen = isDesktop && tabToolsOpen && !!selectedFileSheetKind && !previewMode;
-  const effectiveSidebarOpen = sidebarOpen && !previewMode;
+  const effectiveSidebarOpen = directoryCatalogActive && sidebarOpen && !previewMode;
   const desktopSidebarOpen = isDesktop && effectiveSidebarOpen && !previewMode;
 
   const setThemeMenuOpen = useCallback(() => {}, []);
@@ -5871,10 +5876,12 @@ export default function CadWorkspace({
           fileSheetKind={selectedFileSheetKind}
           fileSheetOpen={fileSheetOpen}
           onToggleFileSheet={handleToggleFileSheet}
+          navigationAvailable={directoryCatalogActive}
         />
 
         <div className="pointer-events-none relative min-h-0 flex-1 overflow-hidden">
           <div className="flex h-full min-w-0">
+            {directoryCatalogActive ? (
             <FileViewerSidebar
               previewMode={previewMode}
               query={query}
@@ -5908,6 +5915,7 @@ export default function CadWorkspace({
               resizable={isDesktop}
               onStartResize={handleStartSidebarResize}
             />
+            ) : null}
 
             <div className="pointer-events-none relative min-w-0 flex-1 overflow-hidden">
               <FloatingToolBar
@@ -5948,6 +5956,8 @@ export default function CadWorkspace({
                   catalogHydrated={catalogHydrated}
                   catalogRefreshing={catalogRefreshing}
                   catalogError={catalogError}
+                  directoryCatalogActive={directoryCatalogActive}
+                  explicitFileParam={explicitFileParam}
                 />
               ) : null}
 

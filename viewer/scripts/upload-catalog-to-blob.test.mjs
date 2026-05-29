@@ -58,7 +58,6 @@ test("parseUploadArgs accepts a directory and repeated ignore options", () => {
     ], {}),
     {
       directory: "models",
-      rootDir: "",
       ignoreFiles: [".vieweruploadignore"],
       excludePatterns: ["/mechbench/", "/mechbench2/"],
       concurrency: 2,
@@ -66,20 +65,26 @@ test("parseUploadArgs accepts a directory and repeated ignore options", () => {
   );
 });
 
-test("parseUploadArgs accepts root-dir and rejects workspace-root", () => {
-  assert.deepEqual(
-    parseUploadArgs(["--root-dir", "/repo/models"], {}),
-    {
-      directory: "",
-      rootDir: "/repo/models",
-      ignoreFiles: [],
-      excludePatterns: [],
-      concurrency: 4,
-    }
+test("parseUploadArgs rejects removed root-dir and workspace-root flags", () => {
+  assert.throws(
+    () => parseUploadArgs(["--root-dir", "/repo/models"], {}),
+    /--root-dir has been removed/
+  );
+  assert.throws(
+    () => parseUploadArgs(["--root-dir=/repo/models"], {}),
+    /--root-dir has been removed/
   );
   assert.throws(
     () => parseUploadArgs(["--workspace-root", "/repo"], {}),
     /Unknown option: --workspace-root/
+  );
+  assert.throws(
+    () => parseUploadArgs([], { VIEWER_LOCAL_ROOT_DIR: "/repo/models" }),
+    /VIEWER_LOCAL_ROOT_DIR.*removed/
+  );
+  assert.throws(
+    () => parseUploadArgs([], { VIEWER_LOCAL_WORKSPACE_ROOT: "/repo" }),
+    /VIEWER_LOCAL_ROOT_DIR.*removed/
   );
 });
 
@@ -198,14 +203,14 @@ test("uploadCatalogDirectoryToVercelBlob applies default catalog exclusions", as
   assert.deepEqual(result.ignoredPatterns.slice(0, DEFAULT_UPLOAD_EXCLUDE_PATTERNS.length), DEFAULT_UPLOAD_EXCLUDE_PATTERNS);
 });
 
-test("uploadCatalogDirectoryToVercelBlob honors rootDir from npm caller cwd", async () => {
+test("uploadCatalogDirectoryToVercelBlob honors positional directory from npm caller cwd", async () => {
   const repoRoot = makeTempRepo();
   writeFile(path.join(repoRoot, "models/keep.stl"), "solid keep\nendsolid keep\n");
   writeFile(path.join(repoRoot, "viewer/package.json"), "{}\n");
   const putCalls = [];
 
   const result = await uploadCatalogDirectoryToVercelBlob({
-    rootDir: "models",
+    directory: "models",
     env: {
       INIT_CWD: repoRoot,
       VIEWER_ASSET_BACKEND: "vercel-blob",
