@@ -10,14 +10,20 @@ Use this skill to open existing or newly generated CAD, robot-description, DXF, 
 ## Start Viewer
 
 Start or reuse one packaged CAD Viewer server with `npm run serve`, then select
-local files by URL. Always begin at port `4178`.
+local files by URL. Every Viewer link returned from this skill MUST include
+`?dir=` with an absolute path. Set `?dir=` to the workspace-local artifact root
+that owns the model files and related sidecars, usually the project `models/`
+directory, such as `/Users/name/project/models`. This root should be the shared
+directory containing STEP/STL/GLB/URDF/SRDF/SDF/G-code/DXF files, not a relative
+path and not just the selected file's parent when a broader model workspace root
+exists. Always begin at port `4178`.
 
 Probe each candidate port with `GET /__cad/server`. If the response is JSON
 with `app: "cad-viewer"`, `dynamicRoot: true`, and `serverApiVersion >= 2`,
 reuse that base URL. The response also includes `viewerVersion` for sanity
 checking the running build. If the response is a legacy root-bound CAD Viewer
 without those fields, treat it as incompatible and try the next port because
-returned links must use absolute `?dir=` and `file=` values. If the port is
+returned links must use absolute `?dir=` and `?file=` values. If the port is
 occupied by something else, increment the port and probe again. If the port is
 closed, start the packaged server on that port.
 
@@ -43,7 +49,7 @@ npm --prefix scripts/viewer run serve -- --host 127.0.0.1 --port 4178 --shutdown
 Use the printed base URL and append query parameters:
 
 ```bash
-http://127.0.0.1:4178/?dir=/absolute/root&file=/absolute/root/path/to/model.step
+http://127.0.0.1:4178/?dir=/absolute/workspace/models&file=/absolute/workspace/models/path/to/model.step
 ```
 
 If a non-Viewer process occupies the candidate port, rerun `serve` with the next
@@ -56,10 +62,17 @@ with the needed permission/escalation.
 - Return the printed Viewer link for each requested file.
 - If a compatible Viewer server is already running, reuse its port and vary the
   `?dir=`/`?file=` query only.
-- Every handoff link from this skill must include `?dir=<absolute-root>`. Do not
-  rely on the Viewer's session-storage `?dir=` fallback for returned links.
+- ALWAYS include `?dir=<absolute-model-root>` on every returned Viewer link.
+  This is mandatory for cad-viewer handoffs: do not omit it for convenience, do
+  not use a relative path, and do not rely on the Viewer's session-storage
+  `?dir=` fallback.
+- Choose `?dir=` as the absolute workspace folder that contains the model
+  artifacts, commonly `<repo>/models` or the consuming project's equivalent
+  model directory.
 - Include `file=<absolute-file>` for each requested file, one URL per file. For
   directory-only review links, include `?dir=<absolute-root>` without `file=`.
+- Return file-only links with no `?dir=` only when the user explicitly asks to
+  test the Viewer's no-directory/file-only mode.
 - Do not stop an existing Viewer server unless the user asks.
 - If Viewer startup fails, report the failure and continue with the owning skill's non-GUI validation or artifacts.
 
