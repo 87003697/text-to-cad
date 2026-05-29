@@ -6,9 +6,9 @@ description: Find, evaluate, and download common purchasable CAD parts from step
 # CAD Parts
 
 Release version: `0.1.11`.
-Source: [earthtojake/text-to-cad](https://github.com/earthtojake/text-to-cad).
+Provenance: maintained in [earthtojake/text-to-cad](https://github.com/earthtojake/text-to-cad).
 Use the installed local skill files as the runtime source of truth; the
-repository link is for provenance and release review.
+repository link is only for provenance and release review.
 
 ## Overview
 

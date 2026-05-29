@@ -6,9 +6,9 @@ description: Dry-run, upload, and cautiously initiate local Bambu Lab print jobs
 # Bambu Labs
 
 Release version: `0.1.11`.
-Source: [earthtojake/text-to-cad](https://github.com/earthtojake/text-to-cad).
+Provenance: maintained in [earthtojake/text-to-cad](https://github.com/earthtojake/text-to-cad).
 Use the installed local skill files as the runtime source of truth; the
-repository link is for provenance and release review.
+repository link is only for provenance and release review.
 
 Use this skill for local-network Bambu Lab print handoffs after a plain `.gcode`
 file already exists and has been validated. This skill does not slice models.

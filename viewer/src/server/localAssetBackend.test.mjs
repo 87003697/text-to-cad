@@ -98,6 +98,34 @@ test("local backend incrementally refreshes changed CAD catalog entries", async 
   });
 });
 
+test("local backend refreshes requested files against a cached dynamic root catalog", async () => {
+  await withTempWorkspace((workspaceRoot) => {
+    const modelRoot = path.join(workspaceRoot, "models");
+    fs.mkdirSync(modelRoot, { recursive: true });
+    const firstPath = path.join(modelRoot, "first.stl");
+    const secondPath = path.join(modelRoot, "second.stl");
+    fs.writeFileSync(firstPath, "solid first\nendsolid first\n");
+    const backend = createLocalAssetBackend({ workspaceRoot });
+
+    assert.deepEqual(
+      backend.readCatalog({ rootDir: modelRoot, fileRef: firstPath }).entries.map((entry) => entry.rootRelativeFile),
+      ["first.stl"]
+    );
+
+    fs.writeFileSync(secondPath, "solid second\nendsolid second\n");
+    assert.deepEqual(
+      backend.readCatalog({ rootDir: modelRoot, fileRef: secondPath }).entries.map((entry) => entry.rootRelativeFile),
+      ["first.stl", "second.stl"]
+    );
+
+    fs.unlinkSync(firstPath);
+    assert.deepEqual(
+      backend.readCatalog({ rootDir: modelRoot, fileRef: firstPath }).entries.map((entry) => entry.rootRelativeFile),
+      ["second.stl"]
+    );
+  });
+});
+
 test("local backend incrementally refreshes STEP entries when sidecars change", async () => {
   await withTempWorkspace((workspaceRoot) => {
     const modelRoot = path.join(workspaceRoot, "models");

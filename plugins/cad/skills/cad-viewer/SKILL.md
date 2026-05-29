@@ -6,9 +6,9 @@ description: Start or reuse CAD Viewer and return review links for explicit CAD,
 # CAD Viewer
 
 Release version: `0.1.11`.
-Source: [earthtojake/text-to-cad](https://github.com/earthtojake/text-to-cad).
+Provenance: maintained in [earthtojake/text-to-cad](https://github.com/earthtojake/text-to-cad).
 Use the installed local skill files as the runtime source of truth; the
-repository link is for provenance and release review.
+repository link is only for provenance and release review.
 
 Use this skill to open existing or newly generated CAD, robot-description, DXF, or plain FDM G-code files in CAD Viewer and hand back live review links. The expected input is one or more explicit file paths.
 

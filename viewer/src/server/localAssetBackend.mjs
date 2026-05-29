@@ -478,6 +478,13 @@ export function createLocalAssetBackend({
     if (!catalogCache.has(cacheKey)) {
       return refreshCatalog({ rootDir: normalizedDir, fileRef: normalizedFile });
     }
+    if (normalizedDir && normalizedFile) {
+      const resolvedRoot = resolveRoot(normalizedDir);
+      const requestedPath = filePathFromRef(normalizedFile, resolvedRoot);
+      if (requestedPath === resolvedRoot.rootPath || pathIsInside(requestedPath, resolvedRoot.rootPath)) {
+        return refreshCatalogForPath({ rootDir: resolvedRoot.dir, filePath: requestedPath });
+      }
+    }
     return catalogCache.get(cacheKey);
   }
 

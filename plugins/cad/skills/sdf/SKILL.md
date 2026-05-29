@@ -6,9 +6,9 @@ description: SDFormat/SDF model and world generation, validation, and simulator 
 # SDF
 
 Release version: `0.1.11`.
-Source: [earthtojake/text-to-cad](https://github.com/earthtojake/text-to-cad).
+Provenance: maintained in [earthtojake/text-to-cad](https://github.com/earthtojake/text-to-cad).
 Use the installed local skill files as the runtime source of truth; the
-repository link is for provenance and release review.
+repository link is only for provenance and release review.
 
 Use this skill when the deliverable is an SDFormat document or a Python `gen_sdf()` source. SDFormat describes simulator and world behavior: models, worlds, frames, poses, links, joints, inertials, visuals, collisions, sensors, lights, physics, plugins, includes, and simulator metadata.
 

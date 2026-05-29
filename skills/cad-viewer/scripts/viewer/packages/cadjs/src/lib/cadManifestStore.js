@@ -134,6 +134,49 @@ function readSearchParam(name) {
   }
 }
 
+function normalizePathForContainment(value) {
+  const normalized = String(value || "").trim().replace(/\\/g, "/").replace(/\/+/g, "/");
+  if (!normalized || normalized === "/") {
+    return normalized;
+  }
+  if (/^[a-z]:\/?$/i.test(normalized)) {
+    return normalized.endsWith("/") ? normalized : `${normalized}/`;
+  }
+  return normalized.replace(/\/+$/g, "");
+}
+
+function isAbsoluteFileParam(value) {
+  const normalized = normalizePathForContainment(value);
+  return normalized.startsWith("/") || /^[a-z]:\//i.test(normalized);
+}
+
+function directoryContainsFile(directory, file) {
+  const normalizedDirectory = normalizePathForContainment(directory);
+  const normalizedFile = normalizePathForContainment(file);
+  if (!normalizedDirectory || !normalizedFile) {
+    return false;
+  }
+  if (normalizedDirectory === "/") {
+    return normalizedFile.startsWith("/");
+  }
+  if (/^[a-z]:\/$/i.test(normalizedDirectory)) {
+    return normalizedFile.toLowerCase().startsWith(normalizedDirectory.toLowerCase());
+  }
+  return normalizedFile === normalizedDirectory || normalizedFile.startsWith(`${normalizedDirectory}/`);
+}
+
+function activeDirForFile(candidateDir, fileParam) {
+  const normalizedCandidate = String(candidateDir || "").trim();
+  if (!normalizedCandidate) {
+    return "";
+  }
+  const normalizedFile = String(fileParam || "").trim();
+  if (isAbsoluteFileParam(normalizedFile) && !directoryContainsFile(normalizedCandidate, normalizedFile)) {
+    return "";
+  }
+  return normalizedCandidate;
+}
+
 export function readActiveCadDir() {
   if (typeof window === "undefined") {
     return "";
@@ -144,6 +187,7 @@ export function readActiveCadDir() {
   } catch {
     return "";
   }
+  const fileParam = String(url.searchParams.get(CAD_FILE_QUERY_PARAM) || "").trim();
   if (url.searchParams.has(CAD_DIR_QUERY_PARAM)) {
     const queryDir = String(url.searchParams.get(CAD_DIR_QUERY_PARAM) || "").trim();
     try {
@@ -155,10 +199,10 @@ export function readActiveCadDir() {
     } catch {
       // Session storage is only a convenience; URL params remain authoritative.
     }
-    return queryDir;
+    return activeDirForFile(queryDir, fileParam);
   }
   try {
-    return String(window.sessionStorage?.getItem(CAD_DIR_SESSION_STORAGE_KEY) || "").trim();
+    return activeDirForFile(window.sessionStorage?.getItem(CAD_DIR_SESSION_STORAGE_KEY) || "", fileParam);
   } catch {
     return "";
   }
