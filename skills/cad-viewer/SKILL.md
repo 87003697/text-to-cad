@@ -5,6 +5,8 @@ description: Start or reuse CAD Viewer and return review links for explicit CAD,
 
 # CAD Viewer
 
+Release version: `0.1.11`.
+
 Use this skill to open existing or newly generated CAD, robot-description, DXF, or plain FDM G-code files in CAD Viewer and hand back live review links. The expected input is one or more explicit file paths.
 
 ## Start Viewer
@@ -27,8 +29,9 @@ returned links must use absolute `?dir=` and `?file=` values. If the port is
 occupied by something else, increment the port and probe again. If the port is
 closed, start the packaged server on that port.
 
-`--root-dir` and the old local root environment variables have been removed.
-Do not use them.
+Legacy fixed-root startup flags and old local root environment variables have
+been removed. Do not use fixed-root startup configuration; use absolute `?dir=`
+links instead.
 
 Always start new local Viewer servers with `--shutdown-after 12h` so forgotten
 review servers clean themselves up. Do not rely on a default shutdown; the
@@ -56,6 +59,42 @@ If a non-Viewer process occupies the candidate port, rerun `serve` with the next
 available `--port <number>`. In sandboxed agent environments, local binding
 failures such as `EPERM` or `EACCES` can be expected; rerun the same command
 with the needed permission/escalation.
+
+## Claude Preview
+
+When running in Claude Code Desktop, check the workspace `.claude/launch.json`.
+If it does not already contain a CAD Viewer preview configuration, add one and
+preserve every existing configuration. The preview config should start this
+packaged Viewer, use the same selected port as the returned links, and keep
+`autoPort: false` so Claude does not silently move the Viewer to a different
+port. Use an absolute path to this skill's `scripts/viewer` directory in
+`npm --prefix`, or set the preview `cwd` to this skill directory before running
+the same `npm --prefix scripts/viewer run serve -- --host 127.0.0.1 --port
+<port> --shutdown-after 12h` command.
+
+Example configuration entry:
+
+```json
+{
+  "name": "cad-viewer",
+  "runtimeExecutable": "npm",
+  "runtimeArgs": [
+    "--prefix",
+    "/absolute/path/to/cad-viewer/scripts/viewer",
+    "run",
+    "serve",
+    "--",
+    "--host",
+    "127.0.0.1",
+    "--port",
+    "4178",
+    "--shutdown-after",
+    "12h"
+  ],
+  "port": 4178,
+  "autoPort": false
+}
+```
 
 ## Links
 

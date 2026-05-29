@@ -139,8 +139,8 @@ Important environment variables:
 - `VIEWER_SERVER_REGISTRY`: optional local server registry JSON path.
 
 `VIEWER_LOCAL_ROOT_DIR` and `VIEWER_LOCAL_WORKSPACE_ROOT` are removed for local
-filesystem viewing. Setting either variable, or passing `--root-dir`, is a hard
-startup error; use an absolute `?dir=` URL parameter instead.
+filesystem viewing. Setting either variable, or using the old fixed-root startup
+flag, is a hard startup error; use an absolute `?dir=` URL parameter instead.
 
 Vercel Blob backend variables:
 

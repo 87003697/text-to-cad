@@ -5,6 +5,8 @@ description: URDF robot description generation and default generation-time valid
 
 # URDF
 
+Release version: `0.1.11`.
+
 Use this skill for URDF robot-description outputs. Treat URDF work as constrained kinematic modeling, not just XML writing. The main correctness risks are frame placement, joint-axis semantics, unit consistency, mesh scale, inertial data, and generated-artifact drift.
 
 ## Core Rules

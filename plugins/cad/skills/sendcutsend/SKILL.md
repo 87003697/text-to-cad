@@ -5,6 +5,8 @@ description: Review DXF and STEP/STP uploads for SendCutSend.com orders using it
 
 # SendCutSend
 
+Release version: `0.1.11`.
+
 Use this skill to produce conservative, evidence-backed SendCutSend preflight reports for DXF and STEP/STP files.
 
 Treat SendCutSend's ordering guide, catalog JSON, and specs JSON as evidence feeds, not stable APIs. Field names, types, and coverage may vary. Do not turn missing, unparsable, `N/A`, or conflicting source data into a pass or fail. Fetch sources directly from official URLs and use local inspection code only to measure specific file facts; write the final report from explicit comparisons.

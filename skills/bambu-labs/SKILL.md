@@ -5,6 +5,8 @@ description: Dry-run, upload, and cautiously initiate local Bambu Lab print jobs
 
 # Bambu Labs
 
+Release version: `0.1.11`.
+
 Use this skill for local-network Bambu Lab print handoffs after a plain `.gcode`
 file already exists and has been validated. This skill does not slice models.
 

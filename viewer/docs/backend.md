@@ -55,8 +55,8 @@ directory catalog, sidebar, or breadcrumbs. The local backend does not write
 Local filesystem deployments are intentionally URL-driven. `?dir=` must be an
 absolute path, and the client stores the last seen `?dir=` in tab-local
 `sessionStorage` so later navigation can omit it. `VIEWER_LOCAL_ROOT_DIR`,
-`VIEWER_LOCAL_WORKSPACE_ROOT`, and `--root-dir` have been removed and now fail
-at startup.
+`VIEWER_LOCAL_WORKSPACE_ROOT`, and the old fixed-root startup flag have been
+removed and now fail at startup.
 
 Agent handoffs should include `?dir=<absolute-root>` in every returned Viewer
 link even though the browser can fall back to tab-local storage. Include

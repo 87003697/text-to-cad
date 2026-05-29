@@ -46,6 +46,19 @@ class PlannedChange:
     labels: tuple[str, ...]
 
 
+SKILL_NAMES = (
+    "bambu-labs",
+    "cad",
+    "cad-viewer",
+    "gcode",
+    "sdf",
+    "sendcutsend",
+    "srdf",
+    "step-parts",
+    "urdf",
+)
+
+
 JSON_TARGETS = (
     JsonTarget(Path("docs/package.json"), (("version",),)),
     JsonTarget(Path("docs/package-lock.json"), (("version",), ("packages", "", "version"))),
@@ -136,6 +149,24 @@ TEXT_TARGETS = (
         r'"version": "{old}",',
         '"version": "{new}",',
         "generated CAD Viewer runtime package template",
+    ),
+    *(
+        TextTarget(
+            Path(f"skills/{skill}/SKILL.md"),
+            r"Release version: `{old}`\.",
+            "Release version: `{new}`.",
+            f"{skill} source skill version",
+        )
+        for skill in SKILL_NAMES
+    ),
+    *(
+        TextTarget(
+            Path(f"plugins/cad/skills/{skill}/SKILL.md"),
+            r"Release version: `{old}`\.",
+            "Release version: `{new}`.",
+            f"{skill} bundled skill version",
+        )
+        for skill in SKILL_NAMES
     ),
 )
 
