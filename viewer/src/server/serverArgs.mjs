@@ -1,4 +1,4 @@
-import path from "node:path";
+import { parseServerLifetimeMs } from "./serverLifetime.mjs";
 
 function requiredValue(argv, index, flag) {
   const value = argv[index + 1];
@@ -18,9 +18,9 @@ function parsePort(value, flag) {
 
 export function parseServerArgs(argv = []) {
   const options = {
-    rootDir: "",
     port: null,
     host: "",
+    shutdownAfterMs: null,
     help: false,
   };
   for (let index = 0; index < argv.length; index += 1) {
@@ -30,13 +30,10 @@ export function parseServerArgs(argv = []) {
       continue;
     }
     if (arg.startsWith("--root-dir=")) {
-      options.rootDir = arg.slice("--root-dir=".length);
-      continue;
+      throw new Error("--root-dir has been removed; pass an absolute ?dir= path in the Viewer URL.");
     }
     if (arg === "--root-dir") {
-      options.rootDir = requiredValue(argv, index, arg);
-      index += 1;
-      continue;
+      throw new Error("--root-dir has been removed; pass an absolute ?dir= path in the Viewer URL.");
     }
     if (arg.startsWith("--port=")) {
       options.port = parsePort(arg.slice("--port=".length), "--port");
@@ -56,6 +53,15 @@ export function parseServerArgs(argv = []) {
       index += 1;
       continue;
     }
+    if (arg.startsWith("--shutdown-after=")) {
+      options.shutdownAfterMs = parseServerLifetimeMs(arg.slice("--shutdown-after=".length), "--shutdown-after");
+      continue;
+    }
+    if (arg === "--shutdown-after") {
+      options.shutdownAfterMs = parseServerLifetimeMs(requiredValue(argv, index, arg), arg);
+      index += 1;
+      continue;
+    }
     throw new Error(`Unknown argument: ${arg}`);
   }
   return options;
@@ -65,9 +71,10 @@ export function serverHelpText() {
   return `Usage: node backend/server.mjs [options]
 
 Options:
-  --root-dir <path>  Local Viewer root directory to serve. Overrides VIEWER_LOCAL_* env roots.
-  --port <number>    Port to bind. Overrides VIEWER_PORT.
-  --host <host>      Host to bind. Overrides VIEWER_HOST.
+  --port <number>    Port to bind. Defaults to 4178.
+  --host <host>      Host to bind. Defaults to 127.0.0.1.
+  --shutdown-after <time>
+                     Shut down after a duration such as 12h, 30m, or 60000.
   -h, --help         Show this help.
 `;
 }
@@ -79,16 +86,5 @@ export function applyServerArgsToEnv({
 } = {}) {
   const args = parseServerArgs(argv);
   const nextEnv = { ...env };
-  if (args.rootDir) {
-    nextEnv.VIEWER_ASSET_BACKEND = "local-fs";
-    nextEnv.VIEWER_LOCAL_WORKSPACE_ROOT = path.resolve(cwd, args.rootDir);
-    nextEnv.VIEWER_LOCAL_ROOT_DIR = "";
-  }
-  if (args.port !== null) {
-    nextEnv.VIEWER_PORT = String(args.port);
-  }
-  if (args.host) {
-    nextEnv.VIEWER_HOST = args.host;
-  }
   return { args, env: nextEnv };
 }

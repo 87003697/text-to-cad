@@ -49,20 +49,22 @@ test("local backend serves catalog from an in-memory scan without writing catalo
     assert.equal(fs.existsSync(modelCatalogPath), false);
     assert.deepEqual(catalog.entries.map((entry) => ({
       file: entry.file,
+      rootRelativeFile: entry.rootRelativeFile,
       kind: entry.kind,
       hasUrl: Boolean(entry.url),
       hasHash: Boolean(entry.hash),
       bytes: entry.bytes,
     })), [{
-      file: "sample.stl",
+      file: path.join(modelRoot, "sample.stl"),
+      rootRelativeFile: "sample.stl",
       kind: "stl",
       hasUrl: true,
       hasHash: true,
       bytes: "solid sample\nendsolid sample\n".length,
     }]);
     fs.writeFileSync(path.join(modelRoot, "late.stl"), "solid late\nendsolid late\n");
-    assert.equal(backend.readCatalog().entries.some((entry) => entry.file === "late.stl"), false);
-    assert.equal(backend.refreshCatalog().entries.some((entry) => entry.file === "late.stl"), true);
+    assert.equal(backend.readCatalog().entries.some((entry) => entry.rootRelativeFile === "late.stl"), false);
+    assert.equal(backend.refreshCatalog().entries.some((entry) => entry.rootRelativeFile === "late.stl"), true);
     assert.equal(fs.existsSync(hiddenCatalogPath), false);
     assert.equal(fs.existsSync(visibleCatalogPath), false);
     assert.equal(fs.existsSync(modelCatalogPath), false);
@@ -79,18 +81,18 @@ test("local backend incrementally refreshes changed CAD catalog entries", async 
     fs.writeFileSync(firstPath, "solid first\nendsolid first\n");
     const backend = createLocalAssetBackend({ workspaceRoot, rootDir: "models" });
 
-    assert.deepEqual(backend.readCatalog().entries.map((entry) => entry.file), ["first.stl"]);
+    assert.deepEqual(backend.readCatalog().entries.map((entry) => entry.rootRelativeFile), ["first.stl"]);
 
     fs.writeFileSync(secondPath, "solid second\nendsolid second\n");
-    assert.deepEqual(backend.readCatalog().entries.map((entry) => entry.file), ["first.stl"]);
+    assert.deepEqual(backend.readCatalog().entries.map((entry) => entry.rootRelativeFile), ["first.stl"]);
     assert.deepEqual(
-      backend.refreshCatalogForPath({ filePath: secondPath }).entries.map((entry) => entry.file),
+      backend.refreshCatalogForPath({ filePath: secondPath }).entries.map((entry) => entry.rootRelativeFile),
       ["first.stl", "second.stl"]
     );
 
     fs.unlinkSync(firstPath);
     assert.deepEqual(
-      backend.refreshCatalogForPath({ filePath: firstPath }).entries.map((entry) => entry.file),
+      backend.refreshCatalogForPath({ filePath: firstPath }).entries.map((entry) => entry.rootRelativeFile),
       ["second.stl"]
     );
   });
@@ -109,7 +111,8 @@ test("local backend incrementally refreshes STEP entries when sidecars change", 
 
     fs.writeFileSync(modulePath, "export default { manifest: { schemaVersion: 1 } };\n");
     const withModule = backend.refreshCatalogForPath({ filePath: modulePath });
-    assert.ok(withModule.entries[0].moduleUrl.startsWith("/models/.part.step.js?v="));
+    assert.ok(withModule.entries[0].moduleUrl.startsWith("/__cad/asset?file="));
+    assert.equal(withModule.entries[0].moduleFile, modulePath);
 
     fs.unlinkSync(modulePath);
     const withoutModule = backend.refreshCatalogForPath({ filePath: modulePath });
@@ -137,8 +140,8 @@ test("local backend reports active generator status for the active root", async 
 
     const status = backend.readGenerationStatus();
 
-    assert.equal(status.files["part.step"].running, true);
-    assert.equal(status.files["part.step"].generator, "gen_step");
+    assert.equal(status.files[path.join(modelRoot, "part.step")].running, true);
+    assert.equal(status.files[path.join(modelRoot, "part.step")].generator, "gen_step");
     assert.equal(backend.generationStatusDir(), modelRoot);
     assert.equal(backend.isGenerationStatusPath(statusPath), true);
   });
@@ -268,10 +271,11 @@ test("local backend defers STEP artifact status to current-file status reads", a
     const catalogEntry = backend.readCatalog().entries[0];
     const status = backend.readStepSourceStatus({ fileRef: "part.step" });
 
-    assert.equal(catalogEntry.file, "part.step");
+    assert.equal(catalogEntry.file, path.join(modelRoot, "part.step"));
+    assert.equal(catalogEntry.rootRelativeFile, "part.step");
     assert.equal(catalogEntry.artifact, undefined);
     assert.equal(status.artifact.error, "missing_glb");
-    assert.equal(status.artifact.glbPath, "models/.part.step.glb");
+    assert.equal(status.artifact.glbPath, path.join(modelRoot, ".part.step.glb"));
   });
 });
 
@@ -310,7 +314,7 @@ test("local backend resolves selected output files instead of generated GLB arti
     assert.deepEqual(openedPaths, [stepPath]);
     assert.deepEqual(opened, {
       asset: "output",
-      file: "part.step",
+      file: stepPath,
       filename: "part.step",
       opened: true,
     });
@@ -335,7 +339,8 @@ test("local backend resolves generated GLB artifact assets from catalog URLs", a
     });
 
     assert.equal(access.asset, "artifact");
-    assert.equal(access.file, ".part.step.glb");
+    assert.equal(access.file, artifactPath);
+    assert.equal(access.rootRelativeFile, ".part.step.glb");
     assert.equal(access.path, artifactPath);
     assert.equal(access.filename, ".part.step.glb");
     assert.equal(access.contentType, "model/gltf-binary");
@@ -358,7 +363,8 @@ test("local backend resolves catalog output files whose names begin with two dot
     });
 
     assert.equal(access.path, stepPath);
-    assert.equal(access.file, "..part.step");
+    assert.equal(access.file, stepPath);
+    assert.equal(access.rootRelativeFile, "..part.step");
     assert.equal(access.filename, "..part.step");
   });
 });

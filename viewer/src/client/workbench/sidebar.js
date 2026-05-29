@@ -25,7 +25,10 @@ function replaceUrl(url) {
 }
 
 function normalizeUrlPath(value) {
-  return String(value || "").trim().replace(/\\/g, "/").replace(/^\/+/, "").replace(/\/+$/, "");
+  const normalized = String(value || "").trim().replace(/\\/g, "/").replace(/\/+$/, "");
+  return normalized.startsWith("/")
+    ? normalized
+    : normalized.replace(/^\/+/, "");
 }
 
 export function normalizeCadFileQueryParam(value) {
@@ -246,7 +249,7 @@ function normalizedEntryStem(entry) {
 }
 
 export function sidebarDirectoryIdForEntry(entry) {
-  const file = fileKey(entry);
+  const file = String(entry?.rootRelativeFile || fileKey(entry) || "").trim();
   const parts = file.split("/").filter(Boolean);
   parts.pop();
   return parts.join("/");

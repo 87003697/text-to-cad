@@ -65,14 +65,14 @@ python scripts/inspect refs models/bracket.step --facts --planes --positioning
 
 ```text
 Files:
-- STEP: models/bracket.step
-- STL: meshes/bracket.stl
-- GLB: meshes/bracket.glb
+- STEP: /absolute/project/models/bracket.step
+- STL: /absolute/project/models/meshes/bracket.stl
+- GLB: /absolute/project/models/meshes/bracket.glb
 
 CAD Viewer:
-- STEP: http://127.0.0.1:4178/?file=models/bracket.step
-- STL: http://127.0.0.1:4178/?file=meshes/bracket.stl
-- GLB: http://127.0.0.1:4178/?file=meshes/bracket.glb
+- STEP: http://127.0.0.1:4178/?dir=/absolute/project/models&file=/absolute/project/models/bracket.step
+- STL: http://127.0.0.1:4178/?dir=/absolute/project/models&file=/absolute/project/models/meshes/bracket.stl
+- GLB: http://127.0.0.1:4178/?dir=/absolute/project/models&file=/absolute/project/models/meshes/bracket.glb
 
 Validation:
 - STEP geometry validated; STL/3MF/native GLB generated as requested sidecars.

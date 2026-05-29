@@ -9,68 +9,57 @@ Use this skill to open existing or newly generated CAD, robot-description, DXF, 
 
 ## Start Viewer
 
-Always start CAD Viewer with the root directory that owns the model files (.step, .glb, .stl, .urdf, etc).
-Always pass `--root-dir /path/to/root`; the flag is required. This flag is
-the full Viewer root directory; do not treat it as a subdirectory inside another
-repo root.
+Start or reuse one packaged CAD Viewer server with `npm run serve`, then select
+local files by URL. Always begin at port `4178`.
 
-Port reuse depends on passing the same resolved root directory every time.
-`serve:ensure` probes the Viewer port range, asks each live server what root
-directory it serves, and reuses a port only when that server's root directory
-matches the current `--root-dir` and the requested file is available in its
-catalog. Passing a model subfolder, a different checkout path, or relying on a
-different current directory changes the resolved root and can cause
-`serve:ensure` to start a new port. Always pass the same project root directory
-with `--root-dir` for handoffs from the same project.
+Probe each candidate port with `GET /__cad/server`. If the response is JSON
+with `app: "cad-viewer"`, `dynamicRoot: true`, and `serverApiVersion >= 2`,
+reuse that base URL. The response also includes `viewerVersion` for sanity
+checking the running build. If the response is a legacy root-bound CAD Viewer
+without those fields, treat it as incompatible and try the next port because
+returned links must use absolute `?dir=` and `file=` values. If the port is
+occupied by something else, increment the port and probe again. If the port is
+closed, start the packaged server on that port.
 
-New Viewer servers started by `serve:ensure` shut down automatically after 12
-hours. Use the default unless the user explicitly asks for a different
-lifetime; then pass `--shutdown-after <duration>` with an `ms`, `s`, `m`, or
-`h` suffix. This flag only applies when a new server starts; reusing an existing
-matching port does not change that server's existing shutdown timer.
+`--root-dir` and the old local root environment variables have been removed.
+Do not use them.
+
+Always start new local Viewer servers with `--shutdown-after 12h` so forgotten
+review servers clean themselves up. Do not rely on a default shutdown; the
+server stays alive until stopped unless this flag or `VIEWER_SERVER_LIFETIME_MS`
+is set.
 
 If the user has a Viewer URL open, treat that port as the first reuse candidate.
-Return a URL on that same port whenever it already serves the same root
-directory, changing only the `?file=` query. Do not start a separate Viewer with
-a different root directory just to make a file appear faster; wait for the
-existing server/catalog, rerun `serve:ensure` with the same project root
-directory, or report the startup/catalog failure.
+Return a URL on that same port whenever it can serve the requested absolute
+`?dir=`/`?file=`. Do not start a separate Viewer just to change directories;
+the same local server can scan a new absolute `?dir=`.
 
-Run from this skill directory with the project root directory explicitly set:
+Run from this skill directory:
 
 ```bash
-npm --prefix scripts/viewer run serve:ensure -- \
-  --root-dir /path/to/root \
-  --file path/to/model.step
+npm --prefix scripts/viewer run serve -- --host 127.0.0.1 --port 4178 --shutdown-after 12h
 ```
 
-Use only the URL printed by `serve:ensure`; do not assume a fixed port. By
-default, `serve:ensure` starts probing at port `4178` and scans the configured
-port range for a reusable server before binding a new port. It reuses a matching
-root directory when possible, and otherwise starts the packaged production
-server at the requested root directory. Pass `--port <number>` to start probing
-at a known port, or `--port-end <number>` to widen or cap the scan. In sandboxed
-agent environments, local
-binding/probing failures such as `EPERM` or `EACCES` can be expected; rerun the
-same command with the needed permission/escalation instead of choosing an
-arbitrary port or changing the root directory.
-
-Pass exactly one `--file` per `serve:ensure` invocation. For multiple requested files, run the command once per file and return each printed URL.
-
-If `serve:ensure` cannot be used, the packaged backend also accepts direct CLI
-flags. CLI flags take priority over matching environment variables:
+Use the printed base URL and append query parameters:
 
 ```bash
-npm --prefix scripts/viewer run serve -- \
-  --root-dir /path/to/root \
-  --port 4190
+http://127.0.0.1:4178/?dir=/absolute/root&file=/absolute/root/path/to/model.step
 ```
+
+If a non-Viewer process occupies the candidate port, rerun `serve` with the next
+available `--port <number>`. In sandboxed agent environments, local binding
+failures such as `EPERM` or `EACCES` can be expected; rerun the same command
+with the needed permission/escalation.
 
 ## Links
 
 - Return the printed Viewer link for each requested file.
-- If a server is already running for the same root directory, reuse its port and vary the `?file=` query only when that points at the requested file.
-- Per-file URLs use `?file=<root-relative-path>`; URL-encode each path segment while preserving `/` separators.
+- If a compatible Viewer server is already running, reuse its port and vary the
+  `?dir=`/`?file=` query only.
+- Every handoff link from this skill must include `?dir=<absolute-root>`. Do not
+  rely on the Viewer's session-storage `?dir=` fallback for returned links.
+- Include `file=<absolute-file>` for each requested file, one URL per file. For
+  directory-only review links, include `?dir=<absolute-root>` without `file=`.
 - Do not stop an existing Viewer server unless the user asks.
 - If Viewer startup fails, report the failure and continue with the owning skill's non-GUI validation or artifacts.
 

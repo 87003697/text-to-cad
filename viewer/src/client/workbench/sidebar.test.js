@@ -1971,10 +1971,10 @@ test("file query stays pending while a matched catalog entry is being activated"
   );
 });
 
-test("normalizeCadFileQueryParam keeps scan-relative file params unchanged", () => {
+test("normalizeCadFileQueryParam keeps scan-relative and absolute file params unchanged", () => {
   assert.equal(normalizeCadFileQueryParam("parts/sample_plate.step"), "parts/sample_plate.step");
   assert.equal(normalizeCadFileQueryParam("workspace/parts/sample_plate.step"), "workspace/parts/sample_plate.step");
-  assert.equal(normalizeCadFileQueryParam("/workspace/imports/widget.step/"), "workspace/imports/widget.step");
+  assert.equal(normalizeCadFileQueryParam("/workspace/imports/widget.step/"), "/workspace/imports/widget.step");
 });
 
 test("selectedEntryKeyFromUrl restores the selected canonical ref query param", () => {

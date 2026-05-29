@@ -12,8 +12,8 @@ Backend implementations expose this core shape:
 ```js
 {
   kind,
-  readCatalog({ rootDir }),
-  refreshCatalog({ rootDir }),
+  readCatalog({ rootDir, fileRef }),
+  refreshCatalog({ rootDir, fileRef }),
   resolveFileAssetAccess({ fileRef, asset, catalog }),
 }
 ```
@@ -30,7 +30,7 @@ production server:
 {
   resolveRoot(rootDir),
   openFileAsset({ fileRef, asset, catalog }),
-  assetPathForRequestPath(requestPath, { resolvedRoot }),
+  assetPathForFileRef(fileRef, { resolvedRoot }),
   entryForSourcePath(catalog, resolvedRoot, sourcePath),
   contentTypeForPath(filePath),
 }
@@ -45,12 +45,22 @@ local CAD generation.
 
 `src/server/localAssetBackend.mjs` is the development and local deployment
 implementation. `readCatalog()` and `refreshCatalog()` scan
-the configured local root, keep the catalog as an in-memory object for the
-current request, and return schema v4 entries. `dev:ensure` and `serve:ensure`
-set `VIEWER_LOCAL_ROOT_DIR` from the required `--root-dir` argument. Direct
-backend use should set `VIEWER_LOCAL_ROOT_DIR` to the full Viewer root
-directory. The local backend does not write `catalog.json` or any hidden catalog
-cache file.
+the absolute `?dir=` root for the current request, keep the catalog as an
+in-memory object, and return schema v4 entries whose `file` values are absolute
+paths. When no `?dir=` is active, an absolute `?file=` lets the backend scan
+only the requested file's directory so the Viewer can render that file without a
+directory catalog, sidebar, or breadcrumbs. The local backend does not write
+`catalog.json` or any hidden catalog cache file.
+
+Local filesystem deployments are intentionally URL-driven. `?dir=` must be an
+absolute path, and the client stores the last seen `?dir=` in tab-local
+`sessionStorage` so later navigation can omit it. `VIEWER_LOCAL_ROOT_DIR`,
+`VIEWER_LOCAL_WORKSPACE_ROOT`, and `--root-dir` have been removed and now fail
+at startup.
+
+Agent handoffs should include `?dir=<absolute-root>` in every returned Viewer
+link even though the browser can fall back to tab-local storage. Include
+`file=<absolute-file>` for each specific file link.
 
 The local backend serves asset bytes from the active root and writes regenerated
 artifacts back into it. It rejects path traversal and only serves or writes
@@ -67,10 +77,10 @@ Vite dev mounts this backend for:
 
 - `GET /__cad/server`
 - `GET /__cad/catalog`
+- `GET /__cad/asset?file=...`
 - `GET /__cad/download?file=...&asset=output|source`
 - `POST /__cad/reveal?file=...&asset=output|source`
 - `POST /__cad/step-artifact`
-- CAD asset file requests
 
 `download` streams the requested asset bytes and works for both local and hosted
 deployments. `reveal` opens the asset in Finder or the platform file manager and
@@ -82,10 +92,12 @@ The local production server uses the same backend:
 
 ```bash
 npm run build
-VIEWER_ASSET_BACKEND=local-fs \
-VIEWER_LOCAL_ROOT_DIR=/path/to/root \
 npm run serve
 ```
+
+Then open the printed server URL with
+`?dir=/absolute/root&file=/absolute/root/model.step`. Pass `--port <number>` to
+`npm run serve --` only when the default production port is already in use.
 
 ## Vercel Blob
 

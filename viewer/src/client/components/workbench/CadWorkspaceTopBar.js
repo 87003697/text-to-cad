@@ -772,7 +772,8 @@ export default function CadWorkspaceTopBar({
   onCopyFileAssetReference,
   fileSheetKind = "",
   fileSheetOpen = false,
-  onToggleFileSheet
+  onToggleFileSheet,
+  navigationAvailable = true
 }) {
   if (previewMode) {
     return null;
@@ -819,12 +820,15 @@ export default function CadWorkspaceTopBar({
     <header
       className="cad-glass-surface pointer-events-auto flex h-11 shrink-0 items-center gap-2 border-b border-sidebar-border px-2 text-sidebar-foreground"
     >
-      <SidebarTrigger
-        title="Toggle CAD Viewer"
-        aria-label="Toggle CAD Viewer"
-        className="shrink-0"
-      />
+      {navigationAvailable ? (
+        <SidebarTrigger
+          title="Toggle CAD Viewer"
+          aria-label="Toggle CAD Viewer"
+          className="shrink-0"
+        />
+      ) : null}
 
+      {navigationAvailable ? (
       <Breadcrumb className="min-w-0 flex-1 overflow-hidden">
         <ScrollArea
           className="h-8 min-w-0 whitespace-nowrap"
@@ -926,6 +930,9 @@ export default function CadWorkspaceTopBar({
           </BreadcrumbList>
         </ScrollArea>
       </Breadcrumb>
+      ) : (
+        <div className="min-w-0 flex-1" />
+      )}
 
       <div className="flex shrink-0 items-center gap-0.5">
         <VersionCopyButton />

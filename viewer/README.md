@@ -1,15 +1,16 @@
 # CAD Viewer
 
 CAD Viewer is a browser workbench for inspecting CAD files, robot-description
-files, and generated CAD artifacts from a local root directory or hosted catalog. It
-is built for engineering review loops where a developer or agent needs to open
-a model quickly, understand the source tree, copy stable `@cad[...]`
-references, and verify generated assets without leaving the browser.
+files, and generated CAD artifacts from a URL-selected local root directory or
+hosted catalog. It is built for engineering review loops where a developer or
+agent needs to open a model quickly, understand the source tree, copy stable
+`@cad[...]` references, and verify generated assets without leaving the
+browser.
 
 ## Features
 
-- Scans a configured root directory and mirrors its folder structure in the
-  sidebar.
+- Scans an absolute `?dir=` local root directory and mirrors its folder
+  structure in the sidebar.
 - Opens `.step`, `.stp`, `.stl`, `.3mf`, `.glb`, `.gcode`, `.dxf`, `.urdf`,
   `.srdf`, and `.sdf` entries.
 - Uses hidden STEP GLB/topology sidecars for assembly structure, face/edge
@@ -33,19 +34,34 @@ npm run build
 npm run serve
 ```
 
-For a reusable local development link, pass the required root directory:
+For local development, start the dev server and then pass absolute local paths
+in the URL:
 
 ```bash
-npm run dev:ensure -- \
-  --root-dir /path/to/root \
-  --file assemblies/robot-arm/robot-arm.step
+npm run dev -- --host 127.0.0.1
 ```
 
-Use the URL printed by `dev:ensure`; local tools should not assume a fixed port.
-Detached servers started by `dev:ensure` and `serve:ensure` shut down
-automatically after 12 hours. Pass `--shutdown-after <duration>` only when a
-different lifetime is needed, for example `--shutdown-after 30m` or
-`--shutdown-after 2h`; reused servers keep their existing shutdown timer.
+Open the URL printed by Vite and add absolute local paths, for example
+`?dir=/path/to/root&file=/path/to/root/assemblies/robot-arm/robot-arm.step`.
+Local tools should not assume a fixed port; use Vite's standard `--port`
+argument when a specific dev port is needed. Local dev and production servers
+stay running unless `VIEWER_SERVER_LIFETIME_MS` is set or production `serve` is
+started with `--shutdown-after <duration>`.
+
+The local filesystem backend also accepts `?dir=/absolute/path` directly in the
+Viewer URL. `?dir=` must be absolute because the browser consumer may not know
+where the server process was launched. Once seen, the active directory is stored
+in tab-local `sessionStorage`, so subsequent navigation can omit `?dir=` and
+continue using the same root. A URL may omit `?dir=` entirely and pass only an
+absolute `?file=/path/to/model.step`; in that mode the Viewer scans just enough
+to render that file and hides the file explorer sidebar and breadcrumbs. With
+neither `?dir=` nor `?file=`, the Viewer shows an empty prompt asking for one of
+those parameters.
+
+Agent handoff links from the cad-viewer skill should still include an absolute
+`?dir=` on every returned URL, plus an absolute `file=` value for each requested
+file. The session-storage fallback is for same-tab navigation, not for durable
+review links.
 
 This workbench keeps a generated `cadjs` package copy under `packages/cadjs` so
 the viewer can build from a standalone `viewer/` deploy root. Edit the source of
@@ -89,10 +105,8 @@ logic there instead of editing generated viewer-local package copies.
 
 ```bash
 npm run dev          # Vite dev server with local CAD API middleware
-npm run dev:ensure   # Reuse or start a matching detached dev server
 npm run build        # Production frontend build
 npm run serve        # Serve dist/ with the local or hosted backend
-npm run serve:ensure # Reuse or start a matching production server
 npm run test         # Discover and run all JS tests
 ```
 
@@ -110,13 +124,10 @@ Important environment variables:
 
 - `VIEWER_ASSET_BACKEND`: `local-fs` for local files or `vercel-blob` for hosted
   Blob assets.
-- `VIEWER_DEFAULT_FILE`: root-directory-relative file opened when `?file=` is absent.
-- `VIEWER_PORT`: preferred dev or production port, default `4178`.
-- `VIEWER_PORT_END`: optional end of the `dev:ensure` / `serve:ensure` port
-  search range.
+- `VIEWER_DEFAULT_FILE`: active-directory-relative file opened when `?file=`
+  is absent and a `?dir=` or stored active directory is available.
 - `VIEWER_SERVER_LIFETIME_MS`: optional server lifetime in milliseconds for
-  detached servers. `dev:ensure` and `serve:ensure` set this to 12 hours by
-  default, or to the value passed with `--shutdown-after`.
+  local dev and production servers. When unset, there is no automatic shutdown.
 - `VIEWER_GITHUB_URL`: top-bar GitHub link target.
 - `VIEWER_ALLOWED_HOSTS`: extra hostnames accepted by local Vite dev and
   production servers.
@@ -126,11 +137,9 @@ Important environment variables:
   the `cadpy` package.
 - `VIEWER_SERVER_REGISTRY`: optional local server registry JSON path.
 
-Local filesystem backend variables:
-
-- `VIEWER_LOCAL_ROOT_DIR`: local filesystem root path used by the backend.
-  `dev:ensure` and `serve:ensure` set this from the required `--root-dir`
-  argument.
+`VIEWER_LOCAL_ROOT_DIR` and `VIEWER_LOCAL_WORKSPACE_ROOT` are removed for local
+filesystem viewing. Setting either variable, or passing `--root-dir`, is a hard
+startup error; use an absolute `?dir=` URL parameter instead.
 
 Vercel Blob backend variables:
 
@@ -181,9 +190,10 @@ npm run build
 npm run runtime:check
 ```
 
-For UI behavior changes, also open a representative file with `npm run
-dev:ensure` and check that the app renders, selection works, and the browser
-console is clean.
+For UI behavior changes, also run `npm run dev -- --host 127.0.0.1`, open the
+printed URL with `?dir=/absolute/root&file=/absolute/root/path/to/model.step`,
+and check that the app renders, selection works, and the browser console is
+clean.
 
 When changing Viewer source that feeds the cad-viewer skill runtime, refresh the
 generated runtime from the repository root:

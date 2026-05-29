@@ -6,33 +6,49 @@ import {
   parseServerArgs,
 } from "./serverArgs.mjs";
 
-test("parseServerArgs accepts direct backend root and port flags", () => {
+test("parseServerArgs accepts direct backend port and host flags", () => {
   assert.deepEqual(
-    parseServerArgs(["--root-dir", "/tmp/models", "--port=4190", "--host", "0.0.0.0"]),
+    parseServerArgs(["--port=4190", "--host", "0.0.0.0"]),
     {
-      rootDir: "/tmp/models",
       port: 4190,
       host: "0.0.0.0",
+      shutdownAfterMs: null,
       help: false,
     }
   );
 });
 
-test("applyServerArgsToEnv gives CLI root and port priority over env", () => {
+test("parseServerArgs accepts an explicit shutdown duration", () => {
+  assert.deepEqual(
+    parseServerArgs(["--shutdown-after", "12h"]),
+    {
+      port: null,
+      host: "",
+      shutdownAfterMs: 12 * 60 * 60 * 1000,
+      help: false,
+    }
+  );
+  assert.throws(() => parseServerArgs(["--shutdown-after", "forever"]), /positive duration/);
+});
+
+test("parseServerArgs rejects removed root-dir flags", () => {
+  assert.throws(
+    () => parseServerArgs(["--root-dir", "/tmp/models"]),
+    /--root-dir has been removed/
+  );
+});
+
+test("applyServerArgsToEnv preserves env while keeping CLI port in parsed args", () => {
   const result = applyServerArgsToEnv({
-    argv: ["--root-dir", "models", "--port", "4190"],
+    argv: ["--port", "4190"],
     cwd: "/tmp/workspace",
     env: {
-      VIEWER_LOCAL_WORKSPACE_ROOT: "/tmp/old-workspace",
-      VIEWER_LOCAL_ROOT_DIR: "old-models",
-      VIEWER_PORT: "4178",
+      VIEWER_ASSET_BACKEND: "local-fs",
     },
   });
 
+  assert.equal(result.args.port, 4190);
   assert.equal(result.env.VIEWER_ASSET_BACKEND, "local-fs");
-  assert.equal(result.env.VIEWER_LOCAL_WORKSPACE_ROOT, "/tmp/workspace/models");
-  assert.equal(result.env.VIEWER_LOCAL_ROOT_DIR, "");
-  assert.equal(result.env.VIEWER_PORT, "4190");
 });
 
 test("parseServerArgs rejects invalid ports", () => {

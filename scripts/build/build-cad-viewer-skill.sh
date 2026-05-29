@@ -98,7 +98,6 @@ write_runtime_package_json() {
   "version": "0.1.10",
   "scripts": {
     "serve": "node backend/server.mjs",
-    "serve:ensure": "node scripts/ensure-serve.mjs",
     "start": "node backend/server.mjs",
     "moveit2:setup": "moveit2_server/setup.sh",
     "moveit2:check": "moveit2_server/check-moveit2-server.sh",
@@ -158,7 +157,7 @@ sync_dir() {
 build_runtime() {
   local target_dir="$1"
   rm -rf "$target_dir"
-  mkdir -p "$target_dir/backend" "$target_dir/scripts"
+  mkdir -p "$target_dir/backend"
 
   sync_dir "$VIEWER_DIR/dist" "$target_dir/dist"
 
@@ -179,14 +178,6 @@ build_runtime() {
       --legal-comments=none \
       --outfile="$target_dir/backend/server.mjs"
 
-    "$ESBUILD_BIN" "$VIEWER_DIR/scripts/ensure-serve.mjs" \
-      --bundle \
-      --format=esm \
-      --platform=node \
-      --target=node22 \
-      --main-fields=module,main \
-      --legal-comments=none \
-      --outfile="$target_dir/scripts/ensure-serve.mjs"
   )
 
   write_runtime_package_json "$target_dir"

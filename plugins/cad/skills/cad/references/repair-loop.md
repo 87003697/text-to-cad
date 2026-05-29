@@ -158,14 +158,15 @@ Likely causes:
 
 - Node/npm unavailable
 - CAD Viewer app not built or cannot start
-- root directory differs from assumed root
-- returned file path is not relative to the active root directory
+- active Viewer URL is missing the absolute `?dir=` for the project
+- returned link is missing an absolute `file=` path or points outside `?dir=`
 
 Fix:
 
 - hand the explicit artifact path to `$cad-viewer`
-- rerun `$cad-viewer` with the same `--root-dir` for the project
-- return the best documented link format
+- rerun `$cad-viewer` with the same absolute `?dir=` for the project and an
+  absolute `file=` path for each artifact
+- return one documented Viewer link per requested file
 - report startup failure if unresolved
 - rely on CLI facts/measurements for validation
 

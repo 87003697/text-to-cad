@@ -4,28 +4,77 @@ import { spawn } from "node:child_process";
 
 import {
   CAD_CATALOG_SCHEMA_VERSION,
-  DEFAULT_VIEWER_ROOT_DIR,
   catalogFileRefForPath,
   isServedCadAsset,
-  normalizeViewerRootDir,
   readStepSourceStatus,
-  repoRelativePath,
-  resolveViewerRoot,
   scanCadDirectory,
   scanCadFile,
   sortCatalogEntries,
 } from "cadjs/lib/cadDirectoryScanner.mjs";
 import {
   generationStatusDir as resolveGenerationStatusDir,
-  isGenerationStatusPath,
   readGenerationStatus,
 } from "cadjs/lib/generationStatus.mjs";
 import { pathIsInside } from "cadjs/lib/pathUtils.mjs";
 import { ensureStepTopologyArtifact } from "cadjs/lib/step/stepArtifactCompiler.mjs";
 import { readTextToCadStepMetadataFile } from "cadjs/lib/step/stepMetadata.mjs";
 
+function toPosixPath(value) {
+  return String(value || "").split(path.sep).join("/");
+}
+
+function absoluteFileRef(filePath) {
+  return toPosixPath(path.resolve(filePath));
+}
+
+function relativeFileRef(rootPath, filePath) {
+  return toPosixPath(path.relative(path.resolve(rootPath), path.resolve(filePath)));
+}
+
+function pathIsInsideOrEqual(childPath, parentPath) {
+  const relativePath = path.relative(path.resolve(parentPath), path.resolve(childPath));
+  return relativePath === "" || (
+    relativePath !== ".." &&
+    !relativePath.startsWith(`..${path.sep}`) &&
+    !path.isAbsolute(relativePath)
+  );
+}
+
 function normalizedFileRef(value) {
-  return String(value || "").trim().replace(/\\/g, "/").replace(/^\/+/, "");
+  const raw = String(value || "").trim().replace(/\\/g, "/");
+  if (!raw) {
+    return "";
+  }
+  if (raw.includes("\0")) {
+    throw new Error("File path contains an invalid null byte");
+  }
+  return path.isAbsolute(raw) ? absoluteFileRef(raw) : raw.replace(/^\/+/, "");
+}
+
+function normalizedAbsoluteDir(value) {
+  const raw = String(value || "").trim();
+  if (!raw) {
+    return "";
+  }
+  if (raw.includes("\0")) {
+    throw new Error("CAD Viewer directory contains an invalid null byte");
+  }
+  if (!path.isAbsolute(raw)) {
+    throw new Error("CAD Viewer ?dir= must be an absolute filesystem path");
+  }
+  return path.resolve(raw);
+}
+
+function requireDirectory(rootPath) {
+  let stats = null;
+  try {
+    stats = fs.statSync(rootPath);
+  } catch {
+    throw new Error(`CAD Viewer directory not found: ${rootPath}`);
+  }
+  if (!stats.isDirectory()) {
+    throw new Error(`CAD Viewer directory is not a directory: ${rootPath}`);
+  }
 }
 
 function catalogEntryForFileRef(catalog, fileRef) {
@@ -33,7 +82,10 @@ function catalogEntryForFileRef(catalog, fileRef) {
   if (!normalized || !Array.isArray(catalog?.entries)) {
     return null;
   }
-  return catalog.entries.find((entry) => normalizedFileRef(entry?.file) === normalized) || null;
+  return catalog.entries.find((entry) => (
+    normalizedFileRef(entry?.file) === normalized ||
+    normalizedFileRef(entry?.rootRelativeFile) === normalized
+  )) || null;
 }
 
 function ensurePathInsideRoot(filePath, resolvedRoot) {
@@ -187,49 +239,282 @@ function normalizeCatalog(catalog) {
   };
 }
 
+function queryValueFromAssetUrl(rawUrl, name) {
+  try {
+    return new URL(String(rawUrl || ""), "http://cad.local").searchParams.get(name) || "";
+  } catch {
+    return "";
+  }
+}
+
+function assetPathFromCatalogUrl(scanRepoRoot, rawUrl) {
+  const text = String(rawUrl || "").trim();
+  if (!text) {
+    return "";
+  }
+  try {
+    const url = new URL(text, "http://cad.local");
+    const explicitFile = url.searchParams.get("file");
+    if (explicitFile) {
+      return path.resolve(explicitFile);
+    }
+    return path.resolve(scanRepoRoot, decodeURIComponent(url.pathname).replace(/^\/+/, ""));
+  } catch {
+    return path.resolve(scanRepoRoot, text.replace(/[?#].*$/, "").replace(/^\/+/, ""));
+  }
+}
+
+function localAssetUrlForPath(filePath, rawUrl = "") {
+  const url = new URL("/__cad/asset", "http://cad.local");
+  url.searchParams.set("file", absoluteFileRef(filePath));
+  const version = queryValueFromAssetUrl(rawUrl, "v");
+  if (version) {
+    url.searchParams.set("v", version);
+  }
+  return `${url.pathname}${url.search}`;
+}
+
+function absolutePathFromCatalogValue(scanRepoRoot, value) {
+  const text = String(value || "").trim();
+  if (!text) {
+    return "";
+  }
+  if (path.isAbsolute(text)) {
+    return path.resolve(text);
+  }
+  return path.resolve(scanRepoRoot, text);
+}
+
+function absolutizeArtifact(artifact, scanRepoRoot) {
+  if (!artifact || typeof artifact !== "object") {
+    return artifact;
+  }
+  const next = { ...artifact };
+  for (const key of ["stepPath", "glbPath", "sourcePath", "cadPath"]) {
+    if (next[key]) {
+      next[key] = absoluteFileRef(absolutePathFromCatalogValue(scanRepoRoot, next[key]));
+    }
+  }
+  return next;
+}
+
+function absolutizeSource(source, scanRepoRoot) {
+  if (!source || typeof source !== "object") {
+    return source;
+  }
+  const next = { ...source };
+  for (const key of ["file", "path", "sourcePath"]) {
+    if (next[key]) {
+      next[key] = absoluteFileRef(absolutePathFromCatalogValue(scanRepoRoot, next[key]));
+    }
+  }
+  return next;
+}
+
+function absolutizeSourceStatus(sourceStatus, scanRepoRoot) {
+  if (!sourceStatus || typeof sourceStatus !== "object") {
+    return sourceStatus;
+  }
+  const next = { ...sourceStatus };
+  for (const key of ["sourcePath", "stepPath", "glbPath"]) {
+    if (next[key]) {
+      next[key] = absoluteFileRef(absolutePathFromCatalogValue(scanRepoRoot, next[key]));
+    }
+  }
+  return next;
+}
+
+function absolutizeCatalogEntry(entry, { rootPath, scanRepoRoot }) {
+  if (!entry || typeof entry !== "object") {
+    return entry;
+  }
+  const outputPath = path.resolve(rootPath, String(entry.file || ""));
+  const next = {
+    ...entry,
+    file: absoluteFileRef(outputPath),
+    rootRelativeFile: relativeFileRef(rootPath, outputPath),
+  };
+
+  if (entry.url) {
+    const assetPath = assetPathFromCatalogUrl(scanRepoRoot, entry.url);
+    next.url = localAssetUrlForPath(assetPath, entry.url);
+    next.assetFile = absoluteFileRef(assetPath);
+  }
+  if (entry.moduleUrl) {
+    const modulePath = assetPathFromCatalogUrl(scanRepoRoot, entry.moduleUrl);
+    next.moduleUrl = localAssetUrlForPath(modulePath, entry.moduleUrl);
+    next.moduleFile = absoluteFileRef(modulePath);
+  }
+  if (entry.source) {
+    next.source = absolutizeSource(entry.source, scanRepoRoot);
+  }
+  if (entry.sourceStatus) {
+    next.sourceStatus = absolutizeSourceStatus(entry.sourceStatus, scanRepoRoot);
+  }
+  if (entry.artifact) {
+    next.artifact = absolutizeArtifact(entry.artifact, scanRepoRoot);
+  }
+  if (entry.relations && typeof entry.relations === "object") {
+    next.relations = { ...entry.relations };
+    for (const [key, relation] of Object.entries(entry.relations)) {
+      if (!relation || typeof relation !== "object") {
+        continue;
+      }
+      const relationFilePath = path.resolve(rootPath, String(relation.file || ""));
+      const nextRelation = {
+        ...relation,
+        file: absoluteFileRef(relationFilePath),
+        rootRelativeFile: relativeFileRef(rootPath, relationFilePath),
+      };
+      if (relation.url) {
+        const relationAssetPath = assetPathFromCatalogUrl(scanRepoRoot, relation.url);
+        nextRelation.url = localAssetUrlForPath(relationAssetPath, relation.url);
+        nextRelation.assetFile = absoluteFileRef(relationAssetPath);
+      }
+      next.relations[key] = nextRelation;
+    }
+  }
+  return next;
+}
+
+function absolutizeCatalog(catalog, context) {
+  return normalizeCatalog({
+    ...catalog,
+    entries: (Array.isArray(catalog?.entries) ? catalog.entries : [])
+      .map((entry) => absolutizeCatalogEntry(entry, context))
+      .filter(Boolean),
+  });
+}
+
+function absolutizeGenerationStatus(status, rootPath) {
+  const files = {};
+  for (const [file, value] of Object.entries(status?.files || {})) {
+    const absolute = absoluteFileRef(path.resolve(rootPath, String(file || "")));
+    files[absolute] = {
+      ...value,
+      file: absolute,
+      rootRelativeFile: relativeFileRef(rootPath, absolute),
+    };
+  }
+  return {
+    schemaVersion: 1,
+    runs: (Array.isArray(status?.runs) ? status.runs : []).map((run) => ({
+      ...run,
+      files: (Array.isArray(run?.files) ? run.files : [])
+        .map((file) => absoluteFileRef(path.resolve(rootPath, String(file || ""))))
+        .filter(Boolean),
+    })),
+    files,
+  };
+}
+
 export function createLocalAssetBackend({
-  workspaceRoot,
-  rootDir = DEFAULT_VIEWER_ROOT_DIR,
+  workspaceRoot = process.cwd(),
+  rootDir = "",
   defaultFile = "",
   githubUrl = "",
   stepArtifactGenerator = ensureStepTopologyArtifact,
   sourceFileOpener = defaultSourceFileOpener,
 } = {}) {
-  if (!workspaceRoot) {
-    throw new Error("createLocalAssetBackend requires workspaceRoot");
-  }
-  const repoRoot = path.resolve(workspaceRoot);
-  const defaultRootDir = normalizeViewerRootDir(rootDir);
+  const baseWorkspaceRoot = path.resolve(workspaceRoot || process.cwd());
+  const defaultRootDir = rootDir
+    ? absoluteFileRef(path.isAbsolute(String(rootDir)) ? rootDir : path.resolve(baseWorkspaceRoot, String(rootDir)))
+    : "";
   const catalogCache = new Map();
 
-  function resolveRoot(nextRootDir = defaultRootDir) {
-    return resolveViewerRoot(repoRoot, nextRootDir);
-  }
-
-  function readCatalog({ rootDir: nextRootDir = defaultRootDir } = {}) {
-    const normalizedDir = normalizeViewerRootDir(nextRootDir);
-    if (!catalogCache.has(normalizedDir)) {
-      return refreshCatalog({ rootDir: normalizedDir });
+  function resolveRoot(rootDir = defaultRootDir) {
+    const rootPath = normalizedAbsoluteDir(rootDir || defaultRootDir);
+    if (!rootPath) {
+      throw new Error("CAD Viewer local filesystem requests must include an absolute ?dir= path");
     }
-    return catalogCache.get(normalizedDir);
+    requireDirectory(rootPath);
+    return {
+      dir: absoluteFileRef(rootPath),
+      rootPath,
+      rootName: path.basename(rootPath),
+    };
   }
 
-  function readCatalogSafe({ rootDir: nextRootDir = defaultRootDir } = {}) {
+  function resolveRootForFile(fileRef = "") {
+    const normalized = normalizedFileRef(fileRef);
+    if (!normalized || !path.isAbsolute(normalized)) {
+      throw new Error("CAD Viewer requests without ?dir= must include an absolute ?file= path");
+    }
+    const rootPath = path.dirname(path.resolve(normalized));
+    return {
+      dir: "",
+      rootPath,
+      rootName: path.basename(rootPath),
+    };
+  }
+
+  function resolveRequestRoot({ rootDir = defaultRootDir, fileRef = "" } = {}) {
+    return (rootDir || defaultRootDir) ? resolveRoot(rootDir || defaultRootDir) : resolveRootForFile(fileRef);
+  }
+
+  function scanContextForRoot(resolvedRoot) {
+    const rootPath = path.resolve(resolvedRoot.rootPath);
+    const scanRepoRoot = pathIsInsideOrEqual(rootPath, baseWorkspaceRoot)
+      ? baseWorkspaceRoot
+      : rootPath;
+    const scanRootDir = scanRepoRoot === rootPath
+      ? ""
+      : toPosixPath(path.relative(scanRepoRoot, rootPath));
+    return {
+      rootPath,
+      scanRepoRoot,
+      scanRootDir,
+    };
+  }
+
+  function readCatalog({ rootDir: nextRootDir = defaultRootDir, fileRef = "" } = {}) {
+    const normalizedDir = nextRootDir ? absoluteFileRef(normalizedAbsoluteDir(nextRootDir)) : "";
+    const normalizedFile = normalizedFileRef(fileRef);
+    const cacheKey = normalizedDir
+      ? `dir:${normalizedDir}`
+      : normalizedFile
+        ? `file:${normalizedFile}`
+        : "empty";
+    if (!catalogCache.has(cacheKey)) {
+      return refreshCatalog({ rootDir: normalizedDir, fileRef: normalizedFile });
+    }
+    return catalogCache.get(cacheKey);
+  }
+
+  function readCatalogSafe({ rootDir: nextRootDir = defaultRootDir, fileRef = "" } = {}) {
     try {
-      return readCatalog({ rootDir: nextRootDir });
+      return readCatalog({ rootDir: nextRootDir, fileRef });
     } catch {
       return emptyCatalog();
     }
   }
 
-  function refreshCatalog({ rootDir: nextRootDir = defaultRootDir } = {}) {
-    const normalizedDir = normalizeViewerRootDir(nextRootDir);
-    const catalog = normalizeCatalog(scanCadDirectory({
-      repoRoot,
-      rootDir: normalizedDir,
-      includeArtifactStatus: false,
-    }));
-    catalogCache.set(normalizedDir, catalog);
+  function refreshCatalog({ rootDir: nextRootDir = defaultRootDir, fileRef = "" } = {}) {
+    if (!nextRootDir && !fileRef) {
+      catalogCache.set("empty", emptyCatalog());
+      return catalogCache.get("empty");
+    }
+
+    const resolvedRoot = nextRootDir ? resolveRoot(nextRootDir) : resolveRootForFile(fileRef);
+    const context = scanContextForRoot(resolvedRoot);
+    const rawCatalog = nextRootDir
+      ? scanCadDirectory({
+          repoRoot: context.scanRepoRoot,
+          rootDir: context.scanRootDir,
+          includeArtifactStatus: false,
+        })
+      : normalizeCatalog({
+          entries: [
+            scanCadFile({
+              repoRoot: context.scanRepoRoot,
+              rootDir: context.scanRootDir,
+              filePath: path.resolve(normalizedFileRef(fileRef)),
+              includeArtifactStatus: false,
+            }),
+          ].filter(Boolean),
+        });
+    const catalog = absolutizeCatalog(rawCatalog, context);
+    catalogCache.set(nextRootDir ? `dir:${resolvedRoot.dir}` : `file:${normalizedFileRef(fileRef)}`, catalog);
     return catalog;
   }
 
@@ -250,29 +535,32 @@ export function createLocalAssetBackend({
   }
 
   function refreshCatalogEntryForFile({ rootDir: nextRootDir = defaultRootDir, filePath } = {}) {
-    const normalizedDir = normalizeViewerRootDir(nextRootDir);
-    const currentCatalog = readCatalog({ rootDir: normalizedDir });
-    const nextEntry = scanCadFile({
-      repoRoot,
-      rootDir: normalizedDir,
+    const resolvedRoot = resolveRoot(nextRootDir);
+    const context = scanContextForRoot(resolvedRoot);
+    const currentCatalog = readCatalog({ rootDir: resolvedRoot.dir });
+    const rawEntry = scanCadFile({
+      repoRoot: context.scanRepoRoot,
+      rootDir: context.scanRootDir,
       filePath,
       includeArtifactStatus: false,
     });
-    const fileRef = nextEntry?.file || catalogFileRefForPath({ repoRoot, rootDir: normalizedDir, filePath });
-    if (!fileRef) {
-      return currentCatalog;
-    }
+    const nextEntry = rawEntry ? absolutizeCatalogEntry(rawEntry, context) : null;
+    const rawFileRef = rawEntry?.file || catalogFileRefForPath({
+      repoRoot: context.scanRepoRoot,
+      rootDir: context.scanRootDir,
+      filePath,
+    });
+    const fileRef = nextEntry?.file || (rawFileRef ? absoluteFileRef(path.resolve(resolvedRoot.rootPath, rawFileRef)) : absoluteFileRef(filePath));
     const nextCatalog = replaceCatalogEntry(currentCatalog, fileRef, nextEntry);
-    catalogCache.set(normalizedDir, nextCatalog);
+    catalogCache.set(`dir:${resolvedRoot.dir}`, nextCatalog);
     return nextCatalog;
   }
 
   function refreshCatalogForPythonSource({ rootDir: nextRootDir = defaultRootDir, filePath } = {}) {
-    const normalizedDir = normalizeViewerRootDir(nextRootDir);
-    const resolvedRoot = resolveRoot(normalizedDir);
+    const resolvedRoot = resolveRoot(nextRootDir);
     const resolvedFilePath = path.resolve(filePath);
-    const sourcePath = repoRelativePath(repoRoot, resolvedFilePath);
-    const currentCatalog = readCatalog({ rootDir: normalizedDir });
+    const sourcePath = absoluteFileRef(resolvedFilePath);
+    const currentCatalog = readCatalog({ rootDir: resolvedRoot.dir });
     const matchingFileRefs = new Set(
       currentCatalog.entries
         .filter((entry) => normalizedFileRef(entry?.source?.sourcePath || entry?.source?.file) === sourcePath)
@@ -281,36 +569,40 @@ export function createLocalAssetBackend({
     );
     const sameStemStepPath = path.join(path.dirname(resolvedFilePath), `${path.basename(resolvedFilePath, ".py")}.step`);
     if (sameStemStepPath === resolvedRoot.rootPath || pathIsInside(sameStemStepPath, resolvedRoot.rootPath)) {
-      const sameStemEntry = scanCadFile({
-        repoRoot,
-        rootDir: normalizedDir,
+      const context = scanContextForRoot(resolvedRoot);
+      const rawSameStemEntry = scanCadFile({
+        repoRoot: context.scanRepoRoot,
+        rootDir: context.scanRootDir,
         filePath: sameStemStepPath,
         includeArtifactStatus: false,
       });
-      const sameStemFileRef = sameStemEntry?.file || catalogFileRefForPath({ repoRoot, rootDir: normalizedDir, filePath: sameStemStepPath });
+      const sameStemEntry = rawSameStemEntry ? absolutizeCatalogEntry(rawSameStemEntry, context) : null;
+      const sameStemFileRef = sameStemEntry?.file || absoluteFileRef(sameStemStepPath);
       if (sameStemEntry || catalogEntryForFileRef(currentCatalog, sameStemFileRef)) {
         matchingFileRefs.add(sameStemFileRef);
       }
     }
     if (!matchingFileRefs.size) {
-      return refreshCatalog({ rootDir: normalizedDir });
+      return refreshCatalog({ rootDir: resolvedRoot.dir });
     }
 
     let nextCatalog = currentCatalog;
+    const context = scanContextForRoot(resolvedRoot);
     for (const fileRef of matchingFileRefs) {
-      const outputPath = path.resolve(resolvedRoot.rootPath, fileRef);
+      const outputPath = path.resolve(fileRef);
+      const rawEntry = scanCadFile({
+        repoRoot: context.scanRepoRoot,
+        rootDir: context.scanRootDir,
+        filePath: outputPath,
+        includeArtifactStatus: false,
+      });
       nextCatalog = replaceCatalogEntry(
         nextCatalog,
         fileRef,
-        scanCadFile({
-          repoRoot,
-          rootDir: normalizedDir,
-          filePath: outputPath,
-          includeArtifactStatus: false,
-        })
+        rawEntry ? absolutizeCatalogEntry(rawEntry, context) : null
       );
     }
-    catalogCache.set(normalizedDir, nextCatalog);
+    catalogCache.set(`dir:${resolvedRoot.dir}`, nextCatalog);
     return nextCatalog;
   }
 
@@ -322,22 +614,29 @@ export function createLocalAssetBackend({
     return refreshCatalogEntryForFile({ rootDir: nextRootDir, filePath });
   }
 
-  function resolveStepSource(fileRef, { resolvedRoot = resolveRoot(), catalog = null } = {}) {
-    const relativeFileRef = normalizedFileRef(fileRef);
-    if (!relativeFileRef) {
+  function filePathFromRef(fileRef, resolvedRoot) {
+    const normalized = normalizedFileRef(fileRef);
+    if (!normalized) {
+      return "";
+    }
+    return path.isAbsolute(normalized)
+      ? path.resolve(normalized)
+      : path.resolve(resolvedRoot.rootPath, normalized);
+  }
+
+  function resolveStepSource(fileRef, { resolvedRoot = resolveRequestRoot({ fileRef }), catalog = null } = {}) {
+    const normalizedRef = normalizedFileRef(fileRef);
+    if (!normalizedRef) {
       throw new Error("Missing STEP file");
     }
 
-    const rawRef = String(fileRef || "").trim().replace(/\\/g, "/");
-    const candidates = path.isAbsolute(rawRef)
+    const candidates = path.isAbsolute(normalizedRef)
       ? [
-          path.resolve(rawRef),
-          path.resolve(resolvedRoot.rootPath, relativeFileRef),
-          path.resolve(repoRoot, relativeFileRef),
+          path.resolve(normalizedRef),
+          path.resolve(resolvedRoot.rootPath, normalizedRef.replace(/^\/+/, "")),
         ]
       : [
-          path.resolve(resolvedRoot.rootPath, relativeFileRef),
-          path.resolve(repoRoot, relativeFileRef),
+          path.resolve(resolvedRoot.rootPath, normalizedRef),
         ];
 
     for (const candidatePath of [...new Set(candidates)]) {
@@ -348,7 +647,7 @@ export function createLocalAssetBackend({
         const extension = path.extname(candidatePath).toLowerCase();
         if (extension === ".py") {
           if (!fileHasGenStep(candidatePath)) {
-            throw new Error(`Python generator is not a gen_step() source: ${relativeFileRef}`);
+            throw new Error(`Python generator is not a gen_step() source: ${normalizedRef}`);
           }
           return {
             stepPath: path.join(path.dirname(candidatePath), `${path.basename(candidatePath, extension)}.step`),
@@ -377,34 +676,21 @@ export function createLocalAssetBackend({
       if ((extension === ".step" || extension === ".stp") && generatorPath) {
         return { stepPath: candidatePath, sourcePath: generatorPath, skipStepWrite: true };
       }
-      throw new Error(`STEP file not found: ${relativeFileRef}`);
+      throw new Error(`STEP file not found: ${normalizedRef}`);
     }
     throw new Error("Requested STEP file is outside the active CAD Viewer root");
   }
 
-  function resolveStepSourceStatus(fileRef, { resolvedRoot = resolveRoot(), catalog = null } = {}) {
+  function resolveStepSourceStatus(fileRef, { resolvedRoot = resolveRequestRoot({ fileRef }), catalog = null } = {}) {
     try {
       return resolveStepSource(fileRef, { resolvedRoot, catalog });
     } catch (error) {
-      const relativeFileRef = normalizedFileRef(fileRef);
-      if (!relativeFileRef) {
+      const normalizedRef = normalizedFileRef(fileRef);
+      if (!normalizedRef) {
         throw error;
       }
-      const rawRef = String(fileRef || "").trim().replace(/\\/g, "/");
-      const candidates = path.isAbsolute(rawRef)
-        ? [
-            path.resolve(rawRef),
-            path.resolve(resolvedRoot.rootPath, relativeFileRef),
-            path.resolve(repoRoot, relativeFileRef),
-          ]
-        : [
-            path.resolve(resolvedRoot.rootPath, relativeFileRef),
-            path.resolve(repoRoot, relativeFileRef),
-          ];
-      const candidatePath = candidates.find((candidate) => (
-        candidate === resolvedRoot.rootPath || pathIsInside(candidate, resolvedRoot.rootPath)
-      ));
-      if (!candidatePath) {
+      const candidatePath = filePathFromRef(normalizedRef, resolvedRoot);
+      if (!(candidatePath === resolvedRoot.rootPath || pathIsInside(candidatePath, resolvedRoot.rootPath))) {
         throw error;
       }
       const extension = path.extname(candidatePath).toLowerCase();
@@ -421,27 +707,27 @@ export function createLocalAssetBackend({
   }
 
   function requireCatalogEntryForFileRef(fileRef, {
-    resolvedRoot = resolveRoot(),
+    resolvedRoot = resolveRequestRoot({ fileRef }),
     rootDir: nextRootDir = defaultRootDir,
     catalog = null,
   } = {}) {
-    const relativeFileRef = normalizedFileRef(fileRef);
-    if (!relativeFileRef) {
+    const normalizedRef = normalizedFileRef(fileRef);
+    if (!normalizedRef) {
       throw new Error("Missing file");
     }
 
-    const currentCatalog = catalog || readCatalogSafe({ rootDir: nextRootDir });
-    const entry = catalogEntryForFileRef(currentCatalog, relativeFileRef);
+    const currentCatalog = catalog || readCatalogSafe({ rootDir: nextRootDir, fileRef: normalizedRef });
+    const entry = catalogEntryForFileRef(currentCatalog, normalizedRef);
     if (!entry) {
-      throw new Error(`CAD catalog entry not found: ${relativeFileRef}`);
+      throw new Error(`CAD catalog entry not found: ${normalizedRef}`);
     }
-    return { entry, relativeFileRef, currentCatalog, resolvedRoot };
+    return { entry, relativeFileRef: normalizedRef, currentCatalog, resolvedRoot };
   }
 
   function resolveOutputFilePath(fileRef, options = {}) {
     const { entry, relativeFileRef, resolvedRoot } = requireCatalogEntryForFileRef(fileRef, options);
     const outputRef = normalizedFileRef(entry?.file || relativeFileRef);
-    const outputPath = path.resolve(resolvedRoot.rootPath, outputRef);
+    const outputPath = filePathFromRef(outputRef, resolvedRoot);
     ensurePathInsideRoot(outputPath, resolvedRoot);
     if (!fs.existsSync(outputPath) || !fs.statSync(outputPath).isFile()) {
       throw new Error(`Output file not found: ${outputRef || relativeFileRef}`);
@@ -449,33 +735,26 @@ export function createLocalAssetBackend({
     return outputPath;
   }
 
-  function artifactFileRefFromEntry(entry, rootDir) {
+  function artifactFileRefFromEntry(entry) {
+    const explicitAssetFile = normalizedFileRef(entry?.assetFile || entry?.asset?.file || entry?.artifactFile || entry?.artifact?.file);
+    if (explicitAssetFile) {
+      return explicitAssetFile;
+    }
     const rawUrl = String(entry?.url || "").trim();
     if (!rawUrl) {
       throw new Error("Artifact asset is not available for this file");
     }
-
-    let artifactRef = "";
-    try {
-      artifactRef = normalizedFileRef(new URL(rawUrl, "http://cad.local").pathname);
-    } catch {
-      artifactRef = normalizedFileRef(rawUrl.split("?")[0]);
-    }
-
-    const normalizedRootDir = normalizedFileRef(rootDir);
-    if (normalizedRootDir && artifactRef.startsWith(`${normalizedRootDir}/`)) {
-      artifactRef = artifactRef.slice(normalizedRootDir.length + 1);
-    }
-    return artifactRef;
+    const assetPath = assetPathFromCatalogUrl("/", rawUrl);
+    return absoluteFileRef(assetPath);
   }
 
   function resolveArtifactFilePath(fileRef, options = {}) {
     const { entry, relativeFileRef, resolvedRoot } = requireCatalogEntryForFileRef(fileRef, options);
-    const artifactRef = artifactFileRefFromEntry(entry, options.rootDir || defaultRootDir);
+    const artifactRef = artifactFileRefFromEntry(entry);
     if (!artifactRef) {
       throw new Error(`Artifact asset is not available for ${relativeFileRef}`);
     }
-    const artifactPath = path.resolve(resolvedRoot.rootPath, artifactRef);
+    const artifactPath = filePathFromRef(artifactRef, resolvedRoot);
     ensurePathInsideRoot(artifactPath, resolvedRoot);
     if (!fs.existsSync(artifactPath) || !fs.statSync(artifactPath).isFile()) {
       throw new Error(`Artifact file not found: ${artifactRef}`);
@@ -487,11 +766,11 @@ export function createLocalAssetBackend({
     const { entry, relativeFileRef, currentCatalog, resolvedRoot } = requireCatalogEntryForFileRef(fileRef, options);
     const explicitSourceRef = normalizedFileRef(entry?.source?.file || entry?.sourceFile || "");
     if (explicitSourceRef) {
-      const candidatePaths = [
-        path.resolve(resolvedRoot.rootPath, explicitSourceRef),
-        path.resolve(repoRoot, explicitSourceRef),
+      const sourceCandidates = [
+        filePathFromRef(explicitSourceRef, resolvedRoot),
+        path.resolve(baseWorkspaceRoot, explicitSourceRef),
       ];
-      for (const sourcePath of [...new Set(candidatePaths)]) {
+      for (const sourcePath of [...new Set(sourceCandidates)]) {
         if (
           (sourcePath === resolvedRoot.rootPath || pathIsInside(sourcePath, resolvedRoot.rootPath)) &&
           fs.existsSync(sourcePath) &&
@@ -517,7 +796,7 @@ export function createLocalAssetBackend({
   function resolveFileAssetAccess({
     fileRef,
     asset = "output",
-    resolvedRoot = resolveRoot(),
+    resolvedRoot = resolveRequestRoot({ fileRef }),
     rootDir: nextRootDir = defaultRootDir,
     catalog = null,
   } = {}) {
@@ -527,10 +806,10 @@ export function createLocalAssetBackend({
       : assetKind === "artifact"
         ? resolveArtifactFilePath(fileRef, { resolvedRoot, rootDir: nextRootDir, catalog })
         : resolveOutputFilePath(fileRef, { resolvedRoot, rootDir: nextRootDir, catalog });
-    const file = path.relative(resolvedRoot.rootPath, filePath).split(path.sep).join("/");
     return {
       asset: assetKind,
-      file,
+      file: absoluteFileRef(filePath),
+      rootRelativeFile: relativeFileRef(resolvedRoot.rootPath, filePath),
       path: filePath,
       filename: path.basename(filePath),
       contentType: contentTypeForPath(filePath),
@@ -556,11 +835,11 @@ export function createLocalAssetBackend({
     return openFileAsset({ ...request, asset: "source" });
   }
 
-  async function generateStepArtifact({ fileRef, force = false, resolvedRoot = resolveRoot(), catalog = null } = {}) {
+  async function generateStepArtifact({ fileRef, force = false, resolvedRoot = resolveRequestRoot({ fileRef }), catalog = null } = {}) {
     const { stepPath, sourcePath, skipStepWrite } = resolveStepSource(fileRef, { resolvedRoot, catalog });
-    const relativeFileRef = normalizedFileRef(fileRef);
-    const currentCatalog = catalog || readCatalogSafe();
-    const entry = catalogEntryForFileRef(currentCatalog, relativeFileRef);
+    const normalizedRef = normalizedFileRef(fileRef);
+    const currentCatalog = catalog || readCatalogSafe({ rootDir: resolvedRoot.dir, fileRef: normalizedRef });
+    const entry = catalogEntryForFileRef(currentCatalog, normalizedRef);
     if (
       sourcePath ||
       entryIsPythonBackedStep(entry) ||
@@ -570,8 +849,9 @@ export function createLocalAssetBackend({
         "CAD Viewer only regenerates GLB artifacts for imported STEP files. Regenerate Python-backed STEP files with their generator script."
       );
     }
+    const context = scanContextForRoot(resolvedRoot);
     const result = await stepArtifactGenerator({
-      repoRoot,
+      repoRoot: context.scanRepoRoot,
       stepPath,
       sourcePath,
       force,
@@ -586,40 +866,74 @@ export function createLocalAssetBackend({
     };
   }
 
-  function readStepSourceStatusForFile({ fileRef, resolvedRoot = resolveRoot(), catalog = null } = {}) {
+  function readStepSourceStatusForFile({ fileRef, resolvedRoot = resolveRequestRoot({ fileRef }), catalog = null } = {}) {
     const { stepPath, sourcePath } = resolveStepSourceStatus(fileRef, { resolvedRoot, catalog });
-    return readStepSourceStatus({
-      repoRoot,
+    const context = scanContextForRoot(resolvedRoot);
+    const status = readStepSourceStatus({
+      repoRoot: context.scanRepoRoot,
       stepPath,
       pythonSourcePath: sourcePath,
     });
+    return absolutizeSourceStatus({
+      ...status,
+      ...(status?.artifact ? { artifact: absolutizeArtifact(status.artifact, context.scanRepoRoot) } : {}),
+    }, context.scanRepoRoot);
   }
 
   function readGeneratorStatus({ rootDir: nextRootDir = defaultRootDir } = {}) {
-    return readGenerationStatus({
-      repoRoot,
-      rootDir: nextRootDir,
-    });
+    if (!nextRootDir) {
+      return {
+        schemaVersion: 1,
+        runs: [],
+        files: {},
+      };
+    }
+    const resolvedRoot = resolveRoot(nextRootDir);
+    const context = scanContextForRoot(resolvedRoot);
+    return absolutizeGenerationStatus(readGenerationStatus({
+      repoRoot: context.scanRepoRoot,
+      rootDir: context.scanRootDir,
+    }), resolvedRoot.rootPath);
   }
 
-  function generatorStatusDir() {
-    return resolveGenerationStatusDir(repoRoot, defaultRootDir);
+  function generationStatusDir(rootDir = defaultRootDir) {
+    const resolvedRoot = resolveRoot(rootDir);
+    const context = scanContextForRoot(resolvedRoot);
+    return resolveGenerationStatusDir(context.scanRepoRoot, context.scanRootDir);
+  }
+
+  function isGenerationStatusPath(filePath, rootDir = defaultRootDir) {
+    if (!rootDir) {
+      return false;
+    }
+    const resolvedRoot = resolveRoot(rootDir);
+    const resolvedPath = path.resolve(filePath);
+    const name = path.basename(resolvedPath);
+    return (
+      (resolvedPath === resolvedRoot.rootPath || pathIsInside(resolvedPath, resolvedRoot.rootPath)) &&
+      name.startsWith(".") &&
+      name.endsWith(".generation.lock.json")
+    );
   }
 
   function entryForSourcePath(catalog, resolvedRoot, sourcePath) {
-    const fileRef = path.relative(resolvedRoot.rootPath, sourcePath).split(path.sep).join("/");
+    const fileRef = absoluteFileRef(sourcePath);
     return Array.isArray(catalog?.entries)
-      ? catalog.entries.find((entry) => String(entry?.file || "") === fileRef) || null
+      ? catalog.entries.find((entry) => normalizedFileRef(entry?.file) === fileRef) || null
       : null;
   }
 
-  function assetPathForRequestPath(requestPath, { resolvedRoot = resolveRoot() } = {}) {
-    const decodedPath = decodeURIComponent(String(requestPath || "").replace(/\?.*$/, ""));
-    const candidatePath = path.resolve(repoRoot, decodedPath.replace(/^\/+/, ""));
+  function assetPathForFileRef(fileRef, { resolvedRoot = null, rootDir = "" } = {}) {
+    const normalizedRef = normalizedFileRef(fileRef);
+    if (!normalizedRef || !path.isAbsolute(normalizedRef)) {
+      return null;
+    }
+    const candidatePath = path.resolve(normalizedRef);
     if (!isServedCadAsset(candidatePath)) {
       return null;
     }
-    if (!(candidatePath === resolvedRoot.rootPath || pathIsInside(candidatePath, resolvedRoot.rootPath))) {
+    const activeRoot = resolvedRoot || (rootDir ? resolveRoot(rootDir) : null);
+    if (activeRoot && !(candidatePath === activeRoot.rootPath || pathIsInside(candidatePath, activeRoot.rootPath))) {
       const error = new Error("Forbidden");
       error.statusCode = 403;
       throw error;
@@ -627,17 +941,17 @@ export function createLocalAssetBackend({
     return candidatePath;
   }
 
-  async function writeAsset({ fileRef, body, resolvedRoot = resolveRoot() } = {}) {
-    const relativeFileRef = normalizedFileRef(fileRef);
-    if (!relativeFileRef) {
+  async function writeAsset({ fileRef, body, resolvedRoot = resolveRequestRoot({ fileRef }) } = {}) {
+    const normalizedRef = normalizedFileRef(fileRef);
+    if (!normalizedRef) {
       throw new Error("Missing asset path");
     }
-    const filePath = path.resolve(resolvedRoot.rootPath, relativeFileRef);
+    const filePath = filePathFromRef(normalizedRef, resolvedRoot);
     if (!(filePath === resolvedRoot.rootPath || pathIsInside(filePath, resolvedRoot.rootPath))) {
       throw new Error("Asset writes must stay inside the active CAD Viewer root");
     }
     if (!isServedCadAsset(filePath)) {
-      throw new Error(`Unsupported CAD Viewer asset write: ${relativeFileRef}`);
+      throw new Error(`Unsupported CAD Viewer asset write: ${normalizedRef}`);
     }
     const bytes = Buffer.isBuffer(body) ? body : Buffer.from(body || "");
     fs.mkdirSync(path.dirname(filePath), { recursive: true });
@@ -652,9 +966,12 @@ export function createLocalAssetBackend({
   return {
     kind: "local-fs",
     canGenerateStepArtifacts: true,
-    repoRoot,
-    rootDir: defaultRootDir,
+    repoRoot: baseWorkspaceRoot,
+    rootDir: "",
+    defaultFile,
+    githubUrl,
     resolveRoot,
+    resolveRequestRoot,
     readCatalog,
     readCatalogSafe,
     refreshCatalog,
@@ -666,11 +983,11 @@ export function createLocalAssetBackend({
     resolveSourceFileAccess,
     openSourceFile,
     readGenerationStatus: readGeneratorStatus,
-    generationStatusDir: generatorStatusDir,
-    isGenerationStatusPath: (filePath) => isGenerationStatusPath(filePath, repoRoot),
+    generationStatusDir,
+    isGenerationStatusPath,
     generateStepArtifact,
     entryForSourcePath,
-    assetPathForRequestPath,
+    assetPathForFileRef,
     writeAsset,
     contentTypeForPath,
   };

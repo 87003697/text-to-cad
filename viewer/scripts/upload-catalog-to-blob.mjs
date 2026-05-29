@@ -42,12 +42,11 @@ const CACHE_BUSTED_UPLOAD_EXTENSIONS = new Set([".js", ".mjs"]);
 
 function usage() {
   return `Usage:
-  npm --prefix viewer run upload:blob -- [root-dir] [options]
+  npm --prefix viewer run upload:blob -- [directory] [options]
 
 Uploads a CAD Viewer catalog and viewer-supported assets to Vercel Blob.
 
 Options:
-  --root-dir <dir>        Viewer root directory to upload. Overrides [directory].
   --ignore-file <file>    Gitignore-style exclude file. May be repeated.
   --exclude <pattern>     Gitignore-style exclude pattern. May be repeated.
   --concurrency <n>       Concurrent uploads. Defaults to ${DEFAULT_UPLOAD_CONCURRENCY}.
@@ -57,7 +56,6 @@ Environment:
   VIEWER_VERCEL_BLOB_PREFIX
   VIEWER_VERCEL_BLOB_READ_WRITE_TOKEN or BLOB_READ_WRITE_TOKEN
   VIEWER_ASSET_BACKEND=vercel-blob (optional)
-  VIEWER_LOCAL_ROOT_DIR (optional)
 
 Default excludes:
   ${DEFAULT_UPLOAD_EXCLUDE_PATTERNS.join("\n  ")}`;
@@ -222,11 +220,11 @@ function resolveUploadRoot({
   env = process.env,
   cwd = process.cwd(),
 } = {}) {
-  if (directory && rootDir) {
-    throw new Error("Pass either a positional upload root or --root-dir, not both.");
+  if (rootDir) {
+    throw new Error("--root-dir has been removed; pass the upload directory as the positional argument.");
   }
   const callerRoot = path.resolve(env.INIT_CWD || cwd);
-  const rawRootDir = rootDir || directory || env.VIEWER_LOCAL_ROOT_DIR || ".";
+  const rawRootDir = directory || ".";
   const resolvedDirectory = path.resolve(callerRoot, rawRootDir);
   return {
     repoRoot: resolvedDirectory,
@@ -640,9 +638,11 @@ function resolveIgnorePatterns({ rootPath, ignoreFiles = [], excludePatterns = [
 }
 
 export function parseUploadArgs(argv, env = process.env) {
+  if (env.VIEWER_LOCAL_ROOT_DIR || env.VIEWER_LOCAL_WORKSPACE_ROOT) {
+    throw new Error("VIEWER_LOCAL_ROOT_DIR and VIEWER_LOCAL_WORKSPACE_ROOT have been removed; pass the upload directory as the positional argument.");
+  }
   const options = {
     directory: "",
-    rootDir: "",
     ignoreFiles: [],
     excludePatterns: [],
     concurrency: DEFAULT_UPLOAD_CONCURRENCY,
@@ -660,9 +660,8 @@ export function parseUploadArgs(argv, env = process.env) {
     if (arg === "-h" || arg === "--help") {
       return { ...options, help: true };
     }
-    if (arg === "--root-dir") {
-      options.rootDir = readValue();
-      continue;
+    if (arg === "--root-dir" || arg.startsWith("--root-dir=")) {
+      throw new Error("--root-dir has been removed; pass the upload directory as the positional argument.");
     }
     if (arg === "--ignore-file") {
       options.ignoreFiles.push(readValue());

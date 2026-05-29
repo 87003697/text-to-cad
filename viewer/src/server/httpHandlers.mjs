@@ -44,17 +44,71 @@ function errorMessage(error) {
   return error instanceof Error ? error.message : String(error);
 }
 
+function requestRootDir(requestUrl) {
+  return String(requestUrl?.searchParams?.get("dir") || "").trim();
+}
+
+function requestFileRef(requestUrl) {
+  return String(requestUrl?.searchParams?.get("file") || "").trim();
+}
+
+function requestHeader(req, name) {
+  const headers = req?.headers || {};
+  const value = headers[String(name || "").toLowerCase()];
+  return Array.isArray(value) ? value[0] : String(value || "");
+}
+
+function requestRefererUrl(req) {
+  const value = requestHeader(req, "referer") || requestHeader(req, "referrer");
+  if (!value) {
+    return null;
+  }
+  try {
+    return new URL(value, "http://localhost");
+  } catch {
+    return null;
+  }
+}
+
+function siblingFileRef(sourceFileRef, relativeFileRef) {
+  const source = String(sourceFileRef || "").replace(/\\/g, "/");
+  const relative = String(relativeFileRef || "").replace(/\\/g, "/").replace(/^\/+/g, "");
+  if (!source || !relative) {
+    return "";
+  }
+  if (path.isAbsolute(source)) {
+    return path.resolve(path.dirname(source), relative);
+  }
+  const sourceDir = path.posix.dirname(source);
+  return path.posix.normalize(path.posix.join(sourceDir === "." ? "" : sourceDir, relative));
+}
+
+function legacyCadAssetFileRef(requestUrl, req) {
+  if (!requestUrl.pathname.startsWith("/__cad/") || requestUrl.pathname === "/__cad/asset") {
+    return "";
+  }
+  const relativePath = decodeURIComponent(requestUrl.pathname.slice("/__cad/".length));
+  if (!relativePath || !path.extname(relativePath)) {
+    return "";
+  }
+  const refererUrl = requestRefererUrl(req);
+  return siblingFileRef(requestFileRef(refererUrl), relativePath);
+}
+
 function fileAssetRequest(backend, requestUrl, {
   rootDir,
   catalog,
 } = {}) {
+  const fileRef = requestFileRef(requestUrl);
   const request = {
-    fileRef: requestUrl.searchParams.get("file"),
+    fileRef,
     asset: requestUrl.searchParams.get("asset") || "output",
     rootDir,
     catalog,
   };
-  if (typeof backend.resolveRoot === "function") {
+  if (typeof backend.resolveRequestRoot === "function") {
+    request.resolvedRoot = backend.resolveRequestRoot({ rootDir, fileRef });
+  } else if (typeof backend.resolveRoot === "function" && rootDir) {
     request.resolvedRoot = backend.resolveRoot(rootDir);
   }
   return request;
@@ -117,6 +171,7 @@ export function createCadViewerApiMiddleware({
   claimDisabledStepArtifactRoute = false,
   preferFileDownloadRedirects = false,
   onCatalogChanged = () => {},
+  onCatalogActivated = () => {},
   rootDir,
 } = {}) {
   if (!backend) {
@@ -124,13 +179,24 @@ export function createCadViewerApiMiddleware({
   }
   return async function cadViewerApiMiddleware(req, res, next) {
     const requestUrl = new URL(req.url || "/", "http://localhost");
+    const activeRootDir = requestRootDir(requestUrl) || rootDir || "";
+    const activeFileRef = requestFileRef(requestUrl);
     if (requestUrl.pathname === "/__cad/server") {
-      sendJson(res, 200, serverInfo());
+      sendJson(res, 200, serverInfo({ rootDir: activeRootDir, fileRef: activeFileRef }));
       return;
     }
     if (requestUrl.pathname === "/__cad/catalog") {
       try {
-        sendJson(res, 200, await backend.readCatalog({ rootDir }));
+        const catalog = await backend.readCatalog({ rootDir: activeRootDir, fileRef: activeFileRef });
+        if (typeof backend.resolveRequestRoot === "function" && (activeRootDir || activeFileRef)) {
+          onCatalogActivated(
+            backend.resolveRequestRoot({ rootDir: activeRootDir, fileRef: activeFileRef }),
+            { rootDir: activeRootDir, fileRef: activeFileRef },
+          );
+        } else if (activeRootDir && typeof backend.resolveRoot === "function") {
+          onCatalogActivated(backend.resolveRoot(activeRootDir), { rootDir: activeRootDir, fileRef: activeFileRef });
+        }
+        sendJson(res, 200, catalog);
       } catch (error) {
         sendJson(res, 400, {
           error: errorMessage(error),
@@ -146,7 +212,7 @@ export function createCadViewerApiMiddleware({
         return;
       }
       try {
-        sendJson(res, 200, await backend.readGenerationStatus({ rootDir }));
+        sendJson(res, 200, await backend.readGenerationStatus({ rootDir: activeRootDir }));
       } catch (error) {
         sendJson(res, 400, {
           error: errorMessage(error),
@@ -165,8 +231,8 @@ export function createCadViewerApiMiddleware({
       }
 
       try {
-        const catalog = await backend.readCatalog({ rootDir });
-        const request = fileAssetRequest(backend, requestUrl, { rootDir, catalog });
+        const catalog = await backend.readCatalog({ rootDir: activeRootDir, fileRef: activeFileRef });
+        const request = fileAssetRequest(backend, requestUrl, { rootDir: activeRootDir, catalog });
 
         if (preferFileDownloadRedirects && typeof backend.resolveFileAssetAccess === "function") {
           const access = await backend.resolveFileAssetAccess(request);
@@ -224,6 +290,54 @@ export function createCadViewerApiMiddleware({
       }
       return;
     }
+    if (requestUrl.pathname === "/__cad/asset") {
+      const method = String(req.method || "GET").toUpperCase();
+      if (method !== "GET") {
+        res.setHeader("allow", "GET");
+        sendJson(res, 405, {
+          error: "Use GET to read a CAD Viewer asset",
+        });
+        return;
+      }
+      try {
+        if (typeof backend.assetPathForFileRef !== "function") {
+          sendJson(res, 501, {
+            error: "Direct CAD Viewer assets are not available for this backend",
+          });
+          return;
+        }
+        const assetPath = backend.assetPathForFileRef(activeFileRef, {
+          rootDir: activeRootDir,
+          ...(typeof backend.resolveRequestRoot === "function" && (activeRootDir || activeFileRef)
+            ? { resolvedRoot: backend.resolveRequestRoot({ rootDir: activeRootDir, fileRef: activeFileRef }) }
+            : {}),
+        });
+        if (!assetPath) {
+          sendJson(res, 404, {
+            error: "CAD Viewer asset not found",
+          });
+          return;
+        }
+        serveStaticFile(assetPath, req, res, () => {
+          sendJson(res, 404, {
+            error: "CAD Viewer asset not found",
+          });
+        }, {
+          contentType: backend.contentTypeForPath?.(assetPath) || "application/octet-stream",
+        });
+      } catch (error) {
+        if (Number(error?.statusCode) === 403) {
+          sendJson(res, 403, {
+            error: "Forbidden",
+          });
+          return;
+        }
+        sendJson(res, 400, {
+          error: errorMessage(error),
+        });
+      }
+      return;
+    }
     if (requestUrl.pathname === "/__cad/reveal") {
       const method = String(req.method || "GET").toUpperCase();
       if (method !== "POST") {
@@ -241,8 +355,8 @@ export function createCadViewerApiMiddleware({
           });
           return;
         }
-        const catalog = await backend.readCatalog({ rootDir });
-        const request = fileAssetRequest(backend, requestUrl, { rootDir, catalog });
+        const catalog = await backend.readCatalog({ rootDir: activeRootDir, fileRef: activeFileRef });
+        const request = fileAssetRequest(backend, requestUrl, { rootDir: activeRootDir, catalog });
         const result = await backend.openFileAsset(request);
         sendJson(res, 200, {
           ok: true,
@@ -264,14 +378,16 @@ export function createCadViewerApiMiddleware({
         return;
       }
       try {
-        const catalog = await backend.readCatalog({ rootDir });
+        const catalog = await backend.readCatalog({ rootDir: activeRootDir, fileRef: activeFileRef });
         const request = {
-          fileRef: requestUrl.searchParams.get("file"),
-          rootDir,
+          fileRef: activeFileRef,
+          rootDir: activeRootDir,
           catalog,
         };
-        if (typeof backend.resolveRoot === "function") {
-          request.resolvedRoot = backend.resolveRoot(rootDir);
+        if (typeof backend.resolveRequestRoot === "function") {
+          request.resolvedRoot = backend.resolveRequestRoot({ rootDir: activeRootDir, fileRef: activeFileRef });
+        } else if (typeof backend.resolveRoot === "function" && activeRootDir) {
+          request.resolvedRoot = backend.resolveRoot(activeRootDir);
         }
         sendJson(res, 200, await backend.readStepSourceStatus(request));
       } catch (error) {
@@ -299,18 +415,18 @@ export function createCadViewerApiMiddleware({
         return;
       }
       try {
-        const catalog = await backend.readCatalog({ rootDir });
+        const catalog = await backend.readCatalog({ rootDir: activeRootDir, fileRef: activeFileRef });
         if (typeof backend.resolveRoot !== "function") {
           const result = await backend.generateStepArtifact({
-            fileRef: requestUrl.searchParams.get("file"),
+            fileRef: activeFileRef,
             force: requestUrl.searchParams.get("force") === "1",
-            rootDir,
+            rootDir: activeRootDir,
             catalog,
           });
           const nextCatalog = result?.catalog || (
             typeof backend.refreshCatalog === "function"
-              ? await backend.refreshCatalog({ rootDir })
-              : await backend.readCatalog({ rootDir })
+              ? await backend.refreshCatalog({ rootDir: activeRootDir, fileRef: activeFileRef })
+              : await backend.readCatalog({ rootDir: activeRootDir, fileRef: activeFileRef })
           );
           sendJson(res, result?.ok ? 200 : 500, {
             ok: Boolean(result?.ok),
@@ -322,16 +438,18 @@ export function createCadViewerApiMiddleware({
           return;
         }
 
-        const resolvedRoot = backend.resolveRoot(rootDir);
+        const resolvedRoot = typeof backend.resolveRequestRoot === "function"
+          ? backend.resolveRequestRoot({ rootDir: activeRootDir, fileRef: activeFileRef })
+          : backend.resolveRoot(activeRootDir);
         const result = await backend.generateStepArtifact({
-          fileRef: requestUrl.searchParams.get("file"),
+          fileRef: activeFileRef,
           force: requestUrl.searchParams.get("force") === "1",
           resolvedRoot,
           catalog,
         });
         const nextCatalog = typeof backend.refreshCatalog === "function"
-          ? await backend.refreshCatalog({ rootDir })
-          : await backend.readCatalog({ rootDir });
+          ? await backend.refreshCatalog({ rootDir: activeRootDir, fileRef: activeFileRef })
+          : await backend.readCatalog({ rootDir: activeRootDir, fileRef: activeFileRef });
         onCatalogChanged(resolvedRoot);
         sendJson(res, result.ok ? 200 : 500, {
           ok: result.ok,
@@ -356,10 +474,25 @@ export function createLocalAssetMiddleware({ backend, rootDir } = {}) {
     throw new Error("createLocalAssetMiddleware requires backend");
   }
   return function localAssetMiddleware(req, res, next) {
+    const requestUrl = new URL(req.url || "/", "http://localhost");
+    const fallbackFileRef = legacyCadAssetFileRef(requestUrl, req);
+    if (
+      (requestUrl.pathname !== "/__cad/asset" && !fallbackFileRef) ||
+      typeof backend.assetPathForFileRef !== "function"
+    ) {
+      next();
+      return;
+    }
     let assetPath = null;
     try {
-      assetPath = backend.assetPathForRequestPath(req.url || "/", {
-        resolvedRoot: backend.resolveRoot(rootDir),
+      const refererUrl = requestRefererUrl(req);
+      const activeRootDir = requestRootDir(requestUrl) || requestRootDir(refererUrl) || rootDir || "";
+      const activeFileRef = requestFileRef(requestUrl) || fallbackFileRef;
+      assetPath = backend.assetPathForFileRef(activeFileRef, {
+        rootDir: activeRootDir,
+        ...(typeof backend.resolveRequestRoot === "function" && (activeRootDir || activeFileRef)
+          ? { resolvedRoot: backend.resolveRequestRoot({ rootDir: activeRootDir, fileRef: activeFileRef }) }
+          : {}),
       });
     } catch (error) {
       if (Number(error?.statusCode) === 403) {

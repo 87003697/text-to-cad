@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import fs from "node:fs";
 import http from "node:http";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -25,7 +26,7 @@ import {
 import { resolveWorkspaceRoot } from "cadjs/lib/pathUtils.mjs";
 import {
   normalizeViewerAssetBackend,
-  rootDirForAssetBackend,
+  assertNoDeprecatedLocalRootEnv,
   vercelBlobConfigFromEnv,
   VIEWER_ASSET_BACKENDS,
 } from "./viewerEnv.mjs";
@@ -44,6 +45,22 @@ const viewerAppRoot = path.basename(path.dirname(serverModuleDir)) === "src"
   ? path.resolve(serverModuleDir, "..", "..")
   : path.resolve(serverModuleDir, "..");
 const defaultWorkspaceRoot = path.resolve(viewerAppRoot, "..");
+
+function readViewerPackageVersion(appRoot) {
+  try {
+    const packageJson = JSON.parse(fs.readFileSync(path.join(appRoot, "package.json"), "utf8"));
+    return String(packageJson.version || "");
+  } catch {
+    return "";
+  }
+}
+
+const viewerVersion = readViewerPackageVersion(viewerAppRoot);
+const localServerFeatures = [
+  "dynamic-root",
+  "absolute-file-query",
+  "session-dir-cache",
+];
 let runtime;
 try {
   runtime = applyServerArgsToEnv({ argv: process.argv.slice(2), env: process.env, cwd: process.cwd() });
@@ -56,6 +73,12 @@ if (runtime.args.help) {
   process.exit(0);
 }
 const runtimeEnv = runtime.env;
+try {
+  assertNoDeprecatedLocalRootEnv(runtimeEnv);
+} catch (error) {
+  process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
+  process.exit(1);
+}
 const workspaceRoot = resolveWorkspaceRoot({
   env: runtimeEnv,
   cwd: process.cwd(),
@@ -63,10 +86,9 @@ const workspaceRoot = resolveWorkspaceRoot({
   defaultWorkspaceRoot,
 });
 const backendKind = normalizeViewerAssetBackend(runtimeEnv.VIEWER_ASSET_BACKEND);
-const rootDir = rootDirForAssetBackend(backendKind, runtimeEnv);
-const port = normalizeViewerPort(runtimeEnv.VIEWER_PORT, DEFAULT_VIEWER_PORT);
-const host = runtimeEnv.VIEWER_HOST || "127.0.0.1";
-const serverLifetimeMs = normalizeServerLifetimeMs(runtimeEnv.VIEWER_SERVER_LIFETIME_MS);
+const port = normalizeViewerPort(runtime.args.port, DEFAULT_VIEWER_PORT);
+const host = runtime.args.host || "127.0.0.1";
+const serverLifetimeMs = runtime.args.shutdownAfterMs ?? normalizeServerLifetimeMs(runtimeEnv.VIEWER_SERVER_LIFETIME_MS);
 const distRoot = path.resolve(viewerAppRoot, "dist");
 const backend = backendKind === VIEWER_ASSET_BACKENDS.VERCEL_BLOB
   ? createVercelBlobAssetBackend({
@@ -75,35 +97,36 @@ const backend = backendKind === VIEWER_ASSET_BACKENDS.VERCEL_BLOB
     })
   : createLocalAssetBackend({
       workspaceRoot,
-      rootDir,
       defaultFile: normalizeViewerDefaultFile(runtimeEnv.VIEWER_DEFAULT_FILE || ""),
       githubUrl: normalizeViewerGithubUrl(runtimeEnv.VIEWER_GITHUB_URL || ""),
     });
 const localAssetBackendEnabled = backend.kind === "local-fs";
 const stepArtifactBackendEnabled = localAssetBackendEnabled && typeof backend.generateStepArtifact === "function";
 
-if (localAssetBackendEnabled && typeof backend.refreshCatalog === "function") {
-  backend.refreshCatalog({ rootDir });
-}
-
 const middlewares = [
   createCadViewerApiMiddleware({
     backend,
-    rootDir,
     enableStepArtifactBackend: stepArtifactBackendEnabled,
     claimDisabledStepArtifactRoute: true,
-    serverInfo: () => (
-      localAssetBackendEnabled
-        ? buildViewerServerInfo({
-            workspaceRoot,
-            rootDir,
-            port,
-            pid: process.pid,
-          })
-        : buildHostedViewerServerInfo({ backend, env: runtimeEnv, rootDir })
-    ),
+    serverInfo: ({ rootDir = "", fileRef = "" } = {}) => {
+      if (!localAssetBackendEnabled) {
+        return buildHostedViewerServerInfo({ backend, env: runtimeEnv, rootDir: "" });
+      }
+      const infoRootDir = rootDir || (path.isAbsolute(String(fileRef || "")) ? path.dirname(path.resolve(fileRef)) : "");
+      return buildViewerServerInfo({
+        workspaceRoot,
+        rootDir: infoRootDir,
+        port,
+        pid: process.pid,
+        backend: "local-fs",
+        dynamicRoot: true,
+        stepArtifactGenerationAvailable: stepArtifactBackendEnabled,
+        viewerVersion,
+        serverFeatures: localServerFeatures,
+      });
+    },
   }),
-  ...(localAssetBackendEnabled ? [createLocalAssetMiddleware({ backend, rootDir })] : []),
+  ...(localAssetBackendEnabled ? [createLocalAssetMiddleware({ backend })] : []),
   serveDistAsset({ distRoot }),
 ];
 
