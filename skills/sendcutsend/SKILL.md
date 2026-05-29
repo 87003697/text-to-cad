@@ -6,6 +6,9 @@ description: Review DXF and STEP/STP uploads for SendCutSend.com orders using it
 # SendCutSend
 
 Release version: `0.1.11`.
+Source: [earthtojake/text-to-cad](https://github.com/earthtojake/text-to-cad).
+Use the installed local skill files as the runtime source of truth; the
+repository link is for provenance and release review.
 
 Use this skill to produce conservative, evidence-backed SendCutSend preflight reports for DXF and STEP/STP files.
 
