@@ -128,7 +128,8 @@ Important environment variables:
   is absent and a `?dir=` or stored active directory is available.
 - `VIEWER_SERVER_LIFETIME_MS`: optional server lifetime in milliseconds for
   local dev and production servers. When unset, there is no automatic shutdown.
-- `VIEWER_GITHUB_URL`: top-bar GitHub link target.
+- `VIEWER_GITHUB_URL`: optional top-bar GitHub link target. Defaults to this
+  repository; the version label links to the matching GitHub release tag.
 - `VIEWER_ALLOWED_HOSTS`: extra hostnames accepted by local Vite dev and
   production servers.
 - `VIEWER_MOVEIT2_WS_URL`: optional websocket URL for SRDF MoveIt2 controls.

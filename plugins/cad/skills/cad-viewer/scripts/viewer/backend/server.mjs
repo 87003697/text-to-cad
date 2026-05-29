@@ -25741,7 +25741,7 @@ function buildViewerServerInfo({
 }
 
 // viewer/packages/cadjs/src/lib/viewerConfig.mjs
-var DEFAULT_VIEWER_GITHUB_URL = "";
+var DEFAULT_VIEWER_GITHUB_URL = "https://github.com/earthtojake/text-to-cad";
 function normalizeViewerDefaultFile(value = "") {
   const rawValue = String(value ?? "").trim();
   return rawValue.replace(/\\/g, "/").replace(/^\/+/, "").replace(/\/+$/, "");

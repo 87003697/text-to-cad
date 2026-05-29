@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useState } from "react";
+import { Fragment } from "react";
 import {
   Bot,
   Boxes,
@@ -15,7 +15,10 @@ import {
   SlidersHorizontal,
   Sun
 } from "lucide-react";
-import { normalizeViewerGithubUrl } from "cadjs/lib/viewerConfig.mjs";
+import {
+  normalizeViewerGithubUrl,
+  viewerGithubReleaseUrl
+} from "cadjs/lib/viewerConfig.mjs";
 import {
   Breadcrumb,
   BreadcrumbItem,
@@ -56,7 +59,6 @@ import {
   sidebarDirectoryPath
 } from "@/workbench/sidebar";
 import viewerPackage from "../../../../package.json";
-import { copyTextToClipboard } from "@/ui/clipboard";
 
 function collapsedBreadcrumbNodes(nodes) {
   if (nodes.length <= 4) {
@@ -152,6 +154,15 @@ function buildBreadcrumbNodes({
   selectedFileTitle
 }) {
   if (!directoryTree) {
+    if (selectedEntry) {
+      return [{
+        type: "entry",
+        label: selectedFileLabel,
+        title: selectedFileTitle,
+        entry: selectedEntry,
+        menuDirectory: null
+      }];
+    }
     return [{
       type: "placeholder",
       label: selectedFileLabel,
@@ -685,49 +696,31 @@ function nextColorMode(currentColorMode) {
     : DARK_COLOR_SCHEME_ID;
 }
 
-function VersionCopyButton() {
-  const [copyStatus, setCopyStatus] = useState("");
+function VersionReleaseLink({ releaseUrl }) {
   const version = String(viewerPackage.version || "").trim();
-
-  useEffect(() => {
-    if (!copyStatus) {
-      return undefined;
-    }
-    const timeout = globalThis.setTimeout(() => setCopyStatus(""), 1400);
-    return () => globalThis.clearTimeout(timeout);
-  }, [copyStatus]);
 
   if (!version) {
     return null;
   }
 
-  const copyLabel = copyStatus === "copied"
-    ? "Copied version"
-    : copyStatus === "error"
-      ? "Version copy failed"
-      : `Copy version ${version}`;
-
-  const handleCopyVersion = async () => {
-    try {
-      await copyTextToClipboard(version);
-      setCopyStatus("copied");
-    } catch {
-      setCopyStatus("error");
-    }
-  };
+  const label = releaseUrl ? `Open release ${version}` : `Version ${version}`;
 
   return (
     <Button
-      type="button"
+      asChild={Boolean(releaseUrl)}
       variant="ghost"
       size="xs"
-      className="hidden h-7 rounded-sm px-2 text-[10px] font-medium leading-none text-muted-foreground tabular-nums hover:text-sidebar-foreground md:inline-flex"
-      onClick={handleCopyVersion}
-      aria-label={copyLabel}
-      title={copyLabel}
-      aria-live="polite"
+      className="hidden h-7 rounded-sm px-2 text-xs font-medium leading-none text-muted-foreground tabular-nums hover:text-sidebar-foreground md:inline-flex"
+      aria-label={label}
+      title={label}
     >
-      v{version}
+      {releaseUrl ? (
+        <a href={releaseUrl} target="_blank" rel="noreferrer">
+          v{version}
+        </a>
+      ) : (
+        <span>v{version}</span>
+      )}
     </Button>
   );
 }
@@ -785,8 +778,9 @@ export default function CadWorkspaceTopBar({
   const selectedFileTitle = selectedEntry
     ? String(selectedEntry.file || selectedEntry.id || selectedFileLabel)
     : selectedFileLabel;
+  const breadcrumbAvailable = navigationAvailable || Boolean(selectedEntry);
   const breadcrumbNodes = buildBreadcrumbNodes({
-    directoryTree,
+    directoryTree: navigationAvailable ? directoryTree : null,
     selectedEntry,
     selectedFileLabel,
     selectedFileTitle
@@ -799,6 +793,7 @@ export default function CadWorkspaceTopBar({
     ? `Collapse ${fileSheetLabel(fileSheetKind)}`
     : `Expand ${fileSheetLabel(fileSheetKind)}`;
   const githubUrl = normalizeViewerGithubUrl(import.meta.env?.VIEWER_GITHUB_URL);
+  const releaseUrl = viewerGithubReleaseUrl(viewerPackage.version, githubUrl);
   const showThemeColorModeToggle = themeSettingsSupportsSystemColorMode(themeSettings);
   const activeColorSchemeMode = resolvedColorSchemeMode === DARK_COLOR_SCHEME_ID
     ? DARK_COLOR_SCHEME_ID
@@ -828,7 +823,7 @@ export default function CadWorkspaceTopBar({
         />
       ) : null}
 
-      {navigationAvailable ? (
+      {breadcrumbAvailable ? (
       <Breadcrumb className="min-w-0 flex-1 overflow-hidden">
         <ScrollArea
           className="h-8 min-w-0 whitespace-nowrap"
@@ -935,7 +930,7 @@ export default function CadWorkspaceTopBar({
       )}
 
       <div className="flex shrink-0 items-center gap-0.5">
-        <VersionCopyButton />
+        <VersionReleaseLink releaseUrl={releaseUrl} />
         {githubUrl ? (
           <Button
             asChild
