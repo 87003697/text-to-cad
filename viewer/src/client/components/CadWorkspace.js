@@ -8,7 +8,6 @@ import DxfFileSheet from "./workbench/DxfFileSheet";
 import GcodeFileSheet from "./workbench/GcodeFileSheet";
 import FileViewerSidebar from "./workbench/FileViewerSidebar";
 import {
-  DisplaySettingsSection,
   ThemeSettingsSections
 } from "./workbench/ThemeSettingsPopover";
 import MeshFileSheet from "./workbench/MeshFileSheet";
@@ -45,6 +44,8 @@ import {
   THEME_COLOR_MODES
 } from "cadjs/lib/themeSettings";
 import {
+  CAD_DISPLAY_MODE,
+  normalizeDisplayMode,
   normalizeDisplaySettings
 } from "cadjs/lib/displaySettings";
 import { clonePerspectiveSnapshot } from "cadjs/lib/perspective";
@@ -412,6 +413,145 @@ function ownProperty(object, key) {
   return Object.prototype.hasOwnProperty.call(object || {}, key);
 }
 
+function normalizeCollisionStringList(value) {
+  const rawValues = Array.isArray(value)
+    ? value
+    : String(value || "").split(/[\n,]+/u);
+  return rawValues
+    .map((item) => String(item || "").trim())
+    .filter(Boolean);
+}
+
+const DEFAULT_STEP_ANALYSIS_SETTINGS = Object.freeze({
+  enabled: false,
+  selectedPairId: "",
+  bodyDepth: 2,
+  maxPairs: 1000,
+  clearanceMm: 0,
+  contactToleranceMm: 0.0001,
+  collisionVolumeToleranceMm3: 0.000000001,
+  timeBudgetMs: 0,
+  includeContact: true,
+  includeClearance: false,
+  includeSeparated: false,
+  includeAllowed: false,
+  listBodies: false,
+  noCache: false,
+  setA: [],
+  setB: [],
+  pairs: [],
+  allowPairs: [],
+  exclude: [],
+  collapse: [],
+  showSurfaceReview: true,
+  showSurfaceHighlights: true,
+  showWitnesses: true,
+  showInterferenceVolumes: false,
+  showBounds: false,
+  showCollisions: true,
+  showContacts: true,
+  showClearances: true
+});
+
+function normalizeStepAnalysisSettings(value) {
+  const settings = value && typeof value === "object" ? value : {};
+  return {
+    enabled: settings.enabled === true,
+    selectedPairId: String(settings.selectedPairId || "").trim(),
+    bodyDepth: clampNumber(Number.isFinite(Number(settings.bodyDepth)) ? settings.bodyDepth : 2, 1, 12),
+    maxPairs: Math.min(Math.max(Math.round(Number(settings.maxPairs) || 1000), 1), 100000),
+    clearanceMm: clampNumber(settings.clearanceMm, 0, 100000),
+    contactToleranceMm: clampNumber(
+      Number.isFinite(Number(settings.contactToleranceMm)) ? settings.contactToleranceMm : 0.0001,
+      0,
+      1000
+    ),
+    collisionVolumeToleranceMm3: clampNumber(
+      Number.isFinite(Number(settings.collisionVolumeToleranceMm3)) ? settings.collisionVolumeToleranceMm3 : 0.000000001,
+      0,
+      1000000000
+    ),
+    timeBudgetMs: clampNumber(settings.timeBudgetMs, 0, 3600000),
+    includeContact: settings.includeContact !== false,
+    includeClearance: settings.includeClearance === true,
+    includeSeparated: settings.includeSeparated === true,
+    includeAllowed: settings.includeAllowed === true,
+    listBodies: settings.listBodies === true,
+    noCache: settings.noCache === true,
+    setA: normalizeCollisionStringList(settings.setA),
+    setB: normalizeCollisionStringList(settings.setB),
+    pairs: normalizeCollisionStringList(settings.pairs),
+    allowPairs: normalizeCollisionStringList(settings.allowPairs),
+    exclude: normalizeCollisionStringList(settings.exclude),
+    collapse: normalizeCollisionStringList(settings.collapse),
+    showSurfaceReview: settings.showSurfaceReview !== false,
+    showSurfaceHighlights: settings.showSurfaceHighlights !== false,
+    showWitnesses: settings.showWitnesses !== false,
+    showInterferenceVolumes: settings.showInterferenceVolumes === true,
+    showBounds: settings.showBounds === true,
+    showCollisions: settings.showCollisions !== false,
+    showContacts: settings.showContacts !== false,
+    showClearances: settings.showClearances !== false
+  };
+}
+
+function collisionSettingsKey(settings) {
+  const normalized = normalizeStepAnalysisSettings(settings);
+  return [
+    normalized.bodyDepth,
+    normalized.maxPairs,
+    normalized.clearanceMm,
+    normalized.contactToleranceMm,
+    normalized.collisionVolumeToleranceMm3,
+    normalized.timeBudgetMs,
+    normalized.includeContact,
+    normalized.includeClearance,
+    normalized.includeSeparated,
+    normalized.includeAllowed,
+    normalized.listBodies,
+    normalized.noCache,
+    normalized.setA.join(","),
+    normalized.setB.join(","),
+    normalized.pairs.join(","),
+    normalized.allowPairs.join(","),
+    normalized.exclude.join(","),
+    normalized.collapse.join(",")
+  ].join(":");
+}
+
+function normalizeCollisionReportForViewer(report) {
+  if (!report || typeof report !== "object") {
+    return null;
+  }
+  const summary = report.summary && typeof report.summary === "object" ? report.summary : {};
+  const statusCounts = summary.statusCounts && typeof summary.statusCounts === "object"
+    ? summary.statusCounts
+    : {};
+  const bodies = Array.isArray(report.bodies) ? report.bodies : [];
+  return {
+    schemaVersion: report.schemaVersion,
+    kind: String(report.kind || "cadpy-interference-report"),
+    profile: String(report.profile || "agent-interference"),
+    units: report.units || "mm",
+    source: report.source || null,
+    summary: {
+      ...summary,
+      occurrenceCount: bodies.length,
+      collisionCount: Math.max(Number(statusCounts.collision) || 0, 0),
+      contactCount: Math.max(Number(statusCounts.contact) || 0, 0),
+      clearanceCount: Math.max(Number(statusCounts.clearance) || 0, 0)
+    },
+    occurrences: bodies.map((body) => ({
+      id: String(body?.id || "").trim(),
+      name: String(body?.name || body?.id || "").trim(),
+      bbox: body?.bbox || null,
+      sourceOccurrences: Array.isArray(body?.sourceOccurrences) ? body.sourceOccurrences : [],
+      collapsed: body?.collapsed === true
+    })).filter((body) => body.id),
+    pairs: Array.isArray(report.pairs) ? report.pairs : []
+  };
+}
+
 function mergeStepSourceStatusIntoEntry(entry, stepSourceStatus) {
   if (!entry || !stepSourceStatus || typeof stepSourceStatus !== "object") {
     return entry;
@@ -525,6 +665,13 @@ export default function CadWorkspace({
   const [stepTreeRootShowMore, setStepTreeRootShowMore] = useState(false);
   const [hiddenPartIds, setHiddenPartIds] = useState([]);
   const [displaySettings, setDisplaySettings] = useState(() => normalizeDisplaySettings());
+  const [stepAnalysisSettings, setStepAnalysisSettings] = useState(() => (
+    normalizeStepAnalysisSettings(DEFAULT_STEP_ANALYSIS_SETTINGS)
+  ));
+  const [collisionReportState, setCollisionReportState] = useState(null);
+  const [collisionStatus, setCollisionStatus] = useState(REFERENCE_STATUS.IDLE);
+  const [collisionError, setCollisionError] = useState("");
+  const [collisionLoadStage, setCollisionLoadStage] = useState("");
   const [hoveredListPartId, setHoveredListPartId] = useState("");
   const [hoveredModelPartId, setHoveredModelPartId] = useState("");
   const [copyStatus, setCopyStatus] = useState("");
@@ -620,6 +767,8 @@ export default function CadWorkspace({
   });
   const stepArtifactGenerationRequestsRef = useRef(new Map());
   const selectedStepArtifactBuildKeyRef = useRef("");
+  const collisionRequestIdRef = useRef(0);
+  const collisionAbortControllerRef = useRef(null);
 
   const handlePersistenceWriteError = useCallback(({ key }) => {
     const failureKey = String(key || "browser-storage");
@@ -823,6 +972,7 @@ export default function CadWorkspace({
   const selectedEntryHasUrdf = entryHasUrdf(selectedEntry);
   const selectedEntryHasReferences = entryHasReferences(selectedEntry);
   const selectedEntryHasDisplayEdges = entryHasDisplayEdges(selectedEntry);
+  const selectedEntryCanRunCollisions = isStepView && fileAccessBackend === "local-fs";
   const selectedEntryHasDxf = entryHasDxf(selectedEntry);
   const selectedEntryHasGcode = entryHasGcode(selectedEntry);
   const selectedStepArtifactBuildFile = !selectedEntryHasMesh && stepArtifactCanGenerate(
@@ -880,6 +1030,13 @@ export default function CadWorkspace({
     !!selectedEntry &&
     gcodeState.file === fileKey(selectedEntry) &&
     gcodeState.gcodeHash === entryAssetHash(selectedEntry, "gcode");
+  const selectedCollisionSettingsKey = collisionSettingsKey(stepAnalysisSettings);
+  const selectedCollisionMatches =
+    !!collisionReportState &&
+    !!selectedEntry &&
+    collisionReportState.fileRef === fileKey(selectedEntry) &&
+    collisionReportState.entryHash === entryMeshAssetSignature(selectedEntry) &&
+    collisionReportState.settingsKey === selectedCollisionSettingsKey;
   const selectedUrdfMatches =
     !!urdfState &&
     !!selectedEntry &&
@@ -889,6 +1046,134 @@ export default function CadWorkspace({
   const selectedUrdfMeshes = selectedUrdfMatches ? urdfState.meshesByUrl : null;
   const selectedDxfData = selectedDxfMatches ? dxfState.dxfData : null;
   const selectedGcodeData = selectedGcodeMatches ? gcodeState.gcodeData : null;
+  const selectedStepAnalysis = selectedCollisionMatches ? collisionReportState.viewerReport : null;
+  const selectedCollisionStatus = selectedCollisionMatches || collisionStatus === REFERENCE_STATUS.LOADING
+    ? collisionStatus
+    : REFERENCE_STATUS.IDLE;
+  const selectedCollisionError = selectedCollisionMatches || collisionStatus === REFERENCE_STATUS.ERROR
+    ? collisionError
+    : "";
+  const updateStepAnalysisSettings = useCallback((patch) => {
+    setStepAnalysisSettings((current) => normalizeStepAnalysisSettings({
+      ...current,
+      ...(patch && typeof patch === "object" ? patch : {})
+    }));
+  }, []);
+  const cancelCollisionRun = useCallback(() => {
+    collisionRequestIdRef.current += 1;
+    collisionAbortControllerRef.current?.abort();
+    collisionAbortControllerRef.current = null;
+    setCollisionLoadStage("");
+  }, []);
+  const runCollisionsForEntry = useCallback(async (entry = selectedEntry) => {
+    const targetFileRef = fileKey(entry);
+    if (!targetFileRef) {
+      return;
+    }
+    cancelCollisionRun();
+    const requestId = collisionRequestIdRef.current;
+    const controller = new AbortController();
+    collisionAbortControllerRef.current = controller;
+    const settings = normalizeStepAnalysisSettings(stepAnalysisSettings);
+    const settingsKey = collisionSettingsKey(settings);
+    const params = new URLSearchParams({
+      file: targetFileRef,
+      bodyDepth: String(settings.bodyDepth),
+      maxPairs: String(settings.maxPairs),
+      clearanceMm: String(settings.clearanceMm),
+      contactToleranceMm: String(settings.contactToleranceMm),
+      collisionVolumeToleranceMm3: String(settings.collisionVolumeToleranceMm3),
+      includeContact: settings.includeContact ? "1" : "0",
+      includeClearance: settings.includeClearance ? "1" : "0",
+      includeSeparated: settings.includeSeparated ? "1" : "0",
+      includeAllowed: settings.includeAllowed ? "1" : "0",
+      listBodies: settings.listBodies ? "1" : "0",
+      noCache: settings.noCache ? "1" : "0"
+    });
+    if (settings.timeBudgetMs > 0) {
+      params.set("timeBudgetMs", String(settings.timeBudgetMs));
+    }
+    for (const value of settings.collapse) {
+      params.append("collapse", value);
+    }
+    for (const value of settings.exclude) {
+      params.append("exclude", value);
+    }
+    for (const value of settings.setA) {
+      params.append("setA", value);
+    }
+    for (const value of settings.setB) {
+      params.append("setB", value);
+    }
+    for (const value of settings.pairs) {
+      params.append("pair", value);
+    }
+    for (const value of settings.allowPairs) {
+      params.append("allowPair", value);
+    }
+    setCollisionStatus(REFERENCE_STATUS.LOADING);
+    setCollisionError("");
+    setCollisionLoadStage("running collisions");
+    try {
+      const response = await fetch(`/__cad/collisions?${params.toString()}`, {
+        method: "POST",
+        signal: controller.signal
+      });
+      const payload = await response.json().catch(() => null);
+      if (!response.ok || !payload?.ok) {
+        const fallback = payload?.error || "Collision detection failed.";
+        throw new Error(payload?.error || await readResponseError(response, fallback));
+      }
+      const report = payload.result;
+      const viewerReport = normalizeCollisionReportForViewer(report);
+      if (!viewerReport) {
+        throw new Error("Collision detection returned an unrecognized report.");
+      }
+      if (requestId !== collisionRequestIdRef.current) {
+        return;
+      }
+      setCollisionReportState({
+        fileRef: targetFileRef,
+        entryHash: entryMeshAssetSignature(entry),
+        settingsKey,
+        report,
+        viewerReport
+      });
+      setCollisionStatus(REFERENCE_STATUS.READY);
+      setCollisionError("");
+    } catch (err) {
+      if (requestId !== collisionRequestIdRef.current || controller.signal.aborted) {
+        return;
+      }
+      setCollisionStatus(REFERENCE_STATUS.ERROR);
+      setCollisionError(err instanceof Error ? err.message : String(err));
+      setCollisionReportState(null);
+    } finally {
+      if (collisionAbortControllerRef.current === controller) {
+        collisionAbortControllerRef.current = null;
+      }
+      if (requestId === collisionRequestIdRef.current) {
+        setCollisionLoadStage("");
+      }
+    }
+  }, [cancelCollisionRun, selectedEntry, stepAnalysisSettings]);
+  const handleStepDisplayModeChange = useCallback((nextMode) => {
+    const mode = normalizeDisplayMode(nextMode);
+    updateDisplaySettings((current) => ({
+      ...normalizeDisplaySettings(current),
+      mode
+    }));
+    setStepAnalysisSettings((current) => normalizeStepAnalysisSettings({
+      ...current,
+      enabled: mode === CAD_DISPLAY_MODE.COLLISION,
+      showSurfaceReview: mode === CAD_DISPLAY_MODE.COLLISION
+        ? true
+        : current?.showSurfaceReview
+    }));
+  }, [updateDisplaySettings]);
+  useEffect(() => () => {
+    cancelCollisionRun();
+  }, [cancelCollisionRun]);
   const selectedDxfFileRef = selectedEntrySourceFormat === RENDER_FORMAT.DXF
     ? fileKey(selectedEntry)
     : "";
@@ -2638,6 +2923,9 @@ export default function CadWorkspace({
           parameterValues: snapshotStepModuleParameterValues,
           animationState: snapshotStepModuleAnimationState
         },
+        ...(entrySourceFormat(targetEntry) === RENDER_FORMAT.STEP
+          ? { collisions: stepAnalysisSettings }
+          : {}),
         urdf: {
           jointValues: targetUrdfJointValues,
           motionState: targetUrdfMotionState
@@ -2655,6 +2943,7 @@ export default function CadWorkspace({
     jointValuesByFileRef,
     largeFileState,
     selectedEntry,
+    stepAnalysisSettings,
     stepModuleAnimationState,
     stepModuleEnabled,
     stepModuleParameterValues,
@@ -2720,6 +3009,11 @@ export default function CadWorkspace({
       entrySourceFormat(entry) === RENDER_FORMAT.STEP
         ? normalizeDisplaySettings(sessionState?.slices?.display)
         : normalizeDisplaySettings()
+    );
+    setStepAnalysisSettings(
+      entrySourceFormat(entry) === RENDER_FORMAT.STEP
+        ? normalizeStepAnalysisSettings(sessionState?.slices?.collisions)
+        : normalizeStepAnalysisSettings(DEFAULT_STEP_ANALYSIS_SETTINGS)
     );
 
     const dxfSlice = sessionState?.slices?.dxf || null;
@@ -3668,7 +3962,7 @@ export default function CadWorkspace({
   const selectedStepDisplayEdgesRequested =
     effectiveRenderFormat === RENDER_FORMAT.STEP &&
     selectedEntryHasDisplayEdges &&
-    displaySettings.mode !== "wireframe" &&
+    displaySettings.mode !== CAD_DISPLAY_MODE.WIREFRAME &&
     resolvedDisplayEdgeSettings.enabled !== false;
   const selectedTopologyExplicitlyEnabled = largeFileState.selectableTopologyEnabled === true;
   const selectedTopologyLargeByCost = Boolean(
@@ -5988,14 +6282,6 @@ export default function CadWorkspace({
     null;
   const themeSections = (
     <>
-      {isStepView ? (
-        <DisplaySettingsSection
-          displaySettings={displaySettings}
-          updateDisplaySettings={updateDisplaySettings}
-          clipBounds={selectedMeshData?.bounds || null}
-          showClip
-        />
-      ) : null}
       <ThemeSettingsSections
         themePresets={availableThemePresets}
         themeSettings={themeSettings}
@@ -6028,6 +6314,11 @@ export default function CadWorkspace({
           renderPartsIndividually={isUrdfView || Boolean(selectedStepParameterRuntime)}
           stepParameters={selectedStepParameterRuntime}
           selectedMeshData={selectedMeshData}
+          stepAnalysis={selectedStepAnalysis}
+          stepAnalysisSettings={stepAnalysisSettings}
+          stepAnalysisStatus={selectedCollisionStatus}
+          stepAnalysisError={selectedCollisionError}
+          stepAnalysisLoadStage={collisionLoadStage}
           selectedDxfData={selectedDxfData}
           selectedDxfMeshData={selectedDxfMeshData}
           selectedKey={selectedKey}
@@ -6328,6 +6619,50 @@ export default function CadWorkspace({
                   onEnabledChange: handleStepModuleEnabledChange,
                   onCopyParams: handleCopyStepModuleParams,
                   onPasteParams: handlePasteStepModuleParams
+                }}
+                display={{
+                  settings: displaySettings,
+                  updateSettings: updateDisplaySettings,
+                  onModeChange: handleStepDisplayModeChange,
+                  clipBounds: selectedMeshData?.bounds || null
+                }}
+                collisions={{
+                  available: Boolean(selectedStepAnalysis),
+                  canRun: selectedEntryCanRunCollisions,
+                  status: selectedCollisionStatus,
+                  error: selectedCollisionError,
+                  loadStage: collisionLoadStage,
+                  summary: selectedStepAnalysis?.summary || null,
+                  occurrences: Array.isArray(selectedStepAnalysis?.occurrences) ? selectedStepAnalysis.occurrences : [],
+                  pairs: Array.isArray(selectedStepAnalysis?.pairs) ? selectedStepAnalysis.pairs : [],
+                  settings: stepAnalysisSettings,
+                  enabled: stepAnalysisSettings.enabled,
+                  selectedPairId: stepAnalysisSettings.selectedPairId,
+                  showSurfaceReview: stepAnalysisSettings.showSurfaceReview,
+                  showSurfaceHighlights: stepAnalysisSettings.showSurfaceHighlights,
+                  showWitnesses: stepAnalysisSettings.showWitnesses,
+                  showInterferenceVolumes: stepAnalysisSettings.showInterferenceVolumes,
+                  showBounds: stepAnalysisSettings.showBounds,
+                  showCollisions: stepAnalysisSettings.showCollisions,
+                  showContacts: stepAnalysisSettings.showContacts,
+                  showClearances: stepAnalysisSettings.showClearances,
+                  onRun: () => {
+                    void runCollisionsForEntry(selectedEntry);
+                  },
+                  onSettingsChange: updateStepAnalysisSettings,
+                  onEnabledChange: (checked) => updateStepAnalysisSettings({ enabled: checked === true }),
+                  onSelectedPairChange: (pairId) => updateStepAnalysisSettings({
+                    selectedPairId: String(pairId || "").trim(),
+                    enabled: true
+                  }),
+                  onShowSurfaceReviewChange: (checked) => updateStepAnalysisSettings({ showSurfaceReview: checked === true }),
+                  onShowSurfaceHighlightsChange: (checked) => updateStepAnalysisSettings({ showSurfaceHighlights: checked === true }),
+                  onShowWitnessesChange: (checked) => updateStepAnalysisSettings({ showWitnesses: checked === true }),
+                  onShowInterferenceVolumesChange: (checked) => updateStepAnalysisSettings({ showInterferenceVolumes: checked === true }),
+                  onShowBoundsChange: (checked) => updateStepAnalysisSettings({ showBounds: checked === true }),
+                  onShowCollisionsChange: (checked) => updateStepAnalysisSettings({ showCollisions: checked === true }),
+                  onShowContactsChange: (checked) => updateStepAnalysisSettings({ showContacts: checked === true }),
+                  onShowClearancesChange: (checked) => updateStepAnalysisSettings({ showClearances: checked === true })
                 }}
                 fileDownloadAvailable={fileLinkCopyAvailable}
                 viewerServerInfo={viewerServerInfo}

@@ -1719,12 +1719,8 @@ function pythonStepSourceFromStepMetadata(repoRoot, stepPath) {
   if (!metadataSourcePath) {
     return null;
   }
-  const sourceIdentity = sourcePathFromManifest(repoRoot, metadataSourcePath, { baseDir: path.dirname(stepPath) });
+  const sourceIdentity = generatorSourcePathFromManifest(repoRoot, metadataSourcePath, { baseDir: path.dirname(stepPath) });
   if (!sourceIdentity.sourcePath) {
-    return null;
-  }
-  const sourceExtension = path.extname(sourceIdentity.filePath || sourceIdentity.sourcePath).toLowerCase();
-  if (sourceExtension !== ".py") {
     return null;
   }
   return {
@@ -1751,7 +1747,17 @@ function createStepEntry({ repoRoot, rootPath, sourcePath, extension, includeArt
   const stepArtifact = validation?.stepArtifact || {};
   const glbAsset = assetForPath(repoRoot, glbPath);
   const stepModuleAsset = assetForPath(repoRoot, stepParameterPathForStepSource(sourcePath));
-  const artifact = includeArtifactStatus ? catalogArtifactFromValidation(stepArtifact) : undefined;
+  const fastMissingGlbArtifact = !includeArtifactStatus && !glbAsset
+    ? catalogArtifactFromValidation(stepArtifactError({
+        code: "missing_glb",
+        reason: "Generated GLB is missing",
+        repoRoot,
+        cadPath,
+        sourcePath,
+        glbPath,
+      }))
+    : undefined;
+  const artifact = includeArtifactStatus ? catalogArtifactFromValidation(stepArtifact) : fastMissingGlbArtifact;
   const artifactSourceKind = String(
     stepArtifact.sourceKind ||
     stepArtifact.error?.sourceKind ||
@@ -2042,9 +2048,7 @@ export function scanCadDirectory({
     includePath,
   })
     .map((sourcePath) => {
-      const logicalSourcePath = isInlineStepGlbArtifactPath(sourcePath)
-        ? sourcePathForInlineStepGlbArtifact(sourcePath)
-        : sourcePath;
+      const logicalSourcePath = logicalStepSourcePathForInlineArtifactPath(sourcePath) || sourcePath;
       const extension = path.extname(logicalSourcePath).toLowerCase();
       if (extension === ".step" || extension === ".stp") {
         return createStepEntry({

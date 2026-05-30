@@ -336,7 +336,14 @@ def _spec_output_paths(spec: EntrySpec) -> tuple[Path, ...]:
     if spec.step_path is not None:
         paths.append(spec.step_path)
         paths.append(part_glb_path(spec.step_path))
-    for path in (spec.dxf_path, spec.urdf_path, spec.sdf_path, spec.stl_path, spec.three_mf_path, spec.native_glb_path):
+    for path in (
+        spec.dxf_path,
+        spec.urdf_path,
+        spec.sdf_path,
+        spec.stl_path,
+        spec.three_mf_path,
+        spec.native_glb_path,
+    ):
         if path is not None:
             paths.append(path)
     return tuple(path.resolve() for path in paths)

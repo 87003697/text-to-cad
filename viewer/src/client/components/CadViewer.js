@@ -117,6 +117,9 @@ import {
   THEME_FLOOR_MODES,
   resolveThemeSettingsDisplayEdgeSettings
 } from "cadjs/lib/themeSettings";
+import {
+  CAD_DISPLAY_MODE
+} from "cadjs/lib/displaySettings";
 import ViewPlaneControl from "./viewer/ViewPlaneControl";
 import { useViewerDrawingOverlay } from "./viewer/hooks/useViewerDrawingOverlay";
 import { useViewerPicking } from "./viewer/hooks/useViewerPicking";
@@ -177,6 +180,16 @@ const VIEW_PLANE_DEFAULT_PRESET = {
   up: WORLD_UP
 };
 const CAD_EDGE_OPACITY = 0.84;
+const ANALYSIS_SURFACE_REVIEW_SOLID_OPACITY = 0.22;
+const ANALYSIS_SURFACE_REVIEW_SOLID_COLOR = "#cbd5e1";
+const ANALYSIS_SURFACE_REVIEW_EDGE_COLOR = "#dbeafe";
+const ANALYSIS_SURFACE_REVIEW_EDGE_OPACITY = 0.96;
+const ANALYSIS_SURFACE_REVIEW_EDGE_CLASSES = Object.freeze({
+  feature: Object.freeze({ opacity: 0.98, thickness: 1.55 }),
+  seam: Object.freeze({ opacity: 0.88, thickness: 1.35 }),
+  tangent: Object.freeze({ opacity: 0.62, thickness: 1.15 }),
+  degenerate: Object.freeze({ opacity: 0, thickness: 0 })
+});
 const DEFAULT_LIGHTING = {
   toneMappingExposure: 1.08,
   hemisphereSky: "#d3dde6",
@@ -900,6 +913,327 @@ function clearOverlayGroup(runtime, group) {
   }
 }
 
+const STEP_ANALYSIS_STATUS_META = Object.freeze({
+  collision: Object.freeze({ color: "#ff3b30", opacity: 0.96, lineWidth: 3.4, rank: 4 }),
+  contact: Object.freeze({ color: "#22c55e", opacity: 0.94, lineWidth: 3, rank: 3 }),
+  clearance: Object.freeze({ color: "#22d3ee", opacity: 0.82, lineWidth: 2.4, rank: 2 }),
+  separated: Object.freeze({ color: "#94a3b8", opacity: 0.45, lineWidth: 1.7, rank: 1 })
+});
+
+const STEP_ANALYSIS_SURFACE_OPACITY = 0.15;
+const STEP_ANALYSIS_INTERFERENCE_VOLUME_OPACITY = 0.15;
+const STEP_ANALYSIS_VISIBLE_STATUSES = new Set(["collision", "contact", "clearance"]);
+const STEP_ANALYSIS_MAX_OVERLAY_PAIRS = 200;
+
+function normalizeStepAnalysisOverlaySettings(settings) {
+  const value = settings && typeof settings === "object" ? settings : {};
+  return {
+    enabled: value.enabled === true,
+    selectedPairId: String(value.selectedPairId || "").trim(),
+    showSurfaceReview: value.showSurfaceReview !== false,
+    showSurfaceHighlights: value.showSurfaceHighlights !== false,
+    showWitnesses: value.showWitnesses !== false,
+    showInterferenceVolumes: value.showInterferenceVolumes === true,
+    showBounds: value.showBounds === true,
+    statuses: {
+      collision: value.showCollisions !== false,
+      contact: value.showContacts !== false,
+      clearance: value.showClearances !== false
+    }
+  };
+}
+
+function stepAnalysisStatusMeta(status) {
+  const normalizedStatus = String(status || "").trim().toLowerCase();
+  return STEP_ANALYSIS_STATUS_META[normalizedStatus] || STEP_ANALYSIS_STATUS_META.separated;
+}
+
+function normalizeStepAnalysisStatus(status) {
+  const normalizedStatus = String(status || "").trim().toLowerCase();
+  return STEP_ANALYSIS_STATUS_META[normalizedStatus] ? normalizedStatus : "separated";
+}
+
+function numericPoint3(value) {
+  if (!Array.isArray(value) || value.length < 3) {
+    return null;
+  }
+  const point = value.slice(0, 3).map((component) => Number(component));
+  return point.every((component) => Number.isFinite(component)) ? point : null;
+}
+
+function vector3FromPoint(THREE, value) {
+  const point = numericPoint3(value);
+  return point ? new THREE.Vector3(point[0], point[1], point[2]) : null;
+}
+
+function stepAnalysisBoundsLinePositions(bounds) {
+  const min = numericPoint3(bounds?.min);
+  const max = numericPoint3(bounds?.max);
+  if (!min || !max) {
+    return null;
+  }
+  const width = Math.abs(max[0] - min[0]);
+  const depth = Math.abs(max[1] - min[1]);
+  const height = Math.abs(max[2] - min[2]);
+  if (width <= 0 && depth <= 0 && height <= 0) {
+    return null;
+  }
+  const corners = [
+    [min[0], min[1], min[2]],
+    [max[0], min[1], min[2]],
+    [max[0], max[1], min[2]],
+    [min[0], max[1], min[2]],
+    [min[0], min[1], max[2]],
+    [max[0], min[1], max[2]],
+    [max[0], max[1], max[2]],
+    [min[0], max[1], max[2]]
+  ];
+  const edgeIndexes = [
+    [0, 1], [1, 2], [2, 3], [3, 0],
+    [4, 5], [5, 6], [6, 7], [7, 4],
+    [0, 4], [1, 5], [2, 6], [3, 7]
+  ];
+  const positions = [];
+  for (const [startIndex, endIndex] of edgeIndexes) {
+    positions.push(...corners[startIndex], ...corners[endIndex]);
+  }
+  return positions;
+}
+
+function addStepAnalysisMarker(runtime, point, meta, markerRadius) {
+  const { THREE } = runtime;
+  const geometry = new THREE.SphereGeometry(markerRadius, 16, 8);
+  const material = new THREE.MeshBasicMaterial({
+    color: meta.color,
+    transparent: true,
+    opacity: Math.min(1, meta.opacity + 0.08),
+    depthTest: false,
+    depthWrite: false
+  });
+  const marker = new THREE.Mesh(geometry, material);
+  marker.position.copy(point);
+  marker.renderOrder = 82;
+  marker.frustumCulled = false;
+  runtime.stepAnalysisOverlayGroup.add(marker);
+}
+
+function addStepAnalysisWitness(runtime, pair, meta, markerRadius) {
+  const { THREE } = runtime;
+  const aPoint = vector3FromPoint(THREE, pair?.witness?.aPoint);
+  const bPoint = vector3FromPoint(THREE, pair?.witness?.bPoint);
+  if (!aPoint && !bPoint) {
+    return;
+  }
+  if (aPoint) {
+    addStepAnalysisMarker(runtime, aPoint, meta, markerRadius);
+  }
+  if (bPoint && (!aPoint || aPoint.distanceToSquared(bPoint) > markerRadius * markerRadius * 0.04)) {
+    addStepAnalysisMarker(runtime, bPoint, meta, markerRadius);
+  }
+  if (!aPoint || !bPoint || aPoint.distanceToSquared(bPoint) <= 0) {
+    return;
+  }
+  const line = createScreenSpaceLineSegments(runtime, [
+    aPoint.x, aPoint.y, aPoint.z,
+    bPoint.x, bPoint.y, bPoint.z
+  ], {
+    color: meta.color,
+    opacity: Math.min(1, meta.opacity + 0.1),
+    lineWidth: Math.max(meta.lineWidth + 0.8, 3),
+    renderOrder: 81,
+    depthTest: false,
+    depthWrite: false
+  });
+  if (line) {
+    runtime.stepAnalysisOverlayGroup.add(line);
+  }
+}
+
+function addStepAnalysisIntersectionMesh(runtime, pair, meta) {
+  const vertices = Array.isArray(pair?.intersectionMesh?.vertices) ? pair.intersectionMesh.vertices : [];
+  const indices = Array.isArray(pair?.intersectionMesh?.indices) ? pair.intersectionMesh.indices : [];
+  if (vertices.length < 9 || indices.length < 3) {
+    return;
+  }
+  const { THREE } = runtime;
+  const positionValues = vertices.map((value) => Number(value));
+  const indexValues = indices.map((value) => Number(value));
+  if (
+    positionValues.some((value) => !Number.isFinite(value)) ||
+    indexValues.some((value) => !Number.isInteger(value) || value < 0)
+  ) {
+    return;
+  }
+  const geometry = new THREE.BufferGeometry();
+  geometry.setAttribute("position", new THREE.BufferAttribute(new Float32Array(positionValues), 3));
+  geometry.setIndex(new THREE.BufferAttribute(new Uint32Array(indexValues), 1));
+  geometry.computeVertexNormals();
+  geometry.computeBoundingSphere();
+  const material = new THREE.MeshBasicMaterial({
+    color: meta.color,
+    transparent: true,
+    opacity: STEP_ANALYSIS_INTERFERENCE_VOLUME_OPACITY,
+    depthTest: false,
+    depthWrite: false,
+    side: THREE.DoubleSide
+  });
+  const mesh = new THREE.Mesh(geometry, material);
+  mesh.renderOrder = 84;
+  mesh.frustumCulled = false;
+  mesh.userData.analysisPairId = String(pair?.id || "").trim();
+  runtime.stepAnalysisOverlayGroup.add(mesh);
+}
+
+function addStepAnalysisSurfaceMesh(runtime, surface, meta, pair) {
+  const vertices = Array.isArray(surface?.vertices) ? surface.vertices : [];
+  const indices = Array.isArray(surface?.indices) ? surface.indices : [];
+  if (vertices.length < 9 || indices.length < 3) {
+    return;
+  }
+  const { THREE } = runtime;
+  const positionValues = vertices.map((value) => Number(value));
+  const indexValues = indices.map((value) => Number(value));
+  if (
+    positionValues.some((value) => !Number.isFinite(value)) ||
+    indexValues.some((value) => !Number.isInteger(value) || value < 0)
+  ) {
+    return;
+  }
+  const geometry = new THREE.BufferGeometry();
+  geometry.setAttribute("position", new THREE.BufferAttribute(new Float32Array(positionValues), 3));
+  geometry.setIndex(new THREE.BufferAttribute(new Uint32Array(indexValues), 1));
+  geometry.computeVertexNormals();
+  geometry.computeBoundingSphere();
+  const material = new THREE.MeshBasicMaterial({
+    color: meta.color,
+    transparent: true,
+    opacity: STEP_ANALYSIS_SURFACE_OPACITY,
+    depthTest: false,
+    depthWrite: false,
+    side: THREE.DoubleSide
+  });
+  const mesh = new THREE.Mesh(geometry, material);
+  mesh.renderOrder = 86;
+  mesh.frustumCulled = false;
+  mesh.userData.analysisPairId = String(pair?.id || "").trim();
+  mesh.userData.analysisOccurrenceId = String(surface?.occurrenceId || "").trim();
+  runtime.stepAnalysisOverlayGroup.add(mesh);
+}
+
+function addStepAnalysisOccurrenceBox(runtime, occurrence, status) {
+  const positions = stepAnalysisBoundsLinePositions(occurrence?.bbox);
+  if (!positions) {
+    return;
+  }
+  const meta = stepAnalysisStatusMeta(status);
+  const line = createScreenSpaceLineSegments(runtime, positions, {
+    color: meta.color,
+    opacity: meta.opacity,
+    lineWidth: meta.lineWidth,
+    renderOrder: 80,
+    depthTest: false,
+    depthWrite: false
+  });
+  if (line) {
+    line.userData.analysisOccurrenceId = String(occurrence?.id || "").trim();
+    runtime.stepAnalysisOverlayGroup.add(line);
+  }
+}
+
+function ensureStepAnalysisOverlayGroup(runtime) {
+  if (!runtime?.THREE || !runtime?.modelGroup) {
+    return null;
+  }
+  if (!runtime.stepAnalysisOverlayGroup || runtime.stepAnalysisOverlayGroup.parent !== runtime.modelGroup) {
+    runtime.stepAnalysisOverlayGroup = new runtime.THREE.Group();
+    runtime.stepAnalysisOverlayGroup.name = "step-analysis-overlay";
+    runtime.stepAnalysisOverlayGroup.renderOrder = 80;
+    runtime.modelGroup.add(runtime.stepAnalysisOverlayGroup);
+  }
+  return runtime.stepAnalysisOverlayGroup;
+}
+
+function syncStepAnalysisOverlay(runtime, analysis, settings = null) {
+  const group = ensureStepAnalysisOverlayGroup(runtime);
+  if (!group) {
+    return;
+  }
+  clearOverlayGroup(runtime, group);
+  const overlaySettings = normalizeStepAnalysisOverlaySettings(settings);
+  if (!overlaySettings.enabled) {
+    return;
+  }
+
+  const pairs = (Array.isArray(analysis?.pairs) ? analysis.pairs : [])
+    .filter((pair) => {
+      if (overlaySettings.selectedPairId && String(pair?.id || "").trim() !== overlaySettings.selectedPairId) {
+        return false;
+      }
+      const status = normalizeStepAnalysisStatus(pair?.status);
+      return STEP_ANALYSIS_VISIBLE_STATUSES.has(status) && overlaySettings.statuses[status] !== false;
+    })
+    .slice(0, STEP_ANALYSIS_MAX_OVERLAY_PAIRS);
+  if (!pairs.length) {
+    return;
+  }
+
+  const occurrenceById = new Map(
+    (Array.isArray(analysis?.occurrences) ? analysis.occurrences : [])
+      .map((occurrence) => [String(occurrence?.id || "").trim(), occurrence])
+      .filter(([occurrenceId]) => occurrenceId)
+  );
+  const occurrenceStatus = new Map();
+  for (const pair of pairs) {
+    const status = normalizeStepAnalysisStatus(pair?.status);
+    const meta = stepAnalysisStatusMeta(status);
+    for (const occurrenceId of [pair?.a, pair?.b]) {
+      const id = String(occurrenceId || "").trim();
+      if (!id) {
+        continue;
+      }
+      const currentStatus = occurrenceStatus.get(id) || "separated";
+      if (meta.rank > stepAnalysisStatusMeta(currentStatus).rank) {
+        occurrenceStatus.set(id, status);
+      }
+    }
+  }
+
+  if (overlaySettings.showBounds) {
+    for (const [occurrenceId, status] of occurrenceStatus) {
+      addStepAnalysisOccurrenceBox(runtime, occurrenceById.get(occurrenceId), status);
+    }
+  }
+
+  if (overlaySettings.showInterferenceVolumes) {
+    for (const pair of pairs) {
+      if (normalizeStepAnalysisStatus(pair?.status) === "collision") {
+        addStepAnalysisIntersectionMesh(runtime, pair, stepAnalysisStatusMeta(pair?.status));
+      }
+    }
+  }
+
+  if (overlaySettings.showSurfaceHighlights) {
+    for (const pair of pairs) {
+      const status = normalizeStepAnalysisStatus(pair?.status);
+      if (status !== "collision" && status !== "contact") {
+        continue;
+      }
+      const meta = stepAnalysisStatusMeta(status);
+      for (const surface of Array.isArray(pair?.surfaceMeshes) ? pair.surfaceMeshes : []) {
+        addStepAnalysisSurfaceMesh(runtime, surface, meta, pair);
+      }
+    }
+  }
+
+  const markerRadius = Math.max((Number(runtime.modelRadius) || 1) * 0.0075, 0.28);
+  if (overlaySettings.showWitnesses) {
+    for (const pair of pairs) {
+      addStepAnalysisWitness(runtime, pair, stepAnalysisStatusMeta(pair?.status), markerRadius);
+    }
+  }
+  group.visible = group.children.length > 0;
+}
+
 function clamp(value, min, max) {
   return Math.min(Math.max(value, min), max);
 }
@@ -964,6 +1298,8 @@ const CadViewer = forwardRef(function CadViewer({
   selectedReferenceIds = [],
   selectorRuntime = null,
   displayEdgeRuntime = null,
+  stepAnalysis = null,
+  stepAnalysisSettings = null,
   stepParameters = null,
   pickableFaces = [],
   pickableEdges = [],
@@ -1055,7 +1391,30 @@ const CadViewer = forwardRef(function CadViewer({
     () => resolveThemeSettingsDisplayEdgeSettings(normalizedThemeSettings),
     [normalizedThemeSettings]
   );
-  const wireframeMode = normalizedDisplayMode === "wireframe";
+  const normalizedStepAnalysisOverlaySettings = useMemo(
+    () => normalizeStepAnalysisOverlaySettings(stepAnalysisSettings),
+    [stepAnalysisSettings]
+  );
+  const transparentMode = normalizedDisplayMode === CAD_DISPLAY_MODE.TRANSPARENT;
+  const collisionMode = normalizedDisplayMode === CAD_DISPLAY_MODE.COLLISION;
+  const effectiveStepAnalysisOverlaySettings = useMemo(() => ({
+    ...normalizedStepAnalysisOverlaySettings,
+    enabled: collisionMode,
+    showSurfaceReview: transparentMode ||
+      collisionMode ||
+      normalizedStepAnalysisOverlaySettings.showSurfaceReview
+  }), [collisionMode, normalizedStepAnalysisOverlaySettings, transparentMode]);
+  const analysisSurfaceReviewActive =
+    transparentMode ||
+    (
+      effectiveStepAnalysisOverlaySettings.enabled &&
+      effectiveStepAnalysisOverlaySettings.showSurfaceReview
+    );
+  const wireframeMode = normalizedDisplayMode === CAD_DISPLAY_MODE.WIREFRAME;
+  const effectiveWireframeMode = wireframeMode;
+  const effectiveDisplayMode = wireframeMode
+    ? CAD_DISPLAY_MODE.WIREFRAME
+    : CAD_DISPLAY_MODE.SOLID;
   const wireframeEdgeColor = useMemo(
     () => resolveWireframeEdgeColor({
       edgeColor: displayEdgeSettings?.color,
@@ -1070,15 +1429,77 @@ const CadViewer = forwardRef(function CadViewer({
       : (viewerTheme?.edgeOpacity ?? BASE_VIEWER_THEME.edgeOpacity ?? CAD_EDGE_OPACITY);
     return Math.max(baseOpacity, 0.9);
   }, [displayEdgeSettings, viewerTheme]);
-  const visualEdgeSettings = useMemo(() => wireframeMode
-    ? {
+  const visualEdgeSettings = useMemo(() => {
+    if (analysisSurfaceReviewActive) {
+      const baseThickness = Number.isFinite(Number(displayEdgeSettings?.thickness))
+        ? clamp(Number(displayEdgeSettings.thickness), 0.5, 6)
+        : 1;
+      return {
+        ...displayEdgeSettings,
+        enabled: true,
+        contrastMode: "manual",
+        color: ANALYSIS_SURFACE_REVIEW_EDGE_COLOR,
+        opacity: ANALYSIS_SURFACE_REVIEW_EDGE_OPACITY,
+        thickness: Math.max(baseThickness, 1.35),
+        depthTest: false,
+        forceTopologyOverlay: true,
+        silhouette: false,
+        classes: {
+          feature: {
+            ...ANALYSIS_SURFACE_REVIEW_EDGE_CLASSES.feature,
+            thickness: Math.max(baseThickness, ANALYSIS_SURFACE_REVIEW_EDGE_CLASSES.feature.thickness)
+          },
+          seam: {
+            ...ANALYSIS_SURFACE_REVIEW_EDGE_CLASSES.seam,
+            thickness: Math.max(baseThickness, ANALYSIS_SURFACE_REVIEW_EDGE_CLASSES.seam.thickness)
+          },
+          tangent: {
+            ...ANALYSIS_SURFACE_REVIEW_EDGE_CLASSES.tangent,
+            thickness: Math.max(baseThickness, ANALYSIS_SURFACE_REVIEW_EDGE_CLASSES.tangent.thickness)
+          },
+          degenerate: ANALYSIS_SURFACE_REVIEW_EDGE_CLASSES.degenerate
+        }
+      };
+    }
+    if (effectiveWireframeMode) {
+      return {
         ...displayEdgeSettings,
         contrastMode: "manual",
         color: wireframeEdgeColor,
         opacity: wireframeEdgeOpacity
-      }
-    : displayEdgeSettings,
-  [displayEdgeSettings, wireframeEdgeColor, wireframeEdgeOpacity, wireframeMode]);
+      };
+    }
+    return displayEdgeSettings;
+  }, [analysisSurfaceReviewActive, displayEdgeSettings, effectiveWireframeMode, wireframeEdgeColor, wireframeEdgeOpacity]);
+  const resolvedMaterialSettings = useMemo(() => {
+    const baseMaterialSettings = {
+      ...normalizedThemeSettings.materials,
+      envMapIntensity: normalizedThemeSettings.materials.envMapIntensity * (
+        normalizedThemeSettings.environment.enabled ? normalizedThemeSettings.environment.intensity : 0
+      )
+    };
+    if (!analysisSurfaceReviewActive || effectiveWireframeMode) {
+      return baseMaterialSettings;
+    }
+    return {
+      ...baseMaterialSettings,
+      defaultColor: ANALYSIS_SURFACE_REVIEW_SOLID_COLOR,
+      overrideSourceColors: true,
+      opacity: Math.min(
+        Number.isFinite(Number(baseMaterialSettings.opacity)) ? Number(baseMaterialSettings.opacity) : 1,
+        ANALYSIS_SURFACE_REVIEW_SOLID_OPACITY
+      ),
+      depthWrite: false,
+      metalness: 0,
+      clearcoat: 0,
+      clearcoatRoughness: 1
+    };
+  }, [
+    analysisSurfaceReviewActive,
+    effectiveWireframeMode,
+    normalizedThemeSettings.environment,
+    normalizedThemeSettings.materials
+  ]);
   const focusedPartIds = useMemo(() => normalizePartIdList(focusedPartId), [focusedPartId]);
   const focusedPartIdSet = useMemo(() => new Set(focusedPartIds), [focusedPartIds]);
   const normalizedClipSettings = normalizedViewerRenderState.clipSettings;
@@ -1101,10 +1522,14 @@ const CadViewer = forwardRef(function CadViewer({
     floorMode,
     normalizedThemeSettings.floor
   ), [normalizedThemeSettings.floor]);
-  const edgesVisible = showEdges && shouldUseCadEdgeSource && (displayEdgeSettings.enabled || wireframeMode);
+  const edgesVisible = showEdges && shouldUseCadEdgeSource && (
+    displayEdgeSettings.enabled ||
+    effectiveWireframeMode ||
+    analysisSurfaceReviewActive
+  );
   const topologyDisplayEdgesVisible = shouldRenderTopologyDisplayEdges({
     edgesVisible,
-    wireframeMode,
+    wireframeMode: effectiveWireframeMode,
     cadEdgeSource: shouldUseCadEdgeSource,
     displayEdgeRuntime: activeDisplayEdgeRuntime,
     selectorRuntime: activeSelectorRuntime,
@@ -1123,10 +1548,10 @@ const CadViewer = forwardRef(function CadViewer({
     edgesVisible,
     topologyDisplayEdgesVisible,
     displayEdgesVisible,
-    wireframeMode
+    wireframeMode: effectiveWireframeMode
   });
   const preserveInteractionPixelRatio = Boolean(
-    wireframeMode ||
+    effectiveWireframeMode ||
     edgesVisible ||
     topologyDisplayEdgesVisible ||
     displayEdgesVisible ||
@@ -1824,14 +2249,8 @@ const CadViewer = forwardRef(function CadViewer({
     runtime.keyLight.castShadow = runtime.keyLight.visible;
     runtime.spotLight.castShadow = false;
 
-    const materialSettings = {
-      ...normalizedThemeSettings.materials,
-      envMapIntensity: normalizedThemeSettings.materials.envMapIntensity * (
-        normalizedThemeSettings.environment.enabled ? normalizedThemeSettings.environment.intensity : 0
-      )
-    };
     for (const record of runtime.displayRecords || []) {
-      applyMaterialSettingsToRecord(runtime.THREE, record, materialSettings);
+      applyMaterialSettingsToRecord(runtime.THREE, record, resolvedMaterialSettings);
     }
 
     runtime.gridConfig = null;
@@ -1861,6 +2280,7 @@ const CadViewer = forwardRef(function CadViewer({
     defaultGridRadius,
     normalizedThemeSettings,
     normalizedSceneScaleMode,
+    resolvedMaterialSettings,
     resolvedFloorMode,
     viewerReadyTick,
     viewerTheme,
@@ -2049,6 +2469,7 @@ const CadViewer = forwardRef(function CadViewer({
       runtime.edgePickObjects = [];
       runtime.topologyDisplayEdgeLine = null;
       runtime.topologyDisplayEdgeTransformByRecord = false;
+      runtime.stepAnalysisOverlayGroup = null;
       runtime.displayRecords = [];
       runtime.hasVisibleModel = false;
       runtime.activeModelKey = "";
@@ -2076,7 +2497,7 @@ const CadViewer = forwardRef(function CadViewer({
       Array.isArray(meshData?.parts) &&
       meshData.parts.length > 0;
     const shouldRenderSourceColorParts =
-      !wireframeMode &&
+      !effectiveWireframeMode &&
       normalizedThemeSettings.materials?.overrideSourceColors !== true &&
       meshNeedsPartRenderingForSourceColors(meshData);
     const shouldRenderParts =
@@ -2095,12 +2516,6 @@ const CadViewer = forwardRef(function CadViewer({
       : shouldRenderFillParts || shouldRenderSourceColorParts
         ? meshData.parts
         : pickableParts;
-    const materialSettings = {
-      ...normalizedThemeSettings.materials,
-      envMapIntensity: normalizedThemeSettings.materials.envMapIntensity * (
-        normalizedThemeSettings.environment.enabled ? normalizedThemeSettings.environment.intensity : 0
-      )
-    };
     const modelStepParameters = stepParameterRuntime?.definition
       ? {
           ...stepParameterRuntime,
@@ -2108,7 +2523,7 @@ const CadViewer = forwardRef(function CadViewer({
         }
       : null;
 
-    const sceneTheme = wireframeMode
+    const sceneTheme = effectiveWireframeMode
       ? {
           ...normalizedThemeSettings,
           edges: {
@@ -2134,10 +2549,10 @@ const CadViewer = forwardRef(function CadViewer({
         };
     const cadScene = buildModel(THREE, meshData, {
       theme: sceneTheme,
-      displayMode: normalizedDisplayMode,
+      displayMode: effectiveDisplayMode,
       scale: normalizedSceneScaleMode,
       baseTheme: viewerTheme,
-      materialSettings,
+      materialSettings: resolvedMaterialSettings,
       recomputeNormals,
       silhouette: topologyDisplayEdgesVisible && displayEdgeSettings.silhouette === true,
       parts: shouldRenderParts ? renderedParts : [],
@@ -2342,16 +2757,41 @@ const CadViewer = forwardRef(function CadViewer({
     pickableParts,
     selectorRuntime,
     displayEdgeRuntime,
-    normalizedDisplayMode,
+    effectiveDisplayMode,
+    effectiveWireframeMode,
+    wireframeEdgeColor,
     normalizedSceneScaleMode,
     resolvedFloorMode,
+    resolvedMaterialSettings,
     viewerTheme,
     normalizedThemeSettings.materials,
     normalizedThemeSettings.environment,
     displayEdgeSettings,
     visualEdgeSettings,
-    wireframeEdgeColor,
     updateActiveGridHelper
+  ]);
+
+  useEffect(() => {
+    const runtime = runtimeRef.current;
+    if (!runtime?.THREE || !runtime?.modelGroup) {
+      return;
+    }
+    if (isLoading || !meshData || !runtime.hasVisibleModel) {
+      if (runtime.stepAnalysisOverlayGroup) {
+        clearOverlayGroup(runtime, runtime.stepAnalysisOverlayGroup);
+        runtime.requestRender?.();
+      }
+      return;
+    }
+    syncStepAnalysisOverlay(runtime, stepAnalysis, effectiveStepAnalysisOverlaySettings);
+    runtime.requestRender?.();
+  }, [
+    isLoading,
+    meshData,
+    modelKey,
+    effectiveStepAnalysisOverlaySettings,
+    stepAnalysis,
+    viewerReadyTick
   ]);
 
   useEffect(() => {
@@ -2421,7 +2861,7 @@ const CadViewer = forwardRef(function CadViewer({
 
     applyPartVisualState(runtime.THREE, runtime.displayRecords, partVisualStateRef.current);
     runtime.requestRender();
-  }, [viewerReadyTick, partVisualStateEnabled, recordEdgesVisible, focusedPartIds, hiddenPartIds, hoveredPartId, pickMode, pickableParts, selectedPartIds, viewerTheme, visualEdgeSettings, normalizedDisplayMode]);
+  }, [viewerReadyTick, partVisualStateEnabled, recordEdgesVisible, focusedPartIds, hiddenPartIds, hoveredPartId, pickMode, pickableParts, selectedPartIds, viewerTheme, visualEdgeSettings, effectiveDisplayMode]);
 
   useEffect(() => {
     const runtime = runtimeRef.current;
@@ -2515,7 +2955,7 @@ const CadViewer = forwardRef(function CadViewer({
       applyPartVisualState(runtime.THREE, runtime.displayRecords, partVisualStateRef.current);
       const baseTopologyDisplayEdgesVisible = shouldRenderTopologyDisplayEdges({
         edgesVisible,
-        wireframeMode,
+        wireframeMode: effectiveWireframeMode,
         cadEdgeSource: shouldUseCadEdgeSource,
         displayEdgeRuntime,
         selectorRuntime,
@@ -2590,7 +3030,7 @@ const CadViewer = forwardRef(function CadViewer({
     });
     const nextTopologyDisplayEdgesVisible = shouldRenderTopologyDisplayEdges({
       edgesVisible,
-      wireframeMode,
+      wireframeMode: effectiveWireframeMode,
       cadEdgeSource: shouldUseCadEdgeSource,
       displayEdgeRuntime: useRecordTopologyEdgeTransforms ? displayEdgeRuntime : nextEdgeRuntimes.displayEdgeRuntime,
       selectorRuntime: nextEdgeRuntimes.selectorRuntime,
@@ -2637,7 +3077,7 @@ const CadViewer = forwardRef(function CadViewer({
   }, [
     visualEdgeSettings,
     edgesVisible,
-    wireframeMode,
+    effectiveWireframeMode,
     shouldUseCadEdgeSource,
     focusedPartIds,
     recordEdgesVisible,

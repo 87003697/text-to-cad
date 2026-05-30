@@ -276,6 +276,78 @@ test("local asset middleware resolves legacy URDF mesh URLs from referrer file",
   ]);
 });
 
+test("CAD Viewer API middleware generates on-demand collision reports", async () => {
+  const calls = [];
+  const middleware = createCadViewerApiMiddleware({
+    rootDir: "models",
+    backend: {
+      readCatalog: async () => ({ schemaVersion: 4, entries: [{ file: "part.step" }] }),
+      resolveRoot: (rootDir) => ({ rootPath: `/workspace/${rootDir}` }),
+      generateCollisions: async (request) => {
+        calls.push(request);
+        return {
+          ok: true,
+          result: {
+            kind: "cadpy-interference-report",
+            summary: { reportedPairCount: 1 },
+          },
+        };
+      },
+    },
+  });
+  const req = {
+    method: "POST",
+    url: "/__cad/collisions?file=part.step&bodyDepth=2&maxPairs=50&clearanceMm=0.2&contactToleranceMm=0.01&collisionVolumeToleranceMm3=0.1&timeBudgetMs=500&includeContact=1&includeClearance=1&includeSeparated=0&includeAllowed=true&listBodies=false&noCache=1&setA=o1.1&setB=o1.2&pair=o1.1:o1.2&allowPair=o1.1:o1.3&exclude=fixture&collapse=servo",
+  };
+  const res = createResponse();
+
+  await middleware(req, res, () => {});
+
+  assert.equal(res.statusCode, 200);
+  assert.deepEqual(
+    calls.map((call) => ({
+      fileRef: call.fileRef,
+      rootDir: call.rootDir,
+      hasCatalog: Boolean(call.catalog),
+      resolvedRoot: call.resolvedRoot,
+      options: call.options,
+    })),
+    [{
+      fileRef: "part.step",
+      rootDir: "models",
+      hasCatalog: true,
+      resolvedRoot: { rootPath: "/workspace/models" },
+      options: {
+        clearanceMm: 0.2,
+        contactToleranceMm: 0.01,
+        collisionVolumeToleranceMm3: 0.1,
+        maxPairs: 50,
+        timeBudgetMs: 500,
+        bodyDepth: 2,
+        includeContact: true,
+        includeClearance: true,
+        includeSeparated: false,
+        includeAllowed: true,
+        listBodies: false,
+        noCache: true,
+        collapse: ["servo"],
+        exclude: ["fixture"],
+        setA: ["o1.1"],
+        setB: ["o1.2"],
+        pairs: ["o1.1:o1.2"],
+        allowPairs: ["o1.1:o1.3"],
+      },
+    }],
+  );
+  assert.deepEqual(JSON.parse(res.body), {
+    ok: true,
+    error: "",
+    result: {
+      kind: "cadpy-interference-report",
+      summary: { reportedPairCount: 1 },
+    },
+  });
+});
 
 test("CAD Viewer API middleware reveals file assets with POST reveal route", async () => {
   const calls = [];

@@ -138,8 +138,39 @@ test("fill colors and record material settings preserve override semantics", () 
   assert.equal(record.baseOpacity, 0.6);
   assert.equal(record.material.opacity, 0.6);
   assert.equal(record.material.transparent, true);
+  assert.equal(record.baseDepthWrite, true);
+  assert.equal(record.material.depthWrite, true);
   assert.equal(record.material.envMapIntensity, 0.7);
   assert.equal(record.baseEmissiveIntensity, 0.8);
   assert.equal(record.material.emissiveIntensity, 0.8);
   assert.ok(record.material.version > initialMaterialVersion);
+});
+
+test("record material settings can disable transparent depth writes", () => {
+  const material = new THREE.MeshPhysicalMaterial({ color: "#000000" });
+  const record = {
+    material,
+    hasVertexColors: false,
+    sourceColor: null,
+    fillIndex: 0
+  };
+
+  applyMaterialSettingsToRecord(THREE, record, {
+    defaultColor: "#445566",
+    opacity: 0.25,
+    depthWrite: false
+  });
+
+  assert.equal(record.material.transparent, true);
+  assert.equal(record.material.depthWrite, false);
+  assert.equal(record.baseDepthWrite, false);
+
+  applyMaterialSettingsToRecord(THREE, record, {
+    defaultColor: "#445566",
+    opacity: 1
+  });
+
+  assert.equal(record.material.transparent, false);
+  assert.equal(record.material.depthWrite, true);
+  assert.equal(record.baseDepthWrite, true);
 });

@@ -34,12 +34,24 @@ function normalizePositiveNumber(value, fallback = 0) {
   return numericValue > 0 ? numericValue : fallback;
 }
 
+function normalizeNonNegativeNumber(value, fallback = 0) {
+  const numericValue = normalizeNumber(value, fallback);
+  return numericValue >= 0 ? numericValue : fallback;
+}
+
 function normalizeBoolean(value, fallback = false) {
   return typeof value === "boolean" ? value : fallback;
 }
 
 function isPlainObject(value) {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function normalizeStringList(value) {
+  const rawValues = Array.isArray(value)
+    ? value
+    : String(value || "").split(/[\n,]+/u);
+  return rawValues.map((item) => normalizeString(item)).filter(Boolean);
 }
 
 function storageValuesEqual(a, b) {
@@ -181,6 +193,12 @@ function entryStepModuleSignature(entry) {
   ].filter(Boolean).join(":");
 }
 
+function entryCollisionsSignature(entry) {
+  return [
+    normalizeString(entry?.hash)
+  ].filter(Boolean).join(":");
+}
+
 function entryLargeFileSignature(entry) {
   return [
     normalizeString(entry?.kind).toLowerCase(),
@@ -211,6 +229,7 @@ export function fileSessionSignaturesForEntry(entry) {
     tab: entryTabSignature(entry),
     dxf: entryDxfSignature(entry),
     stepModule: entryStepModuleSignature(entry),
+    collisions: entryCollisionsSignature(entry),
     urdf: entryUrdfSignature(entry),
     largeFile: entryLargeFileSignature(entry)
   };
@@ -365,6 +384,42 @@ function normalizeLargeFileSlice(value) {
   };
 }
 
+function normalizeCollisionsSlice(value) {
+  if (!isPlainObject(value)) {
+    return null;
+  }
+  return {
+    enabled: normalizeBoolean(value.enabled, false),
+    selectedPairId: normalizeString(value.selectedPairId),
+    bodyDepth: Math.min(Math.max(Math.round(normalizeNumber(value.bodyDepth, 2)), 1), 12),
+    maxPairs: Math.min(Math.max(Math.round(normalizeNumber(value.maxPairs, 1000)), 1), 100000),
+    clearanceMm: Math.min(normalizeNonNegativeNumber(value.clearanceMm, 0), 100000),
+    contactToleranceMm: Math.min(normalizeNonNegativeNumber(value.contactToleranceMm, 0.0001), 1000),
+    collisionVolumeToleranceMm3: Math.min(normalizeNonNegativeNumber(value.collisionVolumeToleranceMm3, 0.000000001), 1000000000),
+    timeBudgetMs: Math.min(normalizeNonNegativeNumber(value.timeBudgetMs, 0), 3600000),
+    includeContact: normalizeBoolean(value.includeContact, true),
+    includeClearance: normalizeBoolean(value.includeClearance, false),
+    includeSeparated: normalizeBoolean(value.includeSeparated, false),
+    includeAllowed: normalizeBoolean(value.includeAllowed, false),
+    listBodies: normalizeBoolean(value.listBodies, false),
+    noCache: normalizeBoolean(value.noCache, false),
+    setA: normalizeStringList(value.setA),
+    setB: normalizeStringList(value.setB),
+    pairs: normalizeStringList(value.pairs),
+    allowPairs: normalizeStringList(value.allowPairs),
+    exclude: normalizeStringList(value.exclude),
+    collapse: normalizeStringList(value.collapse),
+    showSurfaceReview: normalizeBoolean(value.showSurfaceReview, true),
+    showSurfaceHighlights: normalizeBoolean(value.showSurfaceHighlights, true),
+    showWitnesses: normalizeBoolean(value.showWitnesses, true),
+    showInterferenceVolumes: normalizeBoolean(value.showInterferenceVolumes, false),
+    showBounds: normalizeBoolean(value.showBounds, false),
+    showCollisions: normalizeBoolean(value.showCollisions, true),
+    showContacts: normalizeBoolean(value.showContacts, true),
+    showClearances: normalizeBoolean(value.showClearances, true)
+  };
+}
+
 const FILE_SESSION_SLICE_SCHEMA = Object.freeze({
   display: {
     normalize: normalizeDisplaySlice,
@@ -385,6 +440,11 @@ const FILE_SESSION_SLICE_SCHEMA = Object.freeze({
     normalize: normalizeStepModuleSlice,
     equals: storageValuesEqual,
     signatureKey: "stepModule"
+  },
+  collisions: {
+    normalize: normalizeCollisionsSlice,
+    equals: storageValuesEqual,
+    signatureKey: "collisions"
   },
   urdf: {
     normalize: normalizeUrdfSlice,

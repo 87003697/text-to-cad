@@ -48,6 +48,7 @@ python scripts/inspect refs path/to/part.step --facts --planes --positioning
 ```bash
 python scripts/step path/to/assembly.py
 python scripts/inspect refs path/to/assembly.step --facts --planes --positioning
+python scripts/interference path/to/assembly.step --body-depth 2 --pretty
 ```
 
 Passing a generated assembly `.step` directly treats it as imported native STEP. Pass the `.py` assembly source when source-level assembly composition must be preserved.
@@ -103,6 +104,7 @@ Before running the command:
 - Confirm the source defines `gen_step()`.
 - Prefer the Python generator over a generated STEP/STP file when both are available.
 - Confirm native labels are assigned for exported parts, assembly children, mate datums, and any retained feature shapes.
+- For functional assemblies, decide whether standalone `scripts/interference` should run after generation, and choose explicit body-depth/collapse/scope controls before invoking it.
 - Confirm the target path is explicit.
 - Confirm expected bbox, labels, and positioning checks are known.
 

@@ -137,7 +137,7 @@ function topologyGlb(manifest, {
   selector = true,
   displayEdges = true,
   extensionSchemaVersion = STEP_TOPOLOGY_SCHEMA_VERSION,
-  manifestSchemaVersion = extensionSchemaVersion
+  manifestSchemaVersion = extensionSchemaVersion,
 } = {}) {
   let binary = Buffer.alloc(0);
   const bufferViews = [];
@@ -211,7 +211,9 @@ function topologyGlb(manifest, {
       }],
     }],
     extensionsUsed: ["STEP_topology"],
-    extensions: { STEP_topology: extension },
+    extensions: {
+      STEP_topology: extension,
+    },
   };
   const jsonChunk = pad4(Buffer.from(JSON.stringify(gltf), "utf8"), 0x20);
   const header = Buffer.alloc(12);
@@ -278,6 +280,7 @@ test("scanCadDirectory discovers CAD files directly and infers STEP assets", () 
   assert.equal(stepEntry.artifact, undefined);
   assert.equal(stepEntry.sourceKind, "step");
   assert.ok(stepEntry.moduleUrl.startsWith("/workspace/sample_part/.sample_part.step.js?v="));
+  assert.equal(stepEntry.relations, undefined);
   assert.equal(stepEntry.step, undefined);
   assert.equal(stepEntry.source, undefined);
   assert.equal(stepEntry.assets, undefined);
@@ -314,6 +317,7 @@ test("scanCadDirectory discovers CAD files directly and infers STEP assets", () 
   assert.equal(entryByFile(catalog, "robots/legacy_robot.srdf").relations.urdf.file, "robots/sample_robot.urdf");
   assert.equal(entryByFile(catalog, "sample_part/sample_part.py"), undefined);
   assert.equal(entryByFile(catalog, "sample_part/.sample_part.step.glb"), undefined);
+  assert.equal(entryByFile(catalog, "sample_part/.sample_part.step.analysis.json"), undefined);
   assert.equal(entryByFile(catalog, "sample_part/.sample_part.step.js"), undefined);
   assert.equal(entryByFile(catalog, "sample_part/.sample_part.step/ignored.step"), undefined);
   assert.equal(entryByFile(catalog, "robots/.sample_robot.urdf/ignored.urdf"), undefined);
@@ -379,7 +383,9 @@ test("scanCadDirectory can skip STEP artifact status for fast catalog reads", ()
   const entry = entryByFile(catalog, "fast.step");
 
   assert.equal(entry.file, "fast.step");
-  assert.equal(entry.artifact, undefined);
+  assert.equal(entry.artifact.ok, false);
+  assert.equal(entry.artifact.error, "missing_glb");
+  assert.equal(entry.artifact.glbPath, "workspace/.fast.step.glb");
   const status = readStepSourceStatus({ repoRoot, stepPath });
   assert.equal(status.artifact.error, "missing_glb");
   assert.equal(status.artifact.glbPath, "workspace/.fast.step.glb");
@@ -546,6 +552,27 @@ test("scanCadDirectory treats missing GLBs for STEP files with Python metadata a
     sourceFingerprint: "aggregate-source-fingerprint",
   });
   assert.equal(entry.artifact.error, "missing_glb");
+});
+
+test("scanCadDirectory treats copied STEP files with unavailable Python metadata as imported", () => {
+  const repoRoot = makeTempRepo();
+  writeStepWithSourceMetadata(path.join(repoRoot, "workspace/copied/robot_arm.step"), {
+    sourcePath: "workspace/robots/tom/robot_arm.py",
+    sourceHash: "direct-source-hash",
+    sourceFingerprint: "aggregate-source-fingerprint",
+  });
+
+  const catalog = scanCadDirectory({ repoRoot, rootDir: "workspace" });
+  const entry = entryByFile(catalog, "copied/robot_arm.step");
+  const status = readStepSourceStatus({
+    repoRoot,
+    stepPath: path.join(repoRoot, "workspace/copied/robot_arm.step"),
+  });
+
+  assert.equal(entry.sourceKind, "step");
+  assert.equal(entry.source, undefined);
+  assert.equal(entry.artifact.error, "missing_glb");
+  assert.equal(status.sourceKind, "step");
 });
 
 test("scanCadDirectory requires sourcePath instead of recovering Python identity from embedded file lists", () => {
@@ -1132,6 +1159,7 @@ test("isServedCadAsset serves standalone SDF entries", () => {
 
 test("isServedCadAsset serves inline GLBs and ignores legacy STEP artifact files", () => {
   assert.equal(isServedCadAsset(path.join("workspace", ".sample_part.step.glb")), true);
+  assert.equal(isServedCadAsset(path.join("workspace", ".sample_part.step.analysis.json")), false);
   assert.equal(isServedCadAsset(path.join("workspace", ".sample_part.step", "model.glb")), false);
   assert.equal(isServedCadAsset(path.join("workspace", ".sample_part.step", "topology.json")), false);
   assert.equal(isServedCadAsset(path.join("workspace", ".sample_part.step", "topology.bin")), false);

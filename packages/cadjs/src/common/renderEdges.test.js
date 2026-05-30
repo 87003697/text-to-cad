@@ -79,6 +79,27 @@ test("screen-space display edge creation registers material settings", () => {
   assert.equal(edgeMaterial.resolution.y, 480);
 });
 
+test("screen-space display edges can render through transparent solids", () => {
+  const { edgeMaterial } = createDisplayEdgeObject(edgeContext(), {
+    geometry: twoPointGeometry(),
+    edgeSettings: {
+      color: "#123456",
+      opacity: 0.42,
+      thickness: 2,
+      depthTest: false
+    },
+    baseTheme: {
+      edge: "#000000",
+      edgeOpacity: 0.84
+    },
+    partId: "part-a",
+    displayMode: "solid",
+    thickness: 2
+  });
+
+  assert.equal(edgeMaterial.depthTest, false);
+});
+
 test("wireframe display edges preserve high opacity and basic line material", () => {
   const { edgeMesh, edgeMaterial } = createDisplayEdgeObject(edgeContext(), {
     geometry: twoPointGeometry(),
@@ -128,8 +149,34 @@ test("topology display edge helper builds filtered screen-space edges", () => {
   assert.equal(line.userData.partId, "__topology__");
   assert.equal(line.material.opacity, 0.66);
   assert.equal(line.material.linewidth, 1.5);
+  assert.equal(line.material.depthTest, true);
   assert.equal(line.material.polygonOffset, true);
   assert.equal(line.material.polygonOffsetUnits, -5);
+});
+
+test("topology display edge helper can render CAD edges through transparent solids", () => {
+  const line = createTopologyDisplayEdgeObject(
+    edgeContext(),
+    {
+      proxy: {
+        edgePositions: new Float32Array([0, 0, 0, 1, 0, 0]),
+        edgeIndices: new Uint32Array([0, 1])
+      }
+    },
+    {
+      color: "#654321",
+      opacity: 0.66,
+      thickness: 1.5,
+      depthTest: false
+    },
+    {
+      edge: "#000000",
+      edgeOpacity: 0.84,
+      edgeThickness: 1
+    }
+  );
+
+  assert.equal(line.material.depthTest, false);
 });
 
 test("topology display edge helper renders feature-class edges by default", () => {

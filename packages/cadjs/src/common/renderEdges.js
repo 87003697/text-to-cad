@@ -431,6 +431,7 @@ export function createDisplayEdgeObject(context = {}, {
   const color = wireframeMode
     ? (wireframeEdgeColor || edgeSettings?.color || baseTheme?.edge || "#18181b")
     : (edgeSettings?.color || baseTheme?.edge || "#18181b");
+  const depthTest = edgeSettings?.depthTest !== false;
   if (wireframeMode && THREE) {
     const opacity = Math.max(edgeOpacity, 0.9);
     const material = new THREE.LineBasicMaterial({
@@ -453,7 +454,7 @@ export function createDisplayEdgeObject(context = {}, {
     opacity: edgeOpacity,
     lineWidth: Number.isFinite(Number(thickness)) ? Number(thickness) : 1,
     renderOrder: 3,
-    depthTest: true,
+    depthTest,
     depthWrite: false,
     depthBias: topologyLineDepthBiasForWidth(thickness)
   }, materials);
@@ -487,11 +488,12 @@ export function createTopologyDisplayEdgeObject(context = {}, selectorRuntime, e
   const thickness = Number.isFinite(Number(edgeSettings?.thickness))
     ? clamp(Number(edgeSettings.thickness), 0.5, 6)
     : (baseTheme?.edgeThickness ?? 1);
+  const depthTest = edgeSettings?.depthTest !== false;
   const baseOptions = {
     color: edgeSettings?.color || baseTheme?.edge || "#18181b",
     lineWidth: thickness,
     renderOrder: 3,
-    depthTest: true,
+    depthTest,
     depthWrite: false,
     depthBias: topologyLineDepthBiasForWidth(thickness)
   };

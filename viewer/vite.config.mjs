@@ -126,6 +126,33 @@ function isGenerationStatusFilePath(filePath) {
   return name.startsWith(".") && name.endsWith(".generation.lock.json");
 }
 
+function devPackageSourceCachePlugin() {
+  const sourcePackagePathPattern = /^\/packages\/(?:cadjs|cadpy|cadpy_metadata)\/src\//;
+  return {
+    name: "cad-viewer-dev-package-source-cache",
+    apply: "serve",
+    configureServer(server) {
+      server.middlewares.use((req, res, next) => {
+        const pathname = String(req.url || "").split(/[?#]/, 1)[0];
+        if (!sourcePackagePathPattern.test(pathname)) {
+          next();
+          return;
+        }
+
+        const originalSetHeader = res.setHeader.bind(res);
+        res.setHeader = (name, value) => {
+          if (String(name || "").toLowerCase() === "cache-control") {
+            return originalSetHeader(name, "no-store");
+          }
+          return originalSetHeader(name, value);
+        };
+        res.setHeader("Cache-Control", "no-store");
+        next();
+      });
+    },
+  };
+}
+
 function cadCatalogPlugin({ enableStepArtifactBackend = false } = {}) {
   const activeDirectories = new Map();
   const refreshTimers = new Map();
@@ -334,6 +361,7 @@ export default defineConfig(({ command }) => ({
   root: viewerAppRoot,
   envPrefix: "VIEWER_",
   plugins: [
+    devPackageSourceCachePlugin(),
     react(),
     cadCatalogPlugin({ enableStepArtifactBackend: command === "serve" }),
     serverLifetimePlugin(),

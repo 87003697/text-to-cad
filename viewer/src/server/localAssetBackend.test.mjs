@@ -1,10 +1,13 @@
 import assert from "node:assert/strict";
+import crypto from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 
 import { createLocalAssetBackend } from "./localAssetBackend.mjs";
+
+const STEP_TOPOLOGY_SCHEMA_VERSION = 2;
 
 async function withTempWorkspace(callback) {
   const workspaceRoot = fs.mkdtempSync(path.join(os.tmpdir(), "cad-viewer-backend-"));
@@ -13,6 +16,110 @@ async function withTempWorkspace(callback) {
   } finally {
     fs.rmSync(workspaceRoot, { recursive: true, force: true });
   }
+}
+
+function sha256File(filePath) {
+  return crypto.createHash("sha256").update(fs.readFileSync(filePath)).digest("hex");
+}
+
+function pad4(buffer, byte = 0) {
+  const padding = (4 - (buffer.length % 4)) % 4;
+  return padding ? Buffer.concat([buffer, Buffer.alloc(padding, byte)]) : buffer;
+}
+
+function topologyGlb({ sourcePath, stepHash }) {
+  let binary = Buffer.alloc(0);
+  const bufferViews = [];
+  function addBufferView(payload) {
+    binary = pad4(binary);
+    const byteOffset = binary.length;
+    binary = Buffer.concat([binary, payload]);
+    const index = bufferViews.length;
+    bufferViews.push({ buffer: 0, byteOffset, byteLength: payload.length });
+    return index;
+  }
+  const edgeRendering = {
+    visibilityClasses: ["feature", "tangent", "seam", "degenerate"],
+    generatedVisibilityClasses: ["feature"],
+    visibilityClassCounts: { feature: 1 },
+    generatedVisibilityClassCounts: { feature: 1 },
+  };
+  const manifest = {
+    schemaVersion: STEP_TOPOLOGY_SCHEMA_VERSION,
+    profile: "index",
+    entryKind: "part",
+    sourceKind: "step",
+    sourcePath,
+    stepHash,
+    edgeRendering,
+  };
+  const indexView = addBufferView(Buffer.from(JSON.stringify(manifest), "utf8"));
+  const surfaceHalfEdgesView = addBufferView(Buffer.alloc(0));
+  const edgeView = addBufferView(Buffer.from(JSON.stringify({
+    schemaVersion: STEP_TOPOLOGY_SCHEMA_VERSION,
+    profile: "surface-edges",
+    sourceKind: "step",
+    sourcePath,
+    stepHash,
+    edgeRendering,
+    buffers: {
+      littleEndian: true,
+      views: {
+        surfaceHalfEdges: {
+          dtype: "uint32",
+          bufferView: surfaceHalfEdgesView,
+          byteOffset: 0,
+          byteLength: 0,
+          count: 0,
+          itemSize: 4,
+        },
+      },
+    },
+  }), "utf8"));
+  const selectorView = addBufferView(Buffer.from(JSON.stringify({
+    schemaVersion: STEP_TOPOLOGY_SCHEMA_VERSION,
+    profile: "selector",
+    sourceKind: "step",
+    sourcePath,
+    stepHash,
+  }), "utf8"));
+  binary = pad4(binary);
+  const gltf = {
+    asset: { version: "2.0" },
+    buffers: [{ byteLength: binary.length }],
+    bufferViews,
+    meshes: [{
+      primitives: [{
+        attributes: {
+          _CAD_EDGE_BARYCENTRIC: 0,
+          _CAD_EDGE_CLASS: 1,
+        },
+      }],
+    }],
+    extensionsUsed: ["STEP_topology"],
+    extensions: {
+      STEP_topology: {
+        schemaVersion: STEP_TOPOLOGY_SCHEMA_VERSION,
+        entryKind: "part",
+        indexView,
+        edgeView,
+        selectorView,
+        encoding: "utf-8",
+      },
+    },
+  };
+  const jsonChunk = pad4(Buffer.from(JSON.stringify(gltf), "utf8"), 0x20);
+  const header = Buffer.alloc(12);
+  const jsonHeader = Buffer.alloc(8);
+  const binHeader = Buffer.alloc(8);
+  header.writeUInt32LE(0x46546c67, 0);
+  header.writeUInt32LE(2, 4);
+  header.writeUInt32LE(12 + 8 + jsonChunk.length + 8 + binary.length, 8);
+  jsonHeader.writeUInt32LE(jsonChunk.length, 0);
+  jsonHeader.write("JSON", 4, "latin1");
+  binHeader.writeUInt32LE(binary.length, 0);
+  binHeader.write("BIN\0", 4, "latin1");
+  return Buffer.concat([header, jsonHeader, jsonChunk, binHeader, binary]);
 }
 
 function writeStepWithSourceMetadata(filePath, sourcePath) {
@@ -198,13 +305,13 @@ test("local backend can auto-refresh cached catalogs on reads", async () => {
       now: () => currentTime,
     });
 
-    assert.deepEqual(backend.readCatalog().entries.map((entry) => entry.file), ["first.stl"]);
+    assert.deepEqual(backend.readCatalog().entries.map((entry) => entry.rootRelativeFile), ["first.stl"]);
 
     fs.writeFileSync(path.join(modelRoot, "second.stl"), "solid second\nendsolid second\n");
-    assert.deepEqual(backend.readCatalog().entries.map((entry) => entry.file), ["first.stl"]);
+    assert.deepEqual(backend.readCatalog().entries.map((entry) => entry.rootRelativeFile), ["first.stl"]);
 
     currentTime = 1100;
-    assert.deepEqual(backend.readCatalog().entries.map((entry) => entry.file), ["first.stl", "second.stl"]);
+    assert.deepEqual(backend.readCatalog().entries.map((entry) => entry.rootRelativeFile), ["first.stl", "second.stl"]);
   });
 });
 
@@ -355,6 +462,79 @@ test("local backend rejects Viewer artifact regeneration for Python metadata STE
   });
 });
 
+test("local backend regenerates copied STEP files when Python metadata source is unavailable", async () => {
+  await withTempWorkspace(async (workspaceRoot) => {
+    const modelRoot = path.join(workspaceRoot, "models");
+    fs.mkdirSync(path.join(modelRoot, "copied"), { recursive: true });
+    const stepPath = path.join(modelRoot, "copied", "robot_arm.step");
+    writeStepWithSourceMetadata(stepPath, "models/robots/tom/robot_arm.py");
+    const backend = createLocalAssetBackend({
+      workspaceRoot,
+      rootDir: "models",
+      stepArtifactGenerator: async (request) => {
+        assert.equal(request.stepPath, stepPath);
+        assert.equal(request.sourcePath, "");
+        assert.equal(request.skipStepWrite, false);
+        return { ok: true, validation: { ok: true } };
+      },
+    });
+    const catalog = backend.refreshCatalog();
+    const entry = catalog.entries.find((candidate) => candidate.rootRelativeFile === "copied/robot_arm.step");
+
+    assert.equal(entry.sourceKind, "step");
+    assert.equal(entry.artifact.error, "missing_glb");
+
+    const result = await backend.generateStepArtifact({
+      fileRef: "copied/robot_arm.step",
+      catalog,
+    });
+
+    assert.equal(result.ok, true);
+    assert.equal(result.stepPath, stepPath);
+  });
+});
+
+test("local backend generates collisions for STEP files on demand", async () => {
+  await withTempWorkspace(async (workspaceRoot) => {
+    const modelRoot = path.join(workspaceRoot, "models");
+    const stepPath = path.join(modelRoot, "part.step");
+    const calls = [];
+    fs.mkdirSync(modelRoot, { recursive: true });
+    fs.writeFileSync(stepPath, "ISO-10303-21;\nEND-ISO-10303-21;\n");
+    const backend = createLocalAssetBackend({
+      workspaceRoot,
+      rootDir: "models",
+      collisionGenerator: async (request) => {
+        calls.push(request);
+        return {
+          ok: true,
+          result: {
+            kind: "cadpy-interference-report",
+            summary: { reportedPairCount: 0 },
+          },
+        };
+      },
+    });
+    const catalog = backend.refreshCatalog();
+
+    const result = await backend.generateCollisions({
+      fileRef: "part.step",
+      catalog,
+      options: { bodyDepth: 2, maxPairs: 50 },
+    });
+
+    assert.equal(result.ok, true);
+    assert.deepEqual(result.result, {
+      kind: "cadpy-interference-report",
+      summary: { reportedPairCount: 0 },
+    });
+    assert.equal(calls.length, 1);
+    assert.equal(calls[0].repoRoot, workspaceRoot);
+    assert.equal(calls[0].stepPath, stepPath);
+    assert.deepEqual(calls[0].options, { bodyDepth: 2, maxPairs: 50 });
+  });
+});
+
 test("local backend reports missing Python-backed STEP files dynamically", async () => {
   await withTempWorkspace((workspaceRoot) => {
     const modelRoot = path.join(workspaceRoot, "models");
@@ -371,7 +551,7 @@ test("local backend reports missing Python-backed STEP files dynamically", async
   });
 });
 
-test("local backend defers STEP artifact status to current-file status reads", async () => {
+test("local backend reports missing STEP GLBs in fast catalog reads", async () => {
   await withTempWorkspace((workspaceRoot) => {
     const modelRoot = path.join(workspaceRoot, "models");
     fs.mkdirSync(modelRoot, { recursive: true });
@@ -383,7 +563,7 @@ test("local backend defers STEP artifact status to current-file status reads", a
 
     assert.equal(catalogEntry.file, path.join(modelRoot, "part.step"));
     assert.equal(catalogEntry.rootRelativeFile, "part.step");
-    assert.equal(catalogEntry.artifact, undefined);
+    assert.equal(catalogEntry.artifact.error, "missing_glb");
     assert.equal(status.artifact.error, "missing_glb");
     assert.equal(status.artifact.glbPath, path.join(modelRoot, ".part.step.glb"));
   });
@@ -454,6 +634,42 @@ test("local backend resolves generated GLB artifact assets from catalog URLs", a
     assert.equal(access.path, artifactPath);
     assert.equal(access.filename, ".part.step.glb");
     assert.equal(access.contentType, "model/gltf-binary");
+    assert.throws(
+      () => backend.resolveFileAssetAccess({
+        fileRef: "part.step",
+        asset: "analysis",
+        catalog,
+      }),
+      /Unsupported file asset/
+    );
+  });
+});
+
+test("local backend resolves catalog asset URLs when rootDir is absolute", async () => {
+  await withTempWorkspace((workspaceRoot) => {
+    const modelRoot = path.join(workspaceRoot, "models");
+    fs.mkdirSync(modelRoot, { recursive: true });
+    const stepPath = path.join(modelRoot, "part.step");
+    const artifactPath = path.join(modelRoot, ".part.step.glb");
+    fs.writeFileSync(stepPath, "ISO-10303-21;\nEND-ISO-10303-21;\n");
+    fs.writeFileSync(artifactPath, topologyGlb({
+      sourcePath: "models/part.step",
+      stepHash: sha256File(stepPath),
+    }));
+    const backend = createLocalAssetBackend({ workspaceRoot, rootDir: modelRoot });
+    const catalog = backend.refreshCatalog();
+    const resolvedRoot = backend.resolveRoot(modelRoot);
+
+    const artifact = backend.resolveFileAssetAccess({
+      fileRef: "part.step",
+      asset: "artifact",
+      rootDir: modelRoot,
+      resolvedRoot,
+      catalog,
+    });
+
+    assert.equal(artifact.file, artifactPath);
+    assert.equal(artifact.path, artifactPath);
   });
 });
 

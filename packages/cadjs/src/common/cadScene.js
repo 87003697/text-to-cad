@@ -933,6 +933,10 @@ export function applyMaterialSettingsToRecord(THREE, record, materialSettings, {
   record.baseOpacity = clamp(Number(materialSettings.opacity) || 0, 0, 1);
   record.material.opacity = record.baseOpacity;
   record.material.transparent = record.baseOpacity < 0.999;
+  record.baseDepthWrite = typeof materialSettings.depthWrite === "boolean"
+    ? materialSettings.depthWrite
+    : true;
+  record.material.depthWrite = record.baseDepthWrite;
   record.material.envMapIntensity = Math.max(Number(materialSettings.envMapIntensity) || 0, 0);
   if (record.material.color && record.baseColor) {
     record.material.color.copy(record.baseColor);

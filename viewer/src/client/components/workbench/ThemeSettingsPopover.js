@@ -1,5 +1,5 @@
 import { Children, isValidElement, useEffect, useId, useMemo, useRef, useState } from "react";
-import { Box, Contrast, FlipHorizontal2, Grid3x3, Moon, MoreHorizontal, Pencil, Plus, RotateCcw, Sun, Trash2, X } from "lucide-react";
+import { Contrast, FlipHorizontal2, Moon, MoreHorizontal, Pencil, Plus, RotateCcw, Sun, Trash2, X } from "lucide-react";
 import {
   Accordion
 } from "../ui/accordion";
@@ -49,7 +49,6 @@ import {
   TabsList,
   TabsTrigger
 } from "../ui/tabs";
-import { ToggleGroup, ToggleGroupItem } from "../ui/toggle-group";
 import { cn } from "@/ui/utils";
 import {
   cloneThemePresetSettings,
@@ -82,6 +81,7 @@ import FileSheet, {
   FILE_SHEET_SEGMENTED_ITEM_CLASSES,
   FileSheetControlRow,
   FileSheetSection,
+  FileSheetSectionBody,
   FileSheetSliderField,
   FileSheetSubsection,
   FileSheetSubsubsection,
@@ -97,8 +97,10 @@ const BACKGROUND_MODE_OPTIONS = [
 ];
 
 const DISPLAY_MODE_OPTIONS = [
-  { value: CAD_DISPLAY_MODE.SOLID, label: "Solid", Icon: Box },
-  { value: CAD_DISPLAY_MODE.WIREFRAME, label: "Wire", Icon: Grid3x3 }
+  { value: CAD_DISPLAY_MODE.SOLID, label: "Solid" },
+  { value: CAD_DISPLAY_MODE.TRANSPARENT, label: "Transparent" },
+  { value: CAD_DISPLAY_MODE.COLLISION, label: "Collision" },
+  { value: CAD_DISPLAY_MODE.WIREFRAME, label: "Wire" }
 ];
 
 const FLOOR_MODE_OPTIONS = [
@@ -600,40 +602,79 @@ function FillColorEditor({ colors, onChange, cycleColors = false }) {
 }
 
 function SegmentedControl({ value, onChange, options }) {
-  const templateColumns = `repeat(${Math.max(options.length, 1)}, minmax(0, 1fr))`;
+  const groupName = useId();
+  const templateColumns = "repeat(auto-fit, minmax(min(6.75rem, 100%), 1fr))";
+  const enabledOptions = options.filter((option) => option.disabled !== true);
+  const commitValue = (nextValue) => {
+    if (nextValue) {
+      onChange(nextValue);
+    }
+  };
+  const handleKeyDown = (event, option) => {
+    const activeIndex = enabledOptions.findIndex((item) => item.value === option.value);
+    if (activeIndex < 0) {
+      return;
+    }
+    let nextIndex = activeIndex;
+    if (event.key === "ArrowRight" || event.key === "ArrowDown") {
+      nextIndex = (activeIndex + 1) % enabledOptions.length;
+    } else if (event.key === "ArrowLeft" || event.key === "ArrowUp") {
+      nextIndex = (activeIndex - 1 + enabledOptions.length) % enabledOptions.length;
+    } else if (event.key === "Home") {
+      nextIndex = 0;
+    } else if (event.key === "End") {
+      nextIndex = enabledOptions.length - 1;
+    } else {
+      return;
+    }
+    event.preventDefault();
+    commitValue(enabledOptions[nextIndex]?.value);
+  };
   return (
-    <ToggleGroup
-      type="single"
-      variant="outline"
-      size="sm"
-      value={value}
-      onValueChange={(nextValue) => {
-        if (!nextValue) {
-          return;
-        }
-        onChange(nextValue);
-      }}
-      className="grid h-7 w-full min-w-0"
+    <div
+      role="radiogroup"
+      className="grid w-full min-w-0 gap-1"
       style={{ gridTemplateColumns: templateColumns }}
     >
       {options.map((option) => {
-        const Icon = option.Icon;
         const disabled = option.disabled === true;
+        const selected = value === option.value;
+        const inputId = `${groupName}-${option.value}`;
         return (
-          <ToggleGroupItem
+          <label
             key={option.value}
-            value={option.value}
-            disabled={disabled}
-            className={cn("min-w-0 gap-1.5 !h-7 px-1.5 text-[11px]", FILE_SHEET_SEGMENTED_ITEM_CLASSES)}
+            htmlFor={inputId}
+            data-state={selected ? "on" : "off"}
+            className={cn(
+              "relative inline-flex h-7 min-w-0 cursor-pointer items-center justify-center rounded-md border border-input bg-background px-2 text-[11px] font-medium text-muted-foreground shadow-none transition-colors",
+              "hover:bg-accent hover:text-foreground focus-within:z-10 focus-within:ring-2 focus-within:ring-ring/40",
+              disabled && "cursor-not-allowed opacity-50",
+              FILE_SHEET_SEGMENTED_ITEM_CLASSES
+            )}
             title={option.title || option.label}
-            aria-label={option.label}
+            onClick={() => {
+              if (!disabled) {
+                commitValue(option.value);
+              }
+            }}
+            onKeyDown={(event) => handleKeyDown(event, option)}
           >
-            {Icon ? <Icon className="size-3" strokeWidth={2} aria-hidden="true" /> : null}
-            <span className="truncate">{option.label}</span>
-          </ToggleGroupItem>
+            <input
+              id={inputId}
+              type="radio"
+              name={groupName}
+              value={option.value}
+              checked={selected}
+              disabled={disabled}
+              className="absolute inset-0 z-10 cursor-pointer opacity-0 disabled:cursor-not-allowed"
+              aria-label={option.label}
+              onChange={() => commitValue(option.value)}
+            />
+            <span className="pointer-events-none truncate">{option.label}</span>
+          </label>
         );
       })}
-    </ToggleGroup>
+    </div>
   );
 }
 
@@ -1446,11 +1487,53 @@ function PositionPad({ value, onChange }) {
   );
 }
 
-export function DisplaySettingsSection({
+export function DisplaySettingsControls({
   displaySettings,
   updateDisplaySettings,
-  clipBounds = null,
-  showClip = false
+  onDisplayModeChange = null,
+  modeOptions = DISPLAY_MODE_OPTIONS
+}) {
+  const normalizedDisplaySettings = useMemo(
+    () => normalizeDisplaySettings(displaySettings),
+    [displaySettings]
+  );
+  const setDisplay = (patch) => {
+    updateDisplaySettings?.((current) => ({
+      ...normalizeDisplaySettings(current),
+      ...patch
+    }));
+  };
+  const handleDisplayModeChange = (nextValue) => {
+    if (typeof onDisplayModeChange === "function") {
+      onDisplayModeChange(nextValue);
+      return;
+    }
+    setDisplay({ mode: nextValue });
+  };
+
+  return (
+    <Field label="Mode">
+      <SegmentedControl
+        value={normalizedDisplaySettings.mode}
+        options={modeOptions}
+        onChange={handleDisplayModeChange}
+      />
+    </Field>
+  );
+}
+
+export function DisplaySettingsSection(props) {
+  return (
+    <Section title="Display" value="display">
+      <DisplaySettingsControls {...props} />
+    </Section>
+  );
+}
+
+export function ClipSettingsControls({
+  displaySettings,
+  updateDisplaySettings,
+  clipBounds = null
 }) {
   const normalizedDisplaySettings = useMemo(
     () => normalizeDisplaySettings(displaySettings),
@@ -1485,110 +1568,113 @@ export function DisplaySettingsSection({
       ...(!normalizedClipSettings.enabled && resolvedOffset > 0 ? { enabled: true } : {})
     });
   };
+  const showClipDetails = true;
 
   return (
-    <Section title="Display" value="display">
-      <Field label="Mode">
-        <SegmentedControl
-          value={normalizedDisplaySettings.mode}
-          options={DISPLAY_MODE_OPTIONS}
-          onChange={(nextValue) => setDisplay({ mode: nextValue })}
-        />
-      </Field>
+    <>
+      <ThemeToggleRow
+        label="Enable"
+        checked={normalizedClipSettings.enabled}
+        onChange={(checked) => setClip({ enabled: checked })}
+      />
 
-      {showClip ? (
-        <ControlSubsection title="Clip" hideFirstSeparator={false}>
-          <ThemeToggleRow
-            label="Enable"
-            checked={normalizedClipSettings.enabled}
-            onChange={(checked) => setClip({ enabled: checked })}
-          />
-
-          {AXIS_OPTIONS.map((axis) => {
-            const axisOffset = normalizedClipSettings.offsets?.[axis] ?? DEFAULT_STEP_CLIP_SETTINGS.offsets[axis];
-            const axisSettings = {
-              ...normalizedClipSettings,
-              axis,
-              offset: axisOffset,
-              offsets: {
-                ...normalizedClipSettings.offsets,
-                [axis]: axisOffset
-              }
-            };
-            const boundsForAxis = clipAxisBounds(clipBounds, axis);
-            const axisRange = Math.max(boundsForAxis.max - boundsForAxis.min, 0);
-            const clipPosition = clipAxisPosition(clipBounds, axisSettings);
-            return (
-              <FileSheetSliderField
-                key={axis}
-                label={axis}
-                value={`${formatMm(clipPosition)} mm`}
-                onValueCommit={(nextValue) => {
-                  const nextPosition = parseFileSheetNumberInput(nextValue, {
-                    fallback: clipPosition,
-                    min: boundsForAxis.min,
-                    max: boundsForAxis.max
-                  });
-                  updateClipAxisOffset(
-                    axis,
-                    axisRange > 0 ? (nextPosition - boundsForAxis.min) / axisRange : axisOffset
-                  );
+      {showClipDetails ? (
+        AXIS_OPTIONS.map((axis) => {
+          const axisOffset = normalizedClipSettings.offsets?.[axis] ?? DEFAULT_STEP_CLIP_SETTINGS.offsets[axis];
+          const axisSettings = {
+            ...normalizedClipSettings,
+            axis,
+            offset: axisOffset,
+            offsets: {
+              ...normalizedClipSettings.offsets,
+              [axis]: axisOffset
+            }
+          };
+          const boundsForAxis = clipAxisBounds(clipBounds, axis);
+          const axisRange = Math.max(boundsForAxis.max - boundsForAxis.min, 0);
+          const clipPosition = clipAxisPosition(clipBounds, axisSettings);
+          return (
+            <FileSheetSliderField
+              key={axis}
+              label={axis}
+              value={`${formatMm(clipPosition)} mm`}
+              onValueCommit={(nextValue) => {
+                const nextPosition = parseFileSheetNumberInput(nextValue, {
+                  fallback: clipPosition,
+                  min: boundsForAxis.min,
+                  max: boundsForAxis.max
+                });
+                updateClipAxisOffset(
+                  axis,
+                  axisRange > 0 ? (nextPosition - boundsForAxis.min) / axisRange : axisOffset
+                );
+              }}
+              valueInputProps={{
+                disabled: !axisRange,
+                ariaLabel: `Clip ${axis.toUpperCase()} position`
+              }}
+            >
+              <Slider
+                className={precisionSliderClasses}
+                value={[axisOffset]}
+                min={0}
+                max={1}
+                step={0.001}
+                disabled={!axisRange}
+                onValueChange={(value) => {
+                  const nextOffset = Array.isArray(value) ? value[0] : value;
+                  updateClipAxisOffset(axis, nextOffset);
                 }}
-                valueInputProps={{
-                  disabled: !axisRange,
-                  ariaLabel: `Clip ${axis.toUpperCase()} position`
-                }}
-              >
-                <Slider
-                  className={precisionSliderClasses}
-                  value={[axisOffset]}
-                  min={0}
-                  max={1}
-                  step={0.001}
-                  disabled={!axisRange}
-                  onValueChange={(value) => {
-                    const nextOffset = Array.isArray(value) ? value[0] : value;
-                    updateClipAxisOffset(axis, nextOffset);
-                  }}
-                  aria-label={`Clip ${axis.toUpperCase()} axis`}
-                />
-                <div className="mt-1 flex justify-between text-[10px] text-[var(--ui-text-muted)]">
-                  <span>{formatMm(boundsForAxis.min)}</span>
-                  <span>{formatMm(boundsForAxis.max)}</span>
-                </div>
-              </FileSheetSliderField>
-            );
-          })}
-
-          <FileSheetControlRow>
-            <div className="flex flex-wrap gap-1.5">
-              <Button
-                type="button"
-                variant="outline"
-                size="sm"
-                className={compactButtonClasses}
-                onClick={() => setClip({ invert: !normalizedClipSettings.invert })}
-                aria-pressed={normalizedClipSettings.invert}
-                title="Flip clip side"
-              >
-                <FlipHorizontal2 className="h-3 w-3" strokeWidth={2} aria-hidden="true" />
-                <span>Flip</span>
-              </Button>
-              <Button
-                type="button"
-                variant="outline"
-                size="sm"
-                className={compactButtonClasses}
-                onClick={() => setDisplay({ clip: normalizeStepClipSettings(DEFAULT_STEP_CLIP_SETTINGS) })}
-                title="Reset clip plane"
-              >
-                <RotateCcw className="h-3 w-3" strokeWidth={2} aria-hidden="true" />
-                <span>Reset</span>
-              </Button>
-            </div>
-          </FileSheetControlRow>
-        </ControlSubsection>
+                aria-label={`Clip ${axis.toUpperCase()} axis`}
+              />
+              <div className="mt-1 flex justify-between text-[10px] text-[var(--ui-text-muted)]">
+                <span>{formatMm(boundsForAxis.min)}</span>
+                <span>{formatMm(boundsForAxis.max)}</span>
+              </div>
+            </FileSheetSliderField>
+          );
+        })
       ) : null}
+
+      {showClipDetails ? (
+        <FileSheetControlRow>
+          <div className="flex flex-wrap gap-1.5">
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              className={compactButtonClasses}
+              onClick={() => setClip({ invert: !normalizedClipSettings.invert })}
+              aria-pressed={normalizedClipSettings.invert}
+              title="Flip clip side"
+            >
+              <FlipHorizontal2 className="h-3 w-3" strokeWidth={2} aria-hidden="true" />
+              <span>Flip</span>
+            </Button>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              className={compactButtonClasses}
+              onClick={() => setDisplay({ clip: normalizeStepClipSettings(DEFAULT_STEP_CLIP_SETTINGS) })}
+              title="Reset clip plane"
+            >
+              <RotateCcw className="h-3 w-3" strokeWidth={2} aria-hidden="true" />
+              <span>Reset</span>
+            </Button>
+          </div>
+        </FileSheetControlRow>
+      ) : null}
+    </>
+  );
+}
+
+export function ClipSettingsSection(props) {
+  return (
+    <Section title="Clip" value="clip">
+      <FileSheetSectionBody>
+        <ClipSettingsControls {...props} />
+      </FileSheetSectionBody>
     </Section>
   );
 }

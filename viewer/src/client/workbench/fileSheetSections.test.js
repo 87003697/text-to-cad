@@ -34,6 +34,14 @@ test("rendered file sheet sections include closed-by-default sections", () => {
     "tree",
     "parameters",
     "display",
+    "collisions",
+    "appearance",
+    "metadata"
+  ]);
+  assert.deepEqual(renderedFileSheetSectionIds("step"), [
+    "tree",
+    "display",
+    "collisions",
     "appearance",
     "metadata"
   ]);
