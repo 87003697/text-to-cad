@@ -1,11 +1,12 @@
 from __future__ import annotations
 
+import asyncio
 import io
 import tempfile
 import unittest
 from pathlib import Path
 import sys
-from types import SimpleNamespace
+from types import ModuleType, SimpleNamespace
 
 
 SCRIPTS_DIR = Path(__file__).resolve().parents[2]
@@ -337,6 +338,82 @@ class SnapshotCliTests(unittest.TestCase):
             resolve_snapshot_route_file("http://snapshot.local/snapshot-render.js"),
             RUNTIME_DIR / "snapshot-render.js",
         )
+
+    def test_snapshot_renderer_does_not_force_chromium_single_process(self) -> None:
+        captured_launch_options = {}
+
+        class FakePage:
+            async def route(self, *args, **kwargs):
+                pass
+
+            async def goto(self, *args, **kwargs):
+                pass
+
+            async def wait_for_function(self, *args, **kwargs):
+                pass
+
+        class FakeContext:
+            async def new_page(self):
+                return FakePage()
+
+            async def close(self):
+                pass
+
+        class FakeBrowser:
+            async def new_context(self, *args, **kwargs):
+                return FakeContext()
+
+            async def close(self):
+                pass
+
+        class FakeChromium:
+            async def launch(self, **kwargs):
+                captured_launch_options.update(kwargs)
+                return FakeBrowser()
+
+        class FakePlaywright:
+            def __init__(self) -> None:
+                self.chromium = FakeChromium()
+
+            async def stop(self):
+                pass
+
+        fake_playwright = FakePlaywright()
+
+        class FakeAsyncPlaywright:
+            async def start(self):
+                return fake_playwright
+
+        async_api_module = ModuleType("playwright.async_api")
+        async_api_module.async_playwright = FakeAsyncPlaywright
+        playwright_module = ModuleType("playwright")
+        playwright_module.__path__ = []
+
+        original_playwright = sys.modules.get("playwright")
+        original_async_api = sys.modules.get("playwright.async_api")
+        try:
+            sys.modules["playwright"] = playwright_module
+            sys.modules["playwright.async_api"] = async_api_module
+
+            async def start_renderer() -> None:
+                renderer = snapshot_main.BatchSnapshotRenderer()
+                try:
+                    await renderer.start()
+                finally:
+                    await renderer.close()
+
+            asyncio.run(start_renderer())
+        finally:
+            if original_playwright is None:
+                sys.modules.pop("playwright", None)
+            else:
+                sys.modules["playwright"] = original_playwright
+            if original_async_api is None:
+                sys.modules.pop("playwright.async_api", None)
+            else:
+                sys.modules["playwright.async_api"] = original_async_api
+
+        self.assertNotIn("--single-process", captured_launch_options.get("args") or [])
 
     def test_snapshot_tool_has_no_sideways_runtime_dependencies(self) -> None:
         snapshot_root = Path(__file__).resolve().parents[1]
