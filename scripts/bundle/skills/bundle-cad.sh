@@ -179,6 +179,9 @@ sync_cadpy_runtime() {
     --exclude dist \
     --exclude '*.egg-info' \
     --exclude tests \
+    --exclude __tests__ \
+    --exclude 'test_*.py' \
+    --exclude '*_test.py' \
     "$CADPY_PACKAGE_DIR/" "$target_dir/"
 }
 
@@ -218,6 +221,9 @@ check_cadpy_runtime() {
     -x '*.egg-info' \
     -x '*.md' \
     -x tests \
+    -x __tests__ \
+    -x 'test_*.py' \
+    -x '*_test.py' \
     "$check_dir" "$CADPY_RUNTIME_DIR" >/tmp/cad-skill-cadpy-runtime-diff.txt; then
     cat /tmp/cad-skill-cadpy-runtime-diff.txt >&2
     echo "" >&2

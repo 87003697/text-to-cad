@@ -105,6 +105,16 @@ sync_cadjs_package() {
     --exclude tmp \
     --exclude .vite \
     --exclude .DS_Store \
+    --exclude tests \
+    --exclude __tests__ \
+    --exclude '*.test.js' \
+    --exclude '*.test.mjs' \
+    --exclude '*.test.ts' \
+    --exclude '*.test.tsx' \
+    --exclude '*.spec.js' \
+    --exclude '*.spec.mjs' \
+    --exclude '*.spec.ts' \
+    --exclude '*.spec.tsx' \
     "$CADJS_PACKAGE_DIR/" "$target_dir/"
 }
 
@@ -124,6 +134,9 @@ sync_cadpy_package() {
     --exclude build \
     --exclude dist \
     --exclude tests \
+    --exclude __tests__ \
+    --exclude 'test_*.py' \
+    --exclude '*_test.py' \
     "$source_dir/" "$target_dir/"
 }
 
@@ -145,6 +158,16 @@ check_cadjs_package() {
     -x tmp \
     -x .vite \
     -x .DS_Store \
+    -x tests \
+    -x __tests__ \
+    -x '*.test.js' \
+    -x '*.test.mjs' \
+    -x '*.test.ts' \
+    -x '*.test.tsx' \
+    -x '*.spec.js' \
+    -x '*.spec.mjs' \
+    -x '*.spec.ts' \
+    -x '*.spec.tsx' \
     "$expected_dir" "$VIEWER_CADJS_DIR" >"$diff_path"; then
     cat "$diff_path" >&2
     echo "" >&2
@@ -175,6 +198,9 @@ check_cadpy_package() {
     -x build \
     -x dist \
     -x tests \
+    -x __tests__ \
+    -x 'test_*.py' \
+    -x '*_test.py' \
     "$expected_dir" "$VIEWER_CADPY_DIR" >"$diff_path"; then
     cat "$diff_path" >&2
     echo "" >&2
@@ -263,7 +289,16 @@ sync_dir() {
     --exclude '*.md' \
     --exclude '*.test.js' \
     --exclude '*.test.mjs' \
+    --exclude '*.test.ts' \
+    --exclude '*.test.tsx' \
+    --exclude '*.spec.js' \
+    --exclude '*.spec.mjs' \
+    --exclude '*.spec.ts' \
+    --exclude '*.spec.tsx' \
     --exclude tests \
+    --exclude __tests__ \
+    --exclude 'test_*.py' \
+    --exclude '*_test.py' \
     "$source_dir/" "$target_dir/"
 }
 

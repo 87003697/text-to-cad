@@ -94,8 +94,10 @@ directories.
 `scripts/test/test.sh` is the broad code test runner for source/package tests.
 Documentation checks are separate so CI can run them with production bundle
 checks. Python tests live under `tests/python/`, grouped by tested surface, so
-skill and package runtimes do not carry test-only modules. Focused subcommands
-can be run directly for smaller checks:
+skill and package runtimes do not carry test-only modules. Production bundle
+copy steps also exclude conventional test directories and `*.test.*` /
+`*.spec.*` files as a safety net. Focused subcommands can be run directly for
+smaller checks:
 
 ```bash
 scripts/test/test-js.sh

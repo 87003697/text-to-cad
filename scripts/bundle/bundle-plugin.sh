@@ -110,6 +110,18 @@ sync_skills() {
       --exclude __pycache__ \
       --exclude .pytest_cache \
       --exclude '*.pyc' \
+      --exclude tests \
+      --exclude __tests__ \
+      --exclude 'test_*.py' \
+      --exclude '*_test.py' \
+      --exclude '*.test.js' \
+      --exclude '*.test.mjs' \
+      --exclude '*.test.ts' \
+      --exclude '*.test.tsx' \
+      --exclude '*.spec.js' \
+      --exclude '*.spec.mjs' \
+      --exclude '*.spec.ts' \
+      --exclude '*.spec.tsx' \
       "$source_dir/" "$target_dir/"
   done < <(list_skills)
 

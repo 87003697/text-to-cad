@@ -68,6 +68,9 @@ sync_runtime() {
     --exclude build \
     --exclude dist \
     --exclude tests \
+    --exclude __tests__ \
+    --exclude 'test_*.py' \
+    --exclude '*_test.py' \
     "$PACKAGE_DIR/" "$RUNTIME_DIR/"
 }
 
@@ -88,6 +91,9 @@ check_runtime() {
     -x build \
     -x dist \
     -x tests \
+    -x __tests__ \
+    -x 'test_*.py' \
+    -x '*_test.py' \
     "$PACKAGE_DIR" "$RUNTIME_DIR" >"$diff_path"; then
     cat "$diff_path" >&2
     echo "" >&2
