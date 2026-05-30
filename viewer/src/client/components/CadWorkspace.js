@@ -214,7 +214,12 @@ import {
   validateUrdfMotionJointValues
 } from "cadjs/lib/urdf/motion";
 import { checkMoveIt2ServerLive, moveit2ServerEnabled, requestMoveIt2Server } from "cadjs/lib/urdf/moveit2ServerClient";
-import { readActiveCadDir, requestStepArtifactGeneration, requestStepSourceStatus } from "cadjs/lib/cadManifestStore";
+import {
+  cadViewerUsesHostedCatalog,
+  readActiveCadDir,
+  requestStepArtifactGeneration,
+  requestStepSourceStatus
+} from "cadjs/lib/cadManifestStore";
 import { stepArtifactCanGenerate } from "@/workbench/stepArtifactStatus";
 import {
   buildFileStatusItems,
@@ -392,6 +397,7 @@ export default function CadWorkspace({
 }) {
   const manifestEntries = Array.isArray(manifestEntriesProp) ? manifestEntriesProp : [];
   const catalogEntries = manifestEntries;
+  const viewerAssetBackend = viewerAssetBackendFromEnv();
   const activeGeneratorFiles = useMemo(() => (
     Object.entries(generationStatus?.files || {})
       .filter(([, status]) => status?.running === true)
@@ -399,7 +405,6 @@ export default function CadWorkspace({
       .filter(Boolean)
   ), [generationStatus]);
   const catalogRootDir = String(activeDir || "").trim();
-  const directoryCatalogActive = Boolean(catalogRootDir);
   const [query, setQuery] = useState("");
   const initialFileViewerDirectoryStateRef = useRef(null);
   if (!initialFileViewerDirectoryStateRef.current) {
@@ -417,6 +422,10 @@ export default function CadWorkspace({
   ));
   const [openTabs, setOpenTabs] = useState([]);
   const [viewerServerInfo, setViewerServerInfo] = useState(null);
+  const viewerServerBackend = String(viewerServerInfo?.backend || "").trim().toLowerCase();
+  const directoryCatalogActive = Boolean(catalogRootDir) ||
+    cadViewerUsesHostedCatalog(viewerAssetBackend) ||
+    cadViewerUsesHostedCatalog(viewerServerBackend);
   const [selectedKey, setSelectedKey] = useState("");
   const [fileSheetOpenSectionIds, setFileSheetOpenSectionIds] = useState(null);
   const [dxfThicknessMm, setDxfThicknessMm] = useState(0);
@@ -692,8 +701,6 @@ export default function CadWorkspace({
   );
   const selectedEntrySourceFormat = entrySourceFormat(selectedEntry);
   const selectedFileSheetKind = fileSheetKindForEntry(selectedEntry);
-  const viewerServerBackend = String(viewerServerInfo?.backend || "").trim();
-  const viewerAssetBackend = viewerAssetBackendFromEnv();
   const stepArtifactGenerationAvailable = viewerServerInfo
     ? viewerServerInfo.stepArtifactGenerationAvailable !== false
     : viewerAssetBackend === LOCAL_ASSET_BACKEND;

@@ -114,6 +114,8 @@ Expected deployment shape:
 - Deploy the viewer with `VIEWER_ASSET_BACKEND=vercel-blob` and a read-only
   catalog configuration. Catalog warnings such as stale STEP artifacts are shown
   in the UI instead of being fixed by the hosted app.
+- Hosted Vercel routes ignore local filesystem `?dir=` query values and read the
+  configured hosted `catalog.json` instead.
 
 The Vercel deployment entrypoints are intentionally thin:
 
