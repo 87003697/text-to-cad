@@ -152,6 +152,13 @@ import {
   findStepModuleAnimation
 } from "@/workbench/stepModuleAnimation";
 import {
+  getStepAnimationElapsed,
+  getStepAnimationParameterValues,
+  resetStepAnimationStore,
+  setStepAnimationElapsed,
+  setStepAnimationFrame
+} from "@/workbench/stepAnimationStore";
+import {
   buildUrdfJointAnglesCopyText,
   cloneJointValueMap,
   emptyUrdfPosePickerState,
@@ -329,6 +336,50 @@ function readInitialFileSheetWidth() {
 function readInitialFileSheetWidthIsCustom() {
   const viewportWidth = readWorkspaceViewportWidth();
   return readWorkspaceSessionState(viewportWidth).fileSheetWidthPx != null;
+}
+
+function buildStepModuleAnimationFrameValues({
+  definition,
+  animation,
+  elapsedSec,
+  speed,
+  parameterValues
+}) {
+  if (!definition) {
+    return {};
+  }
+  const baseValues = normalizeStepModuleParameterValues(definition, parameterValues);
+  if (typeof animation?.update !== "function") {
+    return baseValues;
+  }
+  const duration = Math.max(Number(animation.duration) || 1, 0.001);
+  const safeElapsedSec = clampNumber(elapsedSec, 0, duration);
+  const progress = duration > 0 ? clampNumber(safeElapsedSec / duration, 0, 1) : 0;
+  const nextValues = { ...baseValues };
+  const set = (parameterId, value) => {
+    const id = String(parameterId || "").trim();
+    const parameter = definition.parameterMap?.[id];
+    if (!parameter) {
+      return;
+    }
+    nextValues[id] = normalizeParameterValue(parameter, value);
+  };
+  try {
+    animation.update({
+      elapsed: safeElapsedSec,
+      elapsedSec: safeElapsedSec,
+      duration,
+      progress,
+      cycle: duration > 0 ? safeElapsedSec / duration : 0,
+      loop: animation.loop !== false,
+      params: baseValues,
+      set,
+      speed: clampNumber(speed, 0.1, 5)
+    });
+  } catch (error) {
+    console.error("STEP animation update failed", error);
+  }
+  return nextValues;
 }
 
 async function readResponseError(response, fallback) {
@@ -519,6 +570,8 @@ export default function CadWorkspace({
     elapsedSec: 0,
     speed: 1
   });
+  const stepModuleParameterValuesRef = useRef(stepModuleParameterValues);
+  const stepModuleAnimationStateRef = useRef(stepModuleAnimationState);
   const [urdfPosePickerState, setUrdfPosePickerState] = useState(emptyUrdfPosePickerState);
   const [pendingCadRefQueryParams, setPendingCadRefQueryParams] = useState(() => readCadRefQueryParams());
   const [inspectedAssemblyReferenceState, setInspectedAssemblyReferenceState] = useState(null);
@@ -940,6 +993,7 @@ export default function CadWorkspace({
       setStepModuleParameterValues({});
       setStepModuleEnabled(true);
       setStepModuleAnimationState(buildDefaultStepModuleAnimationState(null));
+      resetStepAnimationStore();
       return () => {
         cancelled = true;
       };
@@ -954,6 +1008,7 @@ export default function CadWorkspace({
     setStepModuleParameterValues({});
     setStepModuleEnabled(true);
     setStepModuleAnimationState(buildDefaultStepModuleAnimationState(null));
+    resetStepAnimationStore();
 
     loadStepModuleDefinition(selectedStepModuleUrl, { cadPath: selectedStepModuleCadPath }).then((definition) => {
       if (cancelled) {
@@ -972,19 +1027,27 @@ export default function CadWorkspace({
         error: "",
         definition
       });
-      setStepModuleParameterValues(normalizeStepModuleParameterValues(
+      const nextParameterValues = normalizeStepModuleParameterValues(
         definition,
         restoredStepModuleState?.parameterValues || definition.defaultParameterValues
-      ));
-      setStepModuleEnabled(restoredStepModuleState ? restoredStepModuleState.enabled !== false : true);
-      setStepModuleAnimationState(restoredStepModuleState?.animationState
+      );
+      const nextAnimationState = restoredStepModuleState?.animationState
         ? {
             ...defaultAnimationState,
             ...restoredStepModuleState.animationState,
             activeId: restoredStepModuleState.animationState.activeId || defaultAnimationState.activeId,
             playing: false
           }
-        : defaultAnimationState);
+        : defaultAnimationState;
+      stepModuleParameterValuesRef.current = nextParameterValues;
+      stepModuleAnimationStateRef.current = nextAnimationState;
+      setStepModuleParameterValues(nextParameterValues);
+      setStepModuleEnabled(restoredStepModuleState ? restoredStepModuleState.enabled !== false : true);
+      setStepModuleAnimationState(nextAnimationState);
+      resetStepAnimationStore({
+        elapsedSec: nextAnimationState.elapsedSec,
+        parameterValues: nextParameterValues
+      });
     }).catch((error) => {
       if (cancelled) {
         return;
@@ -998,6 +1061,7 @@ export default function CadWorkspace({
       setStepModuleParameterValues({});
       setStepModuleEnabled(true);
       setStepModuleAnimationState(buildDefaultStepModuleAnimationState(null));
+      resetStepAnimationStore();
     });
 
     return () => {
@@ -1256,6 +1320,14 @@ export default function CadWorkspace({
   const stepModuleTreeSelectionDisabled = false;
   const stepModuleTreeSelectionDisabledReason = "";
 
+  useEffect(() => {
+    stepModuleParameterValuesRef.current = stepModuleParameterValues;
+  }, [stepModuleParameterValues]);
+
+  useEffect(() => {
+    stepModuleAnimationStateRef.current = stepModuleAnimationState;
+  }, [stepModuleAnimationState]);
+
   const handleStepModuleParameterChange = useCallback((parameterId, value) => {
     const id = String(parameterId || "").trim();
     const parameter = selectedStepModuleDefinition?.parameterMap?.[id];
@@ -1308,71 +1380,134 @@ export default function CadWorkspace({
     if (!selectedStepModuleDefinition) {
       return;
     }
-    setStepModuleParameterValues(normalizeStepModuleParameterValues(
+    const nextParameterValues = normalizeStepModuleParameterValues(
       selectedStepModuleDefinition,
       selectedStepModuleDefinition.defaultParameterValues
-    ));
-    setStepModuleAnimationState(buildDefaultStepModuleAnimationState(selectedStepModuleDefinition));
+    );
+    const nextAnimationState = buildDefaultStepModuleAnimationState(selectedStepModuleDefinition);
+    stepModuleParameterValuesRef.current = nextParameterValues;
+    stepModuleAnimationStateRef.current = nextAnimationState;
+    setStepModuleParameterValues(nextParameterValues);
+    setStepModuleAnimationState(nextAnimationState);
+    resetStepAnimationStore({
+      elapsedSec: nextAnimationState.elapsedSec,
+      parameterValues: nextParameterValues
+    });
   }, [selectedStepModuleDefinition]);
 
   const handleStepModuleAnimationSelect = useCallback((animationId) => {
     const animation = findStepModuleAnimation(selectedStepModuleDefinition, animationId);
-    setStepModuleAnimationState((current) => ({
-      ...current,
+    const nextState = {
+      ...stepModuleAnimationStateRef.current,
       activeId: animation?.id || "",
       playing: false,
       elapsedSec: 0
-    }));
+    };
+    stepModuleAnimationStateRef.current = nextState;
+    resetStepAnimationStore({
+      elapsedSec: 0,
+      parameterValues: stepModuleParameterValuesRef.current
+    });
+    setStepModuleAnimationState(nextState);
   }, [selectedStepModuleDefinition]);
 
   const handleStepModuleAnimationPlayToggle = useCallback(() => {
-    setStepModuleAnimationState((current) => {
-      const animation = findStepModuleAnimation(selectedStepModuleDefinition, current.activeId);
-      if (!animation) {
-        return current;
-      }
-      const duration = Math.max(Number(animation.duration) || 0, 0.001);
-      const elapsedSec = current.elapsedSec >= duration ? 0 : current.elapsedSec;
-      return {
-        ...current,
+    const currentState = stepModuleAnimationStateRef.current;
+    const animation = findStepModuleAnimation(selectedStepModuleDefinition, currentState.activeId);
+    if (!animation) {
+      return;
+    }
+    const duration = Math.max(Number(animation.duration) || 0, 0.001);
+    if (currentState.playing) {
+      const elapsedSec = clampNumber(getStepAnimationElapsed(), 0, duration);
+      const liveValues = getStepAnimationParameterValues();
+      const nextValues = liveValues && typeof liveValues === "object" && Object.keys(liveValues).length
+        ? liveValues
+        : stepModuleParameterValuesRef.current;
+      stepModuleParameterValuesRef.current = nextValues;
+      setStepModuleParameterValues(nextValues);
+      setStepAnimationFrame({ elapsedSec, parameterValues: nextValues });
+      const nextState = {
+        ...currentState,
         activeId: animation.id,
         elapsedSec,
-        playing: !current.playing
+        playing: false
       };
-    });
+      stepModuleAnimationStateRef.current = nextState;
+      setStepModuleAnimationState(nextState);
+      return;
+    }
+    const elapsedSec = currentState.elapsedSec >= duration
+      ? 0
+      : clampNumber(currentState.elapsedSec, 0, duration);
+    setStepAnimationElapsed(elapsedSec);
+    const nextState = {
+      ...currentState,
+      activeId: animation.id,
+      elapsedSec,
+      playing: true
+    };
+    stepModuleAnimationStateRef.current = nextState;
+    setStepModuleAnimationState(nextState);
   }, [selectedStepModuleDefinition]);
 
   const handleStepModuleAnimationReset = useCallback(() => {
-    setStepModuleAnimationState((current) => ({
-      ...current,
+    const currentState = stepModuleAnimationStateRef.current;
+    const animation = findStepModuleAnimation(selectedStepModuleDefinition, currentState.activeId);
+    const nextValues = selectedStepModuleDefinition && animation
+      ? buildStepModuleAnimationFrameValues({
+          definition: selectedStepModuleDefinition,
+          animation,
+          elapsedSec: 0,
+          speed: currentState.speed,
+          parameterValues: stepModuleParameterValuesRef.current
+        })
+      : stepModuleParameterValuesRef.current;
+    stepModuleParameterValuesRef.current = nextValues;
+    setStepModuleParameterValues((current) => (
+      shallowObjectValuesEqual(current, nextValues) ? current : nextValues
+    ));
+    resetStepAnimationStore({ elapsedSec: 0, parameterValues: nextValues });
+    const nextState = {
+      ...currentState,
       elapsedSec: 0,
       playing: false
-    }));
-  }, []);
+    };
+    stepModuleAnimationStateRef.current = nextState;
+    setStepModuleAnimationState(nextState);
+  }, [selectedStepModuleDefinition]);
 
   const handleStepModuleAnimationScrub = useCallback((elapsedSec) => {
     const duration = Math.max(Number(selectedStepModuleActiveAnimation?.duration) || 1, 0.001);
-    setStepModuleAnimationState((current) => ({
-      ...current,
-      elapsedSec: clampNumber(elapsedSec, 0, duration)
-    }));
+    const clampedElapsedSec = clampNumber(elapsedSec, 0, duration);
+    setStepAnimationElapsed(clampedElapsedSec);
+    const nextState = {
+      ...stepModuleAnimationStateRef.current,
+      elapsedSec: clampedElapsedSec
+    };
+    stepModuleAnimationStateRef.current = nextState;
+    setStepModuleAnimationState(nextState);
   }, [selectedStepModuleActiveAnimation]);
 
   const handleStepModuleAnimationSpeedChange = useCallback((speed) => {
-    setStepModuleAnimationState((current) => ({
-      ...current,
+    const nextState = {
+      ...stepModuleAnimationStateRef.current,
       speed: clampNumber(speed, 0.1, 5)
-    }));
+    };
+    stepModuleAnimationStateRef.current = nextState;
+    setStepModuleAnimationState(nextState);
   }, []);
 
   const handleStepModuleEnabledChange = useCallback((enabled) => {
     const nextEnabled = enabled !== false;
     setStepModuleEnabled(nextEnabled);
     if (!nextEnabled) {
-      setStepModuleAnimationState((current) => ({
-        ...current,
+      const nextState = {
+        ...stepModuleAnimationStateRef.current,
         playing: false
-      }));
+      };
+      stepModuleAnimationStateRef.current = nextState;
+      setStepModuleAnimationState(nextState);
     }
   }, []);
 
@@ -1388,32 +1523,52 @@ export default function CadWorkspace({
       return undefined;
     }
 
+    const definition = selectedStepModuleDefinition;
+    const animation = selectedStepModuleActiveAnimation;
+    const duration = Math.max(Number(animation.duration) || 1, 0.001);
     let frameId = 0;
     let previousTimeMs = animationNowMs();
+    setStepAnimationElapsed(clampNumber(stepModuleAnimationStateRef.current.elapsedSec, 0, duration));
+
     const tick = (timeMs) => {
+      const currentState = stepModuleAnimationStateRef.current;
+      if (!currentState.playing || currentState.activeId !== animation.id) {
+        return;
+      }
       const deltaSec = Math.max((timeMs - previousTimeMs) / 1000, 0);
       previousTimeMs = timeMs;
-      setStepModuleAnimationState((current) => {
-        if (!current.playing || current.activeId !== selectedStepModuleActiveAnimation.id) {
-          return current;
-        }
-        const duration = Math.max(Number(selectedStepModuleActiveAnimation.duration) || 1, 0.001);
-        const speed = clampNumber(current.speed, 0.1, 5);
-        let elapsedSec = current.elapsedSec + (deltaSec * speed);
-        let playing = current.playing;
-        if (selectedStepModuleActiveAnimation.loop !== false) {
-          elapsedSec %= duration;
-        } else if (elapsedSec >= duration) {
-          elapsedSec = duration;
-          playing = false;
-        }
-        return {
-          ...current,
+      const speed = clampNumber(currentState.speed, 0.1, 5);
+      let elapsedSec = getStepAnimationElapsed() + (deltaSec * speed);
+      let playing = currentState.playing;
+      if (animation.loop !== false) {
+        elapsedSec %= duration;
+      } else if (elapsedSec >= duration) {
+        elapsedSec = duration;
+        playing = false;
+      }
+      const nextValues = buildStepModuleAnimationFrameValues({
+        definition,
+        animation,
+        elapsedSec,
+        speed,
+        parameterValues: stepModuleParameterValuesRef.current
+      });
+      setStepAnimationFrame({ elapsedSec, parameterValues: nextValues });
+      if (!playing) {
+        stepModuleParameterValuesRef.current = nextValues;
+        setStepModuleParameterValues((current) => (
+          shallowObjectValuesEqual(current, nextValues) ? current : nextValues
+        ));
+        const nextState = {
+          ...currentState,
           elapsedSec,
           speed,
-          playing
+          playing: false
         };
-      });
+        stepModuleAnimationStateRef.current = nextState;
+        setStepModuleAnimationState(nextState);
+        return;
+      }
       frameId = window.requestAnimationFrame(tick);
     };
 
@@ -1431,43 +1586,36 @@ export default function CadWorkspace({
   useEffect(() => {
     const animation = selectedStepModuleActiveAnimation;
     if (!selectedStepModuleDefinition || !stepModuleEnabled || typeof animation?.update !== "function") {
+      resetStepAnimationStore({
+        elapsedSec: 0,
+        parameterValues: stepModuleParameterValuesRef.current
+      });
+      return;
+    }
+    if (stepModuleAnimationState.playing) {
       return;
     }
     const duration = Math.max(Number(animation.duration) || 1, 0.001);
     const elapsedSec = clampNumber(stepModuleAnimationState.elapsedSec, 0, duration);
-    const progress = duration > 0 ? clampNumber(elapsedSec / duration, 0, 1) : 0;
-    setStepModuleParameterValues((current) => {
-      const normalizedCurrent = normalizeStepModuleParameterValues(selectedStepModuleDefinition, current);
-      const nextValues = { ...normalizedCurrent };
-      const set = (parameterId, value) => {
-        const id = String(parameterId || "").trim();
-        const parameter = selectedStepModuleDefinition.parameterMap?.[id];
-        if (!parameter) {
-          return;
-        }
-        nextValues[id] = normalizeParameterValue(parameter, value);
-      };
-      try {
-        animation.update({
-          elapsed: elapsedSec,
-          elapsedSec,
-          duration,
-          progress,
-          cycle: duration > 0 ? elapsedSec / duration : 0,
-          loop: animation.loop !== false,
-          params: normalizedCurrent,
-          set
-        });
-      } catch (error) {
-        console.error("STEP animation update failed", error);
-      }
-      return shallowObjectValuesEqual(current, nextValues) ? current : nextValues;
+    const nextValues = buildStepModuleAnimationFrameValues({
+      definition: selectedStepModuleDefinition,
+      animation,
+      elapsedSec,
+      speed: stepModuleAnimationState.speed,
+      parameterValues: stepModuleParameterValuesRef.current
     });
+    stepModuleParameterValuesRef.current = nextValues;
+    setStepModuleParameterValues((current) => (
+      shallowObjectValuesEqual(current, nextValues) ? current : nextValues
+    ));
+    setStepAnimationFrame({ elapsedSec, parameterValues: nextValues });
   }, [
     selectedStepModuleActiveAnimation,
     selectedStepModuleDefinition,
     stepModuleEnabled,
-    stepModuleAnimationState.elapsedSec
+    stepModuleAnimationState.elapsedSec,
+    stepModuleAnimationState.playing,
+    stepModuleAnimationState.speed
   ]);
   const assemblyRoot = selectedAssemblyStructureReady
     ? selectedMeshData?.assemblyRoot || null
@@ -2406,6 +2554,15 @@ export default function CadWorkspace({
     const targetUrdfMotionState = targetFileKey && urdfMotionStateByFileRef?.[targetFileKey]
       ? urdfMotionStateByFileRef[targetFileKey]
       : {};
+    const snapshotStepModuleAnimationState = stepModuleAnimationState.playing
+      ? {
+          ...stepModuleAnimationState,
+          elapsedSec: getStepAnimationElapsed()
+        }
+      : stepModuleAnimationState;
+    const snapshotStepModuleParameterValues = stepModuleAnimationState.playing
+      ? getStepAnimationParameterValues()
+      : stepModuleParameterValues;
     return createFileSessionSnapshot({
       fileKey: targetFileKey,
       entry: targetEntry,
@@ -2418,8 +2575,8 @@ export default function CadWorkspace({
         },
         stepModule: {
           enabled: stepModuleEnabled,
-          parameterValues: stepModuleParameterValues,
-          animationState: stepModuleAnimationState
+          parameterValues: snapshotStepModuleParameterValues,
+          animationState: snapshotStepModuleAnimationState
         },
         urdf: {
           jointValues: targetUrdfJointValues,
