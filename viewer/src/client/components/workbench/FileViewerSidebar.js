@@ -72,6 +72,7 @@ const ENTRY_ICON_COMPONENTS = {
   [ENTRY_ICON_KIND.ASSEMBLY]: Boxes,
   [ENTRY_ICON_KIND.DXF]: DraftingCompass,
   [ENTRY_ICON_KIND.GCODE]: Route,
+  [ENTRY_ICON_KIND.IMPLICIT]: Code,
   [ENTRY_ICON_KIND.ROBOT]: Bot,
   [ENTRY_ICON_KIND.STEP_PART]: Package,
   [ENTRY_ICON_KIND.STL_MESH]: Cuboid,
@@ -101,6 +102,7 @@ function FileEntryButton({
   canCopyFileAssetPaths = false,
   fileAccessBusyKey = "",
   onDownloadFileAsset,
+  onExportImplicitFile,
   onRevealFileAsset,
   onRevealInExplorerView,
   onCopyFileAssetReference,
@@ -181,6 +183,7 @@ function FileEntryButton({
       canCopyFileAssetPaths={canCopyFileAssetPaths}
       busyKey={fileAccessBusyKey}
       onDownloadFileAsset={onDownloadFileAsset}
+      onExportImplicitFile={onExportImplicitFile}
       onRevealFileAsset={onRevealFileAsset}
       onRevealInExplorerView={onRevealInExplorerView}
       onCopyFileAssetReference={onCopyFileAssetReference}
@@ -211,6 +214,7 @@ function DirectoryNode({
   canCopyFileAssetPaths = false,
   fileAccessBusyKey = "",
   onDownloadFileAsset,
+  onExportImplicitFile,
   onRevealFileAsset,
   onRevealInExplorerView,
   onCopyFileAssetReference,
@@ -278,6 +282,7 @@ function DirectoryNode({
                     canCopyFileAssetPaths={canCopyFileAssetPaths}
                     fileAccessBusyKey={fileAccessBusyKey}
                     onDownloadFileAsset={onDownloadFileAsset}
+                    onExportImplicitFile={onExportImplicitFile}
                     onRevealFileAsset={onRevealFileAsset}
                     onRevealInExplorerView={onRevealInExplorerView}
                     onCopyFileAssetReference={onCopyFileAssetReference}
@@ -305,6 +310,7 @@ function DirectoryNode({
                     canCopyFileAssetPaths={canCopyFileAssetPaths}
                     fileAccessBusyKey={fileAccessBusyKey}
                     onDownloadFileAsset={onDownloadFileAsset}
+                    onExportImplicitFile={onExportImplicitFile}
                     onRevealFileAsset={onRevealFileAsset}
                     onRevealInExplorerView={onRevealInExplorerView}
                     onCopyFileAssetReference={onCopyFileAssetReference}
@@ -466,6 +472,7 @@ function FileViewerContents({
   canCopyFileAssetPaths = false,
   fileAccessBusyKey = "",
   onDownloadFileAsset,
+  onExportImplicitFile,
   onRevealFileAsset,
   onRevealInExplorerView,
   onCopyFileAssetReference,
@@ -533,6 +540,7 @@ function FileViewerContents({
                           canCopyFileAssetPaths={canCopyFileAssetPaths}
                           fileAccessBusyKey={fileAccessBusyKey}
                           onDownloadFileAsset={onDownloadFileAsset}
+                          onExportImplicitFile={onExportImplicitFile}
                           onRevealFileAsset={onRevealFileAsset}
                           onRevealInExplorerView={onRevealInExplorerView}
                           onCopyFileAssetReference={onCopyFileAssetReference}
@@ -559,6 +567,7 @@ function FileViewerContents({
                           canCopyFileAssetPaths={canCopyFileAssetPaths}
                           fileAccessBusyKey={fileAccessBusyKey}
                           onDownloadFileAsset={onDownloadFileAsset}
+                          onExportImplicitFile={onExportImplicitFile}
                           onRevealFileAsset={onRevealFileAsset}
                           onRevealInExplorerView={onRevealInExplorerView}
                           onCopyFileAssetReference={onCopyFileAssetReference}
@@ -609,6 +618,7 @@ export default function FileViewerSidebar({
   canCopyFileAssetPaths = false,
   fileAccessBusyKey = "",
   onDownloadFileAsset,
+  onExportImplicitFile,
   onRevealFileAsset,
   onRevealInExplorerView,
   onCopyFileAssetReference,
@@ -651,6 +661,7 @@ export default function FileViewerSidebar({
       canCopyFileAssetPaths={canCopyFileAssetPaths}
       fileAccessBusyKey={fileAccessBusyKey}
       onDownloadFileAsset={onDownloadFileAsset}
+      onExportImplicitFile={onExportImplicitFile}
       onRevealFileAsset={onRevealFileAsset}
       onRevealInExplorerView={onRevealInExplorerView}
       onCopyFileAssetReference={onCopyFileAssetReference}

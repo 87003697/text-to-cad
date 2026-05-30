@@ -4,7 +4,7 @@ import {
   DEFAULT_VIEWER_ROOT_DIR,
   normalizeViewerRootDir,
   resolveViewerRoot,
-} from "./cadDirectoryScanner.mjs";
+} from "./catalog/cadDirectoryScanner.mjs";
 
 export const VIEWER_SERVER_INFO_SCHEMA_VERSION = 1;
 export const VIEWER_SERVER_API_VERSION = 2;

@@ -58,7 +58,7 @@ import {
 } from "cadjs/lib/themeSettings.js";
 import {
   readStoredActiveCadDir
-} from "cadjs/lib/cadViewerDirectorySession.mjs";
+} from "./cadViewerDirectorySession.mjs";
 import {
   CAD_WORKSPACE_MIN_MODEL_VIEWPORT_WIDTH,
   canFitDesktopPanels,

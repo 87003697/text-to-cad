@@ -39,8 +39,12 @@ the GitHub workflows.
 - `plugins/`: versioned agent plugin packages that bundle repo skills.
 - `models/`: sample and durable CAD/robot-description fixtures.
 - `viewer/`: editable CAD Viewer source app.
-- `packages/`: shared source packages copied or vendored into consuming
-  runtimes.
+- `packages/cadjs`: shared JS CAD/render/runtime code, UI-framework agnostic.
+- `packages/implicitjs`: standalone JS implicit CAD model, shader render,
+  snapshot, mesh sampling, and export runtime.
+- `packages/cadpy`: shared Python STEP/GLB/topology artifact code.
+- `packages/cadpy_metadata`: dependency-free Python metadata helpers vendored
+  into generated URDF/SRDF/SDF skill runtimes.
 - `docs/`: documentation site.
 - `tests/`: root-owned test suites for skills, packages, viewer services, and
   repo-wide policy.
@@ -80,6 +84,9 @@ the GitHub workflows.
   lower-level bundle scripts only when debugging the wrapper itself.
 - `packages/cadjs` must stay reusable/non-React; app UI and workflow state
   belong in `viewer/`.
+- `packages/implicitjs` must stay reusable/non-React and independent of
+  `packages/cadjs`; CAD Viewer and snapshot tools should consume its shared
+  render/export APIs instead of duplicating implicit CAD logic.
 - `packages/cadpy` owns reusable Python artifact generation; skills should use
   bundled package code, not sibling skill imports.
 - Create lightweight shared Python packages under `packages/cadpy_*` when a
@@ -119,7 +126,8 @@ when touching shared surfaces or before handoff:
 - Development symlink layout: `scripts/dev/setup-symlinks.sh --check`
 - Canonical release version: `scripts/release/check-version.sh`
 - Generated runtime and plugin freshness: `scripts/bundle/bundle.sh --check`
-- CAD Viewer or `packages/cadjs`: `npm --prefix packages/cadjs test`,
+- CAD Viewer, `packages/cadjs`, or `packages/implicitjs`:
+  `npm --prefix packages/cadjs test`, `npm --prefix packages/implicitjs test`,
   `npm --prefix viewer run test`, `npm --prefix viewer run build`
 - Docs site: `npm --prefix docs run check`
 - Targeted Python tests: `./.venv/bin/python -m unittest <changed test paths>`

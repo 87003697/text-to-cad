@@ -2,8 +2,8 @@ import { buildCadRefToken, parseCadRefToken } from "cadjs/lib/cadRefs.js";
 import {
   readStoredActiveCadDir,
   rememberActiveCadDir
-} from "cadjs/lib/cadViewerDirectorySession.mjs";
-import { normalizeViewerDefaultFile } from "cadjs/lib/viewerConfig.mjs";
+} from "./cadViewerDirectorySession.mjs";
+import { normalizeViewerDefaultFile } from "../../shared/viewerConfig.mjs";
 
 const CAD_DIR_QUERY_PARAM = "dir";
 const CAD_QUERY_PARAM = "file";
@@ -319,7 +319,7 @@ export function filenameLabelForEntry(entry) {
     return "";
   }
   const kind = String(entry?.kind || "").trim().toLowerCase();
-  const directSourceFormats = new Set(["dxf", "urdf", "srdf", "sdf", "stl", "3mf", "glb", "gcode"]);
+  const directSourceFormats = new Set(["dxf", "urdf", "srdf", "sdf", "stl", "3mf", "glb", "gcode", "implicit"]);
   const sourceFormat = directSourceFormats.has(kind)
     ? kind
     : String(sourceExtensionForEntry(entry) || "step").trim().toLowerCase();
@@ -347,6 +347,9 @@ export function filenameLabelForEntry(entry) {
   }
   if (sourceFormat === "gcode" || entry?.kind === "gcode") {
     return `${stem}.gcode`;
+  }
+  if (sourceFormat === "implicit" || entry?.kind === "implicit") {
+    return entryLeafName(entry);
   }
   return `${stem}.${sourceFormat === "stp" ? "stp" : "step"}`;
 }

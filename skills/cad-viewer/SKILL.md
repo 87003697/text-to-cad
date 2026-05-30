@@ -1,6 +1,6 @@
 ---
 name: cad-viewer
-description: Start or reuse CAD Viewer and return review links for explicit CAD, robot-description, and G-code files. Use when visually reviewing `.step`, `.stp`, `.glb`, `.stl`, `.3mf`, `.gcode`, `.dxf`, `.urdf`, `.srdf`, or `.sdf` files, especially when handed off from CAD, G-code, URDF, SRDF, or SDF generation skills.
+description: Start or reuse CAD Viewer and return review links for explicit CAD, implicit CAD, robot-description, and G-code files. Use when visually reviewing `.step`, `.stp`, `.implicit.js`, `.implicit.mjs`, `.glb`, `.stl`, `.3mf`, `.gcode`, `.dxf`, `.urdf`, `.srdf`, or `.sdf` files, especially when handed off from CAD, implicit-cad, G-code, URDF, SRDF, or SDF generation skills.
 ---
 
 # CAD Viewer
@@ -9,9 +9,9 @@ Provenance: maintained in [earthtojake/text-to-cad](https://github.com/earthtoja
 Use the installed local skill files as the runtime source of truth; the
 repository link is only for provenance and release review.
 
-Use this skill to open existing or newly generated CAD, robot-description, DXF,
-or plain FDM G-code files in CAD Viewer and hand back live review links. The
-expected input is one or more explicit file paths.
+Use this skill to open existing or newly generated CAD, implicit CAD,
+robot-description, DXF, or plain FDM G-code files in CAD Viewer and hand back
+live review links. The expected input is one or more explicit file paths.
 
 ## Start Viewer
 

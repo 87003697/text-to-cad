@@ -2,7 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 
 import { DEFAULT_VIEWER_ROOT_DIR, normalizeViewerRootDir, resolveViewerRoot } from "./cadDirectoryScanner.mjs";
-import { toPosixPath } from "./pathUtils.mjs";
+import { toPosixPath } from "cadjs/lib/pathUtils.mjs";
 
 export const GENERATION_STATUS_SCHEMA_VERSION = 1;
 export const GENERATION_LOCK_SUFFIX = ".generation.lock.json";

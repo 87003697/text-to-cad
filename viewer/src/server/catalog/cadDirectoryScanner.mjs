@@ -8,7 +8,7 @@ import {
   isPathInsidePerStepViewerDirectory,
   isPerStepViewerDirectoryName,
   stepParameterPathForStepSource,
-} from "../common/stepSidecars.mjs";
+} from "cadjs/common/stepSidecars.mjs";
 import {
   STEP_EDGE_BARYCENTRIC_ATTRIBUTE,
   STEP_EDGE_CLASS_ATTRIBUTE,
@@ -16,14 +16,15 @@ import {
   STEP_TOPOLOGY_EXTENSION,
   STEP_TOPOLOGY_SCHEMA_VERSION,
   isCurrentStepTopologySchemaVersion
-} from "../common/stepTopology.mjs";
-import { toPosixPath } from "./pathUtils.mjs";
-import { readTextToCadStepMetadataFile } from "./step/stepMetadata.mjs";
+} from "cadjs/common/stepTopology.mjs";
+import { toPosixPath } from "cadjs/lib/pathUtils.mjs";
+import { readTextToCadStepMetadataFile } from "../step/stepMetadata.mjs";
 
 export const DEFAULT_VIEWER_ROOT_DIR = "";
 export const CAD_CATALOG_SCHEMA_VERSION = 4;
 
 const SOURCE_EXTENSIONS = new Set([".step", ".stp", ".stl", ".3mf", ".glb", ".gcode", ".dxf", ".urdf", ".srdf", ".sdf"]);
+const IMPLICIT_CAD_EXTENSIONS = Object.freeze([".implicit.js", ".implicit.mjs"]);
 const REGENERATE_STEP_COMMAND = "python -m cadpy.step_artifact --repo-root . --step";
 export const VIEWER_SKIPPED_DIRECTORIES = new Set([
   ".agents",
@@ -52,6 +53,11 @@ const PYTHON_GENERATOR_BY_KIND = Object.freeze({
 
 function encodeUrlPath(repoRelativePath) {
   return `/${repoRelativePath.split("/").map((part) => encodeURIComponent(part)).join("/")}`;
+}
+
+function pathIsImplicitCadSource(value = "") {
+  const pathname = String(value || "").split(/[?#]/, 1)[0].toLowerCase();
+  return IMPLICIT_CAD_EXTENSIONS.some((extension) => pathname.endsWith(extension));
 }
 
 function relativePathStaysInsideRoot(relativePath) {
@@ -994,6 +1000,10 @@ function sourceFormatFromExtension(extension) {
   return normalized === "stp" ? "stp" : normalized;
 }
 
+function sourceFormatForPath(sourcePath, extension = path.extname(sourcePath)) {
+  return pathIsImplicitCadSource(sourcePath) ? "implicit" : sourceFormatFromExtension(extension);
+}
+
 function isPerUrdfViewerDirectoryName(name) {
   const normalized = String(name || "").toLowerCase();
   return normalized.startsWith(".") && normalized.endsWith(".urdf");
@@ -1226,7 +1236,7 @@ function linkedUrdfPathForSrdf(sourcePath, repoRoot) {
 }
 
 function createSingleAssetEntry({ repoRoot, rootPath, sourcePath, extension }) {
-  const kind = sourceFormatFromExtension(extension);
+  const kind = sourceFormatForPath(sourcePath, extension);
   const asset = assetForPath(repoRoot, sourcePath);
   const file = fileRefForSource(rootPath, sourcePath);
   const generatedSource = generatedSourceStatusForFile({ repoRoot, sourcePath, kind });
@@ -1302,7 +1312,7 @@ function collectCadSourceFiles(rootPath, { scanRootPath = rootPath, includePath 
       }
       continue;
     }
-    if (SOURCE_EXTENSIONS.has(extension) && !isInlineStepGlbArtifactPath(entryPath)) {
+    if ((SOURCE_EXTENSIONS.has(extension) || pathIsImplicitCadSource(entryPath)) && !isInlineStepGlbArtifactPath(entryPath)) {
       result.push(entryPath);
       continue;
     }
@@ -1367,7 +1377,7 @@ export function catalogFileRefForPath({ repoRoot, rootDir = DEFAULT_VIEWER_ROOT_
     return "";
   }
   const extension = path.extname(resolvedFilePath).toLowerCase();
-  return SOURCE_EXTENSIONS.has(extension)
+  return (SOURCE_EXTENSIONS.has(extension) || pathIsImplicitCadSource(resolvedFilePath))
     ? fileRefForSource(resolved.rootPath, resolvedFilePath)
     : "";
 }
@@ -1409,7 +1419,7 @@ export function scanCadFile({
   }
 
   const extension = path.extname(resolvedFilePath).toLowerCase();
-  if (!SOURCE_EXTENSIONS.has(extension) || !fileStats(resolvedFilePath)) {
+  if ((!SOURCE_EXTENSIONS.has(extension) && !pathIsImplicitCadSource(resolvedFilePath)) || !fileStats(resolvedFilePath)) {
     if ((extension === ".step" || extension === ".stp") && fileStats(inlineStepGlbArtifactPathForSource(resolvedFilePath))) {
       return createStepEntry({
         repoRoot,
@@ -1499,18 +1509,18 @@ export function isServedCadAsset(filePath) {
   if (isPathInsidePerUrdfViewerDirectory(filePath)) {
     return false;
   }
-  if (SOURCE_EXTENSIONS.has(extension)) {
+  if (SOURCE_EXTENSIONS.has(extension) || pathIsImplicitCadSource(filePath)) {
     return true;
   }
   return false;
 }
 
 function isCatalogRelevantPythonSource(filePath) {
-  const resolved = path.resolve(filePath);
-  if (path.extname(resolved).toLowerCase() !== ".py") {
+  const normalized = path.normalize(String(filePath || ""));
+  if (path.extname(normalized).toLowerCase() !== ".py") {
     return false;
   }
-  return !resolved.split(path.sep).some((part) => VIEWER_SKIPPED_DIRECTORIES.has(part));
+  return !normalized.split(/[\\/]+/u).some((part) => VIEWER_SKIPPED_DIRECTORIES.has(part));
 }
 
 export function isCatalogRelevantPath(filePath) {

@@ -10,9 +10,11 @@ CLEAN=0
 
 CADJS_PACKAGE_DIR="$REPO_ROOT/packages/cadjs"
 CADPY_PACKAGE_DIR="$REPO_ROOT/packages/cadpy"
+IMPLICITJS_PACKAGE_DIR="$REPO_ROOT/packages/implicitjs"
 VIEWER_DIR="$REPO_ROOT/viewer"
 VIEWER_CADJS_DIR="$VIEWER_DIR/packages/cadjs"
 VIEWER_CADPY_DIR="$VIEWER_DIR/packages/cadpy"
+VIEWER_IMPLICITJS_DIR="$VIEWER_DIR/packages/implicitjs"
 RUNTIME_DIR="$REPO_ROOT/skills/cad-viewer/scripts/viewer"
 CHECK_DIR="${CAD_VIEWER_RUNTIME_CHECK_DIR:-${RENDER_VIEWER_RUNTIME_CHECK_DIR:-$REPO_ROOT/tmp/cad-viewer-runtime-check}}"
 ESBUILD_BIN="$VIEWER_DIR/node_modules/.bin/esbuild"
@@ -118,6 +120,22 @@ sync_cadjs_package() {
     "$CADJS_PACKAGE_DIR/" "$target_dir/"
 }
 
+sync_implicitjs_package() {
+  local target_dir="${1:-$VIEWER_IMPLICITJS_DIR}"
+  rm -rf "$target_dir"
+  mkdir -p "$target_dir"
+  rsync -a --delete \
+    --prune-empty-dirs \
+    --delete-excluded \
+    --exclude node_modules \
+    --exclude dist \
+    --exclude coverage \
+    --exclude tmp \
+    --exclude .vite \
+    --exclude .DS_Store \
+    "$IMPLICITJS_PACKAGE_DIR/" "$target_dir/"
+}
+
 sync_cadpy_package() {
   local source_dir="$1"
   local target_dir="$2"
@@ -178,6 +196,34 @@ check_cadjs_package() {
   echo "$label is up to date."
 }
 
+check_implicitjs_package() {
+  local label="${VIEWER_IMPLICITJS_DIR#$REPO_ROOT/}"
+  local diff_path="${TMPDIR:-/tmp}/viewer-implicitjs-package-diff.txt"
+  local expected_dir="${TMPDIR:-/tmp}/viewer-implicitjs-package-check"
+  if [ ! -d "$VIEWER_IMPLICITJS_DIR" ]; then
+    echo "Missing generated viewer implicitjs package: $label" >&2
+    echo "Run scripts/bundle/bundle-skill.sh cad-viewer and commit the generated copy." >&2
+    exit 1
+  fi
+  rm -rf "$expected_dir"
+  sync_implicitjs_package "$expected_dir"
+  if ! diff -qr \
+    -x node_modules \
+    -x dist \
+    -x coverage \
+    -x tmp \
+    -x .vite \
+    -x .DS_Store \
+    "$expected_dir" "$VIEWER_IMPLICITJS_DIR" >"$diff_path"; then
+    cat "$diff_path" >&2
+    echo "" >&2
+    echo "Viewer implicitjs package is stale." >&2
+    echo "Run scripts/bundle/bundle-skill.sh cad-viewer and commit viewer/packages/implicitjs." >&2
+    exit 1
+  fi
+  echo "$label is up to date."
+}
+
 check_cadpy_package() {
   local label="${VIEWER_CADPY_DIR#$REPO_ROOT/}"
   local diff_path="${TMPDIR:-/tmp}/viewer-cadpy-package-diff.txt"
@@ -215,16 +261,20 @@ build_viewer_packages() {
   if [ "$CLEAN" -eq 1 ]; then
     rm -rf "$VIEWER_CADJS_DIR"
     rm -rf "$VIEWER_CADPY_DIR"
+    rm -rf "$VIEWER_IMPLICITJS_DIR"
   fi
   sync_cadjs_package
   sync_cadpy_package "$CADPY_PACKAGE_DIR" "$VIEWER_CADPY_DIR"
+  sync_implicitjs_package
   echo "Bundled ${VIEWER_CADJS_DIR#$REPO_ROOT/}"
   echo "Bundled ${VIEWER_CADPY_DIR#$REPO_ROOT/}"
+  echo "Bundled ${VIEWER_IMPLICITJS_DIR#$REPO_ROOT/}"
 }
 
 check_viewer_packages() {
   check_cadjs_package
   check_cadpy_package
+  check_implicitjs_package
 }
 
 write_runtime_package_json() {
@@ -359,6 +409,8 @@ require_path "$CADJS_PACKAGE_DIR/package.json" "cadjs package"
 require_path "$CADJS_PACKAGE_DIR/src" "cadjs source"
 require_path "$CADPY_PACKAGE_DIR/pyproject.toml" "cadpy package"
 require_path "$CADPY_PACKAGE_DIR/src/cadpy" "cadpy source"
+require_path "$IMPLICITJS_PACKAGE_DIR/package.json" "implicitjs package"
+require_path "$IMPLICITJS_PACKAGE_DIR/src" "implicitjs source"
 require_path "$VIEWER_DIR/package.json" "viewer package"
 require_path "$ESBUILD_BIN" "viewer esbuild binary; run npm install --prefix viewer"
 
@@ -369,6 +421,8 @@ else
 fi
 require_path "$VIEWER_CADPY_DIR/pyproject.toml" "viewer cadpy package"
 require_path "$VIEWER_CADPY_DIR/src/cadpy" "viewer cadpy source"
+require_path "$VIEWER_IMPLICITJS_DIR/package.json" "viewer implicitjs package"
+require_path "$VIEWER_IMPLICITJS_DIR/src" "viewer implicitjs source"
 
 if [ "$CLEAN" -eq 1 ]; then
   rm -rf "$CHECK_DIR"
