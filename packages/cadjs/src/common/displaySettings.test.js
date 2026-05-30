@@ -12,6 +12,8 @@ import {
 test("display settings normalize mode and clip independently from appearance settings", () => {
   assert.deepEqual(normalizeDisplaySettings(), DEFAULT_DISPLAY_SETTINGS);
   assert.equal(resolveDisplayMode({ mode: "wireframe" }), CAD_DISPLAY_MODE.WIREFRAME);
+  assert.equal(resolveDisplayMode({ mode: "transparent" }), CAD_DISPLAY_MODE.TRANSPARENT);
+  assert.equal(resolveDisplayMode({ mode: "collision" }), CAD_DISPLAY_MODE.COLLISION);
   assert.deepEqual(normalizeDisplaySettings({
     mode: "wireframe",
     clip: {

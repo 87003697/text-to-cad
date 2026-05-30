@@ -41,11 +41,34 @@ function viewportIssueMetaForAlert(alert) {
     : VIEWPORT_ISSUE_META.error;
 }
 
+function analysisSummaryText(analysis) {
+  const summary = analysis?.summary && typeof analysis.summary === "object" ? analysis.summary : {};
+  const collisionCount = Math.max(Number(summary.collisionCount) || 0, 0);
+  const contactCount = Math.max(Number(summary.contactCount) || 0, 0);
+  const clearanceCount = Math.max(Number(summary.clearanceCount) || 0, 0);
+  const chunks = [];
+  if (collisionCount) {
+    chunks.push(`${collisionCount} collision${collisionCount === 1 ? "" : "s"}`);
+  }
+  if (contactCount) {
+    chunks.push(`${contactCount} contact${contactCount === 1 ? "" : "s"}`);
+  }
+  if (clearanceCount) {
+    chunks.push(`${clearanceCount} clearance${clearanceCount === 1 ? "" : "s"}`);
+  }
+  return chunks.length ? chunks.join(" · ") : "No close pairs";
+}
+
 export default function CadRenderPane({
   viewerRef,
   renderFormat,
   renderPartsIndividually = false,
   selectedMeshData,
+  stepAnalysis = null,
+  stepAnalysisSettings = null,
+  stepAnalysisStatus = "",
+  stepAnalysisError = "",
+  stepAnalysisLoadStage = "",
   selectedDxfData,
   selectedDxfMeshData,
   selectedKey,
@@ -125,6 +148,16 @@ export default function CadRenderPane({
   const topologySelectionPending = Boolean(referenceSelectionPending && !dxfMode && !urdfMode && !pathPreviewMode);
   const topologySelectionUnavailable = Boolean(referenceSelectionUnavailable && !dxfMode && !urdfMode && !pathPreviewMode);
   const topologySelectionDeferred = Boolean(referenceSelectionDeferred && activeMeshData && !dxfMode && !urdfMode && !pathPreviewMode);
+  const stepAnalysisVisible = !dxfMode && !urdfMode && !pathPreviewMode && renderFormat === RENDER_FORMAT.STEP;
+  const stepAnalysisEnabled = stepAnalysisVisible && stepAnalysisSettings?.enabled === true;
+  const stepAnalysisReady = stepAnalysisEnabled && stepAnalysis && typeof stepAnalysis === "object";
+  const stepAnalysisBadgeLabel = stepAnalysisReady
+    ? analysisSummaryText(stepAnalysis)
+    : stepAnalysisEnabled && stepAnalysisStatus === "loading"
+      ? (stepAnalysisLoadStage || "Running collisions")
+      : stepAnalysisEnabled && stepAnalysisStatus === "error"
+        ? (stepAnalysisError || "Collisions unavailable")
+        : "";
   const urdfPosePickerActive = Boolean(urdfPosePicker?.active);
   const urdfPosePickerPrompt = "Select target";
   const posePickerExitStyle = {
@@ -236,6 +269,8 @@ export default function CadRenderPane({
           selectedReferenceIds={dxfMode || pathPreviewMode ? [] : selectedReferenceIds}
           selectorRuntime={dxfMode || pathPreviewMode ? null : selectorRuntime}
           displayEdgeRuntime={dxfMode || pathPreviewMode ? null : displayEdgeRuntime}
+          stepAnalysis={dxfMode || pathPreviewMode || !stepAnalysisEnabled ? null : stepAnalysis}
+          stepAnalysisSettings={dxfMode || pathPreviewMode || !stepAnalysisEnabled ? null : stepAnalysisSettings}
           stepParameters={dxfMode || pathPreviewMode ? null : resolvedStepParameters}
           pickableFaces={dxfMode || pathPreviewMode ? [] : pickableFaces}
           pickableEdges={dxfMode || pathPreviewMode ? [] : pickableEdges}
@@ -324,6 +359,22 @@ export default function CadRenderPane({
             className="cad-glass-popover w-auto px-3 py-1.5 text-[11px] font-medium text-popover-foreground shadow-sm"
           >
             STEP changed. Updating/regenerating references...
+          </Alert>
+        </div>
+      ) : null}
+      {!previewMode && stepAnalysisBadgeLabel ? (
+        <div
+          className="pointer-events-none absolute z-20 flex items-start justify-start px-3 py-3 sm:px-4"
+          style={modelViewportOverlayStyle}
+        >
+          <Alert
+            role="status"
+            className={cn(
+              "cad-glass-popover w-auto max-w-[min(22rem,100%)] px-3 py-1.5 text-[11px] font-medium text-popover-foreground shadow-sm",
+              stepAnalysisStatus === "error" ? "border-destructive/45 text-destructive dark:text-red-300" : ""
+            )}
+          >
+            Collisions: {stepAnalysisBadgeLabel}
           </Alert>
         </div>
       ) : null}

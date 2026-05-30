@@ -1,5 +1,6 @@
 import contextlib
 import io
+import json
 import shutil
 import unittest
 from array import array
@@ -21,6 +22,10 @@ from cadpy.render import part_glb_path
 from cadpy.selector_types import SelectorBundle, SelectorProfile
 from cadpy.source_hash import python_source_hash
 from tests.python.support.cad_test_roots import IsolatedCadRoots
+
+
+def _pad4(payload: bytes, byte: bytes = b"\0") -> bytes:
+    return payload + byte * ((4 - (len(payload) % 4)) % 4)
 
 
 def _refs_manifest(cad_ref: str) -> dict[str, object]:

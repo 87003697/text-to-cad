@@ -114,6 +114,73 @@ function fileAssetRequest(backend, requestUrl, {
   return request;
 }
 
+function optionalNumberParam(searchParams, name) {
+  const raw = searchParams.get(name);
+  if (raw === null || raw === "") {
+    return undefined;
+  }
+  const value = Number(raw);
+  return Number.isFinite(value) ? value : undefined;
+}
+
+function optionalIntegerParam(searchParams, name) {
+  const raw = searchParams.get(name);
+  if (raw === null || raw === "") {
+    return undefined;
+  }
+  const value = Number.parseInt(raw, 10);
+  return Number.isFinite(value) ? value : undefined;
+}
+
+function optionalBooleanParam(searchParams, name) {
+  const raw = searchParams.get(name);
+  if (raw === null || raw === "") {
+    return undefined;
+  }
+  const normalized = String(raw).trim().toLowerCase();
+  if (["1", "true", "yes", "on"].includes(normalized)) {
+    return true;
+  }
+  if (["0", "false", "no", "off"].includes(normalized)) {
+    return false;
+  }
+  return undefined;
+}
+
+function repeatedStringParam(searchParams, name) {
+  return searchParams.getAll(name)
+    .map((value) => String(value || "").trim())
+    .filter(Boolean);
+}
+
+function collisionOptionsFromSearchParams(searchParams) {
+  const options = {
+    clearanceMm: optionalNumberParam(searchParams, "clearanceMm") ?? optionalNumberParam(searchParams, "clearance"),
+    contactToleranceMm: optionalNumberParam(searchParams, "contactToleranceMm") ?? optionalNumberParam(searchParams, "contactTolerance"),
+    collisionVolumeToleranceMm3: optionalNumberParam(searchParams, "collisionVolumeToleranceMm3") ?? optionalNumberParam(searchParams, "collisionVolumeTolerance"),
+    maxPairs: optionalIntegerParam(searchParams, "maxPairs"),
+    timeBudgetMs: optionalNumberParam(searchParams, "timeBudgetMs"),
+    bodyDepth: optionalIntegerParam(searchParams, "bodyDepth"),
+    includeContact: optionalBooleanParam(searchParams, "includeContact"),
+    includeClearance: optionalBooleanParam(searchParams, "includeClearance"),
+    includeSeparated: optionalBooleanParam(searchParams, "includeSeparated"),
+    includeAllowed: optionalBooleanParam(searchParams, "includeAllowed"),
+    listBodies: optionalBooleanParam(searchParams, "listBodies"),
+    noCache: optionalBooleanParam(searchParams, "noCache"),
+    collapse: repeatedStringParam(searchParams, "collapse"),
+    exclude: repeatedStringParam(searchParams, "exclude"),
+    setA: repeatedStringParam(searchParams, "setA"),
+    setB: repeatedStringParam(searchParams, "setB"),
+    pairs: repeatedStringParam(searchParams, "pair"),
+    allowPairs: repeatedStringParam(searchParams, "allowPair"),
+  };
+  return Object.fromEntries(
+    Object.entries(options).filter(([, value]) => (
+      Array.isArray(value) ? value.length > 0 : value !== undefined
+    ))
+  );
+}
+
 function sendBufferDownload(res, {
   body,
   filename,
@@ -392,6 +459,45 @@ export function createCadViewerApiMiddleware({
         sendJson(res, 200, await backend.readStepSourceStatus(request));
       } catch (error) {
         sendJson(res, 400, {
+          error: errorMessage(error),
+        });
+      }
+      return;
+    }
+    if (requestUrl.pathname === "/__cad/collisions") {
+      if (req.method !== "POST") {
+        res.setHeader("allow", "POST");
+        sendJson(res, 405, {
+          error: "Use POST to generate collision data",
+        });
+        return;
+      }
+      if (typeof backend.generateCollisions !== "function") {
+        sendJson(res, 501, {
+          error: "Collision generation is not available for this CAD Viewer backend",
+        });
+        return;
+      }
+      try {
+        const catalog = await backend.readCatalog({ rootDir });
+        const request = {
+          fileRef: requestUrl.searchParams.get("file"),
+          rootDir,
+          catalog,
+          options: collisionOptionsFromSearchParams(requestUrl.searchParams),
+        };
+        if (typeof backend.resolveRoot === "function") {
+          request.resolvedRoot = backend.resolveRoot(rootDir);
+        }
+        const result = await backend.generateCollisions(request);
+        sendJson(res, result?.ok ? 200 : 500, {
+          ok: Boolean(result?.ok),
+          error: result?.ok ? "" : String(result?.error || "Collision detection failed."),
+          result: result?.result ?? null,
+        });
+      } catch (error) {
+        sendJson(res, 400, {
+          ok: false,
           error: errorMessage(error),
         });
       }

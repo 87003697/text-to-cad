@@ -172,12 +172,14 @@ export function shouldRenderTopologyDisplayEdges({
   selectorRuntime = null,
   edgeSettings = null
 } = {}) {
+  const forceTopologyOverlay = edgeSettings?.forceTopologyOverlay === true;
+  const topologyRuntime = displayEdgeRuntime || selectorRuntime;
   return Boolean(
     edgesVisible &&
     !wireframeMode &&
     cadEdgeSource &&
-    !runtimeUsesSurfaceOwnedEdges(displayEdgeRuntime || selectorRuntime) &&
-    shouldUseTopologyDisplayEdges(displayEdgeRuntime || selectorRuntime, edgeSettings)
+    (forceTopologyOverlay || !runtimeUsesSurfaceOwnedEdges(topologyRuntime)) &&
+    shouldUseTopologyDisplayEdges(topologyRuntime, edgeSettings)
   );
 }
 

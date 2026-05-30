@@ -13,6 +13,10 @@ import {
 import { Button } from "../ui/button";
 import { ColorPicker } from "../ui/color-picker";
 import {
+  CAD_DISPLAY_MODE,
+  normalizeDisplaySettings
+} from "cadjs/lib/displaySettings";
+import {
   Select,
   SelectContent,
   SelectItem,
@@ -24,6 +28,7 @@ import FileSheet, {
   FILE_SHEET_COMPACT_BUTTON_CLASSES,
   FILE_SHEET_COMPACT_INPUT_CLASSES,
   FILE_SHEET_PRECISION_SLIDER_CLASSES,
+  FileSheetBooleanToggle,
   FileSheetControlRow,
   FileSheetSection,
   FileSheetSectionBody,
@@ -34,16 +39,69 @@ import FileSheet, {
 } from "./FileSheet";
 import FileMetadataSection from "./FileMetadataSection";
 import FileStatusSection from "./FileStatusSection";
+import {
+  ClipSettingsControls,
+  DisplaySettingsControls
+} from "./ThemeSettingsPopover";
 
 const compactButtonClasses = FILE_SHEET_COMPACT_BUTTON_CLASSES;
 const compactInputClasses = FILE_SHEET_COMPACT_INPUT_CLASSES;
 const compactIconButtonClasses = "size-6 text-muted-foreground hover:text-foreground";
 const treeRowButtonClasses = "h-7 min-w-0 rounded-md px-1.5 text-xs font-normal text-sidebar-foreground shadow-none hover:bg-sidebar-accent hover:text-sidebar-accent-foreground";
 const treeSectionId = "tree";
+const displaySectionId = "display";
+const collisionsSectionId = "collisions";
 const treeRevealScrollPaddingTopPx = 120;
 export const STEP_TREE_ROOT_ITEM_LIMIT = 15;
 const STEP_MODULE_ANIMATION_SPEED_MIN = 0.1;
 const STEP_MODULE_ANIMATION_SPEED_MAX = 3;
+const STEP_ANALYSIS_PAIR_STATUS_RANK = Object.freeze({
+  collision: 0,
+  contact: 1,
+  clearance: 2,
+  separated: 3
+});
+const STEP_ANALYSIS_STATUS_STYLES = Object.freeze({
+  collision: "border-red-400/55 bg-red-500/14 text-red-200",
+  contact: "border-emerald-400/50 bg-emerald-500/14 text-emerald-200",
+  clearance: "border-cyan-400/45 bg-cyan-500/12 text-cyan-100",
+  separated: "border-slate-400/40 bg-slate-500/12 text-slate-200"
+});
+const STEP_ANALYSIS_TOOL_LABELS = Object.freeze({
+  surfaces: "Surfaces",
+  witnesses: "Witnesses",
+  volumes: "Volumes",
+  bounds: "Bounds",
+  collisions: "Collisions",
+  contacts: "Contacts",
+  clearances: "Clearances"
+});
+const STEP_DISPLAY_MODE_OPTIONS = Object.freeze([
+  { value: CAD_DISPLAY_MODE.SOLID, label: "Solid" },
+  { value: CAD_DISPLAY_MODE.TRANSPARENT, label: "Transparent" },
+  { value: CAD_DISPLAY_MODE.COLLISION, label: "Collision" },
+  { value: CAD_DISPLAY_MODE.WIREFRAME, label: "Wire" }
+]);
+const DEFAULT_COLLISION_RUN_SETTINGS = Object.freeze({
+  bodyDepth: 2,
+  maxPairs: 1000,
+  clearanceMm: 0,
+  contactToleranceMm: 0.0001,
+  collisionVolumeToleranceMm3: 0.000000001,
+  timeBudgetMs: 0,
+  includeContact: true,
+  includeClearance: false,
+  includeSeparated: false,
+  includeAllowed: false,
+  listBodies: false,
+  noCache: false,
+  setA: [],
+  setB: [],
+  pairs: [],
+  allowPairs: [],
+  exclude: [],
+  collapse: []
+});
 
 function formatControlNumber(value) {
   const numericValue = Number(value);
@@ -70,6 +128,197 @@ function parseAnimationSpeedInput(value, fallbackValue = 1) {
     min: STEP_MODULE_ANIMATION_SPEED_MIN,
     max: STEP_MODULE_ANIMATION_SPEED_MAX
   });
+}
+
+function parseCollisionIntegerInput(value, fallbackValue, { min = 1, max = 100000 } = {}) {
+  const parsedValue = Number.parseInt(String(value ?? ""), 10);
+  const numericValue = Number.isFinite(parsedValue) ? parsedValue : fallbackValue;
+  return Math.min(Math.max(Math.round(Number(numericValue) || fallbackValue), min), max);
+}
+
+function parseCollisionNumberInput(value, fallbackValue, { min = 0, max = Number.MAX_SAFE_INTEGER } = {}) {
+  const parsedValue = Number(value);
+  const numericValue = Number.isFinite(parsedValue) ? parsedValue : fallbackValue;
+  return Math.min(Math.max(numericValue, min), max);
+}
+
+function collisionStringListValue(value) {
+  if (Array.isArray(value)) {
+    return value.map((item) => String(item || "").trim()).filter(Boolean).join(", ");
+  }
+  return String(value || "").trim();
+}
+
+function parseCollisionStringListInput(value) {
+  return String(value || "")
+    .split(/[\n,]+/u)
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
+function formatAnalysisCount(value) {
+  const count = Math.max(Math.round(Number(value) || 0), 0);
+  return count.toLocaleString();
+}
+
+function formatAnalysisNumber(value) {
+  const numericValue = Number(value);
+  if (!Number.isFinite(numericValue)) {
+    return "";
+  }
+  const absoluteValue = Math.abs(numericValue);
+  const fixedValue = absoluteValue >= 1000
+    ? numericValue.toFixed(0)
+    : absoluteValue >= 100
+      ? numericValue.toFixed(1)
+      : absoluteValue >= 1
+        ? numericValue.toFixed(2)
+        : numericValue.toFixed(3);
+  return fixedValue.replace(/\.?0+$/, "");
+}
+
+function formatAnalysisMeasurement(value, unit) {
+  const formattedValue = formatAnalysisNumber(value);
+  return formattedValue ? `${formattedValue} ${unit}` : "";
+}
+
+function normalizeAnalysisPairStatus(status) {
+  const normalizedStatus = String(status || "").trim().toLowerCase();
+  return Object.prototype.hasOwnProperty.call(STEP_ANALYSIS_PAIR_STATUS_RANK, normalizedStatus)
+    ? normalizedStatus
+    : "separated";
+}
+
+function analysisPairSortRank(status) {
+  const normalizedStatus = normalizeAnalysisPairStatus(status);
+  return STEP_ANALYSIS_PAIR_STATUS_RANK[normalizedStatus] ?? STEP_ANALYSIS_PAIR_STATUS_RANK.separated;
+}
+
+function analysisStatusLabel(status) {
+  const normalizedStatus = normalizeAnalysisPairStatus(status);
+  return normalizedStatus.charAt(0).toUpperCase() + normalizedStatus.slice(1);
+}
+
+function analysisOccurrenceName(value) {
+  const normalizedValue = String(value || "").trim();
+  if (!normalizedValue) {
+    return "";
+  }
+  return normalizedValue.startsWith("component:")
+    ? normalizedValue.slice("component:".length)
+    : normalizedValue;
+}
+
+function analysisPairMetric(pair, status) {
+  if (status === "collision") {
+    return {
+      label: "Intersection volume",
+      value: formatAnalysisMeasurement(pair?.intersectionVolumeMm3, "mm3")
+    };
+  }
+  return {
+    label: "Minimum distance",
+    value: formatAnalysisMeasurement(pair?.minDistanceMm ?? pair?.distanceMm, "mm")
+  };
+}
+
+function analysisStatusStyle(status) {
+  return STEP_ANALYSIS_STATUS_STYLES[normalizeAnalysisPairStatus(status)] || STEP_ANALYSIS_STATUS_STYLES.separated;
+}
+
+function AnalysisCountPill({ label, value, status }) {
+  return (
+    <span
+      className={cn(
+        "inline-flex min-w-0 items-center justify-between gap-1.5 rounded-md border px-1.5 py-1 text-[10px] leading-none",
+        analysisStatusStyle(status)
+      )}
+      title={`${label}: ${value}`}
+    >
+      <span className="truncate">{label}</span>
+      <span className="font-mono font-semibold tabular-nums">{value}</span>
+    </span>
+  );
+}
+
+function CompactAnalysisToggle({ label, checked, onCheckedChange, disabled = false, ariaLabel }) {
+  return (
+    <label
+      className={cn(
+        "flex h-7 min-w-0 items-center justify-between gap-2 rounded-md border border-border/55 bg-sidebar-accent/20 px-2 text-[11px] text-sidebar-foreground/80",
+        disabled && "opacity-55"
+      )}
+      title={label}
+    >
+      <span className="min-w-0 truncate">{label}</span>
+      <FileSheetBooleanToggle
+        checked={checked}
+        onCheckedChange={onCheckedChange}
+        disabled={disabled}
+        ariaLabel={ariaLabel || label}
+      />
+    </label>
+  );
+}
+
+function CollisionNumberField({
+  label,
+  value,
+  min,
+  max,
+  step,
+  disabled,
+  onChange,
+  ariaLabel,
+  title
+}) {
+  return (
+    <label
+      className="min-w-0 space-y-1 text-[10px] font-medium uppercase tracking-wide text-[var(--ui-text-muted)]"
+      title={title || label}
+    >
+      <span>{label}</span>
+      <input
+        className={cn(compactInputClasses, "w-full font-mono tabular-nums")}
+        type="number"
+        min={min}
+        max={max}
+        step={step}
+        value={value}
+        disabled={disabled}
+        onChange={(event) => onChange?.(event.target.value)}
+        aria-label={ariaLabel || label}
+      />
+    </label>
+  );
+}
+
+function CollisionTextField({
+  label,
+  value,
+  disabled,
+  onChange,
+  ariaLabel,
+  title
+}) {
+  return (
+    <label
+      className="min-w-0 space-y-1 text-[10px] font-medium uppercase tracking-wide text-[var(--ui-text-muted)]"
+      title={title || label}
+    >
+      <span>{label}</span>
+      <textarea
+        className={cn(
+          "min-h-12 w-full resize-y rounded-md border border-input bg-transparent px-2 py-1 text-[11px] font-mono leading-4 tabular-nums text-foreground shadow-xs outline-none transition-[color,box-shadow,border-color] placeholder:text-muted-foreground focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50 disabled:opacity-50 dark:bg-input/30"
+        )}
+        rows={2}
+        value={value}
+        disabled={disabled}
+        onChange={(event) => onChange?.(event.target.value)}
+        aria-label={ariaLabel || label}
+      />
+    </label>
+  );
 }
 
 function leafIdsHidden(leafPartIds, hiddenPartIds) {
@@ -183,6 +432,8 @@ export default function StepFileSheet({
   hideSelectedParts,
   showAllHiddenParts,
   stepModule = null,
+  collisions = null,
+  display = null,
   fileDownloadAvailable = false,
   viewerServerInfo = null,
   localFileOpenAvailable = false,
@@ -240,6 +491,122 @@ export default function StepFileSheet({
   const stepModuleAnimationState = stepModule?.animationState || {};
   const stepModuleAnimationDuration = Math.max(Number(stepModuleAnimationState.duration) || 1, 0.001);
   const stepModuleEnabled = stepModule?.enabled !== false;
+  const displaySettings = useMemo(
+    () => normalizeDisplaySettings(display?.settings),
+    [display?.settings]
+  );
+  const displayMode = displaySettings.mode;
+  const displayModeIsCollision = displayMode === CAD_DISPLAY_MODE.COLLISION;
+  const collisionReportAvailable = collisions?.available === true;
+  const collisionCanRun = collisions?.canRun === true;
+  const displayModeOptions = useMemo(
+    () => STEP_DISPLAY_MODE_OPTIONS.map((option) => (
+      option.value === CAD_DISPLAY_MODE.COLLISION && !collisionReportAvailable
+        ? {
+            ...option,
+            disabled: true,
+            title: collisionCanRun ? "Run collisions first" : "Collision generation unavailable"
+          }
+        : option
+    )),
+    [collisionCanRun, collisionReportAvailable]
+  );
+  const collisionStatus = String(collisions?.status || "").trim();
+  const collisionRunning = collisionStatus === "loading";
+  const collisionError = String(collisions?.error || "").trim();
+  const collisionSettings = collisions?.settings && typeof collisions.settings === "object" ? collisions.settings : {};
+  const collisionBodyDepth = parseCollisionIntegerInput(collisionSettings.bodyDepth, 2, { min: 1, max: 12 });
+  const collisionMaxPairs = parseCollisionIntegerInput(collisionSettings.maxPairs, 1000, { min: 1, max: 100000 });
+  const collisionClearanceMm = parseCollisionNumberInput(collisionSettings.clearanceMm, 0, { min: 0, max: 100000 });
+  const collisionContactToleranceMm = parseCollisionNumberInput(collisionSettings.contactToleranceMm, 0.0001, { min: 0, max: 1000 });
+  const collisionVolumeToleranceMm3 = parseCollisionNumberInput(
+    collisionSettings.collisionVolumeToleranceMm3,
+    0.000000001,
+    { min: 0, max: 1000000000 }
+  );
+  const collisionTimeBudgetMs = parseCollisionNumberInput(collisionSettings.timeBudgetMs, 0, { min: 0, max: 3600000 });
+  const collisionIncludeContact = collisionSettings.includeContact !== false;
+  const collisionIncludeClearance = collisionSettings.includeClearance === true;
+  const collisionIncludeSeparated = collisionSettings.includeSeparated === true;
+  const collisionIncludeAllowed = collisionSettings.includeAllowed === true;
+  const collisionListBodies = collisionSettings.listBodies === true;
+  const collisionNoCache = collisionSettings.noCache === true;
+  const collisionSetA = collisionStringListValue(collisionSettings.setA);
+  const collisionSetB = collisionStringListValue(collisionSettings.setB);
+  const collisionPairsFilter = collisionStringListValue(collisionSettings.pairs);
+  const collisionAllowPairs = collisionStringListValue(collisionSettings.allowPairs);
+  const collisionExclude = collisionStringListValue(collisionSettings.exclude);
+  const collisionCollapse = collisionStringListValue(collisionSettings.collapse);
+  const collisionSummary = collisions?.summary && typeof collisions.summary === "object" ? collisions.summary : {};
+  const collisionOccurrenceCount = formatAnalysisCount(collisionSummary.occurrenceCount);
+  const collisionPairCount = formatAnalysisCount(collisionSummary.reportedPairCount ?? collisionSummary.analyzedPairCount);
+  const collisionCollisionCount = formatAnalysisCount(collisionSummary.collisionCount);
+  const collisionContactCount = formatAnalysisCount(collisionSummary.contactCount);
+  const collisionClearanceCount = formatAnalysisCount(collisionSummary.clearanceCount);
+  const collisionPairs = useMemo(() => {
+    const occurrenceNameById = new Map(
+      (Array.isArray(collisions?.occurrences) ? collisions.occurrences : [])
+        .map((occurrence) => {
+          const id = String(occurrence?.id || "").trim();
+          const name = analysisOccurrenceName(occurrence?.name) || id;
+          return [id, name];
+        })
+        .filter(([id]) => id)
+    );
+    return (Array.isArray(collisions?.pairs) ? collisions.pairs : [])
+      .map((pair) => {
+        const aId = String(pair?.a || "").trim();
+        const bId = String(pair?.b || "").trim();
+        const id = String(pair?.id || (aId && bId ? `${aId}:${bId}` : "")).trim();
+        if (!id) {
+          return null;
+        }
+        const status = normalizeAnalysisPairStatus(pair?.status);
+        const statusLabel = analysisStatusLabel(status);
+        const aName = occurrenceNameById.get(aId) || aId || "A";
+        const bName = occurrenceNameById.get(bId) || bId || "B";
+        const metric = analysisPairMetric(pair, status);
+        return {
+          id,
+          status,
+          statusLabel,
+          aName,
+          bName,
+          label: `${statusLabel}: ${aName} / ${bName}`,
+          metricLabel: metric.label,
+          metricValue: metric.value
+        };
+      })
+      .filter(Boolean)
+      .sort((left, right) => (
+        analysisPairSortRank(left.status) - analysisPairSortRank(right.status)
+        || left.label.localeCompare(right.label)
+      ));
+  }, [collisions?.occurrences, collisions?.pairs]);
+  const selectedCollisionPairId = String(collisions?.selectedPairId || "").trim();
+  const collisionControlsDisabled = collisionRunning || collisionStatus === "error";
+  const updateCollisionSetting = (patch) => {
+    collisions?.onSettingsChange?.(patch);
+  };
+  const focusCollisionPair = (pairId = "") => {
+    if (!collisionReportAvailable) {
+      return;
+    }
+    display?.onModeChange?.(CAD_DISPLAY_MODE.COLLISION);
+    collisions?.onSelectedPairChange?.(pairId);
+  };
+  const handleDisplayModeChange = (nextMode) => {
+    if (nextMode === CAD_DISPLAY_MODE.COLLISION && !collisionReportAvailable) {
+      return;
+    }
+    display?.onModeChange?.(nextMode);
+  };
+
+  useEffect(() => {
+    if (displayModeIsCollision && !collisionReportAvailable) {
+      display?.onModeChange?.(CAD_DISPLAY_MODE.TRANSPARENT);
+    }
+  }, [collisionReportAvailable, display, displayModeIsCollision]);
 
   useEffect(() => {
     if (!activeTreeNodeId || !treeSectionOpen) {
@@ -780,6 +1147,399 @@ export default function StepFileSheet({
               </FileSheetSectionBody>
           </FileSheetSection>
         ) : null}
+
+        <FileSheetSection value={displaySectionId} title="Display">
+          <FileSheetSectionBody className="py-2">
+            <DisplaySettingsControls
+              displaySettings={displaySettings}
+              updateDisplaySettings={display?.updateSettings}
+              onDisplayModeChange={handleDisplayModeChange}
+              modeOptions={displayModeOptions}
+            />
+            <FileSheetSubsection title="Clip" contentClassName="px-3">
+              <ClipSettingsControls
+                displaySettings={displaySettings}
+                updateDisplaySettings={display?.updateSettings}
+                clipBounds={display?.clipBounds || null}
+              />
+            </FileSheetSubsection>
+          </FileSheetSectionBody>
+        </FileSheetSection>
+
+        <FileSheetSection value={collisionsSectionId} title="Collisions">
+          <FileSheetSectionBody className="py-2">
+            <div className="space-y-2 px-3">
+              <div className="flex flex-wrap items-center gap-1.5">
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  className={compactButtonClasses}
+                  onClick={() => collisions?.onRun?.()}
+                  disabled={!collisionCanRun || collisionRunning}
+                  title={collisionCanRun ? "Run collision detection" : "Collision generation is unavailable"}
+                >
+                  <Play className="h-3.5 w-3.5" strokeWidth={2} aria-hidden="true" />
+                  <span>{collisionRunning ? "Running" : collisionReportAvailable ? "Run again" : "Run"}</span>
+                </Button>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  className={compactButtonClasses}
+                  onClick={() => collisions?.onSettingsChange?.(DEFAULT_COLLISION_RUN_SETTINGS)}
+                  disabled={collisionRunning}
+                  title="Reset collision run parameters"
+                >
+                  <RotateCcw className="h-3.5 w-3.5" strokeWidth={2} aria-hidden="true" />
+                  <span>Defaults</span>
+                </Button>
+                <span className="min-w-0 flex-1 truncate text-[10px] leading-4 text-[var(--ui-text-muted)]">
+                  {collisionRunning ? (
+                    collisions?.loadStage || "Running collisions..."
+                  ) : collisionStatus === "error" ? (
+                    <span className="text-destructive">{collisionError || "Collisions unavailable."}</span>
+                  ) : collisionReportAvailable ? (
+                    `${collisionPairCount} pairs across ${collisionOccurrenceCount} bodies`
+                  ) : collisionCanRun ? (
+                    "No collision report"
+                  ) : (
+                    "Unavailable"
+                  )}
+                </span>
+              </div>
+            </div>
+
+            <FileSheetSubsection title="Run Parameters" contentClassName="px-3">
+              <div className="grid grid-cols-2 gap-2">
+                <CollisionNumberField
+                  label="Depth"
+                  min={1}
+                  max={12}
+                  step={1}
+                  value={collisionBodyDepth}
+                  disabled={collisionRunning}
+                  onChange={(value) => updateCollisionSetting({
+                    bodyDepth: parseCollisionIntegerInput(value, collisionBodyDepth, { min: 1, max: 12 })
+                  })}
+                  ariaLabel="Collision body depth"
+                  title="Occurrence depth used to group bodies"
+                />
+                <CollisionNumberField
+                  label="Pairs"
+                  min={1}
+                  max={100000}
+                  step={1}
+                  value={collisionMaxPairs}
+                  disabled={collisionRunning}
+                  onChange={(value) => updateCollisionSetting({
+                    maxPairs: parseCollisionIntegerInput(value, collisionMaxPairs, { min: 1, max: 100000 })
+                  })}
+                  ariaLabel="Collision pair limit"
+                  title="Maximum candidate pairs to solve"
+                />
+                <CollisionNumberField
+                  label="Clearance mm"
+                  min={0}
+                  max={100000}
+                  step={0.01}
+                  value={collisionClearanceMm}
+                  disabled={collisionRunning}
+                  onChange={(value) => updateCollisionSetting({
+                    clearanceMm: parseCollisionNumberInput(value, collisionClearanceMm, { min: 0, max: 100000 })
+                  })}
+                  ariaLabel="Collision clearance distance in millimeters"
+                  title="Near-clearance distance in millimeters"
+                />
+                <CollisionNumberField
+                  label="Budget ms"
+                  min={0}
+                  max={3600000}
+                  step={100}
+                  value={collisionTimeBudgetMs}
+                  disabled={collisionRunning}
+                  onChange={(value) => updateCollisionSetting({
+                    timeBudgetMs: parseCollisionNumberInput(value, collisionTimeBudgetMs, { min: 0, max: 3600000 })
+                  })}
+                  ariaLabel="Collision time budget in milliseconds"
+                  title="Maximum elapsed milliseconds before stopping new pair solves"
+                />
+                <CollisionNumberField
+                  label="Contact tol"
+                  min={0}
+                  max={1000}
+                  step={0.0001}
+                  value={collisionContactToleranceMm}
+                  disabled={collisionRunning}
+                  onChange={(value) => updateCollisionSetting({
+                    contactToleranceMm: parseCollisionNumberInput(value, collisionContactToleranceMm, { min: 0, max: 1000 })
+                  })}
+                  ariaLabel="Collision contact tolerance in millimeters"
+                  title="Contact tolerance in millimeters"
+                />
+                <CollisionNumberField
+                  label="Volume tol"
+                  min={0}
+                  max={1000000000}
+                  step={0.000000001}
+                  value={collisionVolumeToleranceMm3}
+                  disabled={collisionRunning}
+                  onChange={(value) => updateCollisionSetting({
+                    collisionVolumeToleranceMm3: parseCollisionNumberInput(value, collisionVolumeToleranceMm3, {
+                      min: 0,
+                      max: 1000000000
+                    })
+                  })}
+                  ariaLabel="Collision volume tolerance in cubic millimeters"
+                  title="Minimum common volume classified as collision"
+                />
+              </div>
+            </FileSheetSubsection>
+
+            <FileSheetSubsection title="Report" contentClassName="px-3">
+              <div className="grid grid-cols-2 gap-1.5">
+                <CompactAnalysisToggle
+                  label="Contacts"
+                  checked={collisionIncludeContact}
+                  onCheckedChange={(checked) => updateCollisionSetting({ includeContact: checked === true })}
+                  disabled={collisionRunning}
+                  ariaLabel="Report contact pairs"
+                />
+                <CompactAnalysisToggle
+                  label="Clearances"
+                  checked={collisionIncludeClearance}
+                  onCheckedChange={(checked) => updateCollisionSetting({ includeClearance: checked === true })}
+                  disabled={collisionRunning}
+                  ariaLabel="Report clearance pairs"
+                />
+                <CompactAnalysisToggle
+                  label="Separated"
+                  checked={collisionIncludeSeparated}
+                  onCheckedChange={(checked) => updateCollisionSetting({ includeSeparated: checked === true })}
+                  disabled={collisionRunning}
+                  ariaLabel="Report separated pairs"
+                />
+                <CompactAnalysisToggle
+                  label="Allowed"
+                  checked={collisionIncludeAllowed}
+                  onCheckedChange={(checked) => updateCollisionSetting({ includeAllowed: checked === true })}
+                  disabled={collisionRunning}
+                  ariaLabel="Report allowed pairs"
+                />
+                <CompactAnalysisToggle
+                  label="Bodies only"
+                  checked={collisionListBodies}
+                  onCheckedChange={(checked) => updateCollisionSetting({ listBodies: checked === true })}
+                  disabled={collisionRunning}
+                  ariaLabel="Only list collision bodies"
+                />
+                <CompactAnalysisToggle
+                  label="No cache"
+                  checked={collisionNoCache}
+                  onCheckedChange={(checked) => updateCollisionSetting({ noCache: checked === true })}
+                  disabled={collisionRunning}
+                  ariaLabel="Run collisions without cache"
+                />
+              </div>
+            </FileSheetSubsection>
+
+            <FileSheetSubsection title="Selectors" contentClassName="px-3">
+              <div className="grid grid-cols-2 gap-2">
+                <CollisionTextField
+                  label="Set A"
+                  value={collisionSetA}
+                  disabled={collisionRunning}
+                  onChange={(value) => updateCollisionSetting({ setA: parseCollisionStringListInput(value) })}
+                  ariaLabel="Collision set A selectors"
+                  title="Body selector or name patterns for set A"
+                />
+                <CollisionTextField
+                  label="Set B"
+                  value={collisionSetB}
+                  disabled={collisionRunning}
+                  onChange={(value) => updateCollisionSetting({ setB: parseCollisionStringListInput(value) })}
+                  ariaLabel="Collision set B selectors"
+                  title="Body selector or name patterns for set B"
+                />
+                <CollisionTextField
+                  label="Pairs"
+                  value={collisionPairsFilter}
+                  disabled={collisionRunning}
+                  onChange={(value) => updateCollisionSetting({ pairs: parseCollisionStringListInput(value) })}
+                  ariaLabel="Explicit collision pair selectors"
+                  title="Explicit left:right pair selectors"
+                />
+                <CollisionTextField
+                  label="Allow"
+                  value={collisionAllowPairs}
+                  disabled={collisionRunning}
+                  onChange={(value) => updateCollisionSetting({ allowPairs: parseCollisionStringListInput(value) })}
+                  ariaLabel="Allowed collision pair selectors"
+                  title="left:right pair selectors treated as allowed"
+                />
+                <CollisionTextField
+                  label="Exclude"
+                  value={collisionExclude}
+                  disabled={collisionRunning}
+                  onChange={(value) => updateCollisionSetting({ exclude: parseCollisionStringListInput(value) })}
+                  ariaLabel="Excluded collision selectors"
+                  title="Body selector or name patterns to omit"
+                />
+                <CollisionTextField
+                  label="Collapse"
+                  value={collisionCollapse}
+                  disabled={collisionRunning}
+                  onChange={(value) => updateCollisionSetting({ collapse: parseCollisionStringListInput(value) })}
+                  ariaLabel="Collapsed collision selectors"
+                  title="Occurrence selector or name patterns to collapse into one body"
+                />
+              </div>
+            </FileSheetSubsection>
+
+            {collisionReportAvailable ? (
+              <div className="grid grid-cols-3 gap-1 px-3">
+                <AnalysisCountPill label="Collisions" value={collisionCollisionCount} status="collision" />
+                <AnalysisCountPill label="Contacts" value={collisionContactCount} status="contact" />
+                <AnalysisCountPill label="Clearances" value={collisionClearanceCount} status="clearance" />
+              </div>
+            ) : null}
+
+            {collisionReportAvailable ? (
+              <FileSheetSubsection title="Pairs" contentClassName="px-1.5">
+                {collisionRunning ? (
+                  <p className="px-1.5 py-1 text-xs text-[var(--ui-text-muted)]">Running collisions...</p>
+                ) : collisionStatus === "error" ? (
+                  <p className="whitespace-pre-line px-1.5 py-1 text-xs text-destructive">{collisionError || "Collisions unavailable."}</p>
+                ) : (
+                  <div className="space-y-px" role="list" aria-label="Collision pairs">
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      className={cn(
+                        treeRowButtonClasses,
+                        "h-8 w-full justify-start gap-2 px-2 text-left",
+                        displayModeIsCollision && !selectedCollisionPairId && "bg-sidebar-accent text-sidebar-accent-foreground"
+                      )}
+                      onClick={() => focusCollisionPair("")}
+                      disabled={collisionControlsDisabled || !collisionPairs.length}
+                      aria-pressed={displayModeIsCollision && !selectedCollisionPairId}
+                      title="Show all collision pairs"
+                    >
+                      <span className="min-w-0 flex-1 truncate">All pairs</span>
+                      <span className="font-mono text-[10px] text-[var(--ui-text-muted)]">{collisionPairCount}</span>
+                    </Button>
+                    {collisionPairs.map((pair) => {
+                      const selected = displayModeIsCollision && selectedCollisionPairId === pair.id;
+                      return (
+                        <Button
+                          key={pair.id}
+                          type="button"
+                          variant="ghost"
+                          size="sm"
+                          className={cn(
+                            treeRowButtonClasses,
+                            "h-10 w-full justify-start gap-2 px-2 text-left",
+                            selected && "bg-sidebar-accent text-sidebar-accent-foreground"
+                          )}
+                          onClick={() => focusCollisionPair(pair.id)}
+                          disabled={collisionControlsDisabled}
+                          aria-pressed={selected}
+                          title={pair.label}
+                        >
+                          <span
+                            className={cn(
+                              "h-2 w-2 shrink-0 rounded-full border",
+                              analysisStatusStyle(pair.status)
+                            )}
+                            aria-hidden="true"
+                          />
+                          <span className="min-w-0 flex-1 overflow-hidden">
+                            <span className="block truncate text-[11px] font-medium leading-4">
+                              {pair.aName} / {pair.bName}
+                            </span>
+                            <span className="block truncate text-[10px] leading-3 text-[var(--ui-text-muted)]">
+                              {pair.metricValue || pair.statusLabel}
+                            </span>
+                          </span>
+                          <span
+                            className={cn(
+                              "shrink-0 rounded border px-1 py-0.5 text-[9px] font-medium leading-none",
+                              analysisStatusStyle(pair.status)
+                            )}
+                          >
+                            {pair.statusLabel}
+                          </span>
+                        </Button>
+                      );
+                    })}
+                    {!collisionPairs.length ? (
+                      <p className="px-1.5 py-1 text-[11px] leading-4 text-[var(--ui-text-muted)]">
+                        No reportable pairs.
+                      </p>
+                    ) : null}
+                  </div>
+                )}
+              </FileSheetSubsection>
+            ) : null}
+
+            {collisionReportAvailable && displayModeIsCollision ? (
+              <FileSheetSubsection title="Collision Tools" contentClassName="px-3">
+                <div className="grid grid-cols-2 gap-1.5">
+                  <CompactAnalysisToggle
+                    label={STEP_ANALYSIS_TOOL_LABELS.surfaces}
+                    checked={collisions?.showSurfaceHighlights !== false}
+                    onCheckedChange={(checked) => collisions?.onShowSurfaceHighlightsChange?.(checked)}
+                    disabled={collisionControlsDisabled}
+                    ariaLabel="Show collision and contact surfaces"
+                  />
+                  <CompactAnalysisToggle
+                    label={STEP_ANALYSIS_TOOL_LABELS.witnesses}
+                    checked={collisions?.showWitnesses !== false}
+                    onCheckedChange={(checked) => collisions?.onShowWitnessesChange?.(checked)}
+                    disabled={collisionControlsDisabled}
+                    ariaLabel="Show collision witnesses"
+                  />
+                  <CompactAnalysisToggle
+                    label={STEP_ANALYSIS_TOOL_LABELS.volumes}
+                    checked={collisions?.showInterferenceVolumes !== false}
+                    onCheckedChange={(checked) => collisions?.onShowInterferenceVolumesChange?.(checked)}
+                    disabled={collisionControlsDisabled}
+                    ariaLabel="Show interference volumes"
+                  />
+                  <CompactAnalysisToggle
+                    label={STEP_ANALYSIS_TOOL_LABELS.bounds}
+                    checked={collisions?.showBounds === true}
+                    onCheckedChange={(checked) => collisions?.onShowBoundsChange?.(checked)}
+                    disabled={collisionControlsDisabled}
+                    ariaLabel="Show collision part bounds"
+                  />
+                  <CompactAnalysisToggle
+                    label={STEP_ANALYSIS_TOOL_LABELS.collisions}
+                    checked={collisions?.showCollisions !== false}
+                    onCheckedChange={(checked) => collisions?.onShowCollisionsChange?.(checked)}
+                    disabled={collisionControlsDisabled}
+                    ariaLabel="Show collision pairs"
+                  />
+                  <CompactAnalysisToggle
+                    label={STEP_ANALYSIS_TOOL_LABELS.contacts}
+                    checked={collisions?.showContacts !== false}
+                    onCheckedChange={(checked) => collisions?.onShowContactsChange?.(checked)}
+                    disabled={collisionControlsDisabled}
+                    ariaLabel="Show contact pairs"
+                  />
+                  <CompactAnalysisToggle
+                    label={STEP_ANALYSIS_TOOL_LABELS.clearances}
+                    checked={collisions?.showClearances !== false}
+                    onCheckedChange={(checked) => collisions?.onShowClearancesChange?.(checked)}
+                    disabled={collisionControlsDisabled}
+                    ariaLabel="Show clearance pairs"
+                  />
+                </div>
+              </FileSheetSubsection>
+            ) : null}
+          </FileSheetSectionBody>
+        </FileSheetSection>
 
         {themeSections}
         <FileMetadataSection

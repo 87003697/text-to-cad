@@ -8,6 +8,7 @@ export const FILE_SHEET_SECTION_IDS = Object.freeze({
   GCODE_BOUNDS: "bounds",
   STEP_TREE: "tree",
   STEP_PARAMETERS: "parameters",
+  STEP_COLLISIONS: "collisions",
   ROBOT_SDF: "sdf",
   ROBOT_MOTION: "motion",
   ROBOT_JOINTS: "joints",
@@ -18,6 +19,9 @@ export const FILE_SHEET_SECTION_IDS = Object.freeze({
 
 const THEME_SECTION_IDS = Object.freeze([
   FILE_SHEET_SECTION_IDS.THEME_DISPLAY,
+  FILE_SHEET_SECTION_IDS.THEME_APPEARANCE
+]);
+const STEP_THEME_SECTIONS_WITHOUT_DISPLAY_IDS = Object.freeze([
   FILE_SHEET_SECTION_IDS.THEME_APPEARANCE
 ]);
 
@@ -60,7 +64,9 @@ export function renderedFileSheetSectionIds(kind, options = {}) {
         ...(options.hasFileStatus ? [FILE_SHEET_SECTION_IDS.FILE_STATUS] : []),
         FILE_SHEET_SECTION_IDS.STEP_TREE,
         ...(options.hasStepModulePanel ? [FILE_SHEET_SECTION_IDS.STEP_PARAMETERS] : []),
-        ...THEME_SECTION_IDS,
+        FILE_SHEET_SECTION_IDS.THEME_DISPLAY,
+        FILE_SHEET_SECTION_IDS.STEP_COLLISIONS,
+        ...STEP_THEME_SECTIONS_WITHOUT_DISPLAY_IDS,
         FILE_SHEET_SECTION_IDS.FILE_METADATA
       ];
     case "urdf":

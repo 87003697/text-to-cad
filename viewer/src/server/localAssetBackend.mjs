@@ -17,6 +17,10 @@ import {
 } from "cadjs/lib/generationStatus.mjs";
 import { pathIsInside } from "cadjs/lib/pathUtils.mjs";
 import { ensureStepTopologyArtifact } from "cadjs/lib/step/stepArtifactCompiler.mjs";
+import {
+  cadPythonEnv,
+  cadPythonExecutable,
+} from "cadjs/lib/step/pythonStepArtifact.mjs";
 
 function toPosixPath(value) {
   return String(value || "").split(path.sep).join("/");
@@ -137,6 +141,117 @@ function stepArtifactGenerationError(result) {
   return "STEP artifact generation failed.";
 }
 
+function appendOption(args, name, value) {
+  if (value === null || value === undefined || value === "") {
+    return;
+  }
+  args.push(name, String(value));
+}
+
+function appendRepeatedOption(args, name, values) {
+  if (!Array.isArray(values)) {
+    return;
+  }
+  for (const value of values) {
+    const normalized = String(value || "").trim();
+    if (normalized) {
+      args.push(name, normalized);
+    }
+  }
+}
+
+export function runCadpyInterference({
+  repoRoot,
+  stepPath,
+  options = {},
+} = {}) {
+  const resolvedRepoRoot = path.resolve(repoRoot || "");
+  const resolvedStepPath = path.resolve(stepPath || "");
+  const args = [
+    "-m",
+    "cadpy.interference",
+    resolvedStepPath,
+    "--format",
+    "json",
+  ];
+  appendOption(args, "--clearance", options.clearanceMm);
+  appendOption(args, "--contact-tolerance", options.contactToleranceMm);
+  appendOption(args, "--collision-volume-tolerance", options.collisionVolumeToleranceMm3);
+  appendOption(args, "--max-pairs", options.maxPairs);
+  appendOption(args, "--time-budget-ms", options.timeBudgetMs);
+  appendOption(args, "--body-depth", options.bodyDepth);
+  appendRepeatedOption(args, "--collapse", options.collapse);
+  appendRepeatedOption(args, "--exclude", options.exclude);
+  appendRepeatedOption(args, "--set-a", options.setA);
+  appendRepeatedOption(args, "--set-b", options.setB);
+  appendRepeatedOption(args, "--pair", options.pairs);
+  appendRepeatedOption(args, "--allow-pair", options.allowPairs);
+  if (options.includeContact !== false) {
+    args.push("--include-contact");
+  }
+  if (options.includeClearance === true) {
+    args.push("--include-clearance");
+  }
+  if (options.includeSeparated === true) {
+    args.push("--include-separated");
+  }
+  if (options.includeAllowed === true) {
+    args.push("--include-allowed");
+  }
+  if (options.listBodies === true) {
+    args.push("--list-bodies");
+  }
+  if (options.noCache === true) {
+    args.push("--no-cache");
+  }
+
+  return new Promise((resolve) => {
+    const child = spawn(cadPythonExecutable(resolvedRepoRoot), args, {
+      cwd: resolvedRepoRoot,
+      env: cadPythonEnv(resolvedRepoRoot),
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    let stdout = "";
+    let stderr = "";
+    child.stdout.setEncoding("utf8");
+    child.stderr.setEncoding("utf8");
+    child.stdout.on("data", (chunk) => {
+      stdout += chunk;
+    });
+    child.stderr.on("data", (chunk) => {
+      stderr += chunk;
+    });
+    child.on("error", (error) => {
+      resolve({
+        ok: false,
+        stepPath: resolvedStepPath,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    });
+    child.on("close", (code) => {
+      const output = stdout.trim();
+      const lastJsonLine = output.split(/\r?\n/).reverse().find((line) => line.trim().startsWith("{"));
+      if (code === 0 && lastJsonLine) {
+        try {
+          resolve({
+            ok: true,
+            stepPath: resolvedStepPath,
+            result: JSON.parse(lastJsonLine),
+          });
+          return;
+        } catch {
+          // Fall through to the structured failure below.
+        }
+      }
+      resolve({
+        ok: false,
+        stepPath: resolvedStepPath,
+        exitCode: code,
+        error: (stderr || stdout || `Collision detection exited with code ${code}`).trim(),
+      });
+    });
+  });
+}
 function contentTypeForPath(filePath) {
   const extension = path.extname(filePath).toLowerCase();
   if (extension === ".js" || extension === ".mjs") {
@@ -393,7 +508,10 @@ export function createLocalAssetBackend({
   rootDir = "",
   defaultFile = "",
   githubUrl = "",
+  catalogRefreshIntervalMs = 0,
+  now = () => Date.now(),
   stepArtifactGenerator = ensureStepTopologyArtifact,
+  collisionGenerator = runCadpyInterference,
   sourceFileOpener = defaultSourceFileOpener,
 } = {}) {
   const baseWorkspaceRoot = path.resolve(workspaceRoot || process.cwd());
@@ -401,6 +519,22 @@ export function createLocalAssetBackend({
     ? absoluteFileRef(normalizedRootDir(rootDir, baseWorkspaceRoot))
     : absoluteFileRef(baseWorkspaceRoot);
   const catalogCache = new Map();
+  const catalogCacheTimes = new Map();
+
+  function setCatalogCache(cacheKey, catalog) {
+    catalogCache.set(cacheKey, catalog);
+    catalogCacheTimes.set(cacheKey, Number(now()) || 0);
+    return catalog;
+  }
+
+  function cachedCatalogIsStale(cacheKey) {
+    const interval = Number(catalogRefreshIntervalMs) || 0;
+    if (interval <= 0) {
+      return false;
+    }
+    const updatedAt = Number(catalogCacheTimes.get(cacheKey)) || 0;
+    return (Number(now()) || 0) - updatedAt >= interval;
+  }
 
   function effectiveRootDirForRequest(rootDir = "") {
     return rootDir || defaultRootDir;
@@ -447,6 +581,9 @@ export function createLocalAssetBackend({
     if (!catalogCache.has(cacheKey)) {
       return refreshCatalog({ rootDir: normalizedDir, fileRef: normalizedFile });
     }
+    if (cachedCatalogIsStale(cacheKey)) {
+      return refreshCatalog({ rootDir: normalizedDir, fileRef: normalizedFile });
+    }
     if (normalizedDir && normalizedFile) {
       const resolvedRoot = resolveRoot(normalizedDir);
       const requestedPath = filePathFromRef(normalizedFile, resolvedRoot);
@@ -475,8 +612,7 @@ export function createLocalAssetBackend({
       includeArtifactStatus: false,
     });
     const catalog = absolutizeCatalog(rawCatalog, context);
-    catalogCache.set(`dir:${resolvedRoot.dir}`, catalog);
-    return catalog;
+    return setCatalogCache(`dir:${resolvedRoot.dir}`, catalog);
   }
 
   function replaceCatalogEntry(catalog, fileRef, nextEntry) {
@@ -513,8 +649,7 @@ export function createLocalAssetBackend({
     });
     const fileRef = nextEntry?.file || (rawFileRef ? absoluteFileRef(path.resolve(resolvedRoot.rootPath, rawFileRef)) : absoluteFileRef(filePath));
     const nextCatalog = replaceCatalogEntry(currentCatalog, fileRef, nextEntry);
-    catalogCache.set(`dir:${resolvedRoot.dir}`, nextCatalog);
-    return nextCatalog;
+    return setCatalogCache(`dir:${resolvedRoot.dir}`, nextCatalog);
   }
 
   function refreshCatalogForPythonSource({ rootDir: nextRootDir = defaultRootDir, filePath } = {}) {
@@ -563,8 +698,7 @@ export function createLocalAssetBackend({
         rawEntry ? absolutizeCatalogEntry(rawEntry, context) : null
       );
     }
-    catalogCache.set(`dir:${resolvedRoot.dir}`, nextCatalog);
-    return nextCatalog;
+    return setCatalogCache(`dir:${resolvedRoot.dir}`, nextCatalog);
   }
 
   function refreshCatalogForPath({ rootDir: nextRootDir = defaultRootDir, filePath } = {}) {
@@ -825,6 +959,26 @@ export function createLocalAssetBackend({
     };
   }
 
+  async function generateCollisions({
+    fileRef,
+    options = {},
+    resolvedRoot = resolveRequestRoot({ fileRef }),
+    rootDir: nextRootDir = defaultRootDir,
+    catalog = null,
+  } = {}) {
+    const stepPath = resolveOutputFilePath(fileRef, { resolvedRoot, rootDir: nextRootDir, catalog });
+    const extension = path.extname(stepPath).toLowerCase();
+    if (extension !== ".step" && extension !== ".stp") {
+      throw new Error("Collision detection requires a STEP/STP file");
+    }
+    const context = scanContextForRoot(resolvedRoot);
+    return collisionGenerator({
+      repoRoot: context.scanRepoRoot,
+      stepPath,
+      options,
+    });
+  }
+
   function readStepSourceStatusForFile({ fileRef, resolvedRoot = resolveRequestRoot({ fileRef }), catalog = null } = {}) {
     const { stepPath, sourcePath } = resolveStepSourceStatus(fileRef, { resolvedRoot, catalog });
     const context = scanContextForRoot(resolvedRoot);
@@ -935,6 +1089,7 @@ export function createLocalAssetBackend({
     generationStatusDir,
     isGenerationStatusPath,
     generateStepArtifact,
+    generateCollisions,
     entryForSourcePath,
     assetPathForFileRef,
     writeAsset,

@@ -291,10 +291,15 @@ export function hasTopologyDisplayEdgeClassification(selectorRuntime) {
   return hasTopologyDisplayEdgeProxy(selectorRuntime);
 }
 
-export function shouldUseTopologyDisplayEdges(selectorRuntime) {
-  return !selectorRuntime?.surfaceEdgeRendering &&
-    Number(selectorRuntime?.schemaVersion || 0) < 3 &&
-    hasTopologyDisplayEdgeProxy(selectorRuntime);
+export function shouldUseTopologyDisplayEdges(selectorRuntime, edgeSettings = null) {
+  const forceTopologyOverlay = edgeSettings?.forceTopologyOverlay === true;
+  return hasTopologyDisplayEdgeProxy(selectorRuntime) && (
+    forceTopologyOverlay ||
+    (
+      !selectorRuntime?.surfaceEdgeRendering &&
+      Number(selectorRuntime?.schemaVersion || 0) < 3
+    )
+  );
 }
 
 export function buildTopologyDisplayEdgePositions(selectorRuntime, {

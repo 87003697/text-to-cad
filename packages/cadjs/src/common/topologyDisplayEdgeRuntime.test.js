@@ -130,6 +130,18 @@ test("shouldRenderTopologyDisplayEdges gates CAD topology overlays", () => {
     cadEdgeSource: true,
     selectorRuntime: { schemaVersion: 3, surfaceEdgeRendering: true, edges: [] }
   }), false);
+  assert.equal(shouldRenderTopologyDisplayEdges({
+    edgesVisible: true,
+    cadEdgeSource: true,
+    selectorRuntime: {
+      ...runtime,
+      schemaVersion: 3,
+      surfaceEdgeRendering: true
+    },
+    edgeSettings: {
+      forceTopologyOverlay: true
+    }
+  }), true);
 });
 
 test("surface offset scales for thick topology display edges", () => {

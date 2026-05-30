@@ -395,7 +395,6 @@ def _read_step_source(
         if options.glb is not None
         else None
     )
-
     cad_ref = cad_ref_from_step_path(resolved_step_path)
 
     return CadSource(

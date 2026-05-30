@@ -60,6 +60,8 @@ function topologyDisplayEdgeLineSettingsKey(
     thickness: numberOrNull(edgeSettings?.thickness),
     includePartIds: normalizePartIdList(edgeSettings?.includePartIds),
     excludePartIds: normalizePartIdList(edgeSettings?.excludePartIds),
+    depthTest: edgeSettings?.depthTest !== false,
+    forceTopologyOverlay: edgeSettings?.forceTopologyOverlay === true,
     visibilityClasses: normalizePartIdList(edgeSettings?.visibilityClasses),
     classes: edgeSettings?.classes && typeof edgeSettings.classes === "object"
       ? Object.fromEntries(Object.entries(edgeSettings.classes).map(([classId, settings]) => [

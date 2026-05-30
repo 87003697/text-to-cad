@@ -6,6 +6,8 @@ import {
 
 export const CAD_DISPLAY_MODE = Object.freeze({
   SOLID: "solid",
+  TRANSPARENT: "transparent",
+  COLLISION: "collision",
   WIREFRAME: "wireframe"
 });
 
@@ -19,8 +21,9 @@ function isObject(value) {
 }
 
 export function normalizeDisplayMode(value) {
-  return String(value || "").trim().toLowerCase() === CAD_DISPLAY_MODE.WIREFRAME
-    ? CAD_DISPLAY_MODE.WIREFRAME
+  const normalized = String(value || "").trim().toLowerCase();
+  return Object.values(CAD_DISPLAY_MODE).includes(normalized)
+    ? normalized
     : CAD_DISPLAY_MODE.SOLID;
 }
 

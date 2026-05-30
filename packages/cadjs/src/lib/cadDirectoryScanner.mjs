@@ -1134,12 +1134,8 @@ function pythonStepSourceFromStepMetadata(repoRoot, stepPath) {
   if (!metadataSourcePath) {
     return null;
   }
-  const sourceIdentity = sourcePathFromManifest(repoRoot, metadataSourcePath, { baseDir: path.dirname(stepPath) });
+  const sourceIdentity = generatorSourcePathFromManifest(repoRoot, metadataSourcePath, { baseDir: path.dirname(stepPath) });
   if (!sourceIdentity.sourcePath) {
-    return null;
-  }
-  const sourceExtension = path.extname(sourceIdentity.filePath || sourceIdentity.sourcePath).toLowerCase();
-  if (sourceExtension !== ".py") {
     return null;
   }
   return {

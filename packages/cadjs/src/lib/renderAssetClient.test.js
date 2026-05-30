@@ -57,7 +57,13 @@ function pad4(buffer, byte = 0) {
   return padding ? Buffer.concat([buffer, Buffer.alloc(padding, byte)]) : buffer;
 }
 
-function topologyGlb(manifest, buffers = {}, { schemaVersion = STEP_TOPOLOGY_SCHEMA_VERSION } = {}) {
+function topologyGlb(
+  manifest,
+  buffers = {},
+  {
+    schemaVersion = STEP_TOPOLOGY_SCHEMA_VERSION,
+  } = {}
+) {
   const bufferViews = [];
   let binary = Buffer.alloc(0);
   function addBufferView(payload) {

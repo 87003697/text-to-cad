@@ -279,6 +279,7 @@ def main(argv: list[str] | None = None) -> int:
         args.mesh_angular_tolerance,
         field_name="mesh_angular_tolerance",
     )
+
     if bool(args.skip_step_write):
         existing_spec = spec
         if mesh_tolerance is not None or mesh_angular_tolerance is not None:

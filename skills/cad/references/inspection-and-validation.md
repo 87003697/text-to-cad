@@ -11,6 +11,7 @@ Read this file for every generated STEP artifact and whenever the user asks for 
 - Reference discovery
 - Measurement checks
 - Mating checks
+- Interference detection
 - Frame inspection
 - Diff checks
 - CAD Viewer handoff
@@ -56,10 +57,11 @@ Default validation sequence:
 2. `refs --facts --planes --positioning` confirms scale, labels, major planes, and placement-ready references.
 3. `measure` confirms critical dimensions and offsets.
 4. `mate` confirms read-only alignment deltas for assembly interfaces or ref-to-ref positioning; it does not create source-level build123d joints.
-5. `frame` confirms world frame for occurrences or selected references.
-6. `diff` compares before/after geometry for modifications.
-7. Created or modified supported artifacts are handed to `$cad-viewer` for live viewer links when available.
-8. Saved CAD `scripts/snapshot` packets are ALWAYS run for visible created or updated primary STEP/STP artifacts unless `snapshot-review.md` documents that no visible geometry changed or no valid artifact exists; when run, every visual concern is followed by a deterministic geometry check before it becomes a validation claim.
+5. `scripts/interference` runs on-demand solid interference checks when unexpected assembly collisions are plausible or the user asks for collision detection. Use explicit scope, pair, body-depth, collapse, and allow-pair controls instead of making interference a generation side effect.
+6. `frame` confirms world frame for occurrences or selected references.
+7. `diff` compares before/after geometry for modifications.
+8. Created or modified supported artifacts are handed to `$cad-viewer` for live viewer links when available.
+9. Saved CAD `scripts/snapshot` packets are ALWAYS run for visible created or updated primary STEP/STP artifacts unless `snapshot-review.md` documents that no visible geometry changed or no valid artifact exists; when run, every visual concern is followed by a deterministic geometry check before it becomes a validation claim.
 
 ## Reference discovery
 
@@ -119,6 +121,20 @@ python scripts/inspect mate \
 ```
 
 Apply any required correction in the Python source using build123d joint definitions, `.connect_to()` calls, `Location`, parameter changes, or assembly child placement. Regenerate and re-inspect.
+
+## Interference detection
+
+Run standalone interference detection when an assembly may contain unexpected solid overlaps. The tool is agent-oriented: JSON is the default, all collisions are treated as violations unless an `--allow-pair` rule says otherwise, and scope controls are explicit.
+
+```bash
+python scripts/interference path/to/assembly.step --pretty
+python scripts/interference path/to/assembly.step --body-depth 2 --fail-on-interference
+python scripts/interference path/to/assembly.step --set-a 'o1.3.*' --set-b 'o1.4.*' --pretty
+python scripts/interference path/to/assembly.step --pair base_plate:triangular_prism --include-separated --pretty
+python scripts/interference path/to/assembly.step --collapse '*servo*' --allow-pair press_fit_pin:socket --pretty
+```
+
+Use `--body-depth` or `--collapse` to avoid spending time inside trusted rigid/vendor subassemblies. Use `--set-a`/`--set-b` for cross-set checks, `--pair` for a targeted drilldown, `--clearance` plus `--include-clearance` for near-miss checks, and `--include-allowed` when auditing intentional interferences. Interference detection is intentionally on demand rather than a `scripts/step` generation side effect.
 
 ## Frame inspection
 

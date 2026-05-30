@@ -54,7 +54,10 @@ export function entryAsset(entry, key) {
   if (
     assetKey === kind ||
     assetKey === sourceFormat ||
-    (sourceFormat === RENDER_FORMAT.STEP && ["glb", "topology", "selectortopology", "displayedgetopology"].includes(assetKey)) ||
+    (
+      sourceFormat === RENDER_FORMAT.STEP &&
+      ["glb", "topology", "selectortopology", "displayedgetopology"].includes(assetKey)
+    ) ||
     (kind === "srdf" && assetKey === "srdf")
   ) {
     return primaryAsset(entry);

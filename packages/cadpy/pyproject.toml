@@ -13,6 +13,7 @@ dependencies = [
 ]
 
 [project.scripts]
+cadpy-interference = "cadpy.interference:main"
 cadpy-step-artifact = "cadpy.step_artifact:main"
 
 [tool.setuptools.packages.find]
