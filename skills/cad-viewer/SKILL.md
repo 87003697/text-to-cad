@@ -5,7 +5,6 @@ description: Start or reuse CAD Viewer and return review links for explicit CAD,
 
 # CAD Viewer
 
-Release version: `0.1.11`.
 Provenance: maintained in [earthtojake/text-to-cad](https://github.com/earthtojake/text-to-cad).
 Use the installed local skill files as the runtime source of truth; the
 repository link is only for provenance and release review.
@@ -14,14 +13,16 @@ Use this skill to open existing or newly generated CAD, robot-description, DXF, 
 
 ## Start Viewer
 
-Start or reuse one packaged CAD Viewer server with `npm run serve`, then select
-local files by URL. Every Viewer link returned from this skill MUST include
-`?dir=` with an absolute path. Set `?dir=` to the workspace-local artifact root
-that owns the model files and related sidecars, usually the project `models/`
-directory, such as `/Users/name/project/models`. This root should be the shared
-directory containing STEP/STL/GLB/URDF/SRDF/SDF/G-code/DXF files, not a relative
-path and not just the selected file's parent when a broader model workspace root
-exists. Always begin at port `4178`.
+Start or reuse one local CAD Viewer with `npm run agent:start`, then select
+local files by URL. The launcher uses Vite dev mode when this skill's
+`scripts/viewer` path is a development symlink, and the packaged `dist/` server
+for production skill installs. Every Viewer link returned from this skill MUST
+include `?dir=` with an absolute path. Set `?dir=` to the workspace-local
+artifact root that owns the model files and related sidecars, usually the
+project `models/` directory, such as `/Users/name/project/models`. This root
+should be the shared directory containing STEP/STL/GLB/URDF/SRDF/SDF/G-code/DXF
+files, not a relative path and not just the selected file's parent when a
+broader model workspace root exists. Always begin at port `4178`.
 
 Probe each candidate port with `GET /__cad/server`. If the response is JSON
 with `app: "cad-viewer"`, `dynamicRoot: true`, and `serverApiVersion >= 2`,
@@ -30,7 +31,7 @@ checking the running build. If the response is a legacy root-bound CAD Viewer
 without those fields, treat it as incompatible and try the next port because
 returned links must use absolute `?dir=` and `?file=` values. If the port is
 occupied by something else, increment the port and probe again. If the port is
-closed, start the packaged server on that port.
+closed, start the Viewer launcher on that port.
 
 Legacy fixed-root startup flags and old local root environment variables have
 been removed. Do not use fixed-root startup configuration; use absolute `?dir=`
@@ -49,7 +50,7 @@ the same local server can scan a new absolute `?dir=`.
 Run from this skill directory:
 
 ```bash
-npm --prefix scripts/viewer run serve -- --host 127.0.0.1 --port 4178 --shutdown-after 12h
+npm --prefix scripts/viewer run agent:start -- --host 127.0.0.1 --port 4178 --shutdown-after 12h
 ```
 
 Use the printed base URL and append query parameters:
@@ -58,21 +59,21 @@ Use the printed base URL and append query parameters:
 http://127.0.0.1:4178/?dir=/absolute/workspace/models&file=/absolute/workspace/models/path/to/model.step
 ```
 
-If a non-Viewer process occupies the candidate port, rerun `serve` with the next
-available `--port <number>`. In sandboxed agent environments, local binding
-failures such as `EPERM` or `EACCES` can be expected; rerun the same command
-with the needed permission/escalation.
+If a non-Viewer process occupies the candidate port, rerun `agent:start` with
+the next available `--port <number>`. In sandboxed agent environments, local
+binding failures such as `EPERM` or `EACCES` can be expected; rerun the same
+command with the needed permission/escalation.
 
 ## Claude Preview
 
 When running in Claude Code Desktop, check the workspace `.claude/launch.json`.
 If it does not already contain a CAD Viewer preview configuration, add one and
 preserve every existing configuration. The preview config should start this
-packaged Viewer, use the same selected port as the returned links, and keep
+Viewer launcher, use the same selected port as the returned links, and keep
 `autoPort: false` so Claude does not silently move the Viewer to a different
 port. Use an absolute path to this skill's `scripts/viewer` directory in
 `npm --prefix`, or set the preview `cwd` to this skill directory before running
-the same `npm --prefix scripts/viewer run serve -- --host 127.0.0.1 --port
+the same `npm --prefix scripts/viewer run agent:start -- --host 127.0.0.1 --port
 <port> --shutdown-after 12h` command.
 
 Example configuration entry:
@@ -85,7 +86,7 @@ Example configuration entry:
     "--prefix",
     "/absolute/path/to/cad-viewer/scripts/viewer",
     "run",
-    "serve",
+    "agent:start",
     "--",
     "--host",
     "127.0.0.1",

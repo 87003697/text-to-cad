@@ -1,11 +1,10 @@
 # CAD Viewer
 
-CAD Viewer is a browser workbench for inspecting CAD files, robot-description
-files, and generated CAD artifacts from a URL-selected local root directory or
-hosted catalog. It is built for engineering review loops where a developer or
-agent needs to open a model quickly, understand the source tree, copy stable
-`@cad[...]` references, and verify generated assets without leaving the
-browser.
+CAD Viewer is a browser workbench for inspecting CAD files,
+robot-description files, and generated CAD artifacts from a URL-selected local
+directory or hosted catalog. It is built for engineering review loops where you
+need to open a model quickly, understand the source tree, copy stable
+`@cad[...]` references, and verify generated assets without leaving the browser.
 
 ## Features
 
@@ -28,10 +27,8 @@ Run these commands from this directory:
 
 ```bash
 npm install
-npm run dev
 npm run test
 npm run build
-npm run serve
 ```
 
 For local development, start the dev server and then pass absolute local paths
@@ -58,25 +55,10 @@ to render that file and hides the file explorer sidebar and breadcrumbs. With
 neither `?dir=` nor `?file=`, the Viewer shows an empty prompt asking for one of
 those parameters.
 
-Agent handoff links from the cad-viewer skill should still include an absolute
-`?dir=` on every returned URL, plus an absolute `file=` value for each requested
-file. The session-storage fallback is for same-tab navigation, not for durable
-review links.
-
-This workbench keeps a generated `cadjs` package copy under `packages/cadjs` so
-the viewer can build from a standalone `viewer/` deploy root. Edit the source of
-truth in `../packages/cadjs`, then refresh the viewer-local copy before
-handoff:
+Install the local Python artifact package when iterating on local STEP
+regeneration:
 
 ```bash
-../scripts/build/build-viewer.sh
-```
-
-Refresh and install the viewer-local Python artifact package when iterating on
-local STEP regeneration:
-
-```bash
-../scripts/build/build-viewer.sh
 python -m pip install -r requirements.txt
 ```
 
@@ -97,17 +79,15 @@ python -m pip install -r requirements.txt
   and MoveIt2.
 - `moveit2_server/`: optional Python websocket backend for SRDF controls.
 
-The shared non-React CAD runtime source lives in `../packages/cadjs` in this
-workbench. Keep reusable parsing, rendering, sidecar, selector, and topology
-logic there instead of editing generated viewer-local package copies.
-
 ## Common Commands
 
 ```bash
 npm run dev          # Vite dev server with local CAD API middleware
+npm run agent:start  # Launcher that chooses dev or production serve mode
 npm run build        # Production frontend build
 npm run serve        # Serve dist/ with the local or hosted backend
 npm run test         # Discover and run all JS tests
+npm run upload:blob  # Upload a hosted catalog and supported viewer assets
 ```
 
 `npm run test` uses `scripts/run-tests.mjs`, which discovers
@@ -128,8 +108,8 @@ Important environment variables:
   is absent and a `?dir=` or stored active directory is available.
 - `VIEWER_SERVER_LIFETIME_MS`: optional server lifetime in milliseconds for
   local dev and production servers. When unset, there is no automatic shutdown.
-- `VIEWER_GITHUB_URL`: optional top-bar GitHub link target. Defaults to this
-  repository; the version label links to the matching GitHub release tag.
+- `VIEWER_GITHUB_URL`: optional top-bar GitHub link target. When set, the
+  version label links to the matching GitHub release tag.
 - `VIEWER_ALLOWED_HOSTS`: extra hostnames accepted by local Vite dev and
   production servers.
 - `VIEWER_MOVEIT2_WS_URL`: optional websocket URL for SRDF MoveIt2 controls.
@@ -161,11 +141,10 @@ Vercel's system environment variables (`VERCEL_PROJECT_PRODUCTION_URL`,
 `VERCEL_URL`, then `VERCEL_BRANCH_URL`).
 
 Upload a catalog and supported viewer assets from a local directory with
-`npm --prefix viewer run upload:blob -- models`.
-The repo-level `scripts/catalog/upload-models-catalog.sh` command uploads
-`models/` to the configured Blob prefix. Uploads exclude `mechbench/`,
+`npm run upload:blob -- /path/to/models`. Uploads exclude `mechbench/`,
 `mechbench2/`, `7dof_arm/`, and Python source files by default; public Blob
-catalogs omit Python source paths and URLs.
+catalogs omit Python source paths and URLs. Add a `.vieweruploadignore` file or
+pass `--exclude <pattern>` for project-specific upload filters.
 
 Production builds contain the frontend and initial catalog module only. CAD
 assets are served by a backend and are not copied into `dist/`.
@@ -177,9 +156,6 @@ assets are served by a backend and are not copied into `dist/`.
 - [Browser storage](./docs/storage.md): URL, `localStorage`, and
   `sessionStorage` ownership.
 - [MoveIt2 server](./docs/moveit2-server.md): optional SRDF websocket backend.
-- `cadjs` render pipeline: shared render APIs used by the viewer, docs, and
-  snapshot runtime. In this workbench, see
-  `../packages/cadjs/docs/render-pipeline.md`.
 
 ## Verification
 
@@ -188,18 +164,9 @@ Run the focused viewer checks before handing off viewer changes:
 ```bash
 npm run test
 npm run build
-npm run runtime:check
 ```
 
 For UI behavior changes, also run `npm run dev -- --host 127.0.0.1`, open the
 printed URL with `?dir=/absolute/root&file=/absolute/root/path/to/model.step`,
 and check that the app renders, selection works, and the browser console is
 clean.
-
-When changing Viewer source that feeds the cad-viewer skill runtime, refresh the
-generated runtime from the repository root:
-
-```bash
-scripts/build/build-cad-viewer-skill.sh
-scripts/build/build-cad-viewer-skill.sh --check
-```

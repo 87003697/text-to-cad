@@ -1,0 +1,306 @@
+name: Publish
+
+on:
+  workflow_dispatch:
+    inputs:
+      source_ref:
+        description: Branch, tag, or SHA to publish from.
+        required: true
+        default: develop
+        type: string
+      target_branch:
+        description: Branch to write production output to. Use build-test for validation; use main for a real release.
+        required: true
+        default: build-test
+        type: choice
+        options:
+          - build-test
+          - main
+      dry_run:
+        description: Validate and show publish actions without pushing the target branch, tag, or release.
+        required: true
+        default: false
+        type: boolean
+      publish:
+        description: Publish the GitHub Release instead of leaving it as a draft.
+        required: true
+        default: false
+        type: boolean
+      create_release:
+        description: Create the GitHub Release after pushing the tag.
+        required: true
+        default: true
+        type: boolean
+
+permissions:
+  contents: write
+
+concurrency:
+  group: publish-${{ inputs.target_branch }}
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    name: Publish
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Resolve publish request
+        id: request
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          INPUT_SOURCE_REF: ${{ inputs.source_ref }}
+          INPUT_TARGET_BRANCH: ${{ inputs.target_branch }}
+          INPUT_DRY_RUN: ${{ inputs.dry_run }}
+          INPUT_PUBLISH: ${{ inputs.publish }}
+          INPUT_CREATE_RELEASE: ${{ inputs.create_release }}
+        run: |
+          if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
+            source_ref="${INPUT_SOURCE_REF:-develop}"
+            target_branch="${INPUT_TARGET_BRANCH:-build-test}"
+            dry_run="${INPUT_DRY_RUN:-false}"
+            publish_release="${INPUT_PUBLISH:-false}"
+            create_release="${INPUT_CREATE_RELEASE:-true}"
+          else
+            source_ref="develop"
+            target_branch="main"
+            dry_run="false"
+            publish_release="false"
+            create_release="true"
+          fi
+
+          case "$target_branch" in
+            main|build-test)
+              ;;
+            *)
+              echo "Unsupported publish target branch: $target_branch" >&2
+              exit 2
+              ;;
+          esac
+
+          if [ "$target_branch" != "main" ]; then
+            publish_release="false"
+            create_release="false"
+          fi
+
+          echo "source_ref=$source_ref" >> "$GITHUB_OUTPUT"
+          echo "target_branch=$target_branch" >> "$GITHUB_OUTPUT"
+          echo "dry_run=$dry_run" >> "$GITHUB_OUTPUT"
+          echo "publish_release=$publish_release" >> "$GITHUB_OUTPUT"
+          echo "create_release=$create_release" >> "$GITHUB_OUTPUT"
+          echo "Publishing source_ref=$source_ref to $target_branch; dry_run=$dry_run; create_release=$create_release."
+
+      - name: Check out source
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ steps.request.outputs.source_ref }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Configure publish credentials
+        env:
+          PUBLISH_PUSH_TOKEN: ${{ secrets.PUBLISH_PUSH_TOKEN }}
+          BUILD_TEST_PUSH_TOKEN: ${{ secrets.BUILD_TEST_PUSH_TOKEN }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if [ -n "$PUBLISH_PUSH_TOKEN" ]; then
+            git remote set-url origin "https://x-access-token:${PUBLISH_PUSH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+            echo "Using PUBLISH_PUSH_TOKEN for publish push."
+          elif [ -n "$BUILD_TEST_PUSH_TOKEN" ]; then
+            git remote set-url origin "https://x-access-token:${BUILD_TEST_PUSH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+            echo "Using BUILD_TEST_PUSH_TOKEN for publish push."
+          else
+            git remote set-url origin "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+            echo "Using GITHUB_TOKEN for publish push."
+          fi
+
+      - name: Fetch release comparison refs
+        env:
+          TARGET_BRANCH: ${{ steps.request.outputs.target_branch }}
+        run: |
+          git fetch --tags origin
+          for branch in develop main "$TARGET_BRANCH"; do
+            git fetch --no-tags origin "+$branch:refs/remotes/origin/$branch"
+          done
+
+      - name: Check canonical release version
+        run: scripts/release/check-version.sh
+
+      - name: Evaluate release gate
+        id: gate
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          TARGET_BRANCH: ${{ steps.request.outputs.target_branch }}
+        run: |
+          source_sha="$(git rev-parse HEAD)"
+          echo "source_sha=$source_sha" >> "$GITHUB_OUTPUT"
+
+          if [ "$EVENT_NAME" = "workflow_dispatch" ] && [ "$TARGET_BRANCH" != "main" ]; then
+            echo "should_publish=true" >> "$GITHUB_OUTPUT"
+            echo "Manual publish rehearsal requested for $source_sha."
+            exit 0
+          fi
+
+          latest_tag="$(git tag --list '[0-9]*.[0-9]*.[0-9]*' --sort=-version:refname | head -n 1 || true)"
+          if ! scripts/release/check-version.sh --incremented-from origin/main >/tmp/publish-main-version-check.log 2>&1; then
+            echo "should_publish=false" >> "$GITHUB_OUTPUT"
+            echo "Skipping publish: version has not advanced past origin/main."
+            exit 0
+          fi
+          if [ -n "$latest_tag" ] && ! scripts/release/check-version.sh --incremented-from "refs/tags/$latest_tag" >/tmp/publish-tag-version-check.log 2>&1; then
+            echo "should_publish=false" >> "$GITHUB_OUTPUT"
+            echo "Skipping publish: version has not advanced past latest tag $latest_tag."
+            exit 0
+          fi
+
+          echo "should_publish=true" >> "$GITHUB_OUTPUT"
+          echo "Release version advanced; publishing $source_sha to $TARGET_BRANCH."
+
+      - name: Skip non-release push
+        if: steps.gate.outputs.should_publish != 'true'
+        run: echo "Publish only updates main when the source version is newer than main and the latest release tag."
+
+      - name: Validate publish target
+        if: steps.gate.outputs.should_publish == 'true'
+        env:
+          SOURCE_SHA: ${{ steps.gate.outputs.source_sha }}
+          TARGET_BRANCH: ${{ steps.request.outputs.target_branch }}
+        run: |
+          git merge-base --is-ancestor origin/main "$SOURCE_SHA" || {
+            echo "origin/main is not an ancestor of $SOURCE_SHA; refusing publish." >&2
+            exit 1
+          }
+          if [ "$TARGET_BRANCH" = "main" ]; then
+            echo "Validated main publish target."
+          else
+            echo "Validated build-test rehearsal target against origin/main."
+          fi
+
+      - name: Set up Python
+        if: steps.gate.outputs.should_publish == 'true'
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Set up Node.js
+        if: steps.gate.outputs.should_publish == 'true'
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Install Python dependencies
+        if: steps.gate.outputs.should_publish == 'true'
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements-dev.txt
+
+      - name: Install Node dependencies
+        if: steps.gate.outputs.should_publish == 'true'
+        run: |
+          npm ci --prefix packages/cadjs
+          npm ci --prefix viewer
+          npm ci --prefix docs
+
+      - name: Check development symlink layout
+        if: steps.gate.outputs.should_publish == 'true'
+        run: scripts/dev/setup-symlinks.sh --check
+
+      - name: Create local target branch
+        if: steps.gate.outputs.should_publish == 'true'
+        env:
+          SOURCE_SHA: ${{ steps.gate.outputs.source_sha }}
+          TARGET_BRANCH: ${{ steps.request.outputs.target_branch }}
+        run: git checkout -B "$TARGET_BRANCH" "$SOURCE_SHA"
+
+      - name: Bundle production outputs
+        if: steps.gate.outputs.should_publish == 'true'
+        run: scripts/bundle/bundle.sh --clean
+
+      - name: Validate production bundle layout
+        if: steps.gate.outputs.should_publish == 'true'
+        run: scripts/github-workflows/check-builds.sh --skip-bundle-check
+
+      - name: Run documentation checks
+        if: steps.gate.outputs.should_publish == 'true'
+        run: scripts/test/test-docs.sh
+
+      - name: Run code tests
+        if: steps.gate.outputs.should_publish == 'true'
+        run: scripts/test/test.sh
+
+      - name: Commit publish result
+        if: steps.gate.outputs.should_publish == 'true'
+        env:
+          SOURCE_REF: ${{ steps.request.outputs.source_ref }}
+          SOURCE_SHA: ${{ steps.gate.outputs.source_sha }}
+          TARGET_BRANCH: ${{ steps.request.outputs.target_branch }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+
+          version="$(tr -d '[:space:]' < plugins/cad/VERSION)"
+          target_base_sha="$(git rev-parse --verify "origin/$TARGET_BRANCH^{commit}")"
+          release_base_sha="$(git rev-parse --verify "origin/main^{commit}")"
+          included_commits="$(git log --oneline --no-decorate "origin/main..$SOURCE_SHA" || true)"
+
+          message_file="$(mktemp)"
+          {
+            echo "Publish $version from $SOURCE_REF to $TARGET_BRANCH"
+            echo
+            echo "Source ref: $SOURCE_REF"
+            echo "Source commit: $SOURCE_SHA"
+            echo "Target branch: $TARGET_BRANCH"
+            echo "Previous target: $target_base_sha"
+            echo "Release base: $release_base_sha"
+            echo
+            echo "Included commits since origin/main:"
+            if [ -n "$included_commits" ]; then
+              echo "$included_commits"
+            else
+              echo "(no source commits beyond previous main tip)"
+            fi
+          } > "$message_file"
+
+          git commit --allow-empty -F "$message_file"
+
+      - name: Push target branch
+        if: steps.gate.outputs.should_publish == 'true' && steps.request.outputs.dry_run != 'true'
+        env:
+          TARGET_BRANCH: ${{ steps.request.outputs.target_branch }}
+        run: |
+          if [ "$TARGET_BRANCH" = "main" ]; then
+            git push origin HEAD:main
+          else
+            git push --force-with-lease origin "HEAD:$TARGET_BRANCH"
+          fi
+
+      - name: Show dry-run target push
+        if: steps.gate.outputs.should_publish == 'true' && steps.request.outputs.dry_run == 'true'
+        env:
+          TARGET_BRANCH: ${{ steps.request.outputs.target_branch }}
+        run: echo "Would push HEAD to $TARGET_BRANCH."
+
+      - name: Create release tag and GitHub Release
+        if: steps.gate.outputs.should_publish == 'true' && steps.request.outputs.target_branch == 'main'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          INPUT_DRY_RUN: ${{ steps.request.outputs.dry_run }}
+          INPUT_PUBLISH: ${{ steps.request.outputs.publish_release }}
+          INPUT_CREATE_RELEASE: ${{ steps.request.outputs.create_release }}
+        run: |
+          args=(--target HEAD)
+          if [ "$INPUT_DRY_RUN" = "true" ]; then
+            args+=(--dry-run)
+          fi
+          if [ "$INPUT_PUBLISH" = "true" ]; then
+            args+=(--publish)
+          fi
+          if [ "$INPUT_CREATE_RELEASE" != "true" ]; then
+            args+=(--skip-release)
+          fi
+          scripts/release/publish-github-release.sh "${args[@]}"
+
+      - name: Skip release tag for rehearsal target
+        if: steps.gate.outputs.should_publish == 'true' && steps.request.outputs.target_branch != 'main'
+        run: echo "Skipping release tag and GitHub Release for non-main publish rehearsal target."

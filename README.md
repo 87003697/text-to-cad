@@ -58,6 +58,9 @@ robot description files, simulation, and local review.
 
 ## 💻 Installation
 
+For production use, install or clone from `main`; that branch contains the
+generated skill/plugin outputs needed by provider installers.
+
 ### Skills
 
 Install CAD Skills with the Skills CLI:
@@ -86,7 +89,8 @@ claude plugin install cad@text-to-cad
 ```
 
 Restart your agent if newly installed skills do not appear. For local
-development symlink guidance, see [CONTRIBUTING.md](CONTRIBUTING.md).
+development, branch from `develop`, open PRs against `develop`, and use the symlink
+workflow in [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## 📸 Screenshots
 
@@ -196,5 +200,6 @@ git lfs pull --include="benchmarks/**"
 
 ## 🛠️ Contributing
 
-For local development, contribution workflow, local skill linking, and validation guidance, see
+Development happens from the `develop` branch; open PRs against `develop`, not `main`.
+For local contribution workflow, skill linking, and validation guidance, see
 [CONTRIBUTING.md](CONTRIBUTING.md).
