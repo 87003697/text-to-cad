@@ -41,8 +41,8 @@ the GitHub workflows.
 - `packages/`: shared source packages copied or vendored into consuming
   runtimes.
 - `docs/`: documentation site.
-- `tests/`: repo-wide policy tests that are not owned by one package, skill, or
-  app runtime.
+- `tests/`: root-owned test suites for skills, packages, viewer services, and
+  repo-wide policy.
 - `scripts/`: durable repo commands grouped by purpose.
 
 ## Repo Rules
