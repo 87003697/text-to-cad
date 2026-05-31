@@ -13,6 +13,7 @@ import {
   stepFileStatusItems,
   viewerAlertFileStatusItem
 } from "./fileStatusItems.js";
+import { BUILDABLE_STEP_ARTIFACT_ERROR_CODES } from "./stepArtifactStatus.js";
 
 const viewerServerInfo = {
   workspaceRoot: "/workspace/text-to-cad",
@@ -292,32 +293,51 @@ test("buildFileStatusItems combines producers and exposes the most intense level
 });
 
 test("stepFileStatusItems hides regenerable STEP artifact issues until three generation failures", () => {
-  const entry = {
-    file: "simple/part.step",
-    kind: "part",
-    artifact: {
-      ok: false,
-      error: "missing_step_hash",
-      message: "GLB STEP_topology is missing STEP file identity."
+  for (const code of BUILDABLE_STEP_ARTIFACT_ERROR_CODES) {
+    const entry = {
+      file: "simple/part.step",
+      kind: "part",
+      artifact: {
+        ok: false,
+        error: code,
+        message: "GLB STEP_topology is missing STEP file identity."
+      }
+    };
+
+    assert.deepEqual(stepFileStatusItems({ entry }), [], code);
+
+    assert.deepEqual(stepFileStatusItems({
+      entry,
+      stepArtifactGenerationState: { status: "loading", failureCount: 2 }
+    }), [], code);
+
+    assert.equal(stepFileStatusItems({
+      entry,
+      stepArtifactGenerationState: failedStepArtifactGenerationState
+    })[0]?.code, code);
+
+    assert.equal(stepFileStatusItems({
+      entry,
+      stepArtifactGenerationAvailable: false
+    })[0]?.code, code);
+  }
+});
+
+test("stepFileStatusItems does not hide non-regenerable STEP artifact issues", () => {
+  const items = stepFileStatusItems({
+    entry: {
+      file: "simple/part.step",
+      kind: "part",
+      artifact: {
+        ok: false,
+        error: "invalid_step_artifact_schema",
+        message: "Generated STEP artifact cannot be read."
+      }
     }
-  };
+  });
 
-  assert.deepEqual(stepFileStatusItems({ entry }), []);
-
-  assert.deepEqual(stepFileStatusItems({
-    entry,
-    stepArtifactGenerationState: { status: "loading", failureCount: 2 }
-  }), []);
-
-  assert.equal(stepFileStatusItems({
-    entry,
-    stepArtifactGenerationState: failedStepArtifactGenerationState
-  })[0]?.code, "missing_step_hash");
-
-  assert.equal(stepFileStatusItems({
-    entry,
-    stepArtifactGenerationAvailable: false
-  })[0]?.code, "missing_step_hash");
+  assert.equal(items.length, 1);
+  assert.equal(items[0].code, "invalid_step_artifact_schema");
 });
 
 test("fileStatusWarningOrErrorItems renders errors before warnings", () => {
