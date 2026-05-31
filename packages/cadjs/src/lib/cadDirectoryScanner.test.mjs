@@ -534,6 +534,7 @@ test("scanCadDirectory keeps Python artifact current when STEP file hash matches
       stepHash,
       entryKind: "part",
     }));
+    writeFile(generatorPath, "def gen_step():\n    return 'changed source, same STEP'\n");
 
     const catalog = scanCadDirectory({ repoRoot, rootDir: "workspace" });
     const entry = entryByFile(catalog, "generated/generated.step");

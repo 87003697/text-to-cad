@@ -173,3 +173,38 @@ test("ensureStepTopologyArtifact can write Python STEP after the GLB is ready", 
   assert.equal(metadata.sourcePath, "../sources/robot.py");
   assert.equal(metadata.sourceHash, indexTopology.sourceHash);
 });
+
+test("ensureStepTopologyArtifact regenerates existing same-stem STEP artifacts from STEP bytes", async (t) => {
+  const repoRoot = makeTempRepo();
+  t.after(() => fs.rmSync(repoRoot, { recursive: true, force: true }));
+  const stepPath = path.join(repoRoot, "workspace/generated/robot.step");
+  const generatorPath = path.join(repoRoot, "workspace/generated/robot.py");
+  writePythonBoxGenerator(generatorPath);
+
+  await ensureStepTopologyArtifact({
+    repoRoot,
+    stepPath,
+    sourcePath: generatorPath,
+    skipStepWrite: true,
+    force: true,
+    writeStepAfterArtifact: true,
+  });
+  await waitForStepMetadata(stepPath, (candidate) => candidate.sourcePath === "robot.py");
+
+  const glbPath = inlineStepGlbArtifactPathForSource(stepPath);
+  fs.rmSync(glbPath);
+
+  const result = await ensureStepTopologyArtifact({
+    repoRoot,
+    stepPath,
+    force: true,
+  });
+
+  assert.equal(result.ok, true);
+  assert.equal(result.validation.ok, true);
+  assert.equal(result.validation.sourceKind, "step");
+
+  const indexTopology = readStepTopologyIndexManifest(glbPath);
+  assert.equal(indexTopology.sourceKind, "step");
+  assert.equal(indexTopology.stepPath, "robot.step");
+});

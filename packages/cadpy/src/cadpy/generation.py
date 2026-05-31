@@ -1487,6 +1487,10 @@ def _edge_visibility_classes_match_manifest(
 
 def _artifact_source_kind_matches_spec(spec: EntrySpec, manifest: Mapping[str, object]) -> bool:
     source_kind = str(manifest.get("sourceKind") or "step").strip().lower()
+    if spec.source != "generated" and spec.step_path is not None and spec.step_path.is_file():
+        if source_kind == "python":
+            return bool(str(manifest.get("stepHash") or "").strip())
+        return source_kind == "step"
     expected = "python" if spec.source == "generated" and spec.script_path is not None else "step"
     return source_kind == expected
 

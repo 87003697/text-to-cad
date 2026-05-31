@@ -186,15 +186,22 @@ export async function ensureStepTopologyArtifact({
     currentArtifactError.sourcePath ||
     "",
   ).trim();
-  const sameStemSourcePath = sameStemPythonGeneratorPath(resolvedStepPath);
-  const inferredSourcePath = resolvedSourcePath || (
-    currentSourceKind === "python" && currentSourcePath
-      ? path.resolve(resolvedRepoRoot, currentSourcePath)
-      : ""
-  ) || sameStemSourcePath;
+  const stepFileExists = fs.existsSync(resolvedStepPath);
+  const shouldInferPythonSource = Boolean(
+    resolvedSourcePath ||
+    skipStepWrite ||
+    writeStepAfterArtifact ||
+    !stepFileExists
+  );
+  const inferredSourcePath = shouldInferPythonSource
+    ? resolvedSourcePath || (
+        currentSourceKind === "python" && currentSourcePath
+          ? path.resolve(resolvedRepoRoot, currentSourcePath)
+          : ""
+      ) || sameStemPythonGeneratorPath(resolvedStepPath)
+    : "";
   const resolvedSkipStepWrite = Boolean(
     skipStepWrite ||
-    currentSourceKind === "python" ||
     inferredSourcePath
   );
   const hasMeshOverride = meshTolerance !== null && meshTolerance !== undefined
@@ -252,12 +259,13 @@ export async function ensureStepArtifactsForCatalog({
   const { rootPath } = resolveViewerRoot(resolvedRepoRoot, resolvedRootDir);
   const results = [];
   for (const stepPath of collectStepFiles(rootPath)) {
+    const stepFileExists = fs.existsSync(stepPath);
     try {
       results.push(await ensureStepTopologyArtifact({
         repoRoot: resolvedRepoRoot,
         stepPath,
         force,
-        skipStepWrite: Boolean(sameStemPythonGeneratorPath(stepPath)),
+        skipStepWrite: !stepFileExists && Boolean(sameStemPythonGeneratorPath(stepPath)),
         meshTolerance,
         meshAngularTolerance,
       }));
