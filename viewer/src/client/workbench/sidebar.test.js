@@ -182,6 +182,62 @@ test("entryIconStatus marks buildable STEP artifacts as generating in production
       sourceFormat: "step",
       entryKey: "benchmarks/bracket.step",
       hasMesh: false,
+      activeGenerationFiles: ["benchmarks/.bracket.step.glb"],
+      stepArtifactGenerationAvailable: false
+    }),
+    {
+      artifactBuildable: true,
+      artifactGenerating: true,
+      artifactStale: false,
+      artifactWarning: false,
+      loading: true,
+      pending: true,
+      sourceFormat: "step",
+      statusLabel: "generating artifact"
+    }
+  );
+
+  assert.equal(
+    entryIconStatus({
+      file: "benchmarks/stale.step",
+      kind: "part",
+      artifact: {
+        ok: false,
+        error: "stale_step_artifact",
+        stale: true
+      }
+    }, {
+      sourceFormat: "step",
+      entryKey: "benchmarks/stale.step",
+      hasMesh: false
+    }).artifactBuildable,
+    true
+  );
+
+  assert.equal(
+    entryIconStatus({
+      file: "benchmarks/generated.step",
+      kind: "part",
+      sourceKind: "python",
+      artifact: {
+        ok: false,
+        error: "stale_step_artifact",
+        stale: true,
+        sourceKind: "python"
+      }
+    }, {
+      sourceFormat: "step",
+      entryKey: "benchmarks/generated.step",
+      hasMesh: false
+    }).artifactBuildable,
+    true
+  );
+
+  assert.deepEqual(
+    entryIconStatus(entry, {
+      sourceFormat: "step",
+      entryKey: "benchmarks/bracket.step",
+      hasMesh: false,
       stepArtifactGenerationAvailable: false
     }),
     {
@@ -227,14 +283,14 @@ test("entryIconStatus marks buildable STEP artifacts as generating in production
       hasMesh: true
     }),
     {
-      artifactBuildable: false,
+      artifactBuildable: true,
       artifactGenerating: false,
       artifactStale: false,
-      artifactWarning: true,
+      artifactWarning: false,
       loading: false,
       pending: false,
       sourceFormat: "step",
-      statusLabel: "artifact warning"
+      statusLabel: "artifact generates on open"
     }
   );
 
@@ -244,7 +300,7 @@ test("entryIconStatus marks buildable STEP artifacts as generating in production
       kind: "part",
       artifact: {
         ok: false,
-        error: "stale_source_identity",
+        error: "stale_step_artifact",
         stale: true
       }
     }, {
@@ -279,14 +335,14 @@ test("entryIconStatus marks buildable STEP artifacts as generating in production
       hasMesh: false
     }),
     {
-      artifactBuildable: false,
+      artifactBuildable: true,
       artifactGenerating: false,
       artifactStale: false,
-      artifactWarning: true,
+      artifactWarning: false,
       loading: false,
       pending: true,
       sourceFormat: "step",
-      statusLabel: "artifacts missing"
+      statusLabel: "artifact generates on open"
     }
   );
 });
@@ -355,7 +411,7 @@ test("entryIconStatus treats active generator runs as loading and suppresses art
     sourceKind: "python",
     artifact: {
       ok: false,
-      error: "stale_source_identity",
+      error: "stale_step_artifact",
       stale: true,
       sourceKind: "python"
     }
@@ -369,7 +425,7 @@ test("entryIconStatus treats active generator runs as loading and suppresses art
       activeGenerationFiles: ["robots/tom/robot_arm.step"]
     }),
     {
-      artifactBuildable: false,
+      artifactBuildable: true,
       artifactGenerating: false,
       artifactStale: true,
       artifactWarning: false,

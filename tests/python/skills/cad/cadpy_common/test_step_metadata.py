@@ -32,14 +32,12 @@ class TextToCadStepMetadataTests(unittest.TestCase):
             inject_text_to_cad_step_metadata(
                 step_path,
                 entry_kind="assembly",
-                source_fingerprint="fingerprint-123",
                 source_hash="source-hash-123",
             )
 
             metadata = read_text_to_cad_step_metadata(step_path)
             self.assertEqual(TEXT_TO_CAD_GENERATOR, metadata.get("generator"))
             self.assertEqual("assembly", metadata.get("entryKind"))
-            self.assertEqual("fingerprint-123", metadata.get("sourceFingerprint"))
             self.assertEqual("source-hash-123", metadata.get("sourceHash"))
             step_text = step_path.read_text(encoding="utf-8")
             self.assertIn("PROPERTY_DEFINITION('cadpy metadata','cadpy:entryKind'", step_text)
@@ -57,10 +55,6 @@ class TextToCadStepMetadataTests(unittest.TestCase):
                     "#105=REPRESENTATION('cadpy:entryKind',(#104),#7);",
                     "#106=PROPERTY_DEFINITION('cadpy metadata','cadpy:entryKind',#1);",
                     "#107=PROPERTY_DEFINITION_REPRESENTATION(#106,#105);",
-                    "#108=DESCRIPTIVE_REPRESENTATION_ITEM('cadpy:sourceFingerprint','fingerprint-tail');",
-                    "#109=REPRESENTATION('cadpy:sourceFingerprint',(#108),#7);",
-                    "#110=PROPERTY_DEFINITION('cadpy metadata','cadpy:sourceFingerprint',#1);",
-                    "#111=PROPERTY_DEFINITION_REPRESENTATION(#110,#109);",
                     "#112=DESCRIPTIVE_REPRESENTATION_ITEM('cadpy:sourceHash','source-hash-tail');",
                     "#113=REPRESENTATION('cadpy:sourceHash',(#112),#7);",
                     "#114=PROPERTY_DEFINITION('cadpy metadata','cadpy:sourceHash',#1);",
@@ -79,7 +73,6 @@ class TextToCadStepMetadataTests(unittest.TestCase):
 
             self.assertEqual(TEXT_TO_CAD_GENERATOR, metadata.get("generator"))
             self.assertEqual("assembly", metadata.get("entryKind"))
-            self.assertEqual("fingerprint-tail", metadata.get("sourceFingerprint"))
             self.assertEqual("source-hash-tail", metadata.get("sourceHash"))
 
 

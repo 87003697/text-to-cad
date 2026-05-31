@@ -1,7 +1,6 @@
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
 import {
   inlineStepGlbArtifactPathForSource,
   isInlineStepGlbArtifactPath,
@@ -26,27 +25,6 @@ export const CAD_CATALOG_SCHEMA_VERSION = 4;
 
 const SOURCE_EXTENSIONS = new Set([".step", ".stp", ".stl", ".3mf", ".glb", ".gcode", ".dxf", ".urdf", ".srdf", ".sdf"]);
 const REGENERATE_STEP_COMMAND = "python -m cadpy.step_artifact --repo-root . --step";
-const PYTHON_SOURCE_HASH_SKIPPED_PATH_PARTS = new Set([
-  "__pycache__",
-  ".cache",
-  ".eggs",
-  ".env",
-  ".git",
-  ".hg",
-  ".mypy_cache",
-  ".pytest_cache",
-  ".ruff_cache",
-  ".svn",
-  ".tox",
-  ".venv",
-  "build",
-  "dist",
-  "env",
-  "node_modules",
-  "site-packages",
-  "venv",
-]);
-const CADJS_PACKAGE_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
 export const VIEWER_SKIPPED_DIRECTORIES = new Set([
   ".agents",
   ".cache",
@@ -194,279 +172,6 @@ function dedupePaths(paths) {
   return result;
 }
 
-function pythonSourceSearchPaths(repoRoot, scriptPath) {
-  const resolvedRepoRoot = path.resolve(repoRoot);
-  const cadRoot = path.resolve(resolvedRepoRoot, "cad");
-  const resolvedScriptPath = path.resolve(scriptPath);
-  const paths = [
-    resolvedRepoRoot,
-    cadRoot,
-    CADJS_PACKAGE_ROOT,
-    path.resolve(resolvedRepoRoot, "skills", "cad", "scripts"),
-    path.dirname(resolvedScriptPath),
-  ];
-  const stopAt = path.dirname(resolvedRepoRoot);
-  let current = path.dirname(resolvedScriptPath);
-  for (;;) {
-    if (
-      fs.existsSync(path.join(current, "STEP", "__init__.py")) ||
-      fs.existsSync(path.join(current, "robot_common", "__init__.py"))
-    ) {
-      paths.push(current);
-    }
-    if (current === stopAt) {
-      break;
-    }
-    const next = path.dirname(current);
-    if (next === current) {
-      break;
-    }
-    current = next;
-  }
-  return dedupePaths(paths);
-}
-
-function pythonSourceManifestRoots(repoRoot) {
-  const resolvedRepoRoot = path.resolve(repoRoot);
-  return dedupePaths([
-    path.resolve(resolvedRepoRoot, "cad"),
-    resolvedRepoRoot,
-    CADJS_PACKAGE_ROOT,
-  ]);
-}
-
-function isTrackablePythonSource(filePath, allowedRoots) {
-  const resolved = path.resolve(filePath);
-  if (path.extname(resolved) !== ".py" || !fileStats(resolved)) {
-    return false;
-  }
-  if (resolved.split(path.sep).some((part) => PYTHON_SOURCE_HASH_SKIPPED_PATH_PARTS.has(part))) {
-    return false;
-  }
-  return allowedRoots.some((root) => pathIsInside(resolved, root));
-}
-
-function packageInitFiles(baseDir, packageParts, allowedRoots) {
-  const files = new Set();
-  for (let index = 1; index <= packageParts.length; index += 1) {
-    const initPath = path.join(baseDir, ...packageParts.slice(0, index), "__init__.py");
-    if (isTrackablePythonSource(initPath, allowedRoots)) {
-      files.add(path.resolve(initPath));
-    }
-  }
-  return files;
-}
-
-function resolvePythonModuleFromDirectory(baseDir, moduleName, allowedRoots) {
-  const parts = String(moduleName || "").split(".").filter(Boolean);
-  if (!parts.length) {
-    return new Set();
-  }
-  const files = new Set();
-  const moduleDir = path.join(baseDir, ...parts);
-  const leafModule = `${moduleDir}.py`;
-  if (isTrackablePythonSource(leafModule, allowedRoots)) {
-    for (const filePath of packageInitFiles(baseDir, parts.slice(0, -1), allowedRoots)) {
-      files.add(filePath);
-    }
-    files.add(path.resolve(leafModule));
-    return files;
-  }
-  const packageInit = path.join(moduleDir, "__init__.py");
-  if (isTrackablePythonSource(packageInit, allowedRoots)) {
-    for (const filePath of packageInitFiles(baseDir, parts, allowedRoots)) {
-      files.add(filePath);
-    }
-  }
-  return files;
-}
-
-function resolvePythonModule(moduleName, searchPaths, allowedRoots) {
-  const files = new Set();
-  if (!moduleName) {
-    return files;
-  }
-  for (const baseDir of searchPaths) {
-    for (const filePath of resolvePythonModuleFromDirectory(baseDir, moduleName, allowedRoots)) {
-      files.add(filePath);
-    }
-  }
-  return files;
-}
-
-function splitPythonImportAliases(rawAliases) {
-  return String(rawAliases || "")
-    .replace(/[()]/g, "")
-    .split(",")
-    .map((alias) => alias.trim().split(/\s+as\s+/i)[0].trim())
-    .filter((alias) => alias && alias !== "*");
-}
-
-function stripPythonStringAndCommentLiterals(text) {
-  let result = "";
-  for (let index = 0; index < text.length;) {
-    const char = text[index];
-    if (char === "#") {
-      while (index < text.length && text[index] !== "\n") {
-        result += " ";
-        index += 1;
-      }
-      continue;
-    }
-    if (char === "'" || char === "\"") {
-      const quote = char;
-      const triple = text.slice(index, index + 3) === quote.repeat(3);
-      const endToken = triple ? quote.repeat(3) : quote;
-      const startLength = triple ? 3 : 1;
-      result += " ".repeat(startLength);
-      index += startLength;
-      while (index < text.length) {
-        if (!triple && text[index] === "\\") {
-          result += " ";
-          index += 1;
-          if (index < text.length) {
-            result += text[index] === "\n" ? "\n" : " ";
-            index += 1;
-          }
-          continue;
-        }
-        if (text.slice(index, index + endToken.length) === endToken) {
-          result += " ".repeat(endToken.length);
-          index += endToken.length;
-          break;
-        }
-        result += text[index] === "\n" ? "\n" : " ";
-        index += 1;
-      }
-      continue;
-    }
-    result += char;
-    index += 1;
-  }
-  return result;
-}
-
-function normalizePythonImportText(text) {
-  const stripped = stripPythonStringAndCommentLiterals(text).replace(/\\\r?\n/g, " ");
-  let result = "";
-  let parenDepth = 0;
-  for (const char of stripped) {
-    if (char === "(" || char === "[" || char === "{") {
-      parenDepth += 1;
-    } else if ((char === ")" || char === "]" || char === "}") && parenDepth > 0) {
-      parenDepth -= 1;
-    }
-    result += char === "\n" && parenDepth > 0 ? " " : char;
-  }
-  return result;
-}
-
-function pythonImportDependencies(filePath, searchPaths, allowedRoots) {
-  let text = "";
-  try {
-    text = normalizePythonImportText(fs.readFileSync(filePath, "utf-8"));
-  } catch {
-    return [];
-  }
-  const dependencies = new Set();
-  const importRe = /^\s*import\s+([^\n#]+)/gm;
-  for (const match of text.matchAll(importRe)) {
-    for (const alias of splitPythonImportAliases(match[1])) {
-      for (const file of resolvePythonModule(alias, searchPaths, allowedRoots)) {
-        dependencies.add(file);
-      }
-    }
-  }
-  const fromRe = /^\s*from\s+(\.*)([A-Za-z_][\w.]*)?\s+import\s+([^\n#]+)/gm;
-  for (const match of text.matchAll(fromRe)) {
-    const level = String(match[1] || "").length;
-    const moduleName = String(match[2] || "");
-    const aliases = splitPythonImportAliases(match[3]);
-    if (level > 0) {
-      let baseDir = path.dirname(filePath);
-      for (let index = 1; index < level; index += 1) {
-        baseDir = path.dirname(baseDir);
-      }
-      for (const file of resolvePythonModuleFromDirectory(baseDir, moduleName, allowedRoots)) {
-        dependencies.add(file);
-      }
-      for (const alias of aliases) {
-        const childName = moduleName ? `${moduleName}.${alias}` : alias;
-        for (const file of resolvePythonModuleFromDirectory(baseDir, childName, allowedRoots)) {
-          dependencies.add(file);
-        }
-      }
-      continue;
-    }
-    for (const file of resolvePythonModule(moduleName, searchPaths, allowedRoots)) {
-      dependencies.add(file);
-    }
-    for (const alias of aliases) {
-      const childName = moduleName ? `${moduleName}.${alias}` : alias;
-      for (const file of resolvePythonModule(childName, searchPaths, allowedRoots)) {
-        dependencies.add(file);
-      }
-    }
-  }
-  return [...dependencies].sort();
-}
-
-function pythonSourceManifestPath(repoRoot, filePath) {
-  const resolved = path.resolve(filePath);
-  for (const root of pythonSourceManifestRoots(repoRoot)) {
-    if (pathIsInside(resolved, root)) {
-      return toPosixPath(path.relative(root, resolved));
-    }
-  }
-  return toPosixPath(resolved);
-}
-
-function comparePythonSourceManifestPath(left, right) {
-  return Buffer.compare(Buffer.from(left, "utf8"), Buffer.from(right, "utf8"));
-}
-
-function pythonSourceIdentity(repoRoot, scriptPath) {
-  const resolvedScriptPath = path.resolve(scriptPath);
-  const searchPaths = pythonSourceSearchPaths(repoRoot, resolvedScriptPath);
-  const allowedRoots = searchPaths.map((entry) => path.resolve(entry));
-  const queue = [resolvedScriptPath];
-  const seen = new Set();
-  const files = new Map();
-  while (queue.length) {
-    const current = path.resolve(queue.shift());
-    if (seen.has(current) || !isTrackablePythonSource(current, allowedRoots)) {
-      continue;
-    }
-    seen.add(current);
-    files.set(current, sha256File(current));
-    for (const dependency of pythonImportDependencies(current, searchPaths, allowedRoots)) {
-      if (!seen.has(dependency)) {
-        queue.push(dependency);
-      }
-    }
-  }
-  const manifestFiles = [...files.entries()]
-    .map(([filePath, hash]) => ({ path: pythonSourceManifestPath(repoRoot, filePath), hash }))
-    .sort((a, b) => comparePythonSourceManifestPath(a.path, b.path));
-  const digest = crypto.createHash("sha256");
-  for (const file of manifestFiles) {
-    digest.update(file.path, "utf8");
-    digest.update("\0");
-    digest.update(file.hash, "ascii");
-    digest.update("\0");
-  }
-  return {
-    sourcePath: pythonSourceManifestPath(repoRoot, resolvedScriptPath),
-    sourceHash: files.get(resolvedScriptPath) || "",
-    sourceFingerprint: digest.digest("hex"),
-    files: manifestFiles,
-  };
-}
-
-function pythonSourceHash(repoRoot, scriptPath) {
-  return pythonSourceIdentity(repoRoot, scriptPath).sourceFingerprint;
-}
-
 function normalizeManifestPath(manifestPath) {
   const value = String(manifestPath || "").trim();
   if (!value || value.includes("\0")) {
@@ -558,102 +263,6 @@ function sourcePathFromManifest(repoRoot, manifestPath, { identityRoot = null, b
     manifestSourcePath: value,
     filePath,
     identityRoot: resolvedIdentityRoot,
-  };
-}
-
-function commonAncestorPath(paths) {
-  const resolvedPaths = paths
-    .filter(Boolean)
-    .map((entry) => path.resolve(entry));
-  if (!resolvedPaths.length) {
-    return "";
-  }
-  let current = path.dirname(resolvedPaths[0]);
-  for (;;) {
-    if (resolvedPaths.every((entry) => pathIsInside(entry, current))) {
-      return current;
-    }
-    const parent = path.dirname(current);
-    if (parent === current) {
-      return current;
-    }
-    current = parent;
-  }
-}
-
-function pythonIdentityRootCandidates({ repoRoot, sourceFilePath, anchorPath = "", preferredRoot = null }) {
-  const resolvedRepoRoot = path.resolve(repoRoot);
-  const commonRoot = commonAncestorPath([sourceFilePath, anchorPath || sourceFilePath]);
-  const roots = [];
-  if (preferredRoot) {
-    roots.push(path.resolve(preferredRoot));
-  }
-  if (commonRoot) {
-    let current = path.resolve(commonRoot);
-    for (;;) {
-      roots.push(current);
-      if (current === resolvedRepoRoot || !pathIsInside(current, resolvedRepoRoot)) {
-        break;
-      }
-      const parent = path.dirname(current);
-      if (parent === current) {
-        break;
-      }
-      current = parent;
-    }
-  }
-  roots.push(resolvedRepoRoot);
-  return dedupePaths(roots).filter((root) => (
-    pathIsInside(root, resolvedRepoRoot) &&
-    pathIsInside(sourceFilePath, root)
-  ));
-}
-
-function pythonSourceIdentityForArtifact({
-  repoRoot,
-  sourceFilePath,
-  anchorPath = "",
-  preferredRoot = null,
-  artifactFingerprint = "",
-}) {
-  let fallback = null;
-  for (const root of pythonIdentityRootCandidates({ repoRoot, sourceFilePath, anchorPath, preferredRoot })) {
-    try {
-      const identity = pythonSourceIdentity(root, sourceFilePath);
-      const result = { identity, identityRoot: root };
-      if (!fallback) {
-        fallback = result;
-      }
-      if (artifactFingerprint && identity.sourceFingerprint === artifactFingerprint) {
-        return result;
-      }
-    } catch {
-      // Try the next plausible identity root.
-    }
-  }
-  return fallback || { identity: null, identityRoot: path.resolve(repoRoot) };
-}
-
-function sourceIdentityWithCurrentPythonFingerprint({
-  repoRoot,
-  sourceIdentity,
-  anchorPath,
-  artifactFingerprint,
-}) {
-  if (!sourceIdentity?.filePath) {
-    return { currentIdentity: null, currentHash: "", currentSourceHash: "" };
-  }
-  const { identity } = pythonSourceIdentityForArtifact({
-    repoRoot,
-    sourceFilePath: sourceIdentity.filePath,
-    anchorPath,
-    preferredRoot: sourceIdentity.identityRoot,
-    artifactFingerprint,
-  });
-  return {
-    currentIdentity: identity,
-    currentHash: identity?.sourceFingerprint || "",
-    currentSourceHash: identity?.sourceHash || "",
   };
 }
 
@@ -790,7 +399,6 @@ function generatedSourceStatusForFile({ repoRoot, sourcePath, kind }) {
       file: sourceIdentity.sourcePath || metadataSourcePath,
       sourcePath: sourceIdentity.sourcePath || metadataSourcePath,
       ...(metadata.sourceHash ? { sourceHash: String(metadata.sourceHash) } : {}),
-      ...(metadata.sourceFingerprint ? { sourceFingerprint: String(metadata.sourceFingerprint) } : {}),
     },
   };
   if (!sourceIdentity.filePath) {
@@ -806,40 +414,6 @@ function generatedSourceStatusForFile({ repoRoot, sourcePath, kind }) {
       },
     };
   }
-  const artifactFingerprint = String(metadata.sourceFingerprint || "").trim();
-  const {
-    currentHash,
-    currentSourceHash,
-  } = sourceIdentityWithCurrentPythonFingerprint({
-    repoRoot,
-    sourceIdentity,
-    anchorPath: sourcePath,
-    artifactFingerprint,
-  });
-  if (!artifactFingerprint) {
-    return {
-      ...base,
-      source: {
-        ...base.source,
-        file: sourceIdentity.sourcePath,
-        sourcePath: sourceIdentity.sourcePath,
-        sourceHash: String(metadata.sourceHash || ""),
-        sourceFingerprint: "",
-      },
-      sourceStatus: {
-        ok: false,
-        status: "missing_identity",
-        stale: false,
-        sourceKind: "python",
-        sourcePath: sourceIdentity.sourcePath,
-        sourceHash: String(metadata.sourceHash || ""),
-        currentSourceHash,
-        currentHash,
-        message: "Generated file is missing Python sourceFingerprint metadata.",
-      },
-    };
-  }
-  const stale = Boolean(artifactFingerprint && artifactFingerprint !== currentHash);
   return {
     ...base,
     source: {
@@ -847,19 +421,6 @@ function generatedSourceStatusForFile({ repoRoot, sourcePath, kind }) {
       file: sourceIdentity.sourcePath,
       sourcePath: sourceIdentity.sourcePath,
       sourceHash: String(metadata.sourceHash || ""),
-      sourceFingerprint: String(metadata.sourceFingerprint || ""),
-    },
-    sourceStatus: {
-      ok: !stale,
-      status: stale ? "stale" : "current",
-      stale,
-      sourceKind: "python",
-      sourcePath: sourceIdentity.sourcePath,
-      artifactHash: artifactFingerprint,
-      currentHash,
-      sourceHash: String(metadata.sourceHash || ""),
-      currentSourceHash,
-      message: stale ? "Generated file doesn't match the Python generator fingerprint." : "",
     },
   };
 }
@@ -1004,30 +565,26 @@ function stepArtifactError({ code, reason, repoRoot, cadPath, sourcePath, glbPat
   };
 }
 
-function staleSourceIdentityError({
+function staleStepArtifactError({
   repoRoot,
   cadPath,
   sourcePath,
   glbPath,
-  sourceKind,
   manifestSourcePath = "",
+  sourceKind = "step",
   artifactHash,
   currentHash,
 }) {
-  const normalizedKind = String(sourceKind || "step").trim().toLowerCase() === "python" ? "python" : "step";
-  const reason = normalizedKind === "python"
-    ? "Generated GLB doesn't match the hash of the Python generator script"
-    : "Generated GLB doesn't match the hash of the STEP file";
   return stepArtifactError({
-    code: "stale_source_identity",
-    reason,
+    code: "stale_step_artifact",
+    reason: "Generated GLB doesn't match the hash of the STEP file",
     repoRoot,
     cadPath,
     sourcePath,
     glbPath,
     details: {
       stale: true,
-      sourceKind: normalizedKind,
+      sourceKind,
       ...(manifestSourcePath ? { sourcePath: manifestSourcePath } : {}),
       artifactHash,
       currentHash,
@@ -1139,16 +696,12 @@ export function validateStepTopologyArtifact({ repoRoot, sourcePath, cadPath }) 
     }
     stepHash = String(manifest.stepHash || "").trim();
     sourceHash = String(manifest.sourceHash || "").trim();
-    const sourceFingerprint = String(manifest.sourceFingerprint || "").trim();
-    const sourceIdentityPresent = artifactUsesPythonSource ? Boolean(sourceFingerprint) : Boolean(stepHash);
-    if (!sourceIdentityPresent) {
+    if (!stepHash && fileStats(sourcePath)) {
       return {
         topology,
         stepArtifact: stepArtifactError({
-          code: "missing_source_identity",
-          reason: artifactUsesPythonSource
-            ? "GLB STEP_topology is missing Python generator identity"
-            : "GLB STEP_topology is missing STEP file identity",
+          code: "missing_step_hash",
+          reason: "GLB STEP_topology is missing STEP file identity",
           repoRoot,
           cadPath,
           sourcePath,
@@ -1157,40 +710,26 @@ export function validateStepTopologyArtifact({ repoRoot, sourcePath, cadPath }) 
         }),
         glbPath,
         stepHash,
-          sourceHash,
-          sourceFingerprint,
+        sourceHash,
       };
     }
-    const currentSourceIdentity = artifactUsesPythonSource
-      ? pythonSourceIdentityForArtifact({
-          repoRoot,
-          sourceFilePath: sourceIdentity.filePath,
-          anchorPath: sourcePath,
-          preferredRoot: sourceIdentity.identityRoot || manifestIdentityRoot,
-          artifactFingerprint: sourceFingerprint,
-        }).identity
-      : null;
-    const currentSourceFingerprint = artifactUsesPythonSource
-      ? currentSourceIdentity?.sourceFingerprint || ""
-      : (fileStats(sourceIdentity.filePath || sourcePath) ? sha256File(sourceIdentity.filePath || sourcePath) : "");
-    const artifactSourceFingerprint = artifactUsesPythonSource ? sourceFingerprint : stepHash;
-    if (currentSourceFingerprint && artifactSourceFingerprint !== currentSourceFingerprint) {
+    const currentStepHash = fileStats(sourcePath) ? sha256File(sourcePath) : "";
+    if (currentStepHash && stepHash !== currentStepHash) {
       return {
         topology,
-        stepArtifact: staleSourceIdentityError({
+        stepArtifact: staleStepArtifactError({
           repoRoot,
           cadPath,
           sourcePath,
           glbPath,
-          sourceKind: artifactSourceKind,
           manifestSourcePath: artifactSourcePath,
-          artifactHash: artifactSourceFingerprint,
-          currentHash: currentSourceFingerprint,
+          sourceKind: artifactNormalizedSourceKind,
+          artifactHash: stepHash,
+          currentHash: currentStepHash,
         }),
         glbPath,
         stepHash,
         sourceHash,
-        sourceFingerprint,
       };
     }
     let edgeRendering = null;
@@ -1213,10 +752,7 @@ export function validateStepTopologyArtifact({ repoRoot, sourcePath, cadPath }) 
         !isCurrentStepTopologySchemaVersion(edgeManifest.schemaVersion) ||
         String(edgeManifest.profile || "") !== "surface-edges" ||
         String(edgeManifest.sourcePath || "").trim() !== String(manifest.sourcePath || "").trim() ||
-        (artifactUsesPythonSource
-          ? String(edgeManifest.sourceKind || "").trim().toLowerCase() !== "python" ||
-            String(edgeManifest.sourceFingerprint || "").trim() !== sourceFingerprint
-          : String(edgeManifest.stepHash || "").trim() !== stepHash) ||
+        (stepHash && String(edgeManifest.stepHash || "").trim() !== stepHash) ||
         !edgeVisibilityClasses.length ||
         edgeVisibilityClasses.join("\n") !== indexEdgeVisibilityClasses.join("\n") ||
         !edgeVisibilityClasses.includes(STEP_EDGE_VISIBILITY_CLASSES.FEATURE) ||
@@ -1235,8 +771,7 @@ export function validateStepTopologyArtifact({ repoRoot, sourcePath, cadPath }) 
         }),
         glbPath,
         stepHash,
-          sourceHash,
-          sourceFingerprint,
+        sourceHash,
         };
       }
       edgeRendering = edgeManifest.edgeRendering && typeof edgeManifest.edgeRendering === "object"
@@ -1271,7 +806,6 @@ export function validateStepTopologyArtifact({ repoRoot, sourcePath, cadPath }) 
           glbPath,
           stepHash,
           sourceHash,
-          sourceFingerprint,
         };
       }
     } catch {
@@ -1289,7 +823,6 @@ export function validateStepTopologyArtifact({ repoRoot, sourcePath, cadPath }) 
         glbPath,
         stepHash,
         sourceHash,
-        sourceFingerprint,
       };
     }
     topology.hasDisplayEdges = true;
@@ -1317,7 +850,6 @@ export function validateStepTopologyArtifact({ repoRoot, sourcePath, cadPath }) 
           glbPath,
           stepHash,
           sourceHash,
-          sourceFingerprint,
         };
       }
     } catch {
@@ -1335,9 +867,8 @@ export function validateStepTopologyArtifact({ repoRoot, sourcePath, cadPath }) 
         glbPath,
         stepHash,
         sourceHash,
-        sourceFingerprint,
-      };
-    }
+        };
+      }
     topology.hasSelector = true;
     const stepArtifact = {
       ok: true,
@@ -1348,7 +879,7 @@ export function validateStepTopologyArtifact({ repoRoot, sourcePath, cadPath }) 
       ...(artifactUsesPythonSource
         ? {
             sourceHash,
-            ...(sourceFingerprint ? { sourceFingerprint } : {}),
+            ...(stepHash ? { stepHash } : {}),
           }
         : {
             stepHash,
@@ -1360,7 +891,6 @@ export function validateStepTopologyArtifact({ repoRoot, sourcePath, cadPath }) 
       glbPath,
       stepHash,
       sourceHash,
-      sourceFingerprint,
     };
   } catch {
     return fail(
@@ -1400,33 +930,27 @@ export function readStepSourceStatus({
     cadPath: normalizedCadPath,
   });
   const stepArtifact = validation.stepArtifact || {};
-  const stepArtifactError = stepArtifact.error && typeof stepArtifact.error === "object"
-    ? stepArtifact.error
-    : {};
   const artifact = catalogArtifactFromValidation(stepArtifact) || null;
-  let resolvedPythonSourcePath = pythonSourcePath ? path.resolve(pythonSourcePath) : "";
-  const artifactSourceKind = String(
-    stepArtifact.sourceKind ||
-    stepArtifactError.sourceKind ||
-    "",
-  ).trim().toLowerCase();
-  if (artifactSourceKind === "step") {
-    resolvedPythonSourcePath = "";
-  } else if (!resolvedPythonSourcePath && artifactSourceKind === "python") {
-    const manifestSourcePath = String(stepArtifact.sourcePath || stepArtifactError.sourcePath || "").trim();
-    if (manifestSourcePath) {
-      resolvedPythonSourcePath = path.resolve(resolvedRepoRoot, manifestSourcePath);
-    }
-  }
-  const sourceKind = resolvedPythonSourcePath || artifactSourceKind === "python" ? "python" : "step";
+  const normalizedPythonSourcePath = pythonSourcePath
+    ? repoRelativePath(
+        resolvedRepoRoot,
+        path.isAbsolute(pythonSourcePath)
+          ? path.resolve(pythonSourcePath)
+          : path.resolve(resolvedRepoRoot, pythonSourcePath),
+      )
+    : "";
+  const hasPythonSource = Boolean(normalizedPythonSourcePath) ||
+    String(stepArtifact.sourceKind || artifact?.sourceKind || "").trim().toLowerCase() === "python";
+  const sourceKind = hasPythonSource ? "python" : "step";
   const file = repoRelativePath(resolvedRepoRoot, resolvedStepPath);
+  const sourcePath = String(stepArtifact.sourcePath || artifact?.sourcePath || normalizedPythonSourcePath || "").trim();
   const base = {
     ok: true,
     file,
     stepPath: file,
     sourceKind,
     artifact,
-    ...(resolvedPythonSourcePath ? { sourcePath: repoRelativePath(resolvedRepoRoot, resolvedPythonSourcePath) } : {}),
+    ...(sourcePath ? { sourcePath } : {}),
   };
 
   if (!fileStats(resolvedStepPath)) {
@@ -1443,90 +967,6 @@ export function readStepSourceStatus({
     };
   }
 
-  if (sourceKind !== "python") {
-    return {
-      ...base,
-      step: {
-        ok: true,
-        status: "current",
-        missing: false,
-        stale: false,
-      },
-    };
-  }
-
-  if (!resolvedPythonSourcePath || !fileStats(resolvedPythonSourcePath)) {
-    return {
-      ...base,
-      step: {
-        ok: true,
-        status: "unknown",
-        missing: false,
-        stale: false,
-        message: "Python source identity is unavailable.",
-      },
-    };
-  }
-
-  const manifestIdentityRoot = artifactSourceKind === "python"
-    ? manifestIdentityRootForStep(resolvedRepoRoot, resolvedStepPath, validation.topology?.index?.stepPath)
-    : "";
-  const resolvedIdentityRoot = manifestIdentityRoot && pathIsInside(manifestIdentityRoot, resolvedRepoRoot)
-    ? path.resolve(manifestIdentityRoot)
-    : resolvedRepoRoot;
-  const currentIdentity = pythonSourceIdentityForArtifact({
-    repoRoot: resolvedRepoRoot,
-    sourceFilePath: resolvedPythonSourcePath,
-    anchorPath: resolvedStepPath,
-    preferredRoot: resolvedIdentityRoot,
-    artifactFingerprint: String(validation.topology?.index?.sourceFingerprint || ""),
-  }).identity || pythonSourceIdentity(resolvedIdentityRoot, resolvedPythonSourcePath);
-  const currentHash = currentIdentity.sourceFingerprint;
-  let metadata = {};
-  try {
-    metadata = readTextToCadStepMetadataFile(resolvedStepPath);
-  } catch {
-    metadata = {};
-  }
-  const stepSourceHash = String(metadata.sourceHash || "").trim();
-  const stepSourceFingerprint = String(metadata.sourceFingerprint || "").trim();
-  if (!stepSourceFingerprint) {
-    return {
-      ...base,
-      ok: false,
-      step: {
-        ok: false,
-        status: "missing_identity",
-        missing: false,
-        stale: false,
-        metadataMissing: true,
-        sourceHash: stepSourceHash,
-        currentHash,
-        currentSourceHash: currentIdentity.sourceHash,
-        message: "STEP file is missing Python source identity metadata.",
-      },
-    };
-  }
-  if (stepSourceFingerprint !== currentHash) {
-    return {
-      ...base,
-      ok: false,
-      step: {
-        ok: false,
-        status: "stale",
-        missing: false,
-        stale: true,
-        artifactHash: stepSourceFingerprint,
-        currentHash,
-        sourceHash: stepSourceHash,
-        currentSourceHash: currentIdentity.sourceHash,
-        message: stepSourceFingerprint
-          ? "STEP file doesn't match the hash of the Python generator script."
-          : "STEP file is missing Python source identity metadata.",
-      },
-    };
-  }
-
   return {
     ...base,
     step: {
@@ -1534,9 +974,7 @@ export function readStepSourceStatus({
       status: "current",
       missing: false,
       stale: false,
-      currentHash,
-      sourceHash: stepSourceHash,
-      currentSourceHash: currentIdentity.sourceHash,
+      currentHash: sha256File(resolvedStepPath),
     },
   };
 }
@@ -1612,7 +1050,6 @@ function catalogArtifactFromValidation(stepArtifact) {
   const artifactHash = String(rawError.artifactHash || "").trim();
   const currentHash = String(rawError.currentHash || "").trim();
   const sourceHash = String(rawError.sourceHash || "").trim();
-  const sourceFingerprint = String(rawError.sourceFingerprint || "").trim();
   const stepPath = String(rawError.stepPath || "").trim();
   const glbPath = String(rawError.glbPath || "").trim();
   const cadPath = String(rawError.cadPath || "").trim();
@@ -1625,7 +1062,6 @@ function catalogArtifactFromValidation(stepArtifact) {
     ...(cadPath ? { cadPath } : {}),
     ...(sourceKind ? { sourceKind } : {}),
     ...(sourceHash ? { sourceHash } : {}),
-    ...(sourceFingerprint ? { sourceFingerprint } : {}),
     ...(artifactHash ? { artifactHash } : {}),
     ...(currentHash ? { currentHash } : {}),
     ...(message ? { message } : {}),
@@ -1677,7 +1113,6 @@ function readStepCatalogMetadata({ repoRoot, glbPath, sourcePath = "" } = {}) {
       sourceKind,
       sourcePath: sourceIdentity.sourcePath,
       sourceHash: String(manifest?.sourceHash || ""),
-      sourceFingerprint: String(manifest?.sourceFingerprint || ""),
       stepHash: String(manifest?.stepHash || ""),
     };
   } catch {
@@ -1710,7 +1145,6 @@ function pythonStepSourceFromStepMetadata(repoRoot, stepPath) {
   return {
     sourcePath: sourceIdentity.sourcePath,
     sourceHash: String(metadata.sourceHash || ""),
-    sourceFingerprint: String(metadata.sourceFingerprint || ""),
   };
 }
 
@@ -1763,9 +1197,6 @@ function createStepEntry({ repoRoot, rootPath, sourcePath, extension, includeArt
         sourcePath: pythonSourcePath,
         ...((stepArtifact.sourceHash || catalogMetadata.sourceHash || metadataPythonSource?.sourceHash)
           ? { sourceHash: stepArtifact.sourceHash || catalogMetadata.sourceHash || metadataPythonSource.sourceHash }
-          : {}),
-        ...((stepArtifact.sourceFingerprint || catalogMetadata.sourceFingerprint || metadataPythonSource?.sourceFingerprint)
-          ? { sourceFingerprint: stepArtifact.sourceFingerprint || catalogMetadata.sourceFingerprint || metadataPythonSource.sourceFingerprint }
           : {}),
       },
     } : {}),
@@ -2079,7 +1510,7 @@ function isCatalogRelevantPythonSource(filePath) {
   if (path.extname(resolved).toLowerCase() !== ".py") {
     return false;
   }
-  return !resolved.split(path.sep).some((part) => PYTHON_SOURCE_HASH_SKIPPED_PATH_PARTS.has(part));
+  return !resolved.split(path.sep).some((part) => VIEWER_SKIPPED_DIRECTORIES.has(part));
 }
 
 export function isCatalogRelevantPath(filePath) {

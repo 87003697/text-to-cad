@@ -10,9 +10,6 @@ requires-python = ">=3.11"
 dependencies = [
   "build123d",
   "cadquery-ocp",
-  "numpy",
-  "trimesh",
-  "vtk",
 ]
 
 [project.scripts]

@@ -141,7 +141,6 @@ export function entryHasUrdf(entry) {
 export function entryHasReferences(entry) {
   return Boolean(
     entrySourceFormat(entry) === RENDER_FORMAT.STEP &&
-    entry?.artifact?.ok !== false &&
     entryAssetUrl(entry, "glb") &&
     entryAssetHash(entry, "selectorTopology")
   );
@@ -150,7 +149,6 @@ export function entryHasReferences(entry) {
 export function entryHasDisplayEdges(entry) {
   return Boolean(
     entrySourceFormat(entry) === RENDER_FORMAT.STEP &&
-    entry?.artifact?.ok !== false &&
     entryAssetUrl(entry, "glb") &&
     entryAssetHash(entry, "displayEdgeTopology")
   );

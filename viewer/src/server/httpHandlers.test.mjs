@@ -427,7 +427,7 @@ test("CAD Viewer API middleware can claim disabled STEP artifact routes with JSO
 });
 
 
-test("CAD Viewer API middleware supports non-filesystem STEP artifact backends", async () => {
+test("CAD Viewer API middleware rejects non-filesystem STEP artifact backends", async () => {
   const calls = [];
   const middleware = createCadViewerApiMiddleware({
     backend: {
@@ -452,19 +452,9 @@ test("CAD Viewer API middleware supports non-filesystem STEP artifact backends",
 
   await middleware(req, res, () => {});
 
-  assert.equal(res.statusCode, 200);
-  assert.deepEqual(
-    calls.map((call) => ({ fileRef: call.fileRef, force: call.force, hasCatalog: !!call.catalog })),
-    [{ fileRef: "part.step", force: true, hasCatalog: true }],
-  );
+  assert.equal(res.statusCode, 501);
+  assert.deepEqual(calls, []);
   assert.deepEqual(JSON.parse(res.body), {
-    ok: true,
-    error: "",
-    result: { uploaded: true },
-    entry: { file: "part.step", kind: "part", url: "/.part.step.glb", hash: "hash", bytes: 3 },
-    catalog: {
-      schemaVersion: 4,
-      entries: [{ file: "part.step", kind: "part", url: "/.part.step.glb", hash: "hash", bytes: 3 }]
-    },
+    error: "STEP artifact generation requires a local filesystem CAD Viewer backend",
   });
 });

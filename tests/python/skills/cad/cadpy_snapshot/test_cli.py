@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import io
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -47,6 +48,25 @@ def _selector_artifact(*occurrence_ids: str) -> SimpleNamespace:
 
 
 class SnapshotCliTests(unittest.TestCase):
+    def test_cli_import_does_not_import_heavy_cad_modules(self) -> None:
+        skill_root = repo_path("skills/cad")
+        code = (
+            "import sys; sys.path.insert(0, 'scripts'); import cadpy_snapshot.__main__; "
+            "print('OCP.OCP' in sys.modules); "
+            "print('cadpy.step_scene' in sys.modules)"
+        )
+        result = subprocess.run(
+            [sys.executable, "-c", code],
+            cwd=skill_root,
+            check=False,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+        self.assertEqual("", result.stderr)
+        self.assertEqual(0, result.returncode)
+        self.assertEqual(["False", "False"], result.stdout.strip().splitlines())
+
     def test_shortcut_job_shape_stays_owned_by_python_cli(self) -> None:
         options = parse_snapshot_args(
             [
@@ -185,6 +205,104 @@ class SnapshotCliTests(unittest.TestCase):
         self.assertEqual(job["resolved"]["rootPath"], str(models))
         self.assertEqual(job["resolved"]["inputUrl"], "/__render_asset/part.step")
         self.assertEqual(job["resolved"]["glbUrl"], "/__render_asset/.part.step.glb")
+
+    def test_render_job_ensures_step_artifact_for_step_input(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory).resolve()
+            models = root / "models"
+            models.mkdir()
+            step_path = models / "part.step"
+            step_path.write_text("ISO-10303-21;\nEND-ISO-10303-21;\n", encoding="utf-8")
+            (models / ".part.step.glb").write_bytes(b"glb")
+            calls = []
+
+            def fake_ensure(target, **kwargs):
+                calls.append((target, kwargs))
+                return None
+
+            original_ensure = snapshot_main.ensure_step_topology_artifact
+            try:
+                snapshot_main.ensure_step_topology_artifact = fake_ensure
+                resolve_render_job_packet(
+                    {
+                        "input": "models/part.step",
+                        "outputs": [{"path": "tmp/iso.png", "camera": "iso"}],
+                    },
+                    cwd=root,
+                )
+            finally:
+                snapshot_main.ensure_step_topology_artifact = original_ensure
+
+        self.assertEqual(len(calls), 1)
+        target, kwargs = calls[0]
+        self.assertEqual(target.step_path, step_path)
+        self.assertEqual(target.source_path, step_path)
+        self.assertEqual(kwargs["owner"], "cad-snapshot")
+        self.assertFalse(kwargs["require_selector"])
+
+    def test_render_job_rejects_non_step_input_without_artifact_generation(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory).resolve()
+            models = root / "models"
+            models.mkdir()
+            (models / "robot.urdf").write_text("<robot name=\"r\" />\n", encoding="utf-8")
+            calls = []
+
+            def fake_ensure(target, **kwargs):
+                calls.append((target, kwargs))
+                return None
+
+            original_ensure = snapshot_main.ensure_step_topology_artifact
+            try:
+                snapshot_main.ensure_step_topology_artifact = fake_ensure
+                with self.assertRaisesRegex(
+                    SnapshotError,
+                    "Snapshot supports only STEP/STP inputs or same-stem Python generators",
+                ):
+                    resolve_render_job_packet(
+                        {
+                            "input": "models/robot.urdf",
+                            "outputs": [{"path": "tmp/iso.png", "camera": "iso"}],
+                        },
+                        cwd=root,
+                    )
+            finally:
+                snapshot_main.ensure_step_topology_artifact = original_ensure
+
+        self.assertEqual(calls, [])
+
+    def test_render_job_requires_selector_topology_for_cad_refs(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory).resolve()
+            models = root / "models"
+            models.mkdir()
+            step_path = models / "assembly.step"
+            step_path.write_text("ISO-10303-21;\nEND-ISO-10303-21;\n", encoding="utf-8")
+            (models / ".assembly.step.glb").write_bytes(b"glb")
+            calls = []
+
+            def fake_ensure(target, **kwargs):
+                calls.append((target, kwargs))
+                return _selector_artifact("o1", "o1.2")
+
+            original_ensure = snapshot_main.ensure_step_topology_artifact
+            try:
+                snapshot_main.ensure_step_topology_artifact = fake_ensure
+                resolve_render_job_packet(
+                    {
+                        "input": "models/assembly.step",
+                        "selection": {"focus": ["@cad[models/assembly#o1.2]"]},
+                        "outputs": [{"path": "tmp/iso.png", "camera": "iso"}],
+                    },
+                    cwd=root,
+                )
+            finally:
+                snapshot_main.ensure_step_topology_artifact = original_ensure
+
+        self.assertEqual(len(calls), 1)
+        target, kwargs = calls[0]
+        self.assertEqual(target.step_path, step_path)
+        self.assertTrue(kwargs["require_selector"])
 
     def test_render_job_normalizes_focus_cad_refs(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:

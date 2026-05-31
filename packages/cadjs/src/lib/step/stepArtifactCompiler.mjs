@@ -100,8 +100,8 @@ function canBuildStepArtifact(artifact) {
     "missing_surface_edge_attributes",
     "missing_selector_topology",
     "missing_source_path",
-    "missing_source_identity",
-    "stale_source_identity",
+    "missing_step_hash",
+    "stale_step_artifact",
     "unsupported_step_topology",
   ].includes(code);
 }
@@ -186,16 +186,23 @@ export async function ensureStepTopologyArtifact({
     currentArtifactError.sourcePath ||
     "",
   ).trim();
-  const inferredSourcePath = resolvedSourcePath || (
-    currentSourceKind === "python" && currentSourcePath
-      ? path.resolve(resolvedRepoRoot, currentSourcePath)
-      : ""
+  const stepFileExists = fs.existsSync(resolvedStepPath);
+  const shouldInferPythonSource = Boolean(
+    resolvedSourcePath ||
+    skipStepWrite ||
+    writeStepAfterArtifact ||
+    !stepFileExists
   );
+  const inferredSourcePath = shouldInferPythonSource
+    ? resolvedSourcePath || (
+        currentSourceKind === "python" && currentSourcePath
+          ? path.resolve(resolvedRepoRoot, currentSourcePath)
+          : ""
+      ) || sameStemPythonGeneratorPath(resolvedStepPath)
+    : "";
   const resolvedSkipStepWrite = Boolean(
     skipStepWrite ||
-    currentSourceKind === "python" ||
-    inferredSourcePath ||
-    sameStemPythonGeneratorPath(resolvedStepPath)
+    inferredSourcePath
   );
   const hasMeshOverride = meshTolerance !== null && meshTolerance !== undefined
     || meshAngularTolerance !== null && meshAngularTolerance !== undefined;
@@ -252,12 +259,13 @@ export async function ensureStepArtifactsForCatalog({
   const { rootPath } = resolveViewerRoot(resolvedRepoRoot, resolvedRootDir);
   const results = [];
   for (const stepPath of collectStepFiles(rootPath)) {
+    const stepFileExists = fs.existsSync(stepPath);
     try {
       results.push(await ensureStepTopologyArtifact({
         repoRoot: resolvedRepoRoot,
         stepPath,
         force,
-        skipStepWrite: Boolean(sameStemPythonGeneratorPath(stepPath)),
+        skipStepWrite: !stepFileExists && Boolean(sameStemPythonGeneratorPath(stepPath)),
         meshTolerance,
         meshAngularTolerance,
       }));
