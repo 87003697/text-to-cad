@@ -1,0 +1,4 @@
+interface:
+  display_name: "Drawing to CAD"
+  short_description: "Generate STEP models from technical drawings."
+  default_prompt: "Use $drawing-to-cad to extract a drawing spec from an image or PDF, model the nominal part, generate STEP, and validate it against the source drawing."

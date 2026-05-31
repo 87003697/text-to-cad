@@ -1,0 +1,40 @@
+{
+  "schema": "drawing-to-cad.pmi.v1",
+  "source": {
+    "file": "",
+    "sheet_title": "",
+    "drawing_id": "",
+    "revision": "",
+    "units": "mm",
+    "standard_hint": "",
+    "projection": "unknown",
+    "image_size_px": [0, 0]
+  },
+  "product": {
+    "name": "",
+    "part_number": "",
+    "description": ""
+  },
+  "coordinate_system": {
+    "origin": "inferred",
+    "primary_view": "",
+    "x_axis": "",
+    "y_axis": "",
+    "z_axis": ""
+  },
+  "extraction_quality": {
+    "source_kind": "",
+    "view_set": "unknown",
+    "geometry_extractability": "unknown",
+    "scale_basis": "unknown",
+    "modeling_status": "unknown",
+    "blocking_reasons": []
+  },
+  "evidence_ledger": [],
+  "datums": [],
+  "features": [],
+  "pmi": [],
+  "presentation": [],
+  "assumptions": [],
+  "open_questions": []
+}

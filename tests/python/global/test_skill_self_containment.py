@@ -26,6 +26,7 @@ SKIP_DIRS = {
 }
 PYTHON_SUFFIXES = {".py"}
 JAVASCRIPT_SUFFIXES = {".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx"}
+DOCUMENTATION_SUFFIXES = {".md", ".yaml", ".yml"}
 PACKAGE_DEPENDENCY_FIELDS = (
     "dependencies",
     "devDependencies",
@@ -40,6 +41,9 @@ JS_IMPORT_RE = re.compile(
     r"|(?:import|require)\(\s*['\"](?P<call>[^'\"]+)['\"]\s*\)"
 )
 PEP508_FILE_REF_RE = re.compile(r"@\s*(file:[^\s;]+)")
+REPO_ROOTED_SKILL_PATH_RE = re.compile(
+    r"(?<![\w./-])skills/[a-z0-9-]+(?:/[^\s`'\"<>)\]]+)?"
+)
 
 
 def _logical_abs(path: Path) -> Path:
@@ -70,6 +74,21 @@ def _walk_files(skill_root: Path, names: set[str] | None = None) -> list[Path]:
         for filename in sorted(filenames):
             if names is None or filename in names:
                 result.append(Path(dirpath) / filename)
+    return result
+
+
+def _walk_documentation_files(skill_root: Path) -> list[Path]:
+    result: list[Path] = []
+    for dirpath, dirnames, filenames in os.walk(skill_root, followlinks=False):
+        dirnames[:] = sorted(
+            name
+            for name in dirnames
+            if name not in SKIP_DIRS and not (Path(dirpath) / name).is_symlink()
+        )
+        for filename in sorted(filenames):
+            path = Path(dirpath) / filename
+            if path.suffix in DOCUMENTATION_SUFFIXES:
+                result.append(path)
     return result
 
 
@@ -414,6 +433,26 @@ class SkillSelfContainmentTest(unittest.TestCase):
 
         if errors:
             self.fail("Skill source files reference repo-root or sibling paths:\n" + "\n".join(errors))
+
+    def test_skill_documentation_uses_skill_local_paths(self) -> None:
+        errors: list[str] = []
+
+        for skill_root in _iter_skill_roots():
+            for source in _walk_documentation_files(skill_root):
+                try:
+                    lines = source.read_text(encoding="utf-8").splitlines()
+                except UnicodeDecodeError:
+                    continue
+                for line_number, line in enumerate(lines, start=1):
+                    for match in REPO_ROOTED_SKILL_PATH_RE.finditer(line):
+                        errors.append(
+                            f"{source.relative_to(REPO_ROOT)}:{line_number}: uses repo-rooted "
+                            f"skill path {match.group(0)!r}; use a path relative to the skill "
+                            "directory instead"
+                        )
+
+        if errors:
+            self.fail("Skill documentation uses repo-rooted skill paths:\n" + "\n".join(errors))
 
     def _check_requirements(self, errors: list[str], skill_root: Path, manifest: Path) -> None:
         for line_number, line in enumerate(manifest.read_text(encoding="utf-8").splitlines(), start=1):
