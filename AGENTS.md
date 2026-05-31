@@ -94,6 +94,10 @@ the GitHub workflows.
 ## Environments
 
 - Prefer `./.venv/bin/python` for CAD Python work.
+- When creating a new branch checkout or git worktree for CAD work, copy the
+  installed `.venv/` from the source checkout into the new checkout as a
+  bootstrap cache, then run the branch's dependency install/sync for the
+  workflow being changed so dependency changes are reconciled locally.
 - Install dependencies only for the workflow being changed.
 - Do not commit `.venv/`, `node_modules/`, caches, `tmp/`, local credentials, or
   printer config.
