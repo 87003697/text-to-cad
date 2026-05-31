@@ -19,45 +19,6 @@ const viewerServerInfo = {
   rootPath: "/workspace/text-to-cad/models",
 };
 
-test("stepFileStatusItems explains stale STEP source status", () => {
-  const items = stepFileStatusItems({
-    entry: {
-      file: "simple/rectangular_clamp_block.step",
-      kind: "part"
-    },
-    stepSourceStatus: {
-      file: "models/simple/rectangular_clamp_block.step",
-      stepPath: "models/simple/rectangular_clamp_block.step",
-      sourceKind: "python",
-      sourcePath: "models/simple/rectangular_clamp_block.py",
-      step: {
-        ok: false,
-        status: "stale",
-        stale: true,
-        artifactHash: "",
-        currentHash: "d60a7f19177e9070aecbb302ab5241f56af116c21427f619c61a94dc98623efc",
-        message: "STEP file is missing Python source identity metadata."
-      }
-    },
-    viewerServerInfo
-  });
-
-  assert.equal(items.length, 1);
-  assert.equal(items[0].level, FILE_STATUS_LEVELS.WARNING);
-  assert.equal(items[0].title, "STEP file stale");
-  assert.equal(items[0].message, "STEP file doesn't match the hash of the Python generator script.");
-  assert.deepEqual(items[0].details.map((item) => item.label), [
-    "STEP file",
-    "Source kind",
-    "Python source",
-    "STEP source hash",
-    "Current source hash"
-  ]);
-  assert.equal(items[0].details.find((item) => item.label === "STEP file")?.value, "simple/rectangular_clamp_block.step");
-  assert.equal(items[0].details.find((item) => item.label === "Python source")?.value, "simple/rectangular_clamp_block.py");
-  assert.equal(items[0].details[3].value, "Missing");
-});
-
 test("stepFileStatusItems treats missing STEP source files as warnings", () => {
   const items = stepFileStatusItems({
     entry: {
@@ -87,36 +48,11 @@ test("stepFileStatusItems treats missing STEP source files as warnings", () => {
     items[0].message,
     "STEP file was not generated for this Python script; only a GLB artifact is available."
   );
-});
-
-test("stepFileStatusItems explains hard-migrated missing STEP identity", () => {
-  const items = stepFileStatusItems({
-    entry: {
-      file: "simple/generated.step",
-      kind: "part"
-    },
-    stepSourceStatus: {
-      file: "models/simple/generated.step",
-      stepPath: "models/simple/generated.step",
-      sourceKind: "python",
-      sourcePath: "models/simple/generated.py",
-      step: {
-        ok: false,
-        status: "missing_identity",
-        missing: false,
-        stale: false,
-        metadataMissing: true,
-        currentHash: "fingerprint",
-        currentSourceHash: "source-hash",
-        message: "STEP file is missing Python source identity metadata."
-      }
-    }
-  });
-
-  assert.equal(items.length, 1);
-  assert.equal(items[0].level, FILE_STATUS_LEVELS.WARNING);
-  assert.equal(items[0].title, "STEP file identity missing");
-  assert.equal(items[0].message, "STEP file is missing Python source identity metadata.");
+  assert.deepEqual(items[0].details.map((item) => item.label), [
+    "STEP file",
+    "Source kind",
+    "Python source"
+  ]);
 });
 
 test("stepFileStatusItems marks missing STEP artifacts as errors", () => {
@@ -178,7 +114,7 @@ test("stepFileStatusItems reads artifact warnings from current-file status", () 
 
 test("stepFileStatusItems keeps renderable STEP artifact issues as warnings", () => {
   const renderableArtifactCases = [
-    ["stale_source_identity", true, "STEP artifact stale", "Generated GLB doesn't match the hash of the STEP file."],
+    ["stale_step_artifact", true, "STEP artifact stale", "Generated GLB doesn't match the hash of the STEP file."],
     ["missing_glb", false, "STEP artifact missing", "Generated GLB is missing."],
     ["missing_step_topology", false, "STEP artifact metadata warning", "Generated GLB is missing STEP topology metadata."],
     ["missing_selector_topology", false, "STEP artifact metadata warning", "Generated GLB is missing selector topology metadata."],
@@ -186,7 +122,7 @@ test("stepFileStatusItems keeps renderable STEP artifact issues as warnings", ()
     ["missing_surface_edge_attributes", false, "STEP artifact metadata warning", "Generated GLB is missing surface edge render attributes."],
     ["unsupported_step_topology", false, "STEP artifact metadata warning", "Generated GLB topology metadata is unsupported."],
     ["missing_source_path", false, "STEP artifact metadata warning", "Generated GLB metadata is missing its source path."],
-    ["missing_source_identity", false, "STEP artifact metadata warning", "Generated GLB is missing the hash of the STEP file."]
+    ["missing_step_hash", false, "STEP artifact metadata warning", "Generated GLB is missing the hash of the STEP file."]
   ];
 
   for (const [error, stale, title, message] of renderableArtifactCases) {
@@ -267,7 +203,7 @@ test("parser warnings normalize to status items", () => {
   })[0].title, "SDF warning");
 });
 
-test("generated source status explains missing hard-migrated fingerprints", () => {
+test("generated source status explains missing generator source", () => {
   const items = buildFileStatusItems({
     entry: {
       file: "robots/robot.urdf",
@@ -275,11 +211,11 @@ test("generated source status explains missing hard-migrated fingerprints", () =
       sourceKind: "python",
       sourceStatus: {
         ok: false,
-        status: "missing_identity",
+        status: "missing",
         stale: false,
         sourceKind: "python",
         sourcePath: "models/robots/robot_urdf.py",
-        message: "Generated file is missing Python sourceFingerprint metadata."
+        message: "Python generator source is unavailable."
       }
     },
     fileSheetKind: "urdf",
@@ -288,10 +224,10 @@ test("generated source status explains missing hard-migrated fingerprints", () =
 
   assert.equal(items.length, 1);
   assert.equal(items[0].level, FILE_STATUS_LEVELS.WARNING);
-  assert.equal(items[0].title, "Generated file identity missing");
+  assert.equal(items[0].title, "Generator source missing");
   assert.equal(
     items[0].message,
-    "This file records a Python generator path, but it is missing sourceFingerprint metadata."
+    "This file records a Python generator path, but that source file is not available."
   );
   assert.equal(items[0].details.find((item) => item.label === "Python source")?.value, "robots/robot_urdf.py");
 });
@@ -319,7 +255,7 @@ test("buildFileStatusItems combines producers and exposes the most intense level
       kind: "part",
       artifact: {
         ok: false,
-        error: "stale_source_identity",
+        error: "stale_step_artifact",
         stale: true,
         message: "GLB was generated from older source."
       }
@@ -349,9 +285,9 @@ test("formatFileStatusItemForAgent copies status items with details", () => {
       kind: "part",
       artifact: {
         ok: false,
-        error: "stale_source_identity",
+        error: "stale_step_artifact",
         stale: true,
-        sourceKind: "python",
+        sourceKind: "step",
         stepPath: "models/simple/part.step",
         glbPath: "models/simple/.part.step.glb",
         artifactHash: "old-hash",
@@ -365,15 +301,15 @@ test("formatFileStatusItemForAgent copies status items with details", () => {
     "CAD Viewer issue",
     "Level: Error",
     "Title: STEP artifact stale",
-    "Description: Generated GLB doesn't match the hash of the Python generator script.",
+    "Description: Generated GLB doesn't match the hash of the STEP file.",
     "Source: catalog",
-    "Code: stale_source_identity",
+    "Code: stale_step_artifact",
     "",
     "Details:",
-    "- Code: stale_source_identity",
+    "- Code: stale_step_artifact",
     "- STEP file: simple/part.step",
     "- GLB artifact: simple/.part.step.glb",
-    "- Source kind: python",
+    "- Source kind: step",
     "- Artifact hash: old-hash",
     "- Current hash: new-hash"
   ].join("\n"));

@@ -108,7 +108,6 @@ class LoadedStepScene:
     source_kind: str = "step"
     source_path: str | None = None
     source_hash: str | None = None
-    source_fingerprint: str | None = None
     mesh_signature: tuple[float, float, bool] | None = None
     glb_mesh_payloads: dict[tuple[object, ...], Any] = field(default_factory=dict)
     export_shape: Any | None = None
@@ -2567,12 +2566,12 @@ def extract_selectors_from_scene(
         source_hash = str(getattr(scene, "source_hash", "") or "").strip()
         if source_hash:
             manifest["sourceHash"] = source_hash
-        source_fingerprint = str(getattr(scene, "source_fingerprint", "") or "").strip()
-        if source_fingerprint:
-            manifest["sourceFingerprint"] = source_fingerprint
         manifest["generatedAt"] = datetime.now(timezone.utc).isoformat(timespec="seconds")
-    else:
-        manifest["stepHash"] = _scene_step_hash(scene)
+    step_hash = str(getattr(scene, "step_hash", "") or "").strip()
+    if not step_hash and scene.step_path.is_file():
+        step_hash = _scene_step_hash(scene)
+    if step_hash:
+        manifest["stepHash"] = step_hash
 
     if profile != SelectorProfile.SUMMARY:
         if profile == SelectorProfile.ARTIFACT:

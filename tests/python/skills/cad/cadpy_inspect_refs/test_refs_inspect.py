@@ -427,7 +427,8 @@ class InspectRefsTests(unittest.TestCase):
             edge_manifest["sourceKind"] = "python"
             edge_manifest["sourcePath"] = topology_manifest.get("sourcePath")
             edge_manifest["sourceHash"] = topology_manifest.get("sourceHash")
-            edge_manifest["sourceFingerprint"] = topology_manifest.get("sourceFingerprint")
+            if topology_manifest.get("stepHash"):
+                edge_manifest["stepHash"] = topology_manifest.get("stepHash")
         else:
             edge_manifest["sourceKind"] = "step"
             edge_manifest["sourcePath"] = topology_manifest.get("sourcePath")
@@ -436,11 +437,9 @@ class InspectRefsTests(unittest.TestCase):
         stack = contextlib.ExitStack()
         with stack:
             stack.enter_context(mock.patch.object(step_targets, "find_step_path", return_value=resolved_step_path))
-            stack.enter_context(
-                mock.patch.object(cad_generation, "step_file_hash", return_value=str(topology_manifest.get("stepHash") or ""))
-                if current_hash is None
-                else mock.patch.object(cad_generation, "step_file_hash", return_value=current_hash)
-            )
+            expected_step_hash = str(topology_manifest.get("stepHash") or "") if current_hash is None else current_hash
+            stack.enter_context(mock.patch.object(step_targets, "step_file_hash", return_value=expected_step_hash))
+            stack.enter_context(mock.patch.object(cad_generation, "step_file_hash", return_value=expected_step_hash))
             stack.enter_context(
                 mock.patch.object(
                     step_targets,
@@ -496,7 +495,6 @@ class InspectRefsTests(unittest.TestCase):
             **_summary_manifest(self.cad_ref),
             "sourceKind": "python",
             "sourceHash": source_identity.source_hash,
-            "sourceFingerprint": source_identity.source_fingerprint,
         }
 
         with self._mock_glb_topology(manifest, include_selector=False):
@@ -717,7 +715,7 @@ class InspectRefsTests(unittest.TestCase):
                 **_refs_manifest(assembly_cad_ref),
                 "sourceKind": "python",
                 "sourceHash": source_identity.source_hash,
-                "sourceFingerprint": source_identity.source_fingerprint,
+                "stepHash": cad_generation.step_file_hash(assembly_step_path),
             },
             step_path=assembly_step_path,
         ):

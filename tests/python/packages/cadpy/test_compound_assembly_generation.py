@@ -234,8 +234,8 @@ class CompoundAssemblyGenerationTests(unittest.TestCase):
                     generation,
                     "python_source_hash",
                     return_value=SimpleNamespace(
+                        source_path="robot_arm.py",
                         source_hash="hash-123",
-                        source_fingerprint="fingerprint-123",
                     ),
                 ),
                 mock.patch.object(generation, "export_build123d_step_scene", return_value=scene) as export_scene,
@@ -282,7 +282,6 @@ class CompoundAssemblyGenerationTests(unittest.TestCase):
             scene.source_kind = "python"
             scene.source_path = "compound.py"
             scene.source_hash = "source-hash"
-            scene.source_fingerprint = "source-fingerprint"
             spec = generation.EntrySpec(
                 source_ref="compound.py",
                 cad_ref="compound",

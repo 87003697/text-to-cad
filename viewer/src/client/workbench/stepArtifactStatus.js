@@ -7,8 +7,8 @@ const BUILDABLE_STEP_ARTIFACT_ERROR_CODES = new Set([
   "missing_surface_edge_attributes",
   "missing_selector_topology",
   "missing_source_path",
-  "missing_source_identity",
-  "stale_source_identity",
+  "missing_step_hash",
+  "stale_step_artifact",
   "unsupported_step_topology"
 ]);
 
@@ -31,7 +31,7 @@ export function stepArtifactIsStale(entry, sourceFormat) {
     entry?.artifact?.ok === false &&
     (
       entry.artifact.stale === true ||
-      String(entry.artifact.error || "") === "stale_source_identity"
+      String(entry.artifact.error || "") === "stale_step_artifact"
     )
   );
 }

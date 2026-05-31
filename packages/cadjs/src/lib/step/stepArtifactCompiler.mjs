@@ -100,8 +100,8 @@ function canBuildStepArtifact(artifact) {
     "missing_surface_edge_attributes",
     "missing_selector_topology",
     "missing_source_path",
-    "missing_source_identity",
-    "stale_source_identity",
+    "missing_step_hash",
+    "stale_step_artifact",
     "unsupported_step_topology",
   ].includes(code);
 }
@@ -186,16 +186,16 @@ export async function ensureStepTopologyArtifact({
     currentArtifactError.sourcePath ||
     "",
   ).trim();
+  const sameStemSourcePath = sameStemPythonGeneratorPath(resolvedStepPath);
   const inferredSourcePath = resolvedSourcePath || (
     currentSourceKind === "python" && currentSourcePath
       ? path.resolve(resolvedRepoRoot, currentSourcePath)
       : ""
-  );
+  ) || sameStemSourcePath;
   const resolvedSkipStepWrite = Boolean(
     skipStepWrite ||
     currentSourceKind === "python" ||
-    inferredSourcePath ||
-    sameStemPythonGeneratorPath(resolvedStepPath)
+    inferredSourcePath
   );
   const hasMeshOverride = meshTolerance !== null && meshTolerance !== undefined
     || meshAngularTolerance !== null && meshAngularTolerance !== undefined;

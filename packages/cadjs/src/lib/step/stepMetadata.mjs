@@ -5,7 +5,6 @@ export const TEXT_TO_CAD_GENERATOR_PROPERTY = "cadpy:generator";
 export const TEXT_TO_CAD_ENTRY_KIND_PROPERTY = "cadpy:entryKind";
 export const TEXT_TO_CAD_SOURCE_PATH_PROPERTY = "cadpy:sourcePath";
 export const TEXT_TO_CAD_SOURCE_HASH_PROPERTY = "cadpy:sourceHash";
-export const TEXT_TO_CAD_SOURCE_FINGERPRINT_PROPERTY = "cadpy:sourceFingerprint";
 
 const STEP_STRING_PATTERN = "'(?:''|[^'])*'";
 
@@ -56,7 +55,6 @@ export function readTextToCadStepMetadataText(stepText) {
       propertyName === TEXT_TO_CAD_ENTRY_KIND_PROPERTY ||
       propertyName === TEXT_TO_CAD_SOURCE_PATH_PROPERTY ||
       propertyName === TEXT_TO_CAD_SOURCE_HASH_PROPERTY ||
-      propertyName === TEXT_TO_CAD_SOURCE_FINGERPRINT_PROPERTY ||
       propertyName === "cadpy:entry_kind"
     ) {
       propertyDefinitions.set(`#${match[1]}`, propertyName);
@@ -87,8 +85,6 @@ export function readTextToCadStepMetadataText(stepText) {
       }
     } else if (propertyName === TEXT_TO_CAD_SOURCE_HASH_PROPERTY) {
       metadata.sourceHash = item.value;
-    } else if (propertyName === TEXT_TO_CAD_SOURCE_FINGERPRINT_PROPERTY) {
-      metadata.sourceFingerprint = item.value;
     } else if (propertyName === TEXT_TO_CAD_SOURCE_PATH_PROPERTY) {
       metadata.sourcePath = item.value;
     }

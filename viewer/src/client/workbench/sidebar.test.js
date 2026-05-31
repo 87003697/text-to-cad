@@ -177,6 +177,42 @@ test("entryIconStatus marks buildable STEP artifacts as generating in production
     true
   );
 
+  assert.equal(
+    entryIconStatus({
+      file: "benchmarks/stale.step",
+      kind: "part",
+      artifact: {
+        ok: false,
+        error: "stale_step_artifact",
+        stale: true
+      }
+    }, {
+      sourceFormat: "step",
+      entryKey: "benchmarks/stale.step",
+      hasMesh: false
+    }).artifactBuildable,
+    true
+  );
+
+  assert.equal(
+    entryIconStatus({
+      file: "benchmarks/generated.step",
+      kind: "part",
+      sourceKind: "python",
+      artifact: {
+        ok: false,
+        error: "stale_step_artifact",
+        stale: true,
+        sourceKind: "python"
+      }
+    }, {
+      sourceFormat: "step",
+      entryKey: "benchmarks/generated.step",
+      hasMesh: false
+    }).artifactBuildable,
+    false
+  );
+
   assert.deepEqual(
     entryIconStatus(entry, {
       sourceFormat: "step",
@@ -244,7 +280,7 @@ test("entryIconStatus marks buildable STEP artifacts as generating in production
       kind: "part",
       artifact: {
         ok: false,
-        error: "stale_source_identity",
+        error: "stale_step_artifact",
         stale: true
       }
     }, {
@@ -355,7 +391,7 @@ test("entryIconStatus treats active generator runs as loading and suppresses art
     sourceKind: "python",
     artifact: {
       ok: false,
-      error: "stale_source_identity",
+      error: "stale_step_artifact",
       stale: true,
       sourceKind: "python"
     }

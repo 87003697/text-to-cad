@@ -79,7 +79,7 @@ export function buildViewerMeshAlert(entry, hasMeshData, loadError) {
     : null;
   if (stepArtifactError && !hasMeshData) {
     const code = String(stepArtifactError.error || "").trim();
-    const stale = stepArtifactError.stale === true || code === "stale_source_identity";
+    const stale = stepArtifactError.stale === true || code === "stale_step_artifact";
     const missingGlb = code === "missing_glb";
     const summary = stale
       ? "STEP artifact stale"

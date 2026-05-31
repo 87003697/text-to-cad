@@ -79,7 +79,6 @@ class MetadataGenerationStatusTests(unittest.TestCase):
             identity = PythonSourceIdentity(
                 source_path="src/robot.py",
                 source_hash="source-hash",
-                source_fingerprint="source-fingerprint",
             )
 
             xml = xml_with_text_to_cad_metadata(

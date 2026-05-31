@@ -39,24 +39,9 @@ function writeStep(filePath, content = "ISO-10303-21;\nEND-ISO-10303-21;\n") {
   return sha256Buffer(Buffer.from(content));
 }
 
-function writeStepWithSourceFingerprint(filePath, sourceFingerprint) {
-  return writeStep(filePath, [
-    "ISO-10303-21;",
-    "DATA;",
-    `#1=DESCRIPTIVE_REPRESENTATION_ITEM('cadpy:sourceFingerprint','${sourceFingerprint}');`,
-    "#2=REPRESENTATION('cadpy:sourceFingerprint',(#1),#7);",
-    "#3=PROPERTY_DEFINITION('cadpy metadata','cadpy:sourceFingerprint',#9);",
-    "#4=PROPERTY_DEFINITION_REPRESENTATION(#3,#2);",
-    "ENDSEC;",
-    "END-ISO-10303-21;",
-    "",
-  ].join("\n"));
-}
-
 function writeStepWithSourceMetadata(filePath, {
   sourcePath,
   sourceHash = "source-hash",
-  sourceFingerprint = "source-fingerprint",
 } = {}) {
   return writeStep(filePath, [
     "ISO-10303-21;",
@@ -69,64 +54,11 @@ function writeStepWithSourceMetadata(filePath, {
     "#6=REPRESENTATION('cadpy:sourceHash',(#5),#9);",
     "#7=PROPERTY_DEFINITION('cadpy metadata','cadpy:sourceHash',#10);",
     "#8=PROPERTY_DEFINITION_REPRESENTATION(#7,#6);",
-    `#11=DESCRIPTIVE_REPRESENTATION_ITEM('cadpy:sourceFingerprint','${sourceFingerprint}');`,
-    "#12=REPRESENTATION('cadpy:sourceFingerprint',(#11),#9);",
-    "#13=PROPERTY_DEFINITION('cadpy metadata','cadpy:sourceFingerprint',#10);",
-    "#14=PROPERTY_DEFINITION_REPRESENTATION(#13,#12);",
     "ENDSEC;",
     "END-ISO-10303-21;",
     "",
   ].join("\n"));
 }
-
-function compareSourceManifestPath(left, right) {
-  return Buffer.compare(Buffer.from(left, "utf8"), Buffer.from(right, "utf8"));
-}
-
-function pythonSourceIdentity(repoRoot, relativePaths) {
-  const sourceFileHashes = relativePaths.map((relativePath) => ({
-    path: relativePath,
-    hash: sha256Buffer(fs.readFileSync(path.join(repoRoot, relativePath))),
-  })).sort((a, b) => compareSourceManifestPath(a.path, b.path));
-  const digest = crypto.createHash("sha256");
-  for (const sourceFile of sourceFileHashes) {
-    digest.update(sourceFile.path, "utf8");
-    digest.update("\0");
-    digest.update(sourceFile.hash, "ascii");
-    digest.update("\0");
-  }
-  return {
-    sourceHash: digest.digest("hex"),
-  };
-}
-
-test("pythonSourceIdentity sorts source paths bytewise like Python", () => {
-  const repoRoot = makeTempRepo();
-  const relativePaths = [
-    "workspace/robot.py",
-    "workspace/STEP/__init__.py",
-    "workspace/STEP/assemblies/__init__.py",
-    "workspace/STEP/assemblies/base_link.py",
-  ];
-  for (const relativePath of relativePaths) {
-    writeFile(path.join(repoRoot, relativePath), `${relativePath}\n`);
-  }
-
-  const sourceHash = pythonSourceIdentity(repoRoot, relativePaths).sourceHash;
-  const digest = crypto.createHash("sha256");
-  for (const relativePath of [
-    "workspace/STEP/__init__.py",
-    "workspace/STEP/assemblies/__init__.py",
-    "workspace/STEP/assemblies/base_link.py",
-    "workspace/robot.py",
-  ]) {
-    digest.update(relativePath, "utf8");
-    digest.update("\0");
-    digest.update(sha256Buffer(fs.readFileSync(path.join(repoRoot, relativePath))), "ascii");
-    digest.update("\0");
-  }
-  assert.equal(sourceHash, digest.digest("hex"));
-});
 
 function pad4(buffer, byte = 0) {
   const padding = (4 - (buffer.length % 4)) % 4;
@@ -165,7 +97,6 @@ function topologyGlb(manifest, {
       sourceKind: manifest.sourceKind,
       sourcePath: manifest.sourcePath,
       sourceHash: manifest.sourceHash,
-      sourceFingerprint: manifest.sourceFingerprint,
       stepHash: manifest.stepHash,
       classCodes: { none: 0, feature: 1, tangent: 2, seam: 3, degenerate: 4, boundary: 5, nonManifold: 6, unknown: 7 },
       primitiveAttributes: { barycentric: "_CAD_EDGE_BARYCENTRIC", class: "_CAD_EDGE_CLASS" },
@@ -300,6 +231,7 @@ test("scanCadDirectory discovers CAD files directly and infers STEP assets", () 
     assert.ok(entry.url.startsWith(`/workspace/${file}?v=`));
     assert.equal(entry.hash.length, 64);
     assert.equal(entry.assets, undefined);
+    assert.equal(entry.artifact, undefined);
   }
   assert.ok(entryByFile(catalog, "sample_part/sample_part.gcode").url.startsWith("/workspace/sample_part/sample_part.gcode?v="));
   assert.equal(entryByFile(catalog, "sheets/bracket.dxf").kind, "dxf");
@@ -387,14 +319,14 @@ test("scanCadDirectory can skip STEP artifact status for fast catalog reads", ()
 
 test("scanCadDirectory emits minimal entries for python-backed generated GLB artifacts", () => {
   const repoRoot = makeTempRepo();
-  writeStep(path.join(repoRoot, "workspace/generated/generated.step"));
+  const stepHash = writeStep(path.join(repoRoot, "workspace/generated/generated.step"));
   writeFile(path.join(repoRoot, "workspace/generated/generated.py"), "def gen_step():\n    return None\n");
-  const { sourceHash } = pythonSourceIdentity(repoRoot, ["workspace/generated/generated.py"]);
+  const sourceHash = sha256Buffer(fs.readFileSync(path.join(repoRoot, "workspace/generated/generated.py")));
   writeFile(path.join(repoRoot, "workspace/generated/.generated.step.glb"), topologyGlb({
     sourceKind: "python",
     sourcePath: "workspace/generated/generated.py",
     sourceHash,
-    sourceFingerprint: sourceHash,
+    stepHash,
     entryKind: "part",
   }));
 
@@ -410,22 +342,18 @@ test("scanCadDirectory emits minimal entries for python-backed generated GLB art
   assert.equal(entry.step, undefined);
 });
 
-test("scanCadDirectory reads split Python source hash and fingerprint from GLB artifacts", () => {
+test("scanCadDirectory reads Python source hash from GLB artifacts", () => {
   const repoRoot = makeTempRepo();
-  writeStep(path.join(repoRoot, "workspace/generated/generated.step"));
+  const stepHash = writeStep(path.join(repoRoot, "workspace/generated/generated.step"));
   const generatorPath = path.join(repoRoot, "workspace/generated/generated.py");
   writeFile(generatorPath, "from helper import SIZE\n\ndef gen_step():\n    return None\n");
   writeFile(path.join(repoRoot, "workspace/generated/helper.py"), "SIZE = 1\n");
   const sourceHash = sha256Buffer(fs.readFileSync(generatorPath));
-  const sourceFingerprint = pythonSourceIdentity(repoRoot, [
-    "workspace/generated/generated.py",
-    "workspace/generated/helper.py",
-  ]).sourceHash;
   writeFile(path.join(repoRoot, "workspace/generated/.generated.step.glb"), topologyGlb({
     sourceKind: "python",
     sourcePath: "workspace/generated/generated.py",
     sourceHash,
-    sourceFingerprint,
+    stepHash,
     entryKind: "part",
   }));
 
@@ -435,7 +363,6 @@ test("scanCadDirectory reads split Python source hash and fingerprint from GLB a
   assert.equal(entry.artifact, undefined);
   assert.equal(entry.sourceKind, "python");
   assert.equal(entry.source.sourceHash, sourceHash);
-  assert.equal(entry.source.sourceFingerprint, sourceFingerprint);
 });
 
 test("scanCadDirectory accepts Python STEP topology generated from a nested project root", () => {
@@ -443,19 +370,15 @@ test("scanCadDirectory accepts Python STEP topology generated from a nested proj
   const projectRoot = path.join(repoRoot, "workspace/arm7");
   const stepPath = path.join(projectRoot, "STEP/assembly.step");
   const generatorPath = path.join(projectRoot, "STEP/assembly.py");
-  writeStep(stepPath);
+  const stepHash = writeStep(stepPath);
   writeFile(generatorPath, "from armkit import SIZE\n\ndef gen_step():\n    return None\n");
   writeFile(path.join(projectRoot, "armkit.py"), "SIZE = 1\n");
   const sourceHash = sha256Buffer(fs.readFileSync(generatorPath));
-  const sourceFingerprint = pythonSourceIdentity(projectRoot, [
-    "STEP/assembly.py",
-    "armkit.py",
-  ]).sourceHash;
   writeFile(path.join(projectRoot, "STEP/.assembly.step.glb"), topologyGlb({
     sourceKind: "python",
     sourcePath: "assembly.py",
     sourceHash,
-    sourceFingerprint,
+    stepHash,
     stepPath: "assembly.step",
     entryKind: "assembly",
   }));
@@ -474,7 +397,6 @@ test("scanCadDirectory accepts Python STEP topology generated from a nested proj
   assert.equal(entry.sourceKind, "python");
   assert.equal(entry.source.file, "workspace/arm7/STEP/assembly.py");
   assert.equal(entry.source.sourceHash, sourceHash);
-  assert.equal(entry.source.sourceFingerprint, sourceFingerprint);
 });
 
 test("scanCadDirectory marks non-STEP files as Python-backed from metadata comments", () => {
@@ -482,14 +404,13 @@ test("scanCadDirectory marks non-STEP files as Python-backed from metadata comme
   const generatorPath = path.join(repoRoot, "workspace/robots/robot_urdf.py");
   writeFile(generatorPath, "def gen_urdf():\n    return {'xml': '<robot name=\"sample\" />'}\n");
   const sourceHash = sha256Buffer(fs.readFileSync(generatorPath));
-  const sourceFingerprint = pythonSourceIdentity(repoRoot, ["workspace/robots/robot_urdf.py"]).sourceHash;
   writeFile(path.join(repoRoot, "workspace/robots/robot.urdf"), [
     `<!-- cadpy:sourcePath=robot_urdf.py -->`,
     `<!-- cadpy:sourceHash=${sourceHash} -->`,
-    `<!-- cadpy:sourceFingerprint=${sourceFingerprint} -->`,
     "<robot name=\"sample\" />",
     "",
   ].join("\n"));
+  writeFile(generatorPath, "def gen_urdf():\n    return {'xml': '<robot name=\"changed\" />'}\n");
 
   const catalog = scanCadDirectory({ repoRoot, rootDir: "workspace" });
   const entry = entryByFile(catalog, "robots/robot.urdf");
@@ -498,19 +419,18 @@ test("scanCadDirectory marks non-STEP files as Python-backed from metadata comme
   assert.equal(entry.sourceKind, "python");
   assert.equal(entry.source.file, "workspace/robots/robot_urdf.py");
   assert.equal(entry.source.sourceHash, sourceHash);
-  assert.equal(entry.source.sourceFingerprint, sourceFingerprint);
-  assert.equal(entry.sourceStatus.status, "current");
+  assert.equal(entry.sourceStatus, undefined);
 });
 
 test("scanCadDirectory discovers python-backed logical STEP entries from GLB artifacts", () => {
   const repoRoot = makeTempRepo();
-  writeFile(path.join(repoRoot, "workspace/generated_only/generated_only.py"), "def gen_step():\n    return None\n");
-  const { sourceHash } = pythonSourceIdentity(repoRoot, ["workspace/generated_only/generated_only.py"]);
+  const generatorPath = path.join(repoRoot, "workspace/generated_only/generated_only.py");
+  writeFile(generatorPath, "def gen_step():\n    return None\n");
+  const sourceHash = sha256Buffer(fs.readFileSync(generatorPath));
   writeFile(path.join(repoRoot, "workspace/generated_only/.generated_only.step.glb"), topologyGlb({
     sourceKind: "python",
     sourcePath: "workspace/generated_only/generated_only.py",
     sourceHash,
-    sourceFingerprint: sourceHash,
     entryKind: "assembly",
   }));
 
@@ -532,7 +452,6 @@ test("scanCadDirectory treats missing GLBs for STEP files with Python metadata a
   writeStepWithSourceMetadata(path.join(repoRoot, "workspace/generated/generated.step"), {
     sourcePath: "generated.py",
     sourceHash: "direct-source-hash",
-    sourceFingerprint: "aggregate-source-fingerprint",
   });
 
   const catalog = scanCadDirectory({ repoRoot, rootDir: "workspace" });
@@ -543,7 +462,6 @@ test("scanCadDirectory treats missing GLBs for STEP files with Python metadata a
     file: "workspace/generated/generated.py",
     sourcePath: "workspace/generated/generated.py",
     sourceHash: "direct-source-hash",
-    sourceFingerprint: "aggregate-source-fingerprint",
   });
   assert.equal(entry.artifact.error, "missing_glb");
 });
@@ -555,14 +473,9 @@ test("scanCadDirectory requires sourcePath instead of recovering Python identity
   writeFile(path.join(repoRoot, "workspace/generated/__init__.py"), "\n");
   writeFile(path.join(repoRoot, "workspace/generated/helper.py"), "def gen_step():\n    return None\n");
   writeFile(path.join(repoRoot, "workspace/generated/generated.py"), "def gen_step():\n    return None\n");
-  const { sourceHash } = pythonSourceIdentity(repoRoot, [
-    "workspace/generated/__init__.py",
-    "workspace/generated/helper.py",
-    "workspace/generated/generated.py",
-  ]);
   writeFile(path.join(repoRoot, "workspace/generated/.generated.step.glb"), topologyGlb({
     sourceKind: "python",
-    sourceHash,
+    sourceHash: "source-hash",
     entryKind: "part",
   }));
 
@@ -576,71 +489,26 @@ test("scanCadDirectory requires sourcePath instead of recovering Python identity
   assert.equal(validation.stepArtifact.error.code, "missing_source_path");
 });
 
-test("scanCadDirectory reports stale python-backed GLB source identity", () => {
-  const repoRoot = makeTempRepo();
-  writeStep(path.join(repoRoot, "workspace/generated/generated.step"));
-  writeFile(path.join(repoRoot, "workspace/generated/generated.py"), "from helper import SIZE\n\ndef gen_step():\n    return None\n");
-  writeFile(path.join(repoRoot, "workspace/generated/helper.py"), "SIZE = 1\n");
-  const previous = pythonSourceIdentity(repoRoot, [
-    "workspace/generated/generated.py",
-    "workspace/generated/helper.py",
-  ]);
-  writeFile(path.join(repoRoot, "workspace/generated/helper.py"), "SIZE = 2\n");
-  const current = pythonSourceIdentity(repoRoot, [
-    "workspace/generated/generated.py",
-    "workspace/generated/helper.py",
-  ]);
-  writeFile(path.join(repoRoot, "workspace/generated/.generated.step.glb"), topologyGlb({
-    sourceKind: "python",
-    sourcePath: "workspace/generated/generated.py",
-    sourceHash: previous.sourceHash,
-    sourceFingerprint: previous.sourceHash,
-    entryKind: "part",
-  }));
-
-  const catalog = scanCadDirectory({ repoRoot, rootDir: "workspace" });
-  const entry = entryByFile(catalog, "generated/generated.step");
-
-  assert.notEqual(previous.sourceHash, current.sourceHash);
-  assert.equal(entry.artifact.ok, false);
-  assert.equal(entry.artifact.error, "stale_source_identity");
-  assert.equal(entry.artifact.stale, true);
-  assert.equal(entry.artifact.sourceKind, "python");
-  assert.equal(entry.artifact.artifactHash, previous.sourceHash);
-  assert.equal(entry.artifact.currentHash, current.sourceHash);
-  assert.equal(
-    entry.artifact.message,
-    "Generated GLB doesn't match the hash of the Python generator script: workspace/generated/.generated.step.glb."
-  );
-  assert.ok(entry.url.startsWith("/workspace/generated/.generated.step.glb?v="));
-  assert.equal(entry.hash.length, 64);
-  assert.ok(entry.bytes > 0);
-  assert.equal(entry.stepArtifact, undefined);
-  assert.equal(entry.step, undefined);
-});
-
-test("scanCadDirectory ignores Python imports inside string literals when checking source identity", () => {
+test("scanCadDirectory ignores Python dependency changes for STEP artifact freshness", () => {
   const repoRoot = makeTempRepo();
   try {
-    writeStep(path.join(repoRoot, "workspace/generated/generated.step"));
+    const stepHash = writeStep(path.join(repoRoot, "workspace/generated/generated.step"));
+    const generatorPath = path.join(repoRoot, "workspace/generated/generated.py");
     writeFile(path.join(repoRoot, "workspace/generated/generated.py"), [
-      "\"\"\"",
-      "from helper import SIZE",
-      "\"\"\"",
-      "",
       "def gen_step():",
       "    return None",
       "",
     ].join("\n"));
+    const sourceHash = sha256Buffer(fs.readFileSync(generatorPath));
     writeFile(path.join(repoRoot, "workspace/generated/helper.py"), "SIZE = 1\n");
-    const { sourceHash } = pythonSourceIdentity(repoRoot, ["workspace/generated/generated.py"]);
     writeFile(path.join(repoRoot, "workspace/generated/.generated.step.glb"), topologyGlb({
       sourceKind: "python",
       sourcePath: "workspace/generated/generated.py",
       sourceHash,
-      sourceFingerprint: sourceHash,
+      stepHash,
       entryKind: "part",
     }));
+    writeFile(path.join(repoRoot, "workspace/generated/helper.py"), "SIZE = 2\n");
 
     const catalog = scanCadDirectory({ repoRoot, rootDir: "workspace" });
     const entry = entryByFile(catalog, "generated/generated.step");
@@ -652,115 +520,58 @@ test("scanCadDirectory ignores Python imports inside string literals when checki
   }
 });
 
-test("scanCadDirectory follows parenthesized Python import aliases when checking source identity", () => {
+test("scanCadDirectory keeps Python artifact current when STEP file hash matches", () => {
   const repoRoot = makeTempRepo();
   try {
-    writeStep(path.join(repoRoot, "workspace/generated/generated.step"));
-    writeFile(path.join(repoRoot, "workspace/generated/parts/__init__.py"), "\n");
-    writeFile(path.join(repoRoot, "workspace/generated/parts/helper.py"), "SIZE = 1\n");
-    writeFile(path.join(repoRoot, "workspace/generated/generated.py"), [
-      "from parts import (",
-      "    helper,",
-      ")",
-      "",
-      "def gen_step():",
-      "    return None",
-      "",
-    ].join("\n"));
-    const { sourceHash } = pythonSourceIdentity(repoRoot, [
-      "workspace/generated/generated.py",
-      "workspace/generated/parts/__init__.py",
-      "workspace/generated/parts/helper.py",
-    ]);
-    writeFile(path.join(repoRoot, "workspace/generated/.generated.step.glb"), topologyGlb({
-      sourceKind: "python",
-      sourcePath: "workspace/generated/generated.py",
-      sourceHash,
-      sourceFingerprint: sourceHash,
-      entryKind: "part",
-    }));
-
-    const catalog = scanCadDirectory({ repoRoot, rootDir: "workspace" });
-    const entry = entryByFile(catalog, "generated/generated.step");
-
-    assert.equal(entry.artifact, undefined);
-    assert.equal(entry.sourceKind, "python");
-  } finally {
-    fs.rmSync(repoRoot, { recursive: true, force: true });
-  }
-});
-
-test("readStepSourceStatus infers non-same-stem Python source paths from stale artifacts", () => {
-  const repoRoot = makeTempRepo();
-  try {
-    const generatorPath = path.join(repoRoot, "workspace/sources/assembly.py");
-    writeFile(generatorPath, "def gen_step():\n    return None\n");
-    const previous = pythonSourceIdentity(repoRoot, ["workspace/sources/assembly.py"]);
-    const stepPath = path.join(repoRoot, "workspace/generated/robot.step");
-    writeStepWithSourceFingerprint(stepPath, previous.sourceHash);
-    writeFile(generatorPath, "def gen_step():\n    return None\n\nSIZE = 2\n");
-    const current = pythonSourceIdentity(repoRoot, ["workspace/sources/assembly.py"]);
-  writeFile(path.join(repoRoot, "workspace/generated/.robot.step.glb"), topologyGlb({
-    sourceKind: "python",
-    sourcePath: "../sources/assembly.py",
-    sourceHash: previous.sourceHash,
-    sourceFingerprint: previous.sourceHash,
-    entryKind: "part",
-    }));
-
-    const validation = validateStepTopologyArtifact({
-      repoRoot,
-      sourcePath: stepPath,
-      cadPath: "workspace/generated/robot",
-    });
-    const status = readStepSourceStatus({ repoRoot, stepPath });
-
-    assert.equal(validation.stepArtifact.error.code, "stale_source_identity");
-    assert.equal(validation.stepArtifact.error.sourceKind, "python");
-    assert.equal(validation.stepArtifact.error.sourcePath, "workspace/sources/assembly.py");
-    assert.equal(status.sourceKind, "python");
-    assert.equal(status.sourcePath, "workspace/sources/assembly.py");
-    assert.equal(status.step.status, "stale");
-    assert.equal(status.step.artifactHash, previous.sourceHash);
-    assert.equal(status.step.currentHash, current.sourceHash);
-  } finally {
-    fs.rmSync(repoRoot, { recursive: true, force: true });
-  }
-});
-
-test("readStepSourceStatus reports missing and stale Python-backed STEP files dynamically", () => {
-  const repoRoot = makeTempRepo();
-  try {
+    const stepHash = writeStep(path.join(repoRoot, "workspace/generated/generated.step"));
     const generatorPath = path.join(repoRoot, "workspace/generated/generated.py");
     writeFile(generatorPath, "def gen_step():\n    return None\n");
+    const sourceHash = sha256Buffer(fs.readFileSync(generatorPath));
+    writeFile(path.join(repoRoot, "workspace/generated/.generated.step.glb"), topologyGlb({
+      sourceKind: "python",
+      sourcePath: "workspace/generated/generated.py",
+      sourceHash,
+      stepHash,
+      entryKind: "part",
+    }));
+
+    const catalog = scanCadDirectory({ repoRoot, rootDir: "workspace" });
+    const entry = entryByFile(catalog, "generated/generated.step");
+
+    assert.equal(entry.artifact, undefined);
+    assert.equal(entry.sourceKind, "python");
+  } finally {
+    fs.rmSync(repoRoot, { recursive: true, force: true });
+  }
+});
+
+test("readStepSourceStatus reports missing and current STEP files", () => {
+  const repoRoot = makeTempRepo();
+  try {
     const stepPath = path.join(repoRoot, "workspace/generated/generated.step");
-    const current = pythonSourceIdentity(repoRoot, ["workspace/generated/generated.py"]);
 
     const missing = readStepSourceStatus({
       repoRoot,
       stepPath,
-      pythonSourcePath: generatorPath,
     });
     assert.equal(missing.ok, false);
-    assert.equal(missing.sourceKind, "python");
+    assert.equal(missing.sourceKind, "step");
     assert.equal(missing.step.status, "missing");
 
-    writeStepWithSourceFingerprint(stepPath, "old-source-fingerprint");
-    const stale = readStepSourceStatus({
+    const pythonMissing = readStepSourceStatus({
       repoRoot,
       stepPath,
-      pythonSourcePath: generatorPath,
+      pythonSourcePath: path.join(repoRoot, "workspace/generated/generated.py"),
     });
-    assert.equal(stale.ok, false);
-    assert.equal(stale.step.status, "stale");
-    assert.equal(stale.step.currentHash, current.sourceHash);
-    assert.equal(stale.step.message, "STEP file doesn't match the hash of the Python generator script.");
+    assert.equal(pythonMissing.ok, false);
+    assert.equal(pythonMissing.sourceKind, "python");
+    assert.equal(pythonMissing.sourcePath, "workspace/generated/generated.py");
+    assert.equal(pythonMissing.step.status, "missing");
 
-    writeStepWithSourceFingerprint(stepPath, current.sourceHash);
+    writeStep(stepPath);
     const fresh = readStepSourceStatus({
       repoRoot,
       stepPath,
-      pythonSourcePath: generatorPath,
     });
     assert.equal(fresh.ok, true);
     assert.equal(fresh.step.status, "current");
@@ -769,51 +580,17 @@ test("readStepSourceStatus reports missing and stale Python-backed STEP files dy
   }
 });
 
-test("readStepSourceStatus requires STEP source fingerprint metadata", () => {
-  const repoRoot = makeTempRepo();
-  try {
-    const generatorPath = path.join(repoRoot, "workspace/generated/generated.py");
-    writeFile(generatorPath, "def gen_step():\n    return None\n");
-    const stepPath = path.join(repoRoot, "workspace/generated/generated.step");
-    writeStep(stepPath);
-    const { sourceHash } = pythonSourceIdentity(repoRoot, ["workspace/generated/generated.py"]);
-    writeFile(path.join(repoRoot, "workspace/generated/.generated.step.glb"), topologyGlb({
-      sourceKind: "python",
-      sourcePath: "workspace/generated/generated.py",
-      sourceHash,
-      sourceFingerprint: sourceHash,
-      entryKind: "part",
-    }));
-
-    const status = readStepSourceStatus({
-      repoRoot,
-      stepPath,
-      pythonSourcePath: generatorPath,
-    });
-
-    assert.equal(status.ok, false);
-    assert.equal(status.sourceKind, "python");
-    assert.equal(status.step.ok, false);
-    assert.equal(status.step.status, "missing_identity");
-    assert.equal(status.step.metadataMissing, true);
-    assert.equal(status.step.currentHash, sourceHash);
-    assert.equal(status.step.message, "STEP file is missing Python source identity metadata.");
-  } finally {
-    fs.rmSync(repoRoot, { recursive: true, force: true });
-  }
-});
-
 test("scanCadDirectory preserves Python source kind when Python artifacts have topology errors", () => {
   const repoRoot = makeTempRepo();
   try {
-    writeStep(path.join(repoRoot, "workspace/generated/generated.step"));
+    const stepHash = writeStep(path.join(repoRoot, "workspace/generated/generated.step"));
     writeFile(path.join(repoRoot, "workspace/sources/generated.py"), "def gen_step():\n    return None\n");
-    const { sourceHash } = pythonSourceIdentity(repoRoot, ["workspace/sources/generated.py"]);
+    const sourceHash = sha256Buffer(fs.readFileSync(path.join(repoRoot, "workspace/sources/generated.py")));
     writeFile(path.join(repoRoot, "workspace/generated/.generated.step.glb"), topologyGlb({
       sourceKind: "python",
       sourcePath: "workspace/sources/generated.py",
       sourceHash,
-      sourceFingerprint: sourceHash,
+      stepHash,
       entryKind: "part",
     }, { displayEdges: false }));
 
@@ -911,7 +688,7 @@ test("scanCadDirectory reports future STEP_topology schema versions", () => {
   assertStepArtifactError(entry, "unsupported_step_topology");
 });
 
-test("scanCadDirectory reports stale STEP source identity recorded in GLB artifacts", () => {
+test("scanCadDirectory reports stale STEP hashes recorded in GLB artifacts", () => {
   const repoRoot = makeTempRepo();
   const actualStepHash = writeStep(path.join(repoRoot, "workspace/sample_part/sample_part.step"));
   writeFile(path.join(repoRoot, "workspace/sample_part/.sample_part.step.glb"), topologyGlb({
@@ -925,7 +702,7 @@ test("scanCadDirectory reports stale STEP source identity recorded in GLB artifa
 
   assert.notEqual(actualStepHash, "step-hash-from-glb");
   assert.equal(entry.artifact.ok, false);
-  assert.equal(entry.artifact.error, "stale_source_identity");
+  assert.equal(entry.artifact.error, "stale_step_artifact");
   assert.equal(entry.artifact.stale, true);
   assert.equal(entry.artifact.sourceKind, "step");
   assert.equal(entry.artifact.artifactHash, "step-hash-from-glb");
@@ -939,6 +716,29 @@ test("scanCadDirectory reports stale STEP source identity recorded in GLB artifa
   assert.ok(entry.bytes > 0);
   assert.equal(entry.stepArtifact, undefined);
   assert.equal(entry.step, undefined);
+});
+
+test("scanCadDirectory preserves Python source kind for stale STEP GLB artifacts", () => {
+  const repoRoot = makeTempRepo();
+  const actualStepHash = writeStep(path.join(repoRoot, "workspace/generated/generated.step"));
+  writeFile(path.join(repoRoot, "workspace/generated/generated.py"), "def gen_step():\n    return None\n");
+  writeFile(path.join(repoRoot, "workspace/generated/.generated.step.glb"), topologyGlb({
+    sourceKind: "python",
+    sourcePath: "workspace/generated/generated.py",
+    sourceHash: "old-python-source-hash",
+    stepHash: "step-hash-from-glb",
+    entryKind: "part",
+  }));
+
+  const catalog = scanCadDirectory({ repoRoot, rootDir: "workspace" });
+  const entry = entryByFile(catalog, "generated/generated.step");
+
+  assert.notEqual(actualStepHash, "step-hash-from-glb");
+  assert.equal(entry.sourceKind, "python");
+  assert.equal(entry.source.file, "workspace/generated/generated.py");
+  assert.equal(entry.artifact.ok, false);
+  assert.equal(entry.artifact.error, "stale_step_artifact");
+  assert.equal(entry.artifact.sourceKind, "python");
 });
 
 test("scanCadDirectory accepts legacy STEP_topology CAD refs when the GLB is otherwise valid", () => {

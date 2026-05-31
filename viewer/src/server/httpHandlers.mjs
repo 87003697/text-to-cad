@@ -414,30 +414,14 @@ export function createCadViewerApiMiddleware({
         });
         return;
       }
+      if (typeof backend.resolveRoot !== "function") {
+        sendJson(res, 501, {
+          error: "STEP artifact generation requires a local filesystem CAD Viewer backend",
+        });
+        return;
+      }
       try {
         const catalog = await backend.readCatalog({ rootDir: activeRootDir, fileRef: activeFileRef });
-        if (typeof backend.resolveRoot !== "function") {
-          const result = await backend.generateStepArtifact({
-            fileRef: activeFileRef,
-            force: requestUrl.searchParams.get("force") === "1",
-            rootDir: activeRootDir,
-            catalog,
-          });
-          const nextCatalog = result?.catalog || (
-            typeof backend.refreshCatalog === "function"
-              ? await backend.refreshCatalog({ rootDir: activeRootDir, fileRef: activeFileRef })
-              : await backend.readCatalog({ rootDir: activeRootDir, fileRef: activeFileRef })
-          );
-          sendJson(res, result?.ok ? 200 : 500, {
-            ok: Boolean(result?.ok),
-            error: result?.ok ? "" : String(result?.error || "STEP artifact generation failed."),
-            result: result?.result ?? result,
-            entry: result?.entry ?? null,
-            catalog: nextCatalog,
-          });
-          return;
-        }
-
         const resolvedRoot = typeof backend.resolveRequestRoot === "function"
           ? backend.resolveRequestRoot({ rootDir: activeRootDir, fileRef: activeFileRef })
           : backend.resolveRoot(activeRootDir);

@@ -2549,7 +2549,7 @@ def extract_selectors_from_scene(
         if source_hash:
             manifest["sourceHash"] = source_hash
         manifest["generatedAt"] = datetime.now(timezone.utc).isoformat(timespec="seconds")
-    else:
+    if scene.step_path.is_file():
         manifest["stepHash"] = _scene_step_hash(scene)
 
     if profile != SelectorProfile.SUMMARY:

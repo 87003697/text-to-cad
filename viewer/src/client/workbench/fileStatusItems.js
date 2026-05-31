@@ -163,7 +163,7 @@ export function stepArtifactHasRenderableGlb(entry) {
 
 function artifactStatusTitle(artifact, entry) {
   const code = cleanText(artifact?.error);
-  if (artifact?.stale === true || code === "stale_source_identity") {
+  if (artifact?.stale === true || code === "stale_step_artifact") {
     return "STEP artifact stale";
   }
   if (code === "missing_glb") {
@@ -183,11 +183,8 @@ function artifactStatusLevel(artifact, entry) {
 
 export function stepArtifactStatusMessage(artifact) {
   const code = cleanText(artifact?.error);
-  const sourceKind = sourceKindLabel(artifact?.sourceKind);
-  if (artifact?.stale === true || code === "stale_source_identity") {
-    return sourceKind === "python"
-      ? "Generated GLB doesn't match the hash of the Python generator script."
-      : "Generated GLB doesn't match the hash of the STEP file.";
+  if (artifact?.stale === true || code === "stale_step_artifact") {
+    return "Generated GLB doesn't match the hash of the STEP file.";
   }
   if (code === "missing_glb") {
     return "Generated GLB is missing.";
@@ -210,22 +207,14 @@ export function stepArtifactStatusMessage(artifact) {
   if (code === "missing_source_path") {
     return "Generated GLB metadata is missing its source path.";
   }
-  if (code === "missing_source_identity") {
-    return sourceKind === "python"
-      ? "Generated GLB is missing the hash of the Python generator script."
-      : "Generated GLB is missing the hash of the STEP file.";
+  if (code === "missing_step_hash") {
+    return "Generated GLB is missing the hash of the STEP file.";
   }
   return "Generated STEP artifact is unavailable.";
 }
 
 function stepSourceStatusTitle(stepStatus) {
-  if (stepStatus?.missing) {
-    return "STEP file missing";
-  }
-  if (stepStatus?.status === "missing_identity" || stepStatus?.metadataMissing) {
-    return "STEP file identity missing";
-  }
-  return "STEP file stale";
+  return "STEP file missing";
 }
 
 function stepSourceStatusLevel(stepStatus) {
@@ -238,45 +227,28 @@ function stepSourceStatusMessage(stepStatus, stepSourceStatus) {
       ? "STEP file was not generated for this Python script; only a GLB artifact is available."
       : "STEP file is missing from the workspace.";
   }
-  if (stepStatus?.stale) {
-    return sourceKindLabel(stepSourceStatus?.sourceKind) === "python"
-      ? "STEP file doesn't match the hash of the Python generator script."
-      : "STEP file doesn't match the hash of the STEP source.";
-  }
-  if (stepStatus?.status === "missing_identity" || stepStatus?.metadataMissing) {
-    return "STEP file is missing Python source identity metadata.";
-  }
-  return "STEP file is not current for the selected source.";
+  return cleanText(stepStatus?.message) || "STEP file is missing from the workspace.";
 }
 
 function generatedSourceStatusTitle(sourceStatus) {
   if (sourceStatus?.status === "missing") {
     return "Generator source missing";
   }
-  if (sourceStatus?.status === "missing_identity") {
-    return "Generated file identity missing";
-  }
-  return "Generated file stale";
+  return "Generated source warning";
 }
 
 function generatedSourceStatusMessage(sourceStatus) {
   if (sourceStatus?.status === "missing") {
     return "This file records a Python generator path, but that source file is not available.";
   }
-  if (sourceStatus?.status === "missing_identity") {
-    return "This file records a Python generator path, but it is missing sourceFingerprint metadata.";
-  }
-  if (sourceStatus?.stale) {
-    return "Generated file doesn't match the Python generator fingerprint.";
-  }
-  return "Generated file source identity is not current.";
+  return cleanText(sourceStatus?.message) || "Generated source metadata is incomplete.";
 }
 
 export function generatedSourceStatusItems(entry = null, {
   viewerServerInfo = {},
 } = {}) {
   const sourceStatus = entry?.sourceStatus;
-  if (!sourceStatus || (sourceStatus.ok !== false && sourceStatus.stale !== true)) {
+  if (!sourceStatus || sourceStatus.ok !== false) {
     return [];
   }
   return normalizeFileStatusItems([{
@@ -290,10 +262,6 @@ export function generatedSourceStatusItems(entry = null, {
       pathDetail("File", entry?.file, viewerServerInfo, entry?.file),
       detail("Source kind", sourceStatus.sourceKind || entry?.sourceKind),
       pathDetail("Python source", sourceStatus.sourcePath || entry?.source?.file, viewerServerInfo, entry?.file),
-      detail("Artifact fingerprint", sourceStatus.artifactHash, { mono: true }),
-      detail("Current fingerprint", sourceStatus.currentHash, { mono: true }),
-      detail("Artifact source hash", sourceStatus.sourceHash, { mono: true }),
-      detail("Current source hash", sourceStatus.currentSourceHash, { mono: true }),
       detail("Raw message", sourceStatus.message)
     ].filter(Boolean)
   }]);
@@ -330,26 +298,18 @@ export function stepFileStatusItems({
   }
 
   const stepStatus = stepSourceStatus?.step;
-  if (stepStatus?.missing || stepStatus?.stale || stepStatus?.status === "missing_identity" || stepStatus?.metadataMissing) {
-    const stepHashLabel = stepSourceStatus?.sourceKind === "python"
-      ? "STEP source hash"
-      : "STEP file hash";
-    const currentHashLabel = stepSourceStatus?.sourceKind === "python"
-      ? "Current source hash"
-      : "Current file hash";
+  if (stepStatus?.missing) {
     items.push({
       id: "step-source",
       level: stepSourceStatusLevel(stepStatus),
       source: "step-source-status",
-      code: cleanText(stepStatus.status) || (stepStatus.missing ? "missing" : "stale"),
+      code: cleanText(stepStatus.status) || "missing",
       title: stepSourceStatusTitle(stepStatus),
       message: stepSourceStatusMessage(stepStatus, stepSourceStatus),
       details: [
         pathDetail("STEP file", stepSourceStatus?.stepPath || stepSourceStatus?.file, viewerServerInfo, entry?.file),
         detail("Source kind", stepSourceStatus?.sourceKind),
-        pathDetail("Python source", stepSourceStatus?.sourcePath, viewerServerInfo, entry?.file),
-        detail(stepHashLabel, stepStatus.artifactHash || (stepStatus.stale ? "Missing" : ""), { mono: true }),
-        detail(currentHashLabel, stepStatus.currentHash, { mono: true })
+        pathDetail("Python source", stepSourceStatus?.sourcePath, viewerServerInfo, entry?.file)
       ].filter(Boolean)
     });
   }

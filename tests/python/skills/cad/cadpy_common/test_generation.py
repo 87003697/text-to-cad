@@ -366,7 +366,7 @@ class CadGenerationTests(unittest.TestCase):
 
         self.assertEqual(1, len(specs))
 
-    def test_python_source_hash_includes_local_imports(self) -> None:
+    def test_python_source_hash_uses_generator_file_contents(self) -> None:
         script_path = self.temp_root / "uses_helper.py"
         helper_path = self.temp_root / "helper.py"
         helper_path.write_text("SIZE = 1\n", encoding="utf-8")
@@ -386,19 +386,23 @@ class CadGenerationTests(unittest.TestCase):
         before = cad_generation.python_source_hash(script_path)
         helper_path.write_text("SIZE = 2\n", encoding="utf-8")
         after = cad_generation.python_source_hash(script_path)
+        script_path.write_text(script_path.read_text(encoding="utf-8") + "\n# changed\n", encoding="utf-8")
+        script_changed = cad_generation.python_source_hash(script_path)
 
-        source_paths = {entry.path for entry in before.files}
-        self.assertIn(script_path.relative_to(cad_generation.CAD_ROOT).as_posix(), source_paths)
-        self.assertIn(helper_path.relative_to(cad_generation.CAD_ROOT).as_posix(), source_paths)
-        self.assertNotEqual(before.digest, after.digest)
+        self.assertEqual(before.digest, after.digest)
+        self.assertNotEqual(before.digest, script_changed.digest)
 
-    def test_python_source_hash_keeps_dynamic_dependency_files_out_of_manifest_payloads(self) -> None:
-        script_path = cad_source_hash._PACKAGE_REPO_ROOT / "models/simple/square_mounting_block.py"
-        if not script_path.is_file():
-            self.skipTest(f"fixture missing: {script_path}")
+    def test_python_source_hash_has_no_manifest_payloads(self) -> None:
+        script_path = self.temp_root / "source.py"
+        script_path.write_text(
+            "def gen_step():\n"
+            "    return object()\n",
+            encoding="utf-8",
+        )
         identity = cad_source_hash.python_source_hash(script_path)
 
-        self.assertTrue(identity.files)
+        self.assertTrue(identity.digest)
+        self.assertFalse(hasattr(identity, "files"))
         self.assertFalse(hasattr(identity, "manifest_files"))
 
     def test_generated_step_output_is_not_discovered_as_imported_step(self) -> None:
@@ -1161,13 +1165,15 @@ class CadGenerationTests(unittest.TestCase):
         self.assertIs(scene, result.scene)
         self.assertIsNone(result.selector_bundle)
 
-    def test_skip_step_write_reuses_current_glb_without_running_generator(self) -> None:
+    def test_skip_step_write_reuses_current_glb_when_python_source_hash_changes(self) -> None:
         script_path = self._generator_script("flat")
         spec = next(spec for spec in cad_generation.list_entry_specs() if spec.cad_ref == self._cad_ref("flat"))
+        spec.step_path.write_text("ISO-10303-21;\nEND-ISO-10303-21;\n", encoding="utf-8")
         artifact = mock.Mock()
         artifact.manifest = {
             "sourceKind": "python",
-            "sourceHash": cad_generation.python_source_hash(script_path).digest,
+            "sourceHash": "old-python-source-hash",
+            "stepHash": cad_generation.step_file_hash(spec.step_path),
             "edgeRendering": {
                 "visibilityClasses": ["feature", "tangent", "seam", "degenerate"],
             },
@@ -1219,55 +1225,7 @@ class CadGenerationTests(unittest.TestCase):
         self.assertIsNone(result.selector_bundle)
         self.assertEqual(script_path.with_suffix(".step"), result.spec.step_path)
 
-    def test_skip_step_write_runs_generator_when_python_hash_is_stale(self) -> None:
-        script_path = self._generator_script("flat")
-        spec = next(spec for spec in cad_generation.list_entry_specs() if spec.cad_ref == self._cad_ref("flat"))
-        scene = LoadedStepScene(
-            step_path=spec.step_path.resolve(),
-            roots=[],
-            prototype_shapes={},
-            source_kind="python",
-            source_hash=cad_generation.python_source_hash(script_path).digest,
-            source_path=cad_generation.relative_to_repo(script_path),
-        )
-        artifact = mock.Mock()
-        artifact.manifest = {
-            "sourceKind": "python",
-            "sourceHash": "stale-python-source-hash",
-            "edgeRendering": {
-                "visibilityClasses": ["feature", "tangent", "seam", "degenerate"],
-            },
-            "mesh": {
-                "linearDeflection": spec.mesh_tolerance,
-                "angularDeflection": spec.mesh_angular_tolerance,
-                "relative": True,
-            },
-        }
-
-        with mock.patch(
-            "cadpy_common.step_targets.validate_step_topology_artifact",
-            return_value=artifact,
-        ), mock.patch.object(
-            cad_generation,
-            "run_script_generator",
-            return_value=scene,
-        ) as run_generator, mock.patch.object(
-            cad_generation,
-            "_generate_part_outputs",
-            return_value=cad_generation.GeneratedStepResult(spec=spec, scene=scene),
-        ) as generate_outputs:
-            result = cad_generation._generate_step_outputs(
-                spec,
-                entries_by_step_path={spec.step_path.resolve(): spec},
-                skip_step_write=True,
-                force=False,
-            )
-
-        run_generator.assert_called_once()
-        generate_outputs.assert_called_once()
-        self.assertIs(scene, result.scene)
-
-    def test_generated_assembly_step_reuses_current_fingerprint(self) -> None:
+    def test_generated_assembly_step_exports_with_source_hash(self) -> None:
         child_step = self._write_step("leaf")
         instances = [
             {
@@ -1278,22 +1236,9 @@ class CadGenerationTests(unittest.TestCase):
         ]
         script_path = self._write_assembly_generator("robot", instances=instances)
         output_path = script_path.with_suffix(".step")
-        output_path.write_text("ISO-10303-21; END-ISO-10303-21;\n", encoding="utf-8")
         scene = LoadedStepScene(step_path=output_path.resolve(), roots=[], prototype_shapes={})
 
-        with (
-            mock.patch("cadpy_common.assembly_export.assembly_source_fingerprint", return_value="fingerprint-123"),
-            mock.patch.object(
-                cad_generation,
-                "read_text_to_cad_step_metadata",
-                return_value={"entryKind": "assembly", "sourceFingerprint": "fingerprint-123"},
-            ),
-            mock.patch.object(cad_generation, "load_step_scene", return_value=scene) as load_scene,
-            mock.patch(
-                "cadpy_common.assembly_export.export_assembly_step_scene",
-                side_effect=AssertionError("fresh assembly STEP should not be exported"),
-            ),
-        ):
+        with mock.patch("cadpy_common.assembly_export.export_assembly_step_scene", return_value=scene) as export_scene:
             result = cad_generation._write_assembly_step_payload(
                 {"instances": instances},
                 output_path=output_path,
@@ -1304,77 +1249,6 @@ class CadGenerationTests(unittest.TestCase):
         self.assertIs(scene, result)
         self.assertEqual("python", result.source_kind)
         self.assertEqual(cad_generation.python_source_hash(script_path).digest, result.source_hash)
-        load_scene.assert_called_once_with(output_path)
-
-    def test_generated_assembly_step_exports_stale_fingerprint(self) -> None:
-        child_step = self._write_step("leaf")
-        instances = [
-            {
-                "path": child_step.name,
-                "name": "leaf",
-                "transform": IDENTITY_TRANSFORM,
-            }
-        ]
-        script_path = self._write_assembly_generator("robot", instances=instances)
-        output_path = script_path.with_suffix(".step")
-        output_path.write_text("ISO-10303-21; END-ISO-10303-21;\n", encoding="utf-8")
-        scene = LoadedStepScene(step_path=output_path.resolve(), roots=[], prototype_shapes={})
-
-        with (
-            mock.patch("cadpy_common.assembly_export.assembly_source_fingerprint", return_value="fingerprint-123"),
-            mock.patch.object(
-                cad_generation,
-                "read_text_to_cad_step_metadata",
-                return_value={"entryKind": "assembly", "sourceFingerprint": "old-fingerprint"},
-            ),
-            mock.patch("cadpy_common.assembly_export.export_assembly_step_scene", return_value=scene) as export_scene,
-        ):
-            result = cad_generation._write_assembly_step_payload(
-                {"instances": instances},
-                output_path=output_path,
-                script_path=script_path,
-                logger=cad_generation.CliLogger("test"),
-            )
-
-        self.assertIs(scene, result)
-        self.assertEqual("python", result.source_kind)
-        self.assertEqual(cad_generation.python_source_hash(script_path).digest, result.source_hash)
-        export_scene.assert_called_once()
-        self.assertEqual("fingerprint-123", export_scene.call_args.kwargs.get("source_fingerprint"))
-
-    def test_generated_assembly_step_force_ignores_current_fingerprint(self) -> None:
-        child_step = self._write_step("leaf")
-        instances = [
-            {
-                "path": child_step.name,
-                "name": "leaf",
-                "transform": IDENTITY_TRANSFORM,
-            }
-        ]
-        script_path = self._write_assembly_generator("robot", instances=instances)
-        output_path = script_path.with_suffix(".step")
-        output_path.write_text("ISO-10303-21; END-ISO-10303-21;\n", encoding="utf-8")
-        scene = LoadedStepScene(step_path=output_path.resolve(), roots=[], prototype_shapes={})
-
-        with (
-            mock.patch("cadpy_common.assembly_export.assembly_source_fingerprint", return_value="fingerprint-123"),
-            mock.patch.object(
-                cad_generation,
-                "read_text_to_cad_step_metadata",
-                return_value={"entryKind": "assembly", "sourceFingerprint": "fingerprint-123"},
-            ) as read_metadata,
-            mock.patch("cadpy_common.assembly_export.export_assembly_step_scene", return_value=scene) as export_scene,
-        ):
-            result = cad_generation._write_assembly_step_payload(
-                {"instances": instances},
-                output_path=output_path,
-                script_path=script_path,
-                logger=cad_generation.CliLogger("test"),
-                force=True,
-            )
-
-        self.assertIs(scene, result)
-        read_metadata.assert_not_called()
         export_scene.assert_called_once()
 
     def test_sidecars_are_not_separate_generation_specs(self) -> None:

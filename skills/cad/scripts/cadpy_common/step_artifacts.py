@@ -55,10 +55,6 @@ def ensure_step_topology_artifact(
         if artifact is not None:
             return artifact
 
-    if not force:
-        artifact = _current_artifact_for_spec(spec, glb_path=resolved_glb_path, require_selector=require_selector)
-        if artifact is not None:
-            return artifact
     try:
         spec, scene = _scene_for_regeneration(spec, logger=logger, force=force)
         _generate_part_outputs(

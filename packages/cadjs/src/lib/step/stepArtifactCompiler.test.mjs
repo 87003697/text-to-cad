@@ -144,41 +144,6 @@ test("ensureStepTopologyArtifact records explicit non-same-stem Python sourcePat
   assert.equal(catalog.entries[0].hash.length, 64);
 });
 
-test("ensureStepTopologyArtifact rebuilds stale non-same-stem Python artifacts from recorded sourcePath", async (t) => {
-  const repoRoot = makeTempRepo();
-  t.after(() => fs.rmSync(repoRoot, { recursive: true, force: true }));
-  const stepPath = path.join(repoRoot, "workspace/generated/robot.step");
-  const generatorPath = path.join(repoRoot, "workspace/sources/assembly.py");
-  writePythonBoxGenerator(generatorPath);
-
-  const first = await ensureStepTopologyArtifact({
-    repoRoot,
-    stepPath,
-    sourcePath: generatorPath,
-    skipStepWrite: true,
-    force: true,
-  });
-  assert.equal(first.ok, true);
-  const glbPath = inlineStepGlbArtifactPathForSource(stepPath);
-  const previousManifest = readStepTopologyIndexManifest(glbPath);
-
-  fs.appendFileSync(generatorPath, "\n# source identity change\n");
-  const staleCatalog = scanCadDirectory({ repoRoot, rootDir: "workspace" });
-  assert.equal(staleCatalog.entries[0].artifact.error, "stale_source_identity");
-  assert.equal(staleCatalog.entries[0].artifact.sourceKind, "python");
-
-  const second = await ensureStepTopologyArtifact({ repoRoot, stepPath });
-  assert.equal(second.ok, true);
-  assert.equal(second.validation.sourceKind, "python");
-  assert.equal(second.validation.sourcePath, "workspace/sources/assembly.py");
-
-  const nextManifest = readStepTopologyIndexManifest(glbPath);
-  assert.equal(nextManifest.sourceKind, "python");
-  assert.equal(nextManifest.sourcePath, "../sources/assembly.py");
-  assert.equal(nextManifest.stepPath, "robot.step");
-  assert.notEqual(nextManifest.sourceFingerprint, previousManifest.sourceFingerprint);
-});
-
 test("ensureStepTopologyArtifact can write Python STEP after the GLB is ready", async (t) => {
   const repoRoot = makeTempRepo();
   t.after(() => fs.rmSync(repoRoot, { recursive: true, force: true }));
@@ -196,17 +161,15 @@ test("ensureStepTopologyArtifact can write Python STEP after the GLB is ready", 
   });
 
   assert.equal(result.ok, true);
-  assert.equal(result.stepWrite?.status, "pending");
+  assert.equal(result.stepWrite?.status, "complete");
   const glbPath = inlineStepGlbArtifactPathForSource(stepPath);
   assert.equal(fs.existsSync(glbPath), true);
   const indexTopology = readStepTopologyIndexManifest(glbPath);
   assert.equal(indexTopology.sourceKind, "python");
   const metadata = await waitForStepMetadata(stepPath, (candidate) => (
     candidate.sourcePath === "../sources/robot.py" &&
-    candidate.sourceHash === indexTopology.sourceHash &&
-    candidate.sourceFingerprint === indexTopology.sourceFingerprint
+    candidate.sourceHash === indexTopology.sourceHash
   ));
   assert.equal(metadata.sourcePath, "../sources/robot.py");
   assert.equal(metadata.sourceHash, indexTopology.sourceHash);
-  assert.equal(metadata.sourceFingerprint, indexTopology.sourceFingerprint);
 });

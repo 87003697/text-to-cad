@@ -332,6 +332,29 @@ test("local backend rejects Viewer artifact regeneration for Python metadata STE
   });
 });
 
+test("local backend rejects artifact regeneration for non-STEP files", async () => {
+  await withTempWorkspace(async (workspaceRoot) => {
+    const modelRoot = path.join(workspaceRoot, "models");
+    fs.mkdirSync(modelRoot, { recursive: true });
+    fs.writeFileSync(path.join(modelRoot, "robot.urdf"), "<robot name=\"r\" />\n");
+    const backend = createLocalAssetBackend({
+      workspaceRoot,
+      rootDir: "models",
+      stepArtifactGenerator: async () => {
+        throw new Error("Non-STEP files should not invoke STEP artifact generation.");
+      },
+    });
+
+    await assert.rejects(
+      () => backend.generateStepArtifact({
+        fileRef: "robot.urdf",
+        force: true,
+      }),
+      /Only STEP\/STP sources or same-stem Python generators can generate STEP topology artifacts/
+    );
+  });
+});
+
 test("local backend reports missing Python-backed STEP files dynamically", async () => {
   await withTempWorkspace((workspaceRoot) => {
     const modelRoot = path.join(workspaceRoot, "models");
