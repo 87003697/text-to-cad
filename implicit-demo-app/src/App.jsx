@@ -22,13 +22,11 @@ import {
 
 import { CodePane } from "./CodePane.jsx";
 import { ImplicitViewport } from "./ImplicitViewport.jsx";
-import { combineImplicitSource, splitImplicitSource } from "./sourceSplit.js";
 
 const DEFAULT_EXAMPLE_ID = "mobius-strip";
 const COMPILE_DEBOUNCE_MS = 260;
 const MOBILE_TABS = Object.freeze([
-  ["javascript", "JavaScript"],
-  ["glsl", "GLSL"],
+  ["source", "Source"],
   ["preview", "Preview"],
   ["controls", "Controls"]
 ]);
@@ -373,8 +371,7 @@ function InspectorPanel({
 export default function App() {
   const [examples, setExamples] = useState([]);
   const [selectedExampleId, setSelectedExampleId] = useState(DEFAULT_EXAMPLE_ID);
-  const [jsCode, setJsCode] = useState("");
-  const [glslCode, setGlslCode] = useState("");
+  const [code, setCode] = useState("");
   const [loadedExampleCode, setLoadedExampleCode] = useState("");
   const [compileState, setCompileState] = useState("loading");
   const [compileError, setCompileError] = useState("");
@@ -387,17 +384,14 @@ export default function App() {
   const [animationElapsed, setAnimationElapsed] = useState(0);
   const [themeMode, setThemeMode] = useState(() => localStorage.getItem("implicit-demo-theme") || "dark");
   const [cameraResetToken, setCameraResetToken] = useState(0);
-  const [mobileTab, setMobileTab] = useState("javascript");
+  const [mobileTab, setMobileTab] = useState("source");
   const [workspaceSplit, setWorkspaceSplit] = useState(50);
-  const [editorSplit, setEditorSplit] = useState(48);
   const [viewportSplit, setViewportSplit] = useState(72);
   const workspaceRef = useRef(null);
-  const editorStackRef = useRef(null);
   const visualBodyRef = useRef(null);
   const selectedExampleRef = useRef(DEFAULT_EXAMPLE_ID);
   const examplesRef = useRef([]);
-  const combinedCode = useMemo(() => combineImplicitSource(jsCode, glslCode), [glslCode, jsCode]);
-  const debouncedCode = useDebouncedValue(combinedCode, COMPILE_DEBOUNCE_MS);
+  const debouncedCode = useDebouncedValue(code, COMPILE_DEBOUNCE_MS);
 
   useEffect(() => {
     document.documentElement.classList.toggle("dark", themeMode === "dark");
@@ -420,10 +414,8 @@ export default function App() {
       throw new Error(`Could not load ${example.file}`);
     }
     const source = await response.text();
-    const splitSource = splitImplicitSource(source);
     setLoadedExampleCode(source);
-    setJsCode(splitSource.jsCode);
-    setGlslCode(splitSource.glslCode);
+    setCode(source);
     setPlaying(false);
     setAnimationElapsed(0);
   }, []);
@@ -543,7 +535,7 @@ export default function App() {
     }
   }, [activeAnimation, animatedValues, animationElapsed, compiledModel, definition, playing]);
 
-  const dirty = combinedCode !== loadedExampleCode;
+  const dirty = code !== loadedExampleCode;
   const selectedExample = examples.find((example) => example.id === selectedExampleId);
 
   const handleParamChange = useCallback((parameterId, value) => {
@@ -578,7 +570,6 @@ export default function App() {
       className="app-shell"
       style={{
         "--workspace-left": `${workspaceSplit}%`,
-        "--editor-top": `${editorSplit}%`,
         "--viewport-width": `${viewportSplit}%`
       }}
     >
@@ -632,34 +623,12 @@ export default function App() {
 
       <main className="workspace-grid" ref={workspaceRef}>
         <section className="editor-shell">
-          <div className="editor-stack" ref={editorStackRef}>
-            <CodePane
-              active={mobileTab === "javascript"}
-              language="javascript"
-              title="JavaScript module"
-              value={jsCode}
-              onChange={setJsCode}
-            />
-            <SplitHandle
-              axis="y"
-              className="editor-resizer"
-              title="Resize JavaScript and GLSL editors"
-              onPointerDown={(event) => beginSplitDrag(event, {
-                axis: "y",
-                containerRef: editorStackRef,
-                min: 24,
-                max: 76,
-                setValue: setEditorSplit
-              })}
-            />
-            <CodePane
-              active={mobileTab === "glsl"}
-              language="glsl"
-              title="GLSL distance shader"
-              value={glslCode}
-              onChange={setGlslCode}
-            />
-          </div>
+          <CodePane
+            active={mobileTab === "source"}
+            title="implicit.js source"
+            value={code}
+            onChange={setCode}
+          />
         </section>
 
         <SplitHandle
@@ -741,7 +710,7 @@ export default function App() {
               }}
               runtimeError={compileState === "error" ? compileError : ""}
             />
-            </div>
+          </div>
         </section>
       </main>
     </div>
