@@ -27,15 +27,22 @@ function writePythonBoxGenerator(filePath) {
   ].join("\n"));
 }
 
-async function waitForFile(filePath, { timeoutMs = 10000 } = {}) {
+async function waitForStepMetadata(filePath, predicate, { timeoutMs = 10000 } = {}) {
   const started = Date.now();
   while (Date.now() - started < timeoutMs) {
     if (fs.existsSync(filePath)) {
-      return;
+      try {
+        const metadata = readTextToCadStepMetadataFile(filePath);
+        if (predicate(metadata)) {
+          return metadata;
+        }
+      } catch {
+        // The background writer may still be flushing the STEP file.
+      }
     }
     await new Promise((resolve) => setTimeout(resolve, 100));
   }
-  throw new Error(`Timed out waiting for ${filePath}`);
+  throw new Error(`Timed out waiting for STEP metadata in ${filePath}`);
 }
 
 function readGlbChunks(filePath) {
@@ -194,8 +201,11 @@ test("ensureStepTopologyArtifact can write Python STEP after the GLB is ready", 
   assert.equal(fs.existsSync(glbPath), true);
   const indexTopology = readStepTopologyIndexManifest(glbPath);
   assert.equal(indexTopology.sourceKind, "python");
-  await waitForFile(stepPath);
-  const metadata = readTextToCadStepMetadataFile(stepPath);
+  const metadata = await waitForStepMetadata(stepPath, (candidate) => (
+    candidate.sourcePath === "../sources/robot.py" &&
+    candidate.sourceHash === indexTopology.sourceHash &&
+    candidate.sourceFingerprint === indexTopology.sourceFingerprint
+  ));
   assert.equal(metadata.sourcePath, "../sources/robot.py");
   assert.equal(metadata.sourceHash, indexTopology.sourceHash);
   assert.equal(metadata.sourceFingerprint, indexTopology.sourceFingerprint);
