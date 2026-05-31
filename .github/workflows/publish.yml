@@ -157,11 +157,17 @@ jobs:
             exit 0
           fi
 
+          current_version="$(tr -d '[:space:]' < plugins/cad/VERSION)"
           latest_tag="$(git tag --list '[0-9]*.[0-9]*.[0-9]*' --sort=-version:refname | head -n 1 || true)"
           if ! scripts/release/check-version.sh --incremented-from origin/main >/tmp/publish-main-version-check.log 2>&1; then
-            echo "should_publish=false" >> "$GITHUB_OUTPUT"
-            echo "Skipping publish: version has not advanced past origin/main."
-            exit 0
+            main_version="$(git show origin/main:plugins/cad/VERSION | tr -d '[:space:]')"
+            if [ "$main_version" = "$current_version" ] && ! git rev-parse --verify --quiet "refs/tags/$current_version" >/dev/null; then
+              echo "Release version already reached origin/main, but tag $current_version is missing; resuming publish."
+            else
+              echo "should_publish=false" >> "$GITHUB_OUTPUT"
+              echo "Skipping publish: version has not advanced past origin/main."
+              exit 0
+            fi
           fi
           if [ -n "$latest_tag" ] && ! scripts/release/check-version.sh --incremented-from "refs/tags/$latest_tag" >/tmp/publish-tag-version-check.log 2>&1; then
             echo "should_publish=false" >> "$GITHUB_OUTPUT"
@@ -322,17 +328,18 @@ jobs:
 
           deploy_vercel_project() {
             local label="$1"
-            local project_dir="$2"
+            local project_root="$2"
             local project_id="$3"
             local deployment_output
             local deployment_url
 
             echo "::group::Deploy $label to Vercel production"
             (
-              cd "$project_dir"
+              rm -rf .vercel
               export VERCEL_ORG_ID
               export VERCEL_PROJECT_ID="$project_id"
 
+              echo "Using Vercel project root from project settings for $project_root."
               vercel pull --yes --environment=production --token="$VERCEL_TOKEN"
               vercel build --prod --token="$VERCEL_TOKEN"
               deployment_output="$(vercel deploy --prebuilt --prod --token="$VERCEL_TOKEN")"
