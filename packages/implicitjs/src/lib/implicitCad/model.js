@@ -9,6 +9,9 @@ import { createImplicitCadSdfEvaluator } from "./sdfEvaluator.js";
 export const IMPLICIT_CAD_SCHEMA = "implicit-cad/v1";
 export const IMPLICIT_CAD_KIND = "implicit";
 export const IMPLICIT_CAD_EXTENSIONS = Object.freeze([".implicit.js", ".implicit.mjs"]);
+export const IMPLICIT_SCHEMA = IMPLICIT_CAD_SCHEMA;
+export const IMPLICIT_KIND = IMPLICIT_CAD_KIND;
+export const IMPLICIT_EXTENSIONS = IMPLICIT_CAD_EXTENSIONS;
 
 const DEFAULT_BOUNDS = Object.freeze({
   min: [-50, -50, -50],
@@ -601,3 +604,8 @@ export function implicitCadBoundsCenterAndRadius(model) {
     bounds: { ...DEFAULT_BOUNDS },
   };
 }
+
+export const pathIsImplicitSource = pathIsImplicitCadSource;
+export const normalizeImplicitDefinition = normalizeImplicitCadDefinition;
+export const normalizeImplicitModel = normalizeImplicitCadModel;
+export const implicitBoundsCenterAndRadius = implicitCadBoundsCenterAndRadius;

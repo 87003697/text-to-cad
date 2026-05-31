@@ -1435,3 +1435,16 @@ export async function renderImplicitCadToDataUrl(THREE, modelValue, {
   renderer.dispose();
   return dataUrl;
 }
+
+export const implicitModelShaderKey = implicitCadModelShaderKey;
+export const implicitVertexShader = implicitCadVertexShader;
+export const implicitFragmentShader = implicitCadFragmentShader;
+export const createImplicitMaterial = createImplicitCadMaterial;
+export const updateImplicitModelUniforms = updateImplicitCadModelUniforms;
+export const resolveImplicitAppearanceSettings = resolveImplicitCadAppearanceSettings;
+export const updateImplicitAppearanceUniforms = updateImplicitCadAppearanceUniforms;
+export const updateImplicitGraphicsUniforms = updateImplicitCadGraphicsUniforms;
+export const updateImplicitMaterialUniforms = updateImplicitCadMaterialUniforms;
+export const createImplicitFullscreenScene = createImplicitCadFullscreenScene;
+export const configureImplicitCamera = configureImplicitCadCamera;
+export const renderImplicitToDataUrl = renderImplicitCadToDataUrl;

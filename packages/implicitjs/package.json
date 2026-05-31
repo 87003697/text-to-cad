@@ -4,8 +4,13 @@
   "type": "module",
   "description": "Standalone browser-native implicit CAD runtime, renderer, mesh sampler, and exporters.",
   "exports": {
-    ".": "./src/index.js",
+    ".": {
+      "browser": "./src/browser.js",
+      "default": "./src/index.js"
+    },
+    "./browser": "./src/browser.js",
     "./model": "./src/lib/implicitCad/model.js",
+    "./implicit": "./src/browser.js",
     "./loader": "./src/lib/implicitCad/loader.js",
     "./render": "./src/lib/implicitCad/render.js",
     "./graphicsSettings": "./src/lib/implicitCad/graphicsSettings.js",

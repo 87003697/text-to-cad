@@ -1,0 +1,92 @@
+[
+  {
+    "id": "mobius-strip",
+    "label": "Mobius strip",
+    "file": "mobius-strip.implicit.js",
+    "description": "Default. A parameterized strip with a half twist and animated band controls."
+  },
+  {
+    "id": "planetary-gear",
+    "label": "Planetary gear",
+    "file": "planetary-gear.implicit.js",
+    "description": "A colorful gear train with mesh controls and orbit animation."
+  },
+  {
+    "id": "thickened-mobius-strip",
+    "label": "Thickened Mobius strip",
+    "file": "thickened-mobius-strip.implicit.js",
+    "description": "A manufacturable strip solid with rounded edges and thickness controls."
+  },
+  {
+    "id": "rounded-orb",
+    "label": "Rounded orb",
+    "file": "rounded-orb.implicit.js",
+    "description": "A blended sphere, base, and bore with procedural color."
+  },
+  {
+    "id": "gyroid-unit-cell",
+    "label": "Gyroid unit cell",
+    "file": "gyroid-unit-cell.implicit.js",
+    "description": "A periodic shell clipped into a cubic cell."
+  },
+  {
+    "id": "schwarz-p-unit-cell",
+    "label": "Schwarz P cell",
+    "file": "schwarz-p-unit-cell.implicit.js",
+    "description": "A triply periodic surface with shell-thickness controls."
+  },
+  {
+    "id": "gyroid-window",
+    "label": "Gyroid window",
+    "file": "gyroid-window.implicit.js",
+    "description": "A smaller periodic window into the gyroid field."
+  },
+  {
+    "id": "genus-2-double-torus",
+    "label": "Genus-2 double torus",
+    "file": "genus-2-double-torus.implicit.js",
+    "description": "Two smooth fused handles with blend and spacing controls."
+  },
+  {
+    "id": "trefoil-torus-knot-tube",
+    "label": "Trefoil knot tube",
+    "file": "trefoil-torus-knot-tube.implicit.js",
+    "description": "A closed torus-knot tube with path and tube controls."
+  },
+  {
+    "id": "klein-bottle-immersion",
+    "label": "Klein bottle immersion",
+    "file": "klein-bottle-immersion.implicit.js",
+    "description": "An immersed Klein bottle shell with neck and bulb controls."
+  },
+  {
+    "id": "metaball-molecule-cluster",
+    "label": "Metaball cluster",
+    "file": "metaball-molecule-cluster.implicit.js",
+    "description": "Seven smoothly blended sphere fields."
+  },
+  {
+    "id": "superquadric-rounded-cube",
+    "label": "Superquadric cube",
+    "file": "superquadric-rounded-cube.implicit.js",
+    "description": "A high-exponent rounded cube/sphere interpolation."
+  },
+  {
+    "id": "sierpinski-tetrahedron",
+    "label": "Sierpinski tetrahedron",
+    "file": "sierpinski-tetrahedron.implicit.js",
+    "description": "A finite-depth tetrahedral fractal approximation."
+  },
+  {
+    "id": "whitney-umbrella",
+    "label": "Whitney umbrella",
+    "file": "whitney-umbrella.implicit.js",
+    "description": "A bounded singular surface with shell thickness controls."
+  },
+  {
+    "id": "parametric-pulse",
+    "label": "Parametric pulse",
+    "file": "parametric-pulse.implicit.js",
+    "description": "A compact animation stress example for live parameter motion."
+  }
+]

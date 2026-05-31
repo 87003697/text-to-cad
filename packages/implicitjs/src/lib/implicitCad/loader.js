@@ -14,6 +14,15 @@ function importUrl(url) {
   return rawUrl;
 }
 
+function sourceDataUrl(source) {
+  const text = `${String(source || "")}\n`;
+  if (typeof Buffer !== "undefined") {
+    return `data:text/javascript;base64,${Buffer.from(text, "utf8").toString("base64")}`;
+  }
+  const encoded = encodeURIComponent(text).replace(/'/g, "%27").replace(/"/g, "%22");
+  return `data:text/javascript;charset=utf-8,${encoded}`;
+}
+
 export async function loadImplicitCadModule(url, { signal } = {}) {
   const key = cacheKey(url);
   if (!key) {
@@ -73,3 +82,22 @@ export function peekImplicitCadModule(url) {
   const cached = implicitCadModuleCache.get(cacheKey(url));
   return cached && typeof cached.then !== "function" ? cached : null;
 }
+
+export async function loadImplicitModuleFromSource(source, {
+  signal,
+  sourceUrl = "inline://implicit.js"
+} = {}) {
+  if (signal?.aborted) {
+    throw new DOMException("The operation was aborted.", "AbortError");
+  }
+  const url = sourceDataUrl(source);
+  const moduleValue = await import(/* @vite-ignore */ url);
+  if (signal?.aborted) {
+    throw new DOMException("The operation was aborted.", "AbortError");
+  }
+  return normalizeImplicitCadModel(moduleValue, { sourceUrl });
+}
+
+export const loadImplicitModule = loadImplicitCadModule;
+export const peekImplicitModule = peekImplicitCadModule;
+export const loadImplicitSource = loadImplicitModuleFromSource;
