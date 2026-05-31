@@ -4,6 +4,7 @@ import react from "@vitejs/plugin-react";
 export default defineConfig({
   plugins: [react()],
   build: {
+    chunkSizeWarningLimit: 700,
     rollupOptions: {
       output: {
         manualChunks(id) {
@@ -15,6 +16,13 @@ export default defineConfig({
           }
           if (id.includes("/node_modules/lucide-react/")) {
             return "icons";
+          }
+          if (
+            id.includes("/node_modules/@codemirror/") ||
+            id.includes("/node_modules/@lezer/") ||
+            id.includes("/node_modules/@uiw/react-codemirror/")
+          ) {
+            return "codemirror";
           }
           if (id.includes("/packages/implicitjs/")) {
             return "implicitjs";

@@ -1,8 +1,6 @@
 import {
   Activity,
-  Box,
   Check,
-  Code2,
   Moon,
   Pause,
   Play,
@@ -22,10 +20,18 @@ import {
   normalizeParameterValues
 } from "implicitjs";
 
+import { CodePane } from "./CodePane.jsx";
 import { ImplicitViewport } from "./ImplicitViewport.jsx";
+import { combineImplicitSource, splitImplicitSource } from "./sourceSplit.js";
 
 const DEFAULT_EXAMPLE_ID = "mobius-strip";
 const COMPILE_DEBOUNCE_MS = 260;
+const MOBILE_TABS = Object.freeze([
+  ["javascript", "JavaScript"],
+  ["glsl", "GLSL"],
+  ["preview", "Preview"],
+  ["controls", "Controls"]
+]);
 
 function clampNumber(value, min, max) {
   const numeric = Number(value);
@@ -87,11 +93,6 @@ function animatedParameterValues(definition, animation, baseValues, elapsedSec) 
   return nextValues;
 }
 
-function lineNumbersForCode(code) {
-  const lineCount = Math.max(String(code || "").split("\n").length, 1);
-  return Array.from({ length: lineCount }, (_, index) => index + 1).join("\n");
-}
-
 function compileSummary(model) {
   if (!model) {
     return [];
@@ -126,74 +127,61 @@ function FieldLabel({ children }) {
   return <span className="field-label">{children}</span>;
 }
 
-function CodeEditor({ code, onChange, examples, selectedExampleId, onSelectExample, onReloadExample, compileState }) {
-  const textareaRef = useRef(null);
-  const gutterRef = useRef(null);
-
-  const handleKeyDown = (event) => {
-    if (event.key !== "Tab") {
-      return;
-    }
-    event.preventDefault();
-    const target = event.currentTarget;
-    const start = target.selectionStart;
-    const end = target.selectionEnd;
-    const nextCode = `${code.slice(0, start)}  ${code.slice(end)}`;
-    onChange(nextCode);
-    window.requestAnimationFrame(() => {
-      target.selectionStart = start + 2;
-      target.selectionEnd = start + 2;
-    });
-  };
-
-  const handleScroll = (event) => {
-    if (gutterRef.current) {
-      gutterRef.current.scrollTop = event.currentTarget.scrollTop;
-    }
-  };
-
+function SectionTitle({ children, icon = null, meta = "" }) {
   return (
-    <section className="editor-shell">
-      <div className="panel-header">
-        <div>
-          <span className="panel-kicker">source module</span>
-          <h2><Code2 size={17} /> implicit.js editor</h2>
-        </div>
-        <StatusBadge
-          state={compileState === "ready" ? "ok" : compileState === "error" ? "error" : "busy"}
-          label={compileState}
-        />
+    <div className="section-bar">
+      <div className="section-title-row">
+        {icon}
+        <span>{children}</span>
       </div>
-
-      <div className="editor-actions">
-        <label className="select-field">
-          <FieldLabel>examples</FieldLabel>
-          <select value={selectedExampleId} onChange={(event) => onSelectExample(event.target.value)}>
-            {examples.map((example) => (
-              <option key={example.id} value={example.id}>{example.label}</option>
-            ))}
-          </select>
-        </label>
-        <button className="text-button" type="button" onClick={onReloadExample}>
-          <RefreshCcw size={15} />
-          reload
-        </button>
-      </div>
-
-      <div className="code-frame">
-        <pre ref={gutterRef} className="line-gutter" aria-hidden="true">{lineNumbersForCode(code)}</pre>
-        <textarea
-          ref={textareaRef}
-          spellCheck={false}
-          value={code}
-          onChange={(event) => onChange(event.target.value)}
-          onKeyDown={handleKeyDown}
-          onScroll={handleScroll}
-          aria-label="Implicit JavaScript source editor"
-        />
-      </div>
-    </section>
+      {meta ? <span className="section-meta">{meta}</span> : null}
+    </div>
   );
+}
+
+function SplitHandle({ axis, className = "", onPointerDown, title }) {
+  return (
+    <div
+      className={`split-handle split-${axis} ${className}`}
+      role="separator"
+      tabIndex={0}
+      title={title}
+      aria-label={title}
+      onPointerDown={onPointerDown}
+    />
+  );
+}
+
+function beginSplitDrag(event, {
+  axis,
+  containerRef,
+  max = 78,
+  min = 22,
+  setValue
+}) {
+  const container = containerRef.current;
+  if (!container) {
+    return;
+  }
+  event.preventDefault();
+  const rect = container.getBoundingClientRect();
+  document.documentElement.classList.add("is-resizing");
+
+  const update = (pointerEvent) => {
+    const raw = axis === "x"
+      ? ((pointerEvent.clientX - rect.left) / Math.max(rect.width, 1)) * 100
+      : ((pointerEvent.clientY - rect.top) / Math.max(rect.height, 1)) * 100;
+    setValue(clampNumber(raw, min, max));
+  };
+  const stop = () => {
+    document.documentElement.classList.remove("is-resizing");
+    window.removeEventListener("pointermove", update);
+    window.removeEventListener("pointerup", stop);
+  };
+
+  update(event);
+  window.addEventListener("pointermove", update);
+  window.addEventListener("pointerup", stop, { once: true });
 }
 
 function ParameterControl({ parameter, value, onChange, animatedValue }) {
@@ -278,6 +266,7 @@ function GraphicsControl({ id, label, value, onChange }) {
 }
 
 function InspectorPanel({
+  active = false,
   model,
   definition,
   paramValues,
@@ -297,13 +286,8 @@ function InspectorPanel({
   const summary = compileSummary(model);
 
   return (
-    <aside className="inspector">
-      <div className="panel-header compact">
-        <div>
-          <span className="panel-kicker">runtime</span>
-          <h2><SlidersHorizontal size={16} /> controls</h2>
-        </div>
-      </div>
+    <aside className={`inspector mobile-panel ${active ? "is-active" : ""}`}>
+      <SectionTitle icon={<SlidersHorizontal size={14} />} meta="runtime">Controls</SectionTitle>
 
       <div className="stat-grid">
         {summary.map((item) => (
@@ -389,7 +373,8 @@ function InspectorPanel({
 export default function App() {
   const [examples, setExamples] = useState([]);
   const [selectedExampleId, setSelectedExampleId] = useState(DEFAULT_EXAMPLE_ID);
-  const [code, setCode] = useState("");
+  const [jsCode, setJsCode] = useState("");
+  const [glslCode, setGlslCode] = useState("");
   const [loadedExampleCode, setLoadedExampleCode] = useState("");
   const [compileState, setCompileState] = useState("loading");
   const [compileError, setCompileError] = useState("");
@@ -402,9 +387,17 @@ export default function App() {
   const [animationElapsed, setAnimationElapsed] = useState(0);
   const [themeMode, setThemeMode] = useState(() => localStorage.getItem("implicit-demo-theme") || "dark");
   const [cameraResetToken, setCameraResetToken] = useState(0);
+  const [mobileTab, setMobileTab] = useState("javascript");
+  const [workspaceSplit, setWorkspaceSplit] = useState(50);
+  const [editorSplit, setEditorSplit] = useState(48);
+  const [viewportSplit, setViewportSplit] = useState(72);
+  const workspaceRef = useRef(null);
+  const editorStackRef = useRef(null);
+  const visualBodyRef = useRef(null);
   const selectedExampleRef = useRef(DEFAULT_EXAMPLE_ID);
   const examplesRef = useRef([]);
-  const debouncedCode = useDebouncedValue(code, COMPILE_DEBOUNCE_MS);
+  const combinedCode = useMemo(() => combineImplicitSource(jsCode, glslCode), [glslCode, jsCode]);
+  const debouncedCode = useDebouncedValue(combinedCode, COMPILE_DEBOUNCE_MS);
 
   useEffect(() => {
     document.documentElement.classList.toggle("dark", themeMode === "dark");
@@ -427,8 +420,10 @@ export default function App() {
       throw new Error(`Could not load ${example.file}`);
     }
     const source = await response.text();
+    const splitSource = splitImplicitSource(source);
     setLoadedExampleCode(source);
-    setCode(source);
+    setJsCode(splitSource.jsCode);
+    setGlslCode(splitSource.glslCode);
     setPlaying(false);
     setAnimationElapsed(0);
   }, []);
@@ -548,7 +543,7 @@ export default function App() {
     }
   }, [activeAnimation, animatedValues, animationElapsed, compiledModel, definition, playing]);
 
-  const dirty = code !== loadedExampleCode;
+  const dirty = combinedCode !== loadedExampleCode;
   const selectedExample = examples.find((example) => example.id === selectedExampleId);
 
   const handleParamChange = useCallback((parameterId, value) => {
@@ -579,20 +574,40 @@ export default function App() {
   }, [loadExample, selectedExampleId]);
 
   return (
-    <div className="app-shell">
+    <div
+      className="app-shell"
+      style={{
+        "--workspace-left": `${workspaceSplit}%`,
+        "--editor-top": `${editorSplit}%`,
+        "--viewport-width": `${viewportSplit}%`
+      }}
+    >
       <header className="top-rail">
-        <div className="brand-block">
-          <div className="brand-mark"><Box size={18} /></div>
-          <div>
-            <span className="panel-kicker">standalone package test</span>
-            <h1>implicitjs workbench</h1>
-          </div>
+        <div className="brand-block compact-brand">
+          <strong>implicitjs</strong>
+          <span>workbench</span>
         </div>
+        <label className="top-example-select">
+          <FieldLabel>example</FieldLabel>
+          <select value={selectedExampleId} onChange={(event) => loadExample(event.target.value).catch((error) => {
+            setCompileState("error");
+            setCompileError(error instanceof Error ? error.message : String(error));
+          })}>
+            {examples.map((example) => (
+              <option key={example.id} value={example.id}>{example.label}</option>
+            ))}
+          </select>
+        </label>
         <div className="top-actions">
+          <button className="text-button" type="button" onClick={reloadSelectedExample}>
+            <RefreshCcw size={14} />
+            reload
+          </button>
           <div className="compile-readout">
             {compileState === "ready" ? <Check size={15} /> : compileState === "error" ? <Zap size={15} /> : <Activity size={15} />}
             <span>{compileState === "ready" ? "live shader ready" : compileState}</span>
           </div>
+          {dirty ? <StatusBadge state="busy" label="edited" /> : null}
           <IconButton
             title={themeMode === "dark" ? "Switch to light mode" : "Switch to dark mode"}
             onClick={() => setThemeMode((mode) => mode === "dark" ? "light" : "dark")}
@@ -602,56 +617,110 @@ export default function App() {
         </div>
       </header>
 
-      <main className="workspace-grid">
-        <CodeEditor
-          code={code}
-          onChange={setCode}
-          examples={examples}
-          selectedExampleId={selectedExampleId}
-          onSelectExample={(exampleId) => loadExample(exampleId).catch((error) => {
-            setCompileState("error");
-            setCompileError(error instanceof Error ? error.message : String(error));
+      <nav className="mobile-tabs" aria-label="Mobile sections">
+        {MOBILE_TABS.map(([id, label]) => (
+          <button
+            className={mobileTab === id ? "active" : ""}
+            key={id}
+            type="button"
+            onClick={() => setMobileTab(id)}
+          >
+            {label}
+          </button>
+        ))}
+      </nav>
+
+      <main className="workspace-grid" ref={workspaceRef}>
+        <section className="editor-shell">
+          <div className="editor-stack" ref={editorStackRef}>
+            <CodePane
+              active={mobileTab === "javascript"}
+              language="javascript"
+              title="JavaScript module"
+              value={jsCode}
+              onChange={setJsCode}
+            />
+            <SplitHandle
+              axis="y"
+              className="editor-resizer"
+              title="Resize JavaScript and GLSL editors"
+              onPointerDown={(event) => beginSplitDrag(event, {
+                axis: "y",
+                containerRef: editorStackRef,
+                min: 24,
+                max: 76,
+                setValue: setEditorSplit
+              })}
+            />
+            <CodePane
+              active={mobileTab === "glsl"}
+              language="glsl"
+              title="GLSL distance shader"
+              value={glslCode}
+              onChange={setGlslCode}
+            />
+          </div>
+        </section>
+
+        <SplitHandle
+          axis="x"
+          className="workspace-resizer"
+          title="Resize editors and preview"
+          onPointerDown={(event) => beginSplitDrag(event, {
+            axis: "x",
+            containerRef: workspaceRef,
+            min: 30,
+            max: 68,
+            setValue: setWorkspaceSplit
           })}
-          onReloadExample={reloadSelectedExample}
-          compileState={compileState}
         />
 
         <section className="visual-shell">
-          <div className="viewport-topbar">
-            <div>
-              <span className="panel-kicker">visualizer</span>
-              <h2>{liveModel?.name || "waiting for source"}</h2>
-            </div>
-            <div className="viewport-actions">
-              {dirty ? <span className="status-badge status-busy"><span className="status-dot" /> edited</span> : null}
-              <IconButton title="Reset camera" onClick={() => setCameraResetToken((token) => token + 1)}>
-                <RotateCcw size={16} />
-              </IconButton>
-            </div>
-          </div>
-
-          <div className="visual-body">
-            <div className="viewport-frame">
-              <ImplicitViewport
-                model={compileState === "ready" ? liveModel : null}
-                graphics={graphics}
-                themeMode={themeMode}
-                cameraResetToken={cameraResetToken}
-              />
-              {compileState === "error" ? (
-                <div className="compile-error">
-                  <FieldLabel>compile error</FieldLabel>
-                  <pre>{compileError}</pre>
+          <div className="visual-body" ref={visualBodyRef}>
+            <section className={`viewport-frame mobile-panel ${mobileTab === "preview" ? "is-active" : ""}`}>
+              <div className="section-bar">
+                <div className="section-title-row">
+                  <span>{liveModel?.name || "Preview"}</span>
                 </div>
-              ) : null}
-              {selectedExample ? (
-                <div className="example-caption">
-                  <strong>{selectedExample.label}</strong>
-                  <span>{selectedExample.description}</span>
-                </div>
-              ) : null}
-            </div>
+                <IconButton title="Reset camera" onClick={() => setCameraResetToken((token) => token + 1)}>
+                  <RotateCcw size={15} />
+                </IconButton>
+              </div>
+              <div className="viewport-canvas-area">
+                <ImplicitViewport
+                  model={compileState === "ready" ? liveModel : null}
+                  graphics={graphics}
+                  themeMode={themeMode}
+                  cameraResetToken={cameraResetToken}
+                />
+                {compileState === "error" ? (
+                  <div className="compile-error">
+                    <FieldLabel>compile error</FieldLabel>
+                    <pre>{compileError}</pre>
+                  </div>
+                ) : null}
+                {selectedExample ? (
+                  <div className="example-caption">
+                    <strong>{selectedExample.label}</strong>
+                    <span>{selectedExample.description}</span>
+                  </div>
+                ) : null}
+              </div>
+            </section>
+            <SplitHandle
+              axis="x"
+              className="visual-resizer"
+              title="Resize preview and controls"
+              onPointerDown={(event) => beginSplitDrag(event, {
+                axis: "x",
+                containerRef: visualBodyRef,
+                min: 46,
+                max: 82,
+                setValue: setViewportSplit
+              })}
+            />
             <InspectorPanel
+              active={mobileTab === "controls"}
               model={liveModel}
               definition={definition}
               paramValues={paramValues}
@@ -672,7 +741,7 @@ export default function App() {
               }}
               runtimeError={compileState === "error" ? compileError : ""}
             />
-          </div>
+            </div>
         </section>
       </main>
     </div>
