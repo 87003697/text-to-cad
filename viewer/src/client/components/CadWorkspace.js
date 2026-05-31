@@ -825,7 +825,7 @@ export default function CadWorkspace({
   const selectedEntryHasDisplayEdges = entryHasDisplayEdges(selectedEntry);
   const selectedEntryHasDxf = entryHasDxf(selectedEntry);
   const selectedEntryHasGcode = entryHasGcode(selectedEntry);
-  const selectedStepArtifactBuildFile = !selectedEntryHasMesh && stepArtifactCanGenerate(
+  const selectedStepArtifactBuildFile = stepArtifactCanGenerate(
     selectedEntry,
     selectedEntrySourceFormat,
     { generationAvailable: stepArtifactGenerationAvailable }

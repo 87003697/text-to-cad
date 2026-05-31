@@ -12,19 +12,6 @@ const BUILDABLE_STEP_ARTIFACT_ERROR_CODES = new Set([
   "unsupported_step_topology"
 ]);
 
-function stepEntryIsPythonBacked(entry) {
-  const artifactSourceKind = String(entry?.artifact?.sourceKind || "").trim().toLowerCase();
-  if (artifactSourceKind === "python") {
-    return true;
-  }
-  const sourceKind = String(entry?.sourceKind || entry?.stepSourceKind || "").trim().toLowerCase();
-  if (sourceKind === "python") {
-    return true;
-  }
-  const sourcePath = String(entry?.source?.sourcePath || entry?.source?.file || "").trim().toLowerCase();
-  return sourcePath.endsWith(".py");
-}
-
 export function stepArtifactIsStale(entry, sourceFormat) {
   return (
     sourceFormat === RENDER_FORMAT.STEP &&
@@ -38,9 +25,6 @@ export function stepArtifactIsStale(entry, sourceFormat) {
 
 export function stepArtifactCanGenerate(entry, sourceFormat, { generationAvailable = true } = {}) {
   if (!generationAvailable || sourceFormat !== RENDER_FORMAT.STEP) {
-    return false;
-  }
-  if (stepEntryIsPythonBacked(entry)) {
     return false;
   }
   if (entry?.artifact?.ok) {

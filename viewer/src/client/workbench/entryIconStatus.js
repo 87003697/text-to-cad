@@ -57,14 +57,11 @@ export function entryIconStatus(entry, {
       : !hasMesh;
   const options = { generationAvailable: stepArtifactGenerationAvailable };
   const artifactCanGenerate = stepArtifactCanGenerate(entry, normalizedSourceFormat, options);
-  const artifactBuildable = artifactCanGenerate && !hasMesh;
+  const artifactBuildable = artifactCanGenerate;
   const artifactStale = stepArtifactIsStale(entry, normalizedSourceFormat);
   const artifactErrorCode = String(entry?.artifact?.error || "").trim();
   const generatorRunning = Boolean(entryKey && activeScriptGenerationFileSet.has(entryKey));
-  const artifactWarning = !generatorRunning && (
-    stepArtifactNeedsWarning(entry, normalizedSourceFormat, options) ||
-    (artifactCanGenerate && hasMesh)
-  );
+  const artifactWarning = !generatorRunning && stepArtifactNeedsWarning(entry, normalizedSourceFormat, options);
   const artifactGenerating = Boolean(
     artifactBuildable &&
     entryKey &&

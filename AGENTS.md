@@ -131,16 +131,21 @@ When reviewing repo fixtures in CAD Viewer, point the Viewer at the repo
 generated CAD/robot-description files in `models/` so the viewer catalog and
 artifacts stay in one place.
 
-For root dev-server iteration, use the URL printed by Viewer commands; do not
-assume a fixed dev port unless you pass Vite's standard `--port` flag.
+Start or reuse the Viewer through the `cad-viewer` skill launcher and use the
+base URL it prints. The launcher owns port selection, reuses a compatible live
+Viewer for the same worktree/branch, and uses the source app in Vite dev mode
+when the skill viewer path is a development symlink.
 
-When modifying Viewer behavior, always run the root source app in dev mode for
-iteration; do not run the generated viewer from the cad-viewer skill while
-developing.
+Run from `skills/cad-viewer`:
 
 ```bash
-npm --prefix viewer run dev -- --host 127.0.0.1
+npm --prefix scripts/viewer run agent:start -- --host 127.0.0.1 --shutdown-after 12h
 ```
+
+Every returned Viewer URL must include `?dir=<absolute-model-root>`, commonly
+`<repo>/models`, and `file=<path>` values must be relative to `?dir=`. Do not
+manually choose or increment ports, do not rely on session-storage `?dir=`
+fallbacks, and do not stop an existing Viewer server unless the user asks.
 
 Packaged Viewer runtime and handoff details belong in the `cad-viewer` skill
 instructions. Treat packaged Viewer checks as generated-output checks and use

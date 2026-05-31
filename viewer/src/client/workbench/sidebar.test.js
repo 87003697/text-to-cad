@@ -210,7 +210,7 @@ test("entryIconStatus marks buildable STEP artifacts as generating in production
       entryKey: "benchmarks/generated.step",
       hasMesh: false
     }).artifactBuildable,
-    false
+    true
   );
 
   assert.deepEqual(
@@ -263,14 +263,14 @@ test("entryIconStatus marks buildable STEP artifacts as generating in production
       hasMesh: true
     }),
     {
-      artifactBuildable: false,
+      artifactBuildable: true,
       artifactGenerating: false,
       artifactStale: false,
-      artifactWarning: true,
+      artifactWarning: false,
       loading: false,
       pending: false,
       sourceFormat: "step",
-      statusLabel: "artifact warning"
+      statusLabel: "artifact generates on open"
     }
   );
 
@@ -315,14 +315,14 @@ test("entryIconStatus marks buildable STEP artifacts as generating in production
       hasMesh: false
     }),
     {
-      artifactBuildable: false,
+      artifactBuildable: true,
       artifactGenerating: false,
       artifactStale: false,
-      artifactWarning: true,
+      artifactWarning: false,
       loading: false,
       pending: true,
       sourceFormat: "step",
-      statusLabel: "artifacts missing"
+      statusLabel: "artifact generates on open"
     }
   );
 });
@@ -405,7 +405,7 @@ test("entryIconStatus treats active generator runs as loading and suppresses art
       activeGenerationFiles: ["robots/tom/robot_arm.step"]
     }),
     {
-      artifactBuildable: false,
+      artifactBuildable: true,
       artifactGenerating: false,
       artifactStale: true,
       artifactWarning: false,
