@@ -39,35 +39,32 @@ function withWindow(url, callback) {
   }
 }
 
-test("readActiveCadDir keeps directory mode when absolute file is inside the active dir", () => {
+test("readActiveCadDir keeps directory mode for file params that look absolute", () => {
   withWindow("http://viewer.test/?dir=%2Ftmp%2Fmodels&file=%2Ftmp%2Fmodels%2Frobot.step", () => {
     assert.equal(readActiveCadDir(), "/tmp/models");
   });
 });
 
-test("readActiveCadDir enters file-only mode when absolute file is outside query dir", () => {
-  withWindow("http://viewer.test/?dir=%2Ftmp%2Fmodels&file=%2Ftmp%2Fother%2Frobot.step", () => {
-    assert.equal(readActiveCadDir(), "");
+test("readActiveCadDir keeps directory mode for relative dir and file params", () => {
+  withWindow("http://viewer.test/?dir=models&file=robots%2Fnext.step", () => {
+    assert.equal(readActiveCadDir(), "models");
   });
 });
 
-test("readActiveCadDir enters file-only mode when absolute file is outside stored dir", () => {
-  withWindow("http://viewer.test/?dir=%2Ftmp%2Fmodels&file=%2Ftmp%2Fmodels%2Frobot.step", ({ setHref }) => {
+test("readActiveCadDir reuses stored directories when dir is absent", () => {
+  withWindow("http://viewer.test/?dir=%2Ftmp%2Fmodels", ({ setHref }) => {
+    assert.equal(readActiveCadDir(), "/tmp/models");
+
+    setHref("http://viewer.test/?file=robot.step");
+    assert.equal(readActiveCadDir(), "/tmp/models");
+  });
+});
+
+test("readActiveCadDir reuses stored directories for all file params", () => {
+  withWindow("http://viewer.test/?dir=%2Ftmp%2Fmodels", ({ setHref }) => {
     assert.equal(readActiveCadDir(), "/tmp/models");
 
     setHref("http://viewer.test/?file=%2Ftmp%2Fother%2Frobot.step");
-    assert.equal(readActiveCadDir(), "");
-
-    setHref("http://viewer.test/?file=%2Ftmp%2Fmodels%2Fnext.step");
-    assert.equal(readActiveCadDir(), "/tmp/models");
-  });
-});
-
-test("readActiveCadDir keeps stored directory mode for relative file params", () => {
-  withWindow("http://viewer.test/?dir=%2Ftmp%2Fmodels&file=%2Ftmp%2Fmodels%2Frobot.step", ({ setHref }) => {
-    assert.equal(readActiveCadDir(), "/tmp/models");
-
-    setHref("http://viewer.test/?file=robots%2Fnext.step");
     assert.equal(readActiveCadDir(), "/tmp/models");
   });
 });

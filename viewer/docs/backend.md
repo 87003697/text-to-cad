@@ -47,20 +47,15 @@ local CAD generation.
 implementation. `readCatalog()` and `refreshCatalog()` scan
 the absolute `?dir=` root for the current request, keep the catalog as an
 in-memory object, and return schema v4 entries whose `file` values are absolute
-paths. When no `?dir=` is active, an absolute `?file=` lets the backend scan
-only the requested file's directory so the Viewer can render that file without a
-directory catalog, sidebar, or breadcrumbs. The local backend does not write
-`catalog.json` or any hidden catalog cache file.
+paths plus `rootRelativeFile` values for URL navigation. The local backend does
+not write `catalog.json` or any hidden catalog cache file.
 
-Local filesystem deployments are intentionally URL-driven. `?dir=` must be an
-absolute path, and the client stores the last seen `?dir=` in tab-local
-`sessionStorage` so later navigation can omit it. `VIEWER_LOCAL_ROOT_DIR`,
-`VIEWER_LOCAL_WORKSPACE_ROOT`, and the old fixed-root startup flag have been
-removed and now fail at startup.
-
-Agent handoffs should include `?dir=<absolute-root>` in every returned Viewer
-link even though the browser can fall back to tab-local storage. Include
-`file=<absolute-file>` for each specific file link.
+Local filesystem deployments are intentionally URL-driven. `?dir=` may be
+absolute or relative to the directory where the Viewer was started; when omitted
+it defaults to that startup directory. The startup directory is also the first
+active workspace. `?file=` values are always relative to the active `?dir=`
+workspace. `VIEWER_LOCAL_ROOT_DIR`, `VIEWER_LOCAL_WORKSPACE_ROOT`, and the old
+fixed-root startup flag have been removed and now fail at startup.
 
 The local backend serves asset bytes from the active root and writes regenerated
 artifacts back into it. It rejects path traversal and only serves or writes
@@ -96,7 +91,7 @@ npm run serve
 ```
 
 Then open the printed server URL with
-`?dir=/absolute/root&file=/absolute/root/model.step`. Pass `--port <number>` to
+`?dir=/absolute/root&file=model.step`. Pass `--port <number>` to
 `npm run serve --` only when the default production port is already in use.
 
 ## Vercel Blob

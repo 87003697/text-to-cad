@@ -76,7 +76,7 @@ test("CAD Viewer API middleware awaits async backend catalog reads", async () =>
   });
 });
 
-test("CAD Viewer API middleware activates direct file roots", async () => {
+test("CAD Viewer API middleware activates request roots for file params", async () => {
   const calls = [];
   const resolvedRoots = [];
   const activatedRoots = [];
@@ -104,7 +104,7 @@ test("CAD Viewer API middleware activates direct file roots", async () => {
   });
   const req = {
     method: "GET",
-    url: "/__cad/catalog?file=%2Ftmp%2Ffile-root%2Fpart.step",
+    url: "/__cad/catalog?file=part.step",
   };
   const res = createResponse();
   let nextCalled = false;
@@ -116,14 +116,14 @@ test("CAD Viewer API middleware activates direct file roots", async () => {
   assert.equal(nextCalled, false);
   assert.equal(res.statusCode, 200);
   assert.deepEqual(calls, [
-    { rootDir: "", fileRef: "/tmp/file-root/part.step" },
+    { rootDir: "", fileRef: "part.step" },
   ]);
   assert.deepEqual(resolvedRoots, [
-    { rootDir: "", fileRef: "/tmp/file-root/part.step" },
+    { rootDir: "", fileRef: "part.step" },
   ]);
   assert.deepEqual(activatedRoots, [resolvedRoot]);
   assert.deepEqual(activatedRequests, [
-    { rootDir: "", fileRef: "/tmp/file-root/part.step" },
+    { rootDir: "", fileRef: "part.step" },
   ]);
 });
 

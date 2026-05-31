@@ -72,6 +72,65 @@ test("local backend serves catalog from an in-memory scan without writing catalo
   });
 });
 
+test("local backend defaults directory mode to the workspace root", async () => {
+  await withTempWorkspace((workspaceRoot) => {
+    fs.writeFileSync(path.join(workspaceRoot, "sample.stl"), "solid sample\nendsolid sample\n");
+    const backend = createLocalAssetBackend({ workspaceRoot });
+
+    assert.deepEqual(backend.readCatalog().entries.map((entry) => entry.rootRelativeFile), ["sample.stl"]);
+  });
+});
+
+test("local backend accepts relative request directories from the workspace root", async () => {
+  await withTempWorkspace((workspaceRoot) => {
+    fs.mkdirSync(path.join(workspaceRoot, "models"), { recursive: true });
+    fs.writeFileSync(path.join(workspaceRoot, "models", "sample.stl"), "solid sample\nendsolid sample\n");
+    const backend = createLocalAssetBackend({ workspaceRoot });
+
+    assert.deepEqual(backend.readCatalog({ rootDir: "models" }).entries.map((entry) => entry.rootRelativeFile), ["sample.stl"]);
+  });
+});
+
+test("local backend keeps directory mode for file params that look absolute", async () => {
+  await withTempWorkspace((workspaceRoot) => {
+    fs.mkdirSync(path.join(workspaceRoot, "models"), { recursive: true });
+    fs.mkdirSync(path.join(workspaceRoot, "other"), { recursive: true });
+    fs.writeFileSync(path.join(workspaceRoot, "models", "inside.stl"), "solid inside\nendsolid inside\n");
+    const outsidePath = path.join(workspaceRoot, "other", "solo.stl");
+    fs.writeFileSync(outsidePath, "solid solo\nendsolid solo\n");
+    const backend = createLocalAssetBackend({ workspaceRoot });
+
+    const catalog = backend.readCatalog({ rootDir: "models", fileRef: outsidePath });
+
+    assert.deepEqual(catalog.entries.map((entry) => entry.rootRelativeFile), ["inside.stl"]);
+    assert.deepEqual(catalog.entries.map((entry) => entry.file), [path.join(workspaceRoot, "models", "inside.stl")]);
+  });
+});
+
+test("local backend keeps directory mode for missing relative file params", async () => {
+  await withTempWorkspace((workspaceRoot) => {
+    fs.mkdirSync(path.join(workspaceRoot, "models"), { recursive: true });
+    fs.writeFileSync(path.join(workspaceRoot, "models", "sample.stl"), "solid sample\nendsolid sample\n");
+    const backend = createLocalAssetBackend({ workspaceRoot });
+
+    assert.deepEqual(
+      backend.readCatalog({ rootDir: "models", fileRef: "missing.stl" }).entries.map((entry) => entry.rootRelativeFile),
+      ["sample.stl"]
+    );
+  });
+});
+
+test("local backend reports missing request directories", async () => {
+  await withTempWorkspace((workspaceRoot) => {
+    const backend = createLocalAssetBackend({ workspaceRoot });
+
+    assert.throws(
+      () => backend.readCatalog({ rootDir: "missing-models" }),
+      /CAD Viewer directory not found/
+    );
+  });
+});
+
 test("local backend incrementally refreshes changed CAD catalog entries", async () => {
   await withTempWorkspace((workspaceRoot) => {
     const modelRoot = path.join(workspaceRoot, "models");
@@ -108,19 +167,19 @@ test("local backend refreshes requested files against a cached dynamic root cata
     const backend = createLocalAssetBackend({ workspaceRoot });
 
     assert.deepEqual(
-      backend.readCatalog({ rootDir: modelRoot, fileRef: firstPath }).entries.map((entry) => entry.rootRelativeFile),
+      backend.readCatalog({ rootDir: modelRoot, fileRef: "first.stl" }).entries.map((entry) => entry.rootRelativeFile),
       ["first.stl"]
     );
 
     fs.writeFileSync(secondPath, "solid second\nendsolid second\n");
     assert.deepEqual(
-      backend.readCatalog({ rootDir: modelRoot, fileRef: secondPath }).entries.map((entry) => entry.rootRelativeFile),
+      backend.readCatalog({ rootDir: modelRoot, fileRef: "second.stl" }).entries.map((entry) => entry.rootRelativeFile),
       ["first.stl", "second.stl"]
     );
 
     fs.unlinkSync(firstPath);
     assert.deepEqual(
-      backend.readCatalog({ rootDir: modelRoot, fileRef: firstPath }).entries.map((entry) => entry.rootRelativeFile),
+      backend.readCatalog({ rootDir: modelRoot, fileRef: "first.stl" }).entries.map((entry) => entry.rootRelativeFile),
       ["second.stl"]
     );
   });

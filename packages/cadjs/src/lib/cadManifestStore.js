@@ -1,9 +1,13 @@
+import {
+  readStoredActiveCadDir,
+  rememberActiveCadDir,
+} from "./cadViewerDirectorySession.mjs";
+
 const CAD_CATALOG_REFRESH_INTERVAL_MS = 2_000;
 const CAD_CATALOG_FETCH_TIMEOUT_MS = 10_000;
 const CAD_GENERATION_STATUS_REFRESH_INTERVAL_MS = 750;
 const CAD_DIR_QUERY_PARAM = "dir";
 const CAD_FILE_QUERY_PARAM = "file";
-const CAD_DIR_SESSION_STORAGE_KEY = "__cadViewerDir";
 
 function normalizeCadManifest(manifest) {
   if (!manifest || typeof manifest !== "object") {
@@ -134,49 +138,6 @@ function readSearchParam(name) {
   }
 }
 
-function normalizePathForContainment(value) {
-  const normalized = String(value || "").trim().replace(/\\/g, "/").replace(/\/+/g, "/");
-  if (!normalized || normalized === "/") {
-    return normalized;
-  }
-  if (/^[a-z]:\/?$/i.test(normalized)) {
-    return normalized.endsWith("/") ? normalized : `${normalized}/`;
-  }
-  return normalized.replace(/\/+$/g, "");
-}
-
-function isAbsoluteFileParam(value) {
-  const normalized = normalizePathForContainment(value);
-  return normalized.startsWith("/") || /^[a-z]:\//i.test(normalized);
-}
-
-function directoryContainsFile(directory, file) {
-  const normalizedDirectory = normalizePathForContainment(directory);
-  const normalizedFile = normalizePathForContainment(file);
-  if (!normalizedDirectory || !normalizedFile) {
-    return false;
-  }
-  if (normalizedDirectory === "/") {
-    return normalizedFile.startsWith("/");
-  }
-  if (/^[a-z]:\/$/i.test(normalizedDirectory)) {
-    return normalizedFile.toLowerCase().startsWith(normalizedDirectory.toLowerCase());
-  }
-  return normalizedFile === normalizedDirectory || normalizedFile.startsWith(`${normalizedDirectory}/`);
-}
-
-function activeDirForFile(candidateDir, fileParam) {
-  const normalizedCandidate = String(candidateDir || "").trim();
-  if (!normalizedCandidate) {
-    return "";
-  }
-  const normalizedFile = String(fileParam || "").trim();
-  if (isAbsoluteFileParam(normalizedFile) && !directoryContainsFile(normalizedCandidate, normalizedFile)) {
-    return "";
-  }
-  return normalizedCandidate;
-}
-
 export function readActiveCadDir() {
   if (typeof window === "undefined") {
     return "";
@@ -187,25 +148,11 @@ export function readActiveCadDir() {
   } catch {
     return "";
   }
-  const fileParam = String(url.searchParams.get(CAD_FILE_QUERY_PARAM) || "").trim();
   if (url.searchParams.has(CAD_DIR_QUERY_PARAM)) {
     const queryDir = String(url.searchParams.get(CAD_DIR_QUERY_PARAM) || "").trim();
-    try {
-      if (queryDir) {
-        window.sessionStorage?.setItem(CAD_DIR_SESSION_STORAGE_KEY, queryDir);
-      } else {
-        window.sessionStorage?.removeItem(CAD_DIR_SESSION_STORAGE_KEY);
-      }
-    } catch {
-      // Session storage is only a convenience; URL params remain authoritative.
-    }
-    return activeDirForFile(queryDir, fileParam);
+    return rememberActiveCadDir(queryDir);
   }
-  try {
-    return activeDirForFile(window.sessionStorage?.getItem(CAD_DIR_SESSION_STORAGE_KEY) || "", fileParam);
-  } catch {
-    return "";
-  }
+  return readStoredActiveCadDir();
 }
 
 function cadApiUrl(path, {
@@ -324,10 +271,6 @@ export async function refreshCadGenerationStatus() {
     return;
   }
   const activeDir = readActiveCadDir();
-  if (!activeDir) {
-    publishCadGenerationStatus(null);
-    return;
-  }
   if (generationRefreshInFlight) {
     return generationRefreshInFlight;
   }
