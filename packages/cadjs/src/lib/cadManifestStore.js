@@ -4,6 +4,15 @@ const CAD_GENERATION_STATUS_REFRESH_INTERVAL_MS = 750;
 const CAD_DIR_QUERY_PARAM = "dir";
 const CAD_FILE_QUERY_PARAM = "file";
 const CAD_DIR_SESSION_STORAGE_KEY = "__cadViewerDir";
+const HOSTED_CATALOG_BACKENDS = new Set(["vercel-blob"]);
+
+function viewerAssetBackendFromEnv() {
+  return String(import.meta.env?.VIEWER_ASSET_BACKEND || "").trim().toLowerCase();
+}
+
+export function cadViewerUsesHostedCatalog(assetBackend = viewerAssetBackendFromEnv()) {
+  return HOSTED_CATALOG_BACKENDS.has(String(assetBackend || "").trim().toLowerCase());
+}
 
 function normalizeCadManifest(manifest) {
   if (!manifest || typeof manifest !== "object") {
@@ -177,8 +186,11 @@ function activeDirForFile(candidateDir, fileParam) {
   return normalizedCandidate;
 }
 
-export function readActiveCadDir() {
+export function readActiveCadDir({ assetBackend = viewerAssetBackendFromEnv() } = {}) {
   if (typeof window === "undefined") {
+    return "";
+  }
+  if (cadViewerUsesHostedCatalog(assetBackend)) {
     return "";
   }
   let url = null;

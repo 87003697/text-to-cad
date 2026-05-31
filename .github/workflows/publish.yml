@@ -281,6 +281,57 @@ jobs:
           TARGET_BRANCH: ${{ steps.request.outputs.target_branch }}
         run: echo "Would push HEAD to $TARGET_BRANCH."
 
+      - name: Install Vercel CLI
+        if: steps.gate.outputs.should_publish == 'true' && steps.request.outputs.target_branch == 'main' && steps.request.outputs.dry_run != 'true'
+        run: npm install --global vercel@50.28.0
+
+      - name: Deploy production apps to Vercel
+        if: steps.gate.outputs.should_publish == 'true' && steps.request.outputs.target_branch == 'main' && steps.request.outputs.dry_run != 'true'
+        env:
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+          VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
+          VERCEL_DOCS_PROJECT_ID: ${{ secrets.VERCEL_DOCS_PROJECT_ID }}
+          VERCEL_VIEWER_PROJECT_ID: ${{ secrets.VERCEL_VIEWER_PROJECT_ID }}
+        run: |
+          for name in VERCEL_TOKEN VERCEL_ORG_ID VERCEL_DOCS_PROJECT_ID VERCEL_VIEWER_PROJECT_ID; do
+            if [ -z "${!name:-}" ]; then
+              echo "Missing GitHub Actions secret: $name" >&2
+              exit 1
+            fi
+          done
+
+          deploy_vercel_project() {
+            local label="$1"
+            local project_dir="$2"
+            local project_id="$3"
+            local deployment_output
+            local deployment_url
+
+            echo "::group::Deploy $label to Vercel production"
+            (
+              cd "$project_dir"
+              export VERCEL_ORG_ID
+              export VERCEL_PROJECT_ID="$project_id"
+
+              vercel pull --yes --environment=production --token="$VERCEL_TOKEN"
+              vercel build --prod --token="$VERCEL_TOKEN"
+              deployment_output="$(vercel deploy --prebuilt --prod --token="$VERCEL_TOKEN")"
+              echo "$deployment_output"
+              deployment_url="$(printf '%s\n' "$deployment_output" | tail -n 1)"
+
+              {
+                echo "### $label"
+                echo
+                echo "Production deployment: $deployment_url"
+                echo
+              } >> "$GITHUB_STEP_SUMMARY"
+            )
+            echo "::endgroup::"
+          }
+
+          deploy_vercel_project "Docs app" "docs" "$VERCEL_DOCS_PROJECT_ID"
+          deploy_vercel_project "Demo viewer app" "viewer" "$VERCEL_VIEWER_PROJECT_ID"
+
       - name: Create release tag and GitHub Release
         if: steps.gate.outputs.should_publish == 'true' && steps.request.outputs.target_branch == 'main'
         env:
