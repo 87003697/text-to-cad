@@ -5,7 +5,7 @@ import { meshImplicitCadModel } from "./mesh.js";
 import { analyzeImplicitMeshQuality } from "./meshQuality.js";
 
 const sphereModel = {
-  schema: "implicit-cad/v1",
+  schema: "implicit.js/0.1.0",
   name: "quality sphere",
   bounds: [[-6, -6, -6], [6, 6, 6]],
   glsl: "float sdf(vec3 p) { return length(p) - 4.0; }",

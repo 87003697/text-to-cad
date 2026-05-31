@@ -1,5 +1,27 @@
+const GLSL = `
+float sdf(vec3 p) {
+  float d = implicitCadSphere(p, vec3(0.0), coreRadius);
+  d = implicitCadUnionRound(d, implicitCadSphere(p, vec3(spacing, 0.0, 0.0), satelliteRadius), blend);
+  d = implicitCadUnionRound(d, implicitCadSphere(p, vec3(-spacing, 0.0, 0.0), satelliteRadius), blend);
+  d = implicitCadUnionRound(d, implicitCadSphere(p, vec3(0.0, spacing, 0.0), satelliteRadius), blend);
+  d = implicitCadUnionRound(d, implicitCadSphere(p, vec3(0.0, -spacing, 0.0), satelliteRadius), blend);
+  d = implicitCadUnionRound(d, implicitCadSphere(p, vec3(0.0, 0.0, spacing), satelliteRadius), blend);
+  d = implicitCadUnionRound(d, implicitCadSphere(p, vec3(0.0, 0.0, -spacing), satelliteRadius), blend);
+  return d;
+}
+
+
+vec3 color(vec3 p, vec3 normal) {
+  vec3 directionTint = normalize(abs(p) + vec3(0.001));
+  vec3 blue = vec3(0.14, 0.48, 0.94);
+  vec3 green = vec3(0.26, 0.86, 0.44);
+  vec3 magenta = vec3(0.86, 0.24, 0.76);
+  return blue * directionTint.x + green * directionTint.y + magenta * directionTint.z;
+}
+`;
+
 export default {
-  schema: "implicit-cad/v1",
+  schema: "implicit.js/0.1.0",
   name: "metaball molecule cluster",
   description: "Seven overlapping spheres blended into one smooth organic implicit solid.",
   units: "mm",
@@ -31,25 +53,5 @@ export default {
     epsilon: Math.max(0.004, Math.min(params.coreRadius, params.satelliteRadius) * 0.0007),
     normalEpsilon: Math.max(0.035, params.blend * 0.009)
   }),
-  glsl: `
-float sdf(vec3 p) {
-  float d = implicitCadSphere(p, vec3(0.0), coreRadius);
-  d = implicitCadUnionRound(d, implicitCadSphere(p, vec3(spacing, 0.0, 0.0), satelliteRadius), blend);
-  d = implicitCadUnionRound(d, implicitCadSphere(p, vec3(-spacing, 0.0, 0.0), satelliteRadius), blend);
-  d = implicitCadUnionRound(d, implicitCadSphere(p, vec3(0.0, spacing, 0.0), satelliteRadius), blend);
-  d = implicitCadUnionRound(d, implicitCadSphere(p, vec3(0.0, -spacing, 0.0), satelliteRadius), blend);
-  d = implicitCadUnionRound(d, implicitCadSphere(p, vec3(0.0, 0.0, spacing), satelliteRadius), blend);
-  d = implicitCadUnionRound(d, implicitCadSphere(p, vec3(0.0, 0.0, -spacing), satelliteRadius), blend);
-  return d;
-}
-
-
-vec3 color(vec3 p, vec3 normal) {
-  vec3 directionTint = normalize(abs(p) + vec3(0.001));
-  vec3 blue = vec3(0.14, 0.48, 0.94);
-  vec3 green = vec3(0.26, 0.86, 0.44);
-  vec3 magenta = vec3(0.86, 0.24, 0.76);
-  return blue * directionTint.x + green * directionTint.y + magenta * directionTint.z;
-}
-`
+  glsl: GLSL
 };

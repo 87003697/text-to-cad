@@ -11,7 +11,7 @@ import {
 } from "./export.js";
 
 const sphereModel = {
-  schema: "implicit-cad/v1",
+  schema: "implicit.js/0.1.0",
   name: "export sphere",
   bounds: [[-8, -8, -8], [8, 8, 8]],
   glsl: `
@@ -49,7 +49,7 @@ test("exportImplicitCadFile applies parameter values and writes next to source b
   const input = path.join(tempDir, "orb.implicit.js");
   fs.writeFileSync(input, `
 export default {
-  schema: "implicit-cad/v1",
+  schema: "implicit.js/0.1.0",
   name: "param orb",
   params: {
     radius: { type: "number", min: 2, max: 8, default: 3 }
@@ -83,7 +83,7 @@ test("implicit GLB exports include CAD-native millimeter metadata", () => {
 
 test("implicit animated GLB exports morph target animation", () => {
   const result = exportImplicitCadAnimatedGlb({
-    schema: "implicit-cad/v1",
+    schema: "implicit.js/0.1.0",
     name: "animated sphere",
     params: {
       radius: { type: "number", min: 2, max: 8, default: 4 }

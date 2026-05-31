@@ -10,7 +10,7 @@ import {
 test("loadImplicitModuleFromSource normalizes editable implicit source strings", async () => {
   const model = await loadImplicitModuleFromSource(`
     export default {
-      schema: "implicit-cad/v1",
+      schema: "implicit.js/0.1.0",
       name: "inline sphere",
       params: {
         radius: { type: "number", min: 1, max: 8, default: 4 }

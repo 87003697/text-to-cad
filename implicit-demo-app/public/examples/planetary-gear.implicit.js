@@ -1,86 +1,4 @@
-const PLANETARY_MIN_SUN_TEETH = 12;
-const PLANETARY_MAX_SUN_TEETH = 30;
-
-function roundedTeeth(value, fallback) {
-  const numeric = Number(value);
-  return Math.round(Number.isFinite(numeric) ? numeric : fallback);
-}
-
-function compatibleSunTeeth(params) {
-  const planetTeeth = Math.max(3, roundedTeeth(params.planetTeeth, 12));
-  const rawSunTeeth = Math.min(
-    Math.max(roundedTeeth(params.sunTeeth, 18), PLANETARY_MIN_SUN_TEETH),
-    PLANETARY_MAX_SUN_TEETH
-  );
-  const candidates = [rawSunTeeth - 1, rawSunTeeth, rawSunTeeth + 1, rawSunTeeth - 2, rawSunTeeth + 2]
-    .filter((candidate) => candidate >= PLANETARY_MIN_SUN_TEETH && candidate <= PLANETARY_MAX_SUN_TEETH)
-    .filter((candidate) => (candidate + planetTeeth) % 3 === 0);
-  return candidates.length ? candidates[0] : rawSunTeeth;
-}
-
-export default {
-  schema: "implicit-cad/v1",
-  name: "planetary gear",
-  description: "A shader-parametric planetary gear set with a sun gear, three planet gears, internal ring teeth, and an under-carrier.",
-  units: "mm",
-  params: {
-    sunTeeth: { type: "number", label: "Sun teeth", min: 12, max: 30, step: 1, default: 18 },
-    planetTeeth: { type: "number", label: "Planet teeth", min: 8, max: 18, step: 1, default: 12 },
-    gearModule: { type: "number", label: "Gear module", min: 1.2, max: 3.2, step: 0.05, default: 2.0, unit: "mm" },
-    toothDepth: { type: "number", label: "Tooth depth", min: 0.6, max: 3.6, step: 0.05, default: 1.55, unit: "mm" },
-    thickness: { type: "number", label: "Gear thickness", min: 3, max: 12, step: 0.25, default: 6.5, unit: "mm" },
-    backlash: { type: "number", label: "Backlash", min: 0, max: 1.4, step: 0.02, default: 0.22, unit: "mm" },
-    meshOffset: { type: "number", label: "Mesh spread", min: 0, max: 5, step: 0.05, default: 0, unit: "mm" },
-    meshPhase: { type: "number", label: "Drive phase", min: 0, max: 360, step: 1, default: 16, unit: "deg" },
-    carrierAngle: { type: "number", label: "Carrier orbit", min: -180, max: 180, step: 1, default: 0, unit: "deg" },
-    ringPhase: { type: "number", label: "Ring phase", min: -180, max: 180, step: 1, default: 0, unit: "deg" },
-    showCarrier: { type: "boolean", label: "Show carrier", default: true }
-  },
-  animations: {
-    meshCycle: {
-      label: "Mesh cycle",
-      duration: 8,
-      loop: true,
-      update({ progress, params, set }) {
-        const drive = progress * 360;
-        const sunTeeth = compatibleSunTeeth(params);
-        const planetTeeth = Math.max(3, roundedTeeth(params.planetTeeth, 12));
-        const ringTeeth = sunTeeth + planetTeeth * 2;
-        const carrier = drive * sunTeeth / Math.max(sunTeeth + ringTeeth, 1);
-        set("meshPhase", drive);
-        set("carrierAngle", ((carrier + 180) % 360) - 180);
-        set("ringPhase", 0);
-      }
-    },
-    explodeMesh: {
-      label: "Explode mesh",
-      duration: 5.5,
-      loop: true,
-      update({ progress, set }) {
-        const wave = 0.5 - 0.5 * Math.cos(progress * Math.PI * 2);
-        set("meshOffset", wave * 4.2);
-        set("carrierAngle", -28 + wave * 56);
-      }
-    }
-  },
-  bounds: ({ params }) => {
-    const sunTeeth = compatibleSunTeeth(params);
-    const planetTeeth = Math.max(3, roundedTeeth(params.planetTeeth, 12));
-    const ringTeeth = sunTeeth + planetTeeth * 2;
-    const spread = Math.max(params.meshOffset, 0);
-    const ringPitch = params.gearModule * ringTeeth * 0.5 + spread;
-    const ringOuter = ringPitch + params.toothDepth * 2.8 + params.gearModule * 3.4 + 2;
-    const z = params.thickness * 0.92 + 5;
-    return [[-ringOuter, -ringOuter, -z], [ringOuter, ringOuter, z]];
-  },
-  render: ({ params }) => ({
-    steps: 320,
-    epsilon: Math.max(0.005, params.gearModule * 0.0025),
-    normalEpsilon: Math.max(0.038, params.gearModule * 0.018),
-    stepScale: 0.5,
-    maxStep: Math.max(params.gearModule * 0.62, 0.65)
-  }),
-  glsl: `
+const GLSL = `
 const float PLANETARY_TAU = 6.283185307179586;
 
 float planetaryRoundedSunTeeth() {
@@ -320,5 +238,89 @@ vec3 color(vec3 p, vec3 normal) {
 
   return planetaryPalette(component, p, normal);
 }
-`
+`;
+
+const PLANETARY_MIN_SUN_TEETH = 12;
+const PLANETARY_MAX_SUN_TEETH = 30;
+
+function roundedTeeth(value, fallback) {
+  const numeric = Number(value);
+  return Math.round(Number.isFinite(numeric) ? numeric : fallback);
+}
+
+function compatibleSunTeeth(params) {
+  const planetTeeth = Math.max(3, roundedTeeth(params.planetTeeth, 12));
+  const rawSunTeeth = Math.min(
+    Math.max(roundedTeeth(params.sunTeeth, 18), PLANETARY_MIN_SUN_TEETH),
+    PLANETARY_MAX_SUN_TEETH
+  );
+  const candidates = [rawSunTeeth - 1, rawSunTeeth, rawSunTeeth + 1, rawSunTeeth - 2, rawSunTeeth + 2]
+    .filter((candidate) => candidate >= PLANETARY_MIN_SUN_TEETH && candidate <= PLANETARY_MAX_SUN_TEETH)
+    .filter((candidate) => (candidate + planetTeeth) % 3 === 0);
+  return candidates.length ? candidates[0] : rawSunTeeth;
+}
+
+export default {
+  schema: "implicit.js/0.1.0",
+  name: "planetary gear",
+  description: "A shader-parametric planetary gear set with a sun gear, three planet gears, internal ring teeth, and an under-carrier.",
+  units: "mm",
+  params: {
+    sunTeeth: { type: "number", label: "Sun teeth", min: 12, max: 30, step: 1, default: 18 },
+    planetTeeth: { type: "number", label: "Planet teeth", min: 8, max: 18, step: 1, default: 12 },
+    gearModule: { type: "number", label: "Gear module", min: 1.2, max: 3.2, step: 0.05, default: 2.0, unit: "mm" },
+    toothDepth: { type: "number", label: "Tooth depth", min: 0.6, max: 3.6, step: 0.05, default: 1.55, unit: "mm" },
+    thickness: { type: "number", label: "Gear thickness", min: 3, max: 12, step: 0.25, default: 6.5, unit: "mm" },
+    backlash: { type: "number", label: "Backlash", min: 0, max: 1.4, step: 0.02, default: 0.22, unit: "mm" },
+    meshOffset: { type: "number", label: "Mesh spread", min: 0, max: 5, step: 0.05, default: 0, unit: "mm" },
+    meshPhase: { type: "number", label: "Drive phase", min: 0, max: 360, step: 1, default: 16, unit: "deg" },
+    carrierAngle: { type: "number", label: "Carrier orbit", min: -180, max: 180, step: 1, default: 0, unit: "deg" },
+    ringPhase: { type: "number", label: "Ring phase", min: -180, max: 180, step: 1, default: 0, unit: "deg" },
+    showCarrier: { type: "boolean", label: "Show carrier", default: true }
+  },
+  animations: {
+    meshCycle: {
+      label: "Mesh cycle",
+      duration: 8,
+      loop: true,
+      update({ progress, params, set }) {
+        const drive = progress * 360;
+        const sunTeeth = compatibleSunTeeth(params);
+        const planetTeeth = Math.max(3, roundedTeeth(params.planetTeeth, 12));
+        const ringTeeth = sunTeeth + planetTeeth * 2;
+        const carrier = drive * sunTeeth / Math.max(sunTeeth + ringTeeth, 1);
+        set("meshPhase", drive);
+        set("carrierAngle", ((carrier + 180) % 360) - 180);
+        set("ringPhase", 0);
+      }
+    },
+    explodeMesh: {
+      label: "Explode mesh",
+      duration: 5.5,
+      loop: true,
+      update({ progress, set }) {
+        const wave = 0.5 - 0.5 * Math.cos(progress * Math.PI * 2);
+        set("meshOffset", wave * 4.2);
+        set("carrierAngle", -28 + wave * 56);
+      }
+    }
+  },
+  bounds: ({ params }) => {
+    const sunTeeth = compatibleSunTeeth(params);
+    const planetTeeth = Math.max(3, roundedTeeth(params.planetTeeth, 12));
+    const ringTeeth = sunTeeth + planetTeeth * 2;
+    const spread = Math.max(params.meshOffset, 0);
+    const ringPitch = params.gearModule * ringTeeth * 0.5 + spread;
+    const ringOuter = ringPitch + params.toothDepth * 2.8 + params.gearModule * 3.4 + 2;
+    const z = params.thickness * 0.92 + 5;
+    return [[-ringOuter, -ringOuter, -z], [ringOuter, ringOuter, z]];
+  },
+  render: ({ params }) => ({
+    steps: 320,
+    epsilon: Math.max(0.005, params.gearModule * 0.0025),
+    normalEpsilon: Math.max(0.038, params.gearModule * 0.018),
+    stepScale: 0.5,
+    maxStep: Math.max(params.gearModule * 0.62, 0.65)
+  }),
+  glsl: GLSL
 };

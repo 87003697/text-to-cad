@@ -1,5 +1,25 @@
+const GLSL = `
+float sdf(vec3 p) {
+  vec3 q = p / scale;
+  float field = q.x * q.x - q.y * q.y * q.z;
+  float gradientScale = pinchSharpness + length(vec3(2.0 * q.x, -2.0 * q.y * q.z, -q.y * q.y));
+  float sheet = abs(field) / gradientScale * scale - thickness;
+  float clip = implicitCadSphere(p, vec3(0.0), clipRadius);
+  return max(sheet, clip) * 0.28;
+}
+
+
+vec3 color(vec3 p, vec3 normal) {
+  float pinch = 1.0 - smoothstep(0.0, 12.0, length(p.xy));
+  vec3 violet = vec3(0.54, 0.30, 0.92);
+  vec3 cyan = vec3(0.20, 0.84, 0.92);
+  vec3 hot = vec3(1.0, 0.36, 0.62);
+  return mix(mix(violet, cyan, smoothstep(-14.0, 16.0, p.z)), hot, pinch * 0.65);
+}
+`;
+
 export default {
-  schema: "implicit-cad/v1",
+  schema: "implicit.js/0.1.0",
   name: "Whitney umbrella bounded thickness",
   description: "A sphere-clipped thickened Whitney umbrella retaining the pinch and self-intersecting sheet structure.",
   units: "mm",
@@ -31,23 +51,5 @@ export default {
     epsilon: Math.max(0.005, params.thickness * 0.009),
     normalEpsilon: Math.max(0.045, params.thickness * 0.055)
   }),
-  glsl: `
-float sdf(vec3 p) {
-  vec3 q = p / scale;
-  float field = q.x * q.x - q.y * q.y * q.z;
-  float gradientScale = pinchSharpness + length(vec3(2.0 * q.x, -2.0 * q.y * q.z, -q.y * q.y));
-  float sheet = abs(field) / gradientScale * scale - thickness;
-  float clip = implicitCadSphere(p, vec3(0.0), clipRadius);
-  return max(sheet, clip) * 0.28;
-}
-
-
-vec3 color(vec3 p, vec3 normal) {
-  float pinch = 1.0 - smoothstep(0.0, 12.0, length(p.xy));
-  vec3 violet = vec3(0.54, 0.30, 0.92);
-  vec3 cyan = vec3(0.20, 0.84, 0.92);
-  vec3 hot = vec3(1.0, 0.36, 0.62);
-  return mix(mix(violet, cyan, smoothstep(-14.0, 16.0, p.z)), hot, pinch * 0.65);
-}
-`
+  glsl: GLSL
 };

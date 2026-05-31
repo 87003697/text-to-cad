@@ -6,7 +6,7 @@ import {
 } from "../../common/parameters.js";
 import { createImplicitCadSdfEvaluator } from "./sdfEvaluator.js";
 
-export const IMPLICIT_CAD_SCHEMA = "implicit-cad/v1";
+export const IMPLICIT_CAD_SCHEMA = "implicit.js/0.1.0";
 export const IMPLICIT_CAD_KIND = "implicit";
 export const IMPLICIT_CAD_EXTENSIONS = Object.freeze([".implicit.js", ".implicit.mjs"]);
 export const IMPLICIT_SCHEMA = IMPLICIT_CAD_SCHEMA;

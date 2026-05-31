@@ -28,13 +28,42 @@ import {
 import { CodePane } from "./CodePane.jsx";
 import { ImplicitViewport } from "./ImplicitViewport.jsx";
 
-const DEFAULT_EXAMPLE_ID = "mobius-strip";
+const DEFAULT_TEMPLATE_ID = "mobius-strip";
+const EMPTY_TEMPLATE_ID = "empty";
+const SOURCE_STORAGE_KEY = "implicit-demo-source";
 const COMPILE_DEBOUNCE_MS = 260;
 const MOBILE_TABS = Object.freeze([
   ["source", "Source"],
-  ["preview", "Preview"],
-  ["controls", "Controls"]
+  ["preview", "Preview"]
 ]);
+const EMPTY_TEMPLATE = Object.freeze({
+  id: EMPTY_TEMPLATE_ID,
+  label: "Empty",
+  file: "",
+  description: "A blank implicit.js module."
+});
+const EMPTY_TEMPLATE_SOURCE = `const GLSL = \`
+float sdf(vec3 p) {
+  return 1.0;
+}
+\`;
+
+export default {
+  schema: "implicit.js/0.1.0",
+  name: "empty implicit",
+  units: "mm",
+  params: {},
+  glsl: GLSL
+};
+`;
+
+function readStoredSource() {
+  try {
+    return localStorage.getItem(SOURCE_STORAGE_KEY) || "";
+  } catch {
+    return "";
+  }
+}
 
 function clampNumber(value, min, max) {
   const numeric = Number(value);
@@ -74,6 +103,9 @@ function statusText(state, error = "") {
   }
   if (state === "ready") {
     return "live shader ready";
+  }
+  if (state === "idle") {
+    return "waiting for source";
   }
   return state;
 }
@@ -273,7 +305,7 @@ function NumberControl({ label, value, min, max, step = 1, unit = "", onChange }
 }
 
 function InspectorPanel({
-  active = false,
+  open = false,
   model,
   definition,
   paramValues,
@@ -295,7 +327,7 @@ function InspectorPanel({
   const summary = compileSummary(model);
 
   return (
-    <aside className={`inspector mobile-panel ${active ? "is-active" : ""}`}>
+    <aside className={`inspector ${open ? "is-open" : ""}`}>
       <SectionTitle icon={<SlidersHorizontal size={14} />} meta="runtime">Controls</SectionTitle>
 
       <div className="stat-grid">
@@ -411,10 +443,11 @@ function InspectorPanel({
 }
 
 export default function App() {
-  const [examples, setExamples] = useState([]);
-  const [selectedExampleId, setSelectedExampleId] = useState(DEFAULT_EXAMPLE_ID);
-  const [code, setCode] = useState("");
-  const [loadedExampleCode, setLoadedExampleCode] = useState("");
+  const initialSourceRef = useRef(readStoredSource());
+  const [templates, setTemplates] = useState([]);
+  const [selectedTemplateId, setSelectedTemplateId] = useState(initialSourceRef.current.trim() ? "" : DEFAULT_TEMPLATE_ID);
+  const [code, setCode] = useState(() => initialSourceRef.current);
+  const [loadedTemplateCode, setLoadedTemplateCode] = useState(() => initialSourceRef.current);
   const [compileState, setCompileState] = useState("loading");
   const [compileError, setCompileError] = useState("");
   const [compiledModel, setCompiledModel] = useState(null);
@@ -427,13 +460,13 @@ export default function App() {
   const [playing, setPlaying] = useState(false);
   const [animationElapsed, setAnimationElapsed] = useState(0);
   const [themeMode, setThemeMode] = useState(() => localStorage.getItem("implicit-demo-theme") || "dark");
-  const [cameraResetToken, setCameraResetToken] = useState(0);
   const [mobileTab, setMobileTab] = useState("source");
+  const [controlsOpen, setControlsOpen] = useState(true);
   const [workspaceSplit, setWorkspaceSplit] = useState(50);
   const [viewportSplit, setViewportSplit] = useState(72);
   const workspaceRef = useRef(null);
   const visualBodyRef = useRef(null);
-  const examplesRef = useRef([]);
+  const templatesRef = useRef([]);
   const debouncedCode = useDebouncedValue(code, COMPILE_DEBOUNCE_MS);
 
   useEffect(() => {
@@ -441,27 +474,42 @@ export default function App() {
     localStorage.setItem("implicit-demo-theme", themeMode);
   }, [themeMode]);
 
-  const loadExample = useCallback(async (exampleId, exampleList) => {
-    const list = Array.isArray(exampleList) && exampleList.length
-      ? exampleList
-      : examplesRef.current;
-    const example = list.find((candidate) => candidate.id === exampleId) || list[0];
-    if (!example) {
+  useEffect(() => {
+    localStorage.setItem(SOURCE_STORAGE_KEY, code);
+  }, [code]);
+
+  const loadTemplate = useCallback(async (templateId, templateList) => {
+    const list = Array.isArray(templateList) && templateList.length
+      ? templateList
+      : templatesRef.current;
+    const template = list.find((candidate) => candidate.id === templateId) || list[0];
+    if (!template) {
       return;
     }
-    setSelectedExampleId(example.id);
+    setSelectedTemplateId(template.id);
     setCompileState("loading");
-    const response = await fetch(`/examples/${example.file}?v=${Date.now()}`);
-    if (!response.ok) {
-      throw new Error(`Could not load ${example.file}`);
-    }
-    const source = await response.text();
-    setLoadedExampleCode(source);
+    const source = template.id === EMPTY_TEMPLATE_ID
+      ? EMPTY_TEMPLATE_SOURCE
+      : await (async () => {
+          const response = await fetch(`/examples/${template.file}?v=${Date.now()}`);
+          if (!response.ok) {
+            throw new Error(`Could not load ${template.file}`);
+          }
+          return response.text();
+        })();
+    setLoadedTemplateCode(source);
     setCode(source);
     setPlaying(false);
     setAnimationElapsed(0);
     setExportState({ status: "idle", message: "" });
   }, []);
+
+  const handleSourceChange = useCallback((source) => {
+    setCode(source);
+    if (source !== loadedTemplateCode) {
+      setSelectedTemplateId("");
+    }
+  }, [loadedTemplateCode]);
 
   useEffect(() => {
     let cancelled = false;
@@ -476,10 +524,12 @@ export default function App() {
         if (cancelled) {
           return;
         }
-        const list = Array.isArray(manifest) ? manifest : [];
-        examplesRef.current = list;
-        setExamples(list);
-        await loadExample(DEFAULT_EXAMPLE_ID, list);
+        const list = [EMPTY_TEMPLATE, ...(Array.isArray(manifest) ? manifest : [])];
+        templatesRef.current = list;
+        setTemplates(list);
+        if (!initialSourceRef.current.trim()) {
+          await loadTemplate(DEFAULT_TEMPLATE_ID, list);
+        }
       })
       .catch((error) => {
         if (!cancelled) {
@@ -490,10 +540,13 @@ export default function App() {
     return () => {
       cancelled = true;
     };
-  }, [loadExample]);
+  }, [loadTemplate]);
 
   useEffect(() => {
     if (!debouncedCode.trim()) {
+      setCompiledModel(null);
+      setDefinition(null);
+      setCompileState("idle");
       return;
     }
     const controller = new AbortController();
@@ -644,7 +697,7 @@ export default function App() {
     }
   }, [activeAnimation, exportSettings, liveModel, paramValues, previewError]);
 
-  const dirty = code !== loadedExampleCode;
+  const dirty = code !== loadedTemplateCode;
 
   const handleParamChange = useCallback((parameterId, value) => {
     setParamValues((currentValues) => {
@@ -666,19 +719,21 @@ export default function App() {
     }));
   }, []);
 
-  const reloadSelectedExample = useCallback(() => {
-    loadExample(selectedExampleId).catch((error) => {
+  const handleTemplateChange = useCallback((templateId) => {
+    loadTemplate(templateId).catch((error) => {
       setCompileState("error");
       setCompileError(errorMessage(error));
     });
-  }, [loadExample, selectedExampleId]);
+  }, [loadTemplate]);
 
-  const handleExampleChange = useCallback((exampleId) => {
-    loadExample(exampleId).catch((error) => {
-      setCompileState("error");
-      setCompileError(errorMessage(error));
-    });
-  }, [loadExample]);
+  const handleDownloadSource = useCallback(() => {
+    const template = templates.find((candidate) => candidate.id === selectedTemplateId);
+    const filename = template?.file || `${safeFileStem(liveModel?.name || "implicit-model")}.implicit.js`;
+    downloadExport({
+      body: code,
+      contentType: "text/javascript;charset=utf-8"
+    }, filename);
+  }, [code, liveModel?.name, selectedTemplateId, templates]);
 
   return (
     <div
@@ -725,14 +780,14 @@ export default function App() {
           <CodePane
             active={mobileTab === "source"}
             dirty={dirty}
-            examples={examples}
-            onExampleChange={handleExampleChange}
-            onReloadExample={reloadSelectedExample}
-            selectedExampleId={selectedExampleId}
+            onDownloadSource={handleDownloadSource}
+            onTemplateChange={handleTemplateChange}
+            selectedTemplateId={selectedTemplateId}
             status="javascript + glsl"
+            templates={templates}
             title="implicit.js source"
             value={code}
-            onChange={setCode}
+            onChange={handleSourceChange}
           />
         </section>
 
@@ -749,9 +804,9 @@ export default function App() {
           })}
         />
 
-        <section className="visual-shell">
-          <div className="visual-body" ref={visualBodyRef}>
-            <section className={`viewport-frame mobile-panel ${mobileTab === "preview" ? "is-active" : ""}`}>
+        <section className={`visual-shell mobile-panel ${mobileTab === "preview" ? "is-active" : ""}`}>
+          <div className={`visual-body ${controlsOpen ? "controls-open" : "controls-collapsed"}`} ref={visualBodyRef}>
+            <section className="viewport-frame">
               <div className="section-bar">
                 <div className="section-title-row">
                   <span>Preview</span>
@@ -793,8 +848,12 @@ export default function App() {
                     <Film size={13} />
                     animated
                   </button>
-                  <IconButton title="Reset camera" onClick={() => setCameraResetToken((token) => token + 1)}>
-                    <RotateCcw size={15} />
+                  <IconButton
+                    className={controlsOpen ? "is-active" : ""}
+                    title={controlsOpen ? "Hide controls" : "Show controls"}
+                    onClick={() => setControlsOpen((value) => !value)}
+                  >
+                    <SlidersHorizontal size={15} />
                   </IconButton>
                 </div>
               </div>
@@ -803,7 +862,6 @@ export default function App() {
                   model={previewStatus === "ready" ? liveModel : null}
                   graphics={graphics}
                   themeMode={themeMode}
-                  cameraResetToken={cameraResetToken}
                 />
                 {previewError ? (
                   <div className="compile-error">
@@ -818,20 +876,22 @@ export default function App() {
                 ) : null}
               </div>
             </section>
-            <SplitHandle
-              axis="x"
-              className="visual-resizer"
-              title="Resize preview and controls"
-              onPointerDown={(event) => beginSplitDrag(event, {
-                axis: "x",
-                containerRef: visualBodyRef,
-                min: 46,
-                max: 82,
-                setValue: setViewportSplit
-              })}
-            />
+            {controlsOpen ? (
+              <SplitHandle
+                axis="x"
+                className="visual-resizer"
+                title="Resize preview and controls"
+                onPointerDown={(event) => beginSplitDrag(event, {
+                  axis: "x",
+                  containerRef: visualBodyRef,
+                  min: 46,
+                  max: 82,
+                  setValue: setViewportSplit
+                })}
+              />
+            ) : null}
             <InspectorPanel
-              active={mobileTab === "controls"}
+              open={controlsOpen}
               model={liveModel}
               definition={definition}
               paramValues={paramValues}

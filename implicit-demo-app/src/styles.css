@@ -196,6 +196,7 @@ button:focus-visible {
 
 .text-button:hover,
 .icon-button:hover,
+.icon-button.is-active,
 .section-text-button:hover:not(:disabled) {
   border-color: hsl(var(--smui-border-hover));
   background: hsl(var(--smui-surface-3));
@@ -279,6 +280,14 @@ button:focus-visible {
   min-height: 0;
 }
 
+.visual-body.controls-collapsed {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.visual-body.controls-collapsed .inspector {
+  display: none;
+}
+
 .code-pane,
 .viewport-frame {
   display: grid;
@@ -299,26 +308,23 @@ button:focus-visible {
   padding: 0 10px;
 }
 
+.code-section-bar {
+  gap: 10px;
+}
+
+.source-title-group {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
 .editor-section-actions {
   flex: 1;
 }
 
-.section-select {
-  display: grid;
-  grid-template-columns: auto minmax(110px, 180px);
-  align-items: center;
-  gap: 7px;
-  min-width: 0;
-}
-
-.section-select span {
-  color: var(--muted-foreground);
-  font-size: var(--text-label);
-  letter-spacing: 1.4px;
-  text-transform: uppercase;
-}
-
-.section-select select {
+.template-select {
+  width: min(190px, 28vw);
   height: 24px;
   font-size: 11px;
 }
@@ -675,12 +681,6 @@ input[type="checkbox"] {
     gap: 4px;
   }
 
-  .section-select {
-    grid-template-columns: minmax(0, 1fr);
-    width: min(210px, 46vw);
-  }
-
-  .section-select span,
   .section-meta,
   .preview-actions .section-text-button svg {
     display: none;
@@ -694,7 +694,7 @@ input[type="checkbox"] {
 
   .mobile-tabs {
     display: grid;
-    grid-template-columns: repeat(3, minmax(0, 1fr));
+    grid-template-columns: repeat(2, minmax(0, 1fr));
     width: 100%;
     max-width: 100vw;
     min-width: 0;
@@ -739,9 +739,11 @@ input[type="checkbox"] {
     overflow: hidden;
   }
 
-  .editor-shell,
-  .visual-shell {
+  .editor-shell {
     display: contents;
+  }
+
+  .visual-shell {
     border-left: 0;
   }
 
@@ -762,8 +764,60 @@ input[type="checkbox"] {
     min-height: 0;
   }
 
-  .inspector.mobile-panel.is-active {
+  .visual-shell.mobile-panel.is-active {
+    display: grid !important;
+  }
+
+  .source-title-group {
+    flex: 1;
+    gap: 7px;
+  }
+
+  .source-title-group .section-title-row span {
+    display: none;
+  }
+
+  .template-select {
+    width: min(210px, 46vw);
+  }
+
+  .visual-body {
+    position: relative;
+  }
+
+  .visual-body.controls-open,
+  .visual-body.controls-collapsed {
+    grid-template-columns: 1fr;
+  }
+
+  .viewport-frame {
+    grid-column: 1;
+    grid-row: 1;
+  }
+
+  .visual-body.controls-collapsed .inspector,
+  .inspector {
     display: block !important;
+    position: absolute;
+    right: 0;
+    bottom: 0;
+    left: 0;
+    z-index: 5;
+    height: 50%;
+    max-height: 50%;
+    min-height: 230px;
+    border-top: 1px solid var(--border);
+    box-shadow: 0 -18px 50px hsl(213 28% 8% / 0.32);
+    transform: translateY(calc(100% + 2px));
+    transition: transform 180ms ease;
+  }
+
+  .visual-body.controls-open .inspector {
+    transform: translateY(0);
+  }
+
+  .visual-body.controls-collapsed .inspector {
+    pointer-events: none;
   }
 
   .export-toast {

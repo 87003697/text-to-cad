@@ -1,5 +1,22 @@
+const GLSL = `
+float sdf(vec3 p) {
+  float field = implicitCadTpmsGyroid(p, vec3(cellSize), vec3(1.0));
+  float shell = implicitCadShell(field, wallThickness, 0.0);
+  float cell = implicitCadBoxCentered(p, vec3(cellSize), vec3(0.0));
+  return max(shell, cell) * fieldScale;
+}
+
+
+vec3 color(vec3 p, vec3 normal) {
+  vec3 period = 0.5 + 0.5 * sin((p / cellSize) * 6.283185307179586 + vec3(0.0, 2.1, 4.2));
+  vec3 teal = vec3(0.10, 0.72, 0.66);
+  vec3 gold = vec3(0.94, 0.72, 0.25);
+  return mix(teal, gold, dot(period, vec3(0.28, 0.36, 0.36)));
+}
+`;
+
 export default {
-  schema: "implicit-cad/v1",
+  schema: "implicit.js/0.1.0",
   name: "gyroid unit cell",
   description: "Finite-thickness gyroid minimal surface clipped to one cubic periodic unit cell.",
   units: "mm",
@@ -29,20 +46,5 @@ export default {
     epsilon: Math.max(0.005, params.cellSize * 0.00014),
     normalEpsilon: Math.max(0.04, params.wallThickness * 0.014)
   }),
-  glsl: `
-float sdf(vec3 p) {
-  float field = implicitCadTpmsGyroid(p, vec3(cellSize), vec3(1.0));
-  float shell = implicitCadShell(field, wallThickness, 0.0);
-  float cell = implicitCadBoxCentered(p, vec3(cellSize), vec3(0.0));
-  return max(shell, cell) * fieldScale;
-}
-
-
-vec3 color(vec3 p, vec3 normal) {
-  vec3 period = 0.5 + 0.5 * sin((p / cellSize) * 6.283185307179586 + vec3(0.0, 2.1, 4.2));
-  vec3 teal = vec3(0.10, 0.72, 0.66);
-  vec3 gold = vec3(0.94, 0.72, 0.25);
-  return mix(teal, gold, dot(period, vec3(0.28, 0.36, 0.36)));
-}
-`
+  glsl: GLSL
 };

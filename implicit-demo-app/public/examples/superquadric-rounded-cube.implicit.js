@@ -1,5 +1,21 @@
+const GLSL = `
+float sdf(vec3 p) {
+  vec3 q = abs(p) / vec3(size, size, size * heightScale);
+  float superquadric = pow(pow(q.x, exponent) + pow(q.y, exponent) + pow(q.z, exponent), 1.0 / exponent) - 1.0;
+  return superquadric * size;
+}
+
+
+vec3 color(vec3 p, vec3 normal) {
+  float face = pow(max(abs(normal.x), max(abs(normal.y), abs(normal.z))), 3.0);
+  vec3 lemon = vec3(0.98, 0.82, 0.14);
+  vec3 coral = vec3(0.96, 0.38, 0.32);
+  return mix(coral, lemon, face);
+}
+`;
+
 export default {
-  schema: "implicit-cad/v1",
+  schema: "implicit.js/0.1.0",
   name: "superquadric rounded cube",
   description: "A high-even-exponent superquadric with flat faces and smoothly rounded edges and corners.",
   units: "mm",
@@ -30,19 +46,5 @@ export default {
     epsilon: Math.max(0.004, params.size * 0.00025),
     normalEpsilon: Math.max(0.035, params.size * 0.002)
   }),
-  glsl: `
-float sdf(vec3 p) {
-  vec3 q = abs(p) / vec3(size, size, size * heightScale);
-  float superquadric = pow(pow(q.x, exponent) + pow(q.y, exponent) + pow(q.z, exponent), 1.0 / exponent) - 1.0;
-  return superquadric * size;
-}
-
-
-vec3 color(vec3 p, vec3 normal) {
-  float face = pow(max(abs(normal.x), max(abs(normal.y), abs(normal.z))), 3.0);
-  vec3 lemon = vec3(0.98, 0.82, 0.14);
-  vec3 coral = vec3(0.96, 0.38, 0.32);
-  return mix(coral, lemon, face);
-}
-`
+  glsl: GLSL
 };

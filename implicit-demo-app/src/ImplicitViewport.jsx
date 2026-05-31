@@ -122,8 +122,7 @@ function installOrbitControls(runtime, container, model, getGraphics) {
 export function ImplicitViewport({
   model,
   graphics,
-  themeMode = "dark",
-  cameraResetToken = 0
+  themeMode = "dark"
 }) {
   const containerRef = useRef(null);
   const runtimeRef = useRef(null);
@@ -237,17 +236,6 @@ export function ImplicitViewport({
     updateImplicitGraphicsUniforms(runtime.fullscreen.material, model, graphics);
     runtime.dirtyFrames = Math.max(runtime.dirtyFrames, 3);
   }, [graphics, model, themeSettings]);
-
-  useEffect(() => {
-    const runtime = runtimeRef.current;
-    const container = containerRef.current;
-    if (!runtime?.model || !container) {
-      return;
-    }
-    installOrbitControls(runtime, container, runtime.model, () => latestRef.current.graphics);
-    resizeRuntime(runtime, container, latestRef.current.graphics);
-    runtime.dirtyFrames = Math.max(runtime.dirtyFrames, 8);
-  }, [cameraResetToken]);
 
   return (
     <div className="viewport-canvas-host" ref={containerRef}>

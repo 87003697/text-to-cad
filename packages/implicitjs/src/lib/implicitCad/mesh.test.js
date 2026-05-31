@@ -4,7 +4,7 @@ import test from "node:test";
 import { meshImplicitCadModel } from "./mesh.js";
 
 const sphereModel = {
-  schema: "implicit-cad/v1",
+  schema: "implicit.js/0.1.0",
   name: "orientation sphere",
   bounds: [[-6, -6, -6], [6, 6, 6]],
   glsl: "float sdf(vec3 p) { return length(p) - 4.0; }",
@@ -45,7 +45,7 @@ test("implicit mesh extraction orients closed SDF triangles outward", () => {
 
 test("implicit mesh extraction evaluates shader uniforms", () => {
   const mesh = meshImplicitCadModel({
-    schema: "implicit-cad/v1",
+    schema: "implicit.js/0.1.0",
     name: "uniform sphere",
     params: {
       radius: { type: "number", min: 1, max: 6, default: 4 }

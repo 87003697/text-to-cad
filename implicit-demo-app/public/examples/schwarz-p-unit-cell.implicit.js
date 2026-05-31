@@ -1,5 +1,22 @@
+const GLSL = `
+float sdf(vec3 p) {
+  float field = implicitCadTpmsSchwarz(p, vec3(cellSize), vec3(1.0), 0.0) + fieldOffset;
+  float shell = implicitCadShell(field, wallThickness, 0.0);
+  float cell = implicitCadBoxCentered(p, vec3(cellSize), vec3(0.0));
+  return max(shell, cell) * fieldScale;
+}
+
+
+vec3 color(vec3 p, vec3 normal) {
+  float chamber = 0.5 + 0.5 * cos((p.x + p.y - p.z) * 0.085);
+  vec3 blue = vec3(0.18, 0.47, 0.96);
+  vec3 mint = vec3(0.55, 0.94, 0.82);
+  return mix(blue, mint, chamber);
+}
+`;
+
 export default {
-  schema: "implicit-cad/v1",
+  schema: "implicit.js/0.1.0",
   name: "Schwarz P unit cell",
   description: "Finite-thickness Schwarz P triply periodic shell clipped to one cubic unit cell.",
   units: "mm",
@@ -31,20 +48,5 @@ export default {
     epsilon: Math.max(0.005, params.cellSize * 0.00014),
     normalEpsilon: Math.max(0.04, params.wallThickness * 0.014)
   }),
-  glsl: `
-float sdf(vec3 p) {
-  float field = implicitCadTpmsSchwarz(p, vec3(cellSize), vec3(1.0), 0.0) + fieldOffset;
-  float shell = implicitCadShell(field, wallThickness, 0.0);
-  float cell = implicitCadBoxCentered(p, vec3(cellSize), vec3(0.0));
-  return max(shell, cell) * fieldScale;
-}
-
-
-vec3 color(vec3 p, vec3 normal) {
-  float chamber = 0.5 + 0.5 * cos((p.x + p.y - p.z) * 0.085);
-  vec3 blue = vec3(0.18, 0.47, 0.96);
-  vec3 mint = vec3(0.55, 0.94, 0.82);
-  return mix(blue, mint, chamber);
-}
-`
+  glsl: GLSL
 };

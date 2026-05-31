@@ -1,5 +1,21 @@
+const GLSL = `
+float sdf(vec3 p) {
+  vec3 q = implicitCadRotateAxis(p, vec3(0.0), vec3(0.0, 0.0, 1.0), p.z * (twist * 0.018));
+  float orb = implicitCadSphere(q, vec3(0.0), radius);
+  float ring = implicitCadTorus(q.xzy, radius * 0.72, shell);
+  float groove = implicitCadTorus(q.yxz, radius * 0.54, shell * 0.62);
+  float carved = implicitCadIntersectRound(orb, -groove, max(shell * 0.35, 0.4));
+  return implicitCadUnionRound(carved, ring, max(shell * 0.55, 0.5));
+}
+
+vec3 color(vec3 p, vec3 normal) {
+  float bands = 0.5 + 0.5 * sin(0.07 * p.z + 2.5 * twist + normal.z * 1.4);
+  return mix(vec3(0.05, 0.60, 0.88), vec3(0.95, 0.28, 0.10), bands);
+}
+`;
+
 export default {
-  schema: "implicit-cad/v1",
+  schema: "implicit.js/0.1.0",
   name: "parametric pulse",
   units: "mm",
   params: {
@@ -24,20 +40,6 @@ export default {
     const extent = Math.max(params.radius + params.shell + 10, 42);
     return [[-extent, -extent, -extent], [extent, extent, extent]];
   },
-  glsl: `
-float sdf(vec3 p) {
-  vec3 q = implicitCadRotateAxis(p, vec3(0.0), vec3(0.0, 0.0, 1.0), p.z * (twist * 0.018));
-  float orb = implicitCadSphere(q, vec3(0.0), radius);
-  float ring = implicitCadTorus(q.xzy, radius * 0.72, shell);
-  float groove = implicitCadTorus(q.yxz, radius * 0.54, shell * 0.62);
-  float carved = implicitCadIntersectRound(orb, -groove, max(shell * 0.35, 0.4));
-  return implicitCadUnionRound(carved, ring, max(shell * 0.55, 0.5));
-}
-
-vec3 color(vec3 p, vec3 normal) {
-  float bands = 0.5 + 0.5 * sin(0.07 * p.z + 2.5 * twist + normal.z * 1.4);
-  return mix(vec3(0.05, 0.60, 0.88), vec3(0.95, 0.28, 0.10), bands);
-}
-`,
+  glsl: GLSL,
   render: { steps: 224 }
 };

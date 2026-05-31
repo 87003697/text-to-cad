@@ -1,5 +1,24 @@
+const GLSL = `
+float sdf(vec3 p) {
+  vec3 q = p / periodScale;
+  float gyroid = implicitCadTpmsGyroid(q, vec3(1.0), vec3(1.0));
+  float sheet = implicitCadShell(gyroid, wallThickness, 0.0) * periodScale;
+  float roundedWindow = implicitCadBoxCentered(p, vec3(windowSize), vec3(0.0));
+  float roundover = implicitCadSphere(p, vec3(0.0), outerRadius);
+  return implicitCadIntersectRound(max(sheet, roundedWindow), roundover, roundover);
+}
+
+
+vec3 color(vec3 p, vec3 normal) {
+  vec3 wave = 0.5 + 0.5 * sin((p * 0.095) + vec3(0.0, 2.1, 4.2));
+  vec3 cool = vec3(0.18, 0.72, 0.88);
+  vec3 warm = vec3(0.95, 0.74, 0.32);
+  return mix(cool, warm, dot(wave, vec3(0.28, 0.36, 0.36)));
+}
+`;
+
 export default {
-  schema: "implicit-cad/v1",
+  schema: "implicit.js/0.1.0",
   name: "gyroid window",
   units: "mm",
   params: {
@@ -31,22 +50,5 @@ export default {
     epsilon: Math.max(0.004, params.periodScale * 0.0007),
     normalEpsilon: Math.max(0.04, params.periodScale * 0.006)
   }),
-  glsl: `
-float sdf(vec3 p) {
-  vec3 q = p / periodScale;
-  float gyroid = implicitCadTpmsGyroid(q, vec3(1.0), vec3(1.0));
-  float sheet = implicitCadShell(gyroid, wallThickness, 0.0) * periodScale;
-  float roundedWindow = implicitCadBoxCentered(p, vec3(windowSize), vec3(0.0));
-  float roundover = implicitCadSphere(p, vec3(0.0), outerRadius);
-  return implicitCadIntersectRound(max(sheet, roundedWindow), roundover, roundover);
-}
-
-
-vec3 color(vec3 p, vec3 normal) {
-  vec3 wave = 0.5 + 0.5 * sin((p * 0.095) + vec3(0.0, 2.1, 4.2));
-  vec3 cool = vec3(0.18, 0.72, 0.88);
-  vec3 warm = vec3(0.95, 0.74, 0.32);
-  return mix(cool, warm, dot(wave, vec3(0.28, 0.36, 0.36)));
-}
-`
+  glsl: GLSL
 };

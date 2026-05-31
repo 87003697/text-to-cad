@@ -1,5 +1,29 @@
+const GLSL = `
+const float IMPLICIT_CAD_MOBIUS_TAU = 6.283185307179586;
+
+float sdf(vec3 p) {
+  float u = atan(p.y, p.x);
+  vec2 section = vec2(length(p.xy) - radius, p.z);
+  vec2 twistAxis = vec2(cos(0.5 * u), sin(0.5 * u));
+  vec2 closest = twistAxis * clamp(dot(section, twistAxis), -(width * 0.5), (width * 0.5));
+  return length(section - closest) - thickness;
+}
+
+
+vec3 implicitCadPalette(float t) {
+  return 0.58 + 0.42 * cos(6.283185307179586 * (vec3(0.02, 0.38, 0.72) + t));
+}
+
+vec3 color(vec3 p, vec3 normal) {
+  vec2 ring = vec2(p.x, p.y);
+  float angle = atan(ring.y, ring.x) / 6.283185307179586;
+  vec3 bandColor = implicitCadPalette(angle + p.z * 0.035);
+  return mix(bandColor, vec3(1.0, 0.84, 0.48), smoothstep(0.25, 0.95, abs(normal.z)) * 0.28);
+}
+`;
+
 export default {
-  schema: "implicit-cad/v1",
+  schema: "implicit.js/0.1.0",
   name: "thickened Mobius strip",
   description: "A manufacturable one-half-twist Mobius strip with rounded boundary and finite shell thickness.",
   units: "mm",
@@ -34,27 +58,5 @@ export default {
     epsilon: Math.max(params.thickness * 0.012, 0.006),
     normalEpsilon: Math.max(params.thickness * 0.075, 0.04)
   }),
-  glsl: `
-const float IMPLICIT_CAD_MOBIUS_TAU = 6.283185307179586;
-
-float sdf(vec3 p) {
-  float u = atan(p.y, p.x);
-  vec2 section = vec2(length(p.xy) - radius, p.z);
-  vec2 twistAxis = vec2(cos(0.5 * u), sin(0.5 * u));
-  vec2 closest = twistAxis * clamp(dot(section, twistAxis), -(width * 0.5), (width * 0.5));
-  return length(section - closest) - thickness;
-}
-
-
-vec3 implicitCadPalette(float t) {
-  return 0.58 + 0.42 * cos(6.283185307179586 * (vec3(0.02, 0.38, 0.72) + t));
-}
-
-vec3 color(vec3 p, vec3 normal) {
-  vec2 ring = vec2(p.x, p.y);
-  float angle = atan(ring.y, ring.x) / 6.283185307179586;
-  vec3 bandColor = implicitCadPalette(angle + p.z * 0.035);
-  return mix(bandColor, vec3(1.0, 0.84, 0.48), smoothstep(0.25, 0.95, abs(normal.z)) * 0.28);
-}
-`
+  glsl: GLSL
 };

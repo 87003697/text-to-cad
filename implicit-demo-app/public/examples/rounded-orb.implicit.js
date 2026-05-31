@@ -1,5 +1,29 @@
+const GLSL = `
+float sdf(vec3 p) {
+  float sphereBody = implicitCadSphere(p, vec3(0.0, 0.0, 0.0), radius);
+  float cutBox = implicitCadBoxCentered(p, vec3(radius * 1.58, radius * 1.58, baseHeight), vec3(0.0, 0.0, -radius * 0.75));
+  float bore = implicitCadCylinderCapped(p, vec3(-radius * 1.25, 0.0, radius * 0.2), vec3(radius * 1.25, 0.0, radius * 0.2), boreRadius);
+  return implicitCadIntersectRound(
+    implicitCadUnionRound(sphereBody, cutBox, blend),
+    -bore,
+    max(blend * 0.5, 0.35)
+  );
+}
+
+
+vec3 color(vec3 p, vec3 normal) {
+  float sphereBlend = smoothstep(-18.0, 18.0, p.z);
+  vec3 base = mix(vec3(0.04, 0.50, 0.74), vec3(0.92, 0.34, 0.76), sphereBlend);
+  float plinthMask = 1.0 - smoothstep(-17.0, -7.0, p.z);
+  base = mix(base, vec3(0.05, 0.35, 0.32), plinthMask * 0.9);
+  float boreAccent = smoothstep(0.72, 0.98, abs(normal.x)) * smoothstep(-2.0, 12.0, p.z);
+  vec3 accent = vec3(1.0, 0.68, 0.12);
+  return mix(base, accent, boreAccent);
+}
+`;
+
 export default {
-  schema: "implicit-cad/v1",
+  schema: "implicit.js/0.1.0",
   name: "rounded orb",
   units: "mm",
   params: {
@@ -30,27 +54,5 @@ export default {
     epsilon: Math.max(0.004, params.radius * 0.00025),
     normalEpsilon: Math.max(0.035, params.radius * 0.0018)
   }),
-  glsl: `
-float sdf(vec3 p) {
-  float sphereBody = implicitCadSphere(p, vec3(0.0, 0.0, 0.0), radius);
-  float cutBox = implicitCadBoxCentered(p, vec3(radius * 1.58, radius * 1.58, baseHeight), vec3(0.0, 0.0, -radius * 0.75));
-  float bore = implicitCadCylinderCapped(p, vec3(-radius * 1.25, 0.0, radius * 0.2), vec3(radius * 1.25, 0.0, radius * 0.2), boreRadius);
-  return implicitCadIntersectRound(
-    implicitCadUnionRound(sphereBody, cutBox, blend),
-    -bore,
-    max(blend * 0.5, 0.35)
-  );
-}
-
-
-vec3 color(vec3 p, vec3 normal) {
-  float sphereBlend = smoothstep(-18.0, 18.0, p.z);
-  vec3 base = mix(vec3(0.04, 0.50, 0.74), vec3(0.92, 0.34, 0.76), sphereBlend);
-  float plinthMask = 1.0 - smoothstep(-17.0, -7.0, p.z);
-  base = mix(base, vec3(0.05, 0.35, 0.32), plinthMask * 0.9);
-  float boreAccent = smoothstep(0.72, 0.98, abs(normal.x)) * smoothstep(-2.0, 12.0, p.z);
-  vec3 accent = vec3(1.0, 0.68, 0.12);
-  return mix(base, accent, boreAccent);
-}
-`
+  glsl: GLSL
 };

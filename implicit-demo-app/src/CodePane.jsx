@@ -3,7 +3,7 @@ import { javascript } from "@codemirror/lang-javascript";
 import { HighlightStyle, syntaxHighlighting } from "@codemirror/language";
 import { Decoration, EditorView, ViewPlugin } from "@codemirror/view";
 import { tags } from "@lezer/highlight";
-import { Code2 } from "lucide-react";
+import { Code2, Download } from "lucide-react";
 import { useMemo } from "react";
 
 const editorTheme = EditorView.theme({
@@ -87,7 +87,7 @@ function hasOddBackslashRun(source, index) {
 
 function glslTemplateRanges(source) {
   const ranges = [];
-  const pattern = /glsl\s*:\s*`/gu;
+  const pattern = /(?:const\s+GLSL\s*=\s*|glsl\s*:\s*)`/gu;
   let match = pattern.exec(source);
   while (match) {
     const start = match.index + match[0].length;
@@ -154,11 +154,11 @@ export function CodePane({
   active = false,
   className = "",
   dirty = false,
-  examples = [],
-  onExampleChange,
-  onReloadExample,
-  selectedExampleId = "",
+  onDownloadSource,
+  onTemplateChange,
+  selectedTemplateId = "",
   status = "",
+  templates = [],
   title,
   value,
   onChange
@@ -172,27 +172,31 @@ export function CodePane({
 
   return (
     <section className={`code-pane mobile-panel ${active ? "is-active" : ""} ${className}`}>
-      <div className="section-bar">
-        <div className="section-title-row">
-          <Code2 size={14} />
-          <span>{title}</span>
+      <div className="section-bar code-section-bar">
+        <div className="source-title-group">
+          <div className="section-title-row">
+            <Code2 size={14} />
+            <span>{title}</span>
+          </div>
+          {templates.length ? (
+            <select
+              aria-label="Templates"
+              className="template-select"
+              value={selectedTemplateId}
+              onChange={(event) => onTemplateChange?.(event.target.value)}
+            >
+              <option disabled value="">Templates</option>
+              {templates.map((template) => (
+                <option key={template.id} value={template.id}>{template.label}</option>
+              ))}
+            </select>
+          ) : null}
         </div>
         <div className="editor-section-actions">
-          {examples.length ? (
-            <label className="section-select">
-              <span>example</span>
-              <select value={selectedExampleId} onChange={(event) => onExampleChange?.(event.target.value)}>
-                {examples.map((example) => (
-                  <option key={example.id} value={example.id}>{example.label}</option>
-                ))}
-              </select>
-            </label>
-          ) : null}
-          {onReloadExample ? (
-            <button className="section-text-button" type="button" onClick={onReloadExample}>
-              reload
-            </button>
-          ) : null}
+          <button className="section-text-button" title="Download implicit.js" type="button" onClick={onDownloadSource}>
+            <Download size={13} />
+            download
+          </button>
           {dirty ? <span className="status-badge status-busy">edited</span> : null}
           <span className="section-meta">{status || "javascript + glsl"}</span>
         </div>

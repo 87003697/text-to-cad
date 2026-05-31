@@ -1,5 +1,30 @@
+const GLSL = `
+const float IMPLICIT_CAD_TREFOIL_TAU = 6.283185307179586;
+
+float sdf(vec3 p) {
+  p.z /= verticalScale;
+  float phi = atan(p.y, p.x);
+  vec2 torusSection = vec2(length(p.xy) - majorRadius, p.z);
+  float best = 1.0e6;
+  for (int branchIndex = 0; branchIndex < 3; branchIndex += 1) {
+    float t = (phi + IMPLICIT_CAD_TREFOIL_TAU * float(branchIndex)) / 3.0;
+    vec2 knotCenter = knotRadius * vec2(cos(2.0 * t), sin(2.0 * t));
+    best = min(best, length(torusSection - knotCenter));
+  }
+  return best - tubeRadius;
+}
+
+
+vec3 color(vec3 p, vec3 normal) {
+  float sweep = atan(p.y, p.x) / IMPLICIT_CAD_TREFOIL_TAU + p.z * 0.018;
+  vec3 copper = vec3(0.95, 0.40, 0.13);
+  vec3 cyan = vec3(0.10, 0.72, 0.88);
+  return mix(copper, cyan, 0.5 + 0.5 * sin(6.283185307179586 * sweep));
+}
+`;
+
 export default {
-  schema: "implicit-cad/v1",
+  schema: "implicit.js/0.1.0",
   name: "trefoil torus-knot tube",
   description: "A constant-radius solid tube following a closed trefoil torus knot path.",
   units: "mm",
@@ -34,28 +59,5 @@ export default {
     stepScale: 0.72,
     maxStep: Math.max(params.tubeRadius * 0.68, 0.7)
   }),
-  glsl: `
-const float IMPLICIT_CAD_TREFOIL_TAU = 6.283185307179586;
-
-float sdf(vec3 p) {
-  p.z /= verticalScale;
-  float phi = atan(p.y, p.x);
-  vec2 torusSection = vec2(length(p.xy) - majorRadius, p.z);
-  float best = 1.0e6;
-  for (int branchIndex = 0; branchIndex < 3; branchIndex += 1) {
-    float t = (phi + IMPLICIT_CAD_TREFOIL_TAU * float(branchIndex)) / 3.0;
-    vec2 knotCenter = knotRadius * vec2(cos(2.0 * t), sin(2.0 * t));
-    best = min(best, length(torusSection - knotCenter));
-  }
-  return best - tubeRadius;
-}
-
-
-vec3 color(vec3 p, vec3 normal) {
-  float sweep = atan(p.y, p.x) / IMPLICIT_CAD_TREFOIL_TAU + p.z * 0.018;
-  vec3 copper = vec3(0.95, 0.40, 0.13);
-  vec3 cyan = vec3(0.10, 0.72, 0.88);
-  return mix(copper, cyan, 0.5 + 0.5 * sin(6.283185307179586 * sweep));
-}
-`
+  glsl: GLSL
 };
