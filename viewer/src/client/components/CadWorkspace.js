@@ -174,18 +174,21 @@ import {
 } from "@/workbench/breakpoints";
 import {
   buildSidebarDirectoryTree,
+  cadFileParamForEntry,
   cadPathForEntry,
   collectAncestorDirectoryIds,
   collectSidebarDirectoryIds,
   findEntryByUrlPath,
   fileKey,
   missingFileRefForCatalog,
+  readCadDirParam,
   readCadParam,
   readCadRefQueryParams,
   selectedEntryKeyFromUrl,
   sidebarDirectoryIdForEntry,
   sidebarLabelForEntry,
   shouldDeferFileParamSelection,
+  writeCadDirParam,
   writeCadParam,
   writeCadRefQueryParams,
 } from "@/workbench/sidebar";
@@ -224,6 +227,8 @@ import { checkMoveIt2ServerLive, moveit2ServerEnabled, requestMoveIt2Server } fr
 import {
   cadViewerUsesHostedCatalog,
   readActiveCadDir,
+  refreshCadCatalog,
+  refreshCadGenerationStatus,
   requestStepArtifactGeneration,
   requestStepSourceStatus
 } from "cadjs/lib/cadManifestStore";
@@ -437,6 +442,26 @@ function mergeStepSourceStatusIntoEntry(entry, stepSourceStatus) {
   return nextEntry;
 }
 
+function normalizeViewerWorkspaceOptions(viewerServerInfo) {
+  const seen = new Set();
+  const options = [];
+  for (const option of Array.isArray(viewerServerInfo?.activeDirectories) ? viewerServerInfo.activeDirectories : []) {
+    const dir = String(option?.dir || "").trim();
+    const rootPath = String(option?.rootPath || "").trim();
+    const key = rootPath || dir;
+    if (!dir || !key || seen.has(key)) {
+      continue;
+    }
+    seen.add(key);
+    options.push({
+      dir,
+      rootPath,
+      rootName: String(option?.rootName || "").trim()
+    });
+  }
+  return options;
+}
+
 export default function CadWorkspace({
   manifestEntries: manifestEntriesProp = [],
   generationStatus = null,
@@ -448,6 +473,8 @@ export default function CadWorkspace({
 }) {
   const manifestEntries = Array.isArray(manifestEntriesProp) ? manifestEntriesProp : [];
   const catalogEntries = manifestEntries;
+  const explicitDirParam = readCadDirParam();
+  const explicitFileParam = readCadParam();
   const viewerAssetBackend = viewerAssetBackendFromEnv();
   const activeGeneratorFiles = useMemo(() => (
     Object.entries(generationStatus?.files || {})
@@ -706,7 +733,6 @@ export default function CadWorkspace({
   const allDirectoryIds = useMemo(() => collectSidebarDirectoryIds(allEntriesTree), [allEntriesTree]);
 
   const catalogSelectedEntry = entryMap.get(selectedKey) ?? null;
-  const explicitFileParam = readCadParam();
   const explicitFileEntry = explicitFileParam ? findEntryByUrlPath(catalogEntries, explicitFileParam) : null;
   const fileParamSelectionPending = shouldDeferFileParamSelection({
     explicitFileParam,
@@ -715,13 +741,15 @@ export default function CadWorkspace({
     catalogHydrated,
     catalogRefreshing
   });
-  const missingFileRef = missingFileRefForCatalog({
-    explicitFileParam,
-    matchingEntry: explicitFileEntry,
-    selectedEntry: catalogSelectedEntry,
-    catalogHydrated,
-    catalogRefreshing
-  });
+  const missingFileRef = catalogError
+    ? ""
+    : missingFileRefForCatalog({
+        explicitFileParam,
+        matchingEntry: explicitFileEntry,
+        selectedEntry: catalogSelectedEntry,
+        catalogHydrated,
+        catalogRefreshing
+      });
   const catalogSelectedEntrySourceFormat = entrySourceFormat(catalogSelectedEntry);
   const activeStepArtifactGenerationFiles = useMemo(() => {
     const files = Object.values(stepArtifactGenerationStateByKey)
@@ -754,6 +782,18 @@ export default function CadWorkspace({
   );
   const selectedEntrySourceFormat = entrySourceFormat(selectedEntry);
   const selectedFileSheetKind = fileSheetKindForEntry(selectedEntry);
+  const workspaceOptions = useMemo(
+    () => normalizeViewerWorkspaceOptions(viewerServerInfo),
+    [viewerServerInfo]
+  );
+  const activeViewerDir = readActiveCadDir({ assetBackend: viewerAssetBackend });
+  const activeWorkspaceDir = catalogRootDir || activeViewerDir;
+  const workspaceSelectionEligible = !explicitDirParam && !activeWorkspaceDir;
+  const workspaceSelectionActive = workspaceSelectionEligible && workspaceOptions.length > 1;
+  const workspaceAutoEnterDir = workspaceSelectionEligible && !String(explicitFileParam || "").trim() && workspaceOptions.length === 1
+    ? workspaceOptions[0].dir
+    : "";
+  const directoryNavigationAvailable = !workspaceSelectionActive;
   const stepArtifactGenerationAvailable = viewerServerInfo
     ? viewerServerInfo.stepArtifactGenerationAvailable !== false
     : viewerAssetBackend === LOCAL_ASSET_BACKEND;
@@ -954,6 +994,19 @@ export default function CadWorkspace({
       controller.abort();
     };
   }, [catalogRootDir, explicitFileParam]);
+
+  useEffect(() => {
+    if (!workspaceAutoEnterDir) {
+      return;
+    }
+    writeCadDirParam(workspaceAutoEnterDir);
+    refreshCadCatalog({ markRefreshing: true }).catch((error) => {
+      if (import.meta.env.DEV) {
+        console.warn("Failed to refresh CAD catalog", error);
+      }
+    });
+    refreshCadGenerationStatus();
+  }, [workspaceAutoEnterDir]);
 
   useEffect(() => {
     let active = true;
@@ -2056,7 +2109,7 @@ export default function CadWorkspace({
     setTabToolsWidth(defaultFileSheetWidth);
   }, [defaultFileSheetWidth, fileSheetWidthIsCustom]);
   const desktopFileSheetOpen = isDesktop && tabToolsOpen && !!selectedFileSheetKind && !previewMode;
-  const effectiveSidebarOpen = directoryCatalogActive && sidebarOpen && !previewMode;
+  const effectiveSidebarOpen = directoryNavigationAvailable && sidebarOpen && !previewMode;
   const desktopSidebarOpen = isDesktop && effectiveSidebarOpen && !previewMode;
 
   const setThemeMenuOpen = useCallback(() => {}, []);
@@ -2813,6 +2866,12 @@ export default function CadWorkspace({
     setSelectedKey("");
   }, [setTabToolsOpen]);
 
+  useEffect(() => {
+    if (workspaceSelectionActive && selectedKey) {
+      resetActiveWorkspace();
+    }
+  }, [resetActiveWorkspace, selectedKey, workspaceSelectionActive]);
+
   const activateEntryTab = useCallback((key) => {
     if (!key || !entryMap.has(key)) {
       return;
@@ -2913,9 +2972,14 @@ export default function CadWorkspace({
     upsertTabRecord
   ]);
 
+  const cadFileParamForSelectedEntry = useCallback(
+    (entry) => cadFileParamForEntry(entry),
+    []
+  );
+
   useCadWorkspaceSession({
     manifestEntries,
-    fileKey,
+    cadFileParamForEntry: cadFileParamForSelectedEntry,
     cadWorkspaceSessionBootstrappedRef,
     setOpenTabs,
     applyTabRecord,
@@ -5455,14 +5519,34 @@ export default function CadWorkspace({
   ]);
 
   const handleSelectEntry = useCallback((key) => {
-    if (key && entryMap.has(key)) {
-      writeCadParam(key);
+    const entry = key ? entryMap.get(key) : null;
+    if (entry) {
+      writeCadParam(cadFileParamForEntry(entry), { history: "push" });
     }
     activateEntryTab(key);
     if (!isDesktop) {
       setSidebarOpen(false);
     }
   }, [activateEntryTab, entryMap, isDesktop, writeCadParam]);
+
+  const handleSelectWorkspace = useCallback((dir) => {
+    const normalizedDir = String(dir || "").trim();
+    if (!normalizedDir) {
+      return;
+    }
+    resetActiveWorkspace();
+    setQuery("");
+    writeCadDirParam(normalizedDir, {
+      history: "push",
+      preserveFile: Boolean(workspaceSelectionActive && explicitFileParam)
+    });
+    refreshCadCatalog({ markRefreshing: true }).catch((error) => {
+      if (import.meta.env.DEV) {
+        console.warn("Failed to refresh CAD catalog", error);
+      }
+    });
+    refreshCadGenerationStatus();
+  }, [explicitFileParam, resetActiveWorkspace, workspaceSelectionActive]);
 
   const handleRevealEntryInExplorerView = useCallback((entry) => {
     const targetKey = fileKey(entry);
@@ -5474,7 +5558,7 @@ export default function CadWorkspace({
     setFileViewerDirectoryStateInitialized(true);
     expandFileViewerTreeToEntry(entry);
     if (targetKey !== selectedKey) {
-      writeCadParam(targetKey);
+      writeCadParam(cadFileParamForEntry(entry), { history: "push" });
       activateEntryTab(targetKey);
     }
     handleSidebarOpenChange(true);
@@ -6040,12 +6124,12 @@ export default function CadWorkspace({
           fileSheetKind={selectedFileSheetKind}
           fileSheetOpen={fileSheetOpen}
           onToggleFileSheet={handleToggleFileSheet}
-          navigationAvailable={directoryCatalogActive}
+          navigationAvailable={directoryNavigationAvailable}
         />
 
         <div className="pointer-events-none relative min-h-0 flex-1 overflow-hidden">
           <div className="flex h-full min-w-0">
-            {directoryCatalogActive ? (
+            {directoryNavigationAvailable ? (
             <FileViewerSidebar
               previewMode={previewMode}
               query={query}
@@ -6076,6 +6160,9 @@ export default function CadWorkspace({
               catalogHydrated={catalogHydrated}
               catalogRefreshing={catalogRefreshing}
               catalogError={catalogError}
+              workspaceOptions={workspaceOptions}
+              activeWorkspaceDir={activeWorkspaceDir || explicitDirParam || ""}
+              onSelectWorkspace={handleSelectWorkspace}
               resizable={isDesktop}
               onStartResize={handleStartSidebarResize}
             />
@@ -6113,15 +6200,16 @@ export default function CadWorkspace({
                 handleScreenshotDownload={handleScreenshotDownload}
               />
 
-              {!previewMode && !selectedEntry && !missingFileRef && !fileParamSelectionPending ? (
+              {!previewMode && (workspaceSelectionActive || (!selectedEntry && !missingFileRef && !fileParamSelectionPending)) ? (
                 <CadWorkspaceHome
                   entries={catalogEntries}
                   onSelectEntry={handleSelectEntry}
                   catalogHydrated={catalogHydrated}
                   catalogRefreshing={catalogRefreshing}
                   catalogError={catalogError}
-                  directoryCatalogActive={directoryCatalogActive}
-                  explicitFileParam={explicitFileParam}
+                  workspaceSelectionActive={workspaceSelectionActive}
+                  workspaceOptions={workspaceOptions}
+                  onSelectWorkspace={handleSelectWorkspace}
                 />
               ) : null}
 

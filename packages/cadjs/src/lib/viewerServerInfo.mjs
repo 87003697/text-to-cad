@@ -20,6 +20,60 @@ export function normalizeViewerPort(value, fallback = DEFAULT_VIEWER_PORT) {
   return fallback;
 }
 
+function normalizeViewerActiveDirectory(value, workspaceRoot) {
+  if (!value || typeof value !== "object") {
+    return null;
+  }
+  const rawDir = String(value.dir || "").trim();
+  const rawRootPath = String(value.rootPath || "").trim();
+  if (!rawDir && !rawRootPath) {
+    return null;
+  }
+  const resolvedRawRootPath = rawRootPath
+    ? path.resolve(path.isAbsolute(rawRootPath) ? rawRootPath : path.join(workspaceRoot, rawRootPath))
+    : "";
+  const resolvedRoot = rawRootPath
+    ? {
+        dir: rawDir,
+        rootPath: resolvedRawRootPath,
+        rootName: path.basename(resolvedRawRootPath),
+      }
+    : path.isAbsolute(rawDir)
+      ? {
+          dir: path.resolve(rawDir),
+          rootPath: path.resolve(rawDir),
+          rootName: path.basename(path.resolve(rawDir)),
+        }
+      : resolveViewerRoot(workspaceRoot, normalizeViewerRootDir(rawDir));
+  const dir = rawDir || resolvedRoot.dir || "";
+  const rootPath = resolvedRoot.rootPath || "";
+  if (!rootPath) {
+    return null;
+  }
+  return {
+    dir,
+    rootPath,
+    rootName: String(value.rootName || resolvedRoot.rootName || path.basename(rootPath) || dir || "Workspace"),
+  };
+}
+
+export function normalizeViewerActiveDirectories(activeDirectories, workspaceRoot) {
+  if (!Array.isArray(activeDirectories) || !workspaceRoot) {
+    return [];
+  }
+  const seen = new Set();
+  const normalized = [];
+  for (const value of activeDirectories) {
+    const directory = normalizeViewerActiveDirectory(value, workspaceRoot);
+    if (!directory || !directory.dir || seen.has(directory.rootPath)) {
+      continue;
+    }
+    seen.add(directory.rootPath);
+    normalized.push(directory);
+  }
+  return normalized;
+}
+
 export function buildViewerServerInfo({
   workspaceRoot,
   rootDir = DEFAULT_VIEWER_ROOT_DIR,
@@ -30,7 +84,9 @@ export function buildViewerServerInfo({
   dynamicRoot = false,
   stepArtifactGenerationAvailable = true,
   viewerVersion = "",
+  git = "",
   serverFeatures = [],
+  activeDirectories = [],
 } = {}) {
   if (!workspaceRoot) {
     throw new Error("workspaceRoot is required");
@@ -51,11 +107,14 @@ export function buildViewerServerInfo({
         rootName: "",
       };
   const normalizedPort = normalizeViewerPort(port);
+  const normalizedGit = String(git || "").trim();
+  const normalizedActiveDirectories = normalizeViewerActiveDirectories(activeDirectories, resolvedWorkspaceRoot);
   return {
     schemaVersion: VIEWER_SERVER_INFO_SCHEMA_VERSION,
     serverApiVersion: VIEWER_SERVER_API_VERSION,
     app: VIEWER_SERVER_APP_ID,
     viewerVersion: String(viewerVersion || ""),
+    ...(normalizedGit ? { git: normalizedGit } : {}),
     serverFeatures: Array.isArray(serverFeatures)
       ? serverFeatures.map((feature) => String(feature || "").trim()).filter(Boolean)
       : [],
@@ -65,6 +124,7 @@ export function buildViewerServerInfo({
     rootDir: resolvedViewerRoot.dir,
     rootPath: resolvedViewerRoot.rootPath,
     rootName: resolvedViewerRoot.rootName,
+    activeDirectories: normalizedActiveDirectories,
     port: normalizedPort,
     pid: Number.isInteger(pid) ? pid : process.pid,
     stepArtifactGenerationAvailable: stepArtifactGenerationAvailable !== false,

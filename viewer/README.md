@@ -8,7 +8,7 @@ need to open a model quickly, understand the source tree, copy stable
 
 ## Features
 
-- Scans an absolute `?dir=` local root directory and mirrors its folder
+- Scans a `?dir=` local root directory and mirrors its folder
   structure in the sidebar.
 - Opens `.step`, `.stp`, `.stl`, `.3mf`, `.glb`, `.gcode`, `.dxf`, `.urdf`,
   `.srdf`, and `.sdf` entries.
@@ -31,29 +31,30 @@ npm run test
 npm run build
 ```
 
-For local development, start the dev server and then pass absolute local paths
-in the URL:
+For local development, start the dev server and then pass a local directory and
+directory-relative file path in the URL:
 
 ```bash
 npm run dev -- --host 127.0.0.1
 ```
 
-Open the URL printed by Vite and add absolute local paths, for example
-`?dir=/path/to/root&file=/path/to/root/assemblies/robot-arm/robot-arm.step`.
-Local tools should not assume a fixed port; use Vite's standard `--port`
-argument when a specific dev port is needed. Local dev and production servers
-stay running unless `VIEWER_SERVER_LIFETIME_MS` is set or production `serve` is
+Open the URL printed by Vite and add paths, for example
+`?dir=/path/to/root&file=assemblies/robot-arm/robot-arm.step`.
+Local tools should not assume a fixed port. Use `npm run agent:start` for
+agent-driven review: it starts at port `4178`, reuses a compatible existing
+Viewer, skips viewers with a different launcher-provided `git` value, and
+starts on the first free candidate port. Use Vite's standard `--port` argument
+only when a specific dev port is needed. Local dev and production servers stay
+running unless `VIEWER_SERVER_LIFETIME_MS` is set or production `serve` is
 started with `--shutdown-after <duration>`.
 
-The local filesystem backend also accepts `?dir=/absolute/path` directly in the
-Viewer URL. `?dir=` must be absolute because the browser consumer may not know
-where the server process was launched. Once seen, the active directory is stored
-in tab-local `sessionStorage`, so subsequent navigation can omit `?dir=` and
-continue using the same root. A URL may omit `?dir=` entirely and pass only an
-absolute `?file=/path/to/model.step`; in that mode the Viewer scans just enough
-to render that file and hides the file explorer sidebar and breadcrumbs. With
-neither `?dir=` nor `?file=`, the Viewer shows an empty prompt asking for one of
-those parameters.
+The local filesystem backend accepts absolute or startup-directory-relative
+`?dir=` values directly in the Viewer URL. Once seen, the active directory is
+stored in tab-local `sessionStorage`, so subsequent navigation can omit `?dir=`
+and continue using the same workspace. The directory where the Viewer was
+started is always the first active workspace. If multiple workspaces have been
+scanned and no `?dir=` or stored workspace is active, the Viewer shows a
+workspace picker. `?file=` is always relative to the active workspace.
 
 Install the local Python artifact package when iterating on local STEP
 regeneration:
@@ -83,7 +84,7 @@ python -m pip install -r requirements.txt
 
 ```bash
 npm run dev          # Vite dev server with local CAD API middleware
-npm run agent:start  # Launcher that chooses dev or production serve mode
+npm run agent:start  # Launcher that chooses mode and reuses/selects a local port
 npm run build        # Production frontend build
 npm run serve        # Serve dist/ with the local or hosted backend
 npm run test         # Discover and run all JS tests
@@ -109,7 +110,9 @@ Important environment variables:
 - `VIEWER_SERVER_LIFETIME_MS`: optional server lifetime in milliseconds for
   local dev and production servers. When unset, there is no automatic shutdown.
 - `VIEWER_GITHUB_URL`: optional top-bar GitHub link target. When set, the
-  version label links to the matching GitHub release tag.
+  version label links to the matching GitHub release tag. For GitHub-hosted
+  repositories, the Viewer also checks the latest release and lightly marks the
+  version label when a newer release is available.
 - `VIEWER_ALLOWED_HOSTS`: extra hostnames accepted by local Vite dev and
   production servers.
 - `VIEWER_MOVEIT2_WS_URL`: optional websocket URL for SRDF MoveIt2 controls.
@@ -117,6 +120,10 @@ Important environment variables:
 - `VIEWER_CAD_PYTHONPATH` / `CAD_PYTHONPATH`: optional Python source path for
   the `cadpy` package.
 - `VIEWER_SERVER_REGISTRY`: optional local server registry JSON path.
+- `VIEWER_GIT`: optional launcher-provided git identity, exposed as `git` by
+  `/__cad/server` and used by `npm run agent:start` to avoid reusing viewers
+  from other git worktrees or branches. Ordinary users should not need to set it
+  manually.
 
 `VIEWER_LOCAL_ROOT_DIR` and `VIEWER_LOCAL_WORKSPACE_ROOT` are removed for local
 filesystem viewing. Setting either variable, or using the old fixed-root startup
@@ -167,6 +174,6 @@ npm run build
 ```
 
 For UI behavior changes, also run `npm run dev -- --host 127.0.0.1`, open the
-printed URL with `?dir=/absolute/root&file=/absolute/root/path/to/model.step`,
+printed URL with `?dir=/absolute/root&file=path/to/model.step`,
 and check that the app renders, selection works, and the browser console is
 clean.
