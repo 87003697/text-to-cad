@@ -959,6 +959,7 @@ class _DirectXcafAssemblyWriter:
             return definition_label
         definition_label = self.shape_tool.AddShape(shape.wrapped, False)
         self.shape_definitions[key] = definition_label
+        self._set_label_name(definition_label, getattr(shape, "label", None))
         self._set_label_color(definition_label, getattr(shape, "color", None))
         return definition_label
 

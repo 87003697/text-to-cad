@@ -1,4 +1,4 @@
-import { useEffect } from "react";
+import { useEffect, useMemo } from "react";
 import CadViewer from "../CadViewer";
 import DxfViewer from "../DxfViewer";
 import { CircleAlert, X } from "lucide-react";
@@ -12,6 +12,7 @@ import {
 } from "cadjs/lib/fileFormats";
 import { VIEWER_SCENE_SCALE } from "cadjs/lib/viewer/sceneScale";
 import { VIEWER_PICK_MODE } from "cadjs/lib/viewer/constants";
+import { useStepAnimationSnapshot } from "@/workbench/stepAnimationStore";
 
 const EMPTY_LIST = Object.freeze([]);
 const VIEWPORT_ISSUE_META = Object.freeze({
@@ -93,7 +94,24 @@ export default function CadRenderPane({
   handleScreenshotCopy,
   urdfPosePicker = null
 }) {
-  const resolvedStepParameters = stepParameters;
+  const liveStepAnimation = useStepAnimationSnapshot();
+  const resolvedStepParameters = useMemo(() => {
+    if (!stepParameters?.animationState?.playing) {
+      return stepParameters;
+    }
+    const liveParameterValues = liveStepAnimation?.parameterValues;
+    if (!liveParameterValues || typeof liveParameterValues !== "object") {
+      return stepParameters;
+    }
+    return {
+      ...stepParameters,
+      parameterValues: liveParameterValues,
+      animationState: {
+        ...stepParameters.animationState,
+        elapsedSec: liveStepAnimation.elapsedSec
+      }
+    };
+  }, [stepParameters, liveStepAnimation]);
   const viewerAlertIconLabel = "Viewer error. See the Issues section for details.";
   const dxfMode = renderFormat === RENDER_FORMAT.DXF;
   const gcodeMode = renderFormat === RENDER_FORMAT.GCODE;
