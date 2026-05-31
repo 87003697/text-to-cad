@@ -65,6 +65,37 @@ class ReleasePublishSourceTests(unittest.TestCase):
         self.run_git(repo, "checkout", "develop")
         return publish_commit
 
+    def create_generated_merge_publish_commit(self, repo: Path, target_parent: str, source_parent: str) -> str:
+        self.write_file(repo, "source.txt", "generated output\n")
+        self.run_git(repo, "add", "-A")
+        tree = self.run_git(repo, "write-tree")
+        message = repo / "message.txt"
+        message.write_text(
+            "\n".join(
+                [
+                    "Publish 0.2.0 from develop to main",
+                    "",
+                    f"Source commit: {source_parent}",
+                    "",
+                ]
+            ),
+            encoding="utf-8",
+        )
+        publish_commit = self.run_git(
+            repo,
+            "commit-tree",
+            tree,
+            "-p",
+            target_parent,
+            "-p",
+            source_parent,
+            "-F",
+            "message.txt",
+        )
+        self.run_git(repo, "branch", "-f", "main", publish_commit)
+        self.run_git(repo, "reset", "--hard", "develop")
+        return publish_commit
+
     def test_accepts_source_that_contains_previous_publish_source(self) -> None:
         with temporary_directory(prefix="release-source-ok-") as repo_text:
             repo = Path(repo_text)
@@ -88,6 +119,20 @@ class ReleasePublishSourceTests(unittest.TestCase):
 
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertEqual(result.stdout.strip(), previous_source)
+
+    def test_prints_source_parent_from_generated_merge_publish_commit(self) -> None:
+        with temporary_directory(prefix="release-source-merge-") as repo_text:
+            repo = Path(repo_text)
+            previous_source = self.init_repo(repo)
+            target_parent = self.create_publish_commit(repo, previous_source)
+            self.write_file(repo, "source.txt", "next source\n")
+            source_parent = self.commit(repo, "Next source")
+            self.create_generated_merge_publish_commit(repo, target_parent, source_parent)
+
+            result = self.run_check(repo, "--target-ref", "main", "--print-previous-source")
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(result.stdout.strip(), source_parent)
 
     def test_rejects_source_that_drops_previous_publish_source(self) -> None:
         with temporary_directory(prefix="release-source-bad-") as repo_text:

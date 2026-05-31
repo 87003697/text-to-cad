@@ -276,7 +276,11 @@ jobs:
           } > "$message_file"
 
           tree_sha="$(git write-tree)"
-          publish_commit="$(git commit-tree "$tree_sha" -p "$target_base_sha" -F "$message_file")"
+          commit_parents=(-p "$target_base_sha")
+          if [ "$SOURCE_SHA" != "$target_base_sha" ]; then
+            commit_parents+=(-p "$SOURCE_SHA")
+          fi
+          publish_commit="$(git commit-tree "$tree_sha" "${commit_parents[@]}" -F "$message_file")"
           git reset --hard "$publish_commit"
           echo "Created publish commit: $publish_commit"
 

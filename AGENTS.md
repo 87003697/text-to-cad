@@ -24,7 +24,8 @@ caught before publishing. After a release PR merges, run `Publish` manually from
 the `develop` workflow ref with `source_ref=develop`; it ships only when the
 source version is newer than `main` and the latest semver tag, bundles real
 generated outputs, validates and tests that production layout, writes the
-publish commit on top of the previous publish target, creates the semver git
+publish merge commit on top of the previous publish target with the release
+source as the second parent for release-note attribution, creates the semver git
 tag, and opens a draft GitHub Release. Use `target_branch=main` only for a real
 release and `target_branch=build-test` for publish rehearsals. Pushing
 `develop` runs tests but does not publish `main`.

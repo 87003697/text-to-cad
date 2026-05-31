@@ -207,14 +207,17 @@ gh workflow run publish.yml --ref develop \
 `Publish` only ships to `main` when the source version is newer than `main` and
 the latest semver tag. It repeats the production bundle checks, refuses sources
 that do not contain the previous publish source commit, writes a generated
-production commit on top of the previous publish target, creates the semver tag
-from `plugins/cad/VERSION`, and opens a draft GitHub Release with generated
-notes. Leave `publish=false` unless the release should be published immediately
-rather than reviewed as a draft. Use `target_branch=build-test` to rehearse the
-full publish flow without touching `main` or creating a tag/release. Pushing
-`develop` runs tests but does not publish `main`. During bundling, Publish
-rechecks duplicate package/plugin metadata from `plugins/cad/VERSION`. Treat
-generated outputs as CI products, not edit targets.
+production merge commit on top of the previous publish target with the release
+source as the second parent, creates the semver tag from `plugins/cad/VERSION`,
+and opens a draft GitHub Release with generated notes. This keeps the target
+branch fast-forwardable while preserving source commits for release notes and
+contributor attribution. Leave `publish=false` unless the release should be
+published immediately rather than reviewed as a draft. Use
+`target_branch=build-test` to rehearse the full publish flow without touching
+`main` or creating a tag/release. Pushing `develop` runs tests but does not
+publish `main`. During bundling, Publish rechecks duplicate package/plugin
+metadata from `plugins/cad/VERSION`. Treat generated outputs as CI products, not
+edit targets.
 
 PRs opened against `develop` must keep `plugins/cad/VERSION` and derived version
 metadata valid when they touch release state. The `Test` workflow checks release
