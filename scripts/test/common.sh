@@ -18,7 +18,10 @@ section() {
 run_python_unittest() {
   local name="$1"
   local start_dir="$2"
+  shift 2
   local test_files=()
+  local python_path="$REPO_ROOT:$REPO_ROOT/$start_dir"
+  local path_entry
 
   section "$name"
 
@@ -31,6 +34,14 @@ run_python_unittest() {
     return 0
   fi
 
-  PYTHONPATH="$REPO_ROOT/$start_dir${PYTHONPATH:+:$PYTHONPATH}" \
+  for path_entry in "$@"; do
+    if [[ "$path_entry" = /* ]]; then
+      python_path="$python_path:$path_entry"
+    else
+      python_path="$python_path:$REPO_ROOT/$path_entry"
+    fi
+  done
+
+  PYTHONPATH="$python_path${PYTHONPATH:+:$PYTHONPATH}" \
     "$PYTHON_BIN" -m unittest "${test_files[@]}"
 }
