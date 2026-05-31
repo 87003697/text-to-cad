@@ -311,10 +311,22 @@ test("stepFileStatusItems hides regenerable STEP artifact issues until three gen
       stepArtifactGenerationState: { status: "loading", failureCount: 2 }
     }), [], code);
 
+    assert.deepEqual(stepFileStatusItems({
+      entry,
+      stepArtifactGenerationState: failedStepArtifactGenerationState,
+      activeGenerationFiles: ["simple/.part.step.glb"]
+    }), [], code);
+
     assert.equal(stepFileStatusItems({
       entry,
       stepArtifactGenerationState: failedStepArtifactGenerationState
     })[0]?.code, code);
+
+    assert.deepEqual(stepFileStatusItems({
+      entry,
+      stepArtifactGenerationAvailable: false,
+      activeGenerationFiles: ["simple/.part.step.glb"]
+    }), [], code);
 
     assert.equal(stepFileStatusItems({
       entry,

@@ -1,10 +1,7 @@
 import { entryHasMesh } from "cadjs/lib/entryAssets.js";
-import { RENDER_FORMAT } from "cadjs/lib/fileFormats.js";
 import { viewerRootRelativePath } from "./pathPresentation.js";
 import {
-  STEP_ARTIFACT_GENERATION_FAILURE_DISPLAY_THRESHOLD,
-  stepArtifactCanGenerate,
-  stepArtifactGenerationFailureCount
+  stepArtifactIssueShouldSuppress
 } from "./stepArtifactStatus.js";
 
 export const FILE_STATUS_LEVELS = Object.freeze({
@@ -221,23 +218,6 @@ export function stepArtifactStatusMessage(artifact) {
   return "Generated STEP artifact is unavailable.";
 }
 
-function shouldSuppressBuildableStepArtifactIssue({
-  entry,
-  artifact,
-  generationAvailable,
-  generationState,
-} = {}) {
-  if (!stepArtifactCanGenerate(
-    { ...(entry || {}), artifact },
-    RENDER_FORMAT.STEP,
-    { generationAvailable }
-  )) {
-    return false;
-  }
-  return stepArtifactGenerationFailureCount(generationState) <
-    STEP_ARTIFACT_GENERATION_FAILURE_DISPLAY_THRESHOLD;
-}
-
 function stepSourceStatusTitle(stepStatus) {
   return "STEP file missing";
 }
@@ -297,6 +277,7 @@ export function stepFileStatusItems({
   stepSourceStatus = null,
   stepArtifactGenerationAvailable = true,
   stepArtifactGenerationState = null,
+  activeGenerationFiles = [],
   viewerServerInfo = {},
 } = {}) {
   const items = [];
@@ -305,11 +286,12 @@ export function stepFileStatusItems({
     : entry?.artifact;
   if (
     artifact?.ok === false &&
-    !shouldSuppressBuildableStepArtifactIssue({
+    !stepArtifactIssueShouldSuppress({
       entry,
       artifact,
       generationAvailable: stepArtifactGenerationAvailable,
       generationState: stepArtifactGenerationState,
+      activeGenerationFiles
     })
   ) {
     items.push({
@@ -434,6 +416,7 @@ export function buildFileStatusItems({
   stepSourceStatus = null,
   stepArtifactGenerationAvailable = true,
   stepArtifactGenerationState = null,
+  activeGenerationFiles = [],
   gcodeData = null,
   urdfData = null,
   viewerAlert = null,
@@ -452,6 +435,7 @@ export function buildFileStatusItems({
       stepSourceStatus,
       stepArtifactGenerationAvailable,
       stepArtifactGenerationState,
+      activeGenerationFiles,
       viewerServerInfo
     }));
   }

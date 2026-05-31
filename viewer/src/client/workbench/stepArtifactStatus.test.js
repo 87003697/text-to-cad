@@ -8,7 +8,10 @@ import {
   STEP_ARTIFACT_GENERATION_FAILURE_DISPLAY_THRESHOLD,
   runStepArtifactGenerationWithRetries,
   stepArtifactCanGenerate,
+  stepArtifactGenerationFileRefs,
   stepArtifactGenerationFailureCount,
+  stepArtifactGenerationInProgress,
+  stepArtifactIssueShouldSuppress,
   validateGeneratedStepArtifactPayload
 } from "./stepArtifactStatus.js";
 
@@ -45,6 +48,75 @@ test("stepArtifactGenerationFailureCount normalizes persisted state", () => {
   assert.equal(stepArtifactGenerationFailureCount({ failureCount: -1 }), 0);
   assert.equal(stepArtifactGenerationFailureCount({ failureCount: 2.9 }), 2);
   assert.equal(stepArtifactGenerationFailureCount({ failureCount: "3" }), 3);
+});
+
+test("stepArtifactGenerationFileRefs tracks STEP files and generated GLB artifacts", () => {
+  const refs = stepArtifactGenerationFileRefs({
+    file: "parts/bracket.step",
+    artifact: {
+      stepPath: "models/parts/bracket.step",
+      glbPath: "models/parts/.bracket.step.glb",
+      sourcePath: "models/parts/bracket.py"
+    }
+  });
+
+  assert.equal(refs.includes("parts/bracket.step"), true);
+  assert.equal(refs.includes("parts/.bracket.step.glb"), true);
+  assert.equal(refs.includes("models/parts/bracket.step"), true);
+  assert.equal(refs.includes("models/parts/.bracket.step.glb"), true);
+  assert.equal(refs.includes("models/parts/bracket.py"), false);
+});
+
+test("stepArtifactGenerationInProgress matches viewer retries and lock-file outputs", () => {
+  const entry = {
+    file: "parts/bracket.step",
+    artifact: {
+      ok: false,
+      error: "missing_step_hash"
+    }
+  };
+
+  assert.equal(stepArtifactGenerationInProgress({
+    entry,
+    generationState: { status: "loading", file: "parts/bracket.step" }
+  }), true);
+  assert.equal(stepArtifactGenerationInProgress({
+    entry,
+    activeGenerationFiles: ["parts/.bracket.step.glb"]
+  }), true);
+  assert.equal(stepArtifactGenerationInProgress({
+    entry,
+    activeGenerationFiles: [".bracket.step.glb"]
+  }), false);
+  assert.equal(stepArtifactGenerationInProgress({
+    entry,
+    activeGenerationFiles: ["parts/other.step"]
+  }), false);
+});
+
+test("stepArtifactIssueShouldSuppress hides regenerable issues while generation can resolve them", () => {
+  const entry = {
+    file: "parts/bracket.step",
+    artifact: {
+      ok: false,
+      error: "missing_step_hash"
+    }
+  };
+
+  assert.equal(stepArtifactIssueShouldSuppress({ entry }), true);
+  assert.equal(stepArtifactIssueShouldSuppress({
+    entry,
+    generationState: { status: "error", failureCount: STEP_ARTIFACT_GENERATION_FAILURE_DISPLAY_THRESHOLD }
+  }), false);
+  assert.equal(stepArtifactIssueShouldSuppress({
+    entry,
+    generationAvailable: false
+  }), false);
+  assert.equal(stepArtifactIssueShouldSuppress({
+    entry,
+    generationAvailable: false,
+    activeGenerationFiles: ["parts/.bracket.step.glb"]
+  }), true);
 });
 
 test("validateGeneratedStepArtifactPayload rejects non-renderable generation results", () => {

@@ -237,6 +237,7 @@ import {
   runStepArtifactGenerationWithRetries,
   stepArtifactCanGenerate,
   stepArtifactGenerationFailureCount,
+  stepArtifactGenerationInProgress,
   validateGeneratedStepArtifactPayload
 } from "@/workbench/stepArtifactStatus";
 import {
@@ -831,10 +832,14 @@ export default function CadWorkspace({
   const selectedEntryHasDisplayEdges = entryHasDisplayEdges(selectedEntry);
   const selectedEntryHasDxf = entryHasDxf(selectedEntry);
   const selectedEntryHasGcode = entryHasGcode(selectedEntry);
+  const selectedStepArtifactExternalGenerationActive = stepArtifactGenerationInProgress({
+    entry: selectedEntry,
+    activeGenerationFiles: activeGeneratorFiles
+  });
   const selectedStepArtifactBuildFile = stepArtifactCanGenerate(
     selectedEntry,
     selectedEntrySourceFormat,
-    { generationAvailable: stepArtifactGenerationAvailable }
+    { generationAvailable: stepArtifactGenerationAvailable || selectedStepArtifactExternalGenerationActive }
   )
     ? fileKey(selectedEntry)
     : "";
@@ -852,14 +857,20 @@ export default function CadWorkspace({
   const selectedStepArtifactGenerationFailureCount = stepArtifactGenerationFailureCount(
     selectedStepArtifactGenerationState
   );
-  const selectedStepArtifactGenerating = Boolean(
-    selectedStepArtifactBuildKey &&
-    selectedStepArtifactGenerationStatus === "loading"
-  );
+  const selectedStepArtifactGenerationActive = stepArtifactGenerationInProgress({
+    entry: selectedEntry,
+    generationState: selectedStepArtifactGenerationState,
+    activeGenerationFiles: activeGeneratorFiles
+  });
   const selectedStepArtifactRenderPending = Boolean(
     selectedStepArtifactBuildKey &&
-    selectedStepArtifactGenerationStatus !== "error" &&
-    selectedStepArtifactGenerationStatus !== "ready"
+    (
+      selectedStepArtifactGenerationActive ||
+      (
+        selectedStepArtifactGenerationStatus !== "error" &&
+        selectedStepArtifactGenerationStatus !== "ready"
+      )
+    )
   );
   const selectedMeshHash = entryMeshAssetSignature(selectedEntry);
   const selectedMeshMatches =
@@ -2429,9 +2440,11 @@ export default function CadWorkspace({
         viewerAlert,
         stepArtifactGenerationAvailable,
         stepArtifactGenerationState: selectedStepArtifactGenerationState,
+        activeGenerationFiles: activeGeneratorFiles,
         viewerServerInfo
       })
   ), [
+    activeGeneratorFiles,
     selectedEntry,
     selectedFileSheetKind,
     selectedGcodeData,
@@ -3360,6 +3373,10 @@ export default function CadWorkspace({
       return undefined;
     }
 
+    if (selectedStepArtifactExternalGenerationActive) {
+      return undefined;
+    }
+
     if (
       selectedStepArtifactGenerationStatus === "ready" ||
       (
@@ -3419,6 +3436,7 @@ export default function CadWorkspace({
   }, [
     selectedStepArtifactBuildFile,
     selectedStepArtifactBuildKey,
+    selectedStepArtifactExternalGenerationActive,
     selectedStepArtifactGenerationFailureCount,
     selectedStepArtifactGenerationStatus,
     setError,

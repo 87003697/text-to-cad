@@ -16,10 +16,118 @@ export const BUILDABLE_STEP_ARTIFACT_ERROR_CODES = Object.freeze([
 ]);
 
 const BUILDABLE_STEP_ARTIFACT_ERROR_CODE_SET = new Set(BUILDABLE_STEP_ARTIFACT_ERROR_CODES);
+const STEP_FILE_EXTENSION_RE = /\.(step|stp)$/i;
+
+function normalizeStepArtifactFileRef(value) {
+  return String(value || "").trim().replace(/\\/g, "/").replace(/\/+$/, "");
+}
+
+function valuesArray(value) {
+  if (!value) {
+    return [];
+  }
+  if (Array.isArray(value)) {
+    return value;
+  }
+  if (typeof value !== "string" && typeof value[Symbol.iterator] === "function") {
+    return Array.from(value);
+  }
+  return [value];
+}
+
+function addFileRef(refs, value) {
+  const normalized = normalizeStepArtifactFileRef(value);
+  if (normalized) {
+    refs.add(normalized);
+  }
+  return normalized;
+}
+
+function addStepFileRef(refs, value) {
+  const normalized = addFileRef(refs, value);
+  if (!STEP_FILE_EXTENSION_RE.test(normalized)) {
+    return;
+  }
+  const slashIndex = normalized.lastIndexOf("/");
+  const dir = slashIndex >= 0 ? `${normalized.slice(0, slashIndex)}/` : "";
+  const filename = slashIndex >= 0 ? normalized.slice(slashIndex + 1) : normalized;
+  refs.add(`${dir}.${filename}.glb`);
+}
+
+function fileRefsMatch(left, right) {
+  const leftRef = normalizeStepArtifactFileRef(left);
+  const rightRef = normalizeStepArtifactFileRef(right);
+  return Boolean(leftRef && rightRef && leftRef === rightRef);
+}
+
+function fileRefMatchesAny(file, candidates) {
+  return candidates.some((candidate) => fileRefsMatch(file, candidate));
+}
 
 export function stepArtifactGenerationFailureCount(state) {
   const count = Number(state?.failureCount || 0);
   return Number.isFinite(count) && count > 0 ? Math.trunc(count) : 0;
+}
+
+export function stepArtifactGenerationFileRefs(entry = null, artifact = entry?.artifact) {
+  const refs = new Set();
+  addStepFileRef(refs, entry?.file);
+  addStepFileRef(refs, entry?.rootRelativeFile);
+  addStepFileRef(refs, artifact?.stepPath);
+  if (STEP_FILE_EXTENSION_RE.test(normalizeStepArtifactFileRef(artifact?.sourcePath))) {
+    addStepFileRef(refs, artifact?.sourcePath);
+  }
+  addFileRef(refs, artifact?.glbPath);
+  return [...refs];
+}
+
+export function stepArtifactGenerationInProgress({
+  entry = null,
+  artifact = entry?.artifact,
+  generationState = null,
+  activeGenerationFiles = []
+} = {}) {
+  const candidates = stepArtifactGenerationFileRefs(entry, artifact);
+  if (String(generationState?.status || "").trim().toLowerCase() === "loading") {
+    const stateFile = normalizeStepArtifactFileRef(generationState?.file);
+    if (!stateFile || candidates.length === 0 || fileRefMatchesAny(stateFile, candidates)) {
+      return true;
+    }
+  }
+
+  return valuesArray(activeGenerationFiles)
+    .map(normalizeStepArtifactFileRef)
+    .filter(Boolean)
+    .some((file) => fileRefMatchesAny(file, candidates));
+}
+
+export function stepArtifactIssueShouldSuppress({
+  entry = null,
+  artifact = entry?.artifact,
+  sourceFormat = RENDER_FORMAT.STEP,
+  generationAvailable = true,
+  generationState = null,
+  activeGenerationFiles = []
+} = {}) {
+  const candidateEntry = { ...(entry || {}), artifact };
+  const generationInProgress = stepArtifactGenerationInProgress({
+    entry: candidateEntry,
+    artifact,
+    generationState,
+    activeGenerationFiles
+  });
+  if (!stepArtifactCanGenerate(
+    candidateEntry,
+    sourceFormat,
+    { generationAvailable: generationAvailable || generationInProgress }
+  )) {
+    return false;
+  }
+  if (generationInProgress) {
+    return true;
+  }
+  return stepArtifactGenerationFailureCount(generationState) <
+    STEP_ARTIFACT_GENERATION_FAILURE_DISPLAY_THRESHOLD;
 }
 
 export function validateGeneratedStepArtifactPayload(payload, { file = "" } = {}) {

@@ -177,6 +177,26 @@ test("entryIconStatus marks buildable STEP artifacts as generating in production
     true
   );
 
+  assert.deepEqual(
+    entryIconStatus(entry, {
+      sourceFormat: "step",
+      entryKey: "benchmarks/bracket.step",
+      hasMesh: false,
+      activeGenerationFiles: ["benchmarks/.bracket.step.glb"],
+      stepArtifactGenerationAvailable: false
+    }),
+    {
+      artifactBuildable: true,
+      artifactGenerating: true,
+      artifactStale: false,
+      artifactWarning: false,
+      loading: true,
+      pending: true,
+      sourceFormat: "step",
+      statusLabel: "generating artifact"
+    }
+  );
+
   assert.equal(
     entryIconStatus({
       file: "benchmarks/stale.step",
