@@ -29,7 +29,7 @@ pick up edits without generated bundles.
 - `src/index.js`: public package entrypoint.
 - `src/lib/implicitCad/`: model normalization, loader, graphics settings,
   shader renderer, CPU evaluator, mesh sampler, mesh quality checks, and
-  exporters.
+  browser/Node-safe model exporters.
 - `src/common/`: reusable camera, parameters, theme, render options, and
   headless snapshot entrypoint code.
 - `src/lib/viewer/`: small viewer-adjacent helpers needed by the implicit
@@ -54,7 +54,18 @@ npm --prefix packages/implicitjs test
 node packages/implicitjs/scripts/export-implicit-cad.mjs \
   --input models/implicit-cad/rounded-orb.implicit.js \
   --output /tmp/rounded-orb.glb
+
+node packages/implicitjs/scripts/export-implicit-cad.mjs \
+  --input models/implicit-cad/planetary-gear.implicit.js \
+  --animated \
+  --animation '{"activeId":"meshCycle"}' \
+  --frames 24 \
+  --output /tmp/planetary-gear.animated.glb
 ```
+
+Browser consumers can import `exportImplicitModel` for STL/3MF/GLB buffers and
+`exportImplicitAnimatedGlb` for morph-target GLB animation buffers from the
+browser entrypoint.
 
 ## Boundaries
 

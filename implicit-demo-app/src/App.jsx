@@ -1,10 +1,11 @@
 import {
   Activity,
   Check,
+  Download,
+  Film,
   Moon,
   Pause,
   Play,
-  RefreshCcw,
   RotateCcw,
   SlidersHorizontal,
   Sun,
@@ -13,8 +14,12 @@ import {
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   DEFAULT_IMPLICIT_GRAPHICS_SETTINGS,
+  animatedImplicitParameterValues,
+  exportImplicitAnimatedGlb,
+  exportImplicitModel,
   IMPLICIT_GRAPHICS_LIMITS,
   loadImplicitSource,
+  normalizeImplicitAnimationElapsed,
   normalizeImplicitGraphicsSettings,
   normalizeParameterValue,
   normalizeParameterValues
@@ -50,47 +55,6 @@ function useDebouncedValue(value, delayMs) {
   return debouncedValue;
 }
 
-function normalizeAnimationElapsed(elapsedSec, animation) {
-  const duration = Math.max(Number(animation?.duration) || 1, 0.001);
-  const elapsed = Math.max(Number(elapsedSec) || 0, 0);
-  return animation?.loop === false
-    ? Math.min(elapsed, duration)
-    : elapsed % duration;
-}
-
-function animatedParameterValues(definition, animation, baseValues, elapsedSec) {
-  if (!definition || typeof animation?.update !== "function") {
-    return baseValues;
-  }
-  const normalizedBase = normalizeParameterValues(definition, baseValues);
-  const duration = Math.max(Number(animation.duration) || 1, 0.001);
-  const elapsed = normalizeAnimationElapsed(elapsedSec, animation);
-  const nextValues = { ...normalizedBase };
-  const set = (parameterId, value) => {
-    const id = String(parameterId || "").trim();
-    const parameter = definition.parameterMap?.[id];
-    if (parameter) {
-      nextValues[id] = normalizeParameterValue(parameter, value);
-    }
-  };
-
-  animation.update({
-    ...normalizedBase,
-    elapsed,
-    elapsedSec: elapsed,
-    duration,
-    progress: clampNumber(elapsed / duration, 0, 1),
-    cycle: elapsed / duration,
-    t: elapsed,
-    time: elapsed,
-    loop: animation.loop !== false,
-    params: normalizedBase,
-    set
-  });
-
-  return nextValues;
-}
-
 function compileSummary(model) {
   if (!model) {
     return [];
@@ -104,13 +68,38 @@ function compileSummary(model) {
   ];
 }
 
-function StatusBadge({ state, label }) {
-  return (
-    <span className={`status-badge status-${state}`}>
-      <span className="status-dot" />
-      {label}
-    </span>
-  );
+function statusText(state, error = "") {
+  if (error) {
+    return "error";
+  }
+  if (state === "ready") {
+    return "live shader ready";
+  }
+  return state;
+}
+
+function errorMessage(error) {
+  return error instanceof Error ? error.message : String(error || "");
+}
+
+function safeFileStem(value, fallback = "implicit-model") {
+  return String(value || fallback)
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9._-]+/g, "-")
+    .replace(/^-+|-+$/g, "") || fallback;
+}
+
+function downloadExport(result, filename) {
+  const blob = new Blob([result.body], { type: result.contentType || "application/octet-stream" });
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement("a");
+  anchor.href = url;
+  anchor.download = filename;
+  document.body.appendChild(anchor);
+  anchor.click();
+  anchor.remove();
+  window.setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
 function IconButton({ children, title, className = "", ...props }) {
@@ -263,6 +252,26 @@ function GraphicsControl({ id, label, value, onChange }) {
   );
 }
 
+function NumberControl({ label, value, min, max, step = 1, unit = "", onChange }) {
+  const numericValue = Number(value);
+  return (
+    <label className="control-row">
+      <span className="control-head">
+        <FieldLabel>{label}</FieldLabel>
+        <code>{Number.isFinite(numericValue) ? numericValue.toFixed(step >= 1 ? 0 : 2) : value}{unit ? ` ${unit}` : ""}</code>
+      </span>
+      <input
+        type="range"
+        min={min}
+        max={max}
+        step={step}
+        value={value}
+        onChange={(event) => onChange(Number(event.target.value))}
+      />
+    </label>
+  );
+}
+
 function InspectorPanel({
   active = false,
   model,
@@ -277,6 +286,8 @@ function InspectorPanel({
   playing,
   onTogglePlaying,
   onResetAnimation,
+  exportSettings,
+  onExportSettingChange,
   runtimeError
 }) {
   const parameters = definition?.parameters || [];
@@ -345,6 +356,37 @@ function InspectorPanel({
       )}
 
       <section className="control-section">
+        <div className="section-title">export</div>
+        <div className="control-stack">
+          <NumberControl
+            label="mesh resolution"
+            min={24}
+            max={192}
+            step={4}
+            value={exportSettings.resolution}
+            onChange={(value) => onExportSettingChange("resolution", value)}
+          />
+          <NumberControl
+            label="animation frames"
+            min={4}
+            max={48}
+            step={1}
+            value={exportSettings.frames}
+            onChange={(value) => onExportSettingChange("frames", value)}
+          />
+          <NumberControl
+            label="animation duration"
+            min={0.25}
+            max={20}
+            step={0.25}
+            unit="s"
+            value={exportSettings.duration}
+            onChange={(value) => onExportSettingChange("duration", value)}
+          />
+        </div>
+      </section>
+
+      <section className="control-section">
         <div className="section-title">graphics</div>
         <div className="control-stack">
           <GraphicsControl id="resolutionScale" label="idle resolution" value={graphics.resolutionScale} onChange={onGraphicsChange} />
@@ -379,6 +421,8 @@ export default function App() {
   const [definition, setDefinition] = useState(null);
   const [paramValues, setParamValues] = useState({});
   const [graphics, setGraphics] = useState(() => normalizeImplicitGraphicsSettings(DEFAULT_IMPLICIT_GRAPHICS_SETTINGS));
+  const [exportSettings, setExportSettings] = useState({ resolution: 72, frames: 18, duration: 4 });
+  const [exportState, setExportState] = useState({ status: "idle", message: "" });
   const [activeAnimationId, setActiveAnimationId] = useState("");
   const [playing, setPlaying] = useState(false);
   const [animationElapsed, setAnimationElapsed] = useState(0);
@@ -389,7 +433,6 @@ export default function App() {
   const [viewportSplit, setViewportSplit] = useState(72);
   const workspaceRef = useRef(null);
   const visualBodyRef = useRef(null);
-  const selectedExampleRef = useRef(DEFAULT_EXAMPLE_ID);
   const examplesRef = useRef([]);
   const debouncedCode = useDebouncedValue(code, COMPILE_DEBOUNCE_MS);
 
@@ -406,7 +449,6 @@ export default function App() {
     if (!example) {
       return;
     }
-    selectedExampleRef.current = example.id;
     setSelectedExampleId(example.id);
     setCompileState("loading");
     const response = await fetch(`/examples/${example.file}?v=${Date.now()}`);
@@ -418,6 +460,7 @@ export default function App() {
     setCode(source);
     setPlaying(false);
     setAnimationElapsed(0);
+    setExportState({ status: "idle", message: "" });
   }, []);
 
   useEffect(() => {
@@ -441,7 +484,7 @@ export default function App() {
       .catch((error) => {
         if (!cancelled) {
           setCompileState("error");
-          setCompileError(error instanceof Error ? error.message : String(error));
+          setCompileError(errorMessage(error));
         }
       });
     return () => {
@@ -460,7 +503,7 @@ export default function App() {
 
     loadImplicitSource(debouncedCode, {
       signal: controller.signal,
-      sourceUrl: `editor://${selectedExampleRef.current || "inline"}.implicit.js`
+      sourceUrl: "editor://implicit.implicit.js"
     }).then((model) => {
       if (cancelled) {
         return;
@@ -478,12 +521,15 @@ export default function App() {
           : animations[0]?.id || "";
       });
       setCompileState("ready");
+      setExportState((current) => current.status === "error" ? { status: "idle", message: "" } : current);
     }).catch((error) => {
       if (cancelled || error?.name === "AbortError") {
         return;
       }
+      setCompiledModel(null);
+      setDefinition(null);
       setCompileState("error");
-      setCompileError(error instanceof Error ? error.message : String(error));
+      setCompileError(errorMessage(error));
     });
 
     return () => {
@@ -513,30 +559,92 @@ export default function App() {
     return animations.find((animation) => animation.id === activeAnimationId) || animations[0] || null;
   }, [activeAnimationId, definition]);
 
+  useEffect(() => {
+    if (activeAnimation?.duration) {
+      setExportSettings((current) => ({
+        ...current,
+        duration: Number(activeAnimation.duration.toFixed?.(2) || activeAnimation.duration)
+      }));
+    }
+  }, [activeAnimation?.id, activeAnimation?.duration]);
+
   const animatedValues = useMemo(() => (
     activeAnimation && (playing || animationElapsed > 0)
-      ? animatedParameterValues(definition, activeAnimation, paramValues, animationElapsed)
+      ? animatedImplicitParameterValues(definition, activeAnimation, paramValues, animationElapsed)
       : normalizeParameterValues(definition, paramValues)
   ), [activeAnimation, animationElapsed, definition, paramValues, playing]);
 
-  const liveModel = useMemo(() => {
+  const liveResult = useMemo(() => {
     if (!definition) {
-      return compiledModel;
+      return { model: compiledModel, error: "" };
     }
     try {
-      return definition.buildModel(animatedValues, {
-        activeId: activeAnimation?.id || "",
-        playing,
-        elapsedSec: normalizeAnimationElapsed(animationElapsed, activeAnimation),
-        speed: 1
-      });
-    } catch {
-      return compiledModel;
+      return {
+        model: definition.buildModel(animatedValues, {
+          activeId: activeAnimation?.id || "",
+          playing,
+          elapsedSec: normalizeImplicitAnimationElapsed(animationElapsed, activeAnimation),
+          speed: 1
+        }),
+        error: ""
+      };
+    } catch (error) {
+      return {
+        model: null,
+        error: errorMessage(error)
+      };
     }
   }, [activeAnimation, animatedValues, animationElapsed, compiledModel, definition, playing]);
+  const liveModel = liveResult.model;
+  const previewError = compileState === "error" ? compileError : liveResult.error;
+  const previewStatus = previewError ? "error" : compileState;
+
+  const handleExportSettingChange = useCallback((id, value) => {
+    setExportSettings((current) => ({
+      ...current,
+      [id]: id === "duration"
+        ? clampNumber(value, 0.25, 20)
+        : Math.floor(clampNumber(value, id === "frames" ? 4 : 24, id === "frames" ? 48 : 192))
+    }));
+  }, []);
+
+  const handleExport = useCallback(async (format, { animated = false } = {}) => {
+    if (!liveModel || previewError) {
+      setExportState({ status: "error", message: "Fix the source before exporting." });
+      return;
+    }
+    if (animated && !activeAnimation) {
+      setExportState({ status: "error", message: "This source does not define an animation." });
+      return;
+    }
+    setExportState({ status: "busy", message: animated ? "building animated GLB" : `building ${format.toUpperCase()}` });
+    await new Promise((resolve) => window.requestAnimationFrame(resolve));
+    try {
+      const result = animated
+        ? exportImplicitAnimatedGlb(liveModel, {
+            animationId: activeAnimation?.id || "",
+            params: paramValues,
+            duration: exportSettings.duration,
+            frames: exportSettings.frames,
+            resolution: exportSettings.resolution,
+          })
+        : exportImplicitModel(liveModel, {
+            format,
+            resolution: exportSettings.resolution,
+          });
+      const extension = animated ? "animated.glb" : (result.extension || `.${format}`).replace(/^\./, "");
+      const filename = `${safeFileStem(liveModel.name)}.${extension}`;
+      downloadExport(result, filename);
+      setExportState({
+        status: "done",
+        message: `${filename} exported`
+      });
+    } catch (error) {
+      setExportState({ status: "error", message: errorMessage(error) });
+    }
+  }, [activeAnimation, exportSettings, liveModel, paramValues, previewError]);
 
   const dirty = code !== loadedExampleCode;
-  const selectedExample = examples.find((example) => example.id === selectedExampleId);
 
   const handleParamChange = useCallback((parameterId, value) => {
     setParamValues((currentValues) => {
@@ -561,9 +669,16 @@ export default function App() {
   const reloadSelectedExample = useCallback(() => {
     loadExample(selectedExampleId).catch((error) => {
       setCompileState("error");
-      setCompileError(error instanceof Error ? error.message : String(error));
+      setCompileError(errorMessage(error));
     });
   }, [loadExample, selectedExampleId]);
+
+  const handleExampleChange = useCallback((exampleId) => {
+    loadExample(exampleId).catch((error) => {
+      setCompileState("error");
+      setCompileError(errorMessage(error));
+    });
+  }, [loadExample]);
 
   return (
     <div
@@ -578,27 +693,11 @@ export default function App() {
           <strong>implicitjs</strong>
           <span>workbench</span>
         </div>
-        <label className="top-example-select">
-          <FieldLabel>example</FieldLabel>
-          <select value={selectedExampleId} onChange={(event) => loadExample(event.target.value).catch((error) => {
-            setCompileState("error");
-            setCompileError(error instanceof Error ? error.message : String(error));
-          })}>
-            {examples.map((example) => (
-              <option key={example.id} value={example.id}>{example.label}</option>
-            ))}
-          </select>
-        </label>
         <div className="top-actions">
-          <button className="text-button" type="button" onClick={reloadSelectedExample}>
-            <RefreshCcw size={14} />
-            reload
-          </button>
           <div className="compile-readout">
-            {compileState === "ready" ? <Check size={15} /> : compileState === "error" ? <Zap size={15} /> : <Activity size={15} />}
-            <span>{compileState === "ready" ? "live shader ready" : compileState}</span>
+            {previewStatus === "ready" ? <Check size={15} /> : previewStatus === "error" ? <Zap size={15} /> : <Activity size={15} />}
+            <span>{statusText(compileState, previewError)}</span>
           </div>
-          {dirty ? <StatusBadge state="busy" label="edited" /> : null}
           <IconButton
             title={themeMode === "dark" ? "Switch to light mode" : "Switch to dark mode"}
             onClick={() => setThemeMode((mode) => mode === "dark" ? "light" : "dark")}
@@ -625,6 +724,12 @@ export default function App() {
         <section className="editor-shell">
           <CodePane
             active={mobileTab === "source"}
+            dirty={dirty}
+            examples={examples}
+            onExampleChange={handleExampleChange}
+            onReloadExample={reloadSelectedExample}
+            selectedExampleId={selectedExampleId}
+            status="javascript + glsl"
             title="implicit.js source"
             value={code}
             onChange={setCode}
@@ -649,29 +754,66 @@ export default function App() {
             <section className={`viewport-frame mobile-panel ${mobileTab === "preview" ? "is-active" : ""}`}>
               <div className="section-bar">
                 <div className="section-title-row">
-                  <span>{liveModel?.name || "Preview"}</span>
+                  <span>Preview</span>
                 </div>
-                <IconButton title="Reset camera" onClick={() => setCameraResetToken((token) => token + 1)}>
-                  <RotateCcw size={15} />
-                </IconButton>
+                <div className="preview-actions">
+                  <button
+                    className="section-text-button"
+                    disabled={!liveModel || Boolean(previewError) || exportState.status === "busy"}
+                    type="button"
+                    onClick={() => handleExport("glb")}
+                  >
+                    <Download size={13} />
+                    GLB
+                  </button>
+                  <button
+                    className="section-text-button"
+                    disabled={!liveModel || Boolean(previewError) || exportState.status === "busy"}
+                    type="button"
+                    onClick={() => handleExport("3mf")}
+                  >
+                    <Download size={13} />
+                    3MF
+                  </button>
+                  <button
+                    className="section-text-button"
+                    disabled={!liveModel || Boolean(previewError) || exportState.status === "busy"}
+                    type="button"
+                    onClick={() => handleExport("stl")}
+                  >
+                    <Download size={13} />
+                    STL
+                  </button>
+                  <button
+                    className="section-text-button"
+                    disabled={!liveModel || !activeAnimation || Boolean(previewError) || exportState.status === "busy"}
+                    type="button"
+                    onClick={() => handleExport("glb", { animated: true })}
+                  >
+                    <Film size={13} />
+                    animated
+                  </button>
+                  <IconButton title="Reset camera" onClick={() => setCameraResetToken((token) => token + 1)}>
+                    <RotateCcw size={15} />
+                  </IconButton>
+                </div>
               </div>
               <div className="viewport-canvas-area">
                 <ImplicitViewport
-                  model={compileState === "ready" ? liveModel : null}
+                  model={previewStatus === "ready" ? liveModel : null}
                   graphics={graphics}
                   themeMode={themeMode}
                   cameraResetToken={cameraResetToken}
                 />
-                {compileState === "error" ? (
+                {previewError ? (
                   <div className="compile-error">
-                    <FieldLabel>compile error</FieldLabel>
-                    <pre>{compileError}</pre>
+                    <FieldLabel>{compileState === "error" ? "compile error" : "runtime error"}</FieldLabel>
+                    <pre>{previewError}</pre>
                   </div>
                 ) : null}
-                {selectedExample ? (
-                  <div className="example-caption">
-                    <strong>{selectedExample.label}</strong>
-                    <span>{selectedExample.description}</span>
+                {exportState.message ? (
+                  <div className={`export-toast export-${exportState.status}`}>
+                    {exportState.message}
                   </div>
                 ) : null}
               </div>
@@ -708,7 +850,9 @@ export default function App() {
                 setPlaying(false);
                 setAnimationElapsed(0);
               }}
-              runtimeError={compileState === "error" ? compileError : ""}
+              exportSettings={exportSettings}
+              onExportSettingChange={handleExportSettingChange}
+              runtimeError={previewError}
             />
           </div>
         </section>

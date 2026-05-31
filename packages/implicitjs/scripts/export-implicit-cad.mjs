@@ -14,6 +14,9 @@ Options:
   --max-cells       Safety cap for grid cells. Default: 2500000.
   --params          JSON object of implicit parameter values.
   --animation       JSON object of implicit animation state.
+  --animated        Export a GLB morph-target animation from the selected animation.
+  --frames          Animation frame count for --animated. Default: 18.
+  --duration        Animation duration in seconds for --animated. Default: animation duration.
   --json            Print machine-readable result JSON.
   --help, -h        Show this help.
 `;
@@ -44,6 +47,9 @@ function parseArgs(argv) {
     maxCells: undefined,
     params: null,
     animationState: null,
+    animated: false,
+    frames: undefined,
+    duration: undefined,
     json: false,
     help: false,
   };
@@ -80,6 +86,15 @@ function parseArgs(argv) {
         break;
       case "--animation":
         options.animationState = parseJsonOption(readValue(), "--animation");
+        break;
+      case "--animated":
+        options.animated = true;
+        break;
+      case "--frames":
+        options.frames = Number(readValue());
+        break;
+      case "--duration":
+        options.duration = Number(readValue());
         break;
       case "--json":
         options.json = true;

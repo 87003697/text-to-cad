@@ -5,6 +5,7 @@ import path from "node:path";
 import test from "node:test";
 
 import {
+  exportImplicitCadAnimatedGlb,
   exportImplicitCadFile,
   exportImplicitCadModel,
 } from "./export.js";
@@ -78,4 +79,34 @@ test("implicit GLB exports include CAD-native millimeter metadata", () => {
   assert.equal(json.nodes[0].extras.cadUnits, "mm");
   assert.equal(json.materials[0].extras.cadSourceColor, true);
   assert.deepEqual(json.meshes[0].primitives[0].attributes, { POSITION: 0, NORMAL: 1 });
+});
+
+test("implicit animated GLB exports morph target animation", () => {
+  const result = exportImplicitCadAnimatedGlb({
+    schema: "implicit-cad/v1",
+    name: "animated sphere",
+    params: {
+      radius: { type: "number", min: 2, max: 8, default: 4 }
+    },
+    animations: {
+      pulse: {
+        duration: 1,
+        update({ progress, set }) {
+          set("radius", 4 + Math.sin(progress * Math.PI) * 0.75);
+        }
+      }
+    },
+    bounds: ({ params }) => [[-params.radius - 2, -params.radius - 2, -params.radius - 2], [params.radius + 2, params.radius + 2, params.radius + 2]],
+    glsl: "float sdf(vec3 p) { return length(p) - radius; }"
+  }, {
+    animationId: "pulse",
+    frames: 4,
+    resolution: 10,
+  });
+  assert.equal(result.format, "glb");
+  assert.ok(result.body.length > 100);
+  const json = parseGlbJson(result.body);
+  assert.equal(json.animations.length, 1);
+  assert.ok(json.meshes[0].primitives[0].targets.length > 0);
+  assert.equal(json.nodes[0].extras.implicitjsAnimated, true);
 });

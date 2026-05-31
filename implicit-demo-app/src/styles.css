@@ -88,7 +88,7 @@ select {
 
 .top-rail {
   display: grid;
-  grid-template-columns: auto minmax(260px, 420px) minmax(0, auto);
+  grid-template-columns: auto minmax(0, 1fr);
   align-items: center;
   min-width: 0;
   border-bottom: 1px solid var(--border);
@@ -126,17 +126,13 @@ select {
   font-size: var(--text-ui);
 }
 
-.top-example-select {
-  display: grid;
-  grid-template-columns: auto minmax(0, 1fr);
-  align-items: center;
-  gap: 10px;
-  min-width: 0;
-}
-
 .top-actions,
 .viewport-actions,
-.animation-row {
+.animation-row,
+.preview-actions,
+.editor-section-actions {
+  display: flex;
+  align-items: center;
   justify-content: end;
   gap: 8px;
   min-width: 0;
@@ -148,8 +144,7 @@ select {
 .stat-cell span,
 .compile-readout,
 .section-title-row,
-.section-meta,
-.example-caption strong {
+.section-meta {
   color: var(--muted-foreground);
   font-size: var(--text-label);
   font-weight: 400;
@@ -187,7 +182,8 @@ button:focus-visible {
 }
 
 .text-button,
-.icon-button {
+.icon-button,
+.section-text-button {
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -199,10 +195,18 @@ button:focus-visible {
 }
 
 .text-button:hover,
-.icon-button:hover {
+.icon-button:hover,
+.section-text-button:hover:not(:disabled) {
   border-color: hsl(var(--smui-border-hover));
   background: hsl(var(--smui-surface-3));
   color: hsl(var(--smui-frost-2));
+}
+
+.text-button:disabled,
+.icon-button:disabled,
+.section-text-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
 }
 
 .text-button {
@@ -212,6 +216,15 @@ button:focus-visible {
   font-size: var(--text-label);
   text-transform: uppercase;
   letter-spacing: 1px;
+}
+
+.section-text-button {
+  gap: 6px;
+  height: 24px;
+  padding: 0 7px;
+  font-size: 10px;
+  letter-spacing: 1px;
+  text-transform: uppercase;
 }
 
 .icon-button {
@@ -284,6 +297,30 @@ button:focus-visible {
   border-bottom: 1px solid var(--border);
   background: hsl(var(--smui-surface-1) / 0.96);
   padding: 0 10px;
+}
+
+.editor-section-actions {
+  flex: 1;
+}
+
+.section-select {
+  display: grid;
+  grid-template-columns: auto minmax(110px, 180px);
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+}
+
+.section-select span {
+  color: var(--muted-foreground);
+  font-size: var(--text-label);
+  letter-spacing: 1.4px;
+  text-transform: uppercase;
+}
+
+.section-select select {
+  height: 24px;
+  font-size: 11px;
 }
 
 .code-pane-body {
@@ -397,7 +434,7 @@ button:focus-visible {
 
 .viewport-empty,
 .compile-error,
-.example-caption {
+.export-toast {
   position: absolute;
   border: 1px solid var(--border);
   background: hsl(var(--smui-surface-1) / 0.92);
@@ -427,16 +464,33 @@ button:focus-visible {
   white-space: pre-wrap;
 }
 
-.example-caption {
+.export-toast {
   right: 14px;
   bottom: 14px;
-  left: 14px;
-  display: grid;
-  gap: 4px;
-  padding: 10px 12px;
+  z-index: 3;
+  max-width: min(420px, calc(100% - 28px));
+  overflow: hidden;
+  padding: 8px 10px;
+  color: hsl(var(--smui-frost-2));
+  font-size: var(--text-label);
+  letter-spacing: 1px;
+  text-overflow: ellipsis;
+  text-transform: uppercase;
+  white-space: nowrap;
 }
 
-.example-caption span,
+.export-error {
+  color: hsl(var(--smui-red));
+}
+
+.export-busy {
+  color: hsl(var(--smui-yellow));
+}
+
+.export-done {
+  color: hsl(var(--smui-green));
+}
+
 .muted-copy,
 .alert p,
 .toggle-row small {
@@ -577,7 +631,7 @@ input[type="checkbox"] {
 
 @media (max-width: 1100px) {
   .top-rail {
-    grid-template-columns: auto minmax(220px, 1fr) auto;
+    grid-template-columns: auto minmax(0, 1fr);
   }
 
   .compile-readout span {
@@ -602,10 +656,6 @@ input[type="checkbox"] {
     padding: 8px;
   }
 
-  .top-example-select {
-    grid-column: 1 / -1;
-  }
-
   .top-actions {
     justify-content: end;
   }
@@ -613,6 +663,33 @@ input[type="checkbox"] {
   .text-button,
   .compile-readout {
     display: none;
+  }
+
+  .section-bar {
+    align-items: stretch;
+    min-height: 38px;
+  }
+
+  .editor-section-actions,
+  .preview-actions {
+    gap: 4px;
+  }
+
+  .section-select {
+    grid-template-columns: minmax(0, 1fr);
+    width: min(210px, 46vw);
+  }
+
+  .section-select span,
+  .section-meta,
+  .preview-actions .section-text-button svg {
+    display: none;
+  }
+
+  .section-text-button {
+    padding: 0 5px;
+    font-size: 9px;
+    letter-spacing: 0.7px;
   }
 
   .mobile-tabs {
@@ -685,9 +762,8 @@ input[type="checkbox"] {
     display: block !important;
   }
 
-  .example-caption {
+  .export-toast {
     right: 10px;
     bottom: 10px;
-    left: 10px;
   }
 }

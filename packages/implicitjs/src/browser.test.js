@@ -2,6 +2,8 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  exportImplicitAnimatedGlb,
+  exportImplicitModel,
   createImplicitMaterial,
   loadImplicitSource,
   normalizeImplicitDefinition,
@@ -13,4 +15,6 @@ test("browser entry exposes editable-source, parameter, model, and render APIs",
   assert.equal(typeof normalizeImplicitDefinition, "function");
   assert.equal(typeof normalizeParameterValue, "function");
   assert.equal(typeof createImplicitMaterial, "function");
+  assert.equal(typeof exportImplicitModel, "function");
+  assert.equal(typeof exportImplicitAnimatedGlb, "function");
 });

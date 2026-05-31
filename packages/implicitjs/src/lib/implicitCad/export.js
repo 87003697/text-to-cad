@@ -3,72 +3,23 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 
 import { normalizeImplicitCadModel } from "./model.js";
-import { meshImplicitCadModel } from "./mesh.js";
-import { meshToFormat } from "./exporters.js";
-import { createImplicitCadColorEvaluator } from "./sdfEvaluator.js";
-
-export const IMPLICIT_CAD_EXPORT_FORMATS = Object.freeze(["glb", "stl", "3mf"]);
+import {
+  exportImplicitCadAnimatedGlb,
+  exportImplicitCadModel,
+  IMPLICIT_CAD_EXPORT_FORMATS,
+  normalizeImplicitExportFormat
+} from "./exportModel.js";
 
 function isObject(value) {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
 
 function normalizeFormat(value) {
-  const normalized = String(value || "").trim().toLowerCase().replace(/^\./, "");
-  if (normalized === "gltf") {
-    return "glb";
-  }
-  if (IMPLICIT_CAD_EXPORT_FORMATS.includes(normalized)) {
-    return normalized;
-  }
-  return "";
+  return normalizeImplicitExportFormat(value);
 }
 
 function formatFromOutputPath(outputPath) {
   return normalizeFormat(path.extname(String(outputPath || "")).slice(1));
-}
-
-function rgb01ToHex(rgb) {
-  const channel = (value) => {
-    const numeric = Number(value);
-    const clamped = Math.min(Math.max(Number.isFinite(numeric) ? numeric : 0, 0), 1);
-    return Math.round(clamped * 255).toString(16).padStart(2, "0");
-  };
-  return `#${channel(rgb?.[0])}${channel(rgb?.[1])}${channel(rgb?.[2])}`;
-}
-
-function sampleImplicitCadMeshColor(model, mesh, { sampleLimit = 768 } = {}) {
-  if (!model?.colorSource) {
-    return model?.material?.color;
-  }
-  try {
-    const colorAt = createImplicitCadColorEvaluator(model);
-    const positions = mesh.positions || new Float32Array();
-    const normals = mesh.normals && mesh.normals.length === positions.length
-      ? mesh.normals
-      : null;
-    const vertexCount = Math.floor(positions.length / 3);
-    const stride = Math.max(1, Math.floor(vertexCount / Math.max(sampleLimit, 1)));
-    const sum = [0, 0, 0];
-    let count = 0;
-    for (let vertex = 0; vertex < vertexCount; vertex += stride) {
-      const offset = vertex * 3;
-      const color = colorAt(
-        [positions[offset], positions[offset + 1], positions[offset + 2]],
-        normals ? [normals[offset], normals[offset + 1], normals[offset + 2]] : [0, 0, 1]
-      );
-      if (!color.every((component) => Number.isFinite(component))) {
-        continue;
-      }
-      sum[0] += color[0];
-      sum[1] += color[1];
-      sum[2] += color[2];
-      count += 1;
-    }
-    return count ? rgb01ToHex(sum.map((component) => component / count)) : model?.material?.color;
-  } catch {
-    return model?.material?.color;
-  }
 }
 
 export function defaultImplicitCadExportPath(inputPath, format = "glb") {
@@ -104,36 +55,6 @@ export async function loadImplicitCadModelFromPath(inputPath, {
   return defaultModel;
 }
 
-export function exportImplicitCadModel(modelValue, {
-  format = "glb",
-  resolution = 96,
-  maxCells = undefined,
-  normalEpsilon = undefined,
-  smoothNormals = undefined,
-} = {}) {
-  const model = normalizeImplicitCadModel(modelValue);
-  const outputFormat = normalizeFormat(format);
-  const mesh = meshImplicitCadModel(model, {
-    resolution,
-    maxCells,
-    normalEpsilon,
-    smoothNormals: smoothNormals ?? outputFormat === "glb",
-  });
-  if (!mesh.triangleCount) {
-    throw new Error("Implicit CAD export produced an empty mesh. Check bounds, parameters, and resolution.");
-  }
-  const exported = meshToFormat(mesh, format, {
-    name: model.name,
-    color: sampleImplicitCadMeshColor(model, mesh),
-  });
-  return {
-    ...exported,
-    mesh,
-    model,
-    format: outputFormat,
-  };
-}
-
 export async function exportImplicitCadFile({
   input,
   output = "",
@@ -141,26 +62,40 @@ export async function exportImplicitCadFile({
   params = null,
   parameterValues = null,
   animationState = null,
+  animated = false,
+  frames = undefined,
+  duration = undefined,
   resolution = 96,
   maxCells = undefined,
   normalEpsilon = undefined,
   smoothNormals = undefined,
 } = {}) {
   const inputPath = path.resolve(String(input || ""));
-  const outputFormat = normalizeFormat(format) || formatFromOutputPath(output) || "glb";
+  const outputFormat = animated ? "glb" : normalizeFormat(format) || formatFromOutputPath(output) || "glb";
   const outputPath = path.resolve(output || defaultImplicitCadExportPath(inputPath, outputFormat));
   const model = await loadImplicitCadModelFromPath(inputPath, {
     params,
     parameterValues,
     animationState,
   });
-  const result = exportImplicitCadModel(model, {
-    format: outputFormat,
-    resolution,
-    maxCells,
-    normalEpsilon,
-    smoothNormals,
-  });
+  const result = animated
+    ? exportImplicitCadAnimatedGlb(model, {
+        animationId: animationState?.activeId,
+        params: model.parameterValues,
+        duration,
+        frames,
+        resolution,
+        maxCells,
+        normalEpsilon,
+        smoothNormals,
+      })
+    : exportImplicitCadModel(model, {
+        format: outputFormat,
+        resolution,
+        maxCells,
+        normalEpsilon,
+        smoothNormals,
+      });
   await fs.mkdir(path.dirname(outputPath), { recursive: true });
   await fs.writeFile(outputPath, result.body);
   return {
@@ -180,3 +115,9 @@ export async function exportImplicitCadFile({
     },
   };
 }
+
+export {
+  exportImplicitCadAnimatedGlb,
+  exportImplicitCadModel,
+  IMPLICIT_CAD_EXPORT_FORMATS
+};

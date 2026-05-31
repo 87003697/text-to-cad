@@ -153,6 +153,12 @@ const glslTemplateHighlighting = ViewPlugin.fromClass(class {
 export function CodePane({
   active = false,
   className = "",
+  dirty = false,
+  examples = [],
+  onExampleChange,
+  onReloadExample,
+  selectedExampleId = "",
+  status = "",
   title,
   value,
   onChange
@@ -171,7 +177,25 @@ export function CodePane({
           <Code2 size={14} />
           <span>{title}</span>
         </div>
-        <span className="section-meta">javascript + glsl</span>
+        <div className="editor-section-actions">
+          {examples.length ? (
+            <label className="section-select">
+              <span>example</span>
+              <select value={selectedExampleId} onChange={(event) => onExampleChange?.(event.target.value)}>
+                {examples.map((example) => (
+                  <option key={example.id} value={example.id}>{example.label}</option>
+                ))}
+              </select>
+            </label>
+          ) : null}
+          {onReloadExample ? (
+            <button className="section-text-button" type="button" onClick={onReloadExample}>
+              reload
+            </button>
+          ) : null}
+          {dirty ? <span className="status-badge status-busy">edited</span> : null}
+          <span className="section-meta">{status || "javascript + glsl"}</span>
+        </div>
       </div>
       <div className="code-pane-body">
         <CodeMirror
