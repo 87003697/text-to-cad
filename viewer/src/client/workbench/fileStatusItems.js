@@ -1,5 +1,11 @@
 import { entryHasMesh } from "cadjs/lib/entryAssets.js";
+import { RENDER_FORMAT } from "cadjs/lib/fileFormats.js";
 import { viewerRootRelativePath } from "./pathPresentation.js";
+import {
+  STEP_ARTIFACT_GENERATION_FAILURE_DISPLAY_THRESHOLD,
+  stepArtifactCanGenerate,
+  stepArtifactGenerationFailureCount
+} from "./stepArtifactStatus.js";
 
 export const FILE_STATUS_LEVELS = Object.freeze({
   ERROR: "error",
@@ -131,10 +137,12 @@ export function normalizeFileStatusItems(items) {
 }
 
 export function fileStatusWarningOrErrorItems(items) {
-  return normalizeFileStatusItems(items).filter((item) => (
-    item.level === FILE_STATUS_LEVELS.ERROR ||
-    item.level === FILE_STATUS_LEVELS.WARNING
-  ));
+  return normalizeFileStatusItems(items)
+    .filter((item) => (
+      item.level === FILE_STATUS_LEVELS.ERROR ||
+      item.level === FILE_STATUS_LEVELS.WARNING
+    ))
+    .sort((left, right) => fileStatusLevelRank(right.level) - fileStatusLevelRank(left.level));
 }
 
 export function fileStatusHasWarningsOrErrors(items) {
@@ -213,6 +221,23 @@ export function stepArtifactStatusMessage(artifact) {
   return "Generated STEP artifact is unavailable.";
 }
 
+function shouldSuppressBuildableStepArtifactIssue({
+  entry,
+  artifact,
+  generationAvailable,
+  generationState,
+} = {}) {
+  if (!stepArtifactCanGenerate(
+    { ...(entry || {}), artifact },
+    RENDER_FORMAT.STEP,
+    { generationAvailable }
+  )) {
+    return false;
+  }
+  return stepArtifactGenerationFailureCount(generationState) <
+    STEP_ARTIFACT_GENERATION_FAILURE_DISPLAY_THRESHOLD;
+}
+
 function stepSourceStatusTitle(stepStatus) {
   return "STEP file missing";
 }
@@ -270,13 +295,23 @@ export function generatedSourceStatusItems(entry = null, {
 export function stepFileStatusItems({
   entry = null,
   stepSourceStatus = null,
+  stepArtifactGenerationAvailable = true,
+  stepArtifactGenerationState = null,
   viewerServerInfo = {},
 } = {}) {
   const items = [];
   const artifact = ownProperty(stepSourceStatus, "artifact")
     ? stepSourceStatus?.artifact
     : entry?.artifact;
-  if (artifact?.ok === false) {
+  if (
+    artifact?.ok === false &&
+    !shouldSuppressBuildableStepArtifactIssue({
+      entry,
+      artifact,
+      generationAvailable: stepArtifactGenerationAvailable,
+      generationState: stepArtifactGenerationState,
+    })
+  ) {
     items.push({
       id: "step-artifact",
       level: artifactStatusLevel(artifact, entry),
@@ -397,6 +432,8 @@ export function buildFileStatusItems({
   entry = null,
   fileSheetKind = "",
   stepSourceStatus = null,
+  stepArtifactGenerationAvailable = true,
+  stepArtifactGenerationState = null,
   gcodeData = null,
   urdfData = null,
   viewerAlert = null,
@@ -410,7 +447,13 @@ export function buildFileStatusItems({
   const items = [];
   items.push(...generatedSourceStatusItems(entry, { viewerServerInfo }));
   if (kind === "step") {
-    items.push(...stepFileStatusItems({ entry, stepSourceStatus, viewerServerInfo }));
+    items.push(...stepFileStatusItems({
+      entry,
+      stepSourceStatus,
+      stepArtifactGenerationAvailable,
+      stepArtifactGenerationState,
+      viewerServerInfo
+    }));
   }
   if (kind === "gcode") {
     items.push(...gcodeFileStatusItems(gcodeData));

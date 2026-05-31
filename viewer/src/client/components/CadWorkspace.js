@@ -232,7 +232,11 @@ import {
   requestStepArtifactGeneration,
   requestStepSourceStatus
 } from "cadjs/lib/cadManifestStore";
-import { stepArtifactCanGenerate } from "@/workbench/stepArtifactStatus";
+import {
+  STEP_ARTIFACT_GENERATION_FAILURE_DISPLAY_THRESHOLD,
+  stepArtifactCanGenerate,
+  stepArtifactGenerationFailureCount
+} from "@/workbench/stepArtifactStatus";
 import {
   buildFileStatusItems,
   fileStatusHasWarningsOrErrors,
@@ -843,6 +847,9 @@ export default function CadWorkspace({
     ? stepArtifactGenerationStateByKey[selectedStepArtifactBuildKey]
     : null;
   const selectedStepArtifactGenerationStatus = selectedStepArtifactGenerationState?.status || "idle";
+  const selectedStepArtifactGenerationFailureCount = stepArtifactGenerationFailureCount(
+    selectedStepArtifactGenerationState
+  );
   const selectedStepArtifactGenerating = Boolean(
     selectedStepArtifactBuildKey &&
     selectedStepArtifactGenerationStatus === "loading"
@@ -2418,6 +2425,8 @@ export default function CadWorkspace({
         gcodeData: selectedGcodeData,
         urdfData: selectedUrdfData,
         viewerAlert,
+        stepArtifactGenerationAvailable,
+        stepArtifactGenerationState: selectedStepArtifactGenerationState,
         viewerServerInfo
       })
   ), [
@@ -2425,6 +2434,8 @@ export default function CadWorkspace({
     selectedFileSheetKind,
     selectedGcodeData,
     selectedGeneratorRunning,
+    selectedStepArtifactGenerationState,
+    stepArtifactGenerationAvailable,
     selectedStepSourceStatus,
     selectedUrdfData,
     viewerAlert,
@@ -3347,6 +3358,16 @@ export default function CadWorkspace({
       return undefined;
     }
 
+    if (
+      selectedStepArtifactGenerationStatus === "ready" ||
+      (
+        selectedStepArtifactGenerationStatus === "error" &&
+        selectedStepArtifactGenerationFailureCount >= STEP_ARTIFACT_GENERATION_FAILURE_DISPLAY_THRESHOLD
+      )
+    ) {
+      return undefined;
+    }
+
     if (stepArtifactGenerationRequestsRef.current.has(selectedStepArtifactBuildKey)) {
       return undefined;
     }
@@ -3356,58 +3377,78 @@ export default function CadWorkspace({
       file: selectedStepArtifactBuildFile
     };
     stepArtifactGenerationRequestsRef.current.set(selectedStepArtifactBuildKey, request);
-    setStepArtifactGenerationStateByKey((current) => ({
-      ...current,
-      [selectedStepArtifactBuildKey]: {
-        key: selectedStepArtifactBuildKey,
-        file: selectedStepArtifactBuildFile,
-        status: "loading",
-        error: ""
-      }
-    }));
     setStatus(ASSET_STATUS.LOADING);
     setError("");
 
-    requestStepArtifactGeneration(selectedStepArtifactBuildFile)
-      .then((payload) => {
-        if (stepArtifactGenerationRequestsRef.current.get(selectedStepArtifactBuildKey) !== request) {
-          return;
-        }
-        const generatedEntry = payload?.entry;
-        if (generatedEntry && !entryHasMesh(generatedEntry)) {
-          throw new Error(`Generated STEP artifact is not renderable: ${selectedStepArtifactBuildFile}`);
-        }
+    const runGeneration = async () => {
+      let failureCount = selectedStepArtifactGenerationFailureCount;
+      while (failureCount < STEP_ARTIFACT_GENERATION_FAILURE_DISPLAY_THRESHOLD) {
         setStepArtifactGenerationStateByKey((current) => ({
           ...current,
           [selectedStepArtifactBuildKey]: {
             key: selectedStepArtifactBuildKey,
             file: selectedStepArtifactBuildFile,
-            status: "ready",
+            status: "loading",
+            failureCount,
+            attempt: failureCount + 1,
             error: ""
           }
         }));
-      })
-      .catch((generationError) => {
-        if (stepArtifactGenerationRequestsRef.current.get(selectedStepArtifactBuildKey) !== request) {
-          return;
-        }
-        const message = generationError instanceof Error
-          ? generationError.message
-          : String(generationError);
-        setStepArtifactGenerationStateByKey((current) => ({
-          ...current,
-          [selectedStepArtifactBuildKey]: {
-            key: selectedStepArtifactBuildKey,
-            file: selectedStepArtifactBuildFile,
-            status: "error",
-            error: message
+
+        try {
+          const payload = await requestStepArtifactGeneration(selectedStepArtifactBuildFile);
+          if (stepArtifactGenerationRequestsRef.current.get(selectedStepArtifactBuildKey) !== request) {
+            return;
           }
-        }));
-        if (selectedStepArtifactBuildKeyRef.current === selectedStepArtifactBuildKey) {
-          setStatus(ASSET_STATUS.ERROR);
-          setError(message);
+          const generatedEntry = payload?.entry;
+          if (generatedEntry && !entryHasMesh(generatedEntry)) {
+            throw new Error(`Generated STEP artifact is not renderable: ${selectedStepArtifactBuildFile}`);
+          }
+          setStepArtifactGenerationStateByKey((current) => ({
+            ...current,
+            [selectedStepArtifactBuildKey]: {
+              key: selectedStepArtifactBuildKey,
+              file: selectedStepArtifactBuildFile,
+              status: "ready",
+              failureCount: 0,
+              error: ""
+            }
+          }));
+          return;
+        } catch (generationError) {
+          if (stepArtifactGenerationRequestsRef.current.get(selectedStepArtifactBuildKey) !== request) {
+            return;
+          }
+          failureCount += 1;
+          const message = generationError instanceof Error
+            ? generationError.message
+            : String(generationError);
+          const status = failureCount >= STEP_ARTIFACT_GENERATION_FAILURE_DISPLAY_THRESHOLD
+            ? "error"
+            : "loading";
+          setStepArtifactGenerationStateByKey((current) => ({
+            ...current,
+            [selectedStepArtifactBuildKey]: {
+              key: selectedStepArtifactBuildKey,
+              file: selectedStepArtifactBuildFile,
+              status,
+              failureCount,
+              attempt: Math.min(
+                failureCount + 1,
+                STEP_ARTIFACT_GENERATION_FAILURE_DISPLAY_THRESHOLD
+              ),
+              error: message
+            }
+          }));
+          if (status === "error" && selectedStepArtifactBuildKeyRef.current === selectedStepArtifactBuildKey) {
+            setStatus(ASSET_STATUS.ERROR);
+            setError(message);
+          }
         }
-      })
+      }
+    };
+
+    runGeneration()
       .finally(() => {
         if (stepArtifactGenerationRequestsRef.current.get(selectedStepArtifactBuildKey) === request) {
           stepArtifactGenerationRequestsRef.current.delete(selectedStepArtifactBuildKey);
@@ -3418,6 +3459,8 @@ export default function CadWorkspace({
   }, [
     selectedStepArtifactBuildFile,
     selectedStepArtifactBuildKey,
+    selectedStepArtifactGenerationFailureCount,
+    selectedStepArtifactGenerationStatus,
     setError,
     setStatus
   ]);

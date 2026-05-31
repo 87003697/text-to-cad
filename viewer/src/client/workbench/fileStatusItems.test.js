@@ -4,6 +4,7 @@ import test from "node:test";
 import {
   FILE_STATUS_LEVELS,
   buildFileStatusItems,
+  fileStatusWarningOrErrorItems,
   fileStatusHasWarningsOrErrors,
   formatFileStatusItemForAgent,
   gcodeFileStatusItems,
@@ -18,6 +19,11 @@ const viewerServerInfo = {
   rootDir: "models",
   rootPath: "/workspace/text-to-cad/models",
 };
+
+const failedStepArtifactGenerationState = Object.freeze({
+  status: "error",
+  failureCount: 3
+});
 
 test("stepFileStatusItems treats missing STEP source files as warnings", () => {
   const items = stepFileStatusItems({
@@ -38,6 +44,7 @@ test("stepFileStatusItems treats missing STEP source files as warnings", () => {
         message: "STEP file is missing."
       }
     },
+    stepArtifactGenerationState: failedStepArtifactGenerationState,
     viewerServerInfo
   });
 
@@ -72,6 +79,7 @@ test("stepFileStatusItems marks missing STEP artifacts as errors", () => {
         message: "GLB artifact is missing."
       }
     },
+    stepArtifactGenerationState: failedStepArtifactGenerationState,
     viewerServerInfo
   });
 
@@ -104,6 +112,7 @@ test("stepFileStatusItems reads artifact warnings from current-file status", () 
         stale: false
       }
     },
+    stepArtifactGenerationState: failedStepArtifactGenerationState,
     viewerServerInfo
   });
 
@@ -137,7 +146,8 @@ test("stepFileStatusItems keeps renderable STEP artifact issues as warnings", ()
           error,
           stale
         }
-      }
+      },
+      stepArtifactGenerationState: failedStepArtifactGenerationState
     });
 
     assert.equal(items.length, 1);
@@ -157,7 +167,8 @@ test("stepFileStatusItems marks non-renderable STEP artifact issues as errors", 
         error: "missing_source_path",
         message: "GLB STEP_topology is missing required sourcePath identity."
       }
-    }
+    },
+    stepArtifactGenerationState: failedStepArtifactGenerationState
   });
 
   assert.equal(items.length, 1);
@@ -176,7 +187,8 @@ test("stepFileStatusItems trims obsolete regeneration prompts from artifact mess
         error: "unsupported_step_topology",
         message: "STEP topology schema is unsupported.\nRegenerate STEP artifacts with legacy instructions:"
       }
-    }
+    },
+    stepArtifactGenerationState: failedStepArtifactGenerationState
   });
 
   assert.equal(items.length, 1);
@@ -261,6 +273,7 @@ test("buildFileStatusItems combines producers and exposes the most intense level
       }
     },
     fileSheetKind: "step",
+    stepArtifactGenerationState: failedStepArtifactGenerationState,
     viewerAlert: {
       severity: "error",
       summary: "Mesh load failed",
@@ -276,6 +289,60 @@ test("buildFileStatusItems combines producers and exposes the most intense level
     FILE_STATUS_LEVELS.ERROR
   ]);
   assert.equal(items[0].message, "Generated GLB doesn't match the hash of the STEP file.");
+});
+
+test("stepFileStatusItems hides regenerable STEP artifact issues until three generation failures", () => {
+  const entry = {
+    file: "simple/part.step",
+    kind: "part",
+    artifact: {
+      ok: false,
+      error: "missing_step_hash",
+      message: "GLB STEP_topology is missing STEP file identity."
+    }
+  };
+
+  assert.deepEqual(stepFileStatusItems({ entry }), []);
+
+  assert.deepEqual(stepFileStatusItems({
+    entry,
+    stepArtifactGenerationState: { status: "loading", failureCount: 2 }
+  }), []);
+
+  assert.equal(stepFileStatusItems({
+    entry,
+    stepArtifactGenerationState: failedStepArtifactGenerationState
+  })[0]?.code, "missing_step_hash");
+
+  assert.equal(stepFileStatusItems({
+    entry,
+    stepArtifactGenerationAvailable: false
+  })[0]?.code, "missing_step_hash");
+});
+
+test("fileStatusWarningOrErrorItems renders errors before warnings", () => {
+  const items = fileStatusWarningOrErrorItems([
+    {
+      level: "warning",
+      title: "Generated source warning",
+      message: "Source metadata is incomplete."
+    },
+    {
+      level: "info",
+      title: "Neutral status",
+      message: "This should be omitted."
+    },
+    {
+      level: "error",
+      title: "Failed to load render mesh",
+      message: "Mesh load failed."
+    }
+  ]);
+
+  assert.deepEqual(items.map((item) => item.level), [
+    FILE_STATUS_LEVELS.ERROR,
+    FILE_STATUS_LEVELS.WARNING
+  ]);
 });
 
 test("formatFileStatusItemForAgent copies status items with details", () => {
@@ -294,6 +361,7 @@ test("formatFileStatusItemForAgent copies status items with details", () => {
         currentHash: "new-hash"
       }
     },
+    stepArtifactGenerationState: failedStepArtifactGenerationState,
     viewerServerInfo
   })[0];
 

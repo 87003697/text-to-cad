@@ -1,5 +1,7 @@
 import { RENDER_FORMAT } from "cadjs/lib/fileFormats.js";
 
+export const STEP_ARTIFACT_GENERATION_FAILURE_DISPLAY_THRESHOLD = 3;
+
 const BUILDABLE_STEP_ARTIFACT_ERROR_CODES = new Set([
   "missing_glb",
   "missing_step_topology",
@@ -11,6 +13,11 @@ const BUILDABLE_STEP_ARTIFACT_ERROR_CODES = new Set([
   "stale_step_artifact",
   "unsupported_step_topology"
 ]);
+
+export function stepArtifactGenerationFailureCount(state) {
+  const count = Number(state?.failureCount || 0);
+  return Number.isFinite(count) && count > 0 ? Math.trunc(count) : 0;
+}
 
 export function stepArtifactIsStale(entry, sourceFormat) {
   return (
