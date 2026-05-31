@@ -124,7 +124,12 @@ class StepCliTests(unittest.TestCase):
 
     def test_cli_does_not_reserve_common_module_name(self) -> None:
         skill_root = repo_path("skills/cad")
-        code = "import sys; sys.path.insert(0, 'scripts'); import cadpy_step.cli; print('common' in sys.modules)"
+        code = (
+            "import sys; sys.path.insert(0, 'scripts'); import cadpy_step.cli; "
+            "print('common' in sys.modules); "
+            "print('OCP.OCP' in sys.modules); "
+            "print('cadpy.step_scene' in sys.modules)"
+        )
         result = subprocess.run(
             [sys.executable, "-c", code],
             cwd=skill_root,
@@ -135,7 +140,7 @@ class StepCliTests(unittest.TestCase):
         )
         self.assertEqual("", result.stderr)
         self.assertEqual(0, result.returncode)
-        self.assertEqual("False", result.stdout.strip())
+        self.assertEqual(["False", "False", "False"], result.stdout.strip().splitlines())
 
 
 if __name__ == "__main__":

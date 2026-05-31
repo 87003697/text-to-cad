@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
-import hashlib
 import json
 import math
 import os
@@ -75,6 +74,7 @@ from cadpy.glb_topology import (
 )
 from cadpy.metadata import DEFAULT_MESH_ANGULAR_TOLERANCE, DEFAULT_MESH_TOLERANCE, MeshSettings
 from cadpy.selector_types import SelectorBundle, SelectorProfile
+from cadpy.step_hash import step_file_hash
 
 
 REPO_ROOT = Path.cwd().resolve()
@@ -1965,15 +1965,7 @@ def _artifact_relative_manifest_path(raw_path: str, artifact_dir: Path) -> str:
 
 
 def _step_hash(step_path: Path) -> str:
-    digest = hashlib.sha256()
-    with step_path.open("rb") as handle:
-        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
-
-
-def step_file_hash(step_path: Path) -> str:
-    return _step_hash(step_path.expanduser().resolve())
+    return step_file_hash(step_path)
 
 
 def _normalize_selector_options(options: SelectorOptions | None) -> SelectorOptions:

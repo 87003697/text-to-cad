@@ -20,7 +20,7 @@ from cadpy.glb_topology import (
 )
 from cadpy.render import existing_part_glb_path, part_glb_path
 from cadpy.selector_types import SelectorBundle
-from cadpy.step_scene import step_file_hash
+from cadpy.step_hash import step_file_hash
 
 
 STEP_SUFFIXES = (".step", ".stp")

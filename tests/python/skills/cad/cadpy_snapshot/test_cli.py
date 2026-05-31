@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import io
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -47,6 +48,25 @@ def _selector_artifact(*occurrence_ids: str) -> SimpleNamespace:
 
 
 class SnapshotCliTests(unittest.TestCase):
+    def test_cli_import_does_not_import_heavy_cad_modules(self) -> None:
+        skill_root = repo_path("skills/cad")
+        code = (
+            "import sys; sys.path.insert(0, 'scripts'); import cadpy_snapshot.__main__; "
+            "print('OCP.OCP' in sys.modules); "
+            "print('cadpy.step_scene' in sys.modules)"
+        )
+        result = subprocess.run(
+            [sys.executable, "-c", code],
+            cwd=skill_root,
+            check=False,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+        self.assertEqual("", result.stderr)
+        self.assertEqual(0, result.returncode)
+        self.assertEqual(["False", "False"], result.stdout.strip().splitlines())
+
     def test_shortcut_job_shape_stays_owned_by_python_cli(self) -> None:
         options = parse_snapshot_args(
             [
