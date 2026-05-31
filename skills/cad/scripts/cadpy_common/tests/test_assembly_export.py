@@ -337,6 +337,36 @@ class AssemblyExportTests(unittest.TestCase):
         self.assertEqual(1, iter_cad_sources.call_count)
         self.assertEqual(["leaf_a", "leaf_b"], [child.label for child in assembly.children])
 
+    def test_direct_export_propagates_leaf_shape_label_to_step_product(self) -> None:
+        """Regression: leaf-Part definitions in the assembly STEP must carry
+        the shape label, not the generic 'SOLID' OCCT fallback. Without
+        ``_set_label_name`` on the leaf branch of ``_shape_definition_for_tree``,
+        a CAD UI such as Fusion shows every single-Part component as ``solid``.
+        """
+        leaf_label = "leaf_box_product"
+        step_path = self.cad_root / "STEP" / f"{leaf_label}.step"
+        step_path.parent.mkdir(parents=True, exist_ok=True)
+        box = build123d.Box(1, 1, 1)
+        box.label = leaf_label
+        build123d.export_step(box, step_path)
+
+        assembly_spec = self._assembly_spec(
+            AssemblyInstanceSpec(
+                instance_id="leaf",
+                source_path=step_path.resolve(),
+                path=f"{leaf_label}.step",
+                name="leaf",
+                transform=IDENTITY_TRANSFORM,
+            ),
+        )
+        output_path = assembly_spec.assembly_path.with_suffix(".step")
+
+        export_assembly_step_scene(assembly_spec, output_path)
+        contents = output_path.read_bytes()
+
+        self.assertIn(f"PRODUCT('{leaf_label}'".encode("ascii"), contents)
+        self.assertNotIn(b"PRODUCT('SOLID'", contents)
+
     def test_direct_writer_reuses_quantity_colors_for_tuple_rgba(self) -> None:
         assembly_spec = self._assembly_spec()
         writer = assembly_export_module._DirectXcafAssemblyWriter(assembly_spec, label="assembly")
