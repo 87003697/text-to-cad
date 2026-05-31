@@ -125,15 +125,18 @@ scripts/release/bump-version.sh patch --no-commit
 ```
 
 `plugins/cad/VERSION` is the only canonical release bump file. Duplicate
-package, plugin, lockfile, and Python `pyproject.toml` versions are derived
-metadata; `scripts/bundle/bundle.sh` stamps them with
-`scripts/release/sync-version.mjs` before writing or checking production
-outputs.
+package, plugin, lockfile, and Python `pyproject.toml` versions are derived from
+it; `Prepare Release` stamps them with `scripts/release/sync-version.mjs`, and
+`scripts/bundle/bundle.sh` re-checks the same metadata before writing or
+checking production outputs.
 
 Use `scripts/release/publish-github-release.sh` only from the `Publish`
 workflow after a main production bundle, or as a manual production-branch
 fallback. It creates the semver git tag from `plugins/cad/VERSION` and creates a
 draft GitHub Release with generated notes.
+Use `scripts/release/check-publish-source.sh` to verify that a source ref
+contains the previous release source before Publish writes a new generated
+target commit.
 `scripts/release/create-github-release.sh` remains as a manual all-in-one
 fallback, but the workflow path is preferred.
 
@@ -141,9 +144,9 @@ fallback, but the workflow path is preferred.
 
 | Workflow | Branches/events | Purpose |
 | -------- | --------------- | ------- |
-| `test.yml` | pushes to `develop`; PRs to `develop`; manual dispatch | Checks `plugins/cad/VERSION` as a separate job so test jobs still run if canonical version metadata is wrong. The source test job checks the branch-specific layout and runs the broad code test wrapper. On `develop` and PRs to `develop`, a production-bundle job stamps derived version metadata, bundles temporary production outputs, checks that layout without rebuilding it, runs docs checks, and reruns code tests. |
-| `prepare-release.yml` | manual dispatch | Bumps only `plugins/cad/VERSION` on `release/<version>` and opens a release PR back to `develop` by default. |
-| `publish.yml` | manual dispatch | Uses `source_ref=develop` and `target_branch=build-test` by default for rehearsals; set `target_branch=main` only for a real release. Main publishes are allowed only when the source version is newer than `main` and the latest semver tag. When publishing, it stamps derived version metadata, bundles, validates that layout without rebuilding it, runs docs/code tests, writes the publish commit to the target branch, deploys the docs and demo viewer Vercel projects only for non-dry-run `main` publishes, and creates the semver tag/GitHub Release only for `main`. Use `dry_run=true` to rehearse without writing or deploying. |
+| `test.yml` | pushes to `develop`; PRs to `develop`; manual dispatch | Checks `plugins/cad/VERSION` and derived metadata as a separate job so test jobs still run if release metadata is wrong. The source test job checks the branch-specific layout and runs the broad code test wrapper. On `develop` and PRs to `develop`, a production-bundle job bundles temporary production outputs, checks that layout without rebuilding it, runs docs checks, and reruns code tests. |
+| `prepare-release.yml` | manual dispatch | Bumps `plugins/cad/VERSION`, syncs derived version metadata on `release/<version>`, and opens a release PR back to `develop` by default. |
+| `publish.yml` | manual dispatch | Uses `source_ref=develop` and `target_branch=build-test` by default for rehearsals; dispatch from `develop` and set `target_branch=main` only for a real release. Main publishes are allowed only when the source version is newer than `main` and the latest semver tag, and when the source contains the previous publish source commit. When publishing, it bundles, validates that layout without rebuilding it, runs docs/code tests, writes the production commit on top of the target branch, deploys the docs and demo viewer Vercel projects only for non-dry-run `main` publishes, and creates the semver tag/GitHub Release only for `main`. Use `dry_run=true` to rehearse without writing or deploying. |
 
 In short: `develop` is the editable symlink branch, `test.yml` performs temporary
 production-output rehearsals, and `main` is the explicit publish-only production

@@ -54,6 +54,7 @@ jobs:
           INPUT_DRY_RUN: ${{ inputs.dry_run }}
           INPUT_PUBLISH: ${{ inputs.publish }}
           INPUT_CREATE_RELEASE: ${{ inputs.create_release }}
+          RUN_REF_NAME: ${{ github.ref_name }}
         run: |
           if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
             source_ref="${INPUT_SOURCE_REF:-develop}"
@@ -81,6 +82,16 @@ jobs:
           if [ "$target_branch" != "main" ]; then
             publish_release="false"
             create_release="false"
+          else
+            if [ "$source_ref" != "develop" ]; then
+              echo "Real releases must publish source_ref=develop to main; got source_ref=$source_ref." >&2
+              exit 2
+            fi
+            if [ "$RUN_REF_NAME" != "develop" ]; then
+              echo "Real releases must dispatch the Publish workflow from develop; got workflow ref $RUN_REF_NAME." >&2
+              echo "Use: gh workflow run publish.yml --ref develop -f source_ref=develop -f target_branch=main" >&2
+              exit 2
+            fi
           fi
 
           echo "source_ref=$source_ref" >> "$GITHUB_OUTPUT"
@@ -119,9 +130,14 @@ jobs:
           TARGET_BRANCH: ${{ steps.request.outputs.target_branch }}
         run: |
           git fetch --tags origin
-          for branch in develop main "$TARGET_BRANCH"; do
+          for branch in develop main; do
             git fetch --no-tags origin "+$branch:refs/remotes/origin/$branch"
           done
+          if git fetch --no-tags origin "+$TARGET_BRANCH:refs/remotes/origin/$TARGET_BRANCH"; then
+            echo "Fetched target branch: $TARGET_BRANCH"
+          else
+            echo "Target branch $TARGET_BRANCH does not exist yet; Publish will create it from origin/main."
+          fi
 
       - name: Check canonical release version
         run: scripts/release/check-version.sh
@@ -166,10 +182,7 @@ jobs:
           SOURCE_SHA: ${{ steps.gate.outputs.source_sha }}
           TARGET_BRANCH: ${{ steps.request.outputs.target_branch }}
         run: |
-          git merge-base --is-ancestor origin/main "$SOURCE_SHA" || {
-            echo "origin/main is not an ancestor of $SOURCE_SHA; refusing publish." >&2
-            exit 1
-          }
+          scripts/release/check-publish-source.sh --source-ref "$SOURCE_SHA" --target-ref origin/main
           if [ "$TARGET_BRANCH" = "main" ]; then
             echo "Validated main publish target."
           else
@@ -205,13 +218,6 @@ jobs:
         if: steps.gate.outputs.should_publish == 'true'
         run: scripts/dev/setup-symlinks.sh --check
 
-      - name: Create local target branch
-        if: steps.gate.outputs.should_publish == 'true'
-        env:
-          SOURCE_SHA: ${{ steps.gate.outputs.source_sha }}
-          TARGET_BRANCH: ${{ steps.request.outputs.target_branch }}
-        run: git checkout -B "$TARGET_BRANCH" "$SOURCE_SHA"
-
       - name: Bundle production outputs
         if: steps.gate.outputs.should_publish == 'true'
         run: scripts/bundle/bundle.sh --clean
@@ -240,9 +246,15 @@ jobs:
           git add -A
 
           version="$(tr -d '[:space:]' < plugins/cad/VERSION)"
-          target_base_sha="$(git rev-parse --verify "origin/$TARGET_BRANCH^{commit}")"
+          if target_base_sha="$(git rev-parse --verify "origin/$TARGET_BRANCH^{commit}" 2>/dev/null)"; then
+            echo "Using existing $TARGET_BRANCH as publish parent: $target_base_sha"
+          else
+            target_base_sha="$(git rev-parse --verify "origin/main^{commit}")"
+            echo "Target branch $TARGET_BRANCH does not exist; using origin/main as publish parent: $target_base_sha"
+          fi
           release_base_sha="$(git rev-parse --verify "origin/main^{commit}")"
-          included_commits="$(git log --oneline --no-decorate "origin/main..$SOURCE_SHA" || true)"
+          previous_source_sha="$(scripts/release/check-publish-source.sh --target-ref origin/main --print-previous-source)"
+          included_commits="$(git log --oneline --no-decorate "$previous_source_sha..$SOURCE_SHA" || true)"
 
           message_file="$(mktemp)"
           {
@@ -253,16 +265,20 @@ jobs:
             echo "Target branch: $TARGET_BRANCH"
             echo "Previous target: $target_base_sha"
             echo "Release base: $release_base_sha"
+            echo "Previous source: $previous_source_sha"
             echo
-            echo "Included commits since origin/main:"
+            echo "Included commits since previous source:"
             if [ -n "$included_commits" ]; then
               echo "$included_commits"
             else
-              echo "(no source commits beyond previous main tip)"
+              echo "(no source commits beyond previous published source)"
             fi
           } > "$message_file"
 
-          git commit --allow-empty -F "$message_file"
+          tree_sha="$(git write-tree)"
+          publish_commit="$(git commit-tree "$tree_sha" -p "$target_base_sha" -F "$message_file")"
+          git reset --hard "$publish_commit"
+          echo "Created publish commit: $publish_commit"
 
       - name: Push target branch
         if: steps.gate.outputs.should_publish == 'true' && steps.request.outputs.dry_run != 'true'

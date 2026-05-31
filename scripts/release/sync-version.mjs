@@ -64,8 +64,9 @@ function usage() {
   scripts/release/sync-version.mjs [--check]
 
 Synchronizes duplicate package and plugin metadata versions from
-plugins/cad/VERSION. Release preparation should edit only plugins/cad/VERSION;
-bundle and publish workflows stamp the derived metadata from it.
+plugins/cad/VERSION. Release preparation edits the canonical VERSION file, then
+stamps derived metadata from it; bundle and publish workflows re-check the same
+metadata before production output is written.
 
 Options:
   --check  Fail if derived version metadata is stale.

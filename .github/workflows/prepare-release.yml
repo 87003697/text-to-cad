@@ -52,6 +52,11 @@ jobs:
           git fetch --tags origin
           git fetch --no-tags origin main:refs/remotes/origin/main
 
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
       - name: Prepare canonical version
         id: version
         env:
@@ -63,12 +68,14 @@ jobs:
           else
             scripts/release/bump-version.sh "$BUMP" --no-commit
           fi
+          node scripts/release/sync-version.mjs
           version="$(tr -d '[:space:]' < plugins/cad/VERSION)"
           echo "version=$version" >> "$GITHUB_OUTPUT"
 
-      - name: Check canonical release version
+      - name: Check release version metadata
         run: |
           scripts/release/check-version.sh --incremented-from origin/main
+          node scripts/release/sync-version.mjs --check
           latest_tag="$(git tag --list '[0-9]*.[0-9]*.[0-9]*' --sort=-version:refname | head -n 1 || true)"
           if [ -n "$latest_tag" ]; then
             scripts/release/check-version.sh --incremented-from "refs/tags/$latest_tag"
@@ -105,12 +112,12 @@ jobs:
             gh pr edit "$branch" \
               --repo "$GITHUB_REPOSITORY" \
               --title "Release $VERSION" \
-              --body "Bumps plugins/cad/VERSION to $VERSION. Merging this PR into develop lets Test run the production bundle check and lets Publish ship only if the version is newer than main and the latest tag. Publish stamps derived version metadata during bundling, writes the main publish commit, creates the GitHub tag, and opens a draft release."
+              --body "Bumps plugins/cad/VERSION and derived package/plugin metadata to $VERSION. Merging this PR into develop lets Test run version consistency checks and the production bundle check, then Publish ships only if the version is newer than main and the latest tag. Publish writes the main production commit, creates the GitHub tag, and opens a draft release."
           else
             gh pr create \
               --repo "$GITHUB_REPOSITORY" \
               --base "$BASE_BRANCH" \
               --head "$branch" \
               --title "Release $VERSION" \
-              --body "Bumps plugins/cad/VERSION to $VERSION. Merging this PR into develop lets Test run the production bundle check and lets Publish ship only if the version is newer than main and the latest tag. Publish stamps derived version metadata during bundling, writes the main publish commit, creates the GitHub tag, and opens a draft release."
+              --body "Bumps plugins/cad/VERSION and derived package/plugin metadata to $VERSION. Merging this PR into develop lets Test run version consistency checks and the production bundle check, then Publish ships only if the version is newer than main and the latest tag. Publish writes the main production commit, creates the GitHub tag, and opens a draft release."
           fi

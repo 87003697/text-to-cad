@@ -17,17 +17,17 @@ do not open PRs to `main` or push it directly.
 Normal development work targets `develop` and should not bump the canonical release
 version in `plugins/cad/VERSION`. To start a release, run the `Prepare Release`
 workflow with `base_branch=develop`; it creates a `release/<version>` branch,
-updates only `plugins/cad/VERSION`, and opens a PR back to `develop`. The `Test`
-workflow runs a production bundle job on `develop` and PRs to `develop`, so
-production-output issues are caught before publishing. After a release PR
-merges, `Publish` is run manually with `source_ref=develop` and ships only when
-the source version is newer than `main` and the latest semver tag; it stamps
-duplicate package/plugin metadata from `plugins/cad/VERSION`, bundles real
+updates `plugins/cad/VERSION` and derived version metadata, and opens a PR back
+to `develop`. The `Test` workflow checks version metadata and runs a production
+bundle job on `develop` and PRs to `develop`, so production-output issues are
+caught before publishing. After a release PR merges, run `Publish` manually from
+the `develop` workflow ref with `source_ref=develop`; it ships only when the
+source version is newer than `main` and the latest semver tag, bundles real
 generated outputs, validates and tests that production layout, writes the
-publish commit to `main`, creates the semver git tag, and opens a draft GitHub
-Release. Use `target_branch=main` only for a real release and
-`target_branch=build-test` for publish rehearsals. Pushing `develop` runs tests
-but does not publish `main`.
+publish commit on top of the previous publish target, creates the semver git
+tag, and opens a draft GitHub Release. Use `target_branch=main` only for a real
+release and `target_branch=build-test` for publish rehearsals. Pushing
+`develop` runs tests but does not publish `main`.
 Use `scripts/release/bump-version.sh` and
 `scripts/release/publish-github-release.sh` only as local/manual fallbacks for
 the GitHub workflows.
@@ -87,8 +87,8 @@ the GitHub workflows.
   generated CAD/LFS artifacts unless the task requires them.
 - Treat `plugins/cad/VERSION` as the canonical release version. Do not hand-edit
   duplicate package, plugin, lockfile, or Python `pyproject.toml` versions;
-  `scripts/bundle/bundle.sh` stamps them from the canonical version during
-  production bundling.
+  release preparation and `scripts/bundle/bundle.sh` stamp them from the
+  canonical version.
 
 ## Environments
 

@@ -169,8 +169,8 @@ Normal development PRs should not bump `plugins/cad/VERSION`. Release versions
 are reserved for release PRs so the canonical repo version, Git tag, and GitHub
 Release describe the same production commit. To prepare a release, run the
 `Prepare Release` GitHub Actions workflow with `base_branch=develop`; it updates
-only `plugins/cad/VERSION` on a `release/<version>` branch and opens a release
-PR.
+`plugins/cad/VERSION` plus derived package/plugin metadata on a
+`release/<version>` branch and opens a release PR.
 
 For local release preparation, use the same script that the workflow calls:
 
@@ -178,7 +178,9 @@ For local release preparation, use the same script that the workflow calls:
 git fetch origin develop
 git fetch --tags origin
 scripts/release/bump-version.sh patch --no-commit
+node scripts/release/sync-version.mjs
 scripts/release/check-version.sh --incremented-from origin/main
+node scripts/release/sync-version.mjs --check
 ```
 
 The `main` production branch must be installable from a plain checkout, so it
@@ -190,24 +192,37 @@ production layout without rebuilding it, runs documentation checks, and runs the
 code tests against that generated output.
 
 To ship a release, merge the release PR to `develop`, then manually dispatch the
-`Publish` workflow with `source_ref=develop` and `target_branch=main`. `Publish`
-only ships to `main` when the source version is newer than `main` and the latest
-semver tag. It repeats the production bundle checks, refuses sources that do not
-descend from `main`, writes a publish commit to `main`, creates the semver tag
+`Publish` workflow from the `develop` workflow ref with `source_ref=develop` and
+`target_branch=main`:
+
+```bash
+gh workflow run publish.yml --ref develop \
+  -f source_ref=develop \
+  -f target_branch=main \
+  -f dry_run=false \
+  -f publish=false \
+  -f create_release=true
+```
+
+`Publish` only ships to `main` when the source version is newer than `main` and
+the latest semver tag. It repeats the production bundle checks, refuses sources
+that do not contain the previous publish source commit, writes a generated
+production commit on top of the previous publish target, creates the semver tag
 from `plugins/cad/VERSION`, and opens a draft GitHub Release with generated
 notes. Leave `publish=false` unless the release should be published immediately
 rather than reviewed as a draft. Use `target_branch=build-test` to rehearse the
 full publish flow without touching `main` or creating a tag/release. Pushing
-`develop` runs tests but does not publish `main`. During bundling, Publish stamps
-duplicate package/plugin metadata from `plugins/cad/VERSION`. Treat generated
-outputs and derived version metadata as CI products, not edit targets.
+`develop` runs tests but does not publish `main`. During bundling, Publish
+rechecks duplicate package/plugin metadata from `plugins/cad/VERSION`. Treat
+generated outputs as CI products, not edit targets.
 
-PRs opened against `develop` must keep `plugins/cad/VERSION` valid when they touch
-release state. The `Test` workflow checks the canonical release version in a
-separate job so code tests still run when that metadata is wrong. It also
-verifies the symlink layout for `develop` and runs a temporary production bundle
-check for `develop`. Configure GitHub branch settings/rulesets so `main` rejects PRs
-and direct pushes, leaving the `Publish` workflow as the only writer.
+PRs opened against `develop` must keep `plugins/cad/VERSION` and derived version
+metadata valid when they touch release state. The `Test` workflow checks release
+version metadata in a separate job so code tests still run when that metadata is
+wrong. It also verifies the symlink layout for `develop` and runs a temporary
+production bundle check for `develop`. Configure GitHub branch settings/rulesets
+so `main` rejects PRs and direct pushes, leaving the `Publish` workflow as the
+only writer.
 Enable repository tag rulesets for
 `[0-9]*.[0-9]*.[0-9]*` before publishing from `main`, and enable immutable
 releases once the production flow is trusted.
