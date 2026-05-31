@@ -30,8 +30,9 @@ Usage:
   scripts/release/bump-version.sh --check-incremented-from REF
 
 Bumps or checks the canonical repo release version in plugins/cad/VERSION.
-Duplicate package and plugin metadata is generated from that file by
-scripts/release/sync-version.mjs during production bundling.
+Duplicate package and plugin metadata is synchronized from that file by
+scripts/release/sync-version.mjs during release preparation and production
+bundling.
 
 Common options:
   --dry-run          Show planned edits and git actions without changing files.
