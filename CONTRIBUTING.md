@@ -211,8 +211,10 @@ production merge commit on top of the previous publish target with the release
 source as the second parent, creates the semver tag from `plugins/cad/VERSION`,
 and opens a draft GitHub Release with generated notes. This keeps the target
 branch fast-forwardable while preserving source commits for release notes and
-contributor attribution. Leave `publish=false` unless the release should be
-published immediately rather than reviewed as a draft. Use
+contributor attribution. If a run moves `main` but fails before tag creation,
+rerunning Publish can resume while `main` already has the release version, as
+long as the semver tag is still missing. Leave `publish=false` unless the
+release should be published immediately rather than reviewed as a draft. Use
 `target_branch=build-test` to rehearse the full publish flow without touching
 `main` or creating a tag/release. Pushing `develop` runs tests but does not
 publish `main`. During bundling, Publish rechecks duplicate package/plugin
