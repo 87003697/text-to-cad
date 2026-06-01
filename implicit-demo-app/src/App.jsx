@@ -1,6 +1,4 @@
 import {
-  Activity,
-  Check,
   Download,
   Film,
   Moon,
@@ -9,7 +7,6 @@ import {
   RotateCcw,
   SlidersHorizontal,
   Sun,
-  Zap
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
@@ -95,19 +92,6 @@ function compileSummary(model) {
     { label: "radius", value: formatNumber(model.radius) },
     { label: "params", value: model.parameters?.length || 0 }
   ];
-}
-
-function statusText(state, error = "") {
-  if (error) {
-    return "error";
-  }
-  if (state === "ready") {
-    return "live shader ready";
-  }
-  if (state === "idle") {
-    return "waiting for source";
-  }
-  return state;
 }
 
 function errorMessage(error) {
@@ -697,8 +681,6 @@ export default function App() {
     }
   }, [activeAnimation, exportSettings, liveModel, paramValues, previewError]);
 
-  const dirty = code !== loadedTemplateCode;
-
   const handleParamChange = useCallback((parameterId, value) => {
     setParamValues((currentValues) => {
       const parameter = definition?.parameterMap?.[parameterId];
@@ -745,14 +727,9 @@ export default function App() {
     >
       <header className="top-rail">
         <div className="brand-block compact-brand">
-          <strong>implicitjs</strong>
-          <span>workbench</span>
+          <strong>implicit.js</strong>
         </div>
         <div className="top-actions">
-          <div className="compile-readout">
-            {previewStatus === "ready" ? <Check size={15} /> : previewStatus === "error" ? <Zap size={15} /> : <Activity size={15} />}
-            <span>{statusText(compileState, previewError)}</span>
-          </div>
           <IconButton
             title={themeMode === "dark" ? "Switch to light mode" : "Switch to dark mode"}
             onClick={() => setThemeMode((mode) => mode === "dark" ? "light" : "dark")}
@@ -779,13 +756,10 @@ export default function App() {
         <section className="editor-shell">
           <CodePane
             active={mobileTab === "source"}
-            dirty={dirty}
             onDownloadSource={handleDownloadSource}
             onTemplateChange={handleTemplateChange}
             selectedTemplateId={selectedTemplateId}
-            status="javascript + glsl"
             templates={templates}
-            title="implicit.js source"
             value={code}
             onChange={handleSourceChange}
           />

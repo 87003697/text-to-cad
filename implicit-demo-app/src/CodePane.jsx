@@ -3,7 +3,7 @@ import { javascript } from "@codemirror/lang-javascript";
 import { HighlightStyle, syntaxHighlighting } from "@codemirror/language";
 import { Decoration, EditorView, ViewPlugin } from "@codemirror/view";
 import { tags } from "@lezer/highlight";
-import { Code2, Download } from "lucide-react";
+import { Download } from "lucide-react";
 import { useMemo } from "react";
 
 const editorTheme = EditorView.theme({
@@ -153,13 +153,10 @@ const glslTemplateHighlighting = ViewPlugin.fromClass(class {
 export function CodePane({
   active = false,
   className = "",
-  dirty = false,
   onDownloadSource,
   onTemplateChange,
   selectedTemplateId = "",
-  status = "",
   templates = [],
-  title,
   value,
   onChange
 }) {
@@ -173,32 +170,29 @@ export function CodePane({
   return (
     <section className={`code-pane mobile-panel ${active ? "is-active" : ""} ${className}`}>
       <div className="section-bar code-section-bar">
-        <div className="source-title-group">
-          <div className="section-title-row">
-            <Code2 size={14} />
-            <span>{title}</span>
-          </div>
+        <div className="template-title-group">
           {templates.length ? (
-            <select
-              aria-label="Templates"
-              className="template-select"
-              value={selectedTemplateId}
-              onChange={(event) => onTemplateChange?.(event.target.value)}
-            >
-              <option disabled value="">Templates</option>
-              {templates.map((template) => (
-                <option key={template.id} value={template.id}>{template.label}</option>
-              ))}
-            </select>
+            <label className="template-picker">
+              <span>Templates</span>
+              <select
+                aria-label="Templates"
+                className="template-select"
+                value={selectedTemplateId}
+                onChange={(event) => onTemplateChange?.(event.target.value)}
+              >
+                <option disabled value="">Choose template</option>
+                {templates.map((template) => (
+                  <option key={template.id} value={template.id}>{template.label}</option>
+                ))}
+              </select>
+            </label>
           ) : null}
         </div>
         <div className="editor-section-actions">
           <button className="section-text-button" title="Download implicit.js" type="button" onClick={onDownloadSource}>
             <Download size={13} />
-            download
+            <span>Download</span>
           </button>
-          {dirty ? <span className="status-badge status-busy">edited</span> : null}
-          <span className="section-meta">{status || "javascript + glsl"}</span>
         </div>
       </div>
       <div className="code-pane-body">
