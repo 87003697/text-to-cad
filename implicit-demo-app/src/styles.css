@@ -511,7 +511,6 @@ button:focus-visible {
   height: 100%;
 }
 
-.viewport-empty,
 .compile-error,
 .export-toast {
   position: absolute;
@@ -520,14 +519,33 @@ button:focus-visible {
   backdrop-filter: blur(8px);
 }
 
-.viewport-empty {
+.viewport-loading {
+  position: absolute;
   top: 50%;
   left: 50%;
-  padding: 12px 14px;
+  display: grid;
+  justify-items: center;
+  gap: 10px;
   color: var(--muted-foreground);
+  font-size: 10px;
+  letter-spacing: 1.2px;
   text-transform: uppercase;
-  letter-spacing: 1.5px;
   transform: translate(-50%, -50%);
+}
+
+.loading-spinner {
+  width: 30px;
+  height: 30px;
+  border: 2px solid hsl(var(--smui-frost-2) / 0.2);
+  border-top-color: hsl(var(--smui-frost-2));
+  border-radius: 999px;
+  animation: loading-spin 850ms linear infinite;
+}
+
+@keyframes loading-spin {
+  to {
+    transform: rotate(360deg);
+  }
 }
 
 .compile-error {

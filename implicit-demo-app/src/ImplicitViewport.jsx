@@ -120,7 +120,7 @@ function installOrbitControls(runtime, container, model, getGraphics) {
 }
 
 export function ImplicitViewport({
-  emptyMessage = "waiting for a valid implicit module",
+  emptyMessage = "Loading preview",
   model,
   graphics,
   themeMode = "dark"
@@ -240,7 +240,12 @@ export function ImplicitViewport({
 
   return (
     <div className="viewport-canvas-host" ref={containerRef}>
-      {!model ? <div className="viewport-empty">{emptyMessage}</div> : null}
+      {!model ? (
+        <div className="viewport-loading" role="status" aria-live="polite">
+          <span className="loading-spinner" aria-hidden="true" />
+          <span>{emptyMessage}</span>
+        </div>
+      ) : null}
     </div>
   );
 }

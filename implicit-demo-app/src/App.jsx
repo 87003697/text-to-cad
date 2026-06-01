@@ -161,6 +161,23 @@ function SplitHandle({ axis, className = "", onPointerDown, title }) {
   );
 }
 
+function PreviewLoading({ label = "Loading preview" }) {
+  return (
+    <div className="viewport-loading" role="status" aria-live="polite">
+      <span className="loading-spinner" aria-hidden="true" />
+      <span>{label}</span>
+    </div>
+  );
+}
+
+function PreviewLoadingHost({ label }) {
+  return (
+    <div className="viewport-canvas-host">
+      <PreviewLoading label={label} />
+    </div>
+  );
+}
+
 function beginSplitDrag(event, {
   axis,
   containerRef,
@@ -890,12 +907,7 @@ export default function App() {
             </div>
             <div className="viewport-canvas-area">
               {previewBooted ? (
-                <Suspense fallback={(
-                  <div className="viewport-canvas-host">
-                    <div className="viewport-empty">warming preview</div>
-                  </div>
-                )}
-                >
+                <Suspense fallback={<PreviewLoadingHost />}>
                   <ImplicitViewport
                     model={previewModel}
                     graphics={graphics}
@@ -903,9 +915,7 @@ export default function App() {
                   />
                 </Suspense>
               ) : (
-                <div className="viewport-canvas-host">
-                  <div className="viewport-empty">warming preview</div>
-                </div>
+                <PreviewLoadingHost />
               )}
               {previewError ? (
                 <ScrollArea className="compile-error">
