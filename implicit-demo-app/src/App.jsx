@@ -23,6 +23,7 @@ import {
 } from "implicitjs";
 
 import { CodePane } from "./CodePane.jsx";
+import { ScrollArea } from "./components/ui/scroll-area.jsx";
 
 const ImplicitViewport = lazy(() => (
   import("./ImplicitViewport.jsx").then((module) => ({ default: module.ImplicitViewport }))
@@ -35,7 +36,8 @@ const COMPILE_DEBOUNCE_MS = 260;
 const PREVIEW_BOOT_DELAY_MS = 520;
 const MOBILE_TABS = Object.freeze([
   ["source", "Source"],
-  ["preview", "Preview"]
+  ["preview", "Preview"],
+  ["controls", "Controls"]
 ]);
 const EMPTY_TEMPLATE = Object.freeze({
   id: EMPTY_TEMPLATE_ID,
@@ -191,6 +193,35 @@ function beginSplitDrag(event, {
   window.addEventListener("pointerup", stop, { once: true });
 }
 
+function beginTrailingSplitDrag(event, {
+  containerRef,
+  max = 42,
+  min = 18,
+  setValue
+}) {
+  const container = containerRef.current;
+  if (!container) {
+    return;
+  }
+  event.preventDefault();
+  const rect = container.getBoundingClientRect();
+  document.documentElement.classList.add("is-resizing");
+
+  const update = (pointerEvent) => {
+    const raw = ((rect.right - pointerEvent.clientX) / Math.max(rect.width, 1)) * 100;
+    setValue(clampNumber(raw, min, max));
+  };
+  const stop = () => {
+    document.documentElement.classList.remove("is-resizing");
+    window.removeEventListener("pointermove", update);
+    window.removeEventListener("pointerup", stop);
+  };
+
+  update(event);
+  window.addEventListener("pointermove", update);
+  window.addEventListener("pointerup", stop, { once: true });
+}
+
 function ParameterControl({ parameter, value, onChange, animatedValue }) {
   const displayValue = animatedValue ?? value;
   if (parameter.type === "boolean") {
@@ -293,7 +324,6 @@ function NumberControl({ label, value, min, max, step = 1, unit = "", onChange }
 }
 
 function InspectorPanel({
-  open = false,
   model,
   definition,
   paramValues,
@@ -315,117 +345,121 @@ function InspectorPanel({
   const summary = compileSummary(model);
 
   return (
-    <aside className={`inspector ${open ? "is-open" : ""}`}>
+    <aside className="inspector">
       <SectionTitle icon={<SlidersHorizontal size={14} />} meta="runtime">Controls</SectionTitle>
 
-      <div className="stat-grid">
-        {summary.map((item) => (
-          <div className="stat-cell" key={item.label}>
-            <span>{item.label}</span>
-            <strong>{item.value}</strong>
-          </div>
-        ))}
-      </div>
-
-      {runtimeError ? (
-        <div className="alert error-alert">
-          <FieldLabel>runtime error</FieldLabel>
-          <p>{runtimeError}</p>
-        </div>
-      ) : null}
-
-      {animations.length ? (
-        <section className="control-section">
-          <div className="section-title">animation</div>
-          <div className="animation-row">
-            <select value={activeAnimationId} onChange={(event) => onAnimationChange(event.target.value)}>
-              {animations.map((animation) => (
-                <option key={animation.id} value={animation.id}>{animation.label}</option>
-              ))}
-            </select>
-            <IconButton title={playing ? "Pause animation" : "Play animation"} onClick={onTogglePlaying}>
-              {playing ? <Pause size={16} /> : <Play size={16} />}
-            </IconButton>
-            <IconButton title="Reset animation" onClick={onResetAnimation}>
-              <RotateCcw size={16} />
-            </IconButton>
-          </div>
-        </section>
-      ) : null}
-
-      {parameters.length ? (
-        <section className="control-section">
-          <div className="section-title">parameters</div>
-          <div className="control-stack">
-            {parameters.map((parameter) => (
-              <ParameterControl
-                key={parameter.id}
-                parameter={parameter}
-                value={paramValues[parameter.id]}
-                animatedValue={animatedValues[parameter.id]}
-                onChange={onParamChange}
-              />
+      <ScrollArea className="inspector-scroll">
+        <div className="inspector-content">
+          <div className="stat-grid">
+            {summary.map((item) => (
+              <div className="stat-cell" key={item.label}>
+                <span>{item.label}</span>
+                <strong>{item.value}</strong>
+              </div>
             ))}
           </div>
-        </section>
-      ) : (
-        <section className="control-section">
-          <div className="section-title">parameters</div>
-          <p className="muted-copy">This implicit module has no exposed params.</p>
-        </section>
-      )}
 
-      <section className="control-section">
-        <div className="section-title">export</div>
-        <div className="control-stack">
-          <NumberControl
-            label="mesh resolution"
-            min={24}
-            max={192}
-            step={4}
-            value={exportSettings.resolution}
-            onChange={(value) => onExportSettingChange("resolution", value)}
-          />
-          <NumberControl
-            label="animation frames"
-            min={4}
-            max={48}
-            step={1}
-            value={exportSettings.frames}
-            onChange={(value) => onExportSettingChange("frames", value)}
-          />
-          <NumberControl
-            label="animation duration"
-            min={0.25}
-            max={20}
-            step={0.25}
-            unit="s"
-            value={exportSettings.duration}
-            onChange={(value) => onExportSettingChange("duration", value)}
-          />
-        </div>
-      </section>
+          {runtimeError ? (
+            <div className="alert error-alert">
+              <FieldLabel>runtime error</FieldLabel>
+              <p>{runtimeError}</p>
+            </div>
+          ) : null}
 
-      <section className="control-section">
-        <div className="section-title">graphics</div>
-        <div className="control-stack">
-          <GraphicsControl id="resolutionScale" label="idle resolution" value={graphics.resolutionScale} onChange={onGraphicsChange} />
-          <GraphicsControl id="interactionResolutionScale" label="drag resolution" value={graphics.interactionResolutionScale} onChange={onGraphicsChange} />
-          <GraphicsControl id="detail" label="ray detail" value={graphics.detail} onChange={onGraphicsChange} />
-          <GraphicsControl id="normalSmoothing" label="normal smoothing" value={graphics.normalSmoothing} onChange={onGraphicsChange} />
-          {[
-            ["modelColors", "model colors"],
-            ["shadows", "soft shadows"],
-            ["ambientOcclusion", "ambient occlusion"],
-            ["rimLight", "rim light"]
-          ].map(([id, label]) => (
-            <label className="toggle-row" key={id}>
-              <span><FieldLabel>{label}</FieldLabel></span>
-              <input type="checkbox" checked={Boolean(graphics[id])} onChange={(event) => onGraphicsChange(id, event.target.checked)} />
-            </label>
-          ))}
+          {animations.length ? (
+            <section className="control-section">
+              <div className="section-title">animation</div>
+              <div className="animation-row">
+                <select value={activeAnimationId} onChange={(event) => onAnimationChange(event.target.value)}>
+                  {animations.map((animation) => (
+                    <option key={animation.id} value={animation.id}>{animation.label}</option>
+                  ))}
+                </select>
+                <IconButton title={playing ? "Pause animation" : "Play animation"} onClick={onTogglePlaying}>
+                  {playing ? <Pause size={16} /> : <Play size={16} />}
+                </IconButton>
+                <IconButton title="Reset animation" onClick={onResetAnimation}>
+                  <RotateCcw size={16} />
+                </IconButton>
+              </div>
+            </section>
+          ) : null}
+
+          {parameters.length ? (
+            <section className="control-section">
+              <div className="section-title">parameters</div>
+              <div className="control-stack">
+                {parameters.map((parameter) => (
+                  <ParameterControl
+                    key={parameter.id}
+                    parameter={parameter}
+                    value={paramValues[parameter.id]}
+                    animatedValue={animatedValues[parameter.id]}
+                    onChange={onParamChange}
+                  />
+                ))}
+              </div>
+            </section>
+          ) : (
+            <section className="control-section">
+              <div className="section-title">parameters</div>
+              <p className="muted-copy">This implicit module has no exposed params.</p>
+            </section>
+          )}
+
+          <section className="control-section">
+            <div className="section-title">export</div>
+            <div className="control-stack">
+              <NumberControl
+                label="mesh resolution"
+                min={24}
+                max={192}
+                step={4}
+                value={exportSettings.resolution}
+                onChange={(value) => onExportSettingChange("resolution", value)}
+              />
+              <NumberControl
+                label="animation frames"
+                min={4}
+                max={48}
+                step={1}
+                value={exportSettings.frames}
+                onChange={(value) => onExportSettingChange("frames", value)}
+              />
+              <NumberControl
+                label="animation duration"
+                min={0.25}
+                max={20}
+                step={0.25}
+                unit="s"
+                value={exportSettings.duration}
+                onChange={(value) => onExportSettingChange("duration", value)}
+              />
+            </div>
+          </section>
+
+          <section className="control-section">
+            <div className="section-title">graphics</div>
+            <div className="control-stack">
+              <GraphicsControl id="resolutionScale" label="idle resolution" value={graphics.resolutionScale} onChange={onGraphicsChange} />
+              <GraphicsControl id="interactionResolutionScale" label="drag resolution" value={graphics.interactionResolutionScale} onChange={onGraphicsChange} />
+              <GraphicsControl id="detail" label="ray detail" value={graphics.detail} onChange={onGraphicsChange} />
+              <GraphicsControl id="normalSmoothing" label="normal smoothing" value={graphics.normalSmoothing} onChange={onGraphicsChange} />
+              {[
+                ["modelColors", "model colors"],
+                ["shadows", "soft shadows"],
+                ["ambientOcclusion", "ambient occlusion"],
+                ["rimLight", "rim light"]
+              ].map(([id, label]) => (
+                <label className="toggle-row" key={id}>
+                  <span><FieldLabel>{label}</FieldLabel></span>
+                  <input type="checkbox" checked={Boolean(graphics[id])} onChange={(event) => onGraphicsChange(id, event.target.checked)} />
+                </label>
+              ))}
+            </div>
+          </section>
         </div>
-      </section>
+      </ScrollArea>
     </aside>
   );
 }
@@ -449,12 +483,10 @@ export default function App() {
   const [animationElapsed, setAnimationElapsed] = useState(0);
   const [themeMode, setThemeMode] = useState(() => localStorage.getItem("implicit-demo-theme") || "dark");
   const [mobileTab, setMobileTab] = useState("source");
-  const [controlsOpen, setControlsOpen] = useState(true);
   const [previewBooted, setPreviewBooted] = useState(false);
   const [workspaceSplit, setWorkspaceSplit] = useState(50);
-  const [viewportSplit, setViewportSplit] = useState(72);
+  const [controlsWidth, setControlsWidth] = useState(24);
   const workspaceRef = useRef(null);
-  const visualBodyRef = useRef(null);
   const templatesRef = useRef([]);
   const debouncedCode = useDebouncedValue(code, COMPILE_DEBOUNCE_MS);
 
@@ -754,7 +786,7 @@ export default function App() {
       className="app-shell"
       style={{
         "--workspace-left": `${workspaceSplit}%`,
-        "--viewport-width": `${viewportSplit}%`
+        "--controls-width": `${controlsWidth}%`
       }}
     >
       <header className="top-rail">
@@ -812,129 +844,122 @@ export default function App() {
         />
 
         <section className={`visual-shell mobile-panel ${mobileTab === "preview" ? "is-active" : ""}`}>
-          <div className={`visual-body ${controlsOpen ? "controls-open" : "controls-collapsed"}`} ref={visualBodyRef}>
-            <section className="viewport-frame">
-              <div className="section-bar">
-                <div className="section-title-row">
-                  <span>Preview</span>
-                </div>
-                <div className="preview-actions">
-                  <button
-                    className="section-text-button"
-                    disabled={!liveModel || Boolean(previewError) || exportState.status === "busy"}
-                    type="button"
-                    onClick={() => handleExport("glb")}
-                  >
-                    <Download size={13} />
-                    GLB
-                  </button>
-                  <button
-                    className="section-text-button"
-                    disabled={!liveModel || Boolean(previewError) || exportState.status === "busy"}
-                    type="button"
-                    onClick={() => handleExport("3mf")}
-                  >
-                    <Download size={13} />
-                    3MF
-                  </button>
-                  <button
-                    className="section-text-button"
-                    disabled={!liveModel || Boolean(previewError) || exportState.status === "busy"}
-                    type="button"
-                    onClick={() => handleExport("stl")}
-                  >
-                    <Download size={13} />
-                    STL
-                  </button>
-                  <button
-                    className="section-text-button"
-                    disabled={!liveModel || !activeAnimation || Boolean(previewError) || exportState.status === "busy"}
-                    type="button"
-                    onClick={() => handleExport("glb", { animated: true })}
-                  >
-                    <Film size={13} />
-                    animated
-                  </button>
-                  <IconButton
-                    className={controlsOpen ? "is-active" : ""}
-                    title={controlsOpen ? "Hide controls" : "Show controls"}
-                    onClick={() => setControlsOpen((value) => !value)}
-                  >
-                    <SlidersHorizontal size={15} />
-                  </IconButton>
-                </div>
+          <section className="viewport-frame">
+            <div className="section-bar">
+              <div className="section-title-row">
+                <span>Preview</span>
               </div>
-              <div className="viewport-canvas-area">
-                {previewBooted ? (
-                  <Suspense fallback={(
-                    <div className="viewport-canvas-host">
-                      <div className="viewport-empty">warming preview</div>
-                    </div>
-                  )}
-                  >
-                    <ImplicitViewport
-                      model={previewModel}
-                      graphics={graphics}
-                      themeMode={themeMode}
-                    />
-                  </Suspense>
-                ) : (
+              <div className="preview-actions">
+                <button
+                  className="section-text-button"
+                  disabled={!liveModel || Boolean(previewError) || exportState.status === "busy"}
+                  type="button"
+                  onClick={() => handleExport("glb")}
+                >
+                  <Download size={13} />
+                  GLB
+                </button>
+                <button
+                  className="section-text-button"
+                  disabled={!liveModel || Boolean(previewError) || exportState.status === "busy"}
+                  type="button"
+                  onClick={() => handleExport("3mf")}
+                >
+                  <Download size={13} />
+                  3MF
+                </button>
+                <button
+                  className="section-text-button"
+                  disabled={!liveModel || Boolean(previewError) || exportState.status === "busy"}
+                  type="button"
+                  onClick={() => handleExport("stl")}
+                >
+                  <Download size={13} />
+                  STL
+                </button>
+                <button
+                  className="section-text-button"
+                  disabled={!liveModel || !activeAnimation || Boolean(previewError) || exportState.status === "busy"}
+                  type="button"
+                  onClick={() => handleExport("glb", { animated: true })}
+                >
+                  <Film size={13} />
+                  animated
+                </button>
+              </div>
+            </div>
+            <div className="viewport-canvas-area">
+              {previewBooted ? (
+                <Suspense fallback={(
                   <div className="viewport-canvas-host">
                     <div className="viewport-empty">warming preview</div>
                   </div>
                 )}
-                {previewError ? (
-                  <div className="compile-error">
+                >
+                  <ImplicitViewport
+                    model={previewModel}
+                    graphics={graphics}
+                    themeMode={themeMode}
+                  />
+                </Suspense>
+              ) : (
+                <div className="viewport-canvas-host">
+                  <div className="viewport-empty">warming preview</div>
+                </div>
+              )}
+              {previewError ? (
+                <ScrollArea className="compile-error">
+                  <div className="compile-error-content">
                     <FieldLabel>{compileState === "error" ? "compile error" : "runtime error"}</FieldLabel>
                     <pre>{previewError}</pre>
                   </div>
-                ) : null}
-                {exportState.message ? (
-                  <div className={`export-toast export-${exportState.status}`}>
-                    {exportState.message}
-                  </div>
-                ) : null}
-              </div>
-            </section>
-            {controlsOpen ? (
-              <SplitHandle
-                axis="x"
-                className="visual-resizer"
-                title="Resize preview and controls"
-                onPointerDown={(event) => beginSplitDrag(event, {
-                  axis: "x",
-                  containerRef: visualBodyRef,
-                  min: 46,
-                  max: 82,
-                  setValue: setViewportSplit
-                })}
-              />
-            ) : null}
-            <InspectorPanel
-              open={controlsOpen}
-              model={liveModel}
-              definition={definition}
-              paramValues={paramValues}
-              animatedValues={animatedValues}
-              onParamChange={handleParamChange}
-              graphics={graphics}
-              onGraphicsChange={handleGraphicsChange}
-              activeAnimationId={activeAnimation?.id || ""}
-              onAnimationChange={(animationId) => {
-                setActiveAnimationId(animationId);
-                setAnimationElapsed(0);
-              }}
-              playing={playing}
-              onTogglePlaying={() => setPlaying((value) => !value)}
-              onResetAnimation={() => {
-                setPlaying(false);
-                setAnimationElapsed(0);
-              }}
-              exportSettings={exportSettings}
-              onExportSettingChange={handleExportSettingChange}
-              runtimeError={previewError}
-            />
-          </div>
+                </ScrollArea>
+              ) : null}
+              {exportState.message ? (
+                <div className={`export-toast export-${exportState.status}`}>
+                  {exportState.message}
+                </div>
+              ) : null}
+            </div>
+          </section>
+        </section>
+
+        <SplitHandle
+          axis="x"
+          className="controls-resizer"
+          title="Resize preview and controls"
+          onPointerDown={(event) => beginTrailingSplitDrag(event, {
+            containerRef: workspaceRef,
+            min: 18,
+            max: 40,
+            setValue: setControlsWidth
+          })}
+        />
+
+        <section className={`controls-shell mobile-panel ${mobileTab === "controls" ? "is-active" : ""}`}>
+          <InspectorPanel
+            model={liveModel}
+            definition={definition}
+            paramValues={paramValues}
+            animatedValues={animatedValues}
+            onParamChange={handleParamChange}
+            graphics={graphics}
+            onGraphicsChange={handleGraphicsChange}
+            activeAnimationId={activeAnimation?.id || ""}
+            onAnimationChange={(animationId) => {
+              setActiveAnimationId(animationId);
+              setAnimationElapsed(0);
+            }}
+            playing={playing}
+            onTogglePlaying={() => setPlaying((value) => !value)}
+            onResetAnimation={() => {
+              setPlaying(false);
+              setAnimationElapsed(0);
+            }}
+            exportSettings={exportSettings}
+            onExportSettingChange={handleExportSettingChange}
+            runtimeError={previewError}
+          />
         </section>
       </main>
     </div>

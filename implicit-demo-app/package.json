@@ -13,6 +13,7 @@
     "@codemirror/language": "^6.12.3",
     "@codemirror/view": "^6.43.0",
     "@lezer/highlight": "^1.2.3",
+    "@radix-ui/react-scroll-area": "^1.2.10",
     "@uiw/react-codemirror": "^4.25.10",
     "@vitejs/plugin-react": "^4.7.0",
     "implicitjs": "file:../packages/implicitjs",
