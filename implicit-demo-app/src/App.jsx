@@ -37,6 +37,7 @@ const DEFAULT_TEMPLATE_ID = "mobius-strip";
 const EMPTY_TEMPLATE_ID = "empty";
 const SOURCE_STORAGE_KEY = "implicit-demo-source";
 const COMPILE_DEBOUNCE_MS = 420;
+const EDITOR_BOOT_DELAY_MS = 2800;
 const PREVIEW_BOOT_DELAY_MS = 520;
 const MOBILE_TABS = Object.freeze([
   ["source", "Code"],
@@ -182,19 +183,50 @@ function PreviewLoadingHost({ label }) {
   );
 }
 
-function CodePaneLoading({ active = false }) {
+function SourcePaneFallback({
+  active = false,
+  onActivateEditor,
+  onDownloadSource,
+  onTemplateChange,
+  selectedTemplateId = "",
+  templates = [],
+  value,
+  onChange
+}) {
   return (
     <section className={`code-pane mobile-panel ${active ? "is-active" : ""}`}>
       <div className="section-bar code-section-bar">
         <div className="template-title-group">
-          <span className="section-meta">Loading editor</span>
+          {templates.length ? (
+            <select
+              aria-label="Templates"
+              className="template-select"
+              value={selectedTemplateId}
+              onChange={(event) => onTemplateChange?.(event.target.value)}
+            >
+              <option disabled value="">Choose template</option>
+              {templates.map((template) => (
+                <option key={template.id} value={template.id}>{template.label}</option>
+              ))}
+            </select>
+          ) : null}
+        </div>
+        <div className="editor-section-actions">
+          <button className="section-text-button" title="Download implicit.js" type="button" onClick={onDownloadSource}>
+            <Download size={13} />
+            <span>Download</span>
+          </button>
         </div>
       </div>
       <div className="code-pane-body">
-        <div className="code-pane-loading">
-          <span className="loading-spinner" aria-hidden="true" />
-          <span>Loading editor</span>
-        </div>
+        <textarea
+          aria-label="implicit.js source"
+          className="source-lite-editor"
+          spellCheck={false}
+          value={value}
+          onChange={(event) => onChange?.(event.target.value)}
+          onFocus={onActivateEditor}
+        />
       </div>
     </section>
   );
@@ -593,11 +625,11 @@ export default function App() {
     }
     const timeoutId = window.setTimeout(() => {
       if ("requestIdleCallback" in window) {
-        window.requestIdleCallback(bootEditor, { timeout: 500 });
+        window.requestIdleCallback(bootEditor, { timeout: 1500 });
         return;
       }
       bootEditor();
-    }, 80);
+    }, EDITOR_BOOT_DELAY_MS);
     return () => {
       cancelled = true;
       window.clearTimeout(timeoutId);
@@ -931,7 +963,17 @@ export default function App() {
       <main className="workspace-grid" ref={workspaceRef}>
         <section className="editor-shell">
           {editorBooted ? (
-            <Suspense fallback={<CodePaneLoading active={mobileTab === "source"} />}>
+            <Suspense fallback={(
+              <SourcePaneFallback
+                active={mobileTab === "source"}
+                onDownloadSource={handleDownloadSource}
+                onTemplateChange={handleTemplateChange}
+                selectedTemplateId={selectedTemplateId}
+                templates={templates}
+                value={code}
+                onChange={handleSourceChange}
+              />
+            )}>
               <CodePane
                 active={mobileTab === "source"}
                 onDownloadSource={handleDownloadSource}
@@ -944,7 +986,16 @@ export default function App() {
               />
             </Suspense>
           ) : (
-            <CodePaneLoading active={mobileTab === "source"} />
+            <SourcePaneFallback
+              active={mobileTab === "source"}
+              onActivateEditor={() => setEditorBooted(true)}
+              onDownloadSource={handleDownloadSource}
+              onTemplateChange={handleTemplateChange}
+              selectedTemplateId={selectedTemplateId}
+              templates={templates}
+              value={code}
+              onChange={handleSourceChange}
+            />
           )}
         </section>
 
