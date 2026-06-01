@@ -808,7 +808,9 @@ export default function App() {
     >
       <header className="top-rail">
         <div className="brand-block compact-brand">
-          <strong>implicit.js</strong>
+          <img className="brand-mark" src="/favicon.svg" alt="" aria-hidden="true" />
+          <strong className="brand-word">implicit.js</strong>
+          <span className="brand-subtitle">model 3d objects with math</span>
         </div>
         <div className="top-actions">
           <IconButton

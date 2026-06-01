@@ -124,7 +124,7 @@ select {
 
 .top-rail {
   display: grid;
-  grid-template-columns: auto minmax(0, 1fr);
+  grid-template-columns: minmax(0, 1fr) auto;
   align-items: center;
   min-width: 0;
   border-bottom: 1px solid var(--border);
@@ -144,16 +144,62 @@ select {
 }
 
 .compact-brand {
+  justify-self: start;
+  max-width: 100%;
   min-width: 0;
-  gap: 9px;
+  gap: 8px;
   white-space: nowrap;
 }
 
-.compact-brand strong {
+.brand-mark {
+  width: 24px;
+  height: 24px;
+  flex: 0 0 auto;
+  object-fit: contain;
+}
+
+.brand-word {
+  background: linear-gradient(90deg, #6ee7f9, #8b5cf6, #facc15, #fb7185, #6ee7f9);
+  background-size: 220% 100%;
+  background-position: 0% 50%;
+  background-clip: text;
+  -webkit-background-clip: text;
   color: var(--foreground);
   font-size: 15px;
   font-weight: 700;
   letter-spacing: 0;
+  transition: color 160ms ease, filter 160ms ease;
+}
+
+.compact-brand:hover .brand-word,
+.compact-brand:focus-within .brand-word {
+  color: transparent;
+  filter: saturate(1.18);
+  animation: brand-rainbow-shimmer 1.4s linear infinite;
+}
+
+.brand-subtitle {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--muted-foreground);
+  font-size: 11px;
+  font-weight: 400;
+  letter-spacing: 0;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+@keyframes brand-rainbow-shimmer {
+  to {
+    background-position: 220% 50%;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .compact-brand:hover .brand-word,
+  .compact-brand:focus-within .brand-word {
+    animation: none;
+  }
 }
 
 .top-actions,
