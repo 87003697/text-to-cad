@@ -349,25 +349,25 @@ button:focus-visible {
   max-width: 100%;
 }
 
-.cm-glsl-region {
-  color: #d8dee9;
+.code-pane-body .cm-editor .cm-glsl-region {
+  color: #d8dee9 !important;
 }
 
-.cm-glsl-keyword {
-  color: #81a1c1;
+.code-pane-body .cm-editor .cm-glsl-keyword {
+  color: #81a1c1 !important;
 }
 
-.cm-glsl-function {
-  color: #88c0d0;
+.code-pane-body .cm-editor .cm-glsl-function {
+  color: #88c0d0 !important;
 }
 
-.cm-glsl-number {
-  color: #b48ead;
+.code-pane-body .cm-editor .cm-glsl-number {
+  color: #b48ead !important;
 }
 
-.cm-glsl-comment {
-  color: #6f7d91;
-  font-style: italic;
+.code-pane-body .cm-editor .cm-glsl-comment {
+  color: #6f7d91 !important;
+  font-style: italic !important;
 }
 
 .split-handle {
