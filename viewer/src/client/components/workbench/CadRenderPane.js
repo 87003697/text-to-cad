@@ -1,6 +1,7 @@
 import { useEffect, useMemo } from "react";
 import CadViewer from "../CadViewer";
 import DxfViewer from "../DxfViewer";
+import ImplicitCadViewer from "../ImplicitCadViewer";
 import { CircleAlert, X } from "lucide-react";
 import { Alert, AlertDescription, AlertTitle } from "../ui/alert";
 import { Button } from "../ui/button";
@@ -48,6 +49,9 @@ export default function CadRenderPane({
   selectedMeshData,
   selectedDxfData,
   selectedDxfMeshData,
+  selectedImplicitModel,
+  implicitDynamicRenderActive = false,
+  implicitGraphicsSettings = null,
   selectedKey,
   selectedDxfKey,
   missingFileRef = "",
@@ -116,6 +120,7 @@ export default function CadRenderPane({
   const dxfMode = renderFormat === RENDER_FORMAT.DXF;
   const gcodeMode = renderFormat === RENDER_FORMAT.GCODE;
   const urdfMode = isRobotRenderFormat(renderFormat);
+  const implicitMode = renderFormat === RENDER_FORMAT.IMPLICIT;
   const meshOnlyMode = isMeshRenderFormat(renderFormat);
   const pathPreviewMode = meshOnlyMode || gcodeMode;
   const dxfMeshPreviewReady = dxfMode && !!selectedDxfMeshData;
@@ -158,7 +163,9 @@ export default function CadRenderPane({
   const ctaLabel = ctaMode === "screenshot" ? "Copy Screenshot" : copyButtonLabel;
   const ctaTitle = ctaMode === "screenshot" ? "Copy screenshot to clipboard" : copyButtonLabel;
   const ctaDisabled = ctaMode === "screenshot" ? viewerLoading || !activeMeshData : false;
-  const viewportHasRenderableContent = dxfMode && !dxfMeshPreviewReady
+  const viewportHasRenderableContent = implicitMode
+    ? !!selectedImplicitModel
+    : dxfMode && !dxfMeshPreviewReady
     ? !!selectedDxfData
     : !!activeMeshData;
   const blockingViewerAlert = viewerAlert && viewerAlert.blocking !== false && (
@@ -195,7 +202,25 @@ export default function CadRenderPane({
 
   return (
     <div className="absolute inset-0">
-      {dxfMode && !dxfMeshPreviewReady ? (
+      {implicitMode ? (
+        <ImplicitCadViewer
+          key={`implicit:${activeModelKey}`}
+          ref={viewerRef}
+          model={selectedImplicitModel}
+          modelKey={activeModelKey}
+          isLoading={viewerLoading}
+          previewMode={previewMode}
+          viewportFrameInsets={viewportFrameInsets}
+          viewPlaneOffsetRight={viewPlaneOffsetRight}
+          themeSettings={themeSettings}
+          graphicsSettings={implicitGraphicsSettings}
+          dynamicRenderActive={implicitDynamicRenderActive}
+          perspective={viewerPerspective}
+          perspectiveRef={viewerPerspectiveRef}
+          onPerspectiveChange={handlePerspectiveChange}
+          onViewerAlertChange={handleViewerAlertChange}
+        />
+      ) : dxfMode && !dxfMeshPreviewReady ? (
         <DxfViewer
           ref={viewerRef}
           dxfData={selectedDxfData}

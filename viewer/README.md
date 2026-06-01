@@ -63,6 +63,11 @@ regeneration:
 python -m pip install -r requirements.txt
 ```
 
+Agent handoff links from the cad-viewer skill should still include an absolute
+`?dir=` on every returned URL, plus an absolute `file=` value for each requested
+file. The session-storage fallback is for same-tab navigation, not for durable
+review links.
+
 ## Project Layout
 
 - `src/client/`: React app, browser state, styling, and viewer/workbench UI.
@@ -79,6 +84,12 @@ python -m pip install -r requirements.txt
 - `docs/`: workflow reference docs for backend storage, browser persistence,
   and MoveIt2.
 - `moveit2_server/`: optional Python websocket backend for SRDF controls.
+
+The shared non-React CAD runtime source lives in `../packages/cadjs`, and the
+shared non-React implicit CAD runtime source lives in `../packages/implicitjs`.
+On `develop`, `viewer/packages/*` is a symlinked development layout; keep
+reusable parsing, rendering, sidecar, selector, topology, implicit shader,
+snapshot, and export logic in the source packages.
 
 ## Common Commands
 
@@ -163,6 +174,11 @@ assets are served by a backend and are not copied into `dist/`.
 - [Browser storage](./docs/storage.md): URL, `localStorage`, and
   `sessionStorage` ownership.
 - [MoveIt2 server](./docs/moveit2-server.md): optional SRDF websocket backend.
+- `cadjs` render pipeline: shared render APIs used by the viewer, docs, and
+  snapshot runtime. In this workbench, see
+  `../packages/cadjs/docs/render-pipeline.md`.
+- `implicitjs` runtime: shared implicit CAD model, shader render, snapshot, and
+  export APIs. In this workbench, see `../packages/implicitjs/README.md`.
 
 ## Verification
 

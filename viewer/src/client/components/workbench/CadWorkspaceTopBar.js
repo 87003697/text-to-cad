@@ -5,6 +5,7 @@ import {
   Check,
   ChevronDown,
   CircleCheck,
+  Code,
   Copy,
   Cuboid,
   DraftingCompass,
@@ -27,7 +28,7 @@ import {
   normalizeViewerGithubUrl,
   viewerGithubReleaseUrl,
   viewerSkillsInstallCommandFromText
-} from "cadjs/lib/viewerConfig.mjs";
+} from "../../../shared/viewerConfig.mjs";
 import {
   Breadcrumb,
   BreadcrumbItem,
@@ -104,6 +105,9 @@ function fileSheetLabel(fileSheetKind) {
   if (fileSheetKind === "step") {
     return "STEP sheet";
   }
+  if (fileSheetKind === "implicit") {
+    return "Implicit CAD sheet";
+  }
   return "file sheet";
 }
 
@@ -148,6 +152,7 @@ const ENTRY_ICON_COMPONENTS = {
   [ENTRY_ICON_KIND.ASSEMBLY]: Boxes,
   [ENTRY_ICON_KIND.DXF]: DraftingCompass,
   [ENTRY_ICON_KIND.GCODE]: Route,
+  [ENTRY_ICON_KIND.IMPLICIT]: Code,
   [ENTRY_ICON_KIND.ROBOT]: Bot,
   [ENTRY_ICON_KIND.STEP_PART]: Package,
   [ENTRY_ICON_KIND.STL_MESH]: Cuboid,
@@ -303,6 +308,7 @@ function BreadcrumbDirectoryMenuItems({
   canCopyFileAssetPaths = false,
   fileAccessBusyKey = "",
   onDownloadFileAsset,
+  onExportImplicitFile,
   onRevealFileAsset,
   onCopyFileAssetReference
 }) {
@@ -339,6 +345,7 @@ function BreadcrumbDirectoryMenuItems({
           canCopyFileAssetPaths={canCopyFileAssetPaths}
           fileAccessBusyKey={fileAccessBusyKey}
           onDownloadFileAsset={onDownloadFileAsset}
+          onExportImplicitFile={onExportImplicitFile}
           onRevealFileAsset={onRevealFileAsset}
           onCopyFileAssetReference={onCopyFileAssetReference}
         />
@@ -365,6 +372,7 @@ function BreadcrumbDirectoryMenuItems({
         canCopyFileAssetPaths={canCopyFileAssetPaths}
         fileAccessBusyKey={fileAccessBusyKey}
         onDownloadFileAsset={onDownloadFileAsset}
+        onExportImplicitFile={onExportImplicitFile}
         onRevealFileAsset={onRevealFileAsset}
         onCopyFileAssetReference={onCopyFileAssetReference}
       />
@@ -402,6 +410,7 @@ function BreadcrumbDirectorySubMenu({
   canCopyFileAssetPaths = false,
   fileAccessBusyKey = "",
   onDownloadFileAsset,
+  onExportImplicitFile,
   onRevealFileAsset,
   onCopyFileAssetReference
 }) {
@@ -436,6 +445,7 @@ function BreadcrumbDirectorySubMenu({
             canCopyFileAssetPaths={canCopyFileAssetPaths}
             fileAccessBusyKey={fileAccessBusyKey}
             onDownloadFileAsset={onDownloadFileAsset}
+            onExportImplicitFile={onExportImplicitFile}
             onRevealFileAsset={onRevealFileAsset}
             onCopyFileAssetReference={onCopyFileAssetReference}
           />
@@ -465,6 +475,7 @@ function BreadcrumbNodeDropdown({
   canCopyFileAssetPaths = false,
   fileAccessBusyKey = "",
   onDownloadFileAsset,
+  onExportImplicitFile,
   onRevealFileAsset,
   onRevealInExplorerView,
   onCopyFileAssetReference,
@@ -506,6 +517,7 @@ function BreadcrumbNodeDropdown({
         canCopyFileAssetPaths={canCopyFileAssetPaths}
         busyKey={fileAccessBusyKey}
         onDownloadFileAsset={onDownloadFileAsset}
+        onExportImplicitFile={onExportImplicitFile}
         onRevealFileAsset={onRevealFileAsset}
         onRevealInExplorerView={onRevealInExplorerView}
         onCopyFileAssetReference={onCopyFileAssetReference}
@@ -559,6 +571,7 @@ function BreadcrumbNodeDropdown({
             canCopyFileAssetPaths={canCopyFileAssetPaths}
             fileAccessBusyKey={fileAccessBusyKey}
             onDownloadFileAsset={onDownloadFileAsset}
+            onExportImplicitFile={onExportImplicitFile}
             onRevealFileAsset={onRevealFileAsset}
             onCopyFileAssetReference={onCopyFileAssetReference}
           />
@@ -586,6 +599,7 @@ function BreadcrumbEllipsisDropdown({
   canCopyFileAssetPaths = false,
   fileAccessBusyKey = "",
   onDownloadFileAsset,
+  onExportImplicitFile,
   onRevealFileAsset,
   onCopyFileAssetReference,
   title
@@ -629,6 +643,7 @@ function BreadcrumbEllipsisDropdown({
                   canCopyFileAssetPaths={canCopyFileAssetPaths}
                   fileAccessBusyKey={fileAccessBusyKey}
                   onDownloadFileAsset={onDownloadFileAsset}
+                  onExportImplicitFile={onExportImplicitFile}
                   onRevealFileAsset={onRevealFileAsset}
                   onCopyFileAssetReference={onCopyFileAssetReference}
                 />
@@ -656,6 +671,7 @@ function BreadcrumbEllipsisDropdown({
                   canCopyFileAssetPaths={canCopyFileAssetPaths}
                   fileAccessBusyKey={fileAccessBusyKey}
                   onDownloadFileAsset={onDownloadFileAsset}
+                  onExportImplicitFile={onExportImplicitFile}
                   onRevealFileAsset={onRevealFileAsset}
                   onCopyFileAssetReference={onCopyFileAssetReference}
                 />
@@ -1103,6 +1119,7 @@ export default function CadWorkspaceTopBar({
   canCopyFileAssetPaths = false,
   fileAccessBusyKey = "",
   onDownloadFileAsset,
+  onExportImplicitFile,
   onRevealFileAsset,
   onRevealInExplorerView,
   onCopyFileAssetReference,
@@ -1214,6 +1231,7 @@ export default function CadWorkspaceTopBar({
                   canCopyFileAssetPaths={canCopyFileAssetPaths}
                   fileAccessBusyKey={fileAccessBusyKey}
                   onDownloadFileAsset={onDownloadFileAsset}
+                  onExportImplicitFile={onExportImplicitFile}
                   onRevealFileAsset={onRevealFileAsset}
                   onRevealInExplorerView={onRevealInExplorerView}
                   onCopyFileAssetReference={onCopyFileAssetReference}
@@ -1245,6 +1263,7 @@ export default function CadWorkspaceTopBar({
                       canCopyFileAssetPaths={canCopyFileAssetPaths}
                       fileAccessBusyKey={fileAccessBusyKey}
                       onDownloadFileAsset={onDownloadFileAsset}
+                      onExportImplicitFile={onExportImplicitFile}
                       onRevealFileAsset={onRevealFileAsset}
                       onCopyFileAssetReference={onCopyFileAssetReference}
                       title={selectedFileTitle}
@@ -1270,6 +1289,7 @@ export default function CadWorkspaceTopBar({
                       canCopyFileAssetPaths={canCopyFileAssetPaths}
                       fileAccessBusyKey={fileAccessBusyKey}
                       onDownloadFileAsset={onDownloadFileAsset}
+                      onExportImplicitFile={onExportImplicitFile}
                       onRevealFileAsset={onRevealFileAsset}
                       onRevealInExplorerView={onRevealInExplorerView}
                       onCopyFileAssetReference={onCopyFileAssetReference}

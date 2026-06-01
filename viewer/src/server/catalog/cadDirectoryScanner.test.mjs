@@ -8,7 +8,7 @@ import test from "node:test";
 import {
   STEP_EDGE_RENDER_VISIBILITY_CLASSES,
   STEP_TOPOLOGY_SCHEMA_VERSION
-} from "../common/stepTopology.mjs";
+} from "cadjs/common/stepTopology.mjs";
 import {
   isCatalogRelevantPath,
   isServedCadAsset,
@@ -189,6 +189,8 @@ test("scanCadDirectory discovers CAD files directly and infers STEP assets", () 
   writeFile(path.join(repoRoot, "workspace/sample_part/sample_part.3mf"), "3mf\n");
   writeFile(path.join(repoRoot, "workspace/sample_part/sample_part.glb"), "native glb\n");
   writeFile(path.join(repoRoot, "workspace/sample_part/sample_part.gcode"), "G1 X1 Y1 E0.02\n");
+  writeFile(path.join(repoRoot, "workspace/implicit/orb.implicit.js"), "export default { distance: 'length(p) - 1.0' };\n");
+  writeFile(path.join(repoRoot, "workspace/implicit/implicit-cad.mjs"), "export const helper = true;\n");
   writeFile(path.join(repoRoot, "workspace/sheets/bracket.dxf"), "0\nEOF\n");
   writeFile(path.join(repoRoot, "workspace/robots/sample_robot.urdf"), "<robot name=\"sample_robot\" />\n");
   writeFile(path.join(repoRoot, "workspace/robots/sample_robot.srdf"), "<robot name=\"sample_robot\" xmlns:tcad=\"https://text-to-cad.dev/srdf\"><tcad:urdf path=\"sample_robot.urdf\"/></robot>\n");
@@ -220,6 +222,7 @@ test("scanCadDirectory discovers CAD files directly and infers STEP assets", () 
     ["sample_part/sample_part.3mf", "3mf"],
     ["sample_part/sample_part.glb", "glb"],
     ["sample_part/sample_part.gcode", "gcode"],
+    ["implicit/orb.implicit.js", "implicit"],
     ["sheets/bracket.dxf", "dxf"],
     ["robots/sample_robot.urdf", "urdf"],
     ["robots/legacy_robot.srdf", "srdf"],
@@ -247,6 +250,7 @@ test("scanCadDirectory discovers CAD files directly and infers STEP assets", () 
   assert.equal(entryByFile(catalog, "sample_part/sample_part.py"), undefined);
   assert.equal(entryByFile(catalog, "sample_part/.sample_part.step.glb"), undefined);
   assert.equal(entryByFile(catalog, "sample_part/.sample_part.step.js"), undefined);
+  assert.equal(entryByFile(catalog, "implicit/implicit-cad.mjs"), undefined);
   assert.equal(entryByFile(catalog, "sample_part/.sample_part.step/ignored.step"), undefined);
   assert.equal(entryByFile(catalog, "robots/.sample_robot.urdf/ignored.urdf"), undefined);
   assert.equal(entryByFile(catalog, ".hidden/hidden.step"), undefined);

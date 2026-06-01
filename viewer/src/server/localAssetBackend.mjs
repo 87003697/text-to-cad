@@ -10,13 +10,15 @@ import {
   scanCadDirectory,
   scanCadFile,
   sortCatalogEntries,
-} from "cadjs/lib/cadDirectoryScanner.mjs";
+} from "./catalog/cadDirectoryScanner.mjs";
 import {
   generationStatusDir as resolveGenerationStatusDir,
   readGenerationStatus,
-} from "cadjs/lib/generationStatus.mjs";
+} from "./catalog/generationStatus.mjs";
 import { pathIsInside } from "cadjs/lib/pathUtils.mjs";
-import { ensureStepTopologyArtifact } from "cadjs/lib/step/stepArtifactCompiler.mjs";
+import { ensureStepTopologyArtifact } from "./step/stepArtifactCompiler.mjs";
+import { exportImplicitCadFile, IMPLICIT_CAD_EXPORT_FORMATS } from "implicitjs/export";
+import { pathIsImplicitCadSource } from "implicitjs/model";
 
 function toPosixPath(value) {
   return String(value || "").split(path.sep).join("/");
@@ -101,6 +103,14 @@ function normalizedFileAssetKind(value) {
     return asset;
   }
   throw new Error(`Unsupported file asset: ${asset || "(missing)"}`);
+}
+
+function normalizedImplicitExportFormat(value) {
+  const format = String(value || "").trim().toLowerCase().replace(/^\./, "");
+  if (IMPLICIT_CAD_EXPORT_FORMATS.includes(format)) {
+    return format;
+  }
+  throw new Error(`Unsupported implicit CAD export format: ${format || "(missing)"}`);
 }
 
 function fileHasGenStep(filePath) {
@@ -701,12 +711,27 @@ export function createLocalAssetBackend({
     if (explicitAssetFile) {
       return explicitAssetFile;
     }
+
     const rawUrl = String(entry?.url || "").trim();
     if (!rawUrl) {
       throw new Error("Artifact asset is not available for this file");
     }
     const assetPath = assetPathFromCatalogUrl("/", rawUrl);
     return absoluteFileRef(assetPath);
+  }
+
+  function resolveImplicitCadFilePath(fileRef, options = {}) {
+    const { entry, relativeFileRef, resolvedRoot } = requireCatalogEntryForFileRef(fileRef, options);
+    const outputRef = normalizedFileRef(entry?.file || relativeFileRef);
+    const outputPath = filePathFromRef(outputRef, resolvedRoot);
+    ensurePathInsideRoot(outputPath, resolvedRoot);
+    if (!pathIsImplicitCadSource(outputPath) || String(entry?.kind || "").trim().toLowerCase() !== "implicit") {
+      throw new Error(`File is not an implicit CAD source: ${outputRef || relativeFileRef}`);
+    }
+    if (!fs.existsSync(outputPath) || !fs.statSync(outputPath).isFile()) {
+      throw new Error(`Implicit CAD file not found: ${outputRef || relativeFileRef}`);
+    }
+    return outputPath;
   }
 
   function resolveArtifactFilePath(fileRef, options = {}) {
@@ -825,6 +850,49 @@ export function createLocalAssetBackend({
     };
   }
 
+  async function generateImplicitExport({
+    fileRef,
+    format = "glb",
+    parameterValues = null,
+    animationState = null,
+    resolution = 96,
+    maxCells = undefined,
+    resolvedRoot = resolveRoot(),
+    rootDir: nextRootDir = defaultRootDir,
+    catalog = null,
+  } = {}) {
+    const exportFormat = normalizedImplicitExportFormat(format);
+    const inputPath = resolveImplicitCadFilePath(fileRef, {
+      resolvedRoot,
+      rootDir: nextRootDir,
+      catalog,
+    });
+    const inputFilename = path.basename(inputPath);
+    const outputFilename = inputFilename
+      .replace(/\.implicit\.(?:mjs|js)$/i, `.${exportFormat}`)
+      .replace(/\.(?:mjs|js)$/i, `.${exportFormat}`);
+    const outputPath = path.join(path.dirname(inputPath), outputFilename);
+    ensurePathInsideRoot(outputPath, resolvedRoot);
+    const result = await exportImplicitCadFile({
+      input: inputPath,
+      output: outputPath,
+      format: exportFormat,
+      params: parameterValues,
+      animationState,
+      resolution,
+      maxCells,
+    });
+    const nextCatalog = refreshCatalogForPath({ rootDir: nextRootDir, filePath: outputPath });
+    const outputFileRef = path.relative(resolvedRoot.rootPath, outputPath).split(path.sep).join("/");
+    return {
+      ...result,
+      outputFileRef,
+      filename: path.basename(outputPath),
+      catalog: nextCatalog,
+      entry: catalogEntryForFileRef(nextCatalog, outputFileRef),
+    };
+  }
+
   function readStepSourceStatusForFile({ fileRef, resolvedRoot = resolveRequestRoot({ fileRef }), catalog = null } = {}) {
     const { stepPath, sourcePath } = resolveStepSourceStatus(fileRef, { resolvedRoot, catalog });
     const context = scanContextForRoot(resolvedRoot);
@@ -935,6 +1003,7 @@ export function createLocalAssetBackend({
     generationStatusDir,
     isGenerationStatusPath,
     generateStepArtifact,
+    generateImplicitExport,
     entryForSourcePath,
     assetPathForFileRef,
     writeAsset,

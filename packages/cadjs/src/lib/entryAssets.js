@@ -162,6 +162,10 @@ export function entryHasGcode(entry) {
   return Boolean(entryAssetUrl(entry, "gcode") && entryAssetHash(entry, "gcode"));
 }
 
+export function entryHasImplicitCad(entry) {
+  return Boolean(entryAssetUrl(entry, "implicit") && entryAssetHash(entry, "implicit"));
+}
+
 export function entryStepModuleUrl(entry) {
   return entrySourceFormat(entry) === RENDER_FORMAT.STEP
     ? normalizeString(entry?.moduleUrl)

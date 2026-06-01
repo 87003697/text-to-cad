@@ -3,7 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { inlineStepGlbArtifactPathForSource } from "../../common/stepSidecars.mjs";
+import { inlineStepGlbArtifactPathForSource } from "cadjs/common/stepSidecars.mjs";
 
 const MODULE_DIR = path.dirname(fileURLToPath(import.meta.url));
 const PACKAGE_ROOT = path.resolve(MODULE_DIR, "../../..");

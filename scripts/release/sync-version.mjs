@@ -17,7 +17,11 @@ const jsonTargets = [
   { path: "viewer/package.json", fields: [["version"]] },
   {
     path: "viewer/package-lock.json",
-    fields: [["version"], ["packages", "", "version"], ["packages", "packages/cadjs", "version"]],
+    fields: [
+      ["version"],
+      ["packages", "", "version"],
+      ["packages", "packages/cadjs", "version"],
+    ],
   },
   { path: "skills/cad-viewer/scripts/viewer/package.json", fields: [["version"]] },
   { path: "plugins/cad/skills/cad-viewer/scripts/viewer/package.json", fields: [["version"]] },

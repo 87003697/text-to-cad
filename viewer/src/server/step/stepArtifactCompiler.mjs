@@ -3,14 +3,14 @@ import path from "node:path";
 
 import {
   inlineStepGlbArtifactPathForSource,
-} from "../../common/stepSidecars.mjs";
+} from "cadjs/common/stepSidecars.mjs";
 import {
   VIEWER_SKIPPED_DIRECTORIES,
   normalizeViewerRootDir,
   repoRelativePath,
   resolveViewerRoot,
   validateStepTopologyArtifact,
-} from "../cadDirectoryScanner.mjs";
+} from "../catalog/cadDirectoryScanner.mjs";
 import { ensurePythonStepTopologyArtifact } from "./pythonStepArtifact.mjs";
 
 const STEP_SUFFIXES = new Set([".step", ".stp"]);

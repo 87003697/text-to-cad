@@ -1,16 +1,32 @@
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 
-import { inlineStepGlbArtifactPathForSource } from "../../common/stepSidecars.mjs";
-import { scanCadDirectory } from "../cadDirectoryScanner.mjs";
+import { inlineStepGlbArtifactPathForSource } from "cadjs/common/stepSidecars.mjs";
+import { scanCadDirectory } from "../catalog/cadDirectoryScanner.mjs";
 import {
   ensureStepArtifactsForCatalog,
   ensureStepTopologyArtifact,
 } from "./stepArtifactCompiler.mjs";
 import { readTextToCadStepMetadataFile } from "./stepMetadata.mjs";
+import { cadPythonEnv, cadPythonExecutable } from "./pythonStepArtifact.mjs";
+
+const stepArtifactSkipReason = (() => {
+  const result = spawnSync(
+    cadPythonExecutable(process.cwd()),
+    ["-c", "import OCP, build123d"],
+    {
+      cwd: process.cwd(),
+      env: cadPythonEnv(),
+      encoding: "utf8",
+    }
+  );
+  return result.status === 0 ? "" : "STEP artifact Python dependencies are unavailable";
+})();
+const stepArtifactTestOptions = stepArtifactSkipReason ? { skip: stepArtifactSkipReason } : {};
 
 function makeTempRepo() {
   return fs.mkdtempSync(path.join(os.tmpdir(), "cad-viewer-step-compile-"));
@@ -80,7 +96,7 @@ function readStepEdgeManifest(filePath) {
   return JSON.parse(binary.subarray(start, end).toString("utf8"));
 }
 
-test("ensureStepArtifactsForCatalog discovers Python generators without fixture STEP files", async (t) => {
+test("ensureStepArtifactsForCatalog discovers Python generators without fixture STEP files", stepArtifactTestOptions, async (t) => {
   const repoRoot = makeTempRepo();
   t.after(() => fs.rmSync(repoRoot, { recursive: true, force: true }));
   const stepPath = path.join(repoRoot, "workspace/generated/block.step");
@@ -107,7 +123,7 @@ test("ensureStepArtifactsForCatalog discovers Python generators without fixture 
   assert.equal(catalog.entries[0].hash.length, 64);
 });
 
-test("ensureStepTopologyArtifact records explicit non-same-stem Python sourcePath", async (t) => {
+test("ensureStepTopologyArtifact records explicit non-same-stem Python sourcePath", stepArtifactTestOptions, async (t) => {
   const repoRoot = makeTempRepo();
   t.after(() => fs.rmSync(repoRoot, { recursive: true, force: true }));
   const stepPath = path.join(repoRoot, "workspace/generated/robot.step");
@@ -144,7 +160,7 @@ test("ensureStepTopologyArtifact records explicit non-same-stem Python sourcePat
   assert.equal(catalog.entries[0].hash.length, 64);
 });
 
-test("ensureStepTopologyArtifact can write Python STEP after the GLB is ready", async (t) => {
+test("ensureStepTopologyArtifact can write Python STEP after the GLB is ready", stepArtifactTestOptions, async (t) => {
   const repoRoot = makeTempRepo();
   t.after(() => fs.rmSync(repoRoot, { recursive: true, force: true }));
   const stepPath = path.join(repoRoot, "workspace/generated/robot.step");
@@ -174,7 +190,7 @@ test("ensureStepTopologyArtifact can write Python STEP after the GLB is ready", 
   assert.equal(metadata.sourceHash, indexTopology.sourceHash);
 });
 
-test("ensureStepTopologyArtifact regenerates existing same-stem STEP artifacts from STEP bytes", async (t) => {
+test("ensureStepTopologyArtifact regenerates existing same-stem STEP artifacts from STEP bytes", stepArtifactTestOptions, async (t) => {
   const repoRoot = makeTempRepo();
   t.after(() => fs.rmSync(repoRoot, { recursive: true, force: true }));
   const stepPath = path.join(repoRoot, "workspace/generated/robot.step");

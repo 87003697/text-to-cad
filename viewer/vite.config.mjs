@@ -5,23 +5,23 @@ import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 import {
   isCatalogRelevantPath,
-} from "cadjs/lib/cadDirectoryScanner.mjs";
+} from "./src/server/catalog/cadDirectoryScanner.mjs";
 import {
   normalizeViewerDefaultFile,
   normalizeViewerGithubUrl,
-} from "cadjs/lib/viewerConfig.mjs";
+} from "./src/shared/viewerConfig.mjs";
 import {
   DEFAULT_VIEWER_PORT,
   buildViewerServerInfo,
-} from "cadjs/lib/viewerServerInfo.mjs";
+} from "./src/server/viewerServerInfo.mjs";
 import {
   removeViewerServerRegistryEntry,
   writeViewerServerRegistry,
-} from "cadjs/lib/viewerServerRegistry.mjs";
+} from "./src/server/viewerServerRegistry.mjs";
 import {
   pathIsInside,
-  resolveWorkspaceRoot as resolveViewerWorkspaceRoot,
 } from "cadjs/lib/pathUtils.mjs";
+import { resolveWorkspaceRoot as resolveViewerWorkspaceRoot } from "./src/server/workspaceRoot.mjs";
 import { createLocalAssetBackend } from "./src/server/localAssetBackend.mjs";
 import {
   createCadViewerApiMiddleware,

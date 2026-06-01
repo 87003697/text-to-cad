@@ -18,12 +18,12 @@ import {
   DEFAULT_VIEWER_PORT,
   buildViewerServerInfo,
   normalizeViewerPort,
-} from "cadjs/lib/viewerServerInfo.mjs";
+} from "./viewerServerInfo.mjs";
 import {
   normalizeViewerDefaultFile,
   normalizeViewerGithubUrl,
-} from "cadjs/lib/viewerConfig.mjs";
-import { resolveWorkspaceRoot } from "cadjs/lib/pathUtils.mjs";
+} from "../shared/viewerConfig.mjs";
+import { resolveWorkspaceRoot } from "./workspaceRoot.mjs";
 import {
   normalizeViewerAssetBackend,
   assertNoDeprecatedLocalRootEnv,

@@ -8,10 +8,10 @@ import {
   DEFAULT_VIEWER_PORT,
   VIEWER_SERVER_API_VERSION,
   VIEWER_SERVER_APP_ID,
-} from "cadjs/lib/viewerServerInfo.mjs";
+} from "../src/server/viewerServerInfo.mjs";
 import {
   readViewerServerRegistry,
-} from "cadjs/lib/viewerServerRegistry.mjs";
+} from "../src/server/viewerServerRegistry.mjs";
 import { parseServerLifetimeMs } from "../src/server/serverLifetime.mjs";
 
 const scriptPath = fileURLToPath(import.meta.url);
