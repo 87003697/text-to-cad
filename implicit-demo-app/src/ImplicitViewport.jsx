@@ -9,7 +9,11 @@ import {
   updateImplicitGraphicsUniforms,
   updateImplicitMaterialUniforms,
   updateImplicitModelUniforms
-} from "implicitjs";
+} from "implicitjs/render";
+
+const IDLE_PIXEL_BUDGET = 1_250_000;
+const INTERACTION_PIXEL_BUDGET = 650_000;
+const STARTUP_QUALITY_MS = 900;
 
 function themeSettingsForMode(mode) {
   const dark = mode === "dark";
@@ -57,11 +61,16 @@ function resizeRuntime(runtime, container, graphics) {
   const rect = container.getBoundingClientRect();
   const cssWidth = Math.max(Math.floor(rect.width), 1);
   const cssHeight = Math.max(Math.floor(rect.height), 1);
-  const interacting = runtime.controlsDragging === true;
-  const scale = Math.max(
+  const now = performance.now();
+  const settling = runtime.lowQualityUntil && now < runtime.lowQualityUntil;
+  const interacting = runtime.controlsDragging === true || settling;
+  const requestedScale = Math.max(
     interacting ? graphics.interactionResolutionScale : graphics.resolutionScale,
     0.25
   );
+  const pixelBudget = interacting ? INTERACTION_PIXEL_BUDGET : IDLE_PIXEL_BUDGET;
+  const budgetScale = Math.sqrt(pixelBudget / Math.max(cssWidth * cssHeight, 1));
+  const scale = Math.max(Math.min(requestedScale, budgetScale), 0.25);
   const width = Math.max(Math.floor(cssWidth * scale), 1);
   const height = Math.max(Math.floor(cssHeight * scale), 1);
 
@@ -184,6 +193,13 @@ export function ImplicitViewport({
       if (changed) {
         runtime.dirtyFrames = Math.max(runtime.dirtyFrames, 2);
       }
+      if (runtime.lowQualityUntil && performance.now() >= runtime.lowQualityUntil) {
+        runtime.lowQualityUntil = 0;
+        if (runtime.model) {
+          resizeRuntime(runtime, container, latestRef.current.graphics);
+          runtime.dirtyFrames = Math.max(runtime.dirtyFrames, 3);
+        }
+      }
       if (runtime.dirtyFrames > 0) {
         runtime.dirtyFrames -= 1;
         renderRuntime(runtime);
@@ -229,6 +245,7 @@ export function ImplicitViewport({
     }
 
     runtime.model = model;
+    runtime.lowQualityUntil = performance.now() + STARTUP_QUALITY_MS;
     resizeRuntime(runtime, container, graphics);
     updateImplicitModelUniforms(THREE, runtime.fullscreen.material, model);
     updateImplicitAppearanceUniforms(THREE, runtime.fullscreen.material, model, {

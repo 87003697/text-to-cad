@@ -25,7 +25,23 @@ export default defineConfig({
             return "codemirror";
           }
           if (id.includes("/packages/implicitjs/")) {
-            return "implicitjs";
+            if (
+              id.includes("/lib/implicitCad/exportModel") ||
+              id.includes("/lib/implicitCad/exporters") ||
+              id.includes("/lib/implicitCad/mesh")
+            ) {
+              return "implicitjs-export";
+            }
+            if (
+              id.includes("/lib/implicitCad/render") ||
+              id.includes("/common/camera") ||
+              id.includes("/common/renderOptions") ||
+              id.includes("/common/themeSettings") ||
+              id.includes("/lib/viewer/")
+            ) {
+              return "implicitjs-render";
+            }
+            return "implicitjs-core";
           }
           return undefined;
         },

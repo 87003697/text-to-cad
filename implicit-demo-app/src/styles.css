@@ -508,6 +508,19 @@ button:focus-visible {
   max-width: 100%;
 }
 
+.code-pane-loading {
+  display: grid;
+  width: 100%;
+  height: 100%;
+  place-content: center;
+  justify-items: center;
+  gap: 10px;
+  color: var(--muted-foreground);
+  font-size: 10px;
+  letter-spacing: 1.2px;
+  text-transform: uppercase;
+}
+
 .code-pane-body .cm-editor .cm-glsl-region,
 .code-pane-body .cm-editor .cm-glsl-region * {
   color: var(--editor-variable) !important;

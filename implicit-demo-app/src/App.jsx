@@ -10,21 +10,25 @@ import {
 } from "lucide-react";
 import { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
-  DEFAULT_IMPLICIT_GRAPHICS_SETTINGS,
   animatedImplicitParameterValues,
-  exportImplicitAnimatedGlb,
-  exportImplicitModel,
+  normalizeImplicitAnimationElapsed
+} from "implicitjs/animation";
+import {
+  DEFAULT_IMPLICIT_GRAPHICS_SETTINGS,
   IMPLICIT_GRAPHICS_LIMITS,
-  loadImplicitSource,
-  normalizeImplicitAnimationElapsed,
-  normalizeImplicitGraphicsSettings,
+  normalizeImplicitGraphicsSettings
+} from "implicitjs/graphicsSettings";
+import { loadImplicitSource } from "implicitjs/loader";
+import {
   normalizeParameterValue,
   normalizeParameterValues
-} from "implicitjs";
+} from "implicitjs/common/parameters.js";
 
-import { CodePane } from "./CodePane.jsx";
 import { ScrollArea } from "./components/ui/scroll-area.jsx";
 
+const CodePane = lazy(() => (
+  import("./CodePane.jsx").then((module) => ({ default: module.CodePane }))
+));
 const ImplicitViewport = lazy(() => (
   import("./ImplicitViewport.jsx").then((module) => ({ default: module.ImplicitViewport }))
 ));
@@ -32,7 +36,7 @@ const ImplicitViewport = lazy(() => (
 const DEFAULT_TEMPLATE_ID = "mobius-strip";
 const EMPTY_TEMPLATE_ID = "empty";
 const SOURCE_STORAGE_KEY = "implicit-demo-source";
-const COMPILE_DEBOUNCE_MS = 260;
+const COMPILE_DEBOUNCE_MS = 420;
 const PREVIEW_BOOT_DELAY_MS = 520;
 const MOBILE_TABS = Object.freeze([
   ["source", "Code"],
@@ -175,6 +179,24 @@ function PreviewLoadingHost({ label }) {
     <div className="viewport-canvas-host">
       <PreviewLoading label={label} />
     </div>
+  );
+}
+
+function CodePaneLoading({ active = false }) {
+  return (
+    <section className={`code-pane mobile-panel ${active ? "is-active" : ""}`}>
+      <div className="section-bar code-section-bar">
+        <div className="template-title-group">
+          <span className="section-meta">Loading editor</span>
+        </div>
+      </div>
+      <div className="code-pane-body">
+        <div className="code-pane-loading">
+          <span className="loading-spinner" aria-hidden="true" />
+          <span>Loading editor</span>
+        </div>
+      </div>
+    </section>
   );
 }
 
@@ -531,6 +553,7 @@ export default function App() {
   const [animationElapsed, setAnimationElapsed] = useState(0);
   const [themeMode, setThemeMode] = useState(() => localStorage.getItem("implicit-demo-theme") || "dark");
   const [mobileTab, setMobileTab] = useState("preview");
+  const [editorBooted, setEditorBooted] = useState(false);
   const [previewBooted, setPreviewBooted] = useState(false);
   const [largePreviewWidth, setLargePreviewWidth] = useState(50);
   const [settingsWidth, setSettingsWidth] = useState(260);
@@ -547,6 +570,39 @@ export default function App() {
   useEffect(() => {
     localStorage.setItem(SOURCE_STORAGE_KEY, code);
   }, [code]);
+
+  useEffect(() => {
+    if (editorBooted) {
+      return undefined;
+    }
+    let cancelled = false;
+    const shouldBootEditor = () => (
+      mobileTab === "source" ||
+      !window.matchMedia("(max-width: 760px)").matches
+    );
+    const bootEditor = () => {
+      if (!cancelled && shouldBootEditor()) {
+        setEditorBooted(true);
+      }
+    };
+
+    if (!shouldBootEditor()) {
+      return () => {
+        cancelled = true;
+      };
+    }
+    const timeoutId = window.setTimeout(() => {
+      if ("requestIdleCallback" in window) {
+        window.requestIdleCallback(bootEditor, { timeout: 500 });
+        return;
+      }
+      bootEditor();
+    }, 80);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timeoutId);
+    };
+  }, [editorBooted, mobileTab]);
 
   useEffect(() => {
     let cancelled = false;
@@ -770,6 +826,10 @@ export default function App() {
     setExportState({ status: "busy", message: animated ? "building animated GLB" : `building ${format.toUpperCase()}` });
     await new Promise((resolve) => window.requestAnimationFrame(resolve));
     try {
+      const {
+        exportImplicitAnimatedGlb,
+        exportImplicitModel
+      } = await import("implicitjs/exportModel");
       const result = animated
         ? exportImplicitAnimatedGlb(liveModel, {
             animationId: activeAnimation?.id || "",
@@ -870,16 +930,22 @@ export default function App() {
 
       <main className="workspace-grid" ref={workspaceRef}>
         <section className="editor-shell">
-          <CodePane
-            active={mobileTab === "source"}
-            onDownloadSource={handleDownloadSource}
-            onTemplateChange={handleTemplateChange}
-            selectedTemplateId={selectedTemplateId}
-            themeMode={themeMode}
-            templates={templates}
-            value={code}
-            onChange={handleSourceChange}
-          />
+          {editorBooted ? (
+            <Suspense fallback={<CodePaneLoading active={mobileTab === "source"} />}>
+              <CodePane
+                active={mobileTab === "source"}
+                onDownloadSource={handleDownloadSource}
+                onTemplateChange={handleTemplateChange}
+                selectedTemplateId={selectedTemplateId}
+                themeMode={themeMode}
+                templates={templates}
+                value={code}
+                onChange={handleSourceChange}
+              />
+            </Suspense>
+          ) : (
+            <CodePaneLoading active={mobileTab === "source"} />
+          )}
         </section>
 
         <SplitHandle
