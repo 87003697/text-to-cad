@@ -145,16 +145,35 @@ select {
 }
 
 .compact-brand {
+  position: relative;
   justify-self: start;
   max-width: 100%;
   min-width: 0;
   gap: 8px;
+  isolation: isolate;
   white-space: nowrap;
 }
 
+.compact-brand::after {
+  position: absolute;
+  z-index: 1;
+  content: "";
+  inset: -3px -6px;
+  background: linear-gradient(105deg, transparent 24%, rgb(110 231 249 / 0.05) 38%, rgb(250 204 21 / 0.24) 50%, rgb(251 113 133 / 0.08) 62%, transparent 76%);
+  mix-blend-mode: screen;
+  opacity: 0;
+  pointer-events: none;
+  transform: translateX(-125%);
+}
+
+.compact-brand:hover::after,
+.compact-brand:focus-within::after {
+  animation: brand-logo-wave 980ms ease-out 1;
+}
+
 .brand-mark {
-  width: 24px;
-  height: 24px;
+  width: 20px;
+  height: 20px;
   flex: 0 0 auto;
   object-fit: contain;
 }
@@ -176,14 +195,14 @@ select {
 .compact-brand:focus-within .brand-word {
   color: transparent;
   filter: saturate(1.18);
-  animation: brand-rainbow-shimmer 1.4s linear infinite;
+  animation: brand-rainbow-shimmer 980ms ease-out 1;
 }
 
 .brand-subtitle {
   min-width: 0;
   overflow: hidden;
   color: var(--muted-foreground);
-  font-size: 11px;
+  font-size: 12px;
   font-weight: 400;
   letter-spacing: 0;
   text-overflow: ellipsis;
@@ -191,12 +210,34 @@ select {
 }
 
 @keyframes brand-rainbow-shimmer {
+  from {
+    background-position: -120% 50%;
+  }
+
   to {
-    background-position: 220% 50%;
+    background-position: 120% 50%;
+  }
+}
+
+@keyframes brand-logo-wave {
+  0% {
+    opacity: 0;
+    transform: translateX(-125%);
+  }
+
+  28% {
+    opacity: 1;
+  }
+
+  100% {
+    opacity: 0;
+    transform: translateX(125%);
   }
 }
 
 @media (prefers-reduced-motion: reduce) {
+  .compact-brand:hover::after,
+  .compact-brand:focus-within::after,
   .compact-brand:hover .brand-word,
   .compact-brand:focus-within .brand-word {
     animation: none;

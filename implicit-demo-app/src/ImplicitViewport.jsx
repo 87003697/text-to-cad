@@ -96,11 +96,12 @@ function installOrbitControls(runtime, container, model, getGraphics) {
     Math.max(rect.width, 1),
     Math.max(rect.height, 1),
     "iso",
-    { zoom: 1.08 }
+    { frameMargin: 1.18, zoom: 1.22 }
   );
   const controls = new OrbitControls(runtime.camera, runtime.renderer.domElement);
   controls.enableDamping = true;
   controls.dampingFactor = 0.12;
+  controls.zoomSpeed = 2.35;
   controls.screenSpacePanning = true;
   controls.target.set(...model.center);
   controls.addEventListener("change", () => {
