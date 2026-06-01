@@ -58,6 +58,7 @@ jobs:
       - name: Install Node dependencies
         run: |
           npm ci --prefix packages/cadjs
+          npm ci --prefix packages/implicitjs
           npm ci --prefix viewer
           npm ci --prefix docs
 
@@ -98,6 +99,7 @@ jobs:
       - name: Install Node dependencies
         run: |
           npm ci --prefix packages/cadjs
+          npm ci --prefix packages/implicitjs
           npm ci --prefix viewer
           npm ci --prefix docs
 

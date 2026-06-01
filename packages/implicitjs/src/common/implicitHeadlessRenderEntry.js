@@ -9,11 +9,15 @@ import {
   normalizeParameterValues
 } from "./parameters.js";
 import { loadImplicitCadModule } from "../lib/implicitCad/loader.js";
-import { renderImplicitCadToDataUrl } from "../lib/implicitCad/render.js";
+import {
+  snapshotImplicitCadModel,
+  snapshotImplicitCadOutputOptions
+} from "../lib/implicitCad/snapshot.js";
 
 const GIFEncoder = exportedGifEncoder || gifencDefault?.GIFEncoder || gifencDefault;
 const quantize = exportedQuantize || gifencDefault?.quantize;
 const applyPalette = exportedApplyPalette || gifencDefault?.applyPalette;
+const implicitModuleCache = new Map();
 
 function isObject(value) {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
@@ -22,12 +26,6 @@ function isObject(value) {
 function clampNumber(value, min, max) {
   const numeric = Number(value);
   return Math.min(Math.max(Number.isFinite(numeric) ? numeric : min, min), max);
-}
-
-function outputSize(output = {}, job = {}) {
-  const width = Math.max(1, Math.floor(Number(output.width || job.width || 1200)));
-  const height = Math.max(1, Math.floor(Number(output.height || job.height || 900)));
-  return { width, height };
 }
 
 function implicitParameterValues(rawParameters) {
@@ -48,6 +46,24 @@ function implicitAnimationState(rawParameters, job = {}, output = {}) {
           ? rawParameters.animation
           : {};
   return raw;
+}
+
+function canonicalJsonValue(value) {
+  if (Array.isArray(value)) {
+    return value.map(canonicalJsonValue);
+  }
+  if (!isObject(value)) {
+    return value;
+  }
+  return Object.fromEntries(
+    Object.keys(value)
+      .sort()
+      .map((key) => [key, canonicalJsonValue(value[key])])
+  );
+}
+
+function canonicalJson(value) {
+  return JSON.stringify(canonicalJsonValue(value));
 }
 
 function findImplicitAnimation(definition, animationId) {
@@ -104,7 +120,7 @@ function applyImplicitAnimation(definition, parameterValues, animationState = {}
   );
 }
 
-function implicitRuntimeModel(model, job = {}, output = {}) {
+function implicitRuntimeState(model, job = {}, output = {}) {
   const rawParameters = isObject(output.implicitParameters)
     ? output.implicitParameters
     : isObject(job.implicitParameters)
@@ -116,6 +132,11 @@ function implicitRuntimeModel(model, job = {}, output = {}) {
     implicitParameterValues(rawParameters),
     animationState
   );
+  return { animationState, parameterValues };
+}
+
+function implicitRuntimeModel(model, job = {}, output = {}) {
+  const { animationState, parameterValues } = implicitRuntimeState(model, job, output);
   return typeof model?.definition?.buildModel === "function"
     ? model.definition.buildModel(
         parameterValues,
@@ -124,18 +145,32 @@ function implicitRuntimeModel(model, job = {}, output = {}) {
     : model;
 }
 
-function renderOptionsForOutput(job = {}, output = {}) {
-  return {
-    appearance: output.appearance || job.appearance || "workbench",
-    graphics: {
-      ...(isObject(job.graphics) ? job.graphics : {}),
-      ...(isObject(output.graphics) ? output.graphics : {}),
-    },
-    render: {
-      ...(isObject(job.render) ? job.render : {}),
-      ...(isObject(output.render) ? output.render : {}),
-    },
-  };
+function cachedImplicitRuntimeModel(model, job = {}, output = {}, cache = null) {
+  if (!cache || typeof model?.definition?.buildModel !== "function") {
+    return implicitRuntimeModel(model, job, output);
+  }
+  const state = implicitRuntimeState(model, job, output);
+  const key = canonicalJson(state);
+  if (cache.has(key)) {
+    return cache.get(key);
+  }
+  const runtimeModel = model.definition.buildModel(state.parameterValues, state.animationState);
+  cache.set(key, runtimeModel);
+  return runtimeModel;
+}
+
+async function loadCachedImplicitCadModule(inputUrl) {
+  const key = String(inputUrl || "");
+  if (!implicitModuleCache.has(key)) {
+    implicitModuleCache.set(
+      key,
+      loadImplicitCadModule(key).catch((error) => {
+        implicitModuleCache.delete(key);
+        throw error;
+      })
+    );
+  }
+  return implicitModuleCache.get(key);
 }
 
 function orbitFrameOutputs(job) {
@@ -299,24 +334,23 @@ function gifDataUrlFromEncoder(encoder) {
 async function renderImplicitGifFrames(model, job, frameSpec, { mode = "orbit" } = {}) {
   const encoder = GIFEncoder();
   const transparent = shouldEncodeTransparentGif(job, frameSpec);
-  const renderedOutputs = [];
+  const runtimeModelCache = new Map();
   for (const frameOutput of frameSpec.outputs) {
-    const modelForOutput = implicitRuntimeModel(model, job, frameOutput);
-    renderedOutputs.push({
-      dataUrl: await renderImplicitCadToDataUrl(THREE, modelForOutput, {
-        width: frameSpec.width,
-        height: frameSpec.height,
-        camera: frameOutput.camera || job.camera || "iso",
-        ...renderOptionsForOutput({
-          ...job,
-          appearance: frameSpec.appearance,
-          graphics: frameSpec.graphics,
-          render: frameSpec.render
-        }, frameOutput),
-      }),
+    const modelForOutput = cachedImplicitRuntimeModel(model, job, frameOutput, runtimeModelCache);
+    const renderedOutput = await snapshotImplicitCadModel(THREE, modelForOutput, {
+      width: frameSpec.width,
+      height: frameSpec.height,
+      camera: frameOutput.camera || job.camera || "iso",
+      appearance: frameOutput.appearance || frameSpec.appearance,
+      graphics: {
+        ...(isObject(frameSpec.graphics) ? frameSpec.graphics : {}),
+        ...(isObject(frameOutput.graphics) ? frameOutput.graphics : {}),
+      },
+      render: {
+        ...(isObject(frameSpec.render) ? frameSpec.render : {}),
+        ...(isObject(frameOutput.render) ? frameOutput.render : {}),
+      },
     });
-  }
-  for (const renderedOutput of renderedOutputs) {
     const imageData = await dataUrlToImageData(renderedOutput.dataUrl, frameSpec.width, frameSpec.height);
     const frame = encodeGifFrameImageData(imageData, { transparent });
     encoder.writeFrame(frame.indexed, frameSpec.width, frameSpec.height, {
@@ -352,7 +386,7 @@ export async function runImplicitCadHeadlessRenderJob(job = {}) {
   if (!inputUrl) {
     throw new Error("Implicit CAD snapshot job requires resolved.inputUrl");
   }
-  const model = await loadImplicitCadModule(inputUrl);
+  const model = await loadCachedImplicitCadModule(inputUrl);
   const mode = String(job.mode || "view").trim().toLowerCase();
   if (mode === "orbit") {
     return renderImplicitGifFrames(model, job, orbitFrameOutputs(job), { mode: "orbit" });
@@ -362,22 +396,13 @@ export async function runImplicitCadHeadlessRenderJob(job = {}) {
   }
   const outputs = Array.isArray(job.outputs) ? job.outputs : [];
   const renderedOutputs = [];
+  const runtimeModelCache = new Map();
   for (const output of outputs) {
     const outputObject = isObject(output) ? output : {};
-    const { width, height } = outputSize(outputObject, job);
-    const modelForOutput = implicitRuntimeModel(model, job, outputObject);
-    renderedOutputs.push({
-      path: String(outputObject.path || ""),
-      width,
-      height,
-      mimeType: "image/png",
-      dataUrl: await renderImplicitCadToDataUrl(THREE, modelForOutput, {
-        width,
-        height,
-        camera: outputObject.camera || job.camera || "iso",
-        ...renderOptionsForOutput(job, outputObject),
-      }),
-    });
+    const modelForOutput = cachedImplicitRuntimeModel(model, job, outputObject, runtimeModelCache);
+    renderedOutputs.push(await snapshotImplicitCadModel(THREE, modelForOutput, {
+      ...snapshotImplicitCadOutputOptions(job, outputObject),
+    }));
   }
   return {
     ok: true,

@@ -117,7 +117,7 @@ test("fragment shader uses a zero-direction-safe ray bounds intersection", () =>
     maxSteps: 64
   });
 
-  assert.match(shader, /vec2 implicitCadRaySlab/);
+  assert.match(shader, /vec2 implicit_ray_slab/);
   assert.match(shader, /abs\(direction\) < 1\.0e-8/);
 });
 
@@ -161,6 +161,57 @@ test("camera framing samples SDF bounds when declared bounds are roomy", () => {
   assert.ok(distance < 30, `expected a camera fit to sampled geometry, got ${distance}`);
 });
 
+test("camera framing honors a larger frame margin for safer snapshots", () => {
+  const model = normalizeImplicitCadModel({
+    glsl: "float sdf(vec3 p) { return length(p) - 1.0; }",
+    bounds: { min: [-1, -1, -1], max: [1, 1, 1] }
+  });
+  const compact = implicitCadCameraState(model, "iso", {
+    width: 1200,
+    height: 900,
+    zoom: 1,
+    frameMargin: 1.05
+  });
+  const padded = implicitCadCameraState(model, "iso", {
+    width: 1200,
+    height: 900,
+    zoom: 1,
+    frameMargin: 1.7
+  });
+  const compactDistance = Math.hypot(
+    compact.position[0] - compact.target[0],
+    compact.position[1] - compact.target[1],
+    compact.position[2] - compact.target[2]
+  );
+  const paddedDistance = Math.hypot(
+    padded.position[0] - padded.target[0],
+    padded.position[1] - padded.target[1],
+    padded.position[2] - padded.target[2]
+  );
+
+  assert.ok(paddedDistance > compactDistance, `expected padded camera to stand farther back than ${compactDistance}, got ${paddedDistance}`);
+});
+
+test("camera framing falls back to declared bounds when CPU SDF sampling cannot evaluate GLSL", () => {
+  const state = implicitCadCameraState(
+    normalizeImplicitCadModel({
+      glsl: `
+float sdf(vec3 p) {
+  for (int i = 0; i < 2; i += 1) {
+    break;
+  }
+  return length(p) - 1.0;
+}
+`,
+      bounds: { min: [-10, -10, -10], max: [10, 10, 10] }
+    }),
+    "iso",
+    { width: 1200, height: 900, zoom: 1 }
+  );
+
+  assert.deepEqual(state.frameBounds, { min: [-10, -10, -10], max: [10, 10, 10] });
+});
+
 test("workbench appearance and graphics update the shared shader uniforms", () => {
   const model = normalizeImplicitCadModel({
     glsl: `
@@ -178,6 +229,7 @@ vec3 color(vec3 p, vec3 normal) { return vec3(0.1, 0.8, 1.0); }
   const graphicsSettings = updateImplicitCadGraphicsUniforms(material, model, {
     detail: 4,
     normalSmoothing: 2,
+    stepBudget: 24,
     shadows: false,
     ambientOcclusion: false,
     rimLight: false
@@ -187,6 +239,7 @@ vec3 color(vec3 p, vec3 normal) { return vec3(0.1, 0.8, 1.0); }
   assert.equal(material.uniforms.uShadowStrength.value, 0);
   assert.equal(material.uniforms.uAmbientOcclusionStrength.value, 0);
   assert.equal(material.uniforms.uRimStrength.value, 0);
+  assert.equal(material.uniforms.uStepBudget.value, 24);
   assert.equal(graphicsSettings.detail, 4);
   assert.ok(material.uniforms.uHitEpsilon.value < model.epsilon);
   assert.equal(resolveImplicitCadAppearanceSettings({ appearance: "workbench" }).background.type, themeSettings.background.type);

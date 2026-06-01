@@ -3,8 +3,8 @@ import { exportImplicitCadFile, IMPLICIT_CAD_EXPORT_FORMATS } from "../src/lib/i
 
 function usage() {
   return `Usage:
-  node packages/implicitjs/scripts/export-implicit-cad.mjs --input model.implicit.js --format glb
-  node packages/implicitjs/scripts/export-implicit-cad.mjs --input model.implicit.js --output model.stl --resolution 96
+  node scripts/export.mjs --input <model.implicit.js> --format glb
+  node scripts/export.mjs --input <model.implicit.js> --output <mesh.stl> --resolution <resolution>
 
 Options:
   --input, -i       Input .implicit.js/.implicit.mjs file.

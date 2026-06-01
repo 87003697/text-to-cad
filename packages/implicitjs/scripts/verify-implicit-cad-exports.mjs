@@ -1,7 +1,6 @@
 #!/usr/bin/env node
 import fs from "node:fs/promises";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
 
 import { loadImplicitCadModelFromPath } from "../src/lib/implicitCad/export.js";
 import { meshToFormat } from "../src/lib/implicitCad/exporters.js";
@@ -9,18 +8,16 @@ import { analyzeImplicitMeshQuality } from "../src/lib/implicitCad/meshQuality.j
 import { meshImplicitCadModel } from "../src/lib/implicitCad/mesh.js";
 
 const FORMATS = Object.freeze(["glb", "stl", "3mf"]);
-const SCRIPT_DIR = path.dirname(fileURLToPath(import.meta.url));
-const REPO_ROOT = path.resolve(SCRIPT_DIR, "../../..");
-const DEFAULT_ROOT = path.join(REPO_ROOT, "models/implicit-cad");
+const DEFAULT_ROOT = process.cwd();
 
 function usage() {
   return `Usage:
-  node packages/implicitjs/scripts/verify-implicit-cad-exports.mjs
-  node packages/implicitjs/scripts/verify-implicit-cad-exports.mjs --resolution 96 --formats glb,stl,3mf
+  node scripts/verify-implicit-cad-exports.mjs
+  node scripts/verify-implicit-cad-exports.mjs --root examples --resolution 96 --formats glb,stl,3mf
 
 Options:
-  --root           Directory containing .implicit.js files. Default: models/implicit-cad.
-  --file           Specific .implicit.js file to verify. May be repeated.
+  --root           Directory containing .implicit.js files. Default: current directory.
+  --file, --input  Specific .implicit.js file to verify. May be repeated.
   --resolution     Longest-axis sampling resolution. Default: 96.
   --max-cells      Safety cap for grid cells. Default: exporter default.
   --formats        Comma-separated export formats. Default: glb,stl,3mf.
@@ -63,6 +60,7 @@ function parseArgs(argv) {
         options.root = path.resolve(readValue());
         break;
       case "--file":
+      case "--input":
         options.files.push(path.resolve(readValue()));
         break;
       case "--resolution":
@@ -219,7 +217,7 @@ async function verifyFile(inputPath, options) {
     ...formatResults.flatMap((result) => result.failures.map((failure) => `${result.format}: ${failure}`)),
   ];
   return {
-    input: path.relative(REPO_ROOT, inputPath),
+    input: path.relative(process.cwd(), inputPath),
     name: model.name,
     ok: failures.length === 0,
     failures,
@@ -247,7 +245,7 @@ async function main() {
   const results = [];
   for (const file of files) {
     if (!options.json) {
-      process.stdout.write(`VERIFY ${path.relative(REPO_ROOT, file)}\n`);
+      process.stdout.write(`VERIFY ${path.relative(process.cwd(), file)}\n`);
     }
     const result = await verifyFile(file, options);
     results.push(result);

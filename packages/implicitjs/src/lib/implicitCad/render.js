@@ -24,7 +24,7 @@ import {
 const DEFAULT_BACKGROUND = "#0b1020";
 const DEFAULT_FOV_DEG = 42;
 const DEFAULT_SNAPSHOT_CAMERA_ZOOM = 1.25;
-const DEFAULT_SNAPSHOT_FRAME_MARGIN = 1.35;
+const DEFAULT_SNAPSHOT_FRAME_MARGIN = 1.42;
 const FRAME_BOUNDS_SAMPLE_COUNT = 25;
 const FRAME_BOUNDS_THRESHOLD_STEP_FACTOR = 0.45;
 const FRAME_BOUNDS_MARGIN_STEP_FACTOR = 0.75;
@@ -303,24 +303,28 @@ function estimateImplicitCadFrameBounds(model) {
   const hitMin = [Infinity, Infinity, Infinity];
   const hitMax = [-Infinity, -Infinity, -Infinity];
   let hitCount = 0;
-  for (let ix = 0; ix < sampleCount; ix += 1) {
-    const x = fallbackBounds.min[0] + step[0] * ix;
-    for (let iy = 0; iy < sampleCount; iy += 1) {
-      const y = fallbackBounds.min[1] + step[1] * iy;
-      for (let iz = 0; iz < sampleCount; iz += 1) {
-        const z = fallbackBounds.min[2] + step[2] * iz;
-        if (finiteNumber(sdf(x, y, z), 1e6) > threshold) {
-          continue;
+  try {
+    for (let ix = 0; ix < sampleCount; ix += 1) {
+      const x = fallbackBounds.min[0] + step[0] * ix;
+      for (let iy = 0; iy < sampleCount; iy += 1) {
+        const y = fallbackBounds.min[1] + step[1] * iy;
+        for (let iz = 0; iz < sampleCount; iz += 1) {
+          const z = fallbackBounds.min[2] + step[2] * iz;
+          if (finiteNumber(sdf(x, y, z), 1e6) > threshold) {
+            continue;
+          }
+          hitCount += 1;
+          hitMin[0] = Math.min(hitMin[0], x);
+          hitMin[1] = Math.min(hitMin[1], y);
+          hitMin[2] = Math.min(hitMin[2], z);
+          hitMax[0] = Math.max(hitMax[0], x);
+          hitMax[1] = Math.max(hitMax[1], y);
+          hitMax[2] = Math.max(hitMax[2], z);
         }
-        hitCount += 1;
-        hitMin[0] = Math.min(hitMin[0], x);
-        hitMin[1] = Math.min(hitMin[1], y);
-        hitMin[2] = Math.min(hitMin[2], z);
-        hitMax[0] = Math.max(hitMax[0], x);
-        hitMax[1] = Math.max(hitMax[1], y);
-        hitMax[2] = Math.max(hitMax[2], z);
       }
     }
+  } catch {
+    return fallbackBounds;
   }
   if (!hitCount) {
     return fallbackBounds;
@@ -529,169 +533,170 @@ uniform float uNormalEpsilon;
 uniform float uMaxDistance;
 uniform float uStepScale;
 uniform float uMaxStep;
+uniform float uStepBudget;
 uniform float uShadowStrength;
 uniform float uAmbientOcclusionStrength;
 uniform float uRimStrength;
 ${customUniformDeclarations}
 varying vec2 vUv;
 
-const int IMPLICIT_CAD_MAX_STEPS = ${maxSteps};
+const int IMPLICIT_MAX_STEPS = ${maxSteps};
 
-float implicitCadClamp01(float value) {
+float implicit_clamp01(float value) {
   return clamp(value, 0.0, 1.0);
 }
 
-float implicitCadLinearMap(float value, float inMin, float inMax, float outMin, float outMax) {
+float implicit_linear_map(float value, float inMin, float inMax, float outMin, float outMax) {
   float slope = (outMax - outMin) / (inMax - inMin);
   return (value - inMin) * slope + outMin;
 }
 
-float implicitCadRamp(float value, float inMin, float inMax, float outMin, float outMax) {
-  return clamp(implicitCadLinearMap(value, inMin, inMax, outMin, outMax), outMin, outMax);
+float implicit_ramp(float value, float inMin, float inMax, float outMin, float outMax) {
+  return clamp(implicit_linear_map(value, inMin, inMax, outMin, outMax), outMin, outMax);
 }
 
-float implicitCadTwoBodyField(float a, float b) {
+float implicit_two_body_field(float a, float b) {
   return (a - b) / (a + b);
 }
 
-float implicitCadTwoBodyPolar(float a, float b, float angle) {
+float implicit_two_body_polar(float a, float b, float angle) {
   return a * cos(angle) + b * sin(angle);
 }
 
-float implicitCadTriangleWaveEven(float value, float period) {
+float implicit_triangle_wave_even(float value, float period) {
   float halfPeriod = period * 0.5;
   float quarterPeriod = period * 0.25;
   float wrapped = mod(value + halfPeriod, period);
   return quarterPeriod - abs(wrapped - halfPeriod);
 }
 
-vec2 implicitCadTriangleWaveEven(vec2 value, vec2 period) {
+vec2 implicit_triangle_wave_even(vec2 value, vec2 period) {
   return vec2(
-    implicitCadTriangleWaveEven(value.x, period.x),
-    implicitCadTriangleWaveEven(value.y, period.y)
+    implicit_triangle_wave_even(value.x, period.x),
+    implicit_triangle_wave_even(value.y, period.y)
   );
 }
 
-vec3 implicitCadTriangleWaveEven(vec3 value, vec3 period) {
+vec3 implicit_triangle_wave_even(vec3 value, vec3 period) {
   return vec3(
-    implicitCadTriangleWaveEven(value.x, period.x),
-    implicitCadTriangleWaveEven(value.y, period.y),
-    implicitCadTriangleWaveEven(value.z, period.z)
+    implicit_triangle_wave_even(value.x, period.x),
+    implicit_triangle_wave_even(value.y, period.y),
+    implicit_triangle_wave_even(value.z, period.z)
   );
 }
 
-float implicitCadTriangleWaveEvenPositive(float value, float period) {
-  return implicitCadTriangleWaveEven(value, period) + period * 0.25;
+float implicit_triangle_wave_even_positive(float value, float period) {
+  return implicit_triangle_wave_even(value, period) + period * 0.25;
 }
 
-vec2 implicitCadTriangleWaveEvenPositive(vec2 value, vec2 period) {
+vec2 implicit_triangle_wave_even_positive(vec2 value, vec2 period) {
   return vec2(
-    implicitCadTriangleWaveEvenPositive(value.x, period.x),
-    implicitCadTriangleWaveEvenPositive(value.y, period.y)
+    implicit_triangle_wave_even_positive(value.x, period.x),
+    implicit_triangle_wave_even_positive(value.y, period.y)
   );
 }
 
-vec3 implicitCadTriangleWaveEvenPositive(vec3 value, vec3 period) {
+vec3 implicit_triangle_wave_even_positive(vec3 value, vec3 period) {
   return vec3(
-    implicitCadTriangleWaveEvenPositive(value.x, period.x),
-    implicitCadTriangleWaveEvenPositive(value.y, period.y),
-    implicitCadTriangleWaveEvenPositive(value.z, period.z)
+    implicit_triangle_wave_even_positive(value.x, period.x),
+    implicit_triangle_wave_even_positive(value.y, period.y),
+    implicit_triangle_wave_even_positive(value.z, period.z)
   );
 }
 
-float implicitCadTriangleWaveOdd(float value, float period) {
-  return implicitCadTriangleWaveEven(value - period * 0.5, period);
+float implicit_triangle_wave_odd(float value, float period) {
+  return implicit_triangle_wave_even(value - period * 0.5, period);
 }
 
-vec2 implicitCadTriangleWaveOdd(vec2 value, vec2 period) {
+vec2 implicit_triangle_wave_odd(vec2 value, vec2 period) {
   return vec2(
-    implicitCadTriangleWaveOdd(value.x, period.x),
-    implicitCadTriangleWaveOdd(value.y, period.y)
+    implicit_triangle_wave_odd(value.x, period.x),
+    implicit_triangle_wave_odd(value.y, period.y)
   );
 }
 
-vec3 implicitCadTriangleWaveOdd(vec3 value, vec3 period) {
+vec3 implicit_triangle_wave_odd(vec3 value, vec3 period) {
   return vec3(
-    implicitCadTriangleWaveOdd(value.x, period.x),
-    implicitCadTriangleWaveOdd(value.y, period.y),
-    implicitCadTriangleWaveOdd(value.z, period.z)
+    implicit_triangle_wave_odd(value.x, period.x),
+    implicit_triangle_wave_odd(value.y, period.y),
+    implicit_triangle_wave_odd(value.z, period.z)
   );
 }
 
-float implicitCadTriangleWaveOddPositive(float value, float period) {
-  return implicitCadTriangleWaveOdd(value, period) + period * 0.25;
+float implicit_triangle_wave_odd_positive(float value, float period) {
+  return implicit_triangle_wave_odd(value, period) + period * 0.25;
 }
 
-vec2 implicitCadTriangleWaveOddPositive(vec2 value, vec2 period) {
+vec2 implicit_triangle_wave_odd_positive(vec2 value, vec2 period) {
   return vec2(
-    implicitCadTriangleWaveOddPositive(value.x, period.x),
-    implicitCadTriangleWaveOddPositive(value.y, period.y)
+    implicit_triangle_wave_odd_positive(value.x, period.x),
+    implicit_triangle_wave_odd_positive(value.y, period.y)
   );
 }
 
-vec3 implicitCadTriangleWaveOddPositive(vec3 value, vec3 period) {
+vec3 implicit_triangle_wave_odd_positive(vec3 value, vec3 period) {
   return vec3(
-    implicitCadTriangleWaveOddPositive(value.x, period.x),
-    implicitCadTriangleWaveOddPositive(value.y, period.y),
-    implicitCadTriangleWaveOddPositive(value.z, period.z)
+    implicit_triangle_wave_odd_positive(value.x, period.x),
+    implicit_triangle_wave_odd_positive(value.y, period.y),
+    implicit_triangle_wave_odd_positive(value.z, period.z)
   );
 }
 
-vec2 implicitCadRepeatCentered(vec2 p, vec2 period) {
+vec2 implicit_repeat_centered(vec2 p, vec2 period) {
   return mod(p + period * 0.5, period) - period * 0.5;
 }
 
-vec3 implicitCadRepeatCentered(vec3 p, vec3 period) {
+vec3 implicit_repeat_centered(vec3 p, vec3 period) {
   return mod(p + period * 0.5, period) - period * 0.5;
 }
 
-float implicitCadIntersectSharp(float a, float b) {
+float implicit_intersect_sharp(float a, float b) {
   return max(a, b);
 }
 
-float implicitCadUnionSharp(float a, float b) {
+float implicit_union_sharp(float a, float b) {
   return min(a, b);
 }
 
-float implicitCadIntersectRound(float a, float b, float radius) {
+float implicit_intersect_round(float a, float b, float radius) {
   float k = max(radius, 0.0);
   vec2 q = max(vec2(a, b) + k, 0.0);
   return min(-k, max(a, b)) + length(q);
 }
 
-float implicitCadUnionRound(float a, float b, float radius) {
-  return -implicitCadIntersectRound(-a, -b, radius);
+float implicit_union_round(float a, float b, float radius) {
+  return -implicit_intersect_round(-a, -b, radius);
 }
 
-float implicitCadIntersectChamfer(float a, float b, float radius) {
+float implicit_intersect_chamfer(float a, float b, float radius) {
   return max(max(a, b), (a + b + radius) * 0.7071067811865476);
 }
 
-float implicitCadUnionChamfer(float a, float b, float radius) {
-  return -implicitCadIntersectChamfer(-a, -b, radius);
+float implicit_union_chamfer(float a, float b, float radius) {
+  return -implicit_intersect_chamfer(-a, -b, radius);
 }
 
-float implicitCadIntersectExp(float a, float b, float radius) {
+float implicit_intersect_exp(float a, float b, float radius) {
   float k = max(radius, 1.0e-6) * 0.5;
   return k * log(exp(a / k) + exp(b / k));
 }
 
-float implicitCadUnionExp(float a, float b, float radius) {
-  return -implicitCadIntersectExp(-a, -b, radius);
+float implicit_union_exp(float a, float b, float radius) {
+  return -implicit_intersect_exp(-a, -b, radius);
 }
 
-float implicitCadIntersectLpNorm(float a, float b, float radius, float normPower) {
+float implicit_intersect_lp_norm(float a, float b, float radius, float normPower) {
   float k = max(radius, 0.0);
   float p = max(normPower, 1.0e-6);
   vec2 q = max(vec2(a, b) + k, 0.0);
   return min(-k, max(a, b)) + pow(pow(q.x, p) + pow(q.y, p), 1.0 / p);
 }
 
-float implicitCadUnionLpNorm(float a, float b, float radius, float normPower) {
-  return -implicitCadIntersectLpNorm(-a, -b, radius, normPower);
+float implicit_union_lp_norm(float a, float b, float radius, float normPower) {
+  return -implicit_intersect_lp_norm(-a, -b, radius, normPower);
 }
 
-float implicitCadIntersectRvachev(float a, float b, float radius) {
+float implicit_intersect_rvachev(float a, float b, float radius) {
   float sharp = max(a, b);
   float k = max(radius, 0.0);
   if (k <= 0.0) {
@@ -703,16 +708,16 @@ float implicitCadIntersectRvachev(float a, float b, float radius) {
   return sharp < -k ? sharp : mix(sharp, r0, s);
 }
 
-float implicitCadUnionRvachev(float a, float b, float radius) {
-  return -implicitCadIntersectRvachev(-a, -b, radius);
+float implicit_union_rvachev(float a, float b, float radius) {
+  return -implicit_intersect_rvachev(-a, -b, radius);
 }
 
-float implicitCadPlane2(vec2 p, vec2 origin, vec2 normal) {
+float implicit_plane2(vec2 p, vec2 origin, vec2 normal) {
   vec2 n = normalize(normal);
   return dot(p - origin, n);
 }
 
-float implicitCadLineSegment2(vec2 p, vec2 a, vec2 b) {
+float implicit_line_segment2(vec2 p, vec2 a, vec2 b) {
   vec2 segment = b - a;
   float segmentLengthSq = dot(segment, segment);
   if (segmentLengthSq < 1.0e-12) {
@@ -722,21 +727,21 @@ float implicitCadLineSegment2(vec2 p, vec2 a, vec2 b) {
   return length(p - (a + t * segment));
 }
 
-float implicitCadSphere(vec3 p, vec3 center, float radius) {
+float implicit_sphere(vec3 p, vec3 center, float radius) {
   return length(p - center) - radius;
 }
 
-float implicitCadBoxCentered(vec3 p, vec3 size, vec3 center) {
+float implicit_box_centered(vec3 p, vec3 size, vec3 center) {
   vec3 q = abs(p - center) - size * 0.5;
   return length(max(q, 0.0)) + min(max(q.x, max(q.y, q.z)), 0.0);
 }
 
-float implicitCadPlane(vec3 p, vec3 origin, vec3 normal) {
+float implicit_plane(vec3 p, vec3 origin, vec3 normal) {
   vec3 n = normalize(normal);
   return dot(p - origin, n);
 }
 
-float implicitCadLineSegment(vec3 p, vec3 a, vec3 b) {
+float implicit_line_segment(vec3 p, vec3 a, vec3 b) {
   vec3 segment = b - a;
   float segmentLengthSq = dot(segment, segment);
   if (segmentLengthSq < 1.0e-12) {
@@ -746,12 +751,12 @@ float implicitCadLineSegment(vec3 p, vec3 a, vec3 b) {
   return length(p - (a + t * segment));
 }
 
-float implicitCadTorus(vec3 p, float majorRadius, float minorRadius) {
+float implicit_torus(vec3 p, float majorRadius, float minorRadius) {
   vec2 q = vec2(length(p.xy) - majorRadius, p.z);
   return length(q) - minorRadius;
 }
 
-float implicitCadAxis(vec3 p, vec3 origin, vec3 direction) {
+float implicit_axis(vec3 p, vec3 origin, vec3 direction) {
   float directionLength = length(direction);
   if (directionLength < 1.0e-12) {
     return length(p - origin);
@@ -761,34 +766,34 @@ float implicitCadAxis(vec3 p, vec3 origin, vec3 direction) {
   return length(toPoint - dot(toPoint, axis) * axis);
 }
 
-float implicitCadCylinder(vec3 p, vec3 origin, vec3 direction, float radius) {
-  return implicitCadAxis(p, origin, direction) - radius;
+float implicit_cylinder(vec3 p, vec3 origin, vec3 direction, float radius) {
+  return implicit_axis(p, origin, direction) - radius;
 }
 
-float implicitCadCylinderCapped(vec3 p, vec3 a, vec3 b, float radius) {
+float implicit_cylinder_capped(vec3 p, vec3 a, vec3 b, float radius) {
   vec3 axis = b - a;
-  float side = implicitCadCylinder(p, a, axis, radius);
-  float capA = -implicitCadPlane(p, a, axis);
-  float capB = implicitCadPlane(p, b, axis);
+  float side = implicit_cylinder(p, a, axis, radius);
+  float capA = -implicit_plane(p, a, axis);
+  float capB = implicit_plane(p, b, axis);
   return max(side, max(capA, capB));
 }
 
-float implicitCadCapsule(vec3 p, vec3 a, vec3 b, float radius) {
-  return implicitCadLineSegment(p, a, b) - radius;
+float implicit_capsule(vec3 p, vec3 a, vec3 b, float radius) {
+  return implicit_line_segment(p, a, b) - radius;
 }
 
-float implicitCadConeCapsule(vec3 p, vec3 a, vec3 b, float radiusA, float radiusB) {
+float implicit_cone_capsule(vec3 p, vec3 a, vec3 b, float radiusA, float radiusB) {
   vec3 axis = b - a;
   float axisLengthSq = dot(axis, axis);
   if (axisLengthSq < 1.0e-12) {
-    return implicitCadSphere(p, a, radiusA);
+    return implicit_sphere(p, a, radiusA);
   }
   float t = clamp(dot(p - a, axis) / axisLengthSq, 0.0, 1.0);
   float radius = mix(radiusA, radiusB, t);
   return length(p - (a + t * axis)) - radius;
 }
 
-float implicitCadCone(vec3 p, vec3 apex, vec3 direction, float halfAngle) {
+float implicit_cone(vec3 p, vec3 apex, vec3 direction, float halfAngle) {
   float directionLength = length(direction);
   if (directionLength < 1.0e-12) {
     return length(p - apex);
@@ -800,27 +805,27 @@ float implicitCadCone(vec3 p, vec3 apex, vec3 direction, float halfAngle) {
   return perpendicular - axial * tan(halfAngle);
 }
 
-float implicitCadConeCapped(vec3 p, vec3 a, vec3 b, float radiusA, float radiusB) {
+float implicit_cone_capped(vec3 p, vec3 a, vec3 b, float radiusA, float radiusB) {
   vec3 axis = b - a;
   float axisLength = length(axis);
   if (axisLength < 1.0e-12) {
-    return implicitCadSphere(p, a, radiusA);
+    return implicit_sphere(p, a, radiusA);
   }
   float halfAngle = atan(abs(radiusB - radiusA), axisLength);
   float coneDistance = radiusA < radiusB
-    ? implicitCadCone(p, a, axis, halfAngle) - radiusA
-    : implicitCadCone(p, b, -axis, halfAngle) - radiusB;
-  float capA = -implicitCadPlane(p, a, axis);
-  float capB = implicitCadPlane(p, b, axis);
+    ? implicit_cone(p, a, axis, halfAngle) - radiusA
+    : implicit_cone(p, b, -axis, halfAngle) - radiusB;
+  float capA = -implicit_plane(p, a, axis);
+  float capB = implicit_plane(p, b, axis);
   return max(coneDistance, max(capA, capB));
 }
 
-float implicitCadShell(float distanceValue, float thickness, float bias) {
+float implicit_shell(float distanceValue, float thickness, float bias) {
   float halfThickness = thickness * 0.5;
   return abs(distanceValue + bias * halfThickness) - halfThickness;
 }
 
-vec3 implicitCadRotateAxis(vec3 p, vec3 origin, vec3 direction, float angle) {
+vec3 implicit_rotate_axis(vec3 p, vec3 origin, vec3 direction, float angle) {
   vec3 k = normalize(direction);
   vec3 local = p - origin;
   float c = cos(angle);
@@ -828,20 +833,20 @@ vec3 implicitCadRotateAxis(vec3 p, vec3 origin, vec3 direction, float angle) {
   return origin + local * c + cross(k, local) * s + k * dot(k, local) * (1.0 - c);
 }
 
-vec3 implicitCadRemapCylindrical(vec3 p, float circumference) {
+vec3 implicit_remap_cylindrical(vec3 p, float circumference) {
   float radial = length(p.xy);
   float theta = atan(p.y, p.x);
   return vec3(radial, theta * (circumference / 6.283185307179586), p.z);
 }
 
-float implicitCadTpmsGyroid(vec3 p, vec3 period, vec3 drop) {
+float implicit_tpms_gyroid(vec3 p, vec3 period, vec3 drop) {
   vec3 xyz = p * (6.283185307179586 / period);
   vec3 yzx = xyz.yzx;
   float field = dot(drop, sin(xyz) * cos(yzx));
   return field * (period.x + period.y + period.z) / 18.0;
 }
 
-float implicitCadTpmsSchwarz(vec3 p, vec3 period, vec3 drop, float gyroidBlend) {
+float implicit_tpms_schwarz(vec3 p, vec3 period, vec3 drop, float gyroidBlend) {
   vec3 xyz = p * (6.283185307179586 / period);
   vec3 yzx = xyz.yzx;
   vec3 mixTerm = vec3(-(1.0 - gyroidBlend)) + sin(xyz) * gyroidBlend;
@@ -849,7 +854,7 @@ float implicitCadTpmsSchwarz(vec3 p, vec3 period, vec3 drop, float gyroidBlend) 
   return field * (period.x + period.y + period.z) / 36.0;
 }
 
-float implicitCadTpmsDiamond(vec3 p, vec3 period, vec3 drop, float gyroidBlend) {
+float implicit_tpms_diamond(vec3 p, vec3 period, vec3 drop, float gyroidBlend) {
   vec3 xyz = p * (6.283185307179586 / period);
   vec3 yzx = xyz.yzx;
   vec3 zxy = xyz.zxy;
@@ -862,7 +867,7 @@ float implicitCadTpmsDiamond(vec3 p, vec3 period, vec3 drop, float gyroidBlend) 
   return (term1 + term2) * (period.x + period.y + period.z) / (6.0 * 2.8284271247461903 * 2.0);
 }
 
-float implicitCadTpmsLidinoid(vec3 p, vec3 period, vec3 drop, float gyroidBlend) {
+float implicit_tpms_lidinoid(vec3 p, vec3 period, vec3 drop, float gyroidBlend) {
   vec3 xyz = p * (6.283185307179586 / period);
   vec3 yzx = xyz.yzx;
   vec3 zxy = xyz.zxy;
@@ -874,7 +879,7 @@ float implicitCadTpmsLidinoid(vec3 p, vec3 period, vec3 drop, float gyroidBlend)
   return (term1 - term2) * (period.x + period.y + period.z) / 72.0;
 }
 
-float implicitCadTpmsNeovius(vec3 p, vec3 period, vec3 drop, float schwarzBlend) {
+float implicit_tpms_neovius(vec3 p, vec3 period, vec3 drop, float schwarzBlend) {
   vec3 xyz = p * (6.283185307179586 / period);
   vec3 cosDrop = cos(xyz) * drop;
   float term1 = -dot(cosDrop, vec3(1.0));
@@ -882,7 +887,7 @@ float implicitCadTpmsNeovius(vec3 p, vec3 period, vec3 drop, float schwarzBlend)
   return (term1 - term2) * (period.x + period.y + period.z) / (6.0 * (26.0 / 3.0));
 }
 
-float implicitCadTpmsSplitP(vec3 p, vec3 period, float lidinoidBlend, float gyroidOctave, float schwarzOctave) {
+float implicit_tpms_split_p(vec3 p, vec3 period, float lidinoidBlend, float gyroidOctave, float schwarzOctave) {
   vec3 xyz = p * (6.283185307179586 / period);
   vec3 yzx = xyz.yzx;
   vec3 zxy = xyz.zxy;
@@ -894,7 +899,7 @@ float implicitCadTpmsSplitP(vec3 p, vec3 period, float lidinoidBlend, float gyro
   return (term1 + term2 + term3) * (period.x + period.y + period.z) / 36.0;
 }
 
-float implicitCadTpmsIwp(vec3 p, vec3 period, vec3 drop) {
+float implicit_tpms_iwp(vec3 p, vec3 period, vec3 drop) {
   vec3 xyz = p * (6.283185307179586 / period);
   vec3 yzx = xyz.yzx;
   float term1 = 2.0 * dot(drop * cos(xyz) * cos(yzx), vec3(1.0));
@@ -902,78 +907,78 @@ float implicitCadTpmsIwp(vec3 p, vec3 period, vec3 drop) {
   return (term1 - term2) * (period.x + period.y + period.z) / 48.0;
 }
 
-float implicitCadCubicGrid(vec3 p, vec3 size) {
-  vec3 d = implicitCadTriangleWaveEvenPositive(p, size);
+float implicit_cubic_grid(vec3 p, vec3 size) {
+  vec3 d = implicit_triangle_wave_even_positive(p, size);
   return min(d.x, min(d.y, d.z));
 }
 
-float implicitCadSquareHoneycomb(vec3 p, vec2 size) {
-  vec2 d = implicitCadTriangleWaveEvenPositive(p.xy, size);
+float implicit_square_honeycomb(vec3 p, vec2 size) {
+  vec2 d = implicit_triangle_wave_even_positive(p.xy, size);
   return min(d.x, d.y);
 }
 
-float implicitCadSquareHoneycombReinforced(vec3 p, vec2 size, float rotation, float rotation2, float hasRotation2) {
+float implicit_square_honeycomb_reinforced(vec3 p, vec2 size, float rotation, float rotation2, float hasRotation2) {
   vec2 pxy = p.xy;
-  vec2 grid = implicitCadTriangleWaveEvenPositive(pxy, size);
+  vec2 grid = implicit_triangle_wave_even_positive(pxy, size);
   float squareGrid = min(grid.x, grid.y);
-  vec2 repeated = implicitCadRepeatCentered(pxy, size);
+  vec2 repeated = implicit_repeat_centered(pxy, size);
   float angle = 3.141592653589793 * rotation;
-  float diagonal = abs(implicitCadPlane2(repeated, vec2(0.0), vec2(cos(angle), sin(angle))));
+  float diagonal = abs(implicit_plane2(repeated, vec2(0.0), vec2(cos(angle), sin(angle))));
   if (hasRotation2 > 0.5) {
     float angle2 = 3.141592653589793 * rotation2;
-    float diagonal2 = abs(implicitCadPlane2(repeated, vec2(0.0), vec2(cos(angle2), sin(angle2))));
+    float diagonal2 = abs(implicit_plane2(repeated, vec2(0.0), vec2(cos(angle2), sin(angle2))));
     diagonal = min(diagonal, diagonal2);
   }
   return min(squareGrid, diagonal);
 }
 
-float implicitCadSquareDiagonalHoneycomb(vec3 p, vec2 size) {
+float implicit_square_diagonal_honeycomb(vec3 p, vec2 size) {
   vec2 period = vec2(size.x + size.y);
-  vec2 repeated = implicitCadRepeatCentered(p.xy, period);
-  float positive = abs(implicitCadPlane2(repeated, vec2(0.0), vec2(size.y, size.x)));
-  float negative = abs(implicitCadPlane2(repeated, vec2(0.0), vec2(size.y, -size.x)));
+  vec2 repeated = implicit_repeat_centered(p.xy, period);
+  float positive = abs(implicit_plane2(repeated, vec2(0.0), vec2(size.y, size.x)));
+  float negative = abs(implicit_plane2(repeated, vec2(0.0), vec2(size.y, -size.x)));
   return min(positive, negative);
 }
 
-float implicitCadOctetHoneycomb(vec3 p, vec2 size) {
+float implicit_octet_honeycomb(vec3 p, vec2 size) {
   vec2 pxy = p.xy;
-  float square = implicitCadSquareHoneycomb(p, size);
-  vec2 oddGrid = implicitCadTriangleWaveOddPositive(pxy, size);
+  float square = implicit_square_honeycomb(p, size);
+  vec2 oddGrid = implicit_triangle_wave_odd_positive(pxy, size);
   float planeGrid = min(oddGrid.x, oddGrid.y);
   float diagonalPeriod = length(size) * 0.5;
   vec2 rotated = vec2((pxy.x + pxy.y) / 1.4142135623730951, (pxy.x - pxy.y) / 1.4142135623730951);
-  vec2 diagonal = implicitCadTriangleWaveOddPositive(rotated, vec2(diagonalPeriod));
+  vec2 diagonal = implicit_triangle_wave_odd_positive(rotated, vec2(diagonalPeriod));
   return min(min(square, planeGrid), min(diagonal.x, diagonal.y));
 }
 
-float implicitCadHexagonalHoneycomb(vec3 p, vec2 size, float setback) {
+float implicit_hexagonal_honeycomb(vec3 p, vec2 size, float setback) {
   vec2 pxy = p.xy;
   vec2 halfSize = size * 0.5;
   vec2 quarterSize = size * 0.25;
   vec2 starCenter = vec2(0.0, (1.0 - setback) * halfSize.y);
   vec2 transition = vec2(halfSize.x, setback * halfSize.y);
-  vec2 folded = abs(implicitCadRepeatCentered(pxy, size));
+  vec2 folded = abs(implicit_repeat_centered(pxy, size));
   vec2 reflected = vec2(folded.x - halfSize.x, halfSize.y - folded.y);
 
   float foldedStar = min(
-    implicitCadLineSegment2(folded, starCenter, vec2(0.0, size.y)),
+    implicit_line_segment2(folded, starCenter, vec2(0.0, size.y)),
     min(
-      implicitCadLineSegment2(folded, starCenter, transition),
-      implicitCadLineSegment2(folded, starCenter, vec2(-transition.x, transition.y))
+      implicit_line_segment2(folded, starCenter, transition),
+      implicit_line_segment2(folded, starCenter, vec2(-transition.x, transition.y))
     )
   );
   float reflectedStar = min(
-    implicitCadLineSegment2(reflected, starCenter, vec2(0.0, size.y)),
+    implicit_line_segment2(reflected, starCenter, vec2(0.0, size.y)),
     min(
-      implicitCadLineSegment2(reflected, starCenter, transition),
-      implicitCadLineSegment2(reflected, starCenter, vec2(-transition.x, transition.y))
+      implicit_line_segment2(reflected, starCenter, transition),
+      implicit_line_segment2(reflected, starCenter, vec2(-transition.x, transition.y))
     )
   );
   return folded.x < quarterSize.x ? foldedStar : reflectedStar;
 }
 
-float implicitCadTriangularHoneycomb(vec3 p, vec2 size) {
-  vec2 folded = abs(implicitCadRepeatCentered(p.xy, size));
+float implicit_triangular_honeycomb(vec3 p, vec2 size) {
+  vec2 folded = abs(implicit_repeat_centered(p.xy, size));
   vec2 halfSize = size * 0.5;
   vec2 quarterSize = size * 0.25;
   vec2 normalH = vec2(0.0, 1.0);
@@ -993,19 +998,19 @@ float implicitCadTriangularHoneycomb(vec3 p, vec2 size) {
 
 ${glslSource}
 
-float implicitCadDistance(vec3 p) {
+float implicit_distance(vec3 p) {
   return sdf(p);
 }
 
-vec3 implicitCadColor(vec3 p, vec3 normal) {
+vec3 implicit_color(vec3 p, vec3 normal) {
   ${hasColorFunction ? "return clamp(color(p, normal), vec3(0.0), vec3(1.0));" : "return vec3(1.0);"}
 }
 
-float implicitCadSceneSdf(vec3 p) {
-  return implicitCadDistance(p);
+float implicit_scene_sdf(vec3 p) {
+  return implicit_distance(p);
 }
 
-vec2 implicitCadRaySlab(float origin, float direction, float boundsMin, float boundsMax) {
+vec2 implicit_ray_slab(float origin, float direction, float boundsMin, float boundsMax) {
   if (abs(direction) < 1.0e-8) {
     return origin < boundsMin || origin > boundsMax
       ? vec2(1.0, -1.0)
@@ -1017,46 +1022,46 @@ vec2 implicitCadRaySlab(float origin, float direction, float boundsMin, float bo
   return vec2(min(nearPlane, farPlane), max(nearPlane, farPlane));
 }
 
-vec2 implicitCadRayBounds(vec3 origin, vec3 direction, vec3 boundsMin, vec3 boundsMax) {
-  vec2 x = implicitCadRaySlab(origin.x, direction.x, boundsMin.x, boundsMax.x);
-  vec2 y = implicitCadRaySlab(origin.y, direction.y, boundsMin.y, boundsMax.y);
-  vec2 z = implicitCadRaySlab(origin.z, direction.z, boundsMin.z, boundsMax.z);
+vec2 implicit_ray_bounds(vec3 origin, vec3 direction, vec3 boundsMin, vec3 boundsMax) {
+  vec2 x = implicit_ray_slab(origin.x, direction.x, boundsMin.x, boundsMax.x);
+  vec2 y = implicit_ray_slab(origin.y, direction.y, boundsMin.y, boundsMax.y);
+  vec2 z = implicit_ray_slab(origin.z, direction.z, boundsMin.z, boundsMax.z);
   float tMin = max(max(x.x, y.x), z.x);
   float tMax = min(min(x.y, y.y), z.y);
   return vec2(tMin, tMax);
 }
 
-vec3 implicitCadEstimateNormal(vec3 p) {
+vec3 implicit_estimate_normal(vec3 p) {
   float e = uNormalEpsilon;
   vec2 k = vec2(1.0, -1.0);
   return normalize(
-    k.xyy * implicitCadSceneSdf(p + k.xyy * e) +
-    k.yyx * implicitCadSceneSdf(p + k.yyx * e) +
-    k.yxy * implicitCadSceneSdf(p + k.yxy * e) +
-    k.xxx * implicitCadSceneSdf(p + k.xxx * e)
+    k.xyy * implicit_scene_sdf(p + k.xyy * e) +
+    k.yyx * implicit_scene_sdf(p + k.yyx * e) +
+    k.yxy * implicit_scene_sdf(p + k.yxy * e) +
+    k.xxx * implicit_scene_sdf(p + k.xxx * e)
   );
 }
 
-float implicitCadAmbientOcclusion(vec3 p, vec3 normal) {
+float implicit_ambient_occlusion(vec3 p, vec3 normal) {
   float occlusion = 0.0;
   float scale = 1.0;
   for (int sampleIndex = 1; sampleIndex <= 5; sampleIndex += 1) {
     float distanceAlongNormal = 0.018 * float(sampleIndex) * uMaxDistance;
-    float sampled = implicitCadSceneSdf(p + normal * distanceAlongNormal);
+    float sampled = implicit_scene_sdf(p + normal * distanceAlongNormal);
     occlusion += (distanceAlongNormal - sampled) * scale;
     scale *= 0.58;
   }
   return clamp(1.0 - 0.055 * occlusion, 0.46, 1.0);
 }
 
-float implicitCadSoftShadow(vec3 origin, vec3 direction, float maxDistance) {
+float implicit_soft_shadow(vec3 origin, vec3 direction, float maxDistance) {
   float shadow = 1.0;
   float t = uHitEpsilon * 8.0;
   for (int shadowStep = 0; shadowStep < 28; shadowStep += 1) {
     if (t >= maxDistance) {
       break;
     }
-    float h = implicitCadSceneSdf(origin + direction * t);
+    float h = implicit_scene_sdf(origin + direction * t);
     if (h < uHitEpsilon) {
       return 0.2;
     }
@@ -1066,7 +1071,7 @@ float implicitCadSoftShadow(vec3 origin, vec3 direction, float maxDistance) {
   return clamp(shadow, 0.2, 1.0);
 }
 
-vec3 implicitCadBackgroundColor(vec2 uv) {
+vec3 implicit_background_color(vec2 uv) {
   if (uBackgroundMode < 0.5) {
     return uBackgroundColor;
   }
@@ -1079,7 +1084,7 @@ vec3 implicitCadBackgroundColor(vec2 uv) {
   return mix(uBackgroundColorA, uBackgroundColorB, radial);
 }
 
-vec3 implicitCadRayDirection(vec2 uv) {
+vec3 implicit_ray_direction(vec2 uv) {
   vec2 ndc = uv * 2.0 - 1.0;
   vec4 clip = vec4(ndc, -1.0, 1.0);
   vec4 view = uProjectionInverse * clip;
@@ -1090,9 +1095,9 @@ vec3 implicitCadRayDirection(vec2 uv) {
 void main() {
   vec3 rayOrigin = uCameraPosition;
   vec2 screenUv = gl_FragCoord.xy / uResolution;
-  vec3 backgroundColor = implicitCadBackgroundColor(screenUv);
-  vec3 rayDirection = implicitCadRayDirection(screenUv);
-  vec2 boundsHit = implicitCadRayBounds(rayOrigin, rayDirection, uBoundsMin, uBoundsMax);
+  vec3 backgroundColor = implicit_background_color(screenUv);
+  vec3 rayDirection = implicit_ray_direction(screenUv);
+  vec2 boundsHit = implicit_ray_bounds(rayOrigin, rayDirection, uBoundsMin, uBoundsMax);
   float t = max(boundsHit.x, 0.0);
   float tEnd = min(boundsHit.y, uMaxDistance);
   if (boundsHit.x > boundsHit.y || tEnd < 0.0) {
@@ -1103,10 +1108,13 @@ void main() {
   bool hit = false;
   float previousT = t;
   vec3 p = rayOrigin;
-  for (int stepIndex = 0; stepIndex < IMPLICIT_CAD_MAX_STEPS; stepIndex += 1) {
+  for (int stepIndex = 0; stepIndex < IMPLICIT_MAX_STEPS; stepIndex += 1) {
+    if (float(stepIndex) >= uStepBudget) {
+      break;
+    }
     previousT = t;
     p = rayOrigin + rayDirection * t;
-    float distanceValue = implicitCadSceneSdf(p);
+    float distanceValue = implicit_scene_sdf(p);
     float hitEpsilon = max(uHitEpsilon, t * 0.00028);
     if (distanceValue < hitEpsilon) {
       hit = true;
@@ -1128,7 +1136,7 @@ void main() {
   float refineFar = t;
   for (int refineIndex = 0; refineIndex < 5; refineIndex += 1) {
     float mid = (refineNear + refineFar) * 0.5;
-    float midDistance = implicitCadSceneSdf(rayOrigin + rayDirection * mid);
+    float midDistance = implicit_scene_sdf(rayOrigin + rayDirection * mid);
     if (midDistance > 0.0) {
       refineNear = mid;
     } else {
@@ -1136,19 +1144,27 @@ void main() {
     }
   }
   p = rayOrigin + rayDirection * refineFar;
-  vec3 normal = implicitCadEstimateNormal(p);
+  vec3 normal = implicit_estimate_normal(p);
   vec3 viewDirection = normalize(rayOrigin - p);
   vec3 lightDirection = normalize(vec3(-0.35, 0.68, 0.58) + viewDirection * 0.35);
   float diffuse = clamp(dot(normal, lightDirection), 0.0, 1.0);
-  float shadow = mix(
-    1.0,
-    implicitCadSoftShadow(p + normal * uHitEpsilon * 4.0, lightDirection, uMaxDistance * 0.55),
-    clamp(uShadowStrength, 0.0, 1.0)
-  );
+  float shadowStrength = clamp(uShadowStrength, 0.0, 1.0);
+  float shadow = 1.0;
+  if (shadowStrength > 0.001) {
+    shadow = mix(
+      1.0,
+      implicit_soft_shadow(p + normal * uHitEpsilon * 4.0, lightDirection, uMaxDistance * 0.55),
+      shadowStrength
+    );
+  }
   float rim = pow(1.0 - clamp(dot(normal, viewDirection), 0.0, 1.0), 2.4);
-  float ao = mix(1.0, implicitCadAmbientOcclusion(p, normal), clamp(uAmbientOcclusionStrength, 0.0, 1.0));
+  float ambientOcclusionStrength = clamp(uAmbientOcclusionStrength, 0.0, 1.0);
+  float ao = 1.0;
+  if (ambientOcclusionStrength > 0.001) {
+    ao = mix(1.0, implicit_ambient_occlusion(p, normal), ambientOcclusionStrength);
+  }
   ao *= clamp(0.78 + 0.22 * normal.z, 0.52, 1.0);
-  vec3 sourceColor = clamp(implicitCadColor(p, normal), vec3(0.0), vec3(1.0));
+  vec3 sourceColor = clamp(implicit_color(p, normal), vec3(0.0), vec3(1.0));
   vec3 surfaceColor = mix(uSurfaceColor, sourceColor, clamp(uUseProceduralColor, 0.0, 1.0));
   vec3 color = surfaceColor * (0.34 + diffuse * shadow * 0.7) * ao;
   color += vec3(0.62, 0.78, 1.0) * rim * 0.16 * clamp(uRimStrength, 0.0, 1.0);
@@ -1210,6 +1226,7 @@ export function createImplicitCadMaterial(THREE, model) {
       uMaxDistance: { value: normalized.maxDistance },
       uStepScale: { value: normalized.stepScale },
       uMaxStep: { value: normalized.maxStep },
+      uStepBudget: { value: normalized.maxSteps },
       uShadowStrength: { value: 1 },
       uAmbientOcclusionStrength: { value: 1 },
       uRimStrength: { value: 1 },
@@ -1334,6 +1351,11 @@ export function updateImplicitCadGraphicsUniforms(material, model, graphicsSetti
   if (uniforms.uMaxStep) {
     uniforms.uMaxStep.value = Math.max(finiteNumber(model?.maxStep, 1) / detail, 1e-6);
   }
+  if (uniforms.uStepBudget) {
+    const maxSteps = Math.max(Math.floor(finiteNumber(model?.maxSteps, 192)), 1);
+    const requestedStepBudget = Math.floor(finiteNumber(graphicsSettings?.stepBudget, maxSteps));
+    uniforms.uStepBudget.value = Math.max(Math.min(requestedStepBudget, maxSteps), 1);
+  }
   if (uniforms.uShadowStrength) {
     uniforms.uShadowStrength.value = settings.shadows ? 1 : 0;
   }
@@ -1426,6 +1448,7 @@ export async function renderImplicitCadToDataUrl(THREE, modelValue, {
   updateImplicitCadGraphicsUniforms(material, model, graphics);
   const captureCamera = configureImplicitCadCamera(THREE, model, width, height, camera, {
     zoom: render.zoom,
+    frameMargin: render.frameMargin,
   });
   updateImplicitCadMaterialUniforms(material, captureCamera, width, height);
   const screenCamera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);

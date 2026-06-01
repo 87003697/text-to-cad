@@ -182,26 +182,26 @@ function setSwizzle(target, swizzle, value) {
   return target;
 }
 
-function implicitCadLinearMap(value, inMin, inMax, outMin, outMax) {
+function implicit_linear_map(value, inMin, inMax, outMin, outMax) {
   const slope = (outMax - outMin) / (inMax - inMin);
   return (value - inMin) * slope + outMin;
 }
 
-function implicitCadRamp(value, inMin, inMax, outMin, outMax) {
-  return Math.min(Math.max(implicitCadLinearMap(value, inMin, inMax, outMin, outMax), outMin), outMax);
+function implicit_ramp(value, inMin, inMax, outMin, outMax) {
+  return Math.min(Math.max(implicit_linear_map(value, inMin, inMax, outMin, outMax), outMin), outMax);
 }
 
-function implicitCadTwoBodyField(a, b) {
+function implicit_two_body_field(a, b) {
   return (a - b) / (a + b);
 }
 
-function implicitCadTwoBodyPolar(a, b, angle) {
+function implicit_two_body_polar(a, b, angle) {
   return a * Math.cos(angle) + b * Math.sin(angle);
 }
 
-function implicitCadTriangleWaveEven(value, period) {
+function implicit_triangle_wave_even(value, period) {
   if (isVector(value) || isVector(period)) {
-    return mapBinary(value, period, implicitCadTriangleWaveEven);
+    return mapBinary(value, period, implicit_triangle_wave_even);
   }
   const halfPeriod = period * 0.5;
   const quarterPeriod = period * 0.25;
@@ -209,45 +209,45 @@ function implicitCadTriangleWaveEven(value, period) {
   return quarterPeriod - Math.abs(wrapped - halfPeriod);
 }
 
-function implicitCadTriangleWaveEvenPositive(value, period) {
-  return add(implicitCadTriangleWaveEven(value, period), mul(period, 0.25));
+function implicit_triangle_wave_even_positive(value, period) {
+  return add(implicit_triangle_wave_even(value, period), mul(period, 0.25));
 }
 
-function implicitCadTriangleWaveOdd(value, period) {
-  return implicitCadTriangleWaveEven(sub(value, mul(period, 0.5)), period);
+function implicit_triangle_wave_odd(value, period) {
+  return implicit_triangle_wave_even(sub(value, mul(period, 0.5)), period);
 }
 
-function implicitCadTriangleWaveOddPositive(value, period) {
-  return add(implicitCadTriangleWaveOdd(value, period), mul(period, 0.25));
+function implicit_triangle_wave_odd_positive(value, period) {
+  return add(implicit_triangle_wave_odd(value, period), mul(period, 0.25));
 }
 
-function implicitCadRepeatCentered(p, period) {
+function implicit_repeat_centered(p, period) {
   return sub(mod(add(p, mul(period, 0.5)), period), mul(period, 0.5));
 }
 
-function implicitCadIntersectRound(a, b, radius) {
+function implicit_intersect_round(a, b, radius) {
   const k = Math.max(radius, 0);
   const q = maxValue(add(vec2(a, b), k), 0);
   return Math.min(-k, Math.max(a, b)) + length(q);
 }
 
-function implicitCadIntersectChamfer(a, b, radius) {
+function implicit_intersect_chamfer(a, b, radius) {
   return Math.max(Math.max(a, b), (a + b + radius) * 0.7071067811865476);
 }
 
-function implicitCadIntersectExp(a, b, radius) {
+function implicit_intersect_exp(a, b, radius) {
   const k = Math.max(radius, 1e-6) * 0.5;
   return k * Math.log(Math.exp(a / k) + Math.exp(b / k));
 }
 
-function implicitCadIntersectLpNorm(a, b, radius, normPower) {
+function implicit_intersect_lp_norm(a, b, radius, normPower) {
   const k = Math.max(radius, 0);
   const p = Math.max(normPower, 1e-6);
   const q = maxValue(add(vec2(a, b), k), 0);
   return Math.min(-k, Math.max(a, b)) + Math.pow(Math.pow(q[0], p) + Math.pow(q[1], p), 1 / p);
 }
 
-function implicitCadIntersectRvachev(a, b, radius) {
+function implicit_intersect_rvachev(a, b, radius) {
   const sharp = Math.max(a, b);
   const k = Math.max(radius, 0);
   if (k <= 0) {
@@ -290,30 +290,30 @@ const BUILTINS = {
   fract: (value) => mapUnary(value, (component) => component - Math.floor(component)),
   sign: (value) => mapUnary(value, Math.sign),
 
-  implicitCadClamp01: (value) => clamp(value, 0, 1),
-  implicitCadLinearMap,
-  implicitCadRamp,
-  implicitCadTwoBodyField,
-  implicitCadTwoBodyPolar,
-  implicitCadTriangleWaveEven,
-  implicitCadTriangleWaveEvenPositive,
-  implicitCadTriangleWaveOdd,
-  implicitCadTriangleWaveOddPositive,
-  implicitCadRepeatCentered,
-  implicitCadIntersectSharp: (a, b) => Math.max(a, b),
-  implicitCadUnionSharp: (a, b) => Math.min(a, b),
-  implicitCadIntersectRound,
-  implicitCadUnionRound: (a, b, radius) => -implicitCadIntersectRound(-a, -b, radius),
-  implicitCadIntersectChamfer,
-  implicitCadUnionChamfer: (a, b, radius) => -implicitCadIntersectChamfer(-a, -b, radius),
-  implicitCadIntersectExp,
-  implicitCadUnionExp: (a, b, radius) => -implicitCadIntersectExp(-a, -b, radius),
-  implicitCadIntersectLpNorm,
-  implicitCadUnionLpNorm: (a, b, radius, normPower) => -implicitCadIntersectLpNorm(-a, -b, radius, normPower),
-  implicitCadIntersectRvachev,
-  implicitCadUnionRvachev: (a, b, radius) => -implicitCadIntersectRvachev(-a, -b, radius),
-  implicitCadPlane2: (p, origin, normal) => dot(sub(p, origin), normalize(normal)),
-  implicitCadLineSegment2: (p, a, b) => {
+  implicit_clamp01: (value) => clamp(value, 0, 1),
+  implicit_linear_map,
+  implicit_ramp,
+  implicit_two_body_field,
+  implicit_two_body_polar,
+  implicit_triangle_wave_even,
+  implicit_triangle_wave_even_positive,
+  implicit_triangle_wave_odd,
+  implicit_triangle_wave_odd_positive,
+  implicit_repeat_centered,
+  implicit_intersect_sharp: (a, b) => Math.max(a, b),
+  implicit_union_sharp: (a, b) => Math.min(a, b),
+  implicit_intersect_round,
+  implicit_union_round: (a, b, radius) => -implicit_intersect_round(-a, -b, radius),
+  implicit_intersect_chamfer,
+  implicit_union_chamfer: (a, b, radius) => -implicit_intersect_chamfer(-a, -b, radius),
+  implicit_intersect_exp,
+  implicit_union_exp: (a, b, radius) => -implicit_intersect_exp(-a, -b, radius),
+  implicit_intersect_lp_norm,
+  implicit_union_lp_norm: (a, b, radius, normPower) => -implicit_intersect_lp_norm(-a, -b, radius, normPower),
+  implicit_intersect_rvachev,
+  implicit_union_rvachev: (a, b, radius) => -implicit_intersect_rvachev(-a, -b, radius),
+  implicit_plane2: (p, origin, normal) => dot(sub(p, origin), normalize(normal)),
+  implicit_line_segment2: (p, a, b) => {
     const segment = sub(b, a);
     const segmentLengthSq = dot(segment, segment);
     if (segmentLengthSq < 1e-12) {
@@ -322,13 +322,13 @@ const BUILTINS = {
     const t = clamp(dot(sub(p, a), segment) / segmentLengthSq, 0, 1);
     return length(sub(p, add(a, mul(t, segment))));
   },
-  implicitCadSphere: (p, center, radius) => length(sub(p, center)) - radius,
-  implicitCadBoxCentered: (p, size, center) => {
+  implicit_sphere: (p, center, radius) => length(sub(p, center)) - radius,
+  implicit_box_centered: (p, size, center) => {
     const q = sub(abs(sub(p, center)), mul(size, 0.5));
     return length(maxValue(q, 0)) + Math.min(Math.max(q[0], Math.max(q[1], q[2])), 0);
   },
-  implicitCadPlane: (p, origin, normal) => dot(sub(p, origin), normalize(normal)),
-  implicitCadLineSegment: (p, a, b) => {
+  implicit_plane: (p, origin, normal) => dot(sub(p, origin), normalize(normal)),
+  implicit_line_segment: (p, a, b) => {
     const segment = sub(b, a);
     const segmentLengthSq = dot(segment, segment);
     if (segmentLengthSq < 1e-12) {
@@ -337,11 +337,11 @@ const BUILTINS = {
     const t = clamp(dot(sub(p, a), segment) / segmentLengthSq, 0, 1);
     return length(sub(p, add(a, mul(t, segment))));
   },
-  implicitCadTorus: (p, majorRadius, minorRadius) => {
+  implicit_torus: (p, majorRadius, minorRadius) => {
     const q = vec2(length(getSwizzle(p, "xy")) - majorRadius, getSwizzle(p, "z"));
     return length(q) - minorRadius;
   },
-  implicitCadAxis: (p, origin, direction) => {
+  implicit_axis: (p, origin, direction) => {
     const directionLength = length(direction);
     if (directionLength < 1e-12) {
       return length(sub(p, origin));
@@ -350,26 +350,26 @@ const BUILTINS = {
     const toPoint = sub(p, origin);
     return length(sub(toPoint, mul(dot(toPoint, axis), axis)));
   },
-  implicitCadCylinder: (p, origin, direction, radius) => BUILTINS.implicitCadAxis(p, origin, direction) - radius,
-  implicitCadCylinderCapped: (p, a, b, radius) => {
+  implicit_cylinder: (p, origin, direction, radius) => BUILTINS.implicit_axis(p, origin, direction) - radius,
+  implicit_cylinder_capped: (p, a, b, radius) => {
     const axis = sub(b, a);
-    const side = BUILTINS.implicitCadCylinder(p, a, axis, radius);
-    const capA = -BUILTINS.implicitCadPlane(p, a, axis);
-    const capB = BUILTINS.implicitCadPlane(p, b, axis);
+    const side = BUILTINS.implicit_cylinder(p, a, axis, radius);
+    const capA = -BUILTINS.implicit_plane(p, a, axis);
+    const capB = BUILTINS.implicit_plane(p, b, axis);
     return Math.max(side, Math.max(capA, capB));
   },
-  implicitCadCapsule: (p, a, b, radius) => BUILTINS.implicitCadLineSegment(p, a, b) - radius,
-  implicitCadConeCapsule: (p, a, b, radiusA, radiusB) => {
+  implicit_capsule: (p, a, b, radius) => BUILTINS.implicit_line_segment(p, a, b) - radius,
+  implicit_cone_capsule: (p, a, b, radiusA, radiusB) => {
     const axis = sub(b, a);
     const axisLengthSq = dot(axis, axis);
     if (axisLengthSq < 1e-12) {
-      return BUILTINS.implicitCadSphere(p, a, radiusA);
+      return BUILTINS.implicit_sphere(p, a, radiusA);
     }
     const t = clamp(dot(sub(p, a), axis) / axisLengthSq, 0, 1);
     const radius = mix(radiusA, radiusB, t);
     return length(sub(p, add(a, mul(t, axis)))) - radius;
   },
-  implicitCadCone: (p, apex, direction, halfAngle) => {
+  implicit_cone: (p, apex, direction, halfAngle) => {
     const directionLength = length(direction);
     if (directionLength < 1e-12) {
       return length(sub(p, apex));
@@ -380,50 +380,50 @@ const BUILTINS = {
     const perpendicular = length(sub(toPoint, mul(axial, axis)));
     return perpendicular - axial * Math.tan(halfAngle);
   },
-  implicitCadConeCapped: (p, a, b, radiusA, radiusB) => {
+  implicit_cone_capped: (p, a, b, radiusA, radiusB) => {
     const axis = sub(b, a);
     const axisLength = length(axis);
     if (axisLength < 1e-12) {
-      return BUILTINS.implicitCadSphere(p, a, radiusA);
+      return BUILTINS.implicit_sphere(p, a, radiusA);
     }
     const halfAngle = Math.atan2(Math.abs(radiusB - radiusA), axisLength);
     const coneDistance = radiusA < radiusB
-      ? BUILTINS.implicitCadCone(p, a, axis, halfAngle) - radiusA
-      : BUILTINS.implicitCadCone(p, b, neg(axis), halfAngle) - radiusB;
-    const capA = -BUILTINS.implicitCadPlane(p, a, axis);
-    const capB = BUILTINS.implicitCadPlane(p, b, axis);
+      ? BUILTINS.implicit_cone(p, a, axis, halfAngle) - radiusA
+      : BUILTINS.implicit_cone(p, b, neg(axis), halfAngle) - radiusB;
+    const capA = -BUILTINS.implicit_plane(p, a, axis);
+    const capB = BUILTINS.implicit_plane(p, b, axis);
     return Math.max(coneDistance, Math.max(capA, capB));
   },
-  implicitCadShell: (distanceValue, thickness, bias = 0) => Math.abs(distanceValue + bias * thickness * 0.5) - thickness * 0.5,
-  implicitCadRotateAxis: (p, origin, direction, angle) => {
+  implicit_shell: (distanceValue, thickness, bias = 0) => Math.abs(distanceValue + bias * thickness * 0.5) - thickness * 0.5,
+  implicit_rotate_axis: (p, origin, direction, angle) => {
     const k = normalize(direction);
     const local = sub(p, origin);
     const c = Math.cos(angle);
     const s = Math.sin(angle);
     return add(add(add(origin, mul(local, c)), mul(cross(k, local), s)), mul(k, dot(k, local) * (1 - c)));
   },
-  implicitCadRemapCylindrical: (p, circumference) => {
+  implicit_remap_cylindrical: (p, circumference) => {
     const radial = length(getSwizzle(p, "xy"));
     const theta = Math.atan2(p[1], p[0]);
     return vec3(radial, theta * (circumference / (Math.PI * 2)), p[2]);
   },
-  implicitCadTpmsGyroid: (p, period, drop) => {
+  implicit_tpms_gyroid: (p, period, drop) => {
     const xyz = mul(p, div(Math.PI * 2, period));
     const yzx = getSwizzle(xyz, "yzx");
     const field = dot(drop, mul(BUILTINS.sin(xyz), BUILTINS.cos(yzx)));
     return field * (period[0] + period[1] + period[2]) / 18;
   },
-  implicitCadTpmsSchwarz: (p, period, drop, gyroidBlend) => {
+  implicit_tpms_schwarz: (p, period, drop, gyroidBlend) => {
     const xyz = mul(p, div(Math.PI * 2, period));
     const yzx = getSwizzle(xyz, "yzx");
     const mixTerm = add(vec3(-(1 - gyroidBlend)), mul(BUILTINS.sin(xyz), gyroidBlend));
     const field = dot(drop, mul(BUILTINS.cos(yzx), mixTerm));
     return field * (period[0] + period[1] + period[2]) / 36;
   },
-  implicitCadDiamond: () => 0,
+  implicit_diamond: () => 0,
 };
 
-BUILTINS.implicitCadTpmsDiamond = (p, period, drop, gyroidBlend) => {
+BUILTINS.implicit_tpms_diamond = (p, period, drop, gyroidBlend) => {
   const xyz = mul(p, div(Math.PI * 2, period));
   const yzx = getSwizzle(xyz, "yzx");
   const zxy = getSwizzle(xyz, "zxy");
@@ -436,7 +436,7 @@ BUILTINS.implicitCadTpmsDiamond = (p, period, drop, gyroidBlend) => {
   return (term1 + term2) * (period[0] + period[1] + period[2]) / (6 * 2.8284271247461903 * 2);
 };
 
-BUILTINS.implicitCadTpmsLidinoid = (p, period, drop, gyroidBlend) => {
+BUILTINS.implicit_tpms_lidinoid = (p, period, drop, gyroidBlend) => {
   const xyz = mul(p, div(Math.PI * 2, period));
   const yzx = getSwizzle(xyz, "yzx");
   const zxy = getSwizzle(xyz, "zxy");
@@ -448,7 +448,7 @@ BUILTINS.implicitCadTpmsLidinoid = (p, period, drop, gyroidBlend) => {
   return (term1 - term2) * (period[0] + period[1] + period[2]) / 72;
 };
 
-BUILTINS.implicitCadTpmsNeovius = (p, period, drop, schwarzBlend) => {
+BUILTINS.implicit_tpms_neovius = (p, period, drop, schwarzBlend) => {
   const xyz = mul(p, div(Math.PI * 2, period));
   const cosDrop = mul(BUILTINS.cos(xyz), drop);
   const term1 = -dot(cosDrop, vec3(1));
@@ -456,7 +456,7 @@ BUILTINS.implicitCadTpmsNeovius = (p, period, drop, schwarzBlend) => {
   return (term1 - term2) * (period[0] + period[1] + period[2]) / (6 * (26 / 3));
 };
 
-BUILTINS.implicitCadTpmsSplitP = (p, period, lidinoidBlend, gyroidOctave, schwarzOctave) => {
+BUILTINS.implicit_tpms_split_p = (p, period, lidinoidBlend, gyroidOctave, schwarzOctave) => {
   const xyz = mul(p, div(Math.PI * 2, period));
   const yzx = getSwizzle(xyz, "yzx");
   const zxy = getSwizzle(xyz, "zxy");
@@ -468,7 +468,7 @@ BUILTINS.implicitCadTpmsSplitP = (p, period, lidinoidBlend, gyroidOctave, schwar
   return (term1 + term2 + term3) * (period[0] + period[1] + period[2]) / 36;
 };
 
-BUILTINS.implicitCadTpmsIwp = (p, period, drop) => {
+BUILTINS.implicit_tpms_iwp = (p, period, drop) => {
   const xyz = mul(p, div(Math.PI * 2, period));
   const yzx = getSwizzle(xyz, "yzx");
   const term1 = 2 * dot(mul(mul(drop, BUILTINS.cos(xyz)), BUILTINS.cos(yzx)), vec3(1));
@@ -476,77 +476,77 @@ BUILTINS.implicitCadTpmsIwp = (p, period, drop) => {
   return (term1 - term2) * (period[0] + period[1] + period[2]) / 48;
 };
 
-BUILTINS.implicitCadCubicGrid = (p, size) => {
-  const d = implicitCadTriangleWaveEvenPositive(p, size);
+BUILTINS.implicit_cubic_grid = (p, size) => {
+  const d = implicit_triangle_wave_even_positive(p, size);
   return Math.min(d[0], Math.min(d[1], d[2]));
 };
 
-BUILTINS.implicitCadSquareHoneycomb = (p, size) => {
-  const d = implicitCadTriangleWaveEvenPositive(getSwizzle(p, "xy"), size);
+BUILTINS.implicit_square_honeycomb = (p, size) => {
+  const d = implicit_triangle_wave_even_positive(getSwizzle(p, "xy"), size);
   return Math.min(d[0], d[1]);
 };
 
-BUILTINS.implicitCadSquareHoneycombReinforced = (p, size, rotation, rotation2, hasRotation2) => {
+BUILTINS.implicit_square_honeycomb_reinforced = (p, size, rotation, rotation2, hasRotation2) => {
   const pxy = getSwizzle(p, "xy");
-  const grid = implicitCadTriangleWaveEvenPositive(pxy, size);
+  const grid = implicit_triangle_wave_even_positive(pxy, size);
   const squareGrid = Math.min(grid[0], grid[1]);
-  const repeated = implicitCadRepeatCentered(pxy, size);
+  const repeated = implicit_repeat_centered(pxy, size);
   const angle = Math.PI * rotation;
-  let diagonal = Math.abs(BUILTINS.implicitCadPlane2(repeated, vec2(0), vec2(Math.cos(angle), Math.sin(angle))));
+  let diagonal = Math.abs(BUILTINS.implicit_plane2(repeated, vec2(0), vec2(Math.cos(angle), Math.sin(angle))));
   if (hasRotation2 > 0.5) {
     const angle2 = Math.PI * rotation2;
-    const diagonal2 = Math.abs(BUILTINS.implicitCadPlane2(repeated, vec2(0), vec2(Math.cos(angle2), Math.sin(angle2))));
+    const diagonal2 = Math.abs(BUILTINS.implicit_plane2(repeated, vec2(0), vec2(Math.cos(angle2), Math.sin(angle2))));
     diagonal = Math.min(diagonal, diagonal2);
   }
   return Math.min(squareGrid, diagonal);
 };
 
-BUILTINS.implicitCadSquareDiagonalHoneycomb = (p, size) => {
+BUILTINS.implicit_square_diagonal_honeycomb = (p, size) => {
   const period = vec2(size[0] + size[1]);
-  const repeated = implicitCadRepeatCentered(getSwizzle(p, "xy"), period);
-  const positive = Math.abs(BUILTINS.implicitCadPlane2(repeated, vec2(0), vec2(size[1], size[0])));
-  const negative = Math.abs(BUILTINS.implicitCadPlane2(repeated, vec2(0), vec2(size[1], -size[0])));
+  const repeated = implicit_repeat_centered(getSwizzle(p, "xy"), period);
+  const positive = Math.abs(BUILTINS.implicit_plane2(repeated, vec2(0), vec2(size[1], size[0])));
+  const negative = Math.abs(BUILTINS.implicit_plane2(repeated, vec2(0), vec2(size[1], -size[0])));
   return Math.min(positive, negative);
 };
 
-BUILTINS.implicitCadOctetHoneycomb = (p, size) => {
+BUILTINS.implicit_octet_honeycomb = (p, size) => {
   const pxy = getSwizzle(p, "xy");
-  const square = BUILTINS.implicitCadSquareHoneycomb(p, size);
-  const oddGrid = implicitCadTriangleWaveOddPositive(pxy, size);
+  const square = BUILTINS.implicit_square_honeycomb(p, size);
+  const oddGrid = implicit_triangle_wave_odd_positive(pxy, size);
   const planeGrid = Math.min(oddGrid[0], oddGrid[1]);
   const diagonalPeriod = length(size) * 0.5;
   const rotated = vec2((pxy[0] + pxy[1]) / 1.4142135623730951, (pxy[0] - pxy[1]) / 1.4142135623730951);
-  const diagonal = implicitCadTriangleWaveOddPositive(rotated, vec2(diagonalPeriod));
+  const diagonal = implicit_triangle_wave_odd_positive(rotated, vec2(diagonalPeriod));
   return Math.min(Math.min(square, planeGrid), Math.min(diagonal[0], diagonal[1]));
 };
 
-BUILTINS.implicitCadHexagonalHoneycomb = (p, size, setback) => {
+BUILTINS.implicit_hexagonal_honeycomb = (p, size, setback) => {
   const pxy = getSwizzle(p, "xy");
   const halfSize = mul(size, 0.5);
   const quarterSize = mul(size, 0.25);
   const starCenter = vec2(0, (1 - setback) * halfSize[1]);
   const transition = vec2(halfSize[0], setback * halfSize[1]);
-  const folded = abs(implicitCadRepeatCentered(pxy, size));
+  const folded = abs(implicit_repeat_centered(pxy, size));
   const reflected = vec2(folded[0] - halfSize[0], halfSize[1] - folded[1]);
   const foldedStar = Math.min(
-    BUILTINS.implicitCadLineSegment2(folded, starCenter, vec2(0, size[1])),
+    BUILTINS.implicit_line_segment2(folded, starCenter, vec2(0, size[1])),
     Math.min(
-      BUILTINS.implicitCadLineSegment2(folded, starCenter, transition),
-      BUILTINS.implicitCadLineSegment2(folded, starCenter, vec2(-transition[0], transition[1]))
+      BUILTINS.implicit_line_segment2(folded, starCenter, transition),
+      BUILTINS.implicit_line_segment2(folded, starCenter, vec2(-transition[0], transition[1]))
     )
   );
   const reflectedStar = Math.min(
-    BUILTINS.implicitCadLineSegment2(reflected, starCenter, vec2(0, size[1])),
+    BUILTINS.implicit_line_segment2(reflected, starCenter, vec2(0, size[1])),
     Math.min(
-      BUILTINS.implicitCadLineSegment2(reflected, starCenter, transition),
-      BUILTINS.implicitCadLineSegment2(reflected, starCenter, vec2(-transition[0], transition[1]))
+      BUILTINS.implicit_line_segment2(reflected, starCenter, transition),
+      BUILTINS.implicit_line_segment2(reflected, starCenter, vec2(-transition[0], transition[1]))
     )
   );
   return folded[0] < quarterSize[0] ? foldedStar : reflectedStar;
 };
 
-BUILTINS.implicitCadTriangularHoneycomb = (p, size) => {
-  const folded = abs(implicitCadRepeatCentered(getSwizzle(p, "xy"), size));
+BUILTINS.implicit_triangular_honeycomb = (p, size) => {
+  const folded = abs(implicit_repeat_centered(getSwizzle(p, "xy"), size));
   const halfSize = mul(size, 0.5);
   const quarterSize = mul(size, 0.25);
   const normalH = vec2(0, 1);
@@ -1146,7 +1146,7 @@ function normalizedDistanceSource(source) {
   }
   return `${text}
 
-float implicitCadDistance(vec3 p) {
+float implicit_distance(vec3 p) {
   return sdf(p);
 }
 `;
@@ -1160,7 +1160,7 @@ function normalizedColorSource(source) {
   const hasColorFunction = /\bvec3\s+color\s*\(/.test(text);
   return `${text}
 
-vec3 implicitCadColor(vec3 p, vec3 normal) {
+vec3 implicit_color(vec3 p, vec3 normal) {
   ${hasColorFunction ? "return color(p, normal);" : "return vec3(0.831372549, 0.831372549, 0.847058824);"}
 }
 `;
@@ -1210,20 +1210,20 @@ function createImplicitCadProgramRuntime(model, source, functionName) {
 
 export function createImplicitCadSdfEvaluator(model) {
   const source = normalizedDistanceSource(model?.glslSource || model?.distanceSource);
-  const runtime = createImplicitCadProgramRuntime(model, source, "implicitCadDistance");
-  return (x, y, z) => finiteNumber(runtime.call("implicitCadDistance", [vec3(x, y, z)]), 1e6);
+  const runtime = createImplicitCadProgramRuntime(model, source, "implicit_distance");
+  return (x, y, z) => finiteNumber(runtime.call("implicit_distance", [vec3(x, y, z)]), 1e6);
 }
 
 export function createImplicitCadColorEvaluator(model) {
   const source = normalizedColorSource(model?.colorSource || model?.glslSource || model?.distanceSource);
-  const runtime = createImplicitCadProgramRuntime(model, source, "implicitCadColor");
+  const runtime = createImplicitCadProgramRuntime(model, source, "implicit_color");
   return (point, normal = [0, 0, 1]) => {
-    const value = runtime.call("implicitCadColor", [vec3(point), vec3(normal)]);
+    const value = runtime.call("implicit_color", [vec3(point), vec3(normal)]);
     return vec3(value).map((component) => Math.min(Math.max(finiteNumber(component, 0), 0), 1));
   };
 }
 
-export const implicitCadSdfEvaluatorInternals = {
+export const implicitSdfEvaluatorInternals = {
   BUILTINS,
   tokenize,
   Parser,

@@ -15,7 +15,7 @@ const sphereModel = {
   name: "export sphere",
   bounds: [[-8, -8, -8], [8, 8, 8]],
   glsl: `
-float sdf(vec3 p) { return implicitCadSphere(p, vec3(0.0), 5.0); }
+float sdf(vec3 p) { return implicit_sphere(p, vec3(0.0), 5.0); }
 vec3 color(vec3 p, vec3 normal) { return vec3(0.53, 0.80, 1.0); }
 `,
 };
@@ -42,6 +42,28 @@ test("exportImplicitCadModel writes GLB, STL, and 3MF buffers", () => {
       assert.ok(result.body.includes(Buffer.from('displaycolor="#87CCFFFF"')));
     }
   }
+});
+
+test("exportImplicitCadModel applies parameter values before meshing", () => {
+  const result = exportImplicitCadModel({
+    schema: "implicit.js/0.1.0",
+    name: "param sphere",
+    params: {
+      radius: { type: "number", min: 2, max: 10, default: 3 }
+    },
+    bounds: ({ params }) => {
+      const radius = params.radius + 1;
+      return [[-radius, -radius, -radius], [radius, radius, radius]];
+    },
+    glsl: "float sdf(vec3 p) { return length(p) - radius; }"
+  }, {
+    format: "glb",
+    params: { radius: 6 },
+    resolution: 10,
+  });
+  assert.equal(result.model.parameterValues.radius, 6);
+  assert.equal(result.model.bounds.max[0], 7);
+  assert.ok(result.mesh.triangleCount > 0);
 });
 
 test("exportImplicitCadFile applies parameter values and writes next to source by default", async () => {

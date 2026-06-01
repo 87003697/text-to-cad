@@ -41,11 +41,6 @@ done
 # shellcheck source=scripts/dev/symlink-utils.sh
 source "$UTILS_SCRIPT"
 
-runtime_paths=(
-  "skills/implicit-cad/scripts/export/runtime"
-  "skills/implicit-cad/scripts/snapshot/runtime"
-)
-
 check_no_generated_runtimes() {
   local tracked_runtime
   tracked_runtime="$(
@@ -63,22 +58,10 @@ check_no_generated_runtimes() {
     echo "$tracked_runtime" | sed 's/^/- /' >&2
     return 1
   fi
-
-  for runtime_path in "${runtime_paths[@]}"; do
-    if [ -e "$runtime_path" ] || [ -L "$runtime_path" ]; then
-      echo "$runtime_path must not exist in the develop symlink layout." >&2
-      echo "Run scripts/dev/setup-symlinks.sh to remove generated implicit-cad runtimes." >&2
-      return 1
-    fi
-  done
 }
 
 cd "$REPO_ROOT"
 setup_link "$MODE" "skills/implicit-cad/scripts/packages/implicitjs" "../../../../packages/implicitjs"
 if [ "$MODE" = "check" ]; then
   check_no_generated_runtimes
-else
-  for runtime_path in "${runtime_paths[@]}"; do
-    rm -rf "$runtime_path"
-  done
 fi

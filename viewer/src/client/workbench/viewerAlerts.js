@@ -187,7 +187,7 @@ export function buildViewerImplicitAlert(fileRef, hasImplicitData, loadError) {
       summary: "Implicit CAD unavailable",
       title: "No implicit CAD model is available",
       message: "The selected entry is listed in the CAD catalog but the implicit CAD module did not load.",
-      resolution: "Confirm the .implicit.js or .implicit.mjs file exists and exports an implicit-cad/v1 model."
+      resolution: "Confirm the .implicit.js or .implicit.mjs file exists and exports an implicit.js/0.1.0 model."
     };
   }
   return null;

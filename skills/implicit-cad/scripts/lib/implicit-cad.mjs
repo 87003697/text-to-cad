@@ -1,4 +1,6 @@
-export const SCHEMA = "implicit-cad/v1";
+import { IMPLICIT_CAD_SCHEMA } from "../packages/implicitjs/src/lib/implicitCad/schema.js";
+
+export const SCHEMA = IMPLICIT_CAD_SCHEMA;
 export const PI = Math.PI;
 export const TWO_PI = Math.PI * 2;
 export const SQRT2 = Math.sqrt(2);
@@ -81,83 +83,83 @@ function reduceCallWithArgs(values, callName, args = []) {
 }
 
 export function linearMap(value, inMin, inMax, outMin, outMax) {
-  return `implicitCadLinearMap(${expr(value)}, ${numberLiteral(inMin)}, ${numberLiteral(inMax)}, ${numberLiteral(outMin)}, ${numberLiteral(outMax)})`;
+  return `implicit_linear_map(${expr(value)}, ${numberLiteral(inMin)}, ${numberLiteral(inMax)}, ${numberLiteral(outMin)}, ${numberLiteral(outMax)})`;
 }
 
 export function ramp(value, inMin, inMax, outMin, outMax) {
-  return `implicitCadRamp(${expr(value)}, ${numberLiteral(inMin)}, ${numberLiteral(inMax)}, ${numberLiteral(outMin)}, ${numberLiteral(outMax)})`;
+  return `implicit_ramp(${expr(value)}, ${numberLiteral(inMin)}, ${numberLiteral(inMax)}, ${numberLiteral(outMin)}, ${numberLiteral(outMax)})`;
 }
 
 export function twoBodyField(a, b) {
-  return `implicitCadTwoBodyField(${expr(a)}, ${expr(b)})`;
+  return `implicit_two_body_field(${expr(a)}, ${expr(b)})`;
 }
 
 export function twoBodyPolar(a, b, angle) {
-  return `implicitCadTwoBodyPolar(${expr(a)}, ${expr(b)}, ${numberLiteral(angle)})`;
+  return `implicit_two_body_polar(${expr(a)}, ${expr(b)}, ${numberLiteral(angle)})`;
 }
 
 export function triangleWaveEven(value, period) {
-  return `implicitCadTriangleWaveEven(${expr(value)}, ${expr(period)})`;
+  return `implicit_triangle_wave_even(${expr(value)}, ${expr(period)})`;
 }
 
 export function triangleWaveEvenPositive(value, period) {
-  return `implicitCadTriangleWaveEvenPositive(${expr(value)}, ${expr(period)})`;
+  return `implicit_triangle_wave_even_positive(${expr(value)}, ${expr(period)})`;
 }
 
 export function triangleWaveOdd(value, period) {
-  return `implicitCadTriangleWaveOdd(${expr(value)}, ${expr(period)})`;
+  return `implicit_triangle_wave_odd(${expr(value)}, ${expr(period)})`;
 }
 
 export function triangleWaveOddPositive(value, period) {
-  return `implicitCadTriangleWaveOddPositive(${expr(value)}, ${expr(period)})`;
+  return `implicit_triangle_wave_odd_positive(${expr(value)}, ${expr(period)})`;
 }
 
 export function unionSharp(values) {
-  return reduceCall(values, "implicitCadUnionSharp");
+  return reduceCall(values, "implicit_union_sharp");
 }
 
 export function intersectSharp(values) {
-  return reduceCall(values, "implicitCadIntersectSharp");
+  return reduceCall(values, "implicit_intersect_sharp");
 }
 
 export function unionRound(values, radius = 0) {
-  return reduceCall(values, "implicitCadUnionRound", radius);
+  return reduceCall(values, "implicit_union_round", radius);
 }
 
 export function intersectRound(values, radius = 0) {
-  return reduceCall(values, "implicitCadIntersectRound", radius);
+  return reduceCall(values, "implicit_intersect_round", radius);
 }
 
 export function unionChamfer(values, radius = 0) {
-  return reduceCall(values, "implicitCadUnionChamfer", radius);
+  return reduceCall(values, "implicit_union_chamfer", radius);
 }
 
 export function intersectChamfer(values, radius = 0) {
-  return reduceCall(values, "implicitCadIntersectChamfer", radius);
+  return reduceCall(values, "implicit_intersect_chamfer", radius);
 }
 
 export function unionExp(values, radius = 0) {
-  return reduceCall(values, "implicitCadUnionExp", radius);
+  return reduceCall(values, "implicit_union_exp", radius);
 }
 
 export function intersectExp(values, radius = 0) {
-  return reduceCall(values, "implicitCadIntersectExp", radius);
+  return reduceCall(values, "implicit_intersect_exp", radius);
 }
 
 export function unionLpNorm(values, radius = 0, normPower = 2) {
-  return reduceCallWithArgs(values, "implicitCadUnionLpNorm", [numberLiteral(radius), numberLiteral(normPower)]);
+  return reduceCallWithArgs(values, "implicit_union_lp_norm", [numberLiteral(radius), numberLiteral(normPower)]);
 }
 
 export function intersectLpNorm(values, radius = 0, normPower = 2) {
-  return reduceCallWithArgs(values, "implicitCadIntersectLpNorm", [numberLiteral(radius), numberLiteral(normPower)]);
+  return reduceCallWithArgs(values, "implicit_intersect_lp_norm", [numberLiteral(radius), numberLiteral(normPower)]);
 }
 
 export function unionRvachev(values, radius = 0) {
-  return reduceCall(values, "implicitCadUnionRvachev", radius);
+  return reduceCall(values, "implicit_union_rvachev", radius);
 }
 
 export function intersectRvachev(values, radius = 0) {
-  return reduceCall(values, "implicitCadIntersectRvachev", radius);
+  return reduceCall(values, "implicit_intersect_rvachev", radius);
 }
 
 export function booleanSharp() {
@@ -215,7 +217,7 @@ export function difference(target, tools, {
 }
 
 export function sphere(p, center, radius) {
-  return `implicitCadSphere(${expr(p)}, ${vec3(center)}, ${numberLiteral(radius)})`;
+  return `implicit_sphere(${expr(p)}, ${vec3(center)}, ${numberLiteral(radius)})`;
 }
 
 export function circle(p, center, radius) {
@@ -223,121 +225,121 @@ export function circle(p, center, radius) {
 }
 
 export function boxCentered(p, size, { center = [0, 0, 0] } = {}) {
-  return `implicitCadBoxCentered(${expr(p)}, ${vec3(size)}, ${vec3(center)})`;
+  return `implicit_box_centered(${expr(p)}, ${vec3(size)}, ${vec3(center)})`;
 }
 
 export function plane(p, origin, normal) {
-  return `implicitCadPlane(${expr(p)}, ${vec3(origin)}, ${vec3(normal)})`;
+  return `implicit_plane(${expr(p)}, ${vec3(origin)}, ${vec3(normal)})`;
 }
 
 export function lineSegment(p, endpointA, endpointB) {
-  return `implicitCadLineSegment(${expr(p)}, ${vec3(endpointA)}, ${vec3(endpointB)})`;
+  return `implicit_line_segment(${expr(p)}, ${vec3(endpointA)}, ${vec3(endpointB)})`;
 }
 
 export function torus(p, majorRadius, minorRadius) {
-  return `implicitCadTorus(${expr(p)}, ${numberLiteral(majorRadius)}, ${numberLiteral(minorRadius)})`;
+  return `implicit_torus(${expr(p)}, ${numberLiteral(majorRadius)}, ${numberLiteral(minorRadius)})`;
 }
 
 export function axis(p, origin, direction) {
-  return `implicitCadAxis(${expr(p)}, ${vec3(origin)}, ${vec3(direction)})`;
+  return `implicit_axis(${expr(p)}, ${vec3(origin)}, ${vec3(direction)})`;
 }
 
 export function cylinder(p, origin, direction, radius) {
-  return `implicitCadCylinder(${expr(p)}, ${vec3(origin)}, ${vec3(direction)}, ${numberLiteral(radius)})`;
+  return `implicit_cylinder(${expr(p)}, ${vec3(origin)}, ${vec3(direction)}, ${numberLiteral(radius)})`;
 }
 
 export function cylinderCapped(p, endpointA, endpointB, radius) {
-  return `implicitCadCylinderCapped(${expr(p)}, ${vec3(endpointA)}, ${vec3(endpointB)}, ${numberLiteral(radius)})`;
+  return `implicit_cylinder_capped(${expr(p)}, ${vec3(endpointA)}, ${vec3(endpointB)}, ${numberLiteral(radius)})`;
 }
 
 export function capsule(p, endpointA, endpointB, radius) {
-  return `implicitCadCapsule(${expr(p)}, ${vec3(endpointA)}, ${vec3(endpointB)}, ${numberLiteral(radius)})`;
+  return `implicit_capsule(${expr(p)}, ${vec3(endpointA)}, ${vec3(endpointB)}, ${numberLiteral(radius)})`;
 }
 
 export function coneCapsule(p, endpointA, endpointB, radiusA, radiusB) {
-  return `implicitCadConeCapsule(${expr(p)}, ${vec3(endpointA)}, ${vec3(endpointB)}, ${numberLiteral(radiusA)}, ${numberLiteral(radiusB)})`;
+  return `implicit_cone_capsule(${expr(p)}, ${vec3(endpointA)}, ${vec3(endpointB)}, ${numberLiteral(radiusA)}, ${numberLiteral(radiusB)})`;
 }
 
 export function cone(p, apex, direction, halfAngle) {
-  return `implicitCadCone(${expr(p)}, ${vec3(apex)}, ${vec3(direction)}, ${numberLiteral(halfAngle)})`;
+  return `implicit_cone(${expr(p)}, ${vec3(apex)}, ${vec3(direction)}, ${numberLiteral(halfAngle)})`;
 }
 
 export function coneCapped(p, endpointA, endpointB, radiusA, radiusB) {
-  return `implicitCadConeCapped(${expr(p)}, ${vec3(endpointA)}, ${vec3(endpointB)}, ${numberLiteral(radiusA)}, ${numberLiteral(radiusB)})`;
+  return `implicit_cone_capped(${expr(p)}, ${vec3(endpointA)}, ${vec3(endpointB)}, ${numberLiteral(radiusA)}, ${numberLiteral(radiusB)})`;
 }
 
 export function shell(distance, thickness, bias = 0) {
-  return `implicitCadShell(${expr(distance)}, ${numberLiteral(thickness)}, ${numberLiteral(bias)})`;
+  return `implicit_shell(${expr(distance)}, ${numberLiteral(thickness)}, ${numberLiteral(bias)})`;
 }
 
 export function rotateAxis(p, origin, direction, angle) {
-  return `implicitCadRotateAxis(${expr(p)}, ${vec3(origin)}, ${vec3(direction)}, ${numberLiteral(angle)})`;
+  return `implicit_rotate_axis(${expr(p)}, ${vec3(origin)}, ${vec3(direction)}, ${numberLiteral(angle)})`;
 }
 
 export function repeatCentered(p, period) {
-  return `implicitCadRepeatCentered(${expr(p)}, ${vec3(period)})`;
+  return `implicit_repeat_centered(${expr(p)}, ${vec3(period)})`;
 }
 
 export function remapCylindrical(p, circumference) {
-  return `implicitCadRemapCylindrical(${expr(p)}, ${numberLiteral(circumference)})`;
+  return `implicit_remap_cylindrical(${expr(p)}, ${numberLiteral(circumference)})`;
 }
 
 export function cubicGrid(p, size) {
-  return `implicitCadCubicGrid(${expr(p)}, ${vec3(size)})`;
+  return `implicit_cubic_grid(${expr(p)}, ${vec3(size)})`;
 }
 
 export function squareHoneycomb(p, size) {
-  return `implicitCadSquareHoneycomb(${expr(p)}, ${vec2(size)})`;
+  return `implicit_square_honeycomb(${expr(p)}, ${vec2(size)})`;
 }
 
 export function squareHoneycombReinforced(p, size, { rotation = 0.25, rotation2 = null } = {}) {
-  return `implicitCadSquareHoneycombReinforced(${expr(p)}, ${vec2(size)}, ${numberLiteral(rotation)}, ${numberLiteral(rotation2 ?? 0)}, ${numberLiteral(rotation2 === null ? 0 : 1)})`;
+  return `implicit_square_honeycomb_reinforced(${expr(p)}, ${vec2(size)}, ${numberLiteral(rotation)}, ${numberLiteral(rotation2 ?? 0)}, ${numberLiteral(rotation2 === null ? 0 : 1)})`;
 }
 
 export function squareDiagonalHoneycomb(p, size) {
-  return `implicitCadSquareDiagonalHoneycomb(${expr(p)}, ${vec2(size)})`;
+  return `implicit_square_diagonal_honeycomb(${expr(p)}, ${vec2(size)})`;
 }
 
 export function octetHoneycomb(p, size) {
-  return `implicitCadOctetHoneycomb(${expr(p)}, ${vec2(size)})`;
+  return `implicit_octet_honeycomb(${expr(p)}, ${vec2(size)})`;
 }
 
 export function hexagonalHoneycomb(p, size, { setback = 1 / 3 } = {}) {
   const resolvedSize = typeof size === "number" ? [size, size * SQRT3] : size;
-  return `implicitCadHexagonalHoneycomb(${expr(p)}, ${vec2(resolvedSize)}, ${numberLiteral(setback)})`;
+  return `implicit_hexagonal_honeycomb(${expr(p)}, ${vec2(resolvedSize)}, ${numberLiteral(setback)})`;
 }
 
 export function triangularHoneycomb(p, size) {
   const resolvedSize = typeof size === "number" ? [size, size * SQRT3] : size;
-  return `implicitCadTriangularHoneycomb(${expr(p)}, ${vec2(resolvedSize)})`;
+  return `implicit_triangular_honeycomb(${expr(p)}, ${vec2(resolvedSize)})`;
 }
 
 export function tpmsGyroid(p, period, drop = [1, 1, 1]) {
-  return `implicitCadTpmsGyroid(${expr(p)}, ${vec3(period)}, ${vec3(drop)})`;
+  return `implicit_tpms_gyroid(${expr(p)}, ${vec3(period)}, ${vec3(drop)})`;
 }
 
 export function tpmsSchwarz(p, period, { drop = [1, 1, 1], gyroidBlend = 0 } = {}) {
-  return `implicitCadTpmsSchwarz(${expr(p)}, ${vec3(period)}, ${vec3(drop)}, ${numberLiteral(gyroidBlend)})`;
+  return `implicit_tpms_schwarz(${expr(p)}, ${vec3(period)}, ${vec3(drop)}, ${numberLiteral(gyroidBlend)})`;
 }
 
 export function tpmsDiamond(p, period, { drop = [1, 1, 1], gyroidBlend = 0 } = {}) {
-  return `implicitCadTpmsDiamond(${expr(p)}, ${vec3(period)}, ${vec3(drop)}, ${numberLiteral(gyroidBlend)})`;
+  return `implicit_tpms_diamond(${expr(p)}, ${vec3(period)}, ${vec3(drop)}, ${numberLiteral(gyroidBlend)})`;
 }
 
 export function tpmsLidinoid(p, period, { drop = [1, 1, 1], gyroidBlend = 0 } = {}) {
-  return `implicitCadTpmsLidinoid(${expr(p)}, ${vec3(period)}, ${vec3(drop)}, ${numberLiteral(gyroidBlend)})`;
+  return `implicit_tpms_lidinoid(${expr(p)}, ${vec3(period)}, ${vec3(drop)}, ${numberLiteral(gyroidBlend)})`;
 }
 
 export function tpmsNeovius(p, period, { drop = [1, 1, 1], schwarzBlend = 0 } = {}) {
-  return `implicitCadTpmsNeovius(${expr(p)}, ${vec3(period)}, ${vec3(drop)}, ${numberLiteral(schwarzBlend)})`;
+  return `implicit_tpms_neovius(${expr(p)}, ${vec3(period)}, ${vec3(drop)}, ${numberLiteral(schwarzBlend)})`;
 }
 
 export function tpmsSplitP(p, period, { lidinoidBlend = 1, gyroidOctave = 1, schwarzOctave = 1 } = {}) {
-  return `implicitCadTpmsSplitP(${expr(p)}, ${vec3(period)}, ${numberLiteral(lidinoidBlend)}, ${numberLiteral(gyroidOctave)}, ${numberLiteral(schwarzOctave)})`;
+  return `implicit_tpms_split_p(${expr(p)}, ${vec3(period)}, ${numberLiteral(lidinoidBlend)}, ${numberLiteral(gyroidOctave)}, ${numberLiteral(schwarzOctave)})`;
 }
 
 export function tpmsIwp(p, period, drop = [1, 1, 1]) {
-  return `implicitCadTpmsIwp(${expr(p)}, ${vec3(period)}, ${vec3(drop)})`;
+  return `implicit_tpms_iwp(${expr(p)}, ${vec3(period)}, ${vec3(drop)})`;
 }
 
 export function distanceFunction(distanceExpression, { point = "p" } = {}) {
@@ -360,7 +362,7 @@ function colorSource(value) {
     : colorFunction(value);
 }
 
-export function createImplicitCad({
+export function createImplicitModel({
   name = "Implicit CAD",
   description = "",
   units = "mm",

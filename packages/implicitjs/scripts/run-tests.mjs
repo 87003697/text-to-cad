@@ -6,7 +6,10 @@ import { fileURLToPath } from "node:url";
 
 const packageRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const repoRoot = path.resolve(packageRoot, "..", "..");
-const sourceRoot = path.join(packageRoot, "src");
+const testRoots = [
+  path.join(packageRoot, "src"),
+  path.join(packageRoot, "scripts"),
+];
 
 function collectTests(dir, tests = []) {
   for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
@@ -21,7 +24,7 @@ function collectTests(dir, tests = []) {
 }
 
 const requestedTests = process.argv.slice(2).map((testPath) => path.resolve(packageRoot, testPath));
-const tests = (requestedTests.length ? requestedTests : collectTests(sourceRoot)).sort();
+const tests = (requestedTests.length ? requestedTests : testRoots.flatMap((root) => collectTests(root))).sort();
 if (!tests.length) {
   console.error("No implicitjs tests found.");
   process.exit(1);

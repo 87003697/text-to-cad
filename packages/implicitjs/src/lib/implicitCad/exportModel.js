@@ -129,14 +129,43 @@ function definitionFromModel(modelValue) {
   return normalizeImplicitCadModel(modelValue).definition;
 }
 
+function runtimeModelForExport(modelValue, {
+  params = null,
+  parameterValues = null,
+  animationState = null,
+} = {}) {
+  const model = normalizeImplicitCadModel(modelValue);
+  const nextParams = isObject(params)
+    ? params
+    : isObject(parameterValues)
+      ? parameterValues
+      : null;
+  if (!nextParams && !animationState) {
+    return model;
+  }
+  return typeof model.definition?.buildModel === "function"
+    ? model.definition.buildModel(
+        nextParams || model.parameterValues || model.defaultParameterValues || {},
+        isObject(animationState) ? animationState : model.animationState || {}
+      )
+    : model;
+}
+
 export function exportImplicitCadModel(modelValue, {
   format = "glb",
+  params = null,
+  parameterValues = null,
+  animationState = null,
   resolution = 96,
   maxCells = undefined,
   normalEpsilon = undefined,
   smoothNormals = undefined,
 } = {}) {
-  const model = normalizeImplicitCadModel(modelValue);
+  const model = runtimeModelForExport(modelValue, {
+    params,
+    parameterValues,
+    animationState,
+  });
   const outputFormat = normalizeImplicitExportFormat(format);
   const mesh = meshImplicitCadModel(model, {
     resolution,
