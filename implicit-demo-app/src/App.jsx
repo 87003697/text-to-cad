@@ -35,9 +35,9 @@ const SOURCE_STORAGE_KEY = "implicit-demo-source";
 const COMPILE_DEBOUNCE_MS = 260;
 const PREVIEW_BOOT_DELAY_MS = 520;
 const MOBILE_TABS = Object.freeze([
-  ["source", "Source"],
+  ["source", "Code"],
   ["preview", "Preview"],
-  ["controls", "Controls"]
+  ["controls", "Settings"]
 ]);
 const EMPTY_TEMPLATE = Object.freeze({
   id: EMPTY_TEMPLATE_ID,
@@ -210,10 +210,11 @@ function beginSplitDrag(event, {
   window.addEventListener("pointerup", stop, { once: true });
 }
 
-function beginTrailingSplitDrag(event, {
+function beginLargePreviewDrag(event, {
   containerRef,
-  max = 42,
-  min = 18,
+  settingsWidth,
+  max = 58,
+  min = 42,
   setValue
 }) {
   const container = containerRef.current;
@@ -225,7 +226,37 @@ function beginTrailingSplitDrag(event, {
   document.documentElement.classList.add("is-resizing");
 
   const update = (pointerEvent) => {
-    const raw = ((rect.right - pointerEvent.clientX) / Math.max(rect.width, 1)) * 100;
+    const separatorWidth = 12;
+    const raw = ((rect.right - pointerEvent.clientX - settingsWidth - separatorWidth) / Math.max(rect.width, 1)) * 100;
+    setValue(clampNumber(raw, min, max));
+  };
+  const stop = () => {
+    document.documentElement.classList.remove("is-resizing");
+    window.removeEventListener("pointermove", update);
+    window.removeEventListener("pointerup", stop);
+  };
+
+  update(event);
+  window.addEventListener("pointermove", update);
+  window.addEventListener("pointerup", stop, { once: true });
+}
+
+function beginTrailingPixelDrag(event, {
+  containerRef,
+  max = 320,
+  min = 220,
+  setValue
+}) {
+  const container = containerRef.current;
+  if (!container) {
+    return;
+  }
+  event.preventDefault();
+  const rect = container.getBoundingClientRect();
+  document.documentElement.classList.add("is-resizing");
+
+  const update = (pointerEvent) => {
+    const raw = rect.right - pointerEvent.clientX;
     setValue(clampNumber(raw, min, max));
   };
   const stop = () => {
@@ -499,10 +530,11 @@ export default function App() {
   const [playing, setPlaying] = useState(false);
   const [animationElapsed, setAnimationElapsed] = useState(0);
   const [themeMode, setThemeMode] = useState(() => localStorage.getItem("implicit-demo-theme") || "dark");
-  const [mobileTab, setMobileTab] = useState("source");
+  const [mobileTab, setMobileTab] = useState("preview");
   const [previewBooted, setPreviewBooted] = useState(false);
-  const [workspaceSplit, setWorkspaceSplit] = useState(50);
-  const [controlsWidth, setControlsWidth] = useState(24);
+  const [largePreviewWidth, setLargePreviewWidth] = useState(50);
+  const [settingsWidth, setSettingsWidth] = useState(260);
+  const [mediumPreviewSplit, setMediumPreviewSplit] = useState(50);
   const workspaceRef = useRef(null);
   const templatesRef = useRef([]);
   const debouncedCode = useDebouncedValue(code, COMPILE_DEBOUNCE_MS);
@@ -802,8 +834,9 @@ export default function App() {
     <div
       className="app-shell"
       style={{
-        "--workspace-left": `${workspaceSplit}%`,
-        "--controls-width": `${controlsWidth}%`
+        "--large-preview-width": `${largePreviewWidth}%`,
+        "--settings-width": `${settingsWidth}px`,
+        "--medium-preview-split": `${mediumPreviewSplit}%`
       }}
     >
       <header className="top-rail">
@@ -853,12 +886,12 @@ export default function App() {
           axis="x"
           className="workspace-resizer"
           title="Resize editors and preview"
-          onPointerDown={(event) => beginSplitDrag(event, {
-            axis: "x",
+          onPointerDown={(event) => beginLargePreviewDrag(event, {
             containerRef: workspaceRef,
-            min: 30,
-            max: 68,
-            setValue: setWorkspaceSplit
+            settingsWidth,
+            min: 42,
+            max: 58,
+            setValue: setLargePreviewWidth
           })}
         />
 
@@ -939,13 +972,25 @@ export default function App() {
         <SplitHandle
           axis="x"
           className="controls-resizer"
-          title="Resize preview and controls"
-          onPointerDown={(event) => beginTrailingSplitDrag(event, {
-            containerRef: workspaceRef,
-            min: 18,
-            max: 40,
-            setValue: setControlsWidth
-          })}
+          title="Resize preview and settings"
+          onPointerDown={(event) => {
+            if (window.matchMedia("(min-width: 761px) and (max-width: 1199px)").matches) {
+              beginSplitDrag(event, {
+                axis: "y",
+                containerRef: workspaceRef,
+                min: 32,
+                max: 68,
+                setValue: setMediumPreviewSplit
+              });
+              return;
+            }
+            beginTrailingPixelDrag(event, {
+              containerRef: workspaceRef,
+              min: 220,
+              max: 320,
+              setValue: setSettingsWidth
+            });
+          }}
         />
 
         <section className={`controls-shell mobile-panel ${mobileTab === "controls" ? "is-active" : ""}`}>

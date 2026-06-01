@@ -20,8 +20,9 @@
   --rail-height: 46px;
   --text-label: 11px;
   --text-ui: 13px;
-  --workspace-left: 50%;
-  --controls-width: 24%;
+  --large-preview-width: 50%;
+  --settings-width: 260px;
+  --medium-preview-split: 50%;
   --editor-bg: #f7f9fc;
   --editor-fg: #2e3440;
   --editor-gutter-border: #c9d0dc;
@@ -370,11 +371,14 @@ button:focus-visible {
 .workspace-grid {
   display: grid;
   grid-template-columns:
-    minmax(340px, var(--workspace-left))
+    minmax(240px, 1fr)
     6px
-    minmax(320px, 1fr)
+    minmax(360px, var(--large-preview-width))
     6px
-    minmax(220px, var(--controls-width));
+    clamp(220px, var(--settings-width), 320px);
+  grid-template-rows: minmax(0, 1fr);
+  width: 100%;
+  height: 100%;
   min-width: 0;
   min-height: 0;
 }
@@ -852,7 +856,49 @@ input[type="checkbox"] {
   padding: 10px;
 }
 
-@media (max-width: 1040px) {
+@media (min-width: 761px) and (max-width: 1199px) {
+  .workspace-grid {
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+    grid-template-rows: minmax(0, var(--medium-preview-split)) 6px minmax(0, 1fr);
+  }
+
+  .editor-shell {
+    grid-column: 1;
+    grid-row: 1 / 4;
+  }
+
+  .workspace-resizer {
+    display: none;
+  }
+
+  .visual-shell {
+    grid-column: 2;
+    grid-row: 1;
+  }
+
+  .controls-resizer {
+    grid-column: 2;
+    grid-row: 2;
+    cursor: row-resize;
+  }
+
+  .controls-resizer::after {
+    top: 2px;
+    right: 0;
+    bottom: auto;
+    left: 0;
+    width: auto;
+    height: 2px;
+  }
+
+  .controls-shell {
+    grid-column: 2;
+    grid-row: 3;
+    border-top: 1px solid var(--border);
+  }
+}
+
+@media (max-width: 760px) {
   .app-shell {
     grid-template-rows: auto 38px minmax(0, 1fr);
     width: 100vw;
