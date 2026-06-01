@@ -6,11 +6,11 @@ import { tags } from "@lezer/highlight";
 import { Download } from "lucide-react";
 import { useMemo } from "react";
 
-const editorTheme = EditorView.theme({
+const editorThemeSpec = {
   "&": {
     height: "100%",
-    backgroundColor: "#11151b",
-    color: "#d8dee9",
+    backgroundColor: "var(--editor-bg)",
+    color: "var(--editor-fg)",
     fontSize: "12.5px"
   },
   ".cm-scroller": {
@@ -24,39 +24,42 @@ const editorTheme = EditorView.theme({
     padding: "0 16px"
   },
   ".cm-gutters": {
-    borderRight: "1px solid #2f3640",
-    backgroundColor: "#1a1e24",
-    color: "#647082"
+    borderRight: "1px solid var(--editor-gutter-border)",
+    backgroundColor: "var(--editor-gutter-bg)",
+    color: "var(--editor-gutter-fg)"
   },
   ".cm-activeLine": {
-    backgroundColor: "#18202a"
+    backgroundColor: "var(--editor-active-line)"
   },
   ".cm-activeLineGutter": {
-    backgroundColor: "#202834",
-    color: "#88c0d0"
+    backgroundColor: "var(--editor-active-gutter)",
+    color: "var(--editor-accent)"
   },
   ".cm-selectionBackground": {
-    backgroundColor: "#355263 !important"
+    backgroundColor: "var(--editor-selection) !important"
   },
   ".cm-cursor": {
-    borderLeftColor: "#88c0d0"
+    borderLeftColor: "var(--editor-accent)"
   },
   ".cm-tooltip": {
-    border: "1px solid #3b4252",
-    backgroundColor: "#1a1e24"
+    border: "1px solid var(--editor-gutter-border)",
+    backgroundColor: "var(--editor-gutter-bg)"
   }
-}, { dark: true });
+};
+
+const darkEditorTheme = EditorView.theme(editorThemeSpec, { dark: true });
+const lightEditorTheme = EditorView.theme(editorThemeSpec, { dark: false });
 
 const syntaxTheme = HighlightStyle.define([
-  { tag: tags.keyword, color: "#81a1c1" },
-  { tag: [tags.atom, tags.bool, tags.number], color: "#b48ead" },
-  { tag: [tags.string, tags.special(tags.string)], color: "#a3be8c" },
-  { tag: [tags.comment, tags.lineComment, tags.blockComment], color: "#6f7d91", fontStyle: "italic" },
-  { tag: [tags.function(tags.variableName), tags.function(tags.propertyName)], color: "#88c0d0" },
-  { tag: [tags.variableName, tags.propertyName], color: "#d8dee9" },
-  { tag: [tags.definition(tags.variableName), tags.className], color: "#ebcb8b" },
-  { tag: [tags.operator, tags.punctuation], color: "#8fbcbb" },
-  { tag: tags.invalid, color: "#bf616a" }
+  { tag: tags.keyword, color: "var(--editor-keyword)" },
+  { tag: [tags.atom, tags.bool, tags.number], color: "var(--editor-number)" },
+  { tag: [tags.string, tags.special(tags.string)], color: "var(--editor-string)" },
+  { tag: [tags.comment, tags.lineComment, tags.blockComment], color: "var(--editor-comment)", fontStyle: "italic" },
+  { tag: [tags.function(tags.variableName), tags.function(tags.propertyName)], color: "var(--editor-function)" },
+  { tag: [tags.variableName, tags.propertyName], color: "var(--editor-variable)" },
+  { tag: [tags.definition(tags.variableName), tags.className], color: "var(--editor-definition)" },
+  { tag: [tags.operator, tags.punctuation], color: "var(--editor-operator)" },
+  { tag: tags.invalid, color: "var(--editor-invalid)" }
 ]);
 
 const GLSL_KEYWORDS = /\b(?:bool|break|const|continue|discard|else|false|float|for|if|in|inout|int|mat2|mat3|mat4|out|return|struct|true|uniform|vec2|vec3|vec4|void|while)\b/gu;
@@ -156,6 +159,7 @@ export function CodePane({
   onDownloadSource,
   onTemplateChange,
   selectedTemplateId = "",
+  themeMode = "dark",
   templates = [],
   value,
   onChange
@@ -172,20 +176,17 @@ export function CodePane({
       <div className="section-bar code-section-bar">
         <div className="template-title-group">
           {templates.length ? (
-            <label className="template-picker">
-              <span>Templates</span>
-              <select
-                aria-label="Templates"
-                className="template-select"
-                value={selectedTemplateId}
-                onChange={(event) => onTemplateChange?.(event.target.value)}
-              >
-                <option disabled value="">Choose template</option>
-                {templates.map((template) => (
-                  <option key={template.id} value={template.id}>{template.label}</option>
-                ))}
-              </select>
-            </label>
+            <select
+              aria-label="Templates"
+              className="template-select"
+              value={selectedTemplateId}
+              onChange={(event) => onTemplateChange?.(event.target.value)}
+            >
+              <option disabled value="">Choose template</option>
+              {templates.map((template) => (
+                <option key={template.id} value={template.id}>{template.label}</option>
+              ))}
+            </select>
           ) : null}
         </div>
         <div className="editor-section-actions">
@@ -200,7 +201,7 @@ export function CodePane({
           basicSetup={basicSetup}
           extensions={extensions}
           height="100%"
-          theme={editorTheme}
+          theme={themeMode === "dark" ? darkEditorTheme : lightEditorTheme}
           value={value}
           onChange={onChange}
         />

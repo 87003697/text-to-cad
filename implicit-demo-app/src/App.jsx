@@ -8,7 +8,7 @@ import {
   SlidersHorizontal,
   Sun,
 } from "lucide-react";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   DEFAULT_IMPLICIT_GRAPHICS_SETTINGS,
   animatedImplicitParameterValues,
@@ -23,12 +23,16 @@ import {
 } from "implicitjs";
 
 import { CodePane } from "./CodePane.jsx";
-import { ImplicitViewport } from "./ImplicitViewport.jsx";
+
+const ImplicitViewport = lazy(() => (
+  import("./ImplicitViewport.jsx").then((module) => ({ default: module.ImplicitViewport }))
+));
 
 const DEFAULT_TEMPLATE_ID = "mobius-strip";
 const EMPTY_TEMPLATE_ID = "empty";
 const SOURCE_STORAGE_KEY = "implicit-demo-source";
 const COMPILE_DEBOUNCE_MS = 260;
+const PREVIEW_BOOT_DELAY_MS = 520;
 const MOBILE_TABS = Object.freeze([
   ["source", "Source"],
   ["preview", "Preview"]
@@ -446,6 +450,7 @@ export default function App() {
   const [themeMode, setThemeMode] = useState(() => localStorage.getItem("implicit-demo-theme") || "dark");
   const [mobileTab, setMobileTab] = useState("source");
   const [controlsOpen, setControlsOpen] = useState(true);
+  const [previewBooted, setPreviewBooted] = useState(false);
   const [workspaceSplit, setWorkspaceSplit] = useState(50);
   const [viewportSplit, setViewportSplit] = useState(72);
   const workspaceRef = useRef(null);
@@ -461,6 +466,32 @@ export default function App() {
   useEffect(() => {
     localStorage.setItem(SOURCE_STORAGE_KEY, code);
   }, [code]);
+
+  useEffect(() => {
+    let cancelled = false;
+    let idleId = 0;
+    const bootPreview = () => {
+      if (!cancelled) {
+        setPreviewBooted(true);
+      }
+    };
+
+    const timeoutId = window.setTimeout(() => {
+      if ("requestIdleCallback" in window) {
+        idleId = window.requestIdleCallback(bootPreview, { timeout: 900 });
+        return;
+      }
+      bootPreview();
+    }, PREVIEW_BOOT_DELAY_MS);
+
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timeoutId);
+      if (idleId && "cancelIdleCallback" in window) {
+        window.cancelIdleCallback(idleId);
+      }
+    };
+  }, []);
 
   const loadTemplate = useCallback(async (templateId, templateList) => {
     const list = Array.isArray(templateList) && templateList.length
@@ -635,6 +666,7 @@ export default function App() {
   const liveModel = liveResult.model;
   const previewError = compileState === "error" ? compileError : liveResult.error;
   const previewStatus = previewError ? "error" : compileState;
+  const previewModel = previewBooted && previewStatus === "ready" ? liveModel : null;
 
   const handleExportSettingChange = useCallback((id, value) => {
     setExportSettings((current) => ({
@@ -759,6 +791,7 @@ export default function App() {
             onDownloadSource={handleDownloadSource}
             onTemplateChange={handleTemplateChange}
             selectedTemplateId={selectedTemplateId}
+            themeMode={themeMode}
             templates={templates}
             value={code}
             onChange={handleSourceChange}
@@ -832,11 +865,24 @@ export default function App() {
                 </div>
               </div>
               <div className="viewport-canvas-area">
-                <ImplicitViewport
-                  model={previewStatus === "ready" ? liveModel : null}
-                  graphics={graphics}
-                  themeMode={themeMode}
-                />
+                {previewBooted ? (
+                  <Suspense fallback={(
+                    <div className="viewport-canvas-host">
+                      <div className="viewport-empty">warming preview</div>
+                    </div>
+                  )}
+                  >
+                    <ImplicitViewport
+                      model={previewModel}
+                      graphics={graphics}
+                      themeMode={themeMode}
+                    />
+                  </Suspense>
+                ) : (
+                  <div className="viewport-canvas-host">
+                    <div className="viewport-empty">warming preview</div>
+                  </div>
+                )}
                 {previewError ? (
                   <div className="compile-error">
                     <FieldLabel>{compileState === "error" ? "compile error" : "runtime error"}</FieldLabel>
