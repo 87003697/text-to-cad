@@ -215,6 +215,10 @@ function resolveCadAssetMeshUrl(uri, sourceUrl) {
   }
   const resolved = new URL("/__cad/asset", source);
   resolved.searchParams.set("file", meshFileRef);
+  const sourceDirRef = normalizeFileRefSegments(dirnameFileRef(sourceFileRef));
+  if (sourceDirRef) {
+    resolved.searchParams.set("dir", sourceDirRef);
+  }
   return `${resolved.pathname}${resolved.search}`;
 }
 

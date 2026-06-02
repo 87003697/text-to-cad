@@ -178,7 +178,7 @@ test("parseSdf resolves local CAD asset mesh URIs relative to the SDF file", () 
 
   assert.equal(
     sdfData.links[0].visuals[0].meshUrl,
-    "/__cad/asset?file=%2Fworkspace%2Fmodels%2Fdiffbot%2Fmeshes%2Fchassis.stl"
+    "/__cad/asset?file=%2Fworkspace%2Fmodels%2Fdiffbot%2Fmeshes%2Fchassis.stl&dir=%2Fworkspace%2Fmodels%2Fdiffbot"
   );
 });
 
