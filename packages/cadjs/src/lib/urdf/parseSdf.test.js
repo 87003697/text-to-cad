@@ -162,6 +162,80 @@ test("parseSdf reads SO101-style model-level SDF robot data", () => {
   assert.equal(sdfData.srdf, null);
 });
 
+test("parseSdf resolves local CAD asset mesh URIs relative to the SDF file", () => {
+  const root = sdfRoot([
+    el("model", { name: "diffbot" }, [
+      el("link", { name: "base_link" }, [
+        meshVisual("base_link", "meshes/chassis.stl")
+      ])
+    ])
+  ]);
+
+  const sdfData = parseWithRoot(
+    root,
+    "/__cad/asset?file=%2Fworkspace%2Fmodels%2Fdiffbot%2Fdiffbot.sdf&v=abc123"
+  );
+
+  assert.equal(
+    sdfData.links[0].visuals[0].meshUrl,
+    "/__cad/asset?file=%2Fworkspace%2Fmodels%2Fdiffbot%2Fmeshes%2Fchassis.stl"
+  );
+});
+
+test("parseSdf accepts primitive visual and collision geometry", () => {
+  const root = sdfRoot([
+    el("model", { name: "primitive_robot" }, [
+      el("link", { name: "base_link" }, [
+        el("visual", { name: "box_visual" }, [
+          textEl("pose", "0.025 0 0.003 0 0 0"),
+          el("geometry", {}, [
+            el("box", {}, [
+              textEl("size", "0.17 0.13 0.006")
+            ])
+          ]),
+          el("material", {}, [
+            textEl("diffuse", "0.72 0.78 0.82 1")
+          ])
+        ]),
+        el("visual", { name: "wheel_visual" }, [
+          el("geometry", {}, [
+            el("cylinder", {}, [
+              textEl("radius", "0.04"),
+              textEl("length", "0.012")
+            ])
+          ])
+        ]),
+        el("collision", { name: "body_collision" }, [
+          el("geometry", {}, [
+            el("sphere", {}, [
+              textEl("radius", "0.09")
+            ])
+          ])
+        ])
+      ])
+    ])
+  ]);
+
+  const sdfData = parseWithRoot(root);
+
+  assert.deepEqual(sdfData.links[0].visuals[0].primitive, {
+    type: "box",
+    size: [0.17, 0.13, 0.006]
+  });
+  assert.equal(sdfData.links[0].visuals[0].color, "#b8c7d1");
+  assert.deepEqual(sdfData.links[0].visuals[1].primitive, {
+    type: "cylinder",
+    radius: 0.04,
+    length: 0.012
+  });
+  assert.deepEqual(sdfData.links[0].collisions[0].primitive, {
+    type: "sphere",
+    radius: 0.09
+  });
+  assert.equal(sdfData.sdf.unsupportedVisualCount, 0);
+  assert.equal(sdfData.sdf.unsupportedCollisionCount, 0);
+});
+
 test("parseSdf preserves CAD occurrence ids encoded in visual names", () => {
   const root = sdfRoot([
     el("model", { name: "sample" }, [
@@ -432,7 +506,7 @@ test("parseSdf keeps unsupported geometry as static placeholders", () => {
           el("geometry", {}, [el("mesh")])
         ]),
         el("collision", {}, [
-          el("geometry", {}, [el("box")])
+          el("geometry", {}, [el("plane")])
         ])
       ])
     ])
@@ -441,7 +515,7 @@ test("parseSdf keeps unsupported geometry as static placeholders", () => {
   assert.equal(sdfData.sdf.unsupportedVisualCount, 1);
   assert.equal(sdfData.sdf.unsupportedCollisionCount, 1);
   assert.equal(sdfData.links[0].visuals[0].unsupportedGeometry, "mesh");
-  assert.equal(sdfData.links[0].collisions[0].unsupportedGeometry, "box");
+  assert.equal(sdfData.links[0].collisions[0].unsupportedGeometry, "plane");
 });
 
 test("parseSdf rejects unsupported pose frames", () => {

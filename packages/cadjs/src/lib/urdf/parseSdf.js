@@ -56,6 +56,22 @@ function parseNumberList(value, count, fallback, context) {
   return parsed;
 }
 
+function parseRequiredNumberList(value, count, context) {
+  const text = String(value || "").trim();
+  if (!text) {
+    throw new Error(`${context} must contain ${count} numeric values`);
+  }
+  return parseNumberList(text, count, new Array(count).fill(0), context);
+}
+
+function parsePositiveNumberText(value, context) {
+  const number = Number(String(value || "").trim());
+  if (!Number.isFinite(number) || number <= 0) {
+    throw new Error(`${context} must be positive`);
+  }
+  return number;
+}
+
 function translationTransform(x, y, z) {
   return [
     1, 0, 0, x,
@@ -149,10 +165,67 @@ function normalizeAbsoluteUrl(url) {
   return new URL(String(url || "/"), globalThis.window?.location?.href || "http://localhost/").toString();
 }
 
+function normalizeFileRefSegments(value) {
+  const rawValue = String(value || "").replace(/\\/g, "/");
+  const absolute = rawValue.startsWith("/");
+  const parts = [];
+  for (const part of rawValue.split("/")) {
+    if (!part || part === ".") {
+      continue;
+    }
+    if (part === "..") {
+      if (parts.length && parts[parts.length - 1] !== "..") {
+        parts.pop();
+      } else if (!absolute) {
+        parts.push(part);
+      }
+      continue;
+    }
+    parts.push(part);
+  }
+  return `${absolute ? "/" : ""}${parts.join("/")}`;
+}
+
+function dirnameFileRef(value) {
+  const normalized = String(value || "").replace(/\\/g, "/");
+  const index = normalized.lastIndexOf("/");
+  return index >= 0 ? normalized.slice(0, index + 1) : "";
+}
+
+function resolveLocalAssetFileRef(sourceFileRef, filename) {
+  const rawFilename = String(filename || "").trim();
+  if (!rawFilename || /^[a-z][a-z0-9+.-]*:/i.test(rawFilename)) {
+    return "";
+  }
+  if (rawFilename.startsWith("/")) {
+    return normalizeFileRefSegments(rawFilename);
+  }
+  return normalizeFileRefSegments(`${dirnameFileRef(sourceFileRef)}${rawFilename}`);
+}
+
+function resolveCadAssetMeshUrl(uri, sourceUrl) {
+  const source = new URL(normalizeAbsoluteUrl(sourceUrl));
+  if (source.pathname !== "/__cad/asset") {
+    return "";
+  }
+  const sourceFileRef = source.searchParams.get("file") || "";
+  const meshFileRef = resolveLocalAssetFileRef(sourceFileRef, uri);
+  if (!meshFileRef) {
+    return "";
+  }
+  const resolved = new URL("/__cad/asset", source);
+  resolved.searchParams.set("file", meshFileRef);
+  return `${resolved.pathname}${resolved.search}`;
+}
+
 function resolveMeshUrl(uri, sourceUrl) {
   const rawUri = String(uri || "").trim();
   if (!rawUri) {
     throw new Error("SDF mesh URI is required");
+  }
+  const assetUrl = resolveCadAssetMeshUrl(rawUri, sourceUrl);
+  if (assetUrl) {
+    return assetUrl;
   }
   const normalizedSourceUrl = normalizeAbsoluteUrl(sourceUrl);
   let resolvedUrl;
@@ -231,13 +304,65 @@ function occurrenceIdFromSdfName(value) {
   return match ? `o${match[1].replace(/_/g, ".")}` : "";
 }
 
+function parsePrimitiveGeometry(geometryElement, context) {
+  const boxElement = childElementsByTag(geometryElement, "box")[0] || null;
+  if (boxElement) {
+    const size = parseRequiredNumberList(childText(boxElement, "size"), 3, `${context} box size`);
+    if (size.some((value) => value <= 0)) {
+      throw new Error(`${context} box size values must be positive`);
+    }
+    return {
+      type: "box",
+      size
+    };
+  }
+
+  const cylinderElement = childElementsByTag(geometryElement, "cylinder")[0] || null;
+  if (cylinderElement) {
+    return {
+      type: "cylinder",
+      radius: parsePositiveNumberText(childText(cylinderElement, "radius"), `${context} cylinder radius`),
+      length: parsePositiveNumberText(childText(cylinderElement, "length"), `${context} cylinder length`)
+    };
+  }
+
+  const sphereElement = childElementsByTag(geometryElement, "sphere")[0] || null;
+  if (sphereElement) {
+    return {
+      type: "sphere",
+      radius: parsePositiveNumberText(childText(sphereElement, "radius"), `${context} sphere radius`)
+    };
+  }
+
+  return null;
+}
+
 function parseMeshInstance(containerElement, { linkName, kind, index, sourceUrl }) {
   const labelKind = kind === "collision" ? "collision" : "visual";
   const instanceId = String(containerElement?.getAttribute("name") || "").trim();
   const pose = parsePose(containerElement, `SDF link ${linkName} ${labelKind} ${index}`);
   const geometryElement = childElementsByTag(containerElement, "geometry")[0] || null;
   const meshElement = geometryElement ? childElementsByTag(geometryElement, "mesh")[0] : null;
+  const color = materialColorFromElement(
+    childElementsByTag(containerElement, "material")[0] || null,
+    `SDF link ${linkName} ${labelKind} ${index}`
+  );
   if (!meshElement) {
+    const primitive = geometryElement
+      ? parsePrimitiveGeometry(geometryElement, `SDF link ${linkName} ${labelKind} ${index}`)
+      : null;
+    if (primitive) {
+      return {
+        id: `${linkName}:${kind[0]}${index}`,
+        label: primitive.type,
+        instanceId,
+        occurrenceId: occurrenceIdFromSdfName(instanceId) || occurrenceIdFromSdfName(linkName),
+        primitive,
+        color,
+        localTransform: pose.transform,
+        pose
+      };
+    }
     const geometryKind = geometryElement ? (elementName(childElements(geometryElement)[0]) || "unknown") : "missing";
     return {
       id: `${linkName}:${kind[0]}${index}`,
@@ -245,7 +370,7 @@ function parseMeshInstance(containerElement, { linkName, kind, index, sourceUrl 
       instanceId,
       occurrenceId: occurrenceIdFromSdfName(instanceId) || occurrenceIdFromSdfName(linkName),
       meshUrl: "",
-      color: "",
+      color,
       localTransform: pose.transform,
       pose,
       unsupportedGeometry: geometryKind
@@ -259,7 +384,7 @@ function parseMeshInstance(containerElement, { linkName, kind, index, sourceUrl 
       instanceId,
       occurrenceId: occurrenceIdFromSdfName(instanceId) || occurrenceIdFromSdfName(linkName),
       meshUrl: "",
-      color: "",
+      color,
       localTransform: pose.transform,
       pose,
       unsupportedGeometry: "mesh"
@@ -278,10 +403,7 @@ function parseMeshInstance(containerElement, { linkName, kind, index, sourceUrl 
     instanceId,
     occurrenceId: occurrenceIdFromSdfName(instanceId) || occurrenceIdFromSdfName(linkName),
     meshUrl: resolveMeshUrl(uri, sourceUrl || "/"),
-    color: materialColorFromElement(
-      childElementsByTag(containerElement, "material")[0] || null,
-      `SDF link ${linkName} ${labelKind} ${index}`
-    ),
+    color,
     localTransform: multiplyTransforms(pose.transform, meshScaleTransform),
     pose,
     scaleTransform: meshScaleTransform
