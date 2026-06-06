@@ -17,10 +17,13 @@ import { parseServerLifetimeMs } from "../src/server/serverLifetime.mjs";
 const scriptPath = fileURLToPath(import.meta.url);
 const defaultPackageRoot = path.resolve(path.dirname(scriptPath), "..");
 const startModeFlag = "--viewer-start-mode";
+const defaultRootDirFlag = "--dir";
 const startModes = new Set(["auto", "dev", "serve"]);
 const defaultAgentHost = "127.0.0.1";
 const defaultPortScanLimit = 64;
 const probeTimeoutMs = 350;
+const activationTimeoutMs = 30_000;
+const directoryActivationFeature = "directory-activation";
 
 function requiredValue(argv, index, flag) {
   const value = argv[index + 1];
@@ -54,10 +57,57 @@ function parsePositiveInteger(value, flag) {
   return parsed;
 }
 
-export function parseAgentStartArgs(argv = []) {
+export function normalizeAgentDirectory(value, { fsImpl = fs } = {}) {
+  const rawDir = String(value || "").trim();
+  if (!rawDir) {
+    throw new Error("agent:start requires --dir <absolute-directory>");
+  }
+  if (!path.isAbsolute(rawDir)) {
+    throw new Error("agent:start --dir must be an absolute path");
+  }
+  const resolvedDir = path.resolve(rawDir);
+  let stats = null;
+  try {
+    stats = fsImpl.statSync(resolvedDir);
+  } catch {
+    throw new Error(`agent:start --dir directory not found: ${resolvedDir}`);
+  }
+  if (!stats?.isDirectory?.()) {
+    throw new Error(`agent:start --dir is not a directory: ${resolvedDir}`);
+  }
+  return resolvedDir;
+}
+
+export function replaceForwardedDefaultRootDir(argv = [], rootDir) {
+  const normalizedRootDir = String(rootDir || "").trim();
+  const nextArgs = [];
+  let replaced = false;
+  for (let index = 0; index < argv.length; index += 1) {
+    const arg = argv[index];
+    if (arg.startsWith(`${defaultRootDirFlag}=`)) {
+      nextArgs.push(`${defaultRootDirFlag}=${normalizedRootDir}`);
+      replaced = true;
+      continue;
+    }
+    if (arg === defaultRootDirFlag) {
+      nextArgs.push(arg, normalizedRootDir);
+      replaced = true;
+      index += 1;
+      continue;
+    }
+    nextArgs.push(arg);
+  }
+  if (!replaced) {
+    nextArgs.push(defaultRootDirFlag, normalizedRootDir);
+  }
+  return nextArgs;
+}
+
+export function parseAgentStartArgs(argv = [], { fsImpl = fs } = {}) {
   const options = {
     startMode: "auto",
     forwardedArgs: [],
+    directory: "",
     shutdownAfterMs: null,
     portScanLimit: defaultPortScanLimit,
   };
@@ -97,6 +147,8 @@ export function parseAgentStartArgs(argv = []) {
     options.forwardedArgs.push(arg);
   }
 
+  options.directory = normalizeAgentDirectory(forwardedDefaultRootDir(options.forwardedArgs), { fsImpl });
+  options.forwardedArgs = replaceForwardedDefaultRootDir(options.forwardedArgs, options.directory);
   return options;
 }
 
@@ -108,6 +160,35 @@ export function stripShutdownAfterArgs(argv = []) {
       continue;
     }
     if (arg === "--shutdown-after") {
+      index += 1;
+      continue;
+    }
+    stripped.push(arg);
+  }
+  return stripped;
+}
+
+export function forwardedDefaultRootDir(argv = []) {
+  for (let index = 0; index < argv.length; index += 1) {
+    const arg = argv[index];
+    if (arg.startsWith(`${defaultRootDirFlag}=`)) {
+      return arg.slice(defaultRootDirFlag.length + 1).trim();
+    }
+    if (arg === defaultRootDirFlag) {
+      return requiredValue(argv, index, arg).trim();
+    }
+  }
+  return "";
+}
+
+export function stripDefaultRootDirArgs(argv = []) {
+  const stripped = [];
+  for (let index = 0; index < argv.length; index += 1) {
+    const arg = argv[index];
+    if (arg.startsWith(`${defaultRootDirFlag}=`)) {
+      continue;
+    }
+    if (arg === defaultRootDirFlag) {
       index += 1;
       continue;
     }
@@ -256,6 +337,15 @@ function envWithGit(env, git) {
   };
 }
 
+function envWithGitAndDefaultDir(env, git, defaultDir = "") {
+  const nextEnv = envWithGit(env, git);
+  const normalizedDir = String(defaultDir || "").trim();
+  if (normalizedDir) {
+    nextEnv.VIEWER_DEFAULT_DIR = normalizedDir;
+  }
+  return nextEnv;
+}
+
 export function buildAgentStartCommand({
   mode,
   packageRoot = defaultPackageRoot,
@@ -267,7 +357,7 @@ export function buildAgentStartCommand({
 } = {}) {
   const resolvedPackageRoot = path.resolve(packageRoot);
   if (mode === "dev") {
-    const nextEnv = envWithGit(env, git);
+    const nextEnv = envWithGitAndDefaultDir(env, git, forwardedDefaultRootDir(forwardedArgs));
     if (shutdownAfterMs !== null) {
       nextEnv.VIEWER_SERVER_LIFETIME_MS = String(shutdownAfterMs);
     }
@@ -276,7 +366,7 @@ export function buildAgentStartCommand({
       args: [
         path.join(resolvedPackageRoot, "node_modules", "vite", "bin", "vite.js"),
         "dev",
-        ...stripShutdownAfterArgs(forwardedArgs),
+        ...stripShutdownAfterArgs(stripDefaultRootDirArgs(forwardedArgs)),
       ],
       cwd: resolvedPackageRoot,
       env: nextEnv,
@@ -324,10 +414,21 @@ function normalizeBaseUrl(host, port) {
   return `http://${host}:${port}`;
 }
 
+export function agentViewerUrl(baseUrl, directory) {
+  const url = new URL("/", String(baseUrl || "").endsWith("/") ? baseUrl : `${baseUrl}/`);
+  url.searchParams.set("dir", normalizeAgentDirectory(directory));
+  return url.toString();
+}
+
 function serverInfoGitAllowsReuse(serverInfo, git) {
   const currentGit = String(git || "");
   const serverGit = String(serverInfo?.git || "");
   return !currentGit || !serverGit || currentGit === serverGit;
+}
+
+function serverInfoHasFeature(serverInfo, feature) {
+  const features = Array.isArray(serverInfo?.serverFeatures) ? serverInfo.serverFeatures : [];
+  return features.includes(feature);
 }
 
 export function isReusableAgentViewerServer(serverInfo, git) {
@@ -336,17 +437,20 @@ export function isReusableAgentViewerServer(serverInfo, git) {
     serverInfo.app === VIEWER_SERVER_APP_ID &&
     Number(serverInfo.serverApiVersion || 0) >= VIEWER_SERVER_API_VERSION &&
     serverInfo.dynamicRoot === true &&
+    serverInfoHasFeature(serverInfo, directoryActivationFeature) &&
     serverInfoGitAllowsReuse(serverInfo, git)
   );
 }
 
-async function fetchWithTimeout(fetchImpl, url, timeoutMs) {
+async function fetchWithTimeout(fetchImpl, url, optionsOrTimeoutMs = {}, timeoutMs = probeTimeoutMs) {
+  const requestOptions = typeof optionsOrTimeoutMs === "number" ? {} : { ...optionsOrTimeoutMs };
+  const effectiveTimeoutMs = typeof optionsOrTimeoutMs === "number" ? optionsOrTimeoutMs : timeoutMs;
   const controller = typeof AbortController === "function" ? new AbortController() : null;
   const timeout = controller
-    ? setTimeout(() => controller.abort(), timeoutMs)
+    ? setTimeout(() => controller.abort(), effectiveTimeoutMs)
     : null;
   try {
-    return await fetchImpl(url, controller ? { signal: controller.signal } : {});
+    return await fetchImpl(url, controller ? { ...requestOptions, signal: controller.signal } : requestOptions);
   } finally {
     if (timeout) {
       clearTimeout(timeout);
@@ -392,6 +496,60 @@ export async function probeAgentViewerPort({
     }
     return { status: "closed", port, baseUrl, error };
   }
+}
+
+async function responseSnippet(response) {
+  try {
+    const text = await response.text();
+    return String(text || "").trim().slice(0, 500);
+  } catch {
+    return "";
+  }
+}
+
+export async function activateAgentViewerDirectory({
+  baseUrl,
+  directory,
+  fetchImpl = globalThis.fetch,
+  timeoutMs = activationTimeoutMs,
+} = {}) {
+  if (typeof fetchImpl !== "function") {
+    throw new Error("fetch is unavailable; cannot activate CAD Viewer directory");
+  }
+  const normalizedDirectory = normalizeAgentDirectory(directory);
+  const activationUrl = new URL("/__cad/directory/activate", String(baseUrl || "").endsWith("/") ? baseUrl : `${baseUrl}/`);
+  activationUrl.searchParams.set("dir", normalizedDirectory);
+  let response = null;
+  try {
+    response = await fetchWithTimeout(fetchImpl, String(activationUrl), {
+      method: "POST",
+    }, timeoutMs);
+  } catch (error) {
+    if (probeBlockedByPermissions(error)) {
+      throw new Error(`CAD Viewer directory activation was blocked for ${baseUrl}; rerun agent:start with local network permission.`);
+    }
+    throw error;
+  }
+  if (!response?.ok) {
+    const detail = response ? await responseSnippet(response) : "";
+    const status = response ? `${response.status || "unknown"} ${response.statusText || ""}`.trim() : "unknown";
+    throw new Error(`Failed to activate CAD Viewer directory ${normalizedDirectory}: ${status}${detail ? ` - ${detail}` : ""}`);
+  }
+  let payload = null;
+  try {
+    payload = await response.json();
+  } catch {
+    throw new Error(`CAD Viewer directory activation did not return JSON for ${normalizedDirectory}`);
+  }
+  if (!payload?.ok) {
+    throw new Error(`CAD Viewer directory activation failed for ${normalizedDirectory}`);
+  }
+  return {
+    directory: normalizedDirectory,
+    viewerUrl: agentViewerUrl(baseUrl, normalizedDirectory),
+    activeDirectory: payload.directory || null,
+    serverInfo: payload.server || null,
+  };
 }
 
 function registryHost(serverInfo, fallbackHost) {
@@ -480,7 +638,12 @@ export async function resolveAgentStartLaunch({
     portScanLimit: parsed.portScanLimit,
   });
   if (portResolution.action === "reuse") {
-    return { ...portResolution, git };
+    return {
+      ...portResolution,
+      git,
+      directory: parsed.directory,
+      viewerUrl: agentViewerUrl(portResolution.baseUrl, parsed.directory),
+    };
   }
 
   const mode = selectAgentStartMode({
@@ -494,6 +657,8 @@ export async function resolveAgentStartLaunch({
     port: portResolution.port,
     baseUrl: portResolution.baseUrl,
     git,
+    directory: parsed.directory,
+    viewerUrl: agentViewerUrl(portResolution.baseUrl, parsed.directory),
     command: buildAgentStartCommand({
       mode,
       packageRoot,
@@ -509,13 +674,20 @@ export async function resolveAgentStartLaunch({
 export async function runAgentStart(options = {}) {
   const launch = await resolveAgentStartLaunch(options);
   if (launch.action === "reuse") {
-    console.log(`CAD Viewer already running at ${launch.baseUrl}/`);
+    await activateAgentViewerDirectory({
+      baseUrl: launch.baseUrl,
+      directory: launch.directory,
+      fetchImpl: options.fetchImpl,
+    });
+    console.log(`CAD Viewer already running at ${launch.viewerUrl}`);
+    console.log(`CAD Viewer URL: ${launch.viewerUrl}`);
     console.log(`CAD Viewer git: ${launch.git || "none"}`);
     return null;
   }
 
   const command = launch.command;
-  console.log(`Starting CAD Viewer ${command.mode} server at ${launch.baseUrl}/`);
+  console.log(`Starting CAD Viewer ${command.mode} server at ${launch.viewerUrl}`);
+  console.log(`CAD Viewer URL: ${launch.viewerUrl}`);
   console.log(`CAD Viewer git: ${launch.git || "none"}`);
   const child = spawn(command.command, command.args, {
     cwd: command.cwd,

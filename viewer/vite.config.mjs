@@ -21,7 +21,7 @@ import {
 import {
   pathIsInside,
 } from "cadjs/lib/pathUtils.mjs";
-import { resolveWorkspaceRoot as resolveViewerWorkspaceRoot } from "./src/server/workspaceRoot.mjs";
+import { resolveDirectoryRoot as resolveViewerDirectoryRoot } from "./src/server/directoryRoot.mjs";
 import { createLocalAssetBackend } from "./src/server/localAssetBackend.mjs";
 import {
   createCadViewerApiMiddleware,
@@ -40,12 +40,13 @@ const viewerAppRoot = path.dirname(fileURLToPath(import.meta.url));
 const viewerClientRoot = path.join(viewerAppRoot, "src", "client");
 const cadJsPackageRoot = resolveCadJsPackageRoot();
 const viewerNodeModulesRoot = path.join(viewerAppRoot, "node_modules");
-const defaultWorkspaceRoot = path.resolve(viewerAppRoot, "..");
-const workspaceRoot = resolveWorkspaceRoot();
-const repoRoot = workspaceRoot;
+const defaultDirectoryRoot = path.resolve(viewerAppRoot, "..");
+const directoryRoot = resolveDirectoryRoot();
+const repoRoot = directoryRoot;
 normalizeViewerAssetBackend(process.env.VIEWER_ASSET_BACKEND);
 const buildViewerDefaultFile = normalizeViewerDefaultFile(process.env.VIEWER_DEFAULT_FILE ?? "");
 const buildViewerGithubUrl = normalizeViewerGithubUrl(process.env.VIEWER_GITHUB_URL ?? "");
+const buildViewerDefaultDir = String(process.env.VIEWER_DEFAULT_DIR || "").trim();
 const viewerAllowedHosts = normalizeViewerAllowedHosts(process.env.VIEWER_ALLOWED_HOSTS ?? "");
 const viewerServerLifetimeMs = normalizeServerLifetimeMs(process.env.VIEWER_SERVER_LIFETIME_MS);
 assertNoDeprecatedLocalRootEnv(process.env);
@@ -54,10 +55,12 @@ const viewerGit = String(process.env.VIEWER_GIT || "").trim();
 const localServerFeatures = [
   "dynamic-root",
   "relative-dir-query",
-  "default-root-dir",
+  "default-dir",
+  "directory-activation",
 ];
 const localAssetBackend = createLocalAssetBackend({
-  workspaceRoot,
+  directoryRoot,
+  rootDir: buildViewerDefaultDir,
   defaultFile: buildViewerDefaultFile,
   githubUrl: buildViewerGithubUrl,
 });
@@ -105,12 +108,12 @@ function resolveCadJsPackageRoot() {
   return rootPackageSrc || path.resolve(viewerAppRoot, "../packages/cadjs/src");
 }
 
-function resolveWorkspaceRoot() {
-  return resolveViewerWorkspaceRoot({
+function resolveDirectoryRoot() {
+  return resolveViewerDirectoryRoot({
     env: process.env,
     cwd: process.cwd(),
     appRoot: viewerAppRoot,
-    defaultWorkspaceRoot,
+    defaultDirectoryRoot,
   });
 }
 
@@ -250,12 +253,12 @@ function cadCatalogPlugin({ enableStepArtifactBackend = false } = {}) {
       try {
         activateDirectory(server, localAssetBackend.resolveRoot(""));
       } catch (error) {
-        console.warn("Failed to activate default CAD Viewer workspace", error);
+        console.warn("Failed to activate default CAD Viewer directory", error);
       }
       const currentServerInfo = ({ rootDir = "" } = {}) => {
         const infoRootDir = rootDir || "";
         activeServerInfo = buildViewerServerInfo({
-          workspaceRoot: repoRoot,
+          directoryRoot: repoRoot,
           rootDir: infoRootDir,
           port: viteServerPort(server),
           pid: process.pid,
@@ -285,6 +288,9 @@ function cadCatalogPlugin({ enableStepArtifactBackend = false } = {}) {
         enableStepArtifactBackend,
         serverInfo: currentServerInfo,
         onCatalogActivated: (resolvedRoot) => {
+          activateDirectory(server, resolvedRoot);
+        },
+        onDirectoryActivated: (resolvedRoot) => {
           activateDirectory(server, resolvedRoot);
         },
         onCatalogChanged: (resolvedRoot) => {
