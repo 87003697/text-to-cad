@@ -23,7 +23,7 @@ Use explicit target paths only. Target paths are resolved from the command cwd u
 
 Plain generated Python targets write sibling `.step` outputs. Use `-o`/`--output` only with one plain generated Python target, or use `SOURCE.py=OUTPUT.step` positional pairs for per-target custom outputs. Paired output paths resolve from the command cwd and are valid only for generated Python sources, not direct STEP/STP inputs.
 
-Do not put output-path fields such as `step_output` in the `gen_step()` return envelope. The supported path controls are the sibling default, `-o`/`--output`, and `SOURCE.py=OUTPUT.step`.
+Do not put output paths in the `gen_step()` return value. The supported path controls are the sibling default, `-o`/`--output`, and `SOURCE.py=OUTPUT.step`.
 
 ## Generated Python source
 
@@ -32,10 +32,10 @@ Generated build123d sources should define:
 ```python
 def gen_step():
     ...
-    return shape_or_compound
+    return step_ready_shape_or_labeled_compound
 ```
 
-Generated Python targets infer their kind from the source metadata and `gen_step()` envelope; pass the source path directly. When a generator exists, this is the preferred way to run `scripts/step`.
+Generated Python targets infer their kind from the source metadata and `gen_step()` return value; pass the source path directly. When a generator exists, this is the preferred way to run `scripts/step`.
 
 ```bash
 python scripts/step path/to/part.py
@@ -51,6 +51,8 @@ python scripts/inspect refs path/to/assembly.step --facts --planes --positioning
 ```
 
 Passing a generated assembly `.step` directly treats it as imported native STEP. Pass the `.py` assembly source when source-level assembly composition must be preserved.
+
+For generated build123d assemblies, prefer `cadpy.assembly.AssemblyHelper` in the Python source so native labels, named mate frames, and source-level relationships are preserved before STEP export.
 
 ## Direct STEP/STP targets
 
@@ -100,7 +102,7 @@ Before running the command:
 - Confirm the user request has been converted into a natural-language CAD brief.
 - Confirm the source defines `gen_step()`.
 - Prefer the Python generator over a generated STEP/STP file when both are available.
-- Confirm labels are assigned for exported parts and assembly children.
+- Confirm native labels are assigned for exported parts, assembly children, mate datums, and any retained feature shapes.
 - Confirm the target path is explicit.
 - Confirm expected bbox, labels, and positioning checks are known.
 

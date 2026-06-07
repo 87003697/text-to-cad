@@ -5,6 +5,14 @@ import ImplicitCadViewer from "../ImplicitCadViewer";
 import { CircleAlert, X } from "lucide-react";
 import { Alert, AlertDescription, AlertTitle } from "../ui/alert";
 import { Button } from "../ui/button";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger
+} from "../ui/dropdown-menu";
+import AssemblyContextMenuItems from "./AssemblyContextMenuItems";
 import { cn } from "@/ui/utils";
 import { RENDER_FORMAT } from "@/workbench/constants";
 import {
@@ -14,6 +22,7 @@ import {
 import { VIEWER_SCENE_SCALE } from "cadjs/lib/viewer/sceneScale";
 import { VIEWER_PICK_MODE } from "cadjs/lib/viewer/constants";
 import { useStepAnimationSnapshot } from "@/workbench/stepAnimationStore";
+import { viewerPickModeForRenderPane } from "@/workbench/viewerPickMode";
 
 const EMPTY_LIST = Object.freeze([]);
 const VIEWPORT_ISSUE_META = Object.freeze({
@@ -40,6 +49,133 @@ function viewportIssueMetaForAlert(alert) {
   return alert?.severity === "warning"
     ? VIEWPORT_ISSUE_META.warning
     : VIEWPORT_ISSUE_META.error;
+}
+
+function viewerContextMenuAnchorStyle(menu, viewportFrameInsets) {
+  if (!menu) {
+    return null;
+  }
+  const margin = 8;
+  const viewportWidth = typeof window !== "undefined" ? window.innerWidth : 0;
+  const viewportHeight = typeof window !== "undefined" ? window.innerHeight : 0;
+  const minX = viewportInsetPx(viewportFrameInsets?.left) + margin;
+  const minY = viewportInsetPx(viewportFrameInsets?.top) + margin;
+  const maxX = viewportWidth > 0
+    ? Math.max(minX, viewportWidth - viewportInsetPx(viewportFrameInsets?.right) - margin)
+    : Number(menu.x) || minX;
+  const maxY = viewportHeight > 0
+    ? Math.max(minY, viewportHeight - viewportInsetPx(viewportFrameInsets?.bottom) - margin)
+    : Number(menu.y) || minY;
+  const x = Math.min(Math.max(Number(menu.x) || minX, minX), maxX);
+  const y = Math.min(Math.max(Number(menu.y) || minY, minY), maxY);
+  return {
+    position: "fixed",
+    left: `${x}px`,
+    top: `${y}px`,
+    width: "1px",
+    height: "1px"
+  };
+}
+
+function ViewerContextMenu({
+  menu,
+  positionStyle,
+  onClose,
+  onCopyReference,
+  onSelect,
+  onFocus,
+  onExitAllIsolate,
+  onHideOther,
+  onHideAll,
+  onHide,
+  onReveal,
+  onExpandSelected,
+  onCollapseSelected,
+  onExpandAll,
+  onCollapseAll
+}) {
+  if (!menu || !positionStyle) {
+    return null;
+  }
+
+  const itemClassName = "text-xs";
+  const handleAction = (action) => {
+    action?.(menu);
+    onClose?.();
+  };
+  const selected = menu.selected === true;
+  const hidden = menu.hidden === true;
+  const focused = menu.focused === true;
+
+  return (
+    <DropdownMenu
+      open={true}
+      onOpenChange={(nextOpen) => {
+        if (!nextOpen) {
+          onClose?.();
+        }
+      }}
+    >
+      <DropdownMenuTrigger asChild>
+        <button
+          type="button"
+          tabIndex={-1}
+          aria-hidden="true"
+          className="pointer-events-none fixed size-px opacity-0"
+          style={positionStyle}
+        />
+      </DropdownMenuTrigger>
+      <DropdownMenuContent
+        align="start"
+        side="bottom"
+        sideOffset={4}
+        className="w-44"
+        onContextMenu={(event) => {
+          event.preventDefault();
+          event.stopPropagation();
+        }}
+      >
+        <AssemblyContextMenuItems
+          Item={DropdownMenuItem}
+          Separator={DropdownMenuSeparator}
+          itemClassName={itemClassName}
+          selected={selected}
+          isolated={focused}
+          hidden={hidden}
+          actionCount={menu.actionCount}
+          copyReferenceDisabled={!String(menu.copyText || "").trim()}
+          selectDisabled={menu.selectDisabled === true}
+          showIsolate={menu.showIsolate !== false}
+          isolateDisabled={menu.isolateDisabled === true}
+          showExitAllIsolate={menu.showExitAllIsolate === true}
+          exitAllIsolateDisabled={menu.exitAllIsolateDisabled === true}
+          showHideOther={menu.showHideOther !== false}
+          hideOtherDisabled={menu.hideOtherDisabled === true}
+          showVisibility={menu.showVisibility !== false}
+          showHideAll={menu.showHideAll === true}
+          hideAllDisabled={menu.hideAllDisabled === true}
+          hideAllLabel={String(menu.hideAllLabel || "").trim() || (hidden ? "Reveal all instances" : "Hide all instances")}
+          visibilityDisabled={menu.visibilityDisabled === true}
+          showExpandCollapse={menu.showExpandCollapse === true}
+          expandSelectedDisabled={menu.expandSelectedDisabled !== false}
+          collapseSelectedDisabled={menu.collapseSelectedDisabled !== false}
+          expandAllDisabled={menu.expandAllDisabled !== false}
+          collapseAllDisabled={menu.collapseAllDisabled !== false}
+          onCopyReference={() => handleAction(onCopyReference)}
+          onSelect={() => handleAction(onSelect)}
+          onIsolate={() => handleAction(onFocus)}
+          onExitAllIsolate={() => handleAction(onExitAllIsolate)}
+          onHideOther={() => handleAction(onHideOther)}
+          onHideAll={() => handleAction(onHideAll)}
+          onToggleVisibility={() => handleAction(hidden ? onReveal : onHide)}
+          onExpandSelected={() => handleAction(onExpandSelected)}
+          onCollapseSelected={() => handleAction(onCollapseSelected)}
+          onExpandAll={() => handleAction(onExpandAll)}
+          onCollapseAll={() => handleAction(onCollapseAll)}
+        />
+      </DropdownMenuContent>
+    </DropdownMenu>
+  );
 }
 
 export default function CadRenderPane({
@@ -72,6 +208,9 @@ export default function CadRenderPane({
   hiddenPartIds,
   selectedPartIds,
   hoveredPartId,
+  assemblyMates = EMPTY_LIST,
+  selectedMateIds = EMPTY_LIST,
+  hoveredMateId = "",
   hoveredReferenceId,
   selectedReferenceIds,
   selectorRuntime,
@@ -90,6 +229,21 @@ export default function CadRenderPane({
   handleModelHoverChange,
   handleModelReferenceActivate,
   handleModelReferenceDoubleActivate,
+  handleModelReferenceContext,
+  viewerContextMenu = null,
+  onViewerContextMenuClose,
+  onViewerContextMenuCopyReference,
+  onViewerContextMenuSelect,
+  onViewerContextMenuFocus,
+  onViewerContextMenuExitAllIsolate,
+  onViewerContextMenuHideOther,
+  onViewerContextMenuHideAll,
+  onViewerContextMenuHide,
+  onViewerContextMenuReveal,
+  onViewerContextMenuExpandSelected,
+  onViewerContextMenuCollapseSelected,
+  onViewerContextMenuExpandAll,
+  onViewerContextMenuCollapseAll,
   handleViewerAlertChange,
   handleStepModuleTransformDetectedChange,
   selectionCount,
@@ -176,6 +330,10 @@ export default function CadRenderPane({
     ? viewerAlert
     : null;
   const viewportIssueMeta = viewportIssueMetaForAlert(blockingViewerAlert);
+  const viewerContextMenuStyle = useMemo(
+    () => viewerContextMenuAnchorStyle(viewerContextMenu, viewportFrameInsets),
+    [viewerContextMenu, viewportFrameInsets]
+  );
 
   useEffect(() => {
     if (!urdfPosePickerActive || typeof window === "undefined" || typeof document === "undefined") {
@@ -247,16 +405,25 @@ export default function CadRenderPane({
           compactViewPlane={false}
           viewportFrameInsets={viewportFrameInsets}
           isLoading={viewerLoading}
-          pickMode={
-            urdfMode || pathPreviewMode || topologySelectionPending || topologySelectionUnavailable || topologySelectionDeferred
-              ? VIEWER_PICK_MODE.NONE
-              : (!dxfMode && viewerMode === "assembly" ? VIEWER_PICK_MODE.ASSEMBLY : VIEWER_PICK_MODE.AUTO)
-          }
+          pickMode={urdfMode
+            ? VIEWER_PICK_MODE.NONE
+            : viewerPickModeForRenderPane({
+              dxfMode,
+              pathPreviewMode,
+              topologySelectionPending,
+              topologySelectionUnavailable,
+              topologySelectionDeferred,
+              viewerMode,
+              focusedPartIds
+            })}
           renderPartsIndividually={urdfMode ? true : (renderPartsIndividually || Boolean(resolvedStepParameters?.definition))}
           pickableParts={dxfMode || urdfMode || pathPreviewMode ? EMPTY_LIST : assemblyParts}
           hiddenPartIds={dxfMode || pathPreviewMode ? [] : hiddenPartIds}
           selectedPartIds={dxfMode || pathPreviewMode ? [] : selectedPartIds}
           hoveredPartId={dxfMode || pathPreviewMode ? "" : hoveredPartId}
+          assemblyMates={dxfMode || pathPreviewMode ? [] : assemblyMates}
+          selectedMateIds={dxfMode || pathPreviewMode ? [] : selectedMateIds}
+          hoveredMateId={dxfMode || pathPreviewMode ? "" : hoveredMateId}
           hoveredReferenceId={dxfMode || pathPreviewMode ? "" : hoveredReferenceId}
           selectedReferenceIds={dxfMode || pathPreviewMode ? [] : selectedReferenceIds}
           selectorRuntime={dxfMode || pathPreviewMode ? null : selectorRuntime}
@@ -274,11 +441,31 @@ export default function CadRenderPane({
           onHoverReferenceChange={handleModelHoverChange}
           onActivateReference={handleModelReferenceActivate}
           onDoubleActivateReference={handleModelReferenceDoubleActivate}
+          onContextReference={handleModelReferenceContext}
           onViewerAlertChange={handleViewerAlertChange}
           onStepModuleTransformDetectedChange={handleStepModuleTransformDetectedChange}
           urdfPosePicker={urdfPosePicker}
         />
       )}
+      {!previewMode ? (
+        <ViewerContextMenu
+          menu={viewerContextMenu}
+          positionStyle={viewerContextMenuStyle}
+          onClose={onViewerContextMenuClose}
+          onCopyReference={onViewerContextMenuCopyReference}
+          onSelect={onViewerContextMenuSelect}
+          onFocus={onViewerContextMenuFocus}
+          onExitAllIsolate={onViewerContextMenuExitAllIsolate}
+          onHideOther={onViewerContextMenuHideOther}
+          onHideAll={onViewerContextMenuHideAll}
+          onHide={onViewerContextMenuHide}
+          onReveal={onViewerContextMenuReveal}
+          onExpandSelected={onViewerContextMenuExpandSelected}
+          onCollapseSelected={onViewerContextMenuCollapseSelected}
+          onExpandAll={onViewerContextMenuExpandAll}
+          onCollapseAll={onViewerContextMenuCollapseAll}
+        />
+      ) : null}
       {!previewMode && missingFileLabel ? (
         <div
           className="pointer-events-none absolute z-30 flex min-w-0 items-center justify-center px-4 py-4"

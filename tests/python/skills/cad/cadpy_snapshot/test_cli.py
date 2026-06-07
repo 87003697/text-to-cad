@@ -99,10 +99,47 @@ class SnapshotCliTests(unittest.TestCase):
                     "--output",
                     "tmp/assembly.png",
                     "--focus",
-                    "@cad[models/assembly#o1.2]",
-                    "--hide=@cad[models/assembly#o1.3.1]",
+                    "#o1.2",
+                    "--hide=#o1.3.1",
                 ]
             )
+
+    def test_display_shortcut_accepts_cad_display_modes(self) -> None:
+        for raw_mode, expected_mode in [
+            ("edges", "solid"),
+            ("x-ray", "transparent"),
+            ("hidden edges visible", "hidden_edges"),
+            ("hidden-lines-removed", "hidden_lines_removed"),
+            ("flat", "unshaded"),
+            ("appearance", "rendered"),
+            ("wire", "wireframe"),
+        ]:
+            options = parse_snapshot_args(
+                [
+                    "--input",
+                    "models/simple/cylindrical_cap.step",
+                    "--output",
+                    "tmp/cap.png",
+                    "--display",
+                    raw_mode,
+                ]
+            )
+            job = load_job_from_options(options, stdin=_TtyStringIO(), cwd=Path.cwd())
+            self.assertEqual(job["display"], {"mode": expected_mode})
+
+    def test_display_shortcut_rejects_unknown_modes(self) -> None:
+        options = parse_snapshot_args(
+            [
+                "--input",
+                "models/simple/cylindrical_cap.step",
+                "--output",
+                "tmp/cap.png",
+                "--display",
+                "mist",
+            ]
+        )
+        with self.assertRaisesRegex(SnapshotError, "Unsupported display mode"):
+            load_job_from_options(options, stdin=_TtyStringIO(), cwd=Path.cwd())
 
     def test_shortcut_focus_flags_apply_selection(self) -> None:
         options = parse_snapshot_args(
@@ -112,8 +149,8 @@ class SnapshotCliTests(unittest.TestCase):
                 "--output",
                 "tmp/assembly.png",
                 "--focus",
-                "@cad[models/assembly#o1.2]",
-                "@cad[models/assembly#o1.3]",
+                "#o1.2",
+                "#o1.3",
             ]
         )
 
@@ -122,7 +159,7 @@ class SnapshotCliTests(unittest.TestCase):
         self.assertEqual(
             job["selection"],
             {
-                "focus": ["@cad[models/assembly#o1.2]", "@cad[models/assembly#o1.3]"],
+                "focus": ["#o1.2", "#o1.3"],
             },
         )
 
@@ -291,7 +328,7 @@ class SnapshotCliTests(unittest.TestCase):
                 resolve_render_job_packet(
                     {
                         "input": "models/assembly.step",
-                        "selection": {"focus": ["@cad[models/assembly#o1.2]"]},
+                        "selection": {"focus": ["#o1.2"]},
                         "outputs": [{"path": "tmp/iso.png", "camera": "iso"}],
                     },
                     cwd=root,
@@ -304,7 +341,7 @@ class SnapshotCliTests(unittest.TestCase):
         self.assertEqual(target.step_path, step_path)
         self.assertTrue(kwargs["require_selector"])
 
-    def test_render_job_normalizes_focus_cad_refs(self) -> None:
+    def test_render_job_normalizes_focus_selector_refs(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             root = Path(temporary_directory).resolve()
             models = root / "models"
@@ -324,7 +361,7 @@ class SnapshotCliTests(unittest.TestCase):
                     {
                         "input": "models/assembly.step",
                         "selection": {
-                            "focus": ["@cad[models/assembly#o1.2,o1.3]"],
+                            "focus": ["#o1.2", "#o1.3"],
                         },
                         "outputs": [{"path": "tmp/iso.png", "camera": "iso"}],
                     },
@@ -336,7 +373,7 @@ class SnapshotCliTests(unittest.TestCase):
         selection = packet["jobs"][0]["selection"]
         self.assertEqual(selection["focus"], ["o1.2", "o1.3"])
 
-    def test_render_job_normalizes_hide_cad_refs(self) -> None:
+    def test_render_job_normalizes_hide_selector_refs(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             root = Path(temporary_directory).resolve()
             models = root / "models"
@@ -355,7 +392,7 @@ class SnapshotCliTests(unittest.TestCase):
                 packet = resolve_render_job_packet(
                     {
                         "input": "models/assembly.step",
-                        "selection": {"hide": ["@cad[models/assembly.step#o1.2.1]"]},
+                        "selection": {"hide": ["#o1.2.1"]},
                         "outputs": [{"path": "tmp/iso.png", "camera": "iso"}],
                     },
                     cwd=root,
@@ -381,7 +418,7 @@ class SnapshotCliTests(unittest.TestCase):
                     resolve_render_job_packet(
                         {
                             "input": "models/assembly.step",
-                            "selection": {"focus": ["@cad[models/assembly#o1.2.f1]"]},
+                            "selection": {"focus": ["#o1.2.f1"]},
                             "outputs": [{"path": "tmp/iso.png", "camera": "iso"}],
                         },
                         cwd=root,
@@ -409,8 +446,8 @@ class SnapshotCliTests(unittest.TestCase):
                         {
                             "input": "models/assembly.step",
                             "selection": {
-                                "focus": ["@cad[models/assembly#o1.2]"],
-                                "hide": ["@cad[models/assembly#o1.3]"],
+                                "focus": ["#o1.2"],
+                                "hide": ["#o1.3"],
                             },
                             "outputs": [{"path": "tmp/iso.png", "camera": "iso"}],
                         },

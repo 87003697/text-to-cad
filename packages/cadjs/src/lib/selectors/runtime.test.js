@@ -44,7 +44,7 @@ test("buildSelectorRuntime remaps source part rows onto an assembly occurrence",
   const faces = runtime.references.filter((reference) => reference.selectorType === "face");
 
   assert.deepEqual(faces.map((reference) => reference.displaySelector), ["o1.5.f1", "o1.5.f2"]);
-  assert.equal(faces[1].copyText, "@cad[parts/root#o1.5.f2] plane area=1");
+  assert.equal(faces[1].copyText, "#o1.5.f2");
   assert.equal(faces[1].pickData.surfaceType, "plane");
 });
 
@@ -91,6 +91,37 @@ test("buildSelectorRuntime remaps native occurrence prefixes onto assembly desce
   assert.equal(runtime.occurrenceIdByRowIndex.get(0), "o1");
   assert.equal(runtime.occurrenceIdByRowIndex.get(1), "o1.1");
   assert.equal(runtime.occurrenceIdByRowIndex.get(2), "o9.4.1.2");
+});
+
+test("buildSelectorRuntime uses STEP topology shape names in shape references", () => {
+  const bundle = {
+    manifest: {
+      cadRef: "parts/labeled",
+      tables: {
+        occurrenceColumns: ["id", "path", "name", "sourceName", "parentId", "transform", "bbox", "shapeStart", "shapeCount", "faceStart", "faceCount", "edgeStart", "edgeCount"],
+        shapeColumns: ["id", "occurrenceId", "ordinal", "kind", "name", "sourceName", "bbox", "center", "area", "volume", "faceStart", "faceCount", "edgeStart", "edgeCount"],
+        faceColumns: ["id", "occurrenceId", "shapeId", "ordinal", "surfaceType", "area", "center", "normal", "bbox", "edgeStart", "edgeCount", "relevance", "flags", "params", "triangleStart", "triangleCount"],
+        edgeColumns: ["id", "occurrenceId", "shapeId", "ordinal", "curveType", "length", "center", "bbox", "faceStart", "faceCount", "relevance", "flags", "params", "segmentStart", "segmentCount"],
+      },
+      occurrences: [
+        ["o1", "1", "base:front_left", "base", null, null, null, 0, 1, 0, 0, 0, 0]
+      ],
+      shapes: [
+        ["o1.s1", "o1", 1, "solid", "base:front_left", "base", null, null, 24, 12, 0, 0, 0, 0]
+      ],
+      faces: [],
+      edges: []
+    },
+    buffers: {}
+  };
+
+  const runtime = buildSelectorRuntime(bundle, { copyCadPath: "parts/labeled" });
+  const shape = runtime.references.find((reference) => reference.selectorType === "shape");
+
+  assert.equal(shape.summary, "base:front_left solid volume=12");
+  assert.equal(shape.copyText, "#s1");
+  assert.equal(shape.pickData.name, "base:front_left");
+  assert.equal(shape.pickData.sourceName, "base");
 });
 
 test("buildSelectorRuntime exposes v1 GLB face runs from selector buffers", () => {

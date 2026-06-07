@@ -269,6 +269,29 @@ def _refs_manifest(cad_ref: str) -> dict[str, object]:
                 0,
             ]
         ],
+        "assemblyMates": [
+            {
+                "id": "m1",
+                "label": "m1",
+                "sourceLabel": "face_to_face:block_pocket_floor_offset:bottom_center",
+                "type": "face_to_face",
+                "fixed": "block_pocket_floor:offset",
+                "moving": "bottom_center",
+                "parameters": {"offset": 0.2},
+                "fixedEndpoint": {
+                    "position": [6.0, 1.0, 0.0],
+                    "axes": {
+                        "z": [0.0, 0.0, 1.0],
+                    },
+                },
+                "movingEndpoint": {
+                    "position": [7.0, 2.0, 1.0],
+                    "axes": {
+                        "z": [0.0, 0.0, 1.0],
+                    },
+                },
+            }
+        ],
         "relations": {
             "faceEdgeRows": [0, 1, 0],
             "edgeFaceRows": [0, 1, 0],
@@ -478,7 +501,7 @@ class InspectRefsTests(unittest.TestCase):
 
     def test_whole_entry_summary_uses_glb_index(self) -> None:
         with self._mock_glb_topology(_summary_manifest(self.cad_ref), include_selector=False):
-            result = refs_inspect.inspect_cad_refs(f"@cad[{self.cad_ref}]")
+            result = refs_inspect.inspect_cad_refs(self.cad_ref)
 
         self.assertTrue(result["ok"])
         token = result["tokens"][0]
@@ -498,7 +521,7 @@ class InspectRefsTests(unittest.TestCase):
         }
 
         with self._mock_glb_topology(manifest, include_selector=False):
-            result = refs_inspect.inspect_cad_refs(f"@cad[{self.cad_ref}]")
+            result = refs_inspect.inspect_cad_refs(self.cad_ref)
 
         self.assertTrue(result["ok"])
         token = result["tokens"][0]
@@ -522,10 +545,7 @@ class InspectRefsTests(unittest.TestCase):
                 selector_index=refs_inspect.lookup.build_selector_index(manifest),
             )
 
-        result = refs_inspect.inspect_cad_refs(
-            f"@cad[{self.cad_ref}]",
-            context_provider=provider,
-        )
+        result = refs_inspect.inspect_cad_refs(self.cad_ref, context_provider=provider)
 
         self.assertTrue(result["ok"])
         self.assertEqual([SelectorProfile.SUMMARY], requested_profiles)
@@ -533,7 +553,7 @@ class InspectRefsTests(unittest.TestCase):
 
     def test_face_lookup_resolves_single_occurrence_alias_and_detail(self) -> None:
         with self._mock_glb_topology(_refs_manifest(self.cad_ref)):
-            result = refs_inspect.inspect_cad_refs(f"@cad[{self.cad_ref}#o1.2.f1]", detail=True)
+            result = refs_inspect.inspect_cad_refs(self.cad_ref, "#o1.2.f1", detail=True)
 
         self.assertTrue(result["ok"])
         selection = result["tokens"][0]["selections"][0]
@@ -542,9 +562,25 @@ class InspectRefsTests(unittest.TestCase):
         self.assertEqual("plane area=20.0", selection["summary"])
         self.assertEqual(["e1", "e2"], selection["detail"]["adjacentEdgeSelectors"])
 
+    def test_assembly_mate_lookup_resolves_numbered_ref(self) -> None:
+        with self._mock_glb_topology(_refs_manifest(self.cad_ref)):
+            result = refs_inspect.inspect_cad_refs(self.cad_ref, "#m1", detail=True, positioning=True)
+
+        self.assertTrue(result["ok"])
+        selection = result["tokens"][0]["selections"][0]
+        self.assertEqual("mate", selection["selectorType"])
+        self.assertEqual("m1", selection["normalizedSelector"])
+        self.assertEqual("#m1", selection["copyText"])
+        self.assertEqual("Mate face_to_face:block_pocket_floor_offset:bottom_center", selection["label"])
+        self.assertEqual("face_to_face block_pocket_floor:offset -> bottom_center", selection["summary"])
+        self.assertEqual("face_to_face:block_pocket_floor_offset:bottom_center", selection["detail"]["sourceLabel"])
+        self.assertEqual({"offset": 0.2}, selection["detail"]["parameters"])
+        self.assertEqual("mate", selection["positioning"]["selectorType"])
+        self.assertEqual([6.0, 1.0, 0.0], selection["positioning"]["fixedEndpoint"]["position"])
+
     def test_vertex_lookup_resolves_corner_detail(self) -> None:
         with self._mock_glb_topology(_refs_manifest(self.cad_ref)):
-            result = refs_inspect.inspect_cad_refs(f"@cad[{self.cad_ref}#o1.2.v1]", detail=True)
+            result = refs_inspect.inspect_cad_refs(self.cad_ref, "#o1.2.v1", detail=True)
 
         self.assertTrue(result["ok"])
         selection = result["tokens"][0]["selections"][0]
@@ -556,7 +592,7 @@ class InspectRefsTests(unittest.TestCase):
 
     def test_single_occurrence_alias_is_compacted_in_copy_text(self) -> None:
         with self._mock_glb_topology(_summary_manifest(self.cad_ref)):
-            result = refs_inspect.inspect_cad_refs(f"@cad[{self.cad_ref}#f2]", detail=True)
+            result = refs_inspect.inspect_cad_refs(self.cad_ref, "#f2", detail=True)
 
         self.assertFalse(result["ok"])
 
@@ -574,23 +610,23 @@ class InspectRefsTests(unittest.TestCase):
                 "occurrences": [_refs_manifest(self.cad_ref)["occurrences"][1]],
             },
         ):
-            result = refs_inspect.inspect_cad_refs(f"@cad[{self.cad_ref}#v1]", detail=True)
+            result = refs_inspect.inspect_cad_refs(self.cad_ref, "#v1", detail=True)
 
         self.assertTrue(result["ok"])
         selection = result["tokens"][0]["selections"][0]
         self.assertEqual("v1", selection["displaySelector"])
-        self.assertEqual(f"@cad[{self.cad_ref}#v1]", selection["copyText"])
+        self.assertEqual("#v1", selection["copyText"])
 
     def test_old_part_selector_syntax_is_rejected(self) -> None:
         with self._mock_glb_topology(_refs_manifest(self.cad_ref)):
-            result = refs_inspect.inspect_cad_refs(f"@cad[{self.cad_ref}#p:legacy.f1]")
+            result = refs_inspect.inspect_cad_refs(self.cad_ref, "#p:legacy.f1")
 
         self.assertFalse(result["ok"])
         self.assertEqual("selector", result["errors"][0]["kind"])
 
     def test_topology_flag_returns_full_selector_lists(self) -> None:
         with self._mock_glb_topology(_refs_manifest(self.cad_ref)):
-            result = refs_inspect.inspect_cad_refs(f"@cad[{self.cad_ref}]", include_topology=True)
+            result = refs_inspect.inspect_cad_refs(self.cad_ref, include_topology=True)
 
         self.assertTrue(result["ok"])
         topology = result["tokens"][0]["topology"]
@@ -616,14 +652,14 @@ class InspectRefsTests(unittest.TestCase):
         }
 
         with self._mock_glb_topology(manifest, buffers=buffers):
-            result = refs_inspect.inspect_cad_refs(f"@cad[{self.cad_ref}#o1.2.f1]", detail=True)
+            result = refs_inspect.inspect_cad_refs(self.cad_ref, "#o1.2.f1", detail=True)
 
         self.assertTrue(result["ok"])
         selection = result["tokens"][0]["selections"][0]
         self.assertEqual(["e1", "e2"], selection["detail"]["adjacentEdgeSelectors"])
 
     def test_missing_glb_topology_is_an_inspect_error(self) -> None:
-        result = refs_inspect.inspect_cad_refs(f"@cad[{self.cad_ref}]")
+        result = refs_inspect.inspect_cad_refs(self.cad_ref)
 
         self.assertFalse(result["ok"])
         error = result["errors"][0]
@@ -635,7 +671,7 @@ class InspectRefsTests(unittest.TestCase):
 
     def test_missing_selector_topology_is_an_inspect_error(self) -> None:
         with self._mock_glb_topology(_refs_manifest(self.cad_ref), include_selector=False):
-            result = refs_inspect.inspect_cad_refs(f"@cad[{self.cad_ref}#f1]")
+            result = refs_inspect.inspect_cad_refs(self.cad_ref, "#f1")
 
         self.assertFalse(result["ok"])
         error = result["errors"][0]
@@ -644,7 +680,7 @@ class InspectRefsTests(unittest.TestCase):
 
     def test_missing_step_topology_is_an_inspect_error(self) -> None:
         with self._mock_glb_topology(_summary_manifest(self.cad_ref), include_index=False):
-            result = refs_inspect.inspect_cad_refs(f"@cad[{self.cad_ref}]")
+            result = refs_inspect.inspect_cad_refs(self.cad_ref)
 
         self.assertFalse(result["ok"])
         error = result["errors"][0]
@@ -660,7 +696,7 @@ class InspectRefsTests(unittest.TestCase):
             "read_step_topology_manifest_from_glb",
             return_value=manifest,
         ):
-            result = refs_inspect.inspect_cad_refs(f"@cad[{self.cad_ref}]")
+            result = refs_inspect.inspect_cad_refs(self.cad_ref)
 
         self.assertFalse(result["ok"])
         error = result["errors"][0]
@@ -669,7 +705,7 @@ class InspectRefsTests(unittest.TestCase):
 
     def test_stale_glb_topology_is_an_inspect_error(self) -> None:
         with self._mock_glb_topology(_refs_manifest(self.cad_ref), current_hash="new-step-hash"):
-            result = refs_inspect.inspect_cad_refs(f"@cad[{self.cad_ref}]")
+            result = refs_inspect.inspect_cad_refs(self.cad_ref)
 
         self.assertFalse(result["ok"])
         error = result["errors"][0]
@@ -678,14 +714,14 @@ class InspectRefsTests(unittest.TestCase):
 
     def test_legacy_cad_ref_mismatch_is_accepted_when_hash_matches(self) -> None:
         with self._mock_glb_topology({**_refs_manifest("other/ref"), "stepHash": "step-hash-123"}):
-            result = refs_inspect.inspect_cad_refs(f"@cad[{self.cad_ref}]")
+            result = refs_inspect.inspect_cad_refs(self.cad_ref)
 
         self.assertTrue(result["ok"])
         self.assertEqual(self.cad_ref, result["tokens"][0]["cadPath"])
 
     def test_non_leaf_occurrence_detail_reports_children(self) -> None:
         with self._mock_glb_topology(_refs_manifest(self.cad_ref)):
-            result = refs_inspect.inspect_cad_refs(f"@cad[{self.cad_ref}#o1]", detail=True)
+            result = refs_inspect.inspect_cad_refs(self.cad_ref, "#o1", detail=True)
 
         self.assertTrue(result["ok"])
         selection = result["tokens"][0]["selections"][0]
@@ -719,7 +755,7 @@ class InspectRefsTests(unittest.TestCase):
             },
             step_path=assembly_step_path,
         ):
-            result = refs_inspect.inspect_cad_refs(f"@cad[{assembly_cad_ref}#o1.2.f1]", detail=True)
+            result = refs_inspect.inspect_cad_refs(assembly_cad_ref, "#o1.2.f1", detail=True)
 
         self.assertTrue(result["ok"])
         selection = result["tokens"][0]["selections"][0]
@@ -730,7 +766,8 @@ class InspectRefsTests(unittest.TestCase):
     def test_positioning_flag_returns_plane_facts(self) -> None:
         with self._mock_glb_topology(_refs_manifest(self.cad_ref)):
             result = refs_inspect.inspect_cad_refs(
-                f"@cad[{self.cad_ref}#o1.2.f1]",
+                self.cad_ref,
+                "#o1.2.f1",
                 positioning=True,
             )
 
@@ -744,7 +781,7 @@ class InspectRefsTests(unittest.TestCase):
     def test_planes_flag_returns_entry_planes(self) -> None:
         with self._mock_glb_topology(_refs_manifest(self.cad_ref)):
             result = refs_inspect.inspect_cad_refs(
-                f"@cad[{self.cad_ref}]",
+                self.cad_ref,
                 planes=True,
                 plane_coordinate_tolerance=0.01,
                 plane_min_area_ratio=0.0,
@@ -794,8 +831,8 @@ class InspectRefsTests(unittest.TestCase):
     def test_diff_planes_returns_entry_planes(self) -> None:
         with self._mock_glb_topology(_refs_manifest(self.cad_ref)):
             result = refs_inspect.diff_entry_targets(
-                f"@cad[{self.cad_ref}]",
-                f"@cad[{self.cad_ref}]",
+                self.cad_ref,
+                self.cad_ref,
                 planes=True,
                 plane_limit=1,
             )
@@ -807,7 +844,7 @@ class InspectRefsTests(unittest.TestCase):
     def test_cli_parses_current_agentic_commands(self) -> None:
         parser = inspect_cli.build_parser()
 
-        refs_args = parser.parse_args(["refs", "@cad[entry]", "--detail", "--facts"])
+        refs_args = parser.parse_args(["refs", "entry.step", "#f1", "--detail", "--facts"])
         self.assertEqual("refs", refs_args.command)
         self.assertTrue(refs_args.detail)
         self.assertTrue(refs_args.facts)
@@ -826,7 +863,7 @@ class InspectRefsTests(unittest.TestCase):
         worker_args = parser.parse_args(["worker"])
         self.assertEqual("worker", worker_args.command)
 
-        top_level_verbose_args = parser.parse_args(["--verbose", "refs", "@cad[entry]"])
+        top_level_verbose_args = parser.parse_args(["--verbose", "refs", "entry.step", "#f1"])
         self.assertTrue(top_level_verbose_args.verbose)
 
         with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit) as verbose_render_exit:
@@ -839,11 +876,11 @@ class InspectRefsTests(unittest.TestCase):
         self.assertFalse(response["ok"])
         self.assertEqual("missing-input", response["id"])
         self.assertEqual(2, response["exitCode"])
-        self.assertIn("No input text provided", response["result"]["errors"][0]["message"])
+        self.assertIn("No STEP/CAD entry target provided", response["result"]["errors"][0]["message"])
 
     def test_frame_command_returns_occurrence_axes(self) -> None:
         with self._mock_glb_topology(_refs_manifest(self.cad_ref)):
-            result = refs_inspect.inspect_target_frame(f"@cad[{self.cad_ref}#o1.2]")
+            result = refs_inspect.inspect_target_frame(self.cad_ref, "#o1.2")
 
         self.assertTrue(result["ok"])
         self.assertEqual([5.0, 0.0, 0.0], result["frame"]["translation"])
@@ -852,8 +889,9 @@ class InspectRefsTests(unittest.TestCase):
     def test_measure_targets_returns_signed_axis_distance(self) -> None:
         with self._mock_glb_topology(_refs_manifest(self.cad_ref)):
             result = refs_inspect.measure_targets(
-                f"@cad[{self.cad_ref}#o1.2.f1]",
-                f"@cad[{self.cad_ref}#o1.2.f2]",
+                self.cad_ref,
+                "#o1.2.f1",
+                "#o1.2.f2",
                 axis="x",
             )
 
@@ -863,17 +901,18 @@ class InspectRefsTests(unittest.TestCase):
         self.assertEqual(7.0, result["to"]["coordinate"])
         self.assertEqual(2.0, result["measurement"]["signedDistance"])
 
-    def test_mate_targets_returns_flush_translation_delta(self) -> None:
+    def test_align_targets_returns_flush_translation_delta(self) -> None:
         with self._mock_glb_topology(_refs_manifest(self.cad_ref)):
-            result = refs_inspect.mate_targets(
-                f"@cad[{self.cad_ref}#o1.2.f1]",
-                f"@cad[{self.cad_ref}#o1.2.f2]",
+            result = refs_inspect.align_targets(
+                self.cad_ref,
+                "#o1.2.f1",
+                "#o1.2.f2",
                 axis="x",
             )
 
         self.assertTrue(result["ok"])
-        self.assertEqual([2.0, 0.0, 0.0], result["mate"]["translationVector"])
-        self.assertEqual(2.0, result["mate"]["transformTranslationDelta"]["3"])
+        self.assertEqual([2.0, 0.0, 0.0], result["alignment"]["translationVector"])
+        self.assertEqual(2.0, result["alignment"]["transformTranslationDelta"]["3"])
 
 if __name__ == "__main__":
     unittest.main()

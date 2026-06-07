@@ -62,6 +62,42 @@ CONTACT_SHEET_RENDER_WIDTH = 2400
 CONTACT_SHEET_RENDER_HEIGHT = 1600
 
 DISPLAY_OPTION_KEYS = {"mode", "clip"}
+DISPLAY_MODE_ALIASES = {
+    "solid": "solid",
+    "edges": "solid",
+    "edge": "solid",
+    "shaded_edges": "solid",
+    "shaded_with_edges": "solid",
+    "with_edges": "solid",
+    "shaded": "rendered",
+    "shaded_without_edges": "rendered",
+    "without_edges": "rendered",
+    "transparent": "transparent",
+    "translucent": "transparent",
+    "xray": "transparent",
+    "x_ray": "transparent",
+    "see_through": "transparent",
+    "hidden_edges": "hidden_edges",
+    "hidden_edge": "hidden_edges",
+    "hidden_edges_visible": "hidden_edges",
+    "hidden_edge_display": "hidden_edges",
+    "shaded_hidden_edges": "hidden_edges",
+    "hidden_lines_removed": "hidden_lines_removed",
+    "hidden_line_removed": "hidden_lines_removed",
+    "hidden_lines": "hidden_lines_removed",
+    "hidden_edges_removed": "hidden_lines_removed",
+    "visible_edges": "hidden_lines_removed",
+    "visible_edges_only": "hidden_lines_removed",
+    "unshaded": "unshaded",
+    "flat": "unshaded",
+    "rendered": "rendered",
+    "appearance": "rendered",
+    "material": "rendered",
+    "materials": "rendered",
+    "wireframe": "wireframe",
+    "wire_frame": "wireframe",
+    "wire": "wireframe",
+}
 APPEARANCE_OPTION_KEYS = {
     "materials",
     "edges",
@@ -115,7 +151,7 @@ def help_text() -> str:
   python scripts/snapshot --job -
   python scripts/snapshot --input models/part.step --output /tmp/part.png --appearance workbench
 
-Shortcut flags are for common STEP/STP snapshots. --job accepts one render job, an array of render jobs, or { "jobs": [...] }. Every job input must be a relative or absolute .step/.stp path, or a same-stem Python generator; direct GLB/STL/3MF/DXF/G-code/robot-description inputs are unsupported. The default appearance is the workbench saved theme. --appearance accepts a saved theme name, an inline JSON appearance settings object, or a JSON appearance settings file path. --display accepts solid, wireframe, an inline JSON display settings object, or a JSON display settings file path. --camera accepts a preset, azimuth:elevation pair, or JSON object with preset, position, target, up, and zoom fields. --focus and --hide accept one or more @cad[...] occurrence refs to parts or subassemblies; pass the flag repeatedly or list refs after the flag. Option JSON is direct settings JSON, not a wrapped job fragment. Full JSON jobs use top-level appearance and display. Use --view-labels to burn the camera/view label into shortcut outputs. Use --params with STEP parameter sidecar JSON values, and --size-profile for default dimensions such as simple, diagnostic, labeled, assembly, presentation, orbit, or contact-sheet. Output file names are saved with a shared UTC seconds timestamp before the extension.
+Shortcut flags are for common STEP/STP snapshots. --job accepts one render job, an array of render jobs, or { "jobs": [...] }. Every job input must be a relative or absolute .step/.stp path, or a same-stem Python generator; direct GLB/STL/3MF/DXF/G-code/robot-description inputs are unsupported. The default appearance is the workbench saved theme. --appearance accepts a saved theme name, an inline JSON appearance settings object, or a JSON appearance settings file path. --display accepts solid, rendered, transparent, hidden_edges, hidden_lines_removed, unshaded, wireframe, an inline JSON display settings object, or a JSON display settings file path. --camera accepts a preset, azimuth:elevation pair, or JSON object with preset, position, target, up, and zoom fields. --focus and --hide accept one or more selector refs such as #o1.2 for parts or subassemblies; pass the flag repeatedly or list refs after the flag. Option JSON is direct settings JSON, not a wrapped job fragment. Full JSON jobs use top-level appearance and display. Use --view-labels to burn the camera/view label into shortcut outputs. Use --params with STEP parameter sidecar JSON values, and --size-profile for default dimensions such as simple, diagnostic, labeled, assembly, presentation, orbit, or contact-sheet. Output file names are saved with a shared UTC seconds timestamp before the extension.
 """
 
 
@@ -345,7 +381,11 @@ def load_display_option(raw_display: object, *, cwd: Path) -> dict[str, object]:
     display_path = Path(display) if Path(display).is_absolute() else cwd / display
     looks_like_file = display.lower().endswith(".json") or "/" in display or "\\" in display
     if not looks_like_file and not display_path.exists():
-        return {"mode": "wireframe" if display.lower() == "wireframe" else "solid"}
+        normalized_mode = re.sub(r"[\s-]+", "_", display.lower())
+        if normalized_mode not in DISPLAY_MODE_ALIASES:
+            supported = ", ".join(sorted(set(DISPLAY_MODE_ALIASES.values())))
+            raise SnapshotError(f"Unsupported display mode: {display}. Supported modes: {supported}")
+        return {"mode": DISPLAY_MODE_ALIASES[normalized_mode]}
     if not display_path.exists():
         raise SnapshotError(f"Display JSON file does not exist: {display}")
     return validate_direct_settings_payload(
@@ -655,8 +695,6 @@ def selection_value_list(value: object) -> list[str]:
     text = str(value or "").strip()
     if not text:
         return []
-    if text.startswith("@cad["):
-        return [text]
     return [entry.strip() for entry in text.split(",") if entry.strip()]
 
 
@@ -672,8 +710,6 @@ def selector_value_requires_topology(value: str) -> bool:
     text = str(value or "").strip()
     if not text:
         return False
-    if text.startswith("@cad["):
-        return True
     parsed = cad_ref_syntax.parse_selector(text)
     return parsed is not None and parsed.selector_type != "opaque"
 
@@ -721,39 +757,6 @@ def validate_occurrence_selector(selector: str, *, selector_index: lookup.Select
         raise SnapshotError(f"{source_label} references unknown part/subassembly occurrence selector: {selector}")
 
 
-def normalize_selection_cad_ref(
-    raw_value: str,
-    *,
-    expected_cad_path: str,
-    selector_index: lookup.SelectorIndex | None,
-    source_label: str,
-) -> list[str]:
-    text = str(raw_value or "").strip()
-    tokens = cad_ref_syntax.parse_cad_tokens(text)
-    if len(tokens) != 1 or tokens[0].token.strip() != text:
-        raise SnapshotError(f"{source_label} must be a single @cad[...] occurrence ref: {text}")
-    token = tokens[0]
-    if token.cad_path != expected_cad_path:
-        raise SnapshotError(
-            f"{source_label} ref targets {token.cad_path}, but snapshot input is {expected_cad_path}"
-        )
-    if not token.selectors:
-        raise SnapshotError(f"{source_label} refs must include a part/subassembly occurrence selector")
-
-    selectors: list[str] = []
-    for selector in token.selectors:
-        parsed = cad_ref_syntax.parse_selector(selector)
-        if parsed is None or parsed.selector_type != "occurrence":
-            kind = parsed.selector_type if parsed is not None else "empty"
-            raise SnapshotError(
-                f"{source_label} supports only part/subassembly occurrence refs; "
-                f"got {kind} selector {selector!r}"
-            )
-        validate_occurrence_selector(parsed.canonical, selector_index=selector_index, source_label=source_label)
-        selectors.append(parsed.canonical)
-    return selectors
-
-
 def normalize_selection_selector(
     raw_value: str,
     *,
@@ -784,21 +787,11 @@ def normalize_selection_filter_values(
     selector_index: lookup.SelectorIndex | None,
     source_label: str,
 ) -> list[str]:
+    _ = expected_cad_path
     selectors: list[str] = []
     for raw_value in selection_value_list(value):
-        text = str(raw_value or "").strip()
-        if text.startswith("@cad["):
-            selectors.extend(
-                normalize_selection_cad_ref(
-                    text,
-                    expected_cad_path=expected_cad_path,
-                    selector_index=selector_index,
-                    source_label=source_label,
-                )
-            )
-            continue
         selectors.extend(
-            normalize_selection_selector(text, selector_index=selector_index, source_label=source_label)
+            normalize_selection_selector(raw_value, selector_index=selector_index, source_label=source_label)
         )
     return selectors
 
@@ -891,7 +884,7 @@ def resolve_render_job(
     if mode not in SUPPORTED_RENDER_MODES:
         raise SnapshotError(f"Unsupported render mode: {mode or '(missing)'}")
     if has_param_render and mode != "view":
-        raise SnapshotError("stepParameters support only view mode; set display.mode for solid or wire output")
+        raise SnapshotError("stepParameters support only view mode; set display.mode for display-style changes")
     if has_param_render and not step_parameter_path.exists():
         raise SnapshotError(
             f"STEP/STP render stepParameters require a CAD Viewer STEP parameter sidecar: {step_parameter_path}"

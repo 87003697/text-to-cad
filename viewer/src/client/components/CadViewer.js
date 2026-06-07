@@ -2,6 +2,7 @@
 
 import { forwardRef, useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState } from "react";
 import { parseCadRefToken } from "cadjs/lib/cadRefs";
+import { STEP_TREE_TOPOLOGY_NODE_PREFIX } from "cadjs/lib/step/stepTree";
 import { copyImageBlobToClipboard } from "@/ui/clipboard";
 import { triggerBlobDownload } from "@/ui/download";
 import {
@@ -34,6 +35,12 @@ import {
   shouldShowRecordDisplayEdges
 } from "cadjs/lib/viewer/displayEdgePolicy";
 import {
+  displayModeForcesEdges,
+  displayModeIsWireframe,
+  displayModeShowsEdges,
+  displayModeShowsThroughEdges
+} from "cadjs/lib/displaySettings";
+import {
   createUrdfPosePickerHoverCellMesh,
   createUrdfPosePickerHoverCellOutline,
   createUrdfPosePickerShell,
@@ -59,6 +66,7 @@ import {
   getViewerThemeValue,
   getStageFloorSize,
   normalizeFloorMode,
+  resolveWireframeEdgeColor,
   resolveFloorMode,
   updateSpotLightTarget
 } from "cadjs/lib/viewer/stageTheme";
@@ -105,9 +113,7 @@ import {
   buildVertexMarkerMesh,
   REFERENCE_CORNER_COLOR,
   REFERENCE_HIGHLIGHT_WIDTH_MULTIPLIER,
-  REFERENCE_HOVER_FILL_OPACITY,
-  REFERENCE_SELECTED_COLOR,
-  REFERENCE_SELECTED_FILL_OPACITY
+  REFERENCE_SELECTED_COLOR
 } from "cadjs/lib/viewer/referenceGeometry";
 import { buildRuntimeInitializationAlert } from "cadjs/lib/viewer/webglSupport";
 import { DRAWING_TOOL, RENDER_FORMAT } from "@/workbench/constants";
@@ -235,6 +241,53 @@ const VIEW_PLANE_FACES = [
   }
 ];
 const VIEW_PLANE_FACE_BY_ID = Object.fromEntries(VIEW_PLANE_FACES.map((face) => [face.id, face]));
+
+function referenceSelectorType(reference) {
+  return String(reference?.selectorType || "").trim();
+}
+
+function referenceOccurrenceSelector(reference) {
+  const selectorType = referenceSelectorType(reference);
+  if (selectorType === "occurrence") {
+    return String(reference?.normalizedSelector || reference?.displaySelector || "").trim();
+  }
+  return String(reference?.occurrenceId || "").trim();
+}
+
+function referenceMatchesOccurrenceSubtree(reference, occurrenceSelector) {
+  const candidate = referenceOccurrenceSelector(reference);
+  const selector = String(occurrenceSelector || "").trim();
+  return Boolean(candidate && selector && (candidate === selector || candidate.startsWith(`${selector}.`)));
+}
+
+function referenceShapeSelector(reference) {
+  const selectorType = referenceSelectorType(reference);
+  if (selectorType === "shape") {
+    return String(reference?.normalizedSelector || reference?.displaySelector || "").trim();
+  }
+  return String(reference?.shapeId || "").trim();
+}
+
+function referenceMatchesShape(reference, shapeSelector, occurrenceSelector = "") {
+  const candidate = referenceShapeSelector(reference);
+  const selector = String(shapeSelector || "").trim();
+  if (!candidate || !selector || candidate !== selector) {
+    return false;
+  }
+  const occurrence = String(occurrenceSelector || "").trim();
+  return !occurrence || referenceMatchesOccurrenceSubtree(reference, occurrence);
+}
+
+function syntheticOccurrenceSelectorFromReferenceId(referenceId) {
+  const normalizedReferenceId = String(referenceId || "").trim();
+  if (!normalizedReferenceId.startsWith(STEP_TREE_TOPOLOGY_NODE_PREFIX)) {
+    return "";
+  }
+  const body = normalizedReferenceId.slice(STEP_TREE_TOPOLOGY_NODE_PREFIX.length);
+  const marker = ":occurrence:";
+  const markerIndex = body.lastIndexOf(marker);
+  return markerIndex >= 0 ? body.slice(markerIndex + marker.length).trim() : "";
+}
 
 function viewPlaneOrientationEqual(a, b, epsilon = 1e-4) {
   if (!a || !b) {
@@ -918,6 +971,168 @@ function parseFaceToken(copyText) {
   return String(parseCadRefToken(copyText)?.token || "").trim();
 }
 
+function mateOverlayVector(value) {
+  if (!Array.isArray(value) || value.length < 3) {
+    return null;
+  }
+  const vector = value.slice(0, 3).map((component) => Number(component));
+  return vector.every((component) => Number.isFinite(component)) ? vector : null;
+}
+
+function normalizedMateOverlayEndpoint(endpoint) {
+  if (!endpoint || typeof endpoint !== "object") {
+    return null;
+  }
+  const position = mateOverlayVector(endpoint.position);
+  if (!position) {
+    return null;
+  }
+  const axes = endpoint.axes && typeof endpoint.axes === "object" ? endpoint.axes : {};
+  return {
+    position,
+    axes: {
+      x: mateOverlayVector(axes.x),
+      y: mateOverlayVector(axes.y),
+      z: mateOverlayVector(axes.z)
+    }
+  };
+}
+
+function normalizeMateIdList(value) {
+  return [...new Set(
+    (Array.isArray(value) ? value : [value])
+      .map((id) => String(id || "").trim())
+      .filter(Boolean)
+  )];
+}
+
+function resolveActiveMateOverlays(assemblyMates, selectedMateIds, hoveredMateId) {
+  const selectedSet = new Set(normalizeMateIdList(selectedMateIds));
+  const hoveredId = String(hoveredMateId || "").trim();
+  if (!selectedSet.size && !hoveredId) {
+    return [];
+  }
+  const active = [];
+  const seen = new Set();
+  for (const mate of Array.isArray(assemblyMates) ? assemblyMates : []) {
+    const mateId = String(mate?.id || "").trim();
+    if (!mateId || seen.has(mateId)) {
+      continue;
+    }
+    const selected = selectedSet.has(mateId);
+    const hovered = hoveredId === mateId;
+    if (!selected && !hovered) {
+      continue;
+    }
+    const fixed = normalizedMateOverlayEndpoint(mate.fixedEndpoint);
+    const moving = normalizedMateOverlayEndpoint(mate.movingEndpoint);
+    if (!fixed && !moving) {
+      continue;
+    }
+    seen.add(mateId);
+    active.push({
+      id: mateId,
+      fixed,
+      moving,
+      selected,
+      hovered
+    });
+  }
+  return active;
+}
+
+function createMateMarkerMesh(THREE, position, {
+  color,
+  opacity,
+  radius,
+  renderOrder
+}) {
+  const markerGeometry = new THREE.SphereGeometry(radius, 18, 10);
+  const markerMaterial = new THREE.MeshBasicMaterial({
+    color,
+    transparent: opacity < 0.999,
+    opacity,
+    depthTest: false,
+    depthWrite: false,
+    toneMapped: false
+  });
+  const marker = new THREE.Mesh(markerGeometry, markerMaterial);
+  marker.position.set(position[0], position[1], position[2]);
+  marker.renderOrder = renderOrder;
+  return marker;
+}
+
+function pushMateAxisSegment(segments, origin, direction, length) {
+  const axis = mateOverlayVector(direction);
+  if (!axis) {
+    return;
+  }
+  const magnitude = Math.hypot(axis[0], axis[1], axis[2]);
+  if (magnitude <= 1e-8) {
+    return;
+  }
+  const unit = axis.map((component) => component / magnitude);
+  segments.push(
+    origin[0] - unit[0] * length,
+    origin[1] - unit[1] * length,
+    origin[2] - unit[2] * length,
+    origin[0] + unit[0] * length,
+    origin[1] + unit[1] * length,
+    origin[2] + unit[2] * length
+  );
+}
+
+function addMateOverlayGlyph(runtime, group, mate, {
+  color,
+  opacity,
+  markerRadius,
+  axisLength,
+  lineWidth,
+  renderOrder
+}) {
+  const fixedPosition = mate.fixed?.position || null;
+  const movingPosition = mate.moving?.position || null;
+  const anchorPosition = fixedPosition || movingPosition;
+  if (!anchorPosition) {
+    return;
+  }
+
+  const positions = [];
+  if (fixedPosition && movingPosition) {
+    const span = Math.hypot(
+      fixedPosition[0] - movingPosition[0],
+      fixedPosition[1] - movingPosition[1],
+      fixedPosition[2] - movingPosition[2]
+    );
+    if (span > Math.max(markerRadius * 0.25, 0.01)) {
+      positions.push(...fixedPosition, ...movingPosition);
+    }
+  }
+  const axes = mate.fixed?.axes || mate.moving?.axes || {};
+  pushMateAxisSegment(positions, anchorPosition, axes.z || [0, 0, 1], axisLength);
+  pushMateAxisSegment(positions, anchorPosition, axes.x || [1, 0, 0], axisLength * 0.62);
+  if (positions.length) {
+    const line = createScreenSpaceLineSegments(runtime, positions, {
+      color,
+      opacity,
+      lineWidth,
+      renderOrder,
+      depthTest: false,
+      depthWrite: false
+    });
+    if (line) {
+      group.add(line);
+    }
+  }
+
+  group.add(createMateMarkerMesh(runtime.THREE, anchorPosition, {
+    color,
+    opacity,
+    radius: markerRadius,
+    renderOrder: renderOrder + 1
+  }));
+}
+
 function updateGridHelper(
   runtime,
   viewerTheme,
@@ -959,6 +1174,9 @@ const CadViewer = forwardRef(function CadViewer({
   hiddenPartIds = [],
   selectedPartIds = [],
   hoveredPartId = "",
+  assemblyMates = [],
+  selectedMateIds = [],
+  hoveredMateId = "",
   hoveredReferenceId = "",
   selectedReferenceIds = [],
   selectorRuntime = null,
@@ -978,6 +1196,7 @@ const CadViewer = forwardRef(function CadViewer({
   onHoverReferenceChange,
   onActivateReference,
   onDoubleActivateReference,
+  onContextReference,
   onViewerAlertChange,
   onStepModuleTransformDetectedChange,
   urdfPosePicker = null
@@ -1054,10 +1273,16 @@ const CadViewer = forwardRef(function CadViewer({
     () => resolveThemeSettingsDisplayEdgeSettings(normalizedThemeSettings),
     [normalizedThemeSettings]
   );
-  const wireframeMode = normalizedDisplayMode === "wireframe";
+  const wireframeMode = displayModeIsWireframe(normalizedDisplayMode);
+  const displayModeForceEdges = displayModeForcesEdges(normalizedDisplayMode);
+  const displayModeThroughEdges = displayModeShowsThroughEdges(normalizedDisplayMode);
   const wireframeEdgeColor = useMemo(
-    () => displayEdgeSettings?.color || "#132232",
-    [displayEdgeSettings]
+    () => resolveWireframeEdgeColor({
+      edgeColor: displayEdgeSettings?.color,
+      themeSettings: normalizedThemeSettings,
+      viewerTheme
+    }),
+    [displayEdgeSettings, normalizedThemeSettings, viewerTheme]
   );
   const wireframeEdgeOpacity = useMemo(() => {
     const baseOpacity = Number.isFinite(Number(displayEdgeSettings?.opacity))
@@ -1065,17 +1290,47 @@ const CadViewer = forwardRef(function CadViewer({
       : (viewerTheme?.edgeOpacity ?? BASE_VIEWER_THEME.edgeOpacity ?? CAD_EDGE_OPACITY);
     return Math.max(baseOpacity, 0.9);
   }, [displayEdgeSettings, viewerTheme]);
-  const visualEdgeSettings = useMemo(() => wireframeMode
-    ? {
-        ...displayEdgeSettings,
-        contrastMode: "manual",
-        color: wireframeEdgeColor,
-        opacity: wireframeEdgeOpacity
-      }
-    : displayEdgeSettings,
-  [displayEdgeSettings, wireframeEdgeColor, wireframeEdgeOpacity, wireframeMode]);
+  const visualEdgeSettings = useMemo(() => {
+    const forcedSettings = {
+      ...displayEdgeSettings,
+      enabled: displayModeForceEdges ? true : displayEdgeSettings.enabled,
+      depthTest: displayModeThroughEdges ? false : displayEdgeSettings.depthTest
+    };
+    return wireframeMode
+      ? {
+          ...forcedSettings,
+          contrastMode: "manual",
+          color: wireframeEdgeColor,
+          opacity: wireframeEdgeOpacity
+        }
+      : forcedSettings;
+  }, [
+    displayEdgeSettings,
+    displayModeForceEdges,
+    displayModeThroughEdges,
+    wireframeEdgeColor,
+    wireframeEdgeOpacity,
+    wireframeMode
+  ]);
   const focusedPartIds = useMemo(() => normalizePartIdList(focusedPartId), [focusedPartId]);
   const focusedPartIdSet = useMemo(() => new Set(focusedPartIds), [focusedPartIds]);
+  const hiddenPartIdSet = useMemo(() => new Set(normalizePartIdList(hiddenPartIds)), [hiddenPartIds]);
+  const hiddenAwareVisualEdgeSettings = useMemo(() => {
+    const hiddenIds = normalizePartIdList(hiddenPartIds);
+    if (!hiddenIds.length) {
+      return visualEdgeSettings;
+    }
+    const excludePartIds = [
+      ...new Set([
+        ...normalizePartIdList(visualEdgeSettings?.excludePartIds),
+        ...hiddenIds
+      ])
+    ];
+    return {
+      ...visualEdgeSettings,
+      excludePartIds
+    };
+  }, [hiddenPartIds, visualEdgeSettings]);
   const normalizedClipSettings = normalizedViewerRenderState.clipSettings;
   const resolvedFloorMode = floorModeOverride
     ? normalizeFloorMode(floorModeOverride, resolveFloorMode(normalizedThemeSettings.floor))
@@ -1096,7 +1351,7 @@ const CadViewer = forwardRef(function CadViewer({
     floorMode,
     normalizedThemeSettings.floor
   ), [normalizedThemeSettings.floor]);
-  const edgesVisible = showEdges && shouldUseCadEdgeSource && (displayEdgeSettings.enabled || wireframeMode);
+  const edgesVisible = showEdges && shouldUseCadEdgeSource && displayModeShowsEdges(normalizedDisplayMode, visualEdgeSettings);
   const topologyDisplayEdgesVisible = shouldRenderTopologyDisplayEdges({
     edgesVisible,
     wireframeMode,
@@ -1145,7 +1400,8 @@ const CadViewer = forwardRef(function CadViewer({
     hoveredPartId: partVisualStateEnabled ? hoveredPartId : "",
     focusedPartId: partVisualStateEnabled ? focusedPartIds : [],
     selectedPartIds: partVisualStateEnabled ? selectedPartIds : [],
-    showEdges: recordEdgesVisible
+    showEdges: recordEdgesVisible,
+    displayMode: normalizedDisplayMode
   });
 
   useEffect(() => {
@@ -1156,12 +1412,15 @@ const CadViewer = forwardRef(function CadViewer({
       hoveredPartId: partVisualStateEnabled ? hoveredPartId : "",
       focusedPartId: partVisualStateEnabled ? focusedPartIds : [],
       selectedPartIds: partVisualStateEnabled ? selectedPartIds : [],
-      showEdges: recordEdgesVisible
+      showEdges: recordEdgesVisible,
+      displayMode: normalizedDisplayMode
     };
   }, [
+    normalizedDisplayMode,
     recordEdgesVisible,
     focusedPartIds,
     hiddenPartIds,
+    hiddenAwareVisualEdgeSettings,
     hoveredPartId,
     partVisualStateEnabled,
     selectedPartIds,
@@ -1169,24 +1428,37 @@ const CadViewer = forwardRef(function CadViewer({
     visualEdgeSettings
   ]);
   const activeSurfaceLineFaceId = String(surfaceLineFaceId || "").trim();
-  const filteredPickableFaces = useMemo(() => (
-    focusedPartIdSet.size
-      ? (Array.isArray(pickableFaces) ? pickableFaces : []).filter((reference) => referenceMatchesFocusedPart(reference, focusedPartIdSet))
-      : (Array.isArray(pickableFaces) ? pickableFaces : [])
-  ), [focusedPartIdSet, pickableFaces]);
-  const filteredPickableEdges = useMemo(() => (
-    focusedPartIdSet.size
-      ? (Array.isArray(pickableEdges) ? pickableEdges : []).filter((reference) => referenceMatchesFocusedPart(reference, focusedPartIdSet))
-      : (Array.isArray(pickableEdges) ? pickableEdges : [])
-  ), [focusedPartIdSet, pickableEdges]);
-  const filteredPickableVertices = useMemo(() => (
-    focusedPartIdSet.size
-      ? (Array.isArray(pickableVertices) ? pickableVertices : []).filter((reference) => referenceMatchesFocusedPart(reference, focusedPartIdSet))
-      : (Array.isArray(pickableVertices) ? pickableVertices : [])
-  ), [focusedPartIdSet, pickableVertices]);
+  const visibleReferenceFilter = useCallback((reference) => {
+    const partId = String(reference?.partId || "").trim();
+    if (partId && hiddenPartIdSet.has(partId)) {
+      return false;
+    }
+    if (!partId && hiddenPartIdSet.has("__model__")) {
+      return false;
+    }
+    return referenceMatchesFocusedPart(reference, focusedPartIdSet);
+  }, [focusedPartIdSet, hiddenPartIdSet]);
+  const filteredPickableFaces = useMemo(
+    () => (Array.isArray(pickableFaces) ? pickableFaces : []).filter(visibleReferenceFilter),
+    [pickableFaces, visibleReferenceFilter]
+  );
+  const filteredPickableEdges = useMemo(
+    () => (Array.isArray(pickableEdges) ? pickableEdges : []).filter(visibleReferenceFilter),
+    [pickableEdges, visibleReferenceFilter]
+  );
+  const filteredPickableVertices = useMemo(
+    () => (Array.isArray(pickableVertices) ? pickableVertices : []).filter(visibleReferenceFilter),
+    [pickableVertices, visibleReferenceFilter]
+  );
   const pickableReferenceMap = useMemo(() => {
     if (activeSelectorRuntime?.referenceMap instanceof Map) {
-      return activeSelectorRuntime.referenceMap;
+      const map = new Map();
+      for (const [referenceId, reference] of activeSelectorRuntime.referenceMap.entries()) {
+        if (visibleReferenceFilter(reference)) {
+          map.set(referenceId, reference);
+        }
+      }
+      return map;
     }
     const map = new Map();
     for (const reference of [...filteredPickableFaces, ...filteredPickableEdges, ...filteredPickableVertices]) {
@@ -1197,7 +1469,7 @@ const CadViewer = forwardRef(function CadViewer({
       map.set(referenceId, reference);
     }
     return map;
-  }, [activeSelectorRuntime, filteredPickableEdges, filteredPickableFaces, filteredPickableVertices]);
+  }, [activeSelectorRuntime, filteredPickableEdges, filteredPickableFaces, filteredPickableVertices, visibleReferenceFilter]);
   const pickableFaceReferenceIds = useMemo(
     () => new Set(filteredPickableFaces.map((reference) => String(reference?.id || "").trim()).filter(Boolean)),
     [filteredPickableFaces]
@@ -1826,7 +2098,9 @@ const CadViewer = forwardRef(function CadViewer({
       )
     };
     for (const record of runtime.displayRecords || []) {
-      applyMaterialSettingsToRecord(runtime.THREE, record, materialSettings);
+      applyMaterialSettingsToRecord(runtime.THREE, record, materialSettings, {
+        displayMode: normalizedDisplayMode
+      });
     }
 
     runtime.gridConfig = null;
@@ -1854,6 +2128,7 @@ const CadViewer = forwardRef(function CadViewer({
     runtime.requestRender();
   }, [
     defaultGridRadius,
+    normalizedDisplayMode,
     normalizedThemeSettings,
     normalizedSceneScaleMode,
     resolvedFloorMode,
@@ -2130,6 +2405,7 @@ const CadViewer = forwardRef(function CadViewer({
     const cadScene = buildModel(THREE, meshData, {
       theme: sceneTheme,
       displayMode: normalizedDisplayMode,
+      applyDisplayModeEdgePolicy: !topologyDisplayEdgesVisible,
       scale: normalizedSceneScaleMode,
       baseTheme: viewerTheme,
       materialSettings,
@@ -2214,7 +2490,7 @@ const CadViewer = forwardRef(function CadViewer({
 
     syncTopologyDisplayEdgeLine(runtime, displayEdgesRuntime, {
       visible: topologyDisplayEdgesVisible,
-      edgeSettings: visualEdgeSettings,
+      edgeSettings: hiddenAwareVisualEdgeSettings,
       focusedPartIds,
       viewerTheme,
       dimmedOpacity: FOCUSED_DIMMED_SURFACE_OPACITY,
@@ -2344,6 +2620,7 @@ const CadViewer = forwardRef(function CadViewer({
     normalizedThemeSettings.materials,
     normalizedThemeSettings.environment,
     displayEdgeSettings,
+    hiddenAwareVisualEdgeSettings,
     visualEdgeSettings,
     wireframeEdgeColor,
     updateActiveGridHelper
@@ -2518,7 +2795,7 @@ const CadViewer = forwardRef(function CadViewer({
       });
       syncTopologyDisplayEdgeLine(runtime, displayEdgeRuntime || selectorRuntime, {
         visible: baseTopologyDisplayEdgesVisible,
-        edgeSettings: visualEdgeSettings,
+        edgeSettings: hiddenAwareVisualEdgeSettings,
         focusedPartIds,
         viewerTheme,
         dimmedOpacity: FOCUSED_DIMMED_SURFACE_OPACITY,
@@ -2614,7 +2891,7 @@ const CadViewer = forwardRef(function CadViewer({
       useRecordTopologyEdgeTransforms ? displayEdgeRuntime : nextEdgeRuntimes.topologyRuntime,
       {
         visible: nextTopologyDisplayEdgesVisible,
-        edgeSettings: visualEdgeSettings,
+        edgeSettings: hiddenAwareVisualEdgeSettings,
         focusedPartIds,
         viewerTheme,
         dimmedOpacity: FOCUSED_DIMMED_SURFACE_OPACITY,
@@ -2639,6 +2916,7 @@ const CadViewer = forwardRef(function CadViewer({
     viewerReadyTick,
     viewerTheme,
     hiddenPartIds,
+    hiddenAwareVisualEdgeSettings,
     hoveredPartId,
     isLoading,
     meshData,
@@ -2677,7 +2955,7 @@ const CadViewer = forwardRef(function CadViewer({
         : (activeDisplayEdgeRuntime || activeSelectorRuntime),
       {
         visible: topologyDisplayEdgesVisible,
-        edgeSettings: visualEdgeSettings,
+        edgeSettings: hiddenAwareVisualEdgeSettings,
         focusedPartIds,
         viewerTheme,
         dimmedOpacity: FOCUSED_DIMMED_SURFACE_OPACITY,
@@ -2686,7 +2964,7 @@ const CadViewer = forwardRef(function CadViewer({
         syncClip: (activeRuntime) => syncRuntimeStepClipPlane(activeRuntime, clipSettingsRef.current)
       }
     );
-  }, [activeDisplayEdgeRuntime, activeSelectorRuntime, displayEdgeRuntime, viewerReadyTick, viewerTheme, focusedPartIds, selectorRuntime, topologyDisplayEdgesVisible, visualEdgeSettings]);
+  }, [activeDisplayEdgeRuntime, activeSelectorRuntime, displayEdgeRuntime, viewerReadyTick, viewerTheme, focusedPartIds, hiddenAwareVisualEdgeSettings, selectorRuntime, topologyDisplayEdgesVisible, visualEdgeSettings]);
 
   useEffect(() => {
     const runtime = runtimeRef.current;
@@ -2856,22 +3134,24 @@ const CadViewer = forwardRef(function CadViewer({
 
     const highlightedPartIds = [];
     const seenPartIds = new Set();
-    for (const partId of Array.isArray(selectedPartIds) ? selectedPartIds : []) {
+    const addHighlightedPartId = (partId) => {
       const normalizedPartId = String(partId || "").trim();
-      if (!normalizedPartId || seenPartIds.has(normalizedPartId)) {
-        continue;
+      if (!normalizedPartId || hiddenPartIdSet.has(normalizedPartId) || seenPartIds.has(normalizedPartId)) {
+        return;
       }
       seenPartIds.add(normalizedPartId);
       highlightedPartIds.push(normalizedPartId);
+    };
+    for (const partId of normalizePartIdList(selectedPartIds)) {
+      addHighlightedPartId(partId);
     }
-    const normalizedHoveredPartId = String(hoveredPartId || "").trim();
-    if (normalizedHoveredPartId && !seenPartIds.has(normalizedHoveredPartId)) {
-      highlightedPartIds.push(normalizedHoveredPartId);
+    for (const partId of normalizePartIdList(hoveredPartId)) {
+      addHighlightedPartId(partId);
     }
 
     if (topologyDisplayEdgesVisible && highlightedPartIds.length) {
       const highlightEdgeSettings = {
-        ...visualEdgeSettings,
+        ...hiddenAwareVisualEdgeSettings,
         thickness: getHighlightEdgeThickness(displayEdgeSettings, viewerTheme),
         highlightPartIds: highlightedPartIds,
         highlightColor: getHighlightEdgeColor(displayEdgeSettings),
@@ -2906,6 +3186,8 @@ const CadViewer = forwardRef(function CadViewer({
     activeSelectorRuntime,
     displayEdgeRuntime,
     displayEdgeSettings,
+    hiddenAwareVisualEdgeSettings,
+    hiddenPartIdSet,
     viewerReadyTick,
     viewerTheme,
     hoveredPartId,
@@ -2913,6 +3195,72 @@ const CadViewer = forwardRef(function CadViewer({
     selectedPartIds,
     topologyDisplayEdgesVisible,
     visualEdgeSettings
+  ]);
+
+  useEffect(() => {
+    const runtime = runtimeRef.current;
+    if (!runtime?.THREE || !runtime?.edgesGroup) {
+      return;
+    }
+
+    const { THREE, edgesGroup } = runtime;
+    if (!runtime.mateOverlayGroup || runtime.mateOverlayGroup.parent !== edgesGroup) {
+      runtime.mateOverlayGroup = new THREE.Group();
+      runtime.mateOverlayGroup.renderOrder = 27;
+      edgesGroup.add(runtime.mateOverlayGroup);
+    }
+    const mateOverlayGroup = runtime.mateOverlayGroup;
+    clearOverlayGroup(runtime, mateOverlayGroup);
+
+    if (isLoading || !meshData) {
+      return () => {
+        clearOverlayGroup(runtime, mateOverlayGroup);
+      };
+    }
+
+    const activeMates = resolveActiveMateOverlays(assemblyMates, selectedMateIds, hoveredMateId);
+    if (!activeMates.length) {
+      return () => {
+        clearOverlayGroup(runtime, mateOverlayGroup);
+      };
+    }
+
+    const modelRadius = Number.isFinite(Number(runtime.modelRadius)) && Number(runtime.modelRadius) > 0
+      ? Number(runtime.modelRadius)
+      : 1;
+    const highlightColor = getHighlightEdgeColor(displayEdgeSettings);
+    const highlightOpacity = getHighlightEdgeOpacity(displayEdgeSettings);
+    const markerRadius = clamp(modelRadius * 0.012, 0.55, 4.5);
+    const axisLength = clamp(modelRadius * 0.07, markerRadius * 3.2, 18);
+    const baseLineWidth = Math.max(getHighlightEdgeThickness(displayEdgeSettings, viewerTheme), 2.6);
+
+    for (const mate of activeMates) {
+      addMateOverlayGlyph(runtime, mateOverlayGroup, mate, {
+        color: highlightColor,
+        opacity: mate.selected ? highlightOpacity : Math.min(highlightOpacity, 0.82),
+        markerRadius: mate.hovered && !mate.selected ? markerRadius * 0.9 : markerRadius,
+        axisLength,
+        lineWidth: mate.selected ? baseLineWidth : Math.max(baseLineWidth * 0.86, 2.2),
+        renderOrder: mate.selected ? 28 : 27
+      });
+    }
+
+    mateOverlayGroup.visible = mateOverlayGroup.children.length > 0;
+    runtime.requestRender();
+
+    return () => {
+      clearOverlayGroup(runtime, mateOverlayGroup);
+    };
+  }, [
+    assemblyMates,
+    displayEdgeSettings,
+    hoveredMateId,
+    isLoading,
+    meshData,
+    modelKey,
+    selectedMateIds,
+    viewerReadyTick,
+    viewerTheme
   ]);
 
   useEffect(() => {
@@ -2942,32 +3290,91 @@ const CadViewer = forwardRef(function CadViewer({
     const highlightEdgeColor = getHighlightEdgeColor(displayEdgeSettings);
     const highlightEdgeOpacity = getHighlightEdgeOpacity(displayEdgeSettings);
 
-    const seenReferenceIds = new Set();
-    const orderedReferenceIds = [];
-    for (const referenceId of Array.isArray(selectedReferenceIds) ? selectedReferenceIds : []) {
+    const highlightReferenceStates = new Map();
+    const runtimeReferences = Array.isArray(activeSelectorRuntime?.references)
+      ? activeSelectorRuntime.references
+      : activeSelectorRuntime?.referenceMap instanceof Map
+        ? [...activeSelectorRuntime.referenceMap.values()]
+        : [];
+    const addHighlightReference = (referenceId, { hovered = false } = {}) => {
       const normalizedReferenceId = String(referenceId || "").trim();
-      if (!normalizedReferenceId || seenReferenceIds.has(normalizedReferenceId)) {
-        continue;
+      if (!normalizedReferenceId) {
+        return;
       }
-      seenReferenceIds.add(normalizedReferenceId);
-      orderedReferenceIds.push(normalizedReferenceId);
+      const current = highlightReferenceStates.get(normalizedReferenceId);
+      if (current) {
+        current.hovered = current.hovered || hovered;
+        return;
+      }
+      highlightReferenceStates.set(normalizedReferenceId, { hovered });
+    };
+    const addReferenceSelection = (referenceId, { hovered = false } = {}) => {
+      const normalizedReferenceId = String(referenceId || "").trim();
+      const topologyReference = pickableReferenceMap.get(normalizedReferenceId) || activeSelectorRuntime?.referenceMap?.get(normalizedReferenceId) || null;
+      if (!topologyReference) {
+        const syntheticOccurrenceSelector = syntheticOccurrenceSelectorFromReferenceId(normalizedReferenceId);
+        if (syntheticOccurrenceSelector) {
+          for (const childReference of runtimeReferences) {
+            const childSelectorType = referenceSelectorType(childReference);
+            if (
+              (childSelectorType === "face" || childSelectorType === "edge" || childSelectorType === "vertex") &&
+              referenceMatchesOccurrenceSubtree(childReference, syntheticOccurrenceSelector)
+            ) {
+              addHighlightReference(childReference?.id, { hovered });
+            }
+          }
+        }
+        return;
+      }
+      const selectorType = referenceSelectorType(topologyReference);
+      if (selectorType === "occurrence") {
+        const occurrenceSelector = referenceOccurrenceSelector(topologyReference);
+        for (const childReference of runtimeReferences) {
+          const childSelectorType = referenceSelectorType(childReference);
+          if (
+            (childSelectorType === "face" || childSelectorType === "edge" || childSelectorType === "vertex") &&
+            referenceMatchesOccurrenceSubtree(childReference, occurrenceSelector)
+          ) {
+            addHighlightReference(childReference?.id, { hovered });
+          }
+        }
+        return;
+      }
+      if (selectorType === "shape") {
+        const shapeSelector = referenceShapeSelector(topologyReference);
+        const occurrenceSelector = referenceOccurrenceSelector(topologyReference);
+        for (const childReference of runtimeReferences) {
+          const childSelectorType = referenceSelectorType(childReference);
+          if (
+            (childSelectorType === "face" || childSelectorType === "edge" || childSelectorType === "vertex") &&
+            referenceMatchesShape(childReference, shapeSelector, occurrenceSelector)
+          ) {
+            addHighlightReference(childReference?.id, { hovered });
+          }
+        }
+        return;
+      }
+      addHighlightReference(normalizedReferenceId, { hovered });
+    };
+    for (const referenceId of Array.isArray(selectedReferenceIds) ? selectedReferenceIds : []) {
+      addReferenceSelection(referenceId);
     }
     const normalizedHoveredReferenceId = String(hoveredReferenceId || "").trim();
-    if (normalizedHoveredReferenceId && !seenReferenceIds.has(normalizedHoveredReferenceId)) {
-      orderedReferenceIds.push(normalizedHoveredReferenceId);
+    if (normalizedHoveredReferenceId) {
+      addReferenceSelection(normalizedHoveredReferenceId, { hovered: true });
     }
 
-    for (const referenceId of orderedReferenceIds) {
+    for (const [referenceId, highlightState] of highlightReferenceStates.entries()) {
       const topologyReference = pickableReferenceMap.get(referenceId) || activeSelectorRuntime?.referenceMap?.get(referenceId) || null;
       if (!topologyReference) {
         continue;
       }
-      const selectorType = String(topologyReference?.selectorType || "").trim();
+      const selectorType = referenceSelectorType(topologyReference);
       if (selectorType !== "face" && selectorType !== "edge" && selectorType !== "vertex") {
         continue;
       }
 
-      const isHovered = referenceId === normalizedHoveredReferenceId;
+      const isHovered = Boolean(highlightState?.hovered);
       if (selectorType === "vertex") {
         const marker = buildVertexMarkerMesh(runtime, THREE, topologyReference, {
           color: REFERENCE_CORNER_COLOR,
@@ -3007,10 +3414,11 @@ const CadViewer = forwardRef(function CadViewer({
         const fillGeometry = buildFaceFillGeometryFromDisplayMeshes(runtime, THREE, topologyReference) ||
           buildFaceFillGeometryFromProxy(runtime, THREE, activeSelectorRuntime, topologyReference);
         if (fillGeometry) {
+          const fillOpacity = highlightEdgeOpacity;
           const fillMaterial = new THREE.MeshBasicMaterial({
             color: highlightColor,
-            transparent: true,
-            opacity: isHovered ? REFERENCE_HOVER_FILL_OPACITY : REFERENCE_SELECTED_FILL_OPACITY,
+            transparent: fillOpacity < 0.999,
+            opacity: fillOpacity,
             depthTest: true,
             depthWrite: false,
             polygonOffset: true,
@@ -3072,10 +3480,12 @@ const CadViewer = forwardRef(function CadViewer({
     pickableFaces: filteredPickableFaces,
     pickableEdges: filteredPickableEdges,
     pickableVertices: filteredPickableVertices,
+    hiddenPartIds,
     focusedPartId: focusedPartIds,
     onHoverReferenceChange,
     onActivateReference,
     onDoubleActivateReference,
+    onContextReference,
     viewerReadyTick
   });
 

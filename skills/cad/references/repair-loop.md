@@ -130,6 +130,8 @@ Likely causes:
 
 - wrong part-local origin
 - child `Location` offset wrong
+- `AssemblyHelper` fixed and moving targets reversed
+- `AssemblyHelper` relationship offset attached to the wrong datum
 - build123d joint attached to the wrong datum
 - `.connect_to()` moved the wrong part
 - joint axis or orientation inverted
@@ -139,18 +141,18 @@ Likely causes:
 - joint location defined in world coordinates when a part-local datum was intended
 - duplicate or incorrect joint labels
 - explicit `Location` not recomputed after a parameter change
-- CLI `inspect mate` delta was treated as an edit instead of a diagnostic
+- CLI `inspect align` delta was treated as an edit instead of a diagnostic
 
 Fix:
 
 - inspect `refs --positioning`
 - run `frame` on relevant selectors or occurrences
-- run `mate` for read-only delta
-- verify the source-level build123d joint labels and `joint_location` definitions
-- apply correction to source build123d joint, `.connect_to()` call, `Location`, datum, or feature offset
+- run `align` for read-only selector-pair delta
+- verify the source-level `AssemblyHelper` target order, build123d joint labels, and `joint_location` definitions
+- apply correction to helper relationship, source build123d joint, `.connect_to()` call, `Location`, datum, or feature offset
 - adjust the smallest joint location, axis, angle, position, explicit transform, or part-local datum
 - regenerate the assembly from the Python source
-- rerun `refs --facts --planes --positioning` plus the failed `measure` or `mate` check
+- rerun `refs --facts --planes --positioning` plus the failed `measure` or `align` check
 
 ### CAD Viewer Startup Or Link Failure
 
@@ -183,7 +185,7 @@ Fix:
 - generate STEP first
 - snapshot the primary `.step` or `.stp` artifact with CAD `scripts/snapshot` rather than manual viewer or Playwright inspection
 - retry only with simpler supported snapshot jobs, starting with a single `view` output before wireframe display or `section`
-- for CAD review packets, use still-image modes `view` and `section`; set `display.mode` to `wireframe` for wire output
+- for CAD review packets, use still-image modes `view` and `section`; set `display.mode` to `solid`, `transparent`, `hidden_edges`, `hidden_lines_removed`, or `wireframe` when explicit linework helps the visual check
 - generate GIFs only for STEP-module parameter animation review
 - rerun snapshots only after a source repair changed visible geometry or a specific visual finding needs confirmation
 - skip saved snapshots when they are not needed under `snapshot-review.md`

@@ -3,12 +3,14 @@ import { test } from "node:test";
 
 import {
   buildAssemblyPartCopyText,
+  buildAssemblyMateCopyText,
   buildNormalizedReferenceState,
   buildReferenceCacheKey,
   buildSelectionCopyButtonLabel,
   buildSelectionCopyPayload,
   buildWholeStepEntryCopyReference,
   cadRefQueryHasKnownEntry,
+  canonicalCadRefCopyText,
   collectCadRefSelectionRequest,
   computeNextSelectionIds,
   copySelectedReferenceText,
@@ -61,7 +63,7 @@ test("reference state normalization trims reference metadata and preserves cache
     {
       id: "  f1  ",
       summary: " face ",
-      copyText: " @cad[models/assy#f1] ",
+      copyText: " #f1 ",
       partId: " part-a ",
       entityType: " face ",
       selectorType: " face ",
@@ -75,7 +77,7 @@ test("reference state normalization trims reference metadata and preserves cache
       label: "f1",
       summary: "face",
       shortSummary: "face",
-      copyText: "@cad[models/assy#f1]",
+      copyText: "#f1",
       partId: "part-a",
       entityType: "face",
       selectorType: "face",
@@ -93,65 +95,79 @@ test("reference state normalization trims reference metadata and preserves cache
   assert.deepEqual(
     referenceState.references.map((reference) => reference.copyText),
     [
-      "@cad[models/assy#o1] Root",
-      "@cad[models/assy#s1] solid volume=1",
-      "@cad[models/assy#f1] plane area=4",
-      "@cad[models/assy#e1] line length=2"
+      "#o1",
+      "#s1",
+      "#f1",
+      "#e1"
     ]
   );
 });
 
-test("copy helpers merge CAD reference selectors and keep plain fallback lines", () => {
+test("copy helpers merge selector refs and keep plain fallback lines", () => {
   const copyResult = copySelectedReferenceText([
-    { id: "f2", copyText: "@cad[models/assy#f2]" },
-    { id: "f1", copyText: "@cad[models/assy#f1]" },
-    { id: "f1-duplicate", copyText: "@cad[models/assy#f1]" },
+    { id: "f2", copyText: "#f2 plane area=12" },
+    { id: "f1", copyText: "#f1" },
+    { id: "f1-duplicate", copyText: "#f1" },
     { id: "plain", copyText: "plain reference" }
   ]);
-  assert.equal(copyResult.text, "@cad[models/assy#f1,f2]\nplain reference");
+  assert.equal(copyResult.text, "#f1,f2\nplain reference");
 
   const payload = buildSelectionCopyPayload({
-    references: [{ id: "e1", copyText: "@cad[models/assy#e1]" }],
+    references: [{ id: "e1", copyText: "#e1" }],
     parts: [
       { id: "part-b", occurrenceId: "o1.2", name: "Bracket" },
+      { occurrenceId: "o1.6", name: "triangular_prism" },
       { id: "", name: "Missing selector" }
     ],
     entry: STEP_ENTRY
   });
   assert.deepEqual(payload.lines, [
-    "@cad[models/assy#e1,o1.2]"
+    "#e1,o1.2,o1.6"
   ]);
-  assert.equal(payload.copiedCount, 2);
+  assert.equal(payload.copiedCount, 3);
   assert.deepEqual(payload.missingPartNames, ["Missing selector"]);
 
   assert.equal(
     buildAssemblyPartCopyText({ id: "part-b", occurrenceId: "o1.2", name: "Bracket" }, STEP_ENTRY),
-    '@cad[models/assy#o1.2] Assembly part "Bracket"'
+    "#o1.2"
+  );
+  assert.equal(
+    buildAssemblyPartCopyText({ occurrenceId: "o1.6", name: "triangular_prism" }, STEP_ENTRY),
+    "#o1.6"
+  );
+  assert.equal(
+    buildAssemblyPartCopyText({ id: "internal-node", displaySelector: "o1.7.1.s1", name: "cube_top_pad" }, STEP_ENTRY),
+    "#o1.7.1.s1"
+  );
+  assert.equal(
+    buildAssemblyPartCopyText({ id: "cube_top_pad", name: "cube_top_pad" }, STEP_ENTRY),
+    ""
   );
   assert.deepEqual(buildWholeStepEntryCopyReference(STEP_ENTRY), {
     id: "step-entry:whole",
-    copyText: "@cad[models/assy] STEP file"
+    copyText: "#"
   });
-  assert.equal(buildSelectionCopyButtonLabel(payload.lines, { count: payload.copiedCount }), "Copy [2 refs] @cad[models/assy#e1,o1.2]");
+  assert.equal(buildSelectionCopyButtonLabel(payload.lines, { count: payload.copiedCount }), "Copy #e1,o1.2,o1.6");
+  assert.equal(buildSelectionCopyButtonLabel(["#o1.7.1.s1 cube_top_pad solid volume=490"]), "Copy #o1.7.1.s1");
+  assert.equal(canonicalCadRefCopyText("#o1.7.1.f4 plane area=35"), "#o1.7.1.f4");
   assert.equal(buildSelectionCopyButtonLabel([]), "Copy refs");
 });
 
-test("CAD ref query helpers classify and resolve selected references and parts", () => {
+test("selector ref query helpers classify and resolve selected references and parts", () => {
   const assemblyEntry = {
     ...STEP_ENTRY,
     kind: "assembly"
   };
   const cadRefs = [
-    "@cad[models/assy#o1.2]",
-    "@cad[models/assy#f1]",
-    "@cad[other/file#f9]"
+    "#o1.2,f1"
   ];
-  assert.equal(cadRefQueryHasKnownEntry(cadRefs, [assemblyEntry]), true);
+  assert.equal(cadRefQueryHasKnownEntry(cadRefs, [assemblyEntry]), false);
   assert.deepEqual(collectCadRefSelectionRequest(cadRefs, assemblyEntry), {
     hasMatchingToken: true,
     hasWholeEntryToken: false,
     selectors: ["o1.2", "o1.2.f1"],
     needsParts: true,
+    needsMates: false,
     needsReferences: true
   });
 
@@ -163,7 +179,7 @@ test("CAD ref query helpers classify and resolve selected references and parts",
       {
         id: "ref-face-1",
         partId: "part-a",
-        copyText: "@cad[models/assy#o1.2.f1]",
+        copyText: "#o1.2.f1",
         displaySelector: "o1.2.f1",
         normalizedSelector: "o1.2.f1"
       }
@@ -176,17 +192,64 @@ test("CAD ref query helpers classify and resolve selected references and parts",
   assert.equal(resolved.hasMatchingToken, true);
   assert.deepEqual(resolved.selectedReferenceIds, ["ref-face-1"]);
   assert.deepEqual(resolved.selectedPartIds, ["part-b"]);
-  assert.equal(resolved.inspectedAssemblyNodeId, "part-a");
-  assert.deepEqual(resolved.expandedAssemblyPartIds, ["part-a"]);
+  assert.equal(resolved.inspectedAssemblyNodeId, "");
+  assert.deepEqual(resolved.expandedAssemblyPartIds, ["part-b", "part-a"]);
 });
 
-test("CAD ref query resolves nested occurrence selection to its parent inspection node", () => {
+test("selector ref query helpers copy and resolve assembly mate refs", () => {
+  const assemblyEntry = {
+    ...STEP_ENTRY,
+    kind: "assembly"
+  };
+  const mate = {
+    id: "m1",
+    label: "m1",
+    sourceLabel: "block mate",
+    type: "face_to_face",
+    fixed: "block_pocket_floor:offset",
+    moving: "bottom_center"
+  };
+  const mateCopyText = buildAssemblyMateCopyText(mate, assemblyEntry);
+  assert.equal(
+    mateCopyText,
+    "#m1"
+  );
+
+  const payload = buildSelectionCopyPayload({
+    mates: [mate],
+    entry: assemblyEntry
+  });
+  assert.deepEqual(payload.lines, [
+    "#m1"
+  ]);
+  assert.equal(payload.copiedCount, 1);
+  assert.deepEqual(collectCadRefSelectionRequest(payload.lines, assemblyEntry), {
+    hasMatchingToken: true,
+    hasWholeEntryToken: false,
+    selectors: ["m1"],
+    needsParts: false,
+    needsMates: true,
+    needsReferences: false
+  });
+
+  const resolved = resolveCadRefSelection({
+    cadRefs: payload.lines,
+    entry: assemblyEntry,
+    isAssemblyView: true,
+    assemblyMates: [mate]
+  });
+  assert.deepEqual(resolved.selectedMateIds, [mate.id]);
+  assert.deepEqual(resolved.selectedPartIds, []);
+  assert.deepEqual(resolved.selectedReferenceIds, []);
+});
+
+test("selector ref query resolves nested occurrence selection without entering focus", () => {
   const assemblyEntry = {
     ...STEP_ENTRY,
     kind: "assembly"
   };
   const resolved = resolveCadRefSelection({
-    cadRefs: ["@cad[models/assy#o1.2.3]"],
+    cadRefs: ["#o1.2.3"],
     entry: assemblyEntry,
     isAssemblyView: true,
     assemblyParts: [
@@ -197,7 +260,8 @@ test("CAD ref query resolves nested occurrence selection to its parent inspectio
   });
 
   assert.deepEqual(resolved.selectedPartIds, ["part-c"]);
-  assert.equal(resolved.inspectedAssemblyNodeId, "module");
+  assert.equal(resolved.inspectedAssemblyNodeId, "");
+  assert.deepEqual(resolved.expandedAssemblyPartIds, ["part-c"]);
 });
 
 test("selection utility helpers preserve list and topology path behavior", () => {

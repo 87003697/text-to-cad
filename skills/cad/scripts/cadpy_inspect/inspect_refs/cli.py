@@ -36,12 +36,13 @@ def _inspect_api():
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="inspect",
-        description="Inspect CAD refs, geometry facts, and measurements.",
+        description="Inspect selector refs, geometry facts, and measurements.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=(
             "examples:\n"
-            "  inspect refs '@cad[STEP/foo#f9]' --detail --facts\n"
-            "  inspect measure --from '@cad[STEP/foo#f1]' --to '@cad[STEP/foo#f2]' --axis z\n"
+            "  inspect refs STEP/foo.step '#f9' --detail --facts\n"
+            "  inspect measure STEP/foo.step --from '#f1' --to '#f2' --axis z\n"
+            "  inspect align STEP/foo.step --moving '#f1' --target '#f2' --mode flush --axis z\n"
         ),
     )
     parser.add_argument(
@@ -58,15 +59,15 @@ def build_parser() -> argparse.ArgumentParser:
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=(
             "examples:\n"
-            "  inspect refs '@cad[STEP/foo#f9]' --detail --facts\n"
-            "  inspect refs '@cad[STEP/foo#f1]' '@cad[STEP/foo#e2]' --positioning\n"
-            "  inspect refs --input-file /tmp/prompt.txt --planes\n"
+            "  inspect refs STEP/foo.step '#f9' --detail --facts\n"
+            "  inspect refs STEP/foo.step '#f1' '#e2' --positioning\n"
+            "  inspect refs STEP/foo.step --input-file /tmp/refs.txt --planes\n"
         ),
     )
     refs_parser.add_argument(
         "inputs",
         nargs="*",
-        help="One or more @cad[...] refs, CAD paths, STEP paths, or prompt text containing refs.",
+        help="STEP/CAD entry target followed by optional selector refs like #o1.2.f1.",
     )
     refs_parser.add_argument(
         "--input-file",
@@ -106,8 +107,8 @@ def build_parser() -> argparse.ArgumentParser:
         "diff",
         help="Compare two CAD STEP refs and summarize selector-level changes.",
     )
-    diff_parser.add_argument("left", help="Left CAD STEP path or @cad[...] token.")
-    diff_parser.add_argument("right", help="Right CAD STEP path or @cad[...] token.")
+    diff_parser.add_argument("left", help="Left CAD STEP path.")
+    diff_parser.add_argument("right", help="Right CAD STEP path.")
     diff_parser.add_argument(
         "--planes",
         action="store_true",
@@ -121,31 +122,34 @@ def build_parser() -> argparse.ArgumentParser:
         "frame",
         help="Return the world frame for an occurrence or selector's owning occurrence.",
     )
-    frame_parser.add_argument("target", help="Single @cad[...] target. Selector optional only for single-root entries.")
+    frame_parser.add_argument("entry", help="CAD STEP path or CAD entry target.")
+    frame_parser.add_argument("selector", nargs="?", default="", help="Optional selector ref such as #o1.2.")
     _add_output_arguments(frame_parser)
     frame_parser.set_defaults(handler=run_frame)
 
     measure_parser = subparsers.add_parser(
         "measure",
-        help="Measure signed coordinate distance between two @cad[...] selectors.",
+        help="Measure signed coordinate distance between two selectors in one STEP entry.",
     )
-    measure_parser.add_argument("--from", dest="from_target", required=True, help="Moving/source @cad[...] selector.")
-    measure_parser.add_argument("--to", dest="to_target", required=True, help="Target @cad[...] selector.")
+    measure_parser.add_argument("entry", help="CAD STEP path or CAD entry target.")
+    measure_parser.add_argument("--from", dest="from_selector", required=True, help="Moving/source selector ref.")
+    measure_parser.add_argument("--to", dest="to_selector", required=True, help="Target selector ref.")
     measure_parser.add_argument("--axis", choices=("x", "y", "z"), help="Axis to measure along. Inferred when possible.")
     _add_output_arguments(measure_parser)
     measure_parser.set_defaults(handler=run_measure)
 
-    mate_parser = subparsers.add_parser(
-        "mate",
-        help="Calculate a read-only translation delta for simple selector mating.",
+    align_parser = subparsers.add_parser(
+        "align",
+        help="Calculate a read-only translation delta for simple selector alignment.",
     )
-    mate_parser.add_argument("--moving", required=True, help="Moving/source @cad[...] selector.")
-    mate_parser.add_argument("--target", required=True, help="Target @cad[...] selector.")
-    mate_parser.add_argument("--mode", choices=("flush", "center"), default="flush", help="Mate mode. Default: flush.")
-    mate_parser.add_argument("--offset", type=float, default=0.0, help="Offset in mm. For flush, applies along target normal when axis-aligned.")
-    mate_parser.add_argument("--axis", choices=("x", "y", "z"), help="Axis to use for flush or one-axis center mating.")
-    _add_output_arguments(mate_parser)
-    mate_parser.set_defaults(handler=run_mate)
+    align_parser.add_argument("entry", help="CAD STEP path or CAD entry target.")
+    align_parser.add_argument("--moving", required=True, help="Moving/source selector ref.")
+    align_parser.add_argument("--target", required=True, help="Target selector ref.")
+    align_parser.add_argument("--mode", choices=("flush", "center"), default="flush", help="Alignment mode. Default: flush.")
+    align_parser.add_argument("--offset", type=float, default=0.0, help="Offset in mm. For flush, applies along target normal when axis-aligned.")
+    align_parser.add_argument("--axis", choices=("x", "y", "z"), help="Axis to use for flush or one-axis center alignment.")
+    _add_output_arguments(align_parser)
+    align_parser.set_defaults(handler=run_align)
 
     worker_parser = subparsers.add_parser(
         "worker",
@@ -212,9 +216,10 @@ def _add_plane_report_arguments(
 def run_refs(args: argparse.Namespace) -> int:
     inspect = _inspect_api()
     try:
-        text = _read_input_text(args)
+        entry_target, refs_text = _read_refs_input(args)
         result = inspect.inspect_cad_refs(
-            text,
+            entry_target,
+            refs_text,
             detail=bool(args.detail),
             include_topology=bool(args.topology),
             facts=bool(args.facts),
@@ -261,11 +266,11 @@ def run_diff(args: argparse.Namespace) -> int:
 def run_frame(args: argparse.Namespace) -> int:
     inspect = _inspect_api()
     try:
-        result = inspect.inspect_target_frame(args.target)
+        result = inspect.inspect_target_frame(args.entry, args.selector)
     except inspect.CadRefError as exc:
         result = {
             "ok": False,
-            "target": args.target,
+            "target": args.entry,
             "errors": [inspect.cad_ref_error_payload(exc)],
         }
 
@@ -276,12 +281,13 @@ def run_frame(args: argparse.Namespace) -> int:
 def run_measure(args: argparse.Namespace) -> int:
     inspect = _inspect_api()
     try:
-        result = inspect.measure_targets(args.from_target, args.to_target, axis=args.axis)
+        result = inspect.measure_targets(args.entry, args.from_selector, args.to_selector, axis=args.axis)
     except inspect.CadRefError as exc:
         result = {
             "ok": False,
-            "from": args.from_target,
-            "to": args.to_target,
+            "entry": args.entry,
+            "from": args.from_selector,
+            "to": args.to_selector,
             "errors": [inspect.cad_ref_error_payload(exc)],
         }
 
@@ -289,10 +295,11 @@ def run_measure(args: argparse.Namespace) -> int:
     return 0 if bool(result.get("ok")) else 2
 
 
-def run_mate(args: argparse.Namespace) -> int:
+def run_align(args: argparse.Namespace) -> int:
     inspect = _inspect_api()
     try:
-        result = inspect.mate_targets(
+        result = inspect.align_targets(
+            args.entry,
             args.moving,
             args.target,
             mode=args.mode,
@@ -302,12 +309,13 @@ def run_mate(args: argparse.Namespace) -> int:
     except inspect.CadRefError as exc:
         result = {
             "ok": False,
+            "entry": args.entry,
             "moving": args.moving,
             "target": args.target,
             "errors": [inspect.cad_ref_error_payload(exc)],
         }
 
-    _emit_result(args, result, _format_mate_text)
+    _emit_result(args, result, _format_align_text)
     return 0 if bool(result.get("ok")) else 2
 
 
@@ -375,11 +383,12 @@ def inspect_command_result(argv: Sequence[str]) -> tuple[int, dict[str, object]]
     try:
         if args.command == "refs":
             if not args.inputs and not args.input_file:
-                raise _inspect_api().CadRefError("No input text provided.")
-            text = _read_input_text(args)
+                raise _inspect_api().CadRefError("No STEP/CAD entry target provided.")
+            entry_target, refs_text = _read_refs_input(args)
             inspect = _inspect_api()
             result = inspect.inspect_cad_refs(
-                text,
+                entry_target,
+                refs_text,
                 detail=bool(args.detail),
                 include_topology=bool(args.topology),
                 facts=bool(args.facts),
@@ -400,11 +409,12 @@ def inspect_command_result(argv: Sequence[str]) -> tuple[int, dict[str, object]]
                 plane_limit=int(args.plane_limit),
             )
         elif args.command == "frame":
-            result = _inspect_api().inspect_target_frame(args.target)
+            result = _inspect_api().inspect_target_frame(args.entry, args.selector)
         elif args.command == "measure":
-            result = _inspect_api().measure_targets(args.from_target, args.to_target, axis=args.axis)
-        elif args.command == "mate":
-            result = _inspect_api().mate_targets(
+            result = _inspect_api().measure_targets(args.entry, args.from_selector, args.to_selector, axis=args.axis)
+        elif args.command == "align":
+            result = _inspect_api().align_targets(
+                args.entry,
                 args.moving,
                 args.target,
                 mode=args.mode,
@@ -563,13 +573,13 @@ def _format_measure_text(result: dict[str, object], *, quiet: bool, verbose: boo
     return "\n".join(lines)
 
 
-def _format_mate_text(result: dict[str, object], *, quiet: bool, verbose: bool) -> str:
+def _format_align_text(result: dict[str, object], *, quiet: bool, verbose: bool) -> str:
     if not result.get("ok"):
         return _format_errors(result)
-    mate = result.get("mate") if isinstance(result.get("mate"), dict) else {}
-    lines = [f"mode={result.get('mode')} axis={result.get('axis')} translation={mate.get('translationVector')}"]
+    alignment = result.get("alignment") if isinstance(result.get("alignment"), dict) else {}
+    lines = [f"mode={result.get('mode')} axis={result.get('axis')} translation={alignment.get('translationVector')}"]
     if verbose and not quiet:
-        lines.append(f"transformTranslationDelta={mate.get('transformTranslationDelta')}")
+        lines.append(f"transformTranslationDelta={alignment.get('transformTranslationDelta')}")
     return "\n".join(lines)
 
 
@@ -579,30 +589,37 @@ def _format_errors(result: dict[str, object]) -> str:
     return "\n".join(messages) if messages else "error"
 
 
-def _read_input_text(args: argparse.Namespace) -> str:
+def _read_refs_input(args: argparse.Namespace) -> tuple[str, str]:
     inspect = _inspect_api()
     raw_inputs = [str(value) for value in getattr(args, "inputs", ()) if str(value).strip()]
-    input_sources = sum(1 for source in (args.input_file, raw_inputs) if source)
-    if input_sources > 1:
-        raise inspect.CadRefError("Pass either positional refs/targets or --input-file, not both.")
-
-    if raw_inputs:
-        lines: list[str] = []
-        for raw_input in raw_inputs:
-            parsed = inspect.entry_target_from_target(raw_input)
-            lines.append(parsed.token)
-        text = "\n".join(lines)
-    elif args.input_file:
+    if args.input_file:
+        if len(raw_inputs) != 1:
+            raise inspect.CadRefError("Pass exactly one STEP/CAD entry target with --input-file.")
         try:
             text = args.input_file.read_text(encoding="utf-8")
         except OSError as exc:
             raise inspect.CadRefError(f"Failed to read input file: {args.input_file}") from exc
+        entry_target = raw_inputs[0]
     else:
-        text = sys.stdin.read()
+        if not raw_inputs:
+            raise inspect.CadRefError("No STEP/CAD entry target provided.")
+        entry_target = raw_inputs[0]
+        text = "\n".join(raw_inputs[1:])
+
+    try:
+        inspect.entry_target_from_target(entry_target)
+    except inspect.CadRefError as exc:
+        raise inspect.CadRefError(f"Invalid STEP/CAD entry target: {entry_target}") from exc
 
     if not str(text).strip():
-        raise inspect.CadRefError("No input text provided.")
-    return text
+        return entry_target, ""
+
+    nonempty_lines = [line.strip() for line in str(text).splitlines() if line.strip()]
+    for line in nonempty_lines:
+        parsed_tokens = inspect.syntax.parse_cad_tokens(line)
+        if len(parsed_tokens) != 1 or parsed_tokens[0].token.strip() != line:
+            raise inspect.CadRefError(f"Invalid selector ref {line!r}; expected #o1.2, #f1, or #o1.2.f1.")
+    return entry_target, "\n".join(nonempty_lines)
 
 
 def _safe_cad_path(target: str) -> str:
