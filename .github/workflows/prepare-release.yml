@@ -94,9 +94,25 @@ jobs:
         if: ${{ !inputs.dry_run }}
         env:
           GH_TOKEN: ${{ github.token }}
+          PREPARE_RELEASE_TOKEN: ${{ secrets.PREPARE_RELEASE_TOKEN }}
+          PUBLISH_PUSH_TOKEN: ${{ secrets.PUBLISH_PUSH_TOKEN }}
+          BUILD_TEST_PUSH_TOKEN: ${{ secrets.BUILD_TEST_PUSH_TOKEN }}
           BASE_BRANCH: ${{ inputs.base_branch }}
           VERSION: ${{ steps.version.outputs.version }}
         run: |
+          release_token="${PREPARE_RELEASE_TOKEN:-${PUBLISH_PUSH_TOKEN:-${BUILD_TEST_PUSH_TOKEN:-$GH_TOKEN}}}"
+          if [ -n "${PREPARE_RELEASE_TOKEN:-}" ]; then
+            echo "Using PREPARE_RELEASE_TOKEN for release PR push/create."
+          elif [ -n "${PUBLISH_PUSH_TOKEN:-}" ]; then
+            echo "Using PUBLISH_PUSH_TOKEN for release PR push/create."
+          elif [ -n "${BUILD_TEST_PUSH_TOKEN:-}" ]; then
+            echo "Using BUILD_TEST_PUSH_TOKEN for release PR push/create."
+          else
+            echo "Using GITHUB_TOKEN for release PR push/create."
+          fi
+          git remote set-url origin "https://x-access-token:${release_token}@github.com/${GITHUB_REPOSITORY}.git"
+          export GH_TOKEN="$release_token"
+
           branch="release/$VERSION"
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
