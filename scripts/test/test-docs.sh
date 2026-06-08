@@ -7,4 +7,7 @@ source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/common.sh"
 cd "$REPO_ROOT"
 
 section "Documentation checks"
+if git rev-parse --is-inside-work-tree >/dev/null 2>&1 && git lfs version >/dev/null 2>&1; then
+  git lfs pull --include="docs/public/hero/**" --exclude=""
+fi
 npm --prefix docs run check
