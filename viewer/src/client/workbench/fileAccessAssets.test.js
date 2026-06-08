@@ -119,18 +119,18 @@ test("file access assets expose explicit catalog source files without changing c
 
 test("file access assets preserve directory-relative generator source paths", () => {
   const assets = fileAccessAssetsForEntry({
-    file: "robots/tom/robot_arm.urdf",
+    file: "robots/tom/tom.urdf",
     kind: "urdf",
     sourceKind: "python",
     source: {
-      file: "models/robots/tom/robot_arm_urdf.py",
-      sourcePath: "models/robots/tom/robot_arm_urdf.py",
+      file: "models/robots/tom/tom.py",
+      sourcePath: "models/robots/tom/tom.py",
     },
   });
 
-  assert.equal(assets.source?.filename, "robot_arm_urdf.py");
+  assert.equal(assets.source?.filename, "tom.py");
   assert.equal(assets.source?.rootRelativePath, "");
-  assert.equal(assets.source?.directoryRelativePath, "models/robots/tom/robot_arm_urdf.py");
+  assert.equal(assets.source?.directoryRelativePath, "models/robots/tom/tom.py");
 });
 
 test("file access download URLs target exact output or source assets", () => {

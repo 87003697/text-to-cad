@@ -86,6 +86,7 @@ import {
   applyDisplayRecordTransform,
   applyRuntimeModelBounds,
   readBoundsCenter,
+  resolveRuntimeModelFloorZ,
   runtimeModelKeyMatches,
   syncRuntimeStepClipPlane,
   toNumber
@@ -174,6 +175,7 @@ const DEFAULT_VIEW_PLANE_ORIENTATION = Object.freeze({
 const MODEL_FRAME_BUFFER = 1.08;
 const WORLD_UP = Object.freeze([0, 0, 1]);
 const CAD_COORDINATE_SYSTEM = "cad-z-up-v1";
+const ROBOT_COORDINATE_SYSTEM = "cad-z-up-robot-framing-v2";
 const DEFAULT_VIEW_DIRECTION = [2.1, -1.65, 1.08];
 const VIEW_PLANE_DEFAULT_PRESET = {
   id: "isometric",
@@ -356,7 +358,7 @@ function getPixelRatioCap(cap) {
   return Math.min(window.devicePixelRatio || 1, cap);
 }
 
-function updateStageEffects(runtime, viewerTheme, themeSettings, radius, floorZ = 0, floorMode = THEME_FLOOR_MODES.STAGE) {
+function updateStageEffects(runtime, viewerTheme, themeSettings, radius, floorZ = 0, floorMode = THEME_FLOOR_MODES.STAGE, sceneScaleMode = VIEWER_SCENE_SCALE.CAD) {
   if (!runtime?.THREE || !runtime?.stageGroup) {
     return;
   }
@@ -367,7 +369,7 @@ function updateStageEffects(runtime, viewerTheme, themeSettings, radius, floorZ 
     return;
   }
 
-  const stageScaleMode = VIEWER_SCENE_SCALE.CAD;
+  const stageScaleMode = sceneScaleMode;
   const floorSize = getStageFloorSize(radius, stageScaleMode);
   const lightingScopeRadius = getLightingScopeRadius(stageScaleMode);
   runtime.stageGroup.add(createStageFloorPlane(runtime.THREE, viewerTheme, themeSettings, floorSize, floorZ, 0));
@@ -511,8 +513,14 @@ function readScopedPerspectiveSnapshot(runtime, { modelKey = "", sceneScaleMode 
   return annotatePerspectiveSnapshot(readPerspectiveSnapshot(runtime), {
     modelKey,
     sceneScaleMode,
-    coordinateSystem: CAD_COORDINATE_SYSTEM
+    coordinateSystem: coordinateSystemForSceneScale(sceneScaleMode)
   });
+}
+
+function coordinateSystemForSceneScale(sceneScaleMode) {
+  return normalizeSceneScaleMode(sceneScaleMode) === VIEWER_SCENE_SCALE.URDF
+    ? ROBOT_COORDINATE_SYSTEM
+    : CAD_COORDINATE_SYSTEM;
 }
 
 function getKeyboardOrbitCommand(event) {
@@ -1235,7 +1243,9 @@ const CadViewer = forwardRef(function CadViewer({
   const framedModelKeyRef = useRef("");
   const modelTransformRef = useRef({
     modelKey: "",
-    offset: null
+    sceneScaleMode: "",
+    offset: null,
+    floorZ: null
   });
   const clipSettingsRef = useRef(normalizeStepClipSettings(null));
   const selectorRuntimeRef = useRef(selectorRuntime);
@@ -1560,7 +1570,7 @@ const CadViewer = forwardRef(function CadViewer({
     if (!perspectiveSnapshotMatchesScene(nextPerspective, {
       modelKey: modelKeyRef.current,
       sceneScaleMode: sceneScaleModeRef.current,
-      coordinateSystem: CAD_COORDINATE_SYSTEM
+      coordinateSystem: coordinateSystemForSceneScale(sceneScaleModeRef.current)
     })) {
       return false;
     }
@@ -2120,7 +2130,8 @@ const CadViewer = forwardRef(function CadViewer({
         normalizedThemeSettings,
         runtime.gridRadius ?? defaultGridRadius,
         runtime.gridFloorZ ?? 0,
-        resolvedFloorMode
+        resolvedFloorMode,
+        normalizedSceneScaleMode
       );
     } else {
       clearSceneGroup(runtime.stageGroup);
@@ -2508,22 +2519,35 @@ const CadViewer = forwardRef(function CadViewer({
       (toNumber(boundsMin[2]) + toNumber(boundsMax[2])) / 2
     );
     const previousTransform = modelTransformRef.current;
-    if (previousTransform.modelKey !== modelKey || !previousTransform.offset) {
+    if (
+      previousTransform.modelKey !== modelKey ||
+      previousTransform.sceneScaleMode !== normalizedSceneScaleMode ||
+      !previousTransform.offset
+    ) {
       previousTransform.modelKey = modelKey || "";
+      previousTransform.sceneScaleMode = normalizedSceneScaleMode;
       previousTransform.offset = new THREE.Vector3(-center.x, -center.y, -center.z);
+      previousTransform.floorZ = resolveRuntimeModelFloorZ(
+        displayBounds,
+        previousTransform.offset,
+        normalizedSceneScaleMode
+      );
     }
     const modelOffset = previousTransform.offset;
+    const floorZ = Number.isFinite(Number(previousTransform.floorZ))
+      ? Number(previousTransform.floorZ)
+      : resolveRuntimeModelFloorZ(displayBounds, modelOffset, normalizedSceneScaleMode);
     const { radius } = applyRuntimeModelBounds(THREE, runtime, displayBounds, normalizedSceneScaleMode);
     updateActiveGridHelper(
       runtime,
       viewerTheme,
       radius,
-      toNumber(boundsMin[2]) + modelOffset.z,
+      floorZ,
       normalizedSceneScaleMode,
       resolvedFloorMode
     );
     updateSpotLightTarget(runtime);
-    updateStageEffects(runtime, viewerTheme, normalizedThemeSettings, radius, runtime.gridFloorZ ?? 0, resolvedFloorMode);
+    updateStageEffects(runtime, viewerTheme, normalizedThemeSettings, radius, runtime.gridFloorZ ?? 0, resolvedFloorMode, normalizedSceneScaleMode);
 
     modelGroup.position.copy(modelOffset);
     edgesGroup.position.copy(modelOffset);
@@ -2566,7 +2590,7 @@ const CadViewer = forwardRef(function CadViewer({
       const nextPerspectiveMatchesScene = perspectiveSnapshotMatchesScene(nextPerspective, {
         modelKey,
         sceneScaleMode: normalizedSceneScaleMode,
-        coordinateSystem: CAD_COORDINATE_SYSTEM
+        coordinateSystem: coordinateSystemForSceneScale(normalizedSceneScaleMode)
       });
       runWithoutPerspectiveEvents(() => {
         if (
@@ -2660,17 +2684,23 @@ const CadViewer = forwardRef(function CadViewer({
     }
 
     const { radius } = applyRuntimeModelBounds(runtime.THREE, runtime, meshData.bounds, normalizedSceneScaleMode);
-    const boundsMin = Array.isArray(meshData.bounds?.min) ? meshData.bounds.min : [0, 0, 0];
+    const floorZ = Number.isFinite(Number(modelTransformRef.current.floorZ))
+      ? Number(modelTransformRef.current.floorZ)
+      : resolveRuntimeModelFloorZ(
+        meshData.bounds,
+        runtime.modelGroup?.position,
+        normalizedSceneScaleMode
+      );
     updateActiveGridHelper(
       runtime,
       viewerTheme,
       radius,
-      toNumber(boundsMin[2]) + toNumber(runtime.modelGroup?.position?.z),
+      floorZ,
       normalizedSceneScaleMode,
       resolvedFloorMode
     );
     updateSpotLightTarget(runtime);
-    updateStageEffects(runtime, viewerTheme, normalizedThemeSettings, radius, runtime.gridFloorZ ?? 0, resolvedFloorMode);
+    updateStageEffects(runtime, viewerTheme, normalizedThemeSettings, radius, runtime.gridFloorZ ?? 0, resolvedFloorMode, normalizedSceneScaleMode);
     runtime.requestRender();
   }, [
     meshData?.parts,

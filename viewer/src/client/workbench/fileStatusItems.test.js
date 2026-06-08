@@ -66,15 +66,15 @@ test("stepFileStatusItems treats missing STEP source files as warnings", () => {
 test("stepFileStatusItems marks missing STEP artifacts as errors", () => {
   const items = stepFileStatusItems({
     entry: {
-      file: "tom/STEP/robot_arm.step",
+      file: "tom/STEP/tom.step",
       kind: "assembly",
       artifact: {
         ok: false,
         error: "missing_glb",
         stale: false,
         sourceKind: "python",
-        stepPath: "models/tom/STEP/robot_arm.step",
-        glbPath: "models/tom/STEP/.robot_arm.step.glb",
+        stepPath: "models/tom/STEP/tom.step",
+        glbPath: "models/tom/STEP/.tom.step.glb",
         artifactHash: "",
         currentHash: "new-hash",
         message: "GLB artifact is missing."
@@ -89,13 +89,13 @@ test("stepFileStatusItems marks missing STEP artifacts as errors", () => {
   assert.equal(items[0].title, "STEP artifact missing");
   assert.equal(items[0].message, "Generated GLB is missing.");
   assert.equal(items[0].details.find((item) => item.label === "Code")?.value, "missing_glb");
-  assert.equal(items[0].details.find((item) => item.label === "GLB artifact")?.value, "tom/STEP/.robot_arm.step.glb");
+  assert.equal(items[0].details.find((item) => item.label === "GLB artifact")?.value, "tom/STEP/.tom.step.glb");
 });
 
 test("stepFileStatusItems reads artifact warnings from current-file status", () => {
   const items = stepFileStatusItems({
     entry: {
-      file: "tom/STEP/robot_arm.step",
+      file: "tom/STEP/tom.step",
       kind: "assembly"
     },
     stepSourceStatus: {
@@ -103,8 +103,8 @@ test("stepFileStatusItems reads artifact warnings from current-file status", () 
         ok: false,
         error: "missing_glb",
         sourceKind: "step",
-        stepPath: "models/tom/STEP/robot_arm.step",
-        glbPath: "models/tom/STEP/.robot_arm.step.glb"
+        stepPath: "models/tom/STEP/tom.step",
+        glbPath: "models/tom/STEP/.tom.step.glb"
       },
       step: {
         ok: true,
@@ -119,7 +119,7 @@ test("stepFileStatusItems reads artifact warnings from current-file status", () 
 
   assert.equal(items.length, 1);
   assert.equal(items[0].title, "STEP artifact missing");
-  assert.equal(items[0].details.find((item) => item.label === "GLB artifact")?.value, "tom/STEP/.robot_arm.step.glb");
+  assert.equal(items[0].details.find((item) => item.label === "GLB artifact")?.value, "tom/STEP/.tom.step.glb");
 });
 
 test("stepFileStatusItems keeps renderable STEP artifact issues as warnings", () => {

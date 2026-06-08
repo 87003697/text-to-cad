@@ -1,7 +1,6 @@
 import {
-  Camera,
-  Copy,
   Crosshair,
+  Focus,
   MousePointer2,
   Orbit,
   PenTool
@@ -45,8 +44,7 @@ function DesktopFloatingToolBar({
   canRedoDrawing,
   drawingStrokes,
   handleEnterPreviewMode,
-  handleScreenshotCopy,
-  handleScreenshotDownload
+  handleScreenshotCopy
 }) {
   const dxfMode = renderFormat === RENDER_FORMAT.DXF;
   const implicitMode = renderFormat === RENDER_FORMAT.IMPLICIT;
@@ -123,17 +121,7 @@ function DesktopFloatingToolBar({
             }}
             disabled={captureDisabled}
           >
-            <Copy className="size-3.5" strokeWidth={2} aria-hidden="true" />
-          </ToolbarButton>
-
-          <ToolbarButton
-            label="Download screenshot"
-            onClick={() => {
-              void handleScreenshotDownload();
-            }}
-            disabled={captureDisabled}
-          >
-            <Camera className="size-3.5" strokeWidth={2} aria-hidden="true" />
+            <Focus className="size-3.5" strokeWidth={2} aria-hidden="true" />
           </ToolbarButton>
         </div>
       </TooltipProvider>

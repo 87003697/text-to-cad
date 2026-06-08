@@ -241,6 +241,31 @@ jobs:
         if: steps.gate.outputs.should_publish == 'true'
         run: scripts/test/test.sh
 
+      - name: Upload viewer models catalog
+        if: steps.gate.outputs.should_publish == 'true' && steps.request.outputs.target_branch == 'main' && steps.request.outputs.dry_run != 'true'
+        env:
+          VIEWER_VERCEL_BLOB_READ_WRITE_TOKEN: ${{ secrets.VIEWER_VERCEL_BLOB_READ_WRITE_TOKEN }}
+          BLOB_READ_WRITE_TOKEN: ${{ secrets.BLOB_READ_WRITE_TOKEN }}
+        run: |
+          if [ ! -d models ]; then
+            echo "No models directory to upload."
+            exit 0
+          fi
+          if [ -z "${VIEWER_VERCEL_BLOB_READ_WRITE_TOKEN:-}" ] && [ -z "${BLOB_READ_WRITE_TOKEN:-}" ]; then
+            echo "Missing VIEWER_VERCEL_BLOB_READ_WRITE_TOKEN or BLOB_READ_WRITE_TOKEN secret." >&2
+            exit 1
+          fi
+          scripts/viewer/upload-viewer-models-catalog.sh "$PWD/models" --skip-existing --fetch-missing-lfs
+
+      - name: Remove models from publish tree
+        if: steps.gate.outputs.should_publish == 'true'
+        run: |
+          rm -rf models
+          if [ -e models ]; then
+            echo "Failed to remove models from the publish tree." >&2
+            exit 1
+          fi
+
       - name: Commit publish result
         if: steps.gate.outputs.should_publish == 'true'
         env:
@@ -251,6 +276,11 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add -A
+          if [ -n "$(git ls-files -- models)" ]; then
+            echo "models/ must not be present in the publish commit." >&2
+            git ls-files -- models >&2
+            exit 1
+          fi
 
           version="$(tr -d '[:space:]' < plugins/cad/VERSION)"
           if target_base_sha="$(git rev-parse --verify "origin/$TARGET_BRANCH^{commit}" 2>/dev/null)"; then

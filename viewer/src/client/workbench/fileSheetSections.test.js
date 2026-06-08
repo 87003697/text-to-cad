@@ -17,6 +17,7 @@ test("file sheet section defaults match current sheet behavior", () => {
   assert.deepEqual(defaultOpenFileSheetSectionIds("implicit", { hasFileStatus: true }), ["status"]);
   assert.deepEqual(defaultOpenFileSheetSectionIds("implicit"), []);
   assert.deepEqual(defaultOpenFileSheetSectionIds("implicit", { hasImplicitParameterPanel: true }), ["parameters"]);
+  assert.deepEqual(defaultOpenFileSheetSectionIds("srdf"), ["joints"]);
   assert.deepEqual(defaultOpenFileSheetSectionIds("srdf", { motionEnabled: true }), ["motion", "joints"]);
   assert.deepEqual(defaultOpenFileSheetSectionIds("sdf"), ["sdf", "joints"]);
 });
@@ -40,6 +41,7 @@ test("rendered file sheet sections include closed-by-default sections", () => {
     "appearance",
     "metadata"
   ]);
+  assert.deepEqual(renderedFileSheetSectionIds("srdf"), ["joints", "display", "appearance", "metadata"]);
   assert.deepEqual(renderedFileSheetSectionIds("mesh"), ["display", "appearance", "metadata"]);
   assert.deepEqual(renderedFileSheetSectionIds("implicit"), ["graphics", "display", "appearance", "metadata"]);
   assert.deepEqual(renderedFileSheetSectionIds("implicit", { hasImplicitParameterPanel: true }), ["parameters", "graphics", "display", "appearance", "metadata"]);

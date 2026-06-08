@@ -27,6 +27,19 @@ function shortHash(value) {
   return crypto.createHash("sha256").update(value).digest("hex").slice(0, 16);
 }
 
+function fullHash(value) {
+  return crypto.createHash("sha256").update(value).digest("hex");
+}
+
+function gitLfsPointer({ oid, size }) {
+  return [
+    "version https://git-lfs.github.com/spec/v1",
+    `oid sha256:${oid}`,
+    `size ${size}`,
+    "",
+  ].join("\n");
+}
+
 test("upload ignore patterns support comments, directory patterns, globs, and negation", () => {
   const patterns = parseIgnorePatterns(`
 # comment
@@ -55,12 +68,16 @@ test("parseUploadArgs accepts a directory and repeated ignore options", () => {
       "/mechbench2/",
       "--concurrency",
       "2",
+      "--skip-existing",
+      "--fetch-missing-lfs",
     ], {}),
     {
       directory: "models",
       ignoreFiles: [".vieweruploadignore"],
       excludePatterns: ["/mechbench/", "/mechbench2/"],
       concurrency: 2,
+      skipExisting: true,
+      fetchMissingLfs: true,
     }
   );
 });
@@ -201,6 +218,101 @@ test("uploadCatalogDirectoryToVercelBlob applies default catalog exclusions", as
     `https://blob.test/models2/.part.step.${shortHash(stepModuleBody)}.js`
   );
   assert.deepEqual(result.ignoredPatterns.slice(0, DEFAULT_UPLOAD_EXCLUDE_PATTERNS.length), DEFAULT_UPLOAD_EXCLUDE_PATTERNS);
+});
+
+test("uploadCatalogDirectoryToVercelBlob skips assets already present in the remote catalog", async () => {
+  const repoRoot = makeTempRepo();
+  const existingContent = "solid existing\nendsolid existing\n";
+  const existingHash = fullHash(existingContent);
+  const existingBytes = Buffer.byteLength(existingContent);
+  writeFile(path.join(repoRoot, "models/existing.stl"), gitLfsPointer({
+    oid: existingHash,
+    size: existingBytes,
+  }));
+  writeFile(path.join(repoRoot, "models/new.stl"), "solid new\nendsolid new\n");
+  const remoteCatalog = {
+    schemaVersion: 4,
+    entries: [{
+      file: "existing.stl",
+      kind: "mesh",
+      url: "https://blob.test/models2/existing.stl",
+      hash: existingHash,
+      bytes: existingBytes,
+    }],
+  };
+  const putCalls = [];
+  const getCalls = [];
+
+  const result = await uploadCatalogDirectoryToVercelBlob({
+    directory: "models",
+    skipExisting: true,
+    env: {
+      VIEWER_ASSET_BACKEND: "vercel-blob",
+      VIEWER_VERCEL_BLOB_PREFIX: "models2",
+      VIEWER_VERCEL_BLOB_READ_WRITE_TOKEN: "test-token",
+    },
+    cwd: repoRoot,
+    client: {
+      get: async (pathname, options) => {
+        getCalls.push({ pathname, options });
+        return {
+          stream: new Response(JSON.stringify(remoteCatalog)).body,
+        };
+      },
+      put: async (pathname, body, options) => {
+        putCalls.push({ pathname, body, options });
+        return { pathname, url: `https://blob.test/${pathname}` };
+      },
+    },
+    logger: { log() {} },
+  });
+
+  assert.deepEqual(getCalls, [{
+    pathname: "models2/catalog.json",
+    options: {
+      access: "public",
+      token: "test-token",
+    },
+  }]);
+  assert.deepEqual(putCalls.map((call) => call.pathname).sort(), [
+    "models2/catalog.json",
+    "models2/new.stl",
+  ]);
+  assert.equal(result.uploadedFiles, 1);
+  assert.equal(result.skippedFiles, 1);
+
+  const uploadedCatalog = JSON.parse(putCalls.find((call) => call.pathname === "models2/catalog.json").body);
+  const existingEntry = uploadedCatalog.entries.find((entry) => entry.file === "existing.stl");
+  assert.equal(existingEntry.url, "https://blob.test/models2/existing.stl");
+  assert.equal(existingEntry.hash, existingHash);
+  assert.equal(existingEntry.bytes, existingBytes);
+});
+
+test("uploadCatalogDirectoryToVercelBlob rejects missing Git LFS pointers without explicit fetching", async () => {
+  const repoRoot = makeTempRepo();
+  writeFile(path.join(repoRoot, "models/missing.stl"), gitLfsPointer({
+    oid: "a".repeat(64),
+    size: 12345,
+  }));
+
+  await assert.rejects(
+    () => uploadCatalogDirectoryToVercelBlob({
+      directory: "models",
+      env: {
+        VIEWER_ASSET_BACKEND: "vercel-blob",
+        VIEWER_VERCEL_BLOB_PREFIX: "models2",
+        VIEWER_VERCEL_BLOB_READ_WRITE_TOKEN: "test-token",
+      },
+      cwd: repoRoot,
+      client: {
+        put: async () => {
+          throw new Error("LFS pointer should not be uploaded");
+        },
+      },
+      logger: { log() {} },
+    }),
+    /missing\.stl is a Git LFS pointer/
+  );
 });
 
 test("uploadCatalogDirectoryToVercelBlob honors positional directory from npm caller cwd", async () => {

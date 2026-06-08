@@ -250,6 +250,72 @@ test("buildModel renders solid part records and updates theme without rebuilding
   scene.dispose();
 });
 
+test("buildModel keeps source-mesh color buffers immutable across material refreshes", () => {
+  const sourceColors = new Float32Array([
+    0.2, 0.4, 0.6,
+    0.8, 0.45, 0.2,
+    0.55, 0.3, 0.75
+  ]);
+  const originalColors = Array.from(sourceColors);
+  const sourceMesh = {
+    vertices: new Float32Array([
+      0, 0, 0,
+      1, 0, 0,
+      0, 1, 0
+    ]),
+    indices: new Uint32Array([0, 1, 2]),
+    normals: new Float32Array([
+      0, 0, 1,
+      0, 0, 1,
+      0, 0, 1
+    ]),
+    colors: sourceColors
+  };
+  const meshData = {
+    vertices: new Float32Array(0),
+    indices: new Uint32Array(0),
+    normals: new Float32Array(0),
+    bounds: { min: [0, 0, 0], max: [1, 1, 0] },
+    parts: [
+      {
+        id: "camera-source",
+        sourceMeshKey: "camera-source",
+        sourceMesh,
+        hasSourceColors: true,
+        vertexCount: 3,
+        triangleCount: 1,
+        bounds: { min: [0, 0, 0], max: [1, 1, 0] }
+      }
+    ]
+  };
+  const theme = cloneThemeSettings("workbench");
+  const scene = buildModel(THREE, meshData, {
+    theme,
+    renderPartsIndividually: true
+  });
+  const record = scene.displayRecords[0];
+  const colorAttribute = record.geometry.getAttribute("color");
+
+  assert.notEqual(record.rawColors, sourceColors);
+  assert.notEqual(colorAttribute.array, sourceColors);
+  assert.deepEqual(Array.from(sourceColors), originalColors);
+
+  scene.update({
+    theme: {
+      ...theme,
+      materials: {
+        ...theme.materials,
+        brightness: 0.72,
+        saturation: 1.8
+      }
+    }
+  });
+
+  assert.deepEqual(Array.from(sourceColors), originalColors);
+  assert.deepEqual(Array.from(record.rawColors), originalColors);
+  scene.dispose();
+});
+
 test("buildModel selection can focus and hide subassembly occurrence descendants", () => {
   const focused = buildModel(THREE, nestedAssemblyMeshData(), {
     theme: cloneThemeSettings("workbench"),

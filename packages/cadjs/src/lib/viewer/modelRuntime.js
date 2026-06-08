@@ -6,7 +6,9 @@ import {
 } from "../../common/cadScene.js";
 import {
   clampSceneModelRadius,
-  getShadowCameraSettings
+  getShadowCameraSettings,
+  normalizeSceneScaleMode,
+  VIEWER_SCENE_SCALE
 } from "./sceneScale.js";
 
 export {
@@ -33,6 +35,15 @@ export function runtimeModelKeyMatches(runtime, modelKey) {
   return activeModelKey || currentModelKey
     ? activeModelKey === currentModelKey
     : true;
+}
+
+export function resolveRuntimeModelFloorZ(bounds, modelPosition, sceneScaleMode) {
+  const positionZ = toNumber(modelPosition?.z);
+  if (normalizeSceneScaleMode(sceneScaleMode) === VIEWER_SCENE_SCALE.URDF) {
+    return positionZ;
+  }
+  const boundsMin = Array.isArray(bounds?.min) ? bounds.min : [0, 0, 0];
+  return toNumber(boundsMin[2]) + positionZ;
 }
 
 export function applyRuntimeModelBounds(THREE, runtime, bounds, sceneScaleMode, {

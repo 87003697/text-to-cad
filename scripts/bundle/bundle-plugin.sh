@@ -109,6 +109,7 @@ sync_skills() {
       --delete-excluded \
       --exclude __pycache__ \
       --exclude .pytest_cache \
+      --exclude node_modules \
       --exclude '*.pyc' \
       --exclude tests \
       --exclude __tests__ \

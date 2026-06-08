@@ -17,35 +17,16 @@ htmlcov/
 # Local environments and caches
 .venv
 .cache
+.agents/
 .vite
 node_modules
 dist
-dist-verify
 coverage
 
 # Production CAD Viewer runtime dist is committed on main. On dev,
 # skills/cad-viewer/scripts/viewer must stay a symlink to viewer/.
 !skills/cad-viewer/scripts/viewer/dist/
 !skills/cad-viewer/scripts/viewer/dist/**
-
-# Local model workspace and generated artifacts
-/models/
-*.step
-*.stp
-*.stl
-*.3mf
-*.gcode
-*.gcode.3mf
-*.dxf
-*.glb
-*.gltf
-*.obj
-*.ply
-*.mp4
-*.step.js
-*.stp.js
-.*.step/
-.*.stp/
 
 # Temporary files
 *.tmp

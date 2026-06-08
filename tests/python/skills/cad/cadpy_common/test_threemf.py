@@ -112,7 +112,9 @@ class ThreeMfExportTests(unittest.TestCase):
                 model_xml = package.read("3D/3dmodel.model")
             root = ET.fromstring(model_xml)
             self.assertEqual("millimeter", root.attrib["unit"])
-            self.assertIsNotNone(root.find("./m:resources/m:basematerials", NS))
+            bases = root.findall("./m:resources/m:basematerials/m:base", NS)
+            self.assertTrue(bases)
+            self.assertIn("#B6C4CEFF", [base.attrib.get("displaycolor") for base in bases])
             vertices = root.findall(".//m:vertex", NS)
             triangles = root.findall(".//m:triangle", NS)
             self.assertTrue(vertices)
@@ -191,6 +193,7 @@ class ThreeMfExportTests(unittest.TestCase):
             triangles = root.findall(".//m:triangle", NS)
             self.assertEqual(prototype_key, _shape_hash(shape))
             self.assertIn("#FF0000FF", [base.attrib.get("displaycolor") for base in bases])
+            self.assertNotIn("#B6C4CEFF", [base.attrib.get("displaycolor") for base in bases])
             self.assertEqual("1", mesh_object.attrib.get("pid"))
             self.assertIsNotNone(mesh_object.attrib.get("pindex"))
             self.assertFalse(any("p1" in triangle.attrib for triangle in triangles))
@@ -273,15 +276,19 @@ class ThreeMfExportTests(unittest.TestCase):
             shape = _meshed_box()
             face_hashes: list[int] = []
             explorer = TopExp_Explorer(shape, TopAbs_FACE)
-            while explorer.More() and len(face_hashes) < 2:
+            while explorer.More():
                 face_hashes.append(_shape_hash(TopoDS.Face_s(explorer.Current())))
                 explorer.Next()
             scene, prototype_key = _single_leaf_scene(
                 shape,
                 prototype_face_colors={
                     _shape_hash(shape): {
-                        face_hashes[0]: (1.0, 0.0, 0.0, 1.0),
-                        face_hashes[1]: (0.0, 0.0, 1.0, 1.0),
+                        face_hash: (
+                            (1.0, 0.0, 0.0, 1.0)
+                            if index % 2 == 0
+                            else (0.0, 0.0, 1.0, 1.0)
+                        )
+                        for index, face_hash in enumerate(face_hashes)
                     }
                 },
             )
@@ -296,6 +303,7 @@ class ThreeMfExportTests(unittest.TestCase):
             self.assertEqual(prototype_key, _shape_hash(shape))
             self.assertIn("#FF0000FF", [base.attrib.get("displaycolor") for base in bases])
             self.assertIn("#0000FFFF", [base.attrib.get("displaycolor") for base in bases])
+            self.assertNotIn("#B6C4CEFF", [base.attrib.get("displaycolor") for base in bases])
             self.assertIsNone(mesh_object.attrib.get("pindex"))
             self.assertGreaterEqual(len(triangle_materials), 2)
 

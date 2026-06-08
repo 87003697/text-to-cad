@@ -408,7 +408,7 @@ test("entryStepSourceKind only exposes Python generators for source badges", () 
 
 test("entryIconStatus treats active generator runs as loading and suppresses artifact warnings", () => {
   const entry = {
-    file: "robots/tom/robot_arm.step",
+    file: "robots/tom/tom.step",
     kind: "assembly",
     sourceKind: "python",
     artifact: {
@@ -422,9 +422,9 @@ test("entryIconStatus treats active generator runs as loading and suppresses art
   assert.deepEqual(
     entryIconStatus(entry, {
       sourceFormat: "step",
-      entryKey: "robots/tom/robot_arm.step",
+      entryKey: "robots/tom/tom.step",
       hasMesh: false,
-      activeGenerationFiles: ["robots/tom/robot_arm.step"]
+      activeGenerationFiles: ["robots/tom/tom.step"]
     }),
     {
       artifactBuildable: true,
@@ -443,9 +443,9 @@ test("entryIconStatus treats active generator runs as loading and suppresses art
       sourceFormat: "step",
       status: entryIconStatus(entry, {
         sourceFormat: "step",
-        entryKey: "robots/tom/robot_arm.step",
+        entryKey: "robots/tom/tom.step",
         hasMesh: false,
-        activeGenerationFiles: ["robots/tom/robot_arm.step"]
+        activeGenerationFiles: ["robots/tom/tom.step"]
       })
     }),
     ENTRY_ICON_KIND.LOADING

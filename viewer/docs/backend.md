@@ -155,7 +155,12 @@ Blob integrations create.
 The uploader also reads `.vieweruploadignore` from the uploaded directory and
 accepts repeated `--ignore-file` options for gitignore-style exclude patterns.
 It excludes `mechbench/`, `mechbench2/`, `7dof_arm/`, and Python source files
-by default, and public Blob catalogs omit Python source paths and URLs.
+by default, and public Blob catalogs omit Python source paths and URLs. Add
+`--skip-existing --fetch-missing-lfs` for publish-style runs that compare
+against the remote catalog, skip matching assets, and fetch only the Git LFS
+objects needed for new or changed uploads. The repository publish wrapper,
+`scripts/viewer/upload-viewer-models-catalog.sh`, owns the branch-defined Blob
+path prefix for model catalog uploads.
 
 For token-free read-only deployments, `VIEWER_VERCEL_BLOB_PREFIX` should be the
 public Blob URL for the prefix directory. The hosted backend always reads

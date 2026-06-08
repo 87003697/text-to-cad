@@ -83,7 +83,7 @@ test("parseUrdf resolves relative mesh paths through local CAD asset URLs", () =
 
   assert.equal(
     urdfData.links[0].visuals[0].meshUrl,
-    "/__cad/asset?file=%2Fworkspace%2Frobots%2Fmeshes%2Fsample_part.stl"
+    "/__cad/asset?file=%2Fworkspace%2Frobots%2Fmeshes%2Fsample_part.stl&v=abc123"
   );
 });
 
@@ -104,7 +104,7 @@ test("parseUrdf preserves remote origins when resolving hosted mesh paths", () =
   ]);
 
   const urdfData = withFakeDomParser(new FakeDocument(robot), () => parseUrdf("<robot />", {
-    sourceUrl: "https://blob.example.test/models2/robots/tom/robot_arm.urdf"
+    sourceUrl: "https://blob.example.test/models2/robots/tom/tom.urdf"
   }));
 
   assert.equal(

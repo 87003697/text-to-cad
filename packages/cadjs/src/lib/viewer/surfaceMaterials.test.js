@@ -66,12 +66,15 @@ test("source color helpers read, shape, and buffer source colors consistently", 
   assertColorNear(shaped, [0.1, 0.2, 0.3], "shaped");
 
   const colors = new Float32Array([0.2, 0.4, 0.6, 1, 0.5, 0]);
+  const originalColors = Array.from(colors);
   const shapedBuffer = shapeSourceColorBuffer(THREE, colors, {
     tintStrength: 0,
     saturation: 1,
     contrast: 1,
     brightness: 0.5
   });
+  assert.notEqual(shapedBuffer, colors);
+  assert.deepEqual(Array.from(colors), originalColors);
   assertColorNear({ r: shapedBuffer[0], g: shapedBuffer[1], b: shapedBuffer[2] }, [0.1, 0.2, 0.3], "first buffer color");
   assertColorNear({ r: shapedBuffer[3], g: shapedBuffer[4], b: shapedBuffer[5] }, [0.5, 0.25, 0], "second buffer color");
 

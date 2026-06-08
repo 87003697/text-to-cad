@@ -608,39 +608,72 @@ function geometryCacheEntry(THREE, meshData, key, createGeometry) {
 
 function buildPartGeometryEntry(THREE, meshData, part, recomputeNormals = false) {
   const partId = String(part?.id || part?.occurrenceId || "").trim();
-  const key = partId || `${toNumber(part?.vertexOffset)}:${toNumber(part?.triangleOffset)}`;
+  const sourceMesh = part?.sourceMesh && typeof part.sourceMesh === "object" ? part.sourceMesh : null;
+  const sourceMeshColorMode = sourceMesh && part?.hasSourceColors ? "source-colors" : "flat";
+  const sourceMeshKey = sourceMesh
+    ? `source:${String(part?.sourceMeshKey || part?.meshUrl || part?.partFileRef || partId || "").trim()}:${sourceMeshColorMode}`
+    : "";
+  const key = sourceMeshKey || partId || `${toNumber(part?.vertexOffset)}:${toNumber(part?.triangleOffset)}`;
   return geometryCacheEntry(THREE, meshData, key, () => {
-    const vertexOffset = toNumber(part?.vertexOffset, 0);
-    const vertexCount = toNumber(part?.vertexCount, 0);
-    const triangleOffset = toNumber(part?.triangleOffset, 0);
-    const triangleCount = toNumber(part?.triangleCount, 0);
+    const vertexOffset = sourceMesh ? 0 : toNumber(part?.vertexOffset, 0);
+    const vertexCount = sourceMesh
+      ? Math.floor((sourceMesh.vertices?.length || 0) / 3)
+      : toNumber(part?.vertexCount, 0);
+    const triangleOffset = sourceMesh ? 0 : toNumber(part?.triangleOffset, 0);
+    const triangleCount = sourceMesh
+      ? Math.floor((sourceMesh.indices?.length || 0) / 3)
+      : toNumber(part?.triangleCount, 0);
     if (vertexCount <= 0 || triangleCount <= 0) {
       return null;
     }
 
-    const positionStart = vertexOffset * 3;
-    const positionEnd = positionStart + vertexCount * 3;
-    const localVertices = meshData.vertices.slice(positionStart, positionEnd);
-    const rawColors = partUsesDisplayVertexColors(meshData, part)
-      ? new Float32Array(meshData.colors.slice(positionStart, positionEnd))
-      : null;
-    const localNormals = isNumericArray(meshData.normals, 3) ? meshData.normals.slice(positionStart, positionEnd) : null;
-    const rawIndices = meshData.indices.slice(triangleOffset * 3, triangleOffset * 3 + triangleCount * 3);
-    const localIndices = new Uint32Array(rawIndices.length);
-    for (let index = 0; index < rawIndices.length; index += 1) {
-      localIndices[index] = Math.max(0, Number(rawIndices[index]) - vertexOffset);
+    let localVertices;
+    let rawColors;
+    let localNormals;
+    let localIndices;
+
+    if (sourceMesh) {
+      localVertices = sourceMesh.vertices || new Float32Array(0);
+      rawColors = part?.hasSourceColors &&
+        isNumericArray(sourceMesh.colors, 3) &&
+        sourceMesh.colors.length === localVertices.length
+        ? new Float32Array(sourceMesh.colors)
+        : null;
+      localNormals = isNumericArray(sourceMesh.normals, 3) ? sourceMesh.normals : null;
+      localIndices = sourceMesh.indices || new Uint32Array(0);
+    } else {
+      const positionStart = vertexOffset * 3;
+      const positionEnd = positionStart + vertexCount * 3;
+      localVertices = meshData.vertices.slice(positionStart, positionEnd);
+      rawColors = partUsesDisplayVertexColors(meshData, part)
+        ? new Float32Array(meshData.colors.slice(positionStart, positionEnd))
+        : null;
+      localNormals = isNumericArray(meshData.normals, 3) ? meshData.normals.slice(positionStart, positionEnd) : null;
+      const rawIndices = meshData.indices.slice(triangleOffset * 3, triangleOffset * 3 + triangleCount * 3);
+      localIndices = new Uint32Array(rawIndices.length);
+      for (let index = 0; index < rawIndices.length; index += 1) {
+        localIndices[index] = Math.max(0, Number(rawIndices[index]) - vertexOffset);
+      }
     }
     if (!localIndices.length) {
       return null;
     }
 
     const geometry = new THREE.BufferGeometry();
-    geometry.setAttribute("position", new THREE.BufferAttribute(new Float32Array(localVertices), 3));
-    geometry.setIndex(new THREE.BufferAttribute(localIndices, 1));
+    geometry.setAttribute(
+      "position",
+      new THREE.BufferAttribute(localVertices instanceof Float32Array ? localVertices : new Float32Array(localVertices), 3)
+    );
+    geometry.setIndex(new THREE.BufferAttribute(localIndices instanceof Uint32Array ? localIndices : new Uint32Array(localIndices), 1));
     if (rawColors && rawColors.length === localVertices.length) {
-      geometry.setAttribute("color", new THREE.BufferAttribute(new Float32Array(rawColors), 3));
+      geometry.setAttribute(
+        "color",
+        new THREE.BufferAttribute(new Float32Array(rawColors), 3)
+      );
     }
-    setSurfaceEdgeAttributes(THREE, geometry, meshData, vertexOffset, vertexCount);
+    if (!sourceMesh) {
+      setSurfaceEdgeAttributes(THREE, geometry, meshData, vertexOffset, vertexCount);
+    }
     applyGeometryNormals(THREE, geometry, localNormals, recomputeNormals);
     geometry.computeBoundingSphere();
     return {
@@ -728,7 +761,10 @@ function buildEdgeGeometry(THREE, meshData, part, sourceGeometry, displayMode, e
   void edgeSettings;
   const cache = cacheForMeshData(meshData);
   const partId = part ? String(part?.id || part?.occurrenceId || "").trim() : MODEL_PART_ID;
-  const edgeKey = `${displayMode}:${partId || MODEL_PART_ID}`;
+  const sourceMeshKey = part?.sourceMesh
+    ? String(part?.sourceMeshKey || part?.meshUrl || part?.partFileRef || "").trim()
+    : "";
+  const edgeKey = `${displayMode}:${sourceMeshKey ? `source:${sourceMeshKey}` : (partId || MODEL_PART_ID)}`;
   const cached = cache.edge.get(edgeKey);
   if (cached) {
     return cached;

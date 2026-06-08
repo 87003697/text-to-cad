@@ -23,16 +23,16 @@ test("CAD scenes keep the existing large minimum framing scale", () => {
   });
 });
 
-test("URDF scenes use meter-appropriate framing minimums with CAD lighting scope", () => {
+test("URDF scenes use meter-appropriate framing and lighting minimums", () => {
   assert.equal(normalizeSceneScaleMode(VIEWER_SCENE_SCALE.URDF), VIEWER_SCENE_SCALE.URDF);
   assert.equal(clampSceneModelRadius(0.14, VIEWER_SCENE_SCALE.URDF), 0.14);
   assert.equal(clampSceneModelRadius(0.01, VIEWER_SCENE_SCALE.URDF), 0.05);
-  assert.equal(defaultSceneGridRadius(VIEWER_SCENE_SCALE.URDF), 0.25);
-  assert.equal(getLightingScopeRadius(VIEWER_SCENE_SCALE.URDF), 140);
+  assert.equal(defaultSceneGridRadius(VIEWER_SCENE_SCALE.URDF), 0.14);
+  assert.equal(getLightingScopeRadius(VIEWER_SCENE_SCALE.URDF), 0.14);
   assert.deepEqual(getSceneScaleSettings(VIEWER_SCENE_SCALE.URDF), {
     minModelRadius: 0.05,
-    minGridSize: 0.5,
-    lightingScopeRadius: 140
+    minGridSize: 0.28,
+    lightingScopeRadius: 0.14
   });
 });
 

@@ -1,3 +1,10 @@
+const GENERATED_DEFAULT_MATERIAL_NAMES = new Set(["default"]);
+const GENERATED_DEFAULT_MATERIAL_COLORS = new Set(["#fafafb", "#b6c4ce"]);
+const WORKBENCH_DEFAULT_MATERIAL_COLOR = Object.freeze({
+  rgb: [0.4677837961, 0.5520114015, 0.6172065624],
+  hex: "#b6c4ce",
+});
+
 function buildBoundsFromVertices(vertices) {
   if (!vertices?.length) {
     return {
@@ -219,9 +226,21 @@ function colorFromMaterial(material) {
   if (!material?.color) {
     return null;
   }
+  const hex = `#${material.color.getHexString()}`.toLowerCase();
+  const materialName = String(material.name || "").trim().toLowerCase();
+  const generatedDefault = GENERATED_DEFAULT_MATERIAL_NAMES.has(materialName) &&
+    GENERATED_DEFAULT_MATERIAL_COLORS.has(hex);
+  if (generatedDefault) {
+    return {
+      rgb: WORKBENCH_DEFAULT_MATERIAL_COLOR.rgb,
+      hex: WORKBENCH_DEFAULT_MATERIAL_COLOR.hex,
+      generatedDefault: true,
+    };
+  }
   return {
     rgb: [material.color.r, material.color.g, material.color.b],
-    hex: `#${material.color.getHexString()}`,
+    hex,
+    generatedDefault: false,
   };
 }
 
@@ -307,7 +326,7 @@ function appendMeshPrimitive(THREE, accumulator, mesh, group, material) {
     name: label || id,
     label: label || id,
     nodeType: "part",
-    color: color?.hex || "",
+    color: color && !color.generatedDefault ? color.hex : "",
     bounds: buildBoundsFromVertices(partVertices),
     vertexOffset,
     vertexCount,
@@ -316,7 +335,7 @@ function appendMeshPrimitive(THREE, accumulator, mesh, group, material) {
     edgeIndexOffset: 0,
     edgeIndexCount: 0,
   });
-  if (color?.hex) {
+  if (color?.hex && !color.generatedDefault) {
     accumulator.colorSet.add(color.hex.toLowerCase());
   }
 }
@@ -342,18 +361,19 @@ export function buildMeshDataFromThreeMfGroup(THREE, group) {
     }
   });
   const vertices = new Float32Array(accumulator.vertices);
-  const colors = accumulator.colors.length === accumulator.vertices.length
+  const rawColors = accumulator.colors.length === accumulator.vertices.length
     ? new Float32Array(accumulator.colors)
     : new Float32Array(0);
+  const hasSourceColors = rawColors.length === vertices.length && rawColors.length > 0 && accumulator.colorSet.size > 0;
   return {
     vertices,
     indices: new Uint32Array(accumulator.indices),
     normals: new Float32Array(accumulator.normals),
-    colors,
+    colors: hasSourceColors ? rawColors : new Float32Array(0),
     edge_indices: new Uint32Array(0),
     bounds: buildBoundsFromVertices(vertices),
     parts: accumulator.parts,
-    has_source_colors: colors.length === vertices.length && colors.length > 0,
+    has_source_colors: hasSourceColors,
     sourceColor: accumulator.colorSet.size === 1 ? [...accumulator.colorSet][0] : "",
   };
 }

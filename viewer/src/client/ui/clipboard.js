@@ -121,7 +121,7 @@ function isClipboardPermissionError(error) {
 
 function blockedClipboardError(error) {
   if (isClipboardPermissionError(error)) {
-    return new Error("Clipboard image copy is blocked in this browser. Use Download screenshot instead.");
+    return new Error("Clipboard image copy is blocked in this browser.");
   }
   return error instanceof Error ? error : new Error("Clipboard image copy failed");
 }

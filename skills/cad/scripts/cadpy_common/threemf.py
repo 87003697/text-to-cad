@@ -21,7 +21,7 @@ CORE_NS = "http://schemas.microsoft.com/3dmanufacturing/core/2015/02"
 CONTENT_TYPES_NS = "http://schemas.openxmlformats.org/package/2006/content-types"
 RELATIONSHIPS_NS = "http://schemas.openxmlformats.org/package/2006/relationships"
 MODEL_REL_TYPE = "http://schemas.microsoft.com/3dmanufacturing/2013/01/3dmodel"
-DEFAULT_MATERIAL: ColorRGBA = (0.9568627451, 0.9568627451, 0.9607843137, 1.0)
+DEFAULT_MATERIAL: ColorRGBA = (0.4677837961, 0.5520114015, 0.6172065624, 1.0)
 MATERIAL_RESOURCE_ID = "1"
 
 ET.register_namespace("", CORE_NS)
@@ -38,7 +38,7 @@ class _MaterialRegistry:
     def __init__(self, default_color: ColorRGBA = DEFAULT_MATERIAL) -> None:
         self._materials: list[tuple[str, ColorRGBA]] = []
         self._indices: dict[tuple[int, int, int, int], int] = {}
-        self.index(default_color, name="Default")
+        self._default_color = _normalize_rgba(default_color)
 
     @staticmethod
     def color_key(color: ColorRGBA) -> tuple[int, int, int, int]:
@@ -58,7 +58,10 @@ class _MaterialRegistry:
             return existing
         index = len(self._materials)
         self._indices[key] = index
-        material_name = name or f"Color {key[0]:02X}{key[1]:02X}{key[2]:02X}{key[3]:02X}"
+        default_key = self.color_key(self._default_color)
+        material_name = name or (
+            "Default" if key == default_key else f"Color {key[0]:02X}{key[1]:02X}{key[2]:02X}{key[3]:02X}"
+        )
         self._materials.append((material_name, normalized))
         return index
 
@@ -440,7 +443,6 @@ def _build_model_root() -> tuple[ET.Element, ET.Element, ET.Element]:
 def _build_shape_model_xml(shape: object, *, color: ColorRGBA | None = None) -> bytes:
     model, resources, build = _build_model_root()
     materials = _MaterialRegistry(_normalize_rgba(color))
-    materials.append_xml(resources)
     _append_mesh_object(
         resources,
         object_id=2,
@@ -450,6 +452,12 @@ def _build_shape_model_xml(shape: object, *, color: ColorRGBA | None = None) -> 
         default_color=_normalize_rgba(color),
         face_colors={},
     )
+    objects = [child for child in list(resources) if child.tag == f"{{{CORE_NS}}}object"]
+    for child in objects:
+        resources.remove(child)
+    materials.append_xml(resources)
+    for child in objects:
+        resources.append(child)
     ET.SubElement(build, f"{{{CORE_NS}}}item", {"objectid": "2"})
     return ET.tostring(model, encoding="utf-8", xml_declaration=True)
 

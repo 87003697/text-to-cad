@@ -7,6 +7,7 @@ import {
   buildStepClipPlane,
   runtimeModelKeyMatches,
   readBoundsCenter,
+  resolveRuntimeModelFloorZ,
   syncRuntimeStepClipPlane,
   toNumber
 } from "./modelRuntime.js";
@@ -75,6 +76,17 @@ test("model runtime helpers update bounds and shadow settings", () => {
   assert.equal(runtime.keyLight.shadow.mapSize.y, 512);
   assert.equal(runtime.keyLight.shadow.camera.left, -60);
   assert.equal(runtime.keyLight.shadow.camera.right, 60);
+});
+
+test("model runtime helpers resolve fixed floor planes by scene scale", () => {
+  const bounds = {
+    min: [0, 0, -4],
+    max: [1, 1, 10]
+  };
+  const modelPosition = new THREE.Vector3(0, 0, -6);
+
+  assert.equal(resolveRuntimeModelFloorZ(bounds, modelPosition, VIEWER_SCENE_SCALE.CAD), -10);
+  assert.equal(resolveRuntimeModelFloorZ(bounds, modelPosition, VIEWER_SCENE_SCALE.URDF), -6);
 });
 
 test("model runtime camera events only match the visible model key", () => {

@@ -103,10 +103,10 @@ test("hosted CAD API serves catalog through the backend when a public Blob URL i
     catalogPath: "models2/catalog-0.1.3.json",
     readCatalog: async (request) => {
       calls.push(request);
-      return { schemaVersion: 4, entries: [{ file: "robots/tom/robot_arm.urdf" }] };
+      return { schemaVersion: 4, entries: [{ file: "robots/tom/tom.urdf" }] };
     },
   };
-  const req = { method: "GET", url: "/api/cad/catalog?file=robots%2Ftom%2Frobot_arm.urdf" };
+  const req = { method: "GET", url: "/api/cad/catalog?file=robots%2Ftom%2Ftom.urdf" };
   const res = createResponse();
 
   await handleHostedCadApi(req, res, {
@@ -124,11 +124,11 @@ test("hosted CAD API serves catalog through the backend when a public Blob URL i
   assert.equal(res.getHeader("location"), undefined);
   assert.equal(res.getHeader("content-type"), "application/json; charset=utf-8");
   assert.deepEqual(calls, [
-    { rootDir: "", fileRef: "robots/tom/robot_arm.urdf" },
+    { rootDir: "", fileRef: "robots/tom/tom.urdf" },
   ]);
   assert.deepEqual(JSON.parse(res.body), {
     schemaVersion: 4,
-    entries: [{ file: "robots/tom/robot_arm.urdf" }],
+    entries: [{ file: "robots/tom/tom.urdf" }],
   });
 });
 

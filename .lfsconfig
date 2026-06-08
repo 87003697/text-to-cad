@@ -1,2 +1,2 @@
 [lfs]
-	fetchexclude = assets/**,benchmarks/**,.agents/skills/**/assets/*.gif
+	fetchexclude = assets/**,benchmarks/**,models/**,.agents/skills/**/assets/*.gif

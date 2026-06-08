@@ -23,7 +23,6 @@ export function ToolbarButton({
           size="icon-xs"
           className={cn("size-6 shadow-none", className)}
           aria-label={label}
-          title={label}
           {...props}
         >
           {children}
@@ -56,7 +55,6 @@ export function ToolbarTextButton({
             className
           )}
           aria-label={label}
-          title={label}
           {...props}
         >
           {children}

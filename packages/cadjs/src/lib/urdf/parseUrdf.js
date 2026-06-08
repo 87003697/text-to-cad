@@ -172,6 +172,11 @@ function resolveCadAssetMeshUrl(filename, sourceUrl) {
   }
   const resolved = new URL("/__cad/asset", source);
   resolved.searchParams.set("file", meshFileRef);
+  for (const [key, value] of source.searchParams.entries()) {
+    if (key !== "file") {
+      resolved.searchParams.set(key, value);
+    }
+  }
   return `${resolved.pathname}${resolved.search}`;
 }
 

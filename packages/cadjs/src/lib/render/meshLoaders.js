@@ -11,13 +11,38 @@ import {
   peekRenderStl
 } from "../renderAssetClient.js";
 
-export function meshFormatFromUrl(url) {
-  const format = renderFormatFromPath(url, {
-    baseUrl: typeof window !== "undefined" ? window.location.href : ""
-  });
+function meshRenderFormat(format) {
   return format === RENDER_FORMAT.STL || format === RENDER_FORMAT.THREE_MF || format === RENDER_FORMAT.GLB
     ? format
-    : RENDER_FORMAT.GLB;
+    : "";
+}
+
+function renderFormatFromMeshAssetUrl(url) {
+  const directFormat = meshRenderFormat(renderFormatFromPath(url, {
+    baseUrl: typeof window !== "undefined" ? window.location.href : ""
+  }));
+  if (directFormat) {
+    return directFormat;
+  }
+  try {
+    const parsedUrl = new URL(url, typeof window !== "undefined" ? window.location.href : "http://localhost/");
+    for (const parameterName of ["file", "path"]) {
+      const parameterValue = parsedUrl.searchParams.get(parameterName);
+      const parameterFormat = meshRenderFormat(renderFormatFromPath(parameterValue || "", {
+        baseUrl: parsedUrl.href
+      }));
+      if (parameterFormat) {
+        return parameterFormat;
+      }
+    }
+  } catch {
+    // Fall through to the caller-provided fallback.
+  }
+  return "";
+}
+
+export function meshFormatFromUrl(url) {
+  return renderFormatFromMeshAssetUrl(url) || RENDER_FORMAT.GLB;
 }
 
 function normalizeMeshFallback(fallback) {
@@ -27,12 +52,7 @@ function normalizeMeshFallback(fallback) {
 }
 
 export function resolveMeshFormatFromUrl(url, { fallback = RENDER_FORMAT.GLB } = {}) {
-  const format = renderFormatFromPath(url, {
-    baseUrl: typeof window !== "undefined" ? window.location.href : ""
-  });
-  return format === RENDER_FORMAT.STL || format === RENDER_FORMAT.THREE_MF || format === RENDER_FORMAT.GLB
-    ? format
-    : normalizeMeshFallback(fallback);
+  return renderFormatFromMeshAssetUrl(url) || normalizeMeshFallback(fallback);
 }
 
 export function peekRenderMeshByUrl(url, options = {}) {

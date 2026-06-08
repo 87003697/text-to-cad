@@ -513,8 +513,66 @@ function resolveUrdfVisuals(urdfData, meshesByUrl) {
   return resolvedVisuals;
 }
 
-export function buildUrdfMeshGeometry(urdfData, meshesByUrl) {
+export function buildUrdfMeshGeometry(urdfData, meshesByUrl, options = {}) {
   const resolvedVisuals = resolveUrdfVisuals(urdfData, meshesByUrl);
+  const lightweightGeometry = options?.lightweight === true || options?.mode === "source-parts";
+  if (lightweightGeometry) {
+    const parts = [];
+    let hasAuthoredDisplayColors = false;
+    for (let visualIndex = 0; visualIndex < resolvedVisuals.length; visualIndex += 1) {
+      const { linkName, meshUrl, partFileRef, partMesh, visual } = resolvedVisuals[visualIndex];
+      const sourceVertices = partMesh.vertices || new Float32Array(0);
+      const sourceIndices = partMesh.indices || new Uint32Array(0);
+      const vertexCount = Math.floor(sourceVertices.length / 3);
+      const triangleCount = Math.floor(sourceIndices.length / 3);
+      const authoredVisualColor = String(visual?.color || "").trim();
+      const visualColor = authoredVisualColor;
+      const visualRgb = parseHexColorToLinearRgb(visualColor);
+      const partHasSourceColors = !!visualRgb || urdfMeshHasSourceColors(partMesh);
+      hasAuthoredDisplayColors ||= urdfVisualHasDisplayColors(visualColor, partMesh);
+      const partLabel = String(visual?.label || visual?.instanceId || visual?.id || meshUrl || partFileRef).trim();
+      parts.push({
+        id: String(visual?.id || `${linkName}:${meshUrl || partFileRef}`),
+        name: partLabel,
+        label: partLabel,
+        occurrenceId: String(visual?.occurrenceId || "").trim(),
+        instanceId: String(visual?.instanceId || "").trim(),
+        color: visualColor,
+        meshUrl,
+        partFileRef,
+        linkName,
+        localTransform: toTransformArray(visual?.localTransform),
+        sourceBounds: partMesh.bounds,
+        bounds: partMesh.bounds,
+        transform: [...IDENTITY_TRANSFORM],
+        hasSourceColors: partHasSourceColors,
+        sourceMesh: partMesh,
+        sourceMeshKey: String(meshUrl || partFileRef || visual?.id || `visual:${visualIndex + 1}`),
+        vertexOffset: 0,
+        vertexCount,
+        triangleOffset: 0,
+        triangleCount,
+        edgeIndexOffset: 0,
+        edgeIndexCount: 0
+      });
+    }
+    return {
+      vertices: new Float32Array([0, 0, 0, 0, 0, 0, 0, 0, 0]),
+      indices: new Uint32Array([0, 1, 2]),
+      normals: new Float32Array([0, 0, 1, 0, 0, 1, 0, 0, 1]),
+      colors: new Float32Array(0),
+      edge_indices: new Uint32Array(0),
+      bounds: mergeBounds(parts.map((part) => part.bounds)),
+      parts,
+      has_source_colors: hasAuthoredDisplayColors,
+      lightweightGeometry: true,
+      geometrySource: {
+        type: "urdf-source-parts",
+        urdfData,
+        meshesByUrl
+      }
+    };
+  }
   let totalVertexCount = 0;
   let totalIndexCount = 0;
   let hasAuthoredDisplayColors = false;

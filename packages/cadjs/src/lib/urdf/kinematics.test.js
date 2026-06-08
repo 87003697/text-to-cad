@@ -515,6 +515,48 @@ test("URDF mesh data marks uncolored visuals for default viewer color", () => {
   assert.deepEqual(Array.from(meshGeometry.colors.slice(9, 18)), [1, 1, 1, 1, 1, 1, 1, 1, 1]);
 });
 
+test("URDF mesh geometry can keep source meshes for lightweight viewer rendering", () => {
+  const urdfData = {
+    rootLink: "base_link",
+    rootWorldTransform: translationTransform(0, 0, 0),
+    links: [
+      {
+        name: "base_link",
+        visuals: [
+          {
+            id: "base_link:first",
+            label: "first",
+            partFileRef: "shared-part",
+            localTransform: translationTransform(0, 0, 0)
+          },
+          {
+            id: "base_link:second",
+            label: "second",
+            partFileRef: "shared-part",
+            localTransform: translationTransform(2, 0, 0)
+          }
+        ]
+      }
+    ],
+    joints: []
+  };
+  const sharedMesh = partMesh({ min: [0, 0, 0], max: [1, 1, 0] });
+  const meshes = new Map([["shared-part", sharedMesh]]);
+
+  const meshGeometry = buildUrdfMeshGeometry(urdfData, meshes, { lightweight: true });
+  const posed = poseUrdfMeshData(urdfData, meshGeometry, {});
+
+  assert.equal(meshGeometry.lightweightGeometry, true);
+  assert.equal(meshGeometry.parts[0].sourceMesh, sharedMesh);
+  assert.equal(meshGeometry.parts[1].sourceMesh, sharedMesh);
+  assert.equal(meshGeometry.vertices.length, 9);
+  assert.equal(meshGeometry.indices.length, 3);
+  assert.deepEqual(posed.meshData.bounds, {
+    min: [0, 0, 0],
+    max: [3, 1, 0]
+  });
+});
+
 test("URDF mesh data leaves uncolored robots for theme fill colors", () => {
   const urdfData = {
     rootLink: "base_link",

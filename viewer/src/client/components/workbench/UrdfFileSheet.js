@@ -31,6 +31,8 @@ import FileStatusSection from "./FileStatusSection";
 const fieldLabelClasses = FILE_SHEET_FIELD_LABEL_CLASSES;
 const compactInputClasses = FILE_SHEET_COMPACT_INPUT_CLASSES;
 const compactButtonClasses = FILE_SHEET_COMPACT_BUTTON_CLASSES;
+const JOINT_CONTROL_SYNC_EPSILON = 0.001;
+const JOINT_CONTROL_LOCAL_OVERRIDE_MS = 3500;
 
 function isAngularJoint(joint) {
   const jointType = String(joint?.type || "").trim().toLowerCase();
@@ -91,9 +93,45 @@ const UrdfJointRow = memo(function UrdfJointRow({
   const sliderStep = isAngularJoint(joint) ? 1 : 0.001;
   const pendingFrameRef = useRef(0);
   const pendingValueRef = useRef(safeValueDeg);
+  const latestSafeValueRef = useRef(safeValueDeg);
+  const localOverrideRef = useRef(false);
+  const localOverrideTimeoutRef = useRef(0);
   const [liveValueDeg, setLiveValueDeg] = useState(safeValueDeg);
 
+  const clearLocalOverrideTimeout = () => {
+    if (localOverrideTimeoutRef.current && typeof window !== "undefined") {
+      window.clearTimeout(localOverrideTimeoutRef.current);
+    }
+    localOverrideTimeoutRef.current = 0;
+  };
+
+  const releaseLocalOverride = (nextValueDeg = latestSafeValueRef.current) => {
+    clearLocalOverrideTimeout();
+    localOverrideRef.current = false;
+    const normalizedValueDeg = clampJointInputValue(nextValueDeg, minValueDeg, maxValueDeg, latestSafeValueRef.current);
+    pendingValueRef.current = normalizedValueDeg;
+    setLiveValueDeg(normalizedValueDeg);
+  };
+
+  const holdLocalValueUntilParentSettles = (nextValueDeg) => {
+    pendingValueRef.current = nextValueDeg;
+    localOverrideRef.current = true;
+    clearLocalOverrideTimeout();
+    if (typeof window !== "undefined") {
+      localOverrideTimeoutRef.current = window.setTimeout(() => {
+        releaseLocalOverride();
+      }, JOINT_CONTROL_LOCAL_OVERRIDE_MS);
+    }
+  };
+
   useEffect(() => {
+    latestSafeValueRef.current = safeValueDeg;
+    if (localOverrideRef.current) {
+      if (Math.abs(safeValueDeg - pendingValueRef.current) <= JOINT_CONTROL_SYNC_EPSILON) {
+        releaseLocalOverride(safeValueDeg);
+      }
+      return;
+    }
     pendingValueRef.current = safeValueDeg;
     setLiveValueDeg(safeValueDeg);
   }, [safeValueDeg]);
@@ -102,12 +140,13 @@ const UrdfJointRow = memo(function UrdfJointRow({
     if (pendingFrameRef.current && typeof cancelAnimationFrame === "function") {
       cancelAnimationFrame(pendingFrameRef.current);
     }
+    clearLocalOverrideTimeout();
   }, []);
 
-  const scheduleValueChange = (nextValueDeg) => {
+  const scheduleValueChange = (nextValueDeg, options = {}) => {
     pendingValueRef.current = nextValueDeg;
     if (typeof requestAnimationFrame !== "function") {
-      onValueChange(joint, nextValueDeg);
+      onValueChange(joint, nextValueDeg, options);
       return;
     }
     if (pendingFrameRef.current) {
@@ -115,11 +154,11 @@ const UrdfJointRow = memo(function UrdfJointRow({
     }
     pendingFrameRef.current = requestAnimationFrame(() => {
       pendingFrameRef.current = 0;
-      onValueChange(joint, pendingValueRef.current);
+      onValueChange(joint, pendingValueRef.current, options);
     });
   };
 
-  const commitValue = (nextValueDeg) => {
+  const commitValue = (nextValueDeg, options = {}) => {
     const normalizedValueDeg = clampJointInputValue(nextValueDeg, minValueDeg, maxValueDeg, liveValueDeg);
     pendingValueRef.current = normalizedValueDeg;
     if (pendingFrameRef.current && typeof cancelAnimationFrame === "function") {
@@ -127,7 +166,8 @@ const UrdfJointRow = memo(function UrdfJointRow({
       pendingFrameRef.current = 0;
     }
     setLiveValueDeg(normalizedValueDeg);
-    onValueChange(joint, normalizedValueDeg);
+    holdLocalValueUntilParentSettles(normalizedValueDeg);
+    onValueChange(joint, normalizedValueDeg, options);
   };
 
   return (
@@ -154,10 +194,11 @@ const UrdfJointRow = memo(function UrdfJointRow({
           onValueChange={(nextValue) => {
             const nextValueDeg = clampJointInputValue(nextValue?.[0], minValueDeg, maxValueDeg, liveValueDeg);
             setLiveValueDeg(nextValueDeg);
-            scheduleValueChange(nextValueDeg);
+            holdLocalValueUntilParentSettles(nextValueDeg);
+            scheduleValueChange(nextValueDeg, { scrub: true });
           }}
           onValueCommit={(nextValue) => {
-            commitValue(nextValue?.[0]);
+            commitValue(nextValue?.[0], { scrub: true });
           }}
           aria-label={jointName || "Joint value"}
           title={`${formatJointValue(minValueDeg, joint)} to ${formatJointValue(maxValueDeg, joint)}`}
@@ -329,7 +370,7 @@ export default function UrdfFileSheet({
   const motionEndEffectors = Array.isArray(motion?.endEffectors) ? motion.endEffectors : [];
   const motionPlanningGroups = Array.isArray(motion?.planningGroups) ? motion.planningGroups : [];
   const motionTargetFrames = Array.isArray(motion?.targetFrames) ? motion.targetFrames : [];
-  const motionEnabled = showMotion && motionEndEffectors.length > 0;
+  const motionEnabled = showMotion && motion?.serverLive === true && motionEndEffectors.length > 0;
   const activeMotionEndEffectorName = String(motion?.activeEndEffectorName || motionEndEffectors[0]?.name || "").trim();
   const activeMotionPlanningGroupName = String(motion?.activePlanningGroupName || motionPlanningGroups[0]?.name || "").trim();
   const activeMotionTargetFrameName = String(motion?.activeTargetFrameName || motionTargetFrames[0] || "").trim();
@@ -339,7 +380,6 @@ export default function UrdfFileSheet({
   const motionBusy = Boolean(motion?.solving);
   const motionActionsEnabled = motion?.actionsEnabled !== false;
   const motionServerStatus = motion?.serverLive ? "connected" : "offline";
-  const motionServerOffline = motionEnabled && !motion?.serverLive;
   const motionSelectPoseActive = Boolean(motion?.selectPoseActive);
   const motionTargetMatchesCurrentPosition = motionCurrentPosition ? motionPositionsClose(motionTargetPosition, motionCurrentPosition) : true;
   const activeGroupStateValue = groupStatePresets.some((state) => String(state?.id || "").trim() === activeGroupStateId)
@@ -411,19 +451,6 @@ export default function UrdfFileSheet({
           <FileSheetSection value="motion" title="MoveIt2">
               <div>
                 <FileSheetSubsection title="Status">
-                {motionServerOffline ? (
-                  <div className="px-3 py-2">
-                  <div
-                    role="alert"
-                    className="rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-xs leading-5 text-destructive"
-                  >
-                    <p className="font-semibold">MoveIt2 server is offline</p>
-                    <p className="mt-0.5 text-muted-foreground">
-                      Solve pose and plan to pose are disabled until the local server is running.
-                    </p>
-                  </div>
-                  </div>
-                ) : null}
                 <FileSheetControlRow>
                 <div className="grid grid-cols-2 gap-2">
                   <label className="block min-w-0">

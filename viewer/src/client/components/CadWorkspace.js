@@ -232,6 +232,13 @@ import {
   validateUrdfMotionTrajectory,
   validateUrdfMotionJointValues
 } from "cadjs/lib/urdf/motion";
+import {
+  advanceUrdfJointValues,
+  interpolateUrdfJointValues,
+  jointValueMapsClose,
+  URDF_JOINT_ANIMATION_DURATION_MS,
+  URDF_JOINT_ANIMATION_FOLLOW_MS
+} from "cadjs/lib/urdf/jointAnimation";
 import { checkMoveIt2ServerLive, moveit2ServerEnabled, requestMoveIt2Server } from "cadjs/lib/urdf/moveit2ServerClient";
 import {
   cadViewerUsesHostedCatalog,
@@ -1213,6 +1220,7 @@ export default function CadWorkspace({
   const [drawingUndoStack, setDrawingUndoStack] = useState([]);
   const [drawingRedoStack, setDrawingRedoStack] = useState([]);
   const [jointValuesByFileRef, setJointValuesByFileRef] = useState({});
+  const [selectedUrdfGroupStateIdByFileRef, setSelectedUrdfGroupStateIdByFileRef] = useState({});
   const [urdfMotionStateByFileRef, setUrdfMotionStateByFileRef] = useState({});
   const [stepModuleLoadState, setStepModuleLoadState] = useState({
     url: "",
@@ -1247,6 +1255,16 @@ export default function CadWorkspace({
   const urdfTrajectoryPlaybackRef = useRef({
     frameId: 0,
     token: 0
+  });
+  const urdfJointAnimationRef = useRef({
+    frameId: 0,
+    token: 0,
+    mode: "",
+    fileRef: "",
+    currentValues: null,
+    targetValues: null,
+    smoothingMs: URDF_JOINT_ANIMATION_FOLLOW_MS,
+    lastTimestampMs: 0
   });
   const stepArtifactGenerationRequestsRef = useRef(new Map());
   const selectedStepArtifactBuildKeyRef = useRef("");
@@ -1605,12 +1623,30 @@ export default function CadWorkspace({
       };
     }).filter(Boolean);
   }, [selectedUrdfData]);
-  const activeSelectedUrdfGroupStateId = useMemo(
+  const selectedUrdfContinuousJointNames = useMemo(
+    () => new Set(
+      (Array.isArray(selectedUrdfData?.joints) ? selectedUrdfData.joints : [])
+        .filter((joint) => String(joint?.type || "").trim() === "continuous")
+        .map((joint) => String(joint?.name || "").trim())
+        .filter(Boolean)
+    ),
+    [selectedUrdfData]
+  );
+  const matchedSelectedUrdfGroupStateId = useMemo(
     () => (
       selectedUrdfGroupStates.find((state) => jointValueSubsetClose(selectedUrdfJointValues, state.jointValuesByName))?.id || ""
     ),
     [selectedUrdfJointValues, selectedUrdfGroupStates]
   );
+  const trackedSelectedUrdfGroupStateId = selectedUrdfFileRef
+    ? String(selectedUrdfGroupStateIdByFileRef?.[selectedUrdfFileRef] || "").trim()
+    : "";
+  const activeSelectedUrdfGroupStateId = useMemo(() => {
+    if (trackedSelectedUrdfGroupStateId && selectedUrdfGroupStates.some((state) => String(state?.id || "").trim() === trackedSelectedUrdfGroupStateId)) {
+      return trackedSelectedUrdfGroupStateId;
+    }
+    return matchedSelectedUrdfGroupStateId;
+  }, [matchedSelectedUrdfGroupStateId, selectedUrdfGroupStates, trackedSelectedUrdfGroupStateId]);
   const selectedUrdfMotionConfigKey = useMemo(() => {
     if (!MOVEIT2_SERVER_ENABLED || !selectedUrdfFileRef || !selectedUrdfMotion?.srdf) {
       return "";
@@ -1926,7 +1962,7 @@ export default function CadWorkspace({
     }
     try {
       return {
-        meshData: buildUrdfMeshGeometry(selectedUrdfData, selectedUrdfMeshes),
+        meshData: buildUrdfMeshGeometry(selectedUrdfData, selectedUrdfMeshes, { lightweight: true }),
         error: ""
       };
     } catch (error) {
@@ -3538,7 +3574,7 @@ export default function CadWorkspace({
     ),
     hasFileStatus: selectedFileHasWarningOrErrorStatus,
     isSdf: selectedFileSheetKind === "sdf",
-    motionEnabled: selectedFileSheetKind === "srdf" && selectedUrdfMotionEndEffectors.length > 0,
+    motionEnabled: selectedFileSheetKind === "srdf" && moveit2ServerLive && selectedUrdfMotionEndEffectors.length > 0,
     showJoints: selectedFileSheetKind === "urdf" || selectedFileSheetKind === "srdf" || selectedFileSheetKind === "sdf"
   }), [
     implicitStatus,
@@ -3549,6 +3585,7 @@ export default function CadWorkspace({
     selectedStepModuleDefinition,
     selectedStepModuleError,
     selectedStepModuleStatus,
+    moveit2ServerLive,
     selectedUrdfMotionEndEffectors
   ]);
 
@@ -5548,8 +5585,22 @@ export default function CadWorkspace({
       };
     });
   }, []);
+  const clearTrackedUrdfGroupStateForFile = useCallback((fileRef) => {
+    const normalizedFileRef = String(fileRef || "").trim();
+    if (!normalizedFileRef) {
+      return;
+    }
+    setSelectedUrdfGroupStateIdByFileRef((current) => {
+      if (!current?.[normalizedFileRef]) {
+        return current;
+      }
+      const next = { ...current };
+      delete next[normalizedFileRef];
+      return next;
+    });
+  }, []);
 
-  const cancelUrdfTrajectoryPlayback = useCallback(() => {
+  const cancelUrdfTrajectoryOnly = useCallback(() => {
     const playback = urdfTrajectoryPlaybackRef.current;
     playback.token += 1;
     if (playback.frameId && typeof cancelAnimationFrame === "function") {
@@ -5557,6 +5608,175 @@ export default function CadWorkspace({
     }
     playback.frameId = 0;
   }, []);
+
+  const cancelUrdfJointAnimation = useCallback(() => {
+    const jointAnimation = urdfJointAnimationRef.current;
+    jointAnimation.token += 1;
+    if (jointAnimation.frameId && typeof cancelAnimationFrame === "function") {
+      cancelAnimationFrame(jointAnimation.frameId);
+    }
+    jointAnimation.frameId = 0;
+    jointAnimation.mode = "";
+    jointAnimation.fileRef = "";
+    jointAnimation.targetValues = null;
+    jointAnimation.currentValues = null;
+    jointAnimation.lastTimestampMs = 0;
+  }, []);
+
+  const cancelUrdfTrajectoryPlayback = useCallback(() => {
+    cancelUrdfTrajectoryOnly();
+    cancelUrdfJointAnimation();
+  }, [cancelUrdfJointAnimation, cancelUrdfTrajectoryOnly]);
+
+  const animateUrdfJointValues = useCallback((fileRef, startJointValues, targetJointValues, options = {}) => {
+    const normalizedFileRef = String(fileRef || "").trim();
+    if (!normalizedFileRef) {
+      return;
+    }
+    const startValues = cloneJointValueMap(startJointValues);
+    const finalValues = cloneJointValueMap(targetJointValues);
+    cancelUrdfTrajectoryPlayback();
+    if (
+      typeof requestAnimationFrame !== "function" ||
+      jointValueMapsClose(startValues, finalValues)
+    ) {
+      setJointValuesByFileRef((current) => ({
+        ...current,
+        [normalizedFileRef]: finalValues
+      }));
+      return;
+    }
+    const playback = urdfJointAnimationRef.current;
+    const token = playback.token + 1;
+    playback.token = token;
+    const startedAtMs = animationNowMs();
+    const durationMs = Math.max(toFiniteNumber(options?.durationMs, URDF_JOINT_ANIMATION_DURATION_MS), 1);
+    const step = (timestamp) => {
+      if (urdfJointAnimationRef.current.token !== token) {
+        return;
+      }
+      const elapsedMs = Math.max(toFiniteNumber(timestamp, animationNowMs()) - startedAtMs, 0);
+      const progress = Math.min(elapsedMs / durationMs, 1);
+      const interpolation = interpolateUrdfJointValues(
+        startValues,
+        finalValues,
+        progress,
+        undefined,
+        selectedUrdfContinuousJointNames
+      );
+      const nextValues = interpolation.done || progress >= 1
+        ? finalValues
+        : {
+          ...startValues,
+          ...interpolation.values
+        };
+      setJointValuesByFileRef((current) => ({
+        ...current,
+        [normalizedFileRef]: nextValues
+      }));
+      if (interpolation.done || progress >= 1) {
+        urdfJointAnimationRef.current.frameId = 0;
+        return;
+      }
+      urdfJointAnimationRef.current.frameId = requestAnimationFrame(step);
+    };
+    playback.frameId = requestAnimationFrame(step);
+  }, [
+    cancelUrdfTrajectoryPlayback,
+    selectedUrdfContinuousJointNames
+  ]);
+
+  const followUrdfJointValues = useCallback((fileRef, currentJointValues, targetJointValues, options = {}) => {
+    const normalizedFileRef = String(fileRef || "").trim();
+    if (!normalizedFileRef) {
+      return;
+    }
+    const currentValues = cloneJointValueMap(currentJointValues);
+    const finalValues = cloneJointValueMap(targetJointValues);
+    const smoothingMs = Math.max(toFiniteNumber(options?.durationMs, URDF_JOINT_ANIMATION_FOLLOW_MS), 1);
+
+    cancelUrdfTrajectoryOnly();
+    if (
+      typeof requestAnimationFrame !== "function" ||
+      jointValueMapsClose(currentValues, finalValues)
+    ) {
+      cancelUrdfJointAnimation();
+      setJointValuesByFileRef((current) => ({
+        ...current,
+        [normalizedFileRef]: finalValues
+      }));
+      return;
+    }
+
+    const activeAnimation = urdfJointAnimationRef.current;
+    if (
+      activeAnimation.frameId &&
+      activeAnimation.mode === "follow" &&
+      activeAnimation.fileRef === normalizedFileRef
+    ) {
+      activeAnimation.targetValues = finalValues;
+      activeAnimation.smoothingMs = smoothingMs;
+      return;
+    }
+
+    cancelUrdfJointAnimation();
+    const playback = urdfJointAnimationRef.current;
+    const token = playback.token + 1;
+    playback.token = token;
+    playback.mode = "follow";
+    playback.fileRef = normalizedFileRef;
+    playback.currentValues = currentValues;
+    playback.targetValues = finalValues;
+    playback.smoothingMs = smoothingMs;
+    playback.lastTimestampMs = animationNowMs();
+
+    const step = (timestamp) => {
+      const animation = urdfJointAnimationRef.current;
+      if (animation.token !== token) {
+        return;
+      }
+      const timeMs = toFiniteNumber(timestamp, animationNowMs());
+      const deltaMs = Math.max(timeMs - toFiniteNumber(animation.lastTimestampMs, timeMs), 0);
+      animation.lastTimestampMs = timeMs;
+      const baseValues = cloneJointValueMap(animation.currentValues);
+      const targetValues = cloneJointValueMap(animation.targetValues);
+      const advanced = advanceUrdfJointValues(
+        baseValues,
+        targetValues,
+        deltaMs,
+        animation.smoothingMs,
+        undefined,
+        selectedUrdfContinuousJointNames
+      );
+      const nextValues = advanced.done
+        ? targetValues
+        : {
+          ...baseValues,
+          ...advanced.values
+        };
+      animation.currentValues = nextValues;
+      setJointValuesByFileRef((current) => ({
+        ...current,
+        [normalizedFileRef]: nextValues
+      }));
+      if (advanced.done || jointValueMapsClose(nextValues, targetValues)) {
+        animation.frameId = 0;
+        animation.mode = "";
+        animation.fileRef = "";
+        animation.currentValues = null;
+        animation.targetValues = null;
+        animation.lastTimestampMs = 0;
+        return;
+      }
+      animation.frameId = requestAnimationFrame(step);
+    };
+
+    playback.frameId = requestAnimationFrame(step);
+  }, [
+    cancelUrdfJointAnimation,
+    cancelUrdfTrajectoryOnly,
+    selectedUrdfContinuousJointNames
+  ]);
 
   const playUrdfTrajectory = useCallback((fileRef, baseJointValues, trajectory, finalJointValues) => {
     const normalizedFileRef = String(fileRef || "").trim();
@@ -5660,26 +5880,39 @@ export default function CadWorkspace({
     selectedUrdfMotionTargetFrameName
   ]);
 
-  const handleUrdfJointValueChange = useCallback((joint, nextValueDeg) => {
+  const handleUrdfJointValueChange = useCallback((joint, nextValueDeg, options = {}) => {
     const jointName = String(joint?.name || "").trim();
     if (!selectedUrdfFileRef || !jointName) {
       return;
     }
-    cancelUrdfTrajectoryPlayback();
     const clampedValueDeg = clampJointValueDeg(joint, nextValueDeg);
     const nextJointValues = {
       ...selectedUrdfJointValues,
       [jointName]: clampedValueDeg
     };
-    setJointValuesByFileRef((current) => ({
-      ...current,
-      [selectedUrdfFileRef]: nextJointValues
-    }));
+    if (options?.scrub) {
+      followUrdfJointValues(
+        selectedUrdfFileRef,
+        selectedUrdfJointValues,
+        nextJointValues,
+        { durationMs: URDF_JOINT_ANIMATION_FOLLOW_MS }
+      );
+    } else {
+      animateUrdfJointValues(
+        selectedUrdfFileRef,
+        selectedUrdfJointValues,
+        nextJointValues,
+        { durationMs: URDF_JOINT_ANIMATION_FOLLOW_MS }
+      );
+    }
+    clearTrackedUrdfGroupStateForFile(selectedUrdfFileRef);
     syncUrdfMotionTargetToJointValues(selectedUrdfFileRef, nextJointValues);
     clearUrdfMotionStatusForFile(selectedUrdfFileRef);
   }, [
-    cancelUrdfTrajectoryPlayback,
+    animateUrdfJointValues,
     clearUrdfMotionStatusForFile,
+    clearTrackedUrdfGroupStateForFile,
+    followUrdfJointValues,
     selectedUrdfFileRef,
     selectedUrdfJointValues,
     syncUrdfMotionTargetToJointValues
@@ -5689,21 +5922,18 @@ export default function CadWorkspace({
       return;
     }
     cancelUrdfTrajectoryPlayback();
-    setJointValuesByFileRef((current) => {
-      if (!current?.[selectedUrdfFileRef]) {
-        return current;
-      }
-      const next = { ...current };
-      delete next[selectedUrdfFileRef];
-      return next;
-    });
+    clearTrackedUrdfGroupStateForFile(selectedUrdfFileRef);
+    animateUrdfJointValues(selectedUrdfFileRef, selectedUrdfJointValues, defaultSelectedUrdfJointValues);
     syncUrdfMotionTargetToJointValues(selectedUrdfFileRef, defaultSelectedUrdfJointValues);
     clearUrdfMotionStatusForFile(selectedUrdfFileRef);
   }, [
+    animateUrdfJointValues,
     cancelUrdfTrajectoryPlayback,
     clearUrdfMotionStatusForFile,
+    clearTrackedUrdfGroupStateForFile,
     defaultSelectedUrdfJointValues,
     selectedUrdfFileRef,
+    selectedUrdfJointValues,
     syncUrdfMotionTargetToJointValues
   ]);
   const handleSelectUrdfGroupState = useCallback((groupState) => {
@@ -5719,13 +5949,18 @@ export default function CadWorkspace({
       ...selectedUrdfJointValues,
       ...groupStateJointValues
     };
-    setJointValuesByFileRef((current) => ({
-      ...current,
-      [selectedUrdfFileRef]: nextJointValues
-    }));
+    const groupStateId = String(groupState?.id || "").trim();
+    if (groupStateId) {
+      setSelectedUrdfGroupStateIdByFileRef((current) => ({
+        ...current,
+        [selectedUrdfFileRef]: groupStateId
+      }));
+    }
+    animateUrdfJointValues(selectedUrdfFileRef, selectedUrdfJointValues, nextJointValues);
     syncUrdfMotionTargetToJointValues(selectedUrdfFileRef, nextJointValues);
     clearUrdfMotionStatusForFile(selectedUrdfFileRef);
   }, [
+    animateUrdfJointValues,
     cancelUrdfTrajectoryPlayback,
     clearUrdfMotionStatusForFile,
     selectedUrdfFileRef,
@@ -5942,13 +6177,11 @@ export default function CadWorkspace({
         targetPosition
       );
       const tolerance = selectedUrdfMoveIt2Settings.ikTolerance;
+      clearTrackedUrdfGroupStateForFile(selectedUrdfFileRef);
       if (trajectory) {
         playUrdfTrajectory(selectedUrdfFileRef, selectedUrdfJointValues, trajectory, nextJointValues);
       } else {
-        setJointValuesByFileRef((current) => ({
-          ...current,
-          [selectedUrdfFileRef]: nextJointValues
-        }));
+        animateUrdfJointValues(selectedUrdfFileRef, selectedUrdfJointValues, nextJointValues);
       }
       if (measurement.positionError > tolerance) {
         showMotionError("Motion applied, but FK residual is outside tolerance.");
@@ -5972,8 +6205,10 @@ export default function CadWorkspace({
       });
     }
   }, [
+    animateUrdfJointValues,
     cancelUrdfTrajectoryPlayback,
     catalogRootDir,
+    clearTrackedUrdfGroupStateForFile,
     moveit2ServerLive,
     playUrdfTrajectory,
     selectedUrdfData,
@@ -7915,25 +8150,6 @@ export default function CadWorkspace({
     setTabToolMode
   });
 
-  const handleScreenshotDownload = useCallback(async () => {
-    if (!selectedEntry) {
-      return;
-    }
-
-    try {
-      const filename = `${fileKey(selectedEntry).replace(/[^a-zA-Z0-9._-]+/g, "-")}.png`;
-      if (!viewerRef.current?.captureScreenshot) {
-        throw new Error("CAD Viewer not ready");
-      }
-      await viewerRef.current.captureScreenshot({ filename, mode: "download" });
-      setCopyStatus("");
-      setScreenshotStatus(`Saved ${filename}`);
-    } catch (captureError) {
-      setCopyStatus("");
-      setScreenshotStatus(captureError instanceof Error ? captureError.message : "Screenshot capture failed");
-    }
-  }, [selectedEntry]);
-
   const handleScreenshotCopy = useCallback(async () => {
     if (!selectedEntry) {
       return;
@@ -8362,7 +8578,6 @@ export default function CadWorkspace({
                 drawingStrokes={drawingStrokes}
                 handleEnterPreviewMode={handleEnterPreviewMode}
                 handleScreenshotCopy={handleScreenshotCopy}
-                handleScreenshotDownload={handleScreenshotDownload}
               />
 
               {!previewMode && (directorySelectionActive || (!selectedEntry && !missingFileRef && !fileParamSelectionPending)) ? (

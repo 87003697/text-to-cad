@@ -168,7 +168,12 @@ Upload a catalog and supported viewer assets from a local directory with
 `npm run upload:blob -- /path/to/models`. Uploads exclude `mechbench/`,
 `mechbench2/`, `7dof_arm/`, and Python source files by default; public Blob
 catalogs omit Python source paths and URLs. Add a `.vieweruploadignore` file or
-pass `--exclude <pattern>` for project-specific upload filters.
+pass `--exclude <pattern>` for project-specific upload filters. Pass
+`--skip-existing --fetch-missing-lfs` for publish-style uploads that reuse
+matching remote catalog assets and fetch only the Git LFS objects needed for
+new or changed uploads. The repository publish wrapper,
+`scripts/viewer/upload-viewer-models-catalog.sh`, owns the branch-defined Blob
+path prefix for model catalog uploads.
 
 Production builds contain the frontend and initial catalog module only. CAD
 assets are served by a backend and are not copied into `dist/`.

@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { spawnSync } from "node:child_process";
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
@@ -39,6 +40,7 @@ export const DEFAULT_UPLOAD_EXCLUDE_PATTERNS = Object.freeze([
 ]);
 const DEFAULT_UPLOAD_CONCURRENCY = 4;
 const CACHE_BUSTED_UPLOAD_EXTENSIONS = new Set([".js", ".mjs"]);
+const GIT_LFS_POINTER_PREFIX = "version https://git-lfs.github.com/spec/v1";
 
 function usage() {
   return `Usage:
@@ -50,6 +52,8 @@ Options:
   --ignore-file <file>    Gitignore-style exclude file. May be repeated.
   --exclude <pattern>     Gitignore-style exclude pattern. May be repeated.
   --concurrency <n>       Concurrent uploads. Defaults to ${DEFAULT_UPLOAD_CONCURRENCY}.
+  --skip-existing         Skip assets whose content is already in the remote catalog.
+  --fetch-missing-lfs     Fetch Git LFS pointers only for assets that must be uploaded.
   -h, --help              Show this help.
 
 Environment:
@@ -102,6 +106,46 @@ function fileAssetMetadata(filePath) {
     hash: sha256File(filePath),
     bytes: Number(stats.size),
   };
+}
+
+function readGitLfsPointer(filePath) {
+  const stats = fileStats(filePath);
+  if (!stats || Number(stats.size) > 1024) {
+    return null;
+  }
+  let text = "";
+  try {
+    text = fs.readFileSync(filePath, "utf-8");
+  } catch {
+    return null;
+  }
+  if (!text.startsWith(GIT_LFS_POINTER_PREFIX)) {
+    return null;
+  }
+  const oid = /^oid sha256:([a-f0-9]{64})$/mi.exec(text)?.[1] || "";
+  const sizeText = /^size ([0-9]+)$/mi.exec(text)?.[1] || "";
+  return {
+    oid,
+    size: sizeText ? Number(sizeText) : 0,
+  };
+}
+
+function comparableFileAssetMetadata(filePath) {
+  const pointer = readGitLfsPointer(filePath);
+  if (pointer?.oid) {
+    return {
+      hash: pointer.oid,
+      bytes: pointer.size,
+      gitLfsPointer: true,
+    };
+  }
+  const metadata = fileAssetMetadata(filePath);
+  return metadata
+    ? {
+        ...metadata,
+        gitLfsPointer: false,
+      }
+    : null;
 }
 
 function cacheBustedUploadFileRef({ fileRef, hash }) {
@@ -265,14 +309,14 @@ function addUploadFile(uploadFiles, { rootPath, filePath }) {
   if (!fileRef) {
     return;
   }
-  const metadata = fileAssetMetadata(filePath);
-  if (!metadata) {
+  const stats = fileStats(filePath);
+  if (!stats) {
     return;
   }
   uploadFiles.set(fileRef, {
     fileRef,
     filePath,
-    ...metadata,
+    bytes: Number(stats.size),
   });
 }
 
@@ -418,20 +462,283 @@ function addCatalogReferencedFiles(uploadFiles, {
   return uploadFiles;
 }
 
-async function uploadOneFile(backend, uploadFile) {
-  const blobFileRef = cacheBustedUploadFileRef(uploadFile);
-  return backend.writeAsset({
-    fileRef: blobFileRef,
-    body: fs.createReadStream(uploadFile.filePath),
-    contentType: contentTypeForFileRef(uploadFile.fileRef),
+function normalizedHash(value) {
+  return String(value || "").trim().toLowerCase().replace(/^sha256:/i, "");
+}
+
+function normalizedBytes(value) {
+  const number = Number(value || 0);
+  return Number.isFinite(number) && number >= 0 ? number : 0;
+}
+
+function pathnameFromUrl(url) {
+  try {
+    return new URL(url).pathname.replace(/^\/+/, "");
+  } catch {
+    return "";
+  }
+}
+
+function catalogUploadRecord({ fileRef, url = "", hash = "", bytes = undefined } = {}) {
+  const normalizedRef = cleanPosixPath(fileRef);
+  const normalizedUrl = String(url || "").trim();
+  if (!normalizedRef || !normalizedUrl) {
+    return null;
+  }
+  const normalized = {
+    fileRef: normalizedRef,
+    filePath: "",
+    hash: normalizedHash(hash),
+    blobFileRef: cleanPosixPath(pathnameFromUrl(normalizedUrl)) || normalizedRef,
+    url: normalizedUrl,
+    pathname: pathnameFromUrl(normalizedUrl),
+  };
+  const bytesNumber = Number(bytes);
+  if (String(bytes ?? "").trim() && Number.isFinite(bytesNumber)) {
+    normalized.bytes = bytesNumber;
+  }
+  return normalized;
+}
+
+function addExistingCatalogUpload(uploads, upload) {
+  if (upload?.fileRef && upload?.url) {
+    uploads.set(upload.fileRef, upload);
+  }
+}
+
+function catalogFieldUpload(fileRef, value) {
+  if (!value || typeof value !== "object") {
+    return null;
+  }
+  return catalogUploadRecord({
+    fileRef,
+    url: value.url,
+    hash: value.hash,
+    bytes: value.bytes,
   });
 }
 
-async function uploadFilesToBlob({ backend, uploadFiles, concurrency = DEFAULT_UPLOAD_CONCURRENCY, logger = console }) {
-  const queue = [...uploadFiles.values()].sort((a, b) => a.fileRef.localeCompare(b.fileRef));
+function cacheBustedHashFromUrl(url, extension) {
+  let basename = "";
+  try {
+    basename = path.posix.basename(new URL(url).pathname);
+  } catch {
+    return "";
+  }
+  const escapedExtension = escapeRegExp(extension);
+  const match = new RegExp(`\\.([a-fA-F0-9]{16})${escapedExtension}$`).exec(basename);
+  return match?.[1]?.toLowerCase() || "";
+}
+
+function existingCatalogUploads(catalog, { rootPath } = {}) {
   const uploads = new Map();
+  for (const entry of Array.isArray(catalog?.entries) ? catalog.entries : []) {
+    const fileRef = cleanPosixPath(entry?.file);
+    if (!fileRef) {
+      continue;
+    }
+    const extension = path.posix.extname(fileRef).toLowerCase();
+    if (extension === ".step" || extension === ".stp") {
+      addExistingCatalogUpload(uploads, catalogFieldUpload(fileRef, {
+        ...(entry?.step && typeof entry.step === "object" ? entry.step : {}),
+        url: entry?.stepUrl || entry?.step?.url,
+        hash: entry?.stepHash || entry?.step?.hash,
+        bytes: entry?.stepBytes || entry?.step?.bytes,
+      }));
+
+      if (rootPath) {
+        const stepPath = path.resolve(rootPath, fileRef);
+        const glbRef = rootRelativePath(rootPath, inlineStepGlbArtifactPathForSource(stepPath));
+        addExistingCatalogUpload(uploads, catalogUploadRecord({
+          fileRef: glbRef,
+          url: entry?.url,
+          hash: entry?.hash,
+          bytes: entry?.bytes,
+        }));
+
+        const moduleRef = rootRelativePath(rootPath, stepParameterPathForStepSource(stepPath));
+        const moduleUrl = String(entry?.moduleUrl || "").trim();
+        addExistingCatalogUpload(uploads, catalogUploadRecord({
+          fileRef: moduleRef,
+          url: moduleUrl,
+          hash: cacheBustedHashFromUrl(moduleUrl, path.posix.extname(moduleRef).toLowerCase()),
+          bytes: entry?.moduleBytes,
+        }));
+      }
+    } else {
+      addExistingCatalogUpload(uploads, catalogFieldUpload(fileRef, entry));
+    }
+
+    const relationUrdf = entry?.relations?.urdf;
+    addExistingCatalogUpload(uploads, catalogFieldUpload(relationUrdf?.file, relationUrdf));
+
+    const source = entry?.source;
+    if (source && !isPythonSourceFileRef(source?.file || source?.sourcePath || "")) {
+      addExistingCatalogUpload(uploads, catalogFieldUpload(source?.file || source?.sourcePath, source));
+    }
+  }
+  return uploads;
+}
+
+function uploadMatchesExistingCatalog(uploadFile, existingUpload) {
+  const existingHash = normalizedHash(existingUpload?.hash);
+  if (!existingHash) {
+    return false;
+  }
+  const metadata = comparableFileAssetMetadata(uploadFile.filePath);
+  const localHash = normalizedHash(metadata?.hash);
+  if (!localHash || localHash !== existingHash) {
+    return false;
+  }
+  const existingBytes = normalizedBytes(existingUpload?.bytes);
+  const localBytes = normalizedBytes(metadata?.bytes);
+  return !existingBytes || !localBytes || existingBytes === localBytes;
+}
+
+function findGitRoot({ cwd = process.cwd(), rootPath = "" } = {}) {
+  const candidates = [cwd, rootPath].filter(Boolean);
+  for (const candidate of candidates) {
+    const result = spawnSync("git", ["-C", candidate, "rev-parse", "--show-toplevel"], {
+      encoding: "utf-8",
+    });
+    if (result.status === 0) {
+      return String(result.stdout || "").trim();
+    }
+  }
+  return "";
+}
+
+function gitRelativePath(gitRoot, filePath) {
+  const relativePath = path.relative(path.resolve(gitRoot), path.resolve(filePath));
+  if (!relativePath || relativePath.startsWith(`..${path.sep}`) || path.isAbsolute(relativePath)) {
+    return "";
+  }
+  return toPosixPath(relativePath);
+}
+
+function ensureGitLfsFiles({
+  uploadFiles,
+  cwd = process.cwd(),
+  rootPath = "",
+  logger = console,
+} = {}) {
+  const pointerFiles = uploadFiles
+    .filter((uploadFile) => readGitLfsPointer(uploadFile.filePath))
+    .sort((a, b) => a.fileRef.localeCompare(b.fileRef));
+  if (!pointerFiles.length) {
+    return 0;
+  }
+
+  const gitRoot = findGitRoot({ cwd, rootPath });
+  if (!gitRoot) {
+    throw new Error("Cannot fetch Git LFS pointers because the upload directory is not inside a git worktree.");
+  }
+  const includePaths = pointerFiles
+    .map((uploadFile) => gitRelativePath(gitRoot, uploadFile.filePath))
+    .filter(Boolean);
+  if (includePaths.length !== pointerFiles.length) {
+    throw new Error("Cannot fetch Git LFS pointers because one or more upload files are outside the git worktree.");
+  }
+
+  logger.log?.(`Fetching ${includePaths.length} Git LFS object(s) for missing Blob uploads.`);
+  const result = spawnSync("git", [
+    "-C",
+    gitRoot,
+    "lfs",
+    "pull",
+    "--include",
+    includePaths.join(","),
+    "--exclude",
+    "",
+  ], {
+    stdio: "inherit",
+  });
+  if (result.status !== 0) {
+    throw new Error(`git lfs pull failed while fetching missing Blob upload assets (exit ${result.status ?? "unknown"}).`);
+  }
+  const remainingPointers = pointerFiles.filter((uploadFile) => readGitLfsPointer(uploadFile.filePath));
+  if (remainingPointers.length) {
+    throw new Error(
+      `Git LFS did not materialize ${remainingPointers.length} upload asset(s): ` +
+      remainingPointers.map((uploadFile) => uploadFile.fileRef).join(", ")
+    );
+  }
+  return pointerFiles.length;
+}
+
+function assertNoGitLfsPointers(uploadFiles) {
+  const pointerFile = uploadFiles.find((uploadFile) => readGitLfsPointer(uploadFile.filePath));
+  if (pointerFile) {
+    throw new Error(
+      `${pointerFile.fileRef} is a Git LFS pointer. ` +
+      "Use --fetch-missing-lfs to fetch only missing Blob upload assets before uploading."
+    );
+  }
+}
+
+async function uploadOneFile(backend, uploadFile) {
+  const metadata = fileAssetMetadata(uploadFile.filePath);
+  if (!metadata) {
+    throw new Error(`Upload asset is not a file: ${uploadFile.fileRef}`);
+  }
+  const preparedUploadFile = {
+    ...uploadFile,
+    ...metadata,
+  };
+  const blobFileRef = cacheBustedUploadFileRef(preparedUploadFile);
+  const upload = await backend.writeAsset({
+    fileRef: blobFileRef,
+    body: fs.createReadStream(preparedUploadFile.filePath),
+    contentType: contentTypeForFileRef(preparedUploadFile.fileRef),
+  });
+  return {
+    upload,
+    uploadFile: preparedUploadFile,
+    blobFileRef,
+  };
+}
+
+async function uploadFilesToBlob({
+  backend,
+  uploadFiles,
+  concurrency = DEFAULT_UPLOAD_CONCURRENCY,
+  logger = console,
+  existingUploads = new Map(),
+  skipExisting = false,
+  fetchMissingLfs = false,
+  cwd = process.cwd(),
+  rootPath = "",
+}) {
+  const allFiles = [...uploadFiles.values()].sort((a, b) => a.fileRef.localeCompare(b.fileRef));
+  const uploads = new Map();
+  const queue = [];
+  let skippedCount = 0;
+  for (const uploadFile of allFiles) {
+    const existingUpload = skipExisting ? existingUploads.get(uploadFile.fileRef) : null;
+    if (existingUpload && uploadMatchesExistingCatalog(uploadFile, existingUpload)) {
+      logger.log?.(`Skipping existing ${uploadFile.fileRef}`);
+      uploads.set(uploadFile.fileRef, {
+        ...uploadFile,
+        ...existingUpload,
+        fileRef: uploadFile.fileRef,
+        filePath: uploadFile.filePath,
+      });
+      skippedCount += 1;
+      continue;
+    }
+    queue.push(uploadFile);
+  }
+
+  let fetchedLfsFiles = 0;
+  if (fetchMissingLfs) {
+    fetchedLfsFiles = ensureGitLfsFiles({ uploadFiles: queue, cwd, rootPath, logger });
+  } else {
+    assertNoGitLfsPointers(queue);
+  }
+
   let index = 0;
   const workerCount = Math.max(1, Math.min(Number(concurrency) || DEFAULT_UPLOAD_CONCURRENCY, queue.length || 1));
+  let uploadedCount = 0;
 
   async function worker() {
     for (;;) {
@@ -441,10 +748,14 @@ async function uploadFilesToBlob({ backend, uploadFiles, concurrency = DEFAULT_U
         return;
       }
       logger.log?.(`Uploading ${uploadFile.fileRef}`);
-      const blobFileRef = cacheBustedUploadFileRef(uploadFile);
-      const upload = await uploadOneFile(backend, uploadFile);
-      uploads.set(uploadFile.fileRef, {
-        ...uploadFile,
+      const {
+        upload,
+        uploadFile: preparedUploadFile,
+        blobFileRef,
+      } = await uploadOneFile(backend, uploadFile);
+      uploadedCount += 1;
+      uploads.set(preparedUploadFile.fileRef, {
+        ...preparedUploadFile,
         blobFileRef,
         url: upload?.url || "",
         pathname: upload?.pathname || "",
@@ -453,7 +764,12 @@ async function uploadFilesToBlob({ backend, uploadFiles, concurrency = DEFAULT_U
   }
 
   await Promise.all(Array.from({ length: workerCount }, () => worker()));
-  return uploads;
+  return {
+    uploads,
+    uploadedCount,
+    skippedCount,
+    fetchedLfsFiles,
+  };
 }
 
 function uploadedAssetForRef(uploads, fileRef) {
@@ -464,12 +780,17 @@ function rewriteAssetFields(target, upload) {
   if (!upload?.url) {
     return target;
   }
-  return {
+  const next = {
     ...target,
     url: upload.url,
-    hash: upload.hash,
-    bytes: upload.bytes,
   };
+  if (upload.hash) {
+    next.hash = upload.hash;
+  }
+  if (Number.isFinite(Number(upload.bytes))) {
+    next.bytes = Number(upload.bytes);
+  }
+  return next;
 }
 
 function containsPythonSourceReference(value) {
@@ -643,6 +964,8 @@ export function parseUploadArgs(argv, env = process.env) {
     ignoreFiles: [],
     excludePatterns: [],
     concurrency: DEFAULT_UPLOAD_CONCURRENCY,
+    skipExisting: false,
+    fetchMissingLfs: false,
   };
 
   for (let index = 0; index < argv.length; index += 1) {
@@ -670,6 +993,14 @@ export function parseUploadArgs(argv, env = process.env) {
     }
     if (arg === "--concurrency") {
       options.concurrency = Number(readValue());
+      continue;
+    }
+    if (arg === "--skip-existing") {
+      options.skipExisting = true;
+      continue;
+    }
+    if (arg === "--fetch-missing-lfs") {
+      options.fetchMissingLfs = true;
       continue;
     }
     if (arg.startsWith("-")) {
@@ -708,9 +1039,12 @@ export async function uploadCatalogDirectoryToVercelBlob({
   ignoreFiles = [],
   excludePatterns = [],
   concurrency = DEFAULT_UPLOAD_CONCURRENCY,
+  skipExisting = false,
+  fetchMissingLfs = false,
   env = process.env,
   cwd = process.cwd(),
   client = null,
+  fetchImpl = globalThis.fetch,
   logger = console,
 } = {}) {
   const uploadRoot = resolveUploadRoot({ directory, rootDir, env, cwd });
@@ -722,7 +1056,7 @@ export async function uploadCatalogDirectoryToVercelBlob({
   });
   const ignoreMatcher = createIgnoreMatcher(ignorePatterns);
   const includePath = includePathFromIgnoreMatcher(ignoreMatcher);
-  const catalog = scanCadDirectory({
+  let catalog = scanCadDirectory({
     repoRoot: uploadRoot.repoRoot,
     rootDir: uploadRoot.rootDir,
     includePath,
@@ -742,14 +1076,51 @@ export async function uploadCatalogDirectoryToVercelBlob({
   const backend = createVercelBlobAssetBackend({
     ...config,
     client,
+    fetchImpl,
     readOnly: false,
   });
-  const uploads = await uploadFilesToBlob({
+  let existingUploads = new Map();
+  if (skipExisting) {
+    try {
+      const existingCatalog = await backend.readCatalog();
+      existingUploads = existingCatalogUploads(existingCatalog, {
+        rootPath: uploadRoot.rootPath,
+      });
+      logger.log?.(`Loaded remote catalog with ${existingUploads.size} upload asset reference(s).`);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      if (!/404|not found/i.test(message)) {
+        throw error;
+      }
+      logger.log?.(`No remote catalog found at ${backend.catalogPath}; uploading all catalog assets.`);
+    }
+  }
+  const uploadResult = await uploadFilesToBlob({
     backend,
     uploadFiles,
     concurrency,
     logger,
+    existingUploads,
+    skipExisting,
+    fetchMissingLfs,
+    cwd,
+    rootPath: uploadRoot.rootPath,
   });
+  const uploads = uploadResult.uploads;
+  if (skipExisting) {
+    for (const [fileRef, existingUpload] of existingUploads) {
+      if (!uploads.has(fileRef)) {
+        uploads.set(fileRef, existingUpload);
+      }
+    }
+  }
+  if (uploadResult.fetchedLfsFiles > 0) {
+    catalog = scanCadDirectory({
+      repoRoot: uploadRoot.repoRoot,
+      rootDir: uploadRoot.rootDir,
+      includePath,
+    });
+  }
   const blobCatalog = rewriteCatalogForBlob(catalog, {
     uploads,
     repoRoot: uploadRoot.repoRoot,
@@ -768,7 +1139,9 @@ export async function uploadCatalogDirectoryToVercelBlob({
     catalogPath: backend.catalogPath,
     catalogUrl: catalogUpload?.url || "",
     ignoredPatterns: ignorePatterns,
-    uploadedFiles: uploads.size,
+    uploadedFiles: uploadResult.uploadedCount,
+    skippedFiles: uploadResult.skippedCount,
+    fetchedLfsFiles: uploadResult.fetchedLfsFiles,
     catalogEntries: blobCatalog.entries.length,
     catalog: blobCatalog,
   };
@@ -786,6 +1159,8 @@ async function main(argv = process.argv.slice(2)) {
     catalogPath: result.catalogPath,
     catalogUrl: result.catalogUrl,
     uploadedFiles: result.uploadedFiles,
+    skippedFiles: result.skippedFiles,
+    fetchedLfsFiles: result.fetchedLfsFiles,
     catalogEntries: result.catalogEntries,
     ignoredPatterns: result.ignoredPatterns,
   }, null, 2));
