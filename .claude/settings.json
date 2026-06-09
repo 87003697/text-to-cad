@@ -6,8 +6,20 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bash \"${CLAUDE_PROJECT_DIR}/.claude/hooks/hydrate-models.sh\"",
-            "timeout": 120
+            "command": "bash \"${CLAUDE_PROJECT_DIR}/scripts/dev/agent-env-setup.sh\"",
+            "timeout": 300
+          }
+        ]
+      }
+    ],
+    "SessionEnd": [
+      {
+        "matcher": "other|prompt_input_exit|clear|resume",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"${CLAUDE_PROJECT_DIR}/scripts/dev/agent-env-cleanup.sh\" --current-only --apply",
+            "timeout": 60
           }
         ]
       }

@@ -105,6 +105,9 @@ the GitHub workflows.
   installed `.venv/` from the source checkout into the new checkout as a
   bootstrap cache, then run the branch's dependency install/sync for the
   workflow being changed so dependency changes are reconciled locally.
+- Agent worktree setup/cleanup is centralized in
+  `scripts/dev/agent-env-setup.sh` and `scripts/dev/agent-env-cleanup.sh`;
+  Codex and Claude configs should call those shared scripts.
 - Install dependencies only for the workflow being changed.
 - Do not commit `.venv/`, `node_modules/`, caches, `tmp/`, local credentials, or
   printer config.
