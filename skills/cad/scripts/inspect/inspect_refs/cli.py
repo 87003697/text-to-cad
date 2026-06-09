@@ -11,14 +11,18 @@ from typing import Sequence
 
 if __package__ in {None, ""}:
     package_dir = Path(__file__).resolve().parent
-    scripts_dir = package_dir.parents[2]
-    sys.path.insert(0, str(scripts_dir))
+    tool_dir = package_dir.parent
+    if str(tool_dir) not in sys.path:
+        sys.path.insert(0, str(tool_dir))
 
 from cadpy.cli_logging import CliLogger
 
 
 def _inspect_api():
-    from cad.inspect.inspect_refs import inspect
+    if __package__ in {None, ""}:
+        from inspect_refs import inspect
+    else:
+        from . import inspect
 
     return inspect
 

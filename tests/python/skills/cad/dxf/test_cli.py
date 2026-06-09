@@ -7,7 +7,7 @@ from tests.python.support.paths import add_repo_path, repo_path
 
 add_repo_path("skills/cad/scripts")
 
-from cad.dxf import cli as dxf
+from dxf import cli as dxf
 
 
 class DxfCliTests(unittest.TestCase):
@@ -57,7 +57,7 @@ class DxfCliTests(unittest.TestCase):
     def test_cli_import_does_not_import_heavy_cad_modules(self) -> None:
         skill_root = repo_path("skills/cad")
         code = (
-            "import sys; sys.path.insert(0, 'scripts'); import cad.dxf.cli; "
+            "import sys; sys.path.insert(0, 'scripts'); import dxf.cli; "
             "print('OCP.OCP' in sys.modules); "
             "print('cadpy.step_scene' in sys.modules)"
         )

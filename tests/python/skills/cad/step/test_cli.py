@@ -9,7 +9,7 @@ from tests.python.support.paths import add_repo_path, repo_path
 
 add_repo_path("skills/cad/scripts")
 
-from cad.step import cli
+from step import cli
 
 
 class StepCliTests(unittest.TestCase):
@@ -125,7 +125,7 @@ class StepCliTests(unittest.TestCase):
     def test_cli_does_not_reserve_common_module_name(self) -> None:
         skill_root = repo_path("skills/cad")
         code = (
-            "import sys; sys.path.insert(0, 'scripts'); import cad.step.cli; "
+            "import sys; sys.path.insert(0, 'scripts'); import step.cli; "
             "print('common' in sys.modules); "
             "print('OCP.OCP' in sys.modules); "
             "print('cadpy.step_scene' in sys.modules)"

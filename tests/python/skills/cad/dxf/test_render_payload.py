@@ -3,8 +3,12 @@ from pathlib import Path
 
 import ezdxf
 
+from tests.python.support.paths import add_repo_path
 from tests.python.support.tmp_root import temporary_directory
-from cad.dxf.render_payload import build_dxf_render_payload
+
+add_repo_path("skills/cad/scripts")
+
+from dxf.render_payload import build_dxf_render_payload
 
 
 class CadpyDxfTests(unittest.TestCase):

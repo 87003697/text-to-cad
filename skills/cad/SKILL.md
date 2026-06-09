@@ -46,7 +46,7 @@ Do not ask the user to provide a JSON specification and do not make JSON the use
 
 Keep these roots separate:
 
-- **CAD skill directory**: this folder. Tool launchers live here as `scripts/step`, `scripts/snapshot`, `scripts/inspect`, and `scripts/dxf`.
+- **CAD skill directory**: this folder. Tool directories live here as `scripts/step`, `scripts/snapshot`, `scripts/inspect`, and `scripts/dxf`.
 - **Tool process cwd**: relative CAD targets are resolved from the command's current working directory. Use absolute target paths when running from the skill directory, or run from the workspace root and invoke the launchers with a path to this skill directory.
 
 Short command examples in this skill use launcher paths relative to the CAD skill directory. Adapt the launcher path or target path so project CAD files resolve from the intended workspace, not accidentally under the skill directory.
