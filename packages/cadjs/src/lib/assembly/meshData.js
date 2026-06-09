@@ -168,26 +168,20 @@ export function assemblyInspectionNode(root, nodeId) {
   return findAssemblyNode(root, normalizeAssemblyInspectionNodeId(root, nodeId)) || root;
 }
 
+function directChildAssemblyNodeIds(node) {
+  return (Array.isArray(node?.children) ? node.children : [])
+    .map((child) => String(child?.id || "").trim())
+    .filter(Boolean);
+}
+
 export function selectableAssemblyNodeIdsForInspection(root, nodeId) {
   const inspectedNode = assemblyInspectionNode(root, nodeId);
-  if (String(inspectedNode?.nodeType || "").trim() !== "assembly") {
-    return [];
-  }
-  return (Array.isArray(inspectedNode?.children) ? inspectedNode.children : [])
-    .map((node) => String(node?.id || "").trim())
-    .filter(Boolean);
+  return directChildAssemblyNodeIds(inspectedNode);
 }
 
 export function treeSelectableAssemblyNodeIdsForInspection(root, nodeId) {
   const inspectedNode = assemblyInspectionNode(root, nodeId);
-  if (!inspectedNode) {
-    return [];
-  }
-  const rootId = rootAssemblyInspectionNodeId(root);
-  const inspectedNodeId = normalizeAssemblyInspectionNodeId(root, nodeId);
-  return flattenAssemblyNodes(inspectedNode)
-    .map((node) => String(node?.id || "").trim())
-    .filter((id) => id && id !== rootId && id !== inspectedNodeId);
+  return directChildAssemblyNodeIds(inspectedNode);
 }
 
 export function focusedLeafPartIdsForAssemblyInspection(root, nodeId) {

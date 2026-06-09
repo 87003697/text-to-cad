@@ -57,7 +57,6 @@ const treeDepthGuideOffsetPx = 14;
 const treeDepthMaxPx = 128;
 const treeSectionId = "tree";
 const treeRevealScrollPaddingTopPx = 120;
-export const STEP_TREE_ROOT_ITEM_LIMIT = 15;
 const STEP_MODULE_ANIMATION_SPEED_MIN = 0.1;
 const STEP_MODULE_ANIMATION_SPEED_MAX = 3;
 
@@ -538,8 +537,6 @@ export default function StepFileSheet({
   stepTreeRoot,
   assemblyMates = [],
   expandedTreeNodeIds,
-  stepTreeRootShowMore = false,
-  onStepTreeRootShowMoreChange,
   selectedPartIds,
   selectedReferenceIds = [],
   selectedMateIds = [],
@@ -613,17 +610,11 @@ export default function StepFileSheet({
     isAssemblyView ||
     stepTreeNodeId(treeRoot) === STEP_MODEL_ROOT_ID
   );
-  const rootTreeItemCount = elideRootTreeRow ? treeRootChildren.length : 0;
-  const rootTreeHasOverflow = rootTreeItemCount > STEP_TREE_ROOT_ITEM_LIMIT;
-  const showAllRootTreeItems = !rootTreeHasOverflow || stepTreeRootShowMore === true;
-  const hiddenRootTreeItemCount = Math.max(rootTreeItemCount - STEP_TREE_ROOT_ITEM_LIMIT, 0);
   const visibleRows = useMemo(
     () => flattenVisibleStepTreeRows(treeRoot, expandedTreeNodeIds, {
-      omitRoot: elideRootTreeRow,
-      rootChildLimit: STEP_TREE_ROOT_ITEM_LIMIT,
-      showAllRootChildren: showAllRootTreeItems
+      omitRoot: elideRootTreeRow
     }),
-    [elideRootTreeRow, expandedTreeNodeIds, showAllRootTreeItems, treeRoot]
+    [elideRootTreeRow, expandedTreeNodeIds, treeRoot]
   );
   const visibleRowIdsSignature = useMemo(
     () => visibleRows.map((row) => String(row?.id || "")).join("\n"),
@@ -662,11 +653,16 @@ export default function StepFileSheet({
   const activeTreeNodeId = String(activeReferenceTreeRow?.id || rawActiveTreeNodeId || "").trim();
   const activeTreeRow = useMemo(
     () => activeTreeNodeId
-      ? visibleRows.find((row) => String(row?.id || "").trim() === activeTreeNodeId) || null
+      ? visibleRows.find((row) => (
+          String(row?.id || "").trim() === activeTreeNodeId ||
+          String(row?.node?.selectionPartId || "").trim() === activeTreeNodeId
+        )) || null
       : null,
     [activeTreeNodeId, visibleRows]
   );
-  const activeTreeNodeIsTopology = Boolean(topologyTreeRowType(activeTreeRow));
+  const activeTreeNodeIsTopology = activeTreeRow?.node?.visualOnly === true
+    ? false
+    : Boolean(topologyTreeRowType(activeTreeRow));
   const isolateActive = focusedNodeIdSet.size > 0;
   const showTreeVisibilityControls = isAssemblyView === true;
   const treeSectionOpen = Array.isArray(openSectionIds) && openSectionIds.includes(treeSectionId);
@@ -691,6 +687,10 @@ export default function StepFileSheet({
       const rowId = String(row?.id || "").trim();
       if (rowId) {
         map.set(rowId, row);
+      }
+      const selectionRowId = String(row?.node?.selectionPartId || "").trim();
+      if (selectionRowId && !map.has(selectionRowId)) {
+        map.set(selectionRowId, row);
       }
     }
     return map;
@@ -804,9 +804,13 @@ export default function StepFileSheet({
 
               {hasAssemblyTree
                 ? visibleRows.map((row, rowIndex) => {
-                  const topologyType = topologyTreeRowType(row);
+                  const visualOnlyRow = row?.node?.visualOnly === true;
+                  const topologyType = visualOnlyRow ? "" : topologyTreeRowType(row);
                   const topologyRow = Boolean(topologyType);
+                  const rowId = String(row.id || "").trim();
+                  const selectionRowId = String(row.node?.selectionPartId || row.id || "").trim();
                   const topologyReferenceId = String(row.topologyReferenceId || "").trim();
+                  const topologyPartId = topologyRow ? String(row.node?.partId || "").trim() : "";
                   const selectableTopologyRow = Boolean(topologyType) &&
                     topologyReferenceId &&
                     typeof onSelectReferenceNode === "function";
@@ -815,14 +819,21 @@ export default function StepFileSheet({
                   const rowAriaLabel = stepTreeRowAriaLabel(row, topologyType, rowDetail);
                   const selected = topologyRow
                     ? selectedReferenceIdSet.has(topologyReferenceId)
-                    : selectedIds.includes(row.id);
-                  const insideIsolation = !isolatedTreeRowIds || isolatedTreeRowIds.has(String(row.id || "").trim());
-                  const focused = !topologyRow && focusedNodeIdSet.has(String(row.id || "").trim());
+                    : selectedIds.includes(selectionRowId);
+                  const topologyInsideSelectablePart = topologyRow && topologyPartId && (
+                    isolatedTreeRowIds?.has(topologyPartId) ||
+                    focusedNodeIdSet.has(topologyPartId) ||
+                    selectableNodeIdSet?.has(topologyPartId)
+                  );
+                  const insideIsolation = !isolatedTreeRowIds ||
+                    isolatedTreeRowIds.has(rowId) ||
+                    topologyInsideSelectablePart;
+                  const focused = !topologyRow && focusedNodeIdSet.has(rowId);
                   const topologyShapeOfFocusedPart = topologyType === "shape" &&
                     focusedNodeIdSet.has(String(row.node?.partId || "").trim());
                   const selectable = topologyRow
                     ? selectableTopologyRow && insideIsolation && !topologyShapeOfFocusedPart
-                    : insideIsolation && !focused && (!selectableNodeIdSet || selectableNodeIdSet.has(row.id) || selected);
+                    : insideIsolation && !focused && (!selectableNodeIdSet || selectableNodeIdSet.has(selectionRowId) || selected);
                   const hidden = hiddenTreeRowIds.has(String(row.id || "").trim());
                   const isolationMuted = isolateActive && !insideIsolation;
                   const rowSelectionDisabled = treeSelectionDisabled || hidden || !selectable;
@@ -830,7 +841,7 @@ export default function StepFileSheet({
                   const hovered = !hidden && !rowSelectionDisabled && (
                     topologyRow
                       ? topologyReferenceId && normalizedHoveredReferenceId === topologyReferenceId
-                      : hoveredPartId === row.id
+                      : hoveredPartId === selectionRowId
                   );
                   const rowDisabledReason = treeSelectionTitle ||
                     (!selectable
@@ -861,7 +872,7 @@ export default function StepFileSheet({
                     if (topologyRow) {
                       onSelectReferenceNode?.(topologyReferenceId, { multiSelect });
                     } else {
-                      onSelectTreeNode?.(row.id, { multiSelect });
+                      onSelectTreeNode?.(selectionRowId, { multiSelect });
                     }
                   };
                   const handleRowHoverStart = () => {
@@ -874,7 +885,7 @@ export default function StepFileSheet({
                       }
                       return;
                     }
-                    onHoverTreeNode?.(row.id);
+                    onHoverTreeNode?.(selectionRowId);
                   };
                   const handleRowHoverEnd = () => {
                     if (topologyRow) {
@@ -961,7 +972,7 @@ export default function StepFileSheet({
                       .filter(Boolean)
                     : [];
                   const actionNodeIds = !topologyRow
-                    ? (selectedContextNodeIds.length ? selectedContextNodeIds : [String(row.id || "").trim()].filter(Boolean))
+                    ? (selectedContextNodeIds.length ? selectedContextNodeIds : [selectionRowId].filter(Boolean))
                     : [];
                   const actionRows = actionNodeIds
                     .map((nodeId) => visibleRowById.get(nodeId) || null)
@@ -983,7 +994,7 @@ export default function StepFileSheet({
                     typeof onToggleTreeNode !== "function";
                   const collapseAllDisabled = expandedExpandableTreeNodeIds.length < 1 ||
                     typeof onToggleTreeNode !== "function";
-                  const copyReferenceTargetId = topologyRow ? topologyReferenceId : row.id;
+                  const copyReferenceTargetId = topologyRow ? topologyReferenceId : selectionRowId;
                   return (
                     <div key={row.id} className="relative min-w-0 max-w-full">
                       <StepTreeDepthGuides depth={row.depth} />
@@ -997,9 +1008,15 @@ export default function StepFileSheet({
                               ref={(node) => {
                                 if (node) {
                                   rowRefs.current.set(row.id, node);
+                                  if (selectionRowId && selectionRowId !== row.id) {
+                                    rowRefs.current.set(selectionRowId, node);
+                                  }
                                   return;
                                 }
                                 rowRefs.current.delete(row.id);
+                                if (selectionRowId && selectionRowId !== row.id) {
+                                  rowRefs.current.delete(selectionRowId);
+                                }
                               }}
                               role="treeitem"
                               aria-expanded={row.hasChildren ? row.expanded : undefined}
@@ -1302,27 +1319,6 @@ export default function StepFileSheet({
                 </>
               ) : null}
               </div>
-
-              {rootTreeHasOverflow ? (
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="sm"
-                  className={cn(
-                    compactButtonClasses,
-                    "mt-1 h-7 w-full justify-start rounded-md px-2 text-[11px] text-sidebar-foreground/70 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground"
-                  )}
-                  onClick={() => {
-                    onStepTreeRootShowMoreChange?.(!showAllRootTreeItems);
-                  }}
-                  aria-expanded={showAllRootTreeItems}
-                  title={showAllRootTreeItems
-                    ? `Show first ${STEP_TREE_ROOT_ITEM_LIMIT} root items`
-                    : `Show ${hiddenRootTreeItemCount} more root ${hiddenRootTreeItemCount === 1 ? "item" : "items"}`}
-                >
-                  <span>{showAllRootTreeItems ? "Show less" : "Show more"}</span>
-                </Button>
-              ) : null}
             </div>
         </FileSheetSection>
 

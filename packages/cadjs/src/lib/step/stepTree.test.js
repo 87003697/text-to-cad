@@ -430,6 +430,7 @@ test("STEP tree can assign topology references to assembly parts by occurrence i
       {
         id: "servo-part",
         occurrenceId: "o1.3.2",
+        sourceOccurrenceId: "o1.4",
         nodeType: "part",
         displayName: "servo",
         children: []
@@ -529,9 +530,22 @@ test("STEP tree flattens redundant topology occurrence rows for single STEP root
     ]
   });
 
+  const folder = augmented.children[0];
+  assert.equal(folder.nodeType, "topology-folder");
+  assert.equal(folder.displayName, "base_plate");
+  assert.equal(folder.visualOnly, true);
+  assert.deepEqual(folder.leafPartIds, [STEP_MODEL_RENDER_PART_ID]);
   assert.deepEqual(
-    augmented.children.map((child) => [child.nodeType, child.displaySelector]),
+    folder.children.map((child) => [child.nodeType, child.displaySelector]),
     [["topology-face", "o1.f1"]]
+  );
+  assert.deepEqual(
+    flattenVisibleStepTreeRows(augmented, [folder.id], { omitRoot: true })
+      .map((row) => [row.nodeType, row.label, row.depth]),
+    [
+      ["topology-folder", "base_plate", 0],
+      ["topology-face", "Face f1", 1]
+    ]
   );
 });
 

@@ -22,7 +22,13 @@ const root = {
         {
           id: "part_a2",
           nodeType: "part",
-          children: []
+          children: [
+            {
+              id: "part_a2_leaf",
+              nodeType: "part",
+              children: []
+            }
+          ]
         }
       ]
     },
@@ -45,10 +51,14 @@ test("minimal assembly isolation keeps only the highest selected ancestor", () =
   );
 });
 
-test("tree selection during isolate excludes isolate roots but keeps descendants selectable", () => {
+test("tree selection during isolate only keeps direct children selectable", () => {
   assert.deepEqual(
     selectableTreeNodeIdsForIsolation(root, ["assembly_a", "part_a1"], "root"),
     ["part_a1", "part_a2"]
+  );
+  assert.deepEqual(
+    selectableTreeNodeIdsForIsolation(root, ["part_a2"], "root"),
+    ["part_a2_leaf"]
   );
   assert.deepEqual(
     selectableTreeNodeIdsForIsolation(root, ["part_a1", "part_b"], "root"),
@@ -56,6 +66,6 @@ test("tree selection during isolate excludes isolate roots but keeps descendants
   );
   assert.deepEqual(
     selectableTreeNodeIdsForIsolation(root, [], "root"),
-    ["assembly_a", "part_a1", "part_a2", "part_b"]
+    ["assembly_a", "part_a1", "part_a2", "part_a2_leaf", "part_b"]
   );
 });

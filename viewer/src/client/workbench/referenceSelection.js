@@ -1,6 +1,7 @@
 import { buildCadRefToken, parseCadRefSelector, parseCadRefToken, sortCadRefSelectors } from "cadjs/lib/cadRefs.js";
 import { entryReferenceAssetSignature } from "cadjs/lib/entryAssets.js";
 import { buildSelectorRuntime } from "cadjs/lib/selectors/runtime.js";
+import { STEP_MODEL_ROOT_ID } from "cadjs/lib/step/stepTree.js";
 import { cadPathForEntry, fileKey } from "./sidebar.js";
 
 const ASSEMBLY_MATE_SELECTOR_RE = /^m\d+$/;
@@ -534,6 +535,10 @@ export function resolveCadRefSelection({
   const selectedPartIds = [];
   const selectedMateIds = [];
   const expandedAssemblyPartIds = [];
+
+  if (request.hasWholeEntryToken && !isAssemblyView) {
+    selectedPartIds.push(STEP_MODEL_ROOT_ID);
+  }
 
   for (const selector of request.selectors) {
     const parsedSelector = parseCadRefSelector(selector);

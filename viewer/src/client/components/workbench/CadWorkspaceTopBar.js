@@ -3,7 +3,6 @@ import {
   Bot,
   Boxes,
   Check,
-  ChevronDown,
   CircleCheck,
   Code,
   Copy,
@@ -72,22 +71,13 @@ import FileAccessContextMenu from "./FileAccessContextMenu";
 import {
   fileKey,
   listSidebarItems,
-  sidebarDirectoryIdForEntry,
-  sidebarDirectoryPath
 } from "@/workbench/sidebar";
+import {
+  buildBreadcrumbNodes,
+  collapsedBreadcrumbNodes,
+  directoryTitle
+} from "@/workbench/breadcrumbs";
 import viewerPackage from "../../../../package.json";
-
-function collapsedBreadcrumbNodes(nodes) {
-  if (nodes.length <= 4) {
-    return nodes.map((node) => ({ type: "node", node }));
-  }
-
-  return [
-    { type: "node", node: nodes[0] },
-    { type: "ellipsis", label: "...", nodes: nodes.slice(1, -2) },
-    ...nodes.slice(-2).map((node) => ({ type: "node", node }))
-  ];
-}
 
 function fileSheetLabel(fileSheetKind) {
   if (fileSheetKind === "dxf") {
@@ -162,66 +152,6 @@ const ENTRY_ICON_COMPONENTS = {
 
 function iconForEntry(entry, sourceFormat, status) {
   return ENTRY_ICON_COMPONENTS[entryIconKind(entry, { sourceFormat, status })] || Package;
-}
-
-function directoryTitle(directory) {
-  return String(directory?.id || directory?.name || "Directory");
-}
-
-function buildBreadcrumbNodes({
-  directoryTree,
-  selectedEntry,
-  selectedFileLabel,
-  selectedFileTitle
-}) {
-  if (!directoryTree) {
-    if (selectedEntry) {
-      return [{
-        type: "entry",
-        label: selectedFileLabel,
-        title: selectedFileTitle,
-        entry: selectedEntry,
-        menuDirectory: null
-      }];
-    }
-    return [{
-      type: "placeholder",
-      label: selectedFileLabel,
-      title: selectedFileTitle,
-      menuDirectory: null
-    }];
-  }
-
-  if (!selectedEntry) {
-    return [{
-      type: "placeholder",
-      label: selectedFileLabel,
-      title: selectedFileTitle,
-      menuDirectory: directoryTree
-    }];
-  }
-
-  const directoryId = sidebarDirectoryIdForEntry(selectedEntry);
-  const directoryPath = sidebarDirectoryPath(directoryTree, directoryId);
-  const directoryNodes = directoryPath.filter((directory) => String(directory.id || "").trim()).map((directory) => ({
-    type: "directory",
-    id: String(directory.id || ""),
-    label: String(directory.name || "Folder"),
-    title: directoryTitle(directory),
-    directory,
-    menuDirectory: directory
-  }));
-
-  return [
-    ...directoryNodes,
-    {
-      type: "entry",
-      label: selectedFileLabel,
-      title: selectedFileTitle,
-      entry: selectedEntry,
-      menuDirectory: null
-    }
-  ];
 }
 
 function BreadcrumbEntryMenuItem({
@@ -394,6 +324,8 @@ function DropdownMenuScrollArea({ children }) {
 
 function BreadcrumbDirectorySubMenu({
   directory,
+  label = "",
+  title: titleProp = "",
   selectedKey,
   onSelectEntry,
   sidebarLabelForEntry,
@@ -414,7 +346,8 @@ function BreadcrumbDirectorySubMenu({
   onRevealFileAsset,
   onCopyFileAssetReference
 }) {
-  const title = directoryTitle(directory);
+  const labelText = String(label || directory?.name || "Folder");
+  const title = String(titleProp || directoryTitle(directory));
 
   return (
     <DropdownMenuSub>
@@ -423,7 +356,7 @@ function BreadcrumbDirectorySubMenu({
         title={title}
       >
         <Folder className="size-3.5 shrink-0" aria-hidden="true" />
-        <span className="block min-w-0 flex-1 truncate">{String(directory?.name || "Folder")}</span>
+        <span className="block min-w-0 flex-1 truncate">{labelText}</span>
       </DropdownMenuSubTrigger>
       <DropdownMenuSubContent className="w-max max-w-80">
         <DropdownMenuScrollArea>
@@ -483,7 +416,7 @@ function BreadcrumbNodeDropdown({
 }) {
   const label = String(node?.label || "");
   const title = String(node?.title || label);
-  const menuDirectory = node?.type === "directory" || node?.type === "placeholder"
+  const menuDirectory = node?.type === "directory" || node?.type === "placeholder" || node?.type === "entry"
     ? node?.menuDirectory || null
     : null;
   const canBrowse = !!menuDirectory && listSidebarItems(menuDirectory).length > 0;
@@ -527,30 +460,56 @@ function BreadcrumbNodeDropdown({
     );
   }
 
+  const triggerButton = (
+    <button
+      type="button"
+      className={cn(
+        "inline-flex min-w-0 items-center gap-2 rounded-sm text-xs font-medium transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+        current
+          ? "max-w-[min(36rem,55vw)] text-foreground"
+          : "max-w-32 text-muted-foreground"
+      )}
+      aria-label={`Browse ${label}`}
+      aria-current={current ? "page" : undefined}
+      title={title}
+      onPointerDown={(event) => {
+        if (event.button !== 0) {
+          event.preventDefault();
+        }
+      }}
+    >
+      <span className="block min-w-0 truncate">{label}</span>
+      {current && node?.type === "entry" ? (
+        <FilenameLoadStatus activity={filenameLoadActivity} />
+      ) : null}
+    </button>
+  );
+  const dropdownTrigger = (
+    <DropdownMenuTrigger asChild>
+      {triggerButton}
+    </DropdownMenuTrigger>
+  );
+  const trigger = node?.type === "entry" && node?.entry ? (
+    <FileAccessContextMenu
+      entry={node.entry}
+      stepSourceStatus={selectedStepSourceStatus}
+      canRevealFileAssets={canRevealFileAssets}
+      canCopyFileAssetLinks={canCopyFileAssetLinks}
+      canCopyFileAssetPaths={canCopyFileAssetPaths}
+      busyKey={fileAccessBusyKey}
+      onDownloadFileAsset={onDownloadFileAsset}
+      onExportImplicitFile={onExportImplicitFile}
+      onRevealFileAsset={onRevealFileAsset}
+      onRevealInExplorerView={onRevealInExplorerView}
+      onCopyFileAssetReference={onCopyFileAssetReference}
+    >
+      {dropdownTrigger}
+    </FileAccessContextMenu>
+  ) : dropdownTrigger;
+
   return (
     <DropdownMenu>
-      <DropdownMenuTrigger asChild>
-        <button
-          type="button"
-          className={cn(
-            "inline-flex min-w-0 items-center gap-2 rounded-sm text-xs font-medium transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
-            current
-              ? "max-w-[min(36rem,55vw)] text-foreground"
-              : "max-w-32 text-muted-foreground"
-          )}
-          aria-label={`Browse ${label}`}
-          aria-current={current ? "page" : undefined}
-          title={title}
-        >
-          <span className="block min-w-0 truncate">{label}</span>
-          {current && node?.type === "entry" ? (
-            <FilenameLoadStatus activity={filenameLoadActivity} />
-          ) : null}
-          {node?.type === "placeholder" ? (
-            <ChevronDown className="size-3.5 shrink-0 opacity-70" aria-hidden="true" />
-          ) : null}
-        </button>
-      </DropdownMenuTrigger>
+      {trigger}
       <DropdownMenuContent align="start" sideOffset={6} className="w-max max-w-80">
         <DropdownMenuScrollArea>
           <BreadcrumbDirectoryMenuItems
@@ -622,11 +581,13 @@ function BreadcrumbEllipsisDropdown({
       <DropdownMenuContent align="start" sideOffset={6} className="w-max max-w-80">
         <DropdownMenuScrollArea>
           {hiddenNodes.map((node, index) => {
-            if (node.type === "directory" && node.directory) {
+            if (node.type === "directory" && (node.menuDirectory || node.directory)) {
               return (
                 <BreadcrumbDirectorySubMenu
                   key={`${node.type}:${node.id}:${index}`}
-                  directory={node.directory}
+                  directory={node.menuDirectory || node.directory}
+                  label={node.label}
+                  title={node.title}
                   selectedKey={selectedKey}
                   onSelectEntry={onSelectEntry}
                   sidebarLabelForEntry={sidebarLabelForEntry}
