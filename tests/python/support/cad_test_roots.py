@@ -9,15 +9,7 @@ from tests.python.support.paths import add_repo_path
 
 add_repo_path("skills/cad/scripts")
 
-from cadpy_common import assembly_spec, catalog, generation, render
-from cadpy import assembly_spec as cad_assembly_spec
-from cadpy import catalog as cad_catalog
-from cadpy import generation as cad_generation
-from cadpy import glb_topology as cad_glb_topology
-from cadpy import metadata as cad_metadata
-from cadpy import render as cad_render
-from cadpy import step_scene as cad_step_scene
-from cadpy import step_targets as cad_step_targets
+from cadpy import assembly_spec, catalog, generation, glb_topology, metadata, render, step_scene, step_targets
 from tests.python.support.tmp_root import CAD_TEST_TMP_ROOT, temporary_directory
 
 
@@ -39,14 +31,10 @@ class IsolatedCadRoots:
             catalog,
             render,
             generation,
-            cad_assembly_spec,
-            cad_catalog,
-            cad_render,
-            cad_generation,
-            cad_glb_topology,
-            cad_metadata,
-            cad_step_scene,
-            cad_step_targets,
+            glb_topology,
+            metadata,
+            step_scene,
+            step_targets,
         ):
             if hasattr(module, "CAD_ROOT"):
                 patches.append(mock.patch.object(module, "CAD_ROOT", self.cad_root))

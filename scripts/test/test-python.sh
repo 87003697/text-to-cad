@@ -14,7 +14,11 @@ run_python_unittest "cadpy_metadata package Python tests" "tests/python/packages
 while IFS= read -r skill; do
   test_dir="tests/python/skills/$skill"
   if [ -d "$test_dir" ]; then
-    run_python_unittest "$skill skill Python tests" "$test_dir" "skills/$skill/scripts"
+    skill_paths=("skills/$skill/scripts")
+    if [ "$skill" = "cad" ]; then
+      skill_paths+=("skills/cad/scripts/packages/cadpy/src")
+    fi
+    run_python_unittest "$skill skill Python tests" "$test_dir" "${skill_paths[@]}"
   fi
 done < <("$LIST_SKILLS_SCRIPT")
 

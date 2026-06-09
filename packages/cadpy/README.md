@@ -21,11 +21,10 @@ package directly:
 After that, changes under `packages/cadpy/src/cadpy` are immediately visible to
 local source checkouts that import the package directly.
 
-The CAD skill's checked-in requirements install the generated, skill-local
-package copy under `skills/cad/scripts/packages/cadpy`. The root Viewer carries
-its generated copy under `viewer/packages/cadpy`. Refresh those copies with
-`scripts/bundle/bundle-skill.sh cad` or `scripts/bundle/bundle-skill.sh cad-viewer`
-after changing this package.
+On `develop`, the CAD skill and root Viewer point at this package through the
+development symlinks `skills/cad/scripts/packages/cadpy` and
+`viewer/packages/cadpy`. Keep those links intact with
+`scripts/dev/setup-symlinks.sh --check`.
 
 ## Production Bundling
 
@@ -38,8 +37,8 @@ python -m pip install packages/cadpy/dist/cadpy-*.whl
 ```
 
 The CAD and cad-viewer skills should depend on the package artifact they bundle,
-not on `skills/cad` or the repository root. The generated skill runtimes bundle
+not on `skills/cad` or the repository root. Production packaging vendors
 installable packages under `skills/cad/scripts/packages/cadpy` and
-`skills/cad-viewer/scripts/viewer/packages/cadpy`; production packaging can
-also set `VIEWER_CAD_PYTHON` to a skill-local Python runtime with this package
+`skills/cad-viewer/scripts/viewer/packages/cadpy`; production packaging can also
+set `VIEWER_CAD_PYTHON` to a skill-local Python runtime with this package
 installed.

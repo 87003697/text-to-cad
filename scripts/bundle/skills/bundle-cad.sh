@@ -14,7 +14,7 @@ GIFENC_VERSION="${CAD_SNAPSHOT_GIFENC_VERSION:-1.0.3}"
 
 BUILD_DEPS_DIR="${CAD_SNAPSHOT_BUILD_DEPS_DIR:-$REPO_ROOT/tmp/cad-snapshot-build}"
 CHECK_DIR="${CAD_SNAPSHOT_CHECK_DIR:-$REPO_ROOT/tmp/cad-snapshot-runtime-check}"
-RUNTIME_DIR="$REPO_ROOT/skills/cad/scripts/cadpy_snapshot/runtime"
+RUNTIME_DIR="$REPO_ROOT/skills/cad/scripts/cad/snapshot/runtime"
 ENTRYPOINT="$REPO_ROOT/packages/cadjs/src/common/headlessRenderEntry.js"
 CADPY_PACKAGE_DIR="$REPO_ROOT/packages/cadpy"
 CADPY_RUNTIME_DIR="$REPO_ROOT/skills/cad/scripts/packages/cadpy"
@@ -24,7 +24,7 @@ usage() {
 Usage:
   scripts/bundle/bundle-skill.sh cad [--check] [--clean] [--no-install]
 
-Bundles the self-contained browser runtime used by skills/cad/scripts/cadpy_snapshot
+Bundles the self-contained browser runtime used by skills/cad/scripts/cad/snapshot
 and the bundled Python package runtime used by skills/cad/scripts.
 
 Options:
@@ -189,12 +189,12 @@ check_runtime() {
   local stale=0
   for file in render.html snapshot-render.js; do
     if [ ! -f "$RUNTIME_DIR/$file" ]; then
-      echo "Missing generated runtime file: skills/cad/scripts/cadpy_snapshot/runtime/$file" >&2
+      echo "Missing generated runtime file: skills/cad/scripts/cad/snapshot/runtime/$file" >&2
       stale=1
       continue
     fi
     if ! cmp -s "$CHECK_DIR/$file" "$RUNTIME_DIR/$file"; then
-      echo "Stale generated runtime file: skills/cad/scripts/cadpy_snapshot/runtime/$file" >&2
+      echo "Stale generated runtime file: skills/cad/scripts/cad/snapshot/runtime/$file" >&2
       stale=1
     fi
   done
@@ -244,6 +244,6 @@ if [ "$MODE" = "check" ]; then
 else
   build_runtime "$RUNTIME_DIR"
   sync_cadpy_runtime "$CADPY_RUNTIME_DIR"
-  echo "Bundled skills/cad/scripts/cadpy_snapshot/runtime"
+  echo "Bundled skills/cad/scripts/cad/snapshot/runtime"
   echo "Bundled skills/cad/scripts/packages/cadpy"
 fi
