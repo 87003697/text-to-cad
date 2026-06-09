@@ -80,6 +80,9 @@ export function selectableTreeNodeIdsForIsolation(root, isolatedNodeIds, rootId)
   const validNodeIds = (nodes) => flattenAssemblyNodes(nodes)
     .map((node) => String(node?.id || "").trim())
     .filter((nodeId) => nodeId && nodeId !== rootNodeId);
+  const childNodeIds = (node) => (Array.isArray(node?.children) ? node.children : [])
+    .map((child) => String(child?.id || "").trim())
+    .filter((nodeId) => nodeId && nodeId !== rootNodeId);
   const normalizedIsolatedNodeIds = minimalAssemblyIsolationNodeIds(root, isolatedNodeIds, {
     rootId
   });
@@ -89,10 +92,7 @@ export function selectableTreeNodeIdsForIsolation(root, isolatedNodeIds, rootId)
   const selectable = new Set();
   for (const nodeId of normalizedIsolatedNodeIds) {
     const node = findAssemblyNode(root, nodeId);
-    for (const selectableNodeId of validNodeIds(node)) {
-      if (selectableNodeId === nodeId) {
-        continue;
-      }
+    for (const selectableNodeId of childNodeIds(node)) {
       selectable.add(selectableNodeId);
     }
   }

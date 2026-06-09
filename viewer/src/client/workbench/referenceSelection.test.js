@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
+import { STEP_MODEL_ROOT_ID } from "cadjs/lib/step/stepTree.js";
 import {
   buildAssemblyPartCopyText,
   buildAssemblyMateCopyText,
@@ -151,6 +152,18 @@ test("copy helpers merge selector refs and keep plain fallback lines", () => {
   assert.equal(buildSelectionCopyButtonLabel(["#o1.7.1.s1 cube_top_pad solid volume=490"]), "Copy #o1.7.1.s1");
   assert.equal(canonicalCadRefCopyText("#o1.7.1.f4 plane area=35"), "#o1.7.1.f4");
   assert.equal(buildSelectionCopyButtonLabel([]), "Copy refs");
+});
+
+test("whole-entry refs select the single STEP root row", () => {
+  const resolved = resolveCadRefSelection({
+    cadRefs: ["#"],
+    entry: STEP_ENTRY,
+    isAssemblyView: false
+  });
+  assert.equal(resolved.hasWholeEntryToken, true);
+  assert.deepEqual(resolved.selectedPartIds, [STEP_MODEL_ROOT_ID]);
+  assert.deepEqual(resolved.selectedReferenceIds, []);
+  assert.deepEqual(resolved.selectedMateIds, []);
 });
 
 test("selector ref query helpers classify and resolve selected references and parts", () => {

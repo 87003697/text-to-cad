@@ -44,7 +44,8 @@ export function useCadWorkspaceSelectors({
   const isInspectingAssemblyPart =
     isAssemblyView &&
     Boolean(inspectedAssemblyPartId) &&
-    String(inspectedAssemblyPart?.nodeType || "").trim() === "part";
+    String(inspectedAssemblyPart?.nodeType || "").trim() === "part" &&
+    !(Array.isArray(inspectedAssemblyPart?.children) && inspectedAssemblyPart.children.length > 0);
   const inspectedAssemblyPartReferences = useMemo(
     () => (Array.isArray(inspectedAssemblyPartTopologyReferences) ? inspectedAssemblyPartTopologyReferences : []),
     [inspectedAssemblyPartTopologyReferences]

@@ -475,6 +475,22 @@ test("assembly inspection helpers keep one inspected node and limit selectable c
         ]
       },
       {
+        id: "compound_part",
+        nodeType: "part",
+        children: [
+          {
+            id: "leaf_c",
+            nodeType: "part",
+            children: []
+          },
+          {
+            id: "leaf_d",
+            nodeType: "part",
+            children: []
+          }
+        ]
+      },
+      {
         id: "sibling",
         nodeType: "part",
         children: []
@@ -488,18 +504,21 @@ test("assembly inspection helpers keep one inspected node and limit selectable c
   assert.equal(normalizeAssemblyInspectionNodeId(root, "leaf_a"), "leaf_a");
   assert.equal(assemblyInspectionNode(root, "module")?.id, "module");
 
-  assert.deepEqual(selectableAssemblyNodeIdsForInspection(root, ""), ["module", "sibling"]);
+  assert.deepEqual(selectableAssemblyNodeIdsForInspection(root, ""), ["module", "compound_part", "sibling"]);
   assert.deepEqual(selectableAssemblyNodeIdsForInspection(root, "module"), ["leaf_a", "leaf_b"]);
+  assert.deepEqual(selectableAssemblyNodeIdsForInspection(root, "compound_part"), ["leaf_c", "leaf_d"]);
   assert.deepEqual(selectableAssemblyNodeIdsForInspection(root, "leaf_a"), []);
   assert.equal(selectableAssemblyNodeIdsForInspection(root, "module").includes("sibling"), false);
 
-  assert.deepEqual(treeSelectableAssemblyNodeIdsForInspection(root, ""), ["module", "leaf_a", "leaf_b", "sibling"]);
+  assert.deepEqual(treeSelectableAssemblyNodeIdsForInspection(root, ""), ["module", "compound_part", "sibling"]);
   assert.deepEqual(treeSelectableAssemblyNodeIdsForInspection(root, "module"), ["leaf_a", "leaf_b"]);
+  assert.deepEqual(treeSelectableAssemblyNodeIdsForInspection(root, "compound_part"), ["leaf_c", "leaf_d"]);
   assert.deepEqual(treeSelectableAssemblyNodeIdsForInspection(root, "leaf_a"), []);
   assert.equal(treeSelectableAssemblyNodeIdsForInspection(root, "module").includes("sibling"), false);
 
   assert.deepEqual(focusedLeafPartIdsForAssemblyInspection(root, ""), []);
   assert.deepEqual(focusedLeafPartIdsForAssemblyInspection(root, "module"), ["leaf_a", "leaf_b"]);
+  assert.deepEqual(focusedLeafPartIdsForAssemblyInspection(root, "compound_part"), ["leaf_c", "leaf_d"]);
   assert.deepEqual(focusedLeafPartIdsForAssemblyInspection(root, "leaf_a"), ["leaf_a"]);
 });
 

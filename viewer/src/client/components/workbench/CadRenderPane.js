@@ -204,6 +204,7 @@ export default function CadRenderPane({
   referenceSelectionDeferred = false,
   viewPlaneOffsetRight = 16,
   viewerMode,
+  assemblyPickingActive = false,
   assemblyParts,
   hiddenPartIds,
   selectedPartIds,
@@ -414,6 +415,7 @@ export default function CadRenderPane({
               topologySelectionUnavailable,
               topologySelectionDeferred,
               viewerMode,
+              assemblyPickingActive,
               focusedPartIds
             })}
           renderPartsIndividually={urdfMode ? true : (renderPartsIndividually || Boolean(resolvedStepParameters?.definition))}

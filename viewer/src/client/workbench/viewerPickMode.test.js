@@ -21,6 +21,17 @@ test("viewer pick mode switches focused assemblies to topology picking", () => {
   );
 });
 
+test("viewer pick mode keeps focused assemblies pickable when child components are active", () => {
+  assert.equal(
+    viewerPickModeForRenderPane({
+      viewerMode: "assembly",
+      assemblyPickingActive: true,
+      focusedPartIds: "o1.4"
+    }),
+    VIEWER_PICK_MODE.ASSEMBLY
+  );
+});
+
 test("viewer pick mode switches multi-focused assemblies to topology picking", () => {
   assert.equal(
     viewerPickModeForRenderPane({
