@@ -361,8 +361,11 @@ jobs:
             local label="$1"
             local project_root="$2"
             local project_id="$3"
+            local public_urls="$4"
             local deployment_output
             local deployment_url
+            local public_url
+            local public_status
 
             echo "::group::Deploy $label to Vercel production"
             (
@@ -377,18 +380,80 @@ jobs:
               echo "$deployment_output"
               deployment_url="$(printf '%s\n' "$deployment_output" | tail -n 1)"
 
+              for public_url in $public_urls; do
+                public_status="000"
+                for attempt in 1 2 3 4 5; do
+                  if ! public_status="$(curl --silent --show-error --location --max-time 30 --output /dev/null --write-out "%{http_code}" "$public_url")"; then
+                    public_status="000"
+                  fi
+                  if [ "$public_status" -ge 200 ] && [ "$public_status" -lt 400 ]; then
+                    echo "$label public URL check passed: $public_url returned HTTP $public_status"
+                    break
+                  fi
+                  if [ "$attempt" -lt 5 ]; then
+                    echo "$label public URL check waiting for $public_url; attempt $attempt returned HTTP $public_status"
+                    sleep 5
+                  fi
+                done
+                if [ "$public_status" -lt 200 ] || [ "$public_status" -ge 400 ]; then
+                  echo "$label public URL check failed: $public_url returned HTTP $public_status" >&2
+                  exit 1
+                fi
+              done
+
               {
                 echo "### $label"
                 echo
-                echo "Production deployment: $deployment_url"
+                echo "Public production URLs:"
+                for public_url in $public_urls; do
+                  echo "- $public_url"
+                done
+                echo
+                echo "Raw Vercel deployment URL: $deployment_url"
+                echo
+                echo "> Raw Vercel deployment URLs may require Vercel Authentication. Use the public production URLs above for release testing and sharing."
                 echo
               } >> "$GITHUB_STEP_SUMMARY"
             )
             echo "::endgroup::"
           }
 
-          deploy_vercel_project "Docs app" "docs" "$VERCEL_DOCS_PROJECT_ID"
-          deploy_vercel_project "Demo viewer app" "viewer" "$VERCEL_VIEWER_PROJECT_ID"
+          configure_vercel_project_protection() {
+            local label="$1"
+            local project_id="$2"
+            local response_file
+            local status
+
+            response_file="$(mktemp)"
+            if ! status="$(
+              curl --silent --show-error --location --max-time 30 \
+                --request PATCH \
+                --header "Authorization: Bearer $VERCEL_TOKEN" \
+                --header "Content-Type: application/json" \
+                --output "$response_file" \
+                --write-out "%{http_code}" \
+                --data '{"ssoProtection":{"deploymentType":"preview"}}' \
+                "https://api.vercel.com/v9/projects/$project_id?teamId=$VERCEL_ORG_ID"
+            )"; then
+              status="000"
+            fi
+
+            if [ "$status" -lt 200 ] || [ "$status" -ge 300 ]; then
+              echo "$label Vercel Authentication update failed with HTTP $status" >&2
+              cat "$response_file" >&2
+              rm -f "$response_file"
+              exit 1
+            fi
+
+            rm -f "$response_file"
+            echo "$label Vercel Authentication set to preview deployments only."
+          }
+
+          configure_vercel_project_protection "Docs app" "$VERCEL_DOCS_PROJECT_ID"
+          configure_vercel_project_protection "Demo viewer app" "$VERCEL_VIEWER_PROJECT_ID"
+
+          deploy_vercel_project "Docs app" "docs" "$VERCEL_DOCS_PROJECT_ID" "https://www.cadskills.xyz https://cadskills.xyz https://www.cad.fun https://cad.fun"
+          deploy_vercel_project "Demo viewer app" "viewer" "$VERCEL_VIEWER_PROJECT_ID" "https://demo.cadskills.xyz https://demo.cad.fun"
 
       - name: Create release tag and GitHub Release
         if: steps.gate.outputs.should_publish == 'true' && steps.request.outputs.target_branch == 'main'
