@@ -1,0 +1,161 @@
+name: Vercel Protection
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - develop
+
+concurrency:
+  group: vercel-protection
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  configure:
+    name: Configure Vercel protection
+    runs-on: ubuntu-latest
+    env:
+      VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+      VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
+      VERCEL_DOCS_PROJECT_ID: ${{ secrets.VERCEL_DOCS_PROJECT_ID }}
+      VERCEL_VIEWER_PROJECT_ID: ${{ secrets.VERCEL_VIEWER_PROJECT_ID }}
+    steps:
+      - name: Check required secrets
+        run: |
+          for name in VERCEL_TOKEN VERCEL_ORG_ID VERCEL_DOCS_PROJECT_ID VERCEL_VIEWER_PROJECT_ID; do
+            if [ -z "${!name:-}" ]; then
+              echo "Missing GitHub Actions secret: $name" >&2
+              exit 1
+            fi
+          done
+
+      - name: Configure production deployment access
+        run: |
+          node <<'NODE'
+          async function main() {
+          const requiredEnv = [
+            "VERCEL_TOKEN",
+            "VERCEL_ORG_ID",
+            "VERCEL_DOCS_PROJECT_ID",
+            "VERCEL_VIEWER_PROJECT_ID",
+          ];
+
+          for (const name of requiredEnv) {
+            if (!process.env[name]) {
+              throw new Error(`Missing environment variable: ${name}`);
+            }
+          }
+
+          const token = process.env.VERCEL_TOKEN;
+          const teamId = process.env.VERCEL_ORG_ID;
+          const projects = [
+            {
+              label: "Docs app",
+              id: process.env.VERCEL_DOCS_PROJECT_ID,
+              urls: [
+                "https://www.cadskills.xyz/",
+                "https://cadskills.xyz/",
+                "https://www.cad.fun/",
+                "https://cad.fun/",
+                "https://cadskillsxyz.vercel.app/",
+                "https://cadskillsxyz-jakehenryfitzs-projects.vercel.app/",
+                "https://cadskillsxyz-jakehenryfitz-jakehenryfitzs-projects.vercel.app/",
+              ],
+            },
+            {
+              label: "Demo viewer app",
+              id: process.env.VERCEL_VIEWER_PROJECT_ID,
+              urls: [
+                "https://demo.cadskills.xyz/",
+                "https://demo.cad.fun/",
+                "https://cadskills-demo-jakehenryfitzs-projects.vercel.app/",
+                "https://cadskills-demo-jakehenryfitz-jakehenryfitzs-projects.vercel.app/",
+              ],
+            },
+          ];
+
+          async function vercelFetch(url, options = {}) {
+            const response = await fetch(url, {
+              ...options,
+              headers: {
+                Authorization: `Bearer ${token}`,
+                "Content-Type": "application/json",
+                ...(options.headers || {}),
+              },
+            });
+            const text = await response.text();
+            let body = null;
+            if (text) {
+              try {
+                body = JSON.parse(text);
+              } catch {
+                body = text;
+              }
+            }
+            return { response, body };
+          }
+
+          async function configureProject(project) {
+            const endpoint = `https://api.vercel.com/v9/projects/${encodeURIComponent(project.id)}?teamId=${encodeURIComponent(teamId)}`;
+            const { response, body } = await vercelFetch(endpoint, {
+              method: "PATCH",
+              body: JSON.stringify({
+                ssoProtection: { deploymentType: "preview" },
+              }),
+            });
+            if (!response.ok) {
+              throw new Error(`${project.label} Vercel Authentication update failed with HTTP ${response.status}: ${JSON.stringify(body)}`);
+            }
+            console.log(`${project.label} Vercel Authentication set to preview deployments only.`);
+          }
+
+          async function getProject(project) {
+            const endpoint = `https://api.vercel.com/v9/projects/${encodeURIComponent(project.id)}?teamId=${encodeURIComponent(teamId)}`;
+            const { response, body } = await vercelFetch(endpoint);
+            if (!response.ok) {
+              throw new Error(`${project.label} project lookup failed with HTTP ${response.status}: ${JSON.stringify(body)}`);
+            }
+            return body;
+          }
+
+          async function assertPublicUrl(label, url) {
+            const controller = new AbortController();
+            const timeout = setTimeout(() => controller.abort(), 30000);
+            let response;
+            try {
+              response = await fetch(url, {
+                redirect: "follow",
+                signal: controller.signal,
+              });
+            } finally {
+              clearTimeout(timeout);
+            }
+
+            if (response.status < 200 || response.status >= 400) {
+              throw new Error(`${label} public URL check failed: ${url} returned HTTP ${response.status}`);
+            }
+            console.log(`${label} public URL check passed: ${url} returned HTTP ${response.status}`);
+          }
+
+          for (const project of projects) {
+            await configureProject(project);
+            const current = await getProject(project);
+            const urls = [...project.urls];
+            if (current?.latestDeployment?.url) {
+              urls.push(`https://${current.latestDeployment.url}/`);
+            }
+
+            for (const url of new Set(urls)) {
+              await assertPublicUrl(project.label, url);
+            }
+          }
+          }
+
+          main().catch((error) => {
+            console.error(error);
+            process.exit(1);
+          });
+          NODE
