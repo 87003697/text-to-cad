@@ -61,6 +61,7 @@ import {
 import {
   FILE_SHEET_SECTION_IDS,
   defaultOpenFileSheetSectionIds,
+  fileSheetSectionIdsWithOpenSection,
   normalizeFileSheetOpenSectionIds,
   renderedFileSheetSectionIds,
   shouldOpenFileSheetForSelectionReveal
@@ -257,6 +258,7 @@ import {
   validateGeneratedStepArtifactPayload
 } from "@/workbench/stepArtifactStatus";
 import {
+  FILE_STATUS_LEVELS,
   buildFileStatusItems,
   fileStatusHasWarningsOrErrors,
   mostIntenseFileStatusLevel
@@ -3688,6 +3690,29 @@ export default function CadWorkspace({
     }
     setFileSheetOpenSectionIds(normalizedSectionIds);
   }, [fileSheetOpenSectionIds, renderedSelectedFileSheetSectionIds]);
+
+  useEffect(() => {
+    if (selectedFileStatusLevel !== FILE_STATUS_LEVELS.ERROR) {
+      return;
+    }
+    setFileSheetOpenSectionIds((current) => {
+      const baseSectionIds = normalizeFileSheetOpenSectionIds(
+        Array.isArray(current) ? current : defaultSelectedFileSheetOpenSectionIds,
+        renderedSelectedFileSheetSectionIds
+      );
+      const nextSectionIds = fileSheetSectionIdsWithOpenSection(
+        baseSectionIds,
+        renderedSelectedFileSheetSectionIds,
+        FILE_SHEET_SECTION_IDS.FILE_STATUS
+      );
+      return orderedStringListEqual(nextSectionIds, baseSectionIds) ? current : nextSectionIds;
+    });
+  }, [
+    defaultSelectedFileSheetOpenSectionIds,
+    renderedSelectedFileSheetSectionIds,
+    selectedFileStatusLevel,
+    selectedKey
+  ]);
 
   useEffect(() => {
     if (selectedFileSheetKind !== RENDER_FORMAT.IMPLICIT) {

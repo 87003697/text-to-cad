@@ -3,6 +3,7 @@ import test from "node:test";
 
 import {
   defaultOpenFileSheetSectionIds,
+  fileSheetSectionIdsWithOpenSection,
   renderedFileSheetSectionIds,
   shouldOpenFileSheetForSelectionReveal
 } from "./fileSheetSections.js";
@@ -45,6 +46,25 @@ test("rendered file sheet sections include closed-by-default sections", () => {
   assert.deepEqual(renderedFileSheetSectionIds("mesh"), ["display", "appearance", "metadata"]);
   assert.deepEqual(renderedFileSheetSectionIds("implicit"), ["graphics", "display", "appearance", "metadata"]);
   assert.deepEqual(renderedFileSheetSectionIds("implicit", { hasImplicitParameterPanel: true }), ["parameters", "graphics", "display", "appearance", "metadata"]);
+});
+
+test("file sheet section helper opens only rendered sections", () => {
+  assert.deepEqual(
+    fileSheetSectionIdsWithOpenSection(["tree"], ["status", "tree", "metadata"], "status"),
+    ["tree", "status"]
+  );
+  assert.deepEqual(
+    fileSheetSectionIdsWithOpenSection(["status", "tree"], ["status", "tree"], "status"),
+    ["status", "tree"]
+  );
+  assert.deepEqual(
+    fileSheetSectionIdsWithOpenSection(["tree"], ["tree", "metadata"], "status"),
+    ["tree"]
+  );
+  assert.deepEqual(
+    fileSheetSectionIdsWithOpenSection(["tree", "unknown"], ["status", "tree"], ""),
+    ["tree"]
+  );
 });
 
 test("viewer-origin selection reveals do not open the file sheet on mobile", () => {

@@ -147,6 +147,18 @@ export function normalizeFileSheetOpenSectionIds(sectionIds, renderedSectionIds)
   return normalizeSectionIds(sectionIds).filter((sectionId) => rendered.has(sectionId));
 }
 
+export function fileSheetSectionIdsWithOpenSection(sectionIds, renderedSectionIds, sectionId) {
+  const normalizedSectionId = normalizeString(sectionId);
+  const normalizedSectionIds = normalizeFileSheetOpenSectionIds(sectionIds, renderedSectionIds);
+  if (!normalizedSectionId || !normalizeSectionIds(renderedSectionIds).includes(normalizedSectionId)) {
+    return normalizedSectionIds;
+  }
+  if (normalizedSectionIds.includes(normalizedSectionId)) {
+    return normalizedSectionIds;
+  }
+  return [...normalizedSectionIds, normalizedSectionId];
+}
+
 export function shouldOpenFileSheetForSelectionReveal({ isDesktop = true, source = "viewer" } = {}) {
   return isDesktop || normalizeString(source) !== "viewer";
 }
