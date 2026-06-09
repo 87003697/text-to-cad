@@ -23,6 +23,7 @@ import {
 import {
   contentTypeForFileRef,
   createVercelBlobAssetBackend,
+  normalizeVercelBlobCatalog,
 } from "../src/server/vercelBlobAssetBackend.mjs";
 import {
   envValue,
@@ -912,12 +913,12 @@ export function rewriteCatalogForBlob(catalog, {
   repoRoot,
   rootPath,
 } = {}) {
-  return {
+  return normalizeVercelBlobCatalog({
     schemaVersion: CAD_CATALOG_SCHEMA_VERSION,
     entries: (Array.isArray(catalog?.entries) ? catalog.entries : []).map((entry) => (
       rewriteCatalogEntry(entry, { uploads, repoRoot, rootPath })
     )),
-  };
+  });
 }
 
 export function catalogJsonBody(catalog) {

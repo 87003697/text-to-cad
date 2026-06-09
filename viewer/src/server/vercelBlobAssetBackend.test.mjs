@@ -4,6 +4,7 @@ import test from "node:test";
 import {
   contentTypeForFileRef,
   createVercelBlobAssetBackend,
+  normalizeVercelBlobCatalog,
 } from "./vercelBlobAssetBackend.mjs";
 
 test("Vercel Blob backend uses browser-safe MIME types for served modules", () => {
@@ -103,6 +104,60 @@ test("Vercel Blob backend prefers public catalog URLs when available", async () 
     schemaVersion: 4,
     url: "https://blob.test/demo/catalog.json",
   });
+});
+
+test("Vercel Blob backend suppresses Python source-path artifact warnings", async () => {
+  const catalog = {
+    schemaVersion: 4,
+    entries: [
+      {
+        file: "parts/bracket.step",
+        kind: "part",
+        sourceKind: "python",
+        artifact: {
+          ok: false,
+          error: "missing_source_path",
+          sourceKind: "python",
+          stepPath: "parts/bracket.step",
+          glbPath: "parts/.bracket.step.glb",
+          message: "GLB STEP_topology is missing required sourcePath identity: parts/.bracket.step.glb.",
+        },
+      },
+      {
+        file: "parts/imported.step",
+        kind: "part",
+        sourceKind: "step",
+        artifact: {
+          ok: false,
+          error: "missing_source_path",
+          sourceKind: "step",
+        },
+      },
+      {
+        file: "parts/edge.step",
+        kind: "part",
+        sourceKind: "python",
+        artifact: {
+          ok: false,
+          error: "missing_edge_topology",
+          sourceKind: "python",
+        },
+      },
+    ],
+  };
+  const backend = createVercelBlobAssetBackend({
+    prefix: "demo",
+    catalogUrl: "https://blob.test/demo/catalog.json",
+    fetchImpl: async () => ({
+      ok: true,
+      json: async () => catalog,
+    }),
+  });
+
+  assert.equal(normalizeVercelBlobCatalog(catalog).entries[0].artifact, undefined);
+  assert.equal((await backend.readCatalog()).entries[0].artifact, undefined);
+  assert.equal((await backend.readCatalog()).entries[1].artifact.error, "missing_source_path");
+  assert.equal((await backend.readCatalog()).entries[2].artifact.error, "missing_edge_topology");
 });
 
 test("Vercel Blob backend reads catalog and writes deterministic asset paths", async () => {

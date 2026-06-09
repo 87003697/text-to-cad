@@ -57,6 +57,59 @@ function normalizeString(value) {
   return String(value || "").trim();
 }
 
+function sourceKindIsPython(value) {
+  return normalizeString(value).toLowerCase() === "python";
+}
+
+function artifactErrorCode(artifact) {
+  const rawError = artifact?.error;
+  if (rawError && typeof rawError === "object" && !Array.isArray(rawError)) {
+    return normalizeString(rawError.code);
+  }
+  return normalizeString(rawError || artifact?.code);
+}
+
+function shouldSuppressHostedPythonArtifactWarning(entry) {
+  const artifact = entry?.artifact;
+  if (!artifact || typeof artifact !== "object" || Array.isArray(artifact)) {
+    return false;
+  }
+  if (artifactErrorCode(artifact) !== "missing_source_path") {
+    return false;
+  }
+  return (
+    sourceKindIsPython(entry?.sourceKind) ||
+    sourceKindIsPython(entry?.stepSourceKind) ||
+    sourceKindIsPython(artifact?.sourceKind)
+  );
+}
+
+function normalizeVercelBlobCatalogEntry(entry) {
+  if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
+    return entry;
+  }
+  if (!shouldSuppressHostedPythonArtifactWarning(entry)) {
+    return entry;
+  }
+  const { artifact, ...nextEntry } = entry;
+  return nextEntry;
+}
+
+export function normalizeVercelBlobCatalog(catalog) {
+  if (!catalog || typeof catalog !== "object" || Array.isArray(catalog) || !Array.isArray(catalog.entries)) {
+    return catalog;
+  }
+  let changed = false;
+  const entries = catalog.entries.map((entry) => {
+    const nextEntry = normalizeVercelBlobCatalogEntry(entry);
+    if (nextEntry !== entry) {
+      changed = true;
+    }
+    return nextEntry;
+  });
+  return changed ? { ...catalog, entries } : catalog;
+}
+
 function sourceUrlFromEntry(entry) {
   return normalizeString(entry?.sourceUrl || entry?.source?.url);
 }
@@ -216,7 +269,7 @@ export function createVercelBlobAssetBackend({
 
   async function readCatalog() {
     if (resolvedCatalogUrl) {
-      return readJsonFromUrl(resolvedCatalogUrl, { fetchImpl });
+      return normalizeVercelBlobCatalog(await readJsonFromUrl(resolvedCatalogUrl, { fetchImpl }));
     }
     if (hasBlobSdkReadCredentials(token)) {
       const blob = await blobClient();
@@ -225,10 +278,10 @@ export function createVercelBlobAssetBackend({
         if (token) {
           getOptions.token = token;
         }
-        return readJsonFromBlobGetResult(
+        return normalizeVercelBlobCatalog(await readJsonFromBlobGetResult(
           await blob.get(normalizedCatalogPath, getOptions),
           normalizedCatalogPath
-        );
+        ));
       }
     }
     const blob = await blobClient();
@@ -239,7 +292,7 @@ export function createVercelBlobAssetBackend({
     if (!catalogBlob?.url) {
       throw new Error(`Vercel Blob catalog not found: ${normalizedCatalogPath}`);
     }
-    return readJsonFromUrl(catalogBlob.url, { fetchImpl });
+    return normalizeVercelBlobCatalog(await readJsonFromUrl(catalogBlob.url, { fetchImpl }));
   }
 
   async function writeAsset({ fileRef, body, contentType = "application/octet-stream" } = {}) {
@@ -258,11 +311,12 @@ export function createVercelBlobAssetBackend({
   }
 
   async function writeCatalog(catalog) {
+    const normalizedCatalog = normalizeVercelBlobCatalog(catalog);
     return writeAsset({
       fileRef: catalogPath || "catalog.json",
       body: JSON.stringify({
         schemaVersion: 4,
-        entries: Array.isArray(catalog?.entries) ? catalog.entries : [],
+        entries: Array.isArray(normalizedCatalog?.entries) ? normalizedCatalog.entries : [],
       }, null, 2),
       contentType: "application/json; charset=utf-8",
     });

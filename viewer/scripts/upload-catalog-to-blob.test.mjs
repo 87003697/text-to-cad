@@ -143,6 +143,14 @@ test("rewriteCatalogForBlob annotates STEP assets without publishing Python sour
           sourceKind: "python",
           sourcePath: "models/parts/bracket.py",
         },
+        artifact: {
+          ok: false,
+          error: "missing_source_path",
+          sourceKind: "python",
+          stepPath: "parts/bracket.step",
+          glbPath: "parts/.bracket.step.glb",
+          message: "GLB STEP_topology is missing required sourcePath identity: parts/.bracket.step.glb.",
+        },
       },
     ],
   }, {
@@ -160,7 +168,37 @@ test("rewriteCatalogForBlob annotates STEP assets without publishing Python sour
   assert.equal(catalog.entries[0].sourceKind, "python");
   assert.equal(catalog.entries[0].source, undefined);
   assert.equal(catalog.entries[0].sourceStatus, undefined);
+  assert.equal(catalog.entries[0].artifact, undefined);
   assert.equal(JSON.stringify(catalog).includes(".py"), false);
+});
+
+test("rewriteCatalogForBlob keeps non-source-path STEP artifact warnings", () => {
+  const repoRoot = makeTempRepo();
+  const rootPath = path.join(repoRoot, "models");
+  const catalog = rewriteCatalogForBlob({
+    schemaVersion: 4,
+    entries: [
+      {
+        file: "parts/bracket.step",
+        kind: "part",
+        sourceKind: "python",
+        artifact: {
+          ok: false,
+          error: "missing_edge_topology",
+          sourceKind: "python",
+          stepPath: "parts/bracket.step",
+          glbPath: "parts/.bracket.step.glb",
+          message: "STEP topology validation requires readable STEP_topology edgeView in the GLB.",
+        },
+      },
+    ],
+  }, {
+    uploads: new Map(),
+    repoRoot,
+    rootPath,
+  });
+
+  assert.equal(catalog.entries[0].artifact.error, "missing_edge_topology");
 });
 
 test("uploadCatalogDirectoryToVercelBlob applies default catalog exclusions", async () => {
