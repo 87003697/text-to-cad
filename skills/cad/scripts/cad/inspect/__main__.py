@@ -3,17 +3,13 @@ from __future__ import annotations
 from pathlib import Path
 import sys
 
-
-SCRIPTS_DIR = Path(__file__).resolve().parent
+TOOL_DIR = Path(__file__).resolve().parent
+SCRIPTS_DIR = TOOL_DIR.parents[1]
 scripts_path = str(SCRIPTS_DIR)
-added_scripts_path = scripts_path not in sys.path
-if added_scripts_path:
+if scripts_path not in sys.path:
     sys.path.insert(0, scripts_path)
 
 from cad.inspect.cli import main
-
-if added_scripts_path:
-    sys.path.remove(scripts_path)
 
 
 if __name__ == "__main__":
