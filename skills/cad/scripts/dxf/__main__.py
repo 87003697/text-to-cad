@@ -4,10 +4,10 @@ import sys
 from pathlib import Path
 
 if __package__ in {None, ""}:
-    scripts_dir = Path(__file__).resolve().parents[2]
-    if str(scripts_dir) not in sys.path:
-        sys.path.insert(0, str(scripts_dir))
-    from cad.dxf.cli import main
+    tool_dir = Path(__file__).resolve().parent
+    if str(tool_dir) not in sys.path:
+        sys.path.insert(0, str(tool_dir))
+    from cli import main
 else:
     from .cli import main
 

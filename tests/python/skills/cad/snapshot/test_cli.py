@@ -13,8 +13,8 @@ from tests.python.support.paths import add_repo_path, repo_path
 
 add_repo_path("skills/cad/scripts")
 
-import cad.snapshot.__main__ as snapshot_main
-from cad.snapshot.__main__ import (
+import snapshot.__main__ as snapshot_main
+from snapshot.__main__ import (
     RENDER_HTML_PATH,
     RUNTIME_DIR,
     SnapshotError,
@@ -51,7 +51,7 @@ class SnapshotCliTests(unittest.TestCase):
     def test_cli_import_does_not_import_heavy_cad_modules(self) -> None:
         skill_root = repo_path("skills/cad")
         code = (
-            "import sys; sys.path.insert(0, 'scripts'); import cad.snapshot.__main__; "
+            "import sys; sys.path.insert(0, 'scripts'); import snapshot.__main__; "
             "print('OCP.OCP' in sys.modules); "
             "print('cadpy.step_scene' in sys.modules)"
         )
@@ -570,7 +570,7 @@ class SnapshotCliTests(unittest.TestCase):
         self.assertNotIn("--single-process", captured_launch_options.get("args") or [])
 
     def test_snapshot_tool_has_no_sideways_runtime_dependencies(self) -> None:
-        snapshot_root = repo_path("skills/cad/scripts/cad/snapshot")
+        snapshot_root = repo_path("skills/cad/scripts/snapshot")
         checked_files = [
             snapshot_root / "__main__.py",
             snapshot_root / "runtime" / "render.html",

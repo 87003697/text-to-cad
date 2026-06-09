@@ -17,7 +17,7 @@ from typing import Any
 from urllib.parse import quote, unquote, urlparse
 
 
-SCRIPTS_DIR = Path(__file__).resolve().parents[2]
+SCRIPTS_DIR = Path(__file__).resolve().parents[1]
 PACKAGES_DIR = SCRIPTS_DIR / "packages"
 CADPY_SRC_DIR = PACKAGES_DIR / "cadpy" / "src"
 for runtime_path in (SCRIPTS_DIR, PACKAGES_DIR, CADPY_SRC_DIR):

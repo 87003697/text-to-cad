@@ -8,10 +8,10 @@ from unittest import mock
 
 from tests.python.support.paths import add_repo_path
 
-add_repo_path("skills/cad/scripts")
+add_repo_path("skills/cad/scripts/inspect")
 
-from cad.inspect.inspect_refs import cli as inspect_cli
-from cad.inspect.inspect_refs import inspect as refs_inspect
+from inspect_refs import cli as inspect_cli
+from inspect_refs import inspect as refs_inspect
 from cadpy import cad_ref_syntax as refs_syntax
 from cadpy import assembly_spec
 from cadpy import generation as cad_generation

@@ -26,8 +26,8 @@ class InspectCliWrapperTests(unittest.TestCase):
         skill_root = repo_path("skills/cad")
         code = (
             "import sys; "
-            "sys.path.insert(0, 'scripts'); "
-            "import cad.inspect.inspect_refs.cli; "
+            "sys.path.insert(0, 'scripts/inspect'); "
+            "import inspect_refs.cli; "
             "print('OCP.OCP' in sys.modules); "
             "print('cadpy.step_scene' in sys.modules)"
         )
