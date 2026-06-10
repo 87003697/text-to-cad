@@ -56,8 +56,18 @@ test("parseAgentStartArgs consumes launcher mode and preserves server flags", as
       directory,
       shutdownAfterMs: twelveHoursMs,
       portScanLimit: 64,
+      jsonResult: false,
     }
   );
+});
+
+test("parseAgentStartArgs --json sets jsonResult and is not forwarded to the server", async (t) => {
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "cad-viewer-agent-start-directory-"));
+  t.after(() => fs.rm(directory, { recursive: true, force: true }));
+
+  const result = parseAgentStartArgs(["--dir", directory, "--host", "127.0.0.1", "--json"]);
+  assert.equal(result.jsonResult, true);
+  assert.ok(!result.forwardedArgs.includes("--json"), "--json must not be forwarded to the server");
 });
 
 test("forwardedDefaultRootDir reads and strips default directory flags", () => {
