@@ -1104,11 +1104,11 @@ export default {
         description: "March lifts the knees with planted stance feet; stride sweeps the legs treadmill-style; run adds flight phases and body bounce; jump is a springy in-place hop with hands in the air.",
         default: "march",
         options: [
-          { value: "march", label: "March in place" },
-          { value: "stride", label: "Stride in place" },
-          { value: "run", label: "Run in place" },
+          { value: "routine", label: "Routine (kick, handstand, dance)" },
           { value: "jump", label: "Jump in place" },
-          { value: "routine", label: "Routine (kick, handstand, dance)" }
+          { value: "run", label: "Run in place" },
+          { value: "stride", label: "Stride in place" },
+          { value: "march", label: "March in place" }
         ]
       },
       strideLength: {
@@ -1148,34 +1148,15 @@ export default {
         step: 0.01
       }
     },
+    // Ordered most exciting first — this is the order the viewer lists them.
     animations: {
-      walkLoop: {
-        label: "Walk in place",
-        description: "Continuous march loop; scrub the gait phase or scale lift/swing/sway live.",
-        duration: 1.5,
+      routineLoop: {
+        label: "Routine: kick, handstand, dance",
+        description: "Fixed choreography loop: a chambered karate front kick off the left leg, a toe-pivot fold into a held handstand, and a four-beat sway-and-point dance back in the ready stance.",
+        duration: 12,
         loop: true,
         update({ cycle, set }) {
-          set("gait", "march");
-          set("phase", ((finite(cycle, 0) % 1) + 1) % 1);
-        }
-      },
-      strideLoop: {
-        label: "Stride in place",
-        description: "Bigger strides: legs sweep back and forward with the stance foot sliding flat on the ground, wider arm swing, stronger torso counter-sway.",
-        duration: 1.9,
-        loop: true,
-        update({ cycle, set }) {
-          set("gait", "stride");
-          set("phase", ((finite(cycle, 0) % 1) + 1) % 1);
-        }
-      },
-      runLoop: {
-        label: "Run in place",
-        description: "Running cadence with flight phases: body bounce, toe-pivot push-off, high heel recovery, forward lean, and pumping bent arms.",
-        duration: 0.8,
-        loop: true,
-        update({ cycle, set }) {
-          set("gait", "run");
+          set("gait", "routine");
           set("phase", ((finite(cycle, 0) % 1) + 1) % 1);
         }
       },
@@ -1189,13 +1170,33 @@ export default {
           set("phase", ((finite(cycle, 0) % 1) + 1) % 1);
         }
       },
-      routineLoop: {
-        label: "Routine: kick, handstand, dance",
-        description: "Fixed choreography loop: a chambered karate front kick off the left leg, a toe-pivot fold into a held handstand, and a four-beat sway-and-point dance back in the ready stance.",
-        duration: 12,
+      runLoop: {
+        label: "Run in place",
+        description: "Running cadence with flight phases: body bounce, toe-pivot push-off, high heel recovery, forward lean, and pumping bent arms.",
+        duration: 0.8,
         loop: true,
         update({ cycle, set }) {
-          set("gait", "routine");
+          set("gait", "run");
+          set("phase", ((finite(cycle, 0) % 1) + 1) % 1);
+        }
+      },
+      strideLoop: {
+        label: "Stride in place",
+        description: "Bigger strides: legs sweep back and forward with the stance foot sliding flat on the ground, wider arm swing, stronger torso counter-sway.",
+        duration: 1.9,
+        loop: true,
+        update({ cycle, set }) {
+          set("gait", "stride");
+          set("phase", ((finite(cycle, 0) % 1) + 1) % 1);
+        }
+      },
+      walkLoop: {
+        label: "Walk in place",
+        description: "Continuous march loop; scrub the gait phase or scale lift/swing/sway live.",
+        duration: 1.5,
+        loop: true,
+        update({ cycle, set }) {
+          set("gait", "march");
           set("phase", ((finite(cycle, 0) % 1) + 1) % 1);
         }
       }
