@@ -34,6 +34,10 @@ Chain offsets (parent-local joint origins, mm):
   forearm:  wrist roll (0,0,-150)
   wrist:    wrist pitch (0,0,-28)
   collar:   neck pitch (0,0,46)
+
+Chain offsets and pose angles are shared with the URDF/SRDF generators via
+juno_parts/chain.py; gen_urdf()/gen_srdf() emit juno.urdf/juno.srdf from
+the same spec (see juno_parts/description.py).
 """
 
 from __future__ import annotations
@@ -42,6 +46,7 @@ from build123d import Compound
 
 from cadpy.assembly import AssemblyHelper
 
+from juno_parts import chain
 from juno_parts.arms import build_bicep, build_forearm
 from juno_parts.hand import build_hand
 from juno_parts.head import build_head
@@ -61,31 +66,31 @@ from juno_parts.torso import build_torso
 
 # ----------------------------------------------------------- pose (degrees)
 # Athletic ready stance: knees bent, feet flat, arms relaxed forward.
-HIP_PITCH_DEG = -16.0
-KNEE_DEG = 32.0
-ANKLE_PITCH_DEG = -16.0
-HIP_ROLL_ABDUCT_DEG = 3.0       # left +, right -; ankle roll compensates
-HIP_YAW_DEG = 0.0
-WAIST_YAW_DEG = 0.0
-SHOULDER_PITCH_DEG = -8.0      # negative swings the arm forward
-SHOULDER_ROLL_ABDUCT_DEG = 8.0  # elbows out
-SHOULDER_YAW_INTERNAL_DEG = 8.0
-ELBOW_DEG = -20.0               # negative flexes the forearm forward
-WRIST_ROLL_DEG = 0.0
-WRIST_PITCH_DEG = -2.0
-NECK_YAW_DEG = 0.0
-NECK_PITCH_DEG = -2.0
+# Pose angles and chain offsets are shared with the URDF/SRDF generators
+# through juno_parts/chain.py; edit them there.
+HIP_PITCH_DEG = chain.HIP_PITCH_DEG
+KNEE_DEG = chain.KNEE_DEG
+ANKLE_PITCH_DEG = chain.ANKLE_PITCH_DEG
+HIP_ROLL_ABDUCT_DEG = chain.HIP_ROLL_ABDUCT_DEG
+HIP_YAW_DEG = chain.HIP_YAW_DEG
+WAIST_YAW_DEG = chain.WAIST_YAW_DEG
+SHOULDER_PITCH_DEG = chain.SHOULDER_PITCH_DEG
+SHOULDER_ROLL_ABDUCT_DEG = chain.SHOULDER_ROLL_ABDUCT_DEG
+SHOULDER_YAW_INTERNAL_DEG = chain.SHOULDER_YAW_INTERNAL_DEG
+ELBOW_DEG = chain.ELBOW_DEG
+WRIST_ROLL_DEG = chain.WRIST_ROLL_DEG
+WRIST_PITCH_DEG = chain.WRIST_PITCH_DEG
+NECK_YAW_DEG = chain.NECK_YAW_DEG
+NECK_PITCH_DEG = chain.NECK_PITCH_DEG
 
-HIP_Y = 90.0
-SHOULDER_Y = 148.0
+HIP_Y = chain.HIP_Y_MM
+SHOULDER_Y = chain.SHOULDER_Y_MM
 
-X = (1.0, 0.0, 0.0)
-Y = (0.0, 1.0, 0.0)
-Z = (0.0, 0.0, 1.0)
+X = chain.X_AXIS
+Y = chain.Y_AXIS
+Z = chain.Z_AXIS
 
-
-def _s(side: str) -> float:
-    return 1.0 if side == "left" else -1.0
+_s = chain.side_sign
 
 
 def assemble() -> Compound:
@@ -95,18 +100,18 @@ def assemble() -> Compound:
     torso = asm.add(build_torso(), "torso")
     revolute_attach(
         asm, pelvis, torso, "waist_yaw",
-        (0, 0, 0), Z, X, (0, 0, 0), Z, X, WAIST_YAW_DEG,
+        chain.WAIST_YAW_ORIGIN_MM, Z, X, (0, 0, 0), Z, X, WAIST_YAW_DEG,
     )
 
     collar = asm.add(build_neck_collar(), "neck_collar")
     revolute_attach(
         asm, torso, collar, "neck_yaw",
-        (0, 0, 324), Z, X, (0, 0, 0), Z, X, NECK_YAW_DEG,
+        chain.NECK_YAW_ORIGIN_MM, Z, X, (0, 0, 0), Z, X, NECK_YAW_DEG,
     )
     head = asm.add(build_head(), "head")
     revolute_attach(
         asm, collar, head, "neck_pitch",
-        (0, 0, 46), Y, X, (0, 0, 0), Y, X, NECK_PITCH_DEG,
+        chain.NECK_PITCH_ORIGIN_MM, Y, X, (0, 0, 0), Y, X, NECK_PITCH_DEG,
     )
 
     for side in ("left", "right"):
@@ -116,64 +121,65 @@ def assemble() -> Compound:
         bracket = asm.add(build_hip_bracket(side), f"hip_bracket_{side}")
         revolute_attach(
             asm, pelvis, bracket, f"hip_yaw_{side}",
-            (0, s * HIP_Y, -120), Z, X, (0, 0, 0), Z, X, HIP_YAW_DEG,
+            (0, s * HIP_Y, chain.HIP_YAW_DROP_Z_MM), Z, X, (0, 0, 0), Z, X, HIP_YAW_DEG,
         )
         carrier = asm.add(build_hip_carrier(side), f"hip_carrier_{side}")
         revolute_attach(
             asm, bracket, carrier, f"hip_roll_{side}",
-            (0, 0, -64), X, Y, (0, 0, 0), X, Y, s * HIP_ROLL_ABDUCT_DEG,
+            chain.HIP_ROLL_ORIGIN_MM, X, Y, (0, 0, 0), X, Y, s * HIP_ROLL_ABDUCT_DEG,
         )
         thigh = asm.add(build_thigh(side), f"thigh_{side}")
         revolute_attach(
             asm, carrier, thigh, f"hip_pitch_{side}",
-            (0, 0, -78), Y, X, (0, 0, 0), Y, X, HIP_PITCH_DEG,
+            chain.HIP_PITCH_ORIGIN_MM, Y, X, (0, 0, 0), Y, X, HIP_PITCH_DEG,
         )
         shin = asm.add(build_shin(side), f"shin_{side}")
         revolute_attach(
             asm, thigh, shin, f"knee_{side}",
-            (0, 0, -290), Y, X, (0, 0, 0), Y, X, KNEE_DEG,
+            chain.KNEE_ORIGIN_MM, Y, X, (0, 0, 0), Y, X, KNEE_DEG,
         )
         ankle = asm.add(build_ankle_link(side), f"ankle_link_{side}")
         revolute_attach(
             asm, shin, ankle, f"ankle_pitch_{side}",
-            (0, 0, -290), Y, X, (0, 0, 0), Y, X, ANKLE_PITCH_DEG,
+            chain.ANKLE_PITCH_ORIGIN_MM, Y, X, (0, 0, 0), Y, X, ANKLE_PITCH_DEG,
         )
         foot = asm.add(build_foot(side), f"foot_{side}")
         revolute_attach(
             asm, ankle, foot, f"ankle_roll_{side}",
-            (0, 0, -30), X, Y, (0, 0, 0), X, Y, -s * HIP_ROLL_ABDUCT_DEG,
+            chain.ANKLE_ROLL_ORIGIN_MM, X, Y, (0, 0, 0), X, Y, -s * HIP_ROLL_ABDUCT_DEG,
         )
 
         # ---- arm chain (6 DOF)
         pod = asm.add(build_shoulder_pod(side), f"shoulder_pod_{side}")
         revolute_attach(
             asm, torso, pod, f"shoulder_pitch_{side}",
-            (0, s * SHOULDER_Y, 290), Y, X, (0, 0, 0), Y, X, SHOULDER_PITCH_DEG,
+            (0, s * SHOULDER_Y, chain.SHOULDER_PITCH_RAISE_Z_MM), Y, X, (0, 0, 0), Y, X, SHOULDER_PITCH_DEG,
         )
         housing = asm.add(build_yaw_housing(side), f"yaw_housing_{side}")
         revolute_attach(
             asm, pod, housing, f"shoulder_roll_{side}",
-            (0, s * 34, -72), X, Y, (0, 0, 0), X, Y, s * SHOULDER_ROLL_ABDUCT_DEG,
+            (0, s * chain.SHOULDER_ROLL_Y_MM, chain.SHOULDER_ROLL_Z_MM), X, Y,
+            (0, 0, 0), X, Y, s * SHOULDER_ROLL_ABDUCT_DEG,
         )
         bicep = asm.add(build_bicep(side), f"bicep_{side}")
         revolute_attach(
             asm, housing, bicep, f"shoulder_yaw_{side}",
-            (0, 0, -24), Z, X, (0, 0, 0), Z, X, -s * SHOULDER_YAW_INTERNAL_DEG,
+            chain.SHOULDER_YAW_ORIGIN_MM, Z, X, (0, 0, 0), Z, X, -s * SHOULDER_YAW_INTERNAL_DEG,
         )
         forearm = asm.add(build_forearm(side), f"forearm_{side}")
         revolute_attach(
             asm, bicep, forearm, f"elbow_{side}",
-            (0, 0, -156), Y, X, (0, 0, 0), Y, X, ELBOW_DEG,
+            chain.ELBOW_ORIGIN_MM, Y, X, (0, 0, 0), Y, X, ELBOW_DEG,
         )
         wrist = asm.add(build_wrist_carrier(side), f"wrist_carrier_{side}")
         revolute_attach(
             asm, forearm, wrist, f"wrist_roll_{side}",
-            (0, 0, -150), Z, X, (0, 0, 0), Z, X, WRIST_ROLL_DEG,
+            chain.WRIST_ROLL_ORIGIN_MM, Z, X, (0, 0, 0), Z, X, WRIST_ROLL_DEG,
         )
         hand = asm.add(build_hand(side), f"hand_{side}")
         revolute_attach(
             asm, wrist, hand, f"wrist_pitch_{side}",
-            (0, 0, -28), Y, X, (0, 0, 0), Y, X, WRIST_PITCH_DEG,
+            chain.WRIST_PITCH_ORIGIN_MM, Y, X, (0, 0, 0), Y, X, WRIST_PITCH_DEG,
         )
 
     return asm.build()
@@ -181,3 +187,15 @@ def assemble() -> Compound:
 
 def gen_step():
     return assemble()
+
+
+def gen_urdf():
+    from juno_parts.description import build_urdf
+
+    return {"xml": build_urdf()}
+
+
+def gen_srdf():
+    from juno_parts.description import build_srdf
+
+    return {"xml": build_srdf(), "urdf": "juno.urdf"}
