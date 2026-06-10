@@ -40,13 +40,15 @@ Hands add posed (cosmetic) finger articulation on top of the 27 counted DOF.
   `runLoop` (flight phases, body bounce, toe-pivot push-off, pumping bent
   arms, forward lean), and `jumpLoop` (countermovement hop with hands
   overhead and an underdamped springy landing). All gaits share antiphase
-  arm swing, torso counter-sway, and head stabilization. `routineLoop`
-  chains a fixed choreography: a chambered karate front kick, a toe-pivot
-  fold into a held handstand (whole-body root rotation with per-frame
-  toe/palm contact anchoring), and a four-beat sway-and-point dance.
-  Controls: `phase`, `gait`, `strideLength`, `legLift`, `armSwing`,
-  `torsoSway`. Occurrence refs `#o1.1..#o1.28` follow the `asm.add`
-  order in `juno.py`.
+  arm swing, torso counter-sway, and head stabilization. Three showpiece
+  loops: `danceLoop` (Elvis: right finger pointing up to the right, left
+  leg kicked out to the left on a shaking planted toe via closed-form
+  lateral+sagittal leg IK), `handstandLoop` (toe-pivot fold to a
+  palms-flat inverted hold, whole-body root rotation with per-frame
+  toe/palm contact anchoring), and `kickLoop` (chambered karate front
+  kick behind a fists-up guard). Controls: `phase`, `gait`,
+  `strideLength`, `legLift`, `armSwing`, `torsoSway`. Occurrence refs
+  `#o1.1..#o1.28` follow the `asm.add` order in `juno.py`.
 - `juno.urdf` — generated URDF (derived artifact): a frame-only
   `base_footprint` ground root plus 28 physical links and 27 revolute
   joints (zero pose stands with soles on z = 0), per-link 3MF mesh

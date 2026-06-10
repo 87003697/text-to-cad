@@ -133,11 +133,8 @@ const JUMP_ARM_SPRING_DEG_PER_MM = 0.3; // landing arm dip coupled to body sprin
 const JUMP_LEAN_DEG = 8;          // crouch/landing forward lean
 const JUMP_HEAD_UP_DEG = -8;      // look up slightly while airborne
 
-// Routine: one looping sequence — karate front kick, handstand, dance.
-// Segment boundaries of the normalized cycle; every segment starts and
-// ends in the athletic stance so the chain loops seamlessly.
-const ROUTINE_KICK_END = 0.28;
-const ROUTINE_HANDSTAND_END = 0.66;
+// Showpiece animations: karate kick, handstand, and the Elvis dance each
+// run as their own loop; every one starts and ends in the athletic stance.
 // Lateral pendulum for weight shifts: the hip-roll joint sits at z=-184 in
 // the pelvis frame; rolling there (with the ankle roll compensating) moves
 // the planted sole sideways by ~(soleZ - HIP_ROLL_Z) * sin(roll).
@@ -165,20 +162,32 @@ const HS_PLANT_X_MM = 430;         // hand plant line in front of the feet
 // is on the local -x palm face — the one extent that is symmetric between
 // the two hands (the posed finger curl differs in local z).
 const HS_PALM_LOCAL_MM = [-35, 0, -70];
-const HS_TOE_LOCAL_MM = [100, 0, -26]; // sole front contact point in the foot frame
+const HS_TOE_LOCAL_MM = [112, 0, -26]; // sole FRONT EDGE (pivoting there keeps the whole sole above ground)
 const HS_WOBBLE_DEG = 1.6;         // leg wobble while holding the stand
-// Dance (segment-local, 4 beats): lateral sway with knee bounce, twist,
-// alternating disco arm points, and a head nod.
-const DANCE_BEATS = 4;
-const DANCE_SWAY_MM = 42;
-const DANCE_BOUNCE_MM = 24;
-const DANCE_TWIST_DEG = 20;
-const DANCE_ARM_UP_DEG = -125;
-const DANCE_ARM_OUT_DEG = 35;
-const DANCE_ELBOW_UP_DEG = -15;
-const DANCE_ELBOW_DOWN_DEG = -65;
-const DANCE_NOD_DEG = 7;
-const DANCE_COUNTER_LEAN_DEG_PER_MM = 0.05;
+// Elvis dance (4 beats): weight over the right leg, left leg kicked out
+// to the left planted on a pointed toe (closed-form lateral+sagittal leg
+// IK), rubber-leg shake, right arm pointing up to the right with a beat
+// pulse, hip swivel, head turned toward the pointing hand.
+const ELVIS_BEATS = 4;
+const ELVIS_WEIGHT_SHIFT_MM = -55;   // pelvis shifts over the right leg
+const ELVIS_DIP_MM = 20;             // settled crouch on the stance leg
+const ELVIS_BOUNCE_MM = 8;           // beat bounce on top of the dip
+const ELVIS_TOE_X_MM = 80;           // kicked-out toe plant, forward of the hips
+const ELVIS_TOE_Y_MM = 330;          // ... and out to the robot-left
+const ELVIS_TOE_SHAKE_MM = 28;       // rubber-leg lateral toe shake (2x beat)
+const ELVIS_FOOT_POINT_DEG = 55;     // pointed toe of the kicked-out foot
+const ELVIS_FOOT_POINT_SHAKE_DEG = 7;
+const ELVIS_TOE_TIP_LOCAL = { x: 112, drop: 56 }; // toe tip rel ankle-pitch (fwd, down)
+const ELVIS_POINT_ROLL_DEG = -115;   // right arm raised out-and-up to the right
+const ELVIS_POINT_PITCH_DEG = -25;
+const ELVIS_POINT_ELBOW_DEG = -12;   // nearly straight: the finger points
+const ELVIS_POINT_PULSE_DEG = 8;     // beat pulse of the pointing arm
+const ELVIS_OFF_ARM_PITCH_DEG = -30; // left arm low and bent across
+const ELVIS_OFF_ARM_ELBOW_DEG = -70;
+const ELVIS_TWIST_DEG = 10;          // hip swivel via the waist
+const ELVIS_LEAN_RIGHT_DEG = -3;     // lean into the point
+const ELVIS_HEAD_TURN_DEG = -20;     // look toward the pointing hand
+const ELVIS_CHIN_UP_DEG = -5;
 
 const SIDES = ["left", "right"];
 
@@ -346,6 +355,15 @@ const STRIDE_RIG = (() => {
     rig[side] = { hipZ: hip[2], cosRoll: Math.cos(rollRad), soleZ, ankleToSole };
   }
   return rig;
+})();
+
+// Athletic left toe-tip world position (x, y): the Elvis kick-out leg IK
+// starts and ends its toe-target path here so the dance loop rests
+// exactly on the athletic stance.
+const ELVIS_ATHLETIC_TOE = (() => {
+  const foot = ATHLETIC_FRAMES.foot_left;
+  const toe = matVec3(foot.R, [112, 0, -26]).map((v, k) => v + foot.p[k]);
+  return [toe[0], toe[1]];
 })();
 
 // Row-major 4x4 mapping the baked athletic placement of a link onto its
@@ -966,52 +984,98 @@ function handstandPose(t) {
   return { angles, extras: {}, rootOffset, rootPitchDeg };
 }
 
-// ---- dance (segment-local t, DANCE_BEATS beats): sway + knee bounce,
-// waist twist, alternating disco points, head nod. Feet stay planted via
-// the same planted-leg solve as the kick support leg.
-function dancePose(t) {
-  const angles = { ...ATHLETIC_ANGLES };
-  const env = pulse(t, 0.0, 0.08, 0.92, 1.0);
-  const beat = t * DANCE_BEATS;
-
-  const dy = DANCE_SWAY_MM * env * Math.sin(Math.PI * beat); // sway period: 2 beats
-  const bodyZ = -DANCE_BOUNCE_MM * env * (0.5 - (0.5 * Math.cos(2 * Math.PI * beat)));
-  Object.assign(angles, plantedLegAngles("left", bodyZ, dy));
-  Object.assign(angles, plantedLegAngles("right", bodyZ, dy));
-
-  const twist = DANCE_TWIST_DEG * env * Math.cos(Math.PI * beat);
-  angles.waist_yaw += twist;
-  angles.neck_yaw += -twist * 0.6;
-  angles.neck_pitch += DANCE_NOD_DEG * env * Math.sin((2 * Math.PI * beat) + (Math.PI / 3));
-
-  for (const side of SIDES) {
-    const s = sideSign(side);
-    const up = env * (0.5 + (0.5 * s * Math.sin(Math.PI * beat))); // left up while swaying left
-    angles[`shoulder_pitch_${side}`] = ATHLETIC.SHOULDER_PITCH
-      + ((DANCE_ARM_UP_DEG - ATHLETIC.SHOULDER_PITCH) * up);
-    angles[`shoulder_roll_${side}`] = (s * ATHLETIC.SHOULDER_ROLL_ABDUCT)
-      + (s * DANCE_ARM_OUT_DEG * up);
-    angles[`elbow_${side}`] = ATHLETIC.ELBOW
-      + (((DANCE_ELBOW_DOWN_DEG + ((DANCE_ELBOW_UP_DEG - DANCE_ELBOW_DOWN_DEG) * up)) - ATHLETIC.ELBOW) * env);
-  }
-
+// ---- Elvis dance. The left leg kicks out to the robot-left and plants
+// on a pointed toe, solved with closed-form leg IK: the hip roll angle
+// follows directly from requiring the toe target to lie in the leg's
+// (rolled) pitch plane, then the in-plane two-link IK places the
+// ankle-pitch joint so the toe tip lands exactly on the target. The
+// ankle roll stays 0, so the pointed foot rolls onto its outer toe edge
+// with the leg — the classic look.
+function elvisKickOutLeg(bodyZMm, pelvisDyMm, toeXMm, toeYMm, footPointDeg, liftMm, edgeScale) {
+  const rig = STRIDE_RIG.left;
+  // Left hip-roll joint center in the world, with the shifted pelvis.
+  const hipRoll = [0, HIP_Y + pelvisDyMm, HIP_ROLL_Z_MM + bodyZMm];
+  // The foot rolls with the leg (ankle roll 0), so at full kick-out the
+  // contact is the OUTER toe corner: lift the centerline target by the
+  // rolled half foot width (scaled in with the pose; roll barely changes
+  // with the lift, so one extra pass converges).
+  let target = [toeXMm, toeYMm, rig.soleZ + liftMm];
+  let v = [target[0] - hipRoll[0], target[1] - hipRoll[1], target[2] - hipRoll[2]];
+  const edgeLift = ((35 * Math.abs(Math.sin(Math.atan2(v[1], -v[2])))) + 1) * edgeScale;
+  target = [toeXMm, toeYMm, rig.soleZ + liftMm + edgeLift];
+  v = [target[0] - hipRoll[0], target[1] - hipRoll[1], target[2] - hipRoll[2]];
+  // Roll that brings the target into the leg's pitch plane.
+  const rollRad = Math.atan2(v[1], -v[2]);
+  const planeDepth = Math.hypot(v[1], v[2]); // hip-roll -> target, in-plane
+  // Toe tip relative to the ankle-pitch joint at the pointed foot pitch.
+  const pointRad = (footPointDeg * Math.PI) / 180;
+  const toeForward = (ELVIS_TOE_TIP_LOCAL.x * Math.cos(pointRad))
+    - (ELVIS_TOE_TIP_LOCAL.drop * Math.sin(pointRad));
+  const toeDrop = (ELVIS_TOE_TIP_LOCAL.x * Math.sin(pointRad))
+    + (ELVIS_TOE_TIP_LOCAL.drop * Math.cos(pointRad));
+  // Ankle-pitch target measured from the hip-PITCH joint (78 mm further
+  // down the plane from the hip-roll joint).
+  const ik = legPitchIk(v[0] - toeForward, planeDepth - 78 - toeDrop, footPointDeg);
+  const rollDeg = (rollRad * 180) / Math.PI;
   return {
-    angles,
-    extras: { waist_yaw: { rollDeg: -DANCE_COUNTER_LEAN_DEG_PER_MM * dy } },
-    rootOffset: [0, dy, bodyZ],
-    rootPitchDeg: 0
+    hip_pitch_left: ik.hipDeg,
+    knee_left: ik.kneeDeg,
+    ankle_pitch_left: ik.ankleDeg,
+    hip_roll_left: rollDeg,
+    // Flat (roll-compensated) foot at rest, rolling onto the outer toe
+    // edge with the leg as the kick-out engages.
+    ankle_roll_left: -rollDeg * (1 - edgeScale)
   };
 }
 
-function routinePose(phase) {
-  const p = wrap01(phase);
-  if (p < ROUTINE_KICK_END) {
-    return kickPose(p / ROUTINE_KICK_END);
-  }
-  if (p < ROUTINE_HANDSTAND_END) {
-    return handstandPose((p - ROUTINE_KICK_END) / (ROUTINE_HANDSTAND_END - ROUTINE_KICK_END));
-  }
-  return dancePose((p - ROUTINE_HANDSTAND_END) / (1 - ROUTINE_HANDSTAND_END));
+function dancePose(t) {
+  const angles = { ...ATHLETIC_ANGLES };
+  const env = pulse(t, 0.0, 0.12, 0.88, 1.0);
+  const beat = t * ELVIS_BEATS;
+
+  const dy = ELVIS_WEIGHT_SHIFT_MM * env;
+  const bodyZ = (-ELVIS_DIP_MM * env)
+    - (ELVIS_BOUNCE_MM * env * Math.abs(Math.sin(Math.PI * beat)));
+  // Stance leg: planted under the shifted, bobbing pelvis.
+  Object.assign(angles, plantedLegAngles("right", bodyZ, dy));
+
+  // Kicked-out leg: toe planted out to the left, shaking with the beat.
+  // The whole transition is IK-driven — the toe target slides from the
+  // athletic toe spot to the kick-out point with a lift bump mid-blend,
+  // so the foot never sweeps through the floor (at env=0 the IK lands
+  // exactly back on the athletic leg).
+  const shake = env * Math.sin(2 * Math.PI * 2 * beat);
+  const toeX = ELVIS_ATHLETIC_TOE[0] + ((ELVIS_TOE_X_MM - ELVIS_ATHLETIC_TOE[0]) * env);
+  const toeY = ELVIS_ATHLETIC_TOE[1]
+    + (((ELVIS_TOE_Y_MM + (ELVIS_TOE_SHAKE_MM * shake)) - ELVIS_ATHLETIC_TOE[1]) * env);
+  const point = (ELVIS_FOOT_POINT_DEG * env) + (ELVIS_FOOT_POINT_SHAKE_DEG * shake);
+  const lift = 45 * Math.sin(Math.PI * env);
+  Object.assign(angles, elvisKickOutLeg(bodyZ, dy, toeX, toeY, point, lift, env));
+
+  // The point: right arm up and out to the right, pulsing on the beat.
+  const pulseDeg = ELVIS_POINT_PULSE_DEG * Math.sin(2 * Math.PI * beat);
+  angles.shoulder_roll_right = (sideSign("right") * ATHLETIC.SHOULDER_ROLL_ABDUCT)
+    + (((ELVIS_POINT_ROLL_DEG + pulseDeg) - (sideSign("right") * ATHLETIC.SHOULDER_ROLL_ABDUCT)) * env);
+  angles.shoulder_pitch_right = ATHLETIC.SHOULDER_PITCH
+    + ((ELVIS_POINT_PITCH_DEG - ATHLETIC.SHOULDER_PITCH) * env);
+  angles.elbow_right = ATHLETIC.ELBOW + ((ELVIS_POINT_ELBOW_DEG - ATHLETIC.ELBOW) * env);
+  // Off arm low and bent across the body.
+  angles.shoulder_pitch_left = ATHLETIC.SHOULDER_PITCH
+    + ((ELVIS_OFF_ARM_PITCH_DEG - ATHLETIC.SHOULDER_PITCH) * env);
+  angles.elbow_left = ATHLETIC.ELBOW + ((ELVIS_OFF_ARM_ELBOW_DEG - ATHLETIC.ELBOW) * env);
+
+  // Hip swivel, lean into the point, head to the pointing hand, chin up.
+  const twist = ELVIS_TWIST_DEG * env * Math.sin(Math.PI * beat);
+  angles.waist_yaw += twist;
+  angles.neck_yaw += (ELVIS_HEAD_TURN_DEG * env) - (twist * 0.6);
+  angles.neck_pitch += ELVIS_CHIN_UP_DEG * env;
+
+  return {
+    angles,
+    extras: { waist_yaw: { rollDeg: ELVIS_LEAN_RIGHT_DEG * env } },
+    rootOffset: [0, dy, bodyZ],
+    rootPitchDeg: 0
+  };
 }
 
 const FEATURE_BY_LINK = {
@@ -1101,10 +1165,12 @@ export default {
       gait: {
         type: "select",
         label: "Gait",
-        description: "March lifts the knees with planted stance feet; stride sweeps the legs treadmill-style; run adds flight phases and body bounce; jump is a springy in-place hop with hands in the air.",
+        description: "Showpieces (Elvis dance, handstand, karate kick) and in-place gaits (jump, run, stride, march). Each walk animation drives the matching mode.",
         default: "march",
         options: [
-          { value: "routine", label: "Routine (kick, handstand, dance)" },
+          { value: "dance", label: "Elvis dance" },
+          { value: "handstand", label: "Handstand" },
+          { value: "kick", label: "Karate kick" },
           { value: "jump", label: "Jump in place" },
           { value: "run", label: "Run in place" },
           { value: "stride", label: "Stride in place" },
@@ -1150,13 +1216,33 @@ export default {
     },
     // Ordered most exciting first — this is the order the viewer lists them.
     animations: {
-      routineLoop: {
-        label: "Routine: kick, handstand, dance",
-        description: "Fixed choreography loop: a chambered karate front kick off the left leg, a toe-pivot fold into a held handstand, and a four-beat sway-and-point dance back in the ready stance.",
-        duration: 12,
+      danceLoop: {
+        label: "Elvis dance",
+        description: "The King: weight on the right leg, left leg kicked out to the left on a shaking pointed toe, right finger pointing up to the right with a beat pulse, hip swivel and chin up.",
+        duration: 3.2,
         loop: true,
         update({ cycle, set }) {
-          set("gait", "routine");
+          set("gait", "dance");
+          set("phase", ((finite(cycle, 0) % 1) + 1) % 1);
+        }
+      },
+      handstandLoop: {
+        label: "Handstand",
+        description: "Toe-pivot fold, press to a palms-flat inverted hold with a breathing wobble, and back up to the ready stance.",
+        duration: 4.6,
+        loop: true,
+        update({ cycle, set }) {
+          set("gait", "handstand");
+          set("phase", ((finite(cycle, 0) % 1) + 1) % 1);
+        }
+      },
+      kickLoop: {
+        label: "Karate kick",
+        description: "Weight shifts over the left leg, the right leg chambers and snaps a ball-of-foot front kick at hip height behind a fists-up guard.",
+        duration: 2.8,
+        loop: true,
+        update({ cycle, set }) {
+          set("gait", "kick");
           set("phase", ((finite(cycle, 0) % 1) + 1) % 1);
         }
       },
@@ -1231,8 +1317,12 @@ export default {
         jumpTorsoExtras(phase, jump.bodyZ, jump.flight, scales.torsoSway),
         [0, 0, jump.bodyZ]
       );
-    } else if (gait === "routine") {
-      const pose = routinePose(phase);
+    } else if (gait === "kick" || gait === "handstand" || gait === "dance") {
+      const pose = gait === "kick"
+        ? kickPose(phase)
+        : gait === "handstand"
+          ? handstandPose(phase)
+          : dancePose(phase);
       targetFrames = fkFrames(pose.angles, pose.extras, pose.rootOffset, pose.rootPitchDeg);
     } else {
       targetFrames = fkFrames(
