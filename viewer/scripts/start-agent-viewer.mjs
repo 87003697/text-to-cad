@@ -110,6 +110,7 @@ export function parseAgentStartArgs(argv = [], { fsImpl = fs } = {}) {
     directory: "",
     shutdownAfterMs: null,
     portScanLimit: defaultPortScanLimit,
+    jsonResult: false,
   };
 
   for (let index = 0; index < argv.length; index += 1) {
@@ -142,6 +143,10 @@ export function parseAgentStartArgs(argv = [], { fsImpl = fs } = {}) {
       options.shutdownAfterMs = parseServerLifetimeMs(value, arg);
       options.forwardedArgs.push(arg, value);
       index += 1;
+      continue;
+    }
+    if (arg === "--json") {
+      options.jsonResult = true;
       continue;
     }
     options.forwardedArgs.push(arg);
@@ -643,6 +648,7 @@ export async function resolveAgentStartLaunch({
       git,
       directory: parsed.directory,
       viewerUrl: agentViewerUrl(portResolution.baseUrl, parsed.directory),
+      jsonResult: parsed.jsonResult,
     };
   }
 
@@ -659,6 +665,7 @@ export async function resolveAgentStartLaunch({
     git,
     directory: parsed.directory,
     viewerUrl: agentViewerUrl(portResolution.baseUrl, parsed.directory),
+    jsonResult: parsed.jsonResult,
     command: buildAgentStartCommand({
       mode,
       packageRoot,
@@ -682,6 +689,9 @@ export async function runAgentStart(options = {}) {
     console.log(`CAD Viewer already running at ${launch.viewerUrl}`);
     console.log(`CAD Viewer URL: ${launch.viewerUrl}`);
     console.log(`CAD Viewer git: ${launch.git || "none"}`);
+    if (launch.jsonResult) {
+      console.log(JSON.stringify({ url: launch.viewerUrl, port: launch.port, action: "reuse" }));
+    }
     return null;
   }
 
@@ -689,6 +699,9 @@ export async function runAgentStart(options = {}) {
   console.log(`Starting CAD Viewer ${command.mode} server at ${launch.viewerUrl}`);
   console.log(`CAD Viewer URL: ${launch.viewerUrl}`);
   console.log(`CAD Viewer git: ${launch.git || "none"}`);
+  if (launch.jsonResult) {
+    console.log(JSON.stringify({ url: launch.viewerUrl, port: launch.port, action: "start" }));
+  }
   const child = spawn(command.command, command.args, {
     cwd: command.cwd,
     env: command.env,
