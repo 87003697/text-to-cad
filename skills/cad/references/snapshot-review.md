@@ -1,23 +1,25 @@
 # Snapshot review
 
-Read this file when choosing saved CAD `scripts/snapshot` outputs for primary STEP/STP artifacts after deterministic CAD validation.
+Read this file when choosing saved CAD `scripts/snapshot` outputs for primary STEP/STP artifacts.
 
-## Principle
+## Policy
 
-CAD Viewer links are the live handoff layer and should be returned for every generated or modified supported artifact when `$cad-viewer` is available. Saved snapshots are ALWAYS required for visual verification/review when creating or visibly updating primary STEP/STP parts or assemblies and should be included in final responses when generated. Do not skip snapshots for speed, convenience, confidence, or because deterministic checks passed. Use CAD `scripts/snapshot` over opening the viewer manually or using Playwright; snapshots are faster, lighter, more precise, and more agent-friendly. Snapshots complement STEP generation, `scripts/inspect`, measurements, alignment checks, frames, and diffs.
+Snapshot validation is mandatory. Every created or visibly updated primary STEP/STP part or assembly gets at least one reviewed PNG snapshot; deterministic checks passing is not a reason to skip. Use CAD `scripts/snapshot` rather than opening the viewer manually or using Playwright; snapshots are faster, lighter, more precise, and more agent-friendly. Use PNGs for static reviews and GIFs for motion/animation reviews, including STEP-module parameter animation.
 
-Skip saved snapshots only when no visible geometry was created or updated:
+Skip saved snapshots only when no visible geometry was created or updated, or no valid artifact exists:
 
 - pure format/export requests where geometry is unchanged
 - source changes that do not alter visible geometry
-- direct measurement questions answerable with `scripts/inspect`
+- inspection-only tasks (for example direct measurement questions) that create or update nothing
 - failed Python or STEP generation before a valid artifact exists
 
-Simple created or visibly updated STEP/STP parts ALWAYS get at least one PNG snapshot. For skipped cases, generate or inspect the explicit target, hand off generated or modified artifacts to `$cad-viewer` when available, and report the evidence.
+When skipping, report the reason and the deterministic evidence that still ran.
 
-## Risk triggers
+Do not loop on snapshots. Rerender only when a source repair changed visible geometry or when a specific visual finding needs confirmation.
 
-After STEP/STP generation and geometric validation pass, one PNG may be enough for a simple static part. Use a small snapshot packet when semantic errors are plausible from shape complexity or prompt intent:
+## Packet sizing
+
+One PNG is enough for a simple static part. Use the small multi-view packet when semantic errors are plausible from shape complexity or prompt intent:
 
 - assemblies or more than one body/part
 - holes on multiple faces or multiple axes
@@ -27,25 +29,25 @@ After STEP/STP generation and geometric validation pass, one PNG may be enough f
 - prompts where "looks like the requested object" is part of the task
 - deterministic checks pass but visible semantics are still uncertain
 
-Do not loop on snapshots. Rerender only when a source repair changed visible geometry or when a specific visual finding needs confirmation. Use PNGs for static reviews and GIFs for motion/animation reviews, including STEP-module parameter animation.
-
 ## Small packet
 
-Use a small packet first. Prefer a single `view` JSON job with these outputs:
+Prefer a single `view` JSON job with these outputs:
 
 ```json
 {
   "input": "models/part.step",
   "mode": "view",
   "outputs": [
-    { "path": "/tmp/render/iso_solid.png", "camera": "iso", "width": 1600, "height": 1200 },
-    { "path": "/tmp/render/front_ortho.png", "camera": "front", "width": 1600, "height": 1200 },
-    { "path": "/tmp/render/top_ortho.png", "camera": "top", "width": 1600, "height": 1200 },
-    { "path": "/tmp/render/right_ortho.png", "camera": "right", "width": 1600, "height": 1200 }
+    { "path": "/tmp/render/iso.png", "camera": "iso" },
+    { "path": "/tmp/render/iso_opposite.png", "camera": { "direction": [-1, 1, -0.8] } },
+    { "path": "/tmp/render/top_ortho.png", "camera": "top" },
+    { "path": "/tmp/render/front_ortho.png", "camera": "front" }
   ],
   "render": { "viewLabels": true, "padding": 0.12, "sizeProfile": "diagnostic" }
 }
 ```
+
+The two opposed isometric views guarantee every face appears in at least one image — rear, left, and bottom features are covered by default, not by suspicion. The top ortho is the primary pattern/symmetry check and the front ortho the profile check.
 
 Set `input` to the primary STEP/STP artifact using a relative or absolute path. The snapshot CLI derives its internal render root from that input path. It defaults to `appearance: "workbench"` and `display.mode: "solid"`, matching CAD Viewer; labeled/section views default to 1600x1200 when dimensions are omitted. Use `render.sizeProfile: "assembly"` or `"assembly-large"` for complex assemblies that need 1800x1200 or 1920x1440. For CAD review packets, use still-image render modes `view` and `section`; set `display.mode` to `solid`, `transparent`, `hidden_edges`, `hidden_lines_removed`, or `wireframe` when the visual check benefits from explicit CAD linework.
 
@@ -57,7 +59,7 @@ The snapshot CLI appends one shared UTC seconds timestamp before each output fil
 
 Add views only when the brief or a failure mode calls for them:
 
-- rear or bottom camera: features may be hidden from the default packet
+- reference-image reproduction: one snapshot from the reference image's viewpoint for side-by-side comparison
 - `section`: shell, bore, internal cavity, passage, blind hole, enclosure, or wall/floor relationship
 - `display.mode: "solid"`: shaded CAD view with explicit edge linework
 - `display.mode: "rendered"`: shaded material view without edge overlay
@@ -79,4 +81,4 @@ Visual review is diagnostic, not authoritative. Convert every visual concern int
 - cavity, bore, or blind hole looks wrong -> run section review, then measure wall thickness, depth, or through-condition
 - repeated pattern looks uneven -> measure pattern centers, angular spacing, or occurrence frames
 
-Final reports should say whether the `$cad-viewer` viewer link was returned, include generated snapshot PNG/GIFs or explain why no snapshot applied, and state which deterministic checks support any visual finding.
+Final reports should include the generated snapshot PNG/GIFs or the documented skip reason, and state which deterministic checks support any visual finding.

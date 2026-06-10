@@ -1,23 +1,6 @@
 # Positioning logic, joints, and mating
 
-Read this file when geometry has mating interfaces, repeated features, assembly children, axes, datums, motion, or user-specified alignment. This is the authoritative reference for assembly positioning, build123d joints, explicit `Location` transforms, CLI `inspect align`, and positioning report content.
-
-## Contents
-
-- Core rule
-- Terminology
-- Preferred assembly structure
-- Part-local positioning
-- Feature placement inside a part
-- AssemblyHelper pattern
-- When to use build123d joints
-- Joint type selection
-- Assembly positioning workflow
-- CLI alignment validation
-- Frame validation
-- Measurement validation
-- Source-level positioning corrections
-- Reporting positioning
+Read this file when geometry has mating interfaces, repeated features, assembly children, axes, datums, motion, or user-specified alignment. This is the authoritative reference for assembly positioning, part-local origins, build123d joints, explicit `Location` transforms, CLI `inspect align`, and positioning report content.
 
 ## Core rule
 
@@ -29,10 +12,10 @@ Use these terms carefully:
 
 - **AssemblyHelper** is the preferred generated-script wrapper from `cadpy.assembly`. It records semantic relationships such as `face_to_face`, `coaxial`, `revolute`, and `linear`, then realizes them with native build123d joints.
 - **build123d joints** are source-level objects such as `RigidJoint`, `RevoluteJoint`, `LinearJoint`, `CylindricalJoint`, and `BallJoint`. They are attached to `Solid` or `Compound` objects and can reposition parts with `connect_to()`.
-- **CLI `inspect align`** is a selector-pair validation tool. It computes a read-only translation delta between selected local refs in a STEP/CAD entry. It does not edit source code, patch exported STEP files, or represent an authored mate feature.
+- **CLI `inspect align`** is a selector-pair validation tool. It computes a read-only translation delta between selected local refs in a STEP/CAD entry. It does not edit source code, patch exported STEP files, or represent an authored mate feature. This is the one place that distinction is defined; the rest of the skill assumes it.
 - **Mating intent** is the design relationship: flush, centered, coaxial, offset, hinge-like, slider-like, or otherwise datum-driven.
 
-There is no general instruction to ignore the CLI because build123d has joints. Use `AssemblyHelper` and build123d joints to express and compute source assembly placement where appropriate, then use CLI inspection to validate the generated STEP.
+Use `AssemblyHelper` and build123d joints to express and compute source assembly placement where appropriate, then use CLI inspection to validate the generated STEP.
 
 ## Preferred assembly structure
 
@@ -48,6 +31,8 @@ root component
 ```
 
 A numeric `Location(...)` should usually correspond to a stated datum, offset, clearance, screw axis, face contact, or joint relationship.
+
+Group a functional unit — a bearing, a gearbox stage, a fastener set — into a sub-assembly node with `asm.add_module(name, children)` when it is placed, reasoned about, or repeated as a unit; nested occurrence refs such as `#o1.12.1` then stay meaningful.
 
 ## Part-local positioning
 
@@ -137,6 +122,18 @@ Feature labels survive best when the labeled geometry remains a child shape in a
 
 Use the frame method that matches native build123d joint inputs: `rigid_frame()` and `ball_frame()` take a `Location`; `revolute_frame()`, `linear_frame()`, and `cylindrical_frame()` take an `Axis` plus optional native range/reference arguments.
 
+## Imported components
+
+For purchased or downloaded parts (see `$step-parts`), import the STEP file and add it like any authored part:
+
+```python
+from build123d import import_step
+
+servo = asm.add(import_step("models/parts/sg90_servo.step"), "servo")
+```
+
+Imported geometry was not authored here, so do not assume its origin or orientation. Derive mating frames from inspected geometry: run `refs --facts --planes --positioning` and `measure` against the imported part, then define `asm.rigid_frame(...)` locations from the measured faces, axes, and bolt patterns. Validate the resulting mate exactly like an authored one.
+
 ## When to use build123d joints
 
 Use `AssemblyHelper`/build123d joints when assembly intent is clearer as a relationship between part datums than as a raw transform:
@@ -170,25 +167,16 @@ When only final static placement matters and no meaningful joint datum exists, u
 4. Name source-level joints or mating datums on each child with `asm.rigid_frame()`, `asm.revolute_frame()`, `asm.linear_frame()`, or another helper frame method.
 5. Use `AssemblyHelper` relationship methods where they improve source clarity, otherwise use parameterized `Location` transforms.
 6. Build a labeled `Compound` assembly with `asm.build()`.
-7. Generate the assembly through the Python source, not by re-importing the generated STEP:
+7. Generate the assembly through the Python source, not by re-importing the generated STEP (see `step-generation.md`):
 
 ```bash
 python scripts/step path/to/assembly.py
 python scripts/inspect refs path/to/assembly.step --facts --planes --positioning
 ```
 
-Passing a generated assembly STEP directly treats it as imported native STEP and does not preserve source-level composition semantics.
-
 ## CLI alignment validation
 
-After generation, use CLI inspection to validate the STEP result:
-
-```bash
-python scripts/inspect refs path/to/assembly.step \
-  --facts --planes --positioning
-```
-
-Then select moving and target refs from the returned local selector refs and compute read-only deltas:
+After generation, select moving and target refs from the local selector refs returned by `refs --positioning` and compute deltas:
 
 ```bash
 python scripts/inspect align path/to/assembly.step \
@@ -198,7 +186,7 @@ python scripts/inspect align path/to/assembly.step \
   --axis z
 ```
 
-Use `--mode flush` for coplanar face alignment. Use `--mode center` for centerline, plane-center, or symmetrical alignment where supported by the selected references. If the returned delta is outside tolerance, edit the build123d source placement, helper relationship, or joint location, regenerate, and rerun inspection.
+Use `--mode flush` for coplanar face alignment. Use `--mode center` for centerline, plane-center, or symmetrical alignment where supported by the selected references. If the returned delta is outside tolerance, apply a source-level correction (see below), regenerate, and rerun inspection.
 
 ## Frame validation
 

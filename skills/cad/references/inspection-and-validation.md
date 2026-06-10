@@ -2,23 +2,9 @@
 
 Read this file for every generated STEP artifact and whenever the user asks for geometry facts, references, dimensions, mating, diffing, or frame inspection.
 
-## Contents
-
-- Principle
-- Tool
-- Relationship to build123d joints
-- Validation hierarchy
-- Reference discovery
-- Measurement checks
-- Mating checks
-- Frame inspection
-- Diff checks
-- CAD Viewer handoff
-- Validation report content
-
 ## Principle
 
-Use programmatic geometry checks as the validation source of truth. Use CAD Viewer links and CAD `scripts/snapshot` outputs for visual review, not as substitutes for measurements, facts, planes, labels, or positioning checks.
+Deterministic geometry checks decide pass/fail; mandatory snapshot review (see `snapshot-review.md`) catches semantic errors the deterministic checks did not encode. Scale the deterministic checks to the user's spec: every dimension, clearance, or relationship the user specified — including dimensions taken from a technical drawing — must be verified with `measure`, `align`, or `frame`. The facts/planes/positioning baseline runs for every generated artifact regardless of spec.
 
 ## Tool
 
@@ -28,13 +14,7 @@ The launcher lives in the CAD skill directory:
 python scripts/inspect {refs|diff|frame|measure|align|worker|batch} ...
 ```
 
-Inspection targets are resolved from the command cwd unless absolute. Keep the root model in `SKILL.md` explicit when choosing whether to run from the workspace root or the skill directory.
-
-Common data-output flags on inspection commands:
-
-- `--format json|text`; default is machine-readable output.
-- `--quiet`
-- `--verbose`
+Inspection targets resolve from the command cwd; pass cwd-relative target paths. Common data-output flags: `--format json|text` (default is machine-readable), `--quiet`, `--verbose`.
 
 Accepted target forms:
 
@@ -53,22 +33,12 @@ Selector refs are local to the STEP/CAD entry target passed to the command. They
 
 Pass selector refs as `#...` tokens. The STEP/CAD file path or entry target is a separate CLI argument.
 
-## Relationship to build123d joints
-
-If the source uses `cadpy.assembly.AssemblyHelper` or build123d `Joint` objects, validate the generated STEP exactly as you would validate explicit `Location` placements. Source-level helper relationships and joints express and compute placement during generation; CLI `inspect align` verifies selected exported references by returning a translation delta. Do not confuse CLI `align` with authored mates, helper relationships, or build123d `Joint.connect_to()`. Use `positioning.md` for authoritative source-authoring rules.
-
-## Validation hierarchy
-
-Default validation sequence:
+## Validation sequence
 
 1. Generation completed and the STEP/STP file exists.
-2. `refs --facts --planes --positioning` confirms scale, labels, major planes, and placement-ready references.
-3. `measure` confirms critical dimensions and offsets.
-4. `align` confirms read-only selector-pair alignment deltas for assembly interfaces or ref-to-ref positioning; it does not create source-level build123d joints or authored mates.
-5. `frame` confirms world frame for occurrences or selected references.
-6. `diff` compares before/after geometry for modifications.
-7. Created or modified supported artifacts are handed to `$cad-viewer` for live viewer links when available.
-8. Saved CAD `scripts/snapshot` packets are ALWAYS run for visible created or updated primary STEP/STP artifacts unless `snapshot-review.md` documents that no visible geometry changed or no valid artifact exists; when run, every visual concern is followed by a deterministic geometry check before it becomes a validation claim.
+2. `refs --facts --planes --positioning` confirms scale, labels, major planes, and placement-ready references. Run this for every generated artifact.
+3. Spec-driven checks: `measure` for every user-specified dimension, offset, or clearance; `align` for interfaces that should be flush or centered; `frame` for orientation and occurrence-placement expectations; `diff` for modifications that could affect unrelated geometry.
+4. Snapshot the primary STEP/STP per `snapshot-review.md`, then convert every visual concern into a deterministic geometry check before it becomes a validation claim.
 
 ## Reference discovery
 
@@ -100,7 +70,7 @@ Plane options:
 --plane-limit INT
 ```
 
-Use lower plane limits and compact facts for normal validation. Use topology enumeration only for selector discovery, complex debugging, or when a feature cannot be verified through facts/planes/measurements.
+Use lower plane limits and compact facts for normal validation. Use topology enumeration only for selector discovery, complex debugging, or when a feature cannot be verified through facts/planes/measurements; it can be expensive on large models.
 
 ## Measurement checks
 
@@ -117,7 +87,7 @@ Axis may be inferred when possible, but specify `x`, `y`, or `z` for determinist
 
 ## Alignment checks
 
-Use CLI `align` when two exported STEP references should be flush or centered. It returns a read-only translation delta; it does not edit source files and does not replace `AssemblyHelper`, authored mates, or native build123d joints in source. When source uses helper or build123d `Joint`/`connect_to()` placement, still validate the resulting exported geometry with `refs --positioning`, `frame`, `measure`, or CLI `align`.
+Use `align` when two exported STEP references should be flush or centered. It returns a translation delta between the selected refs; apply any required correction in the build123d source (see `positioning.md`), regenerate, and re-inspect.
 
 ```bash
 python scripts/inspect align path/to/assembly.step \
@@ -126,8 +96,6 @@ python scripts/inspect align path/to/assembly.step \
   --mode flush \
   --axis z
 ```
-
-Apply any required correction in the Python source using `AssemblyHelper` relationships, build123d joint definitions, `.connect_to()` calls, `Location`, parameter changes, or assembly child placement. Regenerate and re-inspect.
 
 ## Frame inspection
 
@@ -149,15 +117,9 @@ python scripts/inspect diff path/to/before.step path/to/after.step --planes
 
 Use diff when a repair, feature addition, or source edit could affect unrelated geometry.
 
-## CAD Viewer handoff
-
-For every final response involving a generated or modified supported artifact (`.step`, `.stp`, `.stl`, `.3mf`, `.dxf`, or native `.glb`), hand off the explicit artifact path to `$cad-viewer` when available and return the link it prints. If an important selector was inspected, return the local selector ref beside the owning CAD Viewer link.
-
-Use `snapshot-review.md` to choose packet size and documented skip cases after deterministic checks. For visible created or updated primary STEP/STP artifacts, ALWAYS prefer CAD `scripts/snapshot` over manual viewer or Playwright inspection for visual feedback. Viewer handoff alone does not count as saved snapshot review.
-
 ## Validation report content
 
-Report only checks that were actually run or directly supported by tool output.
+Report only checks that were actually run or directly supported by tool output. If an important selector was inspected, return the local selector ref beside the owning CAD Viewer link.
 
 Use this structure:
 
