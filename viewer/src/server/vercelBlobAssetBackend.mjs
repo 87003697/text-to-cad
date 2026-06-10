@@ -221,13 +221,30 @@ async function loadBlobClient(client) {
   }
 }
 
+async function blobErrorDetail(response) {
+  const requestId = normalizeString(response.headers?.get?.("x-vercel-id"));
+  let body = "";
+  try {
+    body = normalizeString(await response.text()).slice(0, 200);
+  } catch {
+    body = "";
+  }
+  return [
+    requestId ? `request ${requestId}` : "",
+    body,
+  ].filter(Boolean).join(": ");
+}
+
 async function readJsonFromUrl(url, { fetchImpl = globalThis.fetch } = {}) {
   if (!fetchImpl) {
     throw new Error("Vercel Blob backend requires fetch to read catalog URLs");
   }
   const response = await fetchImpl(url);
   if (!response.ok) {
-    throw new Error(`Failed to read Vercel Blob catalog: ${response.status} ${response.statusText}`);
+    const detail = await blobErrorDetail(response);
+    throw new Error(
+      `Failed to read Vercel Blob catalog: ${response.status} ${response.statusText}${detail ? ` (${detail})` : ""}`
+    );
   }
   return response.json();
 }
