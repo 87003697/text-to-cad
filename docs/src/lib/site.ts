@@ -24,6 +24,7 @@ export const siteConfig = {
     "agent skills",
     "step.parts",
     "STEP parts",
+    "DXF",
   ],
   origin: normalizeOrigin(process.env.NEXT_PUBLIC_SITE_URL, DEFAULT_SITE_ORIGIN),
 };

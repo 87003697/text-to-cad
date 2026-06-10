@@ -166,9 +166,9 @@ def parse_generator_metadata(script_path: Path) -> GeneratorMetadata | None:
 
     if not has_gen_step and not has_gen_dxf and not has_gen_urdf and not has_gen_sdf:
         return None
-    if not has_gen_step:
+    if not has_gen_step and (has_gen_urdf or has_gen_sdf):
         raise ValueError(
-            f"{_display_path(script_path)} gen_dxf(), gen_urdf(), and gen_sdf() require gen_step()"
+            f"{_display_path(script_path)} gen_urdf() and gen_sdf() require gen_step()"
         )
 
     return GeneratorMetadata(

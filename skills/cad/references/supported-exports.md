@@ -1,6 +1,6 @@
 # Supported exports
 
-Read this file when the user requests STL, 3MF, or native GLB output from CAD geometry. Read `dxf.md` for DXF output, because DXF uses a separate `gen_dxf()` source contract.
+Read this file when the user requests STL, 3MF, or native GLB output from CAD geometry. For 2D DXF output, use the `$dxf` skill; DXF uses a separate `gen_dxf()` source contract.
 
 ## Policy
 
