@@ -1172,6 +1172,7 @@ export default function CadWorkspace({
   const [selectedRenderPartIdByAssemblyPartId, setSelectedRenderPartIdByAssemblyPartId] = useState({});
   const [selectedWholeEntryCadRefToken, setSelectedWholeEntryCadRefToken] = useState("");
   const [expandedStepTreeNodeIds, setExpandedStepTreeNodeIds] = useState([]);
+  const [stepTreeRootShowMore, setStepTreeRootShowMore] = useState(false);
   const [activeTreeNodeScrollKey, setActiveTreeNodeScrollKey] = useState("");
   const [hiddenPartIds, setHiddenPartIds] = useState([]);
   const [isolatedAssemblyNodeIds, setIsolatedAssemblyNodeIds] = useState([]);
@@ -1498,6 +1499,8 @@ export default function CadWorkspace({
   const selectedStepModuleDefinition = stepModuleLoadState.url === selectedStepModuleUrl
     ? stepModuleLoadState.definition
     : null;
+  const selectedStepModuleHasAnimations = Array.isArray(selectedStepModuleDefinition?.animations) &&
+    selectedStepModuleDefinition.animations.length > 0;
   const selectedStepModuleStatus = selectedStepModuleUrl
     ? (stepModuleLoadState.url === selectedStepModuleUrl ? stepModuleLoadState.status : "loading")
     : "idle";
@@ -3850,6 +3853,7 @@ export default function CadWorkspace({
       selectedPartIds,
       inspectedAssemblyNodeId: "",
       expandedStepTreeNodeIds,
+      stepTreeRootShowMore,
       fileSheetOpenSectionIds: effectiveFileSheetOpenSectionIds,
       hiddenPartIds,
       camera: activePerspectiveRef.current,
@@ -3871,6 +3875,7 @@ export default function CadWorkspace({
     referenceQuery,
     selectedPartIds,
     selectedReferenceIds,
+    stepTreeRootShowMore,
     tabToolMode,
   ]);
 
@@ -4110,6 +4115,7 @@ export default function CadWorkspace({
     setSelectedRenderPartIdByAssemblyPartId({});
     setSelectedWholeEntryCadRefToken("");
     setExpandedStepTreeNodeIds(nextTab.expandedStepTreeNodeIds);
+    setStepTreeRootShowMore(nextTab.stepTreeRootShowMore);
     setFileSheetOpenSectionIds(nextTab.fileSheetOpenSectionIds);
     setHiddenPartIds(nextTab.hiddenPartIds);
     setIsolatedAssemblyNodeIds([]);
@@ -8636,6 +8642,10 @@ export default function CadWorkspace({
                 urdfPosePickerAvailable={selectedUrdfMoveIt2ActionsEnabled}
                 urdfPosePickerActive={urdfPosePickerActive}
                 handleToggleUrdfPosePicker={handleToggleUrdfPosePicker}
+                stepAnimationAvailable={selectedStepModuleHasAnimations}
+                stepAnimationPlaying={selectedStepModuleAnimationViewState.playing}
+                stepAnimationDisabled={!stepModuleEnabled}
+                handleStepAnimationPlayToggle={handleStepModuleAnimationPlayToggle}
                 drawToolActive={drawToolActive}
                 handleSelectTabToolMode={handleSelectTabToolMode}
                 viewerLoading={viewerLoading}
@@ -8749,6 +8759,8 @@ export default function CadWorkspace({
                 stepTreeRoot={displayStepTreeRoot}
                 assemblyMates={selectedAssemblyMates}
                 expandedTreeNodeIds={expandedStepTreeNodeIds}
+                stepTreeRootShowMore={stepTreeRootShowMore}
+                onStepTreeRootShowMoreChange={setStepTreeRootShowMore}
                 loadableTreeNodeIds={loadableStepTreeTopologyNodeIds}
                 selectedPartIds={selectedPartIds}
                 selectedReferenceIds={selectedReferenceIds}

@@ -1,0 +1,319 @@
+name: Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      bump:
+        description: Semver part to bump when set_version is empty.
+        required: true
+        default: patch
+        type: choice
+        options:
+          - patch
+          - minor
+          - major
+      set_version:
+        description: Exact X.Y.Z version to release instead of bumping.
+        required: false
+        type: string
+      base_branch:
+        description: Branch to merge the release PR into.
+        required: true
+        default: develop
+        type: string
+      target_branch:
+        description: Publish target. Use main for a real release and build-test for a rehearsal.
+        required: true
+        default: main
+        type: choice
+        options:
+          - main
+          - build-test
+      dry_run:
+        description: Show the release version changes without pushing, merging, or publishing.
+        required: true
+        default: false
+        type: boolean
+      publish:
+        description: Publish the GitHub Release instead of leaving it as a draft.
+        required: true
+        default: false
+        type: boolean
+      create_release:
+        description: Create the GitHub Release after pushing the tag.
+        required: true
+        default: true
+        type: boolean
+      auto_merge:
+        description: Merge the release PR after checks pass, then dispatch Publish.
+        required: true
+        default: true
+        type: boolean
+      wait_timeout_minutes:
+        description: Minutes to wait for PR checks and the Publish run.
+        required: true
+        default: "90"
+        type: string
+
+permissions:
+  actions: write
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: release-${{ inputs.base_branch }}-${{ inputs.target_branch }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    name: Release
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out base branch
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.base_branch }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Fetch release comparison refs
+        env:
+          BASE_BRANCH: ${{ inputs.base_branch }}
+          TARGET_BRANCH: ${{ inputs.target_branch }}
+        run: |
+          git fetch --tags origin
+          git fetch --no-tags origin "+$BASE_BRANCH:refs/remotes/origin/$BASE_BRANCH"
+          git fetch --no-tags origin main:refs/remotes/origin/main
+          if [ "$TARGET_BRANCH" != "main" ]; then
+            git fetch --no-tags origin "+$TARGET_BRANCH:refs/remotes/origin/$TARGET_BRANCH" || true
+          fi
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Configure release credentials
+        env:
+          RELEASE_ORCHESTRATOR_TOKEN: ${{ secrets.RELEASE_ORCHESTRATOR_TOKEN }}
+          PREPARE_RELEASE_TOKEN: ${{ secrets.PREPARE_RELEASE_TOKEN }}
+          PUBLISH_PUSH_TOKEN: ${{ secrets.PUBLISH_PUSH_TOKEN }}
+          BUILD_TEST_PUSH_TOKEN: ${{ secrets.BUILD_TEST_PUSH_TOKEN }}
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          release_token="${RELEASE_ORCHESTRATOR_TOKEN:-${PREPARE_RELEASE_TOKEN:-${PUBLISH_PUSH_TOKEN:-${BUILD_TEST_PUSH_TOKEN:-$GITHUB_TOKEN}}}}"
+          if [ -n "${RELEASE_ORCHESTRATOR_TOKEN:-}" ]; then
+            echo "Using RELEASE_ORCHESTRATOR_TOKEN for release orchestration."
+          elif [ -n "${PREPARE_RELEASE_TOKEN:-}" ]; then
+            echo "Using PREPARE_RELEASE_TOKEN for release orchestration."
+          elif [ -n "${PUBLISH_PUSH_TOKEN:-}" ]; then
+            echo "Using PUBLISH_PUSH_TOKEN for release orchestration."
+          elif [ -n "${BUILD_TEST_PUSH_TOKEN:-}" ]; then
+            echo "Using BUILD_TEST_PUSH_TOKEN for release orchestration."
+          else
+            echo "Using GITHUB_TOKEN for release orchestration."
+          fi
+
+          git remote set-url origin "https://x-access-token:${release_token}@github.com/${GITHUB_REPOSITORY}.git"
+          {
+            echo "GH_TOKEN=$release_token"
+            echo "RELEASE_TOKEN=$release_token"
+          } >> "$GITHUB_ENV"
+
+      - name: Prepare canonical version
+        id: version
+        env:
+          BUMP: ${{ inputs.bump }}
+          SET_VERSION: ${{ inputs.set_version }}
+        run: |
+          if [ -n "$SET_VERSION" ]; then
+            scripts/release/bump-version.sh --set-version "$SET_VERSION" --no-commit
+          else
+            scripts/release/bump-version.sh "$BUMP" --no-commit
+          fi
+          node scripts/release/sync-version.mjs
+          version="$(tr -d '[:space:]' < plugins/cad/VERSION)"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "Prepared release version: $version"
+
+      - name: Check release version metadata
+        run: |
+          scripts/release/check-version.sh --incremented-from origin/main
+          node scripts/release/sync-version.mjs --check
+          latest_tag="$(git tag --list '[0-9]*.[0-9]*.[0-9]*' --sort=-version:refname | head -n 1 || true)"
+          if [ -n "$latest_tag" ]; then
+            scripts/release/check-version.sh --incremented-from "refs/tags/$latest_tag"
+          fi
+
+      - name: Check development symlink layout
+        run: scripts/dev/setup-symlinks.sh --check
+
+      - name: Show dry-run diff
+        if: inputs.dry_run
+        run: |
+          git diff --stat
+          git diff -- plugins/cad/VERSION
+
+      - name: Stop after dry run
+        if: inputs.dry_run
+        run: echo "Dry run requested; skipping release branch, PR merge, and publish dispatch."
+
+      - name: Create or update release pull request
+        if: ${{ !inputs.dry_run }}
+        id: release_pr
+        env:
+          BASE_BRANCH: ${{ inputs.base_branch }}
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          if git diff --quiet; then
+            echo "No release metadata changes; $BASE_BRANCH already appears to contain $VERSION."
+            echo "created=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          branch="release/$VERSION"
+          body="Bumps plugins/cad/VERSION and derived package/plugin metadata to $VERSION. This PR was created by the one-button Release workflow. After checks pass, the workflow merges this PR into $BASE_BRANCH and dispatches Publish from $BASE_BRANCH."
+
+          git checkout -B "$branch"
+          git add -A
+          git commit -m "Release $VERSION"
+          git push --force-with-lease origin "$branch"
+
+          if pr_json="$(gh pr view "$branch" --repo "$GITHUB_REPOSITORY" --json number,url 2>/dev/null)"; then
+            pr_number="$(printf '%s\n' "$pr_json" | jq -r '.number')"
+            pr_url="$(printf '%s\n' "$pr_json" | jq -r '.url')"
+            gh pr edit "$pr_number" \
+              --repo "$GITHUB_REPOSITORY" \
+              --base "$BASE_BRANCH" \
+              --title "Release $VERSION" \
+              --body "$body"
+          else
+            pr_url="$(gh pr create \
+              --repo "$GITHUB_REPOSITORY" \
+              --base "$BASE_BRANCH" \
+              --head "$branch" \
+              --title "Release $VERSION" \
+              --body "$body")"
+            pr_number="$(gh pr view "$pr_url" --repo "$GITHUB_REPOSITORY" --json number --jq '.number')"
+          fi
+
+          echo "created=true" >> "$GITHUB_OUTPUT"
+          echo "number=$pr_number" >> "$GITHUB_OUTPUT"
+          echo "url=$pr_url" >> "$GITHUB_OUTPUT"
+          echo "Release PR: $pr_url"
+
+      - name: Wait for release PR checks
+        if: ${{ !inputs.dry_run && inputs.auto_merge && steps.release_pr.outputs.created == 'true' }}
+        env:
+          PR_NUMBER: ${{ steps.release_pr.outputs.number }}
+          WAIT_TIMEOUT_MINUTES: ${{ inputs.wait_timeout_minutes }}
+        run: |
+          for attempt in $(seq 1 30); do
+            check_count="$(gh pr view "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" --json statusCheckRollup --jq '.statusCheckRollup | length')"
+            if [ "$check_count" -gt 0 ]; then
+              echo "Detected $check_count release PR check(s)."
+              break
+            fi
+            echo "Waiting for release PR checks to appear..."
+            sleep 10
+          done
+
+          if [ "${check_count:-0}" -eq 0 ]; then
+            echo "No release PR checks appeared for PR #$PR_NUMBER." >&2
+            exit 1
+          fi
+
+          timeout "${WAIT_TIMEOUT_MINUTES}m" gh pr checks "$PR_NUMBER" \
+            --repo "$GITHUB_REPOSITORY" \
+            --watch \
+            --interval 10 \
+            --fail-fast
+
+      - name: Merge release pull request
+        if: ${{ !inputs.dry_run && inputs.auto_merge && steps.release_pr.outputs.created == 'true' }}
+        env:
+          PR_NUMBER: ${{ steps.release_pr.outputs.number }}
+        run: |
+          pr_json="$(gh pr view "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" --json headRefOid)"
+          head_sha="$(printf '%s\n' "$pr_json" | jq -r '.headRefOid')"
+          gh api \
+            --method PUT \
+            "repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER/merge" \
+            -f merge_method=merge \
+            -f sha="$head_sha"
+
+      - name: Stop before publish when auto-merge is disabled
+        if: ${{ !inputs.dry_run && !inputs.auto_merge }}
+        run: |
+          echo "auto_merge=false; release PR was prepared but Publish was not dispatched."
+          exit 0
+
+      - name: Resolve publish source
+        if: ${{ !inputs.dry_run && inputs.auto_merge }}
+        id: publish_source
+        env:
+          BASE_BRANCH: ${{ inputs.base_branch }}
+        run: |
+          git fetch --no-tags origin "+$BASE_BRANCH:refs/remotes/origin/$BASE_BRANCH"
+          source_sha="$(git rev-parse "origin/$BASE_BRANCH^{commit}")"
+          echo "sha=$source_sha" >> "$GITHUB_OUTPUT"
+          echo "Publishing $BASE_BRANCH at $source_sha."
+
+      - name: Dispatch Publish workflow
+        if: ${{ !inputs.dry_run && inputs.auto_merge }}
+        id: dispatch_publish
+        env:
+          BASE_BRANCH: ${{ inputs.base_branch }}
+          TARGET_BRANCH: ${{ inputs.target_branch }}
+          PUBLISH_RELEASE: ${{ inputs.publish }}
+          CREATE_RELEASE: ${{ inputs.create_release }}
+        run: |
+          dispatch_started_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          echo "started_at=$dispatch_started_at" >> "$GITHUB_OUTPUT"
+          gh workflow run publish.yml \
+            --repo "$GITHUB_REPOSITORY" \
+            --ref "$BASE_BRANCH" \
+            -f source_ref="$BASE_BRANCH" \
+            -f target_branch="$TARGET_BRANCH" \
+            -f dry_run=false \
+            -f publish="$PUBLISH_RELEASE" \
+            -f create_release="$CREATE_RELEASE"
+
+      - name: Wait for Publish workflow
+        if: ${{ !inputs.dry_run && inputs.auto_merge }}
+        env:
+          BASE_BRANCH: ${{ inputs.base_branch }}
+          SOURCE_SHA: ${{ steps.publish_source.outputs.sha }}
+          DISPATCH_STARTED_AT: ${{ steps.dispatch_publish.outputs.started_at }}
+          WAIT_TIMEOUT_MINUTES: ${{ inputs.wait_timeout_minutes }}
+        run: |
+          publish_run_id=""
+          for attempt in $(seq 1 30); do
+            publish_run_id="$(gh run list \
+              --repo "$GITHUB_REPOSITORY" \
+              --workflow publish.yml \
+              --branch "$BASE_BRANCH" \
+              --event workflow_dispatch \
+              --limit 20 \
+              --json databaseId,headSha,createdAt \
+              --jq "map(select(.headSha == \"$SOURCE_SHA\" and .createdAt >= \"$DISPATCH_STARTED_AT\")) | sort_by(.databaseId) | last | .databaseId // empty")"
+            if [ -n "$publish_run_id" ]; then
+              echo "Publish run: https://github.com/$GITHUB_REPOSITORY/actions/runs/$publish_run_id"
+              break
+            fi
+            echo "Waiting for Publish workflow run to appear..."
+            sleep 10
+          done
+
+          if [ -z "$publish_run_id" ]; then
+            echo "Could not find a Publish workflow run for $SOURCE_SHA." >&2
+            exit 1
+          fi
+
+          timeout "${WAIT_TIMEOUT_MINUTES}m" gh run watch "$publish_run_id" \
+            --repo "$GITHUB_REPOSITORY" \
+            --exit-status

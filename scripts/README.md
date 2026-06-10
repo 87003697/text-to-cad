@@ -145,10 +145,12 @@ fallback, but the workflow path is preferred.
 | Workflow | Branches/events | Purpose |
 | -------- | --------------- | ------- |
 | `test.yml` | pushes to `develop`; PRs to `develop`; manual dispatch | Checks `plugins/cad/VERSION` and derived metadata as a separate job so test jobs still run if release metadata is wrong. The source test job checks the branch-specific layout and runs the broad code test wrapper. On `develop` and PRs to `develop`, a production-bundle job bundles temporary production outputs, checks that layout without rebuilding it, runs docs checks, and reruns code tests. |
+| `release.yml` | manual dispatch | One-button release orchestrator. It bumps or sets `plugins/cad/VERSION`, syncs derived metadata on `release/<version>`, opens or updates the release PR, waits for PR checks, merges it into `develop`, dispatches `publish.yml`, and waits for Publish to finish. If `develop` already contains the requested version, it skips the release PR and dispatches Publish directly, which makes failed publishes resumable after external blockers are fixed. |
 | `prepare-release.yml` | manual dispatch | Bumps `plugins/cad/VERSION`, syncs derived version metadata on `release/<version>`, and opens a release PR back to `develop` by default. |
 | `publish.yml` | manual dispatch | Uses `source_ref=develop` and `target_branch=build-test` by default for rehearsals; dispatch from `develop` and set `target_branch=main` only for a real release. Main publishes are allowed only when the source version is newer than `main` and the latest semver tag, and when the source contains the previous publish source commit. When publishing, it bundles, validates that layout without rebuilding it, runs docs/code tests, writes the production merge commit on top of the target branch with the source commit as a second parent for release-note attribution, configures Vercel Authentication for preview deployments only, deploys the docs and demo viewer Vercel projects only for non-dry-run `main` publishes, verifies the public production URLs, and creates the semver tag/GitHub Release only for `main`. Use `dry_run=true` to rehearse without writing or deploying. |
 | `vercel-protection.yml` | pushes to `develop`; manual dispatch | Configures the docs and demo viewer Vercel projects so Vercel Authentication protects preview deployments only, then verifies the production custom domains, stable `.vercel.app` aliases, and latest raw production deployment URLs are publicly reachable. |
 
-In short: `develop` is the editable symlink branch, `test.yml` performs temporary
-production-output rehearsals, and `main` is the explicit publish-only production
-branch for user clones and published releases.
+In short: use `release.yml` for normal releases, keep `prepare-release.yml` and
+`publish.yml` as lower-level fallbacks, treat `develop` as the editable symlink
+branch, and keep `main` as the explicit publish-only production branch for user
+clones and published releases.

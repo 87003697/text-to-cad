@@ -167,10 +167,14 @@ scripts/dev/setup-symlinks.sh --check
 
 Normal development PRs should not bump `plugins/cad/VERSION`. Release versions
 are reserved for release PRs so the canonical repo version, Git tag, and GitHub
-Release describe the same production commit. To prepare a release, run the
-`Prepare Release` GitHub Actions workflow with `base_branch=develop`; it updates
+Release describe the same production commit. For normal releases, run the
+`Release` GitHub Actions workflow with `base_branch=develop`; it updates
 `plugins/cad/VERSION` plus derived package/plugin metadata on a
-`release/<version>` branch and opens a release PR.
+`release/<version>` branch, opens a release PR, waits for checks, merges it into
+`develop`, and dispatches `Publish`. If `develop` already contains the requested
+version, the workflow skips the release PR and dispatches `Publish` directly so
+failed publishes can resume after external blockers are fixed. To only prepare
+the release PR, run `Prepare Release` as a lower-level fallback.
 
 For local release preparation, use the same script that the workflow calls:
 
@@ -191,7 +195,7 @@ the symlink layout, runs `scripts/bundle/bundle.sh --clean`, checks the
 production layout without rebuilding it, runs documentation checks, and runs the
 code tests against that generated output.
 
-To ship a release, merge the release PR to `develop`, then manually dispatch the
+To ship a release manually, merge the release PR to `develop`, then dispatch the
 `Publish` workflow from the `develop` workflow ref with `source_ref=develop` and
 `target_branch=main`:
 

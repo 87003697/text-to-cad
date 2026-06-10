@@ -3,6 +3,8 @@ import {
   Focus,
   MousePointer2,
   Orbit,
+  Pause,
+  Play,
   PenTool
 } from "lucide-react";
 import { RENDER_FORMAT } from "@/workbench/constants";
@@ -28,6 +30,10 @@ function DesktopFloatingToolBar({
   urdfPosePickerAvailable = false,
   urdfPosePickerActive = false,
   handleToggleUrdfPosePicker,
+  stepAnimationAvailable = false,
+  stepAnimationPlaying = false,
+  stepAnimationDisabled = false,
+  handleStepAnimationPlayToggle,
   drawToolActive,
   handleSelectTabToolMode,
   viewerLoading,
@@ -60,6 +66,9 @@ function DesktopFloatingToolBar({
     referenceSelectionDeferred;
   const posePickerDisabled = viewerLoading || !selectedMeshData || !urdfPosePickerAvailable;
   const selectLabel = referenceSelectionPending ? "Preparing selection" : "Select";
+  const showStepAnimationPlay = renderFormat === RENDER_FORMAT.STEP && stepAnimationAvailable;
+  const stepAnimationPlayDisabled = viewerLoading || !selectedMeshData || stepAnimationDisabled;
+  const stepAnimationLabel = stepAnimationPlaying ? "Pause STEP animation" : "Play STEP animation";
 
   return (
     <div
@@ -89,6 +98,22 @@ function DesktopFloatingToolBar({
               >
                 <PenTool className="size-3.5" strokeWidth={2} aria-hidden="true" />
               </ToolbarButton>
+
+              {showStepAnimationPlay ? (
+                <ToolbarButton
+                  label={stepAnimationLabel}
+                  active={stepAnimationPlaying}
+                  onClick={handleStepAnimationPlayToggle}
+                  disabled={stepAnimationPlayDisabled}
+                  aria-pressed={stepAnimationPlaying}
+                >
+                  {stepAnimationPlaying ? (
+                    <Pause className="size-3.5" strokeWidth={2} aria-hidden="true" />
+                  ) : (
+                    <Play className="size-3.5" strokeWidth={2} aria-hidden="true" />
+                  )}
+                </ToolbarButton>
+              ) : null}
             </>
           ) : null}
 
