@@ -509,6 +509,66 @@ test("STEP tree can assign topology references to assembly parts by occurrence i
   );
 });
 
+test("STEP tree topology rows can be limited to loaded parts", () => {
+  const root = {
+    id: "root",
+    occurrenceId: "o1",
+    nodeType: "assembly",
+    displayName: "root assembly",
+    children: [
+      {
+        id: "part-a",
+        occurrenceId: "o1.1",
+        nodeType: "part",
+        displayName: "part A",
+        children: []
+      },
+      {
+        id: "part-b",
+        occurrenceId: "o1.2",
+        nodeType: "part",
+        displayName: "part B",
+        children: []
+      }
+    ]
+  };
+  const references = [
+    {
+      id: "o1.1.f1",
+      selectorType: "face",
+      displaySelector: "o1.1.f1",
+      occurrenceId: "o1.1",
+      partId: "part-a",
+      summary: "plane area=10"
+    },
+    {
+      id: "o1.2.f1",
+      selectorType: "face",
+      displaySelector: "o1.2.f1",
+      occurrenceId: "o1.2",
+      partId: "part-b",
+      summary: "plane area=20"
+    }
+  ];
+
+  const augmented = buildStepTreeRootWithTopology({
+    root,
+    references,
+    topologyPartIds: ["part-b"]
+  });
+
+  assert.deepEqual(
+    augmented.children.map((child) => [
+      child.id,
+      child.children.map((topologyChild) => topologyChild.displaySelector)
+    ]),
+    [
+      ["part-a", []],
+      ["part-b", ["o1.2.f1"]]
+    ]
+  );
+});
+
 test("STEP tree flattens redundant topology occurrence rows for single STEP roots", () => {
   const root = {
     id: STEP_MODEL_ROOT_ID,

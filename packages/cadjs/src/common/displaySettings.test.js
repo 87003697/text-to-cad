@@ -4,6 +4,7 @@ import test from "node:test";
 import {
   CAD_DISPLAY_MODE,
   DEFAULT_DISPLAY_SETTINGS,
+  DEFAULT_EXPLODED_VIEW_SETTINGS,
   displayModeForcesEdges,
   displayModeShowsEdges,
   displayModeShowsThroughEdges,
@@ -11,6 +12,7 @@ import {
   displayModeUsesUnlitSurfaces,
   displaySettingsEqual,
   normalizeDisplaySettings,
+  normalizeExplodedViewSettings,
   resolveDisplayMode
 } from "./displaySettings.js";
 
@@ -37,8 +39,35 @@ test("display settings normalize mode and clip independently from appearance set
         z: 0.4
       },
       invert: true
-    }
+    },
+    exploded: DEFAULT_EXPLODED_VIEW_SETTINGS
   });
+});
+
+test("display settings normalize exploded-view controls independently from mode", () => {
+  assert.deepEqual(normalizeExplodedViewSettings({
+    enabled: true,
+    axis: "-x",
+    spacing: 2,
+    levels: "all",
+    groundBase: false,
+    mergeLayers: true,
+    autoFrame: false
+  }), {
+    enabled: true,
+    axis: "x",
+    direction: "negative",
+    spacing: 2,
+    depth: 8,
+    keepBaseGrounded: false,
+    mergeCoplanar: true,
+    autoFrame: false
+  });
+  assert.equal(normalizeExplodedViewSettings({ axis: "diagonal" }).axis, "z");
+  assert.equal(normalizeExplodedViewSettings({ axis: "radial" }).axis, "radial");
+  assert.equal(normalizeDisplaySettings({ exploded: true }).exploded.enabled, false);
+  assert.equal(normalizeDisplaySettings({ mode: "exploded", exploded: { enabled: true } }).exploded.enabled, true);
+  assert.deepEqual(normalizeDisplaySettings({ mode: "exploded view" }), DEFAULT_DISPLAY_SETTINGS);
 });
 
 test("display modes normalize common CAD aliases", () => {
@@ -72,5 +101,9 @@ test("display settings compare after normalization", () => {
   assert.equal(displaySettingsEqual(
     { mode: "solid", clip: { enabled: true } },
     { mode: "wireframe", clip: { enabled: true } }
+  ), false);
+  assert.equal(displaySettingsEqual(
+    { mode: "solid", exploded: { enabled: true } },
+    { mode: "solid", exploded: { enabled: false } }
   ), false);
 });

@@ -1,3 +1,5 @@
+import { useState } from "react";
+
 const ORIENTATION_FALLBACK = Object.freeze({
   x: [1, 0, 0],
   y: [0, 1, 0],
@@ -130,7 +132,6 @@ export default function ViewPlaneControl({
   meshData,
   viewPlaneOffsetRight,
   viewPlaneOffsetBottom = 16,
-  compact = false,
   activeViewPlaneFace,
   viewPlaneFaces,
   viewPlaneOrientation,
@@ -138,6 +139,8 @@ export default function ViewPlaneControl({
   activateViewPlaneFace,
   activateDefaultViewPlane
 }) {
+  const [hoveredNodeId, setHoveredNodeId] = useState("");
+
   if (!showViewPlane || previewMode || isLoading || !meshData) {
     return null;
   }
@@ -169,12 +172,14 @@ export default function ViewPlaneControl({
     .sort((left, right) => left.z - right.z);
   const backNodes = projectedNodes.filter((node) => node.z < 0);
   const frontNodes = projectedNodes.filter((node) => node.z >= 0);
-  const viewPlaneSizeClasses = compact ? "h-[5.65rem] w-[5.65rem]" : "h-[7.35rem] w-[7.35rem]";
+  const viewPlaneSizeClasses = "h-24 w-24";
   const normalizedBottomOffset = typeof viewPlaneOffsetBottom === "number"
     ? `${viewPlaneOffsetBottom}px`
     : viewPlaneOffsetBottom;
+  const centerHovered = hoveredNodeId === "__default__";
   const renderNode = (node) => {
     const active = activeViewPlaneFace === node.id;
+    const hovered = hoveredNodeId === node.id;
     return (
       <g
         key={node.id}
@@ -182,9 +187,33 @@ export default function ViewPlaneControl({
         tabIndex={0}
         aria-label={node.title}
         aria-pressed={active}
-        className="cursor-pointer focus:outline-none"
+        className="group cursor-pointer focus:outline-none"
         onPointerDown={(event) => {
           event.stopPropagation();
+        }}
+        onPointerEnter={() => {
+          setHoveredNodeId(node.id);
+        }}
+        onPointerMove={() => {
+          setHoveredNodeId(node.id);
+        }}
+        onPointerLeave={() => {
+          setHoveredNodeId((current) => (current === node.id ? "" : current));
+        }}
+        onMouseEnter={() => {
+          setHoveredNodeId(node.id);
+        }}
+        onMouseMove={() => {
+          setHoveredNodeId(node.id);
+        }}
+        onMouseLeave={() => {
+          setHoveredNodeId((current) => (current === node.id ? "" : current));
+        }}
+        onFocus={() => {
+          setHoveredNodeId(node.id);
+        }}
+        onBlur={() => {
+          setHoveredNodeId((current) => (current === node.id ? "" : current));
         }}
         onClick={(event) => {
           event.stopPropagation();
@@ -202,6 +231,18 @@ export default function ViewPlaneControl({
         <circle
           cx={node.x}
           cy={node.y}
+          r={node.radius + 4.4}
+          className="transition-opacity duration-150"
+          opacity={hovered ? 1 : 0}
+          fill={node.fill}
+          fillOpacity="0.12"
+          stroke="var(--sidebar-foreground)"
+          strokeOpacity="0.72"
+          strokeWidth="1.1"
+        />
+        <circle
+          cx={node.x}
+          cy={node.y}
           r={node.radius + (active ? 2.1 : 0)}
           fill="none"
           stroke={active ? "var(--sidebar-foreground)" : "transparent"}
@@ -211,6 +252,12 @@ export default function ViewPlaneControl({
           cx={node.x}
           cy={node.y}
           r={node.radius}
+          className="transition-transform duration-150 ease-out"
+          style={{
+            transform: hovered ? "scale(1.1)" : "scale(1)",
+            transformBox: "fill-box",
+            transformOrigin: "center"
+          }}
           fill={node.fill}
           stroke={active ? "var(--sidebar-foreground)" : node.edge}
           strokeWidth={active ? 1.35 : 1}
@@ -253,9 +300,33 @@ export default function ViewPlaneControl({
             role="button"
             tabIndex={0}
             aria-label="Reset to default isometric view"
-            className="cursor-pointer focus:outline-none"
+            className="group cursor-pointer focus:outline-none"
             onPointerDown={(event) => {
               event.stopPropagation();
+            }}
+            onPointerEnter={() => {
+              setHoveredNodeId("__default__");
+            }}
+            onPointerMove={() => {
+              setHoveredNodeId("__default__");
+            }}
+            onPointerLeave={() => {
+              setHoveredNodeId((current) => (current === "__default__" ? "" : current));
+            }}
+            onMouseEnter={() => {
+              setHoveredNodeId("__default__");
+            }}
+            onMouseMove={() => {
+              setHoveredNodeId("__default__");
+            }}
+            onMouseLeave={() => {
+              setHoveredNodeId((current) => (current === "__default__" ? "" : current));
+            }}
+            onFocus={() => {
+              setHoveredNodeId("__default__");
+            }}
+            onBlur={() => {
+              setHoveredNodeId((current) => (current === "__default__" ? "" : current));
             }}
             onClick={(event) => {
               event.stopPropagation();
@@ -274,7 +345,24 @@ export default function ViewPlaneControl({
             <circle
               cx="50"
               cy="50"
+              r="11.4"
+              className="transition-opacity duration-150"
+              opacity={centerHovered ? 1 : 0}
+              fill={rgbToCss(palette.center.fill, 0.16)}
+              stroke="var(--sidebar-foreground)"
+              strokeOpacity="0.72"
+              strokeWidth="1.1"
+            />
+            <circle
+              cx="50"
+              cy="50"
               r="7.3"
+              className="transition-transform duration-150 ease-out"
+              style={{
+                transform: centerHovered ? "scale(1.1)" : "scale(1)",
+                transformBox: "fill-box",
+                transformOrigin: "center"
+              }}
               fill={rgbToCss(palette.center.fill, 0.95)}
               stroke={rgbToCss(palette.center.stroke, 0.72)}
               strokeWidth="1.05"

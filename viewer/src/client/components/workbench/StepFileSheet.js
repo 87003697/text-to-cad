@@ -537,6 +537,7 @@ export default function StepFileSheet({
   stepTreeRoot,
   assemblyMates = [],
   expandedTreeNodeIds,
+  loadableTreeNodeIds = [],
   selectedPartIds,
   selectedReferenceIds = [],
   selectedMateIds = [],
@@ -673,6 +674,14 @@ export default function StepFileSheet({
     () => new Set((Array.isArray(expandedTreeNodeIds) ? expandedTreeNodeIds : []).map((id) => String(id || "").trim()).filter(Boolean)),
     [expandedTreeNodeIds]
   );
+  const loadableTreeNodeIdSet = useMemo(
+    () => new Set((Array.isArray(loadableTreeNodeIds) ? loadableTreeNodeIds : []).map((id) => String(id || "").trim()).filter(Boolean)),
+    [loadableTreeNodeIds]
+  );
+  const rowCanExpandOrLoad = (row) => {
+    const rowId = String(row?.id || "").trim();
+    return Boolean(row?.hasChildren || (rowId && loadableTreeNodeIdSet.has(rowId)));
+  };
   const collapsedExpandableTreeNodeIds = useMemo(
     () => expandableTreeNodeIds.filter((nodeId) => !expandedTreeNodeIdSet.has(nodeId)),
     [expandableTreeNodeIds, expandedTreeNodeIdSet]
@@ -817,6 +826,8 @@ export default function StepFileSheet({
                   const rowDetail = String(row.detail || "").trim();
                   const inlineRowDetail = topologyType ? "" : rowDetail;
                   const rowAriaLabel = stepTreeRowAriaLabel(row, topologyType, rowDetail);
+                  const rowHasChildren = rowCanExpandOrLoad(row);
+                  const rowExpanded = Boolean(row.expanded);
                   const selected = topologyRow
                     ? selectedReferenceIdSet.has(topologyReferenceId)
                     : selectedIds.includes(selectionRowId);
@@ -934,12 +945,12 @@ export default function StepFileSheet({
                       selectRow(event);
                       return;
                     }
-                    if (row.hasChildren && event.key === "ArrowRight" && !row.expanded) {
+                    if (rowHasChildren && event.key === "ArrowRight" && !rowExpanded) {
                       event.preventDefault();
                       onToggleTreeNode?.(row.id);
                       return;
                     }
-                    if (row.hasChildren && event.key === "ArrowLeft" && row.expanded) {
+                    if (rowHasChildren && event.key === "ArrowLeft" && rowExpanded) {
                       event.preventDefault();
                       onToggleTreeNode?.(row.id);
                     }
@@ -978,11 +989,11 @@ export default function StepFileSheet({
                     .map((nodeId) => visibleRowById.get(nodeId) || null)
                     .filter(Boolean);
                   const collapsedActionNodeIds = actionRows
-                    .filter((actionRow) => actionRow?.hasChildren && !expandedTreeNodeIdSet.has(String(actionRow.id || "").trim()))
+                    .filter((actionRow) => rowCanExpandOrLoad(actionRow) && !expandedTreeNodeIdSet.has(String(actionRow.id || "").trim()))
                     .map((actionRow) => String(actionRow.id || "").trim())
                     .filter(Boolean);
                   const expandedActionNodeIds = actionRows
-                    .filter((actionRow) => actionRow?.hasChildren && expandedTreeNodeIdSet.has(String(actionRow.id || "").trim()))
+                    .filter((actionRow) => rowCanExpandOrLoad(actionRow) && expandedTreeNodeIdSet.has(String(actionRow.id || "").trim()))
                     .map((actionRow) => String(actionRow.id || "").trim())
                     .filter(Boolean);
                   const contextActionCount = actionNodeIds.length || 1;
@@ -1019,7 +1030,7 @@ export default function StepFileSheet({
                                 }
                               }}
                               role="treeitem"
-                              aria-expanded={row.hasChildren ? row.expanded : undefined}
+                              aria-expanded={rowHasChildren ? rowExpanded : undefined}
                               aria-selected={selected}
                               aria-label={rowAriaLabel}
                               data-step-tree-node-id={row.id || undefined}
@@ -1045,7 +1056,7 @@ export default function StepFileSheet({
                               onMouseLeave={handleRowHoverEnd}
                             >
                               <div className="flex min-w-0 flex-1 items-center gap-1.5 overflow-hidden">
-                                {row.hasChildren ? (
+                                {rowHasChildren ? (
                                   <Button
                                     type="button"
                                     variant="ghost"
@@ -1055,11 +1066,11 @@ export default function StepFileSheet({
                                       event.stopPropagation();
                                       onToggleTreeNode?.(row.id);
                                     }}
-                                    aria-label={row.expanded ? `Collapse ${row.label}` : `Expand ${row.label}`}
-                                    title={row.expanded ? "Collapse" : "Expand"}
+                                    aria-label={rowExpanded ? `Collapse ${row.label}` : `Expand ${row.label}`}
+                                    title={rowExpanded ? "Collapse" : "Expand"}
                                   >
                                     <ChevronRight
-                                      className={cn("size-3.5 transition-transform", row.expanded && "rotate-90")}
+                                      className={cn("size-3.5 transition-transform", rowExpanded && "rotate-90")}
                                       strokeWidth={2}
                                       aria-hidden="true"
                                     />
@@ -1149,7 +1160,7 @@ export default function StepFileSheet({
                           showVisibility={!topologyRow && !focused}
                           visibilityDisabled={contextVisibilityDisabled}
                           showHideAll={!topologyRow}
-                          showExpandCollapse={row.hasChildren || actionRows.some((actionRow) => actionRow?.hasChildren) || expandableTreeNodeIds.length > 0}
+                          showExpandCollapse={rowHasChildren || actionRows.some((actionRow) => rowCanExpandOrLoad(actionRow)) || expandableTreeNodeIds.length > 0}
                           expandSelectedDisabled={expandSelectedDisabled}
                           collapseSelectedDisabled={collapseSelectedDisabled}
                           expandAllDisabled={expandAllDisabled}
