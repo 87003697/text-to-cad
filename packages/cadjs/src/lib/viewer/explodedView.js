@@ -1,6 +1,7 @@
 import { MAX_EXPLODED_VIEW_DEPTH, normalizeExplodedViewSettings } from "../../common/displaySettings.js";
 
 const EPSILON = 1e-6;
+const GOLDEN_ANGLE = Math.PI * (3 - Math.sqrt(5));
 const AXIS_INDEX = Object.freeze({ x: 0, y: 1, z: 2 });
 
 function clamp(value, min, max) {
@@ -47,6 +48,14 @@ function boundsSize(bounds, axis) {
   return Math.max(toNumber(max[axis]) - toNumber(min[axis]), 0);
 }
 
+function boundsMaxSize(bounds) {
+  return Math.max(
+    boundsSize(bounds, 0),
+    boundsSize(bounds, 1),
+    boundsSize(bounds, 2)
+  );
+}
+
 function shiftedBounds(bounds, translation = [0, 0, 0], amount = 1) {
   if (!bounds || !Array.isArray(bounds.min) || !Array.isArray(bounds.max)) {
     return null;
@@ -72,6 +81,20 @@ function mergeBounds(boundsList) {
     }
   }
   return count > 0 && min.every(Number.isFinite) && max.every(Number.isFinite) ? { min, max } : null;
+}
+
+function translationVector(THREE, value, fallback = null) {
+  if (value?.isVector3) {
+    return value;
+  }
+  if (Array.isArray(value) || ArrayBuffer.isView(value)) {
+    return new THREE.Vector3(
+      toNumber(value[0]),
+      toNumber(value[1]),
+      toNumber(value[2])
+    );
+  }
+  return fallback;
 }
 
 function occurrenceSegments(partId) {
@@ -159,11 +182,105 @@ function createAxisVector(THREE, axis, direction) {
   return vector;
 }
 
+function fallbackDirection(THREE, index, count) {
+  const normalizedCount = Math.max(1, count);
+  const y = normalizedCount > 1
+    ? 1 - ((index + 0.5) / normalizedCount) * 2
+    : 0;
+  const radius = Math.sqrt(Math.max(0, 1 - y * y));
+  const angle = index * GOLDEN_ANGLE;
+  const vector = new THREE.Vector3(
+    Math.cos(angle) * radius,
+    Math.sin(angle) * radius,
+    y
+  );
+  if (vector.lengthSq() <= EPSILON) {
+    vector.set(1, 0, 0);
+  }
+  return vector.normalize();
+}
+
+function radialGroupDirection(THREE, group, modelCenter, index, count, direction) {
+  const vector = group.center?.isVector3
+    ? group.center.clone().sub(modelCenter)
+    : new THREE.Vector3();
+  if (vector.lengthSq() <= EPSILON) {
+    vector.copy(fallbackDirection(THREE, index, count));
+  } else {
+    vector.normalize();
+  }
+  return direction === "negative" ? vector.multiplyScalar(-1) : vector;
+}
+
+function createRadialExplodedViewRecordStates(THREE, groups, bounds, settings) {
+  const modelCenter = boundsCenter(THREE, bounds);
+  const modelRadius = Math.max(boundsRadius(THREE, bounds), EPSILON);
+  const modelMaxSize = Math.max(boundsMaxSize(bounds), EPSILON);
+  const spacing = Math.max(toNumber(settings.spacing, 1.45), 0.25);
+  const baseDistance = Math.max(modelRadius * 0.32 * spacing, modelRadius * 0.12);
+  const states = [];
+  const radialGroups = groups
+    .filter((group) => group.records.length > 0 && group.bounds)
+    .sort((left, right) => left.recordIndex - right.recordIndex);
+
+  radialGroups.forEach((group, groupIndex) => {
+    const direction = radialGroupDirection(
+      THREE,
+      group,
+      modelCenter,
+      groupIndex,
+      radialGroups.length,
+      settings.direction
+    );
+    const groupRadius = boundsRadius(THREE, group.bounds);
+    const travel = baseDistance + Math.min(groupRadius * 0.18 * spacing, modelRadius * 0.2 * spacing);
+    const translation = direction.clone().multiplyScalar(travel);
+    for (const record of group.records) {
+      states.push({
+        record,
+        partId: String(record.partId || "").trim(),
+        groupKey: group.key,
+        layerIndex: groupIndex,
+        direction: direction.clone(),
+        distance: travel,
+        translation: translation.clone(),
+        matrix: new THREE.Matrix4()
+      });
+    }
+  });
+
+  if (settings.keepBaseGrounded !== false) {
+    const baseMin = Array.isArray(bounds?.min) || ArrayBuffer.isView(bounds?.min) ? bounds.min : null;
+    const baseMinZ = baseMin ? toNumber(baseMin[2]) : null;
+    const explodedBounds = mergeBounds(
+      states.map((state) => shiftedBounds(state.record?.partBounds, state.translation.toArray(), 1))
+    );
+    const explodedMinZ = Array.isArray(explodedBounds?.min) ? toNumber(explodedBounds.min[2]) : null;
+    if (
+      Number.isFinite(baseMinZ) &&
+      Number.isFinite(explodedMinZ) &&
+      explodedMinZ < baseMinZ - EPSILON
+    ) {
+      const lift = Math.min(baseMinZ - explodedMinZ, modelMaxSize * spacing);
+      for (const state of states) {
+        state.translation.z += lift;
+        state.distance = state.translation.length();
+        state.direction = state.distance > EPSILON
+          ? state.translation.clone().normalize()
+          : state.direction;
+      }
+    }
+  }
+
+  return states;
+}
+
 export function createExplodedViewRecordStates(THREE, records = [], bounds = null, options = {}) {
   if (!THREE?.Vector3 || !THREE?.Matrix4) {
     return [];
   }
   const settings = normalizeExplodedViewSettings(options);
+  const radialAxis = settings.axis === "radial";
   const axisIndex = AXIS_INDEX[settings.axis] ?? 2;
   const explodableRecords = (Array.isArray(records) ? records : []).filter(recordCanExplode);
   if (explodableRecords.length < 2) {
@@ -172,8 +289,16 @@ export function createExplodedViewRecordStates(THREE, records = [], bounds = nul
 
   const modelRadius = Math.max(boundsRadius(THREE, bounds), EPSILON);
   const modelSpan = Math.max(boundsSize(bounds, axisIndex), EPSILON);
-  const groups = groupRecords(THREE, explodableRecords, settings)
-    .filter((group) => group.records.length > 0 && group.bounds)
+  const baseGroups = groupRecords(THREE, explodableRecords, settings)
+    .filter((group) => group.records.length > 0 && group.bounds);
+  if (baseGroups.length < 2) {
+    return [];
+  }
+  if (radialAxis) {
+    return createRadialExplodedViewRecordStates(THREE, baseGroups, bounds, settings);
+  }
+
+  const groups = baseGroups
     .sort((left, right) => {
       const leftCenter = toNumber(left.center?.getComponent?.(axisIndex));
       const rightCenter = toNumber(right.center?.getComponent?.(axisIndex));
@@ -182,10 +307,6 @@ export function createExplodedViewRecordStates(THREE, records = [], bounds = nul
       }
       return left.recordIndex - right.recordIndex;
     });
-  if (groups.length < 2) {
-    return [];
-  }
-
   const maxGroupThickness = Math.max(
     ...groups.map((group) => boundsSize(group.bounds, axisIndex)),
     modelSpan * 0.08,
@@ -262,26 +383,57 @@ export function createExplodedViewRecordStates(THREE, records = [], bounds = nul
   return states;
 }
 
-export function applyExplodedViewProgress(THREE, states = [], progress = 0) {
+export function explodedViewStateTranslationAtProgress(THREE, state, progress = 0) {
+  if (!THREE?.Vector3) {
+    return null;
+  }
   const amount = clamp(toNumber(progress), 0, 1);
+  const targetTranslation = translationVector(
+    THREE,
+    state?.toTranslation,
+    translationVector(
+      THREE,
+      state?.translation,
+      new THREE.Vector3(0, 0, toNumber(state?.distance))
+    )
+  );
+  const fromTranslation = translationVector(THREE, state?.fromTranslation, null);
+  if (!fromTranslation && amount <= EPSILON) {
+    return null;
+  }
+  const x = fromTranslation
+    ? fromTranslation.x + (targetTranslation.x - fromTranslation.x) * amount
+    : targetTranslation.x * amount;
+  const y = fromTranslation
+    ? fromTranslation.y + (targetTranslation.y - fromTranslation.y) * amount
+    : targetTranslation.y * amount;
+  const z = fromTranslation
+    ? fromTranslation.z + (targetTranslation.z - fromTranslation.z) * amount
+    : targetTranslation.z * amount;
+  if (
+    fromTranslation &&
+    Math.abs(x) <= EPSILON &&
+    Math.abs(y) <= EPSILON &&
+    Math.abs(z) <= EPSILON
+  ) {
+    return null;
+  }
+  return new THREE.Vector3(x, y, z);
+}
+
+export function applyExplodedViewProgress(THREE, states = [], progress = 0) {
   for (const state of Array.isArray(states) ? states : []) {
     const record = state?.record;
     if (!record) {
       continue;
     }
-    if (amount <= EPSILON) {
+    const translation = explodedViewStateTranslationAtProgress(THREE, state, progress);
+    if (!translation) {
       record.explodedViewMatrix = null;
       continue;
     }
-    const translation = state.translation?.isVector3
-      ? state.translation
-      : new THREE.Vector3(0, 0, toNumber(state.distance));
     const matrix = state.matrix instanceof THREE.Matrix4 ? state.matrix : new THREE.Matrix4();
-    matrix.makeTranslation(
-      translation.x * amount,
-      translation.y * amount,
-      translation.z * amount
-    );
+    matrix.makeTranslation(translation.x, translation.y, translation.z);
     state.matrix = matrix;
     record.explodedViewMatrix = matrix;
   }

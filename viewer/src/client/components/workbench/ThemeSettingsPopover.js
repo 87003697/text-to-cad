@@ -124,7 +124,8 @@ const COLOR_MODE_OPTIONS = [
 const EXPLODED_AXIS_OPTIONS = [
   { value: "x", label: "X" },
   { value: "y", label: "Y" },
-  { value: "z", label: "Z" }
+  { value: "z", label: "Z" },
+  { value: "radial", label: "Radial" }
 ];
 
 const PRIMARY_LIGHT_OPTIONS = [

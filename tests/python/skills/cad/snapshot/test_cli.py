@@ -135,13 +135,13 @@ class SnapshotCliTests(unittest.TestCase):
                 "--output",
                 "tmp/cap.png",
                 "--display",
-                '{"mode":"rendered","exploded":{"enabled":true,"axis":"z","spacing":1.6}}',
+                '{"mode":"rendered","exploded":{"enabled":true,"axis":"radial","spacing":1.6}}',
             ]
         )
         job = load_job_from_options(options, stdin=_TtyStringIO(), cwd=Path.cwd())
         self.assertEqual(
             job["display"],
-            {"mode": "rendered", "exploded": {"enabled": True, "axis": "z", "spacing": 1.6}},
+            {"mode": "rendered", "exploded": {"enabled": True, "axis": "radial", "spacing": 1.6}},
         )
 
     def test_display_shortcut_rejects_unknown_modes(self) -> None:

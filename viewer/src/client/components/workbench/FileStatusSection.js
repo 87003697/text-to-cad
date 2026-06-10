@@ -69,6 +69,17 @@ export default function FileStatusSection({
     });
   };
 
+  const collapseExpandedItem = (itemId) => {
+    setExpandedItemIds((current) => {
+      if (!current.has(itemId)) {
+        return current;
+      }
+      const next = new Set(current);
+      next.delete(itemId);
+      return next;
+    });
+  };
+
   const handleRowKeyDown = (event, itemId, hasDetails) => {
     if (!hasDetails || (event.key !== "Enter" && event.key !== " ")) {
       return;
@@ -172,6 +183,19 @@ export default function FileStatusSection({
                       </div>
                     ))}
                   </dl>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="xs"
+                    className="h-auto rounded-sm px-0 py-0 text-[11px] font-medium text-muted-foreground hover:bg-transparent hover:text-sidebar-foreground"
+                    onClick={(event) => {
+                      event.preventDefault();
+                      event.stopPropagation();
+                      collapseExpandedItem(item.id);
+                    }}
+                  >
+                    Collapse
+                  </Button>
                 </div>
               ) : null}
             </li>

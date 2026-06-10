@@ -64,6 +64,7 @@ test("display settings normalize exploded-view controls independently from mode"
     autoFrame: false
   });
   assert.equal(normalizeExplodedViewSettings({ axis: "diagonal" }).axis, "z");
+  assert.equal(normalizeExplodedViewSettings({ axis: "radial" }).axis, "radial");
   assert.equal(normalizeDisplaySettings({ exploded: true }).exploded.enabled, false);
   assert.equal(normalizeDisplaySettings({ mode: "exploded", exploded: { enabled: true } }).exploded.enabled, true);
   assert.deepEqual(normalizeDisplaySettings({ mode: "exploded view" }), DEFAULT_DISPLAY_SETTINGS);

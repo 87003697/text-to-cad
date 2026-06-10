@@ -87,7 +87,9 @@ import {
   applyExplodedViewProgress,
   clearExplodedViewRecords,
   createExplodedViewRecordStates,
-  easeExplodedViewProgress
+  easeExplodedViewProgress,
+  explodedViewBoundsFromStates,
+  explodedViewStateTranslationAtProgress
 } from "cadjs/lib/viewer/explodedView";
 import {
   applyDisplayRecordTransform,
@@ -378,6 +380,102 @@ function cancelExplodedViewAnimation(animationRef) {
   animation.rafId = 0;
 }
 
+function displayRecordExplodedViewTranslation(THREE, record) {
+  const elements = record?.explodedViewMatrix?.elements;
+  if (!THREE?.Vector3 || !elements || elements.length < 16) {
+    return THREE?.Vector3 ? new THREE.Vector3() : null;
+  }
+  return new THREE.Vector3(
+    toNumber(elements[12]),
+    toNumber(elements[13]),
+    toNumber(elements[14])
+  );
+}
+
+function explodedViewStateTargetTranslation(THREE, state, targetProgress) {
+  const amount = clamp(targetProgress, 0, 1);
+  const translation = state?.translation?.isVector3
+    ? state.translation.clone()
+    : new THREE.Vector3(0, 0, toNumber(state?.distance));
+  return translation.multiplyScalar(amount);
+}
+
+function explodedViewTransitionStateKey(state) {
+  const partId = String(state?.partId || state?.record?.partId || "").trim();
+  return partId || String(state?.groupKey || "").trim();
+}
+
+function createExplodedViewRuntimeTransitionStates(runtime, states, targetProgress, {
+  previousStates = [],
+  previousTransitionProgress = 1,
+  useCurrentTranslations = true
+} = {}) {
+  if (!runtime?.THREE) {
+    return [];
+  }
+  const THREE = runtime.THREE;
+  const previousTranslationsByRecord = new Map();
+  const previousTranslationsByKey = new Map();
+  if (useCurrentTranslations) {
+    for (const previousState of Array.isArray(previousStates) ? previousStates : []) {
+      if (!previousState?.record) {
+        continue;
+      }
+      const translation = explodedViewStateTranslationAtProgress(
+        THREE,
+        previousState,
+        previousTransitionProgress
+      );
+      if (translation) {
+        if (!previousTranslationsByRecord.has(previousState.record)) {
+          previousTranslationsByRecord.set(previousState.record, translation);
+        }
+        const key = explodedViewTransitionStateKey(previousState);
+        if (key && !previousTranslationsByKey.has(key)) {
+          previousTranslationsByKey.set(key, translation);
+        }
+      }
+    }
+  }
+  return (Array.isArray(states) ? states : []).map((state) => ({
+    ...state,
+    fromTranslation: useCurrentTranslations
+      ? (
+        previousTranslationsByRecord.get(state.record) ||
+        previousTranslationsByKey.get(explodedViewTransitionStateKey(state)) ||
+        displayRecordExplodedViewTranslation(THREE, state.record)
+      )
+      : new THREE.Vector3(),
+    translation: explodedViewStateTargetTranslation(THREE, state, targetProgress),
+    matrix: new THREE.Matrix4()
+  }));
+}
+
+function clearExplodedViewRecordsOutsideStates(records = [], states = []) {
+  const stateRecords = new Set((Array.isArray(states) ? states : [])
+    .map((state) => state?.record)
+    .filter(Boolean));
+  for (const record of Array.isArray(records) ? records : []) {
+    if (record && !stateRecords.has(record)) {
+      record.explodedViewMatrix = null;
+    }
+  }
+}
+
+function explodedViewTransitionNeedsAnimation(states = []) {
+  for (const state of Array.isArray(states) ? states : []) {
+    const from = state?.fromTranslation;
+    const to = state?.translation;
+    if (!from?.isVector3 || !to?.isVector3) {
+      return true;
+    }
+    if (from.distanceToSquared(to) > 1e-8) {
+      return true;
+    }
+  }
+  return false;
+}
+
 function applyExplodedViewRuntimeProgress(runtime, states, progress) {
   if (!runtime?.THREE || !Array.isArray(runtime.displayRecords)) {
     return;
@@ -528,6 +626,62 @@ function getFitDistanceForBoundingSphere(camera, radius, sceneScaleMode, frameAs
   const horizontalHalfFov = Math.atan(Math.tan(verticalHalfFov) * Math.max(frameAspect, 1e-3));
   const limitingHalfFov = Math.max(Math.min(verticalHalfFov, horizontalHalfFov), 1e-3);
   return safeRadius / Math.sin(limitingHalfFov);
+}
+
+function cameraBoundsCenterAndRadius(THREE, bounds, modelOffset = null) {
+  if (!THREE?.Vector3 || !Array.isArray(bounds?.min) || !Array.isArray(bounds?.max)) {
+    return null;
+  }
+  const center = new THREE.Vector3(
+    (toNumber(bounds.min[0]) + toNumber(bounds.max[0])) / 2,
+    (toNumber(bounds.min[1]) + toNumber(bounds.max[1])) / 2,
+    (toNumber(bounds.min[2]) + toNumber(bounds.max[2])) / 2
+  );
+  if (modelOffset?.isVector3) {
+    center.add(modelOffset);
+  }
+  const radius = new THREE.Vector3(
+    Math.max(toNumber(bounds.max[0]) - toNumber(bounds.min[0]), 0),
+    Math.max(toNumber(bounds.max[1]) - toNumber(bounds.min[1]), 0),
+    Math.max(toNumber(bounds.max[2]) - toNumber(bounds.min[2]), 0)
+  ).length() / 2;
+  return { center, radius };
+}
+
+function transitionCameraToBounds(runtime, bounds, sceneScaleMode, frameInsets, {
+  durationMs = EXPLODED_VIEW_ANIMATION_DURATION_MS
+} = {}) {
+  if (!runtime?.THREE || !runtime?.camera || !runtime?.controls || !bounds) {
+    return false;
+  }
+  const frame = cameraBoundsCenterAndRadius(runtime.THREE, bounds, runtime.modelGroup?.position);
+  if (!frame || !Number.isFinite(frame.radius)) {
+    return false;
+  }
+  const offset = runtime.camera.position.clone().sub(runtime.controls.target);
+  const direction = offset.lengthSq() > 1e-8
+    ? offset.normalize()
+    : new runtime.THREE.Vector3(...DEFAULT_VIEW_DIRECTION).normalize();
+  const frameMetrics = getViewportFrameMetrics(runtime, frameInsets);
+  const distance = getFitDistanceForBoundingSphere(
+    runtime.camera,
+    frame.radius,
+    sceneScaleMode,
+    frameMetrics.aspect
+  );
+  const endPosition = frame.center.clone().add(direction.multiplyScalar(distance));
+  if (
+    runtime.camera.position.distanceToSquared(endPosition) <= 1e-8 &&
+    runtime.controls.target.distanceToSquared(frame.center) <= 1e-8
+  ) {
+    return false;
+  }
+  return transitionCameraToPerspectiveSnapshot(runtime, {
+    position: [endPosition.x, endPosition.y, endPosition.z],
+    target: [frame.center.x, frame.center.y, frame.center.z],
+    up: [runtime.camera.up.x, runtime.camera.up.y, runtime.camera.up.z],
+    zoom: runtime.camera.zoom
+  }, { durationMs });
 }
 
 function easeInOutCubic(t) {
@@ -1285,7 +1439,10 @@ const CadViewer = forwardRef(function CadViewer({
   const explodedViewAnimationRef = useRef({
     rafId: 0,
     progress: 0,
-    recordKey: ""
+    modelKey: "",
+    recordKey: "",
+    states: [],
+    transitionProgress: 0
   });
   const viewportFrameInsetsRef = useRef(normalizedViewportFrameInsets);
   const framedModelKeyRef = useRef("");
@@ -3019,6 +3176,10 @@ const CadViewer = forwardRef(function CadViewer({
   useEffect(() => {
     const runtime = runtimeRef.current;
     const animation = explodedViewAnimationRef.current;
+    const previousAnimationStates = Array.isArray(animation.states)
+      ? animation.states
+      : [];
+    const previousAnimationProgress = clamp(animation.transitionProgress, 0, 1);
     cancelExplodedViewAnimation(explodedViewAnimationRef);
 
     if (
@@ -3028,22 +3189,25 @@ const CadViewer = forwardRef(function CadViewer({
       !runtime.displayRecords.length
     ) {
       animation.progress = 0;
+      animation.modelKey = "";
       animation.recordKey = "";
+      animation.states = [];
+      animation.transitionProgress = 0;
       return undefined;
     }
 
-    const recordKey = `${modelKey || ""}:${displayRecordsAnimationKey(runtime.displayRecords)}`;
-    const recordsChanged = animation.recordKey !== recordKey;
+    const animationModelKey = modelKey || "";
+    const recordKey = `${animationModelKey}:${displayRecordsAnimationKey(runtime.displayRecords)}`;
+    const modelChanged = animation.modelKey !== animationModelKey;
     const targetProgress = explodedViewActive ? 1 : 0;
-    const fromProgress = explodedViewActive && recordsChanged
-      ? 0
-      : clamp(animation.progress, 0, 1);
+    const baseBounds = runtime.modelBounds || meshData?.bounds;
     const states = createExplodedViewRecordStates(
       runtime.THREE,
       runtime.displayRecords,
-      runtime.modelBounds || meshData?.bounds,
+      baseBounds,
       normalizedExplodedSettings
     );
+    animation.modelKey = animationModelKey;
     animation.recordKey = recordKey;
 
     if (!states.length) {
@@ -3054,12 +3218,36 @@ const CadViewer = forwardRef(function CadViewer({
       syncRecordTopologyDisplayEdgeTransforms(runtime, runtime.displayRecords);
       runtime.requestRender?.();
       animation.progress = 0;
+      animation.states = [];
+      animation.transitionProgress = 0;
       return undefined;
     }
 
-    if (Math.abs(fromProgress - targetProgress) <= 0.001) {
+    const transitionStates = createExplodedViewRuntimeTransitionStates(runtime, states, targetProgress, {
+      previousStates: previousAnimationStates,
+      previousTransitionProgress: previousAnimationProgress,
+      useCurrentTranslations: !modelChanged
+    });
+    clearExplodedViewRecordsOutsideStates(runtime.displayRecords, transitionStates);
+
+    if (normalizedExplodedSettings.autoFrame !== false) {
+      const targetBounds = targetProgress > 0
+        ? explodedViewBoundsFromStates(runtime.THREE, transitionStates, baseBounds, 1)
+        : baseBounds;
+      transitionCameraToBounds(
+        runtime,
+        targetBounds,
+        normalizedSceneScaleMode,
+        viewportFrameInsetsRef.current,
+        { durationMs: EXPLODED_VIEW_ANIMATION_DURATION_MS }
+      );
+    }
+
+    if (!explodedViewTransitionNeedsAnimation(transitionStates)) {
       animation.progress = targetProgress;
-      applyExplodedViewRuntimeProgress(runtime, states, targetProgress);
+      animation.states = transitionStates;
+      animation.transitionProgress = 1;
+      applyExplodedViewRuntimeProgress(runtime, transitionStates, 1);
       return undefined;
     }
 
@@ -3067,7 +3255,9 @@ const CadViewer = forwardRef(function CadViewer({
       ? performance.now()
       : Date.now();
 
-    applyExplodedViewRuntimeProgress(runtime, states, fromProgress);
+    animation.states = transitionStates;
+    animation.transitionProgress = 0;
+    applyExplodedViewRuntimeProgress(runtime, transitionStates, 0);
 
     const step = (timestamp) => {
       const now = Number.isFinite(Number(timestamp)) ? Number(timestamp) : Date.now();
@@ -3077,14 +3267,18 @@ const CadViewer = forwardRef(function CadViewer({
         1
       );
       const easedProgress = easeExplodedViewProgress(linearProgress);
-      const nextProgress = fromProgress + (targetProgress - fromProgress) * easedProgress;
-      animation.progress = nextProgress;
-      applyExplodedViewRuntimeProgress(runtime, states, nextProgress);
+      animation.progress = targetProgress > 0
+        ? easedProgress
+        : 1 - easedProgress;
+      animation.transitionProgress = easedProgress;
+      applyExplodedViewRuntimeProgress(runtime, transitionStates, easedProgress);
       if (linearProgress < 1) {
         animation.rafId = window.requestAnimationFrame(step);
       } else {
         animation.rafId = 0;
         animation.progress = targetProgress;
+        animation.transitionProgress = 1;
+        animation.states = transitionStates;
       }
     };
 
@@ -3099,6 +3293,7 @@ const CadViewer = forwardRef(function CadViewer({
     meshData?.bounds,
     meshGeometrySource,
     modelKey,
+    normalizedSceneScaleMode,
     normalizedThemeSettings,
     viewerReadyTick
   ]);

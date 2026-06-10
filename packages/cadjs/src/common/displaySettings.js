@@ -16,7 +16,7 @@ export const CAD_DISPLAY_MODE = Object.freeze({
 
 export const CAD_DISPLAY_MODE_VALUES = Object.freeze(Object.values(CAD_DISPLAY_MODE));
 
-export const EXPLODED_VIEW_AXES = Object.freeze(["x", "y", "z"]);
+export const EXPLODED_VIEW_AXES = Object.freeze(["x", "y", "z", "radial"]);
 export const EXPLODED_VIEW_DIRECTIONS = Object.freeze(["positive", "negative"]);
 export const MAX_EXPLODED_VIEW_DEPTH = 8;
 
