@@ -67,6 +67,29 @@ rerun the same command with the needed permission/escalation.
 - Do not stop an existing Viewer server unless the user asks.
 - If Viewer startup fails, report the failure and continue with the owning skill's non-GUI validation or artifacts.
 
+## Claude Preview
+
+The viewer port is dynamic — it is chosen at startup and may differ across
+worktrees. To integrate with the Claude Preview tool, add `--json` to the
+`agent:start` command:
+
+```bash
+npm --prefix scripts/viewer run agent:start -- --host 127.0.0.1 --dir <absolute-model-root> --shutdown-after 12h --json
+```
+
+The launcher writes a JSON result line to stdout after the human-readable lines.
+Parse it by taking the last line of stdout that begins with `{`:
+
+```json
+{"url":"http://127.0.0.1:<port>/?dir=<absolute-model-root>","port":<port>,"action":"reuse"}
+```
+
+`action` is `"reuse"` when an existing server was reused and is immediately
+ready, or `"start"` when a new server process was spawned and may still be
+initializing. For a `"start"` result, probe `GET /__cad/server` on the base
+URL (e.g. `http://127.0.0.1:<port>/__cad/server`) until it returns HTTP 200
+before passing the `url` value to the Claude Preview tool.
+
 ## References
 
 - Read `references/development.md` when the user asks to modify, debug, or
