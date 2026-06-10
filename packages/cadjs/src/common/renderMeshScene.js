@@ -18,6 +18,9 @@ import {
   buildModel
 } from "./cadScene.js";
 import {
+  applyDisplayRecordTransform
+} from "./displayRecordTransform.js";
+import {
   resolveTopologyDisplayEdgeRuntimes,
   shouldRenderTopologyDisplayEdges,
   shouldUseRecordTopologyEdgeTransforms
@@ -28,6 +31,12 @@ import {
 import {
   syncTopologyDisplayEdgeLine
 } from "../lib/viewer/topologyDisplayEdgeLine.js";
+import {
+  applyExplodedViewProgress,
+  clearExplodedViewRecords,
+  createExplodedViewRecordStates,
+  explodedViewBoundsFromStates
+} from "../lib/viewer/explodedView.js";
 import {
   addFloor as addSharedFloor,
   applyEnvironment as applySharedEnvironment,
@@ -802,6 +811,41 @@ function displayRecordPartIds(displayRecords = []) {
   ));
 }
 
+function applyViewportExplodedView(viewport, bounds) {
+  const { context, model, THREE: RuntimeTHREE } = viewport;
+  const settings = context.displaySettings?.exploded;
+  const THREEImpl = RuntimeTHREE || THREE;
+  const resetExplodedView = () => {
+    clearExplodedViewRecords(model.displayRecords);
+    for (const record of model.displayRecords) {
+      applyDisplayRecordTransform(THREEImpl, record);
+    }
+    model.root?.updateMatrixWorld?.(true);
+  };
+  if (settings?.enabled !== true) {
+    resetExplodedView();
+    return bounds;
+  }
+  const states = createExplodedViewRecordStates(
+    THREEImpl,
+    model.displayRecords,
+    bounds,
+    settings
+  );
+  if (!states.length) {
+    resetExplodedView();
+    return bounds;
+  }
+  applyExplodedViewProgress(THREEImpl, states, 1);
+  for (const record of model.displayRecords) {
+    applyDisplayRecordTransform(THREEImpl, record);
+  }
+  model.root?.updateMatrixWorld?.(true);
+  return settings.autoFrame === false
+    ? bounds
+    : explodedViewBoundsFromStates(THREEImpl, states, bounds, 1);
+}
+
 function syncViewportTopologyDisplayEdges(viewport) {
   const { context, model } = viewport;
   const renderedPartIds = displayRecordPartIds(model.displayRecords);
@@ -919,7 +963,7 @@ export async function captureModel(viewport, captureOptions = {}) {
     const effectiveBounds = parameters
       ? viewport.model.update({ stepParameters: parameters }).bounds
       : viewport.model.update({ stepParameters: null }).bounds;
-    boundsByOutput.set(output, effectiveBounds);
+    boundsByOutput.set(output, applyViewportExplodedView(viewport, effectiveBounds));
   }
   const lockedBounds = lockFraming
     ? mergeBoundsList(outputs.map((output) => boundsByOutput.get(output))) || bounds
@@ -932,9 +976,10 @@ export async function captureModel(viewport, captureOptions = {}) {
     const parameters = parametersForOutput(output);
     const { width, height } = outputSize(output, job);
     viewport.renderer.setSize(width, height, false);
-    const outputBounds = parameters
+    const baseOutputBounds = parameters
       ? viewport.model.update({ stepParameters: parameters }).bounds
       : viewport.model.update({ stepParameters: null }).bounds;
+    const outputBounds = applyViewportExplodedView(viewport, baseOutputBounds);
     syncViewportTopologyDisplayEdges(viewport);
     syncScreenSpaceLineMaterialResolution(viewport.model.runtime.screenSpaceLineMaterials, width, height);
     const cameraSpec = output.camera || job.camera || "iso";

@@ -25,6 +25,9 @@ import {
   createStepModuleEffectsApi,
   displayTransformForPart
 } from "./stepModuleEffects.js";
+import {
+  applyDisplayRecordTransform
+} from "./displayRecordTransform.js";
 import { axisIndex, normalizeStepClipSettings } from "../lib/viewer/clipPlane.js";
 import {
   clampSceneModelRadius,
@@ -34,6 +37,7 @@ import {
 } from "../lib/viewer/sceneScale.js";
 
 export { CAD_DISPLAY_MODE, normalizeDisplayMode };
+export { applyDisplayRecordTransform } from "./displayRecordTransform.js";
 
 export const CAD_SCENE_SCALE = VIEWER_SCENE_SCALE;
 
@@ -920,29 +924,6 @@ export function readBoundsCenter(THREE, bounds) {
     (toNumber(min[1]) + toNumber(max[1])) / 2,
     (toNumber(min[2]) + toNumber(max[2])) / 2
   );
-}
-
-function applyObjectMatrix(THREE, object3d, matrix) {
-  if (!object3d || !(matrix instanceof THREE.Matrix4)) {
-    return;
-  }
-  object3d.matrixAutoUpdate = false;
-  const targetMatrix = object3d.matrix instanceof THREE.Matrix4 ? object3d.matrix : new THREE.Matrix4();
-  targetMatrix.copy(matrix);
-  object3d.matrix = targetMatrix;
-  object3d.matrixWorldNeedsUpdate = true;
-}
-
-export function applyDisplayRecordTransform(THREE, record) {
-  if (!record) {
-    return;
-  }
-  const baseMatrix = buildPartTransformMatrix(THREE, record.baseTransform);
-  const effectMatrix = record.effectMatrix instanceof THREE.Matrix4 ? record.effectMatrix.clone() : null;
-  const combinedMatrix = effectMatrix ? effectMatrix.multiply(baseMatrix) : baseMatrix;
-  applyObjectMatrix(THREE, record.mesh, combinedMatrix);
-  applyObjectMatrix(THREE, record.edges, combinedMatrix);
-  applyObjectMatrix(THREE, record.silhouette, combinedMatrix);
 }
 
 function safeColor(THREE, value, fallback = null) {

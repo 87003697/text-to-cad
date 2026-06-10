@@ -80,8 +80,15 @@ import {
 } from "cadjs/lib/viewer/partVisualState";
 import {
   createRecordTopologyDisplayEdgeGroup,
+  syncRecordTopologyDisplayEdgeTransforms,
   syncTopologyDisplayEdgeLine
 } from "cadjs/lib/viewer/topologyDisplayEdgeLine";
+import {
+  applyExplodedViewProgress,
+  clearExplodedViewRecords,
+  createExplodedViewRecordStates,
+  easeExplodedViewProgress
+} from "cadjs/lib/viewer/explodedView";
 import {
   applyDisplayRecordTransform,
   applyRuntimeModelBounds,
@@ -158,6 +165,7 @@ const INTERACTION_IDLE_DELAY_MS = 140;
 const DEFAULT_DAMPING_FACTOR = 0.14;
 const DEFAULT_ZOOM_SPEED = 4.5;
 const COARSE_POINTER_ZOOM_SPEED = 1.6;
+const EXPLODED_VIEW_ANIMATION_DURATION_MS = 950;
 const ACCELERATED_WHEEL_ZOOM_SPEED = 10;
 const TRACKPAD_PINCH_ZOOM_SPEED = 14;
 const COARSE_POINTER_PINCH_ZOOM_SPEED = 2.4;
@@ -349,6 +357,41 @@ function meshNeedsPartRenderingForSourceColors(meshData) {
     return false;
   }
   return partColors.length !== parts.length || new Set(partColors).size > 1;
+}
+
+function displayRecordsAnimationKey(records = []) {
+  return (Array.isArray(records) ? records : [])
+    .map((record) => [
+      String(record?.partId || "").trim(),
+      String(record?.mesh?.uuid || ""),
+      String(record?.geometry?.uuid || "")
+    ].join(":"))
+    .join("|");
+}
+
+function cancelExplodedViewAnimation(animationRef) {
+  const animation = animationRef?.current;
+  if (!animation?.rafId || typeof window === "undefined") {
+    return;
+  }
+  window.cancelAnimationFrame(animation.rafId);
+  animation.rafId = 0;
+}
+
+function applyExplodedViewRuntimeProgress(runtime, states, progress) {
+  if (!runtime?.THREE || !Array.isArray(runtime.displayRecords)) {
+    return;
+  }
+  applyExplodedViewProgress(runtime.THREE, states, progress);
+  for (const record of runtime.displayRecords) {
+    applyDisplayRecordTransform(runtime.THREE, record);
+  }
+  runtime.modelGroup?.updateMatrixWorld?.(true);
+  runtime.edgesGroup?.updateMatrixWorld?.(true);
+  if (runtime.topologyDisplayEdgeTransformByRecord === true) {
+    syncRecordTopologyDisplayEdgeTransforms(runtime, runtime.displayRecords);
+  }
+  runtime.requestRender?.();
 }
 
 function getPixelRatioCap(cap) {
@@ -1239,6 +1282,11 @@ const CadViewer = forwardRef(function CadViewer({
   const suppressPerspectiveEventsRef = useRef(0);
   const drawingIdRef = useRef(0);
   const runtimeRef = useRef(null);
+  const explodedViewAnimationRef = useRef({
+    rafId: 0,
+    progress: 0,
+    recordKey: ""
+  });
   const viewportFrameInsetsRef = useRef(normalizedViewportFrameInsets);
   const framedModelKeyRef = useRef("");
   const modelTransformRef = useRef({
@@ -1277,7 +1325,13 @@ const CadViewer = forwardRef(function CadViewer({
     displaySettings
   }), [themeSettings, displaySettings]);
   const normalizedThemeSettings = normalizedViewerRenderState.themeSettings;
+  const normalizedDisplaySettings = normalizedViewerRenderState.displaySettings;
   const normalizedDisplayMode = normalizedViewerRenderState.displayMode;
+  const normalizedExplodedSettings = normalizedDisplaySettings.exploded;
+  const explodablePartCount = useMemo(() => renderableMeshParts(meshData).length, [meshData]);
+  const explodedViewActive = normalizedExplodedSettings.enabled && explodablePartCount > 1;
+  const effectiveRenderPartsIndividually = renderPartsIndividually ||
+    explodedViewActive;
   const shouldUseCadEdgeSource = renderFormat === RENDER_FORMAT.STEP;
   const displayEdgeSettings = useMemo(
     () => resolveThemeSettingsDisplayEdgeSettings(normalizedThemeSettings),
@@ -2361,7 +2415,7 @@ const CadViewer = forwardRef(function CadViewer({
       normalizedThemeSettings.materials?.overrideSourceColors !== true &&
       meshNeedsPartRenderingForSourceColors(meshData);
     const shouldRenderParts =
-      renderPartsIndividually ||
+      effectiveRenderPartsIndividually ||
       shouldRenderFillParts ||
       shouldRenderSourceColorParts ||
       Array.isArray(pickableParts) &&
@@ -2371,7 +2425,7 @@ const CadViewer = forwardRef(function CadViewer({
         pickMode === VIEWER_PICK_MODE.ASSEMBLY ||
         pickMode === VIEWER_PICK_MODE.AUTO
       );
-    const renderedParts = renderPartsIndividually
+    const renderedParts = effectiveRenderPartsIndividually
       ? (Array.isArray(meshData?.parts) ? meshData.parts : [])
       : shouldRenderFillParts || shouldRenderSourceColorParts
         ? meshData.parts
@@ -2423,7 +2477,7 @@ const CadViewer = forwardRef(function CadViewer({
       recomputeNormals,
       silhouette: topologyDisplayEdgesVisible && displayEdgeSettings.silhouette === true,
       parts: shouldRenderParts ? renderedParts : [],
-      renderPartsIndividually,
+      renderPartsIndividually: effectiveRenderPartsIndividually,
       stepParameters: modelStepParameters,
       parameterSetup: false,
       edgeRendering: {
@@ -2470,7 +2524,7 @@ const CadViewer = forwardRef(function CadViewer({
       displayRecords: modelStepParameters ? runtime.displayRecords : [],
       transformDisplayEdges: false
     });
-    const initialRecordTopologyEdgeTransforms = shouldUseRecordTopologyEdgeTransforms({
+    const initialRecordTopologyEdgeTransforms = explodedViewActive || shouldUseRecordTopologyEdgeTransforms({
       transformDetected: initialEdgeRuntimes.transformCount > 0,
       topologyDisplayEdgesVisible,
       displayEdgeRuntime,
@@ -2633,7 +2687,8 @@ const CadViewer = forwardRef(function CadViewer({
     isLoading,
     viewerReadyTick,
     pickMode,
-    renderPartsIndividually,
+    effectiveRenderPartsIndividually,
+    explodedViewActive,
     pickableParts,
     selectorRuntime,
     displayEdgeRuntime,
@@ -2655,7 +2710,7 @@ const CadViewer = forwardRef(function CadViewer({
     if (
       !runtime?.THREE ||
       isLoading ||
-      !renderPartsIndividually ||
+      !effectiveRenderPartsIndividually ||
       !Array.isArray(meshData?.parts) ||
       !Array.isArray(runtime.displayRecords) ||
       !runtime.displayRecords.length
@@ -2672,7 +2727,7 @@ const CadViewer = forwardRef(function CadViewer({
       if (!part) {
         continue;
       }
-      record.baseTransform = displayTransformForPart(meshData, part, renderPartsIndividually);
+      record.baseTransform = displayTransformForPart(meshData, part, effectiveRenderPartsIndividually);
       record.partBounds = part.bounds;
       record.partCenter = readBoundsCenter(runtime.THREE, part.bounds);
       applyDisplayRecordTransform(runtime.THREE, record, runtime.modelRadius || 1);
@@ -2706,7 +2761,7 @@ const CadViewer = forwardRef(function CadViewer({
     meshData?.parts,
     meshData?.bounds,
     isLoading,
-    renderPartsIndividually,
+    effectiveRenderPartsIndividually,
     normalizedSceneScaleMode,
     normalizedThemeSettings,
     resolvedFloorMode,
@@ -2809,7 +2864,7 @@ const CadViewer = forwardRef(function CadViewer({
       stepModuleTransformDetectedChangeRef.current?.(false);
       setTransformedSelectorRuntime(null);
       setTransformedDisplayEdgeRuntime(null);
-      runtime.topologyDisplayEdgeTransformByRecord = false;
+      runtime.topologyDisplayEdgeTransformByRecord = explodedViewActive;
       resetStepModuleRecordEffects(runtime.displayRecords);
       for (const record of runtime.displayRecords) {
         applyDisplayRecordTransform(runtime.THREE, record, runtime.modelRadius || 1);
@@ -2829,7 +2884,7 @@ const CadViewer = forwardRef(function CadViewer({
         focusedPartIds,
         viewerTheme,
         dimmedOpacity: FOCUSED_DIMMED_SURFACE_OPACITY,
-        transformByRecord: false,
+        transformByRecord: explodedViewActive,
         displayRecords: runtime.displayRecords,
         syncClip: (activeRuntime) => syncRuntimeStepClipPlane(activeRuntime, clipSettingsRef.current)
       });
@@ -2878,7 +2933,7 @@ const CadViewer = forwardRef(function CadViewer({
     }
 
     applyStepModuleEffectsToRecords(runtime.THREE, runtime.displayRecords, effectsByPartId);
-    const useRecordTopologyEdgeTransforms = shouldUseRecordTopologyEdgeTransforms({
+    const useRecordTopologyEdgeTransforms = explodedViewActive || shouldUseRecordTopologyEdgeTransforms({
       transformDetected,
       topologyDisplayEdgesVisible,
       displayEdgeRuntime,
@@ -2948,6 +3003,7 @@ const CadViewer = forwardRef(function CadViewer({
     hiddenPartIds,
     hiddenAwareVisualEdgeSettings,
     hoveredPartId,
+    explodedViewActive,
     isLoading,
     meshData,
     modelKey,
@@ -2958,6 +3014,93 @@ const CadViewer = forwardRef(function CadViewer({
     selectorRuntime,
     displayEdgeRuntime,
     stepParameterRuntime
+  ]);
+
+  useEffect(() => {
+    const runtime = runtimeRef.current;
+    const animation = explodedViewAnimationRef.current;
+    cancelExplodedViewAnimation(explodedViewAnimationRef);
+
+    if (
+      !runtime?.THREE ||
+      isLoading ||
+      !Array.isArray(runtime.displayRecords) ||
+      !runtime.displayRecords.length
+    ) {
+      animation.progress = 0;
+      animation.recordKey = "";
+      return undefined;
+    }
+
+    const recordKey = `${modelKey || ""}:${displayRecordsAnimationKey(runtime.displayRecords)}`;
+    const recordsChanged = animation.recordKey !== recordKey;
+    const targetProgress = explodedViewActive ? 1 : 0;
+    const fromProgress = explodedViewActive && recordsChanged
+      ? 0
+      : clamp(animation.progress, 0, 1);
+    const states = createExplodedViewRecordStates(
+      runtime.THREE,
+      runtime.displayRecords,
+      runtime.modelBounds || meshData?.bounds,
+      normalizedExplodedSettings
+    );
+    animation.recordKey = recordKey;
+
+    if (!states.length) {
+      clearExplodedViewRecords(runtime.displayRecords);
+      for (const record of runtime.displayRecords) {
+        applyDisplayRecordTransform(runtime.THREE, record);
+      }
+      syncRecordTopologyDisplayEdgeTransforms(runtime, runtime.displayRecords);
+      runtime.requestRender?.();
+      animation.progress = 0;
+      return undefined;
+    }
+
+    if (Math.abs(fromProgress - targetProgress) <= 0.001) {
+      animation.progress = targetProgress;
+      applyExplodedViewRuntimeProgress(runtime, states, targetProgress);
+      return undefined;
+    }
+
+    const startedAt = typeof performance !== "undefined" && typeof performance.now === "function"
+      ? performance.now()
+      : Date.now();
+
+    applyExplodedViewRuntimeProgress(runtime, states, fromProgress);
+
+    const step = (timestamp) => {
+      const now = Number.isFinite(Number(timestamp)) ? Number(timestamp) : Date.now();
+      const linearProgress = clamp(
+        (now - startedAt) / EXPLODED_VIEW_ANIMATION_DURATION_MS,
+        0,
+        1
+      );
+      const easedProgress = easeExplodedViewProgress(linearProgress);
+      const nextProgress = fromProgress + (targetProgress - fromProgress) * easedProgress;
+      animation.progress = nextProgress;
+      applyExplodedViewRuntimeProgress(runtime, states, nextProgress);
+      if (linearProgress < 1) {
+        animation.rafId = window.requestAnimationFrame(step);
+      } else {
+        animation.rafId = 0;
+        animation.progress = targetProgress;
+      }
+    };
+
+    animation.rafId = window.requestAnimationFrame(step);
+    return () => {
+      cancelExplodedViewAnimation(explodedViewAnimationRef);
+    };
+  }, [
+    explodedViewActive,
+    normalizedExplodedSettings,
+    isLoading,
+    meshData?.bounds,
+    meshGeometrySource,
+    modelKey,
+    normalizedThemeSettings,
+    viewerReadyTick
   ]);
 
   useEffect(() => {

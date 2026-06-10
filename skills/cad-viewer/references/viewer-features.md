@@ -19,4 +19,4 @@ Load this only when a task needs Viewer file-support details or UI control guida
 - Floating toolbar: `Select` copies STEP topology references, `Draw` opens annotation tools, `Select Pose` appears for robot target picking when available, `Open orbit preview` starts an auto-rotating preview, and the copy/download buttons capture screenshots.
 - Drawing tools: freehand, line, arrow, expand, rectangle, circle, fill, erase, undo, redo, and clear.
 - File sheet: open the right sheet for file-specific controls such as STEP tree/parameters, G-code layers/detail/travel, DXF thickness/bends, URDF/SRDF/SDF joints and metadata, plus display and appearance controls.
-- Display/appearance: use the file sheet and theme menu for solid/wireframe mode, STEP clipping, surface colors, edge visibility/detail, highlight styling, backdrop, floor/grid, lighting, theme presets, and color mode.
+- Display/appearance: use the file sheet and theme menu for solid/wireframe/x-ray modes, STEP clipping, an independent Explode toggle for animated vertical STEP disassembly, surface colors, edge visibility/detail, highlight styling, backdrop, floor/grid, lighting, theme presets, and color mode.

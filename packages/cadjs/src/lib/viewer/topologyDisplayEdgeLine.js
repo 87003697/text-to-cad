@@ -3,6 +3,9 @@ import {
   disposeTopologyDisplayEdgeObject
 } from "../../common/topologyDisplayEdgeRuntime.js";
 import {
+  composeDisplayRecordEffectMatrix
+} from "../../common/displayRecordTransform.js";
+import {
   createTopologyDisplayEdgeObject
 } from "../../common/renderEdges.js";
 
@@ -88,9 +91,7 @@ function applyRecordEffectMatrix(runtime, object, record) {
   if (!THREE || !object) {
     return false;
   }
-  const nextMatrix = record?.effectMatrix instanceof THREE.Matrix4
-    ? record.effectMatrix
-    : new THREE.Matrix4();
+  const nextMatrix = composeDisplayRecordEffectMatrix(THREE, record) || new THREE.Matrix4();
   object.matrixAutoUpdate = false;
   const targetMatrix = object.matrix instanceof THREE.Matrix4 ? object.matrix : new THREE.Matrix4();
   const changed = !targetMatrix.equals(nextMatrix);
@@ -133,6 +134,10 @@ function syncRecordEdgeLineTransforms(runtime, group, displayRecords = []) {
     runtime.edgesGroup?.updateMatrixWorld?.(true);
   }
   return changed;
+}
+
+export function syncRecordTopologyDisplayEdgeTransforms(runtime, displayRecords = []) {
+  return syncRecordEdgeLineTransforms(runtime, runtime?.topologyDisplayEdgeLine, displayRecords);
 }
 
 export function createRecordTopologyDisplayEdgeGroup(runtime, sourceRuntime, {
