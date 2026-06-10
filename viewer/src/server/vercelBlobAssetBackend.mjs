@@ -258,16 +258,20 @@ export function createVercelBlobAssetBackend({
   fetchImpl = globalThis.fetch,
   token = process.env.VIEWER_VERCEL_BLOB_READ_WRITE_TOKEN || process.env.BLOB_READ_WRITE_TOKEN,
   readOnly = false,
+  catalogCacheTtlMs = 0,
 } = {}) {
   const normalizedPrefix = normalizePrefix(prefix);
   const normalizedCatalogPath = joinBlobPath(normalizedPrefix, catalogPath || "catalog.json");
   const resolvedCatalogUrl = catalogUrl || publicBlobUrlForRef(prefix, catalogPath || "catalog.json");
+  let cachedCatalog = null;
+  let cachedCatalogAt = 0;
+  let catalogFetchInFlight = null;
 
   async function blobClient() {
     return loadBlobClient(client);
   }
 
-  async function readCatalog() {
+  async function fetchCatalog() {
     if (resolvedCatalogUrl) {
       return normalizeVercelBlobCatalog(await readJsonFromUrl(resolvedCatalogUrl, { fetchImpl }));
     }
@@ -293,6 +297,38 @@ export function createVercelBlobAssetBackend({
       throw new Error(`Vercel Blob catalog not found: ${normalizedCatalogPath}`);
     }
     return normalizeVercelBlobCatalog(await readJsonFromUrl(catalogBlob.url, { fetchImpl }));
+  }
+
+  async function fetchCatalogCached({ force = false } = {}) {
+    if (!(catalogCacheTtlMs > 0)) {
+      return fetchCatalog();
+    }
+    if (!force && cachedCatalog && Date.now() - cachedCatalogAt < catalogCacheTtlMs) {
+      return cachedCatalog;
+    }
+    if (!catalogFetchInFlight) {
+      catalogFetchInFlight = fetchCatalog().finally(() => {
+        catalogFetchInFlight = null;
+      });
+    }
+    try {
+      const catalog = await catalogFetchInFlight;
+      cachedCatalog = catalog;
+      cachedCatalogAt = Date.now();
+      return catalog;
+    } catch (error) {
+      if (cachedCatalog) {
+        console.warn(
+          `Serving cached Vercel Blob catalog after read failure: ${error instanceof Error ? error.message : String(error)}`
+        );
+        return cachedCatalog;
+      }
+      throw error;
+    }
+  }
+
+  async function readCatalog() {
+    return fetchCatalogCached();
   }
 
   async function writeAsset({ fileRef, body, contentType = "application/octet-stream" } = {}) {
@@ -323,7 +359,7 @@ export function createVercelBlobAssetBackend({
   }
 
   async function refreshCatalog() {
-    return readCatalog();
+    return fetchCatalogCached({ force: true });
   }
 
   async function urlForBlobRef(fileRef) {

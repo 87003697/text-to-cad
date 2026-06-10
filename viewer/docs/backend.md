@@ -102,6 +102,16 @@ deployments construct it in read-only mode: the hosted API reads the catalog and
 serves public Blob assets, but it does not write Blob objects or regenerate STEP
 artifacts.
 
+Hosted catalog reads are deliberately conservative about Blob traffic.
+Sustained per-request fetches of the public catalog URL from shared serverless
+egress IPs trip Vercel's abuse mitigation with intermittent `403 Forbidden`
+responses, so the hosted backend caches the parsed catalog in-function for 60
+seconds (serving the last good catalog if a refresh fails), hosted
+`/__cad/catalog` responses carry `s-maxage`/`stale-while-revalidate`
+cache-control so the Vercel CDN absorbs client polling, and hosted viewer
+builds poll the catalog every 60 seconds instead of the local 2-second
+development cadence.
+
 Expected deployment shape:
 
 - Build the frontend normally.
