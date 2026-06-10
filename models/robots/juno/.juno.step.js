@@ -133,6 +133,53 @@ const JUMP_ARM_SPRING_DEG_PER_MM = 0.3; // landing arm dip coupled to body sprin
 const JUMP_LEAN_DEG = 8;          // crouch/landing forward lean
 const JUMP_HEAD_UP_DEG = -8;      // look up slightly while airborne
 
+// Routine: one looping sequence — karate front kick, handstand, dance.
+// Segment boundaries of the normalized cycle; every segment starts and
+// ends in the athletic stance so the chain loops seamlessly.
+const ROUTINE_KICK_END = 0.28;
+const ROUTINE_HANDSTAND_END = 0.66;
+// Lateral pendulum for weight shifts: the hip-roll joint sits at z=-184 in
+// the pelvis frame; rolling there (with the ankle roll compensating) moves
+// the planted sole sideways by ~(soleZ - HIP_ROLL_Z) * sin(roll).
+const HIP_ROLL_Z_MM = -184;
+// Kick (segment-local): weight shifts over the left leg, the right leg
+// chambers and snaps a front kick at hip height with a guard up.
+const KICK_WEIGHT_SHIFT_MM = 42;
+const KICK_DIP_MM = 18;
+const KICK_CHAMBER_HIP_DEG = -70;
+const KICK_CHAMBER_KNEE_DEG = 115;
+const KICK_CHAMBER_ANKLE_DEG = 10;
+const KICK_EXTEND_HIP_DEG = -20;   // added on top of the chamber
+const KICK_EXTEND_KNEE_DEG = -105; // snaps the shin out nearly straight
+const KICK_EXTEND_ANKLE_DEG = -25; // ball-of-foot strike (toes pulled back)
+const KICK_GUARD_SHOULDER_DEG = -45;
+const KICK_GUARD_ELBOW_DEG = -105;
+const KICK_GUARD_ROLL_OUT_DEG = 18;
+const KICK_HIP_TURN_DEG = -14;     // hips rotate into the kick
+const KICK_LEAN_BACK_DEG = -7;     // counterbalance during the snap
+// Handstand: keyframed root rotation about +Y with contact anchoring —
+// toe-pinned while folding, palm-pinned once the hands plant.
+const HS_PLANT_X_MM = 430;         // hand plant line in front of the feet
+// Palm contact point in the hand frame: the hands plant palm-down with the
+// fingers pointing forward (total hand pitch -90 at the hold), so contact
+// is on the local -x palm face — the one extent that is symmetric between
+// the two hands (the posed finger curl differs in local z).
+const HS_PALM_LOCAL_MM = [-35, 0, -70];
+const HS_TOE_LOCAL_MM = [100, 0, -26]; // sole front contact point in the foot frame
+const HS_WOBBLE_DEG = 1.6;         // leg wobble while holding the stand
+// Dance (segment-local, 4 beats): lateral sway with knee bounce, twist,
+// alternating disco arm points, and a head nod.
+const DANCE_BEATS = 4;
+const DANCE_SWAY_MM = 42;
+const DANCE_BOUNCE_MM = 24;
+const DANCE_TWIST_DEG = 20;
+const DANCE_ARM_UP_DEG = -125;
+const DANCE_ARM_OUT_DEG = 35;
+const DANCE_ELBOW_UP_DEG = -15;
+const DANCE_ELBOW_DOWN_DEG = -65;
+const DANCE_NOD_DEG = 7;
+const DANCE_COUNTER_LEAN_DEG_PER_MM = 0.05;
+
 const SIDES = ["left", "right"];
 
 function sideSign(side) {
@@ -256,9 +303,12 @@ function matTranspose3(a) {
 // FK over the whole chain. extras[jointName] = { pitchDeg, rollDeg } folds
 // small artistic +Y/+X rotations in at that joint center (torso lean and
 // weight shift); rootOffset translates the pelvis (body bounce in the air
-// gaits — the stance-leg IK absorbs it on the ground side).
-function fkFrames(anglesDeg, extras = {}, rootOffset = [0, 0, 0]) {
-  const frames = { pelvis: { R: IDENTITY3, p: [...rootOffset] } };
+// gaits — the stance-leg IK absorbs it on the ground side); rootPitchDeg
+// rotates the whole body about +Y at the pelvis (handstand inversion —
+// callers solve the matching translation so contacts stay put).
+function fkFrames(anglesDeg, extras = {}, rootOffset = [0, 0, 0], rootPitchDeg = 0) {
+  const rootR = rootPitchDeg ? rotAxisDeg(Y, rootPitchDeg) : IDENTITY3;
+  const frames = { pelvis: { R: rootR, p: [...rootOffset] } };
   for (const joint of JOINTS) {
     const parent = frames[joint.parent];
     const offset = matVec3(parent.R, joint.origin);
@@ -653,6 +703,317 @@ function jumpTorsoExtras(phase, bodyZ, flight, torsoSway) {
   return { waist_yaw: { pitchDeg } };
 }
 
+// --------------------------------------------------------------- routine
+function wrap01(value) {
+  return ((finite(value, 0) % 1) + 1) % 1;
+}
+
+// Smooth on/off window: ramps up over [inStart, inEnd], back down over
+// [outStart, outEnd], zero outside.
+function pulse(t, inStart, inEnd, outStart, outEnd) {
+  return smooth01((t - inStart) / Math.max(1e-9, inEnd - inStart))
+    * (1 - smooth01((t - outStart) / Math.max(1e-9, outEnd - outStart)));
+}
+
+// Planted-leg solve shared by the kick support leg and the dance: the
+// pitch IK keeps the sole at ground height under a bobbing pelvis, and a
+// hip/ankle roll pair absorbs a lateral pelvis shift dy (the second-order
+// foot lift from the roll arc is under 2 mm at these amplitudes).
+function plantedLegAngles(side, bodyZMm, pelvisDyMm) {
+  const rig = STRIDE_RIG[side];
+  const s = sideSign(side);
+  const depth = ((rig.hipZ + bodyZMm) - (rig.soleZ + rig.ankleToSole)) / rig.cosRoll;
+  const ik = legPitchIk(0, depth, 0);
+  const lateralDrop = HIP_ROLL_Z_MM - rig.soleZ;
+  const rollDeltaDeg = (Math.asin(clamp(pelvisDyMm / lateralDrop, -0.5, 0.5)) * 180) / Math.PI;
+  return {
+    [`hip_pitch_${side}`]: ik.hipDeg,
+    [`knee_${side}`]: ik.kneeDeg,
+    [`ankle_pitch_${side}`]: ik.ankleDeg,
+    [`hip_roll_${side}`]: (s * ATHLETIC.HIP_ROLL_ABDUCT) - rollDeltaDeg,
+    [`ankle_roll_${side}`]: -((s * ATHLETIC.HIP_ROLL_ABDUCT) - rollDeltaDeg)
+  };
+}
+
+// ---- karate front kick (segment-local t): weight onto the left leg,
+// chamber, snap, re-chamber, plant.
+function kickPose(t) {
+  const angles = { ...ATHLETIC_ANGLES };
+  const weight = pulse(t, 0.0, 0.12, 0.86, 0.98);
+  const chamber = pulse(t, 0.14, 0.3, 0.72, 0.88);
+  const extend = pulse(t, 0.36, 0.48, 0.58, 0.7);
+  const guard = pulse(t, 0.04, 0.16, 0.8, 0.94);
+
+  const dy = KICK_WEIGHT_SHIFT_MM * weight;
+  const bodyZ = -KICK_DIP_MM * chamber;
+  Object.assign(angles, plantedLegAngles("left", bodyZ, dy));
+
+  // Kicking leg, authored in joint space (airborne).
+  angles.hip_pitch_right = ATHLETIC.HIP_PITCH
+    + ((KICK_CHAMBER_HIP_DEG - ATHLETIC.HIP_PITCH) * chamber)
+    + (KICK_EXTEND_HIP_DEG * extend);
+  angles.knee_right = ATHLETIC.KNEE
+    + ((KICK_CHAMBER_KNEE_DEG - ATHLETIC.KNEE) * chamber)
+    + (KICK_EXTEND_KNEE_DEG * extend);
+  angles.ankle_pitch_right = ATHLETIC.ANKLE_PITCH
+    + ((KICK_CHAMBER_ANKLE_DEG - ATHLETIC.ANKLE_PITCH) * chamber)
+    + (KICK_EXTEND_ANKLE_DEG * extend);
+  angles.ankle_roll_right = -sideSign("right") * ATHLETIC.HIP_ROLL_ABDUCT;
+
+  // Guard: both fists up, elbows tight.
+  for (const side of SIDES) {
+    const s = sideSign(side);
+    angles[`shoulder_pitch_${side}`] = ATHLETIC.SHOULDER_PITCH
+      + ((KICK_GUARD_SHOULDER_DEG - ATHLETIC.SHOULDER_PITCH) * guard);
+    angles[`shoulder_roll_${side}`] = (s * ATHLETIC.SHOULDER_ROLL_ABDUCT)
+      + (s * KICK_GUARD_ROLL_OUT_DEG * guard);
+    angles[`elbow_${side}`] = ATHLETIC.ELBOW
+      + ((KICK_GUARD_ELBOW_DEG - ATHLETIC.ELBOW) * guard);
+  }
+
+  const turn = KICK_HIP_TURN_DEG * ((0.5 * chamber) + (0.5 * extend));
+  angles.waist_yaw += turn;
+  angles.neck_yaw += -turn * NECK_COMPENSATION;
+
+  return {
+    angles,
+    extras: { waist_yaw: { pitchDeg: KICK_LEAN_BACK_DEG * extend } },
+    rootOffset: [0, dy, bodyZ],
+    rootPitchDeg: 0
+  };
+}
+
+// ---- handstand: keyframed whole-body rotation about +Y. While folding,
+// the root is anchored so the sole front edge stays at its athletic spot
+// (heels rise, toe pivot); once the hands plant, the root is anchored so
+// the palm contact point stays on the ground at the plant line. Anchors
+// are solved once at init by evaluating the FK and shifting the root.
+function anchoredRootOffset(angles, rootPitchDeg, link, localMm, targetMm) {
+  const frames = fkFrames(angles, {}, [0, 0, 0], rootPitchDeg);
+  const f = frames[link];
+  const world = matVec3(f.R, localMm).map((v, k) => v + f.p[k]);
+  // null target components leave that axis where the pose naturally put it.
+  return targetMm.map((t, k) => (t === null ? 0 : t - world[k]));
+}
+
+function handstandKeyAngles(overrides) {
+  const angles = { ...ATHLETIC_ANGLES };
+  for (const side of SIDES) {
+    // Square the limbs for the gymnastic line: no abduction or twist.
+    angles[`hip_roll_${side}`] = 0;
+    angles[`ankle_roll_${side}`] = 0;
+    angles[`shoulder_yaw_${side}`] = 0;
+    angles[`wrist_pitch_${side}`] = 0;
+    for (const [name, value] of Object.entries(overrides.legs || {})) {
+      angles[`${name}_${side}`] = value;
+    }
+    for (const [name, value] of Object.entries(overrides.arms || {})) {
+      angles[`${name}_${side}`] = value;
+    }
+  }
+  if (overrides.neckPitch !== undefined) {
+    angles.neck_pitch = overrides.neckPitch;
+  }
+  return angles;
+}
+
+const HANDSTAND_KEYS = (() => {
+  const toeFrame = ATHLETIC_FRAMES.foot_left;
+  const toeWorld = matVec3(toeFrame.R, HS_TOE_LOCAL_MM).map((v, k) => v + toeFrame.p[k]);
+  // Anchor x/z only; the lateral position stays where the pose puts it.
+  const toeTarget = [toeWorld[0], null, toeWorld[2]];
+  const ground = STRIDE_RIG.left.soleZ;
+  const palmTarget = [HS_PLANT_X_MM, null, ground];
+
+  // The arms stay roughly vertical under the rotating body — the world
+  // arm direction is rootPitch + shoulderPitch, so the shoulder tracks
+  // -rootPitch as the body goes over, reaching shoulder -180 / elbow -18 /
+  // wrist -70 at the hold (total hand pitch -90: palms flat, fingers
+  // forward), all inside the URDF joint limits.
+  const HOLD_ARMS = { shoulder_pitch: -180, shoulder_roll: 0, elbow: -18, wrist_roll: 0, wrist_pitch: -70 };
+  const spec = [
+    { t: 0.0, pitch: 0, anchor: null, overrides: null },
+    {
+      t: 0.09, pitch: 12, anchor: "toe",
+      overrides: {
+        legs: { hip_pitch: -30, knee: 20, ankle_pitch: 3 }, // foot pitch +5: heel just off the ground
+        arms: { shoulder_pitch: -52, shoulder_roll: 0, elbow: -10, wrist_roll: 0, wrist_pitch: -20 }
+      }
+    },
+    {
+      t: 0.2, pitch: 55, anchor: "toe",
+      overrides: {
+        legs: { hip_pitch: -100, knee: 30, ankle_pitch: 27 }, // foot pitch +12: heels rise in the fold
+        arms: { shoulder_pitch: -70, shoulder_roll: 0, elbow: -8, wrist_roll: 0, wrist_pitch: -45 }
+      }
+    },
+    {
+      // Press position: palms planted, arms vertical, pike fold with the
+      // toes still resting on the ground (hip solved at init below).
+      t: 0.3, pitch: 95, anchor: "palm", solvePressHip: true,
+      overrides: {
+        legs: { hip_pitch: -80, knee: 8, ankle_pitch: 30 },
+        arms: { shoulder_pitch: -95, shoulder_roll: 0, elbow: -20, wrist_roll: 0, wrist_pitch: -70 }
+      }
+    },
+    {
+      t: 0.4, pitch: 140, anchor: "palm",
+      overrides: {
+        legs: { hip_pitch: -45, knee: 25, ankle_pitch: 10 },
+        arms: { shoulder_pitch: -145, shoulder_roll: 0, elbow: -18, wrist_roll: 0, wrist_pitch: -67 }
+      }
+    },
+    {
+      t: 0.48, pitch: 178, anchor: "palm",
+      overrides: {
+        legs: { hip_pitch: -6, knee: 4, ankle_pitch: 25 },
+        arms: HOLD_ARMS
+      }
+    },
+    {
+      t: 0.58, pitch: 178, anchor: "palm",
+      overrides: {
+        legs: { hip_pitch: -6, knee: 4, ankle_pitch: 25 },
+        arms: HOLD_ARMS
+      }
+    }
+  ];
+  // Mirror the way back down through the same shapes.
+  const back = [
+    { ...spec[4], t: 0.66 },
+    { ...spec[3], t: 0.76 },
+    { ...spec[2], t: 0.86 },
+    { ...spec[1], t: 0.94 },
+    { ...spec[0], t: 1.0 }
+  ];
+
+  // Resolve every key with its anchor TYPE plus the toe-line x position
+  // it implies; the root translation itself is solved per frame at
+  // runtime, so contacts stay exact through every interpolated pose.
+  // Palm-typed keys still record their natural toe x so toe<->palm
+  // boundary intervals can slide the toe target continuously.
+  const resolved = [...spec, ...back].map((key) => {
+    const angles = key.overrides ? handstandKeyAngles(key.overrides) : { ...ATHLETIC_ANGLES };
+    const type = key.anchor === "palm" ? "palm" : "toe";
+    if (key.solvePressHip) {
+      // Bisect the pike fold so the toes rest exactly on the ground
+      // behind the planted hands (toe height grows monotonically with
+      // hip angle on the toes-behind branch). The palm anchor depends
+      // only on the arm chain, so the hip search does not disturb it.
+      const rootOffset = anchoredRootOffset(angles, key.pitch, "hand_left", HS_PALM_LOCAL_MM, palmTarget);
+      let lo = -95;
+      let hi = -40;
+      for (let i = 0; i < 48; i += 1) {
+        const mid = (lo + hi) / 2;
+        for (const side of SIDES) {
+          angles[`hip_pitch_${side}`] = mid;
+        }
+        const f = fkFrames(angles, {}, rootOffset, key.pitch).foot_left;
+        const toeZ = f.p[2] + matVec3(f.R, HS_TOE_LOCAL_MM)[2];
+        if (toeZ < ground) {
+          lo = mid;
+        } else {
+          hi = mid;
+        }
+      }
+    }
+    const rootOffset = type === "palm"
+      ? anchoredRootOffset(angles, key.pitch, "hand_left", HS_PALM_LOCAL_MM, palmTarget)
+      : anchoredRootOffset(angles, key.pitch, "foot_left", HS_TOE_LOCAL_MM, toeTarget);
+    const foot = fkFrames(angles, {}, rootOffset, key.pitch).foot_left;
+    const toeX = foot.p[0] + matVec3(foot.R, HS_TOE_LOCAL_MM)[0];
+    return { t: key.t, pitch: key.pitch, type, toeX, angles };
+  });
+  return { keys: resolved.sort((a, b) => a.t - b.t), toeZ: toeWorld[2], palmTarget };
+})();
+
+function handstandPose(t) {
+  const { keys, toeZ, palmTarget } = HANDSTAND_KEYS;
+  let a = keys[0];
+  let b = keys[keys.length - 1];
+  for (let i = 0; i < keys.length - 1; i += 1) {
+    if (t >= keys[i].t && t <= keys[i + 1].t) {
+      a = keys[i];
+      b = keys[i + 1];
+      break;
+    }
+  }
+  const s = smooth01((t - a.t) / Math.max(1e-9, b.t - a.t));
+  const angles = {};
+  for (const name of Object.keys(ATHLETIC_ANGLES)) {
+    angles[name] = a.angles[name] + ((b.angles[name] - a.angles[name]) * s);
+  }
+  // A breath of leg wobble during the hold (hips only, so the planted
+  // hands stay put).
+  const hold = pulse(t, 0.46, 0.5, 0.56, 0.6);
+  const wobble = HS_WOBBLE_DEG * hold * Math.sin(2 * Math.PI * ((t - 0.46) / 0.14) * 2);
+  for (const side of SIDES) {
+    angles[`hip_pitch_${side}`] += wobble;
+    angles[`knee_${side}`] += -wobble * 0.6;
+  }
+  const rootPitchDeg = a.pitch + ((b.pitch - a.pitch) * s);
+  // Solve the contact anchor for THIS frame: palm-anchored only while both
+  // bracketing keys are palm keys (the press key satisfies both contacts,
+  // so the anchor handoff there is seamless); otherwise toe-anchored with
+  // the toe target sliding along the ground line between the keys.
+  let rootOffset;
+  if (a.type === "palm" && b.type === "palm") {
+    rootOffset = anchoredRootOffset(angles, rootPitchDeg, "hand_left", HS_PALM_LOCAL_MM, palmTarget);
+  } else {
+    const toeX = a.toeX + ((b.toeX - a.toeX) * s);
+    rootOffset = anchoredRootOffset(angles, rootPitchDeg, "foot_left", HS_TOE_LOCAL_MM, [toeX, null, toeZ]);
+  }
+  return { angles, extras: {}, rootOffset, rootPitchDeg };
+}
+
+// ---- dance (segment-local t, DANCE_BEATS beats): sway + knee bounce,
+// waist twist, alternating disco points, head nod. Feet stay planted via
+// the same planted-leg solve as the kick support leg.
+function dancePose(t) {
+  const angles = { ...ATHLETIC_ANGLES };
+  const env = pulse(t, 0.0, 0.08, 0.92, 1.0);
+  const beat = t * DANCE_BEATS;
+
+  const dy = DANCE_SWAY_MM * env * Math.sin(Math.PI * beat); // sway period: 2 beats
+  const bodyZ = -DANCE_BOUNCE_MM * env * (0.5 - (0.5 * Math.cos(2 * Math.PI * beat)));
+  Object.assign(angles, plantedLegAngles("left", bodyZ, dy));
+  Object.assign(angles, plantedLegAngles("right", bodyZ, dy));
+
+  const twist = DANCE_TWIST_DEG * env * Math.cos(Math.PI * beat);
+  angles.waist_yaw += twist;
+  angles.neck_yaw += -twist * 0.6;
+  angles.neck_pitch += DANCE_NOD_DEG * env * Math.sin((2 * Math.PI * beat) + (Math.PI / 3));
+
+  for (const side of SIDES) {
+    const s = sideSign(side);
+    const up = env * (0.5 + (0.5 * s * Math.sin(Math.PI * beat))); // left up while swaying left
+    angles[`shoulder_pitch_${side}`] = ATHLETIC.SHOULDER_PITCH
+      + ((DANCE_ARM_UP_DEG - ATHLETIC.SHOULDER_PITCH) * up);
+    angles[`shoulder_roll_${side}`] = (s * ATHLETIC.SHOULDER_ROLL_ABDUCT)
+      + (s * DANCE_ARM_OUT_DEG * up);
+    angles[`elbow_${side}`] = ATHLETIC.ELBOW
+      + (((DANCE_ELBOW_DOWN_DEG + ((DANCE_ELBOW_UP_DEG - DANCE_ELBOW_DOWN_DEG) * up)) - ATHLETIC.ELBOW) * env);
+  }
+
+  return {
+    angles,
+    extras: { waist_yaw: { rollDeg: -DANCE_COUNTER_LEAN_DEG_PER_MM * dy } },
+    rootOffset: [0, dy, bodyZ],
+    rootPitchDeg: 0
+  };
+}
+
+function routinePose(phase) {
+  const p = wrap01(phase);
+  if (p < ROUTINE_KICK_END) {
+    return kickPose(p / ROUTINE_KICK_END);
+  }
+  if (p < ROUTINE_HANDSTAND_END) {
+    return handstandPose((p - ROUTINE_KICK_END) / (ROUTINE_HANDSTAND_END - ROUTINE_KICK_END));
+  }
+  return dancePose((p - ROUTINE_HANDSTAND_END) / (1 - ROUTINE_HANDSTAND_END));
+}
+
 const FEATURE_BY_LINK = {
   pelvis: "pelvis",
   torso: "torso",
@@ -746,7 +1107,8 @@ export default {
           { value: "march", label: "March in place" },
           { value: "stride", label: "Stride in place" },
           { value: "run", label: "Run in place" },
-          { value: "jump", label: "Jump in place" }
+          { value: "jump", label: "Jump in place" },
+          { value: "routine", label: "Routine (kick, handstand, dance)" }
         ]
       },
       strideLength: {
@@ -826,6 +1188,16 @@ export default {
           set("gait", "jump");
           set("phase", ((finite(cycle, 0) % 1) + 1) % 1);
         }
+      },
+      routineLoop: {
+        label: "Routine: kick, handstand, dance",
+        description: "Fixed choreography loop: a chambered karate front kick off the left leg, a toe-pivot fold into a held handstand, and a four-beat sway-and-point dance back in the ready stance.",
+        duration: 12,
+        loop: true,
+        update({ cycle, set }) {
+          set("gait", "routine");
+          set("phase", ((finite(cycle, 0) % 1) + 1) % 1);
+        }
       }
     }
   },
@@ -858,6 +1230,9 @@ export default {
         jumpTorsoExtras(phase, jump.bodyZ, jump.flight, scales.torsoSway),
         [0, 0, jump.bodyZ]
       );
+    } else if (gait === "routine") {
+      const pose = routinePose(phase);
+      targetFrames = fkFrames(pose.angles, pose.extras, pose.rootOffset, pose.rootPitchDeg);
     } else {
       targetFrames = fkFrames(
         gaitAnglesDeg(phase, scales),
