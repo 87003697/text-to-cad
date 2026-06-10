@@ -5,7 +5,7 @@ from unittest import mock
 
 from tests.python.support.paths import add_repo_path, repo_path
 
-add_repo_path("skills/cad/scripts")
+add_repo_path("skills/dxf/scripts")
 
 from dxf import cli as dxf
 
@@ -40,7 +40,7 @@ class DxfCliTests(unittest.TestCase):
         self.assertEqual(2, cm.exception.code)
 
     def test_scripts_dxf_directory_invokes_cli(self) -> None:
-        skill_root = repo_path("skills/cad")
+        skill_root = repo_path("skills/dxf")
         result = subprocess.run(
             [sys.executable, "scripts/dxf", "--help"],
             cwd=skill_root,
@@ -55,7 +55,7 @@ class DxfCliTests(unittest.TestCase):
         self.assertIn("--output", result.stdout)
 
     def test_cli_import_does_not_import_heavy_cad_modules(self) -> None:
-        skill_root = repo_path("skills/cad")
+        skill_root = repo_path("skills/dxf")
         code = (
             "import sys; sys.path.insert(0, 'scripts'); import dxf.cli; "
             "print('OCP.OCP' in sys.modules); "
