@@ -4,7 +4,7 @@ Read this file when the user requests STL, 3MF, or native GLB output from CAD ge
 
 ## Policy
 
-STL, 3MF, and native GLB are mesh sidecars, not substitutes for STEP. Generate and validate STEP first, then export requested sidecars from the same `scripts/step` run. Do not treat sidecar renders as CAD validation; inspect the STEP, verify the primary STEP/STP with CAD `scripts/snapshot` when snapshot review applies, and return `$cad-viewer` viewer links for every generated or modified supported artifact.
+STL, 3MF, and native GLB are mesh sidecars, not substitutes for STEP. Generate and validate STEP first, then export requested sidecars from the same `scripts/step` run. Do not treat sidecar renders as CAD validation; inspect and snapshot the primary STEP per the standard workflow.
 
 Native GLB sidecars are ordinary glTF 2.0 binary files for external tools: Y-up, meter-scaled, and free of the CAD Viewer `STEP_topology` extension. Do not confuse them with the hidden `.<name>.step.glb` CAD Viewer topology artifact.
 
@@ -47,7 +47,7 @@ Use tighter tolerances for small curved parts or visual fidelity. Use looser tol
 
 1. Generate STEP from `gen_step()` with the requested sidecar flag(s).
 2. Run facts/planes/positioning inspection on the STEP.
-3. Return the STEP, requested sidecar files, and `$cad-viewer` viewer links for every generated or modified supported artifact when available.
+3. Report the STEP and the requested sidecar files.
 
 Example:
 
@@ -68,11 +68,6 @@ Files:
 - STEP: /absolute/project/models/bracket.step
 - STL: /absolute/project/models/meshes/bracket.stl
 - GLB: /absolute/project/models/meshes/bracket.glb
-
-CAD Viewer:
-- STEP: http://127.0.0.1:4178/?dir=/absolute/project/models&file=bracket.step
-- STL: http://127.0.0.1:4178/?dir=/absolute/project/models&file=meshes/bracket.stl
-- GLB: http://127.0.0.1:4178/?dir=/absolute/project/models&file=meshes/bracket.glb
 
 Validation:
 - STEP geometry validated; STL/3MF/native GLB generated as requested sidecars.

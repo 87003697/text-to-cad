@@ -2,22 +2,6 @@
 
 Read this file when generation, export, inspection, positioning, snapshot review, CAD Viewer setup, or documentation validation fails.
 
-## Contents
-
-- Loop
-- Failure classes and fixes
-- Source import or syntax failure
-- Invalid or missing geometry
-- Fillet or chamfer failure
-- Wrong scale or bounding box
-- Missing feature
-- Selector fragility
-- Positioning or joint mismatch
-- CAD Viewer Startup Or Link Failure
-- CAD `scripts/snapshot` failure
-- Diff after repair
-- Reporting failed repairs
-
 ## Loop
 
 1. Read the failing command output.
@@ -126,35 +110,16 @@ Fix:
 
 ### Positioning or joint mismatch
 
-Likely causes:
-
-- wrong part-local origin
-- child `Location` offset wrong
-- `AssemblyHelper` fixed and moving targets reversed
-- `AssemblyHelper` relationship offset attached to the wrong datum
-- build123d joint attached to the wrong datum
-- `.connect_to()` moved the wrong part
-- joint axis or orientation inverted
-- rotation applied about wrong axis
-- sign error in symmetric placement
-- mating face selected incorrectly
-- joint location defined in world coordinates when a part-local datum was intended
-- duplicate or incorrect joint labels
-- explicit `Location` not recomputed after a parameter change
-- CLI `inspect align` delta was treated as an edit instead of a diagnostic
+Likely causes: wrong part-local origin or datum, reversed `AssemblyHelper` fixed/moving order, `.connect_to()` moving the wrong part, inverted joint axis, sign errors in symmetric placement, an explicit `Location` not recomputed after a parameter change, or a joint defined in world coordinates when a part-local datum was intended.
 
 Fix:
 
-- inspect `refs --positioning`
-- run `frame` on relevant selectors or occurrences
-- run `align` for read-only selector-pair delta
-- verify the source-level `AssemblyHelper` target order, build123d joint labels, and `joint_location` definitions
-- apply correction to helper relationship, source build123d joint, `.connect_to()` call, `Location`, datum, or feature offset
-- adjust the smallest joint location, axis, angle, position, explicit transform, or part-local datum
-- regenerate the assembly from the Python source
-- rerun `refs --facts --planes --positioning` plus the failed `measure` or `align` check
+- inspect `refs --positioning`, then `frame` and `align` on the relevant selectors
+- verify the source-level `AssemblyHelper` target order, joint labels, and `joint_location` definitions
+- apply the smallest source correction from the list in `positioning.md` (Source-level positioning corrections)
+- regenerate the assembly from the Python source and rerun the failed check
 
-### CAD Viewer Startup Or Link Failure
+### CAD Viewer startup or link failure
 
 Likely causes:
 
@@ -165,12 +130,9 @@ Likely causes:
 
 Fix:
 
-- hand the explicit artifact path to `$cad-viewer`
-- rerun `$cad-viewer` with the same absolute `?dir=` for the project and an
-  absolute `file=` path for each artifact
+- rerun `$cad-viewer` with the same absolute `?dir=` for the project and an absolute `file=` path for each artifact
 - return one documented Viewer link per requested file
-- report startup failure if unresolved
-- rely on CLI facts/measurements for validation
+- if unresolved, report the startup failure and rely on CLI facts/measurements plus snapshots for validation
 
 ### CAD `scripts/snapshot` failure
 
@@ -182,13 +144,9 @@ Likely causes:
 
 Fix:
 
-- generate STEP first
-- snapshot the primary `.step` or `.stp` artifact with CAD `scripts/snapshot` rather than manual viewer or Playwright inspection
+- generate STEP first, then snapshot the primary `.step`/`.stp` artifact
 - retry only with simpler supported snapshot jobs, starting with a single `view` output before wireframe display or `section`
-- for CAD review packets, use still-image modes `view` and `section`; set `display.mode` to `solid`, `transparent`, `hidden_edges`, `hidden_lines_removed`, or `wireframe` when explicit linework helps the visual check
-- generate GIFs only for STEP-module parameter animation review
-- rerun snapshots only after a source repair changed visible geometry or a specific visual finding needs confirmation
-- skip saved snapshots when they are not needed under `snapshot-review.md`
+- choose modes and packet size per `snapshot-review.md`
 
 ## Diff after repair
 

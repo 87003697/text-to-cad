@@ -1,19 +1,6 @@
 # CAD parameters
 
-Read this file when designing or reviewing CAD source parameters, STEP sidecar parameters, CAD Viewer controls, or animation controls.
-
-## Contents
-
-- Principle
-- Parameter Brief
-- Naming
-- Defaults And Bounds
-- Derive, Do Not Drift
-- Features And Refs
-- Animations
-- Controls
-- Validation
-- Common Failure Patterns
+Read this file when the user asks to parameterize or animate a STEP model, or when designing or reviewing CAD source parameters, `.step.js` sidecar parameters, CAD Viewer controls, or animation controls.
 
 ## Principle
 
@@ -35,12 +22,13 @@ For assemblies and mechanisms, identify fixed pivots, moving pivots, link length
 
 ## Naming
 
-Use semantic names that describe intent:
+Use snake_case semantic names that describe intent, matching the build123d Python source convention:
 
-- Prefer `wallThickness`, `bearingClearance`, `hingeAngleDeg`, `lidOpen`, `gearRatio`, `linkTravel`.
-- Avoid names like `offset2`, `magicScale`, `fixAngle`, `sliderA`, unless the source model itself uses a meaningful matching term.
-- Encode units in names only when the value could otherwise be ambiguous, such as `angleDeg`, `durationSec`, or `clearanceMm`.
-- Keep source constants, manifest feature ids, UI labels, and comments aligned enough that an LLM can trace a control to geometry.
+- Prefer `wall_thickness`, `bearing_clearance`, `hinge_angle_deg`, `lid_open`, `gear_ratio`, `link_travel`.
+- Avoid names like `offset2`, `magic_scale`, `fix_angle`, `slider_a`, unless the source model itself uses a meaningful matching term.
+- Encode units in names only when the value could otherwise be ambiguous, such as `_deg`, `_sec`, or `_mm` suffixes.
+- Keep sidecar parameter ids aligned with the Python source parameters they mirror, and keep source constants, manifest feature ids, UI labels, and comments aligned enough that an LLM can trace a control to geometry.
+- Module schema field names such as `schemaVersion`, `manifest.step.path`, and `durationSeconds` are fixed by the step-module schema; the snake_case convention applies to the parameter and feature ids you define.
 
 For STEP sidecars, strongly prefer an explicit target link in the module manifest:
 
@@ -85,7 +73,7 @@ Named features are the bridge between parameters and geometry.
 
 - Label source parts and assembly children explicitly.
 - Expose sidecar `manifest.features` with stable local refs such as `#o1.2`; keep file identity in `manifest.step.path`.
-- Prefer feature ids like `lid`, `hingePin`, `inputGear`, `lowerRocker`, not occurrence ids as public names.
+- Prefer feature ids like `lid`, `hinge_pin`, `input_gear`, `lower_rocker`, not occurrence ids as public names.
 - In code, group constants and transforms by feature role so the logic reads like the mechanism.
 - Resolve and inspect refs when a parameter targets a specific face, edge, part, pivot, or assembly child.
 
@@ -132,12 +120,11 @@ Use deterministic checks first:
 - `scripts/inspect frame`, `measure`, or `align` for pivots, axes, mating faces, and distances.
 - Source-level assertions for derived dimensions or joint limits when practical.
 
-Use CAD Viewer links and CAD `scripts/snapshot` review for visual semantics:
+Use CAD `scripts/snapshot` review for visual semantics, following `snapshot-review.md` for packet sizing and PNG-vs-GIF mode selection:
 
-- Use CAD `scripts/snapshot` to review several parameter poses, not manual viewer or Playwright inspection.
+- Review several parameter poses, with GIFs for motion/animation review.
 - Compare sidecar enabled vs disabled when viewer-time presentation is involved.
 - Check for disconnected hinges, drifting pivots, collisions, impossible branch blends, and looping jumps.
-- Use PNGs for static parameter reviews and GIFs for motion/animation reviews.
 - Convert visual concerns into measurements or explicit geometric facts before calling them fixed.
 
 ## Common Failure Patterns

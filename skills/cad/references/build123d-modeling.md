@@ -2,24 +2,20 @@
 
 Read this file when writing or repairing build123d Python source.
 
-## Contents
-
-- Modeling objective
-- Topology stack
-- Source return
-- Parameters first
-- Coordinate system
-- Builder contexts
-- Primitives
-- Feature operations
-- Selection practices
-- Assemblies and positioning
-- Labels and assemblies
-- Common failure modes
-
 ## Modeling objective
 
-Create a valid STEP-ready BREP model, not a visual mesh. Prefer closed solids, explicit labels, and stable parametric dimensions.
+Create a valid STEP-ready BREP model, not a visual mesh. Prefer closed solids, explicit labels, and stable parametric dimensions. Define `gen_step()` returning the STEP-ready shape or labeled compound; the CLI owns output paths (see `step-generation.md`).
+
+## Design strategy
+
+Decide how the part is constructed before writing geometry code:
+
+- **Choose the construction that makes the spec's dimensions direct parameters.** Profile-driven shapes get one closed sketch plus `extrude`/`revolve`/`sweep`/`loft`; block-and-feature parts get a base solid plus subtractive features. Prefer whichever construction lets the user's controlling dimensions appear as named parameters instead of derived values.
+- **Decide part vs assembly before modeling.** Bodies that are separately manufactured, purchased, or movable belong in a labeled assembly (see `positioning.md`); monolithic manufacturing intent gets a single fused solid. Avoid unlabeled compounds of solids — multi-body output without occurrence labels loses traceability in inspection and viewer review.
+- **Pick the origin and orientation from the functional datum before sculpting.** Model on the mating interface, mounting plane, or symmetry axis; see `positioning.md` for part-type origin defaults.
+- **Order operations so fragile steps come last and failures localize.** Base solid → major additions → subtractive features → shell → through-wall holes → fillets and chamfers last. Fillets are the most failure-prone operation and every boolean invalidates selectors, so postpone them. Structure the source so each feature is a named step — a per-feature function or a distinct intermediate variable — so a failed operation points at exactly one feature and a parameter change touches one obvious place.
+- **Overshoot boolean tools.** Extend cutting tools past the faces they enter and exit; for through-cuts, go roughly 1 mm beyond both faces. Coincident or coplanar tool/target faces are a classic kernel failure. Cut repeated or patterned features in one combined operation.
+- **Sanity-check proportions before generating.** Compare the expected bounding box against the real-world object, wall thickness against overall size, and feature positions against edges and neighboring features. Order-of-magnitude and collision errors pass geometric validation but fail visual review.
 
 ## Topology stack
 
@@ -44,18 +40,6 @@ For normal STEP output, return one of:
 - a labeled assembly compound
 
 Avoid returning loose wires, open faces, or construction surfaces unless the user explicitly requested them.
-
-## Source return
-
-Generated sources should define:
-
-```python
-def gen_step():
-    ...
-    return step_ready_shape_or_labeled_compound
-```
-
-Do not hardcode output paths inside `gen_step()`. The CLI owns output paths.
 
 ## Parameters first
 
@@ -103,37 +87,6 @@ Typical flow:
 
 ```text
 curves/paths → sketches/profiles → solids/features → labels → STEP
-```
-
-## Primitives
-
-Use canonical primitives when they fit the design intent:
-
-- `Box` for rectangular blocks and plates
-- `Cylinder` for bosses, rods, pins, and subtractive cylindrical cuts
-- `Sphere` for knobs or spherical ends
-- `Torus` for rings and circular sweeps
-- `Cone` for tapered features
-- `Wedge` for sloped solids
-
-Use sketches plus `extrude`, `revolve`, `sweep`, or `loft` when the shape is profile-driven.
-
-## Feature operations
-
-Map design intent to operations:
-
-```text
-hole              → Hole or subtractive cylinder
-counterbore       → CounterBoreHole
-countersink       → CounterSinkHole
-slot              → slot profile + subtractive extrude
-boss/standoff     → cylinder addition + central hole
-rib               → extruded rectangular/triangular profile
-rounded edge      → fillet
-beveled edge      → chamfer
-hollow enclosure  → shell or subtractive inner volume
-revolved part     → revolve profile
-swept tube/rail   → sweep profile along path
 ```
 
 ## Selection practices
@@ -192,12 +145,9 @@ For repeated parts, keep occurrence labels, transforms, or joint connections exp
 ## Common failure modes
 
 - Fillet radius larger than local edge geometry.
-- Subtractive tool does not pass fully through target material.
 - Open sketch profile produces invalid or missing face.
 - Face selector changes after a boolean or fillet.
-- Source-level assembly composition is lost by re-importing generated STEP instead of using the Python assembly source.
 - Part origin is arbitrary and later alignment checks become ambiguous.
-- Joint labels are duplicated within the same part.
 - Source-level joints are treated as if they were persistent STEP constraints rather than one-time source placement operations.
 - Joint labels are missing, duplicated, or attached to the wrong local datum.
 - `.connect_to()` fixes the wrong side of the relationship, moving the part intended to remain fixed.
