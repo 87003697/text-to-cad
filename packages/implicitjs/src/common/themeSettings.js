@@ -378,7 +378,6 @@ const CHARCOAL_FILL_COLORS = Object.freeze([
   "#68737d"
 ]);
 
-const STUDIO_SHOWROOM_FILL_COLORS = WORKBENCH_FILL_COLORS;
 function mixHexColors(colorA, colorB, amount = 0.5) {
   const from = normalizeColor(colorA, "#000000");
   const to = normalizeColor(colorB, from);
@@ -520,102 +519,6 @@ const CINEMATIC_THEME_SETTINGS = Object.freeze({
       skyColor: "#ffffff",
       groundColor: "#d6e2ee",
       intensity: 1.12
-    }
-  }
-});
-
-const STUDIO_SHOWROOM_BASE_THEME_SETTINGS = Object.freeze({
-  materials: {
-    defaultColor: STUDIO_SHOWROOM_FILL_COLORS[0],
-    fillColors: STUDIO_SHOWROOM_FILL_COLORS,
-    cycleColors: false,
-    overrideSourceColors: false,
-    tintMode: "blend",
-    tintStrength: 0,
-    saturation: 0.96,
-    contrast: 1.02,
-    brightness: 1.02,
-    roughness: 0.82,
-    metalness: 0,
-    clearcoat: 0.02,
-    clearcoatRoughness: 0.78,
-    opacity: 1,
-    envMapIntensity: 0.55,
-    emissiveIntensity: 0
-  },
-  edges: {
-    ...DISABLED_THEME_EDGE_SETTINGS
-  },
-  background: {
-    type: "linear",
-    solidColor: "#f7f7f5",
-    linearStart: "#ffffff",
-    linearEnd: "#e7e7e2",
-    linearAngle: 180,
-    radialInner: "#ffffff",
-    radialOuter: "#e9e9e4"
-  },
-  floor: {
-    mode: THEME_FLOOR_MODES.STAGE,
-    color: "#ececea",
-    roughness: 0.58,
-    reflectivity: 0.22,
-    shadowOpacity: 0.32,
-    horizonBlend: 0.12,
-    ...createFloorGridSettings("#ececea", { opacity: 0.18 })
-  },
-  environment: {
-    enabled: true,
-    presetId: "studio-hdri-41",
-    intensity: 0.85,
-    rotationY: -0.25,
-    useAsBackground: false
-  },
-  lighting: {
-    toneMappingExposure: 1.08,
-    directional: {
-      enabled: true,
-      color: "#ffffff",
-      intensity: 1.55,
-      position: {
-        x: -220,
-        y: 260,
-        z: 260
-      }
-    },
-    spot: {
-      enabled: true,
-      color: "#ffffff",
-      intensity: 0.85,
-      angle: 0.58,
-      distance: 0,
-      position: {
-        x: 200,
-        y: 150,
-        z: 230
-      }
-    },
-    point: {
-      enabled: false,
-      color: "#ffffff",
-      intensity: 0.2,
-      distance: 0,
-      position: {
-        x: -180,
-        y: 80,
-        z: 140
-      }
-    },
-    ambient: {
-      enabled: true,
-      color: "#ffffff",
-      intensity: 0.22
-    },
-    hemisphere: {
-      enabled: true,
-      skyColor: "#ffffff",
-      groundColor: "#d8d8d2",
-      intensity: 0.72
     }
   }
 });
@@ -986,81 +889,99 @@ const TERMINAL_THEME_SETTINGS = Object.freeze({
   lighting: DARK_STUDIO_THEME_SETTINGS.lighting
 });
 
+// Workbench light mode counterpart to the dark treatment below: the canvas
+// sits a few steps below pure white and the floor a step below that, so
+// white parts (which light toward pure white under the shared exposure)
+// keep a silhouette and the horizon reads as an intentional stage break.
+// The deeper hemisphere ground keeps shading gradation on white undersides.
+const WORKBENCH_LIGHT_CANVAS_COLOR = "#f0f4f9";
+const WORKBENCH_LIGHT_FLOOR_COLOR = "#e2e9f0";
+
 const WORKBENCH_BASE_THEME_SETTINGS = Object.freeze({
   ...CINEMATIC_THEME_SETTINGS,
   background: {
     ...CINEMATIC_THEME_SETTINGS.background,
     type: "solid",
-    solidColor: CINEMATIC_THEME_SETTINGS.background.linearStart,
-    linearEnd: CINEMATIC_THEME_SETTINGS.background.linearStart,
-    radialInner: CINEMATIC_THEME_SETTINGS.background.linearStart,
-    radialOuter: CINEMATIC_THEME_SETTINGS.background.linearStart
+    solidColor: WORKBENCH_LIGHT_CANVAS_COLOR,
+    linearStart: WORKBENCH_LIGHT_CANVAS_COLOR,
+    linearEnd: WORKBENCH_LIGHT_CANVAS_COLOR,
+    radialInner: WORKBENCH_LIGHT_CANVAS_COLOR,
+    radialOuter: WORKBENCH_LIGHT_CANVAS_COLOR
   },
   edges: {
     ...CAD_THEME_EDGE_SETTINGS
   },
+  floor: {
+    ...CINEMATIC_THEME_SETTINGS.floor,
+    color: WORKBENCH_LIGHT_FLOOR_COLOR,
+    ...createFloorGridSettings(WORKBENCH_LIGHT_FLOOR_COLOR, { opacity: 0.2 })
+  },
   environment: {
     ...CINEMATIC_THEME_SETTINGS.environment,
     enabled: false
+  },
+  lighting: {
+    ...CINEMATIC_THEME_SETTINGS.lighting,
+    hemisphere: {
+      ...CINEMATIC_THEME_SETTINGS.lighting.hemisphere,
+      groundColor: "#c7d5e3"
+    }
+  }
+});
+
+// Workbench dark mode treatment: a deep, slightly muted blue-slate. Mode
+// overrides can only swap colors, not light intensities, so dark-part
+// visibility is tuned entirely through these colors: lifted ambient and
+// hemisphere-ground fill so shaded faces of dark parts keep their form and
+// a canvas/floor luminance step for silhouette separation. Edges stay deep
+// navy so they read as subtle technical linework on light fills; wireframe
+// display relies on the automatic light-edge contrast fallback.
+const WORKBENCH_DARK_FLOOR_COLOR = "#202832";
+
+const WORKBENCH_DARK_THEME_SETTINGS = Object.freeze({
+  ...DARKOAL_THEME_SETTINGS,
+  edges: {
+    ...CAD_THEME_EDGE_SETTINGS,
+    color: "#1c2836"
+  },
+  background: {
+    ...DARKOAL_THEME_SETTINGS.background,
+    solidColor: "#181f28",
+    linearStart: "#242e3a",
+    linearEnd: "#0c1016",
+    radialInner: "#293443",
+    radialOuter: "#0c1016"
+  },
+  floor: {
+    ...DARKOAL_THEME_SETTINGS.floor,
+    color: WORKBENCH_DARK_FLOOR_COLOR,
+    ...createFloorGridSettings(WORKBENCH_DARK_FLOOR_COLOR, { opacity: 0.22 })
+  },
+  lighting: {
+    ...DARKOAL_THEME_SETTINGS.lighting,
+    spot: {
+      ...DARKOAL_THEME_SETTINGS.lighting.spot,
+      color: "#b3d4f2"
+    },
+    point: {
+      ...DARKOAL_THEME_SETTINGS.lighting.point,
+      color: "#bfd8f0"
+    },
+    ambient: {
+      ...DARKOAL_THEME_SETTINGS.lighting.ambient,
+      color: "#dfe7f0"
+    },
+    hemisphere: {
+      ...DARKOAL_THEME_SETTINGS.lighting.hemisphere,
+      groundColor: "#333d4b"
+    }
   }
 });
 
 const WORKBENCH_THEME_SETTINGS = withThemeColorMode(
   WORKBENCH_BASE_THEME_SETTINGS,
   THEME_COLOR_MODES.SYSTEM,
-  createThemeModeColors(WORKBENCH_BASE_THEME_SETTINGS, DARKOAL_THEME_SETTINGS)
-);
-
-const STUDIO_SHOWROOM_DARK_THEME_SETTINGS = Object.freeze({
-  ...STUDIO_SHOWROOM_BASE_THEME_SETTINGS,
-  edges: {
-    ...STUDIO_SHOWROOM_BASE_THEME_SETTINGS.edges,
-    color: DARKOAL_THEME_SETTINGS.edges.color
-  },
-  background: {
-    ...STUDIO_SHOWROOM_BASE_THEME_SETTINGS.background,
-    solidColor: DARKOAL_THEME_SETTINGS.background.solidColor,
-    linearStart: DARKOAL_THEME_SETTINGS.background.linearStart,
-    linearEnd: DARKOAL_THEME_SETTINGS.background.linearEnd,
-    radialInner: DARKOAL_THEME_SETTINGS.background.radialInner,
-    radialOuter: DARKOAL_THEME_SETTINGS.background.radialOuter
-  },
-  floor: {
-    ...STUDIO_SHOWROOM_BASE_THEME_SETTINGS.floor,
-    color: DARKOAL_THEME_SETTINGS.floor.color,
-    gridCenterColor: DARKOAL_THEME_SETTINGS.floor.gridCenterColor,
-    gridCellColor: DARKOAL_THEME_SETTINGS.floor.gridCellColor
-  },
-  lighting: {
-    ...STUDIO_SHOWROOM_BASE_THEME_SETTINGS.lighting,
-    directional: {
-      ...STUDIO_SHOWROOM_BASE_THEME_SETTINGS.lighting.directional,
-      color: DARKOAL_THEME_SETTINGS.lighting.directional.color
-    },
-    spot: {
-      ...STUDIO_SHOWROOM_BASE_THEME_SETTINGS.lighting.spot,
-      color: DARKOAL_THEME_SETTINGS.lighting.spot.color
-    },
-    point: {
-      ...STUDIO_SHOWROOM_BASE_THEME_SETTINGS.lighting.point,
-      color: DARKOAL_THEME_SETTINGS.lighting.point.color
-    },
-    ambient: {
-      ...STUDIO_SHOWROOM_BASE_THEME_SETTINGS.lighting.ambient,
-      color: DARKOAL_THEME_SETTINGS.lighting.ambient.color
-    },
-    hemisphere: {
-      ...STUDIO_SHOWROOM_BASE_THEME_SETTINGS.lighting.hemisphere,
-      skyColor: DARKOAL_THEME_SETTINGS.lighting.hemisphere.skyColor,
-      groundColor: DARKOAL_THEME_SETTINGS.lighting.hemisphere.groundColor
-    }
-  }
-});
-
-const STUDIO_SHOWROOM_THEME_SETTINGS = withThemeColorMode(
-  STUDIO_SHOWROOM_BASE_THEME_SETTINGS,
-  THEME_COLOR_MODES.SYSTEM,
-  createThemeModeColors(STUDIO_SHOWROOM_BASE_THEME_SETTINGS, STUDIO_SHOWROOM_DARK_THEME_SETTINGS)
+  createThemeModeColors(WORKBENCH_BASE_THEME_SETTINGS, WORKBENCH_DARK_THEME_SETTINGS)
 );
 
 const BLUE_THEME_PRESET_SETTINGS = withThemeColorMode(BLUE_THEME_SETTINGS, THEME_COLOR_MODES.DARK);
@@ -1075,22 +996,11 @@ export const THEME_PRESETS = Object.freeze([
     label: "Workbench",
     description: "Balanced CAD workbench lighting with system-aware light and dark canvas colors.",
     preview: {
-      background: "#fbfdff",
+      background: "#f0f4f9",
       modelColor: "#b6c4ce",
       accentColor: "#4ea7d8"
     },
     settings: WORKBENCH_THEME_SETTINGS
-  },
-  {
-    id: "studio-showroom",
-    label: "Studio",
-    description: "Realistic studio lighting with system-aware light and dark showroom surfaces.",
-    preview: {
-      background: "linear-gradient(135deg, #ffffff 0%, #f4f4f1 58%, #d9d9d4 100%)",
-      modelColor: "#111111",
-      accentColor: "#b8c3cc"
-    },
-    settings: STUDIO_SHOWROOM_THEME_SETTINGS
   },
   {
     id: "blue",

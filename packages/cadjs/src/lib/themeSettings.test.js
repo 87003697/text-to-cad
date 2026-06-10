@@ -117,51 +117,19 @@ test("workbench preset uses neutral material treatment while preserving source c
   assert.equal(cinematic.environment.enabled, false);
   assert.equal(cinematic.environment.intensity, 0.32);
   assert.equal(cinematic.background.type, "solid");
-  assert.equal(cinematic.background.solidColor, "#fbfdff");
-  assert.equal(cinematic.background.linearStart, "#fbfdff");
-  assert.equal(cinematic.background.linearEnd, "#fbfdff");
+  assert.equal(cinematic.background.solidColor, "#f0f4f9");
+  assert.equal(cinematic.background.linearStart, "#f0f4f9");
+  assert.equal(cinematic.background.linearEnd, "#f0f4f9");
   assert.equal(cinematic.floor.reflectivity, 0.14);
   assert.equal(cinematic.lighting.toneMappingExposure, 1.16);
   assert.equal(cinematic.lighting.ambient.intensity, 0.4);
   assert.equal(cinematic.lighting.hemisphere.intensity, 1.12);
-  assert.equal(cinematic.modeColors.light.background.linearStart, "#fbfdff");
-  assert.equal(cinematic.modeColors.dark.background.linearStart, "#212e3c");
-  assert.equal(cinematic.modeColors.dark.floor.color, "#111d29");
+  assert.equal(cinematic.modeColors.light.background.linearStart, "#f0f4f9");
+  assert.equal(cinematic.modeColors.dark.background.linearStart, "#242e3a");
+  assert.equal(cinematic.modeColors.dark.floor.color, "#202832");
 });
 
-test("studio showroom preset exposes realistic studio settings", () => {
-  const studio = cloneThemePresetSettings("studio-showroom");
-  const studioPreset = THEME_PRESETS.find((preset) => preset.id === "studio-showroom");
-
-  assert.equal(studioPreset?.label, "Studio");
-  assert.equal(studio.colorMode, THEME_COLOR_MODES.SYSTEM);
-  assert.equal(studio.materials.defaultColor, "#b6c4ce");
-  assert.deepEqual(studio.materials.fillColors, WORKBENCH_FILL_COLORS);
-  assert.equal(studio.materials.cycleColors, false);
-  assert.equal(resolveThemeFillColor(studio.materials, 4), "#b6c4ce");
-  assert.equal(studio.materials.overrideSourceColors, false);
-  assert.equal(studio.materials.tintStrength, 0);
-  assert.equal(studio.materials.roughness, 0.82);
-  assert.equal(studio.materials.metalness, 0);
-  assert.equal(studio.materials.clearcoat, 0.02);
-  assert.equal(studio.materials.envMapIntensity, 0.55);
-  assert.equal(studio.environment.enabled, true);
-  assert.equal(studio.environment.presetId, "studio-hdri-41");
-  assert.equal(studio.environment.intensity, 0.85);
-  assert.equal(studio.floor.mode, "stage");
-  assert.equal(studio.floor.reflectivity, 0.22);
-  assert.equal(studio.edges.enabled, false);
-  assert.equal(studio.edges.contrastMode, "manual");
-  assert.equal(studio.edges.color, "#132232");
-  assert.equal(studio.lighting.directional.intensity, 1.55);
-  assert.equal(inferThemeSettingsSceneTone(studio), "light");
-  assert.equal(inferThemeSettingsSceneTone(studio, { prefersDark: true }), "dark");
-  assert.equal(studio.modeColors.dark.background.linearStart, "#212e3c");
-  assert.equal(studio.modeColors.dark.floor.color, "#111d29");
-  assert.equal(getThemePresetIdForSettings(studio), "studio-showroom");
-});
-
-test("workbench dark color mode uses the darkoal color treatment", () => {
+test("workbench dark color mode uses the workbench dark color treatment", () => {
   const workbench = cloneThemePresetSettings("workbench");
   const dark = resolveThemeSettingsForColorMode(workbench, { prefersDark: true });
 
@@ -179,28 +147,29 @@ test("workbench dark color mode uses the darkoal color treatment", () => {
   assert.equal(dark.materials.opacity, 1);
   assert.equal(dark.edges.enabled, true);
   assert.equal(dark.edges.contrastMode, "manual");
-  assert.equal(dark.edges.color, "#132232");
+  assert.equal(dark.edges.color, "#1c2836");
   assert.equal(Object.hasOwn(dark.edges, "opacity"), false);
   assert.equal(dark.environment.enabled, false);
   assert.equal(dark.environment.intensity, 0.32);
   assert.equal(dark.background.type, "solid");
-  assert.equal(dark.background.solidColor, "#0f1922");
-  assert.equal(dark.background.linearStart, "#212e3c");
-  assert.equal(dark.background.linearEnd, "#05090f");
-  assert.equal(dark.background.radialInner, "#243a4d");
-  assert.equal(dark.background.radialOuter, "#05090f");
-  assert.equal(dark.floor.color, "#111d29");
+  assert.equal(dark.background.solidColor, "#181f28");
+  assert.equal(dark.background.linearStart, "#242e3a");
+  assert.equal(dark.background.linearEnd, "#0c1016");
+  assert.equal(dark.background.radialInner, "#293443");
+  assert.equal(dark.background.radialOuter, "#0c1016");
+  assert.equal(dark.floor.color, "#202832");
   assert.equal(dark.floor.roughness, 0.7);
   assert.equal(dark.floor.reflectivity, 0.14);
   assert.equal(dark.floor.shadowOpacity, 0.16);
   assert.equal(dark.floor.horizonBlend, 0.18);
   assert.equal(dark.lighting.toneMappingExposure, 1.16);
   assert.equal(dark.lighting.spot.enabled, true);
-  assert.equal(dark.lighting.spot.color, "#70c4ff");
+  assert.equal(dark.lighting.spot.color, "#b3d4f2");
   assert.equal(dark.lighting.spot.intensity, 0.52);
-  assert.equal(dark.lighting.point.color, "#9bd0ff");
+  assert.equal(dark.lighting.point.color, "#bfd8f0");
+  assert.equal(dark.lighting.ambient.color, "#dfe7f0");
   assert.equal(dark.lighting.ambient.intensity, 0.4);
-  assert.equal(dark.lighting.hemisphere.groundColor, "#020713");
+  assert.equal(dark.lighting.hemisphere.groundColor, "#333d4b");
   assert.equal(dark.lighting.hemisphere.intensity, 1.12);
   assert.equal(getThemePresetIdForSettings(workbench), "workbench");
 });
@@ -269,7 +238,6 @@ test("legacy edge detail settings are accepted and normalized away", () => {
 test("built-in theme preset ids stay explicit", () => {
   assert.deepEqual(THEME_PRESETS.map((preset) => preset.id), [
     "workbench",
-    "studio-showroom",
     "blue",
     "pink",
     "clay-sunrise",
@@ -505,7 +473,6 @@ test("scene tone is inferred from the active floor color", () => {
 
 test("system color mode support is exposed only for system-aware themes", () => {
   assert.equal(themeSettingsSupportsSystemColorMode(cloneThemePresetSettings("workbench")), true);
-  assert.equal(themeSettingsSupportsSystemColorMode(cloneThemePresetSettings("studio-showroom")), true);
   assert.equal(themeSettingsSupportsSystemColorMode(cloneThemePresetSettings("blue")), false);
   assert.equal(themeSettingsSupportsSystemColorMode(cloneThemePresetSettings("terminal")), false);
 });
