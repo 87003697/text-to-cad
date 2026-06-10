@@ -560,10 +560,22 @@ function buildTopologyChildrenByPart(references, fallbackPartId) {
   }));
 }
 
-export function buildStepTreeRootWithTopology({ root = null, references = [], fallbackPartId = "" } = {}) {
+export function buildStepTreeRootWithTopology({
+  root = null,
+  references = [],
+  fallbackPartId = "",
+  topologyPartIds = null
+} = {}) {
   if (!root || typeof root !== "object") {
     return root;
   }
+  const topologyPartIdSet = topologyPartIds == null
+    ? null
+    : new Set(
+        (Array.isArray(topologyPartIds) ? topologyPartIds : [topologyPartIds])
+          .map((id) => normalizeString(id))
+          .filter(Boolean)
+      );
   const topologyChildrenByPart = buildTopologyChildrenByPart(references, fallbackPartId || stepTreeNodeId(root));
   if (!topologyChildrenByPart.size) {
     return root;
@@ -572,7 +584,8 @@ export function buildStepTreeRootWithTopology({ root = null, references = [], fa
   function cloneWithTopology(node) {
     const id = stepTreeNodeId(node);
     const children = stepTreeNodeChildren(node).map((child) => cloneWithTopology(child));
-    const topologyChildren = normalizeString(node?.nodeType) === "part"
+    const topologyLoaded = !topologyPartIdSet || topologyPartIdSet.has(id);
+    const topologyChildren = topologyLoaded && normalizeString(node?.nodeType) === "part"
       ? maybeWrapSinglePartTopologyFolder(
           node,
           flattenRedundantTopologyOccurrenceNodes(node, topologyChildrenByPart.get(id) || [])

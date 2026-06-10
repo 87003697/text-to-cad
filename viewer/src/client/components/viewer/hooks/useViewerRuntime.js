@@ -217,6 +217,8 @@ export function useViewerRuntime({
         pixelRatioCap: IDLE_PIXEL_RATIO_CAP,
         pixelRatio: getPixelRatioCap(IDLE_PIXEL_RATIO_CAP),
         renderQueued: false,
+        renderQueuedAt: 0,
+        renderFallbackTimerId: 0,
         restoreTimerId: 0
       };
       const keyboardOrbitState = {
@@ -290,10 +292,35 @@ export function useViewerRuntime({
       let rafId = 0;
       const requestRender = () => {
         if (interactionState.renderQueued) {
-          return;
+          const now = typeof performance !== "undefined" && typeof performance.now === "function"
+            ? performance.now()
+            : Date.now();
+          if (interactionState.renderQueuedAt && now - interactionState.renderQueuedAt < 120) {
+            return;
+          }
+          window.cancelAnimationFrame(rafId);
+          interactionState.renderQueued = false;
+          interactionState.renderQueuedAt = 0;
         }
         interactionState.renderQueued = true;
+        interactionState.renderQueuedAt = typeof performance !== "undefined" && typeof performance.now === "function"
+          ? performance.now()
+          : Date.now();
         rafId = window.requestAnimationFrame(renderFrame);
+        if (interactionState.renderFallbackTimerId) {
+          window.clearTimeout(interactionState.renderFallbackTimerId);
+        }
+        interactionState.renderFallbackTimerId = window.setTimeout(() => {
+          if (!interactionState.renderQueued) {
+            return;
+          }
+          window.cancelAnimationFrame(rafId);
+          renderFrame(
+            typeof performance !== "undefined" && typeof performance.now === "function"
+              ? performance.now()
+              : Date.now()
+          );
+        }, 120);
         if (runtimeRef.current) {
           runtimeRef.current.rafId = rafId;
         }
@@ -301,6 +328,11 @@ export function useViewerRuntime({
 
       function renderFrame(timestamp) {
         interactionState.renderQueued = false;
+        interactionState.renderQueuedAt = 0;
+        if (interactionState.renderFallbackTimerId) {
+          window.clearTimeout(interactionState.renderFallbackTimerId);
+          interactionState.renderFallbackTimerId = 0;
+        }
         const cameraTransitionActive = stepCameraTransition(runtimeRef.current, timestamp);
         const keyboardOrbitMoved = stepKeyboardOrbit(runtimeRef.current, timestamp);
         const needsMoreFrames = controls.update();
@@ -578,6 +610,9 @@ export function useViewerRuntime({
         }
         if (runtime.interactionState.restoreTimerId) {
           window.clearTimeout(runtime.interactionState.restoreTimerId);
+        }
+        if (runtime.interactionState.renderFallbackTimerId) {
+          window.clearTimeout(runtime.interactionState.renderFallbackTimerId);
         }
         cancelCameraTransition(runtime, { scheduleIdle: false });
         window.cancelAnimationFrame(runtime.rafId);

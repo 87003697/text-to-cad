@@ -75,7 +75,7 @@ import { updateGridHelper as updateStageGridHelper } from "cadjs/lib/viewer/stag
 import {
   autoZoomFrameForBounds,
   DEFAULT_AUTO_ZOOM_PADDING,
-  displayRecordsBounds
+  focusedDisplayRecordsBounds
 } from "cadjs/lib/viewer/autoZoom";
 import { applyMaterialSettingsToRecord } from "cadjs/lib/viewer/surfaceMaterials";
 import {
@@ -176,8 +176,8 @@ const EXPLODED_VIEW_ANIMATION_DURATION_MS = 1000;
 const AUTO_ZOOM_SPEED_MS = Object.freeze({
   DEFAULT: 400,
   EXPLODED: EXPLODED_VIEW_ANIMATION_DURATION_MS,
-  ISOLATE: 400,
-  RESET: 400,
+  ISOLATE: 200,
+  RESET: 200,
   RESIZE: 0
 });
 const ACCELERATED_WHEEL_ZOOM_SPEED = 10;
@@ -189,6 +189,8 @@ const KEYBOARD_POLAR_EPSILON = 0.02;
 const PREVIEW_AUTO_ROTATE_SPEED = 1.0;
 const VIEW_PLANE_ACTIVE_DOT_THRESHOLD = 0.994;
 const VIEW_PLANE_TRANSITION_MS = 280;
+const DEFAULT_PERSPECTIVE_DIRECTION_DOT_THRESHOLD = 0.999;
+const DEFAULT_PERSPECTIVE_UP_DOT_THRESHOLD = 0.999;
 const CAMERA_TRANSITION_EASING = Object.freeze({
   EASE_IN_OUT_CUBIC: "ease-in-out-cubic",
   EASE_IN_OUT_SINE: "ease-in-out-sine"
@@ -210,6 +212,7 @@ const VIEW_PLANE_DEFAULT_PRESET = {
   direction: DEFAULT_VIEW_DIRECTION,
   up: WORLD_UP
 };
+const RESET_VIEW_CONTROL_BUTTON_CLASSES = "cad-glass-surface pointer-events-auto grid h-8 w-8 shrink-0 place-items-center rounded-full border border-sidebar-border text-sidebar-foreground/60 shadow-sm transition duration-150 hover:text-sidebar-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/45";
 const CAD_EDGE_OPACITY = 0.84;
 const DEFAULT_LIGHTING = {
   toneMappingExposure: 1.08,
@@ -351,6 +354,40 @@ function readViewPlaneOrientation(runtime) {
     y: projectAxis(0, 1, 0),
     z: projectAxis(0, 0, 1)
   };
+}
+
+function cameraMatchesViewPreset(runtime, preset, {
+  directionDotThreshold = DEFAULT_PERSPECTIVE_DIRECTION_DOT_THRESHOLD,
+  upDotThreshold = DEFAULT_PERSPECTIVE_UP_DOT_THRESHOLD
+} = {}) {
+  if (
+    !runtime?.THREE ||
+    !runtime?.camera ||
+    !runtime?.controls ||
+    !preset ||
+    !Array.isArray(preset.direction) ||
+    !Array.isArray(preset.up)
+  ) {
+    return false;
+  }
+  const currentDirection = runtime.camera.position.clone().sub(runtime.controls.target);
+  const nextDirection = new runtime.THREE.Vector3(...preset.direction);
+  const currentUp = runtime.camera.up.clone();
+  const nextUp = new runtime.THREE.Vector3(...preset.up);
+  if (
+    currentDirection.lengthSq() <= 1e-8 ||
+    nextDirection.lengthSq() <= 1e-8 ||
+    currentUp.lengthSq() <= 1e-8 ||
+    nextUp.lengthSq() <= 1e-8
+  ) {
+    return false;
+  }
+  currentDirection.normalize();
+  nextDirection.normalize();
+  currentUp.normalize();
+  nextUp.normalize();
+  return currentDirection.dot(nextDirection) >= directionDotThreshold &&
+    currentUp.dot(nextUp) >= upDotThreshold;
 }
 
 function isNumericArray(value, stride = 1) {
@@ -541,11 +578,11 @@ function autoZoomBoundsForRuntime(runtime, {
     explodedStates,
     explodedProgress
   );
-  const recordBounds = displayRecordsBounds(runtime.displayRecords, {
+  return focusedDisplayRecordsBounds(runtime.displayRecords, {
     partIds: focusedIds,
-    translationByRecord
+    translationByRecord,
+    fallbackBounds: baseBounds
   });
-  return recordBounds || baseBounds;
 }
 
 function applyExplodedViewRuntimeProgress(runtime, states, progress) {
@@ -703,7 +740,10 @@ function getFitDistanceForBoundingSphere(camera, radius, sceneScaleMode, frameAs
 function transitionCameraToBounds(runtime, bounds, sceneScaleMode, frameInsets, {
   durationMs = AUTO_ZOOM_SPEED_MS.DEFAULT,
   easing = AUTO_ZOOM_TRANSITION_EASING,
-  animate = true
+  animate = true,
+  minRadius = getSceneScaleSettings(sceneScaleMode).minModelRadius,
+  viewDirection = null,
+  viewUp = null
 } = {}) {
   if (!runtime?.THREE || !runtime?.camera || !runtime?.controls || !bounds) {
     return false;
@@ -715,16 +755,19 @@ function transitionCameraToBounds(runtime, bounds, sceneScaleMode, frameInsets, 
     bounds,
     modelOffset: runtime.modelGroup?.position,
     frameAspect: frameMetrics.aspect,
-    minRadius: getSceneScaleSettings(sceneScaleMode).minModelRadius,
+    minRadius,
     padding: AUTO_ZOOM_PADDING,
-    defaultDirection: DEFAULT_VIEW_DIRECTION
+    defaultDirection: DEFAULT_VIEW_DIRECTION,
+    viewDirection,
+    viewUp
   });
   if (!frame) {
     return false;
   }
   if (
     runtime.camera.position.distanceToSquared(frame.position) <= 1e-8 &&
-    runtime.controls.target.distanceToSquared(frame.target) <= 1e-8
+    runtime.controls.target.distanceToSquared(frame.target) <= 1e-8 &&
+    runtime.camera.up.distanceToSquared(frame.up) <= 1e-8
   ) {
     return false;
   }
@@ -1540,14 +1583,17 @@ const CadViewer = forwardRef(function CadViewer({
   const [transformedSelectorRuntime, setTransformedSelectorRuntime] = useState(null);
   const [transformedDisplayEdgeRuntime, setTransformedDisplayEdgeRuntime] = useState(null);
   const [autoZoomDetached, setAutoZoomDetached] = useState(false);
+  const [defaultPerspectiveDetached, setDefaultPerspectiveDetached] = useState(false);
   const [error, setError] = useState("");
   const [viewerReadyTick, setViewerReadyTick] = useState(0);
+  const [displayRecordsReadyTick, setDisplayRecordsReadyTick] = useState(0);
   const [runtimeResetToken, setRuntimeResetToken] = useState(0);
   const [activeViewPlaneFace, setActiveViewPlaneFace] = useState("");
   const [viewPlaneOrientation, setViewPlaneOrientation] = useState(DEFAULT_VIEW_PLANE_ORIENTATION);
   const [urdfPosePickerGuidePoint, setUrdfPosePickerGuidePoint] = useState(null);
   const [urdfPosePickerHoverActive, setUrdfPosePickerHoverActive] = useState(false);
   const activeViewPlaneFaceRef = useRef("");
+  const defaultPerspectiveResettingRef = useRef(false);
   const previewModeRef = useRef(previewMode);
   const perspectivePropRef = useRef(perspective);
   const modelKeyRef = useRef(modelKey);
@@ -1849,6 +1895,21 @@ const CadViewer = forwardRef(function CadViewer({
     lastEmittedPerspectiveRef.current = nextPerspective;
     perspectiveChangeRef.current?.(nextPerspective);
   };
+  const syncDefaultPerspectiveState = (runtime = runtimeRef.current) => {
+    if (defaultPerspectiveResettingRef.current) {
+      if (runtime?.cameraTransition) {
+        setDefaultPerspectiveDetached(false);
+        return;
+      }
+      defaultPerspectiveResettingRef.current = false;
+    }
+    const nextDetached = runtime?.THREE
+      ? !cameraMatchesViewPreset(runtime, VIEW_PLANE_DEFAULT_PRESET)
+      : false;
+    setDefaultPerspectiveDetached((current) => (
+      current === nextDetached ? current : nextDetached
+    ));
+  };
   const syncViewPlaneOrientation = (runtime = runtimeRef.current) => {
     const nextOrientation = readViewPlaneOrientation(runtime);
     if (!nextOrientation) {
@@ -1857,6 +1918,7 @@ const CadViewer = forwardRef(function CadViewer({
     setViewPlaneOrientation((current) => (
       viewPlaneOrientationEqual(current, nextOrientation) ? current : nextOrientation
     ));
+    syncDefaultPerspectiveState(runtime);
   };
   const applyInitialPerspective = useCallback((runtime = runtimeRef.current) => {
     const nextPerspective = resolvePerspectiveSnapshot(
@@ -1904,7 +1966,9 @@ const CadViewer = forwardRef(function CadViewer({
     explodedStates = null,
     explodedProgress = 1,
     animate = true,
-    force = false
+    force = false,
+    viewDirection = null,
+    viewUp = null
   } = {}) => {
     const runtime = runtimeRef.current;
     if (!runtime?.THREE || !runtime.camera || !runtime.controls) {
@@ -1926,6 +1990,9 @@ const CadViewer = forwardRef(function CadViewer({
     state.lastReason = reason;
     setAutoZoomDetached(false);
     const resolvedSpeedMs = normalizeAutoZoomSpeedMs(speedMs, AUTO_ZOOM_SPEED_MS.DEFAULT);
+    const minRadius = focusedPartIds.length > 0
+      ? 0
+      : getSceneScaleSettings(normalizedSceneScaleMode).minModelRadius;
     return transitionCameraToBounds(
       runtime,
       targetBounds,
@@ -1933,10 +2000,14 @@ const CadViewer = forwardRef(function CadViewer({
       viewportFrameInsetsRef.current,
       {
         durationMs: resolvedSpeedMs,
-        animate: animate !== false && resolvedSpeedMs > 0
+        animate: animate !== false && resolvedSpeedMs > 0,
+        minRadius,
+        viewDirection,
+        viewUp
       }
     );
   }, [
+    focusedPartIds.length,
     normalizedSceneScaleMode,
     resolveAutoZoomBounds
   ]);
@@ -1950,17 +2021,33 @@ const CadViewer = forwardRef(function CadViewer({
     state.lastReason = "manual";
     setAutoZoomDetached(true);
   }, []);
-  const resetAutoZoom = useCallback(() => {
+  const resetView = useCallback(() => {
+    const runtime = runtimeRef.current;
     const state = autoZoomStateRef.current;
     state.attached = true;
     state.modelKey = modelKeyRef.current || "";
     state.lastReason = "reset";
     setAutoZoomDetached(false);
-    runAutoZoom("reset", {
+    activeViewPlaneFaceRef.current = "";
+    setActiveViewPlaneFace("");
+    defaultPerspectiveResettingRef.current = true;
+    setDefaultPerspectiveDetached(false);
+    const transitioned = runAutoZoom("reset", {
       force: true,
-      speedMs: AUTO_ZOOM_SPEED_MS.RESET
+      speedMs: AUTO_ZOOM_SPEED_MS.RESET,
+      viewDirection: DEFAULT_VIEW_DIRECTION,
+      viewUp: WORLD_UP
     });
-  }, [runAutoZoom]);
+    if (!transitioned) {
+      const fallbackTransitioned = runtime
+        ? transitionCameraToViewPreset(runtime, VIEW_PLANE_DEFAULT_PRESET)
+        : false;
+      if (!fallbackTransitioned) {
+        defaultPerspectiveResettingRef.current = false;
+        syncDefaultPerspectiveState(runtime);
+      }
+    }
+  }, [runAutoZoom, syncDefaultPerspectiveState]);
   const buildSurfaceLineFaceAnchor = (event, canvas, lockedReferenceId = "", startUv = null) => {
     const runtime = runtimeRef.current;
     if (!runtime?.raycaster || !runtime?.camera || !activeSelectorRuntime?.faceReferenceByRowIndex) {
@@ -2222,7 +2309,12 @@ const CadViewer = forwardRef(function CadViewer({
     }
     activeViewPlaneFaceRef.current = face.id;
     setActiveViewPlaneFace(face.id);
-    return transitionCameraToViewPreset(runtime, face);
+    const transitioned = transitionCameraToViewPreset(runtime, face);
+    if (transitioned) {
+      defaultPerspectiveResettingRef.current = false;
+      setDefaultPerspectiveDetached(true);
+    }
+    return transitioned;
   };
   const activateDefaultViewPlane = () => {
     const runtime = runtimeRef.current;
@@ -2231,7 +2323,12 @@ const CadViewer = forwardRef(function CadViewer({
     }
     activeViewPlaneFaceRef.current = "";
     setActiveViewPlaneFace("");
-    return transitionCameraToViewPreset(runtime, VIEW_PLANE_DEFAULT_PRESET);
+    const transitioned = transitionCameraToViewPreset(runtime, VIEW_PLANE_DEFAULT_PRESET);
+    if (transitioned) {
+      defaultPerspectiveResettingRef.current = true;
+      setDefaultPerspectiveDetached(false);
+    }
+    return transitioned;
   };
 
   useImperativeHandle(ref, () => ({
@@ -2324,9 +2421,11 @@ const CadViewer = forwardRef(function CadViewer({
 
   useLayoutEffect(() => {
     autoZoomRunRef.current?.("focus", {
-      speedMs: AUTO_ZOOM_SPEED_MS.ISOLATE
+      speedMs: AUTO_ZOOM_SPEED_MS.ISOLATE,
+      force: focusedPartIds.length > 0
     });
   }, [
+    displayRecordsReadyTick,
     focusedPartIds,
     modelKey,
     viewerReadyTick
@@ -2373,7 +2472,9 @@ const CadViewer = forwardRef(function CadViewer({
   const handleRuntimeContextRestored = useCallback(() => {
     framedModelKeyRef.current = "";
     lastEmittedPerspectiveRef.current = null;
+    defaultPerspectiveResettingRef.current = false;
     viewerAlertChangeRef.current?.(null);
+    setDefaultPerspectiveDetached(false);
     setRuntimeResetToken((value) => value + 1);
   }, []);
 
@@ -3030,6 +3131,7 @@ const CadViewer = forwardRef(function CadViewer({
     }
 
     setError("");
+    setDisplayRecordsReadyTick((tick) => tick + 1);
     runtime.requestRender();
   }, [
     meshGeometrySource,
@@ -3112,6 +3214,7 @@ const CadViewer = forwardRef(function CadViewer({
     );
     updateSpotLightTarget(runtime);
     updateStageEffects(runtime, viewerTheme, normalizedThemeSettings, radius, runtime.gridFloorZ ?? 0, resolvedFloorMode, normalizedSceneScaleMode);
+    setDisplayRecordsReadyTick((tick) => tick + 1);
     runtime.requestRender();
   }, [
     meshData?.parts,
@@ -3429,7 +3532,11 @@ const CadViewer = forwardRef(function CadViewer({
     });
     clearExplodedViewRecordsOutsideStates(runtime.displayRecords, transitionStates);
 
-    if (normalizedExplodedSettings.autoFrame !== false) {
+    if (
+      targetProgress > 0 &&
+      focusedPartIds.length === 0 &&
+      normalizedExplodedSettings.autoFrame !== false
+    ) {
       runAutoZoom("explode", {
         baseBounds,
         explodedStates: targetProgress > 0 ? transitionStates : [],
@@ -3488,6 +3595,7 @@ const CadViewer = forwardRef(function CadViewer({
     meshData?.bounds,
     meshGeometrySource,
     modelKey,
+    focusedPartIds.length,
     normalizedSceneScaleMode,
     normalizedThemeSettings,
     runAutoZoom,
@@ -4076,17 +4184,17 @@ const CadViewer = forwardRef(function CadViewer({
         }}
         aria-hidden="true"
       />
-      {showViewPlane && !previewMode && !isLoading && meshData && autoZoomDetached ? (
+      {showViewPlane && !previewMode && !isLoading && meshData && (autoZoomDetached || defaultPerspectiveDetached) ? (
         <button
           type="button"
-          aria-label="Reset default zoom"
-          title="Reset default zoom"
-          className="cad-glass-surface pointer-events-auto absolute z-20 grid h-8 w-8 place-items-center rounded-full border border-sidebar-border text-sidebar-foreground/60 shadow-sm transition duration-150 hover:text-sidebar-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/45"
+          aria-label="Reset view"
+          title="Reset view"
+          className={`${RESET_VIEW_CONTROL_BUTTON_CLASSES} absolute z-20`}
           style={{
-            right: `calc(${viewPlaneOffsetRight}px + ${compactViewPlane ? "1.8rem" : "2.7rem"})`,
-            bottom: `calc(${cssLength(viewPlaneOffsetBottom, "16px")} + ${compactViewPlane ? "6.25rem" : "7.95rem"})`
+            right: `calc(${viewPlaneOffsetRight}px + 2rem)`,
+            bottom: `calc(${cssLength(viewPlaneOffsetBottom, "16px")} + 6.6rem)`
           }}
-          onClick={resetAutoZoom}
+          onClick={resetView}
         >
           <Navigation2 className="h-3.5 w-3.5" strokeWidth={2} aria-hidden="true" />
         </button>

@@ -476,6 +476,27 @@ function findStepTreeNodeForWorkspace(root, nodeId) {
   return null;
 }
 
+function collectStepTreeTopologyLoadableNodeIds(root) {
+  const ids = [];
+  const stack = root ? [root] : [];
+  while (stack.length) {
+    const node = stack.pop();
+    const children = stepTreeNodeChildren(node);
+    for (let index = children.length - 1; index >= 0; index -= 1) {
+      stack.push(children[index]);
+    }
+    const nodeId = stepTreeNodeIdForWorkspace(node);
+    if (
+      nodeId &&
+      String(node?.nodeType || "").trim() === "part" &&
+      children.length === 0
+    ) {
+      ids.push(nodeId);
+    }
+  }
+  return uniqueStringList(ids);
+}
+
 function copyableStepTreeNodeForWorkspace({ assemblyPartMap, displayStepTreeRoot, stepTreeRoot, nodeId }) {
   const normalizedNodeId = String(nodeId || "").trim();
   if (!normalizedNodeId) {
@@ -2806,6 +2827,40 @@ export default function CadWorkspace({
     isolatedAssemblyNodeIds,
     isAssemblyView
   ]);
+  const loadableStepTreeTopologyNodeIds = useMemo(() => (
+    isStepView && isAssemblyView && selectedEntryHasReferences
+      ? collectStepTreeTopologyLoadableNodeIds(stepTreeRoot)
+      : []
+  ), [
+    isAssemblyView,
+    isStepView,
+    selectedEntryHasReferences,
+    stepTreeRoot
+  ]);
+  const loadableStepTreeTopologyNodeIdSet = useMemo(
+    () => new Set(loadableStepTreeTopologyNodeIds),
+    [loadableStepTreeTopologyNodeIds]
+  );
+  const requestedStepTreeTopologyNodeIds = useMemo(() => {
+    if (!isStepView || !isAssemblyView || !selectedEntryHasReferences) {
+      return [];
+    }
+    return uniqueStringList(
+      [
+        ...expandedStepTreeNodeIds,
+        ...focusedAssemblyNodeIds
+      ]
+        .map((id) => String(id || "").trim())
+        .filter((id) => id && loadableStepTreeTopologyNodeIdSet.has(id))
+    );
+  }, [
+    expandedStepTreeNodeIds,
+    focusedAssemblyNodeIds,
+    isAssemblyView,
+    isStepView,
+    loadableStepTreeTopologyNodeIdSet,
+    selectedEntryHasReferences
+  ]);
   const assemblyCurrentNodeId = assemblyRootNodeId;
   const focusedAssemblyInteractionId = useMemo(
     () => (isAssemblyView ? focusedAssemblyInteractionNodeId(assemblyRoot, focusedAssemblyNodeIds) : ""),
@@ -4999,7 +5054,8 @@ export default function CadWorkspace({
   const assemblyStepTreeTopologyLoadingEnabled =
     effectiveRenderFormat === RENDER_FORMAT.STEP &&
     selectedEntryHasReferences &&
-    isAssemblyView;
+    isAssemblyView &&
+    requestedStepTreeTopologyNodeIds.length > 0;
   const selectedStepDisplayEdgesRequested =
     effectiveRenderFormat === RENDER_FORMAT.STEP &&
     selectedEntryHasDisplayEdges &&
@@ -5257,21 +5313,26 @@ export default function CadWorkspace({
       return [];
     }
     if (isAssemblyView) {
-      return assemblyStepTreeTopologyReferences;
+      return requestedStepTreeTopologyNodeIds.length
+        ? assemblyStepTreeTopologyReferences
+        : [];
     }
     return currentReferences;
   }, [
     assemblyStepTreeTopologyReferences,
     currentReferences,
     isAssemblyView,
-    isStepView
+    isStepView,
+    requestedStepTreeTopologyNodeIds
   ]);
   const displayStepTreeRoot = useMemo(() => buildStepTreeRootWithTopology({
     root: stepTreeRoot,
     references: stepTreeTopologyReferences,
-    fallbackPartId: isAssemblyView ? "" : STEP_MODEL_ROOT_ID
+    fallbackPartId: isAssemblyView ? "" : STEP_MODEL_ROOT_ID,
+    topologyPartIds: isAssemblyView ? requestedStepTreeTopologyNodeIds : null
   }), [
     isAssemblyView,
+    requestedStepTreeTopologyNodeIds,
     stepTreeRoot,
     stepTreeTopologyReferences
   ]);
@@ -5279,22 +5340,6 @@ export default function CadWorkspace({
     () => buildStepTreeCopyReferenceMap(displayStepTreeRoot),
     [displayStepTreeRoot]
   );
-  useEffect(() => {
-    if (!stepTreeTopologyReferences.length || isAssemblyView) {
-      return;
-    }
-    const expansionIds = collectStepTreeRevealExpansionIds(displayStepTreeRoot, STEP_MODEL_ROOT_ID, { expandSelf: true });
-    if (!expansionIds.length) {
-      return;
-    }
-    setExpandedStepTreeNodeIds((current) => (
-      uniqueStringList([...current, ...expansionIds])
-    ));
-  }, [
-    displayStepTreeRoot,
-    isAssemblyView,
-    stepTreeTopologyReferences
-  ]);
   const effectiveSelectorRuntime = selectedSelectorRuntime;
 
   const effectiveActiveReferenceMap = useMemo(() => {
@@ -6686,7 +6731,11 @@ export default function CadWorkspace({
     setExpandedStepTreeNodeIds((current) => uniqueStringList([...current, ...idsToExpand]));
   }, [displayStepTreeRoot, stepTreeRoot]);
 
-  const revealStepTreeNode = useCallback((nodeId, { expandSelf = false, source = "viewer" } = {}) => {
+  const revealStepTreeNode = useCallback((nodeId, {
+    expandSelf = false,
+    expandAncestors = false,
+    source = "viewer"
+  } = {}) => {
     const normalizedNodeId = String(nodeId || "").trim();
     if (!normalizedNodeId || selectedFileSheetKind !== "step") {
       return;
@@ -6695,7 +6744,9 @@ export default function CadWorkspace({
     openFileSheetSection(FILE_SHEET_SECTION_IDS.STEP_TREE, {
       openSheet: shouldOpenFileSheetForSelectionReveal({ isDesktop, source })
     });
-    expandStepTreeAroundNode(normalizedNodeId, { expandSelf });
+    if (expandAncestors || expandSelf) {
+      expandStepTreeAroundNode(normalizedNodeId, { expandSelf });
+    }
   }, [
     expandStepTreeAroundNode,
     isDesktop,
@@ -6749,7 +6800,7 @@ export default function CadWorkspace({
     setSelectedReferenceIds(next);
     if (next.includes(normalizedReferenceId)) {
       const selectedReferenceTreeNodeId = findStepTreeTopologyNodeIdForReference(displayStepTreeRoot, normalizedReferenceId);
-      revealStepTreeNode(selectedReferenceTreeNodeId || selectedReferencePartId, { expandSelf: true, source });
+      revealStepTreeNode(selectedReferenceTreeNodeId || selectedReferencePartId, { source });
     }
   }, [
     displayStepTreeRoot,
@@ -6948,7 +6999,7 @@ export default function CadWorkspace({
     selectedPartIdsRef.current = next;
     setSelectedPartIds(next);
     if (next.includes(normalizedPartId)) {
-      revealStepTreeNode(normalizedPartId, { expandSelf: true, source });
+      revealStepTreeNode(normalizedPartId, { source });
     }
     setSelectedRenderPartIdByAssemblyPartId((current) => {
       const nextMap = {};
@@ -7081,7 +7132,6 @@ export default function CadWorkspace({
     });
     for (const targetNodeId of targetNodeIds) {
       revealStepTreeNode(targetNodeId, {
-        expandSelf: true,
         source: "tree"
       });
     }
@@ -7251,7 +7301,6 @@ export default function CadWorkspace({
     const leafIdSet = new Set(leafIds);
     setHiddenPartIds((current) => current.filter((id) => !leafIdSet.has(id)));
     revealStepTreeNode(partId, {
-      expandSelf: true,
       source: "viewer"
     });
   }, [
@@ -7369,7 +7418,6 @@ export default function CadWorkspace({
     clearAssemblySelectionForFocus();
     for (const targetNodeId of normalizedNodeIds) {
       revealStepTreeNode(targetNodeId, {
-        expandSelf: false,
         source: "tree"
       });
     }
@@ -8320,19 +8368,6 @@ export default function CadWorkspace({
   ]);
   const activeStepTreeNodeId = selectedPartIds[selectedPartIds.length - 1] ||
     activeReferenceTreeNodeId;
-  useEffect(() => {
-    if (!isStepView || !activeReferenceTreeNodeId || activeReferenceTreeNodeId === activeReferencePartTreeNodeId) {
-      return;
-    }
-    expandStepTreeAroundNode(activeReferenceTreeNodeId, {
-      includeVisualOnlyAncestors: false
-    });
-  }, [
-    activeReferencePartTreeNodeId,
-    activeReferenceTreeNodeId,
-    expandStepTreeAroundNode,
-    isStepView
-  ]);
   const canUndoDrawing = drawingUndoStack.length > 0;
   const canRedoDrawing = drawingRedoStack.length > 0;
   const fileSheetOpen = !!selectedFileSheetKind && tabToolsOpen && !previewMode;
@@ -8714,6 +8749,7 @@ export default function CadWorkspace({
                 stepTreeRoot={displayStepTreeRoot}
                 assemblyMates={selectedAssemblyMates}
                 expandedTreeNodeIds={expandedStepTreeNodeIds}
+                loadableTreeNodeIds={loadableStepTreeTopologyNodeIds}
                 selectedPartIds={selectedPartIds}
                 selectedReferenceIds={selectedReferenceIds}
                 selectedMateIds={selectedMateIds}

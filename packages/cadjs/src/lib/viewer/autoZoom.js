@@ -1,4 +1,4 @@
-export const DEFAULT_AUTO_ZOOM_PADDING = 1.08;
+export const DEFAULT_AUTO_ZOOM_PADDING = 1.04;
 
 const EPSILON = 1e-6;
 
@@ -9,6 +9,33 @@ function toNumber(value, fallback = 0) {
 
 function normalizePartId(value) {
   return String(value || "").trim();
+}
+
+function partIdMatchesFilter(partId, filter) {
+  const normalizedPartId = normalizePartId(partId);
+  if (!filter?.size) {
+    return true;
+  }
+  if (filter.has("__model__")) {
+    return true;
+  }
+  if (!normalizedPartId) {
+    return false;
+  }
+  for (const candidate of filter) {
+    const normalizedCandidate = normalizePartId(
+      String(candidate || "").startsWith("#")
+        ? String(candidate || "").slice(1)
+        : candidate
+    );
+    if (
+      normalizedPartId === normalizedCandidate ||
+      normalizedPartId.startsWith(`${normalizedCandidate}.`)
+    ) {
+      return true;
+    }
+  }
+  return false;
 }
 
 function isNumericBounds(bounds) {
@@ -26,6 +53,15 @@ function vectorComponents(value) {
     return [toNumber(value[0]), toNumber(value[1]), toNumber(value[2])];
   }
   return [0, 0, 0];
+}
+
+function normalizedVector(THREE, value) {
+  if (!value) {
+    return null;
+  }
+  const [x, y, z] = vectorComponents(value);
+  const vector = new THREE.Vector3(x, y, z);
+  return vector.lengthSq() > EPSILON ? vector.normalize() : null;
 }
 
 export function mergeBoundsList(boundsList = []) {
@@ -69,7 +105,7 @@ export function displayRecordsBounds(records = [], {
       continue;
     }
     const partId = normalizePartId(record.partId);
-    if (filter && !filter.has(partId)) {
+    if (filter && !partIdMatchesFilter(partId, filter)) {
       continue;
     }
     const translation = translationByRecord instanceof Map
@@ -78,6 +114,19 @@ export function displayRecordsBounds(records = [], {
     boundsList.push(shiftedBounds(record.partBounds, translation));
   }
   return mergeBoundsList(boundsList);
+}
+
+export function focusedDisplayRecordsBounds(records = [], {
+  partIds = null,
+  translationByRecord = null,
+  fallbackBounds = null
+} = {}) {
+  const filter = partIds instanceof Set && partIds.size > 0 ? partIds : null;
+  if (!filter) {
+    return displayRecordsBounds(records, { translationByRecord }) || fallbackBounds;
+  }
+  const recordBounds = displayRecordsBounds(records, { partIds: filter, translationByRecord });
+  return filter.has("__model__") ? (recordBounds || fallbackBounds) : recordBounds;
 }
 
 export function boundsCenterAndRadius(THREE, bounds, {
@@ -126,7 +175,9 @@ export function autoZoomFrameForBounds(THREE, {
   frameAspect = camera?.aspect || 1,
   minRadius = 0,
   padding = DEFAULT_AUTO_ZOOM_PADDING,
-  defaultDirection = [2.1, -1.65, 1.08]
+  defaultDirection = [2.1, -1.65, 1.08],
+  viewDirection = null,
+  viewUp = null
 } = {}) {
   if (!THREE?.Vector3 || !camera || !controls) {
     return null;
@@ -136,9 +187,10 @@ export function autoZoomFrameForBounds(THREE, {
     return null;
   }
   const offset = camera.position.clone().sub(controls.target);
-  const direction = offset.lengthSq() > EPSILON
+  const direction = normalizedVector(THREE, viewDirection) || (offset.lengthSq() > EPSILON
     ? offset.normalize()
-    : new THREE.Vector3(...defaultDirection).normalize();
+    : new THREE.Vector3(...defaultDirection).normalize());
+  const up = normalizedVector(THREE, viewUp) || camera.up.clone();
   const distance = fitDistanceForRadius(camera, frame.radius, {
     aspect: frameAspect,
     minRadius,
@@ -151,7 +203,7 @@ export function autoZoomFrameForBounds(THREE, {
     distance,
     position,
     target: frame.center.clone(),
-    up: camera.up.clone(),
+    up,
     zoom: camera.zoom
   };
 }
