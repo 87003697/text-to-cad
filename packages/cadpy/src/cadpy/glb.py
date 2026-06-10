@@ -623,6 +623,7 @@ class _GlbBuilder:
             selector_manifest.pop(key, None)
 
         index_manifest = build_step_topology_index_manifest(bundle.manifest, entry_kind=entry_kind)
+        selector_manifest["entryKind"] = index_manifest["entryKind"]
         index_payload = json.dumps(index_manifest, separators=(",", ":")).encode("utf-8")
         index_view = self.add_buffer_view(index_payload)
 

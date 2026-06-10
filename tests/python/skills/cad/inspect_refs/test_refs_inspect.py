@@ -405,6 +405,7 @@ class InspectRefsTests(unittest.TestCase):
         include_selector: bool = True,
         include_index: bool = True,
         current_hash: str | None = None,
+        strip_selector_keys: tuple[str, ...] = (),
     ):
         resolved_step_path = step_path or self.step_path
         edge_rendering = {
@@ -479,12 +480,15 @@ class InspectRefsTests(unittest.TestCase):
             )
             stack.enter_context(mock.patch.object(step_targets, "glb_primitives_have_surface_edge_attributes", return_value=True))
             stack.enter_context(mock.patch.object(step_targets, "glb_surface_edge_class_has_nonzero_values", return_value=True))
+            selector_topology_manifest = {
+                key: value for key, value in topology_manifest.items() if key not in strip_selector_keys
+            }
             stack.enter_context(
                 mock.patch.object(
                     step_targets,
                     "read_step_topology_bundle_from_glb",
                     return_value=(
-                        SelectorBundle(manifest=topology_manifest, buffers=buffers or {})
+                        SelectorBundle(manifest=selector_topology_manifest, buffers=buffers or {})
                         if include_selector
                         else None
                     ),
@@ -508,6 +512,17 @@ class InspectRefsTests(unittest.TestCase):
         self.assertEqual(1, token["summary"]["occurrenceCount"])
         self.assertEqual(2, token["summary"]["faceCount"])
         self.assertEqual([], token["selections"])
+
+    def test_facts_kind_falls_back_to_index_manifest_for_assembly(self) -> None:
+        manifest = {**_refs_manifest(self.cad_ref), "entryKind": "assembly"}
+
+        with self._mock_glb_topology(manifest, strip_selector_keys=("entryKind", "assembly")):
+            result = refs_inspect.inspect_cad_refs(self.cad_ref, facts=True)
+
+        self.assertTrue(result["ok"])
+        token = result["tokens"][0]
+        self.assertEqual("assembly", token["summary"]["kind"])
+        self.assertEqual("assembly", token["entryFacts"]["kind"])
 
     def test_python_backed_glb_only_entry_inspects_without_step_file(self) -> None:
         self.step_path.unlink()
