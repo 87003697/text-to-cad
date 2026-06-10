@@ -105,14 +105,14 @@ class SnapshotCliTests(unittest.TestCase):
             )
 
     def test_display_shortcut_accepts_cad_display_modes(self) -> None:
-        for raw_mode, expected_mode in [
-            ("edges", "solid"),
-            ("x-ray", "transparent"),
-            ("hidden edges visible", "hidden_edges"),
-            ("hidden-lines-removed", "hidden_lines_removed"),
-            ("flat", "unshaded"),
-            ("appearance", "rendered"),
-            ("wire", "wireframe"),
+        for raw_mode, expected_display in [
+            ("edges", {"mode": "solid"}),
+            ("x-ray", {"mode": "transparent"}),
+            ("hidden edges visible", {"mode": "hidden_edges"}),
+            ("hidden-lines-removed", {"mode": "hidden_lines_removed"}),
+            ("flat", {"mode": "unshaded"}),
+            ("appearance", {"mode": "rendered"}),
+            ("wire", {"mode": "wireframe"}),
         ]:
             options = parse_snapshot_args(
                 [
@@ -125,7 +125,24 @@ class SnapshotCliTests(unittest.TestCase):
                 ]
             )
             job = load_job_from_options(options, stdin=_TtyStringIO(), cwd=Path.cwd())
-            self.assertEqual(job["display"], {"mode": expected_mode})
+            self.assertEqual(job["display"], expected_display)
+
+    def test_display_json_accepts_exploded_settings(self) -> None:
+        options = parse_snapshot_args(
+            [
+                "--input",
+                "models/simple/cylindrical_cap.step",
+                "--output",
+                "tmp/cap.png",
+                "--display",
+                '{"mode":"rendered","exploded":{"enabled":true,"axis":"radial","spacing":1.6}}',
+            ]
+        )
+        job = load_job_from_options(options, stdin=_TtyStringIO(), cwd=Path.cwd())
+        self.assertEqual(
+            job["display"],
+            {"mode": "rendered", "exploded": {"enabled": True, "axis": "radial", "spacing": 1.6}},
+        )
 
     def test_display_shortcut_rejects_unknown_modes(self) -> None:
         options = parse_snapshot_args(
@@ -136,6 +153,20 @@ class SnapshotCliTests(unittest.TestCase):
                 "tmp/cap.png",
                 "--display",
                 "mist",
+            ]
+        )
+        with self.assertRaisesRegex(SnapshotError, "Unsupported display mode"):
+            load_job_from_options(options, stdin=_TtyStringIO(), cwd=Path.cwd())
+
+    def test_display_shortcut_rejects_exploded_mode_alias(self) -> None:
+        options = parse_snapshot_args(
+            [
+                "--input",
+                "models/simple/cylindrical_cap.step",
+                "--output",
+                "tmp/cap.png",
+                "--display",
+                "exploded",
             ]
         )
         with self.assertRaisesRegex(SnapshotError, "Unsupported display mode"):

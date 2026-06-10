@@ -25,6 +25,9 @@ import {
   createStepModuleEffectsApi,
   displayTransformForPart
 } from "./stepModuleEffects.js";
+import {
+  applyDisplayRecordTransform
+} from "./displayRecordTransform.js";
 import { axisIndex, normalizeStepClipSettings } from "../lib/viewer/clipPlane.js";
 import {
   clampSceneModelRadius,
@@ -34,6 +37,7 @@ import {
 } from "../lib/viewer/sceneScale.js";
 
 export { CAD_DISPLAY_MODE, normalizeDisplayMode };
+export { applyDisplayRecordTransform } from "./displayRecordTransform.js";
 
 export const CAD_SCENE_SCALE = VIEWER_SCENE_SCALE;
 
@@ -922,29 +926,6 @@ export function readBoundsCenter(THREE, bounds) {
   );
 }
 
-function applyObjectMatrix(THREE, object3d, matrix) {
-  if (!object3d || !(matrix instanceof THREE.Matrix4)) {
-    return;
-  }
-  object3d.matrixAutoUpdate = false;
-  const targetMatrix = object3d.matrix instanceof THREE.Matrix4 ? object3d.matrix : new THREE.Matrix4();
-  targetMatrix.copy(matrix);
-  object3d.matrix = targetMatrix;
-  object3d.matrixWorldNeedsUpdate = true;
-}
-
-export function applyDisplayRecordTransform(THREE, record) {
-  if (!record) {
-    return;
-  }
-  const baseMatrix = buildPartTransformMatrix(THREE, record.baseTransform);
-  const effectMatrix = record.effectMatrix instanceof THREE.Matrix4 ? record.effectMatrix.clone() : null;
-  const combinedMatrix = effectMatrix ? effectMatrix.multiply(baseMatrix) : baseMatrix;
-  applyObjectMatrix(THREE, record.mesh, combinedMatrix);
-  applyObjectMatrix(THREE, record.edges, combinedMatrix);
-  applyObjectMatrix(THREE, record.silhouette, combinedMatrix);
-}
-
 function safeColor(THREE, value, fallback = null) {
   const text = String(value || "").trim();
   if (!text) {
@@ -1018,6 +999,37 @@ function normalizePartIdList(value) {
   return (Array.isArray(value) ? value : [value])
     .map((id) => String(id || "").trim())
     .filter(Boolean);
+}
+
+function normalizePartSelector(value) {
+  const text = String(value || "").trim();
+  return text.startsWith("#") ? text.slice(1).trim() : text;
+}
+
+function partIdMatchesSet(partId, set) {
+  if (!set?.size) {
+    return false;
+  }
+  if (set.has(MODEL_PART_ID)) {
+    return true;
+  }
+  const normalizedPartId = normalizePartSelector(partId);
+  if (!normalizedPartId) {
+    return false;
+  }
+  for (const candidate of set) {
+    const normalizedCandidate = normalizePartSelector(candidate);
+    if (
+      normalizedCandidate &&
+      (
+        normalizedPartId === normalizedCandidate ||
+        normalizedPartId.startsWith(`${normalizedCandidate}.`)
+      )
+    ) {
+      return true;
+    }
+  }
+  return false;
 }
 
 function baseObjectRenderOrder(record, object, fieldName) {
@@ -1143,10 +1155,10 @@ export function applyPartVisualState(THREE, records, {
     const effectColor = readSourceColor(THREE, effectStyle.color);
     const effectEdgeColor = readSourceColor(THREE, effectStyle.edgeColor);
     const effectEmissive = readSourceColor(THREE, effectStyle.emissive);
-    const isHidden = hidden.has(record.partId);
-    const isSelected = !isHidden && (selected.has(record.partId) || record.effectHighlighted === true);
-    const isHovered = !isHidden && !effectHidden && hovered.has(record.partId);
-    const isFocused = !isHidden && !effectHidden && hasFocus && focusIds.has(record.partId);
+    const isHidden = partIdMatchesSet(record.partId, hidden);
+    const isSelected = !isHidden && (partIdMatchesSet(record.partId, selected) || record.effectHighlighted === true);
+    const isHovered = !isHidden && !effectHidden && partIdMatchesSet(record.partId, hovered);
+    const isFocused = !isHidden && !effectHidden && hasFocus && partIdMatchesSet(record.partId, focusIds);
     const isDimmed = !isHidden && !effectHidden && hasFocus && !isFocused;
     const isHighlighted = isSelected || isHovered;
 

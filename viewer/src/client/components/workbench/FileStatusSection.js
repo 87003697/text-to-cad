@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { ChevronDown } from "lucide-react";
+import { Check, Copy } from "lucide-react";
 import { Badge } from "../ui/badge";
 import { Button } from "../ui/button";
 import { copyTextToClipboard } from "@/ui/clipboard";
@@ -69,6 +69,17 @@ export default function FileStatusSection({
     });
   };
 
+  const collapseExpandedItem = (itemId) => {
+    setExpandedItemIds((current) => {
+      if (!current.has(itemId)) {
+        return current;
+      }
+      const next = new Set(current);
+      next.delete(itemId);
+      return next;
+    });
+  };
+
   const handleRowKeyDown = (event, itemId, hasDetails) => {
     if (!hasDetails || (event.key !== "Enter" && event.key !== " ")) {
       return;
@@ -133,26 +144,21 @@ export default function FileStatusSection({
                     {fileStatusLevelLabel(item.level)}
                   </Badge>
                   <div className="min-w-0 flex-1 truncate font-medium leading-4 text-sidebar-foreground" title={item.title}>{item.title}</div>
-                  <span className="ml-auto inline-flex h-5 shrink-0 items-center gap-1">
-                    {hasDetails ? (
-                      <ChevronDown
-                        className={cn(
-                          "size-3.5 text-muted-foreground transition-transform",
-                          expanded && "rotate-180"
-                        )}
-                        aria-hidden="true"
-                      />
-                    ) : null}
+                  <span className="ml-auto inline-flex h-5 shrink-0 items-center">
                     <Button
                       type="button"
                       variant="ghost"
-                      size="xs"
-                      className="h-5 rounded-sm px-1 text-[10px] font-normal text-muted-foreground hover:text-sidebar-foreground"
+                      size="icon-xs"
+                      className="size-5 rounded-sm text-muted-foreground hover:text-sidebar-foreground"
                       onClick={(event) => handleCopyIssue(event, item)}
                       aria-label={copiedItemId === item.id ? "Copied issue" : "Copy issue for agent"}
                       title={copiedItemId === item.id ? "Copied" : "Copy issue for agent"}
                     >
-                      {copiedItemId === item.id ? "Copied" : "Copy"}
+                      {copiedItemId === item.id ? (
+                        <Check className="size-3" strokeWidth={2.25} aria-hidden="true" />
+                      ) : (
+                        <Copy className="size-3" strokeWidth={2.1} aria-hidden="true" />
+                      )}
                     </Button>
                   </span>
                 </div>
@@ -177,6 +183,19 @@ export default function FileStatusSection({
                       </div>
                     ))}
                   </dl>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="xs"
+                    className="h-auto rounded-sm px-0 py-0 text-[11px] font-medium text-muted-foreground hover:bg-transparent hover:text-sidebar-foreground"
+                    onClick={(event) => {
+                      event.preventDefault();
+                      event.stopPropagation();
+                      collapseExpandedItem(item.id);
+                    }}
+                  >
+                    Collapse
+                  </Button>
                 </div>
               ) : null}
             </li>

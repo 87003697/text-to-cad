@@ -65,7 +65,9 @@ import {
 } from "cadjs/lib/themeSettings";
 import {
   CAD_DISPLAY_MODE,
-  normalizeDisplaySettings
+  DEFAULT_EXPLODED_VIEW_SETTINGS,
+  normalizeDisplaySettings,
+  normalizeExplodedViewSettings
 } from "cadjs/lib/displaySettings";
 import {
   buildStepClipPatch,
@@ -117,6 +119,13 @@ const COLOR_MODE_OPTIONS = [
   { value: THEME_COLOR_MODES.SYSTEM, label: "System" },
   { value: THEME_COLOR_MODES.LIGHT, label: "Light" },
   { value: THEME_COLOR_MODES.DARK, label: "Dark" }
+];
+
+const EXPLODED_AXIS_OPTIONS = [
+  { value: "x", label: "X" },
+  { value: "y", label: "Y" },
+  { value: "z", label: "Z" },
+  { value: "radial", label: "Radial" }
 ];
 
 const PRIMARY_LIGHT_OPTIONS = [
@@ -1467,6 +1476,10 @@ export function DisplaySettingsSection({
     () => normalizeStepClipSettings(normalizedDisplaySettings.clip),
     [normalizedDisplaySettings.clip]
   );
+  const normalizedExplodedSettings = useMemo(
+    () => normalizeExplodedViewSettings(normalizedDisplaySettings.exploded),
+    [normalizedDisplaySettings.exploded]
+  );
   const setDisplay = (patch) => {
     updateDisplaySettings?.((current) => ({
       ...normalizeDisplaySettings(current),
@@ -1479,6 +1492,15 @@ export function DisplaySettingsSection({
       return {
         ...currentSettings,
         clip: buildStepClipPatch(currentSettings.clip, patch)
+      };
+    });
+  };
+  const setExploded = (patch) => {
+    updateDisplaySettings?.((current) => {
+      const currentSettings = normalizeDisplaySettings(current);
+      return {
+        ...currentSettings,
+        exploded: normalizeExplodedViewSettings({ ...currentSettings.exploded, ...patch })
       };
     });
   };
@@ -1495,23 +1517,122 @@ export function DisplaySettingsSection({
 
   return (
     <Section title="Display" value="display">
-      <Field label="Mode">
-        <Select
-          value={normalizedDisplaySettings.mode}
-          onValueChange={(nextValue) => setDisplay({ mode: nextValue })}
-        >
-          <SelectTrigger size="sm" className="h-7 !text-[11px]" aria-label="Display mode">
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent>
-            {DISPLAY_MODE_OPTIONS.map((option) => (
-              <SelectItem key={option.value} value={option.value} className="text-xs" title={option.title}>
-                {option.label}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
-      </Field>
+      <ControlSubsection title="Mode">
+        <Field label="Style">
+          <Select
+            value={normalizedDisplaySettings.mode}
+            onValueChange={(nextValue) => setDisplay({ mode: nextValue })}
+          >
+            <SelectTrigger size="sm" className="h-7 !text-[11px]" aria-label="Display mode">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {DISPLAY_MODE_OPTIONS.map((option) => (
+                <SelectItem key={option.value} value={option.value} className="text-xs" title={option.title}>
+                  {option.label}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </Field>
+
+        <FileSheetToggleRow
+          label="Exploded view"
+          checked={normalizedExplodedSettings.enabled}
+          onCheckedChange={(checked) => setExploded({ enabled: checked })}
+        />
+
+        {normalizedExplodedSettings.enabled ? (
+          <>
+            <Field label="Axis">
+              <SegmentedControl
+                value={normalizedExplodedSettings.axis}
+                options={EXPLODED_AXIS_OPTIONS}
+                onChange={(nextValue) => setExploded({ axis: nextValue })}
+              />
+            </Field>
+
+            <FileSheetSliderField
+              label="Spacing"
+              value={`${normalizedExplodedSettings.spacing.toFixed(2)}x`}
+              onValueCommit={(nextValue) => {
+                setExploded({
+                  spacing: parseFileSheetNumberInput(nextValue, {
+                    fallback: normalizedExplodedSettings.spacing,
+                    min: 0.25,
+                    max: 4
+                  })
+                });
+              }}
+            >
+              <Slider
+                className={precisionSliderClasses}
+                value={[normalizedExplodedSettings.spacing]}
+                min={0.25}
+                max={4}
+                step={0.05}
+                onValueChange={(value) => {
+                  setExploded({ spacing: Array.isArray(value) ? value[0] : value });
+                }}
+                aria-label="Exploded spacing"
+              />
+            </FileSheetSliderField>
+
+            <FileSheetSliderField
+              label="Depth"
+              value={`${normalizedExplodedSettings.depth}`}
+              onValueCommit={(nextValue) => {
+                setExploded({
+                  depth: parseFileSheetNumberInput(nextValue, {
+                    fallback: normalizedExplodedSettings.depth,
+                    min: 1,
+                    max: 8,
+                    integer: true
+                  })
+                });
+              }}
+            >
+              <Slider
+                className={precisionSliderClasses}
+                value={[normalizedExplodedSettings.depth]}
+                min={1}
+                max={8}
+                step={1}
+                onValueChange={(value) => {
+                  setExploded({ depth: Array.isArray(value) ? value[0] : value });
+                }}
+                aria-label="Exploded depth"
+              />
+            </FileSheetSliderField>
+
+            <FileSheetToggleRow
+              label="Merge levels"
+              checked={normalizedExplodedSettings.mergeCoplanar}
+              onCheckedChange={(checked) => setExploded({ mergeCoplanar: checked })}
+            />
+
+            <FileSheetToggleRow
+              label="Ground base"
+              checked={normalizedExplodedSettings.keepBaseGrounded}
+              onCheckedChange={(checked) => setExploded({ keepBaseGrounded: checked })}
+            />
+
+            <FileSheetControlRow>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                className={compactButtonClasses}
+                onClick={() => setExploded(DEFAULT_EXPLODED_VIEW_SETTINGS)}
+                title="Reset exploded view"
+              >
+                <RotateCcw className="h-3 w-3" strokeWidth={2} aria-hidden="true" />
+                <span>Reset</span>
+              </Button>
+            </FileSheetControlRow>
+          </>
+        ) : null}
+      </ControlSubsection>
 
       {showClip ? (
         <ControlSubsection title="Clip" hideFirstSeparator={false}>

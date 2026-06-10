@@ -1,6 +1,7 @@
 "use client";
 
-import { forwardRef, useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState } from "react";
+import { forwardRef, useCallback, useEffect, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { Navigation2 } from "lucide-react";
 import { parseCadRefToken } from "cadjs/lib/cadRefs";
 import { STEP_TREE_TOPOLOGY_NODE_PREFIX } from "cadjs/lib/step/stepTree";
 import { copyImageBlobToClipboard } from "@/ui/clipboard";
@@ -71,6 +72,11 @@ import {
   updateSpotLightTarget
 } from "cadjs/lib/viewer/stageTheme";
 import { updateGridHelper as updateStageGridHelper } from "cadjs/lib/viewer/stageGrid";
+import {
+  autoZoomFrameForBounds,
+  DEFAULT_AUTO_ZOOM_PADDING,
+  focusedDisplayRecordsBounds
+} from "cadjs/lib/viewer/autoZoom";
 import { applyMaterialSettingsToRecord } from "cadjs/lib/viewer/surfaceMaterials";
 import {
   applyPartVisualState,
@@ -80,8 +86,16 @@ import {
 } from "cadjs/lib/viewer/partVisualState";
 import {
   createRecordTopologyDisplayEdgeGroup,
+  syncRecordTopologyDisplayEdgeTransforms,
   syncTopologyDisplayEdgeLine
 } from "cadjs/lib/viewer/topologyDisplayEdgeLine";
+import {
+  applyExplodedViewProgress,
+  clearExplodedViewRecords,
+  createExplodedViewRecordStates,
+  easeExplodedViewProgress,
+  explodedViewStateTranslationAtProgress
+} from "cadjs/lib/viewer/explodedView";
 import {
   applyDisplayRecordTransform,
   applyRuntimeModelBounds,
@@ -158,6 +172,14 @@ const INTERACTION_IDLE_DELAY_MS = 140;
 const DEFAULT_DAMPING_FACTOR = 0.14;
 const DEFAULT_ZOOM_SPEED = 4.5;
 const COARSE_POINTER_ZOOM_SPEED = 1.6;
+const EXPLODED_VIEW_ANIMATION_DURATION_MS = 1000;
+const AUTO_ZOOM_SPEED_MS = Object.freeze({
+  DEFAULT: 400,
+  EXPLODED: EXPLODED_VIEW_ANIMATION_DURATION_MS,
+  ISOLATE: 200,
+  RESET: 200,
+  RESIZE: 0
+});
 const ACCELERATED_WHEEL_ZOOM_SPEED = 10;
 const TRACKPAD_PINCH_ZOOM_SPEED = 14;
 const COARSE_POINTER_PINCH_ZOOM_SPEED = 2.4;
@@ -167,12 +189,19 @@ const KEYBOARD_POLAR_EPSILON = 0.02;
 const PREVIEW_AUTO_ROTATE_SPEED = 1.0;
 const VIEW_PLANE_ACTIVE_DOT_THRESHOLD = 0.994;
 const VIEW_PLANE_TRANSITION_MS = 280;
+const DEFAULT_PERSPECTIVE_DIRECTION_DOT_THRESHOLD = 0.999;
+const DEFAULT_PERSPECTIVE_UP_DOT_THRESHOLD = 0.999;
+const CAMERA_TRANSITION_EASING = Object.freeze({
+  EASE_IN_OUT_CUBIC: "ease-in-out-cubic",
+  EASE_IN_OUT_SINE: "ease-in-out-sine"
+});
 const DEFAULT_VIEW_PLANE_ORIENTATION = Object.freeze({
   x: [1, 0, 0],
   y: [0, 1, 0],
   z: [0, 0, 1]
 });
-const MODEL_FRAME_BUFFER = 1.08;
+const AUTO_ZOOM_PADDING = DEFAULT_AUTO_ZOOM_PADDING;
+const AUTO_ZOOM_TRANSITION_EASING = CAMERA_TRANSITION_EASING.EASE_IN_OUT_SINE;
 const WORLD_UP = Object.freeze([0, 0, 1]);
 const CAD_COORDINATE_SYSTEM = "cad-z-up-v1";
 const ROBOT_COORDINATE_SYSTEM = "cad-z-up-robot-framing-v2";
@@ -183,6 +212,7 @@ const VIEW_PLANE_DEFAULT_PRESET = {
   direction: DEFAULT_VIEW_DIRECTION,
   up: WORLD_UP
 };
+const RESET_VIEW_CONTROL_BUTTON_CLASSES = "cad-glass-surface pointer-events-auto grid h-8 w-8 shrink-0 place-items-center rounded-full border border-sidebar-border text-sidebar-foreground/60 shadow-sm transition duration-150 hover:text-sidebar-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/45";
 const CAD_EDGE_OPACITY = 0.84;
 const DEFAULT_LIGHTING = {
   toneMappingExposure: 1.08,
@@ -326,6 +356,40 @@ function readViewPlaneOrientation(runtime) {
   };
 }
 
+function cameraMatchesViewPreset(runtime, preset, {
+  directionDotThreshold = DEFAULT_PERSPECTIVE_DIRECTION_DOT_THRESHOLD,
+  upDotThreshold = DEFAULT_PERSPECTIVE_UP_DOT_THRESHOLD
+} = {}) {
+  if (
+    !runtime?.THREE ||
+    !runtime?.camera ||
+    !runtime?.controls ||
+    !preset ||
+    !Array.isArray(preset.direction) ||
+    !Array.isArray(preset.up)
+  ) {
+    return false;
+  }
+  const currentDirection = runtime.camera.position.clone().sub(runtime.controls.target);
+  const nextDirection = new runtime.THREE.Vector3(...preset.direction);
+  const currentUp = runtime.camera.up.clone();
+  const nextUp = new runtime.THREE.Vector3(...preset.up);
+  if (
+    currentDirection.lengthSq() <= 1e-8 ||
+    nextDirection.lengthSq() <= 1e-8 ||
+    currentUp.lengthSq() <= 1e-8 ||
+    nextUp.lengthSq() <= 1e-8
+  ) {
+    return false;
+  }
+  currentDirection.normalize();
+  nextDirection.normalize();
+  currentUp.normalize();
+  nextUp.normalize();
+  return currentDirection.dot(nextDirection) >= directionDotThreshold &&
+    currentUp.dot(nextUp) >= upDotThreshold;
+}
+
 function isNumericArray(value, stride = 1) {
   return (
     (Array.isArray(value) || ArrayBuffer.isView(value)) &&
@@ -349,6 +413,192 @@ function meshNeedsPartRenderingForSourceColors(meshData) {
     return false;
   }
   return partColors.length !== parts.length || new Set(partColors).size > 1;
+}
+
+function displayRecordsAnimationKey(records = []) {
+  return (Array.isArray(records) ? records : [])
+    .map((record) => [
+      String(record?.partId || "").trim(),
+      String(record?.mesh?.uuid || ""),
+      String(record?.geometry?.uuid || "")
+    ].join(":"))
+    .join("|");
+}
+
+function cancelExplodedViewAnimation(animationRef) {
+  const animation = animationRef?.current;
+  if (!animation?.rafId || typeof window === "undefined") {
+    return;
+  }
+  window.cancelAnimationFrame(animation.rafId);
+  animation.rafId = 0;
+}
+
+function displayRecordExplodedViewTranslation(THREE, record) {
+  const elements = record?.explodedViewMatrix?.elements;
+  if (!THREE?.Vector3 || !elements || elements.length < 16) {
+    return THREE?.Vector3 ? new THREE.Vector3() : null;
+  }
+  return new THREE.Vector3(
+    toNumber(elements[12]),
+    toNumber(elements[13]),
+    toNumber(elements[14])
+  );
+}
+
+function explodedViewStateTargetTranslation(THREE, state, targetProgress) {
+  const amount = clamp(targetProgress, 0, 1);
+  const translation = state?.translation?.isVector3
+    ? state.translation.clone()
+    : new THREE.Vector3(0, 0, toNumber(state?.distance));
+  return translation.multiplyScalar(amount);
+}
+
+function explodedViewTransitionStateKey(state) {
+  const partId = String(state?.partId || state?.record?.partId || "").trim();
+  return partId || String(state?.groupKey || "").trim();
+}
+
+function createExplodedViewRuntimeTransitionStates(runtime, states, targetProgress, {
+  previousStates = [],
+  previousTransitionProgress = 1,
+  useCurrentTranslations = true
+} = {}) {
+  if (!runtime?.THREE) {
+    return [];
+  }
+  const THREE = runtime.THREE;
+  const previousTranslationsByRecord = new Map();
+  const previousTranslationsByKey = new Map();
+  if (useCurrentTranslations) {
+    for (const previousState of Array.isArray(previousStates) ? previousStates : []) {
+      if (!previousState?.record) {
+        continue;
+      }
+      const translation = explodedViewStateTranslationAtProgress(
+        THREE,
+        previousState,
+        previousTransitionProgress
+      );
+      if (translation) {
+        if (!previousTranslationsByRecord.has(previousState.record)) {
+          previousTranslationsByRecord.set(previousState.record, translation);
+        }
+        const key = explodedViewTransitionStateKey(previousState);
+        if (key && !previousTranslationsByKey.has(key)) {
+          previousTranslationsByKey.set(key, translation);
+        }
+      }
+    }
+  }
+  return (Array.isArray(states) ? states : []).map((state) => ({
+    ...state,
+    fromTranslation: useCurrentTranslations
+      ? (
+        previousTranslationsByRecord.get(state.record) ||
+        previousTranslationsByKey.get(explodedViewTransitionStateKey(state)) ||
+        displayRecordExplodedViewTranslation(THREE, state.record)
+      )
+      : new THREE.Vector3(),
+    translation: explodedViewStateTargetTranslation(THREE, state, targetProgress),
+    matrix: new THREE.Matrix4()
+  }));
+}
+
+function clearExplodedViewRecordsOutsideStates(records = [], states = []) {
+  const stateRecords = new Set((Array.isArray(states) ? states : [])
+    .map((state) => state?.record)
+    .filter(Boolean));
+  for (const record of Array.isArray(records) ? records : []) {
+    if (record && !stateRecords.has(record)) {
+      record.explodedViewMatrix = null;
+    }
+  }
+}
+
+function explodedViewTransitionNeedsAnimation(states = []) {
+  for (const state of Array.isArray(states) ? states : []) {
+    const from = state?.fromTranslation;
+    const to = state?.translation;
+    if (!from?.isVector3 || !to?.isVector3) {
+      return true;
+    }
+    if (from.distanceToSquared(to) > 1e-8) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function cssLength(value, fallback = "0px") {
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return `${value}px`;
+  }
+  const text = String(value || "").trim();
+  return text || fallback;
+}
+
+function normalizeAutoZoomSpeedMs(value, fallback = AUTO_ZOOM_SPEED_MS.DEFAULT) {
+  const numeric = Number(value);
+  if (Number.isFinite(numeric) && numeric >= 0) {
+    return numeric;
+  }
+  return fallback;
+}
+
+function explodedViewTranslationMapAtProgress(THREE, states = [], progress = 1) {
+  const translations = new Map();
+  if (!THREE?.Vector3) {
+    return translations;
+  }
+  for (const state of Array.isArray(states) ? states : []) {
+    if (!state?.record || translations.has(state.record)) {
+      continue;
+    }
+    const translation = explodedViewStateTranslationAtProgress(THREE, state, progress);
+    if (translation) {
+      translations.set(state.record, translation);
+    }
+  }
+  return translations;
+}
+
+function autoZoomBoundsForRuntime(runtime, {
+  baseBounds = null,
+  focusedPartIds = [],
+  explodedStates = [],
+  explodedProgress = 1
+} = {}) {
+  if (!runtime?.THREE || !Array.isArray(runtime.displayRecords)) {
+    return baseBounds;
+  }
+  const focusedIds = new Set(normalizePartIdList(focusedPartIds));
+  const translationByRecord = explodedViewTranslationMapAtProgress(
+    runtime.THREE,
+    explodedStates,
+    explodedProgress
+  );
+  return focusedDisplayRecordsBounds(runtime.displayRecords, {
+    partIds: focusedIds,
+    translationByRecord,
+    fallbackBounds: baseBounds
+  });
+}
+
+function applyExplodedViewRuntimeProgress(runtime, states, progress) {
+  if (!runtime?.THREE || !Array.isArray(runtime.displayRecords)) {
+    return;
+  }
+  applyExplodedViewProgress(runtime.THREE, states, progress);
+  for (const record of runtime.displayRecords) {
+    applyDisplayRecordTransform(runtime.THREE, record);
+  }
+  runtime.modelGroup?.updateMatrixWorld?.(true);
+  runtime.edgesGroup?.updateMatrixWorld?.(true);
+  if (runtime.topologyDisplayEdgeTransformByRecord === true) {
+    syncRecordTopologyDisplayEdgeTransforms(runtime, runtime.displayRecords);
+  }
+  runtime.requestRender?.();
 }
 
 function getPixelRatioCap(cap) {
@@ -480,11 +730,56 @@ function reapplyRuntimeCameraFrameInsets(runtime, { updateProjection = false } =
 }
 
 function getFitDistanceForBoundingSphere(camera, radius, sceneScaleMode, frameAspect = camera.aspect) {
-  const safeRadius = Math.max(radius * MODEL_FRAME_BUFFER, getSceneScaleSettings(sceneScaleMode).minModelRadius);
+  const safeRadius = Math.max(radius * AUTO_ZOOM_PADDING, getSceneScaleSettings(sceneScaleMode).minModelRadius);
   const verticalHalfFov = (camera.fov * Math.PI) / 360;
   const horizontalHalfFov = Math.atan(Math.tan(verticalHalfFov) * Math.max(frameAspect, 1e-3));
   const limitingHalfFov = Math.max(Math.min(verticalHalfFov, horizontalHalfFov), 1e-3);
   return safeRadius / Math.sin(limitingHalfFov);
+}
+
+function transitionCameraToBounds(runtime, bounds, sceneScaleMode, frameInsets, {
+  durationMs = AUTO_ZOOM_SPEED_MS.DEFAULT,
+  easing = AUTO_ZOOM_TRANSITION_EASING,
+  animate = true,
+  minRadius = getSceneScaleSettings(sceneScaleMode).minModelRadius,
+  viewDirection = null,
+  viewUp = null
+} = {}) {
+  if (!runtime?.THREE || !runtime?.camera || !runtime?.controls || !bounds) {
+    return false;
+  }
+  const frameMetrics = getViewportFrameMetrics(runtime, frameInsets);
+  const frame = autoZoomFrameForBounds(runtime.THREE, {
+    camera: runtime.camera,
+    controls: runtime.controls,
+    bounds,
+    modelOffset: runtime.modelGroup?.position,
+    frameAspect: frameMetrics.aspect,
+    minRadius,
+    padding: AUTO_ZOOM_PADDING,
+    defaultDirection: DEFAULT_VIEW_DIRECTION,
+    viewDirection,
+    viewUp
+  });
+  if (!frame) {
+    return false;
+  }
+  if (
+    runtime.camera.position.distanceToSquared(frame.position) <= 1e-8 &&
+    runtime.controls.target.distanceToSquared(frame.target) <= 1e-8 &&
+    runtime.camera.up.distanceToSquared(frame.up) <= 1e-8
+  ) {
+    return false;
+  }
+  const nextPerspective = {
+    position: [frame.position.x, frame.position.y, frame.position.z],
+    target: [frame.target.x, frame.target.y, frame.target.z],
+    up: [frame.up.x, frame.up.y, frame.up.z],
+    zoom: frame.zoom
+  };
+  return animate
+    ? transitionCameraToPerspectiveSnapshot(runtime, nextPerspective, { durationMs, easing })
+    : applyPerspectiveSnapshot(runtime, nextPerspective, { scheduleIdle: false });
 }
 
 function easeInOutCubic(t) {
@@ -495,6 +790,22 @@ function easeInOutCubic(t) {
     return 1;
   }
   return t < 0.5 ? 4 * t * t * t : 1 - ((-2 * t + 2) ** 3) / 2;
+}
+
+function easeInOutSine(t) {
+  if (t <= 0) {
+    return 0;
+  }
+  if (t >= 1) {
+    return 1;
+  }
+  return -(Math.cos(Math.PI * t) - 1) / 2;
+}
+
+function easeCameraTransitionProgress(t, easing = CAMERA_TRANSITION_EASING.EASE_IN_OUT_CUBIC) {
+  return easing === CAMERA_TRANSITION_EASING.EASE_IN_OUT_SINE
+    ? easeInOutSine(t)
+    : easeInOutCubic(t);
 }
 
 function readPerspectiveSnapshot(runtime) {
@@ -693,7 +1004,10 @@ function applyPerspectiveSnapshot(runtime, perspective, { scheduleIdle = true } 
   return true;
 }
 
-function transitionCameraToPerspectiveSnapshot(runtime, perspective, { durationMs = VIEW_PLANE_TRANSITION_MS } = {}) {
+function transitionCameraToPerspectiveSnapshot(runtime, perspective, {
+  durationMs = VIEW_PLANE_TRANSITION_MS,
+  easing = CAMERA_TRANSITION_EASING.EASE_IN_OUT_CUBIC
+} = {}) {
   const nextPerspective = clonePerspectiveSnapshot(perspective);
   if (!runtime?.THREE || !runtime?.camera || !runtime?.controls || !nextPerspective) {
     return false;
@@ -723,7 +1037,8 @@ function transitionCameraToPerspectiveSnapshot(runtime, perspective, { durationM
     startUp: runtime.camera.up.clone(),
     endUp: endUp.normalize(),
     startZoom: runtime.camera.zoom,
-    endZoom
+    endZoom,
+    easing
   };
   runtime.controls.enableDamping = false;
   runtime.beginInteraction?.();
@@ -739,7 +1054,7 @@ function stepCameraTransition(runtime, timestamp) {
 
   const durationMs = Math.max(transition.durationMs, 1);
   const progress = clamp((timestamp - transition.startTime) / durationMs, 0, 1);
-  const eased = easeInOutCubic(progress);
+  const eased = easeCameraTransitionProgress(progress, transition.easing);
   const position = new runtime.THREE.Vector3().lerpVectors(
     transition.startPosition,
     transition.endPosition,
@@ -1239,6 +1554,20 @@ const CadViewer = forwardRef(function CadViewer({
   const suppressPerspectiveEventsRef = useRef(0);
   const drawingIdRef = useRef(0);
   const runtimeRef = useRef(null);
+  const explodedViewAnimationRef = useRef({
+    rafId: 0,
+    progress: 0,
+    modelKey: "",
+    recordKey: "",
+    states: [],
+    transitionProgress: 0
+  });
+  const autoZoomStateRef = useRef({
+    attached: true,
+    modelKey: "",
+    lastReason: "initial"
+  });
+  const autoZoomRunRef = useRef(null);
   const viewportFrameInsetsRef = useRef(normalizedViewportFrameInsets);
   const framedModelKeyRef = useRef("");
   const modelTransformRef = useRef({
@@ -1253,14 +1582,18 @@ const CadViewer = forwardRef(function CadViewer({
   const stepModuleCleanupRef = useRef([]);
   const [transformedSelectorRuntime, setTransformedSelectorRuntime] = useState(null);
   const [transformedDisplayEdgeRuntime, setTransformedDisplayEdgeRuntime] = useState(null);
+  const [autoZoomDetached, setAutoZoomDetached] = useState(false);
+  const [defaultPerspectiveDetached, setDefaultPerspectiveDetached] = useState(false);
   const [error, setError] = useState("");
   const [viewerReadyTick, setViewerReadyTick] = useState(0);
+  const [displayRecordsReadyTick, setDisplayRecordsReadyTick] = useState(0);
   const [runtimeResetToken, setRuntimeResetToken] = useState(0);
   const [activeViewPlaneFace, setActiveViewPlaneFace] = useState("");
   const [viewPlaneOrientation, setViewPlaneOrientation] = useState(DEFAULT_VIEW_PLANE_ORIENTATION);
   const [urdfPosePickerGuidePoint, setUrdfPosePickerGuidePoint] = useState(null);
   const [urdfPosePickerHoverActive, setUrdfPosePickerHoverActive] = useState(false);
   const activeViewPlaneFaceRef = useRef("");
+  const defaultPerspectiveResettingRef = useRef(false);
   const previewModeRef = useRef(previewMode);
   const perspectivePropRef = useRef(perspective);
   const modelKeyRef = useRef(modelKey);
@@ -1277,7 +1610,13 @@ const CadViewer = forwardRef(function CadViewer({
     displaySettings
   }), [themeSettings, displaySettings]);
   const normalizedThemeSettings = normalizedViewerRenderState.themeSettings;
+  const normalizedDisplaySettings = normalizedViewerRenderState.displaySettings;
   const normalizedDisplayMode = normalizedViewerRenderState.displayMode;
+  const normalizedExplodedSettings = normalizedDisplaySettings.exploded;
+  const explodablePartCount = useMemo(() => renderableMeshParts(meshData).length, [meshData]);
+  const explodedViewActive = normalizedExplodedSettings.enabled && explodablePartCount > 1;
+  const effectiveRenderPartsIndividually = renderPartsIndividually ||
+    explodedViewActive;
   const shouldUseCadEdgeSource = renderFormat === RENDER_FORMAT.STEP;
   const displayEdgeSettings = useMemo(
     () => resolveThemeSettingsDisplayEdgeSettings(normalizedThemeSettings),
@@ -1414,7 +1753,7 @@ const CadViewer = forwardRef(function CadViewer({
     displayMode: normalizedDisplayMode
   });
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     partVisualStateRef.current = {
       viewerTheme,
       edgeSettings: visualEdgeSettings,
@@ -1508,13 +1847,16 @@ const CadViewer = forwardRef(function CadViewer({
   perspectivePropRef.current = perspective;
   modelKeyRef.current = modelKey;
   sceneScaleModeRef.current = normalizedSceneScaleMode;
-  useEffect(() => {
+  useLayoutEffect(() => {
     viewportFrameInsetsRef.current = normalizedViewportFrameInsets;
     const runtime = runtimeRef.current;
     if (!runtime) {
       return;
     }
     applyCameraFrameInsets(runtime, normalizedViewportFrameInsets);
+    autoZoomRunRef.current?.("viewport", {
+      speedMs: AUTO_ZOOM_SPEED_MS.RESIZE
+    });
     runtime.requestRender?.();
   }, [
     normalizedViewportFrameInsets.top,
@@ -1553,6 +1895,21 @@ const CadViewer = forwardRef(function CadViewer({
     lastEmittedPerspectiveRef.current = nextPerspective;
     perspectiveChangeRef.current?.(nextPerspective);
   };
+  const syncDefaultPerspectiveState = (runtime = runtimeRef.current) => {
+    if (defaultPerspectiveResettingRef.current) {
+      if (runtime?.cameraTransition) {
+        setDefaultPerspectiveDetached(false);
+        return;
+      }
+      defaultPerspectiveResettingRef.current = false;
+    }
+    const nextDetached = runtime?.THREE
+      ? !cameraMatchesViewPreset(runtime, VIEW_PLANE_DEFAULT_PRESET)
+      : false;
+    setDefaultPerspectiveDetached((current) => (
+      current === nextDetached ? current : nextDetached
+    ));
+  };
   const syncViewPlaneOrientation = (runtime = runtimeRef.current) => {
     const nextOrientation = readViewPlaneOrientation(runtime);
     if (!nextOrientation) {
@@ -1561,6 +1918,7 @@ const CadViewer = forwardRef(function CadViewer({
     setViewPlaneOrientation((current) => (
       viewPlaneOrientationEqual(current, nextOrientation) ? current : nextOrientation
     ));
+    syncDefaultPerspectiveState(runtime);
   };
   const applyInitialPerspective = useCallback((runtime = runtimeRef.current) => {
     const nextPerspective = resolvePerspectiveSnapshot(
@@ -1576,6 +1934,120 @@ const CadViewer = forwardRef(function CadViewer({
     }
     return runWithoutPerspectiveEvents(() => applyPerspectiveSnapshot(runtime, nextPerspective, { scheduleIdle: false }));
   }, [perspectiveRef]);
+  const resolveAutoZoomBounds = useCallback((runtime = runtimeRef.current, {
+    baseBounds = null,
+    explodedStates = null,
+    explodedProgress = 1
+  } = {}) => {
+    if (!runtime?.THREE) {
+      return null;
+    }
+    const animation = explodedViewAnimationRef.current;
+    const activeExplodedStates = explodedStates || (
+      explodedViewActive && Array.isArray(animation.states)
+        ? animation.states
+        : []
+    );
+    return autoZoomBoundsForRuntime(runtime, {
+      baseBounds: baseBounds || runtime.modelBounds || meshData?.bounds,
+      focusedPartIds,
+      explodedStates: activeExplodedStates,
+      explodedProgress
+    });
+  }, [
+    explodedViewActive,
+    focusedPartIds,
+    meshData?.bounds
+  ]);
+  const runAutoZoom = useCallback((reason = "state", {
+    bounds = null,
+    baseBounds = null,
+    speedMs = AUTO_ZOOM_SPEED_MS.DEFAULT,
+    explodedStates = null,
+    explodedProgress = 1,
+    animate = true,
+    force = false,
+    viewDirection = null,
+    viewUp = null
+  } = {}) => {
+    const runtime = runtimeRef.current;
+    if (!runtime?.THREE || !runtime.camera || !runtime.controls) {
+      return false;
+    }
+    const state = autoZoomStateRef.current;
+    if (!force && state.attached === false) {
+      return false;
+    }
+    const targetBounds = bounds || resolveAutoZoomBounds(runtime, {
+      baseBounds,
+      explodedStates,
+      explodedProgress
+    });
+    if (!targetBounds) {
+      return false;
+    }
+    state.attached = true;
+    state.lastReason = reason;
+    setAutoZoomDetached(false);
+    const resolvedSpeedMs = normalizeAutoZoomSpeedMs(speedMs, AUTO_ZOOM_SPEED_MS.DEFAULT);
+    const minRadius = focusedPartIds.length > 0
+      ? 0
+      : getSceneScaleSettings(normalizedSceneScaleMode).minModelRadius;
+    return transitionCameraToBounds(
+      runtime,
+      targetBounds,
+      normalizedSceneScaleMode,
+      viewportFrameInsetsRef.current,
+      {
+        durationMs: resolvedSpeedMs,
+        animate: animate !== false && resolvedSpeedMs > 0,
+        minRadius,
+        viewDirection,
+        viewUp
+      }
+    );
+  }, [
+    focusedPartIds.length,
+    normalizedSceneScaleMode,
+    resolveAutoZoomBounds
+  ]);
+  autoZoomRunRef.current = runAutoZoom;
+  const detachAutoZoom = useCallback(() => {
+    const state = autoZoomStateRef.current;
+    if (state.attached === false) {
+      return;
+    }
+    state.attached = false;
+    state.lastReason = "manual";
+    setAutoZoomDetached(true);
+  }, []);
+  const resetView = useCallback(() => {
+    const runtime = runtimeRef.current;
+    const state = autoZoomStateRef.current;
+    state.attached = true;
+    state.modelKey = modelKeyRef.current || "";
+    state.lastReason = "reset";
+    setAutoZoomDetached(false);
+    activeViewPlaneFaceRef.current = "";
+    setActiveViewPlaneFace("");
+    defaultPerspectiveResettingRef.current = true;
+    setDefaultPerspectiveDetached(false);
+    const transitioned = runAutoZoom("reset", {
+      force: true,
+      speedMs: AUTO_ZOOM_SPEED_MS.RESET,
+      viewDirection: DEFAULT_VIEW_DIRECTION,
+      viewUp: WORLD_UP
+    });
+    if (!transitioned) {
+      const fallbackTransitioned = runtime
+        ? transitionCameraToViewPreset(runtime, VIEW_PLANE_DEFAULT_PRESET)
+        : false;
+      if (!fallbackTransitioned) {
+        defaultPerspectiveResettingRef.current = false;
+        syncDefaultPerspectiveState(runtime);
+      }
+    }
+  }, [runAutoZoom, syncDefaultPerspectiveState]);
   const buildSurfaceLineFaceAnchor = (event, canvas, lockedReferenceId = "", startUv = null) => {
     const runtime = runtimeRef.current;
     if (!runtime?.raycaster || !runtime?.camera || !activeSelectorRuntime?.faceReferenceByRowIndex) {
@@ -1837,7 +2309,12 @@ const CadViewer = forwardRef(function CadViewer({
     }
     activeViewPlaneFaceRef.current = face.id;
     setActiveViewPlaneFace(face.id);
-    return transitionCameraToViewPreset(runtime, face);
+    const transitioned = transitionCameraToViewPreset(runtime, face);
+    if (transitioned) {
+      defaultPerspectiveResettingRef.current = false;
+      setDefaultPerspectiveDetached(true);
+    }
+    return transitioned;
   };
   const activateDefaultViewPlane = () => {
     const runtime = runtimeRef.current;
@@ -1846,7 +2323,12 @@ const CadViewer = forwardRef(function CadViewer({
     }
     activeViewPlaneFaceRef.current = "";
     setActiveViewPlaneFace("");
-    return transitionCameraToViewPreset(runtime, VIEW_PLANE_DEFAULT_PRESET);
+    const transitioned = transitionCameraToViewPreset(runtime, VIEW_PLANE_DEFAULT_PRESET);
+    if (transitioned) {
+      defaultPerspectiveResettingRef.current = true;
+      setDefaultPerspectiveDetached(false);
+    }
+    return transitioned;
   };
 
   useImperativeHandle(ref, () => ({
@@ -1913,6 +2395,15 @@ const CadViewer = forwardRef(function CadViewer({
   }, [urdfPosePicker]);
 
   useEffect(() => {
+    autoZoomStateRef.current = {
+      attached: true,
+      modelKey: modelKey || "",
+      lastReason: "model"
+    };
+    setAutoZoomDetached(false);
+  }, [modelKey]);
+
+  useEffect(() => {
     setTransformedSelectorRuntime(null);
   }, [modelKey, selectorRuntime]);
 
@@ -1927,6 +2418,18 @@ const CadViewer = forwardRef(function CadViewer({
   useEffect(() => {
     displayEdgeRuntimeRef.current = activeDisplayEdgeRuntime;
   }, [activeDisplayEdgeRuntime]);
+
+  useLayoutEffect(() => {
+    autoZoomRunRef.current?.("focus", {
+      speedMs: AUTO_ZOOM_SPEED_MS.ISOLATE,
+      force: focusedPartIds.length > 0
+    });
+  }, [
+    displayRecordsReadyTick,
+    focusedPartIds,
+    modelKey,
+    viewerReadyTick
+  ]);
 
   useEffect(() => {
     clipSettingsRef.current = normalizedClipSettings;
@@ -1969,7 +2472,9 @@ const CadViewer = forwardRef(function CadViewer({
   const handleRuntimeContextRestored = useCallback(() => {
     framedModelKeyRef.current = "";
     lastEmittedPerspectiveRef.current = null;
+    defaultPerspectiveResettingRef.current = false;
     viewerAlertChangeRef.current?.(null);
+    setDefaultPerspectiveDetached(false);
     setRuntimeResetToken((value) => value + 1);
   }, []);
 
@@ -2024,6 +2529,12 @@ const CadViewer = forwardRef(function CadViewer({
     defaultGridRadius,
     sceneScaleMode: normalizedSceneScaleMode,
     floorMode: resolvedFloorMode,
+    onManualCameraInteraction: detachAutoZoom,
+    onViewportResize: () => {
+      autoZoomRunRef.current?.("resize", {
+        speedMs: AUTO_ZOOM_SPEED_MS.RESIZE
+      });
+    },
     onInitializationError: handleRuntimeInitializationError,
     onContextRestored: handleRuntimeContextRestored,
     preserveInteractionPixelRatio,
@@ -2361,7 +2872,7 @@ const CadViewer = forwardRef(function CadViewer({
       normalizedThemeSettings.materials?.overrideSourceColors !== true &&
       meshNeedsPartRenderingForSourceColors(meshData);
     const shouldRenderParts =
-      renderPartsIndividually ||
+      effectiveRenderPartsIndividually ||
       shouldRenderFillParts ||
       shouldRenderSourceColorParts ||
       Array.isArray(pickableParts) &&
@@ -2371,7 +2882,7 @@ const CadViewer = forwardRef(function CadViewer({
         pickMode === VIEWER_PICK_MODE.ASSEMBLY ||
         pickMode === VIEWER_PICK_MODE.AUTO
       );
-    const renderedParts = renderPartsIndividually
+    const renderedParts = effectiveRenderPartsIndividually
       ? (Array.isArray(meshData?.parts) ? meshData.parts : [])
       : shouldRenderFillParts || shouldRenderSourceColorParts
         ? meshData.parts
@@ -2423,7 +2934,7 @@ const CadViewer = forwardRef(function CadViewer({
       recomputeNormals,
       silhouette: topologyDisplayEdgesVisible && displayEdgeSettings.silhouette === true,
       parts: shouldRenderParts ? renderedParts : [],
-      renderPartsIndividually,
+      renderPartsIndividually: effectiveRenderPartsIndividually,
       stepParameters: modelStepParameters,
       parameterSetup: false,
       edgeRendering: {
@@ -2470,7 +2981,7 @@ const CadViewer = forwardRef(function CadViewer({
       displayRecords: modelStepParameters ? runtime.displayRecords : [],
       transformDisplayEdges: false
     });
-    const initialRecordTopologyEdgeTransforms = shouldUseRecordTopologyEdgeTransforms({
+    const initialRecordTopologyEdgeTransforms = explodedViewActive || shouldUseRecordTopologyEdgeTransforms({
       transformDetected: initialEdgeRuntimes.transformCount > 0,
       topologyDisplayEdgesVisible,
       displayEdgeRuntime,
@@ -2620,6 +3131,7 @@ const CadViewer = forwardRef(function CadViewer({
     }
 
     setError("");
+    setDisplayRecordsReadyTick((tick) => tick + 1);
     runtime.requestRender();
   }, [
     meshGeometrySource,
@@ -2633,7 +3145,8 @@ const CadViewer = forwardRef(function CadViewer({
     isLoading,
     viewerReadyTick,
     pickMode,
-    renderPartsIndividually,
+    effectiveRenderPartsIndividually,
+    explodedViewActive,
     pickableParts,
     selectorRuntime,
     displayEdgeRuntime,
@@ -2655,7 +3168,7 @@ const CadViewer = forwardRef(function CadViewer({
     if (
       !runtime?.THREE ||
       isLoading ||
-      !renderPartsIndividually ||
+      !effectiveRenderPartsIndividually ||
       !Array.isArray(meshData?.parts) ||
       !Array.isArray(runtime.displayRecords) ||
       !runtime.displayRecords.length
@@ -2672,7 +3185,7 @@ const CadViewer = forwardRef(function CadViewer({
       if (!part) {
         continue;
       }
-      record.baseTransform = displayTransformForPart(meshData, part, renderPartsIndividually);
+      record.baseTransform = displayTransformForPart(meshData, part, effectiveRenderPartsIndividually);
       record.partBounds = part.bounds;
       record.partCenter = readBoundsCenter(runtime.THREE, part.bounds);
       applyDisplayRecordTransform(runtime.THREE, record, runtime.modelRadius || 1);
@@ -2701,12 +3214,13 @@ const CadViewer = forwardRef(function CadViewer({
     );
     updateSpotLightTarget(runtime);
     updateStageEffects(runtime, viewerTheme, normalizedThemeSettings, radius, runtime.gridFloorZ ?? 0, resolvedFloorMode, normalizedSceneScaleMode);
+    setDisplayRecordsReadyTick((tick) => tick + 1);
     runtime.requestRender();
   }, [
     meshData?.parts,
     meshData?.bounds,
     isLoading,
-    renderPartsIndividually,
+    effectiveRenderPartsIndividually,
     normalizedSceneScaleMode,
     normalizedThemeSettings,
     resolvedFloorMode,
@@ -2809,7 +3323,7 @@ const CadViewer = forwardRef(function CadViewer({
       stepModuleTransformDetectedChangeRef.current?.(false);
       setTransformedSelectorRuntime(null);
       setTransformedDisplayEdgeRuntime(null);
-      runtime.topologyDisplayEdgeTransformByRecord = false;
+      runtime.topologyDisplayEdgeTransformByRecord = explodedViewActive;
       resetStepModuleRecordEffects(runtime.displayRecords);
       for (const record of runtime.displayRecords) {
         applyDisplayRecordTransform(runtime.THREE, record, runtime.modelRadius || 1);
@@ -2829,7 +3343,7 @@ const CadViewer = forwardRef(function CadViewer({
         focusedPartIds,
         viewerTheme,
         dimmedOpacity: FOCUSED_DIMMED_SURFACE_OPACITY,
-        transformByRecord: false,
+        transformByRecord: explodedViewActive,
         displayRecords: runtime.displayRecords,
         syncClip: (activeRuntime) => syncRuntimeStepClipPlane(activeRuntime, clipSettingsRef.current)
       });
@@ -2878,7 +3392,7 @@ const CadViewer = forwardRef(function CadViewer({
     }
 
     applyStepModuleEffectsToRecords(runtime.THREE, runtime.displayRecords, effectsByPartId);
-    const useRecordTopologyEdgeTransforms = shouldUseRecordTopologyEdgeTransforms({
+    const useRecordTopologyEdgeTransforms = explodedViewActive || shouldUseRecordTopologyEdgeTransforms({
       transformDetected,
       topologyDisplayEdgesVisible,
       displayEdgeRuntime,
@@ -2948,6 +3462,7 @@ const CadViewer = forwardRef(function CadViewer({
     hiddenPartIds,
     hiddenAwareVisualEdgeSettings,
     hoveredPartId,
+    explodedViewActive,
     isLoading,
     meshData,
     modelKey,
@@ -2958,6 +3473,133 @@ const CadViewer = forwardRef(function CadViewer({
     selectorRuntime,
     displayEdgeRuntime,
     stepParameterRuntime
+  ]);
+
+  useEffect(() => {
+    const runtime = runtimeRef.current;
+    const animation = explodedViewAnimationRef.current;
+    const previousAnimationStates = Array.isArray(animation.states)
+      ? animation.states
+      : [];
+    const previousAnimationProgress = clamp(animation.transitionProgress, 0, 1);
+    cancelExplodedViewAnimation(explodedViewAnimationRef);
+
+    if (
+      !runtime?.THREE ||
+      isLoading ||
+      !Array.isArray(runtime.displayRecords) ||
+      !runtime.displayRecords.length
+    ) {
+      animation.progress = 0;
+      animation.modelKey = "";
+      animation.recordKey = "";
+      animation.states = [];
+      animation.transitionProgress = 0;
+      return undefined;
+    }
+
+    const animationModelKey = modelKey || "";
+    const recordKey = `${animationModelKey}:${displayRecordsAnimationKey(runtime.displayRecords)}`;
+    const modelChanged = animation.modelKey !== animationModelKey;
+    const targetProgress = explodedViewActive ? 1 : 0;
+    const baseBounds = runtime.modelBounds || meshData?.bounds;
+    const states = createExplodedViewRecordStates(
+      runtime.THREE,
+      runtime.displayRecords,
+      baseBounds,
+      normalizedExplodedSettings
+    );
+    animation.modelKey = animationModelKey;
+    animation.recordKey = recordKey;
+
+    if (!states.length) {
+      clearExplodedViewRecords(runtime.displayRecords);
+      for (const record of runtime.displayRecords) {
+        applyDisplayRecordTransform(runtime.THREE, record);
+      }
+      syncRecordTopologyDisplayEdgeTransforms(runtime, runtime.displayRecords);
+      runtime.requestRender?.();
+      animation.progress = 0;
+      animation.states = [];
+      animation.transitionProgress = 0;
+      return undefined;
+    }
+
+    const transitionStates = createExplodedViewRuntimeTransitionStates(runtime, states, targetProgress, {
+      previousStates: previousAnimationStates,
+      previousTransitionProgress: previousAnimationProgress,
+      useCurrentTranslations: !modelChanged
+    });
+    clearExplodedViewRecordsOutsideStates(runtime.displayRecords, transitionStates);
+
+    if (
+      targetProgress > 0 &&
+      focusedPartIds.length === 0 &&
+      normalizedExplodedSettings.autoFrame !== false
+    ) {
+      runAutoZoom("explode", {
+        baseBounds,
+        explodedStates: targetProgress > 0 ? transitionStates : [],
+        explodedProgress: 1,
+        speedMs: AUTO_ZOOM_SPEED_MS.EXPLODED
+      });
+    }
+
+    if (!explodedViewTransitionNeedsAnimation(transitionStates)) {
+      animation.progress = targetProgress;
+      animation.states = transitionStates;
+      animation.transitionProgress = 1;
+      applyExplodedViewRuntimeProgress(runtime, transitionStates, 1);
+      return undefined;
+    }
+
+    const startedAt = typeof performance !== "undefined" && typeof performance.now === "function"
+      ? performance.now()
+      : Date.now();
+
+    animation.states = transitionStates;
+    animation.transitionProgress = 0;
+    applyExplodedViewRuntimeProgress(runtime, transitionStates, 0);
+
+    const step = (timestamp) => {
+      const now = Number.isFinite(Number(timestamp)) ? Number(timestamp) : Date.now();
+      const linearProgress = clamp(
+        (now - startedAt) / EXPLODED_VIEW_ANIMATION_DURATION_MS,
+        0,
+        1
+      );
+      const easedProgress = easeExplodedViewProgress(linearProgress);
+      animation.progress = targetProgress > 0
+        ? easedProgress
+        : 1 - easedProgress;
+      animation.transitionProgress = easedProgress;
+      applyExplodedViewRuntimeProgress(runtime, transitionStates, easedProgress);
+      if (linearProgress < 1) {
+        animation.rafId = window.requestAnimationFrame(step);
+      } else {
+        animation.rafId = 0;
+        animation.progress = targetProgress;
+        animation.transitionProgress = 1;
+        animation.states = transitionStates;
+      }
+    };
+
+    animation.rafId = window.requestAnimationFrame(step);
+    return () => {
+      cancelExplodedViewAnimation(explodedViewAnimationRef);
+    };
+  }, [
+    explodedViewActive,
+    normalizedExplodedSettings,
+    isLoading,
+    meshData?.bounds,
+    meshGeometrySource,
+    modelKey,
+    focusedPartIds.length,
+    normalizedSceneScaleMode,
+    normalizedThemeSettings,
+    runAutoZoom,
+    viewerReadyTick
   ]);
 
   useEffect(() => {
@@ -3542,6 +4184,21 @@ const CadViewer = forwardRef(function CadViewer({
         }}
         aria-hidden="true"
       />
+      {showViewPlane && !previewMode && !isLoading && meshData && (autoZoomDetached || defaultPerspectiveDetached) ? (
+        <button
+          type="button"
+          aria-label="Reset view"
+          title="Reset view"
+          className={`${RESET_VIEW_CONTROL_BUTTON_CLASSES} absolute z-20`}
+          style={{
+            right: `calc(${viewPlaneOffsetRight}px + 2rem)`,
+            bottom: `calc(${cssLength(viewPlaneOffsetBottom, "16px")} + 6.6rem)`
+          }}
+          onClick={resetView}
+        >
+          <Navigation2 className="h-3.5 w-3.5" strokeWidth={2} aria-hidden="true" />
+        </button>
+      ) : null}
       <ViewPlaneControl
         showViewPlane={showViewPlane}
         previewMode={previewMode}

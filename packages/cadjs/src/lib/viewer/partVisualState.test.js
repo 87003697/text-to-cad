@@ -53,8 +53,34 @@ test("part visual helpers normalize focus ids and model-level references", () =>
   const focused = new Set(["part-a"]);
   assert.equal(referenceMatchesFocusedPart({ partId: "part-a" }, focused), true);
   assert.equal(referenceMatchesFocusedPart({ partId: "part-b" }, focused), false);
+  assert.equal(referenceMatchesFocusedPart({ partId: "part-a.child" }, focused), true);
   assert.equal(referenceMatchesFocusedPart({}, new Set(["__model__"])), true);
   assert.equal(referenceMatchesFocusedPart({ partId: "part-a" }, new Set()), true);
+});
+
+test("part visual state matches focused assembly ids against descendant records", () => {
+  const focusedChild = createRecord("o1.4.1", { baseOpacity: 0.8 });
+  const dimmedSibling = createRecord("o1.5", { baseOpacity: 0.8 });
+
+  applyPartVisualState(THREE, [focusedChild, dimmedSibling], {
+    viewerTheme: {
+      edge: "#111111",
+      edgeOpacity: 0.5
+    },
+    edgeSettings: {
+      opacity: 0.5
+    },
+    hiddenPartIds: [],
+    hoveredPartId: "",
+    focusedPartId: ["o1.4"],
+    selectedPartIds: [],
+    showEdges: true
+  });
+
+  assertNear(focusedChild.material.opacity, 0.8, "focused descendant opacity");
+  assertNear(focusedChild.edgeMaterial.opacity, 0.5, "focused descendant edge opacity");
+  assertNear(dimmedSibling.material.opacity, 0.035, "unfocused sibling opacity");
+  assertNear(dimmedSibling.edgeMaterial.opacity, 0.035, "unfocused sibling edge opacity");
 });
 
 test("part visual state applies hover and selected styling without changing visibility", () => {
