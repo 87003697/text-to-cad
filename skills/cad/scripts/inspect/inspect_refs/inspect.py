@@ -256,7 +256,10 @@ def _load_step_context(
         manifest = artifact.selector_bundle.manifest
         selector_index = lookup.build_selector_index(manifest, buffers=artifact.selector_bundle.buffers)
 
-    resolved_kind = _entry_kind_from_manifest(manifest, fallback=target.kind)
+    resolved_kind = _entry_kind_from_manifest(
+        manifest,
+        fallback=_entry_kind_from_manifest(artifact.manifest, fallback=target.kind),
+    )
     return EntryContext(
         cad_path=target.cad_path,
         kind=resolved_kind,

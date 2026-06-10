@@ -174,7 +174,7 @@ def source_from_path(
 ) -> CadSource | None:
     resolved = path.resolve()
     if resolved.suffix.lower() == ".py":
-        return _read_python_source(resolved)
+        return _read_python_source(resolved, allow_dxf_only=True)
     if resolved.suffix.lower() in STEP_SUFFIXES:
         return _read_step_source(resolved, kind=step_kind, options=step_options)
     return None
@@ -302,11 +302,35 @@ def _iter_python_sources(root: Path) -> tuple[CadSource, ...]:
     return tuple(sources)
 
 
-def _read_python_source(script_path: Path) -> CadSource | None:
+def _read_python_source(script_path: Path, *, allow_dxf_only: bool = False) -> CadSource | None:
     resolved_script_path = script_path.resolve()
     metadata = parse_generator_metadata(resolved_script_path)
     if metadata is None:
         return None
+    if not metadata.has_gen_step:
+        # Standalone DXF drafting source: valid as an explicit gen_dxf target,
+        # but it has no STEP entry, so directory catalogs skip it.
+        if not allow_dxf_only:
+            return None
+        return CadSource(
+            source_ref=source_ref_from_path(resolved_script_path),
+            cad_ref="",
+            kind="dxf",
+            source_path=resolved_script_path,
+            source="generated",
+            origin_path=resolved_script_path,
+            script_path=resolved_script_path,
+            generator_metadata=metadata,
+            step_path=None,
+            stl_path=None,
+            three_mf_path=None,
+            native_glb_path=None,
+            dxf_path=resolved_script_path.with_suffix(".dxf"),
+            urdf_path=None,
+            sdf_path=None,
+            mesh_tolerance=None,
+            mesh_angular_tolerance=None,
+        )
     if metadata.kind not in {"part", "assembly"}:
         raise CadSourceError(
             f"{_relative_to_repo(resolved_script_path)} must define a part or assembly gen_step() entry"

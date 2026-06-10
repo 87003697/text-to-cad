@@ -44,6 +44,12 @@ const skillGroups = [
       "Finds off-the-shelf STEP parts like screws, bearings, motors, and connectors.",
   },
   {
+    name: "DXF",
+    path: "skills/dxf",
+    summary:
+      "Creates 2D DXF drawings like profiles, templates, gaskets, and cut layouts from Python sources or CAD geometry.",
+  },
+  {
     name: "URDF",
     path: "skills/urdf",
     summary:

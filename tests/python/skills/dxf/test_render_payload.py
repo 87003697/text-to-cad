@@ -6,7 +6,7 @@ import ezdxf
 from tests.python.support.paths import add_repo_path
 from tests.python.support.tmp_root import temporary_directory
 
-add_repo_path("skills/cad/scripts")
+add_repo_path("skills/dxf/scripts")
 
 from dxf.render_payload import build_dxf_render_payload
 

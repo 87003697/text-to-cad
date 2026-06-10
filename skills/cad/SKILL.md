@@ -1,6 +1,6 @@
 ---
 name: cad
-description: Create, modify, inspect, and validate STEP-first parametric CAD parts and assemblies. Use for natural-language CAD specs, reference images, 2D technical drawings, STEP/STP generation or direct inspection, Python CAD source, source-level joints, selector references, geometry facts, measurements, mating deltas, snapshots, and secondary DXF/STL/3MF/native GLB outputs from CAD geometry.
+description: Create, modify, inspect, and validate STEP-first parametric CAD parts and assemblies. Use for natural-language CAD specs, reference images, 2D technical drawings, STEP/STP generation or direct inspection, Python CAD source, source-level joints, selector references, geometry facts, measurements, mating deltas, snapshots, and secondary STL/3MF/native GLB outputs from CAD geometry.
 ---
 
 # CAD generation, inspection, and validation
@@ -11,7 +11,7 @@ repository link is only for provenance and release review.
 
 ## Purpose
 
-Create or modify parametric CAD models from natural-language requirements, generate validated STEP/STP artifacts, inspect geometry references, and return checked outputs. Treat STEP as the primary CAD artifact. Treat DXF, STL, 3MF, and native GLB as secondary workflows that branch from, or accompany, a STEP-first process. For assemblies, prefer `cadpy.assembly.AssemblyHelper` with source-level build123d joints, named mating datums, and native labels when the parts have functional assembly relationships.
+Create or modify parametric CAD models from natural-language requirements, generate validated STEP/STP artifacts, inspect geometry references, and return checked outputs. Treat STEP as the primary CAD artifact. Treat STL, 3MF, and native GLB as secondary export workflows that branch from a STEP-first process. For assemblies, prefer `cadpy.assembly.AssemblyHelper` with source-level build123d joints, named mating datums, and native labels when the parts have functional assembly relationships.
 
 There are two ways into the STEP workflow: generate from build123d Python source (the default when designing from scratch or modifying a generated model), or import an existing STEP/STP file directly (when no generator exists or the user explicitly targets the STEP file). Both produce the same inspectable artifacts.
 
@@ -19,7 +19,7 @@ There are two ways into the STEP workflow: generate from build123d Python source
 
 Use this skill when the user asks for CAD files, STEP/STP files, build123d source, selector refs such as `#o1.2.f1`, mechanical parts, assemblies, enclosures, brackets, fixtures, holes, counterbores, countersinks, slots, pockets, bosses, standoffs, ribs, fillets, chamfers, shells, source-level joints, mating, or measurements. Also use it when the user supplies reference images or 2D technical drawings of a part to reproduce or take design intent from.
 
-Also use it when the user asks for DXF, STL, 3MF, or native GLB output from CAD geometry. Keep those workflows secondary and load `dxf.md` or `supported-exports.md` for details.
+Also use it when the user asks for STL, 3MF, or native GLB output from CAD geometry. Keep those workflows secondary and load `supported-exports.md` for details. For 2D DXF drawings, use the `$dxf` skill; when a DXF projects from a 3D part, this skill owns the STEP geometry and `$dxf` owns the drawing.
 
 Do not use this skill for render-only concept art, CAM toolpaths, engineering certification, FEA conclusions, architectural BIM, or freehand illustration unless the user also needs CAD geometry.
 
@@ -48,7 +48,6 @@ From the CAD skill directory, the launcher shape is:
 python scripts/step ...      # STEP generation, GLB/topology artifacts, mesh sidecars
 python scripts/inspect ...   # refs, measure, align, frame, diff
 python scripts/snapshot ...  # PNG/GIF visual review packets
-python scripts/dxf ...       # secondary DXF generation
 ```
 
 Use the active project Python interpreter; treat `python` in examples as an interpreter placeholder. Use `python scripts/<tool> --help` for the complete current command interface; reference docs show recommended workflows, not every flag.
@@ -74,16 +73,16 @@ Scale depth to the task: a simple part needs a short brief and few spec-driven c
 
 ## Handoff
 
-After completing CAD work that creates or modifies `.step`, `.stp`, `.stl`, `.3mf`, `.dxf`, or native `.glb` artifacts, you must ALWAYS hand the explicit file path(s) to `$cad-viewer` when that skill is installed. `$cad-viewer` must start CAD Viewer if it is not already running and return link(s) to the relevant created or updated file(s); include those live viewer link(s) in the final response. If `$cad-viewer` is unavailable or startup fails, report that and rely on CLI inspection plus snapshots instead of silently omitting the handoff. This rule applies to every workflow in this skill, including secondary DXF/STL/3MF/GLB outputs.
+After completing CAD work that creates or modifies `.step`, `.stp`, `.stl`, `.3mf`, or native `.glb` artifacts, you must ALWAYS hand the explicit file path(s) to `$cad-viewer` when that skill is installed. `$cad-viewer` must start CAD Viewer if it is not already running and return link(s) to the relevant created or updated file(s); include those live viewer link(s) in the final response. If `$cad-viewer` is unavailable or startup fails, report that and rely on CLI inspection plus snapshots instead of silently omitting the handoff. This rule applies to every workflow in this skill, including secondary STL/3MF/GLB outputs.
 
 When verification snapshots are generated, include the saved PNG/GIF snapshot(s) in the final response. If no snapshot applies, or if snapshot generation fails, say why and report the deterministic validation that still ran.
 
 ## Non-negotiables
 
-- Keep STEP as the primary validated CAD artifact. Generated STEP/STP, STL, 3MF, GLB/topology, DXF outputs, and render sidecars are derived artifacts; DXF/STL/3MF are secondary unless the user explicitly says otherwise.
+- Keep STEP as the primary validated CAD artifact. Generated STEP/STP, STL, 3MF, GLB/topology outputs, and render sidecars are derived artifacts; STL/3MF are secondary unless the user explicitly says otherwise.
 - Use named parameters, closed solids, verbose native build123d labels, and source-controlled geometry intent.
 - Author assembly positioning in source. `references/positioning.md` is authoritative for `AssemblyHelper`, build123d joints, explicit `Location` transforms, and alignment validation.
-- Do not use `git status`, `git diff`, or file-size churn as CAD comparison for large exported STEP/STP, GLB/topology, STL, 3MF, or DXF artifacts. Compare source changes, `scripts/inspect` summaries, snapshots, or generated topology output instead; use path-limited git status only for bookkeeping.
+- Do not use `git status`, `git diff`, or file-size churn as CAD comparison for large exported STEP/STP, GLB/topology, STL, or 3MF artifacts. Compare source changes, `scripts/inspect` summaries, snapshots, or generated topology output instead; use path-limited git status only for bookkeeping.
 - Report only checks that actually ran or are directly supported by tool output.
 
 ## Progressive references
@@ -97,7 +96,6 @@ Load these files only when their trigger applies:
 - `references/snapshot-review.md` — mandatory snapshot policy, packet sizing, targeted views, and converting visual findings into geometry checks.
 - `references/positioning.md` — part-local datums and origins, assembly transforms, build123d joints, CLI alignment validation, and positioning reports.
 - `references/parameters.md` — parameterizing or animating a STEP model: source parameters, `.step.js` sidecar modules, viewer controls, and animation design.
-- `references/dxf.md` — secondary DXF workflow.
 - `references/supported-exports.md` — secondary STL/3MF/native GLB sidecar workflows.
 - `references/repair-loop.md` — diagnosis and repair procedures.
 
