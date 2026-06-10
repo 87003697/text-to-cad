@@ -173,7 +173,13 @@ const DEFAULT_DAMPING_FACTOR = 0.14;
 const DEFAULT_ZOOM_SPEED = 4.5;
 const COARSE_POINTER_ZOOM_SPEED = 1.6;
 const EXPLODED_VIEW_ANIMATION_DURATION_MS = 1000;
-const AUTO_ZOOM_ANIMATION_DURATION_MS = 400;
+const AUTO_ZOOM_SPEED_MS = Object.freeze({
+  DEFAULT: 400,
+  EXPLODED: EXPLODED_VIEW_ANIMATION_DURATION_MS,
+  ISOLATE: 400,
+  RESET: 400,
+  RESIZE: 0
+});
 const ACCELERATED_WHEEL_ZOOM_SPEED = 10;
 const TRACKPAD_PINCH_ZOOM_SPEED = 14;
 const COARSE_POINTER_PINCH_ZOOM_SPEED = 2.4;
@@ -193,8 +199,6 @@ const DEFAULT_VIEW_PLANE_ORIENTATION = Object.freeze({
   z: [0, 0, 1]
 });
 const AUTO_ZOOM_PADDING = DEFAULT_AUTO_ZOOM_PADDING;
-const AUTO_ZOOM_TRANSITION_MS = AUTO_ZOOM_ANIMATION_DURATION_MS;
-const AUTO_ZOOM_EXPLODED_TRANSITION_MS = AUTO_ZOOM_ANIMATION_DURATION_MS;
 const AUTO_ZOOM_TRANSITION_EASING = CAMERA_TRANSITION_EASING.EASE_IN_OUT_SINE;
 const WORLD_UP = Object.freeze([0, 0, 1]);
 const CAD_COORDINATE_SYSTEM = "cad-z-up-v1";
@@ -497,6 +501,14 @@ function cssLength(value, fallback = "0px") {
   return text || fallback;
 }
 
+function normalizeAutoZoomSpeedMs(value, fallback = AUTO_ZOOM_SPEED_MS.DEFAULT) {
+  const numeric = Number(value);
+  if (Number.isFinite(numeric) && numeric >= 0) {
+    return numeric;
+  }
+  return fallback;
+}
+
 function explodedViewTranslationMapAtProgress(THREE, states = [], progress = 1) {
   const translations = new Map();
   if (!THREE?.Vector3) {
@@ -689,7 +701,7 @@ function getFitDistanceForBoundingSphere(camera, radius, sceneScaleMode, frameAs
 }
 
 function transitionCameraToBounds(runtime, bounds, sceneScaleMode, frameInsets, {
-  durationMs = AUTO_ZOOM_TRANSITION_MS,
+  durationMs = AUTO_ZOOM_SPEED_MS.DEFAULT,
   easing = AUTO_ZOOM_TRANSITION_EASING,
   animate = true
 } = {}) {
@@ -1797,8 +1809,7 @@ const CadViewer = forwardRef(function CadViewer({
     }
     applyCameraFrameInsets(runtime, normalizedViewportFrameInsets);
     autoZoomRunRef.current?.("viewport", {
-      durationMs: AUTO_ZOOM_TRANSITION_MS,
-      animate: false
+      speedMs: AUTO_ZOOM_SPEED_MS.RESIZE
     });
     runtime.requestRender?.();
   }, [
@@ -1889,7 +1900,7 @@ const CadViewer = forwardRef(function CadViewer({
   const runAutoZoom = useCallback((reason = "state", {
     bounds = null,
     baseBounds = null,
-    durationMs = AUTO_ZOOM_TRANSITION_MS,
+    speedMs = AUTO_ZOOM_SPEED_MS.DEFAULT,
     explodedStates = null,
     explodedProgress = 1,
     animate = true,
@@ -1914,12 +1925,16 @@ const CadViewer = forwardRef(function CadViewer({
     state.attached = true;
     state.lastReason = reason;
     setAutoZoomDetached(false);
+    const resolvedSpeedMs = normalizeAutoZoomSpeedMs(speedMs, AUTO_ZOOM_SPEED_MS.DEFAULT);
     return transitionCameraToBounds(
       runtime,
       targetBounds,
       normalizedSceneScaleMode,
       viewportFrameInsetsRef.current,
-      { durationMs, animate }
+      {
+        durationMs: resolvedSpeedMs,
+        animate: animate !== false && resolvedSpeedMs > 0
+      }
     );
   }, [
     normalizedSceneScaleMode,
@@ -1943,7 +1958,7 @@ const CadViewer = forwardRef(function CadViewer({
     setAutoZoomDetached(false);
     runAutoZoom("reset", {
       force: true,
-      durationMs: AUTO_ZOOM_TRANSITION_MS
+      speedMs: AUTO_ZOOM_SPEED_MS.RESET
     });
   }, [runAutoZoom]);
   const buildSurfaceLineFaceAnchor = (event, canvas, lockedReferenceId = "", startUv = null) => {
@@ -2309,7 +2324,7 @@ const CadViewer = forwardRef(function CadViewer({
 
   useLayoutEffect(() => {
     autoZoomRunRef.current?.("focus", {
-      durationMs: AUTO_ZOOM_TRANSITION_MS
+      speedMs: AUTO_ZOOM_SPEED_MS.ISOLATE
     });
   }, [
     focusedPartIds,
@@ -2416,8 +2431,7 @@ const CadViewer = forwardRef(function CadViewer({
     onManualCameraInteraction: detachAutoZoom,
     onViewportResize: () => {
       autoZoomRunRef.current?.("resize", {
-        durationMs: AUTO_ZOOM_TRANSITION_MS,
-        animate: false
+        speedMs: AUTO_ZOOM_SPEED_MS.RESIZE
       });
     },
     onInitializationError: handleRuntimeInitializationError,
@@ -3420,7 +3434,7 @@ const CadViewer = forwardRef(function CadViewer({
         baseBounds,
         explodedStates: targetProgress > 0 ? transitionStates : [],
         explodedProgress: 1,
-        durationMs: AUTO_ZOOM_EXPLODED_TRANSITION_MS
+        speedMs: AUTO_ZOOM_SPEED_MS.EXPLODED
       });
     }
 
