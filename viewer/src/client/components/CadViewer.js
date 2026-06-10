@@ -1,6 +1,7 @@
 "use client";
 
-import { forwardRef, useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState } from "react";
+import { forwardRef, useCallback, useEffect, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { Navigation2 } from "lucide-react";
 import { parseCadRefToken } from "cadjs/lib/cadRefs";
 import { STEP_TREE_TOPOLOGY_NODE_PREFIX } from "cadjs/lib/step/stepTree";
 import { copyImageBlobToClipboard } from "@/ui/clipboard";
@@ -71,6 +72,11 @@ import {
   updateSpotLightTarget
 } from "cadjs/lib/viewer/stageTheme";
 import { updateGridHelper as updateStageGridHelper } from "cadjs/lib/viewer/stageGrid";
+import {
+  autoZoomFrameForBounds,
+  DEFAULT_AUTO_ZOOM_PADDING,
+  displayRecordsBounds
+} from "cadjs/lib/viewer/autoZoom";
 import { applyMaterialSettingsToRecord } from "cadjs/lib/viewer/surfaceMaterials";
 import {
   applyPartVisualState,
@@ -88,7 +94,6 @@ import {
   clearExplodedViewRecords,
   createExplodedViewRecordStates,
   easeExplodedViewProgress,
-  explodedViewBoundsFromStates,
   explodedViewStateTranslationAtProgress
 } from "cadjs/lib/viewer/explodedView";
 import {
@@ -167,7 +172,8 @@ const INTERACTION_IDLE_DELAY_MS = 140;
 const DEFAULT_DAMPING_FACTOR = 0.14;
 const DEFAULT_ZOOM_SPEED = 4.5;
 const COARSE_POINTER_ZOOM_SPEED = 1.6;
-const EXPLODED_VIEW_ANIMATION_DURATION_MS = 950;
+const EXPLODED_VIEW_ANIMATION_DURATION_MS = 1000;
+const AUTO_ZOOM_ANIMATION_DURATION_MS = 400;
 const ACCELERATED_WHEEL_ZOOM_SPEED = 10;
 const TRACKPAD_PINCH_ZOOM_SPEED = 14;
 const COARSE_POINTER_PINCH_ZOOM_SPEED = 2.4;
@@ -177,12 +183,19 @@ const KEYBOARD_POLAR_EPSILON = 0.02;
 const PREVIEW_AUTO_ROTATE_SPEED = 1.0;
 const VIEW_PLANE_ACTIVE_DOT_THRESHOLD = 0.994;
 const VIEW_PLANE_TRANSITION_MS = 280;
+const CAMERA_TRANSITION_EASING = Object.freeze({
+  EASE_IN_OUT_CUBIC: "ease-in-out-cubic",
+  EASE_IN_OUT_SINE: "ease-in-out-sine"
+});
 const DEFAULT_VIEW_PLANE_ORIENTATION = Object.freeze({
   x: [1, 0, 0],
   y: [0, 1, 0],
   z: [0, 0, 1]
 });
-const MODEL_FRAME_BUFFER = 1.08;
+const AUTO_ZOOM_PADDING = DEFAULT_AUTO_ZOOM_PADDING;
+const AUTO_ZOOM_TRANSITION_MS = AUTO_ZOOM_ANIMATION_DURATION_MS;
+const AUTO_ZOOM_EXPLODED_TRANSITION_MS = AUTO_ZOOM_ANIMATION_DURATION_MS;
+const AUTO_ZOOM_TRANSITION_EASING = CAMERA_TRANSITION_EASING.EASE_IN_OUT_SINE;
 const WORLD_UP = Object.freeze([0, 0, 1]);
 const CAD_COORDINATE_SYSTEM = "cad-z-up-v1";
 const ROBOT_COORDINATE_SYSTEM = "cad-z-up-robot-framing-v2";
@@ -476,6 +489,53 @@ function explodedViewTransitionNeedsAnimation(states = []) {
   return false;
 }
 
+function cssLength(value, fallback = "0px") {
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return `${value}px`;
+  }
+  const text = String(value || "").trim();
+  return text || fallback;
+}
+
+function explodedViewTranslationMapAtProgress(THREE, states = [], progress = 1) {
+  const translations = new Map();
+  if (!THREE?.Vector3) {
+    return translations;
+  }
+  for (const state of Array.isArray(states) ? states : []) {
+    if (!state?.record || translations.has(state.record)) {
+      continue;
+    }
+    const translation = explodedViewStateTranslationAtProgress(THREE, state, progress);
+    if (translation) {
+      translations.set(state.record, translation);
+    }
+  }
+  return translations;
+}
+
+function autoZoomBoundsForRuntime(runtime, {
+  baseBounds = null,
+  focusedPartIds = [],
+  explodedStates = [],
+  explodedProgress = 1
+} = {}) {
+  if (!runtime?.THREE || !Array.isArray(runtime.displayRecords)) {
+    return baseBounds;
+  }
+  const focusedIds = new Set(normalizePartIdList(focusedPartIds));
+  const translationByRecord = explodedViewTranslationMapAtProgress(
+    runtime.THREE,
+    explodedStates,
+    explodedProgress
+  );
+  const recordBounds = displayRecordsBounds(runtime.displayRecords, {
+    partIds: focusedIds,
+    translationByRecord
+  });
+  return recordBounds || baseBounds;
+}
+
 function applyExplodedViewRuntimeProgress(runtime, states, progress) {
   if (!runtime?.THREE || !Array.isArray(runtime.displayRecords)) {
     return;
@@ -621,67 +681,50 @@ function reapplyRuntimeCameraFrameInsets(runtime, { updateProjection = false } =
 }
 
 function getFitDistanceForBoundingSphere(camera, radius, sceneScaleMode, frameAspect = camera.aspect) {
-  const safeRadius = Math.max(radius * MODEL_FRAME_BUFFER, getSceneScaleSettings(sceneScaleMode).minModelRadius);
+  const safeRadius = Math.max(radius * AUTO_ZOOM_PADDING, getSceneScaleSettings(sceneScaleMode).minModelRadius);
   const verticalHalfFov = (camera.fov * Math.PI) / 360;
   const horizontalHalfFov = Math.atan(Math.tan(verticalHalfFov) * Math.max(frameAspect, 1e-3));
   const limitingHalfFov = Math.max(Math.min(verticalHalfFov, horizontalHalfFov), 1e-3);
   return safeRadius / Math.sin(limitingHalfFov);
 }
 
-function cameraBoundsCenterAndRadius(THREE, bounds, modelOffset = null) {
-  if (!THREE?.Vector3 || !Array.isArray(bounds?.min) || !Array.isArray(bounds?.max)) {
-    return null;
-  }
-  const center = new THREE.Vector3(
-    (toNumber(bounds.min[0]) + toNumber(bounds.max[0])) / 2,
-    (toNumber(bounds.min[1]) + toNumber(bounds.max[1])) / 2,
-    (toNumber(bounds.min[2]) + toNumber(bounds.max[2])) / 2
-  );
-  if (modelOffset?.isVector3) {
-    center.add(modelOffset);
-  }
-  const radius = new THREE.Vector3(
-    Math.max(toNumber(bounds.max[0]) - toNumber(bounds.min[0]), 0),
-    Math.max(toNumber(bounds.max[1]) - toNumber(bounds.min[1]), 0),
-    Math.max(toNumber(bounds.max[2]) - toNumber(bounds.min[2]), 0)
-  ).length() / 2;
-  return { center, radius };
-}
-
 function transitionCameraToBounds(runtime, bounds, sceneScaleMode, frameInsets, {
-  durationMs = EXPLODED_VIEW_ANIMATION_DURATION_MS
+  durationMs = AUTO_ZOOM_TRANSITION_MS,
+  easing = AUTO_ZOOM_TRANSITION_EASING,
+  animate = true
 } = {}) {
   if (!runtime?.THREE || !runtime?.camera || !runtime?.controls || !bounds) {
     return false;
   }
-  const frame = cameraBoundsCenterAndRadius(runtime.THREE, bounds, runtime.modelGroup?.position);
-  if (!frame || !Number.isFinite(frame.radius)) {
+  const frameMetrics = getViewportFrameMetrics(runtime, frameInsets);
+  const frame = autoZoomFrameForBounds(runtime.THREE, {
+    camera: runtime.camera,
+    controls: runtime.controls,
+    bounds,
+    modelOffset: runtime.modelGroup?.position,
+    frameAspect: frameMetrics.aspect,
+    minRadius: getSceneScaleSettings(sceneScaleMode).minModelRadius,
+    padding: AUTO_ZOOM_PADDING,
+    defaultDirection: DEFAULT_VIEW_DIRECTION
+  });
+  if (!frame) {
     return false;
   }
-  const offset = runtime.camera.position.clone().sub(runtime.controls.target);
-  const direction = offset.lengthSq() > 1e-8
-    ? offset.normalize()
-    : new runtime.THREE.Vector3(...DEFAULT_VIEW_DIRECTION).normalize();
-  const frameMetrics = getViewportFrameMetrics(runtime, frameInsets);
-  const distance = getFitDistanceForBoundingSphere(
-    runtime.camera,
-    frame.radius,
-    sceneScaleMode,
-    frameMetrics.aspect
-  );
-  const endPosition = frame.center.clone().add(direction.multiplyScalar(distance));
   if (
-    runtime.camera.position.distanceToSquared(endPosition) <= 1e-8 &&
-    runtime.controls.target.distanceToSquared(frame.center) <= 1e-8
+    runtime.camera.position.distanceToSquared(frame.position) <= 1e-8 &&
+    runtime.controls.target.distanceToSquared(frame.target) <= 1e-8
   ) {
     return false;
   }
-  return transitionCameraToPerspectiveSnapshot(runtime, {
-    position: [endPosition.x, endPosition.y, endPosition.z],
-    target: [frame.center.x, frame.center.y, frame.center.z],
-    up: [runtime.camera.up.x, runtime.camera.up.y, runtime.camera.up.z],
-    zoom: runtime.camera.zoom
-  }, { durationMs });
+  const nextPerspective = {
+    position: [frame.position.x, frame.position.y, frame.position.z],
+    target: [frame.target.x, frame.target.y, frame.target.z],
+    up: [frame.up.x, frame.up.y, frame.up.z],
+    zoom: frame.zoom
+  };
+  return animate
+    ? transitionCameraToPerspectiveSnapshot(runtime, nextPerspective, { durationMs, easing })
+    : applyPerspectiveSnapshot(runtime, nextPerspective, { scheduleIdle: false });
 }
 
 function easeInOutCubic(t) {
@@ -692,6 +735,22 @@ function easeInOutCubic(t) {
     return 1;
   }
   return t < 0.5 ? 4 * t * t * t : 1 - ((-2 * t + 2) ** 3) / 2;
+}
+
+function easeInOutSine(t) {
+  if (t <= 0) {
+    return 0;
+  }
+  if (t >= 1) {
+    return 1;
+  }
+  return -(Math.cos(Math.PI * t) - 1) / 2;
+}
+
+function easeCameraTransitionProgress(t, easing = CAMERA_TRANSITION_EASING.EASE_IN_OUT_CUBIC) {
+  return easing === CAMERA_TRANSITION_EASING.EASE_IN_OUT_SINE
+    ? easeInOutSine(t)
+    : easeInOutCubic(t);
 }
 
 function readPerspectiveSnapshot(runtime) {
@@ -890,7 +949,10 @@ function applyPerspectiveSnapshot(runtime, perspective, { scheduleIdle = true } 
   return true;
 }
 
-function transitionCameraToPerspectiveSnapshot(runtime, perspective, { durationMs = VIEW_PLANE_TRANSITION_MS } = {}) {
+function transitionCameraToPerspectiveSnapshot(runtime, perspective, {
+  durationMs = VIEW_PLANE_TRANSITION_MS,
+  easing = CAMERA_TRANSITION_EASING.EASE_IN_OUT_CUBIC
+} = {}) {
   const nextPerspective = clonePerspectiveSnapshot(perspective);
   if (!runtime?.THREE || !runtime?.camera || !runtime?.controls || !nextPerspective) {
     return false;
@@ -920,7 +982,8 @@ function transitionCameraToPerspectiveSnapshot(runtime, perspective, { durationM
     startUp: runtime.camera.up.clone(),
     endUp: endUp.normalize(),
     startZoom: runtime.camera.zoom,
-    endZoom
+    endZoom,
+    easing
   };
   runtime.controls.enableDamping = false;
   runtime.beginInteraction?.();
@@ -936,7 +999,7 @@ function stepCameraTransition(runtime, timestamp) {
 
   const durationMs = Math.max(transition.durationMs, 1);
   const progress = clamp((timestamp - transition.startTime) / durationMs, 0, 1);
-  const eased = easeInOutCubic(progress);
+  const eased = easeCameraTransitionProgress(progress, transition.easing);
   const position = new runtime.THREE.Vector3().lerpVectors(
     transition.startPosition,
     transition.endPosition,
@@ -1444,6 +1507,12 @@ const CadViewer = forwardRef(function CadViewer({
     states: [],
     transitionProgress: 0
   });
+  const autoZoomStateRef = useRef({
+    attached: true,
+    modelKey: "",
+    lastReason: "initial"
+  });
+  const autoZoomRunRef = useRef(null);
   const viewportFrameInsetsRef = useRef(normalizedViewportFrameInsets);
   const framedModelKeyRef = useRef("");
   const modelTransformRef = useRef({
@@ -1458,6 +1527,7 @@ const CadViewer = forwardRef(function CadViewer({
   const stepModuleCleanupRef = useRef([]);
   const [transformedSelectorRuntime, setTransformedSelectorRuntime] = useState(null);
   const [transformedDisplayEdgeRuntime, setTransformedDisplayEdgeRuntime] = useState(null);
+  const [autoZoomDetached, setAutoZoomDetached] = useState(false);
   const [error, setError] = useState("");
   const [viewerReadyTick, setViewerReadyTick] = useState(0);
   const [runtimeResetToken, setRuntimeResetToken] = useState(0);
@@ -1625,7 +1695,7 @@ const CadViewer = forwardRef(function CadViewer({
     displayMode: normalizedDisplayMode
   });
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     partVisualStateRef.current = {
       viewerTheme,
       edgeSettings: visualEdgeSettings,
@@ -1719,13 +1789,17 @@ const CadViewer = forwardRef(function CadViewer({
   perspectivePropRef.current = perspective;
   modelKeyRef.current = modelKey;
   sceneScaleModeRef.current = normalizedSceneScaleMode;
-  useEffect(() => {
+  useLayoutEffect(() => {
     viewportFrameInsetsRef.current = normalizedViewportFrameInsets;
     const runtime = runtimeRef.current;
     if (!runtime) {
       return;
     }
     applyCameraFrameInsets(runtime, normalizedViewportFrameInsets);
+    autoZoomRunRef.current?.("viewport", {
+      durationMs: AUTO_ZOOM_TRANSITION_MS,
+      animate: false
+    });
     runtime.requestRender?.();
   }, [
     normalizedViewportFrameInsets.top,
@@ -1787,6 +1861,91 @@ const CadViewer = forwardRef(function CadViewer({
     }
     return runWithoutPerspectiveEvents(() => applyPerspectiveSnapshot(runtime, nextPerspective, { scheduleIdle: false }));
   }, [perspectiveRef]);
+  const resolveAutoZoomBounds = useCallback((runtime = runtimeRef.current, {
+    baseBounds = null,
+    explodedStates = null,
+    explodedProgress = 1
+  } = {}) => {
+    if (!runtime?.THREE) {
+      return null;
+    }
+    const animation = explodedViewAnimationRef.current;
+    const activeExplodedStates = explodedStates || (
+      explodedViewActive && Array.isArray(animation.states)
+        ? animation.states
+        : []
+    );
+    return autoZoomBoundsForRuntime(runtime, {
+      baseBounds: baseBounds || runtime.modelBounds || meshData?.bounds,
+      focusedPartIds,
+      explodedStates: activeExplodedStates,
+      explodedProgress
+    });
+  }, [
+    explodedViewActive,
+    focusedPartIds,
+    meshData?.bounds
+  ]);
+  const runAutoZoom = useCallback((reason = "state", {
+    bounds = null,
+    baseBounds = null,
+    durationMs = AUTO_ZOOM_TRANSITION_MS,
+    explodedStates = null,
+    explodedProgress = 1,
+    animate = true,
+    force = false
+  } = {}) => {
+    const runtime = runtimeRef.current;
+    if (!runtime?.THREE || !runtime.camera || !runtime.controls) {
+      return false;
+    }
+    const state = autoZoomStateRef.current;
+    if (!force && state.attached === false) {
+      return false;
+    }
+    const targetBounds = bounds || resolveAutoZoomBounds(runtime, {
+      baseBounds,
+      explodedStates,
+      explodedProgress
+    });
+    if (!targetBounds) {
+      return false;
+    }
+    state.attached = true;
+    state.lastReason = reason;
+    setAutoZoomDetached(false);
+    return transitionCameraToBounds(
+      runtime,
+      targetBounds,
+      normalizedSceneScaleMode,
+      viewportFrameInsetsRef.current,
+      { durationMs, animate }
+    );
+  }, [
+    normalizedSceneScaleMode,
+    resolveAutoZoomBounds
+  ]);
+  autoZoomRunRef.current = runAutoZoom;
+  const detachAutoZoom = useCallback(() => {
+    const state = autoZoomStateRef.current;
+    if (state.attached === false) {
+      return;
+    }
+    state.attached = false;
+    state.lastReason = "manual";
+    setAutoZoomDetached(true);
+  }, []);
+  const resetAutoZoom = useCallback(() => {
+    const state = autoZoomStateRef.current;
+    state.attached = true;
+    state.modelKey = modelKeyRef.current || "";
+    state.lastReason = "reset";
+    setAutoZoomDetached(false);
+    runAutoZoom("reset", {
+      force: true,
+      durationMs: AUTO_ZOOM_TRANSITION_MS
+    });
+  }, [runAutoZoom]);
   const buildSurfaceLineFaceAnchor = (event, canvas, lockedReferenceId = "", startUv = null) => {
     const runtime = runtimeRef.current;
     if (!runtime?.raycaster || !runtime?.camera || !activeSelectorRuntime?.faceReferenceByRowIndex) {
@@ -2124,6 +2283,15 @@ const CadViewer = forwardRef(function CadViewer({
   }, [urdfPosePicker]);
 
   useEffect(() => {
+    autoZoomStateRef.current = {
+      attached: true,
+      modelKey: modelKey || "",
+      lastReason: "model"
+    };
+    setAutoZoomDetached(false);
+  }, [modelKey]);
+
+  useEffect(() => {
     setTransformedSelectorRuntime(null);
   }, [modelKey, selectorRuntime]);
 
@@ -2138,6 +2306,16 @@ const CadViewer = forwardRef(function CadViewer({
   useEffect(() => {
     displayEdgeRuntimeRef.current = activeDisplayEdgeRuntime;
   }, [activeDisplayEdgeRuntime]);
+
+  useLayoutEffect(() => {
+    autoZoomRunRef.current?.("focus", {
+      durationMs: AUTO_ZOOM_TRANSITION_MS
+    });
+  }, [
+    focusedPartIds,
+    modelKey,
+    viewerReadyTick
+  ]);
 
   useEffect(() => {
     clipSettingsRef.current = normalizedClipSettings;
@@ -2235,6 +2413,13 @@ const CadViewer = forwardRef(function CadViewer({
     defaultGridRadius,
     sceneScaleMode: normalizedSceneScaleMode,
     floorMode: resolvedFloorMode,
+    onManualCameraInteraction: detachAutoZoom,
+    onViewportResize: () => {
+      autoZoomRunRef.current?.("resize", {
+        durationMs: AUTO_ZOOM_TRANSITION_MS,
+        animate: false
+      });
+    },
     onInitializationError: handleRuntimeInitializationError,
     onContextRestored: handleRuntimeContextRestored,
     preserveInteractionPixelRatio,
@@ -3231,16 +3416,12 @@ const CadViewer = forwardRef(function CadViewer({
     clearExplodedViewRecordsOutsideStates(runtime.displayRecords, transitionStates);
 
     if (normalizedExplodedSettings.autoFrame !== false) {
-      const targetBounds = targetProgress > 0
-        ? explodedViewBoundsFromStates(runtime.THREE, transitionStates, baseBounds, 1)
-        : baseBounds;
-      transitionCameraToBounds(
-        runtime,
-        targetBounds,
-        normalizedSceneScaleMode,
-        viewportFrameInsetsRef.current,
-        { durationMs: EXPLODED_VIEW_ANIMATION_DURATION_MS }
-      );
+      runAutoZoom("explode", {
+        baseBounds,
+        explodedStates: targetProgress > 0 ? transitionStates : [],
+        explodedProgress: 1,
+        durationMs: AUTO_ZOOM_EXPLODED_TRANSITION_MS
+      });
     }
 
     if (!explodedViewTransitionNeedsAnimation(transitionStates)) {
@@ -3295,6 +3476,7 @@ const CadViewer = forwardRef(function CadViewer({
     modelKey,
     normalizedSceneScaleMode,
     normalizedThemeSettings,
+    runAutoZoom,
     viewerReadyTick
   ]);
 
@@ -3880,6 +4062,21 @@ const CadViewer = forwardRef(function CadViewer({
         }}
         aria-hidden="true"
       />
+      {showViewPlane && !previewMode && !isLoading && meshData && autoZoomDetached ? (
+        <button
+          type="button"
+          aria-label="Reset default zoom"
+          title="Reset default zoom"
+          className="cad-glass-surface pointer-events-auto absolute z-20 grid h-8 w-8 place-items-center rounded-full border border-sidebar-border text-sidebar-foreground/60 shadow-sm transition duration-150 hover:text-sidebar-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/45"
+          style={{
+            right: `calc(${viewPlaneOffsetRight}px + ${compactViewPlane ? "1.8rem" : "2.7rem"})`,
+            bottom: `calc(${cssLength(viewPlaneOffsetBottom, "16px")} + ${compactViewPlane ? "6.25rem" : "7.95rem"})`
+          }}
+          onClick={resetAutoZoom}
+        >
+          <Navigation2 className="h-3.5 w-3.5" strokeWidth={2} aria-hidden="true" />
+        </button>
+      ) : null}
       <ViewPlaneControl
         showViewPlane={showViewPlane}
         previewMode={previewMode}

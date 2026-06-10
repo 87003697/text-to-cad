@@ -1,6 +1,6 @@
 "use client";
 
-import { startTransition, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { startTransition, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { ArrowLeftRight, ArrowRight, Circle, Eraser, Minus, PaintBucket, PenTool, Square } from "lucide-react";
 import { SidebarInset, SidebarProvider } from "@/components/ui/sidebar";
 import CadRenderPane from "./workbench/CadRenderPane";
@@ -2919,6 +2919,34 @@ export default function CadWorkspace({
   const renderPartIdForAssemblySelection = useCallback((partId, fallbackPartId = "") => {
     return renderPartIdsForAssemblySelection(partId, fallbackPartId)[0] || "";
   }, [renderPartIdsForAssemblySelection]);
+  useLayoutEffect(() => {
+    const hiddenLeafIds = new Set(
+      (Array.isArray(hiddenPartIds) ? hiddenPartIds : [])
+        .map((id) => String(id || "").trim())
+        .filter(Boolean)
+    );
+    if (!hiddenLeafIds.size) {
+      return;
+    }
+    setExpandedStepTreeNodeIds((current) => {
+      let changed = false;
+      const next = current.filter((nodeId) => {
+        const leafIds = renderPartIdsForAssemblySelection(nodeId)
+          .map((id) => String(id || "").trim())
+          .filter(Boolean);
+        const shouldCollapse = leafIds.length > 0 && leafIds.every((id) => hiddenLeafIds.has(id));
+        if (shouldCollapse) {
+          changed = true;
+          return false;
+        }
+        return true;
+      });
+      return changed ? next : current;
+    });
+  }, [
+    hiddenPartIds,
+    renderPartIdsForAssemblySelection
+  ]);
   const selectedUrdfPreviewError = selectedUrdfPreview.error;
   const selectedDxfBendLines = useMemo(() => {
     if (!selectedDxfData) {

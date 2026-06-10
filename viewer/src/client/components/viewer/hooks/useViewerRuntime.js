@@ -65,6 +65,8 @@ export function useViewerRuntime({
   defaultGridRadius,
   sceneScaleMode,
   floorMode,
+  onManualCameraInteraction,
+  onViewportResize,
   onContextLost,
   onContextRestored,
   onInitializationError,
@@ -365,6 +367,7 @@ export function useViewerRuntime({
         syncScreenSpaceLineMaterials();
         syncDrawingCanvasSize(runtimeRef.current);
         renderDrawingOverlay();
+        runtimeRef.current?.onViewportResize?.();
         requestRender();
       };
       window.addEventListener("resize", onResize);
@@ -375,7 +378,16 @@ export function useViewerRuntime({
         : null;
       resizeObserver?.observe(container);
 
+      let controlsStartDistance = null;
+      const readControlsDistance = () => {
+        const activeRuntime = runtimeRef.current;
+        if (!activeRuntime?.camera || !activeRuntime?.controls?.target) {
+          return null;
+        }
+        return activeRuntime.camera.position.distanceTo(activeRuntime.controls.target);
+      };
       const handleControlsStart = () => {
+        controlsStartDistance = readControlsDistance();
         cancelCameraTransition(runtimeRef.current);
         beginInteraction();
       };
@@ -384,9 +396,18 @@ export function useViewerRuntime({
         requestRender();
       };
       const handleControlsEnd = () => {
+        const controlsEndDistance = readControlsDistance();
+        if (Number.isFinite(controlsStartDistance) && Number.isFinite(controlsEndDistance)) {
+          const threshold = Math.max(Math.abs(controlsStartDistance) * 0.002, 1e-4);
+          if (Math.abs(controlsEndDistance - controlsStartDistance) > threshold) {
+            runtimeRef.current?.onManualCameraInteraction?.("zoom");
+          }
+        }
+        controlsStartDistance = null;
         scheduleIdleQuality();
       };
       const handleWheel = (event) => {
+        runtimeRef.current?.onManualCameraInteraction?.("wheel");
         cancelCameraTransition(runtimeRef.current);
         controls.enableDamping = false;
         controls.zoomSpeed = getWheelZoomSpeed(isTrackpadLikeWheelEvent(event)
@@ -532,6 +553,8 @@ export function useViewerRuntime({
         scheduleIdleQuality,
         applyCameraFrameInsets,
         frameInsetsRef,
+        onManualCameraInteraction,
+        onViewportResize,
         registerScreenSpaceLineMaterial,
         unregisterScreenSpaceLineMaterial
       };
