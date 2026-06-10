@@ -16,10 +16,10 @@ export function contentTypeForStaticAsset(filePath) {
   return STATIC_CONTENT_TYPES.get(path.extname(String(filePath || "")).toLowerCase()) || "";
 }
 
-export function sendJson(res, statusCode, payload) {
+export function sendJson(res, statusCode, payload, { cacheControl = "no-store" } = {}) {
   res.statusCode = statusCode;
   res.setHeader("content-type", "application/json; charset=utf-8");
-  res.setHeader("cache-control", "no-store");
+  res.setHeader("cache-control", cacheControl || "no-store");
   res.end(JSON.stringify(payload));
 }
 
@@ -201,6 +201,7 @@ export function createCadViewerApiMiddleware({
   onCatalogActivated = () => {},
   onDirectoryActivated = () => {},
   rootDir,
+  catalogCacheControl = "",
 } = {}) {
   if (!backend) {
     throw new Error("createCadViewerApiMiddleware requires backend");
@@ -261,7 +262,7 @@ export function createCadViewerApiMiddleware({
         } else if (activeRootDir && typeof backend.resolveRoot === "function") {
           onCatalogActivated(backend.resolveRoot(activeRootDir), { rootDir: activeRootDir, fileRef: activeFileRef });
         }
-        sendJson(res, 200, catalog);
+        sendJson(res, 200, catalog, { cacheControl: catalogCacheControl });
       } catch (error) {
         sendJson(res, 400, {
           error: errorMessage(error),

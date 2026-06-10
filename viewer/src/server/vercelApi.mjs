@@ -39,6 +39,16 @@ export function hostedViewerPublicUrlFromEnv(env = process.env) {
 }
 
 
+// Hosted catalog reads are cached in-function and at the CDN so steady client
+// polling does not hammer the public Blob endpoint; sustained per-request Blob
+// fetches from shared serverless egress IPs trip Vercel's abuse mitigation
+// with intermittent 403s.
+export const HOSTED_CATALOG_CACHE_TTL_MS = 60_000;
+export const HOSTED_CATALOG_CACHE_CONTROL =
+  "public, max-age=0, s-maxage=60, stale-while-revalidate=600, stale-if-error=86400";
+
+let sharedHostedBackend = null;
+
 export function createHostedCadBackendFromEnv(env = process.env) {
   const assetBackend = normalizeViewerAssetBackend(
     envValue(env, "VIEWER_ASSET_BACKEND"),
@@ -50,7 +60,15 @@ export function createHostedCadBackendFromEnv(env = process.env) {
   return createVercelBlobAssetBackend({
     ...vercelBlobConfigFromEnv(env),
     readOnly: true,
+    catalogCacheTtlMs: HOSTED_CATALOG_CACHE_TTL_MS,
   });
+}
+
+function sharedHostedCadBackendFromEnv() {
+  if (!sharedHostedBackend) {
+    sharedHostedBackend = createHostedCadBackendFromEnv();
+  }
+  return sharedHostedBackend;
 }
 
 
@@ -73,7 +91,7 @@ export function buildHostedViewerServerInfo({
 
 export async function handleHostedCadApi(req, res, {
   cadPath,
-  backend = createHostedCadBackendFromEnv(),
+  backend = sharedHostedCadBackendFromEnv(),
   env = process.env,
 } = {}) {
   const normalizedCadPath = String(cadPath || "").trim();
@@ -93,6 +111,7 @@ export async function handleHostedCadApi(req, res, {
       enableStepArtifactBackend: false,
       claimDisabledStepArtifactRoute: true,
       preferFileDownloadRedirects: true,
+      catalogCacheControl: HOSTED_CATALOG_CACHE_CONTROL,
       serverInfo: () => buildHostedViewerServerInfo({ backend, env, rootDir: "" }),
     });
     await middleware(req, res, () => {

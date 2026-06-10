@@ -229,3 +229,39 @@ test("hosted viewer public URL is derived from Vercel system environment", () =>
     "",
   );
 });
+
+test("hosted CAD API serves CDN-cacheable catalog responses and no-store errors", async () => {
+  let failReads = false;
+  const backend = {
+    kind: "vercel-blob",
+    catalogPath: "demo/catalog.json",
+    readCatalog: async () => {
+      if (failReads) {
+        throw new Error("Failed to read Vercel Blob catalog: 403 Forbidden");
+      }
+      return { schemaVersion: 4, entries: [] };
+    },
+  };
+
+  const okRes = createResponse();
+  await handleHostedCadApi({ method: "GET", url: "/api/cad/catalog" }, okRes, {
+    cadPath: "/__cad/catalog",
+    backend,
+    env: { VIEWER_ASSET_BACKEND: "vercel-blob" },
+  });
+  assert.equal(okRes.statusCode, 200);
+  assert.equal(
+    okRes.getHeader("cache-control"),
+    "public, max-age=0, s-maxage=60, stale-while-revalidate=600, stale-if-error=86400",
+  );
+
+  failReads = true;
+  const errorRes = createResponse();
+  await handleHostedCadApi({ method: "GET", url: "/api/cad/catalog" }, errorRes, {
+    cadPath: "/__cad/catalog",
+    backend,
+    env: { VIEWER_ASSET_BACKEND: "vercel-blob" },
+  });
+  assert.equal(errorRes.statusCode, 400);
+  assert.equal(errorRes.getHeader("cache-control"), "no-store");
+});
