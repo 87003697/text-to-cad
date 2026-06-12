@@ -921,6 +921,46 @@ export function rewriteCatalogForBlob(catalog, {
   });
 }
 
+// Skip-existing publishes leave unchanged assets as unfetched Git LFS
+// pointers, so artifact validation cannot read them and stamps false
+// missing_step_topology warnings into the catalog. For those entries, the
+// remote catalog entry with the same content hash carries the status computed
+// when the real bytes were last scanned, so reuse it.
+export function carryForwardRemoteArtifactStatuses(catalog, {
+  existingCatalog,
+  rootPath,
+} = {}) {
+  const remoteEntries = Array.isArray(existingCatalog?.entries) ? existingCatalog.entries : [];
+  const localEntries = Array.isArray(catalog?.entries) ? catalog.entries : [];
+  if (!remoteEntries.length || !localEntries.length || !rootPath) {
+    return catalog;
+  }
+  const remoteByFile = new Map(remoteEntries.map((entry) => [String(entry?.file || ""), entry]));
+  let changed = false;
+  const entries = localEntries.map((entry) => {
+    const artifact = entry?.artifact;
+    if (!artifact || typeof artifact !== "object" || Array.isArray(artifact) || artifact.ok !== false) {
+      return entry;
+    }
+    const glbPath = cleanPosixPath(String(artifact.glbPath || ""));
+    if (!glbPath || !readGitLfsPointer(path.join(rootPath, ...glbPath.split("/")))) {
+      return entry;
+    }
+    const remoteEntry = remoteByFile.get(String(entry?.file || ""));
+    const localHash = String(entry?.hash || "");
+    if (!remoteEntry || !localHash || String(remoteEntry.hash || "") !== localHash) {
+      return entry;
+    }
+    changed = true;
+    if (remoteEntry.artifact === undefined) {
+      const { artifact: _droppedArtifact, ...cleanEntry } = entry;
+      return cleanEntry;
+    }
+    return { ...entry, artifact: remoteEntry.artifact };
+  });
+  return changed ? { ...catalog, entries } : catalog;
+}
+
 export function catalogJsonBody(catalog) {
   return JSON.stringify({
     schemaVersion: CAD_CATALOG_SCHEMA_VERSION,
@@ -1081,9 +1121,10 @@ export async function uploadCatalogDirectoryToVercelBlob({
     readOnly: false,
   });
   let existingUploads = new Map();
+  let existingCatalog = null;
   if (skipExisting) {
     try {
-      const existingCatalog = await backend.readCatalog();
+      existingCatalog = await backend.readCatalog();
       existingUploads = existingCatalogUploads(existingCatalog, {
         rootPath: uploadRoot.rootPath,
       });
@@ -1122,11 +1163,17 @@ export async function uploadCatalogDirectoryToVercelBlob({
       includePath,
     });
   }
-  const blobCatalog = rewriteCatalogForBlob(catalog, {
-    uploads,
-    repoRoot: uploadRoot.repoRoot,
-    rootPath: uploadRoot.rootPath,
-  });
+  const blobCatalog = carryForwardRemoteArtifactStatuses(
+    rewriteCatalogForBlob(catalog, {
+      uploads,
+      repoRoot: uploadRoot.repoRoot,
+      rootPath: uploadRoot.rootPath,
+    }),
+    {
+      existingCatalog,
+      rootPath: uploadRoot.rootPath,
+    },
+  );
   const catalogFileRef = config.catalogPath || "catalog.json";
   logger.log?.(`Uploading ${catalogFileRef}`);
   const catalogUpload = await uploadCatalogJsonToBlob({
