@@ -344,7 +344,7 @@ if [ "$DRY_RUN" -eq 1 ]; then
   if [ "$TAG" -eq 1 ]; then
     echo "Would create release tag: $next_version"
   fi
-  echo "Release prep workflow: gh workflow run prepare-release.yml"
+  echo "Release workflow: gh workflow run release.yml"
   echo "Local fallback: scripts/release/bump-version.sh --set-version $next_version --no-commit"
   exit 0
 fi
@@ -362,6 +362,6 @@ if [ "$TAG" -eq 1 ]; then
 elif [ "$COMMIT" -eq 1 ] || [ "$AMEND" -eq 1 ]; then
   echo "Release tag to create separately: $next_version"
 else
-  echo "Release prep workflow: gh workflow run prepare-release.yml"
+  echo "Release workflow: gh workflow run release.yml"
   echo "Local fallback: scripts/release/bump-version.sh --set-version $next_version --no-commit"
 fi
