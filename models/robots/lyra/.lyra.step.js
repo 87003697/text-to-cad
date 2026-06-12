@@ -82,15 +82,15 @@ const POSES = {
   ),
   fist: fingerPose(
     { index: [78, 100, 60], middle: [78, 100, 60], ring: [78, 100, 60], pinky: [78, 100, 60] },
-    [95, 20, 70, 84]
+    [92, 13, 58, 74]
   ),
   precision_pinch: fingerPose(
     { index: [40, 48, 30], middle: [66, 92, 55], ring: [66, 92, 55], pinky: [66, 92, 55] },
-    [92, 44, 18, 6]
+    [91, 34, 29, 8]
   ),
   tripod_pinch: fingerPose(
     { index: [44, 52, 32], middle: [42, 50, 30], ring: [66, 92, 55], pinky: [66, 92, 55] },
-    [95, 48, 6, 2]
+    [100, 39, 0, 14]
   ),
   point: fingerPose(
     { index: [-6, 0, 0], middle: [80, 102, 62], ring: [80, 102, 62], pinky: [80, 102, 62] },
@@ -98,7 +98,7 @@ const POSES = {
   ),
   ok_sign: fingerPose(
     { index: [42, 52, 32], middle: [6, 8, 4], ring: [10, 12, 6], pinky: [14, 16, 8] },
-    [88, 30, 30, 22]
+    [91, 26, 35, 20]
   )
 };
 
@@ -209,8 +209,10 @@ function addScaled(pose, delta, scale) {
 // ---------------------------------------------------------------- modes
 // Keyframe cycle through the showpiece poses; each segment blends for 65%
 // of its window and dwells for 35%, and the cycle wraps back to its first
-// key so the loop is exact.
-const TOUR_KEYS = ["relaxed", "precision_pinch", "tripod_pinch", "point", "ok_sign", "fist"];
+// key so the loop is exact. Key order is chosen so every adjacent blend is
+// capsule-verified collision-free (the fist only neighbors tripod/relaxed;
+// blending it with pinch/point/ok would sweep the thumb through the index).
+const TOUR_KEYS = ["relaxed", "precision_pinch", "ok_sign", "point", "tripod_pinch", "fist"];
 
 function tourPose(phase) {
   const p = ((finite(phase, 0) % 1) + 1) % 1;
@@ -282,28 +284,43 @@ function ripplePose(phase, grip) {
   return pose;
 }
 
-// Count 1..5 from a fist (index first, thumb last), then close back.
+// Count 1..5 from a fist (index first, thumb last), then close back. The
+// thumb lifts off to a hover clear of the fingers before any finger
+// extends, and only re-wraps once the fingers are curled again — every
+// adjacent blend is capsule-verified collision-free.
 const COUNT_EXTENDED = { index: [2, 2, 1], middle: [2, 2, 1], ring: [4, 4, 2], pinky: [6, 6, 3] };
+const COUNT_THUMB_FIST = [92, 13, 58, 74];
+const COUNT_THUMB_HOVER = [50, 30, 25, 20];
+const COUNT_THUMB_OPEN = [20, 10, 4, 4];
 
-function countKey(step) {
+function countKey(step, thumb) {
   const curls = {};
   FINGERS.forEach((finger, i) => {
     curls[finger] = step >= i + 1 ? COUNT_EXTENDED[finger] : [78, 100, 60];
   });
-  const thumb = step >= 5 ? [20, 10, 4, 4] : [95, 20, 70, 84];
   return fingerPose(curls, thumb);
 }
 
 function countPose(phase) {
   const p = ((finite(phase, 0) % 1) + 1) % 1;
-  // 7 segments: fist->1->2->3->4->5->hold->fist (the last is the wrap).
-  const keys = [countKey(0), countKey(1), countKey(2), countKey(3), countKey(4), countKey(5), countKey(5)];
+  // 8 segments: fist -> thumb hover -> 1 -> 2 -> 3 -> 4 -> 5 (thumb opens)
+  // -> hover (fingers re-curl) -> wrap back to the fist.
+  const keys = [
+    countKey(0, COUNT_THUMB_FIST),
+    countKey(0, COUNT_THUMB_HOVER),
+    countKey(1, COUNT_THUMB_HOVER),
+    countKey(2, COUNT_THUMB_HOVER),
+    countKey(3, COUNT_THUMB_HOVER),
+    countKey(4, COUNT_THUMB_HOVER),
+    countKey(5, COUNT_THUMB_OPEN),
+    countKey(0, COUNT_THUMB_HOVER)
+  ];
   const segCount = keys.length;
   const seg = Math.min(Math.floor(p * segCount), segCount - 1);
   const u = (p * segCount) - seg;
   const from = keys[seg];
   const to = seg + 1 < segCount ? keys[seg + 1] : keys[0];
-  return blendPoses(from, to, u / 0.55);
+  return blendPoses(from, to, u / 0.6);
 }
 
 const FEATURE_BY_LINK = {
@@ -410,7 +427,7 @@ export default {
     animations: {
       poseTour: {
         label: "Pose tour",
-        description: "Cycles relaxed -> precision pinch -> tripod pinch -> point -> OK sign -> fist and back, dwelling on each pose.",
+        description: "Cycles relaxed -> precision pinch -> OK sign -> point -> tripod pinch -> fist and back, dwelling on each pose.",
         duration: 9.0,
         loop: true,
         update({ cycle, set }) {
@@ -450,7 +467,7 @@ export default {
       },
       countLoop: {
         label: "Count to five",
-        description: "From a fist: index, middle, ring, pinky, then the thumb opens to a flat five before closing again.",
+        description: "From a fist: the thumb lifts clear, then index, middle, ring, pinky extend in turn and the thumb opens to a flat five before the hand closes again.",
         duration: 7.0,
         loop: true,
         update({ cycle, set }) {

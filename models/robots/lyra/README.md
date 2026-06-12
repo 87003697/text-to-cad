@@ -18,10 +18,12 @@ middle fingertip), clean industrial design, no logos.
 | Thumb | CMC yaw (opposition swing about +Z), CMC flex, MP, IP (about -Y) | 4 |
 
 MCP abduction/spread is intentionally omitted (documented tendon-budget
-trade in `lyra_parts/chain.py`). Named poses are FK-tuned: `precision_pinch`
-closes the thumb-index pads to ~2.6 mm, `tripod_pinch` chuck-grips a
-virtual ~15 mm object, and the `fist` thumb wraps onto the index middle
-phalanx.
+trade in `lyra_parts/chain.py`). Named poses are capsule-tuned to small
+positive clearances (`lyra_parts/clearance.py`): `precision_pinch` and
+`ok_sign` kiss the thumb-index pads at ~0.7-0.8 mm surface clearance,
+`tripod_pinch` chuck-grips a virtual ~12 mm object, and the `fist` thumb
+rests on the index middle phalanx — no pose or animation blend
+interpenetrates.
 
 ## Files
 
@@ -34,16 +36,22 @@ phalanx.
   the URDF/SRDF generators, and the animation sidecar; `lib.py` holds the
   palette and the verified `revolute_attach()` joint math; `palm.py` /
   `digits.py` build the parts; `description.py` emits the URDF/SRDF XML;
-  `mass_props.py` holds baked CAD volume/COM/inertia/bbox data.
+  `mass_props.py` holds baked CAD volume/COM/inertia/bbox data;
+  `clearance.py` is the stdlib capsule-collision self-check (run
+  `python -m lyra_parts.clearance` from this directory after editing
+  poses or animation key orders — it sweeps every named pose and every
+  sidecar blend path).
 - `lyra.step` — generated STEP assembly (derived artifact), baked in the
   `relaxed` pose. Occurrence refs `#o1.1..#o1.17` follow the `asm.add`
   order in `lyra.py` (palm, then index/middle/ring/pinky
   proximal/middle/distal, then thumb base/metacarpal/proximal/distal).
 - `.lyra.step.js` — CAD Viewer animation sidecar driving per-frame chain FK
   deltas against the baked pose. Animations: `poseTour` (relaxed ->
-  precision pinch -> tripod pinch -> point -> OK sign -> fist), `graspLoop`
-  (power grasp), `pinchLoop` (pinch with pad double-tap), `rippleLoop`
-  (traveling finger curl wave), `countLoop` (count to five from a fist).
+  precision pinch -> OK sign -> point -> tripod pinch -> fist; key order
+  chosen so every blend is collision-free), `graspLoop` (power grasp),
+  `pinchLoop` (pinch with pad double-tap), `rippleLoop` (traveling finger
+  curl wave), `countLoop` (count to five from a fist; the thumb lifts to a
+  hover before any finger extends).
   Controls: `phase`, `mode`, `pose` (named SRDF pose hold), `grip`.
 - `lyra.urdf` — generated URDF (derived artifact): a frame-only
   `wrist_mount` root plus 17 physical links and 16 revolute joints,

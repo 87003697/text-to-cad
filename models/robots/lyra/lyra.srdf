@@ -92,10 +92,10 @@
     <joint name="pinky_mcp" value="1.361356817" />
     <joint name="pinky_pip" value="1.745329252" />
     <joint name="pinky_dip" value="1.047197551" />
-    <joint name="thumb_cmc_yaw" value="1.658062789" />
-    <joint name="thumb_cmc_flex" value="0.34906585" />
-    <joint name="thumb_mp" value="1.221730476" />
-    <joint name="thumb_ip" value="1.466076572" />
+    <joint name="thumb_cmc_yaw" value="1.605702912" />
+    <joint name="thumb_cmc_flex" value="0.226892803" />
+    <joint name="thumb_mp" value="1.012290966" />
+    <joint name="thumb_ip" value="1.291543646" />
   </group_state>
   <group_state name="precision_pinch" group="hand">
     <joint name="index_mcp" value="0.698131701" />
@@ -110,10 +110,10 @@
     <joint name="pinky_mcp" value="1.151917306" />
     <joint name="pinky_pip" value="1.605702912" />
     <joint name="pinky_dip" value="0.959931089" />
-    <joint name="thumb_cmc_yaw" value="1.605702912" />
-    <joint name="thumb_cmc_flex" value="0.767944871" />
-    <joint name="thumb_mp" value="0.314159265" />
-    <joint name="thumb_ip" value="0.104719755" />
+    <joint name="thumb_cmc_yaw" value="1.588249619" />
+    <joint name="thumb_cmc_flex" value="0.593411946" />
+    <joint name="thumb_mp" value="0.506145483" />
+    <joint name="thumb_ip" value="0.13962634" />
   </group_state>
   <group_state name="tripod_pinch" group="hand">
     <joint name="index_mcp" value="0.767944871" />
@@ -128,10 +128,10 @@
     <joint name="pinky_mcp" value="1.151917306" />
     <joint name="pinky_pip" value="1.605702912" />
     <joint name="pinky_dip" value="0.959931089" />
-    <joint name="thumb_cmc_yaw" value="1.658062789" />
-    <joint name="thumb_cmc_flex" value="0.837758041" />
-    <joint name="thumb_mp" value="0.104719755" />
-    <joint name="thumb_ip" value="0.034906585" />
+    <joint name="thumb_cmc_yaw" value="1.745329252" />
+    <joint name="thumb_cmc_flex" value="0.680678408" />
+    <joint name="thumb_mp" value="0" />
+    <joint name="thumb_ip" value="0.244346095" />
   </group_state>
   <group_state name="point" group="hand">
     <joint name="index_mcp" value="-0.104719755" />
@@ -164,10 +164,10 @@
     <joint name="pinky_mcp" value="0.244346095" />
     <joint name="pinky_pip" value="0.27925268" />
     <joint name="pinky_dip" value="0.13962634" />
-    <joint name="thumb_cmc_yaw" value="1.535889742" />
-    <joint name="thumb_cmc_flex" value="0.523598776" />
-    <joint name="thumb_mp" value="0.523598776" />
-    <joint name="thumb_ip" value="0.383972435" />
+    <joint name="thumb_cmc_yaw" value="1.588249619" />
+    <joint name="thumb_cmc_flex" value="0.453785606" />
+    <joint name="thumb_mp" value="0.610865238" />
+    <joint name="thumb_ip" value="0.34906585" />
   </group_state>
   <end_effector name="hand_eef" parent_link="palm" group="hand" />
   <disable_collisions link1="palm" link2="index_proximal" reason="Adjacent" />

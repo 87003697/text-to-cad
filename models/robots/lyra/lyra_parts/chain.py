@@ -273,21 +273,22 @@ def _fist_deg() -> dict[str, float]:
         pose[f"{finger}_mcp"] = 78.0
         pose[f"{finger}_pip"] = 100.0
         pose[f"{finger}_dip"] = 60.0
-    # FK-tuned wrap: the thumb pad lands ~4 mm off the index middle-phalanx
-    # palmar face (chain.tip_world_mm), reading as a closed fist.
+    # Capsule-tuned wrap: the thumb pad rests on the index middle phalanx
+    # with ~0.8 mm surface clearance (no interpenetration at any digit).
     pose.update(
         {
-            "thumb_cmc_yaw": 95.0,
-            "thumb_cmc_flex": 20.0,
-            "thumb_mp": 70.0,
-            "thumb_ip": 84.0,
+            "thumb_cmc_yaw": 92.0,
+            "thumb_cmc_flex": 13.0,
+            "thumb_mp": 58.0,
+            "thumb_ip": 74.0,
         }
     )
     return pose
 
 
 def _precision_pinch_deg() -> dict[str, float]:
-    """Thumb-index pad opposition (FK-tuned to ~2.6 mm pad separation)."""
+    """Thumb-index pad opposition, capsule-tuned so the tip pads kiss with
+    ~0.8 mm surface clearance (no tip-sphere interpenetration)."""
     pose = _zero_deg()
     pose.update({"index_mcp": 40.0, "index_pip": 48.0, "index_dip": 30.0})
     for finger in ("middle", "ring", "pinky"):
@@ -296,10 +297,10 @@ def _precision_pinch_deg() -> dict[str, float]:
         pose[f"{finger}_dip"] = 55.0
     pose.update(
         {
-            "thumb_cmc_yaw": 92.0,
-            "thumb_cmc_flex": 44.0,
-            "thumb_mp": 18.0,
-            "thumb_ip": 6.0,
+            "thumb_cmc_yaw": 91.0,
+            "thumb_cmc_flex": 34.0,
+            "thumb_mp": 29.0,
+            "thumb_ip": 8.0,
         }
     )
     return pose
@@ -307,16 +308,16 @@ def _precision_pinch_deg() -> dict[str, float]:
 
 def _tripod_pinch_deg() -> dict[str, float]:
     """Thumb opposed between index and middle pads, chuck-gripping a
-    virtual ~15 mm object (FK-tuned tip triangle)."""
+    virtual object (capsule-tuned: ~12 mm pad-surface gap to both)."""
     pose = _precision_pinch_deg()
     pose.update({"index_mcp": 44.0, "index_pip": 52.0, "index_dip": 32.0})
     pose.update({"middle_mcp": 42.0, "middle_pip": 50.0, "middle_dip": 30.0})
     pose.update(
         {
-            "thumb_cmc_yaw": 95.0,
-            "thumb_cmc_flex": 48.0,
-            "thumb_mp": 6.0,
-            "thumb_ip": 2.0,
+            "thumb_cmc_yaw": 100.0,
+            "thumb_cmc_flex": 39.0,
+            "thumb_mp": 0.0,
+            "thumb_ip": 14.0,
         }
     )
     return pose
@@ -349,10 +350,10 @@ def _ok_sign_deg() -> dict[str, float]:
     pose.update({"pinky_mcp": 14.0, "pinky_pip": 16.0, "pinky_dip": 8.0})
     pose.update(
         {
-            "thumb_cmc_yaw": 88.0,
-            "thumb_cmc_flex": 30.0,
-            "thumb_mp": 30.0,
-            "thumb_ip": 22.0,
+            "thumb_cmc_yaw": 91.0,
+            "thumb_cmc_flex": 26.0,
+            "thumb_mp": 35.0,
+            "thumb_ip": 20.0,
         }
     )
     return pose
