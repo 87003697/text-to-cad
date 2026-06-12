@@ -22,7 +22,7 @@ import {
 } from "../viewer/surfaceMaterials.js";
 
 const DEFAULT_BACKGROUND = "#0b1020";
-const DEFAULT_FOV_DEG = 42;
+const DEFAULT_FOV_DEG = 48;
 const DEFAULT_SNAPSHOT_CAMERA_ZOOM = 1.25;
 const DEFAULT_SNAPSHOT_FRAME_MARGIN = 1.42;
 const FRAME_BOUNDS_SAMPLE_COUNT = 25;
@@ -69,6 +69,88 @@ function implicitCadUniformDeclarations(uniforms = {}) {
     .map(([name, uniform]) => `uniform ${uniform.type} ${name};`)
     .sort()
     .join("\n");
+}
+
+// Mirrors the mesh viewer's default workbench light rig so implicit models
+// shade like STEP/GLB models when no theme settings are provided.
+const DEFAULT_LIGHTING_RIG = Object.freeze({
+  toneMappingExposure: 1.16,
+  directional: { color: "#ffffff", intensity: 1.16, position: { x: -210, y: 260, z: 270 } },
+  spot: { color: "#f4fbff", intensity: 0.52, position: { x: 190, y: 210, z: 170 } },
+  point: { color: "#ffe2ba", intensity: 0.28, position: { x: -240, y: 110, z: -210 } },
+  ambient: { color: "#ffffff", intensity: 0.4 },
+  hemisphere: { skyColor: "#ffffff", groundColor: "#d6e2ee", intensity: 1.12 },
+  environmentAmbientScale: 0.5,
+  rimColor: "#6db6e8",
+  rimIntensity: 0.08,
+  floorShadowOpacity: 0.16,
+});
+
+function srgbChannelToLinear(value) {
+  const channel = Math.min(Math.max(finiteNumber(value, 0), 0), 1);
+  return channel <= 0.04045 ? channel / 12.92 : Math.pow((channel + 0.055) / 1.055, 2.4);
+}
+
+function linearLightRgb(color, intensity, fallbackColor) {
+  const rgb = hexToRgb01(color, fallbackColor);
+  const scale = Math.max(finiteNumber(intensity, 0), 0);
+  return rgb.map((channel) => srgbChannelToLinear(channel) * scale);
+}
+
+function lightDirectionFromPosition(position, fallbackPosition) {
+  const source = position && typeof position === "object" ? position : fallbackPosition;
+  const x = finiteNumber(source?.x, fallbackPosition.x);
+  const y = finiteNumber(source?.y, fallbackPosition.y);
+  const z = finiteNumber(source?.z, fallbackPosition.z);
+  const length = Math.hypot(x, y, z);
+  return length > 1e-9
+    ? [x / length, y / length, z / length]
+    : lightDirectionFromPosition(fallbackPosition, { x: 0, y: 0, z: 1 });
+}
+
+function implicitFloorFadeRadius(bounds) {
+  const size = [
+    bounds.max[0] - bounds.min[0],
+    bounds.max[1] - bounds.min[1],
+    bounds.max[2] - bounds.min[2],
+  ];
+  return Math.max(Math.hypot(size[0], size[1], size[2]) * 1.2, 1e-3);
+}
+
+// Declared model bounds are often padded well past the surface, which would
+// hang the stage-floor shadow in mid-air. Sample the SDF for tight bounds and
+// cache per material; re-estimate only when declared bounds move materially.
+function implicitFloorBoundsForModel(normalized, userData = null) {
+  const boundsKey = `${normalized.bounds.min.join(",")}|${normalized.bounds.max.join(",")}`;
+  if (userData?.implicitFloorBounds) {
+    if (userData.implicitFloorBoundsKey === boundsKey) {
+      return userData.implicitFloorBounds;
+    }
+    const previous = userData.implicitFloorDeclaredBounds;
+    if (previous) {
+      const current = [...normalized.bounds.min, ...normalized.bounds.max];
+      const radius = Math.max(finiteNumber(normalized.radius, 1), 1e-6);
+      let maxDelta = 0;
+      for (let index = 0; index < 6; index += 1) {
+        maxDelta = Math.max(maxDelta, Math.abs(finiteNumber(previous[index], 0) - finiteNumber(current[index], 0)));
+      }
+      if (maxDelta < radius * 0.05) {
+        return userData.implicitFloorBounds;
+      }
+    }
+  }
+  let floorBounds = normalized.bounds;
+  try {
+    floorBounds = estimateImplicitCadFrameBounds(normalized) || normalized.bounds;
+  } catch {
+    floorBounds = normalized.bounds;
+  }
+  if (userData) {
+    userData.implicitFloorBounds = floorBounds;
+    userData.implicitFloorBoundsKey = boundsKey;
+    userData.implicitFloorDeclaredBounds = [...normalized.bounds.min, ...normalized.bounds.max];
+  }
+  return floorBounds;
 }
 
 function vecUniformValue(THREE, type, value = []) {
@@ -596,6 +678,22 @@ uniform float uStepBudget;
 uniform float uShadowStrength;
 uniform float uAmbientOcclusionStrength;
 uniform float uRimStrength;
+uniform float uExposure;
+uniform vec3 uHemiSky;
+uniform vec3 uHemiGround;
+uniform vec3 uAmbientLight;
+uniform vec3 uKeyColor;
+uniform vec3 uKeyDir;
+uniform vec3 uFillColor;
+uniform vec3 uFillDir;
+uniform vec3 uBounceColor;
+uniform vec3 uBounceDir;
+uniform vec3 uRimColor;
+uniform float uFloorEnabled;
+uniform float uFloorShadowOpacity;
+uniform float uFloorZ;
+uniform vec2 uFloorCenter;
+uniform float uFloorFadeRadius;
 ${customUniformDeclarations}
 varying vec2 vUv;
 
@@ -1130,6 +1228,88 @@ float implicit_soft_shadow(vec3 origin, vec3 direction, float maxDistance) {
   return clamp(shadow, 0.2, 1.0);
 }
 
+vec3 implicit_srgb_to_linear(vec3 c) {
+  c = clamp(c, vec3(0.0), vec3(1.0));
+  vec3 low = c / 12.92;
+  vec3 high = pow((c + 0.055) / 1.055, vec3(2.4));
+  return mix(low, high, step(vec3(0.04045), c));
+}
+
+vec3 implicit_linear_to_srgb(vec3 c) {
+  c = clamp(c, vec3(0.0), vec3(1.0));
+  vec3 low = c * 12.92;
+  vec3 high = 1.055 * pow(c, vec3(1.0 / 2.4)) - 0.055;
+  return mix(low, high, step(vec3(0.0031308), c));
+}
+
+// THREE.js ACESFilmicToneMapping port so implicit shading matches the mesh
+// viewer's renderer output transform.
+vec3 implicit_rrt_odt_fit(vec3 v) {
+  vec3 a = v * (v + 0.0245786) - 0.000090537;
+  vec3 b = v * (0.983729 * v + 0.4329510) + 0.238081;
+  return a / b;
+}
+
+vec3 implicit_aces_tone_map(vec3 color) {
+  const mat3 acesInput = mat3(
+    vec3(0.59719, 0.07600, 0.02840),
+    vec3(0.35458, 0.90834, 0.13383),
+    vec3(0.04823, 0.01566, 0.83777)
+  );
+  const mat3 acesOutput = mat3(
+    vec3(1.60475, -0.10208, -0.00327),
+    vec3(-0.53108, 1.10813, -0.07276),
+    vec3(-0.07367, -0.00605, 1.07602)
+  );
+  color *= 1.0 / 0.6;
+  color = acesInput * color;
+  color = implicit_rrt_odt_fit(color);
+  color = acesOutput * color;
+  return clamp(color, vec3(0.0), vec3(1.0));
+}
+
+// Sharper than implicit_soft_shadow so the stage shadow stays a tight contact
+// shadow like the mesh viewer's PCF shadow map instead of a broad blob.
+float implicit_floor_shadow(vec3 origin, vec3 direction, float maxDistance) {
+  float shadow = 1.0;
+  float t = uHitEpsilon * 8.0;
+  for (int shadowStep = 0; shadowStep < 32; shadowStep += 1) {
+    if (t >= maxDistance) {
+      break;
+    }
+    float h = implicit_scene_sdf(origin + direction * t);
+    if (h < uHitEpsilon) {
+      return 0.0;
+    }
+    shadow = min(shadow, 30.0 * h / t);
+    t += clamp(h, uHitEpsilon * 3.0, maxDistance * 0.05);
+  }
+  return clamp(shadow, 0.0, 1.0);
+}
+
+// Stage-floor shadow matte for rays that miss the model, matching the mesh
+// viewer's shadow-catcher plane under the part.
+vec3 implicit_floor_shadowed_background(vec3 backgroundColor, vec3 rayOrigin, vec3 rayDirection) {
+  float shadowStrength = clamp(uShadowStrength, 0.0, 1.0);
+  if (uFloorEnabled < 0.5 || shadowStrength < 0.001 || rayDirection.z > -1.0e-5) {
+    return backgroundColor;
+  }
+  float tFloor = (uFloorZ - rayOrigin.z) / rayDirection.z;
+  if (tFloor <= 0.0) {
+    return backgroundColor;
+  }
+  vec3 floorPoint = rayOrigin + rayDirection * tFloor;
+  float fade = 1.0 - smoothstep(uFloorFadeRadius * 0.5, uFloorFadeRadius, length(floorPoint.xy - uFloorCenter));
+  if (fade < 0.002) {
+    return backgroundColor;
+  }
+  vec3 shadowOrigin = vec3(floorPoint.xy, uFloorZ + max(uHitEpsilon * 6.0, uFloorFadeRadius * 0.0001));
+  float lit = implicit_floor_shadow(shadowOrigin, uKeyDir, uFloorFadeRadius * 1.5);
+  float occlusion = clamp(1.0 - lit, 0.0, 1.0);
+  float strength = occlusion * fade * clamp(uFloorShadowOpacity, 0.0, 1.0) * shadowStrength;
+  return backgroundColor * (1.0 - strength);
+}
+
 vec3 implicit_background_color(vec2 uv) {
   if (uBackgroundMode < 0.5) {
     return uBackgroundColor;
@@ -1160,7 +1340,7 @@ void main() {
   float t = max(boundsHit.x, 0.0);
   float tEnd = min(boundsHit.y, uMaxDistance);
   if (boundsHit.x > boundsHit.y || tEnd < 0.0) {
-    gl_FragColor = vec4(backgroundColor, uBackgroundAlpha);
+    gl_FragColor = vec4(implicit_floor_shadowed_background(backgroundColor, rayOrigin, rayDirection), uBackgroundAlpha);
     return;
   }
 
@@ -1187,7 +1367,7 @@ void main() {
   }
 
   if (!hit) {
-    gl_FragColor = vec4(backgroundColor, uBackgroundAlpha);
+    gl_FragColor = vec4(implicit_floor_shadowed_background(backgroundColor, rayOrigin, rayDirection), uBackgroundAlpha);
     return;
   }
 
@@ -1205,29 +1385,34 @@ void main() {
   p = rayOrigin + rayDirection * refineFar;
   vec3 normal = implicit_estimate_normal(p);
   vec3 viewDirection = normalize(rayOrigin - p);
-  vec3 lightDirection = normalize(vec3(-0.35, 0.68, 0.58) + viewDirection * 0.35);
-  float diffuse = clamp(dot(normal, lightDirection), 0.0, 1.0);
   float shadowStrength = clamp(uShadowStrength, 0.0, 1.0);
   float shadow = 1.0;
   if (shadowStrength > 0.001) {
     shadow = mix(
       1.0,
-      implicit_soft_shadow(p + normal * uHitEpsilon * 4.0, lightDirection, uMaxDistance * 0.55),
+      implicit_soft_shadow(p + normal * uHitEpsilon * 4.0, uKeyDir, uMaxDistance * 0.55),
       shadowStrength
     );
   }
-  float rim = pow(1.0 - clamp(dot(normal, viewDirection), 0.0, 1.0), 2.4);
   float ambientOcclusionStrength = clamp(uAmbientOcclusionStrength, 0.0, 1.0);
   float ao = 1.0;
   if (ambientOcclusionStrength > 0.001) {
     ao = mix(1.0, implicit_ambient_occlusion(p, normal), ambientOcclusionStrength);
   }
-  ao *= clamp(0.78 + 0.22 * normal.z, 0.52, 1.0);
   vec3 sourceColor = clamp(implicit_color(p, normal), vec3(0.0), vec3(1.0));
-  vec3 surfaceColor = mix(uSurfaceColor, sourceColor, clamp(uUseProceduralColor, 0.0, 1.0));
-  vec3 color = surfaceColor * (0.34 + diffuse * shadow * 0.7) * ao;
-  color += vec3(0.62, 0.78, 1.0) * rim * 0.16 * clamp(uRimStrength, 0.0, 1.0);
-  color = pow(color, vec3(1.0 / 2.2));
+  vec3 surfaceColor = implicit_srgb_to_linear(mix(uSurfaceColor, sourceColor, clamp(uUseProceduralColor, 0.0, 1.0)));
+  // Match the mesh viewer's light rig: hemisphere + ambient indirect terms,
+  // key/fill/bounce directional terms with a Lambert 1/pi factor, then the
+  // same ACES filmic tone mapping and sRGB encode THREE.js applies.
+  vec3 irradiance = (mix(uHemiGround, uHemiSky, normal.z * 0.5 + 0.5) + uAmbientLight) * ao;
+  irradiance += uKeyColor * clamp(dot(normal, uKeyDir), 0.0, 1.0) * shadow;
+  irradiance += uFillColor * clamp(dot(normal, uFillDir), 0.0, 1.0);
+  irradiance += uBounceColor * clamp(dot(normal, uBounceDir), 0.0, 1.0);
+  vec3 color = surfaceColor * irradiance * 0.3183098861837907;
+  float rim = pow(1.0 - clamp(dot(normal, viewDirection), 0.0, 1.0), 2.4);
+  color += uRimColor * rim * clamp(uRimStrength, 0.0, 1.0);
+  color = implicit_aces_tone_map(color * uExposure);
+  color = implicit_linear_to_srgb(color);
   gl_FragColor = vec4(color, 1.0);
 }
 `;
@@ -1260,7 +1445,9 @@ export function createImplicitCadMaterial(THREE, model) {
       { value: threeUniformValue(THREE, uniform) }
     ])
   );
-  return new THREE.ShaderMaterial({
+  const floorUserData = {};
+  const floorBounds = implicitFloorBoundsForModel(normalized, floorUserData);
+  const material = new THREE.ShaderMaterial({
     name: "ImplicitCadRaymarchMaterial",
     depthTest: false,
     depthWrite: false,
@@ -1289,11 +1476,32 @@ export function createImplicitCadMaterial(THREE, model) {
       uShadowStrength: { value: 1 },
       uAmbientOcclusionStrength: { value: 1 },
       uRimStrength: { value: 1 },
+      uExposure: { value: DEFAULT_LIGHTING_RIG.toneMappingExposure },
+      uHemiSky: { value: new THREE.Vector3(...linearLightRgb(DEFAULT_LIGHTING_RIG.hemisphere.skyColor, DEFAULT_LIGHTING_RIG.hemisphere.intensity, "#ffffff")) },
+      uHemiGround: { value: new THREE.Vector3(...linearLightRgb(DEFAULT_LIGHTING_RIG.hemisphere.groundColor, DEFAULT_LIGHTING_RIG.hemisphere.intensity, "#d6e2ee")) },
+      uAmbientLight: { value: new THREE.Vector3(...linearLightRgb(DEFAULT_LIGHTING_RIG.ambient.color, DEFAULT_LIGHTING_RIG.ambient.intensity, "#ffffff")) },
+      uKeyColor: { value: new THREE.Vector3(...linearLightRgb(DEFAULT_LIGHTING_RIG.directional.color, DEFAULT_LIGHTING_RIG.directional.intensity, "#ffffff")) },
+      uKeyDir: { value: new THREE.Vector3(...lightDirectionFromPosition(DEFAULT_LIGHTING_RIG.directional.position, DEFAULT_LIGHTING_RIG.directional.position)) },
+      uFillColor: { value: new THREE.Vector3(...linearLightRgb(DEFAULT_LIGHTING_RIG.spot.color, DEFAULT_LIGHTING_RIG.spot.intensity, "#f4fbff")) },
+      uFillDir: { value: new THREE.Vector3(...lightDirectionFromPosition(DEFAULT_LIGHTING_RIG.spot.position, DEFAULT_LIGHTING_RIG.spot.position)) },
+      uBounceColor: { value: new THREE.Vector3(...linearLightRgb(DEFAULT_LIGHTING_RIG.point.color, DEFAULT_LIGHTING_RIG.point.intensity, "#ffe2ba")) },
+      uBounceDir: { value: new THREE.Vector3(...lightDirectionFromPosition(DEFAULT_LIGHTING_RIG.point.position, DEFAULT_LIGHTING_RIG.point.position)) },
+      uRimColor: { value: new THREE.Vector3(...linearLightRgb(DEFAULT_LIGHTING_RIG.rimColor, DEFAULT_LIGHTING_RIG.rimIntensity, "#6db6e8")) },
+      uFloorEnabled: { value: 1 },
+      uFloorShadowOpacity: { value: DEFAULT_LIGHTING_RIG.floorShadowOpacity },
+      uFloorZ: { value: floorBounds.min[2] },
+      uFloorCenter: { value: new THREE.Vector2(
+        (floorBounds.min[0] + floorBounds.max[0]) / 2,
+        (floorBounds.min[1] + floorBounds.max[1]) / 2
+      ) },
+      uFloorFadeRadius: { value: implicitFloorFadeRadius(floorBounds) },
       ...customUniforms,
     },
     vertexShader: implicitCadVertexShader(),
     fragmentShader: implicitCadFragmentShader(normalized),
   });
+  Object.assign(material.userData, floorUserData);
+  return material;
 }
 
 export function updateImplicitCadModelUniforms(THREE, material, model) {
@@ -1310,6 +1518,15 @@ export function updateImplicitCadModelUniforms(THREE, material, model) {
   if (material.uniforms.uMaxDistance) {
     material.uniforms.uMaxDistance.value = normalized.maxDistance;
   }
+  if (material.uniforms.uFloorZ && material.uniforms.uFloorCenter && material.uniforms.uFloorFadeRadius) {
+    const floorBounds = implicitFloorBoundsForModel(normalized, material.userData);
+    material.uniforms.uFloorZ.value = floorBounds.min[2];
+    material.uniforms.uFloorCenter.value.set(
+      (floorBounds.min[0] + floorBounds.max[0]) / 2,
+      (floorBounds.min[1] + floorBounds.max[1]) / 2
+    );
+    material.uniforms.uFloorFadeRadius.value = implicitFloorFadeRadius(floorBounds);
+  }
   for (const [name, uniform] of Object.entries(normalized.uniforms || {})) {
     updateThreeUniformValue(THREE, material.uniforms[name], uniform);
   }
@@ -1325,6 +1542,75 @@ export function resolveImplicitCadAppearanceSettings({
   return resolveAppearanceSettings({ appearance: appearance || DEFAULT_APPEARANCE_ID }, {
     defaultThemeId: DEFAULT_APPEARANCE_ID
   });
+}
+
+function applyImplicitLightingUniforms(uniforms, normalizedTheme) {
+  const lighting = normalizedTheme?.lighting || {};
+  const rig = DEFAULT_LIGHTING_RIG;
+  if (uniforms.uExposure) {
+    uniforms.uExposure.value = Math.max(finiteNumber(lighting.toneMappingExposure, rig.toneMappingExposure), 0.05);
+  }
+  const hemisphere = lighting.hemisphere || rig.hemisphere;
+  const hemiIntensity = hemisphere.enabled === false ? 0 : finiteNumber(hemisphere.intensity, rig.hemisphere.intensity);
+  if (uniforms.uHemiSky) {
+    uniforms.uHemiSky.value.set(...linearLightRgb(hemisphere.skyColor, hemiIntensity, rig.hemisphere.skyColor));
+  }
+  if (uniforms.uHemiGround) {
+    uniforms.uHemiGround.value.set(...linearLightRgb(hemisphere.groundColor, hemiIntensity, rig.hemisphere.groundColor));
+  }
+  if (uniforms.uAmbientLight) {
+    const ambient = lighting.ambient || rig.ambient;
+    const ambientIntensity = ambient.enabled === false ? 0 : finiteNumber(ambient.intensity, rig.ambient.intensity);
+    const ambientRgb = linearLightRgb(ambient.color, ambientIntensity, rig.ambient.color);
+    // The mesh stage adds an environment map; fold its contribution into a
+    // white ambient term so overall brightness tracks the mesh viewer.
+    const environment = normalizedTheme?.environment || {};
+    const environmentAmbient = environment.enabled === false
+      ? 0
+      : Math.max(finiteNumber(environment.intensity, 0), 0) * rig.environmentAmbientScale;
+    uniforms.uAmbientLight.value.set(
+      ambientRgb[0] + environmentAmbient,
+      ambientRgb[1] + environmentAmbient,
+      ambientRgb[2] + environmentAmbient
+    );
+  }
+  const directional = lighting.directional || rig.directional;
+  if (uniforms.uKeyColor) {
+    const keyIntensity = directional.enabled === false ? 0 : finiteNumber(directional.intensity, rig.directional.intensity);
+    uniforms.uKeyColor.value.set(...linearLightRgb(directional.color, keyIntensity, rig.directional.color));
+  }
+  if (uniforms.uKeyDir) {
+    uniforms.uKeyDir.value.set(...lightDirectionFromPosition(directional.position, rig.directional.position));
+  }
+  const spot = lighting.spot || rig.spot;
+  if (uniforms.uFillColor) {
+    const spotIntensity = spot.enabled === false ? 0 : finiteNumber(spot.intensity, rig.spot.intensity);
+    uniforms.uFillColor.value.set(...linearLightRgb(spot.color, spotIntensity, rig.spot.color));
+  }
+  if (uniforms.uFillDir) {
+    uniforms.uFillDir.value.set(...lightDirectionFromPosition(spot.position, rig.spot.position));
+  }
+  const point = lighting.point || rig.point;
+  if (uniforms.uBounceColor) {
+    const pointIntensity = point.enabled === false ? 0 : finiteNumber(point.intensity, rig.point.intensity);
+    uniforms.uBounceColor.value.set(...linearLightRgb(point.color, pointIntensity, rig.point.color));
+  }
+  if (uniforms.uBounceDir) {
+    uniforms.uBounceDir.value.set(...lightDirectionFromPosition(point.position, rig.point.position));
+  }
+  if (uniforms.uRimColor) {
+    uniforms.uRimColor.value.set(...linearLightRgb(rig.rimColor, rig.rimIntensity, rig.rimColor));
+  }
+  const floor = normalizedTheme?.floor || {};
+  if (uniforms.uFloorEnabled) {
+    uniforms.uFloorEnabled.value = floor.mode === "none" ? 0 : 1;
+  }
+  if (uniforms.uFloorShadowOpacity) {
+    uniforms.uFloorShadowOpacity.value = Math.min(
+      Math.max(finiteNumber(floor.shadowOpacity, rig.floorShadowOpacity), 0),
+      1
+    );
+  }
 }
 
 export function updateImplicitCadAppearanceUniforms(THREE, material, model, {
@@ -1353,6 +1639,7 @@ export function updateImplicitCadAppearanceUniforms(THREE, material, model, {
     forceFill: materialSettings.overrideSourceColors === true
   });
   uniforms.uSurfaceColor.value.set(...colorToRgb01(surfaceColor));
+  applyImplicitLightingUniforms(uniforms, normalizedTheme);
 
   if (model?.background?.color) {
     const backgroundRgb = hexToRgb01(model.background.color, BASE_VIEWER_THEME.sceneBackground);

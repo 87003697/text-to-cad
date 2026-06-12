@@ -33,8 +33,10 @@ const WORLD_UP = Object.freeze([0, 0, 1]);
 const CAMERA_UP_PARALLEL_DOT_THRESHOLD = 0.9;
 const VIEW_PLANE_ACTIVE_DOT_THRESHOLD = 0.994;
 const VIEW_PLANE_TRANSITION_MS = 280;
-const DEFAULT_FOV_DEG = 42;
-const IMPLICIT_CAMERA_VERSION = 7;
+const DEFAULT_FOV_DEG = 48;
+const IMPLICIT_CAMERA_VERSION = 8;
+const AUTO_ZOOM_FRAME_MARGIN = 1.08;
+const AUTO_ZOOM_SPEED_MS = 400;
 const VIEW_PLANE_FACES = [
   { id: "z", title: "Jump to top view", direction: [0, 0, 1], up: [0, 1, 0] },
   { id: "zNeg", title: "Jump to bottom view", direction: [0, 0, -1], up: [0, 1, 0] },
@@ -417,15 +419,74 @@ function stepCameraTransition(runtime, timestamp) {
   const eased = easeInOutCubic(progress);
   runtime.camera.position.lerpVectors(transition.startPosition, transition.endPosition, eased);
   runtime.camera.up.lerpVectors(transition.startUp, transition.endUp, eased).normalize();
+  if (transition.endTarget) {
+    runtime.controls.target.lerpVectors(transition.startTarget, transition.endTarget, eased);
+  }
   runtime.camera.lookAt(runtime.controls.target);
   if (progress >= 1) {
     runtime.cameraTransition = null;
     runtime.controls.enableDamping = true;
     runtime.controls.dampingFactor = DEFAULT_DAMPING_FACTOR;
     runtime.scheduleIdleQuality?.();
+    runtime.emitPerspectiveChange?.();
     return false;
   }
   return true;
+}
+
+function applyCameraState(runtime, cameraState) {
+  runtime.controls.target.set(...cameraState.target);
+  runtime.camera.position.set(...cameraState.position);
+  runtime.camera.up.set(...cameraState.up);
+  runtime.camera.fov = cameraState.fov;
+  runtime.camera.zoom = cameraState.zoom;
+  runtime.updateCameraFraming?.();
+  runtime.camera.lookAt(runtime.controls.target);
+  runtime.controls.update();
+  runtime.emitPerspectiveChange?.();
+  runtime.requestRender?.();
+}
+
+function transitionCameraToState(runtime, cameraState, {
+  animate = true,
+  durationMs = AUTO_ZOOM_SPEED_MS
+} = {}) {
+  if (!runtime?.camera || !runtime?.controls || !cameraState) {
+    return false;
+  }
+  if (!animate || durationMs <= 0) {
+    applyCameraState(runtime, cameraState);
+    return true;
+  }
+  runtime.camera.fov = cameraState.fov;
+  runtime.camera.zoom = cameraState.zoom;
+  runtime.updateCameraFraming?.();
+  runtime.cameraTransition = {
+    startTime: performance.now(),
+    durationMs,
+    startPosition: runtime.camera.position.clone(),
+    endPosition: new THREE.Vector3(...cameraState.position),
+    startUp: runtime.camera.up.clone(),
+    endUp: new THREE.Vector3(...cameraState.up).normalize(),
+    startTarget: runtime.controls.target.clone(),
+    endTarget: new THREE.Vector3(...cameraState.target)
+  };
+  runtime.controls.enableDamping = false;
+  runtime.beginInteraction?.();
+  runtime.requestRender?.();
+  return true;
+}
+
+function autoZoomBoundsKey(model) {
+  const bounds = model?.bounds;
+  if (!Array.isArray(bounds?.min) || !Array.isArray(bounds?.max)) {
+    return "";
+  }
+  const radius = Math.max(finiteNumber(model?.radius, 1), 1e-6);
+  const quantum = Math.max(radius * 0.02, 1e-6);
+  return [...bounds.min, ...bounds.max]
+    .map((value) => Math.round(finiteNumber(value, 0) / quantum))
+    .join(",");
 }
 
 function canvasBlob(canvas, crop = null) {
@@ -531,14 +592,77 @@ const ImplicitCadViewer = forwardRef(function ImplicitCadViewer({
     }
   }, []);
 
+  const autoZoomStateRef = useRef({ attached: true, lastFitKey: "" });
+
+  const runAutoZoom = useCallback((reason = "state", {
+    animate = true,
+    force = false,
+    viewDirection = null,
+    viewUp = null,
+    durationMs = AUTO_ZOOM_SPEED_MS
+  } = {}) => {
+    const runtime = runtimeRef.current;
+    if (!runtime?.camera || !runtime?.controls) {
+      return false;
+    }
+    const state = autoZoomStateRef.current;
+    if (!force && state.attached === false) {
+      return false;
+    }
+    const activeModel = runtime.model || model;
+    if (!activeModel) {
+      return false;
+    }
+    const metrics = getViewportFrameMetrics(runtime, frameInsetsRef.current);
+    const offset = runtime.camera.position.clone().sub(runtime.controls.target);
+    const direction = viewDirection || (offset.lengthSq() > 1e-9 ? offset.toArray() : DEFAULT_VIEW_DIRECTION);
+    const cameraState = implicitCadCameraState(
+      activeModel,
+      { direction, up: viewUp || runtime.camera.up.toArray() },
+      {
+        width: metrics.framedWidth,
+        height: metrics.framedHeight,
+        zoom: 1,
+        frameMargin: AUTO_ZOOM_FRAME_MARGIN
+      }
+    );
+    state.attached = true;
+    state.lastFitKey = autoZoomBoundsKey(activeModel);
+    return transitionCameraToState(runtime, cameraState, { animate, durationMs });
+  }, [model]);
+  const runAutoZoomRef = useRef(null);
+  runAutoZoomRef.current = runAutoZoom;
+
+  const maybeAutoZoomForModel = useCallback((nextModel) => {
+    if (!nextModel || dynamicRenderActiveRef.current) {
+      return;
+    }
+    const state = autoZoomStateRef.current;
+    if (state.attached === false) {
+      return;
+    }
+    const key = autoZoomBoundsKey(nextModel);
+    if (!key || state.lastFitKey === key) {
+      return;
+    }
+    runAutoZoomRef.current?.("model");
+  }, []);
+
   const activateViewPlaneFace = useCallback((faceId) => {
     const face = VIEW_PLANE_FACE_BY_ID[faceId];
     if (!face || !runtimeRef.current) {
       return false;
     }
     setActiveViewPlaneFace(face.id);
+    if (autoZoomStateRef.current.attached !== false) {
+      return runAutoZoom("viewport", {
+        viewDirection: face.direction,
+        viewUp: face.up,
+        durationMs: VIEW_PLANE_TRANSITION_MS
+      });
+    }
     return transitionCameraToViewPreset(runtimeRef.current, face);
-  }, []);
+  }, [runAutoZoom]);
 
   const activateDefaultViewPlane = useCallback(() => {
     const runtime = runtimeRef.current;
@@ -546,11 +670,12 @@ const ImplicitCadViewer = forwardRef(function ImplicitCadViewer({
       return false;
     }
     setActiveViewPlaneFace("");
-    return transitionCameraToViewPreset(runtime, {
-      direction: DEFAULT_VIEW_DIRECTION,
-      up: WORLD_UP
+    return runAutoZoom("reset", {
+      force: true,
+      viewDirection: DEFAULT_VIEW_DIRECTION,
+      viewUp: WORLD_UP
     });
-  }, []);
+  }, [runAutoZoom]);
 
   useImperativeHandle(ref, () => ({
     async captureScreenshot({ filename = "implicit-cad-screenshot.png", mode = "download" } = {}) {
@@ -614,6 +739,7 @@ const ImplicitCadViewer = forwardRef(function ImplicitCadViewer({
       runtime.updateCameraFraming?.();
       updateImplicitThemeUniforms(runtime, model, themeSettings);
       updateImplicitGraphicsUniforms(runtime, model);
+      maybeAutoZoomForModel(model);
       runtime.requestRender?.();
       return;
     }
@@ -641,9 +767,10 @@ const ImplicitCadViewer = forwardRef(function ImplicitCadViewer({
     updateImplicitThemeUniforms(runtime, model, themeSettings);
     updateImplicitGraphicsUniforms(runtime, model);
     runtime.updateCameraFraming?.();
+    maybeAutoZoomForModel(model);
     runtime.requestRender?.();
     previousShaderScene?.dispose?.();
-  }, [model, normalizedGraphicsSettings, onViewerAlertChange, themeSettings]);
+  }, [maybeAutoZoomForModel, model, normalizedGraphicsSettings, onViewerAlertChange, themeSettings]);
 
   useEffect(() => {
     updateImplicitThemeUniforms(runtimeRef.current, model, themeSettings);
@@ -749,7 +876,8 @@ const ImplicitCadViewer = forwardRef(function ImplicitCadViewer({
       beginInteraction,
       scheduleIdleQuality,
       setPixelRatioCap,
-      updateCameraFraming
+      updateCameraFraming,
+      emitPerspectiveChange
     };
     runtimeRef.current = runtime;
 
@@ -771,32 +899,6 @@ const ImplicitCadViewer = forwardRef(function ImplicitCadViewer({
       applyCameraFrameInsets(runtime, frameInsetsRef.current, { updateProjection: false });
       runtime.controls.minDistance = Math.max(activeModel.radius / 2200, 0.02);
       runtime.controls.maxDistance = Math.max(activeModel.radius * 140, 50);
-    }
-
-    function frameDefaultCamera() {
-      if (!runtime.camera || !runtime.controls) {
-        return;
-      }
-      updateCameraFraming();
-      const activeModel = runtime.model || model;
-      const metrics = getViewportFrameMetrics(runtime, frameInsetsRef.current);
-      const cameraState = implicitCadCameraState(
-        activeModel,
-        { direction: DEFAULT_VIEW_DIRECTION, up: WORLD_UP },
-        {
-          width: metrics.framedWidth,
-          height: metrics.framedHeight,
-          zoom: 1
-        }
-      );
-      runtime.controls.target.set(...cameraState.target);
-      runtime.camera.position.set(...cameraState.position);
-      runtime.camera.up.set(...cameraState.up);
-      runtime.camera.fov = cameraState.fov;
-      runtime.camera.zoom = cameraState.zoom;
-      updateCameraFraming();
-      runtime.camera.lookAt(runtime.controls.target);
-      runtime.controls.update();
     }
 
     function requestRender(options = {}) {
@@ -872,11 +974,15 @@ const ImplicitCadViewer = forwardRef(function ImplicitCadViewer({
       }
       setPixelRatioCap(graphicsSettingsRef.current.resolutionScale);
       updateCameraFraming();
+      if (autoZoomStateRef.current.attached !== false) {
+        runAutoZoomRef.current?.("resize", { animate: false });
+      }
       requestRender();
     }
 
     const handleControlsStart = () => {
       runtime.cameraTransition = null;
+      autoZoomStateRef.current.attached = false;
       beginInteraction();
     };
     const handleControlsChange = () => {
@@ -888,6 +994,7 @@ const ImplicitCadViewer = forwardRef(function ImplicitCadViewer({
     };
     const handleWheel = (event) => {
       runtime.cameraTransition = null;
+      autoZoomStateRef.current.attached = false;
       controls.enableDamping = false;
       controls.zoomSpeed = getWheelZoomSpeed(
         isTrackpadLikeWheelEvent(event) ? TRACKPAD_PINCH_ZOOM_SPEED : ACCELERATED_WHEEL_ZOOM_SPEED
@@ -919,6 +1026,7 @@ const ImplicitCadViewer = forwardRef(function ImplicitCadViewer({
       keyboardOrbitState.directionCounts[command.direction] += 1;
       keyboardOrbitState.lastFrameTime = 0;
       runtime.cameraTransition = null;
+      autoZoomStateRef.current.attached = false;
       beginInteraction();
       applyOrbitDelta(
         runtime,
@@ -978,10 +1086,14 @@ const ImplicitCadViewer = forwardRef(function ImplicitCadViewer({
 
     updateImplicitThemeUniforms(runtime, model, themeSettings);
     updateImplicitGraphicsUniforms(runtime, model);
-    frameDefaultCamera();
+    updateCameraFraming();
     const initialPerspective = perspectiveRef?.current || perspective;
-    if (!applyPerspectiveSnapshot(runtime, initialPerspective, modelKey)) {
-      emitPerspectiveChange();
+    if (applyPerspectiveSnapshot(runtime, initialPerspective, modelKey)) {
+      autoZoomStateRef.current.attached = false;
+      autoZoomStateRef.current.lastFitKey = autoZoomBoundsKey(model);
+    } else {
+      autoZoomStateRef.current.attached = true;
+      runAutoZoomRef.current?.("mount", { animate: false, force: true });
     }
     if (controls) {
       controls.autoRotate = !!previewMode;
