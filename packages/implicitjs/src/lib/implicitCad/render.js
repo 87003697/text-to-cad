@@ -177,7 +177,58 @@ function isInsideForHeader(source, index) {
   return openParen >= 0 && openParen < index && closeParen >= index;
 }
 
-function shouldPromoteIntegerLiteral(source, start, end) {
+function isExponentSuffixDigits(source, start) {
+  // Adjacent characters only: a signed exponent never contains whitespace, so
+  // "1.0e-6" matches here while "value - 6" and "foo_e-6" do not.
+  const sign = source[start - 1];
+  if (sign !== "+" && sign !== "-") {
+    return false;
+  }
+  const marker = source[start - 2];
+  if (marker !== "e" && marker !== "E") {
+    return false;
+  }
+  return /[0-9.]/.test(source[start - 3] || "");
+}
+
+const INT_SCALAR_DECLARATION_PATTERN = /\b(?:int|uint)\s+([A-Za-z_]\w*)/g;
+
+function collectIntScalarIdentifiers(source) {
+  const identifiers = new Set();
+  let match;
+  INT_SCALAR_DECLARATION_PATTERN.lastIndex = 0;
+  while ((match = INT_SCALAR_DECLARATION_PATTERN.exec(source)) !== null) {
+    identifiers.add(match[1]);
+  }
+  return identifiers;
+}
+
+function comparisonOperandBefore(source, start) {
+  // Only operators ending in "=" can reach a literal here: a bare "<" or ">"
+  // before the literal is already rejected by the previous-character guard.
+  let cursor = start - 1;
+  while (cursor >= 0 && /\s/.test(source[cursor])) {
+    cursor -= 1;
+  }
+  if (source[cursor] !== "=") {
+    return "";
+  }
+  const lead = source[cursor - 1];
+  if (lead !== "=" && lead !== "!" && lead !== "<" && lead !== ">") {
+    return "";
+  }
+  let operandEnd = cursor - 2;
+  while (operandEnd >= 0 && /\s/.test(source[operandEnd])) {
+    operandEnd -= 1;
+  }
+  let operandStart = operandEnd;
+  while (operandStart >= 0 && isIdentifierCharacter(source[operandStart])) {
+    operandStart -= 1;
+  }
+  return source.slice(operandStart + 1, operandEnd + 1);
+}
+
+function shouldPromoteIntegerLiteral(source, start, end, intIdentifiers) {
   const previous = previousSignificantCharacter(source, start);
   const next = nextSignificantCharacter(source, end);
   if (previous === "." || next === "." || isIdentifierCharacter(previous) || isIdentifierCharacter(next)) {
@@ -192,6 +243,13 @@ function shouldPromoteIntegerLiteral(source, start, end) {
   if (next && !/[,);}\]+\-*/?:]/.test(next)) {
     return false;
   }
+  if (isExponentSuffixDigits(source, start)) {
+    return false;
+  }
+  const comparedOperand = comparisonOperandBefore(source, start);
+  if (comparedOperand && intIdentifiers?.has(comparedOperand)) {
+    return false;
+  }
   if (isInsideForHeader(source, start)) {
     return false;
   }
@@ -201,6 +259,7 @@ function shouldPromoteIntegerLiteral(source, start, end) {
 
 export function normalizeImplicitCadGlslFloatLiterals(source) {
   const text = String(source || "");
+  const intIdentifiers = collectIntScalarIdentifiers(text);
   let result = "";
   let index = 0;
   while (index < text.length) {
@@ -221,7 +280,7 @@ export function normalizeImplicitCadGlslFloatLiterals(source) {
     if (match) {
       const token = match[0];
       const end = index + token.length;
-      result += shouldPromoteIntegerLiteral(text, index, end) ? `${token}.0` : token;
+      result += shouldPromoteIntegerLiteral(text, index, end, intIdentifiers) ? `${token}.0` : token;
       index = end;
       continue;
     }

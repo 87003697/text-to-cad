@@ -36,6 +36,47 @@ test("keeps integer control-flow and array-index literals intact", () => {
   );
 });
 
+test("keeps signed scientific-notation exponents intact", () => {
+  assert.equal(
+    normalizeImplicitCadGlslFloatLiterals("max(k1, 1.0e-6)"),
+    "max(k1, 1.0e-6)"
+  );
+  assert.equal(
+    normalizeImplicitCadGlslFloatLiterals("float tiny = 2e-4; float huge = 1.5E+8;"),
+    "float tiny = 2e-4; float huge = 1.5E+8;"
+  );
+  // A minus before a literal is still ordinary subtraction.
+  assert.equal(
+    normalizeImplicitCadGlslFloatLiterals("value - 6"),
+    "value - 6.0"
+  );
+  assert.equal(
+    normalizeImplicitCadGlslFloatLiterals("value-6"),
+    "value-6.0"
+  );
+});
+
+test("keeps comparisons against declared int identifiers intact", () => {
+  assert.equal(
+    normalizeImplicitCadGlslFloatLiterals("for (int i = 0; i < 2; i++) { float s = (i == 0) ? 1.0 : -1.0; }"),
+    "for (int i = 0; i < 2; i++) { float s = (i == 0) ? 1.0 : -1.0; }"
+  );
+  assert.equal(
+    normalizeImplicitCadGlslFloatLiterals("int counter = 3; float v = (counter != 4) ? 0.5 : (counter <= 2) ? 1.5 : 2.5;"),
+    "int counter = 3; float v = (counter != 4) ? 0.5 : (counter <= 2) ? 1.5 : 2.5;"
+  );
+  // Comparisons against float identifiers still promote.
+  assert.equal(
+    normalizeImplicitCadGlslFloatLiterals("float x = 1.5; float y = (x == 0) ? 2.0 : 3.0;"),
+    "float x = 1.5; float y = (x == 0.0) ? 2.0 : 3.0;"
+  );
+  // Plain assignment from an equals sign still promotes.
+  assert.equal(
+    normalizeImplicitCadGlslFloatLiterals("float z = 0;"),
+    "float z = 0.0;"
+  );
+});
+
 test("fragment shader accepts ordinary JS integer template output", () => {
   const shader = implicitCadFragmentShader({
     glslSource: `
