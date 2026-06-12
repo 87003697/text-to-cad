@@ -213,12 +213,20 @@ function addScaled(pose, delta, scale) {
 // capsule-verified collision-free (the fist only neighbors tripod/relaxed;
 // blending it with pinch/point/ok would sweep the thumb through the index).
 const TOUR_KEYS = ["relaxed", "precision_pinch", "ok_sign", "point", "tripod_pinch", "fist"];
+// The tour opens with one finger-ripple wave (starts and ends exactly on
+// the relaxed pose, so it splices seamlessly before the first keyframe
+// blend) and spends the rest of the cycle on the pose keyframes.
+const TOUR_RIPPLE_FRAC = 0.22;
 
 function tourPose(phase) {
   const p = ((finite(phase, 0) % 1) + 1) % 1;
+  if (p < TOUR_RIPPLE_FRAC) {
+    return ripplePose(p / TOUR_RIPPLE_FRAC, 1);
+  }
+  const q = (p - TOUR_RIPPLE_FRAC) / (1 - TOUR_RIPPLE_FRAC);
   const segCount = TOUR_KEYS.length;
-  const seg = Math.min(Math.floor(p * segCount), segCount - 1);
-  const u = (p * segCount) - seg;
+  const seg = Math.min(Math.floor(q * segCount), segCount - 1);
+  const u = (q * segCount) - seg;
   const from = POSES[TOUR_KEYS[seg]];
   const to = POSES[TOUR_KEYS[(seg + 1) % segCount]];
   return blendPoses(from, to, u / 0.65);
@@ -251,13 +259,16 @@ function pinchPose(phase) {
 }
 
 // Traveling curl wave: each digit pulses inside its own window (raised
-// cosine, zero at both ends), thumb last.
+// cosine, zero at both ends), thumb last. The windows are wide relative to
+// the digit spacing, so each digit starts curling while its neighbor is
+// still mid-pulse and the wave reads as one continuous motion.
 const RIPPLE_ORDER = ["index", "middle", "ring", "pinky", "thumb"];
 const RIPPLE_CURL = { mcp: 30, pip: 40, dip: 22, thumbFlex: 12, thumbMp: 30, thumbIp: 30 };
+const RIPPLE_WINDOW = 0.45;
 
 function ripplePose(phase, grip) {
   const p = ((finite(phase, 0) % 1) + 1) % 1;
-  const window = 0.32;
+  const window = RIPPLE_WINDOW;
   const step = (1 - window) / (RIPPLE_ORDER.length - 1);
   const pose = {};
   for (const joint of JOINTS) {
@@ -427,8 +438,8 @@ export default {
     animations: {
       poseTour: {
         label: "Pose tour",
-        description: "Cycles relaxed -> precision pinch -> OK sign -> point -> tripod pinch -> fist and back, dwelling on each pose.",
-        duration: 9.0,
+        description: "Opens with a finger ripple wave, then cycles relaxed -> precision pinch -> OK sign -> point -> tripod pinch -> fist and back, dwelling on each pose.",
+        duration: 11.5,
         loop: true,
         update({ cycle, set }) {
           set("mode", "tour");

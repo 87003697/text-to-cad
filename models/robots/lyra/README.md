@@ -46,11 +46,12 @@ interpenetrates.
   order in `lyra.py` (palm, then index/middle/ring/pinky
   proximal/middle/distal, then thumb base/metacarpal/proximal/distal).
 - `.lyra.step.js` — CAD Viewer animation sidecar driving per-frame chain FK
-  deltas against the baked pose. Animations: `poseTour` (relaxed ->
-  precision pinch -> OK sign -> point -> tripod pinch -> fist; key order
-  chosen so every blend is collision-free), `graspLoop` (power grasp),
-  `pinchLoop` (pinch with pad double-tap), `rippleLoop` (traveling finger
-  curl wave), `countLoop` (count to five from a fist; the thumb lifts to a
+  deltas against the baked pose. Animations: `poseTour` (a finger-ripple
+  wave, then relaxed -> precision pinch -> OK sign -> point -> tripod
+  pinch -> fist; key order chosen so every blend is collision-free),
+  `graspLoop` (power grasp), `pinchLoop` (pinch with pad double-tap),
+  `rippleLoop` (traveling finger curl wave with overlapping per-digit
+  pulses), `countLoop` (count to five from a fist; the thumb lifts to a
   hover before any finger extends).
   Controls: `phase`, `mode`, `pose` (named SRDF pose hold), `grip`.
 - `lyra.urdf` — generated URDF (derived artifact): a frame-only

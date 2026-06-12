@@ -130,8 +130,34 @@ def path_worst(pose_a, pose_b, steps: int = 120) -> tuple[float, str, str, float
     return worst
 
 
-# Animation key orders mirrored from .lyra.step.js.
+# Animation key orders and ripple-wave constants mirrored from .lyra.step.js.
 TOUR_KEYS = ("relaxed", "precision_pinch", "ok_sign", "point", "tripod_pinch", "fist")
+RIPPLE_ORDER = ("index", "middle", "ring", "pinky", "thumb")
+RIPPLE_CURL = {"mcp": 30.0, "pip": 40.0, "dip": 22.0, "thumbFlex": 12.0, "thumbMp": 30.0, "thumbIp": 30.0}
+RIPPLE_WINDOW = 0.45
+
+
+def ripple_pose(phase: float, grip: float = 1.0) -> dict[str, float]:
+    """Mirror of the sidecar ripplePose: overlapping per-digit curl pulses
+    on top of the baked relaxed pose (the tour's opening wave)."""
+    p = phase % 1.0
+    step = (1.0 - RIPPLE_WINDOW) / (len(RIPPLE_ORDER) - 1)
+    pose = dict(chain.named_poses_deg()[chain.BAKED_POSE_NAME])
+    for i, digit in enumerate(RIPPLE_ORDER):
+        u = (p - i * step) / RIPPLE_WINDOW
+        if u <= 0.0 or u >= 1.0:
+            continue
+        lobe = math.sin(math.pi * u)
+        amp = lobe * lobe * grip
+        if digit == "thumb":
+            pose["thumb_cmc_flex"] += RIPPLE_CURL["thumbFlex"] * amp
+            pose["thumb_mp"] += RIPPLE_CURL["thumbMp"] * amp
+            pose["thumb_ip"] += RIPPLE_CURL["thumbIp"] * amp
+        else:
+            pose[f"{digit}_mcp"] += RIPPLE_CURL["mcp"] * amp
+            pose[f"{digit}_pip"] += RIPPLE_CURL["pip"] * amp
+            pose[f"{digit}_dip"] += RIPPLE_CURL["dip"] * amp
+    return pose
 COUNT_THUMB_FIST = (92.0, 13.0, 58.0, 74.0)
 COUNT_THUMB_HOVER = (50.0, 30.0, 25.0, 20.0)
 COUNT_THUMB_OPEN = (20.0, 10.0, 4.0, 4.0)
@@ -201,6 +227,16 @@ def run_checks(verbose: bool = True) -> list[str]:
             print(f"loop {a} <-> {b}: worst {d:7.2f} mm at u={u:.2f}")
         if d < 0:
             failures.append(f"loop {a}<->{b}: {d:.2f} mm overlap ({ca}|{cb})")
+    worst = (math.inf, "", "", 0.0)
+    for i in range(241):
+        u = i / 240.0
+        d, ca, cb = worst_clearance(ripple_pose(u))
+        if d < worst[0]:
+            worst = (d, ca, cb, u)
+    if verbose:
+        print(f"ripple wave: worst {worst[0]:7.2f} mm at u={worst[3]:.2f}")
+    if worst[0] < 0:
+        failures.append(f"ripple wave: {worst[0]:.2f} mm overlap at u={worst[3]:.2f} ({worst[1]}|{worst[2]})")
     return failures
 
 
