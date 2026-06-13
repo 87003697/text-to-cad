@@ -114,8 +114,8 @@ const DISPLAY_MODE_OPTIONS = [
 ];
 
 const PROJECTION_MODE_OPTIONS = [
-  { value: CAMERA_PROJECTION.PERSPECTIVE, label: "Perspective", title: "Depth projection with vanishing lines" },
-  { value: CAMERA_PROJECTION.ORTHOGRAPHIC, label: "Orthographic", title: "Parallel projection for CAD inspection" }
+  { value: CAMERA_PROJECTION.PERSPECTIVE, label: "Perspective", title: "Vanishing-point camera view" },
+  { value: CAMERA_PROJECTION.ORTHOGRAPHIC, label: "Orthographic", title: "Parallel CAD view" }
 ];
 
 const FLOOR_MODE_OPTIONS = [

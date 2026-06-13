@@ -8506,6 +8506,7 @@ export default function CadWorkspace({
           viewerPerspective={viewerPerspective}
           viewerProjection={viewerProjection}
           viewerPerspectiveRef={activePerspectiveRef}
+          onViewerProjectionChange={updateViewerProjection}
           themeSettings={resolvedThemeSettings}
           displaySettings={renderDisplaySettings}
           previewMode={previewMode}

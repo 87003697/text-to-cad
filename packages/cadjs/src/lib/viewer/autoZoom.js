@@ -64,6 +64,45 @@ function normalizedVector(THREE, value) {
   return vector.lengthSq() > EPSILON ? vector.normalize() : null;
 }
 
+function boundsCorners(THREE, bounds, {
+  offset = null
+} = {}) {
+  if (!THREE?.Vector3 || !isNumericBounds(bounds)) {
+    return [];
+  }
+  const [ox, oy, oz] = vectorComponents(offset);
+  const min = bounds.min.slice(0, 3).map((value) => toNumber(value));
+  const max = bounds.max.slice(0, 3).map((value) => toNumber(value));
+  const corners = [];
+  for (const x of [min[0], max[0]]) {
+    for (const y of [min[1], max[1]]) {
+      for (const z of [min[2], max[2]]) {
+        corners.push(new THREE.Vector3(x + ox, y + oy, z + oz));
+      }
+    }
+  }
+  return corners;
+}
+
+function viewFrameAxes(THREE, directionValue, upValue) {
+  const direction = normalizedVector(THREE, directionValue) || new THREE.Vector3(1, -1, 0.8).normalize();
+  const requestedUp = normalizedVector(THREE, upValue) || new THREE.Vector3(0, 0, 1);
+  let right = new THREE.Vector3().crossVectors(direction, requestedUp);
+  if (right.lengthSq() <= EPSILON) {
+    const fallbackUp = Math.abs(direction.z) > 0.9
+      ? new THREE.Vector3(0, 1, 0)
+      : new THREE.Vector3(0, 0, 1);
+    right = new THREE.Vector3().crossVectors(direction, fallbackUp);
+  }
+  if (right.lengthSq() <= EPSILON) {
+    right = new THREE.Vector3(1, 0, 0);
+  } else {
+    right.normalize();
+  }
+  const up = new THREE.Vector3().crossVectors(right, direction).normalize();
+  return { direction, right, up };
+}
+
 export function mergeBoundsList(boundsList = []) {
   const min = [Infinity, Infinity, Infinity];
   const max = [-Infinity, -Infinity, -Infinity];
@@ -167,6 +206,33 @@ export function fitDistanceForRadius(camera, radius, {
   return safeRadius / Math.sin(limitingHalfFov);
 }
 
+export function orthographicHalfHeightForBounds(THREE, bounds, {
+  direction = null,
+  up = null,
+  modelOffset = null,
+  aspect = 1,
+  minRadius = 0,
+  padding = DEFAULT_AUTO_ZOOM_PADDING
+} = {}) {
+  const corners = boundsCorners(THREE, bounds, { offset: modelOffset });
+  if (!corners.length) {
+    return null;
+  }
+  const axes = viewFrameAxes(THREE, direction, up);
+  const xs = corners.map((corner) => corner.dot(axes.right));
+  const ys = corners.map((corner) => corner.dot(axes.up));
+  const spanX = Math.max(Math.max(...xs) - Math.min(...xs), 0);
+  const spanY = Math.max(Math.max(...ys) - Math.min(...ys), 0);
+  const safeAspect = Math.max(toNumber(aspect, 1), EPSILON);
+  const paddingScale = Math.max(toNumber(padding, DEFAULT_AUTO_ZOOM_PADDING), EPSILON);
+  const minimumHalfHeight = Math.max(toNumber(minRadius), EPSILON);
+  return Math.max(
+    spanY / 2,
+    spanX / (2 * safeAspect),
+    minimumHalfHeight
+  ) * paddingScale;
+}
+
 export function autoZoomFrameForBounds(THREE, {
   camera,
   controls,
@@ -187,16 +253,17 @@ export function autoZoomFrameForBounds(THREE, {
     return null;
   }
   const offset = camera.position.clone().sub(controls.target);
-  const direction = normalizedVector(THREE, viewDirection) || (offset.lengthSq() > EPSILON
+  const rawDirection = normalizedVector(THREE, viewDirection) || (offset.lengthSq() > EPSILON
     ? offset.normalize()
     : new THREE.Vector3(...defaultDirection).normalize());
-  const up = normalizedVector(THREE, viewUp) || camera.up.clone();
+  const rawUp = normalizedVector(THREE, viewUp) || camera.up.clone();
+  const { direction, up } = viewFrameAxes(THREE, rawDirection, rawUp);
   const distance = fitDistanceForRadius(camera, frame.radius, {
     aspect: frameAspect,
     minRadius,
     padding
   });
-  const position = frame.center.clone().add(direction.multiplyScalar(distance));
+  const position = frame.center.clone().add(direction.clone().multiplyScalar(distance));
   return {
     center: frame.center,
     radius: frame.radius,
@@ -204,6 +271,14 @@ export function autoZoomFrameForBounds(THREE, {
     position,
     target: frame.center.clone(),
     up,
-    zoom: camera.zoom
+    zoom: camera.zoom,
+    orthographicHalfHeight: orthographicHalfHeightForBounds(THREE, bounds, {
+      direction,
+      up,
+      modelOffset,
+      aspect: frameAspect,
+      minRadius,
+      padding
+    })
   };
 }

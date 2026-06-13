@@ -8,6 +8,7 @@ import {
   fitDistanceForRadius,
   focusedDisplayRecordsBounds,
   mergeBoundsList,
+  orthographicHalfHeightForBounds,
   shiftedBounds
 } from "./autoZoom.js";
 
@@ -127,4 +128,31 @@ test("auto zoom frame can reset to a requested direction and up vector", () => {
   assert.ok(Math.abs(frame.position.y) < 1e-8);
   assert.ok(Math.abs(frame.position.z) < 1e-8);
   assert.deepEqual(frame.up.toArray(), [0, 1, 0]);
+});
+
+test("orthographic fit uses projected bounds instead of perspective distance", () => {
+  const bounds = { min: [-10, -1, -2], max: [10, 1, 2] };
+  const halfHeight = orthographicHalfHeightForBounds(THREE, bounds, {
+    direction: [0, -1, 0],
+    up: [0, 0, 1],
+    aspect: 2,
+    padding: 1.1
+  });
+
+  assert.ok(Math.abs(halfHeight - 5.5) < 1e-8);
+
+  const camera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0.1, 1000);
+  camera.position.set(0, -20, 0);
+  camera.up.set(0, 0, 1);
+  const frame = autoZoomFrameForBounds(THREE, {
+    camera,
+    controls: { target: new THREE.Vector3(0, 0, 0) },
+    bounds,
+    frameAspect: 2,
+    padding: 1.1
+  });
+
+  assert.ok(frame);
+  assert.ok(Math.abs(frame.orthographicHalfHeight - halfHeight) < 1e-8);
+  assert.deepEqual(frame.up.toArray(), [0, 0, 1]);
 });

@@ -88,6 +88,26 @@ export function normalizeCameraZoom(value, fallback = 1, {
   return fallback;
 }
 
+export function applyCameraProjectionFrameOffset(camera, offsetNdcX = 0, offsetNdcY = 0) {
+  if (!camera?.projectionMatrix?.elements) {
+    return false;
+  }
+  const x = Number(offsetNdcX);
+  const y = Number(offsetNdcY);
+  const elements = camera.projectionMatrix.elements;
+  if (camera.isOrthographicCamera) {
+    elements[12] += Number.isFinite(x) ? x : 0;
+    elements[13] += Number.isFinite(y) ? y : 0;
+  } else {
+    elements[8] -= Number.isFinite(x) ? x : 0;
+    elements[9] -= Number.isFinite(y) ? y : 0;
+  }
+  if (camera.projectionMatrixInverse?.copy) {
+    camera.projectionMatrixInverse.copy(camera.projectionMatrix).invert();
+  }
+  return true;
+}
+
 function clonePreset(preset) {
   return {
     name: preset.name,

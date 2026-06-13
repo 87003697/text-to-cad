@@ -364,7 +364,11 @@ export function useViewerRuntime({
           emitPerspectiveChange(runtimeRef.current);
         }
         const previewOrbitActive = !!runtimeRef.current?.previewOrbitEnabled;
-        renderer.render(scene, runtimeRef.current?.camera || camera);
+        const activeRuntime = runtimeRef.current;
+        if (activeRuntime?.camera?.isOrthographicCamera) {
+          applyCameraFrameInsets?.(activeRuntime, frameInsetsRef?.current, { updateProjection: false });
+        }
+        renderer.render(scene, activeRuntime?.camera || camera);
         const nextActiveFace = getActiveViewPlaneFaceId(runtimeRef.current);
         if (nextActiveFace !== activeViewPlaneFaceRef.current) {
           activeViewPlaneFaceRef.current = nextActiveFace;

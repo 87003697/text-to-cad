@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  applyCameraProjectionFrameOffset,
   cameraSpecUsesPerspectiveProjection,
   normalizeCameraSpec,
   resolveCameraSnapshot
@@ -30,6 +31,29 @@ const SCALE_SETTINGS = Object.freeze({
 function assertClose(actual, expected, epsilon = 1e-6) {
   assert.ok(Math.abs(actual - expected) <= epsilon, `${actual} !== ${expected}`);
 }
+
+test("camera projection frame offsets use perspective and orthographic matrix slots", async () => {
+  const THREE = await import("three");
+  const perspectiveCamera = new THREE.PerspectiveCamera(48, 1.5, 0.1, 100);
+  perspectiveCamera.updateProjectionMatrix();
+  const perspectiveBefore = [...perspectiveCamera.projectionMatrix.elements];
+
+  assert.equal(applyCameraProjectionFrameOffset(perspectiveCamera, 0.25, -0.1), true);
+  assertClose(perspectiveCamera.projectionMatrix.elements[8], perspectiveBefore[8] - 0.25);
+  assertClose(perspectiveCamera.projectionMatrix.elements[9], perspectiveBefore[9] + 0.1);
+  assertClose(perspectiveCamera.projectionMatrix.elements[12], perspectiveBefore[12]);
+  assertClose(perspectiveCamera.projectionMatrix.elements[13], perspectiveBefore[13]);
+
+  const orthographicCamera = new THREE.OrthographicCamera(-2, 2, 1, -1, 0.1, 100);
+  orthographicCamera.updateProjectionMatrix();
+  const orthographicBefore = [...orthographicCamera.projectionMatrix.elements];
+
+  assert.equal(applyCameraProjectionFrameOffset(orthographicCamera, 0.25, -0.1), true);
+  assertClose(orthographicCamera.projectionMatrix.elements[8], orthographicBefore[8]);
+  assertClose(orthographicCamera.projectionMatrix.elements[9], orthographicBefore[9]);
+  assertClose(orthographicCamera.projectionMatrix.elements[12], orthographicBefore[12] + 0.25);
+  assertClose(orthographicCamera.projectionMatrix.elements[13], orthographicBefore[13] - 0.1);
+});
 
 test("camera preset strings expand like JSON preset specs", () => {
   const stringSpec = normalizeCameraSpec("iso");

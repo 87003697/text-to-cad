@@ -194,6 +194,7 @@ export default function CadRenderPane({
   viewerPerspective,
   viewerProjection,
   viewerPerspectiveRef,
+  onViewerProjectionChange,
   themeSettings,
   previewMode,
   viewportFrameInsets,
@@ -396,6 +397,7 @@ export default function CadRenderPane({
           perspective={viewerPerspective}
           projection={viewerProjection}
           perspectiveRef={viewerPerspectiveRef}
+          onProjectionChange={onViewerProjectionChange}
           showEdges={!gcodeMode}
           recomputeNormals={false}
           themeSettings={themeSettings}

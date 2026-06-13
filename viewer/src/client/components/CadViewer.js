@@ -148,6 +148,9 @@ import {
   buildModel
 } from "cadjs/common/cadScene";
 import {
+  applyCameraProjectionFrameOffset
+} from "cadjs/common/camera";
+import {
   resolveTopologyDisplayEdgeRuntimes,
   shouldRenderTopologyDisplayEdges,
   shouldUseRecordTopologyEdgeTransforms
@@ -713,15 +716,24 @@ function applyCameraFrameInsets(runtime, frameInsets = {}, { updateProjection = 
   if (!camera?.projectionMatrix?.elements) {
     return;
   }
+  const metrics = getViewportFrameMetrics(runtime, frameInsets);
+  if (camera.isOrthographicCamera) {
+    const halfHeight = Math.max(Number(camera.userData?.cadHalfHeight) || 0, 1e-6);
+    const halfWidth = halfHeight * Math.max(metrics.width / Math.max(metrics.height, 1), 1e-6);
+    const centerX = -metrics.offsetNdcX * halfWidth;
+    const centerY = -metrics.offsetNdcY * halfHeight;
+    camera.left = centerX - halfWidth;
+    camera.right = centerX + halfWidth;
+    camera.top = centerY + halfHeight;
+    camera.bottom = centerY - halfHeight;
+    camera.updateProjectionMatrix();
+    return;
+  }
   if (updateProjection) {
     camera.updateProjectionMatrix();
   }
-  const { offsetNdcX, offsetNdcY } = getViewportFrameMetrics(runtime, frameInsets);
-  camera.projectionMatrix.elements[8] -= offsetNdcX;
-  camera.projectionMatrix.elements[9] -= offsetNdcY;
-  if (camera.projectionMatrixInverse?.copy) {
-    camera.projectionMatrixInverse.copy(camera.projectionMatrix).invert();
-  }
+  const { offsetNdcX, offsetNdcY } = metrics;
+  applyCameraProjectionFrameOffset(camera, offsetNdcX, offsetNdcY);
 }
 
 function reapplyRuntimeCameraFrameInsets(runtime, { updateProjection = false } = {}) {
@@ -745,6 +757,14 @@ function runtimeCameraProjection(runtime) {
   );
 }
 
+function floorModeForCameraProjection(floorMode, projection) {
+  const normalizedFloorMode = normalizeFloorMode(floorMode, THEME_FLOOR_MODES.STAGE);
+  return normalizeCameraProjection(projection) === CAMERA_PROJECTION.ORTHOGRAPHIC &&
+    normalizedFloorMode === THEME_FLOOR_MODES.STAGE
+    ? THEME_FLOOR_MODES.NONE
+    : normalizedFloorMode;
+}
+
 function syncRuntimeCameraClipPlanes(runtime, near, far) {
   for (const camera of [runtime?.perspectiveCamera, runtime?.orthographicCamera].filter(Boolean)) {
     camera.near = near;
@@ -761,14 +781,104 @@ function getOrthographicHalfHeightForBoundingSphere(radius, sceneScaleMode, fram
   return (safeRadius / Math.min(frameAspect, 1)) * (viewportHeight / framedHeight);
 }
 
-function syncOrthographicCameraFrame(runtime, radius, sceneScaleMode, frameMetrics = null) {
+function positiveCameraZoom(camera, fallback = 1) {
+  return Number.isFinite(Number(camera?.zoom)) && Number(camera.zoom) > 0
+    ? Number(camera.zoom)
+    : fallback;
+}
+
+function perspectiveVisibleHalfHeightAtTarget(camera, controls) {
+  if (!camera?.isPerspectiveCamera || !controls?.target) {
+    return null;
+  }
+  const distance = camera.position.distanceTo(controls.target);
+  const verticalHalfFov = (camera.fov * Math.PI) / 360;
+  const halfHeight = distance * Math.tan(verticalHalfFov) / positiveCameraZoom(camera);
+  return Number.isFinite(halfHeight) && halfHeight > 1e-6 ? halfHeight : null;
+}
+
+function orthographicVisibleHalfHeight(camera) {
+  if (!camera?.isOrthographicCamera) {
+    return null;
+  }
+  const halfHeight = Math.max(Number(camera.userData?.cadHalfHeight) || 0, 1e-6);
+  const visibleHalfHeight = halfHeight / positiveCameraZoom(camera);
+  return Number.isFinite(visibleHalfHeight) && visibleHalfHeight > 1e-6 ? visibleHalfHeight : null;
+}
+
+function orthographicHalfHeightForFrame(halfHeight, frameMetrics = {}) {
+  const value = Number(halfHeight);
+  if (!Number.isFinite(value) || value <= 0) {
+    return null;
+  }
+  const viewportHeight = Math.max(Number(frameMetrics.height) || 1, 1);
+  const framedHeight = Math.max(Number(frameMetrics.framedHeight) || viewportHeight, 1);
+  return value * (viewportHeight / framedHeight);
+}
+
+function syncOrthographicCameraFrame(runtime, radius, sceneScaleMode, frameMetrics = null, {
+  halfHeight = null,
+  resetZoom = false
+} = {}) {
   const camera = runtime?.orthographicCamera;
   if (!camera?.isOrthographicCamera) {
-    return;
+    return false;
   }
   const metrics = frameMetrics || getViewportFrameMetrics(runtime, runtime?.frameInsetsRef?.current);
-  camera.userData.cadHalfHeight = getOrthographicHalfHeightForBoundingSphere(radius, sceneScaleMode, metrics);
+  const previousHalfHeight = Number(camera.userData?.cadHalfHeight);
+  const previousZoom = Number(camera.zoom);
+  const nextHalfHeight = Number.isFinite(Number(halfHeight)) && Number(halfHeight) > 0
+    ? Number(halfHeight)
+    : getOrthographicHalfHeightForBoundingSphere(radius, sceneScaleMode, metrics);
+  camera.userData.cadHalfHeight = Math.max(nextHalfHeight, 1e-6);
+  if (resetZoom) {
+    camera.zoom = 1;
+  } else if (!Number.isFinite(Number(camera.zoom)) || Number(camera.zoom) <= 0) {
+    camera.zoom = 1;
+  }
   runtime.syncCameraViewport?.(camera, metrics.width, metrics.height);
+  return Math.abs((Number.isFinite(previousHalfHeight) ? previousHalfHeight : 0) - camera.userData.cadHalfHeight) > 1e-6 ||
+    Math.abs((Number.isFinite(previousZoom) ? previousZoom : 0) - Number(camera.zoom)) > 1e-6;
+}
+
+function syncProjectionCameraScale(runtime, previousCamera, nextCamera, frameMetrics) {
+  if (!runtime?.controls || !nextCamera) {
+    return;
+  }
+  const modelRadius = Number.isFinite(Number(runtime.modelRadius)) ? Number(runtime.modelRadius) : 1;
+  if (nextCamera.isOrthographicCamera) {
+    const modelHalfHeight = getOrthographicHalfHeightForBoundingSphere(modelRadius, runtime.sceneScaleMode, frameMetrics);
+    const previousHalfHeight = previousCamera?.isPerspectiveCamera
+      ? perspectiveVisibleHalfHeightAtTarget(previousCamera, runtime.controls)
+      : null;
+    nextCamera.userData.cadHalfHeight = modelHalfHeight;
+    if (previousHalfHeight) {
+      nextCamera.zoom = Math.max(modelHalfHeight / previousHalfHeight, 1e-4);
+    } else if (!Number.isFinite(Number(nextCamera.zoom)) || Number(nextCamera.zoom) <= 0) {
+      nextCamera.zoom = 1;
+    }
+    runtime.syncCameraViewport?.(nextCamera, frameMetrics.width, frameMetrics.height);
+    return;
+  }
+
+  runtime.syncCameraViewport?.(nextCamera, frameMetrics.width, frameMetrics.height);
+  if (!previousCamera?.isOrthographicCamera || !runtime.THREE || !runtime.controls?.target) {
+    return;
+  }
+  const previousHalfHeight = orthographicVisibleHalfHeight(previousCamera);
+  if (!previousHalfHeight) {
+    return;
+  }
+  const verticalHalfFov = (nextCamera.fov * Math.PI) / 360;
+  const targetDistance = previousHalfHeight * positiveCameraZoom(nextCamera) / Math.max(Math.tan(verticalHalfFov), 1e-6);
+  const minDistance = Number.isFinite(Number(runtime.controls.minDistance)) ? Number(runtime.controls.minDistance) : 0.01;
+  const maxDistance = Number.isFinite(Number(runtime.controls.maxDistance)) ? Number(runtime.controls.maxDistance) : Infinity;
+  const distance = clamp(targetDistance, minDistance, maxDistance);
+  const direction = new runtime.THREE.Vector3().copy(previousCamera.position).sub(runtime.controls.target);
+  if (direction.lengthSq() <= 1e-8) {
+    return;
+  }
+  nextCamera.position.copy(runtime.controls.target).add(direction.normalize().multiplyScalar(distance));
 }
 
 function frameRuntimeCameraForBoundingSphere(runtime, radius, sceneScaleMode, frameMetrics) {
@@ -786,6 +896,41 @@ function frameRuntimeCameraForBoundingSphere(runtime, radius, sceneScaleMode, fr
   return fitDistance;
 }
 
+function frameRuntimeCameraForBounds(runtime, bounds, sceneScaleMode, frameMetrics, {
+  minRadius = getSceneScaleSettings(sceneScaleMode).minModelRadius,
+  viewDirection = null,
+  viewUp = null
+} = {}) {
+  if (!runtime?.THREE || !runtime?.camera || !runtime?.controls || !bounds) {
+    return null;
+  }
+  const frame = autoZoomFrameForBounds(runtime.THREE, {
+    camera: runtime.camera,
+    controls: runtime.controls,
+    bounds,
+    modelOffset: runtime.modelGroup?.position,
+    frameAspect: frameMetrics.aspect,
+    minRadius,
+    padding: AUTO_ZOOM_PADDING,
+    defaultDirection: DEFAULT_VIEW_DIRECTION,
+    viewDirection,
+    viewUp
+  });
+  if (!frame) {
+    return null;
+  }
+  if (runtime.camera?.isOrthographicCamera) {
+    syncOrthographicCameraFrame(runtime, frame.radius, sceneScaleMode, frameMetrics, {
+      halfHeight: orthographicHalfHeightForFrame(frame.orthographicHalfHeight, frameMetrics),
+      resetZoom: true
+    });
+  } else {
+    runtime.camera?.updateProjectionMatrix?.();
+  }
+  applyCameraFrameInsets(runtime, runtime?.frameInsetsRef?.current, { updateProjection: false });
+  return frame;
+}
+
 function transitionCameraToBounds(runtime, bounds, sceneScaleMode, frameInsets, {
   durationMs = AUTO_ZOOM_SPEED_MS.DEFAULT,
   easing = AUTO_ZOOM_TRANSITION_EASING,
@@ -798,11 +943,8 @@ function transitionCameraToBounds(runtime, bounds, sceneScaleMode, frameInsets, 
     return false;
   }
   const frameMetrics = getViewportFrameMetrics(runtime, frameInsets);
-  const frameCamera = runtime.camera?.isPerspectiveCamera
-    ? runtime.camera
-    : runtime.perspectiveCamera || runtime.camera;
   const frame = autoZoomFrameForBounds(runtime.THREE, {
-    camera: frameCamera,
+    camera: runtime.camera,
     controls: runtime.controls,
     bounds,
     modelOffset: runtime.modelGroup?.position,
@@ -816,13 +958,18 @@ function transitionCameraToBounds(runtime, bounds, sceneScaleMode, frameInsets, 
   if (!frame) {
     return false;
   }
+  let orthographicFrameChanged = false;
   if (runtime.camera?.isOrthographicCamera) {
-    syncOrthographicCameraFrame(runtime, frame.radius, sceneScaleMode, frameMetrics);
+    orthographicFrameChanged = syncOrthographicCameraFrame(runtime, frame.radius, sceneScaleMode, frameMetrics, {
+      halfHeight: orthographicHalfHeightForFrame(frame.orthographicHalfHeight, frameMetrics),
+      resetZoom: true
+    });
   }
   if (
     runtime.camera.position.distanceToSquared(frame.position) <= 1e-8 &&
     runtime.controls.target.distanceToSquared(frame.target) <= 1e-8 &&
-    runtime.camera.up.distanceToSquared(frame.up) <= 1e-8
+    runtime.camera.up.distanceToSquared(frame.up) <= 1e-8 &&
+    !orthographicFrameChanged
   ) {
     return false;
   }
@@ -854,22 +1001,15 @@ function syncRuntimeCameraProjection(runtime, projection, { scheduleIdle = true 
     nextCamera.up.copy(previousCamera.up);
     nextCamera.near = previousCamera.near;
     nextCamera.far = previousCamera.far;
-    nextCamera.zoom = Number.isFinite(previousCamera.zoom) && previousCamera.zoom > 0 ? previousCamera.zoom : 1;
+    if (!Number.isFinite(Number(nextCamera.zoom)) || Number(nextCamera.zoom) <= 0) {
+      nextCamera.zoom = 1;
+    }
     runtime.camera = nextCamera;
     runtime.controls.object = nextCamera;
   }
   runtime.projection = nextProjection;
   const frameMetrics = getViewportFrameMetrics(runtime, runtime.frameInsetsRef?.current);
-  if (nextCamera.isOrthographicCamera) {
-    syncOrthographicCameraFrame(
-      runtime,
-      Number.isFinite(Number(runtime.modelRadius)) ? Number(runtime.modelRadius) : 1,
-      runtime.sceneScaleMode,
-      frameMetrics
-    );
-  } else {
-    runtime.syncCameraViewport?.(nextCamera, frameMetrics.width, frameMetrics.height);
-  }
+  syncProjectionCameraScale(runtime, previousCamera, nextCamera, frameMetrics);
   applyCameraFrameInsets(runtime, runtime.frameInsetsRef?.current, { updateProjection: false });
   runtime.controls.update?.();
   if (scheduleIdle) {
@@ -1621,6 +1761,7 @@ const CadViewer = forwardRef(function CadViewer({
   drawingStrokes = [],
   onDrawingStrokesChange,
   onPerspectiveChange,
+  onProjectionChange,
   onHoverReferenceChange,
   onActivateReference,
   onDoubleActivateReference,
@@ -1652,6 +1793,7 @@ const CadViewer = forwardRef(function CadViewer({
   const drawingStrokesRef = useRef(Array.isArray(drawingStrokes) ? drawingStrokes : []);
   const drawingChangeRef = useRef(onDrawingStrokesChange);
   const perspectiveChangeRef = useRef(onPerspectiveChange);
+  const projectionChangeRef = useRef(onProjectionChange);
   const viewerAlertChangeRef = useRef(onViewerAlertChange);
   const stepModuleTransformDetectedChangeRef = useRef(onStepModuleTransformDetectedChange);
   const urdfPosePickerRef = useRef(urdfPosePicker);
@@ -1790,6 +1932,10 @@ const CadViewer = forwardRef(function CadViewer({
   const resolvedFloorMode = floorModeOverride
     ? normalizeFloorMode(floorModeOverride, resolveFloorMode(normalizedThemeSettings.floor))
     : resolveFloorMode(normalizedThemeSettings.floor);
+  const effectiveFloorMode = useMemo(
+    () => floorModeForCameraProjection(resolvedFloorMode, normalizedProjection),
+    [resolvedFloorMode, normalizedProjection]
+  );
   const updateActiveGridHelper = useCallback((
     runtime,
     activeViewerTheme,
@@ -2436,6 +2582,9 @@ const CadViewer = forwardRef(function CadViewer({
     }
     return transitioned;
   };
+  const handleProjectionControlChange = (nextProjection) => {
+    projectionChangeRef.current?.(normalizeCameraProjection(nextProjection));
+  };
 
   useImperativeHandle(ref, () => ({
     async captureScreenshot({ filename = "cad-screenshot.png", mode = "download" } = {}) {
@@ -2487,6 +2636,10 @@ const CadViewer = forwardRef(function CadViewer({
   useEffect(() => {
     perspectiveChangeRef.current = onPerspectiveChange;
   }, [onPerspectiveChange]);
+
+  useEffect(() => {
+    projectionChangeRef.current = onProjectionChange;
+  }, [onProjectionChange]);
 
   useEffect(() => {
     viewerAlertChangeRef.current = onViewerAlertChange;
@@ -2634,7 +2787,7 @@ const CadViewer = forwardRef(function CadViewer({
     KEYBOARD_ORBIT_NUDGE_RAD,
     defaultGridRadius,
     sceneScaleMode: normalizedSceneScaleMode,
-    floorMode: resolvedFloorMode,
+    floorMode: effectiveFloorMode,
     onManualCameraInteraction: detachAutoZoom,
     onViewportResize: () => {
       autoZoomRunRef.current?.("resize", {
@@ -2749,7 +2902,7 @@ const CadViewer = forwardRef(function CadViewer({
       runtime.gridRadius ?? defaultGridRadius,
       runtime.gridFloorZ ?? 0,
       normalizedSceneScaleMode,
-      resolvedFloorMode
+      effectiveFloorMode
     );
     updateSpotLightTarget(runtime);
     if (runtime.hasVisibleModel) {
@@ -2759,7 +2912,7 @@ const CadViewer = forwardRef(function CadViewer({
         normalizedThemeSettings,
         runtime.gridRadius ?? defaultGridRadius,
         runtime.gridFloorZ ?? 0,
-        resolvedFloorMode,
+        effectiveFloorMode,
         normalizedSceneScaleMode
       );
     } else {
@@ -2771,7 +2924,7 @@ const CadViewer = forwardRef(function CadViewer({
     normalizedDisplayMode,
     normalizedThemeSettings,
     normalizedSceneScaleMode,
-    resolvedFloorMode,
+    effectiveFloorMode,
     viewerReadyTick,
     viewerTheme,
     updateActiveGridHelper
@@ -3173,10 +3326,10 @@ const CadViewer = forwardRef(function CadViewer({
       radius,
       floorZ,
       normalizedSceneScaleMode,
-      resolvedFloorMode
+      effectiveFloorMode
     );
     updateSpotLightTarget(runtime);
-    updateStageEffects(runtime, viewerTheme, normalizedThemeSettings, radius, runtime.gridFloorZ ?? 0, resolvedFloorMode, normalizedSceneScaleMode);
+    updateStageEffects(runtime, viewerTheme, normalizedThemeSettings, radius, runtime.gridFloorZ ?? 0, effectiveFloorMode, normalizedSceneScaleMode);
 
     modelGroup.position.copy(modelOffset);
     edgesGroup.position.copy(modelOffset);
@@ -3227,14 +3380,23 @@ const CadViewer = forwardRef(function CadViewer({
           cancelCameraTransition(runtime);
           const frameMetrics = getViewportFrameMetrics(runtime, viewportFrameInsetsRef.current);
           const camera = runtime.camera;
-          const fitDistance = frameRuntimeCameraForBoundingSphere(runtime, radius, normalizedSceneScaleMode, frameMetrics);
           const viewDirection = new THREE.Vector3(...DEFAULT_VIEW_DIRECTION).normalize();
           camera.zoom = 1;
           camera.up.set(...WORLD_UP);
-          frameRuntimeCameraForBoundingSphere(runtime, radius, normalizedSceneScaleMode, frameMetrics);
-          applyCameraFrameInsets(runtime, viewportFrameInsetsRef.current, { updateProjection: false });
-          camera.position.copy(viewDirection.multiplyScalar(fitDistance));
-          controls.target.set(0, 0, 0);
+          const frame = frameRuntimeCameraForBounds(runtime, displayBounds, normalizedSceneScaleMode, frameMetrics, {
+            viewDirection,
+            viewUp: WORLD_UP
+          });
+          if (frame) {
+            camera.position.copy(frame.position);
+            camera.up.copy(frame.up);
+            controls.target.copy(frame.target);
+          } else {
+            const fitDistance = frameRuntimeCameraForBoundingSphere(runtime, radius, normalizedSceneScaleMode, frameMetrics);
+            applyCameraFrameInsets(runtime, viewportFrameInsetsRef.current, { updateProjection: false });
+            camera.position.copy(viewDirection.multiplyScalar(fitDistance));
+            controls.target.set(0, 0, 0);
+          }
           camera.lookAt(controls.target);
           controls.update();
           runtime.requestRender();
@@ -3269,7 +3431,7 @@ const CadViewer = forwardRef(function CadViewer({
     displayEdgeRuntime,
     normalizedDisplayMode,
     normalizedSceneScaleMode,
-    resolvedFloorMode,
+    effectiveFloorMode,
     viewerTheme,
     normalizedThemeSettings.materials,
     normalizedThemeSettings.environment,
@@ -3327,10 +3489,10 @@ const CadViewer = forwardRef(function CadViewer({
       radius,
       floorZ,
       normalizedSceneScaleMode,
-      resolvedFloorMode
+      effectiveFloorMode
     );
     updateSpotLightTarget(runtime);
-    updateStageEffects(runtime, viewerTheme, normalizedThemeSettings, radius, runtime.gridFloorZ ?? 0, resolvedFloorMode, normalizedSceneScaleMode);
+    updateStageEffects(runtime, viewerTheme, normalizedThemeSettings, radius, runtime.gridFloorZ ?? 0, effectiveFloorMode, normalizedSceneScaleMode);
     setDisplayRecordsReadyTick((tick) => tick + 1);
     runtime.requestRender();
   }, [
@@ -3340,7 +3502,7 @@ const CadViewer = forwardRef(function CadViewer({
     effectiveRenderPartsIndividually,
     normalizedSceneScaleMode,
     normalizedThemeSettings,
-    resolvedFloorMode,
+    effectiveFloorMode,
     viewerTheme,
     viewerReadyTick,
     updateActiveGridHelper
@@ -4328,6 +4490,8 @@ const CadViewer = forwardRef(function CadViewer({
         viewPlaneFaces={VIEW_PLANE_FACES}
         viewPlaneOrientation={viewPlaneOrientation}
         viewerTheme={viewerTheme}
+        projection={normalizedProjection}
+        onProjectionChange={typeof onProjectionChange === "function" ? handleProjectionControlChange : undefined}
         activateViewPlaneFace={activateViewPlaneFace}
         activateDefaultViewPlane={activateDefaultViewPlane}
       />

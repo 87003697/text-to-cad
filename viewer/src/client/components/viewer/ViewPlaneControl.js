@@ -1,4 +1,9 @@
 import { useState } from "react";
+import { Box, Rows3 } from "lucide-react";
+import {
+  CAMERA_PROJECTION,
+  normalizeCameraProjection
+} from "cadjs/lib/perspective.js";
 
 const ORIENTATION_FALLBACK = Object.freeze({
   x: [1, 0, 0],
@@ -26,6 +31,19 @@ const DEFAULT_VIEW_PLANE_PALETTE = Object.freeze({
     stroke: [255, 235, 153]
   }
 });
+
+const PROJECTION_CONTROL_OPTIONS = Object.freeze([
+  {
+    value: CAMERA_PROJECTION.PERSPECTIVE,
+    label: "Perspective projection",
+    Icon: Box
+  },
+  {
+    value: CAMERA_PROJECTION.ORTHOGRAPHIC,
+    label: "Orthographic projection",
+    Icon: Rows3
+  }
+]);
 
 function clamp(value, min, max) {
   return Math.min(Math.max(value, min), max);
@@ -136,6 +154,8 @@ export default function ViewPlaneControl({
   viewPlaneFaces,
   viewPlaneOrientation,
   viewerTheme,
+  projection = CAMERA_PROJECTION.PERSPECTIVE,
+  onProjectionChange,
   activateViewPlaneFace,
   activateDefaultViewPlane
 }) {
@@ -147,6 +167,8 @@ export default function ViewPlaneControl({
 
   const orientation = normalizeOrientation(viewPlaneOrientation);
   const palette = resolveViewPlanePalette(viewerTheme);
+  const normalizedProjection = normalizeCameraProjection(projection);
+  const showProjectionControl = typeof onProjectionChange === "function";
   const faces = Array.isArray(viewPlaneFaces) ? viewPlaneFaces : [];
   const projectedNodes = faces
     .map((face) => {
@@ -265,14 +287,57 @@ export default function ViewPlaneControl({
       </g>
     );
   };
+  const renderProjectionControl = () => {
+    if (!showProjectionControl) {
+      return null;
+    }
+    return (
+      <div
+        role="group"
+        aria-label="Projection mode"
+        className="cad-glass-surface pointer-events-auto absolute flex flex-col gap-1 rounded-md border border-sidebar-border p-1 text-sidebar-foreground shadow-sm"
+        style={{ right: "calc(100% + 0.5rem)", bottom: 0 }}
+      >
+        {PROJECTION_CONTROL_OPTIONS.map(({ value, label, Icon }) => {
+          const active = normalizedProjection === value;
+          return (
+            <button
+              key={value}
+              type="button"
+              aria-label={label}
+              aria-pressed={active}
+              title={label}
+              className={`flex size-6 items-center justify-center rounded-[5px] transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 focus-visible:ring-offset-background ${
+                active
+                  ? "bg-sidebar-accent text-sidebar-accent-foreground shadow-sm"
+                  : "text-sidebar-foreground/72 hover:bg-sidebar-accent/70 hover:text-sidebar-accent-foreground"
+              }`}
+              onPointerDown={(event) => {
+                event.stopPropagation();
+              }}
+              onClick={(event) => {
+                event.stopPropagation();
+                if (!active) {
+                  onProjectionChange(value);
+                }
+              }}
+            >
+              <Icon className="size-3.5" strokeWidth={2} aria-hidden="true" />
+            </button>
+          );
+        })}
+      </div>
+    );
+  };
 
   return (
     <div
       className="pointer-events-none absolute z-20"
       style={{ right: `${viewPlaneOffsetRight}px`, bottom: normalizedBottomOffset }}
     >
+      {renderProjectionControl()}
       <div className={`cad-glass-surface pointer-events-auto relative rounded-full border border-sidebar-border text-sidebar-foreground shadow-sm transition duration-150 ${viewPlaneSizeClasses}`}>
-        <svg className="absolute inset-0 h-full w-full" viewBox="0 0 100 100" aria-label="Perspective selector">
+        <svg className="absolute inset-0 h-full w-full" viewBox="0 0 100 100" aria-label="View orientation selector">
           <defs>
             <radialGradient id="view-sphere-shell" cx="34%" cy="28%" r="74%">
               <stop offset="0%" stopColor="var(--sidebar)" />
