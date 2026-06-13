@@ -459,7 +459,7 @@ def build_step() -> build123d.Shape:
     )
     print(
         "Sheet setup "
-        f"material=5052-H32 (ALU-063), thickness={lc.SHEET_THICKNESS_MM:.4f} mm, "
+        f"material=5052-H32 (ALU-080), thickness={lc.SHEET_THICKNESS_MM:.4f} mm, "
         "bends=2 (continuous foot bend, full-length wrap bend)"
     )
     print(

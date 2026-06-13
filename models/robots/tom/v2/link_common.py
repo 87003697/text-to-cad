@@ -85,8 +85,8 @@ def _env_float(name: str, default: float) -> float:
     return parsed
 
 
-# Sheet stock matches the v1 tom brackets (SendCutSend 0.063 in 5052-H32).
-SHEET_THICKNESS_MM = _env_float("TOM_V2_SHEET_THICKNESS_MM", 25.4 * 0.063)
+# Sheet stock for the v2 aluminum brackets (SendCutSend 0.080 in 5052-H32).
+SHEET_THICKNESS_MM = _env_float("TOM_V2_SHEET_THICKNESS_MM", 25.4 * 0.080)
 MOUNT_PLANE_CLEARANCE_MM = 0.0
 SIDE_FACE_CLEARANCE_MM = 0.25
 # Gap between a horn mount face and its bracket horn plate, matching the
@@ -199,12 +199,12 @@ CASE_FLUSH_WALL_TOP_Z_MM = CASE_FLUSH_RELIEF_BOTTOM_Z_MM  # 104.797
 CASE_OFFSET_TAB_TOP_Z_MM = (
     CASE_OFFSET_HOLE_Z_MM + SERVO_MOUNT_HOLE_RADIUS_MM + 1.5
 )  # 108.6
-# SendCutSend ALU-063 rule values used for layout decisions (inches
+# SendCutSend ALU-080 rule values used for layout decisions (inches
 # converted; sources fetched 2026-06-12):
-SCS_MIN_FLANGE_AFTER_BEND_MM = 25.4 * 0.303  # 7.696
+SCS_MIN_FLANGE_AFTER_BEND_MM = 25.4 * 0.313  # 7.950
 SCS_CHANNEL_BASE_TO_FLANGE_RATIO = 2.0
 SCS_HALF_DIE_WIDTH_MM = 25.4 * 0.472 / 2.0  # 5.994
-SCS_BEND_RELIEF_DEPTH_MM = 25.4 * 0.118  # 2.997
+SCS_BEND_RELIEF_DEPTH_MM = 25.4 * 0.150  # 3.810
 
 # Bottom-servo up-face obstacles (extents measured from the STEP, with
 # clearance margins): the cable bay and the raised center zone that runs
@@ -232,7 +232,7 @@ LIP_BOTTOM_Z_MM = FOOT_TOP_Z_MM - 9.5
 # the screw-tab flange above it stays as short as possible (jog channel
 # 2:1 rule).
 SHELF_TOP_Z_MM = CASE_OFFSET_RELIEF_BOTTOM_Z_MM  # 99.394
-SHELF_BOTTOM_Z_MM = SHELF_TOP_Z_MM - SHEET_THICKNESS_MM  # 97.794
+SHELF_BOTTOM_Z_MM = SHELF_TOP_Z_MM - SHEET_THICKNESS_MM  # 97.362
 
 # Feet stop clear of the cable bay (flush side) and the raised panel
 # (offset side), so the split feet need no windows.
@@ -251,7 +251,7 @@ OFFSET_WINDOW_HALF_WIDTH_MM = 9.7
 # bottom servo's cable exit slot over its cable bay. The extra 1.5 mm
 # keeps the relief past the published minimum regardless of where the
 # flat-pattern bend line lands within the bend allowance.
-OFFSET_PLATE_RELIEF_TOP_Z_MM = FOOT_TOP_Z_MM + SCS_BEND_RELIEF_DEPTH_MM + 1.5  # 6.347
+OFFSET_PLATE_RELIEF_TOP_Z_MM = FOOT_TOP_Z_MM + SCS_BEND_RELIEF_DEPTH_MM + 1.5  # 7.342
 # The bend zone and foot flare outboard so each interrupted-bend rail is
 # three sheet thicknesses wide instead of the two-thickness rule-of-thumb
 # minimum; the flare wings end at free edges above the bend.

@@ -27,7 +27,7 @@ def _env_float(name: str, default: float) -> float:
 
 ALUMINUM_5052_SHEET_THICKNESS_MM = _env_float(
     "TOM_V2_ALUMINUM_5052_SHEET_THICKNESS_MM",
-    25.4 * 0.063,
+    25.4 * 0.080,
 )
 ALUMINUM_5052_YIELD_MPA = _env_float("TOM_V2_ALUMINUM_5052_YIELD_MPA", 193.0)
 PRINTABLE_EFFECTIVE_STRENGTH_MPA = _env_float(

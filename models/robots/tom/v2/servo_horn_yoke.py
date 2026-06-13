@@ -74,7 +74,7 @@ def _env_float(name: str, default: float) -> float:
     return parsed
 
 
-SHEET_THICKNESS_MM = _env_float("TOM_V2_SHEET_THICKNESS_MM", 25.4 * 0.063)
+SHEET_THICKNESS_MM = _env_float("TOM_V2_SHEET_THICKNESS_MM", 25.4 * 0.080)
 SHEET_RULE_SCALE = SHEET_THICKNESS_MM / REFERENCE_SHEET_THICKNESS_MM
 
 
@@ -111,7 +111,7 @@ class BendRule:
 
 
 SHEET_RULE = BendRule(
-    material_name="5052-H32 1.6 mm",
+    material_name="5052-H32 ALU-080",
     thickness_mm=SHEET_THICKNESS_MM,
     effective_inside_radius_mm=25.4 * 0.038,
     k_factor=0.48,
