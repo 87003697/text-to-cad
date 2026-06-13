@@ -28,7 +28,6 @@ from STEP.base_clamp import (
     BASE_HORN_CONNECTION_HOLE_SPECS_MM,
     BASE_SERVO_M2_HOLE_SPECS_MM,
     CORNER_RADIUS_MM,
-    PLATE_THICKNESS_MM,
     _as_single_solid,
     _build_bracket_layout,
     _cut_base_plate_mount_features,
@@ -39,6 +38,7 @@ from robot_common.materials import GRAY_ALUMINUM_COLOR
 
 
 DISPLAY_NAME = "Base Plate"
+PLATE_THICKNESS_MM = 25.4 * 0.080
 
 
 @dataclass(frozen=True)
@@ -59,8 +59,8 @@ def _build_plate_layout() -> PlateLayout:
     bracket_layout = _build_bracket_layout()
     x_min = bracket_layout.x_min
     x_max = bracket_layout.side_x_max
-    y_min = bracket_layout.y_min
     y_max = bracket_layout.y_max
+    y_min = y_max - PLATE_THICKNESS_MM
     z_min = bracket_layout.z_min
     z_max = bracket_layout.z_max
 
