@@ -1011,6 +1011,7 @@ function syncRuntimeCameraProjection(runtime, projection, { scheduleIdle = true 
   const frameMetrics = getViewportFrameMetrics(runtime, runtime.frameInsetsRef?.current);
   syncProjectionCameraScale(runtime, previousCamera, nextCamera, frameMetrics);
   applyCameraFrameInsets(runtime, runtime.frameInsetsRef?.current, { updateProjection: false });
+  runtime.syncOrbitNavigationMode?.(nextProjection, nextCamera);
   runtime.syncOrbitPanSpeed?.(nextCamera);
   runtime.controls.update?.();
   if (scheduleIdle) {
@@ -1238,6 +1239,7 @@ function applyPerspectiveSnapshot(runtime, perspective, { scheduleIdle = true } 
     reapplyRuntimeCameraFrameInsets(runtime);
   }
   runtime.camera.lookAt(runtime.controls.target);
+  runtime.syncOrbitNavigationMode?.();
   runtime.syncOrbitPanSpeed?.();
   runtime.controls.update();
   if (scheduleIdle) {
@@ -1327,6 +1329,7 @@ function stepCameraTransition(runtime, timestamp) {
     reapplyRuntimeCameraFrameInsets(runtime);
   }
   runtime.camera.lookAt(target);
+  runtime.syncOrbitNavigationMode?.();
   runtime.syncOrbitPanSpeed?.();
 
   if (progress >= 1) {

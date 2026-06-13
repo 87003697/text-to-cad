@@ -14,6 +14,7 @@ import {
   ORBIT_BASE_PAN_SPEED,
   syncOrbitPanSpeed
 } from "../orbitPanSpeed.js";
+import { syncOrbitNavigationMode } from "../orbitNavigationMode.js";
 
 function createWebGlRenderer(THREE) {
   return createCadWebGlRenderer(THREE, {
@@ -292,6 +293,18 @@ export function useViewerRuntime({
       const syncControlsPanSpeed = (targetCamera = runtimeRef.current?.camera || controls.object) => (
         syncOrbitPanSpeed(controls, targetCamera, { basePanSpeed: ORBIT_BASE_PAN_SPEED })
       );
+      const syncControlsNavigationMode = (
+        projection = runtimeRef.current?.projection,
+        targetCamera = runtimeRef.current?.camera || controls.object
+      ) => {
+        const synced = syncOrbitNavigationMode(controls, targetCamera, {
+          projection,
+          mouse: THREE.MOUSE,
+          touch: THREE.TOUCH
+        });
+        targetCamera?.updateMatrixWorld?.(true);
+        return synced;
+      };
       const handleContextLost = (event) => {
         event.preventDefault();
         clearKeyboardOrbitState(keyboardOrbitState);
@@ -366,6 +379,7 @@ export function useViewerRuntime({
         }
         const cameraTransitionActive = stepCameraTransition(runtimeRef.current, timestamp);
         const keyboardOrbitMoved = stepKeyboardOrbit(runtimeRef.current, timestamp);
+        syncControlsNavigationMode();
         syncControlsPanSpeed();
         const needsMoreFrames = controls.update();
         if (cameraTransitionActive || keyboardOrbitMoved) {
@@ -419,6 +433,7 @@ export function useViewerRuntime({
           controls.enableDamping = true;
           controls.dampingFactor = DEFAULT_DAMPING_FACTOR;
           controls.zoomSpeed = getDefaultZoomSpeed();
+          syncControlsNavigationMode();
           syncControlsPanSpeed();
           applyRenderQuality(IDLE_PIXEL_RATIO_CAP);
           requestRender();
@@ -433,6 +448,7 @@ export function useViewerRuntime({
         syncCameraViewport(perspectiveCamera, w, h);
         syncCameraViewport(orthographicCamera, w, h);
         applyCameraFrameInsets?.(runtimeRef.current, frameInsetsRef?.current, { updateProjection: false });
+        syncControlsNavigationMode();
         syncControlsPanSpeed();
         syncScreenSpaceLineMaterials();
         syncDrawingCanvasSize(runtimeRef.current);
@@ -459,13 +475,19 @@ export function useViewerRuntime({
       const handleControlsStart = () => {
         controlsStartDistance = readControlsDistance();
         cancelCameraTransition(runtimeRef.current);
+        syncControlsNavigationMode();
         syncControlsPanSpeed();
         beginInteraction();
       };
       const handleControlsChange = () => {
+        syncControlsNavigationMode();
         syncControlsPanSpeed();
         emitPerspectiveChange(runtimeRef.current);
         requestRender();
+      };
+      const handleControlsPointerDown = () => {
+        syncControlsNavigationMode();
+        syncControlsPanSpeed();
       };
       const handleControlsEnd = () => {
         const controlsEndDistance = readControlsDistance();
@@ -488,10 +510,12 @@ export function useViewerRuntime({
         beginInteraction();
       };
       const wheelListenerOptions = { passive: true, capture: true };
+      const pointerDownListenerOptions = { passive: true, capture: true };
 
       controls.addEventListener("start", handleControlsStart);
       controls.addEventListener("change", handleControlsChange);
       controls.addEventListener("end", handleControlsEnd);
+      renderer.domElement.addEventListener("pointerdown", handleControlsPointerDown, pointerDownListenerOptions);
       renderer.domElement.addEventListener("wheel", handleWheel, wheelListenerOptions);
       renderer.domElement.addEventListener("webglcontextlost", handleContextLost, false);
       renderer.domElement.addEventListener("webglcontextrestored", handleContextRestored, false);
@@ -630,6 +654,7 @@ export function useViewerRuntime({
         applyCameraFrameInsets,
         frameInsetsRef,
         syncOrbitPanSpeed: syncControlsPanSpeed,
+        syncOrbitNavigationMode: syncControlsNavigationMode,
         onManualCameraInteraction,
         onViewportResize,
         registerScreenSpaceLineMaterial,
@@ -640,6 +665,7 @@ export function useViewerRuntime({
       applySceneBackground(runtimeRef.current, viewerTheme);
       applyCameraFrameInsets?.(runtimeRef.current, frameInsetsRef?.current);
       applyInitialPerspective?.(runtimeRef.current);
+      runtimeRef.current?.syncOrbitNavigationMode?.();
       window.addEventListener("keydown", handleKeyDown);
       window.addEventListener("keyup", handleKeyUp);
       window.addEventListener("blur", clearKeyboardOrbit);
@@ -666,6 +692,7 @@ export function useViewerRuntime({
         runtime.controls.removeEventListener("start", handleControlsStart);
         runtime.controls.removeEventListener("change", handleControlsChange);
         runtime.controls.removeEventListener("end", handleControlsEnd);
+        runtime.renderer.domElement.removeEventListener("pointerdown", handleControlsPointerDown, pointerDownListenerOptions);
         runtime.renderer.domElement.removeEventListener("wheel", handleWheel, wheelListenerOptions);
         runtime.renderer.domElement.removeEventListener("webglcontextlost", handleContextLost, false);
         runtime.renderer.domElement.removeEventListener("webglcontextrestored", handleContextRestored, false);
