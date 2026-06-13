@@ -28,6 +28,9 @@ class RollLinkMateSpec:
     upstream_servo_transform: tuple[float, ...]
     downstream_servo: str
     downstream_servo_path: str
+    right_bracket_path: str
+    left_bracket_path: str
+    case_span_centering_offset_mm: float
 
 
 @dataclass(frozen=True)
@@ -36,6 +39,7 @@ class RollLinkMates:
     bracket_local: list[float]
     downstream_shift_local: tuple[float, float, float]
     downstream_servo_local: list[float]
+    top_servo_case_transform: tuple[float, ...]
 
 
 ROLL_LINK_SPECS = {
@@ -46,6 +50,9 @@ ROLL_LINK_SPECS = {
         upstream_servo_transform=tuple(pitch_link_sts3250.STS3250_TRANSFORM),
         downstream_servo="sts3250_4",
         downstream_servo_path="../imports/sts3250.step",
+        right_bracket_path="../link_bracket_shoulder_right.step",
+        left_bracket_path="../link_bracket_shoulder_left.step",
+        case_span_centering_offset_mm=lc.SHOULDER_ROLL_CASE_SPAN_CENTERING_OFFSET_MM,
     ),
     "elbow": RollLinkMateSpec(
         anchor="quinary_servo_2020_connector",
@@ -54,6 +61,9 @@ ROLL_LINK_SPECS = {
         upstream_servo_transform=tuple(pitch_link_sts3215.STS3215_TRANSFORM),
         downstream_servo="sts3215_6",
         downstream_servo_path="../imports/sts3215.step",
+        right_bracket_path="../link_bracket_elbow_right.step",
+        left_bracket_path="../link_bracket_elbow_left.step",
+        case_span_centering_offset_mm=lc.ELBOW_ROLL_CASE_SPAN_CENTERING_OFFSET_MM,
     ),
 }
 
@@ -172,7 +182,7 @@ def _validate_roll_link_mates(kind: str, mates: RollLinkMates, upstream_servo_lo
         invert_rigid_transform(mates.bracket_local),
         mates.downstream_servo_local,
     )
-    top_delta = _max_transform_delta(top_servo_relative, lc.TOP_SERVO_CASE_TRANSFORM)
+    top_delta = _max_transform_delta(top_servo_relative, mates.top_servo_case_transform)
     if top_delta > MATE_TRANSFORM_TOLERANCE:
         raise RuntimeError(
             f"{kind} roll-link top servo mate drifted by {top_delta:.9f}; "
@@ -212,7 +222,13 @@ def roll_link_mates(kind: str) -> RollLinkMates:
         upstream_servo_local,
         invert_rigid_transform(lc.BOTTOM_SERVO_TRANSFORM),
     )
-    downstream_servo_local = multiply_transforms(bracket_local, lc.TOP_SERVO_CASE_TRANSFORM)
+    top_servo_case_transform = lc.top_servo_case_transform(
+        spec.case_span_centering_offset_mm,
+    )
+    downstream_servo_local = multiply_transforms(
+        bracket_local,
+        top_servo_case_transform,
+    )
     downstream_shift_local = tuple(
         downstream_servo_local[index] - old_downstream_servo_local[index]
         for index in (3, 7, 11)
@@ -223,6 +239,7 @@ def roll_link_mates(kind: str) -> RollLinkMates:
         bracket_local=bracket_local,
         downstream_shift_local=downstream_shift_local,
         downstream_servo_local=downstream_servo_local,
+        top_servo_case_transform=top_servo_case_transform,
     )
     _validate_roll_link_mates(kind, mates, upstream_servo_local)
     return mates
@@ -238,12 +255,12 @@ def roll_link_instances(kind: str) -> list[dict[str, object]]:
 
     return [
         {
-            "path": "../link_bracket_right.step",
+            "path": spec.right_bracket_path,
             "name": f"{kind}_link_bracket_right",
             "transform": mates.bracket_local,
         },
         {
-            "path": "../link_bracket_left.step",
+            "path": spec.left_bracket_path,
             "name": f"{kind}_link_bracket_left",
             "transform": mates.bracket_local,
         },
