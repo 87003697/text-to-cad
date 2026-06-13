@@ -14,25 +14,28 @@ do not open PRs to `main` or push it directly.
 
 ## Release Workflow
 
-Normal development work targets `develop` and should not bump the canonical release
-version in `plugins/cad/VERSION`. To start a release, run the `Release` workflow
-with `base_branch=develop`; it creates or updates a `release/<version>` branch,
-updates `plugins/cad/VERSION` and derived version metadata, opens a PR back to
-`develop`, waits for checks, merges the PR, and dispatches `Publish`. The `Test`
-workflow checks version metadata and runs a production bundle job on `develop`
-and PRs to `develop`, so production-output issues are caught before publishing.
-Use `Prepare Release` and `Publish` directly only as lower-level fallbacks.
-`Publish` runs from the `develop` workflow ref with `source_ref=develop`; it
-ships only when the source version is newer than `main` and the latest semver
-tag, bundles real generated outputs, validates and tests that production layout,
-writes the publish merge commit on top of the previous publish target with the
-release source as the second parent for release-note attribution, creates the
-semver git tag, and opens a draft GitHub Release. Use `target_branch=main` only
-for a real release and `target_branch=build-test` for publish rehearsals.
-Pushing `develop` runs tests but does not publish `main`.
-Use `scripts/release/bump-version.sh` and
-`scripts/release/publish-github-release.sh` only as local/manual fallbacks for
-the GitHub workflows.
+Do not bump the canonical release version in `plugins/cad/VERSION` during
+normal development work. Ship releases only through the single `Release`
+GitHub Actions workflow, which handles the version bump, release PR, publish
+commit to `main`, models upload, web-app deploys, semver tag, and GitHub
+Release in one run.
+
+When asked to publish, make, or ship a release, dispatch `Release` with its
+defaults: build from `develop` (`base_branch=develop`), publish to `main`
+(`target_branch=main`), and publish the GitHub Release (`publish=true`, not a
+draft). Never pick the semver bump yourself: if the request does not name
+patch, minor, major, or an exact version, ask which one before dispatching.
+Use `target_branch=build-test` only when the user explicitly asks to test
+CI/CD or build-pipeline changes — never by default and never as part of a
+requested release. Rerun `Release` with `set_version` pinned to the current
+version to resume a failed publish.
+
+The standalone `Deploy Docs` and `Deploy Viewer` workflows redeploy the
+individual web apps from `main`, and the standalone `Upload Models` workflow
+uploads the `models/` catalog to Vercel Blob from `develop`, all without
+running a release. `main` is publish-only; pushing `develop` runs tests but
+never publishes. See the Releases section in `CONTRIBUTING.md` for the full
+flow, CI/CD-testing and resume options, and local/manual fallbacks.
 
 ## Repo Map
 
@@ -120,10 +123,11 @@ when touching shared surfaces or before handoff:
 
 - Code tests: `scripts/test/test.sh`
   - In GitHub Actions, `test.yml` checks the canonical release version as a
-    separate non-blocking job, verifies the `develop` symlink layout on `develop`,
-    and runs a temporary production bundle check plus docs checks for `develop`.
-    `main` writes are validated by `publish.yml`; GitHub branch settings should
-    block PRs and direct pushes to `main`.
+    separate non-blocking job; its test job verifies the `develop` symlink
+    layout, bundles temporary production outputs, and runs docs and code tests
+    against that bundle. `main` writes are validated by the `Release`
+    workflow's publish job; GitHub branch settings should block PRs and direct
+    pushes to `main`.
 - Focused test runners: `scripts/test/test-js.sh`,
   `scripts/test/test-docs.sh`, `scripts/test/test-python.sh`,
   `scripts/test/test-global.sh`
