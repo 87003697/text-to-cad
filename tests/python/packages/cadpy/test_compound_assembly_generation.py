@@ -34,6 +34,61 @@ class CompoundAssemblyGenerationTests(unittest.TestCase):
                 script_path=Path("part.py"),
             )
 
+    def test_step_payload_preserves_instance_assembly_mates(self) -> None:
+        payload = generation._normalize_step_payload(
+            {
+                "instances": [
+                    {
+                        "path": "servo.step",
+                        "name": "servo",
+                    }
+                ],
+                "assembly_mates": [
+                    {
+                        "sourceLabel": "servo_to_bracket",
+                        "relation": "rigid",
+                        "fixed": "servo_mount",
+                        "moving": "bracket_foot",
+                    }
+                ],
+            },
+            script_path=Path("assembly.py"),
+        )
+
+        self.assertEqual("servo_to_bracket", payload["assembly_mates"][0]["sourceLabel"])
+
+    def test_attach_envelope_assembly_mates_renumbers_for_scene(self) -> None:
+        scene = LoadedStepScene(step_path=Path("assembly.step"), roots=[], prototype_shapes={})
+
+        generation._attach_envelope_assembly_mates(
+            scene,
+            {
+                "assembly_mates": [
+                    {
+                        "sourceLabel": "servo_to_bracket",
+                        "relation": "rigid",
+                        "fixed": "servo_mount",
+                        "moving": "bracket_foot",
+                    }
+                ]
+            },
+            script_path=Path("assembly.py"),
+        )
+
+        self.assertEqual(
+            [
+                {
+                    "id": "m1",
+                    "label": "m1",
+                    "sourceLabel": "servo_to_bracket",
+                    "relation": "rigid",
+                    "fixed": "servo_mount",
+                    "moving": "bracket_foot",
+                }
+            ],
+            scene.assembly_mates,
+        )
+
     def test_dxf_payload_rejects_legacy_output_field(self) -> None:
         with self.assertRaisesRegex(TypeError, "unsupported field\\(s\\): dxf_output"):
             generation._normalize_dxf_payload(
