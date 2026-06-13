@@ -304,6 +304,28 @@ function readViewPlaneOrientation(runtime) {
   };
 }
 
+function viewPlaneOrientationsEqual(a, b) {
+  if (a === b) {
+    return true;
+  }
+  if (!a || !b) {
+    return false;
+  }
+  for (const axis of ["x", "y", "z"]) {
+    const av = a[axis];
+    const bv = b[axis];
+    if (!av || !bv) {
+      return false;
+    }
+    for (let index = 0; index < 3; index += 1) {
+      if (Math.abs((av[index] || 0) - (bv[index] || 0)) > 1e-4) {
+        return false;
+      }
+    }
+  }
+  return true;
+}
+
 function getActiveViewPlaneFaceId(runtime) {
   if (!runtime?.camera || !runtime?.controls) {
     return "";
@@ -685,12 +707,25 @@ const ImplicitCadViewer = forwardRef(function ImplicitCadViewer({
     runAutoZoomRef.current?.("model");
   }, []);
 
-  const refineImplicitFit = useCallback((nextModel) => {
+  // Resolve tight floor/frame bounds in the background, then re-fit once. This
+  // only ever runs when the model's *declared* bounds change and never during
+  // dynamic render (animation playback, slider drags): animation advances
+  // uniforms every frame without changing the envelope, so refining per frame
+  // would spawn an unbounded flood of concurrent CPU SDF scans.
+  const refineImplicitFit = useCallback((nextModel, { force = false } = {}) => {
     const runtime = runtimeRef.current;
     const material = runtime?.shaderScene?.material;
     if (!runtime || !material || !nextModel) {
       return;
     }
+    if (!force && dynamicRenderActiveRef.current) {
+      return;
+    }
+    const boundsKey = autoZoomBoundsKey(nextModel);
+    if (!force && boundsKey && runtime.refineBoundsKey === boundsKey) {
+      return;
+    }
+    runtime.refineBoundsKey = boundsKey;
     const token = (runtime.refineToken = (runtime.refineToken || 0) + 1);
     refreshImplicitCadFloorBounds(material, nextModel)
       .then(() => {
@@ -705,7 +740,11 @@ const ImplicitCadViewer = forwardRef(function ImplicitCadViewer({
           runAutoZoomRef.current?.("refine");
         }
       })
-      .catch(() => {});
+      .catch(() => {
+        if (runtimeRef.current === runtime && runtime.refineBoundsKey === boundsKey) {
+          runtime.refineBoundsKey = null;
+        }
+      });
   }, []);
   const refineImplicitFitRef = useRef(null);
   refineImplicitFitRef.current = refineImplicitFit;
@@ -1028,7 +1067,13 @@ const ImplicitCadViewer = forwardRef(function ImplicitCadViewer({
       }
       const nextActiveFace = getActiveViewPlaneFaceId(runtime);
       setActiveViewPlaneFace((current) => current === nextActiveFace ? current : nextActiveFace);
-      setViewPlaneOrientation(readViewPlaneOrientation(runtime));
+      // The camera is static while animation only advances geometry uniforms;
+      // bail out of the state update unless the orientation actually changed so
+      // playback does not trigger a React re-render every frame.
+      const nextOrientation = readViewPlaneOrientation(runtime);
+      setViewPlaneOrientation((current) => (
+        viewPlaneOrientationsEqual(current, nextOrientation) ? current : nextOrientation
+      ));
       if (transitionActive || keyboardOrbitMoved || controlsActive || controls?.autoRotate) {
         requestRender();
       }
