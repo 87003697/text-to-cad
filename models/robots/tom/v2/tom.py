@@ -71,6 +71,10 @@ URDF_STEP_MATERIALS = {
     "servo_horn_yoke.step": "aluminum_5052",
     "link_bracket_right.step": "aluminum_5052",
     "link_bracket_left.step": "aluminum_5052",
+    "link_bracket_shoulder_right.step": "aluminum_5052",
+    "link_bracket_shoulder_left.step": "aluminum_5052",
+    "link_bracket_elbow_right.step": "aluminum_5052",
+    "link_bracket_elbow_left.step": "aluminum_5052",
 }
 
 

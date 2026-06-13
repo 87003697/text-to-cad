@@ -152,6 +152,10 @@ HORN_SPAN_CENTERING_OFFSET_MM = HORN_HALF_SPAN_MM - SERVO_OUTPUT_HORN_FACE_LOCAL
 CASE_SPAN_CENTERING_OFFSET_MM = -0.5 * (
     SERVO_CASE_BOTTOM_LOCAL_Y_MM + SERVO_CASE_TOP_LOCAL_Y_MM
 )  # 9.6
+# The roll-link stages use slightly different case-face offsets so the visible
+# vertical motor body centerline stays at one X coordinate through the arm.
+SHOULDER_ROLL_CASE_SPAN_CENTERING_OFFSET_MM = 9.9
+ELBOW_ROLL_CASE_SPAN_CENTERING_OFFSET_MM = 9.1
 # Z mapping constants for the two top-servo orientations.
 TOP_BODY_DOWN_Z_OFFSET_MM = TOP_PIVOT_Z_MM + SERVO_SHAFT_LOCAL_X_MM  # Z = 109.5 - x
 TOP_BODY_UP_Z_OFFSET_MM = TOP_PIVOT_Z_MM - SERVO_SHAFT_LOCAL_X_MM  # Z = x + 160.5
@@ -313,13 +317,17 @@ TOP_SERVO_HORN_TRANSFORM = (
     1.0, 0.0, 0.0, TOP_BODY_UP_Z_OFFSET_MM,
     0.0, 0.0, 0.0, 1.0,
 )
-# Case variation: body down (local x -> -Z), output horn toward +X.
-TOP_SERVO_CASE_TRANSFORM = (
-    0.0, 1.0, 0.0, CASE_SPAN_CENTERING_OFFSET_MM,
-    0.0, 0.0, -1.0, 0.0,
-    -1.0, 0.0, 0.0, TOP_BODY_DOWN_Z_OFFSET_MM,
-    0.0, 0.0, 0.0, 1.0,
-)
+def top_servo_case_transform(case_span_centering_offset_mm: float = CASE_SPAN_CENTERING_OFFSET_MM) -> tuple[float, ...]:
+    # Case variation: body down (local x -> -Z), output horn toward +X.
+    return (
+        0.0, 1.0, 0.0, case_span_centering_offset_mm,
+        0.0, 0.0, -1.0, 0.0,
+        -1.0, 0.0, 0.0, TOP_BODY_DOWN_Z_OFFSET_MM,
+        0.0, 0.0, 0.0, 1.0,
+    )
+
+
+TOP_SERVO_CASE_TRANSFORM = top_servo_case_transform()
 BOTTOM_SERVO_TRANSFORM = (
     1.0, 0.0, 0.0, -SERVO_SHAFT_LOCAL_X_MM,
     0.0, 0.0, 1.0, 0.0,
@@ -511,15 +519,27 @@ def verify_top_servo_horn_holes(placed_servo: build123d.Shape, *, side: float) -
     )
 
 
-def verify_top_servo_case_holes(placed_servo: build123d.Shape) -> None:
+def verify_top_servo_case_holes(
+    placed_servo: build123d.Shape,
+    *,
+    case_span_centering_offset_mm: float = CASE_SPAN_CENTERING_OFFSET_MM,
+) -> None:
     _verify_holes(
-        _planar_hole_centers(placed_servo, axis="x", plane_coordinate=CASE_BOTTOM_FACE_X_MM),
+        _planar_hole_centers(
+            placed_servo,
+            axis="x",
+            plane_coordinate=SERVO_CASE_BOTTOM_LOCAL_Y_MM + case_span_centering_offset_mm,
+        ),
         expected=CASE_FLUSH_HOLES_YZ_MM,
         radius=SERVO_MOUNT_HOLE_RADIUS_MM,
         label="case-bottom-face",
     )
     _verify_holes(
-        _planar_hole_centers(placed_servo, axis="x", plane_coordinate=CASE_TOP_FACE_X_MM),
+        _planar_hole_centers(
+            placed_servo,
+            axis="x",
+            plane_coordinate=SERVO_CASE_TOP_LOCAL_Y_MM + case_span_centering_offset_mm,
+        ),
         expected=CASE_OFFSET_HOLES_YZ_MM,
         radius=SERVO_MOUNT_HOLE_RADIUS_MM,
         label="case-top-face",
@@ -547,10 +567,19 @@ def placed_link_servos_horn() -> tuple[build123d.Shape, build123d.Shape]:
     return top, bottom
 
 
-def placed_link_servos_case() -> tuple[build123d.Shape, build123d.Shape]:
-    top = place_servo(_load_servo_shape(SERVO_STEP), TOP_SERVO_CASE_TRANSFORM)
+def placed_link_servos_case(
+    *,
+    case_span_centering_offset_mm: float = CASE_SPAN_CENTERING_OFFSET_MM,
+) -> tuple[build123d.Shape, build123d.Shape]:
+    top = place_servo(
+        _load_servo_shape(SERVO_STEP),
+        top_servo_case_transform(case_span_centering_offset_mm),
+    )
     bottom = place_servo(_load_servo_shape(SERVO_NO_REAR_HORN_STEP), BOTTOM_SERVO_TRANSFORM)
-    verify_top_servo_case_holes(top)
+    verify_top_servo_case_holes(
+        top,
+        case_span_centering_offset_mm=case_span_centering_offset_mm,
+    )
     verify_bottom_servo_mount_holes(bottom)
     return top, bottom
 

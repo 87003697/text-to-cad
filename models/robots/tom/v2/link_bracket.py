@@ -34,6 +34,7 @@ Usage:
 from __future__ import annotations
 
 import math
+import os
 import sys
 from pathlib import Path
 
@@ -50,16 +51,31 @@ PART_NAME = Path(__file__).stem
 
 CUT_EXTENSION_MM = 2.0
 
+
+def _env_float(name: str, default: float) -> float:
+    raw = os.environ.get(name)
+    if raw is None:
+        return default
+    try:
+        return float(raw)
+    except ValueError as exc:
+        raise ValueError(f"{name} must be a floating point number, got {raw!r}") from exc
+
 # Plate planes. The leg stands 0.8 mm off the servo's +Y side face so the
 # wrap bend radius clears the servo corner. The flange seats close to the
 # case-top face (0.25 mm) so it bolts down flush rather than floating; its
 # inner edge stays outboard of the case-top center ridge (proud only over
 # Y 5-7). The bend position follows FLANGE_INNER_X parametrically.
+CASE_SPAN_CENTERING_OFFSET_MM = _env_float(
+    "TOM_V2_CASE_SPAN_CENTERING_OFFSET_MM",
+    lc.CASE_SPAN_CENTERING_OFFSET_MM,
+)
 LEG_FACE_CLEARANCE_MM = 3.5
 FLANGE_FACE_CLEARANCE_MM = 0.25
 LEG_INNER_Y_MM = 12.36 + LEG_FACE_CLEARANCE_MM  # against the top servo's +Y side face
 LEG_OUTER_Y_MM = LEG_INNER_Y_MM + lc.SHEET_THICKNESS_MM
-FLANGE_INNER_X_MM = lc.CASE_TOP_FACE_X_MM + FLANGE_FACE_CLEARANCE_MM
+CASE_TOP_FACE_X_MM = lc.SERVO_CASE_TOP_LOCAL_Y_MM + CASE_SPAN_CENTERING_OFFSET_MM
+FLANGE_INNER_X_MM = CASE_TOP_FACE_X_MM + FLANGE_FACE_CLEARANCE_MM
 FLANGE_OUTER_X_MM = FLANGE_INNER_X_MM + lc.SHEET_THICKNESS_MM
 # Output-horn relief: concentric with the servo's output horn edge
 # (radius 11.5 on the pitch axis) plus a rotating-clearance margin, so the
@@ -382,7 +398,9 @@ def build_step() -> build123d.Shape:
     if len(solids) != 1:
         raise RuntimeError(f"Expected one connected plate solid, found {len(solids)}")
 
-    top_servo, bottom_servo = lc.placed_link_servos_case()
+    top_servo, bottom_servo = lc.placed_link_servos_case(
+        case_span_centering_offset_mm=CASE_SPAN_CENTERING_OFFSET_MM,
+    )
     top_volume = lc.verify_no_interference(bracket, top_servo, label="the top servo")
     bottom_volume = lc.verify_no_interference(bracket, bottom_servo, label="the bottom servo")
 
@@ -404,6 +422,11 @@ def build_step() -> build123d.Shape:
     print(
         "Wrap plate envelope "
         f"X={bb.size.X:.3f} mm, Y={bb.size.Y:.3f} mm, Z={bb.size.Z:.3f} mm"
+    )
+    print(
+        "Top case centering offset "
+        f"{CASE_SPAN_CENTERING_OFFSET_MM:.3f} mm; "
+        f"case-top face X={CASE_TOP_FACE_X_MM:.3f} mm"
     )
     print(
         f"Side profile bands: lower to low/high-X Z="

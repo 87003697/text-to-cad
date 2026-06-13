@@ -52,12 +52,24 @@ def _module_path(module_name: str) -> Path:
 
 
 @contextmanager
-def loaded_v2_module(module_name: str, *, sheet_thickness_mm: float | None = None):
+def loaded_v2_module(
+    module_name: str,
+    *,
+    sheet_thickness_mm: float | None = None,
+    case_span_centering_offset_mm: float | None = None,
+):
     old_env = os.environ.get("TOM_V2_SHEET_THICKNESS_MM")
+    old_case_offset_env = os.environ.get("TOM_V2_CASE_SPAN_CENTERING_OFFSET_MM")
     if sheet_thickness_mm is None:
         os.environ.pop("TOM_V2_SHEET_THICKNESS_MM", None)
     else:
         os.environ["TOM_V2_SHEET_THICKNESS_MM"] = f"{sheet_thickness_mm:.9f}"
+    if case_span_centering_offset_mm is None:
+        os.environ.pop("TOM_V2_CASE_SPAN_CENTERING_OFFSET_MM", None)
+    else:
+        os.environ["TOM_V2_CASE_SPAN_CENTERING_OFFSET_MM"] = (
+            f"{case_span_centering_offset_mm:.9f}"
+        )
 
     stale_modules = {module_name}
     if module_name == "link_bracket":
@@ -72,7 +84,10 @@ def loaded_v2_module(module_name: str, *, sheet_thickness_mm: float | None = Non
             sys.path.insert(0, str(path))
 
     module_file = _module_path(module_name)
-    synthetic_name = f"_tom_v2_variant_{module_name}_{abs(hash((module_file, sheet_thickness_mm)))}"
+    synthetic_name = (
+        f"_tom_v2_variant_{module_name}_"
+        f"{abs(hash((module_file, sheet_thickness_mm, case_span_centering_offset_mm)))}"
+    )
     spec = importlib.util.spec_from_file_location(synthetic_name, module_file)
     if spec is None or spec.loader is None:
         raise RuntimeError(f"Unable to load {module_file}")
@@ -95,6 +110,10 @@ def loaded_v2_module(module_name: str, *, sheet_thickness_mm: float | None = Non
             os.environ.pop("TOM_V2_SHEET_THICKNESS_MM", None)
         else:
             os.environ["TOM_V2_SHEET_THICKNESS_MM"] = old_env
+        if old_case_offset_env is None:
+            os.environ.pop("TOM_V2_CASE_SPAN_CENTERING_OFFSET_MM", None)
+        else:
+            os.environ["TOM_V2_CASE_SPAN_CENTERING_OFFSET_MM"] = old_case_offset_env
 
 
 def mirror_y(shape: build123d.Shape) -> build123d.Shape:
