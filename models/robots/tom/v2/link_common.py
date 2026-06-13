@@ -152,10 +152,6 @@ HORN_SPAN_CENTERING_OFFSET_MM = HORN_HALF_SPAN_MM - SERVO_OUTPUT_HORN_FACE_LOCAL
 CASE_SPAN_CENTERING_OFFSET_MM = -0.5 * (
     SERVO_CASE_BOTTOM_LOCAL_Y_MM + SERVO_CASE_TOP_LOCAL_Y_MM
 )  # 9.6
-# The roll-link stages use slightly different case-face offsets so the visible
-# vertical motor body centerline stays at one X coordinate through the arm.
-SHOULDER_ROLL_CASE_SPAN_CENTERING_OFFSET_MM = 9.9
-ELBOW_ROLL_CASE_SPAN_CENTERING_OFFSET_MM = 9.1
 # Z mapping constants for the two top-servo orientations.
 TOP_BODY_DOWN_Z_OFFSET_MM = TOP_PIVOT_Z_MM + SERVO_SHAFT_LOCAL_X_MM  # Z = 109.5 - x
 TOP_BODY_UP_Z_OFFSET_MM = TOP_PIVOT_Z_MM - SERVO_SHAFT_LOCAL_X_MM  # Z = x + 160.5
