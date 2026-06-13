@@ -11,6 +11,7 @@ import {
   createImplicitCadFullscreenScene,
   implicitCadCameraState,
   implicitCadModelShaderKey,
+  refreshImplicitCadFloorBounds,
   updateImplicitCadAppearanceUniforms,
   updateImplicitCadGraphicsUniforms,
   updateImplicitCadModelUniforms,
@@ -479,6 +480,30 @@ function transitionCameraToState(runtime, cameraState, {
   return true;
 }
 
+// Compile the raymarch program off the main thread (KHR_parallel_shader_compile
+// via THREE.compileAsync) and only start rendering once it links; large models
+// otherwise freeze the tab for seconds on their first frame.
+function armImplicitShaderCompile(runtime) {
+  const shaderScene = runtime?.shaderScene;
+  const renderer = runtime?.renderer;
+  if (!shaderScene || !renderer) {
+    return;
+  }
+  if (typeof renderer.compileAsync !== "function" || !runtime.screenCamera) {
+    runtime.shaderSceneReady = true;
+    return;
+  }
+  runtime.shaderSceneReady = false;
+  renderer.compileAsync(shaderScene.scene, runtime.screenCamera)
+    .catch(() => {})
+    .finally(() => {
+      if (runtime.shaderScene === shaderScene) {
+        runtime.shaderSceneReady = true;
+        runtime.requestRender?.();
+      }
+    });
+}
+
 function autoZoomBoundsKey(model) {
   const bounds = model?.bounds;
   if (!Array.isArray(bounds?.min) || !Array.isArray(bounds?.max)) {
@@ -632,7 +657,10 @@ const ImplicitCadViewer = forwardRef(function ImplicitCadViewer({
         width: metrics.framedWidth,
         height: metrics.framedHeight,
         zoom: 1,
-        frameMargin: AUTO_ZOOM_FRAME_MARGIN
+        frameMargin: AUTO_ZOOM_FRAME_MARGIN,
+        // Never run the CPU SDF estimator on the interaction path; fits use
+        // cached/declared bounds and refineImplicitFit tightens them later.
+        estimateFrameBounds: false
       }
     );
     setAutoZoomAttached(true);
@@ -656,6 +684,31 @@ const ImplicitCadViewer = forwardRef(function ImplicitCadViewer({
     }
     runAutoZoomRef.current?.("model");
   }, []);
+
+  const refineImplicitFit = useCallback((nextModel) => {
+    const runtime = runtimeRef.current;
+    const material = runtime?.shaderScene?.material;
+    if (!runtime || !material || !nextModel) {
+      return;
+    }
+    const token = (runtime.refineToken = (runtime.refineToken || 0) + 1);
+    refreshImplicitCadFloorBounds(material, nextModel)
+      .then(() => {
+        if (runtimeRef.current !== runtime || runtime.refineToken !== token) {
+          return;
+        }
+        if (runtime.shaderScene?.material !== material) {
+          return;
+        }
+        runtime.requestRender?.();
+        if (autoZoomStateRef.current.attached !== false && !dynamicRenderActiveRef.current) {
+          runAutoZoomRef.current?.("refine");
+        }
+      })
+      .catch(() => {});
+  }, []);
+  const refineImplicitFitRef = useRef(null);
+  refineImplicitFitRef.current = refineImplicitFit;
 
   const activateViewPlaneFace = useCallback((faceId) => {
     const face = VIEW_PLANE_FACE_BY_ID[faceId];
@@ -749,6 +802,7 @@ const ImplicitCadViewer = forwardRef(function ImplicitCadViewer({
       updateImplicitThemeUniforms(runtime, model, themeSettings);
       updateImplicitGraphicsUniforms(runtime, model);
       maybeAutoZoomForModel(model);
+      refineImplicitFit(model);
       runtime.requestRender?.();
       return;
     }
@@ -771,15 +825,17 @@ const ImplicitCadViewer = forwardRef(function ImplicitCadViewer({
     const previousShaderScene = runtime.shaderScene;
     runtime.shaderScene = nextShaderScene;
     runtime.model = model;
+    armImplicitShaderCompile(runtime);
     setRenderError("");
     onViewerAlertChange?.(null);
     updateImplicitThemeUniforms(runtime, model, themeSettings);
     updateImplicitGraphicsUniforms(runtime, model);
     runtime.updateCameraFraming?.();
     maybeAutoZoomForModel(model);
+    refineImplicitFit(model);
     runtime.requestRender?.();
     previousShaderScene?.dispose?.();
-  }, [maybeAutoZoomForModel, model, normalizedGraphicsSettings, onViewerAlertChange, themeSettings]);
+  }, [maybeAutoZoomForModel, model, normalizedGraphicsSettings, onViewerAlertChange, refineImplicitFit, themeSettings]);
 
   useEffect(() => {
     updateImplicitThemeUniforms(runtimeRef.current, model, themeSettings);
@@ -881,6 +937,7 @@ const ImplicitCadViewer = forwardRef(function ImplicitCadViewer({
       graphicsSettings: graphicsSettingsRef.current,
       dynamicRenderActive: dynamicRenderActiveRef.current,
       model,
+      shaderSceneReady: false,
       requestRender,
       beginInteraction,
       scheduleIdleQuality,
@@ -959,7 +1016,7 @@ const ImplicitCadViewer = forwardRef(function ImplicitCadViewer({
       if (keyboardOrbitMoved) {
         emitPerspectiveChange();
       }
-      if (runtime.shaderScene && runtime.camera && runtime.screenCamera) {
+      if (runtime.shaderScene && runtime.shaderSceneReady !== false && runtime.camera && runtime.screenCamera) {
         const canvas = renderer.domElement;
         updateImplicitCadMaterialUniforms(
           runtime.shaderScene.material,
@@ -1096,6 +1153,7 @@ const ImplicitCadViewer = forwardRef(function ImplicitCadViewer({
     updateImplicitThemeUniforms(runtime, model, themeSettings);
     updateImplicitGraphicsUniforms(runtime, model);
     updateCameraFraming();
+    armImplicitShaderCompile(runtime);
     const initialPerspective = perspectiveRef?.current || perspective;
     if (applyPerspectiveSnapshot(runtime, initialPerspective, modelKey)) {
       setAutoZoomAttachedRef.current(false);
@@ -1103,6 +1161,7 @@ const ImplicitCadViewer = forwardRef(function ImplicitCadViewer({
     } else {
       runAutoZoomRef.current?.("mount", { animate: false, force: true });
     }
+    refineImplicitFitRef.current?.(model);
     if (controls) {
       controls.autoRotate = !!previewMode;
       controls.autoRotateSpeed = 1.0;

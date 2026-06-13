@@ -4,10 +4,12 @@ import * as THREE from "three";
 
 import {
   createImplicitCadMaterial,
+  estimateImplicitCadFrameBoundsAsync,
   implicitCadCameraState,
   implicitCadModelShaderKey,
   implicitCadFragmentShader,
   normalizeImplicitCadGlslFloatLiterals,
+  refreshImplicitCadFloorBounds,
   resolveImplicitCadAppearanceSettings,
   updateImplicitCadAppearanceUniforms,
   updateImplicitCadGraphicsUniforms
@@ -231,6 +233,49 @@ test("camera framing honors a larger frame margin for safer snapshots", () => {
   );
 
   assert.ok(paddedDistance > compactDistance, `expected padded camera to stand farther back than ${compactDistance}, got ${paddedDistance}`);
+});
+
+test("camera framing can skip the CPU SDF estimate for interactive fits", () => {
+  // Distinct radius keeps this model's estimate-cache key unique across tests,
+  // so the no-estimate path sees a cold cache and uses declared bounds.
+  const model = normalizeImplicitCadModel({
+    glsl: "float sdf(vec3 p) { return length(p) - 2.5; }",
+    bounds: { min: [-10, -10, -10], max: [10, 10, 10] }
+  });
+  const started = performance.now();
+  const state = implicitCadCameraState(model, "iso", {
+    width: 1200,
+    height: 900,
+    zoom: 1,
+    estimateFrameBounds: false
+  });
+
+  assert.ok(performance.now() - started < 50, "no-estimate fit should not run the evaluator grid");
+  assert.deepEqual(state.frameBounds, { min: [-10, -10, -10], max: [10, 10, 10] });
+});
+
+test("async frame-bounds estimate matches the sync estimate and refreshes floor uniforms", async () => {
+  // Distinct radius keeps this model's estimate-cache key unique across tests.
+  const source = {
+    glsl: "float sdf(vec3 p) { return length(p) - 1.5; }",
+    bounds: { min: [-10, -10, -10], max: [10, 10, 10] }
+  };
+  const model = normalizeImplicitCadModel(source);
+  const material = createImplicitCadMaterial(THREE, model);
+  // Floor placement starts on declared bounds because no estimate exists yet.
+  assert.equal(material.uniforms.uFloorZ.value, -10);
+
+  const estimated = await estimateImplicitCadFrameBoundsAsync(model);
+  assert.ok(estimated.min[2] > -5, `expected sampled min z, got ${estimated.min[2]}`);
+
+  const syncState = implicitCadCameraState(model, "iso", { width: 1200, height: 900, zoom: 1 });
+  assert.deepEqual(syncState.frameBounds, estimated);
+
+  const floorBounds = await refreshImplicitCadFloorBounds(material, model);
+  assert.equal(material.uniforms.uFloorZ.value, floorBounds.min[2]);
+  assert.ok(material.uniforms.uFloorZ.value > -5, "floor should snap to sampled bounds");
+
+  material.dispose();
 });
 
 test("camera framing falls back to declared bounds when CPU SDF sampling cannot evaluate GLSL", () => {

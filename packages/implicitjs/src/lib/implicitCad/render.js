@@ -120,7 +120,7 @@ function implicitFloorFadeRadius(bounds) {
 // Declared model bounds are often padded well past the surface, which would
 // hang the stage-floor shadow in mid-air. Sample the SDF for tight bounds and
 // cache per material; re-estimate only when declared bounds move materially.
-function implicitFloorBoundsForModel(normalized, userData = null) {
+function implicitFloorBoundsForModel(normalized, userData = null, { estimate = true } = {}) {
   const boundsKey = `${normalized.bounds.min.join(",")}|${normalized.bounds.max.join(",")}`;
   if (userData?.implicitFloorBounds) {
     if (userData.implicitFloorBoundsKey === boundsKey) {
@@ -139,27 +139,46 @@ function implicitFloorBoundsForModel(normalized, userData = null) {
       }
     }
   }
-  let floorBounds = normalized.bounds;
+  let floorBounds = null;
   try {
-    floorBounds = estimateImplicitCadFrameBounds(normalized) || normalized.bounds;
+    floorBounds = estimate
+      ? estimateImplicitCadFrameBounds(normalized)
+      : peekImplicitCadFrameBounds(normalized);
   } catch {
-    floorBounds = normalized.bounds;
+    floorBounds = null;
   }
-  // The estimate pads outward by its sampling margin; declared bounds are an
-  // authoritative outer limit, so refine inward only or the floor (and its
-  // contact shadow) detaches below coarsely sampled models.
-  const clamped = {
-    min: floorBounds.min.map((value, axis) => Math.max(value, normalized.bounds.min[axis])),
-    max: floorBounds.max.map((value, axis) => Math.min(value, normalized.bounds.max[axis])),
-  };
-  if (clamped.min.every((value, axis) => value < clamped.max[axis])) {
-    floorBounds = clamped;
+  if (!floorBounds) {
+    // No estimate available yet: place the floor on declared bounds without
+    // caching, so a later (possibly async) estimate can still refine it.
+    return normalized.bounds;
   }
   if (userData) {
     userData.implicitFloorBounds = floorBounds;
     userData.implicitFloorBoundsKey = boundsKey;
     userData.implicitFloorDeclaredBounds = [...normalized.bounds.min, ...normalized.bounds.max];
   }
+  return floorBounds;
+}
+
+function applyImplicitFloorUniforms(material, floorBounds) {
+  if (!material?.uniforms?.uFloorZ || !material.uniforms.uFloorCenter || !material.uniforms.uFloorFadeRadius) {
+    return;
+  }
+  material.uniforms.uFloorZ.value = floorBounds.min[2];
+  material.uniforms.uFloorCenter.value.set(
+    (floorBounds.min[0] + floorBounds.max[0]) / 2,
+    (floorBounds.min[1] + floorBounds.max[1]) / 2
+  );
+  material.uniforms.uFloorFadeRadius.value = implicitFloorFadeRadius(floorBounds);
+}
+
+// Resolve tight floor bounds off the main thread and apply them to the
+// material; loading stays responsive and the floor snaps in when ready.
+export async function refreshImplicitCadFloorBounds(material, model) {
+  const normalized = normalizeImplicitCadModel(model);
+  await estimateImplicitCadFrameBoundsAsync(normalized);
+  const floorBounds = implicitFloorBoundsForModel(normalized, material?.userData || null, { estimate: false });
+  applyImplicitFloorUniforms(material, floorBounds);
   return floorBounds;
 }
 
@@ -462,18 +481,25 @@ function frameBoundsSampleCount(model) {
   return FRAME_BOUNDS_SAMPLE_COUNT;
 }
 
-function estimateImplicitCadFrameBounds(model) {
-  const fallbackBounds = cameraBoundsForImplicitModel(model);
+function rememberFrameBoundsEstimate(cacheKey, estimated) {
+  frameBoundsEstimateCache.set(cacheKey, estimated);
+  while (frameBoundsEstimateCache.size > FRAME_BOUNDS_CACHE_LIMIT) {
+    frameBoundsEstimateCache.delete(frameBoundsEstimateCache.keys().next().value);
+  }
+}
+
+function peekImplicitCadFrameBounds(model) {
   if (model?.frameBounds?.min && model?.frameBounds?.max) {
     return model.frameBounds;
   }
-  const cacheKey = frameBoundsCacheKey(model, fallbackBounds);
-  if (frameBoundsEstimateCache.has(cacheKey)) {
-    const cached = frameBoundsEstimateCache.get(cacheKey);
-    frameBoundsEstimateCache.delete(cacheKey);
-    frameBoundsEstimateCache.set(cacheKey, cached);
-    return cached;
-  }
+  const fallbackBounds = cameraBoundsForImplicitModel(model);
+  return frameBoundsEstimateCache.get(frameBoundsCacheKey(model, fallbackBounds)) || null;
+}
+
+// Shared core of the sync and async estimators: a generator that yields after
+// each sample row so the async driver can hand control back to the event loop
+// between slices while the sync driver simply drains it in one pass.
+function* scanImplicitCadFrameBoundsSteps(model, fallbackBounds, cacheKey) {
   let sdf = null;
   try {
     sdf = createImplicitCadSdfEvaluator(model);
@@ -510,6 +536,7 @@ function estimateImplicitCadFrameBounds(model) {
           hitMax[1] = Math.max(hitMax[1], y);
           hitMax[2] = Math.max(hitMax[2], z);
         }
+        yield;
       }
     }
   } catch {
@@ -532,11 +559,62 @@ function estimateImplicitCadFrameBounds(model) {
     min: expanded.min.map((value, axis) => Math.max(value, fallbackBounds.min[axis])),
     max: expanded.max.map((value, axis) => Math.min(value, fallbackBounds.max[axis])),
   };
-  frameBoundsEstimateCache.set(cacheKey, estimated);
-  while (frameBoundsEstimateCache.size > FRAME_BOUNDS_CACHE_LIMIT) {
-    frameBoundsEstimateCache.delete(frameBoundsEstimateCache.keys().next().value);
-  }
+  rememberFrameBoundsEstimate(cacheKey, estimated);
   return estimated;
+}
+
+function estimateImplicitCadFrameBounds(model) {
+  const fallbackBounds = cameraBoundsForImplicitModel(model);
+  if (model?.frameBounds?.min && model?.frameBounds?.max) {
+    return model.frameBounds;
+  }
+  const cacheKey = frameBoundsCacheKey(model, fallbackBounds);
+  if (frameBoundsEstimateCache.has(cacheKey)) {
+    const cached = frameBoundsEstimateCache.get(cacheKey);
+    frameBoundsEstimateCache.delete(cacheKey);
+    frameBoundsEstimateCache.set(cacheKey, cached);
+    return cached;
+  }
+  const steps = scanImplicitCadFrameBoundsSteps(model, fallbackBounds, cacheKey);
+  let current = steps.next();
+  while (!current.done) {
+    current = steps.next();
+  }
+  return current.value || fallbackBounds;
+}
+
+const frameBoundsEstimatePending = new Map();
+
+export async function estimateImplicitCadFrameBoundsAsync(model) {
+  const fallbackBounds = cameraBoundsForImplicitModel(model);
+  if (model?.frameBounds?.min && model?.frameBounds?.max) {
+    return model.frameBounds;
+  }
+  const cacheKey = frameBoundsCacheKey(model, fallbackBounds);
+  if (frameBoundsEstimateCache.has(cacheKey)) {
+    return frameBoundsEstimateCache.get(cacheKey);
+  }
+  if (frameBoundsEstimatePending.has(cacheKey)) {
+    return frameBoundsEstimatePending.get(cacheKey);
+  }
+  const pending = (async () => {
+    const now = () => (typeof performance !== "undefined" ? performance.now() : Date.now());
+    const steps = scanImplicitCadFrameBoundsSteps(model, fallbackBounds, cacheKey);
+    let sliceStart = now();
+    let current = steps.next();
+    while (!current.done) {
+      if (now() - sliceStart >= 10) {
+        await new Promise((resolve) => setTimeout(resolve, 0));
+        sliceStart = now();
+      }
+      current = steps.next();
+    }
+    return current.value || fallbackBounds;
+  })().finally(() => {
+    frameBoundsEstimatePending.delete(cacheKey);
+  });
+  frameBoundsEstimatePending.set(cacheKey, pending);
+  return pending;
 }
 
 function vectorFromArray(value, fallback) {
@@ -660,10 +738,17 @@ export function implicitCadCameraState(model, camera = "iso", {
   zoom = DEFAULT_SNAPSHOT_CAMERA_ZOOM,
   width = 4,
   height = 3,
-  frameMargin = DEFAULT_SNAPSHOT_FRAME_MARGIN
+  frameMargin = DEFAULT_SNAPSHOT_FRAME_MARGIN,
+  estimateFrameBounds = true
 } = {}) {
   const spec = normalizeCameraSpec(camera, { strict: true });
-  const frameBounds = estimateImplicitCadFrameBounds(model);
+  // estimateFrameBounds=false keeps this call off the CPU SDF evaluator: it
+  // uses a cached estimate when one exists and declared bounds otherwise, so
+  // interactive callers can frame instantly and refine after
+  // estimateImplicitCadFrameBoundsAsync completes.
+  const frameBounds = estimateFrameBounds
+    ? estimateImplicitCadFrameBounds(model)
+    : (peekImplicitCadFrameBounds(model) || cameraBoundsForImplicitModel(model));
   const fallbackBounds = cameraBoundsForImplicitModel(model);
   const center = boundsCenter(frameBounds || fallbackBounds);
   let target = vectorFromArray(spec.target, center);
@@ -1510,7 +1595,7 @@ export function createImplicitCadMaterial(THREE, model) {
     ])
   );
   const floorUserData = {};
-  const floorBounds = implicitFloorBoundsForModel(normalized, floorUserData);
+  const floorBounds = implicitFloorBoundsForModel(normalized, floorUserData, { estimate: false });
   const material = new THREE.ShaderMaterial({
     name: "ImplicitCadRaymarchMaterial",
     depthTest: false,
@@ -1582,15 +1667,10 @@ export function updateImplicitCadModelUniforms(THREE, material, model) {
   if (material.uniforms.uMaxDistance) {
     material.uniforms.uMaxDistance.value = normalized.maxDistance;
   }
-  if (material.uniforms.uFloorZ && material.uniforms.uFloorCenter && material.uniforms.uFloorFadeRadius) {
-    const floorBounds = implicitFloorBoundsForModel(normalized, material.userData);
-    material.uniforms.uFloorZ.value = floorBounds.min[2];
-    material.uniforms.uFloorCenter.value.set(
-      (floorBounds.min[0] + floorBounds.max[0]) / 2,
-      (floorBounds.min[1] + floorBounds.max[1]) / 2
-    );
-    material.uniforms.uFloorFadeRadius.value = implicitFloorFadeRadius(floorBounds);
-  }
+  applyImplicitFloorUniforms(
+    material,
+    implicitFloorBoundsForModel(normalized, material.userData, { estimate: false })
+  );
   for (const [name, uniform] of Object.entries(normalized.uniforms || {})) {
     updateThreeUniformValue(THREE, material.uniforms[name], uniform);
   }
@@ -1849,6 +1929,13 @@ export async function renderImplicitCadToDataUrl(THREE, modelValue, {
   const transparent = Boolean(render.transparent || background.transparent || background.type === "transparent");
   const backgroundColor = hexToRgb01(background.color || background.solidColor, DEFAULT_BACKGROUND);
   renderer.setClearColor(new THREE.Color(...backgroundColor), transparent ? 0 : 1);
+  // Configure the camera before creating the scene: the camera fit warms the
+  // frame-bounds estimate cache that floor placement reads at material
+  // creation time.
+  const captureCamera = configureImplicitCadCamera(THREE, model, width, height, camera, {
+    zoom: render.zoom,
+    frameMargin: render.frameMargin,
+  });
   const { scene, material, dispose } = createImplicitCadFullscreenScene(THREE, model);
   updateImplicitCadAppearanceUniforms(THREE, material, model, {
     themeSettings,
@@ -1856,10 +1943,6 @@ export async function renderImplicitCadToDataUrl(THREE, modelValue, {
     forceTransparent: transparent
   });
   updateImplicitCadGraphicsUniforms(material, model, graphics);
-  const captureCamera = configureImplicitCadCamera(THREE, model, width, height, camera, {
-    zoom: render.zoom,
-    frameMargin: render.frameMargin,
-  });
   updateImplicitCadMaterialUniforms(material, captureCamera, width, height);
   const screenCamera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
   renderer.render(scene, screenCamera);
