@@ -21,6 +21,10 @@ import {
   normalizeImplicitGraphicsSettings
 } from "@/workbench/implicitGraphicsSettings";
 import ViewPlaneControl from "./viewer/ViewPlaneControl";
+import {
+  ORBIT_BASE_PAN_SPEED,
+  syncOrbitPanSpeed
+} from "./viewer/orbitPanSpeed";
 
 const INTERACTION_IDLE_DELAY_MS = 140;
 const DEFAULT_DAMPING_FACTOR = 0.14;
@@ -946,7 +950,7 @@ const ImplicitCadViewer = forwardRef(function ImplicitCadViewer({
       controls.enableDamping = true;
       controls.dampingFactor = DEFAULT_DAMPING_FACTOR;
       controls.rotateSpeed = 1;
-      controls.panSpeed = 1.35;
+      controls.panSpeed = ORBIT_BASE_PAN_SPEED;
       controls.zoomSpeed = DEFAULT_ZOOM_SPEED;
       if ("zoomToCursor" in controls) {
         controls.zoomToCursor = true;
@@ -986,6 +990,12 @@ const ImplicitCadViewer = forwardRef(function ImplicitCadViewer({
     };
     runtimeRef.current = runtime;
 
+    function syncControlsPanSpeed() {
+      return syncOrbitPanSpeed(controls, runtime.camera, { basePanSpeed: ORBIT_BASE_PAN_SPEED });
+    }
+    runtime.syncOrbitPanSpeed = syncControlsPanSpeed;
+    syncControlsPanSpeed();
+
     function setPixelRatioCap(cap) {
       renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, cap));
       renderer.setSize(mount.clientWidth || 800, mount.clientHeight || 640, false);
@@ -1004,6 +1014,7 @@ const ImplicitCadViewer = forwardRef(function ImplicitCadViewer({
       applyCameraFrameInsets(runtime, frameInsetsRef.current, { updateProjection: false });
       runtime.controls.minDistance = Math.max(activeModel.radius / 2200, 0.02);
       runtime.controls.maxDistance = Math.max(activeModel.radius * 140, 50);
+      syncControlsPanSpeed();
     }
 
     function requestRender(options = {}) {
@@ -1039,6 +1050,7 @@ const ImplicitCadViewer = forwardRef(function ImplicitCadViewer({
         controls.enableDamping = true;
         controls.dampingFactor = DEFAULT_DAMPING_FACTOR;
         controls.zoomSpeed = DEFAULT_ZOOM_SPEED;
+        syncControlsPanSpeed();
         setPixelRatioCap(graphicsSettingsRef.current.resolutionScale);
         requestRender();
       }, INTERACTION_IDLE_DELAY_MS);
@@ -1051,6 +1063,7 @@ const ImplicitCadViewer = forwardRef(function ImplicitCadViewer({
       runtime.renderQueued = false;
       const transitionActive = stepCameraTransition(runtime, timestamp);
       const keyboardOrbitMoved = stepKeyboardOrbit(runtime, timestamp);
+      syncControlsPanSpeed();
       const controlsActive = controls?.update?.();
       if (keyboardOrbitMoved) {
         emitPerspectiveChange();
@@ -1094,9 +1107,11 @@ const ImplicitCadViewer = forwardRef(function ImplicitCadViewer({
     const handleControlsStart = () => {
       runtime.cameraTransition = null;
       setAutoZoomAttachedRef.current(false);
+      syncControlsPanSpeed();
       beginInteraction();
     };
     const handleControlsChange = () => {
+      syncControlsPanSpeed();
       emitPerspectiveChange();
       requestRender();
     };

@@ -10,6 +10,10 @@ import {
 import {
   resolveInteractionPixelRatioCap
 } from "cadjs/lib/viewer/renderQuality";
+import {
+  ORBIT_BASE_PAN_SPEED,
+  syncOrbitPanSpeed
+} from "../orbitPanSpeed.js";
 
 function createWebGlRenderer(THREE) {
   return createCadWebGlRenderer(THREE, {
@@ -169,7 +173,7 @@ export function useViewerRuntime({
       controls.enableDamping = true;
       controls.dampingFactor = DEFAULT_DAMPING_FACTOR;
       controls.rotateSpeed = 1;
-      controls.panSpeed = 1.35;
+      controls.panSpeed = ORBIT_BASE_PAN_SPEED;
       controls.zoomSpeed = getDefaultZoomSpeed();
       if ("zoomToCursor" in controls) {
         controls.zoomToCursor = true;
@@ -285,6 +289,9 @@ export function useViewerRuntime({
         }
         screenSpaceLineMaterials.delete(material);
       };
+      const syncControlsPanSpeed = (targetCamera = runtimeRef.current?.camera || controls.object) => (
+        syncOrbitPanSpeed(controls, targetCamera, { basePanSpeed: ORBIT_BASE_PAN_SPEED })
+      );
       const handleContextLost = (event) => {
         event.preventDefault();
         clearKeyboardOrbitState(keyboardOrbitState);
@@ -359,6 +366,7 @@ export function useViewerRuntime({
         }
         const cameraTransitionActive = stepCameraTransition(runtimeRef.current, timestamp);
         const keyboardOrbitMoved = stepKeyboardOrbit(runtimeRef.current, timestamp);
+        syncControlsPanSpeed();
         const needsMoreFrames = controls.update();
         if (cameraTransitionActive || keyboardOrbitMoved) {
           emitPerspectiveChange(runtimeRef.current);
@@ -411,6 +419,7 @@ export function useViewerRuntime({
           controls.enableDamping = true;
           controls.dampingFactor = DEFAULT_DAMPING_FACTOR;
           controls.zoomSpeed = getDefaultZoomSpeed();
+          syncControlsPanSpeed();
           applyRenderQuality(IDLE_PIXEL_RATIO_CAP);
           requestRender();
         }, INTERACTION_IDLE_DELAY_MS);
@@ -424,6 +433,7 @@ export function useViewerRuntime({
         syncCameraViewport(perspectiveCamera, w, h);
         syncCameraViewport(orthographicCamera, w, h);
         applyCameraFrameInsets?.(runtimeRef.current, frameInsetsRef?.current, { updateProjection: false });
+        syncControlsPanSpeed();
         syncScreenSpaceLineMaterials();
         syncDrawingCanvasSize(runtimeRef.current);
         renderDrawingOverlay();
@@ -449,9 +459,11 @@ export function useViewerRuntime({
       const handleControlsStart = () => {
         controlsStartDistance = readControlsDistance();
         cancelCameraTransition(runtimeRef.current);
+        syncControlsPanSpeed();
         beginInteraction();
       };
       const handleControlsChange = () => {
+        syncControlsPanSpeed();
         emitPerspectiveChange(runtimeRef.current);
         requestRender();
       };
@@ -617,6 +629,7 @@ export function useViewerRuntime({
         scheduleIdleQuality,
         applyCameraFrameInsets,
         frameInsetsRef,
+        syncOrbitPanSpeed: syncControlsPanSpeed,
         onManualCameraInteraction,
         onViewportResize,
         registerScreenSpaceLineMaterial,
