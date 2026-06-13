@@ -80,7 +80,7 @@ const DEFAULT_LIGHTING_RIG = Object.freeze({
   point: { color: "#ffe2ba", intensity: 0.28, position: { x: -240, y: 110, z: -210 } },
   ambient: { color: "#ffffff", intensity: 0.4 },
   hemisphere: { skyColor: "#ffffff", groundColor: "#d6e2ee", intensity: 1.12 },
-  environmentAmbientScale: 0.5,
+  environmentAmbientScale: 1.0,
   rimColor: "#6db6e8",
   rimIntensity: 0.08,
   floorShadowOpacity: 0.16,
@@ -144,6 +144,16 @@ function implicitFloorBoundsForModel(normalized, userData = null) {
     floorBounds = estimateImplicitCadFrameBounds(normalized) || normalized.bounds;
   } catch {
     floorBounds = normalized.bounds;
+  }
+  // The estimate pads outward by its sampling margin; declared bounds are an
+  // authoritative outer limit, so refine inward only or the floor (and its
+  // contact shadow) detaches below coarsely sampled models.
+  const clamped = {
+    min: floorBounds.min.map((value, axis) => Math.max(value, normalized.bounds.min[axis])),
+    max: floorBounds.max.map((value, axis) => Math.min(value, normalized.bounds.max[axis])),
+  };
+  if (clamped.min.every((value, axis) => value < clamped.max[axis])) {
+    floorBounds = clamped;
   }
   if (userData) {
     userData.implicitFloorBounds = floorBounds;
@@ -421,10 +431,48 @@ function expandBounds(min, max, margin) {
   };
 }
 
+const FRAME_BOUNDS_CACHE_LIMIT = 32;
+const frameBoundsEstimateCache = new Map();
+
+function frameBoundsCacheKey(model, fallbackBounds) {
+  const source = String(model?.glslSource || model?.distanceSource || "");
+  let uniformsKey = "";
+  try {
+    uniformsKey = JSON.stringify(model?.uniforms ?? null);
+  } catch {
+    uniformsKey = "?";
+  }
+  return `${JSON.stringify(fallbackBounds)}|${uniformsKey}|${source}`;
+}
+
+// The CPU evaluator interprets the model's GLSL per sample, so the grid
+// density must shrink as source size grows or heavy models stall the browser
+// main thread for tens of seconds on load.
+function frameBoundsSampleCount(model) {
+  const sourceLength = String(model?.glslSource || model?.distanceSource || "").length;
+  if (sourceLength > 16000) {
+    return 9;
+  }
+  if (sourceLength > 8000) {
+    return 11;
+  }
+  if (sourceLength > 4000) {
+    return 17;
+  }
+  return FRAME_BOUNDS_SAMPLE_COUNT;
+}
+
 function estimateImplicitCadFrameBounds(model) {
   const fallbackBounds = cameraBoundsForImplicitModel(model);
   if (model?.frameBounds?.min && model?.frameBounds?.max) {
     return model.frameBounds;
+  }
+  const cacheKey = frameBoundsCacheKey(model, fallbackBounds);
+  if (frameBoundsEstimateCache.has(cacheKey)) {
+    const cached = frameBoundsEstimateCache.get(cacheKey);
+    frameBoundsEstimateCache.delete(cacheKey);
+    frameBoundsEstimateCache.set(cacheKey, cached);
+    return cached;
   }
   let sdf = null;
   try {
@@ -433,7 +481,7 @@ function estimateImplicitCadFrameBounds(model) {
     return fallbackBounds;
   }
 
-  const sampleCount = FRAME_BOUNDS_SAMPLE_COUNT;
+  const sampleCount = frameBoundsSampleCount(model);
   const size = boundsSize(fallbackBounds);
   const step = size.map((axisSize) => axisSize / Math.max(sampleCount - 1, 1));
   const threshold = Math.max(
@@ -476,7 +524,19 @@ function estimateImplicitCadFrameBounds(model) {
     finiteNumber(model?.epsilon, 0.002) * 20,
     0.25
   );
-  return expandBounds(hitMin, hitMax, margin);
+  const expanded = expandBounds(hitMin, hitMax, margin);
+  // The sampling margin can push past the model's declared bounds, especially
+  // at coarse grids; declared bounds are an authoritative outer limit, so the
+  // estimate only ever refines inward.
+  const estimated = {
+    min: expanded.min.map((value, axis) => Math.max(value, fallbackBounds.min[axis])),
+    max: expanded.max.map((value, axis) => Math.min(value, fallbackBounds.max[axis])),
+  };
+  frameBoundsEstimateCache.set(cacheKey, estimated);
+  while (frameBoundsEstimateCache.size > FRAME_BOUNDS_CACHE_LIMIT) {
+    frameBoundsEstimateCache.delete(frameBoundsEstimateCache.keys().next().value);
+  }
+  return estimated;
 }
 
 function vectorFromArray(value, fallback) {
@@ -1208,10 +1268,14 @@ float implicit_ambient_occlusion(vec3 p, vec3 normal) {
     occlusion += (distanceAlongNormal - sampled) * scale;
     scale *= 0.58;
   }
-  return clamp(1.0 - 0.055 * occlusion, 0.46, 1.0);
+  // Gentler floor than a typical raymarcher: the mesh viewer has no SSAO, so
+  // heavy AO reads as "implicit models render darker".
+  return clamp(1.0 - 0.045 * occlusion, 0.62, 1.0);
 }
 
 float implicit_soft_shadow(vec3 origin, vec3 direction, float maxDistance) {
+  // Tight penumbra and a higher floor keep self-shadowing close to the mesh
+  // viewer's crisp PCF shadows instead of dimming broad surface areas.
   float shadow = 1.0;
   float t = uHitEpsilon * 8.0;
   for (int shadowStep = 0; shadowStep < 28; shadowStep += 1) {
@@ -1220,12 +1284,12 @@ float implicit_soft_shadow(vec3 origin, vec3 direction, float maxDistance) {
     }
     float h = implicit_scene_sdf(origin + direction * t);
     if (h < uHitEpsilon) {
-      return 0.2;
+      return 0.32;
     }
-    shadow = min(shadow, 12.0 * h / t);
+    shadow = min(shadow, 22.0 * h / t);
     t += clamp(h, uHitEpsilon * 3.0, maxDistance * 0.08);
   }
-  return clamp(shadow, 0.2, 1.0);
+  return clamp(shadow, 0.32, 1.0);
 }
 
 vec3 implicit_srgb_to_linear(vec3 c) {

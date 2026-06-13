@@ -2,6 +2,7 @@
 
 import { forwardRef, useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState } from "react";
 import * as THREE from "three";
+import { Navigation2 } from "lucide-react";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import { copyImageBlobToClipboard } from "@/ui/clipboard";
 import { triggerBlobDownload } from "@/ui/download";
@@ -37,6 +38,7 @@ const DEFAULT_FOV_DEG = 48;
 const IMPLICIT_CAMERA_VERSION = 8;
 const AUTO_ZOOM_FRAME_MARGIN = 1.08;
 const AUTO_ZOOM_SPEED_MS = 400;
+const RESET_VIEW_CONTROL_BUTTON_CLASSES = "cad-glass-surface pointer-events-auto grid h-8 w-8 shrink-0 place-items-center rounded-full border border-sidebar-border text-sidebar-foreground/60 shadow-sm transition duration-150 hover:text-sidebar-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/45";
 const VIEW_PLANE_FACES = [
   { id: "z", title: "Jump to top view", direction: [0, 0, 1], up: [0, 1, 0] },
   { id: "zNeg", title: "Jump to bottom view", direction: [0, 0, -1], up: [0, 1, 0] },
@@ -593,6 +595,13 @@ const ImplicitCadViewer = forwardRef(function ImplicitCadViewer({
   }, []);
 
   const autoZoomStateRef = useRef({ attached: true, lastFitKey: "" });
+  const [autoZoomDetached, setAutoZoomDetached] = useState(false);
+  const setAutoZoomAttached = useCallback((attached) => {
+    autoZoomStateRef.current.attached = attached;
+    setAutoZoomDetached(!attached);
+  }, []);
+  const setAutoZoomAttachedRef = useRef(setAutoZoomAttached);
+  setAutoZoomAttachedRef.current = setAutoZoomAttached;
 
   const runAutoZoom = useCallback((reason = "state", {
     animate = true,
@@ -626,10 +635,10 @@ const ImplicitCadViewer = forwardRef(function ImplicitCadViewer({
         frameMargin: AUTO_ZOOM_FRAME_MARGIN
       }
     );
-    state.attached = true;
+    setAutoZoomAttached(true);
     state.lastFitKey = autoZoomBoundsKey(activeModel);
     return transitionCameraToState(runtime, cameraState, { animate, durationMs });
-  }, [model]);
+  }, [model, setAutoZoomAttached]);
   const runAutoZoomRef = useRef(null);
   runAutoZoomRef.current = runAutoZoom;
 
@@ -982,7 +991,7 @@ const ImplicitCadViewer = forwardRef(function ImplicitCadViewer({
 
     const handleControlsStart = () => {
       runtime.cameraTransition = null;
-      autoZoomStateRef.current.attached = false;
+      setAutoZoomAttachedRef.current(false);
       beginInteraction();
     };
     const handleControlsChange = () => {
@@ -994,7 +1003,7 @@ const ImplicitCadViewer = forwardRef(function ImplicitCadViewer({
     };
     const handleWheel = (event) => {
       runtime.cameraTransition = null;
-      autoZoomStateRef.current.attached = false;
+      setAutoZoomAttachedRef.current(false);
       controls.enableDamping = false;
       controls.zoomSpeed = getWheelZoomSpeed(
         isTrackpadLikeWheelEvent(event) ? TRACKPAD_PINCH_ZOOM_SPEED : ACCELERATED_WHEEL_ZOOM_SPEED
@@ -1026,7 +1035,7 @@ const ImplicitCadViewer = forwardRef(function ImplicitCadViewer({
       keyboardOrbitState.directionCounts[command.direction] += 1;
       keyboardOrbitState.lastFrameTime = 0;
       runtime.cameraTransition = null;
-      autoZoomStateRef.current.attached = false;
+      setAutoZoomAttachedRef.current(false);
       beginInteraction();
       applyOrbitDelta(
         runtime,
@@ -1089,10 +1098,9 @@ const ImplicitCadViewer = forwardRef(function ImplicitCadViewer({
     updateCameraFraming();
     const initialPerspective = perspectiveRef?.current || perspective;
     if (applyPerspectiveSnapshot(runtime, initialPerspective, modelKey)) {
-      autoZoomStateRef.current.attached = false;
+      setAutoZoomAttachedRef.current(false);
       autoZoomStateRef.current.lastFitKey = autoZoomBoundsKey(model);
     } else {
-      autoZoomStateRef.current.attached = true;
       runAutoZoomRef.current?.("mount", { animate: false, force: true });
     }
     if (controls) {
@@ -1137,6 +1145,21 @@ const ImplicitCadViewer = forwardRef(function ImplicitCadViewer({
   return (
     <div className="relative h-full w-full overflow-hidden bg-[#09090b]">
       <div ref={mountRef} className="absolute inset-0" />
+      {!previewMode && !isLoading && model && autoZoomDetached ? (
+        <button
+          type="button"
+          aria-label="Reset view"
+          title="Reset view"
+          className={`${RESET_VIEW_CONTROL_BUTTON_CLASSES} absolute z-20`}
+          style={{
+            right: `calc(${finiteNumber(viewPlaneOffsetRight, 16)}px + 2rem)`,
+            bottom: "calc(1rem + 6.6rem)"
+          }}
+          onClick={activateDefaultViewPlane}
+        >
+          <Navigation2 className="h-3.5 w-3.5" strokeWidth={2} aria-hidden="true" />
+        </button>
+      ) : null}
       <ViewPlaneControl
         showViewPlane
         previewMode={previewMode}
