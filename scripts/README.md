@@ -116,8 +116,9 @@ scripts/release/check-version.sh --incremented-from origin/main
 ```
 
 Normal development branches should not bump `plugins/cad/VERSION`. Use the
-`Prepare Release` GitHub Actions workflow to open a release PR from `develop`; use
-`scripts/release/bump-version.sh` only as a local fallback for that release PR:
+`Release` GitHub Actions workflow to open and ship the release PR from
+`develop`; use `scripts/release/bump-version.sh` only as a local fallback for
+that release PR:
 
 ```bash
 scripts/release/bump-version.sh patch --dry-run
@@ -126,17 +127,23 @@ scripts/release/bump-version.sh patch --no-commit
 
 `plugins/cad/VERSION` is the only canonical release bump file. Duplicate
 package, plugin, lockfile, and Python `pyproject.toml` versions are derived from
-it; `Prepare Release` stamps them with `scripts/release/sync-version.mjs`, and
-`scripts/bundle/bundle.sh` re-checks the same metadata before writing or
+it; the `Release` workflow stamps them with `scripts/release/sync-version.mjs`,
+and `scripts/bundle/bundle.sh` re-checks the same metadata before writing or
 checking production outputs.
 
-Use `scripts/release/publish-github-release.sh` only from the `Publish`
+Use `scripts/release/publish-github-release.sh` only from the `Release`
 workflow after a main production bundle, or as a manual production-branch
-fallback. It creates the semver git tag from `plugins/cad/VERSION` and creates a
-draft GitHub Release with generated notes.
+fallback. It creates the semver git tag from `plugins/cad/VERSION` and creates
+a GitHub Release with generated notes; unlike the `Release` workflow, which
+publishes the release by default, the script creates a draft unless
+`--publish` is passed.
 Use `scripts/release/check-publish-source.sh` to verify that a source ref
-contains the previous release source before Publish writes a new generated
-target commit.
+contains the previous release source before the publish job writes a new
+generated target commit.
+Use `scripts/github-workflows/deploy-vercel-app.sh` only from the `Deploy Docs`
+and `Deploy Viewer` workflows; it configures Vercel Authentication for preview
+deployments only, deploys one Vercel project to production, and verifies its
+public URLs.
 `scripts/release/create-github-release.sh` remains as a manual all-in-one
 fallback, but the workflow path is preferred.
 
@@ -144,13 +151,14 @@ fallback, but the workflow path is preferred.
 
 | Workflow | Branches/events | Purpose |
 | -------- | --------------- | ------- |
-| `test.yml` | pushes to `develop`; PRs to `develop`; manual dispatch | Checks `plugins/cad/VERSION` and derived metadata as a separate job so test jobs still run if release metadata is wrong. The source test job checks the branch-specific layout and runs the broad code test wrapper. On `develop` and PRs to `develop`, a production-bundle job bundles temporary production outputs, checks that layout without rebuilding it, runs docs checks, and reruns code tests. |
-| `release.yml` | manual dispatch | One-button release orchestrator. It bumps or sets `plugins/cad/VERSION`, syncs derived metadata on `release/<version>`, opens or updates the release PR, waits for PR checks, merges it into `develop`, dispatches `publish.yml`, and waits for Publish to finish. If `develop` already contains the requested version, it skips the release PR and dispatches Publish directly, which makes failed publishes resumable after external blockers are fixed. |
-| `prepare-release.yml` | manual dispatch | Bumps `plugins/cad/VERSION`, syncs derived version metadata on `release/<version>`, and opens a release PR back to `develop` by default. |
-| `publish.yml` | manual dispatch | Uses `source_ref=develop` and `target_branch=build-test` by default for rehearsals; dispatch from `develop` and set `target_branch=main` only for a real release. Main publishes are allowed only when the source version is newer than `main` and the latest semver tag, and when the source contains the previous publish source commit. When publishing, it bundles, validates that layout without rebuilding it, runs docs/code tests, writes the production merge commit on top of the target branch with the source commit as a second parent for release-note attribution, configures Vercel Authentication for preview deployments only, deploys the docs and demo viewer Vercel projects only for non-dry-run `main` publishes, verifies the public production URLs, and creates the semver tag/GitHub Release only for `main`. Use `dry_run=true` to rehearse without writing or deploying. |
-| `vercel-protection.yml` | pushes to `develop`; manual dispatch | Configures the docs and demo viewer Vercel projects so Vercel Authentication protects preview deployments only, then verifies the production custom domains, stable `.vercel.app` aliases, and latest raw production deployment URLs are publicly reachable. |
+| `test.yml` | pushes to `develop`; PRs to `develop`; manual dispatch | Checks `plugins/cad/VERSION` and derived metadata as a separate job so the test job still runs if release metadata is wrong. The test job checks the `develop` symlink layout, bundles temporary production outputs, checks that layout without rebuilding it, and runs docs and code tests against the generated output. Superseded PR runs are cancelled. |
+| `release.yml` | manual dispatch | The single release workflow: release PR, production publish commit to the target branch, models upload, web-app deploys, semver tag, and GitHub Release in one run. See the Releases section in `CONTRIBUTING.md` for the full flow, CI/CD-testing, and resume options. |
+| `deploy-docs.yml` | manual dispatch; called by `release.yml` | Deploys the docs app to Vercel production from a production-layout ref (default `main`): configures Vercel Authentication for preview deployments only, runs `vercel pull/build/deploy --prod`, and verifies the public production URLs. |
+| `deploy-viewer.yml` | manual dispatch; called by `release.yml` | Deploys the demo viewer app to Vercel production from a production-layout ref (default `main`), with the same protection and public URL checks as `deploy-docs.yml`. |
+| `upload-models.yml` | manual dispatch; called by `release.yml` | Uploads the `models/` catalog and CAD Viewer assets to Vercel Blob via `scripts/viewer/upload-viewer-models-catalog.sh`, skipping assets that already match remote and fetching only the missing LFS objects. Upload from a source ref (default `develop`); `main` does not contain `models/`. |
 
-In short: use `release.yml` for normal releases, keep `prepare-release.yml` and
-`publish.yml` as lower-level fallbacks, treat `develop` as the editable symlink
-branch, and keep `main` as the explicit publish-only production branch for user
-clones and published releases.
+In short: use `release.yml` for releases, use `deploy-docs.yml` and
+`deploy-viewer.yml` to redeploy the individual web apps from `main`, use
+`upload-models.yml` to push new models to Vercel Blob from `develop`, treat
+`develop` as the editable symlink branch, and keep `main` as the explicit
+publish-only production branch for user clones and published releases.

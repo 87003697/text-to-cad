@@ -44,8 +44,8 @@ Options:
   -h, --help            Show this help.
 
 The worktree must be clean before a non-dry-run release prep starts.
-This is a manual all-in-one fallback. Prefer the Prepare Release and Publish
-GitHub Actions workflows for normal releases.
+This is a manual all-in-one fallback. Prefer the Release GitHub Actions
+workflow for normal releases.
 EOF
 }
 

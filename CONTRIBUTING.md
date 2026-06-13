@@ -165,18 +165,94 @@ scripts/dev/setup-symlinks.sh
 scripts/dev/setup-symlinks.sh --check
 ```
 
-Normal development PRs should not bump `plugins/cad/VERSION`. Release versions
-are reserved for release PRs so the canonical repo version, Git tag, and GitHub
-Release describe the same production commit. For normal releases, run the
-`Release` GitHub Actions workflow with `base_branch=develop`; it updates
-`plugins/cad/VERSION` plus derived package/plugin metadata on a
-`release/<version>` branch, opens a release PR, waits for checks, merges it into
-`develop`, and dispatches `Publish`. If `develop` already contains the requested
-version, the workflow skips the release PR and dispatches `Publish` directly so
-failed publishes can resume after external blockers are fixed. To only prepare
-the release PR, run `Prepare Release` as a lower-level fallback.
+The `main` production branch must be installable from a plain checkout, so it
+contains generated production outputs instead of symlinks. `main` is
+publish-only: do not open PRs to `main` or push it directly. The `Test`
+workflow runs on `develop` and PRs to `develop`: it starts from the symlink
+layout, runs `scripts/bundle/bundle.sh --clean`, checks the production layout
+without rebuilding it, runs documentation checks, and runs the code tests
+against that generated output.
 
-For local release preparation, use the same script that the workflow calls:
+## Releases
+
+Normal development PRs should not bump `plugins/cad/VERSION`; release versions
+are reserved for release PRs so the canonical repo version, Git tag, and GitHub
+Release describe the same production commit. PRs that do touch release state
+must keep `plugins/cad/VERSION` and derived version metadata valid; the `Test`
+workflow checks that metadata in a separate job so code tests still run when it
+is wrong.
+
+### Shipping a release
+
+Run the `Release` GitHub Actions workflow. Its defaults are the real-release
+settings — build from `develop` (`base_branch=develop`), publish to `main`
+(`target_branch=main`), and publish the GitHub Release (`publish=true`, not a
+draft) — and the input descriptions in `.github/workflows/release.yml` are
+authoritative. Choose the semver bump (`patch`, `minor`, or `major`) or an
+exact `set_version` deliberately for every release; if a release request does
+not specify one, confirm it rather than assuming:
+
+```bash
+gh workflow run release.yml --ref develop -f bump=patch
+```
+
+One run bumps `plugins/cad/VERSION` plus derived metadata on a
+`release/<version>` branch, opens a release PR, merges it into `develop`
+immediately, and then runs the publish, models-upload, web-app deploy, and
+tag/GitHub Release jobs in the same run. The release PR does not wait for its own CI checks; the
+publish job repeats the full bundle and test validation against exactly what
+ships. The publish job ships to `main` only when the
+source version is newer than `main` and the latest semver tag, and refuses
+sources that do not contain the previous publish source commit. It writes a
+generated production merge commit on top of the previous publish target with
+the release source as the second parent, which keeps `main` fast-forwardable
+while preserving source commits for release notes and contributor attribution.
+The GitHub Release is published immediately by default; set `publish=false` to
+review it as a draft first. Treat generated outputs as CI products, not edit
+targets.
+
+### Testing CI/CD and build changes
+
+Use `target_branch=build-test` only when explicitly testing changes to the
+CI/CD pipeline or production build outputs; it is never part of a normal
+release and should never be chosen by default. It rehearses the full publish
+flow without touching `main`, deploying, or creating a tag/release. Use
+`dry_run=true` to preview the version changes only, and `auto_merge=false` to
+stop after preparing the release PR.
+
+### Resuming a failed publish
+
+If a run fails partway — including after `main` has moved but before the semver
+tag exists — rerun `Release` with `set_version` pinned to the current version.
+When `develop` already contains that version, the workflow skips the release PR
+and proceeds straight to the publish jobs.
+
+### Redeploying the web apps
+
+The standalone `Deploy Docs` and `Deploy Viewer` workflows redeploy the
+individual web apps to Vercel production without running a release. They
+default to deploying `main` and expect a production-layout ref:
+
+```bash
+gh workflow run deploy-docs.yml -f ref=main
+gh workflow run deploy-viewer.yml -f ref=main
+```
+
+### Uploading new models
+
+The standalone `Upload Models` workflow uploads the `models/` catalog and CAD
+Viewer assets to Vercel Blob without running a release or redeploying the
+viewer. It skips assets that already match the remote catalog and fetches only
+the missing Git LFS objects. Upload from a source ref — `main` does not
+contain `models/`:
+
+```bash
+gh workflow run upload-models.yml -f ref=develop
+```
+
+### Local and manual fallbacks
+
+For local release preparation, use the same scripts the workflow calls:
 
 ```bash
 git fetch origin develop
@@ -187,57 +263,19 @@ scripts/release/check-version.sh --incremented-from origin/main
 node scripts/release/sync-version.mjs --check
 ```
 
-The `main` production branch must be installable from a plain checkout, so it
-contains generated production outputs instead of symlinks. `main` is
-publish-only: do not open PRs to `main` or push it directly. The `Test`
-workflow runs a production bundle job on `develop` and PRs to `develop`: it starts from
-the symlink layout, runs `scripts/bundle/bundle.sh --clean`, checks the
-production layout without rebuilding it, runs documentation checks, and runs the
-code tests against that generated output.
+`scripts/release/publish-github-release.sh` is the manual fallback for the tag
+and GitHub Release step. Unlike the `Release` workflow, the script creates a
+draft release unless `--publish` is passed.
 
-To ship a release manually, merge the release PR to `develop`, then dispatch the
-`Publish` workflow from the `develop` workflow ref with `source_ref=develop` and
-`target_branch=main`:
+### Repository settings
 
-```bash
-gh workflow run publish.yml --ref develop \
-  -f source_ref=develop \
-  -f target_branch=main \
-  -f dry_run=false \
-  -f publish=false \
-  -f create_release=true
-```
-
-`Publish` only ships to `main` when the source version is newer than `main` and
-the latest semver tag. It repeats the production bundle checks, refuses sources
-that do not contain the previous publish source commit, writes a generated
-production merge commit on top of the previous publish target with the release
-source as the second parent, creates the semver tag from `plugins/cad/VERSION`,
-and opens a draft GitHub Release with generated notes. This keeps the target
-branch fast-forwardable while preserving source commits for release notes and
-contributor attribution. If a run moves `main` but fails before tag creation,
-rerunning Publish can resume while `main` already has the release version, as
-long as the semver tag is still missing. Leave `publish=false` unless the
-release should be published immediately rather than reviewed as a draft. Use
-`target_branch=build-test` to rehearse the full publish flow without touching
-`main` or creating a tag/release. Pushing `develop` runs tests but does not
-publish `main`. During bundling, Publish rechecks duplicate package/plugin
-metadata from `plugins/cad/VERSION`. Treat generated outputs as CI products, not
-edit targets.
-
-PRs opened against `develop` must keep `plugins/cad/VERSION` and derived version
-metadata valid when they touch release state. The `Test` workflow checks release
-version metadata in a separate job so code tests still run when that metadata is
-wrong. It also verifies the symlink layout for `develop` and runs a temporary
-production bundle check for `develop`. Configure GitHub branch settings/rulesets
-so `main` rejects PRs and direct pushes, leaving the `Publish` workflow as the
-only writer.
-Enable repository tag rulesets for
-`[0-9]*.[0-9]*.[0-9]*` before publishing from `main`, and enable immutable
-releases once the production flow is trusted.
+Configure GitHub branch settings/rulesets so `main` rejects PRs and direct
+pushes, leaving the `Release` workflow's publish job as the only writer. Enable
+repository tag rulesets for `[0-9]*.[0-9]*.[0-9]*` before publishing from
+`main`, and enable immutable releases once the production flow is trusted.
 
 Production users should continue cloning `main`; developers should treat
-`develop` plus the `Publish` workflow as the only route to `main`.
+`develop` plus the `Release` workflow as the only route to `main`.
 
 ## Iteration Loop
 
