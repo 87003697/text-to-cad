@@ -99,17 +99,18 @@ FOOT_EDGE_RAISED_Y_MM = 9.6
 LEFT_TAB_RIGHT_X_MM = 10.6  # 4.6 mm tab (X 6.0-10.6) around the left screw at 8.3
 RAISED_ZONE_X_MM = (LEFT_TAB_RIGHT_X_MM, 30.4)
 
-# Leg profile (in the X-Z plane). The side-view layout is three main bands
-# from the bottom-servo mounting plane to the 180 mm top pitch axis: lower
-# vertical section, centered sloped transition, and upper vertical section
-# that carries the top-servo face features. The upper band gets one sheet of
-# extra low-X material so the formed section keeps the same working web width
-# after the full-length wrap bend consumes material on the high-X side.
+# Leg profile (in the X-Z plane). The side-view layout is three constant-width
+# bands from the bottom-servo mounting plane to the 180 mm top pitch axis:
+# lower vertical section, centered sloped transition, and upper vertical
+# section that carries the top-servo face features. The upper band carries a
+# 2t flat lead-in before the one-thickness wrap flange turns onto the servo
+# case face.
 SECTION_WIDTH_MM = FOOT_X_MAX_MM - FOOT_X_MIN_MM
-TOP_WRAP_BEND_WIDTH_ALLOWANCE_MM = lc.SHEET_THICKNESS_MM
-UPPER_SECTION_WIDTH_MM = SECTION_WIDTH_MM + TOP_WRAP_BEND_WIDTH_ALLOWANCE_MM
-UPPER_X_MAX_MM = FLANGE_OUTER_X_MM
-UPPER_X_MIN_MM = UPPER_X_MAX_MM - UPPER_SECTION_WIDTH_MM
+TOP_FLANGE_WRAP_LEAD_IN_MM = 2.0 * lc.SHEET_THICKNESS_MM
+UPPER_X_MAX_MM = FLANGE_INNER_X_MM + TOP_FLANGE_WRAP_LEAD_IN_MM
+UPPER_X_MIN_MM = UPPER_X_MAX_MM - SECTION_WIDTH_MM
+FLANGE_WRAP_INNER_X_MM = UPPER_X_MAX_MM
+FLANGE_WRAP_OUTER_X_MM = FLANGE_WRAP_INNER_X_MM + lc.SHEET_THICKNESS_MM
 RIGHT_SLOPE_BOTTOM_Z_MM = 60.0
 RIGHT_SLOPE_TOP_Z_MM = 120.0
 SLOPE_SECTION_HEIGHT_MM = RIGHT_SLOPE_TOP_Z_MM - RIGHT_SLOPE_BOTTOM_Z_MM
@@ -119,35 +120,20 @@ LOW_X_SLOPE_Z_SHIFT_DOWN_MM = SECTION_WIDTH_MM * (
 ) / SLOPE_RUN_X_MM
 LEFT_SLOPE_BOTTOM_Z_MM = RIGHT_SLOPE_BOTTOM_Z_MM - LOW_X_SLOPE_Z_SHIFT_DOWN_MM
 LEFT_SLOPE_TOP_Z_MM = RIGHT_SLOPE_TOP_Z_MM - LOW_X_SLOPE_Z_SHIFT_DOWN_MM
-SLOPE_HIGH_DX_PER_Z_MM = (UPPER_X_MAX_MM - FOOT_X_MAX_MM) / SLOPE_SECTION_HEIGHT_MM
-SLOPE_LOW_DX_PER_Z_MM = (
-    (UPPER_X_MIN_MM - FOOT_X_MIN_MM)
-    / (LEFT_SLOPE_TOP_Z_MM - LEFT_SLOPE_BOTTOM_Z_MM)
-)
-SLOPE_HIGH_X_INTERCEPT_MM = FOOT_X_MAX_MM - SLOPE_HIGH_DX_PER_Z_MM * RIGHT_SLOPE_BOTTOM_Z_MM
-SLOPE_LOW_X_INTERCEPT_MM = FOOT_X_MIN_MM - SLOPE_LOW_DX_PER_Z_MM * LEFT_SLOPE_BOTTOM_Z_MM
-
-
-def _slope_high_x_at_z(z: float) -> float:
-    return SLOPE_HIGH_DX_PER_Z_MM * z + SLOPE_HIGH_X_INTERCEPT_MM
-
-
-def _slope_low_x_at_z(z: float) -> float:
-    return SLOPE_LOW_DX_PER_Z_MM * z + SLOPE_LOW_X_INTERCEPT_MM
-
-
+SLOPE_DX_PER_Z_MM = (UPPER_X_MAX_MM - FOOT_X_MAX_MM) / SLOPE_SECTION_HEIGHT_MM
+SLOPE_HIGH_X_INTERCEPT_MM = FOOT_X_MAX_MM - SLOPE_DX_PER_Z_MM * RIGHT_SLOPE_BOTTOM_Z_MM
+SLOPE_LOW_X_INTERCEPT_MM = FOOT_X_MIN_MM - SLOPE_DX_PER_Z_MM * LEFT_SLOPE_BOTTOM_Z_MM
+SLOPED_BAND_NORMAL_WIDTH_MM = abs(
+    SLOPE_HIGH_X_INTERCEPT_MM - SLOPE_LOW_X_INTERCEPT_MM
+) / math.hypot(1.0, SLOPE_DX_PER_Z_MM)
 SLOPE_SECTION_CENTER_Z_MM = 0.25 * (
     LEFT_SLOPE_BOTTOM_Z_MM
     + RIGHT_SLOPE_BOTTOM_Z_MM
     + LEFT_SLOPE_TOP_Z_MM
     + RIGHT_SLOPE_TOP_Z_MM
 )
-SLOPED_BAND_CENTER_WIDTH_MM = (
-    _slope_high_x_at_z(SLOPE_SECTION_CENTER_Z_MM)
-    - _slope_low_x_at_z(SLOPE_SECTION_CENTER_Z_MM)
-)
-# The high-X outside face is pulled inward flush with the wrap flange's
-# outside face; the low-X side carries the bend allowance at the upper band.
+# The main top web now carries the wrap lead-in; the flange box itself remains
+# one sheet thickness.
 LEG_RUN_X_MM = (min(FOOT_X_MIN_MM, UPPER_X_MIN_MM), max(FOOT_X_MAX_MM, UPPER_X_MAX_MM))
 OUTPUT_HORN_TOP_EDGE_GAP_MM = 6.6
 LEG_TOP_Z_MM = lc.TOP_PIVOT_Z_MM - OUTPUT_HORN_TOP_EDGE_GAP_MM
@@ -174,23 +160,22 @@ MIDDLE_SLOT_CENTER_Z_MM = SLOPE_SECTION_CENTER_Z_MM
 TOP_SLOT_CENTER_Z_MM = 0.5 * (RIGHT_SLOPE_TOP_Z_MM + LEG_TOP_Z_MM)
 LOWER_SLOT_CENTER_X_MM = (14.0, 27.0)
 MIDDLE_SLOT_PAIR_CENTER_X_MM = 0.5 * (
-    _slope_low_x_at_z(MIDDLE_SLOT_CENTER_Z_MM)
-    + _slope_high_x_at_z(MIDDLE_SLOT_CENTER_Z_MM)
+    (SLOPE_DX_PER_Z_MM * MIDDLE_SLOT_CENTER_Z_MM + SLOPE_LOW_X_INTERCEPT_MM)
+    + (SLOPE_DX_PER_Z_MM * MIDDLE_SLOT_CENTER_Z_MM + SLOPE_HIGH_X_INTERCEPT_MM)
 )
 MIDDLE_SLOT_CENTER_SPACING_X_MM = 13.0
 MIDDLE_SLOT_CENTER_X_MM = (
     MIDDLE_SLOT_PAIR_CENTER_X_MM - 0.5 * MIDDLE_SLOT_CENTER_SPACING_X_MM,
     MIDDLE_SLOT_PAIR_CENTER_X_MM + 0.5 * MIDDLE_SLOT_CENTER_SPACING_X_MM,
 )
-MIDDLE_SLOT_LOW_EDGE_MARGIN_MM = (
-    MIDDLE_SLOT_CENTER_X_MM[0]
-    - 0.5 * SLOT_WIDTH_MM
-    - _slope_low_x_at_z(MIDDLE_SLOT_CENTER_Z_MM)
+MIDDLE_SLOT_CENTER_NORMAL_MM = tuple(
+    (slot_x - SLOPE_DX_PER_Z_MM * MIDDLE_SLOT_CENTER_Z_MM - SLOPE_LOW_X_INTERCEPT_MM)
+    / math.hypot(1.0, SLOPE_DX_PER_Z_MM)
+    for slot_x in MIDDLE_SLOT_CENTER_X_MM
 )
+MIDDLE_SLOT_LOW_EDGE_MARGIN_MM = MIDDLE_SLOT_CENTER_NORMAL_MM[0] - 0.5 * SLOT_WIDTH_MM
 MIDDLE_SLOT_HIGH_EDGE_MARGIN_MM = (
-    _slope_high_x_at_z(MIDDLE_SLOT_CENTER_Z_MM)
-    - MIDDLE_SLOT_CENTER_X_MM[1]
-    - 0.5 * SLOT_WIDTH_MM
+    SLOPED_BAND_NORMAL_WIDTH_MM - MIDDLE_SLOT_CENTER_NORMAL_MM[1] - 0.5 * SLOT_WIDTH_MM
 )
 TOP_SLOT_PAIR_CENTER_X_MM = 0.5 * (UPPER_X_MIN_MM + UPPER_X_MAX_MM)
 TOP_SLOT_CENTER_SPACING_X_MM = 13.0
@@ -202,8 +187,7 @@ MIDDLE_SLOT_ROTATION_DEG = math.degrees(
     math.atan2(
         0.5 * (LEFT_SLOPE_TOP_Z_MM + RIGHT_SLOPE_TOP_Z_MM)
         - 0.5 * (LEFT_SLOPE_BOTTOM_Z_MM + RIGHT_SLOPE_BOTTOM_Z_MM),
-        0.5 * (UPPER_X_MIN_MM + UPPER_X_MAX_MM)
-        - 0.5 * (FOOT_X_MIN_MM + FOOT_X_MAX_MM),
+        UPPER_X_MAX_MM - FOOT_X_MAX_MM,
     )
 )
 VERTICAL_SLOT_ROTATION_DEG = 90.0
@@ -319,8 +303,8 @@ def build_bracket() -> build123d.Shape:
         z_max=lc.FOOT_TOP_Z_MM,
     )
     flange = lc.make_box(
-        x_min=FLANGE_INNER_X_MM,
-        x_max=FLANGE_OUTER_X_MM,
+        x_min=FLANGE_WRAP_INNER_X_MM,
+        x_max=FLANGE_WRAP_OUTER_X_MM,
         y_min=FLANGE_EDGE_Y_MM,
         y_max=LEG_OUTER_Y_MM,
         z_min=FLANGE_BOTTOM_Z_MM,
@@ -365,8 +349,8 @@ def build_bracket() -> build123d.Shape:
             y=0.0,
             z=lc.TOP_PIVOT_Z_MM,
             radius=OUTPUT_HORN_RELIEF_RADIUS_MM,
-            x_min=FLANGE_INNER_X_MM - CUT_EXTENSION_MM,
-            x_max=FLANGE_OUTER_X_MM + CUT_EXTENSION_MM,
+            x_min=FLANGE_WRAP_INNER_X_MM - CUT_EXTENSION_MM,
+            x_max=FLANGE_WRAP_OUTER_X_MM + CUT_EXTENSION_MM,
         )
     )
     # Flange servo holes (the case-top +Y pair).
@@ -376,8 +360,8 @@ def build_bracket() -> build123d.Shape:
                 y=lc.HOLE_SIDE_OFFSET_MM,
                 z=hole_z,
                 radius=lc.SERVO_MOUNT_HOLE_RADIUS_MM,
-                x_min=FLANGE_INNER_X_MM - CUT_EXTENSION_MM,
-                x_max=FLANGE_OUTER_X_MM + CUT_EXTENSION_MM,
+                x_min=FLANGE_WRAP_INNER_X_MM - CUT_EXTENSION_MM,
+                x_max=FLANGE_WRAP_OUTER_X_MM + CUT_EXTENSION_MM,
             )
         )
 
@@ -452,16 +436,15 @@ def build_step() -> build123d.Shape:
     print(
         f"Side profile bands: lower to low/high-X Z="
         f"{LEFT_SLOPE_BOTTOM_Z_MM:.1f}/{RIGHT_SLOPE_BOTTOM_Z_MM:.1f} mm, "
-        f"compensated slope to low/high-X Z="
+        f"steeper slope to low/high-X Z="
         f"{LEFT_SLOPE_TOP_Z_MM:.1f}/{RIGHT_SLOPE_TOP_Z_MM:.1f} mm, "
         f"upper to axis Z={lc.TOP_PIVOT_Z_MM:.1f} mm; "
         f"top servo pitch axis Z={lc.TOP_PIVOT_Z_MM:.1f} mm"
     )
     print(
-        f"Web width check: lower band {SECTION_WIDTH_MM:.3f} mm, "
-        f"upper band {UPPER_SECTION_WIDTH_MM:.3f} mm "
-        f"(includes {TOP_WRAP_BEND_WIDTH_ALLOWANCE_MM:.3f} mm bend allowance), "
-        f"sloped band center {SLOPED_BAND_CENTER_WIDTH_MM:.3f} mm, "
+        f"Web width check: lower/upper bands {SECTION_WIDTH_MM:.3f} mm, "
+        f"flange wrap lead-in {TOP_FLANGE_WRAP_LEAD_IN_MM:.3f} mm, "
+        f"sloped band normal width {SLOPED_BAND_NORMAL_WIDTH_MM:.3f} mm, "
         f"low-X transition shift {LOW_X_SLOPE_Z_SHIFT_DOWN_MM:.3f} mm down"
     )
     print(
