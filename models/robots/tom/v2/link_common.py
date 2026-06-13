@@ -72,9 +72,22 @@ V2_DIR = Path(__file__).resolve().parent
 SERVO_STEP = V2_DIR / "imports" / "sts3250.step"
 SERVO_NO_REAR_HORN_STEP = V2_DIR / "imports" / "sts3250_no_rear_horn.step"
 
+def _env_float(name: str, default: float) -> float:
+    value = os.environ.get(name)
+    if value is None:
+        return default
+    try:
+        parsed = float(value)
+    except ValueError as exc:
+        raise ValueError(f"{name} must be a number, got {value!r}") from exc
+    if parsed <= 0.0:
+        raise ValueError(f"{name} must be positive, got {parsed!r}")
+    return parsed
+
+
 # Sheet stock matches the v1 tom brackets (SendCutSend 0.063 in 5052-H32).
-SHEET_THICKNESS_MM = 25.4 * 0.063
-MOUNT_PLANE_CLEARANCE_MM = 0.25
+SHEET_THICKNESS_MM = _env_float("TOM_V2_SHEET_THICKNESS_MM", 25.4 * 0.063)
+MOUNT_PLANE_CLEARANCE_MM = 0.0
 SIDE_FACE_CLEARANCE_MM = 0.25
 # Gap between a horn mount face and its bracket horn plate, matching the
 # v1 servo_horn_yoke convention. Also used for case-face plates.
@@ -125,14 +138,20 @@ OUTER_WEB_INNER_X_MM = 39.5
 OUTER_WEB_OUTER_X_MM = OUTER_WEB_INNER_X_MM + SHEET_THICKNESS_MM
 OUTER_WEB_CLEARANCE_MM = OUTER_WEB_INNER_X_MM - BODY_FRONT_REACH_MM
 
-# Top pitch joint: the horn axis runs along X at this height, and the
-# horn-to-horn span is centered on the link centerline.
-TOP_PIVOT_Z_MM = 135.0
+# Top pitch joint: the horn axis runs along X at this height. For the
+# case-mounted link, center the visible case span on the link centerline so
+# the top servo body reads centered over the bottom horn axis; the pitch axis
+# still intersects that vertical axis at X = Y = 0.
+TOP_PIVOT_Z_MM = 180.0
 HORN_HALF_SPAN_MM = 0.5 * (
     SERVO_OUTPUT_HORN_FACE_LOCAL_Y_MM - SERVO_REAR_HORN_FACE_LOCAL_Y_MM
 )  # 18.3
 # Offset that centers the horn span: local y -> X = y + this value.
 HORN_SPAN_CENTERING_OFFSET_MM = HORN_HALF_SPAN_MM - SERVO_OUTPUT_HORN_FACE_LOCAL_Y_MM  # 9.1
+# Offset that centers the case side faces for the case-mounted top servo.
+CASE_SPAN_CENTERING_OFFSET_MM = -0.5 * (
+    SERVO_CASE_BOTTOM_LOCAL_Y_MM + SERVO_CASE_TOP_LOCAL_Y_MM
+)  # 9.6
 # Z mapping constants for the two top-servo orientations.
 TOP_BODY_DOWN_Z_OFFSET_MM = TOP_PIVOT_Z_MM + SERVO_SHAFT_LOCAL_X_MM  # Z = 109.5 - x
 TOP_BODY_UP_Z_OFFSET_MM = TOP_PIVOT_Z_MM - SERVO_SHAFT_LOCAL_X_MM  # Z = x + 160.5
@@ -144,8 +163,8 @@ HORN_PLATE_TOP_Z_MM = TOP_PIVOT_Z_MM + 13.0
 
 # Case-mount plates (case variation). The plates sit against the case
 # faces and stop below the rotating horn parts.
-CASE_BOTTOM_FACE_X_MM = SERVO_CASE_BOTTOM_LOCAL_Y_MM + HORN_SPAN_CENTERING_OFFSET_MM  # -16.5
-CASE_TOP_FACE_X_MM = SERVO_CASE_TOP_LOCAL_Y_MM + HORN_SPAN_CENTERING_OFFSET_MM  # +15.5
+CASE_BOTTOM_FACE_X_MM = SERVO_CASE_BOTTOM_LOCAL_Y_MM + CASE_SPAN_CENTERING_OFFSET_MM  # -16.0
+CASE_TOP_FACE_X_MM = SERVO_CASE_TOP_LOCAL_Y_MM + CASE_SPAN_CENTERING_OFFSET_MM  # +16.0
 CASE_FLUSH_PLATE_INNER_X_MM = -(abs(CASE_BOTTOM_FACE_X_MM) + HORN_FACE_GAP_MM)  # -16.75
 CASE_FLUSH_PLATE_OUTER_X_MM = CASE_FLUSH_PLATE_INNER_X_MM - SHEET_THICKNESS_MM
 CASE_OFFSET_PLATE_INNER_X_MM = CASE_TOP_FACE_X_MM + HORN_FACE_GAP_MM  # +15.75
@@ -296,7 +315,7 @@ TOP_SERVO_HORN_TRANSFORM = (
 )
 # Case variation: body down (local x -> -Z), output horn toward +X.
 TOP_SERVO_CASE_TRANSFORM = (
-    0.0, 1.0, 0.0, HORN_SPAN_CENTERING_OFFSET_MM,
+    0.0, 1.0, 0.0, CASE_SPAN_CENTERING_OFFSET_MM,
     0.0, 0.0, -1.0, 0.0,
     -1.0, 0.0, 0.0, TOP_BODY_DOWN_Z_OFFSET_MM,
     0.0, 0.0, 0.0, 1.0,
