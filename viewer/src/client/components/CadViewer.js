@@ -1,7 +1,6 @@
 "use client";
 
 import { forwardRef, useCallback, useEffect, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { Navigation2 } from "lucide-react";
 import { parseCadRefToken } from "cadjs/lib/cadRefs";
 import { STEP_TREE_TOPOLOGY_NODE_PREFIX } from "cadjs/lib/step/stepTree";
 import { copyImageBlobToClipboard } from "@/ui/clipboard";
@@ -139,7 +138,27 @@ import {
   getEnvironmentPresetById,
   THEME_FLOOR_MODES
 } from "cadjs/lib/themeSettings";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger
+} from "./ui/tooltip";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger
+} from "./ui/select";
 import ViewPlaneControl from "./viewer/ViewPlaneControl";
+import {
+  OrthographicProjectionIcon,
+  PerspectiveProjectionIcon
+} from "./viewer/ProjectionModeIcons";
+import {
+  DISPLAY_MODE_OPTIONS,
+  displayModeOptionForValue
+} from "./viewer/DisplayModeOptions";
 import { useViewerDrawingOverlay } from "./viewer/hooks/useViewerDrawingOverlay";
 import { useViewerPicking } from "./viewer/hooks/useViewerPicking";
 import { useViewerRuntime } from "./viewer/hooks/useViewerRuntime";
@@ -214,7 +233,27 @@ const VIEW_PLANE_DEFAULT_PRESET = {
   direction: DEFAULT_VIEW_DIRECTION,
   up: WORLD_UP
 };
-const RESET_VIEW_CONTROL_BUTTON_CLASSES = "cad-glass-surface pointer-events-auto grid h-8 w-8 shrink-0 place-items-center rounded-full border border-sidebar-border text-sidebar-foreground/60 shadow-sm transition duration-150 hover:text-sidebar-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/45";
+const VIEW_MODE_CONTROL_SECTION_CLASSES = "cad-glass-surface pointer-events-auto absolute z-30 inline-flex w-fit flex-col items-center gap-1 rounded-full border border-sidebar-border p-1 text-sidebar-foreground shadow-sm";
+const PROJECTION_CONTROL_CLASSES = "grid grid-rows-2 overflow-hidden rounded-full bg-sidebar-accent/20 ring-1 ring-inset ring-sidebar-border/70";
+const PROJECTION_TAB_BUTTON_CLASSES = "grid size-6 place-items-center transition duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/45";
+const STYLE_CONTROL_BUTTON_CLASSES = "!grid !size-6 !place-items-center !justify-center rounded-full !border-0 !bg-transparent !p-0 text-sidebar-foreground/70 !shadow-none transition duration-150 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground focus-visible:ring-2 focus-visible:ring-ring/45 data-[state=open]:bg-sidebar-accent data-[state=open]:text-sidebar-accent-foreground";
+const VIEW_PLANE_CONTROL_SIZE = "6rem";
+const VIEW_PLANE_CONTROL_GAP = "0.5rem";
+const VIEW_MODE_CONTROL_SECTION_BOTTOM_INSET = "0.625rem";
+const PROJECTION_MODE_OPTIONS = Object.freeze([
+  Object.freeze({
+    value: CAMERA_PROJECTION.PERSPECTIVE,
+    label: "Perspective projection",
+    title: "Switch to perspective projection",
+    Icon: PerspectiveProjectionIcon
+  }),
+  Object.freeze({
+    value: CAMERA_PROJECTION.ORTHOGRAPHIC,
+    label: "Orthographic projection",
+    title: "Switch to orthographic projection",
+    Icon: OrthographicProjectionIcon
+  })
+]);
 const CAD_EDGE_OPACITY = 0.84;
 const DEFAULT_LIGHTING = {
   toneMappingExposure: 1.08,
@@ -540,6 +579,158 @@ function cssLength(value, fallback = "0px") {
   return text || fallback;
 }
 
+function ProjectionModeControl({
+  projection,
+  onProjectionChange,
+  onProjectionReset
+}) {
+  const activeProjection = normalizeCameraProjection(projection);
+  return (
+    <TooltipProvider delayDuration={250}>
+      <div className={PROJECTION_CONTROL_CLASSES} role="tablist" aria-label="Projection">
+        {PROJECTION_MODE_OPTIONS.map((option, index) => {
+          const active = activeProjection === option.value;
+          const Icon = option.Icon;
+          const tooltip = active
+            ? `${option.label}. Click to reset view.`
+            : option.title;
+          return (
+            <Tooltip key={option.value}>
+              <TooltipTrigger asChild>
+                <button
+                  type="button"
+                  role="tab"
+                  aria-label={option.label}
+                  aria-selected={active}
+                  aria-pressed={active}
+                  title={tooltip}
+                  className={`${PROJECTION_TAB_BUTTON_CLASSES} ${index > 0 ? "border-t border-sidebar-border/70" : ""} ${
+                    active
+                      ? "bg-sidebar-accent text-sidebar-accent-foreground"
+                      : "text-sidebar-foreground/70 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground"
+                  }`}
+                  onPointerDown={(event) => {
+                    event.stopPropagation();
+                  }}
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    if (active) {
+                      onProjectionReset?.();
+                      return;
+                    }
+                    onProjectionChange?.(option.value);
+                  }}
+                >
+                  <Icon className="size-3.5" strokeWidth={2} aria-hidden="true" />
+                </button>
+              </TooltipTrigger>
+              <TooltipContent side="left" sideOffset={8}>
+                {tooltip}
+              </TooltipContent>
+            </Tooltip>
+          );
+        })}
+      </div>
+    </TooltipProvider>
+  );
+}
+
+function DisplayStyleControl({
+  displayMode,
+  onDisplayModeChange
+}) {
+  const selectedOption = displayModeOptionForValue(displayMode);
+  const SelectedIcon = selectedOption?.Icon || null;
+  const label = `Display style: ${selectedOption?.label || "Style"}`;
+  return (
+    <TooltipProvider delayDuration={250}>
+      <Tooltip>
+        <Select
+          value={selectedOption.value}
+          onValueChange={(nextValue) => {
+            onDisplayModeChange?.(nextValue);
+          }}
+        >
+          <TooltipTrigger asChild>
+            <SelectTrigger
+              size="sm"
+              showIcon={false}
+              aria-label={label}
+              title={label}
+              className={STYLE_CONTROL_BUTTON_CLASSES}
+              onPointerDown={(event) => {
+                event.stopPropagation();
+              }}
+            >
+              {SelectedIcon ? <SelectedIcon className="size-3.5" strokeWidth={2} aria-hidden="true" /> : null}
+              <span className="sr-only">{selectedOption.label}</span>
+            </SelectTrigger>
+          </TooltipTrigger>
+          <SelectContent align="end" side="left" sideOffset={8} className="w-44">
+            {DISPLAY_MODE_OPTIONS.map((option) => {
+              const Icon = option.Icon;
+              return (
+                <SelectItem
+                  key={option.value}
+                  value={option.value}
+                  className="text-xs"
+                  title={option.title}
+                  icon={Icon ? <Icon className="size-3.5" strokeWidth={2} /> : null}
+                >
+                  {option.label}
+                </SelectItem>
+              );
+            })}
+          </SelectContent>
+        </Select>
+        <TooltipContent side="left" sideOffset={8}>
+          {label}
+        </TooltipContent>
+      </Tooltip>
+    </TooltipProvider>
+  );
+}
+
+function ViewModeControlSection({
+  displayMode,
+  onDisplayModeChange,
+  projection,
+  onProjectionChange,
+  onProjectionReset,
+  viewPlaneOffsetRight,
+  viewPlaneOffsetBottom
+}) {
+  const showStyleControl = typeof onDisplayModeChange === "function";
+  const showProjectionControl = typeof onProjectionChange === "function";
+  if (!showStyleControl && !showProjectionControl) {
+    return null;
+  }
+  return (
+    <div
+      className={VIEW_MODE_CONTROL_SECTION_CLASSES}
+      style={{
+        right: `calc(${viewPlaneOffsetRight}px + ${VIEW_PLANE_CONTROL_SIZE} + ${VIEW_PLANE_CONTROL_GAP})`,
+        bottom: `calc(${cssLength(viewPlaneOffsetBottom, "16px")} + ${VIEW_MODE_CONTROL_SECTION_BOTTOM_INSET})`
+      }}
+      aria-label="View display controls"
+    >
+      {showStyleControl ? (
+        <DisplayStyleControl
+          displayMode={displayMode}
+          onDisplayModeChange={onDisplayModeChange}
+        />
+      ) : null}
+      {showProjectionControl ? (
+        <ProjectionModeControl
+          projection={projection}
+          onProjectionChange={onProjectionChange}
+          onProjectionReset={onProjectionReset}
+        />
+      ) : null}
+    </div>
+  );
+}
+
 function normalizeAutoZoomSpeedMs(value, fallback = AUTO_ZOOM_SPEED_MS.DEFAULT) {
   const numeric = Number(value);
   if (Number.isFinite(numeric) && numeric >= 0) {
@@ -837,7 +1028,7 @@ function transitionCameraToBounds(runtime, bounds, sceneScaleMode, frameInsets, 
     : applyPerspectiveSnapshot(runtime, nextPerspective, { scheduleIdle: false });
 }
 
-function syncRuntimeCameraProjection(runtime, projection, { scheduleIdle = true } = {}) {
+function syncRuntimeCameraProjection(runtime, projection, { scheduleIdle = true, requestRender = true } = {}) {
   if (!runtime?.camera || !runtime?.controls) {
     return false;
   }
@@ -875,7 +1066,9 @@ function syncRuntimeCameraProjection(runtime, projection, { scheduleIdle = true 
   if (scheduleIdle) {
     runtime.scheduleIdleQuality?.();
   }
-  runtime.requestRender?.();
+  if (requestRender) {
+    runtime.requestRender?.();
+  }
   return true;
 }
 
@@ -1623,6 +1816,8 @@ const CadViewer = forwardRef(function CadViewer({
   drawingStrokes = [],
   onDrawingStrokesChange,
   onPerspectiveChange,
+  onProjectionChange,
+  onDisplayModeChange,
   onHoverReferenceChange,
   onActivateReference,
   onDoubleActivateReference,
@@ -1659,6 +1854,7 @@ const CadViewer = forwardRef(function CadViewer({
   const urdfPosePickerRef = useRef(urdfPosePicker);
   const posePickerPointerRef = useRef(null);
   const lastEmittedPerspectiveRef = useRef(null);
+  const lastProjectionRef = useRef(normalizedProjection);
   const suppressPerspectiveEventsRef = useRef(0);
   const drawingIdRef = useRef(0);
   const runtimeRef = useRef(null);
@@ -2147,21 +2343,24 @@ const CadViewer = forwardRef(function CadViewer({
       detachAutoZoomState("animation");
     }
   }, [boundsAnimationActive, detachAutoZoomState]);
-  const resetView = useCallback(() => {
+  const resetView = useCallback(({
+    reason = "reset",
+    speedMs = AUTO_ZOOM_SPEED_MS.RESET
+  } = {}) => {
     const runtime = runtimeRef.current;
     const state = autoZoomStateRef.current;
     state.attached = true;
     state.modelKey = modelKeyRef.current || "";
-    state.lastReason = "reset";
+    state.lastReason = reason;
     setAutoZoomDetached(false);
     activeViewPlaneFaceRef.current = "";
     setActiveViewPlaneFace("");
     defaultPerspectiveResettingRef.current = true;
     setDefaultPerspectiveDetached(false);
-    const transitioned = runAutoZoom("reset", {
+    const transitioned = runAutoZoom(reason, {
       force: true,
       allowDuringBoundsAnimation: true,
-      speedMs: AUTO_ZOOM_SPEED_MS.RESET,
+      speedMs,
       viewDirection: DEFAULT_VIEW_DIRECTION,
       viewUp: WORLD_UP
     });
@@ -2175,6 +2374,12 @@ const CadViewer = forwardRef(function CadViewer({
       }
     }
   }, [runAutoZoom, syncDefaultPerspectiveState]);
+  const resetProjectionView = useCallback(() => {
+    resetView({
+      reason: "projection-reset",
+      speedMs: AUTO_ZOOM_SPEED_MS.DEFAULT
+    });
+  }, [resetView]);
   const buildSurfaceLineFaceAnchor = (event, canvas, lockedReferenceId = "", startUv = null) => {
     const runtime = runtimeRef.current;
     if (!runtime?.raycaster || !runtime?.camera || !activeSelectorRuntime?.faceReferenceByRowIndex) {
@@ -2681,12 +2886,26 @@ const CadViewer = forwardRef(function CadViewer({
     if (!runtime) {
       return;
     }
-    if (!syncRuntimeCameraProjection(runtime, normalizedProjection)) {
+    const previousProjection = lastProjectionRef.current;
+    lastProjectionRef.current = normalizedProjection;
+    const projectionChanged = previousProjection !== normalizedProjection;
+    if (!syncRuntimeCameraProjection(runtime, normalizedProjection, projectionChanged ? {
+      scheduleIdle: false,
+      requestRender: false
+    } : undefined)) {
+      return;
+    }
+    if (projectionChanged) {
+      resetView({
+        reason: "projection",
+        speedMs: AUTO_ZOOM_SPEED_MS.DEFAULT
+      });
+      syncViewPlaneOrientation(runtime);
       return;
     }
     emitPerspectiveChange(runtime);
     syncViewPlaneOrientation(runtime);
-  }, [normalizedProjection, viewerReadyTick]);
+  }, [normalizedProjection, resetView, syncViewPlaneOrientation, viewerReadyTick]);
 
   useEffect(() => {
     const runtime = runtimeRef.current;
@@ -4319,20 +4538,16 @@ const CadViewer = forwardRef(function CadViewer({
         }}
         aria-hidden="true"
       />
-      {showViewPlane && !previewMode && !isLoading && meshData && (autoZoomDetached || defaultPerspectiveDetached) ? (
-        <button
-          type="button"
-          aria-label="Reset view"
-          title="Reset view"
-          className={`${RESET_VIEW_CONTROL_BUTTON_CLASSES} absolute z-20`}
-          style={{
-            right: `calc(${viewPlaneOffsetRight}px + 2rem)`,
-            bottom: `calc(${cssLength(viewPlaneOffsetBottom, "16px")} + 6.6rem)`
-          }}
-          onClick={resetView}
-        >
-          <Navigation2 className="h-3.5 w-3.5" strokeWidth={2} aria-hidden="true" />
-        </button>
+      {renderFormat === RENDER_FORMAT.STEP && showViewPlane && !previewMode && !isLoading && meshData ? (
+        <ViewModeControlSection
+          displayMode={normalizedDisplayMode}
+          onDisplayModeChange={onDisplayModeChange}
+          projection={normalizedProjection}
+          onProjectionChange={onProjectionChange}
+          onProjectionReset={resetProjectionView}
+          viewPlaneOffsetRight={viewPlaneOffsetRight}
+          viewPlaneOffsetBottom={viewPlaneOffsetBottom}
+        />
       ) : null}
       <ViewPlaneControl
         showViewPlane={showViewPlane}

@@ -133,6 +133,8 @@ const THEME_MODE_COLOR_PATHS = Object.freeze([
   Object.freeze(["floor", "color"]),
   Object.freeze(["floor", "gridCenterColor"]),
   Object.freeze(["floor", "gridCellColor"]),
+  Object.freeze(["floor", "grid", "centerColor"]),
+  Object.freeze(["floor", "grid", "cellColor"]),
   Object.freeze(["lighting", "directional", "color"]),
   Object.freeze(["lighting", "spot", "color"]),
   Object.freeze(["lighting", "point", "color"]),
@@ -213,10 +215,15 @@ function applyThemeModeColorOverrides(target, overrides = {}) {
 export const MIN_FLOOR_GRID_DENSITY = 0.25;
 export const MAX_FLOOR_GRID_DENSITY = 4;
 export const DEFAULT_FLOOR_GRID_SETTINGS = Object.freeze({
+  enabled: true,
   gridCenterColor: "#6b7280",
   gridCellColor: "#cbd5e1",
   gridOpacity: 0.18,
-  gridDensity: 1
+  gridDensity: 1,
+  centerColor: "#6b7280",
+  cellColor: "#cbd5e1",
+  opacity: 0.18,
+  density: 1
 });
 
 function normalizeFloorMode(value, fallback = THEME_FLOOR_MODES.STAGE) {
@@ -360,20 +367,35 @@ function midpointPalette(primaryColors, secondaryColors) {
 function createFloorGridSettings(floorColor, options = {}) {
   const normalizedFloorColor = normalizeColor(floorColor, "#f1f5f9");
   const lightFloor = relativeLuminance(normalizedFloorColor) >= 0.36;
-  return {
-    gridCenterColor: lightFloor
+  const centerColor = normalizeColor(
+    options.centerColor,
+    lightFloor
       ? mixHexColors(normalizedFloorColor, "#0f172a", 0.48)
-      : mixHexColors(normalizedFloorColor, "#f8fafc", 0.46),
-    gridCellColor: lightFloor
+      : mixHexColors(normalizedFloorColor, "#f8fafc", 0.46)
+  );
+  const cellColor = normalizeColor(
+    options.cellColor,
+    lightFloor
       ? mixHexColors(normalizedFloorColor, "#475569", 0.26)
-      : mixHexColors(normalizedFloorColor, "#cbd5e1", 0.22),
-    gridOpacity: normalizeNumber(options.opacity, DEFAULT_FLOOR_GRID_SETTINGS.gridOpacity, 0, 1),
-    gridDensity: normalizeNumber(
-      options.density,
-      DEFAULT_FLOOR_GRID_SETTINGS.gridDensity,
-      MIN_FLOOR_GRID_DENSITY,
-      MAX_FLOOR_GRID_DENSITY
-    )
+      : mixHexColors(normalizedFloorColor, "#cbd5e1", 0.22)
+  );
+  const opacity = normalizeNumber(options.opacity, DEFAULT_FLOOR_GRID_SETTINGS.opacity, 0, 1);
+  const density = normalizeNumber(
+    options.density,
+    DEFAULT_FLOOR_GRID_SETTINGS.density,
+    MIN_FLOOR_GRID_DENSITY,
+    MAX_FLOOR_GRID_DENSITY
+  );
+  return {
+    enabled: normalizeBoolean(options.enabled, false),
+    gridCenterColor: centerColor,
+    gridCellColor: cellColor,
+    gridOpacity: opacity,
+    gridDensity: density,
+    centerColor,
+    cellColor,
+    opacity,
+    density
   };
 }
 
@@ -1407,7 +1429,31 @@ export function normalizeThemeSettings(value = {}) {
   );
   const fillColors = normalizeThemeFillColors(materials.fillColors, normalizedDefaultColor);
   const normalizedFloorColor = normalizeColor(floor.color, DEFAULT_THEME_SETTINGS.floor?.color || "#141416");
+  const normalizedFloorMode = normalizeFloorMode(floor.mode, DEFAULT_THEME_SETTINGS.floor?.mode || THEME_FLOOR_MODES.STAGE);
+  const grid = floor.grid && typeof floor.grid === "object" && !Array.isArray(floor.grid)
+    ? floor.grid
+    : {};
   const fallbackGridSettings = createFloorGridSettings(normalizedFloorColor);
+  const normalizedGridCenterColor = normalizeColor(
+    grid.centerColor ?? floor.gridCenterColor ?? floor.gridCenter,
+    fallbackGridSettings.centerColor
+  );
+  const normalizedGridCellColor = normalizeColor(
+    grid.cellColor ?? floor.gridCellColor ?? floor.gridCell,
+    fallbackGridSettings.cellColor
+  );
+  const normalizedGridOpacity = normalizeNumber(
+    grid.opacity ?? floor.gridOpacity,
+    fallbackGridSettings.opacity,
+    0,
+    1
+  );
+  const normalizedGridDensity = normalizeNumber(
+    grid.density ?? floor.gridDensity,
+    fallbackGridSettings.density,
+    MIN_FLOOR_GRID_DENSITY,
+    MAX_FLOOR_GRID_DENSITY
+  );
   const colorMode = normalizeThemeColorMode(
     source.colorMode,
     DEFAULT_THEME_SETTINGS?.colorMode || THEME_COLOR_MODES.SYSTEM
@@ -1462,27 +1508,24 @@ export function normalizeThemeSettings(value = {}) {
       radialOuter: normalizeColor(background.radialOuter, DEFAULT_THEME_SETTINGS.background.radialOuter)
     },
     floor: {
-      mode: normalizeFloorMode(floor.mode, DEFAULT_THEME_SETTINGS.floor?.mode || THEME_FLOOR_MODES.STAGE),
+      mode: normalizedFloorMode,
+      enabled: normalizeBoolean(floor.enabled, normalizedFloorMode !== THEME_FLOOR_MODES.NONE),
       color: normalizedFloorColor,
       roughness: normalizeNumber(floor.roughness, DEFAULT_THEME_SETTINGS.floor?.roughness ?? 0.72, 0, 1),
       reflectivity: normalizeNumber(floor.reflectivity, DEFAULT_THEME_SETTINGS.floor?.reflectivity ?? 0.12, 0, 1),
       shadowOpacity: normalizeNumber(floor.shadowOpacity, DEFAULT_THEME_SETTINGS.floor?.shadowOpacity ?? 0.45, 0, 1),
       horizonBlend: normalizeNumber(floor.horizonBlend, DEFAULT_THEME_SETTINGS.floor?.horizonBlend ?? 0, 0, 1),
-      gridCenterColor: normalizeColor(
-        floor.gridCenterColor ?? floor.gridCenter,
-        fallbackGridSettings.gridCenterColor
-      ),
-      gridCellColor: normalizeColor(
-        floor.gridCellColor ?? floor.gridCell,
-        fallbackGridSettings.gridCellColor
-      ),
-      gridOpacity: normalizeNumber(floor.gridOpacity, fallbackGridSettings.gridOpacity, 0, 1),
-      gridDensity: normalizeNumber(
-        floor.gridDensity,
-        fallbackGridSettings.gridDensity,
-        MIN_FLOOR_GRID_DENSITY,
-        MAX_FLOOR_GRID_DENSITY
-      )
+      gridCenterColor: normalizedGridCenterColor,
+      gridCellColor: normalizedGridCellColor,
+      gridOpacity: normalizedGridOpacity,
+      gridDensity: normalizedGridDensity,
+      grid: {
+        enabled: normalizeBoolean(grid.enabled, normalizedFloorMode === THEME_FLOOR_MODES.GRID),
+        centerColor: normalizedGridCenterColor,
+        cellColor: normalizedGridCellColor,
+        opacity: normalizedGridOpacity,
+        density: normalizedGridDensity
+      }
     },
     environment: {
       enabled: normalizeBoolean(environment.enabled, DEFAULT_THEME_SETTINGS.environment.enabled),

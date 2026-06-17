@@ -182,6 +182,18 @@ export function normalizeFloorMode(value, fallback = THEME_FLOOR_MODES.STAGE) {
 }
 
 export function resolveFloorMode(floorSettings = {}) {
+  const gridEnabled = floorSettings?.grid?.enabled === true;
+  const floorEnabled = floorSettings?.enabled !== false;
+  const gridExplicitlyDisabled = floorSettings?.grid?.enabled === false;
+  if (gridEnabled) {
+    return THEME_FLOOR_MODES.GRID;
+  }
+  if (!floorEnabled) {
+    return THEME_FLOOR_MODES.NONE;
+  }
+  if (gridExplicitlyDisabled) {
+    return THEME_FLOOR_MODES.STAGE;
+  }
   return normalizeFloorMode(floorSettings?.mode);
 }
 

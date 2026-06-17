@@ -1235,6 +1235,18 @@ export default function CadWorkspace({
       typeof nextValue === "function" ? nextValue(current) : nextValue
     ));
   }, []);
+  const updateDisplayMode = useCallback((nextMode) => {
+    updateDisplaySettings((current) => ({
+      ...normalizeDisplaySettings(current),
+      mode: nextMode
+    }));
+  }, [updateDisplaySettings]);
+  const updateDisplayProjection = useCallback((nextProjection) => {
+    updateDisplaySettings((current) => ({
+      ...normalizeDisplaySettings(current),
+      projection: nextProjection
+    }));
+  }, [updateDisplaySettings]);
   const updateImplicitGraphicsSettings = useCallback((nextValue) => {
     setImplicitGraphicsSettings((current) => normalizeImplicitGraphicsSettings(
       typeof nextValue === "function" ? nextValue(current) : nextValue
@@ -8486,6 +8498,8 @@ export default function CadWorkspace({
           viewerPerspectiveRef={activePerspectiveRef}
           themeSettings={resolvedThemeSettings}
           displaySettings={renderDisplaySettings}
+          onProjectionChange={isStepView ? updateDisplayProjection : undefined}
+          onDisplayModeChange={isStepView ? updateDisplayMode : undefined}
           previewMode={previewMode}
           viewportFrameInsets={viewportFrameInsets}
           viewerLoading={viewerLoading}
