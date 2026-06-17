@@ -156,6 +156,8 @@ sync_cadjs_package() {
     --exclude coverage \
     --exclude tmp \
     --exclude .vite \
+    --exclude /common \
+    --exclude /lib \
     --exclude .DS_Store \
     --exclude tests \
     --exclude __tests__ \
@@ -324,6 +326,9 @@ build_viewer_packages() {
 ensure_viewer_cadjs_node_module_subpaths() {
   local cadjs_node_module="$VIEWER_DIR/node_modules/cadjs"
   if [ ! -d "$cadjs_node_module" ]; then
+    return
+  fi
+  if [ -L "$cadjs_node_module" ]; then
     return
   fi
   local subpath
