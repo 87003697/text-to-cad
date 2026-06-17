@@ -283,10 +283,10 @@ test("topology display edge helper renders enabled classified edge styles", () =
       color: "#132232",
       opacity: 0.5,
       classes: {
-        feature: { opacity: 1, thickness: 1 },
-        tangent: { opacity: 0.32, thickness: 0.75 },
-        seam: { opacity: 0.7, thickness: 1 },
-        degenerate: { opacity: 1, thickness: 0 }
+        feature: { color: "#101010", opacity: 1, thickness: 1 },
+        tangent: { color: "#224466", opacity: 0.32, thickness: 0.75 },
+        seam: { color: "#6688aa", opacity: 0.7, thickness: 1 },
+        degenerate: { color: "#aa8844", opacity: 1, thickness: 0 }
       }
     },
     {
@@ -298,11 +298,14 @@ test("topology display edge helper renders enabled classified edge styles", () =
 
   assert.equal(group.children.length, 3);
   assert.equal(group.children[0].material.linewidth, 1);
+  assert.equal(group.children[0].material.color.getHexString(), "101010");
   assert.equal(group.children[0].material.opacity, 1);
   assert.equal(group.children[1].material.linewidth, 0.75);
+  assert.equal(group.children[1].material.color.getHexString(), "224466");
   assert.equal(group.children[1].material.opacity, 0.32);
   assert.equal(group.children[1].material.polygonOffsetUnits, -6);
   assert.equal(group.children[2].material.linewidth, 1);
+  assert.equal(group.children[2].material.color.getHexString(), "6688aa");
   assert.equal(group.children[2].material.opacity, 0.7);
   assert.equal(group.children[2].material.polygonOffsetUnits, -6);
 });

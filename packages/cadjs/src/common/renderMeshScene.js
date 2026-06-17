@@ -5,14 +5,12 @@ import { Line2 } from "three/examples/jsm/lines/Line2.js";
 import { LineGeometry } from "three/examples/jsm/lines/LineGeometry.js";
 import { LineMaterial } from "three/examples/jsm/lines/LineMaterial.js";
 import {
-  resolveThemeDisplayEdgeSettings
-} from "./themeSettings.js";
-import {
   displayModeForcesEdges,
   displayModeIsWireframe,
   displayModeShowsEdges,
   displayModeShowsThroughEdges,
-  normalizeDisplaySettings
+  normalizeDisplaySettings,
+  resolveDisplayEdgeSettings
 } from "./displaySettings.js";
 import {
   buildModel
@@ -586,6 +584,7 @@ function renderSectionSvg(segments, edgeColor = "#132232") {
 }
 
 function renderSectionPng(segments, width, height, themeSettings, {
+  edgeSettings = null,
   transparent = false,
   section = {},
   bounds = null,
@@ -613,7 +612,7 @@ function renderSectionPng(segments, width, height, themeSettings, {
     context.restore();
   }
   drawSectionCenterlines(context, transform, width, height);
-  context.strokeStyle = resolveThemeDisplayEdgeSettings(themeSettings).color || "#132232";
+  context.strokeStyle = edgeSettings?.color || "#132232";
   context.lineWidth = 3;
   context.lineCap = "round";
   context.lineJoin = "round";
@@ -668,7 +667,7 @@ export function renderJobContext(meshData, job = {}) {
     lighting: theme.lighting || null,
     renderScale: job.render?.renderScale ?? job.renderScale ?? DEFAULT_RENDER_SCALE
   });
-  const baseEdgeSettings = resolveThemeDisplayEdgeSettings(theme);
+  const baseEdgeSettings = resolveDisplayEdgeSettings(displaySettings);
   const edgeSettings = {
     ...baseEdgeSettings,
     enabled: displayModeForcesEdges(displayMode) ? true : baseEdgeSettings.enabled,
@@ -925,7 +924,7 @@ export async function captureModel(viewport, captureOptions = {}) {
           return {
             path: String(output.path || ""),
             mimeType: "image/svg+xml",
-            text: renderSectionSvg(segments, resolveThemeDisplayEdgeSettings(theme).color)
+            text: renderSectionSvg(segments, edgeSettings.color)
           };
         }
         return {
@@ -934,6 +933,7 @@ export async function captureModel(viewport, captureOptions = {}) {
             height,
             mimeType: "image/png",
             dataUrl: renderSectionPng(segments, width, height, theme, {
+              edgeSettings,
               transparent: normalizeBoolean(job.render?.transparent, false),
               section,
               bounds: modelBounds,

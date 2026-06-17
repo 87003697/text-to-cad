@@ -3,6 +3,7 @@ import test from "node:test";
 
 import {
   CAD_DISPLAY_MODE,
+  DEFAULT_DISPLAY_EDGE_SETTINGS,
   DEFAULT_DISPLAY_SETTINGS,
   DEFAULT_EXPLODED_VIEW_SETTINGS,
   displayModeForcesEdges,
@@ -11,6 +12,7 @@ import {
   displayModeSurfaceOpacity,
   displayModeUsesUnlitSurfaces,
   displaySettingsEqual,
+  normalizeDisplayEdgeSettings,
   normalizeDisplaySettings,
   normalizeExplodedViewSettings,
   resolveDisplayMode
@@ -40,7 +42,63 @@ test("display settings normalize mode and clip independently from appearance set
       },
       invert: true
     },
-    exploded: DEFAULT_EXPLODED_VIEW_SETTINGS
+    exploded: DEFAULT_EXPLODED_VIEW_SETTINGS,
+    edges: DEFAULT_DISPLAY_EDGE_SETTINGS
+  });
+});
+
+test("display settings normalize edge styling independently from appearance settings", () => {
+  assert.deepEqual(normalizeDisplayEdgeSettings({
+    enabled: false,
+    contrastMode: "auto",
+    color: "#ABC",
+    thickness: 2,
+    classes: {
+      tangent: {
+        enabled: false,
+        color: "#456",
+        opacity: 0.25,
+        thickness: 4
+      }
+    },
+    highlightColor: "#123456",
+    highlightOpacity: 0.4,
+    highlightThickness: 4,
+    silhouette: true,
+    silhouetteScale: 0.01
+  }), {
+    enabled: false,
+    contrastMode: "auto",
+    color: "#aabbcc",
+    thickness: 2,
+    classes: {
+      feature: { color: "#aabbcc", opacity: 1, thickness: 1.15 },
+      tangent: { color: "#445566", opacity: 0.25, thickness: 0 },
+      seam: { color: "#aabbcc", opacity: 0.85, thickness: 1.15 },
+      degenerate: { color: "#aabbcc", opacity: 1, thickness: 0 }
+    },
+    highlightColor: "#123456",
+    highlightOpacity: 0.4,
+    highlightThickness: 4,
+    silhouette: true,
+    silhouetteScale: 0.01
+  });
+  assert.deepEqual(normalizeDisplaySettings({
+    mode: "solid",
+    edges: {
+      enabled: false,
+      color: "#456"
+    }
+  }).edges, {
+    ...DEFAULT_DISPLAY_EDGE_SETTINGS,
+    enabled: false,
+    color: "#445566",
+    classes: {
+      feature: { color: "#445566", opacity: 1, thickness: 1.15 },
+      tangent: { color: "#445566", opacity: 0.5, thickness: 1.15 },
+      seam: { color: "#445566", opacity: 0.85, thickness: 1.15 },
+      degenerate: { color: "#445566", opacity: 1, thickness: 0 }
+    }
   });
 });
 
@@ -105,5 +163,9 @@ test("display settings compare after normalization", () => {
   assert.equal(displaySettingsEqual(
     { mode: "solid", exploded: { enabled: true } },
     { mode: "solid", exploded: { enabled: false } }
+  ), false);
+  assert.equal(displaySettingsEqual(
+    { mode: "solid", edges: { color: "#111111" } },
+    { mode: "solid", edges: { color: "#222222" } }
   ), false);
 });

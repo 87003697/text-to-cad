@@ -144,6 +144,33 @@ class SnapshotCliTests(unittest.TestCase):
             {"mode": "rendered", "exploded": {"enabled": True, "axis": "radial", "spacing": 1.6}},
         )
 
+    def test_edge_settings_belong_to_display_json(self) -> None:
+        options = parse_snapshot_args(
+            [
+                "--input",
+                "models/simple/cylindrical_cap.step",
+                "--output",
+                "tmp/cap.png",
+                "--display",
+                '{"edges":{"enabled":false,"color":"#123456"}}',
+            ]
+        )
+        job = load_job_from_options(options, stdin=_TtyStringIO(), cwd=Path.cwd())
+        self.assertEqual(job["display"], {"edges": {"enabled": False, "color": "#123456"}})
+
+        appearance_options = parse_snapshot_args(
+            [
+                "--input",
+                "models/simple/cylindrical_cap.step",
+                "--output",
+                "tmp/cap.png",
+                "--appearance",
+                '{"edges":{"enabled":false}}',
+            ]
+        )
+        with self.assertRaisesRegex(SnapshotError, "unsupported keys: edges"):
+            load_job_from_options(appearance_options, stdin=_TtyStringIO(), cwd=Path.cwd())
+
     def test_display_shortcut_rejects_unknown_modes(self) -> None:
         options = parse_snapshot_args(
             [

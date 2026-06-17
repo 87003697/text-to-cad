@@ -222,6 +222,7 @@ export default function CadRenderPane({
   pickableVertices,
   focusedPartIds = "",
   displaySettings = null,
+  boundsAnimationActive = false,
   drawToolActive,
   drawingTool,
   drawingStrokes,
@@ -281,6 +282,8 @@ export default function CadRenderPane({
   const dxfMeshPreviewReady = dxfMode && !!selectedDxfMeshData;
   const activeMeshData = dxfMeshPreviewReady ? selectedDxfMeshData : selectedMeshData;
   const activeModelKey = dxfMeshPreviewReady ? (selectedDxfKey || selectedKey) : selectedKey;
+  const stepBoundsAnimationActive = Boolean(resolvedStepParameters?.animationState?.playing);
+  const cadViewerBoundsAnimationActive = Boolean(boundsAnimationActive || stepBoundsAnimationActive);
   const missingFileLabel = String(missingFileRef || "").trim();
   const topologySelectionPending = Boolean(referenceSelectionPending && !dxfMode && !urdfMode && !pathPreviewMode);
   const topologySelectionUnavailable = Boolean(referenceSelectionUnavailable && !dxfMode && !urdfMode && !pathPreviewMode);
@@ -435,6 +438,7 @@ export default function CadRenderPane({
           pickableEdges={dxfMode || pathPreviewMode ? [] : pickableEdges}
           pickableVertices={dxfMode || pathPreviewMode ? [] : pickableVertices}
           focusedPartId={dxfMode || pathPreviewMode ? "" : focusedPartIds}
+          boundsAnimationActive={cadViewerBoundsAnimationActive}
           drawingEnabled={!dxfMode && !pathPreviewMode && drawToolActive}
           drawingTool={drawingTool}
           drawingStrokes={dxfMode || pathPreviewMode ? [] : drawingStrokes}

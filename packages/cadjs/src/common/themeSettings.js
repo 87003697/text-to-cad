@@ -1,45 +1,18 @@
+import {
+  DEFAULT_DISPLAY_EDGE_SETTINGS,
+  DISABLED_DISPLAY_EDGE_SETTINGS
+} from "./displaySettings.js";
+
+export {
+  CAD_EDGE_CLASS_IDS,
+  CAD_EDGE_COLOR,
+  CAD_EDGE_HIGHLIGHT_COLOR
+} from "./displaySettings.js";
+
 const HEX_COLOR_PATTERN = /^#(?:[0-9a-fA-F]{3}){1,2}$/;
 export const MAX_THEME_FILL_COLORS = 50;
-export const CAD_EDGE_COLOR = "#132232";
-export const CAD_EDGE_HIGHLIGHT_COLOR = "#8dc5ff";
-export const CAD_EDGE_CLASS_IDS = Object.freeze(["feature", "tangent", "seam", "degenerate"]);
-
-const CAD_EDGE_CLASS_SETTINGS = Object.freeze({
-  feature: Object.freeze({
-    opacity: 1,
-    thickness: 1.15
-  }),
-  tangent: Object.freeze({
-    opacity: 0.5,
-    thickness: 1.15
-  }),
-  seam: Object.freeze({
-    opacity: 0.85,
-    thickness: 1.15
-  }),
-  degenerate: Object.freeze({
-    opacity: 1,
-    thickness: 0
-  })
-});
-
-const CAD_THEME_EDGE_SETTINGS = Object.freeze({
-  enabled: true,
-  contrastMode: "manual",
-  color: CAD_EDGE_COLOR,
-  thickness: 1,
-  classes: CAD_EDGE_CLASS_SETTINGS,
-  highlightColor: CAD_EDGE_HIGHLIGHT_COLOR,
-  highlightOpacity: 1,
-  highlightThickness: 3,
-  silhouette: false,
-  silhouetteScale: 0
-});
-
-const DISABLED_THEME_EDGE_SETTINGS = Object.freeze({
-  ...CAD_THEME_EDGE_SETTINGS,
-  enabled: false
-});
+const CAD_THEME_EDGE_SETTINGS = DEFAULT_DISPLAY_EDGE_SETTINGS;
+const DISABLED_THEME_EDGE_SETTINGS = DISABLED_DISPLAY_EDGE_SETTINGS;
 
 function clamp(value, min, max) {
   return Math.min(Math.max(value, min), max);
@@ -132,28 +105,6 @@ function normalizeMaterialTintMode(value, fallback = "multiply") {
     : fallback;
 }
 
-function normalizeEdgeContrastMode(value, fallback = "manual") {
-  const normalized = String(value || "").trim().toLowerCase();
-  return ["auto", "manual"].includes(normalized)
-    ? normalized
-    : fallback;
-}
-
-function normalizeEdgeClassSettings(value = {}, fallback = CAD_EDGE_CLASS_SETTINGS) {
-  const source = value && typeof value === "object" ? value : {};
-  return Object.fromEntries(CAD_EDGE_CLASS_IDS.map((classId) => {
-    const classSource = source[classId] && typeof source[classId] === "object" ? source[classId] : {};
-    const classFallback = fallback?.[classId] || CAD_EDGE_CLASS_SETTINGS[classId];
-    const legacyDisabled = classSource.enabled === false;
-    return [classId, {
-      opacity: normalizeNumber(classSource.opacity, classFallback.opacity, 0, 1),
-      thickness: legacyDisabled
-        ? 0
-        : normalizeNumber(classSource.thickness, classFallback.thickness, 0, 6)
-    }];
-  }));
-}
-
 export const THEME_FLOOR_MODES = Object.freeze({
   STAGE: "stage",
   GRID: "grid",
@@ -174,7 +125,6 @@ function normalizeThemeColorMode(value, fallback = THEME_COLOR_MODES.SYSTEM) {
 }
 
 const THEME_MODE_COLOR_PATHS = Object.freeze([
-  Object.freeze(["edges", "color"]),
   Object.freeze(["background", "solidColor"]),
   Object.freeze(["background", "linearStart"]),
   Object.freeze(["background", "linearEnd"]),
@@ -1363,7 +1313,6 @@ function createThemeSettingsSignature(value = {}) {
     colorMode: value?.colorMode || THEME_COLOR_MODES.SYSTEM,
     modeColors: value?.modeColors || {},
     materials: value?.materials || {},
-    edges: value?.edges || {},
     background: value?.background || {},
     floor: value?.floor || {},
     environment: value?.environment || {},
@@ -1400,13 +1349,6 @@ function isMigratableCinematicThemeSettings(settings) {
     FEATURE_CONTRAST_CINEMATIC_MATERIALS,
     CINEMATIC_THEME_SETTINGS.materials
   ]);
-  const edgeMatches = valuesMatchAny(settings?.edges, [
-    LEGACY_CINEMATIC_EDGES,
-    PREVIOUS_CINEMATIC_EDGES,
-    DIM_CINEMATIC_EDGES,
-    LOW_CONTRAST_CINEMATIC_EDGES,
-    CINEMATIC_THEME_SETTINGS.edges
-  ]);
   const floorMatches = valuesMatchAny(settings?.floor, [
     LEGACY_CINEMATIC_FLOOR,
     PREVIOUS_CINEMATIC_FLOOR,
@@ -1432,7 +1374,6 @@ function isMigratableCinematicThemeSettings(settings) {
   ]);
   return (
     materialMatches &&
-    edgeMatches &&
     backgroundMatches &&
     floorMatches &&
     environmentMatches &&
@@ -1453,9 +1394,6 @@ export function normalizeThemeSettings(value = {}) {
     : {};
   const floor = source.floor && typeof source.floor === "object"
     ? source.floor
-    : {};
-  const edges = source.edges && typeof source.edges === "object"
-    ? source.edges
     : {};
   const lighting = source.lighting && typeof source.lighting === "object"
     ? source.lighting
@@ -1513,21 +1451,6 @@ export function normalizeThemeSettings(value = {}) {
         0,
         2
       )
-    },
-    edges: {
-      enabled: normalizeBoolean(edges.enabled, DEFAULT_THEME_SETTINGS.edges.enabled),
-      contrastMode: normalizeEdgeContrastMode(edges.contrastMode, DEFAULT_THEME_SETTINGS.edges.contrastMode),
-      color: normalizeColor(edges.color, DEFAULT_THEME_SETTINGS.edges.color),
-      thickness: normalizeNumber(edges.thickness, DEFAULT_THEME_SETTINGS.edges.thickness, 0.5, 6),
-      classes: normalizeEdgeClassSettings(edges.classes, DEFAULT_THEME_SETTINGS.edges.classes),
-      highlightColor: normalizeColor(
-        edges.highlightColor,
-        DEFAULT_THEME_SETTINGS.edges.highlightColor || CAD_EDGE_HIGHLIGHT_COLOR
-      ),
-      highlightOpacity: normalizeNumber(edges.highlightOpacity, DEFAULT_THEME_SETTINGS.edges.highlightOpacity || 1, 0, 1),
-      highlightThickness: normalizeNumber(edges.highlightThickness, DEFAULT_THEME_SETTINGS.edges.highlightThickness || 3, 0.5, 6),
-      silhouette: normalizeBoolean(edges.silhouette, DEFAULT_THEME_SETTINGS.edges.silhouette || false),
-      silhouetteScale: normalizeNumber(edges.silhouetteScale, DEFAULT_THEME_SETTINGS.edges.silhouetteScale || 0.004, 0, 0.04)
     },
     background: {
       type: normalizeBackgroundType(background.type, DEFAULT_THEME_SETTINGS.background.type),
@@ -1700,16 +1623,6 @@ export function inferThemeSettingsSceneTone(themeSettings, options = {}) {
 
 export function inferThemeSceneTone(themeSettings) {
   return inferThemeSettingsSceneTone(themeSettings);
-}
-
-export function resolveThemeSettingsDisplayEdgeSettings(themeSettings) {
-  const normalized = resolveThemeSettingsForColorMode(themeSettings);
-  const edges = normalized.edges || DEFAULT_THEME_SETTINGS.edges;
-  return { ...edges };
-}
-
-export function resolveThemeDisplayEdgeSettings(themeSettings) {
-  return resolveThemeSettingsDisplayEdgeSettings(themeSettings);
 }
 
 export function getEnvironmentPresetById(presetId) {

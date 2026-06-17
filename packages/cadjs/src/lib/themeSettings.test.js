@@ -17,7 +17,6 @@ import {
   normalizeThemeSettings,
   resolveThemeFillColor,
   resolveThemeSettingsForColorMode,
-  resolveThemeSettingsDisplayEdgeSettings,
   resolveSystemThemePresetId,
   themeSettingsSupportsSystemColorMode
 } from "./themeSettings.js";
@@ -99,21 +98,7 @@ test("workbench preset uses neutral material treatment while preserving source c
   assert.equal(cinematic.materials.opacity, 1);
   assert.equal(cinematic.materials.envMapIntensity, 0.42);
   assert.equal(cinematic.materials.emissiveIntensity, 0.02);
-  assert.equal(cinematic.edges.enabled, true);
-  assert.equal(cinematic.edges.contrastMode, "manual");
-  assert.equal(cinematic.edges.color, "#132232");
-  assert.equal(Object.hasOwn(cinematic.edges, "opacity"), false);
-  assert.equal(cinematic.edges.thickness, 1);
-  assert.deepEqual(cinematic.edges.classes, {
-    feature: { opacity: 1, thickness: 1.15 },
-    tangent: { opacity: 0.5, thickness: 1.15 },
-    seam: { opacity: 0.85, thickness: 1.15 },
-    degenerate: { opacity: 1, thickness: 0 }
-  });
-  assert.equal(cinematic.edges.highlightColor, "#8dc5ff");
-  assert.equal(cinematic.edges.highlightOpacity, 1);
-  assert.equal(cinematic.edges.highlightThickness, 3);
-  assert.equal(cinematic.edges.silhouette, false);
+  assert.equal(Object.hasOwn(cinematic, "edges"), false);
   assert.equal(cinematic.environment.enabled, false);
   assert.equal(cinematic.environment.intensity, 0.32);
   assert.equal(cinematic.background.type, "solid");
@@ -145,10 +130,7 @@ test("workbench dark color mode uses the workbench dark color treatment", () => 
   assert.equal(dark.materials.contrast, 1.12);
   assert.equal(dark.materials.brightness, 1.02);
   assert.equal(dark.materials.opacity, 1);
-  assert.equal(dark.edges.enabled, true);
-  assert.equal(dark.edges.contrastMode, "manual");
-  assert.equal(dark.edges.color, "#1c2836");
-  assert.equal(Object.hasOwn(dark.edges, "opacity"), false);
+  assert.equal(Object.hasOwn(dark, "edges"), false);
   assert.equal(dark.environment.enabled, false);
   assert.equal(dark.environment.intensity, 0.32);
   assert.equal(dark.background.type, "solid");
@@ -189,9 +171,7 @@ test("beach preset keeps light materials with sunlit sand presentation styling",
   assert.equal(beach.materials.tintMode, "blend");
   assert.equal(beach.materials.tintStrength, 0);
   assert.equal(beach.materials.opacity, 1);
-  assert.equal(beach.edges.enabled, false);
-  assert.equal(beach.edges.contrastMode, "manual");
-  assert.equal(beach.edges.color, "#132232");
+  assert.equal(Object.hasOwn(beach, "edges"), false);
   assert.equal(beach.background.type, "linear");
   assert.equal(beach.background.solidColor, "#dff7f7");
   assert.equal(beach.background.linearStart, "#fff4d6");
@@ -208,31 +188,17 @@ test("beach preset keeps light materials with sunlit sand presentation styling",
   assert.equal(getThemePresetIdForSettings(beach), "beach");
 });
 
-test("built-in theme presets omit deprecated edge detail settings", () => {
-  for (const preset of THEME_PRESETS) {
-    const settings = normalizeThemeSettings(preset.settings);
-    assert.equal(Object.hasOwn(settings.edges, "source"), false, `${preset.id} edge source`);
-    assert.equal(Object.hasOwn(settings.edges, "topologyFilter"), false, `${preset.id} CAD edge detail`);
-    assert.equal(Object.hasOwn(settings.edges, "topologyMinRelevance"), false, `${preset.id} CAD edge relevance`);
-    for (const classSettings of Object.values(settings.edges.classes)) {
-      assert.equal(Object.hasOwn(classSettings, "enabled"), false, `${preset.id} class enabled flag`);
+test("theme settings do not normalize display edge settings", () => {
+  const normalized = normalizeThemeSettings({
+    ...cloneThemePresetSettings("workbench"),
+    edges: {
+      enabled: false,
+      color: "#ff0000"
     }
-  }
-});
+  });
 
-test("legacy edge detail settings are accepted and normalized away", () => {
-  const legacyWorkbench = cloneThemePresetSettings("workbench");
-  delete legacyWorkbench.edges.source;
-  legacyWorkbench.edges.topologyFilter = "feature";
-  legacyWorkbench.edges.topologyMinRelevance = 12;
-  legacyWorkbench.edges.classes.tangent.enabled = false;
-  const normalized = normalizeThemeSettings(legacyWorkbench);
-
-  assert.equal(Object.hasOwn(normalized.edges, "source"), false);
-  assert.equal(Object.hasOwn(normalized.edges, "topologyFilter"), false);
-  assert.equal(Object.hasOwn(normalized.edges, "topologyMinRelevance"), false);
-  assert.equal(Object.hasOwn(normalized.edges.classes.tangent, "enabled"), false);
-  assert.equal(normalized.edges.classes.tangent.thickness, 0);
+  assert.equal(Object.hasOwn(normalized, "edges"), false);
+  assert.equal(Object.hasOwn(cloneThemePresetSettings("workbench"), "edges"), false);
 });
 
 test("built-in theme preset ids stay explicit", () => {
@@ -264,8 +230,6 @@ test("stylized presets keep their palettes and declare an opinionated color mode
       materialColor: BLUE_FILL_COLORS[0],
       fillColors: BLUE_FILL_COLORS,
       cycleColors: false,
-      edgesEnabled: false,
-      edgeColor: "#132232",
       backgroundColor: "#04131f",
       floorColor: "#06324f"
     },
@@ -275,8 +239,6 @@ test("stylized presets keep their palettes and declare an opinionated color mode
       materialColor: MAGENTA_FILL_COLORS[0],
       fillColors: MAGENTA_FILL_COLORS,
       cycleColors: false,
-      edgesEnabled: false,
-      edgeColor: "#132232",
       backgroundColor: "#281323",
       floorColor: "#4a1833"
     },
@@ -286,8 +248,6 @@ test("stylized presets keep their palettes and declare an opinionated color mode
       materialColor: CLAY_FILL_COLORS[0],
       fillColors: CLAY_FILL_COLORS,
       cycleColors: false,
-      edgesEnabled: false,
-      edgeColor: "#132232",
       backgroundColor: "#f3eadc",
       floorColor: "#d4a070"
     },
@@ -297,8 +257,6 @@ test("stylized presets keep their palettes and declare an opinionated color mode
       materialColor: BEACH_FILL_COLORS[0],
       fillColors: BEACH_FILL_COLORS,
       cycleColors: true,
-      edgesEnabled: false,
-      edgeColor: "#132232",
       backgroundColor: "#dff7f7",
       floorColor: "#f2d59b"
     },
@@ -308,8 +266,6 @@ test("stylized presets keep their palettes and declare an opinionated color mode
       materialColor: TERMINAL_FILL_COLORS[0],
       fillColors: TERMINAL_FILL_COLORS,
       cycleColors: false,
-      edgesEnabled: true,
-      edgeColor: "#66ff99",
       backgroundColor: "#020403",
       floorColor: "#020403"
     }
@@ -321,21 +277,11 @@ test("stylized presets keep their palettes and declare an opinionated color mode
     assert.equal(settings.materials.defaultColor, expectation.materialColor);
     assert.deepEqual(settings.materials.fillColors, expectation.fillColors);
     assert.equal(settings.materials.cycleColors, expectation.cycleColors);
-    assert.equal(settings.edges.enabled, expectation.edgesEnabled);
-    assert.equal(settings.edges.color, expectation.edgeColor);
+    assert.equal(Object.hasOwn(settings, "edges"), false);
     assert.equal(settings.background.solidColor, expectation.backgroundColor);
     assert.equal(settings.floor.color, expectation.floorColor);
     assert.equal(getThemePresetIdForSettings(settings), expectation.presetId);
   }
-
-  const terminal = cloneThemePresetSettings("terminal");
-  assert.equal(terminal.edges.highlightColor, "#b7ffc9");
-  assert.deepEqual(terminal.edges.classes, {
-    feature: { opacity: 1, thickness: 1.15 },
-    tangent: { opacity: 0.84, thickness: 0.95 },
-    seam: { opacity: 0.92, thickness: 1 },
-    degenerate: { opacity: 0.72, thickness: 0.8 }
-  });
 });
 
 test("fill color normalization keeps up to fifty colors and syncs the default fill", () => {
@@ -399,41 +345,6 @@ test("disabled color cycling preserves palettes without rotating fills", () => {
   assert.deepEqual(normalized.materials.fillColors, ["#111111", "#222222", "#333333"]);
   assert.equal(resolveThemeFillColor(normalized.materials, 0), "#111111");
   assert.equal(resolveThemeFillColor(normalized.materials, 2), "#111111");
-});
-
-test("display edge settings keep uniform theme-owned line styles", () => {
-  const lightEdges = resolveThemeSettingsDisplayEdgeSettings(cloneThemePresetSettings("light"));
-  const darkEdges = resolveThemeSettingsDisplayEdgeSettings(cloneThemePresetSettings("dark"));
-  const darkSurfaceEdges = resolveThemeSettingsDisplayEdgeSettings({
-    ...cloneThemePresetSettings("dark"),
-    materials: {
-      ...cloneThemePresetSettings("dark").materials,
-      defaultColor: "#141821",
-      fillColors: ["#141821"]
-    }
-  });
-  const workbenchEdges = resolveThemeSettingsDisplayEdgeSettings(cloneThemePresetSettings("workbench"));
-
-  assert.equal(lightEdges.color, "#132232");
-  assert.equal(Object.hasOwn(lightEdges, "opacity"), false);
-  assert.equal(lightEdges.thickness, 1);
-  assert.equal(darkEdges.color, "#132232");
-  assert.equal(Object.hasOwn(darkEdges, "opacity"), false);
-  assert.equal(darkEdges.thickness, 1);
-  assert.equal(darkSurfaceEdges.color, "#132232");
-  assert.equal(Object.hasOwn(darkSurfaceEdges, "opacity"), false);
-  assert.equal(workbenchEdges.contrastMode, "manual");
-  assert.equal(workbenchEdges.color, "#132232");
-  assert.equal(Object.hasOwn(workbenchEdges, "opacity"), false);
-  assert.equal(workbenchEdges.thickness, 1);
-  assert.equal(workbenchEdges.classes.feature.thickness, 1.15);
-  assert.equal(workbenchEdges.classes.tangent.thickness, 1.15);
-  assert.equal(workbenchEdges.classes.tangent.opacity, 0.5);
-  assert.equal(workbenchEdges.classes.seam.thickness, 1.15);
-  assert.equal(workbenchEdges.classes.seam.opacity, 0.85);
-  assert.equal(workbenchEdges.classes.degenerate.thickness, 0);
-  assert.equal(workbenchEdges.highlightColor, "#8dc5ff");
-  assert.equal(workbenchEdges.highlightThickness, 3);
 });
 
 test("system theme preset stays on the workbench preset", () => {
@@ -507,10 +418,6 @@ test("normalizeThemeSettings migrates persisted legacy cinematic preset values",
   legacyCinematic.materials.clearcoatRoughness = 0.34;
   legacyCinematic.materials.opacity = 1;
   legacyCinematic.materials.envMapIntensity = 0.58;
-  legacyCinematic.edges.enabled = false;
-  legacyCinematic.edges.color = "#8fa1b5";
-  legacyCinematic.edges.opacity = 0.1;
-  legacyCinematic.edges.thickness = 1;
   legacyCinematic.background.solidColor = "#050711";
   legacyCinematic.background.linearStart = "#02040b";
   legacyCinematic.background.linearEnd = "#252f47";
@@ -563,10 +470,6 @@ test("normalizeThemeSettings migrates previous cinematic preset values", () => {
   transitionalCinematic.materials.opacity = 1;
   transitionalCinematic.materials.envMapIntensity = 0.58;
   transitionalCinematic.materials.emissiveIntensity = 0.06;
-  transitionalCinematic.edges.enabled = true;
-  transitionalCinematic.edges.color = "#8fa1b5";
-  transitionalCinematic.edges.opacity = 1;
-  transitionalCinematic.edges.thickness = 1.65;
   transitionalCinematic.background.solidColor = "#050711";
   transitionalCinematic.background.linearStart = "#02040b";
   transitionalCinematic.background.linearEnd = "#252f47";
@@ -617,10 +520,6 @@ test("normalizeThemeSettings migrates dim cinematic preset values", () => {
   dimCinematic.materials.opacity = 1;
   dimCinematic.materials.envMapIntensity = 0.08;
   dimCinematic.materials.emissiveIntensity = 0.01;
-  dimCinematic.edges.enabled = false;
-  dimCinematic.edges.color = "#8fa1b5";
-  dimCinematic.edges.opacity = 0.1;
-  dimCinematic.edges.thickness = 1;
   dimCinematic.background.solidColor = "#0a0f18";
   dimCinematic.background.linearStart = "#08111c";
   dimCinematic.background.linearEnd = "#1f2c3d";
@@ -664,23 +563,6 @@ test("normalizeThemeSettings preserves non-cinematic legacy material defaults", 
   assert.equal(normalized.materials.tintMode, "multiply");
   assert.equal(normalized.materials.emissiveIntensity, 0);
   assert.notDeepEqual(normalized, cloneThemePresetSettings("workbench"));
-});
-
-test("only workbench and terminal render CAD edges by default", () => {
-  assert.equal(THEME_PRESETS.find((preset) => preset.id === "clay-sunrise")?.label, "Clay");
-
-  for (const preset of THEME_PRESETS) {
-    assert.equal(
-      preset.settings.edges.enabled,
-      preset.id === "workbench" || preset.id === "terminal",
-      `${preset.id} edge default`
-    );
-    assert.equal(
-      preset.settings.edges.color,
-      preset.id === "terminal" ? "#66ff99" : "#132232",
-      `${preset.id} edge color`
-    );
-  }
 });
 
 test("built-in theme presets preserve source colors by default", () => {
