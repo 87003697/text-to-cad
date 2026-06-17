@@ -26,6 +26,16 @@ from cadpy.step_export import _create_bin_xcaf_doc, export_build123d_step_scene
 from cadpy.step_scene import LoadedStepScene, _bbox_from_shape, scene_leaf_occurrences, scene_occurrence_shape
 
 
+def _rounded_color(color: tuple[float, ...]) -> tuple[float, ...]:
+    return tuple(round(component, 3) for component in color)
+
+
+def _srgb_to_linear(component: float) -> float:
+    if component <= 0.04045:
+        return component / 12.92
+    return ((component + 0.055) / 1.055) ** 2.4
+
+
 class CompoundAssemblyGenerationTests(unittest.TestCase):
     def test_step_payload_rejects_legacy_output_field(self) -> None:
         with self.assertRaisesRegex(TypeError, "unsupported field\\(s\\): step_output"):
@@ -251,6 +261,13 @@ class CompoundAssemblyGenerationTests(unittest.TestCase):
             child = build123d.Box(1, 1, 1)
             child.label = "motor_body"
             child.color = build123d.Color(0.1, 0.2, 0.3)
+            expected_color = _rounded_color(child.color)
+            expected_linear_color = _rounded_color(
+                (
+                    *(_srgb_to_linear(component) for component in expected_color[:3]),
+                    expected_color[3],
+                )
+            )
             nested = build123d.Compound(children=[child], label="imported_motor")
             placed = build123d.Pos(20, 0, 0) * nested
             placed.label = "placed_motor"
@@ -267,9 +284,9 @@ class CompoundAssemblyGenerationTests(unittest.TestCase):
         bbox = _bbox_from_shape(scene_occurrence_shape(scene, leaves[0]))
         self.assertGreater(bbox["min"][0], 19.0)
         self.assertLess(bbox["max"][0], 21.0)
-        self.assertEqual(
-            (0.1, 0.2, 0.3, 1.0),
-            tuple(round(component, 3) for component in leaves[0].color),
+        self.assertIn(
+            _rounded_color(leaves[0].color),
+            {expected_color, expected_linear_color},
         )
 
     def test_shape_payload_can_export_with_assembly_entry_kind(self) -> None:

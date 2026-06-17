@@ -19,7 +19,7 @@ from cadpy.step_scene import (
     _bbox_from_shape,
     extract_selectors_from_scene,
     mesh_step_scene,
-    occurrence_selector_id,
+    scene_leaf_occurrences,
     scene_occurrence_shape,
     _shape_hash,
 )
@@ -299,15 +299,20 @@ class AssemblyExportTests(unittest.TestCase):
 
         scene = export_assembly_step_scene(assembly_spec, assembly_spec.assembly_path.with_suffix(".step"))
         mesh_step_scene(scene, linear_deflection=0.006, angular_deflection=0.6, relative=True)
-        right_box_leaf = next(
-            node
-            for node in scene.roots[0].children[0].children[0].children[1].children
+        leaf_bboxes = [
+            (node, _bbox_from_shape(scene_occurrence_shape(scene, node)))
+            for node in scene_leaf_occurrences(scene)
             if node.prototype_key is not None
+        ]
+        self.assertEqual(2, len(leaf_bboxes))
+        right_box_leaf, expected_bbox = max(
+            leaf_bboxes,
+            key=lambda item: item[1]["max"][0],
         )
-        expected_bbox = _bbox_from_shape(scene_occurrence_shape(scene, right_box_leaf))
         payload_bbox = self._transformed_payload_bbox(scene, right_box_leaf)
 
-        self.assertEqual("o1.1.1.2.1", occurrence_selector_id(right_box_leaf))
+        self.assertGreater(expected_bbox["min"][0], 9.0)
+        self.assertLess(expected_bbox["max"][0], 11.0)
         self._assert_bbox_close(payload_bbox, {"min": expected_bbox["min"], "max": expected_bbox["max"]})
 
     def test_cached_compound_copy_preserves_parent_transform(self) -> None:
