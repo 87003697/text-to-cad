@@ -68,6 +68,7 @@ import {
   CAD_EDGE_COLOR,
   CAD_EDGE_HIGHLIGHT_COLOR,
   DEFAULT_EXPLODED_VIEW_SETTINGS,
+  CAMERA_PROJECTION,
   normalizeDisplayEdgeSettings,
   normalizeDisplaySettings,
   normalizeExplodedViewSettings
@@ -110,6 +111,11 @@ const DISPLAY_MODE_OPTIONS = [
   { value: CAD_DISPLAY_MODE.HIDDEN_LINES_REMOVED, label: "Lines", title: "Visible lines with hidden lines removed" },
   { value: CAD_DISPLAY_MODE.UNSHADED, label: "Flat", title: "Unshaded flat color" },
   { value: CAD_DISPLAY_MODE.WIREFRAME, label: "Wire", title: "Full wireframe" }
+];
+
+const PROJECTION_MODE_OPTIONS = [
+  { value: CAMERA_PROJECTION.ORTHOGRAPHIC, label: "Orthographic", title: "Parallel projection for CAD inspection" },
+  { value: CAMERA_PROJECTION.PERSPECTIVE, label: "Perspective", title: "Depth projection with vanishing lines" }
 ];
 
 const FLOOR_MODE_OPTIONS = [
@@ -1639,6 +1645,14 @@ export function DisplaySettingsSection({
   return (
     <Section title="Display" value="display">
       <ControlSubsection title="Mode">
+        <Field label="Projection">
+          <SegmentedControl
+            value={normalizedDisplaySettings.projection}
+            onChange={(nextValue) => setDisplay({ projection: nextValue })}
+            options={PROJECTION_MODE_OPTIONS}
+          />
+        </Field>
+
         <Field label="Style">
           <Select
             value={normalizedDisplaySettings.mode}

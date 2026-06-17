@@ -9,7 +9,9 @@ import {
   displayModeIsWireframe,
   displayModeShowsEdges,
   displayModeShowsThroughEdges,
+  CAMERA_PROJECTION,
   normalizeDisplaySettings,
+  normalizeCameraProjection,
   resolveDisplayEdgeSettings
 } from "./displaySettings.js";
 import {
@@ -651,7 +653,7 @@ export function renderJobContext(meshData, job = {}) {
   const stepDisplayEnabled = sourceKind === "step" || sourceKind === "stp";
   const displaySettings = stepDisplayEnabled
     ? normalizeDisplaySettings(job.display)
-    : normalizeDisplaySettings();
+    : normalizeDisplaySettings({ projection: CAMERA_PROJECTION.PERSPECTIVE });
   const displayMode = displaySettings.mode;
   const bounds = meshData.bounds || boundsFromVertices(meshData.vertices || []);
   const outputs = toArray(job.outputs).length ? toArray(job.outputs) : [{ path: job.output || "", camera: job.camera || "iso" }];
@@ -902,7 +904,8 @@ export async function captureModel(viewport, captureOptions = {}) {
     sceneScale,
     bounds,
     outputs,
-    warnings
+    warnings,
+    edgeSettings
   } = context;
   const modelBounds = viewport.model?.bounds || meshData.bounds || bounds;
 
@@ -990,7 +993,12 @@ export async function captureModel(viewport, captureOptions = {}) {
     syncViewportTopologyDisplayEdges(viewport);
     syncScreenSpaceLineMaterialResolution(viewport.model.runtime.screenSpaceLineMaterials, width, height);
     const cameraSpec = output.camera || job.camera || "iso";
-    const usePerspectiveCamera = cameraSpecUsesPerspectiveProjection(cameraSpec, {
+    const displayProjection = normalizeCameraProjection(
+      context.displaySettings?.projection,
+      CAMERA_PROJECTION.ORTHOGRAPHIC
+    );
+    const usePerspectiveCamera = displayProjection === CAMERA_PROJECTION.PERSPECTIVE ||
+      cameraSpecUsesPerspectiveProjection(cameraSpec, {
       presets: RENDER_VIEW_PRESETS,
       strict: true
     });

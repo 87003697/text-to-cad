@@ -3,6 +3,7 @@ import test from "node:test";
 
 import {
   CAD_DISPLAY_MODE,
+  CAMERA_PROJECTION,
   DEFAULT_DISPLAY_EDGE_SETTINGS,
   DEFAULT_DISPLAY_SETTINGS,
   DEFAULT_EXPLODED_VIEW_SETTINGS,
@@ -21,7 +22,11 @@ import {
 test("display settings normalize mode and clip independently from appearance settings", () => {
   assert.deepEqual(normalizeDisplaySettings(), DEFAULT_DISPLAY_SETTINGS);
   assert.equal(resolveDisplayMode({ mode: "wireframe" }), CAD_DISPLAY_MODE.WIREFRAME);
+  assert.equal(normalizeDisplaySettings().projection, CAMERA_PROJECTION.ORTHOGRAPHIC);
+  assert.equal(normalizeDisplaySettings({ projection: "perspective" }).projection, CAMERA_PROJECTION.PERSPECTIVE);
+  assert.equal(normalizeDisplaySettings({ projection: "fisheye" }).projection, CAMERA_PROJECTION.ORTHOGRAPHIC);
   assert.deepEqual(normalizeDisplaySettings({
+    projection: "perspective",
     mode: "wireframe",
     clip: {
       enabled: true,
@@ -30,6 +35,7 @@ test("display settings normalize mode and clip independently from appearance set
       invert: true
     }
   }), {
+    projection: CAMERA_PROJECTION.PERSPECTIVE,
     mode: CAD_DISPLAY_MODE.WIREFRAME,
     clip: {
       enabled: true,
@@ -167,5 +173,9 @@ test("display settings compare after normalization", () => {
   assert.equal(displaySettingsEqual(
     { mode: "solid", edges: { color: "#111111" } },
     { mode: "solid", edges: { color: "#222222" } }
+  ), false);
+  assert.equal(displaySettingsEqual(
+    { mode: "solid", projection: "orthographic" },
+    { mode: "solid", projection: "perspective" }
   ), false);
 });

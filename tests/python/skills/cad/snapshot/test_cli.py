@@ -135,13 +135,17 @@ class SnapshotCliTests(unittest.TestCase):
                 "--output",
                 "tmp/cap.png",
                 "--display",
-                '{"mode":"rendered","exploded":{"enabled":true,"axis":"radial","spacing":1.6}}',
+                '{"projection":"perspective","mode":"rendered","exploded":{"enabled":true,"axis":"radial","spacing":1.6}}',
             ]
         )
         job = load_job_from_options(options, stdin=_TtyStringIO(), cwd=Path.cwd())
         self.assertEqual(
             job["display"],
-            {"mode": "rendered", "exploded": {"enabled": True, "axis": "radial", "spacing": 1.6}},
+            {
+                "projection": "perspective",
+                "mode": "rendered",
+                "exploded": {"enabled": True, "axis": "radial", "spacing": 1.6},
+            },
         )
 
     def test_edge_settings_belong_to_display_json(self) -> None:
