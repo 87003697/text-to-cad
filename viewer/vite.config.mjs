@@ -51,6 +51,7 @@ const viewerAllowedHosts = normalizeViewerAllowedHosts(process.env.VIEWER_ALLOWE
 const viewerServerLifetimeMs = normalizeServerLifetimeMs(process.env.VIEWER_SERVER_LIFETIME_MS);
 assertNoDeprecatedLocalRootEnv(process.env);
 const viewerVersion = readViewerPackageVersion(viewerAppRoot);
+const viewerServerMode = String(process.env.VIEWER_AGENT_START_MODE || "dev").trim() || "dev";
 const viewerGit = String(process.env.VIEWER_GIT || "").trim();
 const localServerFeatures = [
   "dynamic-root",
@@ -266,6 +267,7 @@ function cadCatalogPlugin({ enableStepArtifactBackend = false } = {}) {
           dynamicRoot: true,
           stepArtifactGenerationAvailable: enableStepArtifactBackend,
           viewerVersion,
+          serverMode: viewerServerMode,
           git: viewerGit,
           serverFeatures: localServerFeatures,
           activeDirectories: activeDirectoryOptions({ rootDir: infoRootDir }),

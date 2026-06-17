@@ -315,13 +315,33 @@ function envWithGit(env, git) {
   };
 }
 
-function envWithGitAndDefaultDir(env, git, defaultDir = "") {
-  const nextEnv = envWithGit(env, git);
+function envWithAgentStartMode(env, mode) {
+  return {
+    ...env,
+    VIEWER_AGENT_START_MODE: normalizeStartMode(mode),
+  };
+}
+
+function envWithGitAndMode(env, git, mode) {
+  return envWithAgentStartMode(envWithGit(env, git), mode);
+}
+
+function envWithGitModeAndDefaultDir(env, git, mode, defaultDir = "") {
+  const nextEnv = envWithGitAndMode(env, git, mode);
   const normalizedDir = String(defaultDir || "").trim();
   if (normalizedDir) {
     nextEnv.VIEWER_DEFAULT_DIR = normalizedDir;
   }
   return nextEnv;
+}
+
+export function readAgentViewerPackageVersion(packageRoot = defaultPackageRoot, { fsImpl = fs } = {}) {
+  try {
+    const packageJson = JSON.parse(fsImpl.readFileSync(path.join(path.resolve(packageRoot), "package.json"), "utf8"));
+    return String(packageJson.version || "").trim();
+  } catch {
+    return "";
+  }
 }
 
 export function buildAgentStartCommand({
@@ -334,7 +354,7 @@ export function buildAgentStartCommand({
 } = {}) {
   const resolvedPackageRoot = path.resolve(packageRoot);
   if (mode === "dev") {
-    const nextEnv = envWithGitAndDefaultDir(env, git, forwardedDefaultRootDir(forwardedArgs));
+    const nextEnv = envWithGitModeAndDefaultDir(env, git, mode, forwardedDefaultRootDir(forwardedArgs));
     return {
       command: nodePath,
       args: [
@@ -355,7 +375,7 @@ export function buildAgentStartCommand({
       ...forwardedArgs,
     ],
     cwd: resolvedPackageRoot,
-    env: envWithGit(env, git),
+    env: envWithGitAndMode(env, git, mode),
     mode,
   };
 }
@@ -393,10 +413,58 @@ export function agentViewerUrl(baseUrl, directory) {
   return url.toString();
 }
 
-function serverInfoGitAllowsReuse(serverInfo, git) {
-  const currentGit = String(git || "");
+function normalizeReuseMode(mode) {
+  const normalizedMode = String(mode || "").trim();
+  if (normalizedMode === "dev") {
+    return "dev";
+  }
+  if (normalizedMode === "serve" || normalizedMode === "dist" || normalizedMode === "bundle") {
+    return "serve";
+  }
+  return "";
+}
+
+function normalizeReuseContext(contextOrGit = {}) {
+  if (typeof contextOrGit === "string") {
+    return {
+      git: contextOrGit,
+      mode: "dev",
+      viewerVersion: "",
+    };
+  }
+  return {
+    git: String(contextOrGit?.git || ""),
+    mode: normalizeReuseMode(contextOrGit?.mode),
+    viewerVersion: String(contextOrGit?.viewerVersion || "").trim(),
+  };
+}
+
+function serverInfoMode(serverInfo) {
+  return normalizeReuseMode(serverInfo?.serverMode || serverInfo?.runtimeMode || serverInfo?.mode);
+}
+
+function serverInfoRequiresGitMatch(serverInfo, context) {
+  const currentMode = normalizeReuseMode(context?.mode);
+  const serverMode = serverInfoMode(serverInfo);
+  return !currentMode || !serverMode || currentMode === "dev" || serverMode === "dev";
+}
+
+function serverInfoGitAllowsReuse(serverInfo, context) {
+  if (!serverInfoRequiresGitMatch(serverInfo, context)) {
+    return true;
+  }
+  const currentGit = String(context?.git || "");
   const serverGit = String(serverInfo?.git || "");
   return !currentGit || !serverGit || currentGit === serverGit;
+}
+
+function serverInfoVersionAllowsReuse(serverInfo, context) {
+  if (serverInfoRequiresGitMatch(serverInfo, context)) {
+    return true;
+  }
+  const currentVersion = String(context?.viewerVersion || "").trim();
+  const serverVersion = String(serverInfo?.viewerVersion || "").trim();
+  return Boolean(currentVersion && serverVersion && currentVersion === serverVersion);
 }
 
 function serverInfoHasFeature(serverInfo, feature) {
@@ -404,14 +472,16 @@ function serverInfoHasFeature(serverInfo, feature) {
   return features.includes(feature);
 }
 
-export function isReusableAgentViewerServer(serverInfo, git) {
+export function isReusableAgentViewerServer(serverInfo, contextOrGit = {}) {
+  const context = normalizeReuseContext(contextOrGit);
   return Boolean(
     serverInfo &&
     serverInfo.app === VIEWER_SERVER_APP_ID &&
     Number(serverInfo.serverApiVersion || 0) >= VIEWER_SERVER_API_VERSION &&
     serverInfo.dynamicRoot === true &&
     serverInfoHasFeature(serverInfo, directoryActivationFeature) &&
-    serverInfoGitAllowsReuse(serverInfo, git)
+    serverInfoGitAllowsReuse(serverInfo, context) &&
+    serverInfoVersionAllowsReuse(serverInfo, context)
   );
 }
 
@@ -537,13 +607,16 @@ function registryHost(serverInfo, fallbackHost) {
 export async function resolveAgentViewerPort({
   forwardedArgs = [],
   git = "",
+  mode = "dev",
+  viewerVersion = "",
   registryServers = readViewerServerRegistry(),
   probePort = probeAgentViewerPort,
   portScanLimit = defaultPortScanLimit,
 } = {}) {
   const target = forwardedServerTarget(forwardedArgs);
+  const reuseContext = { git, mode, viewerVersion };
   const reusableRegistryServers = registryServers
-    .filter((serverInfo) => isReusableAgentViewerServer(serverInfo, git))
+    .filter((serverInfo) => isReusableAgentViewerServer(serverInfo, reuseContext))
     .sort((left, right) => Number(left.port) - Number(right.port));
   for (const serverInfo of reusableRegistryServers) {
     const host = registryHost(serverInfo, target.host);
@@ -551,7 +624,7 @@ export async function resolveAgentViewerPort({
     if (probe.status === "blocked") {
       throw new Error(`CAD Viewer port probe was blocked for ${probe.baseUrl}; rerun agent:start with local network permission.`);
     }
-    if (probe.status === "viewer" && isReusableAgentViewerServer(probe.serverInfo, git)) {
+    if (probe.status === "viewer" && isReusableAgentViewerServer(probe.serverInfo, reuseContext)) {
       return {
         action: "reuse",
         host,
@@ -571,7 +644,7 @@ export async function resolveAgentViewerPort({
     if (probe.status === "blocked") {
       throw new Error(`CAD Viewer port probe was blocked for ${probe.baseUrl}; rerun agent:start with local network permission.`);
     }
-    if (probe.status === "viewer" && isReusableAgentViewerServer(probe.serverInfo, git)) {
+    if (probe.status === "viewer" && isReusableAgentViewerServer(probe.serverInfo, reuseContext)) {
       return {
         action: "reuse",
         host: target.host,
@@ -603,9 +676,17 @@ export async function resolveAgentStartLaunch({
 } = {}) {
   const parsed = parseAgentStartArgs(argv);
   const git = buildAgentViewerGit({ env });
+  const mode = selectAgentStartMode({
+    requestedMode: parsed.startMode,
+    npmConfigPrefix: env.npm_config_prefix,
+    npmPackageJson: env.npm_package_json,
+  });
+  const viewerVersion = readAgentViewerPackageVersion(packageRoot);
   const portResolution = await resolveAgentViewerPort({
     forwardedArgs: parsed.forwardedArgs,
     git,
+    mode,
+    viewerVersion,
     registryServers,
     probePort,
     portScanLimit: parsed.portScanLimit,
@@ -620,11 +701,6 @@ export async function resolveAgentStartLaunch({
     };
   }
 
-  const mode = selectAgentStartMode({
-    requestedMode: parsed.startMode,
-    npmConfigPrefix: env.npm_config_prefix,
-    npmPackageJson: env.npm_package_json,
-  });
   return {
     action: "start",
     host: portResolution.host,

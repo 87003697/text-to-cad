@@ -18,10 +18,12 @@ live review links. The expected input is one or more explicit file paths.
 Start or reuse one local CAD Viewer with `npm run agent:start`, passing the
 absolute artifact directory as `--dir`. The `agent:start` launcher owns port
 selection, compatible-server reuse, directory activation, and the `?dir=` query
-parameter. It activates reused servers through the Viewer's lightweight
-directory activation API, without requiring agents to probe ports or trigger
-catalog scans manually. Use the Viewer URL printed by `agent:start` as-is, then
-add only a `file=` query value for the artifact you want to review.
+parameter. Dev-mode viewers are reused only for matching git identities; dist
+bundle viewers can be reused across git branches when their viewer versions
+match. It activates reused servers through the Viewer's lightweight directory
+activation API, without requiring agents to probe ports or trigger catalog
+scans manually. Use the Viewer URL printed by `agent:start` as-is, then add only
+a `file=` query value for the artifact you want to review.
 
 Choose `--dir` as the absolute directory that contains the model
 artifacts and sidecars, commonly `<repo>/models` or the consuming project's

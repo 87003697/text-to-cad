@@ -182,6 +182,7 @@ test("buildAgentStartCommand prepares dev mode without a server lifetime", () =>
   assert.equal(command.env.VIEWER_SERVER_LIFETIME_MS, undefined);
   assert.equal(command.env.VIEWER_DEFAULT_DIR, "/project/models");
   assert.equal(command.env.VIEWER_GIT, "git-a");
+  assert.equal(command.env.VIEWER_AGENT_START_MODE, "dev");
 });
 
 test("resolveAgentStartCommand keeps server-only flags on the production server path", async (t) => {
@@ -196,6 +197,7 @@ test("resolveAgentStartCommand keeps server-only flags on the production server 
   });
 
   assert.equal(command.mode, "serve");
+  assert.equal(command.env.VIEWER_AGENT_START_MODE, "serve");
   assert.deepEqual(command.args, [
     "/project/viewer/src/server/server.mjs",
     "--dir",
@@ -287,6 +289,57 @@ test("isReusableAgentViewerServer uses git only when both sides report it", () =
   );
 });
 
+test("isReusableAgentViewerServer ignores git for matching dist bundle versions", () => {
+  const distServer = {
+    app: "cad-viewer",
+    serverApiVersion: 2,
+    dynamicRoot: true,
+    serverFeatures: ["directory-activation"],
+    serverMode: "serve",
+    viewerVersion: "0.3.2",
+    git: "git-b",
+  };
+
+  assert.equal(
+    isReusableAgentViewerServer(distServer, {
+      mode: "serve",
+      viewerVersion: "0.3.2",
+      git: "git-a",
+    }),
+    true
+  );
+  assert.equal(
+    isReusableAgentViewerServer(distServer, {
+      mode: "serve",
+      viewerVersion: "0.3.3",
+      git: "git-a",
+    }),
+    false
+  );
+  assert.equal(
+    isReusableAgentViewerServer({
+      ...distServer,
+      serverMode: "dev",
+    }, {
+      mode: "serve",
+      viewerVersion: "0.3.2",
+      git: "git-a",
+    }),
+    false
+  );
+  assert.equal(
+    isReusableAgentViewerServer({
+      ...distServer,
+      serverMode: "serve",
+    }, {
+      mode: "dev",
+      viewerVersion: "0.3.2",
+      git: "git-a",
+    }),
+    false
+  );
+});
+
 test("agentViewerUrl includes the selected absolute directory", async (t) => {
   const directory = await fs.mkdtemp(path.join(os.tmpdir(), "cad-viewer-agent-start-directory-"));
   t.after(() => fs.rm(directory, { recursive: true, force: true }));
@@ -361,6 +414,48 @@ test("resolveAgentViewerPort reuses matching registry servers before free lower 
           dynamicRoot: true,
           serverFeatures: ["directory-activation"],
           git: "git-a",
+        },
+      };
+    },
+  });
+
+  assert.equal(result.action, "reuse");
+  assert.equal(result.port, 5173);
+  assert.deepEqual(probes, ["127.0.0.1:5173"]);
+});
+
+test("resolveAgentViewerPort reuses matching-version dist servers across git branches", async () => {
+  const probes = [];
+  const result = await resolveAgentViewerPort({
+    forwardedArgs: ["--host", "127.0.0.1", "--port", "4178"],
+    git: "git-a",
+    mode: "serve",
+    viewerVersion: "0.3.2",
+    registryServers: [{
+      app: "cad-viewer",
+      serverApiVersion: 2,
+      dynamicRoot: true,
+      serverFeatures: ["directory-activation"],
+      serverMode: "serve",
+      viewerVersion: "0.3.2",
+      git: "git-b",
+      port: 5173,
+      url: "http://127.0.0.1:5173",
+    }],
+    probePort: async ({ host, port }) => {
+      probes.push(`${host}:${port}`);
+      return {
+        status: "viewer",
+        port,
+        baseUrl: `http://${host}:${port}`,
+        serverInfo: {
+          app: "cad-viewer",
+          serverApiVersion: 2,
+          dynamicRoot: true,
+          serverFeatures: ["directory-activation"],
+          serverMode: "serve",
+          viewerVersion: "0.3.2",
+          git: "git-b",
         },
       };
     },

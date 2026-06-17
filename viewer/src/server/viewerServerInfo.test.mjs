@@ -56,6 +56,7 @@ test("buildViewerServerInfo can describe a dynamic rootless local viewer", () =>
     pid: 12346,
     dynamicRoot: true,
     viewerVersion: "0.1.10",
+    serverMode: "serve",
     git: "git-a",
     serverFeatures: ["dynamic-root", ""],
   });
@@ -65,6 +66,7 @@ test("buildViewerServerInfo can describe a dynamic rootless local viewer", () =>
     serverApiVersion: VIEWER_SERVER_API_VERSION,
     app: VIEWER_SERVER_APP_ID,
     viewerVersion: "0.1.10",
+    serverMode: "serve",
     git: "git-a",
     serverFeatures: ["dynamic-root"],
     backend: "local-fs",
