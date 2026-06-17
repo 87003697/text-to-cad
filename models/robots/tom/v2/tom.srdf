@@ -1,6 +1,6 @@
 <?xml version="1.0"?>
 <!-- cadpy:sourcePath=tom.py -->
-<!-- cadpy:sourceHash=5f97be561c8df033f159db7dd228cb6cce334dd48dd8a7f6a5a4427cd6e73382 -->
+<!-- cadpy:sourceHash=795a1797a07c61368396fa2dd786121fc546b91943d410490c3eb65c608eebab -->
 <robot xmlns:tcad="https://text-to-cad.dev/srdf" name="tom_v2">
   <tcad:urdf path="tom.urdf" />
   <virtual_joint name="fixed_base" type="fixed" parent_frame="world" child_link="base_footprint" />
@@ -11,37 +11,37 @@
     <joint name="base_yaw" value="0" />
     <joint name="shoulder_pitch" value="0" />
     <joint name="shoulder_roll" value="0" />
-    <joint name="elbow_pitch" value="0" />
+    <joint name="elbow_pitch" value="-1.570796327" />
     <joint name="elbow_roll" value="0" />
     <joint name="wrist_pitch" value="0" />
     <joint name="wrist_roll" value="0" />
   </group_state>
   <group_state name="reach_forward" group="arm">
     <joint name="base_yaw" value="0" />
-    <joint name="shoulder_pitch" value="1.047197551" />
+    <joint name="shoulder_pitch" value="1.570796327" />
     <joint name="shoulder_roll" value="0" />
-    <joint name="elbow_pitch" value="-1.570796327" />
+    <joint name="elbow_pitch" value="0" />
     <joint name="elbow_roll" value="0" />
-    <joint name="wrist_pitch" value="0.523598776" />
+    <joint name="wrist_pitch" value="0" />
     <joint name="wrist_roll" value="0" />
   </group_state>
   <group_state name="inspection" group="arm">
     <joint name="base_yaw" value="0.785398163" />
     <joint name="shoulder_pitch" value="-0.471238898" />
-    <joint name="shoulder_roll" value="-0.925041957" />
-    <joint name="elbow_pitch" value="0.052359878" />
-    <joint name="elbow_roll" value="0.523057724" />
-    <joint name="wrist_pitch" value="1.012360779" />
-    <joint name="wrist_roll" value="-0.977384381" />
+    <joint name="shoulder_roll" value="1.151917306" />
+    <joint name="elbow_pitch" value="-1.518436449" />
+    <joint name="elbow_roll" value="2.129214421" />
+    <joint name="wrist_pitch" value="1.448623279" />
+    <joint name="wrist_roll" value="-1.727875959" />
   </group_state>
   <group_state name="inspection_mirrored" group="arm">
     <joint name="base_yaw" value="0.785398163" />
     <joint name="shoulder_pitch" value="-0.471238898" />
-    <joint name="shoulder_roll" value="0.925041957" />
-    <joint name="elbow_pitch" value="0.052359878" />
-    <joint name="elbow_roll" value="-0.523057724" />
-    <joint name="wrist_pitch" value="1.012360779" />
-    <joint name="wrist_roll" value="0.977384381" />
+    <joint name="shoulder_roll" value="-1.151917306" />
+    <joint name="elbow_pitch" value="-1.518436449" />
+    <joint name="elbow_roll" value="-2.129214421" />
+    <joint name="wrist_pitch" value="1.448623279" />
+    <joint name="wrist_roll" value="1.727875959" />
   </group_state>
   <disable_collisions link1="base_link" link2="shoulder_yaw_link" reason="Adjacent" />
   <disable_collisions link1="shoulder_yaw_link" link2="shoulder_pitch_link" reason="Adjacent" />

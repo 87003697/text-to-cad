@@ -130,6 +130,31 @@ URDF_JOINT_VELOCITY_RAD_S_BY_NAME = {
     "wrist_pitch": STS3215_NO_LOAD_SPEED_RAD_S,
     "wrist_roll": STS3215_NO_LOAD_SPEED_RAD_S,
 }
+V2_HOME_ELBOW_PITCH_DEG = -90.0
+V2_SRDF_REACH_ARM_GROUP_STATE_DEG = {
+    "base_yaw": 0.0,
+    "shoulder_pitch": 90.0,
+    "shoulder_roll": 0.0,
+    "elbow_pitch": 0.0,
+    "elbow_roll": 0.0,
+    "wrist_pitch": 0.0,
+    "wrist_roll": 0.0,
+}
+V2_SRDF_INSPECTION_ARM_GROUP_STATE_DEG = {
+    "base_yaw": 45.0,
+    "shoulder_pitch": -27.0,
+    "shoulder_roll": 66.0,
+    "elbow_pitch": -87.0,
+    "elbow_roll": 121.995,
+    "wrist_pitch": 83.0,
+    "wrist_roll": -99.0,
+}
+V2_SRDF_INSPECTION_MIRRORED_ARM_GROUP_STATE_DEG = {
+    **V2_SRDF_INSPECTION_ARM_GROUP_STATE_DEG,
+    "shoulder_roll": -V2_SRDF_INSPECTION_ARM_GROUP_STATE_DEG["shoulder_roll"],
+    "elbow_roll": -V2_SRDF_INSPECTION_ARM_GROUP_STATE_DEG["elbow_roll"],
+    "wrist_roll": -V2_SRDF_INSPECTION_ARM_GROUP_STATE_DEG["wrist_roll"],
+}
 
 NO_GRIPPER_LINK_NAMES = (
     "base_footprint",
@@ -1469,6 +1494,27 @@ def _srdf_group_state_element(
     )
 
 
+def _srdf_arm_group_states_deg() -> tuple[tuple[str, dict[str, float]], ...]:
+    old_home_elbow_pitch_deg = 0.0
+    for state_name, joint_values_deg in robot_arm.ROBOT_ARM_SRDF_ARM_GROUP_STATES_DEG:
+        if state_name == "home":
+            old_home_elbow_pitch_deg = float(joint_values_deg.get("elbow_pitch", 0.0))
+            break
+    elbow_pitch_offset_deg = V2_HOME_ELBOW_PITCH_DEG - old_home_elbow_pitch_deg
+    states: list[tuple[str, dict[str, float]]] = []
+    for state_name, joint_values_deg in robot_arm.ROBOT_ARM_SRDF_ARM_GROUP_STATES_DEG:
+        next_values = dict(joint_values_deg)
+        next_values["elbow_pitch"] = float(next_values.get("elbow_pitch", 0.0)) + elbow_pitch_offset_deg
+        if state_name == "reach_forward":
+            next_values = dict(V2_SRDF_REACH_ARM_GROUP_STATE_DEG)
+        elif state_name == "inspection":
+            next_values = dict(V2_SRDF_INSPECTION_ARM_GROUP_STATE_DEG)
+        elif state_name == "inspection_mirrored":
+            next_values = dict(V2_SRDF_INSPECTION_MIRRORED_ARM_GROUP_STATE_DEG)
+        states.append((state_name, next_values))
+    return tuple(states)
+
+
 def _srdf_adjacent_collision_pairs_from_urdf(urdf: str) -> tuple[tuple[str, str], ...]:
     urdf_root = ET.parse(V2_DIR / urdf).getroot()
     pairs: list[tuple[str, str]] = []
@@ -1540,7 +1586,7 @@ def _srdf_root_element(
             )
         )
 
-    for name, joint_values_deg in robot_arm.ROBOT_ARM_SRDF_ARM_GROUP_STATES_DEG:
+    for name, joint_values_deg in _srdf_arm_group_states_deg():
         root.append(
             _srdf_group_state_element(
                 name=name,
