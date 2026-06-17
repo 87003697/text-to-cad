@@ -34,3 +34,11 @@ def gen_urdf() -> dict[str, object]:
         robot_name="tom_v2_with_gripper",
         source_name="models/robots/tom/v2/tom_with_gripper.py",
     )
+
+
+def gen_srdf() -> dict[str, object]:
+    return _load_tom_module().gen_srdf_with_options(
+        include_gripper=True,
+        robot_name="tom_v2_with_gripper",
+        urdf="tom_with_gripper.urdf",
+    )

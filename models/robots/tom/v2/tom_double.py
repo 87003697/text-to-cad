@@ -641,3 +641,12 @@ def gen_urdf() -> dict[str, object]:
             )
         )
     return {"xml": tom_module._serialize_urdf(robot)}
+
+
+def gen_srdf() -> dict[str, object]:
+    """MoveIt semantic groups and named states for the double shoulder v2 arm."""
+    return _load_module(TOM_SOURCE, "tom_double_srdf_base").gen_srdf_with_options(
+        include_gripper=False,
+        robot_name="tom_v2_double",
+        urdf="tom_double.urdf",
+    )
