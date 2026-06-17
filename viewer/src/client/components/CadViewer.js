@@ -210,6 +210,8 @@ const KEYBOARD_POLAR_EPSILON = 0.02;
 const PREVIEW_AUTO_ROTATE_SPEED = 1.0;
 const VIEW_PLANE_ACTIVE_DOT_THRESHOLD = 0.994;
 const VIEW_PLANE_TRANSITION_MS = 280;
+const VIEW_PLANE_POLE_DIRECTION_DOT_THRESHOLD = 0.9999;
+const VIEW_PLANE_POLE_DIRECTION_NUDGE = 0.02;
 const DEFAULT_PERSPECTIVE_DIRECTION_DOT_THRESHOLD = 0.999;
 const DEFAULT_PERSPECTIVE_UP_DOT_THRESHOLD = 0.999;
 const CAMERA_TRANSITION_EASING = Object.freeze({
@@ -237,9 +239,9 @@ const VIEW_MODE_CONTROL_SECTION_CLASSES = "cad-glass-surface pointer-events-auto
 const PROJECTION_CONTROL_CLASSES = "grid grid-rows-2 overflow-hidden rounded-full bg-sidebar-accent/20 ring-1 ring-inset ring-sidebar-border/70";
 const PROJECTION_TAB_BUTTON_CLASSES = "grid size-6 place-items-center transition duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/45";
 const STYLE_CONTROL_BUTTON_CLASSES = "!grid !size-6 !place-items-center !justify-center rounded-full !border-0 !bg-transparent !p-0 text-sidebar-foreground/70 !shadow-none transition duration-150 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground focus-visible:ring-2 focus-visible:ring-ring/45 data-[state=open]:bg-sidebar-accent data-[state=open]:text-sidebar-accent-foreground";
-const VIEW_PLANE_CONTROL_SIZE = "6rem";
+const VIEW_PLANE_CONTROL_SIZE = "6.71875rem";
 const VIEW_PLANE_CONTROL_GAP = "0.5rem";
-const VIEW_MODE_CONTROL_SECTION_BOTTOM_INSET = "0.625rem";
+const VIEW_MODE_CONTROL_SECTION_BOTTOM_INSET = "0px";
 const PROJECTION_MODE_OPTIONS = Object.freeze([
   Object.freeze({
     value: CAMERA_PROJECTION.PERSPECTIVE,
@@ -1428,6 +1430,20 @@ function transitionCameraToViewPreset(runtime, preset) {
 
   nextDirection.normalize();
   nextUp.normalize();
+  const worldUp = new runtime.THREE.Vector3(...WORLD_UP).normalize();
+  if (Math.abs(nextDirection.dot(worldUp)) >= VIEW_PLANE_POLE_DIRECTION_DOT_THRESHOLD) {
+    let screenUp = nextUp.clone().addScaledVector(worldUp, -nextUp.dot(worldUp));
+    if (screenUp.lengthSq() < 1e-6) {
+      screenUp = new runtime.THREE.Vector3(0, 1, 0).addScaledVector(worldUp, -worldUp.y);
+    }
+    if (screenUp.lengthSq() < 1e-6) {
+      screenUp = new runtime.THREE.Vector3(1, 0, 0);
+    }
+    screenUp.normalize();
+    const poleSign = nextDirection.dot(worldUp) >= 0 ? 1 : -1;
+    nextDirection.addScaledVector(screenUp, -poleSign * VIEW_PLANE_POLE_DIRECTION_NUDGE).normalize();
+    nextUp.copy(worldUp);
+  }
   runtime.cameraTransition = {
     startTime: performance.now(),
     durationMs: VIEW_PLANE_TRANSITION_MS,
