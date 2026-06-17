@@ -904,12 +904,16 @@ function applyCameraFrameInsets(runtime, frameInsets = {}, { updateProjection = 
   if (!camera?.projectionMatrix?.elements) {
     return;
   }
-  if (updateProjection) {
+  const metrics = getViewportFrameMetrics(runtime, frameInsets);
+  const offsetX = (metrics.right - metrics.left) / 2;
+  const offsetY = (metrics.bottom - metrics.top) / 2;
+  if ((Math.abs(offsetX) > 1e-6 || Math.abs(offsetY) > 1e-6) && typeof camera.setViewOffset === "function") {
+    camera.setViewOffset(metrics.width, metrics.height, offsetX, offsetY, metrics.width, metrics.height);
+  } else if (typeof camera.clearViewOffset === "function") {
+    camera.clearViewOffset();
+  } else if (updateProjection) {
     camera.updateProjectionMatrix();
   }
-  const { offsetNdcX, offsetNdcY } = getViewportFrameMetrics(runtime, frameInsets);
-  camera.projectionMatrix.elements[8] -= offsetNdcX;
-  camera.projectionMatrix.elements[9] -= offsetNdcY;
   if (camera.projectionMatrixInverse?.copy) {
     camera.projectionMatrixInverse.copy(camera.projectionMatrix).invert();
   }
@@ -1009,6 +1013,7 @@ function transitionCameraToBounds(runtime, bounds, sceneScaleMode, frameInsets, 
   }
   if (runtime.camera?.isOrthographicCamera) {
     syncOrthographicCameraFrame(runtime, frame.radius, sceneScaleMode, frameMetrics);
+    applyCameraFrameInsets(runtime, frameInsets, { updateProjection: false });
   }
   if (
     runtime.camera.position.distanceToSquared(frame.position) <= 1e-8 &&
