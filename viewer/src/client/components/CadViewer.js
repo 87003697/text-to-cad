@@ -70,7 +70,6 @@ import {
   getStageFloorSize,
   normalizeFloorMode,
   resolveWireframeEdgeColor,
-  resolveFloorMode,
   updateSpotLightTarget
 } from "cadjs/lib/viewer/stageTheme";
 import { updateGridHelper as updateStageGridHelper } from "cadjs/lib/viewer/stageGrid";
@@ -2007,9 +2006,13 @@ const CadViewer = forwardRef(function CadViewer({
     };
   }, [hiddenPartIds, visualEdgeSettings]);
   const normalizedClipSettings = normalizedViewerRenderState.clipSettings;
+  const floorSettings = normalizedThemeSettings.floor || {};
+  const defaultFloorMode = floorSettings.enabled === true
+    ? THEME_FLOOR_MODES.STAGE
+    : THEME_FLOOR_MODES.NONE;
   const resolvedFloorMode = floorModeOverride
-    ? normalizeFloorMode(floorModeOverride, resolveFloorMode(normalizedThemeSettings.floor))
-    : resolveFloorMode(normalizedThemeSettings.floor);
+    ? normalizeFloorMode(floorModeOverride, defaultFloorMode)
+    : defaultFloorMode;
   const updateActiveGridHelper = useCallback((
     runtime,
     activeViewerTheme,

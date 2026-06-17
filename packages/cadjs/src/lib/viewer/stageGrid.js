@@ -89,8 +89,9 @@ export function updateGridHelper(
   }
   runtime.gridRadius = radius;
   runtime.gridFloorZ = floorZ;
-  runtime.floorMode = floorMode;
-  if (floorMode !== THEME_FLOOR_MODES.GRID) {
+  const gridEnabled = floorSettings?.grid?.enabled === true || floorMode === THEME_FLOOR_MODES.GRID;
+  runtime.floorMode = gridEnabled ? THEME_FLOOR_MODES.GRID : floorMode;
+  if (!gridEnabled) {
     disposeSceneObject(runtime.gridHelper);
     runtime.gridHelper = null;
     runtime.gridConfig = null;

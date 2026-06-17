@@ -366,6 +366,7 @@ function midpointPalette(primaryColors, secondaryColors) {
 
 function createFloorGridSettings(floorColor, options = {}) {
   const normalizedFloorColor = normalizeColor(floorColor, "#f1f5f9");
+  const enabled = normalizeBoolean(options.enabled, false);
   const lightFloor = relativeLuminance(normalizedFloorColor) >= 0.36;
   const centerColor = normalizeColor(
     options.centerColor,
@@ -387,11 +388,17 @@ function createFloorGridSettings(floorColor, options = {}) {
     MAX_FLOOR_GRID_DENSITY
   );
   return {
-    enabled: normalizeBoolean(options.enabled, false),
     gridCenterColor: centerColor,
     gridCellColor: cellColor,
     gridOpacity: opacity,
     gridDensity: density,
+    grid: {
+      enabled,
+      centerColor,
+      cellColor,
+      opacity,
+      density
+    },
     centerColor,
     cellColor,
     opacity,
@@ -437,7 +444,8 @@ const CINEMATIC_THEME_SETTINGS = Object.freeze({
     reflectivity: 0.14,
     shadowOpacity: 0.16,
     horizonBlend: 0.18,
-    ...createFloorGridSettings("#edf3f8", { opacity: 0.2 })
+    ...createFloorGridSettings("#edf3f8", { opacity: 0.2 }),
+    enabled: false
   },
   environment: {
     enabled: true,
@@ -533,7 +541,8 @@ const DARK_STUDIO_THEME_SETTINGS = Object.freeze({
     reflectivity: 0.1,
     shadowOpacity: 0.42,
     horizonBlend: 0.1,
-    ...createFloorGridSettings("#0a2238", { opacity: 0.22 })
+    ...createFloorGridSettings("#0a2238", { opacity: 0.22 }),
+    enabled: false
   },
   environment: {
     enabled: true,
@@ -672,7 +681,8 @@ const BLUE_THEME_SETTINGS = Object.freeze({
     reflectivity: 0.2,
     shadowOpacity: 0.3,
     horizonBlend: 0.18,
-    ...createFloorGridSettings("#06324f", { opacity: 0.24 })
+    ...createFloorGridSettings("#06324f", { opacity: 0.24 }),
+    enabled: false
   },
   environment: DARK_STUDIO_THEME_SETTINGS.environment,
   lighting: DARK_STUDIO_THEME_SETTINGS.lighting
@@ -704,7 +714,8 @@ const PINK_THEME_SETTINGS = Object.freeze({
     reflectivity: 0.2,
     shadowOpacity: 0.26,
     horizonBlend: 0.22,
-    ...createFloorGridSettings("#4a1833", { opacity: 0.24 })
+    ...createFloorGridSettings("#4a1833", { opacity: 0.24 }),
+    enabled: false
   },
   environment: DARK_STUDIO_THEME_SETTINGS.environment,
   lighting: DARK_STUDIO_THEME_SETTINGS.lighting
@@ -736,7 +747,8 @@ const CLAY_SUNRISE_THEME_SETTINGS = Object.freeze({
     reflectivity: 0.14,
     shadowOpacity: 0.34,
     horizonBlend: 0.12,
-    ...createFloorGridSettings("#d4a070", { opacity: 0.18 })
+    ...createFloorGridSettings("#d4a070", { opacity: 0.18 }),
+    enabled: false
   },
   environment: DARK_STUDIO_THEME_SETTINGS.environment,
   lighting: DARK_STUDIO_THEME_SETTINGS.lighting
@@ -768,7 +780,8 @@ const BEACH_THEME_SETTINGS = Object.freeze({
     reflectivity: 0.18,
     shadowOpacity: 0.2,
     horizonBlend: 0.2,
-    ...createFloorGridSettings("#f2d59b", { opacity: 0.18 })
+    ...createFloorGridSettings("#f2d59b", { opacity: 0.18 }),
+    enabled: false
   },
   environment: {
     enabled: true,
@@ -886,7 +899,8 @@ const WORKBENCH_BASE_THEME_SETTINGS = Object.freeze({
   floor: {
     ...CINEMATIC_THEME_SETTINGS.floor,
     color: WORKBENCH_LIGHT_FLOOR_COLOR,
-    ...createFloorGridSettings(WORKBENCH_LIGHT_FLOOR_COLOR, { opacity: 0.2 })
+    enabled: true,
+    ...createFloorGridSettings(WORKBENCH_LIGHT_FLOOR_COLOR, { enabled: true, opacity: 0.2 })
   },
   environment: {
     ...CINEMATIC_THEME_SETTINGS.environment,
@@ -927,7 +941,8 @@ const WORKBENCH_DARK_THEME_SETTINGS = Object.freeze({
   floor: {
     ...DARKOAL_THEME_SETTINGS.floor,
     color: WORKBENCH_DARK_FLOOR_COLOR,
-    ...createFloorGridSettings(WORKBENCH_DARK_FLOOR_COLOR, { opacity: 0.22 })
+    enabled: true,
+    ...createFloorGridSettings(WORKBENCH_DARK_FLOOR_COLOR, { enabled: true, opacity: 0.22 })
   },
   lighting: {
     ...DARKOAL_THEME_SETTINGS.lighting,

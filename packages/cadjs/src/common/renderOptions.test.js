@@ -163,3 +163,38 @@ test("grid floors use theme line opacity and density for snapshots", () => {
   assert.equal(materials[0].transparent, true);
   assert.equal(materials[0].depthWrite, false);
 });
+
+test("snapshot floors render grid independently from the stage floor", () => {
+  const scene = new THREE.Scene();
+  addFloor(
+    scene,
+    { min: [0, 0, 0], max: [10, 10, 10] },
+    normalizeThemeSettings({
+      floor: {
+        mode: "stage",
+        enabled: true,
+        color: "#ddeeff",
+        shadowOpacity: 0.25,
+        grid: {
+          enabled: true,
+          centerColor: "#123456",
+          cellColor: "#abcdef",
+          opacity: 0.37,
+          density: 2
+        }
+      }
+    }),
+    RENDER_SCENE_SCALE.CAD,
+    SCALE_SETTINGS
+  );
+
+  const grid = scene.children.find((child) => child.type === "GridHelper");
+  const plane = scene.children.find((child) => child.type === "Mesh");
+  const gridMaterials = Array.isArray(grid.material) ? grid.material : [grid.material];
+
+  assert.ok(grid);
+  assert.ok(plane);
+  assert.equal(gridMaterials[0].opacity, 0.37);
+  assert.equal(plane.receiveShadow, true);
+  assert.equal(plane.material.opacity, 0.25);
+});
