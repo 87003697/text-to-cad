@@ -994,9 +994,14 @@ function transitionCameraToBounds(runtime, bounds, sceneScaleMode, frameInsets, 
     return false;
   }
   const frameMetrics = getViewportFrameMetrics(runtime, frameInsets);
-  const frameCamera = runtime.camera?.isPerspectiveCamera
-    ? runtime.camera
-    : runtime.perspectiveCamera || runtime.camera;
+  const activeCamera = runtime.camera;
+  const frameCamera = activeCamera?.isPerspectiveCamera
+    ? activeCamera
+    : runtime.perspectiveCamera || activeCamera;
+  const activeOffset = activeCamera?.position?.clone?.().sub(runtime.controls.target);
+  const activeViewDirection = activeOffset?.lengthSq?.() > 1e-8
+    ? activeOffset.normalize()
+    : null;
   const frame = autoZoomFrameForBounds(runtime.THREE, {
     camera: frameCamera,
     controls: runtime.controls,
@@ -1006,8 +1011,8 @@ function transitionCameraToBounds(runtime, bounds, sceneScaleMode, frameInsets, 
     minRadius,
     padding: AUTO_ZOOM_PADDING,
     defaultDirection: DEFAULT_VIEW_DIRECTION,
-    viewDirection,
-    viewUp
+    viewDirection: viewDirection || (activeCamera?.isOrthographicCamera ? activeViewDirection : null),
+    viewUp: viewUp || (activeCamera?.isOrthographicCamera ? activeCamera.up : null)
   });
   if (!frame) {
     return false;
