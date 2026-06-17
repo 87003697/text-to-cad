@@ -4,7 +4,12 @@ import test from "node:test";
 import * as THREE from "three";
 
 import {
+  buildModel
+} from "./cadScene.js";
+import {
+  modelOptionsForRenderJob,
   projectedVisibleGeometryFrame,
+  renderJobContext,
   renderMeshJob
 } from "./renderMeshScene.js";
 
@@ -69,6 +74,56 @@ test("renderMeshJob list capture uses buildModel selection", async () => {
     min: [2, 0, 0],
     max: [3, 1, 0]
   });
+});
+
+test("render view focus preserves full assembly while hide still filters", () => {
+  const focusedContext = renderJobContext(twoPartMeshData(), {
+    mode: "view",
+    selection: {
+      focus: ["right"]
+    }
+  });
+  const focused = buildModel(
+    THREE,
+    twoPartMeshData(),
+    modelOptionsForRenderJob(focusedContext, {
+      mode: "view",
+      selection: {
+        focus: ["right"]
+      }
+    })
+  );
+
+  assert.deepEqual(focused.displayRecords.map((record) => record.partId), ["left", "right"]);
+  assert.deepEqual(focused.bounds, {
+    min: [0, 0, 0],
+    max: [3, 1, 0]
+  });
+  focused.dispose();
+
+  const hiddenContext = renderJobContext(twoPartMeshData(), {
+    mode: "view",
+    selection: {
+      hide: ["left"]
+    }
+  });
+  const hidden = buildModel(
+    THREE,
+    twoPartMeshData(),
+    modelOptionsForRenderJob(hiddenContext, {
+      mode: "view",
+      selection: {
+        hide: ["left"]
+      }
+    })
+  );
+
+  assert.deepEqual(hidden.displayRecords.map((record) => record.partId), ["right"]);
+  assert.deepEqual(hidden.bounds, {
+    min: [2, 0, 0],
+    max: [3, 1, 0]
+  });
+  hidden.dispose();
 });
 
 test("projectedVisibleGeometryFrame fits actual vertices instead of sparse bounds", () => {

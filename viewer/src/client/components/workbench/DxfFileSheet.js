@@ -18,7 +18,8 @@ import FileSheet, {
   FILE_SHEET_SEGMENTED_ITEM_CLASSES,
   FileSheetControlRow,
   FileSheetSection,
-  FileSheetSectionBody
+  FileSheetSectionBody,
+  FileSheetSubsection
 } from "./FileSheet";
 import FileMetadataSection from "./FileMetadataSection";
 import FileStatusSection from "./FileStatusSection";
@@ -183,82 +184,81 @@ export default function DxfFileSheet({
       >
         <FileStatusSection items={statusItems} />
 
-        <FileSheetSection value="plate" title="Plate">
-          <FileSheetSectionBody>
-            <FileSheetControlRow label="Thickness">
-              <div className="grid grid-cols-[2rem_minmax(0,1fr)_2rem] items-center gap-1.5">
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="icon-sm"
-                  className={compactIconButtonClasses}
-                  onClick={() => {
-                    commitValue(valueMm - 0.25);
-                  }}
-                  disabled={!hasDxfData}
-                  aria-label="Reduce DXF material thickness"
-                  title="Reduce thickness"
-                >
-                  <Minus className="h-3.5 w-3.5" strokeWidth={2} aria-hidden="true" />
-                </Button>
-                <div className="relative block">
-                  <Input
-                    type="number"
-                    min="0.2"
-                    max="25"
-                    step="any"
-                    inputMode="decimal"
-                    value={draftValue}
+        <FileSheetSection value="dxf" title="DXF">
+          <FileSheetSectionBody className="py-0">
+            <FileSheetSubsection title="Thickness">
+              <FileSheetControlRow label="Material">
+                <div className="grid grid-cols-[2rem_minmax(0,1fr)_2rem] items-center gap-1.5">
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="icon-sm"
+                    className={compactIconButtonClasses}
+                    onClick={() => {
+                      commitValue(valueMm - 0.25);
+                    }}
                     disabled={!hasDxfData}
-                    onChange={(event) => {
-                      setDraftValue(event.target.value);
+                    aria-label="Reduce DXF material thickness"
+                    title="Reduce thickness"
+                  >
+                    <Minus className="h-3.5 w-3.5" strokeWidth={2} aria-hidden="true" />
+                  </Button>
+                  <div className="relative block">
+                    <Input
+                      type="number"
+                      min="0.2"
+                      max="25"
+                      step="any"
+                      inputMode="decimal"
+                      value={draftValue}
+                      disabled={!hasDxfData}
+                      onChange={(event) => {
+                        setDraftValue(event.target.value);
+                      }}
+                      onBlur={() => {
+                        commitValue(draftValue);
+                      }}
+                      onKeyDown={(event) => {
+                        if (event.key === "Enter") {
+                          event.currentTarget.blur();
+                        }
+                      }}
+                      className={`${compactInputClasses} w-full pr-9 text-right`}
+                      aria-label="DXF material thickness in millimeters"
+                    />
+                    <span className="pointer-events-none absolute inset-y-0 right-2 flex items-center text-xs text-muted-foreground">mm</span>
+                  </div>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="icon-sm"
+                    className={compactIconButtonClasses}
+                    onClick={() => {
+                      commitValue(valueMm + 0.25);
                     }}
-                    onBlur={() => {
-                      commitValue(draftValue);
-                    }}
-                    onKeyDown={(event) => {
-                      if (event.key === "Enter") {
-                        event.currentTarget.blur();
-                      }
-                    }}
-                    className={`${compactInputClasses} w-full pr-9 text-right`}
-                    aria-label="DXF material thickness in millimeters"
-                  />
-                  <span className="pointer-events-none absolute inset-y-0 right-2 flex items-center text-xs text-muted-foreground">mm</span>
+                    disabled={!hasDxfData}
+                    aria-label="Increase DXF material thickness"
+                    title="Increase thickness"
+                  >
+                    <Plus className="h-3.5 w-3.5" strokeWidth={2} aria-hidden="true" />
+                  </Button>
                 </div>
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="icon-sm"
-                  className={compactIconButtonClasses}
-                  onClick={() => {
-                    commitValue(valueMm + 0.25);
-                  }}
-                  disabled={!hasDxfData}
-                  aria-label="Increase DXF material thickness"
-                  title="Increase thickness"
-                >
-                  <Plus className="h-3.5 w-3.5" strokeWidth={2} aria-hidden="true" />
-                </Button>
-              </div>
-            </FileSheetControlRow>
-          </FileSheetSectionBody>
-        </FileSheetSection>
-
-        <FileSheetSection value="bends" title="Bends">
-          <FileSheetSectionBody>
-            {normalizedBendSettings.length ? normalizedBendSettings.map((setting, index) => (
-              <DxfBendRow
-                key={setting.id || `bend-${index + 1}`}
-                index={index}
-                setting={setting}
-                onChange={onBendChange}
-              />
-            )) : (
-              <p className="px-3 py-1 text-xs text-muted-foreground">
-                {viewerLoading ? "Loading bends..." : "No bends are available."}
-              </p>
-            )}
+              </FileSheetControlRow>
+            </FileSheetSubsection>
+            <FileSheetSubsection title="Bends">
+              {normalizedBendSettings.length ? normalizedBendSettings.map((setting, index) => (
+                <DxfBendRow
+                  key={setting.id || `bend-${index + 1}`}
+                  index={index}
+                  setting={setting}
+                  onChange={onBendChange}
+                />
+              )) : (
+                <p className="px-3 py-1 text-xs text-muted-foreground">
+                  {viewerLoading ? "Loading bends..." : "No bends are available."}
+                </p>
+              )}
+            </FileSheetSubsection>
           </FileSheetSectionBody>
         </FileSheetSection>
         {themeSections}

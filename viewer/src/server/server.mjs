@@ -74,6 +74,7 @@ if (runtime.args.help) {
   process.exit(0);
 }
 const runtimeEnv = runtime.env;
+const viewerServerMode = String(runtimeEnv.VIEWER_AGENT_START_MODE || "serve").trim() || "serve";
 const viewerGit = String(runtimeEnv.VIEWER_GIT || "").trim();
 try {
   assertNoDeprecatedLocalRootEnv(runtimeEnv);
@@ -156,6 +157,7 @@ const middlewares = [
         dynamicRoot: true,
         stepArtifactGenerationAvailable: stepArtifactBackendEnabled,
         viewerVersion,
+        serverMode: viewerServerMode,
         git: viewerGit,
         serverFeatures: localServerFeatures,
         activeDirectories: activeDirectoryOptions({ rootDir: infoRootDir }),

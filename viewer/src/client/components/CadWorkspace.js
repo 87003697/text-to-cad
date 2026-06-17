@@ -1157,6 +1157,7 @@ export default function CadWorkspace({
   const [fileSheetOpenSectionIds, setFileSheetOpenSectionIds] = useState(null);
   const [dxfThicknessMm, setDxfThicknessMm] = useState(0);
   const [dxfBendSettings, setDxfBendSettings] = useState([]);
+  const [dxfViewMode, setDxfViewMode] = useState("2d");
   const [gcodeShowTravel, setGcodeShowTravel] = useState(false);
   const [gcodeMaxLayer, setGcodeMaxLayer] = useState(null);
   const [gcodeFullDetail, setGcodeFullDetail] = useState(false);
@@ -8473,6 +8474,8 @@ export default function CadWorkspace({
           selectedMeshData={selectedMeshData}
           selectedDxfData={selectedDxfData}
           selectedDxfMeshData={selectedDxfMeshData}
+          dxfViewMode={dxfViewMode}
+          onDxfViewModeChange={setDxfViewMode}
           selectedImplicitModel={selectedImplicitRuntimeModel}
           implicitDynamicRenderActive={implicitDynamicRenderActive}
           implicitGraphicsSettings={implicitGraphicsSettings}

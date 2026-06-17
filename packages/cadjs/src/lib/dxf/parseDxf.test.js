@@ -52,23 +52,38 @@ test("parseDxf normalizes closed lwpolyline, circles, and bends", () => {
   assert.deepEqual(payload.layers.map((layer) => layer.name), ["BEND", "CUT"]);
 });
 
-test("parseDxf rejects lwpolyline bulges", () => {
-  assert.throws(
-    () => parseDxf(dxfText([
-      "0", "SECTION",
-      "2", "ENTITIES",
-      "0", "LWPOLYLINE",
-      "8", "CUT",
-      "90", "2",
-      "70", "0",
-      "10", "0",
-      "20", "0",
-      "42", "0.5",
-      "10", "10",
-      "20", "0",
-      "0", "ENDSEC",
-      "0", "EOF"
-    ])),
-    /bulge/
-  );
+test("parseDxf converts lwpolyline bulges into arcs", () => {
+  const quarterBulge = Math.tan(Math.PI / 8);
+  const payload = parseDxf(dxfText([
+    "0", "SECTION",
+    "2", "ENTITIES",
+    "0", "LWPOLYLINE",
+    "8", "CUT",
+    "90", "4",
+    "70", "1",
+    "10", "1",
+    "20", "0",
+    "42", String(quarterBulge),
+    "10", "0",
+    "20", "1",
+    "42", String(quarterBulge),
+    "10", "-1",
+    "20", "0",
+    "42", String(quarterBulge),
+    "10", "0",
+    "20", "-1",
+    "42", String(quarterBulge),
+    "0", "ENDSEC",
+    "0", "EOF"
+  ]), { fileRef: "test/bulged-hole.dxf" });
+
+  assert.equal(payload.counts.paths, 4);
+  assert.equal(payload.counts.circles, 0);
+  assert.equal(payload.geometry.lines.length, 0);
+  assert.equal(payload.geometry.arcs.length, 4);
+  assert.equal(payload.bounds.width, 2);
+  assert.equal(payload.bounds.height, 2);
+  assert.deepEqual(payload.geometry.arcs.map((arc) => arc.radius), [1, 1, 1, 1]);
+  assert.deepEqual(payload.geometry.arcs.map((arc) => arc.sweepAngleDeg), [90, 90, 90, 90]);
+  assert.match(payload.paths[0].d, /A 1 1 0 0 0 /);
 });

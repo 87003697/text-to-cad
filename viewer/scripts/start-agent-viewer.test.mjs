@@ -22,10 +22,7 @@ import {
   resolveAgentViewerPort,
   selectAgentStartMode,
   stripDefaultRootDirArgs,
-  stripShutdownAfterArgs,
 } from "./start-agent-viewer.mjs";
-
-const twelveHoursMs = 12 * 60 * 60 * 1000;
 
 test("parseAgentStartArgs consumes launcher mode and preserves server flags", async (t) => {
   const directory = await fs.mkdtemp(path.join(os.tmpdir(), "cad-viewer-agent-start-directory-"));
@@ -39,8 +36,6 @@ test("parseAgentStartArgs consumes launcher mode and preserves server flags", as
       "--dir",
       directory,
       "--port=4178",
-      "--shutdown-after",
-      "12h",
     ]),
     {
       startMode: "dev",
@@ -50,11 +45,8 @@ test("parseAgentStartArgs consumes launcher mode and preserves server flags", as
         "--dir",
         directory,
         "--port=4178",
-        "--shutdown-after",
-        "12h",
       ],
       directory,
-      shutdownAfterMs: twelveHoursMs,
       portScanLimit: 64,
       jsonResult: false,
     }
@@ -99,10 +91,17 @@ test("parseAgentStartArgs rejects invalid launcher modes", () => {
   );
 });
 
-test("stripShutdownAfterArgs removes lifetime flags before starting Vite", () => {
-  assert.deepEqual(
-    stripShutdownAfterArgs(["--host", "127.0.0.1", "--shutdown-after=30m", "--port", "4178"]),
-    ["--host", "127.0.0.1", "--port", "4178"]
+test("parseAgentStartArgs rejects shutdown lifetime flags", async (t) => {
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "cad-viewer-agent-start-directory-"));
+  t.after(() => fs.rm(directory, { recursive: true, force: true }));
+
+  assert.throws(
+    () => parseAgentStartArgs(["--dir", directory, "--shutdown-after", "12h"]),
+    /does not support --shutdown-after/
+  );
+  assert.throws(
+    () => parseAgentStartArgs(["--dir", directory, "--shutdown-after=12h"]),
+    /does not support --shutdown-after/
   );
 });
 
@@ -161,12 +160,11 @@ test("buildAgentViewerGit is empty outside git", async (t) => {
   assert.equal(buildAgentViewerGit({ env: {}, cwd: tmpDir }), "");
 });
 
-test("buildAgentStartCommand translates shutdown-after for dev mode", () => {
+test("buildAgentStartCommand prepares dev mode without a server lifetime", () => {
   const command = buildAgentStartCommand({
     mode: "dev",
     packageRoot: "/project/viewer",
-    forwardedArgs: ["--host", "127.0.0.1", "--dir", "/project/models", "--shutdown-after", "12h", "--port", "4178"],
-    shutdownAfterMs: twelveHoursMs,
+    forwardedArgs: ["--host", "127.0.0.1", "--dir", "/project/models", "--port", "4178"],
     env: {},
     nodePath: "/node",
     git: "git-a",
@@ -181,9 +179,10 @@ test("buildAgentStartCommand translates shutdown-after for dev mode", () => {
     "--port",
     "4178",
   ]);
-  assert.equal(command.env.VIEWER_SERVER_LIFETIME_MS, String(twelveHoursMs));
+  assert.equal(command.env.VIEWER_SERVER_LIFETIME_MS, undefined);
   assert.equal(command.env.VIEWER_DEFAULT_DIR, "/project/models");
   assert.equal(command.env.VIEWER_GIT, "git-a");
+  assert.equal(command.env.VIEWER_AGENT_START_MODE, "dev");
 });
 
 test("resolveAgentStartCommand keeps server-only flags on the production server path", async (t) => {
@@ -191,19 +190,18 @@ test("resolveAgentStartCommand keeps server-only flags on the production server 
   t.after(() => fs.rm(directory, { recursive: true, force: true }));
 
   const command = resolveAgentStartCommand({
-    argv: ["--viewer-start-mode", "serve", "--dir", directory, "--shutdown-after", "12h"],
+    argv: ["--viewer-start-mode", "serve", "--dir", directory],
     env: {},
     packageRoot: "/project/viewer",
     nodePath: "/node",
   });
 
   assert.equal(command.mode, "serve");
+  assert.equal(command.env.VIEWER_AGENT_START_MODE, "serve");
   assert.deepEqual(command.args, [
     "/project/viewer/src/server/server.mjs",
     "--dir",
     directory,
-    "--shutdown-after",
-    "12h",
   ]);
 });
 
@@ -291,6 +289,57 @@ test("isReusableAgentViewerServer uses git only when both sides report it", () =
   );
 });
 
+test("isReusableAgentViewerServer ignores git for matching dist bundle versions", () => {
+  const distServer = {
+    app: "cad-viewer",
+    serverApiVersion: 2,
+    dynamicRoot: true,
+    serverFeatures: ["directory-activation"],
+    serverMode: "serve",
+    viewerVersion: "0.3.2",
+    git: "git-b",
+  };
+
+  assert.equal(
+    isReusableAgentViewerServer(distServer, {
+      mode: "serve",
+      viewerVersion: "0.3.2",
+      git: "git-a",
+    }),
+    true
+  );
+  assert.equal(
+    isReusableAgentViewerServer(distServer, {
+      mode: "serve",
+      viewerVersion: "0.3.3",
+      git: "git-a",
+    }),
+    false
+  );
+  assert.equal(
+    isReusableAgentViewerServer({
+      ...distServer,
+      serverMode: "dev",
+    }, {
+      mode: "serve",
+      viewerVersion: "0.3.2",
+      git: "git-a",
+    }),
+    false
+  );
+  assert.equal(
+    isReusableAgentViewerServer({
+      ...distServer,
+      serverMode: "serve",
+    }, {
+      mode: "dev",
+      viewerVersion: "0.3.2",
+      git: "git-a",
+    }),
+    false
+  );
+});
+
 test("agentViewerUrl includes the selected absolute directory", async (t) => {
   const directory = await fs.mkdtemp(path.join(os.tmpdir(), "cad-viewer-agent-start-directory-"));
   t.after(() => fs.rm(directory, { recursive: true, force: true }));
@@ -375,6 +424,48 @@ test("resolveAgentViewerPort reuses matching registry servers before free lower 
   assert.deepEqual(probes, ["127.0.0.1:5173"]);
 });
 
+test("resolveAgentViewerPort reuses matching-version dist servers across git branches", async () => {
+  const probes = [];
+  const result = await resolveAgentViewerPort({
+    forwardedArgs: ["--host", "127.0.0.1", "--port", "4178"],
+    git: "git-a",
+    mode: "serve",
+    viewerVersion: "0.3.2",
+    registryServers: [{
+      app: "cad-viewer",
+      serverApiVersion: 2,
+      dynamicRoot: true,
+      serverFeatures: ["directory-activation"],
+      serverMode: "serve",
+      viewerVersion: "0.3.2",
+      git: "git-b",
+      port: 5173,
+      url: "http://127.0.0.1:5173",
+    }],
+    probePort: async ({ host, port }) => {
+      probes.push(`${host}:${port}`);
+      return {
+        status: "viewer",
+        port,
+        baseUrl: `http://${host}:${port}`,
+        serverInfo: {
+          app: "cad-viewer",
+          serverApiVersion: 2,
+          dynamicRoot: true,
+          serverFeatures: ["directory-activation"],
+          serverMode: "serve",
+          viewerVersion: "0.3.2",
+          git: "git-b",
+        },
+      };
+    },
+  });
+
+  assert.equal(result.action, "reuse");
+  assert.equal(result.port, 5173);
+  assert.deepEqual(probes, ["127.0.0.1:5173"]);
+});
+
 test("resolveAgentViewerPort skips other viewers and starts on the first closed port", async () => {
   const probes = [];
   const result = await resolveAgentViewerPort({
@@ -430,7 +521,7 @@ test("resolveAgentStartLaunch starts the selected free port", async (t) => {
   t.after(() => fs.rm(directory, { recursive: true, force: true }));
 
   const result = await resolveAgentStartLaunch({
-    argv: ["--viewer-start-mode", "serve", "--host", "127.0.0.1", "--dir", directory, "--port", "4178", "--shutdown-after", "12h"],
+    argv: ["--viewer-start-mode", "serve", "--host", "127.0.0.1", "--dir", directory, "--port", "4178"],
     env: {},
     packageRoot: "/project/viewer",
     nodePath: "/node",
@@ -452,8 +543,6 @@ test("resolveAgentStartLaunch starts the selected free port", async (t) => {
     directory,
     "--port",
     "4179",
-    "--shutdown-after",
-    "12h",
   ]);
   assert.equal(new URL(result.viewerUrl).searchParams.get("dir"), directory);
 });

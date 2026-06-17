@@ -84,6 +84,7 @@ export function buildViewerServerInfo({
   dynamicRoot = false,
   stepArtifactGenerationAvailable = true,
   viewerVersion = "",
+  serverMode = "",
   git = "",
   serverFeatures = [],
   activeDirectories = [],
@@ -107,6 +108,7 @@ export function buildViewerServerInfo({
         rootName: "",
       };
   const normalizedPort = normalizeViewerPort(port);
+  const normalizedServerMode = String(serverMode || "").trim();
   const normalizedGit = String(git || "").trim();
   const normalizedActiveDirectories = normalizeViewerActiveDirectories(activeDirectories, resolvedDirectoryRoot);
   return {
@@ -114,6 +116,7 @@ export function buildViewerServerInfo({
     serverApiVersion: VIEWER_SERVER_API_VERSION,
     app: VIEWER_SERVER_APP_ID,
     viewerVersion: String(viewerVersion || ""),
+    ...(normalizedServerMode ? { serverMode: normalizedServerMode } : {}),
     ...(normalizedGit ? { git: normalizedGit } : {}),
     serverFeatures: Array.isArray(serverFeatures)
       ? serverFeatures.map((feature) => String(feature || "").trim()).filter(Boolean)

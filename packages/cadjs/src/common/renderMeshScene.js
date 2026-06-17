@@ -725,6 +725,12 @@ export function renderJobContext(meshData, job = {}) {
 }
 
 export function modelOptionsForRenderJob(context, job = {}) {
+  const selection = job.selection || {};
+  const filterSelection = context.mode === "view" || context.mode === "orbit"
+    ? {
+        hide: selection.hide
+      }
+    : selection;
   return {
     theme: context.sceneTheme,
     displayMode: context.displayMode,
@@ -752,7 +758,8 @@ export function modelOptionsForRenderJob(context, job = {}) {
           context.warnings.push(message);
         }
       }
-    }
+    },
+    filterSelection
   };
 }
 

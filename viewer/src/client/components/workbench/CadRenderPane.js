@@ -12,6 +12,7 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger
 } from "../ui/dropdown-menu";
+import { ToggleGroup, ToggleGroupItem } from "../ui/toggle-group";
 import AssemblyContextMenuItems from "./AssemblyContextMenuItems";
 import { cn } from "@/ui/utils";
 import { RENDER_FORMAT } from "@/workbench/constants";
@@ -75,6 +76,52 @@ function viewerContextMenuAnchorStyle(menu, viewportFrameInsets) {
     width: "1px",
     height: "1px"
   };
+}
+
+function DxfViewModeControl({
+  value,
+  threeDimensionalAvailable = false,
+  onChange
+}) {
+  const normalizedValue = value === "3d" && threeDimensionalAvailable ? "3d" : "2d";
+
+  return (
+    <div className="cad-glass-surface rounded-md border border-sidebar-border p-0.5 shadow-sm">
+      <ToggleGroup
+        type="single"
+        variant="outline"
+        size="sm"
+        value={normalizedValue}
+        onValueChange={(nextValue) => {
+          if (!nextValue) {
+            return;
+          }
+          if (nextValue === "3d" && !threeDimensionalAvailable) {
+            return;
+          }
+          onChange?.(nextValue);
+        }}
+        className="grid h-7 w-[5.5rem] grid-cols-2"
+        aria-label="DXF view mode"
+      >
+        <ToggleGroupItem
+          value="2d"
+          className="!h-7 px-2 text-[11px] text-muted-foreground hover:text-foreground data-[state=on]:!bg-accent data-[state=on]:!text-foreground data-[state=on]:font-semibold"
+          title="Show DXF flat pattern"
+        >
+          2D
+        </ToggleGroupItem>
+        <ToggleGroupItem
+          value="3d"
+          disabled={!threeDimensionalAvailable}
+          className="!h-7 px-2 text-[11px] text-muted-foreground hover:text-foreground data-[state=on]:!bg-accent data-[state=on]:!text-foreground data-[state=on]:font-semibold"
+          title={threeDimensionalAvailable ? "Show DXF bend preview" : "3D bend preview unavailable"}
+        >
+          3D
+        </ToggleGroupItem>
+      </ToggleGroup>
+    </div>
+  );
 }
 
 function ViewerContextMenu({
@@ -185,6 +232,8 @@ export default function CadRenderPane({
   selectedMeshData,
   selectedDxfData,
   selectedDxfMeshData,
+  dxfViewMode = "2d",
+  onDxfViewModeChange,
   selectedImplicitModel,
   implicitDynamicRenderActive = false,
   implicitGraphicsSettings = null,
@@ -279,7 +328,9 @@ export default function CadRenderPane({
   const implicitMode = renderFormat === RENDER_FORMAT.IMPLICIT;
   const meshOnlyMode = isMeshRenderFormat(renderFormat);
   const pathPreviewMode = meshOnlyMode || gcodeMode;
-  const dxfMeshPreviewReady = dxfMode && !!selectedDxfMeshData;
+  const dxf3dAvailable = !!selectedDxfMeshData;
+  const activeDxfViewMode = dxfViewMode === "3d" && dxf3dAvailable ? "3d" : "2d";
+  const dxfMeshPreviewReady = dxfMode && activeDxfViewMode === "3d" && dxf3dAvailable;
   const activeMeshData = dxfMeshPreviewReady ? selectedDxfMeshData : selectedMeshData;
   const activeModelKey = dxfMeshPreviewReady ? (selectedDxfKey || selectedKey) : selectedKey;
   const stepBoundsAnimationActive = Boolean(resolvedStepParameters?.animationState?.playing);
@@ -296,9 +347,16 @@ export default function CadRenderPane({
   };
   const ctaMode = !dxfMode && !pathPreviewMode && drawToolActive
     ? "screenshot"
-    : selectionCount > 0
+    : !dxfMode && !pathPreviewMode && selectionCount > 0
       ? "selection"
       : "";
+  const dxfViewPlaneHeader = dxfMode ? (
+    <DxfViewModeControl
+      value={activeDxfViewMode}
+      threeDimensionalAvailable={dxf3dAvailable}
+      onChange={onDxfViewModeChange}
+    />
+  ) : null;
   const bottomOverlayStyle = {
     bottom: "1rem"
   };
@@ -387,6 +445,10 @@ export default function CadRenderPane({
           ref={viewerRef}
           dxfData={selectedDxfData}
           modelKey={selectedDxfKey}
+          themeSettings={themeSettings}
+          viewPlaneOffsetRight={viewPlaneOffsetRight}
+          viewPlaneOffsetBottom="1rem"
+          viewPlaneHeader={dxfViewPlaneHeader}
           onViewerAlertChange={handleViewerAlertChange}
         />
       ) : (
@@ -406,6 +468,7 @@ export default function CadRenderPane({
           scale={urdfMode ? VIEWER_SCENE_SCALE.URDF : VIEWER_SCENE_SCALE.CAD}
           viewPlaneOffsetRight={viewPlaneOffsetRight}
           viewPlaneOffsetBottom="1rem"
+          viewPlaneHeader={dxfViewPlaneHeader}
           compactViewPlane={false}
           viewportFrameInsets={viewportFrameInsets}
           isLoading={viewerLoading}

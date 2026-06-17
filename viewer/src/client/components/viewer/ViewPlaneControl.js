@@ -136,6 +136,9 @@ export default function ViewPlaneControl({
   viewPlaneFaces,
   viewPlaneOrientation,
   viewerTheme,
+  compact = false,
+  variant = "3d",
+  viewPlaneHeader = null,
   activateViewPlaneFace,
   activateDefaultViewPlane
 }) {
@@ -172,7 +175,10 @@ export default function ViewPlaneControl({
     .sort((left, right) => left.z - right.z);
   const backNodes = projectedNodes.filter((node) => node.z < 0);
   const frontNodes = projectedNodes.filter((node) => node.z >= 0);
-  const viewPlaneSizeClasses = "h-24 w-24";
+  const is2d = variant === "2d";
+  const viewPlaneSizeClasses = compact || is2d ? "h-20 w-20" : "h-24 w-24";
+  const viewPlaneShapeClasses = is2d ? "rounded-md" : "rounded-full";
+  const viewPlaneLabel = is2d ? "2D view selector" : "Perspective selector";
   const normalizedBottomOffset = typeof viewPlaneOffsetBottom === "number"
     ? `${viewPlaneOffsetBottom}px`
     : viewPlaneOffsetBottom;
@@ -268,20 +274,45 @@ export default function ViewPlaneControl({
 
   return (
     <div
-      className="pointer-events-none absolute z-20"
+      className="pointer-events-none absolute z-20 flex flex-col items-end gap-1.5"
       style={{ right: `${viewPlaneOffsetRight}px`, bottom: normalizedBottomOffset }}
     >
-      <div className={`cad-glass-surface pointer-events-auto relative rounded-full border border-sidebar-border text-sidebar-foreground shadow-sm transition duration-150 ${viewPlaneSizeClasses}`}>
-        <svg className="absolute inset-0 h-full w-full" viewBox="0 0 100 100" aria-label="Perspective selector">
+      {viewPlaneHeader ? (
+        <div
+          className="pointer-events-auto"
+          onPointerDown={(event) => {
+            event.stopPropagation();
+          }}
+        >
+          {viewPlaneHeader}
+        </div>
+      ) : null}
+      <div
+        className={`cad-glass-surface pointer-events-auto relative border border-sidebar-border text-sidebar-foreground shadow-sm transition duration-150 ${viewPlaneShapeClasses} ${viewPlaneSizeClasses}`}
+        onPointerDown={(event) => {
+          event.stopPropagation();
+        }}
+      >
+        <svg className="absolute inset-0 h-full w-full" viewBox="0 0 100 100" aria-label={viewPlaneLabel}>
           <defs>
             <radialGradient id="view-sphere-shell" cx="34%" cy="28%" r="74%">
               <stop offset="0%" stopColor="var(--sidebar)" />
               <stop offset="100%" stopColor="var(--sidebar)" />
             </radialGradient>
           </defs>
-          <circle cx="50" cy="50" r="44" fill="url(#view-sphere-shell)" stroke="var(--sidebar-border)" strokeWidth="0.75" />
-          <ellipse cx="50" cy="50" rx="30" ry="11.8" fill="none" stroke="color-mix(in oklch, var(--sidebar-foreground) 12%, transparent)" strokeWidth="0.8" />
-          <ellipse cx="50" cy="50" rx="14" ry="30" fill="none" stroke="color-mix(in oklch, var(--sidebar-foreground) 12%, transparent)" strokeWidth="0.8" />
+          {is2d ? (
+            <>
+              <rect x="15" y="15" width="70" height="70" rx="8" fill="url(#view-sphere-shell)" stroke="var(--sidebar-border)" strokeWidth="0.75" />
+              <line x1="22" y1="50" x2="78" y2="50" fill="none" stroke="color-mix(in oklch, var(--sidebar-foreground) 18%, transparent)" strokeWidth="1" strokeLinecap="round" />
+              <line x1="50" y1="22" x2="50" y2="78" fill="none" stroke="color-mix(in oklch, var(--sidebar-foreground) 18%, transparent)" strokeWidth="1" strokeLinecap="round" />
+            </>
+          ) : (
+            <>
+              <circle cx="50" cy="50" r="44" fill="url(#view-sphere-shell)" stroke="var(--sidebar-border)" strokeWidth="0.75" />
+              <ellipse cx="50" cy="50" rx="30" ry="11.8" fill="none" stroke="color-mix(in oklch, var(--sidebar-foreground) 12%, transparent)" strokeWidth="0.8" />
+              <ellipse cx="50" cy="50" rx="14" ry="30" fill="none" stroke="color-mix(in oklch, var(--sidebar-foreground) 12%, transparent)" strokeWidth="0.8" />
+            </>
+          )}
           {backNodes.map((node) => (
             <line
               key={`${node.id}-stem`}
@@ -299,7 +330,7 @@ export default function ViewPlaneControl({
           <g
             role="button"
             tabIndex={0}
-            aria-label="Reset to default isometric view"
+            aria-label={is2d ? "Fit 2D view" : "Reset to default isometric view"}
             className="group cursor-pointer focus:outline-none"
             onPointerDown={(event) => {
               event.stopPropagation();

@@ -1937,6 +1937,9 @@ function normalizeSettings(settings = {}) {
     callbacks,
     baseTheme,
     selection: normalizeSelection(settings.selection),
+    filterSelection: settings.filterSelection === false
+      ? {}
+      : normalizeSelection(settings.filterSelection ?? settings.selection),
     clip: normalizeStepClipSettings(settings.clip),
     stepParameters: settings.stepParameters || null,
     parameterSetup: settings.parameterSetup !== false,
@@ -1968,7 +1971,7 @@ export function buildModel(THREE, source, settings = {}) {
   }
   const rawMeshData = meshDataFromSource(source);
   const normalized = normalizeSettings(settings);
-  const meshData = filterMeshDataForSelection(rawMeshData, normalized.selection);
+  const meshData = filterMeshDataForSelection(rawMeshData, normalized.filterSelection);
   const root = new THREE.Group();
   const modelGroup = new THREE.Group();
   const edgesGroup = new THREE.Group();

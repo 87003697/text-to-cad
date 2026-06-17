@@ -18,10 +18,12 @@ live review links. The expected input is one or more explicit file paths.
 Start or reuse one local CAD Viewer with `npm run agent:start`, passing the
 absolute artifact directory as `--dir`. The `agent:start` launcher owns port
 selection, compatible-server reuse, directory activation, and the `?dir=` query
-parameter. It activates reused servers through the Viewer's lightweight
-directory activation API, without requiring agents to probe ports or trigger
-catalog scans manually. Use the Viewer URL printed by `agent:start` as-is, then
-add only a `file=` query value for the artifact you want to review.
+parameter. Dev-mode viewers are reused only for matching git identities; dist
+bundle viewers can be reused across git branches when their viewer versions
+match. It activates reused servers through the Viewer's lightweight directory
+activation API, without requiring agents to probe ports or trigger catalog
+scans manually. Use the Viewer URL printed by `agent:start` as-is, then add only
+a `file=` query value for the artifact you want to review.
 
 Choose `--dir` as the absolute directory that contains the model
 artifacts and sidecars, commonly `<repo>/models` or the consuming project's
@@ -29,15 +31,10 @@ equivalent model directory. The `file=` value must be relative to that `--dir`.
 Do not manually choose ports, probe servers, rewrite `?dir=`, or start a
 separate Viewer just to change directories.
 
-Always start new local Viewer servers with `--shutdown-after 12h` so forgotten
-review servers clean themselves up. Do not rely on a default shutdown; the
-server stays alive until stopped unless this flag or `VIEWER_SERVER_LIFETIME_MS`
-is set.
-
 Run from this skill directory:
 
 ```bash
-npm --prefix scripts/viewer run agent:start -- --host 127.0.0.1 --dir <absolute-model-root> --shutdown-after 12h
+npm --prefix scripts/viewer run agent:start -- --host 127.0.0.1 --dir <absolute-model-root>
 ```
 
 Use the printed Viewer URL and append `file=`:
@@ -74,7 +71,7 @@ worktrees. To integrate with the Claude Preview tool, add `--json` to the
 `agent:start` command:
 
 ```bash
-npm --prefix scripts/viewer run agent:start -- --host 127.0.0.1 --dir <absolute-model-root> --shutdown-after 12h --json
+npm --prefix scripts/viewer run agent:start -- --host 127.0.0.1 --dir <absolute-model-root> --json
 ```
 
 The launcher writes a JSON result line to stdout after the human-readable lines.
