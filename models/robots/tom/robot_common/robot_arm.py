@@ -6,7 +6,7 @@ from pathlib import PurePosixPath
 import xml.etree.ElementTree as ET
 
 from robot_common.materials import BLACK_ALUMINUM_RGBA
-from STEP.assemblies.base_link import (
+from v1.assemblies.base_link import (
     STS3250_BASE_PLATE_FLUSH_Y_OFFSET_MM as BASE_LINK_STS3250_SOURCE_Y_OFFSET_MM,
 )
 

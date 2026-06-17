@@ -17,12 +17,15 @@ from pathlib import Path
 
 V2_DIR = Path(__file__).resolve().parents[1]
 ASSEMBLIES_DIR = Path(__file__).resolve().parent
-for path in (V2_DIR, ASSEMBLIES_DIR):
+PARTS_DIR = V2_DIR / "parts"
+for path in (V2_DIR, PARTS_DIR, ASSEMBLIES_DIR):
     if str(path) not in sys.path:
         sys.path.insert(0, str(path))
 
 import link_common as lc
-import pitch_link_sts3215
+import link_bracket
+import pitch_link_sts3250
+import servo_horn_yoke
 
 
 YOKE_HORN_SPAN_CENTER_LOCAL_Y_MM = -9.1
@@ -41,23 +44,8 @@ MIRROR_Y_TRANSFORM = (
 )
 
 
-YOKE_180_ABOUT_WEB_AXIS_TRANSFORM = (
-    1.0,
-    0.0,
-    0.0,
-    0.0,
-    0.0,
-    -1.0,
-    0.0,
-    2.0 * YOKE_HORN_SPAN_CENTER_LOCAL_Y_MM,
-    0.0,
-    0.0,
-    -1.0,
-    0.0,
-    0.0,
-    0.0,
-    0.0,
-    1.0,
+YOKE_ON_SERVO_HORNS_TRANSFORM = tuple(
+    servo_horn_yoke.STANDALONE_YOKE_ON_SERVO_HORNS_TRANSFORM
 )
 
 
@@ -86,15 +74,59 @@ def _matmul(
     )
 
 
-YOKE_ON_BOTTOM_SERVO_TRANSFORM = _matmul(
+def _invert_rigid_transform(transform: list[float] | tuple[float, ...]) -> list[float]:
+    matrix = _matrix(transform)
+    rotation = [row[:3] for row in matrix[:3]]
+    translation = [matrix[row][3] for row in range(3)]
+    inverse_rotation = [[rotation[col][row] for col in range(3)] for row in range(3)]
+    inverse_translation = [
+        -sum(inverse_rotation[row][col] * translation[col] for col in range(3))
+        for row in range(3)
+    ]
+    return _flatten(
+        [
+            [*inverse_rotation[0], inverse_translation[0]],
+            [*inverse_rotation[1], inverse_translation[1]],
+            [*inverse_rotation[2], inverse_translation[2]],
+            [0.0, 0.0, 0.0, 1.0],
+        ]
+    )
+
+
+YOKE_WEB_ON_BOTTOM_SERVO_OUTPUT_HORN_TRANSFORM = _matmul(
     lc.BOTTOM_SERVO_TRANSFORM,
-    YOKE_180_ABOUT_WEB_AXIS_TRANSFORM,
+    _invert_rigid_transform(pitch_link_sts3250.STS3250_TRANSFORM),
 )
 
-THIRD_SERVO_ON_BOTTOM_YOKE_TRANSFORM = _matmul(
-    YOKE_ON_BOTTOM_SERVO_TRANSFORM,
-    pitch_link_sts3215.STS3215_TRANSFORM,
+THIRD_SERVO_HORNS_IN_YOKE_TRANSFORM = _matmul(
+    YOKE_WEB_ON_BOTTOM_SERVO_OUTPUT_HORN_TRANSFORM,
+    _invert_rigid_transform(YOKE_ON_SERVO_HORNS_TRANSFORM),
 )
+
+TOP_SERVO_FACE_TO_FLANGE_TRANSFORM = link_bracket.top_servo_case_transform(
+    case_span_centering_offset_mm=link_bracket.TOP_SERVO_MATED_CASE_SPAN_CENTERING_OFFSET_MM,
+)
+
+
+def _translation_transform(x: float, y: float, z: float) -> list[float]:
+    return [
+        1.0, 0.0, 0.0, x,
+        0.0, 1.0, 0.0, y,
+        0.0, 0.0, 1.0, z,
+        0.0, 0.0, 0.0, 1.0,
+    ]
+
+
+def _standoff_children() -> list[dict[str, object]]:
+    return [
+        {
+            "path": "../parts/link_standoff_m3_35.step",
+            "name": f"link_standoff_{label}",
+            "transform": _translation_transform(x, 0.0, z),
+            "use_source_colors": True,
+        }
+        for label, x, z in link_bracket.STANDOFF_CENTER_XZ_MM
+    ]
 
 
 def _mate(
@@ -124,39 +156,60 @@ def _mate(
     }
 
 
+def _standoff_mates() -> list[dict[str, object]]:
+    mates: list[dict[str, object]] = []
+    for label, _x, _z in link_bracket.STANDOFF_CENTER_XZ_MM:
+        mates.append(
+            _mate(
+                f"{label}_standoff_to_right_bracket",
+                fixed=f"link_bracket_right:{label}_standoff_hole",
+                moving=f"link_standoff_{label}:positive_y_thread",
+            )
+        )
+        mates.append(
+            _mate(
+                f"{label}_standoff_to_left_bracket",
+                fixed=f"link_bracket_left:{label}_standoff_hole",
+                moving=f"link_standoff_{label}:negative_y_thread",
+            )
+        )
+    return mates
+
+
 def gen_step() -> dict[str, object]:
     return {
         "children": [
             {
-                "path": "../imports/sts3250.step",
+                "path": "../parts/imports/sts3250.step",
                 "name": "sts3250_top",
-                "transform": list(lc.TOP_SERVO_CASE_TRANSFORM),
+                "transform": list(TOP_SERVO_FACE_TO_FLANGE_TRANSFORM),
             },
             {
-                "path": "../imports/sts3250.step",
+                "path": "../parts/imports/sts3250.step",
                 "name": "sts3250_bottom",
                 "transform": list(lc.BOTTOM_SERVO_TRANSFORM),
                 "use_source_colors": True,
             },
             {
-                "path": "../link_bracket_right.step",
+                "path": "../parts/link_bracket_right.step",
                 "name": "link_bracket_right",
                 "transform": list(IDENTITY_TRANSFORM),
             },
             {
-                "path": "../link_bracket_left.step",
+                "path": "../parts/link_bracket_left.step",
                 "name": "link_bracket_left",
                 "transform": list(IDENTITY_TRANSFORM),
             },
+            *_standoff_children(),
             {
-                "path": "../servo_horn_yoke.step",
+                "path": "../parts/servo_horn_yoke.step",
                 "name": "servo_horn_yoke",
-                "transform": YOKE_ON_BOTTOM_SERVO_TRANSFORM,
+                "transform": YOKE_WEB_ON_BOTTOM_SERVO_OUTPUT_HORN_TRANSFORM,
             },
             {
-                "path": "../imports/sts3215.step",
+                "path": "../parts/imports/sts3215.step",
                 "name": "sts3215_yoke_servo",
-                "transform": THIRD_SERVO_ON_BOTTOM_YOKE_TRANSFORM,
+                "transform": THIRD_SERVO_HORNS_IN_YOKE_TRANSFORM,
                 "use_source_colors": True,
             },
         ],
@@ -182,14 +235,15 @@ def gen_step() -> dict[str, object]:
                 moving="sts3250_top:case_mount",
             ),
             _mate(
-                "bottom_servo_horns_to_yoke",
+                "bottom_servo_output_horn_to_yoke_web",
                 fixed="sts3250_bottom:horn_axis",
-                moving="servo_horn_yoke:horn_axis",
+                moving="servo_horn_yoke:web_horn_axis",
             ),
             _mate(
-                "bottom_yoke_to_third_servo",
+                "third_servo_horns_to_yoke",
                 fixed="servo_horn_yoke:horn_axis",
                 moving="sts3215_yoke_servo:horn_axis",
             ),
+            *_standoff_mates(),
         ],
     }

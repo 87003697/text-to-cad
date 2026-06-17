@@ -131,6 +131,7 @@ export function buildViewerDxfAlert(fileRef, hasDxfData, loadError, previewError
   }
 
   const command = commandForFile(CAD_BUILD_COMMANDS.dxf, fileRef);
+  const normalizedPreviewError = String(previewError || "").trim();
 
   if (loadError) {
     return {
@@ -143,12 +144,16 @@ export function buildViewerDxfAlert(fileRef, hasDxfData, loadError, previewError
     };
   }
 
-  if (previewError) {
+  if (/DXF 3D bend preview currently requires vertical bend lines/i.test(normalizedPreviewError)) {
+    return null;
+  }
+
+  if (normalizedPreviewError) {
     return {
       severity: "warning",
       summary: "DXF 3D preview unavailable",
       title: "Failed to build the DXF 3D preview",
-      message: previewError,
+      message: normalizedPreviewError,
       resolution: "The flat pattern can still be shown, but the 3D extrusion preview could not be built from the current DXF geometry.",
       command
     };

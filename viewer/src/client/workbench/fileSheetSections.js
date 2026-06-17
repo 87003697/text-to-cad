@@ -1,7 +1,6 @@
 export const FILE_SHEET_SECTION_IDS = Object.freeze({
   FILE_STATUS: "status",
-  DXF_PLATE: "plate",
-  DXF_BENDS: "bends",
+  DXF: "dxf",
   GCODE_TOOLPATH: "toolpath",
   GCODE_FEATURES: "features",
   GCODE_STATS: "stats",
@@ -33,6 +32,13 @@ function normalizeSectionIds(value) {
   return [...new Set(value.map(normalizeString).filter(Boolean))];
 }
 
+function migrateLegacySectionId(sectionId) {
+  if (sectionId === "plate" || sectionId === "bends") {
+    return FILE_SHEET_SECTION_IDS.DXF;
+  }
+  return sectionId;
+}
+
 export function renderedFileSheetSectionIds(kind, options = {}) {
   const normalizedKind = normalizeString(kind);
   const isSdf = options.isSdf === true || normalizedKind === "sdf";
@@ -41,8 +47,7 @@ export function renderedFileSheetSectionIds(kind, options = {}) {
     case "dxf":
       return [
         ...(options.hasFileStatus ? [FILE_SHEET_SECTION_IDS.FILE_STATUS] : []),
-        FILE_SHEET_SECTION_IDS.DXF_PLATE,
-        FILE_SHEET_SECTION_IDS.DXF_BENDS,
+        FILE_SHEET_SECTION_IDS.DXF,
         ...THEME_SECTION_IDS,
         FILE_SHEET_SECTION_IDS.FILE_METADATA
       ];
@@ -102,8 +107,7 @@ export function defaultOpenFileSheetSectionIds(kind, options = {}) {
     case "dxf":
       return [
         ...(options.hasFileStatus ? [FILE_SHEET_SECTION_IDS.FILE_STATUS] : []),
-        FILE_SHEET_SECTION_IDS.DXF_PLATE,
-        FILE_SHEET_SECTION_IDS.DXF_BENDS
+        FILE_SHEET_SECTION_IDS.DXF
       ];
     case "gcode":
       return [
@@ -144,7 +148,9 @@ export function normalizeFileSheetOpenSectionIds(sectionIds, renderedSectionIds)
   if (!rendered.size) {
     return [];
   }
-  return normalizeSectionIds(sectionIds).filter((sectionId) => rendered.has(sectionId));
+  return [...new Set(normalizeSectionIds(sectionIds)
+    .map(migrateLegacySectionId)
+    .filter((sectionId) => rendered.has(sectionId)))];
 }
 
 export function fileSheetSectionIdsWithOpenSection(sectionIds, renderedSectionIds, sectionId) {

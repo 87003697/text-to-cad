@@ -7,19 +7,27 @@ from pathlib import Path
 V2_DIR = Path(__file__).resolve().parents[1]
 TOM_DIR = V2_DIR.parent
 ASSEMBLIES_DIR = V2_DIR / "assemblies"
-for path in (TOM_DIR, V2_DIR, ASSEMBLIES_DIR):
+PARTS_DIR = V2_DIR / "parts"
+for path in (TOM_DIR, V2_DIR, PARTS_DIR, ASSEMBLIES_DIR):
     if str(path) not in sys.path:
         sys.path.insert(0, str(path))
 
 import link_common as lc
+import link_bracket
 import pitch_link_sts3215
 import pitch_link_sts3250
 from robot_common import robot_arm
 
 
 MATE_TRANSFORM_TOLERANCE = 1e-6
-RIGHT_BRACKET_PATH = "../link_bracket_right.step"
-LEFT_BRACKET_PATH = "../link_bracket_left.step"
+RIGHT_BRACKET_PATH = "../parts/link_bracket_right.step"
+LEFT_BRACKET_PATH = "../parts/link_bracket_left.step"
+LINK_STANDOFF_PATH = "../parts/link_standoff_m3_35.step"
+TOP_SERVO_FACE_TO_FLANGE_TRANSFORM = tuple(
+    link_bracket.top_servo_case_transform(
+        case_span_centering_offset_mm=link_bracket.TOP_SERVO_MATED_CASE_SPAN_CENTERING_OFFSET_MM,
+    )
+)
 
 
 @dataclass(frozen=True)
@@ -45,17 +53,17 @@ ROLL_LINK_SPECS = {
         anchor="secondary_servo_2020_connector",
         upstream_anchor="servo_horn_yoke",
         upstream_servo="sts3250_2",
-        upstream_servo_transform=tuple(pitch_link_sts3250.STS3250_TRANSFORM),
+        upstream_servo_transform=tuple(pitch_link_sts3250.STS3250_DESIGN_TRANSFORM),
         downstream_servo="sts3250_4",
-        downstream_servo_path="../imports/sts3250.step",
+        downstream_servo_path="../parts/imports/sts3250.step",
     ),
     "elbow": RollLinkMateSpec(
         anchor="quinary_servo_2020_connector",
         upstream_anchor="quinary_horn_yoke",
         upstream_servo="sts3215_5",
-        upstream_servo_transform=tuple(pitch_link_sts3215.STS3215_TRANSFORM),
+        upstream_servo_transform=tuple(pitch_link_sts3215.STS3215_DESIGN_TRANSFORM),
         downstream_servo="sts3215_6",
-        downstream_servo_path="../imports/sts3215.step",
+        downstream_servo_path="../parts/imports/sts3215.step",
     ),
 }
 
@@ -123,6 +131,15 @@ def translate_transform(
     return translated
 
 
+def translation_transform(x: float, y: float, z: float) -> list[float]:
+    return [
+        1.0, 0.0, 0.0, x,
+        0.0, 1.0, 0.0, y,
+        0.0, 0.0, 1.0, z,
+        0.0, 0.0, 0.0, 1.0,
+    ]
+
+
 def transform_local_vector_world(
     transform: list[float] | tuple[float, ...],
     vector_xyz_mm: tuple[float, float, float],
@@ -174,7 +191,7 @@ def _validate_roll_link_mates(kind: str, mates: RollLinkMates, upstream_servo_lo
         invert_rigid_transform(mates.bracket_local),
         mates.downstream_servo_local,
     )
-    top_delta = _max_transform_delta(top_servo_relative, lc.TOP_SERVO_CASE_TRANSFORM)
+    top_delta = _max_transform_delta(top_servo_relative, TOP_SERVO_FACE_TO_FLANGE_TRANSFORM)
     if top_delta > MATE_TRANSFORM_TOLERANCE:
         raise RuntimeError(
             f"{kind} roll-link top servo mate drifted by {top_delta:.9f}; "
@@ -216,7 +233,7 @@ def roll_link_mates(kind: str) -> RollLinkMates:
     )
     downstream_servo_local = multiply_transforms(
         bracket_local,
-        lc.TOP_SERVO_CASE_TRANSFORM,
+        TOP_SERVO_FACE_TO_FLANGE_TRANSFORM,
     )
     downstream_shift_local = tuple(
         downstream_servo_local[index] - old_downstream_servo_local[index]
@@ -252,6 +269,18 @@ def roll_link_instances(kind: str) -> list[dict[str, object]]:
             "name": f"{kind}_link_bracket_left",
             "transform": mates.bracket_local,
         },
+        *[
+            {
+                "path": LINK_STANDOFF_PATH,
+                "name": f"{kind}_link_standoff_{label}",
+                "transform": multiply_transforms(
+                    mates.bracket_local,
+                    translation_transform(x, 0.0, z),
+                ),
+                "use_source_colors": True,
+            }
+            for label, x, z in link_bracket.STANDOFF_CENTER_XZ_MM
+        ],
         {
             "path": spec.downstream_servo_path,
             "name": spec.downstream_servo,

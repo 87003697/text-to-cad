@@ -29,15 +29,10 @@ equivalent model directory. The `file=` value must be relative to that `--dir`.
 Do not manually choose ports, probe servers, rewrite `?dir=`, or start a
 separate Viewer just to change directories.
 
-Always start new local Viewer servers with `--shutdown-after 12h` so forgotten
-review servers clean themselves up. Do not rely on a default shutdown; the
-server stays alive until stopped unless this flag or `VIEWER_SERVER_LIFETIME_MS`
-is set.
-
 Run from this skill directory:
 
 ```bash
-npm --prefix scripts/viewer run agent:start -- --host 127.0.0.1 --dir <absolute-model-root> --shutdown-after 12h
+npm --prefix scripts/viewer run agent:start -- --host 127.0.0.1 --dir <absolute-model-root>
 ```
 
 Use the printed Viewer URL and append `file=`:
@@ -74,7 +69,7 @@ worktrees. To integrate with the Claude Preview tool, add `--json` to the
 `agent:start` command:
 
 ```bash
-npm --prefix scripts/viewer run agent:start -- --host 127.0.0.1 --dir <absolute-model-root> --shutdown-after 12h --json
+npm --prefix scripts/viewer run agent:start -- --host 127.0.0.1 --dir <absolute-model-root> --json
 ```
 
 The launcher writes a JSON result line to stdout after the human-readable lines.

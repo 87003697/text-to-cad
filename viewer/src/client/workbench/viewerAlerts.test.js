@@ -244,5 +244,15 @@ test("buildViewerDxfAlert distinguishes DXF load, preview, and missing data stat
     }
   );
 
+  assert.equal(
+    buildViewerDxfAlert(
+      "flat/panel.dxf",
+      true,
+      "",
+      "DXF 3D bend preview currently requires vertical bend lines"
+    ),
+    null
+  );
+
   assert.equal(buildViewerDxfAlert("flat/panel.dxf", true, "", ""), null);
 });

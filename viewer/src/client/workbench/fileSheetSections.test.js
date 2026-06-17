@@ -9,7 +9,7 @@ import {
 } from "./fileSheetSections.js";
 
 test("file sheet section defaults match current sheet behavior", () => {
-  assert.deepEqual(defaultOpenFileSheetSectionIds("dxf"), ["plate", "bends"]);
+  assert.deepEqual(defaultOpenFileSheetSectionIds("dxf"), ["dxf"]);
   assert.deepEqual(defaultOpenFileSheetSectionIds("gcode"), ["toolpath"]);
   assert.deepEqual(defaultOpenFileSheetSectionIds("step"), ["tree"]);
   assert.deepEqual(defaultOpenFileSheetSectionIds("step", { hasFileStatus: true }), ["status", "tree"]);
@@ -24,6 +24,13 @@ test("file sheet section defaults match current sheet behavior", () => {
 });
 
 test("rendered file sheet sections include closed-by-default sections", () => {
+  assert.deepEqual(renderedFileSheetSectionIds("dxf", { hasFileStatus: true }), [
+    "status",
+    "dxf",
+    "display",
+    "appearance",
+    "metadata"
+  ]);
   assert.deepEqual(renderedFileSheetSectionIds("gcode", { hasFileStatus: true }), [
     "status",
     "toolpath",
@@ -49,6 +56,10 @@ test("rendered file sheet sections include closed-by-default sections", () => {
 });
 
 test("file sheet section helper opens only rendered sections", () => {
+  assert.deepEqual(
+    fileSheetSectionIdsWithOpenSection(["plate", "bends"], ["dxf", "metadata"], "metadata"),
+    ["dxf", "metadata"]
+  );
   assert.deepEqual(
     fileSheetSectionIdsWithOpenSection(["tree"], ["status", "tree", "metadata"], "status"),
     ["tree", "status"]

@@ -32,12 +32,12 @@ def gen_step() -> dict[str, object]:
     return {
         "instances": [
             {
-                "path": "../imports/sts3250.step",
+                "path": "../parts/imports/sts3250.step",
                 "name": "sts3250_3",
                 "transform": STS3250_BASE_PLATE_TRANSFORM,
             },
             {
-                "path": "../base_plate.step",
+                "path": "../parts/base_plate.step",
                 "name": "base_plate",
                 "transform": BASE_PLATE_TRANSFORM,
             },

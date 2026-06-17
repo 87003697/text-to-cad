@@ -12,7 +12,6 @@ import {
 import {
   readViewerServerRegistry,
 } from "../src/server/viewerServerRegistry.mjs";
-import { parseServerLifetimeMs } from "../src/server/serverLifetime.mjs";
 
 const scriptPath = fileURLToPath(import.meta.url);
 const defaultPackageRoot = path.resolve(path.dirname(scriptPath), "..");
@@ -108,7 +107,6 @@ export function parseAgentStartArgs(argv = [], { fsImpl = fs } = {}) {
     startMode: "auto",
     forwardedArgs: [],
     directory: "",
-    shutdownAfterMs: null,
     portScanLimit: defaultPortScanLimit,
     jsonResult: false,
   };
@@ -133,17 +131,8 @@ export function parseAgentStartArgs(argv = [], { fsImpl = fs } = {}) {
       index += 1;
       continue;
     }
-    if (arg.startsWith("--shutdown-after=")) {
-      options.shutdownAfterMs = parseServerLifetimeMs(arg.slice("--shutdown-after=".length), "--shutdown-after");
-      options.forwardedArgs.push(arg);
-      continue;
-    }
-    if (arg === "--shutdown-after") {
-      const value = requiredValue(argv, index, arg);
-      options.shutdownAfterMs = parseServerLifetimeMs(value, arg);
-      options.forwardedArgs.push(arg, value);
-      index += 1;
-      continue;
+    if (arg.startsWith("--shutdown-after=") || arg === "--shutdown-after") {
+      throw new Error("agent:start does not support --shutdown-after");
     }
     if (arg === "--json") {
       options.jsonResult = true;
@@ -155,22 +144,6 @@ export function parseAgentStartArgs(argv = [], { fsImpl = fs } = {}) {
   options.directory = normalizeAgentDirectory(forwardedDefaultRootDir(options.forwardedArgs), { fsImpl });
   options.forwardedArgs = replaceForwardedDefaultRootDir(options.forwardedArgs, options.directory);
   return options;
-}
-
-export function stripShutdownAfterArgs(argv = []) {
-  const stripped = [];
-  for (let index = 0; index < argv.length; index += 1) {
-    const arg = argv[index];
-    if (arg.startsWith("--shutdown-after=")) {
-      continue;
-    }
-    if (arg === "--shutdown-after") {
-      index += 1;
-      continue;
-    }
-    stripped.push(arg);
-  }
-  return stripped;
 }
 
 export function forwardedDefaultRootDir(argv = []) {
@@ -355,7 +328,6 @@ export function buildAgentStartCommand({
   mode,
   packageRoot = defaultPackageRoot,
   forwardedArgs = [],
-  shutdownAfterMs = null,
   env = process.env,
   nodePath = process.execPath,
   git = buildAgentViewerGit({ env }),
@@ -363,15 +335,12 @@ export function buildAgentStartCommand({
   const resolvedPackageRoot = path.resolve(packageRoot);
   if (mode === "dev") {
     const nextEnv = envWithGitAndDefaultDir(env, git, forwardedDefaultRootDir(forwardedArgs));
-    if (shutdownAfterMs !== null) {
-      nextEnv.VIEWER_SERVER_LIFETIME_MS = String(shutdownAfterMs);
-    }
     return {
       command: nodePath,
       args: [
         path.join(resolvedPackageRoot, "node_modules", "vite", "bin", "vite.js"),
         "dev",
-        ...stripShutdownAfterArgs(stripDefaultRootDirArgs(forwardedArgs)),
+        ...stripDefaultRootDirArgs(forwardedArgs),
       ],
       cwd: resolvedPackageRoot,
       env: nextEnv,
@@ -408,7 +377,6 @@ export function resolveAgentStartCommand({
     mode,
     packageRoot,
     forwardedArgs: parsed.forwardedArgs,
-    shutdownAfterMs: parsed.shutdownAfterMs,
     env,
     nodePath,
     git,
@@ -670,7 +638,6 @@ export async function resolveAgentStartLaunch({
       mode,
       packageRoot,
       forwardedArgs: replaceForwardedPort(parsed.forwardedArgs, portResolution.port),
-      shutdownAfterMs: parsed.shutdownAfterMs,
       env,
       nodePath,
       git,
