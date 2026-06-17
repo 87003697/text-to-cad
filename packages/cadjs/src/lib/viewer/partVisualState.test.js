@@ -140,14 +140,18 @@ test("part visual state highlights shader-rendered surface edges", () => {
   record.material.userData.cadSurfaceEdgeBaseColor = new THREE.Color("#111111");
   record.material.userData.cadSurfaceEdgeColor = new THREE.Color("#111111");
   record.material.userData.cadSurfaceEdgeBaseClassSettings = {
-    feature: { opacity: 0.25 },
-    tangent: { opacity: 0.15 },
-    seam: { opacity: 0.2 },
-    degenerate: { opacity: 0.1 }
+    feature: { color: "#111111", opacity: 0.25 },
+    tangent: { color: "#224466", opacity: 0.15 },
+    seam: { color: "#335577", opacity: 0.2 },
+    degenerate: { color: "#446688", opacity: 0.1 }
   };
   record.material.userData.cadSurfaceEdgeShader = {
     uniforms: {
       cadSurfaceEdgeColor: { value: new THREE.Color("#111111") },
+      cadSurfaceFeatureColor: { value: new THREE.Color("#111111") },
+      cadSurfaceTangentColor: { value: new THREE.Color("#224466") },
+      cadSurfaceSeamColor: { value: new THREE.Color("#335577") },
+      cadSurfaceDegenerateColor: { value: new THREE.Color("#446688") },
       cadSurfaceFeatureOpacity: { value: 0.25 },
       cadSurfaceTangentOpacity: { value: 0.15 },
       cadSurfaceSeamOpacity: { value: 0.2 },
@@ -172,6 +176,8 @@ test("part visual state highlights shader-rendered surface edges", () => {
   });
 
   assert.equal(record.material.userData.cadSurfaceEdgeShader.uniforms.cadSurfaceEdgeColor.value.getHexString(), "8dc5ff");
+  assert.equal(record.material.userData.cadSurfaceEdgeShader.uniforms.cadSurfaceFeatureColor.value.getHexString(), "8dc5ff");
+  assert.equal(record.material.userData.cadSurfaceEdgeShader.uniforms.cadSurfaceTangentColor.value.getHexString(), "8dc5ff");
   assertNear(record.material.userData.cadSurfaceEdgeShader.uniforms.cadSurfaceFeatureOpacity.value, 0.9, "selected feature edge opacity");
   assertNear(record.material.userData.cadSurfaceEdgeShader.uniforms.cadSurfaceTangentOpacity.value, 0.9, "selected tangent edge opacity");
 
@@ -192,6 +198,8 @@ test("part visual state highlights shader-rendered surface edges", () => {
   });
 
   assert.equal(record.material.userData.cadSurfaceEdgeShader.uniforms.cadSurfaceEdgeColor.value.getHexString(), "111111");
+  assert.equal(record.material.userData.cadSurfaceEdgeShader.uniforms.cadSurfaceFeatureColor.value.getHexString(), "111111");
+  assert.equal(record.material.userData.cadSurfaceEdgeShader.uniforms.cadSurfaceTangentColor.value.getHexString(), "224466");
   assertNear(record.material.userData.cadSurfaceEdgeShader.uniforms.cadSurfaceFeatureOpacity.value, 0.25, "restored feature edge opacity");
   assertNear(record.material.userData.cadSurfaceEdgeShader.uniforms.cadSurfaceTangentOpacity.value, 0.15, "restored tangent edge opacity");
 });

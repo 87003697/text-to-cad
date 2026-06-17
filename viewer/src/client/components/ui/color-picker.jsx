@@ -223,15 +223,19 @@ function ColorNumberInput({ label, value, min, max, onChange }) {
 function ColorPicker({
   value = "#ffffff",
   onChange,
+  opacity = 1,
+  onOpacityChange,
   className,
   swatchClassName,
   valueClassName,
   popoverAlign = "start",
   showValue = true,
+  showOpacity = false,
   disabled = false,
   ...props
 }) {
   const normalizedValue = normalizeHexColor(value)
+  const normalizedOpacity = Number.isFinite(Number(opacity)) ? clamp(Number(opacity), 0, 1) : 1
   const [format, setFormat] = React.useState("hex")
   const [hexDraft, setHexDraft] = React.useState(normalizedValue)
   const [canUseEyeDropper, setCanUseEyeDropper] = React.useState(false)
@@ -344,7 +348,10 @@ function ColorPicker({
               "size-4 shrink-0 rounded bg-clip-border shadow-[0_0_0_1px_rgba(15,23,42,0.24)] dark:shadow-[0_0_0_1px_rgba(255,255,255,0.24)]",
               swatchClassName
             )}
-            style={{ backgroundColor: normalizedValue }}
+            style={{
+              backgroundColor: normalizedValue,
+              opacity: showOpacity ? normalizedOpacity : undefined
+            }}
             aria-hidden="true"
           />
           {showValue ? (
@@ -406,6 +413,30 @@ function ColorPicker({
             aria-hidden="true"
           />
         </div>
+
+        {showOpacity ? (
+          <div className="space-y-1">
+            <div className="flex items-center justify-between gap-2 text-[10px] font-medium uppercase tracking-[0.08em] text-muted-foreground">
+              <span>Opacity</span>
+              <span>{Math.round(normalizedOpacity * 100)}%</span>
+            </div>
+            <div className="flex items-center gap-1.5">
+              <Input
+                type="number"
+                min={0}
+                max={100}
+                step={1}
+                value={Math.round(normalizedOpacity * 100)}
+                onChange={(event) => {
+                  onOpacityChange?.(clamp(event.currentTarget.value, 0, 100) / 100)
+                }}
+                className="h-7 px-1.5 text-[11px]"
+                aria-label="Color opacity"
+              />
+              <span className="text-[10px] font-medium text-muted-foreground">%</span>
+            </div>
+          </div>
+        ) : null}
 
         <div className="flex items-center gap-1 rounded-md bg-muted p-1">
           {FORMAT_OPTIONS.map((option) => (

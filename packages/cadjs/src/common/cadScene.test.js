@@ -12,6 +12,9 @@ import {
   normalizeDisplayMode
 } from "./cadScene.js";
 import {
+  DEFAULT_DISPLAY_EDGE_SETTINGS
+} from "./displaySettings.js";
+import {
   cloneThemeSettings
 } from "./themeSettings.js";
 
@@ -413,12 +416,12 @@ test("buildModel rebuilds surface edge shader materials when edge theme settings
     theme: {
       ...theme,
       edges: {
-        ...theme.edges,
+        ...DEFAULT_DISPLAY_EDGE_SETTINGS,
         color: "#0055ff",
         classes: {
-          ...theme.edges.classes,
+          ...DEFAULT_DISPLAY_EDGE_SETTINGS.classes,
           tangent: {
-            ...theme.edges.classes.tangent,
+            ...DEFAULT_DISPLAY_EDGE_SETTINGS.classes.tangent,
             thickness: 2.5
           }
         }
@@ -543,7 +546,7 @@ test("buildModel ignores deprecated mesh edge detail and keeps wireframe all-edg
     theme: {
       ...baseTheme,
       edges: {
-        ...baseTheme.edges,
+        ...DEFAULT_DISPLAY_EDGE_SETTINGS,
         topologyFilter: "all"
       }
     },
@@ -588,7 +591,7 @@ test("buildModel can render silhouette contours without derived mesh edges", () 
     theme: {
       ...theme,
       edges: {
-        ...theme.edges,
+        ...DEFAULT_DISPLAY_EDGE_SETTINGS,
         enabled: false,
         silhouette: true,
         silhouetteScale: 0.004

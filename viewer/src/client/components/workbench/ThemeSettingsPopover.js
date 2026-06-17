@@ -65,7 +65,10 @@ import {
 } from "cadjs/lib/themeSettings";
 import {
   CAD_DISPLAY_MODE,
+  CAD_EDGE_COLOR,
+  CAD_EDGE_HIGHLIGHT_COLOR,
   DEFAULT_EXPLODED_VIEW_SETTINGS,
+  normalizeDisplayEdgeSettings,
   normalizeDisplaySettings,
   normalizeExplodedViewSettings
 } from "cadjs/lib/displaySettings";
@@ -141,10 +144,10 @@ const precisionSliderClasses = FILE_SHEET_PRECISION_SLIDER_CLASSES;
 const SLIDER_COMMIT_DELAY_MS = 120;
 const AXIS_OPTIONS = Object.freeze(["x", "y", "z"]);
 const EDGE_CLASS_CONTROLS = Object.freeze([
-  Object.freeze({ id: "feature", label: "Feature", defaultOpacity: 1, defaultThickness: 1.15 }),
-  Object.freeze({ id: "tangent", label: "Tangent", defaultOpacity: 0.5, defaultThickness: 1.15 }),
-  Object.freeze({ id: "seam", label: "Seam", defaultOpacity: 0.85, defaultThickness: 1.15 }),
-  Object.freeze({ id: "degenerate", label: "Degenerate", defaultOpacity: 1, defaultThickness: 0 })
+  Object.freeze({ id: "feature", label: "Feature", defaultColor: CAD_EDGE_COLOR, defaultOpacity: 1, defaultThickness: 1.15 }),
+  Object.freeze({ id: "tangent", label: "Tangent", defaultColor: CAD_EDGE_COLOR, defaultOpacity: 0.5, defaultThickness: 1.15 }),
+  Object.freeze({ id: "seam", label: "Seam", defaultColor: CAD_EDGE_COLOR, defaultOpacity: 0.85, defaultThickness: 1.15 }),
+  Object.freeze({ id: "degenerate", label: "Degenerate", defaultColor: CAD_EDGE_COLOR, defaultOpacity: 1, defaultThickness: 0 })
 ]);
 
 function normalizeEdgeAvailability(value) {
@@ -332,82 +335,166 @@ function SliderInput({ value, min, max, step = 0.01, onChange }) {
   );
 }
 
-function EdgeClassControlRow({
-  label,
-  checked,
-  available = true,
-  thickness,
-  opacity,
-  onEnabledChange,
-  onThicknessChange,
-  onOpacityChange
+function CompactNumberInput({
+  value,
+  min = 0,
+  max = 6,
+  step = 0.05,
+  digits = 2,
+  disabled = false,
+  ariaLabel,
+  onChange
 }) {
+  const numericValue = Number.isFinite(Number(value)) ? Number(value) : min;
+  const formattedValue = formatNumber(numericValue, digits);
+  const [draftValue, setDraftValue] = useState(formattedValue);
+  const [editing, setEditing] = useState(false);
+
+  useEffect(() => {
+    if (!editing) {
+      setDraftValue(formattedValue);
+    }
+  }, [editing, formattedValue]);
+
+  const commitValue = (nextValue) => {
+    const resolvedValue = parseFileSheetNumberInput(nextValue, {
+      fallback: numericValue,
+      min,
+      max
+    });
+    setDraftValue(formatNumber(resolvedValue, digits));
+    if (Math.abs(resolvedValue - numericValue) > 1e-9) {
+      onChange?.(resolvedValue);
+    }
+  };
+
+  const updateValue = (nextValue) => {
+    setDraftValue(nextValue);
+    const text = String(nextValue ?? "").trim();
+    if (!text || text === "-" || text === "." || text === "-.") {
+      return;
+    }
+    const resolvedValue = parseFileSheetNumberInput(text, {
+      fallback: numericValue,
+      min,
+      max
+    });
+    if (Math.abs(resolvedValue - numericValue) > 1e-9) {
+      onChange?.(resolvedValue);
+    }
+  };
+
   return (
-    <NestedControlGroup
-      title={label}
-      className="py-2"
-      contentClassName="space-y-3"
-    >
-      <ThemeToggleRow
-        label="Enabled"
-        checked={checked && available}
-        onChange={onEnabledChange}
-        disabled={!available}
-        description={available ? undefined : "Not generated for this file"}
-      />
-      {checked && available ? (
-        <>
-          <SliderField label="Thickness" value={`${formatNumber(thickness, 2)} px`}>
-            <SliderInput
-              value={thickness}
-              min={0}
-              max={2}
-              step={0.05}
-              onChange={onThicknessChange}
-            />
-          </SliderField>
-          <SliderField label="Opacity" value={formatNumber(opacity)}>
-            <SliderInput
-              value={opacity}
-              min={0}
-              max={1}
-              step={0.01}
-              onChange={onOpacityChange}
-            />
-          </SliderField>
-        </>
-      ) : null}
-    </NestedControlGroup>
+    <Input
+      type="number"
+      min={min}
+      max={max}
+      step={step}
+      value={draftValue}
+      disabled={disabled}
+      onFocus={() => setEditing(true)}
+      onChange={(event) => updateValue(event.currentTarget.value)}
+      onBlur={(event) => {
+        setEditing(false);
+        commitValue(event.currentTarget.value);
+      }}
+      onKeyDown={(event) => {
+        if (event.key === "Enter") {
+          commitValue(event.currentTarget.value);
+          event.currentTarget.blur();
+        }
+      }}
+      className="h-7 w-16 rounded-none border-0 bg-transparent px-1.5 text-right !text-[11px] font-medium tabular-nums shadow-none focus-visible:ring-0"
+      aria-label={ariaLabel}
+    />
   );
 }
 
-function HighlightEdgeSlidersRow({
+function EdgeMetricInput({
+  label,
+  color,
+  opacity,
+  thickness,
+  min = 0,
+  max = 6,
+  step = 0.05,
+  digits = 2,
+  disabled = false,
+  onColorChange,
+  onOpacityChange,
+  onThicknessChange
+}) {
+  return (
+    <div
+      className={cn(
+        "inline-flex h-7 shrink-0 items-center overflow-hidden rounded-md border border-input bg-background shadow-xs dark:bg-input/30",
+        disabled && "opacity-50"
+      )}
+    >
+      <ColorInput
+        value={color}
+        opacity={opacity}
+        showOpacity
+        showValue={false}
+        disabled={disabled}
+        onChange={onColorChange}
+        onOpacityChange={onOpacityChange}
+        className="h-7 w-7 rounded-none border-0 border-r border-input bg-transparent px-1.5 shadow-none"
+        swatchClassName="size-3.5"
+        title={`${label} edge color`}
+        aria-label={`${label} edge color`}
+      />
+      <CompactNumberInput
+        value={thickness}
+        min={min}
+        max={max}
+        step={step}
+        digits={digits}
+        disabled={disabled}
+        ariaLabel={`${label} edge thickness`}
+        onChange={onThicknessChange}
+      />
+      <span className="pr-1.5 text-[10px] font-medium text-muted-foreground">px</span>
+    </div>
+  );
+}
+
+function EdgeClassControlRow({
+  label,
+  available = true,
+  color,
   thickness,
   opacity,
+  onColorChange,
   onThicknessChange,
   onOpacityChange
 }) {
+  const disabled = !available;
+  const off = Number(thickness) <= 0;
   return (
-    <>
-      <SliderField label="Width" value={`${formatNumber(thickness, 1)} px`}>
-        <SliderInput
-          value={thickness}
-          min={2}
-          max={4}
-          step={0.1}
-          onChange={onThicknessChange}
-        />
-      </SliderField>
-      <SliderField label="Opacity" value={formatNumber(opacity)}>
-        <SliderInput
-          value={opacity}
-          min={0}
-          max={1}
-          step={0.01}
-          onChange={onOpacityChange}
-        />
-      </SliderField>
-    </>
+    <div
+      className={cn(
+        "flex min-w-0 items-center justify-between gap-2 rounded-md border border-border/60 bg-muted/20 px-2 py-1",
+        disabled && "opacity-55"
+      )}
+    >
+      <div className="min-w-0">
+        <div className="truncate text-[11px] font-medium leading-4 text-sidebar-foreground">{label}</div>
+        <div className="truncate text-[10px] leading-3 text-muted-foreground">
+          {available ? (off ? "Off" : `${formatNumber(thickness, 2)} px`) : "Unavailable"}
+        </div>
+      </div>
+      <EdgeMetricInput
+        label={label}
+        color={color}
+        opacity={opacity}
+        thickness={thickness}
+        disabled={disabled}
+        onColorChange={onColorChange}
+        onOpacityChange={onOpacityChange}
+        onThicknessChange={onThicknessChange}
+      />
+    </div>
   );
 }
 
@@ -1216,9 +1303,7 @@ function ThemeAppearanceSection({
   updateThemeSettings,
   handleResetThemeSettings,
   handleSaveCustomThemePreset,
-  handleUpdateThemePresetSettings,
-  showEdgeSettings = true,
-  edgeAvailability = null
+  handleUpdateThemePresetSettings
 }) {
   const [saveThemeDialogOpen, setSaveThemeDialogOpen] = useState(false);
   const activeThemePreset = useMemo(
@@ -1465,6 +1550,7 @@ function PositionPad({ value, onChange }) {
 export function DisplaySettingsSection({
   displaySettings,
   updateDisplaySettings,
+  edgeAvailability = null,
   clipBounds = null,
   showClip = false
 }) {
@@ -1480,6 +1566,11 @@ export function DisplaySettingsSection({
     () => normalizeExplodedViewSettings(normalizedDisplaySettings.exploded),
     [normalizedDisplaySettings.exploded]
   );
+  const normalizedEdgeSettings = useMemo(
+    () => normalizeDisplayEdgeSettings(normalizedDisplaySettings.edges),
+    [normalizedDisplaySettings.edges]
+  );
+  const availableEdgeClassSet = useMemo(() => normalizeEdgeAvailability(edgeAvailability), [edgeAvailability]);
   const setDisplay = (patch) => {
     updateDisplaySettings?.((current) => ({
       ...normalizeDisplaySettings(current),
@@ -1501,6 +1592,36 @@ export function DisplaySettingsSection({
       return {
         ...currentSettings,
         exploded: normalizeExplodedViewSettings({ ...currentSettings.exploded, ...patch })
+      };
+    });
+  };
+  const setEdges = (patch) => {
+    updateDisplaySettings?.((current) => {
+      const currentSettings = normalizeDisplaySettings(current);
+      return {
+        ...currentSettings,
+        edges: normalizeDisplayEdgeSettings({
+          ...currentSettings.edges,
+          ...patch
+        })
+      };
+    });
+  };
+  const setEdgeClass = (classId, patch) => {
+    updateDisplaySettings?.((current) => {
+      const currentSettings = normalizeDisplaySettings(current);
+      return {
+        ...currentSettings,
+        edges: normalizeDisplayEdgeSettings({
+          ...currentSettings.edges,
+          classes: {
+            ...(currentSettings.edges?.classes || {}),
+            [classId]: {
+              ...(currentSettings.edges?.classes?.[classId] || {}),
+              ...patch
+            }
+          }
+        })
       };
     });
   };
@@ -1634,6 +1755,49 @@ export function DisplaySettingsSection({
         ) : null}
       </ControlSubsection>
 
+      <ControlSubsection title="Edges" hideFirstSeparator={false}>
+        <FileSheetControlRow label="Edge color" contentClassName="space-y-1">
+          {EDGE_CLASS_CONTROLS.map((edgeClass) => {
+            const settings = normalizedEdgeSettings.classes?.[edgeClass.id] || {};
+            const color = settings.color || edgeClass.defaultColor;
+            const thickness = settings.thickness ?? edgeClass.defaultThickness;
+            const opacity = settings.opacity ?? edgeClass.defaultOpacity;
+            const available = !availableEdgeClassSet || availableEdgeClassSet.has(edgeClass.id);
+            return (
+              <EdgeClassControlRow
+                key={edgeClass.id}
+                label={edgeClass.label}
+                available={available}
+                color={color}
+                thickness={thickness}
+                opacity={opacity}
+                onColorChange={(nextValue) => setEdgeClass(edgeClass.id, { color: nextValue })}
+                onThicknessChange={(nextValue) => setEdgeClass(edgeClass.id, { thickness: nextValue })}
+                onOpacityChange={(nextValue) => setEdgeClass(edgeClass.id, { opacity: nextValue })}
+              />
+            );
+          })}
+        </FileSheetControlRow>
+
+        <FileSheetControlRow label="Highlight">
+          <div className="flex justify-end">
+            <EdgeMetricInput
+              label="Highlight"
+              color={normalizedEdgeSettings.highlightColor || CAD_EDGE_HIGHLIGHT_COLOR}
+              opacity={normalizedEdgeSettings.highlightOpacity ?? 1}
+              thickness={normalizedEdgeSettings.highlightThickness ?? 3}
+              min={0.5}
+              max={6}
+              step={0.1}
+              digits={1}
+              onColorChange={(nextValue) => setEdges({ highlightColor: nextValue })}
+              onOpacityChange={(nextValue) => setEdges({ highlightOpacity: nextValue })}
+              onThicknessChange={(nextValue) => setEdges({ highlightThickness: nextValue })}
+            />
+          </div>
+        </FileSheetControlRow>
+      </ControlSubsection>
+
       {showClip ? (
         <ControlSubsection title="Clip" hideFirstSeparator={false}>
           {AXIS_OPTIONS.map((axis) => {
@@ -1733,9 +1897,7 @@ export function ThemeSettingsSections({
   updateThemeSettings,
   handleResetThemeSettings,
   handleSaveCustomThemePreset,
-  handleUpdateThemePresetSettings,
-  showEdgeSettings = true,
-  edgeAvailability = null
+  handleUpdateThemePresetSettings
 }) {
   const [activePrimaryLight, setActivePrimaryLight] = useState("directional");
   const activeThemePreset = useMemo(
@@ -1743,8 +1905,6 @@ export function ThemeSettingsSections({
     [themePresets, themePresetId, themeSettings]
   );
   const themeHasChanged = themeSettingsChangedFromPreset(activeThemePreset, themeSettings);
-  const showEdgeDetailControls = showEdgeSettings && themeSettings.edges.enabled;
-  const availableEdgeClassSet = useMemo(() => normalizeEdgeAvailability(edgeAvailability), [edgeAvailability]);
   const appearanceTitle = (
     <span className="flex min-w-0 items-center gap-2">
       <span>Appearance</span>
@@ -1778,32 +1938,6 @@ export function ThemeSettingsSections({
       floor: {
         ...current.floor,
         ...patch
-      }
-    }));
-  };
-
-  const setEdges = (patch) => {
-    updateThemeSettings((current) => ({
-      ...current,
-      edges: {
-        ...current.edges,
-        ...patch
-      }
-    }));
-  };
-
-  const setEdgeClass = (classId, patch) => {
-    updateThemeSettings((current) => ({
-      ...current,
-      edges: {
-        ...current.edges,
-        classes: {
-          ...(current.edges?.classes || {}),
-          [classId]: {
-            ...(current.edges?.classes?.[classId] || {}),
-            ...patch
-          }
-        }
       }
     }));
   };
@@ -1951,69 +2085,6 @@ export function ThemeSettingsSections({
           />
         </SliderField>
       </ControlSubsection>
-
-      {showEdgeSettings ? (
-        <ControlSubsection title="Edges">
-          <ThemeToggleRow
-            label="Show edges"
-            checked={themeSettings.edges.enabled}
-            onChange={(nextValue) => setEdges({ enabled: nextValue })}
-          />
-
-          {showEdgeDetailControls ? (
-            <>
-              <ColorModeField
-                label="Edge color"
-                path={["edges", "color"]}
-                {...themeColorFieldProps}
-              />
-              <div className="space-y-1">
-                {EDGE_CLASS_CONTROLS.map((edgeClass) => {
-                  const settings = themeSettings.edges.classes?.[edgeClass.id] || {};
-                  const thickness = settings.thickness ?? edgeClass.defaultThickness;
-                  const opacity = settings.opacity ?? edgeClass.defaultOpacity;
-                  const available = !availableEdgeClassSet || availableEdgeClassSet.has(edgeClass.id);
-                  const checked = available && thickness > 0 && opacity > 0;
-                  return (
-                    <EdgeClassControlRow
-                      key={edgeClass.id}
-                      label={edgeClass.label}
-                      checked={checked}
-                      available={available}
-                      thickness={thickness}
-                      opacity={opacity}
-                      onEnabledChange={(nextValue) => setEdgeClass(edgeClass.id, nextValue
-                        ? {
-                            thickness: thickness > 0 ? thickness : edgeClass.defaultThickness,
-                            opacity: opacity > 0 ? opacity : edgeClass.defaultOpacity
-                          }
-                        : { thickness: 0 })}
-                      onThicknessChange={(nextValue) => setEdgeClass(edgeClass.id, { thickness: nextValue })}
-                      onOpacityChange={(nextValue) => setEdgeClass(edgeClass.id, { opacity: nextValue })}
-                    />
-                  );
-                })}
-              </div>
-            </>
-          ) : null}
-        </ControlSubsection>
-      ) : null}
-
-      {showEdgeDetailControls ? (
-        <ControlSubsection title="Highlight">
-          <ColorField
-            label="Color"
-            value={themeSettings.edges.highlightColor || "#8dc5ff"}
-            onChange={(nextValue) => setEdges({ highlightColor: nextValue })}
-          />
-          <HighlightEdgeSlidersRow
-            thickness={themeSettings.edges.highlightThickness ?? 3}
-            opacity={themeSettings.edges.highlightOpacity ?? 1}
-            onThicknessChange={(nextValue) => setEdges({ highlightThickness: nextValue })}
-            onOpacityChange={(nextValue) => setEdges({ highlightOpacity: nextValue })}
-          />
-        </ControlSubsection>
-      ) : null}
 
       <ControlSubsection title="Backdrop">
         <Field label="Style">
@@ -2334,8 +2405,7 @@ export default function ThemeSettingsPopover({
   updateThemeSettings,
   handleResetThemeSettings,
   handleSaveCustomThemePreset,
-  handleUpdateThemePresetSettings,
-  showEdgeSettings = true
+  handleUpdateThemePresetSettings
 }) {
   return (
     <FileSheet
@@ -2355,8 +2425,6 @@ export default function ThemeSettingsPopover({
           handleResetThemeSettings={handleResetThemeSettings}
           handleSaveCustomThemePreset={handleSaveCustomThemePreset}
           handleUpdateThemePresetSettings={handleUpdateThemePresetSettings}
-          showEdgeSettings={showEdgeSettings}
-          edgeAvailability={edgeAvailability}
         />
       </Accordion>
     </FileSheet>

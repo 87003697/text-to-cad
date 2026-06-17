@@ -1360,9 +1360,9 @@ test("theme persistence ignores previous theme library versions", () => {
   try {
     const previousWorkbenchTheme = normalizeThemeSettings({
       ...cloneThemePresetSettings("workbench"),
-      edges: {
-        ...cloneThemePresetSettings("workbench").edges,
-        topologyFilter: "feature"
+      materials: {
+        ...cloneThemePresetSettings("workbench").materials,
+        brightness: 1.08
       }
     });
     globalThis.window.localStorage.setItem(
@@ -1679,10 +1679,6 @@ test("theme persistence ignores legacy full preset payloads", () => {
     legacyCinematic.materials.clearcoat = 0.18;
     legacyCinematic.materials.clearcoatRoughness = 0.34;
     legacyCinematic.materials.envMapIntensity = 0.58;
-    legacyCinematic.edges.enabled = false;
-    legacyCinematic.edges.color = "#8fa1b5";
-    legacyCinematic.edges.opacity = 0.1;
-    legacyCinematic.edges.thickness = 1;
     legacyCinematic.background.solidColor = "#050711";
     legacyCinematic.background.linearStart = "#02040b";
     legacyCinematic.background.linearEnd = "#252f47";
