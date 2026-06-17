@@ -1,6 +1,6 @@
 <?xml version="1.0"?>
 <!-- cadpy:sourcePath=tom.py -->
-<!-- cadpy:sourceHash=795a1797a07c61368396fa2dd786121fc546b91943d410490c3eb65c608eebab -->
+<!-- cadpy:sourceHash=c0a371705415e81db5ea479d394de2370143c3e5bdba68d76ad6ddfcf4ea50b2 -->
 <robot xmlns:tcad="https://text-to-cad.dev/srdf" name="tom_v2">
   <tcad:urdf path="tom.urdf" />
   <virtual_joint name="fixed_base" type="fixed" parent_frame="world" child_link="base_footprint" />

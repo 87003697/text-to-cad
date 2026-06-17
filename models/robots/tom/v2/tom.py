@@ -507,6 +507,93 @@ def _transform_direction(
     )
 
 
+def _axis_angle_transform(
+    *,
+    axis_point_mm: tuple[float, float, float],
+    axis_direction: tuple[float, float, float],
+    angle_deg: float,
+) -> list[float]:
+    ux, uy, uz = _normalized_vector(axis_direction)
+    theta = math.radians(angle_deg)
+    c = math.cos(theta)
+    s = math.sin(theta)
+    one_minus_c = 1.0 - c
+    rotation = (
+        (
+            c + ux * ux * one_minus_c,
+            ux * uy * one_minus_c - uz * s,
+            ux * uz * one_minus_c + uy * s,
+        ),
+        (
+            uy * ux * one_minus_c + uz * s,
+            c + uy * uy * one_minus_c,
+            uy * uz * one_minus_c - ux * s,
+        ),
+        (
+            uz * ux * one_minus_c - uy * s,
+            uz * uy * one_minus_c + ux * s,
+            c + uz * uz * one_minus_c,
+        ),
+    )
+    px, py, pz = axis_point_mm
+    rotated_point = (
+        rotation[0][0] * px + rotation[0][1] * py + rotation[0][2] * pz,
+        rotation[1][0] * px + rotation[1][1] * py + rotation[1][2] * pz,
+        rotation[2][0] * px + rotation[2][1] * py + rotation[2][2] * pz,
+    )
+    translation = (
+        px - rotated_point[0],
+        py - rotated_point[1],
+        pz - rotated_point[2],
+    )
+    return [
+        rotation[0][0], rotation[0][1], rotation[0][2], translation[0],
+        rotation[1][0], rotation[1][1], rotation[1][2], translation[1],
+        rotation[2][0], rotation[2][1], rotation[2][2], translation[2],
+        0.0, 0.0, 0.0, 1.0,
+    ]
+
+
+def _rotate_transform_about_axis(
+    transform: list[float],
+    *,
+    axis_point_mm: tuple[float, float, float],
+    axis_direction: tuple[float, float, float],
+    angle_deg: float,
+) -> list[float]:
+    if abs(angle_deg) <= 1e-9:
+        return list(transform)
+    return multiply_transforms(
+        _axis_angle_transform(
+            axis_point_mm=axis_point_mm,
+            axis_direction=axis_direction,
+            angle_deg=angle_deg,
+        ),
+        transform,
+    )
+
+
+def _apply_v2_step_home_pose_to_elbow_pitch(
+    *,
+    child_transform: list[float],
+    instance_transforms_by_name: dict[str, list[float]],
+) -> list[float]:
+    elbow_pitch_servo = instance_transforms_by_name.get(
+        URDF_SERVO_AXIS_INSTANCE_BY_JOINT["elbow_pitch"]
+    )
+    if elbow_pitch_servo is None:
+        raise RuntimeError("Cannot apply v2 STEP elbow home pose before elbow servo exists")
+    axis_center_world, axis_direction_world = _servo_horn_axis_from_transform(
+        elbow_pitch_servo
+    )
+    return _rotate_transform_about_axis(
+        child_transform,
+        axis_point_mm=axis_center_world,
+        axis_direction=axis_direction_world,
+        angle_deg=V2_HOME_ELBOW_PITCH_DEG,
+    )
+
+
 def _translate_transform(
     transform: list[float],
     delta: tuple[float, float, float],
@@ -606,6 +693,16 @@ def gen_step_with_options(*, include_gripper: bool = False) -> dict[str, object]
                 downstream_correction = multiply_transforms(
                     child_transform,
                     invert_rigid_transform(source_child_transform),
+                )
+
+        if child_name == "elbow_pitch_link":
+            child_transform = _apply_v2_step_home_pose_to_elbow_pitch(
+                child_transform=child_transform,
+                instance_transforms_by_name=instance_transforms_by_name,
+            )
+            downstream_correction = multiply_transforms(
+                child_transform,
+                invert_rigid_transform(source_child_transform),
             )
 
         if child_name == GRIPPER_CHILD_NAME:
