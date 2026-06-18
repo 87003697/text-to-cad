@@ -63,8 +63,9 @@ flow, CI/CD-testing and resume options, and local/manual fallbacks.
   rules and pointers.
 - Read `CONTRIBUTING.md` before committing, rebasing, resolving generated-file
   conflicts, or bumping release versions.
-- Keep the `develop` checkout in symlink layout with
-  `scripts/dev/setup-symlinks.sh`.
+- Keep the primary local `develop` checkout in symlink layout with
+  `scripts/dev/setup-symlinks.sh`. Do not auto-repair that layout from
+  Codex or Claude Code startup hooks in linked worktrees.
 - Each skill must be self-contained and independent at runtime. A skill must
   not refer to or import or depend on code from another skill, from `skills/`
   root, or from repository-root modules. Do not add `skills/`, the repository
@@ -108,9 +109,12 @@ flow, CI/CD-testing and resume options, and local/manual fallbacks.
 - Keep new branch checkouts and git worktrees lightweight by default. Do not
   copy `.venv/` or `models/` through `.worktreeinclude`; recreate `.venv/`
   inside the worktree only when Python dependencies are needed for the workflow.
-- Agent startup should only verify the development symlink layout with
-  `scripts/dev/setup-symlinks.sh --check`, repairing it with
-  `scripts/dev/setup-symlinks.sh` if needed.
+- In Codex or Claude Code worktrees, prefer the skill instructions and scripts
+  under the current worktree's `skills/` directory over globally installed
+  skill symlinks from another checkout.
+- If a worktree explicitly needs the development symlink layout, run
+  `scripts/dev/setup-symlinks.sh --check` and then
+  `scripts/dev/setup-symlinks.sh` intentionally in that worktree.
 - Hydrate `models/` only when the user asks for it or when the task targets
   specific files under `models/`. In a new worktree, make the relevant model
   paths real before using them, preferring the local Git LFS cache with
