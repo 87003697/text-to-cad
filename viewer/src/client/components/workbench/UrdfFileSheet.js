@@ -34,6 +34,10 @@ const compactButtonClasses = FILE_SHEET_COMPACT_BUTTON_CLASSES;
 const JOINT_CONTROL_SYNC_EPSILON = 0.001;
 const JOINT_CONTROL_LOCAL_OVERRIDE_MS = 3500;
 
+function jointControlValuesClose(left, right) {
+  return Math.abs(Number(left) - Number(right)) <= JOINT_CONTROL_SYNC_EPSILON;
+}
+
 function isAngularJoint(joint) {
   const jointType = String(joint?.type || "").trim().toLowerCase();
   return jointType === "continuous" || jointType === "revolute";
@@ -127,7 +131,7 @@ const UrdfJointRow = memo(function UrdfJointRow({
   useEffect(() => {
     latestSafeValueRef.current = safeValueDeg;
     if (localOverrideRef.current) {
-      if (Math.abs(safeValueDeg - pendingValueRef.current) <= JOINT_CONTROL_SYNC_EPSILON) {
+      if (jointControlValuesClose(safeValueDeg, pendingValueRef.current)) {
         releaseLocalOverride(safeValueDeg);
       }
       return;
@@ -193,6 +197,9 @@ const UrdfJointRow = memo(function UrdfJointRow({
           value={[liveValueDeg]}
           onValueChange={(nextValue) => {
             const nextValueDeg = clampJointInputValue(nextValue?.[0], minValueDeg, maxValueDeg, liveValueDeg);
+            if (jointControlValuesClose(nextValueDeg, pendingValueRef.current)) {
+              return;
+            }
             setLiveValueDeg(nextValueDeg);
             holdLocalValueUntilParentSettles(nextValueDeg);
             scheduleValueChange(nextValueDeg, { scrub: true });
@@ -755,7 +762,7 @@ export default function UrdfFileSheet({
                   {groupStatePresets.length ? (
                     <FileSheetControlRow label="Group state">
                       <Select
-                        value={activeGroupStateValue === "__custom__" ? undefined : activeGroupStateValue}
+                        value={activeGroupStateValue}
                         onValueChange={(value) => {
                           if (value === "__custom__") {
                             return;
