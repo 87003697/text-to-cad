@@ -1,6 +1,5 @@
 import {
-  findAssemblyNode,
-  flattenAssemblyNodes
+  findAssemblyNode
 } from "cadjs/lib/assembly/meshData.js";
 
 export function assemblyPathToNode(root, nodeId) {
@@ -72,29 +71,99 @@ export function minimalAssemblyIsolationNodeIds(root, nodeIds, { rootId = "" } =
   return roots;
 }
 
-export function selectableTreeNodeIdsForIsolation(root, isolatedNodeIds, rootId) {
+function assemblyChildNodeIds(node, rootId) {
+  const normalizedRootId = String(rootId || "").trim();
+  return (Array.isArray(node?.children) ? node.children : [])
+    .map((child) => String(child?.id || "").trim())
+    .filter((nodeId) => nodeId && nodeId !== normalizedRootId);
+}
+
+export function assemblyIsolationLayerNodeIds(root, isolatedNodeIds, rootId) {
   if (!root) {
     return [];
   }
-  const rootNodeId = String(rootId || "").trim();
-  const validNodeIds = (nodes) => flattenAssemblyNodes(nodes)
-    .map((node) => String(node?.id || "").trim())
-    .filter((nodeId) => nodeId && nodeId !== rootNodeId);
-  const childNodeIds = (node) => (Array.isArray(node?.children) ? node.children : [])
-    .map((child) => String(child?.id || "").trim())
-    .filter((nodeId) => nodeId && nodeId !== rootNodeId);
   const normalizedIsolatedNodeIds = minimalAssemblyIsolationNodeIds(root, isolatedNodeIds, {
     rootId
   });
   if (!normalizedIsolatedNodeIds.length) {
-    return validNodeIds(root);
+    return assemblyChildNodeIds(root, rootId);
   }
   const selectable = new Set();
   for (const nodeId of normalizedIsolatedNodeIds) {
     const node = findAssemblyNode(root, nodeId);
-    for (const selectableNodeId of childNodeIds(node)) {
+    for (const selectableNodeId of assemblyChildNodeIds(node, rootId)) {
       selectable.add(selectableNodeId);
     }
   }
   return [...selectable];
+}
+
+export function selectableViewerNodeIdsForIsolation(root, isolatedNodeIds, rootId) {
+  if (!root) {
+    return [];
+  }
+  return assemblyIsolationLayerNodeIds(root, isolatedNodeIds, rootId);
+}
+
+export function selectableViewerNodeIdsForExpandedTree(root, expandedNodeIds, {
+  rootId = "",
+  isolatedNodeIds = [],
+  topologyNodeIds = []
+} = {}) {
+  if (!root) {
+    return [];
+  }
+  const normalizedRootId = String(rootId || root?.id || "").trim();
+  const expanded = new Set(
+    (Array.isArray(expandedNodeIds) ? expandedNodeIds : [expandedNodeIds])
+      .map((id) => String(id || "").trim())
+      .filter(Boolean)
+  );
+  const topologyNodes = new Set(
+    (Array.isArray(topologyNodeIds) ? topologyNodeIds : [topologyNodeIds])
+      .map((id) => String(id || "").trim())
+      .filter(Boolean)
+  );
+  const isolationRoots = minimalAssemblyIsolationNodeIds(root, isolatedNodeIds, {
+    rootId: normalizedRootId
+  });
+  const startNodes = isolationRoots.length
+    ? isolationRoots.map((nodeId) => findAssemblyNode(root, nodeId)).filter(Boolean)
+    : [root];
+  const selectable = [];
+  const seen = new Set();
+
+  const addSelectable = (nodeId) => {
+    const normalizedNodeId = String(nodeId || "").trim();
+    if (!normalizedNodeId || normalizedNodeId === normalizedRootId || seen.has(normalizedNodeId)) {
+      return;
+    }
+    seen.add(normalizedNodeId);
+    selectable.push(normalizedNodeId);
+  };
+
+  const visit = (node, { forceChildren = false } = {}) => {
+    if (!node) {
+      return;
+    }
+    const nodeId = String(node?.id || "").trim();
+    const children = Array.isArray(node?.children) ? node.children : [];
+    const expandedNode = nodeId && expanded.has(nodeId);
+    if (children.length && (forceChildren || expandedNode || nodeId === normalizedRootId)) {
+      for (const child of children) {
+        visit(child);
+      }
+      return;
+    }
+    if (expandedNode && topologyNodes.has(nodeId)) {
+      return;
+    }
+    addSelectable(nodeId);
+  };
+
+  for (const node of startNodes) {
+    visit(node, { forceChildren: !isolationRoots.length || expanded.has(String(node?.id || "").trim()) });
+  }
+
+  return selectable;
 }

@@ -1,3 +1,4 @@
+import { useState } from "react";
 import {
   Crosshair,
   Focus,
@@ -16,9 +17,12 @@ import { TooltipProvider } from "../ui/tooltip";
 import DrawingToolbar from "./DrawingToolbar";
 import { ToolbarButton } from "./ToolbarButton";
 import { CAD_WORKSPACE_TOOLBAR_DESKTOP_WIDTH_CLASS } from "./ToolbarShell";
+import { DisplayProjectionControl } from "../viewer/DisplayProjectionControl";
 
 const FLOATING_TOOL_BAR_SURFACE_CLASS =
   "cad-glass-surface border border-sidebar-border text-sidebar-foreground shadow-sm";
+const FLOATING_TOOL_BAR_BUTTON_CLASSES =
+  "grid size-6 shrink-0 place-items-center rounded-sm text-sidebar-foreground/70 shadow-none transition hover:bg-sidebar-accent hover:text-sidebar-accent-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/45 disabled:pointer-events-none disabled:opacity-50 data-[state=open]:bg-sidebar-accent data-[state=open]:text-sidebar-accent-foreground";
 
 function DesktopFloatingToolBar({
   renderFormat,
@@ -36,6 +40,10 @@ function DesktopFloatingToolBar({
   handleStepAnimationPlayToggle,
   drawToolActive,
   handleSelectTabToolMode,
+  displayMode,
+  onDisplayModeChange,
+  projection,
+  onProjectionChange,
   viewerLoading,
   selectedMeshData,
   selectedDxfData,
@@ -52,6 +60,7 @@ function DesktopFloatingToolBar({
   handleEnterPreviewMode,
   handleScreenshotCopy
 }) {
+  const [displayMenuOpen, setDisplayMenuOpen] = useState(false);
   const dxfMode = renderFormat === RENDER_FORMAT.DXF;
   const implicitMode = renderFormat === RENDER_FORMAT.IMPLICIT;
   const urdfMode = renderFormat === RENDER_FORMAT.URDF;
@@ -68,15 +77,18 @@ function DesktopFloatingToolBar({
   const selectLabel = referenceSelectionPending ? "Preparing selection" : "Select";
   const showStepAnimationPlay = renderFormat === RENDER_FORMAT.STEP && stepAnimationAvailable;
   const stepAnimationPlayDisabled = viewerLoading || !selectedMeshData || stepAnimationDisabled;
-  const stepAnimationLabel = stepAnimationPlaying ? "Pause STEP animation" : "Play STEP animation";
+  const stepAnimationLabel = stepAnimationPlaying ? "Pause" : "Play";
+  const displayControlAvailable = renderFormat === RENDER_FORMAT.STEP &&
+    typeof onDisplayModeChange === "function" &&
+    typeof onProjectionChange === "function";
 
   return (
     <div
-      className="absolute z-20 flex flex-col items-end gap-1.5"
+      className="absolute z-20 flex flex-col items-end gap-1"
       style={floatingCadToolbarPosition}
     >
       <TooltipProvider delayDuration={250}>
-        <div className={`pointer-events-auto inline-flex w-fit items-center gap-1 self-end rounded-full p-1 ${FLOATING_TOOL_BAR_SURFACE_CLASS}`}>
+        <div className={`pointer-events-auto inline-flex h-8 w-fit items-center gap-0.5 self-end rounded-md p-1 ${FLOATING_TOOL_BAR_SURFACE_CLASS}`}>
           {!dxfMode && !implicitMode && !robotMode && !meshOnlyMode ? (
             <>
               <ToolbarButton
@@ -86,7 +98,7 @@ function DesktopFloatingToolBar({
                 disabled={selectDisabled}
                 aria-pressed={referenceSelectionDeferred ? false : selectionToolActive}
               >
-                <MousePointer2 className="size-3.5" strokeWidth={2} aria-hidden="true" />
+                <MousePointer2 className="size-3" strokeWidth={2} aria-hidden="true" />
               </ToolbarButton>
 
               <ToolbarButton
@@ -96,8 +108,23 @@ function DesktopFloatingToolBar({
                 disabled={viewerLoading || !selectedMeshData}
                 aria-pressed={drawToolActive}
               >
-                <PenTool className="size-3.5" strokeWidth={2} aria-hidden="true" />
+                <PenTool className="size-3" strokeWidth={2} aria-hidden="true" />
               </ToolbarButton>
+
+              {displayControlAvailable ? (
+                <DisplayProjectionControl
+                  displayMode={displayMode}
+                  onDisplayModeChange={onDisplayModeChange}
+                  projection={projection}
+                  onProjectionChange={onProjectionChange}
+                  open={displayMenuOpen}
+                  onOpenChange={setDisplayMenuOpen}
+                  triggerClassName={FLOATING_TOOL_BAR_BUTTON_CLASSES}
+                  contentAlign="end"
+                  contentSide="bottom"
+                  contentSideOffset={6}
+                />
+              ) : null}
 
               {showStepAnimationPlay ? (
                 <ToolbarButton
@@ -108,9 +135,9 @@ function DesktopFloatingToolBar({
                   aria-pressed={stepAnimationPlaying}
                 >
                   {stepAnimationPlaying ? (
-                    <Pause className="size-3.5" strokeWidth={2} aria-hidden="true" />
+                    <Pause className="size-3" strokeWidth={2} aria-hidden="true" />
                   ) : (
-                    <Play className="size-3.5" strokeWidth={2} aria-hidden="true" />
+                    <Play className="size-3" strokeWidth={2} aria-hidden="true" />
                   )}
                 </ToolbarButton>
               ) : null}
@@ -125,28 +152,28 @@ function DesktopFloatingToolBar({
               disabled={posePickerDisabled}
               aria-pressed={urdfPosePickerActive}
             >
-              <Crosshair className="size-3.5" strokeWidth={2} aria-hidden="true" />
+              <Crosshair className="size-3" strokeWidth={2} aria-hidden="true" />
             </ToolbarButton>
           ) : null}
 
           {!dxfMode ? (
             <ToolbarButton
-              label="Open orbit preview"
+              label="Orbit"
               onClick={handleEnterPreviewMode}
               disabled={viewerLoading || !renderReady}
             >
-              <Orbit className="size-3.5" strokeWidth={2} aria-hidden="true" />
+              <Orbit className="size-3" strokeWidth={2} aria-hidden="true" />
             </ToolbarButton>
           ) : null}
 
           <ToolbarButton
-            label="Copy screenshot to clipboard"
+            label="Copy screenshot"
             onClick={() => {
               void handleScreenshotCopy();
             }}
             disabled={captureDisabled}
           >
-            <Focus className="size-3.5" strokeWidth={2} aria-hidden="true" />
+            <Focus className="size-3" strokeWidth={2} aria-hidden="true" />
           </ToolbarButton>
         </div>
       </TooltipProvider>

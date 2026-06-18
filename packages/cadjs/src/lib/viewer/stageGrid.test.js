@@ -2,10 +2,12 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import { THEME_FLOOR_MODES } from "../themeSettings.js";
+import { DEFAULT_AUTO_ZOOM_PADDING } from "./autoZoom.js";
 import { VIEWER_SCENE_SCALE, getSceneScaleSettings } from "./sceneScale.js";
 import {
   buildGridConfig,
   DEFAULT_GRID_DIVISIONS,
+  GRID_TARGET_VISIBLE_CELLS,
   niceGridStep,
   updateGridHelper
 } from "./stageGrid.js";
@@ -47,8 +49,32 @@ test("stage grid sizing uses nice CAD-scale steps and even divisions", () => {
 
   const config = buildGridConfig(12, VIEWER_SCENE_SCALE.CAD);
   assert.ok(config.size > 0);
-  assert.ok(config.divisions >= DEFAULT_GRID_DIVISIONS);
+  assert.equal(config.divisions, DEFAULT_GRID_DIVISIONS);
   assert.equal(config.divisions % 2, 0);
+});
+
+test("stage grid cells scale with model radius near default framing", () => {
+  const cadConfig = buildGridConfig(12, VIEWER_SCENE_SCALE.CAD);
+  assert.equal(cadConfig.cellSize, (24 * DEFAULT_AUTO_ZOOM_PADDING) / GRID_TARGET_VISIBLE_CELLS);
+  assert.equal(cadConfig.size, cadConfig.cellSize * cadConfig.divisions);
+  const cadDefaultZoomCells = (12 * 2 * DEFAULT_AUTO_ZOOM_PADDING) / cadConfig.cellSize;
+  assert.equal(cadDefaultZoomCells, GRID_TARGET_VISIBLE_CELLS);
+
+  const urdfConfig = buildGridConfig(0.12, VIEWER_SCENE_SCALE.URDF);
+  assert.equal(urdfConfig.cellSize, (0.24 * DEFAULT_AUTO_ZOOM_PADDING) / GRID_TARGET_VISIBLE_CELLS);
+  const urdfDefaultZoomCells = (0.12 * 2 * DEFAULT_AUTO_ZOOM_PADDING) / urdfConfig.cellSize;
+  assert.equal(urdfDefaultZoomCells, GRID_TARGET_VISIBLE_CELLS);
+});
+
+test("stage grid density changes cell count without changing the base model-relative span", () => {
+  const normalConfig = buildGridConfig(12, VIEWER_SCENE_SCALE.CAD);
+  const denseConfig = buildGridConfig(12, VIEWER_SCENE_SCALE.CAD, {
+    grid: { density: 2 }
+  });
+
+  assert.equal(denseConfig.divisions, DEFAULT_GRID_DIVISIONS * 2);
+  assert.equal(denseConfig.cellSize, normalConfig.cellSize / 2);
+  assert.equal(denseConfig.size, normalConfig.size);
 });
 
 test("updateGridHelper creates, reuses, and disposes runtime grid helpers", () => {

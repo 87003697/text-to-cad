@@ -32,6 +32,17 @@ test("viewer pick mode keeps focused assemblies pickable when child components a
   );
 });
 
+test("viewer pick mode uses hybrid topology picking when expanded topology is visible", () => {
+  assert.equal(
+    viewerPickModeForRenderPane({
+      viewerMode: "assembly",
+      assemblyPickingActive: true,
+      topologyPickingActive: true
+    }),
+    VIEWER_PICK_MODE.AUTO
+  );
+});
+
 test("viewer pick mode switches multi-focused assemblies to topology picking", () => {
   assert.equal(
     viewerPickModeForRenderPane({

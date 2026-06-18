@@ -121,26 +121,6 @@ function stepTreeNodeId(node) {
   return String(node?.id || node?.occurrenceId || "").trim();
 }
 
-function expandableStepTreeNodeIds(root, { omitRoot = false } = {}) {
-  if (!root) {
-    return [];
-  }
-  const ids = [];
-  const stack = [root];
-  while (stack.length) {
-    const node = stack.pop();
-    const nodeId = stepTreeNodeId(node);
-    const children = stepTreeNodeChildren(node);
-    if ((!omitRoot || node !== root) && nodeId && children.length) {
-      ids.push(nodeId);
-    }
-    for (let index = children.length - 1; index >= 0; index -= 1) {
-      stack.push(children[index]);
-    }
-  }
-  return ids;
-}
-
 function isolatedStepTreeRowIds(visibleRows, focusedNodeIds) {
   const focused = new Set(
     (Array.isArray(focusedNodeIds) ? focusedNodeIds : [])
@@ -571,7 +551,6 @@ export default function StepFileSheet({
   treeSelectionDisabled = false,
   treeSelectionDisabledReason = "",
   onTogglePartVisibility,
-  hideSelectedParts,
   hideAllParts,
   showAllHiddenParts,
   stepModule = null,
@@ -703,10 +682,6 @@ export default function StepFileSheet({
     () => visibleRows.map((row) => String(row?.id || "")).join("\n"),
     [visibleRows]
   );
-  const expandableTreeNodeIds = useMemo(
-    () => expandableStepTreeNodeIds(treeRoot, { omitRoot: elideRootTreeRow }),
-    [elideRootTreeRow, treeRoot]
-  );
   const hiddenTreeRowIds = useMemo(
     () => hiddenStepTreeRowIds(visibleRows, hiddenIds),
     [hiddenIds, visibleRows]
@@ -793,6 +768,21 @@ export default function StepFileSheet({
     const rowId = String(row?.id || "").trim();
     return Boolean(row?.hasChildren || (rowId && loadableTreeNodeIdSet.has(rowId)));
   };
+  const expandableTreeNodeIds = useMemo(() => {
+    const ids = [];
+    const seen = new Set();
+    for (const row of visibleRows) {
+      const rowId = String(row?.id || "").trim();
+      if (!rowId || seen.has(rowId)) {
+        continue;
+      }
+      if (rowCanExpandOrLoad(row)) {
+        seen.add(rowId);
+        ids.push(rowId);
+      }
+    }
+    return ids;
+  }, [loadableTreeNodeIdSet, visibleRows]);
   const collapsedExpandableTreeNodeIds = useMemo(
     () => expandableTreeNodeIds.filter((nodeId) => !expandedTreeNodeIdSet.has(nodeId)),
     [expandableTreeNodeIds, expandedTreeNodeIdSet]
@@ -955,7 +945,7 @@ export default function StepFileSheet({
                     focusedNodeIdSet.has(String(row.node?.partId || "").trim());
                   const selectable = topologyRow
                     ? selectableTopologyRow && insideIsolation && !topologyShapeOfFocusedPart
-                    : insideIsolation && !focused && (!selectableNodeIdSet || selectableNodeIdSet.has(selectionRowId) || selected);
+                    : !focused && (!selectableNodeIdSet || selectableNodeIdSet.has(selectionRowId) || selected);
                   const hidden = hiddenTreeRowIds.has(String(row.id || "").trim());
                   const isolationMuted = isolateActive && !insideIsolation;
                   const rowSelectionDisabled = treeSelectionDisabled || hidden || !selectable;
@@ -1070,7 +1060,10 @@ export default function StepFileSheet({
                     ? typeof onUnfocusTreeNode === "function"
                     : typeof onFocusTreeNode === "function";
                   const contextSelectDisabled = treeSelectionDisabled || (!selectable && !selected) || (hidden && !selected);
-                  const contextFocusDisabled = topologyRow || treeSelectionDisabled || !contextFocusActionAvailable;
+                  const contextFocusDisabled = topologyRow ||
+                    treeSelectionDisabled ||
+                    !contextFocusActionAvailable ||
+                    (!focused && !selectable && !selected);
                   const contextExitAllIsolateAvailable = !topologyRow &&
                     isolateActive &&
                     focusedNodeIdSet.size > 1 &&
@@ -1088,13 +1081,16 @@ export default function StepFileSheet({
                     focused ||
                     !showTreeVisibilityControls ||
                     typeof onTogglePartVisibility !== "function";
-                  const selectedContextNodeIds = !topologyRow && selected
+                  const selectedContextNodeIds = !topologyRow
                     ? selectedIds
                       .map((id) => String(id || "").trim())
                       .filter(Boolean)
                     : [];
                   const actionNodeIds = !topologyRow
-                    ? (selectedContextNodeIds.length ? selectedContextNodeIds : [selectionRowId].filter(Boolean))
+                    ? Array.from(new Set([
+                      ...selectedContextNodeIds,
+                      selectionRowId
+                    ].filter(Boolean)))
                     : [];
                   const actionRows = actionNodeIds
                     .map((nodeId) => visibleRowById.get(nodeId) || null)
@@ -1267,10 +1263,10 @@ export default function StepFileSheet({
                           showHideOther={!topologyRow}
                           hideOtherDisabled={contextHideOtherDisabled}
                           hideAllDisabled={contextHideAllDisabled}
-                          hideAllLabel={hidden ? "Reveal all instances" : "Hide all instances"}
+                          hideAllLabel="Show all"
                           showVisibility={!topologyRow && !focused}
                           visibilityDisabled={contextVisibilityDisabled}
-                          showHideAll={!topologyRow}
+                          showHideAll={false}
                           showExpandCollapse={rowHasChildren || actionRows.some((actionRow) => rowCanExpandOrLoad(actionRow)) || expandableTreeNodeIds.length > 0}
                           expandSelectedDisabled={expandSelectedDisabled}
                           collapseSelectedDisabled={collapseSelectedDisabled}
@@ -1280,7 +1276,7 @@ export default function StepFileSheet({
                             onCopyTreeNodeReference?.(copyReferenceTargetId, { topology: topologyRow });
                           }}
                           onSelect={(event) => {
-                            if (!topologyRow && selectedContextNodeIds.length > 1) {
+                            if (!topologyRow && selected && selectedContextNodeIds.length > 1) {
                               onClearSelection?.();
                               return;
                             }
@@ -1307,10 +1303,6 @@ export default function StepFileSheet({
                             hideAllParts?.();
                           }}
                           onToggleVisibility={() => {
-                            if (!hidden && selectedContextNodeIds.length > 1 && typeof hideSelectedParts === "function") {
-                              hideSelectedParts();
-                              return;
-                            }
                             for (const nodeId of actionNodeIds) {
                               onTogglePartVisibility?.(nodeId);
                             }

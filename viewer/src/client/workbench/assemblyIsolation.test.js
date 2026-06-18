@@ -3,7 +3,8 @@ import test from "node:test";
 
 import {
   minimalAssemblyIsolationNodeIds,
-  selectableTreeNodeIdsForIsolation
+  selectableViewerNodeIdsForExpandedTree,
+  selectableViewerNodeIdsForIsolation
 } from "./assemblyIsolation.js";
 
 const root = {
@@ -51,21 +52,63 @@ test("minimal assembly isolation keeps only the highest selected ancestor", () =
   );
 });
 
-test("tree selection during isolate only keeps direct children selectable", () => {
+test("viewer selection during isolate only keeps direct children selectable", () => {
   assert.deepEqual(
-    selectableTreeNodeIdsForIsolation(root, ["assembly_a", "part_a1"], "root"),
+    selectableViewerNodeIdsForIsolation(root, ["assembly_a", "part_a1"], "root"),
     ["part_a1", "part_a2"]
   );
   assert.deepEqual(
-    selectableTreeNodeIdsForIsolation(root, ["part_a2"], "root"),
+    selectableViewerNodeIdsForIsolation(root, ["part_a2"], "root"),
     ["part_a2_leaf"]
   );
   assert.deepEqual(
-    selectableTreeNodeIdsForIsolation(root, ["part_a1", "part_b"], "root"),
+    selectableViewerNodeIdsForIsolation(root, ["part_a1", "part_b"], "root"),
     []
   );
   assert.deepEqual(
-    selectableTreeNodeIdsForIsolation(root, [], "root"),
-    ["assembly_a", "part_a1", "part_a2", "part_a2_leaf", "part_b"]
+    selectableViewerNodeIdsForIsolation(root, [], "root"),
+    ["assembly_a", "part_b"]
+  );
+});
+
+test("viewer selection follows the expanded tree frontier", () => {
+  assert.deepEqual(
+    selectableViewerNodeIdsForExpandedTree(root, [], { rootId: "root" }),
+    ["assembly_a", "part_b"]
+  );
+  assert.deepEqual(
+    selectableViewerNodeIdsForExpandedTree(root, ["assembly_a"], { rootId: "root" }),
+    ["part_a1", "part_a2", "part_b"]
+  );
+  assert.deepEqual(
+    selectableViewerNodeIdsForExpandedTree(root, ["assembly_a", "part_a2"], { rootId: "root" }),
+    ["part_a1", "part_a2_leaf", "part_b"]
+  );
+});
+
+test("viewer selection treats expanded topology nodes as topology-only", () => {
+  assert.deepEqual(
+    selectableViewerNodeIdsForExpandedTree(root, ["assembly_a", "part_a1"], {
+      rootId: "root",
+      topologyNodeIds: ["part_a1"]
+    }),
+    ["part_a2", "part_b"]
+  );
+});
+
+test("viewer selection scopes expanded tree frontier to isolation roots", () => {
+  assert.deepEqual(
+    selectableViewerNodeIdsForExpandedTree(root, ["assembly_a"], {
+      rootId: "root",
+      isolatedNodeIds: ["assembly_a"]
+    }),
+    ["part_a1", "part_a2"]
+  );
+  assert.deepEqual(
+    selectableViewerNodeIdsForExpandedTree(root, ["assembly_a", "part_a2"], {
+      rootId: "root",
+      isolatedNodeIds: ["assembly_a"]
+    }),
+    ["part_a1", "part_a2_leaf"]
   );
 });

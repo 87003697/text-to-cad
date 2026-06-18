@@ -10,6 +10,7 @@ import {
   createStageFloorGlowPlane,
   createStageFloorPlane,
   createStageShadowPlane,
+  getStageFloorGlowSize,
   getViewerThemeNumber,
   getViewerThemeValue,
   getStageFloorSize,
@@ -61,6 +62,13 @@ test("stage color and floor sizing helpers preserve rendering defaults", () => {
 
   assert.equal(getStageFloorSize(0.25, VIEWER_SCENE_SCALE.URDF), 40);
   assert.equal(getStageFloorSize(2, VIEWER_SCENE_SCALE.CAD), 22400);
+});
+
+test("stage floor glow scales from model lighting scope instead of CAD floor minimums", () => {
+  assert.equal(getStageFloorGlowSize(2, 22400, VIEWER_SCENE_SCALE.CAD), 16);
+  assert.equal(getStageFloorGlowSize(140, 22400, VIEWER_SCENE_SCALE.CAD), 1120);
+  assert.equal(getStageFloorGlowSize(0.01, 22400, VIEWER_SCENE_SCALE.CAD), 8);
+  assert.equal(getStageFloorGlowSize(100, 200, VIEWER_SCENE_SCALE.CAD), 48);
 });
 
 test("wireframe edge color uses contrast-safe colors on dark and light backgrounds", () => {

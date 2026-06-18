@@ -126,20 +126,36 @@ export function perspectiveSnapshotEqual(a, b, epsilon = 1e-4) {
   );
 }
 
-export function perspectiveSnapshotMatchesScene(snapshot, { modelKey = "", sceneScaleMode = "", coordinateSystem = "" } = {}) {
+export function perspectiveSnapshotMatchesScene(snapshot, {
+  modelKey = "",
+  sceneScaleMode = "",
+  coordinateSystem = "",
+  requireModelKey = false,
+  requireSceneScaleMode = false,
+  requireCoordinateSystem = false
+} = {}) {
   const normalizedSnapshot = clonePerspectiveSnapshot(snapshot);
   if (!normalizedSnapshot) {
     return false;
   }
   const normalizedModelKey = normalizePerspectiveMetadataValue(modelKey);
+  if (requireModelKey && normalizedModelKey && normalizedSnapshot.modelKey !== normalizedModelKey) {
+    return false;
+  }
   if (normalizedModelKey && normalizedSnapshot.modelKey && normalizedSnapshot.modelKey !== normalizedModelKey) {
     return false;
   }
   const normalizedSceneScaleMode = normalizePerspectiveMetadataValue(sceneScaleMode);
+  if (requireSceneScaleMode && normalizedSceneScaleMode && normalizedSnapshot.sceneScaleMode !== normalizedSceneScaleMode) {
+    return false;
+  }
   if (normalizedSceneScaleMode && normalizedSnapshot.sceneScaleMode && normalizedSnapshot.sceneScaleMode !== normalizedSceneScaleMode) {
     return false;
   }
   const normalizedCoordinateSystem = normalizePerspectiveMetadataValue(coordinateSystem);
+  if (requireCoordinateSystem && normalizedCoordinateSystem && normalizedSnapshot.coordinateSystem !== normalizedCoordinateSystem) {
+    return false;
+  }
   if (normalizedCoordinateSystem && normalizedSnapshot.coordinateSystem && normalizedSnapshot.coordinateSystem !== normalizedCoordinateSystem) {
     return false;
   }

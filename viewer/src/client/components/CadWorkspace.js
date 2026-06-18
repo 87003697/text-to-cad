@@ -265,7 +265,6 @@ import {
 } from "@/workbench/fileStatusItems";
 import {
   rootAssemblyInspectionNodeId,
-  selectableAssemblyNodeIdsForInspection,
   buildAssemblyLeafToNodePickMap,
   descendantLeafPartIds,
   findAssemblyNode,
@@ -276,15 +275,15 @@ import {
 } from "cadjs/lib/assembly/meshData";
 import {
   assemblyNodeContainsNode,
-  assemblyPathToNode,
   minimalAssemblyIsolationNodeIds,
-  selectableTreeNodeIdsForIsolation
+  selectableViewerNodeIdsForExpandedTree
 } from "@/workbench/assemblyIsolation";
 import {
   assignStepTreeTopologyReferencePartIds,
   buildStepTreeRoot,
   buildStepTreeRootWithTopology,
   collectStepTreeAncestorIds,
+  flattenVisibleStepTreeRows,
   STEP_MODEL_ROOT_ID,
   STEP_MODEL_RENDER_PART_ID,
   STEP_TREE_TOPOLOGY_NODE_PREFIX,
@@ -704,21 +703,34 @@ function stepTreeRootRowIsElidedForWorkspace(root, isAssemblyView) {
   );
 }
 
-function expandableStepTreeNodeIdsForWorkspace(root, { omitRoot = false } = {}) {
+function expandableStepTreeNodeIdsForWorkspace(root, {
+  omitRoot = false,
+  expandedTreeNodeIds = [],
+  loadableTreeNodeIds = []
+} = {}) {
   if (!root) {
     return [];
   }
   const ids = [];
-  const stack = [root];
-  while (stack.length) {
-    const node = stack.pop();
-    const nodeId = stepTreeNodeIdForWorkspace(node);
-    const children = stepTreeNodeChildren(node);
-    if ((!omitRoot || node !== root) && nodeId && children.length) {
-      ids.push(nodeId);
+  const seen = new Set();
+  const loadableTreeNodeIdSet = new Set(
+    (Array.isArray(loadableTreeNodeIds) ? loadableTreeNodeIds : [])
+      .map((id) => String(id || "").trim())
+      .filter(Boolean)
+  );
+  const visibleRows = flattenVisibleStepTreeRows(root, expandedTreeNodeIds, {
+    omitRoot,
+    showAllRootChildren: true
+  });
+  for (const row of visibleRows) {
+    const node = row?.node || row;
+    const nodeId = String(row?.id || "").trim() || stepTreeNodeIdForWorkspace(node);
+    if (!nodeId || seen.has(nodeId)) {
+      continue;
     }
-    for (let index = children.length - 1; index >= 0; index -= 1) {
-      stack.push(children[index]);
+    if (row?.hasChildren || stepTreeNodeChildren(node).length || loadableTreeNodeIdSet.has(nodeId)) {
+      seen.add(nodeId);
+      ids.push(nodeId);
     }
   }
   return ids;
@@ -728,6 +740,7 @@ function buildStepTreeExpansionMenuState({
   root,
   isAssemblyView = false,
   expandedTreeNodeIds = [],
+  loadableTreeNodeIds = [],
   actionNodeIds = []
 } = {}) {
   const expandedTreeNodeIdSet = new Set(
@@ -744,15 +757,29 @@ function buildStepTreeExpansionMenuState({
     .map((nodeId) => findStepTreeNodeForWorkspace(root, nodeId))
     .filter(Boolean);
   const collapsedActionNodeIds = actionRows
-    .filter((row) => stepTreeNodeChildren(row).length && !expandedTreeNodeIdSet.has(stepTreeNodeIdForWorkspace(row)))
+    .filter((row) => (
+      (
+        stepTreeNodeChildren(row).length ||
+        loadableTreeNodeIds.includes(stepTreeNodeIdForWorkspace(row))
+      ) &&
+      !expandedTreeNodeIdSet.has(stepTreeNodeIdForWorkspace(row))
+    ))
     .map((row) => stepTreeNodeIdForWorkspace(row))
     .filter(Boolean);
   const expandedActionNodeIds = actionRows
-    .filter((row) => stepTreeNodeChildren(row).length && expandedTreeNodeIdSet.has(stepTreeNodeIdForWorkspace(row)))
+    .filter((row) => (
+      (
+        stepTreeNodeChildren(row).length ||
+        loadableTreeNodeIds.includes(stepTreeNodeIdForWorkspace(row))
+      ) &&
+      expandedTreeNodeIdSet.has(stepTreeNodeIdForWorkspace(row))
+    ))
     .map((row) => stepTreeNodeIdForWorkspace(row))
     .filter(Boolean);
   const expandableTreeNodeIds = expandableStepTreeNodeIdsForWorkspace(root, {
-    omitRoot: stepTreeRootRowIsElidedForWorkspace(root, isAssemblyView)
+    omitRoot: stepTreeRootRowIsElidedForWorkspace(root, isAssemblyView),
+    expandedTreeNodeIds,
+    loadableTreeNodeIds
   });
   const collapsedExpandableTreeNodeIds = expandableTreeNodeIds
     .filter((nodeId) => !expandedTreeNodeIdSet.has(nodeId));
@@ -768,6 +795,22 @@ function buildStepTreeExpansionMenuState({
       expandableTreeNodeIds.length
     )
   };
+}
+
+function visibleStepTreeTopologyReferenceIdsForWorkspace(root, expandedTreeNodeIds, {
+  isAssemblyView = false
+} = {}) {
+  if (!root) {
+    return [];
+  }
+  return uniqueStringList(
+    flattenVisibleStepTreeRows(root, expandedTreeNodeIds, {
+      omitRoot: stepTreeRootRowIsElidedForWorkspace(root, isAssemblyView),
+      showAllRootChildren: true
+    })
+      .map((row) => String(row?.topologyReferenceId || "").trim())
+      .filter(Boolean)
+  );
 }
 
 function findStepTreeTopologyNodeIdForReference(root, referenceId) {
@@ -787,29 +830,6 @@ function findStepTreeTopologyNodeIdForReference(root, referenceId) {
     }
   }
   return "";
-}
-
-function focusedAssemblyInteractionNodeId(root, nodeIds) {
-  if (!root || !Array.isArray(nodeIds) || !nodeIds.length) {
-    return "";
-  }
-  let bestNodeId = "";
-  let bestDepth = -1;
-  for (const nodeId of nodeIds) {
-    const normalizedNodeId = String(nodeId || "").trim();
-    if (!normalizedNodeId) {
-      continue;
-    }
-    const path = assemblyPathToNode(root, normalizedNodeId);
-    const node = path[path.length - 1] || null;
-    const children = Array.isArray(node?.children) ? node.children : [];
-    if (!children.length || path.length <= bestDepth) {
-      continue;
-    }
-    bestNodeId = normalizedNodeId;
-    bestDepth = path.length;
-  }
-  return bestNodeId;
 }
 
 function childAssemblyNodeIdForPickedLeaf(node, leafPartId) {
@@ -2833,6 +2853,14 @@ export default function CadWorkspace({
   }, [assemblyLeafParts, isAssemblyView, selectedMeshData?.bounds, stepTreeRoot]);
   const assemblyNodes = useMemo(() => flattenAssemblyNodes(assemblyRoot), [assemblyRoot]);
   const stepTreeNodes = useMemo(() => flattenAssemblyNodes(stepTreeRoot), [stepTreeRoot]);
+  const validAssemblySelectionIds = useMemo(
+    () => stepTreeNodes.map((node) => String(node?.id || "").trim()).filter(Boolean),
+    [stepTreeNodes]
+  );
+  const validAssemblySelectionIdSet = useMemo(
+    () => new Set(validAssemblySelectionIds),
+    [validAssemblySelectionIds]
+  );
   const assemblyRootNodeId = useMemo(
     () => rootAssemblyInspectionNodeId(assemblyRoot),
     [assemblyRoot]
@@ -2869,70 +2897,52 @@ export default function CadWorkspace({
       return [];
     }
     return uniqueStringList(
-      [
-        ...expandedStepTreeNodeIds,
-        ...focusedAssemblyNodeIds
-      ]
+      expandedStepTreeNodeIds
         .map((id) => String(id || "").trim())
         .filter((id) => id && loadableStepTreeTopologyNodeIdSet.has(id))
     );
   }, [
     expandedStepTreeNodeIds,
-    focusedAssemblyNodeIds,
     isAssemblyView,
     isStepView,
     loadableStepTreeTopologyNodeIdSet,
     selectedEntryHasReferences
   ]);
-  const assemblyCurrentNodeId = assemblyRootNodeId;
-  const focusedAssemblyInteractionId = useMemo(
-    () => (isAssemblyView ? focusedAssemblyInteractionNodeId(assemblyRoot, focusedAssemblyNodeIds) : ""),
-    [assemblyRoot, focusedAssemblyNodeIds, isAssemblyView]
-  );
-  const assemblyInteractionNodeId = focusedAssemblyInteractionId || (
-    focusedAssemblyNodeIds.length ? "" : assemblyCurrentNodeId
-  );
-  const assemblyInteractionNode = useMemo(
-    () => (assemblyInteractionNodeId ? findAssemblyNode(assemblyRoot, assemblyInteractionNodeId) || assemblyRoot : null),
-    [assemblyInteractionNodeId, assemblyRoot]
-  );
-  const assemblyInteractionNodeChildren = useMemo(
-    () => (Array.isArray(assemblyInteractionNode?.children) ? assemblyInteractionNode.children : []),
-    [assemblyInteractionNode]
-  );
-  const selectableAssemblyNodeIds = useMemo(
-    () => {
-      if (!isAssemblyView || !assemblyInteractionNodeId) {
-        return [];
-      }
-      const focusedNodeIdSet = new Set(focusedAssemblyNodeIds);
-      return selectableAssemblyNodeIdsForInspection(assemblyRoot, assemblyInteractionNodeId)
-        .filter((nodeId) => !focusedNodeIdSet.has(String(nodeId || "").trim()));
-    },
-    [assemblyInteractionNodeId, assemblyRoot, focusedAssemblyNodeIds, isAssemblyView]
-  );
-  const selectableAssemblyNodeIdSet = useMemo(
-    () => new Set(selectableAssemblyNodeIds),
-    [selectableAssemblyNodeIds]
-  );
-  const treeSelectableAssemblyNodeIds = useMemo(
+  const viewerSelectableAssemblyNodeIds = useMemo(
     () => (isAssemblyView
-      ? selectableTreeNodeIdsForIsolation(assemblyRoot, focusedAssemblyNodeIds, assemblyRootNodeId)
+      ? selectableViewerNodeIdsForExpandedTree(assemblyRoot, expandedStepTreeNodeIds, {
+        rootId: assemblyRootNodeId,
+        isolatedNodeIds: focusedAssemblyNodeIds,
+        topologyNodeIds: requestedStepTreeTopologyNodeIds
+      })
       : []),
-    [assemblyRoot, assemblyRootNodeId, focusedAssemblyNodeIds, isAssemblyView]
+    [
+      assemblyRoot,
+      assemblyRootNodeId,
+      expandedStepTreeNodeIds,
+      focusedAssemblyNodeIds,
+      isAssemblyView,
+      requestedStepTreeTopologyNodeIds
+    ]
   );
-  const treeSelectableAssemblyNodeIdSet = useMemo(
-    () => new Set(treeSelectableAssemblyNodeIds),
-    [treeSelectableAssemblyNodeIds]
+  const viewerSelectableAssemblyNodeIdSet = useMemo(
+    () => new Set(viewerSelectableAssemblyNodeIds),
+    [viewerSelectableAssemblyNodeIds]
   );
   const assemblyParts = useMemo(() => {
-    return assemblyInteractionNodeChildren.length
-      ? assemblyInteractionNodeChildren.map((node) => ({
-        ...node,
-        leafPartIds: descendantLeafPartIds(node)
-      }))
+    return viewerSelectableAssemblyNodeIds.length
+      ? viewerSelectableAssemblyNodeIds
+        .map((nodeId) => findAssemblyNode(assemblyRoot, nodeId))
+        .filter(Boolean)
+        .map((node) => ({
+          ...node,
+          leafPartIds: descendantLeafPartIds(node)
+        }))
       : [];
-  }, [assemblyInteractionNodeChildren]);
+  }, [
+    assemblyRoot,
+    viewerSelectableAssemblyNodeIds
+  ]);
   const assemblyPickPartIdMap = useMemo(() => {
     return buildAssemblyLeafToNodePickMap(assemblyParts);
   }, [assemblyParts]);
@@ -2950,10 +2960,6 @@ export default function CadWorkspace({
     }
     return map;
   }, [stepLeafParts, stepTreeNodes]);
-  const validAssemblySelectionIds = useMemo(
-    () => stepTreeNodes.map((node) => String(node?.id || "").trim()).filter(Boolean),
-    [stepTreeNodes]
-  );
   useEffect(() => {
     if (!isAssemblyView || !assemblyRoot) {
       setIsolatedAssemblyNodeIds((current) => (current.length ? [] : current));
@@ -3254,15 +3260,14 @@ export default function CadWorkspace({
     }
     setDxfBendSettings((current) => normalizeDxfBendSettings(selectedDxfData, current));
   }, [selectedDxfData, selectedDxfFileRef]);
-  const assemblyInteractionNodeHasChildren = assemblyInteractionNodeChildren.length > 0;
   const focusedAssemblyTopologyActive = Boolean(
     isAssemblyView &&
-    focusedAssemblyNodeIds.length &&
-    !assemblyInteractionNodeHasChildren
+    requestedStepTreeTopologyNodeIds.length > 0 &&
+    viewerSelectableAssemblyNodeIds.length < 1
   );
   const viewerInAssemblyMode =
     isAssemblyView &&
-    assemblyInteractionNodeHasChildren;
+    viewerSelectableAssemblyNodeIds.length > 0;
   const viewerMode = viewerInAssemblyMode ? "assembly" : "part";
   const drawModeActive = selectedEntrySourceFormat === RENDER_FORMAT.STEP && tabToolMode === TAB_TOOL_MODE.DRAW;
   const selectionCountBase = selectedPartIds.length + selectedReferenceIds.length + selectedMateIds.length;
@@ -5226,9 +5231,7 @@ export default function CadWorkspace({
     setHoveredListReferenceId,
     setHoveredModelReferenceId,
     assemblyParts,
-    validAssemblyPartIds: isAssemblyView && focusedAssemblyNodeIds.length
-      ? treeSelectableAssemblyNodeIds
-      : validAssemblySelectionIds,
+    validAssemblyPartIds: validAssemblySelectionIds,
     validHiddenPartIds: validAssemblyLeafIds,
     selectedPartIdsRef,
     setSelectedPartIds,
@@ -5298,7 +5301,10 @@ export default function CadWorkspace({
     }
     return uniqueStringList(
       focusedAssemblyNodeIds
-        .flatMap((nodeId) => renderPartIdsForAssemblySelection(nodeId))
+        .flatMap((nodeId) => [
+          nodeId,
+          ...renderPartIdsForAssemblySelection(nodeId)
+        ])
         .map((partId) => String(partId || "").trim())
         .filter(Boolean)
     );
@@ -5362,6 +5368,36 @@ export default function CadWorkspace({
     stepTreeRoot,
     stepTreeTopologyReferences
   ]);
+  const isolatedStepTreeSelectableNodeIds = useMemo(() => {
+    if (!isAssemblyView || !focusedAssemblyNodeIds.length) {
+      return null;
+    }
+    const treeRootForIsolation = displayStepTreeRoot || stepTreeRoot;
+    return uniqueStringList(
+      focusedAssemblyNodeIds.flatMap((nodeId) => collectStepTreeSubtreeIds(treeRootForIsolation, nodeId))
+    );
+  }, [
+    displayStepTreeRoot,
+    focusedAssemblyNodeIds,
+    isAssemblyView,
+    stepTreeRoot
+  ]);
+  const visibleStepTreeTopologyReferenceIds = useMemo(() => (
+    isStepView && isAssemblyView
+      ? visibleStepTreeTopologyReferenceIdsForWorkspace(displayStepTreeRoot, expandedStepTreeNodeIds, {
+        isAssemblyView
+      })
+      : []
+  ), [
+    displayStepTreeRoot,
+    expandedStepTreeNodeIds,
+    isAssemblyView,
+    isStepView
+  ]);
+  const visibleStepTreeTopologyReferenceIdSet = useMemo(
+    () => new Set(visibleStepTreeTopologyReferenceIds),
+    [visibleStepTreeTopologyReferenceIds]
+  );
   const stepTreeCopyReferenceMap = useMemo(
     () => buildStepTreeCopyReferenceMap(displayStepTreeRoot),
     [displayStepTreeRoot]
@@ -5407,8 +5443,22 @@ export default function CadWorkspace({
     if (stepModuleTreeSelectionDisabled) {
       return [];
     }
+    if (isAssemblyView) {
+      if (!visibleStepTreeTopologyReferenceIdSet.size) {
+        return [];
+      }
+      return assemblyStepTreeTopologyReferences.filter((reference) => (
+        visibleStepTreeTopologyReferenceIdSet.has(String(reference?.id || "").trim())
+      ));
+    }
     return effectiveVisibleReferences;
-  }, [effectiveVisibleReferences, stepModuleTreeSelectionDisabled]);
+  }, [
+    assemblyStepTreeTopologyReferences,
+    effectiveVisibleReferences,
+    isAssemblyView,
+    stepModuleTreeSelectionDisabled,
+    visibleStepTreeTopologyReferenceIdSet
+  ]);
   const viewerPickableFaces = useMemo(
     () => viewerPickableReferences.filter((reference) => isFaceReference(reference)),
     [isFaceReference, viewerPickableReferences]
@@ -5425,7 +5475,7 @@ export default function CadWorkspace({
     viewerPickableVertices.length
   );
   const topologySelectionActive =
-    (isAssemblyView && focusedAssemblyTopologyActive) ||
+    (isAssemblyView && requestedStepTreeTopologyNodeIds.length > 0) ||
     topLevelReferenceSelectionActive;
   const referenceSelectionUnavailable = stepModuleTreeSelectionDisabled || (
     effectiveRenderFormat === RENDER_FORMAT.STEP &&
@@ -6963,12 +7013,42 @@ export default function CadWorkspace({
     if (!normalizedNodeId) {
       return;
     }
-    setExpandedStepTreeNodeIds((current) => (
-      current.includes(normalizedNodeId)
-        ? current.filter((id) => id !== normalizedNodeId)
-        : [...current, normalizedNodeId]
-    ));
-  }, []);
+    const collapsing = expandedStepTreeNodeIds.includes(normalizedNodeId);
+    const collapseExitsIsolation = collapsing &&
+      isAssemblyView &&
+      assemblyRoot &&
+      focusedAssemblyNodeIds.some((focusedNodeId) => (
+        assemblyNodeContainsNode(assemblyRoot, normalizedNodeId, focusedNodeId)
+      ));
+    const collapsedSubtreeIds = collapseExitsIsolation
+      ? new Set(collectStepTreeSubtreeIds(displayStepTreeRoot || stepTreeRoot, normalizedNodeId))
+      : null;
+    setExpandedStepTreeNodeIds((current) => {
+      if (current.includes(normalizedNodeId)) {
+        return current.filter((id) => (
+          collapsedSubtreeIds
+            ? !collapsedSubtreeIds.has(id)
+            : id !== normalizedNodeId
+        ));
+      }
+      return uniqueStringList([...current, normalizedNodeId]);
+    });
+    if (collapseExitsIsolation) {
+      setIsolatedAssemblyNodeIds((current) => {
+        const next = current.filter((focusedNodeId) => (
+          !assemblyNodeContainsNode(assemblyRoot, normalizedNodeId, focusedNodeId)
+        ));
+        return next.length === current.length ? current : next;
+      });
+    }
+  }, [
+    assemblyRoot,
+    displayStepTreeRoot,
+    expandedStepTreeNodeIds,
+    focusedAssemblyNodeIds,
+    isAssemblyView,
+    stepTreeRoot
+  ]);
 
   const removeSelectedAssemblyNode = useCallback((nodeId) => {
     const normalizedNodeId = String(nodeId || "").trim();
@@ -7001,9 +7081,9 @@ export default function CadWorkspace({
       return removeSelectedAssemblyNode(normalizedPartId);
     }
     const alreadySelected = selectedPartIdsRef.current.includes(normalizedPartId);
-    const scopedSelectableNodeIds = source === "tree"
-      ? treeSelectableAssemblyNodeIdSet
-      : selectableAssemblyNodeIdSet;
+    const scopedSelectableNodeIds = source === "viewer"
+      ? viewerSelectableAssemblyNodeIdSet
+      : validAssemblySelectionIdSet;
     if (isAssemblyView && !scopedSelectableNodeIds.has(normalizedPartId) && !alreadySelected) {
       return selectedPartIdsRef.current;
     }
@@ -7051,8 +7131,8 @@ export default function CadWorkspace({
     removeSelectedAssemblyNode,
     revealStepTreeNode,
     renderPartIdForAssemblySelection,
-    selectableAssemblyNodeIdSet,
-    treeSelectableAssemblyNodeIdSet,
+    validAssemblySelectionIdSet,
+    viewerSelectableAssemblyNodeIdSet,
     stepModuleTreeSelectionDisabled,
     stepUpdateInProgress
   ]);
@@ -7124,6 +7204,19 @@ export default function CadWorkspace({
     setCopyStatus("");
   }, []);
 
+  const collapseStepTreeSubtree = useCallback((partId) => {
+    const normalizedPartId = String(partId || "").trim();
+    const treeRootForCollapse = displayStepTreeRoot || stepTreeRoot;
+    const collapsedIds = new Set(collectStepTreeSubtreeIds(treeRootForCollapse, normalizedPartId));
+    if (!collapsedIds.size) {
+      return;
+    }
+    setExpandedStepTreeNodeIds((current) => current.filter((id) => !collapsedIds.has(id)));
+  }, [
+    displayStepTreeRoot,
+    stepTreeRoot
+  ]);
+
   const focusStepTreeNode = useCallback((nodeId) => {
     if (!isAssemblyView || !assemblyRoot) {
       return;
@@ -7149,6 +7242,7 @@ export default function CadWorkspace({
     const targetLeafIdSet = new Set(targetLeafIds);
     clearAssemblySelectionForFocus();
     setIsolatedAssemblyNodeIds(targetNodeIds);
+    setExpandedStepTreeNodeIds((current) => uniqueStringList([...current, ...targetNodeIds]));
     setHiddenPartIds((current) => {
       if (!targetLeafIdSet.size) {
         return current;
@@ -7158,6 +7252,7 @@ export default function CadWorkspace({
     });
     for (const targetNodeId of targetNodeIds) {
       revealStepTreeNode(targetNodeId, {
+        expandSelf: true,
         source: "tree"
       });
     }
@@ -7170,8 +7265,14 @@ export default function CadWorkspace({
   ]);
 
   const handleExitIsolate = useCallback(() => {
+    for (const nodeId of focusedAssemblyNodeIds) {
+      collapseStepTreeSubtree(nodeId);
+    }
     setIsolatedAssemblyNodeIds((current) => (current.length ? [] : current));
-  }, []);
+  }, [
+    collapseStepTreeSubtree,
+    focusedAssemblyNodeIds
+  ]);
 
   const handleExitSingleIsolate = useCallback((nodeId) => {
     const normalizedNodeId = String(nodeId || "").trim();
@@ -7179,11 +7280,15 @@ export default function CadWorkspace({
       handleExitIsolate();
       return;
     }
+    collapseStepTreeSubtree(normalizedNodeId);
     setIsolatedAssemblyNodeIds((current) => {
       const next = current.filter((id) => String(id || "").trim() !== normalizedNodeId);
       return next.length === current.length ? current : next;
     });
-  }, [handleExitIsolate]);
+  }, [
+    collapseStepTreeSubtree,
+    handleExitIsolate
+  ]);
 
   const clearAssemblySelection = useCallback(() => {
     clearAssemblySelectionForFocus();
@@ -7207,19 +7312,6 @@ export default function CadWorkspace({
       clearAssemblySelection();
     }
   }, [clearAssemblySelection, selectedWholeEntryCadRefToken, stepModuleTreeSelectionDisabled]);
-
-  const collapseStepTreeSubtree = useCallback((partId) => {
-    const normalizedPartId = String(partId || "").trim();
-    const treeRootForCollapse = displayStepTreeRoot || stepTreeRoot;
-    const collapsedIds = new Set(collectStepTreeSubtreeIds(treeRootForCollapse, normalizedPartId));
-    if (!collapsedIds.size) {
-      return;
-    }
-    setExpandedStepTreeNodeIds((current) => current.filter((id) => !collapsedIds.has(id)));
-  }, [
-    displayStepTreeRoot,
-    stepTreeRoot
-  ]);
 
   const clearSelectionForHiddenLeafIds = useCallback((leafIds, nodeId = "") => {
     const hiddenLeafIds = new Set(
@@ -7566,22 +7658,60 @@ export default function CadWorkspace({
     setViewerContextMenu(null);
   }, [selectedKey]);
 
+  const openGlobalViewerContextMenu = useCallback(({ clientX = 0, clientY = 0 } = {}) => {
+    if (!isStepView) {
+      setViewerContextMenu(null);
+      return;
+    }
+    const expansionState = buildStepTreeExpansionMenuState({
+      root: displayStepTreeRoot,
+      isAssemblyView,
+      expandedTreeNodeIds: expandedStepTreeNodeIds,
+      loadableTreeNodeIds: loadableStepTreeTopologyNodeIds,
+      actionNodeIds: []
+    });
+    setViewerContextMenu({
+      x: Number(clientX) || 0,
+      y: Number(clientY) || 0,
+      global: true,
+      label: "Viewer",
+      hidden: true,
+      showShowAll: hiddenPartIds.length > 0,
+      showCameraActions: true,
+      showExpandCollapse: expansionState.showExpandCollapse || expandedStepTreeNodeIds.length > 0,
+      collapsedExpandableTreeNodeIds: expansionState.collapsedExpandableTreeNodeIds,
+      expandedExpandableTreeNodeIds: expandedStepTreeNodeIds,
+      expandAllDisabled: expansionState.collapsedExpandableTreeNodeIds.length < 1,
+      collapseAllDisabled: expandedStepTreeNodeIds.length < 1
+    });
+  }, [
+    displayStepTreeRoot,
+    expandedStepTreeNodeIds,
+    hiddenPartIds.length,
+    isAssemblyView,
+    isStepView,
+    loadableStepTreeTopologyNodeIds
+  ]);
+
   const handleModelReferenceContext = useCallback((referenceId, { clientX = 0, clientY = 0 } = {}) => {
     if (stepUpdateInProgress || stepModuleTreeSelectionDisabled) {
       setViewerContextMenu(null);
       return;
     }
     const pickedPartId = String(referenceId || "").trim();
+    if (!pickedPartId) {
+      openGlobalViewerContextMenu({ clientX, clientY });
+      return;
+    }
     const topologyReference = effectiveActiveReferenceMap.get(pickedPartId) || null;
     if (topologyReference && (isFaceReference(topologyReference) || isEdgeReference(topologyReference))) {
       const selected = selectedReferenceIdsRef.current.includes(pickedPartId);
-      const actionReferenceIds = selected
-        ? uniqueStringList(
-          selectedReferenceIdsRef.current
-            .map((id) => String(id || "").trim())
-            .filter(Boolean)
-        )
-        : [pickedPartId];
+      const selectedContextReferenceIds = uniqueStringList(
+        selectedReferenceIdsRef.current
+          .map((id) => String(id || "").trim())
+          .filter(Boolean)
+      );
+      const actionReferenceIds = uniqueStringList([...selectedContextReferenceIds, pickedPartId]);
       const referencesForCopy = actionReferenceIds
         .map((id) => (
           stepTreeCopyReferenceMap.get(id) ||
@@ -7589,6 +7719,23 @@ export default function CadWorkspace({
           copyReferenceForRawSelectorSelection(id, "topology")
         ))
         .filter(Boolean);
+      const fitReferenceIds = actionReferenceIds;
+      const selectedFitPartIds = uniqueStringList(
+        selectedPartIdsRef.current
+          .map((id) => String(id || "").trim())
+          .filter(Boolean)
+          .flatMap((id) => renderPartIdsForAssemblySelection(id, id))
+      );
+      const fitPartIds = uniqueStringList([
+        ...selectedFitPartIds,
+        ...fitReferenceIds
+          .map((id) => referencePartId(
+            effectiveActiveReferenceMap.get(id) ||
+            (id === pickedPartId ? topologyReference : null)
+          ))
+          .filter(Boolean)
+      ]);
+      const fitAvailable = fitReferenceIds.length > 0 || fitPartIds.length > 0;
       const { lines } = copyPayloadWithSelectedIdFallback(buildSelectionCopyPayload({
         references: referencesForCopy.length ? referencesForCopy : [topologyReference],
         parts: [],
@@ -7611,17 +7758,21 @@ export default function CadWorkspace({
         showIsolate: false,
         showHideOther: false,
         showVisibility: false,
-        showHideAll: false
+        showHideAll: false,
+        showCameraActions: true,
+        zoomToFitDisabled: !fitAvailable,
+        fitReferenceIds,
+        fitPartIds
       });
       return;
     }
     if (!viewerInAssemblyMode) {
-      setViewerContextMenu(null);
+      openGlobalViewerContextMenu({ clientX, clientY });
       return;
     }
     const nodeId = resolvePickedAssemblyPartId(pickedPartId);
     if (!nodeId) {
-      setViewerContextMenu(null);
+      openGlobalViewerContextMenu({ clientX, clientY });
       return;
     }
     const node = assemblyPartMap.get(nodeId) || findAssemblyNode(assemblyRoot, nodeId) || null;
@@ -7635,18 +7786,29 @@ export default function CadWorkspace({
     const hidden = leafIds.length > 0 && leafIds.every((id) => hiddenPartIds.includes(id));
     const focused = focusedAssemblyNodeIds.includes(nodeId);
     const selected = selectedPartIdsRef.current.includes(nodeId);
-    const selectedContextNodeIds = selected
-      ? uniqueStringList(
-        selectedPartIdsRef.current
-          .map((id) => String(id || "").trim())
-          .filter(Boolean)
-      )
-      : [];
-    const actionNodeIds = selectedContextNodeIds.length ? selectedContextNodeIds : [nodeId];
+    const actionNodeIds = uniqueStringList([
+      ...selectedPartIdsRef.current
+        .map((id) => String(id || "").trim())
+        .filter(Boolean),
+      nodeId
+    ]);
+    const fitReferenceIds = uniqueStringList(
+      selectedReferenceIdsRef.current
+        .map((id) => String(id || "").trim())
+        .filter(Boolean)
+    );
+    const fitPartIds = uniqueStringList([
+      ...actionNodeIds.flatMap((id) => renderPartIdsForAssemblySelection(
+        id,
+        id === nodeId ? pickedPartId : id
+      ))
+    ]);
+    const fitAvailable = fitReferenceIds.length > 0 || fitPartIds.length > 0;
     const expansionState = buildStepTreeExpansionMenuState({
       root: displayStepTreeRoot,
       isAssemblyView,
       expandedTreeNodeIds: expandedStepTreeNodeIds,
+      loadableTreeNodeIds: loadableStepTreeTopologyNodeIds,
       actionNodeIds
     });
     const contextCopyReference = stepTreeCopyReferenceMap.get(nodeId) ||
@@ -7682,9 +7844,13 @@ export default function CadWorkspace({
       hideOtherDisabled: hidden,
       showVisibility: !focused,
       visibilityDisabled: focused,
-      showHideAll: true,
+      showHideAll: false,
       hideAllDisabled: false,
-      hideAllLabel: hidden ? "Reveal all instances" : "Hide all instances",
+      hideAllLabel: "Show all",
+      showCameraActions: true,
+      zoomToFitDisabled: !fitAvailable,
+      fitPartIds,
+      fitReferenceIds,
       showExpandCollapse: expansionState.showExpandCollapse,
       collapsedActionNodeIds: expansionState.collapsedActionNodeIds,
       expandedActionNodeIds: expansionState.expandedActionNodeIds,
@@ -7699,17 +7865,19 @@ export default function CadWorkspace({
     assemblyPartMap,
     assemblyRoot,
     displayStepTreeRoot,
-    expandedStepTreeNodeIds,
     focusedAssemblyNodeIds,
     effectiveActiveReferenceMap,
     hiddenPartIds,
     isAssemblyView,
     isEdgeReference,
     isFaceReference,
+    loadableStepTreeTopologyNodeIds,
     renderPartIdsForAssemblySelection,
+    openGlobalViewerContextMenu,
     resolvePickedAssemblyPartId,
     selectedEntry,
     stepTreeCopyReferenceMap,
+    expandedStepTreeNodeIds,
     stepModuleTreeSelectionDisabled,
     stepUpdateInProgress,
     viewerInAssemblyMode
@@ -7954,6 +8122,36 @@ export default function CadWorkspace({
     handleHideAllParts,
     handleShowAllHiddenParts
   ]);
+
+  const resetZoomViewerContextMenu = useCallback(() => {
+    if (!viewerRef.current?.resetZoom?.()) {
+      setCopyStatus("CAD Viewer camera not ready");
+    }
+  }, []);
+
+  const zoomToFitViewerContextMenu = useCallback((menu) => {
+    const fitPartIds = uniqueStringList(
+      (Array.isArray(menu?.fitPartIds) ? menu.fitPartIds : [])
+        .map((id) => String(id || "").trim())
+        .filter(Boolean)
+    );
+    const fitReferenceIds = uniqueStringList(
+      (Array.isArray(menu?.fitReferenceIds) ? menu.fitReferenceIds : [])
+        .map((id) => String(id || "").trim())
+        .filter(Boolean)
+    );
+    if (!fitPartIds.length && !fitReferenceIds.length) {
+      setCopyStatus("No geometry to fit");
+      return;
+    }
+    if (!viewerRef.current?.zoomToFitSelection?.({
+      partIds: fitPartIds,
+      referenceIds: fitReferenceIds,
+      animate: true
+    })) {
+      setCopyStatus("No geometry to fit");
+    }
+  }, []);
 
   const expandSelectedViewerContextMenuNodes = useCallback((menu) => {
     for (const nodeId of Array.isArray(menu?.collapsedActionNodeIds) ? menu.collapsedActionNodeIds : []) {
@@ -8439,17 +8637,12 @@ export default function CadWorkspace({
     { id: DRAWING_TOOL.ERASE, label: "Erase", Icon: Eraser }
   ];
   const renderDisplaySettings = isStepView ? displaySettings : null;
-  const selectedStepEdgeAvailability =
-    selectedDisplayEdgeRuntime?.edgeRendering ||
-    selectedEntry?.artifact?.edgeRendering ||
-    null;
   const themeSections = (
     <>
       {isStepView ? (
         <DisplaySettingsSection
           displaySettings={displaySettings}
           updateDisplaySettings={updateDisplaySettings}
-          edgeAvailability={selectedStepEdgeAvailability}
           clipBounds={selectedMeshData?.bounds || null}
           showClip
         />
@@ -8546,6 +8739,8 @@ export default function CadWorkspace({
           onViewerContextMenuHideAll={hideAllViewerContextMenuNodes}
           onViewerContextMenuHide={hideViewerContextMenuNode}
           onViewerContextMenuReveal={revealViewerContextMenuNode}
+          onViewerContextMenuResetZoom={resetZoomViewerContextMenu}
+          onViewerContextMenuZoomToFit={zoomToFitViewerContextMenu}
           onViewerContextMenuExpandSelected={expandSelectedViewerContextMenuNodes}
           onViewerContextMenuCollapseSelected={collapseSelectedViewerContextMenuNodes}
           onViewerContextMenuExpandAll={expandAllViewerContextMenuNodes}
@@ -8672,6 +8867,10 @@ export default function CadWorkspace({
                 handleStepAnimationPlayToggle={handleStepModuleAnimationPlayToggle}
                 drawToolActive={drawToolActive}
                 handleSelectTabToolMode={handleSelectTabToolMode}
+                displayMode={isStepView ? displaySettings.mode : undefined}
+                onDisplayModeChange={isStepView ? updateDisplayMode : undefined}
+                projection={isStepView ? displaySettings.projection : undefined}
+                onProjectionChange={isStepView ? updateDisplayProjection : undefined}
                 viewerLoading={viewerLoading}
                 selectedMeshData={selectedMeshData}
                 selectedDxfData={selectedDxfData}
@@ -8789,7 +8988,7 @@ export default function CadWorkspace({
                 selectedPartIds={selectedPartIds}
                 selectedReferenceIds={selectedReferenceIds}
                 selectedMateIds={selectedMateIds}
-                selectableNodeIds={isAssemblyView ? treeSelectableAssemblyNodeIds : null}
+                selectableNodeIds={isolatedStepTreeSelectableNodeIds}
                 activeTreeNodeId={activeStepTreeNodeId}
                 activeTreeNodeScrollKey={activeTreeNodeScrollKey}
                 hoveredPartId={hoveredPartId}
@@ -8814,7 +9013,6 @@ export default function CadWorkspace({
                 treeSelectionDisabled={stepModuleTreeSelectionDisabled}
                 treeSelectionDisabledReason={stepModuleTreeSelectionDisabledReason}
                 onTogglePartVisibility={togglePartVisibility}
-                hideSelectedParts={handleHideSelectedParts}
                 hideOtherSelectedParts={handleHideOtherSelectedParts}
                 hideAllParts={handleHideAllParts}
                 showAllHiddenParts={handleShowAllHiddenParts}

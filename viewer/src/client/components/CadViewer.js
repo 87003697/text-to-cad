@@ -1,6 +1,7 @@
 "use client";
 
 import { forwardRef, useCallback, useEffect, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { Minus, Plus, RotateCcw } from "lucide-react";
 import { parseCadRefToken } from "cadjs/lib/cadRefs";
 import { STEP_TREE_TOPOLOGY_NODE_PREFIX } from "cadjs/lib/step/stepTree";
 import { copyImageBlobToClipboard } from "@/ui/clipboard";
@@ -54,6 +55,7 @@ import {
 import {
   defaultSceneGridRadius,
   getLightingScopeRadius,
+  getProportionalLightingScopeRadius,
   getSceneScaleSettings,
   normalizeSceneScaleMode,
   VIEWER_SCENE_SCALE
@@ -76,7 +78,8 @@ import { updateGridHelper as updateStageGridHelper } from "cadjs/lib/viewer/stag
 import {
   autoZoomFrameForBounds,
   DEFAULT_AUTO_ZOOM_PADDING,
-  focusedDisplayRecordsBounds
+  displayRecordsBounds,
+  mergeBoundsList
 } from "cadjs/lib/viewer/autoZoom";
 import { applyMaterialSettingsToRecord } from "cadjs/lib/viewer/surfaceMaterials";
 import {
@@ -137,27 +140,7 @@ import {
   getEnvironmentPresetById,
   THEME_FLOOR_MODES
 } from "cadjs/lib/themeSettings";
-import {
-  Tooltip,
-  TooltipContent,
-  TooltipProvider,
-  TooltipTrigger
-} from "./ui/tooltip";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger
-} from "./ui/select";
 import ViewPlaneControl from "./viewer/ViewPlaneControl";
-import {
-  OrthographicProjectionIcon,
-  PerspectiveProjectionIcon
-} from "./viewer/ProjectionModeIcons";
-import {
-  DISPLAY_MODE_OPTIONS,
-  displayModeOptionForValue
-} from "./viewer/DisplayModeOptions";
 import { useViewerDrawingOverlay } from "./viewer/hooks/useViewerDrawingOverlay";
 import { useViewerPicking } from "./viewer/hooks/useViewerPicking";
 import { useViewerRuntime } from "./viewer/hooks/useViewerRuntime";
@@ -193,13 +176,6 @@ const DEFAULT_DAMPING_FACTOR = 0.14;
 const DEFAULT_ZOOM_SPEED = 4.5;
 const COARSE_POINTER_ZOOM_SPEED = 1.6;
 const EXPLODED_VIEW_ANIMATION_DURATION_MS = 1000;
-const AUTO_ZOOM_SPEED_MS = Object.freeze({
-  DEFAULT: 400,
-  EXPLODED: EXPLODED_VIEW_ANIMATION_DURATION_MS,
-  ISOLATE: 200,
-  RESET: 200,
-  RESIZE: 0
-});
 const ACCELERATED_WHEEL_ZOOM_SPEED = 10;
 const TRACKPAD_PINCH_ZOOM_SPEED = 14;
 const COARSE_POINTER_PINCH_ZOOM_SPEED = 2.4;
@@ -223,7 +199,6 @@ const DEFAULT_VIEW_PLANE_ORIENTATION = Object.freeze({
   z: [0, 0, 1]
 });
 const AUTO_ZOOM_PADDING = DEFAULT_AUTO_ZOOM_PADDING;
-const AUTO_ZOOM_TRANSITION_EASING = CAMERA_TRANSITION_EASING.EASE_IN_OUT_SINE;
 const WORLD_UP = Object.freeze([0, 0, 1]);
 const CAD_COORDINATE_SYSTEM = "cad-z-up-v1";
 const ROBOT_COORDINATE_SYSTEM = "cad-z-up-robot-framing-v2";
@@ -234,27 +209,14 @@ const VIEW_PLANE_DEFAULT_PRESET = {
   direction: DEFAULT_VIEW_DIRECTION,
   up: WORLD_UP
 };
-const VIEW_MODE_CONTROL_SECTION_CLASSES = "cad-glass-surface pointer-events-auto absolute z-30 inline-flex w-fit flex-col items-center gap-1 rounded-full border border-sidebar-border p-1 text-sidebar-foreground shadow-sm";
-const PROJECTION_CONTROL_CLASSES = "grid grid-rows-2 overflow-hidden rounded-full bg-sidebar-accent/20 ring-1 ring-inset ring-sidebar-border/70";
-const PROJECTION_TAB_BUTTON_CLASSES = "grid size-6 place-items-center transition duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/45";
-const STYLE_CONTROL_BUTTON_CLASSES = "!grid !size-6 !place-items-center !justify-center rounded-full !border-0 !bg-transparent !p-0 text-sidebar-foreground/70 !shadow-none transition duration-150 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground focus-visible:ring-2 focus-visible:ring-ring/45 data-[state=open]:bg-sidebar-accent data-[state=open]:text-sidebar-accent-foreground";
-const VIEW_PLANE_CONTROL_SIZE = "6.71875rem";
+const DISPLAY_TOOLBAR_CLASSES = "cad-glass-surface pointer-events-auto absolute z-30 inline-flex h-8 w-fit items-center gap-0.5 rounded-md border border-sidebar-border p-1 text-sidebar-foreground shadow-sm";
+const DISPLAY_TOOLBAR_BUTTON_CLASSES = "grid size-6 shrink-0 place-items-center rounded-sm text-sidebar-foreground/70 transition hover:bg-sidebar-accent hover:text-sidebar-accent-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/45 disabled:pointer-events-none disabled:opacity-50";
+const VIEW_PLANE_CONTROL_SIZE = "7.5rem";
 const VIEW_PLANE_CONTROL_GAP = "0.5rem";
-const VIEW_MODE_CONTROL_SECTION_BOTTOM_INSET = "0px";
-const PROJECTION_MODE_OPTIONS = Object.freeze([
-  Object.freeze({
-    value: CAMERA_PROJECTION.PERSPECTIVE,
-    label: "Perspective projection",
-    title: "Switch to perspective projection",
-    Icon: PerspectiveProjectionIcon
-  }),
-  Object.freeze({
-    value: CAMERA_PROJECTION.ORTHOGRAPHIC,
-    label: "Orthographic projection",
-    title: "Switch to orthographic projection",
-    Icon: OrthographicProjectionIcon
-  })
-]);
+const ZOOM_CONTROL_CONTENT_WIDTH = "6.875rem";
+const ZOOM_CONTROL_MIN_PERCENT = 10;
+const ZOOM_CONTROL_MAX_PERCENT = 800;
+const ZOOM_CONTROL_STEP_PERCENT = 10;
 const CAD_EDGE_OPACITY = 0.84;
 const DEFAULT_LIGHTING = {
   toneMappingExposure: 1.08,
@@ -572,6 +534,258 @@ function explodedViewTransitionNeedsAnimation(states = []) {
   return false;
 }
 
+function normalizeZoomPercent(value, fallback = 100) {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) {
+    return fallback;
+  }
+  return clamp(numeric, ZOOM_CONTROL_MIN_PERCENT, ZOOM_CONTROL_MAX_PERCENT);
+}
+
+function formatZoomPercent(value) {
+  return `${Math.round(normalizeZoomPercent(value))}%`;
+}
+
+function readCameraTargetDistance(runtime) {
+  if (!runtime?.camera?.position || !runtime?.controls?.target) {
+    return null;
+  }
+  const distance = runtime.camera.position.distanceTo(runtime.controls.target);
+  return Number.isFinite(distance) && distance > 1e-6 ? distance : null;
+}
+
+function readOrthographicHalfHeight(runtime) {
+  const camera = runtime?.camera?.isOrthographicCamera
+    ? runtime.camera
+    : runtime?.orthographicCamera;
+  if (!camera?.isOrthographicCamera) {
+    return null;
+  }
+  const storedHalfHeight = Number(camera.userData?.cadHalfHeight);
+  if (Number.isFinite(storedHalfHeight) && storedHalfHeight > 1e-6) {
+    return storedHalfHeight;
+  }
+  const derivedHalfHeight = Math.abs((Number(camera.top) || 0) - (Number(camera.bottom) || 0)) / 2;
+  return Number.isFinite(derivedHalfHeight) && derivedHalfHeight > 1e-6 ? derivedHalfHeight : null;
+}
+
+function resetRuntimeZoomBaseline(runtime) {
+  if (runtime?.camera?.isOrthographicCamera) {
+    const halfHeight = readOrthographicHalfHeight(runtime);
+    if (halfHeight) {
+      runtime.zoomBaseHalfHeight = halfHeight;
+    }
+    return halfHeight;
+  }
+  const distance = readCameraTargetDistance(runtime);
+  if (distance) {
+    runtime.zoomBaseDistance = distance;
+  }
+  return distance;
+}
+
+function readRuntimeZoomPercent(runtime) {
+  const camera = runtime?.camera;
+  if (!camera) {
+    return 100;
+  }
+  const cameraZoom = Number.isFinite(Number(camera.zoom)) && Number(camera.zoom) > 0
+    ? Number(camera.zoom)
+    : 1;
+  if (camera.isOrthographicCamera) {
+    const halfHeight = readOrthographicHalfHeight(runtime);
+    if (!halfHeight) {
+      return normalizeZoomPercent(cameraZoom * 100);
+    }
+    const baseHalfHeight = Number(runtime.zoomBaseHalfHeight);
+    const normalizedBaseHalfHeight = Number.isFinite(baseHalfHeight) && baseHalfHeight > 1e-6
+      ? baseHalfHeight
+      : resetRuntimeZoomBaseline(runtime) || halfHeight;
+    return normalizeZoomPercent((normalizedBaseHalfHeight / halfHeight) * cameraZoom * 100);
+  }
+  const distance = readCameraTargetDistance(runtime);
+  if (!distance) {
+    return normalizeZoomPercent(cameraZoom * 100);
+  }
+  const baseDistance = Number(runtime.zoomBaseDistance);
+  const normalizedBaseDistance = Number.isFinite(baseDistance) && baseDistance > 1e-6
+    ? baseDistance
+    : resetRuntimeZoomBaseline(runtime) || distance;
+  return normalizeZoomPercent((normalizedBaseDistance / distance) * cameraZoom * 100);
+}
+
+function setRuntimeZoomPercent(runtime, percent) {
+  if (!runtime?.THREE || !runtime?.camera || !runtime?.controls?.target) {
+    return false;
+  }
+  const nextZoom = normalizeZoomPercent(percent) / 100;
+  const camera = runtime.camera;
+  cancelCameraTransition(runtime, { scheduleIdle: false });
+  clearKeyboardOrbitState(runtime.keyboardOrbitState);
+  if (camera.isOrthographicCamera) {
+    const halfHeight = readOrthographicHalfHeight(runtime) || 1;
+    const baseHalfHeight = Number(runtime.zoomBaseHalfHeight);
+    const normalizedBaseHalfHeight = Number.isFinite(baseHalfHeight) && baseHalfHeight > 1e-6
+      ? baseHalfHeight
+      : halfHeight;
+    runtime.zoomBaseHalfHeight = normalizedBaseHalfHeight;
+    camera.zoom = nextZoom * (halfHeight / normalizedBaseHalfHeight);
+    camera.updateProjectionMatrix?.();
+    reapplyRuntimeCameraFrameInsets(runtime);
+  } else {
+    const target = runtime.controls.target;
+    const offset = camera.position.clone().sub(target);
+    const direction = offset.lengthSq() > 1e-8
+      ? offset.normalize()
+      : new runtime.THREE.Vector3(...DEFAULT_VIEW_DIRECTION).normalize();
+    const distance = readCameraTargetDistance(runtime) || direction.length() || 1;
+    const baseDistance = Number(runtime.zoomBaseDistance);
+    const normalizedBaseDistance = Number.isFinite(baseDistance) && baseDistance > 1e-6
+      ? baseDistance
+      : distance;
+    runtime.zoomBaseDistance = normalizedBaseDistance;
+    const minDistance = Number.isFinite(Number(runtime.controls.minDistance))
+      ? Number(runtime.controls.minDistance)
+      : 0.01;
+    const maxDistance = Number.isFinite(Number(runtime.controls.maxDistance)) && Number(runtime.controls.maxDistance) > 0
+      ? Number(runtime.controls.maxDistance)
+      : Number.POSITIVE_INFINITY;
+    const nextDistance = clamp(normalizedBaseDistance / nextZoom, minDistance, maxDistance);
+    camera.position.copy(target.clone().add(direction.multiplyScalar(nextDistance)));
+    camera.zoom = 1;
+    camera.updateProjectionMatrix?.();
+    reapplyRuntimeCameraFrameInsets(runtime);
+  }
+  camera.lookAt(runtime.controls.target);
+  runtime.controls.update?.();
+  runtime.scheduleIdleQuality?.();
+  runtime.requestRender?.();
+  return true;
+}
+
+function ZoomControl({
+  zoomPercent,
+  onZoomPercentChange,
+  onZoomReset
+}) {
+  const [editing, setEditing] = useState(false);
+  const [inputValue, setInputValue] = useState(formatZoomPercent(zoomPercent));
+  const selectOnFocusRef = useRef(false);
+  useEffect(() => {
+    if (!editing) {
+      setInputValue(formatZoomPercent(zoomPercent));
+    }
+  }, [editing, zoomPercent]);
+
+  const commitInputValue = () => {
+    const numericValue = Number(String(inputValue || "").replace(/%/g, "").trim());
+    setEditing(false);
+    if (!Number.isFinite(numericValue) || numericValue <= 0) {
+      const resetValue = 100;
+      setInputValue(formatZoomPercent(resetValue));
+      onZoomPercentChange?.(resetValue);
+      return;
+    }
+    onZoomPercentChange?.(normalizeZoomPercent(numericValue));
+  };
+  const adjustZoom = (delta) => {
+    onZoomPercentChange?.(normalizeZoomPercent(Math.round(zoomPercent) + delta));
+  };
+
+  return (
+    <div
+      className="flex h-6 items-center gap-0.5"
+      style={{ width: ZOOM_CONTROL_CONTENT_WIDTH }}
+      aria-label="Zoom controls"
+      onPointerDown={(event) => {
+        event.stopPropagation();
+      }}
+    >
+      <button
+        type="button"
+        aria-label="Zoom out"
+        title="Zoom out"
+        className={DISPLAY_TOOLBAR_BUTTON_CLASSES}
+        onClick={(event) => {
+          event.stopPropagation();
+          adjustZoom(-ZOOM_CONTROL_STEP_PERCENT);
+        }}
+      >
+        <Minus className="size-3" strokeWidth={2.25} aria-hidden="true" />
+      </button>
+      <input
+        type="text"
+        inputMode="numeric"
+        aria-label="Zoom level percent"
+        className="h-6 w-8 min-w-0 rounded-sm border border-transparent bg-transparent px-0 text-center text-xs font-medium tabular-nums text-sidebar-foreground outline-none transition focus-visible:border-ring focus-visible:bg-sidebar-accent/40 focus-visible:ring-2 focus-visible:ring-ring/35"
+        value={inputValue}
+        onFocus={(event) => {
+          const input = event.currentTarget;
+          selectOnFocusRef.current = true;
+          setEditing(true);
+          setInputValue(String(Math.round(zoomPercent)));
+          window.requestAnimationFrame(() => {
+            input.select();
+            selectOnFocusRef.current = false;
+          });
+        }}
+        onMouseUp={(event) => {
+          if (!selectOnFocusRef.current) {
+            return;
+          }
+          event.preventDefault();
+          event.currentTarget.select();
+          selectOnFocusRef.current = false;
+        }}
+        onClick={(event) => {
+          if (String(event.currentTarget.value || "").includes("%")) {
+            event.currentTarget.select();
+          }
+        }}
+        onChange={(event) => {
+          setInputValue(event.target.value);
+        }}
+        onBlur={commitInputValue}
+        onKeyDown={(event) => {
+          if (event.key === "Enter") {
+            event.preventDefault();
+            commitInputValue();
+          } else if (event.key === "Escape") {
+            event.preventDefault();
+            setEditing(false);
+            setInputValue(formatZoomPercent(zoomPercent));
+            event.currentTarget.blur();
+          }
+        }}
+      />
+      <button
+        type="button"
+        aria-label="Zoom in"
+        title="Zoom in"
+        className={DISPLAY_TOOLBAR_BUTTON_CLASSES}
+        onClick={(event) => {
+          event.stopPropagation();
+          adjustZoom(ZOOM_CONTROL_STEP_PERCENT);
+        }}
+      >
+        <Plus className="size-3" strokeWidth={2.25} aria-hidden="true" />
+      </button>
+      <button
+        type="button"
+        aria-label="Reset zoom"
+        title="Reset zoom"
+        className={DISPLAY_TOOLBAR_BUTTON_CLASSES}
+        onClick={(event) => {
+          event.stopPropagation();
+          onZoomReset?.();
+        }}
+      >
+        <RotateCcw className="size-3" strokeWidth={2.1} aria-hidden="true" />
+      </button>
+    </div>
+  );
+}
+
 function cssLength(value, fallback = "0px") {
   if (typeof value === "number" && Number.isFinite(value)) {
     return `${value}px`;
@@ -580,203 +794,32 @@ function cssLength(value, fallback = "0px") {
   return text || fallback;
 }
 
-function ProjectionModeControl({
-  projection,
-  onProjectionChange,
-  onProjectionReset
+function ZoomToolbar({
+  zoomPercent,
+  onZoomPercentChange,
+  onZoomReset,
+  viewPlaneOffsetRight = 16,
+  viewPlaneOffsetBottom = 16
 }) {
-  const activeProjection = normalizeCameraProjection(projection);
-  return (
-    <TooltipProvider delayDuration={250}>
-      <div className={PROJECTION_CONTROL_CLASSES} role="tablist" aria-label="Projection">
-        {PROJECTION_MODE_OPTIONS.map((option, index) => {
-          const active = activeProjection === option.value;
-          const Icon = option.Icon;
-          const tooltip = active
-            ? `${option.label}. Click to reset view.`
-            : option.title;
-          return (
-            <Tooltip key={option.value}>
-              <TooltipTrigger asChild>
-                <button
-                  type="button"
-                  role="tab"
-                  aria-label={option.label}
-                  aria-selected={active}
-                  aria-pressed={active}
-                  title={tooltip}
-                  className={`${PROJECTION_TAB_BUTTON_CLASSES} ${index > 0 ? "border-t border-sidebar-border/70" : ""} ${
-                    active
-                      ? "bg-sidebar-accent text-sidebar-accent-foreground"
-                      : "text-sidebar-foreground/70 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground"
-                  }`}
-                  onPointerDown={(event) => {
-                    event.stopPropagation();
-                  }}
-                  onClick={(event) => {
-                    event.stopPropagation();
-                    if (active) {
-                      onProjectionReset?.();
-                      return;
-                    }
-                    onProjectionChange?.(option.value);
-                  }}
-                >
-                  <Icon className="size-3.5" strokeWidth={2} aria-hidden="true" />
-                </button>
-              </TooltipTrigger>
-              <TooltipContent side="left" sideOffset={8}>
-                {tooltip}
-              </TooltipContent>
-            </Tooltip>
-          );
-        })}
-      </div>
-    </TooltipProvider>
-  );
-}
-
-function DisplayStyleControl({
-  displayMode,
-  onDisplayModeChange
-}) {
-  const selectedOption = displayModeOptionForValue(displayMode);
-  const SelectedIcon = selectedOption?.Icon || null;
-  const label = `Display style: ${selectedOption?.label || "Style"}`;
-  return (
-    <TooltipProvider delayDuration={250}>
-      <Tooltip>
-        <Select
-          value={selectedOption.value}
-          onValueChange={(nextValue) => {
-            onDisplayModeChange?.(nextValue);
-          }}
-        >
-          <TooltipTrigger asChild>
-            <SelectTrigger
-              size="sm"
-              showIcon={false}
-              aria-label={label}
-              title={label}
-              className={STYLE_CONTROL_BUTTON_CLASSES}
-              onPointerDown={(event) => {
-                event.stopPropagation();
-              }}
-            >
-              {SelectedIcon ? <SelectedIcon className="size-3.5" strokeWidth={2} aria-hidden="true" /> : null}
-              <span className="sr-only">{selectedOption.label}</span>
-            </SelectTrigger>
-          </TooltipTrigger>
-          <SelectContent align="end" side="left" sideOffset={8} className="w-44">
-            {DISPLAY_MODE_OPTIONS.map((option) => {
-              const Icon = option.Icon;
-              return (
-                <SelectItem
-                  key={option.value}
-                  value={option.value}
-                  className="text-xs"
-                  title={option.title}
-                  icon={Icon ? <Icon className="size-3.5" strokeWidth={2} /> : null}
-                >
-                  {option.label}
-                </SelectItem>
-              );
-            })}
-          </SelectContent>
-        </Select>
-        <TooltipContent side="left" sideOffset={8}>
-          {label}
-        </TooltipContent>
-      </Tooltip>
-    </TooltipProvider>
-  );
-}
-
-function ViewModeControlSection({
-  displayMode,
-  onDisplayModeChange,
-  projection,
-  onProjectionChange,
-  onProjectionReset,
-  viewPlaneOffsetRight,
-  viewPlaneOffsetBottom
-}) {
-  const showStyleControl = typeof onDisplayModeChange === "function";
-  const showProjectionControl = typeof onProjectionChange === "function";
-  if (!showStyleControl && !showProjectionControl) {
-    return null;
-  }
   return (
     <div
-      className={VIEW_MODE_CONTROL_SECTION_CLASSES}
+      className={DISPLAY_TOOLBAR_CLASSES}
       style={{
-        right: `calc(${viewPlaneOffsetRight}px + ${VIEW_PLANE_CONTROL_SIZE} + ${VIEW_PLANE_CONTROL_GAP})`,
-        bottom: `calc(${cssLength(viewPlaneOffsetBottom, "16px")} + ${VIEW_MODE_CONTROL_SECTION_BOTTOM_INSET})`
+        right: cssLength(viewPlaneOffsetRight, "16px"),
+        bottom: `calc(${cssLength(viewPlaneOffsetBottom, "16px")} + ${VIEW_PLANE_CONTROL_SIZE} + ${VIEW_PLANE_CONTROL_GAP})`
       }}
-      aria-label="View display controls"
+      aria-label="Zoom controls"
+      onPointerDown={(event) => {
+        event.stopPropagation();
+      }}
     >
-      {showStyleControl ? (
-        <DisplayStyleControl
-          displayMode={displayMode}
-          onDisplayModeChange={onDisplayModeChange}
-        />
-      ) : null}
-      {showProjectionControl ? (
-        <ProjectionModeControl
-          projection={projection}
-          onProjectionChange={onProjectionChange}
-          onProjectionReset={onProjectionReset}
-        />
-      ) : null}
+      <ZoomControl
+        zoomPercent={zoomPercent}
+        onZoomPercentChange={onZoomPercentChange}
+        onZoomReset={onZoomReset}
+      />
     </div>
   );
-}
-
-function normalizeAutoZoomSpeedMs(value, fallback = AUTO_ZOOM_SPEED_MS.DEFAULT) {
-  const numeric = Number(value);
-  if (Number.isFinite(numeric) && numeric >= 0) {
-    return numeric;
-  }
-  return fallback;
-}
-
-function explodedViewTranslationMapAtProgress(THREE, states = [], progress = 1) {
-  const translations = new Map();
-  if (!THREE?.Vector3) {
-    return translations;
-  }
-  for (const state of Array.isArray(states) ? states : []) {
-    if (!state?.record || translations.has(state.record)) {
-      continue;
-    }
-    const translation = explodedViewStateTranslationAtProgress(THREE, state, progress);
-    if (translation) {
-      translations.set(state.record, translation);
-    }
-  }
-  return translations;
-}
-
-function autoZoomBoundsForRuntime(runtime, {
-  baseBounds = null,
-  focusedPartIds = [],
-  explodedStates = [],
-  explodedProgress = 1
-} = {}) {
-  if (!runtime?.THREE || !Array.isArray(runtime.displayRecords)) {
-    return baseBounds;
-  }
-  const focusedIds = new Set(normalizePartIdList(focusedPartIds));
-  const translationByRecord = explodedViewTranslationMapAtProgress(
-    runtime.THREE,
-    explodedStates,
-    explodedProgress
-  );
-  return focusedDisplayRecordsBounds(runtime.displayRecords, {
-    partIds: focusedIds,
-    translationByRecord,
-    fallbackBounds: baseBounds
-  });
 }
 
 function applyExplodedViewRuntimeProgress(runtime, states, progress) {
@@ -802,6 +845,53 @@ function getPixelRatioCap(cap) {
   return Math.min(window.devicePixelRatio || 1, cap);
 }
 
+function getStageEffectRadius(radius, sceneScaleMode = VIEWER_SCENE_SCALE.CAD) {
+  return getProportionalLightingScopeRadius(radius, sceneScaleMode);
+}
+
+function getStageEffectScale(radius, sceneScaleMode = VIEWER_SCENE_SCALE.CAD) {
+  const referenceRadius = Math.max(
+    getLightingScopeRadius(sceneScaleMode),
+    getSceneScaleSettings(sceneScaleMode).minModelRadius
+  );
+  return getStageEffectRadius(radius, sceneScaleMode) / referenceRadius;
+}
+
+function setScaledLightPosition(light, position = {}, scale = 1) {
+  light?.position?.set?.(
+    (Number(position.x) || 0) * scale,
+    (Number(position.y) || 0) * scale,
+    (Number(position.z) || 0) * scale
+  );
+}
+
+function scaledLightDistance(distance, scale = 1) {
+  const numericDistance = Number(distance);
+  return Number.isFinite(numericDistance) && numericDistance > 0
+    ? numericDistance * scale
+    : 0;
+}
+
+function syncRuntimeScaledLighting(runtime, lightingSettings = {}, radius, sceneScaleMode = VIEWER_SCENE_SCALE.CAD) {
+  const scale = getStageEffectScale(radius, sceneScaleMode);
+  setScaledLightPosition(runtime?.keyLight, lightingSettings.directional?.position, scale);
+  setScaledLightPosition(runtime?.spotLight, lightingSettings.spot?.position, scale);
+  setScaledLightPosition(runtime?.pointLight, lightingSettings.point?.position, scale);
+  if (runtime?.spotLight) {
+    runtime.spotLight.distance = scaledLightDistance(lightingSettings.spot?.distance, scale);
+  }
+  if (runtime?.pointLight) {
+    runtime.pointLight.distance = scaledLightDistance(lightingSettings.point?.distance, scale);
+  }
+}
+
+function syncRuntimeScaledLightingAndShadow(THREE, runtime, lightingSettings = {}, radius, bounds, sceneScaleMode = VIEWER_SCENE_SCALE.CAD) {
+  syncRuntimeScaledLighting(runtime, lightingSettings, radius, sceneScaleMode);
+  if (THREE && bounds && runtime?.keyLight?.shadow?.camera) {
+    applyRuntimeModelBounds(THREE, runtime, bounds, sceneScaleMode);
+  }
+}
+
 function updateStageEffects(runtime, viewerTheme, themeSettings, radius, floorZ = 0, floorMode = THEME_FLOOR_MODES.STAGE, sceneScaleMode = VIEWER_SCENE_SCALE.CAD) {
   if (!runtime?.THREE || !runtime?.stageGroup) {
     return;
@@ -815,7 +905,7 @@ function updateStageEffects(runtime, viewerTheme, themeSettings, radius, floorZ 
 
   const stageScaleMode = sceneScaleMode;
   const floorSize = getStageFloorSize(radius, stageScaleMode);
-  const lightingScopeRadius = getLightingScopeRadius(stageScaleMode);
+  const lightingScopeRadius = getStageEffectRadius(radius, stageScaleMode);
   runtime.stageGroup.add(createStageFloorPlane(runtime.THREE, viewerTheme, themeSettings, floorSize, floorZ, 0));
   const glowPlane = createStageFloorGlowPlane(
     runtime.THREE,
@@ -949,22 +1039,44 @@ function syncRuntimeCameraClipPlanes(runtime, near, far) {
   }
 }
 
-function getOrthographicHalfHeightForBoundingSphere(radius, sceneScaleMode, frameMetrics = {}) {
-  const safeRadius = Math.max(radius * AUTO_ZOOM_PADDING, getSceneScaleSettings(sceneScaleMode).minModelRadius);
+function getOrthographicHalfHeightForBoundingSphere(radius, sceneScaleMode, frameMetrics = {}, padding = AUTO_ZOOM_PADDING) {
+  const safeRadius = Math.max(radius * padding, getSceneScaleSettings(sceneScaleMode).minModelRadius);
   const frameAspect = Math.max(Number(frameMetrics.aspect) || 1, 1e-3);
   const viewportHeight = Math.max(Number(frameMetrics.height) || 1, 1);
   const framedHeight = Math.max(Number(frameMetrics.framedHeight) || viewportHeight, 1);
   return (safeRadius / Math.min(frameAspect, 1)) * (viewportHeight / framedHeight);
 }
 
-function syncOrthographicCameraFrame(runtime, radius, sceneScaleMode, frameMetrics = null) {
+function setOrthographicCameraHalfHeight(runtime, halfHeight, frameMetrics = null) {
   const camera = runtime?.orthographicCamera;
   if (!camera?.isOrthographicCamera) {
-    return;
+    return false;
   }
   const metrics = frameMetrics || getViewportFrameMetrics(runtime, runtime?.frameInsetsRef?.current);
-  camera.userData.cadHalfHeight = getOrthographicHalfHeightForBoundingSphere(radius, sceneScaleMode, metrics);
+  const nextHalfHeight = Math.max(Number(halfHeight) || 0, 1e-3);
+  const previousHalfHeight = Number(camera.userData?.cadHalfHeight);
+  const previousLeft = Number(camera.left);
+  const previousRight = Number(camera.right);
+  const previousTop = Number(camera.top);
+  const previousBottom = Number(camera.bottom);
+  camera.userData.cadHalfHeight = nextHalfHeight;
   runtime.syncCameraViewport?.(camera, metrics.width, metrics.height);
+  return (
+    Math.abs((Number.isFinite(previousHalfHeight) ? previousHalfHeight : 0) - nextHalfHeight) > 1e-6 ||
+    Math.abs((Number.isFinite(previousLeft) ? previousLeft : 0) - Number(camera.left)) > 1e-6 ||
+    Math.abs((Number.isFinite(previousRight) ? previousRight : 0) - Number(camera.right)) > 1e-6 ||
+    Math.abs((Number.isFinite(previousTop) ? previousTop : 0) - Number(camera.top)) > 1e-6 ||
+    Math.abs((Number.isFinite(previousBottom) ? previousBottom : 0) - Number(camera.bottom)) > 1e-6
+  );
+}
+
+function syncOrthographicCameraFrame(runtime, radius, sceneScaleMode, frameMetrics = null) {
+  const metrics = frameMetrics || getViewportFrameMetrics(runtime, runtime?.frameInsetsRef?.current);
+  return setOrthographicCameraHalfHeight(
+    runtime,
+    getOrthographicHalfHeightForBoundingSphere(radius, sceneScaleMode, metrics),
+    metrics
+  );
 }
 
 function frameRuntimeCameraForBoundingSphere(runtime, radius, sceneScaleMode, frameMetrics) {
@@ -982,63 +1094,6 @@ function frameRuntimeCameraForBoundingSphere(runtime, radius, sceneScaleMode, fr
   return fitDistance;
 }
 
-function transitionCameraToBounds(runtime, bounds, sceneScaleMode, frameInsets, {
-  durationMs = AUTO_ZOOM_SPEED_MS.DEFAULT,
-  easing = AUTO_ZOOM_TRANSITION_EASING,
-  animate = true,
-  minRadius = getSceneScaleSettings(sceneScaleMode).minModelRadius,
-  viewDirection = null,
-  viewUp = null
-} = {}) {
-  if (!runtime?.THREE || !runtime?.camera || !runtime?.controls || !bounds) {
-    return false;
-  }
-  const frameMetrics = getViewportFrameMetrics(runtime, frameInsets);
-  const activeCamera = runtime.camera;
-  const frameCamera = activeCamera?.isPerspectiveCamera
-    ? activeCamera
-    : runtime.perspectiveCamera || activeCamera;
-  const activeOffset = activeCamera?.position?.clone?.().sub(runtime.controls.target);
-  const activeViewDirection = activeOffset?.lengthSq?.() > 1e-8
-    ? activeOffset.normalize()
-    : null;
-  const frame = autoZoomFrameForBounds(runtime.THREE, {
-    camera: frameCamera,
-    controls: runtime.controls,
-    bounds,
-    modelOffset: runtime.modelGroup?.position,
-    frameAspect: frameMetrics.aspect,
-    minRadius,
-    padding: AUTO_ZOOM_PADDING,
-    defaultDirection: DEFAULT_VIEW_DIRECTION,
-    viewDirection: viewDirection || (activeCamera?.isOrthographicCamera ? activeViewDirection : null),
-    viewUp: viewUp || (activeCamera?.isOrthographicCamera ? activeCamera.up : null)
-  });
-  if (!frame) {
-    return false;
-  }
-  if (runtime.camera?.isOrthographicCamera) {
-    syncOrthographicCameraFrame(runtime, frame.radius, sceneScaleMode, frameMetrics);
-    applyCameraFrameInsets(runtime, frameInsets, { updateProjection: false });
-  }
-  if (
-    runtime.camera.position.distanceToSquared(frame.position) <= 1e-8 &&
-    runtime.controls.target.distanceToSquared(frame.target) <= 1e-8 &&
-    runtime.camera.up.distanceToSquared(frame.up) <= 1e-8
-  ) {
-    return false;
-  }
-  const nextPerspective = {
-    position: [frame.position.x, frame.position.y, frame.position.z],
-    target: [frame.target.x, frame.target.y, frame.target.z],
-    up: [frame.up.x, frame.up.y, frame.up.z],
-    zoom: runtime.camera.zoom
-  };
-  return animate
-    ? transitionCameraToPerspectiveSnapshot(runtime, nextPerspective, { durationMs, easing })
-    : applyPerspectiveSnapshot(runtime, nextPerspective, { scheduleIdle: false });
-}
-
 function syncRuntimeCameraProjection(runtime, projection, { scheduleIdle = true, requestRender = true } = {}) {
   if (!runtime?.camera || !runtime?.controls) {
     return false;
@@ -1051,6 +1106,13 @@ function syncRuntimeCameraProjection(runtime, projection, { scheduleIdle = true,
     return false;
   }
   const previousCamera = runtime.camera;
+  const previousPerspectiveHalfHeight = previousCamera?.isPerspectiveCamera && runtime.controls?.target
+    ? (
+        previousCamera.position.distanceTo(runtime.controls.target) *
+        Math.tan((Math.max(Number(previousCamera.fov) || 48, 1e-3) * Math.PI) / 360) /
+        Math.max(Number(previousCamera.zoom) || 1, 1e-3)
+      )
+    : null;
   if (previousCamera !== nextCamera) {
     nextCamera.position.copy(previousCamera.position);
     nextCamera.up.copy(previousCamera.up);
@@ -1062,13 +1124,16 @@ function syncRuntimeCameraProjection(runtime, projection, { scheduleIdle = true,
   }
   runtime.projection = nextProjection;
   const frameMetrics = getViewportFrameMetrics(runtime, runtime.frameInsetsRef?.current);
-  if (nextCamera.isOrthographicCamera) {
-    syncOrthographicCameraFrame(
-      runtime,
-      Number.isFinite(Number(runtime.modelRadius)) ? Number(runtime.modelRadius) : 1,
-      runtime.sceneScaleMode,
-      frameMetrics
-    );
+  if (nextCamera.isOrthographicCamera && previousCamera !== nextCamera) {
+    const previousOrthographicHalfHeight = Number(previousCamera?.userData?.cadHalfHeight);
+    const preservedHalfHeight = Number.isFinite(previousPerspectiveHalfHeight) && previousPerspectiveHalfHeight > 0
+      ? previousPerspectiveHalfHeight
+      : previousOrthographicHalfHeight;
+    if (Number.isFinite(preservedHalfHeight) && preservedHalfHeight > 0) {
+      setOrthographicCameraHalfHeight(runtime, preservedHalfHeight, frameMetrics);
+    } else {
+      runtime.syncCameraViewport?.(nextCamera, frameMetrics.width, frameMetrics.height);
+    }
   } else {
     runtime.syncCameraViewport?.(nextCamera, frameMetrics.width, frameMetrics.height);
   }
@@ -1311,7 +1376,9 @@ function applyPerspectiveSnapshot(runtime, perspective, { scheduleIdle = true } 
 
 function transitionCameraToPerspectiveSnapshot(runtime, perspective, {
   durationMs = VIEW_PLANE_TRANSITION_MS,
-  easing = CAMERA_TRANSITION_EASING.EASE_IN_OUT_CUBIC
+  easing = CAMERA_TRANSITION_EASING.EASE_IN_OUT_CUBIC,
+  orthographicHalfHeight = null,
+  resetZoomBaselineOnComplete = false
 } = {}) {
   const nextPerspective = clonePerspectiveSnapshot(perspective);
   if (!runtime?.THREE || !runtime?.camera || !runtime?.controls || !nextPerspective) {
@@ -1328,6 +1395,12 @@ function transitionCameraToPerspectiveSnapshot(runtime, perspective, {
   const endZoom = Number.isFinite(nextPerspective.zoom) && nextPerspective.zoom > 0
     ? nextPerspective.zoom
     : runtime.camera.zoom;
+  const startOrthographicHalfHeight = runtime.camera?.isOrthographicCamera
+    ? Number(runtime.camera.userData?.cadHalfHeight)
+    : null;
+  const endOrthographicHalfHeight = runtime.camera?.isOrthographicCamera
+    ? Number(orthographicHalfHeight)
+    : null;
   if (
     ![endPosition.x, endPosition.y, endPosition.z, endTarget.x, endTarget.y, endTarget.z, endUp.x, endUp.y, endUp.z, endZoom]
       .every(Number.isFinite) ||
@@ -1346,12 +1419,145 @@ function transitionCameraToPerspectiveSnapshot(runtime, perspective, {
     endUp: endUp.normalize(),
     startZoom: runtime.camera.zoom,
     endZoom,
+    startOrthographicHalfHeight,
+    endOrthographicHalfHeight,
+    resetZoomBaselineOnComplete,
     easing
   };
   runtime.controls.enableDamping = false;
   runtime.beginInteraction?.();
   runtime.requestRender?.();
   return true;
+}
+
+function pointBounds(center) {
+  if (!Array.isArray(center) && !ArrayBuffer.isView(center)) {
+    return null;
+  }
+  const x = toNumber(center[0]);
+  const y = toNumber(center[1]);
+  const z = toNumber(center[2]);
+  return {
+    min: [x, y, z],
+    max: [x, y, z]
+  };
+}
+
+function selectorReferenceForId(selectorRuntime, referenceId) {
+  const id = String(referenceId || "").trim();
+  if (!id || !selectorRuntime) {
+    return null;
+  }
+  return selectorRuntime.referenceMap?.get?.(id) ||
+    selectorRuntime.faceReferenceMap?.get?.(id) ||
+    selectorRuntime.edgeReferenceMap?.get?.(id) ||
+    selectorRuntime.referenceByDisplaySelector?.get?.(id) ||
+    selectorRuntime.referenceByNormalizedSelector?.get?.(id) ||
+    null;
+}
+
+function selectorReferenceBounds(selectorRuntime, referenceIds = []) {
+  const boundsList = [];
+  for (const referenceId of normalizePartIdList(referenceIds)) {
+    const reference = selectorReferenceForId(selectorRuntime, referenceId);
+    const bbox = reference?.pickData?.bbox || reference?.bbox || null;
+    const bounds = mergeBoundsList([bbox]) ||
+      pointBounds(reference?.pickData?.center || reference?.center);
+    if (bounds) {
+      boundsList.push(bounds);
+    }
+  }
+  return mergeBoundsList(boundsList);
+}
+
+function currentDisplayRecordTranslationByRecord(THREE, records = []) {
+  const translations = new Map();
+  if (!THREE?.Vector3) {
+    return translations;
+  }
+  for (const record of Array.isArray(records) ? records : []) {
+    const translation = displayRecordExplodedViewTranslation(THREE, record);
+    if (translation?.isVector3 && translation.lengthSq() > 1e-12) {
+      translations.set(record, translation);
+    }
+  }
+  return translations;
+}
+
+function displayRecordBoundsForPartIds(runtime, partIds = []) {
+  const normalizedPartIds = normalizePartIdList(partIds);
+  if (!normalizedPartIds.length || !Array.isArray(runtime?.displayRecords)) {
+    return null;
+  }
+  return displayRecordsBounds(runtime.displayRecords, {
+    partIds: new Set(normalizedPartIds),
+    translationByRecord: currentDisplayRecordTranslationByRecord(runtime?.THREE, runtime.displayRecords)
+  });
+}
+
+function zoomRuntimeToBounds(runtime, bounds, sceneScaleMode, {
+  animate = true,
+  modelOffset = null,
+  resetZoomBaseline = false
+} = {}) {
+  if (!runtime?.THREE || !runtime?.camera || !runtime?.controls) {
+    return false;
+  }
+  const normalizedBounds = mergeBoundsList([bounds]);
+  if (!normalizedBounds) {
+    return false;
+  }
+  const frameMetrics = getViewportFrameMetrics(runtime, runtime.frameInsetsRef?.current);
+  const frame = autoZoomFrameForBounds(runtime.THREE, {
+    camera: runtime.camera,
+    controls: runtime.controls,
+    bounds: normalizedBounds,
+    modelOffset,
+    frameAspect: frameMetrics.aspect,
+    minRadius: getSceneScaleSettings(sceneScaleMode).minModelRadius,
+    padding: DEFAULT_AUTO_ZOOM_PADDING,
+    defaultDirection: DEFAULT_VIEW_DIRECTION,
+    viewUp: runtime.camera.up?.toArray?.() || WORLD_UP
+  });
+  if (!frame) {
+    return false;
+  }
+  const snapshot = {
+    position: frame.position.toArray(),
+    target: frame.target.toArray(),
+    up: frame.up.toArray(),
+    zoom: 1,
+    projection: runtimeCameraProjection(runtime)
+  };
+  const orthographicHalfHeight = runtime.camera.isOrthographicCamera
+    ? getOrthographicHalfHeightForBoundingSphere(
+        frame.radius,
+        sceneScaleMode,
+        frameMetrics,
+        DEFAULT_AUTO_ZOOM_PADDING
+      )
+    : null;
+
+  if (animate) {
+    return transitionCameraToPerspectiveSnapshot(runtime, snapshot, {
+      durationMs: VIEW_PLANE_TRANSITION_MS,
+      easing: CAMERA_TRANSITION_EASING.EASE_IN_OUT_CUBIC,
+      orthographicHalfHeight,
+      resetZoomBaselineOnComplete: resetZoomBaseline
+    });
+  }
+
+  if (runtime.camera.isOrthographicCamera && orthographicHalfHeight) {
+    setOrthographicCameraHalfHeight(runtime, orthographicHalfHeight, frameMetrics);
+  }
+  const applied = applyPerspectiveSnapshot(runtime, snapshot);
+  if (applied) {
+    if (resetZoomBaseline) {
+      resetRuntimeZoomBaseline(runtime);
+    }
+    runtime.onZoomChange?.(runtime);
+  }
+  return applied;
 }
 
 function stepCameraTransition(runtime, timestamp) {
@@ -1383,14 +1589,34 @@ function stepCameraTransition(runtime, timestamp) {
   if (up.lengthSq() > 1e-6) {
     runtime.camera.up.copy(up.normalize());
   }
+  const startOrthographicHalfHeight = Number(transition.startOrthographicHalfHeight);
+  const endOrthographicHalfHeight = Number(transition.endOrthographicHalfHeight);
+  let projectionUpdated = false;
+  if (
+    runtime.camera?.isOrthographicCamera &&
+    Number.isFinite(startOrthographicHalfHeight) &&
+    Number.isFinite(endOrthographicHalfHeight) &&
+    endOrthographicHalfHeight > 0
+  ) {
+    const nextHalfHeight = startOrthographicHalfHeight + ((endOrthographicHalfHeight - startOrthographicHalfHeight) * eased);
+    setOrthographicCameraHalfHeight(runtime, nextHalfHeight);
+    reapplyRuntimeCameraFrameInsets(runtime);
+    projectionUpdated = true;
+  }
   if (Number.isFinite(transition.startZoom) && Number.isFinite(transition.endZoom)) {
     runtime.camera.zoom = transition.startZoom + ((transition.endZoom - transition.startZoom) * eased);
     runtime.camera.updateProjectionMatrix?.();
-    reapplyRuntimeCameraFrameInsets(runtime);
+    if (!projectionUpdated) {
+      reapplyRuntimeCameraFrameInsets(runtime);
+    }
   }
   runtime.camera.lookAt(target);
 
   if (progress >= 1) {
+    if (transition.resetZoomBaselineOnComplete) {
+      resetRuntimeZoomBaseline(runtime);
+    }
+    runtime.onZoomChange?.(runtime);
     runtime.cameraTransition = null;
     runtime.controls.enableDamping = true;
     runtime.controls.dampingFactor = DEFAULT_DAMPING_FACTOR;
@@ -1835,7 +2061,6 @@ const CadViewer = forwardRef(function CadViewer({
   surfaceLineFaceId = "",
   focusedPartId = "",
   displaySettings = null,
-  boundsAnimationActive = false,
   drawingEnabled = false,
   drawingTool = DRAWING_TOOL.FREEHAND,
   drawingStrokes = [],
@@ -1891,13 +2116,6 @@ const CadViewer = forwardRef(function CadViewer({
     states: [],
     transitionProgress: 0
   });
-  const autoZoomStateRef = useRef({
-    attached: true,
-    modelKey: "",
-    lastReason: "initial"
-  });
-  const boundsAnimationActiveRef = useRef(false);
-  const autoZoomRunRef = useRef(null);
   const viewportFrameInsetsRef = useRef(normalizedViewportFrameInsets);
   const framedModelKeyRef = useRef("");
   const modelTransformRef = useRef({
@@ -1912,14 +2130,13 @@ const CadViewer = forwardRef(function CadViewer({
   const stepModuleCleanupRef = useRef([]);
   const [transformedSelectorRuntime, setTransformedSelectorRuntime] = useState(null);
   const [transformedDisplayEdgeRuntime, setTransformedDisplayEdgeRuntime] = useState(null);
-  const [autoZoomDetached, setAutoZoomDetached] = useState(false);
   const [defaultPerspectiveDetached, setDefaultPerspectiveDetached] = useState(false);
   const [error, setError] = useState("");
   const [viewerReadyTick, setViewerReadyTick] = useState(0);
-  const [displayRecordsReadyTick, setDisplayRecordsReadyTick] = useState(0);
   const [runtimeResetToken, setRuntimeResetToken] = useState(0);
   const [activeViewPlaneFace, setActiveViewPlaneFace] = useState("");
   const [viewPlaneOrientation, setViewPlaneOrientation] = useState(DEFAULT_VIEW_PLANE_ORIENTATION);
+  const [cameraZoomPercent, setCameraZoomPercent] = useState(100);
   const [urdfPosePickerGuidePoint, setUrdfPosePickerGuidePoint] = useState(null);
   const [urdfPosePickerHoverActive, setUrdfPosePickerHoverActive] = useState(false);
   const activeViewPlaneFaceRef = useRef("");
@@ -2181,7 +2398,6 @@ const CadViewer = forwardRef(function CadViewer({
   perspectivePropRef.current = perspective;
   modelKeyRef.current = modelKey;
   sceneScaleModeRef.current = normalizedSceneScaleMode;
-  boundsAnimationActiveRef.current = boundsAnimationActive === true;
   useLayoutEffect(() => {
     viewportFrameInsetsRef.current = normalizedViewportFrameInsets;
     const runtime = runtimeRef.current;
@@ -2189,9 +2405,6 @@ const CadViewer = forwardRef(function CadViewer({
       return;
     }
     applyCameraFrameInsets(runtime, normalizedViewportFrameInsets);
-    autoZoomRunRef.current?.("viewport", {
-      speedMs: AUTO_ZOOM_SPEED_MS.RESIZE
-    });
     runtime.requestRender?.();
   }, [
     normalizedViewportFrameInsets.top,
@@ -2208,6 +2421,16 @@ const CadViewer = forwardRef(function CadViewer({
       suppressPerspectiveEventsRef.current = Math.max(0, suppressPerspectiveEventsRef.current - 1);
     }
   };
+  const syncCameraZoomPercent = useCallback((runtime = runtimeRef.current) => {
+    if (!runtime?.camera) {
+      setCameraZoomPercent((current) => (current === 100 ? current : 100));
+      return;
+    }
+    const nextZoomPercent = Math.round(readRuntimeZoomPercent(runtime));
+    setCameraZoomPercent((current) => (
+      Math.abs(current - nextZoomPercent) < 0.5 ? current : nextZoomPercent
+    ));
+  }, []);
   const emitPerspectiveChange = (runtime = runtimeRef.current) => {
     const currentModelKey = modelKeyRef.current;
     if (!runtimeModelKeyMatches(runtime, currentModelKey)) {
@@ -2220,6 +2443,7 @@ const CadViewer = forwardRef(function CadViewer({
     if (!nextPerspective) {
       return;
     }
+    syncCameraZoomPercent(runtime);
     if (suppressPerspectiveEventsRef.current > 0) {
       lastEmittedPerspectiveRef.current = nextPerspective;
       return;
@@ -2263,152 +2487,59 @@ const CadViewer = forwardRef(function CadViewer({
     if (!perspectiveSnapshotMatchesScene(nextPerspective, {
       modelKey: modelKeyRef.current,
       sceneScaleMode: sceneScaleModeRef.current,
-      coordinateSystem: coordinateSystemForSceneScale(sceneScaleModeRef.current)
+      coordinateSystem: coordinateSystemForSceneScale(sceneScaleModeRef.current),
+      requireModelKey: true,
+      requireSceneScaleMode: true,
+      requireCoordinateSystem: true
     })) {
       return false;
     }
     return runWithoutPerspectiveEvents(() => applyPerspectiveSnapshot(runtime, nextPerspective, { scheduleIdle: false }));
   }, [perspectiveRef]);
-  const resolveAutoZoomBounds = useCallback((runtime = runtimeRef.current, {
-    baseBounds = null,
-    explodedStates = null,
-    explodedProgress = 1
-  } = {}) => {
-    if (!runtime?.THREE) {
-      return null;
-    }
-    const animation = explodedViewAnimationRef.current;
-    const activeExplodedStates = explodedStates || (
-      explodedViewActive && Array.isArray(animation.states)
-        ? animation.states
-        : []
-    );
-    return autoZoomBoundsForRuntime(runtime, {
-      baseBounds: baseBounds || runtime.modelBounds || meshData?.bounds,
-      focusedPartIds,
-      explodedStates: activeExplodedStates,
-      explodedProgress
-    });
-  }, [
-    explodedViewActive,
-    focusedPartIds,
-    meshData?.bounds
-  ]);
-  const detachAutoZoomState = useCallback((reason = "manual") => {
-    const state = autoZoomStateRef.current;
-    if (state.attached === false && state.lastReason === reason) {
+  const applyZoomPercent = useCallback((nextZoomPercent) => {
+    const runtime = runtimeRef.current;
+    if (!setRuntimeZoomPercent(runtime, nextZoomPercent)) {
       return;
     }
-    state.attached = false;
-    state.lastReason = reason;
-    setAutoZoomDetached(true);
-  }, []);
-  const runAutoZoom = useCallback((reason = "state", {
-    bounds = null,
-    baseBounds = null,
-    speedMs = AUTO_ZOOM_SPEED_MS.DEFAULT,
-    explodedStates = null,
-    explodedProgress = 1,
-    animate = true,
-    force = false,
-    allowDuringBoundsAnimation = false,
-    viewDirection = null,
-    viewUp = null
-  } = {}) => {
+    syncCameraZoomPercent(runtime);
+    emitPerspectiveChange(runtime);
+    syncViewPlaneOrientation(runtime);
+  }, [
+    syncCameraZoomPercent,
+    syncViewPlaneOrientation
+  ]);
+  const resetZoomAndPan = useCallback(({ animate = true } = {}) => {
     const runtime = runtimeRef.current;
-    if (!runtime?.THREE || !runtime.camera || !runtime.controls) {
-      return false;
-    }
-    const state = autoZoomStateRef.current;
-    if (boundsAnimationActiveRef.current && allowDuringBoundsAnimation !== true) {
-      detachAutoZoomState("animation");
-      return false;
-    }
-    if (!force && state.attached === false) {
-      return false;
-    }
-    const targetBounds = bounds || resolveAutoZoomBounds(runtime, {
-      baseBounds,
-      explodedStates,
-      explodedProgress
-    });
-    if (!targetBounds) {
-      return false;
-    }
-    state.attached = true;
-    state.lastReason = reason;
-    setAutoZoomDetached(false);
-    const resolvedSpeedMs = normalizeAutoZoomSpeedMs(speedMs, AUTO_ZOOM_SPEED_MS.DEFAULT);
-    const minRadius = focusedPartIds.length > 0
-      ? 0
-      : getSceneScaleSettings(normalizedSceneScaleMode).minModelRadius;
-    const transitioned = transitionCameraToBounds(
+    const reset = zoomRuntimeToBounds(
       runtime,
-      targetBounds,
-      normalizedSceneScaleMode,
-      viewportFrameInsetsRef.current,
+      runtime?.modelBounds || meshData?.bounds,
+      sceneScaleModeRef.current,
       {
-        durationMs: resolvedSpeedMs,
-        animate: animate !== false && resolvedSpeedMs > 0,
-        minRadius,
-        viewDirection,
-        viewUp
+        animate,
+        modelOffset: modelTransformRef.current.offset,
+        resetZoomBaseline: true
       }
     );
-    if (boundsAnimationActiveRef.current) {
-      detachAutoZoomState("animation");
+    if (reset && !animate) {
+      syncCameraZoomPercent(runtime);
+      emitPerspectiveChange(runtime);
+      syncViewPlaneOrientation(runtime);
     }
-    return transitioned;
+    if (reset) {
+      return true;
+    }
+    if (!setRuntimeZoomPercent(runtime, 100)) {
+      return false;
+    }
+    syncCameraZoomPercent(runtime);
+    emitPerspectiveChange(runtime);
+    syncViewPlaneOrientation(runtime);
+    return true;
   }, [
-    detachAutoZoomState,
-    focusedPartIds.length,
-    normalizedSceneScaleMode,
-    resolveAutoZoomBounds
+    meshData?.bounds,
+    syncCameraZoomPercent,
+    syncViewPlaneOrientation
   ]);
-  autoZoomRunRef.current = runAutoZoom;
-  const detachAutoZoom = detachAutoZoomState;
-  useEffect(() => {
-    if (boundsAnimationActive === true) {
-      detachAutoZoomState("animation");
-    }
-  }, [boundsAnimationActive, detachAutoZoomState]);
-  const resetView = useCallback(({
-    reason = "reset",
-    speedMs = AUTO_ZOOM_SPEED_MS.RESET
-  } = {}) => {
-    const runtime = runtimeRef.current;
-    const state = autoZoomStateRef.current;
-    state.attached = true;
-    state.modelKey = modelKeyRef.current || "";
-    state.lastReason = reason;
-    setAutoZoomDetached(false);
-    activeViewPlaneFaceRef.current = "";
-    setActiveViewPlaneFace("");
-    defaultPerspectiveResettingRef.current = true;
-    setDefaultPerspectiveDetached(false);
-    const transitioned = runAutoZoom(reason, {
-      force: true,
-      allowDuringBoundsAnimation: true,
-      speedMs,
-      viewDirection: DEFAULT_VIEW_DIRECTION,
-      viewUp: WORLD_UP
-    });
-    if (!transitioned) {
-      const fallbackTransitioned = runtime
-        ? transitionCameraToViewPreset(runtime, VIEW_PLANE_DEFAULT_PRESET)
-        : false;
-      if (!fallbackTransitioned) {
-        defaultPerspectiveResettingRef.current = false;
-        syncDefaultPerspectiveState(runtime);
-      }
-    }
-  }, [runAutoZoom, syncDefaultPerspectiveState]);
-  const resetProjectionView = useCallback(() => {
-    resetView({
-      reason: "projection-reset",
-      speedMs: AUTO_ZOOM_SPEED_MS.DEFAULT
-    });
-  }, [resetView]);
   const buildSurfaceLineFaceAnchor = (event, canvas, lockedReferenceId = "", startUv = null) => {
     const runtime = runtimeRef.current;
     if (!runtime?.raycaster || !runtime?.camera || !activeSelectorRuntime?.faceReferenceByRowIndex) {
@@ -2726,10 +2857,61 @@ const CadViewer = forwardRef(function CadViewer({
       }
       return applyPerspectiveSnapshot(runtimeRef.current, perspective);
     },
+    resetZoom() {
+      return resetZoomAndPan({ animate: true });
+    },
+    zoomToFit({ animate = true } = {}) {
+      const runtime = runtimeRef.current;
+      const fitted = zoomRuntimeToBounds(
+        runtime,
+        runtime?.modelBounds || meshData?.bounds,
+        sceneScaleModeRef.current,
+        {
+          animate,
+          modelOffset: modelTransformRef.current.offset,
+          resetZoomBaseline: true
+        }
+      );
+      if (fitted && !animate) {
+        emitPerspectiveChange(runtime);
+        syncViewPlaneOrientation(runtime);
+      }
+      return fitted;
+    },
+    zoomToFitSelection({ partIds = [], referenceIds = [], animate = true } = {}) {
+      const runtime = runtimeRef.current;
+      const bounds = mergeBoundsList([
+        selectorReferenceBounds(activeSelectorRuntime, referenceIds),
+        displayRecordBoundsForPartIds(runtime, partIds)
+      ]);
+      const fitted = zoomRuntimeToBounds(
+        runtime,
+        bounds,
+        sceneScaleModeRef.current,
+        {
+          animate,
+          modelOffset: modelTransformRef.current.offset,
+          resetZoomBaseline: false
+        }
+      );
+      if (fitted && !animate) {
+        emitPerspectiveChange(runtime);
+        syncViewPlaneOrientation(runtime);
+      }
+      return fitted;
+    },
     focusViewPreset(faceId) {
       return activateViewPlaneFace(faceId);
     }
-  }), [modelKey, normalizedSceneScaleMode]);
+  }), [
+    activeSelectorRuntime,
+    meshData?.bounds,
+    modelKey,
+    normalizedSceneScaleMode,
+    resetZoomAndPan,
+    syncCameraZoomPercent,
+    syncViewPlaneOrientation
+  ]);
 
   useEffect(() => {
     previewModeRef.current = previewMode;
@@ -2744,6 +2926,20 @@ const CadViewer = forwardRef(function CadViewer({
   }, [onPerspectiveChange]);
 
   useEffect(() => {
+    const runtime = runtimeRef.current;
+    if (!runtime) {
+      return undefined;
+    }
+    runtime.onZoomChange = syncCameraZoomPercent;
+    syncCameraZoomPercent(runtime);
+    return () => {
+      if (runtime.onZoomChange === syncCameraZoomPercent) {
+        runtime.onZoomChange = null;
+      }
+    };
+  }, [syncCameraZoomPercent, viewerReadyTick]);
+
+  useEffect(() => {
     viewerAlertChangeRef.current = onViewerAlertChange;
   }, [onViewerAlertChange]);
 
@@ -2754,15 +2950,6 @@ const CadViewer = forwardRef(function CadViewer({
   useEffect(() => {
     urdfPosePickerRef.current = urdfPosePicker;
   }, [urdfPosePicker]);
-
-  useEffect(() => {
-    autoZoomStateRef.current = {
-      attached: true,
-      modelKey: modelKey || "",
-      lastReason: "model"
-    };
-    setAutoZoomDetached(false);
-  }, [modelKey]);
 
   useEffect(() => {
     setTransformedSelectorRuntime(null);
@@ -2779,18 +2966,6 @@ const CadViewer = forwardRef(function CadViewer({
   useEffect(() => {
     displayEdgeRuntimeRef.current = activeDisplayEdgeRuntime;
   }, [activeDisplayEdgeRuntime]);
-
-  useLayoutEffect(() => {
-    autoZoomRunRef.current?.("focus", {
-      speedMs: AUTO_ZOOM_SPEED_MS.ISOLATE,
-      force: focusedPartIds.length > 0
-    });
-  }, [
-    displayRecordsReadyTick,
-    focusedPartIds,
-    modelKey,
-    viewerReadyTick
-  ]);
 
   useEffect(() => {
     clipSettingsRef.current = normalizedClipSettings;
@@ -2890,12 +3065,6 @@ const CadViewer = forwardRef(function CadViewer({
     defaultGridRadius,
     sceneScaleMode: normalizedSceneScaleMode,
     floorMode: resolvedFloorMode,
-    onManualCameraInteraction: detachAutoZoom,
-    onViewportResize: () => {
-      autoZoomRunRef.current?.("resize", {
-        speedMs: AUTO_ZOOM_SPEED_MS.RESIZE
-      });
-    },
     onInitializationError: handleRuntimeInitializationError,
     onContextRestored: handleRuntimeContextRestored,
     preserveInteractionPixelRatio,
@@ -2924,17 +3093,9 @@ const CadViewer = forwardRef(function CadViewer({
     } : undefined)) {
       return;
     }
-    if (projectionChanged) {
-      resetView({
-        reason: "projection",
-        speedMs: AUTO_ZOOM_SPEED_MS.DEFAULT
-      });
-      syncViewPlaneOrientation(runtime);
-      return;
-    }
     emitPerspectiveChange(runtime);
     syncViewPlaneOrientation(runtime);
-  }, [normalizedProjection, resetView, syncViewPlaneOrientation, viewerReadyTick]);
+  }, [normalizedProjection, syncViewPlaneOrientation, viewerReadyTick]);
 
   useEffect(() => {
     const runtime = runtimeRef.current;
@@ -2957,11 +3118,6 @@ const CadViewer = forwardRef(function CadViewer({
     runtime.keyLight.visible = normalizedThemeSettings.lighting.directional.enabled;
     runtime.keyLight.color.set(normalizedThemeSettings.lighting.directional.color);
     runtime.keyLight.intensity = normalizedThemeSettings.lighting.directional.intensity;
-    runtime.keyLight.position.set(
-      normalizedThemeSettings.lighting.directional.position.x,
-      normalizedThemeSettings.lighting.directional.position.y,
-      normalizedThemeSettings.lighting.directional.position.z
-    );
 
     const fillIntensity = getViewerThemeNumber(viewerTheme, "fillLightIntensity", DEFAULT_LIGHTING.fillLightIntensity);
     runtime.fillLight.visible = fillIntensity > 0.0001;
@@ -2977,23 +3133,19 @@ const CadViewer = forwardRef(function CadViewer({
     runtime.spotLight.color.set(normalizedThemeSettings.lighting.spot.color);
     runtime.spotLight.intensity = normalizedThemeSettings.lighting.spot.intensity;
     runtime.spotLight.angle = normalizedThemeSettings.lighting.spot.angle;
-    runtime.spotLight.distance = normalizedThemeSettings.lighting.spot.distance;
-    runtime.spotLight.position.set(
-      normalizedThemeSettings.lighting.spot.position.x,
-      normalizedThemeSettings.lighting.spot.position.y,
-      normalizedThemeSettings.lighting.spot.position.z
-    );
-    updateSpotLightTarget(runtime);
 
     runtime.pointLight.visible = normalizedThemeSettings.lighting.point.enabled;
     runtime.pointLight.color.set(normalizedThemeSettings.lighting.point.color);
     runtime.pointLight.intensity = normalizedThemeSettings.lighting.point.intensity;
-    runtime.pointLight.distance = normalizedThemeSettings.lighting.point.distance;
-    runtime.pointLight.position.set(
-      normalizedThemeSettings.lighting.point.position.x,
-      normalizedThemeSettings.lighting.point.position.y,
-      normalizedThemeSettings.lighting.point.position.z
+    syncRuntimeScaledLightingAndShadow(
+      runtime.THREE,
+      runtime,
+      normalizedThemeSettings.lighting,
+      runtime.modelRadius ?? runtime.gridRadius ?? defaultGridRadius,
+      runtime.modelBounds,
+      normalizedSceneScaleMode
     );
+    updateSpotLightTarget(runtime);
 
     // Keep a single primary shadow; the spot light drives the floor glow/fill.
     runtime.keyLight.castShadow = runtime.keyLight.visible;
@@ -3433,6 +3585,14 @@ const CadViewer = forwardRef(function CadViewer({
       ? Number(previousTransform.floorZ)
       : resolveRuntimeModelFloorZ(displayBounds, modelOffset, normalizedSceneScaleMode);
     const { radius } = applyRuntimeModelBounds(THREE, runtime, displayBounds, normalizedSceneScaleMode);
+    syncRuntimeScaledLightingAndShadow(
+      THREE,
+      runtime,
+      normalizedThemeSettings.lighting,
+      radius,
+      displayBounds,
+      normalizedSceneScaleMode
+    );
     updateActiveGridHelper(
       runtime,
       viewerTheme,
@@ -3483,7 +3643,10 @@ const CadViewer = forwardRef(function CadViewer({
       const nextPerspectiveMatchesScene = perspectiveSnapshotMatchesScene(nextPerspective, {
         modelKey,
         sceneScaleMode: normalizedSceneScaleMode,
-        coordinateSystem: coordinateSystemForSceneScale(normalizedSceneScaleMode)
+        coordinateSystem: coordinateSystemForSceneScale(normalizedSceneScaleMode),
+        requireModelKey: true,
+        requireSceneScaleMode: true,
+        requireCoordinateSystem: true
       });
       runWithoutPerspectiveEvents(() => {
         if (
@@ -3506,6 +3669,8 @@ const CadViewer = forwardRef(function CadViewer({
           runtime.requestRender();
         }
       });
+      resetRuntimeZoomBaseline(runtime);
+      syncCameraZoomPercent(runtime);
       framedModelKeyRef.current = modelKey || "";
       lastEmittedPerspectiveRef.current = readScopedPerspectiveSnapshot(runtime, {
         modelKey,
@@ -3514,7 +3679,6 @@ const CadViewer = forwardRef(function CadViewer({
     }
 
     setError("");
-    setDisplayRecordsReadyTick((tick) => tick + 1);
     runtime.requestRender();
   }, [
     meshGeometrySource,
@@ -3537,11 +3701,13 @@ const CadViewer = forwardRef(function CadViewer({
     normalizedSceneScaleMode,
     resolvedFloorMode,
     viewerTheme,
+    normalizedThemeSettings.lighting,
     normalizedThemeSettings.materials,
     normalizedThemeSettings.environment,
     displayEdgeSettings,
     hiddenAwareVisualEdgeSettings,
     visualEdgeSettings,
+    syncCameraZoomPercent,
     wireframeEdgeColor,
     updateActiveGridHelper
   ]);
@@ -3580,6 +3746,14 @@ const CadViewer = forwardRef(function CadViewer({
     }
 
     const { radius } = applyRuntimeModelBounds(runtime.THREE, runtime, meshData.bounds, normalizedSceneScaleMode);
+    syncRuntimeScaledLightingAndShadow(
+      runtime.THREE,
+      runtime,
+      normalizedThemeSettings.lighting,
+      radius,
+      meshData.bounds,
+      normalizedSceneScaleMode
+    );
     const floorZ = Number.isFinite(Number(modelTransformRef.current.floorZ))
       ? Number(modelTransformRef.current.floorZ)
       : resolveRuntimeModelFloorZ(
@@ -3597,7 +3771,6 @@ const CadViewer = forwardRef(function CadViewer({
     );
     updateSpotLightTarget(runtime);
     updateStageEffects(runtime, viewerTheme, normalizedThemeSettings, radius, runtime.gridFloorZ ?? 0, resolvedFloorMode, normalizedSceneScaleMode);
-    setDisplayRecordsReadyTick((tick) => tick + 1);
     runtime.requestRender();
   }, [
     meshData?.parts,
@@ -3915,19 +4088,6 @@ const CadViewer = forwardRef(function CadViewer({
     });
     clearExplodedViewRecordsOutsideStates(runtime.displayRecords, transitionStates);
 
-    if (
-      targetProgress > 0 &&
-      focusedPartIds.length === 0 &&
-      normalizedExplodedSettings.autoFrame !== false
-    ) {
-      runAutoZoom("explode", {
-        baseBounds,
-        explodedStates: targetProgress > 0 ? transitionStates : [],
-        explodedProgress: 1,
-        speedMs: AUTO_ZOOM_SPEED_MS.EXPLODED
-      });
-    }
-
     if (!explodedViewTransitionNeedsAnimation(transitionStates)) {
       animation.progress = targetProgress;
       animation.states = transitionStates;
@@ -3981,7 +4141,6 @@ const CadViewer = forwardRef(function CadViewer({
     focusedPartIds.length,
     normalizedSceneScaleMode,
     normalizedThemeSettings,
-    runAutoZoom,
     viewerReadyTick
   ]);
 
@@ -4567,13 +4726,13 @@ const CadViewer = forwardRef(function CadViewer({
         }}
         aria-hidden="true"
       />
-      {renderFormat === RENDER_FORMAT.STEP && showViewPlane && !previewMode && !isLoading && meshData ? (
-        <ViewModeControlSection
-          displayMode={normalizedDisplayMode}
-          onDisplayModeChange={onDisplayModeChange}
-          projection={normalizedProjection}
-          onProjectionChange={onProjectionChange}
-          onProjectionReset={resetProjectionView}
+      {showViewPlane && !previewMode && !isLoading && meshData ? (
+        <ZoomToolbar
+          zoomPercent={cameraZoomPercent}
+          onZoomPercentChange={applyZoomPercent}
+          onZoomReset={() => {
+            resetZoomAndPan({ animate: true });
+          }}
           viewPlaneOffsetRight={viewPlaneOffsetRight}
           viewPlaneOffsetBottom={viewPlaneOffsetBottom}
         />
@@ -4585,6 +4744,7 @@ const CadViewer = forwardRef(function CadViewer({
         meshData={meshData}
         viewPlaneOffsetRight={viewPlaneOffsetRight}
         viewPlaneOffsetBottom={viewPlaneOffsetBottom}
+        viewPlaneSize={VIEW_PLANE_CONTROL_SIZE}
         viewPlaneHeader={viewPlaneHeader}
         compact={compactViewPlane}
         activeViewPlaneFace={activeViewPlaneFace}

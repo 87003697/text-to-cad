@@ -2,6 +2,7 @@ import { useEffect, useRef } from "react";
 import { VIEWER_PICK_MODE } from "cadjs/lib/viewer/constants";
 import { pointVisibleByClipPlane } from "cadjs/lib/viewer/clipPlane";
 import { screenLimitedPickThreshold } from "cadjs/lib/viewer/pickingThresholds";
+import { createViewerContextMenuGestureState } from "./viewerContextMenuGesture.js";
 
 const FACE_BOUNDS_EPSILON = 0.25;
 const PLANE_SURFACE_EPSILON = 0.25;
@@ -505,6 +506,21 @@ export function useViewerPicking({
       pointerType: "",
       referenceId: ""
     };
+    const primaryPointer = {
+      active: false,
+      x: 0,
+      y: 0,
+      pointerType: ""
+    };
+    const contextPointer = {
+      active: false,
+      blocked: false,
+      moved: false,
+      startedInScene: false,
+      x: 0,
+      y: 0,
+      pointerType: ""
+    };
     const hoverState = {
       rafId: 0,
       x: 0,
@@ -515,6 +531,46 @@ export function useViewerPicking({
     };
     const doubleClickEnabled = !defaultToCoarsePointer;
     let activationTimerId = 0;
+    const contextMenuGesture = createViewerContextMenuGestureState();
+
+    function pointerButtons(event) {
+      const buttons = Number(event?.buttons);
+      return Number.isFinite(buttons) ? buttons : 0;
+    }
+
+    function primaryButtonHeld(event) {
+      return (pointerButtons(event) & 1) === 1;
+    }
+
+    function contextButtonHeld(event) {
+      return (pointerButtons(event) & 2) === 2;
+    }
+
+    function chordButtonsHeld(event) {
+      return (pointerButtons(event) & 3) === 3;
+    }
+
+    function resetPrimaryPointer() {
+      primaryPointer.active = false;
+      primaryPointer.pointerType = "";
+    }
+
+    function resetContextPointer() {
+      contextPointer.active = false;
+      contextPointer.blocked = false;
+      contextPointer.moved = false;
+      contextPointer.startedInScene = false;
+      contextPointer.pointerType = "";
+    }
+
+    function suppressContextMenuFromPanChord() {
+      contextMenuGesture.suppressNextContextMenu();
+      contextPointer.blocked = true;
+      contextPointer.moved = true;
+      pointerDown.active = false;
+      pointerDown.pointerType = "";
+      pointerDown.referenceId = "";
+    }
 
     function setPointerFromPosition(clientX, clientY) {
       const rect = container.getBoundingClientRect();
@@ -928,7 +984,8 @@ export function useViewerPicking({
         return pickPartReferenceFromIntersections(modelIntersections);
       }
       if (pickMode === VIEWER_PICK_MODE.AUTO) {
-        return pickTopologyReference(modelIntersections, clientX, clientY, { hover });
+        return pickTopologyReference(modelIntersections, clientX, clientY, { hover }) ||
+          pickPartReferenceFromIntersections(modelIntersections);
       }
       return null;
     }
@@ -963,6 +1020,29 @@ export function useViewerPicking({
         return true;
       }
       return false;
+    }
+
+    function isPointInsideElement(clientX, clientY, element) {
+      if (!element || !Number.isFinite(Number(clientX)) || !Number.isFinite(Number(clientY))) {
+        return false;
+      }
+      const rect = element.getBoundingClientRect();
+      return (
+        clientX >= rect.left &&
+        clientX <= rect.right &&
+        clientY >= rect.top &&
+        clientY <= rect.bottom
+      );
+    }
+
+    function isSceneEvent(event) {
+      if (isSceneInteractionTarget(event.target)) {
+        return true;
+      }
+      if (isPointInsideElement(event.clientX, event.clientY, sceneMount || container)) {
+        return true;
+      }
+      return contextPointer.active || primaryPointer.active || contextMenuGesture.isSuppressed();
     }
 
     function commitHoverState(referenceId) {
@@ -1041,11 +1121,168 @@ export function useViewerPicking({
       hoverState.rafId = window.requestAnimationFrame(flushHoverPick);
     }
 
+    function recordPrimaryPointerDown(event) {
+      primaryPointer.active = true;
+      primaryPointer.x = event.clientX;
+      primaryPointer.y = event.clientY;
+      primaryPointer.pointerType = event.pointerType || "";
+    }
+
+    function recordContextPointerDown(event) {
+      const preserveGestureBlock = contextPointer.active || contextPointer.startedInScene;
+      const blocked = preserveGestureBlock && contextPointer.blocked;
+      const moved = preserveGestureBlock && contextPointer.moved;
+      contextPointer.active = true;
+      contextPointer.blocked = blocked;
+      contextPointer.moved = moved;
+      contextPointer.startedInScene = true;
+      contextPointer.x = event.clientX;
+      contextPointer.y = event.clientY;
+      contextPointer.pointerType = event.pointerType || "";
+    }
+
+    function shouldOpenContextMenuFromRelease(event) {
+      if (!contextPointer.startedInScene || contextPointer.blocked || contextPointer.moved) {
+        return false;
+      }
+      if (primaryPointer.active || primaryButtonHeld(event) || chordButtonsHeld(event)) {
+        return false;
+      }
+      const tapSlop = tapSlopForPointer(contextPointer.pointerType || event.pointerType);
+      const moved = Math.hypot(event.clientX - contextPointer.x, event.clientY - contextPointer.y);
+      return moved <= tapSlop;
+    }
+
+    function openContextMenuFromEvent(event, { suppressNativeContextMenu = true } = {}) {
+      clearPendingActivation();
+      if (suppressNativeContextMenu) {
+        contextMenuGesture.suppressNextContextMenu();
+      }
+      const referenceId = pickActivationReference(event.clientX, event.clientY, event.pointerType || contextPointer.pointerType || "") || "";
+      onContextReferenceRef.current?.(referenceId || "", {
+        clientX: event.clientX,
+        clientY: event.clientY,
+        multiSelect: !!event.shiftKey
+      });
+      resetContextPointer();
+    }
+
+    function releaseContextPointer(event) {
+      if (!contextPointer.startedInScene && !contextMenuGesture.isSuppressed()) {
+        contextPointer.active = false;
+        return;
+      }
+      if (shouldOpenContextMenuFromRelease(event)) {
+        openContextMenuFromEvent(event);
+        return;
+      }
+      contextMenuGesture.suppressNextContextMenu();
+      resetContextPointer();
+    }
+
+    function updateContextPointerMove(event) {
+      if (!contextPointer.active) {
+        return;
+      }
+      const tapSlop = tapSlopForPointer(contextPointer.pointerType || event.pointerType);
+      const moved = Math.hypot(event.clientX - contextPointer.x, event.clientY - contextPointer.y);
+      if (moved > tapSlop) {
+        contextPointer.blocked = true;
+        contextPointer.moved = true;
+        suppressContextMenuFromPanChord();
+      }
+    }
+
+    function handlePointerDownCapture(event) {
+      if (!isSceneEvent(event)) {
+        return;
+      }
+      if (event.button === 0) {
+        if (contextPointer.active || contextButtonHeld(event) || chordButtonsHeld(event)) {
+          suppressContextMenuFromPanChord();
+        } else {
+          recordPrimaryPointerDown(event);
+        }
+        return;
+      }
+      if (event.button !== 2) {
+        return;
+      }
+      recordContextPointerDown(event);
+      if (pointerDown.active || primaryPointer.active || primaryButtonHeld(event) || chordButtonsHeld(event)) {
+        suppressContextMenuFromPanChord();
+      }
+    }
+
+    function handleMouseDownCapture(event) {
+      if (!isSceneEvent(event)) {
+        return;
+      }
+      if (event.button === 0) {
+        if (contextPointer.active || contextButtonHeld(event) || chordButtonsHeld(event)) {
+          suppressContextMenuFromPanChord();
+        } else {
+          recordPrimaryPointerDown(event);
+        }
+        return;
+      }
+      if (event.button !== 2) {
+        return;
+      }
+      recordContextPointerDown(event);
+      if (pointerDown.active || primaryPointer.active || primaryButtonHeld(event) || chordButtonsHeld(event)) {
+        suppressContextMenuFromPanChord();
+      }
+    }
+
+    function handlePointerMoveCapture(event) {
+      if (!isSceneEvent(event)) {
+        return;
+      }
+      updateContextPointerMove(event);
+      if (chordButtonsHeld(event) || (primaryPointer.active && contextButtonHeld(event))) {
+        suppressContextMenuFromPanChord();
+      }
+    }
+
+    function handleMouseMoveCapture(event) {
+      if (!isSceneEvent(event)) {
+        return;
+      }
+      updateContextPointerMove(event);
+      if (chordButtonsHeld(event) || (primaryPointer.active && contextButtonHeld(event))) {
+        suppressContextMenuFromPanChord();
+      }
+    }
+
+    function handlePointerUpCapture(event) {
+      if (event.button === 0) {
+        resetPrimaryPointer();
+      } else if (event.button === 2) {
+        contextPointer.active = false;
+      }
+    }
+
+    function handleMouseUpCapture(event) {
+      if (event.button === 0) {
+        resetPrimaryPointer();
+      } else if (event.button === 2) {
+        releaseContextPointer(event);
+      }
+    }
+
     function handlePointerMove(event) {
       if (!isSceneInteractionTarget(event.target)) {
         clearHoverState();
         return;
       }
+      if (primaryPointer.active && !primaryButtonHeld(event)) {
+        resetPrimaryPointer();
+      }
+      if (chordButtonsHeld(event) || (primaryPointer.active && contextButtonHeld(event))) {
+        suppressContextMenuFromPanChord();
+      }
+      updateContextPointerMove(event);
       if (runtime.interactionState.active) {
         clearHoverState();
         return;
@@ -1066,18 +1303,33 @@ export function useViewerPicking({
 
     function handlePointerLeave() {
       clearHoverState();
+      if (pointerDown.active || primaryPointer.active || contextPointer.active) {
+        suppressContextMenuFromPanChord();
+      }
       pointerDown.active = false;
       pointerDown.pointerType = "";
       pointerDown.referenceId = "";
+      resetPrimaryPointer();
     }
 
     function handlePointerDown(event) {
       if (event.button !== 0) {
+        if (event.button === 2 && isSceneInteractionTarget(event.target)) {
+          recordContextPointerDown(event);
+          if (pointerDown.active || primaryPointer.active || primaryButtonHeld(event) || chordButtonsHeld(event)) {
+            suppressContextMenuFromPanChord();
+          }
+        }
         return;
       }
       if (!isSceneInteractionTarget(event.target)) {
         return;
       }
+      if (chordButtonsHeld(event) || contextButtonHeld(event)) {
+        suppressContextMenuFromPanChord();
+        return;
+      }
+      recordPrimaryPointerDown(event);
       pointerDown.active = true;
       pointerDown.x = event.clientX;
       pointerDown.y = event.clientY;
@@ -1090,6 +1342,11 @@ export function useViewerPicking({
     }
 
     function handlePointerUp(event) {
+      if (event.button === 0) {
+        resetPrimaryPointer();
+      } else if (event.button === 2) {
+        contextPointer.active = false;
+      }
       if (event.button !== 0) {
         return;
       }
@@ -1122,38 +1379,49 @@ export function useViewerPicking({
     }
 
     function handleContextMenu(event) {
-      if (!isSceneInteractionTarget(event.target)) {
+      if (!isSceneEvent(event)) {
         return;
       }
       event.preventDefault();
       event.stopPropagation();
       clearPendingActivation();
-      const referenceId = pickActivationReference(event.clientX, event.clientY, event.pointerType || "") || "";
-      onContextReferenceRef.current?.(referenceId || "", {
-        clientX: event.clientX,
-        clientY: event.clientY,
-        multiSelect: !!event.shiftKey
-      });
+      contextMenuGesture.consumeSuppression();
+      if (!contextPointer.startedInScene) {
+        resetContextPointer();
+      }
     }
 
+    container.addEventListener("pointerdown", handlePointerDownCapture, true);
+    container.addEventListener("pointermove", handlePointerMoveCapture, true);
+    container.addEventListener("pointerup", handlePointerUpCapture, true);
+    document.addEventListener("mousedown", handleMouseDownCapture, true);
+    document.addEventListener("mousemove", handleMouseMoveCapture, true);
+    document.addEventListener("mouseup", handleMouseUpCapture, true);
+    document.addEventListener("contextmenu", handleContextMenu, true);
     container.addEventListener("pointermove", handlePointerMove);
     container.addEventListener("pointerleave", handlePointerLeave);
     container.addEventListener("pointerdown", handlePointerDown);
     container.addEventListener("pointerup", handlePointerUp);
-    container.addEventListener("contextmenu", handleContextMenu);
     if (doubleClickEnabled) {
       container.addEventListener("dblclick", handleDoubleClick);
     }
 
     return () => {
+      container.removeEventListener("pointerdown", handlePointerDownCapture, true);
+      container.removeEventListener("pointermove", handlePointerMoveCapture, true);
+      container.removeEventListener("pointerup", handlePointerUpCapture, true);
+      document.removeEventListener("mousedown", handleMouseDownCapture, true);
+      document.removeEventListener("mousemove", handleMouseMoveCapture, true);
+      document.removeEventListener("mouseup", handleMouseUpCapture, true);
+      document.removeEventListener("contextmenu", handleContextMenu, true);
       container.removeEventListener("pointermove", handlePointerMove);
       container.removeEventListener("pointerleave", handlePointerLeave);
       container.removeEventListener("pointerdown", handlePointerDown);
       container.removeEventListener("pointerup", handlePointerUp);
-      container.removeEventListener("contextmenu", handleContextMenu);
       if (doubleClickEnabled) {
         container.removeEventListener("dblclick", handleDoubleClick);
       }
+      contextMenuGesture.clear();
       clearPendingActivation();
       clearHoverState();
       container.style.cursor = "";
