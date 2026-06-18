@@ -21,6 +21,7 @@ import {
 } from "cadjs/lib/pathUtils.mjs";
 
 import {
+  CATALOG_BLOB_CACHE_CONTROL_MAX_AGE_SECONDS,
   contentTypeForFileRef,
   createVercelBlobAssetBackend,
   normalizeVercelBlobCatalog,
@@ -980,6 +981,7 @@ export async function uploadCatalogJsonToBlob({
     fileRef: catalogPath || "catalog.json",
     body: catalogJsonBody(catalog),
     contentType: "application/json; charset=utf-8",
+    cacheControlMaxAge: CATALOG_BLOB_CACHE_CONTROL_MAX_AGE_SECONDS,
   });
 }
 

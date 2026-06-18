@@ -1,5 +1,7 @@
 import path from "node:path";
 
+export const CATALOG_BLOB_CACHE_CONTROL_MAX_AGE_SECONDS = 60;
+
 function normalizePrefix(value) {
   const rawValue = String(value || "").trim();
   if (!rawValue) {
@@ -348,7 +350,12 @@ export function createVercelBlobAssetBackend({
     return fetchCatalogCached();
   }
 
-  async function writeAsset({ fileRef, body, contentType = "application/octet-stream" } = {}) {
+  async function writeAsset({
+    fileRef,
+    body,
+    contentType = "application/octet-stream",
+    cacheControlMaxAge,
+  } = {}) {
     const pathname = joinBlobPath(normalizedPrefix, fileRef);
     if (!pathname) {
       throw new Error("Missing Vercel Blob asset path");
@@ -359,6 +366,7 @@ export function createVercelBlobAssetBackend({
       addRandomSuffix: false,
       allowOverwrite: true,
       contentType,
+      ...(cacheControlMaxAge !== undefined ? { cacheControlMaxAge } : {}),
       token,
     });
   }
@@ -372,6 +380,7 @@ export function createVercelBlobAssetBackend({
         entries: Array.isArray(normalizedCatalog?.entries) ? normalizedCatalog.entries : [],
       }, null, 2),
       contentType: "application/json; charset=utf-8",
+      cacheControlMaxAge: CATALOG_BLOB_CACHE_CONTROL_MAX_AGE_SECONDS,
     });
   }
 

@@ -248,6 +248,8 @@ test("uploadCatalogDirectoryToVercelBlob applies default catalog exclusions", as
   assert.equal(result.rootPath, path.join(repoRoot, "models"));
 
   const catalogUpload = putCalls.find((call) => call.pathname === "models2/catalog.json");
+  assert.equal(catalogUpload.options.cacheControlMaxAge, 60);
+  assert.equal(putCalls.find((call) => call.pathname === "models2/keep.stl").options.cacheControlMaxAge, undefined);
   const uploadedCatalog = JSON.parse(catalogUpload.body);
   assert.deepEqual(uploadedCatalog.entries.map((entry) => entry.file), ["keep.stl", "part.step"]);
   assert.equal(uploadedCatalog.entries[0].url, "https://blob.test/models2/keep.stl");
@@ -321,6 +323,7 @@ test("uploadCatalogDirectoryToVercelBlob skips assets already present in the rem
   assert.equal(result.skippedFiles, 1);
 
   const uploadedCatalog = JSON.parse(putCalls.find((call) => call.pathname === "models2/catalog.json").body);
+  assert.equal(putCalls.find((call) => call.pathname === "models2/catalog.json").options.cacheControlMaxAge, 60);
   const existingEntry = uploadedCatalog.entries.find((entry) => entry.file === "existing.stl");
   assert.equal(existingEntry.url, "https://blob.test/models2/existing.stl");
   assert.equal(existingEntry.hash, existingHash);
