@@ -40,6 +40,16 @@ function publicBlobUrlForRef(prefix, fileRef) {
   }
 }
 
+function cacheBypassedCatalogUrl(value) {
+  try {
+    const url = new URL(String(value || ""));
+    url.searchParams.set("cache", "0");
+    return url.toString();
+  } catch {
+    return value;
+  }
+}
+
 function normalizeFileRef(value) {
   const normalized = path.posix.normalize(String(value || "").trim().replace(/\\/g, "/").replace(/^\/+/, ""));
   return normalized && normalized !== "." && !normalized.startsWith("../") ? normalized : "";
@@ -241,7 +251,7 @@ async function readJsonFromUrl(url, { fetchImpl = globalThis.fetch } = {}) {
   if (!fetchImpl) {
     throw new Error("Vercel Blob backend requires fetch to read catalog URLs");
   }
-  const response = await fetchImpl(url);
+  const response = await fetchImpl(cacheBypassedCatalogUrl(url));
   if (!response.ok) {
     const detail = await blobErrorDetail(response);
     throw new Error(

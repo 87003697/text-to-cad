@@ -47,7 +47,7 @@ test("Vercel Blob backend reports public catalog URL failures instead of falling
     () => backend.readCatalog(),
     /Failed to read Vercel Blob catalog: 403 Forbidden/
   );
-  assert.deepEqual(fetchCalls, ["https://blob.test/demo/catalog.json"]);
+  assert.deepEqual(fetchCalls, ["https://blob.test/demo/catalog.json?cache=0"]);
   assert.deepEqual(getCalls, []);
 });
 
@@ -102,7 +102,7 @@ test("Vercel Blob backend prefers public catalog URLs when available", async () 
 
   assert.deepEqual(await backend.readCatalog(), {
     schemaVersion: 4,
-    url: "https://blob.test/demo/catalog.json",
+    url: "https://blob.test/demo/catalog.json?cache=0",
   });
 });
 
@@ -182,7 +182,7 @@ test("Vercel Blob backend reads catalog and writes deterministic asset paths", a
   assert.equal("generateStepArtifact" in backend, false);
   assert.deepEqual(await backend.readCatalog(), {
     schemaVersion: 4,
-    url: "https://blob.test/catalog.json",
+    url: "https://blob.test/catalog.json?cache=0",
   });
   const result = await backend.writeAsset({
     fileRef: "models/.part.step.glb",
@@ -504,7 +504,7 @@ test("Vercel Blob backend can be constructed read-only for hosted deployments", 
   assert.equal(backend.catalogPath, "models2/catalog.json");
   assert.deepEqual(await backend.readCatalog(), {
     schemaVersion: 4,
-    url: "https://blob.test/models2/catalog.json",
+    url: "https://blob.test/models2/catalog.json?cache=0",
   });
 });
 
