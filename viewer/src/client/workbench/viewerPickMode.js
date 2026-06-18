@@ -6,6 +6,7 @@ export function viewerPickModeForRenderPane({
   topologySelectionPending = false,
   topologySelectionUnavailable = false,
   topologySelectionDeferred = false,
+  topologyPickingActive = false,
   viewerMode = "",
   assemblyPickingActive = false,
   focusedPartIds = ""
@@ -18,6 +19,7 @@ export function viewerPickModeForRenderPane({
   }
   if (
     viewerMode === "assembly" &&
+    !topologyPickingActive &&
     (
       assemblyPickingActive ||
       !String(focusedPartIds || "").trim()

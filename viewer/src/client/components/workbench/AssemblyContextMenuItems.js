@@ -19,9 +19,12 @@ export default function AssemblyContextMenuItems({
   showHideOther = true,
   hideOtherDisabled = false,
   hideAllDisabled = true,
-  hideAllLabel = "Hide all instances",
+  hideAllLabel = "Show all",
   showVisibility = true,
   visibilityDisabled = false,
+  showCameraActions = false,
+  resetZoomDisabled = false,
+  zoomToFitDisabled = false,
   showHideAll = false,
   showExpandCollapse = false,
   expandSelectedDisabled = true,
@@ -35,22 +38,20 @@ export default function AssemblyContextMenuItems({
   onHideOther,
   onHideAll,
   onToggleVisibility,
+  onResetZoom,
+  onZoomToFit,
   onExpandSelected,
   onCollapseSelected,
   onExpandAll,
   onCollapseAll
 }) {
-  const normalizedActionCount = Math.max(Number(actionCount) || 1, 1);
-  const multiAction = normalizedActionCount > 1;
-  const selectLabel = selected
-    ? multiAction ? "Deselect selected" : "Deselect"
-    : "Select";
+  const selectLabel = selected ? "Deselect" : "Select";
   const isolateLabel = isolated
     ? "Exit isolate"
-    : multiAction ? "Isolate selected" : "Isolate";
+    : "Isolate";
   const visibilityLabel = hidden
     ? "Reveal"
-    : multiAction ? "Hide selected" : "Hide";
+    : "Hide";
 
   return (
     <>
@@ -94,7 +95,7 @@ export default function AssemblyContextMenuItems({
           disabled={hideOtherDisabled}
           onSelect={onHideOther}
         >
-          <AssemblyContextMenuItemLabel>Hide other instances</AssemblyContextMenuItemLabel>
+          <AssemblyContextMenuItemLabel>Hide others</AssemblyContextMenuItemLabel>
         </Item>
       ) : null}
       {showHideAll ? (
@@ -115,6 +116,25 @@ export default function AssemblyContextMenuItems({
           <AssemblyContextMenuItemLabel>{visibilityLabel}</AssemblyContextMenuItemLabel>
         </Item>
       ) : null}
+      {showCameraActions ? (
+        <>
+          <Separator />
+          <Item
+            className={itemClassName}
+            disabled={resetZoomDisabled}
+            onSelect={onResetZoom}
+          >
+            <AssemblyContextMenuItemLabel>Reset Zoom</AssemblyContextMenuItemLabel>
+          </Item>
+          <Item
+            className={itemClassName}
+            disabled={zoomToFitDisabled}
+            onSelect={onZoomToFit}
+          >
+            <AssemblyContextMenuItemLabel>Zoom To Fit</AssemblyContextMenuItemLabel>
+          </Item>
+        </>
+      ) : null}
       {showExpandCollapse ? (
         <>
           <Separator />
@@ -123,14 +143,14 @@ export default function AssemblyContextMenuItems({
             disabled={expandSelectedDisabled}
             onSelect={onExpandSelected}
           >
-            <AssemblyContextMenuItemLabel>Expand selected</AssemblyContextMenuItemLabel>
+            <AssemblyContextMenuItemLabel>Expand</AssemblyContextMenuItemLabel>
           </Item>
           <Item
             className={itemClassName}
             disabled={collapseSelectedDisabled}
             onSelect={onCollapseSelected}
           >
-            <AssemblyContextMenuItemLabel>Collapse selected</AssemblyContextMenuItemLabel>
+            <AssemblyContextMenuItemLabel>Collapse</AssemblyContextMenuItemLabel>
           </Item>
           <Item
             className={itemClassName}

@@ -140,6 +140,8 @@ function ViewerContextMenu({
   onHideAll,
   onHide,
   onReveal,
+  onResetZoom,
+  onZoomToFit,
   onExpandSelected,
   onCollapseSelected,
   onExpandAll,
@@ -186,44 +188,100 @@ function ViewerContextMenu({
           event.stopPropagation();
         }}
       >
-        <AssemblyContextMenuItems
-          Item={DropdownMenuItem}
-          Separator={DropdownMenuSeparator}
-          itemClassName={itemClassName}
-          selected={selected}
-          isolated={focused}
-          hidden={hidden}
-          actionCount={menu.actionCount}
-          copyReferenceDisabled={!String(menu.copyText || "").trim()}
-          selectDisabled={menu.selectDisabled === true}
-          showIsolate={menu.showIsolate !== false}
-          isolateDisabled={menu.isolateDisabled === true}
-          showExitAllIsolate={menu.showExitAllIsolate === true}
-          exitAllIsolateDisabled={menu.exitAllIsolateDisabled === true}
-          showHideOther={menu.showHideOther !== false}
-          hideOtherDisabled={menu.hideOtherDisabled === true}
-          showVisibility={menu.showVisibility !== false}
-          showHideAll={menu.showHideAll === true}
-          hideAllDisabled={menu.hideAllDisabled === true}
-          hideAllLabel={String(menu.hideAllLabel || "").trim() || (hidden ? "Reveal all instances" : "Hide all instances")}
-          visibilityDisabled={menu.visibilityDisabled === true}
-          showExpandCollapse={menu.showExpandCollapse === true}
-          expandSelectedDisabled={menu.expandSelectedDisabled !== false}
-          collapseSelectedDisabled={menu.collapseSelectedDisabled !== false}
-          expandAllDisabled={menu.expandAllDisabled !== false}
-          collapseAllDisabled={menu.collapseAllDisabled !== false}
-          onCopyReference={() => handleAction(onCopyReference)}
-          onSelect={() => handleAction(onSelect)}
-          onIsolate={() => handleAction(onFocus)}
-          onExitAllIsolate={() => handleAction(onExitAllIsolate)}
-          onHideOther={() => handleAction(onHideOther)}
-          onHideAll={() => handleAction(onHideAll)}
-          onToggleVisibility={() => handleAction(hidden ? onReveal : onHide)}
-          onExpandSelected={() => handleAction(onExpandSelected)}
-          onCollapseSelected={() => handleAction(onCollapseSelected)}
-          onExpandAll={() => handleAction(onExpandAll)}
-          onCollapseAll={() => handleAction(onCollapseAll)}
-        />
+        {menu.global === true ? (
+          <>
+            {menu.showShowAll === true ? (
+              <DropdownMenuItem
+                className={itemClassName}
+                onSelect={() => handleAction(onHideAll)}
+              >
+                Show all
+              </DropdownMenuItem>
+            ) : null}
+            {menu.showShowAll === true && menu.showCameraActions !== false ? (
+              <DropdownMenuSeparator />
+            ) : null}
+            {menu.showCameraActions !== false ? (
+              <>
+                <DropdownMenuItem
+                  className={itemClassName}
+                  disabled={menu.resetZoomDisabled === true}
+                  onSelect={() => handleAction(onResetZoom)}
+                >
+                  Reset Zoom
+                </DropdownMenuItem>
+              </>
+            ) : null}
+            {menu.showCameraActions !== false && menu.showExpandCollapse === true ? (
+              <DropdownMenuSeparator />
+            ) : null}
+            {menu.showShowAll === true && menu.showCameraActions === false && menu.showExpandCollapse === true ? (
+              <DropdownMenuSeparator />
+            ) : null}
+            {menu.showExpandCollapse === true ? (
+              <>
+                <DropdownMenuItem
+                  className={itemClassName}
+                  disabled={menu.expandAllDisabled === true}
+                  onSelect={() => handleAction(onExpandAll)}
+                >
+                  Expand all
+                </DropdownMenuItem>
+                <DropdownMenuItem
+                  className={itemClassName}
+                  disabled={menu.collapseAllDisabled === true}
+                  onSelect={() => handleAction(onCollapseAll)}
+                >
+                  Collapse all
+                </DropdownMenuItem>
+              </>
+            ) : null}
+          </>
+        ) : (
+          <AssemblyContextMenuItems
+            Item={DropdownMenuItem}
+            Separator={DropdownMenuSeparator}
+            itemClassName={itemClassName}
+            selected={selected}
+            isolated={focused}
+            hidden={hidden}
+            actionCount={menu.actionCount}
+            copyReferenceDisabled={!String(menu.copyText || "").trim()}
+            selectDisabled={menu.selectDisabled === true}
+            showIsolate={menu.showIsolate !== false}
+            isolateDisabled={menu.isolateDisabled === true}
+            showExitAllIsolate={menu.showExitAllIsolate === true}
+            exitAllIsolateDisabled={menu.exitAllIsolateDisabled === true}
+            showHideOther={menu.showHideOther !== false}
+            hideOtherDisabled={menu.hideOtherDisabled === true}
+            showVisibility={menu.showVisibility !== false}
+            showHideAll={menu.showHideAll === true}
+            hideAllDisabled={menu.hideAllDisabled === true}
+            hideAllLabel={String(menu.hideAllLabel || "").trim() || "Show all"}
+            visibilityDisabled={menu.visibilityDisabled === true}
+            showCameraActions={menu.showCameraActions !== false}
+            resetZoomDisabled={menu.resetZoomDisabled === true}
+            zoomToFitDisabled={menu.zoomToFitDisabled === true}
+            showExpandCollapse={menu.showExpandCollapse === true}
+            expandSelectedDisabled={menu.expandSelectedDisabled !== false}
+            collapseSelectedDisabled={menu.collapseSelectedDisabled !== false}
+            expandAllDisabled={menu.expandAllDisabled !== false}
+            collapseAllDisabled={menu.collapseAllDisabled !== false}
+            onCopyReference={() => handleAction(onCopyReference)}
+            onSelect={() => handleAction(onSelect)}
+            onIsolate={() => handleAction(onFocus)}
+            onExitAllIsolate={() => handleAction(onExitAllIsolate)}
+            onHideOther={() => handleAction(onHideOther)}
+            onHideAll={() => handleAction(onHideAll)}
+            onToggleVisibility={() => handleAction(hidden ? onReveal : onHide)}
+            onResetZoom={() => handleAction(onResetZoom)}
+            onZoomToFit={() => handleAction(onZoomToFit)}
+            onExpandSelected={() => handleAction(onExpandSelected)}
+            onCollapseSelected={() => handleAction(onCollapseSelected)}
+            onExpandAll={() => handleAction(onExpandAll)}
+            onCollapseAll={() => handleAction(onCollapseAll)}
+          />
+        )}
       </DropdownMenuContent>
     </DropdownMenu>
   );
@@ -297,6 +355,8 @@ export default function CadRenderPane({
   onViewerContextMenuHideAll,
   onViewerContextMenuHide,
   onViewerContextMenuReveal,
+  onViewerContextMenuResetZoom,
+  onViewerContextMenuZoomToFit,
   onViewerContextMenuExpandSelected,
   onViewerContextMenuCollapseSelected,
   onViewerContextMenuExpandAll,
@@ -493,6 +553,11 @@ export default function CadRenderPane({
               topologySelectionPending,
               topologySelectionUnavailable,
               topologySelectionDeferred,
+              topologyPickingActive: Boolean(
+                pickableFaces?.length ||
+                pickableEdges?.length ||
+                pickableVertices?.length
+              ),
               viewerMode,
               assemblyPickingActive,
               focusedPartIds
@@ -542,6 +607,8 @@ export default function CadRenderPane({
           onHideAll={onViewerContextMenuHideAll}
           onHide={onViewerContextMenuHide}
           onReveal={onViewerContextMenuReveal}
+          onResetZoom={onViewerContextMenuResetZoom}
+          onZoomToFit={onViewerContextMenuZoomToFit}
           onExpandSelected={onViewerContextMenuExpandSelected}
           onCollapseSelected={onViewerContextMenuCollapseSelected}
           onExpandAll={onViewerContextMenuExpandAll}

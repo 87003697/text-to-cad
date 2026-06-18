@@ -5,6 +5,7 @@ import {
   clampSceneModelRadius,
   defaultSceneGridRadius,
   getLightingScopeRadius,
+  getProportionalLightingScopeRadius,
   getShadowCameraSettings,
   getSceneScaleSettings,
   normalizeSceneScaleMode,
@@ -19,7 +20,8 @@ test("CAD scenes keep the existing large minimum framing scale", () => {
   assert.deepEqual(getSceneScaleSettings(VIEWER_SCENE_SCALE.CAD), {
     minModelRadius: 1,
     minGridSize: 280,
-    lightingScopeRadius: 140
+    lightingScopeRadius: 140,
+    lightingReferenceModelRadius: 760
   });
 });
 
@@ -32,7 +34,8 @@ test("URDF scenes use meter-appropriate framing and lighting minimums", () => {
   assert.deepEqual(getSceneScaleSettings(VIEWER_SCENE_SCALE.URDF), {
     minModelRadius: 0.05,
     minGridSize: 0.28,
-    lightingScopeRadius: 0.14
+    lightingScopeRadius: 0.14,
+    lightingReferenceModelRadius: 0.76
   });
 });
 
@@ -58,4 +61,12 @@ test("shadow camera settings keep CAD lighting but preserve scene-unit shadow re
     normalBias: 0.000012,
     radius: 14
   });
+});
+
+test("proportional lighting scope scales from the reference model size", () => {
+  assert.equal(getProportionalLightingScopeRadius(760, VIEWER_SCENE_SCALE.CAD), 140);
+  assert.equal(getProportionalLightingScopeRadius(380, VIEWER_SCENE_SCALE.CAD), 70);
+  assert.equal(getProportionalLightingScopeRadius(1520, VIEWER_SCENE_SCALE.CAD), 280);
+  assert.equal(getProportionalLightingScopeRadius(0.76, VIEWER_SCENE_SCALE.URDF), 0.14);
+  assert.equal(getProportionalLightingScopeRadius(0.38, VIEWER_SCENE_SCALE.URDF), 0.07);
 });

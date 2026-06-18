@@ -2,6 +2,10 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import { screenLimitedPickThreshold, worldUnitsPerPixelAtDistance } from "cadjs/lib/viewer/pickingThresholds.js";
+import {
+  createViewerContextMenuGestureState,
+  VIEWER_CONTEXT_MENU_SUPPRESSION_MS
+} from "./viewerContextMenuGesture.js";
 
 test("worldUnitsPerPixelAtDistance converts perspective depth to screen scale", () => {
   const camera = {
@@ -50,4 +54,32 @@ test("screenLimitedPickThreshold falls back to the scaled base threshold when sc
     distance: 30
   });
   assert.equal(threshold, 0.45);
+});
+
+test("viewer context menu gesture suppression blocks one menu event", () => {
+  let time = 1000;
+  const gesture = createViewerContextMenuGestureState({
+    now: () => time
+  });
+
+  gesture.suppressNextContextMenu();
+  assert.equal(gesture.isSuppressed(), true);
+  assert.equal(gesture.consumeSuppression(), true);
+  assert.equal(gesture.isSuppressed(), false);
+  assert.equal(gesture.consumeSuppression(), false);
+});
+
+test("viewer context menu gesture suppression expires", () => {
+  let time = 2000;
+  const gesture = createViewerContextMenuGestureState({
+    now: () => time
+  });
+
+  gesture.suppressNextContextMenu();
+  assert.equal(gesture.isSuppressed(), true);
+
+  time += VIEWER_CONTEXT_MENU_SUPPRESSION_MS + 1;
+
+  assert.equal(gesture.isSuppressed(), false);
+  assert.equal(gesture.consumeSuppression(), false);
 });

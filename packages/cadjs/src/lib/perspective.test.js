@@ -77,6 +77,17 @@ test("perspective snapshots match scene metadata when present", () => {
     }),
     true
   );
+  assert.equal(
+    perspectiveSnapshotMatchesScene(PERSPECTIVE_A, {
+      modelKey: "sample_robot.urdf",
+      sceneScaleMode: "urdf",
+      coordinateSystem: "cad-z-up-v1",
+      requireModelKey: true,
+      requireSceneScaleMode: true,
+      requireCoordinateSystem: true
+    }),
+    false
+  );
 });
 
 test("perspective snapshots preserve and compare camera projection", () => {

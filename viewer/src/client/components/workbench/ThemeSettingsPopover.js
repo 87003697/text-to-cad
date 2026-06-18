@@ -148,21 +148,6 @@ const EDGE_CLASS_CONTROLS = Object.freeze([
   Object.freeze({ id: "degenerate", label: "Degenerate", defaultColor: CAD_EDGE_COLOR, defaultOpacity: 1, defaultThickness: 0 })
 ]);
 
-function normalizeEdgeAvailability(value) {
-  if (!value || typeof value !== "object") {
-    return null;
-  }
-  const classes = Array.isArray(value.generatedVisibilityClasses)
-    ? value.generatedVisibilityClasses
-    : Array.isArray(value.visibilityClasses)
-      ? value.visibilityClasses
-      : null;
-  if (!classes) {
-    return null;
-  }
-  return new Set(classes.map((item) => String(item || "").trim()).filter(Boolean));
-}
-
 function clamp(value, min, max) {
   return Math.min(Math.max(value, min), max);
 }
@@ -421,7 +406,6 @@ function EdgeMetricInput({
 
 function EdgeClassControlRow({
   label,
-  available = true,
   color,
   thickness,
   opacity,
@@ -429,7 +413,6 @@ function EdgeClassControlRow({
   onThicknessChange,
   onOpacityChange
 }) {
-  const disabled = !available;
   return (
     <FileSheetControlRow
       label={label}
@@ -439,13 +422,11 @@ function EdgeClassControlRow({
           color={color}
           opacity={opacity}
           thickness={thickness}
-          disabled={disabled}
           onColorChange={onColorChange}
           onOpacityChange={onOpacityChange}
           onThicknessChange={onThicknessChange}
         />
       )}
-      className={cn(disabled && "opacity-55")}
       contentClassName="hidden"
     />
   );
@@ -1503,7 +1484,6 @@ function PositionPad({ value, onChange }) {
 export function DisplaySettingsSection({
   displaySettings,
   updateDisplaySettings,
-  edgeAvailability = null,
   clipBounds = null,
   showClip = false
 }) {
@@ -1523,7 +1503,6 @@ export function DisplaySettingsSection({
     () => normalizeDisplayEdgeSettings(normalizedDisplaySettings.edges),
     [normalizedDisplaySettings.edges]
   );
-  const availableEdgeClassSet = useMemo(() => normalizeEdgeAvailability(edgeAvailability), [edgeAvailability]);
   const setDisplay = (patch) => {
     updateDisplaySettings?.((current) => ({
       ...normalizeDisplaySettings(current),
@@ -1644,12 +1623,10 @@ export function DisplaySettingsSection({
           const color = settings.color || edgeClass.defaultColor;
           const thickness = settings.thickness ?? edgeClass.defaultThickness;
           const opacity = settings.opacity ?? edgeClass.defaultOpacity;
-          const available = !availableEdgeClassSet || availableEdgeClassSet.has(edgeClass.id);
           return (
             <EdgeClassControlRow
               key={edgeClass.id}
               label={edgeClass.label}
-              available={available}
               color={color}
               thickness={thickness}
               opacity={opacity}

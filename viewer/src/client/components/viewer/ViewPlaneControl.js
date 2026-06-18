@@ -27,8 +27,18 @@ const DEFAULT_VIEW_PLANE_PALETTE = Object.freeze({
   }
 });
 
+const DEFAULT_VIEW_PLANE_SIZE = "6.71875rem";
+
 function clamp(value, min, max) {
   return Math.min(Math.max(value, min), max);
+}
+
+function normalizeCssLength(value, fallback = "") {
+  if (typeof value === "number" && Number.isFinite(value) && value > 0) {
+    return `${value}px`;
+  }
+  const text = String(value || "").trim();
+  return text || fallback;
 }
 
 function toRgb(value) {
@@ -138,6 +148,7 @@ export default function ViewPlaneControl({
   viewerTheme,
   compact = false,
   variant = "3d",
+  viewPlaneSize,
   viewPlaneHeader = null,
   activateViewPlaneFace,
   activateDefaultViewPlane
@@ -176,8 +187,16 @@ export default function ViewPlaneControl({
   const backNodes = projectedNodes.filter((node) => node.z < 0);
   const frontNodes = projectedNodes.filter((node) => node.z >= 0);
   const is2d = variant === "2d";
-  const viewPlaneSizeClasses = compact || is2d ? "h-20 w-20" : "h-[6.71875rem] w-[6.71875rem]";
-  const viewPlaneShapeClasses = is2d ? "rounded-md" : "rounded-full";
+  const customViewPlaneSize = !compact && !is2d
+    ? normalizeCssLength(viewPlaneSize, DEFAULT_VIEW_PLANE_SIZE)
+    : "";
+  const viewPlaneSizeClasses = compact || is2d ? "h-20 w-20" : "";
+  const viewPlaneSizeStyle = customViewPlaneSize
+    ? { width: customViewPlaneSize, height: customViewPlaneSize }
+    : undefined;
+  const viewPlaneSurfaceClasses = is2d
+    ? "cad-glass-surface pointer-events-auto relative rounded-md border border-sidebar-border text-sidebar-foreground shadow-sm transition duration-150"
+    : "pointer-events-auto relative text-sidebar-foreground transition duration-150";
   const viewPlaneLabel = is2d ? "2D view selector" : "Perspective selector";
   const normalizedBottomOffset = typeof viewPlaneOffsetBottom === "number"
     ? `${viewPlaneOffsetBottom}px`
@@ -274,7 +293,7 @@ export default function ViewPlaneControl({
 
   return (
     <div
-      className="pointer-events-none absolute z-20 flex flex-col items-end gap-1.5"
+      className="pointer-events-none absolute z-30 flex flex-col items-end gap-1"
       style={{ right: `${viewPlaneOffsetRight}px`, bottom: normalizedBottomOffset }}
     >
       {viewPlaneHeader ? (
@@ -288,7 +307,8 @@ export default function ViewPlaneControl({
         </div>
       ) : null}
       <div
-        className={`cad-glass-surface pointer-events-auto relative border border-sidebar-border text-sidebar-foreground shadow-sm transition duration-150 ${viewPlaneShapeClasses} ${viewPlaneSizeClasses}`}
+        className={`${viewPlaneSurfaceClasses} ${viewPlaneSizeClasses}`}
+        style={viewPlaneSizeStyle}
         onPointerDown={(event) => {
           event.stopPropagation();
         }}

@@ -21,7 +21,10 @@ export function ToolbarButton({
           type="button"
           variant={active ? "secondary" : "ghost"}
           size="icon-xs"
-          className={cn("size-6 shadow-none", className)}
+          className={cn(
+            "size-6 rounded-sm text-sidebar-foreground/70 shadow-none transition hover:bg-sidebar-accent hover:text-sidebar-accent-foreground focus-visible:ring-2 focus-visible:ring-ring/45 data-[variant=secondary]:bg-sidebar-accent data-[variant=secondary]:text-sidebar-accent-foreground data-[variant=secondary]:hover:bg-sidebar-accent",
+            className
+          )}
           aria-label={label}
           {...props}
         >

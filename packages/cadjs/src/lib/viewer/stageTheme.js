@@ -2,7 +2,6 @@ import { THEME_FLOOR_MODES } from "../themeSettings.js";
 import {
   clampSceneModelRadius,
   VIEWER_SCENE_SCALE,
-  getLightingScopeRadius,
   getSceneScaleSettings
 } from "./sceneScale.js";
 
@@ -481,6 +480,18 @@ export function createStageFloorGlowTexture(THREE, color, opacity) {
   return texture;
 }
 
+export function getStageFloorGlowSize(lightingScopeRadius, size, sceneScaleMode = VIEWER_SCENE_SCALE.CAD) {
+  const sceneScaleSettings = getSceneScaleSettings(sceneScaleMode);
+  const safeLightingRadius = Math.max(
+    Number(lightingScopeRadius) || 0,
+    sceneScaleSettings.minModelRadius
+  );
+  return Math.min(
+    Math.max(Number(size) || 0, 0) * 0.24,
+    safeLightingRadius * 8
+  );
+}
+
 export function createStageFloorPlane(THREE, viewerTheme, themeSettings, size, floorZ, lift = 0) {
   const glassFactor = resolveStageFloorGlassFactor(themeSettings);
   const horizonBlend = getStageFloorSetting(themeSettings, "horizonBlend", 0, 0, 1);
@@ -584,12 +595,7 @@ export function createStageFloorGlowPlane(THREE, themeSettings, lightingScopeRad
     return null;
   }
 
-  const sceneScaleSettings = getSceneScaleSettings(sceneScaleMode);
-  const safeLightingRadius = Math.max(Number(lightingScopeRadius) || 0, getLightingScopeRadius(sceneScaleMode));
-  const glowSize = Math.min(
-    size * 0.24,
-    Math.max(safeLightingRadius * 8, sceneScaleSettings.minGridSize * 3.4)
-  );
+  const glowSize = getStageFloorGlowSize(lightingScopeRadius, size, sceneScaleMode);
   const material = new THREE.MeshBasicMaterial({
     map: texture,
     transparent: true,
