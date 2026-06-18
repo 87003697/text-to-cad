@@ -199,6 +199,16 @@ def gen_step_with_options(*, include_gripper: bool = False) -> dict[str, object]
                     tom_module.invert_rigid_transform(source_child_transform),
                 )
 
+        if child_name == "elbow_pitch_link":
+            child_transform = tom_module._apply_v2_step_home_pose_to_elbow_pitch(
+                child_transform=child_transform,
+                instance_transforms_by_name=instance_transforms_by_name,
+            )
+            downstream_correction = tom_module.multiply_transforms(
+                child_transform,
+                tom_module.invert_rigid_transform(source_child_transform),
+            )
+
         if child_name == tom_module.GRIPPER_CHILD_NAME:
             if not include_gripper:
                 continue

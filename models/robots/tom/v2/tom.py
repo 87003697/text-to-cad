@@ -130,6 +130,31 @@ URDF_JOINT_VELOCITY_RAD_S_BY_NAME = {
     "wrist_pitch": STS3215_NO_LOAD_SPEED_RAD_S,
     "wrist_roll": STS3215_NO_LOAD_SPEED_RAD_S,
 }
+V2_HOME_ELBOW_PITCH_DEG = -90.0
+V2_SRDF_REACH_ARM_GROUP_STATE_DEG = {
+    "base_yaw": 0.0,
+    "shoulder_pitch": 90.0,
+    "shoulder_roll": 0.0,
+    "elbow_pitch": 0.0,
+    "elbow_roll": 0.0,
+    "wrist_pitch": 0.0,
+    "wrist_roll": 0.0,
+}
+V2_SRDF_INSPECTION_ARM_GROUP_STATE_DEG = {
+    "base_yaw": 45.0,
+    "shoulder_pitch": -27.0,
+    "shoulder_roll": 66.0,
+    "elbow_pitch": -87.0,
+    "elbow_roll": 121.995,
+    "wrist_pitch": 83.0,
+    "wrist_roll": -99.0,
+}
+V2_SRDF_INSPECTION_MIRRORED_ARM_GROUP_STATE_DEG = {
+    **V2_SRDF_INSPECTION_ARM_GROUP_STATE_DEG,
+    "shoulder_roll": -V2_SRDF_INSPECTION_ARM_GROUP_STATE_DEG["shoulder_roll"],
+    "elbow_roll": -V2_SRDF_INSPECTION_ARM_GROUP_STATE_DEG["elbow_roll"],
+    "wrist_roll": -V2_SRDF_INSPECTION_ARM_GROUP_STATE_DEG["wrist_roll"],
+}
 
 NO_GRIPPER_LINK_NAMES = (
     "base_footprint",
@@ -482,6 +507,93 @@ def _transform_direction(
     )
 
 
+def _axis_angle_transform(
+    *,
+    axis_point_mm: tuple[float, float, float],
+    axis_direction: tuple[float, float, float],
+    angle_deg: float,
+) -> list[float]:
+    ux, uy, uz = _normalized_vector(axis_direction)
+    theta = math.radians(angle_deg)
+    c = math.cos(theta)
+    s = math.sin(theta)
+    one_minus_c = 1.0 - c
+    rotation = (
+        (
+            c + ux * ux * one_minus_c,
+            ux * uy * one_minus_c - uz * s,
+            ux * uz * one_minus_c + uy * s,
+        ),
+        (
+            uy * ux * one_minus_c + uz * s,
+            c + uy * uy * one_minus_c,
+            uy * uz * one_minus_c - ux * s,
+        ),
+        (
+            uz * ux * one_minus_c - uy * s,
+            uz * uy * one_minus_c + ux * s,
+            c + uz * uz * one_minus_c,
+        ),
+    )
+    px, py, pz = axis_point_mm
+    rotated_point = (
+        rotation[0][0] * px + rotation[0][1] * py + rotation[0][2] * pz,
+        rotation[1][0] * px + rotation[1][1] * py + rotation[1][2] * pz,
+        rotation[2][0] * px + rotation[2][1] * py + rotation[2][2] * pz,
+    )
+    translation = (
+        px - rotated_point[0],
+        py - rotated_point[1],
+        pz - rotated_point[2],
+    )
+    return [
+        rotation[0][0], rotation[0][1], rotation[0][2], translation[0],
+        rotation[1][0], rotation[1][1], rotation[1][2], translation[1],
+        rotation[2][0], rotation[2][1], rotation[2][2], translation[2],
+        0.0, 0.0, 0.0, 1.0,
+    ]
+
+
+def _rotate_transform_about_axis(
+    transform: list[float],
+    *,
+    axis_point_mm: tuple[float, float, float],
+    axis_direction: tuple[float, float, float],
+    angle_deg: float,
+) -> list[float]:
+    if abs(angle_deg) <= 1e-9:
+        return list(transform)
+    return multiply_transforms(
+        _axis_angle_transform(
+            axis_point_mm=axis_point_mm,
+            axis_direction=axis_direction,
+            angle_deg=angle_deg,
+        ),
+        transform,
+    )
+
+
+def _apply_v2_step_home_pose_to_elbow_pitch(
+    *,
+    child_transform: list[float],
+    instance_transforms_by_name: dict[str, list[float]],
+) -> list[float]:
+    elbow_pitch_servo = instance_transforms_by_name.get(
+        URDF_SERVO_AXIS_INSTANCE_BY_JOINT["elbow_pitch"]
+    )
+    if elbow_pitch_servo is None:
+        raise RuntimeError("Cannot apply v2 STEP elbow home pose before elbow servo exists")
+    axis_center_world, axis_direction_world = _servo_horn_axis_from_transform(
+        elbow_pitch_servo
+    )
+    return _rotate_transform_about_axis(
+        child_transform,
+        axis_point_mm=axis_center_world,
+        axis_direction=axis_direction_world,
+        angle_deg=V2_HOME_ELBOW_PITCH_DEG,
+    )
+
+
 def _translate_transform(
     transform: list[float],
     delta: tuple[float, float, float],
@@ -581,6 +693,16 @@ def gen_step_with_options(*, include_gripper: bool = False) -> dict[str, object]
                 downstream_correction = multiply_transforms(
                     child_transform,
                     invert_rigid_transform(source_child_transform),
+                )
+
+        if child_name == "elbow_pitch_link":
+            child_transform = _apply_v2_step_home_pose_to_elbow_pitch(
+                child_transform=child_transform,
+                instance_transforms_by_name=instance_transforms_by_name,
+            )
+            downstream_correction = multiply_transforms(
+                child_transform,
+                invert_rigid_transform(source_child_transform),
             )
 
         if child_name == GRIPPER_CHILD_NAME:
@@ -1469,6 +1591,27 @@ def _srdf_group_state_element(
     )
 
 
+def _srdf_arm_group_states_deg() -> tuple[tuple[str, dict[str, float]], ...]:
+    old_home_elbow_pitch_deg = 0.0
+    for state_name, joint_values_deg in robot_arm.ROBOT_ARM_SRDF_ARM_GROUP_STATES_DEG:
+        if state_name == "home":
+            old_home_elbow_pitch_deg = float(joint_values_deg.get("elbow_pitch", 0.0))
+            break
+    elbow_pitch_offset_deg = V2_HOME_ELBOW_PITCH_DEG - old_home_elbow_pitch_deg
+    states: list[tuple[str, dict[str, float]]] = []
+    for state_name, joint_values_deg in robot_arm.ROBOT_ARM_SRDF_ARM_GROUP_STATES_DEG:
+        next_values = dict(joint_values_deg)
+        next_values["elbow_pitch"] = float(next_values.get("elbow_pitch", 0.0)) + elbow_pitch_offset_deg
+        if state_name == "reach_forward":
+            next_values = dict(V2_SRDF_REACH_ARM_GROUP_STATE_DEG)
+        elif state_name == "inspection":
+            next_values = dict(V2_SRDF_INSPECTION_ARM_GROUP_STATE_DEG)
+        elif state_name == "inspection_mirrored":
+            next_values = dict(V2_SRDF_INSPECTION_MIRRORED_ARM_GROUP_STATE_DEG)
+        states.append((state_name, next_values))
+    return tuple(states)
+
+
 def _srdf_adjacent_collision_pairs_from_urdf(urdf: str) -> tuple[tuple[str, str], ...]:
     urdf_root = ET.parse(V2_DIR / urdf).getroot()
     pairs: list[tuple[str, str]] = []
@@ -1540,7 +1683,7 @@ def _srdf_root_element(
             )
         )
 
-    for name, joint_values_deg in robot_arm.ROBOT_ARM_SRDF_ARM_GROUP_STATES_DEG:
+    for name, joint_values_deg in _srdf_arm_group_states_deg():
         root.append(
             _srdf_group_state_element(
                 name=name,

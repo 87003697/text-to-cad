@@ -8,7 +8,7 @@
 | SRDF output path | `tom.srdf` | `tom_double.srdf` | `tom_with_gripper.srdf` |
 | Robot name | `tom_v2` | `tom_v2_double` | `tom_v2_with_gripper` |
 | Root link | `base_footprint` | `base_footprint` | `base_footprint` |
-| Active arm joints | `base_yaw`, `shoulder_pitch`, `shoulder_roll`, `elbow_pitch`, `elbow_roll`, `wrist_pitch`, `wrist_roll` | same, with double STS3250 effort on `shoulder_pitch` in URDF | same |
+| Active arm joints | `base_yaw`, `shoulder_pitch`, `shoulder_roll`, `elbow_pitch`, `elbow_roll`, `wrist_pitch`, `wrist_roll`; v2 rebases the named home pose at `elbow_pitch=-90 deg` | same, with double STS3250 effort on `shoulder_pitch` in URDF | same |
 | Fixed joints | `base_footprint_to_base_link` | `base_footprint_to_base_link` | `base_footprint_to_base_link`, `wrist_roll_to_gripper_base` |
 | Mimic joints | none | none | `gripper_right_claw_slide`, `gripper_left_claw_slide` mimic `gripper_servo` |
 | Passive joints | none | none | none |
@@ -50,10 +50,10 @@
 
 | State | Group | Unit check | Limit check | Purpose |
 |---|---|---|---|---|
-| `home` | `arm` | revolute/continuous values generated in radians from shared v1 degree constants | within URDF limits | Neutral all-zero arm pose. |
-| `reach_forward` | `arm` | radians | within URDF limits | Forward reach review pose matching v1. |
-| `inspection` | `arm` | radians | within URDF limits | Angled inspection pose matching v1. |
-| `inspection_mirrored` | `arm` | radians | within URDF limits | Mirrored inspection pose matching v1. |
+| `home` | `arm` | revolute/continuous values generated in radians; `elbow_pitch=-90 deg` | within URDF limits | V2 calibrated home pose. |
+| `reach_forward` | `arm` | radians; explicit v2 review pose uses `base_yaw=0 deg`, `shoulder_pitch=90 deg`, `shoulder_roll=0 deg`, `elbow_pitch=0 deg`, `elbow_roll=0 deg`, `wrist_pitch=0 deg`, `wrist_roll=0 deg` | within URDF limits | Forward reach review pose selected from viewer review. |
+| `inspection` | `arm` | radians; explicit v2 review pose uses `base_yaw=45 deg`, `shoulder_pitch=-27 deg`, `shoulder_roll=66 deg`, `elbow_pitch=-87 deg`, `elbow_roll=121.995 deg`, `wrist_pitch=83 deg`, `wrist_roll=-99 deg` | within URDF limits | Angled inspection pose selected from viewer review. |
+| `inspection_mirrored` | `arm` | radians; mirrors the inspection roll joints to `shoulder_roll=-66 deg`, `elbow_roll=-121.995 deg`, `wrist_roll=99 deg` while keeping the other inspection values | within URDF limits | Mirrored inspection pose using the same roll-sign convention as v1. |
 | `open` | `gripper` | radians | within URDF limits | Gripper open state for `tom_with_gripper`. |
 | `half_closed` | `gripper` | radians | within URDF limits | Gripper mid travel state for `tom_with_gripper`. |
 | `closed` | `gripper` | radians | within URDF limits | Gripper closed state for `tom_with_gripper`. |
@@ -69,6 +69,8 @@ MoveIt Setup Assistant and runtime IK/path planning were not run in this change.
 ## Assumptions to report
 
 - The v2 arm planning group intentionally mirrors the v1 `arm` chain from `base_link` to `wrist_roll_link`.
-- The named arm poses intentionally reuse the v1 constants because v2 keeps the same controllable arm joint names and limits.
+- `home` keeps the v2-only `elbow_pitch=-90 deg` home offset.
+- `reach_forward` is an explicit v2 viewer-selected pose with `elbow_roll=0 deg`.
+- `inspection` is an explicit v2 viewer-selected pose, and `inspection_mirrored` flips the roll-joint signs from that pose.
 - Collision disables are adjacency-only; no broad manual or sampled-safe collision matrix was added.
 - `tom_with_gripper` uses `gripper_base_link` as the TCP target link, matching v1 semantics.
