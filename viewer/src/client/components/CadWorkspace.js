@@ -172,9 +172,10 @@ import {
   buildUrdfJointAnglesCopyText,
   cloneJointValueMap,
   emptyUrdfPosePickerState,
+  findBestMatchingJointValueState,
   interpolateTrajectoryJointValues,
-  jointValueSubsetClose,
   normalizePoint3,
+  srdfHomeGroupStateJointValuesToDisplay,
   srdfGroupStateJointValuesToDisplay
 } from "@/workbench/robotMotionControls";
 import {
@@ -238,6 +239,7 @@ import {
   interpolateUrdfJointValues,
   jointValueMapsClose,
   URDF_JOINT_ANIMATION_DURATION_MS,
+  URDF_JOINT_ANIMATION_EPSILON,
   URDF_JOINT_ANIMATION_FOLLOW_MS
 } from "cadjs/lib/urdf/jointAnimation";
 import { checkMoveIt2ServerLive, moveit2ServerEnabled, requestMoveIt2Server } from "cadjs/lib/urdf/moveit2ServerClient";
@@ -1649,7 +1651,10 @@ export default function CadWorkspace({
     ? fileKey(selectedEntry)
     : "";
   const defaultSelectedUrdfJointValues = useMemo(
-    () => buildDefaultUrdfJointValues(selectedUrdfData),
+    () => ({
+      ...buildDefaultUrdfJointValues(selectedUrdfData),
+      ...srdfHomeGroupStateJointValuesToDisplay(selectedUrdfData)
+    }),
     [selectedUrdfData]
   );
   const storedSelectedUrdfJointValues = useMemo(() => {
@@ -1705,9 +1710,13 @@ export default function CadWorkspace({
   );
   const matchedSelectedUrdfGroupStateId = useMemo(
     () => (
-      selectedUrdfGroupStates.find((state) => jointValueSubsetClose(selectedUrdfJointValues, state.jointValuesByName))?.id || ""
+      findBestMatchingJointValueState(
+        selectedUrdfGroupStates,
+        selectedUrdfJointValues,
+        defaultSelectedUrdfJointValues
+      )?.id || ""
     ),
-    [selectedUrdfJointValues, selectedUrdfGroupStates]
+    [defaultSelectedUrdfJointValues, selectedUrdfJointValues, selectedUrdfGroupStates]
   );
   const trackedSelectedUrdfGroupStateId = selectedUrdfFileRef
     ? String(selectedUrdfGroupStateIdByFileRef?.[selectedUrdfFileRef] || "").trim()
@@ -6070,6 +6079,10 @@ export default function CadWorkspace({
       return;
     }
     const clampedValueDeg = clampJointValueDeg(joint, nextValueDeg);
+    const currentValueDeg = toFiniteNumber(selectedUrdfJointValues?.[jointName], joint?.defaultValueDeg ?? 0);
+    if (Math.abs(clampedValueDeg - currentValueDeg) <= URDF_JOINT_ANIMATION_EPSILON) {
+      return;
+    }
     const nextJointValues = {
       ...selectedUrdfJointValues,
       [jointName]: clampedValueDeg

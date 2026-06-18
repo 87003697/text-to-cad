@@ -3299,6 +3299,7 @@ const CadViewer = forwardRef(function CadViewer({
     }
     clearKeyboardOrbitState(runtime.keyboardOrbitState);
     runtime.previewOrbitEnabled = !!previewMode;
+    runtime.orbitControlsLastTimestamp = 0;
     runtime.controls.autoRotate = !!previewMode;
     runtime.controls.autoRotateSpeed = PREVIEW_AUTO_ROTATE_SPEED;
     runtime.controls.enabled = true;

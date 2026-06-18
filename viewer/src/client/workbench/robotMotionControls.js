@@ -30,6 +30,27 @@ export function srdfGroupStateJointValuesToDisplay(urdfData, jointValuesByName) 
   );
 }
 
+export function srdfHomeGroupStateJointValuesToDisplay(urdfData) {
+  const groupStates = Array.isArray(urdfData?.srdf?.groupStates)
+    ? urdfData.srdf.groupStates
+    : Array.isArray(urdfData?.motion?.groupStates)
+      ? urdfData.motion.groupStates
+      : [];
+  return groupStates.reduce((homeValues, state) => {
+    if (String(state?.name || "").trim().toLowerCase() !== "home") {
+      return homeValues;
+    }
+    const jointValuesByName = srdfGroupStateJointValuesToDisplay(
+      urdfData,
+      state?.jointValuesByName || state?.jointValuesByNameRad
+    );
+    return {
+      ...homeValues,
+      ...jointValuesByName
+    };
+  }, {});
+}
+
 export function jointValueSubsetClose(values, subset) {
   const targetValues = cloneJointValueMap(subset);
   const targetNames = Object.keys(targetValues);
@@ -38,6 +59,38 @@ export function jointValueSubsetClose(values, subset) {
   }
   const currentValues = Object.fromEntries(targetNames.map((name) => [name, values?.[name]]));
   return jointValueMapsClose(currentValues, targetValues);
+}
+
+export function findBestMatchingJointValueState(states, currentValues, defaultValues = {}) {
+  const normalizedStates = Array.isArray(states) ? states : [];
+  const normalizedCurrentValues = cloneJointValueMap(currentValues);
+  const normalizedDefaultValues = cloneJointValueMap(defaultValues);
+  const defaultJointNames = new Set([
+    ...Object.keys(normalizedCurrentValues),
+    ...Object.keys(normalizedDefaultValues)
+  ]);
+  let bestState = null;
+  let bestJointCount = 0;
+
+  for (const state of normalizedStates) {
+    const stateValues = cloneJointValueMap(state?.jointValuesByName);
+    const stateJointNames = Object.keys(stateValues);
+    if (!stateJointNames.length || !jointValueSubsetClose(normalizedCurrentValues, stateValues)) {
+      continue;
+    }
+    const outsideJointNames = [...defaultJointNames].filter((name) => !Object.hasOwn(stateValues, name));
+    const outsideCurrentValues = Object.fromEntries(outsideJointNames.map((name) => [name, normalizedCurrentValues[name] ?? 0]));
+    const outsideDefaultValues = Object.fromEntries(outsideJointNames.map((name) => [name, normalizedDefaultValues[name] ?? 0]));
+    if (!jointValueMapsClose(outsideCurrentValues, outsideDefaultValues)) {
+      continue;
+    }
+    if (stateJointNames.length > bestJointCount) {
+      bestState = state;
+      bestJointCount = stateJointNames.length;
+    }
+  }
+
+  return bestState;
 }
 
 export function interpolateTrajectoryJointValues(trajectory, elapsedSec, fallbackValues = {}) {
