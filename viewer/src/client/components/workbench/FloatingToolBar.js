@@ -76,7 +76,7 @@ function DesktopFloatingToolBar({
       style={floatingCadToolbarPosition}
     >
       <TooltipProvider delayDuration={250}>
-        <div className={`pointer-events-auto inline-flex w-fit items-center gap-1 self-end rounded-md p-1 ${FLOATING_TOOL_BAR_SURFACE_CLASS}`}>
+        <div className={`pointer-events-auto inline-flex w-fit items-center gap-1 self-end rounded-full p-1 ${FLOATING_TOOL_BAR_SURFACE_CLASS}`}>
           {!dxfMode && !implicitMode && !robotMode && !meshOnlyMode ? (
             <>
               <ToolbarButton

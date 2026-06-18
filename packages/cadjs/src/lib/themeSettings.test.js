@@ -105,6 +105,9 @@ test("workbench preset uses neutral material treatment while preserving source c
   assert.equal(cinematic.background.solidColor, "#f0f4f9");
   assert.equal(cinematic.background.linearStart, "#f0f4f9");
   assert.equal(cinematic.background.linearEnd, "#f0f4f9");
+  assert.equal(cinematic.floor.mode, THEME_FLOOR_MODES.STAGE);
+  assert.equal(cinematic.floor.enabled, true);
+  assert.equal(cinematic.floor.grid.enabled, true);
   assert.equal(cinematic.floor.reflectivity, 0.14);
   assert.equal(cinematic.lighting.toneMappingExposure, 1.16);
   assert.equal(cinematic.lighting.ambient.intensity, 0.4);

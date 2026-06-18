@@ -110,6 +110,7 @@ export function FileSheetSection({
 
 export function FileSheetSubsection({
   title,
+  trailing = null,
   children,
   className,
   contentClassName,
@@ -124,8 +125,9 @@ export function FileSheetSubsection({
       )}
     >
       <div className="cad-sheet-subsection-separator mx-3 mb-2 h-px bg-border/60" />
-      <div className="px-3 pb-1 text-[12px] font-normal leading-5 text-sidebar-foreground/80">
-        {title}
+      <div className="flex min-w-0 items-center justify-between gap-2 px-3 pb-1 text-[12px] font-normal leading-5 text-sidebar-foreground/80">
+        <span className="min-w-0 truncate">{title}</span>
+        {trailing ? <span className="shrink-0">{trailing}</span> : null}
       </div>
       <div
         className={cn(FILE_SHEET_ROW_STACK_CLASSES, contentClassName)}

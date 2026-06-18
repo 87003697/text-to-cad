@@ -176,7 +176,7 @@ export default function ViewPlaneControl({
   const backNodes = projectedNodes.filter((node) => node.z < 0);
   const frontNodes = projectedNodes.filter((node) => node.z >= 0);
   const is2d = variant === "2d";
-  const viewPlaneSizeClasses = compact || is2d ? "h-20 w-20" : "h-24 w-24";
+  const viewPlaneSizeClasses = compact || is2d ? "h-20 w-20" : "h-[6.71875rem] w-[6.71875rem]";
   const viewPlaneShapeClasses = is2d ? "rounded-md" : "rounded-full";
   const viewPlaneLabel = is2d ? "2D view selector" : "Perspective selector";
   const normalizedBottomOffset = typeof viewPlaneOffsetBottom === "number"

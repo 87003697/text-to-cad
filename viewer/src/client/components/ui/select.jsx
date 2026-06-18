@@ -22,14 +22,16 @@ function SelectValue({
   return <SelectPrimitive.Value data-slot="select-value" {...props} />
 }
 
-function SelectTrigger({
+const SelectTrigger = React.forwardRef(function SelectTrigger({
   className,
   size = "default",
+  showIcon = true,
   children,
   ...props
-}) {
+}, ref) {
   return (
     <SelectPrimitive.Trigger
+      ref={ref}
       data-slot="select-trigger"
       data-size={size}
       className={cn(
@@ -39,12 +41,14 @@ function SelectTrigger({
       {...props}
     >
       {children}
-      <SelectPrimitive.Icon asChild>
-        <ChevronDownIcon className="size-4 opacity-50" />
-      </SelectPrimitive.Icon>
+      {showIcon ? (
+        <SelectPrimitive.Icon asChild>
+          <ChevronDownIcon className="size-4 opacity-50" />
+        </SelectPrimitive.Icon>
+      ) : null}
     </SelectPrimitive.Trigger>
   )
-}
+})
 
 function SelectContent({
   className,
@@ -97,6 +101,7 @@ function SelectLabel({
 function SelectItem({
   className,
   children,
+  icon = null,
   ...props
 }) {
   return (
@@ -113,6 +118,11 @@ function SelectItem({
           <CheckIcon className="size-4" />
         </SelectPrimitive.ItemIndicator>
       </span>
+      {icon ? (
+        <span className="flex size-3.5 shrink-0 items-center justify-center text-muted-foreground" aria-hidden="true">
+          {icon}
+        </span>
+      ) : null}
       <SelectPrimitive.ItemText>{children}</SelectPrimitive.ItemText>
     </SelectPrimitive.Item>
   )

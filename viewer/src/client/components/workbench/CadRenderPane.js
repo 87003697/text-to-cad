@@ -20,6 +20,10 @@ import {
   isMeshRenderFormat,
   isRobotRenderFormat
 } from "cadjs/lib/fileFormats";
+import {
+  CAMERA_PROJECTION,
+  normalizeCameraProjection
+} from "cadjs/lib/displaySettings";
 import { VIEWER_SCENE_SCALE } from "cadjs/lib/viewer/sceneScale";
 import { VIEWER_PICK_MODE } from "cadjs/lib/viewer/constants";
 import { useStepAnimationSnapshot } from "@/workbench/stepAnimationStore";
@@ -271,6 +275,8 @@ export default function CadRenderPane({
   pickableVertices,
   focusedPartIds = "",
   displaySettings = null,
+  onProjectionChange,
+  onDisplayModeChange,
   boundsAnimationActive = false,
   drawToolActive,
   drawingTool,
@@ -332,6 +338,10 @@ export default function CadRenderPane({
   const activeDxfViewMode = dxfViewMode === "3d" && dxf3dAvailable ? "3d" : "2d";
   const dxfMeshPreviewReady = dxfMode && activeDxfViewMode === "3d" && dxf3dAvailable;
   const activeMeshData = dxfMeshPreviewReady ? selectedDxfMeshData : selectedMeshData;
+  const stepDisplaySettingsActive = renderFormat === RENDER_FORMAT.STEP && !!displaySettings && !dxfMode && !pathPreviewMode;
+  const cadProjection = stepDisplaySettingsActive
+    ? normalizeCameraProjection(displaySettings.projection)
+    : CAMERA_PROJECTION.PERSPECTIVE;
   const activeModelKey = dxfMeshPreviewReady ? (selectedDxfKey || selectedKey) : selectedKey;
   const stepBoundsAnimationActive = Boolean(resolvedStepParameters?.animationState?.playing);
   const cadViewerBoundsAnimationActive = Boolean(boundsAnimationActive || stepBoundsAnimationActive);
@@ -458,11 +468,14 @@ export default function CadRenderPane({
           modelKey={activeModelKey}
           renderFormat={renderFormat}
           perspective={viewerPerspective}
+          projection={cadProjection}
           perspectiveRef={viewerPerspectiveRef}
+          onProjectionChange={stepDisplaySettingsActive ? onProjectionChange : undefined}
+          onDisplayModeChange={stepDisplaySettingsActive ? onDisplayModeChange : undefined}
           showEdges={!gcodeMode}
           recomputeNormals={false}
           themeSettings={themeSettings}
-          displaySettings={dxfMode || pathPreviewMode ? null : displaySettings}
+          displaySettings={stepDisplaySettingsActive ? displaySettings : null}
           previewMode={dxfMode ? false : previewMode}
           showViewPlane={dxfMode || gcodeMode ? true : !previewMode}
           scale={urdfMode ? VIEWER_SCENE_SCALE.URDF : VIEWER_SCENE_SCALE.CAD}

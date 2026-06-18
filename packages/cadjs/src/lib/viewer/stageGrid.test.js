@@ -133,3 +133,34 @@ test("updateGridHelper creates, reuses, and disposes runtime grid helpers", () =
   assert.equal(runtime.gridConfig, null);
   assert.deepEqual(disposed, [firstGrid, themedGrid]);
 });
+
+test("updateGridHelper renders grid independently from stage floor mode", () => {
+  const runtime = createRuntime();
+
+  updateGridHelper(
+    runtime,
+    { gridCenter: "#111111", gridCell: "#222222", gridOpacity: 0.42 },
+    10,
+    -2,
+    VIEWER_SCENE_SCALE.CAD,
+    THEME_FLOOR_MODES.STAGE,
+    {
+      floorSettings: {
+        enabled: true,
+        grid: {
+          enabled: true,
+          centerColor: "#333333",
+          cellColor: "#444444",
+          opacity: 0.5
+        }
+      }
+    }
+  );
+
+  assert.ok(runtime.gridHelper instanceof FakeGridHelper);
+  assert.equal(runtime.gridHelper.centerColor, "#333333");
+  assert.equal(runtime.gridHelper.cellColor, "#444444");
+  assert.equal(runtime.gridHelper.material.opacity, 0.5);
+  assert.deepEqual(runtime.gridHelper.position.value, [0, 0, -2]);
+  assert.equal(runtime.floorMode, THEME_FLOOR_MODES.GRID);
+});
