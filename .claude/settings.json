@@ -6,19 +6,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bash \"${CLAUDE_PROJECT_DIR}/scripts/dev/agent-env-setup.sh\"",
-            "timeout": 300
-          }
-        ]
-      }
-    ],
-    "SessionEnd": [
-      {
-        "matcher": "other|prompt_input_exit|clear|resume",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "bash \"${CLAUDE_PROJECT_DIR}/scripts/dev/agent-env-cleanup.sh\" --current-only --apply",
+            "command": "bash -lc 'cd \"${CLAUDE_PROJECT_DIR:-$PWD}\" && (scripts/dev/setup-symlinks.sh --check || scripts/dev/setup-symlinks.sh)'",
             "timeout": 60
           }
         ]

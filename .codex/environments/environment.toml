@@ -9,15 +9,14 @@ set -euo pipefail
 repo_root="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
 cd "$repo_root"
 
-scripts/dev/agent-env-setup.sh
+if [ -x scripts/dev/setup-symlinks.sh ]; then
+  scripts/dev/setup-symlinks.sh --check || scripts/dev/setup-symlinks.sh
+fi
 '''
 
 [cleanup]
 script = '''
 set -euo pipefail
 
-repo_root="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
-cd "$repo_root"
-
-scripts/dev/agent-env-cleanup.sh --current-only --apply
+:
 '''

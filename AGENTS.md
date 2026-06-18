@@ -105,13 +105,18 @@ flow, CI/CD-testing and resume options, and local/manual fallbacks.
 ## Environments
 
 - Prefer `./.venv/bin/python` for CAD Python work.
-- When creating a new branch checkout or git worktree for CAD work, copy the
-  installed `.venv/` from the source checkout into the new checkout as a
-  bootstrap cache, then run the branch's dependency install/sync for the
-  workflow being changed so dependency changes are reconciled locally.
-- Agent worktree setup/cleanup is centralized in
-  `scripts/dev/agent-env-setup.sh` and `scripts/dev/agent-env-cleanup.sh`;
-  Codex and Claude configs should call those shared scripts.
+- Keep new branch checkouts and git worktrees lightweight by default. Do not
+  copy `.venv/` or `models/` through `.worktreeinclude`; recreate `.venv/`
+  inside the worktree only when Python dependencies are needed for the workflow.
+- Agent startup should only verify the development symlink layout with
+  `scripts/dev/setup-symlinks.sh --check`, repairing it with
+  `scripts/dev/setup-symlinks.sh` if needed.
+- Hydrate `models/` only when the user asks for it or when the task targets
+  specific files under `models/`. In a new worktree, make the relevant model
+  paths real before using them, preferring the local Git LFS cache with
+  `git lfs checkout <path>` or `git lfs checkout models`. Download missing LFS
+  objects only when explicitly requested or required after confirming the local
+  cache is missing them.
 - Install dependencies only for the workflow being changed.
 - Do not commit `.venv/`, `node_modules/`, caches, `tmp/`, local credentials, or
   printer config.
