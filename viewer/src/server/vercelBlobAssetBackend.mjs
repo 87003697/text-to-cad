@@ -43,7 +43,7 @@ function publicBlobUrlForRef(prefix, fileRef) {
 function cacheBypassedCatalogUrl(value) {
   try {
     const url = new URL(String(value || ""));
-    url.searchParams.set("cache", "0");
+    url.searchParams.set("_tcad_catalog", "1");
     return url.toString();
   } catch {
     return value;

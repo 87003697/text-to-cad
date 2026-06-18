@@ -173,7 +173,7 @@ objects needed for new or changed uploads. The repository publish wrapper,
 path prefix for model catalog uploads. Catalog uploads use Vercel Blob's
 minimum supported cache TTL so in-place `catalog.json` overwrites are visible
 quickly, while large immutable model assets keep the default Blob cache policy.
-Hosted catalog reads also append Vercel Blob's `cache=0` query parameter so the
+Hosted catalog reads also append a catalog cache-busting query parameter so the
 viewer does not inherit stale edge entries from earlier catalog overwrites.
 
 For token-free read-only deployments, `VIEWER_VERCEL_BLOB_PREFIX` should be the
