@@ -10,6 +10,7 @@ import {
 import {
   resolveInteractionPixelRatioCap
 } from "cadjs/lib/viewer/renderQuality";
+import { updateOrbitControls } from "../orbitControls.js";
 
 function createWebGlRenderer(THREE) {
   return createCadWebGlRenderer(THREE, {
@@ -359,7 +360,7 @@ export function useViewerRuntime({
         }
         const cameraTransitionActive = stepCameraTransition(runtimeRef.current, timestamp);
         const keyboardOrbitMoved = stepKeyboardOrbit(runtimeRef.current, timestamp);
-        const needsMoreFrames = controls.update();
+        const needsMoreFrames = updateOrbitControls(controls, timestamp, runtimeRef.current);
         if (cameraTransitionActive || keyboardOrbitMoved) {
           emitPerspectiveChange(runtimeRef.current);
         }
@@ -602,6 +603,7 @@ export function useViewerRuntime({
         vertexPickThreshold: 0.9,
         cameraTransition: null,
         previewOrbitEnabled: false,
+        orbitControlsLastTimestamp: 0,
         preserveInteractionPixelRatio: preserveInteractionPixelRatio === true,
         interactionState,
         keyboardOrbitState,
