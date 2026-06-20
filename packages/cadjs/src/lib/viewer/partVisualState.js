@@ -30,6 +30,34 @@ export function getPartHighlightColors(THREE, {
   };
 }
 
+// Selection/hover highlight as a SATURATED TONE SHIFT of the part's own color
+// (not a blue overlay): keep the hue, push saturation up and lightness slightly
+// so the selected feature reads as a vivid version of itself. Falls back to the
+// reference highlight color only when the part has no base color (e.g. reference
+// geometry). Edge emphasis is preserved separately via highlight opacity/width.
+const SELECTED_SATURATION_SHIFT = { sat: 0.45, light: 0.05 };
+const HOVER_SATURATION_SHIFT = { sat: 0.28, light: 0.1 };
+
+export function saturatedHighlightColor(THREE, baseColor, fallback, shift = SELECTED_SATURATION_SHIFT) {
+  if (!baseColor || typeof baseColor.getHSL !== "function" || typeof baseColor.clone !== "function") {
+    return fallback;
+  }
+  const color = baseColor.clone();
+  const hsl = { h: 0, s: 0, l: 0 };
+  color.getHSL(hsl);
+  // Near-gray parts have no meaningful hue to saturate — saturating them would
+  // pull an arbitrary (red) hue, so keep the reference highlight color instead.
+  if (hsl.s < 0.12) {
+    return fallback;
+  }
+  color.setHSL(
+    hsl.h,
+    clamp(hsl.s + (shift?.sat ?? 0), 0, 1),
+    clamp(hsl.l + (shift?.light ?? 0), 0, 1)
+  );
+  return color;
+}
+
 export function normalizePartIdList(value) {
   return (Array.isArray(value) ? value : [value])
     .map((id) => String(id || "").trim())
@@ -181,11 +209,15 @@ export function applyPartVisualState(THREE, records, {
   hoveredPartId,
   focusedPartId,
   selectedPartIds,
+  translucentPartIds,
   showEdges,
   displayMode = CAD_DISPLAY_MODE.SOLID
 }) {
   const hidden = new Set(Array.isArray(hiddenPartIds) ? hiddenPartIds : []);
   const selected = new Set(Array.isArray(selectedPartIds) ? selectedPartIds : []);
+  // Parts rendered as see-through ghosts (e.g. negative/cut features when the
+  // negative feature tab is active). They stay visible but at low opacity.
+  const translucent = new Set(Array.isArray(translucentPartIds) ? translucentPartIds : []);
   const hovered = new Set(
     (Array.isArray(hoveredPartId) ? hoveredPartId : [hoveredPartId])
       .map((id) => String(id || "").trim())
@@ -224,6 +256,20 @@ export function applyPartVisualState(THREE, records, {
     const isDimmed = !isHidden && !effectHidden && hasFocus && !isFocused;
     const isHighlighted = isSelected || isHovered;
 
+    // Per-part saturated tone shift of its OWN color for the highlight, instead
+    // of the global blue overlay. Falls back to the reference color if the part
+    // has no base color.
+    const highlightSurface = isSelected
+      ? saturatedHighlightColor(THREE, record.baseColor, selectedSurfaceColor, SELECTED_SATURATION_SHIFT)
+      : isHovered
+        ? saturatedHighlightColor(THREE, record.baseColor, hoveredSurfaceColor, HOVER_SATURATION_SHIFT)
+        : null;
+    const highlightEdge = isSelected
+      ? saturatedHighlightColor(THREE, record.baseColor, selectedEdgeColor, SELECTED_SATURATION_SHIFT)
+      : isHovered
+        ? saturatedHighlightColor(THREE, record.baseColor, hoveredEdgeColor, HOVER_SATURATION_SHIFT)
+        : null;
+
     record.mesh.visible = !effectHidden && !isHidden;
     if (record.edges) {
       record.edges.visible = showEdges && !effectHidden && !isHidden;
@@ -252,27 +298,23 @@ export function applyPartVisualState(THREE, records, {
           )
         : clamp(highlightEdgeOpacity * effectOpacity, 0, 1)
       : baseEffectSurfaceOpacity;
-    const nextSurfaceOpacity = isHidden ? 0 : isDimmed ? dimmedSurfaceOpacity : highlightedSurfaceOpacity;
-    syncSurfaceTransparency(record, isHidden || isDimmed || isHighlighted, nextSurfaceOpacity, {
-      writeTransparentDepth: !isHidden && !isDimmed && !transparentDisplayMode
+    const isTranslucent = !isHidden && partIdMatchesSet(record.partId, translucent);
+    const baseNextSurfaceOpacity = isHidden ? 0 : isDimmed ? dimmedSurfaceOpacity : highlightedSurfaceOpacity;
+    const nextSurfaceOpacity = isTranslucent && !isHidden && !isDimmed
+      ? Math.min(baseNextSurfaceOpacity, 0.35)
+      : baseNextSurfaceOpacity;
+    syncSurfaceTransparency(record, isHidden || isDimmed || isHighlighted || isTranslucent, nextSurfaceOpacity, {
+      writeTransparentDepth: !isHidden && !isDimmed && !isTranslucent && !transparentDisplayMode
     });
     record.material.opacity = nextSurfaceOpacity;
 
     if (record.baseColor && record.material.color) {
-      record.material.color.copy(
-        isSelected
-          ? selectedSurfaceColor
-          : isHovered
-            ? hoveredSurfaceColor
-            : effectColor || record.baseColor
-      );
+      record.material.color.copy(highlightSurface || effectColor || record.baseColor);
     }
 
     if ("emissive" in record.material && record.material.emissive) {
-      if (isSelected) {
-        record.material.emissive.copy(selectedSurfaceColor);
-      } else if (isHovered) {
-        record.material.emissive.copy(hoveredSurfaceColor);
+      if (highlightSurface) {
+        record.material.emissive.copy(highlightSurface);
       } else if (record.baseEmissiveColor && record.baseEmissiveIntensity > 0) {
         record.material.emissive.copy(record.baseEmissiveColor);
       } else {
@@ -290,11 +332,7 @@ export function applyPartVisualState(THREE, records, {
       }
     }
 
-    const nextEdgeColor = isSelected
-      ? selectedEdgeColor
-      : isHovered
-        ? hoveredEdgeColor
-        : effectEdgeColor || baseEdgeColor;
+    const nextEdgeColor = highlightEdge || effectEdgeColor || baseEdgeColor;
     syncCadSurfaceEdgeHighlight(THREE, record, nextEdgeColor, highlightedEdgeOpacity);
 
     if (record.edgeMaterial) {
@@ -306,6 +344,20 @@ export function applyPartVisualState(THREE, records, {
           : isHidden || isDimmed
             ? nextSurfaceOpacity
             : baseEdgeOpacity * effectEdgeOpacity);
+    }
+
+    // Occlusion ghost: only a SELECTED part shows its see-through ghost. It is
+    // tinted to the selection BLUE (selectedSurfaceColor) — a distinct cue that
+    // reads as "this is behind something" — while the visible surface keeps the
+    // saturated tone shift of its own color. The GreaterDepth material (see
+    // cadScene) makes the ghost appear only where the part is occluded.
+    if (record.ghostMesh && record.ghostMaterial) {
+      const showGhost = isSelected && !isHidden;
+      record.ghostMesh.visible = showGhost;
+      const ghostColorUniform = record.ghostMaterial.uniforms?.uColor?.value;
+      if (showGhost && ghostColorUniform?.copy) {
+        ghostColorUniform.copy(selectedSurfaceColor);
+      }
     }
   }
 }

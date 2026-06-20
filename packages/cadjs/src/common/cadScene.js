@@ -1815,9 +1815,71 @@ function buildDisplayRecords(THREE, runtime, meshData, settings) {
     }
     runtime.modelGroup.add(mesh);
 
+    // Occlusion ghost: an ASCII-character DITHER copy of this part that renders
+    // ONLY where the part is hidden behind other geometry (depthFunc
+    // GreaterDepth), so a selected feature can be seen through whatever blocks
+    // it. A screen-space ASCII glyph ramp stipples the obscured silhouette. It
+    // is a child of the surface mesh (shares geometry + world transform),
+    // starts invisible, and is shown/colored on selection by
+    // applyPartVisualState (which sets uColor).
+    const ghostMaterial = new THREE.ShaderMaterial({
+      glslVersion: THREE.GLSL3,
+      transparent: true,
+      depthTest: true,
+      depthFunc: THREE.GreaterDepth,
+      depthWrite: false,
+      // FrontSide + Greater: the ghost draws ONLY where this part's front face
+      // is behind something else (occluded by ANOTHER part in front). The part's
+      // own back faces no longer self-ghost, and visible (front-most) fragments
+      // fail the Greater test, so nothing draws over the unobscured surface.
+      side: THREE.FrontSide,
+      uniforms: {
+        uColor: { value: baseColor ? baseColor.clone() : new THREE.Color("#8dc5ff") },
+        uOpacity: { value: 0.9 },
+        uCoverage: { value: 0.6 }
+      },
+      vertexShader: [
+        "void main() {",
+        "  gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);",
+        "}"
+      ].join("\n"),
+      fragmentShader: [
+        "precision highp float;",
+        "uniform vec3 uColor;",
+        "uniform float uOpacity;",
+        "uniform float uCoverage;",          // fraction of pixels kept (dither density)
+        "out vec4 fragColor;",
+        "const int BAYER8[64] = int[64](",   // ordered (Bayer) 8x8 dither matrix
+        "  0,32,8,40,2,34,10,42,",
+        "  48,16,56,24,50,18,58,26,",
+        "  12,44,4,36,14,46,6,38,",
+        "  60,28,52,20,62,30,54,22,",
+        "  3,35,11,43,1,33,9,41,",
+        "  51,19,59,27,49,17,57,25,",
+        "  15,47,7,39,13,45,5,37,",
+        "  63,31,55,23,61,29,53,21);",
+        "void main(){",
+        "  ivec2 p = ivec2(gl_FragCoord.xy);",
+        "  int x = p.x & 7;",
+        "  int y = p.y & 7;",
+        "  float threshold = (float(BAYER8[y * 8 + x]) + 0.5) / 64.0;",
+        "  if(uCoverage <= threshold) discard;",   // ordered dither: keep the densest cells
+        "  fragColor = vec4(uColor, uOpacity);",
+        "}"
+      ].join("\n")
+    });
+    const ghostMesh = new THREE.Mesh(geometryEntry.geometry, ghostMaterial);
+    ghostMesh.renderOrder = 30;
+    ghostMesh.visible = false;
+    ghostMesh.userData.partId = partId;
+    ghostMesh.userData.isOcclusionGhost = true;
+    mesh.add(ghostMesh);
+
     const record = {
       partId,
       mesh,
+      ghostMesh,
+      ghostMaterial,
       edges: null,
       silhouette: null,
       material,
