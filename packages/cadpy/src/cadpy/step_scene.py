@@ -41,7 +41,7 @@ from OCP.TopAbs import (
 )
 from OCP.TopExp import TopExp, TopExp_Explorer
 from OCP.TopLoc import TopLoc_Location
-from OCP.TopTools import TopTools_FormatVersion, TopTools_IndexedMapOfShape
+from OCP.TopTools import TopTools_IndexedMapOfShape
 from OCP.TopoDS import TopoDS, TopoDS_Compound, TopoDS_Shape
 from OCP.XCAFApp import XCAFApp_Application
 from OCP.XCAFDoc import (
@@ -79,7 +79,12 @@ from cadpy.step_hash import step_file_hash
 
 REPO_ROOT = Path.cwd().resolve()
 ColorRGBA = tuple[float, float, float, float]
-STEP_SCENE_CACHE_SCHEMA_VERSION = 1
+# v2: per-prototype geometry is cached as binary BREP (BinTools) instead of the
+# slower/larger ASCII BRepTools format.
+STEP_SCENE_CACHE_SCHEMA_VERSION = 2
+# Pinned BinTools format version. Cached geometry is rebuildable, so a future
+# OCCT upgrade that cannot read this version simply misses the cache.
+_STEP_SCENE_CACHE_BINTOOLS_VERSION = 3
 
 
 @dataclass(frozen=True)
@@ -108,6 +113,8 @@ class LoadedStepScene:
     source_kind: str = "step"
     source_path: str | None = None
     source_hash: str | None = None
+    source_closure_hash: str | None = None
+    source_closure_files: tuple[str, ...] = ()
     mesh_signature: tuple[float, float, bool] | None = None
     glb_mesh_payloads: dict[tuple[object, ...], Any] = field(default_factory=dict)
     assembly_mates: list[dict[str, Any]] = field(default_factory=list)
@@ -1159,18 +1166,15 @@ def load_step_scene(step_path: Path) -> LoadedStepScene:
     )
 
 
-def _step_scene_cache_root() -> Path | None:
-    enabled = os.environ.get("TEXT_TO_CAD_STEP_SCENE_CACHE", "1").strip().lower()
-    if enabled in {"0", "false", "no", "off"}:
-        return None
-    configured = os.environ.get("TEXT_TO_CAD_STEP_SCENE_CACHE_DIR")
-    if configured:
-        return Path(configured).expanduser().resolve()
-    init_cwd = str(os.environ.get("INIT_CWD") or "").strip()
-    cache_root = Path(init_cwd).expanduser().resolve() if init_cwd else REPO_ROOT
-    if _path_is_skill_runtime(cache_root):
-        return Path(tempfile.gettempdir()).resolve() / "cadpy-step-scene-cache"
-    return cache_root / "tmp" / "step-scene-cache"
+# Hidden inline cache directory, written beside each STEP like __pycache__ next to
+# a .py. All STEPs in a directory share one __cadcache__; entries are namespaced by
+# STEP filename and keyed by schema + content hash.
+_STEP_SCENE_CACHE_DIRNAME = "__cadcache__"
+
+
+def _step_scene_cache_enabled() -> bool:
+    value = os.environ.get("TEXT_TO_CAD_STEP_SCENE_CACHE", "1").strip().lower()
+    return value not in {"0", "false", "no", "off"}
 
 
 def _path_is_skill_runtime(path: Path) -> bool:
@@ -1178,8 +1182,27 @@ def _path_is_skill_runtime(path: Path) -> bool:
     return any((candidate / "SKILL.md").is_file() for candidate in (resolved, *resolved.parents))
 
 
-def _step_scene_cache_dir(root: Path, step_hash: str) -> Path:
-    return root / f"v{STEP_SCENE_CACHE_SCHEMA_VERSION}" / step_hash[:2] / step_hash
+def _step_scene_cache_dir(step_path: Path, step_hash: str) -> Path | None:
+    """Inline binary-scene cache directory for a STEP file.
+
+    Written next to the STEP in a hidden ``__cadcache__`` folder (like
+    ``__pycache__`` beside a ``.py``). Honors ``TEXT_TO_CAD_STEP_SCENE_CACHE=0``
+    (disabled) and ``TEXT_TO_CAD_STEP_SCENE_CACHE_DIR`` (central override); falls
+    back to a temp store when the STEP lives inside a packaged skill runtime so the
+    cache never pollutes shipped skill files.
+    """
+    if not _step_scene_cache_enabled():
+        return None
+    resolved = step_path.expanduser().resolve()
+    configured = os.environ.get("TEXT_TO_CAD_STEP_SCENE_CACHE_DIR")
+    if configured:
+        base = Path(configured).expanduser().resolve()
+    elif _path_is_skill_runtime(resolved.parent):
+        base = Path(tempfile.gettempdir()).resolve() / "cadpy-step-scene-cache"
+    else:
+        base = resolved.parent
+    leaf = f"v{STEP_SCENE_CACHE_SCHEMA_VERSION}-{step_hash}"
+    return base / _STEP_SCENE_CACHE_DIRNAME / resolved.name / leaf
 
 
 def _rgba_to_cache_value(color: ColorRGBA | None) -> list[float] | None:
@@ -1268,11 +1291,13 @@ def _face_colors_from_index_payload(shape: object, payload: object) -> dict[int,
     return face_colors
 
 
-def _read_step_scene_cache(step_path: Path, *, step_hash: str, root: Path) -> LoadedStepScene | None:
-    from OCP.BRepTools import BRepTools
+def _read_step_scene_cache(step_path: Path, *, step_hash: str) -> LoadedStepScene | None:
+    from OCP.BinTools import BinTools
 
     started = time.perf_counter()
-    cache_dir = _step_scene_cache_dir(root, step_hash)
+    cache_dir = _step_scene_cache_dir(step_path, step_hash)
+    if cache_dir is None:
+        return None
     meta_path = cache_dir / "scene.json"
     if not meta_path.is_file():
         return None
@@ -1293,14 +1318,14 @@ def _read_step_scene_cache(step_path: Path, *, step_hash: str, root: Path) -> Lo
             if not isinstance(prototype, dict):
                 return None
             prototype_key = int(prototype["key"])
-            brep_file = str(prototype.get("file") or f"prototype-{index}.brep")
+            brep_file = str(prototype.get("file") or f"prototype-{index}.bin")
             if "/" in brep_file or "\\" in brep_file:
                 return None
             brep_path = cache_dir / brep_file
             if not brep_path.is_file():
                 return None
             shape = TopoDS_Shape()
-            if not BRepTools.Read_s(shape, os.fspath(brep_path), BRep_Builder()) or shape.IsNull():
+            if not BinTools.Read_s(shape, os.fspath(brep_path)) or shape.IsNull():
                 return None
             prototype_shapes[prototype_key] = shape
             name = prototype.get("name")
@@ -1328,10 +1353,16 @@ def _read_step_scene_cache(step_path: Path, *, step_hash: str, root: Path) -> Lo
         return None
 
 
-def _write_step_scene_cache(scene: LoadedStepScene, *, step_hash: str, root: Path) -> None:
-    from OCP.BRepTools import BRepTools
+def _write_step_scene_cache(scene: LoadedStepScene, *, step_hash: str) -> None:
+    from OCP.BinTools import BinTools, BinTools_FormatVersion
 
-    cache_dir = _step_scene_cache_dir(root, step_hash)
+    bintools_version = getattr(
+        BinTools_FormatVersion,
+        f"BinTools_FormatVersion_VERSION_{_STEP_SCENE_CACHE_BINTOOLS_VERSION}",
+    )
+    cache_dir = _step_scene_cache_dir(scene.step_path, step_hash)
+    if cache_dir is None:
+        return
     if (cache_dir / "scene.json").is_file():
         return
     temp_dir = cache_dir.parent / f".{cache_dir.name}.{os.getpid()}.tmp"
@@ -1342,13 +1373,13 @@ def _write_step_scene_cache(scene: LoadedStepScene, *, step_hash: str, root: Pat
         temp_dir.mkdir(parents=True, exist_ok=False)
         prototypes: list[dict[str, Any]] = []
         for index, (prototype_key, shape) in enumerate(scene.prototype_shapes.items()):
-            brep_file = f"prototype-{index}.brep"
-            if not BRepTools.Write_s(
+            brep_file = f"prototype-{index}.bin"
+            if not BinTools.Write_s(
                 shape,
                 os.fspath(temp_dir / brep_file),
                 False,
                 False,
-                TopTools_FormatVersion.TopTools_FormatVersion_VERSION_1,
+                bintools_version,
             ):
                 raise RuntimeError("failed to write cached BREP prototype")
             prototypes.append(
@@ -1376,10 +1407,23 @@ def _write_step_scene_cache(scene: LoadedStepScene, *, step_hash: str, root: Pat
         )
         try:
             temp_dir.rename(cache_dir)
+            _prune_step_scene_cache_siblings(cache_dir)
         except FileExistsError:
             shutil.rmtree(temp_dir, ignore_errors=True)
     except Exception:
         shutil.rmtree(temp_dir, ignore_errors=True)
+
+
+def _prune_step_scene_cache_siblings(cache_dir: Path) -> None:
+    """Drop stale cache entries for this STEP (older hashes / schema versions),
+    keeping only the just-written ``cache_dir`` so __cadcache__ does not accumulate."""
+    try:
+        for sibling in cache_dir.parent.iterdir():
+            if sibling.name == cache_dir.name or sibling.name.endswith(".tmp"):
+                continue
+            shutil.rmtree(sibling, ignore_errors=True)
+    except Exception:
+        pass
 
 
 def load_step_scene_cached(step_path: Path) -> LoadedStepScene:
@@ -1387,15 +1431,12 @@ def load_step_scene_cached(step_path: Path) -> LoadedStepScene:
     if not resolved_step_path.exists():
         raise FileNotFoundError(f"STEP file does not exist: {resolved_step_path}")
     step_hash = _step_hash(resolved_step_path)
-    cache_root = _step_scene_cache_root()
-    if cache_root is not None:
-        cached = _read_step_scene_cache(resolved_step_path, step_hash=step_hash, root=cache_root)
-        if cached is not None:
-            return cached
+    cached = _read_step_scene_cache(resolved_step_path, step_hash=step_hash)
+    if cached is not None:
+        return cached
     scene = load_step_scene(resolved_step_path)
     scene.step_hash = step_hash
-    if cache_root is not None:
-        _write_step_scene_cache(scene, step_hash=step_hash, root=cache_root)
+    _write_step_scene_cache(scene, step_hash=step_hash)
     return scene
 
 
@@ -2581,6 +2622,11 @@ def extract_selectors_from_scene(
         source_hash = str(getattr(scene, "source_hash", "") or "").strip()
         if source_hash:
             manifest["sourceHash"] = source_hash
+        source_closure_hash = str(getattr(scene, "source_closure_hash", "") or "").strip()
+        source_closure_files = getattr(scene, "source_closure_files", ()) or ()
+        if source_closure_hash and source_closure_files:
+            manifest["sourceClosureHash"] = source_closure_hash
+            manifest["sourceClosureFiles"] = list(source_closure_files)
         manifest["generatedAt"] = datetime.now(timezone.utc).isoformat(timespec="seconds")
     step_hash = str(getattr(scene, "step_hash", "") or "").strip()
     if not step_hash and scene.step_path.is_file():
