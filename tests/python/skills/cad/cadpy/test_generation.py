@@ -14,6 +14,7 @@ from cadpy.assembly_spec import (
     AssemblySpec,
 )
 from cadpy.catalog import StepImportOptions
+from cadpy.glb import read_step_topology_manifest_from_glb
 from cadpy.glb_topology import STEP_TOPOLOGY_SCHEMA_VERSION
 from cadpy.step_scene import LoadedStepScene, OccurrenceNode, SelectorBundle
 from cadpy.step_metadata import TEXT_TO_CAD_GENERATOR, read_text_to_cad_step_metadata
@@ -2685,6 +2686,257 @@ class CadGenerationTests(unittest.TestCase):
         discovered_paths = {spec.source_path for spec in result}
         self.assertIn(assembly_path.resolve(), discovered_paths)
         self.assertIn(leaf_script.resolve(), discovered_paths)
+
+    # --- Incremental-regen freshness gate (D) --------------------------------
+
+    def _write_part_with_dependency(self, prefix: str) -> tuple[Path, Path]:
+        """A generated part whose generator imports a sibling helper module, so
+        its captured source closure spans more than its own file."""
+        helper = self.temp_root / f"{prefix}_dims.py"
+        helper.write_text("WIDTH = 3.0\n", encoding="utf-8")
+        script = self.temp_root / f"{prefix}.py"
+        script.write_text(
+            f"import {prefix}_dims as dims\n"
+            "def gen_step():\n"
+            "    import build123d\n"
+            "    return {'shape': build123d.Box(dims.WIDTH, 2.0, 1.0)}\n",
+            encoding="utf-8",
+        )
+        return script, helper
+
+    def _part_spec(self, script: Path) -> cad_generation.EntrySpec:
+        _all, selected, _outs = cad_generation._selected_specs_for_targets(
+            [str(script)],
+            direct_step_kind="part",
+            expected_output_suffixes=(".step",),
+            tool_name="scripts/step",
+            include_output_paths=True,
+        )
+        return selected[0]
+
+    def test_generated_part_records_source_closure(self) -> None:
+        script, _helper = self._write_part_with_dependency("record")
+        cad_generation.generate_step_targets([str(script)])
+
+        manifest = read_step_topology_manifest_from_glb(
+            cad_render.part_glb_path(script.with_suffix(".step"))
+        )
+        self.assertIsNotNone(manifest)
+        assert manifest is not None
+        self.assertTrue(manifest.get("sourceClosureHash"))
+        joined = " ".join(manifest.get("sourceClosureFiles") or [])
+        self.assertIn("record.py", joined)
+        self.assertIn("record_dims.py", joined)
+
+    def test_generated_child_is_stale_tracks_own_and_transitive_edits(self) -> None:
+        script, helper = self._write_part_with_dependency("stalecheck")
+        cad_generation.generate_step_targets([str(script)])
+        spec = self._part_spec(script)
+
+        self.assertFalse(cad_generation._generated_child_is_stale(spec, force=False))
+        self.assertTrue(cad_generation._generated_child_is_stale(spec, force=True))
+
+        original = script.read_text(encoding="utf-8")
+        script.write_text(original + "\n# tweak\n", encoding="utf-8")
+        self.assertTrue(cad_generation._generated_child_is_stale(spec, force=False))
+        script.write_text(original, encoding="utf-8")
+        self.assertFalse(cad_generation._generated_child_is_stale(spec, force=False))
+
+        # Editing a transitive dependency (reached via import) is detected.
+        helper.write_text("WIDTH = 4.0\n", encoding="utf-8")
+        self.assertTrue(cad_generation._generated_child_is_stale(spec, force=False))
+        helper.write_text("WIDTH = 3.0\n", encoding="utf-8")
+        self.assertFalse(cad_generation._generated_child_is_stale(spec, force=False))
+
+        # A missing STEP forces a rebuild.
+        spec.step_path.unlink()
+        self.assertTrue(cad_generation._generated_child_is_stale(spec, force=False))
+
+    def _spec(self, ref: str, kind: str, step_name: str) -> cad_generation.EntrySpec:
+        return cad_generation.EntrySpec(
+            source_ref=ref,
+            cad_ref=ref,
+            kind=kind,
+            source_path=self.temp_root / f"{ref}.py",
+            display_name=ref,
+            source="generated",
+            script_path=self.temp_root / f"{ref}.py",
+            step_path=self.temp_root / step_name,
+        )
+
+    def test_rebuild_stale_assembly_children_rebuilds_only_stale_leaf_first(self) -> None:
+        assembly = self._spec("robot", "assembly", "robot.step")
+        leaf_a = self._spec("leaf_a", "part", "leaf_a.step")
+        leaf_b = self._spec("leaf_b", "part", "leaf_b.step")
+        all_specs = [assembly, leaf_a, leaf_b]  # parents listed before children
+
+        stale_refs = {"leaf_b"}
+
+        def fake_stale(spec, *, force):
+            return force or spec.source_ref in stale_refs
+
+        rebuilt: list[str] = []
+
+        def record_rebuild(child):
+            rebuilt.append(child.source_ref)
+
+        with (
+            mock.patch.object(cad_generation, "_generated_child_is_stale", side_effect=fake_stale),
+            mock.patch.object(cad_generation, "_rebuild_child_in_subprocess", side_effect=record_rebuild),
+        ):
+            result = cad_generation._rebuild_stale_assembly_children(
+                all_specs, [assembly], force=False, logger=None
+            )
+        # Only the stale leaf is rebuilt; the assembly target itself is not.
+        self.assertEqual(["leaf_b"], rebuilt)
+        self.assertEqual(["leaf_b"], result)
+
+        # force rebuilds every generated child. Independent leaves run in
+        # parallel, so the side-effect call order is not deterministic, but the
+        # returned refs follow the deterministic leaf-first (reversed) input order.
+        rebuilt.clear()
+        with (
+            mock.patch.object(cad_generation, "_generated_child_is_stale", side_effect=fake_stale),
+            mock.patch.object(cad_generation, "_rebuild_child_in_subprocess", side_effect=record_rebuild),
+        ):
+            result = cad_generation._rebuild_stale_assembly_children(
+                all_specs, [assembly], force=True, logger=None
+            )
+        self.assertEqual({"leaf_a", "leaf_b"}, set(rebuilt))
+        self.assertEqual(["leaf_b", "leaf_a"], result)
+
+    def test_rebuild_stale_assembly_children_noop_without_assembly_target(self) -> None:
+        leaf = self._spec("solo", "part", "solo.step")
+        with mock.patch.object(
+            cad_generation, "_rebuild_child_in_subprocess", side_effect=AssertionError("should not rebuild")
+        ):
+            result = cad_generation._rebuild_stale_assembly_children(
+                [leaf], [leaf], force=True, logger=None
+            )
+        self.assertEqual([], result)
+
+    # --- Assembly-level no-op skip -------------------------------------------
+
+    def test_referenced_child_step_paths_resolves_instances_and_nested_children(self) -> None:
+        envelope = {
+            "instances": [
+                {"path": "parts/a.step", "name": "a"},
+                {"path": "parts/b.step", "name": "b", "children": [{"path": "parts/c.step"}]},
+                {"name": "grouping_node_without_path"},
+            ]
+        }
+        paths = cad_generation._referenced_child_step_paths(envelope, self.temp_root)
+        self.assertEqual(["a.step", "b.step", "c.step"], sorted(p.name for p in paths))
+        self.assertTrue(all(p.is_absolute() for p in paths))
+
+        deduped = cad_generation._referenced_child_step_paths(
+            {"instances": [{"path": "x.step"}, {"path": "x.step"}]}, self.temp_root
+        )
+        self.assertEqual(1, len(deduped))
+
+    def test_assembly_is_current_tracks_closure_and_step_hash(self) -> None:
+        step_path = self.temp_root / "asm.step"
+        step_path.write_text("ISO-10303-21; END-ISO-10303-21;\n", encoding="utf-8")
+        glb_path = cad_render.part_glb_path(step_path)
+        glb_path.parent.mkdir(parents=True, exist_ok=True)
+        glb_path.write_bytes(b"glTF-fake")
+        dep = self.temp_root / "asm_src.py"
+        dep.write_text("X = 1\n", encoding="utf-8")
+        closure = cad_source_hash.closure_for_files(dep, [])
+
+        spec = cad_generation.EntrySpec(
+            source_ref="asm",
+            cad_ref="asm",
+            kind="assembly",
+            source_path=self.temp_root / "asm.py",
+            display_name="asm",
+            source="generated",
+            script_path=self.temp_root / "asm.py",
+            step_path=step_path,
+        )
+        manifest = {
+            "stepHash": "STEPHASH",
+            "sourceClosureHash": closure.closure_hash,
+            "sourceClosureFiles": list(closure.files),
+        }
+
+        with (
+            mock.patch.object(cad_generation, "read_step_topology_manifest_from_glb", return_value=manifest),
+            mock.patch.object(cad_generation, "step_file_hash", return_value="STEPHASH"),
+        ):
+            self.assertTrue(cad_generation._assembly_is_current(spec))
+
+            # A changed composition/source input invalidates the closure.
+            dep.write_text("X = 2\n", encoding="utf-8")
+            self.assertFalse(cad_generation._assembly_is_current(spec))
+            dep.write_text("X = 1\n", encoding="utf-8")
+            self.assertTrue(cad_generation._assembly_is_current(spec))
+
+        # A changed STEP (stepHash no longer matches the GLB) invalidates it.
+        with (
+            mock.patch.object(cad_generation, "read_step_topology_manifest_from_glb", return_value=manifest),
+            mock.patch.object(cad_generation, "step_file_hash", return_value="DIFFERENT"),
+        ):
+            self.assertFalse(cad_generation._assembly_is_current(spec))
+
+        # A part (non-assembly) is never treated as a skippable assembly.
+        part_spec = cad_generation.EntrySpec(
+            source_ref="p",
+            cad_ref="p",
+            kind="part",
+            source_path=self.temp_root / "p.py",
+            display_name="p",
+            source="generated",
+            script_path=self.temp_root / "p.py",
+            step_path=step_path,
+        )
+        self.assertFalse(cad_generation._assembly_is_current(part_spec))
+
+    def test_generated_assembly_glb_closure_current_tracks_children(self) -> None:
+        # The --skip-step-write GLB-reuse gate: a child STEP change must be
+        # detected via the assembly closure even though tom.step is not rewritten.
+        step_path = self.temp_root / "asm.step"
+        step_path.write_text("ISO-10303-21; END-ISO-10303-21;\n", encoding="utf-8")
+        glb_path = cad_render.part_glb_path(step_path)
+        glb_path.parent.mkdir(parents=True, exist_ok=True)
+        glb_path.write_bytes(b"glTF-fake")
+        child_step = self.temp_root / "child.step"  # stand-in for a composed child STEP
+        child_step.write_text("child v1\n", encoding="utf-8")
+        closure = cad_source_hash.closure_for_files(child_step, [])
+
+        spec = cad_generation.EntrySpec(
+            source_ref="asm",
+            cad_ref="asm",
+            kind="assembly",
+            source_path=self.temp_root / "asm.py",
+            display_name="asm",
+            source="generated",
+            script_path=self.temp_root / "asm.py",
+            step_path=step_path,
+        )
+        manifest = {
+            "sourceClosureHash": closure.closure_hash,
+            "sourceClosureFiles": list(closure.files),
+        }
+        with mock.patch.object(cad_generation, "read_step_topology_manifest_from_glb", return_value=manifest):
+            self.assertTrue(cad_generation._generated_assembly_glb_closure_current(spec))
+            # A composed child STEP changing invalidates the GLB (unlike step_hash,
+            # this is detected even though asm.step itself was not rewritten).
+            child_step.write_text("child v2\n", encoding="utf-8")
+            self.assertFalse(cad_generation._generated_assembly_glb_closure_current(spec))
+
+        # A part (non-assembly) is unaffected — the gate must never block it.
+        part_spec = cad_generation.EntrySpec(
+            source_ref="p",
+            cad_ref="p",
+            kind="part",
+            source_path=self.temp_root / "p.py",
+            display_name="p",
+            source="generated",
+            script_path=self.temp_root / "p.py",
+            step_path=step_path,
+        )
+        self.assertTrue(cad_generation._generated_assembly_glb_closure_current(part_spec))
 
 
 if __name__ == "__main__":
