@@ -87,11 +87,10 @@ class StepSceneSelectorArtifactTests(unittest.TestCase):
                 prototype_shapes={7: shape},
                 prototype_face_colors={7: {face_hash: (1.0, 0.0, 0.0, 1.0)}},
             )
-            cache_root = temp_root / "cache"
             step_hash = "a" * 64
 
-            step_scene._write_step_scene_cache(scene, step_hash=step_hash, root=cache_root)
-            cached = step_scene._read_step_scene_cache(step_path, step_hash=step_hash, root=cache_root)
+            step_scene._write_step_scene_cache(scene, step_hash=step_hash)
+            cached = step_scene._read_step_scene_cache(step_path, step_hash=step_hash)
 
             self.assertIsNotNone(cached)
             assert cached is not None

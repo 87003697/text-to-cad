@@ -5,6 +5,8 @@
 # Python
 __pycache__/
 *.py[cod]
+# Inline CAD scene cache (binary BREP + scene.json), written beside STEP files
+__cadcache__/
 *.egg-info/
 .pytest_cache/
 .mypy_cache/

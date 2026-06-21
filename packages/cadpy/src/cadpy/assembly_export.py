@@ -31,7 +31,6 @@ from cadpy.step_export import create_bin_xcaf_doc, export_xcaf_doc_step_scene, q
 from cadpy.step_scene import (
     LoadedStepScene,
     _shape_hash,
-    load_step_scene,
     load_step_scene_cached,
     load_step_scene_from_xcaf_doc,
     occurrence_selector_id,
@@ -298,7 +297,9 @@ def _load_step_assembly_shape(step_path: Path, *, label: str):
 
     from cadpy.step_scene import scene_occurrence_shape
 
-    scene = load_step_scene(step_path)
+    # Cached load: reuses the binary BREP scene cache so an unchanged child's
+    # geometry is read in ~tens of ms instead of re-imported from STEP.
+    scene = load_step_scene_cached(step_path)
 
     def node_label(node: object) -> str:
         return str(getattr(node, "name", None) or getattr(node, "source_name", None) or occurrence_selector_id(node)).strip()

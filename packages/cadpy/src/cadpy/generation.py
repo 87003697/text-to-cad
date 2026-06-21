@@ -6,8 +6,12 @@ import io
 import importlib.util
 import json
 import math
+import os
 import shutil
+import subprocess
 import sys
+import time
+from concurrent.futures import ThreadPoolExecutor
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, replace
 from pathlib import Path, PurePosixPath
@@ -37,6 +41,7 @@ from cadpy.catalog import (
 )
 from cadpy.cli_logging import CliLogger
 from cadpy.file_metadata import text_to_cad_identity_metadata, write_dxf_text_to_cad_metadata
+from cadpy.step_metadata import read_text_to_cad_step_metadata
 from cadpy.glb import (
     build_step_topology_index_manifest,
     export_assembly_glb_from_scene,
@@ -61,7 +66,13 @@ from cadpy.render import (
     relative_to_file,
     relative_to_repo,
 )
-from cadpy.source_hash import PythonSourceHash, python_source_hash
+from cadpy.source_hash import (
+    PythonSourceClosure,
+    PythonSourceHash,
+    capture_runtime_closure,
+    closure_hash_from_files,
+    python_source_hash,
+)
 from cadpy.stl import export_part_stl_from_scene
 from cadpy.step_export import build_build123d_step_scene, export_build123d_step_scene
 from cadpy.threemf import export_part_3mf_from_scene
@@ -1083,6 +1094,7 @@ def _run_script_generator_inner(
     skip_step_write: bool = False,
 ) -> LoadedStepScene | None:
     generated_scene: LoadedStepScene | None = None
+    modules_before_load = set(sys.modules)
     with logger.timed(f"load generator {spec.source_ref}"):
         module = _load_generator_module(spec.script_path)
     generator = getattr(module, generator_name, None)
@@ -1091,10 +1103,24 @@ def _run_script_generator_inner(
     with logger.timed(f"run {generator_name} {spec.source_ref}"):
         raw_payload = generator()
 
+    source_closure: PythonSourceClosure | None = None
     if generator_name == "gen_step":
         envelope = _normalize_step_payload(raw_payload, script_path=spec.script_path)
         if spec.step_path is None:
             raise RuntimeError(f"{spec.source_ref} has no configured STEP output")
+        # Capture the import closure here — after normalizing the (cheap) payload
+        # but before the writers import cadpy's own assembly/export modules, so
+        # the sys.modules delta stays the generator's own dependencies. For
+        # assemblies, fold in the referenced child STEPs so the closure hash also
+        # captures "a composed child changed" (enabling the no-op skip).
+        child_step_inputs = (
+            _referenced_child_step_paths(envelope, spec.step_path.parent)
+            if ("instances" in envelope or "children" in envelope)
+            else []
+        )
+        source_closure = capture_runtime_closure(
+            modules_before_load, spec.script_path, extra_files=child_step_inputs
+        )
         if "shape" in envelope:
             generated_scene = _write_shape_step_payload(
                 envelope,
@@ -1126,6 +1152,9 @@ def _run_script_generator_inner(
         if spec.dxf_path is None:
             raise RuntimeError(f"{spec.source_ref} has no configured DXF output")
         _write_dxf_payload(envelope, output_path=spec.dxf_path, script_path=spec.script_path, logger=logger)
+    if generated_scene is not None and source_closure is not None:
+        generated_scene.source_closure_hash = source_closure.closure_hash
+        generated_scene.source_closure_files = source_closure.files
     if (
         generator_name == "gen_step"
         and spec.step_path is not None
@@ -1700,6 +1729,7 @@ def _generate_part_outputs(
         not has_mesh_sidecars
         and not force
         and _existing_topology_artifact_matches_options(spec, selector_options)
+        and _generated_assembly_glb_closure_current(spec)
     ):
         logger.debug(f"reused current GLB/topology: {_display_path(part_glb_path(spec.step_path))}")
         return GeneratedStepResult(spec=spec, scene=scene)
@@ -1839,6 +1869,7 @@ def _generate_step_outputs(
         and not force
         and not has_mesh_sidecars
         and _existing_topology_artifact_matches_spec_without_scene(spec)
+        and _generated_assembly_glb_closure_current(spec)
     ):
         if logger is not None:
             logger.debug(f"reused current GLB/topology: {_display_path(part_glb_path(spec.step_path))}")
@@ -2180,6 +2211,266 @@ def _run_selected_specs(
     return results
 
 
+def _referenced_child_step_paths(envelope: Mapping[str, object], base_dir: Path) -> list[Path]:
+    """Absolute STEP paths an assembly envelope composes from (its instances /
+    children). These become composition inputs folded into the assembly's source
+    closure so the no-op skip-check can detect a changed child."""
+    paths: list[Path] = []
+    seen: set[Path] = set()
+
+    def collect(items: object) -> None:
+        if not isinstance(items, list):
+            return
+        for item in items:
+            if not isinstance(item, Mapping):
+                continue
+            raw = item.get("path")
+            if isinstance(raw, str) and raw:
+                resolved = (base_dir / raw).resolve()
+                if resolved not in seen:
+                    seen.add(resolved)
+                    paths.append(resolved)
+            collect(item.get("children"))
+
+    collect(envelope.get("instances"))
+    collect(envelope.get("children"))
+    return paths
+
+
+def _manifest_source_closure_unchanged(manifest: Mapping[str, object]) -> bool:
+    """Whether a topology manifest's recorded source closure re-hashes unchanged.
+
+    For an assembly the closure spans the generator's import closure *and* every
+    composed child STEP, so a changed generator, shared helper, or child STEP all
+    invalidate it. Returns False when no usable closure was recorded."""
+    recorded_hash = str(manifest.get("sourceClosureHash") or "").strip()
+    recorded_files = manifest.get("sourceClosureFiles")
+    if not recorded_hash or not isinstance(recorded_files, list) or not recorded_files:
+        return False
+    current_hash = closure_hash_from_files(recorded_files)
+    return current_hash is not None and current_hash == recorded_hash
+
+
+def _assembly_is_current(spec: EntrySpec) -> bool:
+    """Whether a generated assembly's composed artifacts are already up to date,
+    so recomposition can be skipped entirely.
+
+    Current iff its STEP + GLB exist and are hydrated, the GLB was built for the
+    on-disk STEP (recorded stepHash matches), and the recorded source closure
+    (generator imports + every referenced child STEP) re-hashes unchanged.
+    """
+    if spec.kind != "assembly" or spec.source != "generated" or spec.step_path is None:
+        return False
+    step_path = spec.step_path
+    if not step_path.exists() or _is_git_lfs_pointer(step_path):
+        return False
+    glb_path = part_glb_path(step_path)
+    if not glb_path.exists() or _is_git_lfs_pointer(glb_path):
+        return False
+    manifest = read_step_topology_manifest_from_glb(glb_path)
+    if not isinstance(manifest, dict):
+        return False
+    recorded_step_hash = str(manifest.get("stepHash") or "").strip()
+    if not recorded_step_hash or recorded_step_hash != step_file_hash(step_path):
+        return False
+    return _manifest_source_closure_unchanged(manifest)
+
+
+def _generated_assembly_glb_closure_current(spec: EntrySpec) -> bool:
+    """For ``--skip-step-write`` GLB reuse: whether a generated assembly's existing
+    GLB/topology still matches its source closure (generator imports + every
+    composed child STEP). Non-assemblies are unaffected (return True).
+
+    This closes the gap where the skip-step-write artifact-match gate only checked
+    the assembly's *own* source, so editing a child rebuilt the child STEP but
+    then reused the stale assembly GLB. Unlike ``_assembly_is_current`` this does
+    not require ``tom.step`` (skip-step-write never writes it)."""
+    if spec.kind != "assembly":
+        return True
+    if spec.step_path is None:
+        return False
+    glb_path = part_glb_path(spec.step_path)
+    if not glb_path.exists() or _is_git_lfs_pointer(glb_path):
+        return False
+    manifest = read_step_topology_manifest_from_glb(glb_path)
+    if not isinstance(manifest, dict):
+        return False
+    return _manifest_source_closure_unchanged(manifest)
+
+
+def _generated_child_is_stale(child_spec: EntrySpec, *, force: bool) -> bool:
+    """Whether a generated child part must be rebuilt before composing a parent.
+
+    Detection order:
+    1. force, or a missing/unhydrated STEP -> stale.
+    2. Recorded import closure (sound, incl. transitive sys.path-loaded deps):
+       re-hash the recorded closure files and compare. This is the precise path.
+    3. Fallback when no closure was recorded (artifacts predating this feature,
+       or minimal fixtures): compare the script's own-file source hash to the
+       sourceHash recorded with the STEP. Catches own-file edits; transitive-dep
+       detection resumes once the child is regenerated with a closure.
+    4. If nothing was recorded, do not rebuild blindly (avoid mass rebuilds and
+       false positives on artifacts that carry no provenance).
+    """
+    if child_spec.source != "generated" or child_spec.script_path is None or child_spec.step_path is None:
+        return False
+    if force:
+        return True
+    step_path = child_spec.step_path
+    if not step_path.exists() or _is_git_lfs_pointer(step_path):
+        return True
+
+    glb_path = part_glb_path(step_path)
+    manifest = (
+        read_step_topology_manifest_from_glb(glb_path)
+        if glb_path.exists() and not _is_git_lfs_pointer(glb_path)
+        else None
+    )
+    if isinstance(manifest, dict):
+        recorded_hash = str(manifest.get("sourceClosureHash") or "").strip()
+        recorded_files = manifest.get("sourceClosureFiles")
+        if recorded_hash and isinstance(recorded_files, list) and recorded_files:
+            current_hash = closure_hash_from_files(recorded_files)
+            return current_hash is None or current_hash != recorded_hash
+
+    recorded_source_hash = str(manifest.get("sourceHash") or "").strip() if isinstance(manifest, dict) else ""
+    if not recorded_source_hash:
+        try:
+            recorded_source_hash = str(read_text_to_cad_step_metadata(step_path).get("sourceHash") or "").strip()
+        except Exception:
+            recorded_source_hash = ""
+    if not recorded_source_hash:
+        return False
+    return python_source_hash(child_spec.script_path).source_hash != recorded_source_hash
+
+
+def _rebuild_child_in_subprocess(child_spec: EntrySpec) -> None:
+    """Rebuild one stale child in a clean subprocess.
+
+    A fresh interpreter is required so the child's runtime import closure is
+    captured accurately: the current process has already imported the part
+    modules (the parent generator imports them), which would make an in-process
+    sys.modules delta miss shared dependencies."""
+    bootstrap = (
+        "import sys\n"
+        "from cadpy.generation import generate_step_targets\n"
+        "sys.exit(generate_step_targets([sys.argv[1]], force=True))\n"
+    )
+    result = subprocess.run(
+        [sys.executable, "-c", bootstrap, str(child_spec.script_path)],
+        cwd=str(Path.cwd()),
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode != 0:
+        detail = (result.stderr or result.stdout or "").strip()
+        raise RuntimeError(
+            f"Failed to rebuild stale subcomponent {child_spec.source_ref}:\n{detail}"
+        )
+
+
+def _timed_rebuild(child: EntrySpec, *, logger: CliLogger | None) -> None:
+    if logger is not None:
+        with logger.timed(f"rebuild stale subcomponent {child.source_ref}"):
+            _rebuild_child_in_subprocess(child)
+    else:
+        _rebuild_child_in_subprocess(child)
+
+
+def _rebuild_children_parallel(
+    children: Sequence[EntrySpec],
+    *,
+    logger: CliLogger | None,
+) -> list[str]:
+    """Rebuild independent leaf children concurrently in bounded subprocesses.
+
+    Each rebuilds in its own clean interpreter (sound closure capture), so they
+    share no in-process state and parallelize freely. Their build123d imports
+    overlap, which is what removes the sequential per-child import overhead.
+    Errors are collected so one failure doesn't mask the others. Returns the
+    source refs in the input order (deterministic), regardless of finish order."""
+    if len(children) <= 1:
+        for child in children:
+            _timed_rebuild(child, logger=logger)
+        return [child.source_ref for child in children]
+
+    max_workers = min(len(children), max(1, (os.cpu_count() or 2) - 1))
+    if logger is not None:
+        logger.debug(f"rebuilding {len(children)} stale subcomponents (up to {max_workers} parallel)")
+
+    def run_one(child: EntrySpec) -> tuple[str, float, Exception | None]:
+        started = time.perf_counter()
+        try:
+            _rebuild_child_in_subprocess(child)
+            return child.source_ref, time.perf_counter() - started, None
+        except Exception as exc:  # aggregated and re-raised below
+            return child.source_ref, time.perf_counter() - started, exc
+
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        results = list(executor.map(run_one, children))
+
+    rebuilt: list[str] = []
+    errors: list[tuple[str, Exception]] = []
+    for source_ref, elapsed, exc in results:
+        if exc is not None:
+            errors.append((source_ref, exc))
+            continue
+        rebuilt.append(source_ref)
+        if logger is not None:
+            logger.debug(f"rebuilt subcomponent {source_ref} in {elapsed:.2f}s")
+    if errors:
+        joined = "\n".join(f"  {source_ref}: {exc}" for source_ref, exc in errors)
+        raise RuntimeError(f"Failed to rebuild {len(errors)} stale subcomponent(s):\n{joined}")
+    return rebuilt
+
+
+def _rebuild_stale_assembly_children(
+    all_specs: Sequence[EntrySpec],
+    selected_specs: Sequence[EntrySpec],
+    *,
+    force: bool,
+    logger: CliLogger | None,
+) -> list[str]:
+    """Rebuild generated child parts of selected assemblies whose source changed.
+
+    Reuses the already-expanded ``all_specs`` (no extra source discovery).
+    Independent leaf parts rebuild concurrently; sub-assembly children rebuild
+    sequentially afterward in leaf-first (deepest-first) order, since each
+    composes from its own children and its subprocess force-rebuilds that
+    subtree. Returns the source refs that were rebuilt."""
+    has_assembly_target = any(
+        spec.kind == "assembly" and spec.source == "generated" for spec in selected_specs
+    )
+    if not has_assembly_target:
+        return []
+    selected_refs = {spec.source_ref for spec in selected_specs}
+    seen: set[str] = set()
+    stale_leaves: list[EntrySpec] = []
+    stale_assemblies: list[EntrySpec] = []
+    # all_specs lists parents before dependencies; reversing yields leaf-first.
+    for child in reversed(list(all_specs)):
+        if child.source_ref in selected_refs or child.source_ref in seen:
+            continue
+        seen.add(child.source_ref)
+        if not _generated_child_is_stale(child, force=force):
+            continue
+        if child.kind == "assembly":
+            stale_assemblies.append(child)
+        else:
+            stale_leaves.append(child)
+    if not stale_leaves and not stale_assemblies:
+        return []
+
+    rebuilt = _rebuild_children_parallel(stale_leaves, logger=logger)
+    for child in stale_assemblies:
+        _timed_rebuild(child, logger=logger)
+        rebuilt.append(child.source_ref)
+
+    if rebuilt and logger is not None:
+        logger.info(f"rebuilt {len(rebuilt)} stale subcomponent(s): {', '.join(rebuilt)}")
+    return rebuilt
+
+
 def generate_step_targets(
     targets: Sequence[str],
     *,
@@ -2238,6 +2529,22 @@ def generate_step_targets(
     if step_options is not None and step_options.has_metadata:
         selected_specs = [_apply_step_options_to_spec(spec, step_options) for spec in selected_specs]
     _validate_part_render_output_paths([*all_specs, *selected_specs])
+    _rebuild_stale_assembly_children(all_specs, selected_specs, force=force, logger=logger)
+    # No-op fast path: skip recomposing a generated assembly whose source closure
+    # (generator imports + every composed child STEP) is unchanged. Runs after the
+    # child rebuild so a just-rebuilt child correctly invalidates the closure. Only
+    # for plain in-place regeneration (no --force, --skip-step-write, or overrides).
+    no_output_override = output_path is None and not any(path is not None for path in target_output_paths)
+    if not force and not skip_step_write and no_output_override:
+        current_specs = [spec for spec in selected_specs if _assembly_is_current(spec)]
+        if current_specs:
+            for spec in current_specs:
+                logger.info(f"{spec.cad_ref} is current; skipped recompose")
+            current_refs = {spec.source_ref for spec in current_specs}
+            selected_specs = [spec for spec in selected_specs if spec.source_ref not in current_refs]
+            if not selected_specs:
+                logger.total()
+                return 0
     entries_by_step_path = _entries_by_step_path([*all_specs, *selected_specs])
     def generate_step(spec: EntrySpec) -> object:
         return _run_with_spec_generation_status(
