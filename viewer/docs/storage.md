@@ -16,7 +16,6 @@ Use query params only for shareable state that should survive copying a URL:
   the directory where the Viewer server was started. When omitted, the Viewer
   uses the active directory remembered for the tab, or the directory where the
   server was started when that is the only active directory.
-- `refs`: copied CAD references and selection targets.
 - `moveit2Ws`: explicit MoveIt2 websocket override for local or hosted sessions.
 
 Do not put dense viewer state, panel state, drawing state, or per-file controls
