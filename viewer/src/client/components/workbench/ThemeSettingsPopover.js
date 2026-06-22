@@ -1,9 +1,6 @@
 import { Children, isValidElement, useEffect, useId, useMemo, useRef, useState } from "react";
 import { Contrast, FlipHorizontal2, Moon, MoreHorizontal, Pencil, Plus, RotateCcw, Sun, Trash2, X } from "lucide-react";
 import {
-  Accordion
-} from "../ui/accordion";
-import {
   AlertDialog,
   AlertDialogAction,
   AlertDialogCancel,
@@ -86,7 +83,8 @@ import {
   DEFAULT_STEP_CLIP_SETTINGS,
   normalizeStepClipSettings
 } from "cadjs/lib/viewer/clipPlane";
-import FileSheet, {
+import { FILE_SHEET_SECTION_IDS } from "@/workbench/fileSheetSections";
+import {
   FILE_SHEET_COMPACT_BUTTON_CLASSES,
   FILE_SHEET_COMPACT_INPUT_CLASSES,
   FILE_SHEET_FIELD_LABEL_CLASSES,
@@ -95,7 +93,6 @@ import FileSheet, {
   FILE_SHEET_SEGMENTED_ITEM_CLASSES,
   FileSheetBooleanToggle,
   FileSheetControlRow,
-  FileSheetSection,
   FileSheetSliderField,
   FileSheetSubsection,
   FileSheetSubsubsection,
@@ -185,14 +182,6 @@ function Field({ label, value, trailing, children, className, contentClassName }
     >
       {children}
     </FileSheetControlRow>
-  );
-}
-
-function Section({ title, value, children, ...props }) {
-  return (
-    <FileSheetSection value={value} title={title} {...props}>
-      {children}
-    </FileSheetSection>
   );
 }
 
@@ -1574,7 +1563,7 @@ export function DisplaySettingsSection({
   };
 
   return (
-    <Section title="Display" value="display">
+    <div className="py-1" data-cad-display-settings-section="true">
       <ControlSubsection title="Mode">
         <Field label="Projection">
           <SegmentedControl
@@ -1857,11 +1846,20 @@ export function DisplaySettingsSection({
           </FileSheetControlRow>
         </ControlSubsection>
       ) : null}
-    </Section>
+    </div>
   );
 }
 
-export function ThemeSettingsSections({
+// Build the "Display" tab descriptor (STEP scene/display controls).
+export function buildDisplaySettingsTab(props) {
+  return {
+    id: FILE_SHEET_SECTION_IDS.THEME_DISPLAY,
+    title: "Display",
+    content: <DisplaySettingsSection {...props} />
+  };
+}
+
+function ThemeAppearanceContent({
   themePresets = [],
   themeSettings,
   themePresetId = "",
@@ -1872,17 +1870,6 @@ export function ThemeSettingsSections({
   handleUpdateThemePresetSettings
 }) {
   const [activePrimaryLight, setActivePrimaryLight] = useState("directional");
-  const activeThemePreset = useMemo(
-    () => resolveActiveThemePreset(themePresets, themePresetId, themeSettings),
-    [themePresets, themePresetId, themeSettings]
-  );
-  const themeHasChanged = themeSettingsChangedFromPreset(activeThemePreset, themeSettings);
-  const appearanceTitle = (
-    <span className="flex min-w-0 items-center gap-2">
-      <span>Appearance</span>
-      {themeHasChanged ? <ThemeDirtyIndicator className="h-1.5 w-1.5" /> : null}
-    </span>
-  );
 
   const setMaterials = (patch) => {
     updateThemeSettings((current) => ({
@@ -2003,11 +1990,7 @@ export function ThemeSettingsSections({
   };
 
   return (
-    <Section
-      title={appearanceTitle}
-      value="appearance"
-      data-cad-theme-appearance-section="true"
-    >
+    <div className="py-1" data-cad-theme-appearance-section="true">
       <ThemeAppearanceSection
         themePresets={themePresets}
         themeSettings={themeSettings}
@@ -2395,44 +2378,26 @@ export function ThemeSettingsSections({
           </SliderField>
         </NestedControlGroup>
       </ControlSubsection>
-    </Section>
+    </div>
   );
 }
 
-export default function ThemeSettingsPopover({
-  open,
-  isDesktop,
-  width,
-  onStartResize,
-  themePresets = [],
-  themeSettings,
-  themePresetId = "",
-  resolvedColorSchemeMode = THEME_COLOR_MODES.LIGHT,
-  updateThemeSettings,
-  handleResetThemeSettings,
-  handleSaveCustomThemePreset,
-  handleUpdateThemePresetSettings
-}) {
-  return (
-    <FileSheet
-      open={open}
-      title="Theme"
-      isDesktop={isDesktop}
-      width={width}
-      onStartResize={onStartResize}
-    >
-      <Accordion type="multiple" className="text-sm">
-        <ThemeSettingsSections
-          themePresets={themePresets}
-          themeSettings={themeSettings}
-          themePresetId={themePresetId}
-          resolvedColorSchemeMode={resolvedColorSchemeMode}
-          updateThemeSettings={updateThemeSettings}
-          handleResetThemeSettings={handleResetThemeSettings}
-          handleSaveCustomThemePreset={handleSaveCustomThemePreset}
-          handleUpdateThemePresetSettings={handleUpdateThemePresetSettings}
-        />
-      </Accordion>
-    </FileSheet>
+// Build the "Appearance" tab descriptor (theme presets, surface, scene, lighting).
+export function buildThemeAppearanceTab(props) {
+  const activeThemePreset = resolveActiveThemePreset(
+    props.themePresets || [],
+    props.themePresetId || "",
+    props.themeSettings
   );
+  const themeHasChanged = themeSettingsChangedFromPreset(activeThemePreset, props.themeSettings);
+  return {
+    id: FILE_SHEET_SECTION_IDS.THEME_APPEARANCE,
+    title: (
+      <span className="flex min-w-0 items-center gap-1.5">
+        <span>Appearance</span>
+        {themeHasChanged ? <ThemeDirtyIndicator className="h-1.5 w-1.5" /> : null}
+      </span>
+    ),
+    content: <ThemeAppearanceContent {...props} />
+  };
 }

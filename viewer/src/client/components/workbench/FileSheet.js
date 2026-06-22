@@ -462,6 +462,7 @@ export default function FileSheet({
   onOpenChange,
   onStartResize,
   bodyClassName,
+  scrollBody = true,
   children
 }) {
   const desktopWidth = `min(${normalizeFileSheetWidth(width)}px, ${DESKTOP_FILE_SHEET_MAX_WIDTH})`;
@@ -476,7 +477,7 @@ export default function FileSheet({
       width: MOBILE_FILE_SHEET_WIDTH,
       maxWidth: DESKTOP_FILE_SHEET_MAX_WIDTH
     };
-  const sheetBody = (
+  const sheetBody = scrollBody ? (
     <ScrollArea
       className={cn("min-h-0 flex-1", FILE_SHEET_CONTROL_TEXT_CLASSES, bodyClassName)}
       type="auto"
@@ -484,6 +485,10 @@ export default function FileSheet({
     >
       {children}
     </ScrollArea>
+  ) : (
+    <div className={cn("flex min-h-0 flex-1 flex-col", FILE_SHEET_CONTROL_TEXT_CLASSES, bodyClassName)}>
+      {children}
+    </div>
   );
 
   if (!isDesktop) {

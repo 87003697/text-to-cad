@@ -1,9 +1,7 @@
-import {
-  Accordion
-} from "../ui/accordion";
 import FileSheet from "./FileSheet";
-import FileMetadataSection from "./FileMetadataSection";
-import FileStatusSection from "./FileStatusSection";
+import FileSheetTabbedSurface from "./FileSheetTabbedSurface";
+import { buildFileMetadataTab } from "./FileMetadataSection";
+import { buildFileStatusTab } from "./FileStatusSection";
 
 export default function MeshFileSheet({
   open,
@@ -20,10 +18,24 @@ export default function MeshFileSheet({
   onOpenFileAsset,
   suppressDynamicMetadataStatus = false,
   statusItems = [],
-  themeSections = null,
+  themeTabs = [],
   openSectionIds = [],
   onOpenSectionIdsChange
 }) {
+  const sections = [
+    buildFileStatusTab(statusItems),
+    ...themeTabs,
+    buildFileMetadataTab({
+      entry: selectedEntry,
+      fileDownloadAvailable,
+      viewerServerInfo,
+      localFileOpenAvailable,
+      fileAccessBusyKey,
+      onOpenFileAsset,
+      suppressDynamicStatus: suppressDynamicMetadataStatus
+    })
+  ];
+
   return (
     <FileSheet
       open={open}
@@ -32,25 +44,14 @@ export default function MeshFileSheet({
       width={width}
       onOpenChange={onOpenChange}
       onStartResize={onStartResize}
+      scrollBody={false}
     >
-      <Accordion
-        type="multiple"
-        value={openSectionIds}
-        onValueChange={onOpenSectionIdsChange}
-        className="text-sm"
-      >
-        <FileStatusSection items={statusItems} />
-        {themeSections}
-        <FileMetadataSection
-          entry={selectedEntry}
-          fileDownloadAvailable={fileDownloadAvailable}
-          viewerServerInfo={viewerServerInfo}
-          localFileOpenAvailable={localFileOpenAvailable}
-          fileAccessBusyKey={fileAccessBusyKey}
-          onOpenFileAsset={onOpenFileAsset}
-          suppressDynamicStatus={suppressDynamicMetadataStatus}
-        />
-      </Accordion>
+      <FileSheetTabbedSurface
+        kind="mesh"
+        sections={sections}
+        openSectionIds={openSectionIds}
+        onOpenSectionIdsChange={onOpenSectionIdsChange}
+      />
     </FileSheet>
   );
 }
