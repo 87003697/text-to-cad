@@ -21,11 +21,12 @@ This app is **Vite + Tailwind v4**, not Next.js, so ignore the upstream
 - **Tokens live in [`viewer/src/client/styles/globals.css`](../../src/client/styles/globals.css).**
   The shadcn CSS variables are set directly in `:root` (light "Snow Storm") and
   `.dark` (dark "Polar Night"); the Tailwind v4 `@theme inline` block maps them
-  to utilities and sets `--radius` to `0` and `--font-sans` to JetBrains Mono.
-  Do **not** run `npx shadcn add` — edit `globals.css` by hand.
-- **Font** is pulled via a Google Fonts `@import` at the top of `globals.css`
-  (`JetBrains Mono`), with a `ui-monospace` fallback. For production you may
-  prefer to self-host it (e.g. an `@fontsource` package) instead of the CDN.
+  to utilities and sets `--radius` to `0`. Do **not** run `npx shadcn add` —
+  edit `globals.css` by hand.
+- **Font (app divergence): this app does NOT adopt smui's monospace.** It keeps
+  the viewer's previous typeface — `--font-sans: "IBM Plex Sans", "Aptos",
+  "Segoe UI", sans-serif`. So skip smui's "monospace everything" rule and the
+  JetBrains Mono setup; everything else (palette, sharp edges) still applies.
 - **Light/dark** is driven by the viewer's own color-scheme system, which
   toggles the `.dark` class on `<html>` — no `next-themes`.
 
@@ -60,7 +61,8 @@ Everything below this section is the agnostic smui guide.
 2. **Zero border radius.** `--radius: 0rem`. All components have sharp corners.
    The only `rounded-full` elements are status dots, toggle knobs, and avatars.
 3. **Monospace everything.** JetBrains Mono is the only font. No serif, no
-   sans-serif.
+   sans-serif. *(This app diverges — it keeps its previous sans-serif font; see
+   "In this app".)*
 4. **No emoji.** Use [lucide-react](https://lucide.dev/) icons instead.
 5. **Labels are uppercase.** Labels, card titles, and status text use
    `uppercase` with wide letter-spacing.
@@ -268,12 +270,14 @@ export function cn(...inputs: ClassValue[]) {
 
 ## Quick Reference
 
-- Theme: light + dark, Nord-inspired, zero radius, monospace.
+- Theme: light + dark, Nord-inspired, zero radius, monospace (this app keeps its
+  own sans-serif font — see below).
 - Primary accent: dark `#88c0d0` / light `#4c6d94` (frost blue).
 - Status: green=success, yellow=warning, red=error, purple=info.
 - Labels: always uppercase with wide tracking.
 - Cards: use `card-glow`, `py-2.5 px-3.5` header padding.
 - No emoji — use lucide-react icons.
-- **This app:** translucent frosted-glass surfaces over the 3D scene; tokens in
-  `globals.css`; Vite + Tailwind v4 (no next/font, no next-themes).
+- **This app:** translucent frosted-glass surfaces over the 3D scene; keeps its
+  previous sans-serif font (not JetBrains Mono); tokens in `globals.css`; Vite +
+  Tailwind v4 (no next/font, no next-themes).
 - Live examples: <https://smui.statico.io>
