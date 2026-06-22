@@ -42,8 +42,6 @@ export function useCadDirectorySession({
   catalogEntries,
   manifestRevision = 0,
   readCadParam = () => null,
-  readCadRefQueryParams = () => [],
-  setPendingCadRefQueryParams = () => {},
   activateEntryTab,
   resetActiveDirectory,
   writeCadParam,
@@ -59,12 +57,8 @@ export function useCadDirectorySession({
     }
     cadDirectorySessionBootstrappedRef.current = true;
 
-    const initialCadRefQueryParams = readCadRefQueryParams();
-    if (initialCadRefQueryParams.length) {
-      setPendingCadRefQueryParams(initialCadRefQueryParams);
-    }
     const urlSelectedKey = selectedEntryKeyFromUrl(manifestEntries);
-    initialUnresolvedUrlSelectionRef.current = Boolean(readCadParam() || initialCadRefQueryParams.length) && !urlSelectedKey;
+    initialUnresolvedUrlSelectionRef.current = Boolean(readCadParam()) && !urlSelectedKey;
 
     if (urlSelectedKey) {
       const fileSessionState = readEntrySessionState(urlSelectedKey);
@@ -83,12 +77,10 @@ export function useCadDirectorySession({
     applyTabRecord,
     createTabRecord,
     manifestEntries,
-    readCadRefQueryParams,
     readCadParam,
     readEntrySessionState,
     selectedEntryKeyFromUrl,
     setOpenTabs,
-    setPendingCadRefQueryParams,
     upsertTabRecord,
     initialSelectedTabSnapshot,
     cadDirectorySessionBootstrappedRef
@@ -100,7 +92,7 @@ export function useCadDirectorySession({
   }, [defaultDocumentTitle, selectedEntry]);
 
   useLayoutEffect(() => {
-    const urlSelectionRequested = Boolean(readCadParam() || readCadRefQueryParams().length);
+    const urlSelectionRequested = Boolean(readCadParam());
     const nextSelectedKey = selectedEntryKeyFromUrl(catalogEntries);
     const selectedKeyExists = Boolean(selectedKey && entryMap.has(selectedKey));
 
@@ -140,7 +132,6 @@ export function useCadDirectorySession({
     entryMap,
     manifestRevision,
     readCadParam,
-    readCadRefQueryParams,
     resetActiveDirectory,
     selectedEntryKeyFromUrl,
     selectedKey,
@@ -150,9 +141,6 @@ export function useCadDirectorySession({
 
   useEffect(() => {
     const syncSelectionFromHistory = () => {
-      const nextCadRefQueryParams = readCadRefQueryParams();
-      setPendingCadRefQueryParams(nextCadRefQueryParams);
-
       const nextSelectedKey = selectedEntryKeyFromUrl(catalogEntries);
       if (nextSelectedKey) {
         activateEntryTab(nextSelectedKey);
@@ -168,25 +156,17 @@ export function useCadDirectorySession({
   }, [
     activateEntryTab,
     catalogEntries,
-    readCadRefQueryParams,
     resetActiveDirectory,
-    selectedEntryKeyFromUrl,
-    setPendingCadRefQueryParams
+    selectedEntryKeyFromUrl
   ]);
 
   useEffect(() => {
     if (selectedEntry) {
-      const currentCadRefQueryParams = readCadRefQueryParams();
-      if (currentCadRefQueryParams.length) {
-        setPendingCadRefQueryParams((current) => (
-          Array.isArray(current) && current.length ? current : currentCadRefQueryParams
-        ));
-      }
       writeCadParam(cadFileParamForEntry(selectedEntry));
       return;
     }
     if (!selectedKey) {
-      const unresolvedUrlSelection = Boolean(readCadParam() || readCadRefQueryParams().length);
+      const unresolvedUrlSelection = Boolean(readCadParam());
       if (unresolvedUrlSelection) {
         const urlSelectedKey = selectedEntryKeyFromUrl(catalogEntries);
         if (
@@ -207,11 +187,9 @@ export function useCadDirectorySession({
     cadFileParamForEntry,
     manifestRevision,
     readCadParam,
-    readCadRefQueryParams,
     selectedEntry,
     selectedEntryKeyFromUrl,
     selectedKey,
-    setPendingCadRefQueryParams,
     writeCadParam
   ]);
 

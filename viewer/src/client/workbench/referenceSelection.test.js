@@ -1,7 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { STEP_MODEL_ROOT_ID } from "cadjs/lib/step/stepTree.js";
 import {
   buildAssemblyPartCopyText,
   buildAssemblyMateCopyText,
@@ -10,15 +9,12 @@ import {
   buildSelectionCopyButtonLabel,
   buildSelectionCopyPayload,
   buildWholeStepEntryCopyReference,
-  cadRefQueryHasKnownEntry,
   canonicalCadRefCopyText,
-  collectCadRefSelectionRequest,
   computeNextSelectionIds,
   copySelectedReferenceText,
   normalizeReferenceList,
   orderedStringListEqual,
   parseAssemblyPartReferenceSelectionId,
-  resolveCadRefSelection,
   resolveTopologyRelativeFile,
   uniqueStringList
 } from "./referenceSelection.js";
@@ -154,62 +150,7 @@ test("copy helpers merge selector refs and keep plain fallback lines", () => {
   assert.equal(buildSelectionCopyButtonLabel([]), "Copy refs");
 });
 
-test("whole-entry refs select the single STEP root row", () => {
-  const resolved = resolveCadRefSelection({
-    cadRefs: ["#"],
-    entry: STEP_ENTRY,
-    isAssemblyView: false
-  });
-  assert.equal(resolved.hasWholeEntryToken, true);
-  assert.deepEqual(resolved.selectedPartIds, [STEP_MODEL_ROOT_ID]);
-  assert.deepEqual(resolved.selectedReferenceIds, []);
-  assert.deepEqual(resolved.selectedMateIds, []);
-});
-
-test("selector ref query helpers classify and resolve selected references and parts", () => {
-  const assemblyEntry = {
-    ...STEP_ENTRY,
-    kind: "assembly"
-  };
-  const cadRefs = [
-    "#o1.2,f1"
-  ];
-  assert.equal(cadRefQueryHasKnownEntry(cadRefs, [assemblyEntry]), false);
-  assert.deepEqual(collectCadRefSelectionRequest(cadRefs, assemblyEntry), {
-    hasMatchingToken: true,
-    hasWholeEntryToken: false,
-    selectors: ["o1.2", "o1.2.f1"],
-    needsParts: true,
-    needsMates: false,
-    needsReferences: true
-  });
-
-  const resolved = resolveCadRefSelection({
-    cadRefs,
-    entry: assemblyEntry,
-    isAssemblyView: true,
-    references: [
-      {
-        id: "ref-face-1",
-        partId: "part-a",
-        copyText: "#o1.2.f1",
-        displaySelector: "o1.2.f1",
-        normalizedSelector: "o1.2.f1"
-      }
-    ],
-    assemblyParts: [
-      { id: "root", children: [{ id: "part-b", occurrenceId: "o1.2" }] },
-      { id: "part-b", occurrenceId: "o1.2" }
-    ]
-  });
-  assert.equal(resolved.hasMatchingToken, true);
-  assert.deepEqual(resolved.selectedReferenceIds, ["ref-face-1"]);
-  assert.deepEqual(resolved.selectedPartIds, ["part-b"]);
-  assert.equal(resolved.inspectedAssemblyNodeId, "");
-  assert.deepEqual(resolved.expandedAssemblyPartIds, ["part-b", "part-a"]);
-});
-
-test("selector ref query helpers copy and resolve assembly mate refs", () => {
+test("assembly mate refs copy as selector lines", () => {
   const assemblyEntry = {
     ...STEP_ENTRY,
     kind: "assembly"
@@ -236,45 +177,6 @@ test("selector ref query helpers copy and resolve assembly mate refs", () => {
     "#m1"
   ]);
   assert.equal(payload.copiedCount, 1);
-  assert.deepEqual(collectCadRefSelectionRequest(payload.lines, assemblyEntry), {
-    hasMatchingToken: true,
-    hasWholeEntryToken: false,
-    selectors: ["m1"],
-    needsParts: false,
-    needsMates: true,
-    needsReferences: false
-  });
-
-  const resolved = resolveCadRefSelection({
-    cadRefs: payload.lines,
-    entry: assemblyEntry,
-    isAssemblyView: true,
-    assemblyMates: [mate]
-  });
-  assert.deepEqual(resolved.selectedMateIds, [mate.id]);
-  assert.deepEqual(resolved.selectedPartIds, []);
-  assert.deepEqual(resolved.selectedReferenceIds, []);
-});
-
-test("selector ref query resolves nested occurrence selection without entering focus", () => {
-  const assemblyEntry = {
-    ...STEP_ENTRY,
-    kind: "assembly"
-  };
-  const resolved = resolveCadRefSelection({
-    cadRefs: ["#o1.2.3"],
-    entry: assemblyEntry,
-    isAssemblyView: true,
-    assemblyParts: [
-      { id: "root", children: [{ id: "module", occurrenceId: "o1.2" }] },
-      { id: "module", occurrenceId: "o1.2", children: [{ id: "part-c", occurrenceId: "o1.2.3" }] },
-      { id: "part-c", occurrenceId: "o1.2.3" }
-    ]
-  });
-
-  assert.deepEqual(resolved.selectedPartIds, ["part-c"]);
-  assert.equal(resolved.inspectedAssemblyNodeId, "");
-  assert.deepEqual(resolved.expandedAssemblyPartIds, ["part-c"]);
 });
 
 test("selection utility helpers preserve list and topology path behavior", () => {
