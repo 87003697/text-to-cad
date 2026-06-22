@@ -178,6 +178,35 @@ test("selector pick helpers sync display mesh face ids", () => {
   assert.equal("faceIds" in missingMesh.userData, false);
 });
 
+test("selector pick helpers sync display mesh face ids from display record source parts", () => {
+  const selectorRuntime = {
+    occurrenceIdByRowIndex: new Map([[0, "part-a"]]),
+    proxy: {
+      faceRuns: new Uint32Array([0, 0, 0, 1, 5])
+    }
+  };
+  const partMesh = { userData: {} };
+  const runtime = {
+    displayRecords: [
+      {
+        partId: "part-a",
+        sourcePart: {
+          id: "part-a",
+          triangleCount: 1
+        },
+        mesh: partMesh
+      }
+    ]
+  };
+
+  syncDisplayMeshFaceIds(runtime, {
+    indices: new Uint32Array([0, 1, 2]),
+    parts: null
+  }, selectorRuntime);
+
+  assert.deepEqual([...partMesh.userData.faceIds], [5]);
+});
+
 test("selector pick helpers sync pick groups and preserve caller-owned clearing", () => {
   const runtime = {
     THREE,

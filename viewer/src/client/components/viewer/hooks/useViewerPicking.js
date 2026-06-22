@@ -1022,27 +1022,12 @@ export function useViewerPicking({
       return false;
     }
 
-    function isPointInsideElement(clientX, clientY, element) {
-      if (!element || !Number.isFinite(Number(clientX)) || !Number.isFinite(Number(clientY))) {
-        return false;
-      }
-      const rect = element.getBoundingClientRect();
-      return (
-        clientX >= rect.left &&
-        clientX <= rect.right &&
-        clientY >= rect.top &&
-        clientY <= rect.bottom
-      );
+    function isSceneEvent(event) {
+      return isSceneInteractionTarget(event.target);
     }
 
-    function isSceneEvent(event) {
-      if (isSceneInteractionTarget(event.target)) {
-        return true;
-      }
-      if (isPointInsideElement(event.clientX, event.clientY, sceneMount || container)) {
-        return true;
-      }
-      return contextPointer.active || primaryPointer.active || contextMenuGesture.isSuppressed();
+    function isActiveSceneGestureEvent(event) {
+      return isSceneEvent(event) || contextPointer.active || primaryPointer.active;
     }
 
     function commitHoverState(referenceId) {
@@ -1236,7 +1221,7 @@ export function useViewerPicking({
     }
 
     function handlePointerMoveCapture(event) {
-      if (!isSceneEvent(event)) {
+      if (!isActiveSceneGestureEvent(event)) {
         return;
       }
       updateContextPointerMove(event);
@@ -1246,7 +1231,7 @@ export function useViewerPicking({
     }
 
     function handleMouseMoveCapture(event) {
-      if (!isSceneEvent(event)) {
+      if (!isActiveSceneGestureEvent(event)) {
         return;
       }
       updateContextPointerMove(event);

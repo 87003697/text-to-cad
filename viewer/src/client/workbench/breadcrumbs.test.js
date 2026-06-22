@@ -4,7 +4,8 @@ import test from "node:test";
 import { buildSidebarDirectoryTree } from "./sidebar.js";
 import {
   buildBreadcrumbNodes,
-  collapsedBreadcrumbNodes
+  collapsedBreadcrumbNodes,
+  ellipsisBreadcrumbMenuDirectory
 } from "./breadcrumbs.js";
 
 test("breadcrumb dropdown directories target adjacent siblings", () => {
@@ -78,4 +79,49 @@ test("breadcrumb helpers support collapsed paths", () => {
   assert.equal(items.length, 4);
   assert.equal(items[1].type, "ellipsis");
   assert.deepEqual(items[1].nodes.map((node) => node.label), ["assemblies", "robot"]);
+});
+
+test("collapsed breadcrumb directories browse their own nested folders", () => {
+  const selectedEntry = {
+    file: "robots/tom/v2/printable/link.step",
+    kind: "part",
+    source: { format: "step", path: "robots/tom/v2/printable/link.step" }
+  };
+  const tree = buildSidebarDirectoryTree([
+    selectedEntry,
+    {
+      file: "robots/tom/v2/raw/source.step",
+      kind: "part",
+      source: { format: "step", path: "robots/tom/v2/raw/source.step" }
+    },
+    {
+      file: "robots/lerobot/base.step",
+      kind: "part",
+      source: { format: "step", path: "robots/lerobot/base.step" }
+    }
+  ], { rootName: "models" });
+
+  const nodes = buildBreadcrumbNodes({
+    directoryTree: tree,
+    selectedEntry,
+    selectedFileLabel: "link.step",
+    selectedFileTitle: "robots/tom/v2/printable/link.step"
+  });
+  const collapsedItems = collapsedBreadcrumbNodes(nodes);
+  const hiddenNodes = collapsedItems.find((item) => item.type === "ellipsis")?.nodes || [];
+  const tomNode = hiddenNodes.find((node) => node.label === "tom");
+  const v2Node = hiddenNodes.find((node) => node.label === "v2");
+
+  assert.equal(tomNode.menuDirectory.id, "robots");
+  assert.equal(ellipsisBreadcrumbMenuDirectory(tomNode).id, "robots/tom");
+  assert.deepEqual(
+    ellipsisBreadcrumbMenuDirectory(tomNode).directories.map((directory) => directory.id),
+    ["robots/tom/v2"]
+  );
+  assert.equal(v2Node.menuDirectory.id, "robots/tom");
+  assert.equal(ellipsisBreadcrumbMenuDirectory(v2Node).id, "robots/tom/v2");
+  assert.deepEqual(
+    ellipsisBreadcrumbMenuDirectory(v2Node).directories.map((directory) => directory.id).sort(),
+    ["robots/tom/v2/printable", "robots/tom/v2/raw"]
+  );
 });

@@ -1817,6 +1817,7 @@ function buildDisplayRecords(THREE, runtime, meshData, settings) {
 
     const record = {
       partId,
+      sourcePart: part || null,
       mesh,
       edges: null,
       silhouette: null,

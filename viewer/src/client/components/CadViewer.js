@@ -429,6 +429,19 @@ function displayRecordsAnimationKey(records = []) {
     .join("|");
 }
 
+function transformedRuntimeStateEqual(current, next) {
+  return (
+    (current?.base || null) === (next?.base || null) &&
+    (current?.runtime || null) === (next?.runtime || null)
+  );
+}
+
+function updateTransformedRuntimeState(setState, next) {
+  setState((current) => (
+    transformedRuntimeStateEqual(current, next) ? current : next
+  ));
+}
+
 function cancelExplodedViewAnimation(animationRef) {
   const animation = animationRef?.current;
   if (!animation?.rafId || typeof window === "undefined") {
@@ -3532,11 +3545,11 @@ const CadViewer = forwardRef(function CadViewer({
           displayRecords: modelStepParameters ? runtime.displayRecords : []
         }).transformedDisplayEdgeRuntime;
     const initialSelectorRuntime = initialEdgeRuntimes.transformedSelectorRuntime;
-    setTransformedSelectorRuntime(initialSelectorRuntime ? {
+    updateTransformedRuntimeState(setTransformedSelectorRuntime, initialSelectorRuntime ? {
       base: selectorRuntime,
       runtime: initialSelectorRuntime
     } : null);
-    setTransformedDisplayEdgeRuntime(initialDisplayEdgeRuntime ? {
+    updateTransformedRuntimeState(setTransformedDisplayEdgeRuntime, initialDisplayEdgeRuntime ? {
       base: displayEdgeRuntime,
       runtime: initialDisplayEdgeRuntime
     } : null);
@@ -3878,8 +3891,8 @@ const CadViewer = forwardRef(function CadViewer({
     const module = definition?.module || null;
     if (!definition || isLoading || !meshData) {
       stepModuleTransformDetectedChangeRef.current?.(false);
-      setTransformedSelectorRuntime(null);
-      setTransformedDisplayEdgeRuntime(null);
+      updateTransformedRuntimeState(setTransformedSelectorRuntime, null);
+      updateTransformedRuntimeState(setTransformedDisplayEdgeRuntime, null);
       runtime.topologyDisplayEdgeTransformByRecord = explodedViewActive;
       resetStepModuleRecordEffects(runtime.displayRecords);
       for (const record of runtime.displayRecords) {
@@ -3974,11 +3987,11 @@ const CadViewer = forwardRef(function CadViewer({
     const nextDisplayEdgeRuntime = useRecordTopologyEdgeTransforms
       ? null
       : nextEdgeRuntimes.transformedDisplayEdgeRuntime;
-    setTransformedSelectorRuntime(nextSelectorRuntime ? {
+    updateTransformedRuntimeState(setTransformedSelectorRuntime, nextSelectorRuntime ? {
       base: selectorRuntime,
       runtime: nextSelectorRuntime
     } : null);
-    setTransformedDisplayEdgeRuntime(nextDisplayEdgeRuntime ? {
+    updateTransformedRuntimeState(setTransformedDisplayEdgeRuntime, nextDisplayEdgeRuntime ? {
       base: displayEdgeRuntime,
       runtime: nextDisplayEdgeRuntime
     } : null);

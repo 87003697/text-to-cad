@@ -941,15 +941,15 @@ export default function StepFileSheet({
                     isolatedTreeRowIds.has(rowId) ||
                     topologyInsideSelectablePart;
                   const focused = !topologyRow && focusedNodeIdSet.has(rowId);
-                  const topologyShapeOfFocusedPart = topologyType === "shape" &&
+                  const topologyWholeOfFocusedPart = (topologyType === "shape" || topologyType === "occurrence") &&
                     focusedNodeIdSet.has(String(row.node?.partId || "").trim());
                   const selectable = topologyRow
-                    ? selectableTopologyRow && insideIsolation && !topologyShapeOfFocusedPart
+                    ? selectableTopologyRow && insideIsolation && !topologyWholeOfFocusedPart
                     : !focused && (!selectableNodeIdSet || selectableNodeIdSet.has(selectionRowId) || selected);
                   const hidden = hiddenTreeRowIds.has(String(row.id || "").trim());
                   const isolationMuted = isolateActive && !insideIsolation;
                   const rowSelectionDisabled = treeSelectionDisabled || hidden || !selectable;
-                  const showSelectedRowState = selected && !hidden && !focused && !topologyShapeOfFocusedPart;
+                  const showSelectedRowState = selected && !hidden && !focused && !topologyWholeOfFocusedPart;
                   const hovered = !hidden && !rowSelectionDisabled && (
                     topologyRow
                       ? topologyReferenceId && normalizedHoveredReferenceId === topologyReferenceId
@@ -957,7 +957,7 @@ export default function StepFileSheet({
                   );
                   const rowDisabledReason = treeSelectionTitle ||
                     (!selectable
-                      ? topologyShapeOfFocusedPart
+                      ? topologyWholeOfFocusedPart
                         ? "Select a face or edge of this isolated component"
                         : !topologyRow
                           ? isolateActive ? "Exit isolate to select this node" : "Select a parent assembly to inspect this node"

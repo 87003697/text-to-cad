@@ -75,7 +75,8 @@ import {
 import {
   buildBreadcrumbNodes,
   collapsedBreadcrumbNodes,
-  directoryTitle
+  directoryTitle,
+  ellipsisBreadcrumbMenuDirectory
 } from "@/workbench/breadcrumbs";
 import viewerPackage from "../../../../package.json";
 
@@ -473,7 +474,7 @@ function BreadcrumbNodeDropdown({
       aria-current={current ? "page" : undefined}
       title={title}
       onPointerDown={(event) => {
-        if (event.button !== 0) {
+        if (event.button === 1) {
           event.preventDefault();
         }
       }}
@@ -581,11 +582,12 @@ function BreadcrumbEllipsisDropdown({
       <DropdownMenuContent align="start" sideOffset={6} className="w-max max-w-80">
         <DropdownMenuScrollArea>
           {hiddenNodes.map((node, index) => {
-            if (node.type === "directory" && (node.menuDirectory || node.directory)) {
+            const directory = ellipsisBreadcrumbMenuDirectory(node);
+            if (node.type === "directory" && directory) {
               return (
                 <BreadcrumbDirectorySubMenu
                   key={`${node.type}:${node.id}:${index}`}
-                  directory={node.menuDirectory || node.directory}
+                  directory={directory}
                   label={node.label}
                   title={node.title}
                   selectedKey={selectedKey}
