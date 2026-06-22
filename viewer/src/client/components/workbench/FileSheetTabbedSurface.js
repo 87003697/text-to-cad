@@ -91,10 +91,10 @@ function FileSheetTab({
       }}
       onDragEnd={onDragEnd}
       className={cn(
-        "group/file-sheet-tab relative flex h-7 max-w-[11rem] shrink-0 cursor-pointer select-none items-center gap-1.5 whitespace-nowrap rounded-md px-2 text-[11px] font-medium leading-none transition-colors",
+        "group/file-sheet-tab relative -mb-px flex h-9 max-w-[12rem] shrink-0 cursor-pointer select-none items-center gap-1.5 whitespace-nowrap border-r border-sidebar-border/50 border-b-2 px-3 text-[11px] font-medium leading-none transition-colors",
         active
-          ? "bg-accent text-foreground"
-          : "text-muted-foreground hover:bg-accent/50 hover:text-foreground",
+          ? "border-b-primary bg-accent/40 text-foreground"
+          : "border-b-transparent text-muted-foreground hover:bg-accent/25 hover:text-foreground",
         dragging && "opacity-40"
       )}
     >
@@ -135,7 +135,7 @@ function FileSheetTabPane({
         aria-orientation="horizontal"
         ref={stripRef}
         className={cn(
-          "flex h-9 shrink-0 items-center gap-1 overflow-x-auto border-b border-sidebar-border/70 px-1.5 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden",
+          "flex h-9 shrink-0 items-stretch overflow-x-auto border-b border-sidebar-border/70 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden",
           isDropPane && "bg-accent/20"
         )}
       >
@@ -145,9 +145,9 @@ function FileSheetTabPane({
             return null;
           }
           return (
-            <span key={id} className="relative flex items-center">
+            <span key={id} className="relative flex items-stretch">
               {isDropPane && dropIndex === index ? (
-                <span className="absolute -left-0.5 top-1 h-5 w-0.5 rounded-full bg-primary" aria-hidden="true" />
+                <span className="absolute inset-y-0 -left-px z-10 w-0.5 bg-primary" aria-hidden="true" />
               ) : null}
               <FileSheetTab
                 section={section}
@@ -162,11 +162,11 @@ function FileSheetTabPane({
           );
         })}
         {isDropPane && dropIndex >= tabs.length ? (
-          <span className="relative flex items-center">
-            <span className="h-5 w-0.5 rounded-full bg-primary" aria-hidden="true" />
+          <span className="relative flex items-stretch">
+            <span className="absolute inset-y-0 left-0 z-10 w-0.5 bg-primary" aria-hidden="true" />
           </span>
         ) : null}
-        {splitToggle ? <span className="ml-auto flex shrink-0 items-center pl-1">{splitToggle}</span> : null}
+        {splitToggle ? <span className="ml-auto flex shrink-0 items-center px-1.5">{splitToggle}</span> : null}
       </div>
       <ScrollArea
         className="min-h-0 flex-1"
