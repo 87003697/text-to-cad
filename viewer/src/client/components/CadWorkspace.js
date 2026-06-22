@@ -8,8 +8,8 @@ import DxfFileSheet from "./workbench/DxfFileSheet";
 import GcodeFileSheet from "./workbench/GcodeFileSheet";
 import FileViewerSidebar from "./workbench/FileViewerSidebar";
 import {
-  DisplaySettingsSection,
-  ThemeSettingsSections
+  buildDisplaySettingsTab,
+  buildThemeAppearanceTab
 } from "./workbench/ThemeSettingsPopover";
 import MeshFileSheet from "./workbench/MeshFileSheet";
 import ImplicitFileSheet from "./workbench/ImplicitFileSheet";
@@ -8541,28 +8541,26 @@ export default function CadWorkspace({
     { id: DRAWING_TOOL.ERASE, label: "Erase", Icon: Eraser }
   ];
   const renderDisplaySettings = isStepView ? displaySettings : null;
-  const themeSections = (
-    <>
-      {isStepView ? (
-        <DisplaySettingsSection
-          displaySettings={displaySettings}
-          updateDisplaySettings={updateDisplaySettings}
-          clipBounds={selectedMeshData?.bounds || null}
-          showClip
-        />
-      ) : null}
-      <ThemeSettingsSections
-        themePresets={availableThemePresets}
-        themeSettings={themeSettings}
-        themePresetId={themePresetId}
-        resolvedColorSchemeMode={resolvedColorSchemeMode}
-        updateThemeSettings={updateThemeSettings}
-        handleResetThemeSettings={handleResetThemeSettings}
-        handleSaveCustomThemePreset={handleSaveCustomThemePreset}
-        handleUpdateThemePresetSettings={handleUpdateThemePresetSettings}
-      />
-    </>
-  );
+  const themeTabs = [
+    isStepView
+      ? buildDisplaySettingsTab({
+          displaySettings,
+          updateDisplaySettings,
+          clipBounds: selectedMeshData?.bounds || null,
+          showClip: true
+        })
+      : null,
+    buildThemeAppearanceTab({
+      themePresets: availableThemePresets,
+      themeSettings,
+      themePresetId,
+      resolvedColorSchemeMode,
+      updateThemeSettings,
+      handleResetThemeSettings,
+      handleSaveCustomThemePreset,
+      handleUpdateThemePresetSettings
+    })
+  ].filter(Boolean);
 
   return (
     <SidebarProvider
@@ -8834,7 +8832,7 @@ export default function CadWorkspace({
                 onOpenFileAsset={handleRevealFileAsset}
                 suppressDynamicMetadataStatus={selectedGeneratorRunning}
                 statusItems={selectedFileStatusItems}
-                themeSections={themeSections}
+                themeTabs={themeTabs}
                 openSectionIds={effectiveFileSheetOpenSectionIds}
                 onOpenSectionIdsChange={handleFileSheetOpenSectionIdsChange}
               />
@@ -8866,7 +8864,7 @@ export default function CadWorkspace({
                 onOpenFileAsset={handleRevealFileAsset}
                 suppressDynamicMetadataStatus={selectedGeneratorRunning}
                 statusItems={selectedFileStatusItems}
-                themeSections={themeSections}
+                themeTabs={themeTabs}
                 openSectionIds={effectiveFileSheetOpenSectionIds}
                 onOpenSectionIdsChange={handleFileSheetOpenSectionIdsChange}
               />
@@ -8946,7 +8944,7 @@ export default function CadWorkspace({
                 onOpenFileAsset={handleRevealFileAsset}
                 suppressDynamicMetadataStatus={selectedGeneratorRunning}
                 statusItems={selectedFileStatusItems}
-                themeSections={themeSections}
+                themeTabs={themeTabs}
                 openSectionIds={effectiveFileSheetOpenSectionIds}
                 onOpenSectionIdsChange={handleFileSheetOpenSectionIdsChange}
               />
@@ -9007,7 +9005,7 @@ export default function CadWorkspace({
                 onOpenFileAsset={handleRevealFileAsset}
                 suppressDynamicMetadataStatus={selectedGeneratorRunning}
                 statusItems={selectedFileStatusItems}
-                themeSections={themeSections}
+                themeTabs={themeTabs}
                 openSectionIds={effectiveFileSheetOpenSectionIds}
                 onOpenSectionIdsChange={handleFileSheetOpenSectionIdsChange}
               />
@@ -9030,7 +9028,7 @@ export default function CadWorkspace({
                 onOpenFileAsset={handleRevealFileAsset}
                 suppressDynamicMetadataStatus={selectedGeneratorRunning}
                 statusItems={selectedFileStatusItems}
-                themeSections={themeSections}
+                themeTabs={themeTabs}
                 openSectionIds={effectiveFileSheetOpenSectionIds}
                 onOpenSectionIdsChange={handleFileSheetOpenSectionIdsChange}
               />
@@ -9074,7 +9072,7 @@ export default function CadWorkspace({
                 onOpenFileAsset={handleRevealFileAsset}
                 suppressDynamicMetadataStatus={selectedGeneratorRunning}
                 statusItems={selectedFileStatusItems}
-                themeSections={themeSections}
+                themeTabs={themeTabs}
                 openSectionIds={effectiveFileSheetOpenSectionIds}
                 onOpenSectionIdsChange={handleFileSheetOpenSectionIdsChange}
               />

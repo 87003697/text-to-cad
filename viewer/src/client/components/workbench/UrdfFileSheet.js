@@ -1,9 +1,6 @@
 import { memo, useEffect, useRef, useState } from "react";
 import { Copy, RotateCcw } from "lucide-react";
 import { cn } from "@/ui/utils";
-import {
-  Accordion
-} from "../ui/accordion";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
 import {
@@ -20,13 +17,13 @@ import FileSheet, {
   FILE_SHEET_FIELD_LABEL_CLASSES,
   FILE_SHEET_PRECISION_SLIDER_CLASSES,
   FileSheetControlRow,
-  FileSheetSection,
   FileSheetSliderField,
   FileSheetSubsection,
   parseFileSheetNumberInput
 } from "./FileSheet";
-import FileMetadataSection from "./FileMetadataSection";
-import FileStatusSection from "./FileStatusSection";
+import FileSheetTabbedSurface from "./FileSheetTabbedSurface";
+import { buildFileMetadataTab } from "./FileMetadataSection";
+import { buildFileStatusTab } from "./FileStatusSection";
 
 const fieldLabelClasses = FILE_SHEET_FIELD_LABEL_CLASSES;
 const compactInputClasses = FILE_SHEET_COMPACT_INPUT_CLASSES;
@@ -348,7 +345,7 @@ export default function UrdfFileSheet({
   onOpenFileAsset,
   suppressDynamicMetadataStatus = false,
   statusItems = [],
-  themeSections = null,
+  themeTabs = [],
   openSectionIds = [],
   onOpenSectionIdsChange
 }) {
@@ -395,24 +392,12 @@ export default function UrdfFileSheet({
   const activeGroupState = groupStatePresets.find((state) => String(state?.id || "").trim() === activeGroupStateValue);
   const activeGroupStateLabel = activeGroupStateValue === "__custom__" ? "custom" : String(activeGroupState?.label || activeGroupState?.name || activeGroupStateValue);
 
-  return (
-    <FileSheet
-      open={open}
-      title={title}
-      isDesktop={isDesktop}
-      width={width}
-      onOpenChange={onOpenChange}
-      onStartResize={onStartResize}
-    >
-      <Accordion
-        type="multiple"
-        value={openSectionIds}
-        onValueChange={onOpenSectionIdsChange}
-      >
-        <FileStatusSection items={statusItems} />
-
-        {isSdf ? (
-          <FileSheetSection value="sdf" title="SDF">
+  const sections = [
+    buildFileStatusTab(statusItems),
+    isSdf ? {
+      id: "sdf",
+      title: "SDF",
+      content: (
               <div>
                 <FileSheetSubsection title="Document" contentClassName="px-3">
                 <div className="grid grid-cols-2 gap-2">
@@ -452,10 +437,12 @@ export default function UrdfFileSheet({
                   </FileSheetSubsection>
                 ) : null}
               </div>
-          </FileSheetSection>
-        ) : null}
-        {motionEnabled ? (
-          <FileSheetSection value="motion" title="MoveIt2">
+      )
+    } : null,
+    motionEnabled ? {
+      id: "motion",
+      title: "MoveIt2",
+      content: (
               <div>
                 <FileSheetSubsection title="Status">
                 <FileSheetControlRow>
@@ -752,11 +739,13 @@ export default function UrdfFileSheet({
                 </FileSheetControlRow>
                 </FileSheetSubsection>
               </div>
-          </FileSheetSection>
-        ) : null}
-        {showJoints ? (
-        <FileSheetSection value="joints" title="Joints">
-            {movableJoints.length ? (
+      )
+    } : null,
+    showJoints ? {
+      id: "joints",
+      title: "Joints",
+      content: (
+            movableJoints.length ? (
               <>
                 <FileSheetSubsection title="Controls">
                   {groupStatePresets.length ? (
@@ -830,20 +819,37 @@ export default function UrdfFileSheet({
               </>
             ) : (
               <p className="px-3 py-2 text-xs text-muted-foreground">No movable joints are available.</p>
-            )}
-        </FileSheetSection>
-        ) : null}
-        {themeSections}
-        <FileMetadataSection
-          entry={selectedEntry}
-          fileDownloadAvailable={fileDownloadAvailable}
-          viewerServerInfo={viewerServerInfo}
-          localFileOpenAvailable={localFileOpenAvailable}
-          fileAccessBusyKey={fileAccessBusyKey}
-          onOpenFileAsset={onOpenFileAsset}
-          suppressDynamicStatus={suppressDynamicMetadataStatus}
-        />
-      </Accordion>
+            )
+      )
+    } : null,
+    ...themeTabs,
+    buildFileMetadataTab({
+      entry: selectedEntry,
+      fileDownloadAvailable,
+      viewerServerInfo,
+      localFileOpenAvailable,
+      fileAccessBusyKey,
+      onOpenFileAsset,
+      suppressDynamicStatus: suppressDynamicMetadataStatus
+    })
+  ];
+
+  return (
+    <FileSheet
+      open={open}
+      title={title}
+      isDesktop={isDesktop}
+      width={width}
+      onOpenChange={onOpenChange}
+      onStartResize={onStartResize}
+      scrollBody={false}
+    >
+      <FileSheetTabbedSurface
+        kind={isSdf ? "sdf" : (sourceFormat || "urdf")}
+        sections={sections}
+        openSectionIds={openSectionIds}
+        onOpenSectionIdsChange={onOpenSectionIdsChange}
+      />
     </FileSheet>
   );
 }

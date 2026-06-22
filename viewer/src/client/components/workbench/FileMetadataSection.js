@@ -6,7 +6,6 @@ import { FILE_SHEET_SECTION_IDS } from "@/workbench/fileSheetSections";
 import { fileMetadataGroupsForEntry } from "@/workbench/fileMetadata";
 import {
   FILE_SHEET_FIELD_LABEL_CLASSES,
-  FileSheetSection,
   FileSheetSubsection
 } from "./FileSheet";
 
@@ -125,33 +124,9 @@ function MetadataValue({
   );
 }
 
-export default function FileMetadataSection({
-  entry,
-  fileDownloadAvailable = false,
-  viewerServerInfo = null,
-  localFileOpenAvailable = false,
-  fileAccessBusyKey = "",
-  onOpenFileAsset,
-  suppressDynamicStatus = false
-}) {
-  const groups = fileMetadataGroupsForEntry(entry, {
-    includeFileDownloadActions: fileDownloadAvailable && !localFileOpenAvailable,
-    includeFileOpenActions: localFileOpenAvailable,
-    includePythonSource: localFileOpenAvailable,
-    viewerServerInfo,
-    suppressDynamicStatus
-  });
-  if (!groups.length) {
-    return null;
-  }
-
+function FileMetadataTabContent({ entry, groups, fileAccessBusyKey = "", onOpenFileAsset }) {
   return (
-    <FileSheetSection
-      value={FILE_SHEET_SECTION_IDS.FILE_METADATA}
-      title="Metadata"
-      aria-label="File metadata"
-    >
-      <div>
+    <div aria-label="File metadata">
         {groups.map((group) => (
           <FileSheetSubsection key={group.title} title={group.title} contentClassName="px-3">
             <dl className="space-y-1.5">
@@ -179,7 +154,40 @@ export default function FileMetadataSection({
             </dl>
           </FileSheetSubsection>
         ))}
-      </div>
-    </FileSheetSection>
+    </div>
   );
+}
+
+// Build the "Metadata" tab descriptor, or null when the entry has no metadata.
+export function buildFileMetadataTab({
+  entry,
+  fileDownloadAvailable = false,
+  viewerServerInfo = null,
+  localFileOpenAvailable = false,
+  fileAccessBusyKey = "",
+  onOpenFileAsset,
+  suppressDynamicStatus = false
+} = {}) {
+  const groups = fileMetadataGroupsForEntry(entry, {
+    includeFileDownloadActions: fileDownloadAvailable && !localFileOpenAvailable,
+    includeFileOpenActions: localFileOpenAvailable,
+    includePythonSource: localFileOpenAvailable,
+    viewerServerInfo,
+    suppressDynamicStatus
+  });
+  if (!groups.length) {
+    return null;
+  }
+  return {
+    id: FILE_SHEET_SECTION_IDS.FILE_METADATA,
+    title: "Metadata",
+    content: (
+      <FileMetadataTabContent
+        entry={entry}
+        groups={groups}
+        fileAccessBusyKey={fileAccessBusyKey}
+        onOpenFileAsset={onOpenFileAsset}
+      />
+    )
+  };
 }

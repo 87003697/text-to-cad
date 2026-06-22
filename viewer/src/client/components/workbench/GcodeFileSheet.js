@@ -1,16 +1,13 @@
 import FileSheet, {
   FILE_SHEET_FIELD_LABEL_CLASSES,
   FILE_SHEET_PRECISION_SLIDER_CLASSES,
-  FileSheetSection,
   FileSheetSliderField,
   FileSheetSubsection,
   FileSheetToggleRow,
   parseFileSheetNumberInput
 } from "./FileSheet";
-import FileMetadataSection from "./FileMetadataSection";
-import {
-  Accordion
-} from "../ui/accordion";
+import FileSheetTabbedSurface from "./FileSheetTabbedSurface";
+import { buildFileMetadataTab } from "./FileMetadataSection";
 import { Badge } from "../ui/badge";
 import { Slider } from "../ui/slider";
 import {
@@ -18,7 +15,7 @@ import {
   GCODE_PREVIEW_DETAIL_MAX,
   GCODE_PREVIEW_DETAIL_MIN
 } from "cadjs/lib/gcode/buildPreviewMesh";
-import FileStatusSection from "./FileStatusSection";
+import { buildFileStatusTab } from "./FileStatusSection";
 const fieldLabelClasses = FILE_SHEET_FIELD_LABEL_CLASSES;
 const compactNumberBadgeClasses = "h-4 rounded-sm px-1.5 py-0 text-[10px] font-medium leading-none";
 
@@ -160,7 +157,7 @@ export default function GcodeFileSheet({
   onOpenFileAsset,
   suppressDynamicMetadataStatus = false,
   statusItems = [],
-  themeSections = null,
+  themeTabs = [],
   openSectionIds = [],
   onOpenSectionIdsChange
 }) {
@@ -196,24 +193,12 @@ export default function GcodeFileSheet({
   const hasGcodeData = Boolean(gcodeData);
   const visibleLayers = visibleLayerText(layerCount, safeMaxLayer);
 
-  return (
-    <FileSheet
-      open={open}
-      title="G-code"
-      isDesktop={isDesktop}
-      width={width}
-      onOpenChange={onOpenChange}
-      onStartResize={onStartResize}
-    >
-      <Accordion
-        type="multiple"
-        value={openSectionIds}
-        onValueChange={onOpenSectionIdsChange}
-        className="text-sm"
-      >
-        <FileStatusSection items={statusItems} />
-
-        <FileSheetSection value="toolpath" title="Toolpath">
+  const sections = [
+    buildFileStatusTab(statusItems),
+    {
+      id: "toolpath",
+      title: "Toolpath",
+      content: (
             <div>
               {!hasGcodeData ? (
                 <p className="px-3 py-2 text-xs text-muted-foreground">Loading G-code...</p>
@@ -323,12 +308,12 @@ export default function GcodeFileSheet({
                 />
               </FileSheetSubsection>
             </div>
-        </FileSheetSection>
-
-        <FileSheetSection
-          value="features"
-          title={(
-            <span className="flex min-w-0 items-center gap-2">
+      )
+    },
+    {
+      id: "features",
+      title: (
+            <span className="flex min-w-0 items-center gap-1.5">
               <span>Features</span>
               {features.length ? (
                 <Badge variant="outline" className={compactNumberBadgeClasses}>{features.length}</Badge>
@@ -337,8 +322,8 @@ export default function GcodeFileSheet({
                 <Badge variant="outline" className="font-normal">Supports</Badge>
               ) : null}
             </span>
-          )}
-        >
+      ),
+      content: (
             <div className="space-y-2 px-3 py-2.5">
               {!features.length ? (
                 <p className="text-xs leading-5 text-muted-foreground">
@@ -391,9 +376,12 @@ export default function GcodeFileSheet({
                 </>
               )}
             </div>
-        </FileSheetSection>
-
-        <FileSheetSection value="stats" title="Stats">
+      )
+    },
+    {
+      id: "stats",
+      title: "Stats",
+      content: (
             <div className="grid grid-cols-2 gap-2 px-3 py-3">
               <GcodeValueField label="Extrusion" value={formatDistance(stats.extrusionMm, 1)} />
               <GcodeValueField label="Path length" value={formatDistance(stats.pathMm, 1)} />
@@ -402,27 +390,47 @@ export default function GcodeFileSheet({
               <GcodeValueField label="Move commands" value={formatCommandCount(stats.movementCommands)} />
               <GcodeValueField label="Prime moves" value={formatCount(stats.primeMoves)} />
             </div>
-        </FileSheetSection>
-
-        <FileSheetSection value="bounds" title="Bounds">
+      )
+    },
+    {
+      id: "bounds",
+      title: "Bounds",
+      content: (
             <div className="grid grid-cols-1 gap-2 px-3 py-3">
               <GcodeValueField label="X" value={boundsAxisText(gcodeData?.bounds, 0, 1)} mono />
               <GcodeValueField label="Y" value={boundsAxisText(gcodeData?.bounds, 1, 1)} mono />
               <GcodeValueField label="Z" value={boundsAxisText(gcodeData?.bounds, 2, 2)} mono />
             </div>
-        </FileSheetSection>
+      )
+    },
+    ...themeTabs,
+    buildFileMetadataTab({
+      entry: selectedEntry,
+      fileDownloadAvailable,
+      viewerServerInfo,
+      localFileOpenAvailable,
+      fileAccessBusyKey,
+      onOpenFileAsset,
+      suppressDynamicStatus: suppressDynamicMetadataStatus
+    })
+  ];
 
-        {themeSections}
-        <FileMetadataSection
-          entry={selectedEntry}
-          fileDownloadAvailable={fileDownloadAvailable}
-          viewerServerInfo={viewerServerInfo}
-          localFileOpenAvailable={localFileOpenAvailable}
-          fileAccessBusyKey={fileAccessBusyKey}
-          onOpenFileAsset={onOpenFileAsset}
-          suppressDynamicStatus={suppressDynamicMetadataStatus}
-        />
-      </Accordion>
+  return (
+    <FileSheet
+      open={open}
+      title="G-code"
+      isDesktop={isDesktop}
+      width={width}
+      onOpenChange={onOpenChange}
+      onStartResize={onStartResize}
+      scrollBody={false}
+    >
+      <FileSheetTabbedSurface
+        kind="gcode"
+        sections={sections}
+        openSectionIds={openSectionIds}
+        onOpenSectionIdsChange={onOpenSectionIdsChange}
+      />
     </FileSheet>
   );
 }

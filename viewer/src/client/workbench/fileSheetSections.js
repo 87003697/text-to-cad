@@ -115,10 +115,11 @@ export function defaultOpenFileSheetSectionIds(kind, options = {}) {
         FILE_SHEET_SECTION_IDS.GCODE_TOOLPATH
       ];
     case "step":
+      // In the tabbed layout the default-active bottom tab is Display, so the
+      // STEP default-open list is just the Tree (the default-active top tab).
       return [
         ...(options.hasFileStatus ? [FILE_SHEET_SECTION_IDS.FILE_STATUS] : []),
-        FILE_SHEET_SECTION_IDS.STEP_TREE,
-        ...(options.hasStepModulePanel ? [FILE_SHEET_SECTION_IDS.STEP_PARAMETERS] : [])
+        FILE_SHEET_SECTION_IDS.STEP_TREE
       ];
     case "urdf":
     case "srdf":

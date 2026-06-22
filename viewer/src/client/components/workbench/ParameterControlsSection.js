@@ -16,7 +16,6 @@ import {
   FILE_SHEET_COMPACT_INPUT_CLASSES,
   FILE_SHEET_PRECISION_SLIDER_CLASSES,
   FileSheetControlRow,
-  FileSheetSection,
   FileSheetSectionBody,
   FileSheetSliderField,
   FileSheetToggleRow,
@@ -80,18 +79,11 @@ export default function ParameterControlsSection({
   const animationState = runtime?.animationState || {};
   const animationDuration = Math.max(Number(animationState.duration) || 1, 0.001);
   const enabled = runtime?.enabled !== false;
-  const hasControls = parameters.length > 0 || animations.length > 0;
-  if (hideWhenEmpty && definition && !hasControls && status !== "loading" && !error) {
-    return null;
-  }
-  const hasBody = definition || status === "loading" || error;
-
-  if (!hasBody) {
+  if (!parameterControlsHasContent(runtime, { hideWhenEmpty })) {
     return null;
   }
 
   return (
-    <FileSheetSection value={value} title={title}>
       <FileSheetSectionBody>
         {definition && showEnableToggle ? (
           <FileSheetToggleRow
@@ -391,6 +383,31 @@ export default function ParameterControlsSection({
           </>
         ) : null}
       </FileSheetSectionBody>
-    </FileSheetSection>
   );
+}
+
+// Whether the parameter controls would render any content for this runtime.
+export function parameterControlsHasContent(runtime, { hideWhenEmpty = false } = {}) {
+  const definition = runtime?.definition || null;
+  const parameters = Array.isArray(definition?.parameters) ? definition.parameters : [];
+  const animations = Array.isArray(definition?.animations) ? definition.animations : [];
+  const status = String(runtime?.status || "").trim();
+  const error = String(runtime?.error || "").trim();
+  const hasControls = parameters.length > 0 || animations.length > 0;
+  if (hideWhenEmpty && definition && !hasControls && status !== "loading" && !error) {
+    return false;
+  }
+  return Boolean(definition || status === "loading" || error);
+}
+
+// Build a parameter-controls tab descriptor, or null when there is nothing to show.
+export function buildParameterControlsTab(props = {}) {
+  if (!parameterControlsHasContent(props.runtime, { hideWhenEmpty: props.hideWhenEmpty })) {
+    return null;
+  }
+  return {
+    id: props.value || "parameters",
+    title: props.title || "Parameters",
+    content: <ParameterControlsSection {...props} />
+  };
 }

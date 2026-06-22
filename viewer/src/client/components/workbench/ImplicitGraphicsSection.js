@@ -12,7 +12,6 @@ import {
   FILE_SHEET_COMPACT_BUTTON_CLASSES,
   FILE_SHEET_PRECISION_SLIDER_CLASSES,
   FileSheetControlRow,
-  FileSheetSection,
   FileSheetSectionBody,
   FileSheetSliderField,
   FileSheetToggleRow,
@@ -75,7 +74,6 @@ export default function ImplicitGraphicsSection({
   const hasDefaultSettings = implicitGraphicsSettingsEqual(settings, DEFAULT_IMPLICIT_GRAPHICS_SETTINGS);
 
   return (
-    <FileSheetSection value={value} title={title}>
       <FileSheetSectionBody>
         {renderScaleSlider({
           label: "Resolution",
@@ -141,6 +139,5 @@ export default function ImplicitGraphicsSection({
           </Button>
         </FileSheetControlRow>
       </FileSheetSectionBody>
-    </FileSheetSection>
   );
 }

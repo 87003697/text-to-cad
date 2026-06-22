@@ -6,9 +6,6 @@ import {
   normalizeDxfBendDirection,
   normalizeDxfPreviewThicknessMm
 } from "cadjs/lib/dxf/buildPreviewMesh";
-import {
-  Accordion
-} from "../ui/accordion";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
 import { ToggleGroup, ToggleGroupItem } from "../ui/toggle-group";
@@ -17,12 +14,12 @@ import FileSheet, {
   FILE_SHEET_COMPACT_NUMERIC_INPUT_CLASSES,
   FILE_SHEET_SEGMENTED_ITEM_CLASSES,
   FileSheetControlRow,
-  FileSheetSection,
   FileSheetSectionBody,
   FileSheetSubsection
 } from "./FileSheet";
-import FileMetadataSection from "./FileMetadataSection";
-import FileStatusSection from "./FileStatusSection";
+import FileSheetTabbedSurface from "./FileSheetTabbedSurface";
+import { buildFileMetadataTab } from "./FileMetadataSection";
+import { buildFileStatusTab } from "./FileStatusSection";
 
 const compactInputClasses = FILE_SHEET_COMPACT_NUMERIC_INPUT_CLASSES;
 const compactIconButtonClasses = FILE_SHEET_COMPACT_ICON_BUTTON_CLASSES;
@@ -150,7 +147,7 @@ export default function DxfFileSheet({
   onOpenFileAsset,
   suppressDynamicMetadataStatus = false,
   statusItems = [],
-  themeSections = null,
+  themeTabs = [],
   openSectionIds = [],
   onOpenSectionIdsChange
 }) {
@@ -167,24 +164,12 @@ export default function DxfFileSheet({
     setDraftValue(formatThicknessInput(normalizedValue));
   };
 
-  return (
-    <FileSheet
-      open={open}
-      title="DXF"
-      isDesktop={isDesktop}
-      width={width}
-      onOpenChange={onOpenChange}
-      onStartResize={onStartResize}
-    >
-      <Accordion
-        type="multiple"
-        value={openSectionIds}
-        onValueChange={onOpenSectionIdsChange}
-        className="text-sm"
-      >
-        <FileStatusSection items={statusItems} />
-
-        <FileSheetSection value="dxf" title="DXF">
+  const sections = [
+    buildFileStatusTab(statusItems),
+    {
+      id: "dxf",
+      title: "DXF",
+      content: (
           <FileSheetSectionBody className="py-0">
             <FileSheetSubsection title="Thickness">
               <FileSheetControlRow label="Material">
@@ -260,18 +245,36 @@ export default function DxfFileSheet({
               )}
             </FileSheetSubsection>
           </FileSheetSectionBody>
-        </FileSheetSection>
-        {themeSections}
-        <FileMetadataSection
-          entry={selectedEntry}
-          fileDownloadAvailable={fileDownloadAvailable}
-          viewerServerInfo={viewerServerInfo}
-          localFileOpenAvailable={localFileOpenAvailable}
-          fileAccessBusyKey={fileAccessBusyKey}
-          onOpenFileAsset={onOpenFileAsset}
-          suppressDynamicStatus={suppressDynamicMetadataStatus}
-        />
-      </Accordion>
+      )
+    },
+    ...themeTabs,
+    buildFileMetadataTab({
+      entry: selectedEntry,
+      fileDownloadAvailable,
+      viewerServerInfo,
+      localFileOpenAvailable,
+      fileAccessBusyKey,
+      onOpenFileAsset,
+      suppressDynamicStatus: suppressDynamicMetadataStatus
+    })
+  ];
+
+  return (
+    <FileSheet
+      open={open}
+      title="DXF"
+      isDesktop={isDesktop}
+      width={width}
+      onOpenChange={onOpenChange}
+      onStartResize={onStartResize}
+      scrollBody={false}
+    >
+      <FileSheetTabbedSurface
+        kind="dxf"
+        sections={sections}
+        openSectionIds={openSectionIds}
+        onOpenSectionIdsChange={onOpenSectionIdsChange}
+      />
     </FileSheet>
   );
 }

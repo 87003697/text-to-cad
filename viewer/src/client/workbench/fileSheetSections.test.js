@@ -13,7 +13,9 @@ test("file sheet section defaults match current sheet behavior", () => {
   assert.deepEqual(defaultOpenFileSheetSectionIds("gcode"), ["toolpath"]);
   assert.deepEqual(defaultOpenFileSheetSectionIds("step"), ["tree"]);
   assert.deepEqual(defaultOpenFileSheetSectionIds("step", { hasFileStatus: true }), ["status", "tree"]);
-  assert.deepEqual(defaultOpenFileSheetSectionIds("step", { hasStepModulePanel: true }), ["tree", "parameters"]);
+  // In the tabbed layout the Tree is the only default-open section; Display is
+  // the default-active bottom tab, resolved by the tab layout, not this list.
+  assert.deepEqual(defaultOpenFileSheetSectionIds("step", { hasStepModulePanel: true }), ["tree"]);
   assert.deepEqual(defaultOpenFileSheetSectionIds("mesh", { hasFileStatus: true }), ["status"]);
   assert.deepEqual(defaultOpenFileSheetSectionIds("implicit", { hasFileStatus: true }), ["status"]);
   assert.deepEqual(defaultOpenFileSheetSectionIds("implicit"), []);

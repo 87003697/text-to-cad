@@ -9,9 +9,6 @@ import {
 } from "cadjs/lib/step/stepTree";
 import { resolveStepModuleNumberControlStep } from "@/workbench/stepModuleParameterControls";
 import { useStepAnimationElapsed } from "@/workbench/stepAnimationStore";
-import {
-  Accordion
-} from "../ui/accordion";
 import { Button } from "../ui/button";
 import {
   ContextMenu,
@@ -34,16 +31,16 @@ import FileSheet, {
   FILE_SHEET_COMPACT_INPUT_CLASSES,
   FILE_SHEET_PRECISION_SLIDER_CLASSES,
   FileSheetControlRow,
-  FileSheetSection,
   FileSheetSectionBody,
   FileSheetSliderField,
   FileSheetSubsection,
   FileSheetToggleRow,
   parseFileSheetNumberInput
 } from "./FileSheet";
+import FileSheetTabbedSurface from "./FileSheetTabbedSurface";
 import AssemblyContextMenuItems from "./AssemblyContextMenuItems";
-import FileMetadataSection from "./FileMetadataSection";
-import FileStatusSection from "./FileStatusSection";
+import { buildFileMetadataTab } from "./FileMetadataSection";
+import { buildFileStatusTab } from "./FileStatusSection";
 
 const compactButtonClasses = FILE_SHEET_COMPACT_BUTTON_CLASSES;
 const compactInputClasses = FILE_SHEET_COMPACT_INPUT_CLASSES;
@@ -561,7 +558,7 @@ export default function StepFileSheet({
   onOpenFileAsset,
   suppressDynamicMetadataStatus = false,
   statusItems = [],
-  themeSections = null,
+  themeTabs = [],
   openSectionIds = [],
   onOpenSectionIdsChange
 }) {
@@ -863,27 +860,13 @@ export default function StepFileSheet({
     return null;
   }
 
-  return (
-    <FileSheet
-      open={open}
-      title="STEP"
-      isDesktop={isDesktop}
-      width={width}
-      onOpenChange={onOpenChange}
-      onStartResize={onStartResize}
-    >
-      <Accordion
-        type="multiple"
-        value={openSectionIds}
-        onValueChange={onOpenSectionIdsChange}
-      >
-        <FileStatusSection items={statusItems} />
-
-        <FileSheetSection
-          value={treeSectionId}
-          title="Tree"
-          triggerProps={{ title: treeSelectionTitle || undefined }}
-        >
+  const sections = [
+    buildFileStatusTab(statusItems),
+    {
+      id: treeSectionId,
+      title: "Tree",
+      titleAttr: treeSelectionTitle || undefined,
+      content: (
             <div className="max-w-full overflow-hidden px-1.5 pb-2">
               <div
                 className="select-none space-y-px"
@@ -1437,10 +1420,12 @@ export default function StepFileSheet({
               ) : null}
               </div>
             </div>
-        </FileSheetSection>
-
-        {stepModuleDefinition || stepModuleStatus === "loading" || stepModuleError ? (
-          <FileSheetSection value="parameters" title="Parameters">
+      )
+    },
+    (stepModuleDefinition || stepModuleStatus === "loading" || stepModuleError) ? {
+      id: "parameters",
+      title: "Parameters",
+      content: (
               <FileSheetSectionBody>
                 {stepModuleDefinition ? (
                   <FileSheetToggleRow
@@ -1683,20 +1668,36 @@ export default function StepFileSheet({
                   </FileSheetControlRow>
                 ) : null}
               </FileSheetSectionBody>
-          </FileSheetSection>
-        ) : null}
+      )
+    } : null,
+    ...themeTabs,
+    buildFileMetadataTab({
+      entry: selectedEntry,
+      fileDownloadAvailable,
+      viewerServerInfo,
+      localFileOpenAvailable,
+      fileAccessBusyKey,
+      onOpenFileAsset,
+      suppressDynamicStatus: suppressDynamicMetadataStatus
+    })
+  ];
 
-        {themeSections}
-        <FileMetadataSection
-          entry={selectedEntry}
-          fileDownloadAvailable={fileDownloadAvailable}
-          viewerServerInfo={viewerServerInfo}
-          localFileOpenAvailable={localFileOpenAvailable}
-          fileAccessBusyKey={fileAccessBusyKey}
-          onOpenFileAsset={onOpenFileAsset}
-          suppressDynamicStatus={suppressDynamicMetadataStatus}
-        />
-      </Accordion>
+  return (
+    <FileSheet
+      open={open}
+      title="STEP"
+      isDesktop={isDesktop}
+      width={width}
+      onOpenChange={onOpenChange}
+      onStartResize={onStartResize}
+      scrollBody={false}
+    >
+      <FileSheetTabbedSurface
+        kind="step"
+        sections={sections}
+        openSectionIds={openSectionIds}
+        onOpenSectionIdsChange={onOpenSectionIdsChange}
+      />
     </FileSheet>
   );
 }
