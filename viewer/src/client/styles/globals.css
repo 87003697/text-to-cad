@@ -108,15 +108,15 @@
   --ui-chip: var(--muted);
   --ui-chip-text: var(--muted-foreground);
   --ui-overlay: color-mix(in srgb, var(--foreground) 42%, transparent);
-  --ui-shadow-soft: none;
-  --ui-shadow-panel: none;
-  --ui-shadow-dialog: 0 0 0 1px var(--border);
-  /* SMUI is flat: opaque surfaces, no backdrop blur. */
-  --ui-glass-blur: 0px;
-  --ui-glass-saturation: 1;
-  --ui-glass-surface: var(--sidebar);
-  --ui-glass-popover: var(--popover);
-  --ui-glass-control: var(--secondary);
+  --ui-shadow-soft: 0 10px 24px -18px rgb(0 0 0 / 0.32);
+  --ui-shadow-panel: 0 24px 48px -36px rgb(0 0 0 / 0.28);
+  --ui-shadow-dialog: 0 28px 62px -36px rgb(0 0 0 / 0.36);
+  /* Frosted glass over the 3D scene, tinted by the SMUI (Nord) tokens. */
+  --ui-glass-blur: 26px;
+  --ui-glass-saturation: 1.4;
+  --ui-glass-surface: color-mix(in srgb, var(--sidebar) 58%, transparent);
+  --ui-glass-popover: color-mix(in srgb, var(--popover) 66%, transparent);
+  --ui-glass-control: color-mix(in srgb, var(--background) 42%, transparent);
   --ui-warning-bg: oklch(0.962 0.059 95.617);
   --ui-warning-text: oklch(0.473 0.137 46.201);
   --ui-error-bg: oklch(0.936 0.032 17.717);
@@ -176,17 +176,19 @@
   --ui-success-bg: oklch(0.262 0.051 172.552);
   --ui-success-text: oklch(0.871 0.15 154.449);
 
-  --ui-glass-surface: var(--sidebar);
-  --ui-glass-popover: var(--popover);
-  --ui-glass-control: var(--secondary);
+  --ui-glass-surface: color-mix(in srgb, var(--sidebar) 82%, transparent);
+  --ui-glass-popover: color-mix(in srgb, var(--popover) 86%, transparent);
+  --ui-glass-control: color-mix(in srgb, var(--background) 64%, transparent);
   --ui-loading-overlay: rgb(26 30 35 / 40%);
   --ui-loading-overlay-strong: rgb(26 30 35 / 78%);
 }
 
 /*
- * SMUI is a flat, opaque, terminal-style design system, so the frosted
- * glass-tone translucency overrides are intentionally dropped — the base
- * Snow Storm / Polar Night tokens above apply regardless of scene tone.
+ * The frosted-glass translucency is kept but tinted by the SMUI (Nord)
+ * tokens above (see --ui-glass-* in :root/.dark). The old per-scene-tone
+ * overrides used monochrome white/black translucency, which washed out the
+ * Nord palette, so they are intentionally dropped — the base Snow Storm /
+ * Polar Night tokens apply regardless of scene tone.
  */
 
 @layer base {
