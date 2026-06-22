@@ -4,8 +4,8 @@
 This is a working copy of the regular link assembly in the printable folder.
 It keeps the original servo, bracket, standoff, and yoke layout, then adds the
 current straight four-tongue plastic shell halves on both link brackets. The
-right shell has printed male dovetail rails; the left shell has matching
-female dovetail channels. Future printable connector iterations can target this
+right shell has printed male keyed overlap pads; the left shell has matching
+female keyed pockets. Future printable connector iterations can target this
 assembly without keeping assemblies/link_assembly.py in sync.
 """
 
@@ -295,7 +295,7 @@ def gen_step() -> dict[str, object]:
         f"tongue depth={connector.TONGUE_INSERTION_DEPTH_MM:.3f} mm, "
         f"base sheet={connector.BASE_LENGTH_MM:.3f} x {connector.BASE_WIDTH_MM:.3f} mm, "
         f"shell half depth={connector.SHELL_HALF_DEPTH_MM:.3f} mm, "
-        "printed dovetail slide seam"
+        "printed keyed overlap seam"
     )
     return {
         "children": children,

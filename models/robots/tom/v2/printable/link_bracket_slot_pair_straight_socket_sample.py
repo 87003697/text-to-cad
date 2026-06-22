@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Matching female dovetail half for the printable straight tongue shell."""
+"""Matching female keyed-overlap half for the printable straight tongue shell."""
 
 from __future__ import annotations
 
