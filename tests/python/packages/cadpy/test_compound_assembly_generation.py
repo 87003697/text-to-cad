@@ -14,13 +14,6 @@ from tests.python.support.paths import add_repo_path
 add_repo_path("packages/cadpy/src")
 
 from cadpy import generation
-from cadpy.assembly_spec import (
-    IDENTITY_TRANSFORM,
-    AssemblyInstanceSpec,
-    AssemblyNodeSpec,
-    AssemblySpec,
-)
-from cadpy.catalog import CadSource
 from cadpy.metadata import parse_generator_metadata
 from cadpy.step_export import _create_bin_xcaf_doc, export_build123d_step_scene
 from cadpy.step_scene import LoadedStepScene, _bbox_from_shape, scene_leaf_occurrences, scene_occurrence_shape
@@ -44,46 +37,45 @@ class CompoundAssemblyGenerationTests(unittest.TestCase):
                 script_path=Path("part.py"),
             )
 
-    def test_step_payload_preserves_instance_assembly_mates(self) -> None:
-        payload = generation._normalize_step_payload(
-            {
-                "instances": [
-                    {
-                        "path": "servo.step",
-                        "name": "servo",
-                    }
-                ],
-                "assembly_mates": [
-                    {
-                        "sourceLabel": "servo_to_bracket",
-                        "relation": "rigid",
-                        "fixed": "servo_mount",
-                        "moving": "bracket_foot",
-                    }
-                ],
-            },
-            script_path=Path("assembly.py"),
-        )
+    def test_step_payload_rejects_assembly_mates_envelope_field(self) -> None:
+        # assembly_mates is hard-deprecated as an envelope field. Semantic mates now
+        # ride on the returned shape (compound.assembly_mates) and are collected at
+        # export, so a gen_step() envelope must never carry an assembly_mates key.
+        with self.assertRaisesRegex(TypeError, "unsupported field\\(s\\): assembly_mates"):
+            generation._normalize_step_payload(
+                {
+                    "shape": object(),
+                    "assembly_mates": [{"sourceLabel": "servo_to_bracket"}],
+                },
+                script_path=Path("assembly.py"),
+            )
 
-        self.assertEqual("servo_to_bracket", payload["assembly_mates"][0]["sourceLabel"])
+    def test_shape_assembly_mates_attribute_round_trips_to_scene(self) -> None:
+        # Mates set on the returned compound survive STEP-scene export onto
+        # scene.assembly_mates with canonical m{n} ids — the replacement for the
+        # removed assembly_mates envelope field.
+        import build123d
 
-    def test_attach_envelope_assembly_mates_renumbers_for_scene(self) -> None:
-        scene = LoadedStepScene(step_path=Path("assembly.step"), roots=[], prototype_shapes={})
+        with tempfile.TemporaryDirectory(prefix="cadpy-compound-") as tempdir:
+            left = build123d.Box(1, 1, 1)
+            left.label = "servo"
+            right = build123d.Pos(2, 0, 0) * build123d.Box(1, 1, 1)
+            right.label = "bracket"
+            shape = build123d.Compound(children=[left, right], label="assembly")
+            shape.assembly_mates = [
+                {
+                    "sourceLabel": "servo_to_bracket",
+                    "relation": "rigid",
+                    "fixed": "servo:mount",
+                    "moving": "bracket:foot",
+                }
+            ]
 
-        generation._attach_envelope_assembly_mates(
-            scene,
-            {
-                "assembly_mates": [
-                    {
-                        "sourceLabel": "servo_to_bracket",
-                        "relation": "rigid",
-                        "fixed": "servo_mount",
-                        "moving": "bracket_foot",
-                    }
-                ]
-            },
-            script_path=Path("assembly.py"),
-        )
+            scene = export_build123d_step_scene(
+                shape,
+                Path(tempdir) / "assembly.step",
+                text_to_cad_entry_kind="assembly",
+            )
 
         self.assertEqual(
             [
@@ -92,8 +84,8 @@ class CompoundAssemblyGenerationTests(unittest.TestCase):
                     "label": "m1",
                     "sourceLabel": "servo_to_bracket",
                     "relation": "rigid",
-                    "fixed": "servo_mount",
-                    "moving": "bracket_foot",
+                    "fixed": "servo:mount",
+                    "moving": "bracket:foot",
                 }
             ],
             scene.assembly_mates,
@@ -310,7 +302,7 @@ class CompoundAssemblyGenerationTests(unittest.TestCase):
                         source_hash="hash-123",
                     ),
                 ),
-                mock.patch.object(generation, "export_build123d_step_scene", return_value=scene) as export_scene,
+                mock.patch.object(generation, "build_build123d_step_scene", return_value=scene) as build_scene,
             ):
                 result = generation._write_shape_step_payload(
                     {"shape": shape},
@@ -320,10 +312,13 @@ class CompoundAssemblyGenerationTests(unittest.TestCase):
                     entry_kind="assembly",
                 )
 
+        # gen_step builds the scene in memory (no STEP write); the entry kind is marked
+        # on the scene, and the pre-bake compound is stashed for the package/STEP jobs.
         self.assertIs(result, scene)
-        self.assertEqual("assembly", export_scene.call_args.kwargs["text_to_cad_entry_kind"])
+        self.assertEqual("python", build_scene.call_args.kwargs["source_kind"])
         self.assertEqual("assembly", getattr(scene, "text_to_cad_entry_kind", None))
         self.assertEqual("shape", getattr(scene, "step_payload_kind", None))
+        self.assertIs(shape, getattr(scene, "source_compound", None))
 
     def test_effective_spec_follows_runtime_shape_entry_kind(self) -> None:
         step_path = Path("/tmp/compound.step")
@@ -364,8 +359,6 @@ class CompoundAssemblyGenerationTests(unittest.TestCase):
                 step_path=step_path,
                 script_path=script_path,
             )
-            selector_bundle = generation.SelectorBundle(manifest={"stats": {}})
-
             with (
                 mock.patch.object(generation, "_existing_topology_artifact_matches_spec_without_scene", return_value=False),
                 mock.patch.object(generation, "_existing_topology_artifact_matches_options", return_value=False),
@@ -373,7 +366,7 @@ class CompoundAssemblyGenerationTests(unittest.TestCase):
                 mock.patch.object(generation, "mesh_step_scene"),
                 mock.patch.object(generation, "scene_export_shape"),
                 mock.patch.object(generation, "_reset_step_artifact_dir"),
-                mock.patch.object(generation, "_run_artifact_jobs", return_value={"GLB/topology": selector_bundle}),
+                mock.patch.object(generation, "_run_artifact_jobs", return_value={}) as run_jobs,
             ):
                 result = generation._generate_part_outputs(
                     spec,
@@ -383,78 +376,12 @@ class CompoundAssemblyGenerationTests(unittest.TestCase):
                     force=True,
                 )
 
+            # The runtime compound is an assembly, so the effective spec adopts that kind
+            # (introspect-children emit) even though the authored spec said "part".
             self.assertEqual("assembly", result.spec.kind)
-            self.assertIs(result.selector_bundle, selector_bundle)
-
-    def test_dependency_expansion_walks_flattened_grouping_node_leaves(self) -> None:
-        with tempfile.TemporaryDirectory(prefix="cadpy-dependencies-") as tempdir:
-            root = Path(tempdir)
-            assembly_path = root / "grouped_assembly.py"
-            assembly_step = root / "grouped_assembly.step"
-            leaf_step = root / "nested_part.step"
-            assembly_path.write_text("def gen_step():\n    return None\n", encoding="utf-8")
-            leaf_step.write_text("ISO-10303-21; END-ISO-10303-21;\n", encoding="utf-8")
-
-            identity = tuple(IDENTITY_TRANSFORM)
-            leaf_instance = AssemblyInstanceSpec(
-                instance_id="nested_part",
-                source_path=leaf_step.resolve(),
-                path="nested_part.step",
-                name="nested_part",
-                transform=identity,
-            )
-            leaf_node = AssemblyNodeSpec(
-                instance_id="nested_part",
-                name="nested_part",
-                transform=identity,
-                source_path=leaf_step.resolve(),
-                path="nested_part.step",
-                children=(),
-            )
-            grouping_node = AssemblyNodeSpec(
-                instance_id="front_group",
-                name="front_group",
-                transform=identity,
-                source_path=None,
-                path=None,
-                children=(leaf_node,),
-            )
-            assembly_spec = AssemblySpec(
-                assembly_path=assembly_path.resolve(),
-                instances=(leaf_instance,),
-                children=(grouping_node,),
-            )
-            entry = generation.EntrySpec(
-                source_ref="grouped_assembly.py",
-                cad_ref="grouped_assembly",
-                kind="assembly",
-                source_path=assembly_path.resolve(),
-                display_name="grouped_assembly",
-                source="generated",
-                step_path=assembly_step.resolve(),
-                script_path=assembly_path.resolve(),
-            )
-            leaf_source = CadSource(
-                source_ref="nested_part.step",
-                cad_ref="nested_part",
-                kind="part",
-                source_path=leaf_step.resolve(),
-                source="imported",
-                origin_path=leaf_step.resolve(),
-                step_path=leaf_step.resolve(),
-            )
-
-            with (
-                mock.patch.object(generation, "read_assembly_spec", return_value=assembly_spec),
-                mock.patch.object(generation, "_source_lookup_by_path", return_value={leaf_step.resolve(): leaf_source}),
-            ):
-                expanded = generation._expand_specs_with_file_dependencies([entry])
-
-        self.assertEqual(
-            [assembly_path.resolve(), leaf_step.resolve()],
-            [spec.source_path for spec in expanded],
-        )
-
+            # The package is the render artifact; generation returns no selector bundle.
+            self.assertIsNone(result.selector_bundle)
+            run_jobs.assert_called_once()
 
 if __name__ == "__main__":
     unittest.main()

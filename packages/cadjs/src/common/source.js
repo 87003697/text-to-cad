@@ -1,13 +1,11 @@
 import {
-  assemblyUsesSelfContainedMesh,
-  buildSelfContainedAssemblyMeshData
+  buildComposedPackageMeshData
 } from "../lib/assembly/meshData.js";
 import { buildMeshDataFromGlbBuffer } from "../lib/render/glbMeshData.js";
 import {
   loadRenderDisplayEdgeBundle,
   loadRenderGlb,
-  loadRenderSelectorBundle,
-  loadRenderTopologyIndex
+  loadRenderSelectorBundle
 } from "../lib/stepRenderAssetClient.js";
 import {
   buildDisplayEdgeRuntime,
@@ -80,12 +78,9 @@ function assertStepOnlyOption(kind, value, label) {
 }
 
 async function loadStepMeshFromGlb(glbUrl) {
-  const meshData = await loadRenderGlb(glbUrl);
-  const topology = await loadRenderTopologyIndex(glbUrl);
-  if (assemblyUsesSelfContainedMesh(topology)) {
-    return buildSelfContainedAssemblyMeshData(topology, meshData);
-  }
-  return meshData;
+  // A plain (non-package) GLB URL is a single mesh blob — assemblies are component-GLB
+  // packages loaded via loadPackageMeshData, not self-contained monolith GLBs.
+  return loadRenderGlb(glbUrl);
 }
 
 async function loadSelectorRuntime(glbUrl, { cadPath = "" } = {}) {
@@ -111,6 +106,28 @@ async function loadDisplayEdgeRuntime(glbUrl) {
   } catch {
     return null;
   }
+}
+
+async function loadPackageMeshData(packageInfo) {
+  const descriptor = isObject(packageInfo.descriptor) ? packageInfo.descriptor : null;
+  if (!descriptor) {
+    throw new Error("Assembly package render job is missing its descriptor");
+  }
+  const componentUrls = isObject(packageInfo.componentUrls) ? packageInfo.componentUrls : {};
+  const components = isObject(descriptor.components) ? descriptor.components : {};
+  const componentMeshDataByCid = {};
+  for (const cid of Object.keys(components)) {
+    const url = String(componentUrls[cid] || "").trim();
+    if (!url) {
+      throw new Error(`Assembly package component ${cid} has no resolved URL`);
+    }
+    const response = await fetch(url, { cache: "no-store" });
+    if (!response.ok) {
+      throw new Error(`Failed to load component GLB ${cid}: HTTP ${response.status}`);
+    }
+    componentMeshDataByCid[cid] = await buildMeshDataFromGlbBuffer(await response.arrayBuffer());
+  }
+  return buildComposedPackageMeshData(descriptor, componentMeshDataByCid);
 }
 
 async function loadMeshDataFromUrl(url, kind) {
@@ -191,6 +208,27 @@ export async function loadSource(input, options = {}) {
   assertStepOnlyOption(kind, stepParameterUrl, "stepParameterUrl");
 
   let meshData = explicitMeshData;
+  // Component-GLB package: the canonical assembly artifact is a directory, so there is
+  // no single GLB to load. Fetch each unique component GLB and compose them in world
+  // space from the descriptor (transforms baked per occurrence). Picking is not wired
+  // for packages yet, so the selector runtime is left empty (renders, no selection).
+  const packageInfo = isObject(inputObject.package) ? inputObject.package : (
+    isObject(resolved.package) ? resolved.package : null
+  );
+  if (!meshData && packageInfo) {
+    meshData = await loadPackageMeshData(packageInfo);
+    return {
+      kind: "step",
+      meshData,
+      selectorRuntime: inputObject.selectorRuntime || options.selectorRuntime || null,
+      displayEdgeRuntime: inputObject.displayEdgeRuntime || options.displayEdgeRuntime || null,
+      stepParameterSource: null,
+      resolved,
+      url: "",
+      glbUrl: "",
+      cadPath
+    };
+  }
   const glbUrl = String(inputObject.glbUrl || resolved.glbUrl || options.glbUrl || "").trim();
   const url = String(typeof input === "string" ? input : inputObject.url || resolved.url || glbUrl || "").trim();
   if (!meshData) {

@@ -6,7 +6,7 @@ Read this file when the user requests STL, 3MF, or native GLB output from CAD ge
 
 STL, 3MF, and native GLB are mesh sidecars, not substitutes for STEP. Generate and validate STEP first, then export requested sidecars from the same `scripts/step` run. Do not treat sidecar renders as CAD validation; inspect and snapshot the primary STEP per the standard workflow.
 
-Native GLB sidecars are ordinary glTF 2.0 binary files for external tools: Y-up, meter-scaled, and free of the CAD Viewer `STEP_topology` extension. Do not confuse them with the hidden `.<name>.step.glb` CAD Viewer topology artifact.
+Native GLB sidecars are ordinary glTF 2.0 binary files for external tools: Y-up, meter-scaled, and free of the CAD Viewer `STEP_topology` extension. Do not confuse them with the CAD Viewer render artifact — the component-GLB package directory at `<folder>/__cadcache__/models/<name>.step/` (an `assembly.json` descriptor plus a `components/` dir of content-addressed GLBs).
 
 ## Tool
 

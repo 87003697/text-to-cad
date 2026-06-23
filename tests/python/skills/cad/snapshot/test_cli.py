@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import io
+import json
 import subprocess
 import sys
 import tempfile
@@ -10,6 +12,46 @@ from pathlib import Path
 from types import ModuleType, SimpleNamespace
 
 from tests.python.support.paths import add_repo_path, repo_path
+
+
+def write_package(step_path, *, entry_kind="part", source_kind="step"):
+    """Materialize the canonical render artifact for ``step_path``: a SELF-CONTAINED
+    component-GLB PACKAGE directory inside the per-folder cache
+    (``__cadcache__/models/<step-filename>/assembly.json``) whose content-addressed component
+    GLBs live in the package's own ``components/<hash>.glb`` dir. Returns the package directory
+    path, mirroring ``cadpy.render.part_glb_path``."""
+    step_path = Path(step_path)
+    pkg_dir = step_path.parent / "__cadcache__" / "models" / step_path.name
+    comp_dir = pkg_dir / "components"
+    pkg_dir.mkdir(parents=True, exist_ok=True)
+    comp_dir.mkdir(parents=True, exist_ok=True)
+    cid = hashlib.sha256(str(step_path).encode()).hexdigest()[:16]
+    (comp_dir / f"{cid}.glb").write_bytes(b"component-glb")
+    (pkg_dir / "assembly.json").write_text(
+        json.dumps(
+            {
+                "kind": "assembly-package",
+                "packageSchemaVersion": 2,
+                "entryKind": entry_kind,
+                "rootName": step_path.stem,
+                "units": "mm",
+                "sourceKind": source_kind,
+                "stepPath": step_path.name,
+                "bbox": {"min": [0, 0, 0], "max": [1, 1, 1]},
+                "stats": {"occurrenceCount": 1, "shapeCount": 1},
+                "components": {cid: {"glb": f"components/{cid}.glb", "contentHash": cid}},
+                "occurrences": [
+                    {
+                        "id": "o1.1",
+                        "name": "occ",
+                        "component": cid,
+                        "transform": [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1],
+                    }
+                ],
+            }
+        )
+    )
+    return pkg_dir
 
 add_repo_path("skills/cad/scripts")
 
@@ -231,7 +273,7 @@ class SnapshotCliTests(unittest.TestCase):
             models = root / "models"
             models.mkdir()
             (models / "part.step").write_text("ISO-10303-21;\nEND-ISO-10303-21;\n", encoding="utf-8")
-            (models / ".part.step.glb").write_bytes(b"glb")
+            write_package(models / "part.step")
 
             original_timestamp = snapshot_main.snapshot_timestamp
             original_ensure = snapshot_main.ensure_step_topology_artifact
@@ -283,7 +325,7 @@ class SnapshotCliTests(unittest.TestCase):
             models = root / "models"
             models.mkdir()
             (models / "part.step").write_text("ISO-10303-21;\nEND-ISO-10303-21;\n", encoding="utf-8")
-            (models / ".part.step.glb").write_bytes(b"glb")
+            write_package(models / "part.step")
 
             original_ensure = snapshot_main.ensure_step_topology_artifact
             try:
@@ -303,7 +345,19 @@ class SnapshotCliTests(unittest.TestCase):
         self.assertNotIn("rootDir", job)
         self.assertEqual(job["resolved"]["rootPath"], str(models))
         self.assertEqual(job["resolved"]["inputUrl"], "/__render_asset/part.step")
-        self.assertEqual(job["resolved"]["glbUrl"], "/__render_asset/.part.step.glb")
+        # The render artifact is a SELF-CONTAINED component-GLB package, so the resolved job
+        # carries a package descriptor with per-component asset URLs (no monolithic glbUrl).
+        # Each component URL points into the package's own components/ dir inside __cadcache__.
+        self.assertNotIn("glbUrl", job["resolved"])
+        package = job["resolved"]["package"]
+        self.assertEqual(package["descriptor"]["kind"], "assembly-package")
+        component_urls = package["componentUrls"]
+        self.assertTrue(component_urls)
+        for component_url in component_urls.values():
+            self.assertTrue(
+                component_url.startswith("/__render_asset/__cadcache__/models/part.step/components/"),
+                component_url,
+            )
 
     def test_render_job_ensures_step_artifact_for_step_input(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
@@ -312,7 +366,7 @@ class SnapshotCliTests(unittest.TestCase):
             models.mkdir()
             step_path = models / "part.step"
             step_path.write_text("ISO-10303-21;\nEND-ISO-10303-21;\n", encoding="utf-8")
-            (models / ".part.step.glb").write_bytes(b"glb")
+            write_package(step_path)
             calls = []
 
             def fake_ensure(target, **kwargs):
@@ -377,7 +431,7 @@ class SnapshotCliTests(unittest.TestCase):
             models.mkdir()
             step_path = models / "assembly.step"
             step_path.write_text("ISO-10303-21;\nEND-ISO-10303-21;\n", encoding="utf-8")
-            (models / ".assembly.step.glb").write_bytes(b"glb")
+            write_package(step_path, entry_kind="assembly")
             calls = []
 
             def fake_ensure(target, **kwargs):
@@ -409,7 +463,7 @@ class SnapshotCliTests(unittest.TestCase):
             models = root / "models"
             models.mkdir()
             (models / "assembly.step").write_text("ISO-10303-21;\nEND-ISO-10303-21;\n", encoding="utf-8")
-            (models / ".assembly.step.glb").write_bytes(b"glb")
+            write_package(models / "assembly.step", entry_kind="assembly")
 
             original_ensure = snapshot_main.ensure_step_topology_artifact
             try:
@@ -441,7 +495,7 @@ class SnapshotCliTests(unittest.TestCase):
             models = root / "models"
             models.mkdir()
             (models / "assembly.step").write_text("ISO-10303-21;\nEND-ISO-10303-21;\n", encoding="utf-8")
-            (models / ".assembly.step.glb").write_bytes(b"glb")
+            write_package(models / "assembly.step", entry_kind="assembly")
 
             original_ensure = snapshot_main.ensure_step_topology_artifact
             try:

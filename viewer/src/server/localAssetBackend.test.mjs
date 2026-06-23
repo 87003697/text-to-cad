@@ -1,10 +1,46 @@
 import assert from "node:assert/strict";
+import crypto from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 
 import { createLocalAssetBackend } from "./localAssetBackend.mjs";
+
+// The canonical render artifact is a SELF-CONTAINED component-GLB PACKAGE directory inside the
+// per-folder cache: `<folder>/__cadcache__/models/<step-filename>/assembly.json`, with its
+// content-addressed component GLBs in the package's own `components/<hash>.glb` dir. Mirror the
+// scanner test's helper so the served artifact assets resolve out of __cadcache__.
+function writeStepPackage(modelRoot, stepRelPath, { entryKind = "part", sourceKind = "step" } = {}) {
+  const stepAbs = path.join(modelRoot, stepRelPath);
+  const folder = path.dirname(stepAbs);
+  const stepName = path.basename(stepAbs);
+  const pkgDir = path.join(folder, "__cadcache__", "models", stepName);
+  const compDir = path.join(pkgDir, "components");
+  fs.mkdirSync(pkgDir, { recursive: true });
+  fs.mkdirSync(compDir, { recursive: true });
+  const cid = crypto.createHash("sha256").update(`comp:${stepRelPath}`).digest("hex").slice(0, 16);
+  const componentPath = path.join(compDir, `${cid}.glb`);
+  fs.writeFileSync(componentPath, "component-glb-bytes");
+  const descriptorPath = path.join(pkgDir, "assembly.json");
+  fs.writeFileSync(descriptorPath, JSON.stringify({
+    kind: "assembly-package",
+    packageSchemaVersion: 2,
+    entryKind,
+    rootName: stepName.replace(/\.(step|stp)$/i, ""),
+    units: "mm",
+    sourceKind,
+    stepPath: stepName,
+    bbox: { min: [0, 0, 0], max: [1, 1, 1] },
+    stats: { occurrenceCount: 1, shapeCount: 1 },
+    components: { [cid]: { glb: `components/${cid}.glb`, contentHash: cid } },
+    occurrences: [{
+      id: "o1.1", name: "occ", component: cid,
+      transform: [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1],
+    }],
+  }));
+  return { pkgDir, descriptorPath, componentPath };
+}
 
 async function withTempDirectoryRoot(callback) {
   const directoryRoot = fs.mkdtempSync(path.join(os.tmpdir(), "cad-viewer-backend-"));
@@ -424,7 +460,10 @@ test("local backend defers STEP artifact status to current-file status reads", a
     assert.equal(catalogEntry.rootRelativeFile, "part.step");
     assert.equal(catalogEntry.artifact, undefined);
     assert.equal(status.artifact.error, "missing_glb");
-    assert.equal(status.artifact.glbPath, path.join(modelRoot, ".part.step.glb"));
+    assert.equal(
+      status.artifact.glbPath,
+      path.join(modelRoot, "__cadcache__", "models", "part.step"),
+    );
   });
 });
 
@@ -475,24 +514,31 @@ test("local backend resolves generated GLB artifact assets from catalog URLs", a
     const modelRoot = path.join(directoryRoot, "models");
     fs.mkdirSync(modelRoot, { recursive: true });
     const stepPath = path.join(modelRoot, "part.step");
-    const artifactPath = path.join(modelRoot, ".part.step.glb");
     fs.writeFileSync(stepPath, "ISO-10303-21;\nEND-ISO-10303-21;\n");
-    fs.writeFileSync(artifactPath, "glb");
+    const { pkgDir, descriptorPath, componentPath } = writeStepPackage(modelRoot, "part.step");
     const backend = createLocalAssetBackend({ directoryRoot, rootDir: "models" });
     const catalog = backend.refreshCatalog();
 
-    const access = backend.resolveFileAssetAccess({
-      fileRef: "part.step",
-      asset: "artifact",
-      catalog,
-    });
+    // The STEP catalog entry's render artifact is a component-GLB PACKAGE: its URL points at
+    // the package directory inside __cadcache__, and the viewer fetches the descriptor +
+    // referenced component GLBs out of __cadcache__.
+    const entry = catalog.entries.find((candidate) => candidate.rootRelativeFile === "part.step");
+    const entryFileParam = new URL(entry.url, "http://cad.local").searchParams.get("file");
+    assert.equal(entryFileParam, pkgDir);
 
-    assert.equal(access.asset, "artifact");
-    assert.equal(access.file, artifactPath);
-    assert.equal(access.rootRelativeFile, ".part.step.glb");
-    assert.equal(access.path, artifactPath);
-    assert.equal(access.filename, ".part.step.glb");
-    assert.equal(access.contentType, "model/gltf-binary");
+    // Both the package descriptor and its content-addressed component GLB resolve to served
+    // assets inside __cadcache__.
+    const descriptorAccess = backend.assetPathForFileRef(descriptorPath, { rootDir: "models" });
+    assert.equal(descriptorAccess, descriptorPath);
+    assert.equal(path.relative(modelRoot, descriptorAccess), path.join("__cadcache__", "models", "part.step", "assembly.json"));
+
+    const componentAccess = backend.assetPathForFileRef(componentPath, { rootDir: "models" });
+    assert.equal(componentAccess, componentPath);
+    assert.equal(
+      path.dirname(path.relative(modelRoot, componentAccess)),
+      path.join("__cadcache__", "models", "part.step", "components"),
+    );
+    assert.equal(backend.contentTypeForPath(componentAccess), "model/gltf-binary");
   });
 });
 

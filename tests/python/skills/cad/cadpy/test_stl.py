@@ -37,21 +37,21 @@ class CadpyRenderTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "no configured STL output"):
             cad_render.part_stl_path(step_path)
 
-    def test_glb_path_uses_adjacent_hidden_step_glb(self) -> None:
+    def test_glb_path_resolves_into_cadcache(self) -> None:
         step_path = self._write_step("part")
 
         glb_path = cad_render.part_glb_path(step_path)
 
-        self.assertEqual(self.temp_root / ".part.step.glb", glb_path)
-        self.assertEqual(self.temp_root / ".part.step" / "model.glb", cad_render.legacy_part_glb_path(step_path))
+        # The render artifact (a component-GLB package dir) lives inside __cadcache__,
+        # keyed by the STEP filename, so the model folder holds only source.
+        self.assertEqual(self.temp_root / "__cadcache__" / "models" / "part.step", glb_path)
 
     def test_glb_path_preserves_stp_extension(self) -> None:
         step_path = self._write_step("part-stp", extension=".stp")
 
         glb_path = cad_render.part_glb_path(step_path)
 
-        self.assertEqual(self.temp_root / ".part-stp.stp.glb", glb_path)
-        self.assertEqual(self.temp_root / ".part-stp.stp" / "model.glb", cad_render.legacy_part_glb_path(step_path))
+        self.assertEqual(self.temp_root / "__cadcache__" / "models" / "part-stp.stp", glb_path)
 
 
 if __name__ == "__main__":

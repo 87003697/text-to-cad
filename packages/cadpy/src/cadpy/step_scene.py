@@ -1493,6 +1493,74 @@ def scene_occurrence_shape(scene: LoadedStepScene, node: OccurrenceNode) -> Any:
     return _located_shape(scene.prototype_shapes[node.prototype_key], node.location)
 
 
+def scene_to_build123d_compound(scene: LoadedStepScene, *, label: str | None = None) -> Any:
+    """Reconstruct a build123d ``Compound`` from a loaded scene.
+
+    Mirrors what ``build123d.import_step`` produces topologically AND chromatically:
+    the occurrence tree with each leaf prototype placed by its world transform,
+    labeled by its occurrence name, and tagged with its STEP color (per-occurrence
+    color first, prototype color second). Geometry is the exact BREP from the scene,
+    so a cache-backed scene yields a shape topologically identical to a fresh import.
+    The ``.color`` attribute is what the STEP exporter (``set_label_color``) and the
+    downstream GLB pipeline read to round-trip the visual into rendered artifacts.
+    """
+    import build123d
+
+    def node_label(node: OccurrenceNode) -> str:
+        return str(node.name or node.source_name or occurrence_selector_id(node)).strip()
+
+    def node_color(node: OccurrenceNode) -> tuple[float, ...] | None:
+        if node.color is not None:
+            return tuple(node.color)
+        if node.prototype_key is not None:
+            prototype_color = scene.prototype_colors.get(node.prototype_key)
+            if prototype_color is not None:
+                return tuple(prototype_color)
+        return None
+
+    def build_node(node: OccurrenceNode) -> Any:
+        if node.children:
+            compound = build123d.Compound(
+                children=[build_node(child) for child in node.children],
+                label=node_label(node),
+            )
+            color = node_color(node)
+            if color is not None:
+                compound.color = color
+            return compound
+        shape = build123d.Shape(obj=scene_occurrence_shape(scene, node))
+        shape.label = node_label(node)
+        color = node_color(node)
+        if color is not None:
+            shape.color = color
+        return shape
+
+    roots = [build_node(root) for root in scene.roots]
+    if not roots:
+        raise RuntimeError(f"STEP scene has no geometry: {scene.step_path}")
+    return build123d.Compound(children=roots, label=label or scene.step_path.stem)
+
+
+def import_step(step_path: Path, *, label: str | None = None) -> Any:
+    """``build123d.import_step`` backed by the inline ``__cadcache__`` scene cache.
+
+    Returns a build123d ``Compound`` topologically identical to ``import_step`` but
+    reuses the cached binary BREP, so warm loads are ~tens of ms instead of a full
+    text-STEP re-parse. Cold loads cost the same as ``import_step`` (plus a small
+    cache write). Per-occurrence and prototype STEP colors are applied via
+    ``scene_to_build123d_compound``, so the returned shape is a colored drop-in.
+    Falls back to a raw import if the scene cannot be reconstructed.
+    """
+    import build123d
+
+    resolved = Path(step_path).expanduser().resolve()
+    try:
+        scene = load_step_scene_cached(resolved)
+        return scene_to_build123d_compound(scene, label=label or resolved.stem)
+    except Exception:
+        return build123d.import_step(resolved)
+
+
 def scene_occurrence_prototype_shape(scene: LoadedStepScene, node: OccurrenceNode) -> Any:
     if node.prototype_key is None or node.prototype_key not in scene.prototype_shapes:
         raise RuntimeError(f"Occurrence {occurrence_selector_id(node)} has no prototype shape")

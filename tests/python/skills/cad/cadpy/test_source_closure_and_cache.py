@@ -40,26 +40,26 @@ class SourceClosureTests(unittest.TestCase):
             script.write_text("import helper\n", encoding="utf-8")
             dep.write_text("VALUE = 1\n", encoding="utf-8")
 
-            closure = cad_source_hash.closure_for_files(script, [dep])
+            closure = cad_source_hash.closure_for_files(script, [dep], base=base)
             # The script and its dependency are both recorded.
             self.assertEqual(2, len(closure.files))
 
             # Re-hashing the recorded file list reproduces the same hash.
             self.assertEqual(
                 closure.closure_hash,
-                cad_source_hash.closure_hash_from_files(closure.files),
+                cad_source_hash.closure_hash_from_files(closure.files, base=base),
             )
 
             # Editing a dependency changes the recomputed hash (stale).
             dep.write_text("VALUE = 2\n", encoding="utf-8")
             self.assertNotEqual(
                 closure.closure_hash,
-                cad_source_hash.closure_hash_from_files(closure.files),
+                cad_source_hash.closure_hash_from_files(closure.files, base=base),
             )
 
             # A missing recorded file yields None (callers treat as stale).
             dep.unlink()
-            self.assertIsNone(cad_source_hash.closure_hash_from_files(closure.files))
+            self.assertIsNone(cad_source_hash.closure_hash_from_files(closure.files, base=base))
 
     def test_capture_runtime_closure_includes_imported_repo_local_modules(self) -> None:
         with temporary_directory(prefix="closure-capture-") as raw_dir:
@@ -76,7 +76,7 @@ class SourceClosureTests(unittest.TestCase):
                 sys.path.insert(0, str(base))
                 try:
                     import shared_helper  # noqa: F401  (exercise a real import)
-                    closure = cad_source_hash.capture_runtime_closure(before, script)
+                    closure = cad_source_hash.capture_runtime_closure(before, script, base=base)
                 finally:
                     sys.path.remove(str(base))
                     sys.modules.pop("shared_helper", None)
@@ -140,6 +140,27 @@ class BinarySceneCacheTests(unittest.TestCase):
                 self.assertIsNone(
                     step_scene._read_step_scene_cache(step_path, step_hash="hash-xyz")
                 )
+
+
+class ImportStepCachedTests(unittest.TestCase):
+    """cadpy import_step: build123d shape identical to build123d.import_step, served from cache."""
+
+    def test_matches_import_step_and_reuses_cache(self) -> None:
+        with temporary_directory(prefix="import-cached-") as raw_dir:
+            step_path = Path(raw_dir) / "widget.step"
+            build123d.export_step(build123d.Box(4, 3, 2), step_path)
+
+            raw = build123d.import_step(step_path)
+            cached = step_scene.import_step(step_path)  # cold: parses + writes cache
+
+            self.assertEqual(_face_count(raw.wrapped), _face_count(cached.wrapped))
+            self.assertAlmostEqual(raw.volume, cached.volume, places=4)
+            self.assertTrue((step_path.parent / "__cadcache__").is_dir())
+
+            # Second call must hit the inline cache — no re-parse — and still match.
+            with mock.patch.object(step_scene, "load_step_scene", side_effect=AssertionError("cache miss")):
+                cached_warm = step_scene.import_step(step_path)
+            self.assertAlmostEqual(raw.volume, cached_warm.volume, places=4)
 
 
 if __name__ == "__main__":

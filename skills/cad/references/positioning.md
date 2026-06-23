@@ -124,13 +124,15 @@ Use the frame method that matches native build123d joint inputs: `rigid_frame()`
 
 ## Imported components
 
-For purchased or downloaded parts (see `$step-parts`), import the STEP file and add it like any authored part:
+For purchased or downloaded parts (see `$step-parts`), import the STEP file and add it like any authored part. Always import STEP parts through `cadpy.step_scene.import_step`, not `build123d.import_step` — it is a drop-in that returns a topologically and chromatically identical shape but reuses an inline `__cadcache__` binary-BREP cache, so re-imports of the same part (an assembly with repeated fasteners or servos) and rebuilds skip re-parsing the text STEP:
 
 ```python
-from build123d import import_step
+from cadpy.step_scene import import_step
 
 servo = asm.add(import_step("models/parts/sg90_servo.step"), "servo")
 ```
+
+It writes a hidden `__cadcache__/` cache directory next to each imported STEP — add `__cadcache__/` to your `.gitignore`. It falls back to `build123d.import_step` automatically when the cache cannot be written, so no extra error handling is needed.
 
 Imported geometry was not authored here, so do not assume its origin or orientation. Derive mating frames from inspected geometry: run `refs --facts --planes --positioning` and `measure` against the imported part, then define `asm.rigid_frame(...)` locations from the measured faces, axes, and bolt patterns. Validate the resulting mate exactly like an authored one.
 

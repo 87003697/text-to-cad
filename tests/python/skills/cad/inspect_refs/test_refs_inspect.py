@@ -750,8 +750,9 @@ class InspectRefsTests(unittest.TestCase):
         assembly_path = self.temp_root / "sample-assembly.py"
         assembly_step_path = self.temp_root / "sample-assembly.step"
         assembly_path.write_text(
+            "from build123d import Box, Compound\n"
             "def gen_step():\n"
-            "    return {'instances': []}\n",
+            "    return Compound(children=[Box(1, 1, 1), Box(1, 1, 1)], label='sample')\n",
             encoding="utf-8",
         )
         assembly_step_path.write_text("ISO-10303-21; END-ISO-10303-21;\n", encoding="utf-8")

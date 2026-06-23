@@ -281,7 +281,14 @@ export function filenameLabelForEntry(entry) {
   if (sourceFormat === "implicit" || entry?.kind === "implicit") {
     return entryLeafName(entry);
   }
-  return `${stem}.${sourceFormat === "stp" ? "stp" : "step"}`;
+  const stepExtension = sourceFormat === "stp" ? "stp" : "step";
+  // A Python-generated model has no committed STEP — its real source is a `<stem>.py` gen_step
+  // script. Surface that in the explorer as `<stem>.step.py` so it reads as a Python generator
+  // (which the viewer rebuilds on demand) rather than a static, hand-committed STEP file.
+  if (String(entry?.sourceKind || "").trim().toLowerCase() === "python") {
+    return `${stem}.${stepExtension}.py`;
+  }
+  return `${stem}.${stepExtension}`;
 }
 
 export function sidebarLabelForEntry(entry) {

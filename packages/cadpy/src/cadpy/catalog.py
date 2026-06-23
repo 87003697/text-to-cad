@@ -49,6 +49,7 @@ class StepImportOptions:
     stl: str | None = None
     three_mf: str | None = None
     glb: str | None = None
+    step: str | None = None
     mesh_tolerance: float | None = None
     mesh_angular_tolerance: float | None = None
 
@@ -59,6 +60,7 @@ class StepImportOptions:
                 self.stl is not None,
                 self.three_mf is not None,
                 self.glb is not None,
+                self.step is not None,
                 self.mesh_tolerance is not None,
                 self.mesh_angular_tolerance is not None,
             )
@@ -273,8 +275,13 @@ def explorer_directory_for_step_path(step_path: Path) -> Path:
 
 
 def hidden_glb_path_for_step_path(step_path: Path) -> Path:
+    # The render artifact is a self-contained component-GLB package directory (assembly.json
+    # descriptor + a components/ dir of content-addressed GLBs). It lives INSIDE the
+    # per-folder __cadcache__, keyed by the STEP filename, so model folders hold only source
+    # — there is no .{model}.step.glb in the model tree. Components live in the package itself
+    # at <key>/components/<hash>.glb (so the descriptor references components/...).
     base = step_path.resolve()
-    return (base.parent / f".{base.name}.glb").resolve()
+    return (base.parent / "__cadcache__" / "models" / base.name).resolve()
 
 
 def legacy_explorer_artifact_path_for_step_path(step_path: Path, suffix: str) -> Path:
