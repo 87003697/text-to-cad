@@ -90,7 +90,7 @@ function FileSheetTab({
       }}
       onDragEnd={onDragEnd}
       className={cn(
-        "group/file-sheet-tab relative -mb-px flex h-9 max-w-[12rem] shrink-0 cursor-pointer select-none items-center gap-1.5 whitespace-nowrap border-r border-sidebar-border/50 border-b-2 px-3 text-[11px] font-medium leading-none transition-colors",
+        "group/file-sheet-tab relative -mb-px flex h-8 max-w-[12rem] shrink-0 cursor-pointer select-none items-center gap-1.5 whitespace-nowrap border-r border-sidebar-border/50 border-b-2 px-2 text-[11px] font-medium leading-none transition-colors",
         active
           ? "border-b-primary bg-accent/40 text-foreground"
           : "border-b-transparent text-muted-foreground hover:bg-accent/25 hover:text-foreground",
@@ -133,7 +133,7 @@ function FileSheetTabPane({
         aria-orientation="horizontal"
         ref={stripRef}
         className={cn(
-          "flex h-9 shrink-0 items-stretch overflow-x-auto border-b border-sidebar-border/70 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden",
+          "flex h-8 shrink-0 items-stretch overflow-x-auto border-b border-sidebar-border/70 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden",
           isDropPane && "bg-accent/20"
         )}
       >
