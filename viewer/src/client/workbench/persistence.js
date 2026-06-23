@@ -361,11 +361,6 @@ const TAB_STATE_SCHEMA = [
     equals: stringListEqual
   },
   {
-    key: "stepTreeRootShowMore",
-    defaultValue: false,
-    normalize: normalizeBoolean
-  },
-  {
     key: "fileSheetOpenSectionIds",
     defaultValue: null,
     normalize: normalizeNullableUniqueStringList,
