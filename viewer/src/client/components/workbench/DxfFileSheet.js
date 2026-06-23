@@ -170,10 +170,10 @@ export default function DxfFileSheet({
       id: "dxf",
       title: "DXF",
       content: (
-          <FileSheetSectionBody className="py-0">
+          <FileSheetSectionBody>
             <FileSheetSubsection title="Thickness">
               <FileSheetControlRow label="Material">
-                <div className="grid grid-cols-[2rem_minmax(0,1fr)_2rem] items-center gap-1.5">
+                <div className="grid grid-cols-[2rem_minmax(0,1fr)_2rem] items-center gap-2">
                   <Button
                     type="button"
                     variant="ghost"

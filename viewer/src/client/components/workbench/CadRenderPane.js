@@ -622,7 +622,7 @@ export default function CadRenderPane({
         >
           <Alert
             variant="destructive"
-            className="cad-glass-popover pointer-events-auto w-full max-w-xl min-w-0 p-5 text-center shadow-lg"
+            className="cad-glass-popover pointer-events-auto w-full max-w-xl min-w-0 p-4 text-center shadow-lg"
           >
             <p className="col-start-1 text-[11px] font-semibold uppercase tracking-[0.16em] text-destructive">
               File does not exist

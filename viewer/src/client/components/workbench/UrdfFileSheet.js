@@ -270,7 +270,7 @@ function SdfValueField({ label, value }) {
     <div className="block min-w-0">
       <span className={fieldLabelClasses}>{label}</span>
       <div
-        className="mt-1 min-h-7 truncate rounded-md border border-border/70 bg-muted/25 px-2 py-1.5 text-[11px] font-medium leading-4 text-foreground"
+        className="mt-1 min-h-7 truncate rounded-md border border-border/70 bg-muted/25 px-2 py-1 text-[11px] font-medium leading-4 text-foreground"
         title={displayValue}
       >
         {displayValue}
@@ -297,7 +297,7 @@ function SdfMetadataList({ title, items, fields }) {
     return null;
   }
   return (
-    <div className="space-y-1.5 rounded-md border border-border/80 bg-background/40 p-3">
+    <div className="space-y-1.5 rounded-md border border-border/80 bg-background/40 p-2">
       <span className={fieldLabelClasses}>{title}</span>
       <div className="space-y-1">
         {records.slice(0, 5).map((record, index) => (
@@ -818,7 +818,7 @@ export default function UrdfFileSheet({
                 </FileSheetSubsection>
               </>
             ) : (
-              <p className="px-2 py-2 text-xs text-muted-foreground">No movable joints are available.</p>
+              <p className="px-2 py-1 text-xs text-muted-foreground">No movable joints are available.</p>
             )
       )
     } : null,

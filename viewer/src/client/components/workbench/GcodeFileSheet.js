@@ -124,7 +124,7 @@ function GcodeValueField({ label, value, mono = false }) {
     <div className="block min-w-0">
       <span className={fieldLabelClasses}>{label}</span>
       <div
-        className={`mt-1 min-h-7 truncate rounded-md border border-border/70 bg-muted/25 px-2 py-1.5 text-[11px] font-medium leading-4 text-foreground ${mono ? "font-mono" : ""}`}
+        className={`mt-1 min-h-7 truncate rounded-md border border-border/70 bg-muted/25 px-2 py-1 text-[11px] font-medium leading-4 text-foreground ${mono ? "font-mono" : ""}`}
         title={displayValue}
       >
         {displayValue}
@@ -201,7 +201,7 @@ export default function GcodeFileSheet({
       content: (
             <div>
               {!hasGcodeData ? (
-                <p className="px-2 py-2 text-xs text-muted-foreground">Loading G-code...</p>
+                <p className="px-2 py-1 text-xs text-muted-foreground">Loading G-code...</p>
               ) : null}
 
               <FileSheetSubsection title="Summary" contentClassName="px-2">
@@ -324,7 +324,7 @@ export default function GcodeFileSheet({
             </span>
       ),
       content: (
-            <div className="space-y-2 px-2 py-2.5">
+            <div className="space-y-2 px-2 py-2">
               {!features.length ? (
                 <p className="text-xs leading-5 text-muted-foreground">
                   No slicer feature annotations found. The preview can still show layers, extrusion paths, and travel moves.
@@ -355,7 +355,7 @@ export default function GcodeFileSheet({
                       return (
                         <li
                           key={feature?.id || feature?.label}
-                          className="min-w-0 px-2.5 py-1.5"
+                          className="min-w-0 px-2 py-1"
                           title={rawLabels}
                         >
                           <div className="flex items-center gap-2">
@@ -382,7 +382,7 @@ export default function GcodeFileSheet({
       id: "stats",
       title: "Stats",
       content: (
-            <div className="grid grid-cols-2 gap-2 px-2 py-3">
+            <div className="grid grid-cols-2 gap-2 px-2 py-2">
               <GcodeValueField label="Extrusion" value={formatDistance(stats.extrusionMm, 1)} />
               <GcodeValueField label="Path length" value={formatDistance(stats.pathMm, 1)} />
               <GcodeValueField label="Retracts" value={formatCount(stats.retractMoves)} />
@@ -396,7 +396,7 @@ export default function GcodeFileSheet({
       id: "bounds",
       title: "Bounds",
       content: (
-            <div className="grid grid-cols-1 gap-2 px-2 py-3">
+            <div className="grid grid-cols-1 gap-2 px-2 py-2">
               <GcodeValueField label="X" value={boundsAxisText(gcodeData?.bounds, 0, 1)} mono />
               <GcodeValueField label="Y" value={boundsAxisText(gcodeData?.bounds, 1, 1)} mono />
               <GcodeValueField label="Z" value={boundsAxisText(gcodeData?.bounds, 2, 2)} mono />
