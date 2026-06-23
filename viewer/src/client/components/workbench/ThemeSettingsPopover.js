@@ -1560,7 +1560,7 @@ export function DisplaySettingsSection({
   };
 
   return (
-    <div className="py-1" data-cad-display-settings-section="true">
+    <div className="py-2" data-cad-display-settings-section="true">
       <ControlSubsection title="Mode">
         <Field label="Projection">
           <SegmentedControl
@@ -1978,7 +1978,7 @@ function ThemeAppearanceContent({
   };
 
   return (
-    <div className="py-1" data-cad-theme-appearance-section="true">
+    <div className="py-2" data-cad-theme-appearance-section="true">
       <ThemeAppearanceSection
         themePresets={themePresets}
         themeSettings={themeSettings}
@@ -2235,7 +2235,7 @@ function ThemeAppearanceContent({
 
         <NestedControlGroup title="Primary">
           <Tabs value={activePrimaryLight} onValueChange={setActivePrimaryLight} className="gap-0">
-            <div className="px-3 py-1">
+            <div className="px-2 py-1">
               <TabsList className="grid h-7 w-full grid-cols-3 rounded-md p-0.5">
                 {PRIMARY_LIGHT_OPTIONS.map((option) => (
                   <TabsTrigger key={option.value} value={option.value} className="text-[11px]">

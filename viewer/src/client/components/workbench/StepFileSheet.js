@@ -46,7 +46,7 @@ const compactInputClasses = FILE_SHEET_COMPACT_INPUT_CLASSES;
 const treeChevronButtonClasses = "grid h-5 w-5 shrink-0 place-items-center rounded-sm px-0 text-current/60 hover:bg-sidebar-accent/45 hover:text-sidebar-accent-foreground focus-visible:bg-sidebar-accent/45";
 const treeRowActionButtonClasses = "h-5 w-5 rounded-sm px-0 text-current/60 shadow-none hover:bg-sidebar-accent/45 hover:text-sidebar-accent-foreground focus-visible:bg-sidebar-accent/45 focus-visible:text-sidebar-accent-foreground";
 const treeRowContentClasses = "h-7 min-w-0 text-xs font-normal";
-const treeGroupLabelClasses = "px-1.5 pb-1 pt-2 text-[10px] font-medium text-sidebar-foreground/45";
+const treeGroupLabelClasses = "px-2 pb-1 pt-2 text-[10px] font-medium text-sidebar-foreground/45";
 const treeGlyphIconClasses = "size-3.5 shrink-0 text-current/60";
 const treeMateIconSlotClasses = "grid h-5 w-5 shrink-0 place-items-center text-current/60";
 const treeDepthIndentPx = 22;
@@ -782,7 +782,7 @@ export default function StepFileSheet({
               ) : null}
 
               {viewerLoading && !visibleRows.length ? (
-                <p className="px-1.5 py-2 text-xs text-[var(--ui-text-muted)]">
+                <p className="px-2 py-1 text-xs text-[var(--ui-text-muted)]">
                   Loading STEP tree...
                 </p>
               ) : null}
@@ -1022,7 +1022,7 @@ export default function StepFileSheet({
                               aria-disabled={rowAriaDisabled}
                               tabIndex={rowSelectionDisabled ? -1 : 0}
                               className={cn(
-                                "group/tree-row flex h-7 min-w-0 w-full max-w-full items-center gap-1 rounded-md px-1 outline-none transition-colors",
+                                "group/tree-row flex h-7 min-w-0 w-full max-w-full items-center gap-2 rounded-md px-2 outline-none transition-colors",
                                 rowSelectionDisabled
                                   ? "cursor-default text-sidebar-foreground/55"
                                   : "cursor-pointer text-sidebar-foreground hover:bg-sidebar-accent hover:text-sidebar-accent-foreground focus-visible:bg-sidebar-accent focus-visible:text-sidebar-accent-foreground",
@@ -1212,7 +1212,7 @@ export default function StepFileSheet({
                 : null}
 
               {!hasAssemblyTree && !viewerLoading ? (
-                <p className="px-1.5 py-2 text-xs text-[var(--ui-text-muted)]">
+                <p className="px-2 py-1 text-xs text-[var(--ui-text-muted)]">
                   No assembly tree
                 </p>
               ) : null}
@@ -1240,7 +1240,7 @@ export default function StepFileSheet({
                             aria-disabled={mateSelectionDisabled}
                             tabIndex={mateSelectionDisabled ? -1 : 0}
                             className={cn(
-                              "flex h-7 min-w-0 max-w-full items-center gap-1.5 rounded-md px-1 text-xs outline-none transition-colors",
+                              "flex h-7 min-w-0 max-w-full items-center gap-2 rounded-md px-2 text-xs outline-none transition-colors",
                               mateSelectionDisabled
                                 ? "cursor-default text-sidebar-foreground/55"
                                 : "cursor-pointer text-sidebar-foreground hover:bg-sidebar-accent hover:text-sidebar-accent-foreground focus-visible:bg-sidebar-accent focus-visible:text-sidebar-accent-foreground",
@@ -1326,10 +1326,10 @@ export default function StepFileSheet({
                 ) : null}
 
                 {stepModuleStatus === "loading" ? (
-                  <p className="px-2 py-2 text-xs text-[var(--ui-text-muted)]">Loading STEP module...</p>
+                  <p className="px-2 py-1 text-xs text-[var(--ui-text-muted)]">Loading STEP module...</p>
                 ) : null}
                 {stepModuleError ? (
-                  <p className="whitespace-pre-line px-2 py-2 text-xs text-destructive">{stepModuleError}</p>
+                  <p className="whitespace-pre-line px-2 py-1 text-xs text-destructive">{stepModuleError}</p>
                 ) : null}
 
                 {stepModuleDefinition && stepModuleAnimations.length ? (
@@ -1420,7 +1420,7 @@ export default function StepFileSheet({
                 ) : null}
 
                 {stepModuleDefinition && !stepModuleParameters.length ? (
-                  <p className="px-2 py-2 text-xs text-[var(--ui-text-muted)]">No module parameters.</p>
+                  <p className="px-2 py-1 text-xs text-[var(--ui-text-muted)]">No module parameters.</p>
                 ) : null}
                 {stepModuleParameters.map((parameter) => {
                   const value = stepModuleValues?.[parameter.id] ?? parameter.defaultValue;

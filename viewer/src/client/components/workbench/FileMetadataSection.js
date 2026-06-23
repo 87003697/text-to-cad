@@ -129,11 +129,11 @@ function FileMetadataTabContent({ entry, groups, fileAccessBusyKey = "", onOpenF
     <div aria-label="File metadata">
         {groups.map((group) => (
           <FileSheetSubsection key={group.title} title={group.title} contentClassName="px-2">
-            <dl className="space-y-1.5">
+            <dl className="space-y-2">
               {group.rows.map((row) => (
                 <div
                   key={`${group.title}:${row.label}`}
-                  className="min-w-0 space-y-0.5 py-0.5"
+                  className="min-w-0 space-y-1 py-1"
                 >
                   <dt
                     className={cn(FILE_SHEET_FIELD_LABEL_CLASSES, "leading-4")}
