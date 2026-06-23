@@ -27,13 +27,13 @@ const FILE_SHEET_CONTROL_TEXT_CLASSES = [
 
 export const FILE_SHEET_SECTION_TRIGGER_CLASSES = "px-3 py-2 text-sm font-normal text-sidebar-foreground/90";
 export const FILE_SHEET_SECTION_CONTENT_CLASSES = "py-1";
-export const FILE_SHEET_CONTROL_ROW_CLASSES = "space-y-1 px-3 py-0.5";
+export const FILE_SHEET_CONTROL_ROW_CLASSES = "space-y-1 px-2 py-0.5";
 export const FILE_SHEET_ROW_STACK_CLASSES = "space-y-2";
 export const FILE_SHEET_SECTION_BODY_CLASSES = `${FILE_SHEET_ROW_STACK_CLASSES} py-3`;
-export const FILE_SHEET_SLIDER_FIELD_CLASSES = "space-y-1 px-3 py-0.5";
-export const FILE_SHEET_INLINE_CONTROL_ROW_CLASSES = "px-3 py-0.5";
+export const FILE_SHEET_SLIDER_FIELD_CLASSES = "space-y-1 px-2 py-0.5";
+export const FILE_SHEET_INLINE_CONTROL_ROW_CLASSES = "px-2 py-0.5";
 export const FILE_SHEET_FIELD_LABEL_CLASSES = "block min-w-0 truncate text-[11px] font-medium leading-4 text-muted-foreground";
-export const FILE_SHEET_SUBSUBSECTION_HEADER_CLASSES = "px-3 py-1 text-[11px] font-normal leading-4 text-sidebar-foreground";
+export const FILE_SHEET_SUBSUBSECTION_HEADER_CLASSES = "px-2 py-1 text-[11px] font-normal leading-4 text-sidebar-foreground";
 export const FILE_SHEET_VALUE_BADGE_CLASSES = "shrink-0 rounded bg-muted px-1.5 py-0.5 font-mono text-[10px] font-medium leading-none tabular-nums text-muted-foreground";
 export const FILE_SHEET_VALUE_BADGE_INPUT_CLASSES = [
   "h-7 w-20 shrink-0 rounded-md border border-input bg-transparent px-1.5 py-1 text-right text-[11px] font-medium leading-none tabular-nums text-foreground shadow-xs outline-none",
@@ -124,8 +124,8 @@ export function FileSheetSubsection({
         className
       )}
     >
-      <div className="cad-sheet-subsection-separator mx-3 mb-2 h-px bg-border/60" />
-      <div className="flex min-w-0 items-center justify-between gap-2 px-3 pb-1 text-[12px] font-normal leading-5 text-sidebar-foreground/80">
+      <div className="cad-sheet-subsection-separator mx-2 mb-2 h-px bg-border/60" />
+      <div className="flex min-w-0 items-center justify-between gap-2 px-2 pb-1 text-[12px] font-normal leading-5 text-sidebar-foreground/80">
         <span className="min-w-0 truncate">{title}</span>
         {trailing ? <span className="shrink-0">{trailing}</span> : null}
       </div>

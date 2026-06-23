@@ -95,10 +95,10 @@ export default function ParameterControlsSection({
         ) : null}
 
         {status === "loading" ? (
-          <p className="px-3 py-2 text-xs text-[var(--ui-text-muted)]">{loadingLabel}</p>
+          <p className="px-2 py-2 text-xs text-[var(--ui-text-muted)]">{loadingLabel}</p>
         ) : null}
         {error ? (
-          <p className="whitespace-pre-line px-3 py-2 text-xs text-destructive">{error}</p>
+          <p className="whitespace-pre-line px-2 py-2 text-xs text-destructive">{error}</p>
         ) : null}
 
         {definition && animations.length ? (
@@ -211,7 +211,7 @@ export default function ParameterControlsSection({
         ) : null}
 
         {definition && !parameters.length ? (
-          <p className="px-3 py-2 text-xs text-[var(--ui-text-muted)]">{noParametersLabel}</p>
+          <p className="px-2 py-2 text-xs text-[var(--ui-text-muted)]">{noParametersLabel}</p>
         ) : null}
         {parameters.map((parameter) => {
           const currentValue = values?.[parameter.id] ?? parameter.defaultValue;

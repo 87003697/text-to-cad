@@ -239,7 +239,7 @@ export default function DxfFileSheet({
                   onChange={onBendChange}
                 />
               )) : (
-                <p className="px-3 py-1 text-xs text-muted-foreground">
+                <p className="px-2 py-1 text-xs text-muted-foreground">
                   {viewerLoading ? "Loading bends..." : "No bends are available."}
                 </p>
               )}
