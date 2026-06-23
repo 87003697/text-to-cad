@@ -69,8 +69,7 @@ import {
   normalizeExplodedViewSettings
 } from "cadjs/lib/displaySettings";
 import {
-  DISPLAY_MODE_OPTIONS,
-  displayModeOptionForValue
+  DISPLAY_MODE_OPTIONS
 } from "../viewer/DisplayModeOptions";
 import {
   OrthographicProjectionIcon,
@@ -1549,8 +1548,6 @@ export function DisplaySettingsSection({
   const resetEdges = () => {
     setDisplay({ edges: normalizeDisplayEdgeSettings() });
   };
-  const selectedDisplayModeOption = displayModeOptionForValue(normalizedDisplaySettings.mode);
-  const SelectedDisplayModeIcon = selectedDisplayModeOption?.Icon || null;
   const updateClipAxisOffset = (axis, nextOffset) => {
     const numericOffset = Number(nextOffset);
     const resolvedOffset = Number.isFinite(numericOffset) ? numericOffset : 0;
@@ -1579,28 +1576,19 @@ export function DisplaySettingsSection({
             onValueChange={(nextValue) => setDisplay({ mode: nextValue })}
           >
             <SelectTrigger size="sm" className="h-7 !text-[11px]" aria-label="Display mode">
-              <span className="flex min-w-0 items-center gap-1.5 overflow-hidden">
-                {SelectedDisplayModeIcon ? (
-                  <SelectedDisplayModeIcon className="size-3.5 shrink-0 text-muted-foreground" strokeWidth={2} aria-hidden="true" />
-                ) : null}
-                <SelectValue />
-              </span>
+              <SelectValue />
             </SelectTrigger>
             <SelectContent>
-              {DISPLAY_MODE_OPTIONS.map((option) => {
-                const Icon = option.Icon;
-                return (
-                  <SelectItem
-                    key={option.value}
-                    value={option.value}
-                    className="text-xs"
-                    title={option.title}
-                    icon={Icon ? <Icon className="size-3.5" strokeWidth={2} /> : null}
-                  >
-                    {option.label}
-                  </SelectItem>
-                );
-              })}
+              {DISPLAY_MODE_OPTIONS.map((option) => (
+                <SelectItem
+                  key={option.value}
+                  value={option.value}
+                  className="text-xs"
+                  title={option.title}
+                >
+                  {option.label}
+                </SelectItem>
+              ))}
             </SelectContent>
           </Select>
         </Field>
