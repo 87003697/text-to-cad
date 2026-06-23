@@ -511,7 +511,7 @@ function FileViewerContents({
 
       <SidebarContent>
         <ScrollArea className="cad-file-viewer-scroll min-h-0 min-w-0 flex-1 overflow-x-hidden" type="auto">
-          <SidebarGroup className="p-1">
+          <SidebarGroup>
             <SidebarGroupContent>
               {hasMatches ? (
                 <SidebarMenu>
@@ -577,13 +577,13 @@ function FileViewerContents({
                   })}
                 </SidebarMenu>
               ) : catalogErrorMessage && !hasEntries ? (
-                <p className="px-2 py-3 text-xs text-muted-foreground">CAD catalog unavailable: {catalogErrorMessage}</p>
+                <p className="px-2 py-1 text-xs text-muted-foreground">CAD catalog unavailable: {catalogErrorMessage}</p>
               ) : catalogLoading ? (
-                <p className="px-2 py-3 text-xs text-muted-foreground">Loading CAD catalog...</p>
+                <p className="px-2 py-1 text-xs text-muted-foreground">Loading CAD catalog...</p>
               ) : hasEntries ? (
-                <p className="px-2 py-3 text-xs text-muted-foreground">No CAD entries match this filter.</p>
+                <p className="px-2 py-1 text-xs text-muted-foreground">No CAD entries match this filter.</p>
               ) : (
-                <p className="px-2 py-3 text-xs text-muted-foreground">No CAD entries found.</p>
+                <p className="px-2 py-1 text-xs text-muted-foreground">No CAD entries found.</p>
               )}
             </SidebarGroupContent>
           </SidebarGroup>

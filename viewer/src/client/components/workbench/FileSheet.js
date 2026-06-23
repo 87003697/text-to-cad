@@ -25,18 +25,18 @@ const FILE_SHEET_CONTROL_TEXT_CLASSES = [
   "[&_[data-slot=color-picker-trigger]]:!text-[11px]"
 ].join(" ");
 
-export const FILE_SHEET_SECTION_TRIGGER_CLASSES = "px-3 py-2 text-sm font-normal text-sidebar-foreground/90";
-export const FILE_SHEET_SECTION_CONTENT_CLASSES = "py-1";
-export const FILE_SHEET_CONTROL_ROW_CLASSES = "space-y-1 px-2 py-0.5";
+export const FILE_SHEET_SECTION_TRIGGER_CLASSES = "px-2 py-2 text-sm font-normal text-sidebar-foreground/90";
+export const FILE_SHEET_SECTION_CONTENT_CLASSES = "py-2";
+export const FILE_SHEET_CONTROL_ROW_CLASSES = "space-y-1 px-2 py-1";
 export const FILE_SHEET_ROW_STACK_CLASSES = "space-y-2";
-export const FILE_SHEET_SECTION_BODY_CLASSES = `${FILE_SHEET_ROW_STACK_CLASSES} py-3`;
-export const FILE_SHEET_SLIDER_FIELD_CLASSES = "space-y-1 px-2 py-0.5";
-export const FILE_SHEET_INLINE_CONTROL_ROW_CLASSES = "px-2 py-0.5";
+export const FILE_SHEET_SECTION_BODY_CLASSES = `${FILE_SHEET_ROW_STACK_CLASSES} py-2`;
+export const FILE_SHEET_SLIDER_FIELD_CLASSES = "space-y-1 px-2 py-1";
+export const FILE_SHEET_INLINE_CONTROL_ROW_CLASSES = "px-2 py-1";
 export const FILE_SHEET_FIELD_LABEL_CLASSES = "block min-w-0 truncate text-[11px] font-medium leading-4 text-muted-foreground";
 export const FILE_SHEET_SUBSUBSECTION_HEADER_CLASSES = "px-2 py-1 text-[11px] font-normal leading-4 text-sidebar-foreground";
 export const FILE_SHEET_VALUE_BADGE_CLASSES = "shrink-0 rounded bg-muted px-1.5 py-0.5 font-mono text-[10px] font-medium leading-none tabular-nums text-muted-foreground";
 export const FILE_SHEET_VALUE_BADGE_INPUT_CLASSES = [
-  "h-7 w-20 shrink-0 rounded-md border border-input bg-transparent px-1.5 py-1 text-right text-[11px] font-medium leading-none tabular-nums text-foreground shadow-xs outline-none",
+  "h-7 w-20 shrink-0 rounded-md border border-input bg-transparent px-2 py-1 text-right text-[11px] font-medium leading-none tabular-nums text-foreground shadow-xs outline-none",
   "m-0 box-border min-w-0 appearance-none transition-[color,box-shadow,border-color] placeholder:text-muted-foreground",
   "focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50 disabled:opacity-50 dark:bg-input/30"
 ].join(" ");
@@ -389,7 +389,7 @@ export function FileSheetInlineControlRow({
       data-file-sheet-control-row=""
       data-file-sheet-row-kind="inline"
     >
-      <div className="flex min-h-7 max-w-full items-center justify-between gap-3">
+      <div className="flex min-h-7 max-w-full items-center justify-between gap-2">
         <span className={cn(FILE_SHEET_FIELD_LABEL_CLASSES, labelClassName)}>{label}</span>
         <span className="shrink-0">{children}</span>
       </div>
