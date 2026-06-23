@@ -6,9 +6,11 @@ from pathlib import PurePosixPath
 import xml.etree.ElementTree as ET
 
 from robot_common.materials import BLACK_ALUMINUM_RGBA
-from v1.assemblies.base_link import (
-    STS3250_BASE_PLATE_FLUSH_Y_OFFSET_MM as BASE_LINK_STS3250_SOURCE_Y_OFFSET_MM,
-)
+
+# Servo (sts3250) flush-mount offset on the base plate: plate top y minus the servo
+# mounting-tab face local y. Fixed design constant matching the base_link source
+# geometry; defined here so this shared module carries no v1/v2 link dependency.
+BASE_LINK_STS3250_SOURCE_Y_OFFSET_MM = -29.8002 - (-27.4)
 
 
 EXTRUSION_2020_LENGTH_MM = 100.0
@@ -111,10 +113,18 @@ def _replace_named_instance(
     raise RuntimeError(f"Missing assembly instance {name!r}")
 
 
+# The base mounts on the base_clamp_assembly desk clamp (see assemblies/base_link.py),
+# whose grip face hangs this far below the legacy flat-plate ground plane once the
+# clamp is M-aligned to the base servo. Lifting the whole robot by this amount seats
+# base_footprint on the clamp's desk-grip surface (measured from the M-aligned clamp
+# bounding box: lowest point at base_link-local Y = -72.518).
+BASE_CLAMP_GROUND_LIFT_MM = 72.518
+
+
 def _base_ground_y_offset_mm() -> float:
     base_plate = _find_named_instance(ASSEMBLY_INSTANCES, "base_plate")
     base_plate_transform = [float(value) for value in base_plate["transform"]]
-    return -(base_plate_transform[7] + BASE_PLATE_BOTTOM_LOCAL_Y_MM)
+    return -(base_plate_transform[7] + BASE_PLATE_BOTTOM_LOCAL_Y_MM) + BASE_CLAMP_GROUND_LIFT_MM
 
 
 def _grounded_top_level_transform(
