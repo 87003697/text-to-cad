@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { PanelBottomClose, Rows2 } from "lucide-react";
+import { Rows2 } from "lucide-react";
 import { cn } from "@/ui/utils";
 import {
   activateFileSheetTab,
@@ -11,7 +11,6 @@ import {
   readFileSheetTabLayoutStore,
   resolveFileSheetTabPanes,
   setFileSheetTabRatio,
-  setFileSheetTabSplit,
   writeFileSheetTabLayoutStore
 } from "@/workbench/fileSheetTabLayout";
 import { ScrollArea } from "../ui/scroll-area";
@@ -116,8 +115,7 @@ function FileSheetTabPane({
   onDragEndTab,
   onPaneDragOver,
   onPaneDrop,
-  onPaneDragLeave,
-  splitToggle
+  onPaneDragLeave
 }) {
   const stripRef = useRef(null);
   const activeSection = activeId ? sectionsById.get(activeId) : null;
@@ -166,7 +164,6 @@ function FileSheetTabPane({
             <span className="absolute inset-y-0 left-0 z-10 w-0.5 bg-primary" aria-hidden="true" />
           </span>
         ) : null}
-        {splitToggle ? <span className="ml-auto flex shrink-0 items-center px-1.5">{splitToggle}</span> : null}
       </div>
       <ScrollArea
         className="min-h-0 flex-1"
@@ -176,22 +173,6 @@ function FileSheetTabPane({
         {activeSection ? activeSection.content : null}
       </ScrollArea>
     </section>
-  );
-}
-
-function SplitToggleButton({ split, onToggle }) {
-  const Icon = split ? PanelBottomClose : Rows2;
-  const label = split ? "Merge tabs into one strip" : "Split tabs into two panes";
-  return (
-    <button
-      type="button"
-      onClick={onToggle}
-      aria-label={label}
-      title={label}
-      className="flex size-6 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
-    >
-      <Icon className="size-3.5" strokeWidth={2} aria-hidden="true" />
-    </button>
   );
 }
 
@@ -239,6 +220,7 @@ export default function FileSheetTabbedSurface({
   const [dragId, setDragId] = useState("");
   const dragIdRef = useRef("");
   const [dropTarget, setDropTarget] = useState(null);
+  const [splitZoneActive, setSplitZoneActive] = useState(false);
   const [liveRatio, setLiveRatio] = useState(null);
   const containerRef = useRef(null);
   const dividerDraggingRef = useRef(false);
@@ -256,6 +238,7 @@ export default function FileSheetTabbedSurface({
     dragIdRef.current = "";
     setDragId("");
     setDropTarget(null);
+    setSplitZoneActive(false);
   }, []);
 
   const handlePaneDragOver = useCallback((event, pane, stripEl) => {
@@ -264,6 +247,7 @@ export default function FileSheetTabbedSurface({
     }
     event.preventDefault();
     event.dataTransfer.dropEffect = "move";
+    setSplitZoneActive(false);
     const index = computeDropIndex(stripEl, event.clientX);
     setDropTarget({ pane, index: index == null ? 0 : index });
   }, []);
@@ -294,14 +278,41 @@ export default function FileSheetTabbedSurface({
     clearDrag();
   }, [arrangement, clearDrag, dropTarget, kind, onOpenSectionIdsChange, openSectionIds, updateArrangement]);
 
-  const handleToggleSplit = useCallback(() => {
-    updateArrangement((current) => setFileSheetTabSplit(current, kind, current.split !== true, sectionIds));
-  }, [kind, sectionIds, updateArrangement]);
-
+  // Dropping a tab into the bottom zone of a single strip splits the view.
   const canSplit = kindSupportsSplit(kind) && sectionIds.length > 1;
-  const splitToggle = canSplit ? (
-    <SplitToggleButton split={resolved.split} onToggle={handleToggleSplit} />
-  ) : null;
+
+  const handleSplitZoneDragOver = useCallback((event) => {
+    if (!dragIdRef.current) {
+      return;
+    }
+    event.preventDefault();
+    event.stopPropagation();
+    event.dataTransfer.dropEffect = "move";
+    setDropTarget(null);
+    setSplitZoneActive(true);
+  }, []);
+
+  const handleSplitZoneDragLeave = useCallback((event) => {
+    if (event.currentTarget.contains(event.relatedTarget)) {
+      return;
+    }
+    setSplitZoneActive(false);
+  }, []);
+
+  const handleSplitDrop = useCallback((event) => {
+    const sectionId = dragIdRef.current;
+    if (!sectionId) {
+      return;
+    }
+    event.preventDefault();
+    event.stopPropagation();
+    const nextArrangement = moveFileSheetTab(arrangement, kind, sectionId, FILE_SHEET_TAB_PANES.BOTTOM, 0);
+    updateArrangement(nextArrangement);
+    onOpenSectionIdsChange?.(
+      activateFileSheetTab(openSectionIds, nextArrangement, kind, FILE_SHEET_TAB_PANES.BOTTOM, sectionId)
+    );
+    clearDrag();
+  }, [arrangement, clearDrag, kind, onOpenSectionIdsChange, openSectionIds, updateArrangement]);
 
   // Divider resize.
   const handleDividerPointerDown = useCallback((event) => {
@@ -335,7 +346,7 @@ export default function FileSheetTabbedSurface({
     });
   }, [updateArrangement]);
 
-  const renderPane = (paneInfo, options = {}) => (
+  const renderPane = (paneInfo) => (
     <FileSheetTabPane
       pane={paneInfo.pane}
       tabs={paneInfo.tabs}
@@ -350,14 +361,32 @@ export default function FileSheetTabbedSurface({
       onPaneDragOver={handlePaneDragOver}
       onPaneDrop={handlePaneDrop}
       onPaneDragLeave={handlePaneDragLeave}
-      splitToggle={options.splitToggle}
     />
   );
 
   if (!resolved.split) {
     return (
-      <div className="flex min-h-0 flex-1 flex-col">
-        {renderPane(resolved.panes[0], { splitToggle })}
+      <div className="relative flex min-h-0 flex-1 flex-col">
+        {renderPane(resolved.panes[0])}
+        {canSplit && dragId ? (
+          <div
+            data-file-sheet-split-zone=""
+            onDragOver={handleSplitZoneDragOver}
+            onDragLeave={handleSplitZoneDragLeave}
+            onDrop={handleSplitDrop}
+            className={cn(
+              "absolute inset-x-0 bottom-0 z-20 flex h-1/2 items-center justify-center border-t-2 border-dashed transition-colors",
+              splitZoneActive
+                ? "border-primary bg-primary/15"
+                : "border-sidebar-border/70 bg-background/30"
+            )}
+          >
+            <span className="pointer-events-none flex items-center gap-1.5 text-[11px] font-medium text-muted-foreground">
+              <Rows2 className="size-3.5" strokeWidth={2} aria-hidden="true" />
+              Drop here to split
+            </span>
+          </div>
+        ) : null}
       </div>
     );
   }
@@ -371,7 +400,7 @@ export default function FileSheetTabbedSurface({
         className="flex min-h-0 min-w-0 flex-col"
         style={{ flex: `0 0 ${ratio * 100}%` }}
       >
-        {renderPane(topPane, { splitToggle })}
+        {renderPane(topPane)}
       </div>
       <div
         role="separator"
