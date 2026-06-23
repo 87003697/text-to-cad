@@ -1190,7 +1190,6 @@ export default function CadWorkspace({
   const [selectedRenderPartIdByAssemblyPartId, setSelectedRenderPartIdByAssemblyPartId] = useState({});
   const [selectedWholeEntryCadRefToken, setSelectedWholeEntryCadRefToken] = useState("");
   const [expandedStepTreeNodeIds, setExpandedStepTreeNodeIds] = useState([]);
-  const [stepTreeRootShowMore, setStepTreeRootShowMore] = useState(false);
   const [activeTreeNodeScrollKey, setActiveTreeNodeScrollKey] = useState("");
   const [hiddenPartIds, setHiddenPartIds] = useState([]);
   const [isolatedAssemblyNodeIds, setIsolatedAssemblyNodeIds] = useState([]);
@@ -3879,7 +3878,6 @@ export default function CadWorkspace({
       selectedPartIds,
       inspectedAssemblyNodeId: "",
       expandedStepTreeNodeIds,
-      stepTreeRootShowMore,
       fileSheetOpenSectionIds: effectiveFileSheetOpenSectionIds,
       hiddenPartIds,
       camera: activePerspectiveRef.current,
@@ -3901,7 +3899,6 @@ export default function CadWorkspace({
     referenceQuery,
     selectedPartIds,
     selectedReferenceIds,
-    stepTreeRootShowMore,
     tabToolMode,
   ]);
 
@@ -4141,7 +4138,6 @@ export default function CadWorkspace({
     setSelectedRenderPartIdByAssemblyPartId({});
     setSelectedWholeEntryCadRefToken("");
     setExpandedStepTreeNodeIds(nextTab.expandedStepTreeNodeIds);
-    setStepTreeRootShowMore(nextTab.stepTreeRootShowMore);
     setFileSheetOpenSectionIds(nextTab.fileSheetOpenSectionIds);
     setHiddenPartIds(nextTab.hiddenPartIds);
     setIsolatedAssemblyNodeIds([]);
@@ -4175,7 +4171,6 @@ export default function CadWorkspace({
     setSelectedPartIds([]);
     setSelectedRenderPartIdByAssemblyPartId({});
     setExpandedStepTreeNodeIds([]);
-    setStepTreeRootShowMore(false);
     setFileSheetOpenSectionIds(null);
     setHiddenPartIds([]);
     setIsolatedAssemblyNodeIds([]);
@@ -8884,8 +8879,6 @@ export default function CadWorkspace({
                 stepTreeRoot={displayStepTreeRoot}
                 assemblyMates={selectedAssemblyMates}
                 expandedTreeNodeIds={expandedStepTreeNodeIds}
-                stepTreeRootShowMore={stepTreeRootShowMore}
-                onStepTreeRootShowMoreChange={setStepTreeRootShowMore}
                 loadableTreeNodeIds={loadableStepTreeTopologyNodeIds}
                 selectedPartIds={selectedPartIds}
                 selectedReferenceIds={selectedReferenceIds}
