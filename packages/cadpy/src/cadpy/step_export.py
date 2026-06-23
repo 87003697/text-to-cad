@@ -384,3 +384,29 @@ def build_build123d_step_scene(
         source_hash=source_hash,
     )
     return _attach_assembly_mates(scene, to_export)
+
+
+def export_build123d_step_file(
+    to_export: Any,
+    output_path: Path,
+    *,
+    text_to_cad_entry_kind: str | None = None,
+    source_path: str | None = None,
+    source_hash: str | None = None,
+    logger: object | None = None,
+) -> str:
+    """Write a build123d shape to a text STEP file (no scene), returning its hash.
+
+    The write-only counterpart to :func:`export_build123d_step_scene`, used by the
+    on-demand ``--step`` export: the build already holds the in-memory scene/compound,
+    so STEP export only needs to serialize the shape, not rebuild a scene."""
+    doc = _create_bin_xcaf_doc(to_export)
+    return write_xcaf_doc_step_file(
+        doc,
+        output_path,
+        label=getattr(to_export, "label", None),
+        text_to_cad_entry_kind=text_to_cad_entry_kind,
+        source_path=source_path,
+        source_hash=source_hash,
+        logger=logger,
+    )

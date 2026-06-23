@@ -934,8 +934,19 @@ def resolve_render_job(
         "inputUrl": asset_url_for_path(input_path, root_path),
         "kind": kind,
         "glbPath": str(glb_path),
-        "glbUrl": asset_url_for_path(glb_path, root_path),
     }
+    if glb_path.is_dir():
+        # Component-GLB package (canonical assembly artifact): inline the descriptor and
+        # pre-resolve one asset URL per unique component GLB so the renderer fetches and
+        # composes them in world space (no single monolithic GLB to load).
+        descriptor = json.loads((glb_path / "assembly.json").read_text())
+        component_urls = {
+            cid: asset_url_for_path(glb_path / str(entry.get("glb", "")), root_path)
+            for cid, entry in (descriptor.get("components") or {}).items()
+        }
+        resolved["package"] = {"descriptor": descriptor, "componentUrls": component_urls}
+    else:
+        resolved["glbUrl"] = asset_url_for_path(glb_path, root_path)
     if step_parameter_path.exists():
         resolved["stepParameterPath"] = str(step_parameter_path)
         resolved["stepParameterUrl"] = asset_url_for_path(step_parameter_path, root_path)

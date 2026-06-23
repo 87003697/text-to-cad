@@ -5,7 +5,7 @@ import {
   assemblyBreadcrumb,
   assemblyInspectionNode,
   buildAssemblyLeafToNodePickMap,
-  buildSelfContainedAssemblyMeshData,
+  buildComposedPackageMeshData,
   descendantLeafPartIds,
   findAssemblyNode,
   focusedLeafPartIdsForAssemblyInspection,
@@ -19,268 +19,6 @@ import {
   treeSelectableAssemblyNodeIdsForInspection,
   resolveAssemblyPickedPartId
 } from "./meshData.js";
-
-test("self-contained assembly mesh data maps GLB node parts by occurrence id", () => {
-  const topology = {
-    assembly: {
-      mesh: {
-        url: ".assembly.step.glb?v=abc",
-        addressing: "gltf-node-extras",
-        occurrenceIdKey: "cadOccurrenceId"
-      },
-      root: {
-        id: "root",
-        nodeType: "assembly",
-        children: [
-          {
-            id: "o1.2",
-            occurrenceId: "o1.2",
-            nodeType: "part",
-            displayName: "sample_part",
-            sourcePath: "parts/sample_part.step",
-            worldTransform: [
-              1, 0, 0, 10,
-              0, 1, 0, 20,
-              0, 0, 1, 30,
-              0, 0, 0, 1
-            ],
-            bbox: {
-              min: [10, 20, 30],
-              max: [11, 21, 30]
-            },
-            children: []
-          }
-        ]
-      }
-    }
-  };
-  const parsedGlbMeshData = {
-    vertices: new Float32Array([
-      10, 20, 30,
-      11, 20, 30,
-      10, 21, 30
-    ]),
-    normals: new Float32Array([
-      0, 0, 1,
-      0, 0, 1,
-      0, 0, 1
-    ]),
-    indices: new Uint32Array([0, 1, 2]),
-    colors: new Float32Array(0),
-    edge_indices: new Uint32Array(0),
-    bounds: {
-      min: [10, 20, 30],
-      max: [11, 21, 30]
-    },
-    parts: [
-      {
-        id: "o1.2",
-        occurrenceId: "o1.2",
-        vertexOffset: 0,
-        vertexCount: 3,
-        triangleOffset: 0,
-        triangleCount: 1,
-        bounds: {
-          min: [10, 20, 30],
-          max: [11, 21, 30]
-        }
-      }
-    ]
-  };
-
-  const meshData = buildSelfContainedAssemblyMeshData(topology, parsedGlbMeshData);
-
-  assert.equal(meshData.parts.length, 1);
-  assert.equal(meshData.partTransformsBaked, true);
-  assert.equal(meshData.parts[0].id, "o1.2");
-  assert.equal(meshData.parts[0].label, "sample_part");
-  assert.equal(meshData.parts[0].partSourcePath, "parts/sample_part.step");
-  assert.equal(meshData.parts[0].vertexOffset, 0);
-  assert.deepEqual(meshData.parts[0].bounds, {
-    min: [10, 20, 30],
-    max: [11, 21, 30]
-  });
-  assert.deepEqual(Array.from(meshData.vertices), [
-    10, 20, 30,
-    11, 20, 30,
-    10, 21, 30
-  ]);
-});
-
-test("self-contained assembly mesh data groups descendant GLB nodes under topology leaves", () => {
-  const topology = {
-    assembly: {
-      mesh: {
-        url: ".assembly.step.glb?v=abc",
-        addressing: "gltf-node-extras",
-        occurrenceIdKey: "cadOccurrenceId"
-      },
-      root: {
-        id: "root",
-        nodeType: "assembly",
-        children: [
-          {
-            id: "o1.2",
-            occurrenceId: "o1.2",
-            nodeType: "part",
-            displayName: "compound_part",
-            children: []
-          }
-        ]
-      }
-    }
-  };
-  const parsedGlbMeshData = {
-    vertices: new Float32Array([
-      0, 0, 0,
-      1, 0, 0,
-      0, 1, 0,
-      10, 0, 0,
-      11, 0, 0,
-      10, 1, 0
-    ]),
-    normals: new Float32Array([
-      0, 0, 1,
-      0, 0, 1,
-      0, 0, 1,
-      0, 0, 1,
-      0, 0, 1,
-      0, 0, 1
-    ]),
-    indices: new Uint32Array([0, 1, 2, 3, 4, 5]),
-    colors: new Float32Array(0),
-    edge_indices: new Uint32Array(0),
-    bounds: {
-      min: [0, 0, 0],
-      max: [11, 1, 0]
-    },
-    parts: [
-      {
-        id: "o1.2.1",
-        occurrenceId: "o1.2.1",
-        vertexOffset: 0,
-        vertexCount: 3,
-        triangleOffset: 0,
-        triangleCount: 1,
-        primitiveIndex: 0,
-        bounds: {
-          min: [0, 0, 0],
-          max: [1, 1, 0]
-        }
-      },
-      {
-        id: "o1.2.2",
-        occurrenceId: "o1.2.2",
-        vertexOffset: 3,
-        vertexCount: 3,
-        triangleOffset: 1,
-        triangleCount: 1,
-        primitiveIndex: 2,
-        bounds: {
-          min: [10, 0, 0],
-          max: [11, 1, 0]
-        }
-      }
-    ]
-  };
-
-  const meshData = buildSelfContainedAssemblyMeshData(topology, parsedGlbMeshData);
-
-  assert.equal(meshData.parts.length, 1);
-  assert.equal(meshData.parts[0].id, "o1.2");
-  assert.equal(meshData.parts[0].vertexCount, 6);
-  assert.equal(meshData.parts[0].triangleCount, 2);
-  assert.deepEqual(meshData.parts[0].sourcePartRanges, [
-    {
-      occurrenceId: "o1.2.1",
-      primitiveIndex: 0,
-      triangleOffset: 0,
-      triangleCount: 1
-    },
-    {
-      occurrenceId: "o1.2.2",
-      primitiveIndex: 2,
-      triangleOffset: 1,
-      triangleCount: 1
-    }
-  ]);
-  assert.deepEqual(Array.from(meshData.indices), [0, 1, 2, 3, 4, 5]);
-  assert.deepEqual(meshData.parts[0].sourceBounds, {
-    min: [0, 0, 0],
-    max: [11, 1, 0]
-  });
-});
-
-test("self-contained assembly mesh data skips topology leaves without GLB triangles", () => {
-  const topology = {
-    assembly: {
-      mesh: {
-        url: ".assembly.step.glb?v=abc",
-        addressing: "gltf-node-extras",
-        occurrenceIdKey: "cadOccurrenceId"
-      },
-      root: {
-        id: "root",
-        nodeType: "assembly",
-        children: [
-          {
-            id: "o1.1",
-            occurrenceId: "o1.1",
-            nodeType: "part",
-            displayName: "rendered_part",
-            children: []
-          },
-          {
-            id: "o1.2",
-            occurrenceId: "o1.2",
-            nodeType: "part",
-            displayName: "wire_only_part",
-            children: []
-          }
-        ]
-      }
-    }
-  };
-  const parsedGlbMeshData = {
-    vertices: new Float32Array([
-      0, 0, 0,
-      1, 0, 0,
-      0, 1, 0
-    ]),
-    normals: new Float32Array([
-      0, 0, 1,
-      0, 0, 1,
-      0, 0, 1
-    ]),
-    indices: new Uint32Array([0, 1, 2]),
-    colors: new Float32Array(0),
-    edge_indices: new Uint32Array(0),
-    bounds: {
-      min: [0, 0, 0],
-      max: [1, 1, 0]
-    },
-    parts: [
-      {
-        id: "o1.1",
-        occurrenceId: "o1.1",
-        vertexOffset: 0,
-        vertexCount: 3,
-        triangleOffset: 0,
-        triangleCount: 1,
-        bounds: {
-          min: [0, 0, 0],
-          max: [1, 1, 0]
-        }
-      }
-    ]
-  };
-
-  const meshData = buildSelfContainedAssemblyMeshData(topology, parsedGlbMeshData);
-
-  assert.deepEqual(meshData.parts.map((part) => part.id), ["o1.1"]);
-  assert.deepEqual(meshData.meshlessLeafPartIds, ["o1.2"]);
-  assert.equal(meshData.indices.length, 3);
-});
 
 test("assembly helpers navigate nested assemblies down to leaf parts", () => {
   const root = {
@@ -542,4 +280,144 @@ test("assembly picking maps rendered leaves to the current selectable node befor
     resolveAssemblyPickedPartId("unknown", { pickPartIdMap, validLeafPartIds }),
     "unknown"
   );
+});
+
+function unitTriangleComponentMeshData() {
+  // One part: a triangle in the component's LOCAL frame, +z normals.
+  return {
+    vertices: new Float32Array([
+      0, 0, 0,
+      1, 0, 0,
+      0, 1, 0
+    ]),
+    normals: new Float32Array([
+      0, 0, 1,
+      0, 0, 1,
+      0, 0, 1
+    ]),
+    colors: new Float32Array(0),
+    indices: new Uint32Array([0, 1, 2]),
+    parts: [
+      {
+        id: "o1",
+        occurrenceId: "o1",
+        primitiveIndex: 0,
+        vertexOffset: 0,
+        vertexCount: 3,
+        triangleOffset: 0,
+        triangleCount: 1
+      }
+    ]
+  };
+}
+
+const IDENTITY_4X4 = [
+  1, 0, 0, 0,
+  0, 1, 0, 0,
+  0, 0, 1, 0,
+  0, 0, 0, 1
+];
+
+test("composed package mesh bakes each occurrence transform into copied vertices", () => {
+  const descriptor = {
+    schemaVersion: 1,
+    kind: "assembly-package",
+    rootName: "demo",
+    components: { cA: { glb: "components/cA.glb", contentHash: "abc" } },
+    occurrences: [
+      { id: "o1.1", name: "part_a", component: "cA", transform: IDENTITY_4X4 },
+      {
+        id: "o1.2",
+        name: "part_b",
+        component: "cA",
+        transform: [
+          1, 0, 0, 10,
+          0, 1, 0, 0,
+          0, 0, 1, 0,
+          0, 0, 0, 1
+        ]
+      }
+    ]
+  };
+  const composed = buildComposedPackageMeshData(descriptor, { cA: unitTriangleComponentMeshData() });
+
+  assert.equal(composed.parts.length, 2);
+  assert.equal(composed.partTransformsBaked, true);
+  assert.equal(composed.vertices.length, 18); // 2 occ * 3 verts * 3
+  assert.equal(composed.indices.length, 6);
+
+  // o1.1 (identity) keeps local positions.
+  assert.deepEqual([...composed.vertices.slice(0, 9)], [0, 0, 0, 1, 0, 0, 0, 1, 0]);
+  // o1.2 is shifted +10 on x.
+  assert.deepEqual([...composed.vertices.slice(9, 18)], [10, 0, 0, 11, 0, 0, 10, 1, 0]);
+
+  // Each output part carries the assembly occurrence id + component id, and the pick range uses
+  // the SAME assembly occurrence id so it matches the composed selector runtime's remapped
+  // occurrence id (letting buildGlbFaceIdsForPart resolve render-mesh triangles to this
+  // occurrence's faces). The component-local primitive index is preserved for the run lookup.
+  assert.equal(composed.parts[1].occurrenceId, "o1.2");
+  assert.equal(composed.parts[1].componentId, "cA");
+  assert.equal(composed.parts[1].sourcePartRanges[0].occurrenceId, "o1.2");
+  assert.equal(composed.parts[1].sourcePartRanges[0].primitiveIndex, 0);
+  // Second part's indices are rebased onto the second vertex block.
+  assert.deepEqual([...composed.indices.slice(3, 6)], [3, 4, 5]);
+  // Bounds reflect the world-baked positions.
+  assert.deepEqual(composed.parts[1].bounds, { min: [10, 0, 0], max: [11, 1, 0] });
+});
+
+test("composed package mesh flips winding for a mirrored occurrence", () => {
+  const descriptor = {
+    occurrences: [
+      {
+        id: "o1.1",
+        name: "mirror",
+        component: "cA",
+        transform: [
+          -1, 0, 0, 0,
+          0, 1, 0, 0,
+          0, 0, 1, 0,
+          0, 0, 0, 1
+        ]
+      }
+    ]
+  };
+  const composed = buildComposedPackageMeshData(descriptor, { cA: unitTriangleComponentMeshData() });
+  // det < 0 => winding reversed from [0,1,2] to [0,2,1].
+  assert.deepEqual([...composed.indices], [0, 2, 1]);
+  // x mirrored.
+  assert.deepEqual([...composed.vertices.slice(0, 9)], [0, 0, 0, -1, 0, 0, 0, 1, 0]);
+});
+
+test("composed package mesh records missing components instead of throwing", () => {
+  const descriptor = {
+    occurrences: [
+      { id: "o1.1", name: "present", component: "cA", transform: IDENTITY_4X4 },
+      { id: "o1.2", name: "absent", component: "cMissing", transform: IDENTITY_4X4 }
+    ]
+  };
+  const composed = buildComposedPackageMeshData(descriptor, { cA: unitTriangleComponentMeshData() });
+  assert.equal(composed.parts.length, 1);
+  assert.deepEqual(composed.missingComponentIds, ["cMissing"]);
+});
+
+test("single-component part carries NO assemblyRoot so the viewer renders a topology tree", () => {
+  // entryKind:"part" is a single-component package: the viewer must render it like a monolithic
+  // STEP part (topology tree of solids/faces/edges), NOT a one-node assembly wrapper. Returning a
+  // synthesized assemblyRoot would make buildStepTreeRoot show "No assembly tree" in the part view.
+  const partDescriptor = {
+    kind: "assembly-package",
+    entryKind: "part",
+    rootName: "bracket",
+    components: { cA: { glb: "components/cA.glb", contentHash: "abc" } },
+    occurrences: [{ id: "o1.1", name: "bracket", component: "cA", transform: IDENTITY_4X4 }]
+  };
+  const part = buildComposedPackageMeshData(partDescriptor, { cA: unitTriangleComponentMeshData() });
+  assert.equal(part.parts.length, 1, "the single component still composes a render part");
+  assert.equal(part.assemblyRoot, null, "a part has no assembly structure tree");
+
+  // An assembly with the same single occurrence DOES synthesize a root (structure tree).
+  const assemblyDescriptor = { ...partDescriptor, entryKind: "assembly" };
+  const assembly = buildComposedPackageMeshData(assemblyDescriptor, { cA: unitTriangleComponentMeshData() });
+  assert.ok(assembly.assemblyRoot, "an assembly keeps its structure tree");
+  assert.equal(assembly.assemblyRoot.nodeType, "assembly");
 });

@@ -653,6 +653,29 @@ test("filenameLabelForEntry shows canonical step, stl, 3mf, glb, gcode, dxf, urd
   );
 });
 
+test("filenameLabelForEntry surfaces Python-generated STEP models as .step.py", () => {
+  // A gen_step Python model has no committed STEP (logical `<stem>.step`, real source `<stem>.py`);
+  // show it as `<stem>.step.py` so the explorer distinguishes generators from static STEP files.
+  assert.equal(
+    filenameLabelForEntry({
+      file: "simple/spur_gear_blank.step",
+      kind: "part",
+      sourceKind: "python",
+      sourcePath: "simple/spur_gear_blank.py"
+    }),
+    "spur_gear_blank.step.py"
+  );
+  // A committed STEP (sourceKind step) keeps the plain `.step` label.
+  assert.equal(
+    filenameLabelForEntry({
+      file: "imports/widget.step",
+      kind: "part",
+      sourceKind: "step"
+    }),
+    "widget.step"
+  );
+});
+
 test("sidebarLabelForEntry uses the same suffix-aware filename labels", () => {
   const entry = {
     file: "sample_assembly.step",
