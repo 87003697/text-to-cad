@@ -128,7 +128,7 @@ function FileMetadataTabContent({ entry, groups, fileAccessBusyKey = "", onOpenF
   return (
     <div aria-label="File metadata">
         {groups.map((group) => (
-          <FileSheetSubsection key={group.title} title={group.title} contentClassName="px-3">
+          <FileSheetSubsection key={group.title} title={group.title} contentClassName="px-2">
             <dl className="space-y-1.5">
               {group.rows.map((row) => (
                 <div
