@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef } from "react";
-import { ChevronRight, ClipboardPaste, Copy, Eye, EyeOff, Link2, Pause, Play, RotateCcw, X } from "lucide-react";
+import { Box, Boxes, ChevronRight, ClipboardPaste, Copy, Eye, EyeOff, Link2, Pause, Play, RotateCcw, X } from "lucide-react";
 import { cn } from "@/ui/utils";
 import {
   STEP_MODEL_ROOT_ID,
@@ -429,10 +429,15 @@ function TopologyTreeGlyph({ row, type }) {
 
 function StepTreeRowGlyph({ row }) {
   const topologyType = topologyTreeRowType(row);
-  if (topologyType) {
+  // Topology leaves (faces/edges/shapes) keep their geometric glyph; everything
+  // else — assemblies, components, and part occurrences — gets a box icon so
+  // every tree row carries an icon, not only the leaf topology nodes.
+  if (topologyType && topologyType !== "occurrence") {
     return <TopologyTreeGlyph row={row} type={topologyType} />;
   }
-  return null;
+  const nodeType = String(row?.nodeType || row?.node?.nodeType || "").trim();
+  const Icon = nodeType === "assembly" ? Boxes : Box;
+  return <Icon className={treeGlyphIconClasses} strokeWidth={1.6} aria-hidden="true" />;
 }
 
 function normalizeAssemblyMateRows(assemblyMates) {
