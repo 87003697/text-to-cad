@@ -324,8 +324,6 @@ def main(argv: list[str] | None = None) -> int:
             "gen_step",
             logger=logger,
             force=bool(args.force),
-            load_current_scene=False,
-            skip_step_write=True,
         )
         if scene is None:
             raise RuntimeError(f"Python generator did not produce a STEP scene: {existing_spec.source_ref}")

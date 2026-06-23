@@ -61,9 +61,12 @@ def _add_step_arguments(parser: argparse.ArgumentParser) -> None:
         help="Export a native Y-up GLB sidecar to this relative .glb path.",
     )
     parser.add_argument(
-        "--skip-step-write",
-        action="store_true",
-        help="For Python gen_step() targets, generate the hidden GLB/topology artifact without writing STEP.",
+        "--step",
+        metavar="OUTPUT",
+        help=(
+            "Export a text STEP file to this relative .step path. gen_step() builds GLB "
+            "render artifacts by default; STEP is written only on demand via this option."
+        ),
     )
     parser.add_argument(
         "--force",
@@ -92,6 +95,7 @@ def _step_import_options_from_args(args: argparse.Namespace, *, parser: argparse
         stl=args.stl,
         three_mf=args.three_mf,
         glb=args.glb,
+        step=args.step,
         mesh_tolerance=_normalize_cli_numeric(
             args.mesh_tolerance,
             field_name="mesh_tolerance",
@@ -127,7 +131,6 @@ def main(argv: Sequence[str] | None = None) -> int:
         direct_step_kind=args.kind,
         step_options=_step_import_options_from_args(args, parser=parser),
         output=args.output,
-        skip_step_write=bool(args.skip_step_write),
         force=bool(args.force),
         verbose=bool(args.verbose),
     )

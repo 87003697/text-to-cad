@@ -83,6 +83,7 @@ def export_assembly_glb_from_scene(
     step_path: Path,
     scene: LoadedStepScene,
     *,
+    target_path: Path | None = None,
     linear_deflection: float,
     angular_deflection: float,
     color: tuple[float, float, float, float] | None = None,
@@ -90,7 +91,10 @@ def export_assembly_glb_from_scene(
     selector_bundle: SelectorBundle | None = None,
     include_selector_topology: bool = True,
 ) -> Path:
-    target_path = part_glb_path(step_path)
+    # ``target_path`` writes the GLB exactly there (used by the component builder to land a
+    # clean leaf GLB inside its package, with no derived __cadcache__ scaffolding). Default
+    # derives the package path from ``step_path``.
+    target_path = target_path if target_path is not None else part_glb_path(step_path)
     # The caller meshes the scene before scheduling artifact jobs. Keep the
     # deflection args on this API so assembly/part exports share one contract.
     _ = (linear_deflection, angular_deflection)
@@ -1094,6 +1098,13 @@ def read_step_topology_bundle_from_glb(glb_path: Path) -> SelectorBundle | None:
 
 
 def read_step_topology_index_from_glb(glb_path: Path) -> dict[str, Any] | None:
+    if glb_path.is_dir():
+        # Component-GLB package: the canonical assembly artifact is a directory whose
+        # assembly.json IS the index manifest (provenance + occurrences). Return it so
+        # build freshness gates (stepHash / sourceClosure) read it like a monolith blob.
+        from cadpy.component_package import read_package_descriptor
+
+        return read_package_descriptor(glb_path)
     try:
         gltf, binary_offset, binary_length = _read_glb_json_and_bin_location(glb_path)
     except (OSError, ValueError, json.JSONDecodeError):

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import os
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -134,8 +135,32 @@ def repo_local_loaded_modules(module_names: object) -> dict[str, Path]:
     return result
 
 
-def closure_for_files(script_path: Path, files: object) -> PythonSourceClosure:
-    """Build a closure record from the script plus a set of dependency files."""
+def _relative_to_base(path: Path, base: Path) -> str:
+    """A closure file's path relative to the model folder ``base`` (the directory that holds the
+    generator source / logical STEP). Uses ``os.path.relpath`` so a sibling or parent file gets a
+    clean ``../`` ref instead of an absolute or repo-root-anchored path — this keeps the closure
+    (and the descriptor that records it) location-independent: the same model produces the same
+    closure regardless of where the repository lives on disk."""
+    return Path(os.path.relpath(path.resolve(), base.resolve())).as_posix()
+
+
+def _resolve_against_base(relative: str, base: Path) -> Path | None:
+    """Inverse of :func:`_relative_to_base`: resolve a ``base``-relative (or absolute) recorded
+    closure path back to an existing file."""
+    rel = str(relative or "").strip()
+    if not rel:
+        return None
+    candidate = Path(rel)
+    resolved = (candidate if candidate.is_absolute() else (base / candidate)).resolve()
+    return resolved if resolved.is_file() else None
+
+
+def closure_for_files(script_path: Path, files: object, *, base: Path) -> PythonSourceClosure:
+    """Build a closure record from the script plus a set of dependency files, recording every path
+    RELATIVE TO ``base`` (the model folder). The digest is computed over (relative path, content
+    hash) pairs, so it — like the stored ``files`` — is independent of the absolute repository
+    location."""
+    base_dir = base.expanduser().resolve()
     paths: set[Path] = {script_path.expanduser().resolve()}
     for file in files:
         paths.add(Path(file).expanduser().resolve())
@@ -145,7 +170,7 @@ def closure_for_files(script_path: Path, files: object) -> PythonSourceClosure:
             file_hash = _sha256_file(path)
         except OSError:
             continue
-        pairs.append((_manifest_path(path), file_hash))
+        pairs.append((_relative_to_base(path, base_dir), file_hash))
     return PythonSourceClosure(
         closure_hash=_closure_hash_for_pairs(pairs),
         files=tuple(sorted(rel for rel, _ in pairs)),
@@ -156,6 +181,7 @@ def capture_runtime_closure(
     before_module_names: object,
     script_path: Path,
     *,
+    base: Path,
     extra_files: object = (),
 ) -> PythonSourceClosure:
     """Capture a generator's import closure after running it.
@@ -164,27 +190,29 @@ def capture_runtime_closure(
     the generator module was loaded; the newly imported repo-local modules are
     its dependency closure. ``extra_files`` folds additional inputs into the
     closure — used by assemblies to include the child STEP files they compose
-    from, so the closure hash also captures "a referenced child changed".
+    from, so the closure hash also captures "a referenced child changed". Every
+    recorded path is relative to ``base`` (the model folder).
     """
     import sys
 
     new_names = set(sys.modules) - set(before_module_names)
     dependency_files = [*repo_local_loaded_modules(new_names).values(), *extra_files]
-    return closure_for_files(script_path, dependency_files)
+    return closure_for_files(script_path, dependency_files, base=base)
 
 
-def closure_hash_from_files(relative_files: object) -> str | None:
-    """Recompute a closure hash from a previously recorded relative file list.
+def closure_hash_from_files(relative_files: object, *, base: Path) -> str | None:
+    """Recompute a closure hash from a previously recorded ``base``-relative file list.
 
     Returns ``None`` when any recorded file is missing, which callers treat as
     "stale" (rebuild rather than risk reusing geometry built from absent
     sources)."""
+    base_dir = base.expanduser().resolve()
     pairs: list[tuple[str, str]] = []
     for relative in relative_files:
         rel = str(relative or "").strip()
         if not rel:
             continue
-        resolved = _resolve_manifest_path(rel)
+        resolved = _resolve_against_base(rel, base_dir)
         if resolved is None:
             return None
         try:
