@@ -759,7 +759,7 @@ export default function StepFileSheet({
       title: "Tree",
       titleAttr: treeSelectionTitle || undefined,
       content: (
-            <div className="max-w-full overflow-hidden px-1.5 pb-2">
+            <div className="max-w-full overflow-hidden pb-2">
               <div
                 className="select-none space-y-px"
                 role="tree"
@@ -1326,10 +1326,10 @@ export default function StepFileSheet({
                 ) : null}
 
                 {stepModuleStatus === "loading" ? (
-                  <p className="px-3 py-2 text-xs text-[var(--ui-text-muted)]">Loading STEP module...</p>
+                  <p className="px-2 py-2 text-xs text-[var(--ui-text-muted)]">Loading STEP module...</p>
                 ) : null}
                 {stepModuleError ? (
-                  <p className="whitespace-pre-line px-3 py-2 text-xs text-destructive">{stepModuleError}</p>
+                  <p className="whitespace-pre-line px-2 py-2 text-xs text-destructive">{stepModuleError}</p>
                 ) : null}
 
                 {stepModuleDefinition && stepModuleAnimations.length ? (
@@ -1420,7 +1420,7 @@ export default function StepFileSheet({
                 ) : null}
 
                 {stepModuleDefinition && !stepModuleParameters.length ? (
-                  <p className="px-3 py-2 text-xs text-[var(--ui-text-muted)]">No module parameters.</p>
+                  <p className="px-2 py-2 text-xs text-[var(--ui-text-muted)]">No module parameters.</p>
                 ) : null}
                 {stepModuleParameters.map((parameter) => {
                   const value = stepModuleValues?.[parameter.id] ?? parameter.defaultValue;

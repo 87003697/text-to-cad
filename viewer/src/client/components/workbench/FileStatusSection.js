@@ -95,7 +95,7 @@ function FileStatusTabContent({ items = [] }) {
   };
 
   return (
-    <ul className="space-y-3 px-3 py-3 text-xs leading-5">
+    <ul className="space-y-2.5 px-2 py-2 text-xs leading-5">
         {statusItems.map((item) => {
           const itemMeta = renderMetaForLevel(item.level);
           const details = Array.isArray(item.details) ? item.details : [];
@@ -110,7 +110,7 @@ function FileStatusTabContent({ items = [] }) {
                 role={hasDetails ? "button" : undefined}
                 tabIndex={hasDetails ? 0 : undefined}
                 className={cn(
-                  "block min-w-0 rounded-md py-1 pl-2.5 pr-1 text-left",
+                  "block min-w-0 rounded-md py-1 pl-2 pr-1 text-left",
                   hasDetails && "w-full cursor-pointer hover:bg-sidebar-accent/60 hover:text-sidebar-accent-foreground",
                   !hasDetails && "w-full"
                 )}

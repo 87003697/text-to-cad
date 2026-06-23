@@ -399,7 +399,7 @@ export default function UrdfFileSheet({
       title: "SDF",
       content: (
               <div>
-                <FileSheetSubsection title="Document" contentClassName="px-3">
+                <FileSheetSubsection title="Document" contentClassName="px-2">
                 <div className="grid grid-cols-2 gap-2">
                   <SdfValueField label="Version" value={String(sdfInfo.version || "unknown")} />
                   <SdfValueField label="Document" value={String(sdfInfo.documentKind || "model")} />
@@ -412,7 +412,7 @@ export default function UrdfFileSheet({
                 </div>
                 </FileSheetSubsection>
 
-                <FileSheetSubsection title="Counts" contentClassName="px-3">
+                <FileSheetSubsection title="Counts" contentClassName="px-2">
                 <div className="grid grid-cols-3 gap-2">
                   <SdfValueField label="Links" value={String(sdfInfo.linkCount ?? movableJoints.length)} />
                   <SdfValueField label="Joints" value={String(sdfInfo.jointCount ?? joints?.length ?? 0)} />
@@ -428,7 +428,7 @@ export default function UrdfFileSheet({
                 </FileSheetSubsection>
 
                 {hasSdfMetadata ? (
-                  <FileSheetSubsection title="Metadata" contentClassName="px-3">
+                  <FileSheetSubsection title="Metadata" contentClassName="px-2">
                     <SdfMetadataList title="Includes" items={sdfIncludes} fields={["name", "uri"]} />
                     <SdfMetadataList title="Plugins" items={sdfPlugins} fields={["name", "filename"]} />
                     <SdfMetadataList title="Sensors" items={sdfSensors} fields={["name", "type"]} />
@@ -818,7 +818,7 @@ export default function UrdfFileSheet({
                 </FileSheetSubsection>
               </>
             ) : (
-              <p className="px-3 py-2 text-xs text-muted-foreground">No movable joints are available.</p>
+              <p className="px-2 py-2 text-xs text-muted-foreground">No movable joints are available.</p>
             )
       )
     } : null,

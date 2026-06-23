@@ -511,7 +511,7 @@ function FileViewerContents({
 
       <SidebarContent>
         <ScrollArea className="cad-file-viewer-scroll min-h-0 min-w-0 flex-1 overflow-x-hidden" type="auto">
-          <SidebarGroup>
+          <SidebarGroup className="p-1">
             <SidebarGroupContent>
               {hasMatches ? (
                 <SidebarMenu>

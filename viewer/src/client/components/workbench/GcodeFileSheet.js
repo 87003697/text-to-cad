@@ -201,10 +201,10 @@ export default function GcodeFileSheet({
       content: (
             <div>
               {!hasGcodeData ? (
-                <p className="px-3 py-2 text-xs text-muted-foreground">Loading G-code...</p>
+                <p className="px-2 py-2 text-xs text-muted-foreground">Loading G-code...</p>
               ) : null}
 
-              <FileSheetSubsection title="Summary" contentClassName="px-3">
+              <FileSheetSubsection title="Summary" contentClassName="px-2">
                 <div className="flex flex-wrap gap-1.5">
                   <Badge variant="secondary" className="font-normal">
                     {formatCount(layerCount)} layer{layerCount === 1 ? "" : "s"}
@@ -324,7 +324,7 @@ export default function GcodeFileSheet({
             </span>
       ),
       content: (
-            <div className="space-y-2 px-3 py-2.5">
+            <div className="space-y-2 px-2 py-2.5">
               {!features.length ? (
                 <p className="text-xs leading-5 text-muted-foreground">
                   No slicer feature annotations found. The preview can still show layers, extrusion paths, and travel moves.
@@ -382,7 +382,7 @@ export default function GcodeFileSheet({
       id: "stats",
       title: "Stats",
       content: (
-            <div className="grid grid-cols-2 gap-2 px-3 py-3">
+            <div className="grid grid-cols-2 gap-2 px-2 py-3">
               <GcodeValueField label="Extrusion" value={formatDistance(stats.extrusionMm, 1)} />
               <GcodeValueField label="Path length" value={formatDistance(stats.pathMm, 1)} />
               <GcodeValueField label="Retracts" value={formatCount(stats.retractMoves)} />
@@ -396,7 +396,7 @@ export default function GcodeFileSheet({
       id: "bounds",
       title: "Bounds",
       content: (
-            <div className="grid grid-cols-1 gap-2 px-3 py-3">
+            <div className="grid grid-cols-1 gap-2 px-2 py-3">
               <GcodeValueField label="X" value={boundsAxisText(gcodeData?.bounds, 0, 1)} mono />
               <GcodeValueField label="Y" value={boundsAxisText(gcodeData?.bounds, 1, 1)} mono />
               <GcodeValueField label="Z" value={boundsAxisText(gcodeData?.bounds, 2, 2)} mono />
