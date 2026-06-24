@@ -10,7 +10,6 @@ import {
 } from "@/components/ui/tooltip";
 
 const GITHUB_REPO_URL = "https://github.com/earthtojake/text-to-cad";
-const DISCORD_URL = "https://discord.gg/5FGB9DwJYU";
 
 function DiscordLogo({ className }: { className?: string }) {
   return (
@@ -67,9 +66,11 @@ function VersionLink({ version }: { version: string }) {
 
 export function SiteHeaderClient({
   githubStars,
+  discordUrl,
   version,
 }: {
   githubStars: number | null;
+  discordUrl: string;
   version: string;
 }) {
   const githubLabel =
@@ -134,7 +135,7 @@ export function SiteHeaderClient({
                 className="card-glow h-8 w-8 border-border bg-card text-foreground hover:bg-secondary hover:text-primary"
               >
                 <a
-                  href={DISCORD_URL}
+                  href={discordUrl}
                   target="_blank"
                   rel="noreferrer"
                   aria-label="Join the CAD Skills Discord"

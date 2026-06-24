@@ -24,6 +24,7 @@ import {
   isViewerReleaseNewer,
   viewerGithubLatestReleaseApiUrl,
   viewerGithubLatestReleaseUrl,
+  normalizeViewerDiscordUrl,
   normalizeViewerGithubUrl,
   viewerGithubReleaseUrl,
   viewerSkillsInstallCommandFromText
@@ -690,7 +691,6 @@ function DiscordMark(props) {
   );
 }
 
-const DISCORD_URL = "https://discord.gg/5FGB9DwJYU";
 const topBarIconButtonClasses = "size-7";
 const topBarIconClasses = "size-4";
 const latestReleaseCacheKeyPrefix = "cad-viewer:latest-release:v1:";
@@ -1101,6 +1101,7 @@ export default function CadWorkspaceTopBar({
   navigationAvailable = true
 }) {
   const viewerVersion = String(viewerPackage.version || "").trim();
+  const discordUrl = normalizeViewerDiscordUrl(import.meta.env?.VIEWER_DISCORD_URL);
   const githubUrl = normalizeViewerGithubUrl(import.meta.env?.VIEWER_GITHUB_URL);
   const releaseUrl = viewerGithubReleaseUrl(viewerVersion, githubUrl);
   const latestReleaseUrl = viewerGithubLatestReleaseUrl(githubUrl);
@@ -1296,7 +1297,7 @@ export default function CadWorkspaceTopBar({
             title="Join the CAD Skills Discord"
             className={topBarIconButtonClasses}
           >
-            <a href={DISCORD_URL} target="_blank" rel="noreferrer">
+            <a href={discordUrl} target="_blank" rel="noreferrer">
               <DiscordMark className={topBarIconClasses} />
             </a>
           </Button>
