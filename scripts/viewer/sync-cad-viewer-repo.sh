@@ -260,7 +260,6 @@ const pathReplacements = [
   ["../packages/cadjs", "packages/cadjs"],
   ["../packages/cadpy", "packages/cadpy"],
   ["../.venv/bin/python -m pip install -e packages/cadpy", "python -m pip install -e packages/cadpy"],
-  ["npm --prefix viewer run upload:blob", "npm run upload:blob"],
   ["npm run build\nnpm run runtime:check", "npm run build"],
   [
     "\nWhen changing Viewer source that feeds the cad-viewer skill runtime, refresh the\ngenerated runtime from the repository root:\n\n```bash\nscripts/bundle/bundle-skill.sh cad-viewer\nscripts/bundle/bundle-skill.sh cad-viewer --check\n```\n",

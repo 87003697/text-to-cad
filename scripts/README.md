@@ -152,13 +152,11 @@ fallback, but the workflow path is preferred.
 | Workflow | Branches/events | Purpose |
 | -------- | --------------- | ------- |
 | `test.yml` | pushes to `develop`; PRs to `develop`; manual dispatch | Checks `plugins/cad/VERSION` and derived metadata as a separate job so the test job still runs if release metadata is wrong. The test job checks the `develop` symlink layout, bundles temporary production outputs, checks that layout without rebuilding it, and runs docs and code tests against the generated output. Superseded PR runs are cancelled. |
-| `release.yml` | manual dispatch | The single release workflow: release PR, production publish commit to the target branch, models upload, web-app deploys, semver tag, and GitHub Release in one run. See the Releases section in `CONTRIBUTING.md` for the full flow, CI/CD-testing, and resume options. |
+| `release.yml` | manual dispatch | The single release workflow: release PR, production publish commit to the target branch, docs deploy, semver tag, and GitHub Release in one run. See the Releases section in `CONTRIBUTING.md` for the full flow, CI/CD-testing, and resume options. |
 | `deploy-docs.yml` | manual dispatch; called by `release.yml` | Deploys the docs app to Vercel production from a production-layout ref (default `main`): configures Vercel Authentication for preview deployments only, runs `vercel pull/build/deploy --prod`, and verifies the public production URLs. |
-| `deploy-viewer.yml` | manual dispatch; called by `release.yml` | Deploys the demo viewer app to Vercel production from a production-layout ref (default `main`), with the same protection and public URL checks as `deploy-docs.yml`. |
-| `upload-models.yml` | manual dispatch; called by `release.yml` | Uploads the `models/` catalog and CAD Viewer assets to Vercel Blob via `scripts/viewer/upload-viewer-models-catalog.sh`, skipping assets that already match remote and fetching only the missing LFS objects. Upload from a source ref (default `develop`); `main` does not contain `models/`. |
 
-In short: use `release.yml` for releases, use `deploy-docs.yml` and
-`deploy-viewer.yml` to redeploy the individual web apps from `main`, use
-`upload-models.yml` to push new models to Vercel Blob from `develop`, treat
-`develop` as the editable symlink branch, and keep `main` as the explicit
-publish-only production branch for user clones and published releases.
+In short: use `release.yml` for releases, use `deploy-docs.yml` to redeploy the
+docs site from `main`, treat `develop` as the editable symlink branch, and keep
+`main` as the explicit publish-only production branch for user clones and
+published releases. The CAD Viewer is a local-filesystem app with no hosted
+deployment.
