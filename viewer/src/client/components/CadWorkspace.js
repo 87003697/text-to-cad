@@ -8710,6 +8710,7 @@ export default function CadWorkspace({
           onToggleFileSheet={handleToggleFileSheet}
           appearanceEditing={appearanceEditing}
           onOpenAppearanceEditor={openAppearanceEditor}
+          onCloseAppearanceEditor={closeAppearanceEditor}
           navigationAvailable={directoryNavigationAvailable}
         />
 
