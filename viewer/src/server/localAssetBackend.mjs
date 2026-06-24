@@ -12,9 +12,11 @@ import {
   sortCatalogEntries,
 } from "./catalog/cadDirectoryScanner.mjs";
 import {
-  generationStatusDir as resolveGenerationStatusDir,
-  readGenerationStatus,
-} from "./catalog/generationStatus.mjs";
+  generationLockPath,
+  generationLockActive,
+  awaitGenerationLock,
+} from "./catalog/generationLock.mjs";
+import { inlineStepGlbArtifactPathForSource } from "cadjs/common/stepSidecars.mjs";
 import { pathIsInside } from "cadjs/lib/pathUtils.mjs";
 import { ensureStepTopologyArtifact } from "./step/stepArtifactCompiler.mjs";
 import { createRenderArtifactPipeline } from "./artifact/renderArtifact.mjs";
@@ -379,28 +381,6 @@ function absolutizeCatalog(catalog, context) {
       .map((entry) => absolutizeCatalogEntry(entry, context))
       .filter(Boolean),
   });
-}
-
-function absolutizeGenerationStatus(status, rootPath) {
-  const files = {};
-  for (const [file, value] of Object.entries(status?.files || {})) {
-    const absolute = absoluteFileRef(path.resolve(rootPath, String(file || "")));
-    files[absolute] = {
-      ...value,
-      file: absolute,
-      rootRelativeFile: relativeFileRef(rootPath, absolute),
-    };
-  }
-  return {
-    schemaVersion: 1,
-    runs: (Array.isArray(status?.runs) ? status.runs : []).map((run) => ({
-      ...run,
-      files: (Array.isArray(run?.files) ? run.files : [])
-        .map((file) => absoluteFileRef(path.resolve(rootPath, String(file || ""))))
-        .filter(Boolean),
-    })),
-    files,
-  };
 }
 
 export function createLocalAssetBackend({
@@ -938,30 +918,13 @@ export function createLocalAssetBackend({
     }, context.scanRepoRoot);
   }
 
-  function readGeneratorStatus({ rootDir: nextRootDir = defaultRootDir } = {}) {
-    const resolvedRoot = resolveRoot(effectiveRootDirForRequest(nextRootDir));
-    const context = scanContextForRoot(resolvedRoot);
-    return absolutizeGenerationStatus(readGenerationStatus({
-      repoRoot: context.scanRepoRoot,
-      rootDir: context.scanRootDir,
-    }), resolvedRoot.rootPath);
-  }
-
-  function generationStatusDir(rootDir = defaultRootDir) {
-    const resolvedRoot = resolveRoot(effectiveRootDirForRequest(rootDir));
-    const context = scanContextForRoot(resolvedRoot);
-    return resolveGenerationStatusDir(context.scanRepoRoot, context.scanRootDir);
-  }
-
-  function isGenerationStatusPath(filePath, rootDir = defaultRootDir) {
-    const resolvedRoot = resolveRoot(effectiveRootDirForRequest(rootDir));
-    const resolvedPath = path.resolve(filePath);
-    const name = path.basename(resolvedPath);
-    return (
-      (resolvedPath === resolvedRoot.rootPath || pathIsInside(resolvedPath, resolvedRoot.rootPath)) &&
-      name.startsWith(".") &&
-      name.endsWith(".generation.lock.json")
-    );
+  function lockPathFor({ fileRef, resolvedRoot = resolveRequestRoot({ fileRef }), catalog = null } = {}) {
+    try {
+      const { stepPath } = resolveStepSource(fileRef, { resolvedRoot, catalog: catalog || readCatalogSafe({ fileRef }) });
+      return generationLockPath(inlineStepGlbArtifactPathForSource(stepPath));
+    } catch {
+      return "";
+    }
   }
 
   function entryForSourcePath(catalog, resolvedRoot, sourcePath) {
@@ -1026,6 +989,8 @@ export function createLocalAssetBackend({
         build: ({ fileRef, force, resolvedRoot, catalog }) =>
           generateStepArtifact({ fileRef, force, resolvedRoot, catalog }),
         artifactRef: (entry) => String(entry?.url || ""),
+        lockActive: (args) => generationLockActive(lockPathFor(args)),
+        awaitLock: (args) => awaitGenerationLock(lockPathFor(args)),
       }),
     ],
     directRef: (entry) => String(entry?.url || ""),
@@ -1062,9 +1027,6 @@ export function createLocalAssetBackend({
     openFileAsset,
     resolveSourceFileAccess,
     openSourceFile,
-    readGenerationStatus: readGeneratorStatus,
-    generationStatusDir,
-    isGenerationStatusPath,
     generateStepArtifact,
     generateImplicitExport,
     artifactStatus,

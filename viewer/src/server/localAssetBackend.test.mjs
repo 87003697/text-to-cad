@@ -243,30 +243,12 @@ test("local backend incrementally refreshes STEP entries when sidecars change", 
   });
 });
 
-test("local backend reports active generator status for the active root", async () => {
+test("local backend does not expose readGenerationStatus (replaced by lock-in-pull)", async () => {
   await withTempDirectoryRoot((directoryRoot) => {
-    const modelRoot = path.join(directoryRoot, "models");
-    const statusPath = path.join(modelRoot, ".part.step.run-1.generation.lock.json");
-    const updatedAt = new Date().toISOString();
-    fs.mkdirSync(modelRoot, { recursive: true });
-    fs.writeFileSync(statusPath, JSON.stringify({
-      status: "running",
-      id: "run-1",
-      pid: process.pid,
-      startedAt: updatedAt,
-      updatedAt,
-      sourcePath: "models/part.py",
-      generator: "gen_step",
-      outputs: [{ path: "models/part.step", kind: "step" }],
-    }));
     const backend = createLocalAssetBackend({ directoryRoot, rootDir: "models" });
-
-    const status = backend.readGenerationStatus();
-
-    assert.equal(status.files[path.join(modelRoot, "part.step")].running, true);
-    assert.equal(status.files[path.join(modelRoot, "part.step")].generator, "gen_step");
-    assert.equal(backend.generationStatusDir(), modelRoot);
-    assert.equal(backend.isGenerationStatusPath(statusPath), true);
+    assert.equal(typeof backend.readGenerationStatus, "undefined");
+    assert.equal(typeof backend.generationStatusDir, "undefined");
+    assert.equal(typeof backend.isGenerationStatusPath, "undefined");
   });
 });
 

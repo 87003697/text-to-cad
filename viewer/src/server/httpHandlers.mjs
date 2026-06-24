@@ -270,22 +270,6 @@ export function createCadViewerApiMiddleware({
       }
       return;
     }
-    if (requestUrl.pathname === "/__cad/generation-status") {
-      if (typeof backend.readGenerationStatus !== "function") {
-        sendJson(res, 501, {
-          error: "Generation status is not available for this CAD Viewer backend",
-        });
-        return;
-      }
-      try {
-        sendJson(res, 200, await backend.readGenerationStatus({ rootDir: activeRootDir }));
-      } catch (error) {
-        sendJson(res, 400, {
-          error: errorMessage(error),
-        });
-      }
-      return;
-    }
     if (requestUrl.pathname === "/__cad/download") {
       const method = String(req.method || "GET").toUpperCase();
       if (method !== "GET") {

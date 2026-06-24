@@ -43,7 +43,7 @@ from cadpy.glb_topology import (
     STEP_EDGE_VISIBILITY_CLASSES,
     normalize_step_edge_render_visibility_classes,
 )
-from cadpy.generation_status import GenerationOutput, track_generation_run
+from cadpy.generation_status import generation_lock_path, track_generation_run
 from cadpy.metadata import (
     DEFAULT_MESH_ANGULAR_TOLERANCE,
     DEFAULT_MESH_TOLERANCE,
@@ -1706,29 +1706,13 @@ def _generated_dxf_summary(spec: EntrySpec) -> str:
     return f"processed: {spec.source_ref}"
 
 
-def _generation_outputs_for_spec(spec: EntrySpec, generator_name: str) -> tuple[GenerationOutput, ...]:
-    outputs: list[GenerationOutput] = []
-    if generator_name == "gen_step" and spec.step_path is not None:
-        outputs.append(GenerationOutput(spec.step_path, "step"))
-        outputs.append(GenerationOutput(part_glb_path(spec.step_path), "glb"))
-        if spec.stl_path is not None:
-            outputs.append(GenerationOutput(spec.stl_path, "stl"))
-        if spec.three_mf_path is not None:
-            outputs.append(GenerationOutput(spec.three_mf_path, "3mf"))
-        if spec.native_glb_path is not None:
-            outputs.append(GenerationOutput(spec.native_glb_path, "glb"))
-    elif generator_name == "gen_dxf" and spec.dxf_path is not None:
-        outputs.append(GenerationOutput(spec.dxf_path, "dxf"))
-    return tuple(outputs)
-
-
 def _track_spec_generation(spec: EntrySpec, generator_name: str) -> contextlib.AbstractContextManager[None]:
-    return track_generation_run(
-        source_path=spec.script_path or spec.source_path,
-        generator=generator_name,
-        outputs=_generation_outputs_for_spec(spec, generator_name),
-        repo_root=REPO_ROOT,
-    )
+    # Only a generated STEP package is coordinated with the viewer's artifact pull: lock the model's
+    # __cadcache__ package so a concurrent viewer/CLI build detects the in-flight run and waits for
+    # it instead of duplicating the work. Non-package generators (e.g. gen_dxf) are not locked.
+    if generator_name == "gen_step" and spec.step_path is not None:
+        return track_generation_run(generation_lock_path(part_glb_path(spec.step_path)))
+    return track_generation_run(None)
 
 
 def _run_with_spec_generation_status(
