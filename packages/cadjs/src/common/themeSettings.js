@@ -997,7 +997,7 @@ const TERMINAL_THEME_PRESET_SETTINGS = withThemeColorMode(TERMINAL_THEME_SETTING
 export const THEME_PRESETS = Object.freeze([
   {
     id: "workbench-light",
-    label: "Workbench Light",
+    label: "Light",
     description: "Balanced CAD workbench lighting on a light canvas.",
     preview: {
       background: "#f0f4f9",
@@ -1008,7 +1008,7 @@ export const THEME_PRESETS = Object.freeze([
   },
   {
     id: "workbench-dark",
-    label: "Workbench Dark",
+    label: "Dark",
     description: "Balanced CAD workbench lighting on a deep blue-slate canvas.",
     preview: {
       background: "#181f28",
