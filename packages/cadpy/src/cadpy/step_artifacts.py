@@ -49,7 +49,7 @@ def ensure_step_topology_artifact(
         mesh_tolerance=mesh_tolerance,
         mesh_angular_tolerance=mesh_angular_tolerance,
     )
-    resolved_glb_path = glb_path or part_glb_path(spec.step_path)
+    resolved_glb_path = glb_path or part_glb_path(spec.entry_path)
 
     # The canonical render artifact for a generated assembly is a component-GLB package
     # directory, which carries no whole-assembly selector topology (faces/edges). inspect
@@ -187,7 +187,7 @@ def _assembly_topology_artifact(
                 kind="assembly",
                 source_path=spec.source_path,
                 step_path=spec.step_path,
-                glb_path=part_glb_path(spec.step_path),
+                glb_path=part_glb_path(spec.entry_path),
                 manifest=descriptor,
                 selector_bundle=None,
             )
@@ -223,7 +223,7 @@ def _assembly_topology_artifact(
         kind="assembly",
         source_path=spec.source_path,
         step_path=spec.step_path,
-        glb_path=part_glb_path(spec.step_path),
+        glb_path=part_glb_path(spec.entry_path),
         manifest=bundle.manifest,
         selector_bundle=bundle,
     )

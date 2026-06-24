@@ -74,6 +74,7 @@ const ENTRY_ICON_COMPONENTS = {
   [ENTRY_ICON_KIND.GCODE]: Route,
   [ENTRY_ICON_KIND.IMPLICIT]: Code,
   [ENTRY_ICON_KIND.ROBOT]: Bot,
+  [ENTRY_ICON_KIND.STEP_GENERATED]: Code,
   [ENTRY_ICON_KIND.STEP_PART]: Package,
   [ENTRY_ICON_KIND.STL_MESH]: Cuboid,
   [ENTRY_ICON_KIND.THREE_MF_MESH]: Layers3,
@@ -103,6 +104,7 @@ function FileEntryButton({
   fileAccessBusyKey = "",
   onDownloadFileAsset,
   onExportImplicitFile,
+  onExportStepFile,
   onRevealFileAsset,
   onRevealInExplorerView,
   onCopyFileAssetReference,
@@ -184,6 +186,7 @@ function FileEntryButton({
       busyKey={fileAccessBusyKey}
       onDownloadFileAsset={onDownloadFileAsset}
       onExportImplicitFile={onExportImplicitFile}
+      onExportStepFile={onExportStepFile}
       onRevealFileAsset={onRevealFileAsset}
       onRevealInExplorerView={onRevealInExplorerView}
       onCopyFileAssetReference={onCopyFileAssetReference}
@@ -215,6 +218,7 @@ function DirectoryNode({
   fileAccessBusyKey = "",
   onDownloadFileAsset,
   onExportImplicitFile,
+  onExportStepFile,
   onRevealFileAsset,
   onRevealInExplorerView,
   onCopyFileAssetReference,
@@ -283,6 +287,7 @@ function DirectoryNode({
                     fileAccessBusyKey={fileAccessBusyKey}
                     onDownloadFileAsset={onDownloadFileAsset}
                     onExportImplicitFile={onExportImplicitFile}
+                    onExportStepFile={onExportStepFile}
                     onRevealFileAsset={onRevealFileAsset}
                     onRevealInExplorerView={onRevealInExplorerView}
                     onCopyFileAssetReference={onCopyFileAssetReference}
@@ -311,6 +316,7 @@ function DirectoryNode({
                     fileAccessBusyKey={fileAccessBusyKey}
                     onDownloadFileAsset={onDownloadFileAsset}
                     onExportImplicitFile={onExportImplicitFile}
+                    onExportStepFile={onExportStepFile}
                     onRevealFileAsset={onRevealFileAsset}
                     onRevealInExplorerView={onRevealInExplorerView}
                     onCopyFileAssetReference={onCopyFileAssetReference}
@@ -473,6 +479,7 @@ function FileViewerContents({
   fileAccessBusyKey = "",
   onDownloadFileAsset,
   onExportImplicitFile,
+  onExportStepFile,
   onRevealFileAsset,
   onRevealInExplorerView,
   onCopyFileAssetReference,
@@ -541,6 +548,7 @@ function FileViewerContents({
                           fileAccessBusyKey={fileAccessBusyKey}
                           onDownloadFileAsset={onDownloadFileAsset}
                           onExportImplicitFile={onExportImplicitFile}
+                          onExportStepFile={onExportStepFile}
                           onRevealFileAsset={onRevealFileAsset}
                           onRevealInExplorerView={onRevealInExplorerView}
                           onCopyFileAssetReference={onCopyFileAssetReference}
@@ -568,6 +576,7 @@ function FileViewerContents({
                           fileAccessBusyKey={fileAccessBusyKey}
                           onDownloadFileAsset={onDownloadFileAsset}
                           onExportImplicitFile={onExportImplicitFile}
+                          onExportStepFile={onExportStepFile}
                           onRevealFileAsset={onRevealFileAsset}
                           onRevealInExplorerView={onRevealInExplorerView}
                           onCopyFileAssetReference={onCopyFileAssetReference}
@@ -619,6 +628,7 @@ export default function FileViewerSidebar({
   fileAccessBusyKey = "",
   onDownloadFileAsset,
   onExportImplicitFile,
+  onExportStepFile,
   onRevealFileAsset,
   onRevealInExplorerView,
   onCopyFileAssetReference,
@@ -662,6 +672,7 @@ export default function FileViewerSidebar({
       fileAccessBusyKey={fileAccessBusyKey}
       onDownloadFileAsset={onDownloadFileAsset}
       onExportImplicitFile={onExportImplicitFile}
+      onExportStepFile={onExportStepFile}
       onRevealFileAsset={onRevealFileAsset}
       onRevealInExplorerView={onRevealInExplorerView}
       onCopyFileAssetReference={onCopyFileAssetReference}

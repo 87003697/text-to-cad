@@ -4,7 +4,7 @@ Read this file when writing or repairing build123d Python source.
 
 ## Modeling objective
 
-Create a valid STEP-ready BREP model, not a visual mesh. Prefer closed solids, explicit labels, and stable parametric dimensions. Define `gen_step()` returning the STEP-ready shape or labeled compound; the CLI owns output paths (see `step-generation.md`).
+Create a valid STEP-ready BREP model, not a visual mesh. Prefer closed solids, explicit labels, and stable parametric dimensions. Define `gen_step()` returning the STEP-ready shape or labeled compound; the CLI owns output paths (see `step-generation.md`). Name a buildable entry generator `<name>.step.py` (the marker the viewer and build tools scan for); keep `<name>.py` for helper/library modules that are only imported, not built on their own (see "Entry generators are named `<name>.step.py`" in `step-generation.md`).
 
 ## Design strategy
 

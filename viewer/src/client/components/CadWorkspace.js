@@ -301,6 +301,10 @@ import {
   DEFAULT_IMPLICIT_EXPORT_RESOLUTION,
   requestImplicitCadExport
 } from "@/workbench/implicitExport";
+import {
+  requestStepExport,
+  stepExportFormatLabel
+} from "@/workbench/stepExport";
 
 const DEFAULT_DOCUMENT_TITLE = "CAD Viewer";
 // Single user-facing label for "the viewer is (re)generating the render artifacts a STEP model
@@ -8042,6 +8046,41 @@ export default function CadWorkspace({
     selectedKey
   ]);
 
+  const handleExportStepFile = useCallback(async (entry, format) => {
+    const fileRef = entry ? fileKey(entry) : "";
+    const exportFormat = String(format || "").trim().toLowerCase();
+    if (!fileRef || !exportFormat || typeof window === "undefined") {
+      return;
+    }
+    const busyKey = `${fileRef}:export:${exportFormat}`;
+    setCopyStatus("");
+    setScreenshotStatus("");
+    setFileAccessBusyKey(busyKey);
+    try {
+      setCopyStatus(`Exporting ${stepExportFormatLabel(exportFormat)}...`);
+      const payload = await requestStepExport({ file: fileRef, format: exportFormat });
+      if (payload?.cancelled) {
+        // User dismissed the native save dialog — clear the in-progress status, no error.
+        setCopyStatus("");
+        return;
+      }
+      const filename = String(payload?.filename || "").trim();
+      const downloadUrl = String(payload?.downloadUrl || "").trim();
+      if (downloadUrl) {
+        const result = triggerUrlDownload(downloadUrl, { filename });
+        setCopyStatus(result.message);
+      } else {
+        const savedPath = String(payload?.path || "").trim();
+        const label = filename || stepExportFormatLabel(exportFormat);
+        setCopyStatus(savedPath ? `Exported ${label} to ${savedPath}` : `Exported ${label}`);
+      }
+    } catch (error) {
+      setCopyStatus(error instanceof Error ? error.message : "Export failed");
+    } finally {
+      setFileAccessBusyKey((current) => (current === busyKey ? "" : current));
+    }
+  }, []);
+
   const handleDrawingStrokesChange = useCallback((nextStrokes) => {
     const normalized = cloneDrawingStrokes(nextStrokes);
     const current = drawingStrokesRef.current;
@@ -8426,6 +8465,7 @@ export default function CadWorkspace({
           fileAccessBusyKey={fileAccessBusyKey}
           onDownloadFileAsset={handleDownloadFileAsset}
           onExportImplicitFile={handleExportImplicitFile}
+          onExportStepFile={handleExportStepFile}
           onRevealFileAsset={handleRevealFileAsset}
           onRevealInExplorerView={handleRevealEntryInExplorerView}
           onCopyFileAssetReference={handleCopyFileAssetReference}
@@ -8465,6 +8505,7 @@ export default function CadWorkspace({
               fileAccessBusyKey={fileAccessBusyKey}
               onDownloadFileAsset={handleDownloadFileAsset}
               onExportImplicitFile={handleExportImplicitFile}
+              onExportStepFile={handleExportStepFile}
               onRevealFileAsset={handleRevealFileAsset}
               onRevealInExplorerView={handleRevealEntryInExplorerView}
               onCopyFileAssetReference={handleCopyFileAssetReference}

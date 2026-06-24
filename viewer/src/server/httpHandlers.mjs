@@ -478,6 +478,72 @@ export function createCadViewerApiMiddleware({
       }
       return;
     }
+    if (requestUrl.pathname === "/__cad/step-export") {
+      const method = String(req.method || "GET").toUpperCase();
+      if (method !== "POST") {
+        res.setHeader("allow", "POST");
+        sendJson(res, 405, {
+          error: "Use POST to export STEP models",
+        });
+        return;
+      }
+      if (
+        backend.kind !== "local-fs" ||
+        typeof backend.generateStepExport !== "function" ||
+        typeof backend.resolveRoot !== "function"
+      ) {
+        sendJson(res, 405, {
+          error: "STEP export is only available for the local filesystem backend",
+        });
+        return;
+      }
+      try {
+        const body = await readJsonBody(req);
+        const catalog = await backend.readCatalog({ rootDir: activeRootDir, fileRef: activeFileRef });
+        const resolvedRoot = typeof backend.resolveRequestRoot === "function"
+          ? backend.resolveRequestRoot({ rootDir: activeRootDir, fileRef: activeFileRef })
+          : backend.resolveRoot(activeRootDir);
+        const format = requestUrl.searchParams.get("format") || body.format || "step";
+        const result = await backend.generateStepExport({
+          fileRef: activeFileRef || body.file,
+          format,
+          resolvedRoot,
+          catalog,
+        });
+        if (result?.cancelled) {
+          // User dismissed the native save dialog — not an error, just nothing written.
+          sendJson(res, 200, { ok: false, cancelled: true });
+          return;
+        }
+        if (!result?.ok) {
+          sendJson(res, 400, { ok: false, error: result?.error || "STEP export failed" });
+          return;
+        }
+        const payload = {
+          ok: true,
+          path: result.path,
+          filename: result.filename,
+          format: result.format,
+        };
+        if (result.catalogChanged) {
+          // The export landed inside the active root, so the catalog gained/updated an entry.
+          onCatalogChanged(resolvedRoot);
+          payload.catalogChanged = true;
+        }
+        if (result.fallback && result.outputFileRef) {
+          // No native dialog: the file was written beside the source; hand it to the browser.
+          payload.fallback = true;
+          payload.downloadUrl = `/__cad/download?dir=${encodeURIComponent(activeRootDir)}&file=${encodeURIComponent(result.outputFileRef)}&asset=output`;
+        }
+        sendJson(res, 200, payload);
+      } catch (error) {
+        sendJson(res, 400, {
+          ok: false,
+          error: errorMessage(error),
+        });
+      }
+      return;
+    }
     // Unified render-artifact endpoint (replaces step-artifact + step-source-status). GET reports
     // freshness (ready | needs-build | error); POST (re)builds the artifact and refreshes the
     // catalog. Direct-render types resolve to "ready" with no work.

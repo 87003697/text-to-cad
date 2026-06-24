@@ -104,7 +104,8 @@ test("ensureStepArtifactsForCatalog discovers Python generators without fixture 
   assert.equal(results[0].sourceKind, "python");
   assert.equal(fs.existsSync(stepPath), false);
 
-  const indexTopology = readStepTopologyIndexManifest(inlineStepGlbArtifactPathForSource(stepPath));
+  // The render cache is keyed by the ENTRY filename (`block.step.py`), not the logical step.
+  const indexTopology = readStepTopologyIndexManifest(inlineStepGlbArtifactPathForSource(generatorPath));
   assert.equal(indexTopology.sourceKind, "python");
   assert.equal(indexTopology.sourcePath, "block.step.py");
   assert.equal(indexTopology.stepPath, "block.step");
@@ -112,16 +113,17 @@ test("ensureStepArtifactsForCatalog discovers Python generators without fixture 
 
   const catalog = scanCadDirectory({ repoRoot, rootDir: "workspace" });
   assert.equal(catalog.entries.length, 1);
+  assert.equal(catalog.entries[0].file, "generated/block.step.py");
   assert.equal(catalog.entries[0].artifact, undefined);
-  assert.ok(catalog.entries[0].url.includes("__cadcache__/models/block.step"));
+  assert.ok(catalog.entries[0].url.includes("__cadcache__/models/block.step.py"));
   assert.equal(catalog.entries[0].hash.length, 64);
 });
 
-test("ensureStepTopologyArtifact records explicit non-same-stem Python sourcePath", stepArtifactTestOptions, async (t) => {
+test("ensureStepTopologyArtifact records the Python generator sourcePath for a generated entry", stepArtifactTestOptions, async (t) => {
   const repoRoot = makeTempRepo();
   t.after(() => fs.rmSync(repoRoot, { recursive: true, force: true }));
   const stepPath = path.join(repoRoot, "workspace/generated/robot.step");
-  const generatorPath = path.join(repoRoot, "workspace/sources/assembly.py");
+  const generatorPath = path.join(repoRoot, "workspace/generated/robot.step.py");
   writePythonBoxGenerator(generatorPath);
 
   const result = await ensureStepTopologyArtifact({
@@ -136,25 +138,22 @@ test("ensureStepTopologyArtifact records explicit non-same-stem Python sourcePat
   assert.equal(fs.existsSync(stepPath), false);
   assert.equal(result.validation.ok, true);
   assert.equal(result.validation.sourceKind, "python");
-  assert.equal(result.validation.sourcePath, "workspace/sources/assembly.py");
+  assert.equal(result.validation.sourcePath, "workspace/generated/robot.step.py");
 
-  // The descriptor (assembly.json) carries the model-level source provenance; per-edge
-  // display topology is embedded in each clean component GLB, not the package descriptor.
-  const indexTopology = readStepTopologyIndexManifest(inlineStepGlbArtifactPathForSource(stepPath));
+  // The render cache is keyed by the ENTRY filename (`robot.step.py`); the descriptor carries the
+  // model-folder-relative generator source and the LOGICAL step path.
+  const indexTopology = readStepTopologyIndexManifest(inlineStepGlbArtifactPathForSource(generatorPath));
   assert.equal(indexTopology.sourceKind, "python");
-  assert.equal(indexTopology.sourcePath, "../sources/assembly.py");
+  assert.equal(indexTopology.sourcePath, "robot.step.py");
   assert.equal(indexTopology.stepPath, "robot.step");
 
-  // A non-same-stem generated-only model leaves no anchor in the source tree (the package
-  // lives inside the skipped __cadcache__, the generator stem differs, and no STEP is
-  // written), so a directory walk cannot rediscover it. The per-file scan API that the
-  // viewer uses to map the logical STEP path to its package still resolves the entry.
-  const entry = scanCadFile({ repoRoot, rootDir: "workspace", filePath: stepPath });
-  assert.equal(entry.file, "generated/robot.step");
+  // The viewer discovers the `.step.py` entry directly (its own filename), keyed by its package.
+  const entry = scanCadFile({ repoRoot, rootDir: "workspace", filePath: generatorPath });
+  assert.equal(entry.file, "generated/robot.step.py");
   assert.equal(entry.artifact, undefined);
   assert.equal(entry.sourceKind, "python");
-  assert.equal(entry.source.sourcePath, "workspace/sources/assembly.py");
-  assert.ok(entry.url.includes("__cadcache__/models/robot.step"));
+  assert.equal(entry.source.sourcePath, "generated/robot.step.py");
+  assert.ok(entry.url.includes("__cadcache__/models/robot.step.py"));
   assert.equal(entry.hash.length, 64);
 });
 
@@ -162,7 +161,7 @@ test("ensureStepTopologyArtifact can write Python STEP after the GLB is ready", 
   const repoRoot = makeTempRepo();
   t.after(() => fs.rmSync(repoRoot, { recursive: true, force: true }));
   const stepPath = path.join(repoRoot, "workspace/generated/robot.step");
-  const generatorPath = path.join(repoRoot, "workspace/sources/robot.py");
+  const generatorPath = path.join(repoRoot, "workspace/generated/robot.step.py");
   writePythonBoxGenerator(generatorPath);
 
   const result = await ensureStepTopologyArtifact({
@@ -176,15 +175,16 @@ test("ensureStepTopologyArtifact can write Python STEP after the GLB is ready", 
 
   assert.equal(result.ok, true);
   assert.equal(result.stepWrite?.status, "complete");
-  const glbPath = inlineStepGlbArtifactPathForSource(stepPath);
+  // The render cache is keyed by the ENTRY filename (`robot.step.py`).
+  const glbPath = inlineStepGlbArtifactPathForSource(generatorPath);
   assert.equal(fs.existsSync(glbPath), true);
   const indexTopology = readStepTopologyIndexManifest(glbPath);
   assert.equal(indexTopology.sourceKind, "python");
   const metadata = await waitForStepMetadata(stepPath, (candidate) => (
-    candidate.sourcePath === "../sources/robot.py" &&
+    candidate.sourcePath === "robot.step.py" &&
     candidate.sourceHash === indexTopology.sourceHash
   ));
-  assert.equal(metadata.sourcePath, "../sources/robot.py");
+  assert.equal(metadata.sourcePath, "robot.step.py");
   assert.equal(metadata.sourceHash, indexTopology.sourceHash);
 });
 

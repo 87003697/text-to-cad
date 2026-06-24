@@ -437,9 +437,21 @@ def _transform_location(transform: tuple[float, ...]) -> build123d.Location:
 
 
 def _load_servo_shape(step_path: Path) -> build123d.Shape:
-    if not step_path.exists():
+    generator_path = step_path.with_name(step_path.name + ".py")
+    if generator_path.is_file():
+        # A GENERATED servo variant (the no-rear-horn sts3250, derived from the stock servo) builds
+        # from its gen_step — a source-level dependency, so no committed STEP is needed. The stock
+        # IMPORTED sts3250 (no generator) keeps the cached import. The layout-fact check below
+        # validates whichever shape we get.
+        import copy
+
+        from robot_common.link_assembly import _generated_child_shape
+
+        shape = copy.deepcopy(_generated_child_shape(str(generator_path)))
+    elif step_path.exists():
+        shape = import_as_shape(step_path)
+    else:
         raise FileNotFoundError(f"Missing STS3250 servo STEP: {step_path}")
-    shape = import_as_shape(step_path)
     bb = shape.bounding_box()
     for measured, expected in (
         (bb.min.X, SERVO_BODY_X_MIN_MM),

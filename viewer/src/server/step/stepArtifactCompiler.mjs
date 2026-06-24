@@ -116,7 +116,9 @@ export async function compileStepTopologyArtifact({
   repoRoot,
   stepPath,
   sourcePath = "",
-  targetPath = inlineStepGlbArtifactPathForSource(stepPath),
+  // The render cache is keyed by the ENTRY filename — the `.step.py` generator for a generated
+  // model (sourcePath), or the `.step` itself for an imported one — matching where cadpy writes it.
+  targetPath = inlineStepGlbArtifactPathForSource(sourcePath || stepPath),
   force = true,
   skipStepWrite = false,
   writeStepAfterArtifact = false,
@@ -229,7 +231,9 @@ export async function ensureStepTopologyArtifact({
       validation: current.stepArtifact,
     };
   }
-  const targetPath = inlineStepGlbArtifactPathForSource(resolvedStepPath);
+  // Key the render cache by the ENTRY filename — the inferred `.step.py` generator for a generated
+  // model, or the `.step` itself for an imported one (matches where cadpy writes the package).
+  const targetPath = inlineStepGlbArtifactPathForSource(inferredSourcePath || resolvedStepPath);
   const result = await compileStepTopologyArtifact({
     repoRoot: resolvedRepoRoot,
     stepPath: resolvedStepPath,
@@ -243,7 +247,9 @@ export async function ensureStepTopologyArtifact({
   });
   const next = validateStepTopologyArtifact({
     repoRoot: resolvedRepoRoot,
-    sourcePath: resolvedStepPath,
+    // Validate at the ENTRY-keyed package — the inferred `.step.py` generator for a generated
+    // model, or the `.step` itself for an imported one (where the package actually lives).
+    sourcePath: inferredSourcePath || resolvedStepPath,
     cadPath,
   });
   return {
