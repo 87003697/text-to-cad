@@ -12,11 +12,9 @@ import {
   Folder,
   Layers3,
   LoaderCircle,
-  Moon,
   Package,
   Route,
-  SlidersHorizontal,
-  Sun
+  SlidersHorizontal
 } from "lucide-react";
 import {
   DEFAULT_VIEWER_SKILLS_INSTALL_COMMAND,
@@ -58,7 +56,6 @@ import {
   themeSettingsSupportsSystemColorMode
 } from "cadjs/lib/themeSettings";
 import {
-  DARK_COLOR_SCHEME_ID,
   LIGHT_COLOR_SCHEME_ID
 } from "@/ui/colorScheme";
 import {
@@ -696,12 +693,6 @@ const emptyLatestReleaseCheck = Object.freeze({
   latestReleaseNewer: false
 });
 
-function nextColorMode(currentColorMode) {
-  return currentColorMode === DARK_COLOR_SCHEME_ID
-    ? LIGHT_COLOR_SCHEME_ID
-    : DARK_COLOR_SCHEME_ID;
-}
-
 function latestReleaseCacheKey(apiUrl) {
   return `${latestReleaseCacheKeyPrefix}${apiUrl}`;
 }
@@ -1065,6 +1056,7 @@ export default function CadWorkspaceTopBar({
   themePresets = [],
   themeSettings,
   themePresetId = "",
+  colorSchemePreference = LIGHT_COLOR_SCHEME_ID,
   resolvedColorSchemeMode = LIGHT_COLOR_SCHEME_ID,
   onColorSchemePreferenceChange,
   updateThemeSettings,
@@ -1136,22 +1128,9 @@ export default function CadWorkspaceTopBar({
   const fileSheetToggleLabel = fileSheetOpen
     ? `Collapse ${fileSheetLabel(fileSheetKind)}`
     : `Expand ${fileSheetLabel(fileSheetKind)}`;
-  const showThemeColorModeToggle = themeSettingsSupportsSystemColorMode(themeSettings);
-  const activeColorSchemeMode = resolvedColorSchemeMode === DARK_COLOR_SCHEME_ID
-    ? DARK_COLOR_SCHEME_ID
-    : LIGHT_COLOR_SCHEME_ID;
-  const nextColorSchemeMode = nextColorMode(activeColorSchemeMode);
-  const activeColorSchemeModeLabel = activeColorSchemeMode === DARK_COLOR_SCHEME_ID ? "dark" : "light";
-  const nextColorSchemeModeLabel = nextColorSchemeMode === DARK_COLOR_SCHEME_ID ? "dark" : "light";
-  const colorModeToggleLabel = `Browser color mode: ${activeColorSchemeModeLabel}. Switch to ${nextColorSchemeModeLabel} mode.`;
-  const ColorModeIcon = activeColorSchemeMode === DARK_COLOR_SCHEME_ID ? Moon : Sun;
-
-  const handleThemeColorModeToggle = () => {
-    if (typeof onColorSchemePreferenceChange !== "function") {
-      return;
-    }
-    onColorSchemePreferenceChange(nextColorSchemeMode);
-  };
+  // Light/dark lives inside the theme dropdown now (System/Light/Dark segment),
+  // shown only when the active theme follows the system color mode.
+  const showColorModeControl = themeSettingsSupportsSystemColorMode(themeSettings);
 
   return (
     <header
@@ -1310,25 +1289,13 @@ export default function CadWorkspaceTopBar({
             handleRestoreDefaultThemePresets={handleRestoreDefaultThemePresets}
             appearanceEditing={appearanceEditing}
             onOpenAppearanceEditor={onOpenAppearanceEditor}
+            colorSchemePreference={colorSchemePreference}
+            resolvedColorSchemeMode={resolvedColorSchemeMode}
+            onColorSchemePreferenceChange={onColorSchemePreferenceChange}
+            showColorModeControl={showColorModeControl}
             triggerClassName={topBarIconButtonClasses}
             iconClassName={topBarIconClasses}
           />
-
-          {showThemeColorModeToggle ? (
-            <Button
-              type="button"
-              variant="ghost"
-              size="icon"
-              aria-label={colorModeToggleLabel}
-              title={colorModeToggleLabel}
-              disabled={typeof onColorSchemePreferenceChange !== "function"}
-              onClick={handleThemeColorModeToggle}
-              className={topBarIconButtonClasses}
-            >
-              <ColorModeIcon className={topBarIconClasses} />
-              <span className="sr-only">{colorModeToggleLabel}</span>
-            </Button>
-          ) : null}
 
           {showFileSheetToggle ? (
             <Button

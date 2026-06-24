@@ -8683,6 +8683,7 @@ export default function CadWorkspace({
           themePresets={availableThemePresets}
           themeSettings={themeSettings}
           themePresetId={themePresetId}
+          colorSchemePreference={colorSchemePreference}
           resolvedColorSchemeMode={resolvedColorSchemeMode}
           onColorSchemePreferenceChange={handleColorSchemePreferenceChange}
           updateThemeSettings={updateThemeSettings}
