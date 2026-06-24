@@ -50,9 +50,12 @@ const treeRowContentClasses = "h-7 min-w-0 text-xs font-normal";
 const treeGroupLabelClasses = "px-2 pb-1 pt-2 text-[10px] font-medium text-sidebar-foreground/45";
 const treeGlyphIconClasses = "size-3.5 shrink-0 text-current/60";
 const treeMateIconSlotClasses = "grid h-5 w-5 shrink-0 place-items-center text-current/60";
-const treeDepthIndentPx = 22;
+// One indent level equals the expand-chevron's footprint (w-5 button + gap-1.5),
+// so a leaf row's glyph (which has no chevron) lines up exactly under its
+// expandable parent's glyph instead of sitting a few pixels to the left.
+const treeDepthIndentPx = 26;
 const treeDepthGuideOffsetPx = 14;
-const treeDepthMaxPx = 128;
+const treeDepthMaxPx = 156;
 const treeSectionId = "tree";
 const treeRevealScrollPaddingTopPx = 120;
 const STEP_MODULE_ANIMATION_SPEED_MIN = 0.1;
