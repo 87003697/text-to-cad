@@ -1083,6 +1083,7 @@ export default function CadWorkspaceTopBar({
   onToggleFileSheet,
   appearanceEditing = false,
   onOpenAppearanceEditor,
+  onCloseAppearanceEditor,
   navigationAvailable = true
 }) {
   const viewerVersion = String(viewerPackage.version || "").trim();
@@ -1289,6 +1290,7 @@ export default function CadWorkspaceTopBar({
             handleRestoreDefaultThemePresets={handleRestoreDefaultThemePresets}
             appearanceEditing={appearanceEditing}
             onOpenAppearanceEditor={onOpenAppearanceEditor}
+            onCloseAppearanceEditor={onCloseAppearanceEditor}
             colorSchemePreference={colorSchemePreference}
             resolvedColorSchemeMode={resolvedColorSchemeMode}
             onColorSchemePreferenceChange={onColorSchemePreferenceChange}
