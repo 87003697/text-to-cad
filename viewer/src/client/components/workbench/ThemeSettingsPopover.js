@@ -1121,8 +1121,8 @@ export function ThemePresetDropdown({
             aria-pressed={appearanceEditing}
             className={cn(
               triggerClassName,
-              appearanceEditing &&
-                "bg-primary text-primary-foreground hover:bg-primary hover:text-primary-foreground"
+              // Match the file-sheet toggle's open/active state (activeIconButtonClasses).
+              appearanceEditing && "bg-accent text-accent-foreground"
             )}
           >
             <TriggerIcon className={iconClassName} strokeWidth={2} aria-hidden="true" />
@@ -1296,17 +1296,6 @@ function ThemeAppearanceSection({
     : "Theme copy";
   const colorMode = themeSettings.colorMode || THEME_COLOR_MODES.SYSTEM;
 
-  const applyThemePreset = (presetId) => {
-    const preset = themePresets.find((candidate) => candidate.id === presetId);
-    if (!preset) {
-      return;
-    }
-    updateThemeSettings?.(preset.settings, {
-      persistGlobal: true,
-      presetId: preset.id
-    });
-  };
-
   const handleSaveTheme = (themeName) => {
     if (!themeHasChanged || typeof handleSaveCustomThemePreset !== "function") {
       return null;
@@ -1331,32 +1320,6 @@ function ThemeAppearanceSection({
   return (
     <>
       <ControlSubsection title="Theme">
-        <Field
-          label="Current"
-          value={themeHasChanged ? "Changed" : "Saved"}
-        >
-          <Select value={activeThemeId} onValueChange={applyThemePreset}>
-            <SelectTrigger
-              size="sm"
-              className={cn(compactInputClasses, "w-full justify-between")}
-              aria-label="Theme"
-            >
-              <span className="flex min-w-0 items-center gap-2">
-                <PresetSwatch preset={activeThemePreset} />
-                <span className="min-w-0 truncate">{activeThemePreset?.label || "Theme"}</span>
-              </span>
-            </SelectTrigger>
-            <SelectContent>
-              {themePresets.map((preset) => (
-                <SelectItem key={preset.id} value={preset.id} className="text-xs">
-                  <PresetSwatch preset={preset} />
-                  <span className="min-w-0 truncate">{preset.label}</span>
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-        </Field>
-
         <Field label="Color mode">
           <SegmentedControl
             value={colorMode}
@@ -2465,6 +2428,10 @@ export function AppearanceEditorPanel({
   handleSaveCustomThemePreset,
   handleUpdateThemePresetSettings
 }) {
+  const activeThemePreset = useMemo(
+    () => resolveActiveThemePreset(themePresets, themePresetId, themeSettings),
+    [themePresets, themePresetId, themeSettings]
+  );
   return (
     <FileSheet
       open={open}
@@ -2479,8 +2446,19 @@ export function AppearanceEditorPanel({
       onStartResize={onStartResize}
       scrollBody={false}
     >
-      <div className="flex h-8 shrink-0 items-center justify-between border-b border-sidebar-border/70 px-2">
-        <span className="text-[11px] font-medium text-sidebar-foreground">Appearance</span>
+      <div className="flex h-8 shrink-0 items-center justify-between gap-2 border-b border-sidebar-border/70 px-2">
+        <span className="flex min-w-0 items-center gap-1.5 text-[11px] font-medium text-sidebar-foreground">
+          <span className="shrink-0">Appearance</span>
+          {activeThemePreset ? (
+            <>
+              <span className="shrink-0 text-muted-foreground/60">/</span>
+              <PresetSwatch preset={activeThemePreset} />
+              <span className="min-w-0 truncate font-normal text-muted-foreground">
+                {activeThemePreset.label}
+              </span>
+            </>
+          ) : null}
+        </span>
         <button
           type="button"
           onClick={() => onClose?.()}
