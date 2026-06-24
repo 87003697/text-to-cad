@@ -26,11 +26,11 @@ test("only step supports the split", () => {
   assert.equal(kindSupportsSplit("gcode"), false);
 });
 
-test("default step arrangement puts the tree on top and the rest on the bottom", () => {
+test("default step arrangement puts tree and parameters on top, the rest on the bottom", () => {
   const arrangement = defaultFileSheetTabArrangement("step", STEP_SECTIONS);
   assert.equal(arrangement.split, true);
-  assert.deepEqual(arrangement.top, ["tree"]);
-  assert.deepEqual(arrangement.bottom, ["parameters", "display", "appearance", "metadata"]);
+  assert.deepEqual(arrangement.top, ["tree", "parameters"]);
+  assert.deepEqual(arrangement.bottom, ["display", "appearance", "metadata"]);
   assert.equal(arrangement.ratio, 0.5);
 });
 
@@ -50,9 +50,10 @@ test("step with only a tree collapses to a single strip", () => {
 test("normalize drops missing tabs and appends new ones to their default pane", () => {
   const stored = { split: true, top: ["tree"], bottom: ["display", "appearance"], ratio: 0.6 };
   const normalized = normalizeFileSheetTabArrangement(stored, "step", STEP_SECTIONS);
-  assert.deepEqual(normalized.top, ["tree"]);
-  // parameters + metadata are newly rendered, appended to the bottom default pane.
-  assert.deepEqual(normalized.bottom, ["display", "appearance", "parameters", "metadata"]);
+  // parameters + metadata are newly rendered, appended to their default panes
+  // (parameters -> top, metadata -> bottom).
+  assert.deepEqual(normalized.top, ["tree", "parameters"]);
+  assert.deepEqual(normalized.bottom, ["display", "appearance", "metadata"]);
   assert.equal(normalized.ratio, 0.6);
 });
 
@@ -67,8 +68,8 @@ test("normalize re-derives the default split when a requested split has an empty
   const stored = { split: true, top: ["tree", "parameters", "display", "appearance", "metadata"], bottom: [] };
   const normalized = normalizeFileSheetTabArrangement(stored, "step", STEP_SECTIONS);
   assert.equal(normalized.split, true);
-  assert.deepEqual(normalized.top, ["tree"]);
-  assert.deepEqual(normalized.bottom, ["parameters", "display", "appearance", "metadata"]);
+  assert.deepEqual(normalized.top, ["tree", "parameters"]);
+  assert.deepEqual(normalized.bottom, ["display", "appearance", "metadata"]);
 });
 
 test("normalize forces a single strip for non-split kinds", () => {
@@ -82,8 +83,8 @@ test("normalize forces a single strip for non-split kinds", () => {
 test("moving a tab across panes updates assignment", () => {
   const arrangement = defaultFileSheetTabArrangement("step", STEP_SECTIONS);
   const next = moveFileSheetTab(arrangement, "step", "display", FILE_SHEET_TAB_PANES.TOP, 1);
-  assert.deepEqual(next.top, ["tree", "display"]);
-  assert.deepEqual(next.bottom, ["parameters", "appearance", "metadata"]);
+  assert.deepEqual(next.top, ["tree", "display", "parameters"]);
+  assert.deepEqual(next.bottom, ["appearance", "metadata"]);
   assert.equal(next.split, true);
 });
 
@@ -103,8 +104,8 @@ test("toggling the split off merges panes, on restores the default split", () =>
 
   const reSplit = setFileSheetTabSplit(merged, "step", true, STEP_SECTIONS);
   assert.equal(reSplit.split, true);
-  assert.deepEqual(reSplit.top, ["tree"]);
-  assert.deepEqual(reSplit.bottom, ["parameters", "display", "appearance", "metadata"]);
+  assert.deepEqual(reSplit.top, ["tree", "parameters"]);
+  assert.deepEqual(reSplit.bottom, ["display", "appearance", "metadata"]);
 });
 
 test("split ratio is clamped", () => {
