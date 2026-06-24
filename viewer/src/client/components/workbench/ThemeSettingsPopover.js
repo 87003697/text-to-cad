@@ -997,6 +997,10 @@ export function ThemePresetDropdown({
   handleRestoreDefaultThemePresets,
   appearanceEditing = false,
   onOpenAppearanceEditor,
+  colorSchemePreference = THEME_COLOR_MODES.SYSTEM,
+  resolvedColorSchemeMode = THEME_COLOR_MODES.LIGHT,
+  onColorSchemePreferenceChange,
+  showColorModeControl = false,
   triggerClassName,
   iconClassName
 }) {
@@ -1016,6 +1020,14 @@ export function ThemePresetDropdown({
   );
   const activeThemePresetId = activeThemePreset?.id || "";
   const activeThemeLabel = activeThemePreset?.label || "Theme";
+  // When the active theme follows the system color mode, the trigger doubles as
+  // the light/dark indicator (Sun/Moon); otherwise it stays the neutral
+  // appearance glyph since color mode can't be switched from here.
+  const colorModeControlVisible =
+    showColorModeControl && typeof onColorSchemePreferenceChange === "function";
+  const TriggerIcon = colorModeControlVisible
+    ? (resolvedColorSchemeMode === THEME_COLOR_MODES.DARK ? Moon : Sun)
+    : Contrast;
   const deleteThemePreset = themePresets.find((preset) => preset.id === deleteThemeId) || null;
   const resetThemePreset = themePresets.find((preset) => preset.id === resetThemeId) || null;
   const themeLibraryHasChanged = useMemo(
@@ -1104,8 +1116,8 @@ export function ThemePresetDropdown({
             type="button"
             variant="ghost"
             size="icon-sm"
-            aria-label={`Theme: ${activeThemeLabel}`}
-            title={`Theme: ${activeThemeLabel}`}
+            aria-label={`Appearance: ${activeThemeLabel}`}
+            title={`Appearance: ${activeThemeLabel}`}
             aria-pressed={appearanceEditing}
             className={cn(
               triggerClassName,
@@ -1113,11 +1125,26 @@ export function ThemePresetDropdown({
                 "bg-primary text-primary-foreground hover:bg-primary hover:text-primary-foreground"
             )}
           >
-            <Contrast className={iconClassName} strokeWidth={2} aria-hidden="true" />
-            <span className="sr-only">Theme</span>
+            <TriggerIcon className={iconClassName} strokeWidth={2} aria-hidden="true" />
+            <span className="sr-only">Appearance</span>
           </Button>
         </DropdownMenuTrigger>
         <DropdownMenuContent align="end" sideOffset={6} className="w-64">
+          {colorModeControlVisible ? (
+            <>
+              <DropdownMenuLabel className="px-2 pb-1 pt-1.5 text-xs text-muted-foreground">
+                Color mode
+              </DropdownMenuLabel>
+              <div className="px-2 pb-1">
+                <SegmentedControl
+                  value={colorSchemePreference}
+                  options={COLOR_MODE_OPTIONS}
+                  onChange={(nextMode) => onColorSchemePreferenceChange?.(nextMode)}
+                />
+              </div>
+              <DropdownMenuSeparator />
+            </>
+          ) : null}
           <DropdownMenuLabel className="px-2 py-1.5 text-xs text-muted-foreground">
             Theme
           </DropdownMenuLabel>
