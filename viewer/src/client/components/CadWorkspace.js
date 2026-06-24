@@ -304,6 +304,12 @@ import {
 } from "@/workbench/implicitExport";
 
 const DEFAULT_DOCUMENT_TITLE = "CAD Viewer";
+// Single user-facing label for "the viewer is (re)generating the render artifacts a STEP model
+// needs before it can render" — used for both the filename status chip and its tooltip across every
+// artifact-generation trigger (first build, stale rebuild, source-changed regen). Browser-side
+// asset-load/parse stages ("loading mesh", reference "loading topology", etc.) are a different
+// concept and keep their own wording.
+const ARTIFACT_GENERATING_LABEL = "Generating artifacts";
 const EMPTY_LIST = Object.freeze([]);
 const MOVEIT2_SERVER_ENABLED = moveit2ServerEnabled();
 const URDF_POSE_PICKER_DEFAULT_CENTER = Object.freeze([0, 0, 0]);
@@ -3082,13 +3088,13 @@ export default function CadWorkspace({
             : effectiveRenderFormat === RENDER_FORMAT.GLB
               ? "Loading GLB..."
               : stepUpdateInProgress
-                ? "STEP changed. Updating/regenerating CAD..."
+                ? ARTIFACT_GENERATING_LABEL
                 : selectedStepArtifactRenderPending
-                  ? "Loading topology..."
+                  ? ARTIFACT_GENERATING_LABEL
                   : selectedStepModuleLoading
                     ? "Loading STEP module..."
                   : selectedEntry && !selectedEntryHasMesh
-                    ? "Loading topology..."
+                    ? ARTIFACT_GENERATING_LABEL
                     : "Loading CAD...";
   const viewerAlert = useMemo(() => {
     if (viewerRuntimeAlert?.blocking) {
@@ -5288,7 +5294,7 @@ export default function CadWorkspace({
     if (selectedGeneratorRunning) {
       return {
         loading: true,
-        label: "generating",
+        label: ARTIFACT_GENERATING_LABEL,
         title: "Generator script is running"
       };
     }
@@ -5328,7 +5334,7 @@ export default function CadWorkspace({
     if (effectiveRenderFormat === RENDER_FORMAT.STEP && stepUpdateInProgress) {
       return {
         loading: true,
-        label: "building",
+        label: ARTIFACT_GENERATING_LABEL,
         title: viewerLoadingLabel
       };
     }
@@ -5336,7 +5342,7 @@ export default function CadWorkspace({
     if (effectiveRenderFormat === RENDER_FORMAT.STEP && selectedStepArtifactRenderPending) {
       return {
         loading: true,
-        label: "loading topology",
+        label: ARTIFACT_GENERATING_LABEL,
         title: viewerLoadingLabel
       };
     }
