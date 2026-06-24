@@ -234,7 +234,6 @@ import {
 } from "cadjs/lib/urdf/jointAnimation";
 import { checkMoveIt2ServerLive, moveit2ServerEnabled, requestMoveIt2Server } from "cadjs/lib/urdf/moveit2ServerClient";
 import {
-  cadViewerUsesHostedCatalog,
   readActiveCadDir,
   refreshCadCatalog,
   refreshCadGenerationStatus,
@@ -315,7 +314,6 @@ import {
 } from "@/workbench/implicitExport";
 
 const DEFAULT_DOCUMENT_TITLE = "CAD Viewer";
-const LOCAL_ASSET_BACKEND = "local-fs";
 const EMPTY_LIST = Object.freeze([]);
 const MOVEIT2_SERVER_ENABLED = moveit2ServerEnabled();
 const URDF_POSE_PICKER_DEFAULT_CENTER = Object.freeze([0, 0, 0]);
@@ -332,10 +330,6 @@ const IMPLICIT_DYNAMIC_RENDER_SETTLE_MS = 220;
 const DEFAULT_LARGE_FILE_STATE = Object.freeze({
   selectableTopologyEnabled: false
 });
-
-function viewerAssetBackendFromEnv() {
-  return String(import.meta.env?.VIEWER_ASSET_BACKEND || LOCAL_ASSET_BACKEND).trim().toLowerCase();
-}
 
 function normalizeLargeFileState(value = {}) {
   return {
@@ -1145,7 +1139,6 @@ export default function CadWorkspace({
   const catalogEntries = manifestEntries;
   const explicitDirParam = readCadDirParam();
   const explicitFileParam = readCadParam();
-  const viewerAssetBackend = viewerAssetBackendFromEnv();
   const activeGeneratorFiles = useMemo(() => (
     Object.entries(generationStatus?.files || {})
       .filter(([, status]) => status?.running === true)
@@ -1171,9 +1164,6 @@ export default function CadWorkspace({
   const [openTabs, setOpenTabs] = useState([]);
   const [viewerServerInfo, setViewerServerInfo] = useState(null);
   const viewerServerBackend = String(viewerServerInfo?.backend || "").trim().toLowerCase();
-  const directoryCatalogActive = Boolean(catalogRootDir) ||
-    cadViewerUsesHostedCatalog(viewerAssetBackend) ||
-    cadViewerUsesHostedCatalog(viewerServerBackend);
   const [selectedKey, setSelectedKey] = useState("");
   const [fileSheetOpenSectionIds, setFileSheetOpenSectionIds] = useState(null);
   const [dxfThicknessMm, setDxfThicknessMm] = useState(0);
@@ -1511,7 +1501,7 @@ export default function CadWorkspace({
     () => normalizeViewerDirectoryOptions(viewerServerInfo),
     [viewerServerInfo]
   );
-  const activeViewerDir = readActiveCadDir({ assetBackend: viewerAssetBackend });
+  const activeViewerDir = readActiveCadDir();
   const activeDirectory = catalogRootDir || activeViewerDir;
   const directorySelectionEligible = !explicitDirParam && !activeDirectory;
   const directorySelectionActive = directorySelectionEligible && directoryOptions.length > 1;
@@ -1521,13 +1511,14 @@ export default function CadWorkspace({
   const directoryNavigationAvailable = !directorySelectionActive;
   const stepArtifactGenerationAvailable = viewerServerInfo
     ? viewerServerInfo.stepArtifactGenerationAvailable !== false
-    : viewerAssetBackend === LOCAL_ASSET_BACKEND;
+    : true;
   const fileAccessBackend = viewerServerInfo ? (viewerServerBackend || "local-fs") : "";
   const fileRevealAvailable = fileAccessBackend === "local-fs";
   const filePathCopyAvailable = fileAccessBackend === "local-fs" && Boolean(
     viewerServerInfo?.rootPath || viewerServerInfo?.directoryRoot
   );
-  const fileLinkCopyAvailable = fileAccessBackend === "vercel-blob";
+  // The local-fs viewer has no remote asset links; the copy-link affordance is hosted-only.
+  const fileLinkCopyAvailable = false;
   const isStepView = selectedEntrySourceFormat === RENDER_FORMAT.STEP;
   const isAssemblyView = selectedEntry?.kind === "assembly";
   const isUrdfView = isRobotRenderFormat(selectedEntrySourceFormat);

@@ -1,11 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import {
-  cadCatalogRefreshIntervalMs,
-  cadViewerUsesHostedCatalog,
-  readActiveCadDir
-} from "./cadManifestStore.js";
+import { readActiveCadDir } from "./cadManifestStore.js";
 
 function createMemorySessionStorage() {
   const store = new Map();
@@ -71,21 +67,4 @@ test("readActiveCadDir reuses stored directories for all file params", () => {
     setHref("http://viewer.test/?file=%2Ftmp%2Fother%2Frobot.step");
     assert.equal(readActiveCadDir(), "/tmp/models");
   });
-});
-
-test("hosted catalog mode ignores local directory query state", () => {
-  assert.equal(cadViewerUsesHostedCatalog("vercel-blob"), true);
-
-  withWindow("http://viewer.test/?dir=%2Ftmp%2Fmodels&file=robots%2Fnext.step", ({ setHref }) => {
-    assert.equal(readActiveCadDir({ assetBackend: "vercel-blob" }), "");
-
-    setHref("http://viewer.test/?file=robots%2Fnext.step");
-    assert.equal(readActiveCadDir({ assetBackend: "vercel-blob" }), "");
-  });
-});
-
-test("cadCatalogRefreshIntervalMs slows polling for hosted catalog backends", () => {
-  assert.equal(cadCatalogRefreshIntervalMs("vercel-blob"), 60_000);
-  assert.equal(cadCatalogRefreshIntervalMs("local-fs"), 2_000);
-  assert.equal(cadCatalogRefreshIntervalMs(""), 2_000);
 });

@@ -6,10 +6,6 @@ import { fileURLToPath } from "node:url";
 
 import { createLocalAssetBackend } from "./localAssetBackend.mjs";
 import {
-  buildHostedViewerServerInfo,
-} from "./vercelApi.mjs";
-import { createVercelBlobAssetBackend } from "./vercelBlobAssetBackend.mjs";
-import {
   createCadViewerApiMiddleware,
   createLocalAssetMiddleware,
   serveDistAsset,
@@ -24,12 +20,7 @@ import {
   normalizeViewerGithubUrl,
 } from "../shared/viewerConfig.mjs";
 import { resolveDirectoryRoot } from "./directoryRoot.mjs";
-import {
-  normalizeViewerAssetBackend,
-  assertNoDeprecatedLocalRootEnv,
-  vercelBlobConfigFromEnv,
-  VIEWER_ASSET_BACKENDS,
-} from "./viewerEnv.mjs";
+import { assertNoDeprecatedLocalRootEnv } from "./viewerEnv.mjs";
 import {
   closeHttpServer,
   normalizeServerLifetimeMs,
@@ -88,24 +79,17 @@ const directoryRoot = resolveDirectoryRoot({
   appRoot: viewerAppRoot,
   defaultDirectoryRoot,
 });
-const backendKind = normalizeViewerAssetBackend(runtimeEnv.VIEWER_ASSET_BACKEND);
 const port = normalizeViewerPort(runtime.args.port, DEFAULT_VIEWER_PORT);
 const host = runtime.args.host || "127.0.0.1";
 const serverLifetimeMs = runtime.args.shutdownAfterMs ?? normalizeServerLifetimeMs(runtimeEnv.VIEWER_SERVER_LIFETIME_MS);
 const distRoot = path.resolve(viewerAppRoot, "dist");
-const backend = backendKind === VIEWER_ASSET_BACKENDS.VERCEL_BLOB
-  ? createVercelBlobAssetBackend({
-      ...vercelBlobConfigFromEnv(runtimeEnv),
-      readOnly: true,
-    })
-  : createLocalAssetBackend({
-      directoryRoot,
-      rootDir: runtime.args.rootDir || "",
-      defaultFile: normalizeViewerDefaultFile(runtimeEnv.VIEWER_DEFAULT_FILE || ""),
-      githubUrl: normalizeViewerGithubUrl(runtimeEnv.VIEWER_GITHUB_URL || ""),
-    });
-const localAssetBackendEnabled = backend.kind === "local-fs";
-const stepArtifactBackendEnabled = localAssetBackendEnabled && typeof backend.generateStepArtifact === "function";
+const backend = createLocalAssetBackend({
+  directoryRoot,
+  rootDir: runtime.args.rootDir || "",
+  defaultFile: normalizeViewerDefaultFile(runtimeEnv.VIEWER_DEFAULT_FILE || ""),
+  githubUrl: normalizeViewerGithubUrl(runtimeEnv.VIEWER_GITHUB_URL || ""),
+});
+const stepArtifactBackendEnabled = typeof backend.generateStepArtifact === "function";
 const activeDirectories = new Map();
 
 function trackActiveDirectory(resolvedRoot) {
@@ -130,12 +114,10 @@ function activeDirectoryOptions({ rootDir = "" } = {}) {
   return options;
 }
 
-if (localAssetBackendEnabled) {
-  try {
-    trackActiveDirectory(backend.resolveRoot(""));
-  } catch (error) {
-    process.stderr.write(`Failed to activate default CAD Viewer directory: ${error instanceof Error ? error.message : String(error)}\n`);
-  }
+try {
+  trackActiveDirectory(backend.resolveRoot(""));
+} catch (error) {
+  process.stderr.write(`Failed to activate default CAD Viewer directory: ${error instanceof Error ? error.message : String(error)}\n`);
 }
 
 const middlewares = [
@@ -144,9 +126,6 @@ const middlewares = [
     enableStepArtifactBackend: stepArtifactBackendEnabled,
     claimDisabledStepArtifactRoute: true,
     serverInfo: ({ rootDir = "" } = {}) => {
-      if (!localAssetBackendEnabled) {
-        return buildHostedViewerServerInfo({ backend, env: runtimeEnv, rootDir: "" });
-      }
       const infoRootDir = rootDir || "";
       return buildViewerServerInfo({
         directoryRoot,
@@ -170,7 +149,7 @@ const middlewares = [
       trackActiveDirectory(resolvedRoot);
     },
   }),
-  ...(localAssetBackendEnabled ? [createLocalAssetMiddleware({ backend })] : []),
+  createLocalAssetMiddleware({ backend }),
   serveDistAsset({ distRoot }),
 ];
 
