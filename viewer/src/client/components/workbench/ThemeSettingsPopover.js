@@ -83,7 +83,8 @@ import {
   normalizeStepClipSettings
 } from "cadjs/lib/viewer/clipPlane";
 import { FILE_SHEET_SECTION_IDS } from "@/workbench/fileSheetSections";
-import {
+import { ScrollArea } from "../ui/scroll-area";
+import FileSheet, {
   FILE_SHEET_COMPACT_BUTTON_CLASSES,
   FILE_SHEET_COMPACT_INPUT_CLASSES,
   FILE_SHEET_FIELD_LABEL_CLASSES,
@@ -994,6 +995,8 @@ export function ThemePresetDropdown({
   handleEditThemePreset,
   handleResetThemePresetToDefault,
   handleRestoreDefaultThemePresets,
+  appearanceEditing = false,
+  onOpenAppearanceEditor,
   triggerClassName,
   iconClassName
 }) {
@@ -1060,6 +1063,11 @@ export function ThemePresetDropdown({
   };
 
   const handleEditTheme = (presetId) => {
+    setMenuOpen(false);
+    if (typeof onOpenAppearanceEditor === "function") {
+      onOpenAppearanceEditor(presetId);
+      return;
+    }
     const didEdit = typeof handleEditThemePreset === "function"
       ? handleEditThemePreset(presetId)
       : false;
@@ -1098,7 +1106,12 @@ export function ThemePresetDropdown({
             size="icon-sm"
             aria-label={`Theme: ${activeThemeLabel}`}
             title={`Theme: ${activeThemeLabel}`}
-            className={triggerClassName}
+            aria-pressed={appearanceEditing}
+            className={cn(
+              triggerClassName,
+              appearanceEditing &&
+                "bg-primary text-primary-foreground hover:bg-primary hover:text-primary-foreground"
+            )}
           >
             <Contrast className={iconClassName} strokeWidth={2} aria-hidden="true" />
             <span className="sr-only">Theme</span>
@@ -1164,6 +1177,22 @@ export function ThemePresetDropdown({
               </div>
             );
           })}
+          {typeof onOpenAppearanceEditor === "function" ? (
+            <>
+              <DropdownMenuSeparator />
+              <DropdownMenuItem
+                className="text-xs"
+                onSelect={(event) => {
+                  event.preventDefault();
+                  setMenuOpen(false);
+                  onOpenAppearanceEditor("");
+                }}
+              >
+                <Plus className="h-3.5 w-3.5" strokeWidth={2} aria-hidden="true" />
+                <span>Custom</span>
+              </DropdownMenuItem>
+            </>
+          ) : null}
           {themeLibraryHasChanged ? (
             <>
               <DropdownMenuSeparator />
@@ -2388,4 +2417,65 @@ export function buildThemeAppearanceTab(props) {
     ),
     content: <ThemeAppearanceContent {...props} />
   };
+}
+
+// Full-sidebar appearance editor (global theme). Mutually exclusive with the
+// per-file sheet; opened from the navbar theme dropdown. Reuses the FileSheet
+// aside frame (width + resize) and the ThemeAppearanceContent editor body
+// (which already holds the preset select + Save-as/Update/Restore actions).
+export function AppearanceEditorPanel({
+  open,
+  isDesktop,
+  width,
+  onClose,
+  onStartResize,
+  themePresets = [],
+  themeSettings,
+  themePresetId = "",
+  resolvedColorSchemeMode = THEME_COLOR_MODES.LIGHT,
+  updateThemeSettings,
+  handleResetThemeSettings,
+  handleSaveCustomThemePreset,
+  handleUpdateThemePresetSettings
+}) {
+  return (
+    <FileSheet
+      open={open}
+      title="Appearance"
+      isDesktop={isDesktop}
+      width={width}
+      onOpenChange={(nextOpen) => {
+        if (!nextOpen) {
+          onClose?.();
+        }
+      }}
+      onStartResize={onStartResize}
+      scrollBody={false}
+    >
+      <div className="flex h-8 shrink-0 items-center justify-between border-b border-sidebar-border/70 px-2">
+        <span className="text-[11px] font-medium text-sidebar-foreground">Appearance</span>
+        <button
+          type="button"
+          onClick={() => onClose?.()}
+          aria-label="Close appearance editor"
+          title="Close"
+          className="flex size-6 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+        >
+          <X className="size-3.5" strokeWidth={2} aria-hidden="true" />
+        </button>
+      </div>
+      <ScrollArea className="min-h-0 flex-1" viewportClassName="h-full">
+        <ThemeAppearanceContent
+          themePresets={themePresets}
+          themeSettings={themeSettings}
+          themePresetId={themePresetId}
+          resolvedColorSchemeMode={resolvedColorSchemeMode}
+          updateThemeSettings={updateThemeSettings}
+          handleResetThemeSettings={handleResetThemeSettings}
+          handleSaveCustomThemePreset={handleSaveCustomThemePreset}
+          handleUpdateThemePresetSettings={handleUpdateThemePresetSettings}
+        />
+      </ScrollArea>
+    </FileSheet>
+  );
 }

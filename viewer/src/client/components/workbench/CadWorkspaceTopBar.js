@@ -1089,6 +1089,8 @@ export default function CadWorkspaceTopBar({
   fileSheetKind = "",
   fileSheetOpen = false,
   onToggleFileSheet,
+  appearanceEditing = false,
+  onOpenAppearanceEditor,
   navigationAvailable = true
 }) {
   const viewerVersion = String(viewerPackage.version || "").trim();
@@ -1306,6 +1308,8 @@ export default function CadWorkspaceTopBar({
             handleEditThemePreset={handleEditThemePreset}
             handleResetThemePresetToDefault={handleResetThemePresetToDefault}
             handleRestoreDefaultThemePresets={handleRestoreDefaultThemePresets}
+            appearanceEditing={appearanceEditing}
+            onOpenAppearanceEditor={onOpenAppearanceEditor}
             triggerClassName={topBarIconButtonClasses}
             iconClassName={topBarIconClasses}
           />
@@ -1333,9 +1337,9 @@ export default function CadWorkspaceTopBar({
               size="icon"
               aria-label={fileSheetToggleLabel}
               title={fileSheetToggleLabel}
-              aria-pressed={fileSheetOpen}
+              aria-pressed={fileSheetOpen && !appearanceEditing}
               onClick={onToggleFileSheet}
-              className={`${topBarIconButtonClasses} ${fileSheetOpen ? activeIconButtonClasses : ""}`}
+              className={`${topBarIconButtonClasses} ${fileSheetOpen && !appearanceEditing ? activeIconButtonClasses : ""}`}
             >
               <SlidersHorizontal className={topBarIconClasses} />
               <span className="sr-only">{fileSheetToggleLabel}</span>
