@@ -53,12 +53,6 @@ import {
 import { cn } from "@/ui/utils";
 import { copyTextToClipboard } from "@/ui/clipboard";
 import {
-  themeSettingsSupportsSystemColorMode
-} from "cadjs/lib/themeSettings";
-import {
-  LIGHT_COLOR_SCHEME_ID
-} from "@/ui/colorScheme";
-import {
   ENTRY_ICON_KIND,
   entryIconKind
 } from "@/workbench/entryIconKind";
@@ -1056,9 +1050,6 @@ export default function CadWorkspaceTopBar({
   themePresets = [],
   themeSettings,
   themePresetId = "",
-  colorSchemePreference = LIGHT_COLOR_SCHEME_ID,
-  resolvedColorSchemeMode = LIGHT_COLOR_SCHEME_ID,
-  onColorSchemePreferenceChange,
   updateThemeSettings,
   handleResetThemeSettings,
   handleSaveCustomThemePreset,
@@ -1129,9 +1120,6 @@ export default function CadWorkspaceTopBar({
   const fileSheetToggleLabel = fileSheetOpen
     ? `Collapse ${fileSheetLabel(fileSheetKind)}`
     : `Expand ${fileSheetLabel(fileSheetKind)}`;
-  // Light/dark lives inside the theme dropdown now (System/Light/Dark segment),
-  // shown only when the active theme follows the system color mode.
-  const showColorModeControl = themeSettingsSupportsSystemColorMode(themeSettings);
 
   return (
     <header
@@ -1291,10 +1279,6 @@ export default function CadWorkspaceTopBar({
             appearanceEditing={appearanceEditing}
             onOpenAppearanceEditor={onOpenAppearanceEditor}
             onCloseAppearanceEditor={onCloseAppearanceEditor}
-            colorSchemePreference={colorSchemePreference}
-            resolvedColorSchemeMode={resolvedColorSchemeMode}
-            onColorSchemePreferenceChange={onColorSchemePreferenceChange}
-            showColorModeControl={showColorModeControl}
             triggerClassName={topBarIconButtonClasses}
             iconClassName={topBarIconClasses}
           />

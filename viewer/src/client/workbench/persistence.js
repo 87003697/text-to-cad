@@ -1006,8 +1006,11 @@ export function readThemeSettingsStateFromAppearanceQuery(customPresets = readCu
   if (!requestedPresetId) {
     return null;
   }
+  // Canonicalize legacy/alias ids (e.g. ?appearance=workbench -> workbench-light)
+  // so older URLs keep resolving after the preset split.
+  const canonicalPresetId = getThemePresetById(requestedPresetId)?.id || requestedPresetId;
   const presets = normalizeThemeLibraryPayload(customPresets);
-  const normalizedPresetId = normalizeThemeLibraryThemeId(requestedPresetId, presets);
+  const normalizedPresetId = normalizeThemeLibraryThemeId(canonicalPresetId, presets);
   return normalizedPresetId ? cloneThemeSettingsState(normalizedPresetId, null, presets) : null;
 }
 

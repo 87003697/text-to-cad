@@ -1,5 +1,5 @@
 import { Children, isValidElement, useEffect, useId, useMemo, useRef, useState } from "react";
-import { Contrast, FlipHorizontal2, Monitor, Moon, MoreHorizontal, Pencil, Plus, RotateCcw, Save, Sun, Trash2, X } from "lucide-react";
+import { Contrast, FlipHorizontal2, Moon, MoreHorizontal, Pencil, Plus, RotateCcw, Save, Sun, Trash2, X } from "lucide-react";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -113,11 +113,6 @@ const PROJECTION_MODE_OPTIONS = [
   { value: CAMERA_PROJECTION.PERSPECTIVE, label: "Perspective", title: "Depth projection with vanishing lines", Icon: PerspectiveProjectionIcon }
 ];
 
-const COLOR_MODE_OPTIONS = [
-  { value: THEME_COLOR_MODES.SYSTEM, label: "System", Icon: Monitor },
-  { value: THEME_COLOR_MODES.LIGHT, label: "Light", Icon: Sun },
-  { value: THEME_COLOR_MODES.DARK, label: "Dark", Icon: Moon }
-];
 
 const EXPLODED_AXIS_OPTIONS = [
   { value: "x", label: "X" },
@@ -998,10 +993,6 @@ export function ThemePresetDropdown({
   appearanceEditing = false,
   onOpenAppearanceEditor,
   onCloseAppearanceEditor,
-  colorSchemePreference = THEME_COLOR_MODES.SYSTEM,
-  resolvedColorSchemeMode = THEME_COLOR_MODES.LIGHT,
-  onColorSchemePreferenceChange,
-  showColorModeControl = false,
   triggerClassName,
   iconClassName
 }) {
@@ -1021,14 +1012,6 @@ export function ThemePresetDropdown({
   );
   const activeThemePresetId = activeThemePreset?.id || "";
   const activeThemeLabel = activeThemePreset?.label || "Theme";
-  // When the active theme follows the system color mode, the trigger doubles as
-  // the light/dark indicator (Sun/Moon); otherwise it stays the neutral
-  // appearance glyph since color mode can't be switched from here.
-  const colorModeControlVisible =
-    showColorModeControl && typeof onColorSchemePreferenceChange === "function";
-  const TriggerIcon = colorModeControlVisible
-    ? (resolvedColorSchemeMode === THEME_COLOR_MODES.DARK ? Moon : Sun)
-    : Contrast;
   const deleteThemePreset = themePresets.find((preset) => preset.id === deleteThemeId) || null;
   const resetThemePreset = themePresets.find((preset) => preset.id === resetThemeId) || null;
   const themeLibraryHasChanged = useMemo(
@@ -1133,26 +1116,11 @@ export function ThemePresetDropdown({
               appearanceEditing && "bg-accent text-accent-foreground"
             )}
           >
-            <TriggerIcon className={iconClassName} strokeWidth={2} aria-hidden="true" />
+            <Contrast className={iconClassName} strokeWidth={2} aria-hidden="true" />
             <span className="sr-only">Appearance</span>
           </Button>
         </DropdownMenuTrigger>
         <DropdownMenuContent align="end" sideOffset={6} className="w-64">
-          {colorModeControlVisible ? (
-            <>
-              <DropdownMenuLabel className="px-2 pb-1 pt-1.5 text-xs text-muted-foreground">
-                Color mode
-              </DropdownMenuLabel>
-              <div className="px-2 pb-1">
-                <SegmentedControl
-                  value={colorSchemePreference}
-                  options={COLOR_MODE_OPTIONS}
-                  onChange={(nextMode) => onColorSchemePreferenceChange?.(nextMode)}
-                />
-              </div>
-              <DropdownMenuSeparator />
-            </>
-          ) : null}
           <DropdownMenuLabel className="px-2 py-1.5 text-xs text-muted-foreground">
             Theme
           </DropdownMenuLabel>
@@ -1286,7 +1254,6 @@ function ThemeAppearanceSection({
   themePresets = [],
   themeSettings,
   themePresetId = "",
-  resolvedColorSchemeMode = THEME_COLOR_MODES.LIGHT,
   updateThemeSettings,
   handleResetThemeSettings,
   handleSaveCustomThemePreset,
@@ -1303,14 +1270,6 @@ function ThemeAppearanceSection({
   const fallbackThemeName = activeThemePreset?.label
     ? `${activeThemePreset.label} copy`
     : "Theme copy";
-  const colorMode = themeSettings.colorMode || THEME_COLOR_MODES.SYSTEM;
-  const isDarkResolved = resolvedColorSchemeMode === THEME_COLOR_MODES.DARK;
-  const colorModeHint =
-    colorMode === THEME_COLOR_MODES.LIGHT
-      ? "Always renders this theme’s light palette."
-      : colorMode === THEME_COLOR_MODES.DARK
-        ? "Always renders this theme’s dark palette."
-        : "Follows the light/dark toggle in the toolbar.";
   // The primary action is "Update" for editable (custom) themes and "Save as"
   // for built-ins, which can't be overwritten in place.
   const canUpdate = canUpdateActiveTheme && typeof handleUpdateThemePresetSettings === "function";
@@ -1339,30 +1298,9 @@ function ThemeAppearanceSection({
     handleUpdateThemePresetSettings(activeThemeId);
   };
 
-  const handleColorModeChange = (nextColorMode) => {
-    updateThemeSettings?.((current) => ({
-      ...normalizeThemeSettings(current),
-      colorMode: nextColorMode
-    }));
-  };
-
   return (
     <>
       <ControlSubsection title="Theme">
-        <Field
-          label="Color mode"
-          value={colorMode === THEME_COLOR_MODES.SYSTEM ? (isDarkResolved ? "Dark now" : "Light now") : null}
-        >
-          <div className="space-y-1.5">
-            <SegmentedControl
-              value={colorMode}
-              options={COLOR_MODE_OPTIONS}
-              onChange={handleColorModeChange}
-            />
-            <p className="text-[11px] leading-snug text-muted-foreground">{colorModeHint}</p>
-          </div>
-        </Field>
-
         <FileSheetControlRow>
           <div className="w-full space-y-1.5">
             <Button
@@ -2042,7 +1980,6 @@ function ThemeAppearanceContent({
         themePresets={themePresets}
         themeSettings={themeSettings}
         themePresetId={themePresetId}
-        resolvedColorSchemeMode={resolvedColorSchemeMode}
         updateThemeSettings={updateThemeSettings}
         handleResetThemeSettings={handleResetThemeSettings}
         handleSaveCustomThemePreset={handleSaveCustomThemePreset}

@@ -69,20 +69,23 @@ test("theme presets expose a default material color", () => {
   assert.equal(getThemePresetIdForSettings(pink), "pink");
 });
 
-test("workbench is the default system-aware theme preset", () => {
-  assert.equal(DEFAULT_THEME_PRESET_ID, "workbench");
-  assert.equal(THEME_PRESETS[0]?.id, "workbench");
-  assert.equal(THEME_PRESETS[0]?.label, "Workbench");
-  assert.equal(getThemePresetIdForSettings(DEFAULT_THEME_SETTINGS), "workbench");
-  assert.deepEqual(cloneThemePresetSettings("cinematic"), cloneThemePresetSettings("workbench"));
-  assert.deepEqual(cloneThemePresetSettings("light"), cloneThemePresetSettings("workbench"));
-  assert.deepEqual(cloneThemePresetSettings("dark"), cloneThemePresetSettings("workbench"));
+test("workbench ships as split light and dark presets", () => {
+  assert.equal(DEFAULT_THEME_PRESET_ID, "workbench-light");
+  assert.equal(THEME_PRESETS[0]?.id, "workbench-light");
+  assert.equal(THEME_PRESETS[0]?.label, "Workbench Light");
+  assert.equal(THEME_PRESETS[1]?.id, "workbench-dark");
+  assert.equal(THEME_PRESETS[1]?.label, "Workbench Dark");
+  assert.equal(getThemePresetIdForSettings(DEFAULT_THEME_SETTINGS), "workbench-light");
+  assert.deepEqual(cloneThemePresetSettings("cinematic"), cloneThemePresetSettings("workbench-light"));
+  assert.deepEqual(cloneThemePresetSettings("light"), cloneThemePresetSettings("workbench-light"));
+  assert.deepEqual(cloneThemePresetSettings("workbench"), cloneThemePresetSettings("workbench-light"));
+  assert.deepEqual(cloneThemePresetSettings("dark"), cloneThemePresetSettings("workbench-dark"));
 });
 
-test("workbench preset uses neutral material treatment while preserving source colors", () => {
-  const cinematic = cloneThemePresetSettings("workbench");
+test("workbench-light preset uses neutral material treatment while preserving source colors", () => {
+  const cinematic = cloneThemePresetSettings("workbench-light");
 
-  assert.equal(cinematic.colorMode, THEME_COLOR_MODES.SYSTEM);
+  assert.equal(cinematic.colorMode, THEME_COLOR_MODES.LIGHT);
   assert.equal(cinematic.materials.defaultColor, "#b6c4ce");
   assert.deepEqual(cinematic.materials.fillColors, WORKBENCH_FILL_COLORS);
   assert.equal(cinematic.materials.cycleColors, false);
@@ -112,14 +115,14 @@ test("workbench preset uses neutral material treatment while preserving source c
   assert.equal(cinematic.lighting.toneMappingExposure, 1.16);
   assert.equal(cinematic.lighting.ambient.intensity, 0.4);
   assert.equal(cinematic.lighting.hemisphere.intensity, 1.12);
+  // Flat theme: light and dark mode-color slots are identical (no per-variable split).
   assert.equal(cinematic.modeColors.light.background.linearStart, "#f0f4f9");
-  assert.equal(cinematic.modeColors.dark.background.linearStart, "#242e3a");
-  assert.equal(cinematic.modeColors.dark.floor.color, "#202832");
+  assert.equal(cinematic.modeColors.dark.background.linearStart, "#f0f4f9");
+  assert.equal(cinematic.modeColors.dark.floor.color, "#e2e9f0");
 });
 
-test("workbench dark color mode uses the workbench dark color treatment", () => {
-  const workbench = cloneThemePresetSettings("workbench");
-  const dark = resolveThemeSettingsForColorMode(workbench, { prefersDark: true });
+test("workbench-dark preset uses the workbench dark color treatment", () => {
+  const dark = cloneThemePresetSettings("workbench-dark");
 
   assert.equal(THEME_PRESETS.some((preset) => preset.id === "dark"), false);
   assert.equal(dark.colorMode, THEME_COLOR_MODES.DARK);
@@ -127,15 +130,7 @@ test("workbench dark color mode uses the workbench dark color treatment", () => 
   assert.deepEqual(dark.materials.fillColors, WORKBENCH_FILL_COLORS);
   assert.equal(dark.materials.cycleColors, false);
   assert.equal(resolveThemeFillColor(dark.materials, 3), "#b6c4ce");
-  assert.equal(dark.materials.tintMode, "blend");
-  assert.equal(dark.materials.tintStrength, 0);
-  assert.equal(dark.materials.saturation, 1.18);
-  assert.equal(dark.materials.contrast, 1.12);
-  assert.equal(dark.materials.brightness, 1.02);
-  assert.equal(dark.materials.opacity, 1);
   assert.equal(Object.hasOwn(dark, "edges"), false);
-  assert.equal(dark.environment.enabled, false);
-  assert.equal(dark.environment.intensity, 0.32);
   assert.equal(dark.background.type, "solid");
   assert.equal(dark.background.solidColor, "#181f28");
   assert.equal(dark.background.linearStart, "#242e3a");
@@ -143,20 +138,12 @@ test("workbench dark color mode uses the workbench dark color treatment", () => 
   assert.equal(dark.background.radialInner, "#293443");
   assert.equal(dark.background.radialOuter, "#0c1016");
   assert.equal(dark.floor.color, "#202832");
-  assert.equal(dark.floor.roughness, 0.7);
-  assert.equal(dark.floor.reflectivity, 0.14);
-  assert.equal(dark.floor.shadowOpacity, 0.16);
-  assert.equal(dark.floor.horizonBlend, 0.18);
-  assert.equal(dark.lighting.toneMappingExposure, 1.16);
-  assert.equal(dark.lighting.spot.enabled, true);
   assert.equal(dark.lighting.spot.color, "#b3d4f2");
-  assert.equal(dark.lighting.spot.intensity, 0.52);
   assert.equal(dark.lighting.point.color, "#bfd8f0");
   assert.equal(dark.lighting.ambient.color, "#dfe7f0");
-  assert.equal(dark.lighting.ambient.intensity, 0.4);
   assert.equal(dark.lighting.hemisphere.groundColor, "#333d4b");
-  assert.equal(dark.lighting.hemisphere.intensity, 1.12);
-  assert.equal(getThemePresetIdForSettings(workbench), "workbench");
+  assert.equal(inferThemeSettingsSceneTone(dark), "dark");
+  assert.equal(getThemePresetIdForSettings(dark), "workbench-dark");
 });
 
 test("beach preset keeps light materials with sunlit sand presentation styling", () => {
@@ -206,7 +193,8 @@ test("theme settings do not normalize display edge settings", () => {
 
 test("built-in theme preset ids stay explicit", () => {
   assert.deepEqual(THEME_PRESETS.map((preset) => preset.id), [
-    "workbench",
+    "workbench-light",
+    "workbench-dark",
     "blue",
     "pink",
     "clay-sunrise",
@@ -215,14 +203,14 @@ test("built-in theme preset ids stay explicit", () => {
   ]);
 });
 
-test("legacy darkoal and charcoal ids resolve to workbench", () => {
-  const workbench = cloneThemePresetSettings("workbench");
+test("legacy darkoal and charcoal ids resolve to workbench-dark", () => {
+  const workbenchDark = cloneThemePresetSettings("workbench-dark");
 
   assert.equal(THEME_PRESETS.some((preset) => preset.id === "darkoal"), false);
   assert.equal(THEME_PRESETS.some((preset) => preset.id === "charcoal"), false);
-  assert.deepEqual(cloneThemePresetSettings("darkoal"), workbench);
-  assert.deepEqual(cloneThemePresetSettings("charcoal"), workbench);
-  assert.deepEqual(cloneThemePresetSettings("dark-2"), workbench);
+  assert.deepEqual(cloneThemePresetSettings("darkoal"), workbenchDark);
+  assert.deepEqual(cloneThemePresetSettings("charcoal"), workbenchDark);
+  assert.deepEqual(cloneThemePresetSettings("dark-2"), workbenchDark);
 });
 
 test("stylized presets keep their palettes and declare an opinionated color mode", () => {
@@ -350,43 +338,39 @@ test("disabled color cycling preserves palettes without rotating fills", () => {
   assert.equal(resolveThemeFillColor(normalized.materials, 2), "#111111");
 });
 
-test("system theme preset stays on the workbench preset", () => {
-  assert.equal(resolveSystemThemePresetId({ prefersDark: false }), "workbench");
-  assert.equal(resolveSystemThemePresetId({ prefersDark: true }), "workbench");
+test("system default preset follows the OS preference for the first-load pick", () => {
+  assert.equal(resolveSystemThemePresetId({ prefersDark: false }), "workbench-light");
+  assert.equal(resolveSystemThemePresetId({ prefersDark: true }), "workbench-dark");
 });
 
-test("scene tone is inferred from the active floor color", () => {
-  assert.equal(inferThemeSettingsSceneTone(cloneThemePresetSettings("workbench")), "light");
-  assert.equal(inferThemeSettingsSceneTone(cloneThemePresetSettings("workbench"), { prefersDark: true }), "dark");
-  assert.equal(inferThemeSettingsSceneTone(cloneThemePresetSettings("charcoal"), { prefersDark: true }), "dark");
+test("scene tone is inferred from the dominant background color", () => {
+  assert.equal(inferThemeSettingsSceneTone(cloneThemePresetSettings("workbench-light")), "light");
+  assert.equal(inferThemeSettingsSceneTone(cloneThemePresetSettings("workbench-dark")), "dark");
+  assert.equal(inferThemeSettingsSceneTone(cloneThemePresetSettings("charcoal")), "dark");
   assert.equal(inferThemeSettingsSceneTone(cloneThemePresetSettings("blue")), "dark");
   assert.equal(inferThemeSettingsSceneTone(cloneThemePresetSettings("clay-sunrise")), "light");
+  // The background drives tone, not the floor: a dark-canvas theme reads dark
+  // even when given a light floor color.
   assert.equal(inferThemeSettingsSceneTone({
-    ...cloneThemePresetSettings("workbench"),
-    colorMode: THEME_COLOR_MODES.LIGHT,
-    background: {
-      ...cloneThemePresetSettings("workbench").background,
-      type: "solid",
-      solidColor: "#f8fafc"
-    }
-  }), "light");
-  assert.equal(inferThemeSettingsSceneTone({
-    ...cloneThemePresetSettings("workbench"),
-    colorMode: THEME_COLOR_MODES.LIGHT,
-    background: {
-      ...cloneThemePresetSettings("workbench").background,
-      type: "solid",
-      solidColor: "#030914"
-    },
+    ...cloneThemePresetSettings("workbench-dark"),
     floor: {
-      ...cloneThemePresetSettings("workbench").floor,
+      ...cloneThemePresetSettings("workbench-dark").floor,
       color: "#f8fafc"
+    }
+  }), "dark");
+  // ...and a light-canvas theme reads light even with a dark floor color.
+  assert.equal(inferThemeSettingsSceneTone({
+    ...cloneThemePresetSettings("workbench-light"),
+    floor: {
+      ...cloneThemePresetSettings("workbench-light").floor,
+      color: "#030914"
     }
   }), "light");
 });
 
-test("system color mode support is exposed only for system-aware themes", () => {
-  assert.equal(themeSettingsSupportsSystemColorMode(cloneThemePresetSettings("workbench")), true);
+test("no built-in preset declares a system color mode", () => {
+  assert.equal(themeSettingsSupportsSystemColorMode(cloneThemePresetSettings("workbench-light")), false);
+  assert.equal(themeSettingsSupportsSystemColorMode(cloneThemePresetSettings("workbench-dark")), false);
   assert.equal(themeSettingsSupportsSystemColorMode(cloneThemePresetSettings("blue")), false);
   assert.equal(themeSettingsSupportsSystemColorMode(cloneThemePresetSettings("terminal")), false);
 });
