@@ -18,6 +18,7 @@ import {
   updateImplicitCadMaterialUniforms
 } from "implicitjs/render";
 import {
+  implicitGraphicsRenderResolutionScale,
   normalizeImplicitGraphicsSettings
 } from "@/workbench/implicitGraphicsSettings";
 import ViewPlaneControl from "./viewer/ViewPlaneControl";
@@ -901,11 +902,10 @@ const ImplicitCadViewer = forwardRef(function ImplicitCadViewer({
     runtime.dynamicRenderActive = dynamicRenderActiveRef.current;
     updateImplicitThemeUniforms(runtime, model, themeSettings);
     updateImplicitGraphicsUniforms(runtime, model);
-    runtime.setPixelRatioCap?.(
-      previewModeRef.current
-        ? normalizedGraphicsSettings.interactionResolutionScale
-        : normalizedGraphicsSettings.resolutionScale
-    );
+    runtime.setPixelRatioCap?.(implicitGraphicsRenderResolutionScale(
+      normalizedGraphicsSettings,
+      { interaction: previewModeRef.current }
+    ));
     runtime.requestRender?.();
   }, [model, normalizedGraphicsSettings, themeSettings]);
 
@@ -1098,11 +1098,10 @@ const ImplicitCadViewer = forwardRef(function ImplicitCadViewer({
       if (disposed) {
         return;
       }
-      setPixelRatioCap(
-        previewModeRef.current
-          ? graphicsSettingsRef.current.interactionResolutionScale
-          : graphicsSettingsRef.current.resolutionScale
-      );
+      setPixelRatioCap(implicitGraphicsRenderResolutionScale(
+        graphicsSettingsRef.current,
+        { interaction: previewModeRef.current }
+      ));
       updateCameraFraming();
       if (autoZoomStateRef.current.attached !== false) {
         runAutoZoomRef.current?.("resize", { animate: false });

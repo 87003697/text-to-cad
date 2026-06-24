@@ -59,6 +59,11 @@ export function normalizeImplicitGraphicsSettings(value = {}) {
   };
 }
 
+export function implicitGraphicsRenderResolutionScale(value = {}, { interaction = false } = {}) {
+  const settings = normalizeImplicitGraphicsSettings(value);
+  return interaction ? settings.interactionResolutionScale : settings.resolutionScale;
+}
+
 export function implicitGraphicsSettingsEqual(a, b) {
   const normalizedA = normalizeImplicitGraphicsSettings(a);
   const normalizedB = normalizeImplicitGraphicsSettings(b);

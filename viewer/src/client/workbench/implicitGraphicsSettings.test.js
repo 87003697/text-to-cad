@@ -3,6 +3,7 @@ import test from "node:test";
 
 import {
   IMPLICIT_GRAPHICS_LIMITS,
+  implicitGraphicsRenderResolutionScale,
   normalizeImplicitGraphicsSettings
 } from "./implicitGraphicsSettings.js";
 
@@ -29,4 +30,14 @@ test("implicit graphics settings clamp to expanded ranges", () => {
     ambientOcclusion: true,
     rimLight: true
   });
+});
+
+test("implicit graphics render resolution switches to interaction scale while orbiting", () => {
+  const settings = {
+    resolutionScale: 2.5,
+    interactionResolutionScale: 0.75
+  };
+
+  assert.equal(implicitGraphicsRenderResolutionScale(settings), 2.5);
+  assert.equal(implicitGraphicsRenderResolutionScale(settings, { interaction: true }), 0.75);
 });
