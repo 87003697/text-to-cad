@@ -1166,10 +1166,19 @@ def load_step_scene(step_path: Path) -> LoadedStepScene:
     )
 
 
-# Hidden inline cache directory, written beside each STEP like __pycache__ next to
-# a .py. All STEPs in a directory share one __cadcache__; entries are namespaced by
-# STEP filename and keyed by schema + content hash.
+# Hidden inline cache directory, written beside each STEP like __pycache__ next to a
+# .py. All STEPs in a directory share one __cadcache__. Scene caches live under
+# ``__cadcache__/models/<step-filename>/scene/`` so they sit inside the same per-model
+# home as the component-GLB render package (``__cadcache__/models/<step-filename>/``)
+# and its generation lock, rather than at the __cadcache__ root. Each is namespaced by
+# STEP filename and keyed by schema + content hash; the ``scene`` subdir isolates the
+# content-hash leaves so sibling pruning never touches ``assembly.json``/``components``.
 _STEP_SCENE_CACHE_DIRNAME = "__cadcache__"
+# Matches the component-GLB package namespace in component_package.py so every per-model
+# cache (scene, render package, lock) shares one ``__cadcache__/models`` home.
+_STEP_SCENE_CACHE_MODELS_DIRNAME = "models"
+# Subdir holding the content-hash scene leaves, isolated from the render package files.
+_STEP_SCENE_CACHE_SUBDIR = "scene"
 
 
 def _step_scene_cache_enabled() -> bool:
@@ -1185,11 +1194,14 @@ def _path_is_skill_runtime(path: Path) -> bool:
 def _step_scene_cache_dir(step_path: Path, step_hash: str) -> Path | None:
     """Inline binary-scene cache directory for a STEP file.
 
-    Written next to the STEP in a hidden ``__cadcache__`` folder (like
-    ``__pycache__`` beside a ``.py``). Honors ``TEXT_TO_CAD_STEP_SCENE_CACHE=0``
-    (disabled) and ``TEXT_TO_CAD_STEP_SCENE_CACHE_DIR`` (central override); falls
-    back to a temp store when the STEP lives inside a packaged skill runtime so the
-    cache never pollutes shipped skill files.
+    Written under
+    ``<base>/__cadcache__/models/<step-filename>/scene/v<schema>-<hash>`` so it sits
+    inside the same per-model ``__cadcache__/models`` home as the component-GLB render
+    package and generation lock (like ``__pycache__`` beside a ``.py``). Honors
+    ``TEXT_TO_CAD_STEP_SCENE_CACHE=0`` (disabled) and
+    ``TEXT_TO_CAD_STEP_SCENE_CACHE_DIR`` (central override); falls back to a temp store
+    when the STEP lives inside a packaged skill runtime so the cache never pollutes
+    shipped skill files.
     """
     if not _step_scene_cache_enabled():
         return None
@@ -1202,7 +1214,14 @@ def _step_scene_cache_dir(step_path: Path, step_hash: str) -> Path | None:
     else:
         base = resolved.parent
     leaf = f"v{STEP_SCENE_CACHE_SCHEMA_VERSION}-{step_hash}"
-    return base / _STEP_SCENE_CACHE_DIRNAME / resolved.name / leaf
+    return (
+        base
+        / _STEP_SCENE_CACHE_DIRNAME
+        / _STEP_SCENE_CACHE_MODELS_DIRNAME
+        / resolved.name
+        / _STEP_SCENE_CACHE_SUBDIR
+        / leaf
+    )
 
 
 def _rgba_to_cache_value(color: ColorRGBA | None) -> list[float] | None:
