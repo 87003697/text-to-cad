@@ -1124,8 +1124,8 @@ test("theme URL param is ignored in favor of stored theme state", () => {
   try {
     assert.equal(writeThemeSettings(cloneThemePresetSettings("workbench")), true);
     assert.deepEqual(readThemeSettingsState(), {
-      presetId: "workbench",
-      settings: cloneThemePresetSettings("workbench")
+      presetId: "workbench-light",
+      settings: cloneThemePresetSettings("workbench-light")
     });
   } finally {
     if (originalWindow === undefined) {
@@ -1150,12 +1150,12 @@ test("appearance URL param overrides stored theme state without mutating persist
     const storedTheme = JSON.parse(globalThis.window.localStorage.getItem(THEME_STORAGE_KEY));
     assert.equal(storedTheme.activeThemeId, "blue");
     assert.deepEqual(readThemeSettingsStateFromAppearanceQuery(), {
-      presetId: "workbench",
-      settings: cloneThemePresetSettings("workbench")
+      presetId: "workbench-light",
+      settings: cloneThemePresetSettings("workbench-light")
     });
     assert.deepEqual(readThemeSettingsState(), {
-      presetId: "workbench",
-      settings: cloneThemePresetSettings("workbench")
+      presetId: "workbench-light",
+      settings: cloneThemePresetSettings("workbench-light")
     });
     assert.equal(
       JSON.parse(globalThis.window.localStorage.getItem(THEME_STORAGE_KEY)).activeThemeId,
@@ -1197,9 +1197,9 @@ test("theme persistence ignores stale stored built-in workbench snapshots", () =
     );
 
     const state = readThemeSettingsState();
-    const availableWorkbenchPresets = readCustomThemePresets().filter((preset) => preset.id === "workbench");
-    assert.equal(state.presetId, "workbench");
-    assert.deepEqual(state.settings, cloneThemePresetSettings("workbench"));
+    const availableWorkbenchPresets = readCustomThemePresets().filter((preset) => preset.id === "workbench-light");
+    assert.equal(state.presetId, "workbench-light");
+    assert.deepEqual(state.settings, cloneThemePresetSettings("workbench-light"));
     assert.equal(availableWorkbenchPresets.length, 1);
     assert.deepEqual(availableWorkbenchPresets[0].settings, cloneThemePresetSettings("workbench"));
   } finally {
@@ -1220,8 +1220,8 @@ test("theme default stays on workbench under system dark mode", () => {
 
   try {
     assert.deepEqual(readThemeSettingsState(), {
-      presetId: "workbench",
-      settings: cloneThemePresetSettings("workbench")
+      presetId: "workbench-light",
+      settings: cloneThemePresetSettings("workbench-light")
     });
   } finally {
     if (originalWindow === undefined) {
@@ -1335,8 +1335,8 @@ test("theme persistence ignores legacy stored theme state", () => {
     );
 
     assert.deepEqual(readThemeSettingsState(), {
-      presetId: "workbench",
-      settings: cloneThemePresetSettings("workbench")
+      presetId: "workbench-light",
+      settings: cloneThemePresetSettings("workbench-light")
     });
   } finally {
     if (originalWindow === undefined) {
@@ -1375,12 +1375,12 @@ test("theme persistence ignores previous theme library versions", () => {
       })
     );
 
-    const availableWorkbenchPresets = readCustomThemePresets().filter((preset) => preset.id === "workbench");
+    const availableWorkbenchPresets = readCustomThemePresets().filter((preset) => preset.id === "workbench-light");
     assert.equal(availableWorkbenchPresets.length, 1);
     assert.deepEqual(availableWorkbenchPresets[0].settings, cloneThemePresetSettings("workbench"));
     assert.deepEqual(readThemeSettingsState(), {
-      presetId: "workbench",
-      settings: cloneThemePresetSettings("workbench")
+      presetId: "workbench-light",
+      settings: cloneThemePresetSettings("workbench-light")
     });
   } finally {
     if (originalWindow === undefined) {
@@ -1421,8 +1421,8 @@ test("theme persistence ignores stored themes with removed source presets", () =
 
     assert.equal(readCustomThemePresets().some((preset) => preset.id === "custom:retired-shop"), false);
     assert.deepEqual(readThemeSettingsState(), {
-      presetId: "workbench",
-      settings: cloneThemePresetSettings("workbench")
+      presetId: "workbench-light",
+      settings: cloneThemePresetSettings("workbench-light")
     });
   } finally {
     if (originalWindow === undefined) {
@@ -1549,11 +1549,11 @@ test("themes can be deleted from local storage while at least one remains", () =
     assert.equal(storedTheme.activeThemeId, "");
     assert.equal(storedTheme.themes.some((preset) => preset.id === shopPreset.id), true);
     assert.deepEqual(readThemeSettingsState(readCustomThemePresets()), {
-      presetId: "workbench",
-      settings: cloneThemePresetSettings("workbench")
+      presetId: "workbench-light",
+      settings: cloneThemePresetSettings("workbench-light")
     });
-    assert.equal(deleteCustomThemePreset("workbench"), false);
-    assert.equal(readCustomThemePresets().some((preset) => preset.id === "workbench"), true);
+    assert.equal(deleteCustomThemePreset("workbench-light"), false);
+    assert.equal(readCustomThemePresets().some((preset) => preset.id === "workbench-light"), true);
   } finally {
     if (originalWindow === undefined) {
       delete globalThis.window;

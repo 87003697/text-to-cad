@@ -965,11 +965,28 @@ const WORKBENCH_DARK_THEME_SETTINGS = Object.freeze({
   }
 });
 
-const WORKBENCH_THEME_SETTINGS = withThemeColorMode(
+// Workbench ships as two distinct, single-palette themes (light + dark) rather
+// than one system-adaptive theme. App light/dark is inferred from the active
+// theme's background, so each Workbench variant is pinned to its own palette.
+const WORKBENCH_LIGHT_THEME_PRESET_SETTINGS = withThemeColorMode(
   WORKBENCH_BASE_THEME_SETTINGS,
-  THEME_COLOR_MODES.SYSTEM,
-  createThemeModeColors(WORKBENCH_BASE_THEME_SETTINGS, WORKBENCH_DARK_THEME_SETTINGS)
+  THEME_COLOR_MODES.LIGHT
 );
+// Workbench Dark keeps the shared Workbench materials and lighting intensities,
+// swapping in the dark canvas/floor/light colors (the same color set the old
+// system theme applied for its dark mode) so the two variants read as one theme
+// on two canvases.
+const WORKBENCH_DARK_BAKED_SETTINGS = deepClone(WORKBENCH_BASE_THEME_SETTINGS);
+applyThemeModeColorOverrides(
+  WORKBENCH_DARK_BAKED_SETTINGS,
+  createThemeModeColors(WORKBENCH_BASE_THEME_SETTINGS, WORKBENCH_DARK_THEME_SETTINGS).dark
+);
+const WORKBENCH_DARK_THEME_PRESET_SETTINGS = withThemeColorMode(
+  WORKBENCH_DARK_BAKED_SETTINGS,
+  THEME_COLOR_MODES.DARK
+);
+// Back-compat: the migration fallback and any "workbench" id resolve to light.
+const WORKBENCH_THEME_SETTINGS = WORKBENCH_LIGHT_THEME_PRESET_SETTINGS;
 
 const BLUE_THEME_PRESET_SETTINGS = withThemeColorMode(BLUE_THEME_SETTINGS, THEME_COLOR_MODES.DARK);
 const PINK_THEME_PRESET_SETTINGS = withThemeColorMode(PINK_THEME_SETTINGS, THEME_COLOR_MODES.DARK);
@@ -979,15 +996,26 @@ const TERMINAL_THEME_PRESET_SETTINGS = withThemeColorMode(TERMINAL_THEME_SETTING
 
 export const THEME_PRESETS = Object.freeze([
   {
-    id: "workbench",
-    label: "Workbench",
-    description: "Balanced CAD workbench lighting with system-aware light and dark canvas colors.",
+    id: "workbench-light",
+    label: "Workbench Light",
+    description: "Balanced CAD workbench lighting on a light canvas.",
     preview: {
       background: "#f0f4f9",
       modelColor: "#b6c4ce",
       accentColor: "#4ea7d8"
     },
-    settings: WORKBENCH_THEME_SETTINGS
+    settings: WORKBENCH_LIGHT_THEME_PRESET_SETTINGS
+  },
+  {
+    id: "workbench-dark",
+    label: "Workbench Dark",
+    description: "Balanced CAD workbench lighting on a deep blue-slate canvas.",
+    preview: {
+      background: "#181f28",
+      modelColor: "#b6c4ce",
+      accentColor: "#4ea7d8"
+    },
+    settings: WORKBENCH_DARK_THEME_PRESET_SETTINGS
   },
   {
     id: "blue",
@@ -1047,15 +1075,16 @@ export const THEME_PRESETS = Object.freeze([
 ]);
 
 const THEME_PRESET_ID_ALIASES = Object.freeze({
-  cinematic: "workbench",
-  light: "workbench",
-  dark: "workbench",
-  charcoal: "workbench",
-  darkoal: "workbench",
-  "dark-2": "workbench"
+  workbench: "workbench-light",
+  cinematic: "workbench-light",
+  light: "workbench-light",
+  dark: "workbench-dark",
+  charcoal: "workbench-dark",
+  darkoal: "workbench-dark",
+  "dark-2": "workbench-dark"
 });
 
-export const DEFAULT_THEME_PRESET_ID = "workbench";
+export const DEFAULT_THEME_PRESET_ID = "workbench-light";
 
 export const DEFAULT_THEME_PRESET = Object.freeze(
   THEME_PRESETS.find((preset) => preset.id === DEFAULT_THEME_PRESET_ID) || THEME_PRESETS[0]
@@ -1067,7 +1096,9 @@ export const DEFAULT_THEME_ID = DEFAULT_THEME_PRESET_ID;
 export const DEFAULT_THEME = DEFAULT_THEME_PRESET;
 
 export function resolveSystemThemePresetId({ prefersDark = false } = {}) {
-  return DEFAULT_THEME_PRESET_ID;
+  // Used only to pick the first-load default; afterwards the app tone follows
+  // whichever theme is active (inferred from its background).
+  return prefersDark === true ? "workbench-dark" : "workbench-light";
 }
 
 const PRESET_ID_SET = new Set(ENVIRONMENT_PRESETS.map((preset) => preset.id));
@@ -1670,13 +1701,32 @@ export function themeSettingsSupportsSystemColorMode(themeSettings = {}) {
   return normalized.colorMode === THEME_COLOR_MODES.SYSTEM;
 }
 
+// The dominant background color drives the app's light/dark chrome, because the
+// nav/sidebars float over the (transparent) viewport: their contrast depends on
+// what is behind them, not on the floor or fills.
+function dominantBackgroundLuminance(themeSettings = {}) {
+  const background = themeSettings.background || {};
+  const type = background.type || "solid";
+  const fallback =
+    DEFAULT_THEME_SETTINGS?.background?.solidColor || "#ffffff";
+  if (type === "linear") {
+    return (
+      relativeLuminance(background.linearStart, fallback) +
+      relativeLuminance(background.linearEnd, fallback)
+    ) / 2;
+  }
+  if (type === "radial") {
+    return (
+      relativeLuminance(background.radialInner, fallback) +
+      relativeLuminance(background.radialOuter, fallback)
+    ) / 2;
+  }
+  return relativeLuminance(background.solidColor, fallback);
+}
+
 export function inferThemeSettingsSceneTone(themeSettings, options = {}) {
   const normalized = resolveThemeSettingsForColorMode(themeSettings, options);
-  const luminance = relativeLuminance(
-    normalized.floor?.color,
-    DEFAULT_THEME_SETTINGS.floor?.color || DEFAULT_THEME_SETTINGS.background.solidColor
-  );
-  return luminance >= 0.36 ? "light" : "dark";
+  return dominantBackgroundLuminance(normalized) >= 0.3 ? "light" : "dark";
 }
 
 export function inferThemeSceneTone(themeSettings) {
