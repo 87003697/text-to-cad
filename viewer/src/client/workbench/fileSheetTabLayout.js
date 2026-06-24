@@ -13,7 +13,9 @@ import { FILE_SHEET_SECTION_IDS } from "./fileSheetSections.js";
 // per-file `openSectionIds` list (see resolveFileSheetTabPanes) so that the
 // existing reveal-on-select behavior keeps working.
 
-export const FILE_SHEET_TAB_LAYOUT_STORAGE_KEY = "cad-viewer:file-sheet-tab-layout:v1";
+// v2 resets saved arrangements so the Reference tab lands first in the bottom
+// pane (a new section would otherwise append to the end of a stored layout).
+export const FILE_SHEET_TAB_LAYOUT_STORAGE_KEY = "cad-viewer:file-sheet-tab-layout:v2";
 
 export const DEFAULT_FILE_SHEET_SPLIT_RATIO = 0.5;
 export const MIN_FILE_SHEET_SPLIT_RATIO = 0.2;
@@ -24,11 +26,12 @@ export const FILE_SHEET_TAB_PANES = Object.freeze({ TOP: "top", BOTTOM: "bottom"
 const SPLITTABLE_KINDS = Object.freeze(new Set(["step"]));
 
 // The default-active tab for a pane when the per-file open list names none of
-// its tabs. Top pane prefers the Tree; bottom pane prefers Display.
+// its tabs. Top pane prefers the Tree; bottom pane leads with the Reference
+// inspector (which shows a prompt until geometry is selected).
 const DEFAULT_PANE_ACTIVE = Object.freeze({
   step: {
     [FILE_SHEET_TAB_PANES.TOP]: FILE_SHEET_SECTION_IDS.STEP_TREE,
-    [FILE_SHEET_TAB_PANES.BOTTOM]: FILE_SHEET_SECTION_IDS.THEME_DISPLAY
+    [FILE_SHEET_TAB_PANES.BOTTOM]: FILE_SHEET_SECTION_IDS.STEP_REFERENCE
   }
 });
 
