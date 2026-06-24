@@ -242,6 +242,7 @@ import {
   requestStepSourceStatus
 } from "../workbench/cadManifestStore.js";
 import {
+  BUILDABLE_STEP_ARTIFACT_ERROR_CODES,
   STEP_ARTIFACT_GENERATION_FAILURE_DISPLAY_THRESHOLD,
   runStepArtifactGenerationWithRetries,
   stepArtifactCanGenerate,
@@ -1075,6 +1076,20 @@ function mergeStepSourceStatusIntoEntry(entry, stepSourceStatus) {
   if (ownProperty(stepSourceStatus, "artifact")) {
     if (stepSourceStatus.artifact && typeof stepSourceStatus.artifact === "object") {
       nextEntry.artifact = stepSourceStatus.artifact;
+      // A buildable artifact error (stale or missing cache) means the on-disk package can't be
+      // rendered as-is. Drop the mesh assets so the entry reads as "needs building": the viewer
+      // shows a loading state and the generation effect (gated on !entryHasMesh) fires a
+      // (re)build instead of rendering the stale cache. A missing package already lacks a hash;
+      // a stale one keeps its hash, so stripping it here is what makes STALE trigger regeneration.
+      if (
+        nextEntry.artifact.ok === false &&
+        BUILDABLE_STEP_ARTIFACT_ERROR_CODES.includes(String(nextEntry.artifact.error || ""))
+      ) {
+        delete nextEntry.url;
+        delete nextEntry.hash;
+        delete nextEntry.bytes;
+        delete nextEntry.assets;
+      }
     } else {
       delete nextEntry.artifact;
     }

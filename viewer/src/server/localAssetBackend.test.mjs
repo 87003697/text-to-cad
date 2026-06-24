@@ -284,18 +284,20 @@ test("local backend resolves same-stem Python generators without requiring a STE
   });
 });
 
-test("local backend rejects Viewer artifact regeneration when same-stem Python has no STEP file", async () => {
+test("local backend regenerates same-stem Python generators even with no committed STEP file", async () => {
   await withTempDirectoryRoot(async (directoryRoot) => {
     const modelRoot = path.join(directoryRoot, "models");
     const generatorPath = path.join(modelRoot, "robot", "robot.py");
     fs.mkdirSync(path.dirname(generatorPath), { recursive: true });
     fs.writeFileSync(generatorPath, "def gen_step():\n    return None\n");
-    const stepPath = path.join(modelRoot, "robot", "robot.step");
+    const stepPath = path.join(modelRoot, "robot", "robot.step"); // no committed STEP on disk
+    let invokedWith = null;
     const backend = createLocalAssetBackend({
       directoryRoot,
       rootDir: "models",
-      stepArtifactGenerator: async () => {
-        throw new Error("Python generators should not be invoked by Viewer regeneration.");
+      stepArtifactGenerator: async (request) => {
+        invokedWith = request;
+        return { ok: true, validation: { ok: true } };
       },
     });
     const resolved = backend.resolveStepSource("robot/robot.step");
@@ -303,13 +305,16 @@ test("local backend rejects Viewer artifact regeneration when same-stem Python h
     assert.equal(resolved.stepPath, stepPath);
     assert.equal(resolved.sourcePath, generatorPath);
     assert.equal(resolved.skipStepWrite, true);
-    await assert.rejects(
-      () => backend.generateStepArtifact({
-        fileRef: "robot/robot.step",
-        force: true,
-      }),
-      /only regenerates GLB artifacts for existing STEP\/STP files/
-    );
+
+    // A generated model (Python gen_step, no committed STEP) is now regenerable on demand: the
+    // route invokes the generator with the same-stem Python source instead of rejecting it.
+    const result = await backend.generateStepArtifact({
+      fileRef: "robot/robot.step",
+      force: true,
+    });
+    assert.equal(result.ok, true);
+    assert.equal(invokedWith?.stepPath, stepPath);
+    assert.equal(invokedWith?.sourcePath, generatorPath);
   });
 });
 

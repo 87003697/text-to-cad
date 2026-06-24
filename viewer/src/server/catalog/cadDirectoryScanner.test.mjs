@@ -66,6 +66,7 @@ function writePackage(repoRoot, stepRelPath, {
   sourcePath = null,   // descriptor sourcePath relative to the model folder (python only)
   sourceHash = null,
   stepHash = null,
+  sourceClosureFiles = null, // model-folder-relative generator closure (python freshness)
   occurrences = 1,
 } = {}) {
   const stepAbs = path.join(repoRoot, stepRelPath);
@@ -87,6 +88,7 @@ function writePackage(repoRoot, stepRelPath, {
     ...(sourcePath ? { sourcePath } : {}),
     ...(sourceHash ? { sourceHash } : {}),
     ...(stepHash ? { stepHash } : {}),
+    ...(sourceClosureFiles ? { sourceClosureFiles } : {}),
     stepPath: stepName,
     bbox: { min: [0, 0, 0], max: [1, 1, 1] },
     stats: { occurrenceCount: occurrences, shapeCount: occurrences },
@@ -312,6 +314,38 @@ test("scanCadDirectory reads Python source hash from GLB artifacts", () => {
   assert.equal(entry.artifact, undefined);
   assert.equal(entry.sourceKind, "python");
   assert.equal(entry.source.sourceHash, sourceHash);
+});
+
+test("scanCadDirectory flags a Python package stale when a closure source is newer than the build", () => {
+  const repoRoot = makeTempRepo();
+  const generatorPath = path.join(repoRoot, "workspace/generated/gear.py");
+  writeFile(generatorPath, "def gen_step():\n    return None\n");
+  const pkgDir = writePackage(repoRoot, "workspace/generated/gear.step", {
+    entryKind: "part",
+    sourceKind: "python",
+    sourcePath: "gear.py",
+    sourceClosureFiles: ["gear.py"],
+  });
+  const descriptorPath = path.join(pkgDir, "assembly.json");
+  const scan = () => entryByFile(scanCadDirectory({ repoRoot, rootDir: "workspace" }), "generated/gear.step");
+
+  // Fresh: the generator is older than the built descriptor → no buildable error.
+  const past = new Date(Date.now() - 60_000);
+  fs.utimesSync(generatorPath, past, past);
+  assert.equal(scan().artifact, undefined);
+
+  // Editing the generator (newer mtime) marks the package stale — a buildable error that drives
+  // the client to (re)generate and show a loading state on the next open.
+  const future = new Date(Date.now() + 60_000);
+  fs.utimesSync(generatorPath, future, future);
+  const stale = scan();
+  assert.equal(stale.artifact.ok, false);
+  assert.equal(stale.artifact.error, "stale_step_artifact");
+
+  // Bumping the descriptor mtime (as generateStepArtifact does after a build) clears staleness.
+  const rebuilt = new Date(future.getTime() + 60_000);
+  fs.utimesSync(descriptorPath, rebuilt, rebuilt);
+  assert.equal(scan().artifact, undefined);
 });
 
 test("scanCadDirectory accepts Python STEP topology generated from a nested project root", () => {

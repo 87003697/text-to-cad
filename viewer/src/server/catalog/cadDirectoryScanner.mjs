@@ -728,6 +728,43 @@ function validateAssemblyPackageArtifact({ repoRoot, sourcePath, cadPath, glbPat
     }
   }
 
+  // Generated (Python) models write no STEP, so freshness is a source-closure rehash that the
+  // Python build verifies by content. The scanner adds a cheap *trigger*: flag the package stale
+  // when any recorded closure source is newer (mtime) than the built descriptor, so editing a
+  // generator rebuilds it on the next open. A false positive (an mtime-only touch) is self-
+  // correcting — the Python build is a content-hash no-op and the descriptor mtime is bumped
+  // after generation (see localAssetBackend.generateStepArtifact).
+  if (usesPython) {
+    const descriptorStats = packageDescriptorStats(glbPath);
+    const closureSources = Array.isArray(descriptor.sourceClosureFiles)
+      ? descriptor.sourceClosureFiles
+      : [];
+    if (descriptorStats && closureSources.length) {
+      const modelFolder = path.dirname(sourceIdentity.filePath);
+      for (const relativeSource of closureSources) {
+        const sourceFileStats = fileStats(path.resolve(modelFolder, String(relativeSource || "")));
+        if (sourceFileStats && sourceFileStats.mtimeNs > descriptorStats.mtimeNs) {
+          return {
+            topology: descriptor,
+            stepArtifact: staleStepArtifactError({
+              repoRoot,
+              cadPath,
+              sourcePath,
+              glbPath,
+              manifestSourcePath: artifactSourcePath,
+              sourceKind: normalizedSourceKind,
+              artifactHash: sourceHash,
+              currentHash: "",
+            }),
+            glbPath,
+            stepHash,
+            sourceHash,
+          };
+        }
+      }
+    }
+  }
+
   const stepArtifact = {
     ok: true,
     glbPath: repoRelativePath(repoRoot, glbPath),
