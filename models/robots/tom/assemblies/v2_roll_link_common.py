@@ -13,9 +13,11 @@ for path in (TOM_DIR, V2_DIR, PARTS_DIR, ASSEMBLIES_DIR):
         sys.path.insert(0, str(path))
 
 import link_common as lc
-import link_bracket
-import pitch_link_sts3215
-import pitch_link_sts3250
+from robot_common.step_entry import load_step_entry
+
+link_bracket = load_step_entry("link_bracket")
+pitch_link_sts3215 = load_step_entry("pitch_link_sts3215")
+pitch_link_sts3250 = load_step_entry("pitch_link_sts3250")
 from robot_common import robot_arm
 
 

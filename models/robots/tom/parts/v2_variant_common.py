@@ -49,7 +49,9 @@ PRINTABLE_COLOR = build123d.Color(0.72, 0.74, 0.72, 1.0)
 
 
 def _module_path(module_name: str) -> Path:
-    return PARTS_DIR / f"{module_name}.py"
+    # Entry generators are <name>.step.py; fall back to <name>.py for non-entry helper modules.
+    step_entry = PARTS_DIR / f"{module_name}.step.py"
+    return step_entry if step_entry.is_file() else PARTS_DIR / f"{module_name}.py"
 
 
 @contextmanager

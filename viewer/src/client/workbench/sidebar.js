@@ -227,6 +227,9 @@ function normalizedEntryStem(entry) {
   return entryLeafName(entry)
     .replace(/\.step\.json$/i, "")
     .replace(/\.urdf\.json$/i, "")
+    // A generated-STEP entry's filename is `<name>.step.py` — strip the whole generator suffix to
+    // `<name>` so the label reconstructs as `<name>.step.py` (not `<name>.step.step.py`).
+    .replace(/\.(step|stp)\.py$/i, "")
     .replace(/\.(step|stp|stl|3mf|glb|gcode|dxf|urdf|srdf|sdf|py)$/i, "");
 }
 

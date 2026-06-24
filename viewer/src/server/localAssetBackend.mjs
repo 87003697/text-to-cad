@@ -19,6 +19,8 @@ import {
 import { inlineStepGlbArtifactPathForSource } from "cadjs/common/stepSidecars.mjs";
 import { pathIsInside } from "cadjs/lib/pathUtils.mjs";
 import { ensureStepTopologyArtifact } from "./step/stepArtifactCompiler.mjs";
+import { runPythonStepExport } from "./step/pythonStepExport.mjs";
+import { pickSaveDestination } from "./saveAsDialog.mjs";
 import { createRenderArtifactPipeline } from "./artifact/renderArtifact.mjs";
 import { createStepArtifactProvider } from "./artifact/stepArtifactProvider.mjs";
 import { exportImplicitCadFile, IMPLICIT_CAD_EXPORT_FORMATS } from "implicitjs/export";
@@ -96,6 +98,22 @@ function ensurePathInsideRoot(filePath, resolvedRoot) {
   if (!(filePath === resolvedRoot.rootPath || pathIsInside(filePath, resolvedRoot.rootPath))) {
     throw new Error("Requested file is outside the active CAD Viewer root");
   }
+}
+
+// User-facing model export ("Export model" toolbar/context-menu action). Logical format -> file
+// suffix; the cadpy.step_export_target module owns the actual geometry conversion.
+const STEP_EXPORT_FORMAT_SUFFIX = Object.freeze({ step: "step", stl: "stl", "3mf": "3mf", glb: "glb" });
+
+function normalizeStepExportFormat(format) {
+  const normalized = String(format || "").trim().toLowerCase();
+  if (!Object.prototype.hasOwnProperty.call(STEP_EXPORT_FORMAT_SUFFIX, normalized)) {
+    throw new Error(`Unsupported export format: ${format}`);
+  }
+  return normalized;
+}
+
+function stepExportErrorMessage(result) {
+  return String(result?.error || "STEP export failed").trim() || "STEP export failed";
 }
 
 function normalizedFileAssetKind(value) {
@@ -617,11 +635,15 @@ export function createLocalAssetBackend({
         if (extension !== ".step" && extension !== ".stp") {
           throw new Error("Only STEP/STP sources or same-stem Python generators can generate STEP topology artifacts");
         }
-        const generatorPath = sameStemPythonGeneratorPath(candidatePath);
+        // An existing `.step`/`.stp` is ALWAYS an imported entry — its own file is the source.
+        // Do NOT auto-link it to a same-stem `.step.py` generator: that generator is a SEPARATE
+        // generated entry with its own entry-keyed render package. (A generated model's logical
+        // `.step` does not exist on disk, so it never reaches this existing-file branch — its
+        // fileRef is the `.step.py`, handled above, or the not-on-disk fallback below.)
         return {
           stepPath: candidatePath,
-          sourcePath: generatorPath,
-          skipStepWrite: Boolean(generatorPath),
+          sourcePath: "",
+          skipStepWrite: false,
         };
       }
     }
@@ -861,6 +883,93 @@ export function createLocalAssetBackend({
     };
   }
 
+  async function generateStepExport({
+    fileRef,
+    format = "step",
+    resolvedRoot = resolveRequestRoot({ fileRef }),
+    catalog = null,
+    suggestedDir = "",
+  } = {}) {
+    const normalizedFormat = normalizeStepExportFormat(format);
+    // Resolve the model's on-disk source (a STEP/STP file, or a generated `.step.py` whose
+    // logical STEP path may not exist). Guard the SOURCE against path traversal; the export
+    // DESTINATION is intentionally allowed anywhere the user picks in the save dialog.
+    const { stepPath, sourcePath } = resolveStepSource(fileRef, { resolvedRoot, catalog });
+    ensurePathInsideRoot(stepPath, resolvedRoot);
+    const context = scanContextForRoot(resolvedRoot);
+    const baseName = path.basename(stepPath).replace(/\.(step|stp)$/i, "");
+    const suggestedName = `${baseName}.${STEP_EXPORT_FORMAT_SUFFIX[normalizedFormat]}`;
+    const candidateDir = suggestedDir ? path.resolve(suggestedDir) : "";
+    const defaultDir = candidateDir && pathIsInside(candidateDir, resolvedRoot.rootPath)
+      ? candidateDir
+      : path.dirname(stepPath);
+
+    const destination = await pickSaveDestination({
+      suggestedName,
+      defaultDir,
+      prompt: `Export ${baseName} as ${normalizedFormat.toUpperCase()}`,
+    });
+    if (destination?.cancelled) {
+      return { ok: false, cancelled: true };
+    }
+
+    if (destination?.path) {
+      const result = await runPythonStepExport({
+        repoRoot: context.scanRepoRoot,
+        stepPath,
+        sourcePath,
+        format: normalizedFormat,
+        outPath: destination.path,
+      });
+      if (!result?.ok) {
+        return { ok: false, error: stepExportErrorMessage(result) };
+      }
+      const outPath = path.resolve(result.path || destination.path);
+      // If the user saved into the active CAD Viewer root, refresh the catalog so the new file
+      // appears in the tree immediately (no manual rescan). Saves outside the root don't touch it.
+      const insideRoot = outPath === resolvedRoot.rootPath || pathIsInside(outPath, resolvedRoot.rootPath);
+      const nextCatalog = insideRoot
+        ? refreshCatalogForPath({ rootDir: resolvedRoot.dir, filePath: outPath })
+        : null;
+      return {
+        ok: true,
+        path: outPath,
+        filename: result.filename || path.basename(outPath),
+        format: normalizedFormat,
+        catalogChanged: insideRoot,
+        ...(nextCatalog ? { catalog: nextCatalog } : {}),
+      };
+    }
+
+    // No native dialog available (e.g. a headless server): export beside the source and hand
+    // the file to the browser via the existing /__cad/download route (mirrors the implicit
+    // export fallback). The destination is inside the root, so the standard download applies.
+    const outputPath = path.join(path.dirname(stepPath), suggestedName);
+    ensurePathInsideRoot(outputPath, resolvedRoot);
+    const result = await runPythonStepExport({
+      repoRoot: context.scanRepoRoot,
+      stepPath,
+      sourcePath,
+      format: normalizedFormat,
+      outPath: outputPath,
+    });
+    if (!result?.ok) {
+      return { ok: false, error: stepExportErrorMessage(result) };
+    }
+    const outputFileRef = path.relative(resolvedRoot.rootPath, outputPath).split(path.sep).join("/");
+    const nextCatalog = refreshCatalogForPath({ rootDir: resolvedRoot.dir, filePath: outputPath });
+    return {
+      ok: true,
+      fallback: true,
+      path: outputPath,
+      filename: path.basename(outputPath),
+      format: normalizedFormat,
+      catalogChanged: true,
+      outputFileRef,
+      catalog: nextCatalog,
+    };
+  }
+
   async function generateImplicitExport({
     fileRef,
     format = "glb",
@@ -1028,6 +1137,7 @@ export function createLocalAssetBackend({
     resolveSourceFileAccess,
     openSourceFile,
     generateStepArtifact,
+    generateStepExport,
     generateImplicitExport,
     artifactStatus,
     resolveArtifact,

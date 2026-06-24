@@ -89,8 +89,14 @@ class CadSource:
     color: tuple[float, float, float, float] | None = None
 
     @property
+    def entry_path(self) -> Path | None:
+        # The actual on-disk ENTRY file the render cache is keyed by: the `.step.py` generator for
+        # a generated model, or the `.step`/`.stp` itself for an imported one.
+        return self.script_path if self.script_path is not None else self.step_path
+
+    @property
     def glb_path(self) -> Path | None:
-        return explorer_artifact_path_for_step_path(self.step_path, ".glb") if self.step_path is not None else None
+        return explorer_artifact_path_for_step_path(self.entry_path, ".glb") if self.entry_path is not None else None
 
     @property
     def generated_paths(self) -> tuple[Path, ...]:
@@ -309,6 +315,26 @@ def _iter_python_sources(root: Path) -> tuple[CadSource, ...]:
     return tuple(sources)
 
 
+def _generator_part_stem(script_path: Path) -> str:
+    """The part name a generator script produces, independent of the source extension.
+
+    A ``<name>.step.py`` entry generator and the legacy ``<name>.py`` both produce the logical
+    STEP ``<name>.step`` (and ``<name>.dxf`` / ``.urdf`` / ``.sdf`` siblings), so the derived
+    artifact paths key off ``<name>`` either way — ``.with_suffix('.step')`` would wrongly yield
+    ``<name>.step.step`` for a ``.step.py`` source.
+    """
+    name = script_path.name
+    if name.endswith(".step.py"):
+        return name[: -len(".step.py")]
+    if name.endswith(".py"):
+        return name[: -len(".py")]
+    return script_path.stem
+
+
+def _generator_sibling(script_path: Path, suffix: str) -> Path:
+    return script_path.with_name(_generator_part_stem(script_path) + suffix)
+
+
 def _read_python_source(script_path: Path, *, allow_dxf_only: bool = False) -> CadSource | None:
     resolved_script_path = script_path.resolve()
     metadata = parse_generator_metadata(resolved_script_path)
@@ -332,7 +358,7 @@ def _read_python_source(script_path: Path, *, allow_dxf_only: bool = False) -> C
             stl_path=None,
             three_mf_path=None,
             native_glb_path=None,
-            dxf_path=resolved_script_path.with_suffix(".dxf"),
+            dxf_path=_generator_sibling(resolved_script_path, ".dxf"),
             urdf_path=None,
             sdf_path=None,
             mesh_tolerance=None,
@@ -342,10 +368,10 @@ def _read_python_source(script_path: Path, *, allow_dxf_only: bool = False) -> C
         raise CadSourceError(
             f"{_relative_to_repo(resolved_script_path)} must define a part or assembly gen_step() entry"
         )
-    step_path = resolved_script_path.with_suffix(".step")
-    dxf_path = resolved_script_path.with_suffix(".dxf") if metadata.has_gen_dxf else None
-    urdf_path = resolved_script_path.with_suffix(".urdf") if metadata.has_gen_urdf else None
-    sdf_path = resolved_script_path.with_suffix(".sdf") if metadata.has_gen_sdf else None
+    step_path = _generator_sibling(resolved_script_path, ".step")
+    dxf_path = _generator_sibling(resolved_script_path, ".dxf") if metadata.has_gen_dxf else None
+    urdf_path = _generator_sibling(resolved_script_path, ".urdf") if metadata.has_gen_urdf else None
+    sdf_path = _generator_sibling(resolved_script_path, ".sdf") if metadata.has_gen_sdf else None
     return CadSource(
         source_ref=source_ref_from_path(resolved_script_path),
         cad_ref=cad_ref_from_step_path(step_path),

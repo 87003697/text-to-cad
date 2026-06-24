@@ -580,6 +580,170 @@ test("CAD Viewer API middleware rejects implicit exports for hosted backends", a
 });
 
 
+test("CAD Viewer API middleware exports a STEP model to the chosen path", async () => {
+  const catalog = { schemaVersion: 4, entries: [{ file: "mech/widget.step", kind: "step" }] };
+  const calls = [];
+  const changedRoots = [];
+  const resolvedRoot = { rootPath: "/project/models", rootDir: "models" };
+  const middleware = createCadViewerApiMiddleware({
+    rootDir: "models",
+    backend: {
+      kind: "local-fs",
+      readCatalog: async () => catalog,
+      resolveRoot: () => resolvedRoot,
+      generateStepExport: async (request) => {
+        calls.push(request);
+        return { ok: true, path: "/Users/me/Desktop/widget.stl", filename: "widget.stl", format: "stl" };
+      },
+    },
+    onCatalogChanged: (root) => {
+      changedRoots.push(root);
+    },
+  });
+  const req = createJsonRequest({ url: "/__cad/step-export?file=mech%2Fwidget.step&format=stl" });
+  const res = createResponse();
+
+  await middleware(req, res, () => {});
+
+  assert.equal(res.statusCode, 200);
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].fileRef, "mech/widget.step");
+  assert.equal(calls[0].format, "stl");
+  assert.deepEqual(JSON.parse(res.body), {
+    ok: true,
+    path: "/Users/me/Desktop/widget.stl",
+    filename: "widget.stl",
+    format: "stl",
+  });
+  // A direct-to-path export changes nothing inside the catalog root.
+  assert.deepEqual(changedRoots, []);
+});
+
+
+test("CAD Viewer API middleware refreshes the catalog when a STEP export lands inside the root", async () => {
+  const changedRoots = [];
+  const resolvedRoot = { rootPath: "/project/models", rootDir: "models" };
+  const middleware = createCadViewerApiMiddleware({
+    rootDir: "models",
+    backend: {
+      kind: "local-fs",
+      readCatalog: async () => ({ schemaVersion: 4, entries: [] }),
+      resolveRoot: () => resolvedRoot,
+      generateStepExport: async () => ({
+        ok: true,
+        path: "/project/models/simple/widget.step",
+        filename: "widget.step",
+        format: "step",
+        catalogChanged: true,
+      }),
+    },
+    onCatalogChanged: (root) => {
+      changedRoots.push(root);
+    },
+  });
+  const req = createJsonRequest({ url: "/__cad/step-export?file=simple%2Fwidget.step&format=step" });
+  const res = createResponse();
+
+  await middleware(req, res, () => {});
+
+  assert.equal(res.statusCode, 200);
+  assert.deepEqual(changedRoots, [resolvedRoot]);
+  assert.equal(JSON.parse(res.body).catalogChanged, true);
+});
+
+
+test("CAD Viewer API middleware reports a cancelled STEP export without error", async () => {
+  const middleware = createCadViewerApiMiddleware({
+    rootDir: "models",
+    backend: {
+      kind: "local-fs",
+      readCatalog: async () => ({ schemaVersion: 4, entries: [] }),
+      resolveRoot: () => ({ rootPath: "/project/models" }),
+      generateStepExport: async () => ({ ok: false, cancelled: true }),
+    },
+  });
+  const req = createJsonRequest({ url: "/__cad/step-export?file=mech%2Fwidget.step&format=glb" });
+  const res = createResponse();
+
+  await middleware(req, res, () => {});
+
+  assert.equal(res.statusCode, 200);
+  assert.deepEqual(JSON.parse(res.body), { ok: false, cancelled: true });
+});
+
+
+test("CAD Viewer API middleware returns a download URL for the STEP export fallback", async () => {
+  const middleware = createCadViewerApiMiddleware({
+    rootDir: "models",
+    backend: {
+      kind: "local-fs",
+      readCatalog: async () => ({ schemaVersion: 4, entries: [] }),
+      resolveRoot: () => ({ rootPath: "/project/models" }),
+      generateStepExport: async () => ({
+        ok: true,
+        fallback: true,
+        path: "/project/models/mech/widget.stl",
+        filename: "widget.stl",
+        format: "stl",
+        outputFileRef: "mech/widget.stl",
+      }),
+    },
+  });
+  const req = createJsonRequest({ url: "/__cad/step-export?file=mech%2Fwidget.step&format=stl" });
+  const res = createResponse();
+
+  await middleware(req, res, () => {});
+
+  assert.equal(res.statusCode, 200);
+  const payload = JSON.parse(res.body);
+  assert.equal(payload.ok, true);
+  assert.equal(payload.fallback, true);
+  assert.equal(payload.downloadUrl, "/__cad/download?dir=models&file=mech%2Fwidget.stl&asset=output");
+});
+
+
+test("CAD Viewer API middleware rejects STEP export for hosted backends", async () => {
+  let called = false;
+  const middleware = createCadViewerApiMiddleware({
+    backend: {
+      kind: "hosted",
+      readCatalog: async () => ({ schemaVersion: 4, entries: [] }),
+      resolveRoot: () => ({ rootPath: "/project/models" }),
+      generateStepExport: async () => {
+        called = true;
+      },
+    },
+  });
+  const req = createJsonRequest({ url: "/__cad/step-export?file=mech%2Fwidget.step&format=glb" });
+  const res = createResponse();
+
+  await middleware(req, res, () => {});
+
+  assert.equal(called, false);
+  assert.equal(res.statusCode, 405);
+  assert.match(JSON.parse(res.body).error, /local filesystem/);
+});
+
+
+test("CAD Viewer API middleware requires POST for STEP export", async () => {
+  const middleware = createCadViewerApiMiddleware({
+    backend: {
+      kind: "local-fs",
+      readCatalog: async () => ({ schemaVersion: 4, entries: [] }),
+      resolveRoot: () => ({ rootPath: "/project/models" }),
+      generateStepExport: async () => ({ ok: true }),
+    },
+  });
+  const req = createJsonRequest({ method: "GET", url: "/__cad/step-export?file=a.step&format=glb" });
+  const res = createResponse();
+
+  await middleware(req, res, () => {});
+
+  assert.equal(res.statusCode, 405);
+  assert.equal(res.getHeader("allow"), "POST");
+});
+
+
 test("CAD Viewer API middleware leaves the artifact build route unclaimed when generation is disabled", async () => {
   const middleware = createCadViewerApiMiddleware({
     backend: {
