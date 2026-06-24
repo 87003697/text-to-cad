@@ -17,11 +17,6 @@ export const FILE_SHEET_SECTION_IDS = Object.freeze({
   FILE_METADATA: "metadata"
 });
 
-const THEME_SECTION_IDS = Object.freeze([
-  FILE_SHEET_SECTION_IDS.THEME_DISPLAY,
-  FILE_SHEET_SECTION_IDS.THEME_APPEARANCE
-]);
-
 function normalizeString(value) {
   return String(value || "").trim();
 }
@@ -44,57 +39,46 @@ export function renderedFileSheetSectionIds(kind, options = {}) {
   const normalizedKind = normalizeString(kind);
   const isSdf = options.isSdf === true || normalizedKind === "sdf";
   const showJoints = options.showJoints !== false;
+  const status = options.hasFileStatus ? [FILE_SHEET_SECTION_IDS.FILE_STATUS] : [];
   switch (normalizedKind) {
     case "dxf":
-      return [
-        ...(options.hasFileStatus ? [FILE_SHEET_SECTION_IDS.FILE_STATUS] : []),
-        FILE_SHEET_SECTION_IDS.DXF,
-        ...THEME_SECTION_IDS,
-        FILE_SHEET_SECTION_IDS.FILE_METADATA
-      ];
+      return [...status, FILE_SHEET_SECTION_IDS.DXF];
     case "gcode":
       return [
-        ...(options.hasFileStatus ? [FILE_SHEET_SECTION_IDS.FILE_STATUS] : []),
+        ...status,
         FILE_SHEET_SECTION_IDS.GCODE_TOOLPATH,
         FILE_SHEET_SECTION_IDS.GCODE_FEATURES,
         FILE_SHEET_SECTION_IDS.GCODE_STATS,
-        FILE_SHEET_SECTION_IDS.GCODE_BOUNDS,
-        ...THEME_SECTION_IDS,
-        FILE_SHEET_SECTION_IDS.FILE_METADATA
+        FILE_SHEET_SECTION_IDS.GCODE_BOUNDS
       ];
     case "step":
+      // Display is the only theme tab rendered in the sheet (appearance is the
+      // global navbar editor), and only for STEP views.
       return [
-        ...(options.hasFileStatus ? [FILE_SHEET_SECTION_IDS.FILE_STATUS] : []),
+        ...status,
         FILE_SHEET_SECTION_IDS.STEP_TREE,
         FILE_SHEET_SECTION_IDS.STEP_REFERENCE,
         ...(options.hasStepModulePanel ? [FILE_SHEET_SECTION_IDS.STEP_PARAMETERS] : []),
-        ...THEME_SECTION_IDS,
-        FILE_SHEET_SECTION_IDS.FILE_METADATA
+        FILE_SHEET_SECTION_IDS.THEME_DISPLAY
       ];
     case "urdf":
     case "srdf":
     case "sdf":
       return [
-        ...(options.hasFileStatus ? [FILE_SHEET_SECTION_IDS.FILE_STATUS] : []),
+        ...status,
         ...(isSdf ? [FILE_SHEET_SECTION_IDS.ROBOT_SDF] : []),
         ...(options.motionEnabled ? [FILE_SHEET_SECTION_IDS.ROBOT_MOTION] : []),
-        ...(showJoints ? [FILE_SHEET_SECTION_IDS.ROBOT_JOINTS] : []),
-        ...THEME_SECTION_IDS,
-        FILE_SHEET_SECTION_IDS.FILE_METADATA
+        ...(showJoints ? [FILE_SHEET_SECTION_IDS.ROBOT_JOINTS] : [])
       ];
     case "mesh":
-      return [
-        ...(options.hasFileStatus ? [FILE_SHEET_SECTION_IDS.FILE_STATUS] : []),
-        ...THEME_SECTION_IDS,
-        FILE_SHEET_SECTION_IDS.FILE_METADATA
-      ];
+      // A mesh (e.g. STL) has no file-specific sections; only a status tab when
+      // there's an issue. With none, the sheet is hidden entirely.
+      return [...status];
     case "implicit":
       return [
-        ...(options.hasFileStatus ? [FILE_SHEET_SECTION_IDS.FILE_STATUS] : []),
+        ...status,
         ...(options.hasImplicitParameterPanel ? [FILE_SHEET_SECTION_IDS.STEP_PARAMETERS] : []),
-        FILE_SHEET_SECTION_IDS.IMPLICIT_GRAPHICS,
-        ...THEME_SECTION_IDS,
-        FILE_SHEET_SECTION_IDS.FILE_METADATA
+        FILE_SHEET_SECTION_IDS.IMPLICIT_GRAPHICS
       ];
     default:
       return [];
