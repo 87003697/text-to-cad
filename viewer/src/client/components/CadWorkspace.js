@@ -3084,11 +3084,11 @@ export default function CadWorkspace({
               : stepUpdateInProgress
                 ? "STEP changed. Updating/regenerating CAD..."
                 : selectedStepArtifactRenderPending
-                  ? "Generating STEP GLB artifact..."
+                  ? "Loading topology..."
                   : selectedStepModuleLoading
                     ? "Loading STEP module..."
                   : selectedEntry && !selectedEntryHasMesh
-                    ? "Generating CAD assets..."
+                    ? "Loading topology..."
                     : "Loading CAD...";
   const viewerAlert = useMemo(() => {
     if (viewerRuntimeAlert?.blocking) {
@@ -5336,7 +5336,7 @@ export default function CadWorkspace({
     if (effectiveRenderFormat === RENDER_FORMAT.STEP && selectedStepArtifactRenderPending) {
       return {
         loading: true,
-        label: "generating GLB",
+        label: "loading topology",
         title: viewerLoadingLabel
       };
     }
