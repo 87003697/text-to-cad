@@ -830,18 +830,41 @@ export function createLocalAssetBackend({
     } catch {
       hasStepFile = false;
     }
-    if (!hasStepFile) {
-      throw new Error("CAD Viewer only regenerates GLB artifacts for existing STEP/STP files.");
+    // A generated model has no committed STEP — regenerate it from its same-stem Python
+    // gen_step generator (the compiler infers this too, but the route must not reject it).
+    const pythonGeneratorPath = hasStepFile ? "" : sameStemPythonGeneratorPath(stepPath);
+    let hasPythonGenerator = false;
+    try {
+      hasPythonGenerator = Boolean(pythonGeneratorPath) && fs.statSync(pythonGeneratorPath).isFile();
+    } catch {
+      hasPythonGenerator = false;
+    }
+    if (!hasStepFile && !hasPythonGenerator) {
+      throw new Error("CAD Viewer regenerates GLB artifacts only for existing STEP/STP files or their same-stem Python generators.");
     }
     const context = scanContextForRoot(resolvedRoot);
     const result = await stepArtifactGenerator({
       repoRoot: context.scanRepoRoot,
       stepPath,
-      sourcePath: "",
+      sourcePath: hasPythonGenerator ? pythonGeneratorPath : "",
       force,
       skipStepWrite: false,
       writeStepAfterArtifact: false,
     });
+    // Bump the package descriptor mtime so the scanner's source-mtime staleness check clears even
+    // when the Python build was a content-hash no-op (skipped geometry rebuild). Otherwise an
+    // mtime-only edit would re-flag the package stale and re-trigger generation on every open.
+    if (result?.ok && result.glbPath) {
+      try {
+        const descriptorPath = path.join(result.glbPath, "assembly.json");
+        if (fs.statSync(descriptorPath).isFile()) {
+          const now = new Date();
+          fs.utimesSync(descriptorPath, now, now);
+        }
+      } catch {
+        // best-effort: a missing/!file descriptor just means the next open re-checks freshness
+      }
+    }
     return {
       ok: Boolean(result?.ok),
       error: result?.ok ? "" : stepArtifactGenerationError(result),
