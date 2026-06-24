@@ -33,16 +33,12 @@ import { useCadWorkspaceShortcuts } from "./workbench/hooks/useCadWorkspaceShort
 import {
   applyColorSchemeToDocument,
   DARK_COLOR_SCHEME_ID,
-  normalizeColorSchemeId,
-  readColorSchemePreference,
-  resolveColorSchemeMode,
-  writeColorSchemePreference
+  LIGHT_COLOR_SCHEME_ID
 } from "@/ui/colorScheme";
 import {
   inferThemeSettingsSceneTone,
   normalizeThemeSettings,
-  resolveThemeSettingsForColorMode,
-  THEME_COLOR_MODES
+  resolveThemeSettingsForColorMode
 } from "cadjs/lib/themeSettings";
 import {
   displayModeForcesEdges,
@@ -352,13 +348,6 @@ function readViewerViewportWidth() {
   }
   const width = Number(window.innerWidth);
   return Number.isFinite(width) && width > 0 ? width : 1600;
-}
-
-function readViewerPrefersDark() {
-  if (typeof window === "undefined" || typeof window.matchMedia !== "function") {
-    return false;
-  }
-  return window.matchMedia("(prefers-color-scheme: dark)").matches === true;
 }
 
 function readViewerLayoutMode() {
@@ -1230,23 +1219,21 @@ export default function CadWorkspace({
   const themePresetId = themeState.presetId;
   const availableThemePresets = useMemo(() => buildAvailableThemePresets(customThemePresets), [customThemePresets]);
   const [appearanceEditing, setAppearanceEditing] = useState(false);
-  const [systemPrefersDark, setSystemPrefersDark] = useState(readViewerPrefersDark);
-  const [colorSchemePreference, setColorSchemePreference] = useState(readColorSchemePreference);
-  const resolvedColorSchemeMode = useMemo(
-    () => resolveColorSchemeMode(colorSchemePreference, { prefersDark: systemPrefersDark }),
-    [colorSchemePreference, systemPrefersDark]
-  );
   const resolvedThemeSettings = useMemo(
-    () => resolveThemeSettingsForColorMode(themeSettings, {
-      prefersDark: resolvedColorSchemeMode === DARK_COLOR_SCHEME_ID
-    }),
-    [resolvedColorSchemeMode, themeSettings]
+    () => resolveThemeSettingsForColorMode(themeSettings, { prefersDark: false }),
+    [themeSettings]
   );
   const resolvedDisplayEdgeSettings = useMemo(
     () => resolveDisplayEdgeSettings(displaySettings),
     [displaySettings]
   );
+  // App light/dark is inferred from the active theme's dominant background color
+  // (not a user preference). The nav/sidebars float over the transparent
+  // viewport, so their contrast must track whatever canvas sits behind them.
   const cadWorkspaceGlassTone = useMemo(() => inferThemeSettingsSceneTone(resolvedThemeSettings), [resolvedThemeSettings]);
+  const resolvedColorSchemeMode = cadWorkspaceGlassTone === "dark"
+    ? DARK_COLOR_SCHEME_ID
+    : LIGHT_COLOR_SCHEME_ID;
   const updateDisplaySettings = useCallback((nextValue) => {
     setDisplaySettings((current) => normalizeDisplaySettings(
       typeof nextValue === "function" ? nextValue(current) : nextValue
@@ -3361,14 +3348,6 @@ export default function CadWorkspace({
     readThemeSettingsState(readCustomThemePresets())
   ), []);
 
-  const handleColorSchemePreferenceChange = useCallback((nextPreference) => {
-    const normalizedPreference = normalizeColorSchemeId(nextPreference);
-    if (!writeColorSchemePreference(normalizedPreference, { onWriteError: handlePersistenceWriteError })) {
-      return;
-    }
-    setColorSchemePreference(normalizedPreference);
-  }, [handlePersistenceWriteError]);
-
   const updateThemeSettings = useCallback((updater, options = {}) => {
     const persistGlobal = options.persistGlobal === true;
     const requestedPresetId = String(options.presetId || "").trim();
@@ -4390,31 +4369,8 @@ export default function CadWorkspace({
   }, [flushActiveFileSession]);
 
   useEffect(() => {
-    const colorSchemeQuery = typeof window !== "undefined"
-      ? window.matchMedia?.("(prefers-color-scheme: dark)")
-      : null;
-    if (!colorSchemeQuery) {
-      return undefined;
-    }
-
-    const handleColorSchemeChange = () => {
-      setSystemPrefersDark(colorSchemeQuery.matches === true);
-    };
-    handleColorSchemeChange();
-    colorSchemeQuery.addEventListener?.("change", handleColorSchemeChange);
-    return () => {
-      colorSchemeQuery.removeEventListener?.("change", handleColorSchemeChange);
-    };
-  }, []);
-
-  useEffect(() => {
-    const documentColorSchemePreference = themeSettings.colorMode === THEME_COLOR_MODES.SYSTEM
-      ? colorSchemePreference
-      : themeSettings.colorMode;
-    applyColorSchemeToDocument(documentColorSchemePreference, document.documentElement, {
-      prefersDark: systemPrefersDark
-    });
-  }, [colorSchemePreference, systemPrefersDark, themeSettings.colorMode]);
+    applyColorSchemeToDocument(resolvedColorSchemeMode, document.documentElement);
+  }, [resolvedColorSchemeMode]);
 
   useEffect(() => {
     writeCustomThemePresets(customThemePresets, {
@@ -4433,10 +4389,6 @@ export default function CadWorkspace({
     const handleStorage = (event) => {
       const action = cadDirectoryStorageEventAction(event.key);
       if (action === CAD_DIRECTORY_STORAGE_EVENT_ACTION.IGNORE) {
-        return;
-      }
-      if (action === CAD_DIRECTORY_STORAGE_EVENT_ACTION.COLOR_SCHEME) {
-        setColorSchemePreference(readColorSchemePreference());
         return;
       }
       try {
@@ -8683,9 +8635,6 @@ export default function CadWorkspace({
           themePresets={availableThemePresets}
           themeSettings={themeSettings}
           themePresetId={themePresetId}
-          colorSchemePreference={colorSchemePreference}
-          resolvedColorSchemeMode={resolvedColorSchemeMode}
-          onColorSchemePreferenceChange={handleColorSchemePreferenceChange}
           updateThemeSettings={updateThemeSettings}
           handleResetThemeSettings={handleResetThemeSettings}
           handleSaveCustomThemePreset={handleSaveCustomThemePreset}
