@@ -7,7 +7,6 @@ import FileSheet, {
   parseFileSheetNumberInput
 } from "./FileSheet";
 import FileSheetTabbedSurface from "./FileSheetTabbedSurface";
-import { buildFileMetadataTab } from "./FileMetadataSection";
 import { Badge } from "../ui/badge";
 import { Slider } from "../ui/slider";
 import {
@@ -403,16 +402,7 @@ export default function GcodeFileSheet({
             </div>
       )
     },
-    ...themeTabs,
-    buildFileMetadataTab({
-      entry: selectedEntry,
-      fileDownloadAvailable,
-      viewerServerInfo,
-      localFileOpenAvailable,
-      fileAccessBusyKey,
-      onOpenFileAsset,
-      suppressDynamicStatus: suppressDynamicMetadataStatus
-    })
+    ...themeTabs
   ];
 
   return (

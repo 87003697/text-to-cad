@@ -28,34 +28,28 @@ test("file sheet section defaults match current sheet behavior", () => {
 test("rendered file sheet sections include closed-by-default sections", () => {
   assert.deepEqual(renderedFileSheetSectionIds("dxf", { hasFileStatus: true }), [
     "status",
-    "dxf",
-    "display",
-    "appearance",
-    "metadata"
+    "dxf"
   ]);
   assert.deepEqual(renderedFileSheetSectionIds("gcode", { hasFileStatus: true }), [
     "status",
     "toolpath",
     "features",
     "stats",
-    "bounds",
-    "display",
-    "appearance",
-    "metadata"
+    "bounds"
   ]);
   assert.deepEqual(renderedFileSheetSectionIds("step", { hasFileStatus: true, hasStepModulePanel: true }), [
     "status",
     "tree",
     "reference",
     "parameters",
-    "display",
-    "appearance",
-    "metadata"
+    "display"
   ]);
-  assert.deepEqual(renderedFileSheetSectionIds("srdf"), ["joints", "display", "appearance", "metadata"]);
-  assert.deepEqual(renderedFileSheetSectionIds("mesh"), ["display", "appearance", "metadata"]);
-  assert.deepEqual(renderedFileSheetSectionIds("implicit"), ["graphics", "display", "appearance", "metadata"]);
-  assert.deepEqual(renderedFileSheetSectionIds("implicit", { hasImplicitParameterPanel: true }), ["parameters", "graphics", "display", "appearance", "metadata"]);
+  assert.deepEqual(renderedFileSheetSectionIds("srdf"), ["joints"]);
+  // A mesh has no file-specific sections (only a status tab when there's an issue).
+  assert.deepEqual(renderedFileSheetSectionIds("mesh"), []);
+  assert.deepEqual(renderedFileSheetSectionIds("mesh", { hasFileStatus: true }), ["status"]);
+  assert.deepEqual(renderedFileSheetSectionIds("implicit"), ["graphics"]);
+  assert.deepEqual(renderedFileSheetSectionIds("implicit", { hasImplicitParameterPanel: true }), ["parameters", "graphics"]);
 });
 
 test("file sheet section helper opens only rendered sections", () => {

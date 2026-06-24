@@ -22,7 +22,6 @@ import FileSheet, {
   parseFileSheetNumberInput
 } from "./FileSheet";
 import FileSheetTabbedSurface from "./FileSheetTabbedSurface";
-import { buildFileMetadataTab } from "./FileMetadataSection";
 import { buildFileStatusTab } from "./FileStatusSection";
 
 const fieldLabelClasses = FILE_SHEET_FIELD_LABEL_CLASSES;
@@ -822,16 +821,7 @@ export default function UrdfFileSheet({
             )
       )
     } : null,
-    ...themeTabs,
-    buildFileMetadataTab({
-      entry: selectedEntry,
-      fileDownloadAvailable,
-      viewerServerInfo,
-      localFileOpenAvailable,
-      fileAccessBusyKey,
-      onOpenFileAsset,
-      suppressDynamicStatus: suppressDynamicMetadataStatus
-    })
+    ...themeTabs
   ];
 
   return (

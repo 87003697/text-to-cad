@@ -38,7 +38,6 @@ import FileSheet, {
 } from "./FileSheet";
 import FileSheetTabbedSurface from "./FileSheetTabbedSurface";
 import AssemblyContextMenuItems from "./AssemblyContextMenuItems";
-import { buildFileMetadataTab } from "./FileMetadataSection";
 import { buildFileStatusTab } from "./FileStatusSection";
 import { buildStepReferenceTab } from "./StepReferenceSection";
 
@@ -1570,16 +1569,7 @@ export default function StepFileSheet({
               </FileSheetSectionBody>
       )
     } : null,
-    ...themeTabs,
-    buildFileMetadataTab({
-      entry: selectedEntry,
-      fileDownloadAvailable,
-      viewerServerInfo,
-      localFileOpenAvailable,
-      fileAccessBusyKey,
-      onOpenFileAsset,
-      suppressDynamicStatus: suppressDynamicMetadataStatus
-    })
+    ...themeTabs
   ];
 
   return (
