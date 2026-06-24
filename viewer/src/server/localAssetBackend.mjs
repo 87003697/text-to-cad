@@ -17,6 +17,8 @@ import {
 } from "./catalog/generationStatus.mjs";
 import { pathIsInside } from "cadjs/lib/pathUtils.mjs";
 import { ensureStepTopologyArtifact } from "./step/stepArtifactCompiler.mjs";
+import { createRenderArtifactPipeline } from "./artifact/renderArtifact.mjs";
+import { createStepArtifactProvider } from "./artifact/stepArtifactProvider.mjs";
 import { exportImplicitCadFile, IMPLICIT_CAD_EXPORT_FORMATS } from "implicitjs/export";
 import { pathIsImplicitCadSource } from "implicitjs/model";
 
@@ -126,7 +128,10 @@ function sameStemPythonGeneratorPath(stepPath) {
   if (extension !== ".step" && extension !== ".stp") {
     return "";
   }
-  const candidate = path.join(path.dirname(stepPath), `${path.basename(stepPath, extension)}.py`);
+  // The generator for the logical STEP `<name>.step` is `<name>.step.py` (append .py to the full
+  // step filename) — matches stepArtifactCompiler.sameStemPythonGeneratorPath. An imported STEP has
+  // no such sibling and resolves to "".
+  const candidate = path.join(path.dirname(stepPath), `${path.basename(stepPath)}.py`);
   return fileHasGenStep(candidate) ? candidate : "";
 }
 
@@ -620,8 +625,11 @@ export function createLocalAssetBackend({
           if (!fileHasGenStep(candidatePath)) {
             throw new Error(`Python generator is not a gen_step() source: ${normalizedRef}`);
           }
+          // `<name>.step.py` already carries the `.step` in its stem; legacy `<name>.py` does not.
+          const stem = path.basename(candidatePath, extension);
+          const stepBase = /\.(step|stp)$/i.test(stem) ? stem : `${stem}.step`;
           return {
-            stepPath: path.join(path.dirname(candidatePath), `${path.basename(candidatePath, extension)}.step`),
+            stepPath: path.join(path.dirname(candidatePath), stepBase),
             sourcePath: candidatePath,
             skipStepWrite: true,
           };
@@ -1003,6 +1011,38 @@ export function createLocalAssetBackend({
     };
   }
 
+  // Render-artifact pipeline: one shareable seam over per-type providers. Today only STEP needs a
+  // generated artifact (the component-GLB package); every other type renders directly from its
+  // committed file (no provider -> always READY). `artifactStatus` reports freshness without
+  // building; `resolveArtifact` (re)builds. Both wrap the existing STEP closures unchanged.
+  const renderArtifactPipeline = createRenderArtifactPipeline({
+    providers: [
+      createStepArtifactProvider({
+        // A STEP model is exactly an entry whose logical file is a .step/.stp (generator models
+        // carry the synthesized <stem>.step; imported models the committed file). No other type does.
+        ownsEntry: (entry) => /\.(step|stp)$/i.test(String(entry?.file || "")),
+        readStatus: ({ fileRef, resolvedRoot, catalog }) =>
+          readStepSourceStatusForFile({ fileRef, resolvedRoot, catalog }),
+        build: ({ fileRef, force, resolvedRoot, catalog }) =>
+          generateStepArtifact({ fileRef, force, resolvedRoot, catalog }),
+        artifactRef: (entry) => String(entry?.url || ""),
+      }),
+    ],
+    directRef: (entry) => String(entry?.url || ""),
+  });
+
+  function artifactStatus({ fileRef, resolvedRoot = resolveRequestRoot({ fileRef }), catalog = null } = {}) {
+    const activeCatalog = catalog || readCatalogSafe({ fileRef });
+    const entry = catalogEntryForFileRef(activeCatalog, fileRef);
+    return renderArtifactPipeline.artifactStatus({ fileRef, entry, resolvedRoot, catalog: activeCatalog });
+  }
+
+  function resolveArtifact({ fileRef, force = false, resolvedRoot = resolveRequestRoot({ fileRef }), catalog = null } = {}) {
+    const activeCatalog = catalog || readCatalogSafe({ fileRef });
+    const entry = catalogEntryForFileRef(activeCatalog, fileRef);
+    return renderArtifactPipeline.resolveArtifact({ fileRef, entry, force, resolvedRoot, catalog: activeCatalog });
+  }
+
   return {
     kind: "local-fs",
     canGenerateStepArtifacts: true,
@@ -1027,6 +1067,8 @@ export function createLocalAssetBackend({
     isGenerationStatusPath,
     generateStepArtifact,
     generateImplicitExport,
+    artifactStatus,
+    resolveArtifact,
     entryForSourcePath,
     assetPathForFileRef,
     writeAsset,

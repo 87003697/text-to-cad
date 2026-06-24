@@ -287,7 +287,7 @@ test("local backend resolves same-stem Python generators without requiring a STE
 test("local backend regenerates same-stem Python generators even with no committed STEP file", async () => {
   await withTempDirectoryRoot(async (directoryRoot) => {
     const modelRoot = path.join(directoryRoot, "models");
-    const generatorPath = path.join(modelRoot, "robot", "robot.py");
+    const generatorPath = path.join(modelRoot, "robot", "robot.step.py");
     fs.mkdirSync(path.dirname(generatorPath), { recursive: true });
     fs.writeFileSync(generatorPath, "def gen_step():\n    return None\n");
     const stepPath = path.join(modelRoot, "robot", "robot.step"); // no committed STEP on disk
@@ -321,7 +321,7 @@ test("local backend regenerates same-stem Python generators even with no committ
 test("local backend regenerates same-stem Python STEP artifacts from the STEP file", async () => {
   await withTempDirectoryRoot(async (directoryRoot) => {
     const modelRoot = path.join(directoryRoot, "models");
-    const generatorPath = path.join(modelRoot, "robot", "robot.py");
+    const generatorPath = path.join(modelRoot, "robot", "robot.step.py");
     fs.mkdirSync(path.dirname(generatorPath), { recursive: true });
     fs.writeFileSync(generatorPath, "def gen_step():\n    return None\n");
     const stepPath = path.join(modelRoot, "robot", "robot.step");
@@ -439,7 +439,7 @@ test("local backend reports missing Python-backed STEP files dynamically", async
   await withTempDirectoryRoot((directoryRoot) => {
     const modelRoot = path.join(directoryRoot, "models");
     fs.mkdirSync(modelRoot, { recursive: true });
-    fs.writeFileSync(path.join(modelRoot, "box.py"), "def gen_step():\n    return None\n");
+    fs.writeFileSync(path.join(modelRoot, "box.step.py"), "def gen_step():\n    return None\n");
     const backend = createLocalAssetBackend({ directoryRoot, rootDir: "models" });
 
     const status = backend.readStepSourceStatus({ fileRef: "box.step" });
@@ -574,7 +574,7 @@ test("local backend resolves Python source code separately from output files", a
     const modelRoot = path.join(directoryRoot, "models");
     fs.mkdirSync(modelRoot, { recursive: true });
     const stepPath = path.join(modelRoot, "part.step");
-    const sourcePath = path.join(modelRoot, "part.py");
+    const sourcePath = path.join(modelRoot, "part.step.py");
     fs.writeFileSync(stepPath, "ISO-10303-21;\nEND-ISO-10303-21;\n");
     fs.writeFileSync(sourcePath, "def gen_step():\n    return None\n");
     const backend = createLocalAssetBackend({ directoryRoot, rootDir: "models" });
@@ -586,7 +586,7 @@ test("local backend resolves Python source code separately from output files", a
     assert.equal(output.path, stepPath);
     assert.equal(source.asset, "source");
     assert.equal(source.path, sourcePath);
-    assert.equal(source.filename, "part.py");
+    assert.equal(source.filename, "part.step.py");
     assert.equal(source.contentType, "text/plain; charset=utf-8");
   });
 });
@@ -649,7 +649,7 @@ test("local backend ignores same-stem Python metadata when regenerating existing
     const modelRoot = path.join(directoryRoot, "models");
     fs.mkdirSync(path.join(modelRoot, "robot"), { recursive: true });
     fs.writeFileSync(path.join(modelRoot, "robot", "__init__.py"), "\n");
-    const generatorPath = path.join(modelRoot, "robot", "robot.py");
+    const generatorPath = path.join(modelRoot, "robot", "robot.step.py");
     fs.writeFileSync(generatorPath, "def gen_step():\n    return None\n");
     const stepPath = path.join(modelRoot, "robot", "robot.step");
     fs.writeFileSync(stepPath, "ISO-10303-21;\nEND-ISO-10303-21;\n");

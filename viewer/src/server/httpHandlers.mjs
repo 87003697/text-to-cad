@@ -521,6 +521,55 @@ export function createCadViewerApiMiddleware({
       }
       return;
     }
+
+    // Unified render-artifact endpoint (replaces step-artifact + step-source-status). GET reports
+    // freshness (ready | needs-build | error); POST (re)builds the artifact and refreshes the
+    // catalog. Direct-render types resolve to "ready" with no work.
+    if (requestUrl.pathname === "/__cad/artifact") {
+      if (typeof backend.artifactStatus !== "function" || typeof backend.resolveArtifact !== "function") {
+        sendJson(res, 501, {
+          error: "Render-artifact resolution is not available for this CAD Viewer backend",
+        });
+        return;
+      }
+      const isBuild = req.method === "POST";
+      if (isBuild && !enableStepArtifactBackend) {
+        if (claimDisabledStepArtifactRoute) {
+          sendJson(res, 501, { error: "Render-artifact generation is not enabled for this CAD Viewer backend" });
+          return;
+        }
+        next();
+        return;
+      }
+      if (req.method !== "GET" && req.method !== "POST") {
+        sendJson(res, 405, { error: "Use GET (status) or POST (build) for /__cad/artifact" });
+        return;
+      }
+      try {
+        const catalog = await backend.readCatalog({ rootDir: activeRootDir, fileRef: activeFileRef });
+        const resolvedRoot = typeof backend.resolveRequestRoot === "function"
+          ? backend.resolveRequestRoot({ rootDir: activeRootDir, fileRef: activeFileRef })
+          : (typeof backend.resolveRoot === "function" && activeRootDir ? backend.resolveRoot(activeRootDir) : undefined);
+        if (!isBuild) {
+          sendJson(res, 200, backend.artifactStatus({ fileRef: activeFileRef, resolvedRoot, catalog }));
+          return;
+        }
+        const result = await backend.resolveArtifact({
+          fileRef: activeFileRef,
+          force: requestUrl.searchParams.get("force") === "1",
+          resolvedRoot,
+          catalog,
+        });
+        const nextCatalog = typeof backend.refreshCatalog === "function"
+          ? await backend.refreshCatalog({ rootDir: activeRootDir, fileRef: activeFileRef })
+          : await backend.readCatalog({ rootDir: activeRootDir, fileRef: activeFileRef });
+        onCatalogChanged(resolvedRoot);
+        sendJson(res, result?.ok === false ? 500 : 200, { ...result, catalog: nextCatalog });
+      } catch (error) {
+        sendJson(res, 400, { error: errorMessage(error) });
+      }
+      return;
+    }
     if (requestUrl.pathname === "/__cad/step-artifact") {
       if (!enableStepArtifactBackend) {
         if (claimDisabledStepArtifactRoute) {
