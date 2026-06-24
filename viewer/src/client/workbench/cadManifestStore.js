@@ -302,61 +302,9 @@ export async function refreshCadGenerationStatus() {
   return generationRefreshInFlight;
 }
 
-export async function requestStepArtifactGeneration(fileRef, { signal } = {}) {
-  if (typeof window === "undefined") {
-    return null;
-  }
-  const normalizedFileRef = String(fileRef || "").trim();
-  if (!normalizedFileRef) {
-    throw new Error("Missing STEP file");
-  }
-  const response = await fetch(cadApiUrl("/__cad/step-artifact", {
-    params: { file: normalizedFileRef },
-  }), {
-    method: "POST",
-    cache: "no-store",
-    signal,
-  });
-  if (!response.ok) {
-    throw new Error(await readJsonError(
-      response,
-      `Failed to generate STEP artifact: ${response.status} ${response.statusText}`
-    ));
-  }
-  const payload = await response.json();
-  if (payload?.catalog) {
-    publishCadManifest(payload.catalog);
-  }
-  return payload;
-}
-
-export async function requestStepSourceStatus(fileRef, { signal } = {}) {
-  if (typeof window === "undefined") {
-    return null;
-  }
-  const normalizedFileRef = String(fileRef || "").trim();
-  if (!normalizedFileRef) {
-    throw new Error("Missing STEP file");
-  }
-  const response = await fetch(cadApiUrl("/__cad/step-source-status", {
-    params: { file: normalizedFileRef },
-  }), {
-    method: "GET",
-    cache: "no-store",
-    signal,
-  });
-  if (!response.ok) {
-    throw new Error(await readJsonError(
-      response,
-      `Failed to check STEP source status: ${response.status} ${response.statusText}`
-    ));
-  }
-  return response.json();
-}
-
-// Unified render-artifact client API (replaces requestStepSourceStatus + requestStepArtifactGeneration).
-// GET reports freshness ({ state: "ready" | "needs-build" | "error", ... }); a direct-render entry is
-// always "ready".
+// Unified render-artifact client API. GET reports freshness ({ state: "ready" | "needs-build" |
+// "error", ... }); a direct-render entry is always "ready". (Replaced the STEP-specific
+// requestStepSourceStatus + requestStepArtifactGeneration.)
 export async function requestArtifactStatus(fileRef, { signal } = {}) {
   if (typeof window === "undefined") {
     return null;
