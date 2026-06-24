@@ -13,7 +13,7 @@ Native GLB sidecars are ordinary glTF 2.0 binary files for external tools: Y-up,
 Use `scripts/step` with a generated Python source:
 
 ```bash
-python scripts/step path/to/model.py \
+python scripts/step path/to/model.step.py \
   --stl meshes/model.stl \
   --3mf meshes/model.3mf \
   --glb meshes/model.glb
@@ -52,7 +52,7 @@ Use tighter tolerances for small curved parts or visual fidelity. Use looser tol
 Example:
 
 ```bash
-python scripts/step models/bracket.py \
+python scripts/step models/bracket.step.py \
   --stl meshes/bracket.stl \
   --glb meshes/bracket.glb \
   --mesh-tolerance 0.2 \

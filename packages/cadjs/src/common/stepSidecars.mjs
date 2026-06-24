@@ -16,13 +16,14 @@ export function isInsideCadCache(filePath) {
 }
 
 // A render artifact is the package DESCRIPTOR directory at
-// `<folder>/__cadcache__/models/<step-filename>/`. Recognized by structure (parent dir is
-// `models`, grandparent is `__cadcache__`, basename is a STEP filename) — there is no
-// `.step.glb` in the model tree anymore.
+// `<folder>/__cadcache__/models/<entry-filename>/`. Recognized purely by STRUCTURE — parent
+// dir is `models`, grandparent is `__cadcache__` — so the package may be named after ANY entry
+// file (`<name>.step.py`, `<name>.step`, `<name>.stp`, or an arbitrary `<name>.blah.py`). The
+// cache is unopinionated about the entry's extension; only the viewer decides which files are
+// entrypoints.
 export function isInlineStepGlbArtifactPath(filePath) {
   const p = String(filePath || "");
-  const name = path.basename(p).toLowerCase();
-  if (!(name.endsWith(".step") || name.endsWith(".stp"))) {
+  if (!path.basename(p)) {
     return false;
   }
   return path.basename(path.dirname(p)) === CACHE_MODELS_DIRNAME
@@ -40,20 +41,21 @@ export function isPathInsidePerStepViewerDirectory(filePath) {
     .some((part) => isPerStepViewerDirectoryName(part));
 }
 
-// The render-artifact (component-GLB package) directory for a STEP source:
-// `<folder>/__cadcache__/models/<step-filename>/` — a self-contained unit holding assembly.json
-// plus its own `components/<hash>.glb` dir (no shared per-folder component store).
-export function inlineStepGlbArtifactPathForSource(sourcePath) {
+// The render-artifact (component-GLB package) directory for a CAD ENTRY file:
+// `<folder>/__cadcache__/models/<entry-filename>/` — a self-contained unit holding assembly.json
+// plus its own `components/<hash>.glb` dir. Keyed by the entry filename VERBATIM (no extension
+// stripping), so a generated `<name>.step.py` and an imported `<name>.step` get distinct packages.
+export function inlineStepGlbArtifactPathForSource(entryPath) {
   return path.join(
-    path.dirname(sourcePath),
+    path.dirname(entryPath),
     CACHE_DIRNAME,
     CACHE_MODELS_DIRNAME,
-    path.basename(sourcePath),
+    path.basename(entryPath),
   );
 }
 
-export function stepGlbArtifactPathForSource(sourcePath) {
-  return inlineStepGlbArtifactPathForSource(sourcePath);
+export function stepGlbArtifactPathForSource(entryPath) {
+  return inlineStepGlbArtifactPathForSource(entryPath);
 }
 
 export function stepParameterPathForStepSource(sourcePath) {

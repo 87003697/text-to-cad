@@ -11,6 +11,12 @@ the mate frames carry the design placement, validated against the imported topol
 
 from __future__ import annotations
 
+import contextlib
+import copy
+import importlib.util
+import io
+import sys
+from functools import lru_cache
 from pathlib import Path
 from typing import Any, Sequence
 
@@ -35,6 +41,67 @@ def _resolve(path: object, *, base_dir: Path) -> Path:
     if candidate.is_absolute():
         return candidate
     return (base_dir / text).resolve()
+
+
+@lru_cache(maxsize=None)
+def _load_generator_module(generator_path_str: str) -> Any:
+    """Import a generated child's generator script once and cache the module.
+
+    Generators self-bootstrap their own ``sys.path`` and import their dependencies at module
+    top, so executing the module here is enough to call its ``gen_step()``. Cached per path so
+    a part reused across the arm loads its module a single time.
+    """
+    generator_path = Path(generator_path_str)
+    module_name = f"_tom_child_gen_{generator_path.stem}_{abs(hash(generator_path_str))}"
+    spec = importlib.util.spec_from_file_location(module_name, generator_path)
+    if spec is None or spec.loader is None:
+        raise RuntimeError(f"Unable to load generator {generator_path}")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[module_name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+@lru_cache(maxsize=None)
+def _generated_child_shape(generator_path_str: str) -> Any:
+    """Build a generated child's shape once via its ``gen_step()`` and cache it.
+
+    Leaf generators can be expensive (sheet-metal bend analysis, interference checks), so a part
+    reused across the arm must build a single time, not once per occurrence. Callers deepcopy the
+    result for each placement, so the cached shape is never moved, labeled, or otherwise mutated.
+    """
+    module = _load_generator_module(generator_path_str)
+    gen_step = getattr(module, "gen_step", None)
+    if not callable(gen_step):
+        raise RuntimeError(f"generated child {generator_path_str} has no gen_step()")
+    # Leaf generators print build diagnostics to stdout when run standalone; silence them here so
+    # composing a parent does not flood the build log (geometry is unaffected).
+    with contextlib.redirect_stdout(io.StringIO()):
+        result = gen_step()
+    if isinstance(result, dict):
+        if "shape" not in result:
+            raise RuntimeError(f"{generator_path_str} gen_step() returned no 'shape'")
+        return result["shape"]
+    return result
+
+
+def _resolve_shape(path: object, *, base_dir: Path) -> Any:
+    """Resolve one instance's geometry by dependency kind.
+
+    A GENERATED child — its STEP ``<name>.step`` has a sibling ``<name>.step.py`` generator — is
+    composed from that generator's ``gen_step()``. This is a source-level dependency: a child edit
+    flows into the parent on the next rebuild with no committed-STEP refresh and no leaf-first
+    regeneration ordering. An IMPORTED child — no generator, e.g. a purchased/downloaded servo,
+    extrusion, or gripper — loads through the cached ``__cadcache__`` importer. Both paths return a
+    fresh, independent shape per call so repeated copies of the same part stay independent occurrences.
+    """
+    step_path = _resolve(path, base_dir=base_dir)
+    # The generator for the logical STEP ``<name>.step`` is ``<name>.step.py`` (append .py to the
+    # full step filename; ``with_suffix('.py')`` would drop the ``.step`` and miss it).
+    generator_path = step_path.with_name(step_path.name + ".py")
+    if generator_path.exists():
+        return copy.deepcopy(_generated_child_shape(str(generator_path)))
+    return import_step(step_path)
 
 
 def compound_from_instances(
@@ -64,7 +131,7 @@ def compound_from_instances(
         raise RuntimeError(f"assembly {name!r} has no instances")
     children: list[Compound] = []
     for inst in instances:
-        part = import_step(_resolve(inst["path"], base_dir=base_dir))
+        part = _resolve_shape(inst["path"], base_dir=base_dir)
         placed = part.moved(location_from_transform(inst["transform"]))
         placed.label = str(inst["name"])
         children.append(placed)
@@ -90,10 +157,10 @@ def link_assembly_from_instances(
     if not instances:
         raise RuntimeError(f"link {name!r} has no instances")
     root = instances[0]
-    root_shape = asm.add(import_step(_resolve(root["path"], base_dir=base_dir)), str(root["name"]))
+    root_shape = asm.add(_resolve_shape(root["path"], base_dir=base_dir), str(root["name"]))
     root_loc = location_from_transform(root["transform"])
     for inst in instances[1:]:
-        child = asm.add(import_step(_resolve(inst["path"], base_dir=base_dir)), str(inst["name"]))
+        child = asm.add(_resolve_shape(inst["path"], base_dir=base_dir), str(inst["name"]))
         relative = root_loc.inverse() * location_from_transform(inst["transform"])
         seat = asm.rigid_frame(root_shape, f"{inst['name']}_seat", relative)
         origin = asm.rigid_frame(child, f"{inst['name']}_origin", Location())

@@ -300,33 +300,33 @@ test("local backend regenerates same-stem Python generators even with no committ
   });
 });
 
-test("local backend regenerates same-stem Python STEP artifacts from the STEP file", async () => {
+test("local backend resolves a generated .step.py entry from its own python source", async () => {
   await withTempDirectoryRoot(async (directoryRoot) => {
     const modelRoot = path.join(directoryRoot, "models");
     const generatorPath = path.join(modelRoot, "robot", "robot.step.py");
     fs.mkdirSync(path.dirname(generatorPath), { recursive: true });
     fs.writeFileSync(generatorPath, "def gen_step():\n    return None\n");
+    // No on-disk `robot.step`: a generated model is the `.step.py` entry, keyed by its own name.
     const stepPath = path.join(modelRoot, "robot", "robot.step");
-    fs.writeFileSync(stepPath, "ISO-10303-21;\nEND-ISO-10303-21;\n");
     const backend = createLocalAssetBackend({
       directoryRoot,
       rootDir: "models",
       stepArtifactGenerator: async (request) => {
         assert.equal(request.stepPath, stepPath);
-        assert.equal(request.sourcePath, "");
+        assert.equal(request.sourcePath, generatorPath);
         assert.equal(request.skipStepWrite, false);
         assert.equal(request.writeStepAfterArtifact, false);
         assert.equal(request.force, true);
         return { ok: true, validation: { ok: true } };
       },
     });
-    const resolved = backend.resolveStepSource("robot/robot.step");
+    const resolved = backend.resolveStepSource("robot/robot.step.py");
 
     assert.equal(resolved.stepPath, stepPath);
     assert.equal(resolved.sourcePath, generatorPath);
     assert.equal(resolved.skipStepWrite, true);
     const result = await backend.generateStepArtifact({
-      fileRef: "robot/robot.step",
+      fileRef: "robot/robot.step.py",
       force: true,
     });
 
@@ -551,21 +551,27 @@ test("local backend resolves catalog output files whose names begin with two dot
   });
 });
 
-test("local backend resolves Python source code separately from output files", async () => {
+test("local backend resolves a generated .step.py entry's python source", async () => {
   await withTempDirectoryRoot((directoryRoot) => {
     const modelRoot = path.join(directoryRoot, "models");
     fs.mkdirSync(modelRoot, { recursive: true });
-    const stepPath = path.join(modelRoot, "part.step");
     const sourcePath = path.join(modelRoot, "part.step.py");
-    fs.writeFileSync(stepPath, "ISO-10303-21;\nEND-ISO-10303-21;\n");
     fs.writeFileSync(sourcePath, "def gen_step():\n    return None\n");
     const backend = createLocalAssetBackend({ directoryRoot, rootDir: "models" });
-    const catalog = backend.refreshCatalog();
+    // A generated model is the `.step.py` entry; its python source resolves to the generator file
+    // itself (the cache is keyed by entry filename, so it never collapses with an imported `.step`).
+    const catalog = {
+      schemaVersion: 4,
+      entries: [{
+        file: "part.step.py",
+        kind: "part",
+        sourceKind: "python",
+        source: { file: "part.step.py", sourcePath: "part.step.py" },
+      }],
+    };
 
-    const output = backend.resolveFileAssetAccess({ fileRef: "part.step", asset: "output", catalog });
-    const source = backend.resolveFileAssetAccess({ fileRef: "part.step", asset: "source", catalog });
+    const source = backend.resolveFileAssetAccess({ fileRef: "part.step.py", asset: "source", catalog });
 
-    assert.equal(output.path, stepPath);
     assert.equal(source.asset, "source");
     assert.equal(source.path, sourcePath);
     assert.equal(source.filename, "part.step.py");

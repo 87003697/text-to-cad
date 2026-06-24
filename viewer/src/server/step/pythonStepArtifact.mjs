@@ -157,7 +157,9 @@ export function ensurePythonStepTopologyArtifact({
     const normalizeResult = (result) => {
       if (result?.ok) {
         result.stepPath = resolvedStepPath;
-        result.glbPath = inlineStepGlbArtifactPathForSource(resolvedStepPath);
+        // The render cache is keyed by the ENTRY filename — the `.step.py` generator for a
+        // generated model (resolvedSourcePath), or the `.step` itself for an imported one.
+        result.glbPath = inlineStepGlbArtifactPathForSource(resolvedSourcePath || resolvedStepPath);
       }
       return result;
     };

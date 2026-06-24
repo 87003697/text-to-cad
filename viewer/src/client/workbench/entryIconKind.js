@@ -11,11 +11,23 @@ export const ENTRY_ICON_KIND = Object.freeze({
   GCODE: "gcode",
   IMPLICIT: "implicit",
   ROBOT: "robot",
+  STEP_GENERATED: "step-generated",
   STEP_PART: "step-part",
   STL_MESH: "stl-mesh",
   THREE_MF_MESH: "3mf-mesh",
   GLB_MESH: "glb-mesh"
 });
+
+// A generated STEP model is produced by a `.step.py` generator (catalog sourceKind "python");
+// an imported STEP file is its own source. Generated models get a code icon, imported ones the
+// regular STEP/assembly icon.
+export function isGeneratedStepEntry(entry) {
+  if (String(entry?.sourceKind || "").trim().toLowerCase() === "python") {
+    return true;
+  }
+  const sourcePath = String(entry?.source?.sourcePath || entry?.source?.file || "").toLowerCase();
+  return sourcePath.endsWith(".step.py");
+}
 
 export function entryIconKind(entry, {
   sourceFormat = "",
@@ -27,9 +39,6 @@ export function entryIconKind(entry, {
 
   if (safeStatus.artifactGenerating || safeStatus.loading) {
     return ENTRY_ICON_KIND.LOADING;
-  }
-  if (normalizedKind === "assembly") {
-    return ENTRY_ICON_KIND.ASSEMBLY;
   }
   if (normalizedSourceFormat === RENDER_FORMAT.DXF || normalizedKind === RENDER_FORMAT.DXF) {
     return ENTRY_ICON_KIND.DXF;
@@ -51,6 +60,14 @@ export function entryIconKind(entry, {
   }
   if (normalizedSourceFormat === RENDER_FORMAT.GLB || normalizedSourceFormat === "gltf" || normalizedKind === RENDER_FORMAT.GLB || normalizedKind === "gltf") {
     return ENTRY_ICON_KIND.GLB_MESH;
+  }
+  // STEP family: a generated `.step.py` model reads as code; an imported STEP keeps the regular
+  // STEP icon (and an imported assembly keeps the assembly icon).
+  if (isGeneratedStepEntry(entry)) {
+    return ENTRY_ICON_KIND.STEP_GENERATED;
+  }
+  if (normalizedKind === "assembly") {
+    return ENTRY_ICON_KIND.ASSEMBLY;
   }
   return ENTRY_ICON_KIND.STEP_PART;
 }
