@@ -343,7 +343,7 @@ function SidebarResizeHandle({ onStartResize }) {
       onPointerDown={onStartResize}
       className="group/sidebar-resize absolute inset-y-0 -right-1.5 z-30 flex h-auto w-3 cursor-col-resize touch-none items-stretch justify-center rounded-none px-0 py-0 hover:bg-transparent"
     >
-      <span className="my-2 w-px rounded-full bg-transparent transition-colors group-hover/sidebar-resize:bg-sidebar-border group-focus-visible/sidebar-resize:bg-ring" />
+      <span className="w-px bg-transparent transition-colors group-hover/sidebar-resize:bg-ring group-focus-visible/sidebar-resize:bg-ring" />
     </Button>
   );
 }
