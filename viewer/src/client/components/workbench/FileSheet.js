@@ -534,7 +534,7 @@ export default function FileSheet({
           onPointerDown={onStartResize}
           className="group/file-sheet-resize absolute inset-y-0 -left-1.5 z-30 flex h-auto w-3 cursor-col-resize touch-none items-stretch justify-center rounded-none px-0 py-0 hover:bg-transparent"
         >
-          <span className="my-2 w-px rounded-full bg-transparent transition-colors group-hover/file-sheet-resize:bg-sidebar-border group-focus-visible/file-sheet-resize:bg-ring" />
+          <span className="w-px bg-transparent transition-colors group-hover/file-sheet-resize:bg-ring group-focus-visible/file-sheet-resize:bg-ring" />
         </button>
       ) : null}
       {sheetBody}

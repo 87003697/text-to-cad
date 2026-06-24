@@ -409,10 +409,8 @@ export default function FileSheetTabbedSurface({
         onPointerDown={handleDividerPointerDown}
         onPointerMove={handleDividerPointerMove}
         onPointerUp={handleDividerPointerUp}
-        className="group/file-sheet-split relative z-10 flex h-1.5 shrink-0 cursor-row-resize touch-none items-center justify-center"
-      >
-        <span className="h-px w-full bg-sidebar-border transition-colors group-hover/file-sheet-split:bg-ring" />
-      </div>
+        className="relative z-10 h-px shrink-0 cursor-row-resize touch-none bg-sidebar-border transition-colors before:absolute before:inset-x-0 before:-top-[3px] before:h-[7px] before:content-[''] hover:bg-ring"
+      />
       <div className="flex min-h-0 min-w-0 flex-1 flex-col">
         {renderPane(bottomPane)}
       </div>
