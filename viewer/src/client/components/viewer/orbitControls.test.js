@@ -3,8 +3,13 @@ import test from "node:test";
 
 import {
   orbitControlsDeltaSeconds,
+  PREVIEW_AUTO_ROTATE_SPEED,
   updateOrbitControls
 } from "./orbitControls.js";
+
+test("preview auto-rotate speed stays intentionally calm", () => {
+  assert.equal(PREVIEW_AUTO_ROTATE_SPEED, 0.25);
+});
 
 test("orbitControlsDeltaSeconds converts animation timestamps from ms to seconds", () => {
   assert.equal(orbitControlsDeltaSeconds(1016, 1000), 0.016);

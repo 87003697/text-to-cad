@@ -21,7 +21,10 @@ import {
   normalizeImplicitGraphicsSettings
 } from "@/workbench/implicitGraphicsSettings";
 import ViewPlaneControl from "./viewer/ViewPlaneControl";
-import { updateOrbitControls } from "./viewer/orbitControls.js";
+import {
+  PREVIEW_AUTO_ROTATE_SPEED,
+  updateOrbitControls
+} from "./viewer/orbitControls.js";
 
 const INTERACTION_IDLE_DELAY_MS = 140;
 const DEFAULT_DAMPING_FACTOR = 0.14;
@@ -812,7 +815,7 @@ const ImplicitCadViewer = forwardRef(function ImplicitCadViewer({
     }
     runtime.orbitControlsLastTimestamp = 0;
     runtime.controls.autoRotate = !!previewMode;
-    runtime.controls.autoRotateSpeed = 1.0;
+    runtime.controls.autoRotateSpeed = PREVIEW_AUTO_ROTATE_SPEED;
     runtime.requestRender?.();
   }, [previewMode]);
 
@@ -1213,7 +1216,7 @@ const ImplicitCadViewer = forwardRef(function ImplicitCadViewer({
     if (controls) {
       runtime.orbitControlsLastTimestamp = 0;
       controls.autoRotate = !!previewMode;
-      controls.autoRotateSpeed = 1.0;
+      controls.autoRotateSpeed = PREVIEW_AUTO_ROTATE_SPEED;
     }
     requestRender();
 

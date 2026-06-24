@@ -1,4 +1,5 @@
 const MAX_ORBIT_DELTA_SECONDS = 0.05;
+export const PREVIEW_AUTO_ROTATE_SPEED = 0.25;
 
 function finiteTimestamp(value) {
   const numeric = Number(value);

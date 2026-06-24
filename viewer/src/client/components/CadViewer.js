@@ -144,6 +144,7 @@ import ViewPlaneControl from "./viewer/ViewPlaneControl";
 import { useViewerDrawingOverlay } from "./viewer/hooks/useViewerDrawingOverlay";
 import { useViewerPicking } from "./viewer/hooks/useViewerPicking";
 import { useViewerRuntime } from "./viewer/hooks/useViewerRuntime";
+import { PREVIEW_AUTO_ROTATE_SPEED } from "./viewer/orbitControls";
 import { normalizeViewerRenderState } from "./viewer/renderState";
 import {
   buildModel
@@ -182,7 +183,6 @@ const COARSE_POINTER_PINCH_ZOOM_SPEED = 2.4;
 const KEYBOARD_ORBIT_NUDGE_RAD = Math.PI / 32;
 const KEYBOARD_ORBIT_SPEED_RAD_PER_SEC = Math.PI * 0.42;
 const KEYBOARD_POLAR_EPSILON = 0.02;
-const PREVIEW_AUTO_ROTATE_SPEED = 1.0;
 const VIEW_PLANE_ACTIVE_DOT_THRESHOLD = 0.994;
 const VIEW_PLANE_TRANSITION_MS = 280;
 const VIEW_PLANE_POLE_DIRECTION_DOT_THRESHOLD = 0.9999;
