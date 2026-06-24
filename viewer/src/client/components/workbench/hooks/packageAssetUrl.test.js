@@ -37,18 +37,6 @@ test("resolvePackageAssetUrl repoints the file param on query-style (local-fs) U
   assert.notEqual(descriptor.searchParams.get("file"), "/models/simple/__cadcache__/models/part.step");
 });
 
-test("resolvePackageAssetUrl resolves against the path on path-style (blob) URLs", () => {
-  const blobUrl = "https://blob.example.test/prefix/simple/__cadcache__/models/part.step";
-  assert.equal(
-    resolvePackageAssetUrl(blobUrl, "assembly.json"),
-    "https://blob.example.test/prefix/simple/__cadcache__/models/part.step/assembly.json"
-  );
-  assert.equal(
-    resolvePackageAssetUrl(blobUrl, "components/7e4f.glb"),
-    "https://blob.example.test/prefix/simple/__cadcache__/models/part.step/components/7e4f.glb"
-  );
-});
-
 test("resolvePackageAssetUrl returns empty for missing inputs", () => {
   assert.equal(resolvePackageAssetUrl("", "assembly.json"), "");
   assert.equal(resolvePackageAssetUrl("/__cad/asset?file=%2Fx", ""), "");

@@ -7,7 +7,6 @@
     "dev": "vite dev",
     "agent:start": "node scripts/start-agent-viewer.mjs",
     "serve": "node src/server/server.mjs",
-    "upload:blob": "node scripts/upload-catalog-to-blob.mjs",
     "start": "node src/server/server.mjs",
     "moveit2:setup": "moveit2_server/setup.sh",
     "moveit2:check": "moveit2_server/check-moveit2-server.sh",
@@ -18,7 +17,6 @@
     "test": "node scripts/run-tests.mjs"
   },
   "dependencies": {
-    "@vercel/blob": "^2.4.0",
     "cadjs": "file:./packages/cadjs",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
