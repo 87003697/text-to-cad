@@ -94,7 +94,7 @@ test("ensureStepArtifactsForCatalog discovers Python generators without fixture 
   const repoRoot = makeTempRepo();
   t.after(() => fs.rmSync(repoRoot, { recursive: true, force: true }));
   const stepPath = path.join(repoRoot, "workspace/generated/block.step");
-  const generatorPath = path.join(repoRoot, "workspace/generated/block.py");
+  const generatorPath = path.join(repoRoot, "workspace/generated/block.step.py");
   writePythonBoxGenerator(generatorPath);
 
   const results = await ensureStepArtifactsForCatalog({ repoRoot, rootDir: "workspace" });
@@ -106,7 +106,7 @@ test("ensureStepArtifactsForCatalog discovers Python generators without fixture 
 
   const indexTopology = readStepTopologyIndexManifest(inlineStepGlbArtifactPathForSource(stepPath));
   assert.equal(indexTopology.sourceKind, "python");
-  assert.equal(indexTopology.sourcePath, "block.py");
+  assert.equal(indexTopology.sourcePath, "block.step.py");
   assert.equal(indexTopology.stepPath, "block.step");
   assert.equal(indexTopology.sourceFiles, undefined);
 

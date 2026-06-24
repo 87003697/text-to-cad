@@ -107,7 +107,6 @@ function entryStatusForMenu(entry, {
   entryHasDxf,
   entryHasGcode,
   entryHasUrdf,
-  activeGenerationFiles = [],
   activeStepArtifactGenerationFile = "",
   stepArtifactGenerationAvailable = true
 }) {
@@ -119,12 +118,10 @@ function entryStatusForMenu(entry, {
 
   return entryIconStatus(entry, {
     sourceFormat,
-    entryKey: fileKey(entry),
     hasMesh,
     hasDxf,
     hasGcode,
     hasUrdf,
-    activeGenerationFiles,
     activeStepArtifactGenerationFile,
     stepArtifactGenerationAvailable
   });
@@ -157,7 +154,6 @@ function BreadcrumbEntryMenuItem({
   entryHasDxf,
   entryHasGcode,
   entryHasUrdf,
-  activeGenerationFiles = [],
   activeStepArtifactGenerationFile = "",
   stepArtifactGenerationAvailable = true
 }) {
@@ -172,7 +168,6 @@ function BreadcrumbEntryMenuItem({
     entryHasDxf,
     entryHasGcode,
     entryHasUrdf,
-    activeGenerationFiles,
     activeStepArtifactGenerationFile,
     stepArtifactGenerationAvailable
   });
@@ -223,7 +218,6 @@ function BreadcrumbDirectoryMenuItems({
   entryHasDxf,
   entryHasGcode,
   entryHasUrdf,
-  activeGenerationFiles = [],
   activeStepArtifactGenerationFile = "",
   stepArtifactGenerationAvailable = true,
   canRevealFileAssets = false,
@@ -260,7 +254,6 @@ function BreadcrumbDirectoryMenuItems({
           entryHasDxf={entryHasDxf}
           entryHasGcode={entryHasGcode}
           entryHasUrdf={entryHasUrdf}
-          activeGenerationFiles={activeGenerationFiles}
           activeStepArtifactGenerationFile={activeStepArtifactGenerationFile}
           stepArtifactGenerationAvailable={stepArtifactGenerationAvailable}
           canRevealFileAssets={canRevealFileAssets}
@@ -287,7 +280,6 @@ function BreadcrumbDirectoryMenuItems({
         entryHasDxf={entryHasDxf}
         entryHasGcode={entryHasGcode}
         entryHasUrdf={entryHasUrdf}
-        activeGenerationFiles={activeGenerationFiles}
         activeStepArtifactGenerationFile={activeStepArtifactGenerationFile}
         stepArtifactGenerationAvailable={stepArtifactGenerationAvailable}
         canRevealFileAssets={canRevealFileAssets}
@@ -327,7 +319,6 @@ function BreadcrumbDirectorySubMenu({
   entryHasDxf,
   entryHasGcode,
   entryHasUrdf,
-  activeGenerationFiles = [],
   activeStepArtifactGenerationFile = "",
   stepArtifactGenerationAvailable = true,
   canRevealFileAssets = false,
@@ -363,7 +354,6 @@ function BreadcrumbDirectorySubMenu({
             entryHasDxf={entryHasDxf}
             entryHasGcode={entryHasGcode}
             entryHasUrdf={entryHasUrdf}
-            activeGenerationFiles={activeGenerationFiles}
             activeStepArtifactGenerationFile={activeStepArtifactGenerationFile}
             stepArtifactGenerationAvailable={stepArtifactGenerationAvailable}
             canRevealFileAssets={canRevealFileAssets}
@@ -392,7 +382,6 @@ function BreadcrumbNodeDropdown({
   entryHasDxf,
   entryHasGcode,
   entryHasUrdf,
-  activeGenerationFiles = [],
   activeStepArtifactGenerationFile = "",
   stepArtifactGenerationAvailable = true,
   selectedStepSourceStatus = null,
@@ -515,7 +504,6 @@ function BreadcrumbNodeDropdown({
             entryHasDxf={entryHasDxf}
             entryHasGcode={entryHasGcode}
             entryHasUrdf={entryHasUrdf}
-            activeGenerationFiles={activeGenerationFiles}
             activeStepArtifactGenerationFile={activeStepArtifactGenerationFile}
             stepArtifactGenerationAvailable={stepArtifactGenerationAvailable}
             canRevealFileAssets={canRevealFileAssets}
@@ -543,7 +531,6 @@ function BreadcrumbEllipsisDropdown({
   entryHasDxf,
   entryHasGcode,
   entryHasUrdf,
-  activeGenerationFiles = [],
   activeStepArtifactGenerationFile = "",
   stepArtifactGenerationAvailable = true,
   canRevealFileAssets = false,
@@ -590,7 +577,6 @@ function BreadcrumbEllipsisDropdown({
                   entryHasDxf={entryHasDxf}
                   entryHasGcode={entryHasGcode}
                   entryHasUrdf={entryHasUrdf}
-                  activeGenerationFiles={activeGenerationFiles}
                   activeStepArtifactGenerationFile={activeStepArtifactGenerationFile}
                   stepArtifactGenerationAvailable={stepArtifactGenerationAvailable}
                   canRevealFileAssets={canRevealFileAssets}
@@ -618,7 +604,6 @@ function BreadcrumbEllipsisDropdown({
                   entryHasDxf={entryHasDxf}
                   entryHasGcode={entryHasGcode}
                   entryHasUrdf={entryHasUrdf}
-                  activeGenerationFiles={activeGenerationFiles}
                   activeStepArtifactGenerationFile={activeStepArtifactGenerationFile}
                   stepArtifactGenerationAvailable={stepArtifactGenerationAvailable}
                   canRevealFileAssets={canRevealFileAssets}
@@ -1053,7 +1038,6 @@ export default function CadWorkspaceTopBar({
   entryHasDxf,
   entryHasGcode,
   entryHasUrdf,
-  activeGenerationFiles = [],
   activeStepArtifactGenerationFile = "",
   stepArtifactGenerationAvailable = true,
   themePresets = [],
@@ -1165,7 +1149,6 @@ export default function CadWorkspaceTopBar({
                   entryHasDxf={entryHasDxf}
                   entryHasGcode={entryHasGcode}
                   entryHasUrdf={entryHasUrdf}
-                  activeGenerationFiles={activeGenerationFiles}
                   activeStepArtifactGenerationFile={activeStepArtifactGenerationFile}
                   stepArtifactGenerationAvailable={stepArtifactGenerationAvailable}
                   selectedStepSourceStatus={selectedStepSourceStatus}
@@ -1198,7 +1181,6 @@ export default function CadWorkspaceTopBar({
                       entryHasDxf={entryHasDxf}
                       entryHasGcode={entryHasGcode}
                       entryHasUrdf={entryHasUrdf}
-                      activeGenerationFiles={activeGenerationFiles}
                       activeStepArtifactGenerationFile={activeStepArtifactGenerationFile}
                       stepArtifactGenerationAvailable={stepArtifactGenerationAvailable}
                       canRevealFileAssets={canRevealFileAssets}
@@ -1223,7 +1205,6 @@ export default function CadWorkspaceTopBar({
                       entryHasDxf={entryHasDxf}
                       entryHasGcode={entryHasGcode}
                       entryHasUrdf={entryHasUrdf}
-                      activeGenerationFiles={activeGenerationFiles}
                       activeStepArtifactGenerationFile={activeStepArtifactGenerationFile}
                       stepArtifactGenerationAvailable={stepArtifactGenerationAvailable}
                       selectedStepSourceStatus={selectedStepSourceStatus}

@@ -1537,17 +1537,23 @@ function collectCadSourceFiles(rootPath, { scanRootPath = rootPath, includePath 
       continue;
     }
     const extension = path.extname(entry.name).toLowerCase();
-    // A Python gen_step() generator is the only on-disk trace of a generated model (its
-    // render artifact lives in __cadcache__). Discover it via its LOGICAL STEP, but only
-    // when the artifact actually exists — generators that fail to build standalone (e.g.
-    // package-internal modules with relative imports) never produce one and stay hidden.
-    if (extension === ".py" && entry.name !== "__init__.py" && fileHasGenStep(entryPath)) {
-      const logicalStep = path.join(path.dirname(entryPath), `${path.basename(entryPath, ".py")}.step`);
+    const lowerEntryName = entry.name.toLowerCase();
+    // A generator script is the only on-disk trace of a generated model (its render artifact
+    // lives in __cadcache__). Discover it via its LOGICAL STEP, but only when the artifact
+    // actually exists. The canonical entry marker is `<name>.step.py`: that filename is what
+    // distinguishes a buildable STEP entry from an ordinary helper module, so the viewer keys
+    // on it rather than scanning every .py. Its logical STEP is the filename minus the trailing
+    // ".py" (the stem already ends in ".step").
+    if (lowerEntryName.endsWith(".step.py")) {
+      const logicalStep = path.join(path.dirname(entryPath), entry.name.slice(0, -".py".length));
       if (!fileStats(logicalStep) && stepRenderArtifactPresent(inlineStepGlbArtifactPathForSource(logicalStep))) {
         result.push(logicalStep);
       }
       continue;
     }
+    // Only `<name>.step.py` files are entry generators. A plain `<name>.py` is a helper/library
+    // module (never an entry) even if it defines gen_step, so it is intentionally NOT scanned —
+    // the viewer keys on the `.step.py` name, not on "any Python file that has gen_step()".
     if (SOURCE_EXTENSIONS.has(extension) || pathIsImplicitCadSource(entryPath)) {
       result.push(entryPath);
       continue;
@@ -1733,6 +1739,12 @@ export function sortCatalogEntries(entries) {
 
 export function isServedCadAsset(filePath) {
   const extension = path.extname(filePath).toLowerCase();
+  // Generation lock files live beside the package dir inside __cadcache__ and are server-only
+  // coordination files — never served to the client.
+  const name = path.basename(filePath);
+  if (name.startsWith(".") && name.endsWith(".generation.lock.json")) {
+    return false;
+  }
   // Render artifacts (package descriptors + content-addressed component GLBs) live inside
   // __cadcache__ and are fetched by the viewer client.
   if (isInsideCadCache(filePath)) {

@@ -46,7 +46,7 @@ function bootstrap() {
 }
 
 function AppRoot() {
-  const { manifest, generationStatus, revision, catalogHydrated, catalogRefreshing, catalogError, activeDir } = useSyncExternalStore(
+  const { manifest, revision, catalogHydrated, catalogRefreshing, catalogError, activeDir } = useSyncExternalStore(
     subscribeCadManifest,
     getCadManifestSnapshot,
     getCadManifestSnapshot,
@@ -56,7 +56,6 @@ function AppRoot() {
     <CadWorkspace
       manifestRevision={revision}
       manifestEntries={manifest.entries}
-      generationStatus={generationStatus}
       catalogHydrated={catalogHydrated}
       catalogRefreshing={catalogRefreshing}
       catalogError={catalogError}
