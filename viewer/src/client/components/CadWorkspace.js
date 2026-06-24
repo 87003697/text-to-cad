@@ -236,7 +236,6 @@ import { checkMoveIt2ServerLive, moveit2ServerEnabled, requestMoveIt2Server } fr
 import {
   readActiveCadDir,
   refreshCadCatalog,
-  refreshCadGenerationStatus
 } from "../workbench/cadManifestStore.js";
 import {
   FILE_STATUS_LEVELS,
@@ -1092,7 +1091,6 @@ function normalizeViewerDirectoryOptions(viewerServerInfo) {
 
 export default function CadWorkspace({
   manifestEntries: manifestEntriesProp = [],
-  generationStatus = null,
   manifestRevision = 0,
   catalogHydrated = false,
   catalogRefreshing = false,
@@ -1103,12 +1101,6 @@ export default function CadWorkspace({
   const catalogEntries = manifestEntries;
   const explicitDirParam = readCadDirParam();
   const explicitFileParam = readCadParam();
-  const activeGeneratorFiles = useMemo(() => (
-    Object.entries(generationStatus?.files || {})
-      .filter(([, status]) => status?.running === true)
-      .map(([file]) => String(file || "").trim())
-      .filter(Boolean)
-  ), [generationStatus]);
   const catalogRootDir = String(activeDir || "").trim();
   const [query, setQuery] = useState("");
   const initialFileViewerDirectoryStateRef = useRef(null);
@@ -1412,17 +1404,13 @@ export default function CadWorkspace({
         catalogRefreshing
       });
   const catalogSelectedEntrySourceFormat = entrySourceFormat(catalogSelectedEntry);
-  const selectedGeneratorRunning = Boolean(
-    catalogSelectedEntry &&
-    activeGeneratorFiles.includes(fileKey(catalogSelectedEntry))
-  );
   // Unified render-artifact status for the selected entry: ready (render) | generating (loading) |
   // error (fatal). A missing/stale cache is not an issue — it just triggers a (re)build. Replaces
   // the per-entry step-source-status fetch, the mesh-stripping merge, and the build effect.
   const selectedArtifact = useArtifact(
     catalogSelectedEntry ? fileKey(catalogSelectedEntry) : "",
     {
-      enabled: catalogSelectedEntrySourceFormat === RENDER_FORMAT.STEP && !selectedGeneratorRunning,
+      enabled: catalogSelectedEntrySourceFormat === RENDER_FORMAT.STEP,
       freshnessKey: `${catalogSelectedEntry?.hash || ""}:${manifestRevision}`,
     }
   );
@@ -1701,7 +1689,6 @@ export default function CadWorkspace({
         console.warn("Failed to refresh CAD catalog", error);
       }
     });
-    refreshCadGenerationStatus();
   }, [directoryAutoEnterDir]);
 
   useEffect(() => {
@@ -3057,7 +3044,7 @@ export default function CadWorkspace({
       : isRobotRenderFormat(effectiveRenderFormat)
         ? urdfViewerLoading
         : stepViewerLoading;
-  const effectiveViewerLoading = viewerLoading || selectedGeneratorRunning || fileParamSelectionPending;
+  const effectiveViewerLoading = viewerLoading || selectedArtifactGenerating || fileParamSelectionPending;
   const assemblySidebarLoading =
     isAssemblyView &&
     selectedMeshMatches &&
@@ -3069,7 +3056,7 @@ export default function CadWorkspace({
     selectedAssemblyStructureReady &&
     !selectedAssemblyInteractionReady &&
     !selectedAssemblyHydrationFailed;
-  const viewerLoadingLabel = selectedGeneratorRunning
+  const viewerLoadingLabel = selectedArtifactGenerating
     ? "Generating file..."
     : effectiveRenderFormat === RENDER_FORMAT.DXF
     ? selectedEntry && !selectedEntryHasDxf
@@ -3100,7 +3087,7 @@ export default function CadWorkspace({
     if (viewerRuntimeAlert?.blocking) {
       return viewerRuntimeAlert;
     }
-    if (!selectedEntry || viewerLoading || selectedGeneratorRunning) {
+    if (!selectedEntry || viewerLoading || selectedArtifactGenerating) {
       return null;
     }
     if (effectiveRenderFormat === RENDER_FORMAT.DXF) {
@@ -3150,7 +3137,7 @@ export default function CadWorkspace({
     implicitStatus,
     selectedDxfData,
     selectedEntry,
-    selectedGeneratorRunning,
+    selectedArtifactGenerating,
     selectedGcodePreviewError,
     selectedImplicitRuntimeError,
     selectedImplicitRuntimeModel,
@@ -3590,7 +3577,7 @@ export default function CadWorkspace({
   }, []);
 
   const selectedFileStatusItems = useMemo(() => (
-    selectedGeneratorRunning
+    selectedArtifactGenerating
       ? []
       : buildFileStatusItems({
         entry: selectedEntry,
@@ -3600,15 +3587,15 @@ export default function CadWorkspace({
         urdfData: selectedUrdfData,
         viewerAlert,
         stepArtifactGenerationAvailable,
-        activeGenerationFiles: activeGeneratorFiles,
+        activeGenerationFiles: activeStepArtifactGenerationFiles,
         viewerServerInfo
       })
   ), [
-    activeGeneratorFiles,
+    activeStepArtifactGenerationFiles,
     selectedEntry,
     selectedFileSheetKind,
     selectedGcodeData,
-    selectedGeneratorRunning,
+    selectedArtifactGenerating,
     stepArtifactGenerationAvailable,
     selectedStepSourceStatus,
     selectedUrdfData,
@@ -5291,7 +5278,7 @@ export default function CadWorkspace({
       return null;
     }
 
-    if (selectedGeneratorRunning) {
+    if (selectedArtifactGenerating) {
       return {
         loading: true,
         label: ARTIFACT_GENERATING_LABEL,
@@ -5423,7 +5410,7 @@ export default function CadWorkspace({
     selectedEntryHasImplicit,
     selectedEntryHasMesh,
     selectedEntryHasUrdf,
-    selectedGeneratorRunning,
+    selectedArtifactGenerating,
     selectedStepArtifactRenderPending,
     selectedStepModuleLoading,
     stepUpdateInProgress,
@@ -7852,7 +7839,6 @@ export default function CadWorkspace({
         console.warn("Failed to refresh CAD catalog", error);
       }
     });
-    refreshCadGenerationStatus();
   }, [explicitFileParam, resetActiveDirectory, directorySelectionActive]);
 
   const handleRevealEntryInExplorerView = useCallback((entry) => {
@@ -8419,7 +8405,6 @@ export default function CadWorkspace({
           entryHasDxf={entryHasDxf}
           entryHasGcode={entryHasGcode}
           entryHasUrdf={entryHasUrdf}
-          activeGenerationFiles={activeGeneratorFiles}
           activeStepArtifactGenerationFile={activeStepArtifactGenerationFiles}
           stepArtifactGenerationAvailable={stepArtifactGenerationAvailable}
           themePresets={availableThemePresets}
@@ -8472,7 +8457,6 @@ export default function CadWorkspace({
               entryHasDxf={entryHasDxf}
               entryHasGcode={entryHasGcode}
               entryHasUrdf={entryHasUrdf}
-              activeGenerationFiles={activeGeneratorFiles}
               activeStepArtifactGenerationFile={activeStepArtifactGenerationFiles}
               stepArtifactGenerationAvailable={stepArtifactGenerationAvailable}
               canRevealFileAssets={fileRevealAvailable}
@@ -8575,7 +8559,7 @@ export default function CadWorkspace({
                 localFileOpenAvailable={fileRevealAvailable}
                 fileAccessBusyKey={fileAccessBusyKey}
                 onOpenFileAsset={handleRevealFileAsset}
-                suppressDynamicMetadataStatus={selectedGeneratorRunning}
+                suppressDynamicMetadataStatus={selectedArtifactGenerating}
                 statusItems={selectedFileStatusItems}
                 themeTabs={themeTabs}
                 openSectionIds={effectiveFileSheetOpenSectionIds}
@@ -8607,7 +8591,7 @@ export default function CadWorkspace({
                 localFileOpenAvailable={fileRevealAvailable}
                 fileAccessBusyKey={fileAccessBusyKey}
                 onOpenFileAsset={handleRevealFileAsset}
-                suppressDynamicMetadataStatus={selectedGeneratorRunning}
+                suppressDynamicMetadataStatus={selectedArtifactGenerating}
                 statusItems={selectedFileStatusItems}
                 themeTabs={themeTabs}
                 openSectionIds={effectiveFileSheetOpenSectionIds}
@@ -8686,7 +8670,7 @@ export default function CadWorkspace({
                 localFileOpenAvailable={fileRevealAvailable}
                 fileAccessBusyKey={fileAccessBusyKey}
                 onOpenFileAsset={handleRevealFileAsset}
-                suppressDynamicMetadataStatus={selectedGeneratorRunning}
+                suppressDynamicMetadataStatus={selectedArtifactGenerating}
                 statusItems={selectedFileStatusItems}
                 themeTabs={themeTabs}
                 openSectionIds={effectiveFileSheetOpenSectionIds}
@@ -8747,7 +8731,7 @@ export default function CadWorkspace({
                 localFileOpenAvailable={fileRevealAvailable}
                 fileAccessBusyKey={fileAccessBusyKey}
                 onOpenFileAsset={handleRevealFileAsset}
-                suppressDynamicMetadataStatus={selectedGeneratorRunning}
+                suppressDynamicMetadataStatus={selectedArtifactGenerating}
                 statusItems={selectedFileStatusItems}
                 themeTabs={themeTabs}
                 openSectionIds={effectiveFileSheetOpenSectionIds}
@@ -8770,7 +8754,7 @@ export default function CadWorkspace({
                 localFileOpenAvailable={fileRevealAvailable}
                 fileAccessBusyKey={fileAccessBusyKey}
                 onOpenFileAsset={handleRevealFileAsset}
-                suppressDynamicMetadataStatus={selectedGeneratorRunning}
+                suppressDynamicMetadataStatus={selectedArtifactGenerating}
                 statusItems={selectedFileStatusItems}
                 themeTabs={themeTabs}
                 openSectionIds={effectiveFileSheetOpenSectionIds}
@@ -8814,7 +8798,7 @@ export default function CadWorkspace({
                 localFileOpenAvailable={fileRevealAvailable}
                 fileAccessBusyKey={fileAccessBusyKey}
                 onOpenFileAsset={handleRevealFileAsset}
-                suppressDynamicMetadataStatus={selectedGeneratorRunning}
+                suppressDynamicMetadataStatus={selectedArtifactGenerating}
                 statusItems={selectedFileStatusItems}
                 themeTabs={themeTabs}
                 openSectionIds={effectiveFileSheetOpenSectionIds}

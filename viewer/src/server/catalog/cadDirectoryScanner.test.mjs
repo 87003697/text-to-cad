@@ -318,13 +318,13 @@ test("scanCadDirectory reads Python source hash from GLB artifacts", () => {
 
 test("scanCadDirectory flags a Python package stale when a closure source is newer than the build", () => {
   const repoRoot = makeTempRepo();
-  const generatorPath = path.join(repoRoot, "workspace/generated/gear.py");
+  const generatorPath = path.join(repoRoot, "workspace/generated/gear.step.py");
   writeFile(generatorPath, "def gen_step():\n    return None\n");
   const pkgDir = writePackage(repoRoot, "workspace/generated/gear.step", {
     entryKind: "part",
     sourceKind: "python",
-    sourcePath: "gear.py",
-    sourceClosureFiles: ["gear.py"],
+    sourcePath: "gear.step.py",
+    sourceClosureFiles: ["gear.step.py"],
   });
   const descriptorPath = path.join(pkgDir, "assembly.json");
   const scan = () => entryByFile(scanCadDirectory({ repoRoot, rootDir: "workspace" }), "generated/gear.step");
@@ -406,13 +406,13 @@ test("scanCadDirectory marks non-STEP files as Python-backed from metadata comme
 
 test("scanCadDirectory discovers python-backed logical STEP entries from GLB artifacts", () => {
   const repoRoot = makeTempRepo();
-  const generatorPath = path.join(repoRoot, "workspace/generated_only/generated_only.py");
+  const generatorPath = path.join(repoRoot, "workspace/generated_only/generated_only.step.py");
   writeFile(generatorPath, "def gen_step():\n    return None\n");
   const sourceHash = sha256Buffer(fs.readFileSync(generatorPath));
   writePackage(repoRoot, "workspace/generated_only/generated_only.step", {
     entryKind: "assembly",
     sourceKind: "python",
-    sourcePath: "generated_only.py",
+    sourcePath: "generated_only.step.py",
     sourceHash,
   });
 

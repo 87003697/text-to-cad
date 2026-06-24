@@ -178,9 +178,8 @@ test("entryIconStatus marks buildable STEP artifacts as generating in production
   assert.deepEqual(
     entryIconStatus(entry, {
       sourceFormat: "step",
-      entryKey: "benchmarks/bracket.step",
       hasMesh: false,
-      activeGenerationFiles: ["benchmarks/.bracket.step.glb"],
+      activeStepArtifactGenerationFiles: ["benchmarks/bracket.step"],
       stepArtifactGenerationAvailable: false
     }),
     {
@@ -419,19 +418,18 @@ test("entryIconStatus treats active generator runs as loading and suppresses art
   assert.deepEqual(
     entryIconStatus(entry, {
       sourceFormat: "step",
-      entryKey: "robots/tom/tom.step",
       hasMesh: false,
-      activeGenerationFiles: ["robots/tom/tom.step"]
+      activeStepArtifactGenerationFiles: ["robots/tom/tom.step"]
     }),
     {
       artifactBuildable: true,
-      artifactGenerating: false,
+      artifactGenerating: true,
       artifactStale: true,
       artifactWarning: false,
       loading: true,
       pending: true,
       sourceFormat: "step",
-      statusLabel: "generating"
+      statusLabel: "generating artifact"
     }
   );
 
@@ -440,9 +438,8 @@ test("entryIconStatus treats active generator runs as loading and suppresses art
       sourceFormat: "step",
       status: entryIconStatus(entry, {
         sourceFormat: "step",
-        entryKey: "robots/tom/tom.step",
         hasMesh: false,
-        activeGenerationFiles: ["robots/tom/tom.step"]
+        activeStepArtifactGenerationFiles: ["robots/tom/tom.step"]
       })
     }),
     ENTRY_ICON_KIND.LOADING

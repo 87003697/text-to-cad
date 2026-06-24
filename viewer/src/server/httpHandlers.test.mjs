@@ -301,30 +301,19 @@ test("CAD Viewer API middleware serves render-artifact status (GET /__cad/artifa
 });
 
 
-test("CAD Viewer API middleware serves local generation status", async () => {
+test("CAD Viewer API middleware passes through for removed generation-status route", async () => {
   const middleware = createCadViewerApiMiddleware({
     rootDir: "models",
-    backend: {
-      readGenerationStatus: async ({ rootDir }) => ({
-        schemaVersion: 1,
-        rootDir,
-        runs: [{ id: "run-1", files: ["part.step"] }],
-        files: { "part.step": { running: true } },
-      }),
-    },
+    backend: {},
   });
   const req = { method: "GET", url: "/__cad/generation-status" };
   const res = createResponse();
+  let nextCalled = false;
 
-  await middleware(req, res, () => {});
+  await middleware(req, res, () => { nextCalled = true; });
 
-  assert.equal(res.statusCode, 200);
-  assert.deepEqual(JSON.parse(res.body), {
-    schemaVersion: 1,
-    rootDir: "models",
-    runs: [{ id: "run-1", files: ["part.step"] }],
-    files: { "part.step": { running: true } },
-  });
+  assert.equal(nextCalled, true);
+  assert.equal(res.statusCode, 0);
 });
 
 test("local asset middleware resolves legacy URDF mesh URLs from referrer file", async () => {
