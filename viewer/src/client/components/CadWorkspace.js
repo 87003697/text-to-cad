@@ -5152,6 +5152,7 @@ export default function CadWorkspace({
     currentReferences,
     activeReferenceMap,
     selectedReferences,
+    selectedParts,
     hoveredReferenceId,
     hoveredPartId,
     visibleReferences
@@ -5172,6 +5173,13 @@ export default function CadWorkspace({
     hoveredListPartId,
     hoveredModelPartId
   });
+
+  // The Reference inspector shows every selected element: topology references
+  // (faces/edges/shapes) plus selected components and subassemblies.
+  const selectedReferenceItems = useMemo(
+    () => [...(selectedReferences || []), ...(selectedParts || [])],
+    [selectedReferences, selectedParts]
+  );
 
   useCadWorkspaceSelection({
     isAssemblyView,
@@ -8843,7 +8851,7 @@ export default function CadWorkspace({
                 loadableTreeNodeIds={loadableStepTreeTopologyNodeIds}
                 selectedPartIds={selectedPartIds}
                 selectedReferenceIds={selectedReferenceIds}
-                selectedReferences={selectedReferences}
+                selectedReferences={selectedReferenceItems}
                 selectedMateIds={selectedMateIds}
                 selectableNodeIds={isolatedStepTreeSelectableNodeIds}
                 activeTreeNodeId={activeStepTreeNodeId}
