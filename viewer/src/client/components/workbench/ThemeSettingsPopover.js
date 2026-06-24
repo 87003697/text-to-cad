@@ -1,5 +1,5 @@
 import { Children, isValidElement, useEffect, useId, useMemo, useRef, useState } from "react";
-import { Contrast, FlipHorizontal2, Moon, MoreHorizontal, Pencil, Plus, RotateCcw, Sun, Trash2, X } from "lucide-react";
+import { Contrast, FlipHorizontal2, Monitor, Moon, MoreHorizontal, Pencil, Plus, RotateCcw, Sun, Trash2, X } from "lucide-react";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -114,9 +114,9 @@ const PROJECTION_MODE_OPTIONS = [
 ];
 
 const COLOR_MODE_OPTIONS = [
-  { value: THEME_COLOR_MODES.SYSTEM, label: "System" },
-  { value: THEME_COLOR_MODES.LIGHT, label: "Light" },
-  { value: THEME_COLOR_MODES.DARK, label: "Dark" }
+  { value: THEME_COLOR_MODES.SYSTEM, label: "System", Icon: Monitor },
+  { value: THEME_COLOR_MODES.LIGHT, label: "Light", Icon: Sun },
+  { value: THEME_COLOR_MODES.DARK, label: "Dark", Icon: Moon }
 ];
 
 const EXPLODED_AXIS_OPTIONS = [
