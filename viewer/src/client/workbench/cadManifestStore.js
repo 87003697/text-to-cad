@@ -354,6 +354,63 @@ export async function requestStepSourceStatus(fileRef, { signal } = {}) {
   return response.json();
 }
 
+// Unified render-artifact client API (replaces requestStepSourceStatus + requestStepArtifactGeneration).
+// GET reports freshness ({ state: "ready" | "needs-build" | "error", ... }); a direct-render entry is
+// always "ready".
+export async function requestArtifactStatus(fileRef, { signal } = {}) {
+  if (typeof window === "undefined") {
+    return null;
+  }
+  const normalizedFileRef = String(fileRef || "").trim();
+  if (!normalizedFileRef) {
+    throw new Error("Missing file");
+  }
+  const response = await fetch(cadApiUrl("/__cad/artifact", {
+    params: { file: normalizedFileRef },
+  }), {
+    method: "GET",
+    cache: "no-store",
+    signal,
+  });
+  if (!response.ok) {
+    throw new Error(await readJsonError(
+      response,
+      `Failed to check render artifact: ${response.status} ${response.statusText}`
+    ));
+  }
+  return response.json();
+}
+
+// POST (re)builds the artifact and publishes the refreshed catalog; resolves to
+// { ok, state: "ready" | "error", ... }.
+export async function requestArtifact(fileRef, { force = false, signal } = {}) {
+  if (typeof window === "undefined") {
+    return null;
+  }
+  const normalizedFileRef = String(fileRef || "").trim();
+  if (!normalizedFileRef) {
+    throw new Error("Missing file");
+  }
+  const response = await fetch(cadApiUrl("/__cad/artifact", {
+    params: { file: normalizedFileRef, ...(force ? { force: "1" } : {}) },
+  }), {
+    method: "POST",
+    cache: "no-store",
+    signal,
+  });
+  if (!response.ok) {
+    throw new Error(await readJsonError(
+      response,
+      `Failed to generate render artifact: ${response.status} ${response.statusText}`
+    ));
+  }
+  const payload = await response.json();
+  if (payload?.catalog) {
+    publishCadManifest(payload.catalog);
+  }
+  return payload;
+}
+
 export function getCadManifestSnapshot() {
   return currentSnapshot;
 }

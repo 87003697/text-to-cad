@@ -43,10 +43,9 @@ function sameStemPythonGeneratorPath(stepPath) {
   if (!STEP_SUFFIXES.has(extension)) {
     return "";
   }
-  const candidatePath = path.join(
-    path.dirname(stepPath),
-    `${path.basename(stepPath, extension)}.py`,
-  );
+  // The generator for the logical STEP `<name>.step` is `<name>.step.py` (append .py to the full
+  // step filename). An imported STEP has no such sibling and resolves to "".
+  const candidatePath = path.join(path.dirname(stepPath), `${path.basename(stepPath)}.py`);
   try {
     return /\bgen_step\s*\(/.test(fs.readFileSync(candidatePath, "utf-8"))
       ? candidatePath
@@ -75,8 +74,10 @@ function collectStepFiles(rootPath, result = []) {
       const extension = path.extname(entry.name).toLowerCase();
       if (STEP_SUFFIXES.has(extension)) {
         result.push(entryPath);
-      } else if (extension === ".py" && /\bgen_step\s*\(/.test(fs.readFileSync(entryPath, "utf-8"))) {
-        const logicalStepPath = path.join(path.dirname(entryPath), `${path.basename(entryPath, extension)}.step`);
+      } else if (entry.name.toLowerCase().endsWith(".step.py")) {
+        // `<name>.step.py` is the entry-generator marker; its logical STEP is the filename minus
+        // the trailing ".py". A plain `<name>.py` is a helper module and is intentionally ignored.
+        const logicalStepPath = path.join(path.dirname(entryPath), entry.name.slice(0, -".py".length));
         if (!fs.existsSync(logicalStepPath)) {
           result.push(logicalStepPath);
         }
@@ -91,19 +92,24 @@ function cadPathForStepSource(repoRoot, sourcePath) {
   return relativePath.slice(0, -path.extname(relativePath).length);
 }
 
+// Validation error codes that mean "the cache is missing/stale — (re)generate it" rather than a
+// fatal failure. The render-artifact pipeline uses this set to map a STEP package's freshness onto
+// needs-build vs error. Keep in sync with the client BUILDABLE_STEP_ARTIFACT_ERROR_CODES.
+export const BUILDABLE_STEP_ARTIFACT_CODES = Object.freeze(new Set([
+  "missing_glb",
+  "missing_step_topology",
+  "missing_edge_topology",
+  "missing_surface_edge_attributes",
+  "missing_selector_topology",
+  "missing_source_path",
+  "missing_step_hash",
+  "stale_step_artifact",
+  "unsupported_step_topology",
+]));
+
 function canBuildStepArtifact(artifact) {
   const code = String(artifact?.stepArtifact?.error?.code || "");
-  return !artifact?.stepArtifact?.ok && [
-    "missing_glb",
-    "missing_step_topology",
-    "missing_edge_topology",
-    "missing_surface_edge_attributes",
-    "missing_selector_topology",
-    "missing_source_path",
-    "missing_step_hash",
-    "stale_step_artifact",
-    "unsupported_step_topology",
-  ].includes(code);
+  return !artifact?.stepArtifact?.ok && BUILDABLE_STEP_ARTIFACT_CODES.has(code);
 }
 
 export async function compileStepTopologyArtifact({
