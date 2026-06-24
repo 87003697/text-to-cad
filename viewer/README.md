@@ -129,6 +129,7 @@ Important environment variables:
   version label links to the matching GitHub release tag. For GitHub-hosted
   repositories, the Viewer also checks the latest release and lightly marks the
   version label when a newer release is available.
+- `VIEWER_DISCORD_URL`: optional top-bar Discord community link target.
 - `VIEWER_ALLOWED_HOSTS`: extra hostnames accepted by local Vite dev and
   production servers.
 - `VIEWER_MOVEIT2_WS_URL`: optional websocket URL for SRDF MoveIt2 controls.

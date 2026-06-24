@@ -2,11 +2,13 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  DEFAULT_VIEWER_DISCORD_URL,
   DEFAULT_VIEWER_GITHUB_URL,
   DEFAULT_VIEWER_SKILLS_INSTALL_COMMAND,
   isViewerReleaseMajorMinorNewer,
   isViewerReleaseNewer,
   normalizeViewerDefaultFile,
+  normalizeViewerDiscordUrl,
   normalizeViewerGithubUrl,
   normalizeViewerSkillsInstallCommand,
   viewerGithubLatestReleaseApiUrl,
@@ -40,6 +42,21 @@ test("normalizeViewerGithubUrl falls back to a configured default", () => {
   assert.equal(
     normalizeViewerGithubUrl("", "github.com/example/default"),
     "https://github.com/example/default"
+  );
+});
+
+test("normalizeViewerDiscordUrl defaults to the CAD Skills Discord invite", () => {
+  assert.equal(normalizeViewerDiscordUrl(""), DEFAULT_VIEWER_DISCORD_URL);
+});
+
+test("normalizeViewerDiscordUrl accepts configured invite URLs", () => {
+  assert.equal(
+    normalizeViewerDiscordUrl("discord.gg/example"),
+    "https://discord.gg/example"
+  );
+  assert.equal(
+    normalizeViewerDiscordUrl("https://example.com/community"),
+    "https://example.com/community"
   );
 });
 
