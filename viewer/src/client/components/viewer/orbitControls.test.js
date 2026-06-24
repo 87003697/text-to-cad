@@ -9,8 +9,8 @@ import {
 } from "./orbitControls.js";
 
 test("preview auto-rotate speed stays intentionally calm", () => {
-  assert.equal(PREVIEW_ORBIT_SECONDS_PER_TURN, 1800);
-  assert.equal(PREVIEW_AUTO_ROTATE_SPEED, 1 / 30);
+  assert.equal(PREVIEW_ORBIT_SECONDS_PER_TURN, 600);
+  assert.equal(PREVIEW_AUTO_ROTATE_SPEED, 0.1);
 });
 
 test("orbitControlsDeltaSeconds converts animation timestamps from ms to seconds", () => {
