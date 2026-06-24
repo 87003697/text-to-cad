@@ -8,8 +8,8 @@ import DxfFileSheet from "./workbench/DxfFileSheet";
 import GcodeFileSheet from "./workbench/GcodeFileSheet";
 import FileViewerSidebar from "./workbench/FileViewerSidebar";
 import {
-  buildDisplaySettingsTab,
-  buildThemeAppearanceTab
+  AppearanceEditorPanel,
+  buildDisplaySettingsTab
 } from "./workbench/ThemeSettingsPopover";
 import MeshFileSheet from "./workbench/MeshFileSheet";
 import ImplicitFileSheet from "./workbench/ImplicitFileSheet";
@@ -1229,6 +1229,7 @@ export default function CadWorkspace({
   const themeSettings = themeState.settings;
   const themePresetId = themeState.presetId;
   const availableThemePresets = useMemo(() => buildAvailableThemePresets(customThemePresets), [customThemePresets]);
+  const [appearanceEditing, setAppearanceEditing] = useState(false);
   const [systemPrefersDark, setSystemPrefersDark] = useState(readViewerPrefersDark);
   const [colorSchemePreference, setColorSchemePreference] = useState(readColorSchemePreference);
   const resolvedColorSchemeMode = useMemo(
@@ -3410,6 +3411,28 @@ export default function CadWorkspace({
     });
   }, [availableThemePresets, readGlobalThemeState, themePresetId]);
 
+  // Appearance editing is a global sidebar mode (mutually exclusive with the
+  // per-file sheet). Opening with a presetId loads that theme as a live, in-state
+  // draft; edits are not persisted until the user saves inside the editor.
+  const openAppearanceEditor = useCallback((presetId = "") => {
+    const targetId = String(presetId || "").trim();
+    if (targetId) {
+      const preset = availableThemePresets.find((candidate) => candidate.id === targetId);
+      if (preset) {
+        setThemeState({
+          presetId: preset.id,
+          settings: normalizeThemeSettings(preset.settings)
+        });
+      }
+    }
+    setViewerAlertOpen(false);
+    setAppearanceEditing(true);
+  }, [availableThemePresets]);
+
+  const closeAppearanceEditor = useCallback(() => {
+    setAppearanceEditing(false);
+  }, []);
+
   const handleSaveCustomThemePreset = useCallback((themeName) => {
     const savedTheme = saveAndActivateCustomThemePreset(themeName, themeSettings, {
       customPresets: customThemePresets,
@@ -3774,29 +3797,13 @@ export default function CadWorkspace({
     if (!preset) {
       return false;
     }
-
-    updateThemeSettings(preset.settings, {
-      persistGlobal: true,
-      presetId: preset.id
-    });
-
-    if (openFileSheetSection(FILE_SHEET_SECTION_IDS.THEME_APPEARANCE)) {
-      if (typeof window !== "undefined") {
-        window.requestAnimationFrame(() => {
-          window.requestAnimationFrame(() => {
-            document
-              .querySelector("[data-cad-theme-appearance-section='true']")
-              ?.scrollIntoView({ block: "start", behavior: "instant" });
-          });
-        });
-      }
-    }
-
+    // Editing a preset opens the global appearance editor with that preset
+    // loaded as a local draft (state-only); saving persists it.
+    openAppearanceEditor(preset.id);
     return true;
   }, [
     availableThemePresets,
-    openFileSheetSection,
-    updateThemeSettings
+    openAppearanceEditor
   ]);
 
   useEffect(() => {
@@ -8153,6 +8160,13 @@ export default function CadWorkspace({
   }, [selectedEntry, selectedEntryHasReferences]);
 
   const handleToggleFileSheet = useCallback(() => {
+    if (appearanceEditing) {
+      setAppearanceEditing(false);
+      if (selectedFileSheetKind) {
+        setTabToolsOpen(true);
+      }
+      return;
+    }
     if (!selectedFileSheetKind) {
       return;
     }
@@ -8165,7 +8179,7 @@ export default function CadWorkspace({
       }
       return nextOpen;
     });
-  }, [isDesktop, selectedFileSheetKind, setThemeMenuOpen, setTabToolsOpen]);
+  }, [appearanceEditing, isDesktop, selectedFileSheetKind, setThemeMenuOpen, setTabToolsOpen]);
 
   const handleDownloadFileAsset = useCallback((entry, asset = "output", assetInfo = null) => {
     const fileRef = entry ? fileKey(entry) : "";
@@ -8493,11 +8507,12 @@ export default function CadWorkspace({
     activeReferenceTreeNodeId;
   const canUndoDrawing = drawingUndoStack.length > 0;
   const canRedoDrawing = drawingRedoStack.length > 0;
-  const fileSheetOpen = !!selectedFileSheetKind && tabToolsOpen && !previewMode;
+  const fileSheetOpen = !!selectedFileSheetKind && tabToolsOpen && !previewMode && !appearanceEditing;
+  const appearancePanelOpen = isDesktop && appearanceEditing && !previewMode;
   const activeSidebarWidth = desktopSidebarOpen
     ? resolvedDesktopPanelWidths.sidebarWidth
     : 0;
-  const activeSheetWidth = desktopFileSheetOpen
+  const activeSheetWidth = (desktopFileSheetOpen && !appearanceEditing) || appearancePanelOpen
     ? resolvedDesktopPanelWidths.sheetWidth
     : 0;
   const sidebarShellWidth = isDesktop && desktopSidebarOpen
@@ -8544,17 +8559,9 @@ export default function CadWorkspace({
           clipBounds: selectedMeshData?.bounds || null,
           showClip: true
         })
-      : null,
-    buildThemeAppearanceTab({
-      themePresets: availableThemePresets,
-      themeSettings,
-      themePresetId,
-      resolvedColorSchemeMode,
-      updateThemeSettings,
-      handleResetThemeSettings,
-      handleSaveCustomThemePreset,
-      handleUpdateThemePresetSettings
-    })
+      : null
+    // Appearance is global theming, not file-specific — it lives in the
+    // navbar-triggered appearance editor (AppearanceEditorPanel), not here.
   ].filter(Boolean);
 
   return (
@@ -8700,6 +8707,8 @@ export default function CadWorkspace({
           fileSheetKind={selectedFileSheetKind}
           fileSheetOpen={fileSheetOpen}
           onToggleFileSheet={handleToggleFileSheet}
+          appearanceEditing={appearanceEditing}
+          onOpenAppearanceEditor={openAppearanceEditor}
           navigationAvailable={directoryNavigationAvailable}
         />
 
@@ -9068,6 +9077,24 @@ export default function CadWorkspace({
                 themeTabs={themeTabs}
                 openSectionIds={effectiveFileSheetOpenSectionIds}
                 onOpenSectionIdsChange={handleFileSheetOpenSectionIdsChange}
+              />
+            ) : null}
+
+            {appearanceEditing ? (
+              <AppearanceEditorPanel
+                open
+                isDesktop={isDesktop}
+                width={activeSheetWidth || tabToolsWidth}
+                onClose={closeAppearanceEditor}
+                onStartResize={handleStartFileSheetResize}
+                themePresets={availableThemePresets}
+                themeSettings={themeSettings}
+                themePresetId={themePresetId}
+                resolvedColorSchemeMode={resolvedColorSchemeMode}
+                updateThemeSettings={updateThemeSettings}
+                handleResetThemeSettings={handleResetThemeSettings}
+                handleSaveCustomThemePreset={handleSaveCustomThemePreset}
+                handleUpdateThemePresetSettings={handleUpdateThemePresetSettings}
               />
             ) : null}
           </div>
