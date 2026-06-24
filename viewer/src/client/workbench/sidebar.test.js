@@ -260,7 +260,8 @@ test("entryIconStatus marks buildable STEP artifacts as generating in production
       artifactGenerating: false,
       artifactStale: false,
       artifactWarning: false,
-      loading: true,
+      // An un-built / not-yet-loaded entry is no longer shown as "loading" in the static file list.
+      loading: false,
       pending: true,
       sourceFormat: "gcode",
       statusLabel: "pending"
