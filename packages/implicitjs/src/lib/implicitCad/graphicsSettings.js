@@ -16,6 +16,9 @@ export const IMPLICIT_GRAPHICS_LIMITS = Object.freeze({
   normalSmoothing: Object.freeze({ min: 0.25, max: 5, step: 0.05 })
 });
 
+export const IMPLICIT_INTERACTION_STEP_BUDGET = 96;
+export const IMPLICIT_INTERACTION_DETAIL = 0.75;
+
 function clampNumber(value, fallback, { min = -Infinity, max = Infinity } = {}) {
   const numericValue = Number(value);
   const resolvedValue = Number.isFinite(numericValue) ? numericValue : fallback;
@@ -62,6 +65,24 @@ export function normalizeImplicitGraphicsSettings(value = {}) {
 export function implicitGraphicsRenderResolutionScale(value = {}, { interaction = false } = {}) {
   const settings = normalizeImplicitGraphicsSettings(value);
   return interaction ? settings.interactionResolutionScale : settings.resolutionScale;
+}
+
+export function implicitGraphicsRenderSettings(value = {}, { interaction = false } = {}) {
+  const settings = normalizeImplicitGraphicsSettings(value);
+  if (!interaction) {
+    return settings;
+  }
+  const source = value && typeof value === "object" ? value : {};
+  const requestedStepBudget = Number.isFinite(Number(source.stepBudget))
+    ? Math.max(1, Math.floor(Number(source.stepBudget)))
+    : IMPLICIT_INTERACTION_STEP_BUDGET;
+  return {
+    ...settings,
+    detail: Math.min(settings.detail, IMPLICIT_INTERACTION_DETAIL),
+    stepBudget: Math.min(requestedStepBudget, IMPLICIT_INTERACTION_STEP_BUDGET),
+    shadows: false,
+    ambientOcclusion: false
+  };
 }
 
 export function implicitGraphicsSettingsEqual(a, b) {

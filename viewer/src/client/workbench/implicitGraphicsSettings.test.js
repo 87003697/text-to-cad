@@ -4,6 +4,7 @@ import test from "node:test";
 import {
   IMPLICIT_GRAPHICS_LIMITS,
   implicitGraphicsRenderResolutionScale,
+  implicitGraphicsRenderSettings,
   normalizeImplicitGraphicsSettings
 } from "./implicitGraphicsSettings.js";
 
@@ -40,4 +41,22 @@ test("implicit graphics render resolution switches to interaction scale while or
 
   assert.equal(implicitGraphicsRenderResolutionScale(settings), 2.5);
   assert.equal(implicitGraphicsRenderResolutionScale(settings, { interaction: true }), 0.75);
+});
+
+test("implicit graphics render settings reduce orbit shader cost", () => {
+  const settings = {
+    resolutionScale: 2.5,
+    interactionResolutionScale: 0.75,
+    detail: 2,
+    shadows: true,
+    ambientOcclusion: true
+  };
+
+  assert.deepEqual(implicitGraphicsRenderSettings(settings, { interaction: true }), {
+    ...normalizeImplicitGraphicsSettings(settings),
+    detail: 0.75,
+    stepBudget: 96,
+    shadows: false,
+    ambientOcclusion: false
+  });
 });
