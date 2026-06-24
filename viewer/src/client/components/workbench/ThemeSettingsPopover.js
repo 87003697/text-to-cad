@@ -556,7 +556,7 @@ function settingsSignature(settings) {
   return JSON.stringify(normalizeThemeSettings(settings));
 }
 
-function FillColorEditor({ colors, onChange, cycleColors = false }) {
+function FillColorEditor({ colors, onChange }) {
   const resolvedColors = colors.length ? colors : ["#ffffff"];
   const commitColors = (nextColors) => {
     const compactColors = nextColors.filter(Boolean).slice(0, MAX_THEME_FILL_COLORS);
@@ -571,10 +571,7 @@ function FillColorEditor({ colors, onChange, cycleColors = false }) {
       {resolvedColors.map((color, index) => (
         <div
           key={index}
-          className={cn(
-            "group relative transition-opacity",
-            !cycleColors && index > 0 && "opacity-45 grayscale"
-          )}
+          className="group relative transition-opacity"
         >
           <ColorInput
             value={color}
@@ -1307,7 +1304,13 @@ function ThemeAppearanceSection({
               type="button"
               variant="default"
               size="sm"
-              className={cn(compactButtonClasses, "relative w-full justify-center")}
+              className={cn(
+                compactButtonClasses,
+                "relative w-full justify-center",
+                // Keep the disabled (nothing-to-save) state legible on dark
+                // backgrounds instead of fading the primary fill to invisibility.
+                "disabled:opacity-100 disabled:bg-muted disabled:text-muted-foreground"
+              )}
               disabled={primarySaveDisabled}
               onClick={handlePrimarySave}
             >
@@ -1987,16 +1990,29 @@ function ThemeAppearanceContent({
       />
 
       <ControlSubsection title="Surface">
-        <Field label="Colors" value={`${resolveFillColors(themeSettings.materials).length}/${MAX_THEME_FILL_COLORS}`}>
-          <FillColorEditor
-            colors={resolveFillColors(themeSettings.materials)}
-            cycleColors={themeSettings.materials.cycleColors === true}
-            onChange={(nextColors) => setMaterials({
-              defaultColor: nextColors[0],
-              fillColors: nextColors
-            })}
+        {themeSettings.materials.cycleColors === true ? (
+          <Field label="Colors" value={`${resolveFillColors(themeSettings.materials).length}/${MAX_THEME_FILL_COLORS}`}>
+            <FillColorEditor
+              colors={resolveFillColors(themeSettings.materials)}
+              onChange={(nextColors) => setMaterials({
+                defaultColor: nextColors[0],
+                fillColors: nextColors
+              })}
+            />
+          </Field>
+        ) : (
+          <ColorField
+            label="Color"
+            value={resolveFillColors(themeSettings.materials)[0]}
+            onChange={(nextColor) => {
+              const current = resolveFillColors(themeSettings.materials);
+              setMaterials({
+                defaultColor: nextColor,
+                fillColors: [nextColor, ...current.slice(1)]
+              });
+            }}
           />
-        </Field>
+        )}
 
         <ThemeToggleRow
           label="Cycle colors"
