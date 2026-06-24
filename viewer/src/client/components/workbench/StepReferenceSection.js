@@ -134,10 +134,12 @@ function DetailHeader({ typeLabel, subtitle, selector, copyText }) {
   return (
     <>
       <div className="flex items-center gap-2 px-2 pb-1.5 pt-1">
-        <span className="inline-flex shrink-0 items-center rounded-sm bg-accent px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-accent-foreground">
+        {subtitle ? (
+          <span className="min-w-0 truncate text-[11px] font-medium text-sidebar-foreground">{subtitle}</span>
+        ) : null}
+        <span className="shrink-0 rounded-sm bg-muted px-1 py-0.5 font-mono text-[10px] text-muted-foreground">
           {typeLabel}
         </span>
-        {subtitle ? <span className="truncate text-[11px] text-muted-foreground">{subtitle}</span> : null}
         <span className="ml-auto inline-flex shrink-0 items-center gap-1">
           {selector ? (
             <code className="max-w-[8rem] truncate rounded-sm bg-muted px-1 py-0.5 font-mono text-[10px] text-muted-foreground">
