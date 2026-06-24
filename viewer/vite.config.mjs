@@ -27,10 +27,7 @@ import {
   createCadViewerApiMiddleware,
   createLocalAssetMiddleware,
 } from "./src/server/httpHandlers.mjs";
-import {
-  assertNoDeprecatedLocalRootEnv,
-  normalizeViewerAssetBackend,
-} from "./src/server/viewerEnv.mjs";
+import { assertNoDeprecatedLocalRootEnv } from "./src/server/viewerEnv.mjs";
 import {
   normalizeServerLifetimeMs,
   scheduleProcessShutdown,
@@ -43,7 +40,6 @@ const viewerNodeModulesRoot = path.join(viewerAppRoot, "node_modules");
 const defaultDirectoryRoot = path.resolve(viewerAppRoot, "..");
 const directoryRoot = resolveDirectoryRoot();
 const repoRoot = directoryRoot;
-normalizeViewerAssetBackend(process.env.VIEWER_ASSET_BACKEND);
 const buildViewerDefaultFile = normalizeViewerDefaultFile(process.env.VIEWER_DEFAULT_FILE ?? "");
 const buildViewerGithubUrl = normalizeViewerGithubUrl(process.env.VIEWER_GITHUB_URL ?? "");
 const buildViewerDefaultDir = String(process.env.VIEWER_DEFAULT_DIR || "").trim();
