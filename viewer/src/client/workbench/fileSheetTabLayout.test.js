@@ -114,12 +114,13 @@ test("split ratio is clamped", () => {
   assert.equal(setFileSheetTabRatio({ top: [], bottom: [] }, 0.7).ratio, 0.7);
 });
 
-test("resolve panes: default active is tree on top, display on bottom", () => {
-  const arrangement = defaultFileSheetTabArrangement("step", STEP_SECTIONS);
+test("resolve panes: default active is tree on top, reference on bottom", () => {
+  const sections = ["tree", "reference", "parameters", "display", "appearance", "metadata"];
+  const arrangement = defaultFileSheetTabArrangement("step", sections);
   const resolved = resolveFileSheetTabPanes(arrangement, "step", []);
   assert.equal(resolved.split, true);
   assert.equal(resolved.panes[0].activeId, "tree");
-  assert.equal(resolved.panes[1].activeId, "display");
+  assert.equal(resolved.panes[1].activeId, "reference");
 });
 
 test("resolve panes: an open id activates its tab (last in pane wins)", () => {

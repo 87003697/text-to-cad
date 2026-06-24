@@ -5151,6 +5151,7 @@ export default function CadWorkspace({
   const {
     currentReferences,
     activeReferenceMap,
+    selectedReferences,
     hoveredReferenceId,
     hoveredPartId,
     visibleReferences
@@ -8842,6 +8843,7 @@ export default function CadWorkspace({
                 loadableTreeNodeIds={loadableStepTreeTopologyNodeIds}
                 selectedPartIds={selectedPartIds}
                 selectedReferenceIds={selectedReferenceIds}
+                selectedReferences={selectedReferences}
                 selectedMateIds={selectedMateIds}
                 selectableNodeIds={isolatedStepTreeSelectableNodeIds}
                 activeTreeNodeId={activeStepTreeNodeId}
