@@ -1485,6 +1485,13 @@ export default function CadWorkspace({
   );
   const selectedEntrySourceFormat = entrySourceFormat(selectedEntry);
   const selectedFileSheetKind = fileSheetKindForEntry(selectedEntry);
+  // Some kinds (e.g. a mesh/STL) have no file-specific sections; when so, hide
+  // the file-sheet toggle and the sheet entirely instead of showing an empty
+  // sidebar.
+  const selectedFileSheetHasSections = useMemo(
+    () => renderedFileSheetSectionIds(selectedFileSheetKind).length > 0,
+    [selectedFileSheetKind]
+  );
   const directoryOptions = useMemo(
     () => normalizeViewerDirectoryOptions(viewerServerInfo),
     [viewerServerInfo]
@@ -3338,7 +3345,7 @@ export default function CadWorkspace({
     }
     setTabToolsWidth(defaultFileSheetWidth);
   }, [defaultFileSheetWidth, fileSheetWidthIsCustom]);
-  const desktopFileSheetOpen = isDesktop && tabToolsOpen && !!selectedFileSheetKind && !previewMode;
+  const desktopFileSheetOpen = isDesktop && tabToolsOpen && !!selectedFileSheetKind && selectedFileSheetHasSections && !previewMode;
   const effectiveSidebarOpen = directoryNavigationAvailable && sidebarOpen && !previewMode;
   const desktopSidebarOpen = isDesktop && effectiveSidebarOpen && !previewMode;
 
@@ -3569,7 +3576,7 @@ export default function CadWorkspace({
     if (event.button !== 0) {
       return;
     }
-    const rightSheetOpen = !previewMode && tabToolsOpen && !!selectedFileSheetKind;
+    const rightSheetOpen = !previewMode && tabToolsOpen && !!selectedFileSheetKind && selectedFileSheetHasSections;
     if (!isDesktop || !rightSheetOpen) {
       return;
     }
@@ -3601,6 +3608,7 @@ export default function CadWorkspace({
     previewMode,
     sidebarWidth,
     selectedFileSheetKind,
+    selectedFileSheetHasSections,
     setFileSheetWidthIsCustom,
     tabToolsOpen,
     tabToolsWidth
@@ -8468,7 +8476,7 @@ export default function CadWorkspace({
     activeReferenceTreeNodeId;
   const canUndoDrawing = drawingUndoStack.length > 0;
   const canRedoDrawing = drawingRedoStack.length > 0;
-  const fileSheetOpen = !!selectedFileSheetKind && tabToolsOpen && !previewMode && !appearanceEditing;
+  const fileSheetOpen = !!selectedFileSheetKind && selectedFileSheetHasSections && tabToolsOpen && !previewMode && !appearanceEditing;
   const appearancePanelOpen = isDesktop && appearanceEditing && !previewMode;
   const activeSidebarWidth = desktopSidebarOpen
     ? resolvedDesktopPanelWidths.sidebarWidth
@@ -8663,7 +8671,7 @@ export default function CadWorkspace({
           onRevealFileAsset={handleRevealFileAsset}
           onRevealInExplorerView={handleRevealEntryInExplorerView}
           onCopyFileAssetReference={handleCopyFileAssetReference}
-          fileSheetKind={selectedFileSheetKind}
+          fileSheetKind={selectedFileSheetHasSections ? selectedFileSheetKind : ""}
           fileSheetOpen={fileSheetOpen}
           onToggleFileSheet={handleToggleFileSheet}
           appearanceEditing={appearanceEditing}

@@ -18,7 +18,6 @@ import FileSheet, {
   FileSheetSubsection
 } from "./FileSheet";
 import FileSheetTabbedSurface from "./FileSheetTabbedSurface";
-import { buildFileMetadataTab } from "./FileMetadataSection";
 import { buildFileStatusTab } from "./FileStatusSection";
 
 const compactInputClasses = FILE_SHEET_COMPACT_NUMERIC_INPUT_CLASSES;
@@ -247,16 +246,7 @@ export default function DxfFileSheet({
           </FileSheetSectionBody>
       )
     },
-    ...themeTabs,
-    buildFileMetadataTab({
-      entry: selectedEntry,
-      fileDownloadAvailable,
-      viewerServerInfo,
-      localFileOpenAvailable,
-      fileAccessBusyKey,
-      onOpenFileAsset,
-      suppressDynamicStatus: suppressDynamicMetadataStatus
-    })
+    ...themeTabs
   ];
 
   return (

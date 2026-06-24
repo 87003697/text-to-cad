@@ -1,6 +1,5 @@
 import FileSheet from "./FileSheet";
 import FileSheetTabbedSurface from "./FileSheetTabbedSurface";
-import { buildFileMetadataTab } from "./FileMetadataSection";
 import { buildFileStatusTab } from "./FileStatusSection";
 
 export default function MeshFileSheet({
@@ -24,16 +23,7 @@ export default function MeshFileSheet({
 }) {
   const sections = [
     buildFileStatusTab(statusItems),
-    ...themeTabs,
-    buildFileMetadataTab({
-      entry: selectedEntry,
-      fileDownloadAvailable,
-      viewerServerInfo,
-      localFileOpenAvailable,
-      fileAccessBusyKey,
-      onOpenFileAsset,
-      suppressDynamicStatus: suppressDynamicMetadataStatus
-    })
+    ...themeTabs
   ];
 
   return (
