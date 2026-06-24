@@ -72,9 +72,9 @@ test("theme presets expose a default material color", () => {
 test("workbench ships as split light and dark presets", () => {
   assert.equal(DEFAULT_THEME_PRESET_ID, "workbench-light");
   assert.equal(THEME_PRESETS[0]?.id, "workbench-light");
-  assert.equal(THEME_PRESETS[0]?.label, "Workbench Light");
+  assert.equal(THEME_PRESETS[0]?.label, "Light");
   assert.equal(THEME_PRESETS[1]?.id, "workbench-dark");
-  assert.equal(THEME_PRESETS[1]?.label, "Workbench Dark");
+  assert.equal(THEME_PRESETS[1]?.label, "Dark");
   assert.equal(getThemePresetIdForSettings(DEFAULT_THEME_SETTINGS), "workbench-light");
   assert.deepEqual(cloneThemePresetSettings("cinematic"), cloneThemePresetSettings("workbench-light"));
   assert.deepEqual(cloneThemePresetSettings("light"), cloneThemePresetSettings("workbench-light"));
