@@ -13,9 +13,10 @@ import { FILE_SHEET_SECTION_IDS } from "./fileSheetSections.js";
 // per-file `openSectionIds` list (see resolveFileSheetTabPanes) so that the
 // existing reveal-on-select behavior keeps working.
 
-// v2 resets saved arrangements so the Reference tab lands first in the bottom
-// pane (a new section would otherwise append to the end of a stored layout).
-export const FILE_SHEET_TAB_LAYOUT_STORAGE_KEY = "cad-viewer:file-sheet-tab-layout:v2";
+// Bumped to reset saved arrangements when the default pane assignment changes
+// (Reference first in the bottom pane; Parameters in the top pane after Tree),
+// since a stored layout would otherwise keep the old pane/order.
+export const FILE_SHEET_TAB_LAYOUT_STORAGE_KEY = "cad-viewer:file-sheet-tab-layout:v3";
 
 export const DEFAULT_FILE_SHEET_SPLIT_RATIO = 0.5;
 export const MIN_FILE_SHEET_SPLIT_RATIO = 0.2;
@@ -58,12 +59,21 @@ export function clampSplitRatio(ratio) {
   return Math.min(MAX_FILE_SHEET_SPLIT_RATIO, Math.max(MIN_FILE_SHEET_SPLIT_RATIO, numericRatio));
 }
 
+// Tabs that live in the top pane of the split STEP layout (Tree, then
+// Parameters); everything else defaults to the bottom pane.
+const TOP_PANE_SECTION_IDS = Object.freeze(new Set([
+  FILE_SHEET_SECTION_IDS.STEP_TREE,
+  FILE_SHEET_SECTION_IDS.STEP_PARAMETERS
+]));
+
 // Which pane a freshly-rendered tab belongs to in the default layout.
 function defaultPaneForSection(kind, sectionId) {
-  if (kindSupportsSplit(kind) && normalizeString(sectionId) === FILE_SHEET_SECTION_IDS.STEP_TREE) {
+  if (!kindSupportsSplit(kind)) {
     return FILE_SHEET_TAB_PANES.TOP;
   }
-  return kindSupportsSplit(kind) ? FILE_SHEET_TAB_PANES.BOTTOM : FILE_SHEET_TAB_PANES.TOP;
+  return TOP_PANE_SECTION_IDS.has(normalizeString(sectionId))
+    ? FILE_SHEET_TAB_PANES.TOP
+    : FILE_SHEET_TAB_PANES.BOTTOM;
 }
 
 export function defaultFileSheetTabArrangement(kind, sectionIds) {
