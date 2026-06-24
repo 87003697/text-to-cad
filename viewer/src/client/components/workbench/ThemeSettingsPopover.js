@@ -1,5 +1,5 @@
 import { Children, isValidElement, useEffect, useId, useMemo, useRef, useState } from "react";
-import { Contrast, FlipHorizontal2, Monitor, Moon, MoreHorizontal, Pencil, Plus, RotateCcw, Sun, Trash2, X } from "lucide-react";
+import { Contrast, FlipHorizontal2, Monitor, Moon, MoreHorizontal, Pencil, Plus, RotateCcw, Save, Sun, Trash2, X } from "lucide-react";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -997,6 +997,7 @@ export function ThemePresetDropdown({
   handleRestoreDefaultThemePresets,
   appearanceEditing = false,
   onOpenAppearanceEditor,
+  onCloseAppearanceEditor,
   colorSchemePreference = THEME_COLOR_MODES.SYSTEM,
   resolvedColorSchemeMode = THEME_COLOR_MODES.LIGHT,
   onColorSchemePreferenceChange,
@@ -1036,6 +1037,13 @@ export function ThemePresetDropdown({
   );
 
   const handleMenuOpenChange = (nextOpen) => {
+    // While the appearance editor is open, the trigger acts as a toggle:
+    // clicking it closes the editor instead of reopening this menu.
+    if (nextOpen && appearanceEditing) {
+      onCloseAppearanceEditor?.();
+      setMenuOpen(false);
+      return;
+    }
     setMenuOpen(nextOpen);
     if (!nextOpen) {
       setActiveActionThemeId("");
@@ -1278,6 +1286,7 @@ function ThemeAppearanceSection({
   themePresets = [],
   themeSettings,
   themePresetId = "",
+  resolvedColorSchemeMode = THEME_COLOR_MODES.LIGHT,
   updateThemeSettings,
   handleResetThemeSettings,
   handleSaveCustomThemePreset,
@@ -1295,6 +1304,26 @@ function ThemeAppearanceSection({
     ? `${activeThemePreset.label} copy`
     : "Theme copy";
   const colorMode = themeSettings.colorMode || THEME_COLOR_MODES.SYSTEM;
+  const isDarkResolved = resolvedColorSchemeMode === THEME_COLOR_MODES.DARK;
+  const colorModeHint =
+    colorMode === THEME_COLOR_MODES.LIGHT
+      ? "Always renders this theme’s light palette."
+      : colorMode === THEME_COLOR_MODES.DARK
+        ? "Always renders this theme’s dark palette."
+        : "Follows the light/dark toggle in the toolbar.";
+  // The primary action is "Update" for editable (custom) themes and "Save as"
+  // for built-ins, which can't be overwritten in place.
+  const canUpdate = canUpdateActiveTheme && typeof handleUpdateThemePresetSettings === "function";
+  const canSaveAs = typeof handleSaveCustomThemePreset === "function";
+  const primarySaveLabel = canUpdate ? "Update theme" : "Save as theme";
+  const primarySaveDisabled = !themeHasChanged || (canUpdate ? !activeThemeId : !canSaveAs);
+  const handlePrimarySave = () => {
+    if (canUpdate) {
+      handleUpdateTheme();
+    } else {
+      setSaveThemeDialogOpen(true);
+    }
+  };
 
   const handleSaveTheme = (themeName) => {
     if (!themeHasChanged || typeof handleSaveCustomThemePreset !== "function") {
@@ -1320,50 +1349,61 @@ function ThemeAppearanceSection({
   return (
     <>
       <ControlSubsection title="Theme">
-        <Field label="Color mode">
-          <SegmentedControl
-            value={colorMode}
-            options={COLOR_MODE_OPTIONS}
-            onChange={handleColorModeChange}
-          />
+        <Field
+          label="Color mode"
+          value={colorMode === THEME_COLOR_MODES.SYSTEM ? (isDarkResolved ? "Dark now" : "Light now") : null}
+        >
+          <div className="space-y-1.5">
+            <SegmentedControl
+              value={colorMode}
+              options={COLOR_MODE_OPTIONS}
+              onChange={handleColorModeChange}
+            />
+            <p className="text-[11px] leading-snug text-muted-foreground">{colorModeHint}</p>
+          </div>
         </Field>
 
         <FileSheetControlRow>
-          <div className="flex flex-wrap gap-1.5">
+          <div className="w-full space-y-1.5">
             <Button
               type="button"
-              variant="outline"
+              variant="default"
               size="sm"
-              className={cn(compactButtonClasses, "relative", themeHasChanged ? "pr-5" : null)}
-              disabled={!themeHasChanged || typeof handleSaveCustomThemePreset !== "function"}
-              onClick={() => setSaveThemeDialogOpen(true)}
+              className={cn(compactButtonClasses, "relative w-full justify-center")}
+              disabled={primarySaveDisabled}
+              onClick={handlePrimarySave}
             >
-              <span>Save as</span>
+              <Save className="h-3 w-3" strokeWidth={2} aria-hidden="true" />
+              <span>{primarySaveLabel}</span>
               {themeHasChanged ? (
                 <ThemeDirtyIndicator className="absolute right-1.5 top-1.5 h-1.5 w-1.5" />
               ) : null}
             </Button>
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              className={compactButtonClasses}
-              disabled={!themeHasChanged || !activeThemeId || !canUpdateActiveTheme || typeof handleUpdateThemePresetSettings !== "function"}
-              onClick={handleUpdateTheme}
-            >
-              <span>Update</span>
-            </Button>
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              className={compactButtonClasses}
-              disabled={!themeHasChanged || !activeThemeId || typeof handleResetThemeSettings !== "function"}
-              onClick={() => handleResetThemeSettings?.()}
-            >
-              <RotateCcw className="h-3 w-3" strokeWidth={2} aria-hidden="true" />
-              <span>Restore to default</span>
-            </Button>
+            <div className="flex gap-1.5">
+              {canUpdate ? (
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  className={cn(compactButtonClasses, "flex-1 justify-center")}
+                  disabled={!themeHasChanged || !canSaveAs}
+                  onClick={() => setSaveThemeDialogOpen(true)}
+                >
+                  <span>Save as new</span>
+                </Button>
+              ) : null}
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                className={cn(compactButtonClasses, "flex-1 justify-center text-muted-foreground")}
+                disabled={!themeHasChanged || !activeThemeId || typeof handleResetThemeSettings !== "function"}
+                onClick={() => handleResetThemeSettings?.()}
+              >
+                <RotateCcw className="h-3 w-3" strokeWidth={2} aria-hidden="true" />
+                <span>Restore</span>
+              </Button>
+            </div>
           </div>
         </FileSheetControlRow>
       </ControlSubsection>
@@ -2002,6 +2042,7 @@ function ThemeAppearanceContent({
         themePresets={themePresets}
         themeSettings={themeSettings}
         themePresetId={themePresetId}
+        resolvedColorSchemeMode={resolvedColorSchemeMode}
         updateThemeSettings={updateThemeSettings}
         handleResetThemeSettings={handleResetThemeSettings}
         handleSaveCustomThemePreset={handleSaveCustomThemePreset}
@@ -2428,10 +2469,6 @@ export function AppearanceEditorPanel({
   handleSaveCustomThemePreset,
   handleUpdateThemePresetSettings
 }) {
-  const activeThemePreset = useMemo(
-    () => resolveActiveThemePreset(themePresets, themePresetId, themeSettings),
-    [themePresets, themePresetId, themeSettings]
-  );
   return (
     <FileSheet
       open={open}
@@ -2447,18 +2484,7 @@ export function AppearanceEditorPanel({
       scrollBody={false}
     >
       <div className="flex h-8 shrink-0 items-center justify-between gap-2 border-b border-sidebar-border/70 px-2">
-        <span className="flex min-w-0 items-center gap-1.5 text-[11px] font-medium text-sidebar-foreground">
-          <span className="shrink-0">Appearance</span>
-          {activeThemePreset ? (
-            <>
-              <span className="shrink-0 text-muted-foreground/60">/</span>
-              <PresetSwatch preset={activeThemePreset} />
-              <span className="min-w-0 truncate font-normal text-muted-foreground">
-                {activeThemePreset.label}
-              </span>
-            </>
-          ) : null}
-        </span>
+        <span className="text-[11px] font-medium text-sidebar-foreground">Appearance</span>
         <button
           type="button"
           onClick={() => onClose?.()}
