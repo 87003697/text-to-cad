@@ -40,6 +40,7 @@ import FileSheetTabbedSurface from "./FileSheetTabbedSurface";
 import AssemblyContextMenuItems from "./AssemblyContextMenuItems";
 import { buildFileMetadataTab } from "./FileMetadataSection";
 import { buildFileStatusTab } from "./FileStatusSection";
+import { buildStepReferenceTab } from "./StepReferenceSection";
 
 const compactButtonClasses = FILE_SHEET_COMPACT_BUTTON_CLASSES;
 const compactInputClasses = FILE_SHEET_COMPACT_INPUT_CLASSES;
@@ -522,6 +523,7 @@ export default function StepFileSheet({
   loadableTreeNodeIds = [],
   selectedPartIds,
   selectedReferenceIds = [],
+  selectedReferences = [],
   selectedMateIds = [],
   selectableNodeIds = null,
   activeTreeNodeId: activeTreeNodeIdProp = "",
@@ -1316,6 +1318,7 @@ export default function StepFileSheet({
             </div>
       )
     },
+    buildStepReferenceTab({ references: selectedReferences }),
     (stepModuleDefinition || stepModuleStatus === "loading" || stepModuleError) ? {
       id: "parameters",
       title: "Parameters",

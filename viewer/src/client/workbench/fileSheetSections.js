@@ -6,6 +6,7 @@ export const FILE_SHEET_SECTION_IDS = Object.freeze({
   GCODE_STATS: "stats",
   GCODE_BOUNDS: "bounds",
   STEP_TREE: "tree",
+  STEP_REFERENCE: "reference",
   STEP_PARAMETERS: "parameters",
   ROBOT_SDF: "sdf",
   ROBOT_MOTION: "motion",
@@ -65,6 +66,7 @@ export function renderedFileSheetSectionIds(kind, options = {}) {
       return [
         ...(options.hasFileStatus ? [FILE_SHEET_SECTION_IDS.FILE_STATUS] : []),
         FILE_SHEET_SECTION_IDS.STEP_TREE,
+        FILE_SHEET_SECTION_IDS.STEP_REFERENCE,
         ...(options.hasStepModulePanel ? [FILE_SHEET_SECTION_IDS.STEP_PARAMETERS] : []),
         ...THEME_SECTION_IDS,
         FILE_SHEET_SECTION_IDS.FILE_METADATA
