@@ -3318,9 +3318,9 @@ const CadViewer = forwardRef(function CadViewer({
     runtime.controls.enabled = true;
     runtime.controls.enableDamping = true;
     runtime.controls.dampingFactor = DEFAULT_DAMPING_FACTOR;
-    runtime.interactionState.active = !!previewMode;
     if (previewMode) {
       cancelCameraTransition(runtime, { scheduleIdle: false });
+      runtime.beginInteraction?.();
     } else {
       runtime.scheduleIdleQuality();
     }

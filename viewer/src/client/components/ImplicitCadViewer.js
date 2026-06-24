@@ -816,6 +816,11 @@ const ImplicitCadViewer = forwardRef(function ImplicitCadViewer({
     runtime.orbitControlsLastTimestamp = 0;
     runtime.controls.autoRotate = !!previewMode;
     runtime.controls.autoRotateSpeed = PREVIEW_AUTO_ROTATE_SPEED;
+    if (previewMode) {
+      runtime.beginInteraction?.();
+    } else {
+      runtime.scheduleIdleQuality?.();
+    }
     runtime.requestRender?.();
   }, [previewMode]);
 
@@ -896,7 +901,11 @@ const ImplicitCadViewer = forwardRef(function ImplicitCadViewer({
     runtime.dynamicRenderActive = dynamicRenderActiveRef.current;
     updateImplicitThemeUniforms(runtime, model, themeSettings);
     updateImplicitGraphicsUniforms(runtime, model);
-    runtime.setPixelRatioCap?.(normalizedGraphicsSettings.resolutionScale);
+    runtime.setPixelRatioCap?.(
+      previewModeRef.current
+        ? normalizedGraphicsSettings.interactionResolutionScale
+        : normalizedGraphicsSettings.resolutionScale
+    );
     runtime.requestRender?.();
   }, [model, normalizedGraphicsSettings, themeSettings]);
 
@@ -1089,7 +1098,11 @@ const ImplicitCadViewer = forwardRef(function ImplicitCadViewer({
       if (disposed) {
         return;
       }
-      setPixelRatioCap(graphicsSettingsRef.current.resolutionScale);
+      setPixelRatioCap(
+        previewModeRef.current
+          ? graphicsSettingsRef.current.interactionResolutionScale
+          : graphicsSettingsRef.current.resolutionScale
+      );
       updateCameraFraming();
       if (autoZoomStateRef.current.attached !== false) {
         runAutoZoomRef.current?.("resize", { animate: false });

@@ -9,20 +9,20 @@ import {
 } from "./orbitControls.js";
 
 test("preview auto-rotate speed stays intentionally calm", () => {
-  assert.equal(PREVIEW_ORBIT_SECONDS_PER_TURN, 600);
-  assert.equal(PREVIEW_AUTO_ROTATE_SPEED, 0.1);
+  assert.equal(PREVIEW_ORBIT_SECONDS_PER_TURN, 1800);
+  assert.equal(PREVIEW_AUTO_ROTATE_SPEED, 1 / 30);
 });
 
 test("orbitControlsDeltaSeconds converts animation timestamps from ms to seconds", () => {
   assert.equal(orbitControlsDeltaSeconds(1016, 1000), 0.016);
 });
 
-test("orbitControlsDeltaSeconds preserves slow render frame deltas", () => {
-  assert.equal(orbitControlsDeltaSeconds(1400, 1000), 0.4);
+test("orbitControlsDeltaSeconds caps slow render frames to avoid visible jumps", () => {
+  assert.equal(orbitControlsDeltaSeconds(1400, 1000), 1 / 15);
 });
 
 test("orbitControlsDeltaSeconds clamps stale frame gaps", () => {
-  assert.equal(orbitControlsDeltaSeconds(3000, 1000), 1);
+  assert.equal(orbitControlsDeltaSeconds(3000, 1000), 1 / 15);
 });
 
 test("updateOrbitControls passes seconds while auto-rotate is active", () => {
