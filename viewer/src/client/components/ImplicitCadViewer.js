@@ -1096,15 +1096,17 @@ const ImplicitCadViewer = forwardRef(function ImplicitCadViewer({
         );
         renderer.render(runtime.shaderScene.scene, runtime.screenCamera);
       }
-      const nextActiveFace = getActiveViewPlaneFaceId(runtime);
-      setActiveViewPlaneFace((current) => current === nextActiveFace ? current : nextActiveFace);
-      // The camera is static while animation only advances geometry uniforms;
-      // bail out of the state update unless the orientation actually changed so
-      // playback does not trigger a React re-render every frame.
-      const nextOrientation = readViewPlaneOrientation(runtime);
-      setViewPlaneOrientation((current) => (
-        viewPlaneOrientationsEqual(current, nextOrientation) ? current : nextOrientation
-      ));
+      if (!runtime.previewOrbitEnabled) {
+        const nextActiveFace = getActiveViewPlaneFaceId(runtime);
+        setActiveViewPlaneFace((current) => current === nextActiveFace ? current : nextActiveFace);
+        // The camera is static while animation only advances geometry uniforms;
+        // bail out of the state update unless the orientation actually changed so
+        // playback does not trigger a React re-render every frame.
+        const nextOrientation = readViewPlaneOrientation(runtime);
+        setViewPlaneOrientation((current) => (
+          viewPlaneOrientationsEqual(current, nextOrientation) ? current : nextOrientation
+        ));
+      }
       if (transitionActive || keyboardOrbitMoved || controlsActive || controls?.autoRotate) {
         requestRender();
       }
