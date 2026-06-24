@@ -17,12 +17,12 @@ test("orbitControlsDeltaSeconds converts animation timestamps from ms to seconds
   assert.equal(orbitControlsDeltaSeconds(1016, 1000), 0.016);
 });
 
-test("orbitControlsDeltaSeconds caps slow render frames to avoid visible jumps", () => {
-  assert.equal(orbitControlsDeltaSeconds(1400, 1000), 1 / 15);
+test("orbitControlsDeltaSeconds preserves slow render frames", () => {
+  assert.equal(orbitControlsDeltaSeconds(1400, 1000), 0.4);
 });
 
 test("orbitControlsDeltaSeconds clamps stale frame gaps", () => {
-  assert.equal(orbitControlsDeltaSeconds(3000, 1000), 1 / 15);
+  assert.equal(orbitControlsDeltaSeconds(3000, 1000), 1);
 });
 
 test("updateOrbitControls passes seconds while auto-rotate is active", () => {
