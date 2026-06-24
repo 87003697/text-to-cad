@@ -15,10 +15,10 @@ test("orbitFrameOutputs uses calm default orbit timing", () => {
 
   assert.equal(orbit.fps, DEFAULT_ORBIT_FPS);
   assert.equal(orbit.durationSeconds, DEFAULT_ORBIT_DURATION_SECONDS);
-  assert.equal(orbit.frameCount, 96);
-  assert.equal(orbit.outputs.length, 96);
+  assert.equal(orbit.frameCount, 72);
+  assert.equal(orbit.outputs.length, 72);
   assert.equal(orbit.outputs[0].camera, "-45:28");
-  assert.equal(orbit.outputs.at(-1).camera, "311.25:28");
+  assert.equal(orbit.outputs.at(-1).camera, "310:28");
 });
 
 test("orbitFrameOutputs honors explicit orbit timing", () => {

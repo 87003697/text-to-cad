@@ -4,19 +4,25 @@ import test from "node:test";
 import {
   orbitControlsDeltaSeconds,
   PREVIEW_AUTO_ROTATE_SPEED,
+  PREVIEW_ORBIT_SECONDS_PER_TURN,
   updateOrbitControls
 } from "./orbitControls.js";
 
 test("preview auto-rotate speed stays intentionally calm", () => {
-  assert.equal(PREVIEW_AUTO_ROTATE_SPEED, 0.25);
+  assert.equal(PREVIEW_ORBIT_SECONDS_PER_TURN, 600);
+  assert.equal(PREVIEW_AUTO_ROTATE_SPEED, 0.1);
 });
 
 test("orbitControlsDeltaSeconds converts animation timestamps from ms to seconds", () => {
   assert.equal(orbitControlsDeltaSeconds(1016, 1000), 0.016);
 });
 
-test("orbitControlsDeltaSeconds clamps long frame gaps", () => {
-  assert.equal(orbitControlsDeltaSeconds(2000, 1000), 0.05);
+test("orbitControlsDeltaSeconds preserves slow render frame deltas", () => {
+  assert.equal(orbitControlsDeltaSeconds(1400, 1000), 0.4);
+});
+
+test("orbitControlsDeltaSeconds clamps stale frame gaps", () => {
+  assert.equal(orbitControlsDeltaSeconds(3000, 1000), 1);
 });
 
 test("updateOrbitControls passes seconds while auto-rotate is active", () => {

@@ -120,7 +120,8 @@ npm run snapshot -- --input examples/model.implicit.js --output /tmp/model.png
 npm run snapshot -- --input examples/model.implicit.js --output /tmp/model.gif --mode orbit
 ```
 
-Orbit GIF jobs default to 12 fps over 8 seconds for a calmer review spin.
+Orbit GIF jobs default to 6 fps over 12 seconds for a calmer review spin
+without increasing default render frame count.
 Override with `orbit.fps` and `orbit.durationSeconds` in JSON jobs when needed.
 
 The snapshot CLI also accepts JSON jobs. A single job can include multiple

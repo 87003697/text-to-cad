@@ -1,5 +1,5 @@
-export const DEFAULT_ORBIT_FPS = 12;
-export const DEFAULT_ORBIT_DURATION_SECONDS = 8;
+export const DEFAULT_ORBIT_FPS = 6;
+export const DEFAULT_ORBIT_DURATION_SECONDS = 12;
 
 export function orbitFrameOutputs(job) {
   const orbit = job.orbit && typeof job.orbit === "object" ? job.orbit : {};
