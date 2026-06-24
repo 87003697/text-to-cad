@@ -1146,14 +1146,6 @@ export function ThemePresetDropdown({
                 >
                   <PresetSwatch preset={preset} />
                   <span className="min-w-0 flex-1 truncate">{preset.label}</span>
-                  {preset.id === systemDefaultPresetId ? (
-                    <span
-                      className="rounded-full border px-1.5 py-0.5 text-[9px] uppercase text-muted-foreground"
-                      data-theme-menu-default-badge=""
-                    >
-                      Default
-                    </span>
-                  ) : null}
                 </DropdownMenuItem>
                 <span
                   className="theme-preset-menu-actions ml-auto flex shrink-0 items-center gap-0.5 rounded-sm px-0.5 py-0.5"
