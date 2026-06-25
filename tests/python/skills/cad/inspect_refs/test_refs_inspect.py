@@ -457,7 +457,14 @@ class InspectRefsTests(unittest.TestCase):
             edge_manifest["sourceKind"] = "step"
             edge_manifest["sourcePath"] = topology_manifest.get("sourcePath")
             edge_manifest["stepHash"] = topology_manifest.get("stepHash")
+        # The render package is keyed by the ENTRY filename. Depending on how the entry
+        # resolves, production reads part_glb_path(spec.entry_path) at either the .py
+        # generator key (a python-backed entry with no STEP) or the .step key (resolved as
+        # imported). Touch the mock GLB at both candidate keys so the lookup succeeds
+        # regardless of which one this scenario resolves to.
         self._touch_glb(resolved_step_path)
+        if source_path != resolved_step_path:
+            self._touch_glb(source_path)
         stack = contextlib.ExitStack()
         with stack:
             stack.enter_context(mock.patch.object(step_targets, "find_step_path", return_value=resolved_step_path))
