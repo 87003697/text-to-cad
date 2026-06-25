@@ -14,15 +14,6 @@ function toTransformArray(value) {
   return value.map((component, index) => Number.isFinite(Number(component)) ? Number(component) : IDENTITY_TRANSFORM[index]);
 }
 
-export function assemblyMeshDescriptor(topologyManifest) {
-  const mesh = topologyManifest?.assembly?.mesh;
-  return mesh && typeof mesh === "object" ? mesh : null;
-}
-
-export function assemblyUsesSelfContainedMesh(topologyManifest) {
-  return String(assemblyMeshDescriptor(topologyManifest)?.addressing || "").trim() === "gltf-node-extras";
-}
-
 export function assemblyRootFromTopology(topologyManifest) {
   const root = topologyManifest?.assembly?.root;
   return root && typeof root === "object" ? root : null;
@@ -339,165 +330,246 @@ function meshPartNumericValue(part, key) {
   return Math.max(0, Math.floor(Number(part?.[key]) || 0));
 }
 
-function meshPartIdMatches(part, ids) {
-  const partIds = [
-    String(part?.occurrenceId || "").trim(),
-    String(part?.id || "").trim()
-  ].filter(Boolean);
-  return partIds.some((partId) => ids.has(partId));
+// --- Component-GLB package composition (design/component-glb-artifacts.md) -------
+//
+// Unlike the monolithic .step.glb (which bakes every occurrence transform into
+// world-space vertices at export), a package's component GLBs are meshed once in
+// their LOCAL frame and instanced N times by the assembly descriptor. So composition
+// here must apply each occurrence's 16-float transform to the copied vertices — the
+// step the self-contained path skips because the monolith was already world-baked.
+
+function transformPointInto(out, base, matrix, x, y, z) {
+  out[base] = matrix[0] * x + matrix[1] * y + matrix[2] * z + matrix[3];
+  out[base + 1] = matrix[4] * x + matrix[5] * y + matrix[6] * z + matrix[7];
+  out[base + 2] = matrix[8] * x + matrix[9] * y + matrix[10] * z + matrix[11];
 }
 
-function meshPartIdHasPrefix(part, prefixes) {
-  const partIds = [
-    String(part?.occurrenceId || "").trim(),
-    String(part?.id || "").trim()
-  ].filter(Boolean);
-  return partIds.some((partId) => prefixes.some((prefix) => partId.startsWith(prefix)));
+function transformNormalInto(out, base, matrix, x, y, z) {
+  // Rotation/scale only (no translation), then renormalize. For the rigid (and
+  // mirror) transforms an assembly uses, the upper-3x3 carries direction correctly;
+  // renormalizing absorbs any uniform scale.
+  let nx = matrix[0] * x + matrix[1] * y + matrix[2] * z;
+  let ny = matrix[4] * x + matrix[5] * y + matrix[6] * z;
+  let nz = matrix[8] * x + matrix[9] * y + matrix[10] * z;
+  const length = Math.hypot(nx, ny, nz);
+  if (length > 1e-12) {
+    nx /= length;
+    ny /= length;
+    nz /= length;
+  } else {
+    nx = x;
+    ny = y;
+    nz = z;
+  }
+  out[base] = nx;
+  out[base + 1] = ny;
+  out[base + 2] = nz;
 }
 
-function meshPartsForTopologyLeaf(meshData, manifestPart) {
-  const allParts = Array.isArray(meshData?.parts) ? meshData.parts : [];
-  const ids = new Set(
-    [manifestPart?.occurrenceId, manifestPart?.id]
-      .map((id) => String(id || "").trim())
-      .filter(Boolean)
+function matrixDeterminant3(matrix) {
+  return (
+    matrix[0] * (matrix[5] * matrix[10] - matrix[6] * matrix[9]) -
+    matrix[1] * (matrix[4] * matrix[10] - matrix[6] * matrix[8]) +
+    matrix[2] * (matrix[4] * matrix[9] - matrix[5] * matrix[8])
   );
-  const exactParts = allParts.filter((part) => meshPartIdMatches(part, ids));
-  if (exactParts.length) {
-    return exactParts;
-  }
-  const prefixes = [...ids].map((id) => `${id}.`);
-  return prefixes.length ? allParts.filter((part) => meshPartIdHasPrefix(part, prefixes)) : [];
 }
 
-export function buildSelfContainedAssemblyMeshData(topologyManifest, meshData) {
-  const assemblyRoot = assemblyRootFromTopology(topologyManifest);
-  if (!assemblyRoot) {
-    throw new Error("Assembly topology is missing assembly.root");
+function componentMeshDataFor(componentMeshDataByCid, cid) {
+  if (!componentMeshDataByCid) {
+    return null;
   }
-  const manifestParts = flattenAssemblyLeafParts(assemblyRoot);
-  const partSources = [];
-  const meshlessLeafPartIds = [];
-  for (const manifestPart of manifestParts) {
-    const partId = String(manifestPart?.id || manifestPart?.occurrenceId || "").trim();
-    const occurrenceId = String(manifestPart?.occurrenceId || manifestPart?.id || "").trim();
-    const sourceParts = meshPartsForTopologyLeaf(meshData, manifestPart);
-    if (!sourceParts.length) {
-      const meshlessLeafPartId = occurrenceId || partId;
-      if (meshlessLeafPartId) {
-        meshlessLeafPartIds.push(meshlessLeafPartId);
+  if (typeof componentMeshDataByCid.get === "function") {
+    return componentMeshDataByCid.get(cid) || null;
+  }
+  return componentMeshDataByCid[cid] || null;
+}
+
+/**
+ * Compose a renderable meshData from an assembly-package descriptor plus a map of
+ * already-parsed component meshDatas (one per unique component cid, each from
+ * buildMeshDataFromGlbBuffer on its component GLB). Each occurrence's transform is
+ * baked into the copied vertices/normals (partTransformsBaked: true), so the result
+ * is drop-in for the same renderer path the monolithic .step.glb uses.
+ *
+ * Output parts carry occurrenceId = the assembly occurrence id and componentId =
+ * the source component cid; sourcePartRanges keep the COMPONENT-LOCAL occurrenceId +
+ * primitiveIndex so picks resolve against that component's own selector runtime
+ * (the occurrence id then namespaces the resolved selector).
+ */
+export function buildComposedPackageMeshData(descriptor, componentMeshDataByCid) {
+  const occurrences = Array.isArray(descriptor?.occurrences) ? descriptor.occurrences : [];
+  if (!occurrences.length) {
+    throw new Error("Assembly package descriptor has no occurrences");
+  }
+
+  const placements = [];
+  let totalVertexCount = 0;
+  let totalIndexCount = 0;
+  let anyColors = false;
+  const missingComponentIds = [];
+  for (const occurrence of occurrences) {
+    const cid = String(occurrence?.component || "").trim();
+    const componentMeshData = componentMeshDataFor(componentMeshDataByCid, cid);
+    const sourceParts = Array.isArray(componentMeshData?.parts) ? componentMeshData.parts : [];
+    if (!componentMeshData || !sourceParts.length) {
+      if (cid) {
+        missingComponentIds.push(cid);
       }
       continue;
     }
-    partSources.push({
-      manifestPart,
-      sourceParts
-    });
-  }
-  if (!partSources.length) {
-    throw new Error("Assembly topology did not match any renderable GLB nodes");
-  }
-  let totalVertexCount = 0;
-  let totalIndexCount = 0;
-  for (const { sourceParts } of partSources) {
     for (const sourcePart of sourceParts) {
       totalVertexCount += meshPartNumericValue(sourcePart, "vertexCount");
       totalIndexCount += meshPartNumericValue(sourcePart, "triangleCount") * 3;
     }
+    const componentColors = componentMeshData?.colors;
+    if (componentColors && componentColors.length === (componentMeshData?.vertices?.length || 0) && componentColors.length > 0) {
+      anyColors = true;
+    }
+    // Clean components carry no per-vertex COLOR_0; their color rides on the occurrence's
+    // `color` (a material baseColorFactor in the GLB). An occurrence override color must still
+    // produce a colored composed mesh, so count it toward allocating the colors buffer.
+    if (toVectorArray(occurrence?.color)) {
+      anyColors = true;
+    }
+    placements.push({ occurrence, componentMeshData, sourceParts });
   }
-  const sourceVertices = meshData?.vertices || new Float32Array(0);
-  const sourceNormals = meshData?.normals || new Float32Array(0);
-  const sourceColors = meshData?.colors || new Float32Array(0);
-  const sourceSurfaceEdgeBarycentric = meshData?.surfaceEdgeBarycentric || new Float32Array(0);
-  const sourceSurfaceEdgeClass = meshData?.surfaceEdgeClass || new Uint8Array(0);
-  const sourceIndices = meshData?.indices || new Uint32Array(0);
-  const hasSourceColors = sourceColors.length === sourceVertices.length && sourceColors.length > 0;
-  const hasSurfaceEdgeAttributes =
-    sourceSurfaceEdgeBarycentric.length === sourceVertices.length &&
-    sourceSurfaceEdgeClass.length === sourceVertices.length &&
-    sourceVertices.length > 0;
+  if (!placements.length) {
+    throw new Error("Assembly package matched no renderable component GLBs");
+  }
+
   const vertices = new Float32Array(totalVertexCount * 3);
   const normals = new Float32Array(totalVertexCount * 3);
-  const colors = hasSourceColors ? new Float32Array(totalVertexCount * 3) : new Float32Array(0);
-  const surfaceEdgeBarycentric = hasSurfaceEdgeAttributes ? new Float32Array(totalVertexCount * 3) : new Float32Array(0);
-  const surfaceEdgeClass = hasSurfaceEdgeAttributes ? new Uint8Array(totalVertexCount * 3) : new Uint8Array(0);
+  const colors = anyColors ? new Float32Array(totalVertexCount * 3) : new Float32Array(0);
   const indices = new Uint32Array(totalIndexCount);
+  // Per-vertex edge attributes drive the wireframe-on-mesh edge shader (3 floats/vertex
+  // barycentric + a per-vertex edge class). They are triangle-local, so they merge untransformed,
+  // aligned with the composed vertices. Leaving them empty (the prior stub) is why assembly edges
+  // never rendered.
+  const edgeSample = placements.find(
+    (placement) => (placement.componentMeshData?.surfaceEdgeBarycentric?.length || 0) > 0
+  )?.componentMeshData || null;
+  const hasEdges = !!edgeSample;
+  const EdgeClassCtor = edgeSample?.surfaceEdgeClass ? edgeSample.surfaceEdgeClass.constructor : Uint8Array;
+  const surfaceEdgeBarycentric = hasEdges ? new Float32Array(totalVertexCount * 3) : new Float32Array(0);
+  const surfaceEdgeClass = hasEdges && edgeSample.surfaceEdgeClass
+    ? new EdgeClassCtor(totalVertexCount * 3)
+    : new EdgeClassCtor(0);
   const parts = [];
   let vertexOffset = 0;
   let indexOffset = 0;
 
-  for (const { manifestPart, sourceParts } of partSources) {
-    const partId = String(manifestPart?.id || manifestPart?.occurrenceId || "").trim();
-    const occurrenceId = String(manifestPart?.occurrenceId || manifestPart?.id || "").trim();
-    const firstMeshPart = sourceParts[0];
+  for (const { occurrence, componentMeshData, sourceParts } of placements) {
+    // Component geometry loads in CAD units (mm) — the GLB loader un-scales meters back to mm —
+    // and the occurrence transform is authored in mm, so it applies directly to place each
+    // (local-frame) component. Components MUST be local for this to be correct under dedup.
+    const matrix = toTransformArray(occurrence?.transform);
+    const mirrored = matrixDeterminant3(matrix) < 0;
+    const occurrenceId = String(occurrence?.id || "").trim();
+    const cid = String(occurrence?.component || "").trim();
+    const overrideColor = toVectorArray(occurrence?.color);
+    const sourceVertices = componentMeshData?.vertices || new Float32Array(0);
+    const sourceNormals = componentMeshData?.normals || new Float32Array(0);
+    const sourceColors = componentMeshData?.colors || new Float32Array(0);
+    const sourceIndices = componentMeshData?.indices || new Uint32Array(0);
+    const sourceEdgeBary = componentMeshData?.surfaceEdgeBarycentric || null;
+    const sourceEdgeClass = componentMeshData?.surfaceEdgeClass || null;
+    const hasComponentColors = sourceColors.length === sourceVertices.length && sourceColors.length > 0;
+
     const partVertexOffset = vertexOffset;
     const partTriangleOffset = Math.floor(indexOffset / 3);
     const sourcePartRanges = [];
+    let minX = Infinity, minY = Infinity, minZ = Infinity;
+    let maxX = -Infinity, maxY = -Infinity, maxZ = -Infinity;
 
     for (const sourcePart of sourceParts) {
-      const sourceVertexOffset = meshPartNumericValue(sourcePart, "vertexOffset");
-      const sourceVertexCount = meshPartNumericValue(sourcePart, "vertexCount");
-      const sourceTriangleOffset = meshPartNumericValue(sourcePart, "triangleOffset");
-      const sourceTriangleCount = meshPartNumericValue(sourcePart, "triangleCount");
+      const srcVertexOffset = meshPartNumericValue(sourcePart, "vertexOffset");
+      const srcVertexCount = meshPartNumericValue(sourcePart, "vertexCount");
+      const srcTriangleOffset = meshPartNumericValue(sourcePart, "triangleOffset");
+      const srcTriangleCount = meshPartNumericValue(sourcePart, "triangleCount");
       const rangeTriangleOffset = Math.floor(indexOffset / 3) - partTriangleOffset;
       sourcePartRanges.push({
-        occurrenceId: meshPartId(sourcePart),
+        // The DESCRIPTOR occurrence id (not the component's internal mesh-part id) so it matches
+        // the composed selector runtime's remapped occurrence id, letting buildGlbFaceIdsForPart
+        // resolve render-mesh triangles to this occurrence's faces.
+        occurrenceId: occurrenceId || meshPartId(sourcePart),
         primitiveIndex: meshPartNumericValue(sourcePart, "primitiveIndex"),
         triangleOffset: rangeTriangleOffset,
-        triangleCount: sourceTriangleCount
+        triangleCount: srcTriangleCount
       });
-      const sourcePositionStart = sourceVertexOffset * 3;
-      const sourcePositionEnd = sourcePositionStart + sourceVertexCount * 3;
-      vertices.set(sourceVertices.subarray(sourcePositionStart, sourcePositionEnd), vertexOffset * 3);
-      if (sourceNormals.length >= sourcePositionEnd) {
-        normals.set(sourceNormals.subarray(sourcePositionStart, sourcePositionEnd), vertexOffset * 3);
+
+      const baseVertexOffset = vertexOffset;
+      for (let local = 0; local < srcVertexCount; local += 1) {
+        const src = (srcVertexOffset + local) * 3;
+        const dst = (vertexOffset + local) * 3;
+        const x = sourceVertices[src];
+        const y = sourceVertices[src + 1];
+        const z = sourceVertices[src + 2];
+        transformPointInto(vertices, dst, matrix, x, y, z);
+        if (sourceNormals.length >= src + 3) {
+          transformNormalInto(normals, dst, matrix, sourceNormals[src], sourceNormals[src + 1], sourceNormals[src + 2]);
+        }
+        if (anyColors) {
+          if (overrideColor) {
+            colors[dst] = overrideColor[0];
+            colors[dst + 1] = overrideColor[1];
+            colors[dst + 2] = overrideColor[2];
+          } else if (hasComponentColors) {
+            colors[dst] = sourceColors[src];
+            colors[dst + 1] = sourceColors[src + 1];
+            colors[dst + 2] = sourceColors[src + 2];
+          }
+        }
+        if (hasEdges) {
+          if (sourceEdgeBary && sourceEdgeBary.length >= src + 3) {
+            surfaceEdgeBarycentric[dst] = sourceEdgeBary[src];
+            surfaceEdgeBarycentric[dst + 1] = sourceEdgeBary[src + 1];
+            surfaceEdgeBarycentric[dst + 2] = sourceEdgeBary[src + 2];
+          }
+          if (sourceEdgeClass && sourceEdgeClass.length >= src + 3) {
+            surfaceEdgeClass[dst] = sourceEdgeClass[src];
+            surfaceEdgeClass[dst + 1] = sourceEdgeClass[src + 1];
+            surfaceEdgeClass[dst + 2] = sourceEdgeClass[src + 2];
+          }
+        }
+        const wx = vertices[dst];
+        const wy = vertices[dst + 1];
+        const wz = vertices[dst + 2];
+        if (wx < minX) minX = wx; if (wy < minY) minY = wy; if (wz < minZ) minZ = wz;
+        if (wx > maxX) maxX = wx; if (wy > maxY) maxY = wy; if (wz > maxZ) maxZ = wz;
       }
-      if (hasSourceColors && sourceColors.length >= sourcePositionEnd) {
-        colors.set(sourceColors.subarray(sourcePositionStart, sourcePositionEnd), vertexOffset * 3);
+
+      const srcIndexStart = srcTriangleOffset * 3;
+      for (let tri = 0; tri < srcTriangleCount; tri += 1) {
+        const a = sourceIndices[srcIndexStart + tri * 3] - srcVertexOffset + baseVertexOffset;
+        const b = sourceIndices[srcIndexStart + tri * 3 + 1] - srcVertexOffset + baseVertexOffset;
+        const c = sourceIndices[srcIndexStart + tri * 3 + 2] - srcVertexOffset + baseVertexOffset;
+        // A mirror (negative determinant) reverses triangle winding once baked into
+        // positions; flip back so front-faces stay consistent with the renderer.
+        indices[indexOffset] = a;
+        indices[indexOffset + 1] = mirrored ? c : b;
+        indices[indexOffset + 2] = mirrored ? b : c;
+        indexOffset += 3;
       }
-      if (hasSurfaceEdgeAttributes && sourceSurfaceEdgeBarycentric.length >= sourcePositionEnd) {
-        surfaceEdgeBarycentric.set(sourceSurfaceEdgeBarycentric.subarray(sourcePositionStart, sourcePositionEnd), vertexOffset * 3);
-      }
-      if (hasSurfaceEdgeAttributes && sourceSurfaceEdgeClass.length >= sourcePositionEnd) {
-        surfaceEdgeClass.set(sourceSurfaceEdgeClass.subarray(sourcePositionStart, sourcePositionEnd), vertexOffset * 3);
-      }
-      const sourceIndexStart = sourceTriangleOffset * 3;
-      const sourceIndexEnd = sourceIndexStart + sourceTriangleCount * 3;
-      for (let index = sourceIndexStart; index < sourceIndexEnd; index += 1) {
-        indices[indexOffset] = sourceIndices[index] - sourceVertexOffset + vertexOffset;
-        indexOffset += 1;
-      }
-      vertexOffset += sourceVertexCount;
+      vertexOffset += srcVertexCount;
     }
 
-    const sourcePath = String(manifestPart?.sourcePath || "").trim();
-    const displayName = String(
-      manifestPart?.displayName ||
-      manifestPart?.instancePath ||
-      manifestPart?.occurrenceId ||
-      sourcePath ||
-      firstMeshPart?.label ||
-      firstMeshPart?.name ||
-      meshPartId(firstMeshPart)
-    ).trim();
-    const sourceBounds = mergeBounds(sourceParts.map((part) => part.bounds));
+    const bounds = Number.isFinite(minX)
+      ? { min: [minX, minY, minZ], max: [maxX, maxY, maxZ] }
+      : null;
+    const firstSourcePart = sourceParts[0];
+    const displayName = String(occurrence?.name || occurrenceId || cid || meshPartId(firstSourcePart)).trim();
     parts.push({
-      ...firstMeshPart,
-      ...manifestPart,
-      id: partId || occurrenceId || meshPartId(firstMeshPart),
-      occurrenceId: occurrenceId || partId || meshPartId(firstMeshPart),
+      id: occurrenceId || cid,
+      occurrenceId: occurrenceId || cid,
+      componentId: cid,
       name: displayName,
       label: displayName,
       nodeType: "part",
-      sourceKind: String(manifestPart?.sourceKind || "").trim(),
-      sourcePath,
-      partSourcePath: sourcePath,
-      sourceBounds,
-      bounds: manifestPart?.bbox || sourceBounds,
-      transform: toTransformArray(manifestPart?.worldTransform || manifestPart?.transform),
-      hasSourceColors: manifestPartUsesSourceColors(manifestPart) && (
-        hasSourceColors || sourceParts.some((part) => !!part.hasSourceColors || !!part.color)
-      ),
+      transform: matrix,
+      bounds,
+      sourceBounds: bounds,
+      color: overrideColor || firstSourcePart?.color || null,
+      hasSourceColors: anyColors && (!!overrideColor || hasComponentColors),
       vertexOffset: partVertexOffset,
       vertexCount: vertexOffset - partVertexOffset,
       triangleOffset: partTriangleOffset,
@@ -507,8 +579,8 @@ export function buildSelfContainedAssemblyMeshData(topologyManifest, meshData) {
       edgeIndexCount: 0
     });
   }
+
   return {
-    ...meshData,
     vertices,
     indices,
     normals,
@@ -517,15 +589,93 @@ export function buildSelfContainedAssemblyMeshData(topologyManifest, meshData) {
     surfaceEdgeClass,
     edge_indices: new Uint32Array(0),
     parts,
-    bounds: mergeBounds(parts.map((part) => part.bounds)) || meshData?.bounds,
-    assemblyRoot,
-    assemblyMates: assemblyMatesFromTopology(topologyManifest),
-    meshlessLeafPartIds,
+    assemblyRoot: buildPackageAssemblyRoot(descriptor, parts),
+    bounds: mergeBounds(parts.map((part) => part.bounds)),
+    assemblyMates: assemblyMatesFromTopology(descriptor),
+    missingComponentIds,
     partTransformsBaked: true,
-    has_source_colors: hasSourceColors
+    has_source_colors: anyColors
   };
 }
 
-function manifestPartUsesSourceColors(part) {
-  return part?.useSourceColors !== false;
+// The package descriptor records a flat list of occurrences (the assembly hierarchy is collapsed
+// at emit time), so synthesize a one-level assembly tree — a root node whose children are the
+// placed parts — so the viewer's structure tree is expandable and every occurrence is selectable.
+function enrichPackageAssemblyNode(node, partById) {
+  const rawChildren = Array.isArray(node?.children) ? node.children : [];
+  const children = rawChildren.map((child) => enrichPackageAssemblyNode(child, partById));
+  const nodeType = String(node?.nodeType || "").trim() || (children.length ? "subassembly" : "part");
+  const id = String(node?.id || "").trim();
+  const name = String(node?.name || node?.label || id).trim();
+  const declaredLeafIds = Array.isArray(node?.leafPartIds)
+    ? node.leafPartIds.map((leafId) => String(leafId || "").trim()).filter(Boolean)
+    : [];
+  const leafPartIds = declaredLeafIds.length
+    ? declaredLeafIds
+    : (children.length
+      ? children.flatMap((child) => child.leafPartIds)
+      : (id ? [id] : []));
+  const out = { id, occurrenceId: id, name, label: name, nodeType, leafPartIds, children };
+  if (nodeType === "part") {
+    // Enrich the leaf with its composed render part (transform/bounds/color drive highlighting).
+    const part = partById.get(id);
+    if (part) {
+      out.componentId = part.componentId;
+      out.transform = part.transform;
+      out.bounds = part.bounds;
+      out.sourceBounds = part.sourceBounds;
+      out.color = part.color;
+    }
+  } else {
+    out.transform = [...IDENTITY_TRANSFORM];
+    out.bounds = mergeBounds(children.map((child) => child.bounds));
+  }
+  return out;
+}
+
+function buildPackageAssemblyRoot(descriptor, parts) {
+  // A single-component part has no internal assembly structure: it renders as a topology
+  // tree (solids/faces/edges) exactly like a monolithic STEP part. Returning null lets
+  // buildStepTreeRoot fall through to buildStepPartRoot instead of showing a spurious
+  // one-node "assembly" wrapper (which the part view can't render → "No assembly tree").
+  if (String(descriptor?.entryKind || "").trim() === "part") {
+    return null;
+  }
+  const partList = Array.isArray(parts) ? parts : [];
+  const partById = new Map(partList.map((part) => [String(part.id), part]));
+  // Preferred: the nested hierarchy the descriptor records (subassembly grouping over leaves),
+  // so the structure tree can drill into / isolate subassemblies just like a monolithic STEP.
+  const descriptorRoot = descriptor?.assembly?.root;
+  if (descriptorRoot && typeof descriptorRoot === "object") {
+    return enrichPackageAssemblyNode(descriptorRoot, partById);
+  }
+  // Fallback (legacy descriptor without a hierarchy): a flat root over the placed parts.
+  if (!partList.length) {
+    return null;
+  }
+  const children = partList.map((part) => ({
+    id: part.id,
+    occurrenceId: part.occurrenceId,
+    componentId: part.componentId,
+    name: part.name,
+    label: part.label,
+    nodeType: "part",
+    transform: part.transform,
+    bounds: part.bounds,
+    sourceBounds: part.sourceBounds,
+    color: part.color,
+    leafPartIds: [part.id],
+    children: []
+  }));
+  const rootName = String(descriptor?.rootName || "").trim() || "assembly";
+  return {
+    id: rootName,
+    name: rootName,
+    label: rootName,
+    nodeType: "assembly",
+    transform: [...IDENTITY_TRANSFORM],
+    bounds: mergeBounds(children.map((child) => child.bounds)),
+    leafPartIds: children.map((child) => child.id),
+    children
+  };
 }

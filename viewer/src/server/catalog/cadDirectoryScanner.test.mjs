@@ -6,10 +6,6 @@ import path from "node:path";
 import test from "node:test";
 
 import {
-  STEP_EDGE_RENDER_VISIBILITY_CLASSES,
-  STEP_TOPOLOGY_SCHEMA_VERSION
-} from "cadjs/common/stepTopology.mjs";
-import {
   isCatalogRelevantPath,
   isServedCadAsset,
   catalogFileRefForPath,
@@ -60,102 +56,54 @@ function writeStepWithSourceMetadata(filePath, {
   ].join("\n"));
 }
 
-function pad4(buffer, byte = 0) {
-  const padding = (4 - (buffer.length % 4)) % 4;
-  return padding ? Buffer.concat([buffer, Buffer.alloc(padding, byte)]) : buffer;
-}
-
-function topologyGlb(manifest, {
-  selector = true,
-  displayEdges = true,
-  extensionSchemaVersion = STEP_TOPOLOGY_SCHEMA_VERSION,
-  manifestSchemaVersion = extensionSchemaVersion
+// The canonical render artifact is a SELF-CONTAINED component-GLB PACKAGE directory inside the
+// per-folder cache: `<folder>/__cadcache__/models/<step-filename>/assembly.json`, with its
+// content-addressed component GLBs in the package's own `components/<hash>.glb` dir. This writes
+// such a package and returns the package directory path.
+function writePackage(repoRoot, stepRelPath, {
+  entryKind = "part",
+  sourceKind = "step",
+  sourcePath = null,   // descriptor sourcePath relative to the model folder (python only)
+  sourceHash = null,
+  stepHash = null,
+  sourceClosureFiles = null, // model-folder-relative generator closure (python freshness)
+  occurrences = 1,
 } = {}) {
-  let binary = Buffer.alloc(0);
-  const bufferViews = [];
-  function addBufferView(payload) {
-    binary = pad4(binary);
-    const byteOffset = binary.length;
-    binary = Buffer.concat([binary, payload]);
-    const index = bufferViews.length;
-    bufferViews.push({ buffer: 0, byteOffset, byteLength: payload.length });
-    return index;
-  }
-  const edgeRendering = manifest.edgeRendering || {
-    visibilityClasses: STEP_EDGE_RENDER_VISIBILITY_CLASSES,
-    generatedVisibilityClasses: ["feature"],
-    visibilityClassCounts: { feature: 1 },
-    generatedVisibilityClassCounts: { feature: 1 },
+  const stepAbs = path.join(repoRoot, stepRelPath);
+  const folder = path.dirname(stepAbs);
+  // The package dir is keyed by the ENTRY filename (`<name>.step.py` for a generated model,
+  // `<name>.step` for an imported one). The descriptor's stepPath/rootName are the LOGICAL step
+  // (`<name>.step` — the generator's `.py` stripped), matching real cadpy output.
+  const stepName = path.basename(stepAbs);
+  const logicalStepName = stepName.replace(/\.(step|stp)\.py$/i, ".$1");
+  const pkgDir = path.join(folder, "__cadcache__", "models", stepName);
+  const compDir = path.join(pkgDir, "components");
+  fs.mkdirSync(pkgDir, { recursive: true });
+  fs.mkdirSync(compDir, { recursive: true });
+  const cid = sha256Buffer(Buffer.from(`comp:${stepRelPath}`)).slice(0, 16);
+  fs.writeFileSync(path.join(compDir, `${cid}.glb`), "component-glb-bytes");
+  const descriptor = {
+    kind: "assembly-package",
+    packageSchemaVersion: 2,
+    entryKind,
+    rootName: logicalStepName.replace(/\.(step|stp)$/i, ""),
+    units: "mm",
+    sourceKind,
+    ...(sourcePath ? { sourcePath } : {}),
+    ...(sourceHash ? { sourceHash } : {}),
+    ...(stepHash ? { stepHash } : {}),
+    ...(sourceClosureFiles ? { sourceClosureFiles } : {}),
+    stepPath: logicalStepName,
+    bbox: { min: [0, 0, 0], max: [1, 1, 1] },
+    stats: { occurrenceCount: occurrences, shapeCount: occurrences },
+    components: { [cid]: { glb: `components/${cid}.glb`, contentHash: cid } },
+    occurrences: Array.from({ length: occurrences }, (_, i) => ({
+      id: `o1.${i + 1}`, name: `occ${i}`, component: cid,
+      transform: [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1],
+    })),
   };
-  const indexManifest = { schemaVersion: manifestSchemaVersion, profile: "index", entryKind: manifest.entryKind || (manifest.assembly ? "assembly" : "part"), edgeRendering, ...manifest };
-  const indexView = addBufferView(Buffer.from(JSON.stringify(indexManifest), "utf8"));
-  const surfaceHalfEdgesView = addBufferView(Buffer.alloc(0));
-  const edgeView = displayEdges
-    ? addBufferView(Buffer.from(JSON.stringify({
-      schemaVersion: manifestSchemaVersion,
-      profile: "surface-edges",
-      sourceKind: manifest.sourceKind,
-      sourcePath: manifest.sourcePath,
-      sourceHash: manifest.sourceHash,
-      stepHash: manifest.stepHash,
-      classCodes: { none: 0, feature: 1, tangent: 2, seam: 3, degenerate: 4, boundary: 5, nonManifold: 6, unknown: 7 },
-      primitiveAttributes: { barycentric: "_CAD_EDGE_BARYCENTRIC", class: "_CAD_EDGE_CLASS" },
-      halfEdgeColumns: ["edgeRow", "faceRow", "occurrenceRow", "primitiveIndex", "triangleIndex", "side", "classCode"],
-      halfEdgesView: "surfaceHalfEdges",
-      edgeRendering,
-      buffers: {
-        littleEndian: true,
-        views: {
-          surfaceHalfEdges: {
-            dtype: "uint32",
-            bufferView: surfaceHalfEdgesView,
-            byteOffset: 0,
-            byteLength: 0,
-            count: 0,
-            itemSize: 4
-          }
-        }
-      },
-    }), "utf8"))
-    : null;
-  const selectorView = selector
-    ? addBufferView(Buffer.from(JSON.stringify({ schemaVersion: manifestSchemaVersion, profile: "selector", ...manifest }), "utf8"))
-    : null;
-  binary = pad4(binary);
-  const extension = { schemaVersion: extensionSchemaVersion, entryKind: indexManifest.entryKind, indexView, encoding: "utf-8" };
-  if (selectorView !== null) {
-    extension.selectorView = selectorView;
-  }
-  if (edgeView !== null) {
-    extension.edgeView = edgeView;
-  }
-  const gltf = {
-    asset: { version: "2.0" },
-    buffers: [{ byteLength: binary.length }],
-    bufferViews,
-    meshes: [{
-      primitives: [{
-        attributes: {
-          _CAD_EDGE_BARYCENTRIC: 0,
-          _CAD_EDGE_CLASS: 1,
-        },
-      }],
-    }],
-    extensionsUsed: ["STEP_topology"],
-    extensions: { STEP_topology: extension },
-  };
-  const jsonChunk = pad4(Buffer.from(JSON.stringify(gltf), "utf8"), 0x20);
-  const header = Buffer.alloc(12);
-  const jsonHeader = Buffer.alloc(8);
-  const binHeader = Buffer.alloc(8);
-  header.writeUInt32LE(0x46546c67, 0);
-  header.writeUInt32LE(2, 4);
-  header.writeUInt32LE(12 + 8 + jsonChunk.length + 8 + binary.length, 8);
-  jsonHeader.writeUInt32LE(jsonChunk.length, 0);
-  jsonHeader.write("JSON", 4, "latin1");
-  binHeader.writeUInt32LE(binary.length, 0);
-  binHeader.write("BIN\0", 4, "latin1");
-  return Buffer.concat([header, jsonHeader, jsonChunk, binHeader, binary]);
+  fs.writeFileSync(path.join(pkgDir, "assembly.json"), JSON.stringify(descriptor));
+  return pkgDir;
 }
 
 function entryByFile(catalog, file) {
@@ -175,14 +123,11 @@ function assertStepArtifactError(entry, code) {
 test("scanCadDirectory discovers CAD files directly and infers STEP assets", () => {
   const repoRoot = makeTempRepo();
   const stepHash = writeStep(path.join(repoRoot, "workspace/sample_part/sample_part.step"));
-  writeFile(path.join(repoRoot, "workspace/sample_part/.sample_part.step.glb"), topologyGlb({
-    sourcePath: "workspace/sample_part/sample_part.step",
+  writePackage(repoRoot, "workspace/sample_part/sample_part.step", {
+    entryKind: "assembly",
+    sourceKind: "step",
     stepHash,
-    assembly: {
-      mesh: { addressing: "gltf-node-extras" },
-      root: { nodeType: "assembly" }
-    },
-  }));
+  });
   writeFile(path.join(repoRoot, "workspace/sample_part/.sample_part.step.js"), "export default { manifest: { schemaVersion: 1 } };\n");
   writeFile(path.join(repoRoot, "workspace/sample_part/.sample_part.step/ignored.step"), "ignored\n");
   writeFile(path.join(repoRoot, "workspace/sample_part/sample_part.stl"), "solid sample_part\nendsolid sample_part\n");
@@ -205,7 +150,9 @@ test("scanCadDirectory discovers CAD files directly and infers STEP assets", () 
   assert.equal(catalog.schemaVersion, 4);
   assert.equal(catalog.root, undefined);
   const stepEntry = entryByFile(catalog, "sample_part/sample_part.step");
-  const stepGlbBytes = fs.statSync(path.join(repoRoot, "workspace/sample_part/.sample_part.step.glb")).size;
+  const descriptorBytes = fs.statSync(
+    path.join(repoRoot, "workspace/sample_part/__cadcache__/models/sample_part.step/assembly.json")
+  ).size;
   assert.equal(stepEntry.kind, "assembly");
   assert.equal(stepEntry.file, "sample_part/sample_part.step");
   assert.equal(stepEntry.artifact, undefined);
@@ -214,8 +161,8 @@ test("scanCadDirectory discovers CAD files directly and infers STEP assets", () 
   assert.equal(stepEntry.step, undefined);
   assert.equal(stepEntry.source, undefined);
   assert.equal(stepEntry.assets, undefined);
-  assert.ok(stepEntry.url.startsWith("/workspace/sample_part/.sample_part.step.glb?v="));
-  assert.equal(stepEntry.bytes, stepGlbBytes);
+  assert.ok(stepEntry.url.startsWith("/workspace/sample_part/__cadcache__/models/sample_part.step?v="));
+  assert.equal(stepEntry.bytes, descriptorBytes);
   assert.equal(stepEntry.hash.length, 64);
   for (const [file, kind] of [
     ["sample_part/sample_part.stl", "stl"],
@@ -260,11 +207,11 @@ test("scanCadFile updates a single catalog entry without walking sibling directo
   const repoRoot = makeTempRepo();
   const stepPath = path.join(repoRoot, "workspace/sample_part/sample_part.step");
   const stepHash = writeStep(stepPath);
-  writeFile(path.join(repoRoot, "workspace/sample_part/.sample_part.step.glb"), topologyGlb({
-    sourcePath: "workspace/sample_part/sample_part.step",
-    stepHash,
+  writePackage(repoRoot, "workspace/sample_part/sample_part.step", {
     entryKind: "part",
-  }));
+    sourceKind: "step",
+    stepHash,
+  });
   writeFile(path.join(repoRoot, "workspace/sample_part/.sample_part.step.js"), "export default { manifest: { schemaVersion: 1 } };\n");
   writeFile(path.join(repoRoot, "workspace/ignored/ignored.step"), "ISO-10303-21;\nEND-ISO-10303-21;\n");
 
@@ -273,31 +220,35 @@ test("scanCadFile updates a single catalog entry without walking sibling directo
   assert.equal(entry.file, "sample_part/sample_part.step");
   assert.equal(entry.kind, "part");
   assert.ok(entry.moduleUrl.startsWith("/workspace/sample_part/.sample_part.step.js?v="));
-  assert.ok(entry.url.startsWith("/workspace/sample_part/.sample_part.step.glb?v="));
+  assert.ok(entry.url.startsWith("/workspace/sample_part/__cadcache__/models/sample_part.step?v="));
 });
 
 test("scanCadFile maps inline STEP sidecars back to their logical STEP entry", () => {
   const repoRoot = makeTempRepo();
   const stepPath = path.join(repoRoot, "workspace/sample_part/sample_part.step");
   const stepHash = writeStep(stepPath);
-  const glbPath = path.join(repoRoot, "workspace/sample_part/.sample_part.step.glb");
-  writeFile(glbPath, topologyGlb({
-    sourcePath: "workspace/sample_part/sample_part.step",
-    stepHash,
+  // The render artifact moved into __cadcache__ (a skipped directory); the surviving inline
+  // sidecar in the model folder is the `.step.js` parameter module, which maps back to the
+  // logical STEP entry. The package descriptor still resolves the generated-only case.
+  writePackage(repoRoot, "workspace/sample_part/sample_part.step", {
     entryKind: "assembly",
-  }));
+    sourceKind: "step",
+    stepHash,
+  });
+  const parameterPath = path.join(repoRoot, "workspace/sample_part/.sample_part.step.js");
+  writeFile(parameterPath, "export default { manifest: { schemaVersion: 1 } };\n");
 
   assert.equal(
-    catalogFileRefForPath({ repoRoot, rootDir: "workspace", filePath: glbPath }),
+    catalogFileRefForPath({ repoRoot, rootDir: "workspace", filePath: parameterPath }),
     "sample_part/sample_part.step"
   );
   assert.equal(
-    scanCadFile({ repoRoot, rootDir: "workspace", filePath: glbPath }).file,
+    scanCadFile({ repoRoot, rootDir: "workspace", filePath: parameterPath }).file,
     "sample_part/sample_part.step"
   );
 
   fs.unlinkSync(stepPath);
-  const generatedOnlyEntry = scanCadFile({ repoRoot, rootDir: "workspace", filePath: glbPath });
+  const generatedOnlyEntry = scanCadFile({ repoRoot, rootDir: "workspace", filePath: parameterPath });
   assert.equal(generatedOnlyEntry.file, "sample_part/sample_part.step");
   assert.equal(generatedOnlyEntry.sourceKind, "step");
 });
@@ -318,29 +269,28 @@ test("scanCadDirectory can skip STEP artifact status for fast catalog reads", ()
   assert.equal(entry.artifact, undefined);
   const status = readStepSourceStatus({ repoRoot, stepPath });
   assert.equal(status.artifact.error, "missing_glb");
-  assert.equal(status.artifact.glbPath, "workspace/.fast.step.glb");
+  assert.equal(status.artifact.glbPath, "workspace/__cadcache__/models/fast.step");
 });
 
 test("scanCadDirectory emits minimal entries for python-backed generated GLB artifacts", () => {
   const repoRoot = makeTempRepo();
-  const stepHash = writeStep(path.join(repoRoot, "workspace/generated/generated.step"));
-  writeFile(path.join(repoRoot, "workspace/generated/generated.py"), "def gen_step():\n    return None\n");
-  const sourceHash = sha256Buffer(fs.readFileSync(path.join(repoRoot, "workspace/generated/generated.py")));
-  writeFile(path.join(repoRoot, "workspace/generated/.generated.step.glb"), topologyGlb({
-    sourceKind: "python",
-    sourcePath: "workspace/generated/generated.py",
-    sourceHash,
-    stepHash,
+  const generatorPath = path.join(repoRoot, "workspace/generated/generated.step.py");
+  writeFile(generatorPath, "def gen_step():\n    return None\n");
+  const sourceHash = sha256Buffer(fs.readFileSync(generatorPath));
+  writePackage(repoRoot, "workspace/generated/generated.step.py", {
     entryKind: "part",
-  }));
+    sourceKind: "python",
+    sourcePath: "generated.step.py",
+    sourceHash,
+  });
 
   const catalog = scanCadDirectory({ repoRoot, rootDir: "workspace" });
-  const entry = entryByFile(catalog, "generated/generated.step");
+  const entry = entryByFile(catalog, "generated/generated.step.py");
 
   assert.equal(entry.kind, "part");
   assert.equal(entry.sourceKind, "python");
   assert.equal(entry.artifact, undefined);
-  assert.ok(entry.url.startsWith("/workspace/generated/.generated.step.glb?v="));
+  assert.ok(entry.url.startsWith("/workspace/generated/__cadcache__/models/generated.step.py?v="));
   assert.equal(entry.hash.length, 64);
   assert.equal(entry.stepArtifact, undefined);
   assert.equal(entry.step, undefined);
@@ -348,58 +298,84 @@ test("scanCadDirectory emits minimal entries for python-backed generated GLB art
 
 test("scanCadDirectory reads Python source hash from GLB artifacts", () => {
   const repoRoot = makeTempRepo();
-  const stepHash = writeStep(path.join(repoRoot, "workspace/generated/generated.step"));
-  const generatorPath = path.join(repoRoot, "workspace/generated/generated.py");
+  const generatorPath = path.join(repoRoot, "workspace/generated/generated.step.py");
   writeFile(generatorPath, "from helper import SIZE\n\ndef gen_step():\n    return None\n");
   writeFile(path.join(repoRoot, "workspace/generated/helper.py"), "SIZE = 1\n");
   const sourceHash = sha256Buffer(fs.readFileSync(generatorPath));
-  writeFile(path.join(repoRoot, "workspace/generated/.generated.step.glb"), topologyGlb({
-    sourceKind: "python",
-    sourcePath: "workspace/generated/generated.py",
-    sourceHash,
-    stepHash,
+  writePackage(repoRoot, "workspace/generated/generated.step.py", {
     entryKind: "part",
-  }));
+    sourceKind: "python",
+    sourcePath: "generated.step.py",
+    sourceHash,
+  });
 
   const catalog = scanCadDirectory({ repoRoot, rootDir: "workspace" });
-  const entry = entryByFile(catalog, "generated/generated.step");
+  const entry = entryByFile(catalog, "generated/generated.step.py");
 
   assert.equal(entry.artifact, undefined);
   assert.equal(entry.sourceKind, "python");
   assert.equal(entry.source.sourceHash, sourceHash);
 });
 
+test("scanCadDirectory flags a Python package stale when a closure source is newer than the build", () => {
+  const repoRoot = makeTempRepo();
+  const generatorPath = path.join(repoRoot, "workspace/generated/gear.step.py");
+  writeFile(generatorPath, "def gen_step():\n    return None\n");
+  const pkgDir = writePackage(repoRoot, "workspace/generated/gear.step.py", {
+    entryKind: "part",
+    sourceKind: "python",
+    sourcePath: "gear.step.py",
+    sourceClosureFiles: ["gear.step.py"],
+  });
+  const descriptorPath = path.join(pkgDir, "assembly.json");
+  const scan = () => entryByFile(scanCadDirectory({ repoRoot, rootDir: "workspace" }), "generated/gear.step.py");
+
+  // Fresh: the generator is older than the built descriptor → no buildable error.
+  const past = new Date(Date.now() - 60_000);
+  fs.utimesSync(generatorPath, past, past);
+  assert.equal(scan().artifact, undefined);
+
+  // Editing the generator (newer mtime) marks the package stale — a buildable error that drives
+  // the client to (re)generate and show a loading state on the next open.
+  const future = new Date(Date.now() + 60_000);
+  fs.utimesSync(generatorPath, future, future);
+  const stale = scan();
+  assert.equal(stale.artifact.ok, false);
+  assert.equal(stale.artifact.error, "stale_step_artifact");
+
+  // Bumping the descriptor mtime (as generateStepArtifact does after a build) clears staleness.
+  const rebuilt = new Date(future.getTime() + 60_000);
+  fs.utimesSync(descriptorPath, rebuilt, rebuilt);
+  assert.equal(scan().artifact, undefined);
+});
+
 test("scanCadDirectory accepts Python STEP topology generated from a nested project root", () => {
   const repoRoot = makeTempRepo();
   const projectRoot = path.join(repoRoot, "workspace/arm7");
-  const stepPath = path.join(projectRoot, "STEP/assembly.step");
-  const generatorPath = path.join(projectRoot, "STEP/assembly.py");
-  const stepHash = writeStep(stepPath);
+  const generatorPath = path.join(projectRoot, "STEP/assembly.step.py");
   writeFile(generatorPath, "from armkit import SIZE\n\ndef gen_step():\n    return None\n");
   writeFile(path.join(projectRoot, "armkit.py"), "SIZE = 1\n");
   const sourceHash = sha256Buffer(fs.readFileSync(generatorPath));
-  writeFile(path.join(projectRoot, "STEP/.assembly.step.glb"), topologyGlb({
-    sourceKind: "python",
-    sourcePath: "assembly.py",
-    sourceHash,
-    stepHash,
-    stepPath: "assembly.step",
+  writePackage(repoRoot, "workspace/arm7/STEP/assembly.step.py", {
     entryKind: "assembly",
-  }));
+    sourceKind: "python",
+    sourcePath: "assembly.step.py",
+    sourceHash,
+  });
 
   const catalog = scanCadDirectory({ repoRoot, rootDir: "workspace" });
-  const entry = entryByFile(catalog, "arm7/STEP/assembly.step");
+  const entry = entryByFile(catalog, "arm7/STEP/assembly.step.py");
   const validation = validateStepTopologyArtifact({
     repoRoot,
-    sourcePath: stepPath,
+    sourcePath: generatorPath,
     cadPath: "workspace/arm7/STEP/assembly",
   });
 
   assert.equal(validation.stepArtifact.ok, true);
-  assert.equal(validation.stepArtifact.sourcePath, "workspace/arm7/STEP/assembly.py");
+  assert.equal(validation.stepArtifact.sourcePath, "workspace/arm7/STEP/assembly.step.py");
   assert.equal(entry.artifact, undefined);
   assert.equal(entry.sourceKind, "python");
-  assert.equal(entry.source.file, "workspace/arm7/STEP/assembly.py");
+  assert.equal(entry.source.file, "arm7/STEP/assembly.step.py");
   assert.equal(entry.source.sourceHash, sourceHash);
 });
 
@@ -428,46 +404,59 @@ test("scanCadDirectory marks non-STEP files as Python-backed from metadata comme
 
 test("scanCadDirectory discovers python-backed logical STEP entries from GLB artifacts", () => {
   const repoRoot = makeTempRepo();
-  const generatorPath = path.join(repoRoot, "workspace/generated_only/generated_only.py");
+  const generatorPath = path.join(repoRoot, "workspace/generated_only/generated_only.step.py");
   writeFile(generatorPath, "def gen_step():\n    return None\n");
   const sourceHash = sha256Buffer(fs.readFileSync(generatorPath));
-  writeFile(path.join(repoRoot, "workspace/generated_only/.generated_only.step.glb"), topologyGlb({
-    sourceKind: "python",
-    sourcePath: "workspace/generated_only/generated_only.py",
-    sourceHash,
+  writePackage(repoRoot, "workspace/generated_only/generated_only.step.py", {
     entryKind: "assembly",
-  }));
+    sourceKind: "python",
+    sourcePath: "generated_only.step.py",
+    sourceHash,
+  });
 
   const catalog = scanCadDirectory({ repoRoot, rootDir: "workspace" });
-  const entry = entryByFile(catalog, "generated_only/generated_only.step");
+  const entry = entryByFile(catalog, "generated_only/generated_only.step.py");
 
   assert.equal(entry.kind, "assembly");
   assert.equal(entry.sourceKind, "python");
   assert.equal(entry.artifact, undefined);
-  assert.ok(entry.url.startsWith("/workspace/generated_only/.generated_only.step.glb?v="));
+  assert.ok(entry.url.startsWith("/workspace/generated_only/__cadcache__/models/generated_only.step.py?v="));
   assert.equal(entry.hash.length, 64);
   assert.equal(entry.stepArtifact, undefined);
   assert.equal(entry.step, undefined);
 });
 
-test("scanCadDirectory treats missing GLBs for STEP files with Python metadata as Python-backed", () => {
+test("scanCadDirectory lists a generated .step.py and an imported .step of the same name as separate entries", () => {
   const repoRoot = makeTempRepo();
-  writeFile(path.join(repoRoot, "workspace/generated/generated.py"), "def gen_step():\n    return None\n");
-  writeStepWithSourceMetadata(path.join(repoRoot, "workspace/generated/generated.step"), {
-    sourcePath: "generated.py",
-    sourceHash: "direct-source-hash",
+  // The cache is keyed by entry filename, so a generated model (its `.step.py` generator) and an
+  // independently imported STEP of the same stem coexist as DISTINCT entries — no dedupe, no
+  // auto-linking the `.step` to the generator.
+  const generatorPath = path.join(repoRoot, "workspace/dual/widget.step.py");
+  writeFile(generatorPath, "def gen_step():\n    return None\n");
+  const sourceHash = sha256Buffer(fs.readFileSync(generatorPath));
+  writePackage(repoRoot, "workspace/dual/widget.step.py", {
+    entryKind: "part",
+    sourceKind: "python",
+    sourcePath: "widget.step.py",
+    sourceHash,
+  });
+  const stepHash = writeStep(path.join(repoRoot, "workspace/dual/widget.step"));
+  writePackage(repoRoot, "workspace/dual/widget.step", {
+    entryKind: "part",
+    sourceKind: "step",
+    stepHash,
   });
 
   const catalog = scanCadDirectory({ repoRoot, rootDir: "workspace" });
-  const entry = entryByFile(catalog, "generated/generated.step");
+  const generated = entryByFile(catalog, "dual/widget.step.py");
+  const imported = entryByFile(catalog, "dual/widget.step");
 
-  assert.equal(entry.sourceKind, "python");
-  assert.deepEqual(entry.source, {
-    file: "workspace/generated/generated.py",
-    sourcePath: "workspace/generated/generated.py",
-    sourceHash: "direct-source-hash",
-  });
-  assert.equal(entry.artifact.error, "missing_glb");
+  assert.equal(generated.sourceKind, "python");
+  assert.ok(generated.url.includes("/__cadcache__/models/widget.step.py?v="));
+  assert.equal(generated.source.file, "dual/widget.step.py");
+  assert.equal(imported.sourceKind, "step");
+  assert.ok(imported.url.includes("/__cadcache__/models/widget.step?v="));
+  assert.equal(imported.source, undefined);
 });
 
 test("scanCadDirectory requires sourcePath instead of recovering Python identity from embedded file lists", () => {
@@ -477,11 +466,11 @@ test("scanCadDirectory requires sourcePath instead of recovering Python identity
   writeFile(path.join(repoRoot, "workspace/generated/__init__.py"), "\n");
   writeFile(path.join(repoRoot, "workspace/generated/helper.py"), "def gen_step():\n    return None\n");
   writeFile(path.join(repoRoot, "workspace/generated/generated.py"), "def gen_step():\n    return None\n");
-  writeFile(path.join(repoRoot, "workspace/generated/.generated.step.glb"), topologyGlb({
+  writePackage(repoRoot, "workspace/generated/generated.step", {
+    entryKind: "part",
     sourceKind: "python",
     sourceHash: "source-hash",
-    entryKind: "part",
-  }));
+  });
 
   const validation = validateStepTopologyArtifact({
     repoRoot,
@@ -493,29 +482,27 @@ test("scanCadDirectory requires sourcePath instead of recovering Python identity
   assert.equal(validation.stepArtifact.error.code, "missing_source_path");
 });
 
-test("scanCadDirectory ignores Python dependency changes for STEP artifact freshness", () => {
+test("scanCadDirectory ignores non-closure Python dependency changes for STEP artifact freshness", () => {
   const repoRoot = makeTempRepo();
   try {
-    const stepHash = writeStep(path.join(repoRoot, "workspace/generated/generated.step"));
-    const generatorPath = path.join(repoRoot, "workspace/generated/generated.py");
-    writeFile(path.join(repoRoot, "workspace/generated/generated.py"), [
-      "def gen_step():",
-      "    return None",
-      "",
-    ].join("\n"));
+    const generatorPath = path.join(repoRoot, "workspace/generated/generated.step.py");
+    writeFile(generatorPath, "def gen_step():\n    return None\n");
     const sourceHash = sha256Buffer(fs.readFileSync(generatorPath));
     writeFile(path.join(repoRoot, "workspace/generated/helper.py"), "SIZE = 1\n");
-    writeFile(path.join(repoRoot, "workspace/generated/.generated.step.glb"), topologyGlb({
-      sourceKind: "python",
-      sourcePath: "workspace/generated/generated.py",
-      sourceHash,
-      stepHash,
+    writePackage(repoRoot, "workspace/generated/generated.step.py", {
       entryKind: "part",
-    }));
-    writeFile(path.join(repoRoot, "workspace/generated/helper.py"), "SIZE = 2\n");
+      sourceKind: "python",
+      sourcePath: "generated.step.py",
+      sourceHash,
+      sourceClosureFiles: ["generated.step.py"],
+    });
+    // helper.py is NOT in the generator's recorded closure, so editing it (even newer) is ignored.
+    const future = new Date(Date.now() + 60_000);
+    fs.writeFileSync(path.join(repoRoot, "workspace/generated/helper.py"), "SIZE = 2\n");
+    fs.utimesSync(path.join(repoRoot, "workspace/generated/helper.py"), future, future);
 
     const catalog = scanCadDirectory({ repoRoot, rootDir: "workspace" });
-    const entry = entryByFile(catalog, "generated/generated.step");
+    const entry = entryByFile(catalog, "generated/generated.step.py");
 
     assert.equal(entry.artifact, undefined);
     assert.equal(entry.sourceKind, "python");
@@ -524,24 +511,25 @@ test("scanCadDirectory ignores Python dependency changes for STEP artifact fresh
   }
 });
 
-test("scanCadDirectory keeps Python artifact current when STEP file hash matches", () => {
+test("scanCadDirectory keeps a Python artifact current when its generator predates the build", () => {
   const repoRoot = makeTempRepo();
   try {
-    const stepHash = writeStep(path.join(repoRoot, "workspace/generated/generated.step"));
-    const generatorPath = path.join(repoRoot, "workspace/generated/generated.py");
+    const generatorPath = path.join(repoRoot, "workspace/generated/generated.step.py");
     writeFile(generatorPath, "def gen_step():\n    return None\n");
     const sourceHash = sha256Buffer(fs.readFileSync(generatorPath));
-    writeFile(path.join(repoRoot, "workspace/generated/.generated.step.glb"), topologyGlb({
-      sourceKind: "python",
-      sourcePath: "workspace/generated/generated.py",
-      sourceHash,
-      stepHash,
+    writePackage(repoRoot, "workspace/generated/generated.step.py", {
       entryKind: "part",
-    }));
-    writeFile(generatorPath, "def gen_step():\n    return 'changed source, same STEP'\n");
+      sourceKind: "python",
+      sourcePath: "generated.step.py",
+      sourceHash,
+      sourceClosureFiles: ["generated.step.py"],
+    });
+    // The generator is older than the built descriptor → current (no buildable error).
+    const past = new Date(Date.now() - 60_000);
+    fs.utimesSync(generatorPath, past, past);
 
     const catalog = scanCadDirectory({ repoRoot, rootDir: "workspace" });
-    const entry = entryByFile(catalog, "generated/generated.step");
+    const entry = entryByFile(catalog, "generated/generated.step.py");
 
     assert.equal(entry.artifact, undefined);
     assert.equal(entry.sourceKind, "python");
@@ -585,122 +573,53 @@ test("readStepSourceStatus reports missing and current STEP files", () => {
   }
 });
 
-test("scanCadDirectory preserves Python source kind when Python artifacts have topology errors", () => {
-  const repoRoot = makeTempRepo();
-  try {
-    const stepHash = writeStep(path.join(repoRoot, "workspace/generated/generated.step"));
-    writeFile(path.join(repoRoot, "workspace/sources/generated.py"), "def gen_step():\n    return None\n");
-    const sourceHash = sha256Buffer(fs.readFileSync(path.join(repoRoot, "workspace/sources/generated.py")));
-    writeFile(path.join(repoRoot, "workspace/generated/.generated.step.glb"), topologyGlb({
-      sourceKind: "python",
-      sourcePath: "workspace/sources/generated.py",
-      sourceHash,
-      stepHash,
-      entryKind: "part",
-    }, { displayEdges: false }));
-
-    const catalog = scanCadDirectory({ repoRoot, rootDir: "workspace" });
-    const entry = entryByFile(catalog, "generated/generated.step");
-
-    assert.equal(entry.sourceKind, "python");
-    assert.equal(entry.artifact.error, "missing_edge_topology");
-    assert.equal(entry.artifact.sourceKind, "python");
-  } finally {
-    fs.rmSync(repoRoot, { recursive: true, force: true });
-  }
-});
-
 test("scanCadDirectory keeps same-stem generator details out of catalog entries", () => {
   const repoRoot = makeTempRepo();
   const stepHash = writeStep(path.join(repoRoot, "workspace/raw/raw.step"));
   writeFile(path.join(repoRoot, "workspace/raw/raw.py"), "def gen_step():\n    return None\n");
-  writeFile(path.join(repoRoot, "workspace/raw/.raw.step.glb"), topologyGlb({
-    sourcePath: "workspace/raw/raw.step",
-    stepHash,
+  writePackage(repoRoot, "workspace/raw/raw.step", {
     entryKind: "part",
-  }));
+    sourceKind: "step",
+    stepHash,
+  });
 
   const catalog = scanCadDirectory({ repoRoot, rootDir: "workspace" });
   const entry = entryByFile(catalog, "raw/raw.step");
 
   assert.equal(entry.artifact, undefined);
   assert.equal(entry.sourceKind, "step");
-  assert.ok(entry.url.startsWith("/workspace/raw/.raw.step.glb?v="));
+  assert.ok(entry.url.startsWith("/workspace/raw/__cadcache__/models/raw.step?v="));
   assert.equal(entry.hash.length, 64);
   assert.equal(entry.stepArtifact, undefined);
   assert.equal(entry.step, undefined);
 });
 
-test("scanCadDirectory ignores legacy STEP artifact folders and reports missing canonical GLB", () => {
+test("scanCadDirectory ignores legacy STEP artifact folders and reports missing canonical package", () => {
   const repoRoot = makeTempRepo();
-  const stepHash = writeStep(path.join(repoRoot, "workspace/sample_part/sample_part.step"));
-  writeFile(path.join(repoRoot, "workspace/sample_part/.sample_part.step/model.glb"), topologyGlb({
-    cadRef: "workspace/sample_part/sample_part",
-    sourcePath: "workspace/sample_part/sample_part.step",
-    stepHash,
-    entryKind: "part",
-    stats: { shapeCount: 1 },
-  }));
+  writeStep(path.join(repoRoot, "workspace/sample_part/sample_part.step"));
+  // A stale pre-__cadcache__ in-folder artifact folder must never become a render artifact;
+  // with no package in __cadcache__, the committed STEP file is still discovered but its
+  // canonical package is reported missing.
+  writeFile(path.join(repoRoot, "workspace/sample_part/.sample_part.step/model.glb"), "legacy-artifact-bytes");
 
   const catalog = scanCadDirectory({ repoRoot, rootDir: "workspace" });
   const entry = entryByFile(catalog, "sample_part/sample_part.step");
 
   assert.equal(entry.kind, "part");
   assertStepArtifactError(entry, "missing_glb");
-  assert.equal(entry.url, "/workspace/sample_part/.sample_part.step.glb");
+  assert.equal(entry.url, "/workspace/sample_part/__cadcache__/models/sample_part.step");
   assert.equal(entry.hash, "");
   assert.equal(entry.bytes, 0);
-});
-
-test("scanCadDirectory reports malformed canonical GLBs as missing STEP topology", () => {
-  const repoRoot = makeTempRepo();
-  writeStep(path.join(repoRoot, "workspace/sample_part/sample_part.step"));
-  writeFile(path.join(repoRoot, "workspace/sample_part/.sample_part.step.glb"), "not a glb");
-
-  const catalog = scanCadDirectory({ repoRoot, rootDir: "workspace" });
-  const entry = entryByFile(catalog, "sample_part/sample_part.step");
-
-  assertStepArtifactError(entry, "missing_step_topology");
-});
-
-test("scanCadDirectory reports old STEP_topology schema versions", () => {
-  const repoRoot = makeTempRepo();
-  const stepHash = writeStep(path.join(repoRoot, "workspace/sample_part/sample_part.step"));
-  writeFile(path.join(repoRoot, "workspace/sample_part/.sample_part.step.glb"), topologyGlb({
-    sourcePath: "workspace/sample_part/sample_part.step",
-    stepHash,
-    entryKind: "part",
-  }, { extensionSchemaVersion: STEP_TOPOLOGY_SCHEMA_VERSION - 1 }));
-
-  const catalog = scanCadDirectory({ repoRoot, rootDir: "workspace" });
-  const entry = entryByFile(catalog, "sample_part/sample_part.step");
-
-  assertStepArtifactError(entry, "unsupported_step_topology");
-});
-
-test("scanCadDirectory reports future STEP_topology schema versions", () => {
-  const repoRoot = makeTempRepo();
-  const stepHash = writeStep(path.join(repoRoot, "workspace/sample_part/sample_part.step"));
-  writeFile(path.join(repoRoot, "workspace/sample_part/.sample_part.step.glb"), topologyGlb({
-    sourcePath: "workspace/sample_part/sample_part.step",
-    stepHash,
-    entryKind: "part",
-  }, { extensionSchemaVersion: STEP_TOPOLOGY_SCHEMA_VERSION + 1 }));
-
-  const catalog = scanCadDirectory({ repoRoot, rootDir: "workspace" });
-  const entry = entryByFile(catalog, "sample_part/sample_part.step");
-
-  assertStepArtifactError(entry, "unsupported_step_topology");
 });
 
 test("scanCadDirectory reports stale STEP hashes recorded in GLB artifacts", () => {
   const repoRoot = makeTempRepo();
   const actualStepHash = writeStep(path.join(repoRoot, "workspace/sample_part/sample_part.step"));
-  writeFile(path.join(repoRoot, "workspace/sample_part/.sample_part.step.glb"), topologyGlb({
-    sourcePath: "workspace/sample_part/sample_part.step",
-    stepHash: "step-hash-from-glb",
+  writePackage(repoRoot, "workspace/sample_part/sample_part.step", {
     entryKind: "part",
-  }));
+    sourceKind: "step",
+    stepHash: "step-hash-from-glb",
+  });
 
   const catalog = scanCadDirectory({ repoRoot, rootDir: "workspace" });
   const entry = entryByFile(catalog, "sample_part/sample_part.step");
@@ -714,70 +633,31 @@ test("scanCadDirectory reports stale STEP hashes recorded in GLB artifacts", () 
   assert.equal(entry.artifact.currentHash, actualStepHash);
   assert.equal(
     entry.artifact.message,
-    "Generated GLB doesn't match the hash of the STEP file: workspace/sample_part/.sample_part.step.glb."
+    "Generated GLB doesn't match the hash of the STEP file: workspace/sample_part/__cadcache__/models/sample_part.step."
   );
-  assert.ok(entry.url.startsWith("/workspace/sample_part/.sample_part.step.glb?v="));
+  assert.ok(entry.url.startsWith("/workspace/sample_part/__cadcache__/models/sample_part.step?v="));
   assert.equal(entry.hash.length, 64);
   assert.ok(entry.bytes > 0);
   assert.equal(entry.stepArtifact, undefined);
   assert.equal(entry.step, undefined);
 });
 
-test("scanCadDirectory preserves Python source kind for stale STEP GLB artifacts", () => {
-  const repoRoot = makeTempRepo();
-  const actualStepHash = writeStep(path.join(repoRoot, "workspace/generated/generated.step"));
-  writeFile(path.join(repoRoot, "workspace/generated/generated.py"), "def gen_step():\n    return None\n");
-  writeFile(path.join(repoRoot, "workspace/generated/.generated.step.glb"), topologyGlb({
-    sourceKind: "python",
-    sourcePath: "workspace/generated/generated.py",
-    sourceHash: "old-python-source-hash",
-    stepHash: "step-hash-from-glb",
-    entryKind: "part",
-  }));
-
-  const catalog = scanCadDirectory({ repoRoot, rootDir: "workspace" });
-  const entry = entryByFile(catalog, "generated/generated.step");
-
-  assert.notEqual(actualStepHash, "step-hash-from-glb");
-  assert.equal(entry.sourceKind, "python");
-  assert.equal(entry.source.file, "workspace/generated/generated.py");
-  assert.equal(entry.artifact.ok, false);
-  assert.equal(entry.artifact.error, "stale_step_artifact");
-  assert.equal(entry.artifact.sourceKind, "python");
-});
-
-test("scanCadDirectory accepts legacy STEP_topology CAD refs when the GLB is otherwise valid", () => {
+test("scanCadDirectory accepts a valid component-GLB package for a committed STEP file", () => {
   const repoRoot = makeTempRepo();
   const stepHash = writeStep(path.join(repoRoot, "workspace/sample_part/sample_part.step"));
-  writeFile(path.join(repoRoot, "workspace/sample_part/.sample_part.step.glb"), topologyGlb({
-    cadRef: "workspace/other_part",
-    sourcePath: "workspace/sample_part/sample_part.step",
-    stepHash,
+  writePackage(repoRoot, "workspace/sample_part/sample_part.step", {
     entryKind: "part",
-  }));
+    sourceKind: "step",
+    stepHash,
+  });
 
   const catalog = scanCadDirectory({ repoRoot, rootDir: "workspace" });
   const entry = entryByFile(catalog, "sample_part/sample_part.step");
 
   assert.equal(entry.artifact, undefined);
-  assert.ok(entry.url.startsWith("/workspace/sample_part/.sample_part.step.glb?v="));
+  assert.ok(entry.url.startsWith("/workspace/sample_part/__cadcache__/models/sample_part.step?v="));
   assert.equal(entry.hash.length, 64);
   assert.equal(entry.assets, undefined);
-});
-
-test("scanCadDirectory reports missing edge topology", () => {
-  const repoRoot = makeTempRepo();
-  const stepHash = writeStep(path.join(repoRoot, "workspace/sample_part/sample_part.step"));
-  writeFile(path.join(repoRoot, "workspace/sample_part/.sample_part.step.glb"), topologyGlb({
-    sourcePath: "workspace/sample_part/sample_part.step",
-    stepHash,
-    entryKind: "part",
-  }, { displayEdges: false }));
-
-  const catalog = scanCadDirectory({ repoRoot, rootDir: "workspace" });
-  const entry = entryByFile(catalog, "sample_part/sample_part.step");
-
-  assertStepArtifactError(entry, "missing_edge_topology");
 });
 
 test("isServedCadAsset allows hidden STEP runtime modules only by convention", () => {
@@ -791,21 +671,6 @@ test("isCatalogRelevantPath watches Python generators without serving them", () 
   assert.equal(isServedCadAsset(path.join("workspace", "generated", "part.py")), false);
   assert.equal(isCatalogRelevantPath(path.join("workspace", "generated", "part.py")), true);
   assert.equal(isCatalogRelevantPath(path.join("workspace", "__pycache__", "part.py")), false);
-});
-
-test("scanCadDirectory reports missing selector topology", () => {
-  const repoRoot = makeTempRepo();
-  const stepHash = writeStep(path.join(repoRoot, "workspace/sample_part/sample_part.step"));
-  writeFile(path.join(repoRoot, "workspace/sample_part/.sample_part.step.glb"), topologyGlb({
-    sourcePath: "workspace/sample_part/sample_part.step",
-    stepHash,
-    entryKind: "part",
-  }, { selector: false }));
-
-  const catalog = scanCadDirectory({ repoRoot, rootDir: "workspace" });
-  const entry = entryByFile(catalog, "sample_part/sample_part.step");
-
-  assertStepArtifactError(entry, "missing_selector_topology");
 });
 
 test("scanCadDirectory uses the requested root directory as the catalog root", () => {

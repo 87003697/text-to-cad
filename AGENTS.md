@@ -30,10 +30,9 @@ CI/CD or build-pipeline changes — never by default and never as part of a
 requested release. Rerun `Release` with `set_version` pinned to the current
 version to resume a failed publish.
 
-The standalone `Deploy Docs` and `Deploy Viewer` workflows redeploy the
-individual web apps from `main`, and the standalone `Upload Models` workflow
-uploads the `models/` catalog to Vercel Blob from `develop`, all without
-running a release. `main` is publish-only; pushing `develop` runs tests but
+The standalone `Deploy Docs` workflow redeploys the docs site from `main`
+without running a release. The CAD Viewer is a local-filesystem app with no
+hosted deployment. `main` is publish-only; pushing `develop` runs tests but
 never publishes. See the Releases section in `CONTRIBUTING.md` for the full
 flow, CI/CD-testing and resume options, and local/manual fallbacks.
 

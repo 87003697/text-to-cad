@@ -436,17 +436,6 @@ jobs:
           fi
           echo "published=true" >> "$GITHUB_OUTPUT"
 
-  upload-models:
-    name: Upload Models
-    needs:
-      - release-pr
-      - publish
-    if: ${{ needs.publish.outputs.published == 'true' && inputs.target_branch == 'main' }}
-    uses: ./.github/workflows/upload-models.yml
-    with:
-      ref: ${{ needs.release-pr.outputs.source_sha }}
-    secrets: inherit
-
   deploy-docs:
     name: Deploy Docs
     needs: publish
@@ -456,22 +445,11 @@ jobs:
       ref: ${{ needs.publish.outputs.publish_sha }}
     secrets: inherit
 
-  deploy-viewer:
-    name: Deploy Viewer
-    needs: publish
-    if: ${{ needs.publish.outputs.published == 'true' && inputs.target_branch == 'main' }}
-    uses: ./.github/workflows/deploy-viewer.yml
-    with:
-      ref: ${{ needs.publish.outputs.publish_sha }}
-    secrets: inherit
-
   tag-release:
     name: Tag and GitHub Release
     needs:
       - publish
-      - upload-models
       - deploy-docs
-      - deploy-viewer
     if: ${{ needs.publish.outputs.published == 'true' && inputs.target_branch == 'main' }}
     runs-on: ubuntu-latest
 

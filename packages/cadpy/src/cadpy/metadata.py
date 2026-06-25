@@ -36,9 +36,6 @@ class GeneratorMetadata:
 
 STEP_ENVELOPE_FIELDS = {
     "shape",
-    "instances",
-    "children",
-    "assembly_mates",
     "stl",
     "3mf",
     "mesh_tolerance",
@@ -210,30 +207,18 @@ def _parse_step_return_metadata(
         envelope=envelope,
         allowed_fields=STEP_ENVELOPE_FIELDS,
     )
-    has_shape = "shape" in envelope
-    has_instances = "instances" in envelope
-    has_children = "children" in envelope
-    has_assembly = has_instances or has_children
-    if has_instances and has_children:
+    if "shape" not in envelope:
         raise ValueError(
-            f"{_display_path(script_path)} gen_step() envelope must define only one of "
-            "'instances' or 'children'"
+            f"{_display_path(script_path)} gen_step() envelope must define 'shape'"
         )
-    if has_shape == has_assembly:
-        raise ValueError(
-            f"{_display_path(script_path)} gen_step() envelope must define exactly one of "
-            "'shape', 'instances', or 'children'"
+    return (
+        "assembly"
+        if _is_compound_assembly_expression(
+            envelope["shape"],
+            local_assignments=local_assignments,
         )
-    if has_shape:
-        return (
-            "assembly"
-            if _is_compound_assembly_expression(
-                envelope["shape"],
-                local_assignments=local_assignments,
-            )
-            else "part"
-        )
-    return "assembly"
+        else "part"
+    )
 
 
 def _parse_bare_step_return(
@@ -243,10 +228,6 @@ def _parse_bare_step_return(
     return_node: ast.expr,
     local_assignments: dict[str, ast.expr] | None = None,
 ) -> str:
-    if isinstance(return_node, ast.List):
-        return "assembly"
-    if isinstance(return_node, ast.Name) and return_node.id in {"instances", "children"}:
-        return "assembly"
     if _is_compound_assembly_expression(
         return_node,
         local_assignments=local_assignments or {},
@@ -254,8 +235,8 @@ def _parse_bare_step_return(
         return "assembly"
     if isinstance(return_node, ast.Constant) and return_node.value is None:
         raise ValueError(
-            f"{_display_path(script_path)} {function.name}() must return a shape, assembly list, "
-            "or legacy envelope dict"
+            f"{_display_path(script_path)} {function.name}() must return a build123d shape "
+            "or a {'shape': ...} envelope"
         )
     return "part"
 

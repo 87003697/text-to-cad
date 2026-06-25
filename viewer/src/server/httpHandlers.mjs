@@ -270,22 +270,6 @@ export function createCadViewerApiMiddleware({
       }
       return;
     }
-    if (requestUrl.pathname === "/__cad/generation-status") {
-      if (typeof backend.readGenerationStatus !== "function") {
-        sendJson(res, 501, {
-          error: "Generation status is not available for this CAD Viewer backend",
-        });
-        return;
-      }
-      try {
-        sendJson(res, 200, await backend.readGenerationStatus({ rootDir: activeRootDir }));
-      } catch (error) {
-        sendJson(res, 400, {
-          error: errorMessage(error),
-        });
-      }
-      return;
-    }
     if (requestUrl.pathname === "/__cad/download") {
       const method = String(req.method || "GET").toUpperCase();
       if (method !== "GET") {
@@ -494,62 +478,105 @@ export function createCadViewerApiMiddleware({
       }
       return;
     }
-    if (requestUrl.pathname === "/__cad/step-source-status") {
-      if (typeof backend.readStepSourceStatus !== "function") {
-        sendJson(res, 501, {
-          error: "STEP source status is not available for this CAD Viewer backend",
+    if (requestUrl.pathname === "/__cad/step-export") {
+      const method = String(req.method || "GET").toUpperCase();
+      if (method !== "POST") {
+        res.setHeader("allow", "POST");
+        sendJson(res, 405, {
+          error: "Use POST to export STEP models",
+        });
+        return;
+      }
+      if (
+        backend.kind !== "local-fs" ||
+        typeof backend.generateStepExport !== "function" ||
+        typeof backend.resolveRoot !== "function"
+      ) {
+        sendJson(res, 405, {
+          error: "STEP export is only available for the local filesystem backend",
         });
         return;
       }
       try {
+        const body = await readJsonBody(req);
         const catalog = await backend.readCatalog({ rootDir: activeRootDir, fileRef: activeFileRef });
-        const request = {
-          fileRef: activeFileRef,
-          rootDir: activeRootDir,
+        const resolvedRoot = typeof backend.resolveRequestRoot === "function"
+          ? backend.resolveRequestRoot({ rootDir: activeRootDir, fileRef: activeFileRef })
+          : backend.resolveRoot(activeRootDir);
+        const format = requestUrl.searchParams.get("format") || body.format || "step";
+        const result = await backend.generateStepExport({
+          fileRef: activeFileRef || body.file,
+          format,
+          resolvedRoot,
           catalog,
-        };
-        if (typeof backend.resolveRequestRoot === "function") {
-          request.resolvedRoot = backend.resolveRequestRoot({ rootDir: activeRootDir, fileRef: activeFileRef });
-        } else if (typeof backend.resolveRoot === "function" && activeRootDir) {
-          request.resolvedRoot = backend.resolveRoot(activeRootDir);
+        });
+        if (result?.cancelled) {
+          // User dismissed the native save dialog — not an error, just nothing written.
+          sendJson(res, 200, { ok: false, cancelled: true });
+          return;
         }
-        sendJson(res, 200, await backend.readStepSourceStatus(request));
+        if (!result?.ok) {
+          sendJson(res, 400, { ok: false, error: result?.error || "STEP export failed" });
+          return;
+        }
+        const payload = {
+          ok: true,
+          path: result.path,
+          filename: result.filename,
+          format: result.format,
+        };
+        if (result.catalogChanged) {
+          // The export landed inside the active root, so the catalog gained/updated an entry.
+          onCatalogChanged(resolvedRoot);
+          payload.catalogChanged = true;
+        }
+        if (result.fallback && result.outputFileRef) {
+          // No native dialog: the file was written beside the source; hand it to the browser.
+          payload.fallback = true;
+          payload.downloadUrl = `/__cad/download?dir=${encodeURIComponent(activeRootDir)}&file=${encodeURIComponent(result.outputFileRef)}&asset=output`;
+        }
+        sendJson(res, 200, payload);
       } catch (error) {
         sendJson(res, 400, {
+          ok: false,
           error: errorMessage(error),
         });
       }
       return;
     }
-    if (requestUrl.pathname === "/__cad/step-artifact") {
-      if (!enableStepArtifactBackend) {
+    // Unified render-artifact endpoint (replaces step-artifact + step-source-status). GET reports
+    // freshness (ready | needs-build | error); POST (re)builds the artifact and refreshes the
+    // catalog. Direct-render types resolve to "ready" with no work.
+    if (requestUrl.pathname === "/__cad/artifact") {
+      if (typeof backend.artifactStatus !== "function" || typeof backend.resolveArtifact !== "function") {
+        sendJson(res, 501, {
+          error: "Render-artifact resolution is not available for this CAD Viewer backend",
+        });
+        return;
+      }
+      const isBuild = req.method === "POST";
+      if (isBuild && !enableStepArtifactBackend) {
         if (claimDisabledStepArtifactRoute) {
-          sendJson(res, 501, {
-            error: "STEP artifact generation is not enabled for this CAD Viewer backend",
-          });
+          sendJson(res, 501, { error: "Render-artifact generation is not enabled for this CAD Viewer backend" });
           return;
         }
         next();
         return;
       }
-      if (req.method !== "POST") {
-        sendJson(res, 405, {
-          error: "Use POST to generate a STEP artifact",
-        });
-        return;
-      }
-      if (typeof backend.resolveRoot !== "function") {
-        sendJson(res, 501, {
-          error: "STEP artifact generation requires a local filesystem CAD Viewer backend",
-        });
+      if (req.method !== "GET" && req.method !== "POST") {
+        sendJson(res, 405, { error: "Use GET (status) or POST (build) for /__cad/artifact" });
         return;
       }
       try {
         const catalog = await backend.readCatalog({ rootDir: activeRootDir, fileRef: activeFileRef });
         const resolvedRoot = typeof backend.resolveRequestRoot === "function"
           ? backend.resolveRequestRoot({ rootDir: activeRootDir, fileRef: activeFileRef })
-          : backend.resolveRoot(activeRootDir);
-        const result = await backend.generateStepArtifact({
+          : (typeof backend.resolveRoot === "function" && activeRootDir ? backend.resolveRoot(activeRootDir) : undefined);
+        if (!isBuild) {
+          sendJson(res, 200, backend.artifactStatus({ fileRef: activeFileRef, resolvedRoot, catalog }));
+          return;
+        }
+        const result = await backend.resolveArtifact({
           fileRef: activeFileRef,
           force: requestUrl.searchParams.get("force") === "1",
           resolvedRoot,
@@ -559,17 +586,9 @@ export function createCadViewerApiMiddleware({
           ? await backend.refreshCatalog({ rootDir: activeRootDir, fileRef: activeFileRef })
           : await backend.readCatalog({ rootDir: activeRootDir, fileRef: activeFileRef });
         onCatalogChanged(resolvedRoot);
-        sendJson(res, result.ok ? 200 : 500, {
-          ok: result.ok,
-          error: result.error,
-          result: result.result,
-          entry: backend.entryForSourcePath(nextCatalog, resolvedRoot, result.stepPath),
-          catalog: nextCatalog,
-        });
+        sendJson(res, result?.ok === false ? 500 : 200, { ...result, catalog: nextCatalog });
       } catch (error) {
-        sendJson(res, 400, {
-          error: errorMessage(error),
-        });
+        sendJson(res, 400, { error: errorMessage(error) });
       }
       return;
     }

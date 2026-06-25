@@ -12,11 +12,17 @@ import {
   sortCatalogEntries,
 } from "./catalog/cadDirectoryScanner.mjs";
 import {
-  generationStatusDir as resolveGenerationStatusDir,
-  readGenerationStatus,
-} from "./catalog/generationStatus.mjs";
+  generationLockPath,
+  generationLockActive,
+  awaitGenerationLock,
+} from "./catalog/generationLock.mjs";
+import { inlineStepGlbArtifactPathForSource } from "cadjs/common/stepSidecars.mjs";
 import { pathIsInside } from "cadjs/lib/pathUtils.mjs";
 import { ensureStepTopologyArtifact } from "./step/stepArtifactCompiler.mjs";
+import { runPythonStepExport } from "./step/pythonStepExport.mjs";
+import { pickSaveDestination } from "./saveAsDialog.mjs";
+import { createRenderArtifactPipeline } from "./artifact/renderArtifact.mjs";
+import { createStepArtifactProvider } from "./artifact/stepArtifactProvider.mjs";
 import { exportImplicitCadFile, IMPLICIT_CAD_EXPORT_FORMATS } from "implicitjs/export";
 import { pathIsImplicitCadSource } from "implicitjs/model";
 
@@ -94,6 +100,22 @@ function ensurePathInsideRoot(filePath, resolvedRoot) {
   }
 }
 
+// User-facing model export ("Export model" toolbar/context-menu action). Logical format -> file
+// suffix; the cadpy.step_export_target module owns the actual geometry conversion.
+const STEP_EXPORT_FORMAT_SUFFIX = Object.freeze({ step: "step", stl: "stl", "3mf": "3mf", glb: "glb" });
+
+function normalizeStepExportFormat(format) {
+  const normalized = String(format || "").trim().toLowerCase();
+  if (!Object.prototype.hasOwnProperty.call(STEP_EXPORT_FORMAT_SUFFIX, normalized)) {
+    throw new Error(`Unsupported export format: ${format}`);
+  }
+  return normalized;
+}
+
+function stepExportErrorMessage(result) {
+  return String(result?.error || "STEP export failed").trim() || "STEP export failed";
+}
+
 function normalizedFileAssetKind(value) {
   const asset = String(value || "output").trim().toLowerCase();
   if (asset === "asset") {
@@ -126,7 +148,10 @@ function sameStemPythonGeneratorPath(stepPath) {
   if (extension !== ".step" && extension !== ".stp") {
     return "";
   }
-  const candidate = path.join(path.dirname(stepPath), `${path.basename(stepPath, extension)}.py`);
+  // The generator for the logical STEP `<name>.step` is `<name>.step.py` (append .py to the full
+  // step filename) — matches stepArtifactCompiler.sameStemPythonGeneratorPath. An imported STEP has
+  // no such sibling and resolves to "".
+  const candidate = path.join(path.dirname(stepPath), `${path.basename(stepPath)}.py`);
   return fileHasGenStep(candidate) ? candidate : "";
 }
 
@@ -376,28 +401,6 @@ function absolutizeCatalog(catalog, context) {
   });
 }
 
-function absolutizeGenerationStatus(status, rootPath) {
-  const files = {};
-  for (const [file, value] of Object.entries(status?.files || {})) {
-    const absolute = absoluteFileRef(path.resolve(rootPath, String(file || "")));
-    files[absolute] = {
-      ...value,
-      file: absolute,
-      rootRelativeFile: relativeFileRef(rootPath, absolute),
-    };
-  }
-  return {
-    schemaVersion: 1,
-    runs: (Array.isArray(status?.runs) ? status.runs : []).map((run) => ({
-      ...run,
-      files: (Array.isArray(run?.files) ? run.files : [])
-        .map((file) => absoluteFileRef(path.resolve(rootPath, String(file || ""))))
-        .filter(Boolean),
-    })),
-    files,
-  };
-}
-
 export function createLocalAssetBackend({
   directoryRoot = process.cwd(),
   rootDir = "",
@@ -620,8 +623,11 @@ export function createLocalAssetBackend({
           if (!fileHasGenStep(candidatePath)) {
             throw new Error(`Python generator is not a gen_step() source: ${normalizedRef}`);
           }
+          // `<name>.step.py` already carries the `.step` in its stem; legacy `<name>.py` does not.
+          const stem = path.basename(candidatePath, extension);
+          const stepBase = /\.(step|stp)$/i.test(stem) ? stem : `${stem}.step`;
           return {
-            stepPath: path.join(path.dirname(candidatePath), `${path.basename(candidatePath, extension)}.step`),
+            stepPath: path.join(path.dirname(candidatePath), stepBase),
             sourcePath: candidatePath,
             skipStepWrite: true,
           };
@@ -629,11 +635,15 @@ export function createLocalAssetBackend({
         if (extension !== ".step" && extension !== ".stp") {
           throw new Error("Only STEP/STP sources or same-stem Python generators can generate STEP topology artifacts");
         }
-        const generatorPath = sameStemPythonGeneratorPath(candidatePath);
+        // An existing `.step`/`.stp` is ALWAYS an imported entry — its own file is the source.
+        // Do NOT auto-link it to a same-stem `.step.py` generator: that generator is a SEPARATE
+        // generated entry with its own entry-keyed render package. (A generated model's logical
+        // `.step` does not exist on disk, so it never reaches this existing-file branch — its
+        // fileRef is the `.step.py`, handled above, or the not-on-disk fallback below.)
         return {
           stepPath: candidatePath,
-          sourcePath: generatorPath,
-          skipStepWrite: Boolean(generatorPath),
+          sourcePath: "",
+          skipStepWrite: false,
         };
       }
     }
@@ -830,23 +840,133 @@ export function createLocalAssetBackend({
     } catch {
       hasStepFile = false;
     }
-    if (!hasStepFile) {
-      throw new Error("CAD Viewer only regenerates GLB artifacts for existing STEP/STP files.");
+    // A generated model has no committed STEP — regenerate it from its same-stem Python
+    // gen_step generator (the compiler infers this too, but the route must not reject it).
+    const pythonGeneratorPath = hasStepFile ? "" : sameStemPythonGeneratorPath(stepPath);
+    let hasPythonGenerator = false;
+    try {
+      hasPythonGenerator = Boolean(pythonGeneratorPath) && fs.statSync(pythonGeneratorPath).isFile();
+    } catch {
+      hasPythonGenerator = false;
+    }
+    if (!hasStepFile && !hasPythonGenerator) {
+      throw new Error("CAD Viewer regenerates GLB artifacts only for existing STEP/STP files or their same-stem Python generators.");
     }
     const context = scanContextForRoot(resolvedRoot);
     const result = await stepArtifactGenerator({
       repoRoot: context.scanRepoRoot,
       stepPath,
-      sourcePath: "",
+      sourcePath: hasPythonGenerator ? pythonGeneratorPath : "",
       force,
       skipStepWrite: false,
       writeStepAfterArtifact: false,
     });
+    // Bump the package descriptor mtime so the scanner's source-mtime staleness check clears even
+    // when the Python build was a content-hash no-op (skipped geometry rebuild). Otherwise an
+    // mtime-only edit would re-flag the package stale and re-trigger generation on every open.
+    if (result?.ok && result.glbPath) {
+      try {
+        const descriptorPath = path.join(result.glbPath, "assembly.json");
+        if (fs.statSync(descriptorPath).isFile()) {
+          const now = new Date();
+          fs.utimesSync(descriptorPath, now, now);
+        }
+      } catch {
+        // best-effort: a missing/!file descriptor just means the next open re-checks freshness
+      }
+    }
     return {
       ok: Boolean(result?.ok),
       error: result?.ok ? "" : stepArtifactGenerationError(result),
       result,
       stepPath,
+    };
+  }
+
+  async function generateStepExport({
+    fileRef,
+    format = "step",
+    resolvedRoot = resolveRequestRoot({ fileRef }),
+    catalog = null,
+    suggestedDir = "",
+  } = {}) {
+    const normalizedFormat = normalizeStepExportFormat(format);
+    // Resolve the model's on-disk source (a STEP/STP file, or a generated `.step.py` whose
+    // logical STEP path may not exist). Guard the SOURCE against path traversal; the export
+    // DESTINATION is intentionally allowed anywhere the user picks in the save dialog.
+    const { stepPath, sourcePath } = resolveStepSource(fileRef, { resolvedRoot, catalog });
+    ensurePathInsideRoot(stepPath, resolvedRoot);
+    const context = scanContextForRoot(resolvedRoot);
+    const baseName = path.basename(stepPath).replace(/\.(step|stp)$/i, "");
+    const suggestedName = `${baseName}.${STEP_EXPORT_FORMAT_SUFFIX[normalizedFormat]}`;
+    const candidateDir = suggestedDir ? path.resolve(suggestedDir) : "";
+    const defaultDir = candidateDir && pathIsInside(candidateDir, resolvedRoot.rootPath)
+      ? candidateDir
+      : path.dirname(stepPath);
+
+    const destination = await pickSaveDestination({
+      suggestedName,
+      defaultDir,
+      prompt: `Export ${baseName} as ${normalizedFormat.toUpperCase()}`,
+    });
+    if (destination?.cancelled) {
+      return { ok: false, cancelled: true };
+    }
+
+    if (destination?.path) {
+      const result = await runPythonStepExport({
+        repoRoot: context.scanRepoRoot,
+        stepPath,
+        sourcePath,
+        format: normalizedFormat,
+        outPath: destination.path,
+      });
+      if (!result?.ok) {
+        return { ok: false, error: stepExportErrorMessage(result) };
+      }
+      const outPath = path.resolve(result.path || destination.path);
+      // If the user saved into the active CAD Viewer root, refresh the catalog so the new file
+      // appears in the tree immediately (no manual rescan). Saves outside the root don't touch it.
+      const insideRoot = outPath === resolvedRoot.rootPath || pathIsInside(outPath, resolvedRoot.rootPath);
+      const nextCatalog = insideRoot
+        ? refreshCatalogForPath({ rootDir: resolvedRoot.dir, filePath: outPath })
+        : null;
+      return {
+        ok: true,
+        path: outPath,
+        filename: result.filename || path.basename(outPath),
+        format: normalizedFormat,
+        catalogChanged: insideRoot,
+        ...(nextCatalog ? { catalog: nextCatalog } : {}),
+      };
+    }
+
+    // No native dialog available (e.g. a headless server): export beside the source and hand
+    // the file to the browser via the existing /__cad/download route (mirrors the implicit
+    // export fallback). The destination is inside the root, so the standard download applies.
+    const outputPath = path.join(path.dirname(stepPath), suggestedName);
+    ensurePathInsideRoot(outputPath, resolvedRoot);
+    const result = await runPythonStepExport({
+      repoRoot: context.scanRepoRoot,
+      stepPath,
+      sourcePath,
+      format: normalizedFormat,
+      outPath: outputPath,
+    });
+    if (!result?.ok) {
+      return { ok: false, error: stepExportErrorMessage(result) };
+    }
+    const outputFileRef = path.relative(resolvedRoot.rootPath, outputPath).split(path.sep).join("/");
+    const nextCatalog = refreshCatalogForPath({ rootDir: resolvedRoot.dir, filePath: outputPath });
+    return {
+      ok: true,
+      fallback: true,
+      path: outputPath,
+      filename: path.basename(outputPath),
+      format: normalizedFormat,
+      catalogChanged: true,
+      outputFileRef,
+      catalog: nextCatalog,
     };
   }
 
@@ -907,30 +1027,13 @@ export function createLocalAssetBackend({
     }, context.scanRepoRoot);
   }
 
-  function readGeneratorStatus({ rootDir: nextRootDir = defaultRootDir } = {}) {
-    const resolvedRoot = resolveRoot(effectiveRootDirForRequest(nextRootDir));
-    const context = scanContextForRoot(resolvedRoot);
-    return absolutizeGenerationStatus(readGenerationStatus({
-      repoRoot: context.scanRepoRoot,
-      rootDir: context.scanRootDir,
-    }), resolvedRoot.rootPath);
-  }
-
-  function generationStatusDir(rootDir = defaultRootDir) {
-    const resolvedRoot = resolveRoot(effectiveRootDirForRequest(rootDir));
-    const context = scanContextForRoot(resolvedRoot);
-    return resolveGenerationStatusDir(context.scanRepoRoot, context.scanRootDir);
-  }
-
-  function isGenerationStatusPath(filePath, rootDir = defaultRootDir) {
-    const resolvedRoot = resolveRoot(effectiveRootDirForRequest(rootDir));
-    const resolvedPath = path.resolve(filePath);
-    const name = path.basename(resolvedPath);
-    return (
-      (resolvedPath === resolvedRoot.rootPath || pathIsInside(resolvedPath, resolvedRoot.rootPath)) &&
-      name.startsWith(".") &&
-      name.endsWith(".generation.lock.json")
-    );
+  function lockPathFor({ fileRef, resolvedRoot = resolveRequestRoot({ fileRef }), catalog = null } = {}) {
+    try {
+      const { stepPath } = resolveStepSource(fileRef, { resolvedRoot, catalog: catalog || readCatalogSafe({ fileRef }) });
+      return generationLockPath(inlineStepGlbArtifactPathForSource(stepPath));
+    } catch {
+      return "";
+    }
   }
 
   function entryForSourcePath(catalog, resolvedRoot, sourcePath) {
@@ -980,6 +1083,40 @@ export function createLocalAssetBackend({
     };
   }
 
+  // Render-artifact pipeline: one shareable seam over per-type providers. Today only STEP needs a
+  // generated artifact (the component-GLB package); every other type renders directly from its
+  // committed file (no provider -> always READY). `artifactStatus` reports freshness without
+  // building; `resolveArtifact` (re)builds. Both wrap the existing STEP closures unchanged.
+  const renderArtifactPipeline = createRenderArtifactPipeline({
+    providers: [
+      createStepArtifactProvider({
+        // A STEP model is exactly an entry whose logical file is a .step/.stp (generator models
+        // carry the synthesized <stem>.step; imported models the committed file). No other type does.
+        ownsEntry: (entry) => /\.(step|stp)$/i.test(String(entry?.file || "")),
+        readStatus: ({ fileRef, resolvedRoot, catalog }) =>
+          readStepSourceStatusForFile({ fileRef, resolvedRoot, catalog }),
+        build: ({ fileRef, force, resolvedRoot, catalog }) =>
+          generateStepArtifact({ fileRef, force, resolvedRoot, catalog }),
+        artifactRef: (entry) => String(entry?.url || ""),
+        lockActive: (args) => generationLockActive(lockPathFor(args)),
+        awaitLock: (args) => awaitGenerationLock(lockPathFor(args)),
+      }),
+    ],
+    directRef: (entry) => String(entry?.url || ""),
+  });
+
+  function artifactStatus({ fileRef, resolvedRoot = resolveRequestRoot({ fileRef }), catalog = null } = {}) {
+    const activeCatalog = catalog || readCatalogSafe({ fileRef });
+    const entry = catalogEntryForFileRef(activeCatalog, fileRef);
+    return renderArtifactPipeline.artifactStatus({ fileRef, entry, resolvedRoot, catalog: activeCatalog });
+  }
+
+  function resolveArtifact({ fileRef, force = false, resolvedRoot = resolveRequestRoot({ fileRef }), catalog = null } = {}) {
+    const activeCatalog = catalog || readCatalogSafe({ fileRef });
+    const entry = catalogEntryForFileRef(activeCatalog, fileRef);
+    return renderArtifactPipeline.resolveArtifact({ fileRef, entry, force, resolvedRoot, catalog: activeCatalog });
+  }
+
   return {
     kind: "local-fs",
     canGenerateStepArtifacts: true,
@@ -999,11 +1136,11 @@ export function createLocalAssetBackend({
     openFileAsset,
     resolveSourceFileAccess,
     openSourceFile,
-    readGenerationStatus: readGeneratorStatus,
-    generationStatusDir,
-    isGenerationStatusPath,
     generateStepArtifact,
+    generateStepExport,
     generateImplicitExport,
+    artifactStatus,
+    resolveArtifact,
     entryForSourcePath,
     assetPathForFileRef,
     writeAsset,

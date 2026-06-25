@@ -99,9 +99,8 @@ snapshot, and export logic in the source packages.
 npm run dev          # Vite dev server with local CAD API middleware
 npm run agent:start  # Launcher that chooses mode and reuses/selects a local port
 npm run build        # Production frontend build
-npm run serve        # Serve dist/ with the local or hosted backend
+npm run serve        # Serve dist/ with the local CAD API backend
 npm run test         # Discover and run all JS tests
-npm run upload:blob  # Upload a hosted catalog and supported viewer assets
 ```
 
 `npm run test` uses `scripts/run-tests.mjs`, which discovers
@@ -116,8 +115,6 @@ node scripts/run-tests.mjs src/server/localAssetBackend.test.mjs
 
 Important environment variables:
 
-- `VIEWER_ASSET_BACKEND`: `local-fs` for local files or `vercel-blob` for hosted
-  Blob assets.
 - `VIEWER_DEFAULT_DIR`: default local directory used by Vite dev mode.
   `npm run agent:start -- --dir <path>` sets this automatically when it launches
   Vite.
@@ -146,42 +143,12 @@ filesystem viewing. Setting either variable, or using the old fixed-root startup
 flag, is a hard startup error; use `--dir` for the startup default and an
 absolute `?dir=` URL parameter for review links.
 
-Vercel Blob backend variables:
-
-- `VIEWER_VERCEL_BLOB_PREFIX`: Blob prefix for all catalog assets. For token-free
-  hosted deployments, use the public Blob URL for the prefix, such as
-  `https://<store-id>.public.blob.vercel-storage.com/models2`. Trusted local
-  upload scripts may use the path prefix, such as `models2`.
-
-Hosted Vercel API routes are read-only. They serve the catalog and file assets
-but do not regenerate STEP artifacts or require a Blob read/write token at
-runtime. The hosted backend always reads `catalog.json` at the root of
-`VIEWER_VERCEL_BLOB_PREFIX`; for the example above, that is
-`https://<store-id>.public.blob.vercel-storage.com/models2/catalog.json`. Use
-`VIEWER_VERCEL_BLOB_READ_WRITE_TOKEN` or `BLOB_READ_WRITE_TOKEN` only for
-trusted local upload or maintenance scripts. Hosted server metadata derives the
-viewer URL from
-Vercel's system environment variables (`VERCEL_PROJECT_PRODUCTION_URL`,
-`VERCEL_URL`, then `VERCEL_BRANCH_URL`).
-
-Upload a catalog and supported viewer assets from a local directory with
-`npm run upload:blob -- /path/to/models`. Uploads exclude `mechbench/`,
-`mechbench2/`, `7dof_arm/`, and Python source files by default; public Blob
-catalogs omit Python source paths and URLs. Add a `.vieweruploadignore` file or
-pass `--exclude <pattern>` for project-specific upload filters. Pass
-`--skip-existing --fetch-missing-lfs` for publish-style uploads that reuse
-matching remote catalog assets and fetch only the Git LFS objects needed for
-new or changed uploads. The repository publish wrapper,
-`scripts/viewer/upload-viewer-models-catalog.sh`, owns the branch-defined Blob
-path prefix for model catalog uploads.
-
 Production builds contain the frontend and initial catalog module only. CAD
-assets are served by a backend and are not copied into `dist/`.
+assets are served by the local backend and are not copied into `dist/`.
 
 ## Reference Docs
 
-- [Backend storage](./docs/backend.md): local filesystem and Vercel Blob backend
-  contracts.
+- [Backend storage](./docs/backend.md): local filesystem backend contracts.
 - [Browser storage](./docs/storage.md): URL, `localStorage`, and
   `sessionStorage` ownership.
 - [MoveIt2 server](./docs/moveit2-server.md): optional SRDF websocket backend.

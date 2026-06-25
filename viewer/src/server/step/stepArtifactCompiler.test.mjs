@@ -6,7 +6,7 @@ import path from "node:path";
 import test from "node:test";
 
 import { inlineStepGlbArtifactPathForSource } from "cadjs/common/stepSidecars.mjs";
-import { scanCadDirectory } from "../catalog/cadDirectoryScanner.mjs";
+import { scanCadDirectory, scanCadFile } from "../catalog/cadDirectoryScanner.mjs";
 import {
   ensureStepArtifactsForCatalog,
   ensureStepTopologyArtifact,
@@ -75,6 +75,11 @@ function readGlbChunks(filePath) {
 }
 
 function readStepTopologyIndexManifest(filePath) {
+  // The canonical render artifact is a component-GLB package directory whose
+  // assembly.json descriptor IS the index manifest.
+  if (fs.statSync(filePath).isDirectory()) {
+    return JSON.parse(fs.readFileSync(path.join(filePath, "assembly.json"), "utf8"));
+  }
   const { json, binary } = readGlbChunks(filePath);
   const indexViewIndex = json.extensions?.STEP_topology?.indexView;
   assert.equal(Number.isInteger(indexViewIndex), true);
@@ -85,22 +90,11 @@ function readStepTopologyIndexManifest(filePath) {
   return JSON.parse(binary.subarray(start, end).toString("utf8"));
 }
 
-function readStepEdgeManifest(filePath) {
-  const { json, binary } = readGlbChunks(filePath);
-  const edgeViewIndex = json.extensions?.STEP_topology?.edgeView;
-  assert.equal(Number.isInteger(edgeViewIndex), true);
-  const edgeView = json.bufferViews?.[edgeViewIndex];
-  assert.equal(Boolean(edgeView), true);
-  const start = Number(edgeView.byteOffset || 0);
-  const end = start + Number(edgeView.byteLength || 0);
-  return JSON.parse(binary.subarray(start, end).toString("utf8"));
-}
-
 test("ensureStepArtifactsForCatalog discovers Python generators without fixture STEP files", stepArtifactTestOptions, async (t) => {
   const repoRoot = makeTempRepo();
   t.after(() => fs.rmSync(repoRoot, { recursive: true, force: true }));
   const stepPath = path.join(repoRoot, "workspace/generated/block.step");
-  const generatorPath = path.join(repoRoot, "workspace/generated/block.py");
+  const generatorPath = path.join(repoRoot, "workspace/generated/block.step.py");
   writePythonBoxGenerator(generatorPath);
 
   const results = await ensureStepArtifactsForCatalog({ repoRoot, rootDir: "workspace" });
@@ -110,24 +104,26 @@ test("ensureStepArtifactsForCatalog discovers Python generators without fixture 
   assert.equal(results[0].sourceKind, "python");
   assert.equal(fs.existsSync(stepPath), false);
 
-  const indexTopology = readStepTopologyIndexManifest(inlineStepGlbArtifactPathForSource(stepPath));
+  // The render cache is keyed by the ENTRY filename (`block.step.py`), not the logical step.
+  const indexTopology = readStepTopologyIndexManifest(inlineStepGlbArtifactPathForSource(generatorPath));
   assert.equal(indexTopology.sourceKind, "python");
-  assert.equal(indexTopology.sourcePath, "block.py");
+  assert.equal(indexTopology.sourcePath, "block.step.py");
   assert.equal(indexTopology.stepPath, "block.step");
   assert.equal(indexTopology.sourceFiles, undefined);
 
   const catalog = scanCadDirectory({ repoRoot, rootDir: "workspace" });
   assert.equal(catalog.entries.length, 1);
+  assert.equal(catalog.entries[0].file, "generated/block.step.py");
   assert.equal(catalog.entries[0].artifact, undefined);
-  assert.ok(catalog.entries[0].url.includes(".block.step.glb"));
+  assert.ok(catalog.entries[0].url.includes("__cadcache__/models/block.step.py"));
   assert.equal(catalog.entries[0].hash.length, 64);
 });
 
-test("ensureStepTopologyArtifact records explicit non-same-stem Python sourcePath", stepArtifactTestOptions, async (t) => {
+test("ensureStepTopologyArtifact records the Python generator sourcePath for a generated entry", stepArtifactTestOptions, async (t) => {
   const repoRoot = makeTempRepo();
   t.after(() => fs.rmSync(repoRoot, { recursive: true, force: true }));
   const stepPath = path.join(repoRoot, "workspace/generated/robot.step");
-  const generatorPath = path.join(repoRoot, "workspace/sources/assembly.py");
+  const generatorPath = path.join(repoRoot, "workspace/generated/robot.step.py");
   writePythonBoxGenerator(generatorPath);
 
   const result = await ensureStepTopologyArtifact({
@@ -142,29 +138,30 @@ test("ensureStepTopologyArtifact records explicit non-same-stem Python sourcePat
   assert.equal(fs.existsSync(stepPath), false);
   assert.equal(result.validation.ok, true);
   assert.equal(result.validation.sourceKind, "python");
-  assert.equal(result.validation.sourcePath, "workspace/sources/assembly.py");
+  assert.equal(result.validation.sourcePath, "workspace/generated/robot.step.py");
 
-  const indexTopology = readStepTopologyIndexManifest(inlineStepGlbArtifactPathForSource(stepPath));
-  const edgeView = readStepEdgeManifest(inlineStepGlbArtifactPathForSource(stepPath));
+  // The render cache is keyed by the ENTRY filename (`robot.step.py`); the descriptor carries the
+  // model-folder-relative generator source and the LOGICAL step path.
+  const indexTopology = readStepTopologyIndexManifest(inlineStepGlbArtifactPathForSource(generatorPath));
   assert.equal(indexTopology.sourceKind, "python");
-  assert.equal(indexTopology.sourcePath, "../sources/assembly.py");
+  assert.equal(indexTopology.sourcePath, "robot.step.py");
   assert.equal(indexTopology.stepPath, "robot.step");
-  assert.equal(edgeView.sourceKind, "python");
-  assert.equal(edgeView.sourcePath, "../sources/assembly.py");
 
-  const catalog = scanCadDirectory({ repoRoot, rootDir: "workspace" });
-  assert.equal(catalog.entries.length, 1);
-  assert.equal(catalog.entries[0].file, "generated/robot.step");
-  assert.equal(catalog.entries[0].artifact, undefined);
-  assert.ok(catalog.entries[0].url.includes(".robot.step.glb"));
-  assert.equal(catalog.entries[0].hash.length, 64);
+  // The viewer discovers the `.step.py` entry directly (its own filename), keyed by its package.
+  const entry = scanCadFile({ repoRoot, rootDir: "workspace", filePath: generatorPath });
+  assert.equal(entry.file, "generated/robot.step.py");
+  assert.equal(entry.artifact, undefined);
+  assert.equal(entry.sourceKind, "python");
+  assert.equal(entry.source.sourcePath, "generated/robot.step.py");
+  assert.ok(entry.url.includes("__cadcache__/models/robot.step.py"));
+  assert.equal(entry.hash.length, 64);
 });
 
 test("ensureStepTopologyArtifact can write Python STEP after the GLB is ready", stepArtifactTestOptions, async (t) => {
   const repoRoot = makeTempRepo();
   t.after(() => fs.rmSync(repoRoot, { recursive: true, force: true }));
   const stepPath = path.join(repoRoot, "workspace/generated/robot.step");
-  const generatorPath = path.join(repoRoot, "workspace/sources/robot.py");
+  const generatorPath = path.join(repoRoot, "workspace/generated/robot.step.py");
   writePythonBoxGenerator(generatorPath);
 
   const result = await ensureStepTopologyArtifact({
@@ -178,15 +175,16 @@ test("ensureStepTopologyArtifact can write Python STEP after the GLB is ready", 
 
   assert.equal(result.ok, true);
   assert.equal(result.stepWrite?.status, "complete");
-  const glbPath = inlineStepGlbArtifactPathForSource(stepPath);
+  // The render cache is keyed by the ENTRY filename (`robot.step.py`).
+  const glbPath = inlineStepGlbArtifactPathForSource(generatorPath);
   assert.equal(fs.existsSync(glbPath), true);
   const indexTopology = readStepTopologyIndexManifest(glbPath);
   assert.equal(indexTopology.sourceKind, "python");
   const metadata = await waitForStepMetadata(stepPath, (candidate) => (
-    candidate.sourcePath === "../sources/robot.py" &&
+    candidate.sourcePath === "robot.step.py" &&
     candidate.sourceHash === indexTopology.sourceHash
   ));
-  assert.equal(metadata.sourcePath, "../sources/robot.py");
+  assert.equal(metadata.sourcePath, "robot.step.py");
   assert.equal(metadata.sourceHash, indexTopology.sourceHash);
 });
 
@@ -208,7 +206,8 @@ test("ensureStepTopologyArtifact regenerates existing same-stem STEP artifacts f
   await waitForStepMetadata(stepPath, (candidate) => candidate.sourcePath === "robot.py");
 
   const glbPath = inlineStepGlbArtifactPathForSource(stepPath);
-  fs.rmSync(glbPath);
+  // The render artifact is a component-GLB package directory; remove it recursively.
+  fs.rmSync(glbPath, { recursive: true, force: true });
 
   const result = await ensureStepTopologyArtifact({
     repoRoot,

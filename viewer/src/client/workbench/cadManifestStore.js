@@ -4,28 +4,9 @@ import {
 } from "./cadViewerDirectorySession.mjs";
 
 const CAD_CATALOG_REFRESH_INTERVAL_MS = 2_000;
-// Hosted catalogs only change when a publish uploads a new catalog.json, so
-// hosted builds poll slowly instead of hammering the serverless catalog route.
-const HOSTED_CAD_CATALOG_REFRESH_INTERVAL_MS = 60_000;
 const CAD_CATALOG_FETCH_TIMEOUT_MS = 10_000;
-const CAD_GENERATION_STATUS_REFRESH_INTERVAL_MS = 750;
 const CAD_DIR_QUERY_PARAM = "dir";
 const CAD_FILE_QUERY_PARAM = "file";
-const HOSTED_CATALOG_BACKENDS = new Set(["vercel-blob"]);
-
-function viewerAssetBackendFromEnv() {
-  return String(import.meta.env?.VIEWER_ASSET_BACKEND || "").trim().toLowerCase();
-}
-
-export function cadViewerUsesHostedCatalog(assetBackend = viewerAssetBackendFromEnv()) {
-  return HOSTED_CATALOG_BACKENDS.has(String(assetBackend || "").trim().toLowerCase());
-}
-
-export function cadCatalogRefreshIntervalMs(assetBackend = viewerAssetBackendFromEnv()) {
-  return cadViewerUsesHostedCatalog(assetBackend)
-    ? HOSTED_CAD_CATALOG_REFRESH_INTERVAL_MS
-    : CAD_CATALOG_REFRESH_INTERVAL_MS;
-}
 
 function normalizeCadManifest(manifest) {
   if (!manifest || typeof manifest !== "object") {
@@ -41,26 +22,10 @@ function normalizeCadManifest(manifest) {
   };
 }
 
-function normalizeCadGenerationStatus(status) {
-  if (!status || typeof status !== "object") {
-    return {
-      schemaVersion: 1,
-      runs: [],
-      files: {},
-    };
-  }
-  return {
-    schemaVersion: 1,
-    runs: Array.isArray(status.runs) ? status.runs : [],
-    files: status.files && typeof status.files === "object" ? status.files : {},
-  };
-}
-
 const listeners = new Set();
 let currentManifestSignature = "";
 let currentSnapshot = {
   manifest: normalizeCadManifest(),
-  generationStatus: normalizeCadGenerationStatus(),
   revision: 0,
   catalogHydrated: false,
   catalogRefreshing: typeof window !== "undefined",
@@ -69,10 +34,6 @@ let currentSnapshot = {
 };
 let refreshRequestId = 0;
 let refreshInFlight = null;
-let generationRefreshInFlight = null;
-// Hosted read-only backends never run local CAD generation, so skip the
-// generation-status route instead of polling it into 501 responses.
-let generationStatusUnavailable = cadViewerUsesHostedCatalog();
 let refreshLoopStarted = false;
 
 currentManifestSignature = JSON.stringify(currentSnapshot.manifest);
@@ -83,7 +44,6 @@ function publishCadManifest(nextManifest, { hydrated = true, refreshing = false,
   const manifestChanged = manifestSignature !== currentManifestSignature;
   const nextSnapshot = {
     manifest: manifestChanged ? manifest : currentSnapshot.manifest,
-    generationStatus: currentSnapshot.generationStatus,
     revision: currentSnapshot.revision + 1,
     catalogHydrated: hydrated,
     catalogRefreshing: refreshing,
@@ -104,23 +64,6 @@ function publishCadManifest(nextManifest, { hydrated = true, refreshing = false,
   }
   currentSnapshot = {
     ...nextSnapshot,
-  };
-  for (const listener of listeners) {
-    listener();
-  }
-}
-
-function publishCadGenerationStatus(nextGenerationStatus) {
-  const generationStatus = normalizeCadGenerationStatus(nextGenerationStatus);
-  const previousSignature = JSON.stringify(currentSnapshot.generationStatus);
-  const nextSignature = JSON.stringify(generationStatus);
-  if (previousSignature === nextSignature) {
-    return;
-  }
-  currentSnapshot = {
-    ...currentSnapshot,
-    generationStatus,
-    revision: currentSnapshot.revision + 1,
   };
   for (const listener of listeners) {
     listener();
@@ -158,11 +101,8 @@ function readSearchParam(name) {
   }
 }
 
-export function readActiveCadDir({ assetBackend = viewerAssetBackendFromEnv() } = {}) {
+export function readActiveCadDir() {
   if (typeof window === "undefined") {
-    return "";
-  }
-  if (cadViewerUsesHostedCatalog(assetBackend)) {
     return "";
   }
   let url = null;
@@ -289,77 +229,18 @@ export async function refreshCadCatalog({ markRefreshing = !currentSnapshot.cata
   return refreshInFlight;
 }
 
-export async function refreshCadGenerationStatus() {
-  if (typeof window === "undefined" || generationStatusUnavailable) {
-    return;
-  }
-  const activeDir = readActiveCadDir();
-  if (generationRefreshInFlight) {
-    return generationRefreshInFlight;
-  }
-  generationRefreshInFlight = (async () => {
-    try {
-      const response = await fetch(cadApiUrl("/__cad/generation-status", { activeDir }), {
-        cache: "no-store",
-      });
-      const contentType = String(response.headers?.get?.("content-type") || "");
-      if (!response.ok || !contentType.includes("application/json")) {
-        if (response.status === 404 || response.status === 501 || !contentType.includes("application/json")) {
-          generationStatusUnavailable = true;
-          publishCadGenerationStatus(null);
-          return;
-        }
-        throw new Error(`Failed to read CAD generation status: ${response.status} ${response.statusText}`);
-      }
-      publishCadGenerationStatus(await response.json());
-    } catch (error) {
-      if (import.meta.env.DEV) {
-        console.warn("Failed to refresh CAD generation status", error);
-      }
-    } finally {
-      generationRefreshInFlight = null;
-    }
-  })();
-  return generationRefreshInFlight;
-}
-
-export async function requestStepArtifactGeneration(fileRef, { signal } = {}) {
+// Unified render-artifact client API. GET reports freshness ({ state: "ready" | "needs-build" |
+// "error", ... }); a direct-render entry is always "ready". (Replaced the STEP-specific
+// requestStepSourceStatus + requestStepArtifactGeneration.)
+export async function requestArtifactStatus(fileRef, { signal } = {}) {
   if (typeof window === "undefined") {
     return null;
   }
   const normalizedFileRef = String(fileRef || "").trim();
   if (!normalizedFileRef) {
-    throw new Error("Missing STEP file");
+    throw new Error("Missing file");
   }
-  const response = await fetch(cadApiUrl("/__cad/step-artifact", {
-    params: { file: normalizedFileRef },
-  }), {
-    method: "POST",
-    cache: "no-store",
-    signal,
-  });
-  if (!response.ok) {
-    throw new Error(await readJsonError(
-      response,
-      `Failed to generate STEP artifact: ${response.status} ${response.statusText}`
-    ));
-  }
-  const payload = await response.json();
-  if (payload?.catalog) {
-    publishCadManifest(payload.catalog);
-  }
-  return payload;
-}
-
-export async function requestStepSourceStatus(fileRef, { signal } = {}) {
-  if (typeof window === "undefined") {
-    return null;
-  }
-  const normalizedFileRef = String(fileRef || "").trim();
-  if (!normalizedFileRef) {
-    throw new Error("Missing STEP file");
-  }
-  const response = await fetch(cadApiUrl("/__cad/step-source-status", {
+  const response = await fetch(cadApiUrl("/__cad/artifact", {
     params: { file: normalizedFileRef },
   }), {
     method: "GET",
@@ -369,10 +250,40 @@ export async function requestStepSourceStatus(fileRef, { signal } = {}) {
   if (!response.ok) {
     throw new Error(await readJsonError(
       response,
-      `Failed to check STEP source status: ${response.status} ${response.statusText}`
+      `Failed to check render artifact: ${response.status} ${response.statusText}`
     ));
   }
   return response.json();
+}
+
+// POST (re)builds the artifact and publishes the refreshed catalog; resolves to
+// { ok, state: "ready" | "error", ... }.
+export async function requestArtifact(fileRef, { force = false, signal } = {}) {
+  if (typeof window === "undefined") {
+    return null;
+  }
+  const normalizedFileRef = String(fileRef || "").trim();
+  if (!normalizedFileRef) {
+    throw new Error("Missing file");
+  }
+  const response = await fetch(cadApiUrl("/__cad/artifact", {
+    params: { file: normalizedFileRef, ...(force ? { force: "1" } : {}) },
+  }), {
+    method: "POST",
+    cache: "no-store",
+    signal,
+  });
+  if (!response.ok) {
+    throw new Error(await readJsonError(
+      response,
+      `Failed to generate render artifact: ${response.status} ${response.statusText}`
+    ));
+  }
+  const payload = await response.json();
+  if (payload?.catalog) {
+    publishCadManifest(payload.catalog);
+  }
+  return payload;
 }
 
 export function getCadManifestSnapshot() {
@@ -397,16 +308,6 @@ if (import.meta.hot) {
       console.warn("Failed to refresh CAD catalog", error);
     });
   });
-  import.meta.hot.on("cad-generation-status:changed", (data = {}) => {
-    const changedDir = String(data?.dir || "").trim();
-    const activeDir = readActiveCadDir();
-    if (changedDir && activeDir && changedDir !== activeDir) {
-      return;
-    }
-    refreshCadGenerationStatus().catch((error) => {
-      console.warn("Failed to refresh CAD generation status", error);
-    });
-  });
 }
 
 if (typeof window !== "undefined") {
@@ -416,7 +317,6 @@ if (typeof window !== "undefined") {
         console.warn("Failed to refresh CAD catalog", error);
       }
     });
-    refreshCadGenerationStatus();
   };
 
   refreshCadCatalog().catch((error) => {
@@ -424,7 +324,6 @@ if (typeof window !== "undefined") {
       console.warn("Failed to refresh CAD catalog", error);
     }
   });
-  refreshCadGenerationStatus();
 
   if (!refreshLoopStarted) {
     refreshLoopStarted = true;
@@ -432,12 +331,7 @@ if (typeof window !== "undefined") {
       if (document.visibilityState !== "hidden") {
         refreshSilently();
       }
-    }, cadCatalogRefreshIntervalMs());
-    window.setInterval(() => {
-      if (document.visibilityState !== "hidden") {
-        refreshCadGenerationStatus();
-      }
-    }, CAD_GENERATION_STATUS_REFRESH_INTERVAL_MS);
+    }, CAD_CATALOG_REFRESH_INTERVAL_MS);
     window.addEventListener("focus", refreshSilently);
     document.addEventListener("visibilitychange", () => {
       if (document.visibilityState !== "hidden") {

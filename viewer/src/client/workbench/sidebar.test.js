@@ -178,9 +178,8 @@ test("entryIconStatus marks buildable STEP artifacts as generating in production
   assert.deepEqual(
     entryIconStatus(entry, {
       sourceFormat: "step",
-      entryKey: "benchmarks/bracket.step",
       hasMesh: false,
-      activeGenerationFiles: ["benchmarks/.bracket.step.glb"],
+      activeStepArtifactGenerationFiles: ["benchmarks/bracket.step"],
       stepArtifactGenerationAvailable: false
     }),
     {
@@ -260,7 +259,8 @@ test("entryIconStatus marks buildable STEP artifacts as generating in production
       artifactGenerating: false,
       artifactStale: false,
       artifactWarning: false,
-      loading: true,
+      // An un-built / not-yet-loaded entry is no longer shown as "loading" in the static file list.
+      loading: false,
       pending: true,
       sourceFormat: "gcode",
       statusLabel: "pending"
@@ -418,19 +418,18 @@ test("entryIconStatus treats active generator runs as loading and suppresses art
   assert.deepEqual(
     entryIconStatus(entry, {
       sourceFormat: "step",
-      entryKey: "robots/tom/tom.step",
       hasMesh: false,
-      activeGenerationFiles: ["robots/tom/tom.step"]
+      activeStepArtifactGenerationFiles: ["robots/tom/tom.step"]
     }),
     {
       artifactBuildable: true,
-      artifactGenerating: false,
+      artifactGenerating: true,
       artifactStale: true,
       artifactWarning: false,
       loading: true,
       pending: true,
       sourceFormat: "step",
-      statusLabel: "generating"
+      statusLabel: "generating artifact"
     }
   );
 
@@ -439,9 +438,8 @@ test("entryIconStatus treats active generator runs as loading and suppresses art
       sourceFormat: "step",
       status: entryIconStatus(entry, {
         sourceFormat: "step",
-        entryKey: "robots/tom/tom.step",
         hasMesh: false,
-        activeGenerationFiles: ["robots/tom/tom.step"]
+        activeStepArtifactGenerationFiles: ["robots/tom/tom.step"]
       })
     }),
     ENTRY_ICON_KIND.LOADING
@@ -650,6 +648,29 @@ test("filenameLabelForEntry shows canonical step, stl, 3mf, glb, gcode, dxf, urd
       source: { format: "gcode", path: "toolpaths/bracket.gcode" }
     }),
     "bracket.gcode"
+  );
+});
+
+test("filenameLabelForEntry surfaces Python-generated STEP models as .step.py", () => {
+  // A gen_step Python model has no committed STEP (logical `<stem>.step`, real source `<stem>.py`);
+  // show it as `<stem>.step.py` so the explorer distinguishes generators from static STEP files.
+  assert.equal(
+    filenameLabelForEntry({
+      file: "simple/spur_gear_blank.step",
+      kind: "part",
+      sourceKind: "python",
+      sourcePath: "simple/spur_gear_blank.py"
+    }),
+    "spur_gear_blank.step.py"
+  );
+  // A committed STEP (sourceKind step) keeps the plain `.step` label.
+  assert.equal(
+    filenameLabelForEntry({
+      file: "imports/widget.step",
+      kind: "part",
+      sourceKind: "step"
+    }),
+    "widget.step"
   );
 });
 

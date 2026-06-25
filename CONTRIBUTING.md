@@ -227,28 +227,17 @@ tag exists — rerun `Release` with `set_version` pinned to the current version.
 When `develop` already contains that version, the workflow skips the release PR
 and proceeds straight to the publish jobs.
 
-### Redeploying the web apps
+### Redeploying the docs site
 
-The standalone `Deploy Docs` and `Deploy Viewer` workflows redeploy the
-individual web apps to Vercel production without running a release. They
-default to deploying `main` and expect a production-layout ref:
+The standalone `Deploy Docs` workflow redeploys the docs site to Vercel
+production without running a release. It defaults to deploying `main` and
+expects a production-layout ref:
 
 ```bash
 gh workflow run deploy-docs.yml -f ref=main
-gh workflow run deploy-viewer.yml -f ref=main
 ```
 
-### Uploading new models
-
-The standalone `Upload Models` workflow uploads the `models/` catalog and CAD
-Viewer assets to Vercel Blob without running a release or redeploying the
-viewer. It skips assets that already match the remote catalog and fetches only
-the missing Git LFS objects. Upload from a source ref — `main` does not
-contain `models/`:
-
-```bash
-gh workflow run upload-models.yml -f ref=develop
-```
+The CAD Viewer is a local-filesystem app and has no hosted deployment.
 
 ### Local and manual fallbacks
 

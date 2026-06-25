@@ -141,7 +141,7 @@ def _result_payload(
 
 
 def _generated_result_payload(spec: EntrySpec, scene: LoadedStepScene, stats: dict[str, object] | None = None) -> dict[str, object]:
-    glb_path = part_glb_path(spec.step_path)
+    glb_path = part_glb_path(spec.entry_path)
     source_kind = str(getattr(scene, "source_kind", "step") or "step").strip().lower()
     step_hash = str(getattr(scene, "step_hash", "") or "").strip()
     if not step_hash and spec.step_path is not None and spec.step_path.is_file():
@@ -214,7 +214,7 @@ def _current_artifact_for_spec(spec: EntrySpec) -> StepTopologyArtifact | None:
                 source_path=spec.source_path,
                 step_path=spec.step_path,
             ),
-            glb_path=part_glb_path(spec.step_path),
+            glb_path=part_glb_path(spec.entry_path),
             require_selector=True,
         )
     except StepTopologyArtifactError:
@@ -317,15 +317,13 @@ def main(argv: list[str] | None = None) -> int:
             print(json.dumps(_existing_result_payload(existing_spec, existing_artifact), separators=(",", ":")))
             return 0
 
-    glb_path = part_glb_path(step_path)
+    glb_path = part_glb_path(existing_spec.entry_path)
     if bool(args.skip_step_write):
         scene = run_script_generator(
             existing_spec,
             "gen_step",
             logger=logger,
             force=bool(args.force),
-            load_current_scene=False,
-            skip_step_write=True,
         )
         if scene is None:
             raise RuntimeError(f"Python generator did not produce a STEP scene: {existing_spec.source_ref}")

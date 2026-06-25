@@ -49,7 +49,34 @@ def ensure_step_topology_artifact(
         mesh_tolerance=mesh_tolerance,
         mesh_angular_tolerance=mesh_angular_tolerance,
     )
-    resolved_glb_path = glb_path or part_glb_path(spec.step_path)
+    resolved_glb_path = glb_path or part_glb_path(spec.entry_path)
+
+    # The canonical render artifact for a generated assembly is a component-GLB package
+    # directory, which carries no whole-assembly selector topology (faces/edges). inspect
+    # needs that full manifest, so extract it on demand from the scene (the build-time
+    # win is precisely that this 29.5s extraction is no longer in the build path).
+    from cadpy.component_package import is_assembly_package
+
+    if glb_path is None and is_assembly_package(resolved_glb_path):
+        try:
+            return _assembly_topology_artifact(
+                spec, require_selector=require_selector, logger=logger, force=force
+            )
+        except StepTopologyArtifactError:
+            raise
+        except Exception as exc:
+            raise StepTopologyArtifactError(
+                code="glb_regeneration_failed",
+                cad_path=spec.cad_ref,
+                step_path=spec.step_path,
+                glb_path=resolved_glb_path,
+                regenerate_command=REGENERATE_STEP_COMMAND,
+                message=(
+                    f"Failed to extract assembly topology for {spec.cad_ref}: {exc}.\n"
+                    f"{REGENERATE_STEP_PROMPT}"
+                ),
+            ) from exc
+
     if not force:
         artifact = _current_artifact_for_spec(spec, glb_path=resolved_glb_path, require_selector=require_selector)
         if artifact is not None:
@@ -79,6 +106,14 @@ def ensure_step_topology_artifact(
                 f"{REGENERATE_STEP_PROMPT}"
             ),
         ) from exc
+    # The build just produced a component-GLB package directory. Return its topology the
+    # same way the fast path above does (cheap descriptor for renders, on-demand selector
+    # extraction otherwise) rather than the monolith file-validator, which requires a GLB
+    # *file* and would report the package directory as missing.
+    if glb_path is None and is_assembly_package(resolved_glb_path):
+        return _assembly_topology_artifact(
+            spec, require_selector=require_selector, logger=logger, force=False
+        )
     return validate_step_topology_artifact(
         ResolvedStepTarget(
             cad_path=spec.cad_ref,
@@ -126,6 +161,74 @@ def _entry_spec_for_target(
     )
 
 
+def _assembly_topology_artifact(
+    spec: EntrySpec,
+    *,
+    require_selector: bool,
+    logger: CliLogger | None,
+    force: bool,
+) -> StepTopologyArtifact:
+    """The topology artifact for a component-GLB package, which carries no embedded
+    whole-assembly topology.
+
+    When the caller does not need selectors (a plain render reads the package's render
+    meshes directly), return a cheap descriptor-only artifact. When selectors ARE needed
+    (inspect, selection-based renders), re-mesh + re-extract the full manifest on demand
+    and return the bundle in memory — the build-time win is precisely that this ~29.5s
+    extraction is no longer in the build path. TODO: cache to a ``topology.glb`` sidecar
+    inside the package to avoid re-extraction on repeated selector queries."""
+    from cadpy.component_package import assembly_package_dir, read_package_descriptor
+
+    if not require_selector:
+        descriptor = read_package_descriptor(assembly_package_dir(spec.step_path))
+        if descriptor is not None:
+            return StepTopologyArtifact(
+                cad_path=spec.cad_ref,
+                kind="assembly",
+                source_path=spec.source_path,
+                step_path=spec.step_path,
+                glb_path=part_glb_path(spec.entry_path),
+                manifest=descriptor,
+                selector_bundle=None,
+            )
+
+    from cadpy.generation import (
+        _effective_step_spec_for_scene,
+        _selector_options_for_part,
+    )
+    from cadpy.step_scene import (
+        SelectorProfile,
+        extract_selectors_from_scene,
+        mesh_step_scene,
+    )
+
+    spec, scene = _scene_for_regeneration(spec, logger=logger, force=force)
+    spec = _effective_step_spec_for_scene(spec, scene)
+    options = _selector_options_for_part(spec, scene=scene)
+    mesh_step_scene(
+        scene,
+        linear_deflection=options.linear_deflection,
+        angular_deflection=options.angular_deflection,
+        relative=options.relative,
+    )
+    bundle = extract_selectors_from_scene(
+        scene,
+        cad_ref=spec.cad_ref,
+        profile=SelectorProfile.ARTIFACT,
+        options=options,
+        color=spec.color,
+    )
+    return StepTopologyArtifact(
+        cad_path=spec.cad_ref,
+        kind="assembly",
+        source_path=spec.source_path,
+        step_path=spec.step_path,
+        glb_path=part_glb_path(spec.entry_path),
+        manifest=bundle.manifest,
+        selector_bundle=bundle,
+    )
+
+
 def _scene_for_regeneration(
     spec: EntrySpec,
     *,
@@ -138,8 +241,6 @@ def _scene_for_regeneration(
             "gen_step",
             logger=logger,
             force=force,
-            load_current_scene=False,
-            skip_step_write=True,
         )
         if scene is None:
             raise RuntimeError(f"Python generator did not produce a STEP scene: {spec.source_ref}")

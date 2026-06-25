@@ -234,27 +234,16 @@ import {
 } from "cadjs/lib/urdf/jointAnimation";
 import { checkMoveIt2ServerLive, moveit2ServerEnabled, requestMoveIt2Server } from "cadjs/lib/urdf/moveit2ServerClient";
 import {
-  cadViewerUsesHostedCatalog,
   readActiveCadDir,
   refreshCadCatalog,
-  refreshCadGenerationStatus,
-  requestStepArtifactGeneration,
-  requestStepSourceStatus
 } from "../workbench/cadManifestStore.js";
-import {
-  STEP_ARTIFACT_GENERATION_FAILURE_DISPLAY_THRESHOLD,
-  runStepArtifactGenerationWithRetries,
-  stepArtifactCanGenerate,
-  stepArtifactGenerationFailureCount,
-  stepArtifactGenerationInProgress,
-  validateGeneratedStepArtifactPayload
-} from "@/workbench/stepArtifactStatus";
 import {
   FILE_STATUS_LEVELS,
   buildFileStatusItems,
   fileStatusHasWarningsOrErrors,
   mostIntenseFileStatusLevel
 } from "@/workbench/fileStatusItems";
+import { useArtifact } from "./workbench/hooks/useArtifact.js";
 import {
   rootAssemblyInspectionNodeId,
   buildAssemblyLeafToNodePickMap,
@@ -312,9 +301,18 @@ import {
   DEFAULT_IMPLICIT_EXPORT_RESOLUTION,
   requestImplicitCadExport
 } from "@/workbench/implicitExport";
+import {
+  requestStepExport,
+  stepExportFormatLabel
+} from "@/workbench/stepExport";
 
 const DEFAULT_DOCUMENT_TITLE = "CAD Viewer";
-const LOCAL_ASSET_BACKEND = "local-fs";
+// Single user-facing label for "the viewer is (re)generating the render artifacts a STEP model
+// needs before it can render" — used for both the filename status chip and its tooltip across every
+// artifact-generation trigger (first build, stale rebuild, source-changed regen). Browser-side
+// asset-load/parse stages ("loading mesh", reference "loading topology", etc.) are a different
+// concept and keep their own wording.
+const ARTIFACT_GENERATING_LABEL = "Generating artifacts";
 const EMPTY_LIST = Object.freeze([]);
 const MOVEIT2_SERVER_ENABLED = moveit2ServerEnabled();
 const URDF_POSE_PICKER_DEFAULT_CENTER = Object.freeze([0, 0, 0]);
@@ -331,10 +329,6 @@ const IMPLICIT_DYNAMIC_RENDER_SETTLE_MS = 220;
 const DEFAULT_LARGE_FILE_STATE = Object.freeze({
   selectableTopologyEnabled: false
 });
-
-function viewerAssetBackendFromEnv() {
-  return String(import.meta.env?.VIEWER_ASSET_BACKEND || LOCAL_ASSET_BACKEND).trim().toLowerCase();
-}
 
 function normalizeLargeFileState(value = {}) {
   return {
@@ -1059,42 +1053,24 @@ function buildDxfCacheKey(entry) {
   return fileRef && dxfHash ? `${fileRef}:${dxfHash}` : "";
 }
 
-function ownProperty(object, key) {
-  return Object.prototype.hasOwnProperty.call(object || {}, key);
-}
-
 function entryHasImplicitAsset(entry) {
   return Boolean(entryAssetUrl(entry, "implicit") && entryAssetHash(entry, "implicit"));
 }
 
-function mergeStepSourceStatusIntoEntry(entry, stepSourceStatus) {
-  if (!entry || !stepSourceStatus || typeof stepSourceStatus !== "object") {
+// Hide an entry's render assets (url/hash/bytes/assets) so the viewer treats it as "not yet
+// renderable" — used while its render artifact is missing/stale/building or has failed, so the
+// viewer shows a loading/error state and never renders a stale cache. Once the artifact is ready
+// the unstripped catalog entry is used and the mesh loads.
+function entryWithoutRenderAssets(entry) {
+  if (!entry) {
     return entry;
   }
-  const nextEntry = { ...entry };
-  if (ownProperty(stepSourceStatus, "artifact")) {
-    if (stepSourceStatus.artifact && typeof stepSourceStatus.artifact === "object") {
-      nextEntry.artifact = stepSourceStatus.artifact;
-    } else {
-      delete nextEntry.artifact;
-    }
-  }
-
-  const sourceKind = String(stepSourceStatus.sourceKind || "").trim().toLowerCase();
-  if (sourceKind) {
-    nextEntry.sourceKind = sourceKind;
-  }
-  const sourcePath = String(stepSourceStatus.sourcePath || "").trim();
-  if (sourceKind === "python" && sourcePath) {
-    nextEntry.source = {
-      ...(entry.source && typeof entry.source === "object" ? entry.source : {}),
-      file: sourcePath,
-      sourcePath,
-    };
-  } else if (sourceKind === "step" && ownProperty(nextEntry, "source")) {
-    delete nextEntry.source;
-  }
-  return nextEntry;
+  const next = { ...entry };
+  delete next.url;
+  delete next.hash;
+  delete next.bytes;
+  delete next.assets;
+  return next;
 }
 
 function normalizeViewerDirectoryOptions(viewerServerInfo) {
@@ -1119,7 +1095,6 @@ function normalizeViewerDirectoryOptions(viewerServerInfo) {
 
 export default function CadWorkspace({
   manifestEntries: manifestEntriesProp = [],
-  generationStatus = null,
   manifestRevision = 0,
   catalogHydrated = false,
   catalogRefreshing = false,
@@ -1130,13 +1105,6 @@ export default function CadWorkspace({
   const catalogEntries = manifestEntries;
   const explicitDirParam = readCadDirParam();
   const explicitFileParam = readCadParam();
-  const viewerAssetBackend = viewerAssetBackendFromEnv();
-  const activeGeneratorFiles = useMemo(() => (
-    Object.entries(generationStatus?.files || {})
-      .filter(([, status]) => status?.running === true)
-      .map(([file]) => String(file || "").trim())
-      .filter(Boolean)
-  ), [generationStatus]);
   const catalogRootDir = String(activeDir || "").trim();
   const [query, setQuery] = useState("");
   const initialFileViewerDirectoryStateRef = useRef(null);
@@ -1156,9 +1124,6 @@ export default function CadWorkspace({
   const [openTabs, setOpenTabs] = useState([]);
   const [viewerServerInfo, setViewerServerInfo] = useState(null);
   const viewerServerBackend = String(viewerServerInfo?.backend || "").trim().toLowerCase();
-  const directoryCatalogActive = Boolean(catalogRootDir) ||
-    cadViewerUsesHostedCatalog(viewerAssetBackend) ||
-    cadViewerUsesHostedCatalog(viewerServerBackend);
   const [selectedKey, setSelectedKey] = useState("");
   const [fileSheetOpenSectionIds, setFileSheetOpenSectionIds] = useState(null);
   const [dxfThicknessMm, setDxfThicknessMm] = useState(0);
@@ -1188,14 +1153,6 @@ export default function CadWorkspace({
   const [hoveredModelPartId, setHoveredModelPartId] = useState("");
   const [copyStatus, setCopyStatus] = useState("");
   const [stepUpdateInProgress, setStepUpdateInProgress] = useState(false);
-  const [stepArtifactGenerationStateByKey, setStepArtifactGenerationStateByKey] = useState({});
-  const [stepSourceStatusState, setStepSourceStatusState] = useState({
-    key: "",
-    file: "",
-    status: null,
-    loading: false,
-    error: ""
-  });
   const [screenshotStatus, setScreenshotStatus] = useState("");
   const [fileAccessBusyKey, setFileAccessBusyKey] = useState("");
   const [persistenceStatus, setPersistenceStatus] = useState("");
@@ -1311,9 +1268,6 @@ export default function CadWorkspace({
     smoothingMs: URDF_JOINT_ANIMATION_FOLLOW_MS,
     lastTimestampMs: 0
   });
-  const stepArtifactGenerationRequestsRef = useRef(new Map());
-  const selectedStepArtifactBuildKeyRef = useRef("");
-
   const handlePersistenceWriteError = useCallback(({ key }) => {
     const failureKey = String(key || "browser-storage");
     if (lastPersistenceFailureKeyRef.current === failureKey) {
@@ -1454,35 +1408,40 @@ export default function CadWorkspace({
         catalogRefreshing
       });
   const catalogSelectedEntrySourceFormat = entrySourceFormat(catalogSelectedEntry);
-  const activeStepArtifactGenerationFiles = useMemo(() => {
-    const files = Object.values(stepArtifactGenerationStateByKey)
-      .filter((state) => state?.status === "loading" && state?.file)
-      .map((state) => String(state.file).trim())
-      .filter(Boolean);
-    return [...new Set(files)];
-  }, [stepArtifactGenerationStateByKey]);
-  const selectedGeneratorRunning = Boolean(
-    catalogSelectedEntry &&
-    activeGeneratorFiles.includes(fileKey(catalogSelectedEntry))
+  // Unified render-artifact status for the selected entry: ready (render) | generating (loading) |
+  // error (fatal). A missing/stale cache is not an issue — it just triggers a (re)build. Replaces
+  // the per-entry step-source-status fetch, the mesh-stripping merge, and the build effect.
+  const selectedArtifact = useArtifact(
+    catalogSelectedEntry ? fileKey(catalogSelectedEntry) : "",
+    {
+      enabled: catalogSelectedEntrySourceFormat === RENDER_FORMAT.STEP,
+      freshnessKey: `${catalogSelectedEntry?.hash || ""}:${manifestRevision}`,
+    }
   );
-  const selectedStepSourceStatusFile = catalogSelectedEntrySourceFormat === RENDER_FORMAT.STEP && catalogSelectedEntry
-    ? fileKey(catalogSelectedEntry)
-    : "";
-  const selectedStepSourceStatusKey = selectedStepSourceStatusFile
-    ? [
-        selectedStepSourceStatusFile,
-        catalogSelectedEntry?.hash || "",
-        manifestRevision
-      ].join(":")
-    : "";
-  const selectedStepSourceStatus =
-    !selectedGeneratorRunning && selectedStepSourceStatusKey && stepSourceStatusState.key === selectedStepSourceStatusKey
-      ? stepSourceStatusState.status
-      : null;
+  const selectedArtifactGenerating = selectedArtifact.status === "generating";
+  const activeStepArtifactGenerationFiles = useMemo(
+    () => (selectedArtifactGenerating && catalogSelectedEntry ? [fileKey(catalogSelectedEntry)] : []),
+    [selectedArtifactGenerating, catalogSelectedEntry]
+  );
+  // While the artifact is missing/stale/building/broken, hide the (possibly stale) render assets so
+  // the viewer shows a loading or error state and renders only the fresh artifact once ready.
   const selectedEntry = useMemo(
-    () => mergeStepSourceStatusIntoEntry(catalogSelectedEntry, selectedStepSourceStatus),
-    [catalogSelectedEntry, selectedStepSourceStatus]
+    () => (!catalogSelectedEntry || selectedArtifact.status === "ready"
+      ? catalogSelectedEntry
+      : entryWithoutRenderAssets(catalogSelectedEntry)),
+    [catalogSelectedEntry, selectedArtifact.status]
   );
+  // Cache states never become user-facing "issues"; only a fatal build/source failure does.
+  const selectedStepSourceStatus = selectedArtifact.status === "error"
+    ? {
+        artifact: {
+          ok: false,
+          error: "render_artifact_unavailable",
+          message: selectedArtifact.error || "Render artifact is unavailable.",
+          stepPath: catalogSelectedEntry ? fileKey(catalogSelectedEntry) : "",
+        },
+      }
+    : null;
   const selectedEntrySourceFormat = entrySourceFormat(selectedEntry);
   const selectedFileSheetKind = fileSheetKindForEntry(selectedEntry);
   // Some kinds (e.g. a mesh/STL) have no file-specific sections; when so, hide
@@ -1496,7 +1455,7 @@ export default function CadWorkspace({
     () => normalizeViewerDirectoryOptions(viewerServerInfo),
     [viewerServerInfo]
   );
-  const activeViewerDir = readActiveCadDir({ assetBackend: viewerAssetBackend });
+  const activeViewerDir = readActiveCadDir();
   const activeDirectory = catalogRootDir || activeViewerDir;
   const directorySelectionEligible = !explicitDirParam && !activeDirectory;
   const directorySelectionActive = directorySelectionEligible && directoryOptions.length > 1;
@@ -1506,13 +1465,14 @@ export default function CadWorkspace({
   const directoryNavigationAvailable = !directorySelectionActive;
   const stepArtifactGenerationAvailable = viewerServerInfo
     ? viewerServerInfo.stepArtifactGenerationAvailable !== false
-    : viewerAssetBackend === LOCAL_ASSET_BACKEND;
+    : true;
   const fileAccessBackend = viewerServerInfo ? (viewerServerBackend || "local-fs") : "";
   const fileRevealAvailable = fileAccessBackend === "local-fs";
   const filePathCopyAvailable = fileAccessBackend === "local-fs" && Boolean(
     viewerServerInfo?.rootPath || viewerServerInfo?.directoryRoot
   );
-  const fileLinkCopyAvailable = fileAccessBackend === "vercel-blob";
+  // The local-fs viewer has no remote asset links; the copy-link affordance is hosted-only.
+  const fileLinkCopyAvailable = false;
   const isStepView = selectedEntrySourceFormat === RENDER_FORMAT.STEP;
   const isAssemblyView = selectedEntry?.kind === "assembly";
   const isUrdfView = isRobotRenderFormat(selectedEntrySourceFormat);
@@ -1545,46 +1505,9 @@ export default function CadWorkspace({
   const selectedEntryHasDxf = entryHasDxf(selectedEntry);
   const selectedEntryHasGcode = entryHasGcode(selectedEntry);
   const selectedEntryHasImplicit = entryHasImplicitAsset(selectedEntry);
-  const selectedStepArtifactExternalGenerationActive = stepArtifactGenerationInProgress({
-    entry: selectedEntry,
-    activeGenerationFiles: activeGeneratorFiles
-  });
-  const selectedStepArtifactBuildFile = !selectedEntryHasMesh && stepArtifactCanGenerate(
-    selectedEntry,
-    selectedEntrySourceFormat,
-    { generationAvailable: stepArtifactGenerationAvailable || selectedStepArtifactExternalGenerationActive }
-  )
-    ? fileKey(selectedEntry)
-    : "";
-  const selectedStepArtifactBuildKey = selectedStepArtifactBuildFile
-      ? [
-          selectedStepArtifactBuildFile,
-          selectedEntry?.hash || "",
-          selectedEntry?.artifact?.error || ""
-        ].join(":")
-    : "";
-  const selectedStepArtifactGenerationState = selectedStepArtifactBuildKey
-    ? stepArtifactGenerationStateByKey[selectedStepArtifactBuildKey]
-    : null;
-  const selectedStepArtifactGenerationStatus = selectedStepArtifactGenerationState?.status || "idle";
-  const selectedStepArtifactGenerationFailureCount = stepArtifactGenerationFailureCount(
-    selectedStepArtifactGenerationState
-  );
-  const selectedStepArtifactGenerationActive = stepArtifactGenerationInProgress({
-    entry: selectedEntry,
-    generationState: selectedStepArtifactGenerationState,
-    activeGenerationFiles: activeGeneratorFiles
-  });
-  const selectedStepArtifactRenderPending = Boolean(
-    selectedStepArtifactBuildKey &&
-    (
-      selectedStepArtifactGenerationActive ||
-      (
-        selectedStepArtifactGenerationStatus !== "error" &&
-        selectedStepArtifactGenerationStatus !== "ready"
-      )
-    )
-  );
+  // The selected entry's render artifact is (re)building -> show the loading state. Replaces the
+  // old !entryHasMesh + buildable-code derivation.
+  const selectedStepArtifactRenderPending = selectedArtifactGenerating;
   const selectedMeshHash = entryMeshAssetSignature(selectedEntry);
   const selectedMeshMatches =
     !!meshState &&
@@ -1770,7 +1693,6 @@ export default function CadWorkspace({
         console.warn("Failed to refresh CAD catalog", error);
       }
     });
-    refreshCadGenerationStatus();
   }, [directoryAutoEnterDir]);
 
   useEffect(() => {
@@ -3108,12 +3030,10 @@ export default function CadWorkspace({
     !!selectedEntry &&
     urdfStatus !== ASSET_STATUS.ERROR &&
     (!selectedUrdfMatches || urdfStatus === ASSET_STATUS.LOADING);
+  // A fatal render-artifact error (not building) stops the loading spinner so the error surfaces.
   const stepArtifactBlocksRender =
     effectiveRenderFormat === RENDER_FORMAT.STEP &&
-    selectedEntry?.artifact &&
-    !selectedEntry.artifact.ok &&
-    !selectedEntryHasMesh &&
-    !selectedStepArtifactRenderPending;
+    selectedArtifact.status === "error";
   const stepViewerLoading =
     !!selectedEntry &&
     (selectedStepArtifactRenderPending || !stepArtifactBlocksRender) &&
@@ -3128,7 +3048,7 @@ export default function CadWorkspace({
       : isRobotRenderFormat(effectiveRenderFormat)
         ? urdfViewerLoading
         : stepViewerLoading;
-  const effectiveViewerLoading = viewerLoading || selectedGeneratorRunning || fileParamSelectionPending;
+  const effectiveViewerLoading = viewerLoading || selectedArtifactGenerating || fileParamSelectionPending;
   const assemblySidebarLoading =
     isAssemblyView &&
     selectedMeshMatches &&
@@ -3140,7 +3060,7 @@ export default function CadWorkspace({
     selectedAssemblyStructureReady &&
     !selectedAssemblyInteractionReady &&
     !selectedAssemblyHydrationFailed;
-  const viewerLoadingLabel = selectedGeneratorRunning
+  const viewerLoadingLabel = selectedArtifactGenerating
     ? "Generating file..."
     : effectiveRenderFormat === RENDER_FORMAT.DXF
     ? selectedEntry && !selectedEntryHasDxf
@@ -3159,19 +3079,19 @@ export default function CadWorkspace({
             : effectiveRenderFormat === RENDER_FORMAT.GLB
               ? "Loading GLB..."
               : stepUpdateInProgress
-                ? "STEP changed. Updating/regenerating CAD..."
+                ? ARTIFACT_GENERATING_LABEL
                 : selectedStepArtifactRenderPending
-                  ? "Generating STEP GLB artifact..."
+                  ? ARTIFACT_GENERATING_LABEL
                   : selectedStepModuleLoading
                     ? "Loading STEP module..."
                   : selectedEntry && !selectedEntryHasMesh
-                    ? "Generating CAD assets..."
+                    ? ARTIFACT_GENERATING_LABEL
                     : "Loading CAD...";
   const viewerAlert = useMemo(() => {
     if (viewerRuntimeAlert?.blocking) {
       return viewerRuntimeAlert;
     }
-    if (!selectedEntry || viewerLoading || selectedGeneratorRunning) {
+    if (!selectedEntry || viewerLoading || selectedArtifactGenerating) {
       return null;
     }
     if (effectiveRenderFormat === RENDER_FORMAT.DXF) {
@@ -3221,7 +3141,7 @@ export default function CadWorkspace({
     implicitStatus,
     selectedDxfData,
     selectedEntry,
-    selectedGeneratorRunning,
+    selectedArtifactGenerating,
     selectedGcodePreviewError,
     selectedImplicitRuntimeError,
     selectedImplicitRuntimeModel,
@@ -3661,7 +3581,7 @@ export default function CadWorkspace({
   }, []);
 
   const selectedFileStatusItems = useMemo(() => (
-    selectedGeneratorRunning
+    selectedArtifactGenerating
       ? []
       : buildFileStatusItems({
         entry: selectedEntry,
@@ -3671,17 +3591,15 @@ export default function CadWorkspace({
         urdfData: selectedUrdfData,
         viewerAlert,
         stepArtifactGenerationAvailable,
-        stepArtifactGenerationState: selectedStepArtifactGenerationState,
-        activeGenerationFiles: activeGeneratorFiles,
+        activeGenerationFiles: activeStepArtifactGenerationFiles,
         viewerServerInfo
       })
   ), [
-    activeGeneratorFiles,
+    activeStepArtifactGenerationFiles,
     selectedEntry,
     selectedFileSheetKind,
     selectedGcodeData,
-    selectedGeneratorRunning,
-    selectedStepArtifactGenerationState,
+    selectedArtifactGenerating,
     stepArtifactGenerationAvailable,
     selectedStepSourceStatus,
     selectedUrdfData,
@@ -4686,164 +4604,10 @@ export default function CadWorkspace({
     expandFileViewerTreeToEntry(selectedEntry);
   }, [expandFileViewerTreeToEntry, selectedEntry]);
 
-  useEffect(() => {
-    selectedStepArtifactBuildKeyRef.current = selectedStepArtifactBuildKey;
-  }, [selectedStepArtifactBuildKey]);
-
-  useEffect(() => {
-    if (!selectedStepArtifactBuildKey || !selectedStepArtifactBuildFile) {
-      return undefined;
-    }
-
-    if (selectedStepArtifactExternalGenerationActive) {
-      return undefined;
-    }
-
-    if (
-      selectedStepArtifactGenerationStatus === "ready" ||
-      (
-        selectedStepArtifactGenerationStatus === "error" &&
-        selectedStepArtifactGenerationFailureCount >= STEP_ARTIFACT_GENERATION_FAILURE_DISPLAY_THRESHOLD
-      )
-    ) {
-      return undefined;
-    }
-
-    if (stepArtifactGenerationRequestsRef.current.has(selectedStepArtifactBuildKey)) {
-      return undefined;
-    }
-
-    const request = {
-      key: selectedStepArtifactBuildKey,
-      file: selectedStepArtifactBuildFile
-    };
-    stepArtifactGenerationRequestsRef.current.set(selectedStepArtifactBuildKey, request);
-    setStatus(ASSET_STATUS.LOADING);
-    setError("");
-
-    const runGeneration = () => (
-      runStepArtifactGenerationWithRetries({
-        key: selectedStepArtifactBuildKey,
-        file: selectedStepArtifactBuildFile,
-        initialFailureCount: selectedStepArtifactGenerationFailureCount,
-        generate: requestStepArtifactGeneration,
-        isCurrent: () => stepArtifactGenerationRequestsRef.current.get(selectedStepArtifactBuildKey) === request,
-        onState: (state) => {
-          setStepArtifactGenerationStateByKey((current) => ({
-            ...current,
-            [selectedStepArtifactBuildKey]: state
-          }));
-        },
-        onFinalError: (message) => {
-          if (selectedStepArtifactBuildKeyRef.current === selectedStepArtifactBuildKey) {
-            setStatus(ASSET_STATUS.ERROR);
-            setError(message);
-          }
-        },
-        validatePayload: (payload) => validateGeneratedStepArtifactPayload(
-          payload,
-          { file: selectedStepArtifactBuildFile }
-        )
-      })
-    );
-
-    runGeneration()
-      .finally(() => {
-        if (stepArtifactGenerationRequestsRef.current.get(selectedStepArtifactBuildKey) === request) {
-          stepArtifactGenerationRequestsRef.current.delete(selectedStepArtifactBuildKey);
-        }
-      });
-
-    return undefined;
-  }, [
-    selectedStepArtifactBuildFile,
-    selectedStepArtifactBuildKey,
-    selectedStepArtifactExternalGenerationActive,
-    selectedStepArtifactGenerationFailureCount,
-    selectedStepArtifactGenerationStatus,
-    setError,
-    setStatus
-  ]);
-
-  useEffect(() => {
-    if (!selectedStepSourceStatusKey || !selectedStepSourceStatusFile) {
-      setStepSourceStatusState((current) => (
-        current.status === null && !current.loading
-          ? current
-          : {
-              key: "",
-              file: "",
-              status: null,
-              loading: false,
-              error: ""
-            }
-      ));
-      return undefined;
-    }
-
-    let cancelled = false;
-    let retryTimer = 0;
-    let attempts = 0;
-    const controller = new AbortController();
-
-    const loadStatus = () => {
-      setStepSourceStatusState((current) => ({
-        key: selectedStepSourceStatusKey,
-        file: selectedStepSourceStatusFile,
-        status: current.key === selectedStepSourceStatusKey ? current.status : null,
-        loading: true,
-        error: ""
-      }));
-      requestStepSourceStatus(selectedStepSourceStatusFile, { signal: controller.signal })
-        .then((payload) => {
-          if (cancelled || controller.signal.aborted) {
-            return;
-          }
-          setStepSourceStatusState({
-            key: selectedStepSourceStatusKey,
-            file: selectedStepSourceStatusFile,
-            status: payload,
-            loading: false,
-            error: ""
-          });
-          const stepStatus = String(payload?.step?.status || "").trim();
-          if (
-            selectedStepArtifactGenerationStatus === "ready" &&
-            (stepStatus === "missing" || stepStatus === "stale") &&
-            attempts < 6
-          ) {
-            attempts += 1;
-            retryTimer = window.setTimeout(loadStatus, 1500);
-          }
-        })
-        .catch((statusError) => {
-          if (cancelled || controller.signal.aborted) {
-            return;
-          }
-          setStepSourceStatusState({
-            key: selectedStepSourceStatusKey,
-            file: selectedStepSourceStatusFile,
-            status: null,
-            loading: false,
-            error: statusError instanceof Error ? statusError.message : String(statusError)
-          });
-        });
-    };
-
-    loadStatus();
-
-    return () => {
-      cancelled = true;
-      controller.abort();
-      if (retryTimer) {
-        window.clearTimeout(retryTimer);
-      }
-    };
-  }, [
-    selectedStepArtifactGenerationStatus,
-    selectedStepSourceStatusFile,
-    selectedStepSourceStatusKey
-  ]);
+  // The render-artifact (re)build + freshness flow now lives entirely in useArtifact (see
+  // selectedArtifact above): it GETs /__cad/artifact for freshness and POSTs to (re)build when
+  // missing/stale, reporting ready | generating | error. The old build effect + step-source-status
+  // fetch effect that this replaced have been removed.
 
   useEffect(() => {
     if (!selectedEntry) {
@@ -5518,10 +5282,10 @@ export default function CadWorkspace({
       return null;
     }
 
-    if (selectedGeneratorRunning) {
+    if (selectedArtifactGenerating) {
       return {
         loading: true,
-        label: "generating",
+        label: ARTIFACT_GENERATING_LABEL,
         title: "Generator script is running"
       };
     }
@@ -5561,7 +5325,7 @@ export default function CadWorkspace({
     if (effectiveRenderFormat === RENDER_FORMAT.STEP && stepUpdateInProgress) {
       return {
         loading: true,
-        label: "building",
+        label: ARTIFACT_GENERATING_LABEL,
         title: viewerLoadingLabel
       };
     }
@@ -5569,7 +5333,7 @@ export default function CadWorkspace({
     if (effectiveRenderFormat === RENDER_FORMAT.STEP && selectedStepArtifactRenderPending) {
       return {
         loading: true,
-        label: "generating GLB",
+        label: ARTIFACT_GENERATING_LABEL,
         title: viewerLoadingLabel
       };
     }
@@ -5650,7 +5414,7 @@ export default function CadWorkspace({
     selectedEntryHasImplicit,
     selectedEntryHasMesh,
     selectedEntryHasUrdf,
-    selectedGeneratorRunning,
+    selectedArtifactGenerating,
     selectedStepArtifactRenderPending,
     selectedStepModuleLoading,
     stepUpdateInProgress,
@@ -8079,7 +7843,6 @@ export default function CadWorkspace({
         console.warn("Failed to refresh CAD catalog", error);
       }
     });
-    refreshCadGenerationStatus();
   }, [explicitFileParam, resetActiveDirectory, directorySelectionActive]);
 
   const handleRevealEntryInExplorerView = useCallback((entry) => {
@@ -8282,6 +8045,41 @@ export default function CadWorkspace({
     selectedImplicitAnimationViewState,
     selectedKey
   ]);
+
+  const handleExportStepFile = useCallback(async (entry, format) => {
+    const fileRef = entry ? fileKey(entry) : "";
+    const exportFormat = String(format || "").trim().toLowerCase();
+    if (!fileRef || !exportFormat || typeof window === "undefined") {
+      return;
+    }
+    const busyKey = `${fileRef}:export:${exportFormat}`;
+    setCopyStatus("");
+    setScreenshotStatus("");
+    setFileAccessBusyKey(busyKey);
+    try {
+      setCopyStatus(`Exporting ${stepExportFormatLabel(exportFormat)}...`);
+      const payload = await requestStepExport({ file: fileRef, format: exportFormat });
+      if (payload?.cancelled) {
+        // User dismissed the native save dialog — clear the in-progress status, no error.
+        setCopyStatus("");
+        return;
+      }
+      const filename = String(payload?.filename || "").trim();
+      const downloadUrl = String(payload?.downloadUrl || "").trim();
+      if (downloadUrl) {
+        const result = triggerUrlDownload(downloadUrl, { filename });
+        setCopyStatus(result.message);
+      } else {
+        const savedPath = String(payload?.path || "").trim();
+        const label = filename || stepExportFormatLabel(exportFormat);
+        setCopyStatus(savedPath ? `Exported ${label} to ${savedPath}` : `Exported ${label}`);
+      }
+    } catch (error) {
+      setCopyStatus(error instanceof Error ? error.message : "Export failed");
+    } finally {
+      setFileAccessBusyKey((current) => (current === busyKey ? "" : current));
+    }
+  }, []);
 
   const handleDrawingStrokesChange = useCallback((nextStrokes) => {
     const normalized = cloneDrawingStrokes(nextStrokes);
@@ -8646,7 +8444,6 @@ export default function CadWorkspace({
           entryHasDxf={entryHasDxf}
           entryHasGcode={entryHasGcode}
           entryHasUrdf={entryHasUrdf}
-          activeGenerationFiles={activeGeneratorFiles}
           activeStepArtifactGenerationFile={activeStepArtifactGenerationFiles}
           stepArtifactGenerationAvailable={stepArtifactGenerationAvailable}
           themePresets={availableThemePresets}
@@ -8668,6 +8465,7 @@ export default function CadWorkspace({
           fileAccessBusyKey={fileAccessBusyKey}
           onDownloadFileAsset={handleDownloadFileAsset}
           onExportImplicitFile={handleExportImplicitFile}
+          onExportStepFile={handleExportStepFile}
           onRevealFileAsset={handleRevealFileAsset}
           onRevealInExplorerView={handleRevealEntryInExplorerView}
           onCopyFileAssetReference={handleCopyFileAssetReference}
@@ -8699,7 +8497,6 @@ export default function CadWorkspace({
               entryHasDxf={entryHasDxf}
               entryHasGcode={entryHasGcode}
               entryHasUrdf={entryHasUrdf}
-              activeGenerationFiles={activeGeneratorFiles}
               activeStepArtifactGenerationFile={activeStepArtifactGenerationFiles}
               stepArtifactGenerationAvailable={stepArtifactGenerationAvailable}
               canRevealFileAssets={fileRevealAvailable}
@@ -8708,6 +8505,7 @@ export default function CadWorkspace({
               fileAccessBusyKey={fileAccessBusyKey}
               onDownloadFileAsset={handleDownloadFileAsset}
               onExportImplicitFile={handleExportImplicitFile}
+              onExportStepFile={handleExportStepFile}
               onRevealFileAsset={handleRevealFileAsset}
               onRevealInExplorerView={handleRevealEntryInExplorerView}
               onCopyFileAssetReference={handleCopyFileAssetReference}
@@ -8802,7 +8600,7 @@ export default function CadWorkspace({
                 localFileOpenAvailable={fileRevealAvailable}
                 fileAccessBusyKey={fileAccessBusyKey}
                 onOpenFileAsset={handleRevealFileAsset}
-                suppressDynamicMetadataStatus={selectedGeneratorRunning}
+                suppressDynamicMetadataStatus={selectedArtifactGenerating}
                 statusItems={selectedFileStatusItems}
                 themeTabs={themeTabs}
                 openSectionIds={effectiveFileSheetOpenSectionIds}
@@ -8834,7 +8632,7 @@ export default function CadWorkspace({
                 localFileOpenAvailable={fileRevealAvailable}
                 fileAccessBusyKey={fileAccessBusyKey}
                 onOpenFileAsset={handleRevealFileAsset}
-                suppressDynamicMetadataStatus={selectedGeneratorRunning}
+                suppressDynamicMetadataStatus={selectedArtifactGenerating}
                 statusItems={selectedFileStatusItems}
                 themeTabs={themeTabs}
                 openSectionIds={effectiveFileSheetOpenSectionIds}
@@ -8913,7 +8711,7 @@ export default function CadWorkspace({
                 localFileOpenAvailable={fileRevealAvailable}
                 fileAccessBusyKey={fileAccessBusyKey}
                 onOpenFileAsset={handleRevealFileAsset}
-                suppressDynamicMetadataStatus={selectedGeneratorRunning}
+                suppressDynamicMetadataStatus={selectedArtifactGenerating}
                 statusItems={selectedFileStatusItems}
                 themeTabs={themeTabs}
                 openSectionIds={effectiveFileSheetOpenSectionIds}
@@ -8974,7 +8772,7 @@ export default function CadWorkspace({
                 localFileOpenAvailable={fileRevealAvailable}
                 fileAccessBusyKey={fileAccessBusyKey}
                 onOpenFileAsset={handleRevealFileAsset}
-                suppressDynamicMetadataStatus={selectedGeneratorRunning}
+                suppressDynamicMetadataStatus={selectedArtifactGenerating}
                 statusItems={selectedFileStatusItems}
                 themeTabs={themeTabs}
                 openSectionIds={effectiveFileSheetOpenSectionIds}
@@ -8997,7 +8795,7 @@ export default function CadWorkspace({
                 localFileOpenAvailable={fileRevealAvailable}
                 fileAccessBusyKey={fileAccessBusyKey}
                 onOpenFileAsset={handleRevealFileAsset}
-                suppressDynamicMetadataStatus={selectedGeneratorRunning}
+                suppressDynamicMetadataStatus={selectedArtifactGenerating}
                 statusItems={selectedFileStatusItems}
                 themeTabs={themeTabs}
                 openSectionIds={effectiveFileSheetOpenSectionIds}
@@ -9041,7 +8839,7 @@ export default function CadWorkspace({
                 localFileOpenAvailable={fileRevealAvailable}
                 fileAccessBusyKey={fileAccessBusyKey}
                 onOpenFileAsset={handleRevealFileAsset}
-                suppressDynamicMetadataStatus={selectedGeneratorRunning}
+                suppressDynamicMetadataStatus={selectedArtifactGenerating}
                 statusItems={selectedFileStatusItems}
                 themeTabs={themeTabs}
                 openSectionIds={effectiveFileSheetOpenSectionIds}

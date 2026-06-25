@@ -1,10 +1,46 @@
 import assert from "node:assert/strict";
+import crypto from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 
 import { createLocalAssetBackend } from "./localAssetBackend.mjs";
+
+// The canonical render artifact is a SELF-CONTAINED component-GLB PACKAGE directory inside the
+// per-folder cache: `<folder>/__cadcache__/models/<step-filename>/assembly.json`, with its
+// content-addressed component GLBs in the package's own `components/<hash>.glb` dir. Mirror the
+// scanner test's helper so the served artifact assets resolve out of __cadcache__.
+function writeStepPackage(modelRoot, stepRelPath, { entryKind = "part", sourceKind = "step" } = {}) {
+  const stepAbs = path.join(modelRoot, stepRelPath);
+  const folder = path.dirname(stepAbs);
+  const stepName = path.basename(stepAbs);
+  const pkgDir = path.join(folder, "__cadcache__", "models", stepName);
+  const compDir = path.join(pkgDir, "components");
+  fs.mkdirSync(pkgDir, { recursive: true });
+  fs.mkdirSync(compDir, { recursive: true });
+  const cid = crypto.createHash("sha256").update(`comp:${stepRelPath}`).digest("hex").slice(0, 16);
+  const componentPath = path.join(compDir, `${cid}.glb`);
+  fs.writeFileSync(componentPath, "component-glb-bytes");
+  const descriptorPath = path.join(pkgDir, "assembly.json");
+  fs.writeFileSync(descriptorPath, JSON.stringify({
+    kind: "assembly-package",
+    packageSchemaVersion: 2,
+    entryKind,
+    rootName: stepName.replace(/\.(step|stp)$/i, ""),
+    units: "mm",
+    sourceKind,
+    stepPath: stepName,
+    bbox: { min: [0, 0, 0], max: [1, 1, 1] },
+    stats: { occurrenceCount: 1, shapeCount: 1 },
+    components: { [cid]: { glb: `components/${cid}.glb`, contentHash: cid } },
+    occurrences: [{
+      id: "o1.1", name: "occ", component: cid,
+      transform: [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1],
+    }],
+  }));
+  return { pkgDir, descriptorPath, componentPath };
+}
 
 async function withTempDirectoryRoot(callback) {
   const directoryRoot = fs.mkdtempSync(path.join(os.tmpdir(), "cad-viewer-backend-"));
@@ -207,30 +243,12 @@ test("local backend incrementally refreshes STEP entries when sidecars change", 
   });
 });
 
-test("local backend reports active generator status for the active root", async () => {
+test("local backend does not expose readGenerationStatus (replaced by lock-in-pull)", async () => {
   await withTempDirectoryRoot((directoryRoot) => {
-    const modelRoot = path.join(directoryRoot, "models");
-    const statusPath = path.join(modelRoot, ".part.step.run-1.generation.lock.json");
-    const updatedAt = new Date().toISOString();
-    fs.mkdirSync(modelRoot, { recursive: true });
-    fs.writeFileSync(statusPath, JSON.stringify({
-      status: "running",
-      id: "run-1",
-      pid: process.pid,
-      startedAt: updatedAt,
-      updatedAt,
-      sourcePath: "models/part.py",
-      generator: "gen_step",
-      outputs: [{ path: "models/part.step", kind: "step" }],
-    }));
     const backend = createLocalAssetBackend({ directoryRoot, rootDir: "models" });
-
-    const status = backend.readGenerationStatus();
-
-    assert.equal(status.files[path.join(modelRoot, "part.step")].running, true);
-    assert.equal(status.files[path.join(modelRoot, "part.step")].generator, "gen_step");
-    assert.equal(backend.generationStatusDir(), modelRoot);
-    assert.equal(backend.isGenerationStatusPath(statusPath), true);
+    assert.equal(typeof backend.readGenerationStatus, "undefined");
+    assert.equal(typeof backend.generationStatusDir, "undefined");
+    assert.equal(typeof backend.isGenerationStatusPath, "undefined");
   });
 });
 
@@ -248,52 +266,19 @@ test("local backend resolves same-stem Python generators without requiring a STE
   });
 });
 
-test("local backend rejects Viewer artifact regeneration when same-stem Python has no STEP file", async () => {
+test("local backend regenerates same-stem Python generators even with no committed STEP file", async () => {
   await withTempDirectoryRoot(async (directoryRoot) => {
     const modelRoot = path.join(directoryRoot, "models");
-    const generatorPath = path.join(modelRoot, "robot", "robot.py");
+    const generatorPath = path.join(modelRoot, "robot", "robot.step.py");
     fs.mkdirSync(path.dirname(generatorPath), { recursive: true });
     fs.writeFileSync(generatorPath, "def gen_step():\n    return None\n");
-    const stepPath = path.join(modelRoot, "robot", "robot.step");
-    const backend = createLocalAssetBackend({
-      directoryRoot,
-      rootDir: "models",
-      stepArtifactGenerator: async () => {
-        throw new Error("Python generators should not be invoked by Viewer regeneration.");
-      },
-    });
-    const resolved = backend.resolveStepSource("robot/robot.step");
-
-    assert.equal(resolved.stepPath, stepPath);
-    assert.equal(resolved.sourcePath, generatorPath);
-    assert.equal(resolved.skipStepWrite, true);
-    await assert.rejects(
-      () => backend.generateStepArtifact({
-        fileRef: "robot/robot.step",
-        force: true,
-      }),
-      /only regenerates GLB artifacts for existing STEP\/STP files/
-    );
-  });
-});
-
-test("local backend regenerates same-stem Python STEP artifacts from the STEP file", async () => {
-  await withTempDirectoryRoot(async (directoryRoot) => {
-    const modelRoot = path.join(directoryRoot, "models");
-    const generatorPath = path.join(modelRoot, "robot", "robot.py");
-    fs.mkdirSync(path.dirname(generatorPath), { recursive: true });
-    fs.writeFileSync(generatorPath, "def gen_step():\n    return None\n");
-    const stepPath = path.join(modelRoot, "robot", "robot.step");
-    fs.writeFileSync(stepPath, "ISO-10303-21;\nEND-ISO-10303-21;\n");
+    const stepPath = path.join(modelRoot, "robot", "robot.step"); // no committed STEP on disk
+    let invokedWith = null;
     const backend = createLocalAssetBackend({
       directoryRoot,
       rootDir: "models",
       stepArtifactGenerator: async (request) => {
-        assert.equal(request.stepPath, stepPath);
-        assert.equal(request.sourcePath, "");
-        assert.equal(request.skipStepWrite, false);
-        assert.equal(request.writeStepAfterArtifact, false);
-        assert.equal(request.force, true);
+        invokedWith = request;
         return { ok: true, validation: { ok: true } };
       },
     });
@@ -302,8 +287,46 @@ test("local backend regenerates same-stem Python STEP artifacts from the STEP fi
     assert.equal(resolved.stepPath, stepPath);
     assert.equal(resolved.sourcePath, generatorPath);
     assert.equal(resolved.skipStepWrite, true);
+
+    // A generated model (Python gen_step, no committed STEP) is now regenerable on demand: the
+    // route invokes the generator with the same-stem Python source instead of rejecting it.
     const result = await backend.generateStepArtifact({
       fileRef: "robot/robot.step",
+      force: true,
+    });
+    assert.equal(result.ok, true);
+    assert.equal(invokedWith?.stepPath, stepPath);
+    assert.equal(invokedWith?.sourcePath, generatorPath);
+  });
+});
+
+test("local backend resolves a generated .step.py entry from its own python source", async () => {
+  await withTempDirectoryRoot(async (directoryRoot) => {
+    const modelRoot = path.join(directoryRoot, "models");
+    const generatorPath = path.join(modelRoot, "robot", "robot.step.py");
+    fs.mkdirSync(path.dirname(generatorPath), { recursive: true });
+    fs.writeFileSync(generatorPath, "def gen_step():\n    return None\n");
+    // No on-disk `robot.step`: a generated model is the `.step.py` entry, keyed by its own name.
+    const stepPath = path.join(modelRoot, "robot", "robot.step");
+    const backend = createLocalAssetBackend({
+      directoryRoot,
+      rootDir: "models",
+      stepArtifactGenerator: async (request) => {
+        assert.equal(request.stepPath, stepPath);
+        assert.equal(request.sourcePath, generatorPath);
+        assert.equal(request.skipStepWrite, false);
+        assert.equal(request.writeStepAfterArtifact, false);
+        assert.equal(request.force, true);
+        return { ok: true, validation: { ok: true } };
+      },
+    });
+    const resolved = backend.resolveStepSource("robot/robot.step.py");
+
+    assert.equal(resolved.stepPath, stepPath);
+    assert.equal(resolved.sourcePath, generatorPath);
+    assert.equal(resolved.skipStepWrite, true);
+    const result = await backend.generateStepArtifact({
+      fileRef: "robot/robot.step.py",
       force: true,
     });
 
@@ -398,7 +421,7 @@ test("local backend reports missing Python-backed STEP files dynamically", async
   await withTempDirectoryRoot((directoryRoot) => {
     const modelRoot = path.join(directoryRoot, "models");
     fs.mkdirSync(modelRoot, { recursive: true });
-    fs.writeFileSync(path.join(modelRoot, "box.py"), "def gen_step():\n    return None\n");
+    fs.writeFileSync(path.join(modelRoot, "box.step.py"), "def gen_step():\n    return None\n");
     const backend = createLocalAssetBackend({ directoryRoot, rootDir: "models" });
 
     const status = backend.readStepSourceStatus({ fileRef: "box.step" });
@@ -424,7 +447,10 @@ test("local backend defers STEP artifact status to current-file status reads", a
     assert.equal(catalogEntry.rootRelativeFile, "part.step");
     assert.equal(catalogEntry.artifact, undefined);
     assert.equal(status.artifact.error, "missing_glb");
-    assert.equal(status.artifact.glbPath, path.join(modelRoot, ".part.step.glb"));
+    assert.equal(
+      status.artifact.glbPath,
+      path.join(modelRoot, "__cadcache__", "models", "part.step"),
+    );
   });
 });
 
@@ -475,24 +501,31 @@ test("local backend resolves generated GLB artifact assets from catalog URLs", a
     const modelRoot = path.join(directoryRoot, "models");
     fs.mkdirSync(modelRoot, { recursive: true });
     const stepPath = path.join(modelRoot, "part.step");
-    const artifactPath = path.join(modelRoot, ".part.step.glb");
     fs.writeFileSync(stepPath, "ISO-10303-21;\nEND-ISO-10303-21;\n");
-    fs.writeFileSync(artifactPath, "glb");
+    const { pkgDir, descriptorPath, componentPath } = writeStepPackage(modelRoot, "part.step");
     const backend = createLocalAssetBackend({ directoryRoot, rootDir: "models" });
     const catalog = backend.refreshCatalog();
 
-    const access = backend.resolveFileAssetAccess({
-      fileRef: "part.step",
-      asset: "artifact",
-      catalog,
-    });
+    // The STEP catalog entry's render artifact is a component-GLB PACKAGE: its URL points at
+    // the package directory inside __cadcache__, and the viewer fetches the descriptor +
+    // referenced component GLBs out of __cadcache__.
+    const entry = catalog.entries.find((candidate) => candidate.rootRelativeFile === "part.step");
+    const entryFileParam = new URL(entry.url, "http://cad.local").searchParams.get("file");
+    assert.equal(entryFileParam, pkgDir);
 
-    assert.equal(access.asset, "artifact");
-    assert.equal(access.file, artifactPath);
-    assert.equal(access.rootRelativeFile, ".part.step.glb");
-    assert.equal(access.path, artifactPath);
-    assert.equal(access.filename, ".part.step.glb");
-    assert.equal(access.contentType, "model/gltf-binary");
+    // Both the package descriptor and its content-addressed component GLB resolve to served
+    // assets inside __cadcache__.
+    const descriptorAccess = backend.assetPathForFileRef(descriptorPath, { rootDir: "models" });
+    assert.equal(descriptorAccess, descriptorPath);
+    assert.equal(path.relative(modelRoot, descriptorAccess), path.join("__cadcache__", "models", "part.step", "assembly.json"));
+
+    const componentAccess = backend.assetPathForFileRef(componentPath, { rootDir: "models" });
+    assert.equal(componentAccess, componentPath);
+    assert.equal(
+      path.dirname(path.relative(modelRoot, componentAccess)),
+      path.join("__cadcache__", "models", "part.step", "components"),
+    );
+    assert.equal(backend.contentTypeForPath(componentAccess), "model/gltf-binary");
   });
 });
 
@@ -518,24 +551,30 @@ test("local backend resolves catalog output files whose names begin with two dot
   });
 });
 
-test("local backend resolves Python source code separately from output files", async () => {
+test("local backend resolves a generated .step.py entry's python source", async () => {
   await withTempDirectoryRoot((directoryRoot) => {
     const modelRoot = path.join(directoryRoot, "models");
     fs.mkdirSync(modelRoot, { recursive: true });
-    const stepPath = path.join(modelRoot, "part.step");
-    const sourcePath = path.join(modelRoot, "part.py");
-    fs.writeFileSync(stepPath, "ISO-10303-21;\nEND-ISO-10303-21;\n");
+    const sourcePath = path.join(modelRoot, "part.step.py");
     fs.writeFileSync(sourcePath, "def gen_step():\n    return None\n");
     const backend = createLocalAssetBackend({ directoryRoot, rootDir: "models" });
-    const catalog = backend.refreshCatalog();
+    // A generated model is the `.step.py` entry; its python source resolves to the generator file
+    // itself (the cache is keyed by entry filename, so it never collapses with an imported `.step`).
+    const catalog = {
+      schemaVersion: 4,
+      entries: [{
+        file: "part.step.py",
+        kind: "part",
+        sourceKind: "python",
+        source: { file: "part.step.py", sourcePath: "part.step.py" },
+      }],
+    };
 
-    const output = backend.resolveFileAssetAccess({ fileRef: "part.step", asset: "output", catalog });
-    const source = backend.resolveFileAssetAccess({ fileRef: "part.step", asset: "source", catalog });
+    const source = backend.resolveFileAssetAccess({ fileRef: "part.step.py", asset: "source", catalog });
 
-    assert.equal(output.path, stepPath);
     assert.equal(source.asset, "source");
     assert.equal(source.path, sourcePath);
-    assert.equal(source.filename, "part.py");
+    assert.equal(source.filename, "part.step.py");
     assert.equal(source.contentType, "text/plain; charset=utf-8");
   });
 });
@@ -598,7 +637,7 @@ test("local backend ignores same-stem Python metadata when regenerating existing
     const modelRoot = path.join(directoryRoot, "models");
     fs.mkdirSync(path.join(modelRoot, "robot"), { recursive: true });
     fs.writeFileSync(path.join(modelRoot, "robot", "__init__.py"), "\n");
-    const generatorPath = path.join(modelRoot, "robot", "robot.py");
+    const generatorPath = path.join(modelRoot, "robot", "robot.step.py");
     fs.writeFileSync(generatorPath, "def gen_step():\n    return None\n");
     const stepPath = path.join(modelRoot, "robot", "robot.step");
     fs.writeFileSync(stepPath, "ISO-10303-21;\nEND-ISO-10303-21;\n");

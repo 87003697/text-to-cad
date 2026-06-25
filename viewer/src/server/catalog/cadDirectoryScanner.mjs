@@ -5,6 +5,7 @@ import {
   inlineStepGlbArtifactPathForSource,
   isInlineStepGlbArtifactPath,
   isInlineStepParameterPath,
+  isInsideCadCache,
   isPathInsidePerStepViewerDirectory,
   isPerStepViewerDirectoryName,
   stepParameterPathForStepSource,
@@ -32,6 +33,7 @@ export const VIEWER_SKIPPED_DIRECTORIES = new Set([
   ".viewer",
   ".git",
   ".venv",
+  "__cadcache__",
   "__pycache__",
   "build",
   "coverage",
@@ -214,7 +216,14 @@ function manifestIdentityRootForStep(repoRoot, actualStepPath, manifestStepPath)
   if (!normalizedStepPath || !actualStepPath) {
     return resolvedRepoRoot;
   }
-  const actualRepoPath = repoRelativePath(resolvedRepoRoot, actualStepPath);
+  // `actualStepPath` is the ENTRY file — `<name>.step.py` for a generated model — while the
+  // descriptor's `stepPath` is the LOGICAL step (`<name>.step`). Compare on the logical step path
+  // so the identity-root suffix-strip aligns (otherwise it never matches and the generator's
+  // sourcePath can't be resolved → a false `missing_source_path`).
+  const logicalActualStepPath = /\.(step|stp)\.py$/i.test(String(actualStepPath))
+    ? String(actualStepPath).slice(0, -".py".length)
+    : actualStepPath;
+  const actualRepoPath = repoRelativePath(resolvedRepoRoot, logicalActualStepPath);
   if (actualRepoPath === normalizedStepPath) {
     return resolvedRepoRoot;
   }
@@ -431,9 +440,35 @@ function generatedSourceStatusForFile({ repoRoot, sourcePath, kind }) {
   };
 }
 
+// The render artifact is either a monolith GLB file or a component-GLB package
+// DIRECTORY (assembly.json descriptor + component GLBs). Returns the descriptor file's
+// stats when ``glbPath`` is a package directory, else null.
+function packageDescriptorStats(glbPath) {
+  return fileStats(path.join(glbPath, "assembly.json"));
+}
+
+// Whether a STEP render artifact exists for ``glbPath`` — a monolith GLB file or a
+// component-GLB package directory.
+function stepRenderArtifactPresent(glbPath) {
+  return Boolean(fileStats(glbPath) || packageDescriptorStats(glbPath));
+}
+
 function assetForPath(repoRoot, filePath) {
   const stats = fileStats(filePath);
   if (!stats) {
+    // Component-GLB package directory: version/hash/bytes come from its assembly.json
+    // descriptor, but the URL points at the package directory itself (the viewer fetches
+    // <dir>/assembly.json and the referenced component GLBs).
+    const descriptorStats = packageDescriptorStats(filePath);
+    if (descriptorStats) {
+      const version = `${descriptorStats.size.toString(36)}-${descriptorStats.mtimeNs.toString(36)}`;
+      const repoPath = repoRelativePath(repoRoot, filePath);
+      return {
+        url: `${encodeUrlPath(repoPath)}?v=${encodeURIComponent(version)}`,
+        hash: sha256File(path.join(filePath, "assembly.json")),
+        bytes: Number(descriptorStats.size),
+      };
+    }
     return null;
   }
   const version = `${stats.size.toString(36)}-${stats.mtimeNs.toString(36)}`;
@@ -598,6 +633,157 @@ function staleStepArtifactError({
   });
 }
 
+// A component-GLB package is a DIRECTORY (assembly.json descriptor + content-addressed
+// component GLBs in the shared __cadcache__), not a monolithic GLB file. Validate the
+// descriptor + component presence + STEP freshness from the descriptor's provenance —
+// the per-component topology is embedded in each component GLB and read on demand, so
+// there is no whole-artifact GLB container to parse. Returns the validation result for a
+// package directory, or null when ``glbPath`` is not a package (fall through to the
+// monolith GLB-file validator).
+function validateAssemblyPackageArtifact({ repoRoot, sourcePath, cadPath, glbPath }) {
+  let dirStats;
+  try {
+    dirStats = fs.statSync(glbPath);
+  } catch {
+    return null;
+  }
+  if (!dirStats.isDirectory()) {
+    return null;
+  }
+  const packageFail = (code, reason, extra = {}) => ({
+    topology: null,
+    stepArtifact: stepArtifactError({ code, reason, repoRoot, cadPath, sourcePath, glbPath }),
+    glbPath,
+    stepHash: "",
+    sourceHash: "",
+    ...extra,
+  });
+
+  let descriptor;
+  try {
+    descriptor = JSON.parse(fs.readFileSync(path.join(glbPath, "assembly.json"), "utf-8"));
+  } catch {
+    return packageFail(
+      "missing_step_topology",
+      "Component-GLB package is missing a readable assembly.json descriptor"
+    );
+  }
+  if (!descriptor || descriptor.kind !== "assembly-package") {
+    return packageFail(
+      "unsupported_step_topology",
+      "assembly.json is not an assembly-package descriptor"
+    );
+  }
+  const components = descriptor.components && typeof descriptor.components === "object"
+    ? descriptor.components
+    : {};
+  for (const [cid, component] of Object.entries(components)) {
+    const ref = String(component?.glb || "").trim();
+    const componentPath = ref ? path.resolve(glbPath, ref) : "";
+    if (!componentPath || !fileStats(componentPath)) {
+      return packageFail("missing_glb", `Component-GLB package is missing component ${cid}`);
+    }
+  }
+
+  const artifactSourceKind = String(descriptor.sourceKind || "step").trim().toLowerCase();
+  const usesPython = artifactSourceKind === "python";
+  const normalizedSourceKind = usesPython ? "python" : "step";
+  const identityRoot = manifestIdentityRootForStep(repoRoot, sourcePath, descriptor.stepPath);
+  const sourceIdentity = usesPython
+    ? generatorSourcePathFromManifest(repoRoot, descriptor.sourcePath, {
+        identityRoot,
+        baseDir: path.dirname(glbPath),
+      })
+    : sourcePathFromManifest(repoRoot, descriptor.sourcePath, {
+        identityRoot,
+        baseDir: path.dirname(glbPath),
+      });
+  const artifactSourcePath = sourceIdentity.sourcePath;
+  // A python generator must record its source path (the generator file). An imported STEP
+  // has no separate source — the STEP file passed as ``sourcePath`` IS the source.
+  if (usesPython && (!artifactSourcePath || !sourceIdentity.filePath)) {
+    return packageFail(
+      "missing_source_path",
+      "assembly.json is missing required sourcePath identity"
+    );
+  }
+  const stepHash = String(descriptor.stepHash || "").trim();
+  const sourceHash = String(descriptor.sourceHash || "").trim();
+
+  // Imported STEP freshness: the on-disk STEP must still hash to the descriptor's stepHash.
+  // Generated (python) models write no STEP, so freshness rides on source-closure rehash,
+  // which the Python build path enforces; nothing to compare here.
+  if (!usesPython) {
+    const currentStepHash = fileStats(sourcePath) ? sha256File(sourcePath) : "";
+    if (currentStepHash && stepHash && stepHash !== currentStepHash) {
+      return {
+        topology: descriptor,
+        stepArtifact: staleStepArtifactError({
+          repoRoot,
+          cadPath,
+          sourcePath,
+          glbPath,
+          manifestSourcePath: artifactSourcePath,
+          sourceKind: normalizedSourceKind,
+          artifactHash: stepHash,
+          currentHash: currentStepHash,
+        }),
+        glbPath,
+        stepHash,
+        sourceHash,
+      };
+    }
+  }
+
+  // Generated (Python) models write no STEP, so freshness is a source-closure rehash that the
+  // Python build verifies by content. The scanner adds a cheap *trigger*: flag the package stale
+  // when any recorded closure source is newer (mtime) than the built descriptor, so editing a
+  // generator rebuilds it on the next open. A false positive (an mtime-only touch) is self-
+  // correcting — the Python build is a content-hash no-op and the descriptor mtime is bumped
+  // after generation (see localAssetBackend.generateStepArtifact).
+  if (usesPython) {
+    const descriptorStats = packageDescriptorStats(glbPath);
+    const closureSources = Array.isArray(descriptor.sourceClosureFiles)
+      ? descriptor.sourceClosureFiles
+      : [];
+    if (descriptorStats && closureSources.length) {
+      const modelFolder = path.dirname(sourceIdentity.filePath);
+      for (const relativeSource of closureSources) {
+        const sourceFileStats = fileStats(path.resolve(modelFolder, String(relativeSource || "")));
+        if (sourceFileStats && sourceFileStats.mtimeNs > descriptorStats.mtimeNs) {
+          return {
+            topology: descriptor,
+            stepArtifact: staleStepArtifactError({
+              repoRoot,
+              cadPath,
+              sourcePath,
+              glbPath,
+              manifestSourcePath: artifactSourcePath,
+              sourceKind: normalizedSourceKind,
+              artifactHash: sourceHash,
+              currentHash: "",
+            }),
+            glbPath,
+            stepHash,
+            sourceHash,
+          };
+        }
+      }
+    }
+  }
+
+  const stepArtifact = {
+    ok: true,
+    glbPath: repoRelativePath(repoRoot, glbPath),
+    ...(artifactSourcePath ? { sourcePath: artifactSourcePath } : {}),
+    sourceKind: normalizedSourceKind,
+    ...(usesPython
+      ? { sourceHash, ...(stepHash ? { stepHash } : {}) }
+      : { stepHash }),
+  };
+  return { topology: descriptor, stepArtifact, glbPath, stepHash, sourceHash };
+}
+
 export function validateStepTopologyArtifact({ repoRoot, sourcePath, cadPath }) {
   const glbPath = inlineStepGlbArtifactPathForSource(sourcePath);
   let stepHash = "";
@@ -610,6 +796,11 @@ export function validateStepTopologyArtifact({ repoRoot, sourcePath, cadPath }) 
     stepHash,
     sourceHash,
   });
+
+  const packageResult = validateAssemblyPackageArtifact({ repoRoot, sourcePath, cadPath, glbPath });
+  if (packageResult) {
+    return packageResult;
+  }
 
   if (!fileStats(glbPath)) {
     return fail(
@@ -1029,11 +1220,12 @@ function cadPathForStepSource(repoRoot, sourcePath, extension) {
 }
 
 function sourcePathForInlineStepGlbArtifact(glbPath) {
-  const name = path.basename(glbPath);
   if (!isInlineStepGlbArtifactPath(glbPath)) {
     return null;
   }
-  return path.join(path.dirname(glbPath), name.slice(1, -".glb".length));
+  // <folder>/__cadcache__/models/<step-filename> -> <folder>/<step-filename>
+  const folder = path.dirname(path.dirname(path.dirname(glbPath)));
+  return path.join(folder, path.basename(glbPath));
 }
 
 function sourcePathForInlineStepParameter(parameterPath) {
@@ -1079,6 +1271,45 @@ function catalogArtifactFromValidation(stepArtifact) {
 }
 
 function readStepCatalogMetadata({ repoRoot, glbPath, sourcePath = "" } = {}) {
+  // Component-GLB package: assembly.json IS the index manifest — read it directly instead
+  // of parsing an embedded GLB topology container.
+  const descriptorStats = packageDescriptorStats(glbPath);
+  if (descriptorStats && !fileStats(glbPath)) {
+    let descriptor;
+    try {
+      descriptor = JSON.parse(fs.readFileSync(path.join(glbPath, "assembly.json"), "utf-8"));
+    } catch {
+      return {};
+    }
+    if (!descriptor || descriptor.kind !== "assembly-package") {
+      return {};
+    }
+    const sourceKind = String(descriptor.sourceKind || "step").trim().toLowerCase() === "python"
+      ? "python"
+      : "step";
+    const identityRoot = manifestIdentityRootForStep(repoRoot, sourcePath, descriptor.stepPath);
+    const sourceIdentity = sourceKind === "python"
+      ? generatorSourcePathFromManifest(repoRoot, descriptor.sourcePath, {
+          identityRoot,
+          baseDir: path.dirname(glbPath),
+        })
+      : sourcePathFromManifest(repoRoot, descriptor.sourcePath, {
+          identityRoot,
+          baseDir: path.dirname(glbPath),
+        });
+    return {
+      topology: {
+        index: descriptor,
+        entryKind: String(descriptor.entryKind || "").trim().toLowerCase(),
+        hasSelector: false,
+        hasDisplayEdges: false,
+      },
+      sourceKind,
+      sourcePath: sourceIdentity.sourcePath,
+      sourceHash: String(descriptor.sourceHash || ""),
+      stepHash: String(descriptor.stepHash || ""),
+    };
+  }
   if (!fileStats(glbPath)) {
     return {};
   }
@@ -1159,7 +1390,15 @@ function pythonStepSourceFromStepMetadata(repoRoot, stepPath) {
 }
 
 function createStepEntry({ repoRoot, rootPath, sourcePath, extension, includeArtifactStatus = true }) {
-  const cadPath = cadPathForStepSource(repoRoot, sourcePath, extension);
+  // The ENTRY is `sourcePath` itself: `<name>.step.py` (a generated model's generator) or a
+  // `<name>.step`/`.stp` (imported). The render cache is keyed by the entry filename, so a
+  // generated `<name>.step.py` and an imported `<name>.step` get distinct packages and entries.
+  // The authored `.step.js` module sidecar and the logical cad ref stay keyed by the LOGICAL
+  // step (the entry minus the generator's trailing `.py`).
+  const entryIsPython = /\.py$/i.test(sourcePath);
+  const logicalStepPath = entryIsPython ? sourcePath.slice(0, -".py".length) : sourcePath;
+  const logicalExtension = entryIsPython ? path.extname(logicalStepPath).toLowerCase() : extension;
+  const cadPath = cadPathForStepSource(repoRoot, logicalStepPath, logicalExtension);
   const validation = includeArtifactStatus
     ? validateStepTopologyArtifact({
         repoRoot,
@@ -1174,40 +1413,32 @@ function createStepEntry({ repoRoot, rootPath, sourcePath, extension, includeArt
   const topology = validation?.topology || catalogMetadata.topology || null;
   const stepArtifact = validation?.stepArtifact || {};
   const glbAsset = assetForPath(repoRoot, glbPath);
-  const stepModuleAsset = assetForPath(repoRoot, stepParameterPathForStepSource(sourcePath));
+  const stepModuleAsset = assetForPath(repoRoot, stepParameterPathForStepSource(logicalStepPath));
   const artifact = includeArtifactStatus ? catalogArtifactFromValidation(stepArtifact) : undefined;
-  const artifactSourceKind = String(
-    stepArtifact.sourceKind ||
-    stepArtifact.error?.sourceKind ||
-    catalogMetadata.sourceKind ||
-    artifact?.sourceKind ||
-    "",
-  ).trim().toLowerCase();
-  const metadataPythonSource = (!includeArtifactStatus || artifact) && artifactSourceKind !== "python"
-    ? pythonStepSourceFromStepMetadata(repoRoot, sourcePath)
-    : null;
-  const sourceKind = artifactSourceKind === "python" || metadataPythonSource ? "python" : "step";
-  const artifactSourcePath = String(
-    stepArtifact.sourcePath ||
-    stepArtifact.error?.sourcePath ||
-    catalogMetadata.sourcePath ||
+  // The viewer is opinionated about entrypoints: a `.step.py` entry is a GENERATED model, a
+  // `.step`/`.stp` is an IMPORTED one — independent of artifact metadata or any sibling file
+  // (no auto-linking a `.step` to a same-stem generator; they are separate entries).
+  const sourceKind = entryIsPython ? "python" : "step";
+  const entryRef = fileRefForSource(rootPath, sourcePath);
+  const sourceHash = String(
+    stepArtifact.sourceHash ||
+    stepArtifact.error?.sourceHash ||
+    catalogMetadata.sourceHash ||
     ""
   ).trim();
-  const pythonSourcePath = artifactSourcePath || metadataPythonSource?.sourcePath || "";
   return {
-    file: fileRefForSource(rootPath, sourcePath),
+    file: entryRef,
     kind: stepKindFromTopology(topology),
     url: glbAsset?.url || assetUrlForPath(repoRoot, glbPath),
     hash: glbAsset?.hash || "",
     bytes: glbAsset?.bytes || 0,
     sourceKind,
-    ...(sourceKind === "python" && pythonSourcePath ? {
+    ...(entryIsPython ? {
+      // A generated model's source IS its own `.step.py` entry.
       source: {
-        file: pythonSourcePath,
-        sourcePath: pythonSourcePath,
-        ...((stepArtifact.sourceHash || catalogMetadata.sourceHash || metadataPythonSource?.sourceHash)
-          ? { sourceHash: stepArtifact.sourceHash || catalogMetadata.sourceHash || metadataPythonSource.sourceHash }
-          : {}),
+        file: entryRef,
+        sourcePath: entryRef,
+        ...(sourceHash ? { sourceHash } : {}),
       },
     } : {}),
     ...(stepModuleAsset ? { moduleUrl: stepModuleAsset.url } : {}),
@@ -1293,6 +1524,9 @@ function collectCadSourceFiles(rootPath, { scanRootPath = rootPath, includePath 
   for (const entry of entries) {
     const entryPath = path.join(rootPath, entry.name);
     if (entry.isDirectory()) {
+      // Render artifacts now live inside __cadcache__ (skipped); model folders hold only
+      // source. So just recurse into source directories — `shouldSkipDirectory` skips
+      // __cadcache__, hidden dirs, and legacy `.{model}.step/` dirs.
       if (!shouldSkipDirectory(entry.name) && scanPathIncluded(includePath, scanRootPath, entryPath, true)) {
         collectCadSourceFiles(entryPath, { scanRootPath, includePath }, result);
       }
@@ -1304,15 +1538,33 @@ function collectCadSourceFiles(rootPath, { scanRootPath = rootPath, includePath 
     if (!scanPathIncluded(includePath, scanRootPath, entryPath, false)) {
       continue;
     }
+    const lowerName = entry.name.toLowerCase();
+    // Skip any stale in-folder package artifact left over from the pre-__cadcache__ layout.
+    if (lowerName.startsWith(".") && (lowerName.endsWith(".step.glb") || lowerName.endsWith(".stp.glb"))) {
+      continue;
+    }
     const extension = path.extname(entry.name).toLowerCase();
-    if (isInlineStepGlbArtifactPath(entryPath)) {
-      const sourcePath = sourcePathForInlineStepGlbArtifact(entryPath);
-      if (sourcePath && !fileStats(sourcePath)) {
+    const lowerEntryName = entry.name.toLowerCase();
+    // A generator script is the only on-disk trace of a generated model (its render artifact
+    // lives in __cadcache__). Discover it via its LOGICAL STEP, but only when the artifact
+    // actually exists. The canonical entry marker is `<name>.step.py`: that filename is what
+    // distinguishes a buildable STEP entry from an ordinary helper module, so the viewer keys
+    // on it rather than scanning every .py. Its logical STEP is the filename minus the trailing
+    // ".py" (the stem already ends in ".step").
+    if (lowerEntryName.endsWith(".step.py")) {
+      // The `.step.py` generator is its OWN entry, keyed by its own filename. Emit it whenever its
+      // entry-keyed render package exists — INDEPENDENTLY of any sibling `<name>.step` (an imported
+      // STEP is a separate entry discovered below). The package lives at
+      // `<folder>/__cadcache__/models/<name>.step.py/`.
+      if (stepRenderArtifactPresent(inlineStepGlbArtifactPathForSource(entryPath))) {
         result.push(entryPath);
       }
       continue;
     }
-    if ((SOURCE_EXTENSIONS.has(extension) || pathIsImplicitCadSource(entryPath)) && !isInlineStepGlbArtifactPath(entryPath)) {
+    // Only `<name>.step.py` files are entry generators. A plain `<name>.py` is a helper/library
+    // module (never an entry) even if it defines gen_step, so it is intentionally NOT scanned —
+    // the viewer keys on the `.step.py` name, not on "any Python file that has gen_step()".
+    if (SOURCE_EXTENSIONS.has(extension) || pathIsImplicitCadSource(entryPath)) {
       result.push(entryPath);
       continue;
     }
@@ -1351,7 +1603,7 @@ function logicalStepSourceExistsForSidecar(sourcePath) {
     sourcePath &&
     (
       fileStats(sourcePath) ||
-      fileStats(inlineStepGlbArtifactPathForSource(sourcePath)) ||
+      stepRenderArtifactPresent(inlineStepGlbArtifactPathForSource(sourcePath)) ||
       fileStats(stepParameterPathForStepSource(sourcePath))
     )
   );
@@ -1419,8 +1671,22 @@ export function scanCadFile({
   }
 
   const extension = path.extname(resolvedFilePath).toLowerCase();
+  // A `.step.py` generator is a generated-STEP entry, keyed by its own filename. Surface it when
+  // its entry-keyed render package exists (independent of any sibling `.step`).
+  if (resolvedFilePath.toLowerCase().endsWith(".step.py")) {
+    if (!fileStats(resolvedFilePath) || !stepRenderArtifactPresent(inlineStepGlbArtifactPathForSource(resolvedFilePath))) {
+      return null;
+    }
+    return createStepEntry({
+      repoRoot,
+      rootPath: resolved.rootPath,
+      sourcePath: resolvedFilePath,
+      extension,
+      includeArtifactStatus,
+    });
+  }
   if ((!SOURCE_EXTENSIONS.has(extension) && !pathIsImplicitCadSource(resolvedFilePath)) || !fileStats(resolvedFilePath)) {
-    if ((extension === ".step" || extension === ".stp") && fileStats(inlineStepGlbArtifactPathForSource(resolvedFilePath))) {
+    if ((extension === ".step" || extension === ".stp") && stepRenderArtifactPresent(inlineStepGlbArtifactPathForSource(resolvedFilePath))) {
       return createStepEntry({
         repoRoot,
         rootPath: resolved.rootPath,
@@ -1467,7 +1733,7 @@ export function scanCadDirectory({
         ? sourcePathForInlineStepGlbArtifact(sourcePath)
         : sourcePath;
       const extension = path.extname(logicalSourcePath).toLowerCase();
-      if (extension === ".step" || extension === ".stp") {
+      if (extension === ".step" || extension === ".stp" || logicalSourcePath.toLowerCase().endsWith(".step.py")) {
         return createStepEntry({
           repoRoot,
           rootPath: resolved.rootPath,
@@ -1497,7 +1763,15 @@ export function sortCatalogEntries(entries) {
 
 export function isServedCadAsset(filePath) {
   const extension = path.extname(filePath).toLowerCase();
-  if (isInlineStepGlbArtifactPath(filePath)) {
+  // Generation lock files live beside the package dir inside __cadcache__ and are server-only
+  // coordination files — never served to the client.
+  const name = path.basename(filePath);
+  if (name.startsWith(".") && name.endsWith(".generation.lock.json")) {
+    return false;
+  }
+  // Render artifacts (package descriptors + content-addressed component GLBs) live inside
+  // __cadcache__ and are fetched by the viewer client.
+  if (isInsideCadCache(filePath)) {
     return true;
   }
   if (isInlineStepParameterPath(filePath)) {

@@ -7,6 +7,7 @@ import {
   Code,
   Copy,
   Cuboid,
+  Download,
   DraftingCompass,
   FileBox,
   Folder,
@@ -70,6 +71,60 @@ import {
   ellipsisBreadcrumbMenuDirectory
 } from "@/workbench/breadcrumbs";
 import viewerPackage from "../../../../package.json";
+import { STEP_EXPORT_FORMATS, isImportedStepEntry, stepExportItemLabel } from "@/workbench/stepExport";
+
+// Dedicated "download" icon dropdown for exporting the open STEP/assembly model to
+// STEP/3MF/STL/GLB. Hidden unless a STEP/assembly entry is selected and export is wired.
+function StepExportTopBarDropdown({
+  selectedEntry,
+  fileAccessBusyKey = "",
+  onExportStepFile,
+  buttonClassName,
+  iconClassName
+}) {
+  const kind = String(selectedEntry?.kind || "").trim().toLowerCase();
+  const isStepEntry = kind === "step" || kind === "assembly";
+  if (!selectedEntry || !isStepEntry || typeof onExportStepFile !== "function") {
+    return null;
+  }
+  const fileRef = String(selectedEntry?.file || selectedEntry?.id || "").trim();
+  const imported = isImportedStepEntry(selectedEntry);
+  const label = "Export model";
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <Button
+          type="button"
+          variant="ghost"
+          size="icon"
+          aria-label={label}
+          title={label}
+          className={buttonClassName}
+        >
+          <Download className={iconClassName} />
+          <span className="sr-only">{label}</span>
+        </Button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end" sideOffset={6} className="w-max">
+        {STEP_EXPORT_FORMATS.map((format) => {
+          const key = `${fileRef}:export:${format}`;
+          return (
+            <DropdownMenuItem
+              key={format}
+              className="text-xs"
+              disabled={fileAccessBusyKey === key}
+              onSelect={() => {
+                onExportStepFile(selectedEntry, format);
+              }}
+            >
+              <span className="min-w-0 truncate">{stepExportItemLabel(format, { imported })}</span>
+            </DropdownMenuItem>
+          );
+        })}
+      </DropdownMenuContent>
+    </DropdownMenu>
+  );
+}
 
 function fileSheetLabel(fileSheetKind) {
   if (fileSheetKind === "dxf") {
@@ -106,7 +161,6 @@ function entryStatusForMenu(entry, {
   entryHasDxf,
   entryHasGcode,
   entryHasUrdf,
-  activeGenerationFiles = [],
   activeStepArtifactGenerationFile = "",
   stepArtifactGenerationAvailable = true
 }) {
@@ -118,12 +172,10 @@ function entryStatusForMenu(entry, {
 
   return entryIconStatus(entry, {
     sourceFormat,
-    entryKey: fileKey(entry),
     hasMesh,
     hasDxf,
     hasGcode,
     hasUrdf,
-    activeGenerationFiles,
     activeStepArtifactGenerationFile,
     stepArtifactGenerationAvailable
   });
@@ -136,6 +188,7 @@ const ENTRY_ICON_COMPONENTS = {
   [ENTRY_ICON_KIND.GCODE]: Route,
   [ENTRY_ICON_KIND.IMPLICIT]: Code,
   [ENTRY_ICON_KIND.ROBOT]: Bot,
+  [ENTRY_ICON_KIND.STEP_GENERATED]: Code,
   [ENTRY_ICON_KIND.STEP_PART]: Package,
   [ENTRY_ICON_KIND.STL_MESH]: Cuboid,
   [ENTRY_ICON_KIND.THREE_MF_MESH]: Layers3,
@@ -156,7 +209,6 @@ function BreadcrumbEntryMenuItem({
   entryHasDxf,
   entryHasGcode,
   entryHasUrdf,
-  activeGenerationFiles = [],
   activeStepArtifactGenerationFile = "",
   stepArtifactGenerationAvailable = true
 }) {
@@ -171,7 +223,6 @@ function BreadcrumbEntryMenuItem({
     entryHasDxf,
     entryHasGcode,
     entryHasUrdf,
-    activeGenerationFiles,
     activeStepArtifactGenerationFile,
     stepArtifactGenerationAvailable
   });
@@ -222,7 +273,6 @@ function BreadcrumbDirectoryMenuItems({
   entryHasDxf,
   entryHasGcode,
   entryHasUrdf,
-  activeGenerationFiles = [],
   activeStepArtifactGenerationFile = "",
   stepArtifactGenerationAvailable = true,
   canRevealFileAssets = false,
@@ -231,6 +281,7 @@ function BreadcrumbDirectoryMenuItems({
   fileAccessBusyKey = "",
   onDownloadFileAsset,
   onExportImplicitFile,
+  onExportStepFile,
   onRevealFileAsset,
   onCopyFileAssetReference
 }) {
@@ -259,7 +310,6 @@ function BreadcrumbDirectoryMenuItems({
           entryHasDxf={entryHasDxf}
           entryHasGcode={entryHasGcode}
           entryHasUrdf={entryHasUrdf}
-          activeGenerationFiles={activeGenerationFiles}
           activeStepArtifactGenerationFile={activeStepArtifactGenerationFile}
           stepArtifactGenerationAvailable={stepArtifactGenerationAvailable}
           canRevealFileAssets={canRevealFileAssets}
@@ -268,6 +318,7 @@ function BreadcrumbDirectoryMenuItems({
           fileAccessBusyKey={fileAccessBusyKey}
           onDownloadFileAsset={onDownloadFileAsset}
           onExportImplicitFile={onExportImplicitFile}
+          onExportStepFile={onExportStepFile}
           onRevealFileAsset={onRevealFileAsset}
           onCopyFileAssetReference={onCopyFileAssetReference}
         />
@@ -286,7 +337,6 @@ function BreadcrumbDirectoryMenuItems({
         entryHasDxf={entryHasDxf}
         entryHasGcode={entryHasGcode}
         entryHasUrdf={entryHasUrdf}
-        activeGenerationFiles={activeGenerationFiles}
         activeStepArtifactGenerationFile={activeStepArtifactGenerationFile}
         stepArtifactGenerationAvailable={stepArtifactGenerationAvailable}
         canRevealFileAssets={canRevealFileAssets}
@@ -295,6 +345,7 @@ function BreadcrumbDirectoryMenuItems({
         fileAccessBusyKey={fileAccessBusyKey}
         onDownloadFileAsset={onDownloadFileAsset}
         onExportImplicitFile={onExportImplicitFile}
+        onExportStepFile={onExportStepFile}
         onRevealFileAsset={onRevealFileAsset}
         onCopyFileAssetReference={onCopyFileAssetReference}
       />
@@ -326,7 +377,6 @@ function BreadcrumbDirectorySubMenu({
   entryHasDxf,
   entryHasGcode,
   entryHasUrdf,
-  activeGenerationFiles = [],
   activeStepArtifactGenerationFile = "",
   stepArtifactGenerationAvailable = true,
   canRevealFileAssets = false,
@@ -335,6 +385,7 @@ function BreadcrumbDirectorySubMenu({
   fileAccessBusyKey = "",
   onDownloadFileAsset,
   onExportImplicitFile,
+  onExportStepFile,
   onRevealFileAsset,
   onCopyFileAssetReference
 }) {
@@ -362,7 +413,6 @@ function BreadcrumbDirectorySubMenu({
             entryHasDxf={entryHasDxf}
             entryHasGcode={entryHasGcode}
             entryHasUrdf={entryHasUrdf}
-            activeGenerationFiles={activeGenerationFiles}
             activeStepArtifactGenerationFile={activeStepArtifactGenerationFile}
             stepArtifactGenerationAvailable={stepArtifactGenerationAvailable}
             canRevealFileAssets={canRevealFileAssets}
@@ -371,6 +421,7 @@ function BreadcrumbDirectorySubMenu({
             fileAccessBusyKey={fileAccessBusyKey}
             onDownloadFileAsset={onDownloadFileAsset}
             onExportImplicitFile={onExportImplicitFile}
+            onExportStepFile={onExportStepFile}
             onRevealFileAsset={onRevealFileAsset}
             onCopyFileAssetReference={onCopyFileAssetReference}
           />
@@ -391,7 +442,6 @@ function BreadcrumbNodeDropdown({
   entryHasDxf,
   entryHasGcode,
   entryHasUrdf,
-  activeGenerationFiles = [],
   activeStepArtifactGenerationFile = "",
   stepArtifactGenerationAvailable = true,
   selectedStepSourceStatus = null,
@@ -401,6 +451,7 @@ function BreadcrumbNodeDropdown({
   fileAccessBusyKey = "",
   onDownloadFileAsset,
   onExportImplicitFile,
+  onExportStepFile,
   onRevealFileAsset,
   onRevealInExplorerView,
   onCopyFileAssetReference,
@@ -443,6 +494,7 @@ function BreadcrumbNodeDropdown({
         busyKey={fileAccessBusyKey}
         onDownloadFileAsset={onDownloadFileAsset}
         onExportImplicitFile={onExportImplicitFile}
+        onExportStepFile={onExportStepFile}
         onRevealFileAsset={onRevealFileAsset}
         onRevealInExplorerView={onRevealInExplorerView}
         onCopyFileAssetReference={onCopyFileAssetReference}
@@ -491,6 +543,7 @@ function BreadcrumbNodeDropdown({
       busyKey={fileAccessBusyKey}
       onDownloadFileAsset={onDownloadFileAsset}
       onExportImplicitFile={onExportImplicitFile}
+      onExportStepFile={onExportStepFile}
       onRevealFileAsset={onRevealFileAsset}
       onRevealInExplorerView={onRevealInExplorerView}
       onCopyFileAssetReference={onCopyFileAssetReference}
@@ -514,7 +567,6 @@ function BreadcrumbNodeDropdown({
             entryHasDxf={entryHasDxf}
             entryHasGcode={entryHasGcode}
             entryHasUrdf={entryHasUrdf}
-            activeGenerationFiles={activeGenerationFiles}
             activeStepArtifactGenerationFile={activeStepArtifactGenerationFile}
             stepArtifactGenerationAvailable={stepArtifactGenerationAvailable}
             canRevealFileAssets={canRevealFileAssets}
@@ -523,6 +575,7 @@ function BreadcrumbNodeDropdown({
             fileAccessBusyKey={fileAccessBusyKey}
             onDownloadFileAsset={onDownloadFileAsset}
             onExportImplicitFile={onExportImplicitFile}
+            onExportStepFile={onExportStepFile}
             onRevealFileAsset={onRevealFileAsset}
             onCopyFileAssetReference={onCopyFileAssetReference}
           />
@@ -542,7 +595,6 @@ function BreadcrumbEllipsisDropdown({
   entryHasDxf,
   entryHasGcode,
   entryHasUrdf,
-  activeGenerationFiles = [],
   activeStepArtifactGenerationFile = "",
   stepArtifactGenerationAvailable = true,
   canRevealFileAssets = false,
@@ -551,6 +603,7 @@ function BreadcrumbEllipsisDropdown({
   fileAccessBusyKey = "",
   onDownloadFileAsset,
   onExportImplicitFile,
+  onExportStepFile,
   onRevealFileAsset,
   onCopyFileAssetReference,
   title
@@ -589,7 +642,6 @@ function BreadcrumbEllipsisDropdown({
                   entryHasDxf={entryHasDxf}
                   entryHasGcode={entryHasGcode}
                   entryHasUrdf={entryHasUrdf}
-                  activeGenerationFiles={activeGenerationFiles}
                   activeStepArtifactGenerationFile={activeStepArtifactGenerationFile}
                   stepArtifactGenerationAvailable={stepArtifactGenerationAvailable}
                   canRevealFileAssets={canRevealFileAssets}
@@ -598,6 +650,7 @@ function BreadcrumbEllipsisDropdown({
                   fileAccessBusyKey={fileAccessBusyKey}
                   onDownloadFileAsset={onDownloadFileAsset}
                   onExportImplicitFile={onExportImplicitFile}
+                  onExportStepFile={onExportStepFile}
                   onRevealFileAsset={onRevealFileAsset}
                   onCopyFileAssetReference={onCopyFileAssetReference}
                 />
@@ -617,7 +670,6 @@ function BreadcrumbEllipsisDropdown({
                   entryHasDxf={entryHasDxf}
                   entryHasGcode={entryHasGcode}
                   entryHasUrdf={entryHasUrdf}
-                  activeGenerationFiles={activeGenerationFiles}
                   activeStepArtifactGenerationFile={activeStepArtifactGenerationFile}
                   stepArtifactGenerationAvailable={stepArtifactGenerationAvailable}
                   canRevealFileAssets={canRevealFileAssets}
@@ -626,6 +678,7 @@ function BreadcrumbEllipsisDropdown({
                   fileAccessBusyKey={fileAccessBusyKey}
                   onDownloadFileAsset={onDownloadFileAsset}
                   onExportImplicitFile={onExportImplicitFile}
+                  onExportStepFile={onExportStepFile}
                   onRevealFileAsset={onRevealFileAsset}
                   onCopyFileAssetReference={onCopyFileAssetReference}
                 />
@@ -1044,7 +1097,6 @@ export default function CadWorkspaceTopBar({
   entryHasDxf,
   entryHasGcode,
   entryHasUrdf,
-  activeGenerationFiles = [],
   activeStepArtifactGenerationFile = "",
   stepArtifactGenerationAvailable = true,
   themePresets = [],
@@ -1066,6 +1118,7 @@ export default function CadWorkspaceTopBar({
   fileAccessBusyKey = "",
   onDownloadFileAsset,
   onExportImplicitFile,
+  onExportStepFile,
   onRevealFileAsset,
   onRevealInExplorerView,
   onCopyFileAssetReference,
@@ -1134,7 +1187,7 @@ export default function CadWorkspaceTopBar({
       ) : null}
 
       {breadcrumbAvailable ? (
-      <Breadcrumb className="min-w-0 flex-1 overflow-hidden">
+      <Breadcrumb className="min-w-0 overflow-hidden">
         <ScrollArea
           className="h-8 min-w-0 whitespace-nowrap"
           type="auto"
@@ -1155,7 +1208,6 @@ export default function CadWorkspaceTopBar({
                   entryHasDxf={entryHasDxf}
                   entryHasGcode={entryHasGcode}
                   entryHasUrdf={entryHasUrdf}
-                  activeGenerationFiles={activeGenerationFiles}
                   activeStepArtifactGenerationFile={activeStepArtifactGenerationFile}
                   stepArtifactGenerationAvailable={stepArtifactGenerationAvailable}
                   selectedStepSourceStatus={selectedStepSourceStatus}
@@ -1165,6 +1217,7 @@ export default function CadWorkspaceTopBar({
                   fileAccessBusyKey={fileAccessBusyKey}
                   onDownloadFileAsset={onDownloadFileAsset}
                   onExportImplicitFile={onExportImplicitFile}
+                  onExportStepFile={onExportStepFile}
                   onRevealFileAsset={onRevealFileAsset}
                   onRevealInExplorerView={onRevealInExplorerView}
                   onCopyFileAssetReference={onCopyFileAssetReference}
@@ -1188,7 +1241,6 @@ export default function CadWorkspaceTopBar({
                       entryHasDxf={entryHasDxf}
                       entryHasGcode={entryHasGcode}
                       entryHasUrdf={entryHasUrdf}
-                      activeGenerationFiles={activeGenerationFiles}
                       activeStepArtifactGenerationFile={activeStepArtifactGenerationFile}
                       stepArtifactGenerationAvailable={stepArtifactGenerationAvailable}
                       canRevealFileAssets={canRevealFileAssets}
@@ -1197,6 +1249,7 @@ export default function CadWorkspaceTopBar({
                       fileAccessBusyKey={fileAccessBusyKey}
                       onDownloadFileAsset={onDownloadFileAsset}
                       onExportImplicitFile={onExportImplicitFile}
+                      onExportStepFile={onExportStepFile}
                       onRevealFileAsset={onRevealFileAsset}
                       onCopyFileAssetReference={onCopyFileAssetReference}
                       title={selectedFileTitle}
@@ -1213,7 +1266,6 @@ export default function CadWorkspaceTopBar({
                       entryHasDxf={entryHasDxf}
                       entryHasGcode={entryHasGcode}
                       entryHasUrdf={entryHasUrdf}
-                      activeGenerationFiles={activeGenerationFiles}
                       activeStepArtifactGenerationFile={activeStepArtifactGenerationFile}
                       stepArtifactGenerationAvailable={stepArtifactGenerationAvailable}
                       selectedStepSourceStatus={selectedStepSourceStatus}
@@ -1223,6 +1275,7 @@ export default function CadWorkspaceTopBar({
                       fileAccessBusyKey={fileAccessBusyKey}
                       onDownloadFileAsset={onDownloadFileAsset}
                       onExportImplicitFile={onExportImplicitFile}
+                      onExportStepFile={onExportStepFile}
                       onRevealFileAsset={onRevealFileAsset}
                       onRevealInExplorerView={onRevealInExplorerView}
                       onCopyFileAssetReference={onCopyFileAssetReference}
@@ -1239,8 +1292,18 @@ export default function CadWorkspaceTopBar({
         </ScrollArea>
       </Breadcrumb>
       ) : (
-        <div className="min-w-0 flex-1" />
+        <div className="min-w-0" />
       )}
+
+      <StepExportTopBarDropdown
+        selectedEntry={selectedEntry}
+        fileAccessBusyKey={fileAccessBusyKey}
+        onExportStepFile={onExportStepFile}
+        buttonClassName={topBarIconButtonClasses}
+        iconClassName={topBarIconClasses}
+      />
+
+      <div className="min-w-0 flex-1" />
 
       <TooltipProvider delayDuration={250}>
         <div className="flex shrink-0 items-center gap-1.5">

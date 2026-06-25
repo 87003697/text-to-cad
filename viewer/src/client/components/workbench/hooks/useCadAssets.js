@@ -5,10 +5,10 @@ import {
   loadRenderDxf,
   loadRenderGcode,
   loadRenderGlb,
+  loadRenderJson,
   loadRenderSelectorBundle,
   loadRenderSdf,
   loadRenderSrdf,
-  loadRenderTopologyIndex,
   loadRenderUrdf,
   peekRenderDxf,
   peekRenderDisplayEdgeBundle,
@@ -26,10 +26,10 @@ import {
 } from "implicitjs/loader";
 import {
   assemblyRootFromTopology,
-  assemblyUsesSelfContainedMesh,
-  buildSelfContainedAssemblyMeshData
+  buildComposedPackageMeshData
 } from "cadjs/lib/assembly/meshData";
 import { mapWithConcurrency } from "cadjs/lib/async/concurrency";
+import { resolvePackageAssetUrl } from "./packageAssetUrl.js";
 import { ASSET_STATUS, REFERENCE_STATUS } from "../../../workbench/constants";
 import {
   entryAssetHash,
@@ -48,8 +48,8 @@ import {
   peekRenderMeshByUrl
 } from "cadjs/lib/render/meshLoaders";
 import { shouldUseGlbMeshWorkerForEntry } from "cadjs/lib/render/meshCost";
-import { RENDER_FORMAT } from "cadjs/lib/fileFormats";
-import { buildDisplayEdgeRuntime } from "cadjs/lib/selectors/runtime";
+import { RENDER_FORMAT, entrySourceFormat } from "cadjs/lib/fileFormats";
+import { buildDisplayEdgeRuntime, buildSelectorRuntime, composeSelectorRuntimes } from "cadjs/lib/selectors/runtime";
 
 const ROBOT_MESH_LOAD_CONCURRENCY = 3;
 
@@ -257,15 +257,14 @@ export function useCadAssets({
     return entryMeshAssetSignature(entry);
   }, []);
 
-  const buildSelfContainedAssemblyMeshState = useCallback((entry, topologyManifest, meshData) => {
-    const assemblyMeshData = buildSelfContainedAssemblyMeshData(topologyManifest, meshData);
+  const buildComposedPackageMeshState = useCallback((entry, descriptor, meshData) => {
     return {
       file: entry.file,
       kind: entry.kind,
       meshHash: getAssemblyMeshHash(entry),
       meshData: {
-        ...assemblyMeshData,
-        assemblyMates: assemblyMatesFromTopology(topologyManifest)
+        ...meshData,
+        assemblyMates: assemblyMatesFromTopology(descriptor)
       },
       assemblyStructureReady: true,
       assemblyInteractionReady: true,
@@ -290,7 +289,11 @@ export function useCadAssets({
     if (!entryHasMesh(entry)) {
       return null;
     }
-    if (entry?.kind === "assembly") {
+    // Every STEP entry — single-component part OR multi-occurrence assembly — is a
+    // component-GLB package (a directory of content-addressed component GLBs + an
+    // assembly.json descriptor), composed asynchronously in the browser. The synchronous
+    // cache only yields the lightweight preview; the full mesh is built in loadMeshForEntry.
+    if (entrySourceFormat(entry) === RENDER_FORMAT.STEP) {
       const glbUrl = entryAssetUrl(entry, "glb");
       const topologyUrl = entryTopologyAssetUrl(entry);
       const previewMeshData = peekRenderGlb(glbUrl);
@@ -300,9 +303,6 @@ export function useCadAssets({
       const topologyManifest = peekRenderTopologyIndex(topologyUrl);
       if (!topologyManifest) {
         return buildAssemblyPreviewMeshState(entry, previewMeshData);
-      }
-      if (assemblyUsesSelfContainedMesh(topologyManifest)) {
-        return buildSelfContainedAssemblyMeshState(entry, topologyManifest, previewMeshData);
       }
       return null;
     }
@@ -316,7 +316,7 @@ export function useCadAssets({
       meshHash: entryMeshAssetHash(entry),
       meshData
     };
-  }, [buildAssemblyPreviewMeshState, buildSelfContainedAssemblyMeshState, entryHasMesh]);
+  }, [buildAssemblyPreviewMeshState, entryHasMesh]);
 
   const getCachedReferenceState = useCallback((entry) => {
     if (!entryHasReferences(entry)) {
@@ -505,41 +505,44 @@ export function useCadAssets({
     }
 
     try {
-      if (entry?.kind === "assembly") {
+      // Every STEP entry is a component-GLB package (a single-component part is just a
+      // package with one occurrence); compose it the same way. Only non-STEP meshes
+      // (STL/3MF/OBJ) fall through to the monolithic single-file loader below.
+      if (entrySourceFormat(entry) === RENDER_FORMAT.STEP) {
         const meshUrl = entryAssetUrl(entry, "glb");
-        const topologyUrl = entryTopologyAssetUrl(entry);
         if (!meshUrl) {
-          throw new Error(`STEP assembly is missing GLB asset: ${entry.file || "(unknown)"}`);
+          throw new Error(`STEP file is missing GLB asset: ${entry.file || "(unknown)"}`);
         }
-        const previewMeshData = cachedMeshState?.meshData || await loadRenderGlb(meshUrl, {
-          signal: controller.signal,
-          preferWorker: shouldUseGlbMeshWorkerForEntry(entry)
-        });
-        if (requestId !== requestIdRef.current) {
-          return;
-        }
-        if (!cachedMeshState) {
-          setMeshState(buildAssemblyPreviewMeshState(entry, previewMeshData));
-          setStatus(ASSET_STATUS.READY);
-          setError("");
-          assemblyPreviewVisible = true;
-        }
-        setMeshLoadStage("loading topology");
-        const topologyManifest = await loadRenderTopologyIndex(topologyUrl, { signal: controller.signal });
-        if (requestId !== requestIdRef.current) {
-          return;
-        }
-        if (!cachedMeshState?.assemblyStructureReady) {
-          setMeshState(buildAssemblyPreviewMeshState(entry, previewMeshData, topologyManifest));
-        }
-        if (assemblyUsesSelfContainedMesh(topologyManifest)) {
+        // Component-GLB package: the canonical STEP artifact is a directory. Probe for
+        // its assembly.json, fetch each unique component GLB once, and compose them in
+        // world space. A non-package descriptor is a stale/unbuilt artifact (throws below).
+        const packageDescriptor = await loadRenderJson(resolvePackageAssetUrl(meshUrl, "assembly.json"), {
+          signal: controller.signal
+        }).catch(() => null);
+        if (packageDescriptor && packageDescriptor.kind === "assembly-package") {
+          setMeshLoadStage("loading components");
+          const componentEntries = Object.entries(packageDescriptor.components || {});
+          const componentMeshDataByCid = {};
+          await mapWithConcurrency(componentEntries, robotMeshLoadConcurrency(), async ([cid, component]) => {
+            componentMeshDataByCid[cid] = await loadRenderGlb(resolvePackageAssetUrl(meshUrl, component.glb), {
+              signal: controller.signal
+            });
+          });
+          if (requestId !== requestIdRef.current) {
+            return;
+          }
           setMeshLoadStage("building assembly");
-          setMeshState(buildSelfContainedAssemblyMeshState(entry, topologyManifest, previewMeshData));
+          const composed = buildComposedPackageMeshData(packageDescriptor, componentMeshDataByCid);
+          setMeshState(buildComposedPackageMeshState(entry, packageDescriptor, composed));
           setStatus(ASSET_STATUS.READY);
           setError("");
           return;
         }
-        throw new Error("STEP assembly topology is not self-contained.");
+        // Every STEP model is a component-GLB package (handled above). A missing/non-package
+        // descriptor means the artifact is stale or was never built as a package.
+        throw new Error(
+          `STEP file ${entry.file || "(unknown)"} is not a component-GLB package; regenerate it to produce an assembly.json package.`
+        );
       }
       const meshUrl = entryMeshAssetUrl(entry);
       if (!meshUrl) {
@@ -587,7 +590,7 @@ export function useCadAssets({
         meshAbortControllerRef.current = null;
       }
     }
-  }, [buildAssemblyPreviewMeshState, buildSelfContainedAssemblyMeshState, cancelMeshLoad, entryHasMesh, getAssemblyMeshHash, getCachedMeshState]);
+  }, [buildAssemblyPreviewMeshState, cancelMeshLoad, entryHasMesh, getAssemblyMeshHash, getCachedMeshState]);
 
   const loadReferencesForEntry = useCallback(async (entry) => {
     cancelReferenceLoad();
@@ -615,6 +618,57 @@ export function useCadAssets({
     setReferenceLoadStage("loading topology");
 
     try {
+      // Component-GLB package: there is no whole-assembly selector bundle. Compose the
+      // per-component selector runtimes (each placed by its occurrence transform and namespaced
+      // by occurrence id) so nested faces/edges become pickable.
+      const glbUrl = entryAssetUrl(entry, "glb");
+      const packageDescriptor = glbUrl
+        ? await loadRenderJson(resolvePackageAssetUrl(glbUrl, "assembly.json"), { signal: controller.signal }).catch(() => null)
+        : null;
+      if (packageDescriptor && packageDescriptor.kind === "assembly-package") {
+        const componentBundleByCid = {};
+        await mapWithConcurrency(
+          Object.entries(packageDescriptor.components || {}),
+          robotMeshLoadConcurrency(),
+          async ([cid, component]) => {
+            componentBundleByCid[cid] = await loadRenderSelectorBundle(
+              resolvePackageAssetUrl(glbUrl, component.glb),
+              { signal: controller.signal }
+            ).catch(() => null);
+          }
+        );
+        if (requestId !== referenceRequestIdRef.current) {
+          return;
+        }
+        // A single-component part renders as a topology tree (not an assembly structure), so its
+        // topology must graft onto the synthetic part root via fallbackPartId — i.e. carry NO
+        // partId (an occurrence-namespaced partId would orphan it). Multi-occurrence assemblies
+        // DO namespace by occurrence so each leaf part owns its faces/edges. Both keep
+        // remapOccurrenceId so picks align with the composed mesh's sourcePartRanges occurrence.
+        const isSingleComponentPart = String(entry?.kind || "").trim() === "part";
+        const occurrenceRuntimes = (Array.isArray(packageDescriptor.occurrences) ? packageDescriptor.occurrences : [])
+          .map((occurrence) => {
+            const bundle = componentBundleByCid[String(occurrence?.component || "").trim()];
+            if (!bundle) {
+              return null;
+            }
+            const occurrenceId = String(occurrence?.id || "").trim();
+            return buildSelectorRuntime(bundle, {
+              copyCadPath: String(entry?.file || ""),
+              partId: isSingleComponentPart ? "" : occurrenceId,
+              transform: occurrence?.transform || null,
+              remapOccurrenceId: occurrenceId
+            });
+          })
+          .filter(Boolean);
+        const composedRuntime = composeSelectorRuntimes(occurrenceRuntimes);
+        const nextReferenceState = buildNormalizedReferenceState(entry, null, { selectorRuntime: composedRuntime });
+        setReferenceState(nextReferenceState);
+        setReferenceStatus(nextReferenceState.disabledReason ? REFERENCE_STATUS.DISABLED : REFERENCE_STATUS.READY);
+        setReferenceError(nextReferenceState.disabledReason || "");
+        return;
+      }
+
       const bundle = await loadRenderSelectorBundle(
         entrySelectorTopologyAssetUrl(entry),
         { signal: controller.signal }
@@ -647,6 +701,17 @@ export function useCadAssets({
     const requestId = displayEdgeRequestIdRef.current;
 
     if (!entryHasDisplayEdges(entry)) {
+      setDisplayEdgeState(null);
+      setDisplayEdgeStatus(REFERENCE_STATUS.DISABLED);
+      setDisplayEdgeError("");
+      return;
+    }
+
+    // A STEP model is a component-GLB package: there is no separate display-edge bundle to
+    // fetch (the package "glb" asset is a directory, so a fetch would 404). The per-component
+    // edges live in the composed selector runtime, which CadViewer already uses as the display-
+    // edge source via `displayEdgeRuntime || selectorRuntime`. Disable the dedicated load.
+    if (entrySourceFormat(entry) === RENDER_FORMAT.STEP) {
       setDisplayEdgeState(null);
       setDisplayEdgeStatus(REFERENCE_STATUS.DISABLED);
       setDisplayEdgeError("");

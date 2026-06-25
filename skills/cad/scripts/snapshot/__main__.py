@@ -541,11 +541,16 @@ def input_kind(file_path: Path) -> str:
 
 
 def logical_step_path_for_python_source(source_path: Path) -> Path:
+    # `<name>.step.py` -> `<name>.step` (strip only `.py`; the stem already ends in `.step`).
+    name = source_path.name
+    if name.endswith(".step.py"):
+        return source_path.with_name(name[: -len(".py")])
     return source_path.with_suffix(".step")
 
 
 def same_stem_python_generator_path(step_path: Path) -> Path | None:
-    candidate = step_path.with_suffix(".py")
+    # The generator for `<name>.step` is `<name>.step.py` (append `.py` to the full step filename).
+    candidate = step_path.with_name(step_path.name + ".py")
     try:
         return candidate if re.search(r"\bgen_step\s*\(", candidate.read_text(encoding="utf-8")) else None
     except OSError:
@@ -871,7 +876,9 @@ def resolve_render_job(
         selector_index=artifact_selector_index(artifact),
     )
 
-    glb_path = existing_part_glb_path(input_path) or part_glb_path(input_path)
+    # The render cache is keyed by the ENTRY filename (`source_path`: the `.step.py` generator for
+    # a generated model, or the `.step`/`.stp` itself), not the logical step path.
+    glb_path = existing_part_glb_path(source_path) or part_glb_path(source_path)
     if not glb_path.exists():
         raise SnapshotError(f"STEP/STP render input is missing its CAD Viewer GLB artifact: {glb_path}")
 
@@ -934,8 +941,19 @@ def resolve_render_job(
         "inputUrl": asset_url_for_path(input_path, root_path),
         "kind": kind,
         "glbPath": str(glb_path),
-        "glbUrl": asset_url_for_path(glb_path, root_path),
     }
+    if glb_path.is_dir():
+        # Component-GLB package (canonical assembly artifact): inline the descriptor and
+        # pre-resolve one asset URL per unique component GLB so the renderer fetches and
+        # composes them in world space (no single monolithic GLB to load).
+        descriptor = json.loads((glb_path / "assembly.json").read_text())
+        component_urls = {
+            cid: asset_url_for_path(glb_path / str(entry.get("glb", "")), root_path)
+            for cid, entry in (descriptor.get("components") or {}).items()
+        }
+        resolved["package"] = {"descriptor": descriptor, "componentUrls": component_urls}
+    else:
+        resolved["glbUrl"] = asset_url_for_path(glb_path, root_path)
     if step_parameter_path.exists():
         resolved["stepParameterPath"] = str(step_parameter_path)
         resolved["stepParameterUrl"] = asset_url_for_path(step_parameter_path, root_path)

@@ -36,9 +36,12 @@ export function buildNormalizedReferenceState(entry, referencePayload = null, {
   partId = "",
   transform = null,
   remapOccurrenceId = "",
-  remapOccurrencePrefix = null
+  remapOccurrencePrefix = null,
+  selectorRuntime: prebuiltSelectorRuntime = null
 } = {}) {
-  const selectorRuntime = buildSelectorRuntime(referencePayload, {
+  // A component-GLB package has no whole-assembly selector bundle; the caller composes the
+  // per-component runtimes and passes the result here instead of a single bundle to parse.
+  const selectorRuntime = prebuiltSelectorRuntime || buildSelectorRuntime(referencePayload, {
     copyCadPath: copyCadPath || cadPathForEntry(entry),
     partId,
     transform,
