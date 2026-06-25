@@ -2100,9 +2100,12 @@ class CadGenerationTests(unittest.TestCase):
     def test_generated_part_records_source_closure(self) -> None:
         script, _helper = self._write_part_with_dependency("record")
         cad_generation.generate_step_targets([str(script)])
+        spec = self._part_spec(script)
 
+        # The render package is keyed by the entry filename (the generator), not the
+        # logical .step — read the manifest from the entry-keyed package.
         manifest = read_step_topology_manifest_from_glb(
-            cad_render.part_glb_path(script.with_suffix(".step"))
+            cad_render.part_glb_path(spec.entry_path)
         )
         self.assertIsNotNone(manifest)
         assert manifest is not None
@@ -2133,7 +2136,8 @@ class CadGenerationTests(unittest.TestCase):
 
         # A missing render artifact (the package directory) forces a rebuild — gen_step
         # writes no STEP, so the render package, not the STEP, is the freshness anchor.
-        shutil.rmtree(cad_generation.part_glb_path(spec.step_path))
+        # The package is keyed by the entry filename (the generator), not the logical .step.
+        shutil.rmtree(cad_generation.part_glb_path(spec.entry_path))
         self.assertTrue(cad_generation._generated_child_is_stale(spec, force=False))
 
     def _spec(self, ref: str, kind: str, step_name: str) -> cad_generation.EntrySpec:
@@ -2203,10 +2207,6 @@ class CadGenerationTests(unittest.TestCase):
 
     def test_is_current_tracks_source_closure(self) -> None:
         step_path = self.temp_root / "asm.step"
-        # gen_step writes no STEP — the package directory is the freshness anchor, so
-        # currency rides on the recorded source closure, not an on-disk STEP hash.
-        glb_path = cad_render.part_glb_path(step_path)
-        glb_path.mkdir(parents=True, exist_ok=True)
         dep = self.temp_root / "asm_src.py"
         dep.write_text("X = 1\n", encoding="utf-8")
         closure = cad_source_hash.closure_for_files(dep, [], base=self.temp_root)
@@ -2221,6 +2221,11 @@ class CadGenerationTests(unittest.TestCase):
             script_path=self.temp_root / "asm.py",
             step_path=step_path,
         )
+        # gen_step writes no STEP — the package directory is the freshness anchor, so
+        # currency rides on the recorded source closure, not an on-disk STEP hash. The
+        # package is keyed by the entry filename (the generator), not the logical .step.
+        glb_path = cad_render.part_glb_path(spec.entry_path)
+        glb_path.mkdir(parents=True, exist_ok=True)
         manifest = {
             "sourceClosureHash": closure.closure_hash,
             "sourceClosureFiles": list(closure.files),
@@ -2247,8 +2252,6 @@ class CadGenerationTests(unittest.TestCase):
         # The GLB-reuse gate: a child STEP change must be detected via the recorded
         # source closure even though the assembly STEP is never (re)written.
         step_path = self.temp_root / "asm.step"
-        glb_path = cad_render.part_glb_path(step_path)
-        glb_path.mkdir(parents=True, exist_ok=True)  # package directory
         child_step = self.temp_root / "child.step"  # stand-in for a composed child STEP
         child_step.write_text("child v1\n", encoding="utf-8")
         closure = cad_source_hash.closure_for_files(child_step, [], base=self.temp_root)
@@ -2263,6 +2266,10 @@ class CadGenerationTests(unittest.TestCase):
             script_path=self.temp_root / "asm.py",
             step_path=step_path,
         )
+        # The package directory is keyed by the entry filename (the generator), not the
+        # logical .step.
+        glb_path = cad_render.part_glb_path(spec.entry_path)
+        glb_path.mkdir(parents=True, exist_ok=True)  # package directory
         manifest = {
             "sourceClosureHash": closure.closure_hash,
             "sourceClosureFiles": list(closure.files),
