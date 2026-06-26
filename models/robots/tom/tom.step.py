@@ -19,7 +19,6 @@ from robot_common import robot_arm
 from robot_common.materials import BLACK_ALUMINUM_RGBA, GRAY_ALUMINUM_RGBA
 from robot_common.step_entry import load_step_entry
 
-link_bracket = load_step_entry("link_bracket")
 servo_end_mount = load_step_entry("servo_end_mount")
 servo_horn_yoke = load_step_entry("servo_horn_yoke")
 from v2_roll_link_common import (
@@ -44,14 +43,20 @@ ROLL_LINK_REPLACEMENTS = {
 }
 
 GRIPPER_CHILD_NAME = "parallel_gripper"
-V2_GRIPPER_SERVO_INSTANCE_NAME = "wrist_pitch_link__sts3215"
+# The wrist's terminal sts3215 servo (#o1.33) is removed; the gripper mounts
+# directly to the wrist servo_horn_yoke (#o1.32) where that servo used to seat.
+V2_WRIST_TERMINAL_SERVO_INSTANCE_NAME = "wrist_pitch_link__sts3215"
+V2_GRIPPER_MOUNT_INSTANCE_NAME = "wrist_pitch_link__servo_horn_yoke"
+# Snap the gripper mount face (#o1.25.1.5.f82) flush onto the yoke face (#o1.24.f1): both are
+# planes at y=-237.8 with opposite normals, offset by (yoke - gripper) face centers in the
+# home-pose frame. Re-derive via inspect if the wrist geometry changes.
+GRIPPER_FACE_TO_YOKE_FACE_OFFSET_MM = (-1.45148, 0.0, 35.61)
 
 NEXT_PITCH_LINK_BY_ROLL_LINK = {
     "shoulder": "elbow_pitch_link",
     "elbow": "wrist_pitch_link",
 }
 
-YOKE_HORN_SPAN_CENTER_LOCAL_Y_MM = -9.1
 # Source STEP face datums for the terminal gripper mate:
 # - sts3215 #o1.16.f14 is the rear horn face at local y=-27.4.
 # - gripper #o1.5.f82 is the mounting face at local z=-52.
@@ -133,7 +138,6 @@ URDF_JOINT_EFFORT_NM_BY_NAME = {
     "elbow_pitch": STS3250_STALL_TORQUE_NM,
     "elbow_roll": STS3215_STALL_TORQUE_NM,
     "wrist_pitch": STS3215_STALL_TORQUE_NM,
-    "wrist_roll": STS3215_STALL_TORQUE_NM,
 }
 URDF_JOINT_VELOCITY_RAD_S_BY_NAME = {
     "base_yaw": STS3250_NO_LOAD_SPEED_RAD_S,
@@ -142,7 +146,6 @@ URDF_JOINT_VELOCITY_RAD_S_BY_NAME = {
     "elbow_pitch": STS3250_NO_LOAD_SPEED_RAD_S,
     "elbow_roll": STS3215_NO_LOAD_SPEED_RAD_S,
     "wrist_pitch": STS3215_NO_LOAD_SPEED_RAD_S,
-    "wrist_roll": STS3215_NO_LOAD_SPEED_RAD_S,
 }
 V2_HOME_ELBOW_PITCH_DEG = -90.0
 V2_SRDF_REACH_ARM_GROUP_STATE_DEG = {
@@ -152,7 +155,6 @@ V2_SRDF_REACH_ARM_GROUP_STATE_DEG = {
     "elbow_pitch": 0.0,
     "elbow_roll": 0.0,
     "wrist_pitch": 0.0,
-    "wrist_roll": 0.0,
 }
 V2_SRDF_INSPECTION_ARM_GROUP_STATE_DEG = {
     "base_yaw": 45.0,
@@ -161,13 +163,11 @@ V2_SRDF_INSPECTION_ARM_GROUP_STATE_DEG = {
     "elbow_pitch": -87.0,
     "elbow_roll": 121.995,
     "wrist_pitch": 83.0,
-    "wrist_roll": -99.0,
 }
 V2_SRDF_INSPECTION_MIRRORED_ARM_GROUP_STATE_DEG = {
     **V2_SRDF_INSPECTION_ARM_GROUP_STATE_DEG,
     "shoulder_roll": -V2_SRDF_INSPECTION_ARM_GROUP_STATE_DEG["shoulder_roll"],
     "elbow_roll": -V2_SRDF_INSPECTION_ARM_GROUP_STATE_DEG["elbow_roll"],
-    "wrist_roll": -V2_SRDF_INSPECTION_ARM_GROUP_STATE_DEG["wrist_roll"],
 }
 
 NO_GRIPPER_LINK_NAMES = (
@@ -179,7 +179,6 @@ NO_GRIPPER_LINK_NAMES = (
     "elbow_pitch_link",
     "elbow_roll_link",
     "wrist_pitch_link",
-    "wrist_roll_link",
 )
 GRIPPER_LINK_NAMES = (
     "gripper_base_link",
@@ -196,7 +195,6 @@ URDF_SERVO_AXIS_INSTANCE_BY_JOINT = {
     "elbow_pitch": "shoulder_roll_link__sts3250_4",
     "elbow_roll": "elbow_pitch_link__sts3215",
     "wrist_pitch": "elbow_roll_link__sts3215_6",
-    "wrist_roll": "wrist_pitch_link__sts3215",
 }
 
 URDF_VISUAL_MODULE_BY_LINK = {
@@ -216,7 +214,6 @@ URDF_PITCH_MODULE_SERVO_BY_LINK = {
 URDF_ROLL_BOTTOM_SERVO_SOURCE_BY_LINK = {
     "shoulder_roll_link": ("shoulder_pitch_link", "sts3250"),
     "elbow_roll_link": ("elbow_pitch_link", "sts3215"),
-    "wrist_roll_link": ("wrist_pitch_link", "sts3215"),
 }
 
 
@@ -246,27 +243,6 @@ def _mate(
             "frame": moving_frame,
         },
     }
-
-
-def _roll_link_standoff_mates(parent_name: str, kind: str) -> list[dict[str, object]]:
-    mates: list[dict[str, object]] = []
-    for label, _x, _z in link_bracket.STANDOFF_CENTER_XZ_MM:
-        standoff = f"{parent_name}__{kind}_link_standoff_{label}"
-        mates.append(
-            _mate(
-                f"{parent_name}_{label}_standoff_to_right_bracket",
-                fixed=f"{parent_name}__{kind}_link_bracket_right:{label}_standoff_hole",
-                moving=f"{standoff}:positive_y_thread",
-            )
-        )
-        mates.append(
-            _mate(
-                f"{parent_name}_{label}_standoff_to_left_bracket",
-                fixed=f"{parent_name}__{kind}_link_bracket_left:{label}_standoff_hole",
-                moving=f"{standoff}:negative_y_thread",
-            )
-        )
-    return mates
 
 
 def _assembly_mates(*, include_gripper: bool) -> list[dict[str, object]]:
@@ -343,16 +319,9 @@ def _assembly_mates(*, include_gripper: bool) -> list[dict[str, object]]:
             moving="wrist_pitch_link__servo_horn_yoke:horn_axis",
         ),
     ]
-    if include_gripper:
-        mates.append(
-            _mate(
-                "gripper_mount_face_to_wrist_servo_horn",
-                fixed="wrist_pitch_link__sts3215:rear_horn_face",
-                moving="parallel_gripper:mount_face",
-            )
-        )
-    mates.extend(_roll_link_standoff_mates("shoulder_roll_link", "shoulder"))
-    mates.extend(_roll_link_standoff_mates("elbow_roll_link", "elbow"))
+    # The gripper seats on the wrist yoke (terminal servo removed); its placement is set by
+    # _mate_gripper_to_yoke_mount, so there is no servo-horn mate, and the link-bracket
+    # standoffs are gone, so they add no assembly mates here either.
     return mates
 
 
@@ -657,21 +626,19 @@ def _mate_shoulder_yaw_mount_to_base_servo_horn(
     )
 
 
-def _mate_gripper_to_terminal_servo_horn(
+def _mate_gripper_to_yoke_mount(
     *,
     gripper_transform: list[float],
-    terminal_servo_transform: list[float],
+    yoke_transform: list[float],
 ) -> list[float]:
+    # The gripper now seats on the wrist yoke's servo-reference face (where the
+    # removed terminal sts3215 used to mount). Translate-only, preserving orientation.
     target = _transform_point(
-        terminal_servo_transform,
-        (
-            STS3215_HORN_AXIS_LOCAL_X_MM,
-            STS3215_REAR_HORN_FACE_LOCAL_Y_MM,
-            0.0,
-        ),
+        yoke_transform,
+        servo_horn_yoke.SERVO_REFERENCE_FACE_TARGET_CENTER_MM,
     )
     moving = _transform_point(gripper_transform, GRIPPER_MOUNT_FACE_CENTER_LOCAL_MM)
-    return _translate_transform(
+    base = _translate_transform(
         gripper_transform,
         (
             target[0] - moving[0],
@@ -679,6 +646,8 @@ def _mate_gripper_to_terminal_servo_horn(
             target[2] - moving[2],
         ),
     )
+    # Snap the gripper mount face flush onto the yoke face (see GRIPPER_FACE_TO_YOKE_FACE_OFFSET_MM).
+    return _translate_transform(base, GRIPPER_FACE_TO_YOKE_FACE_OFFSET_MM)
 
 
 def gen_step_with_options(*, include_gripper: bool = False) -> dict[str, object]:
@@ -727,13 +696,13 @@ def gen_step_with_options(*, include_gripper: bool = False) -> dict[str, object]
         if child_name == GRIPPER_CHILD_NAME:
             if not include_gripper:
                 continue
-            terminal_servo_transform = instance_transforms_by_name.get(
-                V2_GRIPPER_SERVO_INSTANCE_NAME
+            yoke_transform = instance_transforms_by_name.get(
+                V2_GRIPPER_MOUNT_INSTANCE_NAME
             )
-            if terminal_servo_transform is not None:
-                child_transform = _mate_gripper_to_terminal_servo_horn(
+            if yoke_transform is not None:
+                child_transform = _mate_gripper_to_yoke_mount(
                     gripper_transform=child_transform,
-                    terminal_servo_transform=terminal_servo_transform,
+                    yoke_transform=yoke_transform,
                 )
             instances.append(
                 {
@@ -754,6 +723,13 @@ def gen_step_with_options(*, include_gripper: bool = False) -> dict[str, object]
             child_name=child_name,
             child_transform=module_child_transform,
         )
+        if include_gripper:
+            # Drop the wrist's terminal servo; the gripper takes its place on the yoke.
+            child_instances = [
+                instance
+                for instance in child_instances
+                if str(instance["name"]) != V2_WRIST_TERMINAL_SERVO_INSTANCE_NAME
+            ]
         instances.extend(child_instances)
         for instance in child_instances:
             instance_transforms_by_name[str(instance["name"])] = [
@@ -781,14 +757,32 @@ def gen_step_with_options(*, include_gripper: bool = False) -> dict[str, object]
     }
 
 
+# Drop the whole model so the clamp underside (face #o1.6.f2, the large down-facing plate
+# at world z=63.175 in the un-grounded build) sits on the z=0 floor. Applied to the gen_step
+# instances AND the URDF frame solver so the STEP and the URDF/SRDF stay co-located on the
+# floor. The offset only shifts occurrence placements, not local part geometry, so the
+# content-addressed components are unchanged and reused on rebuild.
+STEP_GROUND_OFFSET_MM = -63.175
+
+
+def _with_ground_offset(transform: list[float]) -> list[float]:
+    shifted = [float(value) for value in transform]
+    shifted[11] += STEP_GROUND_OFFSET_MM
+    return shifted
+
+
 def gen_step() -> dict[str, object]:
     from robot_common.link_assembly import compound_from_instances
 
-    envelope = gen_step_with_options(include_gripper=False)
+    envelope = gen_step_with_options(include_gripper=True)
+    grounded = [
+        {**instance, "transform": _with_ground_offset(instance["transform"])}
+        for instance in envelope["instances"]
+    ]
     return {
         "shape": compound_from_instances(
             "tom",
-            envelope["instances"],
+            grounded,
             base_dir=V2_DIR,
             assembly_mates=envelope.get("assembly_mates", []),
         ),
@@ -856,35 +850,6 @@ def _urdf_origin_attrs_from_transform(
     }
 
 
-def _transform_from_urdf_origin_attrs(xyz: str, rpy: str) -> list[float]:
-    x, y, z = (float(value) * 1000.0 for value in xyz.split())
-    roll, pitch, yaw = (float(value) for value in rpy.split())
-    sr = math.sin(roll)
-    cr = math.cos(roll)
-    sp = math.sin(pitch)
-    cp = math.cos(pitch)
-    sy = math.sin(yaw)
-    cy = math.cos(yaw)
-    return [
-        cy * cp,
-        cy * sp * sr - sy * cr,
-        cy * sp * cr + sy * sr,
-        x,
-        sy * cp,
-        sy * sp * sr + cy * cr,
-        sy * sp * cr - cy * sr,
-        y,
-        -sp,
-        cp * sr,
-        cp * cr,
-        z,
-        0.0,
-        0.0,
-        0.0,
-        1.0,
-    ]
-
-
 def _world_vector_to_local(
     frame_transform: list[float] | tuple[float, ...],
     vector: tuple[float, float, float],
@@ -944,11 +909,37 @@ def _servo_horn_axis_from_transform(
     return center, direction
 
 
+@lru_cache(maxsize=1)
+def _gripper_to_yoke_rigid_transform() -> tuple[float, ...]:
+    """Rigid wrist-yoke -> gripper relative, frozen from the geometry build.
+
+    ``_mate_gripper_to_yoke_mount`` snaps the gripper onto the yoke with a world-space
+    offset, so the yoke->gripper relative it produces depends on the yoke orientation
+    (i.e. on the arm pose). ``gen_step`` composes the geometry in the home/inspection
+    pose, which is the visually verified reference, so capture its yoke->gripper relative
+    and reuse it for the URDF zero-pose frame. That keeps the URDF gripper rigidly seated
+    on the u-bracket exactly as in the STEP, at every joint pose.
+    """
+    env = gen_step_with_options(include_gripper=True)
+    by_name = {
+        str(instance["name"]): [float(value) for value in instance["transform"]]
+        for instance in env["instances"]
+    }
+    yoke = by_name[V2_GRIPPER_MOUNT_INSTANCE_NAME]
+    gripper = by_name[GRIPPER_CHILD_NAME]
+    return tuple(multiply_transforms(invert_rigid_transform(yoke), gripper))
+
+
 def _zero_pose_source_frames_and_instances(
     *,
     include_gripper: bool = False,
 ) -> tuple[dict[str, list[float]], dict[str, list[float]]]:
-    frames: dict[str, list[float]] = {"base_footprint": _identity_transform()}
+    # base_footprint is the floor. Raise it to the grounded clamp-underside level so the
+    # frame-derived base_footprint->base_link origin lowers the whole robot by the same
+    # amount gen_step drops the STEP geometry, keeping the URDF/SRDF on z=0 with the STEP.
+    footprint = list(_identity_transform())
+    footprint[11] = -STEP_GROUND_OFFSET_MM
+    frames: dict[str, list[float]] = {"base_footprint": footprint}
     instance_transforms_by_name: dict[str, list[float]] = {}
     downstream_correction = _identity_transform()
     pending_child_transform_overrides: dict[str, list[float]] = {}
@@ -980,8 +971,36 @@ def _zero_pose_source_frames_and_instances(
                     invert_rigid_transform(source_child_transform),
                 )
 
+        if child_name == "elbow_pitch_link":
+            # Bake the STEP elbow home pose into the URDF default pose so tom.urdf opens
+            # in the same configuration as tom.step (elbow rotated ~90 deg toward camera).
+            # gen_step applies this same rotation; mirroring it here keeps the URDF zero
+            # pose aligned with the STEP. The SRDF arm group states are rebased to match
+            # (see _srdf_arm_group_states_deg).
+            child_transform = _apply_v2_step_home_pose_to_elbow_pitch(
+                child_transform=child_transform,
+                instance_transforms_by_name=instance_transforms_by_name,
+            )
+            downstream_correction = multiply_transforms(
+                child_transform,
+                invert_rigid_transform(source_child_transform),
+            )
+
         if child_name == GRIPPER_CHILD_NAME:
             if include_gripper:
+                # The gripper is rigidly seated on the wrist yoke (u-bracket). Reuse the
+                # geometry's verified yoke->gripper relative so the URDF gripper frame
+                # tracks the STEP instead of floating at the raw design position. (The
+                # mate itself uses a world-space offset, so applying it to the zero-pose
+                # yoke here would misplace the gripper relative to the home-pose STEP.)
+                yoke_transform = instance_transforms_by_name.get(
+                    V2_GRIPPER_MOUNT_INSTANCE_NAME
+                )
+                if yoke_transform is not None:
+                    child_transform = multiply_transforms(
+                        yoke_transform,
+                        list(_gripper_to_yoke_rigid_transform()),
+                    )
                 frames[child_name] = child_transform
             continue
 
@@ -1014,20 +1033,6 @@ def _zero_pose_source_frames_and_instances(
                     )
                 )
 
-    wrist_pitch = frames.get("wrist_pitch_link")
-    if wrist_pitch is not None and "wrist_roll_link" not in frames:
-        wrist_roll_joint = next(
-            joint
-            for joint in robot_arm.URDF_JOINTS
-            if str(joint["name"]) == "wrist_roll"
-        )
-        frames["wrist_roll_link"] = multiply_transforms(
-            wrist_pitch,
-            _transform_from_urdf_origin_attrs(
-                str(wrist_roll_joint["origin_xyz"]),
-                str(wrist_roll_joint["origin_rpy"]),
-            ),
-        )
     return frames, instance_transforms_by_name
 
 
@@ -1104,8 +1109,6 @@ def _instances_for_urdf_link(link_name: str) -> list[dict[str, object]]:
         return instances
     if link_name == "elbow_roll_link":
         instances.extend(dict(instance) for instance in roll_link_instances("elbow"))
-        return instances
-    if link_name == "wrist_roll_link":
         return instances
 
     module_path = URDF_VISUAL_MODULE_BY_LINK.get(link_name)
@@ -1535,9 +1538,9 @@ def gen_urdf_with_options(
       rotates with the bracket/link body.
     - Mesh source: 3MF visual meshes only. V2 brackets, mounts, standoffs,
       stock servos, and optional gripper component meshes live in 3MF.
-    - Kinematics: the default tom.urdf stops at wrist_roll_link; the
-      tom_with_gripper.urdf variant adds the Robonine gripper base, servo gear,
-      claw slide links, and mimic joints.
+    - Kinematics: the 6-DOF arm stops at wrist_pitch_link; the gripper variant
+      fixes the Robonine gripper base to wrist_pitch_link and adds the servo
+      gear, claw slide links, and mimic joints.
     - Inertials: link masses are assembled from the same STEP instances as the
       visuals. Servos use Feetech published masses; aluminum plates and
       standoffs use 5052 density and current STEP volumes. Gripper inertials
@@ -1596,8 +1599,8 @@ def gen_urdf_with_options(
 
 
 def gen_urdf() -> dict[str, object]:
-    """Jointed no-gripper URDF using 3MF visual meshes."""
-    return gen_urdf_with_options(include_gripper=False)
+    """Jointed URDF (with gripper) using 3MF visual meshes."""
+    return gen_urdf_with_options(include_gripper=True)
 
 
 def _srdf_joint_degrees_to_radians(joint_values_deg: dict[str, float]) -> dict[str, float]:
@@ -1641,7 +1644,19 @@ def _srdf_arm_group_states_deg() -> tuple[tuple[str, dict[str, float]], ...]:
         elif state_name == "inspection_mirrored":
             next_values = dict(V2_SRDF_INSPECTION_MIRRORED_ARM_GROUP_STATE_DEG)
         states.append((state_name, next_values))
-    return tuple(states)
+    # The URDF default pose now bakes in the STEP elbow home pose (see the URDF frame
+    # solver), so express every arm group state's elbow relative to that home-pose zero:
+    # "home" collapses to all-zeros and the rest keep their original physical poses.
+    return tuple(
+        (
+            name,
+            {
+                **values,
+                "elbow_pitch": float(values.get("elbow_pitch", 0.0)) - V2_HOME_ELBOW_PITCH_DEG,
+            },
+        )
+        for name, values in states
+    )
 
 
 def _srdf_adjacent_collision_pairs_from_urdf(urdf: str) -> tuple[tuple[str, str], ...]:
@@ -1686,7 +1701,7 @@ def _srdf_root_element(
     )
 
     arm_group = _xml("group", {"name": "arm"})
-    arm_group.append(_xml("chain", {"base_link": "base_link", "tip_link": "wrist_roll_link"}))
+    arm_group.append(_xml("chain", {"base_link": "base_link", "tip_link": "wrist_pitch_link"}))
     root.append(arm_group)
 
     if include_gripper:
@@ -1708,7 +1723,7 @@ def _srdf_root_element(
                 "end_effector",
                 {
                     "name": "gripper_tcp",
-                    "parent_link": "wrist_roll_link",
+                    "parent_link": "wrist_pitch_link",
                     "group": "tcp",
                     "parent_group": "arm",
                 },
@@ -1759,5 +1774,5 @@ def gen_srdf_with_options(
 
 
 def gen_srdf() -> dict[str, object]:
-    """MoveIt semantic groups and named states for the no-gripper v2 arm."""
-    return gen_srdf_with_options(include_gripper=False)
+    """MoveIt semantic groups and named states for the v2 arm with gripper."""
+    return gen_srdf_with_options(include_gripper=True)

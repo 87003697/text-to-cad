@@ -925,7 +925,6 @@ URDF_LINKS = (
             },
         ),
     },
-    {"name": "wrist_roll_link"},
     {
         "name": "gripper_base_link",
         "inertial": _urdf_link_inertial("gripper_base_link"),
@@ -1066,22 +1065,9 @@ URDF_JOINTS = (
         },
     },
     {
-        "name": "wrist_roll",
-        "joint_type": "continuous",
-        "parent": "wrist_pitch_link",
-        "child": "wrist_roll_link",
-        "origin_xyz": "-0.0503 0 0",
-        "origin_rpy": "0 0 1.570796327",
-        "axis_xyz": "0 1 0",
-        "limit": {
-            "effort": STS3215_JOINT_EFFORT_TEXT,
-            "velocity": "4.000000",
-        },
-    },
-    {
-        "name": "wrist_roll_to_gripper_base",
+        "name": "wrist_pitch_to_gripper_base",
         "joint_type": "fixed",
-        "parent": "wrist_roll_link",
+        "parent": "wrist_pitch_link",
         "child": "gripper_base_link",
         "origin_xyz": "-0.00003287 0.0674104 0.000002072",
         "origin_rpy": "-1.570796185 -0.00037679 0",
@@ -1619,7 +1605,6 @@ ROBOT_ARM_MOTION_JOINT_NAMES = [
     "elbow_pitch",
     "elbow_roll",
     "wrist_pitch",
-    "wrist_roll",
 ]
 
 ROBOT_ARM_MOTION_DISABLED_COLLISION_PAIRS = (
@@ -1634,7 +1619,6 @@ ROBOT_ARM_SRDF_INSPECTION_ARM_GROUP_STATE_DEG = {
     "elbow_pitch": 3.0,
     "elbow_roll": 29.969,
     "wrist_pitch": 58.004,
-    "wrist_roll": -56.0,
 }
 
 ROBOT_ARM_SRDF_INSPECTION_MIRRORED_ARM_GROUP_STATE_DEG = {
@@ -1644,7 +1628,6 @@ ROBOT_ARM_SRDF_INSPECTION_MIRRORED_ARM_GROUP_STATE_DEG = {
     "elbow_pitch": 3.0,
     "elbow_roll": -29.969,
     "wrist_pitch": 58.004,
-    "wrist_roll": 56.0,
 }
 
 ROBOT_ARM_SRDF_ARM_GROUP_STATES_DEG = (
@@ -1657,7 +1640,6 @@ ROBOT_ARM_SRDF_ARM_GROUP_STATES_DEG = (
             "elbow_pitch": 0.0,
             "elbow_roll": 0.0,
             "wrist_pitch": 0.0,
-            "wrist_roll": 0.0,
         },
     ),
     (
@@ -1669,7 +1651,6 @@ ROBOT_ARM_SRDF_ARM_GROUP_STATES_DEG = (
             "elbow_pitch": -90.0,
             "elbow_roll": 0.0,
             "wrist_pitch": 30.0,
-            "wrist_roll": 0.0,
         },
     ),
     (

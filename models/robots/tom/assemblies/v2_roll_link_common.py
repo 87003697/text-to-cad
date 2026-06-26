@@ -271,18 +271,7 @@ def roll_link_instances(kind: str) -> list[dict[str, object]]:
             "name": f"{kind}_link_bracket_left",
             "transform": mates.bracket_local,
         },
-        *[
-            {
-                "path": LINK_STANDOFF_PATH,
-                "name": f"{kind}_link_standoff_{label}",
-                "transform": multiply_transforms(
-                    mates.bracket_local,
-                    translation_transform(x, 0.0, z),
-                ),
-                "use_source_colors": True,
-            }
-            for label, x, z in link_bracket.STANDOFF_CENTER_XZ_MM
-        ],
+        # Items 2 & 3: all 35 mm link-bracket standoffs (link_standoff_m3_35) removed.
         {
             "path": spec.downstream_servo_path,
             "name": spec.downstream_servo,
