@@ -112,27 +112,6 @@ function normalizeParameters(value) {
     .filter((definition) => definition.id);
 }
 
-function inferCadPathFromStepModuleUrl(url) {
-  let pathname = String(url || "").split("?")[0].split("#")[0].replace(/\\/g, "/").trim();
-  if (!pathname) {
-    return "";
-  }
-  try {
-    pathname = new URL(pathname, "http://localhost").pathname;
-  } catch {
-    // Keep the raw path for relative module URLs.
-  }
-  const normalizedPath = pathname.replace(/^\/+|\/+$/g, "");
-  const slashIndex = normalizedPath.lastIndexOf("/");
-  const directory = slashIndex >= 0 ? normalizedPath.slice(0, slashIndex) : "";
-  const fileName = slashIndex >= 0 ? normalizedPath.slice(slashIndex + 1) : normalizedPath;
-  const match = fileName.match(/^\.?(.+)\.step\.js$/);
-  if (!match?.[1]) {
-    return "";
-  }
-  return normalizeCadPath([directory, match[1]].filter(Boolean).join("/"));
-}
-
 function normalizeRelativeStepPath(value) {
   const rawPath = normalizeString(value).replace(/\\/g, "/");
   if (!rawPath || rawPath.startsWith("/") || /^[A-Za-z]:\//.test(rawPath) || /^[a-z][a-z0-9+.-]*:/i.test(rawPath)) {
@@ -259,7 +238,9 @@ export function normalizeStepModuleDefinition(rawModule, { url = "", cadPath = "
   }
   const step = normalizeStepLink(manifest.step);
   const stepCadPath = cadPathFromStepPath(step.path);
-  const normalizedCadPath = stepCadPath || normalizeCadPath(cadPath) || inferCadPathFromStepModuleUrl(url);
+  // The cadPath comes from the manifest's `step` link or the caller (the catalog entry) —
+  // not from the module filename (no `.step.js` naming convention to back it out of).
+  const normalizedCadPath = stepCadPath || normalizeCadPath(cadPath) || "";
   const parameters = normalizeParameters(manifest.parameters);
   const parameterMap = Object.fromEntries(parameters.map((definition) => [definition.id, definition]));
   const defaultParameterValues = Object.fromEntries(

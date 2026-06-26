@@ -17,7 +17,7 @@ Coordinates: RIGHT hand; wrist-flange mount face center = origin,
 Chain offsets, joint limits, and the baked "relaxed" pose live in
 lyra_parts/chain.py and are shared with the URDF/SRDF generators
 (lyra_parts/description.py) and the CAD Viewer animation sidecar
-(.lyra.step.js); edit them there.
+(lyra.params.js); edit them there.
 """
 
 from __future__ import annotations
@@ -92,7 +92,7 @@ def assemble() -> Compound:
 
 
 def gen_step():
-    return assemble()
+    return {"shape": assemble(), "params": "lyra.params.js"}
 
 
 def gen_urdf():

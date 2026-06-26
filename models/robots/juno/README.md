@@ -33,7 +33,7 @@ Hands add posed (cosmetic) finger articulation on top of the 27 counted DOF.
   generators; `description.py` emits the URDF/SRDF XML; `mass_props.py`
   holds baked CAD volume/COM/inertia/bbox data.
 - `juno.step` — generated STEP assembly (derived artifact).
-- `.juno.step.js` — CAD Viewer animation sidecar with four in-place gaits
+- `juno.params.js` — CAD Viewer animation sidecar with four in-place gaits
   built on per-frame chain FK plus two-link leg IK around the baked
   athletic stance: `walkLoop` (march, planted stance feet), `strideLoop`
   (treadmill-style strides, stance foot slides flat on the ground),

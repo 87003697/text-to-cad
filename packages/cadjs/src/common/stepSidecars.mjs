@@ -30,11 +30,6 @@ export function isInlineStepGlbArtifactPath(filePath) {
     && path.basename(path.dirname(path.dirname(p))) === CACHE_DIRNAME;
 }
 
-export function isInlineStepParameterPath(filePath) {
-  const name = path.basename(String(filePath || "")).toLowerCase();
-  return name.startsWith(".") && name.endsWith(".step.js");
-}
-
 export function isPathInsidePerStepViewerDirectory(filePath) {
   return String(filePath || "")
     .split(path.sep)
@@ -56,9 +51,4 @@ export function inlineStepGlbArtifactPathForSource(entryPath) {
 
 export function stepGlbArtifactPathForSource(entryPath) {
   return inlineStepGlbArtifactPathForSource(entryPath);
-}
-
-export function stepParameterPathForStepSource(sourcePath) {
-  const stem = path.basename(sourcePath, path.extname(sourcePath));
-  return path.join(path.dirname(sourcePath), `.${stem}.step.js`);
 }

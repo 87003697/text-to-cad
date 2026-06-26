@@ -50,6 +50,7 @@ import {
 import { shouldUseGlbMeshWorkerForEntry } from "cadjs/lib/render/meshCost";
 import { RENDER_FORMAT, entrySourceFormat } from "cadjs/lib/fileFormats";
 import { buildDisplayEdgeRuntime, buildSelectorRuntime, composeSelectorRuntimes } from "cadjs/lib/selectors/runtime";
+import { selectRequestedAssemblyComponents } from "../../../workbench/referenceSelection";
 
 const ROBOT_MESH_LOAD_CONCURRENCY = 3;
 
@@ -592,7 +593,7 @@ export function useCadAssets({
     }
   }, [buildAssemblyPreviewMeshState, cancelMeshLoad, entryHasMesh, getAssemblyMeshHash, getCachedMeshState]);
 
-  const loadReferencesForEntry = useCallback(async (entry) => {
+  const loadReferencesForEntry = useCallback(async (entry, requestedOccurrenceIds = []) => {
     cancelReferenceLoad();
     const requestId = referenceRequestIdRef.current;
 
@@ -626,11 +627,27 @@ export function useCadAssets({
         ? await loadRenderJson(resolvePackageAssetUrl(glbUrl, "assembly.json"), { signal: controller.signal }).catch(() => null)
         : null;
       if (packageDescriptor && packageDescriptor.kind === "assembly-package") {
+        // Lazy topology: an assembly loads selector topology only for the occurrences the user has
+        // expanded in the tree (requestedOccurrenceIds), not every component. Loading all of them up
+        // front made expanding one nested node fetch + compose the whole model's topology (regressed
+        // in 8b12837d). A single-component part has no tree, so it loads its one component.
+        // loadRenderSelectorBundle is cache-backed, so each new expansion only fetches the
+        // newly-needed component; previously loaded ones are free.
+        const isSingleComponentPart = String(entry?.kind || "").trim() === "part";
+        const { occurrencesToLoad, neededCids, loadedTopologyKey } = selectRequestedAssemblyComponents(
+          packageDescriptor,
+          requestedOccurrenceIds,
+          { singleComponentPart: isSingleComponentPart }
+        );
         const componentBundleByCid = {};
         await mapWithConcurrency(
-          Object.entries(packageDescriptor.components || {}),
+          neededCids,
           robotMeshLoadConcurrency(),
-          async ([cid, component]) => {
+          async (cid) => {
+            const component = (packageDescriptor.components || {})[cid];
+            if (!component) {
+              return;
+            }
             componentBundleByCid[cid] = await loadRenderSelectorBundle(
               resolvePackageAssetUrl(glbUrl, component.glb),
               { signal: controller.signal }
@@ -645,8 +662,7 @@ export function useCadAssets({
         // partId (an occurrence-namespaced partId would orphan it). Multi-occurrence assemblies
         // DO namespace by occurrence so each leaf part owns its faces/edges. Both keep
         // remapOccurrenceId so picks align with the composed mesh's sourcePartRanges occurrence.
-        const isSingleComponentPart = String(entry?.kind || "").trim() === "part";
-        const occurrenceRuntimes = (Array.isArray(packageDescriptor.occurrences) ? packageDescriptor.occurrences : [])
+        const occurrenceRuntimes = occurrencesToLoad
           .map((occurrence) => {
             const bundle = componentBundleByCid[String(occurrence?.component || "").trim()];
             if (!bundle) {
@@ -662,7 +678,10 @@ export function useCadAssets({
           })
           .filter(Boolean);
         const composedRuntime = composeSelectorRuntimes(occurrenceRuntimes);
-        const nextReferenceState = buildNormalizedReferenceState(entry, null, { selectorRuntime: composedRuntime });
+        const nextReferenceState = buildNormalizedReferenceState(entry, null, {
+          selectorRuntime: composedRuntime,
+          loadedTopologyKey
+        });
         setReferenceState(nextReferenceState);
         setReferenceStatus(nextReferenceState.disabledReason ? REFERENCE_STATUS.DISABLED : REFERENCE_STATUS.READY);
         setReferenceError(nextReferenceState.disabledReason || "");

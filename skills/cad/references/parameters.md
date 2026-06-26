@@ -1,6 +1,6 @@
 # CAD parameters
 
-Read this file when the user asks to parameterize or animate a STEP model, or when designing or reviewing CAD source parameters, `.step.js` sidecar parameters, CAD Viewer controls, or animation controls.
+Read this file when the user asks to parameterize or animate a STEP model, or when designing or reviewing CAD source parameters, JS parameter/animation sidecars, CAD Viewer controls, or animation controls.
 
 ## Principle
 
@@ -30,7 +30,45 @@ Use snake_case semantic names that describe intent, matching the build123d Pytho
 - Keep sidecar parameter ids aligned with the Python source parameters they mirror, and keep source constants, manifest feature ids, UI labels, and comments aligned enough that an LLM can trace a control to geometry.
 - Module schema field names such as `schemaVersion`, `manifest.step.path`, and `durationSeconds` are fixed by the step-module schema; the snake_case convention applies to the parameter and feature ids you define.
 
-For STEP sidecars, strongly prefer an explicit target link in the module manifest:
+### Declaring and discovering the sidecar
+
+A JS sidecar is declared by the model's generator, not by a filename convention.
+The sidecar file itself can have any name; `<name>.params.js` is the convention.
+
+- A generated model declares the sidecar through the `gen_step()` envelope by
+  returning a `params` filepath alongside its `shape`. The path is relative to
+  the generator file:
+
+  ```python
+  def gen_step():
+      return {"shape": build_model(), "params": "<name>.params.js"}
+  ```
+
+  cadpy records that path as `paramsPath` in the package descriptor
+  (`assembly.json`, under `__cadcache__`), model-folder-relative. The CAD Viewer
+  reads `paramsPath` from the descriptor to load the sidecar. JS serving is
+  descriptor-gated: only a file a descriptor declares is served, never arbitrary
+  workspace JS. There is no hidden-dot or `.step.js` filename requirement.
+
+- An imported `.step` model has no `gen_step()`. To attach a sidecar, add a thin
+  generator `<name>.step.py` beside the `.step` that re-imports the STEP and
+  declares `params`:
+
+  ```python
+  from pathlib import Path
+  from cadpy.step_scene import import_step
+
+  def gen_step():
+      return {
+          "shape": import_step(Path(__file__).parent / "<name>.step"),
+          "params": "<name>.params.js",
+      }
+  ```
+
+### `manifest.step.path` link
+
+Inside the sidecar, strongly prefer an explicit logical-link target in the
+module manifest:
 
 ```js
 export default {
@@ -43,7 +81,11 @@ export default {
 };
 ```
 
-`manifest.step.path` must be a workspace-relative path, never an absolute path, URL, or path with `..` segments. This link is provenance for humans and tools, not a freshness contract; do not add hashes or staleness checks to STEP parameter modules. Keep the sidecar named `.<step-stem>.step.js` when it lives next to its STEP file so existing viewers can fall back to the same-filename convention if `manifest.step.path` is absent.
+`manifest.step.path` is the workspace-relative logical `<name>.step` link used
+for provenance and cad-path derivation. It must be a workspace-relative path,
+never an absolute path, URL, or path with `..` segments. This link is provenance
+for humans and tools, not a freshness contract; do not add hashes or staleness
+checks to STEP parameter modules.
 
 ## Defaults And Bounds
 
@@ -89,7 +131,7 @@ Animation parameters should drive the smallest real degrees of freedom and deriv
 - Preserve source STEP/GLB material colors by default. Only override colors, add color controls, or assign viewer-time color styles when the user explicitly asks for recoloring, presentation styling, or diagnostic color coding.
 - Use comments for non-obvious kinematic choices, especially branch selection, sign conventions, datum origin, and derived ratios.
 
-For STEP sidecars, use JavaScript for live CAD Viewer interaction and Three.js hooks. Use Python/build123d as the source of truth for regenerating geometry. Python may generate `.step.js` modules, but CAD Viewer controls should not imply regeneration unless that workflow exists.
+For STEP sidecars, use JavaScript for live CAD Viewer interaction and Three.js hooks. Use Python/build123d as the source of truth for regenerating geometry. Python may generate `<name>.params.js` modules, but CAD Viewer controls should not imply regeneration unless that workflow exists.
 
 ## Controls
 

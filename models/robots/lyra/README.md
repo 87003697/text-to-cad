@@ -45,7 +45,7 @@ interpenetrates.
   `relaxed` pose. Occurrence refs `#o1.1..#o1.17` follow the `asm.add`
   order in `lyra.py` (palm, then index/middle/ring/pinky
   proximal/middle/distal, then thumb base/metacarpal/proximal/distal).
-- `.lyra.step.js` — CAD Viewer animation sidecar driving per-frame chain FK
+- `lyra.params.js` — CAD Viewer animation sidecar driving per-frame chain FK
   deltas against the baked pose. Animations: `poseTour` (a finger-ripple
   wave, then relaxed -> precision pinch -> OK sign -> point -> tripod
   pinch -> fist; key order chosen so every blend is collision-free),

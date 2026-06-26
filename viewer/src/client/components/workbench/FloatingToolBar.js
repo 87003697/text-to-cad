@@ -18,6 +18,7 @@ import DrawingToolbar from "./DrawingToolbar";
 import { ToolbarButton } from "./ToolbarButton";
 import { CAD_WORKSPACE_TOOLBAR_DESKTOP_WIDTH_CLASS } from "./ToolbarShell";
 import { DisplayProjectionControl } from "../viewer/DisplayProjectionControl";
+import { StepExportDropdown } from "./StepExportDropdown";
 
 const FLOATING_TOOL_BAR_SURFACE_CLASS =
   "cad-glass-surface border border-sidebar-border text-sidebar-foreground shadow-sm";
@@ -58,7 +59,10 @@ function DesktopFloatingToolBar({
   canRedoDrawing,
   drawingStrokes,
   handleEnterPreviewMode,
-  handleScreenshotCopy
+  handleScreenshotCopy,
+  selectedEntry,
+  onExportStepFile,
+  fileAccessBusyKey = ""
 }) {
   const [displayMenuOpen, setDisplayMenuOpen] = useState(false);
   const dxfMode = renderFormat === RENDER_FORMAT.DXF;
@@ -175,6 +179,17 @@ function DesktopFloatingToolBar({
           >
             <Focus className="size-3" strokeWidth={2} aria-hidden="true" />
           </ToolbarButton>
+
+          <StepExportDropdown
+            selectedEntry={selectedEntry}
+            onExportStepFile={onExportStepFile}
+            fileAccessBusyKey={fileAccessBusyKey}
+            triggerClassName={FLOATING_TOOL_BAR_BUTTON_CLASSES}
+            iconClassName="size-3"
+            contentAlign="end"
+            contentSide="bottom"
+            contentSideOffset={6}
+          />
         </div>
       </TooltipProvider>
 
@@ -205,5 +220,5 @@ export default function FloatingToolBar({
     return null;
   }
 
-  return <DesktopFloatingToolBar {...toolbarProps} />;
+  return <DesktopFloatingToolBar selectedEntry={selectedEntry} {...toolbarProps} />;
 }

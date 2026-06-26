@@ -95,7 +95,7 @@ Load these files only when their trigger applies:
 - `references/inspection-and-validation.md` — validation sequence, selector refs, facts, planes, measurements, alignment, diff, frame, and validation reporting.
 - `references/snapshot-review.md` — mandatory snapshot policy, packet sizing, targeted views, and converting visual findings into geometry checks.
 - `references/positioning.md` — part-local datums and origins, assembly transforms, build123d joints, CLI alignment validation, and positioning reports.
-- `references/parameters.md` — parameterizing or animating a STEP model: source parameters, `.step.js` sidecar modules, viewer controls, and animation design.
+- `references/parameters.md` — parameterizing or animating a STEP model: source parameters, JS parameter/animation sidecars declared via gen_step params, viewer controls, and animation design.
 - `references/supported-exports.md` — secondary STL/3MF/native GLB sidecar workflows.
 - `references/repair-loop.md` — diagnosis and repair procedures.
 

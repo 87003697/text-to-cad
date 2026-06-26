@@ -279,4 +279,4 @@ def gen_step():
         children=parts,
         label="simplified_planetary_gear_assembly",
     )
-    return assembly
+    return {"shape": assembly, "params": "planetary_gear_assembly.params.js"}
