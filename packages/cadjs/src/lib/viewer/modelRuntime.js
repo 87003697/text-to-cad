@@ -6,9 +6,7 @@ import {
 } from "../../common/cadScene.js";
 import {
   clampSceneModelRadius,
-  getShadowCameraSettings,
-  normalizeSceneScaleMode,
-  VIEWER_SCENE_SCALE
+  getShadowCameraSettings
 } from "./sceneScale.js";
 
 export {
@@ -38,12 +36,12 @@ export function runtimeModelKeyMatches(runtime, modelKey) {
 }
 
 export function resolveRuntimeModelFloorZ(bounds, modelPosition, sceneScaleMode) {
-  const positionZ = toNumber(modelPosition?.z);
-  if (normalizeSceneScaleMode(sceneScaleMode) === VIEWER_SCENE_SCALE.URDF) {
-    return positionZ;
-  }
-  const boundsMin = Array.isArray(bounds?.min) ? bounds.min : [0, 0, 0];
-  return toNumber(boundsMin[2]) + positionZ;
+  // The stage floor sits at world z=0 in every scene scale, so a model's absolute Z is
+  // honored: a grounded model rests on the floor and a part authored above z=0 floats above
+  // it. (Previously the CAD scale glued the floor to the model's bbox bottom, which hid any
+  // uniform vertical translation because the model is re-centered on its bounds at load.)
+  // `bounds` and `sceneScaleMode` are retained for call-site compatibility.
+  return toNumber(modelPosition?.z);
 }
 
 export function applyRuntimeModelBounds(THREE, runtime, bounds, sceneScaleMode, {
