@@ -167,8 +167,11 @@ when the skill viewer path is a development symlink.
 Run from `skills/cad-viewer`:
 
 ```bash
-npm --prefix scripts/viewer run agent:start -- --host 127.0.0.1 --shutdown-after 12h
+npm --prefix scripts/viewer run agent:start -- --host 127.0.0.1 --dir "<repo>/models"
 ```
+
+`--dir <absolute-model-root>` is required (the launcher exits without it); it sets
+the served catalog root and the default `?dir=`.
 
 Every returned Viewer URL must include `?dir=<absolute-model-root>`, commonly
 `<repo>/models`, and `file=<path>` values must be relative to `?dir=`. Do not
