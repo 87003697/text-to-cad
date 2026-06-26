@@ -8,7 +8,6 @@ import test from "node:test";
 import {
   isCatalogRelevantPath,
   isServedCadAsset,
-  catalogFileRefForPath,
   normalizeViewerRootDir,
   readStepSourceStatus,
   resolveViewerRoot,
@@ -67,6 +66,7 @@ function writePackage(repoRoot, stepRelPath, {
   sourceHash = null,
   stepHash = null,
   sourceClosureFiles = null, // model-folder-relative generator closure (python freshness)
+  paramsPath = null,   // model-folder-relative JS step-module sidecar (any filename)
   occurrences = 1,
 } = {}) {
   const stepAbs = path.join(repoRoot, stepRelPath);
@@ -93,6 +93,7 @@ function writePackage(repoRoot, stepRelPath, {
     ...(sourceHash ? { sourceHash } : {}),
     ...(stepHash ? { stepHash } : {}),
     ...(sourceClosureFiles ? { sourceClosureFiles } : {}),
+    ...(paramsPath ? { paramsPath } : {}),
     stepPath: logicalStepName,
     bbox: { min: [0, 0, 0], max: [1, 1, 1] },
     stats: { occurrenceCount: occurrences, shapeCount: occurrences },
@@ -127,8 +128,11 @@ test("scanCadDirectory discovers CAD files directly and infers STEP assets", () 
     entryKind: "assembly",
     sourceKind: "step",
     stepHash,
+    paramsPath: "sample_part_params.js",
   });
-  writeFile(path.join(repoRoot, "workspace/sample_part/.sample_part.step.js"), "export default { manifest: { schemaVersion: 1 } };\n");
+  // The step-module sidecar is named by the descriptor's paramsPath (any filename), not a hidden
+  // `.{stem}.step.js` convention.
+  writeFile(path.join(repoRoot, "workspace/sample_part/sample_part_params.js"), "export default { manifest: { schemaVersion: 1 } };\n");
   writeFile(path.join(repoRoot, "workspace/sample_part/.sample_part.step/ignored.step"), "ignored\n");
   writeFile(path.join(repoRoot, "workspace/sample_part/sample_part.stl"), "solid sample_part\nendsolid sample_part\n");
   writeFile(path.join(repoRoot, "workspace/sample_part/sample_part.3mf"), "3mf\n");
@@ -157,7 +161,7 @@ test("scanCadDirectory discovers CAD files directly and infers STEP assets", () 
   assert.equal(stepEntry.file, "sample_part/sample_part.step");
   assert.equal(stepEntry.artifact, undefined);
   assert.equal(stepEntry.sourceKind, "step");
-  assert.ok(stepEntry.moduleUrl.startsWith("/workspace/sample_part/.sample_part.step.js?v="));
+  assert.ok(stepEntry.moduleUrl.startsWith("/workspace/sample_part/sample_part_params.js?v="));
   assert.equal(stepEntry.step, undefined);
   assert.equal(stepEntry.source, undefined);
   assert.equal(stepEntry.assets, undefined);
@@ -196,7 +200,7 @@ test("scanCadDirectory discovers CAD files directly and infers STEP assets", () 
   assert.equal(entryByFile(catalog, "robots/legacy_robot.srdf").relations.urdf.file, "robots/sample_robot.urdf");
   assert.equal(entryByFile(catalog, "sample_part/sample_part.py"), undefined);
   assert.equal(entryByFile(catalog, "sample_part/.sample_part.step.glb"), undefined);
-  assert.equal(entryByFile(catalog, "sample_part/.sample_part.step.js"), undefined);
+  assert.equal(entryByFile(catalog, "sample_part/sample_part_params.js"), undefined);
   assert.equal(entryByFile(catalog, "implicit/implicit-cad.mjs"), undefined);
   assert.equal(entryByFile(catalog, "sample_part/.sample_part.step/ignored.step"), undefined);
   assert.equal(entryByFile(catalog, "robots/.sample_robot.urdf/ignored.urdf"), undefined);
@@ -211,44 +215,39 @@ test("scanCadFile updates a single catalog entry without walking sibling directo
     entryKind: "part",
     sourceKind: "step",
     stepHash,
+    paramsPath: "sample_part_params.js",
   });
-  writeFile(path.join(repoRoot, "workspace/sample_part/.sample_part.step.js"), "export default { manifest: { schemaVersion: 1 } };\n");
+  writeFile(path.join(repoRoot, "workspace/sample_part/sample_part_params.js"), "export default { manifest: { schemaVersion: 1 } };\n");
   writeFile(path.join(repoRoot, "workspace/ignored/ignored.step"), "ISO-10303-21;\nEND-ISO-10303-21;\n");
 
   const entry = scanCadFile({ repoRoot, rootDir: "workspace", filePath: stepPath });
 
   assert.equal(entry.file, "sample_part/sample_part.step");
   assert.equal(entry.kind, "part");
-  assert.ok(entry.moduleUrl.startsWith("/workspace/sample_part/.sample_part.step.js?v="));
+  assert.ok(entry.moduleUrl.startsWith("/workspace/sample_part/sample_part_params.js?v="));
   assert.ok(entry.url.startsWith("/workspace/sample_part/__cadcache__/models/sample_part.step?v="));
 });
 
-test("scanCadFile maps inline STEP sidecars back to their logical STEP entry", () => {
+test("scanCadFile resolves a generated-only STEP entry from its package, without a sidecar map", () => {
   const repoRoot = makeTempRepo();
   const stepPath = path.join(repoRoot, "workspace/sample_part/sample_part.step");
   const stepHash = writeStep(stepPath);
-  // The render artifact moved into __cadcache__ (a skipped directory); the surviving inline
-  // sidecar in the model folder is the `.step.js` parameter module, which maps back to the
-  // logical STEP entry. The package descriptor still resolves the generated-only case.
+  // The legacy `.step.js` sidecar -> logical-STEP remap was deleted; a JS sidecar no longer maps
+  // back to its STEP entry. The package descriptor still resolves the generated-only case (no
+  // committed STEP) directly from the STEP ref, since the cache is keyed by the entry filename.
   writePackage(repoRoot, "workspace/sample_part/sample_part.step", {
     entryKind: "assembly",
     sourceKind: "step",
     stepHash,
   });
-  const parameterPath = path.join(repoRoot, "workspace/sample_part/.sample_part.step.js");
-  writeFile(parameterPath, "export default { manifest: { schemaVersion: 1 } };\n");
 
   assert.equal(
-    catalogFileRefForPath({ repoRoot, rootDir: "workspace", filePath: parameterPath }),
-    "sample_part/sample_part.step"
-  );
-  assert.equal(
-    scanCadFile({ repoRoot, rootDir: "workspace", filePath: parameterPath }).file,
+    scanCadFile({ repoRoot, rootDir: "workspace", filePath: stepPath }).file,
     "sample_part/sample_part.step"
   );
 
   fs.unlinkSync(stepPath);
-  const generatedOnlyEntry = scanCadFile({ repoRoot, rootDir: "workspace", filePath: parameterPath });
+  const generatedOnlyEntry = scanCadFile({ repoRoot, rootDir: "workspace", filePath: stepPath });
   assert.equal(generatedOnlyEntry.file, "sample_part/sample_part.step");
   assert.equal(generatedOnlyEntry.sourceKind, "step");
 });
@@ -660,11 +659,25 @@ test("scanCadDirectory accepts a valid component-GLB package for a committed STE
   assert.equal(entry.assets, undefined);
 });
 
-test("isServedCadAsset allows hidden STEP runtime modules only by convention", () => {
-  assert.equal(isServedCadAsset("/workspace/sample/.gearbox.step.js"), true);
-  assert.equal(isServedCadAsset("/workspace/sample/.gearbox.stp.js"), false);
-  assert.equal(isServedCadAsset("/workspace/sample/gearbox.step.js"), false);
-  assert.equal(isServedCadAsset("/workspace/sample/gearbox.js"), false);
+test("isServedCadAsset serves a JS sidecar only when a package descriptor declares it via paramsPath", () => {
+  const repoRoot = makeTempRepo();
+  const stepHash = writeStep(path.join(repoRoot, "workspace/sample/gearbox.step"));
+  // The package descriptor names its step-module sidecar (any filename) via paramsPath, relative
+  // to the model folder. Only that declared sidecar is served; a sibling .js that no descriptor
+  // points at — and plain workspace .js — stay blocked.
+  writePackage(repoRoot, "workspace/sample/gearbox.step", {
+    entryKind: "assembly",
+    sourceKind: "step",
+    stepHash,
+    paramsPath: "gearbox_params.js",
+  });
+  const declaredSidecar = path.join(repoRoot, "workspace/sample/gearbox_params.js");
+  writeFile(declaredSidecar, "export default { manifest: { schemaVersion: 1 } };\n");
+  writeFile(path.join(repoRoot, "workspace/sample/other.js"), "export default {};\n");
+
+  assert.equal(isServedCadAsset(declaredSidecar), true);
+  assert.equal(isServedCadAsset(path.join(repoRoot, "workspace/sample/other.js")), false);
+  assert.equal(isServedCadAsset(path.join(repoRoot, "workspace/sample/gearbox.js")), false);
 });
 
 test("isCatalogRelevantPath watches Python generators without serving them", () => {

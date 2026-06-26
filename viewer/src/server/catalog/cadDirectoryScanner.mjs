@@ -4,11 +4,9 @@ import path from "node:path";
 import {
   inlineStepGlbArtifactPathForSource,
   isInlineStepGlbArtifactPath,
-  isInlineStepParameterPath,
   isInsideCadCache,
   isPathInsidePerStepViewerDirectory,
   isPerStepViewerDirectoryName,
-  stepParameterPathForStepSource,
 } from "cadjs/common/stepSidecars.mjs";
 import {
   STEP_EDGE_BARYCENTRIC_ATTRIBUTE,
@@ -1228,14 +1226,6 @@ function sourcePathForInlineStepGlbArtifact(glbPath) {
   return path.join(folder, path.basename(glbPath));
 }
 
-function sourcePathForInlineStepParameter(parameterPath) {
-  const name = path.basename(parameterPath);
-  if (!isInlineStepParameterPath(parameterPath)) {
-    return null;
-  }
-  return path.join(path.dirname(parameterPath), name.slice(1, -".js".length));
-}
-
 function catalogArtifactFromValidation(stepArtifact) {
   if (!stepArtifact || typeof stepArtifact !== "object") {
     return undefined;
@@ -1413,7 +1403,20 @@ function createStepEntry({ repoRoot, rootPath, sourcePath, extension, includeArt
   const topology = validation?.topology || catalogMetadata.topology || null;
   const stepArtifact = validation?.stepArtifact || {};
   const glbAsset = assetForPath(repoRoot, glbPath);
-  const stepModuleAsset = assetForPath(repoRoot, stepParameterPathForStepSource(logicalStepPath));
+  // The hand-authored JS sidecar (step-module manifest: parameters/features/animations) is
+  // declared by the package descriptor's `paramsPath` (model-folder-relative), set from
+  // gen_step()'s `params`. No naming convention: any filename the generator points at.
+  // `validateAssemblyPackageArtifact` returns the bare descriptor as `topology` while
+  // `readStepCatalogMetadata` wraps it as `{ index: descriptor }`; normalize like
+  // stepKindFromTopology so `paramsPath` resolves in both the full-validation and
+  // metadata-only scan paths.
+  const topologyIndex = topology?.index && typeof topology.index === "object"
+    ? topology.index
+    : topology;
+  const paramsPathRel = String(topologyIndex?.paramsPath || "").trim();
+  const stepModuleAsset = paramsPathRel
+    ? assetForPath(repoRoot, path.resolve(path.dirname(sourcePath), paramsPathRel))
+    : null;
   const artifact = includeArtifactStatus ? catalogArtifactFromValidation(stepArtifact) : undefined;
   // The viewer is opinionated about entrypoints: a `.step.py` entry is a GENERATED model, a
   // `.step`/`.stp` is an IMPORTED one — independent of artifact metadata or any sibling file
@@ -1592,9 +1595,6 @@ function logicalStepSourcePathForInlineArtifactPath(filePath) {
   if (isInlineStepGlbArtifactPath(filePath)) {
     return sourcePathForInlineStepGlbArtifact(filePath);
   }
-  if (isInlineStepParameterPath(filePath)) {
-    return sourcePathForInlineStepParameter(filePath);
-  }
   return null;
 }
 
@@ -1603,8 +1603,7 @@ function logicalStepSourceExistsForSidecar(sourcePath) {
     sourcePath &&
     (
       fileStats(sourcePath) ||
-      stepRenderArtifactPresent(inlineStepGlbArtifactPathForSource(sourcePath)) ||
-      fileStats(stepParameterPathForStepSource(sourcePath))
+      stepRenderArtifactPresent(inlineStepGlbArtifactPathForSource(sourcePath))
     )
   );
 }
@@ -1761,6 +1760,37 @@ export function sortCatalogEntries(entries) {
   return [...(Array.isArray(entries) ? entries : [])].sort(compareEntries);
 }
 
+function isDeclaredParamsSidecar(filePath) {
+  // True when a component-GLB package in the file's own directory declares it as the
+  // `paramsPath` sidecar (model-folder-relative). Keeps JS serving descriptor-gated — we
+  // never serve arbitrary workspace JavaScript, only a sidecar a package explicitly names.
+  const modelDir = path.dirname(filePath);
+  const resolved = path.resolve(filePath);
+  const packagesDir = path.join(modelDir, "__cadcache__", "models");
+  let entries = [];
+  try {
+    entries = fs.readdirSync(packagesDir, { withFileTypes: true });
+  } catch {
+    return false;
+  }
+  for (const entry of entries) {
+    if (!entry.isDirectory()) {
+      continue;
+    }
+    let descriptor;
+    try {
+      descriptor = JSON.parse(fs.readFileSync(path.join(packagesDir, entry.name, "assembly.json"), "utf-8"));
+    } catch {
+      continue;
+    }
+    const paramsPath = String(descriptor?.paramsPath || "").trim();
+    if (paramsPath && path.resolve(modelDir, paramsPath) === resolved) {
+      return true;
+    }
+  }
+  return false;
+}
+
 export function isServedCadAsset(filePath) {
   const extension = path.extname(filePath).toLowerCase();
   // Generation lock files live beside the package dir inside __cadcache__ and are server-only
@@ -1774,7 +1804,9 @@ export function isServedCadAsset(filePath) {
   if (isInsideCadCache(filePath)) {
     return true;
   }
-  if (isInlineStepParameterPath(filePath)) {
+  // A JS sidecar (step-module manifest) is served only when a sibling package descriptor
+  // declares it via `paramsPath` — descriptor-gated, never arbitrary workspace JS.
+  if ((extension === ".js" || extension === ".mjs") && isDeclaredParamsSidecar(filePath)) {
     return true;
   }
   if (isPathInsidePerStepViewerDirectory(filePath)) {

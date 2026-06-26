@@ -4788,12 +4788,20 @@ export default function CadWorkspace({
     setUrdfStatus
   ]);
 
+  // Stable key over the expanded tree nodes whose topology should be loaded. An assembly's
+  // reference state is only a match if it was composed for exactly this expanded set, so expanding
+  // a new node re-triggers a load (which fetches only the newly-needed component). A single part
+  // has no tree; its loaded key is "*".
+  const requestedTopologyKey = isAssemblyView
+    ? requestedStepTreeTopologyNodeIds.slice().sort().join("|")
+    : "*";
   const selectedReferencesMatch =
     !!referenceState &&
     !!selectedEntry &&
     selectedEntryHasReferences &&
     referenceState.fileRef === fileKey(selectedEntry) &&
-    referenceState.referenceHash === buildReferenceCacheKey(selectedEntry);
+    referenceState.referenceHash === buildReferenceCacheKey(selectedEntry) &&
+    (referenceState.loadedTopologyKey || "*") === requestedTopologyKey;
   const selectedSelectorRuntime = selectedReferencesMatch ? referenceState?.selectorRuntime || null : null;
   const selectedDisplayEdgesMatch =
     !!displayEdgeState &&
@@ -4868,7 +4876,7 @@ export default function CadWorkspace({
     if (selectedReferencesMatch) {
       return;
     }
-    loadReferencesForEntry(selectedEntry).catch((err) => {
+    loadReferencesForEntry(selectedEntry, requestedStepTreeTopologyNodeIds).catch((err) => {
       setReferenceStatus(REFERENCE_STATUS.ERROR);
       setReferenceError(err instanceof Error ? err.message : String(err));
     });
@@ -4877,6 +4885,7 @@ export default function CadWorkspace({
     isAssemblyView,
     loadReferencesForEntry,
     referenceLoadingEnabled,
+    requestedStepTreeTopologyNodeIds,
     selectedEntry,
     selectedEntryHasReferences,
     selectedReferencesMatch
@@ -8558,6 +8567,8 @@ export default function CadWorkspace({
                 drawingStrokes={drawingStrokes}
                 handleEnterPreviewMode={handleEnterPreviewMode}
                 handleScreenshotCopy={handleScreenshotCopy}
+                onExportStepFile={handleExportStepFile}
+                fileAccessBusyKey={fileAccessBusyKey}
               />
 
               {!previewMode && (directorySelectionActive || (!selectedEntry && !missingFileRef && !fileParamSelectionPending)) ? (

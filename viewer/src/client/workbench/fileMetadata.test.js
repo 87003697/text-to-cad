@@ -156,7 +156,7 @@ test("file metadata lists module and relation catalog data", () => {
     url: "/models/robots/example.srdf?v=1",
     hash: "srdfhash",
     bytes: 1933,
-    moduleUrl: "/models/robots/.example.step.js?v=1",
+    moduleUrl: "/models/robots/example_params.js?v=1",
     relations: {
       urdf: {
         file: "robots/example.urdf",
@@ -168,8 +168,8 @@ test("file metadata lists module and relation catalog data", () => {
     viewerServerInfo,
   });
 
-  assert.equal(rowByLabel(groups, "Module").value, "robots/.example.step.js");
-  assert.equal(rowByLabel(groups, "Module").href, "/models/robots/.example.step.js?v=1");
+  assert.equal(rowByLabel(groups, "Module").value, "robots/example_params.js");
+  assert.equal(rowByLabel(groups, "Module").href, "/models/robots/example_params.js?v=1");
   assert.equal(rowByLabel(groups, "URDF file").value, "robots/example.urdf");
   assert.equal(rowByLabel(groups, "URDF size").value, "9.19 KB (9,414 B)");
   assert.equal(rowByLabel(groups, "URDF hash").displayValue, "89d28a294dc5...ae8c14a3");

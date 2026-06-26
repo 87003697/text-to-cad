@@ -909,4 +909,4 @@ def build_actuator(explode: float = 0.0) -> Compound:
 
 
 def gen_step():
-    return build_actuator(explode=0.0)
+    return {"shape": build_actuator(explode=0.0), "params": "qdd_actuator.params.js"}

@@ -181,52 +181,6 @@ test("STEP module local feature refs prefer explicit relative STEP path", () => 
   assert.equal(definition.features[0].ref, "#o1.2");
 });
 
-test("STEP module invalid explicit STEP paths fall back to sidecar URL inference", () => {
-  const definition = normalizeStepModuleDefinition({
-    manifest: {
-      schemaVersion: 1,
-      step: {
-        path: "/models/mechanisms/box.step"
-      },
-      features: {
-        lid: {
-          ref: "#o1.2"
-        }
-      }
-    }
-  }, {
-    url: "/models/mechanisms/.box.step.js?v=abc"
-  });
-
-  assert.deepEqual(definition.step, {
-    path: "",
-    cadPath: "models/mechanisms/box",
-    explicit: false,
-    inferred: true
-  });
-  assert.equal(definition.manifest.step, undefined);
-  assert.equal(definition.cadPath, "models/mechanisms/box");
-  assert.equal(definition.features[0].ref, "#o1.2");
-});
-
-test("STEP module CAD path can be inferred from sidecar URL", () => {
-  const definition = normalizeStepModuleDefinition({
-    manifest: {
-      schemaVersion: 1,
-      features: {
-        lid: {
-          ref: "#o1.2"
-        }
-      }
-    }
-  }, {
-    url: "/models/fun/.gearbox.step.js?v=abc"
-  });
-
-  assert.equal(definition.cadPath, "models/fun/gearbox");
-  assert.equal(definition.features[0].ref, "#o1.2");
-});
-
 test("STEP module display transforms respect baked assembly part transforms", () => {
   const transform = [
     1, 0, 0, 12,

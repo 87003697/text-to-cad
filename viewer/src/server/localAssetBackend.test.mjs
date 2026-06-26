@@ -11,7 +11,7 @@ import { createLocalAssetBackend } from "./localAssetBackend.mjs";
 // per-folder cache: `<folder>/__cadcache__/models/<step-filename>/assembly.json`, with its
 // content-addressed component GLBs in the package's own `components/<hash>.glb` dir. Mirror the
 // scanner test's helper so the served artifact assets resolve out of __cadcache__.
-function writeStepPackage(modelRoot, stepRelPath, { entryKind = "part", sourceKind = "step" } = {}) {
+function writeStepPackage(modelRoot, stepRelPath, { entryKind = "part", sourceKind = "step", paramsPath = null } = {}) {
   const stepAbs = path.join(modelRoot, stepRelPath);
   const folder = path.dirname(stepAbs);
   const stepName = path.basename(stepAbs);
@@ -30,6 +30,9 @@ function writeStepPackage(modelRoot, stepRelPath, { entryKind = "part", sourceKi
     rootName: stepName.replace(/\.(step|stp)$/i, ""),
     units: "mm",
     sourceKind,
+    // The step-module JS sidecar (any filename) is declared by the descriptor's paramsPath,
+    // model-folder-relative — not a hidden `.{stem}.step.js` convention.
+    ...(paramsPath ? { paramsPath } : {}),
     stepPath: stepName,
     bbox: { min: [0, 0, 0], max: [1, 1, 1] },
     stats: { occurrenceCount: 1, shapeCount: 1 },
@@ -221,24 +224,28 @@ test("local backend refreshes requested files against a cached dynamic root cata
   });
 });
 
-test("local backend incrementally refreshes STEP entries when sidecars change", async () => {
+test("local backend derives STEP entry moduleUrl from the descriptor paramsPath sidecar", async () => {
   await withTempDirectoryRoot((directoryRoot) => {
     const modelRoot = path.join(directoryRoot, "models");
     const stepPath = path.join(modelRoot, "part.step");
-    const modulePath = path.join(modelRoot, ".part.step.js");
+    // The step-module sidecar (any filename) is declared by the package descriptor's paramsPath,
+    // not a hidden `.{stem}.step.js` convention. The entry's moduleUrl appears only while the
+    // declared sidecar file exists on disk.
+    const modulePath = path.join(modelRoot, "part_params.js");
     fs.mkdirSync(modelRoot, { recursive: true });
     fs.writeFileSync(stepPath, "ISO-10303-21;\nEND-ISO-10303-21;\n");
+    writeStepPackage(modelRoot, "part.step", { paramsPath: "part_params.js" });
     const backend = createLocalAssetBackend({ directoryRoot, rootDir: "models" });
 
     assert.equal(backend.readCatalog().entries[0].moduleUrl, undefined);
 
     fs.writeFileSync(modulePath, "export default { manifest: { schemaVersion: 1 } };\n");
-    const withModule = backend.refreshCatalogForPath({ filePath: modulePath });
+    const withModule = backend.refreshCatalogForPath({ filePath: stepPath });
     assert.ok(withModule.entries[0].moduleUrl.startsWith("/__cad/asset?file="));
     assert.equal(withModule.entries[0].moduleFile, modulePath);
 
     fs.unlinkSync(modulePath);
-    const withoutModule = backend.refreshCatalogForPath({ filePath: modulePath });
+    const withoutModule = backend.refreshCatalogForPath({ filePath: stepPath });
     assert.equal(withoutModule.entries[0].moduleUrl, undefined);
   });
 });

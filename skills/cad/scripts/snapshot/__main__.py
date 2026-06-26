@@ -580,8 +580,18 @@ def asset_url_for_path(file_path: Path, root_path: Path) -> str:
     return f"/__render_asset/{encode_path_param(file_path.resolve().relative_to(root_path.resolve()).as_posix())}"
 
 
-def step_parameter_path_for_step_source(source_path: Path) -> Path:
-    return source_path.with_name(f".{source_path.stem}.step.js")
+def step_parameter_path_for_step_source(glb_path: Path, input_path: Path) -> Path | None:
+    """The hand-authored JS sidecar a model declares via its package descriptor's
+    ``paramsPath`` (model-folder-relative, set from gen_step()'s ``params``). Returns None
+    when the model declares no sidecar — there is no filename convention."""
+    try:
+        descriptor = json.loads((glb_path / "assembly.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    params_path = str(descriptor.get("paramsPath") or "").strip()
+    if not params_path:
+        return None
+    return (input_path.parent / params_path).resolve()
 
 
 def has_step_parameter_render_values(value: object) -> bool:
@@ -884,16 +894,17 @@ def resolve_render_job(
 
     has_param_render = has_step_parameter_render_values(job.get("stepParameters"))
     animated_params = step_parameter_render_values_are_animated(job.get("stepParameters"))
-    step_parameter_path = step_parameter_path_for_step_source(input_path)
+    step_parameter_path = step_parameter_path_for_step_source(glb_path, input_path)
 
     mode = str(job.get("mode") or "view").strip().lower()
     if mode not in SUPPORTED_RENDER_MODES:
         raise SnapshotError(f"Unsupported render mode: {mode or '(missing)'}")
     if has_param_render and mode != "view":
         raise SnapshotError("stepParameters support only view mode; set display.mode for display-style changes")
-    if has_param_render and not step_parameter_path.exists():
+    if has_param_render and (step_parameter_path is None or not step_parameter_path.exists()):
         raise SnapshotError(
-            f"STEP/STP render stepParameters require a CAD Viewer STEP parameter sidecar: {step_parameter_path}"
+            "STEP/STP render stepParameters require a parameter sidecar the model declares "
+            f"(gen_step params / descriptor paramsPath): {input_path}"
         )
 
     outputs = job.get("outputs") if isinstance(job.get("outputs"), list) else []
@@ -954,7 +965,7 @@ def resolve_render_job(
         resolved["package"] = {"descriptor": descriptor, "componentUrls": component_urls}
     else:
         resolved["glbUrl"] = asset_url_for_path(glb_path, root_path)
-    if step_parameter_path.exists():
+    if step_parameter_path is not None and step_parameter_path.exists():
         resolved["stepParameterPath"] = str(step_parameter_path)
         resolved["stepParameterUrl"] = asset_url_for_path(step_parameter_path, root_path)
 

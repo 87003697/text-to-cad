@@ -7,7 +7,6 @@ import {
   Code,
   Copy,
   Cuboid,
-  Download,
   DraftingCompass,
   FileBox,
   Folder,
@@ -72,60 +71,6 @@ import {
   ellipsisBreadcrumbMenuDirectory
 } from "@/workbench/breadcrumbs";
 import viewerPackage from "../../../../package.json";
-import { STEP_EXPORT_FORMATS, isImportedStepEntry, stepExportItemLabel } from "@/workbench/stepExport";
-
-// Dedicated "download" icon dropdown for exporting the open STEP/assembly model to
-// STEP/3MF/STL/GLB. Hidden unless a STEP/assembly entry is selected and export is wired.
-function StepExportTopBarDropdown({
-  selectedEntry,
-  fileAccessBusyKey = "",
-  onExportStepFile,
-  buttonClassName,
-  iconClassName
-}) {
-  const kind = String(selectedEntry?.kind || "").trim().toLowerCase();
-  const isStepEntry = kind === "step" || kind === "assembly";
-  if (!selectedEntry || !isStepEntry || typeof onExportStepFile !== "function") {
-    return null;
-  }
-  const fileRef = String(selectedEntry?.file || selectedEntry?.id || "").trim();
-  const imported = isImportedStepEntry(selectedEntry);
-  const label = "Export model";
-  return (
-    <DropdownMenu>
-      <DropdownMenuTrigger asChild>
-        <Button
-          type="button"
-          variant="ghost"
-          size="icon"
-          aria-label={label}
-          title={label}
-          className={buttonClassName}
-        >
-          <Download className={iconClassName} />
-          <span className="sr-only">{label}</span>
-        </Button>
-      </DropdownMenuTrigger>
-      <DropdownMenuContent align="end" sideOffset={6} className="w-max">
-        {STEP_EXPORT_FORMATS.map((format) => {
-          const key = `${fileRef}:export:${format}`;
-          return (
-            <DropdownMenuItem
-              key={format}
-              className="text-xs"
-              disabled={fileAccessBusyKey === key}
-              onSelect={() => {
-                onExportStepFile(selectedEntry, format);
-              }}
-            >
-              <span className="min-w-0 truncate">{stepExportItemLabel(format, { imported })}</span>
-            </DropdownMenuItem>
-          );
-        })}
-      </DropdownMenuContent>
-    </DropdownMenu>
-  );
-}
 
 function fileSheetLabel(fileSheetKind) {
   if (fileSheetKind === "dxf") {
@@ -1304,14 +1249,6 @@ export default function CadWorkspaceTopBar({
       ) : (
         <div className="min-w-0" />
       )}
-
-      <StepExportTopBarDropdown
-        selectedEntry={selectedEntry}
-        fileAccessBusyKey={fileAccessBusyKey}
-        onExportStepFile={onExportStepFile}
-        buttonClassName={topBarIconButtonClasses}
-        iconClassName={topBarIconClasses}
-      />
 
       <div className="min-w-0 flex-1" />
 

@@ -186,7 +186,7 @@ def assemble() -> Compound:
 
 
 def gen_step():
-    return assemble()
+    return {"shape": assemble(), "params": "juno.params.js"}
 
 
 def gen_urdf():
