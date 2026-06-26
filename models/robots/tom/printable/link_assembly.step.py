@@ -299,9 +299,15 @@ def gen_step() -> dict[str, object]:
         f"shell half depth={connector.SHELL_HALF_DEPTH_MM:.3f} mm, "
         "printed dovetail slide seam"
     )
+    from robot_common.link_assembly import compound_from_instances
+
     return {
-        "children": children,
-        "assembly_mates": _assembly_mates(),
+        "shape": compound_from_instances(
+            "link_assembly",
+            children,
+            base_dir=Path(__file__).resolve().parent,
+            assembly_mates=_assembly_mates(),
+        ),
     }
 
 
