@@ -14,10 +14,6 @@ from cadpy.catalog import (
 )
 
 
-REPO_ROOT = Path.cwd().resolve()
-CAD_ROOT = REPO_ROOT
-
-
 def _source_for_step_path(step_path: Path):
     source = find_source_by_path(step_path)
     if source is not None:
@@ -70,10 +66,13 @@ def existing_part_glb_path(step_path: Path) -> Path | None:
     return legacy_path if legacy_path.is_file() else None
 
 
-def relative_to_repo(path: Path) -> str:
+def relative_to_cwd(path: Path) -> str:
+    # Display/label + CLI-payload helper (the payload glbPath/stepPath are overwritten by the
+    # viewer; the persisted descriptor's model-folder-relative paths come from relative_to_file,
+    # not this). Anchored on the live cwd, not a frozen import-time root.
     resolved = path.resolve()
     try:
-        return resolved.relative_to(REPO_ROOT).as_posix()
+        return resolved.relative_to(Path.cwd().resolve()).as_posix()
     except ValueError:
         return resolved.as_posix()
 

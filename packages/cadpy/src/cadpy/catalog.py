@@ -9,8 +9,6 @@ from pathlib import Path, PurePosixPath
 from .metadata import GeneratorMetadata, normalize_mesh_numeric, parse_generator_metadata
 
 
-REPO_ROOT = Path.cwd().resolve()
-CAD_ROOT = REPO_ROOT
 STEP_SUFFIXES = (".step", ".stp")
 EXPLORER_ARTIFACT_FILENAMES = {
     ".glb": "model.glb",
@@ -122,7 +120,9 @@ class CadSource:
 
 
 def iter_cad_sources(root: Path | None = None) -> tuple[CadSource, ...]:
-    root = CAD_ROOT if root is None else root
+    # Discovery scans `root`; callers on the build path pass it explicitly. When omitted (catalog
+    # listing/tooling) default to the live cwd rather than a frozen import-time root.
+    root = Path.cwd().resolve() if root is None else root
     resolved_root = root.resolve()
     python_sources = _iter_python_sources(resolved_root)
     generated_step_paths = {
@@ -158,7 +158,7 @@ def iter_cad_sources(root: Path | None = None) -> tuple[CadSource, ...]:
             if existing_step is not None:
                 raise CadSourceError(
                     "Duplicate CAD STEP source "
-                    f"{_relative_to_repo(source.step_path)}: {_source_label(existing_step)} and {_source_label(source)}"
+                    f"{_display_path(source.step_path)}: {_source_label(existing_step)} and {_source_label(source)}"
             )
             by_step_path[source.step_path.resolve()] = source
         for generated_path in source.generated_paths:
@@ -167,7 +167,7 @@ def iter_cad_sources(root: Path | None = None) -> tuple[CadSource, ...]:
             if existing_generated is not None and existing_generated.source_ref != source.source_ref:
                 raise CadSourceError(
                     "Duplicate CAD generated output "
-                    f"{_relative_to_repo(generated_path)}: "
+                    f"{_display_path(generated_path)}: "
                     f"{_source_label(existing_generated)} and {_source_label(source)}"
                 )
             by_generated_path[resolved_generated_path] = source
@@ -225,9 +225,11 @@ def find_source_by_path(path: Path, root: Path | None = None) -> CadSource | Non
 
 
 def source_ref_from_path(path: Path) -> str:
+    # Entry-identity string (sourceRef), relative to the live cwd. Has no descriptor readers and
+    # is consistent within a build; the persisted model-folder-relative paths come from elsewhere.
     resolved = path.resolve()
     try:
-        relative = resolved.relative_to(CAD_ROOT.resolve())
+        relative = resolved.relative_to(Path.cwd().resolve())
     except ValueError:
         return resolved.as_posix()
     return relative.as_posix()
@@ -236,14 +238,14 @@ def source_ref_from_path(path: Path) -> str:
 def cad_ref_from_step_path(path: Path) -> str:
     resolved = path.resolve()
     try:
-        relative = resolved.relative_to(CAD_ROOT.resolve())
+        relative = resolved.relative_to(Path.cwd().resolve())
     except ValueError:
         relative = PurePosixPath(resolved.as_posix())
     name = relative.name
     suffix = relative.suffix.lower()
     if suffix in STEP_SUFFIXES:
         return relative.with_suffix("").as_posix()
-    raise CadSourceError(f"{_relative_to_repo(path)} is not a CAD STEP source")
+    raise CadSourceError(f"{_display_path(path)} is not a CAD STEP source")
 
 
 def normalize_source_ref(raw_ref: str) -> str | None:
@@ -366,7 +368,7 @@ def _read_python_source(script_path: Path, *, allow_dxf_only: bool = False) -> C
         )
     if metadata.kind not in {"part", "assembly"}:
         raise CadSourceError(
-            f"{_relative_to_repo(resolved_script_path)} must define a part or assembly gen_step() entry"
+            f"{_display_path(resolved_script_path)} must define a part or assembly gen_step() entry"
         )
     step_path = _generator_sibling(resolved_script_path, ".step")
     dxf_path = _generator_sibling(resolved_script_path, ".dxf") if metadata.has_gen_dxf else None
@@ -412,12 +414,12 @@ def _read_step_source(
     resolved_step_path = step_path.resolve()
     options = options or StepImportOptions()
     if kind not in {"part", "assembly"}:
-        raise CadSourceError(f"{_relative_to_repo(resolved_step_path)} kind must be 'part' or 'assembly'")
+        raise CadSourceError(f"{_display_path(resolved_step_path)} kind must be 'part' or 'assembly'")
     if resolved_step_path.suffix.lower() not in STEP_SUFFIXES:
-        raise CadSourceError(f"{_relative_to_repo(resolved_step_path)} source must end in .step or .stp")
+        raise CadSourceError(f"{_display_path(resolved_step_path)} source must end in .step or .stp")
     if not resolved_step_path.is_file():
         raise CadSourceError(
-            f"{_relative_to_repo(resolved_step_path)} source does not exist"
+            f"{_display_path(resolved_step_path)} source does not exist"
         )
     stl_path = (
         _resolve_configured_artifact_path(
@@ -508,7 +510,7 @@ def normalize_step_numeric(raw_value: object, *, base_path: Path, field_name: st
     try:
         return normalize_mesh_numeric(raw_value, field_name=field_name)
     except ValueError as exc:
-        raise CadSourceError(f"{_relative_to_repo(base_path)} {exc}") from exc
+        raise CadSourceError(f"{_display_path(base_path)} {exc}") from exc
 
 
 def normalize_step_color(
@@ -524,11 +526,11 @@ def normalize_step_color(
         if value.startswith("#"):
             value = value[1:]
         if len(value) not in {6, 8}:
-            raise CadSourceError(f"{_relative_to_repo(base_path)} {field_name} must be #RRGGBB or #RRGGBBAA")
+            raise CadSourceError(f"{_display_path(base_path)} {field_name} must be #RRGGBB or #RRGGBBAA")
         try:
             components = [int(value[index : index + 2], 16) / 255.0 for index in range(0, len(value), 2)]
         except ValueError as exc:
-            raise CadSourceError(f"{_relative_to_repo(base_path)} {field_name} must be valid hex") from exc
+            raise CadSourceError(f"{_display_path(base_path)} {field_name} must be valid hex") from exc
     elif (
         isinstance(raw_value, Sequence)
         and not isinstance(raw_value, (bytes, bytearray))
@@ -540,15 +542,15 @@ def normalize_step_color(
                 number = float(component)
             except (TypeError, ValueError) as exc:
                 raise CadSourceError(
-                    f"{_relative_to_repo(base_path)} {field_name} components must be numeric"
+                    f"{_display_path(base_path)} {field_name} components must be numeric"
                 ) from exc
             if not 0.0 <= number <= 1.0:
                 raise CadSourceError(
-                    f"{_relative_to_repo(base_path)} {field_name} components must be between 0 and 1"
+                    f"{_display_path(base_path)} {field_name} components must be between 0 and 1"
                 )
             components.append(number)
     else:
-        raise CadSourceError(f"{_relative_to_repo(base_path)} {field_name} must be an RGB/RGBA array or hex string")
+        raise CadSourceError(f"{_display_path(base_path)} {field_name} must be an RGB/RGBA array or hex string")
     if len(components) == 3:
         components.append(1.0)
     return (float(components[0]), float(components[1]), float(components[2]), float(components[3]))
@@ -564,40 +566,40 @@ def _resolve_configured_artifact_path(
 ) -> Path:
     if raw_value is None:
         if default_path is None:
-            raise CadSourceError(f"{_relative_to_repo(base_path)} {field_name} is required")
+            raise CadSourceError(f"{_display_path(base_path)} {field_name} is required")
         resolved = default_path.resolve()
     else:
         if not isinstance(raw_value, str) or not raw_value.strip():
-            raise CadSourceError(f"{_relative_to_repo(base_path)} {field_name} must be a non-empty string")
+            raise CadSourceError(f"{_display_path(base_path)} {field_name} must be a non-empty string")
         value = raw_value.strip()
         if "\\" in value:
-            raise CadSourceError(f"{_relative_to_repo(base_path)} {field_name} must use POSIX '/' separators")
+            raise CadSourceError(f"{_display_path(base_path)} {field_name} must use POSIX '/' separators")
         pure = PurePosixPath(value)
         if pure.is_absolute() or any(part in {"", "."} for part in pure.parts):
-            raise CadSourceError(f"{_relative_to_repo(base_path)} {field_name} must be relative")
+            raise CadSourceError(f"{_display_path(base_path)} {field_name} must be relative")
         resolved = (base_path.parent.resolve() / Path(*pure.parts)).resolve()
     suffix = resolved.suffix.lower()
     if suffix not in expected_suffixes:
         joined = " or ".join(expected_suffixes)
-        raise CadSourceError(f"{_relative_to_repo(base_path)} {field_name} must end in {joined}")
+        raise CadSourceError(f"{_display_path(base_path)} {field_name} must end in {joined}")
     return resolved
 
 
 def _required_output(raw_value: str | None, *, script_path: Path, field_name: str) -> str:
     if raw_value is None:
-        raise CadSourceError(f"{_relative_to_repo(script_path)} {field_name} is required")
+        raise CadSourceError(f"{_display_path(script_path)} {field_name} is required")
     return raw_value
 
 
 def _source_label(source: CadSource) -> str:
     if source.script_path is not None:
-        return _relative_to_repo(source.script_path)
-    return _relative_to_repo(source.source_path)
+        return _display_path(source.script_path)
+    return _display_path(source.source_path)
 
 
-def _relative_to_repo(path: Path) -> str:
+def _display_path(path: Path) -> str:
     resolved = path.resolve()
     try:
-        return resolved.relative_to(REPO_ROOT).as_posix()
+        return resolved.relative_to(Path.cwd().resolve()).as_posix()
     except ValueError:
         return resolved.as_posix()

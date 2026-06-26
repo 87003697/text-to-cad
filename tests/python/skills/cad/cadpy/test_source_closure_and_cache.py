@@ -15,7 +15,6 @@ import build123d
 from OCP.TopAbs import TopAbs_FACE
 from OCP.TopExp import TopExp_Explorer
 
-from cadpy import catalog as cad_catalog
 from cadpy import source_hash as cad_source_hash
 from cadpy import step_scene
 from cadpy.step_scene import LoadedStepScene, OccurrenceNode
@@ -71,18 +70,52 @@ class SourceClosureTests(unittest.TestCase):
 
             # Ensure a clean import so the sys.modules delta actually captures it.
             sys.modules.pop("shared_helper", None)
-            with mock.patch.object(cad_catalog, "REPO_ROOT", base):
-                before = set(sys.modules)
-                sys.path.insert(0, str(base))
-                try:
-                    import shared_helper  # noqa: F401  (exercise a real import)
-                    closure = cad_source_hash.capture_runtime_closure(before, script, base=base)
-                finally:
-                    sys.path.remove(str(base))
-                    sys.modules.pop("shared_helper", None)
+            before = set(sys.modules)
+            sys.path.insert(0, str(base))
+            try:
+                import shared_helper  # noqa: F401  (exercise a real import)
+                closure = cad_source_hash.capture_runtime_closure(before, script, base=base)
+            finally:
+                sys.path.remove(str(base))
+                sys.modules.pop("shared_helper", None)
 
             self.assertIn("shared_helper.py", " ".join(closure.files))
             self.assertTrue(any(f.endswith("widget.py") for f in closure.files))
+
+    def test_repo_local_modules_key_on_interpreter_not_cwd(self) -> None:
+        """First-party detection keys on the interpreter's stdlib/site-packages layout, NOT a
+        repo-root global or the process working directory. So the dependency closure a generator
+        records is identical no matter which directory the build runs from, while build123d / OCP /
+        stdlib stay excluded. Guards against reintroducing a repo-root containment filter (which
+        silently truncated the closure when a build ran from a subdirectory)."""
+        import json  # noqa: F401  (a stdlib module: must always be excluded)
+        import os
+
+        with temporary_directory(prefix="closure-root-indep-") as raw_dir:
+            base = Path(raw_dir)
+            (base / "first_party_mod.py").write_text("Y = 1\n", encoding="utf-8")
+            sys.modules.pop("first_party_mod", None)
+            sys.path.insert(0, str(base))
+            previous_cwd = Path.cwd()
+            try:
+                import first_party_mod  # noqa: F401  (a real first-party import)
+                names = ["json", "build123d", "first_party_mod"]
+                # Capture from two unrelated working directories; the result must be identical
+                # because the filter consults neither the cwd nor any repo-root global.
+                results = []
+                for cwd in (base, base.parent):
+                    os.chdir(cwd)
+                    results.append(cad_source_hash.repo_local_loaded_modules(names))
+            finally:
+                os.chdir(previous_cwd)
+                sys.path.remove(str(base))
+                sys.modules.pop("first_party_mod", None)
+
+        self.assertEqual(results[0], results[1])
+        captured = results[0]
+        self.assertIn("first_party_mod", captured)   # first-party temp module: included
+        self.assertNotIn("json", captured)           # stdlib: excluded
+        self.assertNotIn("build123d", captured)      # site-packages: excluded
 
 
 class BinarySceneCacheTests(unittest.TestCase):

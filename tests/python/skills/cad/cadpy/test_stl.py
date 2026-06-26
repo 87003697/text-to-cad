@@ -12,7 +12,7 @@ class CadpyRenderTests(unittest.TestCase):
         tempdir = self._isolated_roots.temporary_cad_directory(prefix="tmp-cadjs-")
         self._tempdir = tempdir
         self.temp_root = Path(tempdir.name)
-        self.relative_dir = self.temp_root.relative_to(cad_render.CAD_ROOT).as_posix()
+        self.relative_dir = self.temp_root.relative_to(Path.cwd()).as_posix()
         self.cleanup_paths: set[Path] = set()
 
     def tearDown(self) -> None:

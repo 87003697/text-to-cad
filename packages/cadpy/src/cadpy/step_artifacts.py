@@ -3,7 +3,6 @@ from __future__ import annotations
 from dataclasses import replace
 from pathlib import Path
 
-from cadpy.assembly_spec import REPO_ROOT
 from cadpy.catalog import source_from_path
 from cadpy.cli_logging import CliLogger
 from cadpy.generation import (
@@ -28,7 +27,7 @@ from cadpy.step_targets import (
 
 
 def cad_ref_for_step_path(repo_root: Path, step_path: Path) -> str:
-    relative = _repo_relative(repo_root, step_path)
+    relative = _relative_to_base(repo_root, step_path)
     suffix = step_path.suffix
     return relative[: -len(suffix)] if suffix else relative
 
@@ -143,7 +142,7 @@ def _entry_spec_for_target(
     if not target.step_path.is_file():
         raise FileNotFoundError(f"STEP file does not exist: {target.step_path}")
     return EntrySpec(
-        source_ref=_repo_relative(REPO_ROOT, target.step_path),
+        source_ref=_relative_to_base(Path.cwd().resolve(), target.step_path),
         cad_ref=target.cad_path,
         kind=target.kind if target.kind in {"part", "assembly"} else "part",
         source_path=target.step_path,
@@ -330,7 +329,7 @@ def _infer_entry_kind(step_path: Path, scene: LoadedStepScene) -> str:
     return "assembly" if _scene_has_assembly_structure(scene) else "part"
 
 
-def _repo_relative(repo_root: Path, path: Path) -> str:
+def _relative_to_base(repo_root: Path, path: Path) -> str:
     resolved = path.resolve()
     try:
         return resolved.relative_to(repo_root.resolve()).as_posix()

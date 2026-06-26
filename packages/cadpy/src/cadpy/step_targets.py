@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 
-from cadpy.assembly_spec import REPO_ROOT, find_step_path, resolve_cad_source_path
+from cadpy.assembly_spec import find_step_path, resolve_cad_source_path
 from cadpy.cad_ref_syntax import normalize_cad_path, parse_cad_tokens
 from cadpy.catalog import find_source_by_cad_ref
 from cadpy.glb_topology import (
@@ -88,8 +88,8 @@ class StepTopologyArtifactError(CadRefError):
             "code": self.code,
             "message": str(self),
             "cadPath": self.cad_path,
-            "stepPath": _relative_to_repo(self.step_path),
-            "glbPath": _relative_to_repo(self.glb_path),
+            "stepPath": _display_path(self.step_path),
+            "glbPath": _display_path(self.glb_path),
             "regenerateCommand": self.regenerate_command,
         }
 
@@ -395,7 +395,7 @@ def validate_step_topology_artifact(
 
 def _direct_step_path(cad_path: str) -> Path | None:
     for suffix in STEP_SUFFIXES:
-        candidate = (REPO_ROOT / f"{cad_path}{suffix}").resolve()
+        candidate = (Path.cwd().resolve() / f"{cad_path}{suffix}").resolve()
         if candidate.is_file():
             return candidate
     return None
@@ -407,7 +407,7 @@ def _raw_step_path(target: str) -> Path | None:
     path = Path(target).expanduser()
     if path.suffix.lower() not in STEP_SUFFIXES:
         return None
-    resolved = path.resolve() if path.is_absolute() else (REPO_ROOT / path).resolve()
+    resolved = path.resolve() if path.is_absolute() else (Path.cwd().resolve() / path).resolve()
     return resolved if resolved.is_file() else None
 
 
@@ -423,7 +423,7 @@ def _resolved_manifest_path(raw_path: str, *, base_dir: Path) -> Path | None:
         return None
     candidates = (
         _resolve_manifest_path_from_base(raw_path, base_dir),
-        _resolve_manifest_path_from_base(raw_path, REPO_ROOT),
+        _resolve_manifest_path_from_base(raw_path, Path.cwd().resolve()),
     )
     existing = next((candidate for candidate in candidates if candidate is not None and candidate.is_file()), None)
     if existing is not None:
@@ -435,7 +435,7 @@ def _resolve_manifest_path_from_base(raw_path: str, base_dir: Path) -> Path | No
     path = Path(str(raw_path).replace("\\", "/"))
     resolved = path.resolve() if path.is_absolute() else (base_dir / path).resolve()
     try:
-        resolved.relative_to(REPO_ROOT)
+        resolved.relative_to(Path.cwd().resolve())
     except ValueError:
         return None
     return resolved
@@ -458,7 +458,7 @@ def _topology_artifact_error(
         glb_path=glb_path,
         regenerate_command=REGENERATE_STEP_COMMAND,
         message=(
-            f"{reason}: {_relative_to_repo(glb_path)}.\n"
+            f"{reason}: {_display_path(glb_path)}.\n"
             f"{REGENERATE_STEP_PROMPT}"
         ),
     )
@@ -475,9 +475,9 @@ def _lookup_cad_path(cad_path: str) -> str:
     return cad_path
 
 
-def _relative_to_repo(path: Path) -> str:
+def _display_path(path: Path) -> str:
     resolved = path.resolve()
     try:
-        return resolved.relative_to(REPO_ROOT).as_posix()
+        return resolved.relative_to(Path.cwd().resolve()).as_posix()
     except ValueError:
         return resolved.as_posix()

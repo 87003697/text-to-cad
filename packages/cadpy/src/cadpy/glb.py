@@ -28,7 +28,7 @@ from cadpy.glb_topology import (
     STEP_TOPOLOGY_SCHEMA_VERSION,
     step_topology_capabilities,
 )
-from cadpy.render import REPO_ROOT, part_glb_path, part_native_glb_path
+from cadpy.render import part_glb_path, part_native_glb_path
 from cadpy.step_scene import ColorRGBA, LoadedStepScene, OccurrenceNode, SelectorBundle, occurrence_selector_id
 
 
@@ -52,7 +52,7 @@ IDENTITY_TRANSFORM = (
 def _display_path(path: Path) -> str:
     resolved = path.resolve()
     try:
-        return resolved.relative_to(REPO_ROOT).as_posix()
+        return resolved.relative_to(Path.cwd().resolve()).as_posix()
     except ValueError:
         return resolved.as_posix()
 
@@ -171,6 +171,7 @@ def build_step_topology_index_manifest(
         "capabilities",
         "sourceKind",
         "sourcePath",
+        "paramsPath",
         "sourceHash",
         "sourceClosureHash",
         "sourceClosureFiles",

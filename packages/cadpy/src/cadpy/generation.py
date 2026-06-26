@@ -17,9 +17,7 @@ from dataclasses import dataclass, replace
 from pathlib import Path, PurePosixPath
 from typing import Sequence
 
-from cadpy.assembly_spec import REPO_ROOT
 from cadpy.catalog import (
-    CAD_ROOT,
     CadSource,
     STEP_SUFFIXES,
     StepImportOptions,
@@ -54,7 +52,7 @@ from cadpy.render import (
     native_component_glb_dir,
     part_glb_path,
     relative_to_file,
-    relative_to_repo,
+    relative_to_cwd,
 )
 from cadpy.source_hash import (
     PythonSourceClosure,
@@ -179,7 +177,7 @@ def _display_name_for_path(path: Path) -> str:
 def _display_path(path: Path) -> str:
     resolved = path.resolve()
     try:
-        return resolved.relative_to(REPO_ROOT).as_posix()
+        return resolved.relative_to(Path.cwd().resolve()).as_posix()
     except ValueError:
         return resolved.as_posix()
 
@@ -465,14 +463,14 @@ def _resolve_discovery_root(root: Path | str) -> Path:
     candidate = Path(root)
     resolved = candidate.resolve() if candidate.is_absolute() else (Path.cwd() / candidate).resolve()
     if not resolved.exists():
-        raise FileNotFoundError(f"CAD discovery directory does not exist: {relative_to_repo(resolved)}")
+        raise FileNotFoundError(f"CAD discovery directory does not exist: {relative_to_cwd(resolved)}")
     if not resolved.is_dir():
-        raise NotADirectoryError(f"CAD discovery path is not a directory: {relative_to_repo(resolved)}")
+        raise NotADirectoryError(f"CAD discovery path is not a directory: {relative_to_cwd(resolved)}")
     return resolved
 
 
 def list_entry_specs(root: Path | None = None, *, validate: bool = True) -> list[EntrySpec]:
-    root = CAD_ROOT if root is None else root
+    root = Path.cwd().resolve() if root is None else root
     specs = [_entry_spec_from_source(source) for source in iter_cad_sources(_resolve_discovery_root(root))]
     if validate:
         _validate_part_render_output_paths(specs)
@@ -703,15 +701,14 @@ def _load_generator_module(script_path: Path) -> object:
 
     module = importlib.util.module_from_spec(module_spec)
     original_sys_path = list(sys.path)
-    search_paths = [
-        str(REPO_ROOT),
-        str(CAD_ROOT),
-        str(REPO_ROOT / "skills" / "cad" / "scripts"),
-        str(resolved_script_path.parent),
-    ]
+    # Seed sys.path so the generator's module-top imports (its sibling/shared packages such as
+    # robot_common / STEP) resolve. Derive everything from the generator script's OWN location —
+    # its folder, plus any ancestor that is a package root (contains a STEP/ or robot_common/
+    # package) — so resolution is independent of the process working directory. Deliberately NOT
+    # seeding the repo root or skills/cad/scripts: a generator must not depend on the repository's
+    # skills/ being importable (AGENTS.md skill isolation).
+    search_paths = [str(resolved_script_path.parent)]
     for parent in resolved_script_path.parents:
-        if parent == REPO_ROOT.parent:
-            break
         if (
             (parent / "STEP" / "__init__.py").is_file()
             or (parent / "robot_common" / "__init__.py").is_file()
@@ -730,6 +727,25 @@ def _load_generator_module(script_path: Path) -> object:
     return module
 
 
+def _resolve_params_sidecar(params: object, *, script_path: Path) -> Path:
+    """Resolve the optional gen_step() ``params`` value — a filepath to a hand-authored
+    JS sidecar (the step-module manifest: parameters/features/animations/update) — to an
+    absolute path. A relative path is resolved against the generator file's directory.
+    The sidecar is hand-authored source, so it must already exist on disk."""
+    if not isinstance(params, (str, Path)):
+        raise TypeError(
+            f"{_display_path(script_path)} gen_step() envelope field 'params' must be a "
+            f"filepath string, got {type(params).__name__}"
+        )
+    candidate = Path(params)
+    resolved = (candidate if candidate.is_absolute() else script_path.parent / candidate).resolve()
+    if not resolved.is_file():
+        raise FileNotFoundError(
+            f"{_display_path(script_path)} gen_step() params sidecar not found: {params}"
+        )
+    return resolved
+
+
 def _normalize_step_payload(
     result: object,
     *,
@@ -740,13 +756,9 @@ def _normalize_step_payload(
     if isinstance(result, Build123dShape):
         return {"shape": result}
     if isinstance(result, dict):
-        allowed_fields = {
-            "shape",
-            "stl",
-            "3mf",
-            "mesh_tolerance",
-            "mesh_angular_tolerance",
-        }
+        # stl / 3mf / mesh_tolerance / mesh_angular_tolerance are consumed via the static
+        # metadata path (per-generator STL/3MF outputs + mesh tolerances); keep allowing them.
+        allowed_fields = {"shape", "params", "stl", "3mf", "mesh_tolerance", "mesh_angular_tolerance"}
         extra_fields = sorted(str(key) for key in result if key not in allowed_fields)
         if extra_fields:
             joined = ", ".join(extra_fields)
@@ -755,10 +767,14 @@ def _normalize_step_payload(
             raise TypeError(
                 f"{_display_path(script_path)} gen_step() envelope must define 'shape'"
             )
-        return {"shape": result["shape"]}
+        envelope: dict[str, object] = {"shape": result["shape"]}
+        params = result.get("params")
+        if params is not None:
+            envelope["params"] = _resolve_params_sidecar(params, script_path=script_path)
+        return envelope
     raise TypeError(
         f"{_display_path(script_path)} gen_step() must return a build123d Shape "
-        "or a {'shape': ...} envelope"
+        "or a {'shape': ..., 'params': ...} envelope"
     )
 
 
@@ -884,6 +900,11 @@ def _write_shape_step_payload(
     # Stash the pre-bake compound: the component-package emit job introspects its located
     # children (occurrence transforms + dedup), and the `--step` export serializes it.
     scene.source_compound = shape
+    params_abs = envelope.get("params")
+    if params_abs is not None:
+        # Record the hand-authored JS sidecar model-folder-relative, like sourcePath, so the
+        # descriptor stays portable. The viewer reads this back from assembly.json.
+        scene.params_path = relative_to_file(Path(params_abs), scene.step_path)
     logger.debug(f"built render scene (no STEP written): {_display_path(output_path)}")
     return scene
 
@@ -1287,6 +1308,9 @@ def _assembly_provenance_manifest(
     source_path = str(getattr(scene, "source_path", "") or "")
     if source_path:
         minimal["sourcePath"] = source_path
+    params_path = str(getattr(scene, "params_path", "") or "")
+    if params_path:
+        minimal["paramsPath"] = params_path
     if source_kind == "python":
         source_hash = str(getattr(scene, "source_hash", "") or "").strip()
         if source_hash:
