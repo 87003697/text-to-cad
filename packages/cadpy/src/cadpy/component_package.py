@@ -50,6 +50,7 @@ DESCRIPTOR_NAME = "assembly.json"
 COMPONENT_PROVENANCE_KEYS = (
     "sourceKind",
     "sourcePath",
+    "paramsPath",
     "sourceHash",
     "sourceClosureHash",
     "sourceClosureFiles",
@@ -205,10 +206,25 @@ def _occurrence_color(child: Any) -> list[float] | None:
 def _unlocated_shape(shape: Any) -> Any:
     """A copy of ``shape`` moved to the identity location (its LOCAL frame), preserving the
     ``label``/``color`` a clean component still carries. Mirrors ``_content_hash_shape``'s
-    location stripping so the emitted GLB is the exact local geometry the cid addresses."""
-    from build123d import Location
+    location stripping so the emitted GLB is the exact local geometry the cid addresses.
 
-    local = shape.located(Location())
+    Uses OCCT's ``TopoDS_Shape.Located`` (shares the underlying ``TShape``, O(1)) rather than
+    build123d's ``shape.located()``, which ``copy.deepcopy``s the whole shape graph on every
+    call (~5 s per component on tom — historically ~85% of the fresh-build time). The
+    geometry-only content hash is unaffected: it excludes triangulation, and distinct parts
+    keep distinct ``TShape``s, so meshing one component never perturbs another's digest.
+
+    Parametric build123d primitives (``Box``/``Cylinder``/...) reject a ``TopoDS`` constructor,
+    so for those the cheap OCCT wrap raises ``TypeError`` and we fall back to build123d's
+    ``located()`` (correct, and primitives are small so the deepcopy is negligible)."""
+    from OCP.TopLoc import TopLoc_Location
+
+    try:
+        local = type(shape)(shape.wrapped.Located(TopLoc_Location()))
+    except TypeError:
+        from build123d import Location
+
+        local = shape.located(Location())
     label = getattr(shape, "label", "")
     if label:
         local.label = label
@@ -318,13 +334,26 @@ def build_package_from_compound(
     occurrences: list[dict[str, Any]] = []
     components: dict[str, dict[str, Any]] = {}
     shapes: dict[str, Any] = {}
+    # Memoize the BREP content hash per unique part. Repeated occurrences of a part share
+    # one underlying ``TShape`` (``.moved()`` only swaps the location), and OCP returns the
+    # same wrapper for it, so keying on ``TShape()`` hashes each distinct geometry once
+    # instead of re-serializing the same (often heavy) BREP for every repeat occurrence.
+    hash_memo: dict[Any, str] = {}
 
-    def _add_leaf(node: Any, world_loc: Any, occ_id: str) -> dict[str, Any]:
-        content_hash = _content_hash_shape(node)
+    def _add_leaf(node: Any, world_loc: Any, occ_id: str, name: str | None = None) -> dict[str, Any]:
+        try:
+            memo_key = node.wrapped.TShape()
+            content_hash = hash_memo.get(memo_key)
+            if content_hash is None:
+                content_hash = _content_hash_shape(node)
+                hash_memo[memo_key] = content_hash
+        except TypeError:  # unhashable TShape wrapper: correctness over the micro-optimization
+            content_hash = _content_hash_shape(node)
         cid = _component_id(content_hash)
         shapes.setdefault(cid, node)
         components.setdefault(cid, {"glb": _component_ref(cid), "contentHash": content_hash})
-        name = str(getattr(node, "label", "") or f"part_{occ_id}")
+        if name is None:
+            name = str(getattr(node, "label", "") or f"part_{occ_id}")
         occurrence: dict[str, Any] = {
             "id": occ_id,
             "name": name,
@@ -343,8 +372,27 @@ def build_package_from_compound(
     # (parent_world * node.location). A subassembly is a tree node grouping its descendant leaves,
     # NOT a single merged component, so the tree can drill into / select / isolate its parts.
     assembly_root: dict[str, Any] | None = None
+    occurrence_tree = getattr(compound, "_occurrence_tree", None)
     if single_component:
         _add_leaf(compound, getattr(compound, "location", None) or Location(), "o1.1")
+    elif occurrence_tree is not None:
+        # Fast path: a raw-OCCT-composed assembly carries an explicit occurrence-metadata tree
+        # (see link_assembly.compound_from_instances) because the compound has no build123d child
+        # structure to walk. Each leaf node already holds its local shape + world location + name.
+        def _consume(node: dict[str, Any]) -> dict[str, Any]:
+            if node.get("leaf"):
+                return _add_leaf(node["shape"], node["world_loc"], node["id"], name=node["name"])
+            child_nodes = [_consume(child) for child in node["children"]]
+            return {
+                "id": node["id"],
+                "name": node["name"],
+                "nodeType": "subassembly",
+                "leafPartIds": [leaf_id for cn in child_nodes for leaf_id in cn["leafPartIds"]],
+                "children": child_nodes,
+            }
+
+        assembly_root = _consume(occurrence_tree)
+        assembly_root["nodeType"] = "assembly"
     else:
         def _walk(node: Any, parent_world_loc: Any, path: str) -> dict[str, Any]:
             node_loc = getattr(node, "location", None)

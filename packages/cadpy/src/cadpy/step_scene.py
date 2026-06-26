@@ -77,7 +77,6 @@ from cadpy.selector_types import SelectorBundle, SelectorProfile
 from cadpy.step_hash import step_file_hash
 
 
-REPO_ROOT = Path.cwd().resolve()
 ColorRGBA = tuple[float, float, float, float]
 # v2: per-prototype geometry is cached as binary BREP (BinTools) instead of the
 # slower/larger ASCII BRepTools format.
@@ -112,6 +111,7 @@ class LoadedStepScene:
     step_hash: str | None = None
     source_kind: str = "step"
     source_path: str | None = None
+    params_path: str | None = None
     source_hash: str | None = None
     source_closure_hash: str | None = None
     source_closure_files: tuple[str, ...] = ()
@@ -151,7 +151,12 @@ def _enum_name_from_text(text: str, prefix: str) -> str:
     return name.lower()
 
 
+@lru_cache(maxsize=512)
 def _enum_name(value: Any, prefix: str) -> str:
+    # The OCCT enum domain (GeomAbs_*) is tiny and fixed, but this is called per face/edge
+    # during topology extraction (~74k times for tom). Memoizing avoids re-running the slow
+    # ``str(value)`` enum repr on every call; the cached ``_enum_name_from_text`` only helped
+    # once the string already existed.
     return _enum_name_from_text(str(value), prefix)
 
 
@@ -2083,9 +2088,10 @@ def _artifact_relative_manifest_path(raw_path: str, artifact_dir: Path) -> str:
     if path.is_absolute():
         return _relative_path_from_directory(path, artifact_dir)
     artifact_candidate = (artifact_dir / path).resolve()
-    repo_candidate = (REPO_ROOT / path).resolve()
+    cwd_root = Path.cwd().resolve()
+    repo_candidate = (cwd_root / path).resolve()
     try:
-        repo_candidate.relative_to(REPO_ROOT)
+        repo_candidate.relative_to(cwd_root)
     except ValueError:
         return value
     if repo_candidate.exists() and repo_candidate != artifact_candidate:

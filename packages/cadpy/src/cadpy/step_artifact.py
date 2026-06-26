@@ -14,7 +14,7 @@ from cadpy.generation import (
     run_script_generator,
 )
 from cadpy.metadata import DEFAULT_MESH_ANGULAR_TOLERANCE, DEFAULT_MESH_TOLERANCE, normalize_mesh_numeric
-from cadpy.render import part_glb_path, relative_to_repo
+from cadpy.render import part_glb_path, relative_to_cwd
 from cadpy.step_export import write_xcaf_doc_step_file
 from cadpy.step_metadata import read_text_to_cad_step_metadata
 from cadpy.step_scene import LoadedStepScene, load_step_scene, step_file_hash
@@ -27,7 +27,7 @@ from cadpy.step_targets import (
 )
 
 
-def _repo_relative(repo_root: Path, path: Path) -> str:
+def _relative_to_base(repo_root: Path, path: Path) -> str:
     resolved = path.resolve()
     try:
         return resolved.relative_to(repo_root).as_posix()
@@ -36,7 +36,7 @@ def _repo_relative(repo_root: Path, path: Path) -> str:
 
 
 def _cad_ref_for_step(repo_root: Path, step_path: Path) -> str:
-    relative = _repo_relative(repo_root, step_path)
+    relative = _relative_to_base(repo_root, step_path)
     suffix = step_path.suffix
     return relative[: -len(suffix)] if suffix else relative
 
@@ -75,7 +75,7 @@ def _build_entry_spec(
 ) -> EntrySpec:
     cad_ref = _cad_ref_for_step(repo_root, step_path)
     return EntrySpec(
-        source_ref=_repo_relative(repo_root, step_path),
+        source_ref=_relative_to_base(repo_root, step_path),
         cad_ref=cad_ref,
         kind=kind,
         source_path=step_path,
@@ -121,8 +121,8 @@ def _result_payload(
 ) -> dict[str, object]:
     payload: dict[str, object] = {
         "ok": True,
-        "stepPath": relative_to_repo(spec.step_path),
-        "glbPath": relative_to_repo(glb_path),
+        "stepPath": relative_to_cwd(spec.step_path),
+        "glbPath": relative_to_cwd(glb_path),
         "entryKind": entry_kind,
         "sourceKind": source_kind,
         "stats": stats or {},
@@ -295,7 +295,7 @@ def main(argv: list[str] | None = None) -> int:
             )
     else:
         existing_spec = EntrySpec(
-            source_ref=_repo_relative(repo_root, step_path),
+            source_ref=_relative_to_base(repo_root, step_path),
             cad_ref=_cad_ref_for_step(repo_root, step_path),
             kind=args.kind or "part",
             source_path=step_path,
@@ -332,7 +332,7 @@ def main(argv: list[str] | None = None) -> int:
             step_hash = _write_step_after_artifact(spec, scene, logger=logger)
             scene.step_hash = step_hash
     else:
-        with logger.timed(f"load STEP {relative_to_repo(step_path)}"):
+        with logger.timed(f"load STEP {relative_to_cwd(step_path)}"):
             scene = load_step_scene(step_path)
         kind = args.kind or _infer_entry_kind(step_path, scene)
         spec = _build_entry_spec(

@@ -6,8 +6,6 @@ from dataclasses import dataclass
 from pathlib import Path
 
 
-REPO_ROOT = Path.cwd().resolve()
-CAD_ROOT = REPO_ROOT
 DEFAULT_MESH_TOLERANCE = 0.02
 DEFAULT_MESH_ANGULAR_TOLERANCE = 0.6
 
@@ -36,6 +34,7 @@ class GeneratorMetadata:
 
 STEP_ENVELOPE_FIELDS = {
     "shape",
+    "params",
     "stl",
     "3mf",
     "mesh_tolerance",
@@ -55,7 +54,7 @@ DEFAULT_MESH_SETTINGS = MeshSettings(
 def _display_path(path: Path) -> str:
     resolved = path.resolve()
     try:
-        return resolved.relative_to(REPO_ROOT).as_posix()
+        return resolved.relative_to(Path.cwd().resolve()).as_posix()
     except ValueError:
         return resolved.as_posix()
 

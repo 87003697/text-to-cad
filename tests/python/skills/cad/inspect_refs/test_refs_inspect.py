@@ -381,7 +381,7 @@ class InspectRefsTests(unittest.TestCase):
         tempdir = self._isolated_roots.temporary_cad_directory(prefix="tmp-refs-inspect-")
         self._tempdir = tempdir
         self.temp_root = Path(tempdir.name)
-        self.relative_dir = self.temp_root.relative_to(assembly_spec.CAD_ROOT).as_posix()
+        self.relative_dir = self.temp_root.relative_to(Path.cwd()).as_posix()
         self.lookup_ref = f"{self.relative_dir}/sample"
         self.cad_ref = self.lookup_ref
         self.step_path = self.temp_root / "sample.step"
@@ -506,7 +506,7 @@ class InspectRefsTests(unittest.TestCase):
     def _manifest_path(self, path: Path) -> str:
         resolved = path.resolve()
         try:
-            return resolved.relative_to(assembly_spec.REPO_ROOT).as_posix()
+            return resolved.relative_to(Path.cwd().resolve()).as_posix()
         except ValueError:
             return resolved.as_posix()
 
@@ -547,7 +547,7 @@ class InspectRefsTests(unittest.TestCase):
 
         self.assertTrue(result["ok"])
         token = result["tokens"][0]
-        self.assertEqual(refs_inspect._relative_to_repo(self.step_path), token["stepPath"])
+        self.assertEqual(refs_inspect._display_path(self.step_path), token["stepPath"])
         self.assertEqual(1, token["summary"]["occurrenceCount"])
 
     def test_context_provider_can_supply_in_memory_entry_context(self) -> None:

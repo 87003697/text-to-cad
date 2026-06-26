@@ -4,7 +4,7 @@ from pathlib import Path
 
 from OCP.StlAPI import StlAPI_Writer
 
-from cadpy.render import REPO_ROOT, part_stl_path
+from cadpy.render import part_stl_path
 from cadpy.step_scene import (
     LoadedStepScene,
     scene_export_shape,
@@ -14,7 +14,7 @@ from cadpy.step_scene import (
 def _display_path(path: Path) -> str:
     resolved = path.resolve()
     try:
-        return resolved.relative_to(REPO_ROOT).as_posix()
+        return resolved.relative_to(Path.cwd().resolve()).as_posix()
     except ValueError:
         return resolved.as_posix()
 

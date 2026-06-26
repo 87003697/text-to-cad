@@ -2,10 +2,10 @@ from __future__ import annotations
 
 import hashlib
 import os
+import sys
+import sysconfig
 from dataclasses import dataclass
 from pathlib import Path
-
-from cadpy import catalog
 
 
 _PACKAGE_ROOT = Path(__file__).resolve().parents[1]
@@ -27,9 +27,10 @@ def python_source_hash(script_path: Path) -> PythonSourceHash:
 
 
 def _manifest_roots() -> tuple[Path, ...]:
+    # Roots for displaying a generator's source_path manifest-relative: the live cwd (the repo
+    # root under normal invocation) plus the cadpy package root. No frozen import-time global.
     return tuple(_dedupe_paths([
-        catalog.CAD_ROOT.resolve(),
-        catalog.REPO_ROOT.resolve(),
+        Path.cwd().resolve(),
         _PACKAGE_ROOT.resolve(),
     ]))
 
@@ -114,12 +115,32 @@ def _closure_hash_for_pairs(pairs: list[tuple[str, str]]) -> str:
     return digest.hexdigest()
 
 
-def repo_local_loaded_modules(module_names: object) -> dict[str, Path]:
-    """Map of ``sys.modules`` names (restricted to those given) to their
-    repository-local ``.py`` source files."""
-    import sys
+def _interpreter_roots() -> tuple[Path, ...]:
+    """Directories holding the Python interpreter, its standard library, and installed packages
+    (the venv / site-packages). A loaded module whose file lives under any of these is third-party
+    (build123d, OCP, the stdlib) and is excluded from a generator's source closure.
 
-    repo_root = catalog.REPO_ROOT.resolve()
+    This replaces an earlier repo-root containment test: first-party vs third-party is decided by
+    the interpreter layout, NOT by the process working directory, so the closure a generator
+    records is identical regardless of which directory the build was launched from.
+    """
+    roots: set[Path] = set()
+    paths = sysconfig.get_paths()
+    for key in ("stdlib", "platstdlib", "purelib", "platlib"):
+        value = paths.get(key)
+        if value:
+            roots.add(Path(value).resolve())
+    for prefix in (sys.prefix, sys.base_prefix, sys.exec_prefix, sys.base_exec_prefix):
+        if prefix:
+            roots.add(Path(prefix).resolve())
+    return tuple(roots)
+
+
+def repo_local_loaded_modules(module_names: object) -> dict[str, Path]:
+    """Map of ``sys.modules`` names (restricted to those given) to their first-party ``.py``
+    source files: every loaded module whose file is NOT under the interpreter's stdlib /
+    site-packages roots. Working-directory independent — see :func:`_interpreter_roots`."""
+    interpreter_roots = _interpreter_roots()
     result: dict[str, Path] = {}
     for name in module_names:
         module = sys.modules.get(name)
@@ -130,7 +151,7 @@ def repo_local_loaded_modules(module_names: object) -> dict[str, Path]:
             path = Path(file_name).resolve()
         except OSError:
             continue
-        if path.suffix == ".py" and _is_within(path, repo_root):
+        if path.suffix == ".py" and not any(_is_within(path, root) for root in interpreter_roots):
             result[name] = path
     return result
 

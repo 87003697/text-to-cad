@@ -129,16 +129,50 @@ def compound_from_instances(
     """
     if not instances:
         raise RuntimeError(f"assembly {name!r} has no instances")
-    children: list[Compound] = []
-    for inst in instances:
+    from OCP.TopoDS import TopoDS_Builder, TopoDS_Compound
+
+    # Geometry: place each part with an OCCT location (shares the underlying TShape, O(1)) and add
+    # it to a raw compound. This avoids build123d's ``part.moved()``, whose per-instance shape-graph
+    # copy walks every sub-shape (``shapetype``) and is the dominant compose cost. The raw compound
+    # has no build123d child structure, so the assembly hierarchy the descriptor needs is carried
+    # separately as an occurrence-metadata tree built by reading the (un-copied) resolved parts.
+    builder = TopoDS_Builder()
+    occt_compound = TopoDS_Compound()
+    builder.MakeCompound(occt_compound)
+    occurrence_children: list[dict[str, Any]] = []
+    for index, inst in enumerate(instances, start=1):
         part = _resolve_shape(inst["path"], base_dir=base_dir)
-        placed = part.moved(location_from_transform(inst["transform"]))
-        placed.label = str(inst["name"])
-        children.append(placed)
-    compound = Compound(children=children, label=name)
+        location = location_from_transform(inst["transform"])
+        builder.Add(occt_compound, part.wrapped.Moved(location.wrapped))
+        occurrence_children.append(
+            _occurrence_subtree(part, location, f"o1.{index}", str(inst["name"]))
+        )
+    compound = Compound(occt_compound, label=name)
+    # Occurrence-metadata tree consumed by cadpy.component_package.build_package_from_compound;
+    # absent on plain build123d shapes, which fall back to walking the compound's children.
+    compound._occurrence_tree = {"id": "o1", "name": name, "children": occurrence_children}
     if assembly_mates:
         compound.assembly_mates = [dict(mate) for mate in assembly_mates]
     return compound
+
+
+def _occurrence_subtree(node: Any, parent_world_loc: Location, path: str, name: str) -> dict[str, Any]:
+    """One node of the occurrence-metadata tree, mirroring component_package's compound walk.
+
+    Reads the resolved (un-copied) part's build123d structure: each leaf carries its local shape
+    (for the content hash + component GLB) and accumulated world location; a multi-solid part is a
+    subassembly grouping its leaves. World location = ``parent_world_loc * node.location``, the same
+    accumulation the descriptor walk does on a ``moved()``-composed compound, so output is identical."""
+    node_loc = getattr(node, "location", None)
+    world_loc = (parent_world_loc * node_loc) if node_loc is not None else parent_world_loc
+    child_shapes = list(getattr(node, "children", []) or [])
+    if not child_shapes:
+        return {"id": path, "name": name, "leaf": True, "shape": node, "world_loc": world_loc, "children": []}
+    children = [
+        _occurrence_subtree(child, world_loc, f"{path}.{index}", str(getattr(child, "label", "") or f"{path}.{index}"))
+        for index, child in enumerate(child_shapes, start=1)
+    ]
+    return {"id": path, "name": name, "leaf": False, "children": children}
 
 
 def link_assembly_from_instances(

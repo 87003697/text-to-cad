@@ -88,7 +88,7 @@ class CadGenerationTests(unittest.TestCase):
         tempdir = self._isolated_roots.temporary_cad_directory(prefix="tmp-cad-")
         self._tempdir = tempdir
         self.temp_root = Path(tempdir.name)
-        self.relative_dir = self.temp_root.relative_to(cad_generation.CAD_ROOT).as_posix()
+        self.relative_dir = self.temp_root.relative_to(Path.cwd()).as_posix()
 
     def tearDown(self) -> None:
         shutil.rmtree(self.temp_root, ignore_errors=True)
@@ -1148,7 +1148,7 @@ class CadGenerationTests(unittest.TestCase):
             prototype_shapes={},
             source_kind="python",
             source_hash=source_identity.source_hash,
-            source_path=cad_generation.relative_to_repo(script_path),
+            source_path=cad_generation.relative_to_cwd(script_path),
         )
 
         # A current model reuses its package: the topology options match, the package is
@@ -1289,7 +1289,7 @@ class CadGenerationTests(unittest.TestCase):
                 ),
             )
 
-        self.assertEqual([cad_generation.CAD_ROOT / "meshes" / "source.stl"], calls)
+        self.assertEqual([Path.cwd() / "meshes" / "source.stl"], calls)
 
     def test_direct_step_generation_reads_configured_3mf(self) -> None:
         step_path = self._write_step("source")
@@ -1307,7 +1307,7 @@ class CadGenerationTests(unittest.TestCase):
                 ),
             )
 
-        self.assertEqual([cad_generation.CAD_ROOT / "meshes" / "source.3mf"], calls)
+        self.assertEqual([Path.cwd() / "meshes" / "source.3mf"], calls)
 
     def test_direct_step_stl_flag_sets_stl_path(self) -> None:
         step_path = self._write_step("source")

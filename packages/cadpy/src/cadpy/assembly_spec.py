@@ -15,8 +15,6 @@ from pathlib import Path
 from cadpy.catalog import find_source_by_cad_ref
 
 
-REPO_ROOT = Path.cwd().resolve()
-CAD_ROOT = REPO_ROOT
 STEP_SUFFIXES = (".step", ".stp")
 
 IDENTITY_TRANSFORM: tuple[float, ...] = (

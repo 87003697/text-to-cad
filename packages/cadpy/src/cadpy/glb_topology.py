@@ -66,14 +66,13 @@ STEP_SURFACE_HALF_EDGE_COLUMNS = (
 )
 GLB_MAGIC = 0x46546C67
 GLB_VERSION = 2
-REPO_ROOT = Path.cwd().resolve()
 UNSIGNED_BYTE = 5121
 
 
 def _display_path(path: Path) -> str:
     resolved = path.resolve()
     try:
-        return resolved.relative_to(REPO_ROOT).as_posix()
+        return resolved.relative_to(Path.cwd().resolve()).as_posix()
     except ValueError:
         return resolved.as_posix()
 

@@ -72,7 +72,7 @@ class StepExportTargetTests(unittest.TestCase):
         for fmt in FORMATS:
             out = self.out_dir / f"box.{fmt}"
             code, payload = self._run([
-                "--repo-root", str(cad_render.CAD_ROOT),
+                "--repo-root", str(Path.cwd()),
                 "--step", str(logical_step),
                 "--source-path", str(generator),
                 "--format", fmt,
@@ -90,7 +90,7 @@ class StepExportTargetTests(unittest.TestCase):
         generator = self._write_box_generator()
         imported_step = self.temp_root / "imported.step"
         code, payload = self._run([
-            "--repo-root", str(cad_render.CAD_ROOT),
+            "--repo-root", str(Path.cwd()),
             "--step", str(self.temp_root / "box.step"),
             "--source-path", str(generator),
             "--format", "step",
@@ -102,7 +102,7 @@ class StepExportTargetTests(unittest.TestCase):
         for fmt in FORMATS:
             out = self.out_dir / f"imported.{fmt}"
             code, payload = self._run([
-                "--repo-root", str(cad_render.CAD_ROOT),
+                "--repo-root", str(Path.cwd()),
                 "--step", str(imported_step),
                 "--format", fmt,
                 "--out", str(out),
@@ -113,7 +113,7 @@ class StepExportTargetTests(unittest.TestCase):
 
     def test_missing_imported_step_reports_error(self) -> None:
         code, payload = self._run([
-            "--repo-root", str(cad_render.CAD_ROOT),
+            "--repo-root", str(Path.cwd()),
             "--step", str(self.temp_root / "does_not_exist.step"),
             "--format", "stl",
             "--out", str(self.out_dir / "missing.stl"),
@@ -126,7 +126,7 @@ class StepExportTargetTests(unittest.TestCase):
         generator = self._write_box_generator()
         with self.assertRaises(SystemExit):
             self._run([
-                "--repo-root", str(cad_render.CAD_ROOT),
+                "--repo-root", str(Path.cwd()),
                 "--step", str(self.temp_root / "box.step"),
                 "--source-path", str(generator),
                 "--format", "iges",
