@@ -18,11 +18,11 @@ test("isImportedStepEntry is false for a generator-backed entry, true for an imp
   assert.equal(isImportedStepEntry({}), true);
 });
 
-test("stepExportItemLabel renames imported STEP to a download, leaves others as exports", () => {
-  assert.equal(stepExportItemLabel("step", { imported: true }), "Download STEP");
-  assert.equal(stepExportItemLabel("step", { imported: false }), "Export to STEP");
-  assert.equal(stepExportItemLabel("glb", { imported: true }), "Export to GLB");
-  assert.equal(stepExportItemLabel("3mf"), "Export to 3MF");
+test("stepExportItemLabel: STEP is always a download, other formats are exports", () => {
+  assert.equal(stepExportItemLabel("step"), "Download STEP");
+  assert.equal(stepExportItemLabel("3mf"), "Export 3MF");
+  assert.equal(stepExportItemLabel("stl"), "Export STL");
+  assert.equal(stepExportItemLabel("glb"), "Export GLB");
 });
 
 test("requestStepExport preserves an absolute file ref (leading slash kept)", async () => {
