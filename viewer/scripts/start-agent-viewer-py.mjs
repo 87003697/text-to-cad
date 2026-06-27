@@ -7,7 +7,7 @@ import { spawn } from "node:child_process";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { cadPythonExecutable, cadPythonEnv } from "../src/server/step/pythonStepArtifact.mjs";
+import { cadPythonExecutable, cadPythonEnv } from "./cad-python.mjs";
 
 const viewerRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const repoRoot = path.resolve(viewerRoot, "..");

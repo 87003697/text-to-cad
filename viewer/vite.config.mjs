@@ -1,37 +1,21 @@
 import fs from "node:fs";
+import http from "node:http";
+import net from "node:net";
 import path from "node:path";
+import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
-import {
-  isCatalogRelevantPath,
-} from "./src/server/catalog/cadDirectoryScanner.mjs";
-import {
-  normalizeViewerDefaultFile,
-  normalizeViewerGithubUrl,
-} from "./src/shared/viewerConfig.mjs";
-import {
-  DEFAULT_VIEWER_PORT,
-  buildViewerServerInfo,
-} from "./src/server/viewerServerInfo.mjs";
-import {
-  removeViewerServerRegistryEntry,
-  writeViewerServerRegistry,
-} from "./src/server/viewerServerRegistry.mjs";
-import {
-  pathIsInside,
-} from "cadjs/lib/pathUtils.mjs";
+
+import { cadPythonExecutable, cadPythonEnv } from "./scripts/cad-python.mjs";
 import { resolveDirectoryRoot as resolveViewerDirectoryRoot } from "./src/server/directoryRoot.mjs";
-import { createLocalAssetBackend } from "./src/server/localAssetBackend.mjs";
-import {
-  createCadViewerApiMiddleware,
-  createLocalAssetMiddleware,
-} from "./src/server/httpHandlers.mjs";
 import { assertNoDeprecatedLocalRootEnv } from "./src/server/viewerEnv.mjs";
 import {
   normalizeServerLifetimeMs,
   scheduleProcessShutdown,
 } from "./src/server/serverLifetime.mjs";
+
+const DEFAULT_VIEWER_PORT = 4178;
 
 const viewerAppRoot = path.dirname(fileURLToPath(import.meta.url));
 const viewerClientRoot = path.join(viewerAppRoot, "src", "client");
@@ -40,27 +24,10 @@ const viewerNodeModulesRoot = path.join(viewerAppRoot, "node_modules");
 const defaultDirectoryRoot = path.resolve(viewerAppRoot, "..");
 const directoryRoot = resolveDirectoryRoot();
 const repoRoot = directoryRoot;
-const buildViewerDefaultFile = normalizeViewerDefaultFile(process.env.VIEWER_DEFAULT_FILE ?? "");
-const buildViewerGithubUrl = normalizeViewerGithubUrl(process.env.VIEWER_GITHUB_URL ?? "");
 const buildViewerDefaultDir = String(process.env.VIEWER_DEFAULT_DIR || "").trim();
 const viewerAllowedHosts = normalizeViewerAllowedHosts(process.env.VIEWER_ALLOWED_HOSTS ?? "");
 const viewerServerLifetimeMs = normalizeServerLifetimeMs(process.env.VIEWER_SERVER_LIFETIME_MS);
 assertNoDeprecatedLocalRootEnv(process.env);
-const viewerVersion = readViewerPackageVersion(viewerAppRoot);
-const viewerServerMode = String(process.env.VIEWER_AGENT_START_MODE || "dev").trim() || "dev";
-const viewerGit = String(process.env.VIEWER_GIT || "").trim();
-const localServerFeatures = [
-  "dynamic-root",
-  "relative-dir-query",
-  "default-dir",
-  "directory-activation",
-];
-const localAssetBackend = createLocalAssetBackend({
-  directoryRoot,
-  rootDir: buildViewerDefaultDir,
-  defaultFile: buildViewerDefaultFile,
-  githubUrl: buildViewerGithubUrl,
-});
 
 function normalizeViewerAllowedHosts(value) {
   return String(value || "")
@@ -121,193 +88,100 @@ function resolveDirectoryRoot() {
   });
 }
 
-function viteServerPort(server) {
-  const address = server?.httpServer?.address?.();
-  return address && typeof address === "object" && Number.isInteger(address.port)
-    ? address.port
-    : DEFAULT_VIEWER_PORT;
-}
-
-function isGenerationStatusFilePath(filePath) {
-  const name = path.basename(String(filePath || ""));
-  return name.startsWith(".") && name.endsWith(".generation.lock.json");
-}
-
-function cadCatalogPlugin({ enableStepArtifactBackend = false } = {}) {
-  const activeDirectories = new Map();
-  const refreshTimers = new Map();
-  const pendingRefreshes = new Map();
-
-  function activateDirectory(server, resolvedRoot) {
-    const resolved = resolvedRoot && typeof resolvedRoot === "object"
-      ? resolvedRoot
-      : localAssetBackend.resolveRoot(resolvedRoot);
-    const wasActive = activeDirectories.has(resolved.rootPath);
-    activeDirectories.set(resolved.rootPath, {
-      dir: resolved.dir || "",
+function findFreePort() {
+  return new Promise((resolve, reject) => {
+    const probe = net.createServer();
+    probe.on("error", reject);
+    probe.listen(0, "127.0.0.1", () => {
+      const { port } = probe.address();
+      probe.close(() => resolve(port));
     });
-    if (!wasActive) {
-      server.watcher.add(resolved.rootPath);
-    }
-    return resolved;
-  }
+  });
+}
 
-  function activeDirectoryOptions({ rootDir = "" } = {}) {
-    const options = [];
-    const addOption = (option = {}) => {
-      const dir = String(option.dir || "").trim();
-      if (!dir) {
+function waitForPythonBackend(port, { timeoutMs = 20000 } = {}) {
+  const deadline = Date.now() + timeoutMs;
+  return new Promise((resolve) => {
+    const retry = () => {
+      if (Date.now() >= deadline) {
+        resolve(false);
         return;
       }
-      const rootPath = String(option.rootPath || "").trim();
-      if (options.some((current) => current.dir === dir || (rootPath && current.rootPath === rootPath))) {
-        return;
-      }
-      options.push({
-        dir,
-        rootPath,
-        rootName: String(option.rootName || (rootPath ? path.basename(rootPath) : "") || dir),
-      });
+      setTimeout(attempt, 250);
     };
-    for (const [rootPath, activeRoot] of activeDirectories.entries()) {
-      addOption({
-        dir: activeRoot.dir,
-        rootPath,
-        rootName: path.basename(rootPath),
-      });
-    }
-    addOption({ dir: rootDir });
-    return options;
-  }
-
-  function scheduleCatalogRefresh(server, rootPath, activeRoot = {}, changedPath = "") {
-    const rootState = typeof activeRoot === "string"
-      ? { dir: activeRoot }
-      : {
-          dir: String(activeRoot?.dir || ""),
-        };
-    if (refreshTimers.has(rootPath)) {
-      clearTimeout(refreshTimers.get(rootPath));
-    }
-    const pending = pendingRefreshes.get(rootPath) || {
-      dir: rootState.dir,
-      paths: new Set(),
-      full: false,
-    };
-    pending.dir = rootState.dir;
-    if (changedPath) {
-      pending.paths.add(path.resolve(changedPath));
-    } else {
-      pending.full = true;
-    }
-    pendingRefreshes.set(rootPath, pending);
-    refreshTimers.set(rootPath, setTimeout(() => {
-      refreshTimers.delete(rootPath);
-      const nextRefresh = pendingRefreshes.get(rootPath) || {
-        dir: rootState.dir,
-        paths: new Set(),
-        full: true,
-      };
-      pendingRefreshes.delete(rootPath);
-      try {
-        if (nextRefresh.full || typeof localAssetBackend.refreshCatalogForPath !== "function") {
-          localAssetBackend.refreshCatalog({ rootDir: nextRefresh.dir });
+    const attempt = () => {
+      const req = http.get({ host: "127.0.0.1", port, path: "/__cad/server", timeout: 500 }, (res) => {
+        res.resume();
+        if (res.statusCode === 200) {
+          resolve(true);
         } else {
-          for (const filePath of nextRefresh.paths) {
-            localAssetBackend.refreshCatalogForPath({
-              rootDir: nextRefresh.dir,
-              filePath,
-            });
-          }
+          retry();
         }
-      } catch (error) {
-        console.warn("Failed to refresh CAD catalog", error);
-      }
-      server.ws.send({
-        type: "custom",
-        event: "cad-catalog:changed",
-        data: { dir: nextRefresh.dir },
       });
-    }, 150));
-  }
+      req.on("error", retry);
+      req.on("timeout", () => {
+        req.destroy();
+        retry();
+      });
+    };
+    attempt();
+  });
+}
 
-  function notifyChangedPath(server, changedPath) {
-    const resolvedChangedPath = path.resolve(changedPath);
-    for (const [rootPath, activeRoot] of activeDirectories.entries()) {
-      if (resolvedChangedPath === rootPath || pathIsInside(resolvedChangedPath, rootPath)) {
-        if (isGenerationStatusFilePath(resolvedChangedPath)) {
-          server.ws.send({
-            type: "custom",
-            event: "cad-generation-status:changed",
-            data: { dir: activeRoot.dir },
-          });
-          continue;
-        }
-        if (isCatalogRelevantPath(resolvedChangedPath)) {
-          scheduleCatalogRefresh(server, rootPath, activeRoot, resolvedChangedPath);
-        }
-      }
-    }
-  }
-
+// Dev mode runs the SAME Python backend as production: Vite serves the client
+// (with HMR) and proxies /__cad/* to a Python server it spawns. The Python
+// backend owns all CAD logic; Vite is purely the frontend dev tool.
+function cadViewerBackendProxyPlugin() {
+  let child = null;
+  let backendPort = 0;
   return {
-    name: "cad-catalog",
-    configureServer(server) {
-      let activeServerInfo = null;
-      try {
-        activateDirectory(server, localAssetBackend.resolveRoot(""));
-      } catch (error) {
-        console.warn("Failed to activate default CAD Viewer directory", error);
-      }
-      const currentServerInfo = ({ rootDir = "" } = {}) => {
-        const infoRootDir = rootDir || "";
-        activeServerInfo = buildViewerServerInfo({
-          directoryRoot: repoRoot,
-          rootDir: infoRootDir,
-          port: viteServerPort(server),
-          pid: process.pid,
-          backend: "local-fs",
-          dynamicRoot: true,
-          stepArtifactGenerationAvailable: enableStepArtifactBackend,
-          viewerVersion,
-          serverMode: viewerServerMode,
-          git: viewerGit,
-          serverFeatures: localServerFeatures,
-          activeDirectories: activeDirectoryOptions({ rootDir: infoRootDir }),
-        });
-        return activeServerInfo;
-      };
-      const registerServer = () => {
-        writeViewerServerRegistry(currentServerInfo());
-      };
-      if (server.httpServer?.listening) {
-        registerServer();
-      } else {
-        server.httpServer?.once("listening", registerServer);
-      }
-      server.httpServer?.once("close", () => {
-        removeViewerServerRegistryEntry(activeServerInfo || currentServerInfo());
+    name: "cad-viewer-python-backend",
+    async configureServer(server) {
+      backendPort = await findFreePort();
+      const env = cadPythonEnv();
+      env.PYTHONPATH = [viewerAppRoot, env.PYTHONPATH].filter(Boolean).join(path.delimiter);
+      env.VIEWER_AGENT_START_MODE = env.VIEWER_AGENT_START_MODE || "dev";
+      child = spawn(
+        cadPythonExecutable(repoRoot),
+        ["-m", "server_py.server", "--host", "127.0.0.1", "--port", String(backendPort), "--dir", directoryRoot],
+        { cwd: viewerAppRoot, env, stdio: "inherit" },
+      );
+      child.on("error", (error) => {
+        console.error(`Failed to start Python CAD Viewer backend: ${error.message}`);
       });
-      server.middlewares.use(createCadViewerApiMiddleware({
-        backend: localAssetBackend,
-        enableStepArtifactBackend,
-        serverInfo: currentServerInfo,
-        onCatalogActivated: (resolvedRoot) => {
-          activateDirectory(server, resolvedRoot);
-        },
-        onDirectoryActivated: (resolvedRoot) => {
-          activateDirectory(server, resolvedRoot);
-        },
-        onCatalogChanged: (resolvedRoot) => {
-          scheduleCatalogRefresh(server, resolvedRoot.rootPath, { dir: resolvedRoot.dir });
-        },
-      }));
-      server.middlewares.use(createLocalAssetMiddleware({
-        backend: localAssetBackend,
-      }));
-      for (const eventName of ["add", "change", "unlink"]) {
-        server.watcher.on(eventName, (changedPath) => notifyChangedPath(server, changedPath));
+      const ready = await waitForPythonBackend(backendPort);
+      if (!ready) {
+        console.warn("Python CAD Viewer backend did not become ready; /__cad will 502 until it does.");
       }
+      // Forward every /__cad/* request (method + headers + body + streamed response) to Python.
+      server.middlewares.use((req, res, next) => {
+        if (!req.url || !req.url.startsWith("/__cad/")) {
+          next();
+          return;
+        }
+        const proxyReq = http.request(
+          { host: "127.0.0.1", port: backendPort, path: req.url, method: req.method, headers: req.headers },
+          (proxyRes) => {
+            res.writeHead(proxyRes.statusCode || 502, proxyRes.headers);
+            proxyRes.pipe(res);
+          },
+        );
+        proxyReq.on("error", () => {
+          if (!res.headersSent) {
+            res.statusCode = 502;
+          }
+          res.end("CAD Viewer backend proxy error");
+        });
+        req.pipe(proxyReq);
+      });
+      const stop = () => {
+        if (child) {
+          child.kill();
+          child = null;
+        }
+      };
+      server.httpServer?.once("close", stop);
+      process.once("exit", stop);
     },
   };
 }
@@ -346,7 +220,7 @@ export default defineConfig(({ command }) => ({
   envPrefix: "VIEWER_",
   plugins: [
     react(),
-    cadCatalogPlugin({ enableStepArtifactBackend: command === "serve" }),
+    cadViewerBackendProxyPlugin(),
     serverLifetimePlugin(),
   ],
   resolve: {
