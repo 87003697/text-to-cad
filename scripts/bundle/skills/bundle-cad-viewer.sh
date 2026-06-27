@@ -355,8 +355,8 @@ write_runtime_package_json() {
   "type": "module",
   "version": "$RELEASE_VERSION",
   "scripts": {
-    "serve": "node backend/server.mjs",
-    "start": "node backend/server.mjs",
+    "serve": "python3 -m server_py.server",
+    "start": "python3 -m server_py.server",
     "moveit2:setup": "moveit2_server/setup.sh",
     "moveit2:check": "moveit2_server/check-moveit2-server.sh",
     "moveit2:serve": "moveit2_server/run-moveit2-server.sh"
@@ -424,7 +424,7 @@ sync_dir() {
 build_runtime() {
   local target_dir="$1"
   rm -rf "$target_dir"
-  mkdir -p "$target_dir/backend"
+  mkdir -p "$target_dir"
 
   sync_dir "$VIEWER_DIR/dist" "$target_dir/dist"
 
@@ -434,18 +434,10 @@ build_runtime() {
 
   sync_dir "$VIEWER_DIR/packages" "$target_dir/packages"
 
-  (
-    cd "$REPO_ROOT"
-    "$(resolve_esbuild_bin)" "$VIEWER_DIR/src/server/server.mjs" \
-      --bundle \
-      --format=esm \
-      --platform=node \
-      --target=node22 \
-      --main-fields=module,main \
-      --legal-comments=none \
-      --outfile="$target_dir/backend/server.mjs"
-
-  )
+  # Python backend (server_py): the runtime serves the built dist + /__cad and
+  # shells out to the vendored cadpy for STEP build/export. sync_dir excludes
+  # tests/__pycache__/golden so only the runtime modules are packaged.
+  sync_dir "$VIEWER_DIR/server_py" "$target_dir/server_py"
 
   write_runtime_package_json "$target_dir"
   write_runtime_gitignore "$target_dir"
@@ -480,7 +472,7 @@ require_path "$CADPY_PACKAGE_DIR/src/cadpy" "cadpy source"
 require_path "$IMPLICITJS_PACKAGE_DIR/package.json" "implicitjs package"
 require_path "$IMPLICITJS_PACKAGE_DIR/src" "implicitjs source"
 require_path "$VIEWER_DIR/package.json" "viewer package"
-require_path "$(resolve_esbuild_bin)" "viewer esbuild binary; install viewer dependencies"
+require_path "$VIEWER_DIR/server_py/server.py" "viewer Python backend"
 
 if [ "$MODE" = "check" ]; then
   check_viewer_packages

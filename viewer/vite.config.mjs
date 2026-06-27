@@ -8,12 +8,12 @@ import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 
 import { cadPythonExecutable, cadPythonEnv } from "./scripts/cad-python.mjs";
-import { resolveDirectoryRoot as resolveViewerDirectoryRoot } from "./src/server/directoryRoot.mjs";
-import { assertNoDeprecatedLocalRootEnv } from "./src/server/viewerEnv.mjs";
+import { resolveDirectoryRoot as resolveViewerDirectoryRoot } from "./scripts/directoryRoot.mjs";
+import { assertNoDeprecatedLocalRootEnv } from "./scripts/viewerEnv.mjs";
 import {
   normalizeServerLifetimeMs,
   scheduleProcessShutdown,
-} from "./src/server/serverLifetime.mjs";
+} from "./scripts/serverLifetime.mjs";
 
 const DEFAULT_VIEWER_PORT = 4178;
 

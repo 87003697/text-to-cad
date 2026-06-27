@@ -83,9 +83,30 @@ def activate_directory(host: str, port: int, directory: str):
         pass
 
 
-def spawn_backend(host: str, port: int, directory: str):
+def select_mode() -> str:
+    """dev (Vite serves the client + proxies /__cad to a spawned Python backend)
+    when a source checkout with Vite is present; serve (Python serves the built
+    dist + /__cad) for the bundled runtime. Overridable via VIEWER_AGENT_START_MODE."""
+    requested = str(os.environ.get("VIEWER_AGENT_START_MODE") or "").strip()
+    if requested in ("dev", "serve"):
+        return requested
+    has_vite = (
+        os.path.isfile(os.path.join(_VIEWER_APP_ROOT, "vite.config.mjs"))
+        and os.path.exists(os.path.join(_VIEWER_APP_ROOT, "node_modules", ".bin", "vite"))
+    )
+    return "dev" if has_vite else "serve"
+
+
+def spawn_backend(mode: str, host: str, port: int, directory: str):
     env = dict(os.environ)
     env["PYTHONPATH"] = os.pathsep.join([_VIEWER_APP_ROOT, env.get("PYTHONPATH", "")]).rstrip(os.pathsep)
+    if mode == "dev":
+        # Vite serves the client (HMR) and its config spawns the Python backend +
+        # proxies /__cad to it. We forward the chosen host/port and the served dir.
+        env["VIEWER_DEFAULT_DIR"] = os.path.abspath(directory)
+        env.setdefault("VIEWER_AGENT_START_MODE", "dev")
+        cmd = ["npm", "run", "dev", "--", "--host", host, "--port", str(port)]
+        return subprocess.Popen(cmd, cwd=_VIEWER_APP_ROOT, env=env)
     cmd = [sys.executable, "-m", "server_py.server", "--host", host, "--port", str(port), "--dir", os.path.abspath(directory)]
     return subprocess.Popen(cmd, env=env)
 
@@ -105,6 +126,7 @@ def main(argv=None):
         print(f"--dir is not a directory: {directory}", file=sys.stderr)
         return 1
 
+    mode = select_mode()
     start = args.port
     end = min(start + args.port_scan_limit - 1, 65535)
     # Prefer registry-known live ports first (cheap), then a linear scan.
@@ -124,13 +146,13 @@ def main(argv=None):
             return 0
         if status == "closed":
             url = agent_viewer_url(args.host, port, directory)
-            print(f"Starting CAD Viewer serve server at {url}")
+            print(f"Starting CAD Viewer {mode} server at {url}")
             print(f"CAD Viewer URL: {url}")
             print("CAD Viewer git: none")
             if args.json_result:
                 print(json.dumps({"url": url, "port": port, "action": "start"}))
             sys.stdout.flush()
-            child = spawn_backend(args.host, port, directory)
+            child = spawn_backend(mode, args.host, port, directory)
             return child.wait()
         # 'occupied' (foreign server / slow / non-viewer) -> keep scanning
 
