@@ -532,7 +532,7 @@ ASSEMBLY_INSTANCES = [{'path': 'imports/sts3250.step',
                 0.0,
                 0.0,
                 1.0]},
- {'path': 'gripper/rb9_01_061_000_gripper.step',
+ {'path': 'gripper/tom_gripper.step',
  'name': 'parallel_gripper',
  'transform': [0.999999929014645,
                 0.0,
@@ -1150,7 +1150,7 @@ PRESERVE_SOURCE_COLOR_STEP_PATHS = frozenset(
     {
         "imports/sts3250.step",
         "imports/sts3215.step",
-        "gripper/rb9_01_061_000_gripper.step",
+        "gripper/tom_gripper.step",
     }
 )
 EXPLORER_POSES = (
