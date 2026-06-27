@@ -26,7 +26,7 @@ ensure_cadpy_package_path()
 from cadpy.step_scene import _located_shape, load_step_scene, occurrence_selector_id
 
 
-SOURCE_STEP = Path(__file__).resolve().with_name("rb9_01_061_000_gripper.step")
+SOURCE_STEP = Path(__file__).resolve().with_name("tom_gripper.step")
 
 
 def _cast_shape(obj: object) -> build123d.Shape:
