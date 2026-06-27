@@ -64,6 +64,19 @@ function createJsonRequest({
 }
 
 
+function createBinaryRequest({
+  method = "POST",
+  url,
+  body = Buffer.alloc(0),
+} = {}) {
+  const buffer = Buffer.isBuffer(body) ? body : Buffer.from(body);
+  const req = Readable.from([buffer]);
+  req.method = method;
+  req.url = url;
+  return req;
+}
+
+
 test("CAD Viewer API middleware awaits async backend catalog reads", async () => {
   const middleware = createCadViewerApiMiddleware({
     backend: {
@@ -499,44 +512,26 @@ test("CAD Viewer API middleware exports implicit CAD files through local backend
       changedRoots.push(root);
     },
   });
-  const req = createJsonRequest({
+  // The client meshes + serializes the implicit model and uploads the encoded
+  // bytes; the route forwards them to the backend (no JSON params, no
+  // server-side geometry).
+  const req = createBinaryRequest({
     url: "/__cad/implicit-export?file=implicit-cad%2Forb.implicit.js&format=glb",
-    body: {
-      parameterValues: { radius: 18 },
-      animationState: { activeId: "pulse", elapsedSec: 0.5 },
-      resolution: 40,
-      maxCells: 12345,
-    },
+    body: Buffer.from("fake-glb-bytes"),
   });
   const res = createResponse();
 
   await middleware(req, res, () => {});
 
   assert.equal(res.statusCode, 200);
-  assert.deepEqual(
-    calls.map((call) => ({
-      fileRef: call.fileRef,
-      format: call.format,
-      parameterValues: call.parameterValues,
-      animationState: call.animationState,
-      resolution: call.resolution,
-      maxCells: call.maxCells,
-      resolvedRoot: call.resolvedRoot,
-      rootDir: call.rootDir,
-      catalog: call.catalog,
-    })),
-    [{
-      fileRef: "implicit-cad/orb.implicit.js",
-      format: "glb",
-      parameterValues: { radius: 18 },
-      animationState: { activeId: "pulse", elapsedSec: 0.5 },
-      resolution: 40,
-      maxCells: 12345,
-      resolvedRoot,
-      rootDir: "models",
-      catalog,
-    }],
-  );
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].fileRef, "implicit-cad/orb.implicit.js");
+  assert.equal(calls[0].format, "glb");
+  assert.ok(Buffer.isBuffer(calls[0].bytes));
+  assert.equal(calls[0].bytes.toString("utf8"), "fake-glb-bytes");
+  assert.deepEqual(calls[0].resolvedRoot, resolvedRoot);
+  assert.equal(calls[0].rootDir, "models");
+  assert.deepEqual(calls[0].catalog, catalog);
   assert.deepEqual(changedRoots, [resolvedRoot]);
   assert.deepEqual(JSON.parse(res.body), {
     ok: true,

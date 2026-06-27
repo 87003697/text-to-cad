@@ -1,0 +1,173 @@
+"""Render-artifact status/build for /__cad/artifact (the STEP component-GLB package).
+
+Mirrors renderArtifact.mjs + stepArtifactProvider.mjs + the STEP freshness in
+cadDirectoryScanner.mjs:
+
+- Non-STEP entries and generated `.step.py` entries are NOT owned by the STEP
+  provider (ownsEntry = /\\.(step|stp)$/i on entry.file) -> always READY (direct
+  render). Only imported `.step`/`.stp` get a freshness check.
+- Freshness for an imported `.step` is a PURE descriptor read (assembly.json +
+  component existence + stepHash compare) — no OCP. State machine:
+  ready | needs-build | generating | error.
+- The build (POST) shells out to `cadpy.step_artifact` exactly as Node does,
+  keeping OCP out of the server process (crash/memory isolation).
+"""
+
+from __future__ import annotations
+
+import json
+import os
+import re
+import subprocess
+import sys
+import time
+
+from . import scanner
+
+ARTIFACT_STATE_READY = "ready"
+ARTIFACT_STATE_NEEDS_BUILD = "needs-build"
+ARTIFACT_STATE_GENERATING = "generating"
+ARTIFACT_STATE_ERROR = "error"
+
+BUILDABLE_STEP_ARTIFACT_CODES = frozenset([
+    "missing_glb", "missing_step_topology", "missing_edge_topology",
+    "missing_surface_edge_attributes", "missing_selector_topology",
+    "missing_source_path", "missing_step_hash", "stale_step_artifact",
+    "unsupported_step_topology",
+])
+
+_STEP_ENTRY_RE = re.compile(r"\.(step|stp)$", re.IGNORECASE)
+_GENERATION_LOCK_SUFFIX = ".generation.lock.json"
+_LOCK_ACTIVE_MAX_AGE_MS = 30_000
+
+
+def owns_entry(entry) -> bool:
+    return bool(entry) and bool(_STEP_ENTRY_RE.search(str(entry.get("file") or "")))
+
+
+# --- pure freshness validation (imported .step component-GLB package) ---
+def _validate_assembly_package_artifact(repo_root, source_path, glb_path):
+    """Return (ok, code) — ok=True when fresh, else (False, <error_code>). None
+    if glb_path is not a package directory (legacy monolith GLB; treated as
+    missing by the caller)."""
+    if not os.path.isdir(glb_path):
+        return None
+    descriptor_path = os.path.join(glb_path, "assembly.json")
+    try:
+        with open(descriptor_path, "r", encoding="utf-8") as handle:
+            descriptor = json.load(handle)
+    except (OSError, ValueError):
+        return (False, "missing_step_topology")
+    if not descriptor or descriptor.get("kind") != "assembly-package":
+        return (False, "unsupported_step_topology")
+    components = descriptor.get("components") if isinstance(descriptor.get("components"), dict) else {}
+    for component in components.values():
+        ref = str((component or {}).get("glb") or "").strip()
+        component_path = os.path.join(glb_path, ref) if ref else ""
+        if not component_path or not os.path.isfile(component_path):
+            return (False, "missing_glb")
+    uses_python = str(descriptor.get("sourceKind", "step")).strip().lower() == "python"
+    if uses_python:
+        # Generated packages: source-closure mtime trigger. (Imported .step never
+        # hits this branch; generated .step.py entries aren't owned by the provider.)
+        identity = scanner._generator_source_path_from_metadata(
+            repo_root, descriptor.get("sourcePath"), scanner.PYTHON_GENERATOR_BY_KIND.get("step", "gen_step"),
+            os.path.dirname(glb_path),
+        )
+        if not identity["sourcePath"] or not identity["filePath"]:
+            return (False, "missing_source_path")
+        desc_stats = scanner._file_stats(descriptor_path)
+        closure = descriptor.get("sourceClosureFiles") if isinstance(descriptor.get("sourceClosureFiles"), list) else []
+        if desc_stats and closure:
+            model_folder = os.path.dirname(identity["filePath"])
+            for rel in closure:
+                st = scanner._file_stats(os.path.join(model_folder, str(rel or "")))
+                if st and st.st_mtime_ns > desc_stats.st_mtime_ns:
+                    return (False, "stale_step_artifact")
+        return (True, None)
+    # Imported STEP: the on-disk .step must still hash to descriptor.stepHash.
+    step_hash = str(descriptor.get("stepHash", "")).strip()
+    if scanner._file_stats(source_path):
+        current = scanner._sha256_file(source_path)
+        if current and step_hash and step_hash != current:
+            return (False, "stale_step_artifact")
+    return (True, None)
+
+
+def validate_step_freshness(repo_root, source_path):
+    """ok=True (fresh/ready) or (False, code). source_path is the entry's step
+    path; the package dir is inline_step_glb_artifact_path_for_source(source_path)."""
+    glb_path = scanner.inline_step_glb_artifact_path_for_source(source_path)
+    package = _validate_assembly_package_artifact(repo_root, source_path, glb_path)
+    if package is not None:
+        return package
+    # Legacy monolith GLB topology parsing is a TODO; a missing package reads as
+    # buildable missing_glb (the common pre-build state).
+    if not scanner._file_stats(glb_path):
+        return (False, "missing_glb")
+    return (False, "missing_step_topology")
+
+
+# --- generation lock reader (mirror of generationLock.mjs) ---
+def generation_lock_path(package_dir: str) -> str:
+    d = str(package_dir or "").strip()
+    if not d:
+        return ""
+    return os.path.join(os.path.dirname(d), "." + os.path.basename(d) + _GENERATION_LOCK_SUFFIX)
+
+
+def _process_alive(pid) -> bool:
+    try:
+        pid = int(pid)
+    except (TypeError, ValueError):
+        return False
+    if pid <= 0:
+        return False
+    try:
+        os.kill(pid, 0)
+        return True
+    except PermissionError:
+        return True
+    except OSError:
+        return False
+
+
+def generation_lock_active(lock_path: str, now_ms: float | None = None) -> bool:
+    if not lock_path:
+        return False
+    try:
+        with open(lock_path, "r", encoding="utf-8") as handle:
+            payload = json.load(handle)
+    except (OSError, ValueError):
+        return False
+    if not isinstance(payload, dict) or str(payload.get("status", "")).strip().lower() != "running":
+        return False
+    if not _process_alive(payload.get("pid")):
+        return False
+    stamp = str(payload.get("updatedAt") or payload.get("startedAt") or "")
+    updated_ms = _parse_iso_ms(stamp)
+    if updated_ms is None:
+        return True
+    now = now_ms if now_ms is not None else time.time() * 1000
+    return (now - updated_ms) <= _LOCK_ACTIVE_MAX_AGE_MS
+
+
+def await_generation_lock(lock_path: str, timeout_ms: float = 180_000, poll_ms: float = 400) -> bool:
+    """Wait until an in-flight build's lock clears; return True if cleared, False on timeout."""
+    deadline = time.time() * 1000 + timeout_ms
+    while generation_lock_active(lock_path) and time.time() * 1000 < deadline:
+        time.sleep(poll_ms / 1000)
+    return not generation_lock_active(lock_path)
+
+
+def _parse_iso_ms(value: str):
+    text = str(value or "").strip()
+    if not text:
+        return None
+    try:
+        from datetime import datetime
+        if text.endswith("Z"):
+            text = text[:-1] + "+00:00"
+        return datetime.fromisoformat(text).timestamp() * 1000
+    except (ValueError, OverflowError):
+        return None
