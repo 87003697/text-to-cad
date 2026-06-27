@@ -2245,9 +2245,13 @@ const CadViewer = forwardRef(function CadViewer({
   const defaultFloorMode = floorSettings.enabled === true
     ? THEME_FLOOR_MODES.STAGE
     : THEME_FLOOR_MODES.NONE;
-  const resolvedFloorMode = floorModeOverride
+  const baseFloorMode = floorModeOverride
     ? normalizeFloorMode(floorModeOverride, defaultFloorMode)
     : defaultFloorMode;
+  // Show the floor only in perspective projection; hide it in orthographic projection.
+  const resolvedFloorMode = normalizedProjection === CAMERA_PROJECTION.PERSPECTIVE
+    ? baseFloorMode
+    : THEME_FLOOR_MODES.NONE;
   const updateActiveGridHelper = useCallback((
     runtime,
     activeViewerTheme,
