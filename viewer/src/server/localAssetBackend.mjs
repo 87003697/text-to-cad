@@ -23,7 +23,7 @@ import { runPythonStepExport } from "./step/pythonStepExport.mjs";
 import { pickSaveDestination } from "./saveAsDialog.mjs";
 import { createRenderArtifactPipeline } from "./artifact/renderArtifact.mjs";
 import { createStepArtifactProvider } from "./artifact/stepArtifactProvider.mjs";
-import { exportImplicitCadFile, IMPLICIT_CAD_EXPORT_FORMATS } from "implicitjs/export";
+import { IMPLICIT_CAD_EXPORT_FORMATS } from "implicitjs/exportModel";
 import { pathIsImplicitCadSource } from "implicitjs/model";
 
 function toPosixPath(value) {
@@ -970,18 +970,22 @@ export function createLocalAssetBackend({
     };
   }
 
+  // The browser meshes + serializes the implicit model and uploads the encoded
+  // bytes; the backend only writes them beside the source and refreshes the
+  // catalog. No implicit-CAD geometry runtime runs on the server (the one
+  // formerly server-side JS geometry path), which keeps this backend portable.
   async function generateImplicitExport({
     fileRef,
     format = "glb",
-    parameterValues = null,
-    animationState = null,
-    resolution = 96,
-    maxCells = undefined,
+    bytes = null,
     resolvedRoot = resolveRoot(),
     rootDir: nextRootDir = defaultRootDir,
     catalog = null,
   } = {}) {
     const exportFormat = normalizedImplicitExportFormat(format);
+    if (!bytes || !bytes.length) {
+      throw new Error("Missing implicit CAD export payload");
+    }
     const inputPath = resolveImplicitCadFilePath(fileRef, {
       resolvedRoot,
       rootDir: nextRootDir,
@@ -993,19 +997,15 @@ export function createLocalAssetBackend({
       .replace(/\.(?:mjs|js)$/i, `.${exportFormat}`);
     const outputPath = path.join(path.dirname(inputPath), outputFilename);
     ensurePathInsideRoot(outputPath, resolvedRoot);
-    const result = await exportImplicitCadFile({
-      input: inputPath,
-      output: outputPath,
-      format: exportFormat,
-      params: parameterValues,
-      animationState,
-      resolution,
-      maxCells,
-    });
+    fs.mkdirSync(path.dirname(outputPath), { recursive: true });
+    fs.writeFileSync(outputPath, bytes);
     const nextCatalog = refreshCatalogForPath({ rootDir: nextRootDir, filePath: outputPath });
     const outputFileRef = path.relative(resolvedRoot.rootPath, outputPath).split(path.sep).join("/");
     return {
-      ...result,
+      ok: true,
+      output: outputPath,
+      format: exportFormat,
+      bytes: bytes.length,
       outputFileRef,
       filename: path.basename(outputPath),
       catalog: nextCatalog,

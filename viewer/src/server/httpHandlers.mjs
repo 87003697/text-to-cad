@@ -122,6 +122,25 @@ function readJsonBody(req, { limitBytes = 256 * 1024 } = {}) {
   });
 }
 
+function readBinaryBody(req, { limitBytes = 64 * 1024 * 1024 } = {}) {
+  return new Promise((resolve, reject) => {
+    const chunks = [];
+    let size = 0;
+    req.on("data", (chunk) => {
+      const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+      size += buffer.length;
+      if (size > limitBytes) {
+        reject(new Error("Request body is too large"));
+        req.destroy?.();
+        return;
+      }
+      chunks.push(buffer);
+    });
+    req.on("error", reject);
+    req.on("end", () => resolve(Buffer.concat(chunks)));
+  });
+}
+
 function fileAssetRequest(backend, requestUrl, {
   rootDir,
   catalog,
@@ -440,19 +459,24 @@ export function createCadViewerApiMiddleware({
         return;
       }
       try {
-        const body = await readJsonBody(req);
+        // Geometry runs client-side now: the browser meshes + serializes the
+        // implicit model and uploads the encoded bytes here. The backend just
+        // writes them beside the source and refreshes the catalog — no JS
+        // geometry runtime on the server.
+        const bytes = await readBinaryBody(req);
+        if (!bytes || bytes.length === 0) {
+          sendJson(res, 400, { ok: false, error: "Missing implicit CAD export payload" });
+          return;
+        }
         const catalog = await backend.readCatalog({ rootDir: activeRootDir, fileRef: activeFileRef });
         const resolvedRoot = typeof backend.resolveRequestRoot === "function"
           ? backend.resolveRequestRoot({ rootDir: activeRootDir, fileRef: activeFileRef })
           : backend.resolveRoot(activeRootDir);
-        const format = requestUrl.searchParams.get("format") || body.format || "glb";
+        const format = requestUrl.searchParams.get("format") || "glb";
         const result = await backend.generateImplicitExport({
-          fileRef: activeFileRef || body.file,
+          fileRef: activeFileRef,
           format,
-          parameterValues: body.parameterValues || body.params || null,
-          animationState: body.animationState || body.implicitAnimationState || null,
-          resolution: body.resolution,
-          maxCells: body.maxCells,
+          bytes,
           resolvedRoot,
           rootDir: activeRootDir,
           catalog,

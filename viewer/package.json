@@ -6,7 +6,9 @@
   "scripts": {
     "dev": "vite dev",
     "agent:start": "node scripts/start-agent-viewer.mjs",
+    "agent:start:py": "node scripts/start-agent-viewer-py.mjs",
     "serve": "node src/server/server.mjs",
+    "serve:py": "python3 -m server_py.server",
     "start": "node src/server/server.mjs",
     "moveit2:setup": "moveit2_server/setup.sh",
     "moveit2:check": "moveit2_server/check-moveit2-server.sh",
