@@ -762,7 +762,6 @@ export default function StepFileSheet({
   }
 
   const sections = [
-    buildFileStatusTab(statusItems),
     {
       id: treeSectionId,
       title: "Tree",
@@ -1569,7 +1568,11 @@ export default function StepFileSheet({
               </FileSheetSectionBody>
       )
     } : null,
-    ...themeTabs
+    ...themeTabs,
+    // "Issues" is a diagnostic shown only when there are warnings/errors, so it trails the
+    // content + display tabs as the last item in the top section (null when there are none;
+    // the surface filters falsy tabs).
+    buildFileStatusTab(statusItems)
   ];
 
   return (

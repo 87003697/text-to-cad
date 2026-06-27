@@ -7,12 +7,12 @@ import {
 } from "@/components/ui/dropdown-menu";
 import {
   STEP_EXPORT_FORMATS,
-  isImportedStepEntry,
   stepExportItemLabel
 } from "@/workbench/stepExport";
 
-// Dedicated "download" icon dropdown for exporting the open STEP/assembly model to
-// STEP/3MF/STL/GLB. Hidden unless a STEP/assembly entry is selected and export is wired.
+// Dedicated "download" icon dropdown for exporting the open STEP model (part, assembly, or
+// imported STEP) to STEP/3MF/STL/GLB. Hidden unless a STEP-backed entry is selected and export
+// is wired.
 // Lives in the viewer floating toolbar (styled via triggerClassName, like DisplayProjectionControl).
 export function StepExportDropdown({
   selectedEntry,
@@ -25,12 +25,11 @@ export function StepExportDropdown({
   contentSideOffset = 6
 }) {
   const kind = String(selectedEntry?.kind || "").trim().toLowerCase();
-  const isStepEntry = kind === "step" || kind === "assembly";
+  const isStepEntry = kind === "step" || kind === "assembly" || kind === "part";
   if (!selectedEntry || !isStepEntry || typeof onExportStepFile !== "function") {
     return null;
   }
   const fileRef = String(selectedEntry?.file || selectedEntry?.id || "").trim();
-  const imported = isImportedStepEntry(selectedEntry);
   const label = "Export model";
   return (
     <DropdownMenu>
@@ -65,7 +64,7 @@ export function StepExportDropdown({
                 onExportStepFile(selectedEntry, format);
               }}
             >
-              <span className="min-w-0 truncate">{stepExportItemLabel(format, { imported })}</span>
+              <span className="min-w-0 truncate">{stepExportItemLabel(format)}</span>
             </DropdownMenuItem>
           );
         })}

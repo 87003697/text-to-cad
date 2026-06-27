@@ -21,14 +21,14 @@ export function isImportedStepEntry(entry) {
   return !(entry?.source && entry.source.sourcePath);
 }
 
-// Menu label for one export format. For an imported entry, "STEP" reads as "Download STEP"
-// (it's the original file); every other case is "Export to <FORMAT>".
-export function stepExportItemLabel(format, { imported = false } = {}) {
+// Menu label for one export format. STEP is the model's native type, so it always reads as
+// "Download STEP"; every other format is "Export <FORMAT>".
+export function stepExportItemLabel(format) {
   const normalized = String(format || "").trim().toLowerCase();
-  if (normalized === "step" && imported) {
+  if (normalized === "step") {
     return "Download STEP";
   }
-  return `Export to ${stepExportFormatLabel(normalized)}`;
+  return `Export ${stepExportFormatLabel(normalized)}`;
 }
 
 function normalizedFileRef(value) {
