@@ -7,5 +7,9 @@ src-tauri/gen/
 src-tauri/python/
 src-tauri/binaries/
 
+# App icons are generated from a source logo via `npm run tauri icon <logo>`
+# (one-time setup, see README) — provide a real logo; the placeholders aren't committed.
+src-tauri/icons/
+
 # Node
 node_modules/

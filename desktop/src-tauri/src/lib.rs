@@ -13,7 +13,6 @@
 //! but has not been `cargo build`-verified in this environment (no Rust toolchain).
 //! Build/verify at the Phase-0 gate: `npm --prefix desktop run tauri build`.
 
-use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::time::Duration;
 
@@ -38,32 +37,21 @@ fn models_dir() -> String {
         .unwrap_or_else(|| ".".to_string())
 }
 
-/// Locate the bundled venv's site-packages (where cadpy / OCP / build123d install).
-/// The sidecar interpreter is relocated out of the venv, so it cannot find these on
-/// its own — we add them to PYTHONPATH explicitly. Handles the posix
-/// (`lib/python3.X/site-packages`) and Windows (`Lib/site-packages`) layouts.
-fn venv_site_packages(venv: &Path) -> Option<PathBuf> {
-    let windows = venv.join("Lib").join("site-packages");
-    if windows.is_dir() {
-        return Some(windows);
-    }
-    for entry in std::fs::read_dir(venv.join("lib")).ok()?.flatten() {
-        if entry.file_name().to_string_lossy().starts_with("python3") {
-            let sp = entry.path().join("site-packages");
-            if sp.is_dir() {
-                return Some(sp);
-            }
-        }
-    }
-    None
-}
-
 fn show_error(app: &tauri::AppHandle, message: impl Into<String>) {
     app.dialog()
         .message(message.into())
         .title("CAD Viewer")
         .kind(MessageDialogKind::Error)
         .show(|_| {});
+}
+
+/// Build the viewer URL for `base` (the dev server or the announced loopback URL)
+/// with the model root as `?dir=` so the workspace is populated — the SPA reads
+/// `?dir=<absolute-model-root>` to choose the catalog.
+fn url_with_dir(base: &str) -> Option<tauri::Url> {
+    format!("{}/?dir={}", base.trim_end_matches('/'), models_dir())
+        .parse()
+        .ok()
 }
 
 /// Spawn the Python backend sidecar and navigate the main window to the loopback
@@ -74,17 +62,12 @@ fn start_backend(app: &tauri::AppHandle) -> Result<(), Box<dyn std::error::Error
     let resource_dir = app.path().resource_dir()?;
     let runtime_dir = resource_dir.join("runtime");
     let dist_root = runtime_dir.join("dist");
-    let venv = runtime_dir.join(".venv");
 
-    // The sidecar binary is the relocated venv interpreter; it resolves server_py via
-    // the runtime root and the third-party packages (cadpy/OCP/build123d) via the
-    // venv site-packages. PYTHONHOME points it at the venv as a fallback. The EXACT
-    // relocation env is the Phase-0 packaging gate (desktop/README.md).
-    let mut pythonpath = runtime_dir.to_string_lossy().into_owned();
-    if let Some(site) = venv_site_packages(&venv) {
-        pythonpath = format!("{}{}{}", pythonpath, sep(), site.to_string_lossy());
-    }
-
+    // The sidecar is a launcher shim (scripts/desktop/build-python-runtime.sh): it
+    // finds the bundled runtime relative to itself, puts server_py + site-packages on
+    // PYTHONPATH, and execs the self-contained interpreter (which self-resolves its
+    // libpython + stdlib). So the shell here only passes the server args — the shim
+    // owns the Python environment.
     let args: Vec<String> = vec![
         "-m".into(),
         "server_py.server".into(),
@@ -102,8 +85,6 @@ fn start_backend(app: &tauri::AppHandle) -> Result<(), Box<dyn std::error::Error
         .shell()
         .sidecar("cad-viewer-backend")?
         .current_dir(runtime_dir.clone())
-        .env("PYTHONPATH", pythonpath)
-        .env("PYTHONHOME", venv.to_string_lossy().into_owned())
         .args(args);
 
     let (mut rx, child) = command.spawn()?;
@@ -131,8 +112,8 @@ fn start_backend(app: &tauri::AppHandle) -> Result<(), Box<dyn std::error::Error
 
         match tokio::time::timeout(BACKEND_STARTUP_TIMEOUT, read_url).await {
             Ok(Some(url)) => {
-                match (url.parse::<tauri::Url>(), handle.get_webview_window("main")) {
-                    (Ok(parsed), Some(window)) => {
+                match (url_with_dir(&url), handle.get_webview_window("main")) {
+                    (Some(parsed), Some(window)) => {
                         let _ = window.navigate(parsed);
                     }
                     _ => show_error(&handle, "The CAD backend announced an unusable URL."),
@@ -162,15 +143,6 @@ fn start_backend(app: &tauri::AppHandle) -> Result<(), Box<dyn std::error::Error
     Ok(())
 }
 
-#[cfg(windows)]
-fn sep() -> &'static str {
-    ";"
-}
-#[cfg(not(windows))]
-fn sep() -> &'static str {
-    ":"
-}
-
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -187,13 +159,22 @@ pub fn run() {
             // NOTE: capabilities/default.json's shell:allow-spawn allowlist gates the
             // JS Command API, not this trusted Rust ShellExt call (which is unrestricted
             // by design); the allowlist stands as deployment/audit policy.
-            if !cfg!(debug_assertions) {
-                if let Err(err) = start_backend(app.handle()) {
-                    show_error(
-                        app.handle(),
-                        format!("Could not start the CAD backend: {err}"),
-                    );
+            // `is_dev()` (NOT debug_assertions) distinguishes `tauri dev` from a bundled
+            // app — a `tauri build --debug` bundle still has debug_assertions on but must
+            // take the sidecar path.
+            if tauri::is_dev() {
+                // dev: the conf window already loaded the vite devUrl; re-point it at
+                // the same server WITH the model root so the workspace populates.
+                if let (Some(window), Some(url)) =
+                    (app.get_webview_window("main"), url_with_dir("http://localhost:5173"))
+                {
+                    let _ = window.navigate(url);
                 }
+            } else if let Err(err) = start_backend(app.handle()) {
+                show_error(
+                    app.handle(),
+                    format!("Could not start the CAD backend: {err}"),
+                );
             }
             Ok(())
         })
