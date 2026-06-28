@@ -1,0 +1,11 @@
+# Tauri / Rust build output
+src-tauri/target/
+src-tauri/gen/
+
+# Generated, per-platform Python runtime + sidecar binary (built by
+# scripts/desktop/build-python-runtime.sh; never committed — large + platform-specific)
+src-tauri/python/
+src-tauri/binaries/
+
+# Node
+node_modules/

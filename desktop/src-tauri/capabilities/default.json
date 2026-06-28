@@ -1,0 +1,33 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "Capabilities for the CAD Viewer desktop shell: run the bundled Python backend sidecar and use native OS dialogs/openers.",
+  "windows": ["main"],
+  "permissions": [
+    "core:default",
+    "dialog:default",
+    "opener:default",
+    {
+      "identifier": "shell:allow-spawn",
+      "allow": [
+        {
+          "name": "binaries/cad-viewer-backend",
+          "sidecar": true,
+          "args": [
+            "-m",
+            "server_py.server",
+            "--dir",
+            { "validator": "\\S+" },
+            "--host",
+            "127.0.0.1",
+            "--port",
+            "0",
+            "--announce-url",
+            "--dist-root",
+            { "validator": "\\S+" }
+          ]
+        }
+      ]
+    }
+  ]
+}
