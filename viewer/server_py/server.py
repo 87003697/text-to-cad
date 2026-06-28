@@ -11,9 +11,9 @@ Run: python -m server_py.server --dir <abs-models-root> [--port N] [--host H]
 
 Security / trust model: binds to loopback (127.0.0.1) and serves UNAUTHENTICATED.
 Any local process can read files under --dir (GET /__cad/asset), trigger STEP
-builds/exports, and activate directories. This is intended for single-user dev /
-desktop (Tauri) use, where loopback binding is the trust boundary. Do NOT bind a
-non-loopback --host or expose this server beyond localhost without adding auth.
+builds/exports, and activate directories. This is a single-user, local-filesystem
+viewer where loopback binding is the trust boundary. Do NOT bind a non-loopback
+--host or expose this server beyond localhost without adding auth.
 """
 
 from __future__ import annotations
@@ -366,12 +366,6 @@ def main(argv=None):
     parser.add_argument("--port", type=int, default=server_info_mod.DEFAULT_VIEWER_PORT)
     parser.add_argument("--host", default=server_info_mod.DEFAULT_VIEWER_HOST)
     parser.add_argument("--dist-root", default="", help="built SPA dist directory (serve mode)")
-    parser.add_argument(
-        "--announce-url",
-        action="store_true",
-        help="Print a machine-readable 'CAD_VIEWER_URL=<url>' line on stdout once bound. "
-        "The desktop (Tauri) shell reads this to discover the ephemeral loopback URL.",
-    )
     args = parser.parse_args(argv)
 
     directory_root = os.path.abspath(args.dir or os.getcwd())
@@ -379,25 +373,18 @@ def main(argv=None):
     # viewer app root is the parent of this server_py package -> dist is <viewer>/dist.
     viewer_app_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     _Ctx.dist_root = os.path.abspath(args.dist_root) if args.dist_root else os.path.join(viewer_app_root, "dist")
-    # --port 0 binds an ephemeral port (the desktop shell uses this and reads the
-    # actual URL back from the announce line); any other value is normalized.
-    _Ctx.port = 0 if args.port == 0 else server_info_mod.normalize_viewer_port(args.port)
+    _Ctx.port = server_info_mod.normalize_viewer_port(args.port)
     _Ctx.host = args.host
     _Ctx.backend = backend_mod.LocalAssetBackend(directory_root=directory_root, root_dir=directory_root)
 
     httpd = ThreadingHTTPServer((args.host, _Ctx.port), Handler)
-    # Resolve the actually-bound port so --port 0 (ephemeral) reports its real port
-    # in the registry, the announce line, and the human log.
-    _Ctx.port = httpd.server_address[1]
     # Self-register so the launcher/skill can discover this server for reuse, and
     # deregister on exit (matches viewerServerRegistry semantics).
     info = _server_info("")
     registry_mod.write_registry(info)
     import atexit
     atexit.register(lambda: registry_mod.remove_registry_entry(info))
-    if args.announce_url:
-        print(f"CAD_VIEWER_URL=http://{args.host}:{_Ctx.port}/", flush=True)
-    print(f"Python CAD Viewer backend listening on http://{args.host}:{_Ctx.port}/ (local-fs)", flush=True)
+    print(f"Python CAD Viewer backend listening on http://{args.host}:{_Ctx.port}/ (local-fs)")
     try:
         httpd.serve_forever()
     except KeyboardInterrupt:

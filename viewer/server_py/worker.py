@@ -10,8 +10,8 @@ uses), passing ``reset_runtime_closure=True`` so repeated warm builds record the
 identical source closure a cold CLI would.
 
 There is NO process channel back to the agent's STEP CLI: this worker is a peer
-entrypoint that calls the shared cadpy functions directly. The same binary is the
-dev/web server's build/export backend AND the Tauri desktop sidecar.
+entrypoint that calls the shared cadpy functions directly. It is the web viewer
+server's build/export backend.
 
 Protocol — newline-delimited JSON-RPC 2.0 on stdio:
   request : {"jsonrpc":"2.0","id":N,"method":"invoke",
