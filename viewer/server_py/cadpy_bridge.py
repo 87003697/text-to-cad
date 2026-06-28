@@ -6,7 +6,6 @@ isolation, same as the Node backend). Two execution paths share one contract,
 
 * warm worker (default): a persistent :mod:`server_py.worker` subprocess imports
   OCP once and services every build/export in-process — no per-request cold start.
-  This is also the Tauri desktop sidecar engine.
 * cold subprocess (fallback): a fresh ``python -m <module>`` per request, used when
   the worker is disabled (``VIEWER_CAD_WORKER=0``) or a worker transport fault
   occurs. Always available, fully isolated.
