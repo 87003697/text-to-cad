@@ -194,37 +194,60 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def export_model_to_path(
+    *,
+    repo_root: Path,
+    step: Path,
+    fmt: str,
+    out: Path,
+    source_path: Path | None = None,
+    mesh_tolerance: float | None = None,
+    mesh_angular_tolerance: float | None = None,
+    logger: CliLogger | None = None,
+) -> dict[str, object]:
+    """Export one CAD model to STEP/STL/3MF/GLB at ``out`` and RETURN
+    {ok, path, filename, format}. Single source of truth, callable in-process by a
+    warm-OCCT worker AND wrapped by main(); it RAISES on error so callers map their
+    own protocol (the CLI shell keeps the {ok:false,error} JSON envelope)."""
+    if logger is None:
+        logger = CliLogger("step-export", verbose=False)
+    repo_root = Path(repo_root).expanduser().resolve()
+    step_path = Path(step).expanduser().resolve()
+    source_path = Path(source_path).expanduser().resolve() if source_path else None
+    out = Path(out).expanduser().resolve()
+    mesh_tolerance = normalize_mesh_numeric(mesh_tolerance, field_name="mesh_tolerance")
+    mesh_angular_tolerance = normalize_mesh_numeric(mesh_angular_tolerance, field_name="mesh_angular_tolerance")
+    spec, scene = _resolve_spec_and_scene(
+        repo_root,
+        step_path,
+        source_path,
+        mesh_tolerance=mesh_tolerance,
+        mesh_angular_tolerance=mesh_angular_tolerance,
+        logger=logger,
+    )
+    selector_options = _selector_options_for_part(spec, scene=scene)
+    written = _export_scene(fmt, spec, scene, out, selector_options)
+    return {"ok": True, "path": str(written), "filename": written.name, "format": fmt}
+
+
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     logger = CliLogger("step-export", verbose=bool(args.verbose))
     try:
-        repo_root = Path(args.repo_root).expanduser().resolve()
-        step_path = Path(args.step).expanduser().resolve()
-        source_path = Path(args.source_path).expanduser().resolve() if args.source_path else None
-        out = Path(args.out).expanduser().resolve()
-        mesh_tolerance = normalize_mesh_numeric(args.mesh_tolerance, field_name="mesh_tolerance")
-        mesh_angular_tolerance = normalize_mesh_numeric(
-            args.mesh_angular_tolerance, field_name="mesh_angular_tolerance"
-        )
-        spec, scene = _resolve_spec_and_scene(
-            repo_root,
-            step_path,
-            source_path,
-            mesh_tolerance=mesh_tolerance,
-            mesh_angular_tolerance=mesh_angular_tolerance,
+        payload = export_model_to_path(
+            repo_root=Path(args.repo_root),
+            step=Path(args.step),
+            fmt=args.format,
+            out=Path(args.out),
+            source_path=Path(args.source_path) if args.source_path else None,
+            mesh_tolerance=args.mesh_tolerance,
+            mesh_angular_tolerance=args.mesh_angular_tolerance,
             logger=logger,
         )
-        selector_options = _selector_options_for_part(spec, scene=scene)
-        written = _export_scene(args.format, spec, scene, out, selector_options)
-    except Exception as exc:  # noqa: BLE001 — surface a clean JSON error to the Node caller.
+    except Exception as exc:  # noqa: BLE001 — surface a clean JSON error to the CLI caller.
         print(json.dumps({"ok": False, "error": str(exc)}, separators=(",", ":")))
         return 1
-    print(
-        json.dumps(
-            {"ok": True, "path": str(written), "filename": written.name, "format": args.format},
-            separators=(",", ":"),
-        )
-    )
+    print(json.dumps(payload, separators=(",", ":")))
     logger.total()
     return 0
 
