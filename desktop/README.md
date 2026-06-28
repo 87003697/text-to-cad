@@ -102,15 +102,15 @@ npm --prefix . run build                    # -> .app / .dmg / .msi / .deb / .Ap
 
 OCP packaging is the highest-risk piece; prove it before investing in UI polish:
 
-1. `cadquery-ocp-novtk` installs and imports from a **relocated** venv (we drop
-   VTK because all rendering is in the JS frontend). `build-python-runtime.sh`
-   now runs this automatically: after building it copies `binaries/` + `runtime/`
-   to a fresh temp path and imports `cadpy, OCP, build123d` there with the exact
-   env `lib.rs` sets (`PYTHONHOME=<runtime>/.venv`, `PYTHONPATH=<runtime>:<venv
-   site-packages>`), failing the build if a moved bundle can't import. This is the
-   mechanism the copied interpreter relies on (the venv `pyvenv.cfg` does not
-   travel with a binary copied out of `bin/`, so the env — not the cfg — resolves
-   imports).
+1. `cadquery-ocp-novtk` installs (we drop VTK because all rendering is in the JS
+   frontend) and imports from a **relocated** bundle. `build-python-runtime.sh`
+   runs this automatically: after building it copies `binaries/` + `runtime/` to a
+   fresh temp path and imports `cadpy, OCP, build123d` there THROUGH THE SHIM,
+   failing the build if a moved bundle can't import. The bundle is self-contained —
+   the full python-build-standalone install (`runtime/cpython/`) + site-packages —
+   and `externalBin` is a launcher shim that execs the bundled interpreter, which
+   self-resolves its lib/stdlib (a bare venv binary cannot — see the verified
+   section). **Validated on macOS arm64.**
 2. A real STEP build runs from the bundled interpreter
    (`python -m cadpy.step_artifact …` against a fixture) and matches the agent
    CLI byte-for-byte.
@@ -150,20 +150,36 @@ relocation (bundling `python.exe` + its DLLs) is the least-validated path.
   handshake `lib.rs` performs.
 - The packaging script's structure, arg handling, and toolchain checks.
 
-**Hardened** (from the scaffold review — surfaced to the user, not a silent spinner):
-- `lib.rs` no longer swallows backend failures: a spawn error, a 30s startup
-  timeout, an exit-before-announce, or a post-navigation crash each raise a native
-  error dialog (`tauri-plugin-dialog`) instead of leaving the window on the splash.
-- The splash detects standalone-open and a slow start, and explains itself.
-- The packaging env resolves the relocated interpreter's imports (PYTHONHOME +
-  explicit venv site-packages on PYTHONPATH), validated by the relocated smoke test.
-- `server_py` documents its loopback, no-auth trust model.
+**Built + run for real on macOS arm64** (rustup 1.96 + uv 0.11.25, this machine):
+- `lib.rs` compiles against the Tauri 2 crates; `cargo build` + `tauri build --debug`
+  produce `CAD Viewer.app` (+ `.dmg`).
+- **The interpreter-relocation problem is SOLVED.** A uv venv is not self-contained
+  (its `python3` finds `libpython`/stdlib relative to the pbs base — copying the bare
+  binary dies with `dyld: libpython3.12.dylib not loaded`). The fix: bundle the FULL
+  self-contained python-build-standalone install (`runtime/cpython/`) + the
+  site-packages, and make `externalBin` a **launcher shim** (a `/bin/sh` script) that
+  finds the runtime next to itself (`../runtime` in the smoke test, `../Resources/
+  runtime` in the `.app`), sets `PYTHONPATH`, and execs the bundled interpreter — which
+  self-resolves its lib/stdlib. The relocated smoke test passes; inside the built
+  `.app` the shim imports `cadpy, OCP, build123d` and runs the backend.
+- End-to-end packaged launch works: `open CAD Viewer.app` → spawns the bundled
+  sidecar → backend on an ephemeral loopback port → window navigates to it with
+  `?dir=<models>` → the 265-model workspace renders, served by the app's own warm
+  worker. `tauri::is_dev()` (not `debug_assertions`) gates dev vs bundled so a
+  `--debug` bundle still takes the sidecar path.
+- Failure hardening (from the scaffold review): spawn error / 30s startup timeout /
+  exit-before-announce / post-nav crash each raise a native error dialog instead of a
+  silent spinner; the splash explains a standalone-open / slow start. `server_py`
+  documents its loopback, no-auth trust model.
 
-**Gated** (needs `cargo`/`tauri`/`uv`, build at the gate above):
-- Compiling `lib.rs` against the Tauri 2 crates (the robustness rewrite is written
-  to the APIs but not `cargo build`-verified here).
-- Relocating the venv + signing/notarizing OCP dylibs (the smoke test now *catches*
-  relocation import failures; signing/notarization still needs a mac runner).
-- The end-to-end packaged app launch.
-- Remaining minor polish: a React error boundary in the SPA for catastrophic
-  render failures (backend-connectivity errors are already handled in-app).
+**Still gated** (needs a real signing identity / other runners):
+- macOS **codesigning + notarization** of the bundled OCP/cpython dylibs (the local
+  `.app` is unsigned/ad-hoc — fine to run locally, not for distribution).
+- The **Windows + Linux** legs of `build-python-runtime.sh` — the self-contained-runtime
+  + shim redesign is implemented for posix/macOS; Windows still errors out (it needs the
+  Windows cpython layout + a `.bat`/`.exe` shim), and Linux is built-but-unrun-here.
+- App icons: generated from a logo via `npm run tauri icon <logo>` (one-time, see
+  above); only a placeholder was used here, so `src-tauri/icons/` is gitignored and CI
+  needs real icons (or an icon step).
+- Remaining minor polish: a React error boundary in the SPA for catastrophic render
+  failures (backend-connectivity errors are already handled in-app).

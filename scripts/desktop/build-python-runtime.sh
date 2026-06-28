@@ -130,35 +130,67 @@ else
   log "WARNING: viewer/dist not found — run the viewer build first so the SPA ships."
 fi
 
-log "placing the sidecar interpreter as binaries/$BIN_NAME"
-# Tauri externalBin requires a real binary named with the target-triple suffix
-# (and .exe on Windows).
-[ -f "$VENV_DIR/$VENV_PY_REL" ] || die "venv interpreter not found at $VENV_DIR/$VENV_PY_REL (target $TARGET_TRIPLE)"
-cp "$VENV_DIR/$VENV_PY_REL" "$OUT_DIR/binaries/$BIN_NAME"
+case "$TARGET_TRIPLE" in
+  *windows*)
+    die "Windows packaging is not yet ported to the self-contained-runtime + shim design (it needs the Windows cpython layout + a .bat/.exe shim). Build mac/linux for now."
+    ;;
+esac
+
+# Bundle the FULL self-contained python-build-standalone interpreter (bin + lib +
+# stdlib) so libpython and the stdlib resolve relative to the interpreter wherever
+# the app ends up installed. A uv VENV is NOT self-contained — its python is a stub
+# that references the pbs BASE install — so copying the venv binary breaks with a
+# dyld "libpython not loaded" error once moved. We bundle the base install instead,
+# located via the venv's pyvenv.cfg `home` (= the pbs bin dir).
+PBS_BIN="$(grep -E '^home[[:space:]]*=' "$VENV_DIR/pyvenv.cfg" | head -1 | cut -d= -f2- | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
+PBS_ROOT="$(dirname "$PBS_BIN")"
+[ -x "$PBS_ROOT/bin/python3" ] || die "python-build-standalone install not found at $PBS_ROOT (from $VENV_DIR/pyvenv.cfg)"
+log "bundling the self-contained interpreter from $PBS_ROOT"
+rsync -a "$PBS_ROOT/" "$OUT_DIR/runtime/cpython/"
+
+VENV_SITE="$(venv_site_packages "$VENV_DIR")"
+[ -n "$VENV_SITE" ] || die "venv site-packages not found under $VENV_DIR"
+log "bundling site-packages (cadpy + OCP + build123d)"
+rsync -a "$VENV_SITE/" "$OUT_DIR/runtime/site-packages/"
+rm -rf "$VENV_DIR"  # the non-self-contained venv is not shipped
+
+# externalBin = a launcher shim. Tauri copies the externalBin into the .app's
+# Contents/MacOS/, separating it from its sibling resources, so the sidecar CANNOT be
+# the interpreter itself (it would lose its ../lib). The shim finds the runtime next
+# to itself (smoke-test layout: ../runtime) or one level up (the .app: ../Resources/
+# runtime), puts server_py + site-packages on PYTHONPATH, and execs the bundled
+# interpreter — which self-resolves its libpython/stdlib.
+log "writing launcher shim binaries/$BIN_NAME"
+cat > "$OUT_DIR/binaries/$BIN_NAME" <<'SHIM'
+#!/bin/sh
+here=$(cd "$(dirname "$0")" && pwd)
+for rt in "$here/../runtime" "$here/../Resources/runtime"; do
+  if [ -x "$rt/cpython/bin/python3" ]; then
+    PYTHONPATH="$rt:$rt/site-packages${PYTHONPATH:+:$PYTHONPATH}"
+    export PYTHONPATH
+    exec "$rt/cpython/bin/python3" "$@"
+  fi
+done
+echo "cad-viewer-backend: bundled python runtime not found near $here" >&2
+exit 1
+SHIM
 chmod +x "$OUT_DIR/binaries/$BIN_NAME"
 
-# RELOCATED smoke test — the critical gate. The interpreter is copied OUT of the
-# venv, so importing cadpy/OCP/build123d only works if the runtime env (PYTHONHOME +
-# the venv site-packages on PYTHONPATH) resolves them from a MOVED location. Running
-# the test in-place would pass even when the bundled app fails on the user's machine,
-# so we copy binaries/ + runtime/ to a fresh path and import there, mirroring exactly
-# the env desktop/src-tauri/src/lib.rs sets at runtime.
+# RELOCATED smoke test — the critical gate. Copy binaries/ + runtime/ to a fresh path
+# and import there THROUGH THE SHIM, exactly as the bundled .app would. Fails the
+# build (not the user's launch) if the relocated runtime cannot import.
 log "relocated smoke test (simulates the bundled app on a user machine)"
 SMOKE_TMP="$(mktemp -d)"
 cp -R "$OUT_DIR/binaries" "$SMOKE_TMP/binaries"
 cp -R "$OUT_DIR/runtime" "$SMOKE_TMP/runtime"
-SMOKE_VENV="$SMOKE_TMP/runtime/.venv"
-SMOKE_SITE="$(venv_site_packages "$SMOKE_VENV")"
-[ -n "$SMOKE_SITE" ] || die "site-packages not found in relocated venv $SMOKE_VENV (target $TARGET_TRIPLE)"
-if PYTHONHOME="$SMOKE_VENV" PYTHONPATH="$SMOKE_TMP/runtime:$SMOKE_SITE" \
-     "$SMOKE_TMP/binaries/$BIN_NAME" -c 'import cadpy, OCP, build123d; print("relocated engine OK")'; then
+if "$SMOKE_TMP/binaries/$BIN_NAME" -c 'import cadpy, OCP, build123d; print("relocated engine OK")'; then
   log "relocated smoke test PASSED"
   rm -rf "$SMOKE_TMP"
 else
   log "ERROR: relocated smoke test FAILED — the bundled runtime cannot import from a moved path."
   log "The packaged desktop app would crash on launch. Inspect: $SMOKE_TMP"
-  log "(env mirrors desktop/src-tauri/src/lib.rs: PYTHONHOME=<runtime>/.venv, PYTHONPATH=<runtime>:<site-packages>)"
   exit 1
 fi
 
-log "done. Sidecar: $OUT_DIR/binaries/$BIN_NAME  Resources: $OUT_DIR/runtime/"
+log "done. Sidecar shim: $OUT_DIR/binaries/$BIN_NAME"
+log "Runtime: $OUT_DIR/runtime/ (cpython + site-packages + server_py + dist)"
