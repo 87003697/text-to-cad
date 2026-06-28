@@ -3,11 +3,13 @@
 Mirrors renderArtifact.mjs + stepArtifactProvider.mjs + the STEP freshness in
 cadDirectoryScanner.mjs:
 
-- Non-STEP entries and generated `.step.py` entries are NOT owned by the STEP
-  provider (ownsEntry = /\\.(step|stp)$/i on entry.file) -> always READY (direct
-  render). Only imported `.step`/`.stp` get a freshness check.
-- Freshness for an imported `.step` is a PURE descriptor read (assembly.json +
-  component existence + stepHash compare) — no OCP. State machine:
+- Non-STEP entries are NOT owned by the STEP provider (ownsEntry on entry.file).
+  Imported `.step`/`.stp` AND generated `.step.py` entries ARE owned and get a
+  freshness check; a generated model with no built artifact reports `needs-build`
+  and is built on demand (the viewer surfaces every generated model, built or not).
+- Freshness is a PURE descriptor read (assembly.json + component existence; the
+  imported `.step` also compares stepHash, the generated `.step.py` checks the
+  source-closure mtimes) — no OCP. State machine:
   ready | needs-build | generating | error.
 - The build (POST) shells out to `cadpy.step_artifact` exactly as Node does,
   keeping OCP out of the server process (crash/memory isolation).
@@ -36,7 +38,8 @@ BUILDABLE_STEP_ARTIFACT_CODES = frozenset([
     "unsupported_step_topology",
 ])
 
-_STEP_ENTRY_RE = re.compile(r"\.(step|stp)$", re.IGNORECASE)
+# Owns imported `.step`/`.stp` and generated `.step.py`/`.stp.py` entries.
+_STEP_ENTRY_RE = re.compile(r"\.(step|stp)(\.py)?$", re.IGNORECASE)
 _GENERATION_LOCK_SUFFIX = ".generation.lock.json"
 _LOCK_ACTIVE_MAX_AGE_MS = 30_000
 
@@ -68,11 +71,12 @@ def _validate_assembly_package_artifact(repo_root, source_path, glb_path):
             return (False, "missing_glb")
     uses_python = str(descriptor.get("sourceKind", "step")).strip().lower() == "python"
     if uses_python:
-        # Generated packages: source-closure mtime trigger. (Imported .step never
-        # hits this branch; generated .step.py entries aren't owned by the provider.)
+        # Generated packages: source-closure mtime trigger. The descriptor's
+        # sourcePath + sourceClosureFiles are relative to the MODEL folder (the dir
+        # holding the .step.py = dirname(source_path)), NOT the __cadcache__ dir.
         identity = scanner._generator_source_path_from_metadata(
             repo_root, descriptor.get("sourcePath"), scanner.PYTHON_GENERATOR_BY_KIND.get("step", "gen_step"),
-            os.path.dirname(glb_path),
+            os.path.dirname(source_path),
         )
         if not identity["sourcePath"] or not identity["filePath"]:
             return (False, "missing_source_path")

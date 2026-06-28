@@ -46,11 +46,15 @@ def _write_package(root, step_name, *, source_kind="step", step_hash=None, compo
 
 
 class OwnsEntry(unittest.TestCase):
-    def test_only_imported_step_is_owned(self):
+    def test_step_and_generated_step_py_are_owned(self):
         self.assertTrue(artifact.owns_entry({"file": "/x/a.step"}))
         self.assertTrue(artifact.owns_entry({"file": "/x/a.STP"}))
-        self.assertFalse(artifact.owns_entry({"file": "/x/a.step.py"}))  # generated -> direct
+        # Generated models are owned too — they get the needs-build/build flow so a
+        # not-yet-built .step.py is listed and built on demand.
+        self.assertTrue(artifact.owns_entry({"file": "/x/a.step.py"}))
+        self.assertTrue(artifact.owns_entry({"file": "/x/a.STP.py"}))
         self.assertFalse(artifact.owns_entry({"file": "/x/a.stl"}))
+        self.assertFalse(artifact.owns_entry({"file": "/x/lib.py"}))  # plain .py is not a model
         self.assertFalse(artifact.owns_entry(None))
 
 
@@ -113,6 +117,68 @@ class GenerationLock(unittest.TestCase):
             lp = os.path.join(d, "x.lock.json")
             self._write_lock(lp, os.getpid(), status="done")
             self.assertFalse(artifact.generation_lock_active(lp))
+
+
+def _write_generated_package(root, py_name, *, closure_extra=None, with_package=True):
+    """A gen_step generator + optionally its generated component-GLB package
+    (sourceKind=python), keyed by the .step.py name like cadpy writes it."""
+    py_path = os.path.join(root, py_name)
+    with open(py_path, "w") as h:
+        h.write("def gen_step():\n    return None\n")
+    for rel in (closure_extra or []):
+        with open(os.path.join(root, rel), "w") as h:
+            h.write("# closure dep\n")
+    if not with_package:
+        return py_path, None
+    pkg = os.path.join(root, "__cadcache__", "models", py_name)
+    os.makedirs(os.path.join(pkg, "components"), exist_ok=True)
+    with open(os.path.join(pkg, "components", "c0.glb"), "wb") as h:
+        h.write(b"glTF\x02\x00\x00\x00")
+    descriptor = {
+        "kind": "assembly-package",
+        "sourceKind": "python",
+        "sourcePath": py_name,
+        "sourceClosureFiles": [py_name] + list(closure_extra or []),
+        "components": {"c0": {"glb": "components/c0.glb"}},
+    }
+    with open(os.path.join(pkg, "assembly.json"), "w") as h:
+        json.dump(descriptor, h)
+    return py_path, pkg
+
+
+class GeneratedStepFreshness(unittest.TestCase):
+    def test_built_generated_is_ready(self):
+        with tempfile.TemporaryDirectory() as root:
+            py, _ = _write_generated_package(root, "widget.step.py", closure_extra=["lib.py"])
+            ok, code = artifact.validate_step_freshness(root, py)
+            self.assertTrue(ok, code)
+
+    def test_unbuilt_generated_is_needs_build(self):
+        with tempfile.TemporaryDirectory() as root:
+            py, _ = _write_generated_package(root, "widget.step.py", with_package=False)
+            ok, code = artifact.validate_step_freshness(root, py)
+            self.assertFalse(ok)
+            self.assertIn(code, artifact.BUILDABLE_STEP_ARTIFACT_CODES)
+
+    def test_stale_when_closure_dep_newer(self):
+        import time
+        with tempfile.TemporaryDirectory() as root:
+            py, _ = _write_generated_package(root, "widget.step.py", closure_extra=["lib.py"])
+            time.sleep(0.01)
+            os.utime(os.path.join(root, "lib.py"), None)  # dep newer than the descriptor
+            ok, code = artifact.validate_step_freshness(root, py)
+            self.assertFalse(ok)
+            self.assertEqual(code, "stale_step_artifact")
+
+
+class ScannerListsGenerated(unittest.TestCase):
+    def test_unbuilt_step_py_is_collected(self):
+        with tempfile.TemporaryDirectory() as root:
+            py = os.path.join(root, "widget.step.py")
+            with open(py, "w") as h:
+                h.write("def gen_step():\n    return None\n")
+            # No __cadcache__ at all — it must still be listed (built on demand).
+            self.assertIn(py, scanner._collect_cad_source_files(root, []))
 
 
 if __name__ == "__main__":

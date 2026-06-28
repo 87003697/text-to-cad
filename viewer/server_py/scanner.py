@@ -259,8 +259,11 @@ def _collect_cad_source_files(root_path: str, result: list) -> list:
             continue
         extension = os.path.splitext(entry.name)[1].lower()
         if lower_name.endswith(".step.py"):
-            if _step_render_artifact_present(inline_step_glb_artifact_path_for_source(entry_path)):
-                result.append(entry_path)
+            # List generated models whether or not their render artifact has been
+            # built. An unbuilt one reports `needs-build` via /__cad/artifact and is
+            # built on demand when opened, so a fresh checkout shows ALL generated
+            # models (the __cadcache__ is gitignored), not only the pre-built ones.
+            result.append(entry_path)
             continue
         if extension in SOURCE_EXTENSIONS or path_is_implicit_cad_source(entry_path):
             result.append(entry_path)
