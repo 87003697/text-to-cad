@@ -114,5 +114,27 @@ log "placing the sidecar interpreter as binaries/$BIN_NAME"
 cp "$VENV_DIR/bin/python3" "$OUT_DIR/binaries/$BIN_NAME"
 chmod +x "$OUT_DIR/binaries/$BIN_NAME"
 
+# RELOCATED smoke test — the critical gate. The interpreter is copied OUT of the
+# venv, so importing cadpy/OCP/build123d only works if the runtime env (PYTHONHOME +
+# the venv site-packages on PYTHONPATH) resolves them from a MOVED location. Running
+# the test in-place would pass even when the bundled app fails on the user's machine,
+# so we copy binaries/ + runtime/ to a fresh path and import there, mirroring exactly
+# the env desktop/src-tauri/src/lib.rs sets at runtime.
+log "relocated smoke test (simulates the bundled app on a user machine)"
+SMOKE_TMP="$(mktemp -d)"
+cp -R "$OUT_DIR/binaries" "$SMOKE_TMP/binaries"
+cp -R "$OUT_DIR/runtime" "$SMOKE_TMP/runtime"
+SMOKE_VENV="$SMOKE_TMP/runtime/.venv"
+SMOKE_SITE="$(find "$SMOKE_VENV/lib" -maxdepth 1 -type d -name 'python3*' 2>/dev/null | head -1)/site-packages"
+if PYTHONHOME="$SMOKE_VENV" PYTHONPATH="$SMOKE_TMP/runtime:$SMOKE_SITE" \
+     "$SMOKE_TMP/binaries/$BIN_NAME" -c 'import cadpy, OCP, build123d; print("relocated engine OK")'; then
+  log "relocated smoke test PASSED"
+  rm -rf "$SMOKE_TMP"
+else
+  log "ERROR: relocated smoke test FAILED — the bundled runtime cannot import from a moved path."
+  log "The packaged desktop app would crash on launch. Inspect: $SMOKE_TMP"
+  log "(env mirrors desktop/src-tauri/src/lib.rs: PYTHONHOME=<runtime>/.venv, PYTHONPATH=<runtime>:<site-packages>)"
+  exit 1
+fi
+
 log "done. Sidecar: $OUT_DIR/binaries/$BIN_NAME  Resources: $OUT_DIR/runtime/"
-log "Smoke test:  $OUT_DIR/binaries/$BIN_NAME -c 'import cadpy, OCP, build123d; print(\"engine OK\")'"

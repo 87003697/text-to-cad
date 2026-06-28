@@ -8,6 +8,12 @@ GET /__cad/download, POST /__cad/directory/activate, POST /__cad/implicit-export
 phases).
 
 Run: python -m server_py.server --dir <abs-models-root> [--port N] [--host H]
+
+Security / trust model: binds to loopback (127.0.0.1) and serves UNAUTHENTICATED.
+Any local process can read files under --dir (GET /__cad/asset), trigger STEP
+builds/exports, and activate directories. This is intended for single-user dev /
+desktop (Tauri) use, where loopback binding is the trust boundary. Do NOT bind a
+non-loopback --host or expose this server beyond localhost without adding auth.
 """
 
 from __future__ import annotations
