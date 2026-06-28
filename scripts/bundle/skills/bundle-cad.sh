@@ -3,6 +3,8 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
+# shellcheck source=../lib/vendor.sh
+source "$SCRIPT_DIR/../lib/vendor.sh"
 
 MODE="write"
 CLEAN=0
@@ -166,23 +168,7 @@ build_runtime() {
 }
 
 sync_cadpy_runtime() {
-  local target_dir="$1"
-  rm -rf "$target_dir"
-  mkdir -p "$target_dir"
-  rsync -a --delete \
-    --delete-excluded \
-    --exclude __pycache__ \
-    --exclude .pytest_cache \
-    --exclude '*.pyc' \
-    --exclude '*.md' \
-    --exclude build \
-    --exclude dist \
-    --exclude '*.egg-info' \
-    --exclude tests \
-    --exclude __tests__ \
-    --exclude 'test_*.py' \
-    --exclude '*_test.py' \
-    "$CADPY_PACKAGE_DIR/" "$target_dir/"
+  vendor_python_package "$CADPY_PACKAGE_DIR" "$1"
 }
 
 check_runtime() {
@@ -207,38 +193,15 @@ check_runtime() {
 }
 
 check_cadpy_runtime() {
-  local check_dir="$CHECK_DIR/packages/cadpy"
-  if [ ! -d "$CADPY_RUNTIME_DIR" ]; then
-    echo "Missing generated cadpy runtime: skills/cad/scripts/packages/cadpy" >&2
-    echo "" >&2
-    echo "Run scripts/bundle/bundle-skill.sh cad and commit the updated runtime files." >&2
-    exit 1
-  fi
-  if ! diff -qr \
-    -x __pycache__ \
-    -x .pytest_cache \
-    -x '*.pyc' \
-    -x '*.egg-info' \
-    -x '*.md' \
-    -x tests \
-    -x __tests__ \
-    -x 'test_*.py' \
-    -x '*_test.py' \
-    "$check_dir" "$CADPY_RUNTIME_DIR" >/tmp/cad-skill-cadpy-runtime-diff.txt; then
-    cat /tmp/cad-skill-cadpy-runtime-diff.txt >&2
-    echo "" >&2
-    echo "CAD skill cadpy runtime is stale." >&2
-    echo "Run scripts/bundle/bundle-skill.sh cad and commit skills/cad/scripts/packages/cadpy." >&2
-    exit 1
-  fi
-  echo "CAD skill cadpy runtime is up to date."
+  check_python_runtime "$CADPY_PACKAGE_DIR" "$CADPY_RUNTIME_DIR" \
+    "$CHECK_DIR/packages/cadpy" "skills/cad/scripts/packages/cadpy" \
+    "Run scripts/bundle/bundle-skill.sh cad and commit skills/cad/scripts/packages/cadpy."
 }
 
 ensure_deps
 
 if [ "$MODE" = "check" ]; then
   build_runtime "$CHECK_DIR"
-  sync_cadpy_runtime "$CHECK_DIR/packages/cadpy"
   check_runtime
   check_cadpy_runtime
 else
