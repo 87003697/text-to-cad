@@ -63,8 +63,29 @@ fi
 [ -d "$REPO_ROOT/packages/cadpy/src/cadpy" ] || die "missing packages/cadpy source"
 [ -d "$REPO_ROOT/viewer/server_py" ] || die "missing viewer/server_py"
 
+# Per-OS venv layout. uv puts the interpreter at bin/python3 (posix) or
+# Scripts/python.exe (Windows), and site-packages at lib/python3.X/site-packages
+# (posix) or Lib/site-packages (Windows). Tauri's externalBin also expects a .exe
+# suffix on Windows. Keep this in sync with venv_site_packages() in
+# desktop/src-tauri/src/lib.rs.
+case "$TARGET_TRIPLE" in
+  *windows*) VENV_PY_REL="Scripts/python.exe"; BIN_EXT=".exe" ;;
+  *)         VENV_PY_REL="bin/python3";        BIN_EXT="" ;;
+esac
+
 VENV_DIR="$OUT_DIR/runtime/.venv"
-BIN_NAME="cad-viewer-backend-$TARGET_TRIPLE"
+BIN_NAME="cad-viewer-backend-$TARGET_TRIPLE$BIN_EXT"
+
+# Echo the venv's site-packages dir (Windows layout first, then posix).
+venv_site_packages() {
+  if [ -d "$1/Lib/site-packages" ]; then
+    echo "$1/Lib/site-packages"
+    return 0
+  fi
+  local d
+  d="$(find "$1/lib" -maxdepth 1 -type d -name 'python3*' 2>/dev/null | head -1)"
+  [ -n "$d" ] && echo "$d/site-packages"
+}
 
 log "repo:    $REPO_ROOT"
 log "target:  $TARGET_TRIPLE"
@@ -110,8 +131,10 @@ else
 fi
 
 log "placing the sidecar interpreter as binaries/$BIN_NAME"
-# Tauri externalBin requires a real binary named with the target-triple suffix.
-cp "$VENV_DIR/bin/python3" "$OUT_DIR/binaries/$BIN_NAME"
+# Tauri externalBin requires a real binary named with the target-triple suffix
+# (and .exe on Windows).
+[ -f "$VENV_DIR/$VENV_PY_REL" ] || die "venv interpreter not found at $VENV_DIR/$VENV_PY_REL (target $TARGET_TRIPLE)"
+cp "$VENV_DIR/$VENV_PY_REL" "$OUT_DIR/binaries/$BIN_NAME"
 chmod +x "$OUT_DIR/binaries/$BIN_NAME"
 
 # RELOCATED smoke test — the critical gate. The interpreter is copied OUT of the
@@ -125,7 +148,8 @@ SMOKE_TMP="$(mktemp -d)"
 cp -R "$OUT_DIR/binaries" "$SMOKE_TMP/binaries"
 cp -R "$OUT_DIR/runtime" "$SMOKE_TMP/runtime"
 SMOKE_VENV="$SMOKE_TMP/runtime/.venv"
-SMOKE_SITE="$(find "$SMOKE_VENV/lib" -maxdepth 1 -type d -name 'python3*' 2>/dev/null | head -1)/site-packages"
+SMOKE_SITE="$(venv_site_packages "$SMOKE_VENV")"
+[ -n "$SMOKE_SITE" ] || die "site-packages not found in relocated venv $SMOKE_VENV (target $TARGET_TRIPLE)"
 if PYTHONHOME="$SMOKE_VENV" PYTHONPATH="$SMOKE_TMP/runtime:$SMOKE_SITE" \
      "$SMOKE_TMP/binaries/$BIN_NAME" -c 'import cadpy, OCP, build123d; print("relocated engine OK")'; then
   log "relocated smoke test PASSED"

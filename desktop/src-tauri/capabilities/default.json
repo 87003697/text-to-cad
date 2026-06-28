@@ -11,7 +11,7 @@
       "identifier": "shell:allow-spawn",
       "allow": [
         {
-          "name": "binaries/cad-viewer-backend",
+          "name": "python/binaries/cad-viewer-backend",
           "sidecar": true,
           "args": [
             "-m",

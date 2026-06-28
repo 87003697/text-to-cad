@@ -122,12 +122,22 @@ OCP packaging is the highest-risk piece; prove it before investing in UI polish:
 
 ### Per-platform CI
 
-`bundle.externalBin` resolves a target-triple suffix, so the runtime is built
-per platform on its own runner: macOS (arm64 + x86_64, signed + notarized),
-Windows (x86_64, signed), Linux (x86_64, AppImage + deb). Wire
-`build-python-runtime.sh --target <triple>` into a release matrix alongside the
-existing `Release` workflow; do not bump `plugins/cad/VERSION` by hand
-(AGENTS.md) — the release pipeline stamps versions.
+`.github/workflows/desktop-build.yml` (manual `workflow_dispatch`) builds every
+leg on its native-arch runner — macOS arm64 (`macos-14`) + x86_64 (`macos-13`),
+Linux x86_64 (`ubuntu-22.04`), Windows x86_64 (`windows-latest`) — so each installs
+its own architecture's OCP wheels (no cross-arch wheel problems). Each leg builds
+the SPA, runs `build-python-runtime.sh --target <triple>` (incl. the relocated
+smoke test), bundles via `tauri-apps/tauri-action@v0`, and uploads the installers.
+macOS signing/notarization runs only when the `APPLE_*` secrets are set; otherwise
+the build is unsigned. It is standalone and does NOT publish a GitHub Release
+(releases go through the `Release` workflow per AGENTS.md) — fold it in there when
+the desktop app graduates from scaffold, and never bump `plugins/cad/VERSION` by
+hand (the release pipeline stamps versions).
+
+Status caveat: the workflow + cross-platform packaging are written and statically
+checked but not run on real runners here. Known watch-items at first run: GitHub
+may have retired the `macos-13` (Intel) runner; and the Windows leg's venv
+relocation (bundling `python.exe` + its DLLs) is the least-validated path.
 
 ## What is verified (here) vs gated (needs toolchain)
 
