@@ -168,10 +168,6 @@ def _package_descriptor_stats(glb_path: str):
     return _file_stats(os.path.join(glb_path, "assembly.json"))
 
 
-def _step_render_artifact_present(glb_path: str) -> bool:
-    return bool(_file_stats(glb_path) or _package_descriptor_stats(glb_path))
-
-
 def asset_for_path(repo_root: str, file_path: str):
     st = _file_stats(file_path)
     if not st:
