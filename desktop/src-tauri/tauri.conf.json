@@ -35,7 +35,7 @@
       "icons/icon.ico"
     ],
     "externalBin": [
-      "binaries/cad-viewer-backend"
+      "python/binaries/cad-viewer-backend"
     ],
     "resources": {
       "python/runtime": "runtime"

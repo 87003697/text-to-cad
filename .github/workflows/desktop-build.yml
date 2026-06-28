@@ -1,0 +1,120 @@
+name: Desktop Build
+
+# Per-platform packaging for the CAD Viewer desktop (Tauri) app — the CI/Phase-0
+# gate for the desktop scaffold. On each OS it builds the SPA, builds the
+# relocatable Python runtime (uv + python-build-standalone + cadquery-ocp-novtk,
+# with the relocated import smoke test), bundles the Tauri app, and uploads the
+# installers as artifacts.
+#
+# Standalone and manual: it does NOT publish a GitHub Release (releases go through
+# the Release workflow per AGENTS.md) and is not wired into develop CI (heavy + it
+# needs OCP wheels and signing secrets). macOS signing/notarization runs only when
+# the APPLE_* secrets are present; otherwise the build is unsigned. The native-arch
+# matrix avoids cross-arch OCP wheels (each runner installs its own architecture's).
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: desktop-build-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: ${{ matrix.triple }}
+    runs-on: ${{ matrix.platform }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: macos-14 # Apple Silicon
+            triple: aarch64-apple-darwin
+          # Intel macOS. GitHub is retiring Intel runners — if macos-13 is
+          # unavailable, drop this leg or move x86_64 to a still-supported image.
+          - platform: macos-13
+            triple: x86_64-apple-darwin
+          - platform: ubuntu-22.04
+            triple: x86_64-unknown-linux-gnu
+          - platform: windows-latest
+            triple: x86_64-pc-windows-msvc
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v5
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.triple }}
+
+      - name: Cache Rust build
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: ./desktop/src-tauri -> target
+
+      - name: Install Linux system dependencies
+        if: matrix.platform == 'ubuntu-22.04'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libappindicator3-dev \
+            librsvg2-dev \
+            patchelf
+
+      - name: Install rsync (Windows)
+        # build-python-runtime.sh vendors server_py/dist with rsync, absent on
+        # Windows runners by default.
+        if: matrix.platform == 'windows-latest'
+        run: choco install --no-progress rsync
+
+      - name: Install viewer build dependencies
+        run: |
+          npm ci --prefix packages/cadjs
+          npm ci --prefix packages/implicitjs
+          npm ci --prefix viewer
+
+      - name: Build the viewer SPA
+        run: npm --prefix viewer run build
+
+      - name: Build the relocatable Python runtime
+        # Installs the bundled interpreter + cadpy/OCP/build123d for this arch and
+        # runs the relocated import smoke test (fails the build if a moved bundle
+        # cannot import). Produces desktop/src-tauri/python/{binaries,runtime}.
+        shell: bash
+        run: scripts/desktop/build-python-runtime.sh --target ${{ matrix.triple }}
+
+      - name: Install desktop (Tauri CLI) dependencies
+        # `npm install`, not `ci`: desktop/ ships no lockfile (only @tauri-apps/cli).
+        # tauri-action does not install deps itself, so the CLI must be present.
+        run: npm install --prefix desktop
+
+      - name: Build the Tauri bundle
+        uses: tauri-apps/tauri-action@v0
+        with:
+          projectPath: desktop
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # macOS signing + notarization — unsigned build when these are unset.
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+
+      - name: Upload installers
+        uses: actions/upload-artifact@v4
+        with:
+          name: cad-viewer-${{ matrix.triple }}
+          # Native builds (no --target) emit to target/release/bundle. `error` so an
+          # empty bundle fails the job instead of passing green.
+          path: desktop/src-tauri/target/release/bundle/**
+          if-no-files-found: error
