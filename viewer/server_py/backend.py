@@ -267,11 +267,14 @@ class LocalAssetBackend:
             resolved = self.resolve_step_source(file_ref, resolved_root)
         except ValueError as exc:
             return {"state": artifact_mod.ARTIFACT_STATE_ERROR, "error": str(exc)}
-        step_path = resolved["stepPath"]
-        lock = artifact_mod.generation_lock_path(scanner.inline_step_glb_artifact_path_for_source(step_path))
+        # The render package is keyed by the SOURCE path: the .step.py for a
+        # generated model, the .step for an imported one (sourcePath is "" for
+        # imported, so this falls back to stepPath).
+        artifact_source = resolved.get("sourcePath") or resolved["stepPath"]
+        lock = artifact_mod.generation_lock_path(scanner.inline_step_glb_artifact_path_for_source(artifact_source))
         if artifact_mod.generation_lock_active(lock):
             return {"state": artifact_mod.ARTIFACT_STATE_GENERATING, "ref": ref}
-        ok, code = artifact_mod.validate_step_freshness(ctx["scanRepoRoot"], step_path)
+        ok, code = artifact_mod.validate_step_freshness(ctx["scanRepoRoot"], artifact_source)
         if ok:
             return {"state": artifact_mod.ARTIFACT_STATE_READY, "ref": ref}
         if code in artifact_mod.BUILDABLE_STEP_ARTIFACT_CODES:
@@ -300,7 +303,9 @@ class LocalAssetBackend:
         ctx = self._scan_context(resolved_root)
         args = ["--repo-root", ctx["scanRepoRoot"], "--step", step_path]
         if has_generator:
-            args += ["--source-path", generator]
+            # Generated models keep no .step on disk — run the generator in-process and
+            # write only the render package (the logical --step path never exists).
+            args += ["--source-path", generator, "--skip-step-write"]
         if force:
             args += ["--force"]
         if os.environ.get("VIEWER_STEP_ARTIFACT_VERBOSE") == "1":
@@ -327,11 +332,12 @@ class LocalAssetBackend:
             resolved = self.resolve_step_source(file_ref, resolved_root)
         except ValueError as exc:
             return {"ok": False, "state": artifact_mod.ARTIFACT_STATE_ERROR, "error": str(exc)}
-        lock = artifact_mod.generation_lock_path(scanner.inline_step_glb_artifact_path_for_source(resolved["stepPath"]))
+        artifact_source = resolved.get("sourcePath") or resolved["stepPath"]
+        lock = artifact_mod.generation_lock_path(scanner.inline_step_glb_artifact_path_for_source(artifact_source))
         if not force and artifact_mod.generation_lock_active(lock):
             artifact_mod.await_generation_lock(lock)
             ctx = self._scan_context(resolved_root)
-            ok, _code = artifact_mod.validate_step_freshness(ctx["scanRepoRoot"], resolved["stepPath"])
+            ok, _code = artifact_mod.validate_step_freshness(ctx["scanRepoRoot"], artifact_source)
             if ok:
                 return {"ok": True, "state": artifact_mod.ARTIFACT_STATE_READY, "ref": ref}
         built = self.generate_step_artifact(file_ref, force, resolved_root, catalog)
