@@ -1,9 +1,17 @@
-"""Subprocess bridge to cadpy for the heavy STEP build/export ops.
+"""Bridge to cadpy for the heavy STEP build/export ops.
 
-Mirrors pythonStepArtifact.cadPythonEnv discovery and the spawn + last-JSON-line
-parsing. We deliberately keep these as a SUBPROCESS (not in-process import) so the
-OCP/OpenCascade kernel never loads into the long-lived server process — same
-crash/memory isolation the Node backend gets by spawning cadpy.
+OCP/OpenCascade is kept OUT of the long-lived server process (crash/memory
+isolation, same as the Node backend). Two execution paths share one contract,
+``run_cadpy(module, args, repo_root) -> dict``:
+
+* warm worker (default): a persistent :mod:`server_py.worker` subprocess imports
+  OCP once and services every build/export in-process — no per-request cold start.
+  This is also the Tauri desktop sidecar engine.
+* cold subprocess (fallback): a fresh ``python -m <module>`` per request, used when
+  the worker is disabled (``VIEWER_CAD_WORKER=0``) or a worker transport fault
+  occurs. Always available, fully isolated.
+
+Both call the SAME general cadpy callables; only warmth/lifetime differ.
 """
 
 from __future__ import annotations
@@ -55,8 +63,21 @@ def cadpy_pythonpath(repo_root: str) -> str:
 
 
 def run_cadpy(module: str, args, repo_root: str) -> dict:
-    """Run `python -m <module> <args>` and return the last stdout JSON line as a
-    dict, or {ok:false,error} on failure (matching the Node spawn helpers)."""
+    """Run a cadpy build/export op and return its payload dict (``{ok:false,error}``
+    on failure). Prefers the warm worker; falls back to a cold subprocess on any
+    worker spawn/transport fault so the path is always available."""
+    try:
+        from . import worker_client
+
+        return worker_client.run_cadpy(module, args, repo_root)
+    except worker_client._WorkerError:
+        pass  # worker disabled or faulted -> cold subprocess below
+    return run_cadpy_cold(module, args, repo_root)
+
+
+def run_cadpy_cold(module: str, args, repo_root: str) -> dict:
+    """Run `python -m <module> <args>` in a fresh subprocess and return the last
+    stdout JSON line as a dict, or {ok:false,error} on failure."""
     env = dict(os.environ)
     pythonpath = cadpy_pythonpath(repo_root)
     if pythonpath:
