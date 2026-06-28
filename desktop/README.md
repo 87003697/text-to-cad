@@ -103,8 +103,14 @@ npm --prefix . run build                    # -> .app / .dmg / .msi / .deb / .Ap
 OCP packaging is the highest-risk piece; prove it before investing in UI polish:
 
 1. `cadquery-ocp-novtk` installs and imports from a **relocated** venv (we drop
-   VTK because all rendering is in the JS frontend). Confirm `import OCP` works
-   after the venv is moved into the app bundle.
+   VTK because all rendering is in the JS frontend). `build-python-runtime.sh`
+   now runs this automatically: after building it copies `binaries/` + `runtime/`
+   to a fresh temp path and imports `cadpy, OCP, build123d` there with the exact
+   env `lib.rs` sets (`PYTHONHOME=<runtime>/.venv`, `PYTHONPATH=<runtime>:<venv
+   site-packages>`), failing the build if a moved bundle can't import. This is the
+   mechanism the copied interpreter relies on (the venv `pyvenv.cfg` does not
+   travel with a binary copied out of `bin/`, so the env — not the cfg — resolves
+   imports).
 2. A real STEP build runs from the bundled interpreter
    (`python -m cadpy.step_artifact …` against a fixture) and matches the agent
    CLI byte-for-byte.
@@ -134,7 +140,20 @@ existing `Release` workflow; do not bump `plugins/cad/VERSION` by hand
   handshake `lib.rs` performs.
 - The packaging script's structure, arg handling, and toolchain checks.
 
+**Hardened** (from the scaffold review — surfaced to the user, not a silent spinner):
+- `lib.rs` no longer swallows backend failures: a spawn error, a 30s startup
+  timeout, an exit-before-announce, or a post-navigation crash each raise a native
+  error dialog (`tauri-plugin-dialog`) instead of leaving the window on the splash.
+- The splash detects standalone-open and a slow start, and explains itself.
+- The packaging env resolves the relocated interpreter's imports (PYTHONHOME +
+  explicit venv site-packages on PYTHONPATH), validated by the relocated smoke test.
+- `server_py` documents its loopback, no-auth trust model.
+
 **Gated** (needs `cargo`/`tauri`/`uv`, build at the gate above):
-- Compiling `lib.rs` against the Tauri 2 crates.
-- Relocating the venv + signing/notarizing OCP dylibs.
+- Compiling `lib.rs` against the Tauri 2 crates (the robustness rewrite is written
+  to the APIs but not `cargo build`-verified here).
+- Relocating the venv + signing/notarizing OCP dylibs (the smoke test now *catches*
+  relocation import failures; signing/notarization still needs a mac runner).
 - The end-to-end packaged app launch.
+- Remaining minor polish: a React error boundary in the SPA for catastrophic
+  render failures (backend-connectivity errors are already handled in-app).
