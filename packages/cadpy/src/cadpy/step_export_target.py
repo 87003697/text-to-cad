@@ -78,6 +78,7 @@ def _resolve_spec_and_scene(
     *,
     mesh_tolerance: float | None,
     mesh_angular_tolerance: float | None,
+    reset_runtime_closure: bool = False,
     logger: CliLogger,
 ) -> tuple[EntrySpec, LoadedStepScene]:
     """Build the entry spec + an in-memory scene for the model.
@@ -102,7 +103,13 @@ def _resolve_spec_and_scene(
                 step_path=step_path,
             )
         spec = _apply_mesh_overrides(spec, mesh_tolerance, mesh_angular_tolerance)
-        scene = run_script_generator(spec, "gen_step", logger=logger, force=True)
+        scene = run_script_generator(
+            spec,
+            "gen_step",
+            logger=logger,
+            force=True,
+            reset_runtime_closure=reset_runtime_closure,
+        )
         if scene is None:
             raise RuntimeError(f"Generator did not produce a STEP scene: {spec.source_ref}")
         return spec, scene
@@ -203,12 +210,16 @@ def export_model_to_path(
     source_path: Path | None = None,
     mesh_tolerance: float | None = None,
     mesh_angular_tolerance: float | None = None,
+    reset_runtime_closure: bool = False,
     logger: CliLogger | None = None,
 ) -> dict[str, object]:
     """Export one CAD model to STEP/STL/3MF/GLB at ``out`` and RETURN
     {ok, path, filename, format}. Single source of truth, callable in-process by a
     warm-OCCT worker AND wrapped by main(); it RAISES on error so callers map their
-    own protocol (the CLI shell keeps the {ok:false,error} JSON envelope)."""
+    own protocol (the CLI shell keeps the {ok:false,error} JSON envelope).
+
+    ``reset_runtime_closure`` (default-off) is for warm worker processes — see
+    :func:`cadpy.generation.run_script_generator`."""
     if logger is None:
         logger = CliLogger("step-export", verbose=False)
     repo_root = Path(repo_root).expanduser().resolve()
@@ -223,6 +234,7 @@ def export_model_to_path(
         source_path,
         mesh_tolerance=mesh_tolerance,
         mesh_angular_tolerance=mesh_angular_tolerance,
+        reset_runtime_closure=reset_runtime_closure,
         logger=logger,
     )
     selector_options = _selector_options_for_part(spec, scene=scene)
@@ -230,25 +242,40 @@ def export_model_to_path(
     return {"ok": True, "path": str(written), "filename": written.name, "format": fmt}
 
 
-def main(argv: list[str] | None = None) -> int:
+def run_cli_payload(
+    argv: list[str] | None = None,
+    *,
+    reset_runtime_closure: bool = False,
+) -> dict[str, object]:
+    """Parse CLI ``argv`` and run :func:`export_model_to_path`, RETURNING its
+    ``{ok:true,...}`` payload (no printing). RAISES on error — callers own the error
+    envelope. The in-process primitive shared by ``main()`` and the CAD Viewer's warm
+    worker (which passes ``reset_runtime_closure=True`` to keep the warm interpreter's
+    generator-module state clean between builds)."""
     args = build_parser().parse_args(argv)
     logger = CliLogger("step-export", verbose=bool(args.verbose))
+    payload = export_model_to_path(
+        repo_root=Path(args.repo_root),
+        step=Path(args.step),
+        fmt=args.format,
+        out=Path(args.out),
+        source_path=Path(args.source_path) if args.source_path else None,
+        mesh_tolerance=args.mesh_tolerance,
+        mesh_angular_tolerance=args.mesh_angular_tolerance,
+        reset_runtime_closure=reset_runtime_closure,
+        logger=logger,
+    )
+    logger.total()
+    return payload
+
+
+def main(argv: list[str] | None = None) -> int:
     try:
-        payload = export_model_to_path(
-            repo_root=Path(args.repo_root),
-            step=Path(args.step),
-            fmt=args.format,
-            out=Path(args.out),
-            source_path=Path(args.source_path) if args.source_path else None,
-            mesh_tolerance=args.mesh_tolerance,
-            mesh_angular_tolerance=args.mesh_angular_tolerance,
-            logger=logger,
-        )
+        payload = run_cli_payload(argv)
     except Exception as exc:  # noqa: BLE001 — surface a clean JSON error to the CLI caller.
         print(json.dumps({"ok": False, "error": str(exc)}, separators=(",", ":")))
         return 1
     print(json.dumps(payload, separators=(",", ":")))
-    logger.total()
     return 0
 
 

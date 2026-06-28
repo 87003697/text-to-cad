@@ -250,12 +250,17 @@ def build_step_artifact(
     force: bool = False,
     mesh_tolerance: float | None = None,
     mesh_angular_tolerance: float | None = None,
+    reset_runtime_closure: bool = False,
     logger: CliLogger | None = None,
 ) -> dict[str, object]:
     """Build the GLB/topology artifact for one STEP/.step.py and RETURN the result
     payload (the exact dict the CLI prints). This is the single source of truth,
     callable in-process by a long-lived warm-OCCT worker AND wrapped by main();
-    it raises on error (the CLI shell owns argv parsing + JSON stdout)."""
+    it raises on error (the CLI shell owns argv parsing + JSON stdout).
+
+    ``reset_runtime_closure`` (default-off) is for warm worker processes: it makes
+    the generator's recorded source closure deterministic across repeated in-process
+    builds — see :func:`cadpy.generation.run_script_generator`."""
     if write_step_after_artifact and not skip_step_write:
         raise ValueError("--write-step-after-artifact requires --skip-step-write")
     repo_root = Path(repo_root).expanduser().resolve()
@@ -331,7 +336,13 @@ def build_step_artifact(
 
     glb_path = part_glb_path(existing_spec.entry_path)  # noqa: F841 — parity with prior main()
     if skip_step_write:
-        scene = run_script_generator(existing_spec, "gen_step", logger=logger, force=force)
+        scene = run_script_generator(
+            existing_spec,
+            "gen_step",
+            logger=logger,
+            force=force,
+            reset_runtime_closure=reset_runtime_closure,
+        )
         if scene is None:
             raise RuntimeError(f"Python generator did not produce a STEP scene: {existing_spec.source_ref}")
         spec = existing_spec
@@ -365,7 +376,15 @@ def build_step_artifact(
     return payload
 
 
-def main(argv: list[str] | None = None) -> int:
+def run_cli_payload(
+    argv: list[str] | None = None,
+    *,
+    reset_runtime_closure: bool = False,
+) -> dict[str, object]:
+    """Parse CLI ``argv`` and run :func:`build_step_artifact`, RETURNING its payload
+    (no printing, no logger.total()). The in-process primitive shared by ``main()``
+    and the CAD Viewer's warm worker — the worker passes ``reset_runtime_closure=True``
+    so repeated warm builds record the same closure a cold CLI does."""
     args = build_parser().parse_args(argv)
     logger = CliLogger("step-artifact", verbose=bool(args.verbose))
     payload = build_step_artifact(
@@ -378,10 +397,16 @@ def main(argv: list[str] | None = None) -> int:
         force=bool(args.force),
         mesh_tolerance=args.mesh_tolerance,
         mesh_angular_tolerance=args.mesh_angular_tolerance,
+        reset_runtime_closure=reset_runtime_closure,
         logger=logger,
     )
-    print(json.dumps(payload, separators=(",", ":")))
     logger.total()
+    return payload
+
+
+def main(argv: list[str] | None = None) -> int:
+    payload = run_cli_payload(argv)
+    print(json.dumps(payload, separators=(",", ":")))
     return 0
 
 
