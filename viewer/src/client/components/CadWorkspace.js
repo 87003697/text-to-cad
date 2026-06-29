@@ -8022,6 +8022,7 @@ export default function CadWorkspace({
       return;
     }
     const busyKey = `${fileRef}:export:${exportFormat}`;
+    const moduleUrl = entry ? entryAssetUrl(entry, "implicit") : "";
     const currentParameterValues = fileRef === selectedKey ? implicitParameterValues : null;
     const currentAnimationState = fileRef === selectedKey ? selectedImplicitAnimationViewState : null;
     setCopyStatus("");
@@ -8031,6 +8032,7 @@ export default function CadWorkspace({
       setCopyStatus(`Exporting ${exportFormat.toUpperCase()}...`);
       const payload = await requestImplicitCadExport({
         file: fileRef,
+        moduleUrl,
         format: exportFormat,
         parameterValues: currentParameterValues,
         animationState: currentAnimationState,

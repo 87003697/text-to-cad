@@ -3,6 +3,8 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
+# shellcheck source=../lib/vendor.sh
+source "$SCRIPT_DIR/../lib/vendor.sh"
 
 MODE="write"
 BUILD=1
@@ -189,25 +191,8 @@ sync_implicitjs_package() {
 }
 
 sync_cadpy_package() {
-  local source_dir="$1"
-  local target_dir="$2"
-  rm -rf "$target_dir"
-  mkdir -p "$target_dir"
-  rsync -a --delete \
-    --prune-empty-dirs \
-    --delete-excluded \
-    --exclude __pycache__ \
-    --exclude .pytest_cache \
-    --exclude '*.pyc' \
-    --exclude '*.egg-info' \
-    --exclude '*.md' \
-    --exclude build \
-    --exclude dist \
-    --exclude tests \
-    --exclude __tests__ \
-    --exclude 'test_*.py' \
-    --exclude '*_test.py' \
-    "$source_dir/" "$target_dir/"
+  # Canonical Python vendoring lives in scripts/bundle/lib/vendor.sh.
+  vendor_python_package "$1" "$2"
 }
 
 check_cadjs_package() {
@@ -277,36 +262,9 @@ check_implicitjs_package() {
 }
 
 check_cadpy_package() {
-  local label="${VIEWER_CADPY_DIR#$REPO_ROOT/}"
-  local diff_path="${TMPDIR:-/tmp}/viewer-cadpy-package-diff.txt"
-  local expected_dir="${TMPDIR:-/tmp}/viewer-cadpy-package-check"
-  if [ ! -d "$VIEWER_CADPY_DIR" ]; then
-    echo "Missing generated viewer cadpy package: $label" >&2
-    echo "Run scripts/bundle/bundle-skill.sh cad-viewer and commit the generated copy." >&2
-    exit 1
-  fi
-  rm -rf "$expected_dir"
-  sync_cadpy_package "$CADPY_PACKAGE_DIR" "$expected_dir"
-  if ! diff -qr \
-    -x __pycache__ \
-    -x .pytest_cache \
-    -x '*.pyc' \
-    -x '*.egg-info' \
-    -x '*.md' \
-    -x build \
-    -x dist \
-    -x tests \
-    -x __tests__ \
-    -x 'test_*.py' \
-    -x '*_test.py' \
-    "$expected_dir" "$VIEWER_CADPY_DIR" >"$diff_path"; then
-    cat "$diff_path" >&2
-    echo "" >&2
-    echo "Viewer cadpy package is stale." >&2
-    echo "Run scripts/bundle/bundle-skill.sh cad-viewer and commit viewer/packages/cadpy." >&2
-    exit 1
-  fi
-  echo "$label is up to date."
+  check_python_runtime "$CADPY_PACKAGE_DIR" "$VIEWER_CADPY_DIR" \
+    "${TMPDIR:-/tmp}/viewer-cadpy-package-check" "${VIEWER_CADPY_DIR#$REPO_ROOT/}" \
+    "Run scripts/bundle/bundle-skill.sh cad-viewer and commit viewer/packages/cadpy."
 }
 
 build_viewer_packages() {
@@ -355,8 +313,8 @@ write_runtime_package_json() {
   "type": "module",
   "version": "$RELEASE_VERSION",
   "scripts": {
-    "serve": "node backend/server.mjs",
-    "start": "node backend/server.mjs",
+    "serve": "python3 -m server_py.server",
+    "start": "python3 -m server_py.server",
     "moveit2:setup": "moveit2_server/setup.sh",
     "moveit2:check": "moveit2_server/check-moveit2-server.sh",
     "moveit2:serve": "moveit2_server/run-moveit2-server.sh"
@@ -424,7 +382,7 @@ sync_dir() {
 build_runtime() {
   local target_dir="$1"
   rm -rf "$target_dir"
-  mkdir -p "$target_dir/backend"
+  mkdir -p "$target_dir"
 
   sync_dir "$VIEWER_DIR/dist" "$target_dir/dist"
 
@@ -434,18 +392,13 @@ build_runtime() {
 
   sync_dir "$VIEWER_DIR/packages" "$target_dir/packages"
 
-  (
-    cd "$REPO_ROOT"
-    "$(resolve_esbuild_bin)" "$VIEWER_DIR/src/server/server.mjs" \
-      --bundle \
-      --format=esm \
-      --platform=node \
-      --target=node22 \
-      --main-fields=module,main \
-      --legal-comments=none \
-      --outfile="$target_dir/backend/server.mjs"
-
-  )
+  # Python backend (server_py): the runtime serves the built dist + /__cad. STEP
+  # build/export run through the persistent warm-OCCT worker (server_py/worker.py +
+  # worker_client.py), falling back to a cold `python -m cadpy.<module>` subprocess;
+  # both use the editable-installed cadpy (requirements.txt). sync_dir excludes
+  # tests/__pycache__/golden so only runtime modules ship (worker.py included,
+  # tests/test_worker.py not).
+  sync_dir "$VIEWER_DIR/server_py" "$target_dir/server_py"
 
   write_runtime_package_json "$target_dir"
   write_runtime_gitignore "$target_dir"
@@ -480,7 +433,7 @@ require_path "$CADPY_PACKAGE_DIR/src/cadpy" "cadpy source"
 require_path "$IMPLICITJS_PACKAGE_DIR/package.json" "implicitjs package"
 require_path "$IMPLICITJS_PACKAGE_DIR/src" "implicitjs source"
 require_path "$VIEWER_DIR/package.json" "viewer package"
-require_path "$(resolve_esbuild_bin)" "viewer esbuild binary; install viewer dependencies"
+require_path "$VIEWER_DIR/server_py/server.py" "viewer Python backend"
 
 if [ "$MODE" = "check" ]; then
   check_viewer_packages
