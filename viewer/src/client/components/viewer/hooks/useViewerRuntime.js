@@ -364,14 +364,16 @@ export function useViewerRuntime({
         if (cameraTransitionActive || keyboardOrbitMoved) {
           emitPerspectiveChange(runtimeRef.current);
         }
-        const previewOrbitActive = !!runtimeRef.current?.previewOrbitEnabled;
         renderer.render(scene, runtimeRef.current?.camera || camera);
-        const nextActiveFace = getActiveViewPlaneFaceId(runtimeRef.current);
-        if (nextActiveFace !== activeViewPlaneFaceRef.current) {
-          activeViewPlaneFaceRef.current = nextActiveFace;
-          setActiveViewPlaneFace(nextActiveFace);
+        const previewOrbitActive = !!runtimeRef.current?.previewOrbitEnabled;
+        if (!previewOrbitActive) {
+          const nextActiveFace = getActiveViewPlaneFaceId(runtimeRef.current);
+          if (nextActiveFace !== activeViewPlaneFaceRef.current) {
+            activeViewPlaneFaceRef.current = nextActiveFace;
+            setActiveViewPlaneFace(nextActiveFace);
+          }
+          syncViewPlaneOrientation(runtimeRef.current);
         }
-        syncViewPlaneOrientation(runtimeRef.current);
         if (
           cameraTransitionActive ||
           keyboardOrbitMoved ||

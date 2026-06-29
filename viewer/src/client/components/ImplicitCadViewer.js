@@ -18,10 +18,15 @@ import {
   updateImplicitCadMaterialUniforms
 } from "implicitjs/render";
 import {
+  implicitGraphicsRenderResolutionScale,
+  implicitGraphicsRenderSettings,
   normalizeImplicitGraphicsSettings
 } from "@/workbench/implicitGraphicsSettings";
 import ViewPlaneControl from "./viewer/ViewPlaneControl";
-import { updateOrbitControls } from "./viewer/orbitControls.js";
+import {
+  PREVIEW_AUTO_ROTATE_SPEED,
+  updateOrbitControls
+} from "./viewer/orbitControls.js";
 
 const INTERACTION_IDLE_DELAY_MS = 140;
 const DEFAULT_DAMPING_FACTOR = 0.14;
@@ -565,12 +570,17 @@ function canvasBlob(canvas, crop = null) {
 function updateImplicitThemeUniforms(runtime, model, themeSettings) {
   updateImplicitCadAppearanceUniforms(THREE, runtime?.shaderScene?.material, model, {
     themeSettings,
-    graphicsSettings: runtime?.graphicsSettings
+    graphicsSettings: implicitGraphicsRenderSettings(runtime?.graphicsSettings, {
+      interaction: runtime?.previewOrbitEnabled === true
+    })
   });
 }
 
 function updateImplicitGraphicsUniforms(runtime, model) {
-  updateImplicitCadGraphicsUniforms(runtime?.shaderScene?.material, model, runtime?.graphicsSettings);
+  updateImplicitCadGraphicsUniforms(runtime?.shaderScene?.material, model, implicitGraphicsRenderSettings(
+    runtime?.graphicsSettings,
+    { interaction: runtime?.previewOrbitEnabled === true }
+  ));
 }
 
 const ImplicitCadViewer = forwardRef(function ImplicitCadViewer({
@@ -621,7 +631,7 @@ const ImplicitCadViewer = forwardRef(function ImplicitCadViewer({
 
   useEffect(() => {
     previewModeRef.current = previewMode;
-  }, [previewMode]);
+  }, [model, previewMode, themeSettings]);
 
   useEffect(() => {
     const active = dynamicRenderActive === true;
@@ -811,8 +821,16 @@ const ImplicitCadViewer = forwardRef(function ImplicitCadViewer({
       return;
     }
     runtime.orbitControlsLastTimestamp = 0;
+    runtime.previewOrbitEnabled = !!previewMode;
     runtime.controls.autoRotate = !!previewMode;
-    runtime.controls.autoRotateSpeed = 1.0;
+    runtime.controls.autoRotateSpeed = PREVIEW_AUTO_ROTATE_SPEED;
+    updateImplicitThemeUniforms(runtime, model, themeSettings);
+    updateImplicitGraphicsUniforms(runtime, model);
+    if (previewMode) {
+      runtime.beginInteraction?.();
+    } else {
+      runtime.scheduleIdleQuality?.();
+    }
     runtime.requestRender?.();
   }, [previewMode]);
 
@@ -893,7 +911,10 @@ const ImplicitCadViewer = forwardRef(function ImplicitCadViewer({
     runtime.dynamicRenderActive = dynamicRenderActiveRef.current;
     updateImplicitThemeUniforms(runtime, model, themeSettings);
     updateImplicitGraphicsUniforms(runtime, model);
-    runtime.setPixelRatioCap?.(normalizedGraphicsSettings.resolutionScale);
+    runtime.setPixelRatioCap?.(implicitGraphicsRenderResolutionScale(
+      normalizedGraphicsSettings,
+      { interaction: previewModeRef.current }
+    ));
     runtime.requestRender?.();
   }, [model, normalizedGraphicsSettings, themeSettings]);
 
@@ -978,6 +999,7 @@ const ImplicitCadViewer = forwardRef(function ImplicitCadViewer({
       keyboardOrbitState,
       graphicsSettings: graphicsSettingsRef.current,
       dynamicRenderActive: dynamicRenderActiveRef.current,
+      previewOrbitEnabled: !!previewMode,
       model,
       shaderSceneReady: false,
       requestRender,
@@ -1029,7 +1051,10 @@ const ImplicitCadViewer = forwardRef(function ImplicitCadViewer({
         window.clearTimeout(idleTimerId);
         idleTimerId = 0;
       }
-      setPixelRatioCap(graphicsSettingsRef.current.interactionResolutionScale);
+      setPixelRatioCap(implicitGraphicsRenderResolutionScale(
+        graphicsSettingsRef.current,
+        { interaction: true }
+      ));
       requestRender();
     }
 
@@ -1042,7 +1067,10 @@ const ImplicitCadViewer = forwardRef(function ImplicitCadViewer({
         controls.enableDamping = true;
         controls.dampingFactor = DEFAULT_DAMPING_FACTOR;
         controls.zoomSpeed = DEFAULT_ZOOM_SPEED;
-        setPixelRatioCap(graphicsSettingsRef.current.resolutionScale);
+        setPixelRatioCap(implicitGraphicsRenderResolutionScale(
+          graphicsSettingsRef.current,
+          { interaction: previewModeRef.current }
+        ));
         requestRender();
       }, INTERACTION_IDLE_DELAY_MS);
     }
@@ -1068,15 +1096,17 @@ const ImplicitCadViewer = forwardRef(function ImplicitCadViewer({
         );
         renderer.render(runtime.shaderScene.scene, runtime.screenCamera);
       }
-      const nextActiveFace = getActiveViewPlaneFaceId(runtime);
-      setActiveViewPlaneFace((current) => current === nextActiveFace ? current : nextActiveFace);
-      // The camera is static while animation only advances geometry uniforms;
-      // bail out of the state update unless the orientation actually changed so
-      // playback does not trigger a React re-render every frame.
-      const nextOrientation = readViewPlaneOrientation(runtime);
-      setViewPlaneOrientation((current) => (
-        viewPlaneOrientationsEqual(current, nextOrientation) ? current : nextOrientation
-      ));
+      if (!runtime.previewOrbitEnabled) {
+        const nextActiveFace = getActiveViewPlaneFaceId(runtime);
+        setActiveViewPlaneFace((current) => current === nextActiveFace ? current : nextActiveFace);
+        // The camera is static while animation only advances geometry uniforms;
+        // bail out of the state update unless the orientation actually changed so
+        // playback does not trigger a React re-render every frame.
+        const nextOrientation = readViewPlaneOrientation(runtime);
+        setViewPlaneOrientation((current) => (
+          viewPlaneOrientationsEqual(current, nextOrientation) ? current : nextOrientation
+        ));
+      }
       if (transitionActive || keyboardOrbitMoved || controlsActive || controls?.autoRotate) {
         requestRender();
       }
@@ -1086,7 +1116,10 @@ const ImplicitCadViewer = forwardRef(function ImplicitCadViewer({
       if (disposed) {
         return;
       }
-      setPixelRatioCap(graphicsSettingsRef.current.resolutionScale);
+      setPixelRatioCap(implicitGraphicsRenderResolutionScale(
+        graphicsSettingsRef.current,
+        { interaction: previewModeRef.current }
+      ));
       updateCameraFraming();
       if (autoZoomStateRef.current.attached !== false) {
         runAutoZoomRef.current?.("resize", { animate: false });
@@ -1213,7 +1246,7 @@ const ImplicitCadViewer = forwardRef(function ImplicitCadViewer({
     if (controls) {
       runtime.orbitControlsLastTimestamp = 0;
       controls.autoRotate = !!previewMode;
-      controls.autoRotateSpeed = 1.0;
+      controls.autoRotateSpeed = PREVIEW_AUTO_ROTATE_SPEED;
     }
     requestRender();
 

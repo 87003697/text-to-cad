@@ -144,6 +144,7 @@ import ViewPlaneControl from "./viewer/ViewPlaneControl";
 import { useViewerDrawingOverlay } from "./viewer/hooks/useViewerDrawingOverlay";
 import { useViewerPicking } from "./viewer/hooks/useViewerPicking";
 import { useViewerRuntime } from "./viewer/hooks/useViewerRuntime";
+import { PREVIEW_AUTO_ROTATE_SPEED } from "./viewer/orbitControls";
 import { normalizeViewerRenderState } from "./viewer/renderState";
 import {
   buildModel
@@ -182,7 +183,6 @@ const COARSE_POINTER_PINCH_ZOOM_SPEED = 2.4;
 const KEYBOARD_ORBIT_NUDGE_RAD = Math.PI / 32;
 const KEYBOARD_ORBIT_SPEED_RAD_PER_SEC = Math.PI * 0.42;
 const KEYBOARD_POLAR_EPSILON = 0.02;
-const PREVIEW_AUTO_ROTATE_SPEED = 1.0;
 const VIEW_PLANE_ACTIVE_DOT_THRESHOLD = 0.994;
 const VIEW_PLANE_TRANSITION_MS = 280;
 const VIEW_PLANE_POLE_DIRECTION_DOT_THRESHOLD = 0.9999;
@@ -1151,7 +1151,13 @@ function syncRuntimeCameraProjection(runtime, projection, { scheduleIdle = true,
     runtime.syncCameraViewport?.(nextCamera, frameMetrics.width, frameMetrics.height);
   }
   applyCameraFrameInsets(runtime, runtime.frameInsetsRef?.current, { updateProjection: false });
+  // Recompute camera matrices without advancing auto-rotate. A bare controls.update()
+  // ticks OrbitControls' frame-rate-dependent auto-rotation branch, so any projection
+  // sync that fires during a preview orbit would nudge the camera forward an extra step.
+  const autoRotateBeforeProjectionSync = runtime.controls.autoRotate;
+  runtime.controls.autoRotate = false;
   runtime.controls.update?.();
+  runtime.controls.autoRotate = autoRotateBeforeProjectionSync;
   if (scheduleIdle) {
     runtime.scheduleIdleQuality?.();
   }
@@ -3108,7 +3114,14 @@ const CadViewer = forwardRef(function CadViewer({
     }
     emitPerspectiveChange(runtime);
     syncViewPlaneOrientation(runtime);
-  }, [normalizedProjection, syncViewPlaneOrientation, viewerReadyTick]);
+    // NOTE: syncViewPlaneOrientation is an unmemoized closure (new identity every
+    // render), so listing it here re-ran this effect on every render. During a
+    // preview orbit that became a self-sustaining cascade (each run calls
+    // syncRuntimeCameraProjection -> emitPerspectiveChange/syncViewPlaneOrientation ->
+    // setState -> re-render), tens of times per frame. This effect only needs to run
+    // when the projection or viewer readiness changes, like the already-omitted
+    // emitPerspectiveChange dependency above.
+  }, [normalizedProjection, viewerReadyTick]);
 
   useEffect(() => {
     const runtime = runtimeRef.current;
@@ -3318,9 +3331,9 @@ const CadViewer = forwardRef(function CadViewer({
     runtime.controls.enabled = true;
     runtime.controls.enableDamping = true;
     runtime.controls.dampingFactor = DEFAULT_DAMPING_FACTOR;
-    runtime.interactionState.active = !!previewMode;
     if (previewMode) {
       cancelCameraTransition(runtime, { scheduleIdle: false });
+      runtime.beginInteraction?.();
     } else {
       runtime.scheduleIdleQuality();
     }
