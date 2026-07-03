@@ -33,21 +33,6 @@ class UrdfSourceTests(unittest.TestCase):
     def _write_urdf(self, name: str, body: str) -> Path:
         urdf_path = self.temp_root / f"{name}.urdf"
         urdf_path.write_text(body.strip() + "\n", encoding="utf-8")
-        script_path = self.temp_root / f"{name}.py"
-        if not script_path.exists():
-            script_path.write_text(
-                "\n".join(
-                    [
-                        "def gen_step():",
-                        "    return {'instances': []}",
-                        "",
-                        "def gen_urdf():",
-                        "    return {'xml': ''}",
-                        "",
-                    ]
-                ),
-                encoding="utf-8",
-            )
         return urdf_path
 
     def test_read_urdf_source_accepts_valid_mesh_robot(self) -> None:
@@ -394,7 +379,7 @@ class UrdfSourceTests(unittest.TestCase):
             """,
         )
 
-        with self.assertRaisesRegex(UrdfSourceError, "scale values must be positive"):
+        with self.assertRaisesRegex(UrdfSourceError, "scale values must be nonzero"):
             read_urdf_source(source_path)
 
     def test_read_urdf_source_rejects_invalid_primitive_dimensions(self) -> None:

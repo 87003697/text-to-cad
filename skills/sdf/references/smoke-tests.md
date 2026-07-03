@@ -1,6 +1,6 @@
 # SDF smoke tests
 
-Use smoke tests after generated SDF passes bundled validation. The goal is to catch simulator and spatial failures that dependency-light XML checks cannot detect.
+Use smoke tests after the SDF passes bundled validation. The goal is to catch simulator and spatial failures that dependency-light XML checks cannot detect.
 
 ## Recommended checks
 
@@ -89,7 +89,7 @@ Assumptions:
 
 ## When to stop
 
-Stop and fix the generator when:
+Stop and fix the SDF (or its upstream assets) when:
 
 - bundled validation has errors;
 - `gz sdf --check` fails under a required external-check policy;

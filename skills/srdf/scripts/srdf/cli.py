@@ -1,14 +1,10 @@
 from __future__ import annotations
 
 import argparse
-import importlib.util
-import inspect
-from math import isfinite
-import os
 import sys
 import warnings
 from collections.abc import Sequence
-from dataclasses import dataclass
+from math import isfinite
 from pathlib import Path, PurePosixPath
 import xml.etree.ElementTree as ET
 
@@ -16,244 +12,91 @@ SCRIPTS_DIR = Path(__file__).resolve().parents[1]
 if __package__ in {None, ""}:
     sys.path.insert(0, str(SCRIPTS_DIR))
 
-PACKAGES_DIR = SCRIPTS_DIR / "packages"
-CADPY_METADATA_SRC_DIR = PACKAGES_DIR / "cadpy_metadata" / "src"
-if str(PACKAGES_DIR) not in sys.path:
-    sys.path.insert(0, str(PACKAGES_DIR))
-if str(CADPY_METADATA_SRC_DIR) not in sys.path:
-    sys.path.insert(0, str(CADPY_METADATA_SRC_DIR))
+from srdf.source import SrdfSource, SrdfSourceError, read_srdf_source
 
-from cadpy_metadata import (
-    GenerationOutput,
-    python_source_identity,
-    track_generation_run,
-    xml_with_text_to_cad_metadata,
-)
-from srdf.source import LEGACY_EXPLORER_NAMESPACE, SRDF_METADATA_NAMESPACE, SrdfSource, SrdfSourceError, parse_srdf_xml
+SRDF_SUFFIX = ".srdf"
+URDF_SUFFIX = ".urdf"
 
 
-@dataclass(frozen=True)
-class _TargetSpec:
-    source_path: Path
-    output_path: Path
-
-
-def generate_srdf_targets(targets: Sequence[str], *, output: str | Path | None = None) -> int:
-    target_specs = _resolve_target_specs(targets, output=output)
-    _validate_unique_outputs(target_specs)
-    for target_spec in target_specs:
-        _generate_target(target_spec.source_path, output_path=target_spec.output_path)
-    return 0
+def validate_srdf_targets(targets: Sequence[str]) -> int:
+    target_paths = [_resolve_target_path(target) for target in targets]
+    failed = False
+    for target_path in target_paths:
+        if not _validate_target(target_path):
+            failed = True
+    return 1 if failed else 0
 
 
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         prog="srdf",
-        description="Generate explicit MoveIt2 SRDF targets from Python sources.",
+        description="Validate explicit MoveIt2 SRDF targets against their linked URDF.",
     )
     parser.add_argument(
         "targets",
         nargs="+",
-        help="Explicit Python source file or SOURCE.py=OUTPUT.srdf pair defining gen_srdf() to generate.",
-    )
-    parser.add_argument(
-        "-o",
-        "--output",
-        metavar="PATH",
-        help="Write the generated SRDF file to this path. Valid only with one plain Python target.",
+        help="Explicit .srdf file to validate.",
     )
     args = parser.parse_args(list(argv) if argv is not None else None)
-    if args.output is not None:
-        if _targets_include_output_pairs(args.targets):
-            parser.error("--output cannot be combined with SOURCE=OUTPUT targets")
-        if len(args.targets) != 1:
-            parser.error("--output can only be used with exactly one target")
-    return generate_srdf_targets(args.targets, output=args.output)
+    return validate_srdf_targets(args.targets)
 
 
-def _resolve_target_specs(targets: Sequence[str], *, output: str | Path | None = None) -> list[_TargetSpec]:
-    if output is not None and _targets_include_output_pairs(targets):
-        raise ValueError("srdf --output cannot be combined with SOURCE=OUTPUT targets")
-    if output is not None and len(targets) != 1:
-        raise ValueError("srdf --output can only be used with exactly one target")
-
-    specs: list[_TargetSpec] = []
-    for raw_target in targets:
-        target_text = str(raw_target or "").strip()
-        if "=" in target_text:
-            raw_source, raw_output = target_text.split("=", 1)
-            source_path = _resolve_source_path(raw_source)
-            output_path = _resolve_cli_output_path(raw_output)
-        else:
-            source_path = _resolve_source_path(target_text)
-            output_path = _resolve_cli_output_path(output) if output is not None else source_path.with_suffix(".srdf")
-        specs.append(_TargetSpec(source_path=source_path, output_path=output_path))
-    return specs
-
-
-def _resolve_source_path(raw_source: object) -> Path:
-    value = str(raw_source or "").strip()
+def _resolve_target_path(raw_target: object) -> Path:
+    value = str(raw_target or "").strip()
     if not value:
-        raise ValueError("srdf target source must be a non-empty path")
-    source_path = Path(value).expanduser()
-    return source_path.resolve() if source_path.is_absolute() else (Path.cwd() / source_path).resolve()
+        raise ValueError("srdf target must be a non-empty path")
+    target_path = Path(value).expanduser()
+    return target_path.resolve() if target_path.is_absolute() else (Path.cwd() / target_path).resolve()
 
 
-def _resolve_cli_output_path(raw_output: object) -> Path:
-    value = str(raw_output or "").strip()
-    if not value:
-        raise ValueError("srdf output must be a non-empty path")
-    if "\\" in value:
-        raise ValueError("srdf output must use POSIX '/' separators")
-    output_path = Path(value).expanduser()
-    resolved = output_path.resolve() if output_path.is_absolute() else (Path.cwd() / output_path).resolve()
-    if resolved.suffix.lower() != ".srdf":
-        raise ValueError("srdf output must end in .srdf")
-    return resolved
+def _validate_target(target_path: Path) -> bool:
+    display = _display_path(target_path)
+    if target_path.suffix.lower() != SRDF_SUFFIX:
+        print(f"FAIL {display}: target must be a .srdf file", file=sys.stderr)
+        return False
+    if not target_path.is_file():
+        print(f"FAIL {display}: file not found", file=sys.stderr)
+        return False
+    with warnings.catch_warnings(record=True) as caught_warnings:
+        warnings.simplefilter("always")
+        try:
+            srdf_source = read_srdf_source(target_path)
+            urdf_path = _resolve_linked_urdf_path(srdf_source, srdf_path=target_path)
+            urdf_robot = _read_urdf_robot(urdf_path)
+            _validate_srdf_against_urdf(srdf_source, urdf_robot=urdf_robot)
+        except (SrdfSourceError, ValueError, FileNotFoundError) as exc:
+            print(f"FAIL {display}: {exc}", file=sys.stderr)
+            return False
+    for caught in caught_warnings:
+        print(f"WARN {display}: {caught.message}", file=sys.stderr)
+    print(_summary_line(display, srdf_source, urdf_path))
+    return True
 
 
-def _targets_include_output_pairs(targets: Sequence[str]) -> bool:
-    return any("=" in str(target or "") for target in targets)
-
-
-def _validate_unique_outputs(target_specs: Sequence[_TargetSpec]) -> None:
-    seen: dict[Path, Path] = {}
-    for target_spec in target_specs:
-        output_path = target_spec.output_path.resolve()
-        previous = seen.get(output_path)
-        if previous is not None:
-            raise ValueError(f"srdf output path is used more than once: {_display_path(target_spec.output_path)}")
-        seen[output_path] = target_spec.output_path
-
-
-def _generate_target(script_path: Path, *, output_path: Path) -> Path:
-    script_path = script_path.resolve()
-    if script_path.suffix.lower() != ".py":
-        raise ValueError(f"{_display_path(script_path)} must be a Python source file")
-    if not script_path.is_file():
-        raise FileNotFoundError(f"Python source not found: {_display_path(script_path)}")
-
-    with track_generation_run(
-        source_path=script_path,
-        generator="gen_srdf",
-        outputs=[GenerationOutput(output_path, "srdf")],
-    ):
-        return _generate_target_inner(script_path, output_path=output_path)
-
-
-def _generate_target_inner(script_path: Path, *, output_path: Path) -> Path:
-
-    module = _load_generator_module(script_path)
-    generator = getattr(module, "gen_srdf", None)
-    if not callable(generator):
-        raise RuntimeError(f"{_display_path(script_path)} does not define callable gen_srdf()")
-    if inspect.signature(generator).parameters:
-        raise ValueError(f"{_display_path(script_path)} gen_srdf() must not accept arguments")
-
-    payload = _normalize_srdf_payload(generator(), script_path=script_path)
-    xml = str(payload["xml"])
-    urdf_path = _resolve_relative_file(payload["urdf"], source_path=script_path, suffix=".urdf", label="urdf")
-    urdf_robot = _read_urdf_robot(urdf_path)
-    xml = _xml_with_linked_urdf_metadata(xml, output_path=output_path, urdf_path=urdf_path)
-    srdf_source = parse_srdf_xml(xml, source_path=output_path)
-    _validate_linked_urdf_ref(
-        srdf_source,
-        expected_urdf_ref=_relative_posix_path(urdf_path, output_path.parent),
-    )
-    _validate_srdf_against_urdf(srdf_source, urdf_robot=urdf_robot)
-    _write_srdf_payload(xml, output_path=output_path, script_path=script_path)
-    if not output_path.exists():
-        raise RuntimeError(f"{_display_path(script_path)} did not write {_display_path(output_path)}")
-    return output_path
-
-
-def _load_generator_module(script_path: Path) -> object:
-    module_name = (
-        "_srdf_tool_"
-        + _display_path(script_path).replace("/", "_").replace("\\", "_").replace("-", "_").replace(".", "_")
-    )
-    module_spec = importlib.util.spec_from_file_location(module_name, script_path)
-    if module_spec is None or module_spec.loader is None:
-        raise RuntimeError(f"Failed to load generator module from {_display_path(script_path)}")
-
-    module = importlib.util.module_from_spec(module_spec)
-    original_sys_path = list(sys.path)
-    search_paths = [
-        str(Path.cwd().resolve()),
-        str(script_path.parent),
-    ]
-    for candidate in reversed(search_paths):
-        if candidate not in sys.path:
-            sys.path.insert(0, candidate)
-
-    try:
-        sys.modules[module_name] = module
-        module_spec.loader.exec_module(module)
-    finally:
-        sys.path[:] = original_sys_path
-
-    return module
-
-
-def _normalize_srdf_payload(raw_payload: object, *, script_path: Path) -> dict[str, object]:
-    if not isinstance(raw_payload, dict):
-        raise TypeError(f"{_display_path(script_path)} gen_srdf() must return an envelope dict")
-    allowed_fields = {"xml", "urdf"}
-    extra_fields = sorted(str(key) for key in raw_payload if key not in allowed_fields)
-    if extra_fields:
-        joined = ", ".join(extra_fields)
-        raise TypeError(f"{_display_path(script_path)} gen_srdf() envelope has unsupported field(s): {joined}")
-    if "xml" not in raw_payload:
-        raise TypeError(f"{_display_path(script_path)} gen_srdf() envelope must define 'xml'")
-    if "urdf" not in raw_payload:
-        raise TypeError(f"{_display_path(script_path)} gen_srdf() envelope must define 'urdf'")
-    xml = _normalize_xml_value(raw_payload.get("xml"), script_path=script_path, label="gen_srdf() envelope field 'xml'")
-    if not xml.strip():
-        raise TypeError(f"{_display_path(script_path)} gen_srdf() envelope field 'xml' must be non-empty")
-    if not isinstance(raw_payload.get("urdf"), str) or not str(raw_payload.get("urdf")).strip():
-        raise TypeError(f"{_display_path(script_path)} gen_srdf() envelope field 'urdf' must be a non-empty string")
-    return {
-        "xml": xml,
-        "urdf": str(raw_payload["urdf"]).strip(),
-    }
-
-
-def _normalize_xml_value(raw_xml: object, *, script_path: Path, label: str) -> str:
-    if _is_xml_element(raw_xml):
-        return _serialize_xml_element(raw_xml)
-    if isinstance(raw_xml, str):
-        return raw_xml
-    raise TypeError(
-        f"{_display_path(script_path)} {label} must be an xml.etree.ElementTree.Element or string, "
-        f"got {type(raw_xml).__name__}"
+def _summary_line(display: str, srdf_source: SrdfSource, urdf_path: Path) -> str:
+    return (
+        f"OK {display}: robot {srdf_source.robot_name!r}, urdf {_display_path(urdf_path)}, "
+        f"{len(srdf_source.planning_groups)} groups, {len(srdf_source.end_effectors)} end effectors, "
+        f"{len(srdf_source.group_states)} group states, "
+        f"{len(srdf_source.disabled_collision_pairs)} disabled collision pairs"
     )
 
 
-def _is_xml_element(value: object) -> bool:
-    return isinstance(value, ET.Element)
-
-
-def _serialize_xml_element(root: ET.Element) -> str:
-    ET.indent(root, space="  ")
-    body = ET.tostring(root, encoding="unicode", short_empty_elements=True)
-    return f'<?xml version="1.0"?>\n{body}'
-
-
-def _resolve_relative_file(raw_value: object, *, source_path: Path, suffix: str, label: str) -> Path:
-    if not isinstance(raw_value, str) or not raw_value.strip():
-        raise ValueError(f"{label} must be a non-empty relative path")
-    value = raw_value.strip()
-    if "\\" in value:
-        raise ValueError(f"{label} must use POSIX '/' separators")
-    pure = PurePosixPath(value)
+def _resolve_linked_urdf_path(srdf_source: SrdfSource, *, srdf_path: Path) -> Path:
+    raw_value = str(srdf_source.urdf_ref or "").strip()
+    if not raw_value:
+        raise SrdfSourceError('SRDF must include <tcad:urdf path="..."/> metadata')
+    if "\\" in raw_value:
+        raise SrdfSourceError("SRDF tcad:urdf path must use POSIX '/' separators")
+    pure = PurePosixPath(raw_value)
     if pure.is_absolute() or any(part in {"", "."} for part in pure.parts):
-        raise ValueError(f"{label} must be a relative path")
-    path = (source_path.parent / Path(*pure.parts)).resolve()
-    if path.suffix.lower() != suffix:
-        raise ValueError(f"{label} must end in {suffix}")
-    if not path.is_file():
-        raise FileNotFoundError(f"{label} file does not exist: {_display_path(path)}")
-    return path
+        raise SrdfSourceError(f"SRDF tcad:urdf path must be a relative path: {raw_value!r}")
+    urdf_path = (srdf_path.parent / Path(*pure.parts)).resolve()
+    if urdf_path.suffix.lower() != URDF_SUFFIX:
+        raise SrdfSourceError(f"SRDF tcad:urdf path must end in .urdf: {raw_value!r}")
+    if not urdf_path.is_file():
+        raise SrdfSourceError(f"SRDF tcad:urdf file does not exist: {raw_value!r}")
+    return urdf_path
 
 
 def _read_urdf_robot(urdf_path: Path) -> dict[str, object]:
@@ -320,6 +163,11 @@ def _validate_srdf_against_urdf(srdf_source: SrdfSource, *, urdf_robot: dict[str
                 raise SrdfSourceError(f"planning group {group.name!r} chain references missing base_link {chain.base_link!r}")
             if chain.tip_link not in links:
                 raise SrdfSourceError(f"planning group {group.name!r} chain references missing tip_link {chain.tip_link!r}")
+            if not _joint_path_for_chain(urdf_robot, base_link=chain.base_link, tip_link=chain.tip_link):
+                raise SrdfSourceError(
+                    f"planning group {group.name!r} chain {chain.base_link!r} -> {chain.tip_link!r} "
+                    "is not a parent-to-child path in the URDF tree"
+                )
 
     for end_effector in srdf_source.end_effectors:
         if end_effector.parent_link not in links:
@@ -597,66 +445,10 @@ def _warn_on_many_manual_disabled_pairs(pairs: object) -> None:
         )
 
 
-def _validate_linked_urdf_ref(srdf_source: SrdfSource, *, expected_urdf_ref: str) -> None:
-    urdf_ref = str(srdf_source.urdf_ref or "").strip()
-    if not urdf_ref:
-        raise SrdfSourceError("SRDF must include <tcad:urdf path=\"...\"/> metadata")
-    if PurePosixPath(urdf_ref) != PurePosixPath(expected_urdf_ref):
-        raise SrdfSourceError(
-            f"SRDF tcad:urdf path {urdf_ref!r} must match gen_srdf() envelope urdf {expected_urdf_ref!r}"
-        )
-
-
-def _relative_posix_path(target_path: Path, start_dir: Path) -> str:
-    return Path(os.path.relpath(Path(target_path).resolve(), Path(start_dir).resolve())).as_posix()
-
-
-def _xml_with_linked_urdf_metadata(xml: str, *, output_path: Path, urdf_path: Path) -> str:
-    try:
-        root = ET.fromstring(xml)
-    except ET.ParseError as exc:
-        raise SrdfSourceError(f"{_display_path(output_path)} could not be parsed as SRDF XML") from exc
-    if root.tag != "robot":
-        raise SrdfSourceError(f"{_display_path(output_path)} root element must be <robot>")
-    ET.register_namespace("tcad", SRDF_METADATA_NAMESPACE)
-    ET.register_namespace("explorer", LEGACY_EXPLORER_NAMESPACE)
-    metadata_tag = f"{{{SRDF_METADATA_NAMESPACE}}}urdf"
-    legacy_metadata_tag = f"{{{LEGACY_EXPLORER_NAMESPACE}}}urdf"
-    metadata_element = None
-    for child in list(root):
-        if child.tag in {metadata_tag, legacy_metadata_tag} or str(child.tag or "") in {"tcad:urdf", "explorer:urdf"}:
-            metadata_element = child
-            break
-    if metadata_element is None:
-        metadata_element = ET.Element(metadata_tag)
-        root.insert(0, metadata_element)
-    else:
-        metadata_element.tag = metadata_tag
-    metadata_element.set("path", _relative_posix_path(urdf_path, output_path.parent))
-    if root.text is None:
-        root.text = "\n  "
-    if metadata_element.tail is None:
-        metadata_element.tail = "\n  "
-    return _serialize_xml_element(root)
-
-
 def _validate_names_exist(names: object, allowed: set[str], *, label: str) -> None:
     for name in names:
         if name not in allowed:
             raise SrdfSourceError(f"{label} references missing name {name!r}")
-
-
-def _write_srdf_payload(xml: str, *, output_path: Path, script_path: Path) -> None:
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    xml = xml_with_text_to_cad_metadata(
-        xml,
-        python_source_identity(script_path),
-        output_path=output_path,
-        source_path=script_path,
-    )
-    text = xml if xml.endswith("\n") else xml + "\n"
-    output_path.write_text(text, encoding="utf-8")
-    print(f"Wrote SRDF: {output_path}")
 
 
 def _display_path(path: Path) -> str:

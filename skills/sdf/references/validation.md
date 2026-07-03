@@ -1,6 +1,6 @@
 # SDF validation
 
-Generation validates every `gen_sdf()` result before writing. This validation is dependency-light and intended to catch common structural errors. It is not a replacement for libsdformat, Gazebo, or target-simulator validation.
+Every created or modified `.sdf` is validated with `python scripts/sdf <file.sdf>` before the task is reported complete. The bundled validation is dependency-light and intended to catch common structural errors. It is not a replacement for libsdformat, Gazebo, or target-simulator validation.
 
 ## Validation model
 
@@ -16,7 +16,7 @@ The validator should produce structured diagnostics with severities:
 
 ### Root and document shape
 
-The runtime should check that:
+The validator should check that:
 
 - the root element is `<sdf>`;
 - the root has a non-empty `version` attribute;
@@ -26,7 +26,7 @@ The runtime should check that:
 
 ### Names and scopes
 
-The runtime should check that:
+The validator should check that:
 
 - world names are non-empty and unique at root scope;
 - root model names are non-empty and unique;
@@ -35,7 +35,7 @@ The runtime should check that:
 
 ### Poses
 
-The runtime should check all `<pose>` elements:
+The validator should check all `<pose>` elements:
 
 - default `rotation_format="euler_rpy"` has exactly six finite values;
 - `rotation_format="quat_xyzw"` has exactly seven finite values;
@@ -48,7 +48,7 @@ The runtime should check all `<pose>` elements:
 
 ### Frames
 
-The runtime should check that:
+The validator should check that:
 
 - `<frame name="...">` has a non-empty unique name in its scope;
 - `attached_to`, when present, resolves locally when possible;
@@ -63,7 +63,7 @@ Known SDF 1.12 joint types:
 continuous, revolute, gearbox, revolute2, prismatic, ball, screw, universal, fixed
 ```
 
-The runtime should check that:
+The validator should check that:
 
 - joint type is non-empty and known;
 - `<parent>` and `<child>` text exists;
@@ -78,7 +78,7 @@ The runtime should check that:
 
 ### Geometry and mesh URIs
 
-The runtime should check that:
+The validator should check that:
 
 - each visual/collision owner has one geometry element;
 - each geometry has exactly one known primitive or mesh child when possible;
@@ -88,12 +88,12 @@ The runtime should check that:
 - plane size has 2 positive finite values;
 - mesh URI values are non-empty;
 - mesh scale has 3 positive finite values when present;
-- local mesh references resolve relative to the generated `.sdf` location;
+- local mesh references resolve relative to the `.sdf` file's location;
 - known external URI schemes such as `model://`, `package://`, `fuel://`, `http://`, and `https://` are accepted without local filesystem resolution.
 
 ### Inertials
 
-The runtime should check that:
+The validator should check that:
 
 - mass is positive and finite;
 - inertial pose is valid when present;
@@ -104,7 +104,7 @@ The runtime should check that:
 
 ### Sensors and plugins
 
-The runtime should check that:
+The validator should check that:
 
 - sensor names are non-empty and unique within owner scope;
 - sensor `type` is non-empty;
@@ -120,7 +120,7 @@ Plugin filenames and parameters can pass bundled validation and still fail in th
 
 CAD Viewer treats SDF plugins, sensors, lights, includes, and nested models as static metadata. The bundled validator checks generic structure only; it does not validate Explorer-only motion contracts or execute simulator plugins.
 
-After generated `.sdf` files are created or modified, hand explicit paths to `$cad-viewer` for live viewer links when available.
+After `.sdf` files are created or modified, hand explicit paths to `$cad-viewer` for live viewer links when available.
 
 This plugin is for CAD Viewer visualization and review. It is not a Gazebo physics/controller plugin and should not be represented as simulator runtime behavior.
 
@@ -135,7 +135,7 @@ gz sdf --check path/to/file.sdf
 The CLI option should be:
 
 ```bash
-python scripts/sdf path/to/source.py --gz-check auto
+python scripts/sdf path/to/file.sdf --gz-check auto
 ```
 
 External checks should be recorded in the diagnostics report. A skipped optional check is not a bundled-validation failure unless the user requested `--gz-check required`.

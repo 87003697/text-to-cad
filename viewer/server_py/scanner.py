@@ -37,7 +37,6 @@ VIEWER_SKIPPED_DIRECTORIES = frozenset(
 )
 PYTHON_GENERATOR_BY_KIND = {
     "dxf": "gen_dxf", "step": "gen_step", "stp": "gen_step",
-    "urdf": "gen_urdf", "srdf": "gen_srdf", "sdf": "gen_sdf",
 }
 _SRDF_URDF_METADATA_PATTERN = re.compile(
     r"""<\s*(?:tcad|explorer):urdf\b[^>]*\bpath\s*=\s*["']([^"']+)["'][^>]*>""",
@@ -266,19 +265,7 @@ def _collect_cad_source_files(root_path: str, result: list) -> list:
     return result
 
 
-# --- generated-source status (python-generated dxf/urdf/srdf/sdf) ---
-_CADPY_COMMENT_METADATA_RE = re.compile(r"<!--\s*cadpy:([A-Za-z][A-Za-z0-9]*)=(.*?)-->", re.DOTALL)
-
-
-def _read_xml_textto_cad_metadata(file_path):
-    try:
-        with open(file_path, "r", encoding="utf-8") as handle:
-            text = handle.read()
-    except OSError:
-        return {}
-    return {m.group(1).strip(): m.group(2).strip() for m in _CADPY_COMMENT_METADATA_RE.finditer(text)}
-
-
+# --- generated-source status (python-generated dxf/step) ---
 def _read_dxf_textto_cad_metadata(file_path):
     try:
         with open(file_path, "r", encoding="utf-8") as handle:
@@ -303,9 +290,8 @@ def _read_generated_file_metadata(file_path, kind):
     normalized = str(kind or "").strip().lower()
     if normalized == "dxf":
         return _read_dxf_textto_cad_metadata(file_path)
-    if normalized in ("urdf", "srdf", "sdf"):
-        return _read_xml_textto_cad_metadata(file_path)
     # step/stp embedded metadata (readTextToCadStepMetadataFile) is a TODO.
+    # urdf/srdf/sdf are authored XML artifacts, not python-generated outputs.
     return {}
 
 

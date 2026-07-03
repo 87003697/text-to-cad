@@ -39,7 +39,7 @@ When running a tool manually, use that skill's interpreter:
 
 ```bash
 .venv/skills/cad/bin/python skills/cad/scripts/step --help
-.venv/skills/urdf/bin/python skills/urdf/scripts/urdf --help
+python3 skills/urdf/scripts/urdf --help  # stdlib-only validator, no venv needed
 ```
 
 ## Link Skills Into Your Agent
