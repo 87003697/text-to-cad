@@ -171,14 +171,18 @@ def _validate_model(
     _check_unique_named(nested_model_elements, result, model_path, "model")
 
     link_names = set(_names(link_elements))
+    joint_names = set(_names(joint_elements))
     frame_names = set(_names(frame_elements))
     nested_model_names = set(_names(nested_model_elements))
+    # SDFormat >= 1.7 frame graph: links, joints, and explicit frames are all
+    # valid relative_to / attached_to / expressed_in targets.
     local_targets = {
         "world",
         "__model__",
         model_name,
         *parent_targets,
         *link_names,
+        *joint_names,
         *frame_names,
         *nested_model_names,
     }
@@ -382,7 +386,9 @@ def _validate_geometry_owner(
     owner_name = _required_name(owner, result, owner_path, _local_name(owner.tag))
     path = f"{owner_path}[@name='{owner_name}']" if owner_name else owner_path
     for pose_element in _children(owner, "pose"):
-        _validate_pose(pose_element, result, f"{path}/pose", targets)
+        # Visual/collision pose defaults to the owning link frame, which is
+        # unambiguous; only flag explicit-but-unresolvable relative_to.
+        _validate_pose(pose_element, result, f"{path}/pose", targets, warn_missing_relative_to=False)
 
     geometry_elements = _children(owner, "geometry")
     if len(geometry_elements) != 1:
@@ -432,7 +438,8 @@ def _validate_geometry_owner(
 
 def _validate_inertial(inertial_element: ET.Element, result: ValidationResult, targets: set[str], inertial_path: str) -> None:
     for pose_element in _children(inertial_element, "pose"):
-        _validate_pose(pose_element, result, f"{inertial_path}/pose", targets)
+        # Inertial pose defaults to the owning link frame (unambiguous).
+        _validate_pose(pose_element, result, f"{inertial_path}/pose", targets, warn_missing_relative_to=False)
     mass = _optional_number_child(inertial_element, "mass", result, f"{inertial_path}/mass", required=True)
     if mass is not None and mass <= 0:
         result.add("error", "invalid_mass", "inertial mass must be positive", path=f"{inertial_path}/mass")
@@ -484,7 +491,14 @@ def _validate_include(include_element: ET.Element, result: ValidationResult, inc
     _required_child_text(include_element, "uri", result, f"{include_path}/uri", "include uri")
 
 
-def _validate_pose(pose_element: ET.Element, result: ValidationResult, pose_path: str, targets: set[str]) -> None:
+def _validate_pose(
+    pose_element: ET.Element,
+    result: ValidationResult,
+    pose_path: str,
+    targets: set[str],
+    *,
+    warn_missing_relative_to: bool = True,
+) -> None:
     rotation_format = str(pose_element.attrib.get("rotation_format") or "euler_rpy").strip()
     if rotation_format == "euler_rpy":
         values = _parse_number_text(str(pose_element.text or ""), 6, result, pose_path, "pose")
@@ -508,7 +522,7 @@ def _validate_pose(pose_element: ET.Element, result: ValidationResult, pose_path
         result.add("warning", "pose_uses_degrees", "pose uses degrees=true; SDF defaults to radians", path=pose_path)
 
     relative_to = str(pose_element.attrib.get("relative_to") or "").strip()
-    if values is not None and _nontrivial_pose(values) and not relative_to:
+    if warn_missing_relative_to and values is not None and _nontrivial_pose(values) and not relative_to:
         result.add(
             "warning",
             "pose_missing_relative_to",

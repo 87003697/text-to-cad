@@ -555,13 +555,24 @@ def _validate_geometry_child(geometry_child: ET.Element, *, source_path: Path, l
 def _validate_mesh_scale(mesh_element: ET.Element, *, source_path: Path, filename: str) -> None:
     if "scale" not in mesh_element.attrib:
         return
-    _required_positive_float_vector_attr(
+    values = _required_float_vector_attr(
         mesh_element,
         "scale",
         expected_count=3,
         source_path=source_path,
         label=f"mesh {filename!r} scale",
     )
+    if any(value == 0.0 for value in values):
+        raise UrdfSourceError(
+            f"{_relative_to_repo(source_path)} mesh {filename!r} scale values must be nonzero"
+        )
+    if any(value < 0.0 for value in values):
+        warnings.warn(
+            f"{_relative_to_repo(source_path)} mesh {filename!r} uses negative scale (mirroring); "
+            "consumer support varies and triangle winding flips.",
+            UrdfSourceWarning,
+            stacklevel=4,
+        )
 
 
 def _required_positive_float_attr(
