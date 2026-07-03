@@ -168,7 +168,7 @@ when the skill viewer path is a development symlink.
 Run from `skills/cad-viewer`:
 
 ```bash
-npm --prefix scripts/viewer run agent:start -- --host 127.0.0.1 --shutdown-after 12h
+npm --prefix scripts/viewer run agent:start -- --host 127.0.0.1 --dir <absolute-model-root>
 ```
 
 Every returned Viewer URL must include `?dir=<absolute-model-root>`, commonly

@@ -44,6 +44,27 @@ function errorMessage(error) {
   return error instanceof Error ? error.message : String(error);
 }
 
+function parseRequestUrl(req) {
+  try {
+    return new URL(req?.url || "/", "http://localhost");
+  } catch {
+    return null;
+  }
+}
+
+function sendInvalidRequestUrl(res) {
+  sendJson(res, 400, { error: "Invalid request URL" });
+}
+
+export function sendMiddlewareError(res, error) {
+  console.error("CAD Viewer request failed", error);
+  if (res.headersSent || res.writableEnded) {
+    res.destroy?.();
+    return;
+  }
+  sendJson(res, 500, { error: errorMessage(error) });
+}
+
 function requestRootDir(requestUrl) {
   return String(requestUrl?.searchParams?.get("dir") || "").trim();
 }
@@ -206,12 +227,20 @@ export function createCadViewerApiMiddleware({
   if (!backend) {
     throw new Error("createCadViewerApiMiddleware requires backend");
   }
-  return async function cadViewerApiMiddleware(req, res, next) {
-    const requestUrl = new URL(req.url || "/", "http://localhost");
+  async function handleCadViewerApiRequest(req, res, next) {
+    const requestUrl = parseRequestUrl(req);
+    if (!requestUrl) {
+      sendInvalidRequestUrl(res);
+      return;
+    }
     const activeRootDir = requestRootDir(requestUrl) || rootDir || "";
     const activeFileRef = requestFileRef(requestUrl);
     if (requestUrl.pathname === "/__cad/server") {
-      sendJson(res, 200, serverInfo({ rootDir: activeRootDir, fileRef: activeFileRef }));
+      try {
+        sendJson(res, 200, serverInfo({ rootDir: activeRootDir, fileRef: activeFileRef }));
+      } catch (error) {
+        sendJson(res, 400, { error: errorMessage(error) });
+      }
       return;
     }
     if (requestUrl.pathname === "/__cad/directory/activate") {
@@ -574,6 +603,14 @@ export function createCadViewerApiMiddleware({
       return;
     }
     next();
+  }
+
+  return async function cadViewerApiMiddleware(req, res, next) {
+    try {
+      await handleCadViewerApiRequest(req, res, next);
+    } catch (error) {
+      sendMiddlewareError(res, error);
+    }
   };
 }
 
@@ -582,7 +619,11 @@ export function createLocalAssetMiddleware({ backend, rootDir } = {}) {
     throw new Error("createLocalAssetMiddleware requires backend");
   }
   return function localAssetMiddleware(req, res, next) {
-    const requestUrl = new URL(req.url || "/", "http://localhost");
+    const requestUrl = parseRequestUrl(req);
+    if (!requestUrl) {
+      next();
+      return;
+    }
     const fallbackFileRef = legacyCadAssetFileRef(requestUrl, req);
     if (
       (requestUrl.pathname !== "/__cad/asset" && !fallbackFileRef) ||
@@ -623,7 +664,12 @@ export function createLocalAssetMiddleware({ backend, rootDir } = {}) {
 
 export function serveDistAsset({ distRoot, indexHtmlPath = path.join(distRoot, "index.html") } = {}) {
   return function distAssetMiddleware(req, res, next) {
-    const requestUrl = new URL(req.url || "/", "http://localhost");
+    const requestUrl = parseRequestUrl(req);
+    if (!requestUrl) {
+      res.statusCode = 400;
+      res.end("Bad request");
+      return;
+    }
     const requestPath = requestUrl.pathname === "/" ? "/index.html" : requestUrl.pathname;
     let filePath = "";
     try {

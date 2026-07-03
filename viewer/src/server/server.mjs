@@ -12,6 +12,7 @@ import { createVercelBlobAssetBackend } from "./vercelBlobAssetBackend.mjs";
 import {
   createCadViewerApiMiddleware,
   createLocalAssetMiddleware,
+  sendMiddlewareError,
   serveDistAsset,
 } from "./httpHandlers.mjs";
 import {
@@ -181,7 +182,14 @@ function runMiddleware(index, req, res) {
     res.end("Not found");
     return;
   }
-  middleware(req, res, () => runMiddleware(index + 1, req, res));
+  let result;
+  try {
+    result = middleware(req, res, () => runMiddleware(index + 1, req, res));
+  } catch (error) {
+    sendMiddlewareError(res, error);
+    return;
+  }
+  Promise.resolve(result).catch((error) => sendMiddlewareError(res, error));
 }
 
 const server = http.createServer((req, res) => runMiddleware(0, req, res));

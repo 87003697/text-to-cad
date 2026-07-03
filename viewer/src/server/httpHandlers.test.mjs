@@ -673,3 +673,89 @@ test("CAD Viewer API middleware rejects non-filesystem STEP artifact backends", 
     error: "STEP artifact generation requires a local filesystem CAD Viewer backend",
   });
 });
+
+
+test("CAD Viewer API middleware reports invalid dir values without crashing /__cad/server", async () => {
+  const middleware = createCadViewerApiMiddleware({
+    backend: {},
+    serverInfo: ({ rootDir }) => {
+      if (rootDir === "..") {
+        throw new Error("CAD Viewer root directory must stay inside the directory root: ..");
+      }
+      return { app: "cad-viewer" };
+    },
+  });
+  const req = { method: "GET", url: "/__cad/server?dir=.." };
+  const res = createResponse();
+
+  await middleware(req, res, () => {});
+
+  assert.equal(res.statusCode, 400);
+  assert.match(JSON.parse(res.body).error, /must stay inside the directory root/);
+});
+
+test("CAD Viewer API middleware responds 400 to malformed request URLs", async () => {
+  const middleware = createCadViewerApiMiddleware({
+    backend: {},
+  });
+  const req = { method: "GET", url: "//[a]" };
+  const res = createResponse();
+  let nextCalled = false;
+
+  await middleware(req, res, () => {
+    nextCalled = true;
+  });
+
+  assert.equal(nextCalled, false);
+  assert.equal(res.statusCode, 400);
+  assert.deepEqual(JSON.parse(res.body), { error: "Invalid request URL" });
+});
+
+test("CAD Viewer API middleware converts unexpected middleware errors into 500 responses", async () => {
+  const middleware = createCadViewerApiMiddleware({
+    backend: {},
+  });
+  const req = { method: "GET", url: "/not-a-cad-route" };
+  const res = createResponse();
+
+  await middleware(req, res, () => {
+    throw new Error("downstream middleware exploded");
+  });
+
+  assert.equal(res.statusCode, 500);
+  assert.deepEqual(JSON.parse(res.body), { error: "downstream middleware exploded" });
+});
+
+test("local asset middleware passes malformed request URLs to the next middleware", () => {
+  const middleware = createLocalAssetMiddleware({
+    backend: {
+      assetPathForFileRef: () => {
+        throw new Error("should not resolve assets for malformed URLs");
+      },
+    },
+  });
+  const req = { method: "GET", url: "//[a]", headers: {} };
+  const res = createResponse();
+  let nextCalled = false;
+
+  middleware(req, res, () => {
+    nextCalled = true;
+  });
+
+  assert.equal(nextCalled, true);
+});
+
+test("dist asset middleware responds 400 to malformed request URLs", () => {
+  const middleware = serveDistAsset({ distRoot: os.tmpdir() });
+  const req = { method: "GET", url: "//[a]" };
+  const res = createResponse();
+  let nextCalled = false;
+
+  middleware(req, res, () => {
+    nextCalled = true;
+  });
+
+  assert.equal(nextCalled, false);
+  assert.equal(res.statusCode, 400);
+  assert.equal(res.body, "Bad request");
+});
