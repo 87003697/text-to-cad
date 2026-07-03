@@ -45,7 +45,7 @@ class SrdfSourceTests(unittest.TestCase):
             self.assertEqual(source.planning_groups[0].name, "arm")
             self.assertEqual(source.planning_groups[0].joint_names, ("shoulder", "elbow"))
             self.assertEqual(source.end_effectors[0].name, "tcp")
-            self.assertEqual(source.group_states[0].joint_values_by_name_rad["elbow"], 1.57)
+            self.assertEqual(source.group_states[0].joint_values_by_name["elbow"], 1.57)
             self.assertEqual(source.disabled_collision_pairs[0].reason, "Adjacent")
 
     def test_reads_legacy_explorer_urdf_metadata(self) -> None:

@@ -42,7 +42,7 @@ For every joint, record:
 | Field | Meaning |
 |---|---|
 | joint name | Exact URDF `<joint name="...">` value. |
-| type | `fixed`, `revolute`, `continuous`, or `prismatic` for the current `scripts/urdf` validator; record `floating` or `planar` only if the project has a different supported validation path. |
+| type | `fixed`, `revolute`, `continuous`, or `prismatic` for the bundled validator; record `floating` or `planar` only if the project has a different supported validation path. |
 | parent link | Link whose frame expresses the joint origin. |
 | child link | Link whose frame is created at the joint frame. |
 | origin xyz/rpy | Parent-link-frame transform from parent link to joint frame. |

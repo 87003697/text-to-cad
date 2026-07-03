@@ -70,5 +70,5 @@ Regenerate link meshes per link with the CAD skill, e.g.
 `python scripts/step models/robots/juno/STEP/<link>.py --3mf ../3MF/<link>.3mf`.
 Edit the robot description directly in `juno.urdf` / `juno.srdf`, then
 validate with the URDF/SRDF skills:
-`python scripts/urdf models/robots/juno/juno.urdf`
-and `python scripts/srdf models/robots/juno/juno.srdf`.
+`python scripts/validate models/robots/juno/juno.urdf`
+and `python scripts/validate models/robots/juno/juno.srdf`.

@@ -37,7 +37,7 @@ After completing SRDF work that creates or modifies a `.srdf`, you must ALWAYS h
 8. **Define end effectors after group membership is known.** Avoid overlap between an end-effector group and its parent group. Record the actual target/TCP link.
 9. **Define group states in URDF-native units.** Revolute and continuous values are radians; prismatic values are meters. Do not store degrees in SRDF. Values must lie within URDF limits and must not set fixed or mimic joints.
 10. **Generate disabled collisions from evidence.** Use adjacency derived from the URDF joint table, MoveIt Setup Assistant sampling, or explicit user-provided collision matrices. Do not invent broad disable lists. See `references/disabled-collisions.md`.
-11. **Validate every created or modified `.srdf`** with `scripts/srdf`; it cross-validates all names, chains, states, and pairs against the linked URDF. Fix findings and re-validate until clean.
+11. **Validate every created or modified `.srdf`** with `scripts/validate`; it cross-validates all names, chains, states, and pairs against the linked URDF. Fix findings and re-validate until clean.
 12. **Run MoveIt smoke tests when available.** Use MoveIt Setup Assistant or a project MoveIt launch directly.
 13. **Report assumptions and skipped checks.** Include incomplete validation, missing MoveIt environment, manually reasoned collision disables, and inferred target links.
 
@@ -48,8 +48,8 @@ Run with the Python environment for the project or workspace. Treat `python` in 
 From this skill directory, the validator shape is:
 
 ```bash
-python scripts/srdf path/to/robot.srdf
-python scripts/srdf path/to/a.srdf path/to/b.srdf
+python scripts/validate path/to/robot.srdf
+python scripts/validate path/to/a.srdf path/to/b.srdf
 ```
 
 The validator parses the SRDF, resolves the linked URDF via `<tcad:urdf path="..."/>`, and cross-validates: robot-name match, group/joint/link/subgroup name existence, chain path resolvability, end-effector topology, group-state membership and limits, and disabled-collision pairs. It exits nonzero if any target fails. Relative targets resolve from the current working directory.

@@ -45,10 +45,6 @@ class SrdfGroupState:
     group: str
     joint_values_by_name: dict[str, float]
 
-    @property
-    def joint_values_by_name_rad(self) -> dict[str, float]:
-        return self.joint_values_by_name
-
 
 @dataclass(frozen=True)
 class SrdfDisabledCollisionPair:

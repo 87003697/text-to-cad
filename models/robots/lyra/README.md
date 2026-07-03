@@ -74,5 +74,5 @@ Regenerate link meshes per link with the CAD skill, e.g.
 `python scripts/step models/robots/lyra/STEP/<link>.py --3mf ../3MF/<link>.3mf`.
 Edit the robot description directly in `lyra.urdf` / `lyra.srdf`, then
 validate with the URDF/SRDF skills:
-`python scripts/urdf models/robots/lyra/lyra.urdf`
-and `python scripts/srdf models/robots/lyra/lyra.srdf`.
+`python scripts/validate models/robots/lyra/lyra.urdf`
+and `python scripts/validate models/robots/lyra/lyra.srdf`.
