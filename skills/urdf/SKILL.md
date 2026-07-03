@@ -19,7 +19,7 @@ Use this skill for URDF robot-description outputs. Treat URDF work as constraine
 4. Do not infer spatial transforms, mesh units, handedness, axes, or joint signs from vague prose. Use CAD transforms, dimensioned drawings, measured values, existing source data, or explicit documented assumptions.
 5. Never freehand numeric values that are the result of computation — inertia tensors, centers of mass, unit conversions across many links, mirrored transforms. Compute them: closed-form formulas for primitives, or a throwaway helper script for mesh-derived values. See `references/inertials.md`.
 6. For physical links, model `inertial`, `visual`, and `collision` separately when the target consumer needs them. Frame-only links may intentionally omit mass and geometry.
-7. Validate every created or modified `.urdf` with `scripts/urdf` before reporting completion. See `references/validation.md`.
+7. Validate every created or modified `.urdf` with `scripts/validate` before reporting completion. See `references/validation.md`.
 8. Helper scripts are allowed and encouraged for computation, but they are scaffolding, not the artifact's source of truth. For complex or genuinely parametric models it is reasonable to keep a model-local helper script on disk next to related source code (for example STEP generator sources) and note it in the ledger; this is optional, and the checked-in `.urdf` remains canonical.
 
 ## CAD Viewer Handoff
@@ -33,7 +33,7 @@ After completing URDF work that creates or modifies a `.urdf`, you must ALWAYS h
 3. Prepare mesh assets first when links reference meshes: one mesh per link, exported in that link's frame by the owning CAD/mesh workflow. See `references/meshes.md`.
 4. Author or edit the URDF XML directly, following `references/authoring-contract.md` for structure, ordering, and naming.
 5. Compute — never guess — inertials and other derived numbers. See `references/inertials.md`.
-6. Validate with `scripts/urdf`; fix findings and re-validate until clean.
+6. Validate with `scripts/validate`; fix findings and re-validate until clean.
 7. Run the verification recipe in `references/validation.md`: external tools when available (`check_urdf`), then a viewer review sweeping every joint.
 8. Report remaining assumptions, unchecked spatial data, and validation gaps.
 
@@ -44,8 +44,8 @@ Run with the Python environment for the project or workspace. Treat `python` in 
 From this skill directory, the validator shape is:
 
 ```bash
-python scripts/urdf path/to/robot.urdf
-python scripts/urdf path/to/a.urdf path/to/b.urdf
+python scripts/validate path/to/robot.urdf
+python scripts/validate path/to/a.urdf path/to/b.urdf
 ```
 
 The validator checks XML structure, tree topology, joint semantics, geometry, mesh references, and inertial plausibility, and prints a per-file summary. It exits nonzero if any target fails. Relative targets resolve from the current working directory; when running from outside this skill directory, prefix the launcher path so target files still resolve from the intended workspace.

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import Enum
-from math import degrees, isfinite
+from math import isfinite
 from pathlib import Path, PurePosixPath
 from urllib.parse import unquote, urlparse
 import warnings
@@ -43,8 +43,10 @@ class UrdfJoint:
     joint_type: str
     parent_link: str
     child_link: str
-    min_value_deg: float | None
-    max_value_deg: float | None
+    # Native URDF units: radians for revolute, meters for prismatic.
+    # Fixed joints carry (0.0, 0.0); continuous joints carry (None, None).
+    lower: float | None
+    upper: float | None
 
 
 @dataclass(frozen=True)
@@ -159,15 +161,15 @@ def read_urdf_source(urdf_path: Path, *, package_map: dict[str, Path] | None = N
         parent_by_child[child_link] = parent_link
         children.add(child_link)
         joints_by_parent.setdefault(parent_link, []).append(child_link)
-        min_value_deg, max_value_deg = _joint_limits_deg(joint_element, joint_type=joint_type, source_path=resolved_path)
+        lower, upper = _validated_joint_limits(joint_element, joint_type=joint_type, source_path=resolved_path)
         joints.append(
             UrdfJoint(
                 name=name,
                 joint_type=joint_type,
                 parent_link=parent_link,
                 child_link=child_link,
-                min_value_deg=min_value_deg,
-                max_value_deg=max_value_deg,
+                lower=lower,
+                upper=upper,
             )
         )
 
@@ -399,7 +401,7 @@ def _validated_mesh_path(
     return mesh_path
 
 
-def _joint_limits_deg(
+def _validated_joint_limits(
     joint_element: ET.Element,
     *,
     joint_type: str,
@@ -408,7 +410,7 @@ def _joint_limits_deg(
     if joint_type == "fixed":
         return 0.0, 0.0
     if joint_type == "continuous":
-        return -180.0, 180.0
+        return None, None
     limit_element = joint_element.find("limit")
     if limit_element is None:
         raise UrdfSourceError(
@@ -445,9 +447,7 @@ def _joint_limits_deg(
         source_path=source_path,
         label=f"{joint_type} joint {joint_element.attrib.get('name', '')!r} velocity limit",
     )
-    if joint_type == "prismatic":
-        return lower, upper
-    return degrees(lower), degrees(upper)
+    return lower, upper
 
 
 def _validate_optional_float_attr(

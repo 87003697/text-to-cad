@@ -428,7 +428,6 @@ def _srdf_inventory_from_source(srdf_source: SrdfSource, *, srdf_path: Path, urd
                 "name": group_state.name,
                 "group": group_state.group,
                 "jointValuesByName": group_state.joint_values_by_name,
-                "jointValuesByNameRad": group_state.joint_values_by_name,
             }
             for group_state in srdf_source.group_states
         ],

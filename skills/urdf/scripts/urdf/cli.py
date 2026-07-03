@@ -26,7 +26,7 @@ def validate_urdf_targets(targets: Sequence[str]) -> int:
 
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
-        prog="urdf",
+        prog="validate",
         description="Validate explicit URDF targets.",
     )
     parser.add_argument(

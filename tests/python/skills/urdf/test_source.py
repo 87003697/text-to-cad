@@ -501,8 +501,8 @@ class UrdfSourceTests(unittest.TestCase):
         source = read_urdf_source(source_path)
 
         self.assertEqual("prismatic", source.joints[0].joint_type)
-        self.assertEqual(0.0, source.joints[0].min_value_deg)
-        self.assertEqual(0.05, source.joints[0].max_value_deg)
+        self.assertEqual(0.0, source.joints[0].lower)
+        self.assertEqual(0.05, source.joints[0].upper)
 
     def test_read_urdf_source_rejects_reversed_joint_limits(self) -> None:
         source_path = self._write_urdf(

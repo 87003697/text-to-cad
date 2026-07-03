@@ -6,7 +6,7 @@ Every created or modified `.urdf` runs this recipe before the task is reported c
 
 Run in order; stop and fix at the first failing step:
 
-1. **Bundled validator** (always): `python scripts/urdf path/to/robot.urdf`. Fix findings and re-run until clean; treat warnings as findings unless the ledger explains them.
+1. **Bundled validator** (always): `python scripts/validate path/to/robot.urdf`. Fix findings and re-run until clean; treat warnings as findings unless the ledger explains them.
 2. **External URDF tools** (when installed): `check_urdf robot.urdf` (ros liburdfdom) parses with the reference parser and prints the link tree. Report as skipped when unavailable.
 3. **Viewer sweep** (whenever `$cad-viewer` is available): load the file, confirm meshes appear at sane scale and pose, then sweep **every** movable joint through its limits and compare the motion against the ledger's positive-motion statement, joint by joint. This is the only step that catches a wrong axis sign.
 4. **Consumer smoke test** (when the target runtime is available): RViz display, robot_state_publisher TF tree, Gazebo/Ignition load, or MoveIt model load.

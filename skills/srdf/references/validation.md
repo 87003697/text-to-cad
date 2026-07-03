@@ -4,7 +4,7 @@ Every created or modified `.srdf` runs this recipe before the task is reported c
 
 ## Recipe
 
-1. **Bundled validator** (always): `python scripts/srdf path/to/robot.srdf`. Fix findings and re-run until clean; treat warnings as findings unless the ledger explains them.
+1. **Bundled validator** (always): `python scripts/validate path/to/robot.srdf`. Fix findings and re-run until clean; treat warnings as findings unless the ledger explains them.
 2. **Viewer review** (whenever `$cad-viewer` is available): load the SRDF, confirm the linked URDF resolves and renders, and exercise named group states. Include MoveIt2 controls for IK/path review when the task needs them.
 3. **MoveIt smoke test** (when a MoveIt environment is available): load the URDF+SRDF pair in MoveIt Setup Assistant or a project launch; solve IK for the primary group; plan to a named state. Report as skipped when unavailable.
 

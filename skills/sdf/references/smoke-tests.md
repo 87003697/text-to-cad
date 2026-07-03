@@ -7,8 +7,8 @@ Use smoke tests after the SDF passes bundled validation. The goal is to catch si
 ### Bundled validation
 
 ```bash
-python scripts/sdf path/to/model.py
-python scripts/sdf path/to/model.py --strict
+python scripts/validate path/to/model.sdf
+python scripts/validate path/to/model.sdf --strict
 ```
 
 Bundled validation runs during explicit target generation. Use `--strict` when warnings should block handoff.
@@ -24,7 +24,7 @@ gz sdf --check path/to/model.sdf
 or through the skill CLI:
 
 ```bash
-python scripts/sdf path/to/model.py --gz-check auto
+python scripts/validate path/to/model.sdf --gz-check auto
 ```
 
 Use the exact simulator environment that will consume the file when possible.

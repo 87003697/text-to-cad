@@ -32,7 +32,7 @@ def validate_sdf_targets(
 
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
-        prog="sdf",
+        prog="validate",
         description="Validate explicit SDFormat/SDF targets.",
     )
     parser.add_argument(

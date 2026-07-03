@@ -80,8 +80,6 @@ class CadSource:
     three_mf_path: Path | None = None
     native_glb_path: Path | None = None
     dxf_path: Path | None = None
-    urdf_path: Path | None = None
-    sdf_path: Path | None = None
     mesh_tolerance: float | None = None
     mesh_angular_tolerance: float | None = None
     color: tuple[float, float, float, float] | None = None
@@ -104,10 +102,6 @@ class CadSource:
                 paths.append(self.step_path)
             if self.dxf_path is not None:
                 paths.append(self.dxf_path)
-            if self.urdf_path is not None:
-                paths.append(self.urdf_path)
-            if self.sdf_path is not None:
-                paths.append(self.sdf_path)
         if self.stl_path is not None:
             paths.append(self.stl_path)
         if self.three_mf_path is not None:
@@ -215,8 +209,6 @@ def find_source_by_path(path: Path, root: Path | None = None) -> CadSource | Non
             source.step_path,
             source.script_path,
             source.dxf_path,
-            source.urdf_path,
-            source.sdf_path,
             *source.generated_paths,
         ]
         if any(candidate is not None and candidate.resolve() == resolved_path for candidate in paths):
@@ -321,7 +313,7 @@ def _generator_part_stem(script_path: Path) -> str:
     """The part name a generator script produces, independent of the source extension.
 
     A ``<name>.step.py`` entry generator and the legacy ``<name>.py`` both produce the logical
-    STEP ``<name>.step`` (and ``<name>.dxf`` / ``.urdf`` / ``.sdf`` siblings), so the derived
+    STEP ``<name>.step`` (and a ``<name>.dxf`` sibling), so the derived
     artifact paths key off ``<name>`` either way — ``.with_suffix('.step')`` would wrongly yield
     ``<name>.step.step`` for a ``.step.py`` source.
     """
@@ -361,8 +353,6 @@ def _read_python_source(script_path: Path, *, allow_dxf_only: bool = False) -> C
             three_mf_path=None,
             native_glb_path=None,
             dxf_path=_generator_sibling(resolved_script_path, ".dxf"),
-            urdf_path=None,
-            sdf_path=None,
             mesh_tolerance=None,
             mesh_angular_tolerance=None,
         )
@@ -372,8 +362,6 @@ def _read_python_source(script_path: Path, *, allow_dxf_only: bool = False) -> C
         )
     step_path = _generator_sibling(resolved_script_path, ".step")
     dxf_path = _generator_sibling(resolved_script_path, ".dxf") if metadata.has_gen_dxf else None
-    urdf_path = _generator_sibling(resolved_script_path, ".urdf") if metadata.has_gen_urdf else None
-    sdf_path = _generator_sibling(resolved_script_path, ".sdf") if metadata.has_gen_sdf else None
     return CadSource(
         source_ref=source_ref_from_path(resolved_script_path),
         cad_ref=cad_ref_from_step_path(step_path),
@@ -388,8 +376,6 @@ def _read_python_source(script_path: Path, *, allow_dxf_only: bool = False) -> C
         three_mf_path=None,
         native_glb_path=None,
         dxf_path=dxf_path,
-        urdf_path=urdf_path,
-        sdf_path=sdf_path,
         mesh_tolerance=None,
         mesh_angular_tolerance=None,
     )
