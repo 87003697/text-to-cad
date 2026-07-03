@@ -29,15 +29,12 @@ interpenetrates.
 
 - `lyra.py` — build123d generator (`gen_step()`); authoritative source.
   Joints are authored as `cadpy.assembly.AssemblyHelper` revolute frames
-  driven by the baked `relaxed` pose. Also exposes `gen_urdf()` /
-  `gen_srdf()` for the robot description.
+  driven by the baked `relaxed` pose.
 - `lyra_parts/` — part-builder package. `chain.py` is the shared kinematic
   chain/pose/limit spec (stdlib-only FK included) used by the CAD assembly,
-  the URDF/SRDF generators, and the animation sidecar; `lib.py` holds the
-  palette and the verified `revolute_attach()` joint math; `palm.py` /
-  `digits.py` build the parts; `description.py` emits the URDF/SRDF XML;
-  `mass_props.py` holds baked CAD volume/COM/inertia/bbox data;
-  `clearance.py` is the stdlib capsule-collision self-check (run
+  the authored URDF/SRDF artifacts, and the animation sidecar; `lib.py`
+  holds the palette and the verified `revolute_attach()` joint math;
+  `palm.py` / `digits.py` build the parts; `clearance.py` is the stdlib capsule-collision self-check (run
   `python -m lyra_parts.clearance` from this directory after editing
   poses or animation key orders — it sweeps every named pose and every
   sidecar blend path).
@@ -75,6 +72,7 @@ sits at its joint center with axes parallel to the palm at zero angles
 Regenerate with the CAD skill: `python scripts/step models/robots/lyra/lyra.py`.
 Regenerate link meshes per link with the CAD skill, e.g.
 `python scripts/step models/robots/lyra/STEP/<link>.py --3mf ../3MF/<link>.3mf`.
-Regenerate the robot description with the URDF/SRDF skills:
-`python scripts/urdf models/robots/lyra/lyra.py=models/robots/lyra/lyra.urdf`
-and `python scripts/srdf models/robots/lyra/lyra.py=models/robots/lyra/lyra.srdf`.
+Edit the robot description directly in `lyra.urdf` / `lyra.srdf`, then
+validate with the URDF/SRDF skills:
+`python scripts/urdf models/robots/lyra/lyra.urdf`
+and `python scripts/srdf models/robots/lyra/lyra.srdf`.

@@ -25,13 +25,11 @@ Hands add posed (cosmetic) finger articulation on top of the 27 counted DOF.
 - `juno.py` — build123d generator (`gen_step()`); authoritative source.
   Pose angles are module-level parameters; joints are authored as
   `cadpy.assembly.AssemblyHelper` revolute frames driven by those angles.
-  Also exposes `gen_urdf()` / `gen_srdf()` for the robot description.
 - `juno_parts/` — part-builder package (sculpted segments, joint hardware,
   shared style library). Each builder returns an identity-location labeled
   compound in its part-local frame. `chain.py` is the shared kinematic
-  chain/pose/limit spec used by both the CAD assembly and the URDF/SRDF
-  generators; `description.py` emits the URDF/SRDF XML; `mass_props.py`
-  holds baked CAD volume/COM/inertia/bbox data.
+  chain/pose/limit spec used by the CAD assembly and mirrored by the
+  authored URDF/SRDF artifacts.
 - `juno.step` — generated STEP assembly (derived artifact).
 - `juno.params.js` — CAD Viewer animation sidecar with four in-place gaits
   built on per-frame chain FK plus two-link leg IK around the baked
@@ -49,12 +47,14 @@ Hands add posed (cosmetic) finger articulation on top of the 27 counted DOF.
   kick behind a fists-up guard). Controls: `phase`, `gait`,
   `strideLength`, `legLift`, `armSwing`, `torsoSway`. Occurrence refs
   `#o1.1..#o1.28` follow the `asm.add` order in `juno.py`.
-- `juno.urdf` — generated URDF (derived artifact): a frame-only
+- `juno.urdf` — authored URDF (source of truth for the robot
+  description): a frame-only
   `base_footprint` ground root plus 28 physical links and 27 revolute
   joints (zero pose stands with soles on z = 0), per-link 3MF mesh
   visuals, bbox collisions, CAD-derived inertials at an assumed 35 kg
   total mass.
-- `juno.srdf` — generated MoveIt2 SRDF (derived artifact): limb/torso/head
+- `juno.srdf` — authored MoveIt2 SRDF (source of truth for planning
+  semantics): limb/torso/head
   planning groups, hand end effectors, disabled collisions, and whole-body
   group states (`zero`, `athletic_ready`, `t_pose`, `wave_right`, `squat`).
 - `STEP/` — per-link wrapper sources (`gen_step()` per link) and their
@@ -68,6 +68,7 @@ Units mm. Pelvis waist-yaw joint center is the world origin; +X forward,
 Regenerate with the CAD skill: `python scripts/step models/robots/juno/juno.py`.
 Regenerate link meshes per link with the CAD skill, e.g.
 `python scripts/step models/robots/juno/STEP/<link>.py --3mf ../3MF/<link>.3mf`.
-Regenerate the robot description with the URDF/SRDF skills:
-`python scripts/urdf models/robots/juno/juno.py=models/robots/juno/juno.urdf`
-and `python scripts/srdf models/robots/juno/juno.py=models/robots/juno/juno.srdf`.
+Edit the robot description directly in `juno.urdf` / `juno.srdf`, then
+validate with the URDF/SRDF skills:
+`python scripts/urdf models/robots/juno/juno.urdf`
+and `python scripts/srdf models/robots/juno/juno.srdf`.

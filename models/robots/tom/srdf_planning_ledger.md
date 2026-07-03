@@ -64,7 +64,7 @@ Disabled collisions are generated from the linked URDF kinematic adjacency list 
 
 ## MoveIt smoke tests
 
-MoveIt Setup Assistant and runtime IK/path planning were not run in this change. The generated SRDFs are validated by the SRDF generator against their linked URDFs and handed to CAD Viewer for review links.
+MoveIt Setup Assistant and runtime IK/path planning were not run in this change. The authored SRDFs are validated by the SRDF skill validator against their linked URDFs and handed to CAD Viewer for review links.
 
 ## Assumptions to report
 

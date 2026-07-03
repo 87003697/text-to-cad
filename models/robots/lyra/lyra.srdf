@@ -1,6 +1,4 @@
 <?xml version="1.0"?>
-<!-- cadpy:sourcePath=lyra.py -->
-<!-- cadpy:sourceHash=a6a104f1320f8319869d1cbfe47898e91f5d3186feedb4af8563b1a584c6f9d6 -->
 <robot xmlns:tcad="https://text-to-cad.dev/srdf" name="lyra">
   <tcad:urdf path="lyra.urdf" />
   <virtual_joint name="world_to_wrist" type="fixed" parent_frame="world" child_link="wrist_mount" />

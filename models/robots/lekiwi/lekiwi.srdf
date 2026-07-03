@@ -1,6 +1,6 @@
 <?xml version="1.0"?>
-<robot xmlns:explorer="https://text-to-cad.dev/explorer" name="LeKiwi">
-  <explorer:urdf path="lekiwi.urdf" />
+<robot xmlns:tcad="https://text-to-cad.dev/srdf" name="LeKiwi">
+  <tcad:urdf path="lekiwi.urdf" />
   <group name="mobile_base">
     <joint name="ST3215_Servo_Motor-v1-2_Revolute-60" />
     <joint name="ST3215_Servo_Motor-v1-1_Revolute-62" />

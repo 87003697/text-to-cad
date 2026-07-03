@@ -1,6 +1,6 @@
 <?xml version="1.0"?>
-<robot xmlns:explorer="https://text-to-cad.dev/explorer" name="Elrobot">
-  <explorer:urdf path="elrobot-follower.urdf" />
+<robot xmlns:tcad="https://text-to-cad.dev/srdf" name="Elrobot">
+  <tcad:urdf path="elrobot-follower.urdf" />
   <group name="manipulator">
     <chain base_link="base_link" tip_link="Gripper_Base_v1_1" />
   </group>
