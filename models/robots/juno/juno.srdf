@@ -1,7 +1,4 @@
 <?xml version="1.0"?>
-<!-- cadpy:sourcePath=juno.py -->
-<!-- cadpy:sourceHash=8c6bdac2000dbd3d6f8722708d54954298dc89df3510c53acc29bd7be165a894 -->
-<!-- cadpy:sourceFingerprint=6a581c8539a9fb65a307de2dc1903d68fd80d2ba1486903cff5327c3e49b9289 -->
 <robot xmlns:tcad="https://text-to-cad.dev/srdf" name="juno">
   <tcad:urdf path="juno.urdf" />
   <virtual_joint name="world_to_base" type="floating" parent_frame="world" child_link="base_footprint" />

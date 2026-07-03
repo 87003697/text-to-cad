@@ -35,9 +35,9 @@ Chain offsets (parent-local joint origins, mm):
   wrist:    wrist pitch (0,0,-28)
   collar:   neck pitch (0,0,46)
 
-Chain offsets and pose angles are shared with the URDF/SRDF generators via
-juno_parts/chain.py; gen_urdf()/gen_srdf() emit juno.urdf/juno.srdf from
-the same spec (see juno_parts/description.py).
+Chain offsets and pose angles live in juno_parts/chain.py; juno.urdf and
+juno.srdf are directly authored XML artifacts derived from the same spec
+(see the ledger comments in those files).
 """
 
 from __future__ import annotations
@@ -66,8 +66,8 @@ from juno_parts.torso import build_torso
 
 # ----------------------------------------------------------- pose (degrees)
 # Athletic ready stance: knees bent, feet flat, arms relaxed forward.
-# Pose angles and chain offsets are shared with the URDF/SRDF generators
-# through juno_parts/chain.py; edit them there.
+# Pose angles and chain offsets are shared with the authored URDF/SRDF
+# artifacts through juno_parts/chain.py; edit them there.
 HIP_PITCH_DEG = chain.HIP_PITCH_DEG
 KNEE_DEG = chain.KNEE_DEG
 ANKLE_PITCH_DEG = chain.ANKLE_PITCH_DEG
@@ -187,15 +187,3 @@ def assemble() -> Compound:
 
 def gen_step():
     return {"shape": assemble(), "params": "juno.params.js"}
-
-
-def gen_urdf():
-    from juno_parts.description import build_urdf
-
-    return {"xml": build_urdf()}
-
-
-def gen_srdf():
-    from juno_parts.description import build_srdf
-
-    return {"xml": build_srdf(), "urdf": "juno.urdf"}
