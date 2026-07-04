@@ -62,9 +62,7 @@ check_no_symlinks() {
 check_no_symlinks "viewer/packages"
 check_no_symlinks "skills/cad/scripts/packages"
 check_no_symlinks "skills/cad-viewer/scripts/viewer"
-check_no_symlinks "skills/urdf/scripts/packages"
-check_no_symlinks "skills/srdf/scripts/packages"
-check_no_symlinks "skills/sdf/scripts/packages"
+check_no_symlinks "skills/dxf/scripts/packages"
 check_no_symlinks "plugins/cad/skills"
 
 if [ "$RUN_BUNDLE_CHECK" -eq 1 ]; then
