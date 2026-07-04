@@ -1,6 +1,6 @@
 # SDF validation
 
-Every created or modified `.sdf` is validated with `python scripts/validate <file.sdf>` before the task is reported complete. The bundled validation is dependency-light and intended to catch common structural errors. It is not a replacement for libsdformat, Gazebo, or target-simulator validation.
+Every created or modified `.sdf` is validated with `python scripts/validate <file.sdf>` before the task is reported complete. The validator collects all findings in one pass (severity, code, XML path); `--strict` fails on warnings and `--format json` emits a machine-readable document. The bundled validation is dependency-light and intended to catch common structural errors. It is not a replacement for libsdformat, Gazebo, or target-simulator validation.
 
 ## Validation model
 
@@ -30,7 +30,12 @@ The validator should check that:
 
 - world names are non-empty and unique at root scope;
 - root model names are non-empty and unique;
-- model link, joint, frame, sensor, visual, and collision names are non-empty where required and unique within their owner scope;
+- model link, joint, frame, sensor, light, visual, and collision names are non-empty where required and unique within their owner scope;
+- links, joints, frames, and nested models share one frame-graph namespace per scope: cross-type name collisions are errors;
+- a model with no links, includes, or nested models is an error;
+- unknown elements under model/link/joint/visual/collision/inertial warn (misspelled elements are otherwise silently ignored);
+- the version must be a known SDFormat release (1.4–1.12) or it warns;
+- world- and link-level lights need a valid type (`point`/`directional`/`spot`) and validated poses;
 - duplicate names are reported with a path and scope.
 
 ### Poses
@@ -73,6 +78,7 @@ The validator should check that:
 - `axis2` is used only where the joint type supports a second axis;
 - `expressed_in` resolves when local resolution is possible;
 - limit and dynamics values are finite or documented infinities where SDFormat permits them;
+- effort/velocity/stiffness/dissipation must be non-negative (`-1` is accepted as the unlimited sentinel for effort/velocity); axis `<dynamics>` damping/friction must be non-negative;
 - finite lower limits do not exceed finite upper limits;
 - continuous joints with fake finite position limits produce a warning.
 
@@ -87,7 +93,7 @@ The validator should check that:
 - sphere radius is positive and finite;
 - plane size has 2 positive finite values;
 - mesh URI values are non-empty;
-- mesh scale has 3 positive finite values when present;
+- mesh scale has 3 nonzero finite values when present (negative scale mirrors the mesh and warns — consumer support varies);
 - local mesh references resolve relative to the `.sdf` file's location;
 - known external URI schemes such as `model://`, `package://`, `fuel://`, `http://`, and `https://` are accepted without local filesystem resolution.
 
@@ -98,7 +104,7 @@ The validator should check that:
 - mass is positive and finite;
 - inertial pose is valid when present;
 - inertia tensor components are finite;
-- inertia matrix is positive semidefinite within tolerance;
+- inertia matrix is positive semidefinite within tolerance; principal moments violating the triangle inequality warn;
 - missing inertial data on dynamic physical links is at least a warning;
 - frame-like or static links can omit inertials when documented.
 
@@ -107,7 +113,7 @@ The validator should check that:
 The validator should check that:
 
 - sensor names are non-empty and unique within owner scope;
-- sensor `type` is non-empty;
+- sensor `type` is non-empty and from the known SDFormat sensor-type list (unknown types warn);
 - sensor `update_rate`, when present, is finite and non-negative;
 - sensor pose is valid;
 - plugin filename is non-empty;

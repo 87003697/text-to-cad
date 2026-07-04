@@ -305,7 +305,7 @@ class UrdfSourceTests(unittest.TestCase):
         with self.assertRaisesRegex(UrdfSourceError, "mass must be positive"):
             read_urdf_source(source_path)
 
-    def test_read_urdf_source_rejects_invalid_inertia_triangle(self) -> None:
+    def test_read_urdf_source_warns_on_invalid_inertia_triangle(self) -> None:
         source_path = self._write_urdf(
             "robot",
             """
@@ -320,8 +320,10 @@ class UrdfSourceTests(unittest.TestCase):
             """,
         )
 
-        with self.assertRaisesRegex(UrdfSourceError, "triangle"):
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always", UrdfSourceWarning)
             read_urdf_source(source_path)
+        self.assertTrue(any("triangle" in str(warning.message) for warning in caught))
 
     def test_read_urdf_source_rejects_invalid_origin_vector(self) -> None:
         source_path = self._write_urdf(

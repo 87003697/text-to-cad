@@ -46,9 +46,12 @@ From this skill directory, the validator shape is:
 ```bash
 python scripts/validate path/to/robot.urdf
 python scripts/validate path/to/a.urdf path/to/b.urdf
+python scripts/validate path/to/robot.urdf --strict
+python scripts/validate path/to/robot.urdf --format json
+python scripts/validate path/to/robot.urdf --package robot_description=/path/to/pkg
 ```
 
-The validator checks XML structure, tree topology, joint semantics, geometry, mesh references, and inertial plausibility, and prints a per-file summary. It exits nonzero if any target fails. Relative targets resolve from the current working directory; when running from outside this skill directory, prefix the launcher path so target files still resolve from the intended workspace.
+The validator collects all findings in one pass (severity, code, XML path) across XML structure, tree topology, joint semantics (limits, mimic, dynamics), geometry, mesh references, materials, inertial physics, and misspelled elements, and prints a per-file summary. `--strict` treats warnings as failures; `--format json` emits a machine-readable findings document; `--package NAME=PATH` resolves `package://` mesh URIs. It exits nonzero if any target fails. Relative targets resolve from the current working directory; when running from outside this skill directory, prefix the launcher path so target files still resolve from the intended workspace.
 
 Validation is a guardrail, not spatial proof: a URDF can pass every structural check while placing a joint in the wrong spot. The ledger and viewer sweep exist for that reason.
 

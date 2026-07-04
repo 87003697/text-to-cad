@@ -4,7 +4,7 @@ Every created or modified `.srdf` runs this recipe before the task is reported c
 
 ## Recipe
 
-1. **Bundled validator** (always): `python scripts/validate path/to/robot.srdf`. Fix findings and re-run until clean; treat warnings as findings unless the ledger explains them.
+1. **Bundled validator** (always): `python scripts/validate path/to/robot.srdf`. It collects *all* findings in one pass (severity, code, XML path); fix them and re-run until clean. Use `--strict` to fail on warnings and `--format json` for machine-readable output.
 2. **Viewer review** (whenever `$cad-viewer` is available): load the SRDF, confirm the linked URDF resolves and renders, and exercise named group states. Include MoveIt2 controls for IK/path review when the task needs them.
 3. **MoveIt smoke test** (when a MoveIt environment is available): load the URDF+SRDF pair in MoveIt Setup Assistant or a project launch; solve IK for the primary group; plan to a named state. Report as skipped when unavailable.
 
@@ -20,10 +20,15 @@ Against the linked URDF:
 
 - every group joint/link/subgroup name exists (joints in the URDF, links in the URDF, subgroups in the SRDF);
 - every chain `base_link`/`tip_link` exists **and** the chain is a real parent→child path in the URDF tree;
+- subgroup references contain no cycles;
 - at least one planning group is defined;
+- virtual joints: valid type (`fixed`/`floating`/`planar`), non-empty `parent_frame`, `child_link` exists in the URDF (name collisions with URDF joints warn);
+- passive joints exist in the URDF and are never set by group states;
 - end effectors: group exists, parent group exists when named, parent link exists, no link overlap between EE group and parent group, parent link in parent group or adjacent to the EE group;
-- group states: group exists, each joint exists and belongs to the group, no fixed or mimic joints, values within URDF revolute/prismatic limits;
-- disabled collisions: both links exist, distinct, non-empty reason, no (reversed) duplicates; warns when 25+ pairs are manually reasoned.
+- group states: group exists, each joint exists and belongs to the group, no fixed/mimic/passive joints, values within URDF revolute/prismatic limits; states that omit group joints warn (MoveIt fills them from the current state);
+- disabled collisions: both links exist, distinct, non-empty reason, no (reversed) duplicates; pairs claiming reason `Adjacent` that are not actually joined by a URDF joint warn; warns when 25+ pairs are manually reasoned;
+- unknown elements under `<robot>` or `<group>` warn — misspelled elements are otherwise silently ignored by MoveIt;
+- a linked URDF that is not a single-rooted tree warns (chain/adjacency checks become unreliable).
 
 ## What Validation Cannot Prove
 
