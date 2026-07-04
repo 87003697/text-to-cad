@@ -562,7 +562,7 @@ class CadGenerationTests(unittest.TestCase):
         self.assertEqual(self.temp_root / "flat.dxf", spec.dxf_path)
         self.assertEqual(self._cad_ref("flat") + ".dxf", spec.cad_ref)
 
-    def test_generator_rejects_gen_dxf_beside_gen_step(self) -> None:
+    def test_explicit_target_rejects_gen_dxf_beside_gen_step(self) -> None:
         script_path = self.temp_root / "flat.py"
         script_path.write_text(
             "\n".join(
@@ -579,9 +579,9 @@ class CadGenerationTests(unittest.TestCase):
         )
 
         with self.assertRaisesRegex(ValueError, "dedicated <name>.dxf.py drawing generator"):
-            cad_generation.list_entry_specs()
+            cad_catalog.source_from_path(script_path)
 
-    def test_dxf_generator_script_rejects_gen_step(self) -> None:
+    def test_explicit_dxf_generator_target_rejects_gen_step(self) -> None:
         script_path = self.temp_root / "flat.dxf.py"
         script_path.write_text(
             "\n".join(
@@ -598,7 +598,35 @@ class CadGenerationTests(unittest.TestCase):
         )
 
         with self.assertRaisesRegex(ValueError, "must not define gen_step"):
-            cad_generation.list_entry_specs()
+            cad_catalog.source_from_path(script_path)
+
+    def test_directory_discovery_skips_invalid_generator_sources(self) -> None:
+        # An unmigrated source (gen_dxf beside gen_step) is skipped with a warning
+        # instead of aborting the whole catalog, so unrelated targets keep working.
+        invalid_path = self.temp_root / "unmigrated.py"
+        invalid_path.write_text(
+            "\n".join(
+                [
+                    "def gen_step():",
+                    "    return {'shape': object()}",
+                    "",
+                    "def gen_dxf():",
+                    "    return {'document': object()}",
+                    "",
+                ]
+            ),
+            encoding="utf-8",
+        )
+        self._generator_script("flat")
+
+        stderr = io.StringIO()
+        with contextlib.redirect_stderr(stderr):
+            specs = cad_generation.list_entry_specs()
+
+        cad_refs = {spec.cad_ref for spec in specs}
+        self.assertIn(self._cad_ref("flat"), cad_refs)
+        self.assertNotIn(self._cad_ref("unmigrated"), cad_refs)
+        self.assertIn("skipping invalid CAD source", stderr.getvalue())
 
     def test_deprecated_urdf_and_sdf_generators_are_ignored(self) -> None:
         # gen_urdf()/gen_sdf() are hard-deprecated: robot descriptions are

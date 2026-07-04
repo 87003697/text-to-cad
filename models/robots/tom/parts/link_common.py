@@ -60,6 +60,7 @@ import build123d
 if str(TOM_DIR) not in sys.path:
     sys.path.insert(0, str(TOM_DIR))
 
+from robot_common.booleans import intersection_volume
 from robot_common.materials import GRAY_ALUMINUM_COLOR
 from robot_common.step_import import import_as_shape
 
@@ -586,7 +587,7 @@ def verify_no_interference(
     *,
     label: str,
 ) -> float:
-    volume = placed_servo.intersect(bracket).volume
+    volume = intersection_volume(placed_servo, bracket)
     if volume > INTERFERENCE_VOLUME_LIMIT_MM3:
         raise RuntimeError(f"Bracket intersects {label} by {volume:.6f} mm^3")
     return volume

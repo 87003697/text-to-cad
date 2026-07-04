@@ -3,11 +3,15 @@ import { refreshCadCatalog } from "./cadManifestStore.js";
 // "Export model" formats for a STEP/assembly entry, in dropdown/menu order.
 export const STEP_EXPORT_FORMATS = Object.freeze(["step", "3mf", "stl", "glb"]);
 
+// A generated `.dxf.py` drawing exports its native format only.
+export const DXF_EXPORT_FORMATS = Object.freeze(["dxf"]);
+
 const STEP_EXPORT_FORMAT_LABELS = Object.freeze({
   step: "STEP",
   "3mf": "3MF",
   stl: "STL",
   glb: "GLB",
+  dxf: "DXF",
 });
 
 export function stepExportFormatLabel(format) {
@@ -21,12 +25,12 @@ export function isImportedStepEntry(entry) {
   return !(entry?.source && entry.source.sourcePath);
 }
 
-// Menu label for one export format. STEP is the model's native type, so it always reads as
-// "Download STEP"; every other format is "Export <FORMAT>".
+// Menu label for one export format. STEP/DXF are the entry's native type, so they read as
+// "Download <FORMAT>"; every other format is "Export <FORMAT>".
 export function stepExportItemLabel(format) {
   const normalized = String(format || "").trim().toLowerCase();
-  if (normalized === "step") {
-    return "Download STEP";
+  if (normalized === "step" || normalized === "dxf") {
+    return `Download ${stepExportFormatLabel(normalized)}`;
   }
   return `Export ${stepExportFormatLabel(normalized)}`;
 }
@@ -41,7 +45,7 @@ function normalizedFileRef(value) {
 
 function normalizedFormat(value) {
   const format = String(value || "").trim().toLowerCase().replace(/^\./, "");
-  return STEP_EXPORT_FORMATS.includes(format) ? format : "";
+  return STEP_EXPORT_FORMATS.includes(format) || DXF_EXPORT_FORMATS.includes(format) ? format : "";
 }
 
 // Request a server-side export of one STEP/assembly model to `format`, written to a path the
