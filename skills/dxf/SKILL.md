@@ -21,7 +21,7 @@ The default build product is the **drawing package** — a render artifact the C
   drawing.dxf     # the built DXF
 ```
 
-The sibling `<name>.dxf` file is written **on demand only** (`--dxf`, `-o`, or a `SOURCE=OUTPUT` pair) for deliverables handed to cutting services or other tools. Do not commit generated `.dxf` outputs; the package cache is gitignored and rebuilt on demand.
+The sibling `<name>.dxf` file is written **on demand only** (`--dxf`, `-o`, or a `SOURCE=OUTPUT` pair) for deliverables handed to cutting services or other tools. The sibling namespace belongs to the generator: when the source changes and the drawing rebuilds without an export request, a stale sibling export is deleted (it no longer matches the geometry) — re-export to refresh it. Do not commit generated `.dxf` outputs; the package cache is gitignored and rebuilt on demand.
 
 ## The three DXF workflows
 
