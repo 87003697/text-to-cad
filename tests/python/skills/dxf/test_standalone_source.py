@@ -58,16 +58,41 @@ class StandaloneDxfSourceTests(unittest.TestCase):
             self.assertIsNone(source.step_path)
             self.assertEqual(script_path.with_suffix(".dxf"), source.dxf_path)
 
-    def test_directory_catalog_skips_dxf_only_source(self) -> None:
+    def test_directory_catalog_skips_plain_py_dxf_only_source(self) -> None:
+        # Plain `<name>.py` drawing sources stay explicit-target-only; catalog
+        # entries require the `.dxf.py` naming.
         with temporary_directory(prefix="dxf-skill") as root:
             _write_standalone_source(Path(root))
             self.assertEqual((), cad_catalog.iter_cad_sources(Path(root)))
 
-    def test_generate_dxf_targets_writes_sibling_output(self) -> None:
+    def test_directory_catalog_lists_dxf_generator_entry(self) -> None:
+        with temporary_directory(prefix="dxf-skill") as root:
+            script_path = _write_standalone_source(Path(root), stem="outline.dxf")
+            sources = cad_catalog.iter_cad_sources(Path(root))
+
+            self.assertEqual(1, len(sources))
+            self.assertEqual("dxf", sources[0].kind)
+            self.assertEqual(script_path, sources[0].script_path)
+
+    def test_generate_dxf_targets_builds_drawing_package(self) -> None:
         with temporary_directory(prefix="dxf-skill") as root:
             script_path = _write_standalone_source(Path(root))
 
             self.assertEqual(0, cad_generation.generate_dxf_targets([str(script_path)]))
+
+            package_dir = Path(root) / "__cadcache__" / "models" / script_path.name
+            self.assertTrue((package_dir / "drawing.json").exists())
+            drawing_path = package_dir / "drawing.dxf"
+            self.assertTrue(drawing_path.exists())
+            self.assertGreater(drawing_path.stat().st_size, 0)
+            # No sibling export unless requested.
+            self.assertFalse(script_path.with_suffix(".dxf").exists())
+
+    def test_generate_dxf_targets_writes_sibling_output_on_demand(self) -> None:
+        with temporary_directory(prefix="dxf-skill") as root:
+            script_path = _write_standalone_source(Path(root))
+
+            self.assertEqual(0, cad_generation.generate_dxf_targets([str(script_path)], write_dxf=True))
 
             output_path = script_path.with_suffix(".dxf")
             self.assertTrue(output_path.exists())

@@ -17,7 +17,10 @@ def _targets_include_output_pairs(targets: Sequence[str]) -> bool:
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="dxf",
-        description="Generate explicit DXF targets from Python sources.",
+        description=(
+            "Build drawing-package render artifacts (and on-demand DXF exports) from "
+            "Python gen_dxf() sources."
+        ),
     )
     parser.add_argument(
         "targets",
@@ -28,7 +31,17 @@ def build_parser() -> argparse.ArgumentParser:
         "-o",
         "--output",
         metavar="PATH",
-        help="Write the generated DXF file to this path. Valid only with one plain generated Python target.",
+        help="Export the generated DXF file to this path. Valid only with one plain generated Python target.",
+    )
+    parser.add_argument(
+        "--dxf",
+        action="store_true",
+        help="Also write the sibling <name>.dxf export (the drawing package is always built).",
+    )
+    parser.add_argument(
+        "--force",
+        action="store_true",
+        help="Regenerate even when the cached drawing package is current.",
     )
     parser.add_argument(
         "--verbose",
@@ -46,7 +59,13 @@ def main(argv: Sequence[str] | None = None) -> int:
             parser.error("--output cannot be combined with SOURCE=OUTPUT targets")
         if len(args.targets) != 1:
             parser.error("--output can only be used with exactly one target")
-    return generate_dxf_targets(args.targets, output=args.output, verbose=bool(args.verbose))
+    return generate_dxf_targets(
+        args.targets,
+        output=args.output,
+        write_dxf=bool(args.dxf),
+        force=bool(args.force),
+        verbose=bool(args.verbose),
+    )
 
 
 if __name__ == "__main__":

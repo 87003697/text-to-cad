@@ -22,9 +22,3 @@ def gen_step() -> dict[str, object]:
     return {
         "shape": build_step(),
     }
-
-
-def gen_dxf() -> dict[str, object]:
-    return {
-        "document": build_dxf(),
-    }

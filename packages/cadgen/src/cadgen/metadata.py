@@ -38,7 +38,7 @@ STEP_ENVELOPE_FIELDS = {
     "mesh_tolerance",
     "mesh_angular_tolerance",
 }
-DXF_ENVELOPE_FIELDS = {"document"}
+DXF_ENVELOPE_FIELDS = {"document", "sources"}
 
 
 DEFAULT_MESH_SETTINGS = MeshSettings(

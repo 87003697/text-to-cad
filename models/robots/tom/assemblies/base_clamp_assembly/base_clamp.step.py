@@ -1718,16 +1718,5 @@ def gen_step() -> dict[str, object]:
     }
 
 
-def gen_dxf() -> dict[str, object]:
-    return {
-        "document": build_dxf(),
-    }
-
-
-def gen() -> None:
-    gen_step()
-    gen_dxf()
-
-
 if __name__ == "__main__":
-    gen()
+    gen_step()

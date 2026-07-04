@@ -180,6 +180,137 @@ class ScannerListsGenerated(unittest.TestCase):
             # No __cadcache__ at all — it must still be listed (built on demand).
             self.assertIn(py, scanner._collect_cad_source_files(root, []))
 
+    def test_unbuilt_dxf_py_is_collected(self):
+        with tempfile.TemporaryDirectory() as root:
+            py = os.path.join(root, "outline.dxf.py")
+            with open(py, "w") as h:
+                h.write("def gen_dxf():\n    return None\n")
+            self.assertIn(py, scanner._collect_cad_source_files(root, []))
+
+
+def _write_drawing_package(root, py_name, *, closure_extra=None, with_package=True, kind="drawing-package"):
+    """A gen_dxf generator + optionally its drawing package, keyed by the
+    .dxf.py name like cadgen writes it."""
+    py_path = os.path.join(root, py_name)
+    with open(py_path, "w") as h:
+        h.write("def gen_dxf():\n    return None\n")
+    for rel in (closure_extra or []):
+        with open(os.path.join(root, rel), "w") as h:
+            h.write("# closure dep\n")
+    if not with_package:
+        return py_path, None
+    pkg = os.path.join(root, "__cadcache__", "models", py_name)
+    os.makedirs(pkg, exist_ok=True)
+    with open(os.path.join(pkg, "drawing.dxf"), "w") as h:
+        h.write("0\nEOF\n")
+    descriptor = {
+        "kind": kind,
+        "sourceKind": "python",
+        "sourcePath": py_name,
+        "sourceHash": "abc123",
+        "dxf": "drawing.dxf",
+        "sourceClosureFiles": [py_name] + list(closure_extra or []),
+    }
+    with open(os.path.join(pkg, "drawing.json"), "w") as h:
+        json.dump(descriptor, h)
+    return py_path, pkg
+
+
+class OwnsDxfEntry(unittest.TestCase):
+    def test_generated_dxf_py_is_owned_and_raw_dxf_is_not(self):
+        self.assertTrue(artifact.owns_entry({"file": "/x/outline.dxf.py"}))
+        self.assertTrue(artifact.owns_dxf_entry({"file": "/x/outline.DXF.PY"}))
+        # A raw imported .dxf renders directly from disk — never artifact-managed.
+        self.assertFalse(artifact.owns_entry({"file": "/x/outline.dxf"}))
+        self.assertFalse(artifact.owns_dxf_entry({"file": "/x/a.step.py"}))
+        self.assertFalse(artifact.owns_dxf_entry(None))
+
+
+class GeneratedDxfFreshness(unittest.TestCase):
+    def test_built_drawing_is_ready(self):
+        with tempfile.TemporaryDirectory() as root:
+            py, _ = _write_drawing_package(root, "outline.dxf.py", closure_extra=["lib.py"])
+            ok, code = artifact.validate_dxf_freshness(root, py)
+            self.assertTrue(ok, code)
+
+    def test_unbuilt_drawing_is_needs_build(self):
+        with tempfile.TemporaryDirectory() as root:
+            py, _ = _write_drawing_package(root, "outline.dxf.py", with_package=False)
+            ok, code = artifact.validate_dxf_freshness(root, py)
+            self.assertFalse(ok)
+            self.assertEqual(code, "missing_dxf_artifact")
+            self.assertIn(code, artifact.BUILDABLE_STEP_ARTIFACT_CODES)
+
+    def test_missing_drawing_dxf_is_buildable(self):
+        with tempfile.TemporaryDirectory() as root:
+            py, pkg = _write_drawing_package(root, "outline.dxf.py")
+            os.remove(os.path.join(pkg, "drawing.dxf"))
+            ok, code = artifact.validate_dxf_freshness(root, py)
+            self.assertFalse(ok)
+            self.assertEqual(code, "missing_dxf_artifact")
+
+    def test_unsupported_descriptor(self):
+        with tempfile.TemporaryDirectory() as root:
+            py, _ = _write_drawing_package(root, "outline.dxf.py", kind="something-else")
+            ok, code = artifact.validate_dxf_freshness(root, py)
+            self.assertFalse(ok)
+            self.assertEqual(code, "unsupported_dxf_artifact")
+
+    def test_stale_when_closure_dep_newer(self):
+        import time
+        with tempfile.TemporaryDirectory() as root:
+            py, _ = _write_drawing_package(root, "outline.dxf.py", closure_extra=["lib.py"])
+            time.sleep(0.01)
+            os.utime(os.path.join(root, "lib.py"), None)  # dep newer than the descriptor
+            ok, code = artifact.validate_dxf_freshness(root, py)
+            self.assertFalse(ok)
+            self.assertEqual(code, "stale_dxf_artifact")
+
+    def test_stale_when_source_newer(self):
+        import time
+        with tempfile.TemporaryDirectory() as root:
+            py, _ = _write_drawing_package(root, "outline.dxf.py")
+            time.sleep(0.01)
+            os.utime(py, None)
+            ok, code = artifact.validate_dxf_freshness(root, py)
+            self.assertFalse(ok)
+            self.assertEqual(code, "stale_dxf_artifact")
+
+
+class ScannerDxfEntry(unittest.TestCase):
+    def test_built_drawing_entry_carries_cached_asset(self):
+        with tempfile.TemporaryDirectory() as root:
+            py, pkg = _write_drawing_package(root, "outline.dxf.py")
+            entry = scanner.create_generated_dxf_entry(root, root, py)
+            self.assertEqual(entry["kind"], "dxf")
+            self.assertEqual(entry["file"], "outline.dxf.py")
+            self.assertEqual(entry["sourceKind"], "python")
+            self.assertIn("__cadcache__/models/outline.dxf.py/drawing.dxf", entry["url"])
+            self.assertTrue(entry["hash"])
+            self.assertEqual(entry["source"]["sourceHash"], "abc123")
+
+    def test_unbuilt_drawing_entry_has_no_asset(self):
+        with tempfile.TemporaryDirectory() as root:
+            py, _ = _write_drawing_package(root, "outline.dxf.py", with_package=False)
+            entry = scanner.create_generated_dxf_entry(root, root, py)
+            self.assertEqual(entry["kind"], "dxf")
+            self.assertEqual(entry["url"], "")
+            self.assertEqual(entry["hash"], "")
+
+    def test_scan_directory_lists_generated_and_raw_dxf(self):
+        with tempfile.TemporaryDirectory() as root:
+            _write_drawing_package(root, "outline.dxf.py")
+            with open(os.path.join(root, "imported.dxf"), "w") as h:
+                h.write("0\nEOF\n")
+            catalog = scanner.scan_cad_directory(root, "", include_artifact_status=False)
+            by_file = {entry["file"]: entry for entry in catalog["entries"]}
+            self.assertIn("outline.dxf.py", by_file)
+            self.assertIn("imported.dxf", by_file)
+            self.assertEqual(by_file["outline.dxf.py"]["kind"], "dxf")
+            self.assertEqual(by_file["outline.dxf.py"].get("sourceKind"), "python")
+            self.assertEqual(by_file["imported.dxf"]["kind"], "dxf")
+            self.assertNotIn("sourceKind", by_file["imported.dxf"])
+
 
 if __name__ == "__main__":
     unittest.main()
