@@ -5,8 +5,8 @@ from __future__ import annotations
 import json
 import unittest
 
-from cadgen.glb import _GlbBuilder
-from cadgen.glb_topology import STEP_TOPOLOGY_EXTENSION
+from cadgen._internal.glb import _GlbBuilder
+from cadgen._internal.glb_topology import STEP_TOPOLOGY_EXTENSION
 from cadgen.selector_types import SelectorBundle
 
 

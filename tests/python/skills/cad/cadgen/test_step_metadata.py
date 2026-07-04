@@ -1,7 +1,7 @@
 import unittest
 from pathlib import Path
 
-from cadgen.step_metadata import (
+from cadgen._internal.step_metadata import (
     TEXT_TO_CAD_GENERATOR,
     inject_text_to_cad_step_metadata,
     read_text_to_cad_step_metadata,

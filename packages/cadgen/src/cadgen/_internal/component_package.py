@@ -19,13 +19,13 @@ import os
 from pathlib import Path
 from typing import Any, Mapping
 
-from cadgen.generation import (
+from cadgen._internal.generation import (
     DEFAULT_MESH_ANGULAR_TOLERANCE,
     DEFAULT_MESH_TOLERANCE,
 )
-from cadgen.glb import export_assembly_glb_from_scene
+from cadgen._internal.glb import export_assembly_glb_from_scene
 from cadgen.step_export import build_build123d_step_scene
-from cadgen.step_scene import (
+from cadgen._internal.step_scene import (
     extract_selectors_from_scene,
     mesh_step_scene,
 )

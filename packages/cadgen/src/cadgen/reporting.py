@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from cadgen import analysis, lookup
-from cadgen.validators import geometry_summary_from_manifest
+from cadgen._internal.validators import geometry_summary_from_manifest
 
 
 @dataclass(frozen=True)

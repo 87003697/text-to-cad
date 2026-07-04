@@ -12,7 +12,7 @@ add_repo_path("packages/cadgen/src")
 
 from build123d import Box, Compound, Pos
 
-from cadgen import component_package
+from cadgen._internal import component_package
 
 
 def _glb_json_chunk(glb_path: Path) -> dict:
@@ -131,7 +131,7 @@ class ComponentPackageTests(unittest.TestCase):
             self.assertFalse(component_package.assembly_package_current(step_path))
 
     def test_components_are_clean_and_byte_deterministic(self) -> None:
-        from cadgen.glb import read_step_topology_manifest_from_glb
+        from cadgen._internal.glb import read_step_topology_manifest_from_glb
 
         compound = _demo_compound()
         with tempfile.TemporaryDirectory() as tmp_a, tempfile.TemporaryDirectory() as tmp_b:

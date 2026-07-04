@@ -10,7 +10,7 @@ from OCP.TopAbs import TopAbs_FACE
 from OCP.TopExp import TopExp_Explorer
 from OCP.TopoDS import TopoDS
 
-from cadgen.glb import (
+from cadgen._internal.glb import (
     export_assembly_glb_from_scene,
     export_native_glb_from_scene,
     export_part_glb_from_scene,
@@ -18,8 +18,8 @@ from cadgen.glb import (
     read_step_topology_bundle_from_glb,
     read_step_topology_manifest_from_glb,
 )
-from cadgen.glb_topology import STEP_TOPOLOGY_SCHEMA_VERSION, glb_surface_edge_class_has_nonzero_values
-from cadgen.step_scene import (
+from cadgen._internal.glb_topology import STEP_TOPOLOGY_SCHEMA_VERSION, glb_surface_edge_class_has_nonzero_values
+from cadgen._internal.step_scene import (
     LoadedStepScene,
     OccurrenceNode,
     SelectorBundle,

@@ -9,15 +9,15 @@ from dataclasses import replace
 from pathlib import Path
 from unittest import mock
 
-from cadgen import generation as cad_generation
+from cadgen._internal import generation as cad_generation
 from cadgen import render as cad_render
 from cadgen import catalog as cad_catalog
-from cadgen import source_hash as cad_source_hash
+from cadgen._internal import source_hash as cad_source_hash
 from cadgen.catalog import StepImportOptions
-from cadgen.glb import read_step_topology_manifest_from_glb
-from cadgen.glb_topology import STEP_TOPOLOGY_SCHEMA_VERSION
-from cadgen.step_scene import LoadedStepScene, OccurrenceNode, SelectorBundle
-from cadgen.step_metadata import TEXT_TO_CAD_GENERATOR, read_text_to_cad_step_metadata
+from cadgen._internal.glb import read_step_topology_manifest_from_glb
+from cadgen._internal.glb_topology import STEP_TOPOLOGY_SCHEMA_VERSION
+from cadgen._internal.step_scene import LoadedStepScene, OccurrenceNode, SelectorBundle
+from cadgen._internal.step_metadata import TEXT_TO_CAD_GENERATOR, read_text_to_cad_step_metadata
 from tests.python.support.cad_test_roots import IsolatedCadRoots
 
 
@@ -188,7 +188,7 @@ class CadGenerationTests(unittest.TestCase):
             }
 
         return (
-            mock.patch("cadgen.component_package.build_package_from_compound", side_effect=_fake),
+            mock.patch("cadgen._internal.component_package.build_package_from_compound", side_effect=_fake),
             calls,
         )
 

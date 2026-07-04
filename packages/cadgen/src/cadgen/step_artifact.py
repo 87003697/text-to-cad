@@ -6,7 +6,7 @@ import json
 from pathlib import Path
 
 from cadgen.cli_logging import CliLogger
-from cadgen.generation import (
+from cadgen._internal.generation import (
     EntrySpec,
     _existing_topology_artifact_matches_spec_without_scene,
     _entry_spec_from_source,
@@ -16,8 +16,8 @@ from cadgen.generation import (
 from cadgen.metadata import DEFAULT_MESH_ANGULAR_TOLERANCE, DEFAULT_MESH_TOLERANCE, normalize_mesh_numeric
 from cadgen.render import part_glb_path, relative_to_cwd
 from cadgen.step_export import write_xcaf_doc_step_file
-from cadgen.step_metadata import read_text_to_cad_step_metadata
-from cadgen.step_scene import LoadedStepScene, load_step_scene, step_file_hash
+from cadgen._internal.step_metadata import read_text_to_cad_step_metadata
+from cadgen._internal.step_scene import LoadedStepScene, load_step_scene, step_file_hash
 from cadgen.catalog import iter_cad_sources, source_from_path
 from cadgen.step_targets import (
     ResolvedStepTarget,

@@ -14,6 +14,30 @@ job orchestration stay in their owning skills.
 [earthtojake/text-to-cad](https://github.com/earthtojake/text-to-cad) and was
 previously named `cadpy` inside that repository.
 
+## Public API
+
+The supported import surface is the root `cadgen` exports plus the top-level
+`cadgen.*` modules:
+
+- Generator-script helpers: root exports (`AssemblyHelper`, `MateRelation`,
+  `MateTarget`, `label_text`, `label_shape`, `target`,
+  `ensure_step_glb_artifact`, `validate_step_glb_artifact`), `cadgen.assembly`,
+  and `cadgen.step_scene` (`import_step`, `load_step_scene`, `located_shape`,
+  `occurrence_selector_id`, `scene_occurrence_shape`).
+- Skill CLI surface: `cadgen.generation` (`generate_step_targets`,
+  `generate_dxf_targets`, `targets_include_output_pairs`), `cadgen.catalog`,
+  `cadgen.metadata`, `cadgen.analysis`, `cadgen.lookup`, `cadgen.cad_ref_syntax`,
+  `cadgen.selector_types`, `cadgen.reporting`, `cadgen.cli_logging`,
+  `cadgen.render`, `cadgen.step_artifacts`, `cadgen.step_targets`,
+  `cadgen.step_export`.
+- Process entry points: `cadgen-step-artifact`, `python -m cadgen.step_artifact`,
+  and `python -m cadgen.step_export_target`.
+
+Everything under `cadgen._internal` is private implementation (the STEP scene,
+generation, GLB/topology, and export engines live there) with no import
+stability between releases; `cadgen.generation` and `cadgen.step_scene` are
+thin facades over those engines that re-export only the supported names.
+
 ## Install
 
 Released versions are published to PyPI by the repository's `Release` workflow;

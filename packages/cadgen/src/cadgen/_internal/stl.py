@@ -5,7 +5,7 @@ from pathlib import Path
 from OCP.StlAPI import StlAPI_Writer
 
 from cadgen.render import part_stl_path
-from cadgen.step_scene import (
+from cadgen._internal.step_scene import (
     LoadedStepScene,
     scene_export_shape,
 )

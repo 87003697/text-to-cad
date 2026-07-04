@@ -13,10 +13,10 @@ from tests.python.support.paths import add_repo_path
 
 add_repo_path("packages/cadgen/src")
 
-from cadgen import generation
+from cadgen._internal import generation
 from cadgen.metadata import parse_generator_metadata
 from cadgen.step_export import _create_bin_xcaf_doc, export_build123d_step_scene
-from cadgen.step_scene import LoadedStepScene, _bbox_from_shape, scene_leaf_occurrences, scene_occurrence_shape
+from cadgen._internal.step_scene import LoadedStepScene, _bbox_from_shape, scene_leaf_occurrences, scene_occurrence_shape
 
 
 def _rounded_color(color: tuple[float, ...]) -> tuple[float, ...]:

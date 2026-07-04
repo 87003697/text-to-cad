@@ -9,7 +9,7 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
-from cadgen.glb_mesh_payload import (
+from cadgen._internal.glb_mesh_payload import (
     CAD_TO_GLB_SCALE,
     DEFAULT_MATERIAL,
     ShapeGlbMeshPayload,
@@ -19,7 +19,7 @@ from cadgen.glb_mesh_payload import (
     scene_glb_mesh_payload,
     scene_glb_mesh_payload_key,
 )
-from cadgen.glb_topology import (
+from cadgen._internal.glb_topology import (
     STEP_EDGE_BARYCENTRIC_ATTRIBUTE,
     STEP_EDGE_CLASS_ATTRIBUTE,
     STEP_EDGE_SURFACE_CLASS_CODES,
@@ -29,7 +29,7 @@ from cadgen.glb_topology import (
     step_topology_capabilities,
 )
 from cadgen.render import part_glb_path, part_native_glb_path
-from cadgen.step_scene import ColorRGBA, LoadedStepScene, OccurrenceNode, SelectorBundle, occurrence_selector_id
+from cadgen._internal.step_scene import ColorRGBA, LoadedStepScene, OccurrenceNode, SelectorBundle, occurrence_selector_id
 
 
 ARRAY_BUFFER = 34962
@@ -1103,7 +1103,7 @@ def read_step_topology_index_from_glb(glb_path: Path) -> dict[str, Any] | None:
         # Component-GLB package: the canonical assembly artifact is a directory whose
         # assembly.json IS the index manifest (provenance + occurrences). Return it so
         # build freshness gates (stepHash / sourceClosure) read it like a monolith blob.
-        from cadgen.component_package import read_package_descriptor
+        from cadgen._internal.component_package import read_package_descriptor
 
         return read_package_descriptor(glb_path)
     try:

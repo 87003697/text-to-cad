@@ -2,7 +2,8 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from cadgen import generation, step_artifacts
+from cadgen import step_artifacts
+from cadgen._internal import generation
 from cadgen.step_targets import ResolvedStepTarget
 
 

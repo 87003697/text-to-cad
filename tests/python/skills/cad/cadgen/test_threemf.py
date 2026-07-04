@@ -11,9 +11,9 @@ from OCP.TopAbs import TopAbs_FACE
 from OCP.TopExp import TopExp_Explorer
 from OCP.TopoDS import TopoDS
 
-from cadgen.step_scene import LoadedStepScene, OccurrenceNode, _shape_hash
+from cadgen._internal.step_scene import LoadedStepScene, OccurrenceNode, _shape_hash
 from tests.python.support.tmp_root import temporary_directory
-from cadgen.threemf import export_scene_3mf, export_shape_3mf
+from cadgen._internal.threemf import export_scene_3mf, export_shape_3mf
 
 
 NS = {"m": "http://schemas.microsoft.com/3dmanufacturing/core/2015/02"}

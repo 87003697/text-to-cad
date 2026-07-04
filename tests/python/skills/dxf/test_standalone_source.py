@@ -3,7 +3,7 @@ import unittest
 from pathlib import Path
 
 from cadgen import catalog as cad_catalog
-from cadgen import generation as cad_generation
+from cadgen._internal import generation as cad_generation
 from cadgen.metadata import parse_generator_metadata
 from tests.python.support.tmp_root import temporary_directory
 

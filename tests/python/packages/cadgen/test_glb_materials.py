@@ -6,7 +6,7 @@ from tests.python.support.paths import add_repo_path
 
 add_repo_path("packages/cadgen/src")
 
-from cadgen.glb import _GlbBuilder
+from cadgen._internal.glb import _GlbBuilder
 
 
 class GlbMaterialTests(unittest.TestCase):

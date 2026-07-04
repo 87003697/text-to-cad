@@ -148,7 +148,7 @@ def compound_from_instances(
             _occurrence_subtree(part, location, f"o1.{index}", str(inst["name"]))
         )
     compound = Compound(occt_compound, label=name)
-    # Occurrence-metadata tree consumed by cadgen.component_package.build_package_from_compound;
+    # Occurrence-metadata tree consumed by cadgen._internal.component_package.build_package_from_compound;
     # absent on plain build123d shapes, which fall back to walking the compound's children.
     compound._occurrence_tree = {"id": "o1", "name": name, "children": occurrence_children}
     if assembly_mates:
