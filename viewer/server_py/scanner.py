@@ -19,6 +19,7 @@ import json
 import os
 import posixpath
 import re
+from xml.etree import ElementTree
 
 from .encoding import base36, encode_uri_component
 
@@ -37,12 +38,7 @@ VIEWER_SKIPPED_DIRECTORIES = frozenset(
 )
 PYTHON_GENERATOR_BY_KIND = {
     "dxf": "gen_dxf", "step": "gen_step", "stp": "gen_step",
-    "urdf": "gen_urdf", "srdf": "gen_srdf", "sdf": "gen_sdf",
 }
-_SRDF_URDF_METADATA_PATTERN = re.compile(
-    r"""<\s*(?:tcad|explorer):urdf\b[^>]*\bpath\s*=\s*["']([^"']+)["'][^>]*>""",
-    re.IGNORECASE,
-)
 
 # --- stepSidecars.mjs ---
 CACHE_DIRNAME = "__cadcache__"
@@ -266,19 +262,7 @@ def _collect_cad_source_files(root_path: str, result: list) -> list:
     return result
 
 
-# --- generated-source status (python-generated dxf/urdf/srdf/sdf) ---
-_CADPY_COMMENT_METADATA_RE = re.compile(r"<!--\s*cadpy:([A-Za-z][A-Za-z0-9]*)=(.*?)-->", re.DOTALL)
-
-
-def _read_xml_textto_cad_metadata(file_path):
-    try:
-        with open(file_path, "r", encoding="utf-8") as handle:
-            text = handle.read()
-    except OSError:
-        return {}
-    return {m.group(1).strip(): m.group(2).strip() for m in _CADPY_COMMENT_METADATA_RE.finditer(text)}
-
-
+# --- generated-source status (python-generated dxf/step) ---
 def _read_dxf_textto_cad_metadata(file_path):
     try:
         with open(file_path, "r", encoding="utf-8") as handle:
@@ -303,9 +287,8 @@ def _read_generated_file_metadata(file_path, kind):
     normalized = str(kind or "").strip().lower()
     if normalized == "dxf":
         return _read_dxf_textto_cad_metadata(file_path)
-    if normalized in ("urdf", "srdf", "sdf"):
-        return _read_xml_textto_cad_metadata(file_path)
     # step/stp embedded metadata (readTextToCadStepMetadataFile) is a TODO.
+    # urdf/srdf/sdf are authored XML artifacts, not python-generated outputs.
     return {}
 
 
@@ -411,21 +394,37 @@ def _generated_source_status_for_file(repo_root, source_path, kind):
     }
 
 
-def _linked_urdf_path_for_srdf(source_path, repo_root):
+def _xml_root_name(file_path, expected_tag="robot"):
     try:
-        with open(source_path, "r", encoding="utf-8") as handle:
-            xml_text = handle.read()
+        for _event, element in ElementTree.iterparse(file_path, events=("start",)):
+            if element.tag != expected_tag:
+                return None
+            return str(element.attrib.get("name") or "").strip()
+    except (OSError, ElementTree.ParseError):
+        return None
+    return None
+
+
+def _paired_urdf_path_for_srdf(source_path, repo_root):
+    # An SRDF pairs with the same-directory URDF whose root <robot name>
+    # matches; ambiguity (0 or 2+ matches) yields no pairing.
+    del repo_root
+    robot_name = _xml_root_name(source_path)
+    if not robot_name:
+        return None
+    directory = os.path.dirname(source_path)
+    try:
+        candidates = sorted(
+            os.path.join(directory, entry)
+            for entry in os.listdir(directory)
+            if os.path.splitext(entry)[1].lower() == ".urdf"
+        )
     except OSError:
         return None
-    match = _SRDF_URDF_METADATA_PATTERN.search(xml_text)
-    raw_ref = (match.group(1) if match else "").strip()
-    if not raw_ref or "\\" in raw_ref or raw_ref.startswith("/"):
+    matches = [candidate for candidate in candidates if _xml_root_name(candidate) == robot_name]
+    if len(matches) != 1:
         return None
-    resolved = os.path.abspath(os.path.join(os.path.dirname(source_path), raw_ref))
-    relative_to_repo = os.path.relpath(resolved, os.path.abspath(repo_root))
-    if not relative_path_stays_inside_root(relative_to_repo) or os.path.splitext(resolved)[1].lower() != ".urdf":
-        return None
-    return resolved if _file_stats(resolved) else None
+    return matches[0] if _file_stats(matches[0]) else None
 
 
 # --- entry builders ---
@@ -448,12 +447,12 @@ def create_single_asset_entry(repo_root, root_path, source_path, extension):
     if generated and generated.get("sourceStatus"):
         entry["sourceStatus"] = generated["sourceStatus"]
     if kind == "srdf":
-        linked_urdf = _linked_urdf_path_for_srdf(source_path, repo_root)
-        if linked_urdf:
-            urdf_asset = asset_for_path(repo_root, linked_urdf)
+        paired_urdf = _paired_urdf_path_for_srdf(source_path, repo_root)
+        if paired_urdf:
+            urdf_asset = asset_for_path(repo_root, paired_urdf)
             if urdf_asset:
                 entry["relations"] = {
-                    "urdf": {"file": scan_relative_path(root_path, linked_urdf), **urdf_asset}
+                    "urdf": {"file": scan_relative_path(root_path, paired_urdf), **urdf_asset}
                 }
     return entry
 

@@ -94,12 +94,10 @@ class EntrySpec:
     script_path: Path | None = None
     generator_metadata: GeneratorMetadata | None = None
     dxf_path: Path | None = None
-    urdf_path: Path | None = None
     stl_path: Path | None = None
     three_mf_path: Path | None = None
     native_glb_path: Path | None = None
     step_export_path: Path | None = None
-    sdf_path: Path | None = None
     mesh_tolerance: float = DEFAULT_MESH_TOLERANCE
     mesh_angular_tolerance: float = DEFAULT_MESH_ANGULAR_TOLERANCE
     mesh_tolerance_explicit: bool = False
@@ -318,7 +316,7 @@ def _spec_output_paths(spec: EntrySpec) -> tuple[Path, ...]:
     if spec.step_path is not None:
         paths.append(spec.step_path)
         paths.append(part_glb_path(spec.entry_path))
-    for path in (spec.dxf_path, spec.urdf_path, spec.sdf_path, spec.stl_path, spec.three_mf_path, spec.native_glb_path):
+    for path in (spec.dxf_path, spec.stl_path, spec.three_mf_path, spec.native_glb_path):
         if path is not None:
             paths.append(path)
     return tuple(path.resolve() for path in paths)
@@ -490,7 +488,6 @@ def _entry_spec_from_source(source: CadSource) -> EntrySpec:
         mesh_angular_tolerance=source.mesh_angular_tolerance,
     )
     display_path = step_path if step_path is not None else source.source_path
-    urdf_path = source.urdf_path
 
     return EntrySpec(
         source_ref=source.source_ref,
@@ -507,8 +504,6 @@ def _entry_spec_from_source(source: CadSource) -> EntrySpec:
         script_path=script_path,
         generator_metadata=generator_metadata,
         dxf_path=source.dxf_path,
-        urdf_path=urdf_path,
-        sdf_path=source.sdf_path,
         stl_path=source.stl_path,
         three_mf_path=source.three_mf_path,
         native_glb_path=source.native_glb_path,

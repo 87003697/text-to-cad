@@ -270,15 +270,11 @@ class CadGenerationTests(unittest.TestCase):
         name: str,
         *,
         with_dxf: bool = False,
-        with_urdf: bool = False,
-        with_sdf: bool = False,
         dxf_before_step: bool = False,
         step_output: str | None = None,
         stl: str | None = None,
         three_mf: str | None = None,
         dxf_output: str | None = None,
-        urdf_output: str | None = None,
-        sdf_output: str | None = None,
         mesh_tolerance: float | None = None,
         mesh_angular_tolerance: float | None = None,
     ) -> Path:
@@ -329,35 +325,12 @@ class CadGenerationTests(unittest.TestCase):
             "    }",
             "",
         ]
-        urdf_block = [
-            "def gen_urdf():",
-            "    _record('gen_urdf')",
-            "    return {",
-            "        'xml': '<robot name=\"part\"><link name=\"base\" /></robot>',",
-            *([f"        'urdf_output': {urdf_output!r},"] if urdf_output is not None else []),
-            "    }",
-            "",
-        ]
-        sdf_block = [
-            "def gen_sdf():",
-            "    _record('gen_sdf')",
-            "    return {",
-            "        'xml': '<sdf version=\"1.12\"><model name=\"part\"><link name=\"base\" /></model></sdf>',",
-            *([f"        'sdf_output': {sdf_output!r},"] if sdf_output is not None else []),
-            "    }",
-            "",
-        ]
-
         blocks = [prologue]
         if with_dxf and dxf_before_step:
             blocks.append(dxf_block)
         blocks.append(step_block)
         if with_dxf and not dxf_before_step:
             blocks.append(dxf_block)
-        if with_urdf:
-            blocks.append(urdf_block)
-        if with_sdf:
-            blocks.append(sdf_block)
 
         script_path = self.temp_root / f"{name}.py"
         script_path.write_text("\n".join(line for block in blocks for line in block), encoding="utf-8")
@@ -369,14 +342,10 @@ class CadGenerationTests(unittest.TestCase):
         *,
         instances: list[dict[str, object]],
         with_dxf: bool = False,
-        with_urdf: bool = False,
-        with_sdf: bool = False,
         step_output: str | None = None,
         stl: str | None = None,
         three_mf: str | None = None,
         dxf_output: str | None = None,
-        urdf_output: str | None = None,
-        sdf_output: str | None = None,
         mesh_tolerance: float | None = None,
         mesh_angular_tolerance: float | None = None,
     ) -> Path:
@@ -432,30 +401,6 @@ class CadGenerationTests(unittest.TestCase):
                     "    return {",
                     "        'document': _FakeDxf(),",
                     *([f"        'dxf_output': {dxf_output!r},"] if dxf_output is not None else []),
-                    "    }",
-                    "",
-                ]
-            )
-        if with_urdf:
-            lines.extend(
-                [
-                    "def gen_urdf():",
-                    "    _record('gen_urdf')",
-                    "    return {",
-                    "        'xml': '<robot name=\"sample\"><link name=\"base\" /></robot>',",
-                    *([f"        'urdf_output': {urdf_output!r},"] if urdf_output is not None else []),
-                    "    }",
-                    "",
-                ]
-            )
-        if with_sdf:
-            lines.extend(
-                [
-                    "def gen_sdf():",
-                    "    _record('gen_sdf')",
-                    "    return {",
-                    "        'xml': '<sdf version=\"1.12\"><model name=\"sample\"><link name=\"base\" /></model></sdf>',",
-                    *([f"        'sdf_output': {sdf_output!r},"] if sdf_output is not None else []),
                     "    }",
                     "",
                 ]
@@ -562,7 +507,6 @@ class CadGenerationTests(unittest.TestCase):
         script_path = self._generator_script(
             "flat",
             with_dxf=True,
-            with_sdf=True,
             stl="../meshes/renamed.stl",
             three_mf="../meshes/renamed.3mf",
         )
@@ -572,7 +516,6 @@ class CadGenerationTests(unittest.TestCase):
         self.assertEqual(self._cad_ref("flat"), spec.cad_ref)
         self.assertEqual(self.temp_root / "flat.step", spec.step_path)
         self.assertEqual(self.temp_root / "flat.dxf", spec.dxf_path)
-        self.assertEqual(self.temp_root / "flat.sdf", spec.sdf_path)
         self.assertIsNone(spec.stl_path)
         self.assertIsNone(spec.three_mf_path)
 
@@ -587,31 +530,6 @@ class CadGenerationTests(unittest.TestCase):
 
         with self.assertRaisesRegex(ValueError, "unsupported field\\(s\\): dxf_output"):
             cad_generation.list_entry_specs()
-
-    def test_generated_urdf_rejects_legacy_urdf_output_field(self) -> None:
-        self._generator_script("flat", with_urdf=True, urdf_output="robot/flat.urdf")
-
-        with self.assertRaisesRegex(ValueError, "unsupported field\\(s\\): urdf_output"):
-            cad_generation.list_entry_specs()
-
-    def test_generated_sdf_rejects_legacy_sdf_output_field(self) -> None:
-        self._generator_script("flat", with_sdf=True, sdf_output="robot/flat.sdf")
-
-        with self.assertRaisesRegex(ValueError, "unsupported field\\(s\\): sdf_output"):
-            cad_generation.list_entry_specs()
-
-    def test_generated_sdf_outputs_default_to_sibling_stems(self) -> None:
-        self._generator_script("first", with_sdf=True)
-        self._generator_script("second", with_sdf=True)
-
-        specs = {
-            spec.cad_ref: spec
-            for spec in cad_generation.list_entry_specs()
-            if spec.cad_ref.startswith(f"{self.relative_dir}/")
-        }
-
-        self.assertEqual(self.temp_root / "first.sdf", specs[self._cad_ref("first")].sdf_path)
-        self.assertEqual(self.temp_root / "second.sdf", specs[self._cad_ref("second")].sdf_path)
 
     def test_generated_source_rejects_legacy_parent_output(self) -> None:
         self._generator_script("flat", step_output="../../../flat.step")
@@ -645,7 +563,9 @@ class CadGenerationTests(unittest.TestCase):
 
         self.assertEqual(script_path.with_suffix(".dxf"), spec.dxf_path)
 
-    def test_generated_urdf_and_sdf_direct_returns_default_to_sibling_stems(self) -> None:
+    def test_deprecated_urdf_and_sdf_generators_are_ignored(self) -> None:
+        # gen_urdf()/gen_sdf() are hard-deprecated: robot descriptions are
+        # authored XML artifacts, so leftover definitions are not generators.
         script_path = self.temp_root / "robot.py"
         script_path.write_text(
             "\n".join(
@@ -666,8 +586,7 @@ class CadGenerationTests(unittest.TestCase):
 
         spec = next(spec for spec in cad_generation.list_entry_specs() if spec.source_path == script_path)
 
-        self.assertEqual(script_path.with_suffix(".urdf"), spec.urdf_path)
-        self.assertEqual(script_path.with_suffix(".sdf"), spec.sdf_path)
+        self.assertEqual(("gen_step",), spec.generator_metadata.generator_names)
 
     def test_bare_shape_return_is_supported_for_step_generation(self) -> None:
         script_path = self.temp_root / "bare_part.py"
@@ -1104,7 +1023,7 @@ class CadGenerationTests(unittest.TestCase):
             )
 
     def test_step_generator_does_not_run_sidecars(self) -> None:
-        script_path = self._generator_script("flat", with_dxf=True, with_urdf=True, with_sdf=True, dxf_before_step=True)
+        script_path = self._generator_script("flat", with_dxf=True, dxf_before_step=True)
         spec = next(spec for spec in cad_generation.list_entry_specs() if spec.cad_ref == self._cad_ref("flat"))
 
         cad_generation.run_script_generator(spec, "gen_step")
@@ -1112,8 +1031,6 @@ class CadGenerationTests(unittest.TestCase):
         self.assertEqual("gen_step\n", script_path.with_suffix(".calls").read_text(encoding="utf-8"))
         self.assertFalse(script_path.with_suffix(".dxf").exists())
         self.assertFalse(script_path.with_suffix(".step").exists())
-        self.assertFalse(script_path.with_suffix(".urdf").exists())
-        self.assertFalse(script_path.with_suffix(".sdf").exists())
 
     def test_generated_step_outputs_reuses_generated_scene(self) -> None:
         script_path = self._generator_script("flat")
@@ -1245,8 +1162,7 @@ class CadGenerationTests(unittest.TestCase):
                     "transform": IDENTITY_TRANSFORM,
                 }
             ],
-            with_urdf=True,
-            with_sdf=True,
+            with_dxf=True,
         )
 
         cad_refs = {
@@ -1258,8 +1174,7 @@ class CadGenerationTests(unittest.TestCase):
         self.assertIn(self._cad_ref("flat"), cad_refs)
         self.assertIn(self._cad_ref("robot"), cad_refs)
         self.assertNotIn(self._cad_ref("flat") + ".dxf", cad_refs)
-        self.assertNotIn(self._cad_ref("robot") + ".urdf", cad_refs)
-        self.assertNotIn(self._cad_ref("robot") + ".sdf", cad_refs)
+        self.assertNotIn(self._cad_ref("robot") + ".dxf", cad_refs)
 
     def test_step_toml_target_is_not_supported(self) -> None:
         (self.temp_root / "broken.step.toml").write_text('kind = "part"\n', encoding="utf-8")
@@ -1551,8 +1466,6 @@ class CadGenerationTests(unittest.TestCase):
                 }
             ],
             with_dxf=True,
-            with_urdf=True,
-            with_sdf=True,
             stl="assembly.stl",
             three_mf="assembly.3mf",
             mesh_tolerance=0.3,
@@ -1568,8 +1481,6 @@ class CadGenerationTests(unittest.TestCase):
         self.assertEqual("assembly", spec.kind)
         self.assertEqual(self.temp_root / "assembly.step", spec.step_path)
         self.assertEqual(self.temp_root / "assembly.dxf", spec.dxf_path)
-        self.assertEqual(self.temp_root / "assembly.urdf", spec.urdf_path)
-        self.assertEqual(self.temp_root / "assembly.sdf", spec.sdf_path)
         self.assertIsNone(spec.stl_path)
         self.assertIsNone(spec.three_mf_path)
         self.assertEqual(cad_generation.DEFAULT_MESH_TOLERANCE, spec.mesh_tolerance)
