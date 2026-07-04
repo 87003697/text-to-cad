@@ -19,11 +19,11 @@ CAD_SCRIPT_PATH = Path(__file__).resolve().parents[5] / "skills" / "cad" / "scri
 if str(CAD_SCRIPT_PATH) not in sys.path:
     sys.path.insert(0, str(CAD_SCRIPT_PATH))
 
-from cadpy_common.package_path import ensure_cadpy_package_path
+from cadgen_common.package_path import ensure_cadgen_package_path
 
-ensure_cadpy_package_path()
+ensure_cadgen_package_path()
 
-from cadpy.step_scene import _located_shape, load_step_scene, occurrence_selector_id
+from cadgen.step_scene import _located_shape, load_step_scene, occurrence_selector_id
 
 
 SOURCE_STEP = Path(__file__).resolve().with_name("tom_gripper.step")

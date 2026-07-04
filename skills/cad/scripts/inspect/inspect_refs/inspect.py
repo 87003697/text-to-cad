@@ -4,8 +4,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
 
-from cadpy import cad_ref_syntax as syntax
-from cadpy.reporting import (
+from cadgen import cad_ref_syntax as syntax
+from cadgen.reporting import (
     EntryReportOptions,
     entry_facts_payload,
     entry_positioning_payload,
@@ -13,8 +13,8 @@ from cadpy.reporting import (
     entry_summary_payload,
     major_planes_payload,
 )
-from cadpy.selector_types import SelectorProfile
-from cadpy.step_targets import (
+from cadgen.selector_types import SelectorProfile
+from cadgen.step_targets import (
     CadRefError,
     ResolvedStepTarget,
     cad_path_from_target,
@@ -23,8 +23,8 @@ from cadpy.step_targets import (
     resolve_step_target,
     step_path_from_target,
 )
-from cadpy import analysis
-from cadpy import lookup
+from cadgen import analysis
+from cadgen import lookup
 
 
 @dataclass
@@ -241,7 +241,7 @@ def _load_step_context(
     *,
     profile: SelectorProfile,
 ) -> EntryContext:
-    from cadpy.step_artifacts import ensure_step_topology_artifact
+    from cadgen.step_artifacts import ensure_step_topology_artifact
 
     artifact = ensure_step_topology_artifact(
         target,

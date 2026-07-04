@@ -4,7 +4,7 @@ Serves the /__cad/* contract the unchanged client consumes. Implemented routes
 (parity-verified core): GET /__cad/server, GET /__cad/catalog, GET /__cad/asset,
 GET /__cad/download, POST /__cad/directory/activate, POST /__cad/implicit-export
 (client-side-export write contract). Static dist/SPA, legacy Referer assets,
-/__cad/artifact, and /__cad/step-export are TODO (cadpy-integration + serving
+/__cad/artifact, and /__cad/step-export are TODO (cadgen-integration + serving
 phases).
 
 Run: python -m server_py.server --dir <abs-models-root> [--port N] [--host H]

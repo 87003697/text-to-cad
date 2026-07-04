@@ -52,7 +52,7 @@ seam so future producers (a baked implicit mesh, a decimated-mesh cache, a new f
 - Optimize for simplicity: minimal interface, one concrete provider, trivial default for direct types.
 
 **Non-goals**
-- The Python build is **not** rewritten — `cadpy.step_artifact` / `component_package` /
+- The Python build is **not** rewritten — `cadgen.step_artifact` / `component_package` /
   `generation.py` stay exactly as they are; the provider wraps them.
 - Direct-render types are not touched (they have no artifact; they are always `ready`).
 - Implicit *export/download* stays a separate concern (it is not a render artifact). The interface is
@@ -114,7 +114,7 @@ A thin wrapper — **no new build logic**:
 | `owns` | `sameStemPythonGeneratorPath` sniff + `.step/.stp` ([`stepArtifactCompiler.mjs:41`](../viewer/src/server/step/stepArtifactCompiler.mjs), [`localAssetBackend.mjs:124`](../viewer/src/server/localAssetBackend.mjs)) |
 | `artifactRef` | `inlineStepGlbArtifactPathForSource` ([`stepSidecars.mjs:46`](../packages/cadjs/src/common/stepSidecars.mjs)) |
 | `freshness` | `validateStepTopologyArtifact` / `validateAssemblyPackageArtifact` ([`cadDirectoryScanner.mjs:636,780`](../viewer/src/server/catalog/cadDirectoryScanner.mjs)) → map its error codes to `fresh/stale/missing/broken` via `canBuildStepArtifact` |
-| `build` | `ensureStepTopologyArtifact` → `compileStepTopologyArtifact` → `cadpy.step_artifact` CLI, + the descriptor-mtime bump that settles the mtime trigger ([`localAssetBackend.mjs:854-867`](../viewer/src/server/localAssetBackend.mjs)) |
+| `build` | `ensureStepTopologyArtifact` → `compileStepTopologyArtifact` → `cadgen.step_artifact` CLI, + the descriptor-mtime bump that settles the mtime trigger ([`localAssetBackend.mjs:854-867`](../viewer/src/server/localAssetBackend.mjs)) |
 
 Direct types need **no provider**: `providerFor` returns null → `resolveArtifact` returns `ready`
 with the file URL immediately.
@@ -174,7 +174,7 @@ render now gates on `useArtifact` status from the first frame, a stale model goe
 
 Nothing in the Python build changes. The redesign is mostly *deletion + rewiring* around stable cores:
 
-- `cadpy.step_artifact` / `component_package.build_package_from_compound` / `generation.py` — unchanged.
+- `cadgen.step_artifact` / `component_package.build_package_from_compound` / `generation.py` — unchanged.
 - `ensureStepTopologyArtifact` control flow → the generic resolver shell.
 - `validateStepTopologyArtifact` + `canBuildStepArtifact` → `freshness()` + the trigger classifier.
 - `inlineStepGlbArtifactPathForSource` + the `__cadcache__/<kind>/<basename>/` convention → `artifactRef()`.

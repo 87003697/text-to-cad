@@ -29,7 +29,7 @@ class InspectCliWrapperTests(unittest.TestCase):
             "sys.path.insert(0, 'scripts/inspect'); "
             "import inspect_refs.cli; "
             "print('OCP.OCP' in sys.modules); "
-            "print('cadpy.step_scene' in sys.modules)"
+            "print('cadgen.step_scene' in sys.modules)"
         )
         result = subprocess.run(
             [sys.executable, "-c", code],

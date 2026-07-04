@@ -19,16 +19,16 @@ from urllib.parse import quote, unquote, urlparse
 
 SCRIPTS_DIR = Path(__file__).resolve().parents[1]
 PACKAGES_DIR = SCRIPTS_DIR / "packages"
-CADPY_SRC_DIR = PACKAGES_DIR / "cadpy" / "src"
+CADPY_SRC_DIR = PACKAGES_DIR / "cadgen" / "src"
 for runtime_path in (SCRIPTS_DIR, PACKAGES_DIR, CADPY_SRC_DIR):
     runtime_path_text = str(runtime_path)
     if runtime_path_text not in sys.path:
         sys.path.insert(0, runtime_path_text)
 
-import cadpy.cad_ref_syntax as cad_ref_syntax
-import cadpy.lookup as lookup
-from cadpy.render import existing_part_glb_path, part_glb_path
-from cadpy.step_targets import ResolvedStepTarget, StepTopologyArtifact, StepTopologyArtifactError
+import cadgen.cad_ref_syntax as cad_ref_syntax
+import cadgen.lookup as lookup
+from cadgen.render import existing_part_glb_path, part_glb_path
+from cadgen.step_targets import ResolvedStepTarget, StepTopologyArtifact, StepTopologyArtifactError
 
 
 SNAPSHOT_ORIGIN = "http://snapshot.local"
@@ -694,7 +694,7 @@ def cad_ref_for_step_path(repo_root: Path, step_path: Path) -> str:
 def load_ensure_step_topology_artifact():
     global ensure_step_topology_artifact
     if ensure_step_topology_artifact is None:
-        from cadpy.step_artifacts import ensure_step_topology_artifact as imported_ensure
+        from cadgen.step_artifacts import ensure_step_topology_artifact as imported_ensure
 
         ensure_step_topology_artifact = imported_ensure
     return ensure_step_topology_artifact

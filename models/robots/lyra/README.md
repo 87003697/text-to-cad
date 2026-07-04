@@ -28,7 +28,7 @@ interpenetrates.
 ## Files
 
 - `lyra.py` — build123d generator (`gen_step()`); authoritative source.
-  Joints are authored as `cadpy.assembly.AssemblyHelper` revolute frames
+  Joints are authored as `cadgen.assembly.AssemblyHelper` revolute frames
   driven by the baked `relaxed` pose.
 - `lyra_parts/` — part-builder package. `chain.py` is the shared kinematic
   chain/pose/limit spec (stdlib-only FK included) used by the CAD assembly,

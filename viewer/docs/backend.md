@@ -60,12 +60,12 @@ The local backend serves asset bytes from the active root and writes regenerated
 artifacts back into it. It rejects path traversal and only serves or writes
 supported CAD Viewer asset types.
 
-Local STEP GLB/topology regeneration calls the Python `cadpy` package. The root
-viewer carries a generated, installable copy under `viewer/packages/cadpy`; run
-`scripts/bundle/bundle-skill.sh cad-viewer` after changing `packages/cadpy`, then
+Local STEP GLB/topology regeneration calls the Python `cadgen` package. The root
+viewer carries a generated, installable copy under `viewer/packages/cadgen`; run
+`scripts/bundle/bundle-skill.sh cad-viewer` after changing `packages/cadgen`, then
 install `viewer/requirements.txt` into the Python runtime used by the viewer.
 The generated cad-viewer skill runtime bundles that same installable package
-under `scripts/viewer/packages/cadpy` and does not need the repository root.
+under `scripts/viewer/packages/cadgen` and does not need the repository root.
 
 Vite dev mounts this backend for:
 

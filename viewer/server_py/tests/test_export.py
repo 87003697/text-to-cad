@@ -1,4 +1,4 @@
-"""Unit tests for the save-dialog env hooks and the cadpy subprocess bridge."""
+"""Unit tests for the save-dialog env hooks and the cadgen subprocess bridge."""
 
 import os
 import pathlib
@@ -7,7 +7,7 @@ import unittest
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[2]))
 
-from server_py import cadpy_bridge, save_dialog  # noqa: E402
+from server_py import cadgen_bridge, save_dialog  # noqa: E402
 
 _WORKTREE = pathlib.Path(__file__).resolve().parents[3]
 
@@ -39,11 +39,11 @@ class SaveDialogEnvHooks(unittest.TestCase):
 
 
 class CadpyPythonpath(unittest.TestCase):
-    def test_discovers_cadpy_src(self):
-        if not (_WORKTREE / "packages" / "cadpy" / "src").is_dir():
-            self.skipTest("packages/cadpy/src not present")
-        pp = cadpy_bridge.cadpy_pythonpath(str(_WORKTREE))
-        self.assertIn(os.path.join("packages", "cadpy", "src"), pp)
+    def test_discovers_cadgen_src(self):
+        if not (_WORKTREE / "packages" / "cadgen" / "src").is_dir():
+            self.skipTest("packages/cadgen/src not present")
+        pp = cadgen_bridge.cadgen_pythonpath(str(_WORKTREE))
+        self.assertIn(os.path.join("packages", "cadgen", "src"), pp)
 
 
 if __name__ == "__main__":

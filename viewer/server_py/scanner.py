@@ -8,8 +8,8 @@ gets rewritten to the ``/__cad/asset?file=...`` form later by the backend's
 
 Verified against Node golden output (tests/catalog_golden.json) for the
 single-asset path (implicit/mesh/stl/3mf/glb/gcode/dxf). STEP entries
-(``create_step_entry``) and python-generated source status delegate to cadpy
-and are completed in the cadpy-integration phase — they are marked below.
+(``create_step_entry``) and python-generated source status delegate to cadgen
+and are completed in the cadgen-integration phase — they are marked below.
 """
 
 from __future__ import annotations
@@ -274,9 +274,9 @@ def _read_dxf_textto_cad_metadata(file_path):
         if lines[index].strip() != "999":
             continue
         value = lines[index + 1].strip()
-        if not value.startswith("cadpy:"):
+        if not value.startswith("cadgen:"):
             continue
-        key, sep, rest = value[len("cadpy:"):].partition("=")
+        key, sep, rest = value[len("cadgen:"):].partition("=")
         key = key.strip()
         if sep and re.fullmatch(r"[A-Za-z][A-Za-z0-9]*", key):
             metadata[key] = rest.strip()
@@ -500,10 +500,10 @@ def create_step_entry(repo_root, root_path, source_path, extension, include_arti
     # Catalog path runs with include_artifact_status=False (refreshCatalog), so
     # the entry is built purely from the committed __cadcache__ descriptor — no
     # OCP. The include_artifact_status=True path (the /__cad/artifact status
-    # route) delegates to cadpy and is a later phase.
+    # route) delegates to cadgen and is a later phase.
     if include_artifact_status:
         raise NotImplementedError(
-            "STEP artifact-status path pending cadpy delegation (artifact-route phase)"
+            "STEP artifact-status path pending cadgen delegation (artifact-route phase)"
         )
     entry_is_python = source_path.lower().endswith(".py")
     glb_path = inline_step_glb_artifact_path_for_source(source_path)

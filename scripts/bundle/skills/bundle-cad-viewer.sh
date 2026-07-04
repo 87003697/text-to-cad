@@ -11,11 +11,11 @@ BUILD=1
 CLEAN=0
 
 CADJS_PACKAGE_DIR="$REPO_ROOT/packages/cadjs"
-CADPY_PACKAGE_DIR="$REPO_ROOT/packages/cadpy"
+CADPY_PACKAGE_DIR="$REPO_ROOT/packages/cadgen"
 IMPLICITJS_PACKAGE_DIR="$REPO_ROOT/packages/implicitjs"
 VIEWER_DIR="$REPO_ROOT/viewer"
 VIEWER_CADJS_DIR="$VIEWER_DIR/packages/cadjs"
-VIEWER_CADPY_DIR="$VIEWER_DIR/packages/cadpy"
+VIEWER_CADPY_DIR="$VIEWER_DIR/packages/cadgen"
 VIEWER_IMPLICITJS_DIR="$VIEWER_DIR/packages/implicitjs"
 RUNTIME_DIR="$REPO_ROOT/skills/cad-viewer/scripts/viewer"
 CHECK_DIR="${CAD_VIEWER_RUNTIME_CHECK_DIR:-${RENDER_VIEWER_RUNTIME_CHECK_DIR:-$REPO_ROOT/tmp/cad-viewer-runtime-check}}"
@@ -190,7 +190,7 @@ sync_implicitjs_package() {
     "$IMPLICITJS_PACKAGE_DIR/" "$target_dir/"
 }
 
-sync_cadpy_package() {
+sync_cadgen_package() {
   # Canonical Python vendoring lives in scripts/bundle/lib/vendor.sh.
   vendor_python_package "$1" "$2"
 }
@@ -261,10 +261,10 @@ check_implicitjs_package() {
   echo "$label is up to date."
 }
 
-check_cadpy_package() {
+check_cadgen_package() {
   check_python_runtime "$CADPY_PACKAGE_DIR" "$VIEWER_CADPY_DIR" \
-    "${TMPDIR:-/tmp}/viewer-cadpy-package-check" "${VIEWER_CADPY_DIR#$REPO_ROOT/}" \
-    "Run scripts/bundle/bundle-skill.sh cad-viewer and commit viewer/packages/cadpy."
+    "${TMPDIR:-/tmp}/viewer-cadgen-package-check" "${VIEWER_CADPY_DIR#$REPO_ROOT/}" \
+    "Run scripts/bundle/bundle-skill.sh cad-viewer and commit viewer/packages/cadgen."
 }
 
 build_viewer_packages() {
@@ -274,7 +274,7 @@ build_viewer_packages() {
     rm -rf "$VIEWER_IMPLICITJS_DIR"
   fi
   sync_cadjs_package
-  sync_cadpy_package "$CADPY_PACKAGE_DIR" "$VIEWER_CADPY_DIR"
+  sync_cadgen_package "$CADPY_PACKAGE_DIR" "$VIEWER_CADPY_DIR"
   sync_implicitjs_package
   echo "Bundled ${VIEWER_CADJS_DIR#$REPO_ROOT/}"
   echo "Bundled ${VIEWER_CADPY_DIR#$REPO_ROOT/}"
@@ -300,7 +300,7 @@ ensure_viewer_cadjs_node_module_subpaths() {
 
 check_viewer_packages() {
   check_cadjs_package
-  check_cadpy_package
+  check_cadgen_package
   check_implicitjs_package
 }
 
@@ -344,7 +344,7 @@ EOF
 write_runtime_requirements() {
   local target_dir="$1"
   cat > "$target_dir/requirements.txt" <<'EOF'
---editable ./packages/cadpy
+--editable ./packages/cadgen
 EOF
 }
 
@@ -394,8 +394,8 @@ build_runtime() {
 
   # Python backend (server_py): the runtime serves the built dist + /__cad. STEP
   # build/export run through the persistent warm-OCCT worker (server_py/worker.py +
-  # worker_client.py), falling back to a cold `python -m cadpy.<module>` subprocess;
-  # both use the editable-installed cadpy (requirements.txt). sync_dir excludes
+  # worker_client.py), falling back to a cold `python -m cadgen.<module>` subprocess;
+  # both use the editable-installed cadgen (requirements.txt). sync_dir excludes
   # tests/__pycache__/golden so only runtime modules ship (worker.py included,
   # tests/test_worker.py not).
   sync_dir "$VIEWER_DIR/server_py" "$target_dir/server_py"
@@ -428,8 +428,8 @@ check_runtime() {
 require_command rsync
 require_path "$CADJS_PACKAGE_DIR/package.json" "cadjs package"
 require_path "$CADJS_PACKAGE_DIR/src" "cadjs source"
-require_path "$CADPY_PACKAGE_DIR/pyproject.toml" "cadpy package"
-require_path "$CADPY_PACKAGE_DIR/src/cadpy" "cadpy source"
+require_path "$CADPY_PACKAGE_DIR/pyproject.toml" "cadgen package"
+require_path "$CADPY_PACKAGE_DIR/src/cadgen" "cadgen source"
 require_path "$IMPLICITJS_PACKAGE_DIR/package.json" "implicitjs package"
 require_path "$IMPLICITJS_PACKAGE_DIR/src" "implicitjs source"
 require_path "$VIEWER_DIR/package.json" "viewer package"
@@ -440,8 +440,8 @@ if [ "$MODE" = "check" ]; then
 else
   build_viewer_packages
 fi
-require_path "$VIEWER_CADPY_DIR/pyproject.toml" "viewer cadpy package"
-require_path "$VIEWER_CADPY_DIR/src/cadpy" "viewer cadpy source"
+require_path "$VIEWER_CADPY_DIR/pyproject.toml" "viewer cadgen package"
+require_path "$VIEWER_CADPY_DIR/src/cadgen" "viewer cadgen source"
 require_path "$VIEWER_IMPLICITJS_DIR/package.json" "viewer implicitjs package"
 require_path "$VIEWER_IMPLICITJS_DIR/src" "viewer implicitjs source"
 
