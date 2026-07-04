@@ -506,6 +506,18 @@ test("STEP GLB mesh data preserves non-gray material colors", async () => {
   assert.equal(meshData.parts[0].hasSourceColors, true);
 });
 
+test("STEP GLB mesh data preserves source material opacity", async () => {
+  const meshData = await buildMeshDataFromGlbBuffer(makeOccurrenceGlb({
+    stepTopology: true,
+    materialBaseColor: [1, 0, 0, 0.2]
+  }));
+
+  assert.equal(meshData.has_source_colors, true);
+  assert.equal(meshData.parts[0].color, "#ff0000");
+  assert.equal(meshData.parts[0].opacity, 0.2);
+  assert.equal(meshData.parts[0].hasSourceColors, true);
+});
+
 test("STEP GLB mesh data preserves colored primitives alongside generated default materials", async () => {
   const meshData = await buildMeshDataFromGlbBuffer(makeTwoPrimitiveOccurrenceGlb({
     stepTopology: true,
