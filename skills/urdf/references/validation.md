@@ -6,7 +6,7 @@ Every created or modified `.urdf` runs this recipe before the task is reported c
 
 Run in order; stop and fix at the first failing step:
 
-1. **Bundled validator** (always): `python scripts/validate path/to/robot.urdf`. Fix findings and re-run until clean; treat warnings as findings unless the ledger explains them.
+1. **Bundled validator** (always): `python scripts/validate path/to/robot.urdf`. It collects *all* findings in one pass (severity, code, XML path); fix them and re-run until clean. Use `--strict` to fail on warnings, `--format json` for machine-readable output, and `--package NAME=PATH` to resolve `package://` mesh URIs.
 2. **External URDF tools** (when installed): `check_urdf robot.urdf` (ros liburdfdom) parses with the reference parser and prints the link tree. Report as skipped when unavailable.
 3. **Viewer sweep** (whenever `$cad-viewer` is available): load the file, confirm meshes appear at sane scale and pose, then sweep **every** movable joint through its limits and compare the motion against the ledger's positive-motion statement, joint by joint. This is the only step that catches a wrong axis sign.
 4. **Consumer smoke test** (when the target runtime is available): RViz display, robot_state_publisher TF tree, Gazebo/Ignition load, or MoveIt model load.
@@ -26,8 +26,11 @@ Joints:
 
 - type is `fixed`, `continuous`, `revolute`, or `prismatic` (`floating`/`planar` are rejected — use them only with a consumer-specific validation path);
 - origins have three finite values for `xyz`/`rpy` when present;
-- movable joints have a nonzero, finite axis;
-- revolute/prismatic joints have finite `lower <= upper` limits; `effort`/`velocity` finite when present.
+- movable joints have a nonzero, finite axis; warnings for an omitted axis (spec default `1 0 0`) and non-unit axes;
+- revolute/prismatic joints have finite `lower <= upper` limits; `effort`/`velocity` must be non-negative and warn when omitted; fixed/continuous joints warn when they carry ignored position limits;
+- `<dynamics>` damping/friction must be non-negative;
+- `<mimic>` must reference an existing, non-fixed, non-self joint with no mimic cycles;
+- joint names colliding with link names warn (URDF-to-SDF conversion breaks).
 
 Geometry and meshes:
 
@@ -37,8 +40,16 @@ Geometry and meshes:
 
 Inertials (when present):
 
-- `mass` positive and finite; all six tensor values present and finite;
-- diagonal values positive; triangle inequalities hold (`ixx + iyy >= izz` etc.).
+- at most one `<inertial>` per link; `mass` positive and finite; all six tensor values present and finite;
+- diagonal values positive; the full tensor must be positive semidefinite (eigenvalue check — catches bad off-diagonals);
+- principal moments violating the triangle inequality (`l1 + l2 >= l3`) warn (real-world exports often violate slightly; `--strict` promotes it);
+- movable links with geometry but no inertial warn.
+
+Authoring hygiene:
+
+- unknown elements under `<robot>`, `<link>`, `<joint>`, `<visual>`, `<collision>`, and `<inertial>` warn — misspelled elements are otherwise silently ignored by consumers (namespaced extensions like `<gazebo>` pass through);
+- visual `<material name>` references without a matching definition warn;
+- mesh extensions outside the common set (stl/dae/obj/3mf/glb/gltf/ply) warn.
 
 The validator intentionally does not require inertials or collision geometry on every link — that is target-consumer policy, decided in the ledger (see `references/inertials.md`). When a file fails a *project* policy rather than these checks, report it as policy failure, not URDF invalidity.
 

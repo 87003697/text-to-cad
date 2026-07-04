@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import sys
 from collections.abc import Sequence
 from pathlib import Path
@@ -21,12 +22,18 @@ def validate_sdf_targets(
     *,
     gz_check: str = "auto",
     strict: bool = False,
+    output_format: str = "text",
 ) -> int:
     target_paths = [_resolve_target_path(target) for target in targets]
+    reports: list[dict[str, object]] = []
     failed = False
     for target_path in target_paths:
-        if not _validate_target(target_path, gz_check=gz_check, strict=strict):
+        report = _validate_target(target_path, gz_check=gz_check, strict=strict, output_format=output_format)
+        reports.append(report)
+        if not report["ok"]:
             failed = True
+    if output_format == "json":
+        print(json.dumps({"files": reports}, indent=2))
     return 1 if failed else 0
 
 
@@ -51,8 +58,20 @@ def main(argv: Sequence[str] | None = None) -> int:
         action="store_true",
         help="Treat bundled validation warnings as failures.",
     )
+    parser.add_argument(
+        "--format",
+        choices=("text", "json"),
+        default="text",
+        dest="output_format",
+        help="Output format: human-readable text (default) or a JSON findings document.",
+    )
     args = parser.parse_args(list(argv) if argv is not None else None)
-    return validate_sdf_targets(args.targets, gz_check=args.gz_check, strict=args.strict)
+    return validate_sdf_targets(
+        args.targets,
+        gz_check=args.gz_check,
+        strict=args.strict,
+        output_format=args.output_format,
+    )
 
 
 def _resolve_target_path(raw_target: object) -> Path:
@@ -63,39 +82,64 @@ def _resolve_target_path(raw_target: object) -> Path:
     return target_path.resolve() if target_path.is_absolute() else (Path.cwd() / target_path).resolve()
 
 
-def _validate_target(target_path: Path, *, gz_check: str, strict: bool) -> bool:
+def _validate_target(
+    target_path: Path,
+    *,
+    gz_check: str,
+    strict: bool,
+    output_format: str,
+) -> dict[str, object]:
     display = _display_path(target_path)
+    text_mode = output_format == "text"
     if target_path.suffix.lower() != SDF_SUFFIX:
-        print(f"FAIL {display}: target must be a .sdf file", file=sys.stderr)
-        return False
+        return _report_precheck_failure(display, "target must be a .sdf file", text_mode)
     if not target_path.is_file():
-        print(f"FAIL {display}: file not found", file=sys.stderr)
-        return False
+        return _report_precheck_failure(display, "file not found", text_mode)
     try:
         xml_text = target_path.read_text(encoding="utf-8")
     except OSError as exc:
-        print(f"FAIL {display}: {exc}", file=sys.stderr)
-        return False
+        return _report_precheck_failure(display, str(exc), text_mode)
 
     validation = validate_sdf_xml(xml_text, source_path=target_path, base_dir=target_path.parent)
     validation.extend(run_gz_sdf_check(xml_text, output_path=target_path, mode=gz_check))
+    validation = validation.deduplicated()
 
-    for finding in [*validation.warnings, *validation.infos]:
-        print(finding.format(), file=sys.stderr)
-    failing = validation.errors + (validation.warnings if strict else [])
-    if failing:
-        for finding in validation.errors:
+    if text_mode:
+        for finding in validation.all_findings():
             print(finding.format(), file=sys.stderr)
-        print(f"FAIL {display}: {len(failing)} blocking finding(s)", file=sys.stderr)
-        return False
+    blocking = len(validation.errors) + (len(validation.warnings) if strict else 0)
+    summary = ""
+    ok = not blocking
+    if ok:
+        try:
+            source = parse_sdf_xml(xml_text, source_path=target_path, base_dir=target_path.parent)
+            summary = _summary_line(display, source)
+        except SdfSourceError as exc:
+            ok = False
+            if text_mode:
+                print(f"FAIL {display}: {exc}", file=sys.stderr)
+    if text_mode:
+        if ok and summary:
+            print(summary)
+        elif blocking:
+            print(f"FAIL {display}: {blocking} blocking finding(s)", file=sys.stderr)
+    return {
+        "path": display,
+        "ok": ok,
+        "summary": summary,
+        "findings": [finding.to_dict() for finding in validation.all_findings()],
+    }
 
-    try:
-        source = parse_sdf_xml(xml_text, source_path=target_path, base_dir=target_path.parent)
-    except SdfSourceError as exc:
-        print(f"FAIL {display}: {exc}", file=sys.stderr)
-        return False
-    print(_summary_line(display, source))
-    return True
+
+def _report_precheck_failure(display: str, message: str, text_mode: bool) -> dict[str, object]:
+    if text_mode:
+        print(f"FAIL {display}: {message}", file=sys.stderr)
+    return {
+        "path": display,
+        "ok": False,
+        "summary": "",
+        "findings": [{"severity": "error", "code": "invalid_target", "message": message}],
+    }
 
 
 def _summary_line(display: str, source: SdfSource) -> str:

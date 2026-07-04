@@ -50,9 +50,11 @@ From this skill directory, the validator shape is:
 ```bash
 python scripts/validate path/to/robot.srdf
 python scripts/validate path/to/a.srdf path/to/b.srdf
+python scripts/validate path/to/robot.srdf --strict
+python scripts/validate path/to/robot.srdf --format json
 ```
 
-The validator parses the SRDF, resolves the linked URDF via `<tcad:urdf path="..."/>`, and cross-validates: robot-name match, group/joint/link/subgroup name existence, chain path resolvability, end-effector topology, group-state membership and limits, and disabled-collision pairs. It exits nonzero if any target fails. Relative targets resolve from the current working directory.
+The validator collects all findings in one pass (severity, code, XML path). It parses the SRDF, resolves the linked URDF via `<tcad:urdf path="..."/>`, and cross-validates: robot-name match, group/joint/link/subgroup name existence, chain path resolvability, subgroup cycles, virtual/passive joints, end-effector topology, group-state membership/limits/completeness, disabled-collision pairs (including Adjacent-reason truthfulness), and misspelled elements. `--strict` treats warnings as failures; `--format json` emits a machine-readable findings document. It exits nonzero if any target fails. Relative targets resolve from the current working directory.
 
 ## Hard rules
 

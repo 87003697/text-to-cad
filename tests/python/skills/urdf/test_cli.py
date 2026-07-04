@@ -155,7 +155,7 @@ class UrdfValidateCliTests(unittest.TestCase):
         self.assertIn("OK", stdout)
         self.assertIn("WARN", stderr)
 
-    def test_inertia_triangle_inequality_fails(self) -> None:
+    def test_inertia_triangle_inequality_warns_and_strict_fails(self) -> None:
         urdf_path = self._write(
             "inertia.urdf",
             """\
@@ -170,8 +170,29 @@ class UrdfValidateCliTests(unittest.TestCase):
 """,
         )
         exit_code, _, stderr = self._run(str(urdf_path))
-        self.assertEqual(exit_code, 1)
+        self.assertEqual(exit_code, 0)
         self.assertIn("triangle inequalities", stderr)
+        strict_exit, _, strict_stderr = self._run(str(urdf_path), "--strict")
+        self.assertEqual(strict_exit, 1)
+        self.assertIn("blocking finding", strict_stderr)
+
+    def test_non_psd_inertia_fails(self) -> None:
+        urdf_path = self._write(
+            "psd.urdf",
+            """\
+<robot name="psd">
+  <link name="base">
+    <inertial>
+      <mass value="1"/>
+      <inertia ixx="0.001" ixy="0.01" ixz="0" iyy="0.001" iyz="0" izz="0.001"/>
+    </inertial>
+  </link>
+</robot>
+""",
+        )
+        exit_code, _, stderr = self._run(str(urdf_path))
+        self.assertEqual(exit_code, 1)
+        self.assertIn("not positive semidefinite", stderr)
 
 
 if __name__ == "__main__":
