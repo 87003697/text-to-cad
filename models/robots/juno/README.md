@@ -24,7 +24,7 @@ Hands add posed (cosmetic) finger articulation on top of the 27 counted DOF.
 
 - `juno.py` — build123d generator (`gen_step()`); authoritative source.
   Pose angles are module-level parameters; joints are authored as
-  `cadpy.assembly.AssemblyHelper` revolute frames driven by those angles.
+  `cadgen.assembly.AssemblyHelper` revolute frames driven by those angles.
 - `juno_parts/` — part-builder package (sculpted segments, joint hardware,
   shared style library). Each builder returns an identity-location labeled
   compound in its part-local frame. `chain.py` is the shared kinematic

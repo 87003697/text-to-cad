@@ -15,7 +15,7 @@ if __package__ in {None, ""}:
     if str(tool_dir) not in sys.path:
         sys.path.insert(0, str(tool_dir))
 
-from cadpy.cli_logging import CliLogger
+from cadgen.cli_logging import CliLogger
 
 
 def _inspect_api():

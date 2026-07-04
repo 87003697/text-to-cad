@@ -108,17 +108,17 @@ For source operations, prefer robust selectors such as top/bottom by axis or pos
 For assemblies, keep this file focused on BREP modeling patterns and labels. Use `positioning.md` as the single source of truth for:
 
 - part-local coordinate conventions
-- when to use `cadpy.assembly.AssemblyHelper`, build123d joints, or explicit `Location` transforms
+- when to use `cadgen.assembly.AssemblyHelper`, build123d joints, or explicit `Location` transforms
 - `connect_to()` behavior
 - CLI `inspect align` as read-only selector-pair alignment validation
 - frame, measure, and positioning report expectations
 
 ## Labels and assemblies
 
-Label every exported part and assembly child with native build123d labels. Prefer concise intent labels through `cadpy.assembly` helpers:
+Label every exported part and assembly child with native build123d labels. Prefer concise intent labels through `cadgen.assembly` helpers:
 
 ```python
-from cadpy.assembly import AssemblyHelper, label_shape
+from cadgen.assembly import AssemblyHelper, label_shape
 
 asm = AssemblyHelper("electronics_enclosure")
 base = asm.add(make_base(), "base")

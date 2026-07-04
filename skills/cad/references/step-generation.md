@@ -66,7 +66,7 @@ python scripts/step path/to/a.step.py=out/a.step path/to/b.step.py=out/b.step
 python scripts/step path/to/assembly.step.py
 ```
 
-Passing a generated assembly `.step` directly treats it as imported native STEP and loses source-level assembly composition; pass the `.py` assembly source. For generated build123d assemblies, prefer `cadpy.assembly.AssemblyHelper` in the Python source so native labels, named mate frames, and source-level relationships are preserved before STEP export (see `positioning.md`).
+Passing a generated assembly `.step` directly treats it as imported native STEP and loses source-level assembly composition; pass the `.py` assembly source. For generated build123d assemblies, prefer `cadgen.assembly.AssemblyHelper` in the Python source so native labels, named mate frames, and source-level relationships are preserved before STEP export (see `positioning.md`).
 
 ## Direct STEP/STP imports
 

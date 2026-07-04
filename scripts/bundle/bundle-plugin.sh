@@ -126,7 +126,26 @@ sync_skills() {
       "$source_dir/" "$target_dir/"
   done < <(list_skills)
 
+  pin_cadgen_requirements "$target_root"
   assert_no_symlinks "$target_root"
+}
+
+# Production plugin installs resolve cadgen from PyPI at the pinned release
+# version published by the Release workflow; the vendored package copy stays in
+# the bundle as an offline fallback (`pip install ./<path>/packages/cadgen`).
+# Local development keeps the editable install through the source symlinks.
+pin_cadgen_requirements() {
+  local target_root="$1"
+  local version manifest
+  version="$(tr -d '[:space:]' < "$PLUGIN_ROOT/VERSION")"
+  if [ -z "$version" ]; then
+    echo "Missing canonical plugin version: $PLUGIN_ROOT/VERSION" >&2
+    exit 1
+  fi
+  while IFS= read -r manifest; do
+    sed -E -i.bak "s|^--editable \./([A-Za-z0-9_./-]*/)?packages/cadgen[[:space:]]*$|cadgen==$version|" "$manifest"
+    rm -f "$manifest.bak"
+  done < <(find "$target_root" -name requirements.txt -type f)
 }
 
 check_skill_names() {

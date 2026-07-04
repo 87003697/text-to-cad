@@ -19,7 +19,7 @@ import unittest
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[2]))
 
-from server_py import cadpy_bridge, worker, worker_client  # noqa: E402
+from server_py import cadgen_bridge, worker, worker_client  # noqa: E402
 
 _WORKTREE = pathlib.Path(__file__).resolve().parents[3]
 _FIXTURE = _WORKTREE / "models/simple/basic_shape_mating_test_fixture.step.py"
@@ -31,12 +31,12 @@ _DESCRIPTOR = (
 
 
 def _ocp_available() -> bool:
-    if not (_WORKTREE / "packages/cadpy/src").is_dir():
+    if not (_WORKTREE / "packages/cadgen/src").is_dir():
         return False
-    sys.path.insert(0, str(_WORKTREE / "packages/cadpy/src"))
+    sys.path.insert(0, str(_WORKTREE / "packages/cadgen/src"))
     try:
         importlib.import_module("OCP")
-        importlib.import_module("cadpy.step_artifact")
+        importlib.import_module("cadgen.step_artifact")
         return True
     except Exception:
         return False
@@ -83,10 +83,10 @@ class WorkerProtocol(unittest.TestCase):
 
     def test_invoke_unknown_module_is_failure_dict(self):
         [frame] = self._run(
-            [{"jsonrpc": "2.0", "id": 2, "method": "invoke", "params": {"module": "cadpy.nope"}}]
+            [{"jsonrpc": "2.0", "id": 2, "method": "invoke", "params": {"module": "cadgen.nope"}}]
         )
         self.assertFalse(frame["result"]["ok"])
-        self.assertIn("Unknown cadpy module", frame["result"]["error"])
+        self.assertIn("Unknown cadgen module", frame["result"]["error"])
 
     def test_invoke_core_exception_is_failure_dict_not_protocol_error(self):
         [frame] = self._run(
@@ -160,10 +160,10 @@ class ClientLifecycle(unittest.TestCase):
     def test_disabled_raises_for_cold_fallback(self):
         os.environ["VIEWER_CAD_WORKER"] = "0"
         with self.assertRaises(worker_client._WorkerError):
-            worker_client.run_cadpy("cadpy.step_artifact", [], str(_WORKTREE))
+            worker_client.run_cadgen("cadgen.step_artifact", [], str(_WORKTREE))
 
 
-@unittest.skipUnless(_ocp_available(), "OpenCASCADE / cadpy not importable")
+@unittest.skipUnless(_ocp_available(), "OpenCASCADE / cadgen not importable")
 class WorkerBuildIntegration(unittest.TestCase):
     """End-to-end: build the mating fixture through the warm worker subprocess and
     assert it matches a cold subprocess on the recorded source closure."""
@@ -188,20 +188,20 @@ class WorkerBuildIntegration(unittest.TestCase):
         return (data.get("sourceClosureHash"), tuple(data.get("sourceClosureFiles") or ()))
 
     def test_warm_builds_match_cold(self):
-        cold = cadpy_bridge.run_cadpy_cold("cadpy.step_artifact", self._build_args(), str(_WORKTREE))
+        cold = cadgen_bridge.run_cadgen_cold("cadgen.step_artifact", self._build_args(), str(_WORKTREE))
         self.assertTrue(cold.get("ok"), cold)
         cold_closure = self._closure()
 
-        warm1 = self.client.run_cadpy("cadpy.step_artifact", self._build_args(), str(_WORKTREE))
+        warm1 = self.client.run_cadgen("cadgen.step_artifact", self._build_args(), str(_WORKTREE))
         self.assertTrue(warm1.get("ok"), warm1)
         self.assertTrue(warm1.get("glbPath"))
         w1 = self._closure()
 
-        warm2 = self.client.run_cadpy("cadpy.step_artifact", self._build_args(), str(_WORKTREE))
+        warm2 = self.client.run_cadgen("cadgen.step_artifact", self._build_args(), str(_WORKTREE))
         self.assertTrue(warm2.get("ok"), warm2)
         w2 = self._closure()
 
-        # Two files incl. cadpy/assembly.py — and identical across cold/warm1/warm2.
+        # Two files incl. cadgen/assembly.py — and identical across cold/warm1/warm2.
         self.assertEqual(len(cold_closure[1]), 2, cold_closure)
         self.assertEqual(w1, cold_closure)
         self.assertEqual(w2, cold_closure)

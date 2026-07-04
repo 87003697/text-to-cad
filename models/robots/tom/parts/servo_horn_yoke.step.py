@@ -377,7 +377,7 @@ def _extract_selector_shape(step_path: Path, selector: str) -> tuple[str, build1
         except Exception:
             return build123d.Location()
 
-    def _located_shape(shape: object, location: build123d.Location | None) -> object:
+    def located_shape(shape: object, location: build123d.Location | None) -> object:
         if location is None:
             return shape
         return shape.Located(location.wrapped)
@@ -426,7 +426,7 @@ def _extract_selector_shape(step_path: Path, selector: str) -> tuple[str, build1
 
     base_location = _shape_location(base_shape)
     current_location = base_location if current_location is None else current_location * base_location
-    extracted = _cast_shape(_located_shape(base_shape, current_location))
+    extracted = _cast_shape(located_shape(base_shape, current_location))
     return _label_name(label), extracted
 
 

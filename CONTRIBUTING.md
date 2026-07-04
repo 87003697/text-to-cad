@@ -211,6 +211,27 @@ The GitHub Release is published immediately by default; set `publish=false` to
 review it as a draft first. Treat generated outputs as CI products, not edit
 targets.
 
+The publish job also uploads `packages/cadgen` to
+[PyPI](https://pypi.org/project/cadgen/). The upload runs after the production
+bundle is validated but BEFORE `main` is pushed: production plugin bundles pin
+`cadgen==<version>` from PyPI (`scripts/bundle/bundle-plugin.sh` rewrites the
+requirement lines), so a failed PyPI upload must block the release rather than
+ship a `main` whose skill installs cannot resolve. The PyPI version always
+equals `plugins/cad/VERSION`; `sync-version.mjs` stamps
+`packages/cadgen/pyproject.toml` and the publish job refuses to upload on a
+mismatch. Uploads use `skip-existing`, so a rerun after a post-upload failure
+(for example a failed `main` push) is idempotent and resumes like any other
+failed publish. Local development keeps the editable symlinked installs.
+
+#### One-time PyPI setup
+
+The PyPI upload authenticates with [trusted
+publishing](https://docs.pypi.org/trusted-publishers/) (GitHub OIDC); no API
+token secret is stored. Before the first release that publishes to PyPI, add a
+trusted publisher for the `cadgen` project on PyPI (use "Add a pending
+publisher" if the project does not exist yet): repository
+`earthtojake/text-to-cad`, workflow `release.yml`, environment left blank.
+
 ### Testing CI/CD and build changes
 
 Use `target_branch=build-test` only when explicitly testing changes to the

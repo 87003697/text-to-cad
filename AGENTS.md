@@ -17,8 +17,8 @@ do not open PRs to `main` or push it directly.
 Do not bump the canonical release version in `plugins/cad/VERSION` during
 normal development work. Ship releases only through the single `Release`
 GitHub Actions workflow, which handles the version bump, release PR, publish
-commit to `main`, models upload, web-app deploys, semver tag, and GitHub
-Release in one run.
+commit to `main`, models upload, web-app deploys, `cadgen` PyPI publish,
+semver tag, and GitHub Release in one run.
 
 When asked to publish, make, or ship a release, dispatch `Release` with its
 defaults: build from `develop` (`base_branch=develop`), publish to `main`
@@ -45,7 +45,7 @@ flow, CI/CD-testing and resume options, and local/manual fallbacks.
 - `packages/cadjs`: shared JS CAD/render/runtime code, UI-framework agnostic.
 - `packages/implicitjs`: standalone JS implicit CAD model, shader render,
   snapshot, mesh sampling, and export runtime.
-- `packages/cadpy`: shared Python STEP/GLB/topology artifact code.
+- `packages/cadgen`: shared Python STEP/GLB/topology artifact code.
 - `docs/`: documentation site.
 - `tests/`: root-owned test suites for skills, packages, viewer services, and
   repo-wide policy.
@@ -89,10 +89,10 @@ flow, CI/CD-testing and resume options, and local/manual fallbacks.
 - `packages/implicitjs` must stay reusable/non-React and independent of
   `packages/cadjs`; CAD Viewer and snapshot tools should consume its shared
   render/export APIs instead of duplicating implicit CAD logic.
-- `packages/cadpy` owns reusable Python artifact generation; skills should use
+- `packages/cadgen` owns reusable Python artifact generation; skills should use
   bundled package code, not sibling skill imports.
-- Create lightweight shared Python packages under `packages/cadpy_*` when a
-  helper should not inherit heavier package dependencies.
+- Create lightweight shared Python packages under `packages/` when a helper
+  should not inherit heavier package dependencies.
 - Use path-targeted search, validation, and `git status`; avoid broad scans over
   generated CAD/LFS artifacts unless the task requires them.
 - Treat `plugins/cad/VERSION` as the canonical release version. Do not hand-edit
