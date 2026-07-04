@@ -1,6 +1,6 @@
 # SRDF Authoring Contract
 
-Use this reference when writing or editing SRDF XML directly. The `.srdf` file is the source of truth and must be auditable on its own: linked URDF, planning intent, and provenance all live in the file.
+Use this reference when writing or editing SRDF XML directly. The `.srdf` file is the source of truth and must be auditable on its own: planning intent and provenance live in the file, and the paired URDF is found by convention.
 
 ## File Shape
 
@@ -8,23 +8,20 @@ Every authored `.srdf` follows this shape, in this order:
 
 1. XML declaration: `<?xml version="1.0"?>`.
 2. Planning-ledger comment block (compact form of `references/planning-ledger.md`).
-3. One `<robot>` root with the **same `name` as the linked URDF** and the metadata namespace declared: `<robot xmlns:tcad="https://text-to-cad.dev/srdf" name="...">`.
-4. `<tcad:urdf path="..."/>` as the first child.
-5. `<virtual_joint>` elements, then `<group>`, `<group_state>`, `<end_effector>`, `<passive_joint>`, `<disable_collisions>` — grouped by element type, in that order.
+3. One `<robot>` root with the **same `name` as the paired URDF**: `<robot name="...">`.
+4. `<virtual_joint>` elements, then `<group>`, `<group_state>`, `<end_effector>`, `<passive_joint>`, `<disable_collisions>` — grouped by element type, in that order.
 
 Keep two-space indentation. Comment nontrivial decisions inline (why a chain tip, why a pair is disabled).
 
-## The URDF Link Element (non-negotiable)
+## URDF Pairing (non-negotiable)
 
-```xml
-<robot xmlns:tcad="https://text-to-cad.dev/srdf" name="so101_new_calib">
-  <tcad:urdf path="so101.urdf" />
-```
+An SRDF pairs with its URDF by **colocation and robot name** — nothing else:
 
-- `path` is a POSIX relative path from the `.srdf` file's directory to the `.urdf`; it must stay inside the repository and end in `.urdf`.
-- This element is how the CAD Viewer, the local MoveIt2 server, and the bundled validator resolve robot structure. An SRDF without it fails validation and cannot be reviewed.
-- Legacy files may carry `<explorer:urdf .../>` (namespace `https://text-to-cad.dev/explorer`); consumers still accept it, but always author new or edited files with `tcad:urdf`.
-- Keep the URDF and SRDF in the same directory with the same basename unless the project layout dictates otherwise.
+- Save the `.srdf` in the **same folder** as the `.urdf` it describes.
+- Both files declare the identical `<robot name="...">`.
+- Exactly one `.urdf` in that folder may declare that robot name; the validator, the CAD Viewer, and the local MoveIt2 server all resolve the pairing by scanning the folder, and they error when zero or several URDFs match.
+- Matching basenames (`so101.srdf` next to `so101.urdf`) are conventional and recommended for readability, but the robot name is what pairs the files. Multiple SRDF planning variants for one robot (`so101_dual.srdf`, `so101_precise.srdf`) all pair with the same URDF through its name.
+- There is no link element. Older files carried `<tcad:urdf path="..."/>` (or legacy `<explorer:urdf/>`) metadata; that element is retired, ignored by all consumers, and flagged by the validator as `deprecated_urdf_link` — remove it when you touch such a file.
 
 ## Names Come From the URDF Table
 
@@ -50,8 +47,7 @@ Every `link`, `joint`, `base_link`, `tip_link`, `parent_link`, and group-state j
   disabled collisions: URDF-adjacent pairs only (reason Adjacent)
   assumptions: tool0 is the TCP; no sampled collision matrix yet
 -->
-<robot xmlns:tcad="https://text-to-cad.dev/srdf" name="example_arm">
-  <tcad:urdf path="example_arm.urdf" />
+<robot name="example_arm">
   <virtual_joint name="world_to_base" type="fixed" parent_frame="world" child_link="base_footprint" />
   <group name="arm">
     <chain base_link="base_link" tip_link="tool0" />

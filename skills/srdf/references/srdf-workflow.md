@@ -4,7 +4,7 @@ Use this reference when creating or editing MoveIt planning semantics for an exi
 
 ## Step 0: Extract the URDF Table
 
-Do this before writing any SRDF XML. Parse the linked URDF (read it, or run a three-line ElementTree script for large robots) and write down:
+Do this before writing any SRDF XML. Parse the paired URDF (read it, or run a three-line ElementTree script for large robots) and write down:
 
 - robot `name` (the SRDF must match it exactly);
 - every link name;
@@ -17,7 +17,7 @@ Every name that appears in the SRDF is **copied from this table**. If a name you
 
 1. Confirm the URDF is valid (`$urdf` validator) and extract the URDF table.
 2. Read or create the planning ledger (`references/planning-ledger.md`); keep the compact form as a comment block in the `.srdf`.
-3. Author or edit the SRDF XML directly per `references/authoring-contract.md`, in element order: urdf link, virtual joints, groups, group states, end effectors, passive joints, disabled collisions.
+3. Author or edit the SRDF XML directly per `references/authoring-contract.md`, in element order: virtual joints, groups, group states, end effectors, passive joints, disabled collisions. Save it next to the URDF with the same robot name — colocation plus name match is how every consumer pairs the files.
 4. Derive — do not invent — disabled collisions (`references/disabled-collisions.md`) and group-state values (URDF-native units, within limits).
 5. Validate with `python scripts/validate <file.srdf>`; fix findings until clean.
 6. Hand the file to `$cad-viewer`; include MoveIt2 controls when interactive IK/planning review is needed.

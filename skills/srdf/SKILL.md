@@ -1,6 +1,6 @@
 ---
 name: srdf
-description: MoveIt2 SRDF authoring, validation, and planning-semantics workflow. Use when creating, editing, inspecting, or validating `.srdf` files, MoveIt planning groups, virtual joints, passive joints, end effectors, group states, disabled collisions, URDF-linked planning semantics, or SRDF handoff for live review. Use the URDF skill for robot structure, the SDF skill for simulator descriptions, and the cad-viewer skill for rendering, live review links, and optional MoveIt2 controls.
+description: MoveIt2 SRDF authoring, validation, and planning-semantics workflow. Use when creating, editing, inspecting, or validating `.srdf` files, MoveIt planning groups, virtual joints, passive joints, end effectors, group states, disabled collisions, URDF-paired planning semantics, or SRDF handoff for live review. Use the URDF skill for robot structure, the SDF skill for simulator descriptions, and the cad-viewer skill for rendering, live review links, and optional MoveIt2 controls.
 ---
 
 # SRDF
@@ -27,17 +27,17 @@ After completing SRDF work that creates or modifies a `.srdf`, you must ALWAYS h
 
 ## Required workflow
 
-1. **Start from a valid URDF.** Author or fix the URDF first with `$urdf` and validate it. The SRDF references that URDF by relative path and every name in the SRDF must exist in it.
+1. **Start from a valid URDF.** Author or fix the URDF first with `$urdf` and validate it. The SRDF pairs with that URDF by colocation and robot name, and every name in the SRDF must exist in it.
 2. **Extract the URDF table.** Before writing any SRDF XML, list the URDF's robot name, links, joints (with type, parent, child, limits, mimic flags). Copy names from this table only; never type them from memory. See `references/srdf-workflow.md`.
 3. **Identify the planning task.** Record whether the goal is arm IK, gripper control, mobile base planning, dual-arm planning, tool use, or local smoke testing.
 4. **Create or update the planning ledger.** Use `references/planning-ledger.md` before writing XML; keep a compact copy as a comment block in the `.srdf`.
-5. **Link the URDF.** The root element must declare `xmlns:tcad="https://text-to-cad.dev/srdf"` and the first child must be `<tcad:urdf path="..."/>` with the POSIX relative path to the URDF. This element is how the viewer, the MoveIt2 server, and the validator find the robot structure; without it the SRDF is unusable. See `references/authoring-contract.md`.
+5. **Pair with the URDF by colocation.** Save the `.srdf` in the same folder as its `.urdf`, with the same `<robot name>` — that is the only linking mechanism. The validator, the viewer, and the MoveIt2 server all resolve the pairing by scanning the folder for the URDF whose robot name matches; exactly one URDF per robot name per folder. No metadata element links the files. See `references/authoring-contract.md`.
 6. **Define virtual and passive joints deliberately.** Use them when needed by the robot model.
 7. **Define planning groups from URDF topology.** Prefer chain groups for serial manipulators when base/tip form a real parent-to-child path in the URDF tree (the validator verifies this). Use joint/link/subgroup definitions only when they are deliberate.
 8. **Define end effectors after group membership is known.** Avoid overlap between an end-effector group and its parent group. Record the actual target/TCP link.
 9. **Define group states in URDF-native units.** Revolute and continuous values are radians; prismatic values are meters. Do not store degrees in SRDF. Values must lie within URDF limits and must not set fixed or mimic joints.
 10. **Generate disabled collisions from evidence.** Use adjacency derived from the URDF joint table, MoveIt Setup Assistant sampling, or explicit user-provided collision matrices. Do not invent broad disable lists. See `references/disabled-collisions.md`.
-11. **Validate every created or modified `.srdf`** with `scripts/validate`; it cross-validates all names, chains, states, and pairs against the linked URDF. Fix findings and re-validate until clean.
+11. **Validate every created or modified `.srdf`** with `scripts/validate`; it cross-validates all names, chains, states, and pairs against the paired URDF. Fix findings and re-validate until clean.
 12. **Run MoveIt smoke tests when available.** Use MoveIt Setup Assistant or a project MoveIt launch directly.
 13. **Report assumptions and skipped checks.** Include incomplete validation, missing MoveIt environment, manually reasoned collision disables, and inferred target links.
 
@@ -54,12 +54,11 @@ python scripts/validate path/to/robot.srdf --strict
 python scripts/validate path/to/robot.srdf --format json
 ```
 
-The validator collects all findings in one pass (severity, code, XML path). It parses the SRDF, resolves the linked URDF via `<tcad:urdf path="..."/>`, and cross-validates: robot-name match, group/joint/link/subgroup name existence, chain path resolvability, subgroup cycles, virtual/passive joints, end-effector topology, group-state membership/limits/completeness, disabled-collision pairs (including Adjacent-reason truthfulness), and misspelled elements. `--strict` treats warnings as failures; `--format json` emits a machine-readable findings document. It exits nonzero if any target fails. Relative targets resolve from the current working directory.
+The validator collects all findings in one pass (severity, code, XML path). It parses the SRDF, resolves the paired URDF (the same-folder `.urdf` whose robot name matches; none or several is an error), and cross-validates: group/joint/link/subgroup name existence, chain path resolvability, subgroup cycles, virtual/passive joints, end-effector topology, group-state membership/limits/completeness, disabled-collision pairs (including Adjacent-reason truthfulness), and misspelled elements. `--strict` treats warnings as failures; `--format json` emits a machine-readable findings document. It exits nonzero if any target fails. Relative targets resolve from the current working directory.
 
 ## Hard rules
 
-- SRDF must reference an existing valid URDF through `<tcad:urdf path="..."/>` with a relative POSIX path.
-- The SRDF robot name must match the URDF robot name.
+- The SRDF lives in the same folder as its URDF and shares its `<robot name>`; that colocation-plus-name match is the only pairing mechanism, and exactly one URDF per robot name may exist in the folder.
 - Every link, joint, group, and subgroup name must come from the URDF table or a group defined in the same file.
 - Group states use URDF-native units: radians for revolute/continuous, meters for prismatic.
 - Disabled collision pairs require truthful reasons and provenance.
@@ -69,7 +68,7 @@ The validator collects all findings in one pass (severity, code, XML path). It p
 
 ## References
 
-- Authoring contract (structure, tcad:urdf link, golden skeleton): `references/authoring-contract.md`
+- Authoring contract (structure, URDF pairing, golden skeleton): `references/authoring-contract.md`
 - SRDF workflow (URDF table extraction, edit loop): `references/srdf-workflow.md`
 - Planning ledger: `references/planning-ledger.md`
 - Validation and verification recipe: `references/validation.md`

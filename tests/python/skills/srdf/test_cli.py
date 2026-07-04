@@ -38,8 +38,7 @@ SAMPLE_URDF = """\
 
 
 SAMPLE_SRDF = """\
-<robot name="sample" xmlns:tcad="https://text-to-cad.dev/srdf">
-  <tcad:urdf path="robot.urdf"/>
+<robot name="sample">
   <group name="arm">
     <chain base_link="base" tip_link="wrist"/>
   </group>
@@ -90,36 +89,36 @@ class SrdfValidateCliTests(unittest.TestCase):
         self.assertIn("1 end effectors", stdout)
         self.assertEqual(stderr, "")
 
-    def test_legacy_explorer_namespace_is_accepted(self) -> None:
+    def test_retired_urdf_link_element_warns_but_passes(self) -> None:
         srdf_path = self._write_pair(
             SAMPLE_SRDF.replace(
-                'xmlns:tcad="https://text-to-cad.dev/srdf"',
-                'xmlns:explorer="https://text-to-cad.dev/explorer"',
-            ).replace("tcad:urdf", "explorer:urdf")
+                '<robot name="sample">',
+                '<robot name="sample" xmlns:tcad="https://text-to-cad.dev/srdf">\n  <tcad:urdf path="robot.urdf"/>',
+            )
         )
-        exit_code, stdout, _ = self._run(str(srdf_path))
+        exit_code, stdout, stderr = self._run(str(srdf_path))
         self.assertEqual(exit_code, 0)
         self.assertIn("OK", stdout)
+        self.assertIn("deprecated_urdf_link", stderr)
 
-    def test_missing_urdf_metadata_fails(self) -> None:
-        srdf_path = self._write_pair(
-            SAMPLE_SRDF.replace('<tcad:urdf path="robot.urdf"/>', "")
-        )
-        exit_code, _, stderr = self._run(str(srdf_path))
-        self.assertEqual(exit_code, 1)
-        self.assertIn("tcad:urdf", stderr)
-
-    def test_missing_urdf_file_fails(self) -> None:
+    def test_missing_paired_urdf_fails(self) -> None:
         srdf_path = self._write("robot.srdf", SAMPLE_SRDF)
         exit_code, _, stderr = self._run(str(srdf_path))
         self.assertEqual(exit_code, 1)
-        self.assertIn("does not exist", stderr)
+        self.assertIn("declares robot name", stderr)
 
-    def test_robot_name_mismatch_fails(self) -> None:
+    def test_robot_name_without_matching_urdf_fails(self) -> None:
         srdf_path = self._write_pair(SAMPLE_SRDF.replace('name="sample"', 'name="other"', 1))
         exit_code, _, stderr = self._run(str(srdf_path))
         self.assertEqual(exit_code, 1)
-        self.assertIn("must match URDF robot name", stderr)
+        self.assertIn("no_paired_urdf", stderr)
+
+    def test_ambiguous_paired_urdf_fails(self) -> None:
+        srdf_path = self._write_pair()
+        self._write("robot_copy.urdf", SAMPLE_URDF)
+        exit_code, _, stderr = self._run(str(srdf_path))
+        self.assertEqual(exit_code, 1)
+        self.assertIn("ambiguous_paired_urdf", stderr)
 
     def test_unknown_group_joint_fails(self) -> None:
         srdf_path = self._write_pair(

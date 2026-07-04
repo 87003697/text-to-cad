@@ -1,6 +1,5 @@
 <?xml version="1.0"?>
-<robot xmlns:tcad="https://text-to-cad.dev/srdf" name="lyra">
-  <tcad:urdf path="lyra.urdf" />
+<robot name="lyra">
   <virtual_joint name="world_to_wrist" type="fixed" parent_frame="world" child_link="wrist_mount" />
   <group name="index">
     <joint name="index_mcp" />

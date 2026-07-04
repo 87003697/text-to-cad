@@ -5,18 +5,18 @@ Every created or modified `.srdf` runs this recipe before the task is reported c
 ## Recipe
 
 1. **Bundled validator** (always): `python scripts/validate path/to/robot.srdf`. It collects *all* findings in one pass (severity, code, XML path); fix them and re-run until clean. Use `--strict` to fail on warnings and `--format json` for machine-readable output.
-2. **Viewer review** (whenever `$cad-viewer` is available): load the SRDF, confirm the linked URDF resolves and renders, and exercise named group states. Include MoveIt2 controls for IK/path review when the task needs them.
+2. **Viewer review** (whenever `$cad-viewer` is available): load the SRDF, confirm the paired URDF resolves and renders, and exercise named group states. Include MoveIt2 controls for IK/path review when the task needs them.
 3. **MoveIt smoke test** (when a MoveIt environment is available): load the URDF+SRDF pair in MoveIt Setup Assistant or a project launch; solve IK for the primary group; plan to a named state. Report as skipped when unavailable.
 
 ## What the Bundled Validator Checks
 
 Structure and linkage:
 
-- root is `<robot>` with a non-empty name; `<tcad:urdf path="..."/>` present (legacy `explorer:urdf` accepted), relative POSIX path, resolving to an existing `.urdf`;
-- SRDF robot name matches the URDF robot name;
+- root is `<robot>` with a non-empty name;
+- a paired URDF resolves: exactly one `.urdf` in the same folder declares the SRDF's robot name (`no_paired_urdf` / `ambiguous_paired_urdf` errors otherwise); a leftover `<tcad:urdf>`/`<explorer:urdf>` element warns as deprecated and is ignored;
 - unique group, end-effector, group-state, and collision-pair identities.
 
-Against the linked URDF:
+Against the paired URDF:
 
 - every group joint/link/subgroup name exists (joints in the URDF, links in the URDF, subgroups in the SRDF);
 - every chain `base_link`/`tip_link` exists **and** the chain is a real parent→child path in the URDF tree;
@@ -28,7 +28,7 @@ Against the linked URDF:
 - group states: group exists, each joint exists and belongs to the group, no fixed/mimic/passive joints, values within URDF revolute/prismatic limits; states that omit group joints warn (MoveIt fills them from the current state);
 - disabled collisions: both links exist, distinct, non-empty reason, no (reversed) duplicates; pairs claiming reason `Adjacent` that are not actually joined by a URDF joint warn; warns when 25+ pairs are manually reasoned;
 - unknown elements under `<robot>` or `<group>` warn — misspelled elements are otherwise silently ignored by MoveIt;
-- a linked URDF that is not a single-rooted tree warns (chain/adjacency checks become unreliable).
+- a paired URDF that is not a single-rooted tree warns (chain/adjacency checks become unreliable).
 
 ## What Validation Cannot Prove
 

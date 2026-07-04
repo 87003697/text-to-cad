@@ -43,7 +43,7 @@ URDF = """\
 </robot>
 """
 
-SRDF_HEADER = '<robot name="edge" xmlns:tcad="https://text-to-cad.dev/srdf">\n  <tcad:urdf path="robot.urdf"/>\n'
+SRDF_HEADER = '<robot name="edge">\n'
 ARM_GROUP = '  <group name="arm"><chain base_link="base" tip_link="lower"/></group>\n'
 
 
@@ -56,7 +56,7 @@ CASES = [
     # --- structural parsing ---
     ("invalid_xml", "<robot name='edge'><group></robot>", "invalid_xml", "error"),
     ("invalid_root", "<semantic/>", "invalid_root", "error"),
-    ("missing_robot_name", _srdf("", header='<robot xmlns:tcad="https://text-to-cad.dev/srdf">\n  <tcad:urdf path="robot.urdf"/>\n'), "missing_robot_name", "error"),
+    ("missing_robot_name", _srdf("", header="<robot>\n"), "missing_robot_name", "error"),
     ("missing_group_name", _srdf('  <group><joint name="shoulder"/></group>\n'), "missing_group_name", "error"),
     ("duplicate_group", _srdf('  <group name="arm"><joint name="shoulder"/></group>\n'), "duplicate_name", "error"),
     ("unknown_robot_child", _srdf("  <group_states/>\n"), "unknown_element", "warning"),
@@ -76,14 +76,15 @@ CASES = [
         '  <disable_collisions link1="base" link2="upper" reason="Adjacent"/>\n'
         '  <disable_collisions link1="upper" link2="base" reason="Adjacent"/>\n'
     ), "duplicate_name", "error"),
-    # --- urdf link resolution ---
-    ("missing_urdf_link", _srdf("", header='<robot name="edge">\n'), "missing_urdf_link", "error"),
-    ("backslash_urdf_link", _srdf("", header='<robot name="edge" xmlns:tcad="https://text-to-cad.dev/srdf">\n  <tcad:urdf path="sub\\\\robot.urdf"/>\n'), "invalid_urdf_link", "error"),
-    ("absolute_urdf_link", _srdf("", header='<robot name="edge" xmlns:tcad="https://text-to-cad.dev/srdf">\n  <tcad:urdf path="/tmp/robot.urdf"/>\n'), "invalid_urdf_link", "error"),
-    ("wrong_suffix_urdf_link", _srdf("", header='<robot name="edge" xmlns:tcad="https://text-to-cad.dev/srdf">\n  <tcad:urdf path="robot.xml"/>\n'), "invalid_urdf_link", "error"),
-    ("missing_urdf_file", _srdf("", header='<robot name="edge" xmlns:tcad="https://text-to-cad.dev/srdf">\n  <tcad:urdf path="absent.urdf"/>\n'), "missing_urdf_file", "error"),
+    # --- urdf pairing (same folder, matching robot name) ---
+    ("no_paired_urdf", _srdf("", header='<robot name="other">\n'), "no_paired_urdf", "error"),
+    (
+        "deprecated_urdf_link",
+        _srdf("", header='<robot name="edge" xmlns:tcad="https://text-to-cad.dev/srdf">\n  <tcad:urdf path="robot.urdf"/>\n'),
+        "deprecated_urdf_link",
+        "warning",
+    ),
     # --- cross-validation against the URDF ---
-    ("robot_name_mismatch", _srdf("", header='<robot name="other" xmlns:tcad="https://text-to-cad.dev/srdf">\n  <tcad:urdf path="robot.urdf"/>\n'), "robot_name_mismatch", "error"),
     ("no_planning_groups", _srdf("", groups=""), "no_planning_groups", "error"),
     ("empty_group", _srdf('  <group name="empty"/>\n'), "empty_group", "error"),
     ("unknown_group_joint", _srdf('  <group name="g2"><joint name="wrist_roll"/></group>\n'), "missing_name_reference", "error"),
@@ -239,16 +240,22 @@ class SrdfFindingsTests(unittest.TestCase):
         _, warning_codes = self._codes(_srdf(pairs))
         self.assertIn("many_manual_disabled_pairs", warning_codes)
 
-    def test_broken_linked_urdf_reports_invalid_linked_urdf(self) -> None:
+    def test_broken_paired_urdf_reports_invalid_paired_urdf(self) -> None:
+        # The root tag parses (so pairing resolves by name) but the body is broken XML.
         (self.temp_root / "robot.urdf").write_text("<robot name='edge'><link></robot>", encoding="utf-8")
         error_codes, _ = self._codes(_srdf(""))
-        self.assertIn("invalid_linked_urdf", error_codes)
+        self.assertIn("invalid_paired_urdf", error_codes)
 
-    def test_multi_root_linked_urdf_warns_not_a_tree(self) -> None:
+    def test_ambiguous_paired_urdf_fails(self) -> None:
+        (self.temp_root / "robot_b.urdf").write_text(URDF, encoding="utf-8")
+        error_codes, _ = self._codes(_srdf(""))
+        self.assertIn("ambiguous_paired_urdf", error_codes)
+
+    def test_multi_root_paired_urdf_warns_not_a_tree(self) -> None:
         urdf_text = URDF.replace("</robot>", '<link name="orphan"/></robot>')
         (self.temp_root / "robot.urdf").write_text(urdf_text, encoding="utf-8")
         _, warning_codes = self._codes(_srdf(""))
-        self.assertIn("linked_urdf_not_a_tree", warning_codes)
+        self.assertIn("paired_urdf_not_a_tree", warning_codes)
 
     def test_multiple_errors_collected_in_one_pass(self) -> None:
         srdf_text = _srdf(
