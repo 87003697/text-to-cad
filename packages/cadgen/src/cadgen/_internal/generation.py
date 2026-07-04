@@ -61,8 +61,9 @@ from cadgen._internal.source_hash import (
     PythonSourceHash,
     capture_runtime_closure,
     closure_hash_from_files,
+    evict_first_party_modules,
     python_source_hash,
-    repo_local_loaded_modules,
+    record_first_party_execution,
 )
 from cadgen._internal.stl import export_part_stl_from_scene
 from cadgen.step_export import build_build123d_step_scene, export_build123d_step_scene
@@ -969,18 +970,19 @@ def run_script_generator(
 ) -> LoadedStepScene | None:
     """Run a generator's ``gen_step``/``gen_dxf`` and return its scene.
 
-    ``reset_runtime_closure`` is for long-lived warm processes (the CAD Viewer's
-    persistent worker). The generator's import closure is captured as a
-    ``sys.modules`` delta, which is only correct in a fresh interpreter: on a
-    second build the generator's first-party deps (e.g. ``cadgen.assembly``) are
-    already imported, so the delta — and the recorded ``sourceClosureFiles`` —
-    silently shrinks. With this flag set, the generator's first-party ``.py``
-    closure modules are evicted from ``sys.modules`` after the build, so the next
-    build re-imports and re-captures the identical closure a cold CLI would. Only
-    first-party ``.py`` modules are evicted (see :func:`repo_local_loaded_modules`);
-    C extensions / site-packages (numpy, OCP, build123d) are never touched — they
-    cannot reload and must stay warm. Default-off so the cold CLI/agent path is
-    byte-unchanged.
+    Closure capture is deterministic in every process shape: first-party modules
+    are evicted from ``sys.modules`` BEFORE the generator loads (so its full
+    dependency closure is freshly imported on every run — warm worker, multi-target
+    CLI loop, or cold process alike, and regardless of earlier failed builds), and
+    every first-party file EXECUTED during the run is recorded via the ``exec``
+    audit event (so dependencies survive even when a generator unloads modules
+    from ``sys.modules`` mid-run). Only first-party ``.py`` modules are evicted
+    (see :func:`repo_local_loaded_modules`); the running runtime (cadgen, the CLI
+    launcher) and C extensions / site-packages (numpy, OCP, build123d) are never
+    touched — they cannot reload, must stay warm, and are not freshness inputs.
+
+    ``reset_runtime_closure`` is retained for API compatibility (the warm worker
+    passes it) but is now a no-op: the pre-run eviction supersedes it.
     """
     logger = logger or CliLogger("cad")
     if generator_name not in {"gen_step", "gen_dxf"}:
@@ -1005,37 +1007,35 @@ def _run_script_generator_inner(
     force: bool = False,
     reset_runtime_closure: bool = False,
 ) -> LoadedStepScene | None:
+    del reset_runtime_closure  # superseded by the pre-run eviction below; kept for API compat
     generated_scene: LoadedStepScene | None = None
-    closure_modules_to_reset: tuple[str, ...] = ()
+    # Deterministic closure capture (see run_script_generator's docstring): start from a
+    # clean first-party module space, then record every first-party file executed while
+    # the generator loads and runs. The recorded set is complete even if the generator
+    # unloads modules mid-run; the sys.modules delta stays as a belt-and-braces union.
+    evict_first_party_modules()
     modules_before_load = set(sys.modules)
-    with logger.timed(f"load generator {spec.source_ref}"):
-        module = _load_generator_module(spec.script_path)
-    generator = getattr(module, generator_name, None)
-    if not callable(generator):
-        raise RuntimeError(f"{_display_path(spec.script_path)} does not define callable {generator_name}()")
-    with logger.timed(f"run {generator_name} {spec.source_ref}"):
-        raw_payload = generator()
+    with record_first_party_execution() as executed_files:
+        with logger.timed(f"load generator {spec.source_ref}"):
+            module = _load_generator_module(spec.script_path)
+        generator = getattr(module, generator_name, None)
+        if not callable(generator):
+            raise RuntimeError(f"{_display_path(spec.script_path)} does not define callable {generator_name}()")
+        with logger.timed(f"run {generator_name} {spec.source_ref}"):
+            raw_payload = generator()
 
     source_closure: PythonSourceClosure | None = None
     if generator_name == "gen_step":
         envelope = _normalize_step_payload(raw_payload, script_path=spec.script_path)
         if spec.step_path is None:
             raise RuntimeError(f"{spec.source_ref} has no configured STEP output")
-        # Capture the import closure here — after normalizing the (cheap) payload
-        # but before _write_shape_step_payload starts pulling in cached child
-        # imports, so the sys.modules delta stays the generator's own dependencies.
         # Record paths relative to the model folder so the descriptor stays portable.
         source_closure = capture_runtime_closure(
-            modules_before_load, spec.script_path, base=spec.step_path.parent
+            modules_before_load,
+            spec.script_path,
+            base=spec.step_path.parent,
+            executed_files=executed_files,
         )
-        # The generator's first-party closure modules are exactly the new repo-local
-        # .py modules at capture time (before _write_shape_step_payload pulls in build
-        # infra like cadgen.glb). Record them now so a warm worker can evict precisely
-        # these — not the infra that loads afterward — to keep the closure deterministic.
-        if reset_runtime_closure:
-            closure_modules_to_reset = tuple(
-                repo_local_loaded_modules(set(sys.modules) - modules_before_load)
-            )
         generated_scene = _write_shape_step_payload(
             envelope,
             output_path=spec.step_path,
@@ -1060,7 +1060,7 @@ def _run_script_generator_inner(
                 if finding.severity != "error":
                     logger.info(f"{spec.source_ref} {finding.render()}")
             raise_on_error_findings(findings, label=_display_path(spec.script_path))
-        # Mirror gen_step: capture the generator's import closure (relative to the model
+        # Mirror gen_step: capture the generator's closure (relative to the model
         # folder) so the drawing package records the freshness inputs the viewer's
         # staleness gate reads. Code reuse is the freshness link: a drawing that
         # path-loads its .step.py records it (and its imports) here. Non-Python inputs
@@ -1069,12 +1069,11 @@ def _run_script_generator_inner(
         # they change. Then the default build product is the drawing package; the
         # sibling/exported .dxf is written on demand only.
         source_closure = capture_runtime_closure(
-            modules_before_load, spec.script_path, base=spec.script_path.parent
+            modules_before_load,
+            spec.script_path,
+            base=spec.script_path.parent,
+            executed_files=executed_files,
         )
-        if reset_runtime_closure:
-            closure_modules_to_reset = tuple(
-                repo_local_loaded_modules(set(sys.modules) - modules_before_load)
-            )
         write_drawing_package(
             envelope.get("document"),
             script_path=spec.script_path,
@@ -1098,13 +1097,6 @@ def _run_script_generator_inner(
         raise RuntimeError(
             f"{_display_path(spec.script_path)} did not write {_display_path(spec.dxf_export_path)}"
         )
-    if reset_runtime_closure:
-        # Warm-process determinism: drop the generator's first-party closure modules so the
-        # next build in this interpreter re-imports and re-captures the identical closure a
-        # cold CLI would. Identity-safe — the core pipeline reads assembly mates by getattr
-        # into dicts and never isinstance-checks these classes; C extensions stay warm.
-        for module_name in closure_modules_to_reset:
-            sys.modules.pop(module_name, None)
     return generated_scene if generator_name == "gen_step" else None
 
 

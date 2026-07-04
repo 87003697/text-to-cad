@@ -201,8 +201,10 @@ class WorkerBuildIntegration(unittest.TestCase):
         self.assertTrue(warm2.get("ok"), warm2)
         w2 = self._closure()
 
-        # Two files incl. cadgen/assembly.py — and identical across cold/warm1/warm2.
-        self.assertEqual(len(cold_closure[1]), 2, cold_closure)
+        # Model files only — the running runtime (cadgen, launchers) is excluded from
+        # closures — and identical across cold/warm1/warm2.
+        self.assertEqual(len(cold_closure[1]), 1, cold_closure)
+        self.assertNotIn("cadgen", "".join(cold_closure[1]), cold_closure)
         self.assertEqual(w1, cold_closure)
         self.assertEqual(w2, cold_closure)
 
