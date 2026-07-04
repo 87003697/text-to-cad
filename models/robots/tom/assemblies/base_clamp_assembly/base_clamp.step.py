@@ -36,7 +36,7 @@ if str(PARTS_DIR) not in sys.path:
     sys.path.insert(0, str(PARTS_DIR))
 
 from robot_common.materials import GRAY_ALUMINUM_COLOR
-import dxf_topology
+from cadgen import flatten as dxf_topology
 
 
 DISPLAY_NAME = "Base Clamp"

@@ -10,6 +10,23 @@ def generate_dxf_targets(*args, **kwargs):
     return generate(*args, **kwargs)
 
 
+def validate_dxf_files(targets: Sequence[str]) -> int:
+    """Run the generation-time drawing checks post-hoc on existing .dxf files."""
+    from cadgen.drawing_checks import validate_dxf_file
+
+    exit_code = 0
+    for target in targets:
+        findings = validate_dxf_file(target)
+        errors = [finding for finding in findings if finding.severity == "error"]
+        if errors:
+            exit_code = 1
+        status = "FAIL" if errors else "ok"
+        print(f"[dxf] {target}: {status}")
+        for finding in findings:
+            print(f"[dxf]   {finding.render()}")
+    return exit_code
+
+
 def _targets_include_output_pairs(targets: Sequence[str]) -> bool:
     return any("=" in str(target or "") for target in targets)
 
@@ -39,9 +56,19 @@ def build_parser() -> argparse.ArgumentParser:
         help="Also write the sibling <name>.dxf export (the drawing package is always built).",
     )
     parser.add_argument(
+        "--snapshot",
+        action="store_true",
+        help="Also write an SVG snapshot of each drawing into its package for visual review.",
+    )
+    parser.add_argument(
         "--force",
         action="store_true",
         help="Regenerate even when the cached drawing package is current.",
+    )
+    parser.add_argument(
+        "--validate",
+        action="store_true",
+        help="Validate existing .dxf files with the generation-time drawing checks instead of generating.",
     )
     parser.add_argument(
         "--verbose",
@@ -54,6 +81,10 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: Sequence[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(list(argv) if argv is not None else None)
+    if args.validate:
+        if args.output is not None or args.dxf or args.force or args.snapshot:
+            parser.error("--validate cannot be combined with generation flags")
+        return validate_dxf_files(args.targets)
     if args.output is not None:
         if _targets_include_output_pairs(args.targets):
             parser.error("--output cannot be combined with SOURCE=OUTPUT targets")
@@ -63,6 +94,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         args.targets,
         output=args.output,
         write_dxf=bool(args.dxf),
+        snapshot=bool(args.snapshot),
         force=bool(args.force),
         verbose=bool(args.verbose),
     )

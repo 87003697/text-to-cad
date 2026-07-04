@@ -98,6 +98,16 @@ class StandaloneDxfSourceTests(unittest.TestCase):
             self.assertTrue(output_path.exists())
             self.assertGreater(output_path.stat().st_size, 0)
 
+    def test_generate_dxf_targets_writes_snapshot_on_demand(self) -> None:
+        with temporary_directory(prefix="dxf-skill") as root:
+            script_path = _write_standalone_source(Path(root))
+
+            self.assertEqual(0, cad_generation.generate_dxf_targets([str(script_path)], snapshot=True))
+
+            svg_path = Path(root) / "__cadcache__" / "models" / script_path.name / "drawing.svg"
+            self.assertTrue(svg_path.exists())
+            self.assertIn("<svg", svg_path.read_text(encoding="utf-8"))
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -81,6 +81,9 @@ def run_cadgen_cold(module: str, args, repo_root: str) -> dict:
     pythonpath = cadgen_pythonpath(repo_root)
     if pythonpath:
         env["PYTHONPATH"] = pythonpath
+    # Byte-deterministic artifacts (drawing packages are content-addressed):
+    # ezdxf's object ordering depends on Python hash randomization.
+    env.setdefault("PYTHONHASHSEED", "0")
     try:
         proc = subprocess.run(
             [sys.executable, "-m", module, *args],

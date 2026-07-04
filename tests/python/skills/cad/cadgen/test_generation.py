@@ -734,11 +734,10 @@ class CadGenerationTests(unittest.TestCase):
         cad_generation.generate_dxf_targets([str(script_path)])
         self.assertEqual("gen_dxf\ngen_dxf\n", calls_path.read_text(encoding="utf-8"))
 
-    def test_dxf_generation_records_declared_sources_in_closure(self) -> None:
-        # Workflow: DXF derived from an imported STEP. The generator declares the
-        # STEP as an envelope `sources` dependency, folding it into the recorded
-        # closure so replacing the STEP invalidates the cached drawing.
-        step_path = self._write_step("imported-part")
+    def test_dxf_envelope_rejects_unknown_fields(self) -> None:
+        # The gen_dxf envelope is {"document"} only. Non-Python inputs (e.g. an
+        # imported .step the drawing projects) are deliberately not freshness
+        # inputs — code reuse is the staleness link, not data files.
         script_path = self.temp_root / "projection.dxf.py"
         script_path.write_text(
             "\n".join(
@@ -758,18 +757,8 @@ class CadGenerationTests(unittest.TestCase):
             encoding="utf-8",
         )
 
-        cad_generation.generate_dxf_targets([str(script_path)])
-
-        package_dir = self.temp_root / "__cadcache__" / "models" / "projection.dxf.py"
-        descriptor = json.loads((package_dir / "drawing.json").read_text(encoding="utf-8"))
-        self.assertIn("imported-part.step", descriptor["sourceClosureFiles"])
-
-        # Rewriting the STEP changes the closure hash -> the next run rebuilds.
-        first_hash = descriptor["sourceClosureHash"]
-        step_path.write_text(step_path.read_text(encoding="utf-8") + " ", encoding="utf-8")
-        cad_generation.generate_dxf_targets([str(script_path)])
-        descriptor = json.loads((package_dir / "drawing.json").read_text(encoding="utf-8"))
-        self.assertNotEqual(first_hash, descriptor["sourceClosureHash"])
+        with self.assertRaisesRegex(ValueError, "unsupported field\\(s\\): sources"):
+            cad_generation.list_entry_specs()
 
     def test_generator_stl_sidecar_paths_are_ignored_by_catalog(self) -> None:
         self._generator_script("left", stl="shared.stl")
