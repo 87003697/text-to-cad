@@ -540,6 +540,51 @@ test("buildModel display modes control edges, transparency, and flat surfaces", 
   unshadedScene.dispose();
 });
 
+test("buildModel applies source part opacity from GLB material metadata", () => {
+  const meshData = sampleMeshData();
+  meshData.parts = meshData.parts.map((part, index) => index === 0
+    ? { ...part, color: "#ff0000", opacity: 0.2, hasSourceColors: true }
+    : part
+  );
+  const scene = buildModel(THREE, meshData, {
+    theme: cloneThemeSettings("workbench"),
+    renderPartsIndividually: true
+  });
+
+  const left = scene.displayRecords.find((record) => record.partId === "left");
+
+  assert.equal(left.baseOpacity, 0.2);
+  assert.equal(left.material.opacity, 0.2);
+  assert.equal(left.material.transparent, true);
+  assert.equal(left.material.depthWrite, false);
+  scene.dispose();
+});
+
+test("buildModel uses part records when only source opacity differs", () => {
+  const meshData = sampleMeshData();
+  meshData.sourceColor = "#ff0000";
+  meshData.has_source_colors = true;
+  meshData.parts = meshData.parts.map((part) => ({
+    ...part,
+    color: "#ff0000",
+    opacity: 0.2,
+    hasSourceColors: true
+  }));
+  const scene = buildModel(THREE, meshData, {
+    theme: cloneThemeSettings("workbench"),
+    renderPartsIndividually: false
+  });
+
+  assert.equal(scene.displayRecords.length, 2);
+  for (const record of scene.displayRecords) {
+    assert.equal(record.baseOpacity, 0.2);
+    assert.equal(record.material.opacity, 0.2);
+    assert.equal(record.material.transparent, true);
+    assert.equal(record.material.depthWrite, false);
+  }
+  scene.dispose();
+});
+
 test("buildModel ignores deprecated mesh edge detail and keeps wireframe all-edge mode", () => {
   const baseTheme = cloneThemeSettings("workbench");
   const deprecatedDetailScene = buildModel(THREE, squareMeshData(), {

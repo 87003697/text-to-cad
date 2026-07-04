@@ -599,6 +599,11 @@ function sourceColorForPart(THREE, part, meshData) {
   return readSourceColor(THREE, part?.color || meshData?.sourceColor);
 }
 
+function sourceOpacityForPart(part, fallback = 1) {
+  const opacity = Number(part?.opacity);
+  return Number.isFinite(opacity) ? clamp(opacity, 0, 1) : fallback;
+}
+
 function meshUsesPartSourceColors(meshData, parts) {
   const renderableParts = Array.isArray(parts) ? parts : [];
   const partColors = renderableParts
@@ -608,6 +613,14 @@ function meshUsesPartSourceColors(meshData, parts) {
     return false;
   }
   return partColors.length !== renderableParts.length || new Set(partColors).size > 1;
+}
+
+function meshUsesPartSourceOpacity(parts) {
+  const renderableParts = Array.isArray(parts) ? parts : [];
+  return renderableParts.some((part) => {
+    const opacity = Number(part?.opacity);
+    return Number.isFinite(opacity) && clamp(opacity, 0, 1) < 0.999;
+  });
 }
 
 function emptyLineGeometry(THREE) {
@@ -1018,7 +1031,10 @@ export function applyMaterialSettingsToRecord(THREE, record, materialSettings, {
   record.material.metalness = clamp(Number(materialSettings.metalness) || 0, 0, 1);
   record.material.clearcoat = clamp(Number(materialSettings.clearcoat) || 0, 0, 1);
   record.material.clearcoatRoughness = clamp(Number(materialSettings.clearcoatRoughness) || 0, 0, 1);
-  record.baseOpacity = clamp(displayModeSurfaceOpacity(displayMode, materialSettings.opacity), 0, 1);
+  const sourceOpacity = Number.isFinite(Number(record.sourceOpacity))
+    ? clamp(Number(record.sourceOpacity), 0, 1)
+    : 1;
+  record.baseOpacity = clamp(displayModeSurfaceOpacity(displayMode, materialSettings.opacity) * sourceOpacity, 0, 1);
   record.material.opacity = record.baseOpacity;
   record.material.transparent = record.baseOpacity < 0.999;
   record.material.depthWrite = displayMode === CAD_DISPLAY_MODE.TRANSPARENT ? false : record.baseOpacity >= 0.999;
@@ -1711,7 +1727,7 @@ function resolvePartsToRender(meshData, theme, settings) {
     if (pickableParts.length) {
       return pickableParts;
     }
-    if (meshUsesPartSourceColors(meshData, parts)) {
+    if (meshUsesPartSourceColors(meshData, parts) || meshUsesPartSourceOpacity(parts)) {
       return parts;
     }
     const hasFillRotation = theme?.materials?.cycleColors === true &&
@@ -1775,6 +1791,7 @@ function buildDisplayRecords(THREE, runtime, meshData, settings) {
       edgeSettings.enabled &&
       geometryHasSurfaceEdgeAttributes(geometryEntry.geometry);
     const sourceColor = sourceColorForPart(THREE, part, meshData);
+    const sourceOpacity = sourceOpacityForPart(part);
     const hasSourceColor = sourceVertexColors || !!sourceColor;
     const hasVertexColors = !forceFill && sourceVertexColors;
     const baseColor = resolveSourceBaseColor(THREE, {
@@ -1825,6 +1842,7 @@ function buildDisplayRecords(THREE, runtime, meshData, settings) {
       edgeMaterial: null,
       baseColor,
       sourceColor,
+      sourceOpacity,
       baseTransform,
       partCenter: readBoundsCenter(THREE, part?.bounds || bounds),
       partBounds: part?.bounds || part?.sourceBounds || bounds,

@@ -343,6 +343,11 @@ try {
 }
 ```
 
+Orbit GIF jobs default to 6 fps over 12 seconds for a calmer review spin
+without increasing default render frame count.
+Override with `orbit.fps` and `orbit.durationSeconds` when a shorter or denser
+render is needed.
+
 ## Ownership Rules
 
 - Do not write files from shared render APIs. Return data to the owning CLI or
