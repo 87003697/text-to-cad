@@ -316,25 +316,43 @@ class CadGenerationTests(unittest.TestCase):
             "    }",
             "",
         ]
-        dxf_block = [
-            "def gen_dxf():",
-            "    _record('gen_dxf')",
-            "    return {",
-            "        'document': _FakeDxf(),",
-            *([f"        'dxf_output': {dxf_output!r},"] if dxf_output is not None else []),
-            "    }",
-            "",
-        ]
-        blocks = [prologue]
-        if with_dxf and dxf_before_step:
-            blocks.append(dxf_block)
-        blocks.append(step_block)
-        if with_dxf and not dxf_before_step:
-            blocks.append(dxf_block)
+        del dxf_before_step  # gen_dxf lives in a dedicated <name>.dxf.py sibling now
+        blocks = [prologue, step_block]
 
         script_path = self.temp_root / f"{name}.py"
         script_path.write_text("\n".join(line for block in blocks for line in block), encoding="utf-8")
+        if with_dxf:
+            self._dxf_generator_script(name, dxf_output=dxf_output)
         return script_path
+
+    def _dxf_generator_script(self, name: str, *, dxf_output: str | None = None) -> Path:
+        # A dedicated `<name>.dxf.py` drawing generator (the only gen_dxf shape the
+        # catalog accepts). Records calls into the SAME `<name>.calls` file as the
+        # step generator so cross-generator execution would be visible.
+        dxf_path = self.temp_root / f"{name}.dxf.py"
+        dxf_path.write_text(
+            "\n".join(
+                [
+                    "from pathlib import Path",
+                    f"CALLS = Path(__file__).with_name('{name}.calls')",
+                    "def _record(record_name):",
+                    "    with CALLS.open('a', encoding='utf-8') as handle:",
+                    "        handle.write(record_name + '\\n')",
+                    "class _FakeDxf:",
+                    "    def saveas(self, output_path):",
+                    "        Path(output_path).write_text('0\\nEOF\\n', encoding='utf-8')",
+                    "def gen_dxf():",
+                    "    _record('gen_dxf')",
+                    "    return {",
+                    "        'document': _FakeDxf(),",
+                    *([f"        'dxf_output': {dxf_output!r}," ] if dxf_output is not None else []),
+                    "    }",
+                    "",
+                ]
+            ),
+            encoding="utf-8",
+        )
+        return dxf_path
 
     def _write_assembly_generator(
         self,
@@ -393,20 +411,10 @@ class CadGenerationTests(unittest.TestCase):
             "    }",
             "",
         ]
-        if with_dxf:
-            lines.extend(
-                [
-                    "def gen_dxf():",
-                    "    _record('gen_dxf')",
-                    "    return {",
-                    "        'document': _FakeDxf(),",
-                    *([f"        'dxf_output': {dxf_output!r},"] if dxf_output is not None else []),
-                    "    }",
-                    "",
-                ]
-            )
         assembly_path = self.temp_root / f"{name}.py"
         assembly_path.write_text("\n".join(lines), encoding="utf-8")
+        if with_dxf:
+            self._dxf_generator_script(name, dxf_output=dxf_output)
         return assembly_path
 
     def test_generated_part_discovery_includes_missing_step_output(self) -> None:
@@ -515,7 +523,9 @@ class CadGenerationTests(unittest.TestCase):
 
         self.assertEqual(self._cad_ref("flat"), spec.cad_ref)
         self.assertEqual(self.temp_root / "flat.step", spec.step_path)
-        self.assertEqual(self.temp_root / "flat.dxf", spec.dxf_path)
+        # The drawing generator is its own `<name>.dxf.py` entry; the STEP spec
+        # carries no DXF output.
+        self.assertIsNone(spec.dxf_path)
         self.assertIsNone(spec.stl_path)
         self.assertIsNone(spec.three_mf_path)
 
@@ -544,6 +554,15 @@ class CadGenerationTests(unittest.TestCase):
             cad_generation.list_entry_specs()
 
     def test_generated_dxf_defaults_output_to_sibling_stem(self) -> None:
+        script_path = self._dxf_generator_script("flat")
+
+        spec = next(spec for spec in cad_generation.list_entry_specs() if spec.source_path == script_path)
+
+        self.assertEqual("dxf", spec.kind)
+        self.assertEqual(self.temp_root / "flat.dxf", spec.dxf_path)
+        self.assertEqual(self._cad_ref("flat") + ".dxf", spec.cad_ref)
+
+    def test_generator_rejects_gen_dxf_beside_gen_step(self) -> None:
         script_path = self.temp_root / "flat.py"
         script_path.write_text(
             "\n".join(
@@ -559,9 +578,27 @@ class CadGenerationTests(unittest.TestCase):
             encoding="utf-8",
         )
 
-        spec = next(spec for spec in cad_generation.list_entry_specs() if spec.source_path == script_path)
+        with self.assertRaisesRegex(ValueError, "dedicated <name>.dxf.py drawing generator"):
+            cad_generation.list_entry_specs()
 
-        self.assertEqual(script_path.with_suffix(".dxf"), spec.dxf_path)
+    def test_dxf_generator_script_rejects_gen_step(self) -> None:
+        script_path = self.temp_root / "flat.dxf.py"
+        script_path.write_text(
+            "\n".join(
+                [
+                    "def gen_step():",
+                    "    return {'shape': object()}",
+                    "",
+                    "def gen_dxf():",
+                    "    return {'document': object()}",
+                    "",
+                ]
+            ),
+            encoding="utf-8",
+        )
+
+        with self.assertRaisesRegex(ValueError, "must not define gen_step"):
+            cad_generation.list_entry_specs()
 
     def test_deprecated_urdf_and_sdf_generators_are_ignored(self) -> None:
         # gen_urdf()/gen_sdf() are hard-deprecated: robot descriptions are
@@ -616,6 +653,9 @@ class CadGenerationTests(unittest.TestCase):
         self.assertEqual(cad_generation.python_source_hash(script_path).source_hash, scene.source_hash)
 
     def test_bare_dxf_document_return_is_supported(self) -> None:
+        # The CLI stays naming-agnostic: a plain `.py` defining only gen_dxf() is a
+        # valid EXPLICIT target. The default build product is the drawing package;
+        # no sibling .dxf is written.
         script_path = self.temp_root / "bare_dxf.py"
         script_path.write_text(
             "\n".join(
@@ -624,9 +664,6 @@ class CadGenerationTests(unittest.TestCase):
                     "class _FakeDxf:",
                     "    def saveas(self, output_path):",
                     "        Path(output_path).write_text('0\\nEOF\\n', encoding='utf-8')",
-                    "def gen_step():",
-                    "    import build123d",
-                    "    return build123d.Box(1, 1, 1)",
                     "def gen_dxf():",
                     "    return _FakeDxf()",
                     "",
@@ -637,7 +674,74 @@ class CadGenerationTests(unittest.TestCase):
 
         cad_generation.generate_dxf_targets([str(script_path)])
 
-        self.assertTrue(script_path.with_suffix(".dxf").exists())
+        package_dir = self.temp_root / "__cadcache__" / "models" / "bare_dxf.py"
+        self.assertTrue((package_dir / "drawing.dxf").exists())
+        self.assertTrue((package_dir / "drawing.json").exists())
+        self.assertFalse((self.temp_root / "bare_dxf.dxf").exists())
+
+    def test_dxf_generation_writes_sibling_export_on_demand(self) -> None:
+        script_path = self._dxf_generator_script("flat")
+
+        cad_generation.generate_dxf_targets([str(script_path)], write_dxf=True)
+
+        self.assertTrue((self.temp_root / "flat.dxf").exists())
+        package_dir = self.temp_root / "__cadcache__" / "models" / "flat.dxf.py"
+        self.assertTrue((package_dir / "drawing.json").exists())
+
+    def test_dxf_generation_skips_current_drawing_package(self) -> None:
+        script_path = self._dxf_generator_script("flat")
+        calls_path = self.temp_root / "flat.calls"
+
+        cad_generation.generate_dxf_targets([str(script_path)])
+        self.assertEqual("gen_dxf\n", calls_path.read_text(encoding="utf-8"))
+
+        # Unchanged source closure -> the second run skips regeneration entirely.
+        cad_generation.generate_dxf_targets([str(script_path)])
+        self.assertEqual("gen_dxf\n", calls_path.read_text(encoding="utf-8"))
+
+        # A source edit invalidates the recorded closure -> rebuild.
+        script_path.write_text(
+            script_path.read_text(encoding="utf-8") + "\n# changed\n", encoding="utf-8"
+        )
+        cad_generation.generate_dxf_targets([str(script_path)])
+        self.assertEqual("gen_dxf\ngen_dxf\n", calls_path.read_text(encoding="utf-8"))
+
+    def test_dxf_generation_records_declared_sources_in_closure(self) -> None:
+        # Workflow: DXF derived from an imported STEP. The generator declares the
+        # STEP as an envelope `sources` dependency, folding it into the recorded
+        # closure so replacing the STEP invalidates the cached drawing.
+        step_path = self._write_step("imported-part")
+        script_path = self.temp_root / "projection.dxf.py"
+        script_path.write_text(
+            "\n".join(
+                [
+                    "from pathlib import Path",
+                    "class _FakeDxf:",
+                    "    def saveas(self, output_path):",
+                    "        Path(output_path).write_text('0\\nEOF\\n', encoding='utf-8')",
+                    "def gen_dxf():",
+                    "    return {",
+                    "        'document': _FakeDxf(),",
+                    "        'sources': ['imported-part.step'],",
+                    "    }",
+                    "",
+                ]
+            ),
+            encoding="utf-8",
+        )
+
+        cad_generation.generate_dxf_targets([str(script_path)])
+
+        package_dir = self.temp_root / "__cadcache__" / "models" / "projection.dxf.py"
+        descriptor = json.loads((package_dir / "drawing.json").read_text(encoding="utf-8"))
+        self.assertIn("imported-part.step", descriptor["sourceClosureFiles"])
+
+        # Rewriting the STEP changes the closure hash -> the next run rebuilds.
+        first_hash = descriptor["sourceClosureHash"]
+        step_path.write_text(step_path.read_text(encoding="utf-8") + " ", encoding="utf-8")
+        cad_generation.generate_dxf_targets([str(script_path)])
+        descriptor = json.loads((package_dir / "drawing.json").read_text(encoding="utf-8"))
+        self.assertNotEqual(first_hash, descriptor["sourceClosureHash"])
 
     def test_generator_stl_sidecar_paths_are_ignored_by_catalog(self) -> None:
         self._generator_script("left", stl="shared.stl")
@@ -963,17 +1067,17 @@ class CadGenerationTests(unittest.TestCase):
             cad_generation.generate_dxf_targets([str(script_path)])
 
     def test_dxf_output_override_retargets_single_generated_source(self) -> None:
-        script_path = self._generator_script("flat", with_dxf=True)
+        script_path = self._dxf_generator_script("flat")
         output_path = self.temp_root / "drawings" / "flat-output.dxf"
 
         cad_generation.generate_dxf_targets([str(script_path)], output=str(output_path))
 
         self.assertTrue(output_path.exists())
-        self.assertFalse(script_path.with_suffix(".dxf").exists())
+        self.assertFalse((self.temp_root / "flat.dxf").exists())
 
     def test_dxf_output_pair_retargets_generated_source(self) -> None:
-        first_path = self._generator_script("first", with_dxf=True)
-        second_path = self._generator_script("second", with_dxf=True)
+        first_path = self._dxf_generator_script("first")
+        second_path = self._dxf_generator_script("second")
         first_output = self.temp_root / "drawings" / "first-output.dxf"
         second_output = self.temp_root / "drawings" / "second-output.dxf"
 
@@ -981,22 +1085,25 @@ class CadGenerationTests(unittest.TestCase):
 
         self.assertTrue(first_output.exists())
         self.assertTrue(second_output.exists())
-        self.assertFalse(first_path.with_suffix(".dxf").exists())
-        self.assertFalse(second_path.with_suffix(".dxf").exists())
+        self.assertFalse((self.temp_root / "first.dxf").exists())
+        self.assertFalse((self.temp_root / "second.dxf").exists())
 
     def test_dxf_output_pair_allows_mixed_plain_and_paired_targets(self) -> None:
-        first_path = self._generator_script("first", with_dxf=True)
-        second_path = self._generator_script("second", with_dxf=True)
+        first_path = self._dxf_generator_script("first")
+        second_path = self._dxf_generator_script("second")
         second_output = self.temp_root / "drawings" / "second-output.dxf"
 
         cad_generation.generate_dxf_targets([str(first_path), f"{second_path}={second_output}"])
 
-        self.assertTrue(first_path.with_suffix(".dxf").exists())
+        # The plain target builds its drawing package (no sibling export by default).
+        package_dir = self.temp_root / "__cadcache__" / "models" / "first.dxf.py"
+        self.assertTrue((package_dir / "drawing.dxf").exists())
+        self.assertFalse((self.temp_root / "first.dxf").exists())
         self.assertTrue(second_output.exists())
-        self.assertFalse(second_path.with_suffix(".dxf").exists())
+        self.assertFalse((self.temp_root / "second.dxf").exists())
 
     def test_dxf_output_override_rejects_pair_targets(self) -> None:
-        script_path = self._generator_script("flat", with_dxf=True)
+        script_path = self._dxf_generator_script("flat")
 
         with self.assertRaisesRegex(ValueError, "cannot be combined"):
             cad_generation.generate_dxf_targets(
@@ -1005,16 +1112,16 @@ class CadGenerationTests(unittest.TestCase):
             )
 
     def test_dxf_output_pairs_reject_duplicate_output_paths(self) -> None:
-        first_path = self._generator_script("first", with_dxf=True)
-        second_path = self._generator_script("second", with_dxf=True)
+        first_path = self._dxf_generator_script("first")
+        second_path = self._dxf_generator_script("second")
         output_path = self.temp_root / "shared.dxf"
 
         with self.assertRaisesRegex(ValueError, "used more than once"):
             cad_generation.generate_dxf_targets([f"{first_path}={output_path}", f"{second_path}={output_path}"])
 
     def test_dxf_output_override_requires_single_target(self) -> None:
-        first_path = self._generator_script("first", with_dxf=True)
-        second_path = self._generator_script("second", with_dxf=True)
+        first_path = self._dxf_generator_script("first")
+        second_path = self._dxf_generator_script("second")
 
         with self.assertRaisesRegex(ValueError, "--output can only be used with exactly one target"):
             cad_generation.generate_dxf_targets(
@@ -1150,7 +1257,7 @@ class CadGenerationTests(unittest.TestCase):
         self.assertIsNone(result.selector_bundle)
         self.assertEqual(script_path.with_suffix(".step"), result.spec.step_path)
 
-    def test_sidecars_are_not_separate_generation_specs(self) -> None:
+    def test_dxf_generators_are_separate_generation_specs(self) -> None:
         self._generator_script("flat", with_dxf=True)
         self._write_step("imported-part")
         self._write_assembly_generator(
@@ -1171,10 +1278,12 @@ class CadGenerationTests(unittest.TestCase):
             if spec.cad_ref.startswith(f"{self.relative_dir}/")
         }
 
+        # `.dxf.py` drawings are their own catalog entries, keyed with the `.dxf`
+        # suffix so they never collide with the same-stem STEP entry.
         self.assertIn(self._cad_ref("flat"), cad_refs)
         self.assertIn(self._cad_ref("robot"), cad_refs)
-        self.assertNotIn(self._cad_ref("flat") + ".dxf", cad_refs)
-        self.assertNotIn(self._cad_ref("robot") + ".dxf", cad_refs)
+        self.assertIn(self._cad_ref("flat") + ".dxf", cad_refs)
+        self.assertIn(self._cad_ref("robot") + ".dxf", cad_refs)
 
     def test_step_toml_target_is_not_supported(self) -> None:
         (self.temp_root / "broken.step.toml").write_text('kind = "part"\n', encoding="utf-8")
@@ -1480,7 +1589,7 @@ class CadGenerationTests(unittest.TestCase):
 
         self.assertEqual("assembly", spec.kind)
         self.assertEqual(self.temp_root / "assembly.step", spec.step_path)
-        self.assertEqual(self.temp_root / "assembly.dxf", spec.dxf_path)
+        self.assertIsNone(spec.dxf_path)
         self.assertIsNone(spec.stl_path)
         self.assertIsNone(spec.three_mf_path)
         self.assertEqual(cad_generation.DEFAULT_MESH_TOLERANCE, spec.mesh_tolerance)

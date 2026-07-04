@@ -21,7 +21,9 @@ from cadgen.catalog import (
     CadSource,
     STEP_SUFFIXES,
     StepImportOptions,
+    cad_ref_from_dxf_path,
     cad_ref_from_step_path,
+    drawing_package_path_for_source,
     find_source_by_path,
     iter_cad_sources,
     normalize_step_color,
@@ -98,6 +100,7 @@ class EntrySpec:
     three_mf_path: Path | None = None
     native_glb_path: Path | None = None
     step_export_path: Path | None = None
+    dxf_export_path: Path | None = None
     mesh_tolerance: float = DEFAULT_MESH_TOLERANCE
     mesh_angular_tolerance: float = DEFAULT_MESH_ANGULAR_TOLERANCE
     mesh_tolerance_explicit: bool = False
@@ -432,7 +435,17 @@ def _apply_dxf_output_overrides(
         if spec.source != "generated":
             raise ValueError(f"{tool_name} output pairs can only be used with generated Python targets")
         _validate_cli_output_override(spec, output_path=output_path, all_specs=all_specs, tool_name=tool_name)
-        updated_specs.append(replace(spec, dxf_path=output_path))
+        updated_specs.append(
+            replace(
+                spec,
+                cad_ref=cad_ref_from_dxf_path(output_path),
+                display_name=_display_name_for_path(output_path),
+                # A DXF output path is a DXF *export* request (gen_dxf builds the drawing
+                # package by default): write it on demand to the requested path.
+                dxf_path=output_path,
+                dxf_export_path=output_path,
+            )
+        )
     return updated_specs
 
 
@@ -776,15 +789,48 @@ def _normalize_step_payload(
 
 def _normalize_dxf_payload(result: object, *, script_path: Path) -> dict[str, object]:
     if isinstance(result, dict):
-        allowed_fields = {"document"}
+        allowed_fields = {"document", "sources"}
         extra_fields = sorted(str(key) for key in result if key not in allowed_fields)
         if extra_fields:
             joined = ", ".join(extra_fields)
             raise TypeError(f"{_display_path(script_path)} gen_dxf() envelope has unsupported field(s): {joined}")
         if "document" not in result:
             raise TypeError(f"{_display_path(script_path)} gen_dxf() envelope must define 'document'")
-        return {"document": result["document"]}
+        envelope: dict[str, object] = {"document": result["document"]}
+        sources = result.get("sources")
+        if sources is not None:
+            envelope["sources"] = _resolve_dxf_source_dependencies(sources, script_path=script_path)
+        return envelope
     return {"document": result}
+
+
+def _resolve_dxf_source_dependencies(sources: object, *, script_path: Path) -> tuple[Path, ...]:
+    """The optional gen_dxf() ``sources`` value: non-Python input files the drawing derives
+    from (e.g. an imported .step it projects), folded into the recorded source closure so
+    editing them invalidates the cached drawing package. Relative paths resolve against the
+    generator file's directory; every declared file must exist."""
+    if isinstance(sources, (str, Path)):
+        sources = [sources]
+    if not isinstance(sources, (list, tuple)):
+        raise TypeError(
+            f"{_display_path(script_path)} gen_dxf() envelope field 'sources' must be a "
+            "filepath or a list of filepaths"
+        )
+    resolved_paths: list[Path] = []
+    for item in sources:
+        if not isinstance(item, (str, Path)):
+            raise TypeError(
+                f"{_display_path(script_path)} gen_dxf() envelope 'sources' entries must be "
+                f"filepaths, got {type(item).__name__}"
+            )
+        candidate = Path(item)
+        resolved = (candidate if candidate.is_absolute() else script_path.parent / candidate).resolve()
+        if not resolved.is_file():
+            raise FileNotFoundError(
+                f"{_display_path(script_path)} gen_dxf() sources dependency not found: {item}"
+            )
+        resolved_paths.append(resolved)
+    return tuple(resolved_paths)
 
 
 def _shape_payload_entry_kind(shape: object, *, fallback: str) -> str:
@@ -1031,16 +1077,49 @@ def _run_script_generator_inner(
             entry_kind=_shape_payload_entry_kind(envelope.get("shape"), fallback=spec.kind),
         )
     elif generator_name == "gen_dxf":
+        from cadgen._internal.drawing_package import write_drawing_package
+
         envelope = _normalize_dxf_payload(raw_payload, script_path=spec.script_path)
         if spec.dxf_path is None:
             raise RuntimeError(f"{spec.source_ref} has no configured DXF output")
-        _write_dxf_payload(envelope, output_path=spec.dxf_path, script_path=spec.script_path, logger=logger)
+        # Mirror gen_step: capture the generator's import closure (relative to the model
+        # folder) so the drawing package records the freshness inputs the viewer's
+        # staleness gate reads. Declared envelope `sources` (e.g. an imported .step the
+        # drawing projects) fold in the same way assembly child STEPs do. Then the
+        # default build product is the drawing package; the sibling/exported .dxf is
+        # written on demand only.
+        source_closure = capture_runtime_closure(
+            modules_before_load,
+            spec.script_path,
+            base=spec.script_path.parent,
+            extra_files=envelope.get("sources") or (),
+        )
+        if reset_runtime_closure:
+            closure_modules_to_reset = tuple(
+                repo_local_loaded_modules(set(sys.modules) - modules_before_load)
+            )
+        write_drawing_package(
+            envelope.get("document"),
+            script_path=spec.script_path,
+            source_closure=source_closure,
+        )
+        logger.debug(
+            f"wrote drawing package: {_display_path(drawing_package_path_for_source(spec.script_path))}"
+        )
+        if spec.dxf_export_path is not None:
+            _write_dxf_payload(
+                envelope, output_path=spec.dxf_export_path, script_path=spec.script_path, logger=logger
+            )
     if generated_scene is not None and source_closure is not None:
         generated_scene.source_closure_hash = source_closure.closure_hash
         generated_scene.source_closure_files = source_closure.files
-    if generator_name == "gen_dxf" and spec.dxf_path is not None and not spec.dxf_path.exists():
+    if (
+        generator_name == "gen_dxf"
+        and spec.dxf_export_path is not None
+        and not spec.dxf_export_path.exists()
+    ):
         raise RuntimeError(
-            f"{_display_path(spec.script_path)} did not write {_display_path(spec.dxf_path)}"
+            f"{_display_path(spec.script_path)} did not write {_display_path(spec.dxf_export_path)}"
         )
     if reset_runtime_closure:
         # Warm-process determinism: drop the generator's first-party closure modules so the
@@ -1762,17 +1841,26 @@ def _generated_python_glb_summary(spec: EntrySpec) -> str:
 
 
 def _generated_dxf_summary(spec: EntrySpec) -> str:
-    if spec.dxf_path is not None:
-        return f"generated DXF: {_display_path(spec.dxf_path)}"
+    if spec.dxf_export_path is not None:
+        return f"generated DXF: {_display_path(spec.dxf_export_path)}"
+    if spec.script_path is not None:
+        return (
+            "generated DXF drawing package: "
+            f"{_display_path(drawing_package_path_for_source(spec.script_path))}"
+        )
     return f"processed: {spec.source_ref}"
 
 
 def _track_spec_generation(spec: EntrySpec, generator_name: str) -> contextlib.AbstractContextManager[None]:
-    # Only a generated STEP package is coordinated with the viewer's artifact pull: lock the model's
-    # __cadcache__ package so a concurrent viewer/CLI build detects the in-flight run and waits for
-    # it instead of duplicating the work. Non-package generators (e.g. gen_dxf) are not locked.
+    # Package builds are coordinated with the viewer's artifact pull: lock the model's
+    # __cadcache__ package so a concurrent viewer/CLI build detects the in-flight run and
+    # waits for it instead of duplicating the work.
     if generator_name == "gen_step" and spec.step_path is not None:
         return track_generation_run(generation_lock_path(part_glb_path(spec.entry_path)))
+    if generator_name == "gen_dxf" and spec.script_path is not None:
+        return track_generation_run(
+            generation_lock_path(drawing_package_path_for_source(spec.script_path))
+        )
     return track_generation_run(None)
 
 
@@ -2156,8 +2244,12 @@ def generate_dxf_targets(
     targets: Sequence[str],
     *,
     output: str | Path | None = None,
+    write_dxf: bool = False,
+    force: bool = False,
     verbose: bool = False,
 ) -> int:
+    from cadgen._internal.drawing_package import drawing_package_current
+
     tool_name = "dxf"
     logger = CliLogger("scripts/dxf", verbose=verbose)
     if output is not None and targets_include_output_pairs(targets):
@@ -2183,6 +2275,31 @@ def generate_dxf_targets(
         all_specs=all_specs,
         tool_name=tool_name,
     )
+    if write_dxf:
+        # The sibling `<name>.dxf` is written on demand only (mirror of `--step`); the
+        # default build product is the drawing package under __cadcache__/models/.
+        selected_specs = [
+            spec if spec.dxf_export_path is not None else replace(spec, dxf_export_path=spec.dxf_path)
+            for spec in selected_specs
+        ]
+    # No-op fast path: skip regenerating a drawing whose source closure is unchanged.
+    # Only for plain in-place regeneration (no --force and no export write request).
+    if not force:
+        current_specs = [
+            spec
+            for spec in selected_specs
+            if spec.dxf_export_path is None
+            and spec.script_path is not None
+            and drawing_package_current(spec.script_path)
+        ]
+        if current_specs:
+            for spec in current_specs:
+                logger.info(f"{spec.cad_ref} is current; skipped regeneration")
+            current_refs = {spec.source_ref for spec in current_specs}
+            selected_specs = [spec for spec in selected_specs if spec.source_ref not in current_refs]
+            if not selected_specs:
+                logger.total()
+                return 0
     _run_selected_specs(
         selected_specs,
         action=lambda spec: _run_with_spec_generation_status(
