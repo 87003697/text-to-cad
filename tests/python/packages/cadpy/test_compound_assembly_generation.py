@@ -102,8 +102,6 @@ class CompoundAssemblyGenerationTests(unittest.TestCase):
         cases = [
             ("gen_step", "return {'shape': object(), 'step_output': 'legacy.step'}", "step_output"),
             ("gen_dxf", "return {'document': object(), 'dxf_output': 'legacy.dxf'}", "dxf_output"),
-            ("gen_urdf", "return {'xml': '<robot />', 'urdf_output': 'legacy.urdf'}", "urdf_output"),
-            ("gen_sdf", "return {'xml': '<sdf version=\"1.12\" />', 'sdf_output': 'legacy.sdf'}", "sdf_output"),
         ]
         for function_name, return_line, field_name in cases:
             with self.subTest(function_name=function_name), tempfile.TemporaryDirectory(prefix="cadpy-output-field-") as tempdir:

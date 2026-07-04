@@ -40,12 +40,13 @@ class StandaloneDxfSourceTests(unittest.TestCase):
         self.assertFalse(metadata.has_gen_step)
         self.assertIsNone(metadata.kind)
 
-    def test_metadata_still_requires_gen_step_for_urdf_and_sdf(self) -> None:
+    def test_metadata_ignores_deprecated_urdf_generators(self) -> None:
+        # gen_urdf()/gen_sdf() are hard-deprecated: robot descriptions are
+        # authored XML artifacts, so a urdf-only file is not a CAD source.
         with temporary_directory(prefix="dxf-skill") as root:
             script_path = Path(root) / "robot.py"
             script_path.write_text("def gen_urdf():\n    return '<robot/>'\n")
-            with self.assertRaisesRegex(ValueError, "require gen_step"):
-                parse_generator_metadata(script_path)
+            self.assertIsNone(parse_generator_metadata(script_path))
 
     def test_explicit_target_resolves_dxf_only_source(self) -> None:
         with temporary_directory(prefix="dxf-skill") as root:

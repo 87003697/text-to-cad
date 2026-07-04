@@ -46,8 +46,6 @@ flow, CI/CD-testing and resume options, and local/manual fallbacks.
 - `packages/implicitjs`: standalone JS implicit CAD model, shader render,
   snapshot, mesh sampling, and export runtime.
 - `packages/cadpy`: shared Python STEP/GLB/topology artifact code.
-- `packages/cadpy_metadata`: dependency-free Python metadata helpers vendored
-  into generated URDF/SRDF/SDF skill runtimes.
 - `docs/`: documentation site.
 - `tests/`: root-owned test suites for skills, packages, viewer services, and
   repo-wide policy.

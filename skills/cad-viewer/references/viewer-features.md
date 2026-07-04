@@ -9,7 +9,7 @@ Load this only when a task needs Viewer file-support details or UI control guida
 - `.dxf`: read-only flat-pattern viewing, plus plate thickness and bend direction/angle controls when bend preview data is available.
 - `.gcode`: diagnostic toolpath preview; shows layer-colored extrusion ribbons, optional travel moves, visible-layer and detail controls, feature markers, movement stats, bounds, and parser warnings. It does not reslice, simulate firmware, or replace G-code validation.
 - `.urdf`: robot link/mesh viewing with movable joint sliders, reset pose, and copied joint values.
-- `.srdf`: linked-URDF viewing with planning groups, group-state presets, joint controls, and optional MoveIt2 IK/planning controls.
+- `.srdf`: paired-URDF viewing with planning groups, group-state presets, joint controls, and optional MoveIt2 IK/planning controls.
 - `.sdf`: SDF model/world viewing with metadata, counts, warnings, and joint controls when available.
 
 ## Controls

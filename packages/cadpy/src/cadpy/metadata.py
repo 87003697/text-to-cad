@@ -24,8 +24,6 @@ class GeneratorMetadata:
     generator_names: tuple[str, ...]
     has_gen_step: bool
     has_gen_dxf: bool
-    has_gen_urdf: bool
-    has_gen_sdf: bool
     stl: str | None
     three_mf: str | None
     mesh_tolerance: float | None
@@ -41,8 +39,6 @@ STEP_ENVELOPE_FIELDS = {
     "mesh_angular_tolerance",
 }
 DXF_ENVELOPE_FIELDS = {"document"}
-URDF_ENVELOPE_FIELDS = {"xml"}
-SDF_ENVELOPE_FIELDS = {"xml"}
 
 
 DEFAULT_MESH_SETTINGS = MeshSettings(
@@ -101,8 +97,6 @@ def parse_generator_metadata(script_path: Path) -> GeneratorMetadata | None:
     kind: str | None = None
     has_gen_step = False
     has_gen_dxf = False
-    has_gen_urdf = False
-    has_gen_sdf = False
     generator_names: list[str] = []
     for node in tree.body:
         target: ast.expr | None = None
@@ -117,7 +111,7 @@ def parse_generator_metadata(script_path: Path) -> GeneratorMetadata | None:
             if target.id == "DISPLAY_NAME" and isinstance(value, ast.Constant) and isinstance(value.value, str):
                 display_name = value.value.strip()
 
-        if not isinstance(node, ast.FunctionDef) or node.name not in {"gen_step", "gen_dxf", "gen_urdf", "gen_sdf"}:
+        if not isinstance(node, ast.FunctionDef) or node.name not in {"gen_step", "gen_dxf"}:
             continue
         generator_names.append(node.name)
 
@@ -142,31 +136,15 @@ def parse_generator_metadata(script_path: Path) -> GeneratorMetadata | None:
                 function=node,
             )
             has_gen_step = True
-        elif node.name == "gen_dxf":
+        else:
             _parse_dxf_envelope_metadata(
                 script_path=script_path,
                 function=node,
             )
             has_gen_dxf = True
-        elif node.name == "gen_urdf":
-            _parse_urdf_envelope_metadata(
-                script_path=script_path,
-                function=node,
-            )
-            has_gen_urdf = True
-        else:
-            _parse_sdf_envelope_metadata(
-                script_path=script_path,
-                function=node,
-            )
-            has_gen_sdf = True
 
-    if not has_gen_step and not has_gen_dxf and not has_gen_urdf and not has_gen_sdf:
+    if not has_gen_step and not has_gen_dxf:
         return None
-    if not has_gen_step and (has_gen_urdf or has_gen_sdf):
-        raise ValueError(
-            f"{_display_path(script_path)} gen_urdf() and gen_sdf() require gen_step()"
-        )
 
     return GeneratorMetadata(
         script_path=script_path.resolve(),
@@ -175,8 +153,6 @@ def parse_generator_metadata(script_path: Path) -> GeneratorMetadata | None:
         generator_names=tuple(generator_names),
         has_gen_step=has_gen_step,
         has_gen_dxf=has_gen_dxf,
-        has_gen_urdf=has_gen_urdf,
-        has_gen_sdf=has_gen_sdf,
         stl=None,
         three_mf=None,
         mesh_tolerance=None,
@@ -354,45 +330,6 @@ def _parse_dxf_envelope_metadata(
         raise ValueError(f"{_display_path(script_path)} gen_dxf() envelope must define 'document'")
     return None
 
-
-def _parse_urdf_envelope_metadata(
-    *,
-    script_path: Path,
-    function: ast.FunctionDef,
-) -> str | None:
-    return_node = _single_return_value(script_path=script_path, function=function)
-    if not isinstance(return_node, ast.Dict):
-        return None
-    envelope = _parse_literal_return_envelope(script_path=script_path, function=function)
-    _reject_unsupported_fields(
-        script_path=script_path,
-        function_name=function.name,
-        envelope=envelope,
-        allowed_fields=URDF_ENVELOPE_FIELDS,
-    )
-    if "xml" not in envelope:
-        raise ValueError(f"{_display_path(script_path)} gen_urdf() envelope must define 'xml'")
-    return None
-
-
-def _parse_sdf_envelope_metadata(
-    *,
-    script_path: Path,
-    function: ast.FunctionDef,
-) -> str | None:
-    return_node = _single_return_value(script_path=script_path, function=function)
-    if not isinstance(return_node, ast.Dict):
-        return None
-    envelope = _parse_literal_return_envelope(script_path=script_path, function=function)
-    _reject_unsupported_fields(
-        script_path=script_path,
-        function_name=function.name,
-        envelope=envelope,
-        allowed_fields=SDF_ENVELOPE_FIELDS,
-    )
-    if "xml" not in envelope:
-        raise ValueError(f"{_display_path(script_path)} gen_sdf() envelope must define 'xml'")
-    return None
 
 
 def _parse_literal_return_envelope(
