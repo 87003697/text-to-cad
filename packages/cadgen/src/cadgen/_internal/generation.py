@@ -1087,6 +1087,13 @@ def _run_script_generator_inner(
             _write_dxf_payload(
                 envelope, output_path=spec.dxf_export_path, script_path=spec.script_path, logger=logger
             )
+        elif spec.dxf_path is not None and spec.dxf_path.is_file():
+            # Mirror gen_step's no-sibling default: the drawing package is the build
+            # product, and a previously exported sibling `<name>.dxf` no longer matches
+            # the just-rebuilt geometry. Remove the stale export; an explicit request
+            # (--dxf / -o / SOURCE=OUTPUT) rewrites it instead.
+            spec.dxf_path.unlink(missing_ok=True)
+            logger.info(f"removed stale DXF export: {_display_path(spec.dxf_path)}")
     if generated_scene is not None and source_closure is not None:
         generated_scene.source_closure_hash = source_closure.closure_hash
         generated_scene.source_closure_files = source_closure.files
