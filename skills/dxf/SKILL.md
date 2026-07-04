@@ -25,16 +25,9 @@ The sibling `<name>.dxf` file is written **on demand only** (`--dxf`, `-o`, or a
 
 ## The three DXF workflows
 
+Copy the full generator template for the applicable workflow from `references/generator-templates.md` when creating a new drawing.
+
 1. **DXF generated from scratch** (standalone drafting — gaskets, panels, templates, cut layouts with no 3D model behind them): a `<name>.dxf.py` that builds an `ezdxf` document directly.
-
-   ```python
-   import ezdxf
-
-   def gen_dxf():
-       document = ezdxf.new("R2010")
-       # ... draw modelspace entities ...
-       return {"document": document}
-   ```
 
 2. **DXF derived from a generated STEP part** (flat patterns / profiles of a `$cad` model): a `<name>.dxf.py` beside the `<name>.step.py` it projects. Generator entry files use dotted extensions and cannot be imported by module name, so reuse the STEP source's geometry by path-loading it:
 
@@ -48,9 +41,9 @@ The sibling `<name>.dxf` file is written **on demand only** (`--dxf`, `-o`, or a
        return {"document": _step.build_dxf()}
    ```
 
-   Keep the shared drawing logic (e.g. a `build_dxf()` helper that unfolds the part) in the `.step.py` or a plain helper module; the `.dxf.py` is the drawing entry point. The loaded `.step.py` and its imports are recorded in the drawing's source closure, so editing the 3D part automatically invalidates the cached drawing.
+   Keep the shared drawing logic (e.g. a `build_dxf()` helper that unfolds the part via `cadgen.flatten`) in the `.step.py` or a plain helper module; the `.dxf.py` is the drawing entry point. The loaded `.step.py` and its imports are recorded in the drawing's source closure, so editing the 3D part automatically invalidates the cached drawing.
 
-3. **DXF derived from an imported STEP** (a `.step`/`.stp` file with no Python source): a `<name>.dxf.py` that reads the STEP (e.g. `build123d.import_step`) and projects it. Only Python sources are freshness inputs — like a `gen_step()` that composes imported STEPs, the drawing does not auto-rebuild when the imported file changes; rerun with `--force` after replacing it.
+3. **DXF derived from an imported STEP** (a `.step`/`.stp` file with no Python source): a `<name>.dxf.py` that reads the STEP (e.g. `build123d.import_step`) and projects it with `cadgen.flatten`. Only Python sources are freshness inputs — like a `gen_step()` that composes imported STEPs, the drawing does not auto-rebuild when the imported file changes; rerun with `--force` after replacing it.
 
 `gen_dxf()` must live in a dedicated `.dxf.py` file: a source defining both `gen_step()` and `gen_dxf()` is rejected. A plain `<name>.py` defining only `gen_dxf()` is still accepted as an explicit CLI target (the CLI is naming-agnostic), but only `.dxf.py` files are catalog entries the CAD Viewer lists and rebuilds.
 
