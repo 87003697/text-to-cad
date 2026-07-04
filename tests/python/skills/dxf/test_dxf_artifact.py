@@ -56,6 +56,17 @@ class DxfArtifactTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, "dedicated <name>.dxf.py generator"):
                 dxf_artifact.build_dxf_artifact(repo_root=Path(root), source_path=script_path)
 
+    def test_rebuilds_are_byte_deterministic(self) -> None:
+        with temporary_directory(prefix="dxf-artifact") as root:
+            script_path = self._write_generator(Path(root))
+            drawing_path = Path(root) / "__cadcache__" / "models" / "outline.dxf.py" / "drawing.dxf"
+
+            dxf_artifact.build_dxf_artifact(repo_root=Path(root), source_path=script_path)
+            first = drawing_path.read_bytes()
+            dxf_artifact.build_dxf_artifact(repo_root=Path(root), source_path=script_path, force=True)
+
+            self.assertEqual(first, drawing_path.read_bytes())
+
     def test_export_writes_fresh_dxf_with_relocated_identity(self) -> None:
         with temporary_directory(prefix="dxf-artifact") as root:
             script_path = self._write_generator(Path(root))

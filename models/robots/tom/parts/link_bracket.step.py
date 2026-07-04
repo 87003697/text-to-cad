@@ -45,7 +45,7 @@ if str(V2_DIR) not in sys.path:
 
 import build123d
 
-import dxf_topology
+from cadgen import flatten as dxf_topology
 import link_common as lc
 
 

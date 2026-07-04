@@ -50,13 +50,7 @@ The sibling `<name>.dxf` file is written **on demand only** (`--dxf`, `-o`, or a
 
    Keep the shared drawing logic (e.g. a `build_dxf()` helper that unfolds the part) in the `.step.py` or a plain helper module; the `.dxf.py` is the drawing entry point. The loaded `.step.py` and its imports are recorded in the drawing's source closure, so editing the 3D part automatically invalidates the cached drawing.
 
-3. **DXF derived from an imported STEP** (a `.step`/`.stp` file with no Python source): a `<name>.dxf.py` that reads the STEP (e.g. `build123d.import_step`) and projects it. Declare the STEP as an envelope `sources` dependency so replacing the file invalidates the cached drawing:
-
-   ```python
-   def gen_dxf():
-       # ... project geometry loaded from vendor_part.step ...
-       return {"document": document, "sources": ["vendor_part.step"]}
-   ```
+3. **DXF derived from an imported STEP** (a `.step`/`.stp` file with no Python source): a `<name>.dxf.py` that reads the STEP (e.g. `build123d.import_step`) and projects it. Only Python sources are freshness inputs — like a `gen_step()` that composes imported STEPs, the drawing does not auto-rebuild when the imported file changes; rerun with `--force` after replacing it.
 
 `gen_dxf()` must live in a dedicated `.dxf.py` file: a source defining both `gen_step()` and `gen_dxf()` is rejected. A plain `<name>.py` defining only `gen_dxf()` is still accepted as an explicit CLI target (the CLI is naming-agnostic), but only `.dxf.py` files are catalog entries the CAD Viewer lists and rebuilds.
 
@@ -72,8 +66,9 @@ Use these defaults unless the user specifies otherwise:
 
 - Units: millimeters; set them explicitly on the document (`doc.units = ezdxf.units.MM`).
 - Geometry lives in modelspace at 1:1 scale.
-- Cut profiles are closed polylines or closed line/arc loops; open contours only for engraving or reference geometry.
-- For CAD-backed parts, prefer deriving DXF cut contours from the actual STEP/solid topology: build or load the 3D shape, select/project the real planar faces, unfold them into flat coordinates, and emit closed contours from those projected face wires. Use hand-drawn parametric outlines only when there is no reliable 3D topology to project.
+- Cut profiles are closed polylines or closed line/arc loops; open contours only for engraving or reference geometry (generation validation enforces this — see Validation).
+- For CAD-backed parts, derive DXF cut contours from the actual STEP/solid topology with `cadgen.flatten`: select the real planar faces (`planar_faces`), project and union them (`union_projected_faces`), and emit clean closed contours (`add_shapely_geometry`). Use hand-drawn parametric outlines only when there is no reliable 3D topology to project.
+- Apply kerf / tool-radius compensation with `cadgen.flatten.offset_geometry` / `offset_closed_points` when the cutting process requires it; do not hand-offset coordinates.
 - Layers carry intent: keep cut geometry and bend/fold lines on separate layers, and include "bend" in bend-layer names so downstream tools classify them as bends rather than cuts.
 - DXF layers are drawing structure, not STEP part/assembly structure.
 
@@ -93,7 +88,6 @@ A DXF target is a Python source defining:
 def gen_dxf():
     ...
     return {"document": document}  # or a bare ezdxf document
-    # optional: "sources": [...] file dependencies folded into freshness
 ```
 
 Every run builds/refreshes the drawing package. Flags:
@@ -101,7 +95,9 @@ Every run builds/refreshes the drawing package. Flags:
 - `--dxf` — also write the sibling `<name>.dxf` export.
 - `-o`/`--output PATH` — export to a custom path; only with one plain generated Python target.
 - `SOURCE.dxf.py=OUTPUT.dxf` positional pairs — per-target custom export paths.
+- `--snapshot` — also write an SVG snapshot (`drawing.svg`) into each drawing package for visual review.
 - `--force` — rebuild even when the cached drawing package is current (an unchanged source closure is otherwise skipped).
+- `--validate` — validate existing `.dxf` FILES with the generation-time drawing checks instead of generating.
 
 Do not put output paths in the `gen_dxf()` return value.
 
@@ -125,11 +121,19 @@ python scripts/dxf path/to/a.dxf.py=out/a.dxf path/to/b.dxf.py=out/b.dxf
 
 ## Viewer integration
 
-`<name>.dxf.py` files are CAD Viewer catalog entries, listed whether or not their drawing package has been built. Opening one triggers the unified render-artifact flow: a missing or stale package (any source-closure file — the generator, path-loaded STEP sources, helper modules, or declared `sources` files — newer than the descriptor) rebuilds automatically. The viewer's export dropdown offers "Download DXF" on generated drawings (it refreshes the package first, so the export is never stale). Raw imported `.dxf` files render directly and are never rebuilt.
+`<name>.dxf.py` files are CAD Viewer catalog entries, listed whether or not their drawing package has been built. Opening one triggers the unified render-artifact flow: a missing or stale package (any source-closure file — the generator, its path-loaded `.step.py` sources, and helper modules — newer than the descriptor) rebuilds automatically. The viewer's export dropdown offers "Download DXF" on generated drawings (it refreshes the package first, so the export is never stale). Raw imported `.dxf` files render directly and are never rebuilt.
 
 ## Validation
 
-Verify the generated drawing with targeted `ezdxf` checks instead of eyeballing: entity counts by type and layer, closed flags on cut profiles, drawing extents, and every dimension the user specified. Read the built DXF from the drawing package (or from the exported path when one was requested):
+Validation happens IN generation, not after: every `gen_dxf()` build runs the drawing checks on the in-memory document before the package or any export is written, and a build with error findings fails. The checks: cut-layer profiles must close (polylines, circles, or chained line/arc loops), zero-length/degenerate entities are rejected, exact duplicate geometry (double-cut risk) is rejected, explicitly unitless documents are rejected, and an empty modelspace is rejected. Open geometry is allowed only on bend/engrave/reference-intent layers (matched by name).
+
+The same checks run post-hoc on any existing `.dxf` file:
+
+```bash
+python scripts/dxf --validate path/to/file.dxf
+```
+
+Beyond the built-in checks, verify requested dimensions with targeted `ezdxf` reads (entity counts by layer, drawing extents, every dimension the user specified) against the built DXF in the drawing package (or the exported path when one was requested), and review geometry visually with `--snapshot` or the CAD Viewer:
 
 ```python
 import ezdxf

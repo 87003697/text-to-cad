@@ -18,6 +18,7 @@ descriptor exactly as it reads ``assembly.json``.
 
 from __future__ import annotations
 
+import contextlib
 import json
 from datetime import datetime, timezone
 from pathlib import Path
@@ -56,6 +57,43 @@ def load_drawing_descriptor(package_dir: Path) -> dict[str, object] | None:
     return descriptor
 
 
+@contextlib.contextmanager
+def _deterministic_dxf_output(document: object):
+    """Make ezdxf output a pure function of the drawing content while saving.
+
+    ezdxf stamps volatile metadata into every file (julian-date headers, random
+    fingerprint/version GUIDs, created/written-by markers with timestamps), which
+    would churn the package's dxfHash on every rebuild. The cached drawing is a
+    content-addressed render artifact — provenance lives in drawing.json — so it
+    is saved with ezdxf's fixed-metadata mode plus a pinned ezdxf marker string
+    (the written-by marker is stamped unconditionally on export and is not
+    covered by the fixed-metadata option): identical geometry produces identical
+    bytes."""
+    try:
+        import ezdxf
+        from ezdxf import document as ezdxf_document
+    except ImportError:
+        yield
+        return
+    options = ezdxf.options
+    previous_fixed = bool(getattr(options, "write_fixed_meta_data_for_testing", False))
+    previous_marker = ezdxf_document.ezdxf_marker_string
+    fixed_marker = f"{ezdxf.__version__} @ 2000-01-01T00:00:00+00:00"
+    options.write_fixed_meta_data_for_testing = True
+    ezdxf_document.ezdxf_marker_string = lambda: fixed_marker
+    try:
+        metadata_reader = getattr(document, "ezdxf_metadata", None)
+        if callable(metadata_reader):
+            metadata = metadata_reader()
+            # The created-by marker was stamped when the generator constructed the
+            # document (before this save path had any control); pin it too.
+            metadata[ezdxf_document.CREATED_BY_EZDXF] = fixed_marker
+        yield
+    finally:
+        options.write_fixed_meta_data_for_testing = previous_fixed
+        ezdxf_document.ezdxf_marker_string = previous_marker
+
+
 def write_drawing_package(
     document: object,
     *,
@@ -73,7 +111,8 @@ def write_drawing_package(
     package_dir = drawing_package_path_for_source(resolved_script)
     package_dir.mkdir(parents=True, exist_ok=True)
     dxf_path = drawing_dxf_path(package_dir)
-    saveas(str(dxf_path))
+    with _deterministic_dxf_output(document):
+        saveas(str(dxf_path))
     source_identity = python_source_hash(resolved_script)
     # The identity comment inside the cached DXF records the generator relative to the
     # DXF file itself (inside __cadcache__/models/<key>/), so the package stays portable.
