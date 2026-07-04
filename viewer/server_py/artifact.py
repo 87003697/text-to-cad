@@ -11,7 +11,7 @@ cadDirectoryScanner.mjs:
   imported `.step` also compares stepHash, the generated `.step.py` checks the
   source-closure mtimes) — no OCP. State machine:
   ready | needs-build | generating | error.
-- The build (POST) shells out to `cadpy.step_artifact` exactly as Node does,
+- The build (POST) shells out to `cadgen.step_artifact` exactly as Node does,
   keeping OCP out of the server process (crash/memory isolation).
 """
 

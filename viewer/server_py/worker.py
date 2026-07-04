@@ -1,22 +1,22 @@
 """Persistent warm-OCCT CAD worker for the CAD Viewer (viewer-specific).
 
-A long-lived subprocess that imports cadpy / OpenCASCADE ONCE and then services
+A long-lived subprocess that imports cadgen / OpenCASCADE ONCE and then services
 many STEP build/export requests in-process, so the viewer pays the ~OCP-import +
 kernel-warm cost a single time instead of per request. It is the CAD Viewer's
-specific wrapper around the GENERAL cadpy cores — it adds no geometry logic of its
-own; it only calls :func:`cadpy.step_artifact.run_cli_payload` and
-:func:`cadpy.step_export_target.run_cli_payload` (the same callables the agent CLI
+specific wrapper around the GENERAL cadgen cores — it adds no geometry logic of its
+own; it only calls :func:`cadgen.step_artifact.run_cli_payload` and
+:func:`cadgen.step_export_target.run_cli_payload` (the same callables the agent CLI
 uses), passing ``reset_runtime_closure=True`` so repeated warm builds record the
 identical source closure a cold CLI would.
 
 There is NO process channel back to the agent's STEP CLI: this worker is a peer
-entrypoint that calls the shared cadpy functions directly. It is the web viewer
+entrypoint that calls the shared cadgen functions directly. It is the web viewer
 server's build/export backend.
 
 Protocol — newline-delimited JSON-RPC 2.0 on stdio:
   request : {"jsonrpc":"2.0","id":N,"method":"invoke",
-             "params":{"module":"cadpy.step_artifact","args":[...],"repo_root":"..."}}
-  response: {"jsonrpc":"2.0","id":N,"result":{...cadpy payload dict...}}
+             "params":{"module":"cadgen.step_artifact","args":[...],"repo_root":"..."}}
+  response: {"jsonrpc":"2.0","id":N,"result":{...cadgen payload dict...}}
             {"jsonrpc":"2.0","id":N,"error":{"code":C,"message":"..."}}
 
 Build/export FAILURES are returned as a normal ``result`` dict shaped
@@ -26,7 +26,7 @@ method / malformed request). A hard OCP fault that kills the process is detected
 the client as EOF and respawned.
 
 stdout is reserved exclusively for protocol frames: at startup fd 1 is redirected
-to fd 2, so any stdout writes from cadpy/OCP (C-level included) land on stderr and
+to fd 2, so any stdout writes from cadgen/OCP (C-level included) land on stderr and
 cannot corrupt the frame stream. Frames are written to a dup() of the original
 stdout taken before the redirect.
 """
@@ -38,7 +38,7 @@ import os
 import sys
 import traceback
 
-# --- stdout isolation: do this BEFORE importing cadpy (which may print) ----------
+# --- stdout isolation: do this BEFORE importing cadgen (which may print) ----------
 _RPC_OUT_FD = os.dup(1)  # keep the real stdout (the pipe to the client) for frames
 os.dup2(2, 1)  # fd 1 -> stderr; all later stdout (incl. C-level OCP prints) -> stderr
 _RPC_OUT = os.fdopen(_RPC_OUT_FD, "w", buffering=1, encoding="utf-8")
@@ -53,14 +53,14 @@ INTERNAL_ERROR = -32603
 
 
 def _module_dispatch():
-    """Map a cadpy CLI module name to its in-process payload entrypoint. Imported
+    """Map a cadgen CLI module name to its in-process payload entrypoint. Imported
     lazily inside the worker process so the (warm) OCP import happens here, not in
     the parent server."""
-    from cadpy import step_artifact, step_export_target
+    from cadgen import step_artifact, step_export_target
 
     return {
-        "cadpy.step_artifact": step_artifact.run_cli_payload,
-        "cadpy.step_export_target": step_export_target.run_cli_payload,
+        "cadgen.step_artifact": step_artifact.run_cli_payload,
+        "cadgen.step_export_target": step_export_target.run_cli_payload,
     }
 
 
@@ -68,7 +68,7 @@ _DISPATCH = None
 
 
 def _invoke(params: dict) -> dict:
-    """Handle an ``invoke`` request: run the requested cadpy CLI module in-process,
+    """Handle an ``invoke`` request: run the requested cadgen CLI module in-process,
     warm, and return its payload dict. Build/export failures become an
     ``{"ok": false, "error": ...}`` result (not a JSON-RPC error)."""
     global _DISPATCH
@@ -77,10 +77,10 @@ def _invoke(params: dict) -> dict:
     module = str(params.get("module") or "")
     run = _DISPATCH.get(module)
     if run is None:
-        return {"ok": False, "error": f"Unknown cadpy module for worker: {module!r}"}
+        return {"ok": False, "error": f"Unknown cadgen module for worker: {module!r}"}
     args = list(params.get("args") or [])
     repo_root = str(params.get("repo_root") or "")
-    # Match the cold subprocess exactly: it ran with cwd=repo_root. cadpy resolves
+    # Match the cold subprocess exactly: it ran with cwd=repo_root. cadgen resolves
     # geometry via the explicit --repo-root, but chdir keeps any cwd-relative logging
     # / parity identical. Process-global + single-threaded request loop => safe.
     if repo_root and os.path.isdir(repo_root):
@@ -91,7 +91,7 @@ def _invoke(params: dict) -> dict:
     try:
         return dict(run(args, reset_runtime_closure=True))
     except SystemExit as exc:  # argparse error => exit(2); surface as a failure dict
-        return {"ok": False, "error": f"cadpy {module} argument error (exit {exc.code})"}
+        return {"ok": False, "error": f"cadgen {module} argument error (exit {exc.code})"}
     except Exception as exc:  # noqa: BLE001 — build/export failure -> contract dict
         return {"ok": False, "error": str(exc), "traceback": traceback.format_exc()}
 

@@ -27,7 +27,7 @@ from __future__ import annotations
 import math
 
 from build123d import *  # noqa: F401,F403
-from cadpy.assembly import AssemblyHelper
+from cadgen.assembly import AssemblyHelper
 
 # ---------------------------------------------------------------------------
 # Gear stage parameters (module-1.0 concept teeth, trapezoidal with backlash)

@@ -12,14 +12,14 @@ add_repo_path("skills/cad/scripts/inspect")
 
 from inspect_refs import cli as inspect_cli
 from inspect_refs import inspect as refs_inspect
-from cadpy import cad_ref_syntax as refs_syntax
-from cadpy import assembly_spec
-from cadpy import generation as cad_generation
-from cadpy import step_targets
-from cadpy.glb_topology import STEP_TOPOLOGY_SCHEMA_VERSION
-from cadpy.render import part_glb_path
-from cadpy.selector_types import SelectorBundle, SelectorProfile
-from cadpy.source_hash import python_source_hash
+from cadgen import cad_ref_syntax as refs_syntax
+from cadgen._internal import assembly_spec
+from cadgen._internal import generation as cad_generation
+from cadgen import step_targets
+from cadgen._internal.glb_topology import STEP_TOPOLOGY_SCHEMA_VERSION
+from cadgen.render import part_glb_path
+from cadgen.selector_types import SelectorBundle, SelectorProfile
+from cadgen._internal.source_hash import python_source_hash
 from tests.python.support.cad_test_roots import IsolatedCadRoots
 
 

@@ -1,6 +1,6 @@
 """Deterministic unit tests for the /__cad/artifact freshness logic.
 
-Builds a synthetic imported-.step component-GLB package (no cadpy/OCP) and
+Builds a synthetic imported-.step component-GLB package (no cadgen/OCP) and
 checks the state machine: ready / stale_step_artifact / missing_glb /
 unsupported, the owns_entry gate, and the generation-lock reader.
 """
@@ -121,7 +121,7 @@ class GenerationLock(unittest.TestCase):
 
 def _write_generated_package(root, py_name, *, closure_extra=None, with_package=True):
     """A gen_step generator + optionally its generated component-GLB package
-    (sourceKind=python), keyed by the .step.py name like cadpy writes it."""
+    (sourceKind=python), keyed by the .step.py name like cadgen writes it."""
     py_path = os.path.join(root, py_name)
     with open(py_path, "w") as h:
         h.write("def gen_step():\n    return None\n")

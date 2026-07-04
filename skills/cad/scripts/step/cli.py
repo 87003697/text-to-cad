@@ -3,18 +3,18 @@ from __future__ import annotations
 import argparse
 from collections.abc import Sequence
 
-from cadpy.catalog import StepImportOptions
-from cadpy.metadata import normalize_mesh_numeric
+from cadgen.catalog import StepImportOptions
+from cadgen.metadata import normalize_mesh_numeric
 
 
 def generate_step_targets(*args, **kwargs):
-    from cadpy.generation import generate_step_targets as generate
+    from cadgen.generation import generate_step_targets as generate
 
     return generate(*args, **kwargs)
 
 
 def targets_include_output_pairs(targets) -> bool:
-    from cadpy.generation import targets_include_output_pairs as includes_pairs
+    from cadgen.generation import targets_include_output_pairs as includes_pairs
 
     return includes_pairs(targets)
 

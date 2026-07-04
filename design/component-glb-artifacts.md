@@ -1,6 +1,6 @@
 # Component-GLB assembly artifacts
 
-**Status:** Proposed (design) · **Scope:** `packages/cadpy` (build) + `packages/cadjs`,
+**Status:** Proposed (design) · **Scope:** `packages/cadgen` (build) + `packages/cadjs`,
 `viewer`, `skills/cad/scripts/{snapshot,inspect}` (consume) · **Date:** 2026-06
 
 ## 1. Summary
@@ -199,7 +199,7 @@ stays fast.
 > the scope of this section:
 >
 > 1. **`inspect_refs` does not read the GLB topology for selectors.** It re-extracts the
->    full manifest from the **STEP** via `cadpy.step_artifacts.ensure_step_topology_artifact`
+>    full manifest from the **STEP** via `cadgen.step_artifacts.ensure_step_topology_artifact`
 >    (which calls `_generate_part_outputs` **without** the package flag). The GLB only carries
 >    the lightweight *index* profile (occurrences, no faces/edges). Because the baked
 >    `{model}.step` stays on disk, `inspect_refs` keeps working **unchanged** whether or not a
@@ -217,7 +217,7 @@ stays fast.
 > render consumers are all correct without it. When pursued, target the geometric/selector
 > columns for the perf win and leave mesh-index resolution to the per-component GLBs.
 
-## 7. Build-side design (`packages/cadpy`)
+## 7. Build-side design (`packages/cadgen`)
 
 New path in the shape artifact generation for `kind == "assembly"`:
 
@@ -246,7 +246,7 @@ occurrence, not baked into the mesh).
 (no package) — a part is a single component. Only assemblies get the package.
 
 > **Implementation status (shipped behind `--component-package`).** Realized as
-> `cadpy.component_package.build_package_from_compound` and wired into the build pipeline:
+> `cadgen.component_package.build_package_from_compound` and wired into the build pipeline:
 >
 > - **Source = the compound, not an instance list.** The general path introspects the
 >   `gen_step` compound's located children (`child.wrapped.Located(identity)` for local
@@ -312,7 +312,7 @@ Specifics:
 
 ## 9. Measured results (tom)
 
-Implemented as `cadpy.component_package.build_package_from_compound` (build side, the
+Implemented as `cadgen.component_package.build_package_from_compound` (build side, the
 compound-introspection path) and measured end-to-end. tom → **11 component GLBs cover 33
 occurrences** (22 repeats deduped). Two regimes, because the package coexists with the
 monolith behind the flag today and only fully pays off once the monolith is dropped (§13).

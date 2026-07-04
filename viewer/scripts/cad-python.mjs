@@ -1,4 +1,4 @@
-// Discover the project's venv Python + cadpy PYTHONPATH for spawning the Python
+// Discover the project's venv Python + cadgen PYTHONPATH for spawning the Python
 // CAD Viewer backend (server_py) from Node tooling (the Vite dev proxy and the
 // agent:start shim). Extracted from the former src/server/step/pythonStepArtifact
 // venv discovery so it survives the Node-backend deletion.
@@ -80,9 +80,9 @@ export function cadPythonEnv() {
     }
   }
   for (const discovered of [
-    findUpDirectory(path.join("scripts", "packages", "cadpy", "src")),
-    findUpDirectory(path.join("viewer", "packages", "cadpy", "src")),
-    findUpDirectory(path.join("packages", "cadpy", "src")),
+    findUpDirectory(path.join("scripts", "packages", "cadgen", "src")),
+    findUpDirectory(path.join("viewer", "packages", "cadgen", "src")),
+    findUpDirectory(path.join("packages", "cadgen", "src")),
     path.join(PACKAGE_ROOT, "vendor", "python"),
     findUpDirectory(path.join("runtime", "vendor", "python")),
     findUpDirectory(path.join("vendor", "python")),

@@ -59,7 +59,7 @@ class DxfCliTests(unittest.TestCase):
         code = (
             "import sys; sys.path.insert(0, 'scripts'); import dxf.cli; "
             "print('OCP.OCP' in sys.modules); "
-            "print('cadpy.step_scene' in sys.modules)"
+            "print('cadgen._internal.step_scene' in sys.modules)"
         )
         result = subprocess.run(
             [sys.executable, "-c", code],

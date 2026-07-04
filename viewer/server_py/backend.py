@@ -2,8 +2,8 @@
 
 Reproduces root resolution, catalog absolutization (raw scanner URLs ->
 ``/__cad/asset?file=...`` form the client consumes verbatim), and the guarded
-asset-path resolver. STEP artifact generation + export delegate to cadpy and
-land in the cadpy-integration phase.
+asset-path resolver. STEP artifact generation + export delegate to cadgen and
+land in the cadgen-integration phase.
 """
 
 from __future__ import annotations
@@ -22,7 +22,7 @@ def normalize_implicit_export_format(value: str) -> str:
     raise ValueError(f"Unsupported implicit CAD export format: {value or '(missing)'}")
 
 from . import artifact as artifact_mod
-from . import cadpy_bridge
+from . import cadgen_bridge
 from . import scanner
 from .content_types import content_type_for_path
 from .save_dialog import pick_save_destination
@@ -288,7 +288,7 @@ class LocalAssetBackend:
         candidate = os.path.join(os.path.dirname(step_path), os.path.basename(step_path) + ".py")
         return candidate if scanner._file_has_python_generator(candidate, "gen_step") else ""
 
-    # POST /__cad/artifact build — subprocess cadpy.step_artifact (OCP stays out of
+    # POST /__cad/artifact build — subprocess cadgen.step_artifact (OCP stays out of
     # the server process), then bump the descriptor mtime so a no-op rebuild clears
     # the scanner's source-mtime staleness trigger (mirrors generateStepArtifact).
     def generate_step_artifact(self, file_ref, force, resolved_root, catalog):
@@ -310,7 +310,7 @@ class LocalAssetBackend:
             args += ["--force"]
         if os.environ.get("VIEWER_STEP_ARTIFACT_VERBOSE") == "1":
             args += ["--verbose"]
-        result = cadpy_bridge.run_cadpy("cadpy.step_artifact", args, ctx["scanRepoRoot"])
+        result = cadgen_bridge.run_cadgen("cadgen.step_artifact", args, ctx["scanRepoRoot"])
         if result.get("ok") and result.get("glbPath"):
             glb = result["glbPath"]
             glb_abs = glb if os.path.isabs(glb) else os.path.join(ctx["scanRepoRoot"], glb)
@@ -345,7 +345,7 @@ class LocalAssetBackend:
             return {"ok": True, "state": artifact_mod.ARTIFACT_STATE_READY, "ref": ref}
         return {"ok": False, "state": artifact_mod.ARTIFACT_STATE_ERROR, "error": built["error"]}
 
-    # POST /__cad/step-export — native Save dialog (subprocess) + cadpy.step_export_target
+    # POST /__cad/step-export — native Save dialog (subprocess) + cadgen.step_export_target
     # (subprocess). Headless fallback writes beside the source + a download URL.
     def generate_step_export(self, file_ref, fmt, resolved_root, catalog):
         normalized = str(fmt or "").strip().lower()
@@ -369,7 +369,7 @@ class LocalAssetBackend:
             args = ["--repo-root", ctx["scanRepoRoot"], "--step", step_path, "--format", normalized, "--out", out_path]
             if source_path:
                 args += ["--source-path", source_path]
-            return cadpy_bridge.run_cadpy("cadpy.step_export_target", args, ctx["scanRepoRoot"])
+            return cadgen_bridge.run_cadgen("cadgen.step_export_target", args, ctx["scanRepoRoot"])
 
         if destination.get("path"):
             result = _export(os.path.abspath(destination["path"]))

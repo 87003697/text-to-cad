@@ -78,7 +78,7 @@ consumes.
 
 ## 3. Current architecture (grounded)
 
-- **Catalog discovery is generator-first, not file-first.** `cadpy.catalog.iter_cad_sources`
+- **Catalog discovery is generator-first, not file-first.** `cadgen.catalog.iter_cad_sources`
   scans `*.py` files, keeps those whose bytes contain the `gen_step` marker
   (`_looks_like_generator_script`), and derives `step_path = script.with_suffix(".step")` and
   `cad_ref = cad_ref_from_step_path(step_path)`. **The `.step` file is never checked for
@@ -226,10 +226,10 @@ more shareable.
 
 | layer | responsibility | opinions |
 |---|---|---|
-| **step CLI / cadpy** | given a source (generator or STEP) + explicit output requests, produce them | none: no `.step.py`, no required `.step`, no committing, no cache policy |
+| **step CLI / cadgen** | given a source (generator or STEP) + explicit output requests, produce them | none: no `.step.py`, no required `.step`, no committing, no cache policy |
 | **viewer + CAD skill** | discover `.step.py`, store/serve artifacts from `__cadcache__`, render-first iteration, trigger generation on cache-miss | all naming, caching, and workflow conventions |
 
-This keeps cadpy reusable and unopinionated while letting the viewer be as opinionated as it
+This keeps cadgen reusable and unopinionated while letting the viewer be as opinionated as it
 wants — the same principle behind keeping `packages/cadjs` non-React.
 
 ### 4.6 Direct STEP-file inputs — unchanged
@@ -401,7 +401,7 @@ simplification sweep. Sequence is fixed by dependency: **S2 + S3 (enabling primi
 > package dir correctly), so deleting them is low-value churn. **S8** (delete the `index`
 > `STEP_TOPOLOGY` profile / `build_step_topology_index_manifest`) is **superseded** — the
 > rearchitecture made the index profile the canonical package descriptor, so it is load-bearing,
-> not dead. The viewer still passes `--skip-step-write` to `cadpy.step_artifact` (the flag is now
+> not dead. The viewer still passes `--skip-step-write` to `cadgen.step_artifact` (the flag is now
 > a no-op default the CLI still accepts); fully retiring that plumbing is a follow-up tidy.
 
 ### Tier A — structural (change the model)
@@ -445,7 +445,7 @@ delete the old scheme and regenerate. Because GLB artifacts regenerate on the fl
 old artifacts are harmless (overwritten or ignored), so migration is "delete + rebuild," not a
 careful data migration. In dependency order:
 
-1. **CLI/cadpy:** make no-STEP the default; add `--step <output>`; retire `--skip-step-write`;
+1. **CLI/cadgen:** make no-STEP the default; add `--step <output>`; retire `--skip-step-write`;
    emit the binary BREP cache + inertial metadata; move freshness to `sourceClosureHash`;
    route all derived artifacts into the per-folder content-addressed `__cadcache__` (§4.4).
 2. **Viewer/skill:** index `.step.py` (and direct `.step` files, unchanged); serve GLBs from
@@ -491,7 +491,7 @@ carries a suggested default.
 - **Do the parsed-BREP cache and the component-GLB store unify?** **Default: separate subfolders**
   (`components/<h>.glb` render vs `geometry/<h>.brep` internal), keyed independently; unify later.
 - **Eviction policy?** A) none; B) per-model pruning (today's `component_package.py`); C) folder
-  orphan scan; D) TTL/LRU. **Default B** + a future `cadpy cache clean` sweep.
+  orphan scan; D) TTL/LRU. **Default B** + a future `cadgen cache clean` sweep.
 
 #### Descriptor & schema
 - ⛔ **`assembly.json` schema + how components are referenced** — A) colocated relative
@@ -548,7 +548,7 @@ Adopt it. The agnostic-CLI / opinionated-viewer split is the right shape, and th
 **already** generator-first, so the heavy lifting (discovery without a `.step` file) is done.
 
 Sequence: (1) CLI default-no-STEP + `--step` export + binary BREP/metadata + `sourceClosureHash`
-freshness — all verifiable in cadpy with the existing test suites; (2) viewer `.step.py` +
+freshness — all verifiable in cadgen with the existing test suites; (2) viewer `.step.py` +
 `__cadcache__` artifacts + build-on-demand — needs the live viewer to verify; (3) repo migration
 (rename generators, drop committed artifacts). It is the same philosophy as the component-GLB
 flip — stop paying a heavy serialization on the hot path for an artifact only some consumers
@@ -557,4 +557,4 @@ need, and make it on-demand — applied one level up, to the STEP itself.
 ## References
 - `design/component-glb-artifacts.md` (the flip this builds on).
 - Measured STEP-vs-binary-BREP cost; STEP-consumer audit (session notes).
-- Memory: `gen-step-shape-only-contract`, `tom-build-perf-levers`, `venv-cadpy-points-to-main-checkout`.
+- Memory: `gen-step-shape-only-contract`, `tom-build-perf-levers`, `venv-cadgen-points-to-main-checkout`.

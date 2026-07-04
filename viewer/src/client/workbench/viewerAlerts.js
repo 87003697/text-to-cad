@@ -9,7 +9,7 @@ import { fileKey } from "./sidebar.js";
 
 export const CAD_BUILD_COMMANDS = Object.freeze({
   dxf: "",
-  step: "python -m cadpy.step_artifact --repo-root . --step",
+  step: "python -m cadgen.step_artifact --repo-root . --step",
   urdf: "",
   sdf: ""
 });
