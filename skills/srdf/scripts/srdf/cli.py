@@ -5,7 +5,7 @@ import json
 import sys
 from collections.abc import Sequence
 from math import isfinite
-from pathlib import Path, PurePosixPath
+from pathlib import Path
 import xml.etree.ElementTree as ET
 
 SCRIPTS_DIR = Path(__file__).resolve().parents[1]
@@ -42,7 +42,7 @@ def validate_srdf_targets(
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         prog="validate",
-        description="Validate explicit MoveIt2 SRDF targets against their linked URDF.",
+        description="Validate explicit MoveIt2 SRDF targets against their paired URDF.",
     )
     parser.add_argument(
         "targets",
@@ -84,7 +84,7 @@ def _validate_target(target_path: Path, *, strict: bool, output_format: str) -> 
     srdf_source, result = parse_srdf_file(target_path)
     urdf_path: Path | None = None
     if srdf_source is not None:
-        urdf_path = _resolve_linked_urdf_path(srdf_source, srdf_path=target_path, result=result)
+        urdf_path = _resolve_paired_urdf(srdf_source.robot_name, srdf_dir=target_path.parent, result=result)
         if urdf_path is not None:
             urdf_robot = _read_urdf_robot(urdf_path, result)
             if urdf_robot is not None:
@@ -138,52 +138,66 @@ def _summary_line(display: str, srdf_source: SrdfSource, urdf_path: Path) -> str
     )
 
 
-def _resolve_linked_urdf_path(
-    srdf_source: SrdfSource,
-    *,
-    srdf_path: Path,
-    result: ValidationResult,
-) -> Path | None:
-    raw_value = str(srdf_source.urdf_ref or "").strip()
-    link_path = "/robot/tcad:urdf"
-    if not raw_value:
+def find_paired_urdf(robot_name: str, srdf_dir: Path) -> tuple[Path | None, list[Path]]:
+    """Resolve the URDF paired with an SRDF: the same-directory URDF whose
+    root <robot name> matches. Returns (paired path or None, all matches)."""
+    matches: list[Path] = []
+    for candidate in sorted(srdf_dir.glob("*" + URDF_SUFFIX)):
+        if _urdf_root_name(candidate) == robot_name:
+            matches.append(candidate)
+    return (matches[0] if len(matches) == 1 else None), matches
+
+
+def _urdf_root_name(urdf_path: Path) -> str | None:
+    try:
+        for _event, element in ET.iterparse(str(urdf_path), events=("start",)):
+            if element.tag != "robot":
+                return None
+            return str(element.attrib.get("name") or "").strip()
+    except (OSError, ET.ParseError):
+        return None
+    return None
+
+
+def _resolve_paired_urdf(robot_name: str, *, srdf_dir: Path, result: ValidationResult) -> Path | None:
+    if not robot_name:
+        return None
+    urdf_path, matches = find_paired_urdf(robot_name, srdf_dir)
+    if urdf_path is not None:
+        return urdf_path
+    if not matches:
         result.add(
             "error",
-            "missing_urdf_link",
-            'SRDF must include <tcad:urdf path="..."/> metadata',
+            "no_paired_urdf",
+            f"no .urdf in {_display_path(srdf_dir)} declares robot name {robot_name!r}",
             path="/robot",
-            hint='Declare xmlns:tcad="https://text-to-cad.dev/srdf" and add <tcad:urdf path="robot.urdf"/> as the first child.',
+            hint="An SRDF pairs with the same-folder URDF whose <robot name> matches; "
+            "colocate the URDF and make the names identical.",
         )
         return None
-    if "\\" in raw_value:
-        result.add("error", "invalid_urdf_link", "SRDF tcad:urdf path must use POSIX '/' separators", path=link_path)
-        return None
-    pure = PurePosixPath(raw_value)
-    if pure.is_absolute() or any(part in {"", "."} for part in pure.parts):
-        result.add("error", "invalid_urdf_link", f"SRDF tcad:urdf path must be a relative path: {raw_value!r}", path=link_path)
-        return None
-    urdf_path = (srdf_path.parent / Path(*pure.parts)).resolve()
-    if urdf_path.suffix.lower() != URDF_SUFFIX:
-        result.add("error", "invalid_urdf_link", f"SRDF tcad:urdf path must end in .urdf: {raw_value!r}", path=link_path)
-        return None
-    if not urdf_path.is_file():
-        result.add("error", "missing_urdf_file", f"SRDF tcad:urdf file does not exist: {raw_value!r}", path=link_path)
-        return None
-    return urdf_path
+    result.add(
+        "error",
+        "ambiguous_paired_urdf",
+        f"multiple .urdf files in {_display_path(srdf_dir)} declare robot name {robot_name!r}: "
+        f"{[_display_path(match) for match in matches]!r}",
+        path="/robot",
+        hint="Exactly one URDF per robot name per folder; rename or move the extras.",
+    )
+    return None
 
 
 def _read_urdf_robot(urdf_path: Path, result: ValidationResult) -> dict[str, object] | None:
     try:
         root = ET.parse(urdf_path).getroot()
     except (OSError, ET.ParseError):
-        result.add("error", "invalid_linked_urdf", f"URDF is invalid XML: {_display_path(urdf_path)}", path="/robot/tcad:urdf")
+        result.add("error", "invalid_paired_urdf", f"URDF is invalid XML: {_display_path(urdf_path)}", path="/robot")
         return None
     if root.tag != "robot":
-        result.add("error", "invalid_linked_urdf", "URDF root must be <robot>", path="/robot/tcad:urdf")
+        result.add("error", "invalid_paired_urdf", "URDF root must be <robot>", path="/robot")
         return None
     robot_name = str(root.get("name") or "").strip()
     if not robot_name:
-        result.add("error", "invalid_linked_urdf", "URDF robot name is required", path="/robot/tcad:urdf")
+        result.add("error", "invalid_paired_urdf", "URDF robot name is required", path="/robot")
         return None
     links = {
         str(link.get("name") or "").strip()
@@ -220,10 +234,10 @@ def _read_urdf_robot(urdf_path: Path, result: ValidationResult) -> dict[str, obj
     if len(roots) != 1 or len(set(child_links)) != len([c for c in child_links if c]):
         result.add(
             "warning",
-            "linked_urdf_not_a_tree",
-            f"linked URDF {_display_path(urdf_path)} is not a single-rooted tree; "
+            "paired_urdf_not_a_tree",
+            f"paired URDF {_display_path(urdf_path)} is not a single-rooted tree; "
             "chain and adjacency checks may be unreliable",
-            path="/robot/tcad:urdf",
+            path="/robot",
             hint="Validate the URDF with the URDF skill validator first.",
         )
     return {"name": robot_name, "links": links, "joints": joints}
@@ -235,14 +249,6 @@ def _validate_srdf_against_urdf(
     urdf_robot: dict[str, object],
     result: ValidationResult,
 ) -> None:
-    urdf_name = str(urdf_robot["name"])
-    if srdf_source.robot_name != urdf_name:
-        result.add(
-            "error",
-            "robot_name_mismatch",
-            f"SRDF robot name {srdf_source.robot_name!r} must match URDF robot name {urdf_name!r}",
-            path="/robot",
-        )
     links = urdf_robot["links"]
     joints = urdf_robot["joints"]
     assert isinstance(links, set)

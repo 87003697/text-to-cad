@@ -9,8 +9,6 @@ import xml.etree.ElementTree as ET
 from srdf.findings import ValidationResult, format_findings
 
 SRDF_SUFFIX = ".srdf"
-SRDF_METADATA_NAMESPACE = "https://text-to-cad.dev/srdf"
-LEGACY_EXPLORER_NAMESPACE = "https://text-to-cad.dev/explorer"
 
 VIRTUAL_JOINT_TYPES = {"fixed", "floating", "planar"}
 # MoveIt2 SRDF elements; unknown siblings are typo suspects.
@@ -85,7 +83,6 @@ class SrdfSource:
     file_ref: str
     source_path: Path
     robot_name: str
-    urdf_ref: str
     planning_groups: tuple[SrdfPlanningGroup, ...]
     end_effectors: tuple[SrdfEndEffector, ...]
     group_states: tuple[SrdfGroupState, ...]
@@ -157,7 +154,6 @@ def _parse_srdf_root(
     robot_name = str(root.attrib.get("name") or "").strip()
     if not robot_name:
         result.add("error", "missing_robot_name", f"{display} robot name is required", path="/robot")
-    urdf_ref = _linked_urdf_ref(root)
 
     _warn_unknown_children(root, result)
 
@@ -377,7 +373,6 @@ def _parse_srdf_root(
         file_ref=_relative_to_repo(source_path),
         source_path=source_path.resolve(),
         robot_name=robot_name,
-        urdf_ref=urdf_ref,
         planning_groups=tuple(planning_groups),
         end_effectors=tuple(end_effectors),
         group_states=tuple(group_states),
@@ -394,7 +389,17 @@ def _warn_unknown_children(root: ET.Element, result: ValidationResult) -> None:
             continue
         tag = child.tag
         if "}" in tag or ":" in tag:
-            continue  # tcad/explorer metadata and other namespaced extensions
+            # The retired tcad:/explorer: urdf link element deserves a specific
+            # nudge; other namespaced extensions pass through.
+            if _local_name(tag) == "urdf":
+                result.add(
+                    "warning",
+                    "deprecated_urdf_link",
+                    "the <tcad:urdf>/<explorer:urdf> metadata element is no longer used and is ignored",
+                    path="/robot",
+                    hint="SRDF pairs with the same-folder URDF whose robot name matches; remove the element.",
+                )
+            continue
         if tag not in KNOWN_ROBOT_CHILDREN:
             result.add(
                 "warning",
@@ -407,21 +412,6 @@ def _warn_unknown_children(root: ET.Element, result: ValidationResult) -> None:
 
 def _local_name(tag: str) -> str:
     return str(tag or "").rsplit("}", 1)[-1].split(":", 1)[-1]
-
-
-def _linked_urdf_ref(root: ET.Element) -> str:
-    for child in list(root):
-        if not isinstance(child.tag, str) or _local_name(child.tag) != "urdf":
-            continue
-        tag = str(child.tag or "")
-        if (
-            tag.startswith(f"{{{SRDF_METADATA_NAMESPACE}}}")
-            or tag.startswith(f"{{{LEGACY_EXPLORER_NAMESPACE}}}")
-            or tag.startswith("tcad:")
-            or tag.startswith("explorer:")
-        ):
-            return str(child.attrib.get("path") or "").strip()
-    return ""
 
 
 def _child_names(element: ET.Element, tag: str) -> tuple[str, ...]:
