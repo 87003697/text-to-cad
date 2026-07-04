@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import sys
 from collections.abc import Sequence
 from dataclasses import dataclass
 from fnmatch import fnmatch
@@ -332,7 +333,15 @@ def _iter_python_sources(root: Path) -> tuple[CadSource, ...]:
     for script_path in _iter_paths(root, "*.py"):
         if not _looks_like_generator_script(script_path):
             continue
-        source = _read_python_source(script_path)
+        try:
+            source = _read_python_source(script_path)
+        except CadSourceError as exc:
+            # Directory discovery is resilient: one invalid generator (e.g. an
+            # unmigrated gen_dxf() beside gen_step()) must not abort catalog-wide
+            # operations on unrelated targets. Explicitly targeting the file
+            # (source_from_path) still raises the pointed error.
+            print(f"[cadgen] skipping invalid CAD source: {exc}", file=sys.stderr)
+            continue
         if source is not None:
             sources.append(source)
     return tuple(sources)

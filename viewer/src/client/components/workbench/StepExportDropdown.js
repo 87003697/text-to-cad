@@ -6,13 +6,14 @@ import {
   DropdownMenuTrigger
 } from "@/components/ui/dropdown-menu";
 import {
+  DXF_EXPORT_FORMATS,
   STEP_EXPORT_FORMATS,
   stepExportItemLabel
 } from "@/workbench/stepExport";
 
 // Dedicated "download" icon dropdown for exporting the open STEP model (part, assembly, or
-// imported STEP) to STEP/3MF/STL/GLB. Hidden unless a STEP-backed entry is selected and export
-// is wired.
+// imported STEP) to STEP/3MF/STL/GLB, or a generated DXF drawing to DXF. Hidden unless an
+// export-capable entry is selected and export is wired.
 // Lives in the viewer floating toolbar (styled via triggerClassName, like DisplayProjectionControl).
 export function StepExportDropdown({
   selectedEntry,
@@ -26,11 +27,14 @@ export function StepExportDropdown({
 }) {
   const kind = String(selectedEntry?.kind || "").trim().toLowerCase();
   const isStepEntry = kind === "step" || kind === "assembly" || kind === "part";
-  if (!selectedEntry || !isStepEntry || typeof onExportStepFile !== "function") {
+  // Only generated drawings export (a raw imported .dxf is already the deliverable).
+  const isGeneratedDxfEntry = kind === "dxf" && selectedEntry?.sourceKind === "python";
+  if (!selectedEntry || (!isStepEntry && !isGeneratedDxfEntry) || typeof onExportStepFile !== "function") {
     return null;
   }
+  const exportFormats = isGeneratedDxfEntry ? DXF_EXPORT_FORMATS : STEP_EXPORT_FORMATS;
   const fileRef = String(selectedEntry?.file || selectedEntry?.id || "").trim();
-  const label = "Export model";
+  const label = isGeneratedDxfEntry ? "Export drawing" : "Export model";
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
@@ -53,7 +57,7 @@ export function StepExportDropdown({
         sideOffset={contentSideOffset}
         className="w-max"
       >
-        {STEP_EXPORT_FORMATS.map((format) => {
+        {exportFormats.map((format) => {
           const key = `${fileRef}:export:${format}`;
           return (
             <DropdownMenuItem

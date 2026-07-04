@@ -35,6 +35,7 @@ from ezdxf.units import MM as DXF_UNIT_MM
 if str(TOM_DIR) not in sys.path:
     sys.path.insert(0, str(TOM_DIR))
 
+from robot_common.booleans import as_single_shape, intersection_volume
 from robot_common.materials import GRAY_ALUMINUM_COLOR
 from robot_common.step_import import import_as_shape
 import dxf_topology
@@ -1076,7 +1077,7 @@ def build_bracket(
         ),
     ):
         cap_mask = cap_mask.fuse(flange_shape)
-    bracket = bracket.intersect(cap_mask)
+    bracket = as_single_shape(bracket.intersect(cap_mask))
 
     top_start_y = top_y_max + CUT_EXTENSION_MM
     bracket = _cut_round_horn_face_holes(
@@ -1470,7 +1471,7 @@ def build_step() -> build123d.Shape:
     if len(solids) != 1:
         raise RuntimeError(f"Expected one connected bracket solid, found {len(solids)}")
 
-    interference_volume = inputs.servo_shape.intersect(bracket).volume
+    interference_volume = intersection_volume(inputs.servo_shape, bracket)
     if interference_volume > 1e-3:
         raise RuntimeError(f"Bracket intersects the servo by {interference_volume:.6f} mm^3")
 

@@ -23,3 +23,7 @@ networkx
 lxml
 pytest
 trimesh
+
+# Model-local generator dependencies used by repo fixtures under models/
+# (e.g. the tom flat-pattern DXF topology unfolds).
+shapely

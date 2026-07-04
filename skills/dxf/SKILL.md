@@ -125,7 +125,7 @@ python scripts/dxf path/to/a.dxf.py=out/a.dxf path/to/b.dxf.py=out/b.dxf
 
 ## Viewer integration
 
-`<name>.dxf.py` files are CAD Viewer catalog entries, listed whether or not their drawing package has been built. Opening one triggers the unified render-artifact flow: a missing or stale package (any source-closure file — the generator, path-loaded STEP sources, helper modules, or declared `sources` files — newer than the descriptor) rebuilds automatically. Raw imported `.dxf` files render directly and are never rebuilt.
+`<name>.dxf.py` files are CAD Viewer catalog entries, listed whether or not their drawing package has been built. Opening one triggers the unified render-artifact flow: a missing or stale package (any source-closure file — the generator, path-loaded STEP sources, helper modules, or declared `sources` files — newer than the descriptor) rebuilds automatically. The viewer's export dropdown offers "Download DXF" on generated drawings (it refreshes the package first, so the export is never stale). Raw imported `.dxf` files render directly and are never rebuilt.
 
 ## Validation
 

@@ -406,8 +406,13 @@ class LocalAssetBackend:
 
     # POST /__cad/step-export — native Save dialog (subprocess) + cadgen.step_export_target
     # (subprocess). Headless fallback writes beside the source + a download URL.
+    # Generated `.dxf.py` drawings export through the same route with format "dxf".
     def generate_step_export(self, file_ref, fmt, resolved_root, catalog):
         normalized = str(fmt or "").strip().lower()
+        if scanner.is_dxf_generator_path(str(normalized_file_ref(file_ref))):
+            if normalized != "dxf":
+                raise ValueError(f"Unsupported export format for a DXF drawing: {fmt}")
+            return self.generate_dxf_export(file_ref, resolved_root)
         if normalized not in _STEP_EXPORT_FORMAT_SUFFIX:
             raise ValueError(f"Unsupported export format: {fmt}")
         resolved = self.resolve_step_source(file_ref, resolved_root)
@@ -449,6 +454,45 @@ class LocalAssetBackend:
         output_file_ref = _to_posix(os.path.relpath(output_path, resolved_root["rootPath"]))
         return {"ok": True, "fallback": True, "path": output_path, "filename": os.path.basename(output_path),
                 "format": normalized, "catalogChanged": True, "outputFileRef": output_file_ref}
+
+    # Export a generated `.dxf.py` drawing as a `.dxf` file — cadgen.dxf_artifact with
+    # --export ensures the drawing package is fresh (rebuilding if the source changed)
+    # and writes the DXF to the chosen path.
+    def generate_dxf_export(self, file_ref, resolved_root):
+        resolved = self.resolve_dxf_source(file_ref, resolved_root)
+        source_path = resolved["sourcePath"]
+        ctx = self._scan_context(resolved_root)
+        base_name = os.path.basename(source_path)[: -len(".dxf.py")]
+        suggested_name = f"{base_name}.dxf"
+        default_dir = os.path.dirname(source_path)
+        destination = pick_save_destination(suggested_name=suggested_name, default_dir=default_dir,
+                                            prompt=f"Export {base_name} as DXF")
+        if destination.get("cancelled"):
+            return {"ok": False, "cancelled": True}
+
+        def _export(out_path):
+            args = ["--repo-root", ctx["scanRepoRoot"], "--source-path", source_path, "--export", out_path]
+            return cadgen_bridge.run_cadgen("cadgen.dxf_artifact", args, ctx["scanRepoRoot"])
+
+        if destination.get("path"):
+            result = _export(os.path.abspath(destination["path"]))
+            if not result.get("ok"):
+                return {"ok": False, "error": str(result.get("error") or "DXF export failed")}
+            out_path = os.path.abspath(result.get("path") or destination["path"])
+            inside = out_path == resolved_root["rootPath"] or scanner.path_is_inside(out_path, resolved_root["rootPath"])
+            return {"ok": True, "path": out_path, "filename": result.get("filename") or os.path.basename(out_path),
+                    "format": "dxf", "catalogChanged": inside}
+
+        # Headless fallback: write beside the generator, hand to the browser via /__cad/download.
+        output_path = os.path.join(os.path.dirname(source_path), suggested_name)
+        if not (output_path == resolved_root["rootPath"] or scanner.path_is_inside(output_path, resolved_root["rootPath"])):
+            raise ValueError("Requested file is outside the active CAD Viewer root")
+        result = _export(output_path)
+        if not result.get("ok"):
+            return {"ok": False, "error": str(result.get("error") or "DXF export failed")}
+        output_file_ref = _to_posix(os.path.relpath(output_path, resolved_root["rootPath"]))
+        return {"ok": True, "fallback": True, "path": output_path, "filename": os.path.basename(output_path),
+                "format": "dxf", "catalogChanged": True, "outputFileRef": output_file_ref}
 
     def file_path_from_ref(self, file_ref: str, resolved_root: dict) -> str:
         normalized = normalized_file_ref(file_ref)
