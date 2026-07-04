@@ -22,8 +22,8 @@ from typing import Any, Sequence
 
 from build123d import Compound, Location
 
-from cadpy.assembly import AssemblyHelper
-from cadpy.step_scene import import_step
+from cadgen.assembly import AssemblyHelper
+from cadgen.step_scene import import_step
 
 
 def location_from_transform(transform: Sequence[float]) -> Location:
@@ -122,7 +122,7 @@ def compound_from_instances(
 
     ``assembly_mates`` (semantic joint metadata, the same dicts the legacy envelope
     carried) are attached directly to the returned compound via ``.assembly_mates``.
-    The STEP export collector (``cadpy.step_export._collect_assembly_mates``) reads
+    The STEP export collector (``cadgen.step_export._collect_assembly_mates``) reads
     that attribute off the root compound and normalizes the ids, so the mates reach
     the scene/manifest exactly as the deprecated ``assembly_mates`` envelope field
     used to — no separate envelope channel required.
@@ -148,7 +148,7 @@ def compound_from_instances(
             _occurrence_subtree(part, location, f"o1.{index}", str(inst["name"]))
         )
     compound = Compound(occt_compound, label=name)
-    # Occurrence-metadata tree consumed by cadpy.component_package.build_package_from_compound;
+    # Occurrence-metadata tree consumed by cadgen.component_package.build_package_from_compound;
     # absent on plain build123d shapes, which fall back to walking the compound's children.
     compound._occurrence_tree = {"id": "o1", "name": name, "children": occurrence_children}
     if assembly_mates:

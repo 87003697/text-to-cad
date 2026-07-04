@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from cadpy.step_scene import import_step
+from cadgen.step_scene import import_step
 
 
 def gen_step():

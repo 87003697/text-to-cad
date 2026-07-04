@@ -4,13 +4,13 @@ Read this file when geometry has mating interfaces, repeated features, assembly 
 
 ## Core rule
 
-Positioning is authored in source and validated after generation. Do not position parts by visually dragging or by editing exported STEP geometry. Use build123d parameters, local coordinate systems, `Location` transforms, `Plane`/`Axis` datums, `cadpy.assembly.AssemblyHelper` relationships, source-level `Joint` objects when useful, and labeled assembly children.
+Positioning is authored in source and validated after generation. Do not position parts by visually dragging or by editing exported STEP geometry. Use build123d parameters, local coordinate systems, `Location` transforms, `Plane`/`Axis` datums, `cadgen.assembly.AssemblyHelper` relationships, source-level `Joint` objects when useful, and labeled assembly children.
 
 ## Terminology
 
 Use these terms carefully:
 
-- **AssemblyHelper** is the preferred generated-script wrapper from `cadpy.assembly`. It records semantic relationships such as `face_to_face`, `coaxial`, `revolute`, and `linear`, then realizes them with native build123d joints.
+- **AssemblyHelper** is the preferred generated-script wrapper from `cadgen.assembly`. It records semantic relationships such as `face_to_face`, `coaxial`, `revolute`, and `linear`, then realizes them with native build123d joints.
 - **build123d joints** are source-level objects such as `RigidJoint`, `RevoluteJoint`, `LinearJoint`, `CylindricalJoint`, and `BallJoint`. They are attached to `Solid` or `Compound` objects and can reposition parts with `connect_to()`.
 - **CLI `inspect align`** is a selector-pair validation tool. It computes a read-only translation delta between selected local refs in a STEP/CAD entry. It does not edit source code, patch exported STEP files, or represent an authored mate feature. This is the one place that distinction is defined; the rest of the skill assumes it.
 - **Mating intent** is the design relationship: flush, centered, coaxial, offset, hinge-like, slider-like, or otherwise datum-driven.
@@ -80,7 +80,7 @@ Use `AssemblyHelper` for generated assembly scripts. It keeps the LLM-facing cod
 
 ```python
 from build123d import *
-from cadpy.assembly import AssemblyHelper
+from cadgen.assembly import AssemblyHelper
 
 base_height = 30.0
 lid_thickness = 3.0
@@ -127,15 +127,15 @@ Use the frame method that matches native build123d joint inputs: `rigid_frame()`
 When a generated assembly's `gen_step()` builds on a child part, that child is a **dependency** of the parent generator. Wire it in by the child's kind (see "Generated vs imported STEP" in `step-generation.md`):
 
 - **Generated child** (its source is a `gen_step()` script): path-load the child `.step.py` and call its `gen_step()` — or the underlying build function it returns — inside the parent's `gen_step`, composing from the live generator. You cannot `import` the child by name; load it by path (see "Entry generators are named `<name>.step.py`" in `step-generation.md` for the snippet). Do NOT route a generated child through an exported STEP; keep the dependency at the source level so a child edit flows into the parent on the next rebuild and there are no committed `.step` bytes to keep in sync.
-- **Imported child** (the STEP is its own source — purchased, downloaded, or otherwise not generated here): import it through the cached `cadpy.step_scene.import_step` util (see "Imported components" below).
+- **Imported child** (the STEP is its own source — purchased, downloaded, or otherwise not generated here): import it through the cached `cadgen.step_scene.import_step` util (see "Imported components" below).
 - **Decoupling a generated child — only on explicit request:** if the user explicitly asks for a generated child NOT to be a direct dependency of the parent, export that child to a STEP file and then import it as an imported child via `import_step`. This is never the default — by default a generated child is composed directly from its `gen_step`.
 
 ## Imported components
 
-For purchased or downloaded parts (see `$step-parts`), import the STEP file and add it like any authored part. Always import STEP parts through `cadpy.step_scene.import_step`, not `build123d.import_step` — it is a drop-in that returns a topologically and chromatically identical shape but reuses an inline `__cadcache__` binary-BREP cache, so re-imports of the same part (an assembly with repeated fasteners or servos) and rebuilds skip re-parsing the text STEP:
+For purchased or downloaded parts (see `$step-parts`), import the STEP file and add it like any authored part. Always import STEP parts through `cadgen.step_scene.import_step`, not `build123d.import_step` — it is a drop-in that returns a topologically and chromatically identical shape but reuses an inline `__cadcache__` binary-BREP cache, so re-imports of the same part (an assembly with repeated fasteners or servos) and rebuilds skip re-parsing the text STEP:
 
 ```python
-from cadpy.step_scene import import_step
+from cadgen.step_scene import import_step
 
 servo = asm.add(import_step("models/parts/sg90_servo.step"), "servo")
 ```

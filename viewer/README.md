@@ -132,7 +132,7 @@ Important environment variables:
 - `VIEWER_MOVEIT2_WS_URL`: optional websocket URL for SRDF MoveIt2 controls.
 - `VIEWER_CAD_PYTHON`: optional Python executable for local STEP regeneration.
 - `VIEWER_CAD_PYTHONPATH` / `CAD_PYTHONPATH`: optional Python source path for
-  the `cadpy` package.
+  the `cadgen` package.
 - `VIEWER_SERVER_REGISTRY`: optional local server registry JSON path.
 - `VIEWER_GIT`: optional launcher-provided git identity, exposed as `git` by
   `/__cad/server` and used by `npm run agent:start` to avoid reusing viewers

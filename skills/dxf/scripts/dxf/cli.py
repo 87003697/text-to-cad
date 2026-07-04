@@ -5,7 +5,7 @@ from collections.abc import Sequence
 
 
 def generate_dxf_targets(*args, **kwargs):
-    from cadpy.generation import generate_dxf_targets as generate
+    from cadgen.generation import generate_dxf_targets as generate
 
     return generate(*args, **kwargs)
 

@@ -24,7 +24,7 @@ class IsolatedCadRoots:
         self.cad_root = self.root / "workspace"
         self.cad_root.mkdir(parents=True, exist_ok=True)
 
-        # cadpy resolves its discovery / identity / display roots from the live process working
+        # cadgen resolves its discovery / identity / display roots from the live process working
         # directory (the module-level REPO_ROOT/CAD_ROOT globals were removed), so isolate the
         # test by switching cwd into the temp workspace and restoring it on cleanup.
         previous_cwd = Path.cwd()

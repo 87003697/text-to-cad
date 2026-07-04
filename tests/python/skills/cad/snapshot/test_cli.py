@@ -19,7 +19,7 @@ def write_package(step_path, *, entry_kind="part", source_kind="step"):
     component-GLB PACKAGE directory inside the per-folder cache
     (``__cadcache__/models/<step-filename>/assembly.json``) whose content-addressed component
     GLBs live in the package's own ``components/<hash>.glb`` dir. Returns the package directory
-    path, mirroring ``cadpy.render.part_glb_path``."""
+    path, mirroring ``cadgen.render.part_glb_path``."""
     step_path = Path(step_path)
     pkg_dir = step_path.parent / "__cadcache__" / "models" / step_path.name
     comp_dir = pkg_dir / "components"
@@ -95,7 +95,7 @@ class SnapshotCliTests(unittest.TestCase):
         code = (
             "import sys; sys.path.insert(0, 'scripts'); import snapshot.__main__; "
             "print('OCP.OCP' in sys.modules); "
-            "print('cadpy.step_scene' in sys.modules)"
+            "print('cadgen.step_scene' in sys.modules)"
         )
         result = subprocess.run(
             [sys.executable, "-c", code],

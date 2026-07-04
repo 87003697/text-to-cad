@@ -24,7 +24,7 @@ from __future__ import annotations
 
 from build123d import Compound
 
-from cadpy.assembly import AssemblyHelper
+from cadgen.assembly import AssemblyHelper
 
 from lyra_parts import chain
 from lyra_parts.digits import (
