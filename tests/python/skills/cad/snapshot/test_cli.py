@@ -95,7 +95,7 @@ class SnapshotCliTests(unittest.TestCase):
         code = (
             "import sys; sys.path.insert(0, 'scripts'); import snapshot.__main__; "
             "print('OCP.OCP' in sys.modules); "
-            "print('cadgen.step_scene' in sys.modules)"
+            "print('cadgen._internal.step_scene' in sys.modules)"
         )
         result = subprocess.run(
             [sys.executable, "-c", code],

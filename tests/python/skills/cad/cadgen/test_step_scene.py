@@ -10,8 +10,8 @@ from OCP.TopAbs import TopAbs_FACE
 from OCP.TopExp import TopExp_Explorer
 from OCP.TopoDS import TopoDS
 
-from cadgen import step_scene
-from cadgen.step_scene import (
+from cadgen._internal import step_scene
+from cadgen._internal.step_scene import (
     LoadedStepScene,
     OccurrenceNode,
     SelectorOptions,
@@ -21,7 +21,7 @@ from cadgen.step_scene import (
     load_step_scene,
     scene_occurrence_shape,
 )
-from cadgen.glb_topology import STEP_TOPOLOGY_SCHEMA_VERSION
+from cadgen._internal.glb_topology import STEP_TOPOLOGY_SCHEMA_VERSION
 from cadgen.metadata import DEFAULT_MESH_ANGULAR_TOLERANCE, DEFAULT_MESH_TOLERANCE
 from tests.python.support.tmp_root import temporary_directory
 

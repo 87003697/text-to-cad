@@ -5,8 +5,8 @@ from contextlib import nullcontext
 from pathlib import Path
 from typing import Any
 
-from cadgen.step_scene import LoadedStepScene, load_step_scene_from_xcaf_doc, step_file_hash
-from cadgen.step_metadata import TEXT_TO_CAD_GENERATOR, inject_text_to_cad_step_metadata
+from cadgen._internal.step_scene import LoadedStepScene, load_step_scene_from_xcaf_doc, step_file_hash
+from cadgen._internal.step_metadata import TEXT_TO_CAD_GENERATOR, inject_text_to_cad_step_metadata
 
 
 def _collect_assembly_mates(shape: Any) -> list[dict[str, Any]]:

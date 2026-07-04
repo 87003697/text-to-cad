@@ -15,9 +15,9 @@ import build123d
 from OCP.TopAbs import TopAbs_FACE
 from OCP.TopExp import TopExp_Explorer
 
-from cadgen import source_hash as cad_source_hash
-from cadgen import step_scene
-from cadgen.step_scene import LoadedStepScene, OccurrenceNode
+from cadgen._internal import source_hash as cad_source_hash
+from cadgen._internal import step_scene
+from cadgen._internal.step_scene import LoadedStepScene, OccurrenceNode
 from tests.python.support.tmp_root import temporary_directory
 
 

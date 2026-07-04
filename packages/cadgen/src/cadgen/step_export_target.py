@@ -26,24 +26,24 @@ from pathlib import Path
 
 from cadgen.catalog import source_from_path
 from cadgen.cli_logging import CliLogger
-from cadgen.generation import (
+from cadgen._internal.generation import (
     EntrySpec,
     _entry_spec_from_source,
     _selector_options_for_part,
     run_script_generator,
 )
-from cadgen.glb import export_native_glb_from_scene
+from cadgen._internal.glb import export_native_glb_from_scene
 from cadgen.metadata import normalize_mesh_numeric
 from cadgen.step_artifact import _build_entry_spec, _cad_ref_for_step, _infer_entry_kind
 from cadgen.step_export import export_build123d_step_file
-from cadgen.step_scene import (
+from cadgen._internal.step_scene import (
     LoadedStepScene,
     load_step_scene,
     mesh_step_scene,
     scene_export_shape,
 )
-from cadgen.stl import export_part_stl_from_scene
-from cadgen.threemf import export_part_3mf_from_scene
+from cadgen._internal.stl import export_part_stl_from_scene
+from cadgen._internal.threemf import export_part_3mf_from_scene
 
 # Logical format name -> conventional file suffix (informational; the caller owns `--out`).
 FORMAT_SUFFIX = {"step": ".step", "stl": ".stl", "3mf": ".3mf", "glb": ".glb"}

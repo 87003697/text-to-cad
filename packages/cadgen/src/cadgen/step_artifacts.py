@@ -5,7 +5,7 @@ from pathlib import Path
 
 from cadgen.catalog import source_from_path
 from cadgen.cli_logging import CliLogger
-from cadgen.generation import (
+from cadgen._internal.generation import (
     EntrySpec,
     _entry_spec_from_source,
     _existing_topology_artifact_matches_spec_without_scene,
@@ -14,8 +14,8 @@ from cadgen.generation import (
 )
 from cadgen.metadata import DEFAULT_MESH_ANGULAR_TOLERANCE, DEFAULT_MESH_TOLERANCE
 from cadgen.render import part_glb_path
-from cadgen.step_metadata import read_text_to_cad_step_metadata
-from cadgen.step_scene import LoadedStepScene, load_step_scene
+from cadgen._internal.step_metadata import read_text_to_cad_step_metadata
+from cadgen._internal.step_scene import LoadedStepScene, load_step_scene
 from cadgen.step_targets import (
     REGENERATE_STEP_COMMAND,
     REGENERATE_STEP_PROMPT,
@@ -54,7 +54,7 @@ def ensure_step_topology_artifact(
     # directory, which carries no whole-assembly selector topology (faces/edges). inspect
     # needs that full manifest, so extract it on demand from the scene (the build-time
     # win is precisely that this 29.5s extraction is no longer in the build path).
-    from cadgen.component_package import is_assembly_package
+    from cadgen._internal.component_package import is_assembly_package
 
     if glb_path is None and is_assembly_package(resolved_glb_path):
         try:
@@ -176,7 +176,7 @@ def _assembly_topology_artifact(
     and return the bundle in memory — the build-time win is precisely that this ~29.5s
     extraction is no longer in the build path. TODO: cache to a ``topology.glb`` sidecar
     inside the package to avoid re-extraction on repeated selector queries."""
-    from cadgen.component_package import assembly_package_dir, read_package_descriptor
+    from cadgen._internal.component_package import assembly_package_dir, read_package_descriptor
 
     if not require_selector:
         descriptor = read_package_descriptor(assembly_package_dir(spec.step_path))
@@ -191,11 +191,11 @@ def _assembly_topology_artifact(
                 selector_bundle=None,
             )
 
-    from cadgen.generation import (
+    from cadgen._internal.generation import (
         _effective_step_spec_for_scene,
         _selector_options_for_part,
     )
-    from cadgen.step_scene import (
+    from cadgen._internal.step_scene import (
         SelectorProfile,
         extract_selectors_from_scene,
         mesh_step_scene,

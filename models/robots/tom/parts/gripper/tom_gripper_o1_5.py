@@ -30,7 +30,7 @@ if str(PACKAGE_SRC) not in sys.path:
 os.environ.setdefault("XDG_CACHE_HOME", str(REPO_ROOT / ".cache"))
 os.environ.setdefault("EZDXF_CACHE_HOME", str(REPO_ROOT / ".cache" / "ezdxf"))
 
-from cadgen.step_scene import _located_shape, load_step_scene, occurrence_selector_id
+from cadgen.step_scene import located_shape, load_step_scene, occurrence_selector_id
 
 
 SOURCE_STEP = Path(__file__).resolve().with_name("tom_gripper.step")
@@ -157,7 +157,7 @@ def _find_occurrence(scene: object, selector: str) -> object:
 def _occurrence_shape(scene: object, occurrence: object) -> build123d.Shape:
     if occurrence.prototype_key not in scene.prototype_shapes:
         raise RuntimeError(f"Occurrence {TARGET_OCCURRENCE} has no prototype shape")
-    shape = _cast_shape(_located_shape(scene.prototype_shapes[occurrence.prototype_key], occurrence.location))
+    shape = _cast_shape(located_shape(scene.prototype_shapes[occurrence.prototype_key], occurrence.location))
     shape.label = _safe_label(
         occurrence.source_name or occurrence.name,
         occurrence_selector_id(occurrence).replace(".", "_"),

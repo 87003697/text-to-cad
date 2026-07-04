@@ -3,10 +3,10 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 
-from cadgen.assembly_spec import find_step_path, resolve_cad_source_path
+from cadgen._internal.assembly_spec import find_step_path, resolve_cad_source_path
 from cadgen.cad_ref_syntax import normalize_cad_path, parse_cad_tokens
 from cadgen.catalog import find_source_by_cad_ref
-from cadgen.glb_topology import (
+from cadgen._internal.glb_topology import (
     STEP_EDGE_BARYCENTRIC_ATTRIBUTE,
     STEP_EDGE_CLASS_ATTRIBUTE,
     STEP_EDGE_VISIBILITY_CLASSES,
@@ -20,7 +20,7 @@ from cadgen.glb_topology import (
 )
 from cadgen.render import existing_part_glb_path, part_glb_path
 from cadgen.selector_types import SelectorBundle
-from cadgen.step_hash import step_file_hash
+from cadgen._internal.step_hash import step_file_hash
 
 
 STEP_SUFFIXES = (".step", ".stp")

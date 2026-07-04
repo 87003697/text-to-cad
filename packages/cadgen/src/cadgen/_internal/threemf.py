@@ -14,7 +14,7 @@ from OCP.TopLoc import TopLoc_Location
 from OCP.TopoDS import TopoDS
 
 from cadgen.render import part_3mf_path
-from cadgen.step_scene import ColorRGBA, LoadedStepScene, OccurrenceNode, _shape_hash, occurrence_selector_id
+from cadgen._internal.step_scene import ColorRGBA, LoadedStepScene, OccurrenceNode, _shape_hash, occurrence_selector_id
 
 
 CORE_NS = "http://schemas.microsoft.com/3dmanufacturing/core/2015/02"

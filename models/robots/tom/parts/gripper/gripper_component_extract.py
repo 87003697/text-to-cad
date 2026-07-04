@@ -23,7 +23,7 @@ from cadgen_common.package_path import ensure_cadgen_package_path
 
 ensure_cadgen_package_path()
 
-from cadgen.step_scene import _located_shape, load_step_scene, occurrence_selector_id
+from cadgen.step_scene import located_shape, load_step_scene, occurrence_selector_id
 
 
 SOURCE_STEP = Path(__file__).resolve().with_name("tom_gripper.step")
@@ -87,7 +87,7 @@ def _compound_from_leaves(
     for leaf in leaves:
         if leaf.prototype_key not in scene.prototype_shapes:
             raise RuntimeError(f"Leaf {occurrence_selector_id(leaf)} has no prototype shape")
-        child = _cast_shape(_located_shape(scene.prototype_shapes[leaf.prototype_key], leaf.location))
+        child = _cast_shape(located_shape(scene.prototype_shapes[leaf.prototype_key], leaf.location))
         child.label = _safe_label(
             leaf.source_name or leaf.name,
             occurrence_selector_id(leaf).replace(".", "_"),
