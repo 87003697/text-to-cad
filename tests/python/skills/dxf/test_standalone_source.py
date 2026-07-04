@@ -98,28 +98,25 @@ class StandaloneDxfSourceTests(unittest.TestCase):
             self.assertTrue(output_path.exists())
             self.assertGreater(output_path.stat().st_size, 0)
 
-    def test_rebuild_removes_stale_sibling_export(self) -> None:
-        # A sibling <name>.dxf is an explicit export; once the source changes and the
-        # drawing rebuilds, the unrequested sibling no longer matches the geometry and
-        # is removed (mirror of gen_step's no-sibling default). A current package
-        # leaves a still-accurate export alone.
+    def test_rebuild_leaves_sibling_export_untouched(self) -> None:
+        # An exported <name>.dxf is a point-in-time deliverable, totally detached from
+        # its generator: rebuilds never delete, rewrite, or staleness-track it. Only an
+        # explicit re-export refreshes it.
         with temporary_directory(prefix="dxf-skill") as root:
             script_path = _write_standalone_source(Path(root))
             sibling = script_path.with_suffix(".dxf")
 
             cad_generation.generate_dxf_targets([str(script_path)], write_dxf=True)
             self.assertTrue(sibling.exists())
+            exported_bytes = sibling.read_bytes()
 
-            # Unchanged source -> skip fast path -> export left in place.
-            cad_generation.generate_dxf_targets([str(script_path)])
-            self.assertTrue(sibling.exists())
-
-            # Source edit -> rebuild -> stale export removed.
+            # Source edit -> rebuild -> export untouched, byte for byte.
             script_path.write_text(
                 script_path.read_text(encoding="utf-8") + "\n# changed\n", encoding="utf-8"
             )
             cad_generation.generate_dxf_targets([str(script_path)])
-            self.assertFalse(sibling.exists())
+            self.assertTrue(sibling.exists())
+            self.assertEqual(exported_bytes, sibling.read_bytes())
 
     def test_generate_dxf_targets_writes_snapshot_on_demand(self) -> None:
         with temporary_directory(prefix="dxf-skill") as root:
