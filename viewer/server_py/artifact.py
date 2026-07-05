@@ -36,6 +36,8 @@ BUILDABLE_STEP_ARTIFACT_CODES = frozenset([
     "missing_surface_edge_attributes", "missing_selector_topology",
     "missing_source_path", "missing_step_hash", "stale_step_artifact",
     "unsupported_step_topology",
+    # Generated-DXF drawing package codes (same buildable semantics).
+    "missing_dxf_artifact", "stale_dxf_artifact", "unsupported_dxf_artifact",
 ])
 
 # Owns imported `.step`/`.stp` and generated `.step.py`/`.stp.py` entries.
@@ -44,8 +46,18 @@ _GENERATION_LOCK_SUFFIX = ".generation.lock.json"
 _LOCK_ACTIVE_MAX_AGE_MS = 30_000
 
 
-def owns_entry(entry) -> bool:
+def owns_step_entry(entry) -> bool:
     return bool(entry) and bool(_STEP_ENTRY_RE.search(str(entry.get("file") or "")))
+
+
+def owns_dxf_entry(entry) -> bool:
+    # Generated `.dxf.py` drawings only; a raw imported `.dxf` renders directly
+    # from disk and never needs a build.
+    return bool(entry) and scanner.is_dxf_generator_path(str(entry.get("file") or ""))
+
+
+def owns_entry(entry) -> bool:
+    return owns_step_entry(entry) or owns_dxf_entry(entry)
 
 
 # --- pure freshness validation (imported .step component-GLB package) ---
@@ -110,6 +122,45 @@ def validate_step_freshness(repo_root, source_path):
     if not scanner._file_stats(glb_path):
         return (False, "missing_glb")
     return (False, "missing_step_topology")
+
+
+# --- pure freshness validation (generated .dxf.py drawing package) ---
+def validate_dxf_freshness(repo_root, source_path):
+    """ok=True (fresh/ready) or (False, code). source_path is the `.dxf.py`
+    generator; the package dir is entry-keyed exactly like the STEP package.
+    Mirrors the generated branch of _validate_assembly_package_artifact: the
+    descriptor is a pure JSON read and staleness is the source-closure mtime
+    trigger against the descriptor mtime — no cadgen import."""
+    del repo_root
+    package_dir = scanner.inline_step_glb_artifact_path_for_source(source_path)
+    if not os.path.isdir(package_dir):
+        return (False, "missing_dxf_artifact")
+    descriptor_path = os.path.join(package_dir, scanner.DRAWING_DESCRIPTOR_NAME)
+    try:
+        with open(descriptor_path, "r", encoding="utf-8") as handle:
+            descriptor = json.load(handle)
+    except (OSError, ValueError):
+        return (False, "missing_dxf_artifact")
+    if not isinstance(descriptor, dict) or descriptor.get("kind") != scanner.DRAWING_PACKAGE_KIND:
+        return (False, "unsupported_dxf_artifact")
+    dxf_ref = str(descriptor.get("dxf") or "").strip()
+    dxf_path = os.path.join(package_dir, dxf_ref) if dxf_ref else ""
+    if not dxf_path or not os.path.isfile(dxf_path):
+        return (False, "missing_dxf_artifact")
+    if not os.path.isfile(source_path):
+        return (False, "missing_source_path")
+    desc_stats = scanner._file_stats(descriptor_path)
+    closure = descriptor.get("sourceClosureFiles") if isinstance(descriptor.get("sourceClosureFiles"), list) else []
+    model_folder = os.path.dirname(os.path.abspath(source_path))
+    closure_paths = [os.path.join(model_folder, str(rel or "")) for rel in closure]
+    if not closure_paths:
+        closure_paths = [os.path.abspath(source_path)]
+    if desc_stats:
+        for path in closure_paths:
+            st = scanner._file_stats(path)
+            if st is None or st.st_mtime_ns > desc_stats.st_mtime_ns:
+                return (False, "stale_dxf_artifact")
+    return (True, None)
 
 
 # --- generation lock reader (mirror of generationLock.mjs) ---

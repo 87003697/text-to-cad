@@ -150,6 +150,9 @@ function readGeometryRecords(dxfData) {
       bendLines.push([start, end]);
       continue;
     }
+    if (kind && kind !== "cut") {
+      continue;
+    }
     if (pointsEqual(start, end)) {
       continue;
     }
@@ -173,6 +176,9 @@ function readGeometryRecords(dxfData) {
       bendLines.push([points[0], points[points.length - 1]]);
       continue;
     }
+    if (kind && kind !== "cut") {
+      continue;
+    }
     cutPrimitives.push({ points });
   }
 
@@ -183,7 +189,7 @@ function readGeometryRecords(dxfData) {
       continue;
     }
     const kind = String(record?.kind || "").trim().toLowerCase();
-    if (kind === "bend") {
+    if (kind && kind !== "cut") {
       continue;
     }
     cutCircleLoops.push(sampleCirclePoints(center, radius));

@@ -32,9 +32,10 @@ from ezdxf.units import MM as DXF_UNIT_MM
 if str(TOM_DIR) not in sys.path:
     sys.path.insert(0, str(TOM_DIR))
 
+from robot_common.booleans import intersection_volume
 from robot_common.materials import GRAY_ALUMINUM_COLOR
 from robot_common.step_import import import_as_shape
-import dxf_topology
+from cadgen import flatten as dxf_topology
 
 
 CAD_DIR = Path(__file__).resolve().parent
@@ -1531,9 +1532,9 @@ def build_step(
     if len(solids) != 1:
         raise RuntimeError(f"Expected one connected bracket solid, found {len(solids)}")
 
-    intersection_volume = servo_shape.intersect(bracket).volume
-    if intersection_volume > 1e-3:
-        raise RuntimeError(f"Bracket intersects the servo by {intersection_volume:.6f} mm^3")
+    intersection_volume_mm3 = intersection_volume(servo_shape, bracket)
+    if intersection_volume_mm3 > 1e-3:
+        raise RuntimeError(f"Bracket intersects the servo by {intersection_volume_mm3:.6f} mm^3")
 
     bracket.label = PART_NAME
     bracket.color = GRAY_ALUMINUM_COLOR
@@ -1628,7 +1629,7 @@ def build_step(
             for profile in _front_horn_mount_hole_profiles(layout)
         )
     )
-    print(f"Servo/bracket interference volume (mm^3): {intersection_volume:.6f}")
+    print(f"Servo/bracket interference volume (mm^3): {intersection_volume_mm3:.6f}")
     return bracket
 
 
@@ -1704,16 +1705,5 @@ def gen_step() -> dict[str, object]:
     }
 
 
-def gen_dxf() -> dict[str, object]:
-    return {
-        "document": build_dxf(),
-    }
-
-
-def gen() -> None:
-    gen_step()
-    gen_dxf()
-
-
 if __name__ == "__main__":
-    gen()
+    gen_step()

@@ -1411,10 +1411,14 @@ export default function CadWorkspace({
   // Unified render-artifact status for the selected entry: ready (render) | generating (loading) |
   // error (fatal). A missing/stale cache is not an issue — it just triggers a (re)build. Replaces
   // the per-entry step-source-status fetch, the mesh-stripping merge, and the build effect.
+  // STEP entries and generated DXF drawings (`.dxf.py`, sourceKind "python") are artifact-managed;
+  // a raw imported `.dxf` renders directly from disk and never hits the artifact route.
   const selectedArtifact = useArtifact(
     catalogSelectedEntry ? fileKey(catalogSelectedEntry) : "",
     {
-      enabled: catalogSelectedEntrySourceFormat === RENDER_FORMAT.STEP,
+      enabled: catalogSelectedEntrySourceFormat === RENDER_FORMAT.STEP ||
+        (catalogSelectedEntrySourceFormat === RENDER_FORMAT.DXF &&
+          catalogSelectedEntry?.sourceKind === "python"),
       freshnessKey: `${catalogSelectedEntry?.hash || ""}:${manifestRevision}`,
     }
   );

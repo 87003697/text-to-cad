@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import sys
 from collections.abc import Sequence
 from dataclasses import dataclass
 from fnmatch import fnmatch
@@ -35,7 +36,8 @@ IGNORED_DISCOVERY_DIR_NAMES = {
     "site-packages",
     "venv",
 }
-GENERATOR_NAME_MARKERS = (b"gen_step",)
+GENERATOR_NAME_MARKERS = (b"gen_step", b"gen_dxf")
+DXF_GENERATOR_SUFFIX = ".dxf.py"
 
 
 class CadSourceError(ValueError):
@@ -92,7 +94,9 @@ class CadSource:
 
     @property
     def glb_path(self) -> Path | None:
-        return explorer_artifact_path_for_step_path(self.entry_path, ".glb") if self.entry_path is not None else None
+        if self.kind == "dxf" or self.entry_path is None:
+            return None
+        return explorer_artifact_path_for_step_path(self.entry_path, ".glb")
 
     @property
     def generated_paths(self) -> tuple[Path, ...]:
@@ -240,6 +244,19 @@ def cad_ref_from_step_path(path: Path) -> str:
     raise CadSourceError(f"{_display_path(path)} is not a CAD STEP source")
 
 
+def cad_ref_from_dxf_path(path: Path) -> str:
+    # DXF refs KEEP the `.dxf` suffix so a `<name>.dxf.py` drawing and a `<name>.step.py`
+    # model in the same folder never collide on cad_ref.
+    resolved = path.resolve()
+    try:
+        relative = resolved.relative_to(Path.cwd().resolve())
+    except ValueError:
+        relative = PurePosixPath(resolved.as_posix())
+    if relative.suffix.lower() != ".dxf":
+        raise CadSourceError(f"{_display_path(path)} is not a CAD DXF output path")
+    return relative.as_posix()
+
+
 def normalize_source_ref(raw_ref: str) -> str | None:
     normalized = str(raw_ref or "").replace("\\", "/").strip().strip("/")
     if not normalized:
@@ -274,14 +291,27 @@ def explorer_directory_for_step_path(step_path: Path) -> Path:
     return (base.parent / f".{base.name}").resolve()
 
 
+def cache_package_path_for_entry_path(entry_path: Path) -> Path:
+    # Every render-artifact package lives INSIDE the per-folder __cadcache__, keyed by the
+    # ENTRY filename (the on-disk file the viewer lists: `<name>.step`, `<name>.step.py`,
+    # `<name>.dxf.py`, ...), so distinct entry files always get distinct packages.
+    base = entry_path.resolve()
+    return (base.parent / "__cadcache__" / "models" / base.name).resolve()
+
+
 def hidden_glb_path_for_step_path(step_path: Path) -> Path:
     # The render artifact is a self-contained component-GLB package directory (assembly.json
     # descriptor + a components/ dir of content-addressed GLBs). It lives INSIDE the
     # per-folder __cadcache__, keyed by the STEP filename, so model folders hold only source
     # — there is no .{model}.step.glb in the model tree. Components live in the package itself
     # at <key>/components/<hash>.glb (so the descriptor references components/...).
-    base = step_path.resolve()
-    return (base.parent / "__cadcache__" / "models" / base.name).resolve()
+    return cache_package_path_for_entry_path(step_path)
+
+
+def drawing_package_path_for_source(script_path: Path) -> Path:
+    # The DXF render artifact is a drawing-package directory (drawing.json descriptor +
+    # drawing.dxf), keyed by the `.dxf.py` generator filename.
+    return cache_package_path_for_entry_path(script_path)
 
 
 def legacy_explorer_artifact_path_for_step_path(step_path: Path, suffix: str) -> Path:
@@ -303,7 +333,15 @@ def _iter_python_sources(root: Path) -> tuple[CadSource, ...]:
     for script_path in _iter_paths(root, "*.py"):
         if not _looks_like_generator_script(script_path):
             continue
-        source = _read_python_source(script_path)
+        try:
+            source = _read_python_source(script_path)
+        except CadSourceError as exc:
+            # Directory discovery is resilient: one invalid generator (e.g. an
+            # unmigrated gen_dxf() beside gen_step()) must not abort catalog-wide
+            # operations on unrelated targets. Explicitly targeting the file
+            # (source_from_path) still raises the pointed error.
+            print(f"[cadgen] skipping invalid CAD source: {exc}", file=sys.stderr)
+            continue
         if source is not None:
             sources.append(source)
     return tuple(sources)
@@ -313,20 +351,48 @@ def _generator_part_stem(script_path: Path) -> str:
     """The part name a generator script produces, independent of the source extension.
 
     A ``<name>.step.py`` entry generator and the legacy ``<name>.py`` both produce the logical
-    STEP ``<name>.step`` (and a ``<name>.dxf`` sibling), so the derived
-    artifact paths key off ``<name>`` either way — ``.with_suffix('.step')`` would wrongly yield
-    ``<name>.step.step`` for a ``.step.py`` source.
+    STEP ``<name>.step``; a ``<name>.dxf.py`` drawing generator produces the logical
+    ``<name>.dxf``. The derived artifact paths key off ``<name>`` either way —
+    ``.with_suffix('.step')`` would wrongly yield ``<name>.step.step`` for a ``.step.py``
+    source (and likewise for ``.dxf.py``).
     """
     name = script_path.name
     if name.endswith(".step.py"):
         return name[: -len(".step.py")]
+    if name.endswith(DXF_GENERATOR_SUFFIX):
+        return name[: -len(DXF_GENERATOR_SUFFIX)]
     if name.endswith(".py"):
         return name[: -len(".py")]
     return script_path.stem
 
 
+def is_dxf_generator_path(script_path: Path | str) -> bool:
+    return str(script_path).lower().endswith(DXF_GENERATOR_SUFFIX)
+
+
 def _generator_sibling(script_path: Path, suffix: str) -> Path:
     return script_path.with_name(_generator_part_stem(script_path) + suffix)
+
+
+def _dxf_generator_source(resolved_script_path: Path, metadata: GeneratorMetadata) -> CadSource:
+    dxf_path = _generator_sibling(resolved_script_path, ".dxf")
+    return CadSource(
+        source_ref=source_ref_from_path(resolved_script_path),
+        cad_ref=cad_ref_from_dxf_path(dxf_path),
+        kind="dxf",
+        source_path=resolved_script_path,
+        source="generated",
+        origin_path=resolved_script_path,
+        script_path=resolved_script_path,
+        generator_metadata=metadata,
+        step_path=None,
+        stl_path=None,
+        three_mf_path=None,
+        native_glb_path=None,
+        dxf_path=dxf_path,
+        mesh_tolerance=None,
+        mesh_angular_tolerance=None,
+    )
 
 
 def _read_python_source(script_path: Path, *, allow_dxf_only: bool = False) -> CadSource | None:
@@ -334,34 +400,36 @@ def _read_python_source(script_path: Path, *, allow_dxf_only: bool = False) -> C
     metadata = parse_generator_metadata(resolved_script_path)
     if metadata is None:
         return None
+    if is_dxf_generator_path(resolved_script_path):
+        # `<name>.dxf.py` is a first-class drawing entry (mirror of `<name>.step.py`).
+        if metadata.has_gen_step:
+            raise CadSourceError(
+                f"{_display_path(resolved_script_path)} is a .dxf.py drawing generator and must "
+                "not define gen_step(); keep gen_step() in a .step.py entry"
+            )
+        if not metadata.has_gen_dxf:
+            raise CadSourceError(
+                f"{_display_path(resolved_script_path)} is a .dxf.py drawing generator and must "
+                "define gen_dxf()"
+            )
+        return _dxf_generator_source(resolved_script_path, metadata)
+    if metadata.has_gen_step and metadata.has_gen_dxf:
+        raise CadSourceError(
+            f"{_display_path(resolved_script_path)} defines both gen_step() and gen_dxf(); "
+            "move gen_dxf() into a dedicated <name>.dxf.py drawing generator"
+        )
     if not metadata.has_gen_step:
-        # Standalone DXF drafting source: valid as an explicit gen_dxf target,
-        # but it has no STEP entry, so directory catalogs skip it.
+        # Plain `<name>.py` defining only gen_dxf(): the CLI stays naming-agnostic, so it is
+        # still valid as an EXPLICIT gen_dxf target, but only `.dxf.py` sources are catalog
+        # entries — directory catalogs skip it.
         if not allow_dxf_only:
             return None
-        return CadSource(
-            source_ref=source_ref_from_path(resolved_script_path),
-            cad_ref="",
-            kind="dxf",
-            source_path=resolved_script_path,
-            source="generated",
-            origin_path=resolved_script_path,
-            script_path=resolved_script_path,
-            generator_metadata=metadata,
-            step_path=None,
-            stl_path=None,
-            three_mf_path=None,
-            native_glb_path=None,
-            dxf_path=_generator_sibling(resolved_script_path, ".dxf"),
-            mesh_tolerance=None,
-            mesh_angular_tolerance=None,
-        )
+        return _dxf_generator_source(resolved_script_path, metadata)
     if metadata.kind not in {"part", "assembly"}:
         raise CadSourceError(
             f"{_display_path(resolved_script_path)} must define a part or assembly gen_step() entry"
         )
     step_path = _generator_sibling(resolved_script_path, ".step")
-    dxf_path = _generator_sibling(resolved_script_path, ".dxf") if metadata.has_gen_dxf else None
     return CadSource(
         source_ref=source_ref_from_path(resolved_script_path),
         cad_ref=cad_ref_from_step_path(step_path),
@@ -375,7 +443,7 @@ def _read_python_source(script_path: Path, *, allow_dxf_only: bool = False) -> C
         stl_path=None,
         three_mf_path=None,
         native_glb_path=None,
-        dxf_path=dxf_path,
+        dxf_path=None,
         mesh_tolerance=None,
         mesh_angular_tolerance=None,
     )

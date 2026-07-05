@@ -54,6 +54,11 @@ function normalizePoint(point) {
   return [toFiniteNumber(point[0]), toFiniteNumber(point[1])];
 }
 
+function isNonCutKind(kind) {
+  const normalized = String(kind || "").trim().toLowerCase();
+  return Boolean(normalized) && normalized !== "cut";
+}
+
 function pointsEqual(a, b, epsilon = GEOMETRY_EPSILON) {
   return Math.abs(a[0] - b[0]) <= epsilon && Math.abs(a[1] - b[1]) <= epsilon;
 }
@@ -203,7 +208,7 @@ function readGeometryRecords(dxfData) {
     const start = normalizePoint(line?.start);
     const end = normalizePoint(line?.end);
     rawBounds = expandBounds(rawBounds, boundsFromPoints([start, end]));
-    if (String(line?.kind || "").trim().toLowerCase() === "bend" || pointsEqual(start, end)) {
+    if (isNonCutKind(line?.kind) || pointsEqual(start, end)) {
       continue;
     }
     cutPrimitives.push({ points: [start, end] });
@@ -222,7 +227,7 @@ function readGeometryRecords(dxfData) {
       toFiniteNumber(arc?.startAngleDeg),
       toFiniteNumber(arc?.sweepAngleDeg)
     );
-    if (String(arc?.kind || "").trim().toLowerCase() === "bend") {
+    if (isNonCutKind(arc?.kind)) {
       continue;
     }
     cutPrimitives.push({ points });
@@ -240,7 +245,7 @@ function readGeometryRecords(dxfData) {
       maxX: center[0] + radius,
       maxY: center[1] + radius
     });
-    if (String(circle?.kind || "").trim().toLowerCase() === "bend") {
+    if (isNonCutKind(circle?.kind)) {
       continue;
     }
     cutCircleLoops.push(sampleCirclePoints(center, radius));
@@ -688,7 +693,7 @@ const DxfViewer = forwardRef(function DxfViewer({
           />
         ) : null}
         {Array.isArray(dxfData?.paths) ? dxfData.paths.map((path, index) => {
-          const isBendPath = path?.kind === "bend";
+          const isBendPath = isNonCutKind(path?.kind);
           return (
             <path
               key={`${path?.layer || "path"}:${index}`}
@@ -704,7 +709,7 @@ const DxfViewer = forwardRef(function DxfViewer({
           );
         }) : null}
         {Array.isArray(dxfData?.circles) ? dxfData.circles.map((circle, index) => {
-          const isBendCircle = circle?.kind === "bend";
+          const isBendCircle = isNonCutKind(circle?.kind);
           return (
             <circle
               key={`${circle?.layer || "circle"}:${index}`}

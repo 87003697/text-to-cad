@@ -37,12 +37,21 @@ VIEWER_SKIPPED_DIRECTORIES = frozenset(
     ]
 )
 PYTHON_GENERATOR_BY_KIND = {
-    "dxf": "gen_dxf", "step": "gen_step", "stp": "gen_step",
+    "step": "gen_step", "stp": "gen_step",
 }
 
 # --- stepSidecars.mjs ---
 CACHE_DIRNAME = "__cadcache__"
 CACHE_MODELS_DIRNAME = "models"
+
+# --- drawing package (generated DXF render artifact) ---
+DXF_GENERATOR_SUFFIX = ".dxf.py"
+DRAWING_DESCRIPTOR_NAME = "drawing.json"
+DRAWING_PACKAGE_KIND = "drawing-package"
+
+
+def is_dxf_generator_path(file_path: str) -> bool:
+    return str(file_path or "").lower().endswith(DXF_GENERATOR_SUFFIX)
 
 
 def is_inside_cad_cache(file_path: str) -> bool:
@@ -250,46 +259,16 @@ def _collect_cad_source_files(root_path: str, result: list) -> list:
         if lower_name.startswith(".") and (lower_name.endswith(".step.glb") or lower_name.endswith(".stp.glb")):
             continue
         extension = os.path.splitext(entry.name)[1].lower()
-        if lower_name.endswith(".step.py"):
-            # List generated models whether or not their render artifact has been
-            # built. An unbuilt one reports `needs-build` via /__cad/artifact and is
-            # built on demand when opened, so a fresh checkout shows ALL generated
-            # models (the __cadcache__ is gitignored), not only the pre-built ones.
+        if lower_name.endswith(".step.py") or lower_name.endswith(DXF_GENERATOR_SUFFIX):
+            # List generated models/drawings whether or not their render artifact has
+            # been built. An unbuilt one reports `needs-build` via /__cad/artifact and
+            # is built on demand when opened, so a fresh checkout shows ALL generated
+            # entries (the __cadcache__ is gitignored), not only the pre-built ones.
             result.append(entry_path)
             continue
         if extension in SOURCE_EXTENSIONS or path_is_implicit_cad_source(entry_path):
             result.append(entry_path)
     return result
-
-
-# --- generated-source status (python-generated dxf/step) ---
-def _read_dxf_textto_cad_metadata(file_path):
-    try:
-        with open(file_path, "r", encoding="utf-8") as handle:
-            lines = handle.read().splitlines()
-    except OSError:
-        return {}
-    metadata = {}
-    for index in range(len(lines) - 1):
-        if lines[index].strip() != "999":
-            continue
-        value = lines[index + 1].strip()
-        if not value.startswith("cadgen:"):
-            continue
-        key, sep, rest = value[len("cadgen:"):].partition("=")
-        key = key.strip()
-        if sep and re.fullmatch(r"[A-Za-z][A-Za-z0-9]*", key):
-            metadata[key] = rest.strip()
-    return metadata
-
-
-def _read_generated_file_metadata(file_path, kind):
-    normalized = str(kind or "").strip().lower()
-    if normalized == "dxf":
-        return _read_dxf_textto_cad_metadata(file_path)
-    # step/stp embedded metadata (readTextToCadStepMetadataFile) is a TODO.
-    # urdf/srdf/sdf are authored XML artifacts, not python-generated outputs.
-    return {}
 
 
 def _normalize_manifest_path(value):
@@ -356,44 +335,6 @@ def _generator_source_path_from_metadata(repo_root, manifest_path, generator_nam
     return {"sourcePath": "", "filePath": None}
 
 
-def _generated_source_status_for_file(repo_root, source_path, kind):
-    generator_name = PYTHON_GENERATOR_BY_KIND.get(str(kind or "").strip().lower(), "")
-    if not generator_name:
-        return None
-    metadata = _read_generated_file_metadata(source_path, str(kind or "").strip().lower())
-    metadata_source_path = str(metadata.get("sourcePath", "")).strip()
-    if not metadata_source_path:
-        return None
-    identity = _generator_source_path_from_metadata(repo_root, metadata_source_path, generator_name, os.path.dirname(source_path))
-    base_source = {
-        "file": identity["sourcePath"] or metadata_source_path,
-        "sourcePath": identity["sourcePath"] or metadata_source_path,
-    }
-    if metadata.get("sourceHash"):
-        base_source["sourceHash"] = str(metadata["sourceHash"])
-    if not identity["filePath"]:
-        return {
-            "sourceKind": "python",
-            "source": base_source,
-            "sourceStatus": {
-                "ok": False,
-                "status": "missing",
-                "stale": False,
-                "sourceKind": "python",
-                "sourcePath": metadata_source_path,
-                "message": "Python generator source is unavailable.",
-            },
-        }
-    return {
-        "sourceKind": "python",
-        "source": {
-            "file": identity["sourcePath"],
-            "sourcePath": identity["sourcePath"],
-            "sourceHash": str(metadata.get("sourceHash", "")),
-        },
-    }
-
-
 def _xml_root_name(file_path, expected_tag="robot"):
     try:
         for _event, element in ElementTree.iterparse(file_path, events=("start",)):
@@ -432,7 +373,6 @@ def create_single_asset_entry(repo_root, root_path, source_path, extension):
     kind = source_format_for_path(source_path, extension)
     asset = asset_for_path(repo_root, source_path)
     file = scan_relative_path(root_path, source_path)
-    generated = _generated_source_status_for_file(repo_root=repo_root, source_path=source_path, kind=kind)
     entry = {
         "file": file,
         "kind": kind,
@@ -440,12 +380,6 @@ def create_single_asset_entry(repo_root, root_path, source_path, extension):
         "hash": (asset or {}).get("hash") or "",
         "bytes": (asset or {}).get("bytes") or 0,
     }
-    if generated and generated.get("sourceKind") == "python":
-        entry["sourceKind"] = "python"
-    if generated and generated.get("source"):
-        entry["source"] = generated["source"]
-    if generated and generated.get("sourceStatus"):
-        entry["sourceStatus"] = generated["sourceStatus"]
     if kind == "srdf":
         paired_urdf = _paired_urdf_path_for_srdf(source_path, repo_root)
         if paired_urdf:
@@ -454,6 +388,54 @@ def create_single_asset_entry(repo_root, root_path, source_path, extension):
                 entry["relations"] = {
                     "urdf": {"file": scan_relative_path(root_path, paired_urdf), **urdf_asset}
                 }
+    return entry
+
+
+def read_drawing_catalog_metadata(package_dir):
+    """Read a generated-DXF drawing package descriptor (pure JSON; no cadgen import)."""
+    try:
+        with open(os.path.join(package_dir, DRAWING_DESCRIPTOR_NAME), "r", encoding="utf-8") as handle:
+            descriptor = json.load(handle)
+    except (OSError, ValueError):
+        return {}
+    if not isinstance(descriptor, dict) or descriptor.get("kind") != DRAWING_PACKAGE_KIND:
+        return {}
+    return descriptor
+
+
+def create_generated_dxf_entry(repo_root, root_path, source_path):
+    # A `<name>.dxf.py` drawing generator entry. The render asset is the cached
+    # drawing.dxf inside the entry-keyed __cadcache__ package; an unbuilt entry has
+    # no asset yet and reports `needs-build` via /__cad/artifact when opened.
+    package_dir = inline_step_glb_artifact_path_for_source(source_path)
+    descriptor = read_drawing_catalog_metadata(package_dir)
+    dxf_ref = str(descriptor.get("dxf") or "").strip()
+    dxf_path = os.path.join(package_dir, dxf_ref) if dxf_ref else ""
+    dxf_stats = _file_stats(dxf_path) if dxf_path else None
+    entry_ref = scan_relative_path(root_path, source_path)
+    if dxf_stats:
+        # The descriptor already carries the cached DXF's content hash (dxfHash);
+        # re-hashing the file on every catalog scan would put redundant disk I/O
+        # on the /__cad hot path.
+        version = f"{base36(dxf_stats.st_size)}-{base36(dxf_stats.st_mtime_ns)}"
+        url = f"{_asset_url_for_path(repo_root, dxf_path)}?v={encode_uri_component(version)}"
+        content_hash = str(descriptor.get("dxfHash") or "").strip() or _sha256_file(dxf_path)
+        entry_bytes = int(dxf_stats.st_size)
+    else:
+        url, content_hash, entry_bytes = "", "", 0
+    entry = {
+        "file": entry_ref,
+        "kind": "dxf",
+        "url": url,
+        "hash": content_hash,
+        "bytes": entry_bytes,
+        "sourceKind": "python",
+    }
+    source = {"file": entry_ref, "sourcePath": entry_ref}
+    source_hash = str(descriptor.get("sourceHash") or "").strip()
+    if source_hash:
+        source["sourceHash"] = source_hash
+    entry["source"] = source
     return entry
 
 
@@ -589,7 +571,9 @@ def scan_cad_directory(repo_root, root_dir=DEFAULT_VIEWER_ROOT_DIR, include_arti
     for source_path in source_files:
         logical = source_path_for_inline_step_glb_artifact(source_path) if is_inline_step_glb_artifact_path(source_path) else source_path
         extension = os.path.splitext(logical)[1].lower()
-        if extension in (".step", ".stp") or logical.lower().endswith(".step.py"):
+        if is_dxf_generator_path(logical):
+            entries.append(create_generated_dxf_entry(repo_root, root_path, logical))
+        elif extension in (".step", ".stp") or logical.lower().endswith(".step.py"):
             entries.append(create_step_entry(repo_root, root_path, logical, extension, include_artifact_status))
         else:
             entries.append(create_single_asset_entry(repo_root, root_path, source_path, extension))

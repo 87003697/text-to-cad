@@ -232,30 +232,58 @@ class LocalAssetBackend:
                 return entry
         return None
 
-    def resolve_step_source(self, file_ref, resolved_root):
+    def _source_candidates_for_file_ref(self, file_ref, resolved_root):
         normalized = normalized_file_ref(file_ref)
         if not normalized:
-            raise ValueError("Missing STEP file")
+            return "", []
         if os.path.isabs(normalized):
             candidates = [os.path.abspath(normalized), os.path.abspath(os.path.join(resolved_root["rootPath"], normalized.lstrip("/")))]
         else:
             candidates = [os.path.abspath(os.path.join(resolved_root["rootPath"], normalized))]
         seen = []
+        existing = []
         for c in candidates:
             if c in seen:
                 continue
             seen.append(c)
             inside = c == resolved_root["rootPath"] or scanner.path_is_inside(c, resolved_root["rootPath"])
             if inside and os.path.exists(c):
-                ext = os.path.splitext(c)[1].lower()
-                if ext == ".py":
-                    stem = os.path.basename(c)[: -len(".py")]
-                    step_base = stem if re.search(r"\.(step|stp)$", stem, re.IGNORECASE) else stem + ".step"
-                    return {"stepPath": os.path.join(os.path.dirname(c), step_base), "sourcePath": c, "skipStepWrite": True}
-                if ext not in (".step", ".stp"):
-                    raise ValueError("Only STEP/STP sources or same-stem Python generators can generate STEP topology artifacts")
-                return {"stepPath": c, "sourcePath": "", "skipStepWrite": False}
+                existing.append(c)
+        return normalized, existing
+
+    def resolve_step_source(self, file_ref, resolved_root):
+        normalized, candidates = self._source_candidates_for_file_ref(file_ref, resolved_root)
+        if not normalized:
+            raise ValueError("Missing STEP file")
+        for c in candidates:
+            ext = os.path.splitext(c)[1].lower()
+            if ext == ".py":
+                stem = os.path.basename(c)[: -len(".py")]
+                step_base = stem if re.search(r"\.(step|stp)$", stem, re.IGNORECASE) else stem + ".step"
+                return {"stepPath": os.path.join(os.path.dirname(c), step_base), "sourcePath": c, "skipStepWrite": True}
+            if ext not in (".step", ".stp"):
+                raise ValueError("Only STEP/STP sources or same-stem Python generators can generate STEP topology artifacts")
+            return {"stepPath": c, "sourcePath": "", "skipStepWrite": False}
         raise ValueError(f"STEP file not found: {normalized}")
+
+    def resolve_dxf_source(self, file_ref, resolved_root):
+        normalized, candidates = self._source_candidates_for_file_ref(file_ref, resolved_root)
+        if not normalized:
+            raise ValueError("Missing DXF generator file")
+        for c in candidates:
+            if not scanner.is_dxf_generator_path(c):
+                raise ValueError("Only .dxf.py drawing generators can generate DXF drawing artifacts")
+            return {"sourcePath": c}
+        raise ValueError(f"DXF generator not found: {normalized}")
+
+    def _resolve_artifact_source(self, entry, file_ref, resolved_root):
+        """The on-disk source file the entry's render package is keyed by: the
+        .dxf.py for a generated drawing, the .step.py for a generated model, the
+        .step for an imported one."""
+        if artifact_mod.owns_dxf_entry(entry):
+            return self.resolve_dxf_source(file_ref, resolved_root)["sourcePath"]
+        resolved = self.resolve_step_source(file_ref, resolved_root)
+        return resolved.get("sourcePath") or resolved["stepPath"]
 
     def artifact_status(self, file_ref, resolved_root, catalog):
         entry = self.catalog_entry_for_file_ref(catalog, file_ref)
@@ -264,17 +292,16 @@ class LocalAssetBackend:
             return {"state": artifact_mod.ARTIFACT_STATE_READY, "ref": ref}
         ctx = self._scan_context(resolved_root)
         try:
-            resolved = self.resolve_step_source(file_ref, resolved_root)
+            artifact_source = self._resolve_artifact_source(entry, file_ref, resolved_root)
         except ValueError as exc:
             return {"state": artifact_mod.ARTIFACT_STATE_ERROR, "error": str(exc)}
-        # The render package is keyed by the SOURCE path: the .step.py for a
-        # generated model, the .step for an imported one (sourcePath is "" for
-        # imported, so this falls back to stepPath).
-        artifact_source = resolved.get("sourcePath") or resolved["stepPath"]
         lock = artifact_mod.generation_lock_path(scanner.inline_step_glb_artifact_path_for_source(artifact_source))
         if artifact_mod.generation_lock_active(lock):
             return {"state": artifact_mod.ARTIFACT_STATE_GENERATING, "ref": ref}
-        ok, code = artifact_mod.validate_step_freshness(ctx["scanRepoRoot"], artifact_source)
+        if artifact_mod.owns_dxf_entry(entry):
+            ok, code = artifact_mod.validate_dxf_freshness(ctx["scanRepoRoot"], artifact_source)
+        else:
+            ok, code = artifact_mod.validate_step_freshness(ctx["scanRepoRoot"], artifact_source)
         if ok:
             return {"state": artifact_mod.ARTIFACT_STATE_READY, "ref": ref}
         if code in artifact_mod.BUILDABLE_STEP_ARTIFACT_CODES:
@@ -301,54 +328,91 @@ class LocalAssetBackend:
         if not has_step and not has_generator:
             raise ValueError("CAD Viewer regenerates GLB artifacts only for existing STEP/STP files or their same-stem Python generators.")
         ctx = self._scan_context(resolved_root)
-        args = ["--repo-root", ctx["scanRepoRoot"], "--step", step_path]
+        args = ["--step", step_path]
         if has_generator:
             # Generated models keep no .step on disk — run the generator in-process and
             # write only the render package (the logical --step path never exists).
             args += ["--source-path", generator, "--skip-step-write"]
+        result = self._run_artifact_build(
+            "cadgen.step_artifact", args, ctx,
+            force=force, package_key="glbPath", descriptor_name="assembly.json",
+            error_label="STEP render artifact build failed",
+        )
+        return {**result, "stepPath": step_path}
+
+    # POST /__cad/artifact build for a generated `.dxf.py` drawing — subprocess
+    # cadgen.dxf_artifact (parity with the STEP build; the generator runs out of the
+    # server process).
+    def generate_dxf_artifact(self, file_ref, force, resolved_root, catalog):
+        resolved = self.resolve_dxf_source(file_ref, resolved_root)
+        source_path = resolved["sourcePath"]
+        ctx = self._scan_context(resolved_root)
+        result = self._run_artifact_build(
+            "cadgen.dxf_artifact", ["--source-path", source_path], ctx,
+            force=force, package_key="packagePath", descriptor_name=scanner.DRAWING_DESCRIPTOR_NAME,
+            error_label="DXF render artifact build failed",
+        )
+        return {**result, "sourcePath": source_path}
+
+    # Shared build tail for both artifact formats: run the cadgen module in a
+    # subprocess/worker, then bump the package descriptor's mtime so a no-op rebuild
+    # clears the source-mtime staleness trigger.
+    def _run_artifact_build(self, module, args, ctx, *, force, package_key, descriptor_name, error_label):
+        full_args = ["--repo-root", ctx["scanRepoRoot"], *args]
         if force:
-            args += ["--force"]
+            full_args += ["--force"]
         if os.environ.get("VIEWER_STEP_ARTIFACT_VERBOSE") == "1":
-            args += ["--verbose"]
-        result = cadgen_bridge.run_cadgen("cadgen.step_artifact", args, ctx["scanRepoRoot"])
-        if result.get("ok") and result.get("glbPath"):
-            glb = result["glbPath"]
-            glb_abs = glb if os.path.isabs(glb) else os.path.join(ctx["scanRepoRoot"], glb)
-            descriptor = os.path.join(glb_abs, "assembly.json")
+            full_args += ["--verbose"]
+        result = cadgen_bridge.run_cadgen(module, full_args, ctx["scanRepoRoot"])
+        if result.get("ok") and result.get(package_key):
+            package = result[package_key]
+            package_abs = package if os.path.isabs(package) else os.path.join(ctx["scanRepoRoot"], package)
+            descriptor = os.path.join(package_abs, descriptor_name)
             try:
                 if os.path.isfile(descriptor):
                     os.utime(descriptor, None)
             except OSError:
                 pass
-        error = "" if result.get("ok") else str(result.get("error") or "STEP render artifact build failed")
-        return {"ok": bool(result.get("ok")), "error": error, "result": result, "stepPath": step_path}
+        error = "" if result.get("ok") else str(result.get("error") or error_label)
+        return {"ok": bool(result.get("ok")), "error": error, "result": result}
 
     def resolve_artifact(self, file_ref, force, resolved_root, catalog):
         entry = self.catalog_entry_for_file_ref(catalog, file_ref)
         ref = str((entry or {}).get("url") or "")
         if not artifact_mod.owns_entry(entry):
             return {"ok": True, "state": artifact_mod.ARTIFACT_STATE_READY, "ref": ref}
+        is_dxf = artifact_mod.owns_dxf_entry(entry)
         try:
-            resolved = self.resolve_step_source(file_ref, resolved_root)
+            artifact_source = self._resolve_artifact_source(entry, file_ref, resolved_root)
         except ValueError as exc:
             return {"ok": False, "state": artifact_mod.ARTIFACT_STATE_ERROR, "error": str(exc)}
-        artifact_source = resolved.get("sourcePath") or resolved["stepPath"]
         lock = artifact_mod.generation_lock_path(scanner.inline_step_glb_artifact_path_for_source(artifact_source))
         if not force and artifact_mod.generation_lock_active(lock):
             artifact_mod.await_generation_lock(lock)
             ctx = self._scan_context(resolved_root)
-            ok, _code = artifact_mod.validate_step_freshness(ctx["scanRepoRoot"], artifact_source)
+            if is_dxf:
+                ok, _code = artifact_mod.validate_dxf_freshness(ctx["scanRepoRoot"], artifact_source)
+            else:
+                ok, _code = artifact_mod.validate_step_freshness(ctx["scanRepoRoot"], artifact_source)
             if ok:
                 return {"ok": True, "state": artifact_mod.ARTIFACT_STATE_READY, "ref": ref}
-        built = self.generate_step_artifact(file_ref, force, resolved_root, catalog)
+        if is_dxf:
+            built = self.generate_dxf_artifact(file_ref, force, resolved_root, catalog)
+        else:
+            built = self.generate_step_artifact(file_ref, force, resolved_root, catalog)
         if built["ok"]:
             return {"ok": True, "state": artifact_mod.ARTIFACT_STATE_READY, "ref": ref}
         return {"ok": False, "state": artifact_mod.ARTIFACT_STATE_ERROR, "error": built["error"]}
 
     # POST /__cad/step-export — native Save dialog (subprocess) + cadgen.step_export_target
     # (subprocess). Headless fallback writes beside the source + a download URL.
+    # Generated `.dxf.py` drawings export through the same route with format "dxf".
     def generate_step_export(self, file_ref, fmt, resolved_root, catalog):
         normalized = str(fmt or "").strip().lower()
+        if scanner.is_dxf_generator_path(str(normalized_file_ref(file_ref))):
+            if normalized != "dxf":
+                raise ValueError(f"Unsupported export format for a DXF drawing: {fmt}")
+            return self.generate_dxf_export(file_ref, resolved_root)
         if normalized not in _STEP_EXPORT_FORMAT_SUFFIX:
             raise ValueError(f"Unsupported export format: {fmt}")
         resolved = self.resolve_step_source(file_ref, resolved_root)
@@ -358,12 +422,6 @@ class LocalAssetBackend:
             raise ValueError("Requested file is outside the active CAD Viewer root")
         ctx = self._scan_context(resolved_root)
         base_name = re.sub(r"\.(step|stp)$", "", os.path.basename(step_path), flags=re.IGNORECASE)
-        suggested_name = f"{base_name}.{_STEP_EXPORT_FORMAT_SUFFIX[normalized]}"
-        default_dir = os.path.dirname(step_path)
-        destination = pick_save_destination(suggested_name=suggested_name, default_dir=default_dir,
-                                            prompt=f"Export {base_name} as {normalized.upper()}")
-        if destination.get("cancelled"):
-            return {"ok": False, "cancelled": True}
 
         def _export(out_path):
             args = ["--repo-root", ctx["scanRepoRoot"], "--step", step_path, "--format", normalized, "--out", out_path]
@@ -371,25 +429,70 @@ class LocalAssetBackend:
                 args += ["--source-path", source_path]
             return cadgen_bridge.run_cadgen("cadgen.step_export_target", args, ctx["scanRepoRoot"])
 
+        return self._export_with_destination(
+            resolved_root,
+            run_export=_export,
+            base_name=base_name,
+            suggested_name=f"{base_name}.{_STEP_EXPORT_FORMAT_SUFFIX[normalized]}",
+            default_dir=os.path.dirname(step_path),
+            format_name=normalized,
+            error_label="STEP export failed",
+        )
+
+    # Export a generated `.dxf.py` drawing as a `.dxf` file — cadgen.dxf_artifact with
+    # --export ensures the drawing package is fresh (rebuilding if the source changed)
+    # and writes the DXF to the chosen path.
+    def generate_dxf_export(self, file_ref, resolved_root):
+        resolved = self.resolve_dxf_source(file_ref, resolved_root)
+        source_path = resolved["sourcePath"]
+        ctx = self._scan_context(resolved_root)
+        base_name = os.path.basename(source_path)[: -len(".dxf.py")]
+
+        def _export(out_path):
+            args = ["--repo-root", ctx["scanRepoRoot"], "--source-path", source_path, "--export", out_path]
+            return cadgen_bridge.run_cadgen("cadgen.dxf_artifact", args, ctx["scanRepoRoot"])
+
+        return self._export_with_destination(
+            resolved_root,
+            run_export=_export,
+            base_name=base_name,
+            suggested_name=f"{base_name}.dxf",
+            default_dir=os.path.dirname(source_path),
+            format_name="dxf",
+            error_label="DXF export failed",
+        )
+
+    # Shared export orchestration for every format: native Save dialog, chosen-path
+    # write, or the headless fallback beside the source with a /__cad/download URL.
+    def _export_with_destination(
+        self, resolved_root, *, run_export, base_name, suggested_name, default_dir, format_name, error_label
+    ):
+        destination = pick_save_destination(
+            suggested_name=suggested_name, default_dir=default_dir,
+            prompt=f"Export {base_name} as {format_name.upper()}",
+        )
+        if destination.get("cancelled"):
+            return {"ok": False, "cancelled": True}
+
         if destination.get("path"):
-            result = _export(os.path.abspath(destination["path"]))
+            result = run_export(os.path.abspath(destination["path"]))
             if not result.get("ok"):
-                return {"ok": False, "error": str(result.get("error") or "STEP export failed")}
+                return {"ok": False, "error": str(result.get("error") or error_label)}
             out_path = os.path.abspath(result.get("path") or destination["path"])
             inside = out_path == resolved_root["rootPath"] or scanner.path_is_inside(out_path, resolved_root["rootPath"])
-            payload = {"ok": True, "path": out_path, "filename": result.get("filename") or os.path.basename(out_path), "format": normalized, "catalogChanged": inside}
-            return payload
+            return {"ok": True, "path": out_path, "filename": result.get("filename") or os.path.basename(out_path),
+                    "format": format_name, "catalogChanged": inside}
 
         # Headless fallback: write beside the source, hand to the browser via /__cad/download.
-        output_path = os.path.join(os.path.dirname(step_path), suggested_name)
+        output_path = os.path.join(default_dir, suggested_name)
         if not (output_path == resolved_root["rootPath"] or scanner.path_is_inside(output_path, resolved_root["rootPath"])):
             raise ValueError("Requested file is outside the active CAD Viewer root")
-        result = _export(output_path)
+        result = run_export(output_path)
         if not result.get("ok"):
-            return {"ok": False, "error": str(result.get("error") or "STEP export failed")}
+            return {"ok": False, "error": str(result.get("error") or error_label)}
         output_file_ref = _to_posix(os.path.relpath(output_path, resolved_root["rootPath"]))
         return {"ok": True, "fallback": True, "path": output_path, "filename": os.path.basename(output_path),
-                "format": normalized, "catalogChanged": True, "outputFileRef": output_file_ref}
+                "format": format_name, "catalogChanged": True, "outputFileRef": output_file_ref}
 
     def file_path_from_ref(self, file_ref: str, resolved_root: dict) -> str:
         normalized = normalized_file_ref(file_ref)

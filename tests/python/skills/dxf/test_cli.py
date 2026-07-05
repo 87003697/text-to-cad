@@ -20,19 +20,34 @@ class DxfCliTests(unittest.TestCase):
         with mock.patch.object(dxf, "generate_dxf_targets", return_value=0) as generate:
             self.assertEqual(0, dxf.main(["drawings/second.py", "drawings/first.py"]))
 
-        generate.assert_called_once_with(["drawings/second.py", "drawings/first.py"], output=None, verbose=False)
+        generate.assert_called_once_with(
+            ["drawings/second.py", "drawings/first.py"],
+            output=None, write_dxf=False, snapshot=False, force=False, verbose=False,
+        )
 
     def test_passes_verbose_flag(self) -> None:
         with mock.patch.object(dxf, "generate_dxf_targets", return_value=0) as generate:
             self.assertEqual(0, dxf.main(["drawings/part.py", "--verbose"]))
 
-        generate.assert_called_once_with(["drawings/part.py"], output=None, verbose=True)
+        generate.assert_called_once_with(
+            ["drawings/part.py"], output=None, write_dxf=False, snapshot=False, force=False, verbose=True
+        )
 
     def test_passes_output_flag(self) -> None:
         with mock.patch.object(dxf, "generate_dxf_targets", return_value=0) as generate:
             self.assertEqual(0, dxf.main(["drawings/part.py", "-o", "DXF/part.dxf"]))
 
-        generate.assert_called_once_with(["drawings/part.py"], output="DXF/part.dxf", verbose=False)
+        generate.assert_called_once_with(
+            ["drawings/part.py"], output="DXF/part.dxf", write_dxf=False, snapshot=False, force=False, verbose=False
+        )
+
+    def test_passes_dxf_and_force_flags(self) -> None:
+        with mock.patch.object(dxf, "generate_dxf_targets", return_value=0) as generate:
+            self.assertEqual(0, dxf.main(["drawings/part.py", "--dxf", "--force"]))
+
+        generate.assert_called_once_with(
+            ["drawings/part.py"], output=None, write_dxf=True, snapshot=False, force=True, verbose=False
+        )
 
     def test_output_flag_rejects_multiple_targets(self) -> None:
         with self.assertRaises(SystemExit) as cm:

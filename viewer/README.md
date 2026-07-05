@@ -17,7 +17,8 @@ CAD references, and verify generated assets without leaving the browser.
 - Previews mesh files, DXF flat patterns, G-code toolpaths, URDF/SDF robots,
   and SRDF group states in one app shell.
 - Runs against either a local filesystem backend or hosted Vercel Blob storage.
-- Can regenerate STEP GLB/topology artifacts when the CAD Python runtime is
+- Can regenerate STEP GLB/topology artifacts and generated-DXF drawing
+  packages when the CAD Python runtime is
   available.
 - Provides optional MoveIt2 websocket controls for SRDF IK and planning.
 
@@ -130,7 +131,7 @@ Important environment variables:
 - `VIEWER_ALLOWED_HOSTS`: extra hostnames accepted by local Vite dev and
   production servers.
 - `VIEWER_MOVEIT2_WS_URL`: optional websocket URL for SRDF MoveIt2 controls.
-- `VIEWER_CAD_PYTHON`: optional Python executable for local STEP regeneration.
+- `VIEWER_CAD_PYTHON`: optional Python executable for local STEP/DXF artifact regeneration.
 - `VIEWER_CAD_PYTHONPATH` / `CAD_PYTHONPATH`: optional Python source path for
   the `cadgen` package.
 - `VIEWER_SERVER_REGISTRY`: optional local server registry JSON path.

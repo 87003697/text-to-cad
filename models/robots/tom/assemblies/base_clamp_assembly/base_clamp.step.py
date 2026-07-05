@@ -36,7 +36,7 @@ if str(PARTS_DIR) not in sys.path:
     sys.path.insert(0, str(PARTS_DIR))
 
 from robot_common.materials import GRAY_ALUMINUM_COLOR
-import dxf_topology
+from cadgen import flatten as dxf_topology
 
 
 DISPLAY_NAME = "Base Clamp"
@@ -1718,16 +1718,5 @@ def gen_step() -> dict[str, object]:
     }
 
 
-def gen_dxf() -> dict[str, object]:
-    return {
-        "document": build_dxf(),
-    }
-
-
-def gen() -> None:
-    gen_step()
-    gen_dxf()
-
-
 if __name__ == "__main__":
-    gen()
+    gen_step()

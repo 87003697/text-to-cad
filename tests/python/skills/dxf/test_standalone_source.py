@@ -58,20 +58,97 @@ class StandaloneDxfSourceTests(unittest.TestCase):
             self.assertIsNone(source.step_path)
             self.assertEqual(script_path.with_suffix(".dxf"), source.dxf_path)
 
-    def test_directory_catalog_skips_dxf_only_source(self) -> None:
+    def test_directory_catalog_skips_plain_py_dxf_only_source(self) -> None:
+        # Plain `<name>.py` drawing sources stay explicit-target-only; catalog
+        # entries require the `.dxf.py` naming.
         with temporary_directory(prefix="dxf-skill") as root:
             _write_standalone_source(Path(root))
             self.assertEqual((), cad_catalog.iter_cad_sources(Path(root)))
 
-    def test_generate_dxf_targets_writes_sibling_output(self) -> None:
+    def test_directory_catalog_lists_dxf_generator_entry(self) -> None:
+        with temporary_directory(prefix="dxf-skill") as root:
+            script_path = _write_standalone_source(Path(root), stem="outline.dxf")
+            sources = cad_catalog.iter_cad_sources(Path(root))
+
+            self.assertEqual(1, len(sources))
+            self.assertEqual("dxf", sources[0].kind)
+            self.assertEqual(script_path, sources[0].script_path)
+
+    def test_generate_dxf_targets_builds_drawing_package(self) -> None:
         with temporary_directory(prefix="dxf-skill") as root:
             script_path = _write_standalone_source(Path(root))
 
             self.assertEqual(0, cad_generation.generate_dxf_targets([str(script_path)]))
 
+            package_dir = Path(root) / "__cadcache__" / "models" / script_path.name
+            self.assertTrue((package_dir / "drawing.json").exists())
+            drawing_path = package_dir / "drawing.dxf"
+            self.assertTrue(drawing_path.exists())
+            self.assertGreater(drawing_path.stat().st_size, 0)
+            # No sibling export unless requested.
+            self.assertFalse(script_path.with_suffix(".dxf").exists())
+
+    def test_generate_dxf_targets_writes_sibling_output_on_demand(self) -> None:
+        with temporary_directory(prefix="dxf-skill") as root:
+            script_path = _write_standalone_source(Path(root))
+
+            self.assertEqual(0, cad_generation.generate_dxf_targets([str(script_path)], write_dxf=True))
+
             output_path = script_path.with_suffix(".dxf")
             self.assertTrue(output_path.exists())
             self.assertGreater(output_path.stat().st_size, 0)
+
+    def test_rebuild_leaves_sibling_export_untouched(self) -> None:
+        # An exported <name>.dxf is a point-in-time deliverable, totally detached from
+        # its generator: rebuilds never delete, rewrite, or staleness-track it. Only an
+        # explicit re-export refreshes it.
+        with temporary_directory(prefix="dxf-skill") as root:
+            script_path = _write_standalone_source(Path(root))
+            sibling = script_path.with_suffix(".dxf")
+
+            cad_generation.generate_dxf_targets([str(script_path)], write_dxf=True)
+            self.assertTrue(sibling.exists())
+            exported_bytes = sibling.read_bytes()
+
+            # Source edit -> rebuild -> export untouched, byte for byte.
+            script_path.write_text(
+                script_path.read_text(encoding="utf-8") + "\n# changed\n", encoding="utf-8"
+            )
+            cad_generation.generate_dxf_targets([str(script_path)])
+            self.assertTrue(sibling.exists())
+            self.assertEqual(exported_bytes, sibling.read_bytes())
+
+    def test_generate_dxf_targets_rejects_non_document_payload(self) -> None:
+        # Fail closed: an object that only implements saveas is not a drawing and
+        # must be rejected, not silently written without validation.
+        with temporary_directory(prefix="dxf-skill") as root:
+            script_path = Path(root) / "fake.dxf.py"
+            script_path.write_text(
+                "\n".join(
+                    [
+                        "class _FakeDxf:",
+                        "    def saveas(self, output_path):",
+                        "        pass",
+                        "def gen_dxf():",
+                        "    return {'document': _FakeDxf()}",
+                        "",
+                    ]
+                ),
+                encoding="utf-8",
+            )
+
+            with self.assertRaisesRegex(TypeError, "must return an ezdxf document"):
+                cad_generation.generate_dxf_targets([str(script_path)])
+
+    def test_generate_dxf_targets_writes_snapshot_on_demand(self) -> None:
+        with temporary_directory(prefix="dxf-skill") as root:
+            script_path = _write_standalone_source(Path(root))
+
+            self.assertEqual(0, cad_generation.generate_dxf_targets([str(script_path)], snapshot=True))
+
+            svg_path = Path(root) / "__cadcache__" / "models" / script_path.name / "drawing.svg"
+            self.assertTrue(svg_path.exists())
+            self.assertIn("<svg", svg_path.read_text(encoding="utf-8"))
 
 
 if __name__ == "__main__":
