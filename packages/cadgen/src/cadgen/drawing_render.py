@@ -1,10 +1,16 @@
+"""DXF drawing render payload + SVG snapshot writer.
+
+Converts a .dxf file into a normalized 2D render payload (SVG path data in
+y-down screen coordinates, layer summaries, bounds) and renders that payload
+as a standalone SVG snapshot for visual verification of drawings without the
+CAD Viewer. ezdxf is imported lazily so cadgen imports stay light.
+"""
+
 from __future__ import annotations
 
 import math
 from dataclasses import dataclass
 from pathlib import Path
-
-import ezdxf
 
 
 DXF_RENDER_SCHEMA_VERSION = 1
@@ -45,7 +51,11 @@ def _normalize_layer_name(value: object) -> str:
 
 
 def _semantic_kind_for_layer(layer_name: str) -> str:
-    return "bend" if "bend" in layer_name.strip().lower() else "cut"
+    # Single source of truth for layer intent (whole-token matching) so
+    # validation, snapshots, and rendering classify layers identically.
+    from cadgen.drawing_checks import layer_intent
+
+    return layer_intent(layer_name)
 
 
 def _normalize_angle(angle_deg: float) -> float:
@@ -202,14 +212,21 @@ def _load_dxf_entities(document, dxf_path: Path) -> tuple[list[LineEntity], list
     lines: list[LineEntity] = []
     arcs: list[ArcEntity] = []
     circles: list[CircleEntity] = []
+    skipped: dict[str, int] = {}
 
     for entity in modelspace:
         entity_type = entity.dxftype()
         if entity_type not in SUPPORTED_ENTITY_TYPES:
-            raise ValueError(
-                f"Unsupported DXF entity {entity_type} in {dxf_path.as_posix()}; "
-                f"supported types: {', '.join(sorted(SUPPORTED_ENTITY_TYPES))}"
-            )
+            # Never fail a snapshot for entities validation permits. Curves flatten
+            # to polyline segments via ezdxf; annotations and anything else are
+            # skipped and counted so the payload reports what was dropped.
+            layer_name = _normalize_layer_name(getattr(entity.dxf, "layer", "0"))
+            flattened = _flattened_line_entities(entity, layer_name=layer_name)
+            if flattened is not None:
+                lines.extend(flattened)
+            else:
+                skipped[entity_type] = skipped.get(entity_type, 0) + 1
+            continue
 
         layer_name = _normalize_layer_name(entity.dxf.layer)
         if entity_type == "LINE":
@@ -262,13 +279,35 @@ def _load_dxf_entities(document, dxf_path: Path) -> tuple[list[LineEntity], list
     if not lines and not arcs and not circles:
         raise ValueError(f"No supported DXF entities found in {dxf_path.as_posix()}")
 
-    return lines, arcs, circles
+    return lines, arcs, circles, skipped
+
+
+def _flattened_line_entities(entity, *, layer_name: str) -> list[LineEntity] | None:
+    """Approximate a curve entity (SPLINE, ELLIPSE, ...) as polyline segments via
+    ezdxf's own flattening; None when the entity has no usable curve form
+    (annotations, inserts, ...)."""
+    flattening = getattr(entity, "flattening", None)
+    if not callable(flattening):
+        return None
+    try:
+        points = [(float(p[0]), float(p[1])) for p in flattening(0.05)]
+    except Exception:
+        return None
+    if len(points) < 2:
+        return None
+    return [
+        LineEntity(layer=layer_name, start=points[index], end=points[index + 1])
+        for index in range(len(points) - 1)
+        if math.dist(points[index], points[index + 1]) > 1e-9
+    ]
 
 
 def build_dxf_render_payload(dxf_path: Path, *, file_ref: str) -> dict[str, object]:
+    import ezdxf
+
     source_path = dxf_path.resolve()
     document = ezdxf.readfile(source_path)
-    lines, arcs, circles = _load_dxf_entities(document, source_path)
+    lines, arcs, circles, skipped_entities = _load_dxf_entities(document, source_path)
 
     raw_bounds: tuple[float, float, float, float] | None = None
     for line in lines:
@@ -374,6 +413,7 @@ def build_dxf_render_payload(dxf_path: Path, *, file_ref: str) -> dict[str, obje
             "circles": len(circle_records),
             "entities": len(path_records) + len(circle_records),
         },
+        "skippedEntities": dict(sorted(skipped_entities.items())),
         "layers": [layer_summary[name] for name in sorted(layer_summary)],
         "geometry": {
             "lines": [
@@ -409,3 +449,58 @@ def build_dxf_render_payload(dxf_path: Path, *, file_ref: str) -> dict[str, obje
         "paths": path_records,
         "circles": circle_records,
     }
+
+
+_SNAPSHOT_STROKES = {
+    "cut": ("#111827", ""),
+    "bend": ("#2563eb", "4 3"),
+    "engrave": ("#059669", "1 2"),
+    "reference": ("#9ca3af", "2 2"),
+    "unknown": ("#6b7280", "2 2"),
+}
+_SNAPSHOT_MARGIN_RATIO = 0.05
+
+
+def render_drawing_snapshot_svg(payload: dict[str, object]) -> str:
+    """Render a drawing render payload as a standalone SVG document string."""
+    bounds = payload.get("bounds") or {}
+    width = float(bounds.get("width") or 0.0)
+    height = float(bounds.get("height") or 0.0)
+    margin = max(width, height, 1.0) * _SNAPSHOT_MARGIN_RATIO
+    stroke_width = max(width, height, 1.0) / 400.0
+    view_box = (
+        f"{-margin:.3f} {-margin:.3f} "
+        f"{width + (2.0 * margin):.3f} {height + (2.0 * margin):.3f}"
+    )
+    parts = [
+        f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="{view_box}">',
+        f'<rect x="{-margin:.3f}" y="{-margin:.3f}" width="{width + (2.0 * margin):.3f}" '
+        f'height="{height + (2.0 * margin):.3f}" fill="#ffffff"/>',
+    ]
+
+    def stroke_attrs(kind: str) -> str:
+        color, dashes = _SNAPSHOT_STROKES.get(kind, _SNAPSHOT_STROKES["unknown"])
+        dash_attr = f' stroke-dasharray="{dashes}"' if dashes else ""
+        return (
+            f'fill="none" stroke="{color}" stroke-width="{stroke_width:.4f}"'
+            f' stroke-linecap="round" stroke-linejoin="round"{dash_attr}'
+        )
+
+    for record in payload.get("paths") or []:
+        parts.append(f'<path d="{record["d"]}" {stroke_attrs(str(record.get("kind")))}/>')
+    for record in payload.get("circles") or []:
+        parts.append(
+            f'<circle cx="{record["cx"]}" cy="{record["cy"]}" r="{record["r"]}" '
+            f"{stroke_attrs(str(record.get('kind')))}/>"
+        )
+    parts.append("</svg>")
+    return "\n".join(parts) + "\n"
+
+
+def write_drawing_snapshot_svg(dxf_path: Path, svg_path: Path, *, file_ref: str = "") -> Path:
+    """Build the render payload for ``dxf_path`` and write it as an SVG snapshot."""
+    payload = build_dxf_render_payload(Path(dxf_path), file_ref=file_ref or Path(dxf_path).name)
+    svg_path = Path(svg_path)
+    svg_path.parent.mkdir(parents=True, exist_ok=True)
+    svg_path.write_text(render_drawing_snapshot_svg(payload), encoding="utf-8")
+    return svg_path

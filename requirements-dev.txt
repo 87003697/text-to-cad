@@ -23,3 +23,6 @@ networkx
 lxml
 pytest
 trimesh
+
+# cadgen runtime dependencies are pulled by the editable install above
+# (build123d, cadquery-ocp, ezdxf, shapely).

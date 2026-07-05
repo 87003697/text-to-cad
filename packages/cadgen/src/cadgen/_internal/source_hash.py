@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import os
 import sys
@@ -136,11 +137,39 @@ def _interpreter_roots() -> tuple[Path, ...]:
     return tuple(roots)
 
 
+def _runtime_roots() -> tuple[Path, ...]:
+    """Directories holding the RUNNING generation runtime itself: the active cadgen
+    package and the CLI launcher script's directory. Runtime files are versioned and
+    shipped separately from models, so — like the stdlib and site-packages — they are
+    never a model's freshness input. In production cadgen lives in site-packages and
+    is excluded by :func:`_interpreter_roots` already; these roots make dev checkouts
+    (editable installs, vendored skill symlinks) behave identically."""
+    roots: list[Path] = [_PACKAGE_ROOT.resolve()]
+    main_module = sys.modules.get("__main__")
+    main_file = getattr(main_module, "__file__", None)
+    if main_file:
+        try:
+            roots.append(Path(main_file).resolve().parent)
+        except OSError:
+            pass
+    return tuple(roots)
+
+
+def _excluded_roots() -> tuple[Path, ...]:
+    return (*_interpreter_roots(), *_runtime_roots())
+
+
+def is_first_party_source_file(path: Path) -> bool:
+    """True for a ``.py`` file that counts as model-side code: not stdlib, not
+    site-packages, and not part of the running generation runtime."""
+    return path.suffix == ".py" and not any(_is_within(path, root) for root in _excluded_roots())
+
+
 def repo_local_loaded_modules(module_names: object) -> dict[str, Path]:
     """Map of ``sys.modules`` names (restricted to those given) to their first-party ``.py``
     source files: every loaded module whose file is NOT under the interpreter's stdlib /
-    site-packages roots. Working-directory independent — see :func:`_interpreter_roots`."""
-    interpreter_roots = _interpreter_roots()
+    site-packages roots or the running runtime's own roots. Working-directory
+    independent — see :func:`_interpreter_roots` / :func:`_runtime_roots`."""
     result: dict[str, Path] = {}
     for name in module_names:
         module = sys.modules.get(name)
@@ -151,9 +180,71 @@ def repo_local_loaded_modules(module_names: object) -> dict[str, Path]:
             path = Path(file_name).resolve()
         except OSError:
             continue
-        if path.suffix == ".py" and not any(_is_within(path, root) for root in interpreter_roots):
+        if is_first_party_source_file(path):
             result[name] = path
     return result
+
+
+def evict_first_party_modules() -> tuple[str, ...]:
+    """Drop every first-party module from ``sys.modules`` and return the evicted names.
+
+    Run BEFORE loading a generator: with a clean first-party module space, the
+    generator's full dependency closure is freshly imported (and therefore freshly
+    EXECUTED, which :func:`record_first_party_execution` observes) on every run —
+    regardless of what earlier builds in the same process imported, whether a
+    previous build failed partway, or what the generator unloads mid-run. Runtime
+    and third-party modules (cadgen, build123d, OCP, ...) are never touched: they
+    cannot reload safely and are not freshness inputs."""
+    evicted = tuple(repo_local_loaded_modules(set(sys.modules)))
+    for name in evicted:
+        sys.modules.pop(name, None)
+    return evicted
+
+
+_ACTIVE_EXECUTION_CAPTURE: set[Path] | None = None
+_AUDIT_HOOK_INSTALLED = False
+
+
+def _execution_audit_hook(event: str, args: tuple) -> None:
+    capture = _ACTIVE_EXECUTION_CAPTURE
+    if capture is None or event != "exec" or not args:
+        return
+    file_name = getattr(args[0], "co_filename", None)
+    if not file_name:
+        return
+    try:
+        path = Path(file_name).resolve()
+    except (OSError, ValueError):
+        return
+    if path.is_file() and is_first_party_source_file(path):
+        capture.add(path)
+
+
+@contextlib.contextmanager
+def record_first_party_execution():
+    """Record every first-party ``.py`` file EXECUTED while the context is active.
+
+    Uses the ``exec`` audit event, which fires for each module body execution — via
+    normal imports, ``importlib.util.spec_from_file_location`` path loads (which
+    bypass ``sys.meta_path``), and bytecode-cached loads alike — so the recorded set
+    is complete even if the generator unloads modules from ``sys.modules`` mid-run.
+    Audit hooks are irremovable by design, so one process-global hook is installed
+    lazily and stays dormant (a single ``None`` check per event) outside capture
+    windows. Combined with :func:`evict_first_party_modules`, every first-party
+    dependency is guaranteed to produce an execution event inside the window."""
+    global _ACTIVE_EXECUTION_CAPTURE, _AUDIT_HOOK_INSTALLED
+    if not _AUDIT_HOOK_INSTALLED:
+        sys.addaudithook(_execution_audit_hook)
+        _AUDIT_HOOK_INSTALLED = True
+    recorded: set[Path] = set()
+    previous = _ACTIVE_EXECUTION_CAPTURE
+    _ACTIVE_EXECUTION_CAPTURE = recorded
+    try:
+        yield recorded
+    finally:
+        _ACTIVE_EXECUTION_CAPTURE = previous
+        if previous is not None:
+            previous |= recorded
 
 
 def _relative_to_base(path: Path, base: Path) -> str:
@@ -204,20 +295,28 @@ def capture_runtime_closure(
     *,
     base: Path,
     extra_files: object = (),
+    executed_files: object = (),
 ) -> PythonSourceClosure:
-    """Capture a generator's import closure after running it.
+    """Capture a generator's dependency closure after running it.
 
-    ``before_module_names`` is ``set(sys.modules)`` sampled immediately before
-    the generator module was loaded; the newly imported repo-local modules are
-    its dependency closure. ``extra_files`` folds additional inputs into the
-    closure — used by assemblies to include the child STEP files they compose
-    from, so the closure hash also captures "a referenced child changed". Every
-    recorded path is relative to ``base`` (the model folder).
+    Two observation channels are unioned: ``executed_files`` — the first-party
+    files recorded by :func:`record_first_party_execution` while the generator
+    ran (complete even when the generator unloads modules mid-run) — and the
+    ``sys.modules`` delta against ``before_module_names`` (a belt-and-braces
+    catch for modules registered without a fresh body execution). ``extra_files``
+    folds additional inputs into the closure — used by assemblies to include the
+    child STEP files they compose from, so the closure hash also captures "a
+    referenced child changed". Every recorded path is relative to ``base`` (the
+    model folder).
     """
     import sys
 
     new_names = set(sys.modules) - set(before_module_names)
-    dependency_files = [*repo_local_loaded_modules(new_names).values(), *extra_files]
+    dependency_files = [
+        *repo_local_loaded_modules(new_names).values(),
+        *executed_files,
+        *extra_files,
+    ]
     return closure_for_files(script_path, dependency_files, base=base)
 
 

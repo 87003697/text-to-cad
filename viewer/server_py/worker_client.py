@@ -65,6 +65,9 @@ class CadWorker:
         if pythonpath:
             parts.append(pythonpath)
         env["PYTHONPATH"] = os.pathsep.join(p for p in parts if p)
+        # Byte-deterministic artifacts (drawing packages are content-addressed):
+        # ezdxf's object ordering depends on Python hash randomization.
+        env.setdefault("PYTHONHASHSEED", "0")
         return env
 
     def _alive(self) -> bool:

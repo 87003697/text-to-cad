@@ -10,6 +10,30 @@ def generate_dxf_targets(*args, **kwargs):
     return generate(*args, **kwargs)
 
 
+def validate_dxf_files(targets: Sequence[str]) -> int:
+    """Run the generation-time drawing checks post-hoc on existing .dxf files.
+    One unreadable/corrupt file is a per-file FAIL, never an aborted run."""
+    from cadgen.drawing_checks import validate_dxf_file
+
+    exit_code = 0
+    for target in targets:
+        try:
+            findings = validate_dxf_file(target)
+        except Exception as exc:  # noqa: BLE001 — missing/corrupt file -> per-file FAIL
+            print(f"[dxf] {target}: FAIL")
+            print(f"[dxf]   [error] unreadable: {exc}")
+            exit_code = 1
+            continue
+        errors = [finding for finding in findings if finding.severity == "error"]
+        if errors:
+            exit_code = 1
+        status = "FAIL" if errors else "ok"
+        print(f"[dxf] {target}: {status}")
+        for finding in findings:
+            print(f"[dxf]   {finding.render()}")
+    return exit_code
+
+
 def _targets_include_output_pairs(targets: Sequence[str]) -> bool:
     return any("=" in str(target or "") for target in targets)
 
@@ -17,7 +41,10 @@ def _targets_include_output_pairs(targets: Sequence[str]) -> bool:
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="dxf",
-        description="Generate explicit DXF targets from Python sources.",
+        description=(
+            "Build drawing-package render artifacts (and on-demand DXF exports) from "
+            "Python gen_dxf() sources."
+        ),
     )
     parser.add_argument(
         "targets",
@@ -28,7 +55,27 @@ def build_parser() -> argparse.ArgumentParser:
         "-o",
         "--output",
         metavar="PATH",
-        help="Write the generated DXF file to this path. Valid only with one plain generated Python target.",
+        help="Export the generated DXF file to this path. Valid only with one plain generated Python target.",
+    )
+    parser.add_argument(
+        "--dxf",
+        action="store_true",
+        help="Also write the sibling <name>.dxf export (the drawing package is always built).",
+    )
+    parser.add_argument(
+        "--snapshot",
+        action="store_true",
+        help="Also write an SVG snapshot of each drawing into its package for visual review.",
+    )
+    parser.add_argument(
+        "--force",
+        action="store_true",
+        help="Regenerate even when the cached drawing package is current.",
+    )
+    parser.add_argument(
+        "--validate",
+        action="store_true",
+        help="Validate existing .dxf files with the generation-time drawing checks instead of generating.",
     )
     parser.add_argument(
         "--verbose",
@@ -41,12 +88,23 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: Sequence[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(list(argv) if argv is not None else None)
+    if args.validate:
+        if args.output is not None or args.dxf or args.force or args.snapshot:
+            parser.error("--validate cannot be combined with generation flags")
+        return validate_dxf_files(args.targets)
     if args.output is not None:
         if _targets_include_output_pairs(args.targets):
             parser.error("--output cannot be combined with SOURCE=OUTPUT targets")
         if len(args.targets) != 1:
             parser.error("--output can only be used with exactly one target")
-    return generate_dxf_targets(args.targets, output=args.output, verbose=bool(args.verbose))
+    return generate_dxf_targets(
+        args.targets,
+        output=args.output,
+        write_dxf=bool(args.dxf),
+        snapshot=bool(args.snapshot),
+        force=bool(args.force),
+        verbose=bool(args.verbose),
+    )
 
 
 if __name__ == "__main__":

@@ -45,7 +45,7 @@ if str(V2_DIR) not in sys.path:
 
 import build123d
 
-import dxf_topology
+from cadgen import flatten as dxf_topology
 import link_common as lc
 
 
@@ -1136,12 +1136,6 @@ def build_dxf(*, part_name: str = PART_NAME):
 def gen_step() -> dict[str, object]:
     return {
         "shape": build_step(),
-    }
-
-
-def gen_dxf() -> dict[str, object]:
-    return {
-        "document": build_dxf(),
     }
 
 

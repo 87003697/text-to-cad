@@ -1,3 +1,14 @@
+"""Flat-pattern / 2D-projection helpers for DXF drawing generators.
+
+The shared engine for deriving DXF cut geometry from 3D topology: select planar
+faces, project their wires into 2D, union the projections (shapely), and emit
+clean closed contours into an ezdxf modelspace. Also provides kerf/tool-radius
+offsetting for cut compensation. Drawing generators (`<name>.dxf.py`) should
+consume this module instead of hand-rolling projection math; hand-drawn
+parametric outlines remain appropriate only when there is no reliable 3D
+topology to project.
+"""
+
 from __future__ import annotations
 
 import math
@@ -299,3 +310,36 @@ def add_shapely_geometry(msp, geometry, *, layer: str = "CUT") -> None:
         add_ring(msp, polygon.exterior, layer=layer)
         for interior in polygon.interiors:
             add_ring(msp, interior, layer=layer, prefer_circle=True)
+
+
+def offset_geometry(geometry, distance_mm: float):
+    """Offset closed cut geometry by a kerf / tool-radius compensation.
+
+    Positive ``distance_mm`` grows the profile (cut outside the line), negative
+    shrinks it (cut inside). Returns cleaned shapely geometry ready for
+    :func:`add_shapely_geometry`."""
+    if distance_mm == 0.0:
+        return geometry
+    offset = geometry.buffer(distance_mm, join_style=2)
+    offset = offset.buffer(0)
+    if offset.is_empty:
+        raise RuntimeError(
+            f"Kerf offset of {distance_mm:+.3f} mm produced an empty DXF geometry"
+        )
+    return offset
+
+
+def offset_closed_points(
+    points: list[Point2D],
+    distance_mm: float,
+) -> list[list[Point2D]]:
+    """Offset one closed contour (a point list) by a kerf / tool-radius
+    compensation; returns the resulting closed contour(s) as point lists."""
+    from shapely.geometry import Polygon
+
+    polygon = Polygon(points)
+    if not polygon.is_valid:
+        polygon = polygon.buffer(0)
+    offset = offset_geometry(polygon, distance_mm)
+    polygons = [offset] if offset.geom_type == "Polygon" else list(offset.geoms)
+    return [polyline_points_from_ring(polygon.exterior) for polygon in polygons]
