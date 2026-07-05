@@ -226,6 +226,22 @@ export const DEFAULT_FLOOR_GRID_SETTINGS = Object.freeze({
   density: 1
 });
 
+// The interactive viewer has always rendered soft fill and rim directionals
+// from its structural defaults. Themes that predate the fill/rim settings
+// must normalize to these exact values so their lighting stays identical.
+export const DEFAULT_FILL_LIGHT_SETTINGS = Object.freeze({
+  enabled: true,
+  color: "#6b7f95",
+  intensity: 0.46,
+  position: Object.freeze({ x: 120, y: 80, z: 210 })
+});
+export const DEFAULT_RIM_LIGHT_SETTINGS = Object.freeze({
+  enabled: true,
+  color: "#6db6e8",
+  intensity: 0.04,
+  position: Object.freeze({ x: -260, y: 240, z: 180 })
+});
+
 function normalizeFloorMode(value, fallback = THEME_FLOOR_MODES.STAGE) {
   const normalized = String(value || "").trim().toLowerCase();
   if (normalized === "glass") {
@@ -988,6 +1004,144 @@ const WORKBENCH_DARK_THEME_PRESET_SETTINGS = withThemeColorMode(
 // Back-compat: the migration fallback and any "workbench" id resolve to light.
 const WORKBENCH_THEME_SETTINGS = WORKBENCH_LIGHT_THEME_PRESET_SETTINGS;
 
+// Cinematic: a filmic product-shot stage. Warm charcoal backdrop with a soft
+// radial falloff, satin PBR finish with studio-HDRI reflections, a warm key
+// with cool rim separation, an amber spot glow pooling on a faintly gridded
+// glossy floor. Colors follow a warm silver / copper grade; source part
+// colors pass through with a gentle contrast lift. Distinct from the legacy
+// CINEMATIC_THEME_SETTINGS above, which survives only to seed the Workbench
+// presets and the stored-settings migration matchers.
+const CINEMATIC_FILL_COLORS = Object.freeze([
+  "#c9c2bb",
+  "#c98d55",
+  "#8e969e",
+  "#a9784e"
+]);
+
+const CINEMATIC_STUDIO_FLOOR_COLOR = "#131418";
+
+const CINEMATIC_STUDIO_THEME_SETTINGS = Object.freeze({
+  materials: {
+    defaultColor: CINEMATIC_FILL_COLORS[0],
+    fillColors: CINEMATIC_FILL_COLORS,
+    cycleColors: false,
+    overrideSourceColors: false,
+    tintMode: "blend",
+    tintStrength: 0.14,
+    saturation: 0.85,
+    contrast: 1.14,
+    brightness: 1.04,
+    roughness: 0.32,
+    metalness: 0.32,
+    clearcoat: 0.5,
+    clearcoatRoughness: 0.24,
+    opacity: 1,
+    envMapIntensity: 1.5,
+    emissiveIntensity: 0.02
+  },
+  edges: {
+    ...DISABLED_THEME_EDGE_SETTINGS
+  },
+  background: {
+    type: "radial",
+    solidColor: "#121317",
+    linearStart: "#1c1d22",
+    linearEnd: "#0a0a0d",
+    linearAngle: 135,
+    radialInner: "#191a1f",
+    radialOuter: "#0a0a0d"
+  },
+  floor: {
+    mode: THEME_FLOOR_MODES.STAGE,
+    color: CINEMATIC_STUDIO_FLOOR_COLOR,
+    roughness: 0.55,
+    reflectivity: 0.16,
+    shadowOpacity: 0.58,
+    horizonBlend: 0.34,
+    ...createFloorGridSettings(CINEMATIC_STUDIO_FLOOR_COLOR, { enabled: true, opacity: 0.09 }),
+    enabled: true
+  },
+  environment: {
+    enabled: true,
+    presetId: "studio-hdri-43",
+    intensity: 0.65,
+    rotationY: -0.35,
+    useAsBackground: false
+  },
+  lighting: {
+    toneMappingExposure: 1.24,
+    directional: {
+      enabled: true,
+      color: "#ffe3c0",
+      intensity: 2.5,
+      position: {
+        x: -190,
+        y: 240,
+        z: 300
+      }
+    },
+    fill: {
+      enabled: true,
+      color: "#a89684",
+      intensity: 0.42,
+      position: {
+        x: 120,
+        y: 80,
+        z: 210
+      }
+    },
+    rim: {
+      enabled: true,
+      color: "#d9e6f5",
+      intensity: 1.3,
+      position: {
+        x: -320,
+        y: 260,
+        z: 160
+      }
+    },
+    spot: {
+      enabled: true,
+      color: "#e8d9c4",
+      intensity: 0.35,
+      angle: 0.7,
+      distance: 0,
+      position: {
+        x: 190,
+        y: 210,
+        z: 170
+      }
+    },
+    point: {
+      enabled: true,
+      color: "#9fc4e8",
+      intensity: 0.3,
+      distance: 0,
+      position: {
+        x: -240,
+        y: 110,
+        z: -210
+      }
+    },
+    ambient: {
+      enabled: true,
+      color: "#d8d2c8",
+      intensity: 0.24
+    },
+    hemisphere: {
+      enabled: true,
+      skyColor: "#e8e4de",
+      groundColor: "#201c17",
+      intensity: 0.85
+    }
+  }
+});
+
+const CINEMATIC_STUDIO_THEME_PRESET_SETTINGS = withThemeColorMode(
+  CINEMATIC_STUDIO_THEME_SETTINGS,
+  THEME_COLOR_MODES.DARK
+);
+
 const BLUE_THEME_PRESET_SETTINGS = withThemeColorMode(BLUE_THEME_SETTINGS, THEME_COLOR_MODES.DARK);
 const PINK_THEME_PRESET_SETTINGS = withThemeColorMode(PINK_THEME_SETTINGS, THEME_COLOR_MODES.DARK);
 const CLAY_SUNRISE_THEME_PRESET_SETTINGS = withThemeColorMode(CLAY_SUNRISE_THEME_SETTINGS, THEME_COLOR_MODES.LIGHT);
@@ -1016,6 +1170,17 @@ export const THEME_PRESETS = Object.freeze([
       accentColor: "#4ea7d8"
     },
     settings: WORKBENCH_DARK_THEME_PRESET_SETTINGS
+  },
+  {
+    id: "cinematic",
+    label: "Cinematic",
+    description: "Filmic studio stage with warm key lighting, copper accents, and a glossy charcoal floor.",
+    preview: {
+      background: "radial-gradient(circle at 42% 32%, #23242a 0%, #0a0a0d 78%)",
+      modelColor: "#c9c2bb",
+      accentColor: "#c98d55"
+    },
+    settings: CINEMATIC_STUDIO_THEME_PRESET_SETTINGS
   },
   {
     id: "blue",
@@ -1074,9 +1239,11 @@ export const THEME_PRESETS = Object.freeze([
   }
 ]);
 
+// "cinematic" is intentionally NOT an alias: it is a real preset now. Stored
+// settings from the pre-Workbench cinematic era still migrate via
+// isMigratableCinematicThemeSettings.
 const THEME_PRESET_ID_ALIASES = Object.freeze({
   workbench: "workbench-light",
-  cinematic: "workbench-light",
   light: "workbench-light",
   dark: "workbench-dark",
   charcoal: "workbench-dark",
@@ -1592,6 +1759,46 @@ export function normalizeThemeSettings(value = {}) {
         color: normalizeColor(lighting.directional?.color, DEFAULT_THEME_SETTINGS.lighting.directional.color),
         intensity: normalizeNumber(lighting.directional?.intensity, DEFAULT_THEME_SETTINGS.lighting.directional.intensity, 0, 20),
         position: normalizePosition(lighting.directional?.position, DEFAULT_THEME_SETTINGS.lighting.directional.position)
+      },
+      fill: {
+        enabled: normalizeBoolean(
+          lighting.fill?.enabled,
+          DEFAULT_THEME_SETTINGS.lighting.fill?.enabled ?? DEFAULT_FILL_LIGHT_SETTINGS.enabled
+        ),
+        color: normalizeColor(
+          lighting.fill?.color,
+          DEFAULT_THEME_SETTINGS.lighting.fill?.color || DEFAULT_FILL_LIGHT_SETTINGS.color
+        ),
+        intensity: normalizeNumber(
+          lighting.fill?.intensity,
+          DEFAULT_THEME_SETTINGS.lighting.fill?.intensity ?? DEFAULT_FILL_LIGHT_SETTINGS.intensity,
+          0,
+          20
+        ),
+        position: normalizePosition(
+          lighting.fill?.position,
+          DEFAULT_THEME_SETTINGS.lighting.fill?.position || DEFAULT_FILL_LIGHT_SETTINGS.position
+        )
+      },
+      rim: {
+        enabled: normalizeBoolean(
+          lighting.rim?.enabled,
+          DEFAULT_THEME_SETTINGS.lighting.rim?.enabled ?? DEFAULT_RIM_LIGHT_SETTINGS.enabled
+        ),
+        color: normalizeColor(
+          lighting.rim?.color,
+          DEFAULT_THEME_SETTINGS.lighting.rim?.color || DEFAULT_RIM_LIGHT_SETTINGS.color
+        ),
+        intensity: normalizeNumber(
+          lighting.rim?.intensity,
+          DEFAULT_THEME_SETTINGS.lighting.rim?.intensity ?? DEFAULT_RIM_LIGHT_SETTINGS.intensity,
+          0,
+          20
+        ),
+        position: normalizePosition(
+          lighting.rim?.position,
+          DEFAULT_THEME_SETTINGS.lighting.rim?.position || DEFAULT_RIM_LIGHT_SETTINGS.position
+        )
       },
       spot: {
         enabled: normalizeBoolean(lighting.spot?.enabled, DEFAULT_THEME_SETTINGS.lighting.spot.enabled),

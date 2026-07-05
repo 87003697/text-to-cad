@@ -289,6 +289,30 @@ export function applyLighting(scene, themeSettings) {
   directional.castShadow = true;
   addIfEnabled(directional, lighting.directional?.enabled !== false);
 
+  // Fill and rim mirror the interactive viewer's soft secondary directionals;
+  // normalized themes always carry them, legacy raw settings simply omit them.
+  const fill = new THREE.DirectionalLight(
+    lighting.fill?.color || "#6b7f95",
+    toFiniteNumber(lighting.fill?.intensity, 0)
+  );
+  fill.position.set(
+    toFiniteNumber(lighting.fill?.position?.x, 120),
+    toFiniteNumber(lighting.fill?.position?.y, 80),
+    toFiniteNumber(lighting.fill?.position?.z, 210)
+  );
+  addIfEnabled(fill, lighting.fill?.enabled === true);
+
+  const rim = new THREE.DirectionalLight(
+    lighting.rim?.color || "#6db6e8",
+    toFiniteNumber(lighting.rim?.intensity, 0)
+  );
+  rim.position.set(
+    toFiniteNumber(lighting.rim?.position?.x, -260),
+    toFiniteNumber(lighting.rim?.position?.y, 240),
+    toFiniteNumber(lighting.rim?.position?.z, 180)
+  );
+  addIfEnabled(rim, lighting.rim?.enabled === true);
+
   const spot = new THREE.SpotLight(
     lighting.spot?.color || "#ffffff",
     toFiniteNumber(lighting.spot?.intensity, 0),
