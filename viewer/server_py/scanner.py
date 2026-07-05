@@ -271,16 +271,6 @@ def _collect_cad_source_files(root_path: str, result: list) -> list:
     return result
 
 
-# --- generated-source status (python-generated step) ---
-def _read_generated_file_metadata(file_path, kind):
-    # step/stp embedded metadata (readTextToCadStepMetadataFile) is a TODO.
-    # urdf/srdf/sdf are authored XML artifacts, not python-generated outputs.
-    # Generated DXF entries are `.dxf.py` catalog entries with a drawing package;
-    # a raw `.dxf` file is a plain imported asset.
-    del file_path, kind
-    return {}
-
-
 def _normalize_manifest_path(value):
     text = str(value or "").strip()
     if not text or "\0" in text:
@@ -345,44 +335,6 @@ def _generator_source_path_from_metadata(repo_root, manifest_path, generator_nam
     return {"sourcePath": "", "filePath": None}
 
 
-def _generated_source_status_for_file(repo_root, source_path, kind):
-    generator_name = PYTHON_GENERATOR_BY_KIND.get(str(kind or "").strip().lower(), "")
-    if not generator_name:
-        return None
-    metadata = _read_generated_file_metadata(source_path, str(kind or "").strip().lower())
-    metadata_source_path = str(metadata.get("sourcePath", "")).strip()
-    if not metadata_source_path:
-        return None
-    identity = _generator_source_path_from_metadata(repo_root, metadata_source_path, generator_name, os.path.dirname(source_path))
-    base_source = {
-        "file": identity["sourcePath"] or metadata_source_path,
-        "sourcePath": identity["sourcePath"] or metadata_source_path,
-    }
-    if metadata.get("sourceHash"):
-        base_source["sourceHash"] = str(metadata["sourceHash"])
-    if not identity["filePath"]:
-        return {
-            "sourceKind": "python",
-            "source": base_source,
-            "sourceStatus": {
-                "ok": False,
-                "status": "missing",
-                "stale": False,
-                "sourceKind": "python",
-                "sourcePath": metadata_source_path,
-                "message": "Python generator source is unavailable.",
-            },
-        }
-    return {
-        "sourceKind": "python",
-        "source": {
-            "file": identity["sourcePath"],
-            "sourcePath": identity["sourcePath"],
-            "sourceHash": str(metadata.get("sourceHash", "")),
-        },
-    }
-
-
 def _xml_root_name(file_path, expected_tag="robot"):
     try:
         for _event, element in ElementTree.iterparse(file_path, events=("start",)):
@@ -421,7 +373,6 @@ def create_single_asset_entry(repo_root, root_path, source_path, extension):
     kind = source_format_for_path(source_path, extension)
     asset = asset_for_path(repo_root, source_path)
     file = scan_relative_path(root_path, source_path)
-    generated = _generated_source_status_for_file(repo_root=repo_root, source_path=source_path, kind=kind)
     entry = {
         "file": file,
         "kind": kind,
@@ -429,12 +380,6 @@ def create_single_asset_entry(repo_root, root_path, source_path, extension):
         "hash": (asset or {}).get("hash") or "",
         "bytes": (asset or {}).get("bytes") or 0,
     }
-    if generated and generated.get("sourceKind") == "python":
-        entry["sourceKind"] = "python"
-    if generated and generated.get("source"):
-        entry["source"] = generated["source"]
-    if generated and generated.get("sourceStatus"):
-        entry["sourceStatus"] = generated["sourceStatus"]
     if kind == "srdf":
         paired_urdf = _paired_urdf_path_for_srdf(source_path, repo_root)
         if paired_urdf:
@@ -466,14 +411,24 @@ def create_generated_dxf_entry(repo_root, root_path, source_path):
     descriptor = read_drawing_catalog_metadata(package_dir)
     dxf_ref = str(descriptor.get("dxf") or "").strip()
     dxf_path = os.path.join(package_dir, dxf_ref) if dxf_ref else ""
-    dxf_asset = asset_for_path(repo_root, dxf_path) if dxf_path else None
+    dxf_stats = _file_stats(dxf_path) if dxf_path else None
     entry_ref = scan_relative_path(root_path, source_path)
+    if dxf_stats:
+        # The descriptor already carries the cached DXF's content hash (dxfHash);
+        # re-hashing the file on every catalog scan would put redundant disk I/O
+        # on the /__cad hot path.
+        version = f"{base36(dxf_stats.st_size)}-{base36(dxf_stats.st_mtime_ns)}"
+        url = f"{_asset_url_for_path(repo_root, dxf_path)}?v={encode_uri_component(version)}"
+        content_hash = str(descriptor.get("dxfHash") or "").strip() or _sha256_file(dxf_path)
+        entry_bytes = int(dxf_stats.st_size)
+    else:
+        url, content_hash, entry_bytes = "", "", 0
     entry = {
         "file": entry_ref,
         "kind": "dxf",
-        "url": (dxf_asset or {}).get("url") or "",
-        "hash": (dxf_asset or {}).get("hash") or "",
-        "bytes": (dxf_asset or {}).get("bytes") or 0,
+        "url": url,
+        "hash": content_hash,
+        "bytes": entry_bytes,
         "sourceKind": "python",
     }
     source = {"file": entry_ref, "sourcePath": entry_ref}

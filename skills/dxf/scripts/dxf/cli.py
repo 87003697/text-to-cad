@@ -11,12 +11,19 @@ def generate_dxf_targets(*args, **kwargs):
 
 
 def validate_dxf_files(targets: Sequence[str]) -> int:
-    """Run the generation-time drawing checks post-hoc on existing .dxf files."""
+    """Run the generation-time drawing checks post-hoc on existing .dxf files.
+    One unreadable/corrupt file is a per-file FAIL, never an aborted run."""
     from cadgen.drawing_checks import validate_dxf_file
 
     exit_code = 0
     for target in targets:
-        findings = validate_dxf_file(target)
+        try:
+            findings = validate_dxf_file(target)
+        except Exception as exc:  # noqa: BLE001 — missing/corrupt file -> per-file FAIL
+            print(f"[dxf] {target}: FAIL")
+            print(f"[dxf]   [error] unreadable: {exc}")
+            exit_code = 1
+            continue
         errors = [finding for finding in findings if finding.severity == "error"]
         if errors:
             exit_code = 1

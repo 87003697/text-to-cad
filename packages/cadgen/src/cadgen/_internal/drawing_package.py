@@ -77,21 +77,35 @@ def _deterministic_dxf_output(document: object):
         return
     options = ezdxf.options
     previous_fixed = bool(getattr(options, "write_fixed_meta_data_for_testing", False))
-    previous_marker = ezdxf_document.ezdxf_marker_string
+    # Tolerate ezdxf API drift: if the marker hook disappears, output degrades to
+    # "written-by marker not pinned" instead of every build crashing.
+    previous_marker = getattr(ezdxf_document, "ezdxf_marker_string", None)
     fixed_marker = f"{ezdxf.__version__} @ 2000-01-01T00:00:00+00:00"
+    previous_created: str | None = None
+    metadata = None
     options.write_fixed_meta_data_for_testing = True
-    ezdxf_document.ezdxf_marker_string = lambda: fixed_marker
     try:
+        if previous_marker is not None:
+            ezdxf_document.ezdxf_marker_string = lambda: fixed_marker
         metadata_reader = getattr(document, "ezdxf_metadata", None)
         if callable(metadata_reader):
             metadata = metadata_reader()
             # The created-by marker was stamped when the generator constructed the
-            # document (before this save path had any control); pin it too.
+            # document (before this save path had any control); pin it for the
+            # cached package write and RESTORE it afterwards so later saves of the
+            # same document (e.g. a --dxf export) keep real provenance.
+            try:
+                previous_created = metadata[ezdxf_document.CREATED_BY_EZDXF]
+            except Exception:
+                previous_created = None
             metadata[ezdxf_document.CREATED_BY_EZDXF] = fixed_marker
         yield
     finally:
         options.write_fixed_meta_data_for_testing = previous_fixed
-        ezdxf_document.ezdxf_marker_string = previous_marker
+        if previous_marker is not None:
+            ezdxf_document.ezdxf_marker_string = previous_marker
+        if metadata is not None and previous_created is not None:
+            metadata[ezdxf_document.CREATED_BY_EZDXF] = previous_created
 
 
 def write_drawing_package(
@@ -143,6 +157,32 @@ def write_drawing_package(
         json.dump(descriptor, handle, indent=2, sort_keys=True)
         handle.write("\n")
     return descriptor
+
+
+def export_drawing_dxf(script_path: Path, export_path: Path) -> Path:
+    """Copy the (already fresh) cached drawing DXF to ``export_path``, re-pointing
+    its embedded identity comment at the generator relative to the destination.
+    Raises when the package has no built DXF."""
+    import shutil
+
+    resolved_script = script_path.resolve()
+    package_dir = drawing_package_path_for_source(resolved_script)
+    descriptor = load_drawing_descriptor(package_dir) or {}
+    dxf_ref = str(descriptor.get("dxf") or "").strip()
+    cached_dxf = (package_dir / dxf_ref) if dxf_ref else drawing_dxf_path(package_dir)
+    if not cached_dxf.is_file():
+        raise RuntimeError(f"Drawing package has no built DXF to export: {package_dir}")
+    export_path = Path(export_path).expanduser().resolve()
+    export_path.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copyfile(cached_dxf, export_path)
+    write_dxf_text_to_cad_metadata(
+        export_path,
+        text_to_cad_identity_metadata(
+            source_path=relative_to_file(resolved_script, export_path),
+            source_hash=str(descriptor.get("sourceHash") or "").strip(),
+        ),
+    )
+    return export_path
 
 
 def drawing_package_current(script_path: Path) -> bool:

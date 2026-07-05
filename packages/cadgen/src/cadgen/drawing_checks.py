@@ -13,10 +13,27 @@ geometry layer holds cut profiles, which must be closed.
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from pathlib import Path
 
-_OPEN_GEOMETRY_LAYER_MARKERS = ("bend", "engrave", "etch", "ref", "note", "annotation", "construction")
+# Layer intent is decided by WHOLE tokens of the layer name (split on
+# non-alphanumerics), never substrings — "PREFORM" must not match "ref".
+# This is the single classifier: drawing_render (and the viewer's parseDxf)
+# follow the same token rule so validation, snapshots, and rendering agree.
+_LAYER_INTENT_BY_TOKEN = {
+    "bend": "bend",
+    "fold": "bend",
+    "engrave": "engrave",
+    "etch": "engrave",
+    "ref": "reference",
+    "reference": "reference",
+    "note": "reference",
+    "notes": "reference",
+    "annotation": "reference",
+    "construction": "reference",
+}
+_LAYER_TOKEN_SPLIT = re.compile(r"[^a-z0-9]+")
 _ANNOTATION_ENTITY_TYPES = frozenset({"TEXT", "MTEXT", "DIMENSION", "LEADER", "MULTILEADER", "HATCH"})
 _COORDINATE_TOLERANCE = 1e-6
 
@@ -39,9 +56,17 @@ class DrawingValidationError(ValueError):
         super().__init__(f"{prefix}DXF drawing validation failed: {details}")
 
 
+def layer_intent(layer_name: str) -> str:
+    """Classify a layer name into ``cut`` | ``bend`` | ``engrave`` | ``reference``."""
+    tokens = [t for t in _LAYER_TOKEN_SPLIT.split(str(layer_name or "").strip().lower()) if t]
+    for intent in ("bend", "engrave", "reference"):
+        if any(_LAYER_INTENT_BY_TOKEN.get(token) == intent for token in tokens):
+            return intent
+    return "cut"
+
+
 def layer_allows_open_geometry(layer_name: str) -> bool:
-    normalized = str(layer_name or "").strip().lower()
-    return any(marker in normalized for marker in _OPEN_GEOMETRY_LAYER_MARKERS)
+    return layer_intent(layer_name) != "cut"
 
 
 def _rounded(value: float) -> float:
@@ -116,10 +141,10 @@ def _zero_length_finding(entity) -> DrawingFinding | None:
     if kind == "CIRCLE" and _rounded(entity.dxf.radius) <= 0:
         return DrawingFinding("error", "zero_length_entity", f"zero-radius CIRCLE on layer {layer!r}")
     if kind == "ARC":
+        # start == end (mod 360) is DXF's standard full-circle encoding, not a
+        # zero sweep — the render side treats it as a 360-degree arc.
         if _rounded(entity.dxf.radius) <= 0:
             return DrawingFinding("error", "zero_length_entity", f"zero-radius ARC on layer {layer!r}")
-        if _rounded(entity.dxf.start_angle % 360.0) == _rounded(entity.dxf.end_angle % 360.0):
-            return DrawingFinding("error", "zero_length_entity", f"zero-sweep ARC on layer {layer!r}")
     if kind == "LWPOLYLINE" and len({_point_key(p) for p in _lwpolyline_points(entity)}) < 2:
         return DrawingFinding("error", "zero_length_entity", f"degenerate LWPOLYLINE on layer {layer!r}")
     return None
