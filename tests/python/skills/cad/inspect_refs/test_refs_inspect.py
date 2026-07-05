@@ -17,7 +17,7 @@ from cadgen._internal import assembly_spec
 from cadgen._internal import generation as cad_generation
 from cadgen import step_targets
 from cadgen._internal.glb_topology import STEP_TOPOLOGY_SCHEMA_VERSION
-from cadgen.render import part_glb_path
+from cadgen.catalog import render_package_dir
 from cadgen.selector_types import SelectorBundle, SelectorProfile
 from cadgen._internal.source_hash import python_source_hash
 from tests.python.support.cad_test_roots import IsolatedCadRoots
@@ -390,7 +390,7 @@ class InspectRefsTests(unittest.TestCase):
         self.addCleanup(lambda: shutil.rmtree(self.temp_root, ignore_errors=True))
 
     def _touch_glb(self, step_path: Path | None = None) -> Path:
-        glb_path = part_glb_path(step_path or self.step_path)
+        glb_path = render_package_dir(step_path or self.step_path)
         glb_path.parent.mkdir(parents=True, exist_ok=True)
         glb_path.write_bytes(b"glb")
         return glb_path
@@ -458,7 +458,7 @@ class InspectRefsTests(unittest.TestCase):
             edge_manifest["sourcePath"] = topology_manifest.get("sourcePath")
             edge_manifest["stepHash"] = topology_manifest.get("stepHash")
         # The render package is keyed by the ENTRY filename. Depending on how the entry
-        # resolves, production reads part_glb_path(spec.entry_path) at either the .py
+        # resolves, production reads render_package_dir(spec.entry_path) at either the .py
         # generator key (a python-backed entry with no STEP) or the .step key (resolved as
         # imported). Touch the mock GLB at both candidate keys so the lookup succeeds
         # regardless of which one this scenario resolves to.

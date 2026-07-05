@@ -23,7 +23,7 @@ from cadgen.catalog import (
     StepImportOptions,
     cad_ref_from_dxf_path,
     cad_ref_from_step_path,
-    drawing_package_path_for_source,
+    render_package_dir,
     find_source_by_path,
     iter_cad_sources,
     normalize_step_color,
@@ -51,7 +51,6 @@ from cadgen.metadata import (
     resolve_mesh_settings,
 )
 from cadgen.render import (
-    part_glb_path,
     relative_to_file,
     relative_to_cwd,
 )
@@ -318,7 +317,7 @@ def _spec_output_paths(spec: EntrySpec) -> tuple[Path, ...]:
     paths: list[Path] = []
     if spec.step_path is not None:
         paths.append(spec.step_path)
-        paths.append(part_glb_path(spec.entry_path))
+        paths.append(render_package_dir(spec.entry_path))
     for path in (spec.dxf_path, spec.stl_path, spec.three_mf_path, spec.native_glb_path):
         if path is not None:
             paths.append(path)
@@ -555,10 +554,10 @@ def _validate_part_render_output_paths(specs: Sequence[EntrySpec]) -> None:
             sources_by_3mf_path[three_mf_path] = spec.source_ref
         if spec.native_glb_path is not None:
             native_glb_path = spec.native_glb_path.resolve()
-            topology_glb_path = part_glb_path(spec.entry_path).resolve()
-            if native_glb_path == topology_glb_path:
+            package_dir = render_package_dir(spec.entry_path).resolve()
+            if native_glb_path == package_dir:
                 raise ValueError(
-                    "Native GLB output would overwrite the STEP topology GLB artifact for "
+                    "Native GLB output would overwrite the render package for "
                     f"{spec.source_ref}: {_display_path(native_glb_path)}"
                 )
             existing_source_ref = sources_by_native_glb_path.get(native_glb_path)
@@ -1083,7 +1082,7 @@ def _run_script_generator_inner(
             source_closure=source_closure,
         )
         logger.debug(
-            f"wrote drawing package: {_display_path(drawing_package_path_for_source(spec.script_path))}"
+            f"wrote drawing package: {_display_path(render_package_dir(spec.script_path))}"
         )
         if spec.dxf_export_path is not None:
             _write_dxf_payload(
@@ -1268,7 +1267,7 @@ def _existing_topology_artifact_matches_spec_without_scene(
                 source_path=spec.source_path,
                 step_path=spec.step_path,
             ),
-            glb_path=part_glb_path(spec.entry_path),
+            artifact_path=render_package_dir(spec.entry_path),
             require_selector=require_selector,
         )
     except StepTopologyArtifactError:
@@ -1311,7 +1310,7 @@ def _existing_topology_artifact_matches_options(spec: EntrySpec, selector_option
                 source_path=spec.source_path,
                 step_path=spec.step_path,
             ),
-            glb_path=part_glb_path(spec.entry_path),
+            artifact_path=render_package_dir(spec.entry_path),
             require_selector=False,
         )
     except StepTopologyArtifactError:
@@ -1435,7 +1434,7 @@ def _generate_part_outputs(
         and package_current
         and _existing_topology_artifact_matches_spec_without_scene(spec)
     ):
-        logger.debug(f"reused current GLB/topology: {_display_path(part_glb_path(spec.entry_path))}")
+        logger.debug(f"reused current GLB/topology: {_display_path(render_package_dir(spec.entry_path))}")
         return GeneratedStepResult(spec=spec, scene=None)
 
     if preloaded_scene is not None:
@@ -1462,7 +1461,7 @@ def _generate_part_outputs(
         and _existing_topology_artifact_matches_options(spec, selector_options)
         and _generated_assembly_glb_closure_current(spec)
     ):
-        logger.debug(f"reused current GLB/topology: {_display_path(part_glb_path(spec.entry_path))}")
+        logger.debug(f"reused current GLB/topology: {_display_path(render_package_dir(spec.entry_path))}")
         return GeneratedStepResult(spec=spec, scene=scene)
 
     with logger.timed(f"mesh STEP {spec.cad_ref}"):
@@ -1533,8 +1532,8 @@ def _generate_part_outputs(
         jobs.append(_ArtifactJob("STEP", step_export_job))
 
     # UNIFIED render artifact: every model — part or assembly, generated or imported — is
-    # a component-GLB PACKAGE (a directory at .{model}.step.glb: assembly.json descriptor +
-    # content-addressed components in the shared __cadgen__). An assembly introspects its
+    # a component-GLB PACKAGE (a directory at __cadgen__/models/<entry>: assembly.json
+    # descriptor + content-addressed components). An assembly introspects its
     # placed children as occurrences; a part is one occurrence/one component. The
     # part/assembly choice is the *authored* kind (spec.kind, from generator metadata or STEP
     # inference) — never guessed from geometry — and is recorded as entryKind on the
@@ -1548,10 +1547,7 @@ def _generate_part_outputs(
     def component_package_job() -> dict[str, object]:
         # Lazy import: component_package imports from this module, so a top-level
         # import would cycle.
-        from cadgen._internal.component_package import (
-            assembly_package_dir,
-            build_package_from_compound,
-        )
+        from cadgen._internal.component_package import build_package_from_compound
 
         shape = source_compound
         if shape is None:
@@ -1562,7 +1558,7 @@ def _generate_part_outputs(
             shape = import_step(spec.step_path)
         return build_package_from_compound(
             shape,
-            package_dir=assembly_package_dir(spec.entry_path),
+            package_dir=render_package_dir(spec.entry_path),
             # The descriptor's rootName is a plain model name, not a repo path (which would leak
             # the arbitrary `models/` root into a bundle meant to be hosted/relocated anywhere).
             root_name=spec.step_path.stem,
@@ -1611,7 +1607,7 @@ def _generate_step_outputs(
         and (spec.source != "generated" or _generated_assembly_glb_closure_current(spec))
     ):
         if logger is not None:
-            logger.debug(f"reused current GLB/topology: {_display_path(part_glb_path(spec.entry_path))}")
+            logger.debug(f"reused current GLB/topology: {_display_path(render_package_dir(spec.entry_path))}")
         return GeneratedStepResult(spec=spec, scene=None)
     output_kwargs: dict[str, object] = {
         "entries_by_step_path": entries_by_step_path,
@@ -1790,7 +1786,7 @@ def _generated_output_summary(spec: EntrySpec) -> str:
 
 def _generated_python_glb_summary(spec: EntrySpec) -> str:
     if spec.step_path is not None:
-        return f"generated {spec.kind} GLB/topology artifact: {_display_path(part_glb_path(spec.entry_path))}"
+        return f"generated {spec.kind} GLB/topology artifact: {_display_path(render_package_dir(spec.entry_path))}"
     return f"processed: {spec.source_ref}"
 
 
@@ -1800,7 +1796,7 @@ def _generated_dxf_summary(spec: EntrySpec) -> str:
     if spec.script_path is not None:
         return (
             "generated DXF drawing package: "
-            f"{_display_path(drawing_package_path_for_source(spec.script_path))}"
+            f"{_display_path(render_package_dir(spec.script_path))}"
         )
     return f"processed: {spec.source_ref}"
 
@@ -1810,10 +1806,10 @@ def _track_spec_generation(spec: EntrySpec, generator_name: str) -> contextlib.A
     # __cadgen__ package so a concurrent viewer/CLI build detects the in-flight run and
     # waits for it instead of duplicating the work.
     if generator_name == "gen_step" and spec.step_path is not None:
-        return track_generation_run(generation_lock_path(part_glb_path(spec.entry_path)))
+        return track_generation_run(generation_lock_path(render_package_dir(spec.entry_path)))
     if generator_name == "gen_dxf" and spec.script_path is not None:
         return track_generation_run(
-            generation_lock_path(drawing_package_path_for_source(spec.script_path))
+            generation_lock_path(render_package_dir(spec.script_path))
         )
     return track_generation_run(None)
 
@@ -1919,10 +1915,10 @@ def _generated_assembly_glb_closure_current(spec: EntrySpec) -> bool:
         return True
     if spec.step_path is None:
         return False
-    glb_path = part_glb_path(spec.entry_path)
-    if not glb_path.exists():
+    artifact_path = render_package_dir(spec.entry_path)
+    if not artifact_path.exists():
         return False
-    manifest = read_step_topology_manifest_from_glb(glb_path)
+    manifest = read_step_topology_manifest_from_glb(artifact_path)
     if not isinstance(manifest, dict):
         return False
     return _manifest_source_closure_unchanged(manifest, spec.step_path.parent)
@@ -1960,10 +1956,10 @@ def _generated_child_is_stale(child_spec: EntrySpec, *, force: bool) -> bool:
         return True
     # gen_step writes no STEP — the render GLB/package is the artifact, so freshness keys
     # on it. A missing/unhydrated artifact (file GLB or package directory) is stale.
-    glb_path = part_glb_path(child_spec.entry_path)
-    if not glb_path.exists() or _is_git_lfs_pointer(glb_path):
+    artifact_path = render_package_dir(child_spec.entry_path)
+    if not artifact_path.exists() or _is_git_lfs_pointer(artifact_path):
         return True
-    manifest = read_step_topology_manifest_from_glb(glb_path)
+    manifest = read_step_topology_manifest_from_glb(artifact_path)
     if isinstance(manifest, dict):
         recorded_hash = str(manifest.get("sourceClosureHash") or "").strip()
         recorded_files = manifest.get("sourceClosureFiles")
@@ -2285,7 +2281,7 @@ def _write_dxf_snapshot(spec: EntrySpec, *, logger: CliLogger) -> None:
 
     if spec.script_path is None:
         return
-    package_dir = drawing_package_path_for_source(spec.script_path)
+    package_dir = render_package_dir(spec.script_path)
     descriptor = load_drawing_descriptor(package_dir)
     dxf_ref = str((descriptor or {}).get("dxf") or "").strip()
     dxf_path = (package_dir / dxf_ref) if dxf_ref else drawing_dxf_path(package_dir)

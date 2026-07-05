@@ -54,7 +54,7 @@ test("stepFileStatusItems treats missing STEP source files as warnings", () => {
   assert.equal(items[0].title, "STEP file missing");
   assert.equal(
     items[0].message,
-    "STEP file was not generated for this Python script; only a GLB artifact is available."
+    "STEP file was not generated for this Python script; only the render package is available."
   );
   assert.deepEqual(items[0].details.map((item) => item.label), [
     "STEP file",
@@ -74,10 +74,10 @@ test("stepFileStatusItems marks missing STEP artifacts as errors", () => {
         stale: false,
         sourceKind: "python",
         stepPath: "models/tom/STEP/tom.step",
-        glbPath: "models/tom/STEP/.tom.step.glb",
+        packagePath: "models/tom/STEP/__cadgen__/models/tom.step",
         artifactHash: "",
         currentHash: "new-hash",
-        message: "GLB artifact is missing."
+        message: "Render package is missing."
       }
     },
     stepArtifactGenerationState: failedStepArtifactGenerationState,
@@ -89,7 +89,7 @@ test("stepFileStatusItems marks missing STEP artifacts as errors", () => {
   assert.equal(items[0].title, "STEP artifact missing");
   assert.equal(items[0].message, "Generated GLB is missing.");
   assert.equal(items[0].details.find((item) => item.label === "Code")?.value, "missing_glb");
-  assert.equal(items[0].details.find((item) => item.label === "GLB artifact")?.value, "tom/STEP/.tom.step.glb");
+  assert.equal(items[0].details.find((item) => item.label === "Render package")?.value, "tom/STEP/__cadgen__/models/tom.step");
 });
 
 test("stepFileStatusItems reads artifact warnings from current-file status", () => {
@@ -104,7 +104,7 @@ test("stepFileStatusItems reads artifact warnings from current-file status", () 
         error: "missing_glb",
         sourceKind: "step",
         stepPath: "models/tom/STEP/tom.step",
-        glbPath: "models/tom/STEP/.tom.step.glb"
+        packagePath: "models/tom/STEP/__cadgen__/models/tom.step"
       },
       step: {
         ok: true,
@@ -119,7 +119,7 @@ test("stepFileStatusItems reads artifact warnings from current-file status", () 
 
   assert.equal(items.length, 1);
   assert.equal(items[0].title, "STEP artifact missing");
-  assert.equal(items[0].details.find((item) => item.label === "GLB artifact")?.value, "tom/STEP/.tom.step.glb");
+  assert.equal(items[0].details.find((item) => item.label === "Render package")?.value, "tom/STEP/__cadgen__/models/tom.step");
 });
 
 test("stepFileStatusItems keeps renderable STEP artifact issues as warnings", () => {
@@ -388,7 +388,7 @@ test("formatFileStatusItemForAgent copies status items with details", () => {
         stale: true,
         sourceKind: "step",
         stepPath: "models/simple/part.step",
-        glbPath: "models/simple/.part.step.glb",
+        packagePath: "models/simple/__cadgen__/models/part.step",
         artifactHash: "old-hash",
         currentHash: "new-hash"
       }
@@ -408,7 +408,7 @@ test("formatFileStatusItemForAgent copies status items with details", () => {
     "Details:",
     "- Code: stale_step_artifact",
     "- STEP file: simple/part.step",
-    "- GLB artifact: simple/.part.step.glb",
+    "- Render package: simple/__cadgen__/models/part.step",
     "- Source kind: step",
     "- Artifact hash: old-hash",
     "- Current hash: new-hash"

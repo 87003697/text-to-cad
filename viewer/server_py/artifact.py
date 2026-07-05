@@ -1,8 +1,5 @@
 """Render-artifact status/build for /__cad/artifact (the STEP component-GLB package).
 
-Mirrors renderArtifact.mjs + stepArtifactProvider.mjs + the STEP freshness in
-cadDirectoryScanner.mjs:
-
 - Non-STEP entries are NOT owned by the STEP provider (ownsEntry on entry.file).
   Imported `.step`/`.stp` AND generated `.step.py` entries ARE owned and get a
   freshness check; a generated model with no built artifact reports `needs-build`
@@ -11,8 +8,8 @@ cadDirectoryScanner.mjs:
   imported `.step` also compares stepHash, the generated `.step.py` checks the
   source-closure mtimes) — no OCP. State machine:
   ready | needs-build | generating | error.
-- The build (POST) shells out to `cadgen.step_artifact` exactly as Node does,
-  keeping OCP out of the server process (crash/memory isolation).
+- The build (POST) shells out to `cadgen.step_artifact`, keeping OCP out of the
+  server process (crash/memory isolation).
 """
 
 from __future__ import annotations
@@ -60,14 +57,13 @@ def owns_entry(entry) -> bool:
     return owns_step_entry(entry) or owns_dxf_entry(entry)
 
 
-# --- pure freshness validation (imported .step component-GLB package) ---
-def _validate_assembly_package_artifact(repo_root, source_path, glb_path):
-    """Return (ok, code) — ok=True when fresh, else (False, <error_code>). None
-    if glb_path is not a package directory (legacy monolith GLB; treated as
-    missing by the caller)."""
-    if not os.path.isdir(glb_path):
-        return None
-    descriptor_path = os.path.join(glb_path, "assembly.json")
+# --- pure freshness validation (STEP component-GLB package) ---
+def _validate_assembly_package_artifact(repo_root, source_path, package_dir):
+    """Return (ok, code) — ok=True when fresh, else (False, <error_code>). A
+    missing package directory is the common pre-build state (missing_glb)."""
+    if not os.path.isdir(package_dir):
+        return (False, "missing_glb")
+    descriptor_path = os.path.join(package_dir, "assembly.json")
     try:
         with open(descriptor_path, "r", encoding="utf-8") as handle:
             descriptor = json.load(handle)
@@ -78,7 +74,7 @@ def _validate_assembly_package_artifact(repo_root, source_path, glb_path):
     components = descriptor.get("components") if isinstance(descriptor.get("components"), dict) else {}
     for component in components.values():
         ref = str((component or {}).get("glb") or "").strip()
-        component_path = os.path.join(glb_path, ref) if ref else ""
+        component_path = os.path.join(package_dir, ref) if ref else ""
         if not component_path or not os.path.isfile(component_path):
             return (False, "missing_glb")
     uses_python = str(descriptor.get("sourceKind", "step")).strip().lower() == "python"
@@ -112,16 +108,9 @@ def _validate_assembly_package_artifact(repo_root, source_path, glb_path):
 
 def validate_step_freshness(repo_root, source_path):
     """ok=True (fresh/ready) or (False, code). source_path is the entry's step
-    path; the package dir is inline_step_glb_artifact_path_for_source(source_path)."""
-    glb_path = scanner.inline_step_glb_artifact_path_for_source(source_path)
-    package = _validate_assembly_package_artifact(repo_root, source_path, glb_path)
-    if package is not None:
-        return package
-    # Legacy monolith GLB topology parsing is a TODO; a missing package reads as
-    # buildable missing_glb (the common pre-build state).
-    if not scanner._file_stats(glb_path):
-        return (False, "missing_glb")
-    return (False, "missing_step_topology")
+    path; the package dir is render_package_dir(source_path)."""
+    package_dir = scanner.render_package_dir(source_path)
+    return _validate_assembly_package_artifact(repo_root, source_path, package_dir)
 
 
 # --- pure freshness validation (generated .dxf.py drawing package) ---
@@ -132,7 +121,7 @@ def validate_dxf_freshness(repo_root, source_path):
     descriptor is a pure JSON read and staleness is the source-closure mtime
     trigger against the descriptor mtime — no cadgen import."""
     del repo_root
-    package_dir = scanner.inline_step_glb_artifact_path_for_source(source_path)
+    package_dir = scanner.render_package_dir(source_path)
     if not os.path.isdir(package_dir):
         return (False, "missing_dxf_artifact")
     descriptor_path = os.path.join(package_dir, scanner.DRAWING_DESCRIPTOR_NAME)
@@ -163,7 +152,7 @@ def validate_dxf_freshness(repo_root, source_path):
     return (True, None)
 
 
-# --- generation lock reader (mirror of generationLock.mjs) ---
+# --- generation lock reader (reads the lock cadgen's generation_status.py writes) ---
 def generation_lock_path(package_dir: str) -> str:
     d = str(package_dir or "").strip()
     if not d:

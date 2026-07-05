@@ -29,7 +29,7 @@ from cadgen._internal.source_hash import (
     closure_hash_from_files,
     python_source_hash,
 )
-from cadgen.catalog import drawing_package_path_for_source
+from cadgen.catalog import render_package_dir
 from cadgen.render import relative_to_file, sha256_file
 
 DRAWING_PACKAGE_KIND = "drawing-package"
@@ -122,7 +122,7 @@ def write_drawing_package(
             f"gen_dxf() envelope field 'document' must be a DXF document, got {type(document).__name__}"
         )
     resolved_script = script_path.resolve()
-    package_dir = drawing_package_path_for_source(resolved_script)
+    package_dir = render_package_dir(resolved_script)
     package_dir.mkdir(parents=True, exist_ok=True)
     dxf_path = drawing_dxf_path(package_dir)
     with _deterministic_dxf_output(document):
@@ -166,7 +166,7 @@ def export_drawing_dxf(script_path: Path, export_path: Path) -> Path:
     import shutil
 
     resolved_script = script_path.resolve()
-    package_dir = drawing_package_path_for_source(resolved_script)
+    package_dir = render_package_dir(resolved_script)
     descriptor = load_drawing_descriptor(package_dir) or {}
     dxf_ref = str(descriptor.get("dxf") or "").strip()
     cached_dxf = (package_dir / dxf_ref) if dxf_ref else drawing_dxf_path(package_dir)
@@ -190,7 +190,7 @@ def drawing_package_current(script_path: Path) -> bool:
     closure still hashes to the descriptor's closure hash (the CLI no-op fast path,
     mirroring the STEP `_assembly_is_current` gate)."""
     resolved_script = script_path.resolve()
-    package_dir = drawing_package_path_for_source(resolved_script)
+    package_dir = render_package_dir(resolved_script)
     descriptor = load_drawing_descriptor(package_dir)
     if descriptor is None:
         return False

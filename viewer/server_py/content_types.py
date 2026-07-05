@@ -35,7 +35,7 @@ def content_type_for_static_asset(file_path: str) -> str:
     return _STATIC_CONTENT_TYPES.get(ext, "")
 
 
-# localAssetBackend.mjs contentTypeForPath (CAD asset map). Note: this is an
+# CAD asset content-type map. Note: this is an
 # ordered if/else chain in JS; reproduced as a dict with the same mappings.
 # Unknown ext -> application/octet-stream (the JS default).
 _ASSET_CONTENT_TYPES = {

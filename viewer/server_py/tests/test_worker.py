@@ -180,7 +180,7 @@ class WorkerBuildIntegration(unittest.TestCase):
             "--repo-root", str(_WORKTREE),
             "--step", str(_LOGICAL_STEP),
             "--source-path", str(_FIXTURE),
-            "--skip-step-write", "--force",
+            "--force",
         ]
 
     def _closure(self):
@@ -194,7 +194,7 @@ class WorkerBuildIntegration(unittest.TestCase):
 
         warm1 = self.client.run_cadgen("cadgen.step_artifact", self._build_args(), str(_WORKTREE))
         self.assertTrue(warm1.get("ok"), warm1)
-        self.assertTrue(warm1.get("glbPath"))
+        self.assertTrue(warm1.get("packagePath"))
         w1 = self._closure()
 
         warm2 = self.client.run_cadgen("cadgen.step_artifact", self._build_args(), str(_WORKTREE))

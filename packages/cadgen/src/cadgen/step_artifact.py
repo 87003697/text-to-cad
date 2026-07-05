@@ -14,8 +14,8 @@ from cadgen._internal.generation import (
     run_script_generator,
 )
 from cadgen.metadata import DEFAULT_MESH_ANGULAR_TOLERANCE, DEFAULT_MESH_TOLERANCE, normalize_mesh_numeric
-from cadgen.render import part_glb_path, relative_to_cwd
-from cadgen.step_export import write_xcaf_doc_step_file
+from cadgen.catalog import render_package_dir
+from cadgen.render import relative_to_cwd
 from cadgen._internal.step_metadata import read_text_to_cad_step_metadata
 from cadgen._internal.step_scene import LoadedStepScene, load_step_scene, step_file_hash
 from cadgen.catalog import iter_cad_sources, source_from_path
@@ -112,7 +112,7 @@ def _result_payload(
     *,
     entry_kind: str,
     source_kind: str,
-    glb_path: Path,
+    artifact_path: Path,
     step_hash: str | None = None,
     source_hash: str | None = None,
     stats: dict[str, object] | None = None,
@@ -122,7 +122,7 @@ def _result_payload(
     payload: dict[str, object] = {
         "ok": True,
         "stepPath": relative_to_cwd(spec.step_path),
-        "glbPath": relative_to_cwd(glb_path),
+        "packagePath": relative_to_cwd(artifact_path),
         "entryKind": entry_kind,
         "sourceKind": source_kind,
         "stats": stats or {},
@@ -141,7 +141,7 @@ def _result_payload(
 
 
 def _generated_result_payload(spec: EntrySpec, scene: LoadedStepScene, stats: dict[str, object] | None = None) -> dict[str, object]:
-    glb_path = part_glb_path(spec.entry_path)
+    artifact_path = render_package_dir(spec.entry_path)
     source_kind = str(getattr(scene, "source_kind", "step") or "step").strip().lower()
     step_hash = str(getattr(scene, "step_hash", "") or "").strip()
     if not step_hash and spec.step_path is not None and spec.step_path.is_file():
@@ -152,7 +152,7 @@ def _generated_result_payload(spec: EntrySpec, scene: LoadedStepScene, stats: di
         source_kind=source_kind,
         step_hash=step_hash or None,
         source_hash=getattr(scene, "source_hash", None) if source_kind == "python" else None,
-        glb_path=glb_path,
+        artifact_path=artifact_path,
         stats=stats,
         load_elapsed_ms=scene.load_elapsed * 1000.0,
     )
@@ -172,34 +172,9 @@ def _existing_result_payload(spec: EntrySpec, artifact: StepTopologyArtifact) ->
         source_kind=source_kind,
         step_hash=step_hash or None,
         source_hash=source_hash or None,
-        glb_path=artifact.glb_path,
+        artifact_path=artifact.artifact_path,
         stats=stats if isinstance(stats, dict) else {},
         skipped=True,
-    )
-
-
-def _write_step_after_artifact(spec: EntrySpec, scene: LoadedStepScene, *, logger: CliLogger) -> str:
-    if scene.doc is None:
-        raise RuntimeError(f"Cannot write STEP after GLB artifact; scene has no XCAF document: {spec.step_path}")
-    source_hash = (
-        str(getattr(scene, "source_hash", "") or "").strip()
-        if str(getattr(scene, "source_kind", "") or "").strip().lower() == "python"
-        else ""
-    )
-    source_path = (
-        str(getattr(scene, "source_path", "") or "").strip()
-        if str(getattr(scene, "source_kind", "") or "").strip().lower() == "python"
-        else ""
-    )
-    return write_xcaf_doc_step_file(
-        scene.doc,
-        spec.step_path,
-        label=spec.step_path.stem,
-        originating_system="tom-cad direct XCAF assembly" if spec.kind == "assembly" else "build123d",
-        text_to_cad_entry_kind=spec.kind,
-        source_path=source_path or None,
-        source_hash=source_hash or None,
-        logger=logger,
     )
 
 
@@ -214,7 +189,7 @@ def _current_artifact_for_spec(spec: EntrySpec) -> StepTopologyArtifact | None:
                 source_path=spec.source_path,
                 step_path=spec.step_path,
             ),
-            glb_path=part_glb_path(spec.entry_path),
+            artifact_path=render_package_dir(spec.entry_path),
             require_selector=True,
         )
     except StepTopologyArtifactError:
@@ -224,14 +199,20 @@ def _current_artifact_for_spec(spec: EntrySpec) -> StepTopologyArtifact | None:
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="python -m cadgen.step_artifact",
-        description="Generate the hidden CAD Viewer GLB/topology artifact for one STEP/STP file.",
+        description="Build the CAD Viewer render package for one STEP/STP file or gen_step() generator.",
     )
     parser.add_argument("--repo-root", required=True, help="Repository/workspace root for relative STEP metadata.")
     parser.add_argument("--step", required=True, help="STEP/STP source file to process.")
-    parser.add_argument("--source-path", help="Python gen_step() source path for a logical STEP output.")
+    parser.add_argument(
+        "--source-path",
+        help=(
+            "Python gen_step() source for a generated model. Selects generator mode: the build "
+            "runs the generator in-process and writes only the render package; the logical "
+            "--step path need not exist on disk. Without it, --step must be an existing "
+            "STEP/STP file (imported model)."
+        ),
+    )
     parser.add_argument("--kind", choices=("part", "assembly"), help="Override inferred STEP entry kind.")
-    parser.add_argument("--skip-step-write", action="store_true", help="Generate from same-stem Python generator without writing STEP.")
-    parser.add_argument("--write-step-after-artifact", action="store_true", help="With --skip-step-write, write/update the STEP file after the GLB artifact is ready.")
     parser.add_argument("--force", action="store_true", help="Regenerate even if a current artifact exists.")
     parser.add_argument("--mesh-tolerance", type=float, help="Override automatic mesh linear deflection.")
     parser.add_argument("--mesh-angular-tolerance", type=float, help="Override automatic mesh angular deflection.")
@@ -245,8 +226,6 @@ def build_step_artifact(
     step: Path,
     source_path: Path | None = None,
     kind: str | None = None,
-    skip_step_write: bool = False,
-    write_step_after_artifact: bool = False,
     force: bool = False,
     mesh_tolerance: float | None = None,
     mesh_angular_tolerance: float | None = None,
@@ -258,19 +237,19 @@ def build_step_artifact(
     callable in-process by a long-lived warm-OCCT worker AND wrapped by main();
     it raises on error (the CLI shell owns argv parsing + JSON stdout).
 
+    Passing ``source_path`` selects GENERATOR mode: the gen_step() source runs
+    in-process and only the render package is written — the logical ``step``
+    path never needs to exist on disk (STEP is exported on demand elsewhere).
+    Without ``source_path``, ``step`` must be an existing imported STEP/STP file.
+
     ``reset_runtime_closure`` (default-off) is for warm worker processes: it makes
     the generator's recorded source closure deterministic across repeated in-process
     builds — see :func:`cadgen.generation.run_script_generator`."""
-    if write_step_after_artifact and not skip_step_write:
-        raise ValueError("--write-step-after-artifact requires --skip-step-write")
     repo_root = Path(repo_root).expanduser().resolve()
     step_path = Path(step).expanduser().resolve()
-    if skip_step_write:
-        script_path = (
-            Path(source_path).expanduser().resolve()
-            if source_path
-            else step_path.with_suffix(".py")
-        )
+    from_generator = source_path is not None
+    if from_generator:
+        script_path = Path(source_path).expanduser().resolve()
         if not script_path.is_file():
             raise FileNotFoundError(f"Python generator does not exist for logical STEP path: {script_path}")
         source = source_from_path(script_path)
@@ -278,7 +257,7 @@ def build_step_artifact(
             raise RuntimeError(f"Python generator is not a gen_step() CAD source: {script_path}")
         spec = _entry_spec_from_source(source)
         if spec.step_path is None or spec.step_path.resolve() != step_path:
-            if not source_path or spec.step_path is None:
+            if spec.step_path is None:
                 raise RuntimeError(f"Python generator does not map to logical STEP path: {step_path}")
             spec = replace(
                 spec,
@@ -297,7 +276,7 @@ def build_step_artifact(
         logger = CliLogger("step-artifact", verbose=False)
     mesh_tolerance = normalize_mesh_numeric(mesh_tolerance, field_name="mesh_tolerance")
     mesh_angular_tolerance = normalize_mesh_numeric(mesh_angular_tolerance, field_name="mesh_angular_tolerance")
-    if skip_step_write:
+    if from_generator:
         existing_spec = spec
         if mesh_tolerance is not None or mesh_angular_tolerance is not None:
             existing_spec = replace(
@@ -334,8 +313,7 @@ def build_step_artifact(
         if existing_artifact is not None:
             return _existing_result_payload(existing_spec, existing_artifact)
 
-    glb_path = part_glb_path(existing_spec.entry_path)  # noqa: F841 — parity with prior main()
-    if skip_step_write:
+    if from_generator:
         scene = run_script_generator(
             existing_spec,
             "gen_step",
@@ -346,9 +324,6 @@ def build_step_artifact(
         if scene is None:
             raise RuntimeError(f"Python generator did not produce a STEP scene: {existing_spec.source_ref}")
         spec = existing_spec
-        if write_step_after_artifact:
-            step_hash = _write_step_after_artifact(spec, scene, logger=logger)
-            scene.step_hash = step_hash
     else:
         with logger.timed(f"load STEP {relative_to_cwd(step_path)}"):
             scene = load_step_scene(step_path)
@@ -365,15 +340,12 @@ def build_step_artifact(
         spec,
         entries_by_step_path=_entries_by_step_path_for_repo(repo_root, spec),
         preloaded_scene=scene,
-        require_step_file=not skip_step_write,
+        require_step_file=not from_generator,
         force=force,
         logger=logger,
     )
     stats = result.selector_bundle.manifest.get("stats") if result.selector_bundle is not None else {}
-    payload = _generated_result_payload(spec, scene, stats if isinstance(stats, dict) else {})
-    if write_step_after_artifact:
-        return {**payload, "stepWrite": {"status": "complete", "stepHash": payload.get("stepHash", "")}}
-    return payload
+    return _generated_result_payload(spec, scene, stats if isinstance(stats, dict) else {})
 
 
 def run_cli_payload(
@@ -392,8 +364,6 @@ def run_cli_payload(
         step=Path(args.step),
         source_path=Path(args.source_path) if args.source_path else None,
         kind=args.kind,
-        skip_step_write=bool(args.skip_step_write),
-        write_step_after_artifact=bool(args.write_step_after_artifact),
         force=bool(args.force),
         mesh_tolerance=args.mesh_tolerance,
         mesh_angular_tolerance=args.mesh_angular_tolerance,

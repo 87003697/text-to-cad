@@ -28,7 +28,8 @@ from cadgen._internal.glb_topology import (
     STEP_TOPOLOGY_SCHEMA_VERSION,
     step_topology_capabilities,
 )
-from cadgen.render import part_glb_path, part_native_glb_path
+from cadgen.catalog import render_package_dir
+from cadgen.render import part_native_glb_path
 from cadgen._internal.step_scene import ColorRGBA, LoadedStepScene, OccurrenceNode, SelectorBundle, occurrence_selector_id
 
 
@@ -67,7 +68,7 @@ def export_part_glb_from_scene(
     selector_bundle: SelectorBundle | None = None,
     include_selector_topology: bool = True,
 ) -> Path:
-    target_path = part_glb_path(step_path)
+    target_path = render_package_dir(step_path)
     # The hierarchical writer handles plain part scenes too, and unlike the
     # build123d GLB exporter it preserves XCAF colors and occurrence ids.
     _ = (linear_deflection, angular_deflection)
@@ -94,7 +95,7 @@ def export_assembly_glb_from_scene(
     # ``target_path`` writes the GLB exactly there (used by the component builder to land a
     # clean leaf GLB inside its package, with no derived __cadgen__ scaffolding). Default
     # derives the package path from ``step_path``.
-    target_path = target_path if target_path is not None else part_glb_path(step_path)
+    target_path = target_path if target_path is not None else render_package_dir(step_path)
     # The caller meshes the scene before scheduling artifact jobs. Keep the
     # deflection args on this API so assembly/part exports share one contract.
     _ = (linear_deflection, angular_deflection)

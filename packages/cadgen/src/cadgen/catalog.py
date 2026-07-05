@@ -93,10 +93,10 @@ class CadSource:
         return self.script_path if self.script_path is not None else self.step_path
 
     @property
-    def glb_path(self) -> Path | None:
+    def render_package_path(self) -> Path | None:
         if self.kind == "dxf" or self.entry_path is None:
             return None
-        return cadgen_package_path_for_entry_path(self.entry_path)
+        return render_package_dir(self.entry_path)
 
     @property
     def generated_paths(self) -> tuple[Path, ...]:
@@ -112,8 +112,8 @@ class CadSource:
             paths.append(self.three_mf_path)
         if self.native_glb_path is not None:
             paths.append(self.native_glb_path)
-        if self.glb_path is not None:
-            paths.append(self.glb_path)
+        if self.render_package_path is not None:
+            paths.append(self.render_package_path)
         return tuple(path.resolve() for path in paths)
 
 
@@ -277,19 +277,16 @@ def normalize_cad_ref(raw_ref: str) -> str | None:
     return normalized
 
 
-def cadgen_package_path_for_entry_path(entry_path: Path) -> Path:
-    # Every render-artifact package lives INSIDE the per-folder __cadgen__ directory, keyed
-    # by the ENTRY filename (the on-disk file the viewer lists: `<name>.step`,
-    # `<name>.step.py`, `<name>.dxf.py`, ...), so distinct entry files always get distinct
-    # packages and model folders hold only source. A STEP entry's package is a self-contained
-    # component-GLB directory (assembly.json descriptor + components/<hash>.glb); a `.dxf.py`
-    # entry's package is a drawing directory (drawing.json descriptor + drawing.dxf).
+def render_package_dir(entry_path: Path) -> Path:
+    # The render-artifact package directory for a CAD entry file. Every package lives
+    # INSIDE the per-folder __cadgen__ directory, keyed by the ENTRY filename (the on-disk
+    # file the viewer lists: `<name>.step`, `<name>.step.py`, `<name>.dxf.py`, ...), so
+    # distinct entry files always get distinct packages and model folders hold only source.
+    # A STEP entry's package is a self-contained component-GLB directory (assembly.json
+    # descriptor + components/<hash>.glb); a `.dxf.py` entry's package is a drawing
+    # directory (drawing.json descriptor + drawing.dxf).
     base = entry_path.resolve()
     return (base.parent / CADGEN_DIRNAME / CADGEN_MODELS_DIRNAME / base.name).resolve()
-
-
-def drawing_package_path_for_source(script_path: Path) -> Path:
-    return cadgen_package_path_for_entry_path(script_path)
 
 
 def _iter_python_sources(root: Path) -> tuple[CadSource, ...]:

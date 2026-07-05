@@ -13,7 +13,7 @@ from cadgen._internal.generation import (
     run_script_generator,
 )
 from cadgen.metadata import DEFAULT_MESH_ANGULAR_TOLERANCE, DEFAULT_MESH_TOLERANCE
-from cadgen.render import part_glb_path
+from cadgen.catalog import render_package_dir
 from cadgen._internal.step_metadata import read_text_to_cad_step_metadata
 from cadgen._internal.step_scene import LoadedStepScene, load_step_scene
 from cadgen.step_targets import (
@@ -35,7 +35,7 @@ def cad_ref_for_step_path(repo_root: Path, step_path: Path) -> str:
 def ensure_step_topology_artifact(
     target: ResolvedStepTarget,
     *,
-    glb_path: Path | None = None,
+    artifact_path: Path | None = None,
     require_selector: bool = False,
     force: bool = False,
     logger: CliLogger | None = None,
@@ -48,7 +48,7 @@ def ensure_step_topology_artifact(
         mesh_tolerance=mesh_tolerance,
         mesh_angular_tolerance=mesh_angular_tolerance,
     )
-    resolved_glb_path = glb_path or part_glb_path(spec.entry_path)
+    resolved_artifact_path = artifact_path or render_package_dir(spec.entry_path)
 
     # The canonical render artifact for a generated assembly is a component-GLB package
     # directory, which carries no whole-assembly selector topology (faces/edges). inspect
@@ -56,7 +56,7 @@ def ensure_step_topology_artifact(
     # win is precisely that this 29.5s extraction is no longer in the build path).
     from cadgen._internal.component_package import is_assembly_package
 
-    if glb_path is None and is_assembly_package(resolved_glb_path):
+    if artifact_path is None and is_assembly_package(resolved_artifact_path):
         try:
             return _assembly_topology_artifact(
                 spec, require_selector=require_selector, logger=logger, force=force
@@ -68,7 +68,7 @@ def ensure_step_topology_artifact(
                 code="glb_regeneration_failed",
                 cad_path=spec.cad_ref,
                 step_path=spec.step_path,
-                glb_path=resolved_glb_path,
+                artifact_path=resolved_artifact_path,
                 regenerate_command=REGENERATE_STEP_COMMAND,
                 message=(
                     f"Failed to extract assembly topology for {spec.cad_ref}: {exc}.\n"
@@ -77,7 +77,7 @@ def ensure_step_topology_artifact(
             ) from exc
 
     if not force:
-        artifact = _current_artifact_for_spec(spec, glb_path=resolved_glb_path, require_selector=require_selector)
+        artifact = _current_artifact_for_spec(spec, artifact_path=resolved_artifact_path, require_selector=require_selector)
         if artifact is not None:
             return artifact
 
@@ -98,7 +98,7 @@ def ensure_step_topology_artifact(
             code="glb_regeneration_failed",
             cad_path=spec.cad_ref,
             step_path=spec.step_path,
-            glb_path=resolved_glb_path,
+            artifact_path=resolved_artifact_path,
             regenerate_command=REGENERATE_STEP_COMMAND,
             message=(
                 f"Failed to regenerate GLB/topology artifact for {spec.cad_ref}: {exc}.\n"
@@ -109,7 +109,7 @@ def ensure_step_topology_artifact(
     # same way the fast path above does (cheap descriptor for renders, on-demand selector
     # extraction otherwise) rather than the monolith file-validator, which requires a GLB
     # *file* and would report the package directory as missing.
-    if glb_path is None and is_assembly_package(resolved_glb_path):
+    if artifact_path is None and is_assembly_package(resolved_artifact_path):
         return _assembly_topology_artifact(
             spec, require_selector=require_selector, logger=logger, force=False
         )
@@ -120,7 +120,7 @@ def ensure_step_topology_artifact(
             source_path=spec.source_path,
             step_path=spec.step_path,
         ),
-        glb_path=resolved_glb_path,
+        artifact_path=resolved_artifact_path,
         require_selector=require_selector,
     )
 
@@ -176,17 +176,17 @@ def _assembly_topology_artifact(
     and return the bundle in memory — the build-time win is precisely that this ~29.5s
     extraction is no longer in the build path. TODO: cache to a ``topology.glb`` sidecar
     inside the package to avoid re-extraction on repeated selector queries."""
-    from cadgen._internal.component_package import assembly_package_dir, read_package_descriptor
+    from cadgen._internal.component_package import read_package_descriptor
 
     if not require_selector:
-        descriptor = read_package_descriptor(assembly_package_dir(spec.step_path))
+        descriptor = read_package_descriptor(render_package_dir(spec.step_path))
         if descriptor is not None:
             return StepTopologyArtifact(
                 cad_path=spec.cad_ref,
                 kind="assembly",
                 source_path=spec.source_path,
                 step_path=spec.step_path,
-                glb_path=part_glb_path(spec.entry_path),
+                artifact_path=render_package_dir(spec.entry_path),
                 manifest=descriptor,
                 selector_bundle=None,
             )
@@ -222,7 +222,7 @@ def _assembly_topology_artifact(
         kind="assembly",
         source_path=spec.source_path,
         step_path=spec.step_path,
-        glb_path=part_glb_path(spec.entry_path),
+        artifact_path=render_package_dir(spec.entry_path),
         manifest=bundle.manifest,
         selector_bundle=bundle,
     )
@@ -256,7 +256,7 @@ def _scene_for_regeneration(
 def _current_artifact_for_spec(
     spec: EntrySpec,
     *,
-    glb_path: Path,
+    artifact_path: Path,
     require_selector: bool,
 ) -> StepTopologyArtifact | None:
     if not _existing_topology_artifact_matches_spec_without_scene(spec, require_selector=require_selector):
@@ -269,7 +269,7 @@ def _current_artifact_for_spec(
                 source_path=spec.source_path,
                 step_path=spec.step_path,
             ),
-            glb_path=glb_path,
+            artifact_path=artifact_path,
             require_selector=require_selector,
         )
     except StepTopologyArtifactError:

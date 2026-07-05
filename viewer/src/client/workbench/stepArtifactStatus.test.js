@@ -55,7 +55,7 @@ test("stepArtifactGenerationFileRefs tracks STEP files and generated GLB artifac
     file: "parts/bracket.step",
     artifact: {
       stepPath: "models/parts/bracket.step",
-      glbPath: "models/parts/.bracket.step.glb",
+      packagePath: "models/parts/__cadgen__/models/bracket.step",
       sourcePath: "models/parts/bracket.py"
     }
   });

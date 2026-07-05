@@ -1,4 +1,4 @@
-"""Python port of cadDirectoryScanner.mjs — produces the raw catalog.
+"""CAD directory scanner — produces the raw viewer catalog.
 
 The raw catalog entry shape is ``{file, kind, url, hash, bytes, ...}`` where
 ``file`` is root-relative, ``url`` is repo-relative (``/seg/seg?v=<token>``) and
@@ -6,10 +6,10 @@ gets rewritten to the ``/__cad/asset?file=...`` form later by the backend's
 ``absolutize_catalog``. ``hash`` is sha256 hex; ``bytes`` is the byte size; the
 ``?v=`` token is ``base36(size)-base36(mtime_ns)`` (see encoding.file_version).
 
-Verified against Node golden output (tests/catalog_golden.json) for the
-single-asset path (implicit/mesh/stl/3mf/glb/gcode/dxf). STEP entries
-(``create_step_entry``) and python-generated source status delegate to cadgen
-and are completed in the cadgen-integration phase — they are marked below.
+Encoder semantics are pinned byte-for-byte by tests/golden.json (regenerate with
+tests/gen_golden.mjs). Kept deliberately importable WITHOUT cadgen/OCP: the
+package-path helpers below mirror ``cadgen.catalog`` (see the drift-guard test
+in tests/python/global).
 """
 
 from __future__ import annotations
@@ -59,7 +59,7 @@ def is_inside_cadgen_dir(file_path: str) -> bool:
     return CADGEN_DIRNAME in str(file_path or "").split(os.sep)
 
 
-def is_inline_step_glb_artifact_path(file_path: str) -> bool:
+def is_render_package_path(file_path: str) -> bool:
     # A render-artifact package is the descriptor directory at
     # ``<folder>/__cadgen__/models/<entry-filename>/``, recognized purely by structure.
     p = str(file_path or "")
@@ -71,18 +71,18 @@ def is_inline_step_glb_artifact_path(file_path: str) -> bool:
     )
 
 
-def inline_step_glb_artifact_path_for_source(entry_path: str) -> str:
+def render_package_dir(entry_path: str) -> str:
     return os.path.join(
         os.path.dirname(entry_path), CADGEN_DIRNAME, CADGEN_MODELS_DIRNAME,
         os.path.basename(entry_path),
     )
 
 
-def source_path_for_inline_step_glb_artifact(glb_path: str):
-    if not is_inline_step_glb_artifact_path(glb_path):
+def entry_path_for_render_package(package_path: str):
+    if not is_render_package_path(package_path):
         return None
-    folder = os.path.dirname(os.path.dirname(os.path.dirname(glb_path)))
-    return os.path.join(folder, os.path.basename(glb_path))
+    folder = os.path.dirname(os.path.dirname(os.path.dirname(package_path)))
+    return os.path.join(folder, os.path.basename(package_path))
 
 
 # --- path / ref helpers ---
@@ -163,8 +163,8 @@ def _encode_url_path(repo_relative: str) -> str:
     return "/" + "/".join(encode_uri_component(part) for part in repo_relative.split("/"))
 
 
-def _package_descriptor_stats(glb_path: str):
-    return _file_stats(os.path.join(glb_path, "assembly.json"))
+def _package_descriptor_stats(package_dir: str):
+    return _file_stats(os.path.join(package_dir, "assembly.json"))
 
 
 def asset_for_path(repo_root: str, file_path: str):
@@ -387,7 +387,7 @@ def create_generated_dxf_entry(repo_root, root_path, source_path):
     # A `<name>.dxf.py` drawing generator entry. The render asset is the cached
     # drawing.dxf inside the entry-keyed __cadgen__ package; an unbuilt entry has
     # no asset yet and reports `needs-build` via /__cad/artifact when opened.
-    package_dir = inline_step_glb_artifact_path_for_source(source_path)
+    package_dir = render_package_dir(source_path)
     descriptor = read_drawing_catalog_metadata(package_dir)
     dxf_ref = str(descriptor.get("dxf") or "").strip()
     dxf_path = os.path.join(package_dir, dxf_ref) if dxf_ref else ""
@@ -431,14 +431,13 @@ def step_kind_from_topology(topology):
     return "part"
 
 
-def read_step_catalog_metadata(glb_path):
+def read_step_catalog_metadata(package_dir):
     # Component-GLB package: assembly.json IS the index manifest. Read it
-    # directly (pure-Python; no OCP). The monolith-GLB embedded-topology path is
-    # a TODO — current models use component packages.
-    if not (_package_descriptor_stats(glb_path) and not _file_stats(glb_path)):
+    # directly (pure-Python; no OCP).
+    if not _package_descriptor_stats(package_dir):
         return {}
     try:
-        with open(os.path.join(glb_path, "assembly.json"), "r", encoding="utf-8") as handle:
+        with open(os.path.join(package_dir, "assembly.json"), "r", encoding="utf-8") as handle:
             descriptor = json.load(handle)
     except (OSError, ValueError):
         return {}
@@ -468,10 +467,10 @@ def create_step_entry(repo_root, root_path, source_path, extension, include_arti
             "STEP artifact-status path pending cadgen delegation (artifact-route phase)"
         )
     entry_is_python = source_path.lower().endswith(".py")
-    glb_path = inline_step_glb_artifact_path_for_source(source_path)
-    metadata = read_step_catalog_metadata(glb_path)
+    package_dir = render_package_dir(source_path)
+    metadata = read_step_catalog_metadata(package_dir)
     topology = metadata.get("topology")
-    glb_asset = asset_for_path(repo_root, glb_path)
+    package_asset = asset_for_path(repo_root, package_dir)
     topology_index = topology.get("index") if (topology and isinstance(topology.get("index"), dict)) else topology
     params_path_rel = str((topology_index or {}).get("paramsPath", "")).strip()
     step_module_asset = (
@@ -483,9 +482,9 @@ def create_step_entry(repo_root, root_path, source_path, extension, include_arti
     entry = {
         "file": entry_ref,
         "kind": step_kind_from_topology(topology),
-        "url": (glb_asset or {}).get("url") or _asset_url_for_path(repo_root, glb_path),
-        "hash": (glb_asset or {}).get("hash") or "",
-        "bytes": (glb_asset or {}).get("bytes") or 0,
+        "url": (package_asset or {}).get("url") or _asset_url_for_path(repo_root, package_dir),
+        "hash": (package_asset or {}).get("hash") or "",
+        "bytes": (package_asset or {}).get("bytes") or 0,
         "sourceKind": "python" if entry_is_python else "step",
     }
     if entry_is_python:
@@ -549,7 +548,7 @@ def scan_cad_directory(repo_root, root_dir=DEFAULT_VIEWER_ROOT_DIR, include_arti
     source_files = _collect_cad_source_files(root_path, [])
     entries = []
     for source_path in source_files:
-        logical = source_path_for_inline_step_glb_artifact(source_path) if is_inline_step_glb_artifact_path(source_path) else source_path
+        logical = entry_path_for_render_package(source_path) if is_render_package_path(source_path) else source_path
         extension = os.path.splitext(logical)[1].lower()
         if is_dxf_generator_path(logical):
             entries.append(create_generated_dxf_entry(repo_root, root_path, logical))

@@ -18,7 +18,7 @@ from cadgen._internal.glb_topology import (
     read_step_topology_bundle_from_glb,
     read_step_topology_manifest_from_glb,
 )
-from cadgen.render import part_glb_path
+from cadgen.catalog import render_package_dir
 from cadgen.selector_types import SelectorBundle
 from cadgen._internal.step_hash import step_file_hash
 
@@ -60,7 +60,7 @@ class StepTopologyArtifact:
     kind: str
     source_path: Path
     step_path: Path
-    glb_path: Path
+    artifact_path: Path
     manifest: dict[str, object]
     selector_bundle: SelectorBundle | None = None
 
@@ -73,14 +73,14 @@ class StepTopologyArtifactError(CadRefError):
         message: str,
         cad_path: str,
         step_path: Path,
-        glb_path: Path,
+        artifact_path: Path,
         regenerate_command: str,
     ) -> None:
         super().__init__(message)
         self.code = code
         self.cad_path = cad_path
         self.step_path = step_path
-        self.glb_path = glb_path
+        self.artifact_path = artifact_path
         self.regenerate_command = regenerate_command
 
     def to_error(self) -> dict[str, object]:
@@ -89,7 +89,7 @@ class StepTopologyArtifactError(CadRefError):
             "message": str(self),
             "cadPath": self.cad_path,
             "stepPath": _display_path(self.step_path),
-            "glbPath": _display_path(self.glb_path),
+            "packagePath": _display_path(self.artifact_path),
             "regenerateCommand": self.regenerate_command,
         }
 
@@ -188,11 +188,11 @@ def resolve_step_target(target: str) -> ResolvedStepTarget:
 def validate_step_topology_artifact(
     target: ResolvedStepTarget,
     *,
-    glb_path: Path | None = None,
+    artifact_path: Path | None = None,
     require_selector: bool = False,
 ) -> StepTopologyArtifact:
-    resolved_glb_path = glb_path or part_glb_path(target.step_path)
-    if not resolved_glb_path.is_file():
+    resolved_artifact_path = artifact_path or render_package_dir(target.step_path)
+    if not resolved_artifact_path.is_file():
         raise _topology_artifact_error(
             code="missing_glb",
             reason="STEP topology validation requires the generated GLB artifact, but it is missing",
@@ -200,10 +200,10 @@ def validate_step_topology_artifact(
             kind=target.kind,
             source_path=target.source_path,
             step_path=target.step_path,
-            glb_path=resolved_glb_path,
+            artifact_path=resolved_artifact_path,
         )
 
-    manifest = read_step_topology_manifest_from_glb(resolved_glb_path)
+    manifest = read_step_topology_manifest_from_glb(resolved_artifact_path)
     if manifest is None:
         raise _topology_artifact_error(
             code="missing_step_topology",
@@ -212,7 +212,7 @@ def validate_step_topology_artifact(
             kind=target.kind,
             source_path=target.source_path,
             step_path=target.step_path,
-            glb_path=resolved_glb_path,
+            artifact_path=resolved_artifact_path,
         )
     try:
         schema_version = int(manifest.get("schemaVersion") or 0)
@@ -226,10 +226,10 @@ def validate_step_topology_artifact(
             kind=target.kind,
             source_path=target.source_path,
             step_path=target.step_path,
-            glb_path=resolved_glb_path,
+            artifact_path=resolved_artifact_path,
         )
     source_kind = str(manifest.get("sourceKind") or "step").strip().lower()
-    manifest_source_path = _source_path_from_manifest(manifest, glb_path=resolved_glb_path)
+    manifest_source_path = _source_path_from_manifest(manifest, artifact_path=resolved_artifact_path)
     if manifest_source_path is None:
         raise _topology_artifact_error(
             code="missing_source_path",
@@ -238,7 +238,7 @@ def validate_step_topology_artifact(
             kind=target.kind,
             source_path=target.source_path,
             step_path=target.step_path,
-            glb_path=resolved_glb_path,
+            artifact_path=resolved_artifact_path,
         )
     if source_kind == "python":
         if manifest_source_path.suffix.lower() != ".py":
@@ -249,7 +249,7 @@ def validate_step_topology_artifact(
                 kind=target.kind,
                 source_path=target.source_path,
                 step_path=target.step_path,
-                glb_path=resolved_glb_path,
+                artifact_path=resolved_artifact_path,
             )
     step_hash = str(manifest.get("stepHash") or "").strip()
     if target.step_path.is_file():
@@ -261,7 +261,7 @@ def validate_step_topology_artifact(
                 kind=target.kind,
                 source_path=target.source_path,
                 step_path=target.step_path,
-                glb_path=resolved_glb_path,
+                artifact_path=resolved_artifact_path,
             )
         current_step_hash = step_file_hash(target.step_path)
         if step_hash != current_step_hash:
@@ -272,10 +272,10 @@ def validate_step_topology_artifact(
                 kind=target.kind,
                 source_path=target.source_path,
                 step_path=target.step_path,
-                glb_path=resolved_glb_path,
+                artifact_path=resolved_artifact_path,
             )
 
-    edge_manifest = read_step_display_edge_manifest_from_glb(resolved_glb_path)
+    edge_manifest = read_step_display_edge_manifest_from_glb(resolved_artifact_path)
     if edge_manifest is None:
         raise _topology_artifact_error(
             code="missing_edge_topology",
@@ -284,7 +284,7 @@ def validate_step_topology_artifact(
             kind=target.kind,
             source_path=target.source_path,
             step_path=target.step_path,
-            glb_path=resolved_glb_path,
+            artifact_path=resolved_artifact_path,
         )
     try:
         edge_schema_version = int(edge_manifest.get("schemaVersion") or 0)
@@ -326,13 +326,13 @@ def validate_step_topology_artifact(
             kind=target.kind,
             source_path=target.source_path,
             step_path=target.step_path,
-            glb_path=resolved_glb_path,
+            artifact_path=resolved_artifact_path,
         )
     if not (
         isinstance(primitive_attributes, dict)
         and primitive_attributes.get("barycentric") == STEP_EDGE_BARYCENTRIC_ATTRIBUTE
         and primitive_attributes.get("class") == STEP_EDGE_CLASS_ATTRIBUTE
-        and glb_primitives_have_surface_edge_attributes(resolved_glb_path)
+        and glb_primitives_have_surface_edge_attributes(resolved_artifact_path)
     ):
         raise _topology_artifact_error(
             code="missing_surface_edge_attributes",
@@ -341,7 +341,7 @@ def validate_step_topology_artifact(
             kind=target.kind,
             source_path=target.source_path,
             step_path=target.step_path,
-            glb_path=resolved_glb_path,
+            artifact_path=resolved_artifact_path,
         )
     edge_stats = edge_manifest.get("stats")
     surface_half_edge_count = (
@@ -357,7 +357,7 @@ def validate_step_topology_artifact(
     expects_surface_edge_classes = surface_half_edge_count > 0 or any(
         int(value or 0) > 0 for value in generated_counts.values()
     )
-    if expects_surface_edge_classes and not glb_surface_edge_class_has_nonzero_values(resolved_glb_path):
+    if expects_surface_edge_classes and not glb_surface_edge_class_has_nonzero_values(resolved_artifact_path):
         raise _topology_artifact_error(
             code="missing_surface_edge_attributes",
             reason=f"STEP topology validation requires nonzero {STEP_EDGE_CLASS_ATTRIBUTE} values for generated surface edges",
@@ -365,12 +365,12 @@ def validate_step_topology_artifact(
             kind=target.kind,
             source_path=target.source_path,
             step_path=target.step_path,
-            glb_path=resolved_glb_path,
+            artifact_path=resolved_artifact_path,
         )
 
     selector_bundle = None
     if require_selector:
-        selector_bundle = read_step_topology_bundle_from_glb(resolved_glb_path)
+        selector_bundle = read_step_topology_bundle_from_glb(resolved_artifact_path)
         if selector_bundle is None:
             raise _topology_artifact_error(
                 code="missing_selector_topology",
@@ -379,7 +379,7 @@ def validate_step_topology_artifact(
                 kind=target.kind,
                 source_path=target.source_path,
                 step_path=target.step_path,
-                glb_path=resolved_glb_path,
+                artifact_path=resolved_artifact_path,
             )
 
     return StepTopologyArtifact(
@@ -387,7 +387,7 @@ def validate_step_topology_artifact(
         kind=target.kind,
         source_path=target.source_path,
         step_path=target.step_path,
-        glb_path=resolved_glb_path,
+        artifact_path=resolved_artifact_path,
         manifest=manifest,
         selector_bundle=selector_bundle,
     )
@@ -411,11 +411,11 @@ def _raw_step_path(target: str) -> Path | None:
     return resolved if resolved.is_file() else None
 
 
-def _source_path_from_manifest(manifest: dict[str, object] | None, *, glb_path: Path) -> Path | None:
+def _source_path_from_manifest(manifest: dict[str, object] | None, *, artifact_path: Path) -> Path | None:
     raw_path = str((manifest or {}).get("sourcePath") or "").strip()
     if not raw_path:
         return None
-    return _resolved_manifest_path(raw_path, base_dir=glb_path.parent)
+    return _resolved_manifest_path(raw_path, base_dir=artifact_path.parent)
 
 
 def _resolved_manifest_path(raw_path: str, *, base_dir: Path) -> Path | None:
@@ -449,16 +449,16 @@ def _topology_artifact_error(
     kind: str,
     source_path: Path,
     step_path: Path,
-    glb_path: Path,
+    artifact_path: Path,
 ) -> StepTopologyArtifactError:
     return StepTopologyArtifactError(
         code=code,
         cad_path=cad_path,
         step_path=step_path,
-        glb_path=glb_path,
+        artifact_path=artifact_path,
         regenerate_command=REGENERATE_STEP_COMMAND,
         message=(
-            f"{reason}: {_display_path(glb_path)}.\n"
+            f"{reason}: {_display_path(artifact_path)}.\n"
             f"{REGENERATE_STEP_PROMPT}"
         ),
     )
