@@ -7,6 +7,8 @@ import ezdxf
 
 from cadgen.drawing_checks import (
     DrawingValidationError,
+    layer_allows_open_geometry,
+    layer_intent,
     raise_on_error_findings,
     validate_drawing_document,
     validate_dxf_file,
@@ -24,7 +26,33 @@ def _codes(findings):
     return sorted(finding.code for finding in findings)
 
 
+class LayerIntentTests(unittest.TestCase):
+    def test_whole_token_matching(self) -> None:
+        self.assertEqual("bend", layer_intent("BEND"))
+        self.assertEqual("bend", layer_intent("bend-lines"))
+        self.assertEqual("engrave", layer_intent("ENGRAVE_TEXT"))
+        self.assertEqual("reference", layer_intent("REF_GEOMETRY"))
+        # Substrings must NOT match: PREFORM contains "ref", KEYNOTES contains "note".
+        self.assertEqual("cut", layer_intent("PREFORM"))
+        self.assertEqual("cut", layer_intent("KEYNOTES"))
+        self.assertEqual("cut", layer_intent("CUT"))
+        self.assertFalse(layer_allows_open_geometry("PREFORM"))
+        self.assertTrue(layer_allows_open_geometry("BEND"))
+
+    def test_render_kind_matches_validation_intent(self) -> None:
+        from cadgen.drawing_render import _semantic_kind_for_layer
+
+        for name in ("BEND", "PREFORM", "ENGRAVE", "NOTES", "CUT"):
+            self.assertEqual(layer_intent(name), _semantic_kind_for_layer(name))
+
+
 class DrawingChecksTests(unittest.TestCase):
+    def test_full_circle_arc_is_valid(self) -> None:
+        document = _new_document()
+        document.modelspace().add_arc((0, 0), 5, 0, 360, dxfattribs={"layer": "CUT"})
+
+        self.assertEqual([], validate_drawing_document(document))
+
     def test_closed_profiles_and_bend_lines_pass(self) -> None:
         document = _new_document()
         modelspace = document.modelspace()

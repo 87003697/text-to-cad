@@ -24,14 +24,18 @@ The supported import surface is the root `cadgen` exports plus the top-level
   `ensure_step_glb_artifact`, `validate_step_glb_artifact`), `cadgen.assembly`,
   and `cadgen.step_scene` (`import_step`, `load_step_scene`, `located_shape`,
   `occurrence_selector_id`, `scene_occurrence_shape`).
+- Generator-script helpers (2D): `cadgen.sources` (`load_source_module`) and
+  `cadgen.flatten` (planar-face projection/unfold, contour emission, kerf
+  offsetting) for `.dxf.py` drawing generators.
 - Skill CLI surface: `cadgen.generation` (`generate_step_targets`,
   `generate_dxf_targets`, `targets_include_output_pairs`), `cadgen.catalog`,
   `cadgen.metadata`, `cadgen.analysis`, `cadgen.lookup`, `cadgen.cad_ref_syntax`,
   `cadgen.selector_types`, `cadgen.reporting`, `cadgen.cli_logging`,
   `cadgen.render`, `cadgen.step_artifacts`, `cadgen.step_targets`,
-  `cadgen.step_export`.
+  `cadgen.step_export`, `cadgen.drawing_checks` (DXF drawing validation), and
+  `cadgen.drawing_render` (DXF render payload + SVG snapshots).
 - Process entry points: `cadgen-step-artifact`, `python -m cadgen.step_artifact`,
-  and `python -m cadgen.step_export_target`.
+  `python -m cadgen.step_export_target`, and `python -m cadgen.dxf_artifact`.
 
 Everything under `cadgen._internal` is private implementation (the STEP scene,
 generation, GLB/topology, and export engines live there) with no import

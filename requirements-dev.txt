@@ -24,6 +24,5 @@ lxml
 pytest
 trimesh
 
-# Model-local generator dependencies used by repo fixtures under models/
-# (e.g. the tom flat-pattern DXF topology unfolds).
-shapely
+# cadgen runtime dependencies are pulled by the editable install above
+# (build123d, cadquery-ocp, ezdxf, shapely).

@@ -51,7 +51,11 @@ def _normalize_layer_name(value: object) -> str:
 
 
 def _semantic_kind_for_layer(layer_name: str) -> str:
-    return "bend" if "bend" in layer_name.strip().lower() else "cut"
+    # Single source of truth for layer intent (whole-token matching) so
+    # validation, snapshots, and rendering classify layers identically.
+    from cadgen.drawing_checks import layer_intent
+
+    return layer_intent(layer_name)
 
 
 def _normalize_angle(angle_deg: float) -> float:
@@ -208,14 +212,21 @@ def _load_dxf_entities(document, dxf_path: Path) -> tuple[list[LineEntity], list
     lines: list[LineEntity] = []
     arcs: list[ArcEntity] = []
     circles: list[CircleEntity] = []
+    skipped: dict[str, int] = {}
 
     for entity in modelspace:
         entity_type = entity.dxftype()
         if entity_type not in SUPPORTED_ENTITY_TYPES:
-            raise ValueError(
-                f"Unsupported DXF entity {entity_type} in {dxf_path.as_posix()}; "
-                f"supported types: {', '.join(sorted(SUPPORTED_ENTITY_TYPES))}"
-            )
+            # Never fail a snapshot for entities validation permits. Curves flatten
+            # to polyline segments via ezdxf; annotations and anything else are
+            # skipped and counted so the payload reports what was dropped.
+            layer_name = _normalize_layer_name(getattr(entity.dxf, "layer", "0"))
+            flattened = _flattened_line_entities(entity, layer_name=layer_name)
+            if flattened is not None:
+                lines.extend(flattened)
+            else:
+                skipped[entity_type] = skipped.get(entity_type, 0) + 1
+            continue
 
         layer_name = _normalize_layer_name(entity.dxf.layer)
         if entity_type == "LINE":
@@ -268,7 +279,27 @@ def _load_dxf_entities(document, dxf_path: Path) -> tuple[list[LineEntity], list
     if not lines and not arcs and not circles:
         raise ValueError(f"No supported DXF entities found in {dxf_path.as_posix()}")
 
-    return lines, arcs, circles
+    return lines, arcs, circles, skipped
+
+
+def _flattened_line_entities(entity, *, layer_name: str) -> list[LineEntity] | None:
+    """Approximate a curve entity (SPLINE, ELLIPSE, ...) as polyline segments via
+    ezdxf's own flattening; None when the entity has no usable curve form
+    (annotations, inserts, ...)."""
+    flattening = getattr(entity, "flattening", None)
+    if not callable(flattening):
+        return None
+    try:
+        points = [(float(p[0]), float(p[1])) for p in flattening(0.05)]
+    except Exception:
+        return None
+    if len(points) < 2:
+        return None
+    return [
+        LineEntity(layer=layer_name, start=points[index], end=points[index + 1])
+        for index in range(len(points) - 1)
+        if math.dist(points[index], points[index + 1]) > 1e-9
+    ]
 
 
 def build_dxf_render_payload(dxf_path: Path, *, file_ref: str) -> dict[str, object]:
@@ -276,7 +307,7 @@ def build_dxf_render_payload(dxf_path: Path, *, file_ref: str) -> dict[str, obje
 
     source_path = dxf_path.resolve()
     document = ezdxf.readfile(source_path)
-    lines, arcs, circles = _load_dxf_entities(document, source_path)
+    lines, arcs, circles, skipped_entities = _load_dxf_entities(document, source_path)
 
     raw_bounds: tuple[float, float, float, float] | None = None
     for line in lines:
@@ -382,6 +413,7 @@ def build_dxf_render_payload(dxf_path: Path, *, file_ref: str) -> dict[str, obje
             "circles": len(circle_records),
             "entities": len(path_records) + len(circle_records),
         },
+        "skippedEntities": dict(sorted(skipped_entities.items())),
         "layers": [layer_summary[name] for name in sorted(layer_summary)],
         "geometry": {
             "lines": [
@@ -422,6 +454,8 @@ def build_dxf_render_payload(dxf_path: Path, *, file_ref: str) -> dict[str, obje
 _SNAPSHOT_STROKES = {
     "cut": ("#111827", ""),
     "bend": ("#2563eb", "4 3"),
+    "engrave": ("#059669", "1 2"),
+    "reference": ("#9ca3af", "2 2"),
     "unknown": ("#6b7280", "2 2"),
 }
 _SNAPSHOT_MARGIN_RATIO = 0.05

@@ -19,10 +19,14 @@ _CADGEN_ROOT = Path(cadgen.__file__).resolve().parent
 _HELPER = "SIZE_MM = 10.0\n"
 
 _FAKE_DOC_PRELUDE = [
-    "from pathlib import Path",
-    "class _FakeDxf:",
-    "    def saveas(self, output_path):",
-    "        Path(output_path).write_text('0\\nEOF\\n', encoding='utf-8')",
+    "import ezdxf",
+    "def _make_doc():",
+    "    doc = ezdxf.new('R2010')",
+    "    doc.units = ezdxf.units.MM",
+    "    doc.modelspace().add_lwpolyline(",
+    "        [(0, 0), (10, 0), (10, 5), (0, 5)], close=True, dxfattribs={'layer': 'CUT'}",
+    "    )",
+    "    return doc",
 ]
 
 
@@ -45,7 +49,7 @@ class ClosureCaptureTests(unittest.TestCase):
                         "def gen_dxf():",
                         "    size = geom_helper.SIZE_MM",
                         "    sys.modules.pop('geom_helper', None)",
-                        "    return {'document': _FakeDxf()}",
+                        "    return {'document': _make_doc()}",
                         "",
                     ]
                 ),
@@ -68,7 +72,7 @@ class ClosureCaptureTests(unittest.TestCase):
                             *_FAKE_DOC_PRELUDE,
                             "def gen_dxf():",
                             "    assert geom_helper.SIZE_MM > 0",
-                            "    return {'document': _FakeDxf()}",
+                            "    return {'document': _make_doc()}",
                             "",
                         ]
                     ),
@@ -96,7 +100,7 @@ class ClosureCaptureTests(unittest.TestCase):
                     "def gen_dxf():",
                     "    if geom_helper.SIZE_MM > 0:",
                     "        raise RuntimeError('boom')",
-                    "    return {'document': _FakeDxf()}",
+                    "    return {'document': _make_doc()}",
                     "",
                 ]
             )
@@ -106,7 +110,7 @@ class ClosureCaptureTests(unittest.TestCase):
                     *_FAKE_DOC_PRELUDE,
                     "def gen_dxf():",
                     "    assert geom_helper.SIZE_MM > 0",
-                    "    return {'document': _FakeDxf()}",
+                    "    return {'document': _make_doc()}",
                     "",
                 ]
             )
@@ -134,12 +138,15 @@ class ClosureCaptureTests(unittest.TestCase):
                         "from pathlib import Path",
                         "from cadgen.sources import load_source_module",
                         "_step = load_source_module(Path(__file__).with_name('part.step.py'))",
-                        "class _FakeDxf:",
-                        "    def saveas(self, output_path):",
-                        "        Path(output_path).write_text('0\\nEOF\\n', encoding='utf-8')",
+                        "import ezdxf",
                         "def gen_dxf():",
                         "    assert _step.WIDTH_MM > 0",
-                        "    return {'document': _FakeDxf()}",
+                        "    doc = ezdxf.new('R2010')",
+                        "    doc.units = ezdxf.units.MM",
+                        "    doc.modelspace().add_lwpolyline(",
+                        "        [(0, 0), (10, 0), (10, 5), (0, 5)], close=True, dxfattribs={'layer': 'CUT'}",
+                        "    )",
+                        "    return {'document': doc}",
                         "",
                     ]
                 ),

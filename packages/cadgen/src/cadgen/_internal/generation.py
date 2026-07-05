@@ -1051,15 +1051,19 @@ def _run_script_generator_inner(
         if spec.dxf_path is None:
             raise RuntimeError(f"{spec.source_ref} has no configured DXF output")
         # Validation happens IN generation: the in-memory document is checked once,
-        # gating the drawing package and every export alike. Objects without a real
-        # drawing surface (e.g. test doubles that only implement saveas) are exempt.
+        # gating the drawing package and every export alike. Fail closed — anything
+        # that is not a real drawing document is rejected rather than skipped.
         document = envelope.get("document")
-        if hasattr(document, "modelspace") and hasattr(document, "header"):
-            findings = validate_drawing_document(document)
-            for finding in findings:
-                if finding.severity != "error":
-                    logger.info(f"{spec.source_ref} {finding.render()}")
-            raise_on_error_findings(findings, label=_display_path(spec.script_path))
+        if not (hasattr(document, "modelspace") and hasattr(document, "header")):
+            raise TypeError(
+                f"{_display_path(spec.script_path)} gen_dxf() must return an ezdxf "
+                f"document, got {type(document).__name__}"
+            )
+        findings = validate_drawing_document(document)
+        for finding in findings:
+            if finding.severity != "error":
+                logger.info(f"{spec.source_ref} {finding.render()}")
+        raise_on_error_findings(findings, label=_display_path(spec.script_path))
         # Mirror gen_step: capture the generator's closure (relative to the model
         # folder) so the drawing package records the freshness inputs the viewer's
         # staleness gate reads. Code reuse is the freshness link: a drawing that
@@ -2254,18 +2258,26 @@ def generate_dxf_targets(
         ]
     snapshot_specs = list(selected_specs) if snapshot else []
     # No-op fast path: skip regenerating a drawing whose source closure is unchanged.
-    # Only for plain in-place regeneration (no --force and no export write request).
+    # An export request on a current package is satisfied from the cache (copy +
+    # identity re-point) instead of re-running the generator.
     if not force:
         current_specs = [
             spec
             for spec in selected_specs
-            if spec.dxf_export_path is None
-            and spec.script_path is not None
-            and drawing_package_current(spec.script_path)
+            if spec.script_path is not None and drawing_package_current(spec.script_path)
         ]
         if current_specs:
+            from cadgen._internal.drawing_package import export_drawing_dxf
+
             for spec in current_specs:
-                logger.info(f"{spec.cad_ref} is current; skipped regeneration")
+                if spec.dxf_export_path is not None:
+                    export_drawing_dxf(spec.script_path, spec.dxf_export_path)
+                    logger.info(
+                        f"{spec.cad_ref} is current; exported cached DXF: "
+                        f"{_display_path(spec.dxf_export_path)}"
+                    )
+                else:
+                    logger.info(f"{spec.cad_ref} is current; skipped regeneration")
             current_refs = {spec.source_ref for spec in current_specs}
             selected_specs = [spec for spec in selected_specs if spec.source_ref not in current_refs]
     if selected_specs:

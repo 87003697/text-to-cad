@@ -2,16 +2,14 @@ from __future__ import annotations
 
 import argparse
 import json
-import shutil
 from pathlib import Path
 
 from cadgen.cli_logging import CliLogger
 from cadgen._internal.drawing_package import (
-    drawing_dxf_path,
     drawing_package_current,
+    export_drawing_dxf,
     load_drawing_descriptor,
 )
-from cadgen._internal.file_metadata import text_to_cad_identity_metadata, write_dxf_text_to_cad_metadata
 from cadgen._internal.generation import (
     _entry_spec_from_source,
     run_script_generator,
@@ -21,7 +19,7 @@ from cadgen.catalog import (
     is_dxf_generator_path,
     source_from_path,
 )
-from cadgen.render import relative_to_cwd, relative_to_file
+from cadgen.render import relative_to_cwd
 
 
 def _result_payload(
@@ -57,8 +55,7 @@ def build_parser() -> argparse.ArgumentParser:
         prog="python -m cadgen.dxf_artifact",
         description="Generate the CAD Viewer drawing-package artifact for one generated DXF entry.",
     )
-    parser.add_argument("--repo-root", required=True, help="Repository/workspace root for relative metadata.")
-    parser.add_argument("--dxf", help="Logical DXF output path (informational; the package is source-keyed).")
+    parser.add_argument("--repo-root", default=".", help="Repository/workspace root (accepted for CLI parity with step_artifact).")
     parser.add_argument("--source-path", required=True, help="Python gen_dxf() generator source path.")
     parser.add_argument("--export", help="Also write the (fresh) drawing DXF to this path.")
     parser.add_argument("--force", action="store_true", help="Regenerate even if a current artifact exists.")
@@ -66,24 +63,6 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def _write_export(script_path: Path, descriptor: dict[str, object], export_path: Path) -> None:
-    """Copy the cached drawing DXF to ``export_path`` and re-point its embedded
-    identity comment at the generator relative to the new location."""
-    package_dir = drawing_package_path_for_source(script_path)
-    dxf_ref = str(descriptor.get("dxf") or "").strip()
-    cached_dxf = (package_dir / dxf_ref) if dxf_ref else drawing_dxf_path(package_dir)
-    if not cached_dxf.is_file():
-        raise RuntimeError(f"Drawing package has no built DXF to export: {relative_to_cwd(package_dir)}")
-    export_path.parent.mkdir(parents=True, exist_ok=True)
-    shutil.copyfile(cached_dxf, export_path)
-    source_hash = str(descriptor.get("sourceHash") or "").strip()
-    write_dxf_text_to_cad_metadata(
-        export_path,
-        text_to_cad_identity_metadata(
-            source_path=relative_to_file(script_path, export_path),
-            source_hash=source_hash,
-        ),
-    )
 
 
 def build_dxf_artifact(
@@ -124,8 +103,7 @@ def build_dxf_artifact(
         raise RuntimeError(f"gen_dxf() did not produce a drawing package: {relative_to_cwd(package_dir)}")
     payload = _result_payload(script_path, descriptor=descriptor, skipped=skipped)
     if export is not None:
-        export_path = Path(export).expanduser().resolve()
-        _write_export(script_path, descriptor, export_path)
+        export_path = export_drawing_dxf(script_path, Path(export))
         payload["path"] = str(export_path)
         payload["filename"] = export_path.name
     return payload

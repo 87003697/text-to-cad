@@ -118,6 +118,28 @@ class StandaloneDxfSourceTests(unittest.TestCase):
             self.assertTrue(sibling.exists())
             self.assertEqual(exported_bytes, sibling.read_bytes())
 
+    def test_generate_dxf_targets_rejects_non_document_payload(self) -> None:
+        # Fail closed: an object that only implements saveas is not a drawing and
+        # must be rejected, not silently written without validation.
+        with temporary_directory(prefix="dxf-skill") as root:
+            script_path = Path(root) / "fake.dxf.py"
+            script_path.write_text(
+                "\n".join(
+                    [
+                        "class _FakeDxf:",
+                        "    def saveas(self, output_path):",
+                        "        pass",
+                        "def gen_dxf():",
+                        "    return {'document': _FakeDxf()}",
+                        "",
+                    ]
+                ),
+                encoding="utf-8",
+            )
+
+            with self.assertRaisesRegex(TypeError, "must return an ezdxf document"):
+                cad_generation.generate_dxf_targets([str(script_path)])
+
     def test_generate_dxf_targets_writes_snapshot_on_demand(self) -> None:
         with temporary_directory(prefix="dxf-skill") as root:
             script_path = _write_standalone_source(Path(root))
