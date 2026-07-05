@@ -7,8 +7,30 @@ function toFiniteNumber(value, fallback = 0) {
   return Number.isFinite(numericValue) ? numericValue : fallback;
 }
 
+// Layer intent by WHOLE tokens of the layer name (split on non-alphanumerics),
+// mirroring cadgen.drawing_checks.layer_intent so validation, snapshots, and
+// rendering classify layers identically ("PREFORM" must not match "ref").
+const LAYER_INTENT_BY_TOKEN = new Map([
+  ["bend", "bend"],
+  ["fold", "bend"],
+  ["engrave", "engrave"],
+  ["etch", "engrave"],
+  ["ref", "reference"],
+  ["reference", "reference"],
+  ["note", "reference"],
+  ["notes", "reference"],
+  ["annotation", "reference"],
+  ["construction", "reference"]
+]);
+
 function semanticKindForLayer(layerName) {
-  return String(layerName || "").trim().toLowerCase().includes("bend") ? "bend" : "cut";
+  const tokens = String(layerName || "").trim().toLowerCase().split(/[^a-z0-9]+/).filter(Boolean);
+  for (const intent of ["bend", "engrave", "reference"]) {
+    if (tokens.some((token) => LAYER_INTENT_BY_TOKEN.get(token) === intent)) {
+      return intent;
+    }
+  }
+  return "cut";
 }
 
 function normalizeLayerName(value) {
