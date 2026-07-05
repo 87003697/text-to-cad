@@ -15,7 +15,7 @@ from cadgen._internal.generation import (
     run_script_generator,
 )
 from cadgen.catalog import (
-    drawing_package_path_for_source,
+    render_package_dir,
     is_dxf_generator_path,
     source_from_path,
 )
@@ -28,7 +28,7 @@ def _result_payload(
     descriptor: dict[str, object] | None,
     skipped: bool = False,
 ) -> dict[str, object]:
-    package_dir = drawing_package_path_for_source(script_path)
+    package_dir = render_package_dir(script_path)
     payload: dict[str, object] = {
         "ok": True,
         "sourcePath": relative_to_cwd(script_path),
@@ -91,7 +91,7 @@ def build_dxf_artifact(
         )
     if logger is None:
         logger = CliLogger("dxf-artifact", verbose=False)
-    package_dir = drawing_package_path_for_source(script_path)
+    package_dir = render_package_dir(script_path)
     skipped = not force and drawing_package_current(script_path)
     if not skipped:
         spec = _entry_spec_from_source(source)

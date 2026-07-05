@@ -404,8 +404,8 @@ simplification sweep. Sequence is fixed by dependency: **S2 + S3 (enabling primi
 > **Superseded:** **S8** (delete the `index`
 > `STEP_TOPOLOGY` profile / `build_step_topology_index_manifest`) is **superseded** — the
 > rearchitecture made the index profile the canonical package descriptor, so it is load-bearing,
-> not dead. The viewer still passes `--skip-step-write` to `cadgen.step_artifact` (the flag is now
-> a no-op default the CLI still accepts); fully retiring that plumbing is a follow-up tidy.
+> not dead. `--skip-step-write` (and the unused `--write-step-after-artifact`) are fully
+> retired: `--source-path` alone selects generator mode in `cadgen.step_artifact`.
 
 ### Tier A — structural (change the model)
 

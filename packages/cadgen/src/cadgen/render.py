@@ -6,7 +6,6 @@ from pathlib import Path
 
 from cadgen.catalog import (
     cad_ref_from_step_path as fallback_cad_ref_from_step_path,
-    cadgen_package_path_for_entry_path,
     find_source_by_cad_ref,
     find_source_by_path,
 )
@@ -44,12 +43,8 @@ def part_native_glb_path(step_path: Path) -> Path:
     return source.native_glb_path
 
 
-def part_glb_path(step_path: Path) -> Path:
-    return cadgen_package_path_for_entry_path(step_path)
-
-
 def relative_to_cwd(path: Path) -> str:
-    # Display/label + CLI-payload helper (the payload glbPath/stepPath are overwritten by the
+    # Display/label + CLI-payload helper (the payload packagePath/stepPath are overwritten by the
     # viewer; the persisted descriptor's model-folder-relative paths come from relative_to_file,
     # not this). Anchored on the live cwd, not a frozen import-time root.
     resolved = path.resolve()

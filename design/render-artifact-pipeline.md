@@ -1,6 +1,12 @@
 # Design: Unified Render-Artifact Pipeline
 
-Status: proposal · Supersedes the STEP-specific generation + "cache-state issues" machinery
+Status: historical (written against the retired Node viewer server) · Supersedes the
+STEP-specific generation + "cache-state issues" machinery
+
+> **Note:** this proposal predates the Python viewer server. The `viewer/src/server/*.mjs`
+> files it links no longer exist; their behavior now lives in `viewer/server_py/`
+> (`scanner.py`, `artifact.py`, `backend.py`). The resolve/freshness/build model described
+> here shipped in that port; the doc is kept for design rationale.
 
 ## 1. Why
 
@@ -112,7 +118,7 @@ A thin wrapper — **no new build logic**:
 | Member | Wraps (reused as-is) |
 |---|---|
 | `owns` | `sameStemPythonGeneratorPath` sniff + `.step/.stp` ([`stepArtifactCompiler.mjs:41`](../viewer/src/server/step/stepArtifactCompiler.mjs), [`localAssetBackend.mjs:124`](../viewer/src/server/localAssetBackend.mjs)) |
-| `artifactRef` | `inline_step_glb_artifact_path_for_source` ([`scanner.py`](../viewer/server_py/scanner.py)) |
+| `artifactRef` | `render_package_dir` ([`scanner.py`](../viewer/server_py/scanner.py)) |
 | `freshness` | `validateStepTopologyArtifact` / `validateAssemblyPackageArtifact` ([`cadDirectoryScanner.mjs:636,780`](../viewer/src/server/catalog/cadDirectoryScanner.mjs)) → map its error codes to `fresh/stale/missing/broken` via `canBuildStepArtifact` |
 | `build` | `ensureStepTopologyArtifact` → `compileStepTopologyArtifact` → `cadgen.step_artifact` CLI, + the descriptor-mtime bump that settles the mtime trigger ([`localAssetBackend.mjs:854-867`](../viewer/src/server/localAssetBackend.mjs)) |
 

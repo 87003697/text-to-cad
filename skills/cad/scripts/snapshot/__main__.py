@@ -27,7 +27,7 @@ for runtime_path in (SCRIPTS_DIR, PACKAGES_DIR, CADPY_SRC_DIR):
 
 import cadgen.cad_ref_syntax as cad_ref_syntax
 import cadgen.lookup as lookup
-from cadgen.render import part_glb_path
+from cadgen.catalog import render_package_dir
 from cadgen.step_targets import ResolvedStepTarget, StepTopologyArtifact, StepTopologyArtifactError
 
 
@@ -580,12 +580,12 @@ def asset_url_for_path(file_path: Path, root_path: Path) -> str:
     return f"/__render_asset/{encode_path_param(file_path.resolve().relative_to(root_path.resolve()).as_posix())}"
 
 
-def step_parameter_path_for_step_source(glb_path: Path, input_path: Path) -> Path | None:
+def step_parameter_path_for_step_source(package_dir: Path, input_path: Path) -> Path | None:
     """The hand-authored JS sidecar a model declares via its package descriptor's
     ``paramsPath`` (model-folder-relative, set from gen_step()'s ``params``). Returns None
     when the model declares no sidecar — there is no filename convention."""
     try:
-        descriptor = json.loads((glb_path / "assembly.json").read_text(encoding="utf-8"))
+        descriptor = json.loads((package_dir / "assembly.json").read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return None
     params_path = str(descriptor.get("paramsPath") or "").strip()
@@ -888,13 +888,13 @@ def resolve_render_job(
 
     # The render cache is keyed by the ENTRY filename (`source_path`: the `.step.py` generator for
     # a generated model, or the `.step`/`.stp` itself), not the logical step path.
-    glb_path = part_glb_path(source_path)
-    if not glb_path.exists():
-        raise SnapshotError(f"STEP/STP render input is missing its CAD Viewer GLB artifact: {glb_path}")
+    package_dir = render_package_dir(source_path)
+    if not package_dir.is_dir():
+        raise SnapshotError(f"STEP/STP render input is missing its render package: {package_dir}")
 
     has_param_render = has_step_parameter_render_values(job.get("stepParameters"))
     animated_params = step_parameter_render_values_are_animated(job.get("stepParameters"))
-    step_parameter_path = step_parameter_path_for_step_source(glb_path, input_path)
+    step_parameter_path = step_parameter_path_for_step_source(package_dir, input_path)
 
     mode = str(job.get("mode") or "view").strip().lower()
     if mode not in SUPPORTED_RENDER_MODES:
@@ -951,20 +951,17 @@ def resolve_render_job(
         "inputPath": str(input_path),
         "inputUrl": asset_url_for_path(input_path, root_path),
         "kind": kind,
-        "glbPath": str(glb_path),
+        "packagePath": str(package_dir),
     }
-    if glb_path.is_dir():
-        # Component-GLB package (canonical assembly artifact): inline the descriptor and
-        # pre-resolve one asset URL per unique component GLB so the renderer fetches and
-        # composes them in world space (no single monolithic GLB to load).
-        descriptor = json.loads((glb_path / "assembly.json").read_text())
-        component_urls = {
-            cid: asset_url_for_path(glb_path / str(entry.get("glb", "")), root_path)
-            for cid, entry in (descriptor.get("components") or {}).items()
-        }
-        resolved["package"] = {"descriptor": descriptor, "componentUrls": component_urls}
-    else:
-        resolved["glbUrl"] = asset_url_for_path(glb_path, root_path)
+    # Component-GLB package (the canonical render artifact for every STEP model): inline
+    # the descriptor and pre-resolve one asset URL per unique component GLB so the renderer
+    # fetches and composes them in world space.
+    descriptor = json.loads((package_dir / "assembly.json").read_text())
+    component_urls = {
+        cid: asset_url_for_path(package_dir / str(entry.get("glb", "")), root_path)
+        for cid, entry in (descriptor.get("components") or {}).items()
+    }
+    resolved["package"] = {"descriptor": descriptor, "componentUrls": component_urls}
     if step_parameter_path is not None and step_parameter_path.exists():
         resolved["stepParameterPath"] = str(step_parameter_path)
         resolved["stepParameterUrl"] = asset_url_for_path(step_parameter_path, root_path)

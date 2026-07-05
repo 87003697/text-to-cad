@@ -229,7 +229,7 @@ function stepSourceStatusLevel(stepStatus) {
 function stepSourceStatusMessage(stepStatus, stepSourceStatus) {
   if (stepStatus?.missing) {
     return sourceKindLabel(stepSourceStatus?.sourceKind) === "python"
-      ? "STEP file was not generated for this Python script; only a GLB artifact is available."
+      ? "STEP file was not generated for this Python script; only the render package is available."
       : "STEP file is missing from the directory.";
   }
   return cleanText(stepStatus?.message) || "STEP file is missing from the directory.";
@@ -304,7 +304,7 @@ export function stepFileStatusItems({
       details: [
         detail("Code", artifact.error),
         pathDetail("STEP file", artifact.stepPath || artifact.sourcePath || entry?.file, viewerServerInfo, entry?.file),
-        pathDetail("GLB artifact", artifact.glbPath, viewerServerInfo, entry?.file),
+        pathDetail("Render package", artifact.packagePath, viewerServerInfo, entry?.file),
         pathDetail("CAD path", artifact.cadPath, viewerServerInfo, entry?.file),
         detail("Source kind", artifact.sourceKind),
         detail("Artifact hash", artifact.artifactHash, { mono: true }),

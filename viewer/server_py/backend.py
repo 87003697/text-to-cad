@@ -1,9 +1,9 @@
-"""Python port of localAssetBackend.mjs (the parts the catalog/asset path needs).
+"""The CAD Viewer's local-filesystem backend.
 
-Reproduces root resolution, catalog absolutization (raw scanner URLs ->
-``/__cad/asset?file=...`` form the client consumes verbatim), and the guarded
-asset-path resolver. STEP artifact generation + export delegate to cadgen and
-land in the cadgen-integration phase.
+Owns root resolution, catalog absolutization (raw scanner URLs ->
+``/__cad/asset?file=...`` form the client consumes verbatim), the guarded
+asset-path resolver, and the render-artifact build/export routes that shell
+out to cadgen.
 """
 
 from __future__ import annotations
@@ -122,11 +122,11 @@ def _absolutize_source(source, scan_repo_root):
 
 
 def _absolutize_source_status(status, scan_repo_root):
-    return _absolutize_keyed(status, scan_repo_root, ("sourcePath", "stepPath", "glbPath"))
+    return _absolutize_keyed(status, scan_repo_root, ("sourcePath", "stepPath", "packagePath"))
 
 
 def _absolutize_artifact(artifact, scan_repo_root):
-    return _absolutize_keyed(artifact, scan_repo_root, ("stepPath", "glbPath", "sourcePath", "cadPath"))
+    return _absolutize_keyed(artifact, scan_repo_root, ("stepPath", "packagePath", "sourcePath", "cadPath"))
 
 
 def _absolutize_entry(entry: dict, *, root_path: str, scan_repo_root: str, root_dir: str) -> dict:
@@ -302,7 +302,7 @@ class LocalAssetBackend:
             artifact_source = self._resolve_artifact_source(entry, file_ref, resolved_root)
         except ValueError as exc:
             return {"state": artifact_mod.ARTIFACT_STATE_ERROR, "error": str(exc)}
-        lock = artifact_mod.generation_lock_path(scanner.inline_step_glb_artifact_path_for_source(artifact_source))
+        lock = artifact_mod.generation_lock_path(scanner.render_package_dir(artifact_source))
         if artifact_mod.generation_lock_active(lock):
             return {"state": artifact_mod.ARTIFACT_STATE_GENERATING, "ref": ref}
         if artifact_mod.owns_dxf_entry(entry):
@@ -324,7 +324,7 @@ class LocalAssetBackend:
 
     # POST /__cad/artifact build — subprocess cadgen.step_artifact (OCP stays out of
     # the server process), then bump the descriptor mtime so a no-op rebuild clears
-    # the scanner's source-mtime staleness trigger (mirrors generateStepArtifact).
+    # the scanner's source-mtime staleness trigger.
     def generate_step_artifact(self, file_ref, force, resolved_root, catalog):
         resolved = self.resolve_step_source(file_ref, resolved_root)
         step_path = resolved["stepPath"]
@@ -337,12 +337,13 @@ class LocalAssetBackend:
         ctx = self._scan_context(resolved_root)
         args = ["--step", step_path]
         if has_generator:
-            # Generated models keep no .step on disk — run the generator in-process and
-            # write only the render package (the logical --step path never exists).
-            args += ["--source-path", generator, "--skip-step-write"]
+            # Generated models keep no .step on disk — --source-path selects generator
+            # mode: cadgen runs the generator in-process and writes only the render
+            # package (the logical --step path never exists).
+            args += ["--source-path", generator]
         result = self._run_artifact_build(
             "cadgen.step_artifact", args, ctx,
-            force=force, package_key="glbPath", descriptor_name="assembly.json",
+            force=force, package_key="packagePath", descriptor_name="assembly.json",
             error_label="STEP render artifact build failed",
         )
         return {**result, "stepPath": step_path}
@@ -393,7 +394,7 @@ class LocalAssetBackend:
             artifact_source = self._resolve_artifact_source(entry, file_ref, resolved_root)
         except ValueError as exc:
             return {"ok": False, "state": artifact_mod.ARTIFACT_STATE_ERROR, "error": str(exc)}
-        lock = artifact_mod.generation_lock_path(scanner.inline_step_glb_artifact_path_for_source(artifact_source))
+        lock = artifact_mod.generation_lock_path(scanner.render_package_dir(artifact_source))
         if not force and artifact_mod.generation_lock_active(lock):
             artifact_mod.await_generation_lock(lock)
             ctx = self._scan_context(resolved_root)

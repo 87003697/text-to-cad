@@ -19,7 +19,7 @@ def write_package(step_path, *, entry_kind="part", source_kind="step"):
     component-GLB PACKAGE directory inside the per-folder cache
     (``__cadgen__/models/<step-filename>/assembly.json``) whose content-addressed component
     GLBs live in the package's own ``components/<hash>.glb`` dir. Returns the package directory
-    path, mirroring ``cadgen.render.part_glb_path``."""
+    path, mirroring ``cadgen.catalog.render_package_dir``."""
     step_path = Path(step_path)
     pkg_dir = step_path.parent / "__cadgen__" / "models" / step_path.name
     comp_dir = pkg_dir / "components"

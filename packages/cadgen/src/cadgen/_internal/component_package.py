@@ -1,7 +1,7 @@
-"""Component-GLB assembly package emit (design/component-glb-artifacts.md).
+"""Component-GLB package emit (design/component-glb-artifacts.md).
 
-Replaces the monolithic ``.{model}.step.glb`` for an assembly with a package
-directory of the same name holding one content-addressed component GLB per unique
+Every model's render artifact is a package directory under the per-folder
+``__cadgen__`` home, holding one content-addressed component GLB per unique
 part (mesh + embedded local topology) plus an ``assembly.json`` descriptor mapping
 occurrences -> component + world transform. Components are keyed by their source
 STEP content hash, so editing one part rebuilds only that component; the rest are
@@ -19,7 +19,7 @@ import os
 from pathlib import Path
 from typing import Any, Mapping
 
-from cadgen.catalog import cadgen_package_path_for_entry_path
+from cadgen.catalog import render_package_dir
 from cadgen._internal.generation import (
     DEFAULT_MESH_ANGULAR_TOLERANCE,
     DEFAULT_MESH_TOLERANCE,
@@ -64,16 +64,10 @@ COMPONENT_PROVENANCE_KEYS = (
 TOPOLOGY_GLB_NAME = "topology.glb"
 
 
-def assembly_package_dir(step_path: Path) -> Path:
-    """Canonical render-package directory for a model's entry file, inside the
-    per-folder ``__cadgen__`` directory."""
-    return cadgen_package_path_for_entry_path(step_path)
-
-
 def assembly_topology_glb_path(step_path: Path) -> Path:
     """Path to the lazy full-manifest single GLB inside an assembly package. inspect's
     selector queries build + cache it here on first use; renders never need it."""
-    return assembly_package_dir(step_path) / TOPOLOGY_GLB_NAME
+    return render_package_dir(step_path) / TOPOLOGY_GLB_NAME
 
 
 def is_assembly_package(path: Path) -> bool:
@@ -84,8 +78,8 @@ def is_assembly_package(path: Path) -> bool:
 def read_package_descriptor(path: Path) -> dict[str, Any] | None:
     """Load a package descriptor from a package dir (or its assembly.json path).
 
-    Returns None for anything that is not a package — notably a legacy monolithic GLB
-    *file* sitting at the canonical artifact path (do not try to JSON-parse it)."""
+    Returns None for anything that is not a package directory with a readable
+    descriptor (missing, partial, or a stray file at the package path)."""
     if path.is_dir():
         descriptor_path = path / DESCRIPTOR_NAME
     elif path.name == DESCRIPTOR_NAME:
@@ -106,7 +100,7 @@ def assembly_package_current(step_path: Path) -> bool:
     present. Source-change detection is left to the descriptor's provenance
     (stepHash/sourceClosure) read through the package-aware manifest reader; this only
     guards the package's own existence so a missing/partial package forces a rebuild."""
-    package_dir = assembly_package_dir(step_path)
+    package_dir = render_package_dir(step_path)
     descriptor = read_package_descriptor(package_dir)
     if descriptor is None or descriptor.get("kind") != PACKAGE_KIND:
         return False
@@ -270,7 +264,7 @@ def build_component_glb_from_shape(
     if isinstance(stats, dict):
         stats.pop("timingMs", None)
     # Write the leaf GLB straight to ``out_glb`` (inside the package's components/ dir). Passing
-    # an explicit target avoids deriving a part_glb_path() from the placeholder, which would
+    # an explicit target avoids deriving a render_package_dir() from the placeholder, which would
     # otherwise scaffold a stray __cadgen__/models/ tree next to the component.
     export_assembly_glb_from_scene(
         placeholder,
@@ -294,7 +288,7 @@ def build_package_from_compound(
     linear_deflection: float = DEFAULT_MESH_TOLERANCE,
     angular_deflection: float = DEFAULT_MESH_ANGULAR_TOLERANCE,
 ) -> dict[str, Any]:
-    """Emit a ``.{model}.step.glb/`` package from a baked ``Compound`` or single shape.
+    """Emit a render package (``__cadgen__/models/<entry>/``) from a baked ``Compound`` or single shape.
 
     Every model — part or assembly — is one representation: a descriptor + content-
     addressed components.

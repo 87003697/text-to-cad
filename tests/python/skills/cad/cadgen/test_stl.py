@@ -2,6 +2,7 @@ import shutil
 import unittest
 from pathlib import Path
 
+from cadgen import catalog as cad_catalog
 from cadgen import render as cad_render
 from tests.python.support.cad_test_roots import IsolatedCadRoots
 
@@ -26,7 +27,7 @@ class CadpyRenderTests(unittest.TestCase):
         step_path.write_text("ISO-10303-21; END-ISO-10303-21;\n")
         self.cleanup_paths.update(
             (
-                cad_render.part_glb_path(step_path),
+                cad_catalog.render_package_dir(step_path),
             )
         )
         return step_path
@@ -40,7 +41,7 @@ class CadpyRenderTests(unittest.TestCase):
     def test_glb_path_resolves_into_cadgen_dir(self) -> None:
         step_path = self._write_step("part")
 
-        glb_path = cad_render.part_glb_path(step_path)
+        glb_path = cad_catalog.render_package_dir(step_path)
 
         # The render artifact (a component-GLB package dir) lives inside __cadgen__,
         # keyed by the STEP filename, so the model folder holds only source.
@@ -49,7 +50,7 @@ class CadpyRenderTests(unittest.TestCase):
     def test_glb_path_preserves_stp_extension(self) -> None:
         step_path = self._write_step("part-stp", extension=".stp")
 
-        glb_path = cad_render.part_glb_path(step_path)
+        glb_path = cad_catalog.render_package_dir(step_path)
 
         self.assertEqual(self.temp_root / "__cadgen__" / "models" / "part-stp.stp", glb_path)
 

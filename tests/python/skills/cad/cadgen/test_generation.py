@@ -10,7 +10,6 @@ from pathlib import Path
 from unittest import mock
 
 from cadgen._internal import generation as cad_generation
-from cadgen import render as cad_render
 from cadgen import catalog as cad_catalog
 from cadgen._internal import source_hash as cad_source_hash
 from cadgen.catalog import StepImportOptions
@@ -212,7 +211,7 @@ class CadGenerationTests(unittest.TestCase):
         export_build123d_step_scene(assembly, step_path)
         self.assertTrue(step_path.is_file())
 
-        package_dir = cad_render.part_glb_path(step_path)
+        package_dir = cad_catalog.render_package_dir(step_path)
         self.assertFalse(
             (package_dir / "assembly.json").exists(),
             "precondition: the package must not exist before the build",
@@ -1440,7 +1439,7 @@ class CadGenerationTests(unittest.TestCase):
         # __cadgen__/models/<step-filename>, so a native GLB sidecar whose resolved path
         # equals that artifact path must still be rejected rather than overwriting it.
         step_path = self._write_step("source")
-        artifact_path = cad_render.part_glb_path(step_path)
+        artifact_path = cad_catalog.render_package_dir(step_path)
         self.assertEqual(
             artifact_path,
             (step_path.parent / "__cadgen__" / "models" / step_path.name).resolve(),
@@ -1698,7 +1697,7 @@ class CadGenerationTests(unittest.TestCase):
         # whole-model selector bundle (selectors are extracted on demand by inspect).
         self.assertEqual(1, len(package_calls))
         self.assertTrue(package_calls[0]["single_component"])
-        self.assertTrue(cad_render.part_glb_path(step_path).is_dir())
+        self.assertTrue(cad_catalog.render_package_dir(step_path).is_dir())
         self.assertIsNone(result.selector_bundle)
 
     def test_generate_part_outputs_reuses_current_topology_artifact(self) -> None:
@@ -1954,7 +1953,7 @@ class CadGenerationTests(unittest.TestCase):
 
         load_scene.assert_not_called()
         self.assertEqual(1, len(package_calls))
-        self.assertTrue(cad_render.part_glb_path(step_path).is_dir())
+        self.assertTrue(cad_catalog.render_package_dir(step_path).is_dir())
 
     def test_generate_part_outputs_emits_package_with_stl_sidecar(self) -> None:
         step_path = self._write_step("summary-only")
@@ -1992,7 +1991,7 @@ class CadGenerationTests(unittest.TestCase):
         self.assertEqual(1, len(package_calls))
         self.assertIsNotNone(spec.stl_path)
         self.assertTrue(spec.stl_path.exists())
-        self.assertTrue(cad_render.part_glb_path(step_path).is_dir())
+        self.assertTrue(cad_catalog.render_package_dir(step_path).is_dir())
         self.assertIsNone(result.selector_bundle)
 
     def test_generate_part_outputs_writes_3mf_sidecar(self) -> None:
@@ -2090,7 +2089,7 @@ class CadGenerationTests(unittest.TestCase):
         self.assertEqual(1, len(package_calls))
         self.assertIsNotNone(spec.native_glb_path)
         self.assertTrue(spec.native_glb_path.exists())
-        self.assertTrue(cad_render.part_glb_path(step_path).is_dir())
+        self.assertTrue(cad_catalog.render_package_dir(step_path).is_dir())
 
     # --- Incremental-regen freshness gate (D) --------------------------------
 
@@ -2127,7 +2126,7 @@ class CadGenerationTests(unittest.TestCase):
         # The render package is keyed by the entry filename (the generator), not the
         # logical .step — read the manifest from the entry-keyed package.
         manifest = read_step_topology_manifest_from_glb(
-            cad_render.part_glb_path(spec.entry_path)
+            cad_catalog.render_package_dir(spec.entry_path)
         )
         self.assertIsNotNone(manifest)
         assert manifest is not None
@@ -2159,7 +2158,7 @@ class CadGenerationTests(unittest.TestCase):
         # A missing render artifact (the package directory) forces a rebuild — gen_step
         # writes no STEP, so the render package, not the STEP, is the freshness anchor.
         # The package is keyed by the entry filename (the generator), not the logical .step.
-        shutil.rmtree(cad_generation.part_glb_path(spec.entry_path))
+        shutil.rmtree(cad_catalog.render_package_dir(spec.entry_path))
         self.assertTrue(cad_generation._generated_child_is_stale(spec, force=False))
 
     def _spec(self, ref: str, kind: str, step_name: str) -> cad_generation.EntrySpec:
@@ -2246,7 +2245,7 @@ class CadGenerationTests(unittest.TestCase):
         # gen_step writes no STEP — the package directory is the freshness anchor, so
         # currency rides on the recorded source closure, not an on-disk STEP hash. The
         # package is keyed by the entry filename (the generator), not the logical .step.
-        glb_path = cad_render.part_glb_path(spec.entry_path)
+        glb_path = cad_catalog.render_package_dir(spec.entry_path)
         glb_path.mkdir(parents=True, exist_ok=True)
         manifest = {
             "sourceClosureHash": closure.closure_hash,
@@ -2290,7 +2289,7 @@ class CadGenerationTests(unittest.TestCase):
         )
         # The package directory is keyed by the entry filename (the generator), not the
         # logical .step.
-        glb_path = cad_render.part_glb_path(spec.entry_path)
+        glb_path = cad_catalog.render_package_dir(spec.entry_path)
         glb_path.mkdir(parents=True, exist_ok=True)  # package directory
         manifest = {
             "sourceClosureHash": closure.closure_hash,

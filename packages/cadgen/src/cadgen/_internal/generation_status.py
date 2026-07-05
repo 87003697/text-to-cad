@@ -22,7 +22,8 @@ def generation_lock_path(package_dir: Path | str) -> Path:
     For a package dir ``<folder>/__cadgen__/models/<name>.step`` the lock is the hidden sibling
     ``<folder>/__cadgen__/models/.<name>.step.generation.lock.json``. It lives under
     ``__cadgen__`` (gitignored) and is a fixed path per model, so the viewer can read it during
-    the artifact pull to coordinate with an in-flight build (see viewer generationLock.mjs)."""
+    the artifact pull to coordinate with an in-flight build (see the viewer's
+    server_py/artifact.py lock reader)."""
     package = Path(package_dir)
     return package.parent / f".{package.name}{GENERATION_LOCK_SUFFIX}"
 

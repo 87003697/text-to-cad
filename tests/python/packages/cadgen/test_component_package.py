@@ -113,10 +113,10 @@ class ComponentPackageTests(unittest.TestCase):
     def test_assembly_package_current_tracks_descriptor_and_components(self) -> None:
         compound = _demo_compound()
         with tempfile.TemporaryDirectory() as tmp:
-            # assembly_package_dir derives the package path from a STEP path; emit the
+            # render_package_dir derives the package path from a STEP path; emit the
             # package there so the freshness check sees a real descriptor + components.
             step_path = Path(tmp) / "demo.step"
-            package_dir = component_package.assembly_package_dir(step_path)
+            package_dir = component_package.render_package_dir(step_path)
             self.assertFalse(component_package.assembly_package_current(step_path))
 
             component_package.build_package_from_compound(
