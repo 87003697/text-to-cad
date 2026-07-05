@@ -34,10 +34,10 @@ Four coupled changes:
    the build already holds. STEP is produced on demand, when a human or external tool needs
    interchange/fabrication.
 3. **The viewer indexes Python generators** (a `.step.py` naming convention) and serves their
-   GLB render artifacts from `__cadcache__`, instead of pairing a committed `.step` file with
+   GLB render artifacts from `__cadgen__`, instead of pairing a committed `.step` file with
    a committed `.{model}.step.glb` beside it. **Direct STEP-file inputs are unchanged** —
    they still mesh to GLB for inspect/render and present in the viewer exactly as today.
-4. **`__cadcache__` becomes a per-folder, content-addressed artifact store** (§4.6) so the
+4. **`__cadgen__` becomes a per-folder, content-addressed artifact store** (§4.6) so the
    inevitable duplication — a `.step.py` and the STEP you export from it produce *identical*
    GLBs — collapses to one cached entry, and parts shared between sibling models in a folder
    are meshed once.
@@ -46,7 +46,7 @@ Four coupled changes:
 skill are the opinionated layer.** The CLI takes a generator (any `.py` with a `gen_step`
 marker) or a STEP file and produces *explicitly requested* outputs. It does not require a
 `.step` file to exist, does not assume the `.step.py` suffix, and commits nothing. The
-`.step.py` convention and the `__cadcache__` artifact store live entirely in the
+`.step.py` convention and the `__cadgen__` artifact store live entirely in the
 viewer/skill layer on top of that agnostic CLI.
 
 This repo is in beta: **hard migration is acceptable** and assumed throughout. GLB artifacts
@@ -91,8 +91,8 @@ consumes.
   circuits the STEP write and builds the scene in memory (`build_build123d_step_scene`).
 - **Artifact paths** live *beside* the `.step`: `.{model}.step.glb` (a file for parts, a
   directory for assembly packages), via `part_glb_path` / `explorer_artifact_path_for_step_path`.
-- **`__cadcache__`** (`step_scene.py`) is a per-STEP, content-addressed cache of *parsed
-  geometry* — `__cadcache__/<name>.step/v2-<stepHash>/{scene.json, prototype-N.bin}` (binary
+- **`__cadgen__`** (`step_scene.py`) is a per-STEP, content-addressed cache of *parsed
+  geometry* — `__cadgen__/<name>.step/v2-<stepHash>/{scene.json, prototype-N.bin}` (binary
   BREP). It accelerates `import_step` / `load_step_scene`. It is gitignored, keyed by STEP
   content, and not currently a render-artifact store.
 - **Viewer** (`viewer/src/server/catalog/cadDirectoryScanner.mjs`) scans for `.step/.stp` (+
@@ -137,11 +137,11 @@ catalog's `script → step_path` derivation changes from `with_suffix(".step")` 
 trailing `.py`" so `tom.step.py → tom.step` (a *logical* cad_ref/output path that need not
 exist on disk).
 
-### 4.4 `__cadcache__` as a per-folder, content-addressed artifact store
+### 4.4 `__cadgen__` as a per-folder, content-addressed artifact store
 
-Today `__cadcache__` is per-STEP-file (`__cadcache__/<name>.step/v2-<stepHash>/…`) and caches
+Today `__cadgen__` is per-STEP-file (`__cadgen__/<name>.step/v2-<stepHash>/…`) and caches
 only parsed geometry, while render artifacts live as committed `.{model}.step.glb` blobs
-beside the source. Both go away. Restructure `__cadcache__` into a **per-folder,
+beside the source. Both go away. Restructure `__cadgen__` into a **per-folder,
 content-addressed** store that holds *all* derived artifacts, keyed by **geometry content
 hash** (the unlocated-shape BREP hash already used for component cids), with a thin
 per-model descriptor as the glue:
@@ -150,7 +150,7 @@ per-model descriptor as the glue:
 models/robots/tom/
   tom.step.py                       # generator (source of truth)
   tom_with_gripper.step.py          # sibling generator, shares most parts
-  __cadcache__/                     # gitignored, per-folder, content-addressed
+  __cadgen__/                     # gitignored, per-folder, content-addressed
     components/<geomHash>.glb        # one GLB per unique part geometry — SHARED in folder
     geometry/<geomHash>.brep         # parsed binary BREP (fast scene reload; was prototype-N.bin)
     topology/<geomHash>.json         # full selector manifest for inspect (lazy)
@@ -171,7 +171,7 @@ So the descriptor (`assembly.json`) is the only per-model artifact; the heavy GL
 by content within the folder. A single-part model is just a degenerate package: one occurrence
 referencing one `components/<geomHash>.glb`.
 
-**Per-folder, not global (deliberately).** Each folder owns its `__cadcache__`; dedup is
+**Per-folder, not global (deliberately).** Each folder owns its `__cadgen__`; dedup is
 *within* a folder. No repo-global cache — that keeps invalidation, ownership, and gitignore
 trivial, and avoids cross-folder coupling. Cross-folder reuse (the three tom variants live in
 one folder, so they already share) is left as a future global-cache option, not built now.
@@ -227,7 +227,7 @@ more shareable.
 | layer | responsibility | opinions |
 |---|---|---|
 | **step CLI / cadgen** | given a source (generator or STEP) + explicit output requests, produce them | none: no `.step.py`, no required `.step`, no committing, no cache policy |
-| **viewer + CAD skill** | discover `.step.py`, store/serve artifacts from `__cadcache__`, render-first iteration, trigger generation on cache-miss | all naming, caching, and workflow conventions |
+| **viewer + CAD skill** | discover `.step.py`, store/serve artifacts from `__cadgen__`, render-first iteration, trigger generation on cache-miss | all naming, caching, and workflow conventions |
 
 This keeps cadgen reusable and unopinionated while letting the viewer be as opinionated as it
 wants — the same principle behind keeping `packages/cadjs` non-React.
@@ -236,7 +236,7 @@ wants — the same principle behind keeping `packages/cadjs` non-React.
 
 A `.step`/`.stp` file with no generator keeps today's workflow exactly: it *is* the source,
 so it stays on disk, and the CLI meshes it to GLB for inspect/render. The only change is
-*where the GLB lands* — the same per-folder content-addressed `__cadcache__` (§4.4) instead of
+*where the GLB lands* — the same per-folder content-addressed `__cadgen__` (§4.4) instead of
 a `.{model}.step.glb` beside it — and that change is invisible to the user. The viewer
 presents direct STEP files just as it does now (a `.step` entry that renders its GLB). Because
 the GLB is geometry-keyed, a direct `tom.step` and a `tom.step.py` that produce the same shape
@@ -245,7 +245,7 @@ the GLB is geometry-keyed, a direct `tom.step` and a `tom.step.py` that produce 
 The only asymmetry: a generator carries the *instance structure* (the compound's located
 children) so it produces a proper component **package**; a flat baked STEP file has no
 instancing, so it meshes to a single GLB (or a package whose components are content-addressed
-per solid). Both still land in `__cadcache__` and dedup by geometry hash; the generator path
+per solid). Both still land in `__cadgen__` and dedup by geometry hash; the generator path
 simply gets better part-level reuse for free.
 
 ### 4.7 One representation: `descriptor + components` (a part is a degenerate assembly)
@@ -259,7 +259,7 @@ keystone of the rearchitecture (it is what makes everything else collapse):
   branch** across `generation.py` (the emit fork), `step_artifacts.py`, the catalog, `cadjs`,
   the snapshot, and the viewer. There is one emit path and one render-load path.
 - **`part_glb_path` (file) vs the package directory** stops being a distinction — the model's
-  artifact is always a descriptor + components in `__cadcache__`.
+  artifact is always a descriptor + components in `__cadgen__`.
 - **Likely deletes `assembly_spec.py`** and the part/assembly kind plumbing entirely.
 
 Two consequences to design for (see §8):
@@ -301,7 +301,7 @@ geometry is never lost — it's reproducible from source (`gen_step` ~6s) or the
   Discoverability matters — the failure mode is "where's my STEP?", which docs + a clear
   CLI/skill affordance must pre-empt.
 
-### 5.3 `__cadcache__` as a per-folder, content-addressed store — **win + cost**
+### 5.3 `__cadgen__` as a per-folder, content-addressed store — **win + cost**
 - **Win — duplication collapses.** Geometry-keyed artifacts mean a `.step.py` and the
   `.step` exported from it share one cached GLB (no re-mesh), and parts shared between sibling
   models in a folder mesh once. This directly answers the "the exported STEP has the same GLB"
@@ -388,17 +388,20 @@ simplification sweep. Sequence is fixed by dependency: **S2 + S3 (enabling primi
 > - **S6 ✅** — the cadjs/viewer self-contained (monolith) mesh paths
 >   (`buildSelfContainedAssemblyMeshData`, `assemblyUsesSelfContainedMesh`, the
 >   `buildSelfContainedAssemblyMeshState` viewer hook + tests) are deleted.
-> - **Per-folder `__cadcache__`** live + gitignored + skipped by the viewer scanner.
+> - **Per-folder `__cadgen__`** live + gitignored + skipped by the viewer scanner.
 >   **`packageSchemaVersion = 2`** stamped on the descriptor (independent of
 >   `STEP_TOPOLOGY_SCHEMA_VERSION`).
 > - **P6 viewer/catalog ✅** — `validateStepTopologyArtifact`, `readStepCatalogMetadata`,
 >   `assetForPath`, and `collectCadSourceFiles` are all package-directory-aware; the scanner
->   treats `.{model}.step.glb/` as the artifact anchor and skips `__cadcache__`.
+>   treats `.{model}.step.glb/` as the artifact anchor and skips `__cadgen__`.
 >
-> **Deferred / superseded:** **S7** (legacy path helpers `legacy_part_glb_path` /
-> `existing_part_glb_path` / `native_component_glb_dir`) is left in place — they remain in live
-> file-or-dir fallback chains (`existing_part_glb_path(...) || part_glb_path(...)` resolves a
-> package dir correctly), so deleting them is low-value churn. **S8** (delete the `index`
+> **S7 ✅** — the legacy path helpers (`legacy_part_glb_path` / `existing_part_glb_path` /
+> `native_component_glb_dir`, the explorer-dir helpers in `catalog.py`, and
+> `_reset_step_artifact_dir`'s stale-dir cleanup) are deleted; `part_glb_path` resolves the
+> `__cadgen__` package directly and the viewer ignores dot-prefixed (hidden) files and
+> directories generically instead of pattern-matching legacy artifact names.
+>
+> **Superseded:** **S8** (delete the `index`
 > `STEP_TOPOLOGY` profile / `build_step_topology_index_manifest`) is **superseded** — the
 > rearchitecture made the index profile the canonical package descriptor, so it is load-bearing,
 > not dead. The viewer still passes `--skip-step-write` to `cadgen.step_artifact` (the flag is now
@@ -428,9 +431,10 @@ simplification sweep. Sequence is fixed by dependency: **S2 + S3 (enabling primi
 - **S6 — Delete the cadjs/viewer self-contained (monolithic) mesh paths:**
   `buildSelfContainedAssemblyMeshData` + tests, `assemblyUsesSelfContainedMesh` branches in
   `source.js`, `buildSelfContainedAssemblyMeshState` in `useCadAssets`. `S · low–med`
-- **S7 — Delete legacy GLB path helpers/fallbacks:** `legacy_part_glb_path`,
-  `existing_part_glb_path`, `native_component_glb_dir`, and `_reset_step_artifact_dir`'s
-  stale-dir cleanup. `S · low`
+- **S7 — Delete legacy GLB path helpers/fallbacks:** ✅ **shipped**. `legacy_part_glb_path`,
+  `existing_part_glb_path`, `native_component_glb_dir`, the `catalog.py` explorer-dir helpers,
+  and `_reset_step_artifact_dir` are deleted; the viewer skips dot-prefixed files/dirs
+  generically. `S · low`
 - **S8 — Delete the `index` `STEP_TOPOLOGY` profile; one canonical manifest schema:** remove
   `build_step_topology_index_manifest` and the index-vs-selector branching in the reader.
   *(depends S2.)* `M · med`
@@ -447,16 +451,16 @@ careful data migration. In dependency order:
 
 1. **CLI/cadgen:** make no-STEP the default; add `--step <output>`; retire `--skip-step-write`;
    emit the binary BREP cache + inertial metadata; move freshness to `sourceClosureHash`;
-   route all derived artifacts into the per-folder content-addressed `__cadcache__` (§4.4).
+   route all derived artifacts into the per-folder content-addressed `__cadgen__` (§4.4).
 2. **Viewer/skill:** index `.step.py` (and direct `.step` files, unchanged); serve GLBs from
-   `__cadcache__`; trigger generation on cache-miss; delete the committed-`.{model}.step.glb`
+   `__cadgen__`; trigger generation on cache-miss; delete the committed-`.{model}.step.glb`
    code path outright.
 3. **Repo:** rename top-level generators `<model>.py → <model>.step.py`; **stop committing**
-   `.{model}.step.glb` and generated `.step` files; gitignore `__cadcache__`. Old committed
+   `.{model}.step.glb` and generated `.step` files; gitignore `__cadgen__`. Old committed
    `.step`/GLB artifacts are simply removed — they regenerate on demand. Hand-authored
    (imported) `.step` files stay committed (they are source). The user refactors/regenerates
    the generated ones as prompted.
-4. **CI/release:** pre-warm `__cadcache__` and produce on-demand `--step` exports for the
+4. **CI/release:** pre-warm `__cadgen__` and produce on-demand `--step` exports for the
    release bundle, so published viewers and external CAD consumers still get artifacts.
 
 ## 8. Risks & open questions
@@ -475,7 +479,7 @@ The decisions below fork the implementation. **⛔ marks the ones that block sta
 carries a suggested default.
 
 #### Cache & hashing
-- ⛔ **Where does `__cadcache__` live / at what level is geometry shared?** A) per-model-root
+- ⛔ **Where does `__cadgen__` live / at what level is geometry shared?** A) per-model-root
   folder (all generators in the dir share); B) per-input-file sibling; C) today's per-STEP
   `<step>.step/v2-<hash>/`. **Default A** — deepest common ancestor maximizes sibling-model dedup.
 - ⛔ **Do file-backed and procedural parts share one content-address scheme** (so a `.step.py`
@@ -495,7 +499,7 @@ carries a suggested default.
 
 #### Descriptor & schema
 - ⛔ **`assembly.json` schema + how components are referenced** — A) colocated relative
-  `components/<cid>.glb`; B) descriptor at `__cadcache__/models/<m>/assembly.json` → `../components/<cid>.glb`;
+  `components/<cid>.glb`; B) descriptor at `__cadgen__/models/<m>/assembly.json` → `../components/<cid>.glb`;
   C) absolute/URL. **Default B** (enables per-folder dedup; relative keeps the folder relocatable).
 - **`PACKAGE_SCHEMA_VERSION`** (undefined ref at `component_package.py:297`) — define `=1`,
   independent of `STEP_TOPOLOGY_SCHEMA_VERSION`. **Default: A**, and fix the latent crash now (S16).
@@ -520,7 +524,7 @@ carries a suggested default.
 - **Which generators get renamed?** **Default: only top-level renderables** (`tom.py → tom.step.py`);
   sub-assemblies / `robot_common` stay importable `.py`; generators load by path only.
 - **Migration without breaking imports** — audit-grep for importers of `tom.py` (expected zero —
-  variants are entry points), then rename, stop committing `tom.step`/`.glb`, gitignore `__cadcache__`.
+  variants are entry points), then rename, stop committing `tom.step`/`.glb`, gitignore `__cadgen__`.
 - **Catalog changes for imported flat `.step`?** **Default: none** — catalog stays agnostic; dedup/freshness live downstream.
 
 #### Part/assembly unification (S1)
@@ -549,7 +553,7 @@ Adopt it. The agnostic-CLI / opinionated-viewer split is the right shape, and th
 
 Sequence: (1) CLI default-no-STEP + `--step` export + binary BREP/metadata + `sourceClosureHash`
 freshness — all verifiable in cadgen with the existing test suites; (2) viewer `.step.py` +
-`__cadcache__` artifacts + build-on-demand — needs the live viewer to verify; (3) repo migration
+`__cadgen__` artifacts + build-on-demand — needs the live viewer to verify; (3) repo migration
 (rename generators, drop committed artifacts). It is the same philosophy as the component-GLB
 flip — stop paying a heavy serialization on the hot path for an artifact only some consumers
 need, and make it on-demand — applied one level up, to the STEP itself.

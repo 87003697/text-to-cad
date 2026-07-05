@@ -4,7 +4,7 @@ Status: proposal · Supersedes the STEP-specific generation + "cache-state issue
 
 ## 1. Why
 
-Today the viewer regenerates a STEP model's `__cadcache__` package through a STEP-named,
+Today the viewer regenerates a STEP model's `__cadgen__` package through a STEP-named,
 STEP-coupled path, and models the *cache states* (missing / stale / metadata-incomplete) as
 user-facing **Issues**. That framing is wrong and the implementation has accreted hacks:
 
@@ -31,7 +31,7 @@ generated artifact to render**:
 
 | Type | Renders from | Needs generated artifact? |
 |---|---|---|
-| **STEP generator** (`.step.py` / same-stem `gen_step` `.py`) | component-GLB package | **yes** — `__cadcache__/models/<name>.step/` |
+| **STEP generator** (`.step.py` / same-stem `gen_step` `.py`) | component-GLB package | **yes** — `__cadgen__/models/<name>.step/` |
 | **STEP imported** (committed `.step`/`.stp`) | component-GLB package | **yes** — same package |
 | implicit CAD (`.implicit.mjs`) | GPU raymarch **shader**, client-side | no (export is download-only) |
 | urdf / srdf / sdf | committed file + referenced meshes (parsed in browser) | no |
@@ -46,7 +46,7 @@ seam so future producers (a baked implicit mesh, a decimated-mesh cache, a new f
 
 **Goals**
 - One shareable, server-side interface — `RenderArtifactProvider` — to check freshness and
-  (re)build the render artifact for a source, reusing the existing cadcache pipeline unchanged.
+  (re)build the render artifact for a source, reusing the existing `__cadgen__` package pipeline unchanged.
 - A single client state machine `ready | generating | error` per entry. **No cache-state Issues.**
 - Delete the mesh-stripping hack, the buildable-code suppression logic, and the duplicate endpoints.
 - Optimize for simplicity: minimal interface, one concrete provider, trivial default for direct types.
@@ -66,7 +66,7 @@ Every entry resolves to a **render source**, which is one of:
 
 - **Direct** — the committed file *is* the render input (mesh / dxf / urdf / gcode / implicit shader).
   No artifact, no freshness; always `ready`.
-- **Derived** — the render input is a generated artifact under `__cadcache__/` derived from a source
+- **Derived** — the render input is a generated artifact under `__cadgen__/` derived from a source
   (today: STEP → component-GLB package). Has a freshness check and a build.
 
 ```
@@ -91,7 +91,7 @@ Server-side, one per derived-artifact `kind`. Generic shell around type-specific
 interface RenderArtifactProvider {
   kind: string;                                  // "step"
   owns(entry): boolean;                          // .step/.stp + same-stem gen_step .py
-  artifactRef(source): string;                   // __cadcache__/<kind>/<basename>/  (artifact dir/url)
+  artifactRef(source): string;                   // __cadgen__/<kind>/<basename>/  (artifact dir/url)
   freshness(source): Freshness;                  // present + up-to-date?  (no build)
   build(source, { force, signal }): BuildResult; // idempotent (re)build; settles freshness after
 }
@@ -112,7 +112,7 @@ A thin wrapper — **no new build logic**:
 | Member | Wraps (reused as-is) |
 |---|---|
 | `owns` | `sameStemPythonGeneratorPath` sniff + `.step/.stp` ([`stepArtifactCompiler.mjs:41`](../viewer/src/server/step/stepArtifactCompiler.mjs), [`localAssetBackend.mjs:124`](../viewer/src/server/localAssetBackend.mjs)) |
-| `artifactRef` | `inlineStepGlbArtifactPathForSource` ([`stepSidecars.mjs:46`](../packages/cadjs/src/common/stepSidecars.mjs)) |
+| `artifactRef` | `inline_step_glb_artifact_path_for_source` ([`scanner.py`](../viewer/server_py/scanner.py)) |
 | `freshness` | `validateStepTopologyArtifact` / `validateAssemblyPackageArtifact` ([`cadDirectoryScanner.mjs:636,780`](../viewer/src/server/catalog/cadDirectoryScanner.mjs)) → map its error codes to `fresh/stale/missing/broken` via `canBuildStepArtifact` |
 | `build` | `ensureStepTopologyArtifact` → `compileStepTopologyArtifact` → `cadgen.step_artifact` CLI, + the descriptor-mtime bump that settles the mtime trigger ([`localAssetBackend.mjs:854-867`](../viewer/src/server/localAssetBackend.mjs)) |
 
@@ -177,7 +177,7 @@ Nothing in the Python build changes. The redesign is mostly *deletion + rewiring
 - `cadgen.step_artifact` / `component_package.build_package_from_compound` / `generation.py` — unchanged.
 - `ensureStepTopologyArtifact` control flow → the generic resolver shell.
 - `validateStepTopologyArtifact` + `canBuildStepArtifact` → `freshness()` + the trigger classifier.
-- `inlineStepGlbArtifactPathForSource` + the `__cadcache__/<kind>/<basename>/` convention → `artifactRef()`.
+- `inlineStepGlbArtifactPathForSource` + the `__cadgen__/<kind>/<basename>/` convention → `artifactRef()`.
 - `run_script_generator` (already dispatches `gen_step` **and** `gen_dxf`) + `source_hash.py` closure
   primitives → the shared Python-generator harness, ready if a future type generates via `.py`.
 

@@ -17,11 +17,11 @@ _ACTIVE_RUN = threading.local()
 
 
 def generation_lock_path(package_dir: Path | str) -> Path:
-    """The single per-model generation lock, beside the model's __cadcache__ package directory.
+    """The single per-model generation lock, beside the model's __cadgen__ package directory.
 
-    For a package dir ``<folder>/__cadcache__/models/<name>.step`` the lock is the hidden sibling
-    ``<folder>/__cadcache__/models/.<name>.step.generation.lock.json``. It lives under
-    ``__cadcache__`` (gitignored) and is a fixed path per model, so the viewer can read it during
+    For a package dir ``<folder>/__cadgen__/models/<name>.step`` the lock is the hidden sibling
+    ``<folder>/__cadgen__/models/.<name>.step.generation.lock.json``. It lives under
+    ``__cadgen__`` (gitignored) and is a fixed path per model, so the viewer can read it during
     the artifact pull to coordinate with an in-flight build (see viewer generationLock.mjs)."""
     package = Path(package_dir)
     return package.parent / f".{package.name}{GENERATION_LOCK_SUFFIX}"

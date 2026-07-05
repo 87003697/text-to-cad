@@ -85,7 +85,7 @@ def _validate_assembly_package_artifact(repo_root, source_path, glb_path):
     if uses_python:
         # Generated packages: source-closure mtime trigger. The descriptor's
         # sourcePath + sourceClosureFiles are relative to the MODEL folder (the dir
-        # holding the .step.py = dirname(source_path)), NOT the __cadcache__ dir.
+        # holding the .step.py = dirname(source_path)), NOT the __cadgen__ dir.
         identity = scanner._generator_source_path_from_metadata(
             repo_root, descriptor.get("sourcePath"), scanner.PYTHON_GENERATOR_BY_KIND.get("step", "gen_step"),
             os.path.dirname(source_path),

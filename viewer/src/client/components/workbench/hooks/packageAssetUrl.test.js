@@ -5,23 +5,23 @@ import { resolvePackageAssetUrl, resolvePackageDirRef } from "./packageAssetUrl.
 
 test("resolvePackageDirRef collapses self-contained and legacy refs", () => {
   assert.equal(
-    resolvePackageDirRef("/models/simple/__cadcache__/models/part.step", "components/abc.glb"),
-    "/models/simple/__cadcache__/models/part.step/components/abc.glb"
+    resolvePackageDirRef("/models/simple/__cadgen__/models/part.step", "components/abc.glb"),
+    "/models/simple/__cadgen__/models/part.step/components/abc.glb"
   );
   assert.equal(
-    resolvePackageDirRef("/models/simple/__cadcache__/models/part.step", "../../components/abc.glb"),
-    "/models/simple/__cadcache__/components/abc.glb"
+    resolvePackageDirRef("/models/simple/__cadgen__/models/part.step", "../../components/abc.glb"),
+    "/models/simple/__cadgen__/components/abc.glb"
   );
   assert.equal(resolvePackageDirRef("/models/part.step", "./assembly.json"), "/models/part.step/assembly.json");
 });
 
 test("resolvePackageAssetUrl repoints the file param on query-style (local-fs) URLs", () => {
   const meshUrl =
-    "/__cad/asset?file=%2Fmodels%2Fsimple%2F__cadcache__%2Fmodels%2Fpart.step&dir=%2Fmodels&v=abc123";
+    "/__cad/asset?file=%2Fmodels%2Fsimple%2F__cadgen__%2Fmodels%2Fpart.step&dir=%2Fmodels&v=abc123";
 
   const descriptorUrl = resolvePackageAssetUrl(meshUrl, "assembly.json");
   const descriptor = new URL(descriptorUrl, "http://x.local");
-  assert.equal(descriptor.searchParams.get("file"), "/models/simple/__cadcache__/models/part.step/assembly.json");
+  assert.equal(descriptor.searchParams.get("file"), "/models/simple/__cadgen__/models/part.step/assembly.json");
   // dir and v survive so the sub-asset stays scoped to the active root with a cache key.
   assert.equal(descriptor.searchParams.get("dir"), "/models");
   assert.equal(descriptor.searchParams.get("v"), "abc123");
@@ -30,11 +30,11 @@ test("resolvePackageAssetUrl repoints the file param on query-style (local-fs) U
   const component = new URL(componentUrl, "http://x.local");
   assert.equal(
     component.searchParams.get("file"),
-    "/models/simple/__cadcache__/models/part.step/components/7e4f.glb"
+    "/models/simple/__cadgen__/models/part.step/components/7e4f.glb"
   );
 
   // A naive `${meshUrl}/assembly.json` would have left file at the directory; assert we did NOT.
-  assert.notEqual(descriptor.searchParams.get("file"), "/models/simple/__cadcache__/models/part.step");
+  assert.notEqual(descriptor.searchParams.get("file"), "/models/simple/__cadgen__/models/part.step");
 });
 
 test("resolvePackageAssetUrl returns empty for missing inputs", () => {

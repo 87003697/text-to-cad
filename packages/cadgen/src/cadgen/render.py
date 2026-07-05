@@ -6,11 +6,9 @@ from pathlib import Path
 
 from cadgen.catalog import (
     cad_ref_from_step_path as fallback_cad_ref_from_step_path,
+    cadgen_package_path_for_entry_path,
     find_source_by_cad_ref,
     find_source_by_path,
-    explorer_artifact_path_for_step_path,
-    explorer_directory_for_step_path,
-    legacy_explorer_artifact_path_for_step_path,
 )
 
 
@@ -46,24 +44,8 @@ def part_native_glb_path(step_path: Path) -> Path:
     return source.native_glb_path
 
 
-def native_component_glb_dir(step_path: Path) -> Path:
-    return explorer_directory_for_step_path(step_path) / "components"
-
-
 def part_glb_path(step_path: Path) -> Path:
-    return explorer_artifact_path_for_step_path(step_path, ".glb")
-
-
-def legacy_part_glb_path(step_path: Path) -> Path:
-    return legacy_explorer_artifact_path_for_step_path(step_path, ".glb")
-
-
-def existing_part_glb_path(step_path: Path) -> Path | None:
-    preferred_path = part_glb_path(step_path)
-    if preferred_path.is_file():
-        return preferred_path
-    legacy_path = legacy_part_glb_path(step_path)
-    return legacy_path if legacy_path.is_file() else None
+    return cadgen_package_path_for_entry_path(step_path)
 
 
 def relative_to_cwd(path: Path) -> str:

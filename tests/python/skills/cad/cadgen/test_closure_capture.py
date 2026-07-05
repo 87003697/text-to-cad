@@ -31,7 +31,7 @@ _FAKE_DOC_PRELUDE = [
 
 
 def _closure(root: Path, name: str) -> list[str]:
-    descriptor_path = root / "__cadcache__" / "models" / f"{name}.dxf.py" / "drawing.json"
+    descriptor_path = root / "__cadgen__" / "models" / f"{name}.dxf.py" / "drawing.json"
     return sorted(json.loads(descriptor_path.read_text(encoding="utf-8"))["sourceClosureFiles"])
 
 

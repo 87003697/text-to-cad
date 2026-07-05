@@ -26,7 +26,7 @@ _FIXTURE = _WORKTREE / "models/simple/basic_shape_mating_test_fixture.step.py"
 _LOGICAL_STEP = _WORKTREE / "models/simple/basic_shape_mating_test_fixture.step"
 _DESCRIPTOR = (
     _WORKTREE
-    / "models/simple/__cadcache__/models/basic_shape_mating_test_fixture.step.py/assembly.json"
+    / "models/simple/__cadgen__/models/basic_shape_mating_test_fixture.step.py/assembly.json"
 )
 
 

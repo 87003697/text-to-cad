@@ -6,7 +6,7 @@ STEP / 3MF / STL / GLB to an arbitrary ``--out`` destination — typically a pat
 user picked from a native Save dialog.
 
 It is deliberately distinct from :mod:`cadgen.step_artifact`, which only (re)builds the
-hidden ``__cadcache__`` viewer GLB/topology package beside the source. This module
+per-folder ``__cadgen__`` viewer GLB/topology package beside the source. This module
 produces a single standalone file at an arbitrary location and writes **no** package or
 beside-source artifacts. It reuses the same scene build + mesh + per-format exporters as
 the ``scripts/step`` sidecar jobs (see ``generation.py``), so output is byte-equivalent to

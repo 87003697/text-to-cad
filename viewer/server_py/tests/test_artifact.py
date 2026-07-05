@@ -19,13 +19,13 @@ from server_py import artifact, scanner  # noqa: E402
 
 
 def _write_package(root, step_name, *, source_kind="step", step_hash=None, components=None):
-    """Create <root>/<step_name> + its __cadcache__/models/<step_name> package."""
+    """Create <root>/<step_name> + its __cadgen__/models/<step_name> package."""
     step_path = os.path.join(root, step_name)
     with open(step_path, "wb") as h:
         h.write(b"ISO-10303-21;\nfake step\n")
     with open(step_path, "rb") as h:
         actual_hash = hashlib.sha256(h.read()).hexdigest()
-    pkg = os.path.join(root, "__cadcache__", "models", step_name)
+    pkg = os.path.join(root, "__cadgen__", "models", step_name)
     comp_dir = os.path.join(pkg, "components")
     os.makedirs(comp_dir, exist_ok=True)
     comps = {}
@@ -130,7 +130,7 @@ def _write_generated_package(root, py_name, *, closure_extra=None, with_package=
             h.write("# closure dep\n")
     if not with_package:
         return py_path, None
-    pkg = os.path.join(root, "__cadcache__", "models", py_name)
+    pkg = os.path.join(root, "__cadgen__", "models", py_name)
     os.makedirs(os.path.join(pkg, "components"), exist_ok=True)
     with open(os.path.join(pkg, "components", "c0.glb"), "wb") as h:
         h.write(b"glTF\x02\x00\x00\x00")
@@ -177,7 +177,7 @@ class ScannerListsGenerated(unittest.TestCase):
             py = os.path.join(root, "widget.step.py")
             with open(py, "w") as h:
                 h.write("def gen_step():\n    return None\n")
-            # No __cadcache__ at all — it must still be listed (built on demand).
+            # No __cadgen__ at all — it must still be listed (built on demand).
             self.assertIn(py, scanner._collect_cad_source_files(root, []))
 
     def test_unbuilt_dxf_py_is_collected(self):
@@ -199,7 +199,7 @@ def _write_drawing_package(root, py_name, *, closure_extra=None, with_package=Tr
             h.write("# closure dep\n")
     if not with_package:
         return py_path, None
-    pkg = os.path.join(root, "__cadcache__", "models", py_name)
+    pkg = os.path.join(root, "__cadgen__", "models", py_name)
     os.makedirs(pkg, exist_ok=True)
     with open(os.path.join(pkg, "drawing.dxf"), "w") as h:
         h.write("0\nEOF\n")
@@ -285,7 +285,7 @@ class ScannerDxfEntry(unittest.TestCase):
             self.assertEqual(entry["kind"], "dxf")
             self.assertEqual(entry["file"], "outline.dxf.py")
             self.assertEqual(entry["sourceKind"], "python")
-            self.assertIn("__cadcache__/models/outline.dxf.py/drawing.dxf", entry["url"])
+            self.assertIn("__cadgen__/models/outline.dxf.py/drawing.dxf", entry["url"])
             self.assertTrue(entry["hash"])
             self.assertEqual(entry["source"]["sourceHash"], "abc123")
 

@@ -17,11 +17,11 @@ from tests.python.support.paths import add_repo_path, repo_path
 def write_package(step_path, *, entry_kind="part", source_kind="step"):
     """Materialize the canonical render artifact for ``step_path``: a SELF-CONTAINED
     component-GLB PACKAGE directory inside the per-folder cache
-    (``__cadcache__/models/<step-filename>/assembly.json``) whose content-addressed component
+    (``__cadgen__/models/<step-filename>/assembly.json``) whose content-addressed component
     GLBs live in the package's own ``components/<hash>.glb`` dir. Returns the package directory
     path, mirroring ``cadgen.render.part_glb_path``."""
     step_path = Path(step_path)
-    pkg_dir = step_path.parent / "__cadcache__" / "models" / step_path.name
+    pkg_dir = step_path.parent / "__cadgen__" / "models" / step_path.name
     comp_dir = pkg_dir / "components"
     pkg_dir.mkdir(parents=True, exist_ok=True)
     comp_dir.mkdir(parents=True, exist_ok=True)
@@ -347,7 +347,7 @@ class SnapshotCliTests(unittest.TestCase):
         self.assertEqual(job["resolved"]["inputUrl"], "/__render_asset/part.step")
         # The render artifact is a SELF-CONTAINED component-GLB package, so the resolved job
         # carries a package descriptor with per-component asset URLs (no monolithic glbUrl).
-        # Each component URL points into the package's own components/ dir inside __cadcache__.
+        # Each component URL points into the package's own components/ dir inside __cadgen__.
         self.assertNotIn("glbUrl", job["resolved"])
         package = job["resolved"]["package"]
         self.assertEqual(package["descriptor"]["kind"], "assembly-package")
@@ -355,7 +355,7 @@ class SnapshotCliTests(unittest.TestCase):
         self.assertTrue(component_urls)
         for component_url in component_urls.values():
             self.assertTrue(
-                component_url.startswith("/__render_asset/__cadcache__/models/part.step/components/"),
+                component_url.startswith("/__render_asset/__cadgen__/models/part.step/components/"),
                 component_url,
             )
 

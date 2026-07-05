@@ -12,7 +12,7 @@ assemblies and their sidecars directly.
 
 - `*.step`: canonical mechanism assemblies.
 - `*.step.glb/`: generated render/selector package paired with each STEP file;
-  per-folder content-addressed render content lives under `__cadcache__`.
+  per-folder content-addressed render content lives under `__cadgen__`.
 - `<name>.params.js`: optional JS parameter/animation sidecar. It is declared
   through the model's `gen_step()` envelope (`{"shape": ..., "params":
   "<name>.params.js"}`) and recorded as `paramsPath` in the package descriptor;
@@ -26,7 +26,7 @@ bundle.
 
 ## Manifest
 
-The render/selector package (`<name>.step.glb/`, content under `__cadcache__`)
+The render/selector package (`<name>.step.glb/`, content under `__cadgen__`)
 is generated for every mechanism and is omitted from this table; the optional
 params sidecar is listed per mechanism below.
 

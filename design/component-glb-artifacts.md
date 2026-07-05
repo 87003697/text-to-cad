@@ -257,7 +257,7 @@ occurrence, not baked into the mesh).
 > - **Geometry-only content hash.** `sha256(BinTools.Write_s(unlocated, withTriangles=False,
 >   withNormals=False))`. Excluding mesh data is essential: building a component *meshes* the
 >   shared `TShape`, and a triangulation-sensitive hash would change on re-hash and miss the
->   cache (regression-tested). Determinism note: a *cold* `__cadcache__` build can emit a
+>   cache (regression-tested). Determinism note: a *cold* `__cadgen__` build can emit a
 >   slightly less-deduped package (freshly-STEP-imported geometry serializes differently from
 >   the cache-deserialized form — tom: 19 vs 11 components), but it is **correct and
 >   self-healing** — the next warm rebuild re-hashes to the canonical set and the freshness
@@ -317,7 +317,7 @@ compound-introspection path) and measured end-to-end. tom → **11 component GLB
 occurrences** (22 repeats deduped). Two regimes, because the package coexists with the
 monolith behind the flag today and only fully pays off once the monolith is dropped (§13).
 
-**Per-stage costs (tom, warm `__cadcache__`):** `gen_step` compound 5.3s · STEP write
+**Per-stage costs (tom, warm `__cadgen__`):** `gen_step` compound 5.3s · STEP write
 ~19s (142 MB) · mesh 2.2s · **monolithic GLB/topology 26s** (mesh 2.2 · selector extract
 ~24 · glb) · **package step 0.29s warm / 23s cold**.
 

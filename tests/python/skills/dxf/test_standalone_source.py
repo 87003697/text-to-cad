@@ -80,7 +80,7 @@ class StandaloneDxfSourceTests(unittest.TestCase):
 
             self.assertEqual(0, cad_generation.generate_dxf_targets([str(script_path)]))
 
-            package_dir = Path(root) / "__cadcache__" / "models" / script_path.name
+            package_dir = Path(root) / "__cadgen__" / "models" / script_path.name
             self.assertTrue((package_dir / "drawing.json").exists())
             drawing_path = package_dir / "drawing.dxf"
             self.assertTrue(drawing_path.exists())
@@ -146,7 +146,7 @@ class StandaloneDxfSourceTests(unittest.TestCase):
 
             self.assertEqual(0, cad_generation.generate_dxf_targets([str(script_path)], snapshot=True))
 
-            svg_path = Path(root) / "__cadcache__" / "models" / script_path.name / "drawing.svg"
+            svg_path = Path(root) / "__cadgen__" / "models" / script_path.name / "drawing.svg"
             self.assertTrue(svg_path.exists())
             self.assertIn("<svg", svg_path.read_text(encoding="utf-8"))
 

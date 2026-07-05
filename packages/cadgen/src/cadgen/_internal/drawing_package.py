@@ -2,9 +2,9 @@
 
 The DXF analog of the component-GLB package: a `<name>.dxf.py` generator's build
 product is a self-contained package directory under the model folder's
-``__cadcache__/models/``, keyed by the generator filename:
+``__cadgen__/models/``, keyed by the generator filename:
 
-    <model-folder>/__cadcache__/models/<name>.dxf.py/
+    <model-folder>/__cadgen__/models/<name>.dxf.py/
       drawing.json    # descriptor: provenance + freshness metadata
       drawing.dxf     # the built DXF (the viewer renders this directly)
 
@@ -129,7 +129,7 @@ def write_drawing_package(
         saveas(str(dxf_path))
     source_identity = python_source_hash(resolved_script)
     # The identity comment inside the cached DXF records the generator relative to the
-    # DXF file itself (inside __cadcache__/models/<key>/), so the package stays portable.
+    # DXF file itself (inside __cadgen__/models/<key>/), so the package stays portable.
     write_dxf_text_to_cad_metadata(
         dxf_path,
         text_to_cad_identity_metadata(
@@ -142,7 +142,7 @@ def write_drawing_package(
         "packageSchemaVersion": DRAWING_PACKAGE_SCHEMA_VERSION,
         "sourceKind": "python",
         # Like the assembly package, sourcePath/sourceClosureFiles are relative to the
-        # MODEL folder (the directory holding the .dxf.py), not the __cadcache__ dir.
+        # MODEL folder (the directory holding the .dxf.py), not the __cadgen__ dir.
         "sourcePath": resolved_script.name,
         "sourceHash": source_identity.source_hash,
         "dxf": DRAWING_DXF_NAME,

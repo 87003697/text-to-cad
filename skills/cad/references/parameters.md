@@ -45,7 +45,7 @@ The sidecar file itself can have any name; `<name>.params.js` is the convention.
   ```
 
   cadgen records that path as `paramsPath` in the package descriptor
-  (`assembly.json`, under `__cadcache__`), model-folder-relative. The CAD Viewer
+  (`assembly.json`, under `__cadgen__`), model-folder-relative. The CAD Viewer
   reads `paramsPath` from the descriptor to load the sidecar. JS serving is
   descriptor-gated: only a file a descriptor declares is served, never arbitrary
   workspace JS. There is no hidden-dot or `.step.js` filename requirement.

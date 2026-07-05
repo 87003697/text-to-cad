@@ -5,7 +5,7 @@ helper rebuilds the same geometry as an AssemblyHelper ``Compound`` whose parts 
 connected by explicit rigid mates (a root part, with every other part rigid-mated at
 its transform relative to the root) instead of independent baked transforms. Geometry
 is identical to placing the instances directly; parts import through the cached
-``__cadcache__`` loader. This is the design-coordinate joint approach (juno-style):
+``__cadgen__`` loader. This is the design-coordinate joint approach (juno-style):
 the mate frames carry the design placement, validated against the imported topology.
 """
 
@@ -92,7 +92,7 @@ def _resolve_shape(path: object, *, base_dir: Path) -> Any:
     composed from that generator's ``gen_step()``. This is a source-level dependency: a child edit
     flows into the parent on the next rebuild with no committed-STEP refresh and no leaf-first
     regeneration ordering. An IMPORTED child — no generator, e.g. a purchased/downloaded servo,
-    extrusion, or gripper — loads through the cached ``__cadcache__`` importer. Both paths return a
+    extrusion, or gripper — loads through the cached ``__cadgen__`` importer. Both paths return a
     fresh, independent shape per call so repeated copies of the same part stay independent occurrences.
     """
     step_path = _resolve(path, base_dir=base_dir)
@@ -115,7 +115,7 @@ def compound_from_instances(
 
     Each instance's ``transform`` is its absolute (world) placement — the tom
     composition resolves every part into world coordinates — so parts are imported
-    through the cached ``__cadcache__`` loader, moved to their placement, and labeled
+    through the cached ``__cadgen__`` loader, moved to their placement, and labeled
     with the instance name. There are no joints: the geometry is baked. This is the
     ``shape`` contract for a whole-robot assembly, which trades the assembly path's
     prototype instancing for a self-contained build123d ``Compound``.

@@ -40,7 +40,7 @@ class ComponentPackageTests(unittest.TestCase):
     def test_build_from_compound_dedups_and_self_describes(self) -> None:
         compound = _demo_compound()
         with tempfile.TemporaryDirectory() as tmp:
-            package_dir = Path(tmp) / "__cadcache__" / "models" / "demo.step"
+            package_dir = Path(tmp) / "__cadgen__" / "models" / "demo.step"
             stats = component_package.build_package_from_compound(
                 compound, package_dir=package_dir, root_name="demo"
             )
@@ -84,7 +84,7 @@ class ComponentPackageTests(unittest.TestCase):
     def test_rebuild_reuses_content_addressed_components(self) -> None:
         compound = _demo_compound()
         with tempfile.TemporaryDirectory() as tmp:
-            package_dir = Path(tmp) / "__cadcache__" / "models" / "demo.step"
+            package_dir = Path(tmp) / "__cadgen__" / "models" / "demo.step"
             component_package.build_package_from_compound(
                 compound, package_dir=package_dir, root_name="demo"
             )
@@ -98,7 +98,7 @@ class ComponentPackageTests(unittest.TestCase):
     def test_force_rebuilds_all_components(self) -> None:
         compound = _demo_compound()
         with tempfile.TemporaryDirectory() as tmp:
-            package_dir = Path(tmp) / "__cadcache__" / "models" / "demo.step"
+            package_dir = Path(tmp) / "__cadgen__" / "models" / "demo.step"
             component_package.build_package_from_compound(
                 compound, package_dir=package_dir, root_name="demo"
             )
@@ -172,7 +172,7 @@ class ComponentPackageTests(unittest.TestCase):
         sit at different x, so that component MUST be local."""
         compound = _demo_compound()
         with tempfile.TemporaryDirectory() as tmp:
-            package_dir = Path(tmp) / "__cadcache__" / "models" / "demo.step"
+            package_dir = Path(tmp) / "__cadgen__" / "models" / "demo.step"
             component_package.build_package_from_compound(
                 compound, package_dir=package_dir, root_name="demo"
             )
@@ -219,7 +219,7 @@ class ComponentPackageTests(unittest.TestCase):
         compound.label = "root"
 
         with tempfile.TemporaryDirectory() as tmp:
-            package_dir = Path(tmp) / "__cadcache__" / "models" / "demo.step"
+            package_dir = Path(tmp) / "__cadgen__" / "models" / "demo.step"
             component_package.build_package_from_compound(
                 compound, package_dir=package_dir, root_name="demo"
             )

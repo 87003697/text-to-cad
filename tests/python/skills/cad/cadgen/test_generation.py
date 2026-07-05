@@ -240,7 +240,7 @@ class CadGenerationTests(unittest.TestCase):
             self.assertTrue(ref.startswith("components/"), ref)
             self.assertNotIn("..", ref)
             self.assertTrue((package_dir / ref).is_file(), f"missing component GLB {ref}")
-        # components/ holds only flat GLB files — no nested __cadcache__ scaffolding.
+        # components/ holds only flat GLB files — no nested __cadgen__ scaffolding.
         self.assertEqual(
             [],
             [child.name for child in (package_dir / "components").iterdir() if child.is_dir()],
@@ -709,7 +709,7 @@ class CadGenerationTests(unittest.TestCase):
 
         cad_generation.generate_dxf_targets([str(script_path)])
 
-        package_dir = self.temp_root / "__cadcache__" / "models" / "bare_dxf.py"
+        package_dir = self.temp_root / "__cadgen__" / "models" / "bare_dxf.py"
         self.assertTrue((package_dir / "drawing.dxf").exists())
         self.assertTrue((package_dir / "drawing.json").exists())
         self.assertFalse((self.temp_root / "bare_dxf.dxf").exists())
@@ -720,7 +720,7 @@ class CadGenerationTests(unittest.TestCase):
         cad_generation.generate_dxf_targets([str(script_path)], write_dxf=True)
 
         self.assertTrue((self.temp_root / "flat.dxf").exists())
-        package_dir = self.temp_root / "__cadcache__" / "models" / "flat.dxf.py"
+        package_dir = self.temp_root / "__cadgen__" / "models" / "flat.dxf.py"
         self.assertTrue((package_dir / "drawing.json").exists())
 
     def test_dxf_generation_skips_current_drawing_package(self) -> None:
@@ -1120,7 +1120,7 @@ class CadGenerationTests(unittest.TestCase):
         cad_generation.generate_dxf_targets([str(first_path), f"{second_path}={second_output}"])
 
         # The plain target builds its drawing package (no sibling export by default).
-        package_dir = self.temp_root / "__cadcache__" / "models" / "first.dxf.py"
+        package_dir = self.temp_root / "__cadgen__" / "models" / "first.dxf.py"
         self.assertTrue((package_dir / "drawing.dxf").exists())
         self.assertFalse((self.temp_root / "first.dxf").exists())
         self.assertTrue(second_output.exists())
@@ -1437,13 +1437,13 @@ class CadGenerationTests(unittest.TestCase):
 
     def test_direct_step_rejects_native_glb_topology_artifact_collision(self) -> None:
         # The render artifact is now a component-GLB PACKAGE directory at
-        # __cadcache__/models/<step-filename>, so a native GLB sidecar whose resolved path
+        # __cadgen__/models/<step-filename>, so a native GLB sidecar whose resolved path
         # equals that artifact path must still be rejected rather than overwriting it.
         step_path = self._write_step("source")
         artifact_path = cad_render.part_glb_path(step_path)
         self.assertEqual(
             artifact_path,
-            (step_path.parent / "__cadcache__" / "models" / step_path.name).resolve(),
+            (step_path.parent / "__cadgen__" / "models" / step_path.name).resolve(),
         )
         _, direct_specs = cad_generation._selected_specs_for_targets(
             [str(step_path)],
@@ -1671,23 +1671,13 @@ class CadGenerationTests(unittest.TestCase):
         self.assertEqual(0.9, calls[0].mesh_tolerance)
         self.assertEqual(0.45, calls[0].mesh_angular_tolerance)
 
-    def test_generate_part_outputs_emits_package_and_clears_stale_artifacts(self) -> None:
+    def test_generate_part_outputs_emits_package(self) -> None:
         step_path = self._write_step("selector-output")
         _, selected_specs = cad_generation._selected_specs_for_targets(
             [str(step_path)],
             step_options=self._step_options(mesh_tolerance=0.3, mesh_angular_tolerance=0.2),
         )
         spec = selected_specs[0]
-        # The legacy monolithic explorer dir (.{model}.step/) holds topology.json/.bin
-        # and any leftover artifacts; emitting the package must clear it.
-        artifact_dir = cad_render.native_component_glb_dir(step_path).parent
-        stale_manifest_path = artifact_dir / "topology.json"
-        stale_binary_path = artifact_dir / "topology.bin"
-        stale_extra_path = artifact_dir / "stale-artifact.txt"
-        stale_extra_path.parent.mkdir(parents=True, exist_ok=True)
-        stale_manifest_path.write_text("old topology", encoding="utf-8")
-        stale_binary_path.write_bytes(b"old topology")
-        stale_extra_path.write_text("old artifact", encoding="utf-8")
         scene = self._fake_scene(step_path)
         package_patch, package_calls = self._patch_package_build()
 
@@ -1710,9 +1700,6 @@ class CadGenerationTests(unittest.TestCase):
         self.assertTrue(package_calls[0]["single_component"])
         self.assertTrue(cad_render.part_glb_path(step_path).is_dir())
         self.assertIsNone(result.selector_bundle)
-        self.assertFalse(stale_manifest_path.exists())
-        self.assertFalse(stale_binary_path.exists())
-        self.assertFalse(stale_extra_path.exists())
 
     def test_generate_part_outputs_reuses_current_topology_artifact(self) -> None:
         step_path = self._write_step("current-topology")
@@ -1968,7 +1955,6 @@ class CadGenerationTests(unittest.TestCase):
         load_scene.assert_not_called()
         self.assertEqual(1, len(package_calls))
         self.assertTrue(cad_render.part_glb_path(step_path).is_dir())
-        self.assertFalse(cad_render.native_component_glb_dir(step_path).parent.exists())
 
     def test_generate_part_outputs_emits_package_with_stl_sidecar(self) -> None:
         step_path = self._write_step("summary-only")
@@ -1979,12 +1965,6 @@ class CadGenerationTests(unittest.TestCase):
             ),
         )
         spec = selected_specs[0]
-        artifact_dir = cad_render.native_component_glb_dir(step_path).parent
-        stale_manifest_path = artifact_dir / "topology.json"
-        stale_binary_path = artifact_dir / "topology.bin"
-        stale_manifest_path.parent.mkdir(parents=True, exist_ok=True)
-        stale_manifest_path.write_text("stale", encoding="utf-8")
-        stale_binary_path.write_bytes(b"stale")
         scene = self._fake_scene(step_path)
 
         def fake_export(step_path_arg, scene_arg, *, target_path=None):
@@ -2014,8 +1994,6 @@ class CadGenerationTests(unittest.TestCase):
         self.assertTrue(spec.stl_path.exists())
         self.assertTrue(cad_render.part_glb_path(step_path).is_dir())
         self.assertIsNone(result.selector_bundle)
-        self.assertFalse(stale_manifest_path.exists())
-        self.assertFalse(stale_binary_path.exists())
 
     def test_generate_part_outputs_writes_3mf_sidecar(self) -> None:
         step_path = self._write_step("printable")

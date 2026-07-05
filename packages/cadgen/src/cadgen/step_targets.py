@@ -18,7 +18,7 @@ from cadgen._internal.glb_topology import (
     read_step_topology_bundle_from_glb,
     read_step_topology_manifest_from_glb,
 )
-from cadgen.render import existing_part_glb_path, part_glb_path
+from cadgen.render import part_glb_path
 from cadgen.selector_types import SelectorBundle
 from cadgen._internal.step_hash import step_file_hash
 
@@ -191,7 +191,7 @@ def validate_step_topology_artifact(
     glb_path: Path | None = None,
     require_selector: bool = False,
 ) -> StepTopologyArtifact:
-    resolved_glb_path = glb_path or existing_part_glb_path(target.step_path) or part_glb_path(target.step_path)
+    resolved_glb_path = glb_path or part_glb_path(target.step_path)
     if not resolved_glb_path.is_file():
         raise _topology_artifact_error(
             code="missing_glb",
