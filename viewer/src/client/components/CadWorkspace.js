@@ -38,6 +38,7 @@ import {
 import {
   inferThemeSettingsSceneTone,
   normalizeThemeSettings,
+  resolveThemeSettingsBackdropColor,
   resolveThemeSettingsForColorMode
 } from "cadjs/lib/themeSettings";
 import {
@@ -4314,6 +4315,18 @@ export default function CadWorkspace({
       delete document.documentElement.dataset.glassTone;
     };
   }, [cadWorkspaceGlassTone]);
+
+  // Glass chrome (navbar, toolbars, popovers) tints toward the active scene
+  // backdrop so the UI blends with whichever theme is selected.
+  useEffect(() => {
+    document.documentElement.style.setProperty(
+      "--cad-scene-backdrop",
+      resolveThemeSettingsBackdropColor(resolvedThemeSettings)
+    );
+    return () => {
+      document.documentElement.style.removeProperty("--cad-scene-backdrop");
+    };
+  }, [resolvedThemeSettings]);
 
   useEffect(() => {
     const handleStorage = (event) => {
