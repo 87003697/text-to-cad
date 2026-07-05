@@ -888,6 +888,12 @@ function scaledLightDistance(distance, scale = 1) {
 function syncRuntimeScaledLighting(runtime, lightingSettings = {}, radius, sceneScaleMode = VIEWER_SCENE_SCALE.CAD) {
   const scale = getStageEffectScale(radius, sceneScaleMode);
   setScaledLightPosition(runtime?.keyLight, lightingSettings.directional?.position, scale);
+  if (lightingSettings.fill?.position) {
+    setScaledLightPosition(runtime?.fillLight, lightingSettings.fill.position, scale);
+  }
+  if (lightingSettings.rim?.position) {
+    setScaledLightPosition(runtime?.rimLight, lightingSettings.rim.position, scale);
+  }
   setScaledLightPosition(runtime?.spotLight, lightingSettings.spot?.position, scale);
   setScaledLightPosition(runtime?.pointLight, lightingSettings.point?.position, scale);
   if (runtime?.spotLight) {
@@ -3149,15 +3155,15 @@ const CadViewer = forwardRef(function CadViewer({
     runtime.keyLight.color.set(normalizedThemeSettings.lighting.directional.color);
     runtime.keyLight.intensity = normalizedThemeSettings.lighting.directional.intensity;
 
-    const fillIntensity = getViewerThemeNumber(viewerTheme, "fillLightIntensity", DEFAULT_LIGHTING.fillLightIntensity);
-    runtime.fillLight.visible = fillIntensity > 0.0001;
-    runtime.fillLight.color.set(getViewerThemeValue(viewerTheme, "fillLightColor", DEFAULT_LIGHTING.fillLightColor));
-    runtime.fillLight.intensity = Math.max(fillIntensity, 0);
+    const fillSettings = normalizedThemeSettings.lighting.fill;
+    runtime.fillLight.visible = fillSettings.enabled && fillSettings.intensity > 0.0001;
+    runtime.fillLight.color.set(fillSettings.color);
+    runtime.fillLight.intensity = Math.max(fillSettings.intensity, 0);
 
-    const rimIntensity = getViewerThemeNumber(viewerTheme, "rimLightIntensity", DEFAULT_LIGHTING.rimLightIntensity);
-    runtime.rimLight.visible = rimIntensity > 0.0001;
-    runtime.rimLight.color.set(getViewerThemeValue(viewerTheme, "rimLightColor", DEFAULT_LIGHTING.rimLightColor));
-    runtime.rimLight.intensity = Math.max(rimIntensity, 0);
+    const rimSettings = normalizedThemeSettings.lighting.rim;
+    runtime.rimLight.visible = rimSettings.enabled && rimSettings.intensity > 0.0001;
+    runtime.rimLight.color.set(rimSettings.color);
+    runtime.rimLight.intensity = Math.max(rimSettings.intensity, 0);
 
     runtime.spotLight.visible = normalizedThemeSettings.lighting.spot.enabled;
     runtime.spotLight.color.set(normalizedThemeSettings.lighting.spot.color);

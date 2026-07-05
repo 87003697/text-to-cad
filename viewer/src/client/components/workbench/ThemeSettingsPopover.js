@@ -51,7 +51,10 @@ import { ToggleGroup, ToggleGroupItem } from "../ui/toggle-group";
 import { cn } from "@/ui/utils";
 import {
   cloneThemePresetSettings,
+  DEFAULT_FILL_LIGHT_SETTINGS,
+  DEFAULT_RIM_LIGHT_SETTINGS,
   DEFAULT_THEME_PRESET_ID,
+  ENVIRONMENT_PRESETS,
   THEME_PRESETS,
   THEME_COLOR_MODES,
   MAX_THEME_FILL_COLORS,
@@ -122,10 +125,21 @@ const EXPLODED_AXIS_OPTIONS = [
 ];
 
 const PRIMARY_LIGHT_OPTIONS = [
-  { value: "directional", label: "Directional" },
+  { value: "directional", label: "Key" },
+  { value: "fill", label: "Fill" },
+  { value: "rim", label: "Rim" },
   { value: "spot", label: "Spot" },
   { value: "point", label: "Point" }
 ];
+
+// Drafts saved before fill/rim joined the theme schema lack these lights.
+const PRIMARY_LIGHT_FALLBACKS = Object.freeze({
+  fill: DEFAULT_FILL_LIGHT_SETTINGS,
+  rim: DEFAULT_RIM_LIGHT_SETTINGS
+});
+
+// Fill and rim colors are not mode-color paths, so they use a plain color field.
+const MODE_COLOR_LIGHT_KEYS = Object.freeze(["directional", "spot", "point"]);
 
 const fieldLabelClasses = FILE_SHEET_FIELD_LABEL_CLASSES;
 const compactButtonClasses = FILE_SHEET_COMPACT_BUTTON_CLASSES;
@@ -1946,7 +1960,7 @@ function ThemeAppearanceContent({
       lighting: {
         ...current.lighting,
         [lightKey]: {
-          ...current.lighting[lightKey],
+          ...(current.lighting[lightKey] || PRIMARY_LIGHT_FALLBACKS[lightKey]),
           ...patch
         }
       }
@@ -1954,19 +1968,22 @@ function ThemeAppearanceContent({
   };
 
   const setLightPosition = (lightKey, axis, nextValue) => {
-    updateThemeSettings((current) => ({
-      ...current,
-      lighting: {
-        ...current.lighting,
-        [lightKey]: {
-          ...current.lighting[lightKey],
-          position: {
-            ...current.lighting[lightKey].position,
-            [axis]: nextValue
+    updateThemeSettings((current) => {
+      const currentLight = current.lighting[lightKey] || PRIMARY_LIGHT_FALLBACKS[lightKey] || {};
+      return {
+        ...current,
+        lighting: {
+          ...current.lighting,
+          [lightKey]: {
+            ...currentLight,
+            position: {
+              ...currentLight.position,
+              [axis]: nextValue
+            }
           }
         }
-      }
-    }));
+      };
+    });
   };
 
   return (
@@ -2045,6 +2062,42 @@ function ThemeAppearanceContent({
             max={2}
             step={0.01}
             onChange={(nextValue) => setMaterials({ brightness: nextValue })}
+          />
+        </SliderField>
+        <SliderField label="Roughness" value={formatNumber(themeSettings.materials.roughness)}>
+          <SliderInput
+            value={themeSettings.materials.roughness}
+            min={0}
+            max={1}
+            step={0.01}
+            onChange={(nextValue) => setMaterials({ roughness: nextValue })}
+          />
+        </SliderField>
+        <SliderField label="Metalness" value={formatNumber(themeSettings.materials.metalness)}>
+          <SliderInput
+            value={themeSettings.materials.metalness}
+            min={0}
+            max={1}
+            step={0.01}
+            onChange={(nextValue) => setMaterials({ metalness: nextValue })}
+          />
+        </SliderField>
+        <SliderField label="Clearcoat" value={formatNumber(themeSettings.materials.clearcoat)}>
+          <SliderInput
+            value={themeSettings.materials.clearcoat}
+            min={0}
+            max={1}
+            step={0.01}
+            onChange={(nextValue) => setMaterials({ clearcoat: nextValue })}
+          />
+        </SliderField>
+        <SliderField label="Reflections" value={formatNumber(themeSettings.materials.envMapIntensity)}>
+          <SliderInput
+            value={themeSettings.materials.envMapIntensity}
+            min={0}
+            max={4}
+            step={0.01}
+            onChange={(nextValue) => setMaterials({ envMapIntensity: nextValue })}
           />
         </SliderField>
       </ControlSubsection>
@@ -2218,6 +2271,23 @@ function ThemeAppearanceContent({
           checked={themeSettings.environment.enabled}
           onChange={(nextValue) => setEnvironment({ enabled: nextValue })}
         />
+        <Field label="Environment map">
+          <Select
+            value={themeSettings.environment.presetId}
+            onValueChange={(nextValue) => setEnvironment({ presetId: nextValue })}
+          >
+            <SelectTrigger size="sm" className="h-7 !text-[11px]" aria-label="Environment map">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {ENVIRONMENT_PRESETS.map((option) => (
+                <SelectItem key={option.id} value={option.id} className="text-xs">
+                  {option.label}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </Field>
         <SliderField label="Environment intensity" value={formatNumber(themeSettings.environment.intensity)}>
           <SliderInput
             value={themeSettings.environment.intensity}
@@ -2227,6 +2297,20 @@ function ThemeAppearanceContent({
             onChange={(nextValue) => setEnvironment({ intensity: nextValue })}
           />
         </SliderField>
+        <SliderField label="Environment rotation" value={formatNumber(themeSettings.environment.rotationY)}>
+          <SliderInput
+            value={themeSettings.environment.rotationY}
+            min={-Math.PI}
+            max={Math.PI}
+            step={0.01}
+            onChange={(nextValue) => setEnvironment({ rotationY: nextValue })}
+          />
+        </SliderField>
+        <ThemeToggleRow
+          label="Use as backdrop"
+          checked={themeSettings.environment.useAsBackground}
+          onChange={(nextValue) => setEnvironment({ useAsBackground: nextValue })}
+        />
 
         <SliderField label="Tone mapping" value={formatNumber(themeSettings.lighting.toneMappingExposure)}>
           <SliderInput
@@ -2241,7 +2325,7 @@ function ThemeAppearanceContent({
         <NestedControlGroup title="Primary">
           <Tabs value={activePrimaryLight} onValueChange={setActivePrimaryLight} className="gap-0">
             <div className="px-2 py-1">
-              <TabsList className="grid h-7 w-full grid-cols-3 rounded-md p-0.5">
+              <TabsList className="grid h-7 w-full grid-cols-5 rounded-md p-0.5">
                 {PRIMARY_LIGHT_OPTIONS.map((option) => (
                   <TabsTrigger key={option.value} value={option.value} className="text-[11px]">
                     {option.label}
@@ -2251,8 +2335,9 @@ function ThemeAppearanceContent({
             </div>
 
             {PRIMARY_LIGHT_OPTIONS.map((option) => {
-              const light = themeSettings.lighting[option.value];
-              const supportsDistance = option.value !== "directional";
+              const light = themeSettings.lighting[option.value] || PRIMARY_LIGHT_FALLBACKS[option.value];
+              const supportsDistance = option.value === "spot" || option.value === "point";
+              const supportsModeColors = MODE_COLOR_LIGHT_KEYS.includes(option.value);
               return (
                 <TabsContent
                   key={option.value}
@@ -2265,11 +2350,19 @@ function ThemeAppearanceContent({
                     checked={light.enabled}
                     onChange={(nextValue) => setLightConfig(option.value, { enabled: nextValue })}
                   />
-                  <ColorModeField
-                    label="Color"
-                    path={["lighting", option.value, "color"]}
-                    {...themeColorFieldProps}
-                  />
+                  {supportsModeColors ? (
+                    <ColorModeField
+                      label="Color"
+                      path={["lighting", option.value, "color"]}
+                      {...themeColorFieldProps}
+                    />
+                  ) : (
+                    <ColorField
+                      label="Color"
+                      value={light.color}
+                      onChange={(nextValue) => setLightConfig(option.value, { color: nextValue })}
+                    />
+                  )}
                   <SliderField label="Intensity" value={formatNumber(light.intensity)}>
                     <SliderInput
                       value={light.intensity}
