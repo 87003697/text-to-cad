@@ -27,7 +27,7 @@ for runtime_path in (SCRIPTS_DIR, PACKAGES_DIR, CADPY_SRC_DIR):
 
 import cadgen.cad_ref_syntax as cad_ref_syntax
 import cadgen.lookup as lookup
-from cadgen.render import existing_part_glb_path, part_glb_path
+from cadgen.render import part_glb_path
 from cadgen.step_targets import ResolvedStepTarget, StepTopologyArtifact, StepTopologyArtifactError
 
 
@@ -888,7 +888,7 @@ def resolve_render_job(
 
     # The render cache is keyed by the ENTRY filename (`source_path`: the `.step.py` generator for
     # a generated model, or the `.step`/`.stp` itself), not the logical step path.
-    glb_path = existing_part_glb_path(source_path) or part_glb_path(source_path)
+    glb_path = part_glb_path(source_path)
     if not glb_path.exists():
         raise SnapshotError(f"STEP/STP render input is missing its CAD Viewer GLB artifact: {glb_path}")
 

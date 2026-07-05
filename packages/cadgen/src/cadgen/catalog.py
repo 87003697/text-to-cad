@@ -11,12 +11,12 @@ from .metadata import GeneratorMetadata, normalize_mesh_numeric, parse_generator
 
 
 STEP_SUFFIXES = (".step", ".stp")
-EXPLORER_ARTIFACT_FILENAMES = {
-    ".glb": "model.glb",
-    ".topology.json": "topology.json",
-    ".topology.bin": "topology.bin",
-}
+# The per-folder generated-artifact home for cadgen outputs (render packages, scene
+# caches, generation locks), living beside the CAD sources it derives from. Gitignored.
+CADGEN_DIRNAME = "__cadgen__"
+CADGEN_MODELS_DIRNAME = "models"
 IGNORED_DISCOVERY_DIR_NAMES = {
+    CADGEN_DIRNAME,
     "__pycache__",
     ".cache",
     ".eggs",
@@ -88,15 +88,15 @@ class CadSource:
 
     @property
     def entry_path(self) -> Path | None:
-        # The actual on-disk ENTRY file the render cache is keyed by: the `.step.py` generator for
-        # a generated model, or the `.step`/`.stp` itself for an imported one.
+        # The actual on-disk ENTRY file the render package is keyed by: the `.step.py` generator
+        # for a generated model, or the `.step`/`.stp` itself for an imported one.
         return self.script_path if self.script_path is not None else self.step_path
 
     @property
     def glb_path(self) -> Path | None:
         if self.kind == "dxf" or self.entry_path is None:
             return None
-        return explorer_artifact_path_for_step_path(self.entry_path, ".glb")
+        return cadgen_package_path_for_entry_path(self.entry_path)
 
     @property
     def generated_paths(self) -> tuple[Path, ...]:
@@ -277,55 +277,19 @@ def normalize_cad_ref(raw_ref: str) -> str | None:
     return normalized
 
 
-def artifact_path_for_step_path(step_path: Path, suffix: str) -> Path:
-    return step_path.resolve().with_suffix(suffix)
-
-
-def hidden_artifact_path_for_step_path(step_path: Path, suffix: str) -> Path:
-    base = step_path.resolve()
-    return base.with_name(f".{base.stem}{suffix}").resolve()
-
-
-def explorer_directory_for_step_path(step_path: Path) -> Path:
-    base = step_path.resolve()
-    return (base.parent / f".{base.name}").resolve()
-
-
-def cache_package_path_for_entry_path(entry_path: Path) -> Path:
-    # Every render-artifact package lives INSIDE the per-folder __cadcache__, keyed by the
-    # ENTRY filename (the on-disk file the viewer lists: `<name>.step`, `<name>.step.py`,
-    # `<name>.dxf.py`, ...), so distinct entry files always get distinct packages.
+def cadgen_package_path_for_entry_path(entry_path: Path) -> Path:
+    # Every render-artifact package lives INSIDE the per-folder __cadgen__ directory, keyed
+    # by the ENTRY filename (the on-disk file the viewer lists: `<name>.step`,
+    # `<name>.step.py`, `<name>.dxf.py`, ...), so distinct entry files always get distinct
+    # packages and model folders hold only source. A STEP entry's package is a self-contained
+    # component-GLB directory (assembly.json descriptor + components/<hash>.glb); a `.dxf.py`
+    # entry's package is a drawing directory (drawing.json descriptor + drawing.dxf).
     base = entry_path.resolve()
-    return (base.parent / "__cadcache__" / "models" / base.name).resolve()
-
-
-def hidden_glb_path_for_step_path(step_path: Path) -> Path:
-    # The render artifact is a self-contained component-GLB package directory (assembly.json
-    # descriptor + a components/ dir of content-addressed GLBs). It lives INSIDE the
-    # per-folder __cadcache__, keyed by the STEP filename, so model folders hold only source
-    # — there is no .{model}.step.glb in the model tree. Components live in the package itself
-    # at <key>/components/<hash>.glb (so the descriptor references components/...).
-    return cache_package_path_for_entry_path(step_path)
+    return (base.parent / CADGEN_DIRNAME / CADGEN_MODELS_DIRNAME / base.name).resolve()
 
 
 def drawing_package_path_for_source(script_path: Path) -> Path:
-    # The DXF render artifact is a drawing-package directory (drawing.json descriptor +
-    # drawing.dxf), keyed by the `.dxf.py` generator filename.
-    return cache_package_path_for_entry_path(script_path)
-
-
-def legacy_explorer_artifact_path_for_step_path(step_path: Path, suffix: str) -> Path:
-    base = step_path.resolve()
-    artifact_name = EXPLORER_ARTIFACT_FILENAMES.get(suffix)
-    if artifact_name is None:
-        raise ValueError(f"Unsupported STEP explorer artifact suffix: {suffix}")
-    return (explorer_directory_for_step_path(base) / artifact_name).resolve()
-
-
-def explorer_artifact_path_for_step_path(step_path: Path, suffix: str) -> Path:
-    if suffix == ".glb":
-        return hidden_glb_path_for_step_path(step_path)
-    return legacy_explorer_artifact_path_for_step_path(step_path, suffix)
+    return cadgen_package_path_for_entry_path(script_path)
 
 
 def _iter_python_sources(root: Path) -> tuple[CadSource, ...]:

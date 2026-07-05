@@ -19,6 +19,7 @@ import os
 from pathlib import Path
 from typing import Any, Mapping
 
+from cadgen.catalog import cadgen_package_path_for_entry_path
 from cadgen._internal.generation import (
     DEFAULT_MESH_ANGULAR_TOLERANCE,
     DEFAULT_MESH_TOLERANCE,
@@ -34,14 +35,13 @@ PACKAGE_KIND = "assembly-package"
 # Descriptor (assembly.json) layout version, independent of STEP_TOPOLOGY_SCHEMA_VERSION
 # (which versions each component GLB's embedded topology). Bumped to 2 for the unified
 # part+assembly rearchitecture: one descriptor+components representation, durable
-# ``entryKind``, clean content-addressed components, and per-folder ``__cadcache__`` refs.
+# ``entryKind``, clean content-addressed components, and per-folder ``__cadgen__`` refs.
 PACKAGE_SCHEMA_VERSION = 2
 # Self-contained content-addressed packages: each model's components live INSIDE its own package
-# at <folder>/__cadcache__/models/<step-filename>/components/<geomHash>.glb, referenced by the
+# at <folder>/__cadgen__/models/<step-filename>/components/<geomHash>.glb, referenced by the
 # descriptor via the flat relative ref components/<geomHash>.glb. Within-model dedup (repeated
-# parts share one cid) is preserved; there is no shared per-folder store, so the package
-# directory is a complete, relocatable unit.
-CACHE_DIRNAME = "__cadcache__"
+# parts share one cid) is preserved; components are not shared ACROSS packages, so each
+# package directory is a complete, relocatable unit.
 COMPONENT_DIRNAME = "components"
 DESCRIPTOR_NAME = "assembly.json"
 # Source-provenance keys stripped from a component GLB's embedded STEP_TOPOLOGY so the
@@ -65,12 +65,9 @@ TOPOLOGY_GLB_NAME = "topology.glb"
 
 
 def assembly_package_dir(step_path: Path) -> Path:
-    """Canonical package directory for an assembly — the same path the monolithic GLB
-    used (``.{model}.step.glb``), now a directory. For assemblies the package replaces
-    the monolithic file; parts keep emitting a single ``.{model}.step.glb`` file."""
-    from cadgen.render import part_glb_path
-
-    return part_glb_path(step_path)
+    """Canonical render-package directory for a model's entry file, inside the
+    per-folder ``__cadgen__`` directory."""
+    return cadgen_package_path_for_entry_path(step_path)
 
 
 def assembly_topology_glb_path(step_path: Path) -> Path:
@@ -274,7 +271,7 @@ def build_component_glb_from_shape(
         stats.pop("timingMs", None)
     # Write the leaf GLB straight to ``out_glb`` (inside the package's components/ dir). Passing
     # an explicit target avoids deriving a part_glb_path() from the placeholder, which would
-    # otherwise scaffold a stray __cadcache__/models/ tree next to the component.
+    # otherwise scaffold a stray __cadgen__/models/ tree next to the component.
     export_assembly_glb_from_scene(
         placeholder,
         scene,
@@ -316,7 +313,7 @@ def build_package_from_compound(
     geometry, not the mesh/selector code version). Returns build stats."""
     package_dir = Path(package_dir)
     # Each package is a SELF-CONTAINED unit: the descriptor dir lives at
-    # <folder>/__cadcache__/models/<key>/ and its content-addressed component GLBs live in a
+    # <folder>/__cadgen__/models/<key>/ and its content-addressed component GLBs live in a
     # components/ dir INSIDE that package (<key>/components/<hash>.glb), so the whole model —
     # descriptor plus every GLB it needs — uploads, caches, and deletes as one directory with
     # no cross-model references. The descriptor references them by the flat relative ref

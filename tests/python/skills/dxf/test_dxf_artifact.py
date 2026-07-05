@@ -37,7 +37,7 @@ class DxfArtifactTests(unittest.TestCase):
             payload = dxf_artifact.build_dxf_artifact(repo_root=Path(root), source_path=script_path)
             self.assertTrue(payload["ok"])
             self.assertNotIn("skipped", payload)
-            package_dir = Path(root) / "__cadcache__" / "models" / "outline.dxf.py"
+            package_dir = Path(root) / "__cadgen__" / "models" / "outline.dxf.py"
             self.assertTrue((package_dir / "drawing.dxf").is_file())
 
             payload = dxf_artifact.build_dxf_artifact(repo_root=Path(root), source_path=script_path)
@@ -59,7 +59,7 @@ class DxfArtifactTests(unittest.TestCase):
     def test_rebuilds_are_byte_deterministic(self) -> None:
         with temporary_directory(prefix="dxf-artifact") as root:
             script_path = self._write_generator(Path(root))
-            drawing_path = Path(root) / "__cadcache__" / "models" / "outline.dxf.py" / "drawing.dxf"
+            drawing_path = Path(root) / "__cadgen__" / "models" / "outline.dxf.py" / "drawing.dxf"
 
             dxf_artifact.build_dxf_artifact(repo_root=Path(root), source_path=script_path)
             first = drawing_path.read_bytes()
@@ -84,7 +84,7 @@ class DxfArtifactTests(unittest.TestCase):
             # The identity comment points at the generator relative to the export.
             self.assertIn("cadgen:sourcePath=../outline.dxf.py", text)
             descriptor = json.loads(
-                (Path(root) / "__cadcache__" / "models" / "outline.dxf.py" / "drawing.json").read_text(
+                (Path(root) / "__cadgen__" / "models" / "outline.dxf.py" / "drawing.json").read_text(
                     encoding="utf-8"
                 )
             )

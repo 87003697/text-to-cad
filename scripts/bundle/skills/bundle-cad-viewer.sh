@@ -291,7 +291,7 @@ ensure_viewer_cadjs_node_module_subpaths() {
   fi
   local subpath
   for subpath in common lib; do
-    if [ -d "$VIEWER_CADJS_DIR/src/$subpath" ] && [ ! -e "$cadjs_node_module/$subpath/stepSidecars.mjs" ] && [ ! -e "$cadjs_node_module/$subpath/pathUtils.mjs" ]; then
+    if [ -d "$VIEWER_CADJS_DIR/src/$subpath" ] && [ ! -e "$cadjs_node_module/$subpath/cadScene.js" ] && [ ! -e "$cadjs_node_module/$subpath/pathUtils.mjs" ]; then
       rm -rf "$cadjs_node_module/$subpath"
       ln -s "$VIEWER_CADJS_DIR/src/$subpath" "$cadjs_node_module/$subpath"
     fi

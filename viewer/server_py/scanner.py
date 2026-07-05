@@ -30,19 +30,20 @@ SOURCE_EXTENSIONS = frozenset(
     [".step", ".stp", ".stl", ".3mf", ".glb", ".gcode", ".dxf", ".urdf", ".srdf", ".sdf"]
 )
 IMPLICIT_CAD_EXTENSIONS = (".implicit.js", ".implicit.mjs")
+# Dot-prefixed (hidden) directories are skipped generically by _should_skip_directory;
+# this set only needs the non-hidden names.
 VIEWER_SKIPPED_DIRECTORIES = frozenset(
     [
-        ".agents", ".cache", ".viewer", ".git", ".venv", "__cadcache__",
-        "__pycache__", "build", "coverage", "dist", "node_modules", "viewer",
+        "__cadgen__", "__pycache__", "build", "coverage", "dist", "node_modules", "viewer",
     ]
 )
 PYTHON_GENERATOR_BY_KIND = {
     "step": "gen_step", "stp": "gen_step",
 }
 
-# --- stepSidecars.mjs ---
-CACHE_DIRNAME = "__cadcache__"
-CACHE_MODELS_DIRNAME = "models"
+# --- per-folder __cadgen__ render-package paths (mirrors cadgen.catalog) ---
+CADGEN_DIRNAME = "__cadgen__"
+CADGEN_MODELS_DIRNAME = "models"
 
 # --- drawing package (generated DXF render artifact) ---
 DXF_GENERATOR_SUFFIX = ".dxf.py"
@@ -54,23 +55,25 @@ def is_dxf_generator_path(file_path: str) -> bool:
     return str(file_path or "").lower().endswith(DXF_GENERATOR_SUFFIX)
 
 
-def is_inside_cad_cache(file_path: str) -> bool:
-    return CACHE_DIRNAME in str(file_path or "").split(os.sep)
+def is_inside_cadgen_dir(file_path: str) -> bool:
+    return CADGEN_DIRNAME in str(file_path or "").split(os.sep)
 
 
 def is_inline_step_glb_artifact_path(file_path: str) -> bool:
+    # A render-artifact package is the descriptor directory at
+    # ``<folder>/__cadgen__/models/<entry-filename>/``, recognized purely by structure.
     p = str(file_path or "")
     if not os.path.basename(p):
         return False
     return (
-        os.path.basename(os.path.dirname(p)) == CACHE_MODELS_DIRNAME
-        and os.path.basename(os.path.dirname(os.path.dirname(p))) == CACHE_DIRNAME
+        os.path.basename(os.path.dirname(p)) == CADGEN_MODELS_DIRNAME
+        and os.path.basename(os.path.dirname(os.path.dirname(p))) == CADGEN_DIRNAME
     )
 
 
 def inline_step_glb_artifact_path_for_source(entry_path: str) -> str:
     return os.path.join(
-        os.path.dirname(entry_path), CACHE_DIRNAME, CACHE_MODELS_DIRNAME,
+        os.path.dirname(entry_path), CADGEN_DIRNAME, CADGEN_MODELS_DIRNAME,
         os.path.basename(entry_path),
     )
 
@@ -80,15 +83,6 @@ def source_path_for_inline_step_glb_artifact(glb_path: str):
         return None
     folder = os.path.dirname(os.path.dirname(os.path.dirname(glb_path)))
     return os.path.join(folder, os.path.basename(glb_path))
-
-
-def is_per_step_viewer_directory_name(name: str) -> bool:
-    n = str(name or "").lower()
-    return n.startswith(".") and (n.endswith(".step") or n.endswith(".stp"))
-
-
-def is_path_inside_per_step_viewer_directory(file_path: str) -> bool:
-    return any(is_per_step_viewer_directory_name(p) for p in str(file_path or "").split(os.sep))
 
 
 # --- path / ref helpers ---
@@ -212,26 +206,12 @@ def source_format_for_path(source_path: str, extension: str | None = None) -> st
 
 
 # --- directory scan helpers ---
-def _is_hidden_directory_name(name: str) -> bool:
+def _is_hidden_name(name: str) -> bool:
     return str(name or "").startswith(".")
 
 
-def _is_per_urdf_viewer_directory_name(name: str) -> bool:
-    n = str(name or "").lower()
-    return n.startswith(".") and n.endswith(".urdf")
-
-
-def _is_path_inside_per_urdf_viewer_directory(file_path: str) -> bool:
-    return any(_is_per_urdf_viewer_directory_name(p) for p in str(file_path or "").split(os.sep))
-
-
 def _should_skip_directory(name: str) -> bool:
-    return (
-        name in VIEWER_SKIPPED_DIRECTORIES
-        or _is_hidden_directory_name(name)
-        or is_per_step_viewer_directory_name(name)
-        or _is_per_urdf_viewer_directory_name(name)
-    )
+    return name in VIEWER_SKIPPED_DIRECTORIES or _is_hidden_name(name)
 
 
 def _path_has_skipped_directory(root_path: str, file_path: str) -> bool:
@@ -255,15 +235,15 @@ def _collect_cad_source_files(root_path: str, result: list) -> list:
             continue
         if not entry.is_file():
             continue
-        lower_name = entry.name.lower()
-        if lower_name.startswith(".") and (lower_name.endswith(".step.glb") or lower_name.endswith(".stp.glb")):
+        if _is_hidden_name(entry.name):
             continue
+        lower_name = entry.name.lower()
         extension = os.path.splitext(entry.name)[1].lower()
         if lower_name.endswith(".step.py") or lower_name.endswith(DXF_GENERATOR_SUFFIX):
             # List generated models/drawings whether or not their render artifact has
             # been built. An unbuilt one reports `needs-build` via /__cad/artifact and
             # is built on demand when opened, so a fresh checkout shows ALL generated
-            # entries (the __cadcache__ is gitignored), not only the pre-built ones.
+            # entries (the __cadgen__ dir is gitignored), not only the pre-built ones.
             result.append(entry_path)
             continue
         if extension in SOURCE_EXTENSIONS or path_is_implicit_cad_source(entry_path):
@@ -405,7 +385,7 @@ def read_drawing_catalog_metadata(package_dir):
 
 def create_generated_dxf_entry(repo_root, root_path, source_path):
     # A `<name>.dxf.py` drawing generator entry. The render asset is the cached
-    # drawing.dxf inside the entry-keyed __cadcache__ package; an unbuilt entry has
+    # drawing.dxf inside the entry-keyed __cadgen__ package; an unbuilt entry has
     # no asset yet and reports `needs-build` via /__cad/artifact when opened.
     package_dir = inline_step_glb_artifact_path_for_source(source_path)
     descriptor = read_drawing_catalog_metadata(package_dir)
@@ -480,9 +460,9 @@ def read_step_catalog_metadata(glb_path):
 
 def create_step_entry(repo_root, root_path, source_path, extension, include_artifact_status=True):
     # Catalog path runs with include_artifact_status=False (refreshCatalog), so
-    # the entry is built purely from the committed __cadcache__ descriptor — no
-    # OCP. The include_artifact_status=True path (the /__cad/artifact status
-    # route) delegates to cadgen and is a later phase.
+    # the entry is built purely from the on-disk __cadgen__ descriptor (gitignored,
+    # built locally) — no OCP. The include_artifact_status=True path (the
+    # /__cad/artifact status route) delegates to cadgen and is a later phase.
     if include_artifact_status:
         raise NotImplementedError(
             "STEP artifact-status path pending cadgen delegation (artifact-route phase)"
@@ -522,7 +502,7 @@ def create_step_entry(repo_root, root_path, source_path, extension, include_arti
 def _is_declared_params_sidecar(file_path: str) -> bool:
     model_dir = os.path.dirname(file_path)
     resolved = os.path.abspath(file_path)
-    packages_dir = os.path.join(model_dir, CACHE_DIRNAME, CACHE_MODELS_DIRNAME)
+    packages_dir = os.path.join(model_dir, CADGEN_DIRNAME, CADGEN_MODELS_DIRNAME)
     try:
         names = os.listdir(packages_dir)
     except OSError:
@@ -544,17 +524,17 @@ def _is_declared_params_sidecar(file_path: str) -> bool:
 
 def is_served_cad_asset(file_path: str) -> bool:
     extension = os.path.splitext(file_path)[1].lower()
-    name = os.path.basename(file_path)
-    if name.startswith(".") and name.endswith(".generation.lock.json"):
+    if _is_hidden_name(os.path.basename(file_path)):
+        # Hidden (dot-prefixed) files are never served: generation locks, temp files, and
+        # any leftover pre-__cadgen__ hidden artifacts. Hidden directory components below
+        # the served root are rejected by the backend, which knows the root; the basename
+        # check here stays root-agnostic so a model root under a hidden absolute path
+        # (e.g. a worktree in a dot-directory) still serves.
         return False
-    if is_inside_cad_cache(file_path):
+    if is_inside_cadgen_dir(file_path):
         return True
     if extension in (".js", ".mjs") and _is_declared_params_sidecar(file_path):
         return True
-    if is_path_inside_per_step_viewer_directory(file_path):
-        return False
-    if _is_path_inside_per_urdf_viewer_directory(file_path):
-        return False
     if extension in SOURCE_EXTENSIONS or path_is_implicit_cad_source(file_path):
         return True
     return False

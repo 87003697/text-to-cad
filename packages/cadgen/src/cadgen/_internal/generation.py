@@ -51,7 +51,6 @@ from cadgen.metadata import (
     resolve_mesh_settings,
 )
 from cadgen.render import (
-    native_component_glb_dir,
     part_glb_path,
     relative_to_file,
     relative_to_cwd,
@@ -1335,23 +1334,6 @@ def _existing_topology_artifact_matches_options(spec: EntrySpec, selector_option
     )
 
 
-def _reset_step_artifact_dir(step_path: Path) -> None:
-    # The render artifact now lives inside __cadcache__ (managed by
-    # build_package_from_compound's content-addressed cache), so leave part_glb_path in
-    # place. Clear only STALE artifacts that predate this layout and would otherwise linger
-    # in the model folder: the old in-folder ``.{model}.step.glb`` package (file or dir) and
-    # the legacy ``.{model}.step/`` explorer dir.
-    base = step_path.resolve()
-    stale_infolder_glb = base.parent / f".{base.name}.glb"
-    if stale_infolder_glb.is_dir():
-        shutil.rmtree(stale_infolder_glb, ignore_errors=True)
-    elif stale_infolder_glb.is_file():
-        stale_infolder_glb.unlink(missing_ok=True)
-    legacy_artifact_dir = native_component_glb_dir(step_path).parent
-    if legacy_artifact_dir.is_dir():
-        shutil.rmtree(legacy_artifact_dir)
-
-
 def _assembly_provenance_manifest(
     scene: LoadedStepScene,
     *,
@@ -1491,7 +1473,6 @@ def _generate_part_outputs(
             relative=selector_options.relative,
         )
         scene_export_shape(scene)
-    _reset_step_artifact_dir(spec.step_path)
 
     jobs: list[_ArtifactJob] = []
 
@@ -1553,7 +1534,7 @@ def _generate_part_outputs(
 
     # UNIFIED render artifact: every model — part or assembly, generated or imported — is
     # a component-GLB PACKAGE (a directory at .{model}.step.glb: assembly.json descriptor +
-    # content-addressed components in the shared __cadcache__). An assembly introspects its
+    # content-addressed components in the shared __cadgen__). An assembly introspects its
     # placed children as occurrences; a part is one occurrence/one component. The
     # part/assembly choice is the *authored* kind (spec.kind, from generator metadata or STEP
     # inference) — never guessed from geometry — and is recorded as entryKind on the
@@ -1826,7 +1807,7 @@ def _generated_dxf_summary(spec: EntrySpec) -> str:
 
 def _track_spec_generation(spec: EntrySpec, generator_name: str) -> contextlib.AbstractContextManager[None]:
     # Package builds are coordinated with the viewer's artifact pull: lock the model's
-    # __cadcache__ package so a concurrent viewer/CLI build detects the in-flight run and
+    # __cadgen__ package so a concurrent viewer/CLI build detects the in-flight run and
     # waits for it instead of duplicating the work.
     if generator_name == "gen_step" and spec.step_path is not None:
         return track_generation_run(generation_lock_path(part_glb_path(spec.entry_path)))
@@ -2251,7 +2232,7 @@ def generate_dxf_targets(
     )
     if write_dxf:
         # The sibling `<name>.dxf` is written on demand only (mirror of `--step`); the
-        # default build product is the drawing package under __cadcache__/models/.
+        # default build product is the drawing package under __cadgen__/models/.
         selected_specs = [
             spec if spec.dxf_export_path is not None else replace(spec, dxf_export_path=spec.dxf_path)
             for spec in selected_specs

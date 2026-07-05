@@ -63,7 +63,7 @@ export function entryIconStatus(entry, {
       generationAvailable: stepArtifactGenerationAvailable
     });
   const artifactGenerating = Boolean(artifactBuildable && artifactGenerationInProgress);
-  // A model that simply lacks a built __cadcache__ artifact is NOT "loading" — nothing loads in a
+  // A model that simply lacks a built __cadgen__ artifact is NOT "loading" — nothing loads in a
   // static file list (generation happens lazily when the model is opened). Only an actively-running
   // generation shows a spinner; an un-built entry just shows its normal type icon.
   const loading = artifactGenerating;

@@ -92,7 +92,7 @@ def export_assembly_glb_from_scene(
     include_selector_topology: bool = True,
 ) -> Path:
     # ``target_path`` writes the GLB exactly there (used by the component builder to land a
-    # clean leaf GLB inside its package, with no derived __cadcache__ scaffolding). Default
+    # clean leaf GLB inside its package, with no derived __cadgen__ scaffolding). Default
     # derives the package path from ``step_path``.
     target_path = target_path if target_path is not None else part_glb_path(step_path)
     # The caller meshes the scene before scheduling artifact jobs. Keep the

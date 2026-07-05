@@ -16,7 +16,7 @@ Create or modify 2D DXF drawings from natural-language requirements or from CAD 
 The default build product is the **drawing package** — a render artifact the CAD Viewer serves and auto-regenerates:
 
 ```
-<model-folder>/__cadcache__/models/<name>.dxf.py/
+<model-folder>/__cadgen__/models/<name>.dxf.py/
   drawing.json    # provenance + freshness descriptor
   drawing.dxf     # the built DXF
 ```
@@ -131,7 +131,7 @@ Beyond the built-in checks, verify requested dimensions with targeted `ezdxf` re
 ```python
 import ezdxf
 
-doc = ezdxf.readfile("path/to/__cadcache__/models/source.dxf.py/drawing.dxf")
+doc = ezdxf.readfile("path/to/__cadgen__/models/source.dxf.py/drawing.dxf")
 msp = doc.modelspace()
 profiles = [e for e in msp.query("LWPOLYLINE") if e.closed]
 holes = msp.query('CIRCLE[layer=="0"]')

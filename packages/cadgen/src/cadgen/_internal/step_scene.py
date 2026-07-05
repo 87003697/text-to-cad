@@ -72,6 +72,7 @@ from cadgen._internal.glb_topology import (
     step_edge_surface_class_code,
     step_topology_capabilities,
 )
+from cadgen.catalog import CADGEN_DIRNAME, CADGEN_MODELS_DIRNAME
 from cadgen.metadata import DEFAULT_MESH_ANGULAR_TOLERANCE, DEFAULT_MESH_TOLERANCE, MeshSettings
 from cadgen.selector_types import SelectorBundle, SelectorProfile
 from cadgen._internal.step_hash import step_file_hash
@@ -1171,17 +1172,15 @@ def load_step_scene(step_path: Path) -> LoadedStepScene:
     )
 
 
-# Hidden inline cache directory, written beside each STEP like __pycache__ next to a
-# .py. All STEPs in a directory share one __cadcache__. Scene caches live under
-# ``__cadcache__/models/<step-filename>/scene/`` so they sit inside the same per-model
-# home as the component-GLB render package (``__cadcache__/models/<step-filename>/``)
-# and its generation lock, rather than at the __cadcache__ root. Each is namespaced by
+# Inline scene-cache home, written beside each STEP like __pycache__ next to a .py.
+# All STEPs in a directory share one __cadgen__ directory. Scene caches live under
+# ``__cadgen__/models/<step-filename>/scene/`` so they sit inside the same per-model
+# home as the component-GLB render package (``__cadgen__/models/<step-filename>/``)
+# and its generation lock, rather than at the __cadgen__ root. Each is namespaced by
 # STEP filename and keyed by schema + content hash; the ``scene`` subdir isolates the
 # content-hash leaves so sibling pruning never touches ``assembly.json``/``components``.
-_STEP_SCENE_CACHE_DIRNAME = "__cadcache__"
-# Matches the component-GLB package namespace in component_package.py so every per-model
-# cache (scene, render package, lock) shares one ``__cadcache__/models`` home.
-_STEP_SCENE_CACHE_MODELS_DIRNAME = "models"
+_STEP_SCENE_CACHE_DIRNAME = CADGEN_DIRNAME
+_STEP_SCENE_CACHE_MODELS_DIRNAME = CADGEN_MODELS_DIRNAME
 # Subdir holding the content-hash scene leaves, isolated from the render package files.
 _STEP_SCENE_CACHE_SUBDIR = "scene"
 
@@ -1200,8 +1199,8 @@ def _step_scene_cache_dir(step_path: Path, step_hash: str) -> Path | None:
     """Inline binary-scene cache directory for a STEP file.
 
     Written under
-    ``<base>/__cadcache__/models/<step-filename>/scene/v<schema>-<hash>`` so it sits
-    inside the same per-model ``__cadcache__/models`` home as the component-GLB render
+    ``<base>/__cadgen__/models/<step-filename>/scene/v<schema>-<hash>`` so it sits
+    inside the same per-model ``__cadgen__/models`` home as the component-GLB render
     package and generation lock (like ``__pycache__`` beside a ``.py``). Honors
     ``TEXT_TO_CAD_STEP_SCENE_CACHE=0`` (disabled) and
     ``TEXT_TO_CAD_STEP_SCENE_CACHE_DIR`` (central override); falls back to a temp store
@@ -1440,7 +1439,7 @@ def _write_step_scene_cache(scene: LoadedStepScene, *, step_hash: str) -> None:
 
 def _prune_step_scene_cache_siblings(cache_dir: Path) -> None:
     """Drop stale cache entries for this STEP (older hashes / schema versions),
-    keeping only the just-written ``cache_dir`` so __cadcache__ does not accumulate."""
+    keeping only the just-written ``cache_dir`` so __cadgen__ does not accumulate."""
     try:
         for sibling in cache_dir.parent.iterdir():
             if sibling.name == cache_dir.name or sibling.name.endswith(".tmp"):
@@ -1566,7 +1565,7 @@ def scene_to_build123d_compound(scene: LoadedStepScene, *, label: str | None = N
 
 
 def import_step(step_path: Path, *, label: str | None = None) -> Any:
-    """``build123d.import_step`` backed by the inline ``__cadcache__`` scene cache.
+    """``build123d.import_step`` backed by the inline ``__cadgen__`` scene cache.
 
     Returns a build123d ``Compound`` topologically identical to ``import_step`` but
     reuses the cached binary BREP, so warm loads are ~tens of ms instead of a full

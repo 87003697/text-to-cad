@@ -147,12 +147,12 @@ class BinarySceneCacheTests(unittest.TestCase):
 
             step_scene._write_step_scene_cache(scene, step_hash="hash-abc")
 
-            # The cache is written inline beside the STEP in __cadcache__, as binary
+            # The cache is written inline beside the STEP in __cadgen__, as binary
             # BREP (.bin), not ASCII (.brep).
-            cadcache = step_path.parent / "__cadcache__"
-            self.assertTrue(cadcache.is_dir())
-            self.assertEqual(1, len(list(cadcache.rglob("*.bin"))))
-            self.assertEqual([], list(cadcache.rglob("*.brep")))
+            cadgen_dir = step_path.parent / "__cadgen__"
+            self.assertTrue(cadgen_dir.is_dir())
+            self.assertEqual(1, len(list(cadgen_dir.rglob("*.bin"))))
+            self.assertEqual([], list(cadgen_dir.rglob("*.brep")))
 
             cached = step_scene._read_step_scene_cache(step_path, step_hash="hash-abc")
             self.assertIsNotNone(cached)
@@ -188,7 +188,7 @@ class ImportStepCachedTests(unittest.TestCase):
 
             self.assertEqual(_face_count(raw.wrapped), _face_count(cached.wrapped))
             self.assertAlmostEqual(raw.volume, cached.volume, places=4)
-            self.assertTrue((step_path.parent / "__cadcache__").is_dir())
+            self.assertTrue((step_path.parent / "__cadgen__").is_dir())
 
             # Second call must hit the inline cache — no re-parse — and still match.
             with mock.patch.object(step_scene, "load_step_scene", side_effect=AssertionError("cache miss")):

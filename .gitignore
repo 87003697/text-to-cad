@@ -5,8 +5,10 @@
 # Python
 __pycache__/
 *.py[cod]
-# Inline CAD scene cache (binary BREP + scene.json), written beside STEP files
-__cadcache__/
+# Per-folder cadgen output home written beside CAD sources: component-GLB render
+# packages (assembly.json + components/*.glb), drawing packages, binary BREP scene
+# caches, and generation locks. Rebuilt on demand; never committed.
+__cadgen__/
 *.egg-info/
 .pytest_cache/
 .mypy_cache/
