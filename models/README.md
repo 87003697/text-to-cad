@@ -20,6 +20,9 @@ text files.
   outputs, and selected robot STEP sources.
 - [simple/](simple/README.md): compact build123d generators and STEP outputs
   for basic parts.
+- [spacex/](spacex/README.md): educational public-source SpaceX
+  reconstructions (Raptor 2, Merlin 1D, Merlin Vacuum, Falcon Heavy) with
+  research/provenance docs; non-functional, not for manufacture.
 
 The larger `mechbench/` and `mechbench2/` external datasets are intentionally
 not included in this committed fixture tree.
