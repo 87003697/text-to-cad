@@ -76,9 +76,35 @@ Verified obligations:
   instead of per-occurrence.
 
 **Phase 4 — interaction polish (small; partly subsumed by Phase 3).**
-Cache the visible-mesh set, diff hover state changes (touch ~2 records,
-not all), `matrixAutoUpdate = false` for baked transforms, three-mesh-bvh
-if picking is still hot afterward.
+Cache the visible-mesh set (`useViewerPicking.js:638` rebuilds a
+2,142-element filtered array per pick), diff hover state changes (touch ~2
+records, not all), three-mesh-bvh if picking is still hot afterward.
+NOTE: `matrixAutoUpdate = false` for baked transforms is ALREADY applied
+(`packages/cadjs/src/common/displayRecordTransform.js:9`, tested in
+`modelRuntime.test.js`) — not a remaining item.
+
+## Phase 3 scoping reality (checked against the code)
+
+The record system in `cadScene.js` is one-mesh-per-occurrence end to end:
+`makeRecord` (`:1784-1833`) builds a per-part `BufferGeometry` slice + its
+own `MeshPhysicalMaterial` + `THREE.Mesh` + optional edge and silhouette
+child objects, and every downstream behavior keys on the per-record
+`partId` — selection/hover/hidden/focus (`partIdMatchesSet`, `:1235-1238`),
+exploded `baseTransform`, per-record effect/opacity/highlight, and pick via
+`mesh.userData.partId` + `intersectObjects(perPartMeshes)`. Converting to
+`InstancedMesh` is therefore not a local swap: it needs an instance-aware
+selection/pick/explode/edge layer (instanceId ↔ occurrence, per-instance
+color/visibility, selection-only edges) living beside or replacing the
+record system, and it changes the shared module that also drives headless
+snapshot rendering (bundled into `skills/cad/scripts/snapshot/runtime/
+snapshot-render.js` via `bundle.sh`). Recommended execution: a dedicated
+effort landing behind a default-off `instancePackages` render setting,
+gated by (a) this bench (draw calls/vertices), (b) snapshot pixel-parity
+across all six display modes, (c) an in-browser pass (Preview MCP or
+manual) for hover/pick/explode/transparency before the default flips.
+Strategy to bound blast radius: instance only the common opaque,
+non-mirrored occurrences; fall back to the existing per-mesh record for
+transparent / negative-determinant / edge-heavy parts so nothing regresses.
 
 ## Constraints
 
