@@ -1,0 +1,79 @@
+# Viewer: large-package rendering plan
+
+Recorded 2026-07-06. Target workload: falcon_heavy-class component-GLB
+packages — 2,142 occurrences over 141 unique components (top cid ×108,
+seven more ×54), 24 distinct override colors; starship_stack is 2,562/282.
+All findings below were adversarially verified against the code and the
+actual falcon_heavy descriptor.
+
+## Where the time and memory go today
+
+- `packages/cadjs/src/lib/assembly/meshData.js:399-599`
+  (`buildComposedPackageMeshData`): bakes every occurrence transform into
+  fresh arrays in a synchronous main-thread per-vertex JS loop — 1,397,652
+  composed vertices (12.3× the 113,748 unique ones), ~77 MB.
+- `packages/cadjs/src/common/cadScene.js:670-744, 1784-1833, 1898-1909`:
+  re-slices those arrays into one BufferGeometry + one physical material +
+  one `THREE.Mesh` **per occurrence** (colors copied three times; 2,142
+  `computeBoundingSphere` calls) → ~2,142 draw calls, ~66 MB GPU buffers.
+  No `InstancedMesh`/`BatchedMesh`/merge anywhere in cadjs or viewer.
+- `viewer/src/client/components/workbench/hooks/useCadAssets.js:527-536`:
+  component GLBs parsed on the main thread (`loadRenderGlb` without
+  `preferWorker`, though the worker path exists) at concurrency 3.
+- Barycentric edge attributes force un-indexed 3-verts-per-triangle
+  geometry that is composed and uploaded even when the display mode draws
+  no edges (~42 MB copies, ~21 MB GPU upload).
+- `useViewerPicking.js:638-663`: hover raycasts rebuild the visible-mesh
+  array and intersect all 2,142 meshes per rAF; hover changes rewrite
+  material state across all records.
+
+## Phases
+
+**Phase 0 — benchmark harness (prerequisite).** Headless playwright run
+that loads falcon_heavy and records: time-to-first-frame, composed-vs-
+unique vertex counts, draw calls (renderer.info), JS heap, orbit FPS.
+Every later phase lands with before/after numbers from this harness.
+
+**Phase 1 — parallel worker parsing (small).** `preferWorker: true` for
+package component loads, concurrency 3 → min(hardwareConcurrency, 8), fix
+the serial shared path (`source.js`) to `Promise.all`. Win: est. 2–4×
+time-to-first-render; zero render-path risk. Ship first.
+
+**Phase 2 — compose off the main thread, once (medium).** Move
+`buildComposedPackageMeshData` into the existing GLB worker (transferable
+arrays); stop the per-part re-slice by sharing one geometry with draw
+ranges until Phase 3 replaces it; skip barycentric/class composition and
+upload when the display mode draws no edges. Win: removes the 0.5–2 s
+main-thread stall and ~150 MB of peak heap; −21 MB GPU upload with edges
+off.
+
+**Phase 3 — cid-keyed instancing (large, the headline).** One
+`InstancedMesh` per (component cid × material bucket): per-instance matrix
+from `occurrence.transform`, per-instance color from override colors.
+Win: 2,142 → ~141 draw calls (15×), GPU vertices 1.40M → 114k (12.3×),
+~60 MB GPU saved, hover/visibility loops shrink 15×, and the Phase-2
+compose loop disappears entirely (instances need no baked vertices).
+Verified obligations:
+- mirrored occurrences (negative-determinant transforms) get their own
+  bucket with flipped winding or DoubleSide;
+- picking moves to `InstancedMesh` raycast `instanceId` → occurrence id;
+- exploded view updates per-instance matrices;
+- hover/highlight via per-instance color or a single overlay mesh;
+- translucent parts keep the per-mesh path as a fallback bucket
+  (three.js cannot sort transparency per instance);
+- per-part edge/silhouette overlays render only for selection/hover
+  instead of per-occurrence.
+
+**Phase 4 — interaction polish (small; partly subsumed by Phase 3).**
+Cache the visible-mesh set, diff hover state changes (touch ~2 records,
+not all), `matrixAutoUpdate = false` for baked transforms, three-mesh-bvh
+if picking is still hot afterward.
+
+## Constraints
+
+- Instancing lives in `packages/cadjs` (framework-agnostic); the viewer app
+  keeps only UI state. Snapshot rendering shares cadScene, so Phase 3 must
+  keep snapshot output pixel-equivalent (harness includes a snapshot diff).
+- Verification per phase: screenshot parity across display modes
+  (solid/rendered/transparent/edges), picking + exploded + params-sidecar
+  regression on falcon_heavy, starship_stack, tom, and one small model.
