@@ -108,5 +108,41 @@ class OrphanComponentPruningTests(unittest.TestCase):
                 self.assertTrue((package_dir / entry["glb"]).is_file())
 
 
+class PayloadUnreadableFallbackTests(unittest.TestCase):
+    def test_unreadable_payload_falls_back_to_in_process_original(self) -> None:
+        # Vendor-STEP solids can serialize BREP entities BinTools cannot read
+        # back; the build must fall back to the original in-process shape.
+        import tempfile
+        from pathlib import Path
+        from unittest import mock
+
+        import build123d
+        from cadgen._internal import component_package as cp
+
+        shape = build123d.Box(8, 6, 4)
+        shape.label = "vendor_part"
+        root = build123d.Compound(obj=[shape], children=[shape], label="rig")
+        with tempfile.TemporaryDirectory() as tmp:
+            package_dir = Path(tmp) / "__cadgen__" / "models" / "rig.step.py"
+            with mock.patch.object(
+                cp,
+                "_build123d_shape_from_brep_bytes",
+                side_effect=RuntimeError("NCollection_IndexedMap::FindKey"),
+            ):
+                stats = cp.build_package_from_compound(
+                    root,
+                    package_dir=package_dir,
+                    root_name="rig",
+                    linear_deflection=0.5,
+                    angular_deflection=0.4,
+                )
+            self.assertEqual(1, stats["components_built"])
+            import json
+
+            descriptor = json.loads((package_dir / "assembly.json").read_text())
+            (cid_entry,) = descriptor["components"].values()
+            self.assertTrue((package_dir / cid_entry["glb"]).is_file())
+
+
 if __name__ == "__main__":
     unittest.main()

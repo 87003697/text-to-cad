@@ -278,6 +278,13 @@ def _build123d_shape_from_brep_bytes(payload: bytes) -> Any:
     return cls(topo)
 
 
+# Some imported (vendor STEP / boolean-derived) solids serialize BREP entities
+# that BinTools cannot READ back (an OCCT write/read asymmetry, e.g. point
+# representations) — their payloads cannot cross a process boundary, so they
+# fall back to an in-process build from the original shape.
+PAYLOAD_UNREADABLE = "__payload-unreadable__"
+
+
 def _build_component_glb_worker(
     args: tuple[bytes, str, str, float, float],
 ) -> tuple[str, str | None]:
@@ -285,10 +292,14 @@ def _build_component_glb_worker(
 
     Returns ``(cid, None)`` on success or ``(cid, error message)`` — exceptions
     are flattened so one failed component reports cleanly instead of poisoning
-    the pool."""
+    the pool. A payload the worker cannot deserialize reports the
+    ``PAYLOAD_UNREADABLE`` marker so the parent retries in-process."""
     payload, cid, out_glb, linear_deflection, angular_deflection = args
     try:
-        shape = _build123d_shape_from_brep_bytes(payload)
+        try:
+            shape = _build123d_shape_from_brep_bytes(payload)
+        except Exception as exc:  # noqa: BLE001 - marker for the parent retry
+            return (cid, f"{PAYLOAD_UNREADABLE}: {type(exc).__name__}: {exc}")
         _write_component_glb_atomic(
             shape,
             Path(out_glb),
@@ -598,7 +609,21 @@ def build_package_from_compound(
             results = list(pool.map(_build_component_glb_worker, payloads))
     else:
         results = [_build_component_glb_worker(args) for args in payloads]
+    shapes_by_cid = dict(missing)
     for cid, error in results:
+        if error is not None and error.startswith(PAYLOAD_UNREADABLE):
+            # BinTools write/read asymmetry: build from the original in-process
+            # shape (the pre-payload path); such components simply cannot be
+            # parallelized or byte-normalized.
+            _write_component_glb_atomic(
+                shapes_by_cid[cid],
+                comp_dir / f"{cid}.glb",
+                cad_ref=cid,
+                linear_deflection=linear_deflection,
+                angular_deflection=angular_deflection,
+            )
+            built.append(cid)
+            continue
         if error is not None:
             raise RuntimeError(f"component {cid} build failed: {error}")
         built.append(cid)
