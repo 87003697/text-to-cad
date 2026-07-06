@@ -179,12 +179,16 @@ def _assembly_topology_artifact(
     meshes directly), return a cheap descriptor-only artifact. When selectors ARE needed
     (inspect, selection-based renders), re-mesh + re-extract the full manifest on demand
     and return the bundle in memory — the build-time win is precisely that this ~29.5s
-    extraction is no longer in the build path. TODO: cache to a ``topology.glb`` sidecar
-    inside the package to avoid re-extraction on repeated selector queries."""
-    from cadgen._internal.component_package import read_package_descriptor
+    extraction is no longer in the build path. Repeat selector queries read the
+    ``topology.glb`` sidecar cached inside the package (validated against the
+    descriptor's provenance) instead of re-running the generator + extraction."""
+    from cadgen._internal.component_package import (
+        assembly_topology_glb_path,
+        read_package_descriptor,
+    )
 
+    descriptor = read_package_descriptor(render_package_dir(spec.entry_path))
     if not require_selector:
-        descriptor = read_package_descriptor(render_package_dir(spec.step_path))
         if descriptor is not None:
             return StepTopologyArtifact(
                 cad_path=spec.cad_ref,
@@ -195,6 +199,32 @@ def _assembly_topology_artifact(
                 manifest=descriptor,
                 selector_bundle=None,
             )
+
+    topology_glb = assembly_topology_glb_path(spec.entry_path)
+    if (
+        preloaded_scene is None
+        and not force
+        and descriptor is not None
+        and topology_glb.is_file()
+    ):
+        from cadgen._internal.glb_topology import (
+            read_step_topology_bundle_from_glb,
+            read_step_topology_manifest_from_glb,
+        )
+
+        cached_manifest = read_step_topology_manifest_from_glb(topology_glb)
+        if _topology_sidecar_matches_descriptor(cached_manifest, descriptor):
+            bundle = read_step_topology_bundle_from_glb(topology_glb)
+            if bundle is not None:
+                return StepTopologyArtifact(
+                    cad_path=spec.cad_ref,
+                    kind="assembly",
+                    source_path=spec.source_path,
+                    step_path=spec.step_path,
+                    artifact_path=render_package_dir(spec.entry_path),
+                    manifest=bundle.manifest,
+                    selector_bundle=bundle,
+                )
 
     from cadgen._internal.generation import (
         _effective_step_spec_for_scene,
@@ -228,6 +258,7 @@ def _assembly_topology_artifact(
         options=options,
         color=spec.color,
     )
+    _write_topology_sidecar(spec, scene, options, bundle, logger=logger)
     return StepTopologyArtifact(
         cad_path=spec.cad_ref,
         kind="assembly",
@@ -237,6 +268,73 @@ def _assembly_topology_artifact(
         manifest=bundle.manifest,
         selector_bundle=bundle,
     )
+
+
+def _topology_sidecar_matches_descriptor(
+    manifest: object,
+    descriptor: dict[str, object],
+) -> bool:
+    """Whether a cached topology.glb sidecar's embedded provenance matches the
+    package descriptor it sits beside. The descriptor is the freshness source of
+    truth (its closure gate already ran); the sidecar must carry the SAME source
+    closure / step hash and mesh settings or it predates a rebuild."""
+    if not isinstance(manifest, dict):
+        return False
+    # Provenance-only gate: selector topology (occurrence/face/edge refs) is a
+    # function of the B-rep sources, not of mesh resolution, so the sidecar is
+    # valid whenever it was extracted from the same sources the descriptor
+    # records. Comparing mesh settings here would permanently miss after any
+    # adaptive-resolution tuning until the package itself rebuilds.
+    closure_match = str(descriptor.get("sourceClosureHash") or "").strip() == str(
+        manifest.get("sourceClosureHash") or ""
+    ).strip()
+    step_match = str(descriptor.get("stepHash") or "").strip() == str(
+        manifest.get("stepHash") or ""
+    ).strip()
+    has_any = bool(
+        str(descriptor.get("sourceClosureHash") or "").strip()
+        or str(descriptor.get("stepHash") or "").strip()
+    )
+    return has_any and closure_match and step_match
+
+
+def _write_topology_sidecar(
+    spec: EntrySpec,
+    scene: LoadedStepScene,
+    options: object,
+    bundle: object,
+    *,
+    logger: CliLogger | None,
+) -> None:
+    """Best-effort write-through of the on-demand selector extraction to the
+    package's topology.glb sidecar (atomic rename). A failed cache write must
+    never fail the selector query itself."""
+    import os
+
+    from cadgen._internal.component_package import assembly_topology_glb_path, is_assembly_package
+
+    package_dir = render_package_dir(spec.entry_path)
+    if not is_assembly_package(package_dir):
+        return
+    target = assembly_topology_glb_path(spec.entry_path)
+    temp_path = target.with_name(f"{target.name}.tmp{os.getpid()}")
+    try:
+        from cadgen._internal.glb import export_assembly_glb_from_scene
+
+        export_assembly_glb_from_scene(
+            spec.step_path,
+            scene,
+            target_path=temp_path,
+            linear_deflection=options.linear_deflection,
+            angular_deflection=options.angular_deflection,
+            selector_bundle=bundle,
+        )
+        os.replace(temp_path, target)
+    except Exception as exc:  # noqa: BLE001 - cache write is advisory
+        if logger is not None:
+            logger.debug(f"topology.glb cache write skipped for {spec.cad_ref}: {exc}")
+    finally:
+        temp_path.unlink(missing_ok=True)
 
 
 def _scene_for_regeneration(

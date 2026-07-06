@@ -26,6 +26,8 @@ path/to/entry.step.py
 
 A `<name>.step.py` generator target resolves to the same entry as its logical `<name>.step`, and keeps resolving to the generator entry even when a same-stem exported `.step` file exists beside it.
 
+Selector-backed queries (`refs --facts`, planes, measures) on generated assemblies extract whole-model topology on demand and cache it as `topology.glb` inside the entry's render package; repeat queries read the cache (seconds instead of a full re-extraction) until the package is rebuilt, which invalidates the sidecar.
+
 Selector refs are local to the STEP/CAD entry target passed to the command. They do not include file paths:
 
 ```text
