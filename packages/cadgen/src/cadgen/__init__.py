@@ -4,6 +4,7 @@ __all__ = [
     "AssemblyHelper",
     "MateRelation",
     "MateTarget",
+    "compound_from_instances",
     "ensure_step_glb_artifact",
     "label_text",
     "label_shape",
@@ -31,4 +32,8 @@ def __getattr__(name: str):
             "label_shape": label_shape,
             "target": target,
         }[name]
+    if name == "compound_from_instances":
+        from cadgen.instances import compound_from_instances
+
+        return compound_from_instances
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

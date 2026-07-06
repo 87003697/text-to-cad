@@ -510,9 +510,32 @@ def build_package_from_compound(
         assembly_root = _consume(occurrence_tree)
         assembly_root["nodeType"] = "assembly"
     else:
+        def _consume_spliced(node: dict[str, Any], parent_world_loc: Any, path: str) -> dict[str, Any]:
+            # A nested compound_from_instances subtree: remap its self-relative
+            # occurrence ids under the enclosing walk path and accumulate the
+            # enclosing world location into its placements.
+            if node.get("leaf"):
+                return _add_leaf(node["shape"], parent_world_loc * node["world_loc"], path, name=node["name"])
+            child_nodes = [
+                _consume_spliced(child, parent_world_loc, f"{path}.{index}")
+                for index, child in enumerate(node["children"], start=1)
+            ]
+            return {
+                "id": path,
+                "name": node["name"],
+                "nodeType": "subassembly",
+                "leafPartIds": [leaf_id for cn in child_nodes for leaf_id in cn["leafPartIds"]],
+                "children": child_nodes,
+            }
+
         def _walk(node: Any, parent_world_loc: Any, path: str) -> dict[str, Any]:
             node_loc = getattr(node, "location", None)
             world_loc = (parent_world_loc * node_loc) if node_loc is not None else parent_world_loc
+            nested_tree = getattr(node, "_occurrence_tree", None)
+            if nested_tree is not None:
+                spliced = _consume_spliced(dict(nested_tree, leaf=False), world_loc, path)
+                spliced["name"] = str(getattr(node, "label", "") or nested_tree.get("name") or path)
+                return spliced
             child_shapes = list(getattr(node, "children", []) or [])
             if not child_shapes:
                 return _add_leaf(node, world_loc, path)
