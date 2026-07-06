@@ -64,10 +64,11 @@ COMPONENT_PROVENANCE_KEYS = (
 TOPOLOGY_GLB_NAME = "topology.glb"
 
 
-def assembly_topology_glb_path(step_path: Path) -> Path:
+def assembly_topology_glb_path(entry_path: Path) -> Path:
     """Path to the lazy full-manifest single GLB inside an assembly package. inspect's
-    selector queries build + cache it here on first use; renders never need it."""
-    return render_package_dir(step_path) / TOPOLOGY_GLB_NAME
+    selector queries build + cache it here on first use; renders never need it.
+    Keyed by the ENTRY file (the same key as the package itself)."""
+    return render_package_dir(entry_path) / TOPOLOGY_GLB_NAME
 
 
 def is_assembly_package(path: Path) -> bool:
@@ -613,6 +614,10 @@ def build_package_from_compound(
     descriptor["stats"] = stats
     package_dir.mkdir(parents=True, exist_ok=True)
     (package_dir / DESCRIPTOR_NAME).write_text(json.dumps(descriptor))
+    # The lazy whole-assembly topology sidecar was extracted against the
+    # previous descriptor's provenance; a rewritten package makes it stale by
+    # definition, so drop it and let the next selector query rebuild it.
+    (package_dir / TOPOLOGY_GLB_NAME).unlink(missing_ok=True)
 
     # Prune orphans: each package's components/ dir belongs to exactly ONE entry
     # (packages are self-contained; cross-model sharing was given up on purpose),

@@ -16,6 +16,19 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import quote, unquote, urlparse
 
+# Warm-daemon shim: must run BEFORE the cadgen imports below (which load
+# cadgen/OCP at module import time). The daemon sets CADGEN_DAEMON_CHILD so it
+# never recurses; the stdlib-only client keeps the cold path overhead-free.
+if os.environ.get("CADGEN_WARM") == "1" and not os.environ.get("CADGEN_DAEMON_CHILD"):
+    _daemon_scripts_dir = str(Path(__file__).resolve().parents[1])
+    if _daemon_scripts_dir not in sys.path:
+        sys.path.insert(0, _daemon_scripts_dir)
+    from cadgen_daemon.client import run_via_daemon
+
+    _warm_exit = run_via_daemon("snapshot", sys.argv[1:], os.getcwd())
+    if _warm_exit is not None:
+        raise SystemExit(_warm_exit)
+
 
 SCRIPTS_DIR = Path(__file__).resolve().parents[1]
 PACKAGES_DIR = SCRIPTS_DIR / "packages"

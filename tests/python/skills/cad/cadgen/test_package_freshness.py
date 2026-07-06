@@ -84,5 +84,36 @@ class PackageFreshnessGateTests(unittest.TestCase):
             self.assertIsNone(generation._package_descriptor_matches_spec(spec))
 
 
+class TopologySidecarGateTests(unittest.TestCase):
+    def _match(self, manifest, descriptor):
+        from cadgen.step_artifacts import _topology_sidecar_matches_descriptor
+
+        return _topology_sidecar_matches_descriptor(manifest, descriptor)
+
+    def test_matches_on_same_closure_regardless_of_mesh_drift(self) -> None:
+        descriptor = {"sourceClosureHash": "abc", "mesh": {"linearDeflection": 1.0}}
+        manifest = {"sourceClosureHash": "abc", "mesh": {"linearDeflection": 2.0}}
+        self.assertTrue(self._match(manifest, descriptor))
+
+    def test_rejects_closure_mismatch(self) -> None:
+        self.assertFalse(
+            self._match({"sourceClosureHash": "old"}, {"sourceClosureHash": "new"})
+        )
+
+    def test_rejects_when_no_provenance_recorded(self) -> None:
+        self.assertFalse(self._match({}, {}))
+
+    def test_imported_entry_matches_on_step_hash(self) -> None:
+        self.assertTrue(
+            self._match({"stepHash": "s1"}, {"stepHash": "s1"})
+        )
+        self.assertFalse(
+            self._match({"stepHash": "s1"}, {"stepHash": "s2"})
+        )
+
+    def test_rejects_non_dict_manifest(self) -> None:
+        self.assertFalse(self._match(None, {"sourceClosureHash": "abc"}))
+
+
 if __name__ == "__main__":
     unittest.main()
