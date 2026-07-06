@@ -109,8 +109,9 @@ test("workbench-light preset uses neutral material treatment while preserving so
   assert.equal(cinematic.background.linearStart, "#f0f4f9");
   assert.equal(cinematic.background.linearEnd, "#f0f4f9");
   assert.equal(cinematic.floor.mode, THEME_FLOOR_MODES.STAGE);
-  assert.equal(cinematic.floor.enabled, true);
-  assert.equal(cinematic.floor.grid.enabled, true);
+  assert.equal(cinematic.floor.enabled, false);
+  assert.equal(cinematic.floor.grid.enabled, false);
+  assert.equal(cinematic.floor.followModel, true);
   assert.equal(cinematic.floor.reflectivity, 0.14);
   assert.equal(cinematic.lighting.toneMappingExposure, 1.16);
   assert.equal(cinematic.lighting.ambient.intensity, 0.4);
@@ -223,10 +224,11 @@ test("cinematic ships as a real dark studio preset, not an alias", () => {
   assert.equal(cinematic.floor.mode, THEME_FLOOR_MODES.STAGE);
   assert.equal(cinematic.floor.enabled, true);
   assert.equal(cinematic.floor.grid.enabled, true);
+  assert.equal(cinematic.floor.followModel, true);
   assert.equal(cinematic.environment.enabled, true);
   assert.equal(cinematic.environment.presetId, "studio-hdri-43");
   assert.equal(cinematic.lighting.fill.enabled, true);
-  assert.equal(cinematic.lighting.fill.color, "#a89684");
+  assert.equal(cinematic.lighting.fill.color, "#a6a9ad");
   assert.equal(cinematic.lighting.rim.intensity, 1.3);
   assert.equal(inferThemeSettingsSceneTone(cinematic), "dark");
   assert.equal(getThemePresetIdForSettings(cinematic), "cinematic");

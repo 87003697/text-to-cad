@@ -912,11 +912,13 @@ const WORKBENCH_BASE_THEME_SETTINGS = Object.freeze({
   edges: {
     ...CAD_THEME_EDGE_SETTINGS
   },
+  // Workbench is a clean engineering canvas: no stage floor or grid; the
+  // floor colors stay authored so derived fallbacks and mode overlays hold.
   floor: {
     ...CINEMATIC_THEME_SETTINGS.floor,
     color: WORKBENCH_LIGHT_FLOOR_COLOR,
-    enabled: true,
-    ...createFloorGridSettings(WORKBENCH_LIGHT_FLOOR_COLOR, { enabled: true, opacity: 0.2 })
+    enabled: false,
+    ...createFloorGridSettings(WORKBENCH_LIGHT_FLOOR_COLOR, { enabled: false, opacity: 0.2 })
   },
   environment: {
     ...CINEMATIC_THEME_SETTINGS.environment,
@@ -957,8 +959,8 @@ const WORKBENCH_DARK_THEME_SETTINGS = Object.freeze({
   floor: {
     ...DARKOAL_THEME_SETTINGS.floor,
     color: WORKBENCH_DARK_FLOOR_COLOR,
-    enabled: true,
-    ...createFloorGridSettings(WORKBENCH_DARK_FLOOR_COLOR, { enabled: true, opacity: 0.22 })
+    enabled: false,
+    ...createFloorGridSettings(WORKBENCH_DARK_FLOOR_COLOR, { enabled: false, opacity: 0.22 })
   },
   lighting: {
     ...DARKOAL_THEME_SETTINGS.lighting,
@@ -1027,10 +1029,10 @@ const CINEMATIC_STUDIO_THEME_SETTINGS = Object.freeze({
     cycleColors: false,
     overrideSourceColors: false,
     tintMode: "blend",
-    tintStrength: 0.14,
-    saturation: 0.85,
-    contrast: 1.14,
-    brightness: 1.04,
+    tintStrength: 0,
+    saturation: 1.05,
+    contrast: 1.1,
+    brightness: 1.02,
     roughness: 0.32,
     metalness: 0.32,
     clearcoat: 0.5,
@@ -1072,7 +1074,7 @@ const CINEMATIC_STUDIO_THEME_SETTINGS = Object.freeze({
     toneMappingExposure: 1.24,
     directional: {
       enabled: true,
-      color: "#ffe3c0",
+      color: "#fff3e4",
       intensity: 2.5,
       position: {
         x: -190,
@@ -1082,7 +1084,7 @@ const CINEMATIC_STUDIO_THEME_SETTINGS = Object.freeze({
     },
     fill: {
       enabled: true,
-      color: "#a89684",
+      color: "#a6a9ad",
       intensity: 0.42,
       position: {
         x: 120,
@@ -1102,7 +1104,7 @@ const CINEMATIC_STUDIO_THEME_SETTINGS = Object.freeze({
     },
     spot: {
       enabled: true,
-      color: "#e8d9c4",
+      color: "#e8e5df",
       intensity: 0.35,
       angle: 0.7,
       distance: 0,
@@ -1125,13 +1127,13 @@ const CINEMATIC_STUDIO_THEME_SETTINGS = Object.freeze({
     },
     ambient: {
       enabled: true,
-      color: "#d8d2c8",
+      color: "#d5d7da",
       intensity: 0.24
     },
     hemisphere: {
       enabled: true,
-      skyColor: "#e8e4de",
-      groundColor: "#201c17",
+      skyColor: "#e5e7ea",
+      groundColor: "#1b1c1f",
       intensity: 0.85
     }
   }
@@ -1723,6 +1725,7 @@ export function normalizeThemeSettings(value = {}) {
     floor: {
       mode: normalizedFloorMode,
       enabled: normalizeBoolean(floor.enabled, normalizedFloorMode !== THEME_FLOOR_MODES.NONE),
+      followModel: normalizeBoolean(floor.followModel, DEFAULT_THEME_SETTINGS.floor?.followModel ?? true),
       color: normalizedFloorColor,
       roughness: normalizeNumber(floor.roughness, DEFAULT_THEME_SETTINGS.floor?.roughness ?? 0.72, 0, 1),
       reflectivity: normalizeNumber(floor.reflectivity, DEFAULT_THEME_SETTINGS.floor?.reflectivity ?? 0.12, 0, 1),

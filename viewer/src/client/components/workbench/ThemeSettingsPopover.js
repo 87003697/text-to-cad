@@ -2171,6 +2171,11 @@ function ThemeAppearanceContent({
       >
         {themeSettings.floor?.enabled === true ? (
           <>
+            <ThemeToggleRow
+              label="Follow model"
+              checked={themeSettings.floor?.followModel !== false}
+              onChange={(nextValue) => setFloor({ followModel: nextValue })}
+            />
             <ColorModeField
               label="Color"
               path={["floor", "color"]}
