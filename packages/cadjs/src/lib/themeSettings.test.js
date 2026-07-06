@@ -38,7 +38,7 @@ const WORKBENCH_FILL_COLORS = Object.freeze([
 const BLUE_FILL_COLORS = Object.freeze(["#4cc9f0"]);
 const MAGENTA_FILL_COLORS = Object.freeze(["#ff4faf"]);
 const CLAY_FILL_COLORS = Object.freeze(["#b9856e"]);
-const TERMINAL_FILL_COLORS = Object.freeze(["#0b7a3f"]);
+const TERMINAL_FILL_COLORS = Object.freeze(["#073a20"]);
 const DARKOAL_FILL_COLORS = Object.freeze([
   "#b6c4ce",
   "#c2a1a5",
@@ -154,7 +154,9 @@ test("vibrant ships as a bright photoreal stage after cinematic", () => {
   assert.equal(vibrantPreset?.label, "Vibrant");
   assert.equal(vibrant.colorMode, THEME_COLOR_MODES.LIGHT);
   assert.equal(vibrant.projection, "perspective");
-  assert.equal(vibrant.materials.cycleColors, true);
+  // Vibrant shows off each model's own colors; the palette is kept but not cycled.
+  assert.equal(vibrant.materials.cycleColors, false);
+  assert.equal(vibrant.materials.fillColors.length > 1, true);
   assert.equal(vibrant.materials.overrideSourceColors, false);
   assert.equal(vibrant.materials.saturation, 1.32);
   assert.equal(vibrant.materials.clearcoat, 0.55);
@@ -191,17 +193,26 @@ test("projection is a per-theme trait: canvases orthographic, stages perspective
   assert.equal(normalizeThemeSettings({ projection: "fisheye" }).projection, "orthographic");
 });
 
-test("theme settings do not normalize display edge settings", () => {
-  const normalized = normalizeThemeSettings({
-    ...cloneThemePresetSettings("workbench"),
-    edges: {
-      enabled: false,
-      color: "#ff0000"
-    }
-  });
-
-  assert.equal(Object.hasOwn(normalized, "edges"), false);
+test("themes stay edge-agnostic unless they opt into their own outline", () => {
+  // Most themes carry no edges and leave the outline to per-file display
+  // settings; Terminal is the exception and owns a neon-green outline.
   assert.equal(Object.hasOwn(cloneThemePresetSettings("workbench"), "edges"), false);
+  assert.equal(Object.hasOwn(cloneThemePresetSettings("cinematic"), "edges"), false);
+  assert.equal(Object.hasOwn(cloneThemePresetSettings("vibrant"), "edges"), false);
+  assert.equal(Object.hasOwn(cloneThemePresetSettings("blue"), "edges"), false);
+
+  const terminal = cloneThemePresetSettings("terminal");
+  assert.equal(terminal.edges.enabled, true);
+  assert.equal(terminal.edges.color, "#66ff99");
+
+  // When a theme declares edges, they normalize through the display-edge
+  // normalizer and survive on the theme.
+  const withEdges = normalizeThemeSettings({
+    ...cloneThemePresetSettings("workbench"),
+    edges: { enabled: true, color: "#ABC" }
+  });
+  assert.equal(withEdges.edges.enabled, true);
+  assert.equal(withEdges.edges.color, "#aabbcc");
 });
 
 test("built-in theme preset ids stay explicit with cinematic third", () => {
@@ -329,7 +340,11 @@ test("stylized presets keep their palettes and declare an opinionated color mode
       fillColors: TERMINAL_FILL_COLORS,
       cycleColors: false,
       backgroundColor: "#020403",
-      floorColor: "#02120a"
+      floorColor: "#02120a",
+      // Terminal ships a transparent grid floor (no solid stage) and owns a
+      // neon-green outline, unlike the other stylized stages.
+      floorEnabled: false,
+      hasEdges: true
     }
   ];
 
@@ -339,11 +354,14 @@ test("stylized presets keep their palettes and declare an opinionated color mode
     assert.equal(settings.materials.defaultColor, expectation.materialColor);
     assert.deepEqual(settings.materials.fillColors, expectation.fillColors);
     assert.equal(settings.materials.cycleColors, expectation.cycleColors);
-    assert.equal(Object.hasOwn(settings, "edges"), false);
+    assert.equal(Object.hasOwn(settings, "edges"), expectation.hasEdges === true);
     assert.equal(settings.background.solidColor, expectation.backgroundColor);
     assert.equal(settings.floor.color, expectation.floorColor);
-    // Every stylized theme now ships an enabled presentation floor.
-    assert.equal(settings.floor.enabled, true, `${expectation.presetId} floor enabled`);
+    assert.equal(settings.floor.enabled, expectation.floorEnabled !== false, `${expectation.presetId} floor enabled`);
+    // Terminal keeps its grid even with the solid floor disabled.
+    if (expectation.floorEnabled === false) {
+      assert.equal(settings.floor.grid.enabled, true, `${expectation.presetId} grid enabled`);
+    }
     assert.equal(settings.projection, "perspective", `${expectation.presetId} projection`);
     assert.equal(getThemePresetIdForSettings(settings), expectation.presetId);
   }

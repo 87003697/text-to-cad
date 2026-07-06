@@ -119,22 +119,32 @@ test("exploded view radial axis moves first-level groups outward from model cent
   assert.equal(states[2].translation.z, 0);
 });
 
-test("exploded view radial axis can keep the exploded set above the original floor", () => {
+test("exploded view radial axis blooms coaxial parts horizontally and preserves height", () => {
+  // Two coaxial parts stacked along Z share the model's vertical axis, so they
+  // fan out horizontally (in the XY plane) at their own heights rather than
+  // exploding up/down.
   const records = [
     record("o1.1", [0, 0, 0.5], { min: [-1, -1, 0], max: [1, 1, 1] }),
     record("o1.2", [0, 0, 4.5], { min: [-1, -1, 4], max: [1, 1, 5] })
   ];
   const bounds = { min: [-1, -1, 0], max: [1, 1, 5] };
-  const ungroundedStates = createExplodedViewRecordStates(THREE, records, bounds, {
-    axis: "radial",
-    keepBaseGrounded: false
-  });
-  const groundedStates = createExplodedViewRecordStates(THREE, records, bounds, {
+  const states = createExplodedViewRecordStates(THREE, records, bounds, {
     axis: "radial"
   });
 
-  assert.ok(explodedViewBoundsFromStates(THREE, ungroundedStates, bounds).min[2] < 0);
-  assert.ok(explodedViewBoundsFromStates(THREE, groundedStates, bounds).min[2] >= 0);
+  assert.equal(states.length, 2);
+  // Purely horizontal motion: no vertical component, so the floor is preserved
+  // and each part keeps its authored height.
+  for (const state of states) {
+    assert.equal(state.translation.z, 0);
+    assert.ok(Math.hypot(state.translation.x, state.translation.y) > 0);
+  }
+  // Coaxial parts fan to distinct horizontal directions instead of stacking.
+  assert.ok(
+    Math.abs(states[0].translation.x - states[1].translation.x) > 1e-6 ||
+    Math.abs(states[0].translation.y - states[1].translation.y) > 1e-6
+  );
+  assert.equal(explodedViewBoundsFromStates(THREE, states, bounds).min[2], 0);
 });
 
 test("exploded view easing clamps to animation bounds", () => {

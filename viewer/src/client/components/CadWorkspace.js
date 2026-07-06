@@ -44,6 +44,7 @@ import {
 import {
   displayModeForcesEdges,
   displayModeIsWireframe,
+  normalizeDisplayEdgeSettings,
   normalizeDisplaySettings,
   resolveDisplayEdgeSettings
 } from "cadjs/lib/displaySettings";
@@ -1181,10 +1182,17 @@ export default function CadWorkspace({
     () => resolveThemeSettingsForColorMode(themeSettings, { prefersDark: false }),
     [themeSettings]
   );
-  const resolvedDisplayEdgeSettings = useMemo(
-    () => resolveDisplayEdgeSettings(displaySettings),
-    [displaySettings]
-  );
+  const resolvedDisplayEdgeSettings = useMemo(() => {
+    const base = resolveDisplayEdgeSettings(displaySettings);
+    // A theme may define its own outline (e.g. Terminal's neon-green linework).
+    // When it opts in, the theme edges take over as the base appearance; every
+    // other theme leaves edges entirely to the per-file display settings.
+    const themeEdges = resolvedThemeSettings.edges;
+    if (themeEdges && themeEdges.enabled === true) {
+      return normalizeDisplayEdgeSettings({ ...base, ...themeEdges });
+    }
+    return base;
+  }, [displaySettings, resolvedThemeSettings]);
   // App light/dark is inferred from the active theme's dominant background color
   // (not a user preference). The nav/sidebars float over the transparent
   // viewport, so their contrast must track whatever canvas sits behind them.
