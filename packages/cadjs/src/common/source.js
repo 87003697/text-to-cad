@@ -217,12 +217,22 @@ export async function loadSource(input, options = {}) {
   );
   if (!meshData && packageInfo) {
     meshData = await loadPackageMeshData(packageInfo);
+    const packageSelectorRuntime = inputObject.selectorRuntime || options.selectorRuntime || null;
     return {
       kind: "step",
       meshData,
-      selectorRuntime: inputObject.selectorRuntime || options.selectorRuntime || null,
+      selectorRuntime: packageSelectorRuntime,
       displayEdgeRuntime: inputObject.displayEdgeRuntime || options.displayEdgeRuntime || null,
-      stepParameterSource: null,
+      // Parameter sidecars resolve features against composed occurrence ids, so
+      // they stay fully functional for package sources even without a selector
+      // runtime (feature refs prefix-match meshData part occurrence ids).
+      stepParameterSource: await loadStepParameters({
+        kind: "step",
+        stepParameters,
+        stepParameterUrl,
+        cadPath,
+        selectorRuntime: packageSelectorRuntime
+      }),
       resolved,
       url: "",
       glbUrl: "",
