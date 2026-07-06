@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import functools
+
 import contextlib
 import hashlib
 import os
@@ -116,6 +118,7 @@ def _closure_hash_for_pairs(pairs: list[tuple[str, str]]) -> str:
     return digest.hexdigest()
 
 
+@functools.lru_cache(maxsize=1)
 def _interpreter_roots() -> tuple[Path, ...]:
     """Directories holding the Python interpreter, its standard library, and installed packages
     (the venv / site-packages). A loaded module whose file lives under any of these is third-party
@@ -137,6 +140,7 @@ def _interpreter_roots() -> tuple[Path, ...]:
     return tuple(roots)
 
 
+@functools.lru_cache(maxsize=1)
 def _runtime_roots() -> tuple[Path, ...]:
     """Directories holding the RUNNING generation runtime itself: the active cadgen
     package and the CLI launcher script's directory. Runtime files are versioned and
@@ -155,7 +159,11 @@ def _runtime_roots() -> tuple[Path, ...]:
     return tuple(roots)
 
 
+@functools.lru_cache(maxsize=1)
 def _excluded_roots() -> tuple[Path, ...]:
+    # Environment-derived and stable for the life of the process; the closure
+    # capture consults this per loaded-module path (hundreds of thousands of
+    # lstat/realpath calls per entry when uncached, ~8% of a warm build).
     return (*_interpreter_roots(), *_runtime_roots())
 
 

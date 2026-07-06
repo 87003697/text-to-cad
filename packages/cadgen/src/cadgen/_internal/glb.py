@@ -810,7 +810,15 @@ class _HierarchicalGlbWriter:
             include_surface_edges=self.include_surface_edges,
             surface_edge_class_signature=self.surface_edge_class_signature,
         )
-        if self.include_surface_edges:
+        if self.include_surface_edges and not (
+            payload.edge_classes and len(payload.edge_classes) == len(payload.positions)
+        ):
+            # A payload built with include_surface_edges already bakes the
+            # per-vertex edge classes from the same classification the bundle
+            # rows carry (the surface_edge_class_signature keys the payload
+            # cache to the bundle), so re-applying per half-edge is a strict
+            # no-op costing ~4-6% of a cold build. Apply only for payloads
+            # that lack baked classes.
             payload = _apply_surface_edge_classes_to_payload(
                 payload,
                 self.surface_half_edges_by_occurrence_id.get(occurrence_selector_id(node), []),

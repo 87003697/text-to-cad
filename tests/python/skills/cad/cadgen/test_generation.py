@@ -1680,7 +1680,7 @@ class CadGenerationTests(unittest.TestCase):
         scene = self._fake_scene(step_path)
         package_patch, package_calls = self._patch_package_build()
 
-        with mock.patch.object(cad_generation, "load_step_scene", return_value=scene) as load_scene, mock.patch.object(
+        with mock.patch.object(cad_generation, "load_step_scene_cached", return_value=scene) as load_scene, mock.patch.object(
             cad_generation, "export_part_stl_from_scene"
         ) as stl_export_mock, mock.patch.object(
             cad_generation,
@@ -1722,7 +1722,7 @@ class CadGenerationTests(unittest.TestCase):
         }
 
         package_patch, package_calls = self._patch_package_build()
-        with mock.patch.object(cad_generation, "load_step_scene", return_value=scene) as load_scene, mock.patch(
+        with mock.patch.object(cad_generation, "load_step_scene_cached", return_value=scene) as load_scene, mock.patch(
             "cadgen.step_targets.validate_step_topology_artifact",
             return_value=artifact,
         ) as validate_artifact, mock.patch.object(
@@ -1768,7 +1768,7 @@ class CadGenerationTests(unittest.TestCase):
         }
 
         package_patch, package_calls = self._patch_package_build()
-        with mock.patch.object(cad_generation, "load_step_scene", return_value=scene) as load_scene, mock.patch(
+        with mock.patch.object(cad_generation, "load_step_scene_cached", return_value=scene) as load_scene, mock.patch(
             "cadgen.step_targets.validate_step_topology_artifact",
             return_value=artifact,
         ) as validate_artifact, mock.patch.object(
@@ -1829,7 +1829,7 @@ class CadGenerationTests(unittest.TestCase):
         }
 
         package_patch, package_calls = self._patch_package_build()
-        with mock.patch.object(cad_generation, "load_step_scene") as load_scene, mock.patch(
+        with mock.patch.object(cad_generation, "load_step_scene_cached") as load_scene, mock.patch(
             "cadgen.step_targets.validate_step_topology_artifact",
             return_value=artifact,
         ), mock.patch.object(
@@ -1866,7 +1866,7 @@ class CadGenerationTests(unittest.TestCase):
         }
 
         package_patch, package_calls = self._patch_package_build()
-        with mock.patch.object(cad_generation, "load_step_scene", return_value=scene), mock.patch(
+        with mock.patch.object(cad_generation, "load_step_scene_cached", return_value=scene), mock.patch(
             "cadgen.step_targets.validate_step_topology_artifact",
             return_value=artifact,
         ) as validate_artifact, mock.patch.object(
@@ -1909,7 +1909,7 @@ class CadGenerationTests(unittest.TestCase):
             return target_path
 
         package_patch, package_calls = self._patch_package_build()
-        with mock.patch.object(cad_generation, "load_step_scene", return_value=scene), mock.patch.object(
+        with mock.patch.object(cad_generation, "load_step_scene_cached", return_value=scene), mock.patch.object(
             cad_generation,
             "export_part_stl_from_scene",
             side_effect=fake_export,
@@ -1942,7 +1942,7 @@ class CadGenerationTests(unittest.TestCase):
         scene = self._fake_scene(step_path)
 
         package_patch, package_calls = self._patch_package_build()
-        with mock.patch.object(cad_generation, "load_step_scene") as load_scene, mock.patch.object(
+        with mock.patch.object(cad_generation, "load_step_scene_cached") as load_scene, mock.patch.object(
             cad_generation,
             "mesh_step_scene",
         ), mock.patch.object(
@@ -1979,7 +1979,7 @@ class CadGenerationTests(unittest.TestCase):
             return stl_path
 
         package_patch, package_calls = self._patch_package_build()
-        with mock.patch.object(cad_generation, "load_step_scene", return_value=scene), mock.patch.object(
+        with mock.patch.object(cad_generation, "load_step_scene_cached", return_value=scene), mock.patch.object(
             cad_generation,
             "export_part_stl_from_scene",
             side_effect=fake_export,
@@ -2021,7 +2021,7 @@ class CadGenerationTests(unittest.TestCase):
             return target_path
 
         package_patch, package_calls = self._patch_package_build()
-        with mock.patch.object(cad_generation, "load_step_scene", return_value=scene), mock.patch.object(
+        with mock.patch.object(cad_generation, "load_step_scene_cached", return_value=scene), mock.patch.object(
             cad_generation,
             "export_part_3mf_from_scene",
             side_effect=fake_three_mf_export,
@@ -2076,7 +2076,7 @@ class CadGenerationTests(unittest.TestCase):
             return target_path
 
         package_patch, package_calls = self._patch_package_build()
-        with mock.patch.object(cad_generation, "load_step_scene", return_value=scene), mock.patch.object(
+        with mock.patch.object(cad_generation, "load_step_scene_cached", return_value=scene), mock.patch.object(
             cad_generation,
             "export_native_glb_from_scene",
             side_effect=fake_native_glb_export,
