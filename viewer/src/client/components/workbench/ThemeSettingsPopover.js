@@ -1568,14 +1568,6 @@ export function DisplaySettingsSection({
   return (
     <div className="py-2" data-cad-display-settings-section="true">
       <ControlSubsection title="Mode">
-        <Field label="Projection">
-          <SegmentedControl
-            value={normalizedDisplaySettings.projection}
-            onChange={(nextValue) => setDisplay({ projection: nextValue })}
-            options={PROJECTION_MODE_OPTIONS}
-          />
-        </Field>
-
         <Field label="Style">
           <Select
             value={normalizedDisplaySettings.mode}
@@ -1997,6 +1989,19 @@ function ThemeAppearanceContent({
         handleSaveCustomThemePreset={handleSaveCustomThemePreset}
         handleUpdateThemePresetSettings={handleUpdateThemePresetSettings}
       />
+
+      <ControlSubsection title="View">
+        <Field label="Projection">
+          <SegmentedControl
+            value={themeSettings.projection}
+            onChange={(nextValue) => updateThemeSettings((current) => ({
+              ...current,
+              projection: nextValue
+            }))}
+            options={PROJECTION_MODE_OPTIONS}
+          />
+        </Field>
+      </ControlSubsection>
 
       <ControlSubsection title="Surface">
         {themeSettings.materials.cycleColors === true ? (
