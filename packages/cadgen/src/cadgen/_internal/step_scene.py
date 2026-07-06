@@ -269,9 +269,16 @@ def _compact_bbox(box: dict[str, Any], digits: int | None) -> dict[str, Any]:
     }
 
 
-def _bbox_from_shape(shape: Any) -> dict[str, Any]:
+def _bbox_from_shape(shape: Any, *, tight: bool = True) -> dict[str, Any]:
     box = Bnd_Box()
-    BRepBndLib.AddOptimal_s(shape, box, False, False)
+    if tight:
+        BRepBndLib.AddOptimal_s(shape, box, False, False)
+    else:
+        # Loose geometric bounds (control-point based for splines). ~40% of a
+        # forced heavy-assembly rebuild was AddOptimal tightening boxes whose
+        # only consumer is the adaptive-mesh scale heuristic, which needs the
+        # diagonal's magnitude, not tight extents.
+        BRepBndLib.Add_s(shape, box, False)
     if box.IsVoid():
         return _bbox_from_points([])
     min_x, min_y, min_z, max_x, max_y, max_z = box.Get()
@@ -1693,7 +1700,7 @@ def _scene_mesh_resolution_hints(scene: LoadedStepScene) -> dict[str, Any]:
     # small: _bbox_from_shape uses BRepBndLib without tessellation per unique
     # prototype, plus an 8-corner transform per leaf occurrence.
     prototype_boxes = {
-        key: _bbox_from_shape(shape)
+        key: _bbox_from_shape(shape, tight=False)
         for key, shape in scene.prototype_shapes.items()
     }
     occurrence_boxes = [

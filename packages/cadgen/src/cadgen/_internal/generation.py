@@ -67,6 +67,7 @@ from cadgen._internal.stl import export_part_stl_from_scene
 from cadgen.step_export import build_build123d_step_scene, export_build123d_step_scene
 from cadgen._internal.threemf import export_part_3mf_from_scene
 from cadgen._internal.step_scene import (
+    load_step_scene_cached,
     LoadedStepScene,
     SelectorBundle,
     SelectorOptions,
@@ -1489,7 +1490,10 @@ def _generate_part_outputs(
         scene = preloaded_scene
     else:
         with logger.timed(f"load STEP {spec.cad_ref}"):
-            scene = load_step_scene(spec.step_path)
+            # Cross-run binary BREP scene cache: warm rebuilds of imported
+            # STEP entries skip the text-STEP parse (seconds to ~10s+ for
+            # large vendor files) and deserialize cached geometry instead.
+            scene = load_step_scene_cached(spec.step_path)
         if spec.source == "generated" and spec.script_path is not None:
             _mark_scene_python_backed(
                 scene,

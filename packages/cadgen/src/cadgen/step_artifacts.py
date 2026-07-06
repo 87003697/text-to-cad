@@ -15,7 +15,7 @@ from cadgen._internal.generation import (
 from cadgen.metadata import DEFAULT_MESH_ANGULAR_TOLERANCE, DEFAULT_MESH_TOLERANCE
 from cadgen.catalog import render_package_dir
 from cadgen._internal.step_metadata import read_text_to_cad_step_metadata
-from cadgen._internal.step_scene import LoadedStepScene, load_step_scene
+from cadgen._internal.step_scene import LoadedStepScene, load_step_scene_cached
 from cadgen.step_targets import (
     REGENERATE_STEP_COMMAND,
     REGENERATE_STEP_PROMPT,
@@ -111,7 +111,11 @@ def ensure_step_topology_artifact(
     # *file* and would report the package directory as missing.
     if artifact_path is None and is_assembly_package(resolved_artifact_path):
         return _assembly_topology_artifact(
-            spec, require_selector=require_selector, logger=logger, force=False
+            spec,
+            require_selector=require_selector,
+            logger=logger,
+            force=False,
+            preloaded_scene=scene,
         )
     return validate_step_topology_artifact(
         ResolvedStepTarget(
@@ -166,6 +170,7 @@ def _assembly_topology_artifact(
     require_selector: bool,
     logger: CliLogger | None,
     force: bool,
+    preloaded_scene: LoadedStepScene | None = None,
 ) -> StepTopologyArtifact:
     """The topology artifact for a component-GLB package, which carries no embedded
     whole-assembly topology.
@@ -201,7 +206,13 @@ def _assembly_topology_artifact(
         mesh_step_scene,
     )
 
-    spec, scene = _scene_for_regeneration(spec, logger=logger, force=force)
+    if preloaded_scene is not None:
+        # The caller just ran gen_step for the package build; extracting
+        # selectors from that scene avoids a second full generator run (this
+        # halved cold/stale selector-query latency on generated assemblies).
+        scene = preloaded_scene
+    else:
+        spec, scene = _scene_for_regeneration(spec, logger=logger, force=force)
     spec = _effective_step_spec_for_scene(spec, scene)
     options = _selector_options_for_part(spec, scene=scene)
     mesh_step_scene(
@@ -246,7 +257,7 @@ def _scene_for_regeneration(
         return spec, scene
 
     with (logger.timed(f"load STEP {spec.cad_ref}") if logger is not None else _null_context()):
-        scene = load_step_scene(spec.step_path)
+        scene = load_step_scene_cached(spec.step_path)
     inferred_kind = _infer_entry_kind(spec.step_path, scene)
     if inferred_kind != spec.kind:
         spec = replace(spec, kind=inferred_kind)
