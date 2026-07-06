@@ -58,7 +58,9 @@ def normalize_cad_path(raw_cad_path: str) -> str | None:
     normalized = str(raw_cad_path or "").replace("\\", "/").strip().strip("/")
     if not normalized:
         return None
-    for suffix in (".step", ".stp"):
+    # Strip generator suffixes first so a `<name>.step.py` entry target
+    # normalizes to the same logical cad path as its `<name>.step` output.
+    for suffix in (".step.py", ".stp.py", ".step", ".stp"):
         if normalized.lower().endswith(suffix):
             normalized = normalized[: -len(suffix)]
             break

@@ -745,6 +745,9 @@ def ensure_render_job_step_artifact(
         kind="part",
         source_path=input_path,
         step_path=step_path,
+        # A job input naming the .py generator must keep using the generator
+        # entry even when a same-stem exported .step exists beside it.
+        explicit_python=input_path.suffix.lower() == ".py",
     )
     try:
         ensure_artifact = load_ensure_step_topology_artifact()

@@ -14,14 +14,17 @@ The launcher lives in the CAD skill directory:
 python scripts/inspect {refs|diff|frame|measure|align|worker|batch} ...
 ```
 
-Inspection targets resolve from the command cwd; pass cwd-relative target paths. Common data-output flags: `--format json|text` (default is machine-readable), `--quiet`, `--verbose`.
+Inspection targets resolve from the command cwd; prefer cwd-relative target paths. Absolute paths are accepted when they point under the command cwd (they are relativized); an absolute path outside the cwd fails with an explicit error — run the command from the workspace that owns the artifact. Common data-output flags: `--format json|text` (default is machine-readable), `--quiet`, `--verbose`.
 
 Accepted target forms:
 
 ```text
 path/to/entry
 path/to/entry.step
+path/to/entry.step.py
 ```
+
+A `<name>.step.py` generator target resolves to the same entry as its logical `<name>.step`, and keeps resolving to the generator entry even when a same-stem exported `.step` file exists beside it.
 
 Selector refs are local to the STEP/CAD entry target passed to the command. They do not include file paths:
 

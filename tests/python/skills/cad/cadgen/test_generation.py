@@ -1787,7 +1787,9 @@ class CadGenerationTests(unittest.TestCase):
         self.assertIsNone(result.selector_bundle)
         self.assertGreaterEqual(validate_artifact.call_count, 1)
         load_scene.assert_called_once_with(step_path)
-        mesh_scene.assert_called_once()
+        # No sidecar outputs requested: the whole-scene mesh is skipped and the
+        # package build meshes exactly the components it emits.
+        mesh_scene.assert_not_called()
         self.assertEqual(1, len(package_calls))
 
     def test_generate_part_outputs_reuses_current_auto_topology_artifact_without_scene_load(self) -> None:
@@ -1883,7 +1885,9 @@ class CadGenerationTests(unittest.TestCase):
         self.assertIs(scene, result.scene)
         self.assertIsNone(result.selector_bundle)
         validate_artifact.assert_not_called()
-        mesh_scene.assert_called_once()
+        # No sidecar outputs requested: even a forced rebuild skips the
+        # whole-scene mesh; the package build re-meshes every component.
+        mesh_scene.assert_not_called()
         # force propagates into the package build (content-addressed cache bypass).
         self.assertEqual(1, len(package_calls))
         self.assertTrue(package_calls[0]["force"])

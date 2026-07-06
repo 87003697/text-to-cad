@@ -52,6 +52,11 @@ class ResolvedStepTarget:
     kind: str
     source_path: Path
     step_path: Path
+    # True when the caller explicitly targeted the Python generator (a `.py`
+    # path), as opposed to a `.step`/`.stp` file or a logical cad path. An
+    # explicit generator target must keep resolving to the generator entry even
+    # when a same-stem exported `.step` file exists beside it.
+    explicit_python: bool = False
 
 
 @dataclass(frozen=True)
@@ -109,14 +114,43 @@ def entry_target_from_target(target: str) -> EntryTarget:
     if parsed_tokens:
         raise CadRefError("Selector refs require an explicit STEP target argument.")
     raw_target = str(target or "").strip()
-    if _raw_step_path(raw_target) is not None:
-        normalized = normalize_cad_path(raw_target)
+    raw_file = _raw_step_path(raw_target)
+    if raw_file is not None:
+        try:
+            label_source = raw_file.relative_to(Path.cwd().resolve()).as_posix()
+        except ValueError:
+            # existing STEP file outside the cwd: keep it addressable, label by name
+            label_source = raw_file.name
+        normalized = normalize_cad_path(label_source)
         if normalized is not None:
             return EntryTarget(normalized)
-    normalized = normalize_cad_path(target)
+    normalized = normalize_cad_path(_cwd_relative_target(raw_target))
     if normalized is None:
         raise CadRefError(f"Invalid CAD entry target: {target}")
     return EntryTarget(normalized)
+
+
+def _cwd_relative_target(raw_target: str) -> str:
+    """Map an absolute filesystem target into the cwd-relative cad-path namespace.
+
+    Logical cad paths are cwd-relative; silently stripping the leading '/' from
+    an absolute path used to produce a bogus relative path ("Users/...") that
+    could never resolve. Relativize against the command cwd instead, and fail
+    loudly when the target lives outside it.
+    """
+    if not raw_target:
+        return raw_target
+    path = Path(raw_target).expanduser()
+    if not path.is_absolute():
+        return raw_target
+    try:
+        return path.resolve().relative_to(Path.cwd().resolve()).as_posix()
+    except ValueError:
+        raise CadRefError(
+            f"Absolute CAD target '{raw_target}' is outside the command cwd "
+            f"'{Path.cwd().resolve()}'. Run the command from the workspace that "
+            "owns the artifact, or pass a cwd-relative target path."
+        ) from None
 
 
 def step_path_from_target(target: str) -> Path:
@@ -140,6 +174,7 @@ def step_path_from_target(target: str) -> Path:
 def resolve_step_target(target: str) -> ResolvedStepTarget:
     entry_target = entry_target_from_target(target)
     cad_path = entry_target.cad_path
+    explicit_python = str(target or "").strip().lower().endswith(".py")
     raw_step_path = _raw_step_path(str(target or "").strip())
     if raw_step_path is not None:
         lookup_cad_path = _lookup_cad_path(cad_path)
@@ -169,6 +204,7 @@ def resolve_step_target(target: str) -> ResolvedStepTarget:
             kind=source.kind,
             source_path=source.source_path,
             step_path=source.step_path.resolve(),
+            explicit_python=explicit_python,
         )
     if source is not None:
         raise CadRefError(f"CAD target '{cad_path}' is not STEP-backed.")

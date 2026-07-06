@@ -386,6 +386,21 @@ def read_step_topology_bundle_from_glb(glb_path: Path) -> SelectorBundle | None:
 
 
 def read_step_topology_index_from_glb(glb_path: Path) -> dict[str, Any] | None:
+    # Dir-aware branch: a render package DIRECTORY carries its topology index
+    # as the package descriptor (assembly.json). The generated-model freshness
+    # gate (_generated_assembly_glb_closure_current) reads the recorded source
+    # closure through this path; without it every generated package re-ran
+    # gen_step and the full-scene mesh on every build. The hidden monolith GLB
+    # that used to embed this index was retired with the legacy artifact layer.
+    if glb_path.is_dir():
+        descriptor_path = glb_path / "assembly.json"
+        if not descriptor_path.is_file():
+            return None
+        try:
+            manifest = json.loads(descriptor_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            return None
+        return manifest if isinstance(manifest, dict) else None
     try:
         gltf, binary_offset, binary_length = _read_glb_json_and_bin_location(glb_path)
     except (OSError, ValueError, json.JSONDecodeError):

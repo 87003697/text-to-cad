@@ -1246,6 +1246,48 @@ def _artifact_step_hash_matches_spec(spec: EntrySpec, manifest: Mapping[str, obj
     return str(manifest.get("stepHash") or "").strip() == expected_hash
 
 
+def _package_descriptor_matches_spec(
+    spec: EntrySpec,
+    selector_options: SelectorOptions | None = None,
+) -> bool | None:
+    """Descriptor-based freshness for a component-GLB package directory.
+
+    Returns None when the entry's artifact is not a package (caller falls back
+    to the monolith-GLB validator). Packages carry no embedded selector/edge
+    views (selector topology is extracted on demand), so routing them through
+    the monolith validator always failed and every build re-ran gen_step plus
+    the full-scene mesh; validate against the package descriptor instead.
+    """
+    from cadgen._internal.component_package import is_assembly_package, read_package_descriptor
+
+    package_dir = render_package_dir(spec.entry_path)
+    if not is_assembly_package(package_dir):
+        return None
+    manifest = read_package_descriptor(package_dir)
+    if not isinstance(manifest, dict):
+        return False
+    if not _artifact_source_kind_matches_spec(spec, manifest):
+        return False
+    if not _artifact_step_hash_matches_spec(spec, manifest):
+        return False
+    mesh = manifest.get("mesh")
+    if not isinstance(mesh, Mapping):
+        return False
+    if selector_options is None:
+        selector_options = _selector_options_from_topology_manifest(spec, manifest)
+    if selector_options is None:
+        return False
+    return (
+        _mesh_values_match(
+            mesh,
+            linear_deflection=selector_options.linear_deflection,
+            angular_deflection=selector_options.angular_deflection,
+            relative=selector_options.relative,
+        )
+        and _edge_visibility_classes_match_manifest(manifest, selector_options)
+    )
+
+
 def _existing_topology_artifact_matches_spec_without_scene(
     spec: EntrySpec,
     *,
@@ -1253,6 +1295,9 @@ def _existing_topology_artifact_matches_spec_without_scene(
 ) -> bool:
     if spec.step_path is None or spec.kind not in {"part", "assembly"}:
         return False
+    package_match = _package_descriptor_matches_spec(spec)
+    if package_match is not None:
+        return package_match
     from cadgen.step_targets import (
         ResolvedStepTarget,
         StepTopologyArtifactError,
@@ -1296,6 +1341,9 @@ def _existing_topology_artifact_matches_spec_without_scene(
 def _existing_topology_artifact_matches_options(spec: EntrySpec, selector_options: SelectorOptions) -> bool:
     if spec.step_path is None or spec.kind not in {"part", "assembly"}:
         return False
+    package_match = _package_descriptor_matches_spec(spec, selector_options)
+    if package_match is not None:
+        return package_match
     from cadgen.step_targets import (
         ResolvedStepTarget,
         StepTopologyArtifactError,
@@ -1464,14 +1512,26 @@ def _generate_part_outputs(
         logger.debug(f"reused current GLB/topology: {_display_path(render_package_dir(spec.entry_path))}")
         return GeneratedStepResult(spec=spec, scene=scene)
 
-    with logger.timed(f"mesh STEP {spec.cad_ref}"):
-        mesh_step_scene(
-            scene,
-            linear_deflection=selector_options.linear_deflection,
-            angular_deflection=selector_options.angular_deflection,
-            relative=selector_options.relative,
-        )
-        scene_export_shape(scene)
+    # The whole-scene mesh is consumed ONLY by the single-file mesh sidecars
+    # (STL/3MF/native GLB). The render package meshes exactly the components it
+    # builds — build_component_glb_from_shape tessellates each MISSING component
+    # in its local frame, and a present <cid>.glb is reused without meshing —
+    # so a source edit re-tessellates only changed geometry instead of paying a
+    # full-scene mesh (plus a second per-component pass) on every build. The
+    # --step export serializes B-rep and needs no triangulation either.
+    needs_scene_mesh = any(
+        path is not None
+        for path in (spec.stl_path, spec.three_mf_path, spec.native_glb_path)
+    )
+    if needs_scene_mesh:
+        with logger.timed(f"mesh STEP {spec.cad_ref}"):
+            mesh_step_scene(
+                scene,
+                linear_deflection=selector_options.linear_deflection,
+                angular_deflection=selector_options.angular_deflection,
+                relative=selector_options.relative,
+            )
+            scene_export_shape(scene)
 
     jobs: list[_ArtifactJob] = []
 
@@ -1933,7 +1993,10 @@ def _assembly_glb_package_current(spec: EntrySpec) -> bool:
         return False
     from cadgen._internal.component_package import assembly_package_current
 
-    return assembly_package_current(spec.step_path)
+    # The render package is keyed by the ENTRY filename (`<name>.step.py` for a
+    # generated model), not the logical step path — keying by step_path checked
+    # a directory that never exists and forced a rebuild on every run.
+    return assembly_package_current(spec.entry_path)
 
 
 def _generated_child_is_stale(child_spec: EntrySpec, *, force: bool) -> bool:
