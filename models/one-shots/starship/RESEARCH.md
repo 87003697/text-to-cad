@@ -3,7 +3,7 @@
 > **Educational, non-functional public-source reconstruction. Not suitable for
 > manufacture, propulsion, testing, or operational engineering.**
 
-**Prepared:** July 2026. **Scope:** exterior-geometry / schematic-level facts only, for a non-functional educational model. Raptor engine internals are explicitly out of scope (covered by `models/spacex/raptor2/RESEARCH.md`). All facts from public online sources; each carries a source reference [S#], a source type (OFFICIAL / REG / EXPLAINER / WIKI-IDX / COMMUNITY), and a confidence rating.
+**Prepared:** July 2026. **Scope:** exterior-geometry / schematic-level facts only, for a non-functional educational model. Raptor engine internals are explicitly out of scope (covered by `models/one-shots/raptor2/RESEARCH.md`). All facts from public online sources; each carries a source reference [S#], a source type (OFFICIAL / REG / EXPLAINER / WIKI-IDX / COMMUNITY), and a confidence rating.
 
 **Method note:** `spacex.com/vehicles/starship` and `spacex.com/updates/starship-v3` were fetched directly and both render as empty JavaScript shells with no static content [S1][S2]. Official SpaceX figures are therefore cited as quoted/indexed by Wikipedia and by outlets that reproduce SpaceX's own update text (Leonard David's blog reproduces SpaceX's official Flight 7 upgrade text [S13]; Teslarati reproduces the official V3 update content [S14]). These are marked OFFICIAL-via-secondary.
 

@@ -20,7 +20,7 @@ imagery including two booster catches and two fully successful missions
   included angle), 3-ring payload bay (~614 m³), both header tanks in the
   nose, windward TPS with ablative backup layer (backup layer not visually
   modeled).
-- Engines are Raptor 2 family models from `models/spacex/raptor2` — the RVac is
+- Engines are Raptor 2 family models from `models/one-shots/raptor2` — the RVac is
   a documented schematic derivation (ε≈80 bell on the SL powerhead).
 
 ## V1 / Block 1 deltas (retired, Flights 1–6)

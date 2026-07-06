@@ -25,7 +25,7 @@ ring + ship along +Z. Units: millimeters, full scale. Windward side = -Y
 (TPS field); leeward = +Y. Cutaways open toward +Y.
 
 Raptor engines are linked subassemblies instanced from the sibling package
-`models/spacex/raptor2` (raptor2_common.build_exterior / build_vacuum_exterior);
+`models/one-shots/raptor2` (raptor2_common.build_exterior / build_vacuum_exterior);
 see INSTANCE_MAP.md for the per-engine placement table.
 """
 

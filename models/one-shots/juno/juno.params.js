@@ -1113,7 +1113,7 @@ export default {
   manifest: {
     schemaVersion: 1,
     step: {
-      path: "models/robots/juno/juno.step"
+      path: "models/one-shots/juno/juno.step"
     },
     label: "juno humanoid",
     description: "Walking-in-place march for the juno humanoid: alternating leg lift with planted stance feet, antiphase arm swing, torso counter-sway, and a head that keeps facing forward.",

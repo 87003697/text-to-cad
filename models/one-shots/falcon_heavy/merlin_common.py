@@ -64,7 +64,7 @@ THROAT_RADIUS = 130.0
 EXPANSION_RATIO = (EXIT_RADIUS / THROAT_RADIUS) ** 2   # ~16 effective. LOW
 
 # Vendored copy for the Falcon Heavy vehicle assembly (source of truth:
-# models/spacex/merlin1d/merlin_common.py). Two vehicle-driven adjustments:
+# models/one-shots/merlin1d/merlin_common.py). Two vehicle-driven adjustments:
 # 1) Cluster-fit refinement: nine bells inside a 3.66 m octaweb circle bound
 #    the exit to <= ~1.0 m (2*r_c*sin(22.5deg) >= exit dia with
 #    r_c <= 1830 - exit/2), so the vehicle copy uses 960 mm exit / 240 mm

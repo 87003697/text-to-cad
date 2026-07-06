@@ -5,7 +5,7 @@
 
 A museum/documentary-style full-vehicle CAD package of the SpaceX Falcon
 Heavy, built exclusively from public sources and **reusing the Merlin 1D
-package** (`models/spacex/merlin1d/`) as a linked subassembly: 27 sea-level
+package** (`models/one-shots/merlin1d/`) as a linked subassembly: 27 sea-level
 Merlin instances in three 8-around-1 octaweb clusters, plus a Merlin Vacuum
 derivative on the second stage. Everything proprietary (tank walls, weld
 schedules, separation internals, avionics, COPV counts/placement, feed
@@ -19,7 +19,7 @@ schematic, translucent, labeled placeholders.
 | `falcon_heavy.step.py` | Full stack: three cores (white livery, black interstage, soot-tone bands, decal panels), 27 linked Merlin 1D engines, side-booster nosecones, grid fins, stowed landing legs, raceways + clamps, attach hardware, MVac second stage, 5.2 m fairing |
 | `falcon_heavy_cutaway.step.py` | Center core + S2 + fairing sectioned 270° (opening +Y): schematic LOX/RP-1 volumes (blue/amber), transfer tube, domes, COPV-like placeholders, octaweb frames, avionics + separation placeholders, payload adapter + payload placeholder |
 | `falcon_heavy_exploded.step.py` | Boosters outboard, stage/fairing lifted, guide rods |
-| `falcon_common.py` / `merlin_common.py` | Vehicle library + vendored linked engine library (source of truth: `models/spacex/merlin1d/merlin_common.py`) |
+| `falcon_common.py` / `merlin_common.py` | Vehicle library + vendored linked engine library (source of truth: `models/one-shots/merlin1d/merlin_common.py`) |
 
 Exports beside each entry: `.step`, `.iges`, `.stl`, `.obj`, `.glb`
 (native parametric source = the `.step.py`). Helpers: `export_extras.py`,

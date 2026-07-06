@@ -16,15 +16,15 @@ text files.
 - [implicits/](implicits/README.md): browser-native implicit CAD examples.
 - [mechanisms/](mechanisms/README.md): flattened mechanism STEP demos and
   generated render sidecars.
-- [one-shots/](one-shots/README.md): single-session generative CAD concepts
-  with viewer parameter/animation sidecars.
+- [one-shots/](one-shots/README.md): single-session generative CAD models —
+  flat concept generators with viewer parameter/animation sidecars, the
+  educational public-source SpaceX reconstruction packages (Raptor 2,
+  Merlin 1D, Falcon Heavy, Starship), and the juno/lyra robot description
+  packages.
 - [robots/](robots/README.md): URDF/SRDF robot fixtures, meshes, printable
   outputs, and selected robot STEP sources.
 - [simple/](simple/README.md): compact build123d generators and STEP outputs
   for basic parts.
-- [spacex/](spacex/README.md): educational public-source SpaceX
-  reconstructions (Raptor 2, Merlin 1D, Merlin Vacuum, Falcon Heavy) with
-  research/provenance docs; non-functional, not for manufacture.
 
 The larger `mechbench/` and `mechbench2/` external datasets are intentionally
 not included in this committed fixture tree.

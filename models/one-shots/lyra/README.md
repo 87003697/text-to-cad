@@ -69,10 +69,10 @@ Units mm. RIGHT hand: the wrist-flange mount face center is the origin,
 +Z distal (fingers up), +Y palmar, +X radial (thumb side). Every link frame
 sits at its joint center with axes parallel to the palm at zero angles
 (URDF joints are pure translations). Positive joint angles flex/curl.
-Regenerate with the CAD skill: `python scripts/step models/robots/lyra/lyra.py`.
+Regenerate with the CAD skill: `python scripts/step models/one-shots/lyra/lyra.py`.
 Regenerate link meshes per link with the CAD skill, e.g.
-`python scripts/step models/robots/lyra/STEP/<link>.py --3mf ../3MF/<link>.3mf`.
+`python scripts/step models/one-shots/lyra/STEP/<link>.py --3mf ../3MF/<link>.3mf`.
 Edit the robot description directly in `lyra.urdf` / `lyra.srdf`, then
 validate with the URDF/SRDF skills:
-`python scripts/validate models/robots/lyra/lyra.urdf`
-and `python scripts/validate models/robots/lyra/lyra.srdf`.
+`python scripts/validate models/one-shots/lyra/lyra.urdf`
+and `python scripts/validate models/one-shots/lyra/lyra.srdf`.

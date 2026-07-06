@@ -65,10 +65,10 @@ Hands add posed (cosmetic) finger articulation on top of the 27 counted DOF.
 
 Units mm. Pelvis waist-yaw joint center is the world origin; +X forward,
 +Y robot-left, +Z up. Soles rest near z = -774 in the default stance.
-Regenerate with the CAD skill: `python scripts/step models/robots/juno/juno.py`.
+Regenerate with the CAD skill: `python scripts/step models/one-shots/juno/juno.py`.
 Regenerate link meshes per link with the CAD skill, e.g.
-`python scripts/step models/robots/juno/STEP/<link>.py --3mf ../3MF/<link>.3mf`.
+`python scripts/step models/one-shots/juno/STEP/<link>.py --3mf ../3MF/<link>.3mf`.
 Edit the robot description directly in `juno.urdf` / `juno.srdf`, then
 validate with the URDF/SRDF skills:
-`python scripts/validate models/robots/juno/juno.urdf`
-and `python scripts/validate models/robots/juno/juno.srdf`.
+`python scripts/validate models/one-shots/juno/juno.urdf`
+and `python scripts/validate models/one-shots/juno/juno.srdf`.

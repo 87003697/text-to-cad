@@ -358,7 +358,7 @@ export default {
   manifest: {
     schemaVersion: 1,
     step: {
-      path: "models/robots/lyra/lyra.step"
+      path: "models/one-shots/lyra/lyra.step"
     },
     label: "lyra dexterous hand",
     description: "16-DOF humanoid right hand: pose tour, power grasp, precision pinch with pad taps, finger ripple, and counting, all driven by per-frame chain FK against the baked relaxed pose.",

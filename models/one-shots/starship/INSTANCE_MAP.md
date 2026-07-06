@@ -4,7 +4,7 @@
 > manufacture, propulsion, testing, or operational engineering.**
 
 
-Linked subassemblies from `models/spacex/raptor2` (raptor2_common). Coordinates are
+Linked subassemblies from `models/one-shots/raptor2` (raptor2_common). Coordinates are
 stage-local (mm): booster engines in booster frame (aft plane Z=0), ship engines
 in ship frame; in the stack the ship frame sits at Z=+71,000 mm (69,200 body +
 1,800 ring). Azimuth = engine local +X (turbopump axis) heading. Ring radii are
