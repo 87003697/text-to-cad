@@ -2,7 +2,7 @@
 
 > **Educational, non-functional public-source reconstruction. Not suitable for manufacture, propulsion, testing, or operational engineering.**
 
-Linked source model: `models/spacex/merlin1d/` (vendored parametric library `merlin_common.py`, reduced decorative detail for instancing; cluster-fit exit 960 mm — see DIMENSIONS.md). Octaweb pattern: 8 outer engines on a 1290 mm circle + 1 center per core, outer turbopumps oriented tangentially. Generated from the live assembly.
+Linked source model: `models/one-shots/merlin1d/` (vendored parametric library `merlin_common.py`, reduced decorative detail for instancing; cluster-fit exit 960 mm — see DIMENSIONS.md). Octaweb pattern: 8 outer engines on a 1290 mm circle + 1 center per core, outer turbopumps oriented tangentially. Generated from the live assembly.
 
 | # | Instance | X (mm) | Y (mm) | Z exit (mm) |
 |---|---|---|---|---|

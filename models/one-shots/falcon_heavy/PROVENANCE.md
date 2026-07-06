@@ -12,7 +12,7 @@ Citations in [RESEARCH.md](RESEARCH.md); per-part inventory in
 | Component group | Sources | Type | Confidence | Geometry status |
 |---|---|---|---|---|
 | Overall envelope (70 m × 12.2 m, core 3.66 m, fairing 5.2×13.1 m) | SpaceX FH page / User's Guide | official | High | measured (scale only) |
-| `merlin1d_instance_*` ×27 | linked from `models/spacex/merlin1d/` (vendored `merlin_common.py`); its PROVENANCE.md applies per instance; reduced decorative detail; cluster-fit exit 960 mm | linked model | per linked docs | linked subassembly |
+| `merlin1d_instance_*` ×27 | linked from `models/one-shots/merlin1d/` (vendored `merlin_common.py`); its PROVENANCE.md applies per instance; reduced decorative detail; cluster-fit exit 960 mm | linked model | per linked docs | linked subassembly |
 | `*_engine_cluster__octaweb_9x` layout | "octaweb" publicly named (SpaceX/NASA); outer circle radius cluster-fit derived; tangential pump orientation inferred from packing | official (pattern) + derived | Medium (pattern), Low (radius/orientation) | photogrammetric estimate |
 | `mvac_engine__linked_derivative_schematic` | Merlin powerhead linked; 165:1 nozzle official (User's Guide); niobium skirt public; exit 2.4–3.3 m conflicting → 2.9 m schematic | official (facts) + estimate (shape) | Medium/Low | schematic derivative |
 | Tank barrels, white livery, black interstage, nosecones | SpaceX photos (Flickr/Commons), User's Guide figure | official imagery | Medium (form), Low (stations) | photogrammetric estimate |

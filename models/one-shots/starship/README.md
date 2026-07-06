@@ -7,7 +7,7 @@ A museum/documentary-style CAD package of the full Starship / Super Heavy
 launch system, pinned to **V2 / Block 2** (as flown Flights 7–11, 2025) and
 reconstructed exclusively from public sources. The 39 Raptor engines are
 **linked subassemblies** instanced from the sibling
-[`models/spacex/raptor2`](../raptor2/README.md) package (33 sea-level on the
+[`models/one-shots/raptor2`](../raptor2/README.md) package (33 sea-level on the
 booster, 3 sea-level + 3 derived Raptor Vacuum on the ship). Everything
 proprietary (tank wall construction, feedline routing, flap/fin actuation,
 TPS attachment, avionics, engine mounts, valve/manifold detail) is deliberately
