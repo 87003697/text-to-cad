@@ -16,6 +16,8 @@ text files.
 - [implicits/](implicits/README.md): browser-native implicit CAD examples.
 - [mechanisms/](mechanisms/README.md): flattened mechanism STEP demos and
   generated render sidecars.
+- [one-shots/](one-shots/README.md): single-session generative CAD concepts
+  with viewer parameter/animation sidecars.
 - [robots/](robots/README.md): URDF/SRDF robot fixtures, meshes, printable
   outputs, and selected robot STEP sources.
 - [simple/](simple/README.md): compact build123d generators and STEP outputs
