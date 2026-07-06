@@ -18,3 +18,7 @@ benchmark fixtures and are not expected to form a systematic test suite.
 
 Avoid adding screenshots, videos, throwaway slicer profiles, or timestamped
 review captures here.
+
+## Subdirectories
+
+SpaceX reconstruction packages moved to [../spacex/](../spacex/README.md).
