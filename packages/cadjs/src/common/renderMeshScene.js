@@ -651,9 +651,16 @@ export function renderJobContext(meshData, job = {}) {
   const sceneScale = resolveRenderSceneScale(job, meshData);
   const sourceKind = String(job.resolved?.kind || job.kind || meshData?.sourceFormat || "").trim().toLowerCase();
   const stepDisplayEnabled = sourceKind === "step" || sourceKind === "stp";
-  const displaySettings = stepDisplayEnabled
-    ? normalizeDisplaySettings(job.display)
-    : normalizeDisplaySettings({ projection: CAMERA_PROJECTION.PERSPECTIVE });
+  const displaySettings = normalizeDisplaySettings(stepDisplayEnabled ? job.display : undefined);
+  // Projection is a theme trait (Light/Dark are orthographic, stage themes
+  // perspective); an explicit job display projection still overrides it, and
+  // non-STEP sources keep their historical perspective framing.
+  const projection = normalizeCameraProjection(
+    job.display?.projection,
+    stepDisplayEnabled
+      ? normalizeCameraProjection(theme?.projection, CAMERA_PROJECTION.ORTHOGRAPHIC)
+      : CAMERA_PROJECTION.PERSPECTIVE
+  );
   const displayMode = displaySettings.mode;
   const bounds = meshData.bounds || boundsFromVertices(meshData.vertices || []);
   const outputs = toArray(job.outputs).length ? toArray(job.outputs) : [{ path: job.output || "", camera: job.camera || "iso" }];
@@ -712,6 +719,7 @@ export function renderJobContext(meshData, job = {}) {
     sourceKind,
     stepDisplayEnabled,
     displaySettings,
+    projection,
     displayMode,
     wireframeMode,
     edgesVisible,
@@ -994,7 +1002,7 @@ export async function captureModel(viewport, captureOptions = {}) {
     syncScreenSpaceLineMaterialResolution(viewport.model.runtime.screenSpaceLineMaterials, width, height);
     const cameraSpec = output.camera || job.camera || "iso";
     const displayProjection = normalizeCameraProjection(
-      context.displaySettings?.projection,
+      context.projection,
       CAMERA_PROJECTION.ORTHOGRAPHIC
     );
     const usePerspectiveCamera = displayProjection === CAMERA_PROJECTION.PERSPECTIVE ||
