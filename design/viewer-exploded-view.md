@@ -86,9 +86,10 @@ view as an editable, ordered list of per-component moves.** Concretely:
 1. **No per-component control.** You cannot say "these two turbopumps go
    out ±X, the nozzle goes down −Z, the gimbal goes up +Z". The only knobs
    are one axis for *everything* or a radial bloom for *everything*. The
-   repo itself documents the workaround: `models/spacex/raptor2/
-   raptor2_exploded.step.py` hand-authors a per-group offset table
-   (`OFFSETS = {nozzle: (0,0,-650), ox_turbopump: (380,0,120), …}`) plus
+   repo itself documents the workaround:
+   `models/spacex/raptor2/raptor2_exploded.step.py` hand-authors a
+   per-group offset table (`OFFSETS = {nozzle_bell_group: (0,0,-650),
+   ox_turbopump_group: (380,0,120), …}`) plus
    translucent guide rods — i.e. contributors rebuilt explode *steps* and
    *explode lines* as separate STEP models because the viewer cannot
    express them. Same pattern in `starship_exploded.step.py`,
@@ -121,10 +122,102 @@ view as an editable, ordered list of per-component moves.** Concretely:
 
 ## 3. How professional tools model exploded views
 
-*(Research summary — placeholder, to be filled from the web-research pass:
-SolidWorks / Onshape / Fusion 360 step model, manipulators, trails,
-animation; viewer-style sliders in eDrawings / Autodesk Viewer /
-model-viewer; auto-explode literature.)*
+Survey of SolidWorks, Onshape, Fusion 360, Inventor, FreeCAD 1.x, and
+viewer-class tools (eDrawings, Autodesk/APS Viewer, Babylon/three.js).
+Sources in §6. Two sharply distinct designs exist:
+
+### 3.1 Authoring tools: an exploded view is a document of ordered steps
+
+Every authoring CAD tool converges on the same model:
+
+- **Persistent named views.** SolidWorks stores `ExplView` features per
+  configuration (multiple per configuration, copyable between them);
+  Onshape keeps named exploded views in an assembly panel, spanning all
+  configurations, with step distances linkable to configuration variables;
+  Inventor uses a separate presentation (`.ipn`) file with snapshot views +
+  storyboards; FreeCAD 1.x keeps `Exploded_View` objects holding `Move`
+  objects. Fusion is the outlier in *location* (exploded views live in the
+  Animation workspace as storyboard timelines) but not in *shape* — still
+  an ordered list of recorded per-component actions.
+- **Steps.** Each step = one movement of one-or-more components:
+  translate along a direction, rotate about an axis (SolidWorks 2019+
+  regular steps carry both), or a **radial step** (SolidWorks) that pushes
+  a bolt circle outward about an axis in one step. Steps are named,
+  reordered by dragging, deleted, and edited numerically (exact distance /
+  angle typed in).
+- **Authoring gesture.** Universally: select components → a **triad/gizmo
+  appears** → drag an arm to displace → a step is recorded → refine the
+  number. Direction defaults to the assembly axes but can be taken from
+  geometry (SolidWorks: drag the triad ball onto a face to align with its
+  normal; FreeCAD: align dragger to part origin or selected geometry;
+  legacy Inventor auto-explode took directions from **mate constraints** —
+  bolts "unscrew" along their insert axis).
+- **Sub-assemblies move as units by default**, with explicit opt-in to
+  reach inside; SolidWorks additionally supports **"Reuse Subassembly
+  Explode"** — importing the sub-assembly's own exploded view as steps of
+  the parent's.
+- **Explode lines are part of the artifact.** SolidWorks: a 3D "explode
+  line sketch" with route/jog lines plus auto "Smart Explode Lines"
+  (2021+); Onshape: auto per-step lines, centroid-anchored, **on by
+  default**; Inventor: first-class editable "trails"; Fusion: trail-line
+  visibility toggle on explode actions.
+- **Animation is derived from the steps.** Animate explode/collapse plays
+  the step list (optionally reversed); Fusion's manual explode
+  distinguishes **one-step** (simultaneous) vs **sequential** explosions.
+  Drawings reference a named exploded view/snapshot rather than a live
+  slider state.
+- **No authoring tool has a global "explode amount" slider.** The closest
+  are per-step spacing sliders (SolidWorks auto-space) and Fusion's
+  auto-explode "explosion scale" parameter. Scrubbing is step-sequence
+  playback (Onshape's rollback bar, eDrawings' step slider).
+
+### 3.2 Viewers: a scalar slider over a centroid heuristic
+
+Viewer-class tools have no authored data, so they synthesize the explode
+from one scalar: Autodesk/APS Viewer's explode slider displaces each
+fragment along the (model-center → fragment-center) ray scaled by the
+slider; Babylon.js ships this verbatim as `MeshExploder`; three.js
+tutorials all reimplement it. Its documented failure modes are exactly the
+class of complaints against our implementation:
+
+1. non-physical directions (a screw exits sideways, not along its axis);
+2. concentric/coaxial parts get zero or arbitrary direction;
+3. mid-explode interpenetration (no blocking/contact awareness);
+4. sub-assembly internals scatter when the tree is ignored — hence APS's
+   hierarchy-aware `explodeStrategy` and commercial tools' level-wise
+   explode (children move with parents, displacement damped by depth);
+5. radial-from-center is useless for elongated models — hence APS blog
+   customizations for "vertical explode" / "explode along levels".
+
+Our axis mode is essentially a hand-rolled "vertical explode"
+customization and our radial mode a hierarchy-grouped `MeshExploder`; the
+wonkiness is inherent to this algorithm class, not a tuning problem.
+
+### 3.3 Auto-explode, where it exists
+
+Production auto-explode is assistive, not the primary model: SolidWorks
+auto-spaces components equally along a dragged axis (ordering by bounding
+box) and offers the one-step radial explode; Fusion's Auto Explode
+(one level / all levels) respects hierarchy levels with a scale slider and
+an undocumented outward-direction heuristic; Inventor's legacy
+constraint-driven auto-explode (directions from mates, cumulative distance
+per depth) was **removed** in 2017 in favor of manual tweaks. The research
+literature (Li et al., SIGGRAPH 2008 "Automated Generation of Interactive
+3D Exploded View Diagrams") computes an **explosion graph** from part
+contacts and blocking constraints, giving physically-plausible directions,
+ordering, and interlocking handling — the north star if we later want
+contact-aware auto-explode.
+
+### 3.4 Cross-tool summary
+
+| Aspect | SolidWorks | Onshape | Fusion 360 | Inventor | Viewers (APS etc.) |
+|---|---|---|---|---|---|
+| Persistence | `ExplView` per configuration | Named views, cross-configuration | Animation storyboards | `.ipn` snapshot views + storyboards | none (slider state) |
+| Step model | Ordered steps; translate+rotate; radial | Ordered steps; translate/rotate | Timeline actions | Tweaks on a timeline | single scalar |
+| Direction source | Triad; face normal; radial axis | Triad; reselectable axis | Axis arrows; auto heuristic | Triad; (legacy) mate axes | center-to-part ray |
+| Auto explode | Auto-space, radial step | none | One/all levels + scale | removed 2017 | the whole mechanism |
+| Explode lines | Sketch + Smart Explode Lines | Auto per step, default on | Trail toggle | First-class trails | none |
+| Global slider | no | no (step rollback) | only as auto-explode param | no | yes — primary UX |
 
 ## 4. Proposed design
 
@@ -160,6 +253,11 @@ A serializable `explodedView` document, per file, versioned:
   trails: true                            // explode lines, auto-routed
 }
 ```
+
+This is the SolidWorks/Onshape step model with viewer-grade evaluation on
+top. `order` mirrors Fusion's one-step vs sequential explosions; `trails`
+follows Onshape's default-on auto explode lines (per-step override can come
+later).
 
 Semantics:
 
@@ -215,7 +313,16 @@ with the heuristics upgraded where they are wonky today:
 
 The generated steps are ordinary steps: the user can then delete, retarget,
 re-axis, or renumber them. Auto-explode is a seeding action ("Auto
-explode"), re-runnable, not a live mode that fights manual edits.
+explode"), re-runnable, not a live mode that fights manual edits. Recursion
+into sub-assemblies plays the role of SolidWorks' "Reuse Subassembly
+Explode": inner explodes become ordinary nested steps of the outer view.
+
+Bounds + occurrence tree is deliberately the whole input for now. The
+contact/blocking-constraint approach (Li et al., SIGGRAPH 2008; legacy
+Inventor's mate-driven directions) produces the best directions but needs
+interference analysis we don't compute at view time; it slots in later as a
+better generator behind the same step interface, likely as a cadgen-side
+precomputation stored with package topology artifacts.
 
 ### 4.3 Layer 3 — viewer UX
 
@@ -223,10 +330,12 @@ Move explode out of the theme popover into a first-class **Explode mode**
 (floating-toolbar entry, like Select/Draw):
 
 - **Explode amount slider, 0–100%**, always visible in the mode — the
-  universally-understood viewer control (eDrawings/Autodesk Viewer style),
-  scrubbing evaluator progress. Replaces "spacing" as the primary slider;
-  a small "gap scale" stays in advanced settings and simply scales
-  generated step distances.
+  universally-understood viewer control (Autodesk Viewer's explode slider,
+  eDrawings' step scrub), driving evaluator progress. With
+  `order: "sequential"` the same slider walks the step sequence, which is
+  exactly eDrawings' behavior over authored SolidWorks steps. Replaces
+  "spacing" as the primary slider; a small "gap scale" stays in advanced
+  settings and simply scales generated step distances.
 - **Auto explode button** with the axis/radial presets (hints to the
   generator), plus Reset/Collapse.
 - **Step list panel** (in the file sheet next to the STEP tree): ordered
@@ -271,6 +380,65 @@ Each phase is independently shippable; Phase 1+2 alone remove the main
 "wonky" complaints (serialized coplanar parts, sideways gear scatter,
 unscrubable explode, opaque spacing).
 
-## 5. Sources
+## 5. What this buys, concretely
 
-*(Placeholder — filled from the research pass.)*
+- The raptor2/starship/merlin1d/falcon_heavy `*_exploded.step.py` pattern
+  (a duplicated model per exploded presentation) becomes a small explode
+  document next to the base model — reviewable, diffable, animatable, and
+  usable by snapshot jobs without geometry duplication.
+- Agents get a format they can author reliably: named targets + axis +
+  millimeters, instead of reverse-engineering what `spacing: 1.45` will do
+  to a given assembly.
+- The default un-authored experience improves immediately (Phase 2): no
+  more serialized bolt circles or sideways gear scatter.
+- Humans reviewing a model get the two controls that actually matter:
+  a scrub slider and per-part drag.
+
+## 6. Sources
+
+Compiled 2026-07-06 from vendor documentation and tutorials
+(search-indexed content; key claims cross-checked across at least two
+sources where possible).
+
+- SolidWorks exploded views, steps, configurations:
+  https://help.solidworks.com/2024/English/solidworks/sldworks/c_Exploded_Views_in_Assemblies.htm
+- SolidWorks reuse of sub-assembly explode:
+  https://help.solidworks.com/2024/English/solidworks/sldworks/t_using_subassembly_exploded_view.htm
+- SolidWorks auto-space components:
+  https://help.solidworks.com/2022/english/Solidworks/sldworks/t_Auto-Spacing_Components.htm
+- SolidWorks radial explode:
+  https://www.goengineer.com/blog/create-radial-explode-solidworks
+- SolidWorks explode line sketch / smart explode lines:
+  https://help.solidworks.com/2021/english/SolidWorks/sldworks/t_adding_explode_lines.htm,
+  https://www.goengineer.com/blog/smart-explode-lines-in-solidworks-explained
+- eDrawings exploded-view playback slider:
+  https://help.solidworks.com/2023/English/eDrawings/t_Exploded_Views.htm
+- Onshape exploded views (steps, rollback bar, auto explode lines,
+  configuration-linked distances):
+  https://cad.onshape.com/help/Content/Assembly/exploded_views.htm
+- Fusion 360 exploded views in the Animation workspace:
+  https://www.autodesk.com/support/technical/article/caas/sfdcarticles/sfdcarticles/How-to-create-an-exploded-view-drawing-in-Fusion-360.html
+- Fusion Auto Explode one/all levels:
+  https://help.autodesk.com/view/fusion360/ENU/?guid=ANI-EXPLODE-ONE-LEVEL,
+  https://help.autodesk.com/view/fusion360/ENU/?guid=ANI-EXPLODE-ALL-LEVELS
+- Fusion manual explode (one-step vs sequential):
+  https://help.autodesk.com/cloudhelp/ENU/Fusion-Animate/files/ANI-EXPLODE-MANUAL.htm
+- Inventor presentations (tweaks, trails, snapshot views, storyboards):
+  https://help.autodesk.com/cloudhelp/2026/ENU/Inventor-Help/files/GUID-2A480981-2E53-4408-BFA9-290C14F03C95.htm
+- Inventor legacy constraint-driven Auto Explode (removed 2017):
+  https://help.autodesk.com/cloudhelp/2016/ENU/Inventor-Help/files/GUID-873A362E-843F-44A0-AA6F-5882C24CC632.htm,
+  https://www.autodesk.com/support/technical/article/caas/sfdcarticles/sfdcarticles/Auto-Explode-Removed-from-inventor-2017-Presentations.html
+- FreeCAD 1.x Assembly exploded views:
+  https://reqrefusion.github.io/FreeCAD-Documentation-html/wiki/Assembly_CreateView.html
+- Autodesk/APS Viewer explode slider + extension + customizations:
+  https://aps.autodesk.com/en/docs/viewer/v6/reference/Extensions/ExplodeExtension,
+  https://aps.autodesk.com/blog/selective-explode-viewer,
+  https://aps.autodesk.com/blog/view-each-floor-using-vertical-explode,
+  https://aps.autodesk.com/blog/explode-along-levels
+- Babylon.js MeshExploder (canonical scalar radial explode):
+  https://doc.babylonjs.com/features/featuresDeepDive/mesh/meshExploder/
+- Li, Agrawala, Curless, Salesin — "Automated Generation of Interactive 3D
+  Exploded View Diagrams", SIGGRAPH 2008:
+  https://grail.cs.washington.edu/projects/exview3D/
+- Constraint/interference-based disassembly + exploded view generation:
+  https://ieeexplore.ieee.org/document/8374185/
