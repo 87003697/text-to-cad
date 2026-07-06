@@ -148,10 +148,11 @@ def _rvac_engine() -> Compound:
     return _RVAC_ENGINE
 
 
-def _engine_instance(base: Compound, label: str, x: float, y: float, az_deg: float) -> Compound:
-    inst = base.moved(Location((x, y, 0.0), (0, 0, az_deg)))
-    inst.label = label
-    return inst
+def _engine_instance(base: Compound, label: str, x: float, y: float, az_deg: float) -> tuple:
+    # (prototype, placement, name) for cadgen.compound_from_instances: shares
+    # the prototype geometry instead of build123d .moved()'s per-instance
+    # deep copy of the whole engine.
+    return (base, Location((x, y, 0.0), (0, 0, az_deg)), label)
 
 
 def booster_engine_positions() -> list[tuple[str, float, float, float, bool]]:
@@ -193,21 +194,29 @@ def ship_engine_positions() -> list[tuple[str, str, float, float, float]]:
 
 
 def make_booster_engines() -> Compound:
+    from cadgen import compound_from_instances
+
     base = _sl_engine()
-    parts = [
+    placements = [
         _engine_instance(base, label, x, y, az)
         for label, x, y, az, _gimbal in booster_engine_positions()
     ]
-    return _group("booster_engine_cluster__33_raptor_sl_instances", parts)
+    return compound_from_instances(
+        "booster_engine_cluster__33_raptor_sl_instances", placements
+    )
 
 
 def make_ship_engines() -> Compound:
+    from cadgen import compound_from_instances
+
     sl, rvac = _sl_engine(), _rvac_engine()
-    parts = [
+    placements = [
         _engine_instance(sl if variant == "sl" else rvac, label, x, y, az)
         for label, variant, x, y, az in ship_engine_positions()
     ]
-    return _group("ship_engine_bay__3_sl_3_rvac_instances", parts)
+    return compound_from_instances(
+        "ship_engine_bay__3_sl_3_rvac_instances", placements
+    )
 
 
 # ---------------------------------------------------------------------------

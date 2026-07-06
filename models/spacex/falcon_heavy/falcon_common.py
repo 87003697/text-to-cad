@@ -126,21 +126,32 @@ def engine_prototype() -> Compound:
 
 
 def make_engine_cluster(core_x: float, core_tag: str) -> Compound:
-    """Octaweb 8-around-1; outer pumps oriented tangentially to clear neighbors."""
+    """Octaweb 8-around-1; outer pumps oriented tangentially to clear neighbors.
+
+    Instances share the prototype geometry via cadgen.compound_from_instances
+    (O(1) OCCT placements); build123d .moved() deep-copies the ~70-solid
+    engine per instance, which dominated stack compose time.
+    """
+    from cadgen import compound_from_instances
+
     proto = engine_prototype()
-    engines = []
-    center = proto.moved(Location((core_x, 0, 0), (0, 0, 90)))
-    center.label = f"merlin1d_instance_{core_tag}_center__linked"
-    engines.append(center)
+    placements = [
+        (proto, Location((core_x, 0, 0), (0, 0, 90)),
+         f"merlin1d_instance_{core_tag}_center__linked"),
+    ]
     for i in range(8):
         az = i * 45.0
         a = radians(az)
-        inst = proto.moved(
-            Location((core_x + OCTAWEB_R * cos(a), OCTAWEB_R * sin(a), 0), (0, 0, az + 90))
+        placements.append(
+            (
+                proto,
+                Location((core_x + OCTAWEB_R * cos(a), OCTAWEB_R * sin(a), 0), (0, 0, az + 90)),
+                f"merlin1d_instance_{core_tag}_outer_{i + 1}__linked",
+            )
         )
-        inst.label = f"merlin1d_instance_{core_tag}_outer_{i + 1}__linked"
-        engines.append(inst)
-    return _grp(f"{core_tag}_engine_cluster__octaweb_9x_merlin1d", engines)
+    return compound_from_instances(
+        f"{core_tag}_engine_cluster__octaweb_9x_merlin1d", placements
+    )
 
 
 def make_mvac() -> Compound:
