@@ -1203,12 +1203,6 @@ export default function CadWorkspace({
       mode: nextMode
     }));
   }, [updateDisplaySettings]);
-  const updateDisplayProjection = useCallback((nextProjection) => {
-    updateDisplaySettings((current) => ({
-      ...normalizeDisplaySettings(current),
-      projection: nextProjection
-    }));
-  }, [updateDisplaySettings]);
   const updateImplicitGraphicsSettings = useCallback((nextValue) => {
     setImplicitGraphicsSettings((current) => normalizeImplicitGraphicsSettings(
       typeof nextValue === "function" ? nextValue(current) : nextValue
@@ -3309,6 +3303,15 @@ export default function CadWorkspace({
       };
     });
   }, [customThemePresets, handlePersistenceWriteError, themePresetId]);
+
+  // Projection is a theme trait; the viewport toolbar edits it as a live
+  // theme-settings draft, the same as any appearance-editor change.
+  const updateThemeProjection = useCallback((nextProjection) => {
+    updateThemeSettings((current) => ({
+      ...current,
+      projection: nextProjection
+    }));
+  }, [updateThemeSettings]);
 
   const handleResetThemeSettings = useCallback(() => {
     const activeThemePreset = availableThemePresets.find((preset) => preset.id === themePresetId);
@@ -8390,7 +8393,7 @@ export default function CadWorkspace({
           viewerPerspectiveRef={activePerspectiveRef}
           themeSettings={resolvedThemeSettings}
           displaySettings={renderDisplaySettings}
-          onProjectionChange={isStepView ? updateDisplayProjection : undefined}
+          onProjectionChange={isStepView ? updateThemeProjection : undefined}
           onDisplayModeChange={isStepView ? updateDisplayMode : undefined}
           previewMode={previewMode}
           viewportFrameInsets={viewportFrameInsets}
@@ -8569,8 +8572,8 @@ export default function CadWorkspace({
                 handleSelectTabToolMode={handleSelectTabToolMode}
                 displayMode={isStepView ? displaySettings.mode : undefined}
                 onDisplayModeChange={isStepView ? updateDisplayMode : undefined}
-                projection={isStepView ? displaySettings.projection : undefined}
-                onProjectionChange={isStepView ? updateDisplayProjection : undefined}
+                projection={isStepView ? resolvedThemeSettings.projection : undefined}
+                onProjectionChange={isStepView ? updateThemeProjection : undefined}
                 viewerLoading={viewerLoading}
                 selectedMeshData={selectedMeshData}
                 selectedDxfData={selectedDxfData}

@@ -399,8 +399,11 @@ export default function CadRenderPane({
   const dxfMeshPreviewReady = dxfMode && activeDxfViewMode === "3d" && dxf3dAvailable;
   const activeMeshData = dxfMeshPreviewReady ? selectedDxfMeshData : selectedMeshData;
   const stepDisplaySettingsActive = renderFormat === RENDER_FORMAT.STEP && !!displaySettings && !dxfMode && !pathPreviewMode;
+  // Projection is a theme trait now; STEP views take it from the active theme
+  // (Light/Dark are orthographic, stage themes perspective), everything else
+  // keeps its historical perspective framing.
   const cadProjection = stepDisplaySettingsActive
-    ? normalizeCameraProjection(displaySettings.projection)
+    ? normalizeCameraProjection(themeSettings?.projection)
     : CAMERA_PROJECTION.PERSPECTIVE;
   const activeModelKey = dxfMeshPreviewReady ? (selectedDxfKey || selectedKey) : selectedKey;
   const stepBoundsAnimationActive = Boolean(resolvedStepParameters?.animationState?.playing);

@@ -22,9 +22,10 @@ import {
 test("display settings normalize mode and clip independently from appearance settings", () => {
   assert.deepEqual(normalizeDisplaySettings(), DEFAULT_DISPLAY_SETTINGS);
   assert.equal(resolveDisplayMode({ mode: "wireframe" }), CAD_DISPLAY_MODE.WIREFRAME);
-  assert.equal(normalizeDisplaySettings().projection, CAMERA_PROJECTION.ORTHOGRAPHIC);
-  assert.equal(normalizeDisplaySettings({ projection: "perspective" }).projection, CAMERA_PROJECTION.PERSPECTIVE);
-  assert.equal(normalizeDisplaySettings({ projection: "fisheye" }).projection, CAMERA_PROJECTION.ORTHOGRAPHIC);
+  // Projection is a theme trait now, not a display setting: it is dropped on
+  // normalization even when a stale caller still passes it.
+  assert.equal(Object.hasOwn(normalizeDisplaySettings(), "projection"), false);
+  assert.equal(Object.hasOwn(normalizeDisplaySettings({ projection: "perspective" }), "projection"), false);
   assert.deepEqual(normalizeDisplaySettings({
     projection: "perspective",
     mode: "wireframe",
@@ -35,7 +36,6 @@ test("display settings normalize mode and clip independently from appearance set
       invert: true
     }
   }), {
-    projection: CAMERA_PROJECTION.PERSPECTIVE,
     mode: CAD_DISPLAY_MODE.WIREFRAME,
     clip: {
       enabled: true,
@@ -174,8 +174,10 @@ test("display settings compare after normalization", () => {
     { mode: "solid", edges: { color: "#111111" } },
     { mode: "solid", edges: { color: "#222222" } }
   ), false);
+  // Projection no longer belongs to display settings, so differing projection
+  // values do not make two otherwise-equal display settings unequal.
   assert.equal(displaySettingsEqual(
     { mode: "solid", projection: "orthographic" },
     { mode: "solid", projection: "perspective" }
-  ), false);
+  ), true);
 });

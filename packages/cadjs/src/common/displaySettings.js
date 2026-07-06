@@ -84,7 +84,6 @@ export const DEFAULT_EXPLODED_VIEW_SETTINGS = Object.freeze({
 });
 
 export const DEFAULT_DISPLAY_SETTINGS = Object.freeze({
-  projection: CAMERA_PROJECTION.ORTHOGRAPHIC,
   mode: CAD_DISPLAY_MODE.SOLID,
   clip: DEFAULT_STEP_CLIP_SETTINGS,
   exploded: DEFAULT_EXPLODED_VIEW_SETTINGS,
@@ -286,7 +285,6 @@ export function normalizeDisplaySettings(value = null) {
     explodedOverrides.enabled = source.exploded.enabled;
   }
   return {
-    projection: normalizeCameraProjection(source.projection, DEFAULT_DISPLAY_SETTINGS.projection),
     mode: normalizeDisplayMode(source.mode),
     clip: normalizeStepClipSettings(source.clip),
     exploded: normalizeExplodedViewSettings(source.exploded, explodedOverrides),
@@ -301,8 +299,7 @@ export function cloneDisplaySettings(value = DEFAULT_DISPLAY_SETTINGS) {
 export function displaySettingsEqual(left, right) {
   const a = normalizeDisplaySettings(left);
   const b = normalizeDisplaySettings(right);
-  return a.projection === b.projection &&
-    a.mode === b.mode &&
+  return a.mode === b.mode &&
     stepClipSettingsEqual(a.clip, b.clip) &&
     JSON.stringify(a.exploded) === JSON.stringify(b.exploded) &&
     JSON.stringify(a.edges) === JSON.stringify(b.edges);

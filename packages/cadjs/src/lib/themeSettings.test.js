@@ -38,7 +38,6 @@ const WORKBENCH_FILL_COLORS = Object.freeze([
 const BLUE_FILL_COLORS = Object.freeze(["#4cc9f0"]);
 const MAGENTA_FILL_COLORS = Object.freeze(["#ff4faf"]);
 const CLAY_FILL_COLORS = Object.freeze(["#b9856e"]);
-const BEACH_FILL_COLORS = Object.freeze(["#178f9f", "#ef7459"]);
 const TERMINAL_FILL_COLORS = Object.freeze(["#0b7a3f"]);
 const DARKOAL_FILL_COLORS = Object.freeze([
   "#b6c4ce",
@@ -147,36 +146,49 @@ test("workbench-dark preset uses the workbench dark color treatment", () => {
   assert.equal(getThemePresetIdForSettings(dark), "workbench-dark");
 });
 
-test("beach preset keeps light materials with sunlit sand presentation styling", () => {
-  const beach = cloneThemePresetSettings("beach");
-  const beachPreset = THEME_PRESETS.find((preset) => preset.id === "beach");
+test("vibrant ships as a bright photoreal stage after cinematic", () => {
+  const vibrant = cloneThemePresetSettings("vibrant");
+  const vibrantPreset = THEME_PRESETS.find((preset) => preset.id === "vibrant");
 
-  assert.equal(beachPreset?.label, "Beach");
-  assert.equal(beach.colorMode, THEME_COLOR_MODES.LIGHT);
-  assert.equal(beach.materials.defaultColor, BEACH_FILL_COLORS[0]);
-  assert.deepEqual(beach.materials.fillColors, BEACH_FILL_COLORS);
-  assert.equal(beach.materials.cycleColors, true);
-  assert.equal(resolveThemeFillColor(beach.materials, 0), BEACH_FILL_COLORS[0]);
-  assert.equal(resolveThemeFillColor(beach.materials, 1), BEACH_FILL_COLORS[1]);
-  assert.equal(beach.materials.overrideSourceColors, false);
-  assert.equal(beach.materials.tintMode, "blend");
-  assert.equal(beach.materials.tintStrength, 0);
-  assert.equal(beach.materials.opacity, 1);
-  assert.equal(Object.hasOwn(beach, "edges"), false);
-  assert.equal(beach.background.type, "linear");
-  assert.equal(beach.background.solidColor, "#dff7f7");
-  assert.equal(beach.background.linearStart, "#fff4d6");
-  assert.equal(beach.background.linearEnd, "#47c5d6");
-  assert.equal(beach.floor.mode, "stage");
-  assert.equal(beach.floor.color, "#f2d59b");
-  assert.equal(beach.floor.reflectivity, 0.18);
-  assert.equal(beach.environment.enabled, true);
-  assert.equal(beach.environment.presetId, "studio-hdri-12");
-  assert.equal(beach.lighting.directional.color, "#fff7df");
-  assert.equal(beach.lighting.point.color, "#ffd08a");
-  assert.equal(beach.lighting.hemisphere.skyColor, "#bff8ff");
-  assert.equal(inferThemeSettingsSceneTone(beach), "light");
-  assert.equal(getThemePresetIdForSettings(beach), "beach");
+  assert.equal(THEME_PRESETS[3]?.id, "vibrant");
+  assert.equal(vibrantPreset?.label, "Vibrant");
+  assert.equal(vibrant.colorMode, THEME_COLOR_MODES.LIGHT);
+  assert.equal(vibrant.projection, "perspective");
+  assert.equal(vibrant.materials.cycleColors, true);
+  assert.equal(vibrant.materials.overrideSourceColors, false);
+  assert.equal(vibrant.materials.saturation, 1.32);
+  assert.equal(vibrant.materials.clearcoat, 0.55);
+  assert.equal(Object.hasOwn(vibrant, "edges"), false);
+  assert.equal(vibrant.background.type, "radial");
+  assert.equal(vibrant.background.solidColor, "#f2f4f7");
+  assert.equal(vibrant.floor.mode, "stage");
+  assert.equal(vibrant.floor.enabled, true);
+  assert.equal(vibrant.floor.followModel, true);
+  assert.equal(vibrant.environment.enabled, true);
+  assert.equal(vibrant.environment.presetId, "studio-hdri-43");
+  assert.equal(vibrant.lighting.rim.enabled, true);
+  assert.equal(inferThemeSettingsSceneTone(vibrant), "light");
+  assert.equal(getThemePresetIdForSettings(vibrant), "vibrant");
+});
+
+test("removed beach preset resolves to vibrant", () => {
+  assert.equal(THEME_PRESETS.some((preset) => preset.id === "beach"), false);
+  assert.deepEqual(cloneThemePresetSettings("beach"), cloneThemePresetSettings("vibrant"));
+});
+
+test("projection is a per-theme trait: canvases orthographic, stages perspective", () => {
+  const orthographic = ["workbench-light", "workbench-dark"];
+  const perspective = ["cinematic", "vibrant", "blue", "pink", "clay-sunrise", "terminal"];
+  for (const id of orthographic) {
+    assert.equal(cloneThemePresetSettings(id).projection, "orthographic", `${id} projection`);
+  }
+  for (const id of perspective) {
+    assert.equal(cloneThemePresetSettings(id).projection, "perspective", `${id} projection`);
+  }
+  // Themes predating the setting normalize to the orthographic default.
+  assert.equal(normalizeThemeSettings({}).projection, "orthographic");
+  assert.equal(normalizeThemeSettings({ projection: "perspective" }).projection, "perspective");
+  assert.equal(normalizeThemeSettings({ projection: "fisheye" }).projection, "orthographic");
 });
 
 test("theme settings do not normalize display edge settings", () => {
@@ -197,10 +209,10 @@ test("built-in theme preset ids stay explicit with cinematic third", () => {
     "workbench-light",
     "workbench-dark",
     "cinematic",
+    "vibrant",
     "blue",
     "pink",
     "clay-sunrise",
-    "beach",
     "terminal"
   ]);
 });
@@ -290,7 +302,7 @@ test("stylized presets keep their palettes and declare an opinionated color mode
       fillColors: BLUE_FILL_COLORS,
       cycleColors: false,
       backgroundColor: "#04131f",
-      floorColor: "#06324f"
+      floorColor: "#062a42"
     },
     {
       presetId: "pink",
@@ -298,8 +310,8 @@ test("stylized presets keep their palettes and declare an opinionated color mode
       materialColor: MAGENTA_FILL_COLORS[0],
       fillColors: MAGENTA_FILL_COLORS,
       cycleColors: false,
-      backgroundColor: "#281323",
-      floorColor: "#4a1833"
+      backgroundColor: "#1d0a16",
+      floorColor: "#2b0e20"
     },
     {
       presetId: "clay-sunrise",
@@ -308,16 +320,7 @@ test("stylized presets keep their palettes and declare an opinionated color mode
       fillColors: CLAY_FILL_COLORS,
       cycleColors: false,
       backgroundColor: "#f3eadc",
-      floorColor: "#d4a070"
-    },
-    {
-      presetId: "beach",
-      colorMode: THEME_COLOR_MODES.LIGHT,
-      materialColor: BEACH_FILL_COLORS[0],
-      fillColors: BEACH_FILL_COLORS,
-      cycleColors: true,
-      backgroundColor: "#dff7f7",
-      floorColor: "#f2d59b"
+      floorColor: "#d9a97c"
     },
     {
       presetId: "terminal",
@@ -326,7 +329,7 @@ test("stylized presets keep their palettes and declare an opinionated color mode
       fillColors: TERMINAL_FILL_COLORS,
       cycleColors: false,
       backgroundColor: "#020403",
-      floorColor: "#020403"
+      floorColor: "#02120a"
     }
   ];
 
@@ -339,6 +342,9 @@ test("stylized presets keep their palettes and declare an opinionated color mode
     assert.equal(Object.hasOwn(settings, "edges"), false);
     assert.equal(settings.background.solidColor, expectation.backgroundColor);
     assert.equal(settings.floor.color, expectation.floorColor);
+    // Every stylized theme now ships an enabled presentation floor.
+    assert.equal(settings.floor.enabled, true, `${expectation.presetId} floor enabled`);
+    assert.equal(settings.projection, "perspective", `${expectation.presetId} projection`);
     assert.equal(getThemePresetIdForSettings(settings), expectation.presetId);
   }
 });
