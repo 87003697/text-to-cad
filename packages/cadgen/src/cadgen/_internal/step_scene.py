@@ -1475,6 +1475,7 @@ def mesh_step_scene(
     linear_deflection: float,
     angular_deflection: float,
     relative: bool,
+    parallel: bool = True,
 ) -> None:
     signature = (float(linear_deflection), float(angular_deflection), bool(relative))
     if scene.mesh_signature == signature:
@@ -1485,7 +1486,12 @@ def mesh_step_scene(
             signature[0],
             signature[2],
             signature[1],
-            True,
+            # OCCT's in-mesh parallelism is nondeterministic (triangle/vertex
+            # ordering varies run to run). Whole-scene sidecar meshing keeps it
+            # for throughput; per-component builds pass parallel=False so a
+            # component GLB is reproducible and process-pool workers do not
+            # oversubscribe cores with nested OCCT threads.
+            parallel,
         )
     scene.mesh_signature = signature
 
@@ -1680,31 +1686,33 @@ def _scene_mesh_resolution_hints(scene: LoadedStepScene) -> dict[str, Any]:
         + (float(prototype_curved_face_count) * 0.8)
         + (float(prototype_curved_edge_count) * 0.4)
     )
-    high_complexity = occurrence_face_count >= 8000 or occurrence_edge_count >= 22000
-    diagonal: float | None = None
-    scale_factor = 1.0
-    if not high_complexity:
-        prototype_boxes = {
-            key: _bbox_from_shape(shape)
-            for key, shape in scene.prototype_shapes.items()
-        }
-        occurrence_boxes = [
-            _transform_bbox(prototype_boxes[int(node.prototype_key)], node.transform)
-            for node in leaves
-            if node.prototype_key is not None and int(node.prototype_key) in prototype_boxes
-        ]
-        bbox = _merge_bbox(occurrence_boxes) if occurrence_boxes else _bbox_from_points([])
-        diagonal = float(bbox.get("diag") or 0.0)
-        if diagonal <= 50.0:
-            scale_factor = 0.65
-        elif diagonal <= 150.0:
-            scale_factor = 0.8
-        elif diagonal <= 500.0:
-            scale_factor = 1.0
-        elif diagonal <= 1500.0:
-            scale_factor = 1.18
-        else:
-            scale_factor = 1.35
+    # The diagonal is computed UNCONDITIONALLY: the meter-scale deflection floor
+    # in adaptive_mesh_resolution_from_hints depends on it, and the scenes that
+    # need the floor most (thousands of occurrence faces, e.g. a full launch
+    # stack) are exactly the ones a face-count guard would skip. The cost is
+    # small: _bbox_from_shape uses BRepBndLib without tessellation per unique
+    # prototype, plus an 8-corner transform per leaf occurrence.
+    prototype_boxes = {
+        key: _bbox_from_shape(shape)
+        for key, shape in scene.prototype_shapes.items()
+    }
+    occurrence_boxes = [
+        _transform_bbox(prototype_boxes[int(node.prototype_key)], node.transform)
+        for node in leaves
+        if node.prototype_key is not None and int(node.prototype_key) in prototype_boxes
+    ]
+    bbox = _merge_bbox(occurrence_boxes) if occurrence_boxes else _bbox_from_points([])
+    diagonal: float | None = float(bbox.get("diag") or 0.0)
+    if diagonal <= 50.0:
+        scale_factor = 0.65
+    elif diagonal <= 150.0:
+        scale_factor = 0.8
+    elif diagonal <= 500.0:
+        scale_factor = 1.0
+    elif diagonal <= 1500.0:
+        scale_factor = 1.18
+    else:
+        scale_factor = 1.35
     return {
         "bboxDiag": None if diagonal is None else round(diagonal, 3),
         "prototypeFaceCount": prototype_face_count,
@@ -1762,6 +1770,26 @@ def adaptive_mesh_resolution_from_hints(hints: dict[str, Any]) -> AdaptiveMeshRe
         settings = MeshSettings(tolerance=0.006, angular_tolerance=0.2)
 
     hints = dict(hints)
+    # The absolute profile tolerances above are tuned for desk-scale parts.
+    # Past that envelope, floor the linear deflection proportionally to the
+    # model diagonal (~0.03% of diag) so meter-scale models do not tessellate
+    # at micron-class chord error (multi-minute meshes, quarter-GB packages).
+    # Angular deflection stays per-profile; it is scale-invariant.
+    raw_diagonal = hints.get("bboxDiag")
+    diagonal = float(raw_diagonal) if isinstance(raw_diagonal, (int, float)) else 0.0
+    if diagonal > 500.0:
+        scale_floor = round(diagonal * 3.0e-4, 3)
+        if scale_floor > settings.tolerance:
+            # When the linear floor engages, curvature quality must ride on the
+            # ANGULAR deflection (scale-invariant): a coarse profile pairs the
+            # floor with angular 0.6-0.75 rad, which would leave small
+            # high-curvature parts (engine bells in a full stack) visibly
+            # polygonal. Clamp angular so cylinders keep >=~18 segments.
+            settings = MeshSettings(
+                tolerance=scale_floor,
+                angular_tolerance=min(settings.angular_tolerance, 0.35),
+            )
+            hints["scaleFloorTolerance"] = scale_floor
     hints["profile"] = profile
     return AdaptiveMeshResolution(settings=settings, profile=profile, hints=hints)
 

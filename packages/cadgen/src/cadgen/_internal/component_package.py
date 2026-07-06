@@ -225,6 +225,125 @@ def _unlocated_shape(shape: Any) -> Any:
     return local
 
 
+def _shape_brep_bytes(shape: Any) -> bytes:
+    """Location-stripped binary BREP of a shape (no triangulation/normals) — the
+    process-boundary payload for parallel component builds. Mirrors
+    ``_content_hash_shape``'s serialization so the worker rebuilds exactly the
+    geometry the cid addresses."""
+    import io
+
+    from OCP.BinTools import BinTools, BinTools_FormatVersion
+    from OCP.TopLoc import TopLoc_Location
+
+    stream = io.BytesIO()
+    BinTools.Write_s(
+        shape.wrapped.Located(TopLoc_Location()),
+        stream,
+        False,  # theWithTriangles
+        False,  # theWithNormals
+        BinTools_FormatVersion.BinTools_FormatVersion_CURRENT,
+    )
+    return stream.getvalue()
+
+
+def _build123d_shape_from_brep_bytes(payload: bytes) -> Any:
+    """Rebuild a build123d shape from ``_shape_brep_bytes`` output (worker side).
+
+    The component GLB is a pure function of geometry + mesh tolerances (labels
+    and provenance are stripped), so wrapping in the ShapeType-matched build123d
+    class reproduces the serial build byte-for-byte."""
+    import io
+
+    import build123d
+    from OCP.BinTools import BinTools
+    from OCP.TopAbs import TopAbs_ShapeEnum
+    from OCP.TopoDS import TopoDS_Shape
+
+    topo = TopoDS_Shape()
+    BinTools.Read_s(topo, io.BytesIO(payload))
+    if topo.IsNull():
+        raise RuntimeError("component BREP payload deserialized to a null shape")
+    by_type = {
+        TopAbs_ShapeEnum.TopAbs_COMPOUND: build123d.Compound,
+        TopAbs_ShapeEnum.TopAbs_COMPSOLID: build123d.Compound,
+        TopAbs_ShapeEnum.TopAbs_SOLID: build123d.Solid,
+        TopAbs_ShapeEnum.TopAbs_SHELL: build123d.Shell,
+        TopAbs_ShapeEnum.TopAbs_FACE: build123d.Face,
+        TopAbs_ShapeEnum.TopAbs_WIRE: build123d.Wire,
+        TopAbs_ShapeEnum.TopAbs_EDGE: build123d.Edge,
+        TopAbs_ShapeEnum.TopAbs_VERTEX: build123d.Vertex,
+    }
+    cls = by_type.get(topo.ShapeType(), build123d.Compound)
+    return cls(topo)
+
+
+def _build_component_glb_worker(
+    args: tuple[bytes, str, str, float, float],
+) -> tuple[str, str | None]:
+    """Process-pool entry: build one component GLB from a BREP payload.
+
+    Returns ``(cid, None)`` on success or ``(cid, error message)`` — exceptions
+    are flattened so one failed component reports cleanly instead of poisoning
+    the pool."""
+    payload, cid, out_glb, linear_deflection, angular_deflection = args
+    try:
+        shape = _build123d_shape_from_brep_bytes(payload)
+        _write_component_glb_atomic(
+            shape,
+            Path(out_glb),
+            cad_ref=cid,
+            linear_deflection=linear_deflection,
+            angular_deflection=angular_deflection,
+        )
+        return (cid, None)
+    except Exception as exc:  # noqa: BLE001 - crossing a process boundary
+        return (cid, f"{type(exc).__name__}: {exc}")
+
+
+def _component_build_worker_count(missing_count: int) -> int:
+    """Worker count for parallel component builds.
+
+    ``CADGEN_COMPONENT_WORKERS`` overrides (0/1 disables). Defaults engage only
+    when enough components are missing to amortize the per-worker interpreter +
+    OCP import cost (~seconds each)."""
+    env_value = os.environ.get("CADGEN_COMPONENT_WORKERS", "").strip()
+    if env_value:
+        try:
+            requested = int(env_value)
+        except ValueError:
+            requested = 0
+        return max(1, min(requested, missing_count)) if requested > 1 else 1
+    if missing_count < 6:
+        return 1
+    return max(1, min((os.cpu_count() or 2) - 2, missing_count, 8))
+
+
+def _write_component_glb_atomic(
+    shape: Any,
+    out_glb: Path,
+    *,
+    cad_ref: str,
+    linear_deflection: float,
+    angular_deflection: float,
+) -> Path:
+    """Build to a sibling temp file and rename into place, so a killed build
+    never leaves a truncated ``<cid>.glb`` that a later run would trust as a
+    valid content-addressed cache hit."""
+    temp_path = out_glb.with_name(f"{out_glb.name}.tmp{os.getpid()}")
+    try:
+        build_component_glb_from_shape(
+            shape,
+            temp_path,
+            cad_ref=cad_ref,
+            linear_deflection=linear_deflection,
+            angular_deflection=angular_deflection,
+        )
+        os.replace(temp_path, out_glb)
+    finally:
+        temp_path.unlink(missing_ok=True)
+    return out_glb
+
+
 def build_component_glb_from_shape(
     shape: Any,
     out_glb: Path,
@@ -254,6 +373,7 @@ def build_component_glb_from_shape(
         linear_deflection=linear_deflection,
         angular_deflection=angular_deflection,
         relative=False,
+        parallel=False,
     )
     bundle = extract_selectors_from_scene(scene, cad_ref=cad_ref)
     for key in COMPONENT_PROVENANCE_KEYS:
@@ -325,10 +445,14 @@ def build_package_from_compound(
     occurrences: list[dict[str, Any]] = []
     components: dict[str, dict[str, Any]] = {}
     shapes: dict[str, Any] = {}
-    # Memoize the BREP content hash per unique part. Repeated occurrences of a part share
-    # one underlying ``TShape`` (``.moved()`` only swaps the location), and OCP returns the
-    # same wrapper for it, so keying on ``TShape()`` hashes each distinct geometry once
-    # instead of re-serializing the same (often heavy) BREP for every repeat occurrence.
+    # Memoize the BREP content hash per unique part, keyed on the underlying
+    # ``TShape``. NOTE: build123d 0.10's ``Shape.moved()`` is deepcopy-based
+    # (``BRepBuilderAPI_Copy`` per solid), so instances placed with ``.moved()``
+    # carry DISTINCT TShapes and miss this memo — each instance re-serializes
+    # its leaf BREPs once (content-addressing still dedups them afterwards,
+    # since the copies are byte-identical). The memo still pays off for
+    # occurrences that genuinely share a TShape (raw-OCCT composed assemblies,
+    # ``Location``-composed placements).
     hash_memo: dict[Any, str] = {}
 
     def _add_leaf(node: Any, world_loc: Any, occ_id: str, name: str | None = None) -> dict[str, Any]:
@@ -414,18 +538,45 @@ def build_package_from_compound(
     # ``force`` bypasses the cache (mesh/selector code changed, not the geometry).
     built: list[str] = []
     reused: list[str] = []
+    missing: list[tuple[str, Any]] = []
     for cid, shape in shapes.items():
-        glb_path = comp_dir / f"{cid}.glb"
-        if glb_path.exists() and not force:
+        if (comp_dir / f"{cid}.glb").exists() and not force:
             reused.append(cid)
-            continue
-        build_component_glb_from_shape(
-            shape,
-            glb_path,
-            cad_ref=cid,
-            linear_deflection=linear_deflection,
-            angular_deflection=angular_deflection,
+        else:
+            missing.append((cid, shape))
+    # Every missing component builds from its location-stripped BREP payload —
+    # the same bytes whether built in-process or in a worker — so the emitted
+    # GLB is independent of worker count AND of the caller's Python class for
+    # the shape (a parametric Box and an imported Solid with identical geometry
+    # emit identical components; XCAF auto-labels no longer leak in).
+    payloads = [
+        (
+            _shape_brep_bytes(shape),
+            cid,
+            str(comp_dir / f"{cid}.glb"),
+            linear_deflection,
+            angular_deflection,
         )
+        for cid, shape in missing
+    ]
+    workers = _component_build_worker_count(len(payloads))
+    if workers > 1:
+        # Each missing component is meshed + selector-extracted independently
+        # (the extraction is Python-heavy and GIL-bound, so threads don't
+        # help). Workers write their own <cid>.glb atomically, so nothing
+        # heavy pickles back.
+        import multiprocessing
+        from concurrent.futures import ProcessPoolExecutor
+
+        with ProcessPoolExecutor(
+            max_workers=workers, mp_context=multiprocessing.get_context("spawn")
+        ) as pool:
+            results = list(pool.map(_build_component_glb_worker, payloads))
+    else:
+        results = [_build_component_glb_worker(args) for args in payloads]
+    for cid, error in results:
+        if error is not None:
+            raise RuntimeError(f"component {cid} build failed: {error}")
         built.append(cid)
 
     # The descriptor IS the assembly's index manifest: the provenance block (schema/
@@ -463,12 +614,22 @@ def build_package_from_compound(
     package_dir.mkdir(parents=True, exist_ok=True)
     (package_dir / DESCRIPTOR_NAME).write_text(json.dumps(descriptor))
 
-    # No pruning: the component cache is SHARED across the folder, so a model's stale
-    # entries may still be referenced by a sibling. Content-addressed + regenerated on the
-    # fly, unreferenced GLBs are harmless (a future `cadgen cache clean` can sweep orphans).
+    # Prune orphans: each package's components/ dir belongs to exactly ONE entry
+    # (packages are self-contained; cross-model sharing was given up on purpose),
+    # so any <cid>.glb the fresh descriptor no longer references is garbage from
+    # an earlier geometry revision and accumulates without bound if kept. Writers
+    # are serialized by the generation lock; readers re-resolve components from
+    # the descriptor they load.
+    referenced = {f"{cid}.glb" for cid in components}
+    pruned = 0
+    for stale in comp_dir.glob("*.glb"):
+        if stale.name not in referenced:
+            stale.unlink(missing_ok=True)
+            pruned += 1
     return {
         "occurrences": len(occurrences),
         "unique_components": len(components),
         "components_built": len(built),
         "components_reused": len(reused),
+        "components_pruned": pruned,
     }

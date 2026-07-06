@@ -277,12 +277,29 @@ def _current_artifact_for_spec(
 
 
 def _python_source_for_target(target: ResolvedStepTarget) -> Path | None:
+    source_is_generator = (
+        target.source_path.suffix.lower() == ".py" and target.source_path.is_file()
+    )
+    # An explicitly-targeted `.py` generator keeps resolving to the generator
+    # entry even when its same-stem exported `.step` exists beside it — the
+    # `.step.py` and `.step` files are distinct entry-keyed models, and only an
+    # explicit `.step`/`.stp` target means "treat as imported STEP".
+    if target.explicit_python and source_is_generator:
+        return target.source_path
     if target.step_path.is_file():
         return None
-    if target.source_path.suffix.lower() == ".py" and target.source_path.is_file():
+    if source_is_generator:
         return target.source_path
-    candidate = target.step_path.with_suffix(".py")
-    return candidate if candidate.is_file() else None
+    # The generator for `<name>.step` is `<name>.step.py` (append `.py` to the
+    # full filename) under the entry convention; fall back to the legacy
+    # `<name>.py` sibling for pre-rename layouts.
+    for candidate in (
+        target.step_path.with_name(target.step_path.name + ".py"),
+        target.step_path.with_suffix(".py"),
+    ):
+        if candidate.is_file():
+            return candidate
+    return None
 
 
 def _with_mesh_overrides(

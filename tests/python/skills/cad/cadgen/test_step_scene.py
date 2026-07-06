@@ -177,6 +177,82 @@ class StepSceneSelectorArtifactTests(unittest.TestCase):
             self.assertLess(resolution.settings.angular_tolerance, DEFAULT_MESH_ANGULAR_TOLERANCE)
             self.assertEqual(1, resolution.hints["leafOccurrenceCount"])
 
+    def test_adaptive_mesh_resolution_floors_linear_deflection_for_meter_scale_models(self) -> None:
+        with temporary_directory(prefix="cad-adaptive-mesh-") as temp_dir:
+            step_path = Path(temp_dir) / "big_box.step"
+            build123d.export_step(build123d.Box(2600, 1300, 1300), step_path)
+            scene = load_step_scene(step_path)
+
+            resolution = adaptive_mesh_resolution_for_scene(scene)
+
+            diagonal = float(resolution.hints["bboxDiag"])
+            self.assertGreater(diagonal, 500.0)
+            self.assertAlmostEqual(
+                resolution.settings.tolerance, round(diagonal * 3.0e-4, 3), places=3
+            )
+            self.assertEqual(
+                resolution.hints["scaleFloorTolerance"], resolution.settings.tolerance
+            )
+            # Curvature quality rides on angular deflection once the linear
+            # floor engages; coarse-profile angular values must be clamped.
+            self.assertLessEqual(resolution.settings.angular_tolerance, 0.35)
+
+    def test_adaptive_mesh_resolution_keeps_diagonal_and_floor_for_high_face_count_scenes(self) -> None:
+        # A face-count guard used to skip the bbox/diagonal computation for
+        # scenes with >=8000 occurrence faces, so bboxDiag came back None and
+        # the meter-scale floor silently no-oped on exactly the scenes that
+        # need it (e.g. a full launch stack with dozens of engines). 1,400
+        # instances x 6 faces = 8,400 occurrence faces, spread over ~14 m.
+        box_shape = build123d.Box(10.0, 8.0, 4.0).wrapped
+
+        def translated(tx: float) -> tuple[float, ...]:
+            return (
+                1.0, 0.0, 0.0, tx,
+                0.0, 1.0, 0.0, 0.0,
+                0.0, 0.0, 1.0, 0.0,
+                0.0, 0.0, 0.0, 1.0,
+            )
+
+        scene = LoadedStepScene(
+            step_path=Path("synthetic-stack.step"),
+            roots=[
+                OccurrenceNode(
+                    path=(index + 1,),
+                    name=f"box_{index}",
+                    source_name=f"box_{index}",
+                    transform=translated(index * 10.0),
+                    prototype_key=1,
+                )
+                for index in range(1400)
+            ],
+            prototype_shapes={1: box_shape},
+        )
+
+        resolution = adaptive_mesh_resolution_for_scene(scene)
+
+        self.assertGreaterEqual(resolution.hints["occurrenceFaceCount"], 8000)
+        diagonal = resolution.hints["bboxDiag"]
+        self.assertIsNotNone(diagonal)
+        self.assertGreater(float(diagonal), 500.0)
+        self.assertEqual(
+            resolution.hints["scaleFloorTolerance"], resolution.settings.tolerance
+        )
+        self.assertAlmostEqual(
+            resolution.settings.tolerance, round(float(diagonal) * 3.0e-4, 3), places=3
+        )
+        self.assertLessEqual(resolution.settings.angular_tolerance, 0.35)
+
+    def test_adaptive_mesh_resolution_keeps_absolute_tolerances_for_desk_scale_models(self) -> None:
+        with temporary_directory(prefix="cad-adaptive-mesh-") as temp_dir:
+            step_path = Path(temp_dir) / "medium_box.step"
+            build123d.export_step(build123d.Box(200, 120, 80), step_path)
+            scene = load_step_scene(step_path)
+
+            resolution = adaptive_mesh_resolution_for_scene(scene)
+
+            self.assertNotIn("scaleFloorTolerance", resolution.hints)
+            self.assertLessEqual(resolution.settings.tolerance, 0.025)
+
     def test_adaptive_mesh_resolution_does_not_coarsen_simple_repeated_assemblies_by_leaf_count_alone(self) -> None:
         box_shape = build123d.Box(10, 8, 4).wrapped
         identity = (
