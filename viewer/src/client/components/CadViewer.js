@@ -2257,13 +2257,10 @@ const CadViewer = forwardRef(function CadViewer({
   const defaultFloorMode = floorSettings.enabled === true
     ? THEME_FLOOR_MODES.STAGE
     : THEME_FLOOR_MODES.NONE;
-  const baseFloorMode = floorModeOverride
+  const resolvedFloorMode = floorModeOverride
     ? normalizeFloorMode(floorModeOverride, defaultFloorMode)
     : defaultFloorMode;
-  // Show the floor only in perspective projection; hide it in orthographic projection.
-  const resolvedFloorMode = normalizedProjection === CAMERA_PROJECTION.PERSPECTIVE
-    ? baseFloorMode
-    : THEME_FLOOR_MODES.NONE;
+  const floorFollowsModel = floorSettings.followModel !== false;
   const updateActiveGridHelper = useCallback((
     runtime,
     activeViewerTheme,
@@ -3200,11 +3197,17 @@ const CadViewer = forwardRef(function CadViewer({
     }
 
     runtime.gridConfig = null;
+    const themeFloorZCandidate = floorFollowsModel
+      ? runtime.modelFloorZBelowModel
+      : runtime.modelFloorZBase;
+    const themeFloorZ = Number.isFinite(themeFloorZCandidate)
+      ? themeFloorZCandidate
+      : runtime.gridFloorZ ?? 0;
     updateActiveGridHelper(
       runtime,
       viewerTheme,
       runtime.gridRadius ?? defaultGridRadius,
-      runtime.gridFloorZ ?? 0,
+      themeFloorZ,
       normalizedSceneScaleMode,
       resolvedFloorMode
     );
@@ -3215,7 +3218,7 @@ const CadViewer = forwardRef(function CadViewer({
         viewerTheme,
         normalizedThemeSettings,
         runtime.gridRadius ?? defaultGridRadius,
-        runtime.gridFloorZ ?? 0,
+        themeFloorZ,
         resolvedFloorMode,
         normalizedSceneScaleMode
       );
@@ -3229,6 +3232,7 @@ const CadViewer = forwardRef(function CadViewer({
     normalizedThemeSettings,
     normalizedSceneScaleMode,
     resolvedFloorMode,
+    floorFollowsModel,
     viewerReadyTick,
     viewerTheme,
     updateActiveGridHelper
@@ -3616,11 +3620,24 @@ const CadViewer = forwardRef(function CadViewer({
         previousTransform.offset,
         normalizedSceneScaleMode
       );
+      previousTransform.floorZBelowModel = resolveRuntimeModelFloorZ(
+        displayBounds,
+        previousTransform.offset,
+        normalizedSceneScaleMode,
+        { followModel: true }
+      );
     }
     const modelOffset = previousTransform.offset;
-    const floorZ = Number.isFinite(Number(previousTransform.floorZ))
-      ? Number(previousTransform.floorZ)
-      : resolveRuntimeModelFloorZ(displayBounds, modelOffset, normalizedSceneScaleMode);
+    const cachedFloorZ = floorFollowsModel
+      ? previousTransform.floorZBelowModel
+      : previousTransform.floorZ;
+    const floorZ = Number.isFinite(Number(cachedFloorZ))
+      ? Number(cachedFloorZ)
+      : resolveRuntimeModelFloorZ(displayBounds, modelOffset, normalizedSceneScaleMode, {
+        followModel: floorFollowsModel
+      });
+    runtime.modelFloorZBase = Number(previousTransform.floorZ);
+    runtime.modelFloorZBelowModel = Number(previousTransform.floorZBelowModel);
     const { radius } = applyRuntimeModelBounds(THREE, runtime, displayBounds, normalizedSceneScaleMode);
     syncRuntimeScaledLightingAndShadow(
       THREE,
@@ -3737,6 +3754,7 @@ const CadViewer = forwardRef(function CadViewer({
     normalizedDisplayMode,
     normalizedSceneScaleMode,
     resolvedFloorMode,
+    floorFollowsModel,
     viewerTheme,
     normalizedThemeSettings.lighting,
     normalizedThemeSettings.materials,
@@ -3791,12 +3809,16 @@ const CadViewer = forwardRef(function CadViewer({
       meshData.bounds,
       normalizedSceneScaleMode
     );
-    const floorZ = Number.isFinite(Number(modelTransformRef.current.floorZ))
-      ? Number(modelTransformRef.current.floorZ)
+    const cachedFloorZ = floorFollowsModel
+      ? modelTransformRef.current.floorZBelowModel
+      : modelTransformRef.current.floorZ;
+    const floorZ = Number.isFinite(Number(cachedFloorZ))
+      ? Number(cachedFloorZ)
       : resolveRuntimeModelFloorZ(
         meshData.bounds,
         runtime.modelGroup?.position,
-        normalizedSceneScaleMode
+        normalizedSceneScaleMode,
+        { followModel: floorFollowsModel }
       );
     updateActiveGridHelper(
       runtime,
@@ -3817,6 +3839,7 @@ const CadViewer = forwardRef(function CadViewer({
     normalizedSceneScaleMode,
     normalizedThemeSettings,
     resolvedFloorMode,
+    floorFollowsModel,
     viewerTheme,
     viewerReadyTick,
     updateActiveGridHelper

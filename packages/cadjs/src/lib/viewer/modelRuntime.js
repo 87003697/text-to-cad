@@ -35,13 +35,22 @@ export function runtimeModelKeyMatches(runtime, modelKey) {
     : true;
 }
 
-export function resolveRuntimeModelFloorZ(bounds, modelPosition, sceneScaleMode) {
+export function resolveRuntimeModelFloorZ(bounds, modelPosition, sceneScaleMode, { followModel = false } = {}) {
   // The stage floor sits at world z=0 in every scene scale, so a model's absolute Z is
   // honored: a grounded model rests on the floor and a part authored above z=0 floats above
   // it. (Previously the CAD scale glued the floor to the model's bbox bottom, which hid any
   // uniform vertical translation because the model is re-centered on its bounds at load.)
-  // `bounds` and `sceneScaleMode` are retained for call-site compatibility.
-  return toNumber(modelPosition?.z);
+  // `sceneScaleMode` is retained for call-site compatibility.
+  const baseZ = toNumber(modelPosition?.z);
+  if (!followModel) {
+    return baseZ;
+  }
+  // Follow the model only downward: grounded models still rest on their authored
+  // floor plane, while geometry below it pushes the floor down so nothing clips.
+  const boundsMinZ = Array.isArray(bounds?.min)
+    ? toNumber(bounds.min[2])
+    : toNumber(bounds?.min?.z);
+  return Math.min(baseZ, baseZ + boundsMinZ);
 }
 
 export function applyRuntimeModelBounds(THREE, runtime, bounds, sceneScaleMode, {
