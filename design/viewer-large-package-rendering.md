@@ -29,10 +29,21 @@ actual falcon_heavy descriptor.
 
 ## Phases
 
-**Phase 0 — benchmark harness (prerequisite).** Headless playwright run
-that loads falcon_heavy and records: time-to-first-frame, composed-vs-
-unique vertex counts, draw calls (renderer.info), JS heap, orbit FPS.
-Every later phase lands with before/after numbers from this harness.
+**Phase 0 — benchmark harness (prerequisite). DONE.**
+`packages/cadjs/bench/composePackageBench.mjs` — a Node harness (no GPU) that
+loads a warmed `__cadgen__` package, parses every component GLB, and times +
+measures the meshData-layer structural costs the plan's wins are stated in.
+Run: `cd packages/cadjs && node bench/composePackageBench.mjs [package-dir]`
+(needs `three` resolvable — dev: symlink `viewer/node_modules/three` into
+`packages/cadjs/node_modules/`; and a warmed package on disk).
+Structural metrics (draw calls, vertex inflation, compose ms) are covered
+here; GPU upload / frame rate / felt main-thread stall still need an
+in-browser check per phase.
+
+**falcon_heavy baseline (pre-Phase-1):** 2,142 occurrences · 141 unique
+components · **2,142 draw calls** · 113,748 unique → **1,397,652 composed
+vertices (12.29×)** · 465,884 composed triangles · 53.3 MiB composed
+buffers · 140 ms compose. These are the numbers Phases 2–3 must move.
 
 **Phase 1 — parallel worker parsing (small).** `preferWorker: true` for
 package component loads, concurrency 3 → min(hardwareConcurrency, 8), fix
