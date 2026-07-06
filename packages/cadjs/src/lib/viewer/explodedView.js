@@ -182,30 +182,31 @@ function createAxisVector(THREE, axis, direction) {
   return vector;
 }
 
-function fallbackDirection(THREE, index, count) {
-  const normalizedCount = Math.max(1, count);
-  const y = normalizedCount > 1
-    ? 1 - ((index + 0.5) / normalizedCount) * 2
-    : 0;
-  const radius = Math.sqrt(Math.max(0, 1 - y * y));
+// Concentric/on-axis groups (parts sharing the model's vertical axis) have no
+// intrinsic horizontal direction, so fan them evenly around the circle by the
+// golden angle. Purely horizontal so the bloom stays in-plane.
+function radialFanDirection(THREE, index) {
   const angle = index * GOLDEN_ANGLE;
-  const vector = new THREE.Vector3(
-    Math.cos(angle) * radius,
-    Math.sin(angle) * radius,
-    y
-  );
+  const vector = new THREE.Vector3(Math.cos(angle), Math.sin(angle), 0);
   if (vector.lengthSq() <= EPSILON) {
     vector.set(1, 0, 0);
   }
   return vector.normalize();
 }
 
-function radialGroupDirection(THREE, group, modelCenter, index, count, direction) {
+// Cylindrical radial: push a group outward in the horizontal (XY) plane about
+// the model's vertical axis, preserving each part's height. This matches the
+// "radial explode" in SolidWorks / Fusion / Onshape and reads as a graceful
+// horizontal bloom, instead of the vertical fan you get from exploding along
+// the full 3D center-to-part vector (which points mostly up/down for the
+// Z-stacked assemblies typical of CAD).
+function radialGroupDirection(THREE, group, modelCenter, index, direction) {
   const vector = group.center?.isVector3
     ? group.center.clone().sub(modelCenter)
     : new THREE.Vector3();
+  vector.z = 0;
   if (vector.lengthSq() <= EPSILON) {
-    vector.copy(fallbackDirection(THREE, index, count));
+    vector.copy(radialFanDirection(THREE, index));
   } else {
     vector.normalize();
   }
@@ -216,8 +217,16 @@ function createRadialExplodedViewRecordStates(THREE, groups, bounds, settings) {
   const modelCenter = boundsCenter(THREE, bounds);
   const modelRadius = Math.max(boundsRadius(THREE, bounds), EPSILON);
   const modelMaxSize = Math.max(boundsMaxSize(bounds), EPSILON);
+  // Horizontal footprint radius: parts should clear this to bloom cleanly.
+  const modelRadiusXY = Math.max(
+    Math.hypot(boundsSize(bounds, 0), boundsSize(bounds, 1)) / 2,
+    EPSILON
+  );
   const spacing = Math.max(toNumber(settings.spacing, 1.45), 0.25);
-  const baseDistance = Math.max(modelRadius * 0.32 * spacing, modelRadius * 0.12);
+  // Push each group just past the model's horizontal footprint so it sits
+  // outside the original silhouette, then add a per-part term so larger parts
+  // travel a little further and don't crowd the center.
+  const baseDistance = Math.max(modelRadiusXY * 0.85 * spacing, modelRadius * 0.28);
   const states = [];
   const radialGroups = groups
     .filter((group) => group.records.length > 0 && group.bounds)
@@ -229,11 +238,10 @@ function createRadialExplodedViewRecordStates(THREE, groups, bounds, settings) {
       group,
       modelCenter,
       groupIndex,
-      radialGroups.length,
       settings.direction
     );
     const groupRadius = boundsRadius(THREE, group.bounds);
-    const travel = baseDistance + Math.min(groupRadius * 0.18 * spacing, modelRadius * 0.2 * spacing);
+    const travel = baseDistance + groupRadius * 0.6 * spacing;
     const translation = direction.clone().multiplyScalar(travel);
     for (const record of group.records) {
       states.push({

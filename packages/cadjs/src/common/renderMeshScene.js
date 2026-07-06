@@ -10,6 +10,7 @@ import {
   displayModeShowsEdges,
   displayModeShowsThroughEdges,
   CAMERA_PROJECTION,
+  normalizeDisplayEdgeSettings,
   normalizeDisplaySettings,
   normalizeCameraProjection,
   resolveDisplayEdgeSettings
@@ -676,7 +677,13 @@ export function renderJobContext(meshData, job = {}) {
     lighting: theme.lighting || null,
     renderScale: job.render?.renderScale ?? job.renderScale ?? DEFAULT_RENDER_SCALE
   });
-  const baseEdgeSettings = resolveDisplayEdgeSettings(displaySettings);
+  const displayEdgeSettings = resolveDisplayEdgeSettings(displaySettings);
+  // A theme that opts into its own outline (e.g. Terminal's neon-green
+  // linework) drives the edge appearance; other themes leave it to display.
+  const themeEdges = theme?.edges;
+  const baseEdgeSettings = themeEdges && themeEdges.enabled === true
+    ? normalizeDisplayEdgeSettings({ ...displayEdgeSettings, ...themeEdges })
+    : displayEdgeSettings;
   const edgeSettings = {
     ...baseEdgeSettings,
     enabled: displayModeForcesEdges(displayMode) ? true : baseEdgeSettings.enabled,

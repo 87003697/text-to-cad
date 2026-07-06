@@ -1,4 +1,3 @@
-import { useState } from "react";
 import {
   Crosshair,
   Focus,
@@ -17,7 +16,6 @@ import { TooltipProvider } from "../ui/tooltip";
 import DrawingToolbar from "./DrawingToolbar";
 import { ToolbarButton } from "./ToolbarButton";
 import { CAD_WORKSPACE_TOOLBAR_DESKTOP_WIDTH_CLASS } from "./ToolbarShell";
-import { DisplayProjectionControl } from "../viewer/DisplayProjectionControl";
 import { StepExportDropdown } from "./StepExportDropdown";
 
 const FLOATING_TOOL_BAR_SURFACE_CLASS =
@@ -64,7 +62,6 @@ function DesktopFloatingToolBar({
   onExportStepFile,
   fileAccessBusyKey = ""
 }) {
-  const [displayMenuOpen, setDisplayMenuOpen] = useState(false);
   const dxfMode = renderFormat === RENDER_FORMAT.DXF;
   const implicitMode = renderFormat === RENDER_FORMAT.IMPLICIT;
   const urdfMode = renderFormat === RENDER_FORMAT.URDF;
@@ -82,9 +79,6 @@ function DesktopFloatingToolBar({
   const showStepAnimationPlay = renderFormat === RENDER_FORMAT.STEP && stepAnimationAvailable;
   const stepAnimationPlayDisabled = viewerLoading || !selectedMeshData || stepAnimationDisabled;
   const stepAnimationLabel = stepAnimationPlaying ? "Pause" : "Play";
-  const displayControlAvailable = renderFormat === RENDER_FORMAT.STEP &&
-    typeof onDisplayModeChange === "function" &&
-    typeof onProjectionChange === "function";
 
   return (
     <div
@@ -115,20 +109,6 @@ function DesktopFloatingToolBar({
                 <PenTool className="size-3" strokeWidth={2} aria-hidden="true" />
               </ToolbarButton>
 
-              {displayControlAvailable ? (
-                <DisplayProjectionControl
-                  displayMode={displayMode}
-                  onDisplayModeChange={onDisplayModeChange}
-                  projection={projection}
-                  onProjectionChange={onProjectionChange}
-                  open={displayMenuOpen}
-                  onOpenChange={setDisplayMenuOpen}
-                  triggerClassName={FLOATING_TOOL_BAR_BUTTON_CLASSES}
-                  contentAlign="end"
-                  contentSide="bottom"
-                  contentSideOffset={6}
-                />
-              ) : null}
 
               {showStepAnimationPlay ? (
                 <ToolbarButton
