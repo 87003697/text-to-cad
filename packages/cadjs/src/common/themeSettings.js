@@ -2,7 +2,8 @@ import {
   CAMERA_PROJECTION,
   DEFAULT_DISPLAY_EDGE_SETTINGS,
   DISABLED_DISPLAY_EDGE_SETTINGS,
-  normalizeCameraProjection
+  normalizeCameraProjection,
+  normalizeDisplayEdgeSettings
 } from "./displaySettings.js";
 
 export {
@@ -313,18 +314,20 @@ const MAGENTA_FILL_COLORS = Object.freeze(["#ff4faf"]);
 
 const CLAY_FILL_COLORS = Object.freeze(["#b9856e"]);
 
-const TERMINAL_FILL_COLORS = Object.freeze(["#0b7a3f"]);
+// Deep phosphor green so the neon-green edge outline reads as bright linework
+// against the fill — the classic dark-surface / bright-wireframe terminal look.
+const TERMINAL_FILL_COLORS = Object.freeze(["#073a20"]);
 
 const TERMINAL_EDGE_COLOR = "#66ff99";
 const TERMINAL_EDGE_HIGHLIGHT_COLOR = "#b7ffc9";
 const TERMINAL_EDGE_CLASS_SETTINGS = Object.freeze({
   feature: Object.freeze({
     opacity: 1,
-    thickness: 1.15
+    thickness: 1.6
   }),
   tangent: Object.freeze({
-    opacity: 0.84,
-    thickness: 0.95
+    opacity: 0.9,
+    thickness: 1.15
   }),
   seam: Object.freeze({
     opacity: 0.92,
@@ -462,9 +465,6 @@ const CINEMATIC_THEME_SETTINGS = Object.freeze({
     envMapIntensity: 0.42,
     emissiveIntensity: 0.02
   },
-  edges: {
-    ...CAD_THEME_EDGE_SETTINGS
-  },
   background: {
     type: "linear",
     solidColor: "#edf5fb",
@@ -558,9 +558,6 @@ const DARK_STUDIO_THEME_SETTINGS = Object.freeze({
     opacity: 1,
     envMapIntensity: 0.5,
     emissiveIntensity: 0.03
-  },
-  edges: {
-    ...DISABLED_THEME_EDGE_SETTINGS
   },
   background: {
     type: "linear",
@@ -671,9 +668,6 @@ const DARKOAL_THEME_SETTINGS = Object.freeze({
     defaultColor: DARKOAL_FILL_COLORS[0],
     fillColors: DARKOAL_FILL_COLORS
   },
-  edges: {
-    ...CAD_THEME_EDGE_SETTINGS
-  },
   background: {
     ...DARK_STUDIO_THEME_SETTINGS.background,
     solidColor: mixHexColors(DARK_STUDIO_THEME_SETTINGS.background.solidColor, CODEX_DARK_STUDIO_THEME_SETTINGS.background.solidColor),
@@ -703,9 +697,6 @@ const BLUE_THEME_SETTINGS = Object.freeze({
     defaultColor: BLUE_FILL_COLORS[0],
     fillColors: BLUE_FILL_COLORS,
     saturation: 1.15
-  },
-  edges: {
-    ...DISABLED_THEME_EDGE_SETTINGS
   },
   background: {
     type: "radial",
@@ -793,9 +784,6 @@ const PINK_THEME_SETTINGS = Object.freeze({
     defaultColor: MAGENTA_FILL_COLORS[0],
     fillColors: MAGENTA_FILL_COLORS,
     saturation: 1.2
-  },
-  edges: {
-    ...DISABLED_THEME_EDGE_SETTINGS
   },
   background: {
     type: "radial",
@@ -886,9 +874,6 @@ const CLAY_SUNRISE_THEME_SETTINGS = Object.freeze({
     roughness: 0.38,
     metalness: 0.22,
     envMapIntensity: 1.2
-  },
-  edges: {
-    ...DISABLED_THEME_EDGE_SETTINGS
   },
   background: {
     type: "linear",
@@ -993,8 +978,10 @@ const TERMINAL_THEME_SETTINGS = Object.freeze({
     radialInner: "#06301b",
     radialOuter: "#000201"
   },
+  // Transparent floor: no solid stage plane or shadow catcher, just a neon
+  // green grid floating over the dark backdrop — the classic terminal look.
   floor: {
-    mode: THEME_FLOOR_MODES.STAGE,
+    mode: THEME_FLOOR_MODES.GRID,
     color: TERMINAL_STAGE_FLOOR_COLOR,
     roughness: 0.35,
     reflectivity: 0.32,
@@ -1003,11 +990,11 @@ const TERMINAL_THEME_SETTINGS = Object.freeze({
     ...createFloorGridSettings(TERMINAL_STAGE_FLOOR_COLOR, {
       enabled: true,
       centerColor: TERMINAL_EDGE_COLOR,
-      cellColor: "#0c3d22",
-      opacity: 0.3,
+      cellColor: "#0f5230",
+      opacity: 0.42,
       density: 1.15
     }),
-    enabled: true
+    enabled: false
   },
   environment: {
     enabled: true,
@@ -1085,9 +1072,6 @@ const WORKBENCH_BASE_THEME_SETTINGS = Object.freeze({
     radialInner: WORKBENCH_LIGHT_CANVAS_COLOR,
     radialOuter: WORKBENCH_LIGHT_CANVAS_COLOR
   },
-  edges: {
-    ...CAD_THEME_EDGE_SETTINGS
-  },
   // Workbench is a clean engineering canvas: no stage floor or grid; the
   // floor colors stay authored so derived fallbacks and mode overlays hold.
   floor: {
@@ -1120,10 +1104,6 @@ const WORKBENCH_DARK_FLOOR_COLOR = "#202832";
 
 const WORKBENCH_DARK_THEME_SETTINGS = Object.freeze({
   ...DARKOAL_THEME_SETTINGS,
-  edges: {
-    ...CAD_THEME_EDGE_SETTINGS,
-    color: "#1c2836"
-  },
   background: {
     ...DARKOAL_THEME_SETTINGS.background,
     solidColor: "#181f28",
@@ -1204,9 +1184,6 @@ const CINEMATIC_STUDIO_THEME_SETTINGS = Object.freeze({
     ...STUDIO_STAGE_MATERIALS,
     defaultColor: CINEMATIC_FILL_COLORS[0],
     fillColors: CINEMATIC_FILL_COLORS
-  },
-  edges: {
-    ...DISABLED_THEME_EDGE_SETTINGS
   },
   background: {
     type: "radial",
@@ -1327,8 +1304,10 @@ const VIBRANT_STUDIO_THEME_SETTINGS = Object.freeze({
   materials: {
     ...STUDIO_STAGE_MATERIALS,
     defaultColor: VIBRANT_FILL_COLORS[0],
+    // Palette kept for the picker/custom edits but not cycled: Vibrant shows
+    // off each model's own colors, just with a punchier photoreal grade.
     fillColors: VIBRANT_FILL_COLORS,
-    cycleColors: true,
+    cycleColors: false,
     saturation: 1.32,
     contrast: 1.12,
     brightness: 1.04,
@@ -1337,9 +1316,6 @@ const VIBRANT_STUDIO_THEME_SETTINGS = Object.freeze({
     clearcoat: 0.55,
     clearcoatRoughness: 0.2,
     envMapIntensity: 1.2
-  },
-  edges: {
-    ...DISABLED_THEME_EDGE_SETTINGS
   },
   background: {
     type: "radial",
@@ -1831,7 +1807,8 @@ function createThemeSettingsSignature(value = {}) {
     background: value?.background || {},
     floor: value?.floor || {},
     environment: value?.environment || {},
-    lighting: value?.lighting || {}
+    lighting: value?.lighting || {},
+    edges: value?.edges || null
   });
 }
 
@@ -2116,6 +2093,13 @@ export function normalizeThemeSettings(value = {}) {
       }
     }
   };
+  // Edge styling normally lives in per-file display settings, so themes stay
+  // edge-agnostic by default. A theme MAY opt in to its own outline (e.g.
+  // Terminal's neon-green linework); when it does, the viewer/snapshot use it
+  // as the base edge appearance. Only carry it when explicitly declared.
+  if (source.edges && typeof source.edges === "object" && !Array.isArray(source.edges)) {
+    normalized.edges = normalizeDisplayEdgeSettings(source.edges);
+  }
   normalized.modeColors = normalizeThemeModeColors(source.modeColors, normalized);
 
   if (
