@@ -12,6 +12,12 @@ from OCP.TopExp import TopExp_Explorer
 from OCP.TopLoc import TopLoc_Location
 from OCP.TopoDS import TopoDS
 
+try:
+    import numpy
+except ImportError:
+    # Vendored skill runtimes may not ship numpy; keep the pure-Python path.
+    numpy = None
+
 
 ColorRGBA = tuple[float, float, float, float]
 CAD_TO_GLB_SCALE = 0.001
@@ -121,7 +127,269 @@ def transform_normal_from_occ(
     return (x / length, y / length, z / length)
 
 
+# Encoded side keys pack a (low, high) node-index pair into one int64 as
+# low * 2**32 + high; both components must stay below this bound so the
+# encoding cannot collide or overflow.
+_SIDE_KEY_COMPONENT_LIMIT = 1 << 31
+
+# Per-triangle side node pairs are ((t1, t2), (t2, t0), (t0, t1)).
+_SIDE_LEFT_COLUMNS = (1, 2, 0)
+_SIDE_RIGHT_COLUMNS = (2, 0, 1)
+
+
+def _encoded_edge_side_table(
+    edge_side_ordinals: Mapping[tuple[int, int], int],
+) -> tuple[Any, Any] | None:
+    keys: list[int] = []
+    ordinals: list[int] = []
+    for pair, ordinal in edge_side_ordinals.items():
+        if not isinstance(pair, tuple) or len(pair) != 2:
+            continue
+        left = int(pair[0])
+        right = int(pair[1])
+        if not (0 <= left < _SIDE_KEY_COMPONENT_LIMIT and 0 <= right < _SIDE_KEY_COMPONENT_LIMIT):
+            continue
+        keys.append((left << 32) | right)
+        ordinals.append(int(ordinal))
+    if not keys:
+        return None
+    key_array = numpy.asarray(keys, dtype=numpy.int64)
+    ordinal_array = numpy.asarray(ordinals, dtype=numpy.int64)
+    order = numpy.argsort(key_array)
+    return key_array[order], ordinal_array[order]
+
+
 def _append_face_payload(
+    *,
+    positions: array,
+    normals: array,
+    barycentrics: array,
+    edge_classes: array,
+    primitive_indices_by_key: dict[tuple[int, int, int, int], tuple[int, ColorRGBA, array]],
+    face_runs_by_hash: dict[int, tuple[int, int, int]],
+    surface_half_edges_by_face_ordinal: dict[int, list[tuple[int, int, int, int, int]]],
+    min_values: list[float],
+    max_values: list[float],
+    face_hash: int,
+    face_ordinal: int,
+    default_color: ColorRGBA,
+    face_colors: Mapping[int, ColorRGBA],
+    edge_side_ordinals: Mapping[tuple[int, int], int],
+    edge_surface_class_codes: Mapping[int, int],
+    include_surface_edges: bool,
+    nodes: Sequence[Sequence[float]],
+    node_normals: Sequence[Sequence[float]],
+    triangles: Sequence[Sequence[int]],
+) -> None:
+    if numpy is not None and _append_face_payload_numpy(
+        positions=positions,
+        normals=normals,
+        barycentrics=barycentrics,
+        edge_classes=edge_classes,
+        primitive_indices_by_key=primitive_indices_by_key,
+        face_runs_by_hash=face_runs_by_hash,
+        surface_half_edges_by_face_ordinal=surface_half_edges_by_face_ordinal,
+        min_values=min_values,
+        max_values=max_values,
+        face_hash=face_hash,
+        face_ordinal=face_ordinal,
+        default_color=default_color,
+        face_colors=face_colors,
+        edge_side_ordinals=edge_side_ordinals,
+        edge_surface_class_codes=edge_surface_class_codes,
+        include_surface_edges=include_surface_edges,
+        nodes=nodes,
+        node_normals=node_normals,
+        triangles=triangles,
+    ):
+        return
+    _append_face_payload_python(
+        positions=positions,
+        normals=normals,
+        barycentrics=barycentrics,
+        edge_classes=edge_classes,
+        primitive_indices_by_key=primitive_indices_by_key,
+        face_runs_by_hash=face_runs_by_hash,
+        surface_half_edges_by_face_ordinal=surface_half_edges_by_face_ordinal,
+        min_values=min_values,
+        max_values=max_values,
+        face_hash=face_hash,
+        face_ordinal=face_ordinal,
+        default_color=default_color,
+        face_colors=face_colors,
+        edge_side_ordinals=edge_side_ordinals,
+        edge_surface_class_codes=edge_surface_class_codes,
+        include_surface_edges=include_surface_edges,
+        nodes=nodes,
+        node_normals=node_normals,
+        triangles=triangles,
+    )
+
+
+def _append_face_payload_numpy(
+    *,
+    positions: array,
+    normals: array,
+    barycentrics: array,
+    edge_classes: array,
+    primitive_indices_by_key: dict[tuple[int, int, int, int], tuple[int, ColorRGBA, array]],
+    face_runs_by_hash: dict[int, tuple[int, int, int]],
+    surface_half_edges_by_face_ordinal: dict[int, list[tuple[int, int, int, int, int]]],
+    min_values: list[float],
+    max_values: list[float],
+    face_hash: int,
+    face_ordinal: int,
+    default_color: ColorRGBA,
+    face_colors: Mapping[int, ColorRGBA],
+    edge_side_ordinals: Mapping[tuple[int, int], int],
+    edge_surface_class_codes: Mapping[int, int],
+    include_surface_edges: bool,
+    nodes: Sequence[Sequence[float]],
+    node_normals: Sequence[Sequence[float]],
+    triangles: Sequence[Sequence[int]],
+) -> bool:
+    """Vectorized `_append_face_payload_python`; returns False to fall back.
+
+    The output must stay byte-identical to the Python path, so any input this
+    path cannot reproduce exactly is rejected before mutating the payload.
+    """
+    if not nodes or not triangles:
+        return True
+    if len(node_normals) != len(nodes):
+        node_normals = [(0.0, 0.0, 1.0)] * len(nodes)
+    try:
+        node_array = numpy.asarray(nodes, dtype=numpy.float64)
+        normal_array = numpy.asarray(node_normals, dtype=numpy.float64)
+        triangle_array = numpy.asarray(triangles, dtype=numpy.int64)
+        side_table = (
+            _encoded_edge_side_table(edge_side_ordinals) if include_surface_edges else None
+        )
+    except (TypeError, ValueError, OverflowError):
+        return False
+    if (
+        node_array.ndim != 2
+        or node_array.shape[1] < 3
+        or normal_array.ndim != 2
+        or normal_array.shape[1] < 3
+        or triangle_array.ndim != 2
+        or triangle_array.shape[1] != 3
+    ):
+        return False
+    if int(triangle_array.min()) < 0 or int(triangle_array.max()) >= min(
+        len(nodes), _SIDE_KEY_COMPONENT_LIMIT
+    ):
+        # Out-of-range node references: let the Python path raise (or wrap
+        # negative indices) exactly as before.
+        return False
+
+    normalized_color = normalize_rgba(face_colors.get(face_hash, default_color))
+    key = color_key(normalized_color)
+    bucket = primitive_indices_by_key.get(key)
+    if bucket is None:
+        bucket = (len(primitive_indices_by_key), normalized_color, array("I"))
+        primitive_indices_by_key[key] = bucket
+    primitive_index, _primitive_color, primitive_indices = bucket
+
+    triangle_start = len(primitive_indices) // 3
+    # Bounds must come from the float64 scaled values before the float32 cast,
+    # and nanmin/nanmax mirror Python min()/max(), which never select NaN.
+    scaled_nodes = node_array[:, :3] * CAD_TO_GLB_SCALE
+    normal_columns = normal_array[:, :3]
+
+    if not include_surface_edges:
+        vertex_offset = len(positions) // 3
+        minimum = numpy.nanmin(scaled_nodes, axis=0)
+        maximum = numpy.nanmax(scaled_nodes, axis=0)
+        for axis in range(3):
+            min_values[axis] = min(min_values[axis], float(minimum[axis]))
+            max_values[axis] = max(max_values[axis], float(maximum[axis]))
+        positions.frombytes(scaled_nodes.astype(numpy.float32).tobytes())
+        normals.frombytes(normal_columns.astype(numpy.float32).tobytes())
+        primitive_indices.frombytes(
+            (triangle_array + vertex_offset).astype(numpy.uint32).tobytes()
+        )
+        face_runs_by_hash[face_hash] = (primitive_index, triangle_start, len(triangles))
+        return True
+
+    triangle_count = int(triangle_array.shape[0])
+    side_classes = numpy.zeros(triangle_count * 3, dtype=numpy.int64)
+    matched_flat = matched_ordinals = matched_codes = None
+    if side_table is not None:
+        sorted_keys, sorted_ordinals = side_table
+        left_nodes = triangle_array[:, _SIDE_LEFT_COLUMNS]
+        right_nodes = triangle_array[:, _SIDE_RIGHT_COLUMNS]
+        query_keys = (
+            (numpy.minimum(left_nodes, right_nodes) << 32)
+            | numpy.maximum(left_nodes, right_nodes)
+        ).ravel()
+        insert_at = numpy.searchsorted(sorted_keys, query_keys)
+        matched = sorted_keys[numpy.minimum(insert_at, sorted_keys.size - 1)] == query_keys
+        matched_flat = numpy.nonzero(matched)[0]
+        if matched_flat.size:
+            matched_ordinals = sorted_ordinals[insert_at[matched_flat]]
+            unique_ordinals, inverse = numpy.unique(matched_ordinals, return_inverse=True)
+            unique_codes = numpy.asarray(
+                [
+                    int(edge_surface_class_codes.get(int(ordinal), 0) or 0)
+                    for ordinal in unique_ordinals.tolist()
+                ],
+                dtype=numpy.int64,
+            )
+            matched_codes = unique_codes[inverse]
+            clamped_codes = numpy.maximum(matched_codes, 0)
+            if int(clamped_codes.max()) > 255:
+                # array('B') would raise OverflowError; let the Python path do so.
+                return False
+            side_classes[matched_flat] = clamped_codes
+        else:
+            matched_flat = None
+
+    if matched_flat is not None:
+        half_edge_mask = matched_codes != 0
+        if bool(numpy.any(half_edge_mask)):
+            half_edges = surface_half_edges_by_face_ordinal.setdefault(face_ordinal, [])
+            for flat_side, edge_ordinal, class_code in zip(
+                matched_flat[half_edge_mask].tolist(),
+                matched_ordinals[half_edge_mask].tolist(),
+                matched_codes[half_edge_mask].tolist(),
+            ):
+                half_edges.append(
+                    (
+                        edge_ordinal,
+                        primitive_index,
+                        triangle_start + flat_side // 3,
+                        flat_side % 3,
+                        class_code,
+                    )
+                )
+
+    gathered_positions = scaled_nodes[triangle_array]
+    minimum = numpy.nanmin(gathered_positions.reshape(-1, 3), axis=0)
+    maximum = numpy.nanmax(gathered_positions.reshape(-1, 3), axis=0)
+    for axis in range(3):
+        min_values[axis] = min(min_values[axis], float(minimum[axis]))
+        max_values[axis] = max(max_values[axis], float(maximum[axis]))
+
+    vertex_base = len(positions) // 3
+    positions.frombytes(gathered_positions.astype(numpy.float32).tobytes())
+    normals.frombytes(normal_columns[triangle_array].astype(numpy.float32).tobytes())
+    barycentrics.frombytes(
+        numpy.tile(numpy.eye(3, dtype=numpy.float32), (triangle_count, 1)).tobytes()
+    )
+    # Every vertex of a triangle carries that triangle's full side triplet.
+    edge_classes.frombytes(
+        numpy.repeat(side_classes.reshape(triangle_count, 3), 3, axis=0)
+        .astype(numpy.uint8)
+        .tobytes()
+    )
+    primitive_indices.frombytes(
+        numpy.arange(vertex_base, vertex_base + triangle_count * 3, dtype=numpy.uint32).tobytes()
+    )
+    face_runs_by_hash[face_hash] = (primitive_index, triangle_start, len(triangles))
+    return True
+
+
+def _append_face_payload_python(
     *,
     positions: array,
     normals: array,
