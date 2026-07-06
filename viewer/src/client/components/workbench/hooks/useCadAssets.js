@@ -151,6 +151,23 @@ function robotMeshLoadConcurrency() {
   return Math.max(2, Math.min(ROBOT_MESH_LOAD_CONCURRENCY, Math.floor(hardwareConcurrency / 2)));
 }
 
+// Component-GLB packages fan out to many small content-addressed GLBs (141 for
+// falcon_heavy). They parse in the GLB worker (off the main thread), so — unlike
+// the large robot-mesh STL path above — a higher fetch concurrency just overlaps
+// I/O without stalling the UI. Cap generously but bounded so we do not flood the
+// single worker's queue or open an unreasonable number of sockets.
+const PACKAGE_COMPONENT_LOAD_CONCURRENCY = 8;
+
+function packageComponentLoadConcurrency() {
+  const hardwareConcurrency = typeof navigator !== "undefined"
+    ? Number(navigator.hardwareConcurrency)
+    : 0;
+  if (!Number.isFinite(hardwareConcurrency) || hardwareConcurrency <= 0) {
+    return PACKAGE_COMPONENT_LOAD_CONCURRENCY;
+  }
+  return Math.max(4, Math.min(PACKAGE_COMPONENT_LOAD_CONCURRENCY, Math.floor(hardwareConcurrency)));
+}
+
 function urdfMeshUrls(urdfData) {
   return [...new Set(
     (Array.isArray(urdfData?.links) ? urdfData.links : [])
@@ -524,9 +541,12 @@ export function useCadAssets({
           setMeshLoadStage("loading components");
           const componentEntries = Object.entries(packageDescriptor.components || {});
           const componentMeshDataByCid = {};
-          await mapWithConcurrency(componentEntries, robotMeshLoadConcurrency(), async ([cid, component]) => {
+          await mapWithConcurrency(componentEntries, packageComponentLoadConcurrency(), async ([cid, component]) => {
             componentMeshDataByCid[cid] = await loadRenderGlb(resolvePackageAssetUrl(meshUrl, component.glb), {
-              signal: controller.signal
+              // Parse component GLBs in the worker so the main thread stays free to
+              // paint the loading UI while 100+ components fetch+parse in parallel.
+              signal: controller.signal,
+              preferWorker: true
             });
           });
           if (requestId !== requestIdRef.current) {
