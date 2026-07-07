@@ -23,7 +23,7 @@ import {
 import {
   loadImplicitCadModule,
   peekImplicitCadModule
-} from "implicitjs/loader";
+} from "cadjs/implicit/loader";
 import {
   assemblyRootFromTopology,
   buildComposedPackageMeshData
