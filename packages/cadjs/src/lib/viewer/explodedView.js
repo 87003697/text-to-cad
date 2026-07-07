@@ -138,8 +138,25 @@ function vecLength(vec) {
   return Math.hypot(vec[0], vec[1], vec[2]);
 }
 
-// Build layers of groups that overlap along the explode axis (coplanar layers),
-// sorted from the base outward.
+// Do two groups sit side-by-side in the plane perpendicular to the explode axis
+// (footprints clear of each other) rather than nested/concentric? Side-by-side
+// coplanar groups can separate laterally; nested ones must telescope axially.
+function footprintsDisjoint(a, b, axisIndex) {
+  const perp = [0, 1, 2].filter((axis) => axis !== axisIndex);
+  const dist = Math.hypot(
+    a.center[perp[0]] - b.center[perp[0]],
+    a.center[perp[1]] - b.center[perp[1]]
+  );
+  const halfA = Math.max(boundsSize(a.bounds, perp[0]), boundsSize(a.bounds, perp[1])) / 2;
+  const halfB = Math.max(boundsSize(b.bounds, perp[0]), boundsSize(b.bounds, perp[1])) / 2;
+  return dist > (halfA + halfB) * 0.75;
+}
+
+// Build layers along the explode axis. Groups at the same axial station are
+// merged into one lateral layer ONLY when their footprints are mutually
+// disjoint (side-by-side, e.g. a bolt circle); concentric/overlapping groups
+// (a shaft in a housing, stacked gears) stay as separate layers so the axial
+// sweep telescopes them apart instead of scattering them sideways.
 function buildLayers(groups, axisIndex, tolerance) {
   const sorted = [...groups].sort((left, right) => {
     const delta = left.center[axisIndex] - right.center[axisIndex];
@@ -148,7 +165,9 @@ function buildLayers(groups, axisIndex, tolerance) {
   const layers = [];
   for (const group of sorted) {
     const previous = layers[layers.length - 1];
-    if (previous && Math.abs(group.center[axisIndex] - previous.center) <= tolerance) {
+    const coplanar = previous && Math.abs(group.center[axisIndex] - previous.center) <= tolerance;
+    const sideBySide = coplanar && previous.groups.every((existing) => footprintsDisjoint(group, existing, axisIndex));
+    if (sideBySide) {
       previous.groups.push(group);
       previous.bounds = mergeBounds([previous.bounds, group.bounds]) || previous.bounds;
       previous.center = boundsCenterArray(previous.bounds)[axisIndex];
