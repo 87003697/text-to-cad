@@ -32,21 +32,25 @@ const rad = (deg) => [Math.cos(deg * DEG), Math.sin(deg * DEG), 0];
 
 // Per-subsystem choreography: ref (gen_step child order), unit direction,
 // travel (mm), and the [start,end] window on the 0..1 explode progress. Outer
-// structure and the nozzle leave first (low window); the injector head is
-// revealed last (high window) and emphasized.
+// structure leaves first (low window); the injector head is revealed last
+// (high window) and emphasized.
+//
+// GROUNDED: the nozzle stays put as the datum (dist 0) and every on-axis part
+// separates UPWARD, so nothing drops below the z=0 floor. Radial + vertical
+// travels are kept tight so the full turntable stays readable on-screen.
 const GROUPS = [
-  { key: "nozzle", ref: "#o1.1", label: "Nozzle bell", dir: [0, 0, -1], dist: 1950, win: [0.00, 0.28] },
-  { key: "chamber", ref: "#o1.2", label: "Combustion chamber", dir: [0, 0, -1], dist: 700, win: [0.08, 0.38] },
-  { key: "injector", ref: "#o1.3", label: "Injector head + LOX dome", dir: [0, 0, 1], dist: 900, win: [0.46, 0.94] },
-  { key: "fuel_pump", ref: "#o1.4", label: "Methane turbopump + fuel preburner", dir: [-1, 0, 0], dist: 2900, win: [0.30, 0.70] },
-  { key: "ox_pump", ref: "#o1.5", label: "LOX turbopump + oxygen preburner", dir: [1, 0, 0], dist: 2900, win: [0.30, 0.70] },
-  { key: "main_ox_valve", ref: "#o1.6", label: "Main oxidizer valve", dir: [0, 0, 1], dist: 1500, win: [0.12, 0.44] },
-  { key: "plumbing", ref: "#o1.7", label: "Propellant + hot-gas plumbing", dir: rad(285), dist: 2900, win: [0.18, 0.54] },
-  { key: "inlets", ref: "#o1.8", label: "Propellant inlets", dir: [0, 0, 1], dist: 2050, win: [0.05, 0.35] },
-  { key: "frame", ref: "#o1.9", label: "Thrust frame + gimbal", dir: [0, 0, 1], dist: 2650, win: [0.00, 0.30] },
-  { key: "tvc", ref: "#o1.10", label: "TVC actuators", dir: norm([...rad(215), 0.35]), dist: 3200, win: [0.22, 0.58] },
-  { key: "avionics", ref: "#o1.11", label: "Engine controller + harness", dir: rad(90), dist: 3000, win: [0.15, 0.50] },
-  { key: "sensors", ref: "#o1.12", label: "Sensors + fittings", dir: norm([...rad(45), 0.2]), dist: 3200, win: [0.20, 0.56] },
+  { key: "nozzle", ref: "#o1.1", label: "Nozzle bell", dir: [0, 0, 1], dist: 0, win: [0.00, 0.28] },
+  { key: "chamber", ref: "#o1.2", label: "Combustion chamber", dir: [0, 0, 1], dist: 500, win: [0.08, 0.38] },
+  { key: "injector", ref: "#o1.3", label: "Injector head + LOX dome", dir: [0, 0, 1], dist: 1050, win: [0.46, 0.94] },
+  { key: "fuel_pump", ref: "#o1.4", label: "Methane turbopump + fuel preburner", dir: [-1, 0, 0], dist: 2000, win: [0.30, 0.70] },
+  { key: "ox_pump", ref: "#o1.5", label: "LOX turbopump + oxygen preburner", dir: [1, 0, 0], dist: 2000, win: [0.30, 0.70] },
+  { key: "main_ox_valve", ref: "#o1.6", label: "Main oxidizer valve", dir: [0, 0, 1], dist: 1450, win: [0.12, 0.44] },
+  { key: "plumbing", ref: "#o1.7", label: "Propellant + hot-gas plumbing", dir: rad(285), dist: 2000, win: [0.18, 0.54] },
+  { key: "inlets", ref: "#o1.8", label: "Propellant inlets", dir: [0, 0, 1], dist: 1750, win: [0.05, 0.35] },
+  { key: "frame", ref: "#o1.9", label: "Thrust frame + gimbal", dir: [0, 0, 1], dist: 2200, win: [0.00, 0.30] },
+  { key: "tvc", ref: "#o1.10", label: "TVC actuators", dir: rad(215), dist: 2250, win: [0.22, 0.58] },
+  { key: "avionics", ref: "#o1.11", label: "Engine controller + harness", dir: rad(90), dist: 2100, win: [0.15, 0.50] },
+  { key: "sensors", ref: "#o1.12", label: "Sensors + fittings", dir: rad(45), dist: 2250, win: [0.20, 0.56] },
 ];
 
 const FEATURES = Object.fromEntries(
