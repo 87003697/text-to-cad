@@ -6,6 +6,7 @@ import {
   createViewerContextMenuGestureState,
   VIEWER_CONTEXT_MENU_SUPPRESSION_MS
 } from "./viewerContextMenuGesture.js";
+import { partIdFromIntersection } from "./instancePicking.js";
 
 test("worldUnitsPerPixelAtDistance converts perspective depth to screen scale", () => {
   const camera = {
@@ -82,4 +83,23 @@ test("viewer context menu gesture suppression expires", () => {
 
   assert.equal(gesture.isSuppressed(), false);
   assert.equal(gesture.consumeSuppression(), false);
+});
+
+
+test("partIdFromIntersection reads a per-occurrence mesh's partId", () => {
+  const hit = { object: { userData: { partId: "o1.5" } } };
+  assert.equal(partIdFromIntersection(hit), "o1.5");
+});
+
+test("partIdFromIntersection maps an InstancedMesh instanceId to its occurrence", () => {
+  const object = { userData: { cadInstanceOccurrenceIds: ["o1.1", "o1.2", "o1.3"] } };
+  assert.equal(partIdFromIntersection({ object, instanceId: 0 }), "o1.1");
+  assert.equal(partIdFromIntersection({ object, instanceId: 2 }), "o1.3");
+});
+
+test("partIdFromIntersection returns null for an out-of-range or absent instanceId", () => {
+  const object = { userData: { cadInstanceOccurrenceIds: ["o1.1"] } };
+  assert.equal(partIdFromIntersection({ object, instanceId: 5 }), null);
+  assert.equal(partIdFromIntersection({ object }), null);
+  assert.equal(partIdFromIntersection({}), null);
 });
