@@ -58,12 +58,24 @@ the render — no scene rebuild, cheap per-frame updates.
 
 ### UI
 
-The controls live in a subsection of the theme/display settings popover
-(`viewer/src/client/components/workbench/ThemeSettingsPopover.js:1649`):
-an Enabled toggle, an Axis segmented control, Spacing and Depth sliders,
-Merge levels / Ground base toggles, Reset. The skill docs describe the
-feature as "an independent Explode toggle for animated vertical STEP
-disassembly" (`skills/cad-viewer/references/viewer-features.md:22`).
+The controls live in their own **"Exploded"** file-sheet tab
+(`ExplodedSettingsSection` / `buildExplodedSettingsTab` in
+`viewer/src/client/components/workbench/ThemeSettingsPopover.js`, registered as
+`FILE_SHEET_SECTION_IDS.THEME_EXPLODED` and appended to the STEP section list in
+`viewer/src/client/workbench/fileSheetSections.js`). The tab is **auto-first**
+and deliberately terse. On/off is expressed purely through **Amount** (0 =
+assembled): a compact **Enable / Disable** button at the top just toggles Amount
+to/from zero (syncing the viewer's `enabled` flag and restoring the last
+non-zero amount), so **every control stays visible whether or not the view is
+exploded**. Below it a flat stack of minimally-labelled controls — Amount, a
+top **Layout: Automatic / Custom** switch (kept above the controls it swaps), a
+**Direction dropdown** (`Auto/X/Y/Z/Radial`), Reverse, Spread, Detail, Order,
+Explode lines, Reset — with detail carried in hover tooltips rather than inline
+text. Choosing **Custom** materializes the automatic layout into an editable
+per-part step list (numeric distance/angle edit, reorder, delete); **Automatic**
+discards it. Earlier this was a terse subsection of the Display tab. The skill
+docs describe the feature as "an independent Explode toggle for animated
+vertical STEP disassembly" (`skills/cad-viewer/references/viewer-features.md:22`).
 
 ### What it gets right
 
@@ -399,11 +411,13 @@ axis/spacing/depth/mergeCoplanar setting shape is gone):
   snapshot job schema documented; runtime bundle regenerated.
 - **Layer 3 (viewer).** `CadViewer.js` compiles + evaluates the document
   (toggle animates, amount scrubs and edits snap) and renders explode-line
-  trails. The Display-settings panel exposes the amount scrub slider, auto
-  axis/spacing/depth hints, sequence + explode-lines toggles, an
-  "Auto explode to steps" action that materializes editable steps, and a
-  per-step list (rename-free label, numeric distance/angle edit, reorder,
-  delete). Per-file persistence rides the existing display-settings slice.
+  trails. A dedicated, auto-first **"Exploded" tab** (`ExplodedSettingsSection`)
+  leads with an Enable/Disable button that toggles Amount to/from zero (controls
+  stay visible either way), then a terse flat stack — Amount, a top Automatic/
+  Custom switch, a Direction dropdown, Reverse, Spread, Detail, Order, Explode
+  lines, Reset — where Custom materializes an editable per-step list (numeric
+  distance/angle edit, reorder, delete). Labels are minimal; detail lives in
+  hover tooltips. Per-file persistence rides the existing display-settings slice.
 
 Deferred (single follow-up): the **drag gizmo** for direct manipulation
 (§4.3). Numeric per-step editing already provides precise authoring; the

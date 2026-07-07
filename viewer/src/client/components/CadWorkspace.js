@@ -9,7 +9,9 @@ import GcodeFileSheet from "./workbench/GcodeFileSheet";
 import FileViewerSidebar from "./workbench/FileViewerSidebar";
 import {
   AppearanceEditorPanel,
-  buildDisplaySettingsTab
+  buildClipSettingsTab,
+  buildDisplaySettingsTab,
+  buildExplodedSettingsTab
 } from "./workbench/ThemeSettingsPopover";
 import MeshFileSheet from "./workbench/MeshFileSheet";
 import ImplicitFileSheet from "./workbench/ImplicitFileSheet";
@@ -8361,10 +8363,25 @@ export default function CadWorkspace({
     isStepView
       ? buildDisplaySettingsTab({
           displaySettings,
+          updateDisplaySettings
+        })
+      : null,
+    // Clip (section plane) is its own tab so the axis sliders have room and the
+    // Display tab stays focused on appearance/edges.
+    isStepView
+      ? buildClipSettingsTab({
+          displaySettings,
           updateDisplaySettings,
-          clipBounds: selectedMeshData?.bounds || null,
-          explodeMeshData: selectedMeshData || null,
-          showClip: true
+          clipBounds: selectedMeshData?.bounds || null
+        })
+      : null,
+    // Exploded view is its own tab so the auto-first layout controls and the
+    // optional per-part step authoring have room to be self-explanatory.
+    isStepView
+      ? buildExplodedSettingsTab({
+          displaySettings,
+          updateDisplaySettings,
+          explodeMeshData: selectedMeshData || null
         })
       : null
     // Appearance is global theming, not file-specific — it lives in the
