@@ -594,7 +594,13 @@ export function buildComposedPackageMeshData(descriptor, componentMeshDataByCid)
     assemblyMates: assemblyMatesFromTopology(descriptor),
     missingComponentIds,
     partTransformsBaked: true,
-    has_source_colors: anyColors
+    has_source_colors: anyColors,
+    // The un-composed inputs, carried so the optional cid-keyed instanced render
+    // path (settings.instancePackages) can build InstancedMeshes without baking
+    // per-occurrence vertices. Holding these references keeps ~one components'
+    // worth of meshData alive; a follow-up will skip the compose above entirely
+    // when instancing is requested at load time.
+    packageInstancing: { descriptor, componentMeshDataByCid }
   };
 }
 
