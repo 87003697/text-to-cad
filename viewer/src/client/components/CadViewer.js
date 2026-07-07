@@ -96,10 +96,11 @@ import {
 import {
   applyExplodedViewProgress,
   clearExplodedViewRecords,
-  createExplodedViewRecordStates,
+  compileExplodedView,
   easeExplodedViewProgress,
-  explodedViewStateTranslationAtProgress
-} from "cadjs/lib/viewer/explodedView";
+  explodedViewTrailSegments
+} from "cadjs/lib/viewer/explodedViewSteps";
+import { generateExplodedViewDocument } from "cadjs/lib/viewer/explodedView";
 import {
   applyDisplayRecordTransform,
   applyRuntimeModelBounds,
@@ -419,16 +420,6 @@ function meshNeedsPartRenderingForSourceColors(meshData) {
   return partColors.length !== parts.length || new Set(partColors).size > 1;
 }
 
-function displayRecordsAnimationKey(records = []) {
-  return (Array.isArray(records) ? records : [])
-    .map((record) => [
-      String(record?.partId || "").trim(),
-      String(record?.mesh?.uuid || ""),
-      String(record?.geometry?.uuid || "")
-    ].join(":"))
-    .join("|");
-}
-
 function transformedRuntimeStateEqual(current, next) {
   return (
     (current?.base || null) === (next?.base || null) &&
@@ -463,88 +454,89 @@ function displayRecordExplodedViewTranslation(THREE, record) {
   );
 }
 
-function explodedViewStateTargetTranslation(THREE, state, targetProgress) {
-  const amount = clamp(targetProgress, 0, 1);
-  const translation = state?.translation?.isVector3
-    ? state.translation.clone()
-    : new THREE.Vector3(0, 0, toNumber(state?.distance));
-  return translation.multiplyScalar(amount);
+// Resolve the exploded-view document to render: the authored step list, or a
+// document generated from the auto-explode hints when no steps were authored.
+function resolveViewerExplodeDocument(THREE, settings, records, bounds) {
+  if (settings?.steps?.length) {
+    return settings;
+  }
+  return generateExplodedViewDocument(THREE, records, bounds, settings?.auto, {
+    enabled: settings?.enabled,
+    amount: settings?.amount,
+    order: settings?.order,
+    trails: settings?.trails
+  });
 }
 
-function explodedViewTransitionStateKey(state) {
-  const partId = String(state?.partId || state?.record?.partId || "").trim();
-  return partId || String(state?.groupKey || "").trim();
-}
+// -- explode trails (explode lines) ----------------------------------------
+// Faded overlay lines tracing each moved group from its assembled position to
+// its current exploded position. Built in model space and parented to the edges
+// group so they inherit the model offset; rebuilt each frame during a scrub.
 
-function createExplodedViewRuntimeTransitionStates(runtime, states, targetProgress, {
-  previousStates = [],
-  previousTransitionProgress = 1,
-  useCurrentTranslations = true
-} = {}) {
-  if (!runtime?.THREE) {
-    return [];
+function ensureExplodeTrailGroup(runtime) {
+  if (runtime.explodeTrailGroup) {
+    return runtime.explodeTrailGroup;
   }
   const THREE = runtime.THREE;
-  const previousTranslationsByRecord = new Map();
-  const previousTranslationsByKey = new Map();
-  if (useCurrentTranslations) {
-    for (const previousState of Array.isArray(previousStates) ? previousStates : []) {
-      if (!previousState?.record) {
-        continue;
-      }
-      const translation = explodedViewStateTranslationAtProgress(
-        THREE,
-        previousState,
-        previousTransitionProgress
-      );
-      if (translation) {
-        if (!previousTranslationsByRecord.has(previousState.record)) {
-          previousTranslationsByRecord.set(previousState.record, translation);
-        }
-        const key = explodedViewTransitionStateKey(previousState);
-        if (key && !previousTranslationsByKey.has(key)) {
-          previousTranslationsByKey.set(key, translation);
-        }
-      }
-    }
-  }
-  return (Array.isArray(states) ? states : []).map((state) => ({
-    ...state,
-    fromTranslation: useCurrentTranslations
-      ? (
-        previousTranslationsByRecord.get(state.record) ||
-        previousTranslationsByKey.get(explodedViewTransitionStateKey(state)) ||
-        displayRecordExplodedViewTranslation(THREE, state.record)
-      )
-      : new THREE.Vector3(),
-    translation: explodedViewStateTargetTranslation(THREE, state, targetProgress),
-    matrix: new THREE.Matrix4()
-  }));
+  const group = new THREE.Group();
+  group.name = "explodeTrails";
+  group.renderOrder = 15;
+  (runtime.edgesGroup || runtime.modelGroup)?.add(group);
+  runtime.explodeTrailGroup = group;
+  return group;
 }
 
-function clearExplodedViewRecordsOutsideStates(records = [], states = []) {
-  const stateRecords = new Set((Array.isArray(states) ? states : [])
-    .map((state) => state?.record)
-    .filter(Boolean));
-  for (const record of Array.isArray(records) ? records : []) {
-    if (record && !stateRecords.has(record)) {
-      record.explodedViewMatrix = null;
-    }
+function clearExplodeTrails(runtime) {
+  const group = runtime?.explodeTrailGroup;
+  if (!group) {
+    return;
+  }
+  for (const child of [...group.children]) {
+    group.remove(child);
+    child.geometry?.dispose?.();
+    child.material?.dispose?.();
   }
 }
 
-function explodedViewTransitionNeedsAnimation(states = []) {
-  for (const state of Array.isArray(states) ? states : []) {
-    const from = state?.fromTranslation;
-    const to = state?.translation;
-    if (!from?.isVector3 || !to?.isVector3) {
-      return true;
-    }
-    if (from.distanceToSquared(to) > 1e-8) {
-      return true;
-    }
+function updateExplodeTrails(runtime, compiled, progress) {
+  const THREE = runtime?.THREE;
+  if (!THREE) {
+    return;
   }
-  return false;
+  if (!compiled?.trails || !compiled.groups?.length) {
+    clearExplodeTrails(runtime);
+    return;
+  }
+  const segments = explodedViewTrailSegments(THREE, compiled, progress);
+  clearExplodeTrails(runtime);
+  if (!segments.length) {
+    return;
+  }
+  const group = ensureExplodeTrailGroup(runtime);
+  const positions = new Float32Array(segments.length * 6);
+  segments.forEach((segment, index) => {
+    const offset = index * 6;
+    positions[offset] = segment.from[0];
+    positions[offset + 1] = segment.from[1];
+    positions[offset + 2] = segment.from[2];
+    positions[offset + 3] = segment.to[0];
+    positions[offset + 4] = segment.to[1];
+    positions[offset + 5] = segment.to[2];
+  });
+  const geometry = new THREE.BufferGeometry();
+  geometry.setAttribute("position", new THREE.BufferAttribute(positions, 3));
+  const color = runtime.baseTheme?.exploded?.trailColor || 0x8a94a6;
+  const material = new THREE.LineBasicMaterial({
+    color,
+    transparent: true,
+    opacity: 0.55,
+    depthTest: false,
+    depthWrite: false
+  });
+  const lines = new THREE.LineSegments(geometry, material);
+  lines.renderOrder = 16;
+  lines.frustumCulled = false;
+  group.add(lines);
 }
 
 function normalizeZoomPercent(value, fallback = 100) {
@@ -835,11 +827,11 @@ function ZoomToolbar({
   );
 }
 
-function applyExplodedViewRuntimeProgress(runtime, states, progress) {
+function applyExplodedViewRuntimeProgress(runtime, compiled, progress) {
   if (!runtime?.THREE || !Array.isArray(runtime.displayRecords)) {
     return;
   }
-  applyExplodedViewProgress(runtime.THREE, states, progress);
+  applyExplodedViewProgress(runtime.THREE, compiled, progress);
   for (const record of runtime.displayRecords) {
     applyDisplayRecordTransform(runtime.THREE, record);
   }
@@ -848,6 +840,7 @@ function applyExplodedViewRuntimeProgress(runtime, states, progress) {
   if (runtime.topologyDisplayEdgeTransformByRecord === true) {
     syncRecordTopologyDisplayEdgeTransforms(runtime, runtime.displayRecords);
   }
+  updateExplodeTrails(runtime, compiled, progress);
   runtime.requestRender?.();
 }
 
@@ -2137,9 +2130,8 @@ const CadViewer = forwardRef(function CadViewer({
     rafId: 0,
     progress: 0,
     modelKey: "",
-    recordKey: "",
-    states: [],
-    transitionProgress: 0
+    enabled: false,
+    compiled: null
   });
   const viewportFrameInsetsRef = useRef(normalizedViewportFrameInsets);
   const framedModelKeyRef = useRef("");
@@ -2185,6 +2177,7 @@ const CadViewer = forwardRef(function CadViewer({
   const normalizedDisplaySettings = normalizedViewerRenderState.displaySettings;
   const normalizedDisplayMode = normalizedViewerRenderState.displayMode;
   const normalizedExplodedSettings = normalizedDisplaySettings.exploded;
+  const explodeAmount = clamp(toNumber(normalizedExplodedSettings.amount, 1), 0, 1);
   const explodablePartCount = useMemo(() => renderableMeshParts(meshData).length, [meshData]);
   const explodedViewActive = normalizedExplodedSettings.enabled && explodablePartCount > 1;
   const effectiveRenderPartsIndividually = renderPartsIndividually ||
@@ -4094,10 +4087,6 @@ const CadViewer = forwardRef(function CadViewer({
   useEffect(() => {
     const runtime = runtimeRef.current;
     const animation = explodedViewAnimationRef.current;
-    const previousAnimationStates = Array.isArray(animation.states)
-      ? animation.states
-      : [];
-    const previousAnimationProgress = clamp(animation.transitionProgress, 0, 1);
     cancelExplodedViewAnimation(explodedViewAnimationRef);
 
     if (
@@ -4108,61 +4097,59 @@ const CadViewer = forwardRef(function CadViewer({
     ) {
       animation.progress = 0;
       animation.modelKey = "";
-      animation.recordKey = "";
-      animation.states = [];
-      animation.transitionProgress = 0;
+      animation.enabled = false;
+      animation.compiled = null;
       return undefined;
     }
 
+    const THREE = runtime.THREE;
     const animationModelKey = modelKey || "";
-    const recordKey = `${animationModelKey}:${displayRecordsAnimationKey(runtime.displayRecords)}`;
     const modelChanged = animation.modelKey !== animationModelKey;
-    const targetProgress = explodedViewActive ? 1 : 0;
     const baseBounds = runtime.modelBounds || meshData?.bounds;
-    const states = createExplodedViewRecordStates(
-      runtime.THREE,
-      runtime.displayRecords,
-      baseBounds,
-      normalizedExplodedSettings
-    );
-    animation.modelKey = animationModelKey;
-    animation.recordKey = recordKey;
+    const targetProgress = explodedViewActive ? explodeAmount : 0;
 
-    if (!states.length) {
+    // Resolve + compile the step document. When disabled we still evaluate at
+    // progress 0 (which clears every record) so collapse animates cleanly.
+    const doc = explodedViewActive
+      ? resolveViewerExplodeDocument(THREE, normalizedExplodedSettings, runtime.displayRecords, baseBounds)
+      : null;
+    const compiled = doc
+      ? compileExplodedView(THREE, doc, runtime.displayRecords, baseBounds)
+      : null;
+    animation.modelKey = animationModelKey;
+    animation.compiled = compiled;
+
+    const wasEnabled = animation.enabled === true;
+    animation.enabled = explodedViewActive;
+
+    if (!compiled || !compiled.entries.length) {
       clearExplodedViewRecords(runtime.displayRecords);
       for (const record of runtime.displayRecords) {
-        applyDisplayRecordTransform(runtime.THREE, record);
+        applyDisplayRecordTransform(THREE, record);
       }
+      clearExplodeTrails(runtime);
       syncRecordTopologyDisplayEdgeTransforms(runtime, runtime.displayRecords);
       runtime.requestRender?.();
       animation.progress = 0;
-      animation.states = [];
-      animation.transitionProgress = 0;
       return undefined;
     }
 
-    const transitionStates = createExplodedViewRuntimeTransitionStates(runtime, states, targetProgress, {
-      previousStates: previousAnimationStates,
-      previousTransitionProgress: previousAnimationProgress,
-      useCurrentTranslations: !modelChanged
-    });
-    clearExplodedViewRecordsOutsideStates(runtime.displayRecords, transitionStates);
+    // Animate only the enable/disable transition (explode/collapse). Amount
+    // scrubs, step edits, and gizmo drags snap directly for a responsive feel.
+    const startProgress = clamp(toNumber(animation.progress, 0), 0, 1);
+    const shouldAnimate = wasEnabled !== explodedViewActive && !modelChanged
+      && Math.abs(targetProgress - startProgress) > 1e-4;
 
-    if (!explodedViewTransitionNeedsAnimation(transitionStates)) {
+    if (!shouldAnimate) {
       animation.progress = targetProgress;
-      animation.states = transitionStates;
-      animation.transitionProgress = 1;
-      applyExplodedViewRuntimeProgress(runtime, transitionStates, 1);
+      applyExplodedViewRuntimeProgress(runtime, compiled, targetProgress);
       return undefined;
     }
 
     const startedAt = typeof performance !== "undefined" && typeof performance.now === "function"
       ? performance.now()
       : Date.now();
-
-    animation.states = transitionStates;
-    animation.transitionProgress = 0;
-    applyExplodedViewRuntimeProgress(runtime, transitionStates, 0);
+    applyExplodedViewRuntimeProgress(runtime, compiled, startProgress);
 
     const step = (timestamp) => {
       const now = Number.isFinite(Number(timestamp)) ? Number(timestamp) : Date.now();
@@ -4171,19 +4158,15 @@ const CadViewer = forwardRef(function CadViewer({
         0,
         1
       );
-      const easedProgress = easeExplodedViewProgress(linearProgress);
-      animation.progress = targetProgress > 0
-        ? easedProgress
-        : 1 - easedProgress;
-      animation.transitionProgress = easedProgress;
-      applyExplodedViewRuntimeProgress(runtime, transitionStates, easedProgress);
+      const eased = easeExplodedViewProgress(linearProgress);
+      const progress = startProgress + (targetProgress - startProgress) * eased;
+      animation.progress = progress;
+      applyExplodedViewRuntimeProgress(runtime, compiled, progress);
       if (linearProgress < 1) {
         animation.rafId = window.requestAnimationFrame(step);
       } else {
         animation.rafId = 0;
         animation.progress = targetProgress;
-        animation.transitionProgress = 1;
-        animation.states = transitionStates;
       }
     };
 
@@ -4193,6 +4176,7 @@ const CadViewer = forwardRef(function CadViewer({
     };
   }, [
     explodedViewActive,
+    explodeAmount,
     normalizedExplodedSettings,
     isLoading,
     meshData?.bounds,

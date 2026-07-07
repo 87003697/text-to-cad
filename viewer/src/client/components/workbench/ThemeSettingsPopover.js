@@ -117,11 +117,17 @@ const PROJECTION_MODE_OPTIONS = [
 ];
 
 
-const EXPLODED_AXIS_OPTIONS = [
+const EXPLODE_MODE_OPTIONS = [
+  { value: "auto", label: "Auto" },
   { value: "x", label: "X" },
   { value: "y", label: "Y" },
   { value: "z", label: "Z" },
   { value: "radial", label: "Radial" }
+];
+
+const EXPLODE_ORDER_OPTIONS = [
+  { value: "simultaneous", label: "Together" },
+  { value: "sequential", label: "Sequential" }
 ];
 
 const PRIMARY_LIGHT_OPTIONS = [
@@ -1521,6 +1527,18 @@ export function DisplaySettingsSection({
       };
     });
   };
+  const setExplodedAuto = (autoPatch) => {
+    updateDisplaySettings?.((current) => {
+      const currentSettings = normalizeDisplaySettings(current);
+      return {
+        ...currentSettings,
+        exploded: normalizeExplodedViewSettings({
+          ...currentSettings.exploded,
+          auto: { ...currentSettings.exploded.auto, ...autoPatch }
+        })
+      };
+    });
+  };
   const setEdges = (patch) => {
     updateDisplaySettings?.((current) => {
       const currentSettings = normalizeDisplaySettings(current);
@@ -1655,77 +1673,115 @@ export function DisplaySettingsSection({
 
         {normalizedExplodedSettings.enabled ? (
           <>
-            <Field label="Axis">
+            <FileSheetSliderField
+              label="Amount"
+              value={`${Math.round(normalizedExplodedSettings.amount * 100)}%`}
+              onValueCommit={(nextValue) => {
+                setExploded({
+                  amount: parseFileSheetNumberInput(nextValue, {
+                    fallback: normalizedExplodedSettings.amount * 100,
+                    min: 0,
+                    max: 100
+                  }) / 100
+                });
+              }}
+            >
+              <Slider
+                className={precisionSliderClasses}
+                value={[normalizedExplodedSettings.amount]}
+                min={0}
+                max={1}
+                step={0.01}
+                onValueChange={(value) => {
+                  setExploded({ amount: Array.isArray(value) ? value[0] : value });
+                }}
+                aria-label="Explode amount"
+              />
+            </FileSheetSliderField>
+
+            {normalizedExplodedSettings.steps.length ? (
+              <FileSheetControlRow>
+                <span className="text-[11px] text-muted-foreground">
+                  {normalizedExplodedSettings.steps.length} authored step{normalizedExplodedSettings.steps.length === 1 ? "" : "s"} — auto controls apply after clearing.
+                </span>
+              </FileSheetControlRow>
+            ) : (
+              <>
+                <Field label="Auto axis">
+                  <SegmentedControl
+                    value={normalizedExplodedSettings.auto.mode}
+                    options={EXPLODE_MODE_OPTIONS}
+                    onChange={(nextValue) => setExplodedAuto({ mode: nextValue })}
+                  />
+                </Field>
+
+                <FileSheetSliderField
+                  label="Spacing"
+                  value={`${normalizedExplodedSettings.auto.gapScale.toFixed(2)}x`}
+                  onValueCommit={(nextValue) => {
+                    setExplodedAuto({
+                      gapScale: parseFileSheetNumberInput(nextValue, {
+                        fallback: normalizedExplodedSettings.auto.gapScale,
+                        min: 0.25,
+                        max: 4
+                      })
+                    });
+                  }}
+                >
+                  <Slider
+                    className={precisionSliderClasses}
+                    value={[normalizedExplodedSettings.auto.gapScale]}
+                    min={0.25}
+                    max={4}
+                    step={0.05}
+                    onValueChange={(value) => {
+                      setExplodedAuto({ gapScale: Array.isArray(value) ? value[0] : value });
+                    }}
+                    aria-label="Explode spacing"
+                  />
+                </FileSheetSliderField>
+
+                <FileSheetSliderField
+                  label="Depth"
+                  value={`${normalizedExplodedSettings.auto.depth}`}
+                  onValueCommit={(nextValue) => {
+                    setExplodedAuto({
+                      depth: parseFileSheetNumberInput(nextValue, {
+                        fallback: normalizedExplodedSettings.auto.depth,
+                        min: 1,
+                        max: 8,
+                        integer: true
+                      })
+                    });
+                  }}
+                >
+                  <Slider
+                    className={precisionSliderClasses}
+                    value={[normalizedExplodedSettings.auto.depth]}
+                    min={1}
+                    max={8}
+                    step={1}
+                    onValueChange={(value) => {
+                      setExplodedAuto({ depth: Array.isArray(value) ? value[0] : value });
+                    }}
+                    aria-label="Explode depth"
+                  />
+                </FileSheetSliderField>
+              </>
+            )}
+
+            <Field label="Sequence">
               <SegmentedControl
-                value={normalizedExplodedSettings.axis}
-                options={EXPLODED_AXIS_OPTIONS}
-                onChange={(nextValue) => setExploded({ axis: nextValue })}
+                value={normalizedExplodedSettings.order}
+                options={EXPLODE_ORDER_OPTIONS}
+                onChange={(nextValue) => setExploded({ order: nextValue })}
               />
             </Field>
 
-            <FileSheetSliderField
-              label="Spacing"
-              value={`${normalizedExplodedSettings.spacing.toFixed(2)}x`}
-              onValueCommit={(nextValue) => {
-                setExploded({
-                  spacing: parseFileSheetNumberInput(nextValue, {
-                    fallback: normalizedExplodedSettings.spacing,
-                    min: 0.25,
-                    max: 4
-                  })
-                });
-              }}
-            >
-              <Slider
-                className={precisionSliderClasses}
-                value={[normalizedExplodedSettings.spacing]}
-                min={0.25}
-                max={4}
-                step={0.05}
-                onValueChange={(value) => {
-                  setExploded({ spacing: Array.isArray(value) ? value[0] : value });
-                }}
-                aria-label="Exploded spacing"
-              />
-            </FileSheetSliderField>
-
-            <FileSheetSliderField
-              label="Depth"
-              value={`${normalizedExplodedSettings.depth}`}
-              onValueCommit={(nextValue) => {
-                setExploded({
-                  depth: parseFileSheetNumberInput(nextValue, {
-                    fallback: normalizedExplodedSettings.depth,
-                    min: 1,
-                    max: 8,
-                    integer: true
-                  })
-                });
-              }}
-            >
-              <Slider
-                className={precisionSliderClasses}
-                value={[normalizedExplodedSettings.depth]}
-                min={1}
-                max={8}
-                step={1}
-                onValueChange={(value) => {
-                  setExploded({ depth: Array.isArray(value) ? value[0] : value });
-                }}
-                aria-label="Exploded depth"
-              />
-            </FileSheetSliderField>
-
             <FileSheetToggleRow
-              label="Merge levels"
-              checked={normalizedExplodedSettings.mergeCoplanar}
-              onCheckedChange={(checked) => setExploded({ mergeCoplanar: checked })}
-            />
-
-            <FileSheetToggleRow
-              label="Ground base"
-              checked={normalizedExplodedSettings.keepBaseGrounded}
-              onCheckedChange={(checked) => setExploded({ keepBaseGrounded: checked })}
+              label="Explode lines"
+              checked={normalizedExplodedSettings.trails}
+              onCheckedChange={(checked) => setExploded({ trails: checked })}
             />
 
             <FileSheetControlRow>
