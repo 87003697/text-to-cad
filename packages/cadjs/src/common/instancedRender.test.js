@@ -91,6 +91,60 @@ test("instancePackages:false forces a large package back to the per-mesh path", 
   model.dispose?.();
 });
 
+function coloredBoxComponent(r, g, b) {
+  const c = [r, g, b];
+  return {
+    vertices: new Float32Array([0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1]),
+    normals: new Float32Array([0, 0, 1, 0, 0, 1, 0, 0, 1, 0, 1, 0]),
+    colors: new Float32Array([...c, ...c, ...c, ...c]),
+    indices: new Uint32Array([0, 1, 2, 0, 1, 3]),
+    parts: [{ vertexOffset: 0, vertexCount: 4, triangleOffset: 0, triangleCount: 2 }]
+  };
+}
+
+function firstInstancedMesh(group) {
+  let mesh = null;
+  group.traverse((obj) => {
+    if (obj.isInstancedMesh && !mesh) {
+      mesh = obj;
+    }
+  });
+  return mesh;
+}
+
+test("instanced bucket honors a component's baked vertex colors when there is no override", () => {
+  const occurrences = [];
+  for (let i = 0; i < 200; i += 1) {
+    occurrences.push({ id: `o1.${i + 1}`, component: "A", transform: translation(i, 0, 0) }); // no override color
+  }
+  const meshData = {
+    parts: [],
+    vertices: new Float32Array(0),
+    bounds: { min: [0, 0, 0], max: [200, 1, 1] },
+    packageInstancing: {
+      descriptor: { components: { A: {} }, occurrences },
+      componentMeshDataByCid: { A: coloredBoxComponent(1, 0, 0) }
+    }
+  };
+  const model = buildModel(THREE, meshData, { instancePackages: true });
+  const mesh = firstInstancedMesh(model.modelGroup);
+  assert.ok(mesh, "expected an InstancedMesh");
+  // Before the fix instancedBucketMaterial hardcoded useVertexColors:false, flattening
+  // the component to white; now the baked COLOR_0 drives the diffuse.
+  assert.equal(mesh.material.vertexColors, true);
+  model.dispose?.();
+});
+
+test("toggling instancePackages via update() rebuilds between the instanced and per-mesh paths", () => {
+  const model = buildModel(THREE, largePackageMeshData(200), {}); // instanced by size policy
+  assert.equal(countInstanced(model.modelGroup), 1);
+  model.update({ instancePackages: false });                       // force per-mesh
+  assert.equal(countInstanced(model.modelGroup), 0);
+  model.update({ instancePackages: true });                        // force instanced again
+  assert.equal(countInstanced(model.modelGroup), 1);
+  model.dispose?.();
+});
+
 test("shouldInstancePackageScene: tri-state flag beats the size policy", () => {
   const small = packageMeshData();
   const large = largePackageMeshData(200);
