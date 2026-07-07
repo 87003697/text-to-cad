@@ -1795,7 +1795,7 @@ function addEdgeObject(THREE, runtime, record, edgeGeometry, settings) {
 // set as instanceColor) drives the diffuse — the multiply reproduces the
 // per-mesh path's material.color under identical lighting. Edges are handled
 // separately (selection-only) so no surface-edge shader is attached here.
-function instancedBucketMaterial(THREE, runtime, { doubleSide }) {
+function instancedBucketMaterial(THREE, runtime, { doubleSide, hasVertexColors = false }) {
   const displayMode = runtime.displayMode;
   const white = new THREE.Color(1, 1, 1);
   let material;
@@ -1804,11 +1804,15 @@ function instancedBucketMaterial(THREE, runtime, { doubleSide }) {
   } else if (displayModeUsesUnlitSurfaces(displayMode)) {
     material = createUnshadedSurfaceMaterial(THREE, {
       color: white,
-      useVertexColors: false,
+      // Honor a component's baked per-vertex COLOR_0. The engine only reports
+      // hasVertexColors for buckets with no occurrence override, so instanceColor
+      // stays white and the vertex color drives the diffuse — matching the
+      // per-mesh composed path instead of flattening the component to white.
+      useVertexColors: hasVertexColors,
       opacity: displayModeSurfaceOpacity(displayMode, runtime.materialSettings?.opacity)
     });
   } else {
-    material = createSurfaceMaterial(THREE, runtime.baseTheme, { color: white, useVertexColors: false });
+    material = createSurfaceMaterial(THREE, runtime.baseTheme, { color: white, useVertexColors: hasVertexColors });
   }
   if (doubleSide && material?.side !== undefined) {
     material.side = THREE.DoubleSide;
@@ -2019,7 +2023,11 @@ function settingsSignature(meshData, theme, settings) {
       edgeSettings.silhouette === true &&
       (edgeSettings.enabled !== false || settings.silhouette === true),
     edgeRendering: settings.edgeRendering?.mode || "basic",
-    wireframeEdgeColor: settings.edgeRendering?.wireframeEdgeColor || ""
+    wireframeEdgeColor: settings.edgeRendering?.wireframeEdgeColor || "",
+    // Toggling instancePackages flips between the instanced and per-mesh record
+    // sets, so it must invalidate the rebuild signature (tri-state normalized to
+    // null when unset so the size policy result stays stable across rebuilds).
+    instancePackages: settings.instancePackages ?? null
   });
 }
 

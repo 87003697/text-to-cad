@@ -3,7 +3,7 @@ import { VIEWER_PICK_MODE } from "cadjs/lib/viewer/constants";
 import { pointVisibleByClipPlane } from "cadjs/lib/viewer/clipPlane";
 import { screenLimitedPickThreshold } from "cadjs/lib/viewer/pickingThresholds";
 import { createViewerContextMenuGestureState } from "./viewerContextMenuGesture.js";
-import { partIdFromIntersection } from "./instancePicking.js";
+import { partIdFromIntersection, shouldRaycastRecordForPick } from "./instancePicking.js";
 
 const FACE_BOUNDS_EPSILON = 0.25;
 const PLANE_SURFACE_EPSILON = 0.25;
@@ -640,18 +640,7 @@ export function useViewerPicking({
       const focusIds = focusedPartIdSet(focusedPartIdRef.current);
       const hiddenIds = focusedPartIdSet(hiddenPartIdsRef.current);
       return runtime.displayRecords
-        .filter((record) => {
-          if (!record?.mesh?.visible) {
-            return false;
-          }
-          if (hiddenIds.has(String(record?.partId || "").trim())) {
-            return false;
-          }
-          if (focusIds.size && !focusIds.has(String(record?.partId || "").trim())) {
-            return false;
-          }
-          return true;
-        })
+        .filter((record) => shouldRaycastRecordForPick(record, { focusIds, hiddenIds }))
         .map((record) => record.mesh);
     }
 

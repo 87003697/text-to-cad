@@ -6,7 +6,7 @@ import {
   createViewerContextMenuGestureState,
   VIEWER_CONTEXT_MENU_SUPPRESSION_MS
 } from "./viewerContextMenuGesture.js";
-import { partIdFromIntersection } from "./instancePicking.js";
+import { partIdFromIntersection, shouldRaycastRecordForPick } from "./instancePicking.js";
 
 test("worldUnitsPerPixelAtDistance converts perspective depth to screen scale", () => {
   const camera = {
@@ -102,4 +102,35 @@ test("partIdFromIntersection returns null for an out-of-range or absent instance
   assert.equal(partIdFromIntersection({ object, instanceId: 5 }), null);
   assert.equal(partIdFromIntersection({ object }), null);
   assert.equal(partIdFromIntersection({}), null);
+});
+
+test("shouldRaycastRecordForPick keeps instanced buckets when a focus is active", () => {
+  const focusIds = new Set(["o1.5"]);
+  const hiddenIds = new Set();
+  // Instanced bucket (partId null) stays in the raycast set regardless of focus —
+  // the per-occurrence focus/hidden filter runs downstream. This is the fix: the
+  // old bucket-level focus filter dropped the whole InstancedMesh and killed picking.
+  assert.equal(
+    shouldRaycastRecordForPick({ instanced: true, mesh: { visible: true }, partId: null }, { focusIds, hiddenIds }),
+    true
+  );
+  // A focused instanced bucket that is not visible is still dropped.
+  assert.equal(
+    shouldRaycastRecordForPick({ instanced: true, mesh: { visible: false }, partId: null }, { focusIds, hiddenIds }),
+    false
+  );
+});
+
+test("shouldRaycastRecordForPick applies bucket-level focus/hidden to per-mesh records", () => {
+  const focusIds = new Set(["o1.5"]);
+  // in focus -> kept; out of focus -> dropped
+  assert.equal(shouldRaycastRecordForPick({ mesh: { visible: true }, partId: "o1.5" }, { focusIds, hiddenIds: new Set() }), true);
+  assert.equal(shouldRaycastRecordForPick({ mesh: { visible: true }, partId: "o1.9" }, { focusIds, hiddenIds: new Set() }), false);
+  // hidden -> dropped even with no focus
+  assert.equal(
+    shouldRaycastRecordForPick({ mesh: { visible: true }, partId: "o1.5" }, { focusIds: new Set(), hiddenIds: new Set(["o1.5"]) }),
+    false
+  );
+  // invisible -> dropped
+  assert.equal(shouldRaycastRecordForPick({ mesh: { visible: false }, partId: "o1.5" }, { focusIds: new Set(), hiddenIds: new Set() }), false);
 });
