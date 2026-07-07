@@ -28,7 +28,7 @@ import {
 import {
   applyDisplayRecordTransform
 } from "./displayRecordTransform.js";
-import { buildInstancedPackageScene, applyInstancedVisualState } from "../lib/assembly/instancedScene.js";
+import { buildInstancedPackageScene, applyInstancedVisualState, instancedOccurrenceBounds } from "../lib/assembly/instancedScene.js";
 import { axisIndex, normalizeStepClipSettings } from "../lib/viewer/clipPlane.js";
 import {
   clampSceneModelRadius,
@@ -1859,7 +1859,11 @@ function buildInstancedDisplayRecords(THREE, runtime, meshData) {
     partId: null,
     instanced: true,
     componentId: mesh.userData.cadComponentId,
-    occurrenceIds: mesh.userData.cadInstanceOccurrenceIds || []
+    occurrenceIds: mesh.userData.cadInstanceOccurrenceIds || [],
+    // Resolve world bounds for the occurrences in this bucket matching `matches`
+    // ((occurrenceId) => bool), so zoom-to-fit can frame a selected instanced
+    // occurrence despite there being no per-record partBounds.
+    instancedBoundsFor: (matches) => instancedOccurrenceBounds(mesh, matches)
   }));
 }
 

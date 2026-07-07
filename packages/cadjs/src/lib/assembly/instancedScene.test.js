@@ -3,7 +3,7 @@ import test from "node:test";
 
 import * as THREE from "three";
 
-import { buildInstancedPackageScene, applyInstancedVisualState } from "./instancedScene.js";
+import { buildInstancedPackageScene, applyInstancedVisualState, instancedOccurrenceBounds } from "./instancedScene.js";
 
 function boxComponent() {
   // A trivial 3-vertex component; geometry content is irrelevant to the
@@ -142,6 +142,27 @@ test("selection recolors only the selected instance", () => {
   assert.ok(Math.abs(c.r - 0.5) < 1e-3 && Math.abs(c.g - 0.5) < 1e-3, "o1.2 keeps its base color");
 });
 
+test("applyInstancedVisualState only rewrites instances whose state changed", () => {
+  const mesh = twoInstanceScene();
+  const selectedColor = new THREE.Color(0.31, 0.615, 1);
+  // First apply initializes both instances (unknown -> known).
+  assert.equal(applyInstancedVisualState(THREE, mesh, { selected: new Set(["o1.1"]), selectedColor }), true);
+
+  // A second identical apply must touch nothing and report no change.
+  let colorWrites = 0;
+  const origSetColor = mesh.setColorAt.bind(mesh);
+  mesh.setColorAt = (i, c) => { colorWrites += 1; return origSetColor(i, c); };
+  const changed = applyInstancedVisualState(THREE, mesh, { selected: new Set(["o1.1"]), selectedColor });
+  assert.equal(changed, false, "identical state is a no-op");
+  assert.equal(colorWrites, 0, "no instance rewritten when nothing changed");
+
+  // Moving the selection rewrites exactly the two affected instances, not the bucket.
+  colorWrites = 0;
+  applyInstancedVisualState(THREE, mesh, { selected: new Set(["o1.2"]), selectedColor });
+  assert.equal(colorWrites, 2, "only the deselected + newly-selected instances rewritten");
+  mesh.setColorAt = origSetColor;
+});
+
 test("hidden instance collapses to a zero matrix and restores when unhidden", () => {
   const mesh = twoInstanceScene();
   applyInstancedVisualState(THREE, mesh, { hidden: new Set(["o1.2"]) });
@@ -171,4 +192,27 @@ test("focus dims the non-focused instances", () => {
 test("visual state is a no-op on a mesh without instanced base metadata", () => {
   const changed = applyInstancedVisualState(THREE, { userData: {} }, { selected: new Set(["x"]) });
   assert.equal(changed, false);
+});
+
+test("instancedOccurrenceBounds transforms the component box per matching instance", () => {
+  const descriptor = {
+    components: { A: {} },
+    occurrences: [
+      { id: "o1.1", component: "A", transform: translation(10, 0, 0) },
+      { id: "o1.2", component: "A", transform: translation(20, 0, 0) }
+    ]
+  };
+  const mesh = buildInstancedPackageScene(THREE, descriptor, { A: boxComponent() }).instancedMeshes[0];
+  // boxComponent's local AABB is min[0,0,0] max[1,1,0].
+  const one = instancedOccurrenceBounds(mesh, (id) => id === "o1.1");
+  assert.deepEqual(one.min, [10, 0, 0]);
+  assert.deepEqual(one.max, [11, 1, 0]);
+  // no predicate => union over every instance in the bucket.
+  const all = instancedOccurrenceBounds(mesh, null);
+  assert.deepEqual(all.min, [10, 0, 0]);
+  assert.deepEqual(all.max, [21, 1, 0]);
+  // nothing matches => null (so callers fall back cleanly).
+  assert.equal(instancedOccurrenceBounds(mesh, () => false), null);
+  // missing metadata => null.
+  assert.equal(instancedOccurrenceBounds({ userData: {} }, null), null);
 });
