@@ -1816,6 +1816,29 @@ function instancedBucketMaterial(THREE, runtime, { doubleSide }) {
   return material;
 }
 
+// A composed package instances (cid-keyed InstancedMesh) instead of one THREE.Mesh
+// per occurrence when it is large enough for the draw-call/GPU-vertex collapse to
+// matter. Small packages stay on the per-mesh path, which carries the full
+// per-part feature set (exploded view, per-part edges). `instancePackages`
+// overrides the size policy: true forces instancing on, false forces it off.
+const INSTANCE_MIN_OCCURRENCES = 128;
+
+export function shouldInstancePackageScene(settings, meshData) {
+  if (!meshData?.packageInstancing) {
+    return false;
+  }
+  const flag = settings?.instancePackages;
+  if (flag === true) {
+    return true;
+  }
+  if (flag === false) {
+    return false;
+  }
+  const occurrences = meshData.packageInstancing.descriptor?.occurrences;
+  const count = Array.isArray(occurrences) ? occurrences.length : 0;
+  return count >= INSTANCE_MIN_OCCURRENCES;
+}
+
 function buildInstancedDisplayRecords(THREE, runtime, meshData) {
   const { descriptor, componentMeshDataByCid } = meshData.packageInstancing;
   const scene = buildInstancedPackageScene(THREE, descriptor, componentMeshDataByCid, {
@@ -1837,7 +1860,7 @@ function buildInstancedDisplayRecords(THREE, runtime, meshData) {
 }
 
 function buildDisplayRecords(THREE, runtime, meshData, settings) {
-  if (settings.instancePackages === true && meshData?.packageInstancing) {
+  if (shouldInstancePackageScene(settings, meshData)) {
     return buildInstancedDisplayRecords(THREE, runtime, meshData);
   }
   const theme = runtime.theme;

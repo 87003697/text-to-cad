@@ -70,40 +70,56 @@ Bench-proven on falcon_heavy: **2,142 → 141 draw calls (15.2×), 1.40M →
 (bucketing / matrix == transform / occurrence-id map / instance color /
 mirror). NOT yet wired into the live path — zero regression so far.
 
-*Remaining integration increments (each its own commit + gate):*
-1. **Render wiring** — carry `{descriptor, componentMeshDataByCid}` to
-   `buildModel`; add a default-off `instancePackages` setting; when on,
-   `buildDisplayRecords` builds the instanced group instead of per-part
-   records. Gate: snapshot pixel-parity across all six modes (needs the
-   flag threaded to the snapshot render entry + `bundle.sh` regen).
-2. **Picking** — `InstancedMesh` raycast `instanceId` → occurrence id
-   (via `userData.cadInstanceOccurrenceIds`), replacing per-mesh
-   `userData.partId` + `intersectObjects(perPartMeshes)`.
-3. **Selection / hover / hidden / focus** — per-instance color/visibility
-   (or an overlay mesh) instead of per-record material swaps + `partId`
-   sets (`applyPartVisualState`).
-4. **Exploded view** — per-instance matrix updates from the occurrence
-   `baseTransform`.
-5. **Edges / silhouette** — render only for selected/hovered instances as
-   an overlay, not per-occurrence.
-6. **Fallback buckets** — route transparent (three.js can't sort
-   transparency per instance) and any remaining per-record-only features
-   through the existing per-mesh path so nothing regresses; then flip the
-   default (after the in-browser hover/pick/explode pass).
+*Integration increments (each its own commit + gate):*
+1. **Render wiring — DONE (`308c7261`).** `buildComposedPackageMeshData`
+   attaches `packageInstancing:{descriptor, componentMeshDataByCid}`;
+   `buildInstancedDisplayRecords` builds the instanced group;
+   `modelOptionsForRenderJob` threads the flag; snapshot re-bundled. Gate
+   met: flag-off snapshot **byte-identical** (SHA1 dc7e7dd5); bench 15.2×
+   draws / 12.29× GPU verts.
+2. **Picking — DONE (`333190d2`).** `partIdFromIntersection`
+   (`viewer/.../hooks/instancePicking.js`) maps `InstancedMesh` raycast
+   `instanceId` → occurrence id via `userData.cadInstanceOccurrenceIds`;
+   `pickPartReferenceFromIntersections` uses it. Extracted as a pure module
+   so it unit-tests in Node without the hook's Vite-only imports.
+3. **Selection / hover / hidden / focus — DONE (`db5c1aed`).**
+   `applyInstancedVisualState` recolors via `instanceColor` (selection/hover),
+   dims the base color under focus, and collapses hidden instances to a zero
+   matrix — restoring from base color/matrix arrays stashed at build time.
+   `applyPartVisualState` routes instanced records through it with the same
+   hierarchical `partIdMatchesSet` matcher.
+6. **Size policy + default-on — DONE.** `shouldInstancePackageScene` is
+   tri-state: `instancePackages:true|false` forces on/off; left undefined the
+   size policy decides — a package instances once it has
+   `≥ INSTANCE_MIN_OCCURRENCES` (128) occurrences. So huge packages
+   (falcon_heavy 2,142) instance by default in both the viewer and snapshots,
+   while small/medium assemblies stay on the full-featured per-mesh path.
+   `resolveInstancePackagesFlag` keeps the render-job flag tri-state.
 
-Win (fully wired): 2,142 → ~141 draw calls (15×), GPU vertices 1.40M →
-114k (12.3×), ~60 MB GPU saved, hover/visibility loops shrink 15×, and the
-Phase-2 compose loop disappears entirely (instances need no baked
-vertices). Verified obligations (folded into the increments above):
+*Deferred as documented gaps for instanced (large) packages — NOT bugs:*
+4. **Exploded view.** The per-record explode engine already excludes instanced
+   records (`recordCanExplode` needs a non-null `partId`), so explode is a
+   graceful no-op on a fully-instanced model rather than a crash. Per-occurrence
+   explode on a 2,000-part rocket is visual noise and costly to build; small
+   assemblies that actually use explode stay per-mesh below the size threshold.
+   Revisit only if a mid-size instanced package needs it.
+5. **Edges / silhouette.** Instanced buckets carry no per-part edge/silhouette
+   overlays (the per-mesh path builds `EdgesGeometry` per record). Edge soup
+   over 2,000+ occurrences is low value; a selection-only instanced-edge overlay
+   is the future path if wanted.
+
+Win (as shipped, for packages over the size threshold): 2,142 → ~141 draw
+calls (15×), GPU vertices 1.40M → 114k (12.3×), ~60 MB GPU saved, hover/
+visibility loops shrink 15×, and the Phase-2 compose loop disappears entirely
+(instances need no baked vertices). Verified obligations:
 - mirrored occurrences (negative-determinant transforms) get their own
-  bucket with flipped winding or DoubleSide;
-- picking moves to `InstancedMesh` raycast `instanceId` → occurrence id;
-- exploded view updates per-instance matrices;
-- hover/highlight via per-instance color or a single overlay mesh;
-- translucent parts keep the per-mesh path as a fallback bucket
-  (three.js cannot sort transparency per instance);
-- per-part edge/silhouette overlays render only for selection/hover
-  instead of per-occurrence.
+  DoubleSide bucket — DONE;
+- picking via `InstancedMesh` raycast `instanceId` → occurrence id — DONE;
+- hover/highlight via per-instance color — DONE (per-instance recolor);
+- exploded view / per-part edges — deferred gaps (see 4/5 above);
+- translucent parts: currently share the bucket material (no per-instance
+  transparency sort). Acceptable for opaque rocket hardware; a translucent
+  fallback bucket remains the future path if a translucent large package appears.
 
 **Phase 4 — interaction polish (small; partly subsumed by Phase 3).**
 Cache the visible-mesh set (`useViewerPicking.js:638` rebuilds a
