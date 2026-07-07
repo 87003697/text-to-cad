@@ -22,20 +22,26 @@ function collectSourceFiles(directory, files = []) {
   return files;
 }
 
-test("cadjs does not depend on implicitjs", () => {
+test("cadjs depends on implicitjs", () => {
+  // The viewer installs cadjs only; cadjs pulls implicitjs in transitively and
+  // re-exports its shared render/runtime primitives. The dependency flows
+  // cadjs -> implicitjs (never the reverse), so the two packages stay a DAG.
   const manifest = readJson("package.json");
-  const lockfile = readJson("package-lock.json");
-  assert.equal(manifest.dependencies?.implicitjs, undefined);
-  assert.equal(lockfile.packages?.[""]?.dependencies?.implicitjs, undefined);
-  assert.equal(lockfile.packages?.["node_modules/implicitjs"], undefined);
+  assert.equal(manifest.dependencies?.implicitjs, "file:../implicitjs");
+});
 
-  const sourceFiles = collectSourceFiles(path.join(packageRoot, "src"));
+test("implicitjs does not depend on cadjs (dependency flows cadjs -> implicitjs)", () => {
+  const implicitRoot = path.resolve(packageRoot, "..", "implicitjs");
+  const manifest = JSON.parse(fs.readFileSync(path.join(implicitRoot, "package.json"), "utf8"));
+  assert.equal(manifest.dependencies?.cadjs, undefined);
+
+  const sourceFiles = collectSourceFiles(path.join(implicitRoot, "src"));
   for (const filePath of sourceFiles) {
     const source = fs.readFileSync(filePath, "utf8");
     assert.equal(
-      /\bfrom\s+["']implicitjs(?:\/[^"']*)?["']|export\s+\*\s+from\s+["']implicitjs(?:\/[^"']*)?["']/u.test(source),
+      /\bfrom\s+["']cadjs(?:\/[^"']*)?["']|export\s+\*\s+from\s+["']cadjs(?:\/[^"']*)?["']/u.test(source),
       false,
-      `${path.relative(packageRoot, filePath)} imports implicitjs`
+      `${path.relative(implicitRoot, filePath)} imports cadjs`
     );
   }
 });
