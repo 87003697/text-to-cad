@@ -22,6 +22,16 @@ package's deps from the installed viewer tree, e.g.
 `packages/implicitjs/node_modules/{three,gifenc,playwright}`. Without these,
 standalone `npm --prefix packages/* test` fails to resolve `three`.
 
+**Gotcha (bites first, hard):** the `packages/cadjs/node_modules/implicitjs`
+symlink is the `file:../implicitjs` dep npm would normally create. It is
+gitignored, so a fresh checkout of this branch is missing it — and because
+`cadjs` now imports `implicitjs` (Phase 0 dedup), its absence makes **both**
+`npm --prefix viewer run build` **and** `npm --prefix viewer run test` fail
+(6 red tests, ~285/388 collected) with
+`ERR_MODULE_NOT_FOUND: Cannot find package 'implicitjs' imported from
+packages/cadjs/src/**`. It is not limited to standalone package tests. Recreate:
+`ln -s ../../implicitjs packages/cadjs/node_modules/implicitjs`.
+
 ## Verification commands
 
 - `npm --prefix viewer run build` — primary green signal (vite bundles everything)
@@ -32,8 +42,19 @@ standalone `npm --prefix packages/* test` fails to resolve `three`.
   screenshot a mesh model and an implicit model before/after each change.
   Unit tests do NOT exercise 3D rendering, and the implicit↔mesh convergence
   changes real framing/render behavior. Launch via the `cad-viewer` skill and
-  point `?dir=` at a model root; there is no implicit fixture under `models/`
-  yet — add a small `*.js` implicit model plus a small mesh file to compare.
+  point `?dir=` at the repo `models/` root.
+  - Fixtures now exist (the old "no implicit fixture yet" note is stale): dozens
+    of `models/implicits/*.implicit.js` (e.g. small `parametric-pulse.implicit.js`).
+    For a fast **mesh** comparison use a direct mesh such as
+    `models/fun/miniature_spiral_staircase_highres.glb` (or any `*.stl`) — a raw
+    `*.step` triggers slow on-demand artifact generation and can sit on
+    "building…" for a while, which is a backend-generation delay, not a render bug.
+  - Headless recipe: playwright is vendored at
+    `packages/implicitjs/node_modules/playwright`; against the running dev viewer,
+    `goto(<base>?dir=<models>&file=implicits/<name>.implicit.js)`, wait for
+    `canvas`, ~9s for shader-compile + auto-fit, then `page.screenshot`. The mesh
+    renderer has no `preserveDrawingBuffer`, so in-page canvas readback reads
+    blank — trust the composited `page.screenshot`, not `drawImage`/`toDataURL`.
 
 ## Done (landed on this branch)
 
@@ -56,6 +77,27 @@ standalone `npm --prefix packages/* test` fails to resolve `three`.
    Node resolve extension-less). All viewer imports moved from `implicitjs/*` to
    `cadjs/implicit/*`; `implicitjs` dropped from `viewer/package.json` (arrives
    transitively via cadjs). `AGENTS.md` updated for the new dependency direction.
+
+4. **Phase 2 (partial) — implicit imperative-handle parity.**
+   `ImplicitCadViewer`'s `useImperativeHandle` now exposes `resetZoom`,
+   `zoomToFit`, and `zoomToFitSelection` (previously only
+   `captureScreenshot/getPerspective/setPerspective/focusViewPreset`), matching
+   the `CadViewer` ref contract. All three map to the existing `runAutoZoom`
+   (`{ force: true }`, current view direction preserved — mirrors CadViewer's
+   `resetZoomBaseline` fit); implicit has no sub-part selection, so
+   `zoomToFitSelection` fits the whole model rather than no-oping.
+   **Reachability caveat (discovered while doing this):** the plan's "these
+   calls silently no-op on implicit" is only half the story — the shared viewer
+   context menu that owns Reset Zoom / Zoom to fit **never opens for implicit at
+   all**. `CadWorkspace.openGlobalViewerContextMenu` early-returns `null` when
+   `!isStepView` (`isStepView = sourceFormat === RENDER_FORMAT.STEP`), and
+   `ImplicitCadViewer` emits no right-click/context event (DXF and plain meshes
+   are likewise menuless — the camera-action menu is STEP-only today). So these
+   new methods are correct *contract parity / groundwork* but are not yet
+   user-reachable. Wiring them up = emit a background right-click from the
+   implicit (and mesh/DXF) viewer + open a minimal camera-action menu for
+   non-STEP formats; that is a cross-format capability unlock, tracked under
+   Phase 5, not a one-line fix.
 
 ## Remaining work
 
@@ -83,11 +125,22 @@ Plan:
   `updateModel(runtime, model, opts)`, `getBounds()`, `dispose()`, plus a
   `capabilities` flag set (picking, displayModes, projectionToggle, clipPlane,
   explodedView, drawingOverlay, grid, lighting).
-- Generalize `useViewerRuntime` to take a backend: its hardwired lights/scene
-  groups/grid/background and the `renderer.render(scene, camera)` call become
-  the **mesh backend**'s `attach`/`renderFrame`. It should import the shared
-  helpers from `viewportCameraKit.js` directly instead of receiving ~30 of them
-  as params from `CadViewer` (see the injection block in `CadViewer.js`).
+- Generalize `useViewerRuntime` to take a backend: its hardwired lights
+  (`useViewerRuntime.js:179-223`) / scene groups (`225-236`) / renderer
+  tone-mapping+shadow config (`157-165`) / grid / background and the
+  `renderer.render(scene, camera)` call (the single seam, `line 367`) become the
+  **mesh backend**'s `attach`/`renderFrame`. The `CadViewer` → `useViewerRuntime`
+  call site (`CadViewer.js:2731-2782`) injects ~55 params, but **only ~8 are
+  actually `viewportCameraKit` helpers** that can be imported directly
+  (`stepKeyboardOrbit`, `getActiveViewPlaneFaceId`, `clearKeyboardOrbitState`,
+  `isTrackpadLikeWheelEvent`, `getKeyboardOrbitCommand`, `getKeyboardOrbitAxes`,
+  `applyOrbitDelta`, `KEYBOARD_ORBIT_NUDGE_RAD`). The rest are **CadViewer-local**
+  (`stepCameraTransition`/`cancelCameraTransition` transition engine,
+  `getPixelRatioCap`, `applyCameraFrameInsets`, `clearSceneGroup`,
+  `disposeSceneObject`, `disposeTexture`, `applySceneBackground`,
+  `updateGridHelper`, and unmemoized closures `emitPerspectiveChange`/
+  `syncViewPlaneOrientation`/`applyInitialPerspective`) — those must be *extracted*
+  into shared modules or the backend, not merely re-pointed at the kit.
 - Write an **implicit backend**: `attach` builds `createImplicitCadFullscreenScene`
   (from `cadjs/implicit/render`); `renderFrame` does the uniforms + quad two-liner;
   capabilities mostly `false`; implicit-only extras (shader `compileAsync` warmup,
@@ -100,6 +153,31 @@ Plan:
   the raymarch framing visually (the shader reads `projectionMatrixInverse` via
   `updateImplicitCadMaterialUniforms`, so `setViewOffset` should carry through).
 
+Concrete gotchas for the implicit backend (verified against the code map):
+- `createImplicitCadFullscreenScene(THREE, model)` returns
+  `{ scene, material, quad, shaderKey, dispose }` — the mesh key is **`quad`, not
+  `mesh`**, and there is **no `screenCamera` in the return**. The backend must
+  create/own its own `new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1)` for the
+  `renderer.render(shaderScene.scene, screenCamera)` call; the perspective camera
+  exists only to feed uniforms.
+- `updateImplicitCadMaterialUniforms(material, camera, w, h)` is **not THREE-first**
+  (unlike the factories); it reads `camera.position/matrixWorld/projectionMatrixInverse`
+  and sets `uResolution`. Easy to mis-wire.
+- **No warmup export.** The `renderer.compileAsync(scene, screenCamera)` gate that
+  sets `shaderSceneReady` (prevents a multi-second first-frame tab freeze) lives in
+  `ImplicitCadViewer.armImplicitShaderCompile` and must move into the backend.
+- **No in-place shader swap:** when `shaderKey` changes (model/uniform-signature
+  change) the backend must `dispose()` and recreate the scene, then re-arm warmup.
+- The mesh `runtimeRef` publishes ~60 fields the rest of `CadViewer` reads
+  (`useViewerRuntime.js:557-624`: 8 lights, 6 groups, `facePickMesh`/`edgePickLines`/
+  `vertexPickPoints`, `modelBounds`, thresholds…). The mesh backend's `attach` must
+  still populate all of these on `runtime`, or large swaths of `CadViewer` break —
+  and unit tests won't catch it (no 3D rendering in tests), so this step needs
+  real visual verification of orbit/pick/edges/grid across themes.
+- `getScreenSpaceLineMaterialCount` already peeks
+  `runtime.cadScene.runtime.screenSpaceLineMaterials` — a *second* runtime concept
+  layered on top. The `SceneBackend` interface should subsume this, not add a third.
+
 ### Phase 2 — unify perspective + close imperative-API gaps
 
 - Converge the perspective snapshot format: implicit uses a separate
@@ -108,11 +186,12 @@ Plan:
   `readScopedPerspectiveSnapshot`. Move to the mesh format so `getPerspective`/
   `setPerspective` payloads are interchangeable; version-migrate stored snapshots
   in `localStorage` so old implicit state degrades gracefully.
-- Implement `resetZoom`/`zoomToFit`/`zoomToFitSelection` for the implicit viewer.
-  `CadViewer` exposes all three; `ImplicitCadViewer` exposes only
-  `captureScreenshot/getPerspective/setPerspective/focusViewPreset`, so the
-  workbench's `viewerRef.current?.resetZoom()` / `?.zoomToFitSelection()` calls
-  (`CadWorkspace.js`) silently no-op on implicit models today.
+- ~~Implement `resetZoom`/`zoomToFit`/`zoomToFitSelection` for the implicit
+  viewer.~~ **Done (ref-contract parity)** — see Done #4. Note the reachability
+  caveat there: the context menu that would call them is STEP-only today, so the
+  *user-facing* half of this gap is really a Phase 5 cross-format capability
+  unlock (emit a right-click + open a camera-action menu for non-STEP formats),
+  not just the ref methods.
 
 ### Phase 3 — collapse to one component
 
