@@ -13,6 +13,8 @@ export const FILE_SHEET_SECTION_IDS = Object.freeze({
   ROBOT_JOINTS: "joints",
   IMPLICIT_GRAPHICS: "graphics",
   THEME_DISPLAY: "display",
+  THEME_CLIP: "clip",
+  THEME_EXPLODED: "exploded",
   THEME_APPEARANCE: "appearance",
   FILE_METADATA: "metadata"
 });
@@ -52,14 +54,16 @@ export function renderedFileSheetSectionIds(kind, options = {}) {
         FILE_SHEET_SECTION_IDS.GCODE_BOUNDS
       ];
     case "step":
-      // Display is the only theme tab rendered in the sheet (appearance is the
-      // global navbar editor), and only for STEP views.
+      // Display, Clip, and Exploded are the theme tabs rendered in the sheet
+      // (appearance is the global navbar editor), and only for STEP views.
       return [
         ...status,
         FILE_SHEET_SECTION_IDS.STEP_TREE,
         FILE_SHEET_SECTION_IDS.STEP_REFERENCE,
         ...(options.hasStepModulePanel ? [FILE_SHEET_SECTION_IDS.STEP_PARAMETERS] : []),
-        FILE_SHEET_SECTION_IDS.THEME_DISPLAY
+        FILE_SHEET_SECTION_IDS.THEME_DISPLAY,
+        FILE_SHEET_SECTION_IDS.THEME_CLIP,
+        FILE_SHEET_SECTION_IDS.THEME_EXPLODED
       ];
     case "urdf":
     case "srdf":

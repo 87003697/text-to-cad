@@ -35,9 +35,11 @@ import {
 import {
   applyExplodedViewProgress,
   clearExplodedViewRecords,
-  createExplodedViewRecordStates,
-  explodedViewBoundsFromStates
-} from "../lib/viewer/explodedView.js";
+  compileExplodedView,
+  explodedViewBounds,
+  normalizeExplodedViewDocument
+} from "../lib/viewer/explodedViewSteps.js";
+import { generateExplodedViewDocument } from "../lib/viewer/explodedView.js";
 import {
   addFloor as addSharedFloor,
   applyEnvironment as applySharedEnvironment,
@@ -834,6 +836,21 @@ function displayRecordPartIds(displayRecords = []) {
   ));
 }
 
+// Resolve the exploded-view document for a render: explicit authored steps, or
+// steps generated on demand from the auto-explode hints when none were authored.
+function resolveExplodedViewDocument(THREEImpl, settings, displayRecords, bounds) {
+  const doc = normalizeExplodedViewDocument(settings);
+  if (doc.steps.length) {
+    return doc;
+  }
+  return generateExplodedViewDocument(THREEImpl, displayRecords, bounds, doc.auto, {
+    enabled: doc.enabled,
+    amount: doc.amount,
+    order: doc.order,
+    trails: doc.trails
+  });
+}
+
 function applyViewportExplodedView(viewport, bounds) {
   const { context, model, THREE: RuntimeTHREE } = viewport;
   const settings = context.displaySettings?.exploded;
@@ -849,24 +866,19 @@ function applyViewportExplodedView(viewport, bounds) {
     resetExplodedView();
     return bounds;
   }
-  const states = createExplodedViewRecordStates(
-    THREEImpl,
-    model.displayRecords,
-    bounds,
-    settings
-  );
-  if (!states.length) {
+  const doc = resolveExplodedViewDocument(THREEImpl, settings, model.displayRecords, bounds);
+  const compiled = compileExplodedView(THREEImpl, doc, model.displayRecords, bounds);
+  if (!compiled.entries.length) {
     resetExplodedView();
     return bounds;
   }
-  applyExplodedViewProgress(THREEImpl, states, 1);
+  const amount = clamp(Number(doc.amount), 0, 1);
+  applyExplodedViewProgress(THREEImpl, compiled, amount);
   for (const record of model.displayRecords) {
     applyDisplayRecordTransform(THREEImpl, record);
   }
   model.root?.updateMatrixWorld?.(true);
-  return settings.autoFrame === false
-    ? bounds
-    : explodedViewBoundsFromStates(THREEImpl, states, bounds, 1);
+  return explodedViewBounds(THREEImpl, compiled, bounds, amount);
 }
 
 function syncViewportTopologyDisplayEdges(viewport) {

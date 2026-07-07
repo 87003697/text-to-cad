@@ -2,180 +2,168 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import * as THREE from "three";
 
-import {
-  applyExplodedViewProgress,
-  clearExplodedViewRecords,
-  createExplodedViewRecordStates,
-  easeExplodedViewProgress,
-  explodedViewBoundsFromStates,
-  explodedViewGroupKey,
-  explodedViewStateTranslationAtProgress
-} from "./explodedView.js";
+import { explodedViewGroupKey, generateExplodedViewDocument } from "./explodedView.js";
+import { applyExplodedViewProgress, compileExplodedView } from "./explodedViewSteps.js";
 
-function record(partId, center, bounds) {
+function record(partId, bounds) {
   return {
     partId,
     mesh: new THREE.Object3D(),
-    partCenter: new THREE.Vector3(...center),
     partBounds: bounds
   };
 }
 
-test("exploded view groups first-level assembly components by default", () => {
-  const records = [
-    record("o1.1.1", [0, 0, 1], { min: [-1, -1, 0], max: [1, 1, 2] }),
-    record("o1.1.2", [0, 0, 3], { min: [-1, -1, 2], max: [1, 1, 4] }),
-    record("o1.2", [0, 0, 7], { min: [-1, -1, 6], max: [1, 1, 8] })
-  ];
-  const states = createExplodedViewRecordStates(THREE, records, {
-    min: [-1, -1, 0],
-    max: [1, 1, 8]
-  });
+// Resolve a generated document back into per-record z/x/y displacement at full
+// explode, so tests can assert on where parts actually end up.
+function explode(records, bounds, hints) {
+  const doc = generateExplodedViewDocument(THREE, records, bounds, hints);
+  const compiled = compileExplodedView(THREE, doc, records, bounds);
+  applyExplodedViewProgress(THREE, compiled, 1);
+  const offsets = new Map();
+  for (const r of records) {
+    const m = r.explodedViewMatrix;
+    offsets.set(r.partId, m ? [m.elements[12], m.elements[13], m.elements[14]] : [0, 0, 0]);
+  }
+  return { doc, offsets };
+}
 
-  assert.equal(states.length, 3);
-  assert.equal(states[0].groupKey, "o1.1");
-  assert.equal(states[1].groupKey, "o1.1");
-  assert.equal(states[2].groupKey, "o1.2");
-  assert.equal(states[0].translation.z, states[1].translation.z);
-  assert.equal(states[0].translation.z, 0);
-  assert.ok(states[2].translation.z > 0);
-  assert.equal(states[2].translation.x, 0);
-  assert.equal(states[2].translation.y, 0);
-
-  applyExplodedViewProgress(THREE, states, 1);
-  assert.equal(records[0].explodedViewMatrix.elements[14], 0);
-  assert.ok(records[2].explodedViewMatrix.elements[14] > 0);
-
-  const explodedBounds = explodedViewBoundsFromStates(THREE, states, { min: [-1, -1, 0], max: [1, 1, 8] });
-  assert.equal(explodedBounds.min[2], 0);
-  assert.ok(explodedBounds.max[2] > 8);
-
-  clearExplodedViewRecords(records);
-  assert.equal(records[0].explodedViewMatrix, null);
-  assert.equal(records[2].explodedViewMatrix, null);
-});
-
-test("exploded view separates first-level components even when their heights match", () => {
-  const records = [
-    record("o1.1", [0, 0, 1], { min: [-1, -1, 0], max: [1, 1, 2] }),
-    record("o1.2", [0, 0, 1], { min: [-1, -1, 0], max: [1, 1, 2] }),
-    record("o1.3", [0, 0, 1], { min: [-1, -1, 0], max: [1, 1, 2] })
-  ];
-  const states = createExplodedViewRecordStates(THREE, records, {
-    min: [-1, -1, 0],
-    max: [1, 1, 2]
-  });
-
-  assert.deepEqual(states.map((state) => state.groupKey), ["o1.1", "o1.2", "o1.3"]);
-  assert.deepEqual(states.map((state) => state.layerIndex), [0, 1, 2]);
-  assert.equal(states[0].translation.z, 0);
-  assert.ok(states[1].translation.z > states[0].translation.z);
-  assert.ok(states[2].translation.z > states[1].translation.z);
-
-  const mergedStates = createExplodedViewRecordStates(THREE, records, {
-    min: [-1, -1, 0],
-    max: [1, 1, 2]
-  }, { mergeCoplanar: true });
-  assert.deepEqual(mergedStates.map((state) => state.layerIndex), [0, 0, 0]);
-});
-
-test("exploded view depth can break subassemblies into deeper components", () => {
+test("explodedViewGroupKey groups by occurrence prefix at depth", () => {
   assert.equal(explodedViewGroupKey("o1.2.3", { depth: 1, commonPrefix: ["o1"] }), "o1.2");
   assert.equal(explodedViewGroupKey("o1.2.3", { depth: 2, commonPrefix: ["o1"] }), "o1.2.3");
-
-  const records = [
-    record("o1.1.1", [0, 0, 1], { min: [0, 0, 0], max: [1, 1, 2] }),
-    record("o1.1.2", [0, 0, 4], { min: [0, 0, 3], max: [1, 1, 5] }),
-    record("o1.2", [0, 0, 7], { min: [0, 0, 6], max: [1, 1, 8] })
-  ];
-  const states = createExplodedViewRecordStates(THREE, records, {
-    min: [0, 0, 0],
-    max: [1, 1, 8]
-  }, { depth: 2 });
-
-  assert.deepEqual(states.map((state) => state.groupKey), ["o1.1.1", "o1.1.2", "o1.2"]);
-  assert.ok(states[1].translation.z > states[0].translation.z);
 });
 
-test("exploded view radial axis moves first-level groups outward from model center", () => {
+test("generator groups first-level components and explodes along Z", () => {
   const records = [
-    record("o1.1.1", [-2, 0, 0], { min: [-3, -1, -1], max: [-1, 1, 1] }),
-    record("o1.1.2", [-2, 0, 0], { min: [-3, -1, -1], max: [-1, 1, 1] }),
-    record("o1.2", [2, 0, 0], { min: [1, -1, -1], max: [3, 1, 1] })
+    record("o1.1.1", { min: [-1, -1, 0], max: [1, 1, 2] }),
+    record("o1.1.2", { min: [-1, -1, 2], max: [1, 1, 4] }),
+    record("o1.2", { min: [-1, -1, 6], max: [1, 1, 8] })
   ];
-  const states = createExplodedViewRecordStates(THREE, records, {
-    min: [-3, -1, -1],
-    max: [3, 1, 1]
-  }, { axis: "radial", keepBaseGrounded: false });
+  const bounds = { min: [-1, -1, 0], max: [1, 1, 8] };
+  const { doc, offsets } = explode(records, bounds, { mode: "z" });
 
-  assert.equal(states.length, 3);
-  assert.deepEqual(states.map((state) => state.groupKey), ["o1.1", "o1.1", "o1.2"]);
-  assert.ok(states[0].translation.x < 0);
-  assert.equal(states[0].translation.x, states[1].translation.x);
-  assert.equal(states[0].translation.y, states[1].translation.y);
-  assert.equal(states[0].translation.z, states[1].translation.z);
-  assert.ok(states[2].translation.x > 0);
-  assert.equal(states[2].translation.y, 0);
-  assert.equal(states[2].translation.z, 0);
+  // o1.1.1 and o1.1.2 collapse into group o1.1 (depth 1), which is the grounded
+  // base layer -> stays put; o1.2 moves up in Z.
+  assert.ok(doc.steps.length >= 1);
+  assert.deepEqual(offsets.get("o1.1.1"), offsets.get("o1.1.2")); // rigid group
+  assert.equal(offsets.get("o1.1.1")[2], 0);
+  assert.ok(offsets.get("o1.2")[2] > 0);
 });
 
-test("exploded view radial axis blooms coaxial parts horizontally and preserves height", () => {
-  // Two coaxial parts stacked along Z share the model's vertical axis, so they
-  // fan out horizontally (in the XY plane) at their own heights rather than
-  // exploding up/down.
+test("generator separates side-by-side coplanar groups laterally, not stacked", () => {
+  // Three parts side-by-side in X at the same height (disjoint footprints): the
+  // old solver stacked them into a vertical column; the new one spreads them in
+  // the horizontal plane.
   const records = [
-    record("o1.1", [0, 0, 0.5], { min: [-1, -1, 0], max: [1, 1, 1] }),
-    record("o1.2", [0, 0, 4.5], { min: [-1, -1, 4], max: [1, 1, 5] })
+    record("o1.1", { min: [-5, -1, 0], max: [-3, 1, 2] }),
+    record("o1.2", { min: [-1, -1, 0], max: [1, 1, 2] }),
+    record("o1.3", { min: [3, -1, 0], max: [5, 1, 2] })
   ];
-  const bounds = { min: [-1, -1, 0], max: [1, 1, 5] };
-  const states = createExplodedViewRecordStates(THREE, records, bounds, {
-    axis: "radial"
-  });
-
-  assert.equal(states.length, 2);
-  // Purely horizontal motion: no vertical component, so the floor is preserved
-  // and each part keeps its authored height.
-  for (const state of states) {
-    assert.equal(state.translation.z, 0);
-    assert.ok(Math.hypot(state.translation.x, state.translation.y) > 0);
+  const bounds = { min: [-5, -1, 0], max: [5, 1, 2] };
+  const { offsets } = explode(records, bounds, { mode: "z" });
+  for (const key of ["o1.1", "o1.2", "o1.3"]) {
+    const [x, y, z] = offsets.get(key);
+    assert.ok(Math.abs(z) < 1e-6, `${key} should not move vertically`);
+    assert.ok(Math.hypot(x, y) > 0, `${key} should separate laterally`);
   }
-  // Coaxial parts fan to distinct horizontal directions instead of stacking.
-  assert.ok(
-    Math.abs(states[0].translation.x - states[1].translation.x) > 1e-6 ||
-    Math.abs(states[0].translation.y - states[1].translation.y) > 1e-6
-  );
-  assert.equal(explodedViewBoundsFromStates(THREE, states, bounds).min[2], 0);
 });
 
-test("exploded view easing clamps to animation bounds", () => {
-  assert.equal(easeExplodedViewProgress(-1), 0);
-  assert.equal(easeExplodedViewProgress(1.5), 1);
-  assert.ok(easeExplodedViewProgress(0.5) > 0.5);
-});
-
-test("exploded view progress can interpolate from current translated state", () => {
+test("generator telescopes concentric coplanar parts along the axis", () => {
+  // Nested rings at the same height (a shaft/housing case): they must separate
+  // along the explode axis, not scatter sideways into each other.
   const records = [
-    record("o1.1", [0, 0, 0], { min: [0, 0, 0], max: [1, 1, 1] })
+    record("o1.1", { min: [-6, -6, 0], max: [6, 6, 2] }),
+    record("o1.2", { min: [-4, -4, 0], max: [4, 4, 2] }),
+    record("o1.3", { min: [-2, -2, 0], max: [2, 2, 2] })
   ];
-  const states = [{
-    record: records[0],
-    fromTranslation: new THREE.Vector3(0, 0, 10),
-    translation: new THREE.Vector3(10, 0, 0),
-    matrix: new THREE.Matrix4()
-  }];
+  const bounds = { min: [-6, -6, 0], max: [6, 6, 2] };
+  const { offsets } = explode(records, bounds, { mode: "z" });
+  const z = ["o1.1", "o1.2", "o1.3"].map((k) => offsets.get(k)[2]);
+  // Distinct axial stations, no lateral scatter.
+  assert.ok(z[1] > z[0] && z[2] > z[1], "nested parts telescope along the axis");
+  for (const key of ["o1.1", "o1.2", "o1.3"]) {
+    const [x, y] = offsets.get(key);
+    assert.ok(Math.hypot(x, y) < 1e-6, `${key} should stay on the axis`);
+  }
+});
 
-  assert.deepEqual(explodedViewStateTranslationAtProgress(THREE, states[0], 0).toArray(), [0, 0, 10]);
-  assert.deepEqual(explodedViewStateTranslationAtProgress(THREE, states[0], 1).toArray(), [10, 0, 0]);
+test("generator depth can break subassemblies into deeper components", () => {
+  const records = [
+    record("o1.1.1", { min: [0, 0, 0], max: [1, 1, 2] }),
+    record("o1.1.2", { min: [0, 0, 3], max: [1, 1, 5] }),
+    record("o1.2", { min: [0, 0, 6], max: [1, 1, 8] })
+  ];
+  const bounds = { min: [0, 0, 0], max: [1, 1, 8] };
+  const { doc, offsets } = explode(records, bounds, { mode: "z", depth: 2 });
+  const targets = doc.steps.flatMap((step) => step.targets);
+  // At depth 2 the two children of o1.1 are distinct targets.
+  assert.ok(targets.includes("o1.1.2"));
+  assert.ok(offsets.get("o1.1.2")[2] > offsets.get("o1.1.1")[2]);
+});
 
-  applyExplodedViewProgress(THREE, states, 0);
-  assert.equal(records[0].explodedViewMatrix.elements[12], 0);
-  assert.equal(records[0].explodedViewMatrix.elements[14], 10);
+test("generator auto axis picks the direction of greatest spread", () => {
+  // Parts spread along X, thin in Y/Z -> auto axis should be X.
+  const records = [
+    record("o1.1", { min: [0, 0, 0], max: [1, 1, 1] }),
+    record("o1.2", { min: [5, 0, 0], max: [6, 1, 1] }),
+    record("o1.3", { min: [10, 0, 0], max: [11, 1, 1] })
+  ];
+  const bounds = { min: [0, 0, 0], max: [11, 1, 1] };
+  const { offsets } = explode(records, bounds, { mode: "auto" });
+  // Non-base groups travel primarily along X.
+  const moved = ["o1.2", "o1.3"].map((k) => offsets.get(k));
+  for (const [x, y, z] of moved) {
+    assert.ok(Math.abs(x) >= Math.abs(y) && Math.abs(x) >= Math.abs(z));
+  }
+});
 
-  applyExplodedViewProgress(THREE, states, 0.5);
-  assert.equal(records[0].explodedViewMatrix.elements[12], 5);
-  assert.equal(records[0].explodedViewMatrix.elements[14], 5);
+test("generator radial mode blooms groups outward and preserves height", () => {
+  const records = [
+    record("o1.1", { min: [-3, -1, 0], max: [-1, 1, 2] }),
+    record("o1.2", { min: [1, -1, 0], max: [3, 1, 2] })
+  ];
+  const bounds = { min: [-3, -1, 0], max: [3, 1, 2] };
+  const { doc, offsets } = explode(records, bounds, { mode: "radial", keepBaseGrounded: false });
+  assert.ok(doc.steps.length >= 2);
+  assert.ok(offsets.get("o1.1")[0] < 0);
+  assert.ok(offsets.get("o1.2")[0] > 0);
+  for (const key of ["o1.1", "o1.2"]) {
+    assert.ok(Math.abs(offsets.get(key)[2]) < 1e-6, "radial keeps height");
+  }
+});
 
-  applyExplodedViewProgress(THREE, states, 1);
-  assert.equal(records[0].explodedViewMatrix.elements[12], 10);
-  assert.equal(records[0].explodedViewMatrix.elements[14], 0);
+test("generator radial mode anchors the core and blooms the ring outward", () => {
+  // A central hub with a ring of parts around it: the hub (on the axis) stays,
+  // and each ring part blooms straight outward, preserving height.
+  const ring = [];
+  for (let i = 0; i < 4; i += 1) {
+    const a = (i / 4) * Math.PI * 2;
+    const cx = 6 * Math.cos(a);
+    const cy = 6 * Math.sin(a);
+    ring.push(record(`o1.${i + 2}`, { min: [cx - 1, cy - 1, 0], max: [cx + 1, cy + 1, 2] }));
+  }
+  const records = [record("o1.1", { min: [-2, -2, 0], max: [2, 2, 2] }), ...ring];
+  const bounds = { min: [-8, -8, 0], max: [8, 8, 2] };
+  const { doc, offsets } = explode(records, bounds, { mode: "radial" });
+
+  // Hub stays put; every ring part moves outward with height preserved.
+  assert.deepEqual(offsets.get("o1.1"), [0, 0, 0]);
+  for (let i = 0; i < 4; i += 1) {
+    const [x, y, z] = offsets.get(`o1.${i + 2}`);
+    assert.ok(Math.hypot(x, y) > 0, "ring part blooms outward");
+    assert.ok(Math.abs(z) < 1e-6, "radial preserves height");
+  }
+  // The four ring parts move in four distinct directions.
+  const dirs = new Set([0, 1, 2, 3].map((i) => {
+    const [x, y] = offsets.get(`o1.${i + 2}`);
+    return `${Math.round(x)},${Math.round(y)}`;
+  }));
+  assert.ok(doc.steps.length >= 4);
+  assert.ok(dirs.size >= 3, "ring parts bloom in distinct directions");
+});
+
+test("generator returns no steps for degenerate input", () => {
+  const single = generateExplodedViewDocument(THREE, [record("o1.1", { min: [0, 0, 0], max: [1, 1, 1] })], null, {});
+  assert.equal(single.steps.length, 0);
+  const none = generateExplodedViewDocument(THREE, [], null, {});
+  assert.equal(none.steps.length, 0);
 });
