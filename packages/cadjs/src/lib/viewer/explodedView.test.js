@@ -49,26 +49,41 @@ test("generator groups first-level components and explodes along Z", () => {
   assert.ok(offsets.get("o1.2")[2] > 0);
 });
 
-test("generator separates coplanar groups laterally instead of stacking", () => {
-  // Three side-by-side parts at the same height: the old solver stacked them
-  // into a vertical column; the new one spreads them in the horizontal plane.
+test("generator separates side-by-side coplanar groups laterally, not stacked", () => {
+  // Three parts side-by-side in X at the same height (disjoint footprints): the
+  // old solver stacked them into a vertical column; the new one spreads them in
+  // the horizontal plane.
   const records = [
-    record("o1.1", { min: [-1, -1, 0], max: [1, 1, 2] }),
+    record("o1.1", { min: [-5, -1, 0], max: [-3, 1, 2] }),
     record("o1.2", { min: [-1, -1, 0], max: [1, 1, 2] }),
-    record("o1.3", { min: [-1, -1, 0], max: [1, 1, 2] })
+    record("o1.3", { min: [3, -1, 0], max: [5, 1, 2] })
   ];
-  const bounds = { min: [-1, -1, 0], max: [1, 1, 2] };
+  const bounds = { min: [-5, -1, 0], max: [5, 1, 2] };
   const { offsets } = explode(records, bounds, { mode: "z" });
-
   for (const key of ["o1.1", "o1.2", "o1.3"]) {
     const [x, y, z] = offsets.get(key);
     assert.ok(Math.abs(z) < 1e-6, `${key} should not move vertically`);
     assert.ok(Math.hypot(x, y) > 0, `${key} should separate laterally`);
   }
-  // Directions are distinct (not all piled the same way): the three lateral
-  // offsets are not identical vectors.
-  const vectors = ["o1.1", "o1.2", "o1.3"].map((k) => offsets.get(k).join(","));
-  assert.ok(new Set(vectors).size >= 2, "coplanar groups fan to distinct directions");
+});
+
+test("generator telescopes concentric coplanar parts along the axis", () => {
+  // Nested rings at the same height (a shaft/housing case): they must separate
+  // along the explode axis, not scatter sideways into each other.
+  const records = [
+    record("o1.1", { min: [-6, -6, 0], max: [6, 6, 2] }),
+    record("o1.2", { min: [-4, -4, 0], max: [4, 4, 2] }),
+    record("o1.3", { min: [-2, -2, 0], max: [2, 2, 2] })
+  ];
+  const bounds = { min: [-6, -6, 0], max: [6, 6, 2] };
+  const { offsets } = explode(records, bounds, { mode: "z" });
+  const z = ["o1.1", "o1.2", "o1.3"].map((k) => offsets.get(k)[2]);
+  // Distinct axial stations, no lateral scatter.
+  assert.ok(z[1] > z[0] && z[2] > z[1], "nested parts telescope along the axis");
+  for (const key of ["o1.1", "o1.2", "o1.3"]) {
+    const [x, y] = offsets.get(key);
+    assert.ok(Math.hypot(x, y) < 1e-6, `${key} should stay on the axis`);
+  }
 });
 
 test("generator depth can break subassemblies into deeper components", () => {
