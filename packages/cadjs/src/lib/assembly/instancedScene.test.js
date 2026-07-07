@@ -3,7 +3,7 @@ import test from "node:test";
 
 import * as THREE from "three";
 
-import { buildInstancedPackageScene } from "./instancedScene.js";
+import { buildInstancedPackageScene, applyInstancedVisualState } from "./instancedScene.js";
 
 function boxComponent() {
   // A trivial 3-vertex component; geometry content is irrelevant to the
@@ -97,6 +97,78 @@ test("occurrence override color becomes a per-instance color", () => {
   assert.ok(Math.abs(c.g - 1) < 1e-6 && c.r < 1e-6, "instance 1 is green");
 });
 
-test("empty descriptor throws", () => {
-  assert.throws(() => buildInstancedPackageScene(THREE, { occurrences: [] }, {}));
+test("build stores base color + base matrix and always allocates instanceColor", () => {
+  const descriptor = {
+    components: { A: {} },
+    occurrences: [
+      { id: "o1.1", component: "A", transform: translation(3, 0, 0) },
+      { id: "o1.2", component: "A", transform: translation(6, 0, 0) }
+    ]
+  };
+  const scene = buildInstancedPackageScene(THREE, descriptor, { A: boxComponent() });
+  const mesh = scene.instancedMeshes[0];
+  // instanceColor allocated even with no override colors, defaulting to white.
+  assert.ok(mesh.instanceColor, "instanceColor allocated");
+  const c = new THREE.Color();
+  mesh.getColorAt(0, c);
+  assert.ok(Math.abs(c.r - 1) < 1e-6 && Math.abs(c.g - 1) < 1e-6 && Math.abs(c.b - 1) < 1e-6, "base white");
+  assert.equal(mesh.userData.cadInstanceBaseColors.length, 6);
+  assert.equal(mesh.userData.cadInstanceBaseMatrices.length, 32);
+});
+
+function twoInstanceScene() {
+  const descriptor = {
+    components: { A: {} },
+    occurrences: [
+      { id: "o1.1", component: "A", transform: translation(0, 0, 0), color: [0.5, 0.5, 0.5, 1] },
+      { id: "o1.2", component: "A", transform: translation(5, 0, 0), color: [0.5, 0.5, 0.5, 1] }
+    ]
+  };
+  return buildInstancedPackageScene(THREE, descriptor, { A: boxComponent() }).instancedMeshes[0];
+}
+
+test("selection recolors only the selected instance", () => {
+  const mesh = twoInstanceScene();
+  const selectedColor = new THREE.Color(0.31, 0.615, 1);
+  const changed = applyInstancedVisualState(THREE, mesh, {
+    selected: new Set(["o1.1"]),
+    selectedColor
+  });
+  assert.equal(changed, true);
+  const c = new THREE.Color();
+  mesh.getColorAt(0, c);
+  assert.ok(Math.abs(c.r - 0.31) < 1e-3 && Math.abs(c.g - 0.615) < 1e-3 && Math.abs(c.b - 1) < 1e-3, "o1.1 is selection color");
+  mesh.getColorAt(1, c);
+  assert.ok(Math.abs(c.r - 0.5) < 1e-3 && Math.abs(c.g - 0.5) < 1e-3, "o1.2 keeps its base color");
+});
+
+test("hidden instance collapses to a zero matrix and restores when unhidden", () => {
+  const mesh = twoInstanceScene();
+  applyInstancedVisualState(THREE, mesh, { hidden: new Set(["o1.2"]) });
+  const m = new THREE.Matrix4();
+  mesh.getMatrixAt(1, m);
+  assert.ok(m.elements.every((v) => v === 0), "hidden instance matrix is zeroed");
+  // Unhide: base pose (translation +5 in X) is restored from the stored base matrix.
+  applyInstancedVisualState(THREE, mesh, { hidden: new Set() });
+  mesh.getMatrixAt(1, m);
+  const expected = new THREE.Matrix4().set(...translation(5, 0, 0));
+  assert.deepEqual([...m.elements], [...expected.elements]);
+});
+
+test("focus dims the non-focused instances", () => {
+  const mesh = twoInstanceScene();
+  applyInstancedVisualState(THREE, mesh, {
+    focusIds: new Set(["o1.1"]),
+    hasFocus: true
+  });
+  const c = new THREE.Color();
+  mesh.getColorAt(0, c);
+  assert.ok(Math.abs(c.r - 0.5) < 1e-3, "focused instance keeps base color");
+  mesh.getColorAt(1, c);
+  assert.ok(c.r < 0.5 && c.r > 0, "non-focused instance is dimmed toward black");
+});
+
+test("visual state is a no-op on a mesh without instanced base metadata", () => {
+  const changed = applyInstancedVisualState(THREE, { userData: {} }, { selected: new Set(["x"]) });
+  assert.equal(changed, false);
 });

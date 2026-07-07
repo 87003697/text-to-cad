@@ -28,7 +28,7 @@ import {
 import {
   applyDisplayRecordTransform
 } from "./displayRecordTransform.js";
-import { buildInstancedPackageScene } from "../lib/assembly/instancedScene.js";
+import { buildInstancedPackageScene, applyInstancedVisualState } from "../lib/assembly/instancedScene.js";
 import { axisIndex, normalizeStepClipSettings } from "../lib/viewer/clipPlane.js";
 import {
   clampSceneModelRadius,
@@ -1235,9 +1235,19 @@ export function applyPartVisualState(THREE, records, {
       continue;
     }
     if (record.instanced) {
-      // Per-instance selection/hover/hidden state is applied on the InstancedMesh
-      // (a later increment), not by mutating the shared bucket material — which
-      // would recolor every instance. Skip in the per-record pass.
+      // Per-instance selection/hover/hidden/focus is applied on the InstancedMesh
+      // (recolor + collapse), not by mutating the shared bucket material — which
+      // would recolor every instance at once.
+      applyInstancedVisualState(THREE, record.mesh, {
+        selected,
+        hovered,
+        hidden,
+        focusIds,
+        hasFocus,
+        selectedColor: selectedSurfaceColor,
+        hoveredColor: hoveredSurfaceColor,
+        matches: partIdMatchesSet
+      });
       continue;
     }
     const effectStyle = record.effectStyle && typeof record.effectStyle === "object" ? record.effectStyle : {};

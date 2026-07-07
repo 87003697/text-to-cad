@@ -137,16 +137,21 @@ export function buildInstancedPackageScene(THREE, descriptor, componentMeshDataB
       doubleSide: bucket.mirrored
     });
 
-    const mesh = new THREE.InstancedMesh(geometry, material, bucket.occurrences.length);
+    const count = bucket.occurrences.length;
+    const mesh = new THREE.InstancedMesh(geometry, material, count);
     mesh.name = `CadInstanced:${bucket.cid}${bucket.mirrored ? ":mirror" : ""}`;
-    // Baked transforms: the instances never move except on exploded-view updates,
-    // so skip per-frame auto matrix work (cadScene applies this to per-mesh records too).
     mesh.frustumCulled = true;
     // Map each instance index back to its descriptor occurrence for picking/selection.
-    const instanceOccurrenceIds = new Array(bucket.occurrences.length);
-    let useInstanceColor = false;
+    const instanceOccurrenceIds = new Array(count);
+    // Base per-instance state kept so the visual-state layer (selection/hover/hide/
+    // exploded) can recolor or move a single instance and restore it afterward.
+    // instanceColor is always allocated (base = override color, else white) so a
+    // later setColorAt on one instance never leaves the rest at the zero-init black
+    // three.js would give a lazily-allocated instanceColor buffer.
+    const baseColors = new Float32Array(count * 3);
+    const baseMatrices = new Float32Array(count * 16);
 
-    for (let index = 0; index < bucket.occurrences.length; index += 1) {
+    for (let index = 0; index < count; index += 1) {
       const { occurrence, matrix } = bucket.occurrences[index];
       // three.js Matrix4.set is row-major; the descriptor transform is row-major.
       tmpMatrix.set(
@@ -156,19 +161,27 @@ export function buildInstancedPackageScene(THREE, descriptor, componentMeshDataB
         matrix[12], matrix[13], matrix[14], matrix[15]
       );
       mesh.setMatrixAt(index, tmpMatrix);
+      baseMatrices.set(tmpMatrix.elements, index * 16);
       instanceOccurrenceIds[index] = String(occurrence?.id || "").trim();
       const override = toColorTriplet(occurrence?.color);
-      if (override && tmpColor && mesh.setColorAt) {
-        tmpColor.setRGB(override[0], override[1], override[2]);
+      const r = override ? override[0] : 1;
+      const g = override ? override[1] : 1;
+      const b = override ? override[2] : 1;
+      baseColors[index * 3] = r;
+      baseColors[index * 3 + 1] = g;
+      baseColors[index * 3 + 2] = b;
+      if (tmpColor && mesh.setColorAt) {
+        tmpColor.setRGB(r, g, b);
         mesh.setColorAt(index, tmpColor);
-        useInstanceColor = true;
       }
     }
     mesh.instanceMatrix.needsUpdate = true;
-    if (useInstanceColor && mesh.instanceColor) {
+    if (mesh.instanceColor) {
       mesh.instanceColor.needsUpdate = true;
     }
     mesh.userData.cadInstanceOccurrenceIds = instanceOccurrenceIds;
+    mesh.userData.cadInstanceBaseColors = baseColors;
+    mesh.userData.cadInstanceBaseMatrices = baseMatrices;
     mesh.userData.cadComponentId = bucket.cid;
     group.add(mesh);
     instancedMeshes.push(mesh);
@@ -182,4 +195,100 @@ export function buildInstancedPackageScene(THREE, descriptor, componentMeshDataB
     occurrenceCount: occurrences.length,
     componentCount: geometryByCid.size
   };
+}
+
+const HIDDEN_INSTANCE_MATRIX = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
+const DIMMED_INSTANCE_FACTOR = 0.28;
+
+function defaultMatches(partId, set) {
+  return set instanceof Set && set.has(partId);
+}
+
+/**
+ * Apply per-occurrence selection/hover/hidden/focus state to one instanced bucket.
+ *
+ * A shared bucket material cannot express per-instance emissive glow or opacity,
+ * so selection/hover read out as an instanceColor recolor, focus-dimming as a
+ * darkened instanceColor, and hide as a collapsed (zero) instance matrix. Base
+ * color and base matrix are restored from the arrays stashed at build time, so
+ * toggling state back returns the instance to its authored appearance/pose.
+ *
+ * Pure and THREE-injected for Node testability. Sets are matched with `matches`
+ * (cadScene passes its hierarchical partIdMatchesSet; the default is exact Set
+ * membership).
+ *
+ * @returns true when any instance attribute changed (caller need not track it —
+ *          needsUpdate is set here — but tests assert on it).
+ */
+export function applyInstancedVisualState(THREE, mesh, state = {}) {
+  const occurrenceIds = mesh?.userData?.cadInstanceOccurrenceIds;
+  const baseColors = mesh?.userData?.cadInstanceBaseColors;
+  const baseMatrices = mesh?.userData?.cadInstanceBaseMatrices;
+  if (!Array.isArray(occurrenceIds) || !occurrenceIds.length || !baseColors || !baseMatrices) {
+    return false;
+  }
+  const {
+    selected,
+    hovered,
+    hidden,
+    focusIds,
+    hasFocus = focusIds instanceof Set && focusIds.size > 0,
+    selectedColor,
+    hoveredColor,
+    dimFactor = DIMMED_INSTANCE_FACTOR,
+    matches = defaultMatches
+  } = state;
+
+  const selR = selectedColor?.r ?? 0.31;
+  const selG = selectedColor?.g ?? 0.615;
+  const selB = selectedColor?.b ?? 1;
+  const hovR = hoveredColor?.r ?? 0.553;
+  const hovG = hoveredColor?.g ?? 0.772;
+  const hovB = hoveredColor?.b ?? 1;
+
+  const tmpColor = new THREE.Color();
+  const tmpMatrix = new THREE.Matrix4();
+  let colorChanged = false;
+  let matrixChanged = false;
+
+  for (let index = 0; index < occurrenceIds.length; index += 1) {
+    const id = occurrenceIds[index];
+    const isHidden = matches(id, hidden);
+    const isSelected = !isHidden && matches(id, selected);
+    const isHovered = !isHidden && !isSelected && matches(id, hovered);
+    const isFocused = !isHidden && hasFocus && matches(id, focusIds);
+    const isDimmed = !isHidden && hasFocus && !isFocused && !isSelected && !isHovered;
+
+    // Matrix: hidden collapses to a zero instance; everything else rides its base pose.
+    if (isHidden) {
+      tmpMatrix.fromArray(HIDDEN_INSTANCE_MATRIX);
+    } else {
+      tmpMatrix.fromArray(baseMatrices, index * 16);
+    }
+    mesh.setMatrixAt(index, tmpMatrix);
+    matrixChanged = true;
+
+    // Color: selection/hover recolor, focus-dim darkens the base, else the base color.
+    let r = baseColors[index * 3];
+    let g = baseColors[index * 3 + 1];
+    let b = baseColors[index * 3 + 2];
+    if (isSelected) {
+      r = selR; g = selG; b = selB;
+    } else if (isHovered) {
+      r = hovR; g = hovG; b = hovB;
+    } else if (isDimmed) {
+      r *= dimFactor; g *= dimFactor; b *= dimFactor;
+    }
+    tmpColor.setRGB(r, g, b);
+    mesh.setColorAt(index, tmpColor);
+    colorChanged = true;
+  }
+
+  if (matrixChanged) {
+    mesh.instanceMatrix.needsUpdate = true;
+  }
+  if (colorChanged && mesh.instanceColor) {
+    mesh.instanceColor.needsUpdate = true;
+  }
+  return colorChanged || matrixChanged;
 }
