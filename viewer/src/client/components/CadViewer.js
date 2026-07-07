@@ -474,14 +474,19 @@ function resolveViewerExplodeDocument(THREE, settings, records, bounds) {
 // group so they inherit the model offset; rebuilt each frame during a scrub.
 
 function ensureExplodeTrailGroup(runtime) {
+  const parent = runtime.edgesGroup || runtime.modelGroup;
   if (runtime.explodeTrailGroup) {
+    // Re-attach if a scene reset (clearSceneGroup) detached the trail group.
+    if (parent && runtime.explodeTrailGroup.parent !== parent) {
+      parent.add(runtime.explodeTrailGroup);
+    }
     return runtime.explodeTrailGroup;
   }
   const THREE = runtime.THREE;
   const group = new THREE.Group();
   group.name = "explodeTrails";
   group.renderOrder = 15;
-  (runtime.edgesGroup || runtime.modelGroup)?.add(group);
+  parent?.add(group);
   runtime.explodeTrailGroup = group;
   return group;
 }
@@ -4107,22 +4112,33 @@ const CadViewer = forwardRef(function CadViewer({
     const modelChanged = animation.modelKey !== animationModelKey;
     const baseBounds = runtime.modelBounds || meshData?.bounds;
     const targetProgress = explodedViewActive ? explodeAmount : 0;
-
-    // Resolve + compile the step document. When disabled we still evaluate at
-    // progress 0 (which clears every record) so collapse animates cleanly.
-    const doc = explodedViewActive
-      ? resolveViewerExplodeDocument(THREE, normalizedExplodedSettings, runtime.displayRecords, baseBounds)
-      : null;
-    const compiled = doc
-      ? compileExplodedView(THREE, doc, runtime.displayRecords, baseBounds)
-      : null;
-    animation.modelKey = animationModelKey;
-    animation.compiled = compiled;
-
     const wasEnabled = animation.enabled === true;
+    animation.modelKey = animationModelKey;
     animation.enabled = explodedViewActive;
 
-    if (!compiled || !compiled.entries.length) {
+    // Steady disabled state: nothing to evaluate. (When disabling from an
+    // exploded state we still evaluate below so the collapse animates.)
+    if (!explodedViewActive && !wasEnabled) {
+      clearExplodedViewRecords(runtime.displayRecords);
+      for (const record of runtime.displayRecords) {
+        applyDisplayRecordTransform(THREE, record);
+      }
+      clearExplodeTrails(runtime);
+      syncRecordTopologyDisplayEdgeTransforms(runtime, runtime.displayRecords);
+      runtime.requestRender?.();
+      animation.progress = 0;
+      animation.compiled = null;
+      return undefined;
+    }
+
+    // Resolve + compile the step document from the current settings. On disable
+    // the authored/generated steps are still available, so collapse can animate
+    // from the current progress down to 0.
+    const doc = resolveViewerExplodeDocument(THREE, normalizedExplodedSettings, runtime.displayRecords, baseBounds);
+    const compiled = compileExplodedView(THREE, doc, runtime.displayRecords, baseBounds);
+    animation.compiled = compiled;
+
+    if (!compiled.entries.length) {
       clearExplodedViewRecords(runtime.displayRecords);
       for (const record of runtime.displayRecords) {
         applyDisplayRecordTransform(THREE, record);
