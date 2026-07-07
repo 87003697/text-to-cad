@@ -1,8 +1,6 @@
-"""Port of viewerServerInfo.buildViewerServerInfo (the /__cad/server payload).
-
-The launcher's reuse gate reads this strictly: serverApiVersion must be the
-integer 2, dynamicRoot the boolean true, and serverFeatures must contain
-"directory-activation". Optional serverMode/git keys are omitted when empty.
+"""Builds the /__cad/server payload (app id, dynamicRoot, serverFeatures, etc.)
+that the CAD Viewer client consumes. The optional serverMode key is omitted when
+empty.
 """
 
 from __future__ import annotations
@@ -12,10 +10,9 @@ import os
 from . import scanner
 
 VIEWER_SERVER_INFO_SCHEMA_VERSION = 1
-VIEWER_SERVER_API_VERSION = 2
 VIEWER_SERVER_APP_ID = "cad-viewer"
 DEFAULT_VIEWER_HOST = "127.0.0.1"
-DEFAULT_VIEWER_PORT = 4178
+DEFAULT_VIEWER_PORT = 3245
 
 
 def normalize_viewer_port(value, fallback=DEFAULT_VIEWER_PORT) -> int:
@@ -48,7 +45,6 @@ def build_viewer_server_info(
     step_artifact_generation_available: bool = True,
     viewer_version: str = "",
     server_mode: str = "",
-    git: str = "",
     server_features=None,
     active_directories=None,
 ) -> dict:
@@ -58,17 +54,13 @@ def build_viewer_server_info(
     view_root = _resolve_view_root(resolved_directory_root, root_dir)
     normalized_port = normalize_viewer_port(port)
     normalized_mode = str(server_mode or "").strip()
-    normalized_git = str(git or "").strip()
     info = {
         "schemaVersion": VIEWER_SERVER_INFO_SCHEMA_VERSION,
-        "serverApiVersion": VIEWER_SERVER_API_VERSION,
         "app": VIEWER_SERVER_APP_ID,
         "viewerVersion": str(viewer_version or ""),
     }
     if normalized_mode:
         info["serverMode"] = normalized_mode
-    if normalized_git:
-        info["git"] = normalized_git
     info["serverFeatures"] = [str(f or "").strip() for f in (server_features or []) if str(f or "").strip()]
     info["backend"] = backend
     info["dynamicRoot"] = bool(dynamic_root)

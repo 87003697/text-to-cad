@@ -1,6 +1,6 @@
 #!/usr/bin/env node
-// Thin shim: launch the Python CAD Viewer launcher (server_py.start_agent_viewer)
-// using the project's discovered venv Python + cadgen PYTHONPATH, so `agent:start`
+// Thin shim: launch the Python CAD Viewer launcher (server_py.start_viewer)
+// using the project's discovered venv Python + cadgen PYTHONPATH, so `npm start`
 // can run the Python backend without the caller knowing the venv path. Reuses the
 // proven cadPythonExecutable/cadPythonEnv discovery from the STEP pipeline.
 import { spawn } from "node:child_process";
@@ -16,7 +16,7 @@ const baseEnv = cadPythonEnv(repoRoot);
 // server_py lives under viewer/ — prepend it so `python -m server_py.*` resolves.
 baseEnv.PYTHONPATH = [viewerRoot, baseEnv.PYTHONPATH].filter(Boolean).join(path.delimiter);
 
-const child = spawn(python, ["-m", "server_py.start_agent_viewer", ...process.argv.slice(2)], {
+const child = spawn(python, ["-m", "server_py.start_viewer", ...process.argv.slice(2)], {
   cwd: viewerRoot,
   env: baseEnv,
   stdio: "inherit",
