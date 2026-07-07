@@ -1,6 +1,6 @@
 // Discover the project's venv Python + cadgen PYTHONPATH for spawning the Python
 // CAD Viewer backend (server_py) from Node tooling (the Vite dev proxy and the
-// agent:start shim). Extracted from the former src/server/step/pythonStepArtifact
+// `start` launcher shim). Extracted from the former src/server/step/pythonStepArtifact
 // venv discovery so it survives the Node-backend deletion.
 import fs from "node:fs";
 import path from "node:path";
