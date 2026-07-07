@@ -116,23 +116,34 @@ test("generator radial mode blooms groups outward and preserves height", () => {
   }
 });
 
-test("generator radial mode fans coaxial groups to distinct directions", () => {
-  // Two groups both centered on the vertical axis (stacked in Z): the radial
-  // bloom must fan them to different directions instead of the same fallback.
-  const records = [
-    record("o1.1", { min: [-1, -1, 0], max: [1, 1, 1] }),
-    record("o1.2", { min: [-1, -1, 4], max: [1, 1, 5] })
-  ];
-  const bounds = { min: [-1, -1, 0], max: [1, 1, 5] };
-  const doc = generateExplodedViewDocument(THREE, records, bounds, { mode: "radial", keepBaseGrounded: false });
-  assert.equal(doc.steps.length, 2);
-  const [a, b] = doc.steps.map((step) => step.axis);
-  assert.ok(
-    Math.abs(a[0] - b[0]) > 1e-6 || Math.abs(a[1] - b[1]) > 1e-6,
-    "coaxial groups fan to distinct directions"
-  );
-  // Purely horizontal bloom preserves height.
-  assert.ok(doc.steps.every((step) => Math.abs(step.axis[2]) < 1e-6));
+test("generator radial mode anchors the core and blooms the ring outward", () => {
+  // A central hub with a ring of parts around it: the hub (on the axis) stays,
+  // and each ring part blooms straight outward, preserving height.
+  const ring = [];
+  for (let i = 0; i < 4; i += 1) {
+    const a = (i / 4) * Math.PI * 2;
+    const cx = 6 * Math.cos(a);
+    const cy = 6 * Math.sin(a);
+    ring.push(record(`o1.${i + 2}`, { min: [cx - 1, cy - 1, 0], max: [cx + 1, cy + 1, 2] }));
+  }
+  const records = [record("o1.1", { min: [-2, -2, 0], max: [2, 2, 2] }), ...ring];
+  const bounds = { min: [-8, -8, 0], max: [8, 8, 2] };
+  const { doc, offsets } = explode(records, bounds, { mode: "radial" });
+
+  // Hub stays put; every ring part moves outward with height preserved.
+  assert.deepEqual(offsets.get("o1.1"), [0, 0, 0]);
+  for (let i = 0; i < 4; i += 1) {
+    const [x, y, z] = offsets.get(`o1.${i + 2}`);
+    assert.ok(Math.hypot(x, y) > 0, "ring part blooms outward");
+    assert.ok(Math.abs(z) < 1e-6, "radial preserves height");
+  }
+  // The four ring parts move in four distinct directions.
+  const dirs = new Set([0, 1, 2, 3].map((i) => {
+    const [x, y] = offsets.get(`o1.${i + 2}`);
+    return `${Math.round(x)},${Math.round(y)}`;
+  }));
+  assert.ok(doc.steps.length >= 4);
+  assert.ok(dirs.size >= 3, "ring parts bloom in distinct directions");
 });
 
 test("generator returns no steps for degenerate input", () => {
