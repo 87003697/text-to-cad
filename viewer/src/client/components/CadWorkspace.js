@@ -8313,6 +8313,32 @@ export default function CadWorkspace({
     viewerLoading
   ]);
 
+  // Exit orbit/preview mode and restore the pre-preview UI, from the floating
+  // toolbar's "Exit orbit" button. Mirrors the Escape-key exit in
+  // useCadWorkspaceShortcuts; keep the two restore paths in sync.
+  const handleExitPreviewMode = useCallback(() => {
+    if (!previewMode) {
+      return;
+    }
+    const previousUiState = previewUiStateRef.current;
+    previewUiStateRef.current = null;
+    setPreviewMode(false);
+    if (previousUiState) {
+      setViewerAlertOpen(previousUiState.viewerAlertOpen);
+      setThemeMenuOpen(previousUiState.themeMenuOpen);
+      setSidebarOpen(previousUiState.sidebarOpen);
+      setTabToolsOpen(previousUiState.tabToolsOpen);
+      setTabToolMode(previousUiState.tabToolMode);
+    }
+  }, [
+    previewMode,
+    setSidebarOpen,
+    setTabToolMode,
+    setTabToolsOpen,
+    setThemeMenuOpen,
+    setViewerAlertOpen
+  ]);
+
   const toggleDirectory = (directoryId) => {
     setFileViewerDirectoryStateInitialized(true);
     setExpandedDirectoryIds((current) => {
@@ -8653,6 +8679,7 @@ export default function CadWorkspace({
                 canRedoDrawing={canRedoDrawing}
                 drawingStrokes={drawingStrokes}
                 handleEnterPreviewMode={handleEnterPreviewMode}
+                handleExitPreviewMode={handleExitPreviewMode}
                 handleScreenshotCopy={handleScreenshotCopy}
                 onExportStepFile={handleExportStepFile}
                 fileAccessBusyKey={fileAccessBusyKey}
