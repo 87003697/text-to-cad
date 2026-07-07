@@ -7,8 +7,24 @@ import {
   CAMERA_PROJECTION,
   normalizeCameraProjection
 } from "../lib/perspective.js";
+import {
+  EXPLODED_VIEW_AUTO_MODES,
+  EXPLODED_VIEW_DIRECTIONS,
+  EXPLODED_VIEW_ORDERS,
+  EXPLODED_VIEW_STEP_TYPES,
+  MAX_EXPLODED_VIEW_DEPTH,
+  normalizeExplodedViewDocument
+} from "../lib/viewer/explodedViewSteps.js";
 
 export { CAMERA_PROJECTION, normalizeCameraProjection };
+export {
+  EXPLODED_VIEW_AUTO_MODES,
+  EXPLODED_VIEW_DIRECTIONS,
+  EXPLODED_VIEW_ORDERS,
+  EXPLODED_VIEW_STEP_TYPES,
+  MAX_EXPLODED_VIEW_DEPTH,
+  normalizeExplodedViewDocument
+};
 
 export const CAD_DISPLAY_MODE = Object.freeze({
   HIDDEN_EDGES: "hidden_edges",
@@ -22,9 +38,6 @@ export const CAD_DISPLAY_MODE = Object.freeze({
 
 export const CAD_DISPLAY_MODE_VALUES = Object.freeze(Object.values(CAD_DISPLAY_MODE));
 
-export const EXPLODED_VIEW_AXES = Object.freeze(["x", "y", "z", "radial"]);
-export const EXPLODED_VIEW_DIRECTIONS = Object.freeze(["positive", "negative"]);
-export const MAX_EXPLODED_VIEW_DEPTH = 8;
 const HEX_COLOR_PATTERN = /^#(?:[0-9a-fA-F]{3}){1,2}$/;
 
 export const CAD_EDGE_COLOR = "#132232";
@@ -72,15 +85,14 @@ export const DISABLED_DISPLAY_EDGE_SETTINGS = Object.freeze({
   enabled: false
 });
 
+// The exploded-view display setting is now an ordered step *document* (see
+// lib/viewer/explodedViewSteps.js). `steps` is the authored/generated explode;
+// when empty and enabled, the viewer auto-generates from `auto` hints. `amount`
+// is the 0..1 scrub position.
 export const DEFAULT_EXPLODED_VIEW_SETTINGS = Object.freeze({
-  enabled: false,
-  axis: "z",
-  direction: "positive",
-  spacing: 1.45,
-  depth: 1,
-  keepBaseGrounded: true,
-  mergeCoplanar: false,
-  autoFrame: true
+  ...normalizeExplodedViewDocument({}),
+  auto: Object.freeze(normalizeExplodedViewDocument({}).auto),
+  steps: Object.freeze([])
 });
 
 export const DEFAULT_DISPLAY_SETTINGS = Object.freeze({
@@ -234,48 +246,8 @@ export function normalizeDisplayMode(value) {
     : CAD_DISPLAY_MODE.SOLID;
 }
 
-export function normalizeExplodedViewAxis(value, fallback = DEFAULT_EXPLODED_VIEW_SETTINGS.axis) {
-  const normalized = String(value || "").trim().toLowerCase();
-  const axis = normalized.startsWith("-") ? normalized.slice(1) : normalized;
-  return EXPLODED_VIEW_AXES.includes(axis) ? axis : fallback;
-}
-
-export function normalizeExplodedViewDirection(value, fallback = DEFAULT_EXPLODED_VIEW_SETTINGS.direction) {
-  const normalized = String(value || "").trim().toLowerCase();
-  if (["negative", "reverse", "down", "backward", "-", "-1"].includes(normalized)) {
-    return "negative";
-  }
-  if (["positive", "forward", "up", "+", "+1", "1"].includes(normalized)) {
-    return "positive";
-  }
-  return fallback;
-}
-
-export function normalizeExplodedViewDepth(value, fallback = DEFAULT_EXPLODED_VIEW_SETTINGS.depth) {
-  const normalized = String(value ?? "").trim().toLowerCase();
-  if (["all", "full", "parts", "leaves", "leaf"].includes(normalized)) {
-    return MAX_EXPLODED_VIEW_DEPTH;
-  }
-  const numericValue = Math.round(Number(value));
-  return Number.isFinite(numericValue)
-    ? clamp(numericValue, 1, MAX_EXPLODED_VIEW_DEPTH)
-    : fallback;
-}
-
 export function normalizeExplodedViewSettings(value = null, overrides = {}) {
-  const source = isObject(value) ? value : {};
-  const merged = isObject(overrides) ? { ...source, ...overrides } : source;
-  const axisText = String(merged.axis || "").trim().toLowerCase();
-  return {
-    enabled: normalizeBoolean(merged.enabled, DEFAULT_EXPLODED_VIEW_SETTINGS.enabled),
-    axis: normalizeExplodedViewAxis(merged.axis),
-    direction: normalizeExplodedViewDirection(merged.direction || (axisText.startsWith("-") ? "negative" : "positive")),
-    spacing: normalizeNumber(merged.spacing ?? merged.distance ?? merged.distanceScale, DEFAULT_EXPLODED_VIEW_SETTINGS.spacing, 0.25, 4),
-    depth: normalizeExplodedViewDepth(merged.depth ?? merged.levels ?? merged.scopeDepth),
-    keepBaseGrounded: normalizeBoolean(merged.keepBaseGrounded ?? merged.groundBase, DEFAULT_EXPLODED_VIEW_SETTINGS.keepBaseGrounded),
-    mergeCoplanar: normalizeBoolean(merged.mergeCoplanar ?? merged.mergeLayers ?? merged.coalesceLayers, DEFAULT_EXPLODED_VIEW_SETTINGS.mergeCoplanar),
-    autoFrame: normalizeBoolean(merged.autoFrame, DEFAULT_EXPLODED_VIEW_SETTINGS.autoFrame)
-  };
+  return normalizeExplodedViewDocument(value, isObject(overrides) ? overrides : {});
 }
 
 export function normalizeDisplaySettings(value = null) {

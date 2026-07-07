@@ -42,7 +42,9 @@ test("rendered file sheet sections include closed-by-default sections", () => {
     "tree",
     "reference",
     "parameters",
-    "display"
+    "display",
+    "clip",
+    "exploded"
   ]);
   assert.deepEqual(renderedFileSheetSectionIds("srdf"), ["joints"]);
   // A mesh has no file-specific sections (only a status tab when there's an issue).

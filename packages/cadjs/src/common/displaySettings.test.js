@@ -108,27 +108,31 @@ test("display settings normalize edge styling independently from appearance sett
   });
 });
 
-test("display settings normalize exploded-view controls independently from mode", () => {
-  assert.deepEqual(normalizeExplodedViewSettings({
+test("display settings normalize the exploded-view step document independently from mode", () => {
+  const doc = normalizeExplodedViewSettings({
     enabled: true,
-    axis: "-x",
-    spacing: 2,
-    levels: "all",
-    groundBase: false,
-    mergeLayers: true,
-    autoFrame: false
-  }), {
-    enabled: true,
-    axis: "x",
-    direction: "negative",
-    spacing: 2,
-    depth: 8,
-    keepBaseGrounded: false,
-    mergeCoplanar: true,
-    autoFrame: false
+    amount: 0.5,
+    order: "sequential",
+    trails: true,
+    auto: { mode: "x", direction: "negative", depth: 4, gapScale: 2, keepBaseGrounded: false },
+    steps: [{ id: "s1", type: "translate", targets: ["o1.2"], axis: [0, 0, 3], distance: 12 }]
   });
-  assert.equal(normalizeExplodedViewSettings({ axis: "diagonal" }).axis, "z");
-  assert.equal(normalizeExplodedViewSettings({ axis: "radial" }).axis, "radial");
+  assert.equal(doc.enabled, true);
+  assert.equal(doc.amount, 0.5);
+  assert.equal(doc.order, "sequential");
+  assert.equal(doc.trails, true);
+  assert.deepEqual(doc.auto, { mode: "x", direction: "negative", depth: 4, gapScale: 2, keepBaseGrounded: false });
+  assert.equal(doc.steps.length, 1);
+  assert.deepEqual(doc.steps[0].axis, [0, 0, 1]); // normalized to unit
+  assert.equal(doc.steps[0].distance, 12);
+
+  // Unknown auto modes fall back to "auto"; "radial" is preserved.
+  assert.equal(normalizeExplodedViewSettings({ auto: { mode: "diagonal" } }).auto.mode, "auto");
+  assert.equal(normalizeExplodedViewSettings({ auto: { mode: "radial" } }).auto.mode, "radial");
+  // Amount clamps and invalid steps drop.
+  assert.equal(normalizeExplodedViewSettings({ amount: 9 }).amount, 1);
+  assert.equal(normalizeExplodedViewSettings({ steps: [{ type: "translate", targets: [] }] }).steps.length, 0);
+
   assert.equal(normalizeDisplaySettings({ exploded: true }).exploded.enabled, false);
   assert.equal(normalizeDisplaySettings({ mode: "exploded", exploded: { enabled: true } }).exploded.enabled, true);
   assert.deepEqual(normalizeDisplaySettings({ mode: "exploded view" }), DEFAULT_DISPLAY_SETTINGS);
