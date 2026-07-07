@@ -157,6 +157,13 @@ export default function ParameterControlsSection({
                 </Button>
               </div>
             </FileSheetControlRow>
+            <FileSheetToggleRow
+              label="Loop"
+              checked={animationState.loopEnabled !== false}
+              onCheckedChange={(checked) => runtime?.onAnimationLoopToggle?.(checked)}
+              disabled={!enabled}
+              ariaLabel="Loop animation playback"
+            />
             <FileSheetSliderField
               label="Time"
               value={formatSeconds(animationState.elapsedSec)}

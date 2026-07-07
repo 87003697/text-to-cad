@@ -266,14 +266,16 @@ function normalizeStepModuleAnimationState(value) {
       activeId: "",
       playing: false,
       elapsedSec: 0,
-      speed: 1
+      speed: 1,
+      loopEnabled: true
     };
   }
   return {
     activeId: normalizeString(value.activeId),
     playing: false,
     elapsedSec: Math.max(normalizeNumber(value.elapsedSec, 0), 0),
-    speed: Math.min(Math.max(normalizeNumber(value.speed, 1), 0.1), 5)
+    speed: Math.min(Math.max(normalizeNumber(value.speed, 1), 0.1), 5),
+    loopEnabled: normalizeBoolean(value.loopEnabled, true)
   };
 }
 

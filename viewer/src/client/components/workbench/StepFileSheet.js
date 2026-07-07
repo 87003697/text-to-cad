@@ -1395,6 +1395,13 @@ export default function StepFileSheet({
                         </Button>
                       </div>
                     </FileSheetControlRow>
+                    <FileSheetToggleRow
+                      label="Loop"
+                      checked={stepModuleAnimationState.loopEnabled !== false}
+                      onCheckedChange={(checked) => stepModule?.onAnimationLoopToggle?.(checked)}
+                      disabled={!stepModuleEnabled}
+                      ariaLabel="Loop animation playback"
+                    />
                     <StepModuleAnimationTimeControl
                       animationState={stepModuleAnimationState}
                       duration={stepModuleAnimationDuration}

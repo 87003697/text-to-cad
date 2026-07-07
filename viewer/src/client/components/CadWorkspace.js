@@ -1240,7 +1240,8 @@ export default function CadWorkspace({
     activeId: "",
     playing: false,
     elapsedSec: 0,
-    speed: 1
+    speed: 1,
+    loopEnabled: true
   });
   const stepModuleParameterValuesRef = useRef(stepModuleParameterValues);
   const stepModuleAnimationStateRef = useRef(stepModuleAnimationState);
@@ -1249,7 +1250,8 @@ export default function CadWorkspace({
     activeId: "",
     playing: false,
     elapsedSec: 0,
-    speed: 1
+    speed: 1,
+    loopEnabled: true
   });
   const implicitAnimationStateRef = useRef(implicitAnimationState);
   const [implicitGraphicsSettings, setImplicitGraphicsSettings] = useState(() => normalizeImplicitGraphicsSettings());
@@ -2085,7 +2087,8 @@ export default function CadWorkspace({
     ...stepModuleAnimationState,
     activeId: selectedStepModuleActiveAnimation?.id || stepModuleAnimationState.activeId || "",
     duration: selectedStepModuleActiveAnimation?.duration || 0,
-    loop: selectedStepModuleActiveAnimation?.loop !== false
+    loop: selectedStepModuleActiveAnimation?.loop !== false,
+    loopEnabled: stepModuleAnimationState.loopEnabled ?? (selectedStepModuleActiveAnimation?.loop !== false)
   }), [selectedStepModuleActiveAnimation, stepModuleAnimationState]);
   const selectedStepParameterRuntime = useMemo(() => {
     if (!selectedStepModuleDefinition || !stepModuleEnabled) {
@@ -2191,7 +2194,9 @@ export default function CadWorkspace({
       ...stepModuleAnimationStateRef.current,
       activeId: animation?.id || "",
       playing: false,
-      elapsedSec: 0
+      elapsedSec: 0,
+      // Reset the loop preference to the newly-selected animation's default.
+      loopEnabled: animation?.loop !== false
     };
     stepModuleAnimationStateRef.current = nextState;
     resetStepAnimationStore({
@@ -2288,6 +2293,19 @@ export default function CadWorkspace({
     setStepModuleAnimationState(nextState);
   }, []);
 
+  const handleStepModuleAnimationLoopToggle = useCallback((nextLoopEnabled) => {
+    const currentState = stepModuleAnimationStateRef.current;
+    const animation = findStepModuleAnimation(selectedStepModuleDefinition, currentState.activeId);
+    const currentLoop = currentState.loopEnabled ?? (animation?.loop !== false);
+    const loopEnabled = typeof nextLoopEnabled === "boolean" ? nextLoopEnabled : !currentLoop;
+    const nextState = {
+      ...currentState,
+      loopEnabled
+    };
+    stepModuleAnimationStateRef.current = nextState;
+    setStepModuleAnimationState(nextState);
+  }, [selectedStepModuleDefinition]);
+
   const handleStepModuleEnabledChange = useCallback((enabled) => {
     const nextEnabled = enabled !== false;
     setStepModuleEnabled(nextEnabled);
@@ -2330,7 +2348,8 @@ export default function CadWorkspace({
       const speed = clampNumber(currentState.speed, 0.1, 5);
       let elapsedSec = getStepAnimationElapsed() + (deltaSec * speed);
       let playing = currentState.playing;
-      if (animation.loop !== false) {
+      const loopEnabled = currentState.loopEnabled ?? (animation.loop !== false);
+      if (loopEnabled) {
         elapsedSec %= duration;
       } else if (elapsedSec >= duration) {
         elapsedSec = duration;
@@ -2416,7 +2435,8 @@ export default function CadWorkspace({
     ...implicitAnimationState,
     activeId: selectedImplicitActiveAnimation?.id || implicitAnimationState.activeId || "",
     duration: selectedImplicitActiveAnimation?.duration || 0,
-    loop: selectedImplicitActiveAnimation?.loop !== false
+    loop: selectedImplicitActiveAnimation?.loop !== false,
+    loopEnabled: implicitAnimationState.loopEnabled ?? (selectedImplicitActiveAnimation?.loop !== false)
   }), [implicitAnimationState, selectedImplicitActiveAnimation]);
   const implicitRenderParameterValues = useThrottledValue(
     implicitParameterValues,
@@ -2582,7 +2602,8 @@ export default function CadWorkspace({
         ...current,
         activeId: animation?.id || "",
         playing: false,
-        elapsedSec: 0
+        elapsedSec: 0,
+        loopEnabled: animation?.loop !== false
       };
       implicitAnimationStateRef.current = nextState;
       return nextState;
@@ -2644,6 +2665,23 @@ export default function CadWorkspace({
     });
   }, []);
 
+  const handleImplicitAnimationLoopToggle = useCallback((nextLoopEnabled) => {
+    const animation = findParameterAnimation(
+      selectedImplicitDefinition,
+      implicitAnimationStateRef.current.activeId
+    );
+    setImplicitAnimationState((current) => {
+      const currentLoop = current.loopEnabled ?? (animation?.loop !== false);
+      const loopEnabled = typeof nextLoopEnabled === "boolean" ? nextLoopEnabled : !currentLoop;
+      const nextState = {
+        ...current,
+        loopEnabled
+      };
+      implicitAnimationStateRef.current = nextState;
+      return nextState;
+    });
+  }, [selectedImplicitDefinition]);
+
   useEffect(() => {
     if (
       !selectedImplicitDefinition ||
@@ -2667,7 +2705,8 @@ export default function CadWorkspace({
         const speed = clampNumber(current.speed, 0.1, 5);
         let elapsedSec = current.elapsedSec + (deltaSec * speed);
         let playing = current.playing;
-        if (selectedImplicitActiveAnimation.loop !== false) {
+        const loopEnabled = current.loopEnabled ?? (selectedImplicitActiveAnimation.loop !== false);
+        if (loopEnabled) {
           elapsedSec %= duration;
         } else if (elapsedSec >= duration) {
           elapsedSec = duration;
@@ -8743,6 +8782,7 @@ export default function CadWorkspace({
                   onAnimationReset: handleStepModuleAnimationReset,
                   onAnimationScrub: handleStepModuleAnimationScrub,
                   onAnimationSpeedChange: handleStepModuleAnimationSpeedChange,
+                  onAnimationLoopToggle: handleStepModuleAnimationLoopToggle,
                   onEnabledChange: handleStepModuleEnabledChange,
                   onCopyParams: handleCopyStepModuleParams,
                   onPasteParams: handlePasteStepModuleParams
@@ -8867,6 +8907,7 @@ export default function CadWorkspace({
                   onAnimationReset: handleImplicitAnimationReset,
                   onAnimationScrub: handleImplicitAnimationScrub,
                   onAnimationSpeedChange: handleImplicitAnimationSpeedChange,
+                  onAnimationLoopToggle: handleImplicitAnimationLoopToggle,
                   onCopyParams: handleCopyImplicitParams,
                   onPasteParams: handlePasteImplicitParams
                 }}
