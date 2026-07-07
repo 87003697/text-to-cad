@@ -58,13 +58,43 @@ upload when the display mode draws no edges. Win: removes the 0.5–2 s
 main-thread stall and ~150 MB of peak heap; −21 MB GPU upload with edges
 off.
 
-**Phase 3 — cid-keyed instancing (large, the headline).** One
-`InstancedMesh` per (component cid × material bucket): per-instance matrix
-from `occurrence.transform`, per-instance color from override colors.
-Win: 2,142 → ~141 draw calls (15×), GPU vertices 1.40M → 114k (12.3×),
-~60 MB GPU saved, hover/visibility loops shrink 15×, and the Phase-2
-compose loop disappears entirely (instances need no baked vertices).
-Verified obligations:
+**Phase 3 — cid-keyed instancing (large, the headline).**
+
+*Core engine — DONE (`227ebfd8`).* `packages/cadjs/src/lib/assembly/
+instancedScene.js` `buildInstancedPackageScene(THREE, descriptor,
+componentMeshDataByCid)` builds one `InstancedMesh` per (component × mirror
+bucket): unique geometry uploaded once, per-instance 4×4 matrix + optional
+override color, occurrence-id instance mapping, DoubleSide mirror bucket.
+Bench-proven on falcon_heavy: **2,142 → 141 draw calls (15.2×), 1.40M →
+114k GPU vertices (12.29×), 138 ms compose → 12 ms build.** Unit-tested
+(bucketing / matrix == transform / occurrence-id map / instance color /
+mirror). NOT yet wired into the live path — zero regression so far.
+
+*Remaining integration increments (each its own commit + gate):*
+1. **Render wiring** — carry `{descriptor, componentMeshDataByCid}` to
+   `buildModel`; add a default-off `instancePackages` setting; when on,
+   `buildDisplayRecords` builds the instanced group instead of per-part
+   records. Gate: snapshot pixel-parity across all six modes (needs the
+   flag threaded to the snapshot render entry + `bundle.sh` regen).
+2. **Picking** — `InstancedMesh` raycast `instanceId` → occurrence id
+   (via `userData.cadInstanceOccurrenceIds`), replacing per-mesh
+   `userData.partId` + `intersectObjects(perPartMeshes)`.
+3. **Selection / hover / hidden / focus** — per-instance color/visibility
+   (or an overlay mesh) instead of per-record material swaps + `partId`
+   sets (`applyPartVisualState`).
+4. **Exploded view** — per-instance matrix updates from the occurrence
+   `baseTransform`.
+5. **Edges / silhouette** — render only for selected/hovered instances as
+   an overlay, not per-occurrence.
+6. **Fallback buckets** — route transparent (three.js can't sort
+   transparency per instance) and any remaining per-record-only features
+   through the existing per-mesh path so nothing regresses; then flip the
+   default (after the in-browser hover/pick/explode pass).
+
+Win (fully wired): 2,142 → ~141 draw calls (15×), GPU vertices 1.40M →
+114k (12.3×), ~60 MB GPU saved, hover/visibility loops shrink 15×, and the
+Phase-2 compose loop disappears entirely (instances need no baked
+vertices). Verified obligations (folded into the increments above):
 - mirrored occurrences (negative-determinant transforms) get their own
   bucket with flipped winding or DoubleSide;
 - picking moves to `InstancedMesh` raycast `instanceId` → occurrence id;
