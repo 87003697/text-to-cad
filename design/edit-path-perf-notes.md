@@ -2,15 +2,30 @@
 
 ## Status (executed 2026-07-07 on `claude/cadgen-edit-path-perf`)
 
-- **A2 comment-insensitive closure hashing — DONE** (`74dbc192`): AST-based
+- **A2 comment-insensitive closure hashing — DONE** (`f7e8de7b`): AST-based
   closure hashes; comment/whitespace edits now warm-skip, migration-safe.
-- **A3 stdin closure footgun — DONE** (`74dbc192`): `<stdin>`/`-c` `__main__`
+- **A3 stdin closure footgun — DONE** (`f7e8de7b`): `<stdin>`/`-c` `__main__`
   no longer marks the CWD a runtime root; staleness detection restored for
   stdin-driven builds.
-- **A4 module classification cache — DONE** (`03fc809d`): per-`__file__`
+- **A4 module classification cache — DONE** (`fb0e1834`): per-`__file__`
   first-party resolve cached across builds (helps the warm daemon most).
-- **A8 single BREP serialization — DONE** (`52428c9c`): each component's BREP
+- **A8 single BREP serialization — DONE** (`37876fe5`): each component's BREP
   serialized once for hash + worker payload.
+- **Review follow-up (adversarial audit of the above)**: `_semantic_source_hash`
+  is stat-memoized (`(mtime_ns, size)` key, 2 s settle window) — the AST pass is
+  ~200x the byte pass and ran for every closure file on every warm check
+  (~0.9 s/check on a tom-scale closure once descriptors record semantic
+  digests, with shared helpers re-parsed once per generated child); now each
+  file parses once per content change per process. Parser `MemoryError` /
+  `ast.dump` `RecursionError` on pathological-but-importable sources fall back
+  to the byte hash instead of aborting the freshness gate. `closure_hash_matches`
+  tries the byte recompute first so legacy descriptors skip the AST pass.
+  `brep_bytes_by_cid` retains bytes only for components that need a worker
+  payload (a warm rebuild no longer holds the whole assembly's BREPs in memory).
+  `closure_hash_from_files` (orphaned by the `closure_hash_matches` refactor)
+  deleted. The false-hit audit (44 adversarial vectors: type comments, literal
+  spellings, encodings, string prefixes, parenthesization, line-number-dependent
+  code) found no AST-hash collision that changes runtime behavior.
 - **A5 reuse adaptive resolution — DROPPED**: no cheap "geometry unchanged
   despite a rebuild" gate exists (it needs early cid computation, which costs
   the serialization it would save and penalizes the common cold build); the
