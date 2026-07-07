@@ -15,6 +15,7 @@
 
 import {
   EPSILON,
+  GOLDEN_ANGLE,
   MAX_EXPLODED_VIEW_DEPTH,
   boundsCenterArray,
   boundsRadius,
@@ -185,9 +186,25 @@ function lateralDirection(group, layerCenter, axisIndex, index) {
   return dir;
 }
 
+// Horizontal (XY) outward direction for a group about the vertical axis; groups
+// centered on the axis are fanned by the golden angle so coaxial parts diverge
+// instead of all taking the same fallback direction.
+function radialBloomDirection(modelCenter, groupCenter, index) {
+  const dx = groupCenter[0] - modelCenter[0];
+  const dy = groupCenter[1] - modelCenter[1];
+  const length = Math.hypot(dx, dy);
+  if (length > EPSILON) {
+    return [dx / length, dy / length, 0];
+  }
+  const angle = index * GOLDEN_ANGLE;
+  return [Math.cos(angle), Math.sin(angle), 0];
+}
+
+// Radial mode emits explicit translate steps (one per group) so each group —
+// including coaxial ones — gets its own resolved direction and distance, rather
+// than a single-target radial step whose fan index is always 0.
 function generateRadialSteps(groups, modelBounds, hints) {
   const modelCenter = boundsCenterArray(modelBounds, [0, 0, 0]);
-  const axisVec = AXIS_VECTORS.z;
   const modelRadiusXY = Math.max(
     Math.hypot(boundsSize(modelBounds, 0), boundsSize(modelBounds, 1)) / 2,
     EPSILON
@@ -198,16 +215,16 @@ function generateRadialSteps(groups, modelBounds, hints) {
   const steps = [];
   const sorted = [...groups].sort((left, right) => left.recordIndex - right.recordIndex);
   sorted.forEach((group, index) => {
+    const direction = radialBloomDirection(modelCenter, group.center, index);
     const distance = (baseDistance + group.radius * 0.6 * hints.gapScale) * sign;
     if (Math.abs(distance) <= EPSILON) {
       return;
     }
     steps.push({
       id: `s${index + 1}`,
-      type: "radial",
+      type: "translate",
       targets: [group.key],
-      axis: axisVec,
-      center: modelCenter,
+      axis: direction,
       distance
     });
   });
@@ -255,22 +272,31 @@ function generateAxialSteps(groups, modelBounds, axisIndex, hints) {
     layerOffset.set(layer, offset);
   });
 
+  const perpAxes = [0, 1, 2].filter((axis) => axis !== axisIndex);
   const steps = [];
   let stepIndex = 0;
   layers.forEach((layer) => {
     const axialOffset = layerOffset.get(layer) * sign;
     const layerCenter = boundsCenterArray(layer.bounds, [0, 0, 0]);
     const multiGroup = layer.groups.length > 1;
+    const layerLateralRadius = Math.max(
+      boundsSize(layer.bounds, perpAxes[0]),
+      boundsSize(layer.bounds, perpAxes[1])
+    ) / 2;
+    // Stagger groups that share a lateral direction so they don't overlap at the
+    // same distance (only a few snapped directions exist).
+    const lateralRankByDir = new Map();
     layer.groups.forEach((group, groupIndexInLayer) => {
       let displacement = scaleVec(axisVec, axialOffset);
       if (multiGroup) {
         // Coplanar groups: separate laterally so they don't stack into a column.
         const lateralDir = lateralDirection(group, layerCenter, axisIndex, groupIndexInLayer);
-        const layerLateralRadius = Math.max(
-          boundsSize(layer.bounds, ([0, 1, 2].filter((a) => a !== axisIndex))[0]),
-          boundsSize(layer.bounds, ([0, 1, 2].filter((a) => a !== axisIndex))[1])
-        ) / 2;
-        const lateralDistance = (layerLateralRadius + group.radius * 0.75 + minimumGap) * hints.gapScale;
+        const dirKey = lateralDir.join(",");
+        const rank = lateralRankByDir.get(dirKey) || 0;
+        lateralRankByDir.set(dirKey, rank + 1);
+        // minimumGap already carries gapScale; do not scale it again here.
+        const lateralDistance = layerLateralRadius + group.radius * 0.75 + minimumGap
+          + rank * (group.radius * 2 + minimumGap);
         displacement = addVec(displacement, scaleVec(lateralDir, lateralDistance));
       }
       const distance = vecLength(displacement);

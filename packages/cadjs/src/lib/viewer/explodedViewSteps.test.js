@@ -211,6 +211,31 @@ test("easeExplodedViewProgress clamps to animation bounds", () => {
   assert.ok(easeExplodedViewProgress(0.5) > 0.5);
 });
 
+test("a record matched by nested targets in one step moves exactly once", () => {
+  const records = [record("o1.2.5", { min: [0, 0, 0], max: [1, 1, 1] })];
+  const doc = {
+    enabled: true,
+    steps: [{ id: "s1", type: "translate", targets: ["o1", "o1.2"], axis: [0, 0, 1], distance: 10 }]
+  };
+  const compiled = compileExplodedView(THREE, doc, records, null);
+  applyExplodedViewProgress(THREE, compiled, 1);
+  // Not 20: the most-specific target is chosen and the move applies once.
+  assert.equal(records[0].explodedViewMatrix.elements[14], 10);
+});
+
+test("a zero-magnitude step leaves the record cleared (null contract)", () => {
+  const records = [record("o1.1", { min: [0, 0, 0], max: [1, 1, 1] })];
+  records[0].explodedViewMatrix = new THREE.Matrix4().makeTranslation(3, 3, 3);
+  const compiled = compileExplodedView(
+    THREE,
+    { enabled: true, steps: [translateStep("s1", ["o1.1"], [0, 0, 1], 0)] },
+    records,
+    null
+  );
+  applyExplodedViewProgress(THREE, compiled, 1);
+  assert.equal(records[0].explodedViewMatrix, null);
+});
+
 test("compile is a no-op without steps or without >=1 explodable record", () => {
   const empty = compileExplodedView(THREE, { enabled: true, steps: [] }, [record("o1.1", null)], null);
   assert.equal(empty.entries.length, 0);

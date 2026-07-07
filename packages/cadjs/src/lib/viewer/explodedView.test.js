@@ -108,12 +108,31 @@ test("generator radial mode blooms groups outward and preserves height", () => {
   ];
   const bounds = { min: [-3, -1, 0], max: [3, 1, 2] };
   const { doc, offsets } = explode(records, bounds, { mode: "radial", keepBaseGrounded: false });
-  assert.ok(doc.steps.every((step) => step.type === "radial"));
+  assert.ok(doc.steps.length >= 2);
   assert.ok(offsets.get("o1.1")[0] < 0);
   assert.ok(offsets.get("o1.2")[0] > 0);
   for (const key of ["o1.1", "o1.2"]) {
     assert.ok(Math.abs(offsets.get(key)[2]) < 1e-6, "radial keeps height");
   }
+});
+
+test("generator radial mode fans coaxial groups to distinct directions", () => {
+  // Two groups both centered on the vertical axis (stacked in Z): the radial
+  // bloom must fan them to different directions instead of the same fallback.
+  const records = [
+    record("o1.1", { min: [-1, -1, 0], max: [1, 1, 1] }),
+    record("o1.2", { min: [-1, -1, 4], max: [1, 1, 5] })
+  ];
+  const bounds = { min: [-1, -1, 0], max: [1, 1, 5] };
+  const doc = generateExplodedViewDocument(THREE, records, bounds, { mode: "radial", keepBaseGrounded: false });
+  assert.equal(doc.steps.length, 2);
+  const [a, b] = doc.steps.map((step) => step.axis);
+  assert.ok(
+    Math.abs(a[0] - b[0]) > 1e-6 || Math.abs(a[1] - b[1]) > 1e-6,
+    "coaxial groups fan to distinct directions"
+  );
+  // Purely horizontal bloom preserves height.
+  assert.ok(doc.steps.every((step) => Math.abs(step.axis[2]) < 1e-6));
 });
 
 test("generator returns no steps for degenerate input", () => {
