@@ -208,6 +208,16 @@ export function buildInstancedPackageScene(THREE, descriptor, componentMeshDataB
 const HIDDEN_INSTANCE_MATRIX = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
 const DIMMED_INSTANCE_FACTOR = 0.28;
 
+// Per-instance visual-state codes tracked across applyInstancedVisualState calls so an
+// unchanged instance is skipped (no write, no GPU re-upload). STATE_UNSET forces the
+// first apply to write every instance.
+const STATE_BASE = 0;
+const STATE_SELECTED = 1;
+const STATE_HOVERED = 2;
+const STATE_DIMMED = 3;
+const STATE_HIDDEN = 4;
+const STATE_UNSET = 255;
+
 function defaultMatches(partId, set) {
   return set instanceof Set && set.has(partId);
 }
@@ -254,6 +264,19 @@ export function applyInstancedVisualState(THREE, mesh, state = {}) {
   const hovG = hoveredColor?.g ?? 0.772;
   const hovB = hoveredColor?.b ?? 1;
 
+  // Per-instance state code from the last apply, so a hover/selection change only
+  // rewrites the handful of instances that actually changed and only dirties the GPU
+  // buffers when something moved. Without this, every hover transition re-uploaded all
+  // N instances (2,142 for falcon_heavy). 255 = "never applied" → forces a first write.
+  // A given code always maps to the same color/pose (selection/hover colors are theme
+  // constants; a theme change rebuilds the mesh with a fresh code array), so skipping an
+  // unchanged instance is safe.
+  let stateCodes = mesh.userData.cadInstanceStateCodes;
+  if (!(stateCodes instanceof Uint8Array) || stateCodes.length !== occurrenceIds.length) {
+    stateCodes = new Uint8Array(occurrenceIds.length).fill(STATE_UNSET);
+    mesh.userData.cadInstanceStateCodes = stateCodes;
+  }
+
   const tmpColor = new THREE.Color();
   const tmpMatrix = new THREE.Matrix4();
   let colorChanged = false;
@@ -266,30 +289,44 @@ export function applyInstancedVisualState(THREE, mesh, state = {}) {
     const isHovered = !isHidden && !isSelected && matches(id, hovered);
     const isFocused = !isHidden && hasFocus && matches(id, focusIds);
     const isDimmed = !isHidden && hasFocus && !isFocused && !isSelected && !isHovered;
+    const code = isHidden ? STATE_HIDDEN
+      : isSelected ? STATE_SELECTED
+        : isHovered ? STATE_HOVERED
+          : isDimmed ? STATE_DIMMED
+            : STATE_BASE;
 
-    // Matrix: hidden collapses to a zero instance; everything else rides its base pose.
-    if (isHidden) {
-      tmpMatrix.fromArray(HIDDEN_INSTANCE_MATRIX);
-    } else {
-      tmpMatrix.fromArray(baseMatrices, index * 16);
+    const previous = stateCodes[index];
+    if (previous === code) {
+      continue; // unchanged instance — leave its matrix/color as-is.
     }
-    mesh.setMatrixAt(index, tmpMatrix);
-    matrixChanged = true;
 
-    // Color: selection/hover recolor, focus-dim darkens the base, else the base color.
+    // Matrix only differs between hidden (collapsed) and any visible pose (base), so
+    // rewrite it only when hidden-ness flips (or on the first, unknown-state apply).
+    const hiddenFlipped = (previous === STATE_UNSET) || ((previous === STATE_HIDDEN) !== (code === STATE_HIDDEN));
+    if (hiddenFlipped) {
+      if (code === STATE_HIDDEN) {
+        tmpMatrix.fromArray(HIDDEN_INSTANCE_MATRIX);
+      } else {
+        tmpMatrix.fromArray(baseMatrices, index * 16);
+      }
+      mesh.setMatrixAt(index, tmpMatrix);
+      matrixChanged = true;
+    }
+
     let r = baseColors[index * 3];
     let g = baseColors[index * 3 + 1];
     let b = baseColors[index * 3 + 2];
-    if (isSelected) {
+    if (code === STATE_SELECTED) {
       r = selR; g = selG; b = selB;
-    } else if (isHovered) {
+    } else if (code === STATE_HOVERED) {
       r = hovR; g = hovG; b = hovB;
-    } else if (isDimmed) {
+    } else if (code === STATE_DIMMED) {
       r *= dimFactor; g *= dimFactor; b *= dimFactor;
     }
     tmpColor.setRGB(r, g, b);
     mesh.setColorAt(index, tmpColor);
     colorChanged = true;
+    stateCodes[index] = code;
   }
 
   if (matrixChanged) {

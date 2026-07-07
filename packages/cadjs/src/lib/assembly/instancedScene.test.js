@@ -142,6 +142,27 @@ test("selection recolors only the selected instance", () => {
   assert.ok(Math.abs(c.r - 0.5) < 1e-3 && Math.abs(c.g - 0.5) < 1e-3, "o1.2 keeps its base color");
 });
 
+test("applyInstancedVisualState only rewrites instances whose state changed", () => {
+  const mesh = twoInstanceScene();
+  const selectedColor = new THREE.Color(0.31, 0.615, 1);
+  // First apply initializes both instances (unknown -> known).
+  assert.equal(applyInstancedVisualState(THREE, mesh, { selected: new Set(["o1.1"]), selectedColor }), true);
+
+  // A second identical apply must touch nothing and report no change.
+  let colorWrites = 0;
+  const origSetColor = mesh.setColorAt.bind(mesh);
+  mesh.setColorAt = (i, c) => { colorWrites += 1; return origSetColor(i, c); };
+  const changed = applyInstancedVisualState(THREE, mesh, { selected: new Set(["o1.1"]), selectedColor });
+  assert.equal(changed, false, "identical state is a no-op");
+  assert.equal(colorWrites, 0, "no instance rewritten when nothing changed");
+
+  // Moving the selection rewrites exactly the two affected instances, not the bucket.
+  colorWrites = 0;
+  applyInstancedVisualState(THREE, mesh, { selected: new Set(["o1.2"]), selectedColor });
+  assert.equal(colorWrites, 2, "only the deselected + newly-selected instances rewritten");
+  mesh.setColorAt = origSetColor;
+});
+
 test("hidden instance collapses to a zero matrix and restores when unhidden", () => {
   const mesh = twoInstanceScene();
   applyInstancedVisualState(THREE, mesh, { hidden: new Set(["o1.2"]) });
