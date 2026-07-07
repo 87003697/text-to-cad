@@ -57,6 +57,7 @@ function componentGeometry(THREE, componentMeshData) {
     geometry.setIndex(new THREE.BufferAttribute(indices, 1));
   }
   geometry.computeBoundingSphere();
+  geometry.computeBoundingBox();
   return geometry;
 }
 
@@ -183,6 +184,13 @@ export function buildInstancedPackageScene(THREE, descriptor, componentMeshDataB
     mesh.userData.cadInstanceBaseColors = baseColors;
     mesh.userData.cadInstanceBaseMatrices = baseMatrices;
     mesh.userData.cadComponentId = bucket.cid;
+    // Component-local AABB, shared by every instance of this cid. The per-occurrence
+    // world bounds (used by zoom-to-fit-selection) transform this box by an instance's
+    // base matrix — see instancedOccurrenceBounds.
+    const box = geometry.boundingBox;
+    mesh.userData.cadInstanceComponentBox = box
+      ? { min: [box.min.x, box.min.y, box.min.z], max: [box.max.x, box.max.y, box.max.z] }
+      : null;
     group.add(mesh);
     instancedMeshes.push(mesh);
   }
@@ -199,6 +207,16 @@ export function buildInstancedPackageScene(THREE, descriptor, componentMeshDataB
 
 const HIDDEN_INSTANCE_MATRIX = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
 const DIMMED_INSTANCE_FACTOR = 0.28;
+
+// Per-instance visual-state codes tracked across applyInstancedVisualState calls so an
+// unchanged instance is skipped (no write, no GPU re-upload). STATE_UNSET forces the
+// first apply to write every instance.
+const STATE_BASE = 0;
+const STATE_SELECTED = 1;
+const STATE_HOVERED = 2;
+const STATE_DIMMED = 3;
+const STATE_HIDDEN = 4;
+const STATE_UNSET = 255;
 
 function defaultMatches(partId, set) {
   return set instanceof Set && set.has(partId);
@@ -246,6 +264,19 @@ export function applyInstancedVisualState(THREE, mesh, state = {}) {
   const hovG = hoveredColor?.g ?? 0.772;
   const hovB = hoveredColor?.b ?? 1;
 
+  // Per-instance state code from the last apply, so a hover/selection change only
+  // rewrites the handful of instances that actually changed and only dirties the GPU
+  // buffers when something moved. Without this, every hover transition re-uploaded all
+  // N instances (2,142 for falcon_heavy). 255 = "never applied" → forces a first write.
+  // A given code always maps to the same color/pose (selection/hover colors are theme
+  // constants; a theme change rebuilds the mesh with a fresh code array), so skipping an
+  // unchanged instance is safe.
+  let stateCodes = mesh.userData.cadInstanceStateCodes;
+  if (!(stateCodes instanceof Uint8Array) || stateCodes.length !== occurrenceIds.length) {
+    stateCodes = new Uint8Array(occurrenceIds.length).fill(STATE_UNSET);
+    mesh.userData.cadInstanceStateCodes = stateCodes;
+  }
+
   const tmpColor = new THREE.Color();
   const tmpMatrix = new THREE.Matrix4();
   let colorChanged = false;
@@ -258,30 +289,44 @@ export function applyInstancedVisualState(THREE, mesh, state = {}) {
     const isHovered = !isHidden && !isSelected && matches(id, hovered);
     const isFocused = !isHidden && hasFocus && matches(id, focusIds);
     const isDimmed = !isHidden && hasFocus && !isFocused && !isSelected && !isHovered;
+    const code = isHidden ? STATE_HIDDEN
+      : isSelected ? STATE_SELECTED
+        : isHovered ? STATE_HOVERED
+          : isDimmed ? STATE_DIMMED
+            : STATE_BASE;
 
-    // Matrix: hidden collapses to a zero instance; everything else rides its base pose.
-    if (isHidden) {
-      tmpMatrix.fromArray(HIDDEN_INSTANCE_MATRIX);
-    } else {
-      tmpMatrix.fromArray(baseMatrices, index * 16);
+    const previous = stateCodes[index];
+    if (previous === code) {
+      continue; // unchanged instance — leave its matrix/color as-is.
     }
-    mesh.setMatrixAt(index, tmpMatrix);
-    matrixChanged = true;
 
-    // Color: selection/hover recolor, focus-dim darkens the base, else the base color.
+    // Matrix only differs between hidden (collapsed) and any visible pose (base), so
+    // rewrite it only when hidden-ness flips (or on the first, unknown-state apply).
+    const hiddenFlipped = (previous === STATE_UNSET) || ((previous === STATE_HIDDEN) !== (code === STATE_HIDDEN));
+    if (hiddenFlipped) {
+      if (code === STATE_HIDDEN) {
+        tmpMatrix.fromArray(HIDDEN_INSTANCE_MATRIX);
+      } else {
+        tmpMatrix.fromArray(baseMatrices, index * 16);
+      }
+      mesh.setMatrixAt(index, tmpMatrix);
+      matrixChanged = true;
+    }
+
     let r = baseColors[index * 3];
     let g = baseColors[index * 3 + 1];
     let b = baseColors[index * 3 + 2];
-    if (isSelected) {
+    if (code === STATE_SELECTED) {
       r = selR; g = selG; b = selB;
-    } else if (isHovered) {
+    } else if (code === STATE_HOVERED) {
       r = hovR; g = hovG; b = hovB;
-    } else if (isDimmed) {
+    } else if (code === STATE_DIMMED) {
       r *= dimFactor; g *= dimFactor; b *= dimFactor;
     }
     tmpColor.setRGB(r, g, b);
     mesh.setColorAt(index, tmpColor);
     colorChanged = true;
+    stateCodes[index] = code;
   }
 
   if (matrixChanged) {
@@ -291,4 +336,50 @@ export function applyInstancedVisualState(THREE, mesh, state = {}) {
     mesh.instanceColor.needsUpdate = true;
   }
   return colorChanged || matrixChanged;
+}
+
+// World-space AABB of the occurrences in one instanced bucket that satisfy `matches`
+// (an (occurrenceId) => boolean predicate). Transforms the shared component-local box
+// by each selected instance's base matrix and unions the results. Pure JS (no THREE):
+// base matrices are stored column-major (three.js Matrix4.elements), so for a point
+// p, world = e[0]*x+e[4]*y+e[8]*z+e[12], etc. Returns { min:[3], max:[3] } or null.
+// This is what lets zoom-to-fit frame a selected occurrence that has no per-record
+// partBounds (instanced records are one-per-bucket, ids live per instance).
+export function instancedOccurrenceBounds(mesh, matches) {
+  const occurrenceIds = mesh?.userData?.cadInstanceOccurrenceIds;
+  const baseMatrices = mesh?.userData?.cadInstanceBaseMatrices;
+  const box = mesh?.userData?.cadInstanceComponentBox;
+  if (!Array.isArray(occurrenceIds) || !baseMatrices || !box) {
+    return null;
+  }
+  const predicate = typeof matches === "function" ? matches : () => true;
+  const [nx, ny, nz] = box.min;
+  const [xx, xy, xz] = box.max;
+  const corners = [
+    [nx, ny, nz], [xx, ny, nz], [nx, xy, nz], [xx, xy, nz],
+    [nx, ny, xz], [xx, ny, xz], [nx, xy, xz], [xx, xy, xz]
+  ];
+  const min = [Infinity, Infinity, Infinity];
+  const max = [-Infinity, -Infinity, -Infinity];
+  let matched = 0;
+  for (let index = 0; index < occurrenceIds.length; index += 1) {
+    if (!predicate(occurrenceIds[index])) {
+      continue;
+    }
+    const o = index * 16;
+    const e0 = baseMatrices[o], e1 = baseMatrices[o + 1], e2 = baseMatrices[o + 2];
+    const e4 = baseMatrices[o + 4], e5 = baseMatrices[o + 5], e6 = baseMatrices[o + 6];
+    const e8 = baseMatrices[o + 8], e9 = baseMatrices[o + 9], e10 = baseMatrices[o + 10];
+    const e12 = baseMatrices[o + 12], e13 = baseMatrices[o + 13], e14 = baseMatrices[o + 14];
+    for (const [x, y, z] of corners) {
+      const wx = e0 * x + e4 * y + e8 * z + e12;
+      const wy = e1 * x + e5 * y + e9 * z + e13;
+      const wz = e2 * x + e6 * y + e10 * z + e14;
+      if (wx < min[0]) min[0] = wx; if (wx > max[0]) max[0] = wx;
+      if (wy < min[1]) min[1] = wy; if (wy > max[1]) max[1] = wy;
+      if (wz < min[2]) min[2] = wz; if (wz > max[2]) max[2] = wz;
+    }
+    matched += 1;
+  }
+  return matched > 0 ? { min, max } : null;
 }

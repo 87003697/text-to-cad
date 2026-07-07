@@ -107,13 +107,12 @@ mirror). NOT yet wired into the live path — zero regression so far.
    overlays (the per-mesh path builds `EdgesGeometry` per record). Edge soup
    over 2,000+ occurrences is low value; a selection-only instanced-edge overlay
    is the future path if wanted.
-7. **Zoom-to-fit a selected occurrence.** Instanced records carry no per-record
-   `partBounds` (bounds are per instance, not per bucket), so
-   `autoZoom.js displayRecordsBounds()` skips them and "zoom to fit selection" on
-   an instanced occurrence no-ops ("No geometry to fit"). Framing the whole model
-   still works. A proper fix computes the target occurrence's world bounds from
-   its instance matrix — instance-aware interaction work for the Phase-4 layer,
-   not this render pass. (Found + confirmed in the pre-PR audit.)
+7. **Zoom-to-fit a selected occurrence — RESOLVED in Phase 4** (see below).
+   Instanced records carry no per-record `partBounds` (bounds are per instance,
+   not per bucket), so `autoZoom.js displayRecordsBounds()` skipped them and
+   "zoom to fit selection" on an instanced occurrence no-op'd ("No geometry to
+   fit"). (Found + confirmed in the pre-PR audit; fixed by
+   `instancedOccurrenceBounds` in the Phase-4 pass.)
 
 The pre-PR adversarial audit also surfaced and **fixed** three defects before
 merge: a `major` — focus mode dropped every instanced bucket from the pick
@@ -136,10 +135,43 @@ visibility loops shrink 15×, and the Phase-2 compose loop disappears entirely
   transparency sort). Acceptable for opaque rocket hardware; a translucent
   fallback bucket remains the future path if a translucent large package appears.
 
-**Phase 4 — interaction polish (small; partly subsumed by Phase 3).**
-Cache the visible-mesh set (`useViewerPicking.js:638` rebuilds a
-2,142-element filtered array per pick), diff hover state changes (touch ~2
-records, not all), three-mesh-bvh if picking is still hot afterward.
+**Phase 4 — interaction polish + gap execution (branch
+`claude/viewer-phase4-instanced-interaction`).** Executed as a mix of
+implementations and measured declines (like the edit-path A-set):
+
+- **Zoom-to-fit a selected instanced occurrence — DONE** (was gap #7).
+  `instancedScene` stores each bucket's component-local AABB and exposes
+  `instancedOccurrenceBounds(mesh, matches)`, a pure resolver that transforms
+  the box by each matching instance's base matrix. `buildInstancedDisplayRecords`
+  attaches it as `instancedBoundsFor`; `autoZoom.displayRecordsBounds` calls it
+  for instanced records. Selecting a part and "zoom to fit" now frames it.
+- **Per-hover incremental instance update — DONE.** `applyInstancedVisualState`
+  used to rewrite every instance and dirty the whole GPU buffer on each hover
+  transition (2,142 re-uploads for falcon_heavy). It now tracks a per-instance
+  state code and rewrites only instances whose state changed, dirtying a bucket
+  only when it actually changed — a hover touches ~2 instances, not 2,142. This
+  is the substance of the old "diff hover state changes" Phase-4 item; it lands
+  in the shared engine (also benefits snapshot).
+- **Visible-mesh-set caching — DECLINED (evidence).** The array rebuild is cheap
+  CPU; the cost that mattered was the raycast against N meshes, already cut ~15×
+  by instancing (raycast is now against ~141 InstancedMeshes). Caching adds
+  fragile invalidation (must also track per-record `mesh.visible`) for a
+  negligible gain. Not worth the regression surface.
+- **three-mesh-bvh — DECLINED (evidence).** A bvh is only justified by slow
+  picking; post-instancing picking is not hot. Adding a dependency + build step
+  for no measured need fails the cost/benefit test.
+- **Exploded view (instanced) — DEFERRED (concrete sketch).** Now tractable atop
+  `instancedOccurrenceBounds`: feed the explode engine per-occurrence
+  pseudo-records (partId=occurrence id, partBounds=per-occurrence world bounds),
+  then map each occurrence's resulting translation to a per-instance matrix
+  offset (base × translation) applied like the hidden/base matrix write. Deferred
+  because a 2,000-part radial explode is visual noise and the size threshold keeps
+  explode-using small assemblies on the full-featured per-mesh path; revisit if a
+  mid-size instanced package needs it.
+- **Per-part edges (instanced) — DEFERRED.** Selection recolor already conveys
+  selection; a selection-only instanced-edge overlay (EdgesGeometry of the
+  selected component placed at the instance matrix) is the future path.
+
 NOTE: `matrixAutoUpdate = false` for baked transforms is ALREADY applied
 (`packages/cadjs/src/common/displayRecordTransform.js:9`, tested in
 `modelRuntime.test.js`) — not a remaining item.
