@@ -1,8 +1,6 @@
-"""Builds the /__cad/server payload.
-
-The launcher's reuse gate reads this: app must be "cad-viewer", dynamicRoot the
-boolean true, and serverFeatures must contain "directory-activation". The
-optional serverMode key is omitted when empty.
+"""Builds the /__cad/server payload (app id, dynamicRoot, serverFeatures, etc.)
+that the CAD Viewer client consumes. The optional serverMode key is omitted when
+empty.
 """
 
 from __future__ import annotations
@@ -14,7 +12,7 @@ from . import scanner
 VIEWER_SERVER_INFO_SCHEMA_VERSION = 1
 VIEWER_SERVER_APP_ID = "cad-viewer"
 DEFAULT_VIEWER_HOST = "127.0.0.1"
-DEFAULT_VIEWER_PORT = 4178
+DEFAULT_VIEWER_PORT = 3245
 
 
 def normalize_viewer_port(value, fallback=DEFAULT_VIEWER_PORT) -> int:

@@ -15,7 +15,7 @@ import {
   scheduleProcessShutdown,
 } from "./scripts/serverLifetime.mjs";
 
-const DEFAULT_VIEWER_PORT = 4178;
+const DEFAULT_VIEWER_PORT = 3245;
 
 const viewerAppRoot = path.dirname(fileURLToPath(import.meta.url));
 const viewerClientRoot = path.join(viewerAppRoot, "src", "client");
@@ -276,6 +276,7 @@ export default defineConfig(({ command }) => ({
   },
   server: {
     host: "127.0.0.1",
+    port: DEFAULT_VIEWER_PORT,
     allowedHosts: viewerAllowedHosts,
     fs: {
       allow: [

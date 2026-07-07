@@ -313,8 +313,8 @@ write_runtime_package_json() {
   "type": "module",
   "version": "$RELEASE_VERSION",
   "scripts": {
+    "start": "node scripts/start-viewer.mjs",
     "serve": "python3 -m server_py.server",
-    "start": "python3 -m server_py.server",
     "moveit2:setup": "moveit2_server/setup.sh",
     "moveit2:check": "moveit2_server/check-moveit2-server.sh",
     "moveit2:serve": "moveit2_server/run-moveit2-server.sh"

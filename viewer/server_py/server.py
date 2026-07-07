@@ -2,7 +2,7 @@
 
 Serves the /__cad/* contract the unchanged client consumes. Implemented routes
 (parity-verified core): GET /__cad/server, GET /__cad/catalog, GET /__cad/asset,
-GET /__cad/download, POST /__cad/directory/activate, POST /__cad/implicit-export
+GET /__cad/download, POST /__cad/implicit-export
 (client-side-export write contract). Static dist/SPA, legacy Referer assets,
 /__cad/artifact, and /__cad/step-export are TODO (cadgen-integration + serving
 phases).
@@ -38,7 +38,7 @@ else:
     from . import encoding as enc
     from .content_types import content_type_for_static_asset
 
-LOCAL_SERVER_FEATURES = ["dynamic-root", "relative-dir-query", "default-dir", "directory-activation"]
+LOCAL_SERVER_FEATURES = ["dynamic-root", "relative-dir-query", "default-dir"]
 _BAD_PERCENT_RE = re.compile(r"%(?![0-9A-Fa-f]{2})")
 
 
@@ -151,14 +151,7 @@ class Handler(BaseHTTPRequestHandler):
     def do_POST(self):
         path, q = self._query()
         try:
-            if path == "/__cad/directory/activate":
-                resolved = _Ctx.backend.resolve_request_root(q.get("dir", ""))
-                self._send_json(200, {
-                    "ok": True,
-                    "directory": {"dir": resolved["dir"], "rootPath": resolved["rootPath"], "rootName": resolved["rootName"]},
-                    "server": _server_info(q.get("dir", "")),
-                })
-            elif path == "/__cad/artifact":
+            if path == "/__cad/artifact":
                 self._artifact_build(q)
             elif path == "/__cad/step-export":
                 self._step_export(q)
