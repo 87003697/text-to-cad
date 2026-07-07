@@ -598,10 +598,24 @@ const ImplicitCadViewer = forwardRef(function ImplicitCadViewer({
     setPerspective(nextPerspective) {
       return applyPerspectiveSnapshot(runtimeRef.current, nextPerspective, latestModelKeyRef.current);
     },
+    resetZoom() {
+      // Parity with CadViewer.resetZoom: re-fit to the model at the current view
+      // direction (force past the auto-zoom-detached state, like a baseline reset).
+      return runAutoZoom("reset-zoom", { force: true, animate: true });
+    },
+    zoomToFit({ animate = true } = {}) {
+      return runAutoZoom("zoom-to-fit", { force: true, animate });
+    },
+    zoomToFitSelection({ animate = true } = {}) {
+      // Implicit/SDF models have no sub-part selection, so a "fit selection"
+      // request has no narrower target than the whole model; fit the model
+      // rather than silently no-oping the shared context-menu action.
+      return runAutoZoom("zoom-to-fit-selection", { force: true, animate });
+    },
     focusViewPreset(faceId) {
       return activateViewPlaneFace(faceId);
     }
-  }), [activateViewPlaneFace]);
+  }), [activateViewPlaneFace, runAutoZoom]);
 
   useEffect(() => {
     const runtime = runtimeRef.current;
