@@ -3,6 +3,7 @@ import { VIEWER_PICK_MODE } from "cadjs/lib/viewer/constants";
 import { pointVisibleByClipPlane } from "cadjs/lib/viewer/clipPlane";
 import { screenLimitedPickThreshold } from "cadjs/lib/viewer/pickingThresholds";
 import { createViewerContextMenuGestureState } from "./viewerContextMenuGesture.js";
+import { partIdFromIntersection } from "./instancePicking.js";
 
 const FACE_BOUNDS_EPSILON = 0.25;
 const PLANE_SURFACE_EPSILON = 0.25;
@@ -666,7 +667,7 @@ export function useViewerPicking({
       const focusIds = focusedPartIdSet(focusedPartIdRef.current);
       const hiddenIds = focusedPartIdSet(hiddenPartIdsRef.current);
       for (const intersection of intersections) {
-        const partId = intersection?.object?.userData?.partId;
+        const partId = partIdFromIntersection(intersection);
         if (!partId) {
           continue;
         }
