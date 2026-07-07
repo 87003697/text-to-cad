@@ -755,6 +755,9 @@ export function modelOptionsForRenderJob(context, job = {}) {
     displayMode: context.displayMode,
     applyDisplayModeEdgePolicy: !context.topologyDisplayEdgesVisible,
     scale: context.sceneScale,
+    // Opt-in cid-keyed instanced rendering of component-GLB packages, passed
+    // through from the render job's display block (default off).
+    instancePackages: job?.display?.instancePackages === true || job?.instancePackages === true,
     clip: context.sharedRenderOptions.clip,
     silhouette: context.topologyDisplayEdgesVisible && context.edgeSettings.silhouette === true,
     renderPartsIndividually: true,

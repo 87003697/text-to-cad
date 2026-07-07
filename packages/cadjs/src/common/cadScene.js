@@ -28,6 +28,7 @@ import {
 import {
   applyDisplayRecordTransform
 } from "./displayRecordTransform.js";
+import { buildInstancedPackageScene } from "../lib/assembly/instancedScene.js";
 import { axisIndex, normalizeStepClipSettings } from "../lib/viewer/clipPlane.js";
 import {
   clampSceneModelRadius,
@@ -999,6 +1000,12 @@ export function applyMaterialSettingsToRecord(THREE, record, materialSettings, {
   baseTheme = DEFAULT_THEME,
   displayMode = CAD_DISPLAY_MODE.SOLID
 } = {}) {
+  if (record?.instanced) {
+    // Instanced buckets carry per-instance color (occurrence override) on the
+    // shared material; per-record color mutation does not apply. Source-color /
+    // override handling for the instanced path is a later increment.
+    return;
+  }
   if (!record?.material || !materialSettings) {
     return;
   }
@@ -1225,6 +1232,12 @@ export function applyPartVisualState(THREE, records, {
 
   for (const record of Array.isArray(records) ? records : []) {
     if (!record?.mesh || !record?.material) {
+      continue;
+    }
+    if (record.instanced) {
+      // Per-instance selection/hover/hidden state is applied on the InstancedMesh
+      // (a later increment), not by mutating the shared bucket material — which
+      // would recolor every instance. Skip in the per-record pass.
       continue;
     }
     const effectStyle = record.effectStyle && typeof record.effectStyle === "object" ? record.effectStyle : {};
@@ -1767,7 +1780,56 @@ function addEdgeObject(THREE, runtime, record, edgeGeometry, settings) {
   runtime.edgesGroup.add(object);
 }
 
+// Material for an instanced component bucket, matching makeRecord's per-mode
+// choice but with a WHITE base so the per-instance color (occurrence override,
+// set as instanceColor) drives the diffuse — the multiply reproduces the
+// per-mesh path's material.color under identical lighting. Edges are handled
+// separately (selection-only) so no surface-edge shader is attached here.
+function instancedBucketMaterial(THREE, runtime, { doubleSide }) {
+  const displayMode = runtime.displayMode;
+  const white = new THREE.Color(1, 1, 1);
+  let material;
+  if (displayModeIsWireframe(displayMode)) {
+    material = createWireframeSurfaceMaterial(THREE, runtime.materialSettings, 0);
+  } else if (displayModeUsesUnlitSurfaces(displayMode)) {
+    material = createUnshadedSurfaceMaterial(THREE, {
+      color: white,
+      useVertexColors: false,
+      opacity: displayModeSurfaceOpacity(displayMode, runtime.materialSettings?.opacity)
+    });
+  } else {
+    material = createSurfaceMaterial(THREE, runtime.baseTheme, { color: white, useVertexColors: false });
+  }
+  if (doubleSide && material?.side !== undefined) {
+    material.side = THREE.DoubleSide;
+  }
+  return material;
+}
+
+function buildInstancedDisplayRecords(THREE, runtime, meshData) {
+  const { descriptor, componentMeshDataByCid } = meshData.packageInstancing;
+  const scene = buildInstancedPackageScene(THREE, descriptor, componentMeshDataByCid, {
+    makeMaterial: (_cid, opts) => instancedBucketMaterial(THREE, runtime, opts)
+  });
+  runtime.modelGroup.add(scene.group);
+  runtime.instancedScene = scene;
+  // One inert record per InstancedMesh so the runtime's per-record loops
+  // (material sync, visual state) can iterate without special-casing every site;
+  // instance-level picking/selection/exploded is layered on in later increments.
+  return scene.instancedMeshes.map((mesh) => ({
+    mesh,
+    material: mesh.material,
+    partId: null,
+    instanced: true,
+    componentId: mesh.userData.cadComponentId,
+    occurrenceIds: mesh.userData.cadInstanceOccurrenceIds || []
+  }));
+}
+
 function buildDisplayRecords(THREE, runtime, meshData, settings) {
+  if (settings.instancePackages === true && meshData?.packageInstancing) {
+    return buildInstancedDisplayRecords(THREE, runtime, meshData);
+  }
   const theme = runtime.theme;
   const materialSettings = runtime.materialSettings;
   const displayMode = runtime.displayMode;
