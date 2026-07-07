@@ -78,6 +78,72 @@ class SemanticClosureHashTests(unittest.TestCase):
             root = Path(tmp)
             self.assertFalse(source_hash.closure_hash_matches("abc", ["gone.py"], base=root))
 
+    def test_deep_but_importable_source_falls_back_instead_of_raising(self) -> None:
+        # 'x = 1 + 1 + ... + 1' compiles and imports fine, but ast.dump on the
+        # deep tree can exceed the recursion limit (the exact depth depends on
+        # the ambient stack, so pin the limit low to force it). The freshness
+        # gate must degrade to byte sensitivity, never abort the build.
+        import sys
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            deep = self._write(root, "deep.py", "x = 1" + " + 1" * 2000 + "\n")
+            compile(deep.read_text(encoding="utf-8"), str(deep), "exec")  # importable
+            limit = sys.getrecursionlimit()
+            sys.setrecursionlimit(200)
+            try:
+                hash_a = source_hash._semantic_source_hash(deep)
+            finally:
+                sys.setrecursionlimit(limit)
+            self.assertEqual(hash_a, source_hash._sha256_file(deep))  # byte fallback
+
+    def test_pathological_nesting_falls_back_instead_of_raising(self) -> None:
+        # A unary-minus chain overflows the CPython parser stack (MemoryError);
+        # the hash must fall back to bytes, not propagate out of the gate.
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            nested = self._write(root, "nested.py", "x = " + "-" * 100000 + "1\n")
+            hash_a = source_hash._semantic_source_hash(nested)
+            self.assertFalse(hash_a.startswith("ast1:"))
+            self.assertFalse(source_hash.closure_hash_matches("abc", ["nested.py"], base=root))
+
+
+class SemanticHashMemoTests(unittest.TestCase):
+    def setUp(self) -> None:
+        source_hash._SEMANTIC_HASH_CACHE.clear()
+
+    tearDown = setUp
+
+    def test_settled_file_is_cached_and_fresh_file_is_not(self) -> None:
+        import os
+
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "gen.py"
+            path.write_text("R = 5\n", encoding="utf-8")
+            # Freshly written (mtime = now): hashed but not cached — a same-size
+            # rewrite within one coarse filesystem clock tick must stay visible.
+            source_hash._semantic_source_hash(path)
+            self.assertNotIn(str(path), source_hash._SEMANTIC_HASH_CACHE)
+            # Settled (mtime in the past): cached under (mtime_ns, size).
+            os.utime(path, ns=(path.stat().st_atime_ns, path.stat().st_mtime_ns - 10**10))
+            first = source_hash._semantic_source_hash(path)
+            self.assertIn(str(path), source_hash._SEMANTIC_HASH_CACHE)
+            self.assertEqual(first, source_hash._semantic_source_hash(path))
+
+    def test_same_size_edit_with_new_mtime_recomputes(self) -> None:
+        import os
+
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "gen.py"
+            path.write_text("R = 5\n", encoding="utf-8")
+            os.utime(path, ns=(path.stat().st_atime_ns, path.stat().st_mtime_ns - 10**10))
+            first = source_hash._semantic_source_hash(path)
+            self.assertIn(str(path), source_hash._SEMANTIC_HASH_CACHE)
+            # Same byte length, different semantics, different (settled) mtime.
+            path.write_text("R = 6\n", encoding="utf-8")
+            os.utime(path, ns=(path.stat().st_atime_ns, path.stat().st_mtime_ns - 10**9 * 5))
+            self.assertNotEqual(first, source_hash._semantic_source_hash(path))
+
 
 class RuntimeRootsStdinFootgunTests(unittest.TestCase):
     def test_placeholder_main_file_does_not_mark_cwd_as_runtime(self) -> None:
@@ -102,6 +168,10 @@ class RuntimeRootsStdinFootgunTests(unittest.TestCase):
             else:
                 main.__file__ = original
             source_hash._runtime_roots.cache_clear()
+            # _excluded_roots composes _runtime_roots and caches independently:
+            # drop it too so no classification computed inside the mutation
+            # window can outlive the restore.
+            source_hash._excluded_roots.cache_clear()
 
     def test_real_launcher_file_is_a_runtime_root(self) -> None:
         import sys

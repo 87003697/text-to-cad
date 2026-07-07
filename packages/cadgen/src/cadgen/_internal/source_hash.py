@@ -8,6 +8,7 @@ import hashlib
 import os
 import sys
 import sysconfig
+import time
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -68,6 +69,25 @@ def _sha256_file(path: Path) -> str:
     return digest.hexdigest()
 
 
+# (path string) -> (st_mtime_ns, st_size, hash). The AST pass is ~200x the byte
+# pass (ast.parse + ast.dump dominate), and a warm freshness check recomputes it
+# for EVERY closure file — the parent gate plus one _generated_child_is_stale
+# per generated child, which re-hashes the shared helper modules each time. The
+# stat key makes each file parse once per actual content change instead of once
+# per check (the warm daemon and multi-child builds are the big winners, same as
+# A4). Two safety rules make a stale hit impossible rather than merely unlikely:
+# stat is taken BEFORE the read (a write racing the read leaves an entry keyed
+# by a stat the changed file no longer matches — a spurious recompute, never a
+# stale hash), and a file is only cached once its mtime has SETTLED (see
+# _SEMANTIC_HASH_SETTLE_NS): filesystem mtime clocks can be coarser than a
+# nanosecond, so a same-size rewrite landing in the same clock tick as the
+# cached stat would otherwise be invisible. Freshly-edited files therefore
+# re-hash for a couple of seconds — one file, exactly while it is being edited —
+# and the settled majority of the closure stays cached.
+_SEMANTIC_HASH_CACHE: dict[str, tuple[int, int, str]] = {}
+_SEMANTIC_HASH_SETTLE_NS = 2_000_000_000
+
+
 def _semantic_source_hash(path: Path) -> str:
     """Content hash that ignores comments, blank lines, and formatting for
     Python sources — so a comment/whitespace-only edit to a generator or a
@@ -79,16 +99,33 @@ def _semantic_source_hash(path: Path) -> str:
     ``marshal`` digest would NOT be comment-insensitive: inserting a comment
     line shifts ``co_firstlineno`` and the line table. ``ast.dump`` defaults to
     ``include_attributes=False``, which omits line/column numbers while keeping
-    the full semantic structure. Falls back to the byte hash on an unreadable
-    or unparseable source (so a syntactically broken generator is never treated
-    as unchanged just because its AST could not be built)."""
+    the full semantic structure. Falls back to the byte hash on an unreadable or
+    unparseable source (so a syntactically broken generator is never treated as
+    unchanged just because its AST could not be built). MemoryError /
+    RecursionError take the same fallback: the parser raises MemoryError on
+    pathological nesting, and ``ast.dump`` can exceed the recursion limit on a
+    deep-but-importable tree — a freshness gate must degrade to byte
+    sensitivity, not abort the build."""
     if path.suffix != ".py":
         return _sha256_file(path)
     try:
-        tree = ast.parse(path.read_bytes())
-    except (OSError, SyntaxError, ValueError):
-        return _sha256_file(path)
-    return "ast1:" + hashlib.sha256(ast.dump(tree).encode("utf-8")).hexdigest()
+        stat = path.stat()
+    except OSError:
+        stat = None
+    key = str(path)
+    if stat is not None:
+        cached = _SEMANTIC_HASH_CACHE.get(key)
+        if cached is not None and cached[0] == stat.st_mtime_ns and cached[1] == stat.st_size:
+            return cached[2]
+    try:
+        dumped = ast.dump(ast.parse(path.read_bytes()))
+    except (OSError, SyntaxError, ValueError, MemoryError, RecursionError):
+        result = _sha256_file(path)
+    else:
+        result = "ast1:" + hashlib.sha256(dumped.encode("utf-8")).hexdigest()
+    if stat is not None and time.time_ns() - stat.st_mtime_ns > _SEMANTIC_HASH_SETTLE_NS:
+        _SEMANTIC_HASH_CACHE[key] = (stat.st_mtime_ns, stat.st_size, result)
+    return result
 
 
 @dataclass(frozen=True)
@@ -405,16 +442,6 @@ def _recompute_closure_hash(relative_files: object, *, base: Path, hasher) -> st
     return _closure_hash_for_pairs(pairs)
 
 
-def closure_hash_from_files(relative_files: object, *, base: Path) -> str | None:
-    """Recompute the canonical (semantic) closure hash from a previously recorded
-    ``base``-relative file list.
-
-    Returns ``None`` when any recorded file is missing, which callers treat as
-    "stale" (rebuild rather than risk reusing geometry built from absent
-    sources)."""
-    return _recompute_closure_hash(relative_files, base=base, hasher=_semantic_source_hash)
-
-
 def closure_hash_matches(recorded_hash: object, relative_files: object, *, base: Path) -> bool:
     """Whether a recorded closure hash still matches the current sources.
 
@@ -427,6 +454,15 @@ def closure_hash_matches(recorded_hash: object, relative_files: object, *, base:
     recorded = str(recorded_hash or "").strip()
     if not recorded:
         return False
+    # Semantic pass first: with the stat memo it costs one stat per settled
+    # closure file on the no-edit steady state (every rebuild records semantic
+    # digests), whereas the byte pass re-reads every file's full contents each
+    # check. The byte pass runs only when the semantic recompute misses — i.e.
+    # for legacy (byte-recorded) descriptors, which pay one AST parse per file
+    # per process (memoized thereafter) until their next genuine rebuild
+    # re-records them. Order cannot affect the outcome: a semantic record's
+    # per-file ``ast1:`` hashes can never equal an all-byte recompute's hex
+    # digests.
     for hasher in (_semantic_source_hash, _sha256_file):
         current = _recompute_closure_hash(relative_files, base=base, hasher=hasher)
         if current is not None and current == recorded:

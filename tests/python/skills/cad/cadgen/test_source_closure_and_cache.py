@@ -43,22 +43,22 @@ class SourceClosureTests(unittest.TestCase):
             # The script and its dependency are both recorded.
             self.assertEqual(2, len(closure.files))
 
-            # Re-hashing the recorded file list reproduces the same hash.
-            self.assertEqual(
-                closure.closure_hash,
-                cad_source_hash.closure_hash_from_files(closure.files, base=base),
+            # Re-checking the recorded file list against the recorded hash matches.
+            self.assertTrue(
+                cad_source_hash.closure_hash_matches(closure.closure_hash, closure.files, base=base)
             )
 
-            # Editing a dependency changes the recomputed hash (stale).
+            # A semantic edit to a dependency invalidates the recorded hash (stale).
             dep.write_text("VALUE = 2\n", encoding="utf-8")
-            self.assertNotEqual(
-                closure.closure_hash,
-                cad_source_hash.closure_hash_from_files(closure.files, base=base),
+            self.assertFalse(
+                cad_source_hash.closure_hash_matches(closure.closure_hash, closure.files, base=base)
             )
 
-            # A missing recorded file yields None (callers treat as stale).
+            # A missing recorded file is never a match (callers treat as stale).
             dep.unlink()
-            self.assertIsNone(cad_source_hash.closure_hash_from_files(closure.files, base=base))
+            self.assertFalse(
+                cad_source_hash.closure_hash_matches(closure.closure_hash, closure.files, base=base)
+            )
 
     def test_capture_runtime_closure_includes_imported_repo_local_modules(self) -> None:
         with temporary_directory(prefix="closure-capture-") as raw_dir:
