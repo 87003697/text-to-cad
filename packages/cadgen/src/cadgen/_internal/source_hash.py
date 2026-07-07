@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import functools
 
+import ast
 import contextlib
 import hashlib
 import os
@@ -65,6 +66,29 @@ def _sha256_file(path: Path) -> str:
         for chunk in iter(lambda: handle.read(1024 * 1024), b""):
             digest.update(chunk)
     return digest.hexdigest()
+
+
+def _semantic_source_hash(path: Path) -> str:
+    """Content hash that ignores comments, blank lines, and formatting for
+    Python sources — so a comment/whitespace-only edit to a generator or a
+    shared helper does not invalidate the model's closure — while staying
+    sensitive to every semantic change (including docstrings). Non-``.py``
+    closure inputs (e.g. composed child STEP files) keep the byte hash.
+
+    Hashes the parsed AST dumped WITHOUT position attributes. A bytecode /
+    ``marshal`` digest would NOT be comment-insensitive: inserting a comment
+    line shifts ``co_firstlineno`` and the line table. ``ast.dump`` defaults to
+    ``include_attributes=False``, which omits line/column numbers while keeping
+    the full semantic structure. Falls back to the byte hash on an unreadable
+    or unparseable source (so a syntactically broken generator is never treated
+    as unchanged just because its AST could not be built)."""
+    if path.suffix != ".py":
+        return _sha256_file(path)
+    try:
+        tree = ast.parse(path.read_bytes())
+    except (OSError, SyntaxError, ValueError):
+        return _sha256_file(path)
+    return "ast1:" + hashlib.sha256(ast.dump(tree).encode("utf-8")).hexdigest()
 
 
 @dataclass(frozen=True)
@@ -152,10 +176,19 @@ def _runtime_roots() -> tuple[Path, ...]:
     main_module = sys.modules.get("__main__")
     main_file = getattr(main_module, "__file__", None)
     if main_file:
+        # Only a real on-disk launcher is runtime. Interactive / stdin / ``-c``
+        # entry points set ``__file__`` to a placeholder like ``<stdin>`` or
+        # ``<string>``, whose ``resolve().parent`` is the CWD — adding that would
+        # wrongly mark the model folder (and its sibling helper modules) as
+        # runtime, drop them from the recorded closure, and silently disable
+        # staleness detection for stdin/`-c`-driven builds. ``is_file()`` rejects
+        # every ``<...>`` placeholder while still catching the CLI launcher.
         try:
-            roots.append(Path(main_file).resolve().parent)
+            resolved_main = Path(main_file).resolve()
         except OSError:
-            pass
+            resolved_main = None
+        if resolved_main is not None and resolved_main.is_file():
+            roots.append(resolved_main.parent)
     return tuple(roots)
 
 
@@ -287,7 +320,7 @@ def closure_for_files(script_path: Path, files: object, *, base: Path) -> Python
     pairs: list[tuple[str, str]] = []
     for path in paths:
         try:
-            file_hash = _sha256_file(path)
+            file_hash = _semantic_source_hash(path)
         except OSError:
             continue
         pairs.append((_relative_to_base(path, base_dir), file_hash))
@@ -328,12 +361,7 @@ def capture_runtime_closure(
     return closure_for_files(script_path, dependency_files, base=base)
 
 
-def closure_hash_from_files(relative_files: object, *, base: Path) -> str | None:
-    """Recompute a closure hash from a previously recorded ``base``-relative file list.
-
-    Returns ``None`` when any recorded file is missing, which callers treat as
-    "stale" (rebuild rather than risk reusing geometry built from absent
-    sources)."""
+def _recompute_closure_hash(relative_files: object, *, base: Path, hasher) -> str | None:
     base_dir = base.expanduser().resolve()
     pairs: list[tuple[str, str]] = []
     for relative in relative_files:
@@ -344,9 +372,38 @@ def closure_hash_from_files(relative_files: object, *, base: Path) -> str | None
         if resolved is None:
             return None
         try:
-            pairs.append((rel, _sha256_file(resolved)))
+            pairs.append((rel, hasher(resolved)))
         except OSError:
             return None
     if not pairs:
         return None
     return _closure_hash_for_pairs(pairs)
+
+
+def closure_hash_from_files(relative_files: object, *, base: Path) -> str | None:
+    """Recompute the canonical (semantic) closure hash from a previously recorded
+    ``base``-relative file list.
+
+    Returns ``None`` when any recorded file is missing, which callers treat as
+    "stale" (rebuild rather than risk reusing geometry built from absent
+    sources)."""
+    return _recompute_closure_hash(relative_files, base=base, hasher=_semantic_source_hash)
+
+
+def closure_hash_matches(recorded_hash: object, relative_files: object, *, base: Path) -> bool:
+    """Whether a recorded closure hash still matches the current sources.
+
+    Accepts EITHER the current semantic (AST) recompute OR the legacy byte
+    recompute: descriptors written before comment-insensitive hashing recorded a
+    byte-based digest, and must keep validating (no mass rebuild on upgrade)
+    until their next genuine rebuild re-records the semantic digest. A missing
+    file (either recompute returns ``None``) is not a match — the caller rebuilds.
+    """
+    recorded = str(recorded_hash or "").strip()
+    if not recorded:
+        return False
+    for hasher in (_semantic_source_hash, _sha256_file):
+        current = _recompute_closure_hash(relative_files, base=base, hasher=hasher)
+        if current is not None and current == recorded:
+            return True
+    return False

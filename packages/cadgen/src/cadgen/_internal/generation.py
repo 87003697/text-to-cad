@@ -58,7 +58,7 @@ from cadgen._internal.source_hash import (
     PythonSourceClosure,
     PythonSourceHash,
     capture_runtime_closure,
-    closure_hash_from_files,
+    closure_hash_matches,
     evict_first_party_modules,
     python_source_hash,
     record_first_party_execution,
@@ -1948,8 +1948,7 @@ def _manifest_source_closure_unchanged(manifest: Mapping[str, object], base: Pat
     recorded_files = manifest.get("sourceClosureFiles")
     if not recorded_hash or not isinstance(recorded_files, list) or not recorded_files:
         return False
-    current_hash = closure_hash_from_files(recorded_files, base=base)
-    return current_hash is not None and current_hash == recorded_hash
+    return closure_hash_matches(recorded_hash, recorded_files, base=base)
 
 
 def _assembly_is_current(spec: EntrySpec) -> bool:
@@ -2031,8 +2030,9 @@ def _generated_child_is_stale(child_spec: EntrySpec, *, force: bool) -> bool:
         recorded_hash = str(manifest.get("sourceClosureHash") or "").strip()
         recorded_files = manifest.get("sourceClosureFiles")
         if recorded_hash and isinstance(recorded_files, list) and recorded_files:
-            current_hash = closure_hash_from_files(recorded_files, base=child_spec.step_path.parent)
-            return current_hash is None or current_hash != recorded_hash
+            return not closure_hash_matches(
+                recorded_hash, recorded_files, base=child_spec.step_path.parent
+            )
         recorded_source_hash = str(manifest.get("sourceHash") or "").strip()
         if recorded_source_hash:
             return python_source_hash(child_spec.script_path).source_hash != recorded_source_hash
