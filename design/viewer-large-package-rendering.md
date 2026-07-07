@@ -107,13 +107,12 @@ mirror). NOT yet wired into the live path — zero regression so far.
    overlays (the per-mesh path builds `EdgesGeometry` per record). Edge soup
    over 2,000+ occurrences is low value; a selection-only instanced-edge overlay
    is the future path if wanted.
-7. **Zoom-to-fit a selected occurrence.** Instanced records carry no per-record
-   `partBounds` (bounds are per instance, not per bucket), so
-   `autoZoom.js displayRecordsBounds()` skips them and "zoom to fit selection" on
-   an instanced occurrence no-ops ("No geometry to fit"). Framing the whole model
-   still works. A proper fix computes the target occurrence's world bounds from
-   its instance matrix — instance-aware interaction work for the Phase-4 layer,
-   not this render pass. (Found + confirmed in the pre-PR audit.)
+7. **Zoom-to-fit a selected occurrence — RESOLVED in Phase 4** (see below).
+   Instanced records carry no per-record `partBounds` (bounds are per instance,
+   not per bucket), so `autoZoom.js displayRecordsBounds()` skipped them and
+   "zoom to fit selection" on an instanced occurrence no-op'd ("No geometry to
+   fit"). (Found + confirmed in the pre-PR audit; fixed by
+   `instancedOccurrenceBounds` in the Phase-4 pass.)
 
 The pre-PR adversarial audit also surfaced and **fixed** three defects before
 merge: a `major` — focus mode dropped every instanced bucket from the pick
