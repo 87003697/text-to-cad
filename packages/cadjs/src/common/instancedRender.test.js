@@ -3,7 +3,8 @@ import test from "node:test";
 
 import * as THREE from "three";
 
-import { buildModel } from "./cadScene.js";
+import { buildModel, shouldInstancePackageScene } from "./cadScene.js";
+import { resolveInstancePackagesFlag } from "./renderMeshScene.js";
 
 function boxComponent() {
   return {
@@ -59,8 +60,54 @@ test("instancePackages flag renders the package as InstancedMeshes", () => {
   model.dispose?.();
 });
 
-test("without the flag the package is not instanced (default path unchanged)", () => {
+test("without the flag a small package is not instanced (default path unchanged)", () => {
   const model = buildModel(THREE, packageMeshData(), {});
   assert.equal(countInstanced(model.modelGroup), 0);
   model.dispose?.();
+});
+
+function largePackageMeshData(occurrenceCount) {
+  const occurrences = [];
+  for (let i = 0; i < occurrenceCount; i += 1) {
+    occurrences.push({ id: `o1.${i + 1}`, component: "A", transform: translation(i, 0, 0) });
+  }
+  return {
+    parts: [],
+    vertices: new Float32Array(0),
+    bounds: { min: [0, 0, 0], max: [occurrenceCount, 1, 1] },
+    packageInstancing: { descriptor: { components: { A: {} }, occurrences }, componentMeshDataByCid: { A: boxComponent() } }
+  };
+}
+
+test("a large package instances by default (size policy, no flag)", () => {
+  const model = buildModel(THREE, largePackageMeshData(200), {});
+  assert.equal(countInstanced(model.modelGroup), 1);
+  model.dispose?.();
+});
+
+test("instancePackages:false forces a large package back to the per-mesh path", () => {
+  const model = buildModel(THREE, largePackageMeshData(200), { instancePackages: false });
+  assert.equal(countInstanced(model.modelGroup), 0);
+  model.dispose?.();
+});
+
+test("shouldInstancePackageScene: tri-state flag beats the size policy", () => {
+  const small = packageMeshData();
+  const large = largePackageMeshData(200);
+  // no packageInstancing -> never
+  assert.equal(shouldInstancePackageScene({}, { parts: [] }), false);
+  // size policy
+  assert.equal(shouldInstancePackageScene({}, small), false);
+  assert.equal(shouldInstancePackageScene({}, large), true);
+  // explicit overrides
+  assert.equal(shouldInstancePackageScene({ instancePackages: true }, small), true);
+  assert.equal(shouldInstancePackageScene({ instancePackages: false }, large), false);
+});
+
+test("resolveInstancePackagesFlag preserves the render-job tri-state", () => {
+  assert.equal(resolveInstancePackagesFlag({}), undefined);
+  assert.equal(resolveInstancePackagesFlag({ instancePackages: true }), true);
+  assert.equal(resolveInstancePackagesFlag({ display: { instancePackages: false } }), false);
+  // display block wins over the top-level flag when both are booleans
+  assert.equal(resolveInstancePackagesFlag({ display: { instancePackages: true }, instancePackages: false }), true);
 });
