@@ -465,7 +465,16 @@ def build_package_from_compound(
     # The location-stripped BREP bytes per cid, captured from the single
     # serialization that computed the content hash, so a missing component's
     # worker payload reuses them instead of re-serializing the same shape.
+    # Retained ONLY for cids that will actually need a worker payload (no
+    # <cid>.glb on disk yet, or --force): on the edit-path rebuild most
+    # components are already built, and retaining every BREP for the whole walk
+    # would hold the assembly's entire serialized geometry in memory at once.
     brep_bytes_by_cid: dict[str, bytes] = {}
+
+    def _retain_payload_brep(content_hash: str, brep: bytes) -> None:
+        cid = _component_id(content_hash)
+        if cid not in brep_bytes_by_cid and (force or not (comp_dir / f"{cid}.glb").exists()):
+            brep_bytes_by_cid[cid] = brep
 
     def _add_leaf(node: Any, world_loc: Any, occ_id: str, name: str | None = None) -> dict[str, Any]:
         try:
@@ -474,10 +483,10 @@ def build_package_from_compound(
             if content_hash is None:
                 content_hash, brep = _content_hash_and_bytes(node)
                 hash_memo[memo_key] = content_hash
-                brep_bytes_by_cid.setdefault(_component_id(content_hash), brep)
+                _retain_payload_brep(content_hash, brep)
         except TypeError:  # unhashable TShape wrapper: correctness over the micro-optimization
             content_hash, brep = _content_hash_and_bytes(node)
-            brep_bytes_by_cid.setdefault(_component_id(content_hash), brep)
+            _retain_payload_brep(content_hash, brep)
         cid = _component_id(content_hash)
         shapes.setdefault(cid, node)
         components.setdefault(cid, {"glb": _component_ref(cid), "contentHash": content_hash})
@@ -588,8 +597,9 @@ def build_package_from_compound(
     # emit identical components; XCAF auto-labels no longer leak in).
     payloads = [
         (
-            # Reuse the BREP bytes captured when this cid was content-hashed; only
-            # re-serialize in the (unexpected) event they were not retained.
+            # Reuse the BREP bytes captured when this cid was content-hashed;
+            # re-serialize only when the GLB present at capture time vanished
+            # before the missing-scan above (so the bytes were not retained).
             brep_bytes_by_cid.get(cid) or _shape_brep_bytes(shape),
             cid,
             str(comp_dir / f"{cid}.glb"),
