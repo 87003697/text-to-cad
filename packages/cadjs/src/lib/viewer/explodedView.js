@@ -15,7 +15,6 @@
 
 import {
   EPSILON,
-  GOLDEN_ANGLE,
   MAX_EXPLODED_VIEW_DEPTH,
   boundsCenterArray,
   boundsRadius,
@@ -186,37 +185,38 @@ function lateralDirection(group, layerCenter, axisIndex, index) {
   return dir;
 }
 
-// Horizontal (XY) outward direction for a group about the vertical axis; groups
-// centered on the axis are fanned by the golden angle so coaxial parts diverge
-// instead of all taking the same fallback direction.
-function radialBloomDirection(modelCenter, groupCenter, index) {
+// Horizontal (XY) outward direction for a group about the vertical axis, or null
+// when the group sits on the axis (no intrinsic radial direction — it is the
+// core and stays put, the way a radial engine's crankcase anchors the cylinders).
+function radialBloomDirection(modelCenter, groupCenter) {
   const dx = groupCenter[0] - modelCenter[0];
   const dy = groupCenter[1] - modelCenter[1];
   const length = Math.hypot(dx, dy);
-  if (length > EPSILON) {
-    return [dx / length, dy / length, 0];
-  }
-  const angle = index * GOLDEN_ANGLE;
-  return [Math.cos(angle), Math.sin(angle), 0];
+  return length > EPSILON ? [dx / length, dy / length, 0] : null;
 }
 
-// Radial mode emits explicit translate steps (one per group) so each group —
-// including coaxial ones — gets its own resolved direction and distance, rather
-// than a single-target radial step whose fan index is always 0.
+// Radial mode blooms each off-axis group straight outward from the vertical
+// axis (one editable translate step per group); on-axis "core" groups stay put.
 function generateRadialSteps(groups, modelBounds, hints) {
   const modelCenter = boundsCenterArray(modelBounds, [0, 0, 0]);
   const modelRadiusXY = Math.max(
     Math.hypot(boundsSize(modelBounds, 0), boundsSize(modelBounds, 1)) / 2,
     EPSILON
   );
-  const modelRadius = Math.max(boundsRadius(modelBounds), EPSILON);
-  const baseDistance = Math.max(modelRadiusXY * 0.85 * hints.gapScale, modelRadius * 0.28);
+  // Anchor groups whose centre is within this radius of the axis (the core).
+  const coreThreshold = modelRadiusXY * 0.12;
+  const baseDistance = modelRadiusXY * 0.75 * hints.gapScale;
   const sign = hints.direction === "negative" ? -1 : 1;
   const steps = [];
   const sorted = [...groups].sort((left, right) => left.recordIndex - right.recordIndex);
   sorted.forEach((group, index) => {
-    const direction = radialBloomDirection(modelCenter, group.center, index);
-    const distance = (baseDistance + group.radius * 0.6 * hints.gapScale) * sign;
+    const dx = group.center[0] - modelCenter[0];
+    const dy = group.center[1] - modelCenter[1];
+    const direction = radialBloomDirection(modelCenter, group.center);
+    if (!direction || Math.hypot(dx, dy) <= coreThreshold) {
+      return; // core group stays put
+    }
+    const distance = (baseDistance + group.radius * 1.1 * hints.gapScale) * sign;
     if (Math.abs(distance) <= EPSILON) {
       return;
     }
@@ -245,7 +245,10 @@ function generateAxialSteps(groups, modelBounds, axisIndex, hints) {
     ? thicknesses[Math.floor(thicknesses.length / 2)]
     : modelSpan * 0.1;
   const tolerance = Math.max(modelSpan * 0.025, medianThickness * 0.18, EPSILON);
-  const minimumGap = Math.max(modelSpan * 0.075, medianThickness * 0.35, modelRadius * 0.035, EPSILON)
+  // Default gap is sized to read clearly (comparable to a typical part's
+  // thickness / a healthy fraction of the model span), so the un-tuned explode
+  // is obviously separated rather than timid. `gapScale` tunes it further.
+  const minimumGap = Math.max(modelSpan * 0.16, medianThickness * 1.1, modelRadius * 0.07, EPSILON)
     * hints.gapScale;
 
   const layers = buildLayers(groups, axisIndex, tolerance);
