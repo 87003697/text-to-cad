@@ -200,10 +200,38 @@ def _excluded_roots() -> tuple[Path, ...]:
     return (*_interpreter_roots(), *_runtime_roots())
 
 
+@functools.lru_cache(maxsize=None)
 def is_first_party_source_file(path: Path) -> bool:
     """True for a ``.py`` file that counts as model-side code: not stdlib, not
-    site-packages, and not part of the running generation runtime."""
+    site-packages, and not part of the running generation runtime.
+
+    Memoized: a resolved path's classification is stable for the process (the
+    excluded roots are themselves cached and environment-derived), and the audit
+    hook calls this for every executed module body."""
     return path.suffix == ".py" and not any(_is_within(path, root) for root in _excluded_roots())
+
+
+# Cache the per-module resolve()+classify keyed by the RAW ``__file__`` string.
+# ``repo_local_loaded_modules`` runs over ALL of ``sys.modules`` (thousands of
+# entries once numpy/OCP/etc. are imported) on every evict AND every closure
+# capture; the ``Path(...).resolve()`` realpath is the dominant cost and its
+# result never changes for a given file, so one lookup per distinct file per
+# process replaces a realpath-storm per build (~0.2-0.7 s on a warm build).
+_MISSING = object()
+_MODULE_FILE_FIRST_PARTY: dict[str, Path | None] = {}
+
+
+def _first_party_path_for_module_file(file_name: str) -> Path | None:
+    cached = _MODULE_FILE_FIRST_PARTY.get(file_name, _MISSING)
+    if cached is not _MISSING:
+        return cached
+    try:
+        path = Path(file_name).resolve()
+    except OSError:
+        path = None
+    result = path if (path is not None and is_first_party_source_file(path)) else None
+    _MODULE_FILE_FIRST_PARTY[file_name] = result
+    return result
 
 
 def repo_local_loaded_modules(module_names: object) -> dict[str, Path]:
@@ -217,11 +245,8 @@ def repo_local_loaded_modules(module_names: object) -> dict[str, Path]:
         file_name = getattr(module, "__file__", None)
         if not file_name:
             continue
-        try:
-            path = Path(file_name).resolve()
-        except OSError:
-            continue
-        if is_first_party_source_file(path):
+        path = _first_party_path_for_module_file(file_name)
+        if path is not None:
             result[name] = path
     return result
 
