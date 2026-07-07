@@ -1,107 +1,39 @@
-import { MAX_EXPLODED_VIEW_DEPTH, normalizeExplodedViewSettings } from "../../common/displaySettings.js";
+// Auto-explode generator: turn display records + bounds + hints into an ordered
+// explode-step *document* (see explodedViewSteps.js for the model/evaluator).
+//
+// This replaces the former global-heuristic solver. It still reads the
+// occurrence tree and per-part bounds (no mate/contact data is available at view
+// time), but emits editable per-group steps and fixes the wonky behaviours of
+// the old layout:
+//   - principal explode axis is detected from the component layout ("auto"),
+//     not hardcoded to Z;
+//   - coplanar groups separate laterally instead of serializing into a stack;
+//   - coaxial groups explode along the axis instead of scattering sideways;
+//   - distances are absolute model units, swept so groups clear one another.
+//
+// The generated steps are ordinary steps the user can edit, reorder, or delete.
 
-const EPSILON = 1e-6;
-const GOLDEN_ANGLE = Math.PI * (3 - Math.sqrt(5));
-const AXIS_INDEX = Object.freeze({ x: 0, y: 1, z: 2 });
+import {
+  EPSILON,
+  MAX_EXPLODED_VIEW_DEPTH,
+  boundsCenterArray,
+  boundsRadius,
+  boundsSize,
+  clamp,
+  mergeBounds,
+  normalizeExplodeAutoHints,
+  normalizeExplodedViewDocument,
+  occurrenceSegments,
+  recordBounds,
+  recordCanExplode,
+  toNumber
+} from "./explodedViewSteps.js";
 
-function clamp(value, min, max) {
-  return Math.min(Math.max(value, min), max);
-}
-
-function toNumber(value, fallback = 0) {
-  const numericValue = Number(value);
-  return Number.isFinite(numericValue) ? numericValue : fallback;
-}
-
-function boundsCenter(THREE, bounds, fallback = null) {
-  const min = Array.isArray(bounds?.min) || ArrayBuffer.isView(bounds?.min) ? bounds.min : null;
-  const max = Array.isArray(bounds?.max) || ArrayBuffer.isView(bounds?.max) ? bounds.max : null;
-  if (!min || !max) {
-    return fallback?.clone?.() || new THREE.Vector3();
-  }
-  return new THREE.Vector3(
-    (toNumber(min[0]) + toNumber(max[0])) / 2,
-    (toNumber(min[1]) + toNumber(max[1])) / 2,
-    (toNumber(min[2]) + toNumber(max[2])) / 2
-  );
-}
-
-function boundsRadius(THREE, bounds) {
-  const min = Array.isArray(bounds?.min) || ArrayBuffer.isView(bounds?.min) ? bounds.min : null;
-  const max = Array.isArray(bounds?.max) || ArrayBuffer.isView(bounds?.max) ? bounds.max : null;
-  if (!min || !max) {
-    return 0;
-  }
-  return new THREE.Vector3(
-    Math.max(toNumber(max[0]) - toNumber(min[0]), 0),
-    Math.max(toNumber(max[1]) - toNumber(min[1]), 0),
-    Math.max(toNumber(max[2]) - toNumber(min[2]), 0)
-  ).length() / 2;
-}
-
-function boundsSize(bounds, axis) {
-  const min = Array.isArray(bounds?.min) || ArrayBuffer.isView(bounds?.min) ? bounds.min : null;
-  const max = Array.isArray(bounds?.max) || ArrayBuffer.isView(bounds?.max) ? bounds.max : null;
-  if (!min || !max) {
-    return 0;
-  }
-  return Math.max(toNumber(max[axis]) - toNumber(min[axis]), 0);
-}
-
-function boundsMaxSize(bounds) {
-  return Math.max(
-    boundsSize(bounds, 0),
-    boundsSize(bounds, 1),
-    boundsSize(bounds, 2)
-  );
-}
-
-function shiftedBounds(bounds, translation = [0, 0, 0], amount = 1) {
-  if (!bounds || !Array.isArray(bounds.min) || !Array.isArray(bounds.max)) {
-    return null;
-  }
-  return {
-    min: bounds.min.map((value, index) => toNumber(value) + toNumber(translation[index]) * amount),
-    max: bounds.max.map((value, index) => toNumber(value) + toNumber(translation[index]) * amount)
-  };
-}
-
-function mergeBounds(boundsList) {
-  const min = [Infinity, Infinity, Infinity];
-  const max = [-Infinity, -Infinity, -Infinity];
-  let count = 0;
-  for (const bounds of Array.isArray(boundsList) ? boundsList : []) {
-    if (!bounds || !Array.isArray(bounds.min) || !Array.isArray(bounds.max)) {
-      continue;
-    }
-    count += 1;
-    for (let axis = 0; axis < 3; axis += 1) {
-      min[axis] = Math.min(min[axis], toNumber(bounds.min[axis]));
-      max[axis] = Math.max(max[axis], toNumber(bounds.max[axis]));
-    }
-  }
-  return count > 0 && min.every(Number.isFinite) && max.every(Number.isFinite) ? { min, max } : null;
-}
-
-function translationVector(THREE, value, fallback = null) {
-  if (value?.isVector3) {
-    return value;
-  }
-  if (Array.isArray(value) || ArrayBuffer.isView(value)) {
-    return new THREE.Vector3(
-      toNumber(value[0]),
-      toNumber(value[1]),
-      toNumber(value[2])
-    );
-  }
-  return fallback;
-}
-
-function occurrenceSegments(partId) {
-  const text = String(partId || "").trim();
-  const match = text.match(/^o\d+(?:\.\d+)*/i);
-  return match ? match[0].split(".").filter(Boolean) : [];
-}
+const AXIS_VECTORS = Object.freeze({
+  x: [1, 0, 0],
+  y: [0, 1, 0],
+  z: [0, 0, 1]
+});
 
 function commonOccurrencePrefix(records = []) {
   const paths = records
@@ -122,10 +54,10 @@ function commonOccurrencePrefix(records = []) {
   return prefix.length >= shortest ? prefix.slice(0, -1) : prefix;
 }
 
-export function explodedViewGroupKey(partId, {
-  depth = 1,
-  commonPrefix = []
-} = {}) {
+// Occurrence-path prefix that groups a record at the requested depth below the
+// assembly's common prefix, so sub-assemblies move rigidly at depth 1 and split
+// into deeper components as depth grows.
+export function explodedViewGroupKey(partId, { depth = 1, commonPrefix = [] } = {}) {
   const text = String(partId || "").trim();
   const segments = occurrenceSegments(text);
   if (!segments.length) {
@@ -137,22 +69,12 @@ export function explodedViewGroupKey(partId, {
   return segments.slice(0, groupLength).join(".") || text;
 }
 
-function recordCanExplode(record) {
-  const partId = String(record?.partId || "").trim();
-  return Boolean(record?.mesh && partId && partId !== "__model__");
-}
-
-function groupRecords(THREE, records, settings) {
+function groupRecords(records, depth) {
   const commonPrefix = commonOccurrencePrefix(records);
   const groupsByKey = new Map();
   records.forEach((record, recordIndex) => {
-    const groupKey = explodedViewGroupKey(record?.partId, {
-      depth: settings.depth,
-      commonPrefix
-    }) || String(record?.partId || `part:${recordIndex}`);
-    const bounds = record?.partBounds && Array.isArray(record.partBounds.min) && Array.isArray(record.partBounds.max)
-      ? record.partBounds
-      : null;
+    const groupKey = explodedViewGroupKey(record?.partId, { depth, commonPrefix })
+      || String(record?.partId || `part:${recordIndex}`);
     const existing = groupsByKey.get(groupKey) || {
       key: groupKey,
       records: [],
@@ -160,312 +82,241 @@ function groupRecords(THREE, records, settings) {
       boundsList: []
     };
     existing.records.push(record);
+    const bounds = recordBounds(record);
     if (bounds) {
       existing.boundsList.push(bounds);
     }
     groupsByKey.set(groupKey, existing);
   });
   return [...groupsByKey.values()].map((group) => {
-    const bounds = mergeBounds(group.boundsList) || group.records[0]?.partBounds || null;
+    const bounds = mergeBounds(group.boundsList) || recordBounds(group.records[0]) || null;
     return {
-      ...group,
+      key: group.key,
+      records: group.records,
+      recordIndex: group.recordIndex,
       bounds,
-      center: boundsCenter(THREE, bounds),
-      radius: boundsRadius(THREE, bounds)
+      center: boundsCenterArray(bounds, [0, 0, 0]),
+      radius: boundsRadius(bounds)
     };
   });
 }
 
-function createAxisVector(THREE, axis, direction) {
-  const vector = new THREE.Vector3();
-  vector.setComponent(AXIS_INDEX[axis] ?? 2, direction === "negative" ? -1 : 1);
-  return vector;
-}
-
-// Concentric/on-axis groups (parts sharing the model's vertical axis) have no
-// intrinsic horizontal direction, so fan them evenly around the circle by the
-// golden angle. Purely horizontal so the bloom stays in-plane.
-function radialFanDirection(THREE, index) {
-  const angle = index * GOLDEN_ANGLE;
-  const vector = new THREE.Vector3(Math.cos(angle), Math.sin(angle), 0);
-  if (vector.lengthSq() <= EPSILON) {
-    vector.set(1, 0, 0);
-  }
-  return vector.normalize();
-}
-
-// Cylindrical radial: push a group outward in the horizontal (XY) plane about
-// the model's vertical axis, preserving each part's height. This matches the
-// "radial explode" in SolidWorks / Fusion / Onshape and reads as a graceful
-// horizontal bloom, instead of the vertical fan you get from exploding along
-// the full 3D center-to-part vector (which points mostly up/down for the
-// Z-stacked assemblies typical of CAD).
-function radialGroupDirection(THREE, group, modelCenter, index, direction) {
-  const vector = group.center?.isVector3
-    ? group.center.clone().sub(modelCenter)
-    : new THREE.Vector3();
-  vector.z = 0;
-  if (vector.lengthSq() <= EPSILON) {
-    vector.copy(radialFanDirection(THREE, index));
-  } else {
-    vector.normalize();
-  }
-  return direction === "negative" ? vector.multiplyScalar(-1) : vector;
-}
-
-function createRadialExplodedViewRecordStates(THREE, groups, bounds, settings) {
-  const modelCenter = boundsCenter(THREE, bounds);
-  const modelRadius = Math.max(boundsRadius(THREE, bounds), EPSILON);
-  const modelMaxSize = Math.max(boundsMaxSize(bounds), EPSILON);
-  // Horizontal footprint radius: parts should clear this to bloom cleanly.
-  const modelRadiusXY = Math.max(
-    Math.hypot(boundsSize(bounds, 0), boundsSize(bounds, 1)) / 2,
-    EPSILON
+// Choose the explode axis. World axes come straight through; "auto" picks the
+// world axis with the greatest spread of group centers (robust, axis-aligned
+// analogue of PCA snapped to a principal axis), tie-broken toward Z.
+function resolveExplodeAxisIndex(mode, groups) {
+  if (mode === "x") return 0;
+  if (mode === "y") return 1;
+  if (mode === "z") return 2;
+  const centers = groups.map((group) => group.center);
+  const mean = [0, 1, 2].map((axis) => centers.reduce((sum, c) => sum + c[axis], 0) / (centers.length || 1));
+  const variance = [0, 1, 2].map(
+    (axis) => centers.reduce((sum, c) => sum + (c[axis] - mean[axis]) ** 2, 0)
   );
-  const spacing = Math.max(toNumber(settings.spacing, 1.45), 0.25);
-  // Push each group just past the model's horizontal footprint so it sits
-  // outside the original silhouette, then add a per-part term so larger parts
-  // travel a little further and don't crowd the center.
-  const baseDistance = Math.max(modelRadiusXY * 0.85 * spacing, modelRadius * 0.28);
-  const states = [];
-  const radialGroups = groups
-    .filter((group) => group.records.length > 0 && group.bounds)
-    .sort((left, right) => left.recordIndex - right.recordIndex);
-
-  radialGroups.forEach((group, groupIndex) => {
-    const direction = radialGroupDirection(
-      THREE,
-      group,
-      modelCenter,
-      groupIndex,
-      settings.direction
-    );
-    const groupRadius = boundsRadius(THREE, group.bounds);
-    const travel = baseDistance + groupRadius * 0.6 * spacing;
-    const translation = direction.clone().multiplyScalar(travel);
-    for (const record of group.records) {
-      states.push({
-        record,
-        partId: String(record.partId || "").trim(),
-        groupKey: group.key,
-        layerIndex: groupIndex,
-        direction: direction.clone(),
-        distance: travel,
-        translation: translation.clone(),
-        matrix: new THREE.Matrix4()
-      });
+  let best = 2;
+  let bestValue = -Infinity;
+  for (const axis of [0, 1, 2]) {
+    // Bias ties toward Z (the usual CAD stacking axis) with a tiny nudge.
+    const value = variance[axis] + (axis === 2 ? EPSILON : 0);
+    if (value > bestValue) {
+      bestValue = value;
+      best = axis;
     }
+  }
+  return best;
+}
+
+function scaleVec(vec, scalar) {
+  return [vec[0] * scalar, vec[1] * scalar, vec[2] * scalar];
+}
+
+function addVec(a, b) {
+  return [a[0] + b[0], a[1] + b[1], a[2] + b[2]];
+}
+
+function vecLength(vec) {
+  return Math.hypot(vec[0], vec[1], vec[2]);
+}
+
+// Build layers of groups that overlap along the explode axis (coplanar layers),
+// sorted from the base outward.
+function buildLayers(groups, axisIndex, tolerance) {
+  const sorted = [...groups].sort((left, right) => {
+    const delta = left.center[axisIndex] - right.center[axisIndex];
+    return Math.abs(delta) > EPSILON ? delta : left.recordIndex - right.recordIndex;
   });
-
-  if (settings.keepBaseGrounded !== false) {
-    const baseMin = Array.isArray(bounds?.min) || ArrayBuffer.isView(bounds?.min) ? bounds.min : null;
-    const baseMinZ = baseMin ? toNumber(baseMin[2]) : null;
-    const explodedBounds = mergeBounds(
-      states.map((state) => shiftedBounds(state.record?.partBounds, state.translation.toArray(), 1))
-    );
-    const explodedMinZ = Array.isArray(explodedBounds?.min) ? toNumber(explodedBounds.min[2]) : null;
-    if (
-      Number.isFinite(baseMinZ) &&
-      Number.isFinite(explodedMinZ) &&
-      explodedMinZ < baseMinZ - EPSILON
-    ) {
-      const lift = Math.min(baseMinZ - explodedMinZ, modelMaxSize * spacing);
-      for (const state of states) {
-        state.translation.z += lift;
-        state.distance = state.translation.length();
-        state.direction = state.distance > EPSILON
-          ? state.translation.clone().normalize()
-          : state.direction;
-      }
+  const layers = [];
+  for (const group of sorted) {
+    const previous = layers[layers.length - 1];
+    if (previous && Math.abs(group.center[axisIndex] - previous.center) <= tolerance) {
+      previous.groups.push(group);
+      previous.bounds = mergeBounds([previous.bounds, group.bounds]) || previous.bounds;
+      previous.center = boundsCenterArray(previous.bounds)[axisIndex];
+    } else {
+      layers.push({ center: group.center[axisIndex], bounds: group.bounds, groups: [group] });
     }
   }
-
-  return states;
+  return layers;
 }
 
-export function createExplodedViewRecordStates(THREE, records = [], bounds = null, options = {}) {
-  if (!THREE?.Vector3 || !THREE?.Matrix4) {
-    return [];
+// Lateral (perpendicular-to-axis) unit direction for a coplanar group, snapped
+// to the stronger of the two perpendicular world axes; fans by index when the
+// group sits on the axis (coaxial, no intrinsic side).
+function lateralDirection(group, layerCenter, axisIndex, index) {
+  const perpAxes = [0, 1, 2].filter((axis) => axis !== axisIndex);
+  const delta = [
+    group.center[0] - layerCenter[0],
+    group.center[1] - layerCenter[1],
+    group.center[2] - layerCenter[2]
+  ];
+  delta[axisIndex] = 0;
+  const [pa, pb] = perpAxes;
+  if (Math.hypot(delta[pa], delta[pb]) <= EPSILON) {
+    // Coaxial: fan alternately along the two perpendicular axes.
+    const axis = perpAxes[index % 2];
+    const sign = (Math.floor(index / 2) % 2 === 0) ? 1 : -1;
+    const dir = [0, 0, 0];
+    dir[axis] = sign;
+    return dir;
   }
-  const settings = normalizeExplodedViewSettings(options);
-  const radialAxis = settings.axis === "radial";
-  const axisIndex = AXIS_INDEX[settings.axis] ?? 2;
-  const explodableRecords = (Array.isArray(records) ? records : []).filter(recordCanExplode);
-  if (explodableRecords.length < 2) {
-    return [];
-  }
+  const dominant = Math.abs(delta[pa]) >= Math.abs(delta[pb]) ? pa : pb;
+  const dir = [0, 0, 0];
+  dir[dominant] = delta[dominant] >= 0 ? 1 : -1;
+  return dir;
+}
 
-  const modelRadius = Math.max(boundsRadius(THREE, bounds), EPSILON);
-  const modelSpan = Math.max(boundsSize(bounds, axisIndex), EPSILON);
-  const baseGroups = groupRecords(THREE, explodableRecords, settings)
-    .filter((group) => group.records.length > 0 && group.bounds);
-  if (baseGroups.length < 2) {
-    return [];
-  }
-  if (radialAxis) {
-    return createRadialExplodedViewRecordStates(THREE, baseGroups, bounds, settings);
-  }
-
-  const groups = baseGroups
-    .sort((left, right) => {
-      const leftCenter = toNumber(left.center?.getComponent?.(axisIndex));
-      const rightCenter = toNumber(right.center?.getComponent?.(axisIndex));
-      if (Math.abs(leftCenter - rightCenter) > EPSILON) {
-        return leftCenter - rightCenter;
-      }
-      return left.recordIndex - right.recordIndex;
-    });
-  const maxGroupThickness = Math.max(
-    ...groups.map((group) => boundsSize(group.bounds, axisIndex)),
-    modelSpan * 0.08,
+function generateRadialSteps(groups, modelBounds, hints) {
+  const modelCenter = boundsCenterArray(modelBounds, [0, 0, 0]);
+  const axisVec = AXIS_VECTORS.z;
+  const modelRadiusXY = Math.max(
+    Math.hypot(boundsSize(modelBounds, 0), boundsSize(modelBounds, 1)) / 2,
     EPSILON
   );
-  const sortedThicknesses = groups
+  const modelRadius = Math.max(boundsRadius(modelBounds), EPSILON);
+  const baseDistance = Math.max(modelRadiusXY * 0.85 * hints.gapScale, modelRadius * 0.28);
+  const sign = hints.direction === "negative" ? -1 : 1;
+  const steps = [];
+  const sorted = [...groups].sort((left, right) => left.recordIndex - right.recordIndex);
+  sorted.forEach((group, index) => {
+    const distance = (baseDistance + group.radius * 0.6 * hints.gapScale) * sign;
+    if (Math.abs(distance) <= EPSILON) {
+      return;
+    }
+    steps.push({
+      id: `s${index + 1}`,
+      type: "radial",
+      targets: [group.key],
+      axis: axisVec,
+      center: modelCenter,
+      distance
+    });
+  });
+  return steps;
+}
+
+function generateAxialSteps(groups, modelBounds, axisIndex, hints) {
+  const modelSpan = Math.max(boundsSize(modelBounds, axisIndex), EPSILON);
+  const modelRadius = Math.max(boundsRadius(modelBounds), EPSILON);
+  const axisVec = AXIS_VECTORS[["x", "y", "z"][axisIndex]];
+  const sign = hints.direction === "negative" ? -1 : 1;
+
+  const thicknesses = groups
     .map((group) => boundsSize(group.bounds, axisIndex))
     .filter((value) => value > EPSILON)
     .sort((left, right) => left - right);
-  const medianGroupThickness = sortedThicknesses.length
-    ? sortedThicknesses[Math.floor(sortedThicknesses.length / 2)]
-    : maxGroupThickness;
-  const layerTolerance = Math.max(modelSpan * 0.025, maxGroupThickness * 0.18, EPSILON);
-  const spacing = Math.max(toNumber(settings.spacing, 1.45), 0.25);
-  const minimumGap = Math.max(modelSpan * 0.075, medianGroupThickness * 0.35, modelRadius * 0.035, EPSILON) * spacing;
-  const axisVector = createAxisVector(THREE, settings.axis, settings.direction);
+  const medianThickness = thicknesses.length
+    ? thicknesses[Math.floor(thicknesses.length / 2)]
+    : modelSpan * 0.1;
+  const tolerance = Math.max(modelSpan * 0.025, medianThickness * 0.18, EPSILON);
+  const minimumGap = Math.max(modelSpan * 0.075, medianThickness * 0.35, modelRadius * 0.035, EPSILON)
+    * hints.gapScale;
 
-  const layers = [];
-  for (const group of groups) {
-    const groupCenter = toNumber(group.center.getComponent(axisIndex));
-    const previousLayer = layers[layers.length - 1];
-    if (settings.mergeCoplanar === true && previousLayer && Math.abs(groupCenter - previousLayer.center) <= layerTolerance) {
-      previousLayer.groups.push(group);
-      previousLayer.bounds = mergeBounds([previousLayer.bounds, group.bounds]) || previousLayer.bounds;
-      previousLayer.center = (previousLayer.center * (previousLayer.groups.length - 1) + groupCenter) / previousLayer.groups.length;
-    } else {
-      layers.push({
-        center: groupCenter,
-        bounds: group.bounds,
-        groups: [group]
-      });
-    }
-  }
+  const layers = buildLayers(groups, axisIndex, tolerance);
 
-  const layerGap = (previousLayer, layer) => {
-    const previousThickness = previousLayer ? boundsSize(previousLayer.bounds, axisIndex) : medianGroupThickness;
-    const currentThickness = layer ? boundsSize(layer.bounds, axisIndex) : medianGroupThickness;
-    return Math.max(minimumGap, Math.min(previousThickness, currentThickness) * 0.22 * spacing);
-  };
-
-  let previousMax = null;
-  let previousLayer = null;
-  const states = [];
+  // Axial offset per layer: spread outward from the base with a real gap. Each
+  // successive layer moves at least `minimumGap` further than the previous one
+  // (so already-separated parts still visibly separate) and never overlaps the
+  // previous exploded extent (so thick parts get extra room).
+  const layerOffset = new Map();
+  let previousExplodedMax = null;
+  let previousOffset = 0;
   layers.forEach((layer, layerIndex) => {
     const layerMin = toNumber(layer.bounds.min[axisIndex]);
     const layerMax = toNumber(layer.bounds.max[axisIndex]);
-    let axisDistance = 0;
-    if (settings.keepBaseGrounded !== false && layerIndex === 0) {
-      axisDistance = 0;
-      previousMax = layerMax;
+    let offset = 0;
+    if (layerIndex === 0) {
+      offset = 0; // base layer stays put (grounds the explode)
     } else {
-      const targetMin = previousMax === null ? layerMin : previousMax + layerGap(previousLayer, layer);
-      axisDistance = Math.max(0, targetMin - layerMin);
-      previousMax = layerMax + axisDistance;
+      const clearance = previousExplodedMax + minimumGap - layerMin;
+      offset = Math.max(clearance, previousOffset + minimumGap);
     }
-    previousLayer = layer;
-
-    for (const group of layer.groups) {
-      const translation = axisVector.clone().multiplyScalar(axisDistance);
-      for (const record of group.records) {
-        states.push({
-          record,
-          partId: String(record.partId || "").trim(),
-          groupKey: group.key,
-          layerIndex,
-          direction: translation.lengthSq() > EPSILON ? translation.clone().normalize() : axisVector.clone(),
-          distance: translation.length(),
-          translation,
-          matrix: new THREE.Matrix4()
-        });
-      }
-    }
+    previousOffset = offset;
+    previousExplodedMax = layerMax + offset;
+    layerOffset.set(layer, offset);
   });
-  return states;
+
+  const steps = [];
+  let stepIndex = 0;
+  layers.forEach((layer) => {
+    const axialOffset = layerOffset.get(layer) * sign;
+    const layerCenter = boundsCenterArray(layer.bounds, [0, 0, 0]);
+    const multiGroup = layer.groups.length > 1;
+    layer.groups.forEach((group, groupIndexInLayer) => {
+      let displacement = scaleVec(axisVec, axialOffset);
+      if (multiGroup) {
+        // Coplanar groups: separate laterally so they don't stack into a column.
+        const lateralDir = lateralDirection(group, layerCenter, axisIndex, groupIndexInLayer);
+        const layerLateralRadius = Math.max(
+          boundsSize(layer.bounds, ([0, 1, 2].filter((a) => a !== axisIndex))[0]),
+          boundsSize(layer.bounds, ([0, 1, 2].filter((a) => a !== axisIndex))[1])
+        ) / 2;
+        const lateralDistance = (layerLateralRadius + group.radius * 0.75 + minimumGap) * hints.gapScale;
+        displacement = addVec(displacement, scaleVec(lateralDir, lateralDistance));
+      }
+      const distance = vecLength(displacement);
+      stepIndex += 1;
+      if (distance <= EPSILON) {
+        return;
+      }
+      steps.push({
+        id: `s${stepIndex}`,
+        type: "translate",
+        targets: [group.key],
+        axis: [displacement[0] / distance, displacement[1] / distance, displacement[2] / distance],
+        distance
+      });
+    });
+  });
+  return steps;
 }
 
-export function explodedViewStateTranslationAtProgress(THREE, state, progress = 0) {
-  if (!THREE?.Vector3) {
-    return null;
+// Generate a normalized explode document from records + bounds + hints.
+export function generateExplodedViewDocument(THREE, records = [], modelBounds = null, hints = {}, options = {}) {
+  const autoHints = normalizeExplodeAutoHints(hints);
+  const explodable = (Array.isArray(records) ? records : []).filter(recordCanExplode);
+  const base = {
+    enabled: options.enabled !== undefined ? options.enabled : true,
+    amount: options.amount,
+    order: options.order,
+    trails: options.trails,
+    auto: autoHints,
+    steps: []
+  };
+  if (explodable.length < 2) {
+    return normalizeExplodedViewDocument(base);
   }
-  const amount = clamp(toNumber(progress), 0, 1);
-  const targetTranslation = translationVector(
-    THREE,
-    state?.toTranslation,
-    translationVector(
-      THREE,
-      state?.translation,
-      new THREE.Vector3(0, 0, toNumber(state?.distance))
-    )
-  );
-  const fromTranslation = translationVector(THREE, state?.fromTranslation, null);
-  if (!fromTranslation && amount <= EPSILON) {
-    return null;
+  const groups = groupRecords(explodable, autoHints.depth).filter((group) => group.records.length && group.bounds);
+  if (groups.length < 2) {
+    return normalizeExplodedViewDocument(base);
   }
-  const x = fromTranslation
-    ? fromTranslation.x + (targetTranslation.x - fromTranslation.x) * amount
-    : targetTranslation.x * amount;
-  const y = fromTranslation
-    ? fromTranslation.y + (targetTranslation.y - fromTranslation.y) * amount
-    : targetTranslation.y * amount;
-  const z = fromTranslation
-    ? fromTranslation.z + (targetTranslation.z - fromTranslation.z) * amount
-    : targetTranslation.z * amount;
-  if (
-    fromTranslation &&
-    Math.abs(x) <= EPSILON &&
-    Math.abs(y) <= EPSILON &&
-    Math.abs(z) <= EPSILON
-  ) {
-    return null;
-  }
-  return new THREE.Vector3(x, y, z);
-}
 
-export function applyExplodedViewProgress(THREE, states = [], progress = 0) {
-  for (const state of Array.isArray(states) ? states : []) {
-    const record = state?.record;
-    if (!record) {
-      continue;
-    }
-    const translation = explodedViewStateTranslationAtProgress(THREE, state, progress);
-    if (!translation) {
-      record.explodedViewMatrix = null;
-      continue;
-    }
-    const matrix = state.matrix instanceof THREE.Matrix4 ? state.matrix : new THREE.Matrix4();
-    matrix.makeTranslation(translation.x, translation.y, translation.z);
-    state.matrix = matrix;
-    record.explodedViewMatrix = matrix;
+  let steps;
+  if (autoHints.mode === "radial") {
+    steps = generateRadialSteps(groups, modelBounds, autoHints);
+  } else {
+    const axisIndex = resolveExplodeAxisIndex(autoHints.mode, groups);
+    steps = generateAxialSteps(groups, modelBounds, axisIndex, autoHints);
   }
-}
 
-export function clearExplodedViewRecords(records = []) {
-  for (const record of Array.isArray(records) ? records : []) {
-    if (record) {
-      record.explodedViewMatrix = null;
-    }
-  }
-}
-
-export function explodedViewBoundsFromStates(THREE, states = [], fallbackBounds = null, progress = 1) {
-  if (!THREE?.Vector3) {
-    return fallbackBounds;
-  }
-  const amount = clamp(toNumber(progress), 0, 1);
-  const boundsList = (Array.isArray(states) ? states : [])
-    .map((state) => shiftedBounds(state?.record?.partBounds, state?.translation?.toArray?.() || [0, 0, 0], amount));
-  return mergeBounds(boundsList) || fallbackBounds;
-}
-
-export function easeExplodedViewProgress(value) {
-  const amount = clamp(toNumber(value), 0, 1);
-  return 1 - (1 - amount) ** 3;
+  return normalizeExplodedViewDocument({ ...base, steps });
 }
