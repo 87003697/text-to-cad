@@ -144,5 +144,19 @@ class PayloadUnreadableFallbackTests(unittest.TestCase):
             self.assertTrue((package_dir / cid_entry["glb"]).is_file())
 
 
+class SingleSerializationTests(unittest.TestCase):
+    def test_content_hash_and_bytes_match_split_helpers(self) -> None:
+        # A8: one serialization must yield exactly the bytes _shape_brep_bytes
+        # would and the hash _content_hash_shape would, so cids and worker
+        # payloads (hence emitted GLBs) are unchanged.
+        import build123d
+        from cadgen._internal import component_package as cp
+
+        shape = build123d.Box(11, 7, 3).moved(build123d.Location((4, 2, 1)))
+        combined_hash, combined_bytes = cp._content_hash_and_bytes(shape)
+        self.assertEqual(combined_bytes, cp._shape_brep_bytes(shape))
+        self.assertEqual(combined_hash, cp._content_hash_shape(shape))
+
+
 if __name__ == "__main__":
     unittest.main()

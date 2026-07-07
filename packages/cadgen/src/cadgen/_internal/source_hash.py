@@ -2,11 +2,13 @@ from __future__ import annotations
 
 import functools
 
+import ast
 import contextlib
 import hashlib
 import os
 import sys
 import sysconfig
+import time
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -65,6 +67,65 @@ def _sha256_file(path: Path) -> str:
         for chunk in iter(lambda: handle.read(1024 * 1024), b""):
             digest.update(chunk)
     return digest.hexdigest()
+
+
+# (path string) -> (st_mtime_ns, st_size, hash). The AST pass is ~200x the byte
+# pass (ast.parse + ast.dump dominate), and a warm freshness check recomputes it
+# for EVERY closure file — the parent gate plus one _generated_child_is_stale
+# per generated child, which re-hashes the shared helper modules each time. The
+# stat key makes each file parse once per actual content change instead of once
+# per check (the warm daemon and multi-child builds are the big winners, same as
+# A4). Two safety rules make a stale hit impossible rather than merely unlikely:
+# stat is taken BEFORE the read (a write racing the read leaves an entry keyed
+# by a stat the changed file no longer matches — a spurious recompute, never a
+# stale hash), and a file is only cached once its mtime has SETTLED (see
+# _SEMANTIC_HASH_SETTLE_NS): filesystem mtime clocks can be coarser than a
+# nanosecond, so a same-size rewrite landing in the same clock tick as the
+# cached stat would otherwise be invisible. Freshly-edited files therefore
+# re-hash for a couple of seconds — one file, exactly while it is being edited —
+# and the settled majority of the closure stays cached.
+_SEMANTIC_HASH_CACHE: dict[str, tuple[int, int, str]] = {}
+_SEMANTIC_HASH_SETTLE_NS = 2_000_000_000
+
+
+def _semantic_source_hash(path: Path) -> str:
+    """Content hash that ignores comments, blank lines, and formatting for
+    Python sources — so a comment/whitespace-only edit to a generator or a
+    shared helper does not invalidate the model's closure — while staying
+    sensitive to every semantic change (including docstrings). Non-``.py``
+    closure inputs (e.g. composed child STEP files) keep the byte hash.
+
+    Hashes the parsed AST dumped WITHOUT position attributes. A bytecode /
+    ``marshal`` digest would NOT be comment-insensitive: inserting a comment
+    line shifts ``co_firstlineno`` and the line table. ``ast.dump`` defaults to
+    ``include_attributes=False``, which omits line/column numbers while keeping
+    the full semantic structure. Falls back to the byte hash on an unreadable or
+    unparseable source (so a syntactically broken generator is never treated as
+    unchanged just because its AST could not be built). MemoryError /
+    RecursionError take the same fallback: the parser raises MemoryError on
+    pathological nesting, and ``ast.dump`` can exceed the recursion limit on a
+    deep-but-importable tree — a freshness gate must degrade to byte
+    sensitivity, not abort the build."""
+    if path.suffix != ".py":
+        return _sha256_file(path)
+    try:
+        stat = path.stat()
+    except OSError:
+        stat = None
+    key = str(path)
+    if stat is not None:
+        cached = _SEMANTIC_HASH_CACHE.get(key)
+        if cached is not None and cached[0] == stat.st_mtime_ns and cached[1] == stat.st_size:
+            return cached[2]
+    try:
+        dumped = ast.dump(ast.parse(path.read_bytes()))
+    except (OSError, SyntaxError, ValueError, MemoryError, RecursionError):
+        result = _sha256_file(path)
+    else:
+        result = "ast1:" + hashlib.sha256(dumped.encode("utf-8")).hexdigest()
+    if stat is not None and time.time_ns() - stat.st_mtime_ns > _SEMANTIC_HASH_SETTLE_NS:
+        _SEMANTIC_HASH_CACHE[key] = (stat.st_mtime_ns, stat.st_size, result)
+    return result
 
 
 @dataclass(frozen=True)
@@ -152,10 +213,19 @@ def _runtime_roots() -> tuple[Path, ...]:
     main_module = sys.modules.get("__main__")
     main_file = getattr(main_module, "__file__", None)
     if main_file:
+        # Only a real on-disk launcher is runtime. Interactive / stdin / ``-c``
+        # entry points set ``__file__`` to a placeholder like ``<stdin>`` or
+        # ``<string>``, whose ``resolve().parent`` is the CWD — adding that would
+        # wrongly mark the model folder (and its sibling helper modules) as
+        # runtime, drop them from the recorded closure, and silently disable
+        # staleness detection for stdin/`-c`-driven builds. ``is_file()`` rejects
+        # every ``<...>`` placeholder while still catching the CLI launcher.
         try:
-            roots.append(Path(main_file).resolve().parent)
+            resolved_main = Path(main_file).resolve()
         except OSError:
-            pass
+            resolved_main = None
+        if resolved_main is not None and resolved_main.is_file():
+            roots.append(resolved_main.parent)
     return tuple(roots)
 
 
@@ -167,10 +237,38 @@ def _excluded_roots() -> tuple[Path, ...]:
     return (*_interpreter_roots(), *_runtime_roots())
 
 
+@functools.lru_cache(maxsize=None)
 def is_first_party_source_file(path: Path) -> bool:
     """True for a ``.py`` file that counts as model-side code: not stdlib, not
-    site-packages, and not part of the running generation runtime."""
+    site-packages, and not part of the running generation runtime.
+
+    Memoized: a resolved path's classification is stable for the process (the
+    excluded roots are themselves cached and environment-derived), and the audit
+    hook calls this for every executed module body."""
     return path.suffix == ".py" and not any(_is_within(path, root) for root in _excluded_roots())
+
+
+# Cache the per-module resolve()+classify keyed by the RAW ``__file__`` string.
+# ``repo_local_loaded_modules`` runs over ALL of ``sys.modules`` (thousands of
+# entries once numpy/OCP/etc. are imported) on every evict AND every closure
+# capture; the ``Path(...).resolve()`` realpath is the dominant cost and its
+# result never changes for a given file, so one lookup per distinct file per
+# process replaces a realpath-storm per build (~0.2-0.7 s on a warm build).
+_MISSING = object()
+_MODULE_FILE_FIRST_PARTY: dict[str, Path | None] = {}
+
+
+def _first_party_path_for_module_file(file_name: str) -> Path | None:
+    cached = _MODULE_FILE_FIRST_PARTY.get(file_name, _MISSING)
+    if cached is not _MISSING:
+        return cached
+    try:
+        path = Path(file_name).resolve()
+    except OSError:
+        path = None
+    result = path if (path is not None and is_first_party_source_file(path)) else None
+    _MODULE_FILE_FIRST_PARTY[file_name] = result
+    return result
 
 
 def repo_local_loaded_modules(module_names: object) -> dict[str, Path]:
@@ -184,11 +282,8 @@ def repo_local_loaded_modules(module_names: object) -> dict[str, Path]:
         file_name = getattr(module, "__file__", None)
         if not file_name:
             continue
-        try:
-            path = Path(file_name).resolve()
-        except OSError:
-            continue
-        if is_first_party_source_file(path):
+        path = _first_party_path_for_module_file(file_name)
+        if path is not None:
             result[name] = path
     return result
 
@@ -287,7 +382,7 @@ def closure_for_files(script_path: Path, files: object, *, base: Path) -> Python
     pairs: list[tuple[str, str]] = []
     for path in paths:
         try:
-            file_hash = _sha256_file(path)
+            file_hash = _semantic_source_hash(path)
         except OSError:
             continue
         pairs.append((_relative_to_base(path, base_dir), file_hash))
@@ -328,12 +423,7 @@ def capture_runtime_closure(
     return closure_for_files(script_path, dependency_files, base=base)
 
 
-def closure_hash_from_files(relative_files: object, *, base: Path) -> str | None:
-    """Recompute a closure hash from a previously recorded ``base``-relative file list.
-
-    Returns ``None`` when any recorded file is missing, which callers treat as
-    "stale" (rebuild rather than risk reusing geometry built from absent
-    sources)."""
+def _recompute_closure_hash(relative_files: object, *, base: Path, hasher) -> str | None:
     base_dir = base.expanduser().resolve()
     pairs: list[tuple[str, str]] = []
     for relative in relative_files:
@@ -344,9 +434,37 @@ def closure_hash_from_files(relative_files: object, *, base: Path) -> str | None
         if resolved is None:
             return None
         try:
-            pairs.append((rel, _sha256_file(resolved)))
+            pairs.append((rel, hasher(resolved)))
         except OSError:
             return None
     if not pairs:
         return None
     return _closure_hash_for_pairs(pairs)
+
+
+def closure_hash_matches(recorded_hash: object, relative_files: object, *, base: Path) -> bool:
+    """Whether a recorded closure hash still matches the current sources.
+
+    Accepts EITHER the current semantic (AST) recompute OR the legacy byte
+    recompute: descriptors written before comment-insensitive hashing recorded a
+    byte-based digest, and must keep validating (no mass rebuild on upgrade)
+    until their next genuine rebuild re-records the semantic digest. A missing
+    file (either recompute returns ``None``) is not a match — the caller rebuilds.
+    """
+    recorded = str(recorded_hash or "").strip()
+    if not recorded:
+        return False
+    # Semantic pass first: with the stat memo it costs one stat per settled
+    # closure file on the no-edit steady state (every rebuild records semantic
+    # digests), whereas the byte pass re-reads every file's full contents each
+    # check. The byte pass runs only when the semantic recompute misses — i.e.
+    # for legacy (byte-recorded) descriptors, which pay one AST parse per file
+    # per process (memoized thereafter) until their next genuine rebuild
+    # re-records them. Order cannot affect the outcome: a semantic record's
+    # per-file ``ast1:`` hashes can never equal an all-byte recompute's hex
+    # digests.
+    for hasher in (_semantic_source_hash, _sha256_file):
+        current = _recompute_closure_hash(relative_files, base=base, hasher=hasher)
+        if current is not None and current == recorded:
+            return True
+    return False
