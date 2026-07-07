@@ -40,14 +40,15 @@ npm run dev -- --host 127.0.0.1
 ```
 
 Open the URL printed by Vite and add paths, for example
-`?dir=/path/to/root&file=assemblies/robot-arm/robot-arm.step`.
-Use `npm run agent:start -- --dir /path/to/root` for agent-driven review. It
-targets port `4178`: it reuses a compatible Viewer already running there
-(activating the requested `--dir`), starts one when the port is free, or exits
-with an error when the port is held by another process — it does not roll onto
-another port. Pass `--port <n>` to use a different fixed port. Local dev and
-production servers stay running unless `VIEWER_SERVER_LIFETIME_MS` is set or
-production `serve` is started with `--shutdown-after <duration>`.
+`?dir=/path/to/root&file=assemblies/robot-arm/robot-arm.step`. Use `npm run dev`
+for iterating on the client/backend (HMR), and `npm run start -- --dir
+/path/to/root` to serve the built `dist/` bundle via the Python backend (the
+production path the `cad-viewer` skill uses). `start` targets port `3245`: it
+starts when the port is free, or exits with a `--port <n>` hint when the port is
+in use — it does not reuse a running Viewer or roll onto another port. Pass
+`--port <n>` to use a different fixed port. Local dev and production servers stay
+running unless `VIEWER_SERVER_LIFETIME_MS` is set or production `serve` is
+started with `--shutdown-after <duration>`.
 
 The local filesystem backend accepts absolute or startup-directory-relative
 `?dir=` values directly in the Viewer URL. Once seen, the active directory is
@@ -96,10 +97,10 @@ snapshot, and export logic in the source packages.
 ## Common Commands
 
 ```bash
-npm run dev          # Vite dev server with local CAD API middleware
-npm run agent:start  # Launcher that reuses/starts a Viewer on port 4178 (or --port)
-npm run build        # Production frontend build
-npm run serve        # Serve dist/ with the local CAD API backend
+npm run dev          # Vite dev server (HMR) + local CAD API middleware — use for iteration
+npm run build        # Production frontend build (writes dist/)
+npm run start        # Prod launcher: serve the built dist/ + CAD API on 3245 (or --port)
+npm run serve        # Low-level raw Python backend (what `start` spawns)
 npm run test         # Discover and run all JS tests
 ```
 
@@ -115,9 +116,9 @@ node scripts/run-tests.mjs src/server/localAssetBackend.test.mjs
 
 Important environment variables:
 
-- `VIEWER_DEFAULT_DIR`: default local directory used by Vite dev mode.
-  `npm run agent:start -- --dir <path>` sets this automatically when it launches
-  Vite.
+- `VIEWER_DEFAULT_DIR`: default local directory used by Vite dev mode. The repo
+  dev preview (`scripts/dev/viewer-preview.sh`) sets it to `<repo>/models`; set
+  it yourself when running `npm run dev` directly if you want a default `?dir=`.
 - `VIEWER_DEFAULT_FILE`: active-directory-relative file opened when `?file=`
   is absent and a `?dir=` or stored active directory is available.
 - `VIEWER_SERVER_LIFETIME_MS`: optional server lifetime in milliseconds for

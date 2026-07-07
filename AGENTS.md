@@ -152,39 +152,48 @@ the development symlink layout afterward if you are continuing on `develop`.
 
 ## CAD Viewer
 
-When reviewing repo fixtures in CAD Viewer, point the Viewer at the repo
-`models/` directory with an absolute `?dir=` path; keep any permanent or
-generated CAD/robot-description files in `models/` so the viewer catalog and
-artifacts stay in one place.
+When reviewing repo fixtures, point the Viewer at the repo `models/` directory
+with an absolute `?dir=` path, and keep permanent or generated
+CAD/robot-description files in `models/` so the catalog and artifacts stay in one
+place. Every returned Viewer URL must include `?dir=<absolute-model-root>`
+(commonly `<repo>/models`), with `file=<path>` relative to `?dir=`. Do not rely
+on session-storage `?dir=` fallbacks, and do not stop another Viewer unless the
+user asks.
 
-Start or reuse the Viewer through the `cad-viewer` skill launcher and use the
-base URL it prints. The launcher targets port `4178`: it reuses a compatible
-Viewer already running there (activating the requested `--dir`) or starts one.
-If `4178` is held by another process it errors instead of rolling to a new port;
-rerun with `--port <n>` and use the URL it prints.
+### Dev by default, prod only for e2e
 
-Run from `skills/cad-viewer`:
+Iterate with the **dev** server — Vite serves the client from source with HMR, so
+your `viewer/`, `packages/cadjs`, and `packages/implicitjs` edits show up live:
 
 ```bash
-npm --prefix scripts/viewer run agent:start -- --host 127.0.0.1 --dir "<repo>/models"
+npm --prefix viewer run dev -- --host 127.0.0.1 --port <free-port>
+# then open http://127.0.0.1:<free-port>/?dir=<repo>/models&file=<path>
 ```
 
-`--dir <absolute-model-root>` is required (the launcher exits without it); it sets
-the served catalog root and the default `?dir=`.
+Use the **prod** path only for end-to-end tests against the shipped bundle, or
+when explicitly asked to test prod. It serves the built `dist/` via the Python
+backend (the `cad-viewer` skill's `start` command), so build first:
 
-When a thread is actively changing viewer code (`viewer/`, `packages/cadjs`, or
-`packages/implicitjs`), launch a dedicated Viewer on a fresh `--port` instead of
-reusing `4178`, so you review your in-progress edits rather than a stable or
-bundled Viewer.
+```bash
+npm --prefix viewer run build
+npm --prefix viewer run start -- --host 127.0.0.1 --dir "<repo>/models" --port <free-port>
+```
 
-Every returned Viewer URL must include `?dir=<absolute-model-root>`, commonly
-`<repo>/models`, and `file=<path>` values must be relative to `?dir=`. Do not
-rely on session-storage `?dir=` fallbacks, and do not stop an existing Viewer
-server unless the user asks.
+### One Viewer per worktree/branch
 
-Packaged Viewer runtime and handoff details belong in the `cad-viewer` skill
-instructions. Treat packaged Viewer checks as generated-output checks and use
-the master bundle wrapper unless you are debugging a lower-level script.
+A Viewer binds a single port, so give each worktree/branch its own instance on
+its own port — never assume `3245` is free or yours:
+
+- **Preferred:** start the `cad-viewer` preview from `.claude/launch.json` (it
+  runs the dev server with `autoPort`, so Claude assigns each worktree a free
+  port automatically). Use the port/URL it reports.
+- **Manual:** pass an explicit free `--port` to `dev`/`start` as above. `start`
+  defaults to `3245` and exits with a `--port <n>` hint if it is taken — pick a
+  new port rather than reusing another worktree's Viewer.
+
+Packaged Viewer runtime and handoff details live in the `cad-viewer` skill.
+Treat packaged Viewer checks as generated-output checks via the master bundle
+wrapper unless you are debugging a lower-level script.
 
 ## Git And LFS
 
