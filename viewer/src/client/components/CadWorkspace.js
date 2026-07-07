@@ -8363,6 +8363,7 @@ export default function CadWorkspace({
           displaySettings,
           updateDisplaySettings,
           clipBounds: selectedMeshData?.bounds || null,
+          explodeMeshData: selectedMeshData || null,
           showClip: true
         })
       : null

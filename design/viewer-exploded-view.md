@@ -380,6 +380,38 @@ Each phase is independently shippable; Phase 1+2 alone remove the main
 "wonky" complaints (serialized coplanar parts, sideways gear scatter,
 unscrubable explode, opaque spacing).
 
+## 4.5 Implementation status
+
+Shipped (backwards compatibility intentionally dropped — the old
+axis/spacing/depth/mergeCoplanar setting shape is gone):
+
+- **Layer 1 (model + evaluator).** `packages/cadjs/src/lib/viewer/
+  explodedViewSteps.js` — step document, compiler, progress evaluator
+  (`translate`/`rotate`/`radial`; simultaneous + sequential scheduling),
+  derived auto-frame bounds and trail segments. Unit-tested.
+- **Layer 2 (generator).** `packages/cadjs/src/lib/viewer/explodedView.js`
+  rewritten to emit an editable step document: principal-axis detection,
+  coplanar lateral separation, coaxial axial handling, occurrence-depth
+  grouping, outward sweep with real gaps. Unit-tested.
+- **Settings + snapshot.** `displaySettings.js` carries the step document
+  (deterministic for equality/persistence); `renderMeshScene.js` offline
+  path resolves authored-or-generated steps and honours the scrub amount;
+  snapshot job schema documented; runtime bundle regenerated.
+- **Layer 3 (viewer).** `CadViewer.js` compiles + evaluates the document
+  (toggle animates, amount scrubs and edits snap) and renders explode-line
+  trails. The Display-settings panel exposes the amount scrub slider, auto
+  axis/spacing/depth hints, sequence + explode-lines toggles, an
+  "Auto explode to steps" action that materializes editable steps, and a
+  per-step list (rename-free label, numeric distance/angle edit, reorder,
+  delete). Per-file persistence rides the existing display-settings slice.
+
+Deferred (single follow-up): the **drag gizmo** for direct manipulation
+(§4.3). Numeric per-step editing already provides precise authoring; the
+`TransformControls` drag affordance needs live-canvas integration
+(`useViewerRuntime` init, pick-list exclusion, pointer arbitration) that
+cannot be verified headlessly, so it is left as a contained next step — the
+integration points are recorded in the exploded-view integration map.
+
 ## 5. What this buys, concretely
 
 - The raptor2/starship/merlin1d/falcon_heavy `*_exploded.step.py` pattern

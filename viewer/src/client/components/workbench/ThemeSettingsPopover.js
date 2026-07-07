@@ -71,6 +71,7 @@ import {
   normalizeDisplaySettings,
   normalizeExplodedViewSettings
 } from "cadjs/lib/displaySettings";
+import { generateExplodedViewDocument } from "cadjs/lib/viewer/explodedView";
 import {
   DISPLAY_MODE_OPTIONS
 } from "../viewer/DisplayModeOptions";
@@ -1481,10 +1482,42 @@ function PositionPad({ value, onChange }) {
   );
 }
 
+// Pseudo display-records built from a mesh-data part list, sufficient for the
+// pure auto-explode generator (it only reads partId + partBounds).
+function explodePseudoRecords(meshData) {
+  const parts = Array.isArray(meshData?.parts) ? meshData.parts : [];
+  return parts
+    .filter((part) => part && (part.bounds || part.sourceBounds))
+    .map((part) => ({
+      partId: String(part.occurrenceId || part.id || "").trim(),
+      partBounds: part.bounds || part.sourceBounds,
+      mesh: true
+    }))
+    .filter((record) => record.partId);
+}
+
+function explodeTargetNameMap(meshData) {
+  const map = new Map();
+  for (const part of Array.isArray(meshData?.parts) ? meshData.parts : []) {
+    const id = String(part?.occurrenceId || part?.id || "").trim();
+    if (id) {
+      map.set(id, String(part?.name || part?.label || id).trim() || id);
+    }
+  }
+  return map;
+}
+
+function explodeStepLabel(step, nameMap) {
+  const names = (step.targets || []).map((target) => nameMap.get(target) || target);
+  const head = names[0] || "part";
+  return names.length > 1 ? `${head} +${names.length - 1}` : head;
+}
+
 export function DisplaySettingsSection({
   displaySettings,
   updateDisplaySettings,
   clipBounds = null,
+  explodeMeshData = null,
   showClip = false
 }) {
   const normalizedDisplaySettings = useMemo(
@@ -1538,6 +1571,42 @@ export function DisplaySettingsSection({
         })
       };
     });
+  };
+  const explodeNameMap = useMemo(() => explodeTargetNameMap(explodeMeshData), [explodeMeshData]);
+  const explodePartCount = useMemo(() => explodePseudoRecords(explodeMeshData).length, [explodeMeshData]);
+  const handleAutoExplode = () => {
+    const records = explodePseudoRecords(explodeMeshData);
+    const generated = generateExplodedViewDocument(
+      null,
+      records,
+      explodeMeshData?.bounds || null,
+      normalizedExplodedSettings.auto,
+      {
+        enabled: true,
+        amount: normalizedExplodedSettings.amount,
+        order: normalizedExplodedSettings.order,
+        trails: normalizedExplodedSettings.trails
+      }
+    );
+    setExploded({ enabled: true, steps: generated.steps });
+  };
+  const clearExplodeSteps = () => setExploded({ steps: [] });
+  const updateExplodeStep = (index, patch) => {
+    setExploded({
+      steps: normalizedExplodedSettings.steps.map((step, i) => (i === index ? { ...step, ...patch } : step))
+    });
+  };
+  const removeExplodeStep = (index) => {
+    setExploded({ steps: normalizedExplodedSettings.steps.filter((_, i) => i !== index) });
+  };
+  const moveExplodeStep = (index, delta) => {
+    const steps = [...normalizedExplodedSettings.steps];
+    const target = index + delta;
+    if (target < 0 || target >= steps.length) {
+      return;
+    }
+    [steps[index], steps[target]] = [steps[target], steps[index]];
+    setExploded({ steps });
   };
   const setEdges = (patch) => {
     updateDisplaySettings?.((current) => {
@@ -1700,11 +1769,73 @@ export function DisplaySettingsSection({
             </FileSheetSliderField>
 
             {normalizedExplodedSettings.steps.length ? (
-              <FileSheetControlRow>
-                <span className="text-[11px] text-muted-foreground">
-                  {normalizedExplodedSettings.steps.length} authored step{normalizedExplodedSettings.steps.length === 1 ? "" : "s"} — auto controls apply after clearing.
-                </span>
-              </FileSheetControlRow>
+              <>
+                <div className="flex flex-col gap-1 py-1">
+                  {normalizedExplodedSettings.steps.map((step, index) => {
+                    const isRotate = step.type === "rotate";
+                    const magnitude = isRotate ? step.angleDeg : step.distance;
+                    return (
+                      <div key={step.id || index} className="flex items-center gap-1.5 text-[11px]">
+                        <span className="w-4 shrink-0 text-right text-muted-foreground">{index + 1}</span>
+                        <span className="flex-1 truncate" title={explodeStepLabel(step, explodeNameMap)}>
+                          {explodeStepLabel(step, explodeNameMap)}
+                        </span>
+                        <span className="shrink-0 text-muted-foreground">{step.type[0].toUpperCase()}</span>
+                        <input
+                          type="number"
+                          className="h-6 w-16 rounded border border-input bg-transparent px-1 text-right text-[11px]"
+                          value={Number.isFinite(magnitude) ? magnitude : 0}
+                          step={isRotate ? 5 : 1}
+                          onChange={(event) => {
+                            const next = Number(event.target.value);
+                            if (!Number.isFinite(next)) {
+                              return;
+                            }
+                            updateExplodeStep(index, isRotate ? { angleDeg: next } : { distance: next });
+                          }}
+                          aria-label={`Step ${index + 1} ${isRotate ? "angle" : "distance"}`}
+                          title={isRotate ? "Angle (deg)" : "Distance (mm)"}
+                        />
+                        <button
+                          type="button"
+                          className="px-1 text-muted-foreground hover:text-foreground disabled:opacity-30"
+                          disabled={index === 0}
+                          onClick={() => moveExplodeStep(index, -1)}
+                          aria-label="Move step up"
+                          title="Move up"
+                        >↑</button>
+                        <button
+                          type="button"
+                          className="px-1 text-muted-foreground hover:text-foreground disabled:opacity-30"
+                          disabled={index === normalizedExplodedSettings.steps.length - 1}
+                          onClick={() => moveExplodeStep(index, 1)}
+                          aria-label="Move step down"
+                          title="Move down"
+                        >↓</button>
+                        <button
+                          type="button"
+                          className="px-1 text-muted-foreground hover:text-destructive"
+                          onClick={() => removeExplodeStep(index)}
+                          aria-label="Delete step"
+                          title="Delete step"
+                        >×</button>
+                      </div>
+                    );
+                  })}
+                </div>
+                <FileSheetControlRow>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    className={compactButtonClasses}
+                    onClick={clearExplodeSteps}
+                    title="Clear authored steps and return to auto-explode"
+                  >
+                    <span>Clear steps</span>
+                  </Button>
+                </FileSheetControlRow>
+              </>
             ) : (
               <>
                 <Field label="Auto axis">
@@ -1767,6 +1898,21 @@ export function DisplaySettingsSection({
                     aria-label="Explode depth"
                   />
                 </FileSheetSliderField>
+
+                {explodePartCount > 1 ? (
+                  <FileSheetControlRow>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      className={compactButtonClasses}
+                      onClick={handleAutoExplode}
+                      title="Generate editable explode steps from the current layout"
+                    >
+                      <span>Auto explode to steps</span>
+                    </Button>
+                  </FileSheetControlRow>
+                ) : null}
               </>
             )}
 
