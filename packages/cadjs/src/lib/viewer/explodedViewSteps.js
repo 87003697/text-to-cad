@@ -335,51 +335,51 @@ export function compileExplodedView(THREE, document, records = [], modelBounds =
     if (!targets.length) {
       return;
     }
-    // Group matching records per target so a sub-assembly target moves rigidly.
-    targets.forEach((targetEntry, targetIndex) => {
-      const matched = explodable.filter((record) => targetMatchesRecord(targetEntry.segs, record.partId));
-      if (!matched.length) {
-        return;
-      }
-      const groupBounds = mergeBounds(matched.map(recordBounds));
-      const groupCenter = boundsCenterArray(groupBounds, modelCenter);
-      let contribution = null;
-      if (step.type === "rotate") {
-        contribution = {
-          stepIndex,
-          kind: "rotate",
-          axis: step.axis,
-          origin: step.origin,
-          angleDeg: step.angleDeg
-        };
-      } else {
-        let direction;
-        let distance;
-        if (step.type === "radial") {
-          const center = toVectorArray(step.center, modelCenter);
-          direction = radialDirection(center, step.axis, groupCenter, targetIndex);
-          distance = step.distance;
-        } else {
-          direction = step.axis;
-          distance = step.distance;
+    // Assign each record to the single most-specific matching target within this
+    // step, so a record matched by both a sub-assembly and a descendant target
+    // is moved once (not once per matching target).
+    const recordsByTarget = new Map();
+    for (const record of explodable) {
+      let best = null;
+      for (const targetEntry of targets) {
+        if (targetMatchesRecord(targetEntry.segs, record.partId)
+          && (!best || targetEntry.segs.length > best.segs.length)) {
+          best = targetEntry;
         }
-        const translation = [direction[0] * distance, direction[1] * distance, direction[2] * distance];
+      }
+      if (!best) {
+        continue;
+      }
+      const bucket = recordsByTarget.get(best.target) || { targetEntry: best, records: [] };
+      bucket.records.push(record);
+      recordsByTarget.set(best.target, bucket);
+    }
+
+    // Sub-assembly targets move rigidly; radial resolves a per-group direction.
+    let targetIndex = 0;
+    for (const { targetEntry, records } of recordsByTarget.values()) {
+      const groupBounds = mergeBounds(records.map(recordBounds));
+      const groupCenter = boundsCenterArray(groupBounds, modelCenter);
+      let contribution;
+      if (step.type === "rotate") {
+        contribution = { stepIndex, kind: "rotate", axis: step.axis, origin: step.origin, angleDeg: step.angleDeg };
+      } else {
+        const direction = step.type === "radial"
+          ? radialDirection(toVectorArray(step.center, modelCenter), step.axis, groupCenter, targetIndex)
+          : step.axis;
+        const translation = [direction[0] * step.distance, direction[1] * step.distance, direction[2] * step.distance];
         contribution = { stepIndex, kind: "translate", translation };
         if (Math.hypot(translation[0], translation[1], translation[2]) > EPSILON) {
-          groups.push({
-            stepIndex,
-            key: `${step.id}:${targetEntry.target}`,
-            from: groupCenter,
-            translation
-          });
+          groups.push({ stepIndex, key: `${step.id}:${targetEntry.target}`, from: groupCenter, translation });
         }
       }
-      for (const record of matched) {
+      for (const record of records) {
         const list = contributionsByRecord.get(record) || [];
         list.push(contribution);
         contributionsByRecord.set(record, list);
       }
-    });
+      targetIndex += 1;
+    }
   });
 
   const entries = [];
@@ -421,6 +421,9 @@ function entryMatrix(THREE, entry, order, stepCount, progress) {
       contributionMatrix = rotationMatrix(THREE, contribution.axis, contribution.origin, angleRad);
     } else {
       const t = contribution.translation;
+      if (Math.hypot(t[0], t[1], t[2]) * stepProgress <= EPSILON) {
+        continue; // zero-magnitude move: leave the record cleared (null contract)
+      }
       contributionMatrix = new THREE.Matrix4().makeTranslation(
         t[0] * stepProgress,
         t[1] * stepProgress,

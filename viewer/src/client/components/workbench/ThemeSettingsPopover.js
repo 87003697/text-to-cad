@@ -1489,11 +1489,48 @@ function explodePseudoRecords(meshData) {
   return parts
     .filter((part) => part && (part.bounds || part.sourceBounds))
     .map((part) => ({
-      partId: String(part.occurrenceId || part.id || "").trim(),
+      // Match the display-record id precedence (id || occurrenceId) so generated
+      // step targets resolve against the runtime records.
+      partId: String(part.id || part.occurrenceId || "").trim(),
       partBounds: part.bounds || part.sourceBounds,
       mesh: true
     }))
     .filter((record) => record.partId);
+}
+
+// Numeric step magnitude editor with local text state so partial input
+// (empty, "-", "1.") is allowed while typing; commits a finite value on blur or
+// Enter and reverts to the last valid value otherwise.
+function ExplodeStepMagnitudeInput({ value, step, onCommit, ariaLabel, title }) {
+  const [text, setText] = useState(String(value));
+  useEffect(() => {
+    setText(String(value));
+  }, [value]);
+  const commit = () => {
+    const next = Number(text);
+    if (text.trim() !== "" && Number.isFinite(next)) {
+      onCommit(next);
+    } else {
+      setText(String(value));
+    }
+  };
+  return (
+    <input
+      type="number"
+      className="h-6 w-16 rounded border border-input bg-transparent px-1 text-right text-[11px]"
+      value={text}
+      step={step}
+      onChange={(event) => setText(event.target.value)}
+      onBlur={commit}
+      onKeyDown={(event) => {
+        if (event.key === "Enter") {
+          event.currentTarget.blur();
+        }
+      }}
+      aria-label={ariaLabel}
+      title={title}
+    />
+  );
 }
 
 function explodeTargetNameMap(meshData) {
@@ -1781,19 +1818,11 @@ export function DisplaySettingsSection({
                           {explodeStepLabel(step, explodeNameMap)}
                         </span>
                         <span className="shrink-0 text-muted-foreground">{step.type[0].toUpperCase()}</span>
-                        <input
-                          type="number"
-                          className="h-6 w-16 rounded border border-input bg-transparent px-1 text-right text-[11px]"
+                        <ExplodeStepMagnitudeInput
                           value={Number.isFinite(magnitude) ? magnitude : 0}
                           step={isRotate ? 5 : 1}
-                          onChange={(event) => {
-                            const next = Number(event.target.value);
-                            if (!Number.isFinite(next)) {
-                              return;
-                            }
-                            updateExplodeStep(index, isRotate ? { angleDeg: next } : { distance: next });
-                          }}
-                          aria-label={`Step ${index + 1} ${isRotate ? "angle" : "distance"}`}
+                          onCommit={(next) => updateExplodeStep(index, isRotate ? { angleDeg: next } : { distance: next })}
+                          ariaLabel={`Step ${index + 1} ${isRotate ? "angle" : "distance"}`}
                           title={isRotate ? "Angle (deg)" : "Distance (mm)"}
                         />
                         <button
