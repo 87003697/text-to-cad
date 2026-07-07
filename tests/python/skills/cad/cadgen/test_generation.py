@@ -733,9 +733,16 @@ class CadGenerationTests(unittest.TestCase):
         cad_generation.generate_dxf_targets([str(script_path)])
         self.assertEqual("gen_dxf\n", calls_path.read_text(encoding="utf-8"))
 
-        # A source edit invalidates the recorded closure -> rebuild.
+        # A comment-only edit does NOT change the semantic closure -> still skips.
         script_path.write_text(
             script_path.read_text(encoding="utf-8") + "\n# changed\n", encoding="utf-8"
+        )
+        cad_generation.generate_dxf_targets([str(script_path)])
+        self.assertEqual("gen_dxf\n", calls_path.read_text(encoding="utf-8"))
+
+        # A semantic source edit invalidates the recorded closure -> rebuild.
+        script_path.write_text(
+            script_path.read_text(encoding="utf-8") + "\n_EDIT_MARKER = 1\n", encoding="utf-8"
         )
         cad_generation.generate_dxf_targets([str(script_path)])
         self.assertEqual("gen_dxf\ngen_dxf\n", calls_path.read_text(encoding="utf-8"))
@@ -2148,7 +2155,11 @@ class CadGenerationTests(unittest.TestCase):
         self.assertTrue(cad_generation._generated_child_is_stale(spec, force=True))
 
         original = script.read_text(encoding="utf-8")
+        # A comment-only edit is semantically invisible -> NOT stale.
         script.write_text(original + "\n# tweak\n", encoding="utf-8")
+        self.assertFalse(cad_generation._generated_child_is_stale(spec, force=False))
+        # A semantic own-file edit IS detected.
+        script.write_text(original + "\n_EDIT_MARKER = 1\n", encoding="utf-8")
         self.assertTrue(cad_generation._generated_child_is_stale(spec, force=False))
         script.write_text(original, encoding="utf-8")
         self.assertFalse(cad_generation._generated_child_is_stale(spec, force=False))
