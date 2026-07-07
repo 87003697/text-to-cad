@@ -118,33 +118,29 @@ def _component_id(source_hash: str) -> str:
     return source_hash[:16]
 
 
-def _content_hash_shape(shape: Any) -> str:
-    """sha256 of a shape's BREP bytes in its *local* (unlocated) frame.
+def _content_hash_and_bytes(shape: Any) -> tuple[str, bytes]:
+    """The content hash AND the location-stripped BREP bytes it digests, from a
+    single serialization.
 
     Two occurrences of the same part share an underlying ``TShape`` (``.moved()``
     only swaps the location), so stripping the location and serializing yields an
     identical digest for every repeat — the content-addressing that dedups the
     components. Stable across builds/processes (unlike Python ``hash``).
 
-    Triangulation and normals are excluded from the serialization so the digest is
-    geometry-only: meshing a part attaches a triangulation to its shared ``TShape``,
-    and a triangulation-sensitive hash would change after the first component is
-    built, breaking the content-addressed cache on re-hash."""
-    import io
+    Triangulation and normals are excluded so the digest is geometry-only:
+    meshing a part attaches a triangulation to its shared ``TShape``, and a
+    triangulation-sensitive hash would change after the first component is built,
+    breaking the content-addressed cache on re-hash. The same bytes are the
+    worker-build payload, so returning both avoids serializing each missing
+    component's BREP twice (once to hash, once for the payload)."""
+    brep = _shape_brep_bytes(shape)
+    return hashlib.sha256(brep).hexdigest(), brep
 
-    from OCP.BinTools import BinTools, BinTools_FormatVersion
-    from OCP.TopLoc import TopLoc_Location
 
-    unlocated = shape.wrapped.Located(TopLoc_Location())
-    stream = io.BytesIO()
-    BinTools.Write_s(
-        unlocated,
-        stream,
-        False,  # theWithTriangles
-        False,  # theWithNormals
-        BinTools_FormatVersion.BinTools_FormatVersion_CURRENT,
-    )
-    return hashlib.sha256(stream.getvalue()).hexdigest()
+def _content_hash_shape(shape: Any) -> str:
+    """sha256 of a shape's location-stripped BREP bytes (see
+    :func:`_content_hash_and_bytes`)."""
+    return _content_hash_and_bytes(shape)[0]
 
 
 def _transform_from_location(location: Any) -> list[float]:
@@ -466,16 +462,22 @@ def build_package_from_compound(
     # occurrences that genuinely share a TShape (raw-OCCT composed assemblies,
     # ``Location``-composed placements).
     hash_memo: dict[Any, str] = {}
+    # The location-stripped BREP bytes per cid, captured from the single
+    # serialization that computed the content hash, so a missing component's
+    # worker payload reuses them instead of re-serializing the same shape.
+    brep_bytes_by_cid: dict[str, bytes] = {}
 
     def _add_leaf(node: Any, world_loc: Any, occ_id: str, name: str | None = None) -> dict[str, Any]:
         try:
             memo_key = node.wrapped.TShape()
             content_hash = hash_memo.get(memo_key)
             if content_hash is None:
-                content_hash = _content_hash_shape(node)
+                content_hash, brep = _content_hash_and_bytes(node)
                 hash_memo[memo_key] = content_hash
+                brep_bytes_by_cid.setdefault(_component_id(content_hash), brep)
         except TypeError:  # unhashable TShape wrapper: correctness over the micro-optimization
-            content_hash = _content_hash_shape(node)
+            content_hash, brep = _content_hash_and_bytes(node)
+            brep_bytes_by_cid.setdefault(_component_id(content_hash), brep)
         cid = _component_id(content_hash)
         shapes.setdefault(cid, node)
         components.setdefault(cid, {"glb": _component_ref(cid), "contentHash": content_hash})
@@ -586,7 +588,9 @@ def build_package_from_compound(
     # emit identical components; XCAF auto-labels no longer leak in).
     payloads = [
         (
-            _shape_brep_bytes(shape),
+            # Reuse the BREP bytes captured when this cid was content-hashed; only
+            # re-serialize in the (unexpected) event they were not retained.
+            brep_bytes_by_cid.get(cid) or _shape_brep_bytes(shape),
             cid,
             str(comp_dir / f"{cid}.glb"),
             linear_deflection,
