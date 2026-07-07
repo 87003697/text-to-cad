@@ -158,9 +158,10 @@ generated CAD/robot-description files in `models/` so the viewer catalog and
 artifacts stay in one place.
 
 Start or reuse the Viewer through the `cad-viewer` skill launcher and use the
-base URL it prints. The launcher owns port selection, reuses a compatible live
-Viewer for the same worktree/branch, and uses the source app in Vite dev mode
-when the skill viewer path is a development symlink.
+base URL it prints. The launcher targets port `4178`: it reuses a compatible
+Viewer already running there (activating the requested `--dir`) or starts one.
+If `4178` is held by another process it errors instead of rolling to a new port;
+rerun with `--port <n>` and use the URL it prints.
 
 Run from `skills/cad-viewer`:
 
@@ -171,10 +172,15 @@ npm --prefix scripts/viewer run agent:start -- --host 127.0.0.1 --dir "<repo>/mo
 `--dir <absolute-model-root>` is required (the launcher exits without it); it sets
 the served catalog root and the default `?dir=`.
 
+When a thread is actively changing viewer code (`viewer/`, `packages/cadjs`, or
+`packages/implicitjs`), launch a dedicated Viewer on a fresh `--port` instead of
+reusing `4178`, so you review your in-progress edits rather than a stable or
+bundled Viewer.
+
 Every returned Viewer URL must include `?dir=<absolute-model-root>`, commonly
 `<repo>/models`, and `file=<path>` values must be relative to `?dir=`. Do not
-manually choose or increment ports, do not rely on session-storage `?dir=`
-fallbacks, and do not stop an existing Viewer server unless the user asks.
+rely on session-storage `?dir=` fallbacks, and do not stop an existing Viewer
+server unless the user asks.
 
 Packaged Viewer runtime and handoff details belong in the `cad-viewer` skill
 instructions. Treat packaged Viewer checks as generated-output checks and use

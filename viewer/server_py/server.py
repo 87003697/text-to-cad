@@ -32,13 +32,11 @@ if __package__ in (None, ""):
     from server_py import server_info as server_info_mod
     from server_py import encoding as enc
     from server_py.content_types import content_type_for_static_asset
-    from server_py import registry as registry_mod
 else:
     from . import backend as backend_mod
     from . import server_info as server_info_mod
     from . import encoding as enc
     from .content_types import content_type_for_static_asset
-    from . import registry as registry_mod
 
 LOCAL_SERVER_FEATURES = ["dynamic-root", "relative-dir-query", "default-dir", "directory-activation"]
 _BAD_PERCENT_RE = re.compile(r"%(?![0-9A-Fa-f]{2})")
@@ -378,19 +376,11 @@ def main(argv=None):
     _Ctx.backend = backend_mod.LocalAssetBackend(directory_root=directory_root, root_dir=directory_root)
 
     httpd = ThreadingHTTPServer((args.host, _Ctx.port), Handler)
-    # Self-register so the launcher/skill can discover this server for reuse, and
-    # deregister on exit (matches viewerServerRegistry semantics).
-    info = _server_info("")
-    registry_mod.write_registry(info)
-    import atexit
-    atexit.register(lambda: registry_mod.remove_registry_entry(info))
     print(f"Python CAD Viewer backend listening on http://{args.host}:{_Ctx.port}/ (local-fs)")
     try:
         httpd.serve_forever()
     except KeyboardInterrupt:
         httpd.shutdown()
-    finally:
-        registry_mod.remove_registry_entry(info)
 
 
 if __name__ == "__main__":
