@@ -41,12 +41,11 @@ npm run dev -- --host 127.0.0.1
 
 Open the URL printed by Vite and add paths, for example
 `?dir=/path/to/root&file=assemblies/robot-arm/robot-arm.step`.
-Local tools should not assume a fixed port. Use
-`npm run agent:start -- --dir /path/to/root` for agent-driven review. It starts
-at port `4178`, reuses a compatible existing Viewer, skips viewers with a
-different launcher-provided `git` value or a different requested default
-`--dir`, and starts on the first free candidate port. Use Vite's standard
-`--port` argument only when a specific dev port is needed. Local dev and
+Use `npm run agent:start -- --dir /path/to/root` for agent-driven review. It
+targets port `4178`: it reuses a compatible Viewer already running there
+(activating the requested `--dir`), starts one when the port is free, or exits
+with an error when the port is held by another process — it does not roll onto
+another port. Pass `--port <n>` to use a different fixed port. Local dev and
 production servers stay running unless `VIEWER_SERVER_LIFETIME_MS` is set or
 production `serve` is started with `--shutdown-after <duration>`.
 
@@ -98,7 +97,7 @@ snapshot, and export logic in the source packages.
 
 ```bash
 npm run dev          # Vite dev server with local CAD API middleware
-npm run agent:start  # Launcher that chooses mode and reuses/selects a local port
+npm run agent:start  # Launcher that reuses/starts a Viewer on port 4178 (or --port)
 npm run build        # Production frontend build
 npm run serve        # Serve dist/ with the local CAD API backend
 npm run test         # Discover and run all JS tests
@@ -134,11 +133,6 @@ Important environment variables:
 - `VIEWER_CAD_PYTHON`: optional Python executable for local STEP/DXF artifact regeneration.
 - `VIEWER_CAD_PYTHONPATH` / `CAD_PYTHONPATH`: optional Python source path for
   the `cadgen` package.
-- `VIEWER_SERVER_REGISTRY`: optional local server registry JSON path.
-- `VIEWER_GIT`: optional launcher-provided git identity, exposed as `git` by
-  `/__cad/server` and used by `npm run agent:start` to avoid reusing viewers
-  from other git worktrees or branches. Ordinary users should not need to set it
-  manually.
 
 `VIEWER_LOCAL_ROOT_DIR` and `VIEWER_LOCAL_WORKSPACE_ROOT` are removed for local
 filesystem viewing. Setting either variable, or using the old fixed-root startup
