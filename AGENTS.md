@@ -87,8 +87,13 @@ flow, CI/CD-testing and resume options, and local/manual fallbacks.
 - `packages/cadjs` must stay reusable/non-React; app UI and workflow state
   belong in `viewer/`.
 - `packages/implicitjs` must stay reusable/non-React and independent of
-  `packages/cadjs`; CAD Viewer and snapshot tools should consume its shared
-  render/export APIs instead of duplicating implicit CAD logic.
+  `packages/cadjs` (`implicitjs` must never import `cadjs`). The dependency
+  flows one way: `cadjs` depends on `implicitjs` and re-exports its shared
+  render/export APIs under `cadjs/implicit/*`, so consumers (CAD Viewer,
+  snapshot tools) install and import `cadjs` alone rather than depending on
+  `implicitjs` directly or duplicating implicit CAD logic. Shared primitives
+  that both packages need live in `implicitjs` as the single source of truth
+  and are re-exported from `cadjs` (e.g. `cadjs/common/camera.js`).
 - `packages/cadgen` owns reusable Python artifact generation; skills should use
   bundled package code, not sibling skill imports.
 - Create lightweight shared Python packages under `packages/` when a helper
