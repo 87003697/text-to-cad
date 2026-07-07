@@ -1,4 +1,53 @@
-# Edit-path performance notes (deferred work)
+# Edit-path performance notes
+
+## Status (executed 2026-07-07 on `claude/cadgen-edit-path-perf`)
+
+- **A2 comment-insensitive closure hashing — DONE** (`f7e8de7b`): AST-based
+  closure hashes; comment/whitespace edits now warm-skip, migration-safe.
+- **A3 stdin closure footgun — DONE** (`f7e8de7b`): `<stdin>`/`-c` `__main__`
+  no longer marks the CWD a runtime root; staleness detection restored for
+  stdin-driven builds.
+- **A4 module classification cache — DONE** (`fb0e1834`): per-`__file__`
+  first-party resolve cached across builds (helps the warm daemon most).
+- **A8 single BREP serialization — DONE** (`37876fe5`): each component's BREP
+  serialized once for hash + worker payload.
+- **Review follow-up (adversarial audit of the above)**: `_semantic_source_hash`
+  is stat-memoized (`(mtime_ns, size)` key, 2 s settle window) — the AST pass is
+  ~200x the byte pass and ran for every closure file on every warm check
+  (~0.9 s/check on a tom-scale closure once descriptors record semantic
+  digests, with shared helpers re-parsed once per generated child); now each
+  file parses once per content change per process. Parser `MemoryError` /
+  `ast.dump` `RecursionError` on pathological-but-importable sources fall back
+  to the byte hash instead of aborting the freshness gate. `closure_hash_matches`
+  tries the byte recompute first so legacy descriptors skip the AST pass.
+  `brep_bytes_by_cid` retains bytes only for components that need a worker
+  payload (a warm rebuild no longer holds the whole assembly's BREPs in memory).
+  `closure_hash_from_files` (orphaned by the `closure_hash_matches` refactor)
+  deleted. The false-hit audit (44 adversarial vectors: type comments, literal
+  spellings, encodings, string prefixes, parenthesization, line-number-dependent
+  code) found no AST-hash collision that changes runtime behavior.
+- **A5 reuse adaptive resolution — DROPPED**: no cheap "geometry unchanged
+  despite a rebuild" gate exists (it needs early cid computation, which costs
+  the serialization it would save and penalizes the common cold build); the
+  residual case is narrow now that comment edits skip entirely (A2).
+- **A6 tom `compound_from_instances` — NO WIN (invalid premise)**: tom already
+  composes via `robot_common.link_assembly.compound_from_instances` (OCCT
+  locations, no `.moved()` deepcopy). A cProfile of tom's `gen_step` shows the
+  compose cost is `BRepBndLib.AddOptimal_s` (~0.59 s), `BRepGProp.Surface`
+  Properties (~0.36 s), vendor-STEP `BinTools.Read_s` (~0.35 s), and child-STEP
+  hashing (~0.29 s) — build123d/model internals of tom's specific composition,
+  not instancing-addressable and out of scope for pipeline work.
+- **A1 warm-daemon default-on — NOT FLIPPED (policy)**: kept opt-in
+  (`CADGEN_WARM=1`). Flipping the global CLI default off→on has broad blast
+  radius (CI jobs would spawn+idle a daemon, sandboxes without socket bind fall
+  back inline but noisily) and is an ergonomics decision, not a pipeline fix.
+  Recommendation for agent sessions: export `CADGEN_WARM=1` in the shell/skill
+  launcher rather than change the code default.
+- **A7 geometry-identical fast path — DROPPED**: subsumed by A2.
+
+---
+
+# Original notes (deferred work, pre-execution)
 
 Recorded 2026-07-06 after the round-3 pipeline work (`36c60638..13746038`).
 Baselines measured on this branch: a comment edit in a closure file rebuilds

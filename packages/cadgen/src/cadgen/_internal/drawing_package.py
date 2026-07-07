@@ -26,7 +26,7 @@ from pathlib import Path
 from cadgen._internal.file_metadata import text_to_cad_identity_metadata, write_dxf_text_to_cad_metadata
 from cadgen._internal.source_hash import (
     PythonSourceClosure,
-    closure_hash_from_files,
+    closure_hash_matches,
     python_source_hash,
 )
 from cadgen.catalog import render_package_dir
@@ -202,5 +202,4 @@ def drawing_package_current(script_path: Path) -> bool:
     closure_files = descriptor.get("sourceClosureFiles")
     if not closure_hash or not isinstance(closure_files, list) or not closure_files:
         return False
-    recomputed = closure_hash_from_files(closure_files, base=resolved_script.parent)
-    return recomputed is not None and recomputed == closure_hash
+    return closure_hash_matches(closure_hash, closure_files, base=resolved_script.parent)
