@@ -8,8 +8,11 @@ out to cadgen.
 
 from __future__ import annotations
 
+import hashlib
+import json
 import os
 import re
+import shutil
 from urllib.parse import urlsplit, parse_qs, unquote
 
 IMPLICIT_EXPORT_FORMATS = ("glb", "stl", "3mf")
@@ -29,6 +32,21 @@ from .save_dialog import pick_save_destination
 from .urls import local_asset_url_for_path
 
 _STEP_EXPORT_FORMAT_SUFFIX = {"step": "step", "stl": "stl", "3mf": "3mf", "glb": "glb"}
+
+# Git LFS pointer files are ~130 bytes of text starting with this line; serving
+# one to an external CAD app hands it unparseable bytes.
+_GIT_LFS_POINTER_PREFIX = b"version https://git-lfs.github.com/spec/v1"
+
+_STEP_EXPORT_CACHE_DIRNAME = "exports"
+
+
+def is_git_lfs_pointer(file_path: str) -> bool:
+    try:
+        with open(file_path, "rb") as handle:
+            head = handle.read(512)
+    except OSError:
+        return False
+    return head.startswith(_GIT_LFS_POINTER_PREFIX)
 
 
 def _to_posix(value: str) -> str:
@@ -501,6 +519,97 @@ class LocalAssetBackend:
         output_file_ref = _to_posix(os.path.relpath(output_path, resolved_root["rootPath"]))
         return {"ok": True, "fallback": True, "path": output_path, "filename": os.path.basename(output_path),
                 "format": format_name, "catalogChanged": True, "outputFileRef": output_file_ref}
+
+    # POST /__cad/open-in — ensure a real .step exists on disk for the entry:
+    # imported entries resolve to their own file; generated entries export into a
+    # content-hash-keyed cache under the (gitignored) render package dir so
+    # repeated opens skip the tens-of-seconds gen_step re-run.
+    def materialize_step_output(self, file_ref, resolved_root):
+        resolved = self.resolve_step_source(file_ref, resolved_root)
+        step_path = resolved["stepPath"]
+        source_path = resolved["sourcePath"]
+        if not (step_path == resolved_root["rootPath"] or scanner.path_is_inside(step_path, resolved_root["rootPath"])):
+            raise ValueError("Requested file is outside the active CAD Viewer root")
+        if not source_path:
+            if not os.path.isfile(step_path):
+                raise ValueError(f"STEP file not found: {step_path}")
+            if is_git_lfs_pointer(step_path):
+                raise ValueError(
+                    f"{os.path.basename(step_path)} is an unhydrated Git LFS pointer. "
+                    f"Run `git lfs checkout {_to_posix(step_path)}` and retry."
+                )
+            return {"path": step_path, "materialized": False}
+        package_dir = scanner.render_package_dir(source_path)
+        cache_key = self._step_export_cache_key(source_path, package_dir)
+        exports_dir = os.path.join(package_dir, _STEP_EXPORT_CACHE_DIRNAME)
+        cache_path = os.path.join(exports_dir, cache_key, os.path.basename(step_path))
+        if os.path.isfile(cache_path):
+            return {"path": cache_path, "materialized": False, "cached": True}
+        ctx = self._scan_context(resolved_root)
+        args = ["--repo-root", ctx["scanRepoRoot"], "--step", step_path, "--format", "step",
+                "--out", cache_path, "--source-path", source_path]
+        os.makedirs(os.path.dirname(cache_path), exist_ok=True)
+        result = cadgen_bridge.run_cadgen("cadgen.step_export_target", args, ctx["scanRepoRoot"])
+        if not result.get("ok") or not os.path.isfile(cache_path):
+            raise ValueError(str(result.get("error") or "STEP export failed"))
+        self._prune_step_export_cache(exports_dir, cache_key)
+        return {"path": cache_path, "materialized": True}
+
+    def _step_export_cache_key(self, source_path, package_dir):
+        """Content hash over the generator's source closure (the descriptor's
+        sourceClosureFiles when present, else just the source file). Any hash
+        works as a cache key as long as reads and writes agree — this does not
+        have to match cadgen's own closure hash."""
+        closure = []
+        try:
+            with open(os.path.join(package_dir, "assembly.json"), "r", encoding="utf-8") as handle:
+                descriptor = json.load(handle)
+            if isinstance(descriptor, dict) and isinstance(descriptor.get("sourceClosureFiles"), list):
+                closure = [str(rel or "") for rel in descriptor["sourceClosureFiles"] if str(rel or "")]
+        except (OSError, ValueError):
+            closure = []
+        model_folder = os.path.dirname(os.path.abspath(source_path))
+        paths = sorted({os.path.abspath(os.path.join(model_folder, rel)) for rel in closure})
+        if not paths:
+            paths = [os.path.abspath(source_path)]
+        hasher = hashlib.sha256()
+        for path in paths:
+            hasher.update(_to_posix(os.path.relpath(path, model_folder)).encode("utf-8"))
+            hasher.update(b"\0")
+            hasher.update((scanner._sha256_file(path) or "").encode("utf-8"))
+            hasher.update(b"\0")
+        return hasher.hexdigest()[:32]
+
+    def _prune_step_export_cache(self, exports_dir, keep_key):
+        try:
+            entries = os.listdir(exports_dir)
+        except OSError:
+            return
+        for name in entries:
+            if name == keep_key:
+                continue
+            stale = os.path.join(exports_dir, name)
+            if os.path.isdir(stale):
+                shutil.rmtree(stale, ignore_errors=True)
+
+    # POST /__cad/reveal — the on-disk path the OS file manager should select for
+    # an entry asset, confined to the active root like every asset route.
+    def reveal_target_path(self, file_ref, asset, resolved_root):
+        normalized = normalized_file_ref(file_ref)
+        if not normalized:
+            raise ValueError("Missing file")
+        candidate = self.file_path_from_ref(normalized, resolved_root)
+        if not (candidate == resolved_root["rootPath"] or scanner.path_is_inside(candidate, resolved_root["rootPath"])):
+            raise ForbiddenAssetError("Forbidden")
+        if str(asset or "output").strip().lower() == "source":
+            try:
+                resolved = self.resolve_step_source(file_ref, resolved_root)
+                candidate = resolved["sourcePath"] or resolved["stepPath"]
+            except ValueError:
+                pass
+        if not os.path.exists(candidate):
+            raise ValueError(f"Output file not found: {os.path.basename(candidate)}")
+        return candidate
 
     def file_path_from_ref(self, file_ref: str, resolved_root: dict) -> str:
         normalized = normalized_file_ref(file_ref)

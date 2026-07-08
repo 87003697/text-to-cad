@@ -102,9 +102,11 @@ function FileEntryButton({
   canCopyFileAssetLinks = false,
   canCopyFileAssetPaths = false,
   fileAccessBusyKey = "",
+  openInTargets = [],
   onDownloadFileAsset,
   onExportImplicitFile,
   onExportStepFile,
+  onOpenInApp,
   onRevealFileAsset,
   onRevealInExplorerView,
   onCopyFileAssetReference,
@@ -184,9 +186,11 @@ function FileEntryButton({
       canCopyFileAssetLinks={canCopyFileAssetLinks}
       canCopyFileAssetPaths={canCopyFileAssetPaths}
       busyKey={fileAccessBusyKey}
+      openInTargets={openInTargets}
       onDownloadFileAsset={onDownloadFileAsset}
       onExportImplicitFile={onExportImplicitFile}
       onExportStepFile={onExportStepFile}
+      onOpenInApp={onOpenInApp}
       onRevealFileAsset={onRevealFileAsset}
       onRevealInExplorerView={onRevealInExplorerView}
       onCopyFileAssetReference={onCopyFileAssetReference}
@@ -216,9 +220,11 @@ function DirectoryNode({
   canCopyFileAssetLinks = false,
   canCopyFileAssetPaths = false,
   fileAccessBusyKey = "",
+  openInTargets = [],
   onDownloadFileAsset,
   onExportImplicitFile,
   onExportStepFile,
+  onOpenInApp,
   onRevealFileAsset,
   onRevealInExplorerView,
   onCopyFileAssetReference,
@@ -285,9 +291,11 @@ function DirectoryNode({
                     canCopyFileAssetLinks={canCopyFileAssetLinks}
                     canCopyFileAssetPaths={canCopyFileAssetPaths}
                     fileAccessBusyKey={fileAccessBusyKey}
+                    openInTargets={openInTargets}
                     onDownloadFileAsset={onDownloadFileAsset}
                     onExportImplicitFile={onExportImplicitFile}
                     onExportStepFile={onExportStepFile}
+                    onOpenInApp={onOpenInApp}
                     onRevealFileAsset={onRevealFileAsset}
                     onRevealInExplorerView={onRevealInExplorerView}
                     onCopyFileAssetReference={onCopyFileAssetReference}
@@ -314,9 +322,11 @@ function DirectoryNode({
                     canCopyFileAssetLinks={canCopyFileAssetLinks}
                     canCopyFileAssetPaths={canCopyFileAssetPaths}
                     fileAccessBusyKey={fileAccessBusyKey}
+                    openInTargets={openInTargets}
                     onDownloadFileAsset={onDownloadFileAsset}
                     onExportImplicitFile={onExportImplicitFile}
                     onExportStepFile={onExportStepFile}
+                    onOpenInApp={onOpenInApp}
                     onRevealFileAsset={onRevealFileAsset}
                     onRevealInExplorerView={onRevealInExplorerView}
                     onCopyFileAssetReference={onCopyFileAssetReference}
@@ -477,9 +487,11 @@ function FileViewerContents({
   canCopyFileAssetLinks = false,
   canCopyFileAssetPaths = false,
   fileAccessBusyKey = "",
+  openInTargets = [],
   onDownloadFileAsset,
   onExportImplicitFile,
   onExportStepFile,
+  onOpenInApp,
   onRevealFileAsset,
   onRevealInExplorerView,
   onCopyFileAssetReference,
@@ -546,9 +558,11 @@ function FileViewerContents({
                           canCopyFileAssetLinks={canCopyFileAssetLinks}
                           canCopyFileAssetPaths={canCopyFileAssetPaths}
                           fileAccessBusyKey={fileAccessBusyKey}
+                          openInTargets={openInTargets}
                           onDownloadFileAsset={onDownloadFileAsset}
                           onExportImplicitFile={onExportImplicitFile}
                           onExportStepFile={onExportStepFile}
+                          onOpenInApp={onOpenInApp}
                           onRevealFileAsset={onRevealFileAsset}
                           onRevealInExplorerView={onRevealInExplorerView}
                           onCopyFileAssetReference={onCopyFileAssetReference}
@@ -574,9 +588,11 @@ function FileViewerContents({
                           canCopyFileAssetLinks={canCopyFileAssetLinks}
                           canCopyFileAssetPaths={canCopyFileAssetPaths}
                           fileAccessBusyKey={fileAccessBusyKey}
+                          openInTargets={openInTargets}
                           onDownloadFileAsset={onDownloadFileAsset}
                           onExportImplicitFile={onExportImplicitFile}
                           onExportStepFile={onExportStepFile}
+                          onOpenInApp={onOpenInApp}
                           onRevealFileAsset={onRevealFileAsset}
                           onRevealInExplorerView={onRevealInExplorerView}
                           onCopyFileAssetReference={onCopyFileAssetReference}
@@ -626,9 +642,11 @@ export default function FileViewerSidebar({
   canCopyFileAssetLinks = false,
   canCopyFileAssetPaths = false,
   fileAccessBusyKey = "",
+  openInTargets = [],
   onDownloadFileAsset,
   onExportImplicitFile,
   onExportStepFile,
+  onOpenInApp,
   onRevealFileAsset,
   onRevealInExplorerView,
   onCopyFileAssetReference,
@@ -670,9 +688,11 @@ export default function FileViewerSidebar({
       canCopyFileAssetLinks={canCopyFileAssetLinks}
       canCopyFileAssetPaths={canCopyFileAssetPaths}
       fileAccessBusyKey={fileAccessBusyKey}
+      openInTargets={openInTargets}
       onDownloadFileAsset={onDownloadFileAsset}
       onExportImplicitFile={onExportImplicitFile}
       onExportStepFile={onExportStepFile}
+      onOpenInApp={onOpenInApp}
       onRevealFileAsset={onRevealFileAsset}
       onRevealInExplorerView={onRevealInExplorerView}
       onCopyFileAssetReference={onCopyFileAssetReference}

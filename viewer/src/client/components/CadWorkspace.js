@@ -309,6 +309,11 @@ import {
   requestStepExport,
   stepExportFormatLabel
 } from "@/workbench/stepExport";
+import {
+  fetchOpenInTargets,
+  openInBusyKey,
+  requestOpenInApp
+} from "@/workbench/openInApps";
 
 const DEFAULT_DOCUMENT_TITLE = "CAD Viewer";
 // Single user-facing label for "the viewer is (re)generating the render artifacts a STEP model
@@ -1159,6 +1164,7 @@ export default function CadWorkspace({
   const [stepUpdateInProgress, setStepUpdateInProgress] = useState(false);
   const [screenshotStatus, setScreenshotStatus] = useState("");
   const [fileAccessBusyKey, setFileAccessBusyKey] = useState("");
+  const [openInTargets, setOpenInTargets] = useState([]);
   const [persistenceStatus, setPersistenceStatus] = useState("");
   const [motionErrorStatus, setMotionErrorStatus] = useState("");
   const [moveit2ServerLive, setMoveIt2ServerLive] = useState(false);
@@ -1705,6 +1711,30 @@ export default function CadWorkspace({
       }
     });
   }, [directoryAutoEnterDir]);
+
+  useEffect(() => {
+    // Local backend only: which desktop CAD apps can /__cad/open-in launch.
+    // Older servers without the route yield [] (menu section stays hidden).
+    if (typeof window === "undefined" || !fileRevealAvailable) {
+      setOpenInTargets([]);
+      return undefined;
+    }
+    const controller = new AbortController();
+    let active = true;
+    fetchOpenInTargets({ signal: controller.signal }).then((targets) => {
+      if (active) {
+        setOpenInTargets(targets);
+      }
+    }).catch(() => {
+      if (active) {
+        setOpenInTargets([]);
+      }
+    });
+    return () => {
+      active = false;
+      controller.abort();
+    };
+  }, [fileRevealAvailable]);
 
   useEffect(() => {
     let active = true;
@@ -8161,6 +8191,30 @@ export default function CadWorkspace({
     }
   }, []);
 
+  const handleOpenInApp = useCallback(async (entry, target) => {
+    const fileRef = entry ? fileKey(entry) : "";
+    const appId = String(target?.id || "").trim();
+    const appName = String(target?.name || "").trim() || appId;
+    if (!fileRef || !appId || typeof window === "undefined") {
+      return;
+    }
+    const busyKey = openInBusyKey(fileRef, appId);
+    setCopyStatus("");
+    setScreenshotStatus("");
+    setFileAccessBusyKey(busyKey);
+    try {
+      // Generated models may need a STEP export first (seconds to ~30s+).
+      setCopyStatus(`Opening in ${appName}...`);
+      const payload = await requestOpenInApp({ file: fileRef, app: appId });
+      const filename = String(payload?.filename || "").trim();
+      setCopyStatus(filename ? `Opened ${filename} in ${appName}` : `Opened in ${appName}`);
+    } catch (error) {
+      setCopyStatus(error instanceof Error ? error.message : `Failed to open in ${appName}`);
+    } finally {
+      setFileAccessBusyKey((current) => (current === busyKey ? "" : current));
+    }
+  }, []);
+
   const handleDrawingStrokesChange = useCallback((nextStrokes) => {
     const normalized = cloneDrawingStrokes(nextStrokes);
     const current = drawingStrokesRef.current;
@@ -8585,9 +8639,11 @@ export default function CadWorkspace({
           canCopyFileAssetLinks={fileLinkCopyAvailable}
           canCopyFileAssetPaths={filePathCopyAvailable}
           fileAccessBusyKey={fileAccessBusyKey}
+          openInTargets={openInTargets}
           onDownloadFileAsset={handleDownloadFileAsset}
           onExportImplicitFile={handleExportImplicitFile}
           onExportStepFile={handleExportStepFile}
+          onOpenInApp={handleOpenInApp}
           onRevealFileAsset={handleRevealFileAsset}
           onRevealInExplorerView={handleRevealEntryInExplorerView}
           onCopyFileAssetReference={handleCopyFileAssetReference}
@@ -8625,9 +8681,11 @@ export default function CadWorkspace({
               canCopyFileAssetLinks={fileLinkCopyAvailable}
               canCopyFileAssetPaths={filePathCopyAvailable}
               fileAccessBusyKey={fileAccessBusyKey}
+              openInTargets={openInTargets}
               onDownloadFileAsset={handleDownloadFileAsset}
               onExportImplicitFile={handleExportImplicitFile}
               onExportStepFile={handleExportStepFile}
+              onOpenInApp={handleOpenInApp}
               onRevealFileAsset={handleRevealFileAsset}
               onRevealInExplorerView={handleRevealEntryInExplorerView}
               onCopyFileAssetReference={handleCopyFileAssetReference}

@@ -2,10 +2,13 @@
 
 Serves the /__cad/* contract the unchanged client consumes. Implemented routes
 (parity-verified core): GET /__cad/server, GET /__cad/catalog, GET /__cad/asset,
-GET /__cad/download, POST /__cad/implicit-export
-(client-side-export write contract). Static dist/SPA, legacy Referer assets,
-/__cad/artifact, and /__cad/step-export are TODO (cadgen-integration + serving
-phases).
+GET /__cad/download, GET /__cad/integrations, POST /__cad/artifact,
+POST /__cad/step-export, POST /__cad/implicit-export, POST /__cad/open-in,
+POST /__cad/reveal, plus static dist/SPA and legacy Referer assets.
+
+POST /__cad/open-in and /__cad/reveal touch the local machine (launch a CAD app /
+select a file in the OS file manager), so they additionally require loopback
+Host and Origin headers (see _local_action_forbidden).
 
 Run: python -m server_py.server --dir <abs-models-root> [--port N] [--host H]
 
@@ -29,16 +32,19 @@ from urllib.parse import urlsplit, parse_qs, unquote
 if __package__ in (None, ""):
     sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
     from server_py import backend as backend_mod
+    from server_py import integrations as integrations_mod
     from server_py import server_info as server_info_mod
     from server_py import encoding as enc
     from server_py.content_types import content_type_for_static_asset
 else:
     from . import backend as backend_mod
+    from . import integrations as integrations_mod
     from . import server_info as server_info_mod
     from . import encoding as enc
     from .content_types import content_type_for_static_asset
 
-LOCAL_SERVER_FEATURES = ["dynamic-root", "relative-dir-query", "default-dir"]
+LOCAL_SERVER_FEATURES = ["dynamic-root", "relative-dir-query", "default-dir", "open-in-integrations"]
+_LOOPBACK_HOSTNAMES = frozenset(["localhost", "127.0.0.1", "::1"])
 _BAD_PERCENT_RE = re.compile(r"%(?![0-9A-Fa-f]{2})")
 
 
@@ -47,6 +53,26 @@ def _strict_decode_uri_component(value: str) -> str:
     if _BAD_PERCENT_RE.search(value):
         raise ValueError("URI malformed")
     return unquote(value)
+
+
+def _allowed_local_hostnames() -> frozenset:
+    extra = {
+        token.strip().lower()
+        for token in str(os.environ.get("VIEWER_ALLOWED_HOSTS") or "").split(",")
+        if token.strip()
+    }
+    return _LOOPBACK_HOSTNAMES | extra
+
+
+def _hostname_from_header(value: str, *, is_origin: bool = False) -> str:
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    try:
+        hostname = urlsplit(text if is_origin else f"//{text}").hostname
+    except ValueError:
+        return ""
+    return str(hostname or "").lower()
 
 
 def _sibling_file_ref(source_file_ref: str, relative_file_ref: str) -> str:
@@ -139,6 +165,8 @@ class Handler(BaseHTTPRequestHandler):
                 self._serve_asset(q, download=False)
             elif path == "/__cad/download":
                 self._serve_asset(q, download=True)
+            elif path == "/__cad/integrations":
+                self._send_json(200, {"ok": True, **integrations_mod.list_integration_targets()})
             elif self._legacy_cad_asset(path, q):
                 pass  # served (or 403) by the legacy Referer-based handler
             else:
@@ -157,6 +185,10 @@ class Handler(BaseHTTPRequestHandler):
                 self._step_export(q)
             elif path == "/__cad/implicit-export":
                 self._implicit_export(q)
+            elif path == "/__cad/open-in":
+                self._open_in(q)
+            elif path == "/__cad/reveal":
+                self._reveal(q)
             else:
                 self.send_response(405)
                 self.send_header("allow", "POST")
@@ -349,6 +381,58 @@ class Handler(BaseHTTPRequestHandler):
             "downloadUrl": download_url,
             "filename": result.get("filename"),
         })
+
+    def _local_action_forbidden(self) -> bool:
+        """Cross-site defense for routes that act on the local machine (launch a
+        CAD app / reveal in the OS file manager): Host and Origin must both
+        resolve to loopback (or a VIEWER_ALLOWED_HOSTS name). Hostname-only —
+        vite dev mode proxies the browser's Host/Origin verbatim, so the port is
+        the vite port, never this server's. Origin may be absent (non-browser
+        same-machine callers); a present non-loopback Origin means another web
+        origin is driving the request (CSRF / DNS rebinding)."""
+        allowed = _allowed_local_hostnames()
+        host = _hostname_from_header(self.headers.get("host"))
+        if host and host not in allowed:
+            return True
+        origin = str(self.headers.get("origin") or "").strip()
+        if origin:
+            # "null" (sandboxed iframes, file:// pages) counts as foreign: a
+            # cross-site sandboxed iframe can form-POST here with Origin: null.
+            origin_host = _hostname_from_header(origin, is_origin=True)
+            if not origin_host or origin_host not in allowed:
+                return True
+        return False
+
+    def _open_in(self, q):
+        if self._local_action_forbidden():
+            self._send_json(403, {"ok": False, "error": "Forbidden"})
+            return
+        resolved = _Ctx.backend.resolve_request_root(q.get("dir", ""))
+        materialized = _Ctx.backend.materialize_step_output(q.get("file", ""), resolved)
+        launched = integrations_mod.launch_integration(q.get("app", ""), materialized["path"])
+        payload = {
+            "ok": True,
+            "appId": launched["appId"],
+            "appName": launched["appName"],
+            "path": materialized["path"],
+            "filename": os.path.basename(materialized["path"]),
+            "materialized": bool(materialized.get("materialized")),
+        }
+        if launched.get("command"):
+            payload["command"] = launched["command"]
+        self._send_json(200, payload)
+
+    def _reveal(self, q):
+        if self._local_action_forbidden():
+            self._send_json(403, {"ok": False, "error": "Forbidden"})
+            return
+        resolved = _Ctx.backend.resolve_request_root(q.get("dir", ""))
+        target = _Ctx.backend.reveal_target_path(q.get("file", ""), q.get("asset", "output"), resolved)
+        result = integrations_mod.reveal_in_file_manager(target)
+        payload = {"ok": True, "path": target}
+        if result.get("command"):
+            payload["command"] = result["command"]
+        self._send_json(200, payload)
 
 
 def main(argv=None):

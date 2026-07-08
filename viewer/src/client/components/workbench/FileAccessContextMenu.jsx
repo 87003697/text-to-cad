@@ -3,16 +3,64 @@ import {
   ContextMenuContent,
   ContextMenuItem,
   ContextMenuSeparator,
+  ContextMenuSub,
+  ContextMenuSubContent,
+  ContextMenuSubTrigger,
   ContextMenuTrigger
 } from "@/components/ui/context-menu";
 import { fileAccessAssetsForEntry } from "@/workbench/fileAccessAssets";
 import { IMPLICIT_EXPORT_FORMATS } from "@/workbench/implicitExport";
+import { openInBusyKey } from "@/workbench/openInApps";
 import { STEP_EXPORT_FORMATS, isImportedStepEntry, stepExportItemLabel } from "@/workbench/stepExport";
 
 // Entries whose geometry can be exported to STEP/3MF/STL/GLB via the server export endpoint.
 function isStepExportEntry(entry) {
   const kind = String(entry?.kind || "").trim().toLowerCase();
   return kind === "step" || kind === "assembly";
+}
+
+function OpenInSection({
+  entry,
+  openInTargets = [],
+  busyKey = "",
+  onOpenInApp
+}) {
+  if (
+    typeof onOpenInApp !== "function" ||
+    !isStepExportEntry(entry) ||
+    !Array.isArray(openInTargets) ||
+    !openInTargets.length
+  ) {
+    return null;
+  }
+  const fileRef = String(entry?.file || entry?.id || "").trim();
+  return (
+    <>
+      <ContextMenuSub>
+        <ContextMenuSubTrigger className="text-xs">
+          <span className="min-w-0 truncate">Open in</span>
+        </ContextMenuSubTrigger>
+        <ContextMenuSubContent className="w-52">
+          {openInTargets.map((target) => (
+            <ContextMenuItem
+              key={target.id}
+              className="text-xs"
+              disabled={!target.installed || busyKey === openInBusyKey(fileRef, target.id)}
+              onSelect={() => {
+                onOpenInApp(entry, target);
+              }}
+            >
+              <span className="min-w-0 truncate">{target.name}</span>
+              {!target.installed ? (
+                <span className="ml-auto text-[10px] text-muted-foreground">Not installed</span>
+              ) : null}
+            </ContextMenuItem>
+          ))}
+        </ContextMenuSubContent>
+      </ContextMenuSub>
+      <ContextMenuSeparator />
+    </>
+  );
 }
 
 function ExplorerViewSection({
@@ -178,9 +226,11 @@ export default function FileAccessContextMenu({
   canCopyFileAssetLinks = false,
   canCopyFileAssetPaths = false,
   busyKey = "",
+  openInTargets = [],
   onDownloadFileAsset,
   onExportImplicitFile,
   onExportStepFile,
+  onOpenInApp,
   onRevealFileAsset,
   onRevealInExplorerView,
   onCopyFileAssetReference,
@@ -191,12 +241,14 @@ export default function FileAccessContextMenu({
   const implicitExportAvailable = entry && typeof onExportImplicitFile === "function" &&
     String(entry?.kind || "").trim().toLowerCase() === "implicit";
   const stepExportAvailable = entry && typeof onExportStepFile === "function" && isStepExportEntry(entry);
-  if (!revealInExplorerViewAvailable && !assetActionsAvailable && !implicitExportAvailable && !stepExportAvailable) {
+  const openInAvailable = entry && typeof onOpenInApp === "function" && isStepExportEntry(entry) &&
+    Array.isArray(openInTargets) && openInTargets.length > 0;
+  if (!revealInExplorerViewAvailable && !assetActionsAvailable && !implicitExportAvailable && !stepExportAvailable && !openInAvailable) {
     return children;
   }
 
   const assets = fileAccessAssetsForEntry(entry);
-  if (!revealInExplorerViewAvailable && !assets.output && !implicitExportAvailable && !stepExportAvailable) {
+  if (!revealInExplorerViewAvailable && !assets.output && !implicitExportAvailable && !stepExportAvailable && !openInAvailable) {
     return children;
   }
 
@@ -206,6 +258,12 @@ export default function FileAccessContextMenu({
         {children}
       </ContextMenuTrigger>
       <ContextMenuContent className="w-64">
+        <OpenInSection
+          entry={entry}
+          openInTargets={openInTargets}
+          busyKey={busyKey}
+          onOpenInApp={onOpenInApp}
+        />
         {!assets.output || !assetActionsAvailable ? (
           <ExplorerViewSection
             entry={entry}
