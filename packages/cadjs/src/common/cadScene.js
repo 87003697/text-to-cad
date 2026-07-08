@@ -1820,27 +1820,23 @@ function instancedBucketMaterial(THREE, runtime, { doubleSide, hasVertexColors =
   return material;
 }
 
-// A composed package instances (cid-keyed InstancedMesh) instead of one THREE.Mesh
-// per occurrence when it is large enough for the draw-call/GPU-vertex collapse to
-// matter. Small packages stay on the per-mesh path, which carries the full
-// per-part feature set (exploded view, per-part edges). `instancePackages`
-// overrides the size policy: true forces instancing on, false forces it off.
-const INSTANCE_MIN_OCCURRENCES = 128;
-
+// A composed package can instance (cid-keyed InstancedMesh) instead of one
+// THREE.Mesh per occurrence, collapsing draw calls/GPU vertices for a large GPU
+// win. The trade-off is that the instanced record path does NOT carry the full
+// per-part feature set: exploded view, per-part edges, per-occurrence param /
+// animation transforms, and per-part highlighting all need the per-mesh records.
+//
+// Instancing is therefore opt-in: it renders only when a job/display explicitly
+// requests it via `instancePackages: true`. It is intentionally NOT enabled by a
+// size policy — auto-instancing large packages silently broke the per-part
+// features above for any interactive package, so absence of the flag keeps the
+// per-mesh path (full features). Re-enable an automatic policy only once the
+// instanced path carries those features.
 export function shouldInstancePackageScene(settings, meshData) {
   if (!meshData?.packageInstancing) {
     return false;
   }
-  const flag = settings?.instancePackages;
-  if (flag === true) {
-    return true;
-  }
-  if (flag === false) {
-    return false;
-  }
-  const occurrences = meshData.packageInstancing.descriptor?.occurrences;
-  const count = Array.isArray(occurrences) ? occurrences.length : 0;
-  return count >= INSTANCE_MIN_OCCURRENCES;
+  return settings?.instancePackages === true;
 }
 
 function buildInstancedDisplayRecords(THREE, runtime, meshData) {
@@ -2029,8 +2025,8 @@ function settingsSignature(meshData, theme, settings) {
     edgeRendering: settings.edgeRendering?.mode || "basic",
     wireframeEdgeColor: settings.edgeRendering?.wireframeEdgeColor || "",
     // Toggling instancePackages flips between the instanced and per-mesh record
-    // sets, so it must invalidate the rebuild signature (tri-state normalized to
-    // null when unset so the size policy result stays stable across rebuilds).
+    // sets, so it must invalidate the rebuild signature (normalized to null when
+    // unset — absent === opt-in-off === per-mesh — so rebuilds stay stable).
     instancePackages: settings.instancePackages ?? null
   });
 }
