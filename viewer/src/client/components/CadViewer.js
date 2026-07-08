@@ -146,6 +146,31 @@ import { useViewerDrawingOverlay } from "./viewer/hooks/useViewerDrawingOverlay"
 import { useViewerPicking } from "./viewer/hooks/useViewerPicking";
 import { useViewerRuntime } from "./viewer/hooks/useViewerRuntime";
 import { PREVIEW_AUTO_ROTATE_SPEED } from "./viewer/orbitControls";
+import {
+  applyOrbitDelta,
+  cameraMatchesViewPreset,
+  clamp,
+  clearKeyboardOrbitState,
+  DEFAULT_VIEW_DIRECTION,
+  DEFAULT_VIEW_PLANE_ORIENTATION,
+  easeInOutCubic,
+  getActiveViewPlaneFaceId,
+  getKeyboardOrbitAxes,
+  getKeyboardOrbitCommand,
+  isTrackpadLikeWheelEvent,
+  KEYBOARD_ORBIT_NUDGE_RAD,
+  normalizeViewportFrameInsets,
+  readViewPlaneOrientation,
+  stepKeyboardOrbit,
+  VIEW_PLANE_DEFAULT_PRESET,
+  VIEW_PLANE_FACE_BY_ID,
+  VIEW_PLANE_FACES,
+  VIEW_PLANE_POLE_DIRECTION_DOT_THRESHOLD,
+  VIEW_PLANE_POLE_DIRECTION_NUDGE,
+  VIEW_PLANE_TRANSITION_MS,
+  viewPlaneOrientationEqual,
+  WORLD_UP
+} from "./viewer/viewportCameraKit";
 import { normalizeViewerRenderState } from "./viewer/renderState";
 import {
   buildModel
@@ -181,35 +206,13 @@ const EXPLODED_VIEW_ANIMATION_DURATION_MS = 1000;
 const ACCELERATED_WHEEL_ZOOM_SPEED = 10;
 const TRACKPAD_PINCH_ZOOM_SPEED = 14;
 const COARSE_POINTER_PINCH_ZOOM_SPEED = 2.4;
-const KEYBOARD_ORBIT_NUDGE_RAD = Math.PI / 32;
-const KEYBOARD_ORBIT_SPEED_RAD_PER_SEC = Math.PI * 0.42;
-const KEYBOARD_POLAR_EPSILON = 0.02;
-const VIEW_PLANE_ACTIVE_DOT_THRESHOLD = 0.994;
-const VIEW_PLANE_TRANSITION_MS = 280;
-const VIEW_PLANE_POLE_DIRECTION_DOT_THRESHOLD = 0.9999;
-const VIEW_PLANE_POLE_DIRECTION_NUDGE = 0.02;
-const DEFAULT_PERSPECTIVE_DIRECTION_DOT_THRESHOLD = 0.999;
-const DEFAULT_PERSPECTIVE_UP_DOT_THRESHOLD = 0.999;
 const CAMERA_TRANSITION_EASING = Object.freeze({
   EASE_IN_OUT_CUBIC: "ease-in-out-cubic",
   EASE_IN_OUT_SINE: "ease-in-out-sine"
 });
-const DEFAULT_VIEW_PLANE_ORIENTATION = Object.freeze({
-  x: [1, 0, 0],
-  y: [0, 1, 0],
-  z: [0, 0, 1]
-});
 const AUTO_ZOOM_PADDING = DEFAULT_AUTO_ZOOM_PADDING;
-const WORLD_UP = Object.freeze([0, 0, 1]);
 const CAD_COORDINATE_SYSTEM = "cad-z-up-v1";
 const ROBOT_COORDINATE_SYSTEM = "cad-z-up-robot-framing-v2";
-const DEFAULT_VIEW_DIRECTION = [2.1, -1.65, 1.08];
-const VIEW_PLANE_DEFAULT_PRESET = {
-  id: "isometric",
-  title: "Reset to default isometric view",
-  direction: DEFAULT_VIEW_DIRECTION,
-  up: WORLD_UP
-};
 const DISPLAY_TOOLBAR_CLASSES = "cad-glass-surface pointer-events-auto absolute z-30 inline-flex h-8 w-fit items-center gap-0.5 rounded-md border border-sidebar-border p-1 text-sidebar-foreground shadow-sm";
 const DISPLAY_TOOLBAR_BUTTON_CLASSES = "grid size-6 shrink-0 place-items-center rounded-sm text-sidebar-foreground/70 transition hover:bg-sidebar-accent hover:text-sidebar-accent-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/45 disabled:pointer-events-none disabled:opacity-50";
 const VIEW_PLANE_CONTROL_SIZE = "7.5rem";
@@ -233,51 +236,6 @@ const DEFAULT_LIGHTING = {
 };
 const BEND_GUIDE_COLOR = "#f59e0b";
 const BEND_GUIDE_WIDTH_MULTIPLIER = 1.35;
-const VIEW_PLANE_FACES = [
-  {
-    id: "z",
-    label: "Z",
-    title: "Jump to top view",
-    direction: [0, 0, 1],
-    up: [0, 1, 0]
-  },
-  {
-    id: "zNeg",
-    label: "-Z",
-    title: "Jump to bottom view",
-    direction: [0, 0, -1],
-    up: [0, 1, 0]
-  },
-  {
-    id: "yNeg",
-    label: "-Y",
-    title: "Jump to front view",
-    direction: [0, -1, 0],
-    up: WORLD_UP
-  },
-  {
-    id: "y",
-    label: "Y",
-    title: "Jump to back view",
-    direction: [0, 1, 0],
-    up: WORLD_UP
-  },
-  {
-    id: "x",
-    label: "X",
-    title: "Jump to right view",
-    direction: [1, 0, 0],
-    up: WORLD_UP
-  },
-  {
-    id: "xNeg",
-    label: "-X",
-    title: "Jump to left view",
-    direction: [-1, 0, 0],
-    up: WORLD_UP
-  }
-];
-const VIEW_PLANE_FACE_BY_ID = Object.fromEntries(VIEW_PLANE_FACES.map((face) => [face.id, face]));
 
 function referenceSelectorType(reference) {
   return String(reference?.selectorType || "").trim();
@@ -324,75 +282,6 @@ function syntheticOccurrenceSelectorFromReferenceId(referenceId) {
   const marker = ":occurrence:";
   const markerIndex = body.lastIndexOf(marker);
   return markerIndex >= 0 ? body.slice(markerIndex + marker.length).trim() : "";
-}
-
-function viewPlaneOrientationEqual(a, b, epsilon = 1e-4) {
-  if (!a || !b) {
-    return false;
-  }
-  for (const axis of ["x", "y", "z"]) {
-    const left = a[axis];
-    const right = b[axis];
-    if (!Array.isArray(left) || !Array.isArray(right) || left.length !== 3 || right.length !== 3) {
-      return false;
-    }
-    for (let index = 0; index < 3; index += 1) {
-      if (Math.abs((left[index] || 0) - (right[index] || 0)) > epsilon) {
-        return false;
-      }
-    }
-  }
-  return true;
-}
-
-function readViewPlaneOrientation(runtime) {
-  if (!runtime?.THREE || !runtime?.camera) {
-    return null;
-  }
-  const inverseCameraRotation = runtime.camera.quaternion.clone().invert();
-  const projectAxis = (x, y, z) => {
-    const projected = new runtime.THREE.Vector3(x, y, z).applyQuaternion(inverseCameraRotation);
-    return [projected.x, projected.y, projected.z];
-  };
-  return {
-    x: projectAxis(1, 0, 0),
-    y: projectAxis(0, 1, 0),
-    z: projectAxis(0, 0, 1)
-  };
-}
-
-function cameraMatchesViewPreset(runtime, preset, {
-  directionDotThreshold = DEFAULT_PERSPECTIVE_DIRECTION_DOT_THRESHOLD,
-  upDotThreshold = DEFAULT_PERSPECTIVE_UP_DOT_THRESHOLD
-} = {}) {
-  if (
-    !runtime?.THREE ||
-    !runtime?.camera ||
-    !runtime?.controls ||
-    !preset ||
-    !Array.isArray(preset.direction) ||
-    !Array.isArray(preset.up)
-  ) {
-    return false;
-  }
-  const currentDirection = runtime.camera.position.clone().sub(runtime.controls.target);
-  const nextDirection = new runtime.THREE.Vector3(...preset.direction);
-  const currentUp = runtime.camera.up.clone();
-  const nextUp = new runtime.THREE.Vector3(...preset.up);
-  if (
-    currentDirection.lengthSq() <= 1e-8 ||
-    nextDirection.lengthSq() <= 1e-8 ||
-    currentUp.lengthSq() <= 1e-8 ||
-    nextUp.lengthSq() <= 1e-8
-  ) {
-    return false;
-  }
-  currentDirection.normalize();
-  nextDirection.normalize();
-  currentUp.normalize();
-  nextUp.normalize();
-  return currentDirection.dot(nextDirection) >= directionDotThreshold &&
-    currentUp.dot(nextUp) >= upDotThreshold;
 }
 
 function isNumericArray(value, stride = 1) {
@@ -941,23 +830,6 @@ function updateStageEffects(runtime, viewerTheme, themeSettings, radius, floorZ 
   }
 }
 
-function isTrackpadLikeWheelEvent(event) {
-  return event.ctrlKey || (event.deltaMode === 0 && Math.abs(event.deltaY) < 20);
-}
-
-function normalizeViewportFrameInsets(value = {}) {
-  const normalizeInset = (inset) => {
-    const numericInset = Number(inset);
-    return Number.isFinite(numericInset) ? Math.max(0, numericInset) : 0;
-  };
-  return {
-    top: normalizeInset(value?.top),
-    right: normalizeInset(value?.right),
-    bottom: normalizeInset(value?.bottom),
-    left: normalizeInset(value?.left)
-  };
-}
-
 function getViewportFrameMetrics(runtime, frameInsets = {}) {
   const canvas = runtime?.renderer?.domElement;
   const width = Math.max(1, canvas?.clientWidth || canvas?.parentElement?.clientWidth || 1);
@@ -1171,16 +1043,6 @@ function syncRuntimeCameraProjection(runtime, projection, { scheduleIdle = true,
   return true;
 }
 
-function easeInOutCubic(t) {
-  if (t <= 0) {
-    return 0;
-  }
-  if (t >= 1) {
-    return 1;
-  }
-  return t < 0.5 ? 4 * t * t * t : 1 - ((-2 * t + 2) ** 3) / 2;
-}
-
 function easeInOutSine(t) {
   if (t <= 0) {
     return 0;
@@ -1222,138 +1084,6 @@ function coordinateSystemForSceneScale(sceneScaleMode) {
   return normalizeSceneScaleMode(sceneScaleMode) === VIEWER_SCENE_SCALE.URDF
     ? ROBOT_COORDINATE_SYSTEM
     : CAD_COORDINATE_SYSTEM;
-}
-
-function getKeyboardOrbitCommand(event) {
-  if (!event) {
-    return null;
-  }
-  if (event.key === "ArrowLeft") {
-    return { direction: "left", keyId: "ArrowLeft" };
-  }
-  if (event.key === "ArrowRight") {
-    return { direction: "right", keyId: "ArrowRight" };
-  }
-  if (event.key === "ArrowUp") {
-    return { direction: "up", keyId: "ArrowUp" };
-  }
-  if (event.key === "ArrowDown") {
-    return { direction: "down", keyId: "ArrowDown" };
-  }
-
-  const key = String(event.key || "").toLowerCase();
-  if (key === "a" || event.code === "KeyA") {
-    return { direction: "left", keyId: event.code || "KeyA" };
-  }
-  if (key === "d" || event.code === "KeyD") {
-    return { direction: "right", keyId: event.code || "KeyD" };
-  }
-  if (key === "w" || event.code === "KeyW") {
-    return { direction: "up", keyId: event.code || "KeyW" };
-  }
-  if (key === "s" || event.code === "KeyS") {
-    return { direction: "down", keyId: event.code || "KeyS" };
-  }
-  return null;
-}
-
-function getKeyboardOrbitAxes(keyboardOrbitState) {
-  return {
-    azimuth:
-      (keyboardOrbitState.directionCounts.right > 0 ? 1 : 0) -
-      (keyboardOrbitState.directionCounts.left > 0 ? 1 : 0),
-    polar:
-      (keyboardOrbitState.directionCounts.down > 0 ? 1 : 0) -
-      (keyboardOrbitState.directionCounts.up > 0 ? 1 : 0)
-  };
-}
-
-function clearKeyboardOrbitState(keyboardOrbitState) {
-  if (!keyboardOrbitState) {
-    return;
-  }
-  keyboardOrbitState.pressedKeys.clear();
-  keyboardOrbitState.directionCounts.left = 0;
-  keyboardOrbitState.directionCounts.right = 0;
-  keyboardOrbitState.directionCounts.up = 0;
-  keyboardOrbitState.directionCounts.down = 0;
-  keyboardOrbitState.lastFrameTime = 0;
-}
-
-function applyOrbitDelta(runtime, azimuthDelta, polarDelta) {
-  if (!runtime?.THREE || !runtime?.camera || !runtime?.controls) {
-    return false;
-  }
-  if (Math.abs(azimuthDelta) < 1e-6 && Math.abs(polarDelta) < 1e-6) {
-    return false;
-  }
-
-  const offset = new runtime.THREE.Vector3().copy(runtime.camera.position).sub(runtime.controls.target);
-  const distance = offset.length();
-  if (!Number.isFinite(distance) || distance <= 1e-6) {
-    return false;
-  }
-  const worldUp = new runtime.THREE.Vector3(...WORLD_UP).normalize();
-  const direction = offset.clone().divideScalar(distance);
-  const minPolar = Math.max(
-    Number.isFinite(runtime.controls.minPolarAngle) ? runtime.controls.minPolarAngle : 0,
-    KEYBOARD_POLAR_EPSILON
-  );
-  const maxPolar = Math.min(
-    Number.isFinite(runtime.controls.maxPolarAngle) ? runtime.controls.maxPolarAngle : Math.PI,
-    Math.PI - KEYBOARD_POLAR_EPSILON
-  );
-  const currentPolar = Math.acos(clamp(direction.dot(worldUp), -1, 1));
-  const requestedPolar = clamp(currentPolar + polarDelta, minPolar, maxPolar);
-  const resolvedPolarDelta = requestedPolar - currentPolar;
-
-  const minAzimuth = Number.isFinite(runtime.controls.minAzimuthAngle) ? runtime.controls.minAzimuthAngle : -Infinity;
-  const maxAzimuth = Number.isFinite(runtime.controls.maxAzimuthAngle) ? runtime.controls.maxAzimuthAngle : Infinity;
-  if (Number.isFinite(minAzimuth) || Number.isFinite(maxAzimuth)) {
-    const currentAzimuth = Math.atan2(offset.y, offset.x);
-    const nextAzimuth = clamp(normalizeAngleAround(currentAzimuth + azimuthDelta, currentAzimuth), minAzimuth, maxAzimuth);
-    azimuthDelta = nextAzimuth - currentAzimuth;
-  }
-
-  if (Math.abs(azimuthDelta) > 1e-6) {
-    offset.applyAxisAngle(worldUp, azimuthDelta);
-  }
-  if (Math.abs(resolvedPolarDelta) > 1e-6) {
-    let orbitRight = new runtime.THREE.Vector3().crossVectors(worldUp, offset).normalize();
-    if (orbitRight.lengthSq() <= 1e-9) {
-      orbitRight = new runtime.THREE.Vector3(1, 0, 0);
-    }
-    offset.applyAxisAngle(orbitRight, resolvedPolarDelta);
-  }
-  runtime.camera.position.copy(runtime.controls.target).add(offset);
-  runtime.camera.up.set(...WORLD_UP);
-  runtime.camera.lookAt(runtime.controls.target);
-  return true;
-}
-
-function stepKeyboardOrbit(runtime, timestamp) {
-  const keyboardOrbitState = runtime?.keyboardOrbitState;
-  if (!keyboardOrbitState) {
-    return false;
-  }
-
-  const axes = getKeyboardOrbitAxes(keyboardOrbitState);
-  if (!axes.azimuth && !axes.polar) {
-    keyboardOrbitState.lastFrameTime = 0;
-    return false;
-  }
-  if (!keyboardOrbitState.lastFrameTime) {
-    keyboardOrbitState.lastFrameTime = timestamp;
-    return false;
-  }
-
-  const deltaSeconds = clamp((timestamp - keyboardOrbitState.lastFrameTime) / 1000, 0, 0.05);
-  keyboardOrbitState.lastFrameTime = timestamp;
-  return applyOrbitDelta(
-    runtime,
-    axes.azimuth * KEYBOARD_ORBIT_SPEED_RAD_PER_SEC * deltaSeconds,
-    axes.polar * KEYBOARD_ORBIT_SPEED_RAD_PER_SEC * deltaSeconds
-  );
 }
 
 function cancelCameraTransition(runtime, { scheduleIdle = true } = {}) {
@@ -1713,30 +1443,6 @@ function transitionCameraToViewPreset(runtime, preset) {
   return true;
 }
 
-function getActiveViewPlaneFaceId(runtime) {
-  if (!runtime?.THREE || !runtime?.camera || !runtime?.controls) {
-    return "";
-  }
-
-  const offset = new runtime.THREE.Vector3().copy(runtime.camera.position).sub(runtime.controls.target);
-  if (offset.lengthSq() < 1e-6) {
-    return "";
-  }
-  offset.normalize();
-
-  let bestId = "";
-  let bestScore = -Infinity;
-  for (const face of VIEW_PLANE_FACES) {
-    const direction = new runtime.THREE.Vector3(...face.direction).normalize();
-    const score = offset.dot(direction);
-    if (score > bestScore) {
-      bestScore = score;
-      bestId = face.id;
-    }
-  }
-  return bestScore >= VIEW_PLANE_ACTIVE_DOT_THRESHOLD ? bestId : "";
-}
-
 function disposeSceneObject(object) {
   if (!object) {
     return;
@@ -1844,21 +1550,6 @@ function clearOverlayGroup(runtime, group) {
   if (group) {
     group.visible = false;
   }
-}
-
-function clamp(value, min, max) {
-  return Math.min(Math.max(value, min), max);
-}
-
-function normalizeAngleAround(angle, center) {
-  let adjusted = angle;
-  while (adjusted - center > Math.PI) {
-    adjusted -= Math.PI * 2;
-  }
-  while (adjusted - center < -Math.PI) {
-    adjusted += Math.PI * 2;
-  }
-  return adjusted;
 }
 
 function parseFaceToken(copyText) {

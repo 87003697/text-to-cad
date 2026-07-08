@@ -154,7 +154,13 @@ build_runtime() {
   rm -rf "$target_dir"
   mkdir -p "$target_dir"
   write_render_html "$target_dir"
-  "$BUILD_DEPS_DIR/node_modules/.bin/esbuild" "$ENTRYPOINT" \
+  # NODE_PATH resolves cadjs's bare `implicitjs` imports (e.g.
+  # cadjs/common/camera.js re-exports implicitjs/common/camera.js) directly
+  # from packages/ source, honoring implicitjs's exports map, so the bundle
+  # stays hermetic on fresh checkouts with no packages/cadjs/node_modules.
+  # A directory --alias cannot do this: it bypasses the exports map.
+  NODE_PATH="$REPO_ROOT/packages" \
+    "$BUILD_DEPS_DIR/node_modules/.bin/esbuild" "$ENTRYPOINT" \
     --bundle \
     --format=esm \
     --platform=browser \

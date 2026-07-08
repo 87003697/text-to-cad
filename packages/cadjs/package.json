@@ -7,6 +7,13 @@
   "exports": {
     ".": "./src/index.js",
     "./common/*": "./src/common/*",
+    "./implicit/render": "./src/implicit/render.js",
+    "./implicit/model": "./src/implicit/model.js",
+    "./implicit/loader": "./src/implicit/loader.js",
+    "./implicit/graphicsSettings": "./src/implicit/graphicsSettings.js",
+    "./implicit/export": "./src/implicit/export.js",
+    "./implicit/exportModel": "./src/implicit/exportModel.js",
+    "./implicit/parameters": "./src/implicit/parameters.js",
     "./lib/*": "./src/lib/*"
   },
   "scripts": {
@@ -18,6 +25,7 @@
   ],
   "dependencies": {
     "gifenc": "^1.0.3",
+    "implicitjs": "file:../implicitjs",
     "three": "0.160.0"
   }
 }
