@@ -40,6 +40,7 @@ import {
   normalizeExplodedViewDocument
 } from "../lib/viewer/explodedViewSteps.js";
 import { generateExplodedViewDocument } from "../lib/viewer/explodedView.js";
+import { syncInstancedOccurrenceTransforms } from "../lib/assembly/instancedScene.js";
 import {
   addFloor as addSharedFloor,
   applyEnvironment as applySharedEnvironment,
@@ -875,29 +876,40 @@ function applyViewportExplodedView(viewport, bounds) {
   const { context, model, THREE: RuntimeTHREE } = viewport;
   const settings = context.displaySettings?.exploded;
   const THREEImpl = RuntimeTHREE || THREE;
-  const resetExplodedView = () => {
-    clearExplodedViewRecords(model.displayRecords);
-    for (const record of model.displayRecords) {
-      applyDisplayRecordTransform(THREEImpl, record);
+  // Instanced packages explode via their per-occurrence records (partId-bearing, one per
+  // instance) and flush the offsets into the instance buffers; the per-mesh path moves each
+  // record's THREE.Mesh directly. Mirrors CadViewer's interactive explode path.
+  const instancedRecords = Array.isArray(model.instancedOccurrenceRecords) && model.instancedOccurrenceRecords.length
+    ? model.instancedOccurrenceRecords
+    : null;
+  const explodeRecords = instancedRecords || model.displayRecords;
+  const flushExplode = () => {
+    if (instancedRecords) {
+      syncInstancedOccurrenceTransforms(THREEImpl, instancedRecords);
+    } else {
+      for (const record of model.displayRecords) {
+        applyDisplayRecordTransform(THREEImpl, record);
+      }
     }
     model.root?.updateMatrixWorld?.(true);
+  };
+  const resetExplodedView = () => {
+    clearExplodedViewRecords(explodeRecords);
+    flushExplode();
   };
   if (settings?.enabled !== true) {
     resetExplodedView();
     return bounds;
   }
-  const doc = resolveExplodedViewDocument(THREEImpl, settings, model.displayRecords, bounds);
-  const compiled = compileExplodedView(THREEImpl, doc, model.displayRecords, bounds);
+  const doc = resolveExplodedViewDocument(THREEImpl, settings, explodeRecords, bounds);
+  const compiled = compileExplodedView(THREEImpl, doc, explodeRecords, bounds);
   if (!compiled.entries.length) {
     resetExplodedView();
     return bounds;
   }
   const amount = clamp(Number(doc.amount), 0, 1);
   applyExplodedViewProgress(THREEImpl, compiled, amount);
-  for (const record of model.displayRecords) {
-    applyDisplayRecordTransform(THREEImpl, record);
-  }
-  model.root?.updateMatrixWorld?.(true);
+  flushExplode();
   return explodedViewBounds(THREEImpl, compiled, bounds, amount);
 }
 
