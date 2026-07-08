@@ -282,7 +282,7 @@ import {
 import {
   normalizeParameterValue,
   normalizeParameterValues
-} from "implicitjs/common/parameters.js";
+} from "cadjs/implicit/parameters";
 import { copyTextToClipboard, readTextFromClipboard } from "@/ui/clipboard";
 import { triggerUrlDownload } from "@/ui/download";
 import {
