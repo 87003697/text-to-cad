@@ -745,7 +745,7 @@ export function renderJobContext(meshData, job = {}) {
 
 // Preserve the tri-state instancePackages flag from a render job: an explicit
 // boolean (in the job or its display block) forces instancing on/off; absent, it
-// stays undefined so cadScene keeps the per-mesh path (instancing is opt-in).
+// stays undefined so cadScene's size policy decides.
 export function resolveInstancePackagesFlag(job) {
   const fromDisplay = job?.display?.instancePackages;
   if (typeof fromDisplay === "boolean") {
@@ -770,10 +770,10 @@ export function modelOptionsForRenderJob(context, job = {}) {
     displayMode: context.displayMode,
     applyDisplayModeEdgePolicy: !context.topologyDisplayEdgesVisible,
     scale: context.sceneScale,
-    // cid-keyed instanced rendering of component-GLB packages. Opt-in: a job may
-    // force it on (true) or off (false) via its display block; left undefined the
-    // per-mesh path is used (full per-part features), matching the interactive
-    // viewer.
+    // cid-keyed instanced rendering of component-GLB packages. Tri-state: a job
+    // may force it on (true) or off (false) via its display block; left undefined
+    // the size policy in cadScene decides (large packages instance, small stay
+    // per-mesh), matching the interactive viewer.
     instancePackages: resolveInstancePackagesFlag(job),
     clip: context.sharedRenderOptions.clip,
     silhouette: context.topologyDisplayEdgesVisible && context.edgeSettings.silhouette === true,

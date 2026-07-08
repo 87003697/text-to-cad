@@ -5,6 +5,12 @@ import * as THREE from "three";
 
 import { buildModel, shouldInstancePackageScene } from "./cadScene.js";
 import { resolveInstancePackagesFlag } from "./renderMeshScene.js";
+import {
+  buildInstancedPackageScene,
+  buildInstancedOccurrenceRecords,
+  syncInstancedOccurrenceTransforms,
+  applyInstancedVisualState
+} from "../lib/assembly/instancedScene.js";
 
 function boxComponent() {
   return {
@@ -79,9 +85,9 @@ function largePackageMeshData(occurrenceCount) {
   };
 }
 
-test("a large package is NOT instanced without the flag (instancing is opt-in)", () => {
+test("a large package instances by default (size policy, no flag)", () => {
   const model = buildModel(THREE, largePackageMeshData(200), {});
-  assert.equal(countInstanced(model.modelGroup), 0);
+  assert.equal(countInstanced(model.modelGroup), 1);
   model.dispose?.();
 });
 
@@ -136,26 +142,25 @@ test("instanced bucket honors a component's baked vertex colors when there is no
 });
 
 test("toggling instancePackages via update() rebuilds between the instanced and per-mesh paths", () => {
-  const model = buildModel(THREE, largePackageMeshData(200), {}); // per-mesh by default (opt-in)
-  assert.equal(countInstanced(model.modelGroup), 0);
-  model.update({ instancePackages: true });                        // opt into instancing
+  const model = buildModel(THREE, largePackageMeshData(200), {}); // instanced by size policy
   assert.equal(countInstanced(model.modelGroup), 1);
-  model.update({ instancePackages: false });                       // back to per-mesh
+  model.update({ instancePackages: false });                       // force per-mesh
   assert.equal(countInstanced(model.modelGroup), 0);
+  model.update({ instancePackages: true });                        // force instanced again
+  assert.equal(countInstanced(model.modelGroup), 1);
   model.dispose?.();
 });
 
-test("shouldInstancePackageScene: opt-in flag only, no size policy", () => {
+test("shouldInstancePackageScene: tri-state flag beats the size policy", () => {
   const small = packageMeshData();
   const large = largePackageMeshData(200);
   // no packageInstancing -> never
   assert.equal(shouldInstancePackageScene({}, { parts: [] }), false);
-  // no flag -> per-mesh regardless of size (instancing is opt-in)
+  // size policy
   assert.equal(shouldInstancePackageScene({}, small), false);
-  assert.equal(shouldInstancePackageScene({}, large), false);
-  // explicit opt-in / opt-out
+  assert.equal(shouldInstancePackageScene({}, large), true);
+  // explicit overrides
   assert.equal(shouldInstancePackageScene({ instancePackages: true }, small), true);
-  assert.equal(shouldInstancePackageScene({ instancePackages: true }, large), true);
   assert.equal(shouldInstancePackageScene({ instancePackages: false }, large), false);
 });
 
@@ -165,4 +170,79 @@ test("resolveInstancePackagesFlag preserves the render-job tri-state", () => {
   assert.equal(resolveInstancePackagesFlag({ display: { instancePackages: false } }), false);
   // display block wins over the top-level flag when both are booleans
   assert.equal(resolveInstancePackagesFlag({ display: { instancePackages: true }, instancePackages: false }), true);
+});
+
+// -- per-occurrence transform / effect parity (exploded view + params) --------
+
+function instancedSceneWithRecords() {
+  const { descriptor, componentMeshDataByCid } = packageMeshData().packageInstancing;
+  const scene = buildInstancedPackageScene(THREE, descriptor, componentMeshDataByCid);
+  const records = buildInstancedOccurrenceRecords(THREE, scene.instancedMeshes);
+  return { scene, records };
+}
+function recordById(records, id) {
+  return records.find((r) => r.partId === id);
+}
+function instancePosition(rec) {
+  const m = new THREE.Matrix4();
+  rec.instanceMesh.getMatrixAt(rec.instanceIndex, m);
+  return new THREE.Vector3().setFromMatrixPosition(m);
+}
+function instanceColor(rec) {
+  const c = new THREE.Color();
+  rec.instanceMesh.getColorAt(rec.instanceIndex, c);
+  return c;
+}
+
+test("buildInstancedOccurrenceRecords: one record per occurrence with base matrix + bounds", () => {
+  const { records } = instancedSceneWithRecords();
+  assert.equal(records.length, 3); // o1.1, o1.2 (cid A) + o1.3 (cid B)
+  assert.deepEqual(records.map((r) => r.partId).sort(), ["o1.1", "o1.2", "o1.3"]);
+  assert.ok(records.every((r) => r.instanced && r.instanceMesh && Number.isInteger(r.instanceIndex)));
+  assert.ok(records.every((r) => r.baseMatrix instanceof THREE.Matrix4 && r.partBounds));
+});
+
+test("syncInstancedOccurrenceTransforms: exploded offset writes only that instance's matrix", () => {
+  const { records } = instancedSceneWithRecords();
+  recordById(records, "o1.1").explodedViewMatrix = new THREE.Matrix4().makeTranslation(0, 0, 10);
+  syncInstancedOccurrenceTransforms(THREE, records);
+  assert.ok(Math.abs(instancePosition(recordById(records, "o1.1")).z - 10) < 1e-6);
+  // sibling in the same bucket (base x=5) is untouched
+  const sib = instancePosition(recordById(records, "o1.2"));
+  assert.ok(Math.abs(sib.x - 5) < 1e-6 && Math.abs(sib.z) < 1e-6);
+});
+
+test("syncInstancedOccurrenceTransforms: effect matrix composes over the base occurrence transform", () => {
+  const { records } = instancedSceneWithRecords();
+  recordById(records, "o1.2").effectMatrix = new THREE.Matrix4().makeTranslation(0, 3, 0); // base (5,0,0)
+  syncInstancedOccurrenceTransforms(THREE, records);
+  const pos = instancePosition(recordById(records, "o1.2"));
+  assert.ok(Math.abs(pos.x - 5) < 1e-6 && Math.abs(pos.y - 3) < 1e-6);
+});
+
+test("syncInstancedOccurrenceTransforms: effectVisible=false collapses; effectStyle.color recolors", () => {
+  const { records } = instancedSceneWithRecords();
+  recordById(records, "o1.1").effectVisible = false;
+  recordById(records, "o1.3").effectStyle = { color: [1, 0, 0] };
+  syncInstancedOccurrenceTransforms(THREE, records);
+  const hidden = recordById(records, "o1.1");
+  const m = new THREE.Matrix4();
+  hidden.instanceMesh.getMatrixAt(hidden.instanceIndex, m);
+  assert.ok(m.elements.every((e) => Math.abs(e) < 1e-9), "hidden instance collapses to a zero matrix");
+  const c = instanceColor(recordById(records, "o1.3"));
+  assert.ok(c.r > 0.9 && c.g < 0.1 && c.b < 0.1, `expected red effect colour, got ${c.r},${c.g},${c.b}`);
+});
+
+test("selection recolor and exploded pose coexist on one instance (single buffer writer)", () => {
+  const { records } = instancedSceneWithRecords();
+  const rec = recordById(records, "o1.1");
+  rec.explodedViewMatrix = new THREE.Matrix4().makeTranslation(0, 0, 12);
+  syncInstancedOccurrenceTransforms(THREE, records);
+  applyInstancedVisualState(THREE, rec.instanceMesh, {
+    selected: new Set(["o1.1"]),
+    selectedColor: { r: 0.3, g: 0.6, b: 1 }
+  });
+  assert.ok(Math.abs(instancePosition(rec).z - 12) < 1e-6, "exploded pose must survive a selection re-sync");
+  const c = instanceColor(rec);
+  assert.ok(Math.abs(c.r - 0.3) < 0.05 && Math.abs(c.b - 1) < 0.05, `expected selection blue, got ${c.r},${c.g},${c.b}`);
 });

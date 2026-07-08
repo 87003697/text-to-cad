@@ -101,6 +101,7 @@ import {
   explodedViewTrailSegments
 } from "cadjs/lib/viewer/explodedViewSteps";
 import { generateExplodedViewDocument } from "cadjs/lib/viewer/explodedView";
+import { syncInstancedOccurrenceTransforms } from "cadjs/lib/assembly/instancedScene";
 import {
   applyDisplayRecordTransform,
   applyRuntimeModelBounds,
@@ -726,8 +727,17 @@ function applyExplodedViewRuntimeProgress(runtime, compiled, progress) {
     return;
   }
   applyExplodedViewProgress(runtime.THREE, compiled, progress);
-  for (const record of runtime.displayRecords) {
-    applyDisplayRecordTransform(runtime.THREE, record);
+  const instancedRecords = Array.isArray(runtime.instancedOccurrenceRecords) && runtime.instancedOccurrenceRecords.length
+    ? runtime.instancedOccurrenceRecords
+    : null;
+  if (instancedRecords) {
+    // The explode engine wrote explodedViewMatrix onto the per-occurrence records; flush the
+    // combined offsets into the instance buffers (the bucket meshes have no per-record matrix).
+    syncInstancedOccurrenceTransforms(runtime.THREE, instancedRecords);
+  } else {
+    for (const record of runtime.displayRecords) {
+      applyDisplayRecordTransform(runtime.THREE, record);
+    }
   }
   runtime.modelGroup?.updateMatrixWorld?.(true);
   runtime.edgesGroup?.updateMatrixWorld?.(true);
@@ -3239,6 +3249,9 @@ const CadViewer = forwardRef(function CadViewer({
     edgesGroup.add(cadScene.edgesGroup);
     runtime.cadScene = cadScene;
     runtime.displayRecords = cadScene.displayRecords;
+    // Per-occurrence records for instanced packages drive explode/param transforms on the
+    // instance buffers; empty for the per-mesh path.
+    runtime.instancedOccurrenceRecords = cadScene.instancedOccurrenceRecords || [];
     runtime.hasVisibleModel = true;
     runtime.activeModelKey = modelKey || "";
     const initialEdgeRuntimes = resolveTopologyDisplayEdgeRuntimes({
@@ -3807,16 +3820,30 @@ const CadViewer = forwardRef(function CadViewer({
     animation.modelKey = animationModelKey;
     animation.enabled = explodedViewActive;
 
-    // Steady disabled state: nothing to evaluate. (When disabling from an
-    // exploded state we still evaluate below so the collapse animates.)
-    if (!explodedViewActive && !wasEnabled) {
-      clearExplodedViewRecords(runtime.displayRecords);
-      for (const record of runtime.displayRecords) {
-        applyDisplayRecordTransform(THREE, record);
+    // Instanced packages explode via their per-occurrence records (partId-bearing,
+    // one per instance); the per-mesh path uses the per-part display records directly.
+    const instancedRecords = Array.isArray(runtime.instancedOccurrenceRecords) && runtime.instancedOccurrenceRecords.length
+      ? runtime.instancedOccurrenceRecords
+      : null;
+    const explodeRecords = instancedRecords || runtime.displayRecords;
+    const flushClearedExplode = () => {
+      clearExplodedViewRecords(explodeRecords);
+      if (instancedRecords) {
+        syncInstancedOccurrenceTransforms(THREE, instancedRecords);
+      } else {
+        for (const record of runtime.displayRecords) {
+          applyDisplayRecordTransform(THREE, record);
+        }
       }
       clearExplodeTrails(runtime);
       syncRecordTopologyDisplayEdgeTransforms(runtime, runtime.displayRecords);
       runtime.requestRender?.();
+    };
+
+    // Steady disabled state: nothing to evaluate. (When disabling from an
+    // exploded state we still evaluate below so the collapse animates.)
+    if (!explodedViewActive && !wasEnabled) {
+      flushClearedExplode();
       animation.progress = 0;
       animation.compiled = null;
       return undefined;
@@ -3825,18 +3852,12 @@ const CadViewer = forwardRef(function CadViewer({
     // Resolve + compile the step document from the current settings. On disable
     // the authored/generated steps are still available, so collapse can animate
     // from the current progress down to 0.
-    const doc = resolveViewerExplodeDocument(THREE, normalizedExplodedSettings, runtime.displayRecords, baseBounds);
-    const compiled = compileExplodedView(THREE, doc, runtime.displayRecords, baseBounds);
+    const doc = resolveViewerExplodeDocument(THREE, normalizedExplodedSettings, explodeRecords, baseBounds);
+    const compiled = compileExplodedView(THREE, doc, explodeRecords, baseBounds);
     animation.compiled = compiled;
 
     if (!compiled.entries.length) {
-      clearExplodedViewRecords(runtime.displayRecords);
-      for (const record of runtime.displayRecords) {
-        applyDisplayRecordTransform(THREE, record);
-      }
-      clearExplodeTrails(runtime);
-      syncRecordTopologyDisplayEdgeTransforms(runtime, runtime.displayRecords);
-      runtime.requestRender?.();
+      flushClearedExplode();
       animation.progress = 0;
       return undefined;
     }

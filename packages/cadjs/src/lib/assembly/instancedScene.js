@@ -208,86 +208,267 @@ export function buildInstancedPackageScene(THREE, descriptor, componentMeshDataB
 const HIDDEN_INSTANCE_MATRIX = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
 const DIMMED_INSTANCE_FACTOR = 0.28;
 
-// Per-instance visual-state codes tracked across applyInstancedVisualState calls so an
-// unchanged instance is skipped (no write, no GPU re-upload). STATE_UNSET forces the
-// first apply to write every instance.
+// Per-instance overlay codes (selection/hover/focus-dim/hidden) folded into the
+// per-instance colour + matrix signatures below.
 const STATE_BASE = 0;
 const STATE_SELECTED = 1;
 const STATE_HOVERED = 2;
 const STATE_DIMMED = 3;
 const STATE_HIDDEN = 4;
-const STATE_UNSET = 255;
+
+// Version fields are masked so the packed 32-bit signatures never overflow. A wrap
+// (after ~500k transform syncs) can at worst skip a single frame's write for an
+// instance whose pose is unchanged anyway; it self-corrects on the next sync.
+const POSE_VERSION_MASK = 0x7ffff;
+const STYLE_VERSION_MASK = 0xffff;
 
 function defaultMatches(partId, set) {
   return set instanceof Set && set.has(partId);
 }
 
+function resolveEffectColorTriplet(THREE, color) {
+  if (color == null) {
+    return null;
+  }
+  if (Array.isArray(color) && color.length >= 3) {
+    return [Number(color[0]) || 0, Number(color[1]) || 0, Number(color[2]) || 0];
+  }
+  try {
+    const c = new THREE.Color(color);
+    return [c.r, c.g, c.b];
+  } catch {
+    return null;
+  }
+}
+
+// World-space AABB of a single occurrence: transform the shared component-local box by
+// this instance's base matrix (stored column-major in three.js Matrix4.elements order).
+function occurrenceWorldBounds(box, baseMatrices, index) {
+  if (!box || !baseMatrices) {
+    return null;
+  }
+  const [nx, ny, nz] = box.min;
+  const [xx, xy, xz] = box.max;
+  const corners = [
+    [nx, ny, nz], [xx, ny, nz], [nx, xy, nz], [xx, xy, nz],
+    [nx, ny, xz], [xx, ny, xz], [nx, xy, xz], [xx, xy, xz]
+  ];
+  const o = index * 16;
+  const e0 = baseMatrices[o], e1 = baseMatrices[o + 1], e2 = baseMatrices[o + 2];
+  const e4 = baseMatrices[o + 4], e5 = baseMatrices[o + 5], e6 = baseMatrices[o + 6];
+  const e8 = baseMatrices[o + 8], e9 = baseMatrices[o + 9], e10 = baseMatrices[o + 10];
+  const e12 = baseMatrices[o + 12], e13 = baseMatrices[o + 13], e14 = baseMatrices[o + 14];
+  const min = [Infinity, Infinity, Infinity];
+  const max = [-Infinity, -Infinity, -Infinity];
+  for (const [x, y, z] of corners) {
+    const wx = e0 * x + e4 * y + e8 * z + e12;
+    const wy = e1 * x + e5 * y + e9 * z + e13;
+    const wz = e2 * x + e6 * y + e10 * z + e14;
+    if (wx < min[0]) min[0] = wx; if (wx > max[0]) max[0] = wx;
+    if (wy < min[1]) min[1] = wy; if (wy > max[1]) max[1] = wy;
+    if (wz < min[2]) min[2] = wz; if (wz > max[2]) max[2] = wz;
+  }
+  return { min, max };
+}
+
 /**
- * Apply per-occurrence selection/hover/hidden/focus state to one instanced bucket.
+ * Build one lightweight per-occurrence record per instance across all buckets.
  *
- * A shared bucket material cannot express per-instance emissive glow or opacity,
- * so selection/hover read out as an instanceColor recolor, focus-dimming as a
- * darkened instanceColor, and hide as a collapsed (zero) instance matrix. Base
- * color and base matrix are restored from the arrays stashed at build time, so
- * toggling state back returns the instance to its authored appearance/pose.
- *
- * Pure and THREE-injected for Node testability. Sets are matched with `matches`
- * (cadScene passes its hierarchical partIdMatchesSet; the default is exact Set
- * membership).
- *
- * @returns true when any instance attribute changed (caller need not track it —
- *          needsUpdate is set here — but tests assert on it).
+ * These carry the per-occurrence identity (partId = occurrence id), world bounds, and a
+ * link back to `{instanceMesh, instanceIndex}` — but NO geometry/material/THREE.Mesh, so
+ * they are cheap even at 2,000+ occurrences and preserve the instancing GPU win. They
+ * satisfy the same shape the per-mesh record pipelines consume (recordCanExplode wants a
+ * truthy `mesh` + non-null partId; the effect applier keys on partId), so the shared
+ * exploded-view and step-module effect engines write `explodedViewMatrix` / `effectMatrix`
+ * onto them unchanged. `syncInstancedOccurrenceTransforms` then flushes those offsets into
+ * the InstancedMesh instance buffers.
  */
-export function applyInstancedVisualState(THREE, mesh, state = {}) {
-  const occurrenceIds = mesh?.userData?.cadInstanceOccurrenceIds;
-  const baseColors = mesh?.userData?.cadInstanceBaseColors;
-  const baseMatrices = mesh?.userData?.cadInstanceBaseMatrices;
+export function buildInstancedOccurrenceRecords(THREE, instancedMeshes) {
+  const records = [];
+  for (const mesh of Array.isArray(instancedMeshes) ? instancedMeshes : []) {
+    const ud = mesh?.userData || {};
+    const ids = ud.cadInstanceOccurrenceIds;
+    const baseMatrices = ud.cadInstanceBaseMatrices;
+    if (!Array.isArray(ids) || !baseMatrices) {
+      continue;
+    }
+    const box = ud.cadInstanceComponentBox;
+    for (let index = 0; index < ids.length; index += 1) {
+      records.push({
+        partId: ids[index],
+        partBounds: occurrenceWorldBounds(box, baseMatrices, index),
+        // `mesh` only flags the record as live for recordCanExplode; the flush writes an
+        // instance row via instanceMesh/instanceIndex, never mesh.matrix.
+        mesh,
+        instanced: true,
+        instanceMesh: mesh,
+        instanceIndex: index,
+        baseMatrix: new THREE.Matrix4().fromArray(baseMatrices, index * 16),
+        explodedViewMatrix: null,
+        effectMatrix: null,
+        effectStyle: null,
+        effectVisible: null,
+        effectHighlighted: false
+      });
+    }
+  }
+  return records;
+}
+
+/**
+ * Flush per-occurrence transform/effect state (written by the exploded-view engine and the
+ * step-module effect applier onto the pseudo-records) into per-mesh instance-buffer slices,
+ * then re-sync each touched bucket. The posed matrix matches the per-mesh composition
+ * order in composeDisplayRecordObjectMatrix: explodedViewMatrix · effectMatrix · baseMatrix.
+ * GPU writes happen in syncInstancedMesh so a single writer owns instanceMatrix/instanceColor.
+ */
+export function syncInstancedOccurrenceTransforms(THREE, records) {
+  if (!THREE?.Matrix4) {
+    return;
+  }
+  const byMesh = new Map();
+  for (const record of Array.isArray(records) ? records : []) {
+    const mesh = record?.instanceMesh;
+    if (!mesh) {
+      continue;
+    }
+    let list = byMesh.get(mesh);
+    if (!list) {
+      list = [];
+      byMesh.set(mesh, list);
+    }
+    list.push(record);
+  }
+  const tmp = new THREE.Matrix4();
+  for (const [mesh, list] of byMesh) {
+    const ud = mesh.userData || (mesh.userData = {});
+    const baseMatrices = ud.cadInstanceBaseMatrices;
+    const count = Array.isArray(ud.cadInstanceOccurrenceIds) ? ud.cadInstanceOccurrenceIds.length : 0;
+    if (!baseMatrices || !count) {
+      continue;
+    }
+    let posed = ud.cadInstancePosedMatrices;
+    if (!(posed instanceof Float32Array) || posed.length !== count * 16) {
+      posed = new Float32Array(count * 16);
+      ud.cadInstancePosedMatrices = posed;
+    }
+    let effColors = ud.cadInstanceEffectColors;
+    if (!(effColors instanceof Float32Array) || effColors.length !== count * 3) {
+      effColors = new Float32Array(count * 3);
+      ud.cadInstanceEffectColors = effColors;
+    }
+    let effMask = ud.cadInstanceEffectColorMask;
+    if (!(effMask instanceof Uint8Array) || effMask.length !== count) {
+      effMask = new Uint8Array(count);
+      ud.cadInstanceEffectColorMask = effMask;
+    }
+    let effHidden = ud.cadInstanceEffectHidden;
+    if (!(effHidden instanceof Uint8Array) || effHidden.length !== count) {
+      effHidden = new Uint8Array(count);
+      ud.cadInstanceEffectHidden = effHidden;
+    }
+    let effHi = ud.cadInstanceEffectHighlighted;
+    if (!(effHi instanceof Uint8Array) || effHi.length !== count) {
+      effHi = new Uint8Array(count);
+      ud.cadInstanceEffectHighlighted = effHi;
+    }
+    for (const record of list) {
+      const i = record.instanceIndex;
+      if (!Number.isInteger(i) || i < 0 || i >= count) {
+        continue;
+      }
+      tmp.fromArray(baseMatrices, i * 16);
+      const effect = record.effectMatrix instanceof THREE.Matrix4 ? record.effectMatrix : null;
+      const explode = record.explodedViewMatrix instanceof THREE.Matrix4 ? record.explodedViewMatrix : null;
+      if (effect) {
+        tmp.premultiply(effect);
+      }
+      if (explode) {
+        tmp.premultiply(explode);
+      }
+      posed.set(tmp.elements, i * 16);
+      effHidden[i] = record.effectVisible === false ? 1 : 0;
+      effHi[i] = record.effectHighlighted === true ? 1 : 0;
+      const triplet = resolveEffectColorTriplet(THREE, record.effectStyle?.color);
+      if (triplet) {
+        effMask[i] = 1;
+        effColors[i * 3] = triplet[0];
+        effColors[i * 3 + 1] = triplet[1];
+        effColors[i * 3 + 2] = triplet[2];
+      } else {
+        effMask[i] = 0;
+      }
+    }
+    ud.cadInstancePoseVersion = (((ud.cadInstancePoseVersion | 0) + 1) & POSE_VERSION_MASK);
+    ud.cadInstanceStyleVersion = (((ud.cadInstanceStyleVersion | 0) + 1) & STYLE_VERSION_MASK);
+    syncInstancedMesh(THREE, mesh);
+  }
+}
+
+/**
+ * The single writer of an instanced bucket's instanceMatrix/instanceColor buffers. Combines
+ * the visual-state slice (selection/hover/hidden/focus — stored by applyInstancedVisualState)
+ * with the transform/effect slices (posed matrices, effect colours/visibility/highlight —
+ * stored by syncInstancedOccurrenceTransforms):
+ *   - matrix  = hidden ? collapsed : posed-or-base
+ *   - colour  = overlay(selection/hover/dim) over (effect colour or base colour)
+ * Per-instance packed signatures skip unchanged instances so hover on a static package still
+ * touches only the ~2 instances that changed (no full re-upload); a pose/style version bump
+ * (explode / param animation) rewrites the affected instances. Pure + THREE-injected.
+ *
+ * @returns true when any instance attribute changed (tests assert on it).
+ */
+export function syncInstancedMesh(THREE, mesh) {
+  const ud = mesh?.userData;
+  const occurrenceIds = ud?.cadInstanceOccurrenceIds;
+  const baseColors = ud?.cadInstanceBaseColors;
+  const baseMatrices = ud?.cadInstanceBaseMatrices;
   if (!Array.isArray(occurrenceIds) || !occurrenceIds.length || !baseColors || !baseMatrices) {
     return false;
   }
-  const {
-    selected,
-    hovered,
-    hidden,
-    focusIds,
-    hasFocus = focusIds instanceof Set && focusIds.size > 0,
-    selectedColor,
-    hoveredColor,
-    dimFactor = DIMMED_INSTANCE_FACTOR,
-    matches = defaultMatches
-  } = state;
+  const count = occurrenceIds.length;
 
-  const selR = selectedColor?.r ?? 0.31;
-  const selG = selectedColor?.g ?? 0.615;
-  const selB = selectedColor?.b ?? 1;
-  const hovR = hoveredColor?.r ?? 0.553;
-  const hovG = hoveredColor?.g ?? 0.772;
-  const hovB = hoveredColor?.b ?? 1;
+  const vs = ud.cadVisualState || {};
+  const matches = typeof vs.matches === "function" ? vs.matches : defaultMatches;
+  const hasFocus = vs.hasFocus === true || (vs.focusIds instanceof Set && vs.focusIds.size > 0);
+  const dimFactor = Number.isFinite(vs.dimFactor) ? vs.dimFactor : DIMMED_INSTANCE_FACTOR;
+  const selR = vs.selectedColor?.r ?? 0.31;
+  const selG = vs.selectedColor?.g ?? 0.615;
+  const selB = vs.selectedColor?.b ?? 1;
+  const hovR = vs.hoveredColor?.r ?? 0.553;
+  const hovG = vs.hoveredColor?.g ?? 0.772;
+  const hovB = vs.hoveredColor?.b ?? 1;
 
-  // Per-instance state code from the last apply, so a hover/selection change only
-  // rewrites the handful of instances that actually changed and only dirties the GPU
-  // buffers when something moved. Without this, every hover transition re-uploaded all
-  // N instances (2,142 for falcon_heavy). 255 = "never applied" → forces a first write.
-  // A given code always maps to the same color/pose (selection/hover colors are theme
-  // constants; a theme change rebuilds the mesh with a fresh code array), so skipping an
-  // unchanged instance is safe.
-  let stateCodes = mesh.userData.cadInstanceStateCodes;
-  if (!(stateCodes instanceof Uint8Array) || stateCodes.length !== occurrenceIds.length) {
-    stateCodes = new Uint8Array(occurrenceIds.length).fill(STATE_UNSET);
-    mesh.userData.cadInstanceStateCodes = stateCodes;
+  const posed = ud.cadInstancePosedMatrices instanceof Float32Array ? ud.cadInstancePosedMatrices : null;
+  const effColors = ud.cadInstanceEffectColors instanceof Float32Array ? ud.cadInstanceEffectColors : null;
+  const effMask = ud.cadInstanceEffectColorMask instanceof Uint8Array ? ud.cadInstanceEffectColorMask : null;
+  const effHidden = ud.cadInstanceEffectHidden instanceof Uint8Array ? ud.cadInstanceEffectHidden : null;
+  const effHi = ud.cadInstanceEffectHighlighted instanceof Uint8Array ? ud.cadInstanceEffectHighlighted : null;
+  const poseVersion = (ud.cadInstancePoseVersion | 0) & POSE_VERSION_MASK;
+  const styleVersion = (ud.cadInstanceStyleVersion | 0) & STYLE_VERSION_MASK;
+
+  let matrixSig = ud.cadInstanceMatrixSig;
+  if (!(matrixSig instanceof Uint32Array) || matrixSig.length !== count) {
+    matrixSig = new Uint32Array(count).fill(0xffffffff);
+    ud.cadInstanceMatrixSig = matrixSig;
+  }
+  let colorSig = ud.cadInstanceColorSig;
+  if (!(colorSig instanceof Uint32Array) || colorSig.length !== count) {
+    colorSig = new Uint32Array(count).fill(0xffffffff);
+    ud.cadInstanceColorSig = colorSig;
   }
 
   const tmpColor = new THREE.Color();
   const tmpMatrix = new THREE.Matrix4();
-  let colorChanged = false;
   let matrixChanged = false;
+  let colorChanged = false;
 
-  for (let index = 0; index < occurrenceIds.length; index += 1) {
+  for (let index = 0; index < count; index += 1) {
     const id = occurrenceIds[index];
-    const isHidden = matches(id, hidden);
-    const isSelected = !isHidden && matches(id, selected);
-    const isHovered = !isHidden && !isSelected && matches(id, hovered);
-    const isFocused = !isHidden && hasFocus && matches(id, focusIds);
+    const isHidden = (effHidden ? effHidden[index] === 1 : false) || matches(id, vs.hidden);
+    const isSelected = !isHidden && ((effHi ? effHi[index] === 1 : false) || matches(id, vs.selected));
+    const isHovered = !isHidden && !isSelected && matches(id, vs.hovered);
+    const isFocused = !isHidden && hasFocus && matches(id, vs.focusIds);
     const isDimmed = !isHidden && hasFocus && !isFocused && !isSelected && !isHovered;
     const code = isHidden ? STATE_HIDDEN
       : isSelected ? STATE_SELECTED
@@ -295,38 +476,41 @@ export function applyInstancedVisualState(THREE, mesh, state = {}) {
           : isDimmed ? STATE_DIMMED
             : STATE_BASE;
 
-    const previous = stateCodes[index];
-    if (previous === code) {
-      continue; // unchanged instance — leave its matrix/color as-is.
-    }
-
-    // Matrix only differs between hidden (collapsed) and any visible pose (base), so
-    // rewrite it only when hidden-ness flips (or on the first, unknown-state apply).
-    const hiddenFlipped = (previous === STATE_UNSET) || ((previous === STATE_HIDDEN) !== (code === STATE_HIDDEN));
-    if (hiddenFlipped) {
-      if (code === STATE_HIDDEN) {
+    // Matrix: collapse when hidden, else the posed transform (or base when no offsets).
+    // The pose version forces a rewrite when explode/animation moved the instances.
+    const nextMatrixSig = (isHidden ? 1 : 0) | (poseVersion << 1);
+    if (matrixSig[index] !== nextMatrixSig) {
+      if (isHidden) {
         tmpMatrix.fromArray(HIDDEN_INSTANCE_MATRIX);
+      } else if (posed) {
+        tmpMatrix.fromArray(posed, index * 16);
       } else {
         tmpMatrix.fromArray(baseMatrices, index * 16);
       }
       mesh.setMatrixAt(index, tmpMatrix);
+      matrixSig[index] = nextMatrixSig;
       matrixChanged = true;
     }
 
-    let r = baseColors[index * 3];
-    let g = baseColors[index * 3 + 1];
-    let b = baseColors[index * 3 + 2];
-    if (code === STATE_SELECTED) {
-      r = selR; g = selG; b = selB;
-    } else if (code === STATE_HOVERED) {
-      r = hovR; g = hovG; b = hovB;
-    } else if (code === STATE_DIMMED) {
-      r *= dimFactor; g *= dimFactor; b *= dimFactor;
+    // Colour: selection/hover/dim overlay over the effect colour (if any) or base colour.
+    const nextColorSig = code | (styleVersion << 3);
+    if (colorSig[index] !== nextColorSig) {
+      const hasEffectColor = effMask ? effMask[index] === 1 : false;
+      let r = hasEffectColor ? effColors[index * 3] : baseColors[index * 3];
+      let g = hasEffectColor ? effColors[index * 3 + 1] : baseColors[index * 3 + 1];
+      let b = hasEffectColor ? effColors[index * 3 + 2] : baseColors[index * 3 + 2];
+      if (code === STATE_SELECTED) {
+        r = selR; g = selG; b = selB;
+      } else if (code === STATE_HOVERED) {
+        r = hovR; g = hovG; b = hovB;
+      } else if (code === STATE_DIMMED) {
+        r *= dimFactor; g *= dimFactor; b *= dimFactor;
+      }
+      tmpColor.setRGB(r, g, b);
+      mesh.setColorAt(index, tmpColor);
+      colorSig[index] = nextColorSig;
+      colorChanged = true;
     }
-    tmpColor.setRGB(r, g, b);
-    mesh.setColorAt(index, tmpColor);
-    colorChanged = true;
-    stateCodes[index] = code;
   }
 
   if (matrixChanged) {
@@ -335,7 +519,30 @@ export function applyInstancedVisualState(THREE, mesh, state = {}) {
   if (colorChanged && mesh.instanceColor) {
     mesh.instanceColor.needsUpdate = true;
   }
-  return colorChanged || matrixChanged;
+  return matrixChanged || colorChanged;
+}
+
+/**
+ * Store the selection/hover/hidden/focus slice for a bucket and re-sync it. The actual
+ * per-instance buffer writes happen in syncInstancedMesh, which merges this slice with any
+ * transform/effect slice so selection and exploded/animated poses coexist without racing on
+ * the shared instanceMatrix/instanceColor buffers.
+ *
+ * Sets are matched with `matches` (cadScene passes its hierarchical partIdMatchesSet; the
+ * default is exact Set membership). Pure + THREE-injected for Node testability.
+ *
+ * @returns true when any instance attribute changed.
+ */
+export function applyInstancedVisualState(THREE, mesh, state = {}) {
+  if (!mesh?.userData) {
+    return false;
+  }
+  mesh.userData.cadVisualState = {
+    ...state,
+    hasFocus: state.hasFocus ?? (state.focusIds instanceof Set && state.focusIds.size > 0),
+    matches: typeof state.matches === "function" ? state.matches : defaultMatches
+  };
+  return syncInstancedMesh(THREE, mesh);
 }
 
 // World-space AABB of the occurrences in one instanced bucket that satisfy `matches`
