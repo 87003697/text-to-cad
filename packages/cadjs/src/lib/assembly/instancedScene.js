@@ -545,6 +545,63 @@ export function applyInstancedVisualState(THREE, mesh, state = {}) {
   return syncInstancedMesh(THREE, mesh);
 }
 
+const INSTANCED_EDGE_THRESHOLD_DEG = 16;
+
+// Selection-only edge overlay for instanced packages. Screen-space thick-line edges cannot
+// be GPU-instanced, so instead of an edge object per occurrence we build edges only for the
+// selected/hovered occurrences (matched by `matches`). Returns one placement per matching
+// instance: the component-local edge line positions (cached per bucket — the same geometry
+// for every instance of a cid) and the instance's current posed world matrix (base, or the
+// exploded/animated pose when present). The caller renders these with its own screen-space
+// line builder. Effect-hidden instances are skipped. Pure + THREE-injected.
+export function collectInstancedSelectionEdgePlacements(THREE, instancedMeshes, matches, { thresholdDeg = INSTANCED_EDGE_THRESHOLD_DEG } = {}) {
+  const predicate = typeof matches === "function" ? matches : () => false;
+  const placements = [];
+  for (const mesh of Array.isArray(instancedMeshes) ? instancedMeshes : []) {
+    const ud = mesh?.userData || {};
+    const ids = ud.cadInstanceOccurrenceIds;
+    const baseMatrices = ud.cadInstanceBaseMatrices;
+    if (!Array.isArray(ids) || !baseMatrices || !mesh.geometry) {
+      continue;
+    }
+    let anyMatch = false;
+    for (let i = 0; i < ids.length; i += 1) {
+      if (predicate(ids[i])) {
+        anyMatch = true;
+        break;
+      }
+    }
+    if (!anyMatch) {
+      continue;
+    }
+    // Component-local edge positions, computed once per bucket and reused for every instance.
+    let positions = ud.cadInstanceEdgePositions;
+    if (positions === undefined) {
+      const edges = new THREE.EdgesGeometry(mesh.geometry, thresholdDeg);
+      const arr = edges.getAttribute("position")?.array;
+      positions = arr && arr.length ? arr : null;
+      ud.cadInstanceEdgePositions = positions;
+      edges.dispose();
+    }
+    if (!positions) {
+      continue;
+    }
+    const posed = ud.cadInstancePosedMatrices instanceof Float32Array ? ud.cadInstancePosedMatrices : null;
+    const effHidden = ud.cadInstanceEffectHidden instanceof Uint8Array ? ud.cadInstanceEffectHidden : null;
+    for (let i = 0; i < ids.length; i += 1) {
+      if (!predicate(ids[i]) || (effHidden && effHidden[i] === 1)) {
+        continue;
+      }
+      placements.push({
+        occurrenceId: ids[i],
+        positions,
+        matrix: new THREE.Matrix4().fromArray(posed || baseMatrices, i * 16)
+      });
+    }
+  }
+  return placements;
+}
+
 // World-space AABB of the occurrences in one instanced bucket that satisfy `matches`
 // (an (occurrenceId) => boolean predicate). Transforms the shared component-local box
 // by each selected instance's base matrix and unions the results. Pure JS (no THREE):

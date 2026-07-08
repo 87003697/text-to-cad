@@ -1,5 +1,17 @@
 # Viewer: large-package rendering plan
 
+**Update 2026-07-08 — instanced feature parity landed; instancing is default-on again.**
+The Phase-3/4 "documented gaps" (exploded view, per-occurrence param/animation transforms,
+per-part edges, and live-viewer selection highlight) are resolved, so the size-policy
+default-on is back (branch `claude/instanced-feature-parity`). Per-occurrence transforms flow
+through lightweight pseudo-records (`buildInstancedOccurrenceRecords`) fed to the shared
+exploded-view + step-module effect engines, then flushed into the instance buffers
+(`syncInstancedOccurrenceTransforms`); a single writer (`syncInstancedMesh`) merges
+selection/hover with the posed matrices. Edges use a **selection-only** screen-space overlay
+(`collectInstancedSelectionEdgePlacements`) — full per-occurrence edges were declined because
+screen-space thick lines can't be GPU-instanced (one line object per occurrence would undo the
+draw-call win in edge modes). The section below is the original plan for context.
+
 Recorded 2026-07-06. Target workload: falcon_heavy-class component-GLB
 packages — 2,142 occurrences over 141 unique components (top cid ×108,
 seven more ×54), 24 distinct override colors; starship_stack is 2,562/282.

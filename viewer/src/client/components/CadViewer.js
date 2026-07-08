@@ -101,7 +101,10 @@ import {
   explodedViewTrailSegments
 } from "cadjs/lib/viewer/explodedViewSteps";
 import { generateExplodedViewDocument } from "cadjs/lib/viewer/explodedView";
-import { syncInstancedOccurrenceTransforms } from "cadjs/lib/assembly/instancedScene";
+import {
+  syncInstancedOccurrenceTransforms,
+  collectInstancedSelectionEdgePlacements
+} from "cadjs/lib/assembly/instancedScene";
 import {
   applyDisplayRecordTransform,
   applyRuntimeModelBounds,
@@ -722,6 +725,59 @@ function ZoomToolbar({
   );
 }
 
+// Selection-only edge overlay for instanced packages. Screen-space thick-line edges can't
+// be GPU-instanced, so instead of an edge object per occurrence we draw edges only for the
+// selected/hovered occurrences, placed at their current (possibly exploded/animated) pose.
+// Rebuilt whenever selection or the instanced pose changes; a no-op for the per-mesh path.
+function refreshInstancedSelectionEdges(runtime) {
+  if (!runtime?.THREE) {
+    return;
+  }
+  const records = runtime.instancedOccurrenceRecords;
+  const instancedMeshes = Array.isArray(records) && records.length
+    ? [...new Set(records.map((record) => record.instanceMesh).filter(Boolean))]
+    : [];
+  // Parent the overlay to the instanced meshes' own group so its lines share the exact
+  // local space the per-instance (posed) matrices live in.
+  const parent = instancedMeshes[0]?.parent || runtime.modelGroup;
+  let group = runtime.instancedSelectionEdgeGroup;
+  if (!group) {
+    group = new runtime.THREE.Group();
+    group.name = "instancedSelectionEdges";
+    runtime.instancedSelectionEdgeGroup = group;
+  }
+  // Re-attach if a model rebuild disposed/detached the previous parent group.
+  if (parent && group.parent !== parent) {
+    parent.add(group);
+  }
+  clearSceneGroup(group);
+  const state = runtime.instancedSelectionEdgeState;
+  if (!instancedMeshes.length || !state?.enabled || typeof state.matches !== "function") {
+    runtime.requestRender?.();
+    return;
+  }
+  const placements = collectInstancedSelectionEdgePlacements(runtime.THREE, instancedMeshes, state.matches);
+  for (const placement of placements) {
+    const line = createScreenSpaceLineSegments(runtime, placement.positions, {
+      color: state.color,
+      opacity: state.opacity ?? 1,
+      lineWidth: state.lineWidth ?? 1.5,
+      renderOrder: state.renderOrder ?? 4,
+      depthTest: state.depthTest !== false,
+      depthWrite: false
+    });
+    if (!line) {
+      continue;
+    }
+    line.matrixAutoUpdate = false;
+    line.matrix.copy(placement.matrix);
+    line.matrixWorldNeedsUpdate = true;
+    group.add(line);
+  }
+  runtime.modelGroup?.updateMatrixWorld?.(true);
+  runtime.requestRender?.();
+}
+
 function applyExplodedViewRuntimeProgress(runtime, compiled, progress) {
   if (!runtime?.THREE || !Array.isArray(runtime.displayRecords)) {
     return;
@@ -734,6 +790,8 @@ function applyExplodedViewRuntimeProgress(runtime, compiled, progress) {
     // The explode engine wrote explodedViewMatrix onto the per-occurrence records; flush the
     // combined offsets into the instance buffers (the bucket meshes have no per-record matrix).
     syncInstancedOccurrenceTransforms(runtime.THREE, instancedRecords);
+    // Keep the selection edge overlay glued to the occurrences as they move.
+    refreshInstancedSelectionEdges(runtime);
   } else {
     for (const record of runtime.displayRecords) {
       applyDisplayRecordTransform(runtime.THREE, record);
@@ -3791,6 +3849,55 @@ const CadViewer = forwardRef(function CadViewer({
     selectorRuntime,
     displayEdgeRuntime,
     stepParameterRuntime
+  ]);
+
+  // Selection-only edge overlay for instanced packages. Screen-space thick-line edges
+  // can't be GPU-instanced, so we draw edges only for the selected/focused occurrences
+  // (placed at their current pose). No-op for the per-mesh path (edges live on records).
+  useEffect(() => {
+    const runtime = runtimeRef.current;
+    if (!runtime?.THREE) {
+      return undefined;
+    }
+    const highlightIds = new Set([
+      ...normalizePartIdList(selectedPartIds),
+      ...focusedPartIds
+    ]);
+    const matches = highlightIds.size
+      ? (occurrenceId) => {
+          const id = String(occurrenceId || "");
+          if (highlightIds.has(id)) {
+            return true;
+          }
+          for (const selectedId of highlightIds) {
+            if (id.startsWith(`${selectedId}.`)) {
+              return true;
+            }
+          }
+          return false;
+        }
+      : null;
+    const instanced = Array.isArray(runtime.instancedOccurrenceRecords)
+      && runtime.instancedOccurrenceRecords.length > 0;
+    runtime.instancedSelectionEdgeState = {
+      enabled: instanced && partVisualStateEnabled && Boolean(matches),
+      matches,
+      color: String(visualEdgeSettings?.highlightColor || REFERENCE_SELECTED_COLOR).trim() || REFERENCE_SELECTED_COLOR,
+      opacity: 1,
+      lineWidth: 1.6,
+      renderOrder: 4
+    };
+    refreshInstancedSelectionEdges(runtime);
+    return undefined;
+  }, [
+    selectedPartIds,
+    focusedPartIds,
+    partVisualStateEnabled,
+    viewerReadyTick,
+    explodedViewActive,
+    explodeAmount,
+    modelKey,
+    visualEdgeSettings
   ]);
 
   useEffect(() => {

@@ -9,7 +9,8 @@ import {
   buildInstancedPackageScene,
   buildInstancedOccurrenceRecords,
   syncInstancedOccurrenceTransforms,
-  applyInstancedVisualState
+  applyInstancedVisualState,
+  collectInstancedSelectionEdgePlacements
 } from "../lib/assembly/instancedScene.js";
 
 function boxComponent() {
@@ -245,4 +246,49 @@ test("selection recolor and exploded pose coexist on one instance (single buffer
   assert.ok(Math.abs(instancePosition(rec).z - 12) < 1e-6, "exploded pose must survive a selection re-sync");
   const c = instanceColor(rec);
   assert.ok(Math.abs(c.r - 0.3) < 0.05 && Math.abs(c.b - 1) < 0.05, `expected selection blue, got ${c.r},${c.g},${c.b}`);
+});
+
+function cubeComponent() {
+  const s = 0.5;
+  const vertices = new Float32Array([
+    -s, -s, -s, s, -s, -s, s, s, -s, -s, s, -s,
+    -s, -s, s, s, -s, s, s, s, s, -s, s, s
+  ]);
+  const indices = new Uint32Array([
+    0, 1, 2, 0, 2, 3, 4, 6, 5, 4, 7, 6, 0, 4, 5, 0, 5, 1,
+    3, 2, 6, 3, 6, 7, 1, 5, 6, 1, 6, 2, 0, 3, 7, 0, 7, 4
+  ]);
+  return {
+    vertices,
+    normals: new Float32Array(vertices.length),
+    colors: new Float32Array(0),
+    indices,
+    parts: [{ vertexOffset: 0, vertexCount: 8, triangleOffset: 0, triangleCount: 12 }]
+  };
+}
+
+test("collectInstancedSelectionEdgePlacements: edges for matched occurrences follow the posed matrix", () => {
+  const descriptor = {
+    components: { C: {} },
+    occurrences: [
+      { id: "o1.1", component: "C", transform: translation(0, 0, 0) },
+      { id: "o1.2", component: "C", transform: translation(10, 0, 0) }
+    ]
+  };
+  const scene = buildInstancedPackageScene(THREE, descriptor, { C: cubeComponent() });
+  const records = buildInstancedOccurrenceRecords(THREE, scene.instancedMeshes);
+  const matches = (id) => id === "o1.2"; // only the second occurrence is selected
+
+  const placements = collectInstancedSelectionEdgePlacements(THREE, scene.instancedMeshes, matches);
+  assert.equal(placements.length, 1);
+  assert.equal(placements[0].occurrenceId, "o1.2");
+  assert.ok(placements[0].positions?.length > 0, "a cube should yield edge line positions");
+  assert.ok(Math.abs(new THREE.Vector3().setFromMatrixPosition(placements[0].matrix).x - 10) < 1e-6);
+
+  // Exploding the occurrence moves the edge placement with it.
+  recordById(records, "o1.2").explodedViewMatrix = new THREE.Matrix4().makeTranslation(0, 0, 20);
+  syncInstancedOccurrenceTransforms(THREE, records);
+  const posed = collectInstancedSelectionEdgePlacements(THREE, scene.instancedMeshes, matches);
+  const pp = new THREE.Vector3().setFromMatrixPosition(posed[0].matrix);
+  assert.ok(Math.abs(pp.x - 10) < 1e-6 && Math.abs(pp.z - 20) < 1e-6, "edge placement follows the exploded pose");
 });
