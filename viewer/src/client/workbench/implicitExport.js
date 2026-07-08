@@ -1,5 +1,5 @@
-import { loadImplicitCadModule } from "implicitjs/loader";
-import { exportImplicitCadModel } from "implicitjs/exportModel";
+import { loadImplicitCadModule } from "cadjs/implicit/loader";
+import { exportImplicitCadModel } from "cadjs/implicit/exportModel";
 
 import { refreshCadCatalog } from "./cadManifestStore.js";
 
