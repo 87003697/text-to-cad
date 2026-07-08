@@ -12,6 +12,7 @@
     "./implicit/loader": "./src/implicit/loader.js",
     "./implicit/graphicsSettings": "./src/implicit/graphicsSettings.js",
     "./implicit/export": "./src/implicit/export.js",
+    "./implicit/exportModel": "./src/implicit/exportModel.js",
     "./implicit/parameters": "./src/implicit/parameters.js",
     "./lib/*": "./src/lib/*"
   },
