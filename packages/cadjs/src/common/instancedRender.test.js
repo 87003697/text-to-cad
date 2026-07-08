@@ -79,9 +79,9 @@ function largePackageMeshData(occurrenceCount) {
   };
 }
 
-test("a large package instances by default (size policy, no flag)", () => {
+test("a large package is NOT instanced without the flag (instancing is opt-in)", () => {
   const model = buildModel(THREE, largePackageMeshData(200), {});
-  assert.equal(countInstanced(model.modelGroup), 1);
+  assert.equal(countInstanced(model.modelGroup), 0);
   model.dispose?.();
 });
 
@@ -136,25 +136,26 @@ test("instanced bucket honors a component's baked vertex colors when there is no
 });
 
 test("toggling instancePackages via update() rebuilds between the instanced and per-mesh paths", () => {
-  const model = buildModel(THREE, largePackageMeshData(200), {}); // instanced by size policy
-  assert.equal(countInstanced(model.modelGroup), 1);
-  model.update({ instancePackages: false });                       // force per-mesh
+  const model = buildModel(THREE, largePackageMeshData(200), {}); // per-mesh by default (opt-in)
   assert.equal(countInstanced(model.modelGroup), 0);
-  model.update({ instancePackages: true });                        // force instanced again
+  model.update({ instancePackages: true });                        // opt into instancing
   assert.equal(countInstanced(model.modelGroup), 1);
+  model.update({ instancePackages: false });                       // back to per-mesh
+  assert.equal(countInstanced(model.modelGroup), 0);
   model.dispose?.();
 });
 
-test("shouldInstancePackageScene: tri-state flag beats the size policy", () => {
+test("shouldInstancePackageScene: opt-in flag only, no size policy", () => {
   const small = packageMeshData();
   const large = largePackageMeshData(200);
   // no packageInstancing -> never
   assert.equal(shouldInstancePackageScene({}, { parts: [] }), false);
-  // size policy
+  // no flag -> per-mesh regardless of size (instancing is opt-in)
   assert.equal(shouldInstancePackageScene({}, small), false);
-  assert.equal(shouldInstancePackageScene({}, large), true);
-  // explicit overrides
+  assert.equal(shouldInstancePackageScene({}, large), false);
+  // explicit opt-in / opt-out
   assert.equal(shouldInstancePackageScene({ instancePackages: true }, small), true);
+  assert.equal(shouldInstancePackageScene({ instancePackages: true }, large), true);
   assert.equal(shouldInstancePackageScene({ instancePackages: false }, large), false);
 });
 
