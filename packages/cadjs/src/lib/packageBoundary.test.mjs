@@ -14,7 +14,9 @@ function collectSourceFiles(directory, files = []) {
   for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
     const entryPath = path.join(directory, entry.name);
     if (entry.isDirectory()) {
-      collectSourceFiles(entryPath, files);
+      if (entry.name !== "node_modules") {
+        collectSourceFiles(entryPath, files);
+      }
     } else if (/\.[cm]?js$/u.test(entry.name)) {
       files.push(entryPath);
     }
@@ -35,14 +37,21 @@ test("implicitjs does not depend on cadjs (dependency flows cadjs -> implicitjs)
   const manifest = JSON.parse(fs.readFileSync(path.join(implicitRoot, "package.json"), "utf8"));
   assert.equal(manifest.dependencies?.cadjs, undefined);
 
-  const sourceFiles = collectSourceFiles(path.join(implicitRoot, "src"));
-  for (const filePath of sourceFiles) {
-    const source = fs.readFileSync(filePath, "utf8");
-    assert.equal(
-      /\bfrom\s+["']cadjs(?:\/[^"']*)?["']|export\s+\*\s+from\s+["']cadjs(?:\/[^"']*)?["']/u.test(source),
-      false,
-      `${path.relative(implicitRoot, filePath)} imports cadjs`
-    );
+  // Any cadjs specifier is a violation regardless of import style (static,
+  // dynamic import(), require, export-from) or a relative escape into the
+  // sibling package's tree. scripts/ is scanned too: the implicit-cad skill
+  // vendors it as runtime code, so a cadjs import there would ship unnoticed.
+  const cadjsSpecifier = /["'](?:cadjs(?:\/[^"']*)?|(?:\.\.\/)+cadjs\/[^"']*)["']/u;
+  for (const scanRoot of ["src", "scripts"]) {
+    const sourceFiles = collectSourceFiles(path.join(implicitRoot, scanRoot));
+    for (const filePath of sourceFiles) {
+      const source = fs.readFileSync(filePath, "utf8");
+      assert.equal(
+        cadjsSpecifier.test(source),
+        false,
+        `${path.relative(implicitRoot, filePath)} references cadjs`
+      );
+    }
   }
 });
 
