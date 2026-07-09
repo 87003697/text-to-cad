@@ -6,7 +6,6 @@ import {
 import { REFERENCE_SELECTED_COLOR } from "./referenceGeometry.js";
 import { BASE_VIEWER_THEME } from "./stageTheme.js";
 import { readSourceColor } from "./surfaceMaterials.js";
-import { applyInstancedVisualState } from "../assembly/instancedScene.js";
 
 const CAD_EDGE_OPACITY = 0.84;
 const PART_HIGHLIGHT_SURFACE_RENDER_ORDER = 23;
@@ -213,22 +212,6 @@ export function applyPartVisualState(THREE, records, {
   } = getPartHighlightColors(THREE, { edgeSettings });
 
   for (const record of Array.isArray(records) ? records : []) {
-    if (record.instanced) {
-      // Per-instance selection/hover/hidden/focus on the InstancedMesh (recolor +
-      // collapse), merged with any exploded/param pose in syncInstancedMesh. The
-      // shared bucket material can't express per-occurrence highlight otherwise.
-      applyInstancedVisualState(THREE, record.mesh, {
-        selected,
-        hovered,
-        hidden,
-        focusIds,
-        hasFocus,
-        selectedColor: selectedSurfaceColor,
-        hoveredColor: hoveredSurfaceColor,
-        matches: partIdMatchesSet
-      });
-      continue;
-    }
     const effectStyle = record.effectStyle && typeof record.effectStyle === "object" ? record.effectStyle : {};
     const effectHidden = record.effectVisible === false;
     const effectColor = readSourceColor(THREE, effectStyle.color);

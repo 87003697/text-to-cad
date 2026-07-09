@@ -28,13 +28,6 @@ import {
 import {
   applyDisplayRecordTransform
 } from "./displayRecordTransform.js";
-import {
-  buildInstancedPackageScene,
-  applyInstancedVisualState,
-  instancedOccurrenceBounds,
-  buildInstancedOccurrenceRecords,
-  syncInstancedOccurrenceTransforms
-} from "../lib/assembly/instancedScene.js";
 import { axisIndex, normalizeStepClipSettings } from "../lib/viewer/clipPlane.js";
 import {
   clampSceneModelRadius,
@@ -1240,22 +1233,6 @@ export function applyPartVisualState(THREE, records, {
     if (!record?.mesh || !record?.material) {
       continue;
     }
-    if (record.instanced) {
-      // Per-instance selection/hover/hidden/focus is applied on the InstancedMesh
-      // (recolor + collapse), not by mutating the shared bucket material — which
-      // would recolor every instance at once.
-      applyInstancedVisualState(THREE, record.mesh, {
-        selected,
-        hovered,
-        hidden,
-        focusIds,
-        hasFocus,
-        selectedColor: selectedSurfaceColor,
-        hoveredColor: hoveredSurfaceColor,
-        matches: partIdMatchesSet
-      });
-      continue;
-    }
     const effectStyle = record.effectStyle && typeof record.effectStyle === "object" ? record.effectStyle : {};
     const effectHidden = record.effectVisible === false;
     const effectColor = readSourceColor(THREE, effectStyle.color);
@@ -1515,10 +1492,6 @@ function applyParameters(THREE, runtime, parameters, meshData, callbacks = {}) {
     for (const record of runtime.displayRecords) {
       applyDisplayRecordTransform(THREE, record);
     }
-    if (runtime.instancedOccurrenceRecords?.length) {
-      resetParameterEffects(runtime.instancedOccurrenceRecords);
-      syncInstancedOccurrenceTransforms(THREE, runtime.instancedOccurrenceRecords);
-    }
     return runtime.baseBounds;
   }
 
@@ -1559,10 +1532,6 @@ function applyParameters(THREE, runtime, parameters, meshData, callbacks = {}) {
   applyStepModuleEffectsToRecords(THREE, runtime.displayRecords, effectsByPartId);
   for (const record of runtime.displayRecords) {
     applyDisplayRecordTransform(THREE, record);
-  }
-  if (runtime.instancedOccurrenceRecords?.length) {
-    applyStepModuleEffectsToRecords(THREE, runtime.instancedOccurrenceRecords, effectsByPartId);
-    syncInstancedOccurrenceTransforms(THREE, runtime.instancedOccurrenceRecords);
   }
   return effectiveBoundsFromRecords(THREE, runtime.displayRecords, runtime.baseBounds);
 }
@@ -1804,96 +1773,7 @@ function addEdgeObject(THREE, runtime, record, edgeGeometry, settings) {
   runtime.edgesGroup.add(object);
 }
 
-// Material for an instanced component bucket, matching makeRecord's per-mode
-// choice but with a WHITE base so the per-instance color (occurrence override,
-// set as instanceColor) drives the diffuse — the multiply reproduces the
-// per-mesh path's material.color under identical lighting. Edges are handled
-// separately (selection-only) so no surface-edge shader is attached here.
-function instancedBucketMaterial(THREE, runtime, { doubleSide, hasVertexColors = false }) {
-  const displayMode = runtime.displayMode;
-  const white = new THREE.Color(1, 1, 1);
-  let material;
-  if (displayModeIsWireframe(displayMode)) {
-    material = createWireframeSurfaceMaterial(THREE, runtime.materialSettings, 0);
-  } else if (displayModeUsesUnlitSurfaces(displayMode)) {
-    material = createUnshadedSurfaceMaterial(THREE, {
-      color: white,
-      // Honor a component's baked per-vertex COLOR_0. The engine only reports
-      // hasVertexColors for buckets with no occurrence override, so instanceColor
-      // stays white and the vertex color drives the diffuse — matching the
-      // per-mesh composed path instead of flattening the component to white.
-      useVertexColors: hasVertexColors,
-      opacity: displayModeSurfaceOpacity(displayMode, runtime.materialSettings?.opacity)
-    });
-  } else {
-    material = createSurfaceMaterial(THREE, runtime.baseTheme, { color: white, useVertexColors: hasVertexColors });
-  }
-  if (doubleSide && material?.side !== undefined) {
-    material.side = THREE.DoubleSide;
-  }
-  return material;
-}
-
-// A composed package instances (cid-keyed InstancedMesh) instead of one THREE.Mesh
-// per occurrence when it is large enough for the draw-call/GPU-vertex collapse to
-// matter. The instanced record path now carries the full per-part feature set —
-// selection/hover/hide/focus (per-instance colour + collapse), exploded view and
-// per-occurrence param/animation transforms (per-instance posed matrix), and
-// per-occurrence edges — so instancing is safe as the default for large packages.
-//
-// `instancePackages` overrides the size policy: true forces instancing on, false
-// forces it off; left undefined a package instances once it has
-// `≥ INSTANCE_MIN_OCCURRENCES` (128) occurrences. Small/medium assemblies stay on
-// the per-mesh path, which is byte-identical for below-threshold snapshots.
-const INSTANCE_MIN_OCCURRENCES = 128;
-
-export function shouldInstancePackageScene(settings, meshData) {
-  if (!meshData?.packageInstancing) {
-    return false;
-  }
-  const flag = settings?.instancePackages;
-  if (flag === true) {
-    return true;
-  }
-  if (flag === false) {
-    return false;
-  }
-  const occurrences = meshData.packageInstancing.descriptor?.occurrences;
-  const count = Array.isArray(occurrences) ? occurrences.length : 0;
-  return count >= INSTANCE_MIN_OCCURRENCES;
-}
-
-function buildInstancedDisplayRecords(THREE, runtime, meshData) {
-  const { descriptor, componentMeshDataByCid } = meshData.packageInstancing;
-  const scene = buildInstancedPackageScene(THREE, descriptor, componentMeshDataByCid, {
-    makeMaterial: (_cid, opts) => instancedBucketMaterial(THREE, runtime, opts)
-  });
-  runtime.modelGroup.add(scene.group);
-  runtime.instancedScene = scene;
-  // Per-occurrence records (one per instance, no geometry/material) drive the shared
-  // exploded-view and step-module effect engines for instanced packages; the flush
-  // writes the resulting per-occurrence offsets into the instance buffers.
-  runtime.instancedOccurrenceRecords = buildInstancedOccurrenceRecords(THREE, scene.instancedMeshes);
-  // One inert record per InstancedMesh so the runtime's per-record loops
-  // (material sync, visual state) can iterate without special-casing every site.
-  return scene.instancedMeshes.map((mesh) => ({
-    mesh,
-    material: mesh.material,
-    partId: null,
-    instanced: true,
-    componentId: mesh.userData.cadComponentId,
-    occurrenceIds: mesh.userData.cadInstanceOccurrenceIds || [],
-    // Resolve world bounds for the occurrences in this bucket matching `matches`
-    // ((occurrenceId) => bool), so zoom-to-fit can frame a selected instanced
-    // occurrence despite there being no per-record partBounds.
-    instancedBoundsFor: (matches) => instancedOccurrenceBounds(mesh, matches)
-  }));
-}
-
 function buildDisplayRecords(THREE, runtime, meshData, settings) {
-  if (shouldInstancePackageScene(settings, meshData)) {
-    return buildInstancedDisplayRecords(THREE, runtime, meshData);
-  }
   const theme = runtime.theme;
   const materialSettings = runtime.materialSettings;
   const displayMode = runtime.displayMode;
@@ -2050,11 +1930,7 @@ function settingsSignature(meshData, theme, settings) {
       edgeSettings.silhouette === true &&
       (edgeSettings.enabled !== false || settings.silhouette === true),
     edgeRendering: settings.edgeRendering?.mode || "basic",
-    wireframeEdgeColor: settings.edgeRendering?.wireframeEdgeColor || "",
-    // Toggling instancePackages flips between the instanced and per-mesh record
-    // sets, so it must invalidate the rebuild signature (tri-state normalized to
-    // null when unset so the size policy result stays stable across rebuilds).
-    instancePackages: settings.instancePackages ?? null
+    wireframeEdgeColor: settings.edgeRendering?.wireframeEdgeColor || ""
   });
 }
 
@@ -2138,7 +2014,6 @@ export function buildModel(THREE, source, settings = {}) {
     edgesGroup,
     displayRecords: [],
     records: [],
-    instancedOccurrenceRecords: [],
     baseBounds,
     bounds: baseBounds,
     modelBounds: baseBounds,
@@ -2174,9 +2049,6 @@ export function buildModel(THREE, source, settings = {}) {
     clearGroup(edgesGroup);
     setRuntimeTheme(runtime, nextSettings);
     runtime.baseBounds = meshData?.bounds || boundsFromVertices(meshData?.vertices || []);
-    // Cleared each rebuild; the instanced branch of buildDisplayRecords repopulates it.
-    // A per-mesh rebuild must not inherit a prior instanced build's occurrence records.
-    runtime.instancedOccurrenceRecords = [];
     runtime.displayRecords = buildDisplayRecords(THREE, runtime, meshData, nextSettings);
     runtime.records = runtime.displayRecords;
     runtime.bounds = runtime.baseBounds;
@@ -2232,9 +2104,6 @@ export function buildModel(THREE, source, settings = {}) {
     },
     get records() {
       return runtime.displayRecords;
-    },
-    get instancedOccurrenceRecords() {
-      return runtime.instancedOccurrenceRecords;
     },
     get bounds() {
       return runtime.bounds;

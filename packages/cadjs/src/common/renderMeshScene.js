@@ -40,7 +40,6 @@ import {
   normalizeExplodedViewDocument
 } from "../lib/viewer/explodedViewSteps.js";
 import { generateExplodedViewDocument } from "../lib/viewer/explodedView.js";
-import { syncInstancedOccurrenceTransforms } from "../lib/assembly/instancedScene.js";
 import {
   addFloor as addSharedFloor,
   applyEnvironment as applySharedEnvironment,
@@ -744,21 +743,6 @@ export function renderJobContext(meshData, job = {}) {
   };
 }
 
-// Preserve the tri-state instancePackages flag from a render job: an explicit
-// boolean (in the job or its display block) forces instancing on/off; absent, it
-// stays undefined so cadScene's size policy decides.
-export function resolveInstancePackagesFlag(job) {
-  const fromDisplay = job?.display?.instancePackages;
-  if (typeof fromDisplay === "boolean") {
-    return fromDisplay;
-  }
-  const fromJob = job?.instancePackages;
-  if (typeof fromJob === "boolean") {
-    return fromJob;
-  }
-  return undefined;
-}
-
 export function modelOptionsForRenderJob(context, job = {}) {
   const selection = job.selection || {};
   const filterSelection = context.mode === "view" || context.mode === "orbit"
@@ -771,11 +755,6 @@ export function modelOptionsForRenderJob(context, job = {}) {
     displayMode: context.displayMode,
     applyDisplayModeEdgePolicy: !context.topologyDisplayEdgesVisible,
     scale: context.sceneScale,
-    // cid-keyed instanced rendering of component-GLB packages. Tri-state: a job
-    // may force it on (true) or off (false) via its display block; left undefined
-    // the size policy in cadScene decides (large packages instance, small stay
-    // per-mesh), matching the interactive viewer.
-    instancePackages: resolveInstancePackagesFlag(job),
     clip: context.sharedRenderOptions.clip,
     silhouette: context.topologyDisplayEdgesVisible && context.edgeSettings.silhouette === true,
     renderPartsIndividually: true,
@@ -876,40 +855,29 @@ function applyViewportExplodedView(viewport, bounds) {
   const { context, model, THREE: RuntimeTHREE } = viewport;
   const settings = context.displaySettings?.exploded;
   const THREEImpl = RuntimeTHREE || THREE;
-  // Instanced packages explode via their per-occurrence records (partId-bearing, one per
-  // instance) and flush the offsets into the instance buffers; the per-mesh path moves each
-  // record's THREE.Mesh directly. Mirrors CadViewer's interactive explode path.
-  const instancedRecords = Array.isArray(model.instancedOccurrenceRecords) && model.instancedOccurrenceRecords.length
-    ? model.instancedOccurrenceRecords
-    : null;
-  const explodeRecords = instancedRecords || model.displayRecords;
-  const flushExplode = () => {
-    if (instancedRecords) {
-      syncInstancedOccurrenceTransforms(THREEImpl, instancedRecords);
-    } else {
-      for (const record of model.displayRecords) {
-        applyDisplayRecordTransform(THREEImpl, record);
-      }
+  const resetExplodedView = () => {
+    clearExplodedViewRecords(model.displayRecords);
+    for (const record of model.displayRecords) {
+      applyDisplayRecordTransform(THREEImpl, record);
     }
     model.root?.updateMatrixWorld?.(true);
-  };
-  const resetExplodedView = () => {
-    clearExplodedViewRecords(explodeRecords);
-    flushExplode();
   };
   if (settings?.enabled !== true) {
     resetExplodedView();
     return bounds;
   }
-  const doc = resolveExplodedViewDocument(THREEImpl, settings, explodeRecords, bounds);
-  const compiled = compileExplodedView(THREEImpl, doc, explodeRecords, bounds);
+  const doc = resolveExplodedViewDocument(THREEImpl, settings, model.displayRecords, bounds);
+  const compiled = compileExplodedView(THREEImpl, doc, model.displayRecords, bounds);
   if (!compiled.entries.length) {
     resetExplodedView();
     return bounds;
   }
   const amount = clamp(Number(doc.amount), 0, 1);
   applyExplodedViewProgress(THREEImpl, compiled, amount);
-  flushExplode();
+  for (const record of model.displayRecords) {
+    applyDisplayRecordTransform(THREEImpl, record);
+  }
+  model.root?.updateMatrixWorld?.(true);
   return explodedViewBounds(THREEImpl, compiled, bounds, amount);
 }
 

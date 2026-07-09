@@ -25,11 +25,8 @@ import path from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
 
-import * as THREE from "three";
-
 import { buildMeshDataFromGlbBuffer } from "../src/lib/render/glbMeshData.js";
 import { buildComposedPackageMeshData } from "../src/lib/assembly/meshData.js";
-import { buildInstancedPackageScene } from "../src/lib/assembly/instancedScene.js";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(HERE, "../../..");
@@ -86,28 +83,18 @@ async function main() {
   const composedTriangles = (composed.indices?.length || 0) / 3;
   const { bytes, partCount } = sumPartBytes(composed);
 
-  // Instanced path: same scene, one InstancedMesh per (component × mirror bucket).
-  const instStarted = process.hrtime.bigint();
-  const instanced = buildInstancedPackageScene(THREE, descriptor, componentMeshDataByCid);
-  const instancedMs = Number(process.hrtime.bigint() - instStarted) / 1e6;
-
   const report = {
     package: path.relative(REPO_ROOT, packageDir),
     occurrences: (descriptor.occurrences || []).length,
     uniqueComponents: componentEntries.length,
-    drawCallsToday: partCount, // one THREE.Mesh per composed part today
-    uniqueVertices,
-    composedVertices,
+    drawCalls: partCount, // one THREE.Mesh per occurrence
+    uniqueVertices, // shared-geometry target: each component's geometry uploaded once
+    composedVertices, // baked: every occurrence gets its own transformed copy
     vertexInflation: uniqueVertices ? Number((composedVertices / uniqueVertices).toFixed(2)) : null,
     uniqueTriangles,
     composedTriangles,
     composedBufferMiB: Number((bytes / (1024 * 1024)).toFixed(1)),
     composeMs: Number(composeMs.toFixed(1)),
-    instancedDrawCalls: instanced.drawCalls,
-    instancedGpuVertices: instanced.gpuVertices,
-    drawCallReduction: partCount ? Number((partCount / instanced.drawCalls).toFixed(1)) : null,
-    vertexReduction: instanced.gpuVertices ? Number((composedVertices / instanced.gpuVertices).toFixed(2)) : null,
-    instancedBuildMs: Number(instancedMs.toFixed(1)),
   };
 
   if (asJson) {
@@ -117,16 +104,12 @@ async function main() {
   process.stdout.write(`package            ${report.package}\n`);
   process.stdout.write(`occurrences        ${report.occurrences}\n`);
   process.stdout.write(`unique components  ${report.uniqueComponents}\n`);
-  process.stdout.write(`draw calls (today) ${report.drawCallsToday}\n`);
-  process.stdout.write(`unique vertices    ${report.uniqueVertices.toLocaleString()}\n`);
-  process.stdout.write(`composed vertices  ${report.composedVertices.toLocaleString()} (${report.vertexInflation}x)\n`);
+  process.stdout.write(`draw calls         ${report.drawCalls}\n`);
+  process.stdout.write(`unique vertices    ${report.uniqueVertices.toLocaleString()}  (shared-geometry target)\n`);
+  process.stdout.write(`composed vertices  ${report.composedVertices.toLocaleString()} (${report.vertexInflation}x inflation from baking)\n`);
   process.stdout.write(`composed triangles ${report.composedTriangles.toLocaleString()}\n`);
   process.stdout.write(`composed buffers   ${report.composedBufferMiB} MiB\n`);
   process.stdout.write(`compose time       ${report.composeMs} ms\n`);
-  process.stdout.write(`--- instanced ---\n`);
-  process.stdout.write(`draw calls (inst)  ${report.instancedDrawCalls}  (${report.drawCallReduction}x fewer)\n`);
-  process.stdout.write(`gpu vertices(inst) ${report.instancedGpuVertices.toLocaleString()}  (${report.vertexReduction}x fewer)\n`);
-  process.stdout.write(`instanced build    ${report.instancedBuildMs} ms\n`);
 }
 
 main().catch((error) => {

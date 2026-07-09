@@ -102,10 +102,6 @@ import {
 } from "cadjs/lib/viewer/explodedViewSteps";
 import { generateExplodedViewDocument } from "cadjs/lib/viewer/explodedView";
 import {
-  syncInstancedOccurrenceTransforms,
-  collectInstancedSelectionEdgePlacements
-} from "cadjs/lib/assembly/instancedScene";
-import {
   applyDisplayRecordTransform,
   applyRuntimeModelBounds,
   readBoundsCenter,
@@ -725,77 +721,13 @@ function ZoomToolbar({
   );
 }
 
-// Selection-only edge overlay for instanced packages. Screen-space thick-line edges can't
-// be GPU-instanced, so instead of an edge object per occurrence we draw edges only for the
-// selected/hovered occurrences, placed at their current (possibly exploded/animated) pose.
-// Rebuilt whenever selection or the instanced pose changes; a no-op for the per-mesh path.
-function refreshInstancedSelectionEdges(runtime) {
-  if (!runtime?.THREE) {
-    return;
-  }
-  const records = runtime.instancedOccurrenceRecords;
-  const instancedMeshes = Array.isArray(records) && records.length
-    ? [...new Set(records.map((record) => record.instanceMesh).filter(Boolean))]
-    : [];
-  // Parent the overlay to the instanced meshes' own group so its lines share the exact
-  // local space the per-instance (posed) matrices live in.
-  const parent = instancedMeshes[0]?.parent || runtime.modelGroup;
-  let group = runtime.instancedSelectionEdgeGroup;
-  if (!group) {
-    group = new runtime.THREE.Group();
-    group.name = "instancedSelectionEdges";
-    runtime.instancedSelectionEdgeGroup = group;
-  }
-  // Re-attach if a model rebuild disposed/detached the previous parent group.
-  if (parent && group.parent !== parent) {
-    parent.add(group);
-  }
-  clearSceneGroup(group);
-  const state = runtime.instancedSelectionEdgeState;
-  if (!instancedMeshes.length || !state?.enabled || typeof state.matches !== "function") {
-    runtime.requestRender?.();
-    return;
-  }
-  const placements = collectInstancedSelectionEdgePlacements(runtime.THREE, instancedMeshes, state.matches);
-  for (const placement of placements) {
-    const line = createScreenSpaceLineSegments(runtime, placement.positions, {
-      color: state.color,
-      opacity: state.opacity ?? 1,
-      lineWidth: state.lineWidth ?? 1.5,
-      renderOrder: state.renderOrder ?? 4,
-      depthTest: state.depthTest !== false,
-      depthWrite: false
-    });
-    if (!line) {
-      continue;
-    }
-    line.matrixAutoUpdate = false;
-    line.matrix.copy(placement.matrix);
-    line.matrixWorldNeedsUpdate = true;
-    group.add(line);
-  }
-  runtime.modelGroup?.updateMatrixWorld?.(true);
-  runtime.requestRender?.();
-}
-
 function applyExplodedViewRuntimeProgress(runtime, compiled, progress) {
   if (!runtime?.THREE || !Array.isArray(runtime.displayRecords)) {
     return;
   }
   applyExplodedViewProgress(runtime.THREE, compiled, progress);
-  const instancedRecords = Array.isArray(runtime.instancedOccurrenceRecords) && runtime.instancedOccurrenceRecords.length
-    ? runtime.instancedOccurrenceRecords
-    : null;
-  if (instancedRecords) {
-    // The explode engine wrote explodedViewMatrix onto the per-occurrence records; flush the
-    // combined offsets into the instance buffers (the bucket meshes have no per-record matrix).
-    syncInstancedOccurrenceTransforms(runtime.THREE, instancedRecords);
-    // Keep the selection edge overlay glued to the occurrences as they move.
-    refreshInstancedSelectionEdges(runtime);
-  } else {
-    for (const record of runtime.displayRecords) {
-      applyDisplayRecordTransform(runtime.THREE, record);
-    }
+  for (const record of runtime.displayRecords) {
+    applyDisplayRecordTransform(runtime.THREE, record);
   }
   runtime.modelGroup?.updateMatrixWorld?.(true);
   runtime.edgesGroup?.updateMatrixWorld?.(true);
@@ -3307,9 +3239,6 @@ const CadViewer = forwardRef(function CadViewer({
     edgesGroup.add(cadScene.edgesGroup);
     runtime.cadScene = cadScene;
     runtime.displayRecords = cadScene.displayRecords;
-    // Per-occurrence records for instanced packages drive explode/param transforms on the
-    // instance buffers; empty for the per-mesh path.
-    runtime.instancedOccurrenceRecords = cadScene.instancedOccurrenceRecords || [];
     runtime.hasVisibleModel = true;
     runtime.activeModelKey = modelKey || "";
     const initialEdgeRuntimes = resolveTopologyDisplayEdgeRuntimes({
@@ -3851,55 +3780,6 @@ const CadViewer = forwardRef(function CadViewer({
     stepParameterRuntime
   ]);
 
-  // Selection-only edge overlay for instanced packages. Screen-space thick-line edges
-  // can't be GPU-instanced, so we draw edges only for the selected/focused occurrences
-  // (placed at their current pose). No-op for the per-mesh path (edges live on records).
-  useEffect(() => {
-    const runtime = runtimeRef.current;
-    if (!runtime?.THREE) {
-      return undefined;
-    }
-    const highlightIds = new Set([
-      ...normalizePartIdList(selectedPartIds),
-      ...focusedPartIds
-    ]);
-    const matches = highlightIds.size
-      ? (occurrenceId) => {
-          const id = String(occurrenceId || "");
-          if (highlightIds.has(id)) {
-            return true;
-          }
-          for (const selectedId of highlightIds) {
-            if (id.startsWith(`${selectedId}.`)) {
-              return true;
-            }
-          }
-          return false;
-        }
-      : null;
-    const instanced = Array.isArray(runtime.instancedOccurrenceRecords)
-      && runtime.instancedOccurrenceRecords.length > 0;
-    runtime.instancedSelectionEdgeState = {
-      enabled: instanced && partVisualStateEnabled && Boolean(matches),
-      matches,
-      color: String(visualEdgeSettings?.highlightColor || REFERENCE_SELECTED_COLOR).trim() || REFERENCE_SELECTED_COLOR,
-      opacity: 1,
-      lineWidth: 1.6,
-      renderOrder: 4
-    };
-    refreshInstancedSelectionEdges(runtime);
-    return undefined;
-  }, [
-    selectedPartIds,
-    focusedPartIds,
-    partVisualStateEnabled,
-    viewerReadyTick,
-    explodedViewActive,
-    explodeAmount,
-    modelKey,
-    visualEdgeSettings
-  ]);
-
   useEffect(() => {
     const runtime = runtimeRef.current;
     const animation = explodedViewAnimationRef.current;
@@ -3927,30 +3807,16 @@ const CadViewer = forwardRef(function CadViewer({
     animation.modelKey = animationModelKey;
     animation.enabled = explodedViewActive;
 
-    // Instanced packages explode via their per-occurrence records (partId-bearing,
-    // one per instance); the per-mesh path uses the per-part display records directly.
-    const instancedRecords = Array.isArray(runtime.instancedOccurrenceRecords) && runtime.instancedOccurrenceRecords.length
-      ? runtime.instancedOccurrenceRecords
-      : null;
-    const explodeRecords = instancedRecords || runtime.displayRecords;
-    const flushClearedExplode = () => {
-      clearExplodedViewRecords(explodeRecords);
-      if (instancedRecords) {
-        syncInstancedOccurrenceTransforms(THREE, instancedRecords);
-      } else {
-        for (const record of runtime.displayRecords) {
-          applyDisplayRecordTransform(THREE, record);
-        }
+    // Steady disabled state: nothing to evaluate. (When disabling from an
+    // exploded state we still evaluate below so the collapse animates.)
+    if (!explodedViewActive && !wasEnabled) {
+      clearExplodedViewRecords(runtime.displayRecords);
+      for (const record of runtime.displayRecords) {
+        applyDisplayRecordTransform(THREE, record);
       }
       clearExplodeTrails(runtime);
       syncRecordTopologyDisplayEdgeTransforms(runtime, runtime.displayRecords);
       runtime.requestRender?.();
-    };
-
-    // Steady disabled state: nothing to evaluate. (When disabling from an
-    // exploded state we still evaluate below so the collapse animates.)
-    if (!explodedViewActive && !wasEnabled) {
-      flushClearedExplode();
       animation.progress = 0;
       animation.compiled = null;
       return undefined;
@@ -3959,12 +3825,18 @@ const CadViewer = forwardRef(function CadViewer({
     // Resolve + compile the step document from the current settings. On disable
     // the authored/generated steps are still available, so collapse can animate
     // from the current progress down to 0.
-    const doc = resolveViewerExplodeDocument(THREE, normalizedExplodedSettings, explodeRecords, baseBounds);
-    const compiled = compileExplodedView(THREE, doc, explodeRecords, baseBounds);
+    const doc = resolveViewerExplodeDocument(THREE, normalizedExplodedSettings, runtime.displayRecords, baseBounds);
+    const compiled = compileExplodedView(THREE, doc, runtime.displayRecords, baseBounds);
     animation.compiled = compiled;
 
     if (!compiled.entries.length) {
-      flushClearedExplode();
+      clearExplodedViewRecords(runtime.displayRecords);
+      for (const record of runtime.displayRecords) {
+        applyDisplayRecordTransform(THREE, record);
+      }
+      clearExplodeTrails(runtime);
+      syncRecordTopologyDisplayEdgeTransforms(runtime, runtime.displayRecords);
+      runtime.requestRender?.();
       animation.progress = 0;
       return undefined;
     }

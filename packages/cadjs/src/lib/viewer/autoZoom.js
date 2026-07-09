@@ -101,20 +101,6 @@ export function displayRecordsBounds(records = [], {
   const filter = partIds instanceof Set && partIds.size > 0 ? partIds : null;
   const boundsList = [];
   for (const record of Array.isArray(records) ? records : []) {
-    // Instanced package buckets carry no per-record partBounds — occurrence ids
-    // and poses live per instance. Resolve the world bounds of the matching
-    // occurrences (all of them when there is no filter) from the bucket instead,
-    // so zoom-to-fit frames a selected occurrence instead of no-op'ing.
-    if (record?.instanced && typeof record.instancedBoundsFor === "function") {
-      const matches = filter
-        ? (occurrenceId) => partIdMatchesFilter(occurrenceId, filter)
-        : null;
-      const instancedBounds = record.instancedBoundsFor(matches);
-      if (isNumericBounds(instancedBounds)) {
-        boundsList.push(instancedBounds);
-      }
-      continue;
-    }
     if (!record || !isNumericBounds(record.partBounds)) {
       continue;
     }
