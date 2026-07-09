@@ -1,16 +1,47 @@
 # Viewer: large-package rendering plan
 
-**Update 2026-07-08 — instanced feature parity landed; instancing is default-on again.**
-The Phase-3/4 "documented gaps" (exploded view, per-occurrence param/animation transforms,
-per-part edges, and live-viewer selection highlight) are resolved, so the size-policy
-default-on is back (branch `claude/instanced-feature-parity`). Per-occurrence transforms flow
-through lightweight pseudo-records (`buildInstancedOccurrenceRecords`) fed to the shared
-exploded-view + step-module effect engines, then flushed into the instance buffers
-(`syncInstancedOccurrenceTransforms`); a single writer (`syncInstancedMesh`) merges
-selection/hover with the posed matrices. Edges use a **selection-only** screen-space overlay
-(`collectInstancedSelectionEdgePlacements`) — full per-occurrence edges were declined because
-screen-space thick lines can't be GPU-instanced (one line object per occurrence would undo the
-draw-call win in edge modes). The section below is the original plan for context.
+**Update 2026-07-09 — mesh-only consolidation. Instancing removed; ONE render path.**
+The whole instancing engine and its plumbing were **deleted** in favor of a single
+render path: **per-occurrence `THREE.Mesh` over SHARED component geometry** (never baked,
+never instanced). This was a deliberate call for a single, maintainable strategy after the
+instancing effort proved that GPU-instancing fights every per-occurrence feature the viewer
+needs (a `partId` per occurrence for selection/hover/focus/hidden, a real matrix per
+occurrence for explode + param animation, and per-part edges). The parity work made instanced
+*approach* per-mesh, but through a parallel, more complex code path (pseudo-records, instance
+buffer flushes, a selection-only screen-space edge overlay) — two engines to maintain for one
+result. Shared geometry gets the same scaling win without the second path.
+
+What shared geometry keeps and what it costs, vs the two prior approaches:
+
+| | baked per-mesh (old default) | cid instancing (removed) | **shared geometry (now)** |
+|---|---|---|---|
+| GPU vertices (falcon_heavy) | 1.40M (12.3× inflation) | 114k | **114k** |
+| compose (falcon_heavy) | ~140 ms | 12 ms build | **~18 ms** |
+| heap (falcon_heavy, live) | ~301 MB | — | **~135 MB** |
+| draw calls | 2,142 | ~141 | 2,142 |
+| selection / face-select | full | instance recolor | **full (per-Mesh `partId`)** |
+| explode / param animation | full | pseudo-records | **full (per-Mesh matrix)** |
+| per-part edges | full | selection-only overlay | **full (cached per component)** |
+
+How it works: `buildComposedPackageMeshData` keeps ONE component-local copy of each unique
+component's geometry and emits one lightweight part per occurrence carrying `sourceMesh`
+(the shared component meshData), a `sourceMeshKey` (`<cid>:<colourMode>`), the occurrence
+`transform`, and component-local `sourcePartRanges`. `cadScene.buildPartGeometryEntry` caches
+one `BufferGeometry` (with surface-edge attributes) per `sourceMeshKey`, so each component's
+geometry + edges upload **once** and every occurrence is a `THREE.Mesh` reusing it, placed by
+its transform at render time (`partTransformsBaked:false`). Nothing per-occurrence is baked.
+Verified obligations: per-occurrence override colours drive the material as an sRGB hex string
+(the descriptor authors linear RGB → `linearRgbToHex` → `readSourceColor` round-trips to the
+same albedo the baked path shaded); mirrored occurrences render via the negative-determinant
+transform + the `DoubleSide` surface material (no per-occurrence winding flip); face selection
+maps unchanged because `sourcePartRanges` are component-local. In-browser: raptor3 (colours,
+part/face selection, exploded, param animation) + falcon_heavy (2,142 occurrences, 690-part
+selection, ~135 MB) + headless snapshot. The draw-call count is unchanged from baked per-mesh;
+`BatchedMesh`/merge is the future lever if draw calls (not memory) ever dominate — but the
+target models render fine and the user set no draw-call benchmark. **Everything below this line
+is the historical instancing plan, superseded by this consolidation.**
+
+---
 
 Recorded 2026-07-06. Target workload: falcon_heavy-class component-GLB
 packages — 2,142 occurrences over 141 unique components (top cid ×108,
