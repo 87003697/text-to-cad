@@ -4,12 +4,15 @@
 // (design/viewer-large-package-rendering.md), at the JS/meshData layer so it
 // runs deterministically in Node with no GPU/browser:
 //
-//   - occurrences vs unique components (the dedup the render layer should keep)
-//   - composed vertices/triangles vs unique-component vertices/triangles
-//     (the vertex inflation from ignoring cid dedup)
-//   - composed "parts" == today's THREE.Mesh count == draw calls
+//   - occurrences vs unique components (the dedup the render layer keeps)
+//   - composed top-level vertices vs unique-component vertices. The shared-geometry
+//     composer holds ONE component-local copy per unique component, so these must
+//     stay equal (1.0x). This is a regression guard: if a future change re-bakes
+//     per-occurrence vertices, the ratio jumps back toward occurrence count.
+//   - composed "parts" == THREE.Mesh count == draw calls (one per occurrence; the
+//     shared-geometry path reuses one cached BufferGeometry across a cid's meshes)
 //   - buildComposedPackageMeshData wall time (the main-thread compose stall)
-//   - retained buffer bytes across the composed parts
+//   - retained buffer bytes across the composed top-level arrays
 //
 // Not covered (needs a real WebGL/browser session): GPU upload time, frame
 // rate, main-thread stall as felt in the app. Those are validated per-phase
@@ -87,9 +90,10 @@ async function main() {
     package: path.relative(REPO_ROOT, packageDir),
     occurrences: (descriptor.occurrences || []).length,
     uniqueComponents: componentEntries.length,
-    drawCalls: partCount, // one THREE.Mesh per occurrence
-    uniqueVertices, // shared-geometry target: each component's geometry uploaded once
-    composedVertices, // baked: every occurrence gets its own transformed copy
+    drawCalls: partCount, // one THREE.Mesh per occurrence (over shared, cached geometry)
+    uniqueVertices, // each unique component's geometry, uploaded once
+    composedVertices, // shared geometry: top-level holds one copy per unique component
+    // Must stay 1.0 on the shared-geometry path; > 1.0 means per-occurrence baking crept back.
     vertexInflation: uniqueVertices ? Number((composedVertices / uniqueVertices).toFixed(2)) : null,
     uniqueTriangles,
     composedTriangles,
@@ -105,8 +109,8 @@ async function main() {
   process.stdout.write(`occurrences        ${report.occurrences}\n`);
   process.stdout.write(`unique components  ${report.uniqueComponents}\n`);
   process.stdout.write(`draw calls         ${report.drawCalls}\n`);
-  process.stdout.write(`unique vertices    ${report.uniqueVertices.toLocaleString()}  (shared-geometry target)\n`);
-  process.stdout.write(`composed vertices  ${report.composedVertices.toLocaleString()} (${report.vertexInflation}x inflation from baking)\n`);
+  process.stdout.write(`unique vertices    ${report.uniqueVertices.toLocaleString()}  (uploaded once per component)\n`);
+  process.stdout.write(`composed vertices  ${report.composedVertices.toLocaleString()} (${report.vertexInflation}x — shared geometry keeps this at 1.0x; >1 = baking regressed)\n`);
   process.stdout.write(`composed triangles ${report.composedTriangles.toLocaleString()}\n`);
   process.stdout.write(`composed buffers   ${report.composedBufferMiB} MiB\n`);
   process.stdout.write(`compose time       ${report.composeMs} ms\n`);
