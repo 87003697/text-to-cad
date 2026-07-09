@@ -6,7 +6,7 @@ import {
   createViewerContextMenuGestureState,
   VIEWER_CONTEXT_MENU_SUPPRESSION_MS
 } from "./viewerContextMenuGesture.js";
-import { partIdFromIntersection, shouldRaycastRecordForPick } from "./instancePicking.js";
+import { partIdFromIntersection, shouldRaycastRecordForPick } from "./partPicking.js";
 
 test("worldUnitsPerPixelAtDistance converts perspective depth to screen scale", () => {
   const camera = {
@@ -91,34 +91,10 @@ test("partIdFromIntersection reads a per-occurrence mesh's partId", () => {
   assert.equal(partIdFromIntersection(hit), "o1.5");
 });
 
-test("partIdFromIntersection maps an InstancedMesh instanceId to its occurrence", () => {
-  const object = { userData: { cadInstanceOccurrenceIds: ["o1.1", "o1.2", "o1.3"] } };
-  assert.equal(partIdFromIntersection({ object, instanceId: 0 }), "o1.1");
-  assert.equal(partIdFromIntersection({ object, instanceId: 2 }), "o1.3");
-});
-
-test("partIdFromIntersection returns null for an out-of-range or absent instanceId", () => {
-  const object = { userData: { cadInstanceOccurrenceIds: ["o1.1"] } };
-  assert.equal(partIdFromIntersection({ object, instanceId: 5 }), null);
-  assert.equal(partIdFromIntersection({ object }), null);
+test("partIdFromIntersection returns the mesh's userData.partId, else null", () => {
+  assert.equal(partIdFromIntersection({ object: { userData: { partId: "o1.2" } } }), "o1.2");
+  assert.equal(partIdFromIntersection({ object: { userData: {} } }), null);
   assert.equal(partIdFromIntersection({}), null);
-});
-
-test("shouldRaycastRecordForPick keeps instanced buckets when a focus is active", () => {
-  const focusIds = new Set(["o1.5"]);
-  const hiddenIds = new Set();
-  // Instanced bucket (partId null) stays in the raycast set regardless of focus —
-  // the per-occurrence focus/hidden filter runs downstream. This is the fix: the
-  // old bucket-level focus filter dropped the whole InstancedMesh and killed picking.
-  assert.equal(
-    shouldRaycastRecordForPick({ instanced: true, mesh: { visible: true }, partId: null }, { focusIds, hiddenIds }),
-    true
-  );
-  // A focused instanced bucket that is not visible is still dropped.
-  assert.equal(
-    shouldRaycastRecordForPick({ instanced: true, mesh: { visible: false }, partId: null }, { focusIds, hiddenIds }),
-    false
-  );
 });
 
 test("shouldRaycastRecordForPick applies bucket-level focus/hidden to per-mesh records", () => {

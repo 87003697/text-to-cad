@@ -28,7 +28,6 @@ import {
 import {
   applyDisplayRecordTransform
 } from "./displayRecordTransform.js";
-import { buildInstancedPackageScene, applyInstancedVisualState, instancedOccurrenceBounds } from "../lib/assembly/instancedScene.js";
 import { axisIndex, normalizeStepClipSettings } from "../lib/viewer/clipPlane.js";
 import {
   clampSceneModelRadius,
@@ -733,7 +732,11 @@ function buildPartGeometryEntry(THREE, meshData, part, recomputeNormals = false)
         new THREE.BufferAttribute(new Float32Array(rawColors), 3)
       );
     }
-    if (!sourceMesh) {
+    if (sourceMesh) {
+      // Shared component geometry: source the (triangle-local) surface-edge attributes from
+      // the component itself so packages still render CAD edges on the shared-geometry path.
+      setSurfaceEdgeAttributes(THREE, geometry, sourceMesh, 0, vertexCount);
+    } else {
       setSurfaceEdgeAttributes(THREE, geometry, meshData, vertexOffset, vertexCount);
     }
     applyGeometryNormals(THREE, geometry, localNormals, recomputeNormals);
@@ -1232,22 +1235,6 @@ export function applyPartVisualState(THREE, records, {
 
   for (const record of Array.isArray(records) ? records : []) {
     if (!record?.mesh || !record?.material) {
-      continue;
-    }
-    if (record.instanced) {
-      // Per-instance selection/hover/hidden/focus is applied on the InstancedMesh
-      // (recolor + collapse), not by mutating the shared bucket material — which
-      // would recolor every instance at once.
-      applyInstancedVisualState(THREE, record.mesh, {
-        selected,
-        hovered,
-        hidden,
-        focusIds,
-        hasFocus,
-        selectedColor: selectedSurfaceColor,
-        hoveredColor: hoveredSurfaceColor,
-        matches: partIdMatchesSet
-      });
       continue;
     }
     const effectStyle = record.effectStyle && typeof record.effectStyle === "object" ? record.effectStyle : {};
@@ -1790,83 +1777,7 @@ function addEdgeObject(THREE, runtime, record, edgeGeometry, settings) {
   runtime.edgesGroup.add(object);
 }
 
-// Material for an instanced component bucket, matching makeRecord's per-mode
-// choice but with a WHITE base so the per-instance color (occurrence override,
-// set as instanceColor) drives the diffuse — the multiply reproduces the
-// per-mesh path's material.color under identical lighting. Edges are handled
-// separately (selection-only) so no surface-edge shader is attached here.
-function instancedBucketMaterial(THREE, runtime, { doubleSide, hasVertexColors = false }) {
-  const displayMode = runtime.displayMode;
-  const white = new THREE.Color(1, 1, 1);
-  let material;
-  if (displayModeIsWireframe(displayMode)) {
-    material = createWireframeSurfaceMaterial(THREE, runtime.materialSettings, 0);
-  } else if (displayModeUsesUnlitSurfaces(displayMode)) {
-    material = createUnshadedSurfaceMaterial(THREE, {
-      color: white,
-      // Honor a component's baked per-vertex COLOR_0. The engine only reports
-      // hasVertexColors for buckets with no occurrence override, so instanceColor
-      // stays white and the vertex color drives the diffuse — matching the
-      // per-mesh composed path instead of flattening the component to white.
-      useVertexColors: hasVertexColors,
-      opacity: displayModeSurfaceOpacity(displayMode, runtime.materialSettings?.opacity)
-    });
-  } else {
-    material = createSurfaceMaterial(THREE, runtime.baseTheme, { color: white, useVertexColors: hasVertexColors });
-  }
-  if (doubleSide && material?.side !== undefined) {
-    material.side = THREE.DoubleSide;
-  }
-  return material;
-}
-
-// A composed package can instance (cid-keyed InstancedMesh) instead of one
-// THREE.Mesh per occurrence, collapsing draw calls/GPU vertices for a large GPU
-// win. The trade-off is that the instanced record path does NOT carry the full
-// per-part feature set: exploded view, per-part edges, per-occurrence param /
-// animation transforms, and per-part highlighting all need the per-mesh records.
-//
-// Instancing is therefore opt-in: it renders only when a job/display explicitly
-// requests it via `instancePackages: true`. It is intentionally NOT enabled by a
-// size policy — auto-instancing large packages silently broke the per-part
-// features above for any interactive package, so absence of the flag keeps the
-// per-mesh path (full features). Re-enable an automatic policy only once the
-// instanced path carries those features.
-export function shouldInstancePackageScene(settings, meshData) {
-  if (!meshData?.packageInstancing) {
-    return false;
-  }
-  return settings?.instancePackages === true;
-}
-
-function buildInstancedDisplayRecords(THREE, runtime, meshData) {
-  const { descriptor, componentMeshDataByCid } = meshData.packageInstancing;
-  const scene = buildInstancedPackageScene(THREE, descriptor, componentMeshDataByCid, {
-    makeMaterial: (_cid, opts) => instancedBucketMaterial(THREE, runtime, opts)
-  });
-  runtime.modelGroup.add(scene.group);
-  runtime.instancedScene = scene;
-  // One inert record per InstancedMesh so the runtime's per-record loops
-  // (material sync, visual state) can iterate without special-casing every site;
-  // instance-level picking/selection/exploded is layered on in later increments.
-  return scene.instancedMeshes.map((mesh) => ({
-    mesh,
-    material: mesh.material,
-    partId: null,
-    instanced: true,
-    componentId: mesh.userData.cadComponentId,
-    occurrenceIds: mesh.userData.cadInstanceOccurrenceIds || [],
-    // Resolve world bounds for the occurrences in this bucket matching `matches`
-    // ((occurrenceId) => bool), so zoom-to-fit can frame a selected instanced
-    // occurrence despite there being no per-record partBounds.
-    instancedBoundsFor: (matches) => instancedOccurrenceBounds(mesh, matches)
-  }));
-}
-
 function buildDisplayRecords(THREE, runtime, meshData, settings) {
-  if (shouldInstancePackageScene(settings, meshData)) {
-    return buildInstancedDisplayRecords(THREE, runtime, meshData);
-  }
   const theme = runtime.theme;
   const materialSettings = runtime.materialSettings;
   const displayMode = runtime.displayMode;
@@ -2023,11 +1934,7 @@ function settingsSignature(meshData, theme, settings) {
       edgeSettings.silhouette === true &&
       (edgeSettings.enabled !== false || settings.silhouette === true),
     edgeRendering: settings.edgeRendering?.mode || "basic",
-    wireframeEdgeColor: settings.edgeRendering?.wireframeEdgeColor || "",
-    // Toggling instancePackages flips between the instanced and per-mesh record
-    // sets, so it must invalidate the rebuild signature (normalized to null when
-    // unset — absent === opt-in-off === per-mesh — so rebuilds stay stable).
-    instancePackages: settings.instancePackages ?? null
+    wireframeEdgeColor: settings.edgeRendering?.wireframeEdgeColor || ""
   });
 }
 

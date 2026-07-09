@@ -50,37 +50,6 @@ test("auto zoom merges and shifts display record bounds", () => {
   );
 });
 
-test("displayRecordsBounds resolves instanced-record bounds via instancedBoundsFor", () => {
-  // Instanced buckets have no partBounds; they expose a per-occurrence resolver.
-  const occ = { "o1.1": { min: [10, 0, 0], max: [11, 1, 1] }, "o1.2": { min: [20, 0, 0], max: [21, 1, 1] } };
-  const record = {
-    instanced: true,
-    partId: null,
-    instancedBoundsFor: (matches) => {
-      const ids = Object.keys(occ).filter((id) => !matches || matches(id));
-      if (!ids.length) return null;
-      const min = [Infinity, Infinity, Infinity];
-      const max = [-Infinity, -Infinity, -Infinity];
-      for (const id of ids) {
-        for (let a = 0; a < 3; a += 1) {
-          min[a] = Math.min(min[a], occ[id].min[a]);
-          max[a] = Math.max(max[a], occ[id].max[a]);
-        }
-      }
-      return { min, max };
-    }
-  };
-  // No filter => union over all occurrences in the bucket.
-  assert.deepEqual(displayRecordsBounds([record], {}), { min: [10, 0, 0], max: [21, 1, 1] });
-  // Filter forwards a hierarchical predicate to the resolver.
-  assert.deepEqual(
-    displayRecordsBounds([record], { partIds: new Set(["o1.1"]) }),
-    { min: [10, 0, 0], max: [11, 1, 1] }
-  );
-  // A filter that matches nothing yields null (caller falls back to model bounds).
-  assert.equal(displayRecordsBounds([record], { partIds: new Set(["nope"]) }), null);
-});
-
 test("focused auto zoom waits for matching record bounds instead of fitting the whole model", () => {
   const baseBounds = { min: [0, 0, 0], max: [100, 100, 100] };
   const records = [

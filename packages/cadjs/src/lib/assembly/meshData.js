@@ -27,6 +27,31 @@ function toVectorArray(value) {
   return vector.every((component) => Number.isFinite(component)) ? vector : null;
 }
 
+// An occurrence override colour arrives as linear-RGB floats (the descriptor authors it in the
+// renderer's working space). The baked composer wrote those floats straight into vertex colours;
+// the shared-geometry composer instead drives them through the material via part.color, which the
+// viewer parses as an sRGB hex string (readSourceColor -> new THREE.Color, decoded back to linear).
+// Encoding linear -> sRGB hex here makes that round-trip land on the same linear albedo the baked
+// path shaded, so a flat override renders pixel-identically without baking per-occurrence vertices.
+function linearChannelToSrgbByte(channel) {
+  const clamped = Math.min(1, Math.max(0, Number(channel) || 0));
+  const srgb = clamped <= 0.0031308
+    ? clamped * 12.92
+    : 1.055 * Math.pow(clamped, 1 / 2.4) - 0.055;
+  return Math.round(Math.min(1, Math.max(0, srgb)) * 255);
+}
+
+function linearRgbToHex(rgb) {
+  if (!Array.isArray(rgb) || rgb.length < 3) {
+    return null;
+  }
+  const hex = rgb
+    .slice(0, 3)
+    .map((channel) => linearChannelToSrgbByte(channel).toString(16).padStart(2, "0"))
+    .join("");
+  return `#${hex}`;
+}
+
 function normalizeMateEndpoint(endpoint) {
   if (!endpoint || typeof endpoint !== "object") {
     return null;
@@ -332,38 +357,18 @@ function meshPartNumericValue(part, key) {
 
 // --- Component-GLB package composition (design/component-glb-artifacts.md) -------
 //
-// Unlike the monolithic .step.glb (which bakes every occurrence transform into
-// world-space vertices at export), a package's component GLBs are meshed once in
-// their LOCAL frame and instanced N times by the assembly descriptor. So composition
-// here must apply each occurrence's 16-float transform to the copied vertices — the
-// step the self-contained path skips because the monolith was already world-baked.
+// A package's component GLBs are meshed once in their LOCAL frame and instanced N
+// times by the assembly descriptor. Composition keeps one component-local copy of
+// each unique component's geometry (shared across every occurrence via sourceMesh /
+// sourceMeshKey) and places each occurrence with its 16-float transform applied as
+// the render Mesh's matrix — never baked into vertices. Only occurrence *bounds* are
+// pre-transformed here (transformPointInto), so auto-zoom and picking see world-space
+// extents without duplicating vertex data per occurrence.
 
 function transformPointInto(out, base, matrix, x, y, z) {
   out[base] = matrix[0] * x + matrix[1] * y + matrix[2] * z + matrix[3];
   out[base + 1] = matrix[4] * x + matrix[5] * y + matrix[6] * z + matrix[7];
   out[base + 2] = matrix[8] * x + matrix[9] * y + matrix[10] * z + matrix[11];
-}
-
-function transformNormalInto(out, base, matrix, x, y, z) {
-  // Rotation/scale only (no translation), then renormalize. For the rigid (and
-  // mirror) transforms an assembly uses, the upper-3x3 carries direction correctly;
-  // renormalizing absorbs any uniform scale.
-  let nx = matrix[0] * x + matrix[1] * y + matrix[2] * z;
-  let ny = matrix[4] * x + matrix[5] * y + matrix[6] * z;
-  let nz = matrix[8] * x + matrix[9] * y + matrix[10] * z;
-  const length = Math.hypot(nx, ny, nz);
-  if (length > 1e-12) {
-    nx /= length;
-    ny /= length;
-    nz /= length;
-  } else {
-    nx = x;
-    ny = y;
-    nz = z;
-  }
-  out[base] = nx;
-  out[base + 1] = ny;
-  out[base + 2] = nz;
 }
 
 function matrixDeterminant3(matrix) {
@@ -396,6 +401,31 @@ function componentMeshDataFor(componentMeshDataByCid, cid) {
  * primitiveIndex so picks resolve against that component's own selector runtime
  * (the occurrence id then namespaces the resolved selector).
  */
+// World-space AABB of a component's local box under an occurrence transform (row-major
+// 4x4). Used for per-occurrence bounds now that vertices are no longer world-baked.
+function boundsForTransformedBox(box, matrix) {
+  if (!box || !Array.isArray(box.min) || !Array.isArray(box.max) || !Array.isArray(matrix) || matrix.length !== 16) {
+    return box || null;
+  }
+  const [nx, ny, nz] = box.min;
+  const [xx, xy, xz] = box.max;
+  const corners = [
+    [nx, ny, nz], [xx, ny, nz], [nx, xy, nz], [xx, xy, nz],
+    [nx, ny, xz], [xx, ny, xz], [nx, xy, xz], [xx, xy, xz]
+  ];
+  const min = [Infinity, Infinity, Infinity];
+  const max = [-Infinity, -Infinity, -Infinity];
+  const out = [0, 0, 0];
+  for (const [x, y, z] of corners) {
+    transformPointInto(out, 0, matrix, x, y, z);
+    for (let a = 0; a < 3; a += 1) {
+      if (out[a] < min[a]) min[a] = out[a];
+      if (out[a] > max[a]) max[a] = out[a];
+    }
+  }
+  return Number.isFinite(min[0]) ? { min, max } : (box || null);
+}
+
 export function buildComposedPackageMeshData(descriptor, componentMeshDataByCid) {
   const occurrences = Array.isArray(descriptor?.occurrences) ? descriptor.occurrences : [];
   if (!occurrences.length) {
@@ -403,9 +433,6 @@ export function buildComposedPackageMeshData(descriptor, componentMeshDataByCid)
   }
 
   const placements = [];
-  let totalVertexCount = 0;
-  let totalIndexCount = 0;
-  let anyColors = false;
   const missingComponentIds = [];
   for (const occurrence of occurrences) {
     const cid = String(occurrence?.component || "").trim();
@@ -417,147 +444,88 @@ export function buildComposedPackageMeshData(descriptor, componentMeshDataByCid)
       }
       continue;
     }
-    for (const sourcePart of sourceParts) {
-      totalVertexCount += meshPartNumericValue(sourcePart, "vertexCount");
-      totalIndexCount += meshPartNumericValue(sourcePart, "triangleCount") * 3;
-    }
-    const componentColors = componentMeshData?.colors;
-    if (componentColors && componentColors.length === (componentMeshData?.vertices?.length || 0) && componentColors.length > 0) {
-      anyColors = true;
-    }
-    // Clean components carry no per-vertex COLOR_0; their color rides on the occurrence's
-    // `color` (a material baseColorFactor in the GLB). An occurrence override color must still
-    // produce a colored composed mesh, so count it toward allocating the colors buffer.
-    if (toVectorArray(occurrence?.color)) {
-      anyColors = true;
-    }
     placements.push({ occurrence, componentMeshData, sourceParts });
   }
   if (!placements.length) {
     throw new Error("Assembly package matched no renderable component GLBs");
   }
 
-  const vertices = new Float32Array(totalVertexCount * 3);
-  const normals = new Float32Array(totalVertexCount * 3);
-  const colors = anyColors ? new Float32Array(totalVertexCount * 3) : new Float32Array(0);
-  const indices = new Uint32Array(totalIndexCount);
-  // Per-vertex edge attributes drive the wireframe-on-mesh edge shader (3 floats/vertex
-  // barycentric + a per-vertex edge class). They are triangle-local, so they merge untransformed,
-  // aligned with the composed vertices. Leaving them empty (the prior stub) is why assembly edges
-  // never rendered.
-  const edgeSample = placements.find(
-    (placement) => (placement.componentMeshData?.surfaceEdgeBarycentric?.length || 0) > 0
-  )?.componentMeshData || null;
-  const hasEdges = !!edgeSample;
-  const EdgeClassCtor = edgeSample?.surfaceEdgeClass ? edgeSample.surfaceEdgeClass.constructor : Uint8Array;
-  const surfaceEdgeBarycentric = hasEdges ? new Float32Array(totalVertexCount * 3) : new Float32Array(0);
-  const surfaceEdgeClass = hasEdges && edgeSample.surfaceEdgeClass
-    ? new EdgeClassCtor(totalVertexCount * 3)
-    : new EdgeClassCtor(0);
-  const parts = [];
-  let vertexOffset = 0;
-  let indexOffset = 0;
+  // Shared-geometry package rendering. Baking each occurrence's transform into fresh
+  // world-space vertices inflates GPU memory ~12x on large packages (falcon_heavy: 114k
+  // unique -> 1.4M composed) and stalls the main thread. Instead, every occurrence renders
+  // as a THREE.Mesh over its component's OWN geometry — uploaded once per cid (cadScene
+  // caches by sourceMeshKey) and placed by its occurrence transform at render time
+  // (partTransformsBaked: false). The top-level arrays hold each unique component's geometry
+  // ONCE, only for the render gate + the whole-mesh fallback (which per-part packages never
+  // hit). Selectors are unaffected: sourcePartRanges are component-local triangle offsets and
+  // the per-occurrence selector runtime is built + placed from the occurrence transform
+  // elsewhere; mirrored occurrences render correctly because the surface material is DoubleSide.
 
+  // One copy of each unique component's geometry (component-local) for the gate/fallback.
+  const uniqueComponents = new Map();
+  for (const placement of placements) {
+    const cid = String(placement.occurrence?.component || "").trim();
+    if (cid && !uniqueComponents.has(cid)) {
+      uniqueComponents.set(cid, placement.componentMeshData);
+    }
+  }
+  let uniqueVertexCount = 0;
+  let uniqueIndexCount = 0;
+  for (const component of uniqueComponents.values()) {
+    uniqueVertexCount += Math.floor((component?.vertices?.length || 0) / 3);
+    uniqueIndexCount += component?.indices?.length || 0;
+  }
+  const vertices = new Float32Array(uniqueVertexCount * 3);
+  const normals = new Float32Array(uniqueVertexCount * 3);
+  const indices = new Uint32Array(uniqueIndexCount);
+  {
+    let uniqueVertexOffset = 0;
+    let uniqueIndexOffset = 0;
+    for (const component of uniqueComponents.values()) {
+      const cv = component?.vertices || new Float32Array(0);
+      const cn = component?.normals || new Float32Array(0);
+      const ci = component?.indices || new Uint32Array(0);
+      vertices.set(cv, uniqueVertexOffset * 3);
+      if (cn.length === cv.length) {
+        normals.set(cn, uniqueVertexOffset * 3);
+      }
+      for (let i = 0; i < ci.length; i += 1) {
+        indices[uniqueIndexOffset + i] = ci[i] + uniqueVertexOffset;
+      }
+      uniqueVertexOffset += Math.floor(cv.length / 3);
+      uniqueIndexOffset += ci.length;
+    }
+  }
+
+  const parts = [];
   for (const { occurrence, componentMeshData, sourceParts } of placements) {
-    // Component geometry loads in CAD units (mm) — the GLB loader un-scales meters back to mm —
-    // and the occurrence transform is authored in mm, so it applies directly to place each
-    // (local-frame) component. Components MUST be local for this to be correct under dedup.
+    // Component geometry loads in CAD units (mm) and the occurrence transform is authored in
+    // mm, so it places each (local-frame) component directly. Applied as the Mesh matrix.
     const matrix = toTransformArray(occurrence?.transform);
     const mirrored = matrixDeterminant3(matrix) < 0;
     const occurrenceId = String(occurrence?.id || "").trim();
     const cid = String(occurrence?.component || "").trim();
     const overrideColor = toVectorArray(occurrence?.color);
     const sourceVertices = componentMeshData?.vertices || new Float32Array(0);
-    const sourceNormals = componentMeshData?.normals || new Float32Array(0);
     const sourceColors = componentMeshData?.colors || new Float32Array(0);
-    const sourceIndices = componentMeshData?.indices || new Uint32Array(0);
-    const sourceEdgeBary = componentMeshData?.surfaceEdgeBarycentric || null;
-    const sourceEdgeClass = componentMeshData?.surfaceEdgeClass || null;
     const hasComponentColors = sourceColors.length === sourceVertices.length && sourceColors.length > 0;
+    // A per-occurrence override colour drives the material (part.color) — it can't bake into
+    // shared vertices. A component's own COLOR_0 rides on the shared geometry and is used only
+    // when there is no override.
+    const useComponentVertexColors = !overrideColor && hasComponentColors;
 
-    const partVertexOffset = vertexOffset;
-    const partTriangleOffset = Math.floor(indexOffset / 3);
-    const sourcePartRanges = [];
-    let minX = Infinity, minY = Infinity, minZ = Infinity;
-    let maxX = -Infinity, maxY = -Infinity, maxZ = -Infinity;
+    // Selector face ranges: triangle offsets into the COMPONENT's own geometry (the render
+    // mesh via sourceMesh), so buildGlbFaceIdsForPart maps render triangles -> faces. These are
+    // component-local (unchanged by placement), so face selection is preserved.
+    const sourcePartRanges = sourceParts.map((sourcePart) => ({
+      occurrenceId: occurrenceId || meshPartId(sourcePart),
+      primitiveIndex: meshPartNumericValue(sourcePart, "primitiveIndex"),
+      triangleOffset: meshPartNumericValue(sourcePart, "triangleOffset"),
+      triangleCount: meshPartNumericValue(sourcePart, "triangleCount")
+    }));
 
-    for (const sourcePart of sourceParts) {
-      const srcVertexOffset = meshPartNumericValue(sourcePart, "vertexOffset");
-      const srcVertexCount = meshPartNumericValue(sourcePart, "vertexCount");
-      const srcTriangleOffset = meshPartNumericValue(sourcePart, "triangleOffset");
-      const srcTriangleCount = meshPartNumericValue(sourcePart, "triangleCount");
-      const rangeTriangleOffset = Math.floor(indexOffset / 3) - partTriangleOffset;
-      sourcePartRanges.push({
-        // The DESCRIPTOR occurrence id (not the component's internal mesh-part id) so it matches
-        // the composed selector runtime's remapped occurrence id, letting buildGlbFaceIdsForPart
-        // resolve render-mesh triangles to this occurrence's faces.
-        occurrenceId: occurrenceId || meshPartId(sourcePart),
-        primitiveIndex: meshPartNumericValue(sourcePart, "primitiveIndex"),
-        triangleOffset: rangeTriangleOffset,
-        triangleCount: srcTriangleCount
-      });
-
-      const baseVertexOffset = vertexOffset;
-      for (let local = 0; local < srcVertexCount; local += 1) {
-        const src = (srcVertexOffset + local) * 3;
-        const dst = (vertexOffset + local) * 3;
-        const x = sourceVertices[src];
-        const y = sourceVertices[src + 1];
-        const z = sourceVertices[src + 2];
-        transformPointInto(vertices, dst, matrix, x, y, z);
-        if (sourceNormals.length >= src + 3) {
-          transformNormalInto(normals, dst, matrix, sourceNormals[src], sourceNormals[src + 1], sourceNormals[src + 2]);
-        }
-        if (anyColors) {
-          if (overrideColor) {
-            colors[dst] = overrideColor[0];
-            colors[dst + 1] = overrideColor[1];
-            colors[dst + 2] = overrideColor[2];
-          } else if (hasComponentColors) {
-            colors[dst] = sourceColors[src];
-            colors[dst + 1] = sourceColors[src + 1];
-            colors[dst + 2] = sourceColors[src + 2];
-          }
-        }
-        if (hasEdges) {
-          if (sourceEdgeBary && sourceEdgeBary.length >= src + 3) {
-            surfaceEdgeBarycentric[dst] = sourceEdgeBary[src];
-            surfaceEdgeBarycentric[dst + 1] = sourceEdgeBary[src + 1];
-            surfaceEdgeBarycentric[dst + 2] = sourceEdgeBary[src + 2];
-          }
-          if (sourceEdgeClass && sourceEdgeClass.length >= src + 3) {
-            surfaceEdgeClass[dst] = sourceEdgeClass[src];
-            surfaceEdgeClass[dst + 1] = sourceEdgeClass[src + 1];
-            surfaceEdgeClass[dst + 2] = sourceEdgeClass[src + 2];
-          }
-        }
-        const wx = vertices[dst];
-        const wy = vertices[dst + 1];
-        const wz = vertices[dst + 2];
-        if (wx < minX) minX = wx; if (wy < minY) minY = wy; if (wz < minZ) minZ = wz;
-        if (wx > maxX) maxX = wx; if (wy > maxY) maxY = wy; if (wz > maxZ) maxZ = wz;
-      }
-
-      const srcIndexStart = srcTriangleOffset * 3;
-      for (let tri = 0; tri < srcTriangleCount; tri += 1) {
-        const a = sourceIndices[srcIndexStart + tri * 3] - srcVertexOffset + baseVertexOffset;
-        const b = sourceIndices[srcIndexStart + tri * 3 + 1] - srcVertexOffset + baseVertexOffset;
-        const c = sourceIndices[srcIndexStart + tri * 3 + 2] - srcVertexOffset + baseVertexOffset;
-        // A mirror (negative determinant) reverses triangle winding once baked into
-        // positions; flip back so front-faces stay consistent with the renderer.
-        indices[indexOffset] = a;
-        indices[indexOffset + 1] = mirrored ? c : b;
-        indices[indexOffset + 2] = mirrored ? b : c;
-        indexOffset += 3;
-      }
-      vertexOffset += srcVertexCount;
-    }
-
-    const bounds = Number.isFinite(minX)
-      ? { min: [minX, minY, minZ], max: [maxX, maxY, maxZ] }
-      : null;
-    const firstSourcePart = sourceParts[0];
-    const displayName = String(occurrence?.name || occurrenceId || cid || meshPartId(firstSourcePart)).trim();
+    const bounds = boundsForTransformedBox(componentMeshData?.bounds, matrix);
+    const displayName = String(occurrence?.name || occurrenceId || cid || meshPartId(sourceParts[0])).trim();
     parts.push({
       id: occurrenceId || cid,
       occurrenceId: occurrenceId || cid,
@@ -566,14 +534,17 @@ export function buildComposedPackageMeshData(descriptor, componentMeshDataByCid)
       label: displayName,
       nodeType: "part",
       transform: matrix,
+      mirrored,
       bounds,
       sourceBounds: bounds,
-      color: overrideColor || firstSourcePart?.color || null,
-      hasSourceColors: anyColors && (!!overrideColor || hasComponentColors),
-      vertexOffset: partVertexOffset,
-      vertexCount: vertexOffset - partVertexOffset,
-      triangleOffset: partTriangleOffset,
-      triangleCount: Math.floor(indexOffset / 3) - partTriangleOffset,
+      color: (overrideColor && linearRgbToHex(overrideColor)) || sourceParts[0]?.color || null,
+      hasSourceColors: useComponentVertexColors,
+      // Shared component geometry: cadScene caches one BufferGeometry per sourceMeshKey and
+      // reuses it across every occurrence of this cid (+ colour mode).
+      sourceMesh: componentMeshData,
+      sourceMeshKey: `${cid}:${useComponentVertexColors ? "src" : "flat"}`,
+      vertexCount: Math.floor(sourceVertices.length / 3),
+      triangleCount: Math.floor((componentMeshData?.indices?.length || 0) / 3),
       sourcePartRanges,
       edgeIndexOffset: 0,
       edgeIndexCount: 0
@@ -584,23 +555,20 @@ export function buildComposedPackageMeshData(descriptor, componentMeshDataByCid)
     vertices,
     indices,
     normals,
-    colors,
-    surfaceEdgeBarycentric,
-    surfaceEdgeClass,
+    colors: new Float32Array(0),
+    surfaceEdgeBarycentric: new Float32Array(0),
+    surfaceEdgeClass: new Float32Array(0),
     edge_indices: new Uint32Array(0),
     parts,
     assemblyRoot: buildPackageAssemblyRoot(descriptor, parts),
     bounds: mergeBounds(parts.map((part) => part.bounds)),
     assemblyMates: assemblyMatesFromTopology(descriptor),
     missingComponentIds,
-    partTransformsBaked: true,
-    has_source_colors: anyColors,
-    // The un-composed inputs, carried so the optional cid-keyed instanced render
-    // path (settings.instancePackages) can build InstancedMeshes without baking
-    // per-occurrence vertices. Holding these references keeps ~one components'
-    // worth of meshData alive; a follow-up will skip the compose above entirely
-    // when instancing is requested at load time.
-    packageInstancing: { descriptor, componentMeshDataByCid }
+    // Each occurrence is placed by its transform at render time over shared component
+    // geometry (each part carries its own sourceMesh above); nothing here is baked into
+    // world space.
+    partTransformsBaked: false,
+    has_source_colors: false
   };
 }
 
