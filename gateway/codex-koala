@@ -1,0 +1,33 @@
+#!/usr/bin/env zsh
+set -euo pipefail
+
+# Usage: codex-koala <tunnel-url> [codex args...]
+#   e.g. codex-koala https://abc-def.trycloudflare.com -s danger-full-access "Create a gear"
+
+SCRIPT_DIR="${0:a:h}"
+PROXY_PORT=18800
+CODEX_BIN="${CODEX_BIN:-/opt/homebrew/bin/codex}"
+
+TUNNEL_URL="${1:?Usage: codex-koala <tunnel-url> [codex args...]}"
+shift
+
+export UPSTREAM_URL="${TUNNEL_URL}/v1"
+
+# Restart proxy to pick up new UPSTREAM_URL
+lsof -iTCP:$PROXY_PORT -sTCP:LISTEN -t 2>/dev/null | xargs kill 2>/dev/null || true
+node "$SCRIPT_DIR/proxy.js" &
+PROXY_PID=$!
+for i in {1..20}; do
+  lsof -iTCP:$PROXY_PORT -sTCP:LISTEN -t >/dev/null 2>&1 && break
+  sleep 0.1
+done
+trap "kill $PROXY_PID 2>/dev/null" EXIT
+
+exec "$CODEX_BIN" \
+  -c 'model_providers.koala.name="Koala GLM-5.2"' \
+  -c 'model_providers.koala.base_url="http://127.0.0.1:18800"' \
+  -c 'model_providers.koala.wire_api="responses"' \
+  -c 'model_providers.koala.experimental_bearer_token="unused"' \
+  -c 'model_provider="koala"' \
+  -m "/local-ssd/models/GLM-5.2-FP8" \
+  "$@"

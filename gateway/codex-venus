@@ -1,0 +1,26 @@
+#!/usr/bin/env zsh
+set -euo pipefail
+
+SCRIPT_DIR="${0:a:h}"
+PROXY_PORT=18800
+CODEX_BIN="${CODEX_BIN:-/opt/homebrew/bin/codex}"
+VENUS_TOKEN="${VENUS_TOKEN:-PLACEHOLDER_ROTATE_ME}"
+
+# Start proxy if not already running
+if ! lsof -iTCP:$PROXY_PORT -sTCP:LISTEN -t >/dev/null 2>&1; then
+  node "$SCRIPT_DIR/proxy.js" &
+  PROXY_PID=$!
+  for i in {1..20}; do
+    lsof -iTCP:$PROXY_PORT -sTCP:LISTEN -t >/dev/null 2>&1 && break
+    sleep 0.1
+  done
+  trap "kill $PROXY_PID 2>/dev/null" EXIT
+fi
+
+exec "$CODEX_BIN" \
+  -c 'model_providers.venus.name="Venus via Proxy"' \
+  -c 'model_providers.venus.base_url="http://127.0.0.1:18800"' \
+  -c 'model_providers.venus.wire_api="responses"' \
+  -c "model_providers.venus.experimental_bearer_token=\"$VENUS_TOKEN\"" \
+  -c 'model_provider="venus"' \
+  "$@"
