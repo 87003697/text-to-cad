@@ -537,6 +537,8 @@ def input_kind(file_path: Path) -> str:
         return "stp"
     if suffix == ".py":
         return "python"
+    if suffix in {".glb", ".gltf", ".obj", ".stl", ".ply", ".3mf"}:
+        return "mesh"
     return ""
 
 
@@ -854,30 +856,37 @@ def resolve_render_job(
         input_path = logical_step_path_for_python_source(input_path)
         root_path = input_path.parent.resolve()
         kind = "step"
-    if kind not in {"step", "stp"}:
-        raise SnapshotError("Snapshot supports only STEP/STP inputs or same-stem Python generators")
+    if kind not in {"step", "stp", "mesh"}:
+        raise SnapshotError("Snapshot supports only STEP/STP/mesh inputs or same-stem Python generators")
 
-    artifact = ensure_render_job_step_artifact(
-        job,
-        reference_root=reference_root,
-        input_path=source_path,
-        step_path=input_path,
-        require_selector=selection_requires_selector_topology(job),
-    )
-    expected_cad_path = cad_ref_for_step_path(reference_root, input_path)
-    normalized_selection = normalize_render_job_selection(
-        job,
-        expected_cad_path=expected_cad_path,
-        selector_index=artifact_selector_index(artifact),
-    )
+    if kind in {"step", "stp"}:
+        artifact = ensure_render_job_step_artifact(
+            job,
+            reference_root=reference_root,
+            input_path=source_path,
+            step_path=input_path,
+            require_selector=selection_requires_selector_topology(job),
+        )
+        expected_cad_path = cad_ref_for_step_path(reference_root, input_path)
+        normalized_selection = normalize_render_job_selection(
+            job,
+            expected_cad_path=expected_cad_path,
+            selector_index=artifact_selector_index(artifact),
+        )
 
-    glb_path = existing_part_glb_path(input_path) or part_glb_path(input_path)
-    if not glb_path.exists():
-        raise SnapshotError(f"STEP/STP render input is missing its CAD Viewer GLB artifact: {glb_path}")
+        glb_path = existing_part_glb_path(input_path) or part_glb_path(input_path)
+        if not glb_path.exists():
+            raise SnapshotError(f"STEP/STP render input is missing its CAD Viewer GLB artifact: {glb_path}")
 
-    has_param_render = has_step_parameter_render_values(job.get("stepParameters"))
-    animated_params = step_parameter_render_values_are_animated(job.get("stepParameters"))
-    step_parameter_path = step_parameter_path_for_step_source(input_path)
+        has_param_render = has_step_parameter_render_values(job.get("stepParameters"))
+        animated_params = step_parameter_render_values_are_animated(job.get("stepParameters"))
+        step_parameter_path = step_parameter_path_for_step_source(input_path)
+    else:
+        glb_path = input_path
+        normalized_selection = None
+        has_param_render = False
+        animated_params = False
+        step_parameter_path = input_path.parent / ".nonexistent"
 
     mode = str(job.get("mode") or "view").strip().lower()
     if mode not in SUPPORTED_RENDER_MODES:
@@ -928,11 +937,12 @@ def resolve_render_job(
 
     job.pop("clip", None)
     job.pop("clipSettings", None)
+    js_kind = input_path.suffix.lstrip(".").lower() if kind == "mesh" else kind
     resolved: dict[str, object] = {
         "rootPath": str(root_path),
         "inputPath": str(input_path),
         "inputUrl": asset_url_for_path(input_path, root_path),
-        "kind": kind,
+        "kind": js_kind,
         "glbPath": str(glb_path),
         "glbUrl": asset_url_for_path(glb_path, root_path),
     }
@@ -1041,6 +1051,7 @@ class BatchSnapshotRenderer:
             self.playwright = await async_playwright().start()
             self.browser = await self.playwright.chromium.launch(
                 headless=True,
+                args=["--no-sandbox"],
                 timeout=RENDER_BROWSER_STARTUP_TIMEOUT_MS,
             )
             self.context = await self.browser.new_context(

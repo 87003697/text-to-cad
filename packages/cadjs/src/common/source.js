@@ -71,7 +71,7 @@ export function sourceIsStep(sourceOrKind) {
 }
 
 function assertStepOnlyOption(kind, value, label) {
-  if (value === undefined || value === null) {
+  if (!value) {
     return;
   }
   if (!sourceIsStep(kind)) {
