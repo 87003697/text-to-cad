@@ -732,7 +732,11 @@ function buildPartGeometryEntry(THREE, meshData, part, recomputeNormals = false)
         new THREE.BufferAttribute(new Float32Array(rawColors), 3)
       );
     }
-    if (!sourceMesh) {
+    if (sourceMesh) {
+      // Shared component geometry: source the (triangle-local) surface-edge attributes from
+      // the component itself so packages still render CAD edges on the shared-geometry path.
+      setSurfaceEdgeAttributes(THREE, geometry, sourceMesh, 0, vertexCount);
+    } else {
       setSurfaceEdgeAttributes(THREE, geometry, meshData, vertexOffset, vertexCount);
     }
     applyGeometryNormals(THREE, geometry, localNormals, recomputeNormals);
