@@ -1,0 +1,25 @@
+#!/usr/bin/env zsh
+set -euo pipefail
+
+# Usage: codex-gpt56 <model-variant> [codex args...]
+#   e.g. codex-gpt56 terra -s danger-full-access "Create a winged victory statue"
+#   Variants: sol, terra, luna
+
+SCRIPT_DIR="${0:a:h}"
+CODEX_BIN="${CODEX_BIN:-/opt/homebrew/bin/codex}"
+VENUS_TOKEN="${VENUS_TOKEN:-PLACEHOLDER_ROTATE_ME}"
+VENUS_URL="http://v2.open.venus.oa.com/llmproxy/v1"
+
+VARIANT="${1:?Usage: codex-gpt56 <sol|terra|luna> [codex args...]}"
+shift
+
+MODEL="gpt-5.6-${VARIANT}"
+
+exec "$CODEX_BIN" \
+  -c "model_providers.venus.name=\"Venus GPT-5.6-${VARIANT}\"" \
+  -c "model_providers.venus.base_url=\"${VENUS_URL}\"" \
+  -c 'model_providers.venus.wire_api="responses"' \
+  -c "model_providers.venus.experimental_bearer_token=\"${VENUS_TOKEN}\"" \
+  -c 'model_provider="venus"' \
+  -m "$MODEL" \
+  "$@"
