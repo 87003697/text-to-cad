@@ -25,6 +25,12 @@ _PYTHONPATH_REL_CANDIDATES = [
     os.path.join("viewer", "packages", "cadgen", "src"),
     os.path.join("packages", "cadgen", "src"),
 ]
+_CAD_BACKEND_PROBE = (
+    "import OCP\n"
+    "import build123d\n"
+    "import cadgen.step_artifact\n"
+)
+_CAD_BACKEND_PROBE_TIMEOUT_SECONDS = 30
 
 
 def _find_up_dir(rel: str, start: str) -> str:
@@ -59,6 +65,57 @@ def cadgen_pythonpath(repo_root: str) -> str:
             seen.add(entry)
             deduped.append(entry)
     return os.pathsep.join(deduped)
+
+
+def probe_cadgen_runtime(repo_root: str) -> dict:
+    """Validate the current interpreter in an isolated child process.
+
+    The long-lived HTTP server intentionally does not import OpenCascade. This
+    probe exercises the exact interpreter and PYTHONPATH that artifact workers
+    inherit, while keeping OCP out of the server process itself.
+    """
+    env = dict(os.environ)
+    pythonpath = cadgen_pythonpath(repo_root)
+    if pythonpath:
+        env["PYTHONPATH"] = pythonpath
+    try:
+        proc = subprocess.run(
+            [sys.executable, "-c", _CAD_BACKEND_PROBE],
+            cwd=repo_root if repo_root and os.path.isdir(repo_root) else None,
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=_CAD_BACKEND_PROBE_TIMEOUT_SECONDS,
+        )
+    except subprocess.TimeoutExpired:
+        return {
+            "ok": False,
+            "python": sys.executable,
+            "error": f"CAD backend validation timed out after {_CAD_BACKEND_PROBE_TIMEOUT_SECONDS}s.",
+        }
+    except OSError as exc:
+        return {"ok": False, "python": sys.executable, "error": str(exc)}
+    if proc.returncode == 0:
+        return {"ok": True, "python": sys.executable, "error": ""}
+    detail = (proc.stderr or proc.stdout or f"probe exited with code {proc.returncode}").strip()
+    if len(detail) > 4000:
+        detail = detail[-4000:]
+    return {"ok": False, "python": sys.executable, "error": detail}
+
+
+def require_cadgen_runtime(repo_root: str) -> dict:
+    result = probe_cadgen_runtime(repo_root)
+    if result.get("ok"):
+        return result
+    python = result.get("python") or sys.executable
+    detail = result.get("error") or "Unknown CAD backend validation error."
+    raise RuntimeError(
+        "CAD Viewer requires a working CAD Python backend before startup.\n"
+        f"Selected interpreter: {python}\n"
+        "Required imports: OCP, build123d, cadgen.step_artifact\n"
+        f"{detail}\n"
+        "Set VIEWER_CAD_PYTHON to an absolute Python path with the viewer CAD requirements installed."
+    )
 
 
 def run_cadgen(module: str, args, repo_root: str) -> dict:

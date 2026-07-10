@@ -29,11 +29,13 @@ from urllib.parse import urlsplit, parse_qs, unquote
 if __package__ in (None, ""):
     sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
     from server_py import backend as backend_mod
+    from server_py import cadgen_bridge
     from server_py import server_info as server_info_mod
     from server_py import encoding as enc
     from server_py.content_types import content_type_for_static_asset
 else:
     from . import backend as backend_mod
+    from . import cadgen_bridge
     from . import server_info as server_info_mod
     from . import encoding as enc
     from .content_types import content_type_for_static_asset
@@ -360,6 +362,15 @@ def main(argv=None):
     args = parser.parse_args(argv)
 
     directory_root = os.path.abspath(args.dir or os.getcwd())
+    if not os.path.isdir(directory_root):
+        print(f"--dir is not a directory: {directory_root}", file=sys.stderr)
+        return 1
+    if os.environ.get("VIEWER_CAD_BACKEND_VALIDATED") != "1":
+        try:
+            cadgen_bridge.require_cadgen_runtime(directory_root)
+        except RuntimeError as exc:
+            print(str(exc), file=sys.stderr)
+            return 1
     _Ctx.directory_root = directory_root
     # viewer app root is the parent of this server_py package -> dist is <viewer>/dist.
     viewer_app_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -374,7 +385,8 @@ def main(argv=None):
         httpd.serve_forever()
     except KeyboardInterrupt:
         httpd.shutdown()
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

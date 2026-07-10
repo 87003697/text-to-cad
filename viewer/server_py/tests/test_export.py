@@ -2,8 +2,10 @@
 
 import os
 import pathlib
+import subprocess
 import sys
 import unittest
+from unittest import mock
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[2]))
 
@@ -44,6 +46,25 @@ class CadpyPythonpath(unittest.TestCase):
             self.skipTest("packages/cadgen/src not present")
         pp = cadgen_bridge.cadgen_pythonpath(str(_WORKTREE))
         self.assertIn(os.path.join("packages", "cadgen", "src"), pp)
+
+    def test_cadgen_runtime_probe_checks_required_imports(self):
+        completed = subprocess.CompletedProcess([], 0, stdout="", stderr="")
+        with mock.patch.object(cadgen_bridge.subprocess, "run", return_value=completed) as run:
+            result = cadgen_bridge.probe_cadgen_runtime(str(_WORKTREE))
+        self.assertTrue(result["ok"])
+        command = run.call_args.args[0]
+        self.assertEqual(command[:2], [sys.executable, "-c"])
+        self.assertIn("import OCP", command[2])
+        self.assertIn("import build123d", command[2])
+        self.assertIn("import cadgen.step_artifact", command[2])
+
+    def test_cadgen_runtime_probe_preserves_import_failure(self):
+        completed = subprocess.CompletedProcess(
+            [], 1, stdout="", stderr="ModuleNotFoundError: No module named 'OCP'"
+        )
+        with mock.patch.object(cadgen_bridge.subprocess, "run", return_value=completed):
+            with self.assertRaisesRegex(RuntimeError, "No module named 'OCP'"):
+                cadgen_bridge.require_cadgen_runtime(str(_WORKTREE))
 
 
 if __name__ == "__main__":
