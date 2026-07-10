@@ -16,7 +16,8 @@ import {
   resolveDisplayEdgeSettings
 } from "./displaySettings.js";
 import {
-  buildModel
+  buildModel,
+  normalizedSelectorValues
 } from "./cadScene.js";
 import {
   applyDisplayRecordTransform
@@ -767,11 +768,22 @@ export function renderJobContext(meshData, job = {}) {
 
 export function modelOptionsForRenderJob(context, job = {}) {
   const selection = job.selection || {};
-  const filterSelection = context.mode === "view" || context.mode === "orbit"
+  const keepsAllParts = context.mode === "view" || context.mode === "orbit";
+  const filterSelection = keepsAllParts
     ? {
         hide: selection.hide
       }
     : selection;
+  // View/orbit focus keeps every part in the scene so the frame retains
+  // assembly context (hide is the removal filter); the focused refs instead
+  // ghost the rest of the model through the same focusedPartId path the
+  // interactive viewer uses. Section mode still isolates via filterSelection.
+  const focusedPartId = keepsAllParts
+    ? [
+        ...normalizedSelectorValues(selection.focus),
+        ...normalizedSelectorValues(selection.refs)
+      ]
+    : [];
   return {
     theme: context.sceneTheme,
     displayMode: context.displayMode,
@@ -782,6 +794,7 @@ export function modelOptionsForRenderJob(context, job = {}) {
     renderPartsIndividually: true,
     selection: {
       ...(job.selection || {}),
+      ...(focusedPartId.length ? { focusedPartId } : {}),
       showEdges: context.edgesVisible
     },
     edgeRendering: {
