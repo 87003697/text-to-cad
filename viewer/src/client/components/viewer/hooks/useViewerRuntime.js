@@ -12,10 +12,16 @@ import {
 } from "cadjs/lib/viewer/renderQuality";
 import { updateOrbitControls } from "../orbitControls.js";
 
+// Perf experiment: render with a model-fitted depth range instead of a
+// logarithmic depth buffer so early-Z rejection stays enabled. Flip to false
+// to restore the log-depth renderer if depth artifacts appear.
+const FITTED_DEPTH_RANGE_ENABLED = true;
+
 function createWebGlRenderer(THREE) {
   return createCadWebGlRenderer(THREE, {
     allowFallback: true,
-    isRecoverableError: isWebGlContextCreationError
+    isRecoverableError: isWebGlContextCreationError,
+    logarithmicDepthBuffer: !FITTED_DEPTH_RANGE_ENABLED
   });
 }
 
@@ -161,6 +167,9 @@ export function useViewerRuntime({
       renderer.localClippingEnabled = true;
       renderer.shadowMap.enabled = true;
       renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+      // Shadow maps are re-rendered only when the scene changes (see
+      // interactionState.shadowsDirty); camera-only frames reuse the last map.
+      renderer.shadowMap.autoUpdate = false;
       renderer.setPixelRatio(getPixelRatioCap(IDLE_PIXEL_RATIO_CAP));
       renderer.setSize(width, height);
       container.innerHTML = "";
@@ -228,6 +237,11 @@ export function useViewerRuntime({
       const facePickGroup = new THREE.Group();
       const edgePickGroup = new THREE.Group();
       const vertexPickGroup = new THREE.Group();
+      // Pick proxies are opacity-0 raycast targets; keep them out of the render
+      // pass entirely. Raycaster does not check `visible`, so picking still works.
+      facePickGroup.visible = false;
+      edgePickGroup.visible = false;
+      vertexPickGroup.visible = false;
       scene.add(stageGroup);
       scene.add(modelGroup);
       scene.add(edgesGroup);
@@ -244,7 +258,8 @@ export function useViewerRuntime({
         renderQueued: false,
         renderQueuedAt: 0,
         renderFallbackTimerId: 0,
-        restoreTimerId: 0
+        restoreTimerId: 0,
+        shadowsDirty: true
       };
       const keyboardOrbitState = {
         pressedKeys: new Set(),
@@ -293,6 +308,7 @@ export function useViewerRuntime({
         onContextLost?.();
       };
       const handleContextRestored = () => {
+        interactionState.shadowsDirty = true;
         setError("");
         onContextRestored?.();
       };
@@ -312,6 +328,31 @@ export function useViewerRuntime({
         syncScreenSpaceLineMaterials();
         syncDrawingCanvasSize(runtimeRef.current);
         renderDrawingOverlay();
+      };
+
+      const fitCameraDepthRange = (runtime) => {
+        const activeCamera = runtime?.camera;
+        if (
+          !FITTED_DEPTH_RANGE_ENABLED ||
+          !activeCamera?.isPerspectiveCamera ||
+          renderer.capabilities?.logarithmicDepthBuffer
+        ) {
+          return;
+        }
+        const radius = Math.max(Number(runtime?.modelRadius) || 1, 1e-6);
+        const sceneExtent = Math.max(radius, Number(runtime?.gridConfig?.radius) || 0);
+        const target = runtime?.controls?.target || controls.target;
+        const distance = Math.max(activeCamera.position.distanceTo(target), radius * 1e-3);
+        const near = Math.max(distance - radius * 4, distance / 250);
+        const far = Math.max(distance + sceneExtent * 50, near * 16);
+        if (
+          Math.abs(near - activeCamera.near) > activeCamera.near * 0.1 ||
+          Math.abs(far - activeCamera.far) > activeCamera.far * 0.1
+        ) {
+          activeCamera.near = near;
+          activeCamera.far = far;
+          activeCamera.updateProjectionMatrix();
+        }
       };
 
       let rafId = 0;
@@ -364,6 +405,9 @@ export function useViewerRuntime({
         if (cameraTransitionActive || keyboardOrbitMoved) {
           emitPerspectiveChange(runtimeRef.current);
         }
+        fitCameraDepthRange(runtimeRef.current);
+        renderer.shadowMap.needsUpdate = interactionState.shadowsDirty === true;
+        interactionState.shadowsDirty = false;
         renderer.render(scene, runtimeRef.current?.camera || camera);
         const previewOrbitActive = !!runtimeRef.current?.previewOrbitEnabled;
         if (!previewOrbitActive) {
@@ -483,7 +527,10 @@ export function useViewerRuntime({
         let depth = 0;
         if (runtime.raycaster && runtime.modelGroup) {
           runtime.raycaster.setFromCamera(zoomReanchorPointer, activeCamera);
+          // Only the nearest hit matters here; lets BVH-backed meshes early-out.
+          runtime.raycaster.firstHitOnly = true;
           const hits = runtime.raycaster.intersectObject(runtime.modelGroup, true);
+          runtime.raycaster.firstHitOnly = false;
           const hit = hits.find((entry) => entry?.point);
           if (hit) {
             depth = depthOf(hit.point);
@@ -692,7 +739,17 @@ export function useViewerRuntime({
         onResize,
         resizeObserver,
         rafId,
-        requestRender,
+        // Renders requested through the runtime come from scene mutations
+        // (model/theme/params/overlay effects), so they also refresh shadows.
+        // Camera-driven paths use the closure-local requestRender and keep the
+        // last shadow map.
+        requestRender: () => {
+          interactionState.shadowsDirty = true;
+          requestRender();
+        },
+        invalidateShadows: () => {
+          interactionState.shadowsDirty = true;
+        },
         beginInteraction,
         scheduleIdleQuality,
         applyCameraFrameInsets,

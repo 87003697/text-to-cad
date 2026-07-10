@@ -116,6 +116,7 @@ import {
   syncDisplayMeshFaceIds,
   syncSelectorPickGroups
 } from "cadjs/lib/viewer/selectorPickGroups";
+import { scheduleRuntimeRaycastBvh } from "cadjs/lib/viewer/raycastBvh";
 import {
   buildSurfaceLinePositions,
   projectPointToSurfaceUv,
@@ -1791,6 +1792,7 @@ const CadViewer = forwardRef(function CadViewer({
   urdfPosePicker = null
 }, ref) {
   const stepParameterRuntime = stepParameters;
+  const stepAnimationPlaying = Boolean(stepParameterRuntime?.animationState?.playing);
   const normalizedSceneScaleMode = normalizeSceneScaleMode(scale || sceneScaleMode);
   const normalizedProjection = normalizeCameraProjection(projection);
   const meshGeometrySource = meshData?.geometrySource && typeof meshData.geometrySource === "object"
@@ -3356,6 +3358,7 @@ const CadViewer = forwardRef(function CadViewer({
     edgePickGroup.updateMatrixWorld(true);
     vertexPickGroup.updateMatrixWorld(true);
     syncSelectorPickGroups(runtime, displaySelectorRuntime, modelOffset, { clearSceneGroup });
+    scheduleRuntimeRaycastBvh(runtime);
     syncRuntimeStepClipPlane(runtime, clipSettingsRef.current);
 
     const currentPartVisualState = partVisualStateRef.current;
@@ -3752,8 +3755,12 @@ const CadViewer = forwardRef(function CadViewer({
     runtime.modelGroup?.updateMatrixWorld?.(true);
     runtime.edgesGroup?.updateMatrixWorld?.(true);
     const effectiveRuntime = nextEdgeRuntimes.selectorRuntime;
-    syncDisplayMeshFaceIds(runtime, meshData, effectiveRuntime);
-    syncSelectorPickGroups(runtime, effectiveRuntime, modelTransformRef.current.offset, { clearSceneGroup });
+    // Picking is suspended during STEP animation playback, so skip rebuilding
+    // pick-only state per frame; the playing->stopped rerun syncs the final pose.
+    if (!stepAnimationPlaying) {
+      syncDisplayMeshFaceIds(runtime, meshData, effectiveRuntime);
+      syncSelectorPickGroups(runtime, effectiveRuntime, modelTransformRef.current.offset, { clearSceneGroup });
+    }
     runtime.requestRender?.();
   }, [
     visualEdgeSettings,
@@ -4451,7 +4458,8 @@ const CadViewer = forwardRef(function CadViewer({
     onActivateReference,
     onDoubleActivateReference,
     onContextReference,
-    viewerReadyTick
+    viewerReadyTick,
+    suppressTopologyPicking: stepAnimationPlaying
   });
 
   return (
