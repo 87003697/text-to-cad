@@ -885,6 +885,57 @@ class SnapshotCliTests(unittest.TestCase):
         self.assertEqual(packet["jobs"][0]["mode"], "orbit")
         self.assertEqual(packet["jobs"][0]["resolved"]["kind"], "implicit")
 
+    def test_render_job_rejects_static_gif_outside_orbit_mode(self) -> None:
+        # A .gif output in a static job would silently save a single frame; the
+        # CLI must instead point at orbit mode or animated params.
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = self._mesh_job_env(temporary_directory, "pulse.implicit.js", b"export default {};\n")
+            with self.assertRaisesRegex(SnapshotError, "renders a single frame.*--mode orbit"):
+                resolve_render_job_packet(
+                    {"input": "models/pulse.implicit.js", "outputs": [{"path": "tmp/spin.gif"}]},
+                    cwd=root,
+                )
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = self._mesh_job_env(temporary_directory, "widget.glb", b"glTF")
+            with self.assertRaisesRegex(SnapshotError, "renders a single frame.*--mode orbit"):
+                resolve_render_job_packet(
+                    {"input": "models/widget.glb", "outputs": [{"path": "tmp/spin.gif", "camera": "iso"}]},
+                    cwd=root,
+                )
+
+    def test_render_job_allows_gif_for_animated_step_parameters(self) -> None:
+        # Animated --params sweeps legitimately render multi-frame GIFs in view
+        # mode; the static-gif guard must not reject them.
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory).resolve()
+            models = root / "models"
+            models.mkdir()
+            (models / "part.step").write_text("ISO-10303-21;\nEND-ISO-10303-21;\n", encoding="utf-8")
+            package_dir = write_package(models / "part.step")
+            # stepParameters require a declared sidecar; point the descriptor at one.
+            descriptor_path = Path(package_dir) / "assembly.json"
+            descriptor = json.loads(descriptor_path.read_text(encoding="utf-8"))
+            descriptor["paramsPath"] = "part.params.js"
+            descriptor_path.write_text(json.dumps(descriptor), encoding="utf-8")
+            (models / "part.params.js").write_text("export default {};\n", encoding="utf-8")
+
+            original_ensure = snapshot_main.ensure_step_topology_artifact
+            try:
+                snapshot_main.ensure_step_topology_artifact = lambda *args, **kwargs: None
+                packet = resolve_render_job_packet(
+                    {
+                        "input": "models/part.step",
+                        "stepParameters": {"animate": {"from": {"width": 1}, "to": {"width": 2}}},
+                        "outputs": [{"path": "tmp/sweep.gif"}],
+                    },
+                    cwd=root,
+                )
+            finally:
+                snapshot_main.ensure_step_topology_artifact = original_ensure
+
+        self.assertEqual(packet["jobs"][0]["mode"], "view")
+        self.assertTrue(str(packet["jobs"][0]["outputs"][0]["path"]).endswith(".gif"))
+
     def test_render_job_rejects_step_only_options_for_implicit_input(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             root = self._mesh_job_env(temporary_directory, "pulse.implicit.js", b"export default {};\n")
