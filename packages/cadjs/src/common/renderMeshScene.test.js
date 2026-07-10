@@ -102,6 +102,15 @@ test("render view focus preserves full assembly while hide still filters", () =>
     min: [0, 0, 0],
     max: [3, 1, 0]
   });
+  // Focus must still be visible in the render: the focused part keeps full
+  // opacity while every other part is ghosted, mirroring the interactive
+  // viewer's focus treatment.
+  const focusedById = new Map(focused.displayRecords.map((record) => [record.partId, record]));
+  assert.equal(focusedById.get("right").material.opacity, 1);
+  assert.ok(
+    focusedById.get("left").material.opacity <= 0.05,
+    `expected non-focused part to be ghosted, got opacity ${focusedById.get("left").material.opacity}`
+  );
   focused.dispose();
 
   const hiddenContext = renderJobContext(twoPartMeshData(), {
