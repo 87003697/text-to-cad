@@ -25,9 +25,11 @@ import sys
 
 if __package__ in (None, ""):
     sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    from server_py import cadgen_bridge
     from server_py.encoding import url_search_params_encode
     from server_py.server_info import DEFAULT_VIEWER_PORT, DEFAULT_VIEWER_HOST
 else:
+    from . import cadgen_bridge
     from .encoding import url_search_params_encode
     from .server_info import DEFAULT_VIEWER_PORT, DEFAULT_VIEWER_HOST
 
@@ -56,6 +58,7 @@ def spawn_backend(host: str, port: int, directory: str):
     """Spawn the Python backend (serves the built dist + /__cad) on host:port."""
     env = dict(os.environ)
     env["PYTHONPATH"] = os.pathsep.join([_VIEWER_APP_ROOT, env.get("PYTHONPATH", "")]).rstrip(os.pathsep)
+    env["VIEWER_CAD_BACKEND_VALIDATED"] = "1"
     cmd = [sys.executable, "-m", "server_py.server", "--host", host, "--port", str(port), "--dir", os.path.abspath(directory)]
     return subprocess.Popen(cmd, env=env)
 
@@ -81,6 +84,12 @@ def main(argv=None):
             f"Rerun with --port <n> to use a different port.",
             file=sys.stderr,
         )
+        return 1
+
+    try:
+        cadgen_bridge.require_cadgen_runtime(directory)
+    except RuntimeError as exc:
+        print(str(exc), file=sys.stderr)
         return 1
 
     url = viewer_url(host, port, directory)

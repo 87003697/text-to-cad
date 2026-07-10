@@ -99,21 +99,42 @@ function findFreePort() {
   });
 }
 
-function waitForPythonBackend(port, { timeoutMs = 20000 } = {}) {
+function waitForPythonBackend(port, { timeoutMs = 20000, child = null } = {}) {
   const deadline = Date.now() + timeoutMs;
   return new Promise((resolve) => {
-    const retry = () => {
-      if (Date.now() >= deadline) {
-        resolve(false);
+    let settled = false;
+    let retryTimer = null;
+    const finish = (ready) => {
+      if (settled) {
         return;
       }
-      setTimeout(attempt, 250);
+      settled = true;
+      if (retryTimer) {
+        clearTimeout(retryTimer);
+      }
+      child?.off("exit", handleChildExit);
+      resolve(ready);
+    };
+    const handleChildExit = () => finish(false);
+    child?.once("exit", handleChildExit);
+    const retry = () => {
+      if (settled) {
+        return;
+      }
+      if (Date.now() >= deadline) {
+        finish(false);
+        return;
+      }
+      retryTimer = setTimeout(attempt, 250);
     };
     const attempt = () => {
+      if (settled) {
+        return;
+      }
       const req = http.get({ host: "127.0.0.1", port, path: "/__cad/server", timeout: 500 }, (res) => {
         res.resume();
         if (res.statusCode === 200) {
-          resolve(true);
+          finish(true);
         } else {
           retry();
         }
@@ -121,9 +142,12 @@ function waitForPythonBackend(port, { timeoutMs = 20000 } = {}) {
       req.on("error", retry);
       req.on("timeout", () => {
         req.destroy();
-        retry();
       });
     };
+    if (child && child.exitCode !== null) {
+      finish(false);
+      return;
+    }
     attempt();
   });
 }
@@ -149,9 +173,13 @@ function cadViewerBackendProxyPlugin() {
       child.on("error", (error) => {
         console.error(`Failed to start Python CAD Viewer backend: ${error.message}`);
       });
-      const ready = await waitForPythonBackend(backendPort);
+      const ready = await waitForPythonBackend(backendPort, { child });
       if (!ready) {
-        console.warn("Python CAD Viewer backend did not become ready; /__cad will 502 until it does.");
+        if (child && child.exitCode === null) {
+          child.kill();
+        }
+        child = null;
+        throw new Error("Python CAD Viewer backend failed startup validation or did not become ready.");
       }
       // Forward every /__cad/* request (method + headers + body + streamed response) to Python.
       server.middlewares.use((req, res, next) => {
