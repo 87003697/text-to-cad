@@ -17,7 +17,7 @@ git switch -c my-change
 Create the repo-local Python development environment:
 
 ```bash
-python3.11 -m venv .venv
+python3.12 -m venv .venv
 ./.venv/bin/python -m pip install --upgrade pip
 ./.venv/bin/python -m pip install -r requirements-dev.txt
 ```
