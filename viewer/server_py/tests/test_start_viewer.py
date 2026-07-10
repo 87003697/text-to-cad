@@ -29,7 +29,7 @@ class _FakeChild:
 
 
 @contextlib.contextmanager
-def _run(argv, port_free=True, child_code=0):
+def _run(argv, port_free=True, child_code=0, cad_backend_error=""):
     """Run main() with the port probe + backend spawn stubbed; yield
     (rc, out, err, calls)."""
     calls = {"spawn": []}
@@ -39,8 +39,10 @@ def _run(argv, port_free=True, child_code=0):
         return _FakeChild(child_code)
 
     out, err = io.StringIO(), io.StringIO()
+    probe_effect = RuntimeError(cad_backend_error) if cad_backend_error else None
     with mock.patch.object(sav, "port_is_free", return_value=port_free), \
             mock.patch.object(sav, "spawn_backend", side_effect=fake_spawn), \
+            mock.patch.object(sav.cadgen_bridge, "require_cadgen_runtime", side_effect=probe_effect), \
             contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
         rc = sav.main(argv)
     yield rc, out.getvalue(), err.getvalue(), calls
@@ -81,6 +83,17 @@ class LauncherTest(unittest.TestCase):
     def test_start_propagates_child_exit_code(self):
         with _run(["--dir", self.directory], port_free=True, child_code=3) as (rc, out, err, calls):
             self.assertEqual(rc, 3)
+
+    def test_invalid_cad_backend_refuses_to_start(self):
+        with _run(
+            ["--dir", self.directory],
+            port_free=True,
+            cad_backend_error="No module named 'OCP'",
+        ) as (rc, out, err, calls):
+            self.assertEqual(rc, 1)
+            self.assertEqual(calls["spawn"], [])
+            self.assertNotIn("CAD Viewer URL:", out)
+            self.assertIn("No module named 'OCP'", err)
 
     def test_json_output_start(self):
         with _run(["--dir", self.directory, "--json"], port_free=True) as (rc, out, err, calls):

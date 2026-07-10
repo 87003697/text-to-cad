@@ -66,6 +66,11 @@ viewer carries a generated, installable copy under `viewer/packages/cadgen`; run
 install `viewer/requirements.txt` into the Python runtime used by the viewer.
 The generated cad-viewer skill runtime bundles that same installable package
 under `scripts/viewer/packages/cadgen` and does not need the repository root.
+Before binding its HTTP port, the Viewer validates that its selected Python can
+import `OCP`, `build123d`, and `cadgen.step_artifact`. Startup fails instead of
+serving a Viewer that cannot build missing artifacts. Set
+`VIEWER_CAD_PYTHON=/absolute/path/to/python` when the CAD environment is not in
+the checkout's `.venv`.
 
 Vite dev mounts this backend for:
 
