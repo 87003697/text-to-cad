@@ -20,7 +20,6 @@ import {
 import { resolveStepModuleFeatures } from "./stepModule.js";
 import {
   applyStepModuleEffectsToRecords,
-  buildPartTransformMatrix,
   buildStepModuleContext,
   createStepModuleEffectsApi,
   displayTransformForPart
@@ -1408,10 +1407,12 @@ function effectiveBoundsFromRecords(THREE, records, fallbackBounds) {
     if (record.effectVisible === false) {
       continue;
     }
-    const baseMatrix = buildPartTransformMatrix(THREE, record.baseTransform);
-    const effectMatrix = record.effectMatrix instanceof THREE.Matrix4 ? record.effectMatrix.clone() : null;
-    const combinedMatrix = effectMatrix ? effectMatrix.multiply(baseMatrix) : baseMatrix;
-    boundsList.push(transformedBounds(THREE, record.partBounds, combinedMatrix));
+    // record.partBounds is world-space at rest pose: composed packages fold the
+    // occurrence transform into part.bounds and legacy meshDatas bake vertices,
+    // so re-applying baseTransform here would double it. Only the module-effect
+    // delta (a world-space post-transform) moves the bounds.
+    const effectMatrix = record.effectMatrix instanceof THREE.Matrix4 ? record.effectMatrix : null;
+    boundsList.push(transformedBounds(THREE, record.partBounds, effectMatrix));
   }
   return mergeBoundsList(boundsList) || fallbackBounds;
 }
