@@ -877,6 +877,39 @@ class CadGenerationTests(unittest.TestCase):
 
         self.assertEqual([self._cad_ref("second"), self._cad_ref("first")], calls)
 
+    def test_current_target_with_explicit_exports_still_runs(self) -> None:
+        # A current compose must not swallow explicitly requested exports:
+        # `scripts/step model.py --stl out.stl` on a current model previously
+        # logged "is current; skipped recompose" and wrote nothing.
+        script_path = self._generator_script("current_exports")
+        calls: list[object] = []
+
+        def fake_generate(spec, **kwargs):
+            calls.append(spec)
+            return cad_generation.GeneratedStepResult(spec=spec, scene=None)
+
+        with mock.patch.object(
+            cad_generation, "_assembly_is_current", return_value=True
+        ), mock.patch.object(
+            cad_generation, "_assembly_glb_package_current", return_value=True
+        ), mock.patch.object(
+            cad_generation, "_rebuild_stale_assembly_children"
+        ), mock.patch.object(
+            cad_generation, "_generate_step_outputs", side_effect=fake_generate
+        ):
+            # Baseline: with no export requests the current target no-ops.
+            cad_generation.generate_step_targets([str(script_path)])
+            self.assertEqual([], calls)
+
+            cad_generation.generate_step_targets(
+                [str(script_path)],
+                step_options=StepImportOptions(stl="exports/current_exports.stl"),
+            )
+
+        self.assertEqual(1, len(calls))
+        self.assertIsNotNone(calls[0].stl_path)
+        self.assertTrue(str(calls[0].stl_path).endswith("current_exports.stl"))
+
     def test_step_generation_default_allows_missing_logical_step(self) -> None:
         # gen_step builds GLB render artifacts and never writes a text STEP, so the
         # logical .step path need not exist and the artifact pipeline must not require it.
