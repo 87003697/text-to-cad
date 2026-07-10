@@ -26,6 +26,7 @@
   "dependencies": {
     "gifenc": "^1.0.3",
     "implicitjs": "file:../implicitjs",
-    "three": "0.160.0"
+    "three": "0.160.0",
+    "three-mesh-bvh": "^0.8.0"
   }
 }
