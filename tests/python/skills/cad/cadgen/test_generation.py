@@ -878,9 +878,9 @@ class CadGenerationTests(unittest.TestCase):
         self.assertEqual([self._cad_ref("second"), self._cad_ref("first")], calls)
 
     def test_current_target_with_explicit_exports_still_runs(self) -> None:
-        # A current compose must not swallow explicitly requested exports:
-        # `scripts/step model.py --stl out.stl` on a current model previously
-        # logged "is current; skipped recompose" and wrote nothing.
+        # A current compose must not swallow explicitly requested exports
+        # (step_options sidecars or a --write-step pair): the no-op fast path
+        # previously dropped such specs as current and wrote nothing.
         script_path = self._generator_script("current_exports")
         calls: list[object] = []
 

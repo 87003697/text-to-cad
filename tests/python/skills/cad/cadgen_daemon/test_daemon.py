@@ -19,7 +19,7 @@ add_repo_path("skills/cad/scripts")
 from cadgen_daemon import client as daemon_client
 
 DAEMON_DIR = REPO_ROOT / "skills" / "cad" / "scripts" / "cadgen_daemon"
-STEP_LAUNCHER = REPO_ROOT / "skills" / "cad" / "scripts" / "step"
+GEN_LAUNCHER = REPO_ROOT / "skills" / "cad" / "scripts" / "gen"
 SPAWN_WAIT_SECONDS = 90.0  # daemon startup pays the full OCP import once
 
 BOX_SOURCE = """\
@@ -68,7 +68,7 @@ class CadgenDaemonTests(unittest.TestCase):
         # Build inline (cold) first so the daemon request is a warm current-skip.
         build_env = {k: v for k, v in os.environ.items() if k != "CADGEN_WARM"}
         build = subprocess.run(
-            [sys.executable, str(STEP_LAUNCHER), "box.step.py"],
+            [sys.executable, str(GEN_LAUNCHER), "box.step.py"],
             cwd=cls.model_dir,
             env=build_env,
             capture_output=True,
@@ -123,10 +123,10 @@ class CadgenDaemonTests(unittest.TestCase):
         with mock.patch.dict(os.environ, env):
             os.environ.pop("CADGEN_DAEMON_CHILD", None)
             with redirect_stdout(out), redirect_stderr(err):
-                exit_code = daemon_client.run_via_daemon("step", argv, cwd=str(self.model_dir))
+                exit_code = daemon_client.run_via_daemon("gen", argv, cwd=str(self.model_dir))
         return exit_code, out.getvalue() + err.getvalue()
 
-    def test_a_warm_step_request_skips_current_model(self) -> None:
+    def test_a_warm_gen_request_skips_current_model(self) -> None:
         exit_code, output = self._warm_run(["box.step.py"])
         self.assertEqual(0, exit_code, output)
         self.assertIn("is current", output)
@@ -142,7 +142,7 @@ class CadgenDaemonTests(unittest.TestCase):
     def test_c_version_token_mismatch_triggers_restart(self) -> None:
         frames = _raw_request(
             self.socket_path,
-            {"tool": "step", "argv": ["box.step.py"], "cwd": str(self.model_dir), "token": -1},
+            {"tool": "gen", "argv": ["box.step.py"], "cwd": str(self.model_dir), "token": -1},
         )
         self.assertEqual([{"restart": True}], frames)
         # The server unlinks its socket BEFORE replying, then exits cleanly.
