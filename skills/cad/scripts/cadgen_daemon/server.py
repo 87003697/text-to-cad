@@ -1,14 +1,16 @@
 """Warm-process daemon server for the CAD skill CLIs.
 
 One long-lived process imports cadgen / OCP / build123d ONCE and then services
-``scripts/step`` / ``scripts/inspect`` / ``scripts/snapshot`` invocations over a
-per-worktree unix socket, so opted-in sessions (``CADGEN_WARM=1``) skip the
-multi-second interpreter+OCP startup on every call. The daemon runs with
-``CADGEN_DAEMON_CHILD=1`` so the launcher shim never recurses into it.
+``scripts/gen`` / ``scripts/export`` / ``scripts/artifact`` / ``scripts/inspect``
+/ ``scripts/snapshot`` invocations over a per-worktree unix socket, so opted-in
+sessions (``CADGEN_WARM=1``) skip the multi-second interpreter+OCP startup on
+every call. The daemon runs with ``CADGEN_DAEMON_CHILD=1`` so the launcher shim
+never recurses into it.
 
 Protocol — one JSON request per connection, JSON-lines response:
 
-  request : {"tool": "step"|"inspect"|"snapshot", "argv": [...], "cwd": "...",
+  request : {"tool": "gen"|"export"|"artifact"|"inspect"|"snapshot",
+             "argv": [...], "cwd": "...",
              "token": <client version token>}
   response: {"stream": "stdout"|"stderr", "data": "..."} chunks, then
             {"exit": <int>} — or {"restart": true} when the client's version
@@ -65,7 +67,9 @@ REQUEST_READ_TIMEOUT_SECONDS = 30.0
 # the daemon skips the launchers' CADGEN_WARM shim and their name-colliding
 # top-level `cli` modules.
 _TOOL_IMPORTS = {
-    "step": "step.cli",
+    "gen": "gen.cli",
+    "export": "export.cli",
+    "artifact": "artifact.cli",
     "inspect": "inspect_refs.cli",
     "snapshot": "snapshot.__main__",
 }

@@ -95,12 +95,13 @@ python scripts/inspect refs path/to/model.step --facts --planes --positioning
 
 ## Warm daemon (opt-in)
 
-Every `scripts/step` / `scripts/inspect` / `scripts/snapshot` invocation pays a
-multi-second OCP/build123d import. Set `CADGEN_WARM=1` to route these CLIs
-through a shared warm-process daemon instead:
+Every `scripts/gen` / `scripts/export` / `scripts/artifact` / `scripts/inspect`
+/ `scripts/snapshot` invocation pays a multi-second OCP/build123d import. Set
+`CADGEN_WARM=1` to route these CLIs through a shared warm-process daemon
+instead:
 
 ```bash
-CADGEN_WARM=1 python scripts/step path/to/part.step.py
+CADGEN_WARM=1 python scripts/gen path/to/part.step.py
 ```
 
 - The first warm call spawns the daemon (paying the import cost once) and each
