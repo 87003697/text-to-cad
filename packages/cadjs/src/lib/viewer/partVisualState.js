@@ -1,4 +1,5 @@
 import { syncLineMaterialOpacity } from "../../common/renderEdges.js";
+import { syncRecordInstanceState } from "../assembly/instancedRecordBatches.js";
 import {
   CAD_DISPLAY_MODE,
   displayModeUsesTransparentSurfaces
@@ -210,6 +211,7 @@ export function applyPartVisualState(THREE, records, {
     selectedSurfaceColor,
     selectedEdgeColor
   } = getPartHighlightColors(THREE, { edgeSettings });
+  const dimmedInstanceTint = new THREE.Color(0.35, 0.35, 0.35);
 
   for (const record of Array.isArray(records) ? records : []) {
     const effectStyle = record.effectStyle && typeof record.effectStyle === "object" ? record.effectStyle : {};
@@ -227,6 +229,18 @@ export function applyPartVisualState(THREE, records, {
     record.mesh.visible = !effectHidden && !isHidden;
     if (record.edges) {
       record.edges.visible = showEdges && !effectHidden && !isHidden;
+    }
+    if (record.instanceSlot) {
+      syncRecordInstanceState(record, {
+        hidden: isHidden || effectHidden,
+        tint: isSelected
+          ? selectedSurfaceColor
+          : isHovered
+            ? hoveredSurfaceColor
+            : isDimmed
+              ? dimmedInstanceTint
+              : null
+      });
     }
     syncHighlightRenderOrder(record, record.mesh, "baseMeshRenderOrder", isHighlighted, PART_HIGHLIGHT_SURFACE_RENDER_ORDER);
     syncHighlightRenderOrder(record, record.edges, "baseEdgeRenderOrder", isHighlighted, PART_HIGHLIGHT_EDGE_RENDER_ORDER);

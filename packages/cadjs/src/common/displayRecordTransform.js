@@ -1,6 +1,7 @@
 import {
   buildPartTransformMatrix
 } from "./stepModuleEffects.js";
+import { syncRecordInstanceTransform } from "../lib/assembly/instancedRecordBatches.js";
 
 function applyObjectMatrix(THREE, object3d, matrix) {
   if (!object3d || !(matrix instanceof THREE.Matrix4)) {
@@ -11,6 +12,17 @@ function applyObjectMatrix(THREE, object3d, matrix) {
   targetMatrix.copy(matrix);
   object3d.matrix = targetMatrix;
   object3d.matrixWorldNeedsUpdate = true;
+}
+
+// baseTransform is fixed at record creation; cache its Matrix4 so per-frame
+// animation passes over thousands of records stop allocating.
+function baseMatrixForRecord(THREE, record) {
+  if (record.__baseMatrix && record.__baseMatrixSource === record.baseTransform) {
+    return record.__baseMatrix;
+  }
+  record.__baseMatrix = buildPartTransformMatrix(THREE, record.baseTransform);
+  record.__baseMatrixSource = record.baseTransform;
+  return record.__baseMatrix;
 }
 
 export function composeDisplayRecordEffectMatrix(THREE, record) {
@@ -41,8 +53,25 @@ export function applyDisplayRecordTransform(THREE, record) {
   if (!record) {
     return;
   }
-  const combinedMatrix = composeDisplayRecordObjectMatrix(THREE, record);
-  applyObjectMatrix(THREE, record.mesh, combinedMatrix);
-  applyObjectMatrix(THREE, record.edges, combinedMatrix);
-  applyObjectMatrix(THREE, record.silhouette, combinedMatrix);
+  const baseMatrix = baseMatrixForRecord(THREE, record);
+  const effectMatrix = record.effectMatrix instanceof THREE.Matrix4 ? record.effectMatrix : null;
+  const explodedMatrix = record.explodedViewMatrix instanceof THREE.Matrix4 ? record.explodedViewMatrix : null;
+  let combined = baseMatrix;
+  if (effectMatrix || explodedMatrix) {
+    const scratch = record.__composedMatrix || (record.__composedMatrix = new THREE.Matrix4());
+    scratch.copy(baseMatrix);
+    if (effectMatrix) {
+      scratch.premultiply(effectMatrix);
+    }
+    if (explodedMatrix) {
+      scratch.premultiply(explodedMatrix);
+    }
+    combined = scratch;
+  }
+  applyObjectMatrix(THREE, record.mesh, combined);
+  applyObjectMatrix(THREE, record.edges, combined);
+  applyObjectMatrix(THREE, record.silhouette, combined);
+  if (record.instanceSlot) {
+    syncRecordInstanceTransform(record);
+  }
 }

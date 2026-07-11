@@ -26,7 +26,6 @@ import {
 } from "cadjs/lib/displaySettings";
 import { VIEWER_SCENE_SCALE } from "cadjs/lib/viewer/sceneScale";
 import { VIEWER_PICK_MODE } from "cadjs/lib/viewer/constants";
-import { useStepAnimationSnapshot } from "@/workbench/stepAnimationStore";
 import { viewerPickModeForRenderPane } from "@/workbench/viewerPickMode";
 
 const EMPTY_LIST = Object.freeze([]);
@@ -369,24 +368,11 @@ export default function CadRenderPane({
   handleScreenshotCopy,
   urdfPosePicker = null
 }) {
-  const liveStepAnimation = useStepAnimationSnapshot();
-  const resolvedStepParameters = useMemo(() => {
-    if (!stepParameters?.animationState?.playing) {
-      return stepParameters;
-    }
-    const liveParameterValues = liveStepAnimation?.parameterValues;
-    if (!liveParameterValues || typeof liveParameterValues !== "object") {
-      return stepParameters;
-    }
-    return {
-      ...stepParameters,
-      parameterValues: liveParameterValues,
-      animationState: {
-        ...stepParameters.animationState,
-        elapsedSec: liveStepAnimation.elapsedSec
-      }
-    };
-  }, [stepParameters, liveStepAnimation]);
+  // Playback no longer routes live parameter values through React: CadViewer
+  // runs an imperative rAF loop against the animation store, so a playing
+  // animation costs zero React renders per frame. stepParameters passes
+  // through with the playing flag; live values are read from the store.
+  const resolvedStepParameters = stepParameters;
   const viewerAlertIconLabel = "Viewer error. See the Issues section for details.";
   const dxfMode = renderFormat === RENDER_FORMAT.DXF;
   const gcodeMode = renderFormat === RENDER_FORMAT.GCODE;

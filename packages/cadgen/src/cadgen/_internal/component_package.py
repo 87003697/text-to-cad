@@ -450,6 +450,14 @@ def build_package_from_compound(
     def _component_ref(cid: str) -> str:
         return os.path.relpath(comp_dir / f"{cid}.glb", package_dir).replace(os.sep, "/")
 
+    # Tessellation settings are part of a component's rendered identity: the same
+    # BRep meshed at a different tolerance must yield a different cid, or
+    # explicit-tolerance rebuilds silently reuse stale GLBs from the cache.
+    mesh_salt = f"|mesh:{float(linear_deflection):.9g}:{float(angular_deflection):.9g}"
+
+    def _mesh_salted_component_id(content_hash: str) -> str:
+        return _component_id(hashlib.sha256((content_hash + mesh_salt).encode("utf-8")).hexdigest())
+
     occurrences: list[dict[str, Any]] = []
     components: dict[str, dict[str, Any]] = {}
     shapes: dict[str, Any] = {}
@@ -472,7 +480,7 @@ def build_package_from_compound(
     brep_bytes_by_cid: dict[str, bytes] = {}
 
     def _retain_payload_brep(content_hash: str, brep: bytes) -> None:
-        cid = _component_id(content_hash)
+        cid = _mesh_salted_component_id(content_hash)
         if cid not in brep_bytes_by_cid and (force or not (comp_dir / f"{cid}.glb").exists()):
             brep_bytes_by_cid[cid] = brep
 
@@ -487,7 +495,7 @@ def build_package_from_compound(
         except TypeError:  # unhashable TShape wrapper: correctness over the micro-optimization
             content_hash, brep = _content_hash_and_bytes(node)
             _retain_payload_brep(content_hash, brep)
-        cid = _component_id(content_hash)
+        cid = _mesh_salted_component_id(content_hash)
         shapes.setdefault(cid, node)
         components.setdefault(cid, {"glb": _component_ref(cid), "contentHash": content_hash})
         if name is None:

@@ -1606,7 +1606,9 @@ class CadGenerationTests(unittest.TestCase):
 
         self.assertFalse(any(spec.source_path == script_path for spec in specs))
 
-    def test_generated_part_ignores_mesh_settings_from_envelope_metadata(self) -> None:
+    def test_generated_part_applies_mesh_settings_from_envelope_metadata(self) -> None:
+        # Envelope mesh tolerances flow into generated-entry specs (explicit
+        # tessellation control for very dense sources, e.g. mega LEGO imports).
         self._generator_script(
             "meshy",
             stl="meshy.stl",
@@ -1623,8 +1625,10 @@ class CadGenerationTests(unittest.TestCase):
 
         self.assertIsNone(specs[self._cad_ref("meshy")].stl_path)
         self.assertIsNone(specs[self._cad_ref("meshy")].three_mf_path)
-        self.assertEqual(cad_generation.DEFAULT_MESH_TOLERANCE, specs[self._cad_ref("meshy")].mesh_tolerance)
-        self.assertEqual(cad_generation.DEFAULT_MESH_ANGULAR_TOLERANCE, specs[self._cad_ref("meshy")].mesh_angular_tolerance)
+        self.assertEqual(0.2, specs[self._cad_ref("meshy")].mesh_tolerance)
+        self.assertEqual(0.25, specs[self._cad_ref("meshy")].mesh_angular_tolerance)
+        self.assertTrue(specs[self._cad_ref("meshy")].mesh_tolerance_explicit)
+        self.assertTrue(specs[self._cad_ref("meshy")].mesh_angular_tolerance_explicit)
 
     def test_generated_assembly_paths_use_sibling_defaults_and_ignore_legacy_sidecars(self) -> None:
         self._write_step("imported-part")
@@ -1655,8 +1659,8 @@ class CadGenerationTests(unittest.TestCase):
         self.assertIsNone(spec.dxf_path)
         self.assertIsNone(spec.stl_path)
         self.assertIsNone(spec.three_mf_path)
-        self.assertEqual(cad_generation.DEFAULT_MESH_TOLERANCE, spec.mesh_tolerance)
-        self.assertEqual(cad_generation.DEFAULT_MESH_ANGULAR_TOLERANCE, spec.mesh_angular_tolerance)
+        self.assertEqual(0.3, spec.mesh_tolerance)
+        self.assertEqual(0.2, spec.mesh_angular_tolerance)
 
     def test_imported_step_defaults_to_part(self) -> None:
         self._write_step("imported")

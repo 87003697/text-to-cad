@@ -97,6 +97,8 @@ def parse_generator_metadata(script_path: Path) -> GeneratorMetadata | None:
     kind: str | None = None
     has_gen_step = False
     has_gen_dxf = False
+    mesh_tolerance: float | None = None
+    mesh_angular_tolerance: float | None = None
     generator_names: list[str] = []
     for node in tree.body:
         target: ast.expr | None = None
@@ -131,7 +133,7 @@ def parse_generator_metadata(script_path: Path) -> GeneratorMetadata | None:
             )
 
         if node.name == "gen_step":
-            kind = _parse_step_return_metadata(
+            kind, mesh_tolerance, mesh_angular_tolerance = _parse_step_return_metadata(
                 script_path=script_path,
                 function=node,
             )
@@ -155,8 +157,25 @@ def parse_generator_metadata(script_path: Path) -> GeneratorMetadata | None:
         has_gen_dxf=has_gen_dxf,
         stl=None,
         three_mf=None,
-        mesh_tolerance=None,
-        mesh_angular_tolerance=None,
+        mesh_tolerance=mesh_tolerance,
+        mesh_angular_tolerance=mesh_angular_tolerance,
+    )
+
+
+def _numeric_envelope_constant(envelope, key, local_assignments, *, script_path: Path) -> float | None:
+    node = envelope.get(key)
+    if node is None:
+        return None
+    if isinstance(node, ast.Name):
+        node = (local_assignments or {}).get(node.id)
+    if (
+        isinstance(node, ast.Constant) and
+        isinstance(node.value, (int, float)) and
+        not isinstance(node.value, bool)
+    ):
+        return normalize_mesh_numeric(float(node.value), field_name=key)
+    raise ValueError(
+        f"{_display_path(script_path)} gen_step() envelope '{key}' must be a numeric literal"
     )
 
 
@@ -164,15 +183,19 @@ def _parse_step_return_metadata(
     *,
     script_path: Path,
     function: ast.FunctionDef,
-) -> str:
+) -> tuple[str, float | None, float | None]:
     return_node = _single_return_value(script_path=script_path, function=function)
     local_assignments = _function_local_assignments(function)
     if not isinstance(return_node, ast.Dict):
-        return _parse_bare_step_return(
-            script_path=script_path,
-            function=function,
-            return_node=return_node,
-            local_assignments=local_assignments,
+        return (
+            _parse_bare_step_return(
+                script_path=script_path,
+                function=function,
+                return_node=return_node,
+                local_assignments=local_assignments,
+            ),
+            None,
+            None,
         )
 
     envelope = _parse_literal_return_envelope(script_path=script_path, function=function)
@@ -186,13 +209,18 @@ def _parse_step_return_metadata(
         raise ValueError(
             f"{_display_path(script_path)} gen_step() envelope must define 'shape'"
         )
-    return (
+    kind = (
         "assembly"
         if _is_compound_assembly_expression(
             envelope["shape"],
             local_assignments=local_assignments,
         )
         else "part"
+    )
+    return (
+        kind,
+        _numeric_envelope_constant(envelope, "mesh_tolerance", local_assignments, script_path=script_path),
+        _numeric_envelope_constant(envelope, "mesh_angular_tolerance", local_assignments, script_path=script_path),
     )
 
 

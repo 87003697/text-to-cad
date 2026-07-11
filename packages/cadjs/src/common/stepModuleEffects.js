@@ -136,20 +136,29 @@ export function buildStepModuleEffectMatrix(THREE, spec = {}) {
   if (!spec || typeof spec !== "object") {
     return new THREE.Matrix4();
   }
-  const steps = Array.isArray(spec.transforms) ? spec.transforms : [spec];
+  if (!Array.isArray(spec.transforms)) {
+    return buildStepModuleSingleEffectMatrix(THREE, spec);
+  }
   const matrix = new THREE.Matrix4();
-  for (const step of steps) {
+  for (const step of spec.transforms) {
     matrix.premultiply(buildStepModuleSingleEffectMatrix(THREE, step));
   }
   return matrix;
 }
 
+const IDENTITY_ELEMENTS = [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1];
+
 function matrixHasTransform(matrix, epsilon = 1e-6) {
   if (!matrix?.elements || matrix.elements.length !== 16) {
     return false;
   }
-  const identity = [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1];
-  return matrix.elements.some((value, index) => Math.abs(Number(value) - identity[index]) > epsilon);
+  const elements = matrix.elements;
+  for (let index = 0; index < 16; index += 1) {
+    if (Math.abs(Number(elements[index]) - IDENTITY_ELEMENTS[index]) > epsilon) {
+      return true;
+    }
+  }
+  return false;
 }
 
 export function resetStepModuleRecordEffects(records) {
@@ -180,7 +189,10 @@ function resolveStepModuleEffectTargetPartIds(target, features, meshData, displa
       return uniqueStrings(target.partIds);
     }
     if (target.partId) {
-      return uniqueStrings([target.partId]);
+      // Single-part targets are the per-frame animation hot path; skip the
+      // Set-based dedup a one-element list never needs.
+      const partId = String(target.partId).trim();
+      return partId ? [partId] : [];
     }
     if (target.feature) {
       return resolveStepModuleEffectTargetPartIds(target.feature, features, meshData, displayRecords);
@@ -231,17 +243,27 @@ export function createStepModuleEffectsApi(THREE, {
   return {
     transform(target, spec) {
       const matrix = buildStepModuleEffectMatrix(THREE, spec);
+      // The built matrix is fresh per call: hand it to the first untouched
+      // effect instead of cloning (the dominant per-frame path is one call per
+      // part). Stacking premultiplies in place — effect matrices are owned by
+      // this map and copied into records downstream.
+      let handedOff = false;
       const partIds = forEachTarget(target, (effect) => {
-        effect.matrix = effect.matrix
-          ? effect.matrix.clone().premultiply(matrix)
-          : matrix.clone();
+        if (effect.matrix) {
+          effect.matrix.premultiply(matrix);
+        } else if (handedOff) {
+          effect.matrix = matrix.clone();
+        } else {
+          effect.matrix = matrix;
+          handedOff = true;
+        }
       });
       if (partIds.length && matrixHasTransform(matrix)) {
         onTransformEffect?.({
           target,
           spec,
           partIds,
-          matrix: matrix.clone()
+          matrix
         });
       }
     },
@@ -322,7 +344,12 @@ export function applyStepModuleEffectsToRecords(THREE, records, effectsByPartId)
     if (!effect) {
       continue;
     }
-    record.effectMatrix = effect.matrix instanceof THREE.Matrix4 ? effect.matrix.clone() : null;
+    if (effect.matrix instanceof THREE.Matrix4) {
+      record.effectMatrix = (record.__effectMatrixOwned || (record.__effectMatrixOwned = new THREE.Matrix4()))
+        .copy(effect.matrix);
+    } else {
+      record.effectMatrix = null;
+    }
     record.effectStyle = effect.style && typeof effect.style === "object" ? { ...effect.style } : null;
     record.effectVisible = effect.visible;
     record.effectHighlighted = effect.highlighted === true;

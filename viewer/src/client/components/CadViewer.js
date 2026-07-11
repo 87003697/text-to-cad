@@ -138,6 +138,7 @@ import {
 } from "cadjs/lib/viewer/referenceGeometry";
 import { buildRuntimeInitializationAlert } from "cadjs/lib/viewer/webglSupport";
 import { DRAWING_TOOL, RENDER_FORMAT } from "@/workbench/constants";
+import { getStepAnimationParameterValues } from "@/workbench/stepAnimationStore";
 import {
   getEnvironmentPresetById,
   THEME_FLOOR_MODES
@@ -1793,6 +1794,113 @@ const CadViewer = forwardRef(function CadViewer({
 }, ref) {
   const stepParameterRuntime = stepParameters;
   const stepAnimationPlaying = Boolean(stepParameterRuntime?.animationState?.playing);
+  // Playback dirties shadows every frame; throttle the shadow pass while playing.
+  useEffect(() => {
+    const runtime = runtimeRef.current;
+    if (runtime) {
+      runtime.shadowUpdateThrottleMs = stepAnimationPlaying ? 150 : 0;
+    }
+  }, [stepAnimationPlaying]);
+  // Imperative playback: while a STEP animation plays, a rAF loop reads live
+  // parameter values straight from the animation store and drives module
+  // effects + record transforms directly — zero React renders per frame. The
+  // React effect path still renders the paused/static pose and resumes full
+  // syncing when playback stops.
+  useEffect(() => {
+    if (!stepAnimationPlaying) {
+      return undefined;
+    }
+    const runtime = runtimeRef.current;
+    const definition = stepParameterRuntime?.definition || null;
+    const module = definition?.module || null;
+    if (!runtime?.THREE || !definition || !module || isLoading || !meshData) {
+      return undefined;
+    }
+    const THREE = runtime.THREE;
+    const features = resolveStepModuleFeatures(definition, {
+      meshData,
+      selectorRuntime: selectorRuntimeRef.current
+    });
+    const effectsByPartId = new Map();
+    const effects = createStepModuleEffectsApi(THREE, {
+      meshData,
+      features,
+      runtime,
+      effectsByPartId
+    });
+    const cleanups = [];
+    let rafId = 0;
+    const tick = () => {
+      rafId = window.requestAnimationFrame(tick);
+      const liveValues = getStepAnimationParameterValues();
+      const parameterValues = liveValues && Object.keys(liveValues).length
+        ? liveValues
+        : stepParameterRuntime.parameterValues;
+      // Reset effect entries in place instead of clearing: the map's objects
+      // are reused across frames, so a 7k-part animation allocates nothing.
+      for (const effect of effectsByPartId.values()) {
+        effect.matrix = null;
+        effect.style = null;
+        effect.visible = null;
+        effect.highlighted = false;
+      }
+      const ctx = buildStepModuleContext({
+        runtime,
+        stepModuleRuntime: { ...stepParameterRuntime, parameterValues },
+        features,
+        effects,
+        cleanup: (cleanup) => {
+          if (typeof cleanup === "function") {
+            cleanups.push(cleanup);
+          }
+        }
+      });
+      try {
+        module.update?.(ctx);
+        module.render?.(ctx);
+      } catch (error) {
+        console.error("STEP animation frame failed", error);
+        return;
+      }
+      applyStepModuleEffectsToRecords(THREE, runtime.displayRecords, effectsByPartId);
+      for (const record of runtime.displayRecords) {
+        applyDisplayRecordTransform(THREE, record);
+      }
+      let effectsTouchVisualState = false;
+      for (const effect of effectsByPartId.values()) {
+        if (effect && (effect.style || effect.visible !== null || effect.highlighted)) {
+          effectsTouchVisualState = true;
+          break;
+        }
+      }
+      if (effectsTouchVisualState || runtime.__effectsTouchedVisualState) {
+        applyPartVisualState(THREE, runtime.displayRecords, partVisualStateRef.current);
+      }
+      runtime.__effectsTouchedVisualState = effectsTouchVisualState;
+      // Instance-batched models render from instance slots; their logic meshes
+      // only need world matrices for picking, which is suspended during
+      // playback (the stop path re-syncs). Per-mesh models still need them.
+      if (!runtime.displayRecords[0]?.instanceSlot) {
+        runtime.modelGroup?.updateMatrixWorld?.(true);
+        runtime.edgesGroup?.updateMatrixWorld?.(true);
+      }
+      if (runtime.topologyDisplayEdgeTransformByRecord === true) {
+        syncRecordTopologyDisplayEdgeTransforms(runtime, runtime.displayRecords);
+      }
+      runtime.requestRender?.();
+    };
+    rafId = window.requestAnimationFrame(tick);
+    return () => {
+      window.cancelAnimationFrame(rafId);
+      while (cleanups.length) {
+        try {
+          cleanups.pop()?.();
+        } catch (error) {
+          console.error("STEP animation cleanup failed", error);
+        }
+      }
+    };
+  }, [stepAnimationPlaying, stepParameterRuntime, isLoading, meshData]);
   const normalizedSceneScaleMode = normalizeSceneScaleMode(scale || sceneScaleMode);
   const normalizedProjection = normalizeCameraProjection(projection);
   const meshGeometrySource = meshData?.geometrySource && typeof meshData.geometrySource === "object"
@@ -3736,7 +3844,20 @@ const CadViewer = forwardRef(function CadViewer({
     for (const record of runtime.displayRecords) {
       applyDisplayRecordTransform(runtime.THREE, record, runtime.modelRadius || 1);
     }
-    applyPartVisualState(runtime.THREE, runtime.displayRecords, partVisualStateRef.current);
+    // Pure-transform animation frames (the common case) leave visual state
+    // untouched; re-walking every record's material per frame is skipped
+    // unless module effects set styles/visibility now or on the prior frame.
+    let effectsTouchVisualState = false;
+    for (const effect of effectsByPartId.values()) {
+      if (effect && (effect.style || effect.visible !== null || effect.highlighted)) {
+        effectsTouchVisualState = true;
+        break;
+      }
+    }
+    if (!stepAnimationPlaying || effectsTouchVisualState || runtime.__effectsTouchedVisualState) {
+      applyPartVisualState(runtime.THREE, runtime.displayRecords, partVisualStateRef.current);
+    }
+    runtime.__effectsTouchedVisualState = effectsTouchVisualState;
     runtime.topologyDisplayEdgeTransformByRecord = useRecordTopologyEdgeTransforms;
     syncTopologyDisplayEdgeLine(
       runtime,

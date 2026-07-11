@@ -27,6 +27,10 @@ import {
 import {
   applyDisplayRecordTransform
 } from "./displayRecordTransform.js";
+import {
+  buildInstancedRecordBatches,
+  syncRecordInstanceState
+} from "../lib/assembly/instancedRecordBatches.js";
 import { axisIndex, normalizeStepClipSettings } from "../lib/viewer/clipPlane.js";
 import {
   clampSceneModelRadius,
@@ -1231,6 +1235,7 @@ export function applyPartVisualState(THREE, records, {
   const hoveredEdgeColor = new THREE.Color(edgeHighlightColor);
   const selectedSurfaceColor = new THREE.Color(REFERENCE_SELECTED_COLOR);
   const selectedEdgeColor = new THREE.Color(edgeHighlightColor);
+  const dimmedInstanceTint = new THREE.Color(0.35, 0.35, 0.35);
 
   for (const record of Array.isArray(records) ? records : []) {
     if (!record?.mesh || !record?.material) {
@@ -1254,6 +1259,18 @@ export function applyPartVisualState(THREE, records, {
     }
     if (record.silhouette) {
       record.silhouette.visible = !effectHidden;
+    }
+    if (record.instanceSlot) {
+      syncRecordInstanceState(record, {
+        hidden: isHidden || effectHidden,
+        tint: isSelected
+          ? selectedSurfaceColor
+          : isHovered
+            ? hoveredSurfaceColor
+            : isDimmed
+              ? dimmedInstanceTint
+              : null
+      });
     }
     syncHighlightRenderOrder(record, record.mesh, "baseMeshRenderOrder", isHighlighted, PART_HIGHLIGHT_SURFACE_RENDER_ORDER);
     syncHighlightRenderOrder(record, record.edges, "baseEdgeRenderOrder", isHighlighted, PART_HIGHLIGHT_EDGE_RENDER_ORDER);
@@ -1778,6 +1795,9 @@ function addEdgeObject(THREE, runtime, record, edgeGeometry, settings) {
   runtime.edgesGroup.add(object);
 }
 
+// Package size at which records switch to instance-batched rendering.
+const INSTANCED_RECORDS_MIN_PARTS = 750;
+
 function buildDisplayRecords(THREE, runtime, meshData, settings) {
   const theme = runtime.theme;
   const materialSettings = runtime.materialSettings;
@@ -1790,6 +1810,13 @@ function buildDisplayRecords(THREE, runtime, meshData, settings) {
   const renderParts = resolvePartsToRender(meshData, theme, settings);
   const partFillIndexMap = buildPartFillIndexMap(renderParts);
   const useWholeMesh = renderParts.length === 0;
+  // Very large unbaked packages render through instance batches: records stay
+  // fully live (picking/params/explode) but per-record meshes leave the render
+  // pass, so draw calls collapse to ~unique-component count. Per-record edge
+  // and silhouette overlays are skipped in this mode.
+  const useInstancedRecords = settings.instancedRecords !== false &&
+    meshData?.partTransformsBaked === false &&
+    renderParts.length >= (Number(settings.instancedRecordsMinParts) || INSTANCED_RECORDS_MIN_PARTS);
   const records = [];
 
   const makeRecord = ({ part = null, geometryEntry, fillIndex = 0, baseTransform = null }) => {
@@ -1874,7 +1901,7 @@ function buildDisplayRecords(THREE, runtime, meshData, settings) {
       baseEdgeOpacity: 1
     };
 
-    if (useSilhouette) {
+    if (useSilhouette && !useInstancedRecords) {
       const silhouette = createSilhouetteMesh(THREE, geometryEntry.geometry, edgeSettings, radius);
       if (silhouette) {
         record.silhouette = silhouette;
@@ -1882,7 +1909,7 @@ function buildDisplayRecords(THREE, runtime, meshData, settings) {
       }
     }
 
-    if (settings.selection?.showEdges !== false && !useSurfaceEdges && (edgeSettings.enabled || wireframeMode)) {
+    if (!useInstancedRecords && settings.selection?.showEdges !== false && !useSurfaceEdges && (edgeSettings.enabled || wireframeMode)) {
       addEdgeObject(
         THREE,
         runtime,
@@ -1918,6 +1945,10 @@ function buildDisplayRecords(THREE, runtime, meshData, settings) {
         baseTransform: displayTransformForPart(meshData, part, settings.renderPartsIndividually === true)
       });
     }
+  }
+
+  if (useInstancedRecords) {
+    buildInstancedRecordBatches(THREE, runtime, records);
   }
 
   return records;

@@ -250,6 +250,9 @@ export function useViewerRuntime({
       scene.add(vertexPickGroup);
 
       const raycaster = new THREE.Raycaster();
+      // Instance-batched packages keep their pickable logic meshes on a
+      // non-camera layer; the raycaster must see every layer.
+      raycaster.layers.enableAll();
       const pointer = new THREE.Vector2();
       const interactionState = {
         active: false,
@@ -406,8 +409,23 @@ export function useViewerRuntime({
           emitPerspectiveChange(runtimeRef.current);
         }
         fitCameraDepthRange(runtimeRef.current);
-        renderer.shadowMap.needsUpdate = interactionState.shadowsDirty === true;
-        interactionState.shadowsDirty = false;
+        // During animation playback every frame dirties shadows; the throttle
+        // trades a ~100ms shadow lag for skipping the full-scene shadow pass
+        // on most frames. Dirtiness is retained until an allowed frame.
+        const shadowThrottleMs = Number(runtimeRef.current?.shadowUpdateThrottleMs) || 0;
+        if (
+          interactionState.shadowsDirty &&
+          shadowThrottleMs > 0 &&
+          timestamp - (interactionState.lastShadowUpdateAt || 0) < shadowThrottleMs
+        ) {
+          renderer.shadowMap.needsUpdate = false;
+        } else {
+          renderer.shadowMap.needsUpdate = interactionState.shadowsDirty === true;
+          if (interactionState.shadowsDirty) {
+            interactionState.lastShadowUpdateAt = timestamp;
+          }
+          interactionState.shadowsDirty = false;
+        }
         renderer.render(scene, runtimeRef.current?.camera || camera);
         const previewOrbitActive = !!runtimeRef.current?.previewOrbitEnabled;
         if (!previewOrbitActive) {

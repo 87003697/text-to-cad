@@ -405,8 +405,8 @@ def _read_python_source(script_path: Path, *, allow_dxf_only: bool = False) -> C
         three_mf_path=None,
         native_glb_path=None,
         dxf_path=None,
-        mesh_tolerance=None,
-        mesh_angular_tolerance=None,
+        mesh_tolerance=metadata.mesh_tolerance,
+        mesh_angular_tolerance=metadata.mesh_angular_tolerance,
     )
 
 
