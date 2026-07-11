@@ -314,6 +314,20 @@ def _apply_step_options_to_spec(spec: EntrySpec, step_options: StepImportOptions
     )
 
 
+def _spec_requests_extra_outputs(spec: EntrySpec) -> bool:
+    """True when the target asks for on-demand outputs beyond the render package
+    (mesh sidecars or a --step export). Explicitly requested outputs must be
+    produced even when the compose is current, so they defeat every no-op and
+    reuse fast path."""
+    return (
+        spec.step_export_path is not None
+        or any(
+            path is not None
+            for path in (spec.stl_path, spec.three_mf_path, spec.native_glb_path)
+        )
+    )
+
+
 def _spec_output_paths(spec: EntrySpec) -> tuple[Path, ...]:
     paths: list[Path] = []
     if spec.step_path is not None:
@@ -1465,13 +1479,7 @@ def _generate_part_outputs(
 
     # Any on-demand output (mesh sidecar or --step export) must be produced even when the
     # render package is current, so its presence defeats the reuse fast paths.
-    has_extra_outputs = (
-        any(
-            path is not None
-            for path in (spec.stl_path, spec.three_mf_path, spec.native_glb_path)
-        )
-        or spec.step_export_path is not None
-    )
+    has_extra_outputs = _spec_requests_extra_outputs(spec)
     package_current = (
         spec.source != "generated"
         or _assembly_glb_package_current(spec)
@@ -1652,13 +1660,7 @@ def _generate_step_outputs(
     preloaded_scene: LoadedStepScene | None = None
     # An on-demand output (mesh sidecar or --step export) must run even when the package is
     # current, so its presence defeats the reuse fast path.
-    has_extra_outputs = (
-        any(
-            path is not None
-            for path in (spec.stl_path, spec.three_mf_path, spec.native_glb_path)
-        )
-        or spec.step_export_path is not None
-    )
+    has_extra_outputs = _spec_requests_extra_outputs(spec)
     # Reuse fast path: skip the build when the component-GLB package is already present and
     # current and nothing forces a run. A generated model's freshness rides on its recorded
     # source closure; an imported/committed STEP's freshness rides on the STEP hash recorded in
@@ -2222,7 +2224,9 @@ def generate_step_targets(
         current_specs = [
             spec
             for spec in selected_specs
-            if spec.step_export_path is None
+            # Explicit exports (--stl/--3mf/--glb/--step) must be written even
+            # when the compose is current, so they keep the spec in the run.
+            if not _spec_requests_extra_outputs(spec)
             and _assembly_is_current(spec)
             and _assembly_glb_package_current(spec)
         ]

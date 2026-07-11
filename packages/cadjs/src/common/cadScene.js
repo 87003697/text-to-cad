@@ -1636,7 +1636,7 @@ function selectorValuesFromEntry(value) {
     .filter(Boolean);
 }
 
-function normalizedSelectorValues(value) {
+export function normalizedSelectorValues(value) {
   return selectorEntries(value).flatMap(selectorValuesFromEntry);
 }
 
