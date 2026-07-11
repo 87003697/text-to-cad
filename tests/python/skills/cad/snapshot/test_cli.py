@@ -190,6 +190,87 @@ class SnapshotCliTests(unittest.TestCase):
             },
         )
 
+    def _display_job(self, display_json: str):
+        options = parse_snapshot_args(
+            [
+                "--input",
+                "models/simple/cylindrical_cap.step",
+                "--output",
+                "tmp/cap.png",
+                "--display",
+                display_json,
+            ]
+        )
+        return load_job_from_options(options, stdin=_TtyStringIO(), cwd=Path.cwd())
+
+    def test_display_json_rejects_bad_projection_value(self) -> None:
+        with self.assertRaisesRegex(SnapshotError, "projection must be orthographic or perspective"):
+            self._display_job('{"projection":"ortho"}')
+
+    def test_display_json_rejects_bad_mode_value(self) -> None:
+        with self.assertRaisesRegex(SnapshotError, "--display mode must be one of"):
+            self._display_job('{"mode":"shadedd"}')
+
+    def test_display_json_rejects_bad_exploded_axis_value(self) -> None:
+        with self.assertRaisesRegex(SnapshotError, "exploded.axis must be one of x, y, z, radial"):
+            self._display_job('{"exploded":{"axis":"q"}}')
+
+    def test_display_json_accepts_valid_closed_set_values(self) -> None:
+        self.assertEqual(self._display_job('{"projection":"orthographic"}')["display"], {"projection": "orthographic"})
+        self.assertEqual(self._display_job('{"mode":"shaded"}')["display"], {"mode": "shaded"})
+        # A leading '-' axis (e.g. reverse direction) stays valid.
+        self.assertEqual(
+            self._display_job('{"exploded":{"axis":"-z"}}')["display"],
+            {"exploded": {"axis": "-z"}},
+        )
+
+    def test_display_json_treats_empty_string_values_as_unset(self) -> None:
+        # The renderer treats an empty string as absent and falls back to the default, so
+        # validation must not false-reject empty strings an agent emits for unset fields.
+        self.assertEqual(self._display_job('{"projection":""}')["display"], {"projection": ""})
+        self.assertEqual(self._display_job('{"mode":""}')["display"], {"mode": ""})
+        self.assertEqual(self._display_job('{"exploded":{"axis":""}}')["display"], {"exploded": {"axis": ""}})
+
+    def test_display_json_rejects_bad_exploded_auto_mode_value(self) -> None:
+        # auto.mode is the field the renderer actually reads for auto-explode; a typo there
+        # silently renders the auto-picked axis (the exact wrong-image case the guard prevents).
+        with self.assertRaisesRegex(SnapshotError, "exploded.auto.mode must be one of auto, x, y, z, radial"):
+            self._display_job('{"exploded":{"auto":{"mode":"radal"}}}')
+        # A '-'-prefixed x/y/z is not a valid auto.mode (the renderer defaults it to "auto").
+        with self.assertRaisesRegex(SnapshotError, "exploded.auto.mode must be one of"):
+            self._display_job('{"exploded":{"auto":{"mode":"-z"}}}')
+
+    def test_display_json_accepts_valid_exploded_auto_mode(self) -> None:
+        for mode in ("auto", "x", "y", "z", "radial"):
+            self.assertEqual(
+                self._display_job('{"exploded":{"auto":{"mode":"%s"}}}' % mode)["display"],
+                {"exploded": {"auto": {"mode": mode}}},
+            )
+        # auto.axis is an accepted alias for auto.mode; an empty value is treated as unset.
+        self.assertEqual(
+            self._display_job('{"exploded":{"auto":{"axis":"radial"}}}')["display"],
+            {"exploded": {"auto": {"axis": "radial"}}},
+        )
+        self.assertEqual(
+            self._display_job('{"exploded":{"auto":{"mode":""}}}')["display"],
+            {"exploded": {"auto": {"mode": ""}}},
+        )
+
+    def test_exploded_axis_shorthand_translates_to_auto_mode(self) -> None:
+        # The CLI's top-level exploded.axis shorthand must reach the renderer as auto.mode
+        # (normalizeExplodedViewDocument drops a top-level axis), else it silently no-ops.
+        job = {"display": {"exploded": {"enabled": True, "axis": "z"}}}
+        snapshot_main.normalize_exploded_axis_shorthand(job)
+        self.assertEqual(job["display"]["exploded"]["auto"], {"mode": "z"})
+        # An explicit auto.mode wins over the shorthand (never silently overridden).
+        job_explicit = {"display": {"exploded": {"enabled": True, "axis": "z", "auto": {"mode": "radial"}}}}
+        snapshot_main.normalize_exploded_axis_shorthand(job_explicit)
+        self.assertEqual(job_explicit["display"]["exploded"]["auto"], {"mode": "radial"})
+        # No shorthand -> no spurious auto hint injected.
+        job_none = {"display": {"exploded": {"enabled": True}}}
+        snapshot_main.normalize_exploded_axis_shorthand(job_none)
+        self.assertNotIn("auto", job_none["display"]["exploded"])
+
     def test_edge_settings_belong_to_display_json(self) -> None:
         options = parse_snapshot_args(
             [
@@ -390,8 +471,145 @@ class SnapshotCliTests(unittest.TestCase):
         target, kwargs = calls[0]
         self.assertEqual(target.step_path, step_path)
         self.assertEqual(target.source_path, step_path)
-        self.assertEqual(kwargs["owner"], "cad-snapshot")
         self.assertFalse(kwargs["require_selector"])
+        self.assertIsNone(kwargs["debug"])
+
+    def test_debug_shortcut_flag_sets_job_debug_field(self) -> None:
+        options = parse_snapshot_args(
+            [
+                "--input",
+                "models/simple/cylindrical_cap.step",
+                "--output",
+                "tmp/cap.png",
+                "--debug",
+            ]
+        )
+        job = load_job_from_options(options, stdin=_TtyStringIO(), cwd=Path.cwd())
+        self.assertTrue(job["debug"])
+
+    def test_render_job_surfaces_step_artifact_debug_when_requested(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory).resolve()
+            models = root / "models"
+            models.mkdir()
+            step_path = models / "part.step"
+            step_path.write_text("ISO-10303-21;\nEND-ISO-10303-21;\n", encoding="utf-8")
+            write_package(step_path)
+
+            def fake_ensure(target, **kwargs):
+                debug_info = kwargs.get("debug")
+                if debug_info is not None:
+                    debug_info.update(
+                        {"source": "generated", "assembly": False, "cacheHit": True, "tookMs": 1.5}
+                    )
+                return None
+
+            original_ensure = snapshot_main.ensure_step_topology_artifact
+            try:
+                snapshot_main.ensure_step_topology_artifact = fake_ensure
+                packet = resolve_render_job_packet(
+                    {
+                        "input": "models/part.step",
+                        "debug": True,
+                        "outputs": [{"path": "tmp/iso.png", "camera": "iso"}],
+                    },
+                    cwd=root,
+                )
+            finally:
+                snapshot_main.ensure_step_topology_artifact = original_ensure
+
+        job = packet["jobs"][0]
+        self.assertEqual(
+            job["resolved"]["debug"],
+            {"stepArtifact": {"source": "generated", "assembly": False, "cacheHit": True, "tookMs": 1.5}},
+        )
+
+    def test_job_level_display_values_are_validated(self) -> None:
+        """A display object embedded in a full JSON job must hit the same closed-set
+        validation as the --display flag path, or a typo'd value silently renders
+        the default (the exact failure validate_display_settings_values exists for)."""
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory).resolve()
+            models = root / "models"
+            models.mkdir()
+            mesh_path = models / "part.stl"
+            mesh_path.write_bytes(b"solid part\nendsolid part\n")
+            job = {
+                "input": "models/part.stl",
+                "display": {"projection": "ortho"},
+                "outputs": [{"path": "tmp/iso.png", "camera": "iso"}],
+            }
+            with self.assertRaisesRegex(SnapshotError, "projection must be orthographic or perspective"):
+                resolve_render_job_packet(job, cwd=root)
+            job["display"] = {"projection": "orthographic"}
+            packet = resolve_render_job_packet(job, cwd=root)
+            self.assertEqual(packet["jobs"][0]["display"], {"projection": "orthographic"})
+
+    def test_debug_reaches_rendered_json_output(self) -> None:
+        """--debug diagnostics are attached at resolve time, but the printed result is the
+        browser's return value — the render stage must merge them in or the help text's
+        promised "debug" section never appears in --json output."""
+
+        class StubRenderer:
+            async def render(self, job):
+                return {"ok": True, "mode": "view", "outputs": []}
+
+            async def close(self):
+                return None
+
+        debug_payload = {"stepArtifact": {"source": "generated", "cacheHit": True, "tookMs": 1.5}}
+        job = {
+            "input": "models/part.step",
+            "resolved": {"debug": debug_payload},
+        }
+
+        result = asyncio.run(
+            snapshot_main.render_resolved_job_packet(
+                {"single": True, "jobs": [job]}, renderer=StubRenderer()
+            )
+        )
+        self.assertEqual(result["debug"], debug_payload)
+        stream = io.StringIO()
+        snapshot_main.print_render_result(result, json_output=True, stdout=stream)
+        self.assertEqual(json.loads(stream.getvalue())["debug"], debug_payload)
+
+        multi = asyncio.run(
+            snapshot_main.render_resolved_job_packet(
+                {"single": False, "jobs": [job]}, renderer=StubRenderer()
+            )
+        )
+        self.assertEqual(multi["jobs"][0]["debug"], debug_payload)
+
+    def test_render_job_omits_debug_by_default(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory).resolve()
+            models = root / "models"
+            models.mkdir()
+            step_path = models / "part.step"
+            step_path.write_text("ISO-10303-21;\nEND-ISO-10303-21;\n", encoding="utf-8")
+            write_package(step_path)
+            calls = []
+
+            def fake_ensure(target, **kwargs):
+                calls.append(kwargs)
+                return None
+
+            original_ensure = snapshot_main.ensure_step_topology_artifact
+            try:
+                snapshot_main.ensure_step_topology_artifact = fake_ensure
+                packet = resolve_render_job_packet(
+                    {
+                        "input": "models/part.step",
+                        "outputs": [{"path": "tmp/iso.png", "camera": "iso"}],
+                    },
+                    cwd=root,
+                )
+            finally:
+                snapshot_main.ensure_step_topology_artifact = original_ensure
+
+        self.assertIsNone(calls[0]["debug"])
+        job = packet["jobs"][0]
+        self.assertNotIn("debug", job["resolved"])
 
     def test_render_job_rejects_non_step_input_without_artifact_generation(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
@@ -410,7 +628,8 @@ class SnapshotCliTests(unittest.TestCase):
                 snapshot_main.ensure_step_topology_artifact = fake_ensure
                 with self.assertRaisesRegex(
                     SnapshotError,
-                    "Snapshot supports only STEP/STP inputs or same-stem Python generators",
+                    "Snapshot supports STEP/STP inputs, same-stem Python generators, "
+                    "direct GLB/STL/3MF meshes, or .implicit.js models",
                 ):
                     resolve_render_job_packet(
                         {
@@ -423,6 +642,334 @@ class SnapshotCliTests(unittest.TestCase):
                 snapshot_main.ensure_step_topology_artifact = original_ensure
 
         self.assertEqual(calls, [])
+
+    def _mesh_job_env(self, temporary_directory, filename, content=b"mesh-bytes"):
+        root = Path(temporary_directory).resolve()
+        models = root / "models"
+        models.mkdir()
+        (models / filename).write_bytes(content)
+        return root
+
+    def test_render_job_resolves_direct_glb_without_step_artifact(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = self._mesh_job_env(temporary_directory, "widget.glb", b"glTF-binary-bytes")
+            calls = []
+
+            def fake_ensure(target, **kwargs):
+                calls.append((target, kwargs))
+                return None
+
+            original_ensure = snapshot_main.ensure_step_topology_artifact
+            try:
+                snapshot_main.ensure_step_topology_artifact = fake_ensure
+                packet = resolve_render_job_packet(
+                    {
+                        "input": "models/widget.glb",
+                        "outputs": [{"path": "tmp/iso.png", "camera": "iso"}],
+                    },
+                    cwd=root,
+                )
+            finally:
+                snapshot_main.ensure_step_topology_artifact = original_ensure
+
+        # The STEP artifact pipeline must never be entered for a direct mesh.
+        self.assertEqual(calls, [])
+        resolved = packet["jobs"][0]["resolved"]
+        self.assertEqual(resolved["kind"], "glb")
+        self.assertEqual(resolved["inputUrl"], "/__render_asset/widget.glb")
+        self.assertEqual(resolved["url"], "/__render_asset/widget.glb")
+        self.assertEqual(resolved["rootPath"], str(root / "models"))
+        self.assertNotIn("package", resolved)
+        self.assertNotIn("stepParameterUrl", resolved)
+
+    def test_render_job_resolves_direct_stl(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = self._mesh_job_env(temporary_directory, "part.stl", b"solid test\nendsolid test\n")
+            packet = resolve_render_job_packet(
+                {
+                    "input": "models/part.stl",
+                    "outputs": [{"path": "tmp/iso.png", "camera": "iso"}],
+                },
+                cwd=root,
+            )
+        resolved = packet["jobs"][0]["resolved"]
+        self.assertEqual(resolved["kind"], "stl")
+        self.assertEqual(resolved["url"], "/__render_asset/part.stl")
+
+    def test_render_job_resolves_direct_3mf(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = self._mesh_job_env(temporary_directory, "part.3mf")
+            packet = resolve_render_job_packet(
+                {
+                    "input": "models/part.3mf",
+                    "outputs": [{"path": "tmp/iso.png", "camera": "iso"}],
+                },
+                cwd=root,
+            )
+        self.assertEqual(packet["jobs"][0]["resolved"]["kind"], "3mf")
+
+    def test_render_job_surfaces_mesh_source_debug_when_requested(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = self._mesh_job_env(temporary_directory, "part.stl", b"solid test\nendsolid test\n")
+            packet = resolve_render_job_packet(
+                {
+                    "input": "models/part.stl",
+                    "debug": True,
+                    "outputs": [{"path": "tmp/iso.png", "camera": "iso"}],
+                },
+                cwd=root,
+            )
+        self.assertEqual(packet["jobs"][0]["resolved"]["debug"], {"meshSource": {"kind": "stl"}})
+
+    def test_render_job_surfaces_implicit_source_debug_when_requested(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = self._mesh_job_env(temporary_directory, "pulse.implicit.js", b"export default {};\n")
+            packet = resolve_render_job_packet(
+                {
+                    "input": "models/pulse.implicit.js",
+                    "debug": True,
+                    "outputs": [{"path": "tmp/iso.png", "camera": "iso"}],
+                },
+                cwd=root,
+            )
+        self.assertEqual(packet["jobs"][0]["resolved"]["debug"], {"implicitSource": {"kind": "implicit"}})
+
+    def test_render_job_rejects_selection_for_mesh_input(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = self._mesh_job_env(temporary_directory, "widget.glb", b"glTF")
+            with self.assertRaisesRegex(SnapshotError, "selection focus/hide/refs require STEP topology"):
+                resolve_render_job_packet(
+                    {
+                        "input": "models/widget.glb",
+                        "selection": {"focus": ["#o1.2"]},
+                        "outputs": [{"path": "tmp/iso.png", "camera": "iso"}],
+                    },
+                    cwd=root,
+                )
+
+    def test_render_job_rejects_step_parameters_for_mesh_input(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = self._mesh_job_env(temporary_directory, "widget.glb", b"glTF")
+            with self.assertRaisesRegex(SnapshotError, "stepParameters require a STEP model"):
+                resolve_render_job_packet(
+                    {
+                        "input": "models/widget.glb",
+                        "stepParameters": {"width": 5},
+                        "outputs": [{"path": "tmp/iso.png", "camera": "iso"}],
+                    },
+                    cwd=root,
+                )
+
+    def test_render_job_rejects_section_mode_for_mesh_input(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = self._mesh_job_env(temporary_directory, "widget.glb", b"glTF")
+            with self.assertRaisesRegex(SnapshotError, "section mode requires STEP topology"):
+                resolve_render_job_packet(
+                    {
+                        "input": "models/widget.glb",
+                        "mode": "section",
+                        "outputs": [{"path": "tmp/iso.png", "camera": "iso"}],
+                    },
+                    cwd=root,
+                )
+
+    def test_render_job_rejects_hidden_edges_display_for_mesh_input(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = self._mesh_job_env(temporary_directory, "widget.glb", b"glTF")
+            for hidden_mode in ("hidden_edges", "hidden_lines_removed"):
+                with self.assertRaisesRegex(SnapshotError, "requires STEP CAD edges"):
+                    resolve_render_job_packet(
+                        {
+                            "input": "models/widget.glb",
+                            "display": {"mode": hidden_mode},
+                            "outputs": [{"path": "tmp/iso.png", "camera": "iso"}],
+                        },
+                        cwd=root,
+                    )
+
+    def test_render_job_rejects_exploded_display_for_mesh_input(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = self._mesh_job_env(temporary_directory, "widget.glb", b"glTF")
+            with self.assertRaisesRegex(SnapshotError, "exploded view requires STEP assembly"):
+                resolve_render_job_packet(
+                    {
+                        "input": "models/widget.glb",
+                        "display": {"exploded": {"enabled": True, "axis": "z"}},
+                        "outputs": [{"path": "tmp/iso.png", "camera": "iso"}],
+                    },
+                    cwd=root,
+                )
+
+    def test_render_job_allows_list_mode_for_mesh_input(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = self._mesh_job_env(temporary_directory, "widget.glb", b"glTF")
+            packet = resolve_render_job_packet(
+                {"input": "models/widget.glb", "mode": "list"},
+                cwd=root,
+            )
+        job = packet["jobs"][0]
+        self.assertEqual(job["mode"], "list")
+        self.assertEqual(job["resolved"]["kind"], "glb")
+
+    def test_render_job_rejects_non_solid_display_mode_for_mesh_input(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = self._mesh_job_env(temporary_directory, "widget.glb", b"glTF")
+            for non_solid in ("wireframe", "transparent", "unshaded"):
+                with self.assertRaisesRegex(SnapshotError, "display mode is not supported"):
+                    resolve_render_job_packet(
+                        {
+                            "input": "models/widget.glb",
+                            "display": {"mode": non_solid},
+                            "outputs": [{"path": "tmp/iso.png", "camera": "iso"}],
+                        },
+                        cwd=root,
+                    )
+
+    def test_render_job_allows_solid_and_projection_for_mesh_input(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = self._mesh_job_env(temporary_directory, "widget.glb", b"glTF")
+            # Solid mode + orthographic projection both pass (projection is honored by the
+            # renderer; it is camera-only, not topology-dependent).
+            packet = resolve_render_job_packet(
+                {
+                    "input": "models/widget.glb",
+                    "display": {"mode": "solid", "projection": "orthographic"},
+                    "outputs": [{"path": "tmp/iso.png", "camera": "iso"}],
+                },
+                cwd=root,
+            )
+        self.assertEqual(packet["jobs"][0]["display"], {"mode": "solid", "projection": "orthographic"})
+
+    def test_input_kind_detects_implicit_modules(self) -> None:
+        self.assertEqual(snapshot_main.input_kind(Path("models/pulse.implicit.js")), "implicit")
+        # A plain .js file is not an implicit model and stays unsupported.
+        self.assertEqual(snapshot_main.input_kind(Path("models/helper.js")), "")
+
+    def test_render_job_resolves_implicit_module_without_step_artifact(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = self._mesh_job_env(temporary_directory, "pulse.implicit.js", b"export default {};\n")
+            calls = []
+
+            def fake_ensure(target, **kwargs):
+                calls.append(kwargs)
+                return None
+
+            original_ensure = snapshot_main.ensure_step_topology_artifact
+            try:
+                snapshot_main.ensure_step_topology_artifact = fake_ensure
+                packet = resolve_render_job_packet(
+                    {
+                        "input": "models/pulse.implicit.js",
+                        "outputs": [{"path": "tmp/iso.png", "camera": "iso"}],
+                    },
+                    cwd=root,
+                )
+            finally:
+                snapshot_main.ensure_step_topology_artifact = original_ensure
+
+        # Implicit inputs skip the STEP artifact pipeline entirely.
+        self.assertEqual(calls, [])
+        job = packet["jobs"][0]
+        resolved = job["resolved"]
+        self.assertEqual(resolved["kind"], "implicit")
+        self.assertTrue(str(resolved["inputUrl"]).endswith("pulse.implicit.js"))
+        self.assertEqual(resolved["inputUrl"], resolved["url"])
+
+    def test_render_job_supports_orbit_for_implicit_input(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = self._mesh_job_env(temporary_directory, "pulse.implicit.js", b"export default {};\n")
+            packet = resolve_render_job_packet(
+                {"input": "models/pulse.implicit.js", "mode": "orbit", "outputs": [{"path": "tmp/orbit.gif"}]},
+                cwd=root,
+            )
+        self.assertEqual(packet["jobs"][0]["mode"], "orbit")
+        self.assertEqual(packet["jobs"][0]["resolved"]["kind"], "implicit")
+
+    def test_render_job_rejects_static_gif_outside_orbit_mode(self) -> None:
+        # A .gif output in a static job would silently save a single frame; the
+        # CLI must instead point at orbit mode or animated params.
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = self._mesh_job_env(temporary_directory, "pulse.implicit.js", b"export default {};\n")
+            with self.assertRaisesRegex(SnapshotError, "renders a single frame.*--mode orbit"):
+                resolve_render_job_packet(
+                    {"input": "models/pulse.implicit.js", "outputs": [{"path": "tmp/spin.gif"}]},
+                    cwd=root,
+                )
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = self._mesh_job_env(temporary_directory, "widget.glb", b"glTF")
+            with self.assertRaisesRegex(SnapshotError, "renders a single frame.*--mode orbit"):
+                resolve_render_job_packet(
+                    {"input": "models/widget.glb", "outputs": [{"path": "tmp/spin.gif", "camera": "iso"}]},
+                    cwd=root,
+                )
+
+    def test_render_job_allows_gif_for_animated_step_parameters(self) -> None:
+        # Animated --params sweeps legitimately render multi-frame GIFs in view
+        # mode; the static-gif guard must not reject them.
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory).resolve()
+            models = root / "models"
+            models.mkdir()
+            (models / "part.step").write_text("ISO-10303-21;\nEND-ISO-10303-21;\n", encoding="utf-8")
+            package_dir = write_package(models / "part.step")
+            # stepParameters require a declared sidecar; point the descriptor at one.
+            descriptor_path = Path(package_dir) / "assembly.json"
+            descriptor = json.loads(descriptor_path.read_text(encoding="utf-8"))
+            descriptor["paramsPath"] = "part.params.js"
+            descriptor_path.write_text(json.dumps(descriptor), encoding="utf-8")
+            (models / "part.params.js").write_text("export default {};\n", encoding="utf-8")
+
+            original_ensure = snapshot_main.ensure_step_topology_artifact
+            try:
+                snapshot_main.ensure_step_topology_artifact = lambda *args, **kwargs: None
+                packet = resolve_render_job_packet(
+                    {
+                        "input": "models/part.step",
+                        "stepParameters": {"animate": {"from": {"width": 1}, "to": {"width": 2}}},
+                        "outputs": [{"path": "tmp/sweep.gif"}],
+                    },
+                    cwd=root,
+                )
+            finally:
+                snapshot_main.ensure_step_topology_artifact = original_ensure
+
+        self.assertEqual(packet["jobs"][0]["mode"], "view")
+        self.assertTrue(str(packet["jobs"][0]["outputs"][0]["path"]).endswith(".gif"))
+
+    def test_render_job_rejects_step_only_options_for_implicit_input(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = self._mesh_job_env(temporary_directory, "pulse.implicit.js", b"export default {};\n")
+            base = {"input": "models/pulse.implicit.js", "outputs": [{"path": "tmp/iso.png", "camera": "iso"}]}
+            with self.assertRaisesRegex(SnapshotError, "list mode is not supported for implicit"):
+                resolve_render_job_packet({**base, "mode": "list", "outputs": []}, cwd=root)
+            with self.assertRaisesRegex(SnapshotError, "selection focus/hide/refs require STEP topology"):
+                resolve_render_job_packet({**base, "selection": {"focus": ["#o1.2"]}}, cwd=root)
+            with self.assertRaisesRegex(SnapshotError, "display mode is not supported for implicit"):
+                resolve_render_job_packet({**base, "display": {"mode": "wireframe"}}, cwd=root)
+            with self.assertRaisesRegex(SnapshotError, "exploded view requires STEP assembly"):
+                resolve_render_job_packet(
+                    {**base, "display": {"exploded": {"enabled": True, "axis": "z"}}}, cwd=root
+                )
+            # stepParameters and section mode are STEP-only for implicit inputs too.
+            with self.assertRaisesRegex(SnapshotError, "stepParameters require a STEP model"):
+                resolve_render_job_packet({**base, "stepParameters": {"width": 5}}, cwd=root)
+            with self.assertRaisesRegex(SnapshotError, "section mode is not supported for implicit"):
+                resolve_render_job_packet({**base, "mode": "section"}, cwd=root)
+
+    def test_render_job_missing_mesh_file_errors(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory).resolve()
+            (root / "models").mkdir()
+            with self.assertRaisesRegex(SnapshotError, "Render input does not exist"):
+                resolve_render_job_packet(
+                    {"input": "models/absent.stl", "outputs": [{"path": "tmp/iso.png"}]},
+                    cwd=root,
+                )
+
+    def test_content_type_for_mesh_suffixes(self) -> None:
+        self.assertEqual(snapshot_main.content_type_for_path(Path("x.stl")), "model/stl")
+        self.assertEqual(snapshot_main.content_type_for_path(Path("x.3mf")), "model/3mf")
+        self.assertEqual(snapshot_main.content_type_for_path(Path("x.glb")), "model/gltf-binary")
 
     def test_render_job_requires_selector_topology_for_cad_refs(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:

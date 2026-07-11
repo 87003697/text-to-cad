@@ -2,6 +2,8 @@ import {
   buildComposedPackageMeshData
 } from "../lib/assembly/meshData.js";
 import { buildMeshDataFromGlbBuffer } from "../lib/render/glbMeshData.js";
+import { buildMeshDataFromStlBuffer } from "../lib/render/stlMeshData.js";
+import { buildMeshDataFrom3MfBuffer } from "../lib/render/threeMfMeshData.js";
 import {
   loadRenderDisplayEdgeBundle,
   loadRenderGlb,
@@ -69,7 +71,10 @@ export function sourceIsStep(sourceOrKind) {
 }
 
 function assertStepOnlyOption(kind, value, label) {
-  if (value === undefined || value === null) {
+  // An empty value means the option was not provided (stepParameterUrl defaults to
+  // the empty string), so there is nothing step-only to reject — required for direct
+  // non-STEP mesh sources, which reach loadSource with no step parameters at all.
+  if (value === undefined || value === null || value === "") {
     return;
   }
   if (!sourceIsStep(kind)) {
@@ -140,6 +145,20 @@ async function loadMeshDataFromUrl(url, kind) {
       throw new Error(`Failed to load GLB source: HTTP ${response.status}`);
     }
     return buildMeshDataFromGlbBuffer(await response.arrayBuffer());
+  }
+  if (kind === SOURCE_KIND.STL) {
+    const response = await fetch(url, { cache: "no-store" });
+    if (!response.ok) {
+      throw new Error(`Failed to load STL source: HTTP ${response.status}`);
+    }
+    return buildMeshDataFromStlBuffer(await response.arrayBuffer());
+  }
+  if (kind === SOURCE_KIND.THREE_MF) {
+    const response = await fetch(url, { cache: "no-store" });
+    if (!response.ok) {
+      throw new Error(`Failed to load 3MF source: HTTP ${response.status}`);
+    }
+    return buildMeshDataFrom3MfBuffer(await response.arrayBuffer());
   }
   throw new Error(`Unsupported render source kind: ${kind || SOURCE_KIND.UNKNOWN}`);
 }
@@ -248,8 +267,17 @@ export async function loadSource(input, options = {}) {
     meshData = await loadMeshDataFromUrl(sourceIsStep(kind) ? glbUrl || url : url, kind);
   }
 
-  const selectorRuntime = inputObject.selectorRuntime || options.selectorRuntime || await loadSelectorRuntime(glbUrl || url, { cadPath });
-  const displayEdgeRuntime = inputObject.displayEdgeRuntime || options.displayEdgeRuntime || await loadDisplayEdgeRuntime(glbUrl || url);
+  // Selector/display-edge runtimes ride in STEP topology GLB extras. Direct mesh
+  // kinds have none, and loading them anyway re-downloads the mesh binary just to
+  // fail the GLB container parse — gate by kind so "no selectors for meshes" is
+  // intent, not a swallowed error (matches the CLI's mesh-input validation).
+  const stepSidecarsEnabled = sourceIsStep(kind);
+  const selectorRuntime = inputObject.selectorRuntime || options.selectorRuntime || (
+    stepSidecarsEnabled ? await loadSelectorRuntime(glbUrl || url, { cadPath }) : null
+  );
+  const displayEdgeRuntime = inputObject.displayEdgeRuntime || options.displayEdgeRuntime || (
+    stepSidecarsEnabled ? await loadDisplayEdgeRuntime(glbUrl || url) : null
+  );
   const stepParameterSource = await loadStepParameters({
     kind,
     stepParameters,
