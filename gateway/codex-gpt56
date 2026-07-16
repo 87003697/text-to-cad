@@ -7,7 +7,7 @@ set -euo pipefail
 
 SCRIPT_DIR="${0:a:h}"
 CODEX_BIN="${CODEX_BIN:-/opt/homebrew/bin/codex}"
-VENUS_TOKEN="${VENUS_TOKEN:-PLACEHOLDER_ROTATE_ME}"
+VENUS_TOKEN="${VENUS_TOKEN:?VENUS_TOKEN must be set (e.g. source ~/.secrets/text-to-cad.env)}"
 VENUS_URL="http://v2.open.venus.oa.com/llmproxy/v1"
 
 VARIANT="${1:?Usage: codex-gpt56 <sol|terra|luna> [codex args...]}"
