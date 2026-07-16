@@ -44,3 +44,6 @@ outputs/
 
 # Fun models (large generated artifacts)
 models/fun/
+
+# Local-only pilot benchmark inputs (not committed)
+models/toys4k/
