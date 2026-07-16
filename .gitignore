@@ -36,5 +36,11 @@ coverage
 *.stp.glb.lock
 tmp/
 
+# Pilot/experiment outputs (not committed; use models/ for durable artifacts)
+outputs/
+
 # Local printer credentials
 /bambu-printers.json
+
+# Fun models (large generated artifacts)
+models/fun/
