@@ -7,17 +7,21 @@
 #   scripts/utils/toys4k-pilot.sh cup_cup_033
 #
 # Assumes the corresponding PLY exists at models/toys4k/<object_name>.ply.
-# Outputs go to outputs/<timestamp>-<object_name>/ (git-ignored).
+# Outputs go to outputs/<timestamp>-<object_name>/ (git-ignored). Each
+# experiment directory is initialized as an independent local git repo
+# so agents can commit per-phase and per-iteration; see
+# skills/mesh-to-cad/references/output-schemas.md § Git commit conventions.
+#
 # Requires:
 #   - gateway/codex-gpt56 launcher
-#   - codex CLI at /opt/homebrew/bin/codex
+#   - codex CLI at /opt/homebrew/bin/codex (or on $PATH)
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 cd "$REPO_ROOT"
 
-OBJ="${1:?Usage: run_pilot.sh <object_name>}"
+OBJ="${1:?Usage: toys4k-pilot.sh <object_name>}"
 PLY="models/toys4k/${OBJ}.ply"
 [[ -f "$PLY" ]] || { echo "Missing mesh: $PLY" >&2; exit 1; }
 
@@ -25,29 +29,57 @@ TS="$(date +%Y%m%d-%H%M%S)"
 EXP_DIR="outputs/${TS}-${OBJ}"
 mkdir -p "$EXP_DIR"
 
+# Initialize the experiment directory as an independent local git repo so
+# the agent can commit per phase (Setup / iter N / Finalization) per the
+# schema in skills/mesh-to-cad/references/output-schemas.md.
+(
+    cd "$EXP_DIR"
+    git init --quiet
+    cat > .gitignore <<'GITIGNORE'
+stderr.log
+events.jsonl
+usage.json
+__pycache__/
+*.pyc
+.codex/
+GITIGNORE
+    git add .gitignore
+    git -c user.name="pilot" -c user.email="pilot@localhost" \
+        commit --quiet -m "pilot: initial commit (empty experiment scaffold)"
+)
+
 PROMPT=$(cat <<EOF
-You are converting a 3D mesh into a parametric CAD model.
+You are the \$mesh-to-cad skill orchestrator. Follow the SKILL.md at
+skills/mesh-to-cad/SKILL.md verbatim; it is the authoritative contract.
 
 Input mesh: ${PLY}
-Working output directory (write all artifacts here): ${EXP_DIR}
+Experiment directory (\${EXP_DIR}, already an initialized local git repo,
+write ALL artifacts here): ${EXP_DIR}
 
-Workflow:
-1. Inspect the mesh:
-   - Run skills/mesh-to-cad/scripts/mesh-inspect to get stats (volume, surface area, watertight, Euler characteristic, PCA principal axes).
-   - Read skills/mesh-to-cad/references/mesh-analysis.md for interpretation guidance.
-2. Route decision — pick exactly one:
-   - cad skill (skills/cad/SKILL.md): geometric/machinable objects; produces STEP via build123d.
-   - implicit-cad skill (skills/implicit-cad/SKILL.md): organic/free-form; produces .implicit.js via GLSL SDF.
-   Justify the choice from the mesh statistics in one paragraph.
-3. Follow the SKILL.md of the chosen skill to reconstruct the model. Save the primary artifact (STEP or .implicit.js) plus any intermediate build scripts under ${EXP_DIR}.
-4. Write ${EXP_DIR}/notes.md with:
-   - chosen route + one-paragraph justification
-   - key mesh stats used
-   - list of CAD operations you invoked (extrude / revolve / loft / sweep / booleans / fillet / shell / pattern / assembly, or implicit-cad equivalents)
-   - self-assessed quality on 0-10 scale
-   - known limitations or approximations
+Peer skills to delegate to (invoke by name in workflow steps 1, 3, 4, 5, 6):
+- \$mesh-inspect  → skills/mesh-inspect/SKILL.md
+- \$cad           → skills/cad/SKILL.md
+- \$implicit-cad  → skills/implicit-cad/SKILL.md
+- \$mesh-compare  → skills/mesh-compare/SKILL.md
+- \$cad-viewer    → skills/cad-viewer/SKILL.md  (optional handoff)
 
-Stay under ${EXP_DIR}; do not modify skills/ or packages/.
+Progressive references you must consult (lazy-load per SKILL.md triggers):
+- skills/mesh-to-cad/references/routing-rubric.md  (step 2)
+- skills/mesh-to-cad/references/output-schemas.md  (steps 2, 3, 4, 5, 7,
+  including § Git commit conventions)
+- skills/mesh-compare/references/compare-metrics.md  (step 4)
+- skills/mesh-compare/references/render-modes.md      (steps 5, 6)
+
+Commit timing inside \${EXP_DIR} (per output-schemas.md § Git commit
+conventions):
+- Setup phase: one commit at the end of workflow step 1 and step 2.
+- Reconstruction loop: one commit at the end of step 5 for each iter,
+  with verdict accept/refine/plateau in the message. Divergence stops
+  discard the iter via 'git checkout .' (no commit).
+- Finalization phase: one commit at the end of step 6 and step 7.
+
+Stay under \${EXP_DIR}; do not modify skills/, packages/, or files
+outside the experiment directory.
 EOF
 )
 
