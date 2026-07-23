@@ -1,0 +1,4 @@
+interface:
+  display_name: "Mesh Compare"
+  short_description: "Compute similarity metrics between two 3D mesh files."
+  default_prompt: "Use $mesh-compare to compute Chamfer/Hausdorff/IoU metrics between two meshes and optionally render a heatmap or side-by-side comparison."
