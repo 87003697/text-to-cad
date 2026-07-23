@@ -1,0 +1,4 @@
+interface:
+  display_name: "Mesh to CAD"
+  short_description: "Reconstruct parametric or implicit CAD from a 3D mesh with objective similarity verification."
+  default_prompt: "Use $mesh-to-cad to route a mesh into $cad or $implicit-cad, produce standardized STEP or .implicit.js outputs, and verify via $mesh-compare multi-view comparison."
