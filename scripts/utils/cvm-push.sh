@@ -31,6 +31,8 @@ LOG="/tmp/cvm-push-$(date +%Y%m%d-%H%M%S).log"
 echo "Log: $LOG"
 
 # --- 跑 rsync（永不加 --delete）
-rsync -avz --info=progress2 --stats \
+# Mac /usr/bin/rsync = openrsync (macOS 14+), 不支持 --info=progress2/--stats；
+# GNU rsync (brew install rsync) 支持。用 --progress -v 是两者共同子集。
+rsync -avz --progress \
     --exclude-from=.cvmignore \
     ./ cvm:~/text-to-cad/ 2>&1 | tee "$LOG"

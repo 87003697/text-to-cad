@@ -16,7 +16,7 @@ description: Push Mac repo to CVM (~/text-to-cad/) via rsync safely.
 1. 调脚本：用 Bash tool 跑 `scripts/utils/cvm-push.sh`，把 `run_in_background` 设为 `true`。
    记下 stdout 里的 `Log: /tmp/cvm-push-<ts>.log`。
 2. arm Monitor tool tail log：
-   `tail -F <log> | grep -E --line-buffered '(%|Total|error|failed|rsync:)'`
+   `tail -F <log> | grep -E --line-buffered '(xfer#|sent [0-9]+ bytes|total size|error|failed|rsync:)'`
 3. 汇报（见 § Handoff）。
 
 ## Non-negotiable
@@ -37,7 +37,7 @@ description: Push Mac repo to CVM (~/text-to-cad/) via rsync safely.
 ## Handoff
 
 脚本退出后回给用户：
-- Total transferred size / speed（从 log 尾 `--stats` 段读）
+- 传输总量 / speed（从 log 尾 `sent X bytes received Y bytes ... bytes/sec` 段读）
 - CVM 上 head commit：`ssh cvm 'cd ~/text-to-cad && git rev-parse HEAD 2>/dev/null || echo no-git'`
 - 下一步提示：`ssh cvm 'cd ~/text-to-cad && ./scripts/utils/toys4k-pilot.sh <obj>'`
 

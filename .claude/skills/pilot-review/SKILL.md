@@ -39,9 +39,9 @@ SKILL.md" 的具体建议，让 CAD skill 的 iteration loop 从主观感受收�
    7. **Preservation heuristic**（severity=warn，允许假阳）：Read mesh_stats
       face_count + notes.md `## Preserved Structural Features` 段；若 face
       > 5万且 preserved 段没显式提到复数结构（buttons/wings/wheels/legs）→ warn。
-   8. **Cost**：Read `<exp>/usage.json`（若存在）；baseline **$0.30/pilot**
-      （handoff 2026-07-23 明确）；> 2× warn，> 5× error；同时报 `cache_hit_rate`
-      if present。
+   8. **Cost**：Read `<exp>/usage.json`（若存在）；baseline **USD 0.30 per pilot**
+      （handoff 2026-07-23 明确；用 "USD 0.30" 避开 `$0` args 替换）；> 2× warn，
+      > 5× error；同时报 `cache_hit_rate` if present。
    9. **Route replay**：Read mesh_stats.json；按 `routing-rubric.md` 5-priority
       手动重放决策，对比 `route.json.route`；不符 → warn。
 4. **产报告**（见 § Handoff）。
@@ -97,6 +97,7 @@ Iteration playbook（**表格是活的**，每次新型 issue 检出加一行；
 | Issue signature | Fix target |
 |---|---|
 | loop-hygiene: last iter verdict is refine | skills/mesh-to-cad/SKILL.md § Reconstruction loop step 5 |
+| loop-hygiene: last-iter verdict=refine but notes declare divergence exit | skills/mesh-to-cad/references/output-schemas.md § Git commit conventions (add plateau_via_divergence verdict or amend rule) |
 | route.json missing considered_alternative | skills/mesh-to-cad/references/output-schemas.md § route.json |
 | notes.md sections reordered / renamed | skills/mesh-to-cad/references/output-schemas.md § notes.md |
 | iou < 0.5 AND chamfer < 0.03 | packages/meshscope/src/meshscope/compare.py::iou (bug, not skill) |
