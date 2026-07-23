@@ -37,6 +37,7 @@ coverage
 tmp/
 
 # Pilot/experiment outputs (not committed; use models/ for durable artifacts)
+outputs
 outputs/
 
 # Local printer credentials

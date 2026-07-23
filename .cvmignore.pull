@@ -1,0 +1,5 @@
+# aws s3 cp exclude list — CVM → S3 upload (cvm-pull.sh uses this)
+# usage.json + events.jsonl intentionally NOT excluded — cost analysis + incident triage need them.
+*/.codex/*
+*stderr.log
+*/__pycache__/*
