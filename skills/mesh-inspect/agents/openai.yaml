@@ -1,0 +1,4 @@
+interface:
+  display_name: "Mesh Inspect"
+  short_description: "Analyze a 3D mesh file with statistics, preview, and 3D handoff."
+  default_prompt: "Use $mesh-inspect to compute statistics, generate a multi-view preview, and hand off a 3D interactive view of a mesh file."
