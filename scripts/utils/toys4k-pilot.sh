@@ -135,3 +135,6 @@ PY
 
 echo "[pilot] artifacts:"
 ls -la "${EXP_DIR}"
+
+echo ""
+echo "[pilot] Done. Audit with: /pilot-review outputs/${TS}-${OBJ}/"
