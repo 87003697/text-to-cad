@@ -13,6 +13,9 @@ dependencies = [
   "scipy",
 ]
 
+[project.optional-dependencies]
+viz = ["Pillow"]
+
 [tool.setuptools.packages.find]
 where = ["src"]
 include = ["meshscope*"]
