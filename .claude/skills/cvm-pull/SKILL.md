@@ -3,8 +3,8 @@ name: cvm-pull
 description: Upload CVM new pilot outputs to S3, verify, then clean CVM local.
   Mac reads via existing rclone mount at ~/threed-code/ericzyma/text-to-cad/outputs/.
   Use after a pilot finishes on CVM to reclaim disk and make results visible on Mac.
-  Trigger: "cvm-pull", "拉 outputs", "拉 pilot", "拉 CVM pilot", "回收 pilot",
-  "从 CVM 拿 exp", "sync from CVM", "CVM 跑完拿结果".
+  Trigger: "cvm-pull", "拉 outputs", "拉 pilot", "拉 CVM pilot",
+  "从 CVM 拿 exp", "CVM 跑完拿结果", "sync from CVM".
 ---
 
 # CVM pull — Tencent DevCloud CVM → S3 (Mac 通过 mount 看)
