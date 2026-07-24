@@ -25,15 +25,16 @@ INCLUDE_BYPRODUCTS=0
 pgrep -f 'rclone mount threed-code' >/dev/null \
   || { echo "rclone mount threed-code: NOT running. Aborting." >&2; exit 4; }
 
-# --- 预检 2: 列 CVM 上的 exp
-CVM_EXPS="$(ssh cvm 'ls ~/text-to-cad/outputs/ 2>/dev/null' | sort)"
+# --- 预检 2: 列 CVM 上的 exp（<group>/<exp> 两层深度）
+# _snapshot 目录属于 Mac 端产物，S3 侧已存在；CVM 不会有；无需特殊排除
+CVM_EXPS="$(ssh cvm 'find ~/text-to-cad/outputs/ -mindepth 2 -maxdepth 2 -type d -printf "%P\n" 2>/dev/null' | sort)"
 [[ -z "$CVM_EXPS" ]] && { echo "No exp on CVM. Nothing to do."; exit 0; }
 
-# --- 预检 3: 列 S3 上已有的 exp（从 rclone mount 视角）
+# --- 预检 3: 列 S3 上已有的 exp（从 rclone mount 视角，两层深度）
 mkdir -p "$MOUNT_PATH"
 rclone rc --rc-addr=127.0.0.1:5572 vfs/refresh \
     dir="ericzyma/text-to-cad" recursive=false 2>/dev/null || true
-LOCAL_EXPS="$(ls "$MOUNT_PATH" 2>/dev/null | sort)"
+LOCAL_EXPS="$(find "$MOUNT_PATH" -mindepth 2 -maxdepth 2 -type d 2>/dev/null | sed "s|$MOUNT_PATH/||" | sort)"
 
 MISSING="$(comm -23 <(echo "$CVM_EXPS") <(echo "$LOCAL_EXPS"))"
 

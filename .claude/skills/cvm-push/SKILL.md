@@ -41,7 +41,13 @@ description: Push Mac repo to Tencent DevCloud CVM (~/text-to-cad/) via rsync,
 脚本退出后回给用户：
 - 传输总量 / speed（从 log 尾 `sent X bytes received Y bytes ... bytes/sec` 段读）
 - CVM 上 head commit：`ssh cvm 'cd ~/text-to-cad && git rev-parse HEAD 2>/dev/null || echo no-git'`
-- 下一步提示：`ssh cvm 'cd ~/text-to-cad && ./scripts/utils/toys4k-pilot.sh <obj>'`
+- 下一步提示（推荐先做 group snapshot 再跑 pilot）：
+  ```
+  # Mac 端（新 batch 首次）：
+  scripts/utils/snapshot-batch.sh <YYYYMMDD-HHMMSS-slug>
+  # CVM 端：
+  ssh cvm 'cd ~/text-to-cad && ./scripts/utils/toys4k-pilot.sh <obj> <same-group>'
+  ```
 
 失败：
 - exit 1（cwd 错） → 提示切 repo 根

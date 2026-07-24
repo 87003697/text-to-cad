@@ -2,13 +2,15 @@
 # Pilot runner for Toys4K mesh-to-CAD benchmark.
 #
 # Usage:
-#   scripts/utils/toys4k-pilot.sh <object_name>
+#   scripts/utils/toys4k-pilot.sh <object_name> <group>
 # Example:
-#   scripts/utils/toys4k-pilot.sh cup_cup_033
+#   scripts/utils/toys4k-pilot.sh cup_cup_033 20260724-093000-baseline
 #
 # Assumes the corresponding PLY exists at models/toys4k/<object_name>.ply.
-# Outputs go to outputs/<timestamp>-<object_name>/ (git-ignored). Each
-# experiment directory is initialized as an independent local git repo
+# Outputs go to outputs/<group>/<timestamp>-<object_name>/ (git-ignored).
+# The <group> dir also holds _snapshot/ (Mac-side code snapshot produced by
+# scripts/utils/snapshot-batch.sh) for reproducibility.
+# Each experiment directory is initialized as an independent local git repo
 # so agents can commit per-phase and per-iteration; see
 # skills/mesh-to-cad/references/output-schemas.md § Git commit conventions.
 #
@@ -21,12 +23,16 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 cd "$REPO_ROOT"
 
-OBJ="${1:?Usage: toys4k-pilot.sh <object_name>}"
+OBJ="${1:?Usage: toys4k-pilot.sh <object_name> <group>}"
+GROUP="${2:?Usage: toys4k-pilot.sh <object_name> <group>  (e.g. 20260724-093000-baseline)}"
+[[ "$GROUP" =~ ^[0-9]{8}-[0-9]{6}-[a-z0-9-]+$ ]] \
+  || { echo "Bad group format: '$GROUP'. Expect YYYYMMDD-HHMMSS-<slug>." >&2; exit 1; }
+
 PLY="models/toys4k/${OBJ}.ply"
 [[ -f "$PLY" ]] || { echo "Missing mesh: $PLY" >&2; exit 1; }
 
 TS="$(date +%Y%m%d-%H%M%S)"
-EXP_DIR="outputs/${TS}-${OBJ}"
+EXP_DIR="outputs/${GROUP}/${TS}-${OBJ}"
 mkdir -p "$EXP_DIR"
 
 # Initialize the experiment directory as an independent local git repo so
@@ -137,4 +143,4 @@ echo "[pilot] artifacts:"
 ls -la "${EXP_DIR}"
 
 echo ""
-echo "[pilot] Done. Audit with: /pilot-review outputs/${TS}-${OBJ}/"
+echo "[pilot] Done. Audit with: /pilot-review outputs/${GROUP}/${TS}-${OBJ}/"

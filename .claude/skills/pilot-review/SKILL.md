@@ -16,8 +16,11 @@ SKILL.md" 的具体建议，让 CAD skill 的 iteration loop 从主观感受收�
 
 ## Workflow
 
-1. **判断输入**：`$ARGUMENTS` = exp dir 路径 / glob；空 → `ls -td outputs/*/ | head -1`
-   取最新一个。
+1. **判断输入**：`$ARGUMENTS` = exp dir 路径 / group 目录 / glob。
+   - 布局约定：`outputs/<group>/<exp>/`（group = `YYYYMMDD-HHMMSS-<slug>`）
+   - 给 group 目录（含 `_snapshot/`）→ 展开到该 group 下所有 `<exp>/`（跳过 `_snapshot/`）
+   - 给单 exp dir → 只审那一个
+   - 空 → `ls -td outputs/*/*/ | head -1` 取最新一个 exp
 2. **加载权威 schema**（每次 Read，不 cache）：
    - `skills/mesh-to-cad/references/output-schemas.md`
    - `skills/mesh-compare/references/compare-metrics.md`
@@ -82,9 +85,10 @@ SKILL.md" 的具体建议，让 CAD skill 的 iteration loop 从主观感受收�
   每 issue 一行，含 fix target 引用
 - `<exp_dir>/review.json` — machine-readable：issue 数组
 
-批量模式额外产：
-- `outputs/review-summary-<ts>.md` — 跨 exp 汇总（"9 中 6 个 loop 跳步" =
-  systemic drift）
+批量模式（给 group 目录）额外产：
+- `outputs/<group>/review-summary.md` — 跨 exp 汇总（"9 中 6 个 loop 跳步" =
+  systemic drift），落 group 目录内部而非 outputs/ 根，与 `_snapshot/` 一起
+  构成完整 batch 快照
 
 stdout（Claude Code 里给用户）：
 - 前 5 条 error inline

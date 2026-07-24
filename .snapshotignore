@@ -1,0 +1,52 @@
+# rsync exclude list for scripts/utils/snapshot-batch.sh
+# 目标：保留 agent 相关代码 + .git，排除所有产物和衍生物。
+# 与 .cvmignore 语义不同：.snapshotignore 保留 .git/，用于代码状态可复现。
+
+# 产物 / pilot outputs / LFS assets
+outputs
+models
+
+# 依赖包（lock 文件在 .git 里保版本；deps 本身可 rebuild）
+.venv
+node_modules
+
+# 构建产物
+dist
+build
+plugins
+viewer/dist
+viewer/.vite
+packages/*/dist
+docs/build
+docs/.docusaurus
+skills/cad-viewer/scripts/viewer/dist
+
+# 非 agent 应用源（AGENTS.md 明确 viewer/docs 属于 app source）
+viewer
+docs
+
+# 测试/缓存/临时
+.pytest_cache
+.mypy_cache
+.ruff_cache
+.cache
+htmlcov
+.coverage
+.coverage.*
+graphify-out
+wandb
+tmp
+worktrees
+.agents/sessions
+
+# 编译中间物
+__pycache__
+*.pyc
+*.py[cod]
+*.egg-info
+
+# 编辑器/OS
+.DS_Store
+.vscode
+*.swp
+*.tmp
