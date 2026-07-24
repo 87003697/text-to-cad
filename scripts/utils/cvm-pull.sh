@@ -48,13 +48,41 @@ echo "Missing in S3, will upload + clean $N exp(s):"
 echo "$MISSING" | sed 's/^/  /'
 
 # --- 组装 aws s3 cp exclude 参数（从 .cvmignore.pull 读）
+# 同一份 patterns 需要同时给 aws s3 cp（--exclude）和 verify 步骤的 local find
+# 用：一份 EXCLUDE_PATS 变量记录原始 glob，两侧同源避免漂移。
 EXCLUDES=()
+EXCLUDE_PATS=()
 if [[ "$INCLUDE_BYPRODUCTS" -eq 0 ]] && [[ -f .cvmignore.pull ]]; then
     while IFS= read -r pat; do
         [[ -z "$pat" || "$pat" =~ ^# ]] && continue
         EXCLUDES+=(--exclude "$pat")
+        EXCLUDE_PATS+=("$pat")
     done < .cvmignore.pull
 fi
+
+# 把 aws-glob → grep -E 正则片段（支持 3 种形状：*/X/*, *X, X）
+# 用于把 EXCLUDES 应用到 CVM local find 上，让 verify 两侧同 filter
+glob_to_regex() {
+    local pat="$1"
+    pat="${pat//./\\.}"          # 转义 .
+    case "$pat" in
+        '*/'*'/*')                # */X/* → /X/
+            local inner="${pat#\*/}"; inner="${inner%/\*}"
+            echo "/$inner/" ;;
+        '*'*)                     # *X → X$
+            echo "${pat#\*}\$" ;;
+        *'*')                     # X* → ^X
+            echo "^${pat%\*}" ;;
+        *)                        # X → ^X$
+            echo "^$pat\$" ;;
+    esac
+}
+LOCAL_FILTER_RGX=""
+for pat in "${EXCLUDE_PATS[@]}"; do
+    frag="$(glob_to_regex "$pat")"
+    [[ -n "$LOCAL_FILTER_RGX" ]] && LOCAL_FILTER_RGX="$LOCAL_FILTER_RGX|"
+    LOCAL_FILTER_RGX="$LOCAL_FILTER_RGX$frag"
+done
 
 LOG="/tmp/cvm-pull-$(date +%Y%m%d-%H%M%S).log"
 echo "Log: $LOG"
@@ -70,8 +98,12 @@ for exp in $MISSING; do
         ~/text-to-cad/outputs/$exp/ $S3_PREFIX/$exp/ \
         ${EXCLUDES[*]}" 2>&1 | tee -a "$LOG"
 
-    # 2. Verify file count (CVM local vs S3)
-    LOCAL_N=$(ssh cvm "find ~/text-to-cad/outputs/$exp/ -type f | wc -l")
+    # 2. Verify file count (CVM local vs S3)。两侧都应用 EXCLUDES 才能对齐。
+    if [[ -n "$LOCAL_FILTER_RGX" ]]; then
+        LOCAL_N=$(ssh cvm "find ~/text-to-cad/outputs/$exp/ -type f | grep -Ev '$LOCAL_FILTER_RGX' | wc -l")
+    else
+        LOCAL_N=$(ssh cvm "find ~/text-to-cad/outputs/$exp/ -type f | wc -l")
+    fi
     S3_N=$(ssh cvm "aws s3 ls --recursive $S3_PREFIX/$exp/ | wc -l")
 
     if [[ "$LOCAL_N" -eq "$S3_N" ]]; then
@@ -84,7 +116,12 @@ for exp in $MISSING; do
 done
 
 # --- 让 Mac 立即看到新上传的
-rclone rc --rc-addr=127.0.0.1:5572 vfs/refresh \
-    dir="ericzyma" recursive=false 2>/dev/null || true
+# 按处理过的 exp 提取每个 group 名，逐个 refresh 该 group 目录（non-recursive）
+# 只 refresh top-level "ericzyma" 不够 — 不会传染到子目录列表。
+GROUPS_SEEN="$(echo "$MISSING" | awk -F/ '{print $1}' | sort -u)"
+for group in $GROUPS_SEEN; do
+    rclone rc --rc-addr=127.0.0.1:5572 vfs/refresh \
+        dir="ericzyma/text-to-cad/outputs/$group" recursive=false 2>/dev/null || true
+done
 
 echo "Done. Verify: ls $MOUNT_PATH"
