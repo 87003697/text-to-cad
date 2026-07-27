@@ -38,7 +38,7 @@ description: Upload CVM new pilot outputs to S3, verify, then clean CVM local.
 - **上传后 verify 通过才清理 CVM 本地**：`find CVM local -type f | wc -l` ==
   `aws s3 ls --recursive | wc -l`。**verify fail 保留 CVM local + exit 5**，
   绝不盲删源。
-- **`usage.json` + `events.jsonl` 默认上传**（cost 分析 + 事故排查两个用途都要）。
+- **`usage.json` + `rollout.jsonl` 默认上传**（cost 分析 + 事故排查两个用途都要）。
 - **`stderr.log` + `.codex/` + `__pycache__/` 默认排除**；`--include-byproducts` opt-in。
 - **rclone mount 必须健康**：跑前 `pgrep -f 'rclone mount threed-code'`；不在则 exit 4，不硬跑。
 - **不重拉已有 exp**：mount 里已存在 = 完成品；想重拉参见 § 边界条件。
@@ -72,7 +72,7 @@ description: Upload CVM new pilot outputs to S3, verify, then clean CVM local.
 脚本退出后回给用户：
 - 上传的新 exp dir 清单（本轮 uploaded + cleaned）
 - 每 exp artifact 存在性 check（从 mount 侧读）：`notes.md` / `compare_metrics.json` /
-  `usage.json` / `events.jsonl` / `previews/` 各标 ✓/✗
+  `usage.json` / `rollout.jsonl` / `previews/` 各标 ✓/✗
 - 下一步提示：`/pilot-review outputs/<group>/`（推荐指向刚上传的整个 group，
   一次审多个 exp；`outputs/` 是 symlink 指向 mount）
 
@@ -88,11 +88,11 @@ description: Upload CVM new pilot outputs to S3, verify, then clean CVM local.
 
 本 skill 是活的，遇到未覆盖的新情况必须回来改：
 - **新副产物出现** / **新 exp 内不该拉的文件** → `.cvmignore.pull` 加行
-- **empirical 假设失效**（events.jsonl 变大、开始有 base64 image、新副产物）
+- **empirical 假设失效**（rollout.jsonl 变大、开始有 base64 image、新副产物）
   → 本文件 § 边界条件 empirical 段更新；`.cvmignore.pull` 可能要调
 - **新的覆盖策略需求**（如某类文件要 backup） → `cvm-pull.sh` 加逻辑 + 本文件
   § Non-negotiable 加对应约束
 - **发现用户用新说法但没触发到 skill** → description trigger phrases 加
 
-commit 消息说明触发事件（例："feat(cvm-pull): pull heatmap-only after events.jsonl grew to 100MB"）。
+commit 消息说明触发事件（例："feat(cvm-pull): pull heatmap-only after rollout.jsonl grew to 100MB"）。
 参见 `.agents/plans/cvm-sync-and-pilot-review.md § Skill 维护原则`。
