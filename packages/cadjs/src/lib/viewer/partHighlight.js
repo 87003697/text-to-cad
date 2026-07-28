@@ -15,6 +15,16 @@ const PART_OCCLUSION_GHOST_COVERAGE = 0.6;
 export const PART_SELECTED_HIGHLIGHT_BLEND = 0.55;
 export const PART_HOVER_HIGHLIGHT_BLEND = 0.35;
 
+// Hover is a transient "this is what you would pick" affordance; selection is
+// persistent state that several parts can hold at once. Both are visible at the
+// same time — you hover one part while others stay selected — so they differ in
+// hue, and hover stays subordinate: weaker edges, weaker glow, and no occlusion
+// ghost. Ghosting on hover would strobe as the cursor sweeps an assembly and
+// would allocate a ghost mesh for every part the cursor touches.
+export const PART_HOVER_EDGE_EMPHASIS = 0.55;
+export const PART_SELECTED_EMISSIVE_INTENSITY = 0.12;
+export const PART_HOVER_EMISSIVE_INTENSITY = 0.05;
+
 function clamp(value, min, max) {
   return Math.min(Math.max(value, min), max);
 }

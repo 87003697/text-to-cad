@@ -30,7 +30,10 @@ import {
 } from "./displayRecordTransform.js";
 import { axisIndex, normalizeStepClipSettings } from "../lib/viewer/clipPlane.js";
 import {
+  PART_HOVER_EDGE_EMPHASIS,
+  PART_HOVER_EMISSIVE_INTENSITY,
   PART_HOVER_HIGHLIGHT_BLEND,
+  PART_SELECTED_EMISSIVE_INTENSITY,
   PART_SELECTED_HIGHLIGHT_BLEND,
   partHighlightSurfaceColor,
   syncPartOcclusionGhost
@@ -1223,10 +1226,14 @@ export function applyPartVisualState(THREE, records, {
   const highlightEdgeOpacity = Number.isFinite(Number(edgeSettings?.highlightOpacity))
     ? clamp(Number(edgeSettings.highlightOpacity), 0, 1)
     : 1;
+  // Same two-color split the viewer uses: hover and selection are separate
+  // colors, not two strengths of one, so they stay distinguishable on screen
+  // together.
   const edgeHighlightColor = String(edgeSettings?.highlightColor || REFERENCE_SELECTED_COLOR).trim() || REFERENCE_SELECTED_COLOR;
-  const hoveredSurfaceColor = new THREE.Color(REFERENCE_HOVER_COLOR);
-  const hoveredEdgeColor = new THREE.Color(edgeHighlightColor);
-  const selectedSurfaceColor = new THREE.Color(REFERENCE_SELECTED_COLOR);
+  const hoverHighlightColor = String(edgeSettings?.hoverColor || REFERENCE_HOVER_COLOR).trim() || REFERENCE_HOVER_COLOR;
+  const hoveredSurfaceColor = new THREE.Color(hoverHighlightColor);
+  const hoveredEdgeColor = new THREE.Color(hoverHighlightColor);
+  const selectedSurfaceColor = new THREE.Color(edgeHighlightColor);
   const selectedEdgeColor = new THREE.Color(edgeHighlightColor);
 
   for (const record of Array.isArray(records) ? records : []) {
@@ -1240,7 +1247,9 @@ export function applyPartVisualState(THREE, records, {
     const effectEmissive = readSourceColor(THREE, effectStyle.emissive);
     const isHidden = partIdMatchesSet(record.partId, hidden);
     const isSelected = !isHidden && (partIdMatchesSet(record.partId, selected) || record.effectHighlighted === true);
-    const isHovered = !isHidden && !effectHidden && partIdMatchesSet(record.partId, hovered);
+    // Selection outranks hover: hovering an already-selected part must not
+    // downgrade it to the weaker hover treatment.
+    const isHovered = !isHidden && !effectHidden && !isSelected && partIdMatchesSet(record.partId, hovered);
     const isFocused = !isHidden && !effectHidden && hasFocus && partIdMatchesSet(record.partId, focusIds);
     const isDimmed = !isHidden && !effectHidden && hasFocus && !isFocused;
     const isHighlighted = isSelected || isHovered;
@@ -1264,7 +1273,12 @@ export function applyPartVisualState(THREE, records, {
     const effectEdgeOpacity = Number.isFinite(Number(effectStyle.edgeOpacity))
       ? clamp(Number(effectStyle.edgeOpacity), 0, 1)
       : effectOpacity;
-    const highlightedEdgeOpacity = (isSelected || isHovered) ? highlightEdgeOpacity * effectEdgeOpacity : null;
+    // Only selection gets the full-strength outline; hover keeps a lighter one.
+    const highlightedEdgeOpacity = isSelected
+      ? highlightEdgeOpacity * effectEdgeOpacity
+      : isHovered
+        ? highlightEdgeOpacity * PART_HOVER_EDGE_EMPHASIS * effectEdgeOpacity
+        : null;
     const dimmedSurfaceOpacity = Math.min(baseSurfaceOpacity * effectOpacity, FOCUSED_DIMMED_SURFACE_OPACITY);
     const highlightedSurfaceOpacity = isSelected
       ? clamp((baseSurfaceOpacity * effectOpacity) + PART_SELECTED_OPACITY_BOOST, 0, 1)
@@ -1293,18 +1307,18 @@ export function applyPartVisualState(THREE, records, {
 
     if ("emissive" in record.material && record.material.emissive) {
       if (isSelected) {
-        record.material.emissive.set(REFERENCE_SELECTED_COLOR);
+        record.material.emissive.copy(selectedSurfaceColor);
       } else if (isHovered) {
-        record.material.emissive.set(REFERENCE_HOVER_COLOR);
+        record.material.emissive.copy(hoveredSurfaceColor);
       } else if (record.baseEmissiveColor && record.baseEmissiveIntensity > 0) {
         record.material.emissive.copy(record.baseEmissiveColor);
       } else {
         record.material.emissive.set(0x000000);
       }
       record.material.emissiveIntensity = isSelected
-        ? 0.08
+        ? PART_SELECTED_EMISSIVE_INTENSITY
         : isHovered
-          ? 0.12
+          ? PART_HOVER_EMISSIVE_INTENSITY
           : effectEmissive
             ? clamp(Number(effectStyle.emissiveIntensity) || 0.22, 0, 2)
             : clamp(Number(record.baseEmissiveIntensity) || 0, 0, 2);
@@ -1322,13 +1336,11 @@ export function applyPartVisualState(THREE, records, {
 
     if (record.edgeMaterial) {
       record.edgeMaterial.color?.set?.(nextEdgeColor);
-      syncLineMaterialOpacity(record.edgeMaterial, isSelected
-        ? highlightEdgeOpacity * effectEdgeOpacity
-        : isHovered
-          ? highlightEdgeOpacity * effectEdgeOpacity
-          : isHidden || isDimmed
-            ? nextSurfaceOpacity
-            : baseEdgeOpacity * effectEdgeOpacity);
+      syncLineMaterialOpacity(record.edgeMaterial, isSelected || isHovered
+        ? highlightedEdgeOpacity
+        : isHidden || isDimmed
+          ? nextSurfaceOpacity
+          : baseEdgeOpacity * effectEdgeOpacity);
     }
 
     syncPartOcclusionGhost(THREE, record, {
