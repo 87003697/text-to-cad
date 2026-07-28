@@ -3174,7 +3174,7 @@ const CadViewer = forwardRef(function CadViewer({
     updateSpotLightTarget(runtime);
 
     // Keep a single primary shadow; the spot light drives the floor glow/fill.
-    runtime.keyLight.castShadow = runtime.keyLight.visible;
+    runtime.keyLight.castShadow = runtime.keyLight.visible && runtime.softwareRendering !== true;
     runtime.spotLight.castShadow = false;
 
     const materialSettings = {
