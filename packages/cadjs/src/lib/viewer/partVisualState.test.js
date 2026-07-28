@@ -9,7 +9,10 @@ import {
   referenceMatchesFocusedPart
 } from "./partVisualState.js";
 import {
+  PART_HOVER_EDGE_EMPHASIS,
+  PART_HOVER_EMISSIVE_INTENSITY,
   PART_HOVER_HIGHLIGHT_BLEND,
+  PART_SELECTED_EMISSIVE_INTENSITY,
   PART_SELECTED_HIGHLIGHT_BLEND,
   partHighlightSurfaceColor
 } from "./partHighlight.js";
@@ -131,9 +134,11 @@ test("part visual state applies hover and selected styling without changing visi
     ).getHexString()
   );
   assert.equal(hoverRecord.material.emissive.getHexString(), colors.hoveredSurfaceColor.getHexString());
-  assertNear(hoverRecord.material.emissiveIntensity, 0.12, "hover emissive");
+  assertNear(hoverRecord.material.emissiveIntensity, PART_HOVER_EMISSIVE_INTENSITY, "hover emissive");
   assert.equal(hoverRecord.edgeMaterial.color.getHexString(), colors.hoveredEdgeColor.getHexString());
-  assertNear(hoverRecord.edgeMaterial.opacity, 0.9, "hover edge opacity");
+  // Hover keeps a lighter outline than selection.
+  assertNear(hoverRecord.edgeMaterial.opacity, 0.9 * PART_HOVER_EDGE_EMPHASIS, "hover edge opacity");
+  assert.equal(hoverRecord.ghostMesh, undefined, "hover never builds an occlusion ghost");
 
   assertNear(selectedRecord.material.opacity, 0.9, "selected opacity");
   assert.equal(selectedRecord.material.transparent, true);
@@ -153,8 +158,58 @@ test("part visual state applies hover and selected styling without changing visi
   );
   assert.notEqual(selectedRecord.material.color.getHexString(), "aaaaaa");
   assert.equal(selectedRecord.material.emissive.getHexString(), colors.selectedSurfaceColor.getHexString());
+  assertNear(selectedRecord.material.emissiveIntensity, PART_SELECTED_EMISSIVE_INTENSITY, "selected emissive");
   assert.equal(selectedRecord.edgeMaterial.color.getHexString(), colors.selectedEdgeColor.getHexString());
   assertNear(selectedRecord.edgeMaterial.opacity, 0.9, "selected edge opacity");
+
+  // Selection must read stronger than hover on every axis, or "about to pick"
+  // and "already picked" are indistinguishable.
+  assert.ok(
+    selectedRecord.material.emissiveIntensity > hoverRecord.material.emissiveIntensity,
+    "selection should glow more than hover"
+  );
+  assert.ok(
+    selectedRecord.edgeMaterial.opacity > hoverRecord.edgeMaterial.opacity,
+    "selection should outline harder than hover"
+  );
+});
+
+test("hover and selection use distinct colors", () => {
+  const colors = getPartHighlightColors(THREE, { edgeSettings: { highlightColor: "#4f9dff" } });
+  assert.notEqual(
+    colors.hoveredSurfaceColor.getHexString(),
+    colors.selectedSurfaceColor.getHexString(),
+    "hover and selection must be separate colors, not two strengths of one"
+  );
+  // A theme can override either independently.
+  const themed = getPartHighlightColors(THREE, {
+    edgeSettings: { highlightColor: "#ff0000", hoverColor: "#00ff00" }
+  });
+  assert.equal(themed.selectedSurfaceColor.getHexString(), "ff0000");
+  assert.equal(themed.hoveredEdgeColor.getHexString(), "00ff00");
+});
+
+test("hovering an already-selected part keeps the selected treatment", () => {
+  const record = createRecord("part");
+  const children = [];
+  record.mesh = { visible: true, renderOrder: 2, add: (child) => children.push(child) };
+  record.geometry = new THREE.BufferGeometry();
+
+  applyPartVisualState(THREE, [record], {
+    viewerTheme: { edge: "#111111", edgeOpacity: 0.4 },
+    edgeSettings: { highlightColor: "#4f9dff", highlightOpacity: 0.9 },
+    hiddenPartIds: [],
+    hoveredPartId: "part",
+    focusedPartId: [],
+    selectedPartIds: ["part"],
+    showEdges: true
+  });
+
+  const colors = getPartHighlightColors(THREE, { edgeSettings: { highlightColor: "#4f9dff" } });
+  assert.equal(record.material.emissive.getHexString(), colors.selectedSurfaceColor.getHexString());
+  assertNear(record.material.emissiveIntensity, PART_SELECTED_EMISSIVE_INTENSITY, "selected emissive wins");
+  assertNear(record.edgeMaterial.opacity, 0.9, "selected edge opacity wins");
+  assert.ok(record.ghostMesh?.visible, "a hovered selection still ghosts");
 });
 
 test("part highlight surface color blends the part color toward the highlight color", () => {

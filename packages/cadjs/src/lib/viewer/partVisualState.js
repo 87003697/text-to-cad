@@ -3,11 +3,14 @@ import {
   CAD_DISPLAY_MODE,
   displayModeUsesTransparentSurfaces
 } from "../../common/displaySettings.js";
-import { REFERENCE_SELECTED_COLOR } from "./referenceGeometry.js";
+import { REFERENCE_HOVER_COLOR, REFERENCE_SELECTED_COLOR } from "./referenceGeometry.js";
 import { BASE_VIEWER_THEME } from "./stageTheme.js";
 import { readSourceColor } from "./surfaceMaterials.js";
 import {
+  PART_HOVER_EDGE_EMPHASIS,
+  PART_HOVER_EMISSIVE_INTENSITY,
   PART_HOVER_HIGHLIGHT_BLEND,
+  PART_SELECTED_EMISSIVE_INTENSITY,
   PART_SELECTED_HIGHLIGHT_BLEND,
   partHighlightSurfaceColor,
   syncPartOcclusionGhost
@@ -27,12 +30,16 @@ function clamp(value, min, max) {
 export function getPartHighlightColors(THREE, {
   edgeSettings = null
 } = {}) {
-  const highlightColor = String(edgeSettings?.highlightColor || REFERENCE_SELECTED_COLOR).trim() || REFERENCE_SELECTED_COLOR;
+  // Hover and selection are separate colors, not two strengths of one color:
+  // both are on screen at the same time, so "about to pick" has to be
+  // distinguishable from "already picked" at a glance.
+  const selectedColor = String(edgeSettings?.highlightColor || REFERENCE_SELECTED_COLOR).trim() || REFERENCE_SELECTED_COLOR;
+  const hoverColor = String(edgeSettings?.hoverColor || REFERENCE_HOVER_COLOR).trim() || REFERENCE_HOVER_COLOR;
   return {
-    hoveredSurfaceColor: new THREE.Color(highlightColor),
-    hoveredEdgeColor: new THREE.Color(highlightColor),
-    selectedSurfaceColor: new THREE.Color(highlightColor),
-    selectedEdgeColor: new THREE.Color(highlightColor)
+    hoveredSurfaceColor: new THREE.Color(hoverColor),
+    hoveredEdgeColor: new THREE.Color(hoverColor),
+    selectedSurfaceColor: new THREE.Color(selectedColor),
+    selectedEdgeColor: new THREE.Color(selectedColor)
   };
 }
 
@@ -225,7 +232,9 @@ export function applyPartVisualState(THREE, records, {
     const effectEmissive = readSourceColor(THREE, effectStyle.emissive);
     const isHidden = partIdMatchesSet(record.partId, hidden);
     const isSelected = !isHidden && (partIdMatchesSet(record.partId, selected) || record.effectHighlighted === true);
-    const isHovered = !isHidden && !effectHidden && partIdMatchesSet(record.partId, hovered);
+    // Selection outranks hover: hovering a part you already picked must not
+    // downgrade it to the weaker hover treatment.
+    const isHovered = !isHidden && !effectHidden && !isSelected && partIdMatchesSet(record.partId, hovered);
     const isFocused = !isHidden && !effectHidden && hasFocus && partIdMatchesSet(record.partId, focusIds);
     const isDimmed = !isHidden && !effectHidden && hasFocus && !isFocused;
     const isHighlighted = isSelected || isHovered;
@@ -261,7 +270,12 @@ export function applyPartVisualState(THREE, records, {
     const effectEdgeOpacity = Number.isFinite(Number(effectStyle.edgeOpacity))
       ? clamp(Number(effectStyle.edgeOpacity), 0, 1)
       : effectOpacity;
-    const highlightedEdgeOpacity = (isSelected || isHovered) ? highlightEdgeOpacity * effectEdgeOpacity : null;
+    // Only selection gets the full-strength outline; hover keeps a lighter one.
+    const highlightedEdgeOpacity = isSelected
+      ? highlightEdgeOpacity * effectEdgeOpacity
+      : isHovered
+        ? highlightEdgeOpacity * PART_HOVER_EDGE_EMPHASIS * effectEdgeOpacity
+        : null;
     const dimmedSurfaceOpacity = Math.min(baseSurfaceOpacity * effectOpacity, FOCUSED_DIMMED_SURFACE_OPACITY);
     const baseEffectSurfaceOpacity = baseSurfaceOpacity * effectOpacity;
     const highlightedSurfaceOpacity = isHighlighted
@@ -294,9 +308,9 @@ export function applyPartVisualState(THREE, records, {
         record.material.emissive.set(0x000000);
       }
       record.material.emissiveIntensity = isSelected
-        ? 0.08
+        ? PART_SELECTED_EMISSIVE_INTENSITY
         : isHovered
-          ? 0.12
+          ? PART_HOVER_EMISSIVE_INTENSITY
           : effectEmissive
             ? clamp(Number(effectStyle.emissiveIntensity) || 0.22, 0, 2)
             : clamp(Number(record.baseEmissiveIntensity) || 0, 0, 2);
@@ -310,13 +324,11 @@ export function applyPartVisualState(THREE, records, {
 
     if (record.edgeMaterial) {
       record.edgeMaterial.color.set(nextEdgeColor);
-      syncLineMaterialOpacity(record.edgeMaterial, isSelected
-        ? highlightEdgeOpacity * effectEdgeOpacity
-        : isHovered
-          ? highlightEdgeOpacity * effectEdgeOpacity
-          : isHidden || isDimmed
-            ? nextSurfaceOpacity
-            : baseEdgeOpacity * effectEdgeOpacity);
+      syncLineMaterialOpacity(record.edgeMaterial, isSelected || isHovered
+        ? highlightedEdgeOpacity
+        : isHidden || isDimmed
+          ? nextSurfaceOpacity
+          : baseEdgeOpacity * effectEdgeOpacity);
     }
 
     // Occlusion ghost: only a SELECTED part shows its see-through ghost, tinted
