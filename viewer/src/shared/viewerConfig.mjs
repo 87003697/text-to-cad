@@ -1,4 +1,5 @@
 export const DEFAULT_VIEWER_GITHUB_URL = "https://github.com/earthtojake/text-to-cad";
+export const DEFAULT_VIEWER_DISCORD_URL = "https://discord.gg/5FGB9DwJYU";
 export const DEFAULT_VIEWER_SKILLS_INSTALL_COMMAND = "npx skills install earthtojake/text-to-cad";
 
 export function normalizeViewerDefaultFile(value = "") {
@@ -7,7 +8,11 @@ export function normalizeViewerDefaultFile(value = "") {
 }
 
 export function normalizeViewerGithubUrl(value = "", fallback = DEFAULT_VIEWER_GITHUB_URL) {
-  return normalizeViewerGithubUrlCandidate(value) || normalizeViewerGithubUrlCandidate(fallback);
+  return normalizeHttpUrlCandidate(value) || normalizeHttpUrlCandidate(fallback);
+}
+
+export function normalizeViewerDiscordUrl(value = "", fallback = DEFAULT_VIEWER_DISCORD_URL) {
+  return normalizeHttpUrlCandidate(value) || normalizeHttpUrlCandidate(fallback);
 }
 
 export function viewerGithubRepositoryUrl(value = "", fallback = DEFAULT_VIEWER_GITHUB_URL) {
@@ -116,7 +121,7 @@ export function viewerSkillsInstallCommandFromText(
   return String(fallback || "").trim();
 }
 
-function normalizeViewerGithubUrlCandidate(value = "") {
+function normalizeHttpUrlCandidate(value = "") {
   const rawValue = String(value ?? "").trim();
   if (!rawValue) {
     return "";

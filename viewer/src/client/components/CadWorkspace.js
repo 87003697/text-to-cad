@@ -83,13 +83,10 @@ import {
   buildSelectionCopyButtonLabel,
   buildSelectionCopyPayload,
   buildWholeStepEntryCopyReference,
-  cadRefQueryHasKnownEntry,
   canonicalCadRefCopyText,
-  collectCadRefSelectionRequest,
   computeNextSelectionIds,
   orderedStringListEqual,
   parseAssemblyPartReferenceSelectionId,
-  resolveCadRefSelection,
   uniqueStringList
 } from "@/workbench/referenceSelection";
 import {
@@ -194,15 +191,12 @@ import {
   missingFileRefForCatalog,
   readCadDirParam,
   readCadParam,
-  readCadRefQueryParams,
-  readNavigationCadRefQueryParams,
   selectedEntryKeyFromUrl,
   sidebarDirectoryIdForEntry,
   sidebarLabelForEntry,
   shouldDeferFileParamSelection,
   writeCadDirParam,
   writeCadParam,
-  writeCadRefQueryParams,
 } from "@/workbench/sidebar";
 import { buildCadRefToken } from "cadjs/lib/cadRefs.js";
 import {
@@ -278,6 +272,7 @@ import {
 import {
   assemblyNodeContainsNode,
   minimalAssemblyIsolationNodeIds,
+  selectedReferenceIdsOutsideFocusedAssemblyNodes,
   selectableViewerNodeIdsForExpandedTree
 } from "@/workbench/assemblyIsolation";
 import {
@@ -1314,7 +1309,6 @@ export default function CadWorkspace({
   const [implicitParameterInteractionActive, setImplicitParameterInteractionActive] = useState(false);
   const implicitParameterInteractionTimerRef = useRef(0);
   const [urdfPosePickerState, setUrdfPosePickerState] = useState(emptyUrdfPosePickerState);
-  const [pendingCadRefQueryParams, setPendingCadRefQueryParams] = useState(() => readCadRefQueryParams());
   const lastPersistenceFailureKeyRef = useRef("");
   const urdfTrajectoryPlaybackRef = useRef({
     frameId: 0,
@@ -3300,8 +3294,6 @@ export default function CadWorkspace({
   const tabToolsResizeStateRef = useRef(null);
   const selectedFileSheetKeyRef = useRef("");
   const cadDirectorySessionBootstrappedRef = useRef(false);
-  const cadRefQueryRescueUsedRef = useRef(false);
-  const cadRefQueryResolvedOnceRef = useRef(false);
 
   useEffect(() => {
     openTabsRef.current = openTabs;
@@ -4360,8 +4352,6 @@ export default function CadWorkspace({
     defaultSidebarWidth: DEFAULT_SIDEBAR_WIDTH,
     sidebarMinWidth: DESKTOP_SIDEBAR_MIN_WIDTH,
     readCadParam,
-    readCadRefQueryParams,
-    setPendingCadRefQueryParams,
     activateEntryTab,
     resetActiveDirectory,
     writeCadParam,
@@ -5111,7 +5101,7 @@ export default function CadWorkspace({
     !hasStepGlbByteCost(selectedEntry) &&
     !selectedMeshMatches
   );
-  const referenceLoadingExplicitlyRequested = pendingCadRefQueryParams.length > 0 || selectedStepPartRootActive;
+  const referenceLoadingExplicitlyRequested = selectedStepPartRootActive;
   const selectedTopologyDeferredByCost = Boolean(
     plainStepReferencePickingEnabled &&
     selectedTopologyLargeByCost &&
@@ -5119,11 +5109,9 @@ export default function CadWorkspace({
     !referenceLoadingExplicitlyRequested
   );
   const topLevelReferenceSelectionActive =
-    pendingCadRefQueryParams.length > 0 ||
     selectedStepPartRootActive ||
     plainStepReferencePickingEnabled;
   const referenceLoadingEnabled =
-    pendingCadRefQueryParams.length > 0 ||
     selectedStepPartRootActive ||
     assemblyStepTreeTopologyLoadingEnabled ||
     (
@@ -5277,12 +5265,25 @@ export default function CadWorkspace({
   const isEdgeReference = useCallback((reference) => (
     String(reference?.selectorType || "").trim() === "edge"
   ), []);
+  const isVertexReference = useCallback((reference) => (
+    String(reference?.selectorType || "").trim() === "vertex"
+  ), []);
+  const isViewerTopologyReference = useCallback((reference) => (
+    isFaceReference(reference) ||
+    isEdgeReference(reference) ||
+    isVertexReference(reference)
+  ), [
+    isEdgeReference,
+    isFaceReference,
+    isVertexReference
+  ]);
   const isStepTopologyReference = useCallback((reference) => {
     const selectorType = String(reference?.selectorType || "").trim();
     return selectorType === "occurrence" ||
       selectorType === "shape" ||
       selectorType === "face" ||
-      selectorType === "edge";
+      selectorType === "edge" ||
+      selectorType === "vertex";
   }, []);
   const referencePartId = useCallback((reference) => {
     const explicitPartId = String(reference?.partId || "").trim();
@@ -5423,6 +5424,31 @@ export default function CadWorkspace({
     }
     return map;
   }, [activeReferenceMap, effectiveVisibleReferences]);
+
+  useEffect(() => {
+    if (!isAssemblyView || !focusedAssemblyNodeIds.length || !selectedReferenceIds.length) {
+      return;
+    }
+    const nextSelectedReferenceIds = selectedReferenceIdsOutsideFocusedAssemblyNodes(
+      selectedReferenceIds,
+      effectiveActiveReferenceMap,
+      focusedAssemblyNodeIds,
+      { referencePartId }
+    );
+    if (orderedStringListEqual(nextSelectedReferenceIds, selectedReferenceIds)) {
+      return;
+    }
+    selectedReferenceIdsRef.current = nextSelectedReferenceIds;
+    setSelectedReferenceIds(nextSelectedReferenceIds);
+    setCopyStatus("");
+  }, [
+    effectiveActiveReferenceMap,
+    focusedAssemblyNodeIds,
+    isAssemblyView,
+    referencePartId,
+    selectedReferenceIds
+  ]);
+
   const renderPartIdsForWholeTopologyReference = useCallback((referenceId) => {
     const normalizedReferenceId = String(referenceId || "").trim();
     if (!normalizedReferenceId) {
@@ -6642,165 +6668,6 @@ export default function CadWorkspace({
     () => buildSelectionCopyButtonLabel(canonicalCopySelectionLines, { count: copySelectionPayload.copiedCount }),
     [canonicalCopySelectionLines, copySelectionPayload.copiedCount]
   );
-  const cadRefQueryParamsForUrlSignature = useMemo(() => (
-    selectedEntry
-      ? uniqueStringList([
-          ...(selectedWholeEntryCadRefToken ? [selectedWholeEntryCadRefToken] : []),
-          ...canonicalCopySelectionLines
-        ]).join("\n")
-      : ""
-  ), [canonicalCopySelectionLines, selectedEntry, selectedWholeEntryCadRefToken]);
-
-  useEffect(() => {
-    if (!pendingCadRefQueryParams.length) {
-      return;
-    }
-
-    if (!selectedEntry) {
-      if (explicitFileParam || !catalogHydrated || catalogRefreshing) {
-        return;
-      }
-      if (!cadRefQueryHasKnownEntry(pendingCadRefQueryParams, catalogEntries)) {
-        setPendingCadRefQueryParams((current) => Array.isArray(current) && current.length ? [] : current);
-      }
-      return;
-    }
-
-    const selectionRequest = collectCadRefSelectionRequest(pendingCadRefQueryParams, selectedEntry);
-    if (!selectionRequest.hasMatchingToken) {
-      if (!cadRefQueryHasKnownEntry(pendingCadRefQueryParams, catalogEntries)) {
-        setPendingCadRefQueryParams((current) => Array.isArray(current) && current.length ? [] : current);
-      }
-      return;
-    }
-
-    if (selectionRequest.needsParts && !assemblyPartsLoaded) {
-      return;
-    }
-    if (selectionRequest.needsMates && !selectedAssemblyStructureReady) {
-      return;
-    }
-    if (selectionRequest.needsReferences && selectedEntryHasReferences && !selectedReferencesMatch) {
-      return;
-    }
-
-    const resolvedSelection = resolveCadRefSelection({
-      cadRefs: pendingCadRefQueryParams,
-      entry: selectedEntry,
-      references: visibleReferences,
-      assemblyParts: assemblyNodes,
-      assemblyMates: selectedAssemblyMates,
-      isAssemblyView
-    });
-
-    if (!orderedStringListEqual(selectedReferenceIdsRef.current, resolvedSelection.selectedReferenceIds)) {
-      selectedReferenceIdsRef.current = resolvedSelection.selectedReferenceIds;
-      setSelectedReferenceIds(resolvedSelection.selectedReferenceIds);
-    }
-    if (!orderedStringListEqual(selectedPartIdsRef.current, resolvedSelection.selectedPartIds)) {
-      selectedPartIdsRef.current = resolvedSelection.selectedPartIds;
-      setSelectedPartIds(resolvedSelection.selectedPartIds);
-    }
-    if (!orderedStringListEqual(selectedMateIdsRef.current, resolvedSelection.selectedMateIds)) {
-      selectedMateIdsRef.current = resolvedSelection.selectedMateIds;
-      setSelectedMateIds(resolvedSelection.selectedMateIds);
-    }
-    setSelectedRenderPartIdByAssemblyPartId((current) => Object.keys(current || {}).length ? {} : current);
-    const nextWholeEntryCadRefToken = resolvedSelection.hasWholeEntryToken
-      ? buildCadRefToken({ cadPath: cadPathForEntry(selectedEntry) })
-      : "";
-    setSelectedWholeEntryCadRefToken((current) => (
-      current === nextWholeEntryCadRefToken ? current : nextWholeEntryCadRefToken
-    ));
-    const resolvedTreeNodeIds = uniqueStringList([
-      ...resolvedSelection.selectedPartIds.flatMap((id) => collectStepTreeAncestorIds(stepTreeRoot, id)),
-      ...resolvedSelection.expandedAssemblyPartIds.flatMap((id) => collectStepTreeAncestorIds(stepTreeRoot, id)),
-      ...resolvedSelection.expandedAssemblyPartIds
-    ]);
-    if (resolvedTreeNodeIds.length) {
-      setExpandedStepTreeNodeIds((current) => uniqueStringList([...current, ...resolvedTreeNodeIds]));
-    }
-    if (resolvedTreeNodeIds.length || resolvedSelection.selectedMateIds.length) {
-      openFileSheetSection(FILE_SHEET_SECTION_IDS.STEP_TREE);
-    }
-    setHoveredListReferenceId((current) => current ? "" : current);
-    setHoveredModelReferenceId((current) => current ? "" : current);
-    setHoveredListPartId((current) => current ? "" : current);
-    setHoveredModelPartId((current) => current ? "" : current);
-    setHoveredMateId((current) => current ? "" : current);
-    setCopyStatus((current) => current ? "" : current);
-    setTabToolMode((current) => current === TAB_TOOL_MODE.REFERENCES ? current : TAB_TOOL_MODE.REFERENCES);
-    setPendingCadRefQueryParams((current) => Array.isArray(current) && current.length ? [] : current);
-  }, [
-    assemblyPartsLoaded,
-    assemblyNodes,
-    assemblyRootNodeId,
-    catalogEntries,
-    catalogHydrated,
-    catalogRefreshing,
-    explicitFileParam,
-    isAssemblyView,
-    openFileSheetSection,
-    pendingCadRefQueryParams,
-    selectedEntry,
-    selectedEntryHasReferences,
-    selectedAssemblyMates,
-    selectedAssemblyStructureReady,
-    selectedReferencesMatch,
-    selectedMateIdsRef,
-    selectedReferenceIdsRef,
-    selectedPartIdsRef,
-    stepTreeRoot,
-    visibleReferences
-  ]);
-
-  useEffect(() => {
-    if (!cadDirectorySessionBootstrappedRef.current || pendingCadRefQueryParams.length) {
-      return;
-    }
-    if (cadRefQueryParamsForUrlSignature) {
-      cadRefQueryResolvedOnceRef.current = true;
-      writeCadRefQueryParams(cadRefQueryParamsForUrlSignature.split("\n"));
-      return;
-    }
-    if (!cadRefQueryRescueUsedRef.current && !cadRefQueryParamsForUrlSignature) {
-      const liveCadRefQueryParams = readCadRefQueryParams();
-      const rescuedCadRefQueryParams = liveCadRefQueryParams.length
-        ? liveCadRefQueryParams
-        : readNavigationCadRefQueryParams();
-      if (rescuedCadRefQueryParams.length) {
-        if (selectedEntry) {
-          cadRefQueryRescueUsedRef.current = true;
-          setPendingCadRefQueryParams(rescuedCadRefQueryParams);
-        }
-        return;
-      }
-    }
-    if (!cadRefQueryResolvedOnceRef.current) {
-      const liveCadRefQueryParams = readCadRefQueryParams();
-      const rescuedCadRefQueryParams = liveCadRefQueryParams.length
-        ? liveCadRefQueryParams
-        : readNavigationCadRefQueryParams();
-      if (rescuedCadRefQueryParams.length) {
-        if (selectedEntry) {
-          setPendingCadRefQueryParams((current) => (
-            orderedStringListEqual(current, rescuedCadRefQueryParams) ? current : rescuedCadRefQueryParams
-          ));
-        }
-        return;
-      }
-    }
-    writeCadRefQueryParams([]);
-  }, [
-    cadRefQueryParamsForUrlSignature,
-    selectedEntry,
-    pendingCadRefQueryParams,
-    readCadRefQueryParams,
-    readNavigationCadRefQueryParams,
-    setPendingCadRefQueryParams,
-    cadDirectorySessionBootstrappedRef
-  ]);
-
   const expandStepTreeAroundNode = useCallback((nodeId, {
     expandSelf = false,
     includeVisualOnlyAncestors = true
@@ -6856,7 +6723,7 @@ export default function CadWorkspace({
     const selectedReferencePartId = referencePartId(selectedReference);
     if (
       isAssemblyView &&
-      selectedReferenceType === "shape" &&
+      (selectedReferenceType === "shape" || selectedReferenceType === "occurrence") &&
       selectedReferencePartId &&
       focusedAssemblyNodeIds.includes(selectedReferencePartId)
     ) {
@@ -7214,6 +7081,12 @@ export default function CadWorkspace({
     setSelectedRenderPartIdByAssemblyPartId({});
     setSelectedReferenceIds([]);
     setSelectedMateIds([]);
+    setHoveredListPartId("");
+    setHoveredModelPartId("");
+    setHoveredListReferenceId("");
+    setHoveredModelReferenceId("");
+    setHoveredMateId("");
+    setViewerContextMenu(null);
     setCopyStatus("");
   }, []);
 
@@ -7305,11 +7178,6 @@ export default function CadWorkspace({
 
   const clearAssemblySelection = useCallback(() => {
     clearAssemblySelectionForFocus();
-    setHoveredListPartId("");
-    setHoveredModelPartId("");
-    setHoveredListReferenceId("");
-    setHoveredModelReferenceId("");
-    setHoveredMateId("");
   }, [clearAssemblySelectionForFocus]);
 
   useEffect(() => {
@@ -7581,8 +7449,15 @@ export default function CadWorkspace({
       setHoveredModelPartId("");
       return;
     }
+    const nextReferenceId = String(referenceId || "").trim();
+    const topologyReference = effectiveActiveReferenceMap.get(nextReferenceId) || null;
+    if (topologyReference && isViewerTopologyReference(topologyReference)) {
+      setHoveredModelReferenceId(nextReferenceId);
+      setHoveredModelPartId("");
+      return;
+    }
     if (viewerInAssemblyMode) {
-      const pickedPartId = String(referenceId || "").trim();
+      const pickedPartId = nextReferenceId;
       if (!pickedPartId) {
         setHoveredModelReferenceId("");
         setHoveredModelPartId("");
@@ -7592,9 +7467,14 @@ export default function CadWorkspace({
       setHoveredModelPartId(resolvePickedAssemblyPartId(pickedPartId));
       return;
     }
-    const nextReferenceId = String(referenceId || "").trim();
     setHoveredModelReferenceId(nextReferenceId);
-  }, [viewerInAssemblyMode, resolvePickedAssemblyPartId, stepModuleTreeSelectionDisabled]);
+  }, [
+    effectiveActiveReferenceMap,
+    isViewerTopologyReference,
+    viewerInAssemblyMode,
+    resolvePickedAssemblyPartId,
+    stepModuleTreeSelectionDisabled
+  ]);
 
   const handleModelReferenceActivate = useCallback((referenceId, { multiSelect = false } = {}) => {
     if (stepUpdateInProgress || stepModuleTreeSelectionDisabled) {
@@ -7603,6 +7483,11 @@ export default function CadWorkspace({
     const nextReferenceId = String(referenceId || "").trim();
     if (!nextReferenceId) {
       clearAssemblySelection();
+      return;
+    }
+    const topologyReference = effectiveActiveReferenceMap.get(nextReferenceId) || null;
+    if (topologyReference && isViewerTopologyReference(topologyReference)) {
+      toggleReferenceSelection(nextReferenceId, { multiSelect });
       return;
     }
     if (viewerInAssemblyMode) {
@@ -7622,6 +7507,7 @@ export default function CadWorkspace({
   }, [
     clearAssemblySelection,
     effectiveActiveReferenceMap,
+    isViewerTopologyReference,
     resolvePickedAssemblyPartId,
     stepUpdateInProgress,
     toggleReferenceSelection,
@@ -7643,6 +7529,10 @@ export default function CadWorkspace({
     if (!viewerInAssemblyMode) {
       return;
     }
+    const topologyReference = effectiveActiveReferenceMap.get(pickedPartId) || null;
+    if (topologyReference && isViewerTopologyReference(topologyReference)) {
+      return;
+    }
     const nextPartId = resolvePickedAssemblyPartId(pickedPartId);
     if (nextPartId) {
       focusStepTreeNode(nextPartId);
@@ -7656,6 +7546,8 @@ export default function CadWorkspace({
     clearAssemblySelection,
     focusStepTreeNode,
     handleExitIsolate,
+    effectiveActiveReferenceMap,
+    isViewerTopologyReference,
     viewerInAssemblyMode,
     isAssemblyView,
     resolvePickedAssemblyPartId,
@@ -7717,7 +7609,7 @@ export default function CadWorkspace({
       return;
     }
     const topologyReference = effectiveActiveReferenceMap.get(pickedPartId) || null;
-    if (topologyReference && (isFaceReference(topologyReference) || isEdgeReference(topologyReference))) {
+    if (topologyReference && isViewerTopologyReference(topologyReference)) {
       const selected = selectedReferenceIdsRef.current.includes(pickedPartId);
       const selectedContextReferenceIds = uniqueStringList(
         selectedReferenceIdsRef.current
@@ -7882,8 +7774,7 @@ export default function CadWorkspace({
     effectiveActiveReferenceMap,
     hiddenPartIds,
     isAssemblyView,
-    isEdgeReference,
-    isFaceReference,
+    isViewerTopologyReference,
     loadableStepTreeTopologyNodeIds,
     renderPartIdsForAssemblySelection,
     openGlobalViewerContextMenu,

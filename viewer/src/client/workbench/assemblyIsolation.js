@@ -105,10 +105,39 @@ export function selectableViewerNodeIdsForIsolation(root, isolatedNodeIds, rootI
   return assemblyIsolationLayerNodeIds(root, isolatedNodeIds, rootId);
 }
 
+export function selectedReferenceIdsOutsideFocusedAssemblyNodes(referenceIds, referenceMap, focusedNodeIds, {
+  referencePartId = null
+} = {}) {
+  const focused = new Set(
+    (Array.isArray(focusedNodeIds) ? focusedNodeIds : [focusedNodeIds])
+      .map((id) => String(id || "").trim())
+      .filter(Boolean)
+  );
+  if (!focused.size) {
+    return Array.isArray(referenceIds) ? referenceIds : [];
+  }
+  const readReferencePartId = typeof referencePartId === "function"
+    ? referencePartId
+    : (reference) => String(reference?.partId || "").trim();
+  return (Array.isArray(referenceIds) ? referenceIds : [])
+    .map((id) => String(id || "").trim())
+    .filter((id) => {
+      if (!id) {
+        return false;
+      }
+      const reference = referenceMap?.get?.(id) || null;
+      const selectorType = String(reference?.selectorType || "").trim();
+      if (selectorType !== "shape" && selectorType !== "occurrence") {
+        return true;
+      }
+      const partId = String(readReferencePartId(reference) || "").trim();
+      return !partId || !focused.has(partId);
+    });
+}
+
 export function selectableViewerNodeIdsForExpandedTree(root, expandedNodeIds, {
   rootId = "",
-  isolatedNodeIds = [],
-  topologyNodeIds = []
+  isolatedNodeIds = []
 } = {}) {
   if (!root) {
     return [];
@@ -116,11 +145,6 @@ export function selectableViewerNodeIdsForExpandedTree(root, expandedNodeIds, {
   const normalizedRootId = String(rootId || root?.id || "").trim();
   const expanded = new Set(
     (Array.isArray(expandedNodeIds) ? expandedNodeIds : [expandedNodeIds])
-      .map((id) => String(id || "").trim())
-      .filter(Boolean)
-  );
-  const topologyNodes = new Set(
-    (Array.isArray(topologyNodeIds) ? topologyNodeIds : [topologyNodeIds])
       .map((id) => String(id || "").trim())
       .filter(Boolean)
   );
@@ -153,9 +177,6 @@ export function selectableViewerNodeIdsForExpandedTree(root, expandedNodeIds, {
       for (const child of children) {
         visit(child);
       }
-      return;
-    }
-    if (expandedNode && topologyNodes.has(nodeId)) {
       return;
     }
     addSelectable(nodeId);

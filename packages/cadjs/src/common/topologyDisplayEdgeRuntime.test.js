@@ -19,6 +19,15 @@ const TRANSLATE_2_3_4 = Object.freeze({
   ]
 });
 
+const TRANSLATE_3_4_5 = Object.freeze({
+  elements: [
+    1, 0, 0, 0,
+    0, 1, 0, 0,
+    0, 0, 1, 0,
+    3, 4, 5, 1
+  ]
+});
+
 function displayEdgeRuntime() {
   return {
     edges: [{ occurrenceId: "part-a" }],
@@ -64,6 +73,37 @@ test("resolveTopologyDisplayEdgeRuntimes prefers transformed display edges", () 
   assert.equal(resolved.topologyRuntime, resolved.displayEdgeRuntime);
   assert.notEqual(resolved.displayEdgeRuntime, baseRuntime);
   assert.deepEqual([...resolved.displayEdgeRuntime.proxy.edgePositions], [2, 3, 4, 3, 3, 4]);
+});
+
+test("resolveTopologyDisplayEdgeRuntimes reuses stable transformed runtimes", () => {
+  const baseDisplayRuntime = displayEdgeRuntime();
+  const baseSelectorRuntime = {
+    edges: [{ occurrenceId: "part-a" }],
+    proxy: {}
+  };
+  const first = resolveTopologyDisplayEdgeRuntimes({
+    displayEdgeRuntime: baseDisplayRuntime,
+    selectorRuntime: baseSelectorRuntime,
+    displayRecords: [{ partId: "part-a", effectMatrix: TRANSLATE_2_3_4 }]
+  });
+  const second = resolveTopologyDisplayEdgeRuntimes({
+    displayEdgeRuntime: baseDisplayRuntime,
+    selectorRuntime: baseSelectorRuntime,
+    displayRecords: [{
+      partId: "part-a",
+      effectMatrix: { elements: [...TRANSLATE_2_3_4.elements] }
+    }]
+  });
+  const changed = resolveTopologyDisplayEdgeRuntimes({
+    displayEdgeRuntime: baseDisplayRuntime,
+    selectorRuntime: baseSelectorRuntime,
+    displayRecords: [{ partId: "part-a", effectMatrix: TRANSLATE_3_4_5 }]
+  });
+
+  assert.equal(second.transformedSelectorRuntime, first.transformedSelectorRuntime);
+  assert.equal(second.transformedDisplayEdgeRuntime, first.transformedDisplayEdgeRuntime);
+  assert.notEqual(changed.transformedSelectorRuntime, first.transformedSelectorRuntime);
+  assert.notEqual(changed.transformedDisplayEdgeRuntime, first.transformedDisplayEdgeRuntime);
 });
 
 test("resolveTopologyDisplayEdgeRuntimes can skip transformed display edges for record-driven overlays", () => {

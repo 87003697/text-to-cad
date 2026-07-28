@@ -1,4 +1,3 @@
-import { buildCadRefToken, parseCadRefToken } from "cadjs/lib/cadRefs.js";
 import {
   readStoredActiveCadDir,
   rememberActiveCadDir
@@ -7,7 +6,6 @@ import { normalizeViewerDefaultFile } from "../../shared/viewerConfig.mjs";
 
 const CAD_DIR_QUERY_PARAM = "dir";
 const CAD_QUERY_PARAM = "file";
-const CAD_REF_QUERY_PARAM = "refs";
 
 export function fileKey(entry) {
   return String(entry?.file || "").trim();
@@ -87,43 +85,6 @@ export function readDefaultCadParam() {
   return normalizeViewerDefaultFile(import.meta.env?.VIEWER_DEFAULT_FILE) || null;
 }
 
-export function normalizeCadRefQueryParams(values) {
-  const sourceValues = Array.isArray(values) ? values : [values];
-  const seenTokens = new Set();
-  const tokens = [];
-
-  for (const sourceValue of sourceValues) {
-    const lines = String(sourceValue || "").split(/\r?\n/);
-    for (const line of lines) {
-      const normalizedLine = String(line || "").trim();
-      const parsedToken = parseCadRefToken(normalizedLine) ||
-        (normalizedLine && !normalizedLine.startsWith("#")
-          ? parseCadRefToken(`#${normalizedLine}`)
-          : null);
-      const token = String(
-        parsedToken
-          ? buildCadRefToken({ selectors: parsedToken.selectors })
-          : ""
-      ).trim();
-      if (!token || seenTokens.has(token)) {
-        continue;
-      }
-      seenTokens.add(token);
-      tokens.push(token);
-    }
-  }
-
-  return tokens;
-}
-
-function cadRefQueryValueFromToken(token) {
-  const parsedToken = parseCadRefToken(token);
-  if (!parsedToken) {
-    return "";
-  }
-  return parsedToken.selectors.length ? parsedToken.selectors.join(",") : parsedToken.token;
-}
-
 export function readCadParam() {
   if (typeof window === "undefined") {
     return null;
@@ -146,38 +107,6 @@ export function readCadDirParam() {
     ? String(value).trim()
     : "";
   return normalizedValue || null;
-}
-
-export function readCadRefQueryParams() {
-  if (typeof window === "undefined") {
-    return [];
-  }
-  const params = new URLSearchParams(window.location.search);
-  return normalizeCadRefQueryParams(params.getAll(CAD_REF_QUERY_PARAM));
-}
-
-export function cadRefQueryParamsFromUrl(urlValue, baseUrl = "") {
-  const normalizedUrl = String(urlValue || "").trim();
-  if (!normalizedUrl) {
-    return [];
-  }
-  try {
-    const url = new URL(normalizedUrl, baseUrl || "http://localhost/");
-    return normalizeCadRefQueryParams(url.searchParams.getAll(CAD_REF_QUERY_PARAM));
-  } catch {
-    return [];
-  }
-}
-
-export function readNavigationCadRefQueryParams() {
-  if (typeof window === "undefined") {
-    return [];
-  }
-  const entries = typeof window.performance?.getEntriesByType === "function"
-    ? window.performance.getEntriesByType("navigation")
-    : [];
-  const navigationUrl = String(entries?.[0]?.name || "").trim();
-  return cadRefQueryParamsFromUrl(navigationUrl, window.location.href);
 }
 
 export function findEntryByUrlPath(entries, urlPath) {
@@ -225,20 +154,14 @@ export function missingFileRefForCatalog({
   return normalizedFileParam;
 }
 
-export function findEntryByCadRefParams(entries, cadRefs = readCadRefQueryParams()) {
-  void entries;
-  void cadRefs;
-  return null;
-}
-
-export function selectedEntryKeyFromUrl(entries, { cadRefs = readCadRefQueryParams(), defaultFile = readDefaultCadParam() } = {}) {
+export function selectedEntryKeyFromUrl(entries, { defaultFile = readDefaultCadParam() } = {}) {
   const explicitFilePath = readCadParam();
   if (explicitFilePath) {
     const match = findEntryByUrlPath(entries, explicitFilePath);
     return match ? fileKey(match) : "";
   }
 
-  const match = findEntryByCadRefParams(entries, cadRefs) || findEntryByUrlPath(entries, normalizeCadFileQueryParam(defaultFile));
+  const match = findEntryByUrlPath(entries, normalizeCadFileQueryParam(defaultFile));
   return match ? fileKey(match) : "";
 }
 
@@ -248,6 +171,7 @@ export function writeCadParam(urlPath, { history = "replace" } = {}) {
   }
   const normalizedUrlPath = normalizeCadFileQueryParam(urlPath);
   const url = new URL(window.location.href);
+  url.searchParams.delete("refs");
   if (normalizedUrlPath) {
     url.searchParams.set(CAD_QUERY_PARAM, normalizedUrlPath);
     if (url.searchParams.has(CAD_DIR_QUERY_PARAM)) {
@@ -270,6 +194,7 @@ export function writeCadDirParam(dirPath, { history = "replace", preserveFile = 
   }
   const normalizedDirPath = String(dirPath || "").trim();
   const url = new URL(window.location.href);
+  url.searchParams.delete("refs");
   if (!preserveFile) {
     url.searchParams.delete(CAD_QUERY_PARAM);
   }
@@ -280,21 +205,6 @@ export function writeCadDirParam(dirPath, { history = "replace", preserveFile = 
     url.searchParams.delete(CAD_DIR_QUERY_PARAM);
   }
   return writeUrl(url, { history });
-}
-
-export function writeCadRefQueryParams(cadRefs) {
-  if (typeof window === "undefined") {
-    return;
-  }
-  const url = new URL(window.location.href);
-  url.searchParams.delete(CAD_REF_QUERY_PARAM);
-  for (const token of Array.isArray(cadRefs) ? cadRefs : [cadRefs]) {
-    const queryValue = cadRefQueryValueFromToken(token);
-    if (queryValue) {
-      url.searchParams.append(CAD_REF_QUERY_PARAM, queryValue);
-    }
-  }
-  writeUrl(url);
 }
 
 function compareSidebarLabels(a, b) {

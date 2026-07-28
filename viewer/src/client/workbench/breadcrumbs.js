@@ -15,6 +15,13 @@ export function collapsedBreadcrumbNodes(nodes) {
   ];
 }
 
+export function ellipsisBreadcrumbMenuDirectory(node) {
+  if (node?.type === "directory") {
+    return node?.directory || node?.menuDirectory || null;
+  }
+  return node?.menuDirectory || null;
+}
+
 export function directoryTitle(directory) {
   return String(directory?.id || directory?.name || "Directory");
 }
