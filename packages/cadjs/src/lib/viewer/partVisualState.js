@@ -6,6 +6,12 @@ import {
 import { REFERENCE_SELECTED_COLOR } from "./referenceGeometry.js";
 import { BASE_VIEWER_THEME } from "./stageTheme.js";
 import { readSourceColor } from "./surfaceMaterials.js";
+import {
+  PART_HOVER_HIGHLIGHT_BLEND,
+  PART_SELECTED_HIGHLIGHT_BLEND,
+  partHighlightSurfaceColor,
+  syncPartOcclusionGhost
+} from "./partHighlight.js";
 
 const CAD_EDGE_OPACITY = 0.84;
 const PART_HIGHLIGHT_SURFACE_RENDER_ORDER = 23;
@@ -224,6 +230,21 @@ export function applyPartVisualState(THREE, records, {
     const isDimmed = !isHidden && !effectHidden && hasFocus && !isFocused;
     const isHighlighted = isSelected || isHovered;
 
+    // Blend the surface toward the highlight color instead of replacing it, so
+    // the part stays recognizable while still reading as selected. Edges and
+    // emissive keep the full highlight color — those are the cues that must not
+    // depend on the part's own hue.
+    const highlightSurface = isSelected
+      ? partHighlightSurfaceColor(THREE, record.baseColor, selectedSurfaceColor, PART_SELECTED_HIGHLIGHT_BLEND)
+      : isHovered
+        ? partHighlightSurfaceColor(THREE, record.baseColor, hoveredSurfaceColor, PART_HOVER_HIGHLIGHT_BLEND)
+        : null;
+    const highlightEdge = isSelected
+      ? selectedEdgeColor
+      : isHovered
+        ? hoveredEdgeColor
+        : null;
+
     record.mesh.visible = !effectHidden && !isHidden;
     if (record.edges) {
       record.edges.visible = showEdges && !effectHidden && !isHidden;
@@ -307,5 +328,13 @@ export function applyPartVisualState(THREE, records, {
             ? nextSurfaceOpacity
             : baseEdgeOpacity * effectEdgeOpacity);
     }
+
+    // Occlusion ghost: only a SELECTED part shows its see-through ghost, tinted
+    // to the full selection color so it reads as "this is behind something"
+    // while the visible surface keeps its blended own-color highlight.
+    syncPartOcclusionGhost(THREE, record, {
+      visible: isSelected && !isHidden && !effectHidden,
+      color: selectedSurfaceColor
+    });
   }
 }

@@ -30,6 +30,12 @@ import {
 } from "./displayRecordTransform.js";
 import { axisIndex, normalizeStepClipSettings } from "../lib/viewer/clipPlane.js";
 import {
+  PART_HOVER_HIGHLIGHT_BLEND,
+  PART_SELECTED_HIGHLIGHT_BLEND,
+  partHighlightSurfaceColor,
+  syncPartOcclusionGhost
+} from "../lib/viewer/partHighlight.js";
+import {
   clampSceneModelRadius,
   getSceneScaleSettings,
   normalizeSceneScaleMode,
@@ -1271,14 +1277,18 @@ export function applyPartVisualState(THREE, records, {
     });
     record.material.opacity = nextSurfaceOpacity;
 
+    // Blend the surface toward the highlight color instead of replacing it, so
+    // the part stays recognizable while still reading as selected. Edges and
+    // emissive keep the full highlight color below — those are the cues that
+    // must not depend on the part's own hue.
+    const highlightSurface = isSelected
+      ? partHighlightSurfaceColor(THREE, record.baseColor, selectedSurfaceColor, PART_SELECTED_HIGHLIGHT_BLEND)
+      : isHovered
+        ? partHighlightSurfaceColor(THREE, record.baseColor, hoveredSurfaceColor, PART_HOVER_HIGHLIGHT_BLEND)
+        : null;
+
     if (record.baseColor && record.material.color) {
-      record.material.color.copy(
-        isSelected
-          ? selectedSurfaceColor
-          : isHovered
-            ? hoveredSurfaceColor
-            : effectColor || record.baseColor
-      );
+      record.material.color.copy(highlightSurface || effectColor || record.baseColor);
     }
 
     if ("emissive" in record.material && record.material.emissive) {
@@ -1320,6 +1330,11 @@ export function applyPartVisualState(THREE, records, {
             ? nextSurfaceOpacity
             : baseEdgeOpacity * effectEdgeOpacity);
     }
+
+    syncPartOcclusionGhost(THREE, record, {
+      visible: isSelected && !isHidden && !effectHidden,
+      color: selectedSurfaceColor
+    });
   }
 }
 
@@ -1599,6 +1614,7 @@ function syncClip(runtime, clip, bounds, modelOffset = null) {
     syncMaterialClipPlanes(record.material, clipPlanes);
     syncMaterialClipPlanes(record.edgeMaterial, clipPlanes);
     syncMaterialClipPlanes(record.silhouette?.material, clipPlanes);
+    syncMaterialClipPlanes(record.ghostMaterial, clipPlanes);
   }
 }
 
@@ -1836,6 +1852,12 @@ function buildDisplayRecords(THREE, runtime, meshData, settings) {
       partId,
       sourcePart: part || null,
       mesh,
+      // Occlusion ghost: a dithered copy of this part that renders ONLY where
+      // the part is hidden behind other geometry, so a selected feature can be
+      // seen through whatever blocks it. Attached lazily on first selection by
+      // syncPartOcclusionGhost (see lib/viewer/partHighlight.js).
+      ghostMesh: null,
+      ghostMaterial: null,
       edges: null,
       silhouette: null,
       material,
