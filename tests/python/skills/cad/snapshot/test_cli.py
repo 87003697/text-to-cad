@@ -8,6 +8,7 @@ import tempfile
 import unittest
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
+from unittest import mock
 from urllib.parse import parse_qs, urlparse
 
 from tests.python.support.paths import add_repo_path, repo_path
@@ -368,22 +369,19 @@ class SnapshotCliTests(unittest.TestCase):
             asset = root / "model.step"
             asset.write_text("ISO-10303-21;\nEND-ISO-10303-21;\n", encoding="utf-8")
 
-            denied = str(asset.resolve())
+            # Resolve up front: on Python 3.12 Path.resolve() calls Path.stat()
+            # internally, so resolving inside the patch would recurse forever.
+            resolved_asset = asset.resolve()
             original_stat = Path.stat
 
             def denying_stat(self, *args, **kwargs):
-                # No Path operations in here: Path.resolve() calls stat() on some
-                # platforms, which would re-enter this patch recursively.
-                if str(self) == denied:
-                    raise PermissionError(13, "stat denied", denied)
+                if self == resolved_asset:
+                    raise PermissionError(13, "stat denied", str(self))
                 return original_stat(self, *args, **kwargs)
 
-            try:
-                Path.stat = denying_stat
+            with mock.patch.object(Path, "stat", denying_stat):
                 with self.assertRaises(PermissionError):
                     snapshot_main.asset_url_for_path(asset, root)
-            finally:
-                Path.stat = original_stat
 
     def test_render_job_ensures_step_artifact_for_step_input(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
