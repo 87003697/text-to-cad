@@ -15,38 +15,45 @@ live review links. The expected input is one or more explicit file paths.
 
 ## Start Viewer
 
-Start or reuse one local CAD Viewer with `npm run agent:start`, passing the
-absolute artifact directory as `--dir`. The `agent:start` launcher owns port
-selection, compatible-server reuse, directory activation, and the `?dir=` query
-parameter. Dev-mode viewers are reused only for matching git identities; dist
-bundle viewers can be reused across git branches when their viewer versions
-match. It activates reused servers through the Viewer's lightweight directory
-activation API, without requiring agents to probe ports or trigger catalog
-scans manually. Use the Viewer URL printed by `agent:start` as-is, then add only
-a `file=` query value for the artifact you want to review.
+Use one local CAD Viewer per machine and serve every directory through `?dir=`.
+The Viewer advertises `dynamic-root`, so a single server answers for any
+absolute directory; you never need a second server just to change directories.
 
-Choose `--dir` as the absolute directory that contains the model
-artifacts and sidecars, commonly `<repo>/models` or the consuming project's
-equivalent model directory. The `file=` value must be relative to that `--dir`.
-Do not manually choose ports, probe servers, rewrite `?dir=`, or start a
-separate Viewer just to change directories.
-
-Run from this skill directory:
+First check whether a reusable Viewer is already running on the default port:
 
 ```bash
-npm --prefix scripts/viewer run agent:start -- --host 127.0.0.1 --dir <absolute-model-root>
+curl -sS -m 2 http://127.0.0.1:4178/__cad/server
 ```
 
-Use the printed Viewer URL and append `file=`:
+Reuse that server when the response is JSON with `"app": "cad-viewer"` and
+`"dynamicRoot": true`. Take its `url` and `port` from the response and skip
+straight to Links. Start your own server instead when the probe fails, or when
+the response's `viewerVersion` differs from the `version` in
+`scripts/viewer/package.json` — a different version is another checkout's
+Viewer, not this skill's runtime.
+
+To start one, run from this skill directory:
 
 ```bash
-http://127.0.0.1:<printed-port>/?dir=/absolute/project/models&file=path/to/model.step
+npm --prefix scripts/viewer run serve -- --host 127.0.0.1 --dir <absolute-model-root> --shutdown-after 12h --json
 ```
 
-If a non-Viewer process or another worktree's Viewer occupies the candidate
-port, the launcher will continue automatically. In sandboxed agent environments,
-local binding or probe failures such as `EPERM` or `EACCES` can be expected;
-rerun the same command with the needed permission/escalation.
+Choose `--dir` as the absolute directory that contains the model artifacts and
+sidecars, commonly `<repo>/models` or the consuming project's equivalent model
+directory. The `file=` value must be relative to that `--dir`.
+
+The server binds `4178` when it is free and scans forward when it is not, so do
+not pick ports by hand or probe for a free one. Read the bound port from the
+`--json` startup line described under Claude Preview rather than assuming
+`4178`, then append `file=`:
+
+```bash
+http://127.0.0.1:<bound-port>/?dir=/absolute/project/models&file=path/to/model.step
+```
+
+In sandboxed agent environments, local binding or probe failures such as `EPERM`
+or `EACCES` can be expected; rerun the same command with the needed
+permission/escalation.
 
 ## Links
 
@@ -59,33 +66,32 @@ rerun the same command with the needed permission/escalation.
 - Start/reuse the Viewer once per absolute directory `--dir`, then append
   `file=<path>` for each requested file. The file path must be relative to
   `--dir`.
-- For directory-only review links, return the URL printed by `agent:start`
+- For directory-only review links, return the started or reused Viewer URL
   without adding `file=`.
 - Do not stop an existing Viewer server unless the user asks.
 - If Viewer startup fails, report the failure and continue with the owning skill's non-GUI validation or artifacts.
 
 ## Claude Preview
 
-The viewer port is dynamic — it is chosen at startup and may differ across
-worktrees. To integrate with the Claude Preview tool, add `--json` to the
-`agent:start` command:
+The viewer port is dynamic — `4178` is only the first candidate, and the server
+scans forward when it is taken. To integrate with the Claude Preview tool, pass
+`--json` when starting the server:
 
 ```bash
-npm --prefix scripts/viewer run agent:start -- --host 127.0.0.1 --dir <absolute-model-root> --json
+npm --prefix scripts/viewer run serve -- --host 127.0.0.1 --dir <absolute-model-root> --shutdown-after 12h --json
 ```
 
-The launcher writes a JSON result line to stdout after the human-readable lines.
+The server writes a JSON result line to stdout after the human-readable lines.
 Parse it by taking the last line of stdout that begins with `{`:
 
 ```json
-{"url":"http://127.0.0.1:<port>/?dir=<absolute-model-root>","port":<port>,"action":"reuse"}
+{"url":"http://127.0.0.1:<port>/?dir=<absolute-model-root>","host":"127.0.0.1","port":<port>,"action":"start"}
 ```
 
-`action` is `"reuse"` when an existing server was reused and is immediately
-ready, or `"start"` when a new server process was spawned and may still be
-initializing. For a `"start"` result, probe `GET /__cad/server` on the base
-URL (e.g. `http://127.0.0.1:<port>/__cad/server`) until it returns HTTP 200
-before passing the `url` value to the Claude Preview tool.
+The line is written once the listener is bound, so `url` is ready to hand to
+the Claude Preview tool without further probing. When you reused an existing
+Viewer from the `/__cad/server` probe instead of starting one, use that
+response's `url` and append `?dir=<absolute-model-root>` yourself.
 
 ## References
 

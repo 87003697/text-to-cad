@@ -1,3 +1,4 @@
+import { DEFAULT_PORT_SCAN_LIMIT } from "./serverListen.mjs";
 import { parseServerLifetimeMs } from "./serverLifetime.mjs";
 
 function requiredValue(argv, index, flag) {
@@ -16,12 +17,22 @@ function parsePort(value, flag) {
   return parsed;
 }
 
+function parseNonNegativeInteger(value, flag) {
+  const parsed = Number.parseInt(String(value ?? ""), 10);
+  if (!Number.isInteger(parsed) || parsed < 0) {
+    throw new Error(`${flag} must be a non-negative integer`);
+  }
+  return parsed;
+}
+
 export function parseServerArgs(argv = []) {
   const options = {
     port: null,
     host: "",
     rootDir: "",
     shutdownAfterMs: null,
+    portScanLimit: DEFAULT_PORT_SCAN_LIMIT,
+    json: false,
     help: false,
   };
   for (let index = 0; index < argv.length; index += 1) {
@@ -72,6 +83,19 @@ export function parseServerArgs(argv = []) {
       index += 1;
       continue;
     }
+    if (arg.startsWith("--port-scan-limit=")) {
+      options.portScanLimit = parseNonNegativeInteger(arg.slice("--port-scan-limit=".length), "--port-scan-limit");
+      continue;
+    }
+    if (arg === "--port-scan-limit") {
+      options.portScanLimit = parseNonNegativeInteger(requiredValue(argv, index, arg), arg);
+      index += 1;
+      continue;
+    }
+    if (arg === "--json") {
+      options.json = true;
+      continue;
+    }
     throw new Error(`Unknown argument: ${arg}`);
   }
   return options;
@@ -81,11 +105,16 @@ export function serverHelpText() {
   return `Usage: node backend/server.mjs [options]
 
 Options:
-  --port <number>    Port to bind. Defaults to 4178.
+  --port <number>    First port to try. Defaults to 4178.
   --host <host>      Host to bind. Defaults to 127.0.0.1.
   --dir <path>       Default local directory root. Defaults to startup directory.
   --shutdown-after <time>
                      Shut down after a duration such as 12h, 30m, or 60000.
+  --port-scan-limit <number>
+                     How many additional ports to try when the requested port
+                     is in use. Defaults to ${DEFAULT_PORT_SCAN_LIMIT}. Pass 0 to fail instead.
+  --json             Print a machine-readable startup line as the last stdout
+                     line, for example {"url":...,"port":...,"action":"start"}.
   -h, --help         Show this help.
 `;
 }
