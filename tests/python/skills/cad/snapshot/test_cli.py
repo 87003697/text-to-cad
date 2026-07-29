@@ -368,11 +368,14 @@ class SnapshotCliTests(unittest.TestCase):
             asset = root / "model.step"
             asset.write_text("ISO-10303-21;\nEND-ISO-10303-21;\n", encoding="utf-8")
 
+            denied = str(asset.resolve())
             original_stat = Path.stat
 
             def denying_stat(self, *args, **kwargs):
-                if self == asset.resolve():
-                    raise PermissionError(13, "stat denied", str(self))
+                # No Path operations in here: Path.resolve() calls stat() on some
+                # platforms, which would re-enter this patch recursively.
+                if str(self) == denied:
+                    raise PermissionError(13, "stat denied", denied)
                 return original_stat(self, *args, **kwargs)
 
             try:
