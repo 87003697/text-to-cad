@@ -114,6 +114,14 @@ ask it to write files under that scratch path. This keeps skill scripts,
 fixtures, generated sidecars, and Viewer links using the same repo-relative
 paths that CI and local checks expect.
 
+Only commit what belongs there. The File Policy section of
+[models/README.md](models/README.md) lists the file types `models/` accepts —
+CAD/robot sources, the 3D and fabrication outputs generated from them, and
+docs — and `tests/python/global/test_models_directory_policy.py` enforces that
+list against tracked files. Review media such as snapshot PNGs and orbit GIFs
+are not model artifacts: render them under `/tmp` and attach them to the pull
+request instead.
+
 ## Source Boundaries
 
 Each skill must be self-contained and independent when it is installed from a
