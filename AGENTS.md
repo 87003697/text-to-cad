@@ -77,8 +77,16 @@ flow, CI/CD-testing and resume options, and local/manual fallbacks.
 - Edit the source reached by the `develop` symlink layout first, then regenerate
   explicit derived outputs when a production-output task requires it.
 - Write all test, sample, permanent, and generated CAD/robot-description
-  artifacts under `models/`, including STEP/STP, STL, GLB, DXF, URDF, SRDF,
-  SDF, and G-code outputs. Do not create ad hoc artifact directories elsewhere.
+  artifacts under `models/`, including STEP/STP, STL, 3MF, GLB, DXF, URDF,
+  SRDF, SDF, and G-code outputs. Do not create ad hoc artifact directories
+  elsewhere.
+- `models/` takes CAD/robot sources, the 3D and fabrication outputs generated
+  from them, and their docs — nothing else. Do not commit review media
+  (snapshot PNGs, orbit GIFs, screen recordings), data or metadata dumps,
+  archives, foreign CAD sources, or runtime debris there; render review images
+  under `/tmp` and attach them to the conversation or PR. The File Policy
+  section of `models/README.md` is the authoritative list, enforced by
+  `tests/python/global/test_models_directory_policy.py`.
 - Reserve `scripts/` for durable repo commands. Do not write temporary,
   one-off, or local-only helper scripts there; use `tmp/` or `/tmp` instead.
 - Development symlinks mark generated or copied paths. If a file is under a

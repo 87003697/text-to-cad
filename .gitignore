@@ -35,5 +35,22 @@ coverage
 *.stp.glb.lock
 tmp/
 
+# Review media rendered next to a fixture. models/ holds CAD/robot sources,
+# generated 3D and fabrication outputs, and docs only; see models/README.md.
+models/**/*.png
+models/**/*.jpg
+models/**/*.jpeg
+models/**/*.gif
+models/**/*.webp
+models/**/*.avif
+models/**/*.bmp
+models/**/*.tif
+models/**/*.tiff
+models/**/*.svg
+models/**/*.mp4
+models/**/*.mov
+models/**/*.webm
+models/**/*.mkv
+
 # Local printer credentials
 /bambu-printers.json
