@@ -8,6 +8,7 @@ import tempfile
 import unittest
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
+from urllib.parse import parse_qs, urlparse
 
 from tests.python.support.paths import add_repo_path, repo_path
 
@@ -302,8 +303,64 @@ class SnapshotCliTests(unittest.TestCase):
         self.assertNotIn("workspaceRoot", job)
         self.assertNotIn("rootDir", job)
         self.assertEqual(job["resolved"]["rootPath"], str(models))
-        self.assertEqual(job["resolved"]["inputUrl"], "/__render_asset/part.step")
-        self.assertEqual(job["resolved"]["glbUrl"], "/__render_asset/.part.step.glb")
+        input_url = urlparse(job["resolved"]["inputUrl"])
+        glb_url = urlparse(job["resolved"]["glbUrl"])
+        self.assertEqual(input_url.path, "/__render_asset/part.step")
+        self.assertEqual(glb_url.path, "/__render_asset/.part.step.glb")
+        self.assertRegex(parse_qs(input_url.query)["v"][0], r"^[0-9a-f]{16}$")
+        self.assertRegex(parse_qs(glb_url.query)["v"][0], r"^[0-9a-f]{16}$")
+
+    def test_multijob_asset_urls_do_not_collide_across_render_roots(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory).resolve()
+            for folder_name in ("first", "second"):
+                folder = root / folder_name
+                folder.mkdir()
+                (folder / "model.step").write_text(
+                    "ISO-10303-21;\nEND-ISO-10303-21;\n",
+                    encoding="utf-8",
+                )
+                (folder / ".model.step.glb").write_bytes(b"glb")
+
+            original_ensure = snapshot_main.ensure_step_topology_artifact
+            try:
+                snapshot_main.ensure_step_topology_artifact = lambda *args, **kwargs: None
+                packet = resolve_render_job_packet(
+                    {
+                        "jobs": [
+                            {
+                                "input": "first/model.step",
+                                "outputs": [{"path": "first.png"}],
+                            },
+                            {
+                                "input": "second/model.step",
+                                "outputs": [{"path": "second.png"}],
+                            },
+                        ]
+                    },
+                    cwd=root,
+                )
+            finally:
+                snapshot_main.ensure_step_topology_artifact = original_ensure
+
+        first_resolved = packet["jobs"][0]["resolved"]
+        second_resolved = packet["jobs"][1]["resolved"]
+        self.assertEqual(
+            urlparse(first_resolved["glbUrl"]).path,
+            urlparse(second_resolved["glbUrl"]).path,
+        )
+        self.assertNotEqual(
+            first_resolved["glbUrl"],
+            second_resolved["glbUrl"],
+        )
+
+    def test_asset_url_unversioned_for_generator_input_without_step_file(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory).resolve()
+            missing_step = root / "model.step"
+            self.assertFalse(missing_step.exists())
+            url = snapshot_main.asset_url_for_path(missing_step, root)
+        self.assertEqual(url, "/__render_asset/model.step")
 
     def test_render_job_ensures_step_artifact_for_step_input(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:

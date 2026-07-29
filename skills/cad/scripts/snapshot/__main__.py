@@ -12,6 +12,7 @@ import time
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from hashlib import sha256
 from pathlib import Path
 from typing import Any
 from urllib.parse import quote, unquote, urlparse
@@ -572,7 +573,25 @@ def encode_path_param(value: str) -> str:
 def asset_url_for_path(file_path: Path, root_path: Path) -> str:
     if not path_is_inside_or_equal(file_path, root_path):
         raise SnapshotError(f"Render asset must be inside the snapshot render root: {file_path}")
-    return f"/__render_asset/{encode_path_param(file_path.resolve().relative_to(root_path.resolve()).as_posix())}"
+    resolved_path = file_path.resolve()
+    relative_path = resolved_path.relative_to(root_path.resolve()).as_posix()
+    base_url = f"/__render_asset/{encode_path_param(relative_path)}"
+    try:
+        file_stat = resolved_path.stat()
+    except OSError:
+        # Same-stem generator inputs resolve to a STEP path that is never written
+        # (the generator runs with skip_step_write=True), so there is nothing to
+        # version; keep the unversioned URL for those.
+        return base_url
+    cache_identity = "\0".join(
+        (
+            str(resolved_path),
+            str(file_stat.st_size),
+            str(file_stat.st_mtime_ns),
+        )
+    )
+    cache_key = sha256(cache_identity.encode("utf-8")).hexdigest()[:16]
+    return f"{base_url}?v={cache_key}"
 
 
 def step_parameter_path_for_step_source(source_path: Path) -> Path:
