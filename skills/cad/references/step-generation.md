@@ -1,18 +1,19 @@
 # STEP generation
 
-Read this file when generating or regenerating STEP/STP artifacts from build123d Python source or from direct STEP/STP targets.
+Read this file when generating or regenerating STEP/STP artifacts from build123d Python source, or when working with imported STEP/STP files.
 
-## Tool
+## Tools
 
-The launcher lives in the CAD skill directory:
+The launchers live in the CAD skill directory:
 
 ```bash
-python scripts/step [--kind {part|assembly}] targets... [flags]
+python scripts/gen targets... [flags]     # build render GLB/topology packages from gen_step() sources
+python scripts/export target [flags]      # write STEP/STL/3MF/GLB files (see supported-exports.md)
 ```
 
-Use explicit target paths only; target paths resolve from the command cwd unless absolute. Do not rely on directory-wide generation.
+`scripts/gen` accepts gen_step() Python generator sources only. Use explicit target paths only; target paths resolve from the command cwd unless absolute. Do not rely on directory-wide generation.
 
-Plain generated Python targets write sibling `.step` outputs. Use `-o`/`--output` only with one plain generated Python target, or use `SOURCE.step.py=OUTPUT.step` positional pairs for per-target custom outputs. Paired output paths resolve from the command cwd and are valid only for generated Python sources, not direct STEP/STP inputs. Do not put output paths in the `gen_step()` return value; the CLI owns output paths.
+Building a generator writes its hidden render package (GLB/topology artifacts) beside the source; it writes no `.step` file by default. A `.step` file is an export: produce it with `scripts/export <name>.step.py --step`, or write it in the same generation run with `scripts/gen <name>.step.py --write-step` (bare `--write-step` writes each target's sibling `<name>.step`; an explicit path requires exactly one target and resolves from the command cwd). Do not put output paths in the `gen_step()` return value; the CLI flags own output paths.
 
 ## Generated vs imported STEP
 
@@ -60,27 +61,28 @@ def gen_step():
 Generated Python targets infer their kind from the source metadata and `gen_step()` return value; pass the source path directly:
 
 ```bash
-python scripts/step path/to/part.step.py
-python scripts/step path/to/part.step.py -o path/to/custom.step
-python scripts/step path/to/a.step.py=out/a.step path/to/b.step.py=out/b.step
-python scripts/step path/to/assembly.step.py
+python scripts/gen path/to/part.step.py
+python scripts/gen path/to/a.step.py path/to/b.step.py
+python scripts/gen path/to/assembly.step.py
 ```
 
-Passing a generated assembly `.step` directly treats it as imported native STEP and loses source-level assembly composition; pass the `.py` assembly source. For generated build123d assemblies, prefer `cadgen.assembly.AssemblyHelper` in the Python source so native labels, named mate frames, and source-level relationships are preserved before STEP export (see `positioning.md`).
+Passing a generated assembly's exported `.step` to a tool treats it as imported native STEP and loses source-level assembly composition; work with the `.py` assembly source. For generated build123d assemblies, prefer `cadgen.assembly.AssemblyHelper` in the Python source so native labels, named mate frames, and source-level relationships are preserved before STEP export (see `positioning.md`).
 
-## Direct STEP/STP imports
+## Imported STEP/STP files
 
-Use a direct STEP/STP target when no generator exists (imported or downloaded STEP) or the user explicitly identifies a STEP/STP file as the target. The GLB/topology artifacts are then generated from the STEP file itself:
+An imported STEP/STP file (downloaded or authored elsewhere, no generator) needs no build command. Its GLB/topology render artifacts are generated on demand from the STEP file itself by the tools that consume them — `scripts/inspect`, `scripts/snapshot`, and the CAD Viewer — and its part/assembly kind is inferred from embedded metadata or the STEP product hierarchy.
+
+To produce STL/3MF/native GLB files from an imported STEP, pass it directly to `scripts/export`; read `supported-exports.md`.
+
+To debug or pre-run the on-demand render-package build itself, `scripts/artifact` runs exactly one build for an imported STEP/STP file (or a generator source) and prints the result payload:
 
 ```bash
-python scripts/step --kind part path/to/imported.step
+python scripts/artifact path/to/imported.step [--kind part|assembly] [--force]
 ```
-
-Direct targets support the same mesh sidecar flags as generator targets; read `supported-exports.md` for STL and 3MF sidecars.
 
 ## Viewer artifacts
 
-Every `scripts/step` run also writes hidden adjacent GLB/topology artifacts as part of the normal build. They power CAD Viewer review, `$cad-viewer` workflows, and `scripts/inspect` refs, and are not optional in the STEP workflow.
+Every `scripts/gen` run writes hidden adjacent GLB/topology artifacts as the build output. They power CAD Viewer review, `$cad-viewer` workflows, and `scripts/inspect` refs, and are not optional in the STEP workflow. Imported STEP/STP files get the same artifacts on demand, per the previous section.
 
 ## After generation
 
@@ -93,12 +95,13 @@ python scripts/inspect refs path/to/model.step --facts --planes --positioning
 
 ## Warm daemon (opt-in)
 
-Every `scripts/step` / `scripts/inspect` / `scripts/snapshot` invocation pays a
-multi-second OCP/build123d import. Set `CADGEN_WARM=1` to route these CLIs
-through a shared warm-process daemon instead:
+Every `scripts/gen` / `scripts/export` / `scripts/artifact` / `scripts/inspect`
+/ `scripts/snapshot` invocation pays a multi-second OCP/build123d import. Set
+`CADGEN_WARM=1` to route these CLIs through a shared warm-process daemon
+instead:
 
 ```bash
-CADGEN_WARM=1 python scripts/step path/to/part.step.py
+CADGEN_WARM=1 python scripts/gen path/to/part.step.py
 ```
 
 - The first warm call spawns the daemon (paying the import cost once) and each

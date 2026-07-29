@@ -361,8 +361,6 @@ class CompoundAssemblyGenerationTests(unittest.TestCase):
                 mock.patch.object(generation, "_existing_topology_artifact_matches_spec_without_scene", return_value=False),
                 mock.patch.object(generation, "_existing_topology_artifact_matches_options", return_value=False),
                 mock.patch.object(generation, "_selector_options_for_part", return_value=generation.SelectorOptions()),
-                mock.patch.object(generation, "mesh_step_scene"),
-                mock.patch.object(generation, "scene_export_shape"),
                 mock.patch.object(generation, "_run_artifact_jobs", return_value={}) as run_jobs,
             ):
                 result = generation._generate_part_outputs(

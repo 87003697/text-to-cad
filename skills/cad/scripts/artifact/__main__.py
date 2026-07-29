@@ -13,7 +13,7 @@ if os.environ.get("CADGEN_WARM") == "1" and not os.environ.get("CADGEN_DAEMON_CH
         sys.path.insert(0, scripts_dir)
     from cadgen_daemon.client import run_via_daemon
 
-    warm_exit = run_via_daemon("step", sys.argv[1:], os.getcwd())
+    warm_exit = run_via_daemon("artifact", sys.argv[1:], os.getcwd())
     if warm_exit is not None:
         raise SystemExit(warm_exit)
 

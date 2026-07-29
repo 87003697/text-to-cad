@@ -4,7 +4,6 @@ from pathlib import Path
 
 from OCP.StlAPI import StlAPI_Writer
 
-from cadgen.render import part_stl_path
 from cadgen._internal.step_scene import (
     LoadedStepScene,
     scene_export_shape,
@@ -19,8 +18,7 @@ def _display_path(path: Path) -> str:
         return resolved.as_posix()
 
 
-def export_part_stl_from_scene(step_path: Path, scene: LoadedStepScene, *, target_path: Path | None = None) -> Path:
-    target_path = target_path or part_stl_path(step_path)
+def export_part_stl_from_scene(step_path: Path, scene: LoadedStepScene, *, target_path: Path) -> Path:
     export_shape_stl(scene_export_shape(scene), target_path)
     return target_path
 
