@@ -4,7 +4,6 @@ import argparse
 import contextlib
 import io
 import importlib.util
-import json
 import math
 import os
 import shutil
@@ -14,30 +13,24 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, replace
-from pathlib import Path, PurePosixPath
+from pathlib import Path
 from typing import Sequence
 
 from cadgen.catalog import (
     CadSource,
-    STEP_SUFFIXES,
     StepImportOptions,
     cad_ref_from_dxf_path,
     cad_ref_from_step_path,
     render_package_dir,
     find_source_by_path,
     iter_cad_sources,
-    normalize_step_color,
     normalize_cad_ref,
     normalize_source_ref,
     source_from_path,
 )
 from cadgen.cli_logging import CliLogger
 from cadgen._internal.file_metadata import text_to_cad_identity_metadata, write_dxf_text_to_cad_metadata
-from cadgen._internal.step_metadata import read_text_to_cad_step_metadata
-from cadgen._internal.glb import (
-    build_step_topology_index_manifest,
-    export_native_glb_from_scene,
-)
+from cadgen._internal.glb import build_step_topology_index_manifest
 from cadgen._internal.glb import read_step_topology_manifest_from_glb
 from cadgen._internal.glb_topology import (
     STEP_EDGE_VISIBILITY_CLASSES,
@@ -63,9 +56,7 @@ from cadgen._internal.source_hash import (
     python_source_hash,
     record_first_party_execution,
 )
-from cadgen._internal.stl import export_part_stl_from_scene
-from cadgen.step_export import build_build123d_step_scene, export_build123d_step_scene
-from cadgen._internal.threemf import export_part_3mf_from_scene
+from cadgen.step_export import build_build123d_step_scene
 from cadgen._internal.step_scene import (
     load_step_scene_cached,
     LoadedStepScene,
@@ -73,11 +64,6 @@ from cadgen._internal.step_scene import (
     SelectorOptions,
     adaptive_mesh_resolution_from_hints,
     adaptive_mesh_resolution_for_scene,
-    load_step_scene,
-    mesh_step_scene,
-    occurrence_selector_id,
-    scene_export_shape,
-    scene_leaf_occurrences,
     step_file_hash,
 )
 
@@ -96,9 +82,6 @@ class EntrySpec:
     script_path: Path | None = None
     generator_metadata: GeneratorMetadata | None = None
     dxf_path: Path | None = None
-    stl_path: Path | None = None
-    three_mf_path: Path | None = None
-    native_glb_path: Path | None = None
     step_export_path: Path | None = None
     dxf_export_path: Path | None = None
     mesh_tolerance: float = DEFAULT_MESH_TOLERANCE
@@ -238,69 +221,11 @@ def _parse_cli_target_specs(
     return specs
 
 
-def _resolve_step_option_output_path(
-    raw_output: str,
-    *,
-    base_step_path: Path,
-    expected_suffixes: tuple[str, ...],
-    field_name: str,
-) -> Path:
-    value = str(raw_output or "").strip()
-    if not value:
-        raise ValueError(f"{field_name} must be a non-empty path")
-    if "\\" in value:
-        raise ValueError(f"{field_name} must use POSIX '/' separators")
-    pure = PurePosixPath(value)
-    if pure.is_absolute() or any(part in {"", "."} for part in pure.parts):
-        raise ValueError(f"{field_name} must be relative")
-    resolved = (base_step_path.resolve().parent / Path(*pure.parts)).resolve()
-    if resolved.suffix.lower() not in expected_suffixes:
-        joined = " or ".join(expected_suffixes)
-        raise ValueError(f"{field_name} must end in {joined}")
-    return resolved
-
-
 def _apply_step_options_to_spec(spec: EntrySpec, step_options: StepImportOptions) -> EntrySpec:
     if not step_options.has_metadata or spec.step_path is None:
         return spec
-    stl_path = spec.stl_path
-    three_mf_path = spec.three_mf_path
-    native_glb_path = spec.native_glb_path
-    step_export_path = spec.step_export_path
-    if step_options.step is not None:
-        step_export_path = _resolve_step_option_output_path(
-            step_options.step,
-            base_step_path=spec.step_path,
-            expected_suffixes=(".step", ".stp"),
-            field_name="step",
-        )
-    if step_options.stl is not None:
-        stl_path = _resolve_step_option_output_path(
-            step_options.stl,
-            base_step_path=spec.step_path,
-            expected_suffixes=(".stl",),
-            field_name="stl",
-        )
-    if step_options.three_mf is not None:
-        three_mf_path = _resolve_step_option_output_path(
-            step_options.three_mf,
-            base_step_path=spec.step_path,
-            expected_suffixes=(".3mf",),
-            field_name="3mf",
-        )
-    if step_options.glb is not None:
-        native_glb_path = _resolve_step_option_output_path(
-            step_options.glb,
-            base_step_path=spec.step_path,
-            expected_suffixes=(".glb",),
-            field_name="glb",
-        )
     return replace(
         spec,
-        stl_path=stl_path,
-        three_mf_path=three_mf_path,
-        native_glb_path=native_glb_path,
-        step_export_path=step_export_path,
         mesh_tolerance=step_options.mesh_tolerance if step_options.mesh_tolerance is not None else spec.mesh_tolerance,
         mesh_angular_tolerance=(
             step_options.mesh_angular_tolerance
@@ -315,17 +240,11 @@ def _apply_step_options_to_spec(spec: EntrySpec, step_options: StepImportOptions
 
 
 def _spec_requests_extra_outputs(spec: EntrySpec) -> bool:
-    """True when the target asks for on-demand outputs beyond the render package
-    (mesh sidecars or a --step export). Explicitly requested outputs must be
-    produced even when the compose is current, so they defeat every no-op and
-    reuse fast path."""
-    return (
-        spec.step_export_path is not None
-        or any(
-            path is not None
-            for path in (spec.stl_path, spec.three_mf_path, spec.native_glb_path)
-        )
-    )
+    """True when the target asks for an on-demand output beyond the render package
+    (`scripts/gen --write-step`). An explicitly requested output must be produced
+    even when the compose is current, so it defeats every no-op and reuse fast
+    path."""
+    return spec.step_export_path is not None
 
 
 def _spec_output_paths(spec: EntrySpec) -> tuple[Path, ...]:
@@ -333,7 +252,7 @@ def _spec_output_paths(spec: EntrySpec) -> tuple[Path, ...]:
     if spec.step_path is not None:
         paths.append(spec.step_path)
         paths.append(render_package_dir(spec.entry_path))
-    for path in (spec.dxf_path, spec.stl_path, spec.three_mf_path, spec.native_glb_path):
+    for path in (spec.dxf_path,):
         if path is not None:
             paths.append(path)
     return tuple(path.resolve() for path in paths)
@@ -407,28 +326,6 @@ def _apply_step_output_overrides(
     return updated_specs
 
 
-def _apply_step_output_override(
-    selected_specs: Sequence[EntrySpec],
-    *,
-    output_path: Path | None,
-    all_specs: Sequence[EntrySpec],
-    tool_name: str,
-) -> list[EntrySpec]:
-    if output_path is None:
-        return list(selected_specs)
-    if len(selected_specs) != 1:
-        raise ValueError(f"{tool_name} --output can only be used with exactly one target")
-    spec = selected_specs[0]
-    if spec.source != "generated":
-        raise ValueError(f"{tool_name} --output can only be used with generated Python targets")
-    return _apply_step_output_overrides(
-        selected_specs,
-        output_paths=[output_path],
-        all_specs=all_specs,
-        tool_name=tool_name,
-    )
-
-
 def _apply_dxf_output_overrides(
     selected_specs: Sequence[EntrySpec],
     *,
@@ -495,11 +392,9 @@ def _resolve_discovery_root(root: Path | str) -> Path:
     return resolved
 
 
-def list_entry_specs(root: Path | None = None, *, validate: bool = True) -> list[EntrySpec]:
+def list_entry_specs(root: Path | None = None) -> list[EntrySpec]:
     root = Path.cwd().resolve() if root is None else root
     specs = [_entry_spec_from_source(source) for source in iter_cad_sources(_resolve_discovery_root(root))]
-    if validate:
-        _validate_part_render_output_paths(specs)
     return sorted(specs, key=lambda spec: spec.source_ref)
 
 
@@ -531,57 +426,12 @@ def _entry_spec_from_source(source: CadSource) -> EntrySpec:
         script_path=script_path,
         generator_metadata=generator_metadata,
         dxf_path=source.dxf_path,
-        stl_path=source.stl_path,
-        three_mf_path=source.three_mf_path,
-        native_glb_path=source.native_glb_path,
         mesh_tolerance=mesh_settings.tolerance,
         mesh_angular_tolerance=mesh_settings.angular_tolerance,
         mesh_tolerance_explicit=source.mesh_tolerance is not None,
         mesh_angular_tolerance_explicit=source.mesh_angular_tolerance is not None,
         color=source.color,
     )
-
-
-def _validate_part_render_output_paths(specs: Sequence[EntrySpec]) -> None:
-    sources_by_stl_path: dict[Path, str] = {}
-    sources_by_3mf_path: dict[Path, str] = {}
-    sources_by_native_glb_path: dict[Path, str] = {}
-    for spec in specs:
-        if spec.kind not in {"part", "assembly"} or spec.step_path is None:
-            continue
-        if spec.stl_path is not None:
-            stl_path = spec.stl_path.resolve()
-            existing_source_ref = sources_by_stl_path.get(stl_path)
-            if existing_source_ref is not None and existing_source_ref != spec.source_ref:
-                raise ValueError(
-                    "STL output collision between "
-                    f"{existing_source_ref} and {spec.source_ref}: {_display_path(stl_path)}"
-                )
-            sources_by_stl_path[stl_path] = spec.source_ref
-        if spec.three_mf_path is not None:
-            three_mf_path = spec.three_mf_path.resolve()
-            existing_source_ref = sources_by_3mf_path.get(three_mf_path)
-            if existing_source_ref is not None and existing_source_ref != spec.source_ref:
-                raise ValueError(
-                    "3MF output collision between "
-                    f"{existing_source_ref} and {spec.source_ref}: {_display_path(three_mf_path)}"
-                )
-            sources_by_3mf_path[three_mf_path] = spec.source_ref
-        if spec.native_glb_path is not None:
-            native_glb_path = spec.native_glb_path.resolve()
-            package_dir = render_package_dir(spec.entry_path).resolve()
-            if native_glb_path == package_dir:
-                raise ValueError(
-                    "Native GLB output would overwrite the render package for "
-                    f"{spec.source_ref}: {_display_path(native_glb_path)}"
-                )
-            existing_source_ref = sources_by_native_glb_path.get(native_glb_path)
-            if existing_source_ref is not None and existing_source_ref != spec.source_ref:
-                raise ValueError(
-                    "Native GLB output collision between "
-                    f"{existing_source_ref} and {spec.source_ref}: {_display_path(native_glb_path)}"
-                )
-            sources_by_native_glb_path[native_glb_path] = spec.source_ref
 
 
 def selected_entry_specs(all_specs: Sequence[EntrySpec], source_refs: Sequence[str]) -> list[EntrySpec]:
@@ -1136,14 +986,6 @@ def _ensure_step_ready(step_path: Path) -> None:
         )
 
 
-def _read_json_payload(path: Path) -> dict[str, object] | None:
-    try:
-        payload = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return None
-    return payload if isinstance(payload, dict) else None
-
-
 @dataclass(frozen=True)
 class _ArtifactJob:
     name: str
@@ -1524,60 +1366,9 @@ def _generate_part_outputs(
         logger.debug(f"reused current GLB/topology: {_display_path(render_package_dir(spec.entry_path))}")
         return GeneratedStepResult(spec=spec, scene=scene)
 
-    # The whole-scene mesh is consumed ONLY by the single-file mesh sidecars
-    # (STL/3MF/native GLB). The render package meshes exactly the components it
-    # builds — build_component_glb_from_shape tessellates each MISSING component
-    # in its local frame, and a present <cid>.glb is reused without meshing —
-    # so a source edit re-tessellates only changed geometry instead of paying a
-    # full-scene mesh (plus a second per-component pass) on every build. The
-    # --step export serializes B-rep and needs no triangulation either.
-    needs_scene_mesh = any(
-        path is not None
-        for path in (spec.stl_path, spec.three_mf_path, spec.native_glb_path)
-    )
-    if needs_scene_mesh:
-        with logger.timed(f"mesh STEP {spec.cad_ref}"):
-            mesh_step_scene(
-                scene,
-                linear_deflection=selector_options.linear_deflection,
-                angular_deflection=selector_options.angular_deflection,
-                relative=selector_options.relative,
-            )
-            scene_export_shape(scene)
-
     jobs: list[_ArtifactJob] = []
 
     artifact_results: dict[str, object] = {}
-
-    # Per-occurrence colors for the single-file mesh sidecars (STL/3MF/native GLB) live
-    # directly on each child Compound (shape-only generators set them there), so the
-    # exporters harvest colors from the meshed scene — no occurrence-colors map needed.
-    if spec.stl_path is not None:
-        def stl_sidecar_job() -> Path:
-            return export_part_stl_from_scene(spec.step_path, scene, target_path=spec.stl_path)
-
-        jobs.append(_ArtifactJob("STL", stl_sidecar_job))
-
-    if spec.three_mf_path is not None:
-        def three_mf_sidecar_job() -> Path:
-            return export_part_3mf_from_scene(
-                spec.step_path, scene, target_path=spec.three_mf_path, color=spec.color
-            )
-
-        jobs.append(_ArtifactJob("3MF", three_mf_sidecar_job))
-
-    if spec.native_glb_path is not None:
-        def native_glb_sidecar_job() -> Path:
-            return export_native_glb_from_scene(
-                spec.step_path,
-                scene,
-                target_path=spec.native_glb_path,
-                linear_deflection=selector_options.linear_deflection,
-                angular_deflection=selector_options.angular_deflection,
-                color=spec.color,
-            )
-
-        jobs.append(_ArtifactJob("native GLB", native_glb_sidecar_job))
 
     if spec.step_export_path is not None:
         def step_export_job() -> Path:
@@ -1726,7 +1517,6 @@ def _generate_step_outputs_for_cli(
 def _selected_specs_for_targets(
     targets: Sequence[str],
     *,
-    direct_step_kind: str = "part",
     step_options: StepImportOptions | None = None,
     expected_output_suffixes: tuple[str, ...] | None = None,
     tool_name: str = "CAD",
@@ -1750,11 +1540,7 @@ def _selected_specs_for_targets(
         target_path = Path(target_text)
         resolved = target_path.resolve() if target_path.is_absolute() else (Path.cwd() / target_path).resolve()
         source = (
-            source_from_path(
-                resolved,
-                step_kind=direct_step_kind,
-                step_options=step_options,
-            )
+            source_from_path(resolved, step_options=step_options)
             if resolved.exists()
             else None
         )
@@ -1792,24 +1578,7 @@ def _entries_by_step_path(specs: Sequence[EntrySpec]) -> dict[Path, EntrySpec]:
     }
 
 
-def _refreshed_selected_specs(selected_specs: Sequence[EntrySpec]) -> list[EntrySpec]:
-    refreshed: list[EntrySpec] = []
-    for spec in selected_specs:
-        if spec.source == "imported":
-            refreshed.append(spec)
-            continue
-        source_path = spec.script_path or spec.source_path
-        source = source_from_path(source_path) if source_path is not None and source_path.exists() else None
-        refreshed.append(_entry_spec_from_source(source) if source is not None else spec)
-    return refreshed
-
-
-def _validate_step_target(
-    spec: EntrySpec,
-    *,
-    direct_step_kind: str | None,
-    tool_name: str,
-) -> None:
+def _validate_step_target(spec: EntrySpec, *, tool_name: str) -> None:
     if spec.step_path is None:
         raise ValueError(f"{tool_name} target has no STEP path: {spec.source_ref}")
     if spec.source == "generated":
@@ -1817,23 +1586,10 @@ def _validate_step_target(
         if metadata is None or not metadata.has_gen_step:
             raise ValueError(f"{tool_name} target does not define gen_step(): {spec.source_ref}")
         return
-    if direct_step_kind is None:
-        raise ValueError(
-            f"{tool_name} requires an explicit direct_step_kind for direct STEP/STP targets: {spec.source_ref}"
-        )
-
-
-def _existing_direct_step_targets(targets: Sequence[str]) -> list[str]:
-    direct_targets: list[str] = []
-    for target in targets:
-        target_text = str(target or "").strip()
-        if "=" in target_text:
-            target_text = target_text.split("=", 1)[0].strip()
-        target_path = Path(target_text)
-        resolved = target_path.resolve() if target_path.is_absolute() else (Path.cwd() / target_path).resolve()
-        if resolved.exists() and resolved.suffix.lower() in STEP_SUFFIXES:
-            direct_targets.append(target_text)
-    return direct_targets
+    raise ValueError(
+        f"{tool_name} builds gen_step() Python sources only: {spec.source_ref}. "
+        "Imported STEP/STP files get render artifacts on demand (inspect, snapshot, CAD Viewer)."
+    )
 
 
 def _validate_dxf_target(spec: EntrySpec) -> None:
@@ -2173,42 +1929,21 @@ def _rebuild_stale_assembly_children(
 def generate_step_targets(
     targets: Sequence[str],
     *,
-    direct_step_kind: str | None = None,
     step_options: StepImportOptions | None = None,
-    output: str | Path | None = None,
     force: bool = False,
     verbose: bool = False,
 ) -> int:
     tool_name = "scripts/gen"
-    if direct_step_kind is not None and direct_step_kind not in {"part", "assembly"}:
-        raise ValueError(f"{tool_name} direct_step_kind must be 'part' or 'assembly'")
-    if direct_step_kind is None:
-        direct_targets = _existing_direct_step_targets(targets)
-        if direct_targets:
-            joined = ", ".join(direct_targets)
-            raise ValueError(
-                f"{tool_name} requires an explicit direct_step_kind for direct STEP/STP targets: {joined}"
-            )
     logger = CliLogger("scripts/gen", verbose=verbose)
-    if output is not None and targets_include_output_pairs(targets):
-        raise ValueError(f"{tool_name} --output cannot be combined with SOURCE=OUTPUT targets")
-    output_path = _resolve_cli_output_path(output, expected_suffixes=(".step",), tool_name=tool_name)
     all_specs, selected_specs, target_output_paths = _selected_specs_for_targets(
         targets,
-        direct_step_kind=direct_step_kind or "part",
         step_options=step_options,
         expected_output_suffixes=(".step",),
         tool_name=tool_name,
         include_output_paths=True,
     )
     for spec in selected_specs:
-        _validate_step_target(spec, direct_step_kind=direct_step_kind, tool_name=tool_name)
-    selected_specs = _apply_step_output_override(
-        selected_specs,
-        output_path=output_path,
-        all_specs=all_specs,
-        tool_name=tool_name,
-    )
+        _validate_step_target(spec, tool_name=tool_name)
     selected_specs = _apply_step_output_overrides(
         selected_specs,
         output_paths=target_output_paths,
@@ -2217,19 +1952,18 @@ def generate_step_targets(
     )
     if step_options is not None and step_options.has_metadata:
         selected_specs = [_apply_step_options_to_spec(spec, step_options) for spec in selected_specs]
-    _validate_part_render_output_paths([*all_specs, *selected_specs])
     _rebuild_stale_assembly_children(all_specs, selected_specs, force=force, logger=logger)
     # No-op fast path: skip recomposing a generated assembly whose source closure
     # (generator imports + every composed child STEP) is unchanged. Runs after the
     # child rebuild so a just-rebuilt child correctly invalidates the closure. Only
     # for plain in-place regeneration (no --force or output overrides).
-    no_output_override = output_path is None and not any(path is not None for path in target_output_paths)
+    no_output_override = not any(path is not None for path in target_output_paths)
     if not force and no_output_override:
         current_specs = [
             spec
             for spec in selected_specs
-            # Explicit exports (--stl/--3mf/--glb/--step) must be written even
-            # when the compose is current, so they keep the spec in the run.
+            # An explicit STEP export (--write-step) must be written even when the
+            # compose is current, so it keeps the spec in the run.
             if not _spec_requests_extra_outputs(spec)
             and _assembly_is_current(spec)
             and _assembly_glb_package_current(spec)

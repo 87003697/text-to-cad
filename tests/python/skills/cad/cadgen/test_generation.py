@@ -110,16 +110,10 @@ class CadGenerationTests(unittest.TestCase):
     def _step_options(
         self,
         *,
-        stl: str | None = None,
-        three_mf: str | None = None,
-        glb: str | None = None,
         mesh_tolerance: float | None = None,
         mesh_angular_tolerance: float | None = None,
     ) -> StepImportOptions:
         return StepImportOptions(
-            stl=stl,
-            three_mf=three_mf,
-            glb=glb,
             mesh_tolerance=mesh_tolerance,
             mesh_angular_tolerance=mesh_angular_tolerance,
         )
@@ -192,11 +186,13 @@ class CadGenerationTests(unittest.TestCase):
         )
 
     def test_imported_step_assembly_force_writes_component_package(self) -> None:
-        """Regression: a direct/committed STEP target built with force must actually
-        emit the component-GLB package. ``_generate_step_outputs`` previously routed only
+        """Regression: an imported/committed STEP built with force must actually emit
+        the component-GLB package. ``_generate_step_outputs`` previously routed only
         ``source == "generated"`` specs into the build pipeline and fell off the end for an
-        imported/committed STEP — silently returning None (no package written) while the CLI
-        still printed success.
+        imported/committed STEP — silently returning None (no package written) while the
+        caller still reported success. `scripts/gen` no longer accepts direct STEP targets,
+        so this now drives the live on-demand path (`cadgen.step_artifact`) that inspect,
+        snapshot, the CAD Viewer, and `scripts/artifact` all share.
         """
         from build123d import Box, Compound, Pos
         from cadgen.step_export import export_build123d_step_scene
@@ -217,11 +213,17 @@ class CadGenerationTests(unittest.TestCase):
             "precondition: the package must not exist before the build",
         )
 
+        from cadgen.step_artifact import build_step_artifact
+
         with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
-            return_code = cad_generation.generate_step_targets(
-                [str(step_path)], direct_step_kind="assembly", force=True
+            payload = build_step_artifact(
+                repo_root=self.temp_root,
+                step=step_path,
+                kind="assembly",
+                force=True,
             )
-        self.assertEqual(0, return_code)
+        self.assertTrue(payload["ok"])
+        self.assertEqual("assembly", payload["entryKind"])
 
         descriptor_path = package_dir / "assembly.json"
         self.assertTrue(
@@ -515,24 +517,6 @@ class CadGenerationTests(unittest.TestCase):
         self.assertEqual(script_path.with_suffix(".step"), spec.step_path)
         self.assertEqual(self._cad_ref("missing_output"), spec.cad_ref)
 
-    def test_generated_part_ignores_sidecar_metadata(self) -> None:
-        script_path = self._generator_script(
-            "flat",
-            with_dxf=True,
-            stl="../meshes/renamed.stl",
-            three_mf="../meshes/renamed.3mf",
-        )
-
-        spec = next(spec for spec in cad_generation.list_entry_specs() if spec.source_path == script_path)
-
-        self.assertEqual(self._cad_ref("flat"), spec.cad_ref)
-        self.assertEqual(self.temp_root / "flat.step", spec.step_path)
-        # The drawing generator is its own `<name>.dxf.py` entry; the STEP spec
-        # carries no DXF output.
-        self.assertIsNone(spec.dxf_path)
-        self.assertIsNone(spec.stl_path)
-        self.assertIsNone(spec.three_mf_path)
-
     def test_generated_source_rejects_legacy_step_output_field(self) -> None:
         self._generator_script("flat", step_output="custom/renamed.step")
 
@@ -773,32 +757,6 @@ class CadGenerationTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "unsupported field\\(s\\): sources"):
             cad_generation.list_entry_specs()
 
-    def test_generator_stl_sidecar_paths_are_ignored_by_catalog(self) -> None:
-        self._generator_script("left", stl="shared.stl")
-        self._generator_script("right", stl="shared.stl")
-
-        specs = {
-            spec.cad_ref: spec
-            for spec in cad_generation.list_entry_specs()
-            if spec.cad_ref.startswith(f"{self.relative_dir}/")
-        }
-
-        self.assertIsNone(specs[self._cad_ref("left")].stl_path)
-        self.assertIsNone(specs[self._cad_ref("right")].stl_path)
-
-    def test_generator_3mf_sidecar_paths_are_ignored_by_catalog(self) -> None:
-        self._generator_script("left", three_mf="shared.3mf")
-        self._generator_script("right", three_mf="shared.3mf")
-
-        specs = {
-            spec.cad_ref: spec
-            for spec in cad_generation.list_entry_specs()
-            if spec.cad_ref.startswith(f"{self.relative_dir}/")
-        }
-
-        self.assertIsNone(specs[self._cad_ref("left")].three_mf_path)
-        self.assertIsNone(specs[self._cad_ref("right")].three_mf_path)
-
     def test_direct_step_is_discovered_as_imported_part(self) -> None:
         self._write_step("loose")
 
@@ -860,9 +818,9 @@ class CadGenerationTests(unittest.TestCase):
             [spec.cad_ref for spec in selected],
         )
 
-    def test_direct_step_generation_regenerates_selected_entries_in_supplied_order(self) -> None:
-        first_path = self._write_step("first")
-        second_path = self._write_step("second")
+    def test_generation_regenerates_selected_entries_in_supplied_order(self) -> None:
+        first_path = self._generator_script("first")
+        second_path = self._generator_script("second")
         calls: list[str] = []
 
         def fake_generate(spec, *, entries_by_step_path):
@@ -870,17 +828,14 @@ class CadGenerationTests(unittest.TestCase):
             calls.append(spec.cad_ref)
 
         with mock.patch.object(cad_generation, "_generate_step_outputs", side_effect=fake_generate):
-            cad_generation.generate_step_targets(
-                [str(second_path), str(first_path)],
-                direct_step_kind="part",
-            )
+            cad_generation.generate_step_targets([str(second_path), str(first_path)])
 
         self.assertEqual([self._cad_ref("second"), self._cad_ref("first")], calls)
 
     def test_current_target_with_explicit_exports_still_runs(self) -> None:
-        # A current compose must not swallow explicitly requested exports
-        # (step_options sidecars or a --write-step pair): the no-op fast path
-        # previously dropped such specs as current and wrote nothing.
+        # A current compose must not swallow an explicitly requested export (the
+        # --write-step SOURCE=OUTPUT pair): the no-op fast path previously dropped
+        # such specs as current and wrote nothing.
         script_path = self._generator_script("current_exports")
         calls: list[object] = []
 
@@ -901,14 +856,12 @@ class CadGenerationTests(unittest.TestCase):
             cad_generation.generate_step_targets([str(script_path)])
             self.assertEqual([], calls)
 
-            cad_generation.generate_step_targets(
-                [str(script_path)],
-                step_options=StepImportOptions(stl="exports/current_exports.stl"),
-            )
+            step_output = self.temp_root / "exports" / "current_exports.step"
+            cad_generation.generate_step_targets([f"{script_path}={step_output}"])
 
         self.assertEqual(1, len(calls))
-        self.assertIsNotNone(calls[0].stl_path)
-        self.assertTrue(str(calls[0].stl_path).endswith("current_exports.stl"))
+        self.assertIsNotNone(calls[0].step_export_path)
+        self.assertTrue(str(calls[0].step_export_path).endswith("current_exports.step"))
 
     def test_step_generation_default_allows_missing_logical_step(self) -> None:
         # gen_step builds GLB render artifacts and never writes a text STEP, so the
@@ -942,10 +895,7 @@ class CadGenerationTests(unittest.TestCase):
         script_path = self._generator_script("generated_kind")
         generated_spec = next(spec for spec in cad_generation.list_entry_specs() if spec.source_path == script_path)
         direct_path = self._write_step("direct_kind")
-        _, direct_specs = cad_generation._selected_specs_for_targets(
-            [str(direct_path)],
-            direct_step_kind="part",
-        )
+        _, direct_specs = cad_generation._selected_specs_for_targets([str(direct_path)])
 
         self.assertTrue(
             cad_generation._artifact_source_kind_matches_spec(
@@ -971,26 +921,6 @@ class CadGenerationTests(unittest.TestCase):
                 {"sourceKind": "python"},
             )
         )
-
-    def test_step_output_override_retargets_single_generated_source(self) -> None:
-        script_path = self._generator_script("flat")
-        output_path = self.temp_root / "custom" / "flat-output.step"
-        calls: list[cad_generation.EntrySpec] = []
-
-        def fake_generate(spec, *, entries_by_step_path, preloaded_scene=None, force=False, **_extra):
-            self.assertIn(output_path.resolve(), entries_by_step_path)
-            self.assertIsNotNone(preloaded_scene)
-            self.assertEqual(output_path.resolve(), preloaded_scene.step_path)
-            calls.append(spec)
-
-        with mock.patch.object(cad_generation, "_generate_part_outputs", side_effect=fake_generate):
-            cad_generation.generate_step_targets([str(script_path)], output=str(output_path))
-
-        self.assertEqual(1, len(calls))
-        self.assertEqual(output_path, calls[0].step_path)
-        self.assertEqual(f"{self.relative_dir}/custom/flat-output", calls[0].cad_ref)
-        self.assertEqual(output_path, calls[0].step_export_path)
-        self.assertFalse(script_path.with_suffix(".step").exists())
 
     def test_step_output_pairs_retarget_generated_sources(self) -> None:
         first_path = self._generator_script("first")
@@ -1030,68 +960,6 @@ class CadGenerationTests(unittest.TestCase):
         # A SOURCE=OUTPUT.step pair requests an on-demand STEP export to that path.
         self.assertEqual([None, second_output], [call.step_export_path for call in calls])
         self.assertFalse(second_path.with_suffix(".step").exists())
-
-    def test_step_output_override_rejects_pair_targets(self) -> None:
-        script_path = self._generator_script("flat")
-
-        with self.assertRaisesRegex(ValueError, "cannot be combined"):
-            cad_generation.generate_step_targets(
-                [f"{script_path}={self.temp_root / 'custom' / 'flat-output.step'}"],
-                output=str(self.temp_root / "other.step"),
-            )
-
-    def test_step_output_override_requires_single_target(self) -> None:
-        first_path = self._generator_script("first")
-        second_path = self._generator_script("second")
-
-        with self.assertRaisesRegex(ValueError, "--output can only be used with exactly one target"):
-            cad_generation.generate_step_targets(
-                [str(first_path), str(second_path)],
-                output=str(self.temp_root / "first-output.step"),
-            )
-
-    def test_step_sidecar_flags_are_relative_to_output_override(self) -> None:
-        script_path = self._generator_script("flat")
-        output_path = self.temp_root / "custom" / "flat-output.step"
-        calls: list[cad_generation.EntrySpec] = []
-
-        def fake_generate(spec, *, entries_by_step_path, preloaded_scene=None, force=False, **_extra):
-            calls.append(spec)
-
-        with mock.patch.object(cad_generation, "_generate_part_outputs", side_effect=fake_generate):
-            cad_generation.generate_step_targets(
-                [str(script_path)],
-                output=str(output_path),
-                step_options=self._step_options(
-                    stl="flat-output.stl",
-                    three_mf="flat-output.3mf",
-                    glb="flat-output.glb",
-                ),
-            )
-
-        self.assertEqual(1, len(calls))
-        self.assertEqual(output_path.parent / "flat-output.stl", calls[0].stl_path)
-        self.assertEqual(output_path.parent / "flat-output.3mf", calls[0].three_mf_path)
-        self.assertEqual(output_path.parent / "flat-output.glb", calls[0].native_glb_path)
-
-    def test_step_output_override_rejects_direct_step_target(self) -> None:
-        step_path = self._write_step("imported")
-
-        with self.assertRaisesRegex(ValueError, "--output can only be used with generated Python targets"):
-            cad_generation.generate_step_targets(
-                [str(step_path)],
-                direct_step_kind="part",
-                output=str(self.temp_root / "imported-output.step"),
-            )
-
-    def test_step_output_pair_rejects_direct_step_target(self) -> None:
-        step_path = self._write_step("imported")
-
-        with self.assertRaisesRegex(ValueError, "output pairs can only be used with generated Python targets"):
-            cad_generation.generate_step_targets(
-                [f"{step_path}={self.temp_root / 'imported-output.step'}"],
-                direct_step_kind="part",
-            )
 
     def test_step_output_pairs_reject_duplicate_output_paths(self) -> None:
         first_path = self._generator_script("first")
@@ -1244,12 +1112,7 @@ class CadGenerationTests(unittest.TestCase):
             mock.patch.object(cad_generation, "_existing_topology_artifact_matches_options", return_value=True),
             mock.patch.object(cad_generation, "_assembly_glb_package_current", return_value=True),
             mock.patch.object(cad_generation, "_generated_assembly_glb_closure_current", return_value=True),
-            mock.patch.object(
-                cad_generation,
-                "mesh_step_scene",
-                side_effect=AssertionError("current Python-backed package should be reused"),
-            ),
-        ):
+            ):
             result = cad_generation._generate_part_outputs(
                 spec,
                 entries_by_step_path={spec.step_path.resolve(): spec},
@@ -1354,183 +1217,13 @@ class CadGenerationTests(unittest.TestCase):
         with self.assertRaisesRegex(FileNotFoundError, "Python generator or STEP/STP file path"):
             cad_generation.generate_step_targets([str(self.temp_root / "broken.step.toml")])
 
-    def test_direct_step_generation_requires_kind(self) -> None:
+    def test_direct_step_targets_are_rejected(self) -> None:
+        # scripts/gen builds gen_step() sources only; an imported STEP gets its render
+        # artifacts on demand (inspect/snapshot/viewer) or via scripts/artifact.
         step_path = self._write_step("source")
 
-        with self.assertRaisesRegex(ValueError, "requires an explicit direct_step_kind for direct STEP/STP targets"):
+        with self.assertRaisesRegex(ValueError, "builds gen_step\\(\\) Python sources only"):
             cad_generation.generate_step_targets([str(step_path)])
-
-    def test_direct_step_generation_reads_configured_stl(self) -> None:
-        step_path = self._write_step("source")
-        calls: list[Path | None] = []
-
-        def fake_generate(spec, *, entries_by_step_path):
-            calls.append(spec.stl_path)
-
-        with mock.patch.object(cad_generation, "_generate_step_outputs", side_effect=fake_generate):
-            cad_generation.generate_step_targets(
-                [str(step_path)],
-                direct_step_kind="part",
-                step_options=self._step_options(
-                    stl="../meshes/source.stl",
-                ),
-            )
-
-        self.assertEqual([Path.cwd() / "meshes" / "source.stl"], calls)
-
-    def test_direct_step_generation_reads_configured_3mf(self) -> None:
-        step_path = self._write_step("source")
-        calls: list[Path | None] = []
-
-        def fake_generate(spec, *, entries_by_step_path):
-            calls.append(spec.three_mf_path)
-
-        with mock.patch.object(cad_generation, "_generate_step_outputs", side_effect=fake_generate):
-            cad_generation.generate_step_targets(
-                [str(step_path)],
-                direct_step_kind="part",
-                step_options=self._step_options(
-                    three_mf="../meshes/source.3mf",
-                ),
-            )
-
-        self.assertEqual([Path.cwd() / "meshes" / "source.3mf"], calls)
-
-    def test_direct_step_stl_flag_sets_stl_path(self) -> None:
-        step_path = self._write_step("source")
-        calls: list[cad_generation.EntrySpec] = []
-
-        def fake_generate(spec, *, entries_by_step_path):
-            calls.append(spec)
-
-        with mock.patch.object(cad_generation, "_generate_step_outputs", side_effect=fake_generate):
-            cad_generation.generate_step_targets(
-                [str(step_path)],
-                direct_step_kind="part",
-                step_options=self._step_options(stl="source.stl"),
-            )
-
-        self.assertEqual(step_path.parent / "source.stl", calls[0].stl_path)
-
-    def test_direct_step_3mf_flag_sets_3mf_path(self) -> None:
-        step_path = self._write_step("source")
-        calls: list[cad_generation.EntrySpec] = []
-
-        def fake_generate(spec, *, entries_by_step_path):
-            calls.append(spec)
-
-        with mock.patch.object(cad_generation, "_generate_step_outputs", side_effect=fake_generate):
-            cad_generation.generate_step_targets(
-                [str(step_path)],
-                direct_step_kind="part",
-                step_options=self._step_options(three_mf="source.3mf"),
-            )
-
-        self.assertEqual(step_path.parent / "source.3mf", calls[0].three_mf_path)
-
-    def test_direct_step_glb_flag_sets_native_glb_path(self) -> None:
-        step_path = self._write_step("source")
-        calls: list[cad_generation.EntrySpec] = []
-
-        def fake_generate(spec, *, entries_by_step_path):
-            calls.append(spec)
-
-        with mock.patch.object(cad_generation, "_generate_step_outputs", side_effect=fake_generate):
-            cad_generation.generate_step_targets(
-                [str(step_path)],
-                direct_step_kind="part",
-                step_options=self._step_options(glb="source.glb"),
-            )
-
-        self.assertEqual(step_path.parent / "source.glb", calls[0].native_glb_path)
-
-    def test_direct_step_rejects_invalid_stl_suffix(self) -> None:
-        step_path = self._write_step("source")
-
-        with self.assertRaisesRegex(ValueError, "stl must end in .stl"):
-            cad_generation.generate_step_targets(
-                [str(step_path)],
-                direct_step_kind="part",
-                step_options=self._step_options(stl="source.txt"),
-            )
-
-    def test_direct_step_rejects_invalid_3mf_suffix(self) -> None:
-        step_path = self._write_step("source")
-
-        with self.assertRaisesRegex(ValueError, "3mf must end in .3mf"):
-            cad_generation.generate_step_targets(
-                [str(step_path)],
-                direct_step_kind="part",
-                step_options=self._step_options(three_mf="source.txt"),
-            )
-
-    def test_direct_step_rejects_invalid_glb_suffix(self) -> None:
-        step_path = self._write_step("source")
-
-        with self.assertRaisesRegex(ValueError, "glb must end in .glb"):
-            cad_generation.generate_step_targets(
-                [str(step_path)],
-                direct_step_kind="part",
-                step_options=self._step_options(glb="source.txt"),
-            )
-
-    def test_direct_step_rejects_native_glb_topology_artifact_collision(self) -> None:
-        # The render artifact is now a component-GLB PACKAGE directory at
-        # __cadgen__/models/<step-filename>, so a native GLB sidecar whose resolved path
-        # equals that artifact path must still be rejected rather than overwriting it.
-        step_path = self._write_step("source")
-        artifact_path = cad_catalog.render_package_dir(step_path)
-        self.assertEqual(
-            artifact_path,
-            (step_path.parent / "__cadgen__" / "models" / step_path.name).resolve(),
-        )
-        _, direct_specs = cad_generation._selected_specs_for_targets(
-            [str(step_path)],
-            direct_step_kind="part",
-        )
-        colliding_spec = replace(direct_specs[0], native_glb_path=artifact_path)
-
-        with self.assertRaisesRegex(ValueError, "Native GLB output would overwrite"):
-            cad_generation._validate_part_render_output_paths([colliding_spec])
-
-    def test_direct_step_rejects_duplicate_native_glb_sidecars(self) -> None:
-        first_path = self._write_step("first")
-        second_path = self._write_step("second")
-
-        with self.assertRaisesRegex(ValueError, "Native GLB output collision"):
-            cad_generation.generate_step_targets(
-                [str(first_path), str(second_path)],
-                direct_step_kind="part",
-                step_options=self._step_options(glb="../meshes/shared.glb"),
-            )
-
-    def test_direct_step_allows_file_relative_parent_stl(self) -> None:
-        step_path = self._write_step("source")
-        calls: list[Path | None] = []
-
-        def fake_generate(spec, *, entries_by_step_path):
-            calls.append(spec.stl_path)
-
-        with mock.patch.object(cad_generation, "_generate_step_outputs", side_effect=fake_generate):
-            cad_generation.generate_step_targets(
-                [str(step_path)],
-                direct_step_kind="part",
-                step_options=self._step_options(
-                    stl="../../../../source.stl",
-                ),
-            )
-
-        self.assertEqual([(self.temp_root / "../../../../source.stl").resolve()], calls)
-
-    def test_direct_step_reuses_mesh_numeric_validation(self) -> None:
-        step_path = self._write_step("broken")
-
-        with self.assertRaisesRegex(ValueError, "mesh_tolerance must be greater than 0"):
-            cad_generation.generate_step_targets(
-                [str(step_path)],
-                direct_step_kind="part",
-                step_options=self._step_options(mesh_tolerance=-0.1),
-            )
 
     def test_step_cli_flags_apply_to_generated_python_targets(self) -> None:
         script_path = self._generator_script("generated")
@@ -1543,35 +1236,14 @@ class CadGenerationTests(unittest.TestCase):
             cad_generation.generate_step_targets(
                 [str(script_path)],
                 step_options=self._step_options(
-                    stl="generated.stl",
-                    three_mf="generated.3mf",
                     mesh_tolerance=0.2,
                     mesh_angular_tolerance=0.3,
                 ),
             )
 
         self.assertEqual(1, len(calls))
-        self.assertEqual(script_path.with_suffix(".stl"), calls[0].stl_path)
-        self.assertEqual(script_path.with_suffix(".3mf"), calls[0].three_mf_path)
         self.assertEqual(0.2, calls[0].mesh_tolerance)
         self.assertEqual(0.3, calls[0].mesh_angular_tolerance)
-
-    def test_step_cli_flags_apply_to_mixed_imported_and_generated_targets(self) -> None:
-        step_path = self._write_step("imported")
-        script_path = self._generator_script("generated")
-        calls: list[cad_generation.EntrySpec] = []
-
-        def fake_generate(spec, *, entries_by_step_path):
-            calls.append(spec)
-
-        with mock.patch.object(cad_generation, "_generate_step_outputs", side_effect=fake_generate):
-            cad_generation.generate_step_targets(
-                [str(step_path), str(script_path)],
-                direct_step_kind="part",
-                step_options=self._step_options(mesh_tolerance=0.2),
-            )
-
-        self.assertEqual([0.2, 0.2], [spec.mesh_tolerance for spec in calls])
 
     def test_generator_discovery_rejects_none_gen_step(self) -> None:
         script_path = self.temp_root / "broken.py"
@@ -1621,42 +1293,8 @@ class CadGenerationTests(unittest.TestCase):
             if spec.cad_ref.startswith(f"{self.relative_dir}/")
         }
 
-        self.assertIsNone(specs[self._cad_ref("meshy")].stl_path)
-        self.assertIsNone(specs[self._cad_ref("meshy")].three_mf_path)
         self.assertEqual(cad_generation.DEFAULT_MESH_TOLERANCE, specs[self._cad_ref("meshy")].mesh_tolerance)
         self.assertEqual(cad_generation.DEFAULT_MESH_ANGULAR_TOLERANCE, specs[self._cad_ref("meshy")].mesh_angular_tolerance)
-
-    def test_generated_assembly_paths_use_sibling_defaults_and_ignore_legacy_sidecars(self) -> None:
-        self._write_step("imported-part")
-        self._write_assembly_generator(
-            "assembly",
-            instances=[
-                {
-                    "path": "imported-part.step",
-                    "name": "leaf",
-                    "transform": IDENTITY_TRANSFORM,
-                }
-            ],
-            with_dxf=True,
-            stl="assembly.stl",
-            three_mf="assembly.3mf",
-            mesh_tolerance=0.3,
-            mesh_angular_tolerance=0.2,
-        )
-
-        spec = next(
-            spec
-            for spec in cad_generation.list_entry_specs()
-            if spec.cad_ref == self._cad_ref("assembly")
-        )
-
-        self.assertEqual("assembly", spec.kind)
-        self.assertEqual(self.temp_root / "assembly.step", spec.step_path)
-        self.assertIsNone(spec.dxf_path)
-        self.assertIsNone(spec.stl_path)
-        self.assertIsNone(spec.three_mf_path)
-        self.assertEqual(cad_generation.DEFAULT_MESH_TOLERANCE, spec.mesh_tolerance)
-        self.assertEqual(cad_generation.DEFAULT_MESH_ANGULAR_TOLERANCE, spec.mesh_angular_tolerance)
 
     def test_imported_step_defaults_to_part(self) -> None:
         self._write_step("imported")
@@ -1680,35 +1318,20 @@ class CadGenerationTests(unittest.TestCase):
         specs = [spec for spec in cad_generation.list_entry_specs() if spec.cad_ref == self._cad_ref("imported-mesh")]
 
         self.assertEqual(1, len(specs))
-        self.assertIsNone(specs[0].stl_path)
-        self.assertIsNone(specs[0].three_mf_path)
         self.assertEqual(cad_generation.DEFAULT_MESH_TOLERANCE, specs[0].mesh_tolerance)
         self.assertEqual(cad_generation.DEFAULT_MESH_ANGULAR_TOLERANCE, specs[0].mesh_angular_tolerance)
 
     def test_imported_step_reads_mesh_settings_from_cli_options(self) -> None:
         step_path = self._write_step("imported-heavy")
-        calls: list[cad_generation.EntrySpec] = []
 
-        def fake_generate(spec, *, entries_by_step_path):
-            calls.append(spec)
+        _all, selected = cad_generation._selected_specs_for_targets(
+            [str(step_path)],
+            step_options=self._step_options(mesh_tolerance=0.9, mesh_angular_tolerance=0.45),
+        )
 
-        with mock.patch.object(cad_generation, "_generate_step_outputs", side_effect=fake_generate):
-            cad_generation.generate_step_targets(
-                [str(step_path)],
-                direct_step_kind="part",
-                step_options=self._step_options(
-                    stl="imported-heavy.stl",
-                    three_mf="imported-heavy.3mf",
-                    mesh_tolerance=0.9,
-                    mesh_angular_tolerance=0.45,
-                ),
-            )
-
-        self.assertEqual(1, len(calls))
-        self.assertEqual(step_path.parent / "imported-heavy.stl", calls[0].stl_path)
-        self.assertEqual(step_path.parent / "imported-heavy.3mf", calls[0].three_mf_path)
-        self.assertEqual(0.9, calls[0].mesh_tolerance)
-        self.assertEqual(0.45, calls[0].mesh_angular_tolerance)
+        self.assertEqual(1, len(selected))
+        self.assertEqual(0.9, selected[0].mesh_tolerance)
+        self.assertEqual(0.45, selected[0].mesh_angular_tolerance)
 
     def test_generate_part_outputs_emits_package(self) -> None:
         step_path = self._write_step("selector-output")
@@ -1720,19 +1343,10 @@ class CadGenerationTests(unittest.TestCase):
         scene = self._fake_scene(step_path)
         package_patch, package_calls = self._patch_package_build()
 
-        with mock.patch.object(cad_generation, "load_step_scene_cached", return_value=scene) as load_scene, mock.patch.object(
-            cad_generation, "export_part_stl_from_scene"
-        ) as stl_export_mock, mock.patch.object(
-            cad_generation,
-            "mesh_step_scene",
-        ), mock.patch.object(
-            cad_generation,
-            "scene_export_shape",
-        ), package_patch:
+        with mock.patch.object(cad_generation, "load_step_scene_cached", return_value=scene) as load_scene, package_patch:
             result = cad_generation._generate_part_outputs(spec, entries_by_step_path={spec.step_path.resolve(): spec})
 
         load_scene.assert_called_once_with(step_path)
-        stl_export_mock.assert_not_called()
         # A part emits a single-component package directory; the build path returns no
         # whole-model selector bundle (selectors are extracted on demand by inspect).
         self.assertEqual(1, len(package_calls))
@@ -1765,13 +1379,7 @@ class CadGenerationTests(unittest.TestCase):
         with mock.patch.object(cad_generation, "load_step_scene_cached", return_value=scene) as load_scene, mock.patch(
             "cadgen.step_targets.validate_step_topology_artifact",
             return_value=artifact,
-        ) as validate_artifact, mock.patch.object(
-            cad_generation,
-            "mesh_step_scene",
-        ) as mesh_scene, mock.patch.object(
-            cad_generation,
-            "scene_export_shape",
-        ) as export_shape, package_patch:
+        ) as validate_artifact, package_patch:
             result = cad_generation._generate_part_outputs(
                 spec,
                 entries_by_step_path={spec.step_path.resolve(): spec},
@@ -1782,8 +1390,6 @@ class CadGenerationTests(unittest.TestCase):
         self.assertIsNone(result.selector_bundle)
         validate_artifact.assert_called_once()
         load_scene.assert_not_called()
-        mesh_scene.assert_not_called()
-        export_shape.assert_not_called()
         self.assertEqual(0, len(package_calls))
 
     def test_generate_part_outputs_rebuilds_stale_step_topology_artifact(self) -> None:
@@ -1811,13 +1417,7 @@ class CadGenerationTests(unittest.TestCase):
         with mock.patch.object(cad_generation, "load_step_scene_cached", return_value=scene) as load_scene, mock.patch(
             "cadgen.step_targets.validate_step_topology_artifact",
             return_value=artifact,
-        ) as validate_artifact, mock.patch.object(
-            cad_generation,
-            "mesh_step_scene",
-        ) as mesh_scene, mock.patch.object(
-            cad_generation,
-            "scene_export_shape",
-        ), package_patch:
+        ) as validate_artifact, package_patch:
             result = cad_generation._generate_part_outputs(
                 spec,
                 entries_by_step_path={spec.step_path.resolve(): spec},
@@ -1829,7 +1429,6 @@ class CadGenerationTests(unittest.TestCase):
         load_scene.assert_called_once_with(step_path)
         # No sidecar outputs requested: the whole-scene mesh is skipped and the
         # package build meshes exactly the components it emits.
-        mesh_scene.assert_not_called()
         self.assertEqual(1, len(package_calls))
 
     def test_generate_part_outputs_reuses_current_auto_topology_artifact_without_scene_load(self) -> None:
@@ -1872,10 +1471,7 @@ class CadGenerationTests(unittest.TestCase):
         with mock.patch.object(cad_generation, "load_step_scene_cached") as load_scene, mock.patch(
             "cadgen.step_targets.validate_step_topology_artifact",
             return_value=artifact,
-        ), mock.patch.object(
-            cad_generation,
-            "mesh_step_scene",
-        ) as mesh_scene, package_patch:
+        ), package_patch:
             result = cad_generation._generate_part_outputs(
                 spec,
                 entries_by_step_path={spec.step_path.resolve(): spec},
@@ -1884,7 +1480,6 @@ class CadGenerationTests(unittest.TestCase):
         # The current auto-tolerance artifact is reused without even loading the scene.
         self.assertIsNone(result.scene)
         load_scene.assert_not_called()
-        mesh_scene.assert_not_called()
         self.assertEqual(0, len(package_calls))
 
     def test_generate_part_outputs_force_ignores_current_topology_artifact(self) -> None:
@@ -1909,13 +1504,7 @@ class CadGenerationTests(unittest.TestCase):
         with mock.patch.object(cad_generation, "load_step_scene_cached", return_value=scene), mock.patch(
             "cadgen.step_targets.validate_step_topology_artifact",
             return_value=artifact,
-        ) as validate_artifact, mock.patch.object(
-            cad_generation,
-            "mesh_step_scene",
-        ) as mesh_scene, mock.patch.object(
-            cad_generation,
-            "scene_export_shape",
-        ), package_patch:
+        ) as validate_artifact, package_patch:
             result = cad_generation._generate_part_outputs(
                 spec,
                 entries_by_step_path={spec.step_path.resolve(): spec},
@@ -1927,50 +1516,9 @@ class CadGenerationTests(unittest.TestCase):
         validate_artifact.assert_not_called()
         # No sidecar outputs requested: even a forced rebuild skips the
         # whole-scene mesh; the package build re-meshes every component.
-        mesh_scene.assert_not_called()
         # force propagates into the package build (content-addressed cache bypass).
         self.assertEqual(1, len(package_calls))
         self.assertTrue(package_calls[0]["force"])
-
-    def test_generate_part_outputs_writes_requested_sidecar_and_topology(self) -> None:
-        step_path = self._write_step("stl-fast")
-        _, selected_specs = cad_generation._selected_specs_for_targets(
-            [str(step_path)],
-            step_options=self._step_options(stl="stl-fast.stl"),
-        )
-        spec = selected_specs[0]
-        scene = self._fake_scene(step_path)
-
-        def fake_export(step_path_arg, scene_arg, *, target_path=None):
-            self.assertEqual(step_path, step_path_arg)
-            self.assertIs(scene, scene_arg)
-            self.assertEqual(spec.stl_path, target_path)
-            target_path.write_text("solid ok\nendsolid ok\n", encoding="utf-8")
-            return target_path
-
-        package_patch, package_calls = self._patch_package_build()
-        with mock.patch.object(cad_generation, "load_step_scene_cached", return_value=scene), mock.patch.object(
-            cad_generation,
-            "export_part_stl_from_scene",
-            side_effect=fake_export,
-        ) as stl_export_mock, mock.patch.object(
-            cad_generation,
-            "mesh_step_scene",
-        ), mock.patch.object(
-            cad_generation,
-            "scene_export_shape",
-        ), package_patch:
-            result = cad_generation._generate_part_outputs(
-                spec,
-                entries_by_step_path={spec.step_path.resolve(): spec},
-            )
-
-        stl_export_mock.assert_called_once()
-        self.assertEqual(1, len(package_calls))
-        self.assertIs(scene, result.scene)
-        self.assertIsNone(result.selector_bundle)
-        self.assertIsNotNone(spec.stl_path)
-        self.assertTrue(spec.stl_path.exists())
 
     def test_generate_part_outputs_uses_preloaded_scene_without_reloading(self) -> None:
         step_path = self._write_step("preloaded")
@@ -1982,13 +1530,7 @@ class CadGenerationTests(unittest.TestCase):
         scene = self._fake_scene(step_path)
 
         package_patch, package_calls = self._patch_package_build()
-        with mock.patch.object(cad_generation, "load_step_scene_cached") as load_scene, mock.patch.object(
-            cad_generation,
-            "mesh_step_scene",
-        ), mock.patch.object(
-            cad_generation,
-            "scene_export_shape",
-        ), package_patch:
+        with mock.patch.object(cad_generation, "load_step_scene_cached") as load_scene, package_patch:
             cad_generation._generate_part_outputs(
                 spec,
                 entries_by_step_path={spec.step_path.resolve(): spec},
@@ -1997,142 +1539,6 @@ class CadGenerationTests(unittest.TestCase):
 
         load_scene.assert_not_called()
         self.assertEqual(1, len(package_calls))
-        self.assertTrue(cad_catalog.render_package_dir(step_path).is_dir())
-
-    def test_generate_part_outputs_emits_package_with_stl_sidecar(self) -> None:
-        step_path = self._write_step("summary-only")
-        _, selected_specs = cad_generation._selected_specs_for_targets(
-            [str(step_path)],
-            step_options=self._step_options(
-                stl="summary-only.stl",
-            ),
-        )
-        spec = selected_specs[0]
-        scene = self._fake_scene(step_path)
-
-        def fake_export(step_path_arg, scene_arg, *, target_path=None):
-            self.assertIs(scene, scene_arg)
-            stl_path = target_path
-            self.assertIsNotNone(stl_path)
-            stl_path.parent.mkdir(parents=True, exist_ok=True)
-            stl_path.write_text("solid ok\nendsolid ok\n")
-            return stl_path
-
-        package_patch, package_calls = self._patch_package_build()
-        with mock.patch.object(cad_generation, "load_step_scene_cached", return_value=scene), mock.patch.object(
-            cad_generation,
-            "export_part_stl_from_scene",
-            side_effect=fake_export,
-        ), mock.patch.object(
-            cad_generation,
-            "mesh_step_scene",
-        ), mock.patch.object(
-            cad_generation,
-            "scene_export_shape",
-        ), package_patch:
-            result = cad_generation._generate_part_outputs(spec, entries_by_step_path={spec.step_path.resolve(): spec})
-
-        self.assertEqual(1, len(package_calls))
-        self.assertIsNotNone(spec.stl_path)
-        self.assertTrue(spec.stl_path.exists())
-        self.assertTrue(cad_catalog.render_package_dir(step_path).is_dir())
-        self.assertIsNone(result.selector_bundle)
-
-    def test_generate_part_outputs_writes_3mf_sidecar(self) -> None:
-        step_path = self._write_step("printable")
-        _, selected_specs = cad_generation._selected_specs_for_targets(
-            [str(step_path)],
-            step_options=self._step_options(
-                three_mf="printable.3mf",
-                mesh_tolerance=0.4,
-                mesh_angular_tolerance=0.3,
-            ),
-        )
-        spec = selected_specs[0]
-        scene = self._fake_scene(step_path)
-
-        def fake_three_mf_export(step_path_arg, scene_arg, *, target_path=None, color=None):
-            self.assertEqual(step_path, step_path_arg)
-            self.assertIs(scene, scene_arg)
-            self.assertEqual(spec.three_mf_path, target_path)
-            self.assertIsNone(color)
-            target_path.parent.mkdir(parents=True, exist_ok=True)
-            target_path.write_bytes(b"3mf")
-            return target_path
-
-        package_patch, package_calls = self._patch_package_build()
-        with mock.patch.object(cad_generation, "load_step_scene_cached", return_value=scene), mock.patch.object(
-            cad_generation,
-            "export_part_3mf_from_scene",
-            side_effect=fake_three_mf_export,
-        ) as three_mf_export_mock, mock.patch.object(
-            cad_generation,
-            "mesh_step_scene",
-        ) as mesh_scene, mock.patch.object(
-            cad_generation,
-            "scene_export_shape",
-        ), package_patch:
-            cad_generation._generate_part_outputs(spec, entries_by_step_path={spec.step_path.resolve(): spec})
-
-        three_mf_export_mock.assert_called_once()
-        self.assertEqual(1, len(package_calls))
-        self.assertTrue(any(
-            call.kwargs.get("linear_deflection") <= 0.4 and call.kwargs.get("angular_deflection") == 0.3
-            for call in mesh_scene.mock_calls
-        ))
-        self.assertIsNotNone(spec.three_mf_path)
-        self.assertTrue(spec.three_mf_path.exists())
-
-    def test_generate_part_outputs_writes_native_glb_sidecar(self) -> None:
-        step_path = self._write_step("native")
-        _, selected_specs = cad_generation._selected_specs_for_targets(
-            [str(step_path)],
-            step_options=self._step_options(
-                glb="native.glb",
-                mesh_tolerance=0.4,
-                mesh_angular_tolerance=0.3,
-            ),
-        )
-        spec = selected_specs[0]
-        scene = self._fake_scene(step_path)
-
-        def fake_native_glb_export(
-            step_path_arg,
-            scene_arg,
-            *,
-            target_path=None,
-            linear_deflection=None,
-            angular_deflection=None,
-            color=None,
-        ):
-            self.assertEqual(step_path, step_path_arg)
-            self.assertIs(scene, scene_arg)
-            self.assertEqual(spec.native_glb_path, target_path)
-            self.assertLessEqual(linear_deflection, 0.4)
-            self.assertEqual(0.3, angular_deflection)
-            self.assertIsNone(color)
-            target_path.parent.mkdir(parents=True, exist_ok=True)
-            target_path.write_bytes(b"native glb")
-            return target_path
-
-        package_patch, package_calls = self._patch_package_build()
-        with mock.patch.object(cad_generation, "load_step_scene_cached", return_value=scene), mock.patch.object(
-            cad_generation,
-            "export_native_glb_from_scene",
-            side_effect=fake_native_glb_export,
-        ) as native_glb_export_mock, mock.patch.object(
-            cad_generation,
-            "mesh_step_scene",
-        ), mock.patch.object(
-            cad_generation,
-            "scene_export_shape",
-        ), package_patch:
-            cad_generation._generate_part_outputs(spec, entries_by_step_path={spec.step_path.resolve(): spec})
-
-        native_glb_export_mock.assert_called_once()
-        self.assertEqual(1, len(package_calls))
-        self.assertIsNotNone(spec.native_glb_path)
-        self.assertTrue(spec.native_glb_path.exists())
         self.assertTrue(cad_catalog.render_package_dir(step_path).is_dir())
 
     # --- Incremental-regen freshness gate (D) --------------------------------
@@ -2155,7 +1561,6 @@ class CadGenerationTests(unittest.TestCase):
     def _part_spec(self, script: Path) -> cad_generation.EntrySpec:
         _all, selected, _outs = cad_generation._selected_specs_for_targets(
             [str(script)],
-            direct_step_kind="part",
             expected_output_suffixes=(".step",),
             tool_name="scripts/gen",
             include_output_paths=True,

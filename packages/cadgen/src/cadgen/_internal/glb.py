@@ -29,7 +29,6 @@ from cadgen._internal.glb_topology import (
     step_topology_capabilities,
 )
 from cadgen.catalog import render_package_dir
-from cadgen.render import part_native_glb_path
 from cadgen._internal.step_scene import ColorRGBA, LoadedStepScene, OccurrenceNode, SelectorBundle, occurrence_selector_id
 
 
@@ -111,15 +110,14 @@ def export_native_glb_from_scene(
     step_path: Path,
     scene: LoadedStepScene,
     *,
-    target_path: Path | None = None,
+    target_path: Path,
     linear_deflection: float,
     angular_deflection: float,
     color: tuple[float, float, float, float] | None = None,
     occurrence_colors: Mapping[str, ColorRGBA] | None = None,
 ) -> Path:
-    target_path = target_path or part_native_glb_path(step_path)
-    # The caller meshes the scene before scheduling sidecar jobs. Keep the
-    # deflection args on this API so all mesh sidecars share one contract.
+    # The caller meshes the scene before exporting. Keep the deflection args on
+    # this API so all mesh exporters share one contract.
     _ = (linear_deflection, angular_deflection)
     return _HierarchicalGlbWriter(
         scene,

@@ -3,7 +3,6 @@ import unittest
 from pathlib import Path
 
 from cadgen import catalog as cad_catalog
-from cadgen import render as cad_render
 from tests.python.support.cad_test_roots import IsolatedCadRoots
 
 
@@ -31,12 +30,6 @@ class CadpyRenderTests(unittest.TestCase):
             )
         )
         return step_path
-
-    def test_direct_step_has_no_persistent_stl_path(self) -> None:
-        step_path = self._write_step("part")
-
-        with self.assertRaisesRegex(ValueError, "no configured STL output"):
-            cad_render.part_stl_path(step_path)
 
     def test_glb_path_resolves_into_cadgen_dir(self) -> None:
         step_path = self._write_step("part")

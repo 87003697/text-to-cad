@@ -24,8 +24,6 @@ class GeneratorMetadata:
     generator_names: tuple[str, ...]
     has_gen_step: bool
     has_gen_dxf: bool
-    stl: str | None
-    three_mf: str | None
     mesh_tolerance: float | None
     mesh_angular_tolerance: float | None
 
@@ -153,8 +151,6 @@ def parse_generator_metadata(script_path: Path) -> GeneratorMetadata | None:
         generator_names=tuple(generator_names),
         has_gen_step=has_gen_step,
         has_gen_dxf=has_gen_dxf,
-        stl=None,
-        three_mf=None,
         mesh_tolerance=None,
         mesh_angular_tolerance=None,
     )

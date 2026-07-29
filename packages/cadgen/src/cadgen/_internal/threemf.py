@@ -13,7 +13,6 @@ from OCP.TopExp import TopExp_Explorer
 from OCP.TopLoc import TopLoc_Location
 from OCP.TopoDS import TopoDS
 
-from cadgen.render import part_3mf_path
 from cadgen._internal.step_scene import ColorRGBA, LoadedStepScene, OccurrenceNode, _shape_hash, occurrence_selector_id
 
 
@@ -90,11 +89,10 @@ def export_part_3mf_from_scene(
     step_path: Path,
     scene: LoadedStepScene,
     *,
-    target_path: Path | None = None,
+    target_path: Path,
     color: ColorRGBA | None = None,
     occurrence_colors: Mapping[str, ColorRGBA] | None = None,
 ) -> Path:
-    target_path = target_path or part_3mf_path(step_path)
     export_scene_3mf(scene, target_path, color=color, occurrence_colors=occurrence_colors)
     return target_path
 
