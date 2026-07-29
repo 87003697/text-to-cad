@@ -6,6 +6,7 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
 
 MODE="write"
 CLEAN=0
+PRINT_OUTPUTS=0
 
 IMPLICITJS_PACKAGE_DIR="$REPO_ROOT/packages/implicitjs"
 IMPLICITJS_RUNTIME_DIR="$REPO_ROOT/skills/implicit-cad/scripts/packages/implicitjs"
@@ -22,6 +23,8 @@ layouts.
 Options:
   --check  Bundle into tmp/ and fail if checked-in production outputs are stale.
   --clean  Remove temporary check directories first.
+  --print-outputs
+           Print the repo-relative generated output paths, then exit.
   -h, --help
            Show this help.
 EOF
@@ -35,6 +38,9 @@ while [ "$#" -gt 0 ]; do
     --clean)
       CLEAN=1
       ;;
+    --print-outputs)
+      PRINT_OUTPUTS=1
+      ;;
     -h|--help)
       usage
       exit 0
@@ -47,6 +53,11 @@ while [ "$#" -gt 0 ]; do
   esac
   shift
 done
+
+if [ "$PRINT_OUTPUTS" -eq 1 ]; then
+  printf '%s\n' "${IMPLICITJS_RUNTIME_DIR#"$REPO_ROOT"/}"
+  exit 0
+fi
 
 require_file() {
   local path_to_check="$1"

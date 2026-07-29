@@ -6,6 +6,7 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
 
 MODE="write"
 CLEAN=0
+PRINT_OUTPUTS=0
 
 CHECK_DIR="${DXF_SKILL_CHECK_DIR:-$REPO_ROOT/tmp/dxf-skill-runtime-check}"
 CADPY_PACKAGE_DIR="$REPO_ROOT/packages/cadpy"
@@ -21,6 +22,8 @@ Vendors packages/cadpy into skills/dxf/scripts/packages/cadpy.
 Options:
   --check  Fail if the generated DXF skill runtime copy is stale.
   --clean  Remove the temporary check directory first.
+  --print-outputs
+           Print the repo-relative generated output paths, then exit.
   -h, --help
            Show this help.
 EOF
@@ -34,6 +37,9 @@ while [ "$#" -gt 0 ]; do
     --clean)
       CLEAN=1
       ;;
+    --print-outputs)
+      PRINT_OUTPUTS=1
+      ;;
     -h|--help)
       usage
       exit 0
@@ -46,6 +52,11 @@ while [ "$#" -gt 0 ]; do
   esac
   shift
 done
+
+if [ "$PRINT_OUTPUTS" -eq 1 ]; then
+  printf '%s\n' "${CADPY_RUNTIME_DIR#"$REPO_ROOT"/}"
+  exit 0
+fi
 
 if [ ! -f "$CADPY_PACKAGE_DIR/pyproject.toml" ] || [ ! -d "$CADPY_PACKAGE_DIR/src/cadpy" ]; then
   echo "Missing cadpy package source: $CADPY_PACKAGE_DIR" >&2
