@@ -41,13 +41,23 @@ npm run dev -- --host 127.0.0.1
 Open the URL printed by Vite and add paths, for example
 `?dir=/path/to/root&file=assemblies/robot-arm/robot-arm.step`.
 Local tools should not assume a fixed port. Use
-`npm run agent:start -- --dir /path/to/root` for agent-driven review. It starts
-at port `4178`, reuses a compatible existing Viewer, skips viewers with a
-different launcher-provided `git` value or a different requested default
-`--dir`, and starts on the first free candidate port. Use Vite's standard
-`--port` argument only when a specific dev port is needed. Local dev and
-production servers stay running unless `VIEWER_SERVER_LIFETIME_MS` is set or
-production `serve` is started with `--shutdown-after <duration>`.
+`npm run serve -- --dir /path/to/root --json` for agent-driven review. It starts
+at port `4178`, scans forward to the first free port when that one is taken, and
+prints a machine-readable `{"url":...,"port":...}` line as its last stdout line.
+`serve` is the entrypoint the bundled `cad-viewer` skill runtime ships, so it is
+what `skills/cad-viewer/SKILL.md` documents.
+
+`npm run agent:start -- --dir /path/to/root` is a source-checkout-only launcher
+on top of the same server. It additionally picks Vite dev mode when the skill
+viewer path is a development symlink and reuses a compatible existing Viewer,
+skipping viewers with a different launcher-provided `git` value or a different
+requested default `--dir`. It is deliberately **not** bundled into
+`skills/cad-viewer/scripts/viewer`, so skill-facing docs must not reference it.
+Note it requires `--dir` and rejects `--shutdown-after`.
+
+Use Vite's standard `--port` argument only when a specific dev port is needed.
+Local dev and production servers stay running unless `VIEWER_SERVER_LIFETIME_MS`
+is set or production `serve` is started with `--shutdown-after <duration>`.
 
 The local filesystem backend accepts absolute or startup-directory-relative
 `?dir=` values directly in the Viewer URL. Once seen, the active directory is
@@ -97,9 +107,9 @@ snapshot, and export logic in the source packages.
 
 ```bash
 npm run dev          # Vite dev server with local CAD API middleware
-npm run agent:start  # Launcher that chooses mode and reuses/selects a local port
+npm run agent:start  # Source-only launcher: chooses dev/serve mode, reuses viewers
 npm run build        # Production frontend build
-npm run serve        # Serve dist/ with the local or hosted backend
+npm run serve        # Serve dist/ with the local or hosted backend (bundled entrypoint)
 npm run test         # Discover and run all JS tests
 npm run upload:blob  # Upload a hosted catalog and supported viewer assets
 ```

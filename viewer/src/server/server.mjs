@@ -39,6 +39,10 @@ import {
   applyServerArgsToEnv,
   serverHelpText,
 } from "./serverArgs.mjs";
+import {
+  buildViewerStartupJson,
+  listenWithPortFallback,
+} from "./serverListen.mjs";
 
 const serverModuleDir = path.dirname(fileURLToPath(import.meta.url));
 const viewerAppRoot = path.basename(path.dirname(serverModuleDir)) === "src"
@@ -89,8 +93,10 @@ const directoryRoot = resolveDirectoryRoot({
   defaultDirectoryRoot,
 });
 const backendKind = normalizeViewerAssetBackend(runtimeEnv.VIEWER_ASSET_BACKEND);
-const port = normalizeViewerPort(runtime.args.port, DEFAULT_VIEWER_PORT);
+const requestedPort = normalizeViewerPort(runtime.args.port, DEFAULT_VIEWER_PORT);
 const host = runtime.args.host || "127.0.0.1";
+// Reassigned once the listener binds; the requested port may be taken.
+let port = requestedPort;
 const serverLifetimeMs = runtime.args.shutdownAfterMs ?? normalizeServerLifetimeMs(runtimeEnv.VIEWER_SERVER_LIFETIME_MS);
 const distRoot = path.resolve(viewerAppRoot, "dist");
 const backend = backendKind === VIEWER_ASSET_BACKENDS.VERCEL_BLOB
@@ -186,13 +192,37 @@ function runMiddleware(index, req, res) {
 
 const server = http.createServer((req, res) => runMiddleware(0, req, res));
 
-server.listen(port, host, () => {
-  console.log(`CAD Viewer backend listening on http://${host}:${port}/ (${backend.kind})`);
-  if (serverLifetimeMs !== null) {
-    scheduleProcessShutdown({
-      lifetimeMs: serverLifetimeMs,
-      label: "CAD Viewer backend",
-      close: () => closeHttpServer(server),
-    });
-  }
+try {
+  port = await listenWithPortFallback({
+    server,
+    host,
+    port: requestedPort,
+    scanLimit: runtime.args.portScanLimit,
+  });
+} catch (error) {
+  process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
+  process.exit(1);
+}
+server.on("error", (error) => {
+  process.stderr.write(`CAD Viewer backend error: ${error instanceof Error ? error.message : String(error)}\n`);
 });
+
+console.log(`CAD Viewer backend listening on http://${host}:${port}/ (${backend.kind})`);
+if (port !== requestedPort) {
+  console.log(`Requested port ${requestedPort} was in use; bound ${port} instead.`);
+}
+if (runtime.args.json) {
+  console.log(JSON.stringify(buildViewerStartupJson({
+    host,
+    port,
+    rootDir: runtime.args.rootDir || "",
+    cwd: process.cwd(),
+  })));
+}
+if (serverLifetimeMs !== null) {
+  scheduleProcessShutdown({
+    lifetimeMs: serverLifetimeMs,
+    label: "CAD Viewer backend",
+    close: () => closeHttpServer(server),
+  });
+}
