@@ -9,6 +9,7 @@ source "$SCRIPT_DIR/../lib/vendor.sh"
 MODE="write"
 BUILD=1
 CLEAN=0
+PRINT_OUTPUTS=0
 
 CADJS_PACKAGE_DIR="$REPO_ROOT/packages/cadjs"
 CADPY_PACKAGE_DIR="$REPO_ROOT/packages/cadgen"
@@ -38,6 +39,8 @@ Options:
   --clean     Remove generated package copies and temporary check directories first.
   --no-build  Reuse the current viewer/dist instead of rebuilding the viewer.
               The existing dist must already include client sourcemaps.
+  --print-outputs
+              Print the repo-relative generated output paths, then exit.
   -h, --help  Show this help.
 EOF
 }
@@ -53,6 +56,9 @@ while [ "$#" -gt 0 ]; do
     --no-build)
       BUILD=0
       ;;
+    --print-outputs)
+      PRINT_OUTPUTS=1
+      ;;
     -h|--help)
       usage
       exit 0
@@ -65,6 +71,15 @@ while [ "$#" -gt 0 ]; do
   esac
   shift
 done
+
+if [ "$PRINT_OUTPUTS" -eq 1 ]; then
+  printf '%s\n' \
+    "${VIEWER_CADJS_DIR#"$REPO_ROOT"/}" \
+    "${VIEWER_CADPY_DIR#"$REPO_ROOT"/}" \
+    "${VIEWER_IMPLICITJS_DIR#"$REPO_ROOT"/}" \
+    "${RUNTIME_DIR#"$REPO_ROOT"/}"
+  exit 0
+fi
 
 require_path() {
   local path_to_check="$1"

@@ -169,9 +169,16 @@ The `main` production branch must be installable from a plain checkout, so it
 contains generated production outputs instead of symlinks. `main` is
 publish-only: do not open PRs to `main` or push it directly. The `Test`
 workflow runs on `develop` and PRs to `develop`: it starts from the symlink
-layout, runs `scripts/bundle/bundle.sh --clean`, checks the production layout
-without rebuilding it, runs documentation checks, and runs the code tests
-against that generated output.
+layout, verifies that layout, checks generated outputs against their sources
+with `scripts/bundle/bundle.sh --check`, runs `scripts/bundle/bundle.sh
+--clean`, checks the production layout without rebuilding it, runs
+documentation checks, and runs the code tests against that generated output.
+
+Most generated paths cannot drift on `develop` because they are symlinks to
+their canonical sources, and the freshness check skips those. It covers the
+generated outputs that `develop` does commit as real files, such as the CAD
+snapshot runtime built from `packages/cadjs` and `packages/implicitjs`, and
+version metadata derived from `plugins/cad/VERSION`.
 
 ## Releases
 

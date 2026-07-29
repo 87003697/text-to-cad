@@ -50,11 +50,19 @@ scripts/bundle/bundle.sh --check
 scripts/bundle/bundle-skill.sh <skill-id> --check
 ```
 
-`scripts/github-workflows/check-builds.sh` is the release-layout gate. It verifies
-there are no symlinks under production runtime paths, then runs
-`scripts/bundle/bundle.sh --check` by default. Use `--skip-bundle-check` only in
-workflows that already ran `scripts/bundle/bundle.sh --clean` in the same
-checkout. Plugin skill-copy
+Every bundle script also reports the paths it generates, so checks can discover
+production runtime paths instead of repeating them:
+
+```bash
+scripts/bundle/bundle-skill.sh --all --print-outputs
+scripts/bundle/bundle-plugin.sh --print-outputs
+```
+
+`scripts/github-workflows/check-builds.sh` is the release-layout gate. It asks the
+bundle scripts for their generated paths, verifies each one exists and contains no
+symlinks, then runs `scripts/bundle/bundle.sh --check` by default. Use
+`--skip-bundle-check` only in workflows that already ran
+`scripts/bundle/bundle.sh --clean` in the same checkout. Plugin skill-copy
 freshness and plugin metadata validation are part of
 `scripts/bundle/bundle-plugin.sh --check`, which runs through the master bundle
 check.
