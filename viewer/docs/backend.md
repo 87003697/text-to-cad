@@ -92,8 +92,12 @@ npm run serve
 ```
 
 Then open the printed server URL with
-`?dir=/absolute/root&file=model.step`. Pass `--port <number>` to
-`npm run serve --` only when the default production port is already in use.
+`?dir=/absolute/root&file=model.step`. The server binds `4178` by default and
+scans forward when that port is taken, printing the port it actually bound. Pass
+`--port <number>` only to pin a different starting port, `--port-scan-limit 0`
+to fail instead of scanning, and `--json` to emit a machine-readable
+`{"url":...,"host":...,"port":...,"action":"start"}` line as the last stdout
+line once the listener is bound.
 
 ## Vercel Blob
 
