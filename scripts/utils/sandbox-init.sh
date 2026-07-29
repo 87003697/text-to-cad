@@ -58,6 +58,53 @@
 #   Scenario-specific (reflect "codex-on-Venus" use case):
 #     --share-net                 Keep host network namespace. Codex needs
 #                                 HTTPS to Venus.
+#     --ro-bind <repo>/skills     Bind this checkout's skills/ tree over
+#       $HOME/.codex/skills       $HOME/.codex/skills inside the sandbox
+#                                 (read-only). This is how the codex process
+#                                 running inside sees the CAD skill library.
+#
+#                                 Why bind instead of relying on the overlay
+#                                 lower layer: without this, sandbox would
+#                                 read whatever the host's real ~/.codex/
+#                                 skills/ happens to contain — which depends
+#                                 on whether install-skills.sh was ever run
+#                                 on this host, which checkout it pointed at,
+#                                 and whether that checkout has since been
+#                                 modified or deleted. That couples pilot
+#                                 reproducibility to per-machine state that
+#                                 no one tracks, and directly violates the
+#                                 sandbox's isolation contract. The bind
+#                                 forces "sandbox sees exactly the skills/
+#                                 of the checkout that launched it" and cuts
+#                                 the dependency on install-skills.sh
+#                                 entirely for pilot use. install-skills.sh
+#                                 still exists for non-sandbox agents
+#                                 (Claude Code, Gemini CLI, direct codex
+#                                 outside bwrap) — those live on the host
+#                                 and legitimately want host-level symlinks.
+#
+#                                 Why read-only: skills are versioned,
+#                                 declarative artifacts. Any write to
+#                                 ~/.codex/skills/ from inside a pilot is
+#                                 either a bug (skill code confused about
+#                                 its own layout) or malicious (compromised
+#                                 skill trying to persist). Both should
+#                                 surface. Without --ro-bind, such writes
+#                                 would silently land in SANDBOX_UPPER and
+#                                 either get ignored (invisible to next run)
+#                                 or shipped as pilot output (contaminated
+#                                 artifacts). With --ro-bind, the write
+#                                 returns EROFS and fails loudly.
+#
+#                                 Ordering: this flag MUST appear AFTER the
+#                                 --overlay ... $HOME/.codex clause above.
+#                                 bwrap processes mount ops in argv order;
+#                                 --overlay mounts on $HOME/.codex first,
+#                                 then --ro-bind lays the skills tree on
+#                                 top of that overlay's skills/ subdirectory.
+#                                 Swap the order and the overlay covers the
+#                                 bind — sandbox sees an empty skills/ or
+#                                 whatever the overlay lower layer had.
 #     --setenv VENUS_TOKEN <val>  Propagate the caller's token so codex can
 #                                 authenticate. Value baked into SANDBOX_RUN.
 #
@@ -78,6 +125,13 @@
 
 set -euo pipefail
 
+# Resolve the checkout root so we can bind-mount its skills/ into the
+# sandbox's ~/.codex/skills — see the --ro-bind section in the header
+# for why this must come from the checkout, not the host's ~/.codex.
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
+SKILLS_DIR="$REPO_ROOT/skills"
+
 EXP_DIR="${1:?Usage: sandbox-init.sh EXP_DIR}"
 
 # Preflight
@@ -85,6 +139,11 @@ EXP_DIR="${1:?Usage: sandbox-init.sh EXP_DIR}"
 command -v bwrap >/dev/null \
     || { echo "bwrap not installed; run: dnf install -y bubblewrap" >&2; exit 1; }
 [[ -d "$EXP_DIR" ]] || { echo "EXP_DIR not found: $EXP_DIR" >&2; exit 2; }
+# skills/ absence is a hard error: pilot would boot with no skills visible
+# (--ro-bind onto a nonexistent source fails inside bwrap, or worse, the
+# codex process starts and finds no skill definitions to load). Fail here
+# with a clear message rather than let bwrap emit a confusing mount error.
+[[ -d "$SKILLS_DIR" ]] || { echo "skills/ not found in repo: $SKILLS_DIR" >&2; exit 1; }
 
 # Resolve to absolute paths — bwrap requires absolute paths for
 # overlay-src / overlay mount points.
@@ -96,5 +155,5 @@ mkdir -p "$UPPER" "$WORK"
 # Print exports for the caller to `eval`.
 cat <<EOF
 export SANDBOX_UPPER="$UPPER"
-export SANDBOX_RUN="bwrap --dev-bind / / --proc /proc --overlay-src $HOME/.codex --overlay $UPPER $WORK $HOME/.codex --share-net --die-with-parent --setenv VENUS_TOKEN $VENUS_TOKEN --"
+export SANDBOX_RUN="bwrap --dev-bind / / --proc /proc --overlay-src $HOME/.codex --overlay $UPPER $WORK $HOME/.codex --ro-bind $SKILLS_DIR $HOME/.codex/skills --share-net --die-with-parent --setenv VENUS_TOKEN $VENUS_TOKEN --"
 EOF
