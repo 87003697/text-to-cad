@@ -10,6 +10,8 @@ import tempfile
 import unittest
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
+from unittest import mock
+from urllib.parse import parse_qs, urlparse
 
 from tests.python.support.paths import add_repo_path, repo_path
 
@@ -425,7 +427,9 @@ class SnapshotCliTests(unittest.TestCase):
         self.assertNotIn("workspaceRoot", job)
         self.assertNotIn("rootDir", job)
         self.assertEqual(job["resolved"]["rootPath"], str(models))
-        self.assertEqual(job["resolved"]["inputUrl"], "/__render_asset/part.step")
+        input_url = urlparse(job["resolved"]["inputUrl"])
+        self.assertEqual(input_url.path, "/__render_asset/part.step")
+        self.assertRegex(parse_qs(input_url.query)["v"][0], r"^[0-9a-f]{16}$")
         # The render artifact is a SELF-CONTAINED component-GLB package, so the resolved job
         # carries a package descriptor with per-component asset URLs (no monolithic glbUrl).
         # Each component URL points into the package's own components/ dir inside __cadgen__.
@@ -435,10 +439,89 @@ class SnapshotCliTests(unittest.TestCase):
         component_urls = package["componentUrls"]
         self.assertTrue(component_urls)
         for component_url in component_urls.values():
+            parsed_component_url = urlparse(component_url)
             self.assertTrue(
-                component_url.startswith("/__render_asset/__cadgen__/models/part.step/components/"),
+                parsed_component_url.path.startswith(
+                    "/__render_asset/__cadgen__/models/part.step/components/"
+                ),
                 component_url,
             )
+            self.assertRegex(parse_qs(parsed_component_url.query)["v"][0], r"^[0-9a-f]{16}$")
+
+    def test_multijob_asset_urls_do_not_collide_across_render_roots(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory).resolve()
+            for folder_name in ("first", "second"):
+                folder = root / folder_name
+                folder.mkdir()
+                (folder / "model.step").write_text(
+                    "ISO-10303-21;\nEND-ISO-10303-21;\n",
+                    encoding="utf-8",
+                )
+                write_package(folder / "model.step")
+
+            original_ensure = snapshot_main.ensure_step_topology_artifact
+            try:
+                snapshot_main.ensure_step_topology_artifact = lambda *args, **kwargs: None
+                packet = resolve_render_job_packet(
+                    {
+                        "jobs": [
+                            {
+                                "input": "first/model.step",
+                                "outputs": [{"path": "first.png"}],
+                            },
+                            {
+                                "input": "second/model.step",
+                                "outputs": [{"path": "second.png"}],
+                            },
+                        ]
+                    },
+                    cwd=root,
+                )
+            finally:
+                snapshot_main.ensure_step_topology_artifact = original_ensure
+
+        first_resolved = packet["jobs"][0]["resolved"]
+        second_resolved = packet["jobs"][1]["resolved"]
+        # Each job's render root is its own folder, so both inputs land on the same
+        # basename-relative asset path. Only the ?v= key keeps the shared browser
+        # runtime from serving the first job's file for the second job's URL.
+        self.assertEqual(
+            urlparse(first_resolved["inputUrl"]).path,
+            urlparse(second_resolved["inputUrl"]).path,
+        )
+        self.assertNotEqual(
+            first_resolved["inputUrl"],
+            second_resolved["inputUrl"],
+        )
+
+    def test_asset_url_unversioned_for_generator_input_without_step_file(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory).resolve()
+            missing_step = root / "model.step"
+            self.assertFalse(missing_step.exists())
+            url = snapshot_main.asset_url_for_path(missing_step, root)
+        self.assertEqual(url, "/__render_asset/model.step")
+
+    def test_asset_url_does_not_swallow_unexpected_stat_failures(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory).resolve()
+            asset = root / "model.step"
+            asset.write_text("ISO-10303-21;\nEND-ISO-10303-21;\n", encoding="utf-8")
+
+            # Resolve up front: on Python 3.12 Path.resolve() calls Path.stat()
+            # internally, so resolving inside the patch would recurse forever.
+            resolved_asset = asset.resolve()
+            original_stat = Path.stat
+
+            def denying_stat(self, *args, **kwargs):
+                if self == resolved_asset:
+                    raise PermissionError(13, "stat denied", str(self))
+                return original_stat(self, *args, **kwargs)
+
+            with mock.patch.object(Path, "stat", denying_stat):
+                with self.assertRaises(PermissionError):
+                    snapshot_main.asset_url_for_path(asset, root)
 
     def test_render_job_ensures_step_artifact_for_step_input(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
@@ -676,8 +759,8 @@ class SnapshotCliTests(unittest.TestCase):
         self.assertEqual(calls, [])
         resolved = packet["jobs"][0]["resolved"]
         self.assertEqual(resolved["kind"], "glb")
-        self.assertEqual(resolved["inputUrl"], "/__render_asset/widget.glb")
-        self.assertEqual(resolved["url"], "/__render_asset/widget.glb")
+        self.assertEqual(urlparse(resolved["inputUrl"]).path, "/__render_asset/widget.glb")
+        self.assertEqual(urlparse(resolved["url"]).path, "/__render_asset/widget.glb")
         self.assertEqual(resolved["rootPath"], str(root / "models"))
         self.assertNotIn("package", resolved)
         self.assertNotIn("stepParameterUrl", resolved)
@@ -694,7 +777,7 @@ class SnapshotCliTests(unittest.TestCase):
             )
         resolved = packet["jobs"][0]["resolved"]
         self.assertEqual(resolved["kind"], "stl")
-        self.assertEqual(resolved["url"], "/__render_asset/part.stl")
+        self.assertEqual(urlparse(resolved["url"]).path, "/__render_asset/part.stl")
 
     def test_render_job_resolves_direct_3mf(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
@@ -872,7 +955,7 @@ class SnapshotCliTests(unittest.TestCase):
         job = packet["jobs"][0]
         resolved = job["resolved"]
         self.assertEqual(resolved["kind"], "implicit")
-        self.assertTrue(str(resolved["inputUrl"]).endswith("pulse.implicit.js"))
+        self.assertTrue(urlparse(str(resolved["inputUrl"])).path.endswith("pulse.implicit.js"))
         self.assertEqual(resolved["inputUrl"], resolved["url"])
 
     def test_render_job_supports_orbit_for_implicit_input(self) -> None:

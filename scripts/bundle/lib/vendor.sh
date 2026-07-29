@@ -90,7 +90,7 @@ check_python_runtime() {
 # The whole body of a single-package vendoring bundle script (dxf, sdf, srdf, urdf).
 # <module> defaults to <pkg>. Vendors packages/<pkg> -> skills/<id>/scripts/packages/<pkg>.
 vendor_python_skill() {
-  local repo_root skill="" package="" module="" mode="write" clean=0
+  local repo_root skill="" package="" module="" mode="write" clean=0 print_outputs=0
   repo_root="${BUNDLE_REPO_ROOT:?BUNDLE_REPO_ROOT must be set before vendor_python_skill}"
   while [ "$#" -gt 0 ]; do
     case "$1" in
@@ -99,8 +99,9 @@ vendor_python_skill() {
       --module) module="$2"; shift 2 ;;
       --check) mode="check"; shift ;;
       --clean) clean=1; shift ;;
+      --print-outputs) print_outputs=1; shift ;;
       -h|--help)
-        echo "Usage: bundle-skill.sh $skill [--check] [--clean]" >&2
+        echo "Usage: bundle-skill.sh $skill [--check] [--clean] [--print-outputs]" >&2
         echo "Vendors packages/$package into skills/$skill/scripts/packages/$package." >&2
         return 0 ;;
       *) echo "Unknown argument: $1" >&2; return 2 ;;
@@ -114,6 +115,13 @@ vendor_python_skill() {
   local check_dir="${BUNDLE_CHECK_DIR:-$repo_root/tmp/$skill-skill-runtime-check}/packages/$package"
   local rel_runtime="skills/$skill/scripts/packages/$package"
   local fix_hint="Run scripts/bundle/bundle-skill.sh $skill and commit $rel_runtime."
+
+  # Answer scripts/github-workflows/check-builds.sh before doing any work, so the
+  # generated-path list is derived from the bundle scripts instead of repeated there.
+  if [ "$print_outputs" -eq 1 ]; then
+    printf '%s\n' "$rel_runtime"
+    return 0
+  fi
 
   require_python_package "$package_dir" "$module" || return 1
   [ "$clean" -eq 1 ] && rm -rf "${check_dir%/packages/$package}"

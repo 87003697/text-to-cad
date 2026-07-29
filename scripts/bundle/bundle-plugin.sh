@@ -6,6 +6,7 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 
 MODE="write"
 CLEAN=0
+PRINT_OUTPUTS=0
 
 SOURCE_SKILLS_ROOT="$REPO_ROOT/skills"
 PLUGIN_ROOT="$REPO_ROOT/plugins/cad"
@@ -26,6 +27,8 @@ because provider installers cache plugin roots independently of this checkout.
 Options:
   --check  Bundle into tmp/ and fail if plugin outputs or metadata are stale.
   --clean  Remove temporary bundle/check directories first.
+  --print-outputs
+           Print the repo-relative generated output paths, then exit.
   -h, --help
            Show this help.
 EOF
@@ -39,6 +42,9 @@ while [ "$#" -gt 0 ]; do
     --clean)
       CLEAN=1
       ;;
+    --print-outputs)
+      PRINT_OUTPUTS=1
+      ;;
     -h|--help)
       usage
       exit 0
@@ -51,6 +57,11 @@ while [ "$#" -gt 0 ]; do
   esac
   shift
 done
+
+if [ "$PRINT_OUTPUTS" -eq 1 ]; then
+  printf '%s\n' "${TARGET_SKILLS_ROOT#"$REPO_ROOT"/}"
+  exit 0
+fi
 
 ensure_deps() {
   if ! command -v rsync >/dev/null 2>&1; then

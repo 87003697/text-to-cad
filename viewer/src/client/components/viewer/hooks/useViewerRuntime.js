@@ -2,6 +2,7 @@ import { useEffect } from "react";
 import { isEditableTarget } from "../../../ui/dom";
 import {
   isWebGlContextCreationError,
+  isSoftwareWebGlRenderer,
   runtimeErrorMessage
 } from "cadjs/lib/viewer/webglSupport";
 import {
@@ -161,16 +162,19 @@ export function useViewerRuntime({
       syncCameraViewport(orthographicCamera, width, height);
 
       const renderer = createWebGlRenderer(THREE);
+      const softwareRendering = isSoftwareWebGlRenderer(renderer);
+      const idlePixelRatioCap = softwareRendering ? 1 : IDLE_PIXEL_RATIO_CAP;
+      const interactionPixelRatioCap = softwareRendering ? 1 : INTERACTION_PIXEL_RATIO_CAP;
       renderer.outputColorSpace = THREE.SRGBColorSpace;
       renderer.toneMapping = THREE.ACESFilmicToneMapping;
       renderer.toneMappingExposure = getViewerThemeValue(viewerTheme, "toneMappingExposure", DEFAULT_LIGHTING.toneMappingExposure);
       renderer.localClippingEnabled = true;
-      renderer.shadowMap.enabled = true;
+      renderer.shadowMap.enabled = !softwareRendering;
       renderer.shadowMap.type = THREE.PCFSoftShadowMap;
       // Shadow maps are re-rendered only when the scene changes (see
       // interactionState.shadowsDirty); camera-only frames reuse the last map.
       renderer.shadowMap.autoUpdate = false;
-      renderer.setPixelRatio(getPixelRatioCap(IDLE_PIXEL_RATIO_CAP));
+      renderer.setPixelRatio(getPixelRatioCap(idlePixelRatioCap));
       renderer.setSize(width, height);
       container.innerHTML = "";
       container.appendChild(renderer.domElement);
@@ -198,7 +202,7 @@ export function useViewerRuntime({
         getViewerThemeValue(viewerTheme, "keyLightIntensity", DEFAULT_LIGHTING.keyLightIntensity)
       );
       keyLight.position.set(240, -150, 340);
-      keyLight.castShadow = true;
+      keyLight.castShadow = !softwareRendering;
       keyLight.shadow.mapSize.set(2048, 2048);
       keyLight.shadow.bias = -0.00025;
       keyLight.shadow.normalBias = 0.024;
@@ -253,8 +257,8 @@ export function useViewerRuntime({
       const pointer = new THREE.Vector2();
       const interactionState = {
         active: false,
-        pixelRatioCap: IDLE_PIXEL_RATIO_CAP,
-        pixelRatio: getPixelRatioCap(IDLE_PIXEL_RATIO_CAP),
+        pixelRatioCap: idlePixelRatioCap,
+        pixelRatio: getPixelRatioCap(idlePixelRatioCap),
         renderQueued: false,
         renderQueuedAt: 0,
         renderFallbackTimerId: 0,
@@ -436,8 +440,8 @@ export function useViewerRuntime({
         }
         interactionState.active = true;
         applyRenderQuality(resolveInteractionPixelRatioCap({
-          idlePixelRatioCap: IDLE_PIXEL_RATIO_CAP,
-          interactionPixelRatioCap: INTERACTION_PIXEL_RATIO_CAP,
+          idlePixelRatioCap,
+          interactionPixelRatioCap,
           preservePixelRatio: runtimeRef.current?.preserveInteractionPixelRatio === true,
           screenSpaceLineMaterialCount: getScreenSpaceLineMaterialCount()
         }));
@@ -454,7 +458,7 @@ export function useViewerRuntime({
           controls.enableDamping = true;
           controls.dampingFactor = DEFAULT_DAMPING_FACTOR;
           controls.zoomSpeed = getDefaultZoomSpeed();
-          applyRenderQuality(IDLE_PIXEL_RATIO_CAP);
+          applyRenderQuality(idlePixelRatioCap);
           requestRender();
         }, INTERACTION_IDLE_DELAY_MS);
       };
@@ -690,6 +694,7 @@ export function useViewerRuntime({
         projection: "perspective",
         syncCameraViewport,
         renderer,
+        softwareRendering,
         Line2,
         LineGeometry,
         LineSegments2,
