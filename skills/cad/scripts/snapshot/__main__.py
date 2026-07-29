@@ -578,10 +578,12 @@ def asset_url_for_path(file_path: Path, root_path: Path) -> str:
     base_url = f"/__render_asset/{encode_path_param(relative_path)}"
     try:
         file_stat = resolved_path.stat()
-    except OSError:
+    except FileNotFoundError:
         # Same-stem generator inputs resolve to a STEP path that is never written
         # (the generator runs with skip_step_write=True), so there is nothing to
-        # version; keep the unversioned URL for those.
+        # version; keep the unversioned URL for those. Any other stat failure is
+        # left to propagate: silently falling back to an unversioned URL would
+        # re-enable the very collision this key exists to prevent.
         return base_url
     cache_identity = "\0".join(
         (
