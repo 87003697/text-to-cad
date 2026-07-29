@@ -9,6 +9,15 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 cd "$REPO_ROOT"
 
+# Defensive: source secrets so `nohup ./toys4k-pilot.sh ...` works without
+# a caller wrapper. codex-gpt56 需要 VENUS_TOKEN；nohup 不继承 export
+# 也不 source shell rc。文件不存在时静默（本地 dry-run 场景）。
+SECRETS_FILE="${HOME}/.secrets/text-to-cad.env"
+if [[ -z "${VENUS_TOKEN:-}" && -f "$SECRETS_FILE" ]]; then
+    # shellcheck disable=SC1090
+    source "$SECRETS_FILE"
+fi
+
 OBJ="${1:?Usage: toys4k-pilot.sh <object_name> <group>}"
 GROUP="${2:?Usage: toys4k-pilot.sh <object_name> <group>}"
 [[ "$GROUP" =~ ^[0-9]{8}-[0-9]{6}-[a-z0-9-]+$ ]] \

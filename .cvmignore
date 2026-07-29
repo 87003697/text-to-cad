@@ -2,7 +2,7 @@
 .git/
 .venv/
 node_modules/
-outputs/
+outputs
 __pycache__/
 *.pyc
 .claude/

@@ -1,5 +1,26 @@
 # aws s3 cp exclude list — CVM → S3 upload (cvm-pull.sh uses this)
 # usage.json + events.jsonl intentionally NOT excluded — cost analysis + incident triage need them.
+#
+# NB (2026-07-29): aws --exclude matches the RELATIVE path from source
+# root, not the absolute path. `*/.foo/*` requires a leading `/` component
+# and does NOT match `.foo/x` at the top of the source. Since exp dirs
+# are the source root, top-level dirs need the un-prefixed form. Both
+# forms are listed so nested occurrences (rare) are also caught.
+.codex/*
 */.codex/*
-*stderr.log
+stderr.log
+*/stderr.log
+__pycache__/*
 */__pycache__/*
+# bwrap overlay bookkeeping — codex-exit.sh already mv's rollout out to
+# $EXP_DIR/rollout.jsonl. What's left is sqlite state, plugin locks,
+# and (fatally) socket/FIFO tmp files that aws warns on. Excluding
+# these both removes warnings AND drops ~1 GiB of bloat per exp.
+.codex-upper/*
+*/.codex-upper/*
+.codex-work/*
+*/.codex-work/*
+# per-exp git repo. Hooks + refs + objects add ~25 boilerplate files
+# per exp; the per-phase commit history isn't the primary artifact.
+.git/*
+*/.git/*

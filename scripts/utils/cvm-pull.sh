@@ -94,9 +94,29 @@ for exp in $MISSING; do
     echo "=== [$i/$N] $exp ===" | tee -a "$LOG"
 
     # 1. Upload (CVM 上跑 aws s3 cp)
-    ssh cvm "aws s3 cp --recursive \
-        ~/text-to-cad/outputs/$exp/ $S3_PREFIX/$exp/ \
-        ${EXCLUDES[*]}" 2>&1 | tee -a "$LOG"
+    # Wrap each pattern in single quotes so CVM's bash treats them as
+    # literal strings, not glob patterns. If unquoted, CVM would expand
+    # e.g. */.git/* against its cwd (/root/) — the text-to-cad checkout's
+    # own .git makes it match real dirs, aws sees them as positional args
+    # and bails with "Unknown options: text-to-cad/.git/..." (2026-07-29).
+    EXCLUDE_CMD=""
+    for pat in "${EXCLUDE_PATS[@]}"; do
+        EXCLUDE_CMD+=" --exclude '$pat'"
+    done
+    # Accept aws exit=2 (warnings only). aws walks the tree first, then
+    # applies excludes; if a socket/FIFO tmp file lives inside our
+    # excluded dirs (e.g. .codex-upper/tmp/arg0/), the walker warns
+    # "Skipping file ... character special device" BEFORE the exclude
+    # filter kicks in. Those files are effectively skipped either way
+    # so exit=2 (warnings-only) is safe to continue on; only exit >2
+    # or exit=1 is a real transfer failure.
+    { ssh cvm "aws s3 cp --recursive \
+        ~/text-to-cad/outputs/$exp/ $S3_PREFIX/$exp/${EXCLUDE_CMD}" 2>&1 | tee -a "$LOG"; } || true
+    aws_rc=${PIPESTATUS[0]}
+    if [[ "$aws_rc" -ne 0 && "$aws_rc" -ne 2 ]]; then
+        echo "aws s3 cp fatal (exit=$aws_rc) — aborting" | tee -a "$LOG" >&2
+        exit "$aws_rc"
+    fi
 
     # 2. Verify file count (CVM local vs S3)。两侧都应用 EXCLUDES 才能对齐。
     if [[ -n "$LOCAL_FILTER_RGX" ]]; then
