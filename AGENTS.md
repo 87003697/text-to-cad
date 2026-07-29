@@ -160,16 +160,24 @@ When reviewing repo fixtures in CAD Viewer, point the Viewer at the repo
 generated CAD/robot-description files in `models/` so the viewer catalog and
 artifacts stay in one place.
 
-Start or reuse the Viewer through the `cad-viewer` skill launcher and use the
-base URL it prints. The launcher owns port selection, reuses a compatible live
-Viewer for the same worktree/branch, and uses the source app in Vite dev mode
-when the skill viewer path is a development symlink.
+Start or reuse the Viewer through the `serve` entrypoint documented in
+`skills/cad-viewer/SKILL.md` and use the base URL it prints. `serve` is the only
+startup command the bundled skill runtime ships, so document and use it in both
+layouts; it owns port selection, binding `4178` when free and scanning forward
+when it is not.
 
 Run from `skills/cad-viewer`:
 
 ```bash
-npm --prefix scripts/viewer run agent:start -- --host 127.0.0.1 --shutdown-after 12h
+npm --prefix scripts/viewer run serve -- --host 127.0.0.1 --dir <absolute-model-root> --shutdown-after 12h --json
 ```
+
+`--dir` is required for a useful catalog and must be absolute. Read the bound
+port from the `--json` startup line rather than assuming `4178`.
+
+`viewer/scripts/start-agent-viewer.mjs` (`npm run agent:start`) is a
+source-checkout-only launcher that adds Vite dev mode and cross-worktree reuse.
+It is not bundled into the skill runtime, so never document it in `skills/`.
 
 Every returned Viewer URL must include `?dir=<absolute-model-root>`, commonly
 `<repo>/models`, and `file=<path>` values must be relative to `?dir=`. Do not
