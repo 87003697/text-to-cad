@@ -17,7 +17,7 @@ git switch -c my-change
 Create the repo-local Python development environment:
 
 ```bash
-python3.11 -m venv .venv
+python3.12 -m venv .venv
 ./.venv/bin/python -m pip install --upgrade pip
 ./.venv/bin/python -m pip install -r requirements-dev.txt
 ```
@@ -113,6 +113,10 @@ Then start your agent with `/path/to/text-to-cad` as the working directory and
 ask it to write files under that scratch path. This keeps skill scripts,
 fixtures, generated sidecars, and Viewer links using the same repo-relative
 paths that CI and local checks expect.
+
+Review media such as snapshot PNGs and orbit GIFs are not model artifacts:
+render them under `/tmp` and attach them to the pull request instead. `.gitignore`
+keeps them out of `models/`.
 
 ## Source Boundaries
 
