@@ -362,6 +362,26 @@ class SnapshotCliTests(unittest.TestCase):
             url = snapshot_main.asset_url_for_path(missing_step, root)
         self.assertEqual(url, "/__render_asset/model.step")
 
+    def test_asset_url_does_not_swallow_unexpected_stat_failures(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory).resolve()
+            asset = root / "model.step"
+            asset.write_text("ISO-10303-21;\nEND-ISO-10303-21;\n", encoding="utf-8")
+
+            original_stat = Path.stat
+
+            def denying_stat(self, *args, **kwargs):
+                if self == asset.resolve():
+                    raise PermissionError(13, "stat denied", str(self))
+                return original_stat(self, *args, **kwargs)
+
+            try:
+                Path.stat = denying_stat
+                with self.assertRaises(PermissionError):
+                    snapshot_main.asset_url_for_path(asset, root)
+            finally:
+                Path.stat = original_stat
+
     def test_render_job_ensures_step_artifact_for_step_input(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             root = Path(temporary_directory).resolve()
