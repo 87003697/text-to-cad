@@ -131,12 +131,13 @@ Run the smallest path-targeted check that covers the change. Use broad wrappers
 when touching shared surfaces or before handoff:
 
 - Code tests: `scripts/test/test.sh`
-  - In GitHub Actions, `test.yml` checks the canonical release version as a
-    separate non-blocking job; its test job verifies the `develop` symlink
-    layout, bundles temporary production outputs, and runs docs and code tests
-    against that bundle. `main` writes are validated by the `Release`
-    workflow's publish job; GitHub branch settings should block PRs and direct
-    pushes to `main`.
+  - In GitHub Actions, `test.yml` checks the canonical release version in a
+    separate job so code tests still run when version metadata is wrong; its
+    test job verifies the `develop` symlink layout, checks generated outputs
+    against their sources, bundles temporary production outputs, and runs docs
+    and code tests against that bundle. `main` writes are validated by the
+    `Release` workflow's publish job; GitHub branch settings should block PRs
+    and direct pushes to `main`.
 - Focused test runners: `scripts/test/test-js.sh`,
   `scripts/test/test-docs.sh`, `scripts/test/test-python.sh`,
   `scripts/test/test-global.sh`
