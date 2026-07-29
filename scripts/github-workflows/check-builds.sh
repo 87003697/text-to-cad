@@ -41,51 +41,22 @@ while [ "$#" -gt 0 ]; do
   shift
 done
 
-# Generated output paths production layout must materialize. A stale entry here
-# only weakens a redundant guard, because bundling already fails when it cannot
-# write an output.
-required_paths() {
-  cat <<'EOF'
-viewer/packages
-skills/cad/scripts/packages
-skills/cad/scripts/snapshot/runtime
-skills/cad-viewer/scripts/viewer
-skills/dxf/scripts/packages
-skills/implicit-cad/scripts/packages
-skills/sdf/scripts/packages
-skills/srdf/scripts/packages
-skills/urdf/scripts/packages
-plugins/cad/skills
-EOF
+# Ask the bundle scripts which paths they generate rather than repeating them
+# here, so this check cannot fall behind a new or renamed bundle output.
+generated_paths() {
+  "$REPO_ROOT/scripts/bundle/bundle-skill.sh" --all --print-outputs
+  "$REPO_ROOT/scripts/bundle/bundle-plugin.sh" --print-outputs
 }
 
-# Roots scanned for leftover development symlinks. This list must not drift
-# behind the bundle scripts, so derive it from them: every skill with bundle
-# logic ships generated copies, and a new bundle-<skill>.sh is covered without
-# editing anything here.
-symlink_scan_roots() {
-  find scripts/bundle/skills -maxdepth 1 -type f -name 'bundle-*.sh' -print |
-    sed -e 's|.*/bundle-|skills/|' -e 's|\.sh$||' |
-    LC_ALL=C sort
-  echo "viewer/packages"
-  echo "plugins/cad/skills"
-}
-
-check_exists() {
-  local path="$1"
-
-  if [ ! -e "$path" ]; then
-    echo "Missing production bundle path: $path" >&2
-    echo "Run scripts/bundle/bundle.sh --clean and commit the generated outputs." >&2
-    exit 1
-  fi
-}
-
-check_no_symlinks() {
+check_generated_path() {
   local root="$1"
   local first_link
 
-  check_exists "$root"
+  if [ ! -e "$root" ]; then
+    echo "Missing production bundle path: $root" >&2
+    echo "Run scripts/bundle/bundle.sh --clean and commit the generated outputs." >&2
+    exit 1
+  fi
 
   # Bundling installs dependencies under some roots; only committed paths matter.
   first_link="$(find "$root" -name node_modules -prune -o -type l -print -quit)"
@@ -97,13 +68,9 @@ check_no_symlinks() {
   fi
 }
 
-while IFS= read -r required_path; do
-  check_exists "$required_path"
-done < <(required_paths)
-
-while IFS= read -r scan_root; do
-  check_no_symlinks "$scan_root"
-done < <(symlink_scan_roots)
+while IFS= read -r generated_path; do
+  check_generated_path "$generated_path"
+done < <(generated_paths)
 
 if [ "$RUN_BUNDLE_CHECK" -eq 1 ]; then
   "$REPO_ROOT/scripts/bundle/bundle.sh" --check
