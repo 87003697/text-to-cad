@@ -6,6 +6,53 @@ import { pathToFileURL } from "node:url";
 import test from "node:test";
 
 import { loadSource } from "./source.js";
+import { renderAssetSourceScope } from "../lib/renderAssetSourceScope.js";
+
+// Composition coverage for the scoping of render asset caches.
+//
+// loadSource is the only place a resolved render job meets the page-lifetime render asset caches
+// (common/headlessRenderEntry.js is its sole production caller), and the caches it populates live
+// in lib/stepRenderAssetClient.js. These tests drive the real composition — real loadSource, real
+// client, real wiring — with only globalThis.fetch stubbed, so they fail if the scope is not
+// declared, if the assertion is missing from the client the snapshot batch loads through, or if a
+// collision is swallowed on the way out. Unit-level coverage of the assertion itself lives in
+// lib/stepRenderAssetClient.test.js and lib/renderAssetClient.test.js.
+//
+// The stubbed asset body is deliberately not a decodable GLB: these jobs supply meshData, so the
+// property under test is which source owns the cached bytes, not topology decoding (covered in
+// lib/stepRenderAssetClient.test.js). Loading the mesh itself needs the three runtime and is out
+// of scope for a unit test; it reads the same byte cache asserted here.
+
+function renderAssetUrl() {
+  return `/__render_asset/part.glb?v=${Date.now().toString(16)}${Math.random().toString(16).slice(2)}`;
+}
+
+function stepJob({ inputPath, rootPath, glbUrl }) {
+  return {
+    kind: "step",
+    meshData: meshData(),
+    resolved: {
+      kind: "step",
+      ...(inputPath === undefined ? {} : { inputPath }),
+      ...(rootPath === undefined ? {} : { rootPath }),
+      glbUrl
+    }
+  };
+}
+
+function stubAssetFetch(t, url) {
+  const originalFetch = globalThis.fetch;
+  const state = { fetchCount: 0 };
+  globalThis.fetch = async (requestUrl) => {
+    assert.equal(String(requestUrl), url);
+    state.fetchCount += 1;
+    return new Response(new Uint8Array([state.fetchCount]), { status: 200 });
+  };
+  t.after(() => {
+    globalThis.fetch = originalFetch;
+  });
+  return state;
+}
 
 function meshData() {
   return {
@@ -71,6 +118,122 @@ test("loadSource rejects STEP parameter options for non-STEP sources", async () 
     }),
     /stepParameterUrl is supported only for STEP\/STP sources/
   );
+});
+
+test("loadSource refuses a render asset cached for a different job source", async (t) => {
+  const glbUrl = renderAssetUrl();
+  const fetches = stubAssetFetch(t, glbUrl);
+
+  const first = await loadSource(stepJob({
+    inputPath: "/models/first/part.step",
+    rootPath: "/models/first",
+    glbUrl
+  }));
+  assert.equal(first.kind, "step");
+  assert.equal(fetches.fetchCount, 1);
+
+  await assert.rejects(
+    () => loadSource(stepJob({
+      inputPath: "/models/second/part.step",
+      rootPath: "/models/second",
+      glbUrl
+    })),
+    /cached for source \/models\/first\/part\.step but was requested for \/models\/second\/part\.step/
+  );
+  assert.equal(fetches.fetchCount, 1);
+});
+
+test("loadSource refuses a collision between two sources under one render root", async (t) => {
+  // Same directory, so the server would route this URL identically for both jobs: the scope has to
+  // be the source file, not its parent, or a future URL-minting regression inside one directory
+  // stays invisible.
+  const glbUrl = renderAssetUrl();
+  const fetches = stubAssetFetch(t, glbUrl);
+
+  await loadSource(stepJob({ inputPath: "/models/a.step", rootPath: "/models", glbUrl }));
+  await assert.rejects(
+    () => loadSource(stepJob({ inputPath: "/models/b.step", rootPath: "/models", glbUrl })),
+    /refusing to reuse it/
+  );
+  assert.equal(fetches.fetchCount, 1);
+});
+
+test("loadSource shares one render asset fetch across jobs against the same file", async (t) => {
+  const glbUrl = renderAssetUrl();
+  const fetches = stubAssetFetch(t, glbUrl);
+  const job = () => stepJob({
+    inputPath: "/models/only/part.step",
+    rootPath: "/models/only",
+    glbUrl
+  });
+
+  const results = [await loadSource(job()), await loadSource(job()), await loadSource(job())];
+
+  assert.equal(results.length, 3);
+  for (const result of results) {
+    assert.equal(result.kind, "step");
+  }
+  assert.equal(fetches.fetchCount, 1);
+});
+
+test("loadSource still serves single-source callers that pass no resolved job", async (t) => {
+  // The shape documented in packages/cadjs/docs/render-pipeline.md for interactive viewer/docs use,
+  // and the one docs/src/components/hero-step-render.tsx actually calls: no resolved packet, one
+  // source per page. It must keep working unscoped — requiring a source path here would break a
+  // documented public contract and the docs hero renderer.
+  const glbUrl = renderAssetUrl();
+  const fetches = stubAssetFetch(t, glbUrl);
+
+  const source = await loadSource({
+    kind: "step",
+    meshData: meshData(),
+    glbUrl,
+    cadPath: "models/part.step"
+  });
+
+  assert.equal(source.kind, "step");
+  assert.equal(source.glbUrl, glbUrl);
+  assert.equal(renderAssetSourceScope(), "");
+  assert.equal(fetches.fetchCount, 1);
+
+  // Repeating it reuses the cached asset, exactly as before.
+  await loadSource({ kind: "step", meshData: meshData(), glbUrl, cadPath: "models/part.step" });
+  assert.equal(fetches.fetchCount, 1);
+});
+
+test("loadSource refuses to fetch a render asset for a resolved job that does not name its source", async (t) => {
+  const glbUrl = renderAssetUrl();
+  const fetches = stubAssetFetch(t, glbUrl);
+
+  await assert.rejects(
+    () => loadSource(stepJob({ rootPath: "/models/first", glbUrl })),
+    /require resolved\.inputPath to scope the render asset cache/
+  );
+  // A blank or non-string source is not a source: it must fail closed rather than coerce into the
+  // same bucket as the interactive viewer's unscoped default.
+  for (const inputPath of ["", "   ", 0, false, {}, ["/models/first/part.step"]]) {
+    await assert.rejects(
+      () => loadSource(stepJob({ inputPath, rootPath: "/models/first", glbUrl })),
+      /require resolved\.inputPath to scope the render asset cache/
+    );
+  }
+  assert.equal(fetches.fetchCount, 0);
+});
+
+test("loadSource leaves no source scope behind", async (t) => {
+  const glbUrl = renderAssetUrl();
+  stubAssetFetch(t, glbUrl);
+  assert.equal(renderAssetSourceScope(), "");
+
+  await loadSource(stepJob({
+    inputPath: "/models/kept/part.step",
+    rootPath: "/models/kept",
+    glbUrl
+  }));
+  assert.equal(renderAssetSourceScope(), "");
+
+  await assert.rejects(() => loadSource(stepJob({ glbUrl })));
+  assert.equal(renderAssetSourceScope(), "");
 });
 
 test("loadSource accepts STEP parameter sidecars for STEP sources", async () => {
