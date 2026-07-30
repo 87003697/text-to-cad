@@ -1,6 +1,7 @@
 ---
 name: cvm-pull
-description: Upload CVM new pilot outputs to S3, verify, then clean CVM local.
+description: >-
+  Upload CVM new pilot outputs to S3, verify, then clean CVM local.
   Mac reads via existing rclone mount at ~/threed-code/ericzyma/text-to-cad/outputs/.
   Use after a pilot finishes on CVM to reclaim disk and make results visible on Mac.
   Trigger: "cvm-pull", "拉 outputs", "拉 pilot", "拉 CVM pilot",

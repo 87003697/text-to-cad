@@ -1,6 +1,7 @@
 ---
 name: cvm-push
-description: Push Mac repo to Tencent DevCloud CVM (~/text-to-cad/) via rsync,
+description: >-
+  Push Mac repo to Tencent DevCloud CVM (~/text-to-cad/) via rsync,
   never --delete. Use before running pilot on CVM.
   Trigger: "cvm-push", "推代码到 CVM", "推 CVM", "同步到 CVM",
   "上代码到 cvm", "CVM 跑前推代码", "sync to CVM".

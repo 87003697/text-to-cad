@@ -8,10 +8,11 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 cd "$REPO_ROOT"
+PYTHON_BIN="${PYTHON_BIN:-python3}"
 
 # Defensive: source secrets so `nohup ./toys4k-pilot.sh ...` works without
-# a caller wrapper. codex-gpt56 需要 VENUS_TOKEN；nohup 不继承 export
-# 也不 source shell rc。文件不存在时静默（本地 dry-run 场景）。
+# a caller wrapper. The direct Venus provider still needs VENUS_TOKEN; nohup
+# does not source shell startup files. A missing file is fine for local tests.
 SECRETS_FILE="${HOME}/.secrets/text-to-cad.env"
 if [[ -z "${VENUS_TOKEN:-}" && -f "$SECRETS_FILE" ]]; then
     # shellcheck disable=SC1090
@@ -45,11 +46,22 @@ EOF
 
 echo "[pilot] $OBJ → $EXP_DIR"
 
-eval "$("${SCRIPT_DIR}/codex-init.sh" "${EXP_DIR}")"
+# Capture first so an init failure cannot be turned into `eval ""` success.
+if codex_exports="$("${SCRIPT_DIR}/codex-init.sh" "${EXP_DIR}")"; then
+    eval "$codex_exports"
+else
+    init_status=$?
+    exit "$init_status"
+fi
 printf '%s' "$PROMPT" > "${EXP_DIR}/prompt.txt"
 
 CODEX_EXIT=0
-$CODEX_RUN "$PROMPT" \
+# CODEX_RUN is a controlled, whitespace-tokenized argv contract established by
+# sandbox-init.sh. The supervisor starts tap first and passes the local URL
+# through bwrap's inherited environment.
+# shellcheck disable=SC2086
+"$PYTHON_BIN" "$SCRIPT_DIR/pilot-tap-supervisor.py" "$EXP_DIR" -- \
+    $CODEX_RUN "$PROMPT" \
     < /dev/null > /dev/null 2> "${EXP_DIR}/stderr.log" \
     || CODEX_EXIT=$?
 

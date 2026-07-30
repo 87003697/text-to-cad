@@ -25,9 +25,12 @@
 #
 # Exit codes
 # ----------
-#   0    rollout captured, cleanup applied per policy
+#   0    rollout captured and workload succeeded
 #   3    rollout extraction anomaly — 0 or 2+ rollouts under SANDBOX_UPPER.
 #        Sandbox is preserved for postmortem.
+#   other
+#        rollout captured; original supervisor/Codex status is returned after
+#        cleanup or preservation.
 
 set -euo pipefail
 
@@ -63,3 +66,7 @@ else
     echo "sandbox preserved at $SANDBOX_UPPER (exit=$CODEX_EXIT)" >&2
     echo "clean when done: $SCRIPT_DIR/sandbox-clean.sh \"$EXP_DIR\"" >&2
 fi
+
+# Artifact collection has already succeeded. Preserve the actual workload
+# result so tap/Codex failures cannot be reported as successful pilots.
+exit "$CODEX_EXIT"

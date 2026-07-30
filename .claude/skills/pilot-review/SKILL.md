@@ -1,6 +1,7 @@
 ---
 name: pilot-review
-description: Audit mesh-to-cad pilot exp dir(s), emit review.md + iteration
+description: >-
+  Audit mesh-to-cad pilot exp dir(s), emit review.md + iteration
   playbook mapping issues to specific SKILL.md sections.
   Trigger: "pilot-review", "审阅 pilot", "看 outputs", "iterate CAD skill",
   "cvm 运行结果", "分析 pilot".

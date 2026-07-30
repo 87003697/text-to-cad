@@ -8,24 +8,24 @@
 # codex-specific setup:
 #   * git init inside EXP_DIR (agent commits per phase during the pilot)
 #   * .gitignore filtering codex artifacts
-#   * A composed CODEX_RUN command prefix so callers say
-#         $CODEX_RUN "$PROMPT"
-#     instead of manually chaining bwrap + gateway + exec + flags.
+#   * A composed tap-only CODEX_RUN command prefix. Production callers pass
+#     that argv through pilot-tap-supervisor.py; direct execution fails closed
+#     because gateway/codex-tap-gpt56 requires CLAUDE_TAP_URL.
 #
 # See codex-exit.sh for the paired teardown.
 #
 # Usage
 # -----
 #   eval "$(codex-init.sh EXP_DIR)"
-#   $CODEX_RUN "$PROMPT" < /dev/null > /dev/null 2> "$EXP_DIR/stderr.log"
+#   pilot-tap-supervisor.py "$EXP_DIR" -- $CODEX_RUN "$PROMPT"
 #
 # What gets exported (via eval'd stdout)
 # --------------------------------------
 #   SANDBOX_UPPER   passthrough from sandbox-init.sh
 #   SANDBOX_RUN     passthrough from sandbox-init.sh
-#   CODEX_RUN       "$SANDBOX_RUN <REPO_ROOT>/gateway/codex-gpt56 <MODEL> exec -s workspace-write"
-#                   — a full "run codex inside the sandbox" prefix, ready
-#                     to be followed by the prompt string.
+#   CODEX_RUN       "$SANDBOX_RUN <REPO_ROOT>/gateway/codex-tap-gpt56 <MODEL> exec -s workspace-write"
+#                   — a tap-only sandboxed Codex prefix. It must be launched
+#                     by pilot-tap-supervisor.py.
 #
 # Environment
 # -----------
@@ -60,6 +60,14 @@ mkdir -p "$EXP_DIR"
 stderr.log
 rollout.jsonl
 prompt.txt
+trace.html
+traces.sqlite3
+traces.sqlite3-shm
+traces.sqlite3-wal
+traces.sqlite3.write.lock
+.claude-tap.log
+.claude-tap.log.export
+.trace.html.tmp.*
 .codex-upper/
 .codex-work/
 __pycache__/
@@ -79,10 +87,9 @@ GITIGNORE
 sandbox_exports="$("$SCRIPT_DIR/sandbox-init.sh" "$EXP_DIR")"
 eval "$sandbox_exports"
 
-# 4. Compose CODEX_RUN = sandbox prefix + gateway/codex-gpt56 exec prefix.
-#    The caller does `$CODEX_RUN "$PROMPT"` — one string to invoke codex
-#    inside the sandbox.
-CODEX_RUN="$SANDBOX_RUN $REPO_ROOT/gateway/codex-gpt56 ${MODEL:-sol} exec -s workspace-write"
+# 4. Compose a tap-only workload. The supervisor supplies CLAUDE_TAP_URL;
+#    the gateway refuses to run without it and has no direct fallback.
+CODEX_RUN="$SANDBOX_RUN $REPO_ROOT/gateway/codex-tap-gpt56 ${MODEL:-sol} exec -s workspace-write"
 
 # 5. Print all exports for the caller to eval.
 echo "$sandbox_exports"
