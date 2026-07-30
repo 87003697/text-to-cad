@@ -1,0 +1,30 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Usage: codex-tap-gpt56 <model-variant> [codex args...]
+# This gateway is intentionally tap-only: there is no Venus direct fallback.
+
+readonly CODEX_BIN="codex"
+VENUS_TOKEN="${VENUS_TOKEN:?VENUS_TOKEN must be set}"
+CLAUDE_TAP_URL="${CLAUDE_TAP_URL:?CLAUDE_TAP_URL must be set by pilot runner}"
+
+if [[ ! "$CLAUDE_TAP_URL" =~ ^http://127[.]0[.]0[.]1:[0-9]+/v1$ ]]; then
+  echo "CLAUDE_TAP_URL must be a loopback /v1 URL, got: $CLAUDE_TAP_URL" >&2
+  exit 1
+fi
+
+command -v "$CODEX_BIN" >/dev/null \
+  || { echo "codex not found on sandbox PATH" >&2; exit 1; }
+
+VARIANT="${1:?Usage: codex-tap-gpt56 <sol|terra|luna> [codex args...]}"
+shift
+MODEL="gpt-5.6-${VARIANT}"
+
+exec "$CODEX_BIN" \
+  -c "model_providers.venus.name=\"Venus GPT-5.6-${VARIANT} (via claude-tap)\"" \
+  -c "model_providers.venus.base_url=\"${CLAUDE_TAP_URL}\"" \
+  -c 'model_providers.venus.wire_api="responses"' \
+  -c "model_providers.venus.experimental_bearer_token=\"${VENUS_TOKEN}\"" \
+  -c 'model_provider="venus"' \
+  -m "$MODEL" \
+  "$@"

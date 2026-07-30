@@ -14,6 +14,8 @@ Use these durable entrypoints for normal work:
 | Check canonical release version | `scripts/release/check-version.sh` |
 | Install local skills into agents | `scripts/install/install-skills.sh --agent codex` |
 | Uninstall local skill links | `scripts/install/uninstall-skills.sh --agent codex` |
+| Run one Toys4K pilot | `scripts/pilot/toys4k-pilot.sh <object> <group>` |
+| Run a Toys4K pilot batch | `scripts/pilot/toys4k-batch.sh <slug> <object>...` |
 
 Lower-level scripts stay grouped by ownership:
 
@@ -24,6 +26,7 @@ Lower-level scripts stay grouped by ownership:
   used by GitHub Actions.
 - `dev/`: symlink layout setup and verification for development checkouts.
 - `install/`: local skill install/uninstall scripts for agent skill folders.
+- `pilot/`: Toys4K pilot entrypoints and their tap/sandbox lifecycle runtime.
 - `utils/`: shared helper scripts used by durable repo commands.
 - `release/`: version bumping, release commits, tags, and GitHub Releases.
 - `viewer/`, `git-hooks/`: specialized repo tooling.

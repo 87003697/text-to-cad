@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# scripts/utils/toys4k-pilot.sh <object_name> <group>
+# scripts/pilot/toys4k-pilot.sh <object_name> <group>
 # Toys4K mesh-to-CAD benchmark pilot. Reads models/toys4k/<name>.ply,
 # writes outputs/<group>/<TS>-<name>/. Group format: YYYYMMDD-HHMMSS-<slug>.
 
@@ -8,10 +8,11 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 cd "$REPO_ROOT"
+PYTHON_BIN="${PYTHON_BIN:-python3}"
 
 # Defensive: source secrets so `nohup ./toys4k-pilot.sh ...` works without
-# a caller wrapper. codex-gpt56 需要 VENUS_TOKEN；nohup 不继承 export
-# 也不 source shell rc。文件不存在时静默（本地 dry-run 场景）。
+# a caller wrapper. The direct Venus provider still needs VENUS_TOKEN; nohup
+# does not source shell startup files. A missing file is fine for local tests.
 SECRETS_FILE="${HOME}/.secrets/text-to-cad.env"
 if [[ -z "${VENUS_TOKEN:-}" && -f "$SECRETS_FILE" ]]; then
     # shellcheck disable=SC1090
@@ -39,20 +40,37 @@ Input mesh: ${PLY}
 Experiment directory (already an initialized local git repo, write ALL
 artifacts here): ${EXP_DIR}
 
+Save every final CAD/Implicit snapshot review PNG or GIF under
+${EXP_DIR}/reviews/. Do not leave the only copy of any review under /tmp.
+Keep mesh comparison checkpoints under ${EXP_DIR}/previews/ as required by
+the mesh-to-cad skill; previews do not replace the routed skill review packet.
+
 Stay under ${EXP_DIR}; do not modify skills/, packages/, or files outside.
 EOF
 )
 
 echo "[pilot] $OBJ → $EXP_DIR"
 
-eval "$("${SCRIPT_DIR}/codex-init.sh" "${EXP_DIR}")"
+mkdir -p "$EXP_DIR"
 printf '%s' "$PROMPT" > "${EXP_DIR}/prompt.txt"
 
-CODEX_EXIT=0
-$CODEX_RUN "$PROMPT" \
-    < /dev/null > /dev/null 2> "${EXP_DIR}/stderr.log" \
-    || CODEX_EXIT=$?
+WORKLOAD=(
+    "gateway/codex-tap-gpt56"
+    "${MODEL:-sol}"
+    exec
+    --skip-git-repo-check
+    -s
+    danger-full-access
+    "$PROMPT"
+)
 
-"${SCRIPT_DIR}/codex-exit.sh" "${EXP_DIR}" "$CODEX_EXIT"
+PILOT_EXIT=0
+"$PYTHON_BIN" "$SCRIPT_DIR/runner.py" run --input "$PLY" "$EXP_DIR" -- \
+    "${WORKLOAD[@]}" < /dev/null > /dev/null \
+    2> "${EXP_DIR}/stderr.log" || PILOT_EXIT=$?
+
+if [[ $PILOT_EXIT -ne 0 ]]; then
+    exit "$PILOT_EXIT"
+fi
 
 echo "[pilot] Done. Audit: /pilot-review $EXP_DIR/"
