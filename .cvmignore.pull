@@ -12,10 +12,10 @@ stderr.log
 */stderr.log
 __pycache__/*
 */__pycache__/*
-# bwrap overlay bookkeeping — codex-exit.sh already mv's rollout out to
+# bwrap overlay bookkeeping — v4 runner collects the unique rollout into
 # $EXP_DIR/rollout.jsonl. What's left is sqlite state, plugin locks,
-# and (fatally) socket/FIFO tmp files that aws warns on. Excluding
-# these both removes warnings AND drops ~1 GiB of bloat per exp.
+# and socket/FIFO tmp files that aws warns on. Default cvm-pull now preserves
+# failed/postmortem CVM dirs instead of excluding this state and deleting it.
 .codex-upper/*
 */.codex-upper/*
 .codex-work/*

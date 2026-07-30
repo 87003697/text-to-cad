@@ -1,5 +1,6 @@
 # rsync exclude list — Mac → CVM push (cvm-push.sh --exclude-from=.cvmignore)
 .git/
+.git
 .venv/
 node_modules/
 outputs

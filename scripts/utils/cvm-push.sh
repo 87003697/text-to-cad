@@ -27,12 +27,30 @@ elif [[ "$FREE_GB" -lt 10 ]]; then
 fi
 
 # --- log 目标（Monitor tool tail 用）
-LOG="/tmp/cvm-push-$(date +%Y%m%d-%H%M%S).log"
+LOG="${TMPDIR:-/tmp}/cvm-push-$(date +%Y%m%d-%H%M%S).log"
 echo "Log: $LOG"
+
+# --- 记录实际 rsync source provenance
+# CVM checkout 的 .git 不会随 rsync 更新，因此 remote HEAD 只能说明远端基线，
+# 不能代表本次部署内容。linked worktree 和脏 worktree 都是合法 source。
+SOURCE_HEAD="$(git rev-parse HEAD 2>/dev/null || echo no-git)"
+SOURCE_BRANCH="$(git symbolic-ref --quiet --short HEAD 2>/dev/null || echo detached)"
+if [[ -n "$(git status --porcelain --untracked-files=normal 2>/dev/null)" ]]; then
+    SOURCE_STATE="dirty"
+else
+    SOURCE_STATE="clean"
+fi
+echo "Source: branch=$SOURCE_BRANCH head=$SOURCE_HEAD state=$SOURCE_STATE" \
+    | tee -a "$LOG"
 
 # --- 跑 rsync（永不加 --delete）
 # Mac /usr/bin/rsync = openrsync (macOS 14+), 不支持 --info=progress2/--stats；
 # GNU rsync (brew install rsync) 支持。用 --progress -v 是两者共同子集。
 rsync -avz --progress \
     --exclude-from=.cvmignore \
-    ./ cvm:~/text-to-cad/ 2>&1 | tee "$LOG"
+    ./ cvm:~/text-to-cad/ 2>&1 | tee -a "$LOG"
+
+REMOTE_HEAD="$(ssh cvm \
+    'cd ~/text-to-cad && git rev-parse HEAD 2>/dev/null || echo no-git')"
+echo "Remote Git base: $REMOTE_HEAD (rsync overlay; not deployment identity)" \
+    | tee -a "$LOG"
