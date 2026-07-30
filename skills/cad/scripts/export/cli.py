@@ -30,16 +30,6 @@ def _add_export_arguments(parser: argparse.ArgumentParser) -> None:
         help="CAD model to export: a gen_step() Python source or an imported STEP/STP file.",
     )
     parser.add_argument(
-        "--step",
-        nargs="?",
-        const=DEFAULT_OUTPUT,
-        metavar="OUTPUT",
-        help=(
-            "Export a text STEP file. Without a path, writes the sibling <name>.step; "
-            "a relative path resolves beside the model."
-        ),
-    )
-    parser.add_argument(
         "--stl",
         nargs="?",
         const=DEFAULT_OUTPUT,
@@ -62,14 +52,6 @@ def _add_export_arguments(parser: argparse.ArgumentParser) -> None:
         help="Export a native Y-up GLB mesh. Without a path, writes the sibling <name>.glb.",
     )
     parser.add_argument(
-        "--kind",
-        choices=("part", "assembly"),
-        help=(
-            "Override part/assembly inference for an imported STEP/STP target. "
-            "Generated Python targets infer kind from gen_step()."
-        ),
-    )
-    parser.add_argument(
         "--mesh-tolerance",
         type=float,
         help="Positive shared mesh linear deflection for STL, 3MF, and native GLB outputs.",
@@ -89,7 +71,6 @@ def _add_export_arguments(parser: argparse.ArgumentParser) -> None:
 def _requested_outputs(args: argparse.Namespace) -> list[tuple[str, str | None]]:
     outputs: list[tuple[str, str | None]] = []
     for fmt, value in (
-        ("step", args.step),
         ("stl", args.stl),
         ("3mf", args.three_mf),
         ("glb", args.glb),
@@ -105,8 +86,9 @@ def build_parser() -> argparse.ArgumentParser:
         prog="scripts/export",
         description=(
             "Export one CAD model — a gen_step() Python source or an imported STEP/STP "
-            "file — to STEP/STL/3MF/GLB. The model is built once per run, so all "
-            "requested formats come from identical geometry."
+            "file — to STL/3MF/GLB. The model is built once per run, so all requested "
+            "formats come from identical geometry. Writes no .step file: use "
+            "scripts/gen --write-step to write a generated model's STEP."
         ),
     )
     _add_export_arguments(parser)
@@ -118,7 +100,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = parser.parse_args(list(argv) if argv is not None else None)
     outputs = _requested_outputs(args)
     if not outputs:
-        parser.error("at least one export format is required: --step, --stl, --3mf, or --glb")
+        parser.error("at least one export format is required: --stl, --3mf, or --glb")
     mesh_tolerance = _normalize_cli_numeric(
         args.mesh_tolerance,
         field_name="mesh_tolerance",
@@ -133,7 +115,6 @@ def main(argv: Sequence[str] | None = None) -> int:
         payload = export_cad_target(
             args.target,
             outputs,
-            kind=args.kind,
             mesh_tolerance=mesh_tolerance,
             mesh_angular_tolerance=mesh_angular_tolerance,
             verbose=bool(args.verbose),

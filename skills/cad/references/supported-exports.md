@@ -1,6 +1,6 @@
 # Supported exports
 
-Read this file when the user requests STEP, STL, 3MF, or native GLB output files from CAD geometry. For 2D DXF output, use the `$dxf` skill; DXF uses a separate `gen_dxf()` contract in a dedicated `<name>.dxf.py` drawing generator (never inside a `.step.py`).
+Read this file when the user requests STL, 3MF, or native GLB output files from CAD geometry. For a `.step` file, use `scripts/gen --write-step` (see `step-generation.md`) — `scripts/export` writes mesh formats only. For 2D DXF output, use the `$dxf` skill; DXF uses a separate `gen_dxf()` contract in a dedicated `<name>.dxf.py` drawing generator (never inside a `.step.py`).
 
 ## Policy
 
@@ -10,10 +10,10 @@ Native GLB exports are ordinary glTF 2.0 binary files for external tools: Y-up, 
 
 ## Tool
 
-`scripts/export` takes one model target — a `gen_step()` Python source or an imported STEP/STP file — and one or more format flags. The model is built once per run (the generator runs once), so every requested format comes from identical geometry; exports can never be stale.
+`scripts/export` takes one model target — a `gen_step()` Python source or an imported STEP/STP file — and one or more mesh format flags (`--stl`, `--3mf`, `--glb`). The model is built once per run (the generator runs once), so every requested format comes from identical geometry; exports can never be stale.
 
 ```bash
-python scripts/export path/to/model.step.py --step --stl --3mf --glb
+python scripts/export path/to/model.step.py --stl --3mf --glb
 ```
 
 Each format flag takes an optional output path. Without a path, the file is written beside the model as `<name>.<ext>`. A relative path resolves beside the model; an absolute path is used as-is:
@@ -25,13 +25,13 @@ python scripts/export path/to/model.step.py \
   --glb meshes/model.glb
 ```
 
-When a generator exists, export from the generator. Pass an imported STEP/STP file directly only when no generator exists or the user explicitly identifies that file as the target; its part/assembly kind is inferred automatically (`--kind part|assembly` overrides the inference when a vendor STEP misclassifies):
+When a generator exists, export from the generator. Pass an imported STEP/STP file directly only when no generator exists or the user explicitly identifies that file as the target; its part/assembly kind is inferred automatically:
 
 ```bash
 python scripts/export path/to/imported.step --stl --3mf
 ```
 
-A text STEP file is itself an export: `scripts/gen` builds only the hidden render package by default, so use `--step` here (or `scripts/gen --write-step` during generation) to write the `.step` file when the user needs one.
+`scripts/export` never writes a `.step` file. A generated model's STEP comes from `scripts/gen <name>.step.py --write-step` in the generation run; an imported model's STEP is already the file on disk.
 
 ## Mesh tolerance
 
@@ -52,11 +52,12 @@ Use tighter tolerances for small curved parts or visual fidelity. Use looser tol
 2. Run `scripts/export` with the requested format flag(s).
 3. Report the exported files.
 
-Example:
+Example — write the STEP during generation, then mesh exports from the same generator:
 
 ```bash
+python scripts/gen models/bracket.step.py --write-step
+
 python scripts/export models/bracket.step.py \
-  --step \
   --stl meshes/bracket.stl \
   --glb meshes/bracket.glb \
   --mesh-tolerance 0.2 \
@@ -74,6 +75,6 @@ Files:
 - GLB: /absolute/project/models/meshes/bracket.glb
 
 Validation:
-- CAD geometry validated; STEP/STL/3MF/native GLB written as requested exports.
+- CAD geometry validated; STL/3MF/native GLB written as requested exports.
 - Primary STEP/STP snapshot packet run/skipped and why.
 ```

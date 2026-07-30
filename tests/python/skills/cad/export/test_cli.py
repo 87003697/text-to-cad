@@ -34,18 +34,26 @@ class ExportCliTests(unittest.TestCase):
 
     def test_bare_format_flags_request_default_sibling_outputs(self) -> None:
         with mock.patch.object(cli, "export_cad_target", return_value=_OK_PAYLOAD) as export:
-            self.assertEqual(
-                0, cli.main(["parts/sample.step.py", "--step", "--stl", "--3mf", "--glb"])
-            )
+            self.assertEqual(0, cli.main(["parts/sample.step.py", "--stl", "--3mf", "--glb"]))
 
         export.assert_called_once()
         self.assertEqual("parts/sample.step.py", export.call_args.args[0])
         self.assertEqual(
-            [("step", None), ("stl", None), ("3mf", None), ("glb", None)],
+            [("stl", None), ("3mf", None), ("glb", None)],
             export.call_args.args[1],
         )
-        self.assertIsNone(export.call_args.kwargs["kind"])
         self.assertFalse(export.call_args.kwargs["verbose"])
+
+    def test_rejects_step_export(self) -> None:
+        # A .step file is written by `scripts/gen --write-step`, never by export.
+        with self.assertRaises(SystemExit) as cm:
+            cli.main(["parts/sample.step.py", "--step"])
+        self.assertEqual(2, cm.exception.code)
+
+    def test_rejects_kind_override(self) -> None:
+        with self.assertRaises(SystemExit) as cm:
+            cli.main(["imports/sample_part.step", "--stl", "--kind", "assembly"])
+        self.assertEqual(2, cm.exception.code)
 
     def test_explicit_output_paths_pass_through(self) -> None:
         with mock.patch.object(cli, "export_cad_target", return_value=_OK_PAYLOAD) as export:
@@ -72,12 +80,6 @@ class ExportCliTests(unittest.TestCase):
             ],
             export.call_args.args[1],
         )
-
-    def test_passes_kind_override(self) -> None:
-        with mock.patch.object(cli, "export_cad_target", return_value=_OK_PAYLOAD) as export:
-            self.assertEqual(0, cli.main(["imports/sample_part.step", "--stl", "--kind", "assembly"]))
-
-        self.assertEqual("assembly", export.call_args.kwargs["kind"])
 
     def test_passes_mesh_tolerances_and_verbose(self) -> None:
         with mock.patch.object(cli, "export_cad_target", return_value=_OK_PAYLOAD) as export:
@@ -108,12 +110,12 @@ class ExportCliTests(unittest.TestCase):
     def test_value_error_from_export_is_a_usage_error(self) -> None:
         stream = io.StringIO()
         with mock.patch.object(
-            cli, "export_cad_target", side_effect=ValueError("kind overrides apply only to imported STEP")
+            cli, "export_cad_target", side_effect=ValueError("--stl output must end with .stl")
         ):
             with self.assertRaises(SystemExit) as cm, contextlib.redirect_stderr(stream):
-                cli.main(["parts/sample.step.py", "--stl", "--kind", "part"])
+                cli.main(["parts/sample.step.py", "--stl", "meshes/sample.bin"])
         self.assertEqual(2, cm.exception.code)
-        self.assertIn("kind overrides apply only to imported STEP", stream.getvalue())
+        self.assertIn("--stl output must end with .stl", stream.getvalue())
 
     def test_prints_written_files(self) -> None:
         stream = io.StringIO()
@@ -128,13 +130,12 @@ class ExportCliTests(unittest.TestCase):
             cli.main(["--help"])
         self.assertEqual(0, cm.exception.code)
         help_text = stream.getvalue()
-        self.assertIn("--step", help_text)
         self.assertIn("--stl", help_text)
         self.assertIn("--3mf", help_text)
         self.assertIn("--glb", help_text)
-        self.assertIn("--kind", help_text)
         self.assertIn("--mesh-tolerance", help_text)
         self.assertIn("--verbose", help_text)
+        self.assertNotIn("--kind", help_text)
         self.assertNotIn("--output", help_text)
         self.assertNotIn("--force", help_text)
 

@@ -195,8 +195,8 @@ topology embedding), the component-GLB layout, the imported-`stepHash` gate.
 The provider's `freshness()` consolidates today's distinct STEP models (no change in behavior):
 generated source-closure hash + cheap descriptor-mtime trigger; imported on-disk `stepHash`; package
 presence/completeness; embedded `STEP_TOPOLOGY` schema version; mesh-option/tolerance match. An
-external generator-run lock (`.generation.lock.json`, surfaced via `/__cad/generation-status`) maps
-directly to `status: "generating"`.
+external generator-run lock (`.generation.lock`, an `fcntl.flock` sentinel surfaced via
+`/__cad/generation-status`) maps directly to `status: "generating"`.
 
 ## 9. Migration (incremental, each phase shippable)
 

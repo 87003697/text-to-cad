@@ -759,8 +759,9 @@ def _write_shape_step_payload(
             f"got {type(shape).__name__}"
         )
     # gen_step builds the render scene in memory and does NOT write a text STEP — STEP is
-    # an on-demand export (the `--step` job, from scene.source_compound). The scene is built
-    # straight from the XCAF doc, never via a STEP round-trip.
+    # written on demand from scene.source_compound (`scripts/gen --write-step`, or the
+    # Viewer's Save-dialog export). The scene is built straight from the XCAF doc, never
+    # via a STEP round-trip.
     source_identity = python_source_hash(script_path)
     scene = build_build123d_step_scene(
         shape,
@@ -771,7 +772,7 @@ def _write_shape_step_payload(
     _mark_scene_python_backed(scene, source_identity=source_identity, source_path=script_path)
     _mark_scene_step_payload(scene, entry_kind=entry_kind, payload_kind="shape")
     # Stash the pre-bake compound: the component-package emit job introspects its located
-    # children (occurrence transforms + dedup), and the `--step` export serializes it.
+    # children (occurrence transforms + dedup), and the STEP export serializes it.
     scene.source_compound = shape
     params_abs = envelope.get("params")
     if params_abs is not None:
@@ -1625,10 +1626,19 @@ def _generated_dxf_summary(spec: EntrySpec) -> str:
     return f"processed: {spec.source_ref}"
 
 
+class _SkippedGeneration:
+    """Marker: the lock holder ahead of us had already produced a current package."""
+
+    __slots__ = ("spec",)
+
+    def __init__(self, spec: EntrySpec) -> None:
+        self.spec = spec
+
+
 def _track_spec_generation(spec: EntrySpec, generator_name: str) -> contextlib.AbstractContextManager[None]:
     # Package builds are coordinated with the viewer's artifact pull: lock the model's
-    # __cadgen__ package so a concurrent viewer/CLI build detects the in-flight run and
-    # waits for it instead of duplicating the work.
+    # __cadgen__ package so a concurrent viewer/CLI build waits for the in-flight run
+    # instead of writing the same package underneath it.
     if generator_name == "gen_step" and spec.step_path is not None:
         return track_generation_run(generation_lock_path(render_package_dir(spec.entry_path)))
     if generator_name == "gen_dxf" and spec.script_path is not None:
@@ -1642,8 +1652,20 @@ def _run_with_spec_generation_status(
     spec: EntrySpec,
     generator_name: str,
     action: Callable[[EntrySpec], object],
+    *,
+    skip_if_current: Callable[[EntrySpec], bool] | None = None,
 ) -> object:
+    """Run ``action`` while holding the model's generation lock.
+
+    ``skip_if_current`` is re-evaluated AFTER the lock is acquired. The CLI's
+    pre-lock fast path cannot cover the concurrent case: it ran before the other
+    build existed, so a process that queued behind a peer would wake up and redo
+    the full generator+mesh+emit the holder had just finished. Re-checking here
+    turns the second and third contenders into no-ops.
+    """
     with _track_spec_generation(spec, generator_name):
+        if skip_if_current is not None and skip_if_current(spec):
+            return _SkippedGeneration(spec)
         return action(spec)
 
 
@@ -1676,7 +1698,9 @@ def _run_selected_specs(
                     with contextlib.redirect_stdout(action_stdout):
                         result = action(spec)
             results.append(result)
-            if success_message is not None:
+            if isinstance(result, _SkippedGeneration):
+                logger.info(f"{spec.cad_ref} was built by a concurrent run; skipped")
+            elif success_message is not None:
                 message_spec = result.spec if isinstance(result, GeneratedStepResult) else spec
                 logger.info(success_message(message_spec))
         return results
@@ -1700,10 +1724,12 @@ def _run_selected_specs(
 def _manifest_source_closure_unchanged(manifest: Mapping[str, object], base: Path) -> bool:
     """Whether a topology manifest's recorded source closure re-hashes unchanged.
 
-    For an assembly the closure spans the generator's import closure *and* every
-    composed child STEP, so a changed generator, shared helper, or child STEP all
-    invalidate it. ``base`` is the model folder the recorded closure paths are
-    relative to. Returns False when no usable closure was recorded."""
+    The closure is the generator's Python import reach, so a changed generator or
+    shared helper invalidates it — and so does a composed child when it is composed
+    the documented way, by importing its ``.step.py``. A child read as a raw ``.step``
+    file is data, not a closure input; ``_rebuild_stale_assembly_children`` keeps
+    generated children current instead. ``base`` is the model folder the recorded
+    closure paths are relative to. Returns False when no usable closure was recorded."""
     recorded_hash = str(manifest.get("sourceClosureHash") or "").strip()
     recorded_files = manifest.get("sourceClosureFiles")
     if not recorded_hash or not isinstance(recorded_files, list) or not recorded_files:
@@ -1716,9 +1742,9 @@ def _assembly_is_current(spec: EntrySpec) -> bool:
     regeneration (gen_step + mesh + emit) can be skipped entirely.
 
     gen_step no longer writes a STEP, so freshness rides on the package
-    descriptor's recorded source closure (generator imports + every referenced
-    child STEP) re-hashing unchanged — not an on-disk STEP hash. Parts and
-    assemblies are both packages and share this gate.
+    descriptor's recorded source closure (the generator's Python import reach)
+    re-hashing unchanged — not an on-disk STEP hash. Parts and assemblies are
+    both packages and share this gate.
     """
     if spec.source != "generated" or spec.step_path is None:
         return False
@@ -1727,13 +1753,13 @@ def _assembly_is_current(spec: EntrySpec) -> bool:
 
 def _generated_assembly_glb_closure_current(spec: EntrySpec) -> bool:
     """Whether a generated model's existing render package still matches its
-    source closure (generator imports + every composed child STEP). Imported
-    models have no closure and are unaffected (return True; their stepHash gate
-    handles freshness).
+    source closure (the generator's Python import reach). Imported models have no
+    closure and are unaffected (return True; their stepHash gate handles freshness).
 
     Reads the closure from the package descriptor (assembly.json), which the
-    dir-aware manifest reader returns. A changed generator, shared helper, or
-    child STEP all invalidate the closure."""
+    dir-aware manifest reader returns. A changed generator or shared helper
+    invalidates the closure; see :func:`_manifest_source_closure_unchanged` for how
+    composed children are covered."""
     if spec.source != "generated":
         return True
     if spec.step_path is None:
@@ -1954,7 +1980,7 @@ def generate_step_targets(
         selected_specs = [_apply_step_options_to_spec(spec, step_options) for spec in selected_specs]
     _rebuild_stale_assembly_children(all_specs, selected_specs, force=force, logger=logger)
     # No-op fast path: skip recomposing a generated assembly whose source closure
-    # (generator imports + every composed child STEP) is unchanged. Runs after the
+    # (the generator's Python import reach) is unchanged. Runs after the
     # child rebuild so a just-rebuilt child correctly invalidates the closure. Only
     # for plain in-place regeneration (no --force or output overrides).
     no_output_override = not any(path is not None for path in target_output_paths)
@@ -1977,6 +2003,15 @@ def generate_step_targets(
                 logger.total()
                 return 0
     entries_by_step_path = _entries_by_step_path([*all_specs, *selected_specs])
+
+    # Same condition as the pre-lock fast path above, re-checked once the lock is held
+    # so a run that queued behind a concurrent build of this model no-ops instead of
+    # rebuilding it. --force and explicit extra outputs always do the work.
+    def _built_by_a_peer(spec: EntrySpec) -> bool:
+        if force or not no_output_override or _spec_requests_extra_outputs(spec):
+            return False
+        return _assembly_is_current(spec) and _assembly_glb_package_current(spec)
+
     def generate_step(spec: EntrySpec) -> object:
         return _run_with_spec_generation_status(
             spec,
@@ -1987,6 +2022,7 @@ def generate_step_targets(
                 logger=logger,
                 force=force,
             ),
+            skip_if_current=_built_by_a_peer,
         )
 
     _run_selected_specs(
@@ -2067,12 +2103,21 @@ def generate_dxf_targets(
             current_refs = {spec.source_ref for spec in current_specs}
             selected_specs = [spec for spec in selected_specs if spec.source_ref not in current_refs]
     if selected_specs:
+        # Re-checked under the lock, like the STEP path: a run that queued behind a
+        # concurrent build of this drawing must not regenerate it. An export request
+        # still has to write its file, so it never skips.
+        def _built_by_a_peer(spec: EntrySpec) -> bool:
+            if force or spec.dxf_export_path is not None or spec.script_path is None:
+                return False
+            return drawing_package_current(spec.script_path)
+
         _run_selected_specs(
             selected_specs,
             action=lambda spec: _run_with_spec_generation_status(
                 spec,
                 "gen_dxf",
                 lambda tracked_spec: run_script_generator(tracked_spec, "gen_dxf", logger=logger),
+                skip_if_current=_built_by_a_peer,
             ),
             logger=logger,
             success_message=_generated_dxf_summary,

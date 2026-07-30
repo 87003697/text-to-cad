@@ -8,12 +8,12 @@ The launchers live in the CAD skill directory:
 
 ```bash
 python scripts/gen targets... [flags]     # build render GLB/topology packages from gen_step() sources
-python scripts/export target [flags]      # write STEP/STL/3MF/GLB files (see supported-exports.md)
+python scripts/export target [flags]      # write STL/3MF/GLB mesh files (see supported-exports.md)
 ```
 
 `scripts/gen` accepts gen_step() Python generator sources only. Use explicit target paths only; target paths resolve from the command cwd unless absolute. Do not rely on directory-wide generation.
 
-Building a generator writes its hidden render package (GLB/topology artifacts) beside the source; it writes no `.step` file by default. A `.step` file is an export: produce it with `scripts/export <name>.step.py --step`, or write it in the same generation run with `scripts/gen <name>.step.py --write-step` (bare `--write-step` writes each target's sibling `<name>.step`; an explicit path requires exactly one target and resolves from the command cwd). Do not put output paths in the `gen_step()` return value; the CLI flags own output paths.
+Building a generator writes its hidden render package (GLB/topology artifacts) beside the source; it writes no `.step` file by default. Write the `.step` file in the same generation run with `scripts/gen <name>.step.py --write-step` — bare `--write-step` writes each target's sibling `<name>.step`; an explicit path requires exactly one target and resolves from the command cwd. This is the only way to write a `.step` file; `scripts/export` writes mesh formats only. Do not put output paths in the `gen_step()` return value; the CLI flags own output paths.
 
 ## Generated vs imported STEP
 

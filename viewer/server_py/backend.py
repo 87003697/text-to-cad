@@ -283,14 +283,31 @@ class LocalAssetBackend:
             return {"sourcePath": c}
         raise ValueError(f"DXF generator not found: {normalized}")
 
+    # One record per render-package format. Everything that used to be an
+    # `if owns_dxf_entry(entry): ... else: ...` at three call sites lives here, so
+    # adding a format is additive rather than another branch in each method.
+    def _artifact_format(self, entry):
+        if artifact_mod.owns_dxf_entry(entry):
+            return {
+                "validate": artifact_mod.validate_dxf_freshness,
+                "resolve_source": lambda file_ref, root: self.resolve_dxf_source(file_ref, root)["sourcePath"],
+                "build": self.generate_dxf_artifact,
+            }
+        return {
+            "validate": artifact_mod.validate_step_freshness,
+            "resolve_source": self._resolve_step_artifact_source,
+            "build": self.generate_step_artifact,
+        }
+
+    def _resolve_step_artifact_source(self, file_ref, resolved_root):
+        resolved = self.resolve_step_source(file_ref, resolved_root)
+        return resolved.get("sourcePath") or resolved["stepPath"]
+
     def _resolve_artifact_source(self, entry, file_ref, resolved_root):
         """The on-disk source file the entry's render package is keyed by: the
         .dxf.py for a generated drawing, the .step.py for a generated model, the
         .step for an imported one."""
-        if artifact_mod.owns_dxf_entry(entry):
-            return self.resolve_dxf_source(file_ref, resolved_root)["sourcePath"]
-        resolved = self.resolve_step_source(file_ref, resolved_root)
-        return resolved.get("sourcePath") or resolved["stepPath"]
+        return self._artifact_format(entry)["resolve_source"](file_ref, resolved_root)
 
     def artifact_status(self, file_ref, resolved_root, catalog):
         entry = self.catalog_entry_for_file_ref(catalog, file_ref)
@@ -298,17 +315,15 @@ class LocalAssetBackend:
         if not artifact_mod.owns_entry(entry):
             return {"state": artifact_mod.ARTIFACT_STATE_READY, "ref": ref}
         ctx = self._scan_context(resolved_root)
+        fmt = self._artifact_format(entry)
         try:
-            artifact_source = self._resolve_artifact_source(entry, file_ref, resolved_root)
+            artifact_source = fmt["resolve_source"](file_ref, resolved_root)
         except ValueError as exc:
             return {"state": artifact_mod.ARTIFACT_STATE_ERROR, "error": str(exc)}
         lock = artifact_mod.generation_lock_path(scanner.render_package_dir(artifact_source))
         if artifact_mod.generation_lock_active(lock):
             return {"state": artifact_mod.ARTIFACT_STATE_GENERATING, "ref": ref}
-        if artifact_mod.owns_dxf_entry(entry):
-            ok, code = artifact_mod.validate_dxf_freshness(ctx["scanRepoRoot"], artifact_source)
-        else:
-            ok, code = artifact_mod.validate_step_freshness(ctx["scanRepoRoot"], artifact_source)
+        ok, code = fmt["validate"](ctx["scanRepoRoot"], artifact_source)
         if ok:
             return {"state": artifact_mod.ARTIFACT_STATE_READY, "ref": ref}
         if code in artifact_mod.BUILDABLE_STEP_ARTIFACT_CODES:
@@ -323,8 +338,7 @@ class LocalAssetBackend:
         return candidate if scanner._file_has_python_generator(candidate, "gen_step") else ""
 
     # POST /__cad/artifact build — subprocess cadgen.step_artifact (OCP stays out of
-    # the server process), then bump the descriptor mtime so a no-op rebuild clears
-    # the scanner's source-mtime staleness trigger.
+    # the server process).
     def generate_step_artifact(self, file_ref, force, resolved_root, catalog):
         resolved = self.resolve_step_source(file_ref, resolved_root)
         step_path = resolved["stepPath"]
@@ -343,8 +357,7 @@ class LocalAssetBackend:
             args += ["--source-path", generator]
         result = self._run_artifact_build(
             "cadgen.step_artifact", args, ctx,
-            force=force, package_key="packagePath", descriptor_name="assembly.json",
-            error_label="STEP render artifact build failed",
+            force=force, error_label="STEP render artifact build failed",
         )
         return {**result, "stepPath": step_path}
 
@@ -357,30 +370,22 @@ class LocalAssetBackend:
         ctx = self._scan_context(resolved_root)
         result = self._run_artifact_build(
             "cadgen.dxf_artifact", ["--source-path", source_path], ctx,
-            force=force, package_key="packagePath", descriptor_name=scanner.DRAWING_DESCRIPTOR_NAME,
-            error_label="DXF render artifact build failed",
+            force=force, error_label="DXF render artifact build failed",
         )
         return {**result, "sourcePath": source_path}
 
     # Shared build tail for both artifact formats: run the cadgen module in a
-    # subprocess/worker, then bump the package descriptor's mtime so a no-op rebuild
-    # clears the source-mtime staleness trigger.
-    def _run_artifact_build(self, module, args, ctx, *, force, package_key, descriptor_name, error_label):
+    # subprocess/worker. Freshness is decided by the recorded source-closure CONTENT
+    # hash, so there is nothing to touch afterwards — the descriptor mtime bump this
+    # used to do existed only to quiet the old mtime staleness trigger after a
+    # rebuild that the CLI had correctly skipped as current.
+    def _run_artifact_build(self, module, args, ctx, *, force, error_label):
         full_args = ["--repo-root", ctx["scanRepoRoot"], *args]
         if force:
             full_args += ["--force"]
         if os.environ.get("VIEWER_STEP_ARTIFACT_VERBOSE") == "1":
             full_args += ["--verbose"]
         result = cadgen_bridge.run_cadgen(module, full_args, ctx["scanRepoRoot"])
-        if result.get("ok") and result.get(package_key):
-            package = result[package_key]
-            package_abs = package if os.path.isabs(package) else os.path.join(ctx["scanRepoRoot"], package)
-            descriptor = os.path.join(package_abs, descriptor_name)
-            try:
-                if os.path.isfile(descriptor):
-                    os.utime(descriptor, None)
-            except OSError:
-                pass
         error = "" if result.get("ok") else str(result.get("error") or error_label)
         return {"ok": bool(result.get("ok")), "error": error, "result": result}
 
@@ -389,25 +394,19 @@ class LocalAssetBackend:
         ref = str((entry or {}).get("url") or "")
         if not artifact_mod.owns_entry(entry):
             return {"ok": True, "state": artifact_mod.ARTIFACT_STATE_READY, "ref": ref}
-        is_dxf = artifact_mod.owns_dxf_entry(entry)
+        fmt = self._artifact_format(entry)
         try:
-            artifact_source = self._resolve_artifact_source(entry, file_ref, resolved_root)
+            artifact_source = fmt["resolve_source"](file_ref, resolved_root)
         except ValueError as exc:
             return {"ok": False, "state": artifact_mod.ARTIFACT_STATE_ERROR, "error": str(exc)}
         lock = artifact_mod.generation_lock_path(scanner.render_package_dir(artifact_source))
         if not force and artifact_mod.generation_lock_active(lock):
             artifact_mod.await_generation_lock(lock)
             ctx = self._scan_context(resolved_root)
-            if is_dxf:
-                ok, _code = artifact_mod.validate_dxf_freshness(ctx["scanRepoRoot"], artifact_source)
-            else:
-                ok, _code = artifact_mod.validate_step_freshness(ctx["scanRepoRoot"], artifact_source)
+            ok, _code = fmt["validate"](ctx["scanRepoRoot"], artifact_source)
             if ok:
                 return {"ok": True, "state": artifact_mod.ARTIFACT_STATE_READY, "ref": ref}
-        if is_dxf:
-            built = self.generate_dxf_artifact(file_ref, force, resolved_root, catalog)
-        else:
-            built = self.generate_step_artifact(file_ref, force, resolved_root, catalog)
+        built = fmt["build"](file_ref, force, resolved_root, catalog)
         if built["ok"]:
             return {"ok": True, "state": artifact_mod.ARTIFACT_STATE_READY, "ref": ref}
         return {"ok": False, "state": artifact_mod.ARTIFACT_STATE_ERROR, "error": built["error"]}

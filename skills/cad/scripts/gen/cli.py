@@ -39,8 +39,8 @@ def _add_gen_arguments(parser: argparse.ArgumentParser) -> None:
         help=(
             "Also write the .step file during generation. Without a path, each target "
             "writes its sibling <name>.step; an explicit path requires exactly one target "
-            "and resolves from the command cwd. scripts/export --step is the equivalent "
-            "standalone export."
+            "and resolves from the command cwd. This is the only way to write a .step "
+            "file; scripts/export writes mesh formats only."
         ),
     )
     parser.add_argument(
@@ -71,7 +71,7 @@ def _validate_python_targets(targets: Sequence[str], *, parser: argparse.Argumen
         if "=" in target_text:
             parser.error(
                 "SOURCE=OUTPUT pairs are no longer supported. Use --write-step to also "
-                "write the .step file, or scripts/export for STEP/STL/3MF/GLB files."
+                "write the .step file, or scripts/export for STL/3MF/GLB files."
             )
         suffix = Path(target_text).suffix.lower()
         if suffix in {".step", ".stp"}:
@@ -113,7 +113,8 @@ def build_parser() -> argparse.ArgumentParser:
         prog="scripts/gen",
         description=(
             "Build CAD Viewer render packages (GLB/topology) for explicit gen_step() "
-            "Python targets. Writes no STEP/STL/3MF/GLB files; use scripts/export for those."
+            "Python targets. Writes a .step file only with --write-step; use "
+            "scripts/export for STL/3MF/GLB files."
         ),
     )
     _add_gen_arguments(parser)

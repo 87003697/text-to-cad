@@ -37,10 +37,6 @@ VIEWER_SKIPPED_DIRECTORIES = frozenset(
         "__cadgen__", "__pycache__", "build", "coverage", "dist", "node_modules", "viewer",
     ]
 )
-PYTHON_GENERATOR_BY_KIND = {
-    "step": "gen_step", "stp": "gen_step",
-}
-
 # --- per-folder __cadgen__ render-package paths (mirrors cadgen.catalog) ---
 CADGEN_DIRNAME = "__cadgen__"
 CADGEN_MODELS_DIRNAME = "models"
@@ -258,14 +254,6 @@ def _normalize_manifest_path(value):
     return text.replace("\\", "/")
 
 
-def _resolve_manifest_source_path(repo_root, manifest_path, base_dir):
-    value = _normalize_manifest_path(manifest_path)
-    if not value:
-        return None
-    resolved = os.path.abspath(value) if os.path.isabs(value) else os.path.abspath(os.path.join(base_dir, value))
-    return resolved if path_is_inside(resolved, repo_root) else None
-
-
 def _file_has_python_generator(file_path, generator_name):
     if not generator_name:
         return False
@@ -274,45 +262,6 @@ def _file_has_python_generator(file_path, generator_name):
             return re.search(r"\b" + re.escape(generator_name) + r"\s*\(", handle.read()) is not None
     except OSError:
         return False
-
-
-def _source_path_from_manifest(repo_root, manifest_path, base_dir=None):
-    value = _normalize_manifest_path(manifest_path)
-    resolved_repo_root = os.path.abspath(repo_root)
-    if not value:
-        return {"sourcePath": "", "filePath": None}
-    roots = []
-    seen = set()
-    for raw in [base_dir, resolved_repo_root]:
-        if not raw:
-            continue
-        r = os.path.abspath(raw)
-        if r not in seen:
-            seen.add(r)
-            roots.append(r)
-    candidates = []
-    for root in roots:
-        file_path = _resolve_manifest_source_path(resolved_repo_root, value, root)
-        if file_path:
-            candidates.append({"sourcePath": repo_relative_path(resolved_repo_root, file_path), "filePath": file_path})
-    candidate = next((c for c in candidates if _file_stats(c["filePath"])), candidates[0] if candidates else None)
-    if candidate:
-        return candidate
-    return {"sourcePath": value, "filePath": _resolve_manifest_source_path(resolved_repo_root, value, resolved_repo_root)}
-
-
-def _generator_source_path_from_metadata(repo_root, manifest_path, generator_name, base_dir):
-    candidate = _source_path_from_manifest(repo_root, manifest_path, base_dir=base_dir)
-    fp = candidate.get("filePath")
-    if (
-        candidate.get("sourcePath")
-        and fp
-        and os.path.splitext(fp)[1].lower() == ".py"
-        and os.path.basename(fp) != "__init__.py"
-        and _file_has_python_generator(fp, generator_name)
-    ):
-        return candidate
-    return {"sourcePath": "", "filePath": None}
 
 
 def _xml_root_name(file_path, expected_tag="robot"):

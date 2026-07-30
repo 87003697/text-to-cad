@@ -3,8 +3,8 @@
 Educational, non-functional public-source reconstruction. Not suitable for
 manufacture, propulsion, testing, or operational engineering.
 
-STEP/STL/GLB come from the CAD skill pipeline (`scripts/export ... --step/--stl/
---glb`). This helper adds the two formats that pipeline does not emit:
+STEP comes from `scripts/gen ... --write-step`; STL/GLB come from
+`scripts/export ... --stl/--glb`. This helper adds the two formats that pipeline does not emit:
 
     PYTHONPATH=<repo>/packages/cadpy/src <venv-python> export_extras.py
 

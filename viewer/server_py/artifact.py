@@ -4,9 +4,11 @@
   Imported `.step`/`.stp` AND generated `.step.py` entries ARE owned and get a
   freshness check; a generated model with no built artifact reports `needs-build`
   and is built on demand (the viewer surfaces every generated model, built or not).
-- Freshness is a PURE descriptor read (assembly.json + component existence; the
-  imported `.step` also compares stepHash, the generated `.step.py` checks the
-  source-closure mtimes) — no OCP. State machine:
+- Freshness is a PURE descriptor read (descriptor + payload existence; a generated
+  entry re-hashes its recorded source closure, an imported `.step` compares
+  stepHash) — no OCP, no cadgen import. STEP and generated-DXF packages run the
+  SAME validator and the SAME content digest cadgen's CLI gate uses, so the two
+  never disagree about staleness. State machine:
   ready | needs-build | generating | error.
 - The build (POST) shells out to `cadgen.step_artifact`, keeping OCP out of the
   server process (crash/memory isolation).
@@ -21,7 +23,12 @@ import subprocess
 import sys
 import time
 
-from . import scanner
+try:  # POSIX only; without fcntl the lock probe degrades to "never locked".
+    import fcntl
+except ImportError:  # pragma: no cover - not reachable on darwin/linux CI
+    fcntl = None  # type: ignore[assignment]
+
+from . import scanner, source_hash
 
 ARTIFACT_STATE_READY = "ready"
 ARTIFACT_STATE_NEEDS_BUILD = "needs-build"
@@ -39,8 +46,7 @@ BUILDABLE_STEP_ARTIFACT_CODES = frozenset([
 
 # Owns imported `.step`/`.stp` and generated `.step.py`/`.stp.py` entries.
 _STEP_ENTRY_RE = re.compile(r"\.(step|stp)(\.py)?$", re.IGNORECASE)
-_GENERATION_LOCK_SUFFIX = ".generation.lock.json"
-_LOCK_ACTIVE_MAX_AGE_MS = 30_000
+_GENERATION_LOCK_SUFFIX = ".generation.lock"
 
 
 def owns_step_entry(entry) -> bool:
@@ -57,102 +63,107 @@ def owns_entry(entry) -> bool:
     return owns_step_entry(entry) or owns_dxf_entry(entry)
 
 
-# --- pure freshness validation (STEP component-GLB package) ---
-def _validate_assembly_package_artifact(repo_root, source_path, package_dir):
-    """Return (ok, code) — ok=True when fresh, else (False, <error_code>). A
-    missing package directory is the common pre-build state (missing_glb)."""
+# --- pure freshness validation (shared by both package formats) ---
+# Per-format descriptor names, package kinds, payload refs, and error codes. The
+# validation ALGORITHM is identical for both; only this table differs.
+_STEP_PACKAGE = {
+    "descriptor": "assembly.json",
+    "package_kind": "assembly-package",
+    "missing": "missing_glb",
+    "unreadable": "missing_step_topology",
+    "unsupported": "unsupported_step_topology",
+    "stale": "stale_step_artifact",
+}
+_DRAWING_PACKAGE = {
+    "descriptor": scanner.DRAWING_DESCRIPTOR_NAME,
+    "package_kind": scanner.DRAWING_PACKAGE_KIND,
+    "missing": "missing_dxf_artifact",
+    "unreadable": "missing_dxf_artifact",
+    "unsupported": "unsupported_dxf_artifact",
+    "stale": "stale_dxf_artifact",
+}
+
+
+def _step_payload_refs(descriptor):
+    """Every component GLB the assembly descriptor claims."""
+    components = descriptor.get("components") if isinstance(descriptor.get("components"), dict) else {}
+    return [str((component or {}).get("glb") or "").strip() for component in components.values()]
+
+
+def _drawing_payload_refs(descriptor):
+    return [str(descriptor.get("dxf") or "").strip()]
+
+
+def _validate_render_package(spec, source_path, payload_refs, model_folder):
+    """Return (ok, code) — ok=True when fresh, else (False, <error_code>).
+
+    One algorithm for both formats: the package dir and descriptor must exist and
+    declare the expected kind, every payload file the descriptor names must be on
+    disk, and then freshness is decided by provenance —
+
+    * generated (``sourceKind: python``): the recorded source closure must still
+      hash unchanged. This is the SAME content digest cadgen's CLI gate uses (see
+      source_hash.py), so the two never disagree. A descriptor that records no
+      usable closure is treated as STALE for both formats: it cannot be shown to be
+      current, and a rebuild is cheap and self-correcting.
+    * imported (STEP only): the on-disk file must still hash to ``stepHash``.
+    """
+    package_dir = scanner.render_package_dir(source_path)
     if not os.path.isdir(package_dir):
-        return (False, "missing_glb")
-    descriptor_path = os.path.join(package_dir, "assembly.json")
+        return (False, spec["missing"])
+    descriptor_path = os.path.join(package_dir, spec["descriptor"])
     try:
         with open(descriptor_path, "r", encoding="utf-8") as handle:
             descriptor = json.load(handle)
     except (OSError, ValueError):
-        return (False, "missing_step_topology")
-    if not descriptor or descriptor.get("kind") != "assembly-package":
-        return (False, "unsupported_step_topology")
-    components = descriptor.get("components") if isinstance(descriptor.get("components"), dict) else {}
-    for component in components.values():
-        ref = str((component or {}).get("glb") or "").strip()
-        component_path = os.path.join(package_dir, ref) if ref else ""
-        if not component_path or not os.path.isfile(component_path):
-            return (False, "missing_glb")
-    uses_python = str(descriptor.get("sourceKind", "step")).strip().lower() == "python"
-    if uses_python:
-        # Generated packages: source-closure mtime trigger. The descriptor's
-        # sourcePath + sourceClosureFiles are relative to the MODEL folder (the dir
-        # holding the .step.py = dirname(source_path)), NOT the __cadgen__ dir.
-        identity = scanner._generator_source_path_from_metadata(
-            repo_root, descriptor.get("sourcePath"), scanner.PYTHON_GENERATOR_BY_KIND.get("step", "gen_step"),
-            os.path.dirname(source_path),
-        )
-        if not identity["sourcePath"] or not identity["filePath"]:
+        return (False, spec["unreadable"])
+    if not isinstance(descriptor, dict) or descriptor.get("kind") != spec["package_kind"]:
+        return (False, spec["unsupported"])
+    for ref in payload_refs(descriptor):
+        if not ref or not os.path.isfile(os.path.join(package_dir, ref)):
+            return (False, spec["missing"])
+    if str(descriptor.get("sourceKind", "step")).strip().lower() == "python":
+        if not os.path.isfile(source_path):
             return (False, "missing_source_path")
-        desc_stats = scanner._file_stats(descriptor_path)
-        closure = descriptor.get("sourceClosureFiles") if isinstance(descriptor.get("sourceClosureFiles"), list) else []
-        if desc_stats and closure:
-            model_folder = os.path.dirname(identity["filePath"])
-            for rel in closure:
-                st = scanner._file_stats(os.path.join(model_folder, str(rel or "")))
-                if st and st.st_mtime_ns > desc_stats.st_mtime_ns:
-                    return (False, "stale_step_artifact")
+        closure = descriptor.get("sourceClosureFiles")
+        if not isinstance(closure, list) or not closure:
+            return (False, spec["stale"])
+        if not source_hash.closure_hash_matches(
+            descriptor.get("sourceClosureHash"), closure, model_folder
+        ):
+            return (False, spec["stale"])
         return (True, None)
-    # Imported STEP: the on-disk .step must still hash to descriptor.stepHash.
     step_hash = str(descriptor.get("stepHash", "")).strip()
     if scanner._file_stats(source_path):
         current = scanner._sha256_file(source_path)
         if current and step_hash and step_hash != current:
-            return (False, "stale_step_artifact")
+            return (False, spec["stale"])
     return (True, None)
 
 
 def validate_step_freshness(repo_root, source_path):
-    """ok=True (fresh/ready) or (False, code). source_path is the entry's step
-    path; the package dir is render_package_dir(source_path)."""
-    package_dir = scanner.render_package_dir(source_path)
-    return _validate_assembly_package_artifact(repo_root, source_path, package_dir)
+    """ok=True (fresh/ready) or (False, code). source_path is the entry's step path
+    (the `.step.py` for a generated model, the `.step` for an imported one)."""
+    del repo_root  # closure paths resolve against the model folder, not the repo root
+    return _validate_render_package(
+        _STEP_PACKAGE, source_path, _step_payload_refs, os.path.dirname(os.path.abspath(source_path))
+    )
 
 
-# --- pure freshness validation (generated .dxf.py drawing package) ---
 def validate_dxf_freshness(repo_root, source_path):
     """ok=True (fresh/ready) or (False, code). source_path is the `.dxf.py`
-    generator; the package dir is entry-keyed exactly like the STEP package.
-    Mirrors the generated branch of _validate_assembly_package_artifact: the
-    descriptor is a pure JSON read and staleness is the source-closure mtime
-    trigger against the descriptor mtime — no cadgen import."""
+    generator; the package dir is entry-keyed exactly like the STEP package."""
     del repo_root
-    package_dir = scanner.render_package_dir(source_path)
-    if not os.path.isdir(package_dir):
-        return (False, "missing_dxf_artifact")
-    descriptor_path = os.path.join(package_dir, scanner.DRAWING_DESCRIPTOR_NAME)
-    try:
-        with open(descriptor_path, "r", encoding="utf-8") as handle:
-            descriptor = json.load(handle)
-    except (OSError, ValueError):
-        return (False, "missing_dxf_artifact")
-    if not isinstance(descriptor, dict) or descriptor.get("kind") != scanner.DRAWING_PACKAGE_KIND:
-        return (False, "unsupported_dxf_artifact")
-    dxf_ref = str(descriptor.get("dxf") or "").strip()
-    dxf_path = os.path.join(package_dir, dxf_ref) if dxf_ref else ""
-    if not dxf_path or not os.path.isfile(dxf_path):
-        return (False, "missing_dxf_artifact")
-    if not os.path.isfile(source_path):
-        return (False, "missing_source_path")
-    desc_stats = scanner._file_stats(descriptor_path)
-    closure = descriptor.get("sourceClosureFiles") if isinstance(descriptor.get("sourceClosureFiles"), list) else []
-    model_folder = os.path.dirname(os.path.abspath(source_path))
-    closure_paths = [os.path.join(model_folder, str(rel or "")) for rel in closure]
-    if not closure_paths:
-        closure_paths = [os.path.abspath(source_path)]
-    if desc_stats:
-        for path in closure_paths:
-            st = scanner._file_stats(path)
-            if st is None or st.st_mtime_ns > desc_stats.st_mtime_ns:
-                return (False, "stale_dxf_artifact")
-    return (True, None)
+    return _validate_render_package(
+        _DRAWING_PACKAGE, source_path, _drawing_payload_refs, os.path.dirname(os.path.abspath(source_path))
+    )
 
 
-# --- generation lock reader (reads the lock cadgen's generation_status.py writes) ---
+# --- generation lock probe (mirrors cadgen's _internal/generation_status.py) ---
+# The build holds a POSIX advisory lock (fcntl.flock) on this sentinel for its whole
+# run. The kernel owns the state, so a crashed or killed build releases it with no
+# stale window — there is no pid, heartbeat, or age check to get wrong. The lock is
+# probed, never taken: a reader must not block a request thread.
 def generation_lock_path(package_dir: str) -> str:
     d = str(package_dir or "").strip()
     if not d:
@@ -160,40 +171,29 @@ def generation_lock_path(package_dir: str) -> str:
     return os.path.join(os.path.dirname(d), "." + os.path.basename(d) + _GENERATION_LOCK_SUFFIX)
 
 
-def _process_alive(pid) -> bool:
-    try:
-        pid = int(pid)
-    except (TypeError, ValueError):
+def generation_lock_active(lock_path: str) -> bool:
+    """True when a build currently holds the model's lock.
+
+    Non-blocking probe: try to take the lock ourselves. Success means nobody held it,
+    so we release immediately and report idle. A missing sentinel means no build has
+    ever run for this model, which is likewise idle.
+    """
+    if not lock_path or fcntl is None:
         return False
-    if pid <= 0:
-        return False
     try:
-        os.kill(pid, 0)
-        return True
-    except PermissionError:
-        return True
+        handle = open(lock_path, "a+b")
     except OSError:
         return False
-
-
-def generation_lock_active(lock_path: str, now_ms: float | None = None) -> bool:
-    if not lock_path:
-        return False
     try:
-        with open(lock_path, "r", encoding="utf-8") as handle:
-            payload = json.load(handle)
-    except (OSError, ValueError):
-        return False
-    if not isinstance(payload, dict) or str(payload.get("status", "")).strip().lower() != "running":
-        return False
-    if not _process_alive(payload.get("pid")):
-        return False
-    stamp = str(payload.get("updatedAt") or payload.get("startedAt") or "")
-    updated_ms = _parse_iso_ms(stamp)
-    if updated_ms is None:
+        fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        # EWOULDBLOCK/EAGAIN — a builder holds it.
         return True
-    now = now_ms if now_ms is not None else time.time() * 1000
-    return (now - updated_ms) <= _LOCK_ACTIVE_MAX_AGE_MS
+    else:
+        fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+        return False
+    finally:
+        handle.close()
 
 
 def await_generation_lock(lock_path: str, timeout_ms: float = 180_000, poll_ms: float = 400) -> bool:
@@ -202,16 +202,3 @@ def await_generation_lock(lock_path: str, timeout_ms: float = 180_000, poll_ms: 
     while generation_lock_active(lock_path) and time.time() * 1000 < deadline:
         time.sleep(poll_ms / 1000)
     return not generation_lock_active(lock_path)
-
-
-def _parse_iso_ms(value: str):
-    text = str(value or "").strip()
-    if not text:
-        return None
-    try:
-        from datetime import datetime
-        if text.endswith("Z"):
-            text = text[:-1] + "+00:00"
-        return datetime.fromisoformat(text).timestamp() * 1000
-    except (ValueError, OverflowError):
-        return None

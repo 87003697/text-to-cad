@@ -122,6 +122,26 @@ class StepExportTargetTests(unittest.TestCase):
         self.assertFalse(payload.get("ok"))
         self.assertIn("error", payload)
 
+    def test_export_cad_target_rejects_step_format(self) -> None:
+        # The Viewer's Save-dialog path (main(), tested above) still exports STEP; the CAD
+        # skill's scripts/export path does not — `scripts/gen --write-step` owns .step files.
+        generator = self._write_box_generator()
+        with self.assertRaises(ValueError) as cm:
+            step_export_target.export_cad_target(generator, [("step", None)])
+        self.assertIn("Unsupported export format: step", str(cm.exception))
+
+    def test_export_cad_target_writes_mesh_formats(self) -> None:
+        generator = self._write_box_generator()
+        payload = step_export_target.export_cad_target(
+            generator,
+            [(fmt, None) for fmt in step_export_target.MESH_EXPORT_FORMATS],
+        )
+        self.assertTrue(payload["ok"])
+        for entry in payload["files"]:
+            self._assert_export_file(Path(entry["path"]), entry["format"])
+        # Mesh exports never leave a .step behind.
+        self.assertFalse((self.temp_root / "box.step").exists())
+
     def test_invalid_format_rejected(self) -> None:
         generator = self._write_box_generator()
         with self.assertRaises(SystemExit):

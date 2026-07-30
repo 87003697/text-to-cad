@@ -93,7 +93,7 @@ def _semantic_source_hash(path: Path) -> str:
     Python sources — so a comment/whitespace-only edit to a generator or a
     shared helper does not invalidate the model's closure — while staying
     sensitive to every semantic change (including docstrings). Non-``.py``
-    closure inputs (e.g. composed child STEP files) keep the byte hash.
+    closure inputs keep the byte hash.
 
     Hashes the parsed AST dumped WITHOUT position attributes. A bytecode /
     ``marshal`` digest would NOT be comment-insensitive: inserting a comment
@@ -397,7 +397,6 @@ def capture_runtime_closure(
     script_path: Path,
     *,
     base: Path,
-    extra_files: object = (),
     executed_files: object = (),
 ) -> PythonSourceClosure:
     """Capture a generator's dependency closure after running it.
@@ -406,11 +405,15 @@ def capture_runtime_closure(
     files recorded by :func:`record_first_party_execution` while the generator
     ran (complete even when the generator unloads modules mid-run) — and the
     ``sys.modules`` delta against ``before_module_names`` (a belt-and-braces
-    catch for modules registered without a fresh body execution). ``extra_files``
-    folds additional inputs into the closure — used by assemblies to include the
-    child STEP files they compose from, so the closure hash also captures "a
-    referenced child changed". Every recorded path is relative to ``base`` (the
-    model folder).
+    catch for modules registered without a fresh body execution). Every recorded
+    path is relative to ``base`` (the model folder).
+
+    The closure is therefore the generator's PYTHON import reach and nothing
+    else. A composed child is captured when it is composed the documented way —
+    by importing its ``.step.py`` generator — but a raw ``.step``/``.dxf`` file
+    read as data is NOT a freshness input, for STEP assemblies and DXF drawings
+    alike. Generated children are kept current by
+    ``generation._rebuild_stale_assembly_children``, not by this closure.
     """
     import sys
 
@@ -418,7 +421,6 @@ def capture_runtime_closure(
     dependency_files = [
         *repo_local_loaded_modules(new_names).values(),
         *executed_files,
-        *extra_files,
     ]
     return closure_for_files(script_path, dependency_files, base=base)
 
