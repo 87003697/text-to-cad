@@ -143,7 +143,7 @@ Canonical source directories are:
   for production.
 
 On `develop`, paths such as `skills/cad-viewer/scripts/viewer`,
-`skills/*/scripts/packages/*`, `viewer/packages/*`, and `plugins/cad/skills/*`
+`skills/*/scripts/packages/*`, and `viewer/packages/*`
 should be symlinks when they mirror root sources. Treat those paths as
 generated-output aliases, not separate source roots. Edit the canonical source
 path instead.
@@ -174,8 +174,19 @@ scripts/dev/setup-symlinks.sh --check
 ```
 
 The `main` production branch must be installable from a plain checkout, so it
-contains generated production outputs instead of symlinks. `main` is
-publish-only: do not open PRs to `main` or push it directly. The `Test`
+contains generated production outputs instead of symlinks. The repository root
+is itself the agent plugin package — `.claude-plugin/` and `.codex-plugin/` hold
+the manifests and the plugin's skills are `skills/` directly — so whatever is on
+`main` is what agent installers copy.
+
+Replacing symlinks with real copies on `main` is a correctness requirement, not
+a convention. The installers disagree about symlinks and one loses data
+silently: the Skills CLI dereferences them into real files, Claude Code
+preserves them verbatim, and Codex `plugin add` drops them with no error at all,
+publishing a skill whose files are simply missing at runtime.
+`scripts/github-workflows/check-builds.sh` is the gate that enforces this.
+
+`main` is publish-only: do not open PRs to `main` or push it directly. The `Test`
 workflow runs on `develop` and PRs to `develop`: it starts from the symlink
 layout, verifies that layout, checks generated outputs against their sources
 with `scripts/bundle/bundle.sh --check`, runs `scripts/bundle/bundle.sh
@@ -186,14 +197,14 @@ Most generated paths cannot drift on `develop` because they are symlinks to
 their canonical sources, and the freshness check skips those. It covers the
 generated outputs that `develop` does commit as real files, such as the CAD
 snapshot runtime built from `packages/cadjs` and `packages/implicitjs`, and
-version metadata derived from `plugins/cad/VERSION`.
+version metadata derived from `VERSION`.
 
 ## Releases
 
-Normal development PRs should not bump `plugins/cad/VERSION`; release versions
+Normal development PRs should not bump `VERSION`; release versions
 are reserved for release PRs so the canonical repo version, Git tag, and GitHub
 Release describe the same production commit. PRs that do touch release state
-must keep `plugins/cad/VERSION` and derived version metadata valid; the `Test`
+must keep `VERSION` and derived version metadata valid; the `Test`
 workflow checks that metadata in a separate job so code tests still run when it
 is wrong.
 
@@ -211,7 +222,7 @@ not specify one, confirm it rather than assuming:
 gh workflow run release.yml --ref develop -f bump=patch
 ```
 
-One run bumps `plugins/cad/VERSION` plus derived metadata on a
+One run bumps `VERSION` plus derived metadata on a
 `release/<version>` branch, opens a release PR, merges it into `develop`
 immediately, and then runs the publish, models-upload, web-app deploy, and
 tag/GitHub Release jobs in the same run. The release PR does not wait for its own CI checks; the
@@ -319,7 +330,7 @@ npm --prefix docs run check
 ```
 
 Use `AGENTS.md` or `scripts/README.md` for path-specific validation when you are
-working in a particular package, skill, plugin, docs site, or production-output
+working in a particular package, skill, docs site, or production-output
 path.
 
 For targeted Python skill-script tests, run the relevant unittest files with the
