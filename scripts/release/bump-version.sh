@@ -3,7 +3,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
-VERSION_PATH="plugins/cad/VERSION"
+VERSION_PATH="VERSION"
 VERSION_FILE="$REPO_ROOT/$VERSION_PATH"
 
 PART=""
@@ -29,7 +29,7 @@ Usage:
   scripts/release/bump-version.sh --check
   scripts/release/bump-version.sh --check-incremented-from REF
 
-Bumps or checks the canonical repo release version in plugins/cad/VERSION.
+Bumps or checks the canonical repo release version in VERSION.
 Duplicate package and plugin metadata is synchronized from that file by
 scripts/release/sync-version.mjs during release preparation and production
 bundling.

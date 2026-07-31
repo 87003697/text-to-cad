@@ -7,14 +7,14 @@ product and `models/` as the shared fixture/artifact area.
 
 Before changing code, branch from `develop`, not `main`; PRs should target `develop`.
 Do not start development work from `main`. The `develop` branch intentionally uses
-symlinks across generated runtime, viewer-local package, and plugin package
-paths. When a path is symlinked, follow the link and edit the source target.
+symlinks across generated runtime and viewer-local package paths. When a path is
+symlinked, follow the link and edit the source target.
 Use `main` as the production clone/release branch only. `main` is publish-only:
 do not open PRs to `main` or push it directly.
 
 ## Release Workflow
 
-Do not bump the canonical release version in `plugins/cad/VERSION` during
+Do not bump the canonical release version in `VERSION` during
 normal development work. Ship releases only through the single `Release`
 GitHub Actions workflow, which handles the version bump, release PR, publish
 commit to `main`, models upload, web-app deploys, semver tag, and GitHub
@@ -40,7 +40,8 @@ flow, CI/CD-testing and resume options, and local/manual fallbacks.
 ## Repo Map
 
 - `skills/`: agent skills and their references/scripts.
-- `plugins/`: versioned agent plugin packages that bundle repo skills.
+- `.claude-plugin/`, `.codex-plugin/`: agent plugin manifests. The repository
+  root is the plugin package; its skills are `skills/` directly.
 - `models/`: sample and durable CAD/robot-description fixtures.
 - `viewer/`: editable CAD Viewer source app.
 - `packages/cadjs`: shared JS CAD/render/runtime code, UI-framework agnostic.
@@ -90,11 +91,16 @@ flow, CI/CD-testing and resume options, and local/manual fallbacks.
 - Reserve `scripts/` for durable repo commands. Do not write temporary,
   one-off, or local-only helper scripts there; use `tmp/` or `/tmp` instead.
 - Development symlinks mark generated or copied paths. If a file is under a
-  symlinked runtime, viewer package, or plugin package path, edit the symlink
-  target/source path instead of treating the copy as independent.
-- When source changes affect generated runtimes or plugin packages, refresh or
-  check them with the master bundle wrapper, `scripts/bundle/bundle.sh`. Use
-  lower-level bundle scripts only when debugging the wrapper itself.
+  symlinked runtime or viewer package path, edit the symlink target/source path
+  instead of treating the copy as independent.
+- When source changes affect generated runtimes, refresh or check them with the
+  master bundle wrapper, `scripts/bundle/bundle.sh`. Use lower-level bundle
+  scripts only when debugging the wrapper itself.
+- Never let a symlink reach the published tree. Agent installers disagree about
+  symlinks and one loses data silently: the Skills CLI dereferences them, Claude
+  Code preserves them, and Codex `plugin add` drops them with no error, shipping
+  a skill with missing files. `scripts/github-workflows/check-builds.sh` enforces
+  this; do not relax it.
 - `packages/cadjs` must stay reusable/non-React; app UI and workflow state
   belong in `viewer/`.
 - `packages/implicitjs` must stay reusable/non-React and independent of
@@ -106,10 +112,10 @@ flow, CI/CD-testing and resume options, and local/manual fallbacks.
   helper should not inherit heavier package dependencies.
 - Use path-targeted search, validation, and `git status`; avoid broad scans over
   generated CAD/LFS artifacts unless the task requires them.
-- Treat `plugins/cad/VERSION` as the canonical release version. Do not hand-edit
-  duplicate package, plugin, lockfile, or Python `pyproject.toml` versions;
-  release preparation and `scripts/bundle/bundle.sh` stamp them from the
-  canonical version.
+- Treat `VERSION` as the canonical release version. Do not hand-edit duplicate
+  package, plugin, lockfile, or Python `pyproject.toml` versions; release
+  preparation and `scripts/bundle/bundle.sh` stamp them from the canonical
+  version.
 
 ## Environments
 
@@ -151,7 +157,7 @@ when touching shared surfaces or before handoff:
   `scripts/test/test-global.sh`
 - Development symlink layout: `scripts/dev/setup-symlinks.sh --check`
 - Canonical release version: `scripts/release/check-version.sh`
-- Generated runtime and plugin freshness: `scripts/bundle/bundle.sh --check`
+- Generated runtime freshness: `scripts/bundle/bundle.sh --check`
 - CAD Viewer, `packages/cadjs`, or `packages/implicitjs`:
   `npm --prefix packages/cadjs test`, `npm --prefix packages/implicitjs test`,
   `npm --prefix viewer run test`, `npm --prefix viewer run build`
