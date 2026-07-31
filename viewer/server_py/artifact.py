@@ -47,6 +47,11 @@ BUILDABLE_STEP_ARTIFACT_CODES = frozenset([
 # Owns imported `.step`/`.stp` and generated `.step.py`/`.stp.py` entries.
 _STEP_ENTRY_RE = re.compile(r"\.(step|stp)(\.py)?$", re.IGNORECASE)
 _GENERATION_LOCK_SUFFIX = ".generation.lock"
+_GENERATION_PROGRESS_SUFFIX = ".generation.progress.json"
+# Terminal marker in the progress sidecar: the file describes a FINISHED run (it is
+# left behind so the next build can weight its bar from the recorded stage times), so
+# it must never be rendered as an in-flight build. Mirrors cadgen's PHASE_DONE.
+_PROGRESS_PHASE_DONE = "done"
 
 
 def owns_step_entry(entry) -> bool:
@@ -194,6 +199,72 @@ def generation_lock_active(lock_path: str) -> bool:
         return False
     finally:
         handle.close()
+
+
+# --- generation progress sidecar (mirrors cadgen's _internal/progress.py) ---
+# ADVISORY DECORATION ONLY. The ready/generating/error state machine is driven by the
+# lock above and nothing here; this only enriches an already-established `generating`
+# state with how far along the build is. That separation is deliberate: a progress file
+# is written data with no liveness guarantee, and inferring "a build is running" from
+# one would reintroduce exactly the stale-heartbeat failure the flock replaced.
+def generation_progress_path(package_dir: str) -> str:
+    d = str(package_dir or "").strip()
+    if not d:
+        return ""
+    return os.path.join(
+        os.path.dirname(d), "." + os.path.basename(d) + _GENERATION_PROGRESS_SUFFIX
+    )
+
+
+def read_generation_progress(progress_path: str):
+    """The in-flight build's position, or None when there is nothing to show.
+
+    None for: no sidecar, an unreadable/partial one, or one whose terminal event says
+    the run it describes has already finished. Written by whichever process holds the
+    lock, so a `cad gen` in a terminal reports into an open viewer exactly like a
+    viewer-triggered build does."""
+    if not progress_path:
+        return None
+    try:
+        with open(progress_path, "r", encoding="utf-8") as handle:
+            payload = json.load(handle)
+    except (OSError, ValueError):
+        return None
+    if not isinstance(payload, dict):
+        return None
+    phase = str(payload.get("phase") or "").strip()
+    if not phase or phase == _PROGRESS_PHASE_DONE:
+        return None
+    total = payload.get("total")
+    return {
+        "phase": phase,
+        "label": str(payload.get("label") or ""),
+        "detail": str(payload.get("detail") or ""),
+        "done": _as_int(payload.get("done")),
+        "total": _as_int(total) if total is not None else None,
+        "determinate": bool(payload.get("determinate")),
+        "ratio": _as_float(payload.get("ratio")),
+        "ratioFloor": _as_float(payload.get("ratioFloor")),
+        "ratioCeiling": _as_float(payload.get("ratioCeiling")),
+        "phaseStartedAt": _as_float(payload.get("phaseStartedAt")),
+        "phaseExpectedMs": _as_float(payload.get("phaseExpectedMs")) or None,
+        "updatedAt": _as_float(payload.get("updatedAt")),
+    }
+
+
+def _as_int(value) -> int:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return 0
+
+
+def _as_float(value) -> float:
+    try:
+        result = float(value)
+    except (TypeError, ValueError):
+        return 0.0
+    return result if result == result else 0.0  # NaN -> 0
 
 
 def await_generation_lock(lock_path: str, timeout_ms: float = 180_000, poll_ms: float = 400) -> bool:

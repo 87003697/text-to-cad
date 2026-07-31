@@ -320,9 +320,18 @@ class LocalAssetBackend:
             artifact_source = fmt["resolve_source"](file_ref, resolved_root)
         except ValueError as exc:
             return {"state": artifact_mod.ARTIFACT_STATE_ERROR, "error": str(exc)}
-        lock = artifact_mod.generation_lock_path(scanner.render_package_dir(artifact_source))
+        package_dir = scanner.render_package_dir(artifact_source)
+        lock = artifact_mod.generation_lock_path(package_dir)
         if artifact_mod.generation_lock_active(lock):
-            return {"state": artifact_mod.ARTIFACT_STATE_GENERATING, "ref": ref}
+            # The lock decides the state; the sidecar only says how far along it is, and
+            # is omitted when the build has not reported (yet, or at all).
+            status = {"state": artifact_mod.ARTIFACT_STATE_GENERATING, "ref": ref}
+            progress = artifact_mod.read_generation_progress(
+                artifact_mod.generation_progress_path(package_dir)
+            )
+            if progress is not None:
+                status["progress"] = progress
+            return status
         ok, code = fmt["validate"](ctx["scanRepoRoot"], artifact_source)
         if ok:
             return {"state": artifact_mod.ARTIFACT_STATE_READY, "ref": ref}

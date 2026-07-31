@@ -130,7 +130,7 @@ class CompoundAssemblyGenerationTests(unittest.TestCase):
         with contextlib.redirect_stdout(stdout):
             generation._run_selected_specs(
                 [spec],
-                action=lambda _spec: print("generator summary"),
+                action=lambda _spec, _progress_sink=None: print("generator summary"),
                 logger=generation.CliLogger("test", stream=io.StringIO()),
                 success_message=None,
             )

@@ -198,6 +198,32 @@ presence/completeness; embedded `STEP_TOPOLOGY` schema version; mesh-option/tole
 external generator-run lock (`.generation.lock`, an `fcntl.flock` sentinel surfaced via
 `/__cad/generation-status`) maps directly to `status: "generating"`.
 
+## 8a. Build progress (decoration on `generating`)
+
+`generating` on its own says a build is running, not how far along it is — and a component-GLB build
+of a large assembly runs for minutes. So the build writes its position to a sidecar beside the lock
+(`.<entry>.generation.progress.json`, cadgen's `_internal/progress.py`), `GET /__cad/artifact`
+attaches it as `progress` when the lock is held, and `useArtifact` polls that route while its build
+POST is in flight (the POST is one long request and cannot report on itself).
+
+Three properties are load-bearing:
+
+- **The lock still decides the state; progress only decorates it.** A progress file is written data
+  with no liveness guarantee. Inferring "a build is running" from one would reintroduce exactly the
+  stale-heartbeat failure the `flock` replaced. A finished run's sidecar reads as *no* progress.
+- **Only the component-mesh stage is measured.** Its work list (the components missing from the
+  package's content-addressed cache) is resolved in full before the first mesh runs, so `done/total`
+  there is a real count. `gen_step` running and a STEP parsing have no unit of work; they report a
+  phase, and the reader interpolates them against the duration the model's *previous* build recorded
+  in that same sidecar. Nothing invents a denominator the build does not have.
+- **The build emits at work boundaries, never on a timer.** OCP meshing holds the GIL inside C for
+  long stretches, so a heartbeat thread starves during exactly the work it would be reporting.
+  Interpolation is the reader's job, which is why the payload carries `ratioFloor`/`ratioCeiling`/
+  `phaseStartedAt`/`phaseExpectedMs` and not just a number.
+
+Because the sidecar is keyed by package dir like the lock, any producer reports into any reader: a
+`cad gen` in a terminal drives the progress bar in an already-open CAD Viewer.
+
 ## 9. Migration (incremental, each phase shippable)
 
 1. **Introduce the seam, no behavior change.** Add `RenderArtifactProvider` + `StepArtifactProvider`

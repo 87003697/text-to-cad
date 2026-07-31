@@ -14,7 +14,7 @@ from concurrent.futures import ThreadPoolExecutor
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import Sequence
+from typing import Iterator, Sequence, TextIO
 
 from cadgen.catalog import (
     CadSource,
@@ -37,6 +37,13 @@ from cadgen._internal.glb_topology import (
     normalize_step_edge_render_visibility_classes,
 )
 from cadgen._internal.generation_status import generation_lock_path, track_generation_run
+from cadgen._internal.progress import (
+    PHASE_GENERATE,
+    ProgressEvent,
+    render_progress_bar,
+    report_build_progress,
+    resolve as resolve_progress,
+)
 from cadgen.metadata import (
     DEFAULT_MESH_ANGULAR_TOLERANCE,
     DEFAULT_MESH_TOLERANCE,
@@ -153,6 +160,68 @@ class InlineStatusBoard:
                 print("\x1b[2K", file=self._stream)
         self._rendered_rows = len(rows)
         self._stream.flush()
+
+
+class InlineProgressLine:
+    """A single self-erasing progress line for one model's build.
+
+    Repaints in place with ``\\r`` and erases itself when the build ends, so the only
+    durable output is still the logger's own lines -- the bar is transient status, not
+    a log record. Disabled (and completely silent) when the stream is not a tty: a
+    redirected log wants the logger's lines, not a bar smeared over hundreds of writes.
+
+    Separate from :class:`InlineStatusBoard`, which paints a persistent row per model
+    for callers that run without a logger."""
+
+    def __init__(self, *, stream: TextIO | None = None, enabled: bool = True) -> None:
+        self._stream = stream if stream is not None else sys.stderr
+        self._enabled = bool(enabled) and getattr(self._stream, "isatty", lambda: False)()
+        self._width = 0
+
+    def update(self, text: str) -> None:
+        if not self._enabled:
+            return
+        # Pad to the previous width so a shorter line cannot leave the tail of a longer
+        # one behind it.
+        padding = max(0, self._width - len(text))
+        self._width = len(text)
+        print(f"\r{text}{' ' * padding}", end="", file=self._stream, flush=True)
+
+    def clear(self) -> None:
+        if not self._enabled or not self._width:
+            return
+        print(f"\r{' ' * self._width}\r", end="", file=self._stream, flush=True)
+        self._width = 0
+
+
+@contextlib.contextmanager
+def _cli_progress_line(
+    spec: EntrySpec,
+    *,
+    logger: CliLogger,
+    fallback: str,
+) -> Iterator[Callable[[ProgressEvent], None] | None]:
+    """Yield a progress sink that paints ``spec``'s build onto one tty line.
+
+    Yields None -- reporting nothing -- under ``--verbose``, where the logger is already
+    narrating every stage and a bar repainting between its lines would fight with them.
+    The sidecar is written regardless, so an open CAD Viewer still tracks the build."""
+    if logger.verbose:
+        yield None
+        return
+    line = InlineProgressLine(stream=logger.stream)
+
+    def paint(event: ProgressEvent) -> None:
+        # The terminal event exists to record the run's stage times in the sidecar;
+        # painting it would flash a completed bar onto a line about to be erased.
+        if event.finished:
+            return
+        line.update(f"{spec.source_ref}  {_progress_status_text(event, fallback=fallback)}")
+
+    try:
+        yield paint
+    finally:
+        line.clear()
 
 
 def _display_name_for_path(path: Path) -> str:
@@ -831,6 +900,7 @@ def run_script_generator(
     logger: CliLogger | None = None,
     force: bool = False,
     reset_runtime_closure: bool = False,
+    progress: object | None = None,
 ) -> LoadedStepScene | None:
     """Run a generator's ``gen_step``/``gen_dxf`` and return its scene.
 
@@ -853,6 +923,10 @@ def run_script_generator(
         raise RuntimeError(f"Unsupported generator: {generator_name}")
     if spec.script_path is None or spec.generator_metadata is None:
         raise ValueError(f"{spec.source_ref} is not a generated Python CAD source")
+    # Opaque by nature: the generator is arbitrary user code with no unit of work to
+    # count, so this reports a phase, not a fraction. Readers estimate it against the
+    # duration the model's previous build recorded.
+    resolve_progress(progress).phase(PHASE_GENERATE)
     with _track_spec_generation(spec, generator_name):
         return _run_script_generator_inner(
             spec,
@@ -1308,8 +1382,10 @@ def _generate_part_outputs(
     require_step_file: bool = True,
     force: bool = False,
     logger: CliLogger | None = None,
+    progress: object | None = None,
 ) -> GeneratedStepResult:
     logger = logger or CliLogger("cad")
+    progress = resolve_progress(progress)
     if spec.kind not in {"part", "assembly"} or spec.step_path is None:
         return GeneratedStepResult(spec=spec, scene=None)
     if require_step_file:
@@ -1340,6 +1416,9 @@ def _generate_part_outputs(
     if preloaded_scene is not None:
         scene = preloaded_scene
     else:
+        # An imported STEP's parse is this path's equivalent of running a generator:
+        # opaque, and often seconds for a large vendor file.
+        progress.phase(PHASE_GENERATE)
         with logger.timed(f"load STEP {spec.cad_ref}"):
             # Cross-run binary BREP scene cache: warm rebuilds of imported
             # STEP entries skip the text-STEP parse (seconds to ~10s+ for
@@ -1431,6 +1510,7 @@ def _generate_part_outputs(
             provenance=package_provenance,
             linear_deflection=selector_options.linear_deflection,
             angular_deflection=selector_options.angular_deflection,
+            progress=progress,
         )
 
     jobs.append(_ArtifactJob("GLB package", component_package_job))
@@ -1448,6 +1528,7 @@ def _generate_step_outputs(
     entries_by_step_path: dict[Path, EntrySpec],
     force: bool = False,
     logger: CliLogger | None = None,
+    progress: object | None = None,
 ) -> GeneratedStepResult:
     preloaded_scene: LoadedStepScene | None = None
     # An on-demand output (mesh sidecar or --step export) must run even when the package is
@@ -1470,6 +1551,7 @@ def _generate_step_outputs(
     output_kwargs: dict[str, object] = {
         "entries_by_step_path": entries_by_step_path,
         "force": force,
+        "progress": progress,
     }
     if logger is not None:
         output_kwargs["logger"] = logger
@@ -1479,6 +1561,7 @@ def _generate_step_outputs(
             "gen_step",
             logger=logger,
             force=force,
+            progress=progress,
         )
         spec = _effective_step_spec_for_scene(spec, preloaded_scene)
         if spec.step_path is not None:
@@ -1504,9 +1587,11 @@ def _generate_step_outputs_for_cli(
     entries_by_step_path: dict[Path, EntrySpec],
     logger: CliLogger,
     force: bool = False,
+    progress: object | None = None,
 ) -> GeneratedStepResult:
     kwargs: dict[str, object] = {
         "entries_by_step_path": entries_by_step_path,
+        "progress": progress,
     }
     if force:
         kwargs["force"] = True
@@ -1669,13 +1754,28 @@ def _run_with_spec_generation_status(
         return action(spec)
 
 
+def _progress_status_text(event: ProgressEvent, *, fallback: str) -> str:
+    """One status-board row for a build in flight.
+
+    A determinate phase reports its real count (``31/50``); an opaque one reports only
+    which phase is running, with the bar sitting wherever the phase weighting puts it.
+    Nothing here invents a denominator the build does not have."""
+    if event.finished:
+        return fallback
+    label = (event.label or fallback).lower()
+    bar = f"{render_progress_bar(event.ratio)} {int(event.ratio * 100):>3d}%"
+    if event.determinate and event.total:
+        return f"{bar}  {label} {event.done}/{event.total}"
+    return f"{bar}  {label}"
+
+
 def _run_selected_specs(
     selected_specs: Sequence[EntrySpec],
     *,
     initial_status: str = "Queued",
     action_status: str = "Generating...",
     done_status: str = "Generated",
-    action: Callable[[EntrySpec], object],
+    action: Callable[..., object],
     quiet: bool = False,
     status_stream: object | None = None,
     action_stdout: object | None = None,
@@ -1683,20 +1783,25 @@ def _run_selected_specs(
     success_message: Callable[[EntrySpec], str] | None = _generated_output_summary,
 ) -> list[object]:
     results: list[object] = []
+    # Only the status-board branch renders progress. A quiet run has nowhere to put it,
+    # and a verbose run is already narrating each stage through the logger — a bar
+    # repainting between log lines would fight with them. Both still write the sidecar,
+    # so an open CAD Viewer sees the build either way.
     if quiet:
         for spec in selected_specs:
             with contextlib.redirect_stdout(io.StringIO()):
-                results.append(action(spec))
+                results.append(action(spec, None))
         return results
     if logger is not None:
         for spec in selected_specs:
             logger.debug(f"{action_status} {spec.source_ref}")
-            with logger.timed(f"{done_status.lower()} {spec.source_ref}"):
-                if action_stdout is None:
-                    result = action(spec)
-                else:
-                    with contextlib.redirect_stdout(action_stdout):
-                        result = action(spec)
+            with _cli_progress_line(spec, logger=logger, fallback=action_status) as progress_sink:
+                with logger.timed(f"{done_status.lower()} {spec.source_ref}"):
+                    if action_stdout is None:
+                        result = action(spec, progress_sink)
+                    else:
+                        with contextlib.redirect_stdout(action_stdout):
+                            result = action(spec, progress_sink)
             results.append(result)
             if isinstance(result, _SkippedGeneration):
                 logger.info(f"{spec.cad_ref} was built by a concurrent run; skipped")
@@ -1711,11 +1816,17 @@ def _run_selected_specs(
     )
     for spec in selected_specs:
         status_board.set(spec.source_ref, action_status)
+        # Repaint this spec's row from its build's own progress events. The board
+        # already redraws in place on a tty and degrades to one line per change
+        # otherwise, so a bar costs it nothing new.
+        def progress_sink(event: ProgressEvent, ref: str = spec.source_ref) -> None:
+            status_board.set(ref, _progress_status_text(event, fallback=action_status))
+
         if action_stdout is None:
-            result = action(spec)
+            result = action(spec, progress_sink)
         else:
             with contextlib.redirect_stdout(action_stdout):
-                result = action(spec)
+                result = action(spec, progress_sink)
         results.append(result)
         status_board.set(spec.source_ref, done_status)
     return results
@@ -2012,16 +2123,27 @@ def generate_step_targets(
             return False
         return _assembly_is_current(spec) and _assembly_glb_package_current(spec)
 
-    def generate_step(spec: EntrySpec) -> object:
+    def generate_step(spec: EntrySpec, progress_sink: object | None = None) -> object:
+        def build(tracked_spec: EntrySpec) -> object:
+            # Progress is reported per MODEL, keyed by the same package dir the
+            # generation lock is, so a CAD Viewer polling this model's artifact status
+            # picks up the sidecar this run writes.
+            with report_build_progress(
+                render_package_dir(tracked_spec.entry_path) if tracked_spec.entry_path else None,
+                sink=progress_sink,
+            ) as reporter:
+                return _generate_step_outputs_for_cli(
+                    tracked_spec,
+                    entries_by_step_path=entries_by_step_path,
+                    logger=logger,
+                    force=force,
+                    progress=reporter,
+                )
+
         return _run_with_spec_generation_status(
             spec,
             "gen_step",
-            lambda tracked_spec: _generate_step_outputs_for_cli(
-                tracked_spec,
-                entries_by_step_path=entries_by_step_path,
-                logger=logger,
-                force=force,
-            ),
+            build,
             skip_if_current=_built_by_a_peer,
         )
 
@@ -2113,7 +2235,9 @@ def generate_dxf_targets(
 
         _run_selected_specs(
             selected_specs,
-            action=lambda spec: _run_with_spec_generation_status(
+            # A drawing build is one opaque generator run with no countable stage, so it
+            # takes no progress sink; the board keeps its plain status text.
+            action=lambda spec, _progress_sink=None: _run_with_spec_generation_status(
                 spec,
                 "gen_dxf",
                 lambda tracked_spec: run_script_generator(tracked_spec, "gen_dxf", logger=logger),

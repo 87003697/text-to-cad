@@ -89,6 +89,50 @@ class ViewerCadgenMirrorTest(unittest.TestCase):
         package_dir = REPO_ROOT / "models" / "sample" / "__cadgen__" / "models" / "part.step"
         self.assertEqual(str(write_side(package_dir)), read_side(str(package_dir)))
 
+    def test_generation_progress_paths_match(self) -> None:
+        # cadgen writes the sidecar (progress.progress_path); the viewer reads it
+        # (server_py.artifact.generation_progress_path). Same package dir, same file.
+        from cadgen._internal.progress import progress_path as write_side
+        from server_py.artifact import generation_progress_path as read_side
+
+        package_dir = REPO_ROOT / "models" / "sample" / "__cadgen__" / "models" / "part.step"
+        self.assertEqual(str(write_side(package_dir)), read_side(str(package_dir)))
+
+    def test_generation_progress_round_trips_across_the_mirror(self) -> None:
+        """What cadgen writes mid-build is what the viewer renders -- and a finished
+        run's leftover file reports nothing, so it can never look like a live build."""
+        from cadgen._internal.progress import (
+            PHASE_COMPONENTS,
+            progress_path,
+            report_build_progress,
+        )
+        from server_py.artifact import generation_progress_path, read_generation_progress
+
+        with tempfile.TemporaryDirectory() as tmp:
+            package_dir = Path(tmp) / "__cadgen__" / "models" / "part.step"
+            read_path = generation_progress_path(str(package_dir))
+            self.assertIsNone(
+                read_generation_progress(read_path), "no sidecar means nothing to show"
+            )
+            with report_build_progress(package_dir) as reporter:
+                reporter.phase(PHASE_COMPONENTS, total=4)
+                reporter.advance()
+                reporter.advance()
+                mid_build = read_generation_progress(read_path)
+                self.assertIsNotNone(mid_build, "the viewer must see a build in flight")
+                self.assertEqual(PHASE_COMPONENTS, mid_build["phase"])
+                self.assertTrue(mid_build["determinate"])
+                self.assertEqual(2, mid_build["done"])
+                self.assertEqual(4, mid_build["total"])
+                self.assertGreater(mid_build["ratio"], 0.0)
+            # The file survives the run (it carries the stage times the next build
+            # weights itself from), but its terminal phase must read as "not running".
+            self.assertTrue(progress_path(package_dir).is_file())
+            self.assertIsNone(
+                read_generation_progress(read_path),
+                "a finished run's sidecar must not read as a live build",
+            )
+
     def test_generation_lock_is_honoured_across_the_mirror(self) -> None:
         """cadgen's holder and the viewer's probe must agree on real lock state."""
         from cadgen._internal.generation_status import generation_lock_path as write_side

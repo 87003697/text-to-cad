@@ -13,6 +13,8 @@ from cadgen._internal.generation import (
     _generate_part_outputs,
     run_script_generator,
 )
+from cadgen._internal.generation_status import generation_lock_path, track_generation_run
+from cadgen._internal.progress import PHASE_GENERATE, report_build_progress
 from cadgen.metadata import DEFAULT_MESH_ANGULAR_TOLERANCE, DEFAULT_MESH_TOLERANCE, normalize_mesh_numeric
 from cadgen.catalog import render_package_dir
 from cadgen.render import relative_to_cwd
@@ -319,37 +321,50 @@ def build_step_artifact(
         if existing_artifact is not None:
             return _existing_result_payload(existing_spec, existing_artifact)
 
-    if from_generator:
-        scene = run_script_generator(
-            existing_spec,
-            "gen_step",
-            logger=logger,
+    # Hold the model's generation lock across the WHOLE build, not just the generator
+    # run. run_script_generator takes this same lock internally (re-entrantly, so the
+    # nesting is a no-op), but it releases on return — leaving the meshing, which is
+    # the long part, unlocked. A viewer polling artifact status during that window
+    # would read "no build in flight", find the package stale, and start a second one.
+    package_dir = render_package_dir(existing_spec.entry_path) if existing_spec.entry_path else None
+    lock_path = generation_lock_path(package_dir) if package_dir is not None else None
+    with track_generation_run(lock_path), report_build_progress(package_dir) as progress:
+        if from_generator:
+            scene = run_script_generator(
+                existing_spec,
+                "gen_step",
+                logger=logger,
+                force=force,
+                reset_runtime_closure=reset_runtime_closure,
+                progress=progress,
+            )
+            if scene is None:
+                raise RuntimeError(f"Python generator did not produce a STEP scene: {existing_spec.source_ref}")
+            spec = existing_spec
+        else:
+            # _generate_part_outputs reports this phase itself when it does the loading;
+            # here the scene is preloaded, so the parse would otherwise go unreported.
+            progress.phase(PHASE_GENERATE)
+            with logger.timed(f"load STEP {relative_to_cwd(step_path)}"):
+                scene = load_step_scene(step_path)
+            kind_value = kind or infer_entry_kind(step_path, scene)
+            spec = _build_entry_spec(
+                repo_root,
+                step_path,
+                scene,
+                kind=kind_value,
+                mesh_tolerance=mesh_tolerance,
+                mesh_angular_tolerance=mesh_angular_tolerance,
+            )
+        result = _generate_part_outputs(
+            spec,
+            entries_by_step_path=_entries_by_step_path_for_repo(repo_root, spec),
+            preloaded_scene=scene,
+            require_step_file=not from_generator,
             force=force,
-            reset_runtime_closure=reset_runtime_closure,
+            logger=logger,
+            progress=progress,
         )
-        if scene is None:
-            raise RuntimeError(f"Python generator did not produce a STEP scene: {existing_spec.source_ref}")
-        spec = existing_spec
-    else:
-        with logger.timed(f"load STEP {relative_to_cwd(step_path)}"):
-            scene = load_step_scene(step_path)
-        kind_value = kind or infer_entry_kind(step_path, scene)
-        spec = _build_entry_spec(
-            repo_root,
-            step_path,
-            scene,
-            kind=kind_value,
-            mesh_tolerance=mesh_tolerance,
-            mesh_angular_tolerance=mesh_angular_tolerance,
-        )
-    result = _generate_part_outputs(
-        spec,
-        entries_by_step_path=_entries_by_step_path_for_repo(repo_root, spec),
-        preloaded_scene=scene,
-        require_step_file=not from_generator,
-        force=force,
-        logger=logger,
-    )
     stats = result.selector_bundle.manifest.get("stats") if result.selector_bundle is not None else {}
     return _generated_result_payload(spec, scene, stats if isinstance(stats, dict) else {})
 

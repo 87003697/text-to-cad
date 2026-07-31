@@ -1,5 +1,7 @@
 import { useEffect, useState } from "react";
 
+import { formatArtifactProgress, renderProgressBar } from "@/workbench/artifactProgress.js";
+
 // Extracted from the published Claude spinner verb list the user linked.
 const CLAUDE_CODE_LOADING_VERBS = Object.freeze([
   "Accomplishing",
@@ -201,7 +203,8 @@ function shuffledLoadingVerbs() {
 
 export default function ViewerLoadingOverlay({
   viewerLoading,
-  previewMode
+  previewMode,
+  progress = null
 }) {
   const [loadingVerbs, setLoadingVerbs] = useState(() => shuffledLoadingVerbs());
   const [activeWordIndex, setActiveWordIndex] = useState(0);
@@ -210,6 +213,7 @@ export default function ViewerLoadingOverlay({
 
   const ASCII_SPINNER_FRAMES = ["|", "/", "-", "\\"];
   const ASCII_ELLIPSIS_FRAMES = ["", ".", "..", "..."];
+  const OVERLAY_BAR_CELLS = 21;
 
   useEffect(() => {
     if (!viewerLoading || previewMode) {
@@ -245,10 +249,20 @@ export default function ViewerLoadingOverlay({
     return null;
   }
 
+  const displayFrame = progress ? formatArtifactProgress(progress) : null;
   const activeVerb = loadingVerbs[activeWordIndex] || CLAUDE_CODE_LOADING_VERBS[0];
+  // Cell counts, not pixels: the whole block is laid out in `ch` units, so the bar's
+  // rendered length is cells x the mono advance width. OVERLAY_BAR_CELLS is set to hold
+  // the bar at the same physical length it had one font step larger (18 cells at
+  // text-sm) — shrinking the type must not shrink the bar with it.
   const spinnerFrame = ASCII_SPINNER_FRAMES[spinnerFrameIndex];
   const ellipsis = ASCII_ELLIPSIS_FRAMES[ellipsisFrameIndex];
 
+  // Stacked rows on a fixed character grid. Every cell whose contents change — the
+  // spinner, the ellipsis, the percent, the counts — sits in a reserved width, and the
+  // two variable-length strings (the verb and the phase label) are the only things on
+  // their rows. So nothing reflows as the build advances: the bar stays put while it
+  // fills, and rows appear below the verb rather than widening it.
   return (
     <div className="pointer-events-none absolute inset-0 z-20 overflow-hidden">
       <div className="cad-loading-overlay absolute inset-0" />
@@ -256,15 +270,38 @@ export default function ViewerLoadingOverlay({
         <div
           role="status"
           aria-live="polite"
-          className="cad-loading-ascii relative z-10 max-w-[min(90vw,38rem)] text-center font-mono text-sm text-popover-foreground"
+          className="cad-loading-ascii relative z-10 flex w-[30ch] max-w-[min(90vw,38rem)] flex-col gap-y-0.5 text-left font-mono text-xs leading-snug text-popover-foreground"
         >
-          <span className="sr-only">{activeVerb}</span>
-          <span className="inline-flex w-[24ch] items-start justify-start text-left sm:w-[26ch]">
-            <span className="inline-block w-[2ch]">{spinnerFrame}</span>
-            <span className="inline-block w-[1ch]"> </span>
+          {/* Coarse on purpose: the phase changes a handful of times per build, so a
+              screen reader is not read a new sentence every poll. The live value rides
+              on the progressbar below, where it can be queried instead of announced. */}
+          <span className="sr-only">{displayFrame?.label || activeVerb}</span>
+          <span aria-hidden="true" className="flex w-full">
+            <span className="inline-block w-[3ch]">{spinnerFrame}</span>
             <span>{activeVerb}</span>
             <span className="inline-block w-[3ch]">{ellipsis}</span>
           </span>
+          {displayFrame ? (
+            <>
+              <span
+                role="progressbar"
+                aria-label={displayFrame.label}
+                aria-valuenow={displayFrame.percent}
+                aria-valuemin={0}
+                aria-valuemax={100}
+                className="flex w-full pl-[3ch]"
+              >
+                <span aria-hidden="true">{renderProgressBar(displayFrame.ratio, OVERLAY_BAR_CELLS)}</span>
+                <span aria-hidden="true" className="inline-block w-[5ch] text-right tabular-nums">
+                  {displayFrame.percent}%
+                </span>
+              </span>
+              <span aria-hidden="true" className="flex w-full justify-between pl-[3ch] opacity-70">
+                <span>{displayFrame.label}</span>
+                <span className="tabular-nums">{displayFrame.counts}</span>
+              </span>
+            </>
+          ) : null}
         </div>
       </div>
     </div>

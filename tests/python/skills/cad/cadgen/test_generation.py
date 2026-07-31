@@ -152,6 +152,7 @@ class CadGenerationTests(unittest.TestCase):
             provenance=None,
             linear_deflection=None,
             angular_deflection=None,
+            progress=None,
         ):
             calls.append(
                 {
@@ -823,7 +824,7 @@ class CadGenerationTests(unittest.TestCase):
         second_path = self._generator_script("second")
         calls: list[str] = []
 
-        def fake_generate(spec, *, entries_by_step_path):
+        def fake_generate(spec, *, entries_by_step_path, **_extra):
             self.assertIn(spec.step_path.resolve(), entries_by_step_path)
             calls.append(spec.cad_ref)
 
@@ -983,7 +984,7 @@ class CadGenerationTests(unittest.TestCase):
         )
         calls: list[str] = []
 
-        def fake_generate(spec, *, entries_by_step_path):
+        def fake_generate(spec, *, entries_by_step_path, **_extra):
             calls.append(spec.kind)
 
         with mock.patch.object(cad_generation, "_generate_step_outputs", side_effect=fake_generate):
@@ -1229,7 +1230,7 @@ class CadGenerationTests(unittest.TestCase):
         script_path = self._generator_script("generated")
         calls: list[cad_generation.EntrySpec] = []
 
-        def fake_generate(spec, *, entries_by_step_path):
+        def fake_generate(spec, *, entries_by_step_path, **_extra):
             calls.append(spec)
 
         with mock.patch.object(cad_generation, "_generate_step_outputs", side_effect=fake_generate):

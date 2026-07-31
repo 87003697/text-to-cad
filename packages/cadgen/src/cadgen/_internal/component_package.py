@@ -25,6 +25,12 @@ from cadgen._internal.generation import (
     DEFAULT_MESH_TOLERANCE,
 )
 from cadgen._internal.glb import export_assembly_glb_from_scene
+from cadgen._internal.progress import (
+    PHASE_COMPONENTS,
+    PHASE_FINALIZE,
+    PHASE_PACKAGE,
+    resolve as resolve_progress,
+)
 from cadgen.step_export import build_build123d_step_scene
 from cadgen._internal.step_scene import (
     extract_selectors_from_scene,
@@ -415,6 +421,7 @@ def build_package_from_compound(
     provenance: Mapping[str, Any] | None = None,
     linear_deflection: float = DEFAULT_MESH_TOLERANCE,
     angular_deflection: float = DEFAULT_MESH_ANGULAR_TOLERANCE,
+    progress: Any | None = None,
 ) -> dict[str, Any]:
     """Emit a render package (``__cadgen__/models/<entry>/``) from a baked ``Compound`` or single shape.
 
@@ -432,8 +439,13 @@ def build_package_from_compound(
       inferred from geometry (a multi-solid part must not look like an assembly).
 
     ``force`` rebuilds every component even if its ``<cid>.glb`` is present (the cid hashes
-    geometry, not the mesh/selector code version). Returns build stats."""
+    geometry, not the mesh/selector code version). Returns build stats.
+
+    ``progress`` (a :class:`cadgen._internal.progress.ProgressReporter`) is driven through
+    the walk and the component build; the latter is the one stage of a model build with a
+    denominator known before the work starts."""
     package_dir = Path(package_dir)
+    progress = resolve_progress(progress)
     # Each package is a SELF-CONTAINED unit: the descriptor dir lives at
     # <folder>/__cadgen__/models/<key>/ and its content-addressed component GLBs live in a
     # components/ dir INSIDE that package (<key>/components/<hash>.glb), so the whole model —
@@ -502,6 +514,9 @@ def build_package_from_compound(
         if color is not None:
             occurrence["color"] = color
         occurrences.append(occurrence)
+        # One tick per leaf. The walk has no denominator (the leaf count is only known
+        # once it ends), so this drives a count, not a percentage.
+        progress.advance(detail=name)
         return {"id": occ_id, "name": name, "nodeType": "part", "leafPartIds": [occ_id], "children": []}
 
     # Recurse the composed compound so the descriptor preserves the assembly HIERARCHY (for the
@@ -511,6 +526,7 @@ def build_package_from_compound(
     # NOT a single merged component, so the tree can drill into / select / isolate its parts.
     assembly_root: dict[str, Any] | None = None
     occurrence_tree = getattr(compound, "_occurrence_tree", None)
+    progress.phase(PHASE_PACKAGE)
     if single_component:
         _add_leaf(compound, getattr(compound, "location", None) or Location(), "o1.1")
     elif occurrence_tree is not None:
@@ -609,20 +625,40 @@ def build_package_from_compound(
         for cid, shape in missing
     ]
     workers = _component_build_worker_count(len(payloads))
+    # The one stage of a model build whose denominator is known before any of the work
+    # runs: the missing set is fully resolved above. Note the total is the MISSING
+    # count, not the component count -- re-meshing one edited part of a 300-part
+    # assembly is honestly 1/1, not 1/300.
+    progress.phase(PHASE_COMPONENTS, total=len(payloads))
     if workers > 1:
         # Each missing component is meshed + selector-extracted independently
         # (the extraction is Python-heavy and GIL-bound, so threads don't
         # help). Workers write their own <cid>.glb atomically, so nothing
         # heavy pickles back.
         import multiprocessing
-        from concurrent.futures import ProcessPoolExecutor
+        from concurrent.futures import ProcessPoolExecutor, as_completed
 
         with ProcessPoolExecutor(
             max_workers=workers, mp_context=multiprocessing.get_context("spawn")
         ) as pool:
-            results = list(pool.map(_build_component_glb_worker, payloads))
+            # submit + as_completed rather than pool.map: map yields in SUBMISSION
+            # order, so a progress count taken from it reports the length of the
+            # finished PREFIX, not how many components are actually done -- one slow
+            # component early in the list would pin the bar while the rest complete
+            # behind it. Results are collected by cid and re-ordered below, so the
+            # value this function computes is identical either way.
+            futures = {pool.submit(_build_component_glb_worker, args): args[1] for args in payloads}
+            errors_by_cid: dict[str, str | None] = {}
+            for future in as_completed(futures):
+                built_cid, error = future.result()
+                errors_by_cid[built_cid] = error
+                progress.advance(detail=built_cid)
+        results = [(cid, errors_by_cid[cid]) for _payload, cid, *_rest in payloads]
     else:
-        results = [_build_component_glb_worker(args) for args in payloads]
+        results = []
+        for args in payloads:
+            results.append(_build_component_glb_worker(args))
+            progress.advance(detail=args[1])
     shapes_by_cid = dict(missing)
     for cid, error in results:
         if error is not None and error.startswith(PAYLOAD_UNREADABLE):
@@ -647,6 +683,7 @@ def build_package_from_compound(
     # package-specific component map + occurrence placements + mates. Provenance fields
     # come first; package fields override (occurrences here are placement dicts that
     # reference components, not the monolith's tabular occurrence rows).
+    progress.phase(PHASE_FINALIZE)
     descriptor: dict[str, Any] = dict(provenance or {})
     descriptor.update(
         {

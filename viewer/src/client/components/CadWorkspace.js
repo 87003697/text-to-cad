@@ -20,6 +20,7 @@ import StatusToast from "./workbench/StatusToast";
 import UrdfFileSheet from "./workbench/UrdfFileSheet";
 import ViewerAlertDialog from "./workbench/ViewerAlertDialog";
 import ViewerLoadingOverlay from "./workbench/ViewerLoadingOverlay";
+import { formatArtifactProgress } from "@/workbench/artifactProgress.js";
 import FloatingToolBar from "./workbench/FloatingToolBar";
 import CadWorkspaceTopBar from "./workbench/CadWorkspaceTopBar";
 import CadWorkspaceHome from "./workbench/CadWorkspaceHome";
@@ -1430,6 +1431,10 @@ export default function CadWorkspace({
     }
   );
   const selectedArtifactGenerating = selectedArtifact.status === "generating";
+  // The in-flight build's own report of where it is (null until it reports, and for
+  // every loading state that is not an artifact build). Only meaningful while
+  // generating — a stale frame must not outlive the build that produced it.
+  const selectedArtifactProgress = selectedArtifactGenerating ? selectedArtifact.progress : null;
   const activeStepArtifactGenerationFiles = useMemo(
     () => (selectedArtifactGenerating && catalogSelectedEntry ? [fileKey(catalogSelectedEntry)] : []),
     [selectedArtifactGenerating, catalogSelectedEntry]
@@ -5361,10 +5366,13 @@ export default function CadWorkspace({
     }
 
     if (selectedArtifactGenerating) {
+      const frame = selectedArtifactProgress ? formatArtifactProgress(selectedArtifactProgress) : null;
       return {
         loading: true,
-        label: ARTIFACT_GENERATING_LABEL,
-        title: "Generator script is running"
+        label: frame ? `${ARTIFACT_GENERATING_LABEL} ${frame.percent}%` : ARTIFACT_GENERATING_LABEL,
+        title: frame
+          ? `${frame.label}${frame.counts ? ` — ${frame.counts}` : ""}`
+          : "Generator script is running"
       };
     }
 
@@ -5493,6 +5501,7 @@ export default function CadWorkspace({
     selectedEntryHasMesh,
     selectedEntryHasUrdf,
     selectedArtifactGenerating,
+    selectedArtifactProgress,
     selectedStepArtifactRenderPending,
     selectedStepModuleLoading,
     stepUpdateInProgress,
@@ -8701,6 +8710,7 @@ export default function CadWorkspace({
               <ViewerLoadingOverlay
                 viewerLoading={effectiveViewerLoading}
                 previewMode={previewMode}
+                progress={selectedArtifactProgress}
               />
             </div>
 
