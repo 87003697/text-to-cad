@@ -17,13 +17,11 @@ from __future__ import annotations
 import hashlib
 import json
 import os
-import posixpath
 import re
 from xml.etree import ElementTree
 
 from .encoding import base36, encode_uri_component
 
-DEFAULT_VIEWER_ROOT_DIR = ""
 CAD_CATALOG_SCHEMA_VERSION = 4
 
 SOURCE_EXTENSIONS = frozenset(
@@ -113,29 +111,6 @@ def path_is_implicit_cad_source(value: str = "") -> bool:
     return any(pathname.endswith(ext) for ext in IMPLICIT_CAD_EXTENSIONS)
 
 
-def normalize_viewer_root_dir(value: str = DEFAULT_VIEWER_ROOT_DIR) -> str:
-    raw = str(value if value is not None else "").strip()
-    slash = raw.replace("\\", "/")
-    normalized = posixpath.normpath(slash) if slash else ""
-    if not normalized or normalized == ".":
-        return DEFAULT_VIEWER_ROOT_DIR
-    if normalized == ".." or normalized.startswith("../"):
-        raise ValueError(f"CAD Viewer root directory must stay inside the directory root: {raw}")
-    return normalized.rstrip("/") if normalized != "/" else normalized
-
-
-def resolve_viewer_root(repo_root: str, root_dir: str = DEFAULT_VIEWER_ROOT_DIR) -> dict:
-    normalized_dir = normalize_viewer_root_dir(root_dir)
-    resolved_repo_root = os.path.abspath(repo_root)
-    root_path = os.path.abspath(os.path.join(resolved_repo_root, normalized_dir)) if normalized_dir else resolved_repo_root
-    relative = os.path.relpath(root_path, resolved_repo_root)
-    if not relative_path_stays_inside_root(relative):
-        raise ValueError(f"CAD Viewer root directory must stay inside the directory root: {normalized_dir}")
-    return {
-        "dir": normalized_dir,
-        "rootPath": root_path,
-        "rootName": os.path.basename(root_path) if normalized_dir else os.path.basename(resolved_repo_root),
-    }
 
 
 # --- file stats / hashing / urls ---
@@ -210,14 +185,6 @@ def _should_skip_directory(name: str) -> bool:
     return name in VIEWER_SKIPPED_DIRECTORIES or _is_hidden_name(name)
 
 
-def _path_has_skipped_directory(root_path: str, file_path: str) -> bool:
-    relative = scan_relative_path(root_path, file_path)
-    if not relative_path_stays_inside_root(relative):
-        return True
-    parts = [p for p in relative.split("/") if p]
-    return any(_should_skip_directory(part) for part in parts[:-1])
-
-
 def _collect_cad_source_files(root_path: str, result: list) -> list:
     try:
         entries = sorted(os.scandir(root_path), key=lambda e: e.name)
@@ -245,13 +212,6 @@ def _collect_cad_source_files(root_path: str, result: list) -> list:
         if extension in SOURCE_EXTENSIONS or path_is_implicit_cad_source(entry_path):
             result.append(entry_path)
     return result
-
-
-def _normalize_manifest_path(value):
-    text = str(value or "").strip()
-    if not text or "\0" in text:
-        return ""
-    return text.replace("\\", "/")
 
 
 def _file_has_python_generator(file_path, generator_name):
@@ -489,11 +449,12 @@ def is_served_cad_asset(file_path: str) -> bool:
 
 
 # --- public scan API ---
-def scan_cad_directory(repo_root, root_dir=DEFAULT_VIEWER_ROOT_DIR, include_artifact_status=True):
+def scan_cad_directory(repo_root, include_artifact_status=True):
+    """Scan one directory. It is its own root — a request's URL path IS the
+    directory it opens, so there is no enclosing root to resolve against."""
     if not repo_root:
         raise ValueError("repo_root is required")
-    resolved = resolve_viewer_root(repo_root, root_dir)
-    root_path = resolved["rootPath"]
+    root_path = os.path.abspath(repo_root)
     source_files = _collect_cad_source_files(root_path, [])
     entries = []
     for source_path in source_files:

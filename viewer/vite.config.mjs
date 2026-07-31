@@ -24,7 +24,6 @@ const viewerNodeModulesRoot = path.join(viewerAppRoot, "node_modules");
 const defaultDirectoryRoot = path.resolve(viewerAppRoot, "..");
 const directoryRoot = resolveDirectoryRoot();
 const repoRoot = directoryRoot;
-const buildViewerDefaultDir = String(process.env.VIEWER_DEFAULT_DIR || "").trim();
 const viewerAllowedHosts = normalizeViewerAllowedHosts(process.env.VIEWER_ALLOWED_HOSTS ?? "");
 const viewerServerLifetimeMs = normalizeServerLifetimeMs(process.env.VIEWER_SERVER_LIFETIME_MS);
 assertNoDeprecatedLocalRootEnv(process.env);
@@ -165,10 +164,12 @@ function cadViewerBackendProxyPlugin() {
       const env = cadPythonEnv();
       env.PYTHONPATH = [viewerAppRoot, env.PYTHONPATH].filter(Boolean).join(path.delimiter);
       env.VIEWER_AGENT_START_MODE = env.VIEWER_AGENT_START_MODE || "dev";
+      // No --dir: a URL path IS the directory. cwd is the backend's only fallback,
+      // used when a request names no directory at all (the bare origin).
       child = spawn(
         cadPythonExecutable(repoRoot),
-        ["-m", "server_py.server", "--host", "127.0.0.1", "--port", String(backendPort), "--dir", directoryRoot],
-        { cwd: viewerAppRoot, env, stdio: "inherit" },
+        ["-m", "server_py.server", "--host", "127.0.0.1", "--port", String(backendPort)],
+        { cwd: directoryRoot, env, stdio: "inherit" },
       );
       child.on("error", (error) => {
         console.error(`Failed to start Python CAD Viewer backend: ${error.message}`);
@@ -305,6 +306,9 @@ export default defineConfig(({ command }) => ({
   server: {
     host: "127.0.0.1",
     port: DEFAULT_VIEWER_PORT,
+    // Fail on a taken port instead of silently rolling to the next one, so dev
+    // matches `npm run start`: a Viewer is always on the port you asked for.
+    strictPort: true,
     allowedHosts: viewerAllowedHosts,
     fs: {
       allow: [

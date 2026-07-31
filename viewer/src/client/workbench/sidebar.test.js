@@ -11,12 +11,10 @@ import {
   listSidebarItems,
   filenameLabelForEntry,
   normalizeCadFileQueryParam,
-  readCadDirParam,
   sidebarDirectoryPath,
   sidebarDirectoryIdForEntry,
   sidebarLabelForEntry,
   shouldDeferFileParamSelection,
-  writeCadDirParam,
   writeCadParam
 } from "./sidebar.js";
 import {
@@ -54,9 +52,6 @@ import {
   cloneThemePresetSettings,
   normalizeThemeSettings
 } from "cadjs/lib/themeSettings.js";
-import {
-  readStoredActiveCadDir
-} from "./cadViewerDirectorySession.mjs";
 import {
   CAD_WORKSPACE_MIN_MODEL_VIEWPORT_WIDTH,
   canFitDesktopPanels,
@@ -2230,126 +2225,31 @@ test("writeCadParam can push user navigation history", () => {
   }
 });
 
-test("writeCadParam stores active dir and omits dir for directory file selections", () => {
+test("writeCadParam leaves the directory path untouched", () => {
+  // The directory lives in the URL's path; selecting a file must only touch the query.
   const originalWindow = globalThis.window;
   const calls = [];
   globalThis.window = {
     location: {
-      href: "http://viewer.test/?dir=docs%2Fpublic&refs=%23f2",
-      pathname: "/",
-      search: "?dir=docs%2Fpublic&refs=%23f2",
-      hash: ""
-    },
-    history: {
-      replaceState: (...args) => calls.push(args)
-    },
-    sessionStorage: createMemoryStorage()
-  };
-
-  try {
-    writeCadParam("hero/planetary_gear_assembly.step.glb");
-    assert.equal(calls.length, 1);
-    const nextUrl = new URL(`http://viewer.test${calls[0][2]}`);
-    assert.equal(nextUrl.searchParams.has("dir"), false);
-    assert.equal(nextUrl.searchParams.get("file"), "hero/planetary_gear_assembly.step.glb");
-    assert.equal(nextUrl.searchParams.has("refs"), false);
-    assert.equal(readStoredActiveCadDir(), "docs/public");
-  } finally {
-    if (originalWindow === undefined) {
-      delete globalThis.window;
-    } else {
-      globalThis.window = originalWindow;
-    }
-  }
-});
-
-test("writeCadParam keeps explicit dir when clearing file selection", () => {
-  const originalWindow = globalThis.window;
-  const calls = [];
-  globalThis.window = {
-    location: {
-      href: "http://viewer.test/?dir=docs%2Fpublic&file=hero%2Fplanetary_gear_assembly.step.glb",
-      pathname: "/",
-      search: "?dir=docs%2Fpublic&file=hero%2Fplanetary_gear_assembly.step.glb",
-      hash: ""
-    },
-    history: {
-      replaceState: (...args) => calls.push(args)
-    },
-    sessionStorage: createMemoryStorage()
-  };
-
-  try {
-    writeCadParam("");
-    assert.equal(calls.length, 1);
-    const nextUrl = new URL(`http://viewer.test${calls[0][2]}`);
-    assert.equal(nextUrl.searchParams.get("dir"), "docs/public");
-    assert.equal(nextUrl.searchParams.has("file"), false);
-  } finally {
-    if (originalWindow === undefined) {
-      delete globalThis.window;
-    } else {
-      globalThis.window = originalWindow;
-    }
-  }
-});
-
-test("writeCadParam keeps explicit dir when active dir cannot be stored", () => {
-  const originalWindow = globalThis.window;
-  const calls = [];
-  globalThis.window = {
-    location: {
-      href: "http://viewer.test/?dir=docs%2Fpublic",
-      pathname: "/",
-      search: "?dir=docs%2Fpublic",
-      hash: ""
-    },
-    history: {
-      replaceState: (...args) => calls.push(args)
-    }
-  };
-
-  try {
-    writeCadParam("hero/planetary_gear_assembly.step.glb");
-    assert.equal(calls.length, 1);
-    const nextUrl = new URL(`http://viewer.test${calls[0][2]}`);
-    assert.equal(nextUrl.searchParams.get("dir"), "docs/public");
-    assert.equal(nextUrl.searchParams.get("file"), "hero/planetary_gear_assembly.step.glb");
-  } finally {
-    if (originalWindow === undefined) {
-      delete globalThis.window;
-    } else {
-      globalThis.window = originalWindow;
-    }
-  }
-});
-
-test("writeCadDirParam selects a workspace and clears file selection", () => {
-  const originalWindow = globalThis.window;
-  const calls = [];
-  globalThis.window = {
-    location: {
-      href: "http://viewer.test/?file=parts%2Fsample_plate.step&refs=f2",
-      pathname: "/",
-      search: "?file=parts%2Fsample_plate.step&refs=f2",
+      href: "http://viewer.test/workspace/models?file=parts%2Fold.step&refs=f2",
+      pathname: "/workspace/models",
+      search: "?file=parts%2Fold.step&refs=f2",
       hash: ""
     },
     history: {
       replaceState: (...args) => calls.push(["replace", ...args]),
       pushState: (...args) => calls.push(["push", ...args])
-    },
-    sessionStorage: createMemoryStorage()
+    }
   };
 
   try {
-    assert.equal(readCadDirParam(), null);
-    writeCadDirParam("/workspace/models", { history: "push" });
+    writeCadParam("parts/sample_plate.step", { history: "push" });
     assert.deepEqual(calls.map((call) => call[0]), ["push"]);
     const nextUrl = new URL(`http://viewer.test${calls[0][3]}`);
-    assert.equal(nextUrl.searchParams.get("dir"), "/workspace/models");
-    assert.equal(nextUrl.searchParams.has("file"), false);
+    assert.equal(nextUrl.pathname, "/workspace/models");
+    assert.equal(nextUrl.searchParams.get("file"), "parts/sample_plate.step");
+    assert.equal(nextUrl.searchParams.has("dir"), false);
     assert.equal(nextUrl.searchParams.has("refs"), false);
-    assert.equal(readStoredActiveCadDir(), "/workspace/models");
   } finally {
     if (originalWindow === undefined) {
       delete globalThis.window;

@@ -125,12 +125,12 @@ Likely causes:
 
 - Node/npm unavailable
 - CAD Viewer app not built or cannot start
-- active Viewer URL is missing the absolute `?dir=` for the project
-- returned link is missing an absolute `file=` path or points outside `?dir=`
+- Viewer URL path is not the project's absolute model directory
+- returned link is missing `?file=`, or its `file=` is not relative to that directory
 
 Fix:
 
-- rerun `$cad-viewer` with the same absolute `?dir=` for the project and an absolute `file=` path for each artifact
+- rebuild each link as `<viewer-origin><absolute-model-directory>?file=<path relative to it>`
 - return one documented Viewer link per requested file
 - if unresolved, report the startup failure and rely on CLI facts/measurements plus snapshots for validation
 

@@ -1,10 +1,5 @@
-import {
-  readStoredActiveCadDir,
-  rememberActiveCadDir
-} from "./cadViewerDirectorySession.mjs";
 import { normalizeViewerDefaultFile } from "../../shared/viewerConfig.mjs";
 
-const CAD_DIR_QUERY_PARAM = "dir";
 const CAD_QUERY_PARAM = "file";
 
 export function fileKey(entry) {
@@ -97,17 +92,6 @@ export function readCadParam() {
   return normalizedValue || null;
 }
 
-export function readCadDirParam() {
-  if (typeof window === "undefined") {
-    return null;
-  }
-  const params = new URLSearchParams(window.location.search);
-  const value = params.get(CAD_DIR_QUERY_PARAM);
-  const normalizedValue = typeof value === "string"
-    ? String(value).trim()
-    : "";
-  return normalizedValue || null;
-}
 
 export function findEntryByUrlPath(entries, urlPath) {
   const normalizedUrlPath = normalizeCadFileQueryParam(urlPath);
@@ -172,39 +156,14 @@ export function writeCadParam(urlPath, { history = "replace" } = {}) {
   const normalizedUrlPath = normalizeCadFileQueryParam(urlPath);
   const url = new URL(window.location.href);
   url.searchParams.delete("refs");
+  // Only the file changes here. The directory lives in the URL's path and is never
+  // rewritten from the client — switching directories means navigating to a new URL.
   if (normalizedUrlPath) {
     url.searchParams.set(CAD_QUERY_PARAM, normalizedUrlPath);
-    if (url.searchParams.has(CAD_DIR_QUERY_PARAM)) {
-      const activeDir = rememberActiveCadDir(url.searchParams.get(CAD_DIR_QUERY_PARAM));
-      if (activeDir && readStoredActiveCadDir() !== activeDir) {
-        writeUrl(url, { history });
-        return;
-      }
-      url.searchParams.delete(CAD_DIR_QUERY_PARAM);
-    }
   } else {
     url.searchParams.delete(CAD_QUERY_PARAM);
   }
   writeUrl(url, { history });
-}
-
-export function writeCadDirParam(dirPath, { history = "replace", preserveFile = false } = {}) {
-  if (typeof window === "undefined") {
-    return false;
-  }
-  const normalizedDirPath = String(dirPath || "").trim();
-  const url = new URL(window.location.href);
-  url.searchParams.delete("refs");
-  if (!preserveFile) {
-    url.searchParams.delete(CAD_QUERY_PARAM);
-  }
-  if (normalizedDirPath) {
-    url.searchParams.set(CAD_DIR_QUERY_PARAM, normalizedDirPath);
-    rememberActiveCadDir(normalizedDirPath);
-  } else {
-    url.searchParams.delete(CAD_DIR_QUERY_PARAM);
-  }
-  return writeUrl(url, { history });
 }
 
 function compareSidebarLabels(a, b) {

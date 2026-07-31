@@ -476,7 +476,7 @@ class ScannerDxfEntry(unittest.TestCase):
             _write_drawing_package(root, "outline.dxf.py")
             with open(os.path.join(root, "imported.dxf"), "w") as h:
                 h.write("0\nEOF\n")
-            catalog = scanner.scan_cad_directory(root, "", include_artifact_status=False)
+            catalog = scanner.scan_cad_directory(root, include_artifact_status=False)
             by_file = {entry["file"]: entry for entry in catalog["entries"]}
             self.assertIn("outline.dxf.py", by_file)
             self.assertIn("imported.dxf", by_file)

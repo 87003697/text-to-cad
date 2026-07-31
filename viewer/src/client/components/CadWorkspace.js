@@ -190,13 +190,11 @@ import {
   findEntryByUrlPath,
   fileKey,
   missingFileRefForCatalog,
-  readCadDirParam,
   readCadParam,
   selectedEntryKeyFromUrl,
   sidebarDirectoryIdForEntry,
   sidebarLabelForEntry,
   shouldDeferFileParamSelection,
-  writeCadDirParam,
   writeCadParam,
 } from "@/workbench/sidebar";
 import { buildCadRefToken } from "cadjs/lib/cadRefs.js";
@@ -238,10 +236,7 @@ import {
   URDF_JOINT_ANIMATION_FOLLOW_MS
 } from "cadjs/lib/urdf/jointAnimation";
 import { checkMoveIt2ServerLive, moveit2ServerEnabled, requestMoveIt2Server } from "cadjs/lib/urdf/moveit2ServerClient";
-import {
-  readActiveCadDir,
-  refreshCadCatalog,
-} from "../workbench/cadManifestStore.js";
+import { readActiveCadDir } from "../workbench/cadManifestStore.js";
 import {
   FILE_STATUS_LEVELS,
   buildFileStatusItems,
@@ -1078,26 +1073,6 @@ function entryWithoutRenderAssets(entry) {
   return next;
 }
 
-function normalizeViewerDirectoryOptions(viewerServerInfo) {
-  const seen = new Set();
-  const options = [];
-  for (const option of Array.isArray(viewerServerInfo?.activeDirectories) ? viewerServerInfo.activeDirectories : []) {
-    const dir = String(option?.dir || "").trim();
-    const rootPath = String(option?.rootPath || "").trim();
-    const key = rootPath || dir;
-    if (!dir || !key || seen.has(key)) {
-      continue;
-    }
-    seen.add(key);
-    options.push({
-      dir,
-      rootPath,
-      rootName: String(option?.rootName || "").trim()
-    });
-  }
-  return options;
-}
-
 export default function CadWorkspace({
   manifestEntries: manifestEntriesProp = [],
   manifestRevision = 0,
@@ -1108,7 +1083,6 @@ export default function CadWorkspace({
 }) {
   const manifestEntries = Array.isArray(manifestEntriesProp) ? manifestEntriesProp : [];
   const catalogEntries = manifestEntries;
-  const explicitDirParam = readCadDirParam();
   const explicitFileParam = readCadParam();
   const catalogRootDir = String(activeDir || "").trim();
   const [query, setQuery] = useState("");
@@ -1467,18 +1441,8 @@ export default function CadWorkspace({
     () => renderedFileSheetSectionIds(selectedFileSheetKind).length > 0,
     [selectedFileSheetKind]
   );
-  const directoryOptions = useMemo(
-    () => normalizeViewerDirectoryOptions(viewerServerInfo),
-    [viewerServerInfo]
-  );
-  const activeViewerDir = readActiveCadDir();
-  const activeDirectory = catalogRootDir || activeViewerDir;
-  const directorySelectionEligible = !explicitDirParam && !activeDirectory;
-  const directorySelectionActive = directorySelectionEligible && directoryOptions.length > 1;
-  const directoryAutoEnterDir = directorySelectionEligible && !String(explicitFileParam || "").trim() && directoryOptions.length === 1
-    ? directoryOptions[0].dir
-    : "";
-  const directoryNavigationAvailable = !directorySelectionActive;
+  // The URL's path IS the directory, so there is nothing to select and no state to
+  // reconcile — the Viewer always has exactly one directory, the one it was opened at.
   const stepArtifactGenerationAvailable = viewerServerInfo
     ? viewerServerInfo.stepArtifactGenerationAvailable !== false
     : true;
@@ -1698,18 +1662,6 @@ export default function CadWorkspace({
       controller.abort();
     };
   }, [catalogRootDir, explicitFileParam]);
-
-  useEffect(() => {
-    if (!directoryAutoEnterDir) {
-      return;
-    }
-    writeCadDirParam(directoryAutoEnterDir);
-    refreshCadCatalog({ markRefreshing: true }).catch((error) => {
-      if (import.meta.env.DEV) {
-        console.warn("Failed to refresh CAD catalog", error);
-      }
-    });
-  }, [directoryAutoEnterDir]);
 
   useEffect(() => {
     let active = true;
@@ -3319,7 +3271,7 @@ export default function CadWorkspace({
     setTabToolsWidth(defaultFileSheetWidth);
   }, [defaultFileSheetWidth, fileSheetWidthIsCustom]);
   const desktopFileSheetOpen = isDesktop && tabToolsOpen && !!selectedFileSheetKind && selectedFileSheetHasSections && !previewMode;
-  const effectiveSidebarOpen = directoryNavigationAvailable && sidebarOpen && !previewMode;
+  const effectiveSidebarOpen = sidebarOpen && !previewMode;
   const desktopSidebarOpen = isDesktop && effectiveSidebarOpen && !previewMode;
 
   const setThemeMenuOpen = useCallback(() => {}, []);
@@ -4167,12 +4119,6 @@ export default function CadWorkspace({
     setDrawingRedoStack([]);
     setSelectedKey("");
   }, [setTabToolsOpen]);
-
-  useEffect(() => {
-    if (directorySelectionActive && selectedKey) {
-      resetActiveDirectory();
-    }
-  }, [resetActiveDirectory, selectedKey, directorySelectionActive]);
 
   const activateEntryTab = useCallback((key) => {
     if (!key || !entryMap.has(key)) {
@@ -7914,24 +7860,6 @@ export default function CadWorkspace({
     }
   }, [activateEntryTab, entryMap, isDesktop, writeCadParam]);
 
-  const handleSelectDirectory = useCallback((dir) => {
-    const normalizedDir = String(dir || "").trim();
-    if (!normalizedDir) {
-      return;
-    }
-    resetActiveDirectory();
-    setQuery("");
-    writeCadDirParam(normalizedDir, {
-      history: "push",
-      preserveFile: Boolean(directorySelectionActive && explicitFileParam)
-    });
-    refreshCadCatalog({ markRefreshing: true }).catch((error) => {
-      if (import.meta.env.DEV) {
-        console.warn("Failed to refresh CAD catalog", error);
-      }
-    });
-  }, [explicitFileParam, resetActiveDirectory, directorySelectionActive]);
-
   const handleRevealEntryInExplorerView = useCallback((entry) => {
     const targetKey = fileKey(entry);
     if (!targetKey || !entryMap.has(targetKey)) {
@@ -8606,12 +8534,10 @@ export default function CadWorkspace({
           appearanceEditing={appearanceEditing}
           onOpenAppearanceEditor={openAppearanceEditor}
           onCloseAppearanceEditor={closeAppearanceEditor}
-          navigationAvailable={directoryNavigationAvailable}
         />
 
         <div className="pointer-events-none relative min-h-0 flex-1 overflow-hidden">
           <div className="flex h-full min-w-0">
-            {directoryNavigationAvailable ? (
             <FileViewerSidebar
               previewMode={previewMode}
               query={query}
@@ -8643,13 +8569,9 @@ export default function CadWorkspace({
               catalogHydrated={catalogHydrated}
               catalogRefreshing={catalogRefreshing}
               catalogError={catalogError}
-              directoryOptions={directoryOptions}
-              activeDirectory={activeDirectory || explicitDirParam || ""}
-              onSelectDirectory={handleSelectDirectory}
               resizable={isDesktop}
               onStartResize={handleStartSidebarResize}
             />
-            ) : null}
 
             <div className="pointer-events-none relative min-w-0 flex-1 overflow-hidden">
               <FloatingToolBar
@@ -8694,16 +8616,13 @@ export default function CadWorkspace({
                 fileAccessBusyKey={fileAccessBusyKey}
               />
 
-              {!previewMode && (directorySelectionActive || (!selectedEntry && !missingFileRef && !fileParamSelectionPending)) ? (
+              {!previewMode && !selectedEntry && !missingFileRef && !fileParamSelectionPending ? (
                 <CadWorkspaceHome
                   entries={catalogEntries}
                   onSelectEntry={handleSelectEntry}
                   catalogHydrated={catalogHydrated}
                   catalogRefreshing={catalogRefreshing}
                   catalogError={catalogError}
-                  directorySelectionActive={directorySelectionActive}
-                  directoryOptions={directoryOptions}
-                  onSelectDirectory={handleSelectDirectory}
                 />
               ) : null}
 

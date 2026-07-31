@@ -6,7 +6,6 @@ import {
   Cuboid,
   DraftingCompass,
   FileBox,
-  FolderOpen,
   Layers3,
   Package,
   Route
@@ -79,39 +78,6 @@ function pathLabelForEntry(entry) {
   return String(entry?.file || "").trim();
 }
 
-function directoryLabelForOption(option) {
-  const rootName = String(option?.rootName || "").trim();
-  if (rootName) {
-    return rootName;
-  }
-  const pathLabel = String(option?.rootPath || option?.dir || "").trim().replace(/\\/g, "/").replace(/\/+$/g, "");
-  return pathLabel.split("/").filter(Boolean).pop() || pathLabel || "Directory";
-}
-
-function directoryPathLabelForOption(option) {
-  return String(option?.rootPath || option?.dir || "").trim();
-}
-
-function normalizeDirectoryOptions(options) {
-  const seen = new Set();
-  const result = [];
-  for (const option of Array.isArray(options) ? options : []) {
-    const dir = String(option?.dir || "").trim();
-    const rootPath = String(option?.rootPath || "").trim();
-    const key = rootPath || dir;
-    if (!dir || !key || seen.has(key)) {
-      continue;
-    }
-    seen.add(key);
-    result.push({
-      dir,
-      rootPath,
-      rootName: String(option?.rootName || "").trim()
-    });
-  }
-  return result;
-}
-
 function compareEntryLabels(a, b) {
   return sidebarLabelForEntry(a).localeCompare(sidebarLabelForEntry(b), undefined, {
     numeric: true,
@@ -162,20 +128,13 @@ export default function CadWorkspaceHome({
   onSelectEntry,
   catalogHydrated = false,
   catalogRefreshing = false,
-  catalogError = "",
-  directorySelectionActive = false,
-  directoryOptions = [],
-  onSelectDirectory
+  catalogError = ""
 }) {
   const homeEntries = selectHomeEntries(entries);
-  const normalizedDirectoryOptions = normalizeDirectoryOptions(directoryOptions);
   const hasEntries = homeEntries.length > 0;
-  const hasDirectoryOptions = normalizedDirectoryOptions.length > 0;
   const catalogErrorMessage = String(catalogError || "").trim();
   const catalogLoading = !catalogHydrated || (catalogRefreshing && !hasEntries);
-  const heading = directorySelectionActive
-    ? "Select a directory"
-    : "Select a file";
+  const heading = "Select a file";
 
   return (
     <div className="pointer-events-none absolute inset-0 z-20 flex min-w-0 items-center justify-center px-4 py-6">
@@ -190,52 +149,7 @@ export default function CadWorkspaceHome({
         </div>
 
         <div className="divide-y divide-sidebar-border/70">
-          {directorySelectionActive ? (
-            hasDirectoryOptions ? normalizedDirectoryOptions.map((option) => {
-              const label = directoryLabelForOption(option);
-              const pathLabel = directoryPathLabelForOption(option);
-
-              return (
-                <Button
-                  key={option.rootPath || option.dir}
-                  type="button"
-                  variant="ghost"
-                  className="group h-auto w-full justify-start rounded-none px-5 py-3 text-left hover:bg-sidebar-accent/80 focus-visible:ring-inset has-[>svg]:px-5 sm:px-6 sm:has-[>svg]:px-6"
-                  onClick={() => {
-                    if (typeof onSelectDirectory === "function") {
-                      onSelectDirectory(option.dir);
-                    }
-                  }}
-                  title={pathLabel || label}
-                >
-                  <FolderOpen className="size-4 shrink-0 text-muted-foreground group-hover:text-foreground" aria-hidden="true" />
-                  <span className="min-w-0 flex-1">
-                    <span className="block min-w-0 truncate text-sm font-medium text-foreground">
-                      {label}
-                    </span>
-                    {pathLabel ? (
-                      <span className="mt-0.5 block min-w-0 truncate text-[11px] font-normal text-muted-foreground">
-                        {pathLabel}
-                      </span>
-                    ) : null}
-                  </span>
-                  <span
-                    className={cn(
-                      "shrink-0 rounded-md border border-sidebar-border px-1.5 py-0.5 text-[10px] font-semibold uppercase leading-none text-muted-foreground",
-                      "max-sm:hidden"
-                    )}
-                  >
-                    Directory
-                  </span>
-                  <ChevronRight className="size-4 shrink-0 text-muted-foreground transition-transform group-hover:translate-x-0.5 group-hover:text-foreground" aria-hidden="true" />
-                </Button>
-              );
-            }) : (
-              <p className="px-5 py-5 text-sm text-muted-foreground sm:px-6">
-                No active directories found.
-              </p>
-            )
-          ) : hasEntries ? homeEntries.map((entry) => {
+          {hasEntries ? homeEntries.map((entry) => {
             const key = fileKey(entry);
             const sourceFormat = entrySourceFormat(entry);
             const EntryIcon = iconForEntry(entry, sourceFormat);

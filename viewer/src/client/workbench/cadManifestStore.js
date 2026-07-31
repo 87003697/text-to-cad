@@ -1,8 +1,3 @@
-import {
-  readStoredActiveCadDir,
-  rememberActiveCadDir,
-} from "./cadViewerDirectorySession.mjs";
-
 const CAD_CATALOG_REFRESH_INTERVAL_MS = 2_000;
 const CAD_CATALOG_FETCH_TIMEOUT_MS = 10_000;
 const CAD_DIR_QUERY_PARAM = "dir";
@@ -101,21 +96,34 @@ function readSearchParam(name) {
   }
 }
 
+/**
+ * The directory the page is showing: the URL's PATH, exactly as in a file:// URL.
+ *
+ * `http://127.0.0.1:3245/Users/me/models` opens `/Users/me/models`. The bare origin
+ * names no directory and returns "", which the backend reads as its cwd.
+ *
+ * The URL is the only source of truth — there is deliberately no stored fallback.
+ * A dir that persisted in sessionStorage used to make the same URL render different
+ * models depending on what you had opened before.
+ */
 export function readActiveCadDir() {
   if (typeof window === "undefined") {
     return "";
   }
-  let url = null;
+  let pathname = "";
   try {
-    url = new URL(window.location.href);
+    pathname = new URL(window.location.href).pathname;
   } catch {
     return "";
   }
-  if (url.searchParams.has(CAD_DIR_QUERY_PARAM)) {
-    const queryDir = String(url.searchParams.get(CAD_DIR_QUERY_PARAM) || "").trim();
-    return rememberActiveCadDir(queryDir);
+  let decoded = pathname;
+  try {
+    decoded = decodeURIComponent(pathname);
+  } catch {
+    // A malformed escape leaves the raw path; the backend rejects it with a clear error.
   }
-  return readStoredActiveCadDir();
+  const trimmed = String(decoded || "").replace(/\/+$/, "");
+  return trimmed === "" || trimmed === "/" ? "" : trimmed;
 }
 
 function cadApiUrl(path, {

@@ -8,7 +8,7 @@ CAD references, and verify generated assets without leaving the browser.
 
 ## Features
 
-- Scans a `?dir=` local root directory and mirrors its folder
+- Scans the local directory named by the URL's path and mirrors its folder
   structure in the sidebar.
 - Opens `.step`, `.stp`, `.stl`, `.3mf`, `.glb`, `.gcode`, `.dxf`, `.urdf`,
   `.srdf`, and `.sdf` entries.
@@ -39,25 +39,23 @@ directory-relative file path in the URL:
 npm run dev -- --host 127.0.0.1
 ```
 
-Open the URL printed by Vite and add paths, for example
-`?dir=/path/to/root&file=assemblies/robot-arm/robot-arm.step`. Use `npm run dev`
-for iterating on the client/backend (HMR), and `npm run start -- --dir
-/path/to/root` to serve the built `dist/` bundle via the Python backend (the
-production path the `cad-viewer` skill uses). `start` targets port `3245`: it
-starts when the port is free, or exits with a `--port <n>` hint when the port is
-in use — it does not reuse a running Viewer or roll onto another port. Pass
-`--port <n>` to use a different fixed port. Local dev and production servers stay
-running unless `VIEWER_SERVER_LIFETIME_MS` is set or production `serve` is
-started with `--shutdown-after <duration>`.
+Open the URL printed by Vite. A Viewer URL's PATH is the absolute directory to
+open, exactly as in a `file://` URL, and `?file=` selects one artifact within it:
 
-The local filesystem backend accepts absolute or startup-directory-relative
-`?dir=` values directly in the Viewer URL. Once seen, the active directory is
-stored in tab-local `sessionStorage`, so subsequent navigation can omit `?dir=`
-and continue using the same directory. The `--dir` startup path is the first
-active directory; when omitted, the startup directory is used. If multiple
-directories have been scanned and no `?dir=` or stored directory is active, the
-Viewer shows a directory picker. `?file=` is always relative to the active
-directory.
+```text
+http://127.0.0.1:3245/path/to/root?file=assemblies/robot-arm/robot-arm.step
+```
+
+The bare origin names no directory and falls back to the server's cwd. One Viewer
+serves any folder — change the path, no restart.
+
+Use `npm run dev` for iterating on the client/backend (HMR), and `npm run start`
+to serve the built `dist/` bundle via the Python backend (the production path the
+`cad-viewer` skill uses). Both listen on `--port`, defaulting to `3245`, and both
+exit with an error when that port is taken rather than reusing a running Viewer or
+rolling onto another port. Local dev and production servers stay running unless
+`VIEWER_SERVER_LIFETIME_MS` is set or production `serve` is started with
+`--shutdown-after <duration>`.
 
 Install the local Python artifact package when iterating on local STEP
 regeneration:
@@ -66,10 +64,9 @@ regeneration:
 python -m pip install -r requirements.txt
 ```
 
-Agent handoff links from the cad-viewer skill should still include an absolute
-`?dir=` on every returned URL, plus an absolute `file=` value for each requested
-file. The session-storage fallback is for same-tab navigation, not for durable
-review links.
+Agent handoff links from the cad-viewer skill must use an absolute directory as
+the URL path, with `?file=` relative to it. The URL is the only source of truth —
+there is no stored fallback, so the same URL always shows the same thing.
 
 ## Project Layout
 
@@ -116,11 +113,7 @@ node scripts/run-tests.mjs src/server/localAssetBackend.test.mjs
 
 Important environment variables:
 
-- `VIEWER_DEFAULT_DIR`: default local directory used by Vite dev mode. The repo
-  dev preview (`scripts/dev/viewer-preview.sh`) sets it to `<repo>/models`; set
-  it yourself when running `npm run dev` directly if you want a default `?dir=`.
-- `VIEWER_DEFAULT_FILE`: active-directory-relative file opened when `?file=`
-  is absent and a `?dir=` or stored active directory is available.
+- `VIEWER_DEFAULT_FILE`: directory-relative file opened when `?file=` is absent.
 - `VIEWER_SERVER_LIFETIME_MS`: optional server lifetime in milliseconds for
   local dev and production servers. When unset, there is no automatic shutdown.
 - `VIEWER_GITHUB_URL`: optional top-bar GitHub link target. When set, the
@@ -136,9 +129,8 @@ Important environment variables:
   the `cadgen` package.
 
 `VIEWER_LOCAL_ROOT_DIR` and `VIEWER_LOCAL_WORKSPACE_ROOT` are removed for local
-filesystem viewing. Setting either variable, or using the old fixed-root startup
-flag, is a hard startup error; use `--dir` for the startup default and an
-absolute `?dir=` URL parameter for review links.
+filesystem viewing. Setting either variable is a hard startup error; the URL's
+path names the directory instead.
 
 Production builds contain the frontend and initial catalog module only. CAD
 assets are served by the local backend and are not copied into `dist/`.
@@ -165,6 +157,5 @@ npm run build
 ```
 
 For UI behavior changes, also run `npm run dev -- --host 127.0.0.1`, open the
-printed URL with `?dir=/absolute/root&file=path/to/model.step`,
-and check that the app renders, selection works, and the browser console is
-clean.
+printed URL with `/absolute/root?file=path/to/model.step`, and check that the app
+renders, selection works, and the browser console is clean.

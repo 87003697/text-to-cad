@@ -43,11 +43,6 @@ def relative_file_ref(root_path: str, file_path: str) -> str:
     return _to_posix(os.path.relpath(os.path.abspath(file_path), os.path.abspath(root_path)))
 
 
-def _path_is_inside_or_equal(child: str, parent: str) -> bool:
-    rel = os.path.relpath(os.path.abspath(child), os.path.abspath(parent))
-    return scanner.relative_path_stays_inside_root(rel)
-
-
 def normalized_file_ref(value: str) -> str:
     raw = str(value or "").strip().replace("\\", "/")
     if not raw:
@@ -55,15 +50,6 @@ def normalized_file_ref(value: str) -> str:
     if "\0" in raw:
         raise ValueError("File path contains an invalid null byte")
     return absolute_file_ref(raw) if os.path.isabs(raw) else raw.lstrip("/")
-
-
-def normalized_root_dir(value: str, base_root: str) -> str:
-    raw = str(value or "").strip()
-    if not raw:
-        return ""
-    if "\0" in raw:
-        raise ValueError("CAD Viewer directory contains an invalid null byte")
-    return os.path.abspath(raw) if os.path.isabs(raw) else os.path.abspath(os.path.join(base_root, raw))
 
 
 def require_directory(root_path: str) -> None:
@@ -169,41 +155,29 @@ def _absolutize_entry(entry: dict, *, root_path: str, scan_repo_root: str, root_
 
 
 class LocalAssetBackend:
+    """Serves whatever directory a request names. There is no configured root.
+
+    A request's directory is an absolute filesystem path (the page URL's path;
+    see server.py). It is its own scan root, so there is no base-vs-request root
+    to reconcile, no relative-vs-absolute resolution, and no re-basing of scanned
+    entries. An empty directory means the process cwd.
+    """
+
     kind = "local-fs"
 
-    def __init__(self, directory_root: str, root_dir: str = ""):
-        self.base_directory_root = os.path.abspath(directory_root or os.getcwd())
-        self.default_root_dir = (
-            absolute_file_ref(normalized_root_dir(root_dir, self.base_directory_root))
-            if root_dir else absolute_file_ref(self.base_directory_root)
-        )
-
-    def _effective_root_dir(self, root_dir: str = "") -> str:
-        return root_dir or self.default_root_dir
-
     def resolve_root(self, root_dir: str = "") -> dict:
-        root_path = normalized_root_dir(root_dir or self.default_root_dir, self.base_directory_root)
-        if not root_path:
-            raise ValueError("CAD Viewer local filesystem requests must include a ?dir= path")
+        root_path = os.path.abspath(str(root_dir or "").strip() or os.getcwd())
+        if "\0" in root_path:
+            raise ValueError("CAD Viewer directory contains an invalid null byte")
         require_directory(root_path)
         return {"dir": absolute_file_ref(root_path), "rootPath": root_path, "rootName": os.path.basename(root_path)}
 
-    def resolve_request_root(self, root_dir: str = "") -> dict:
-        return self.resolve_root(self._effective_root_dir(root_dir))
-
-    def _scan_context(self, resolved_root: dict) -> dict:
-        root_path = os.path.abspath(resolved_root["rootPath"])
-        inside = _path_is_inside_or_equal(root_path, self.base_directory_root)
-        scan_repo_root = self.base_directory_root if inside else root_path
-        scan_root_dir = "" if scan_repo_root == root_path else _to_posix(os.path.relpath(root_path, scan_repo_root))
-        return {"rootDir": resolved_root["dir"], "rootPath": root_path, "scanRepoRoot": scan_repo_root, "scanRootDir": scan_root_dir}
-
     def read_catalog(self, root_dir: str = "", file_ref: str = "") -> dict:
-        resolved = self.resolve_root(self._effective_root_dir(root_dir))
-        ctx = self._scan_context(resolved)
-        raw = scanner.scan_cad_directory(ctx["scanRepoRoot"], ctx["scanRootDir"], include_artifact_status=False)
+        resolved_root = self.resolve_root(root_dir)
+        root_path = resolved_root["rootPath"]
+        raw = scanner.scan_cad_directory(root_path, include_artifact_status=False)
         entries = [
-            _absolutize_entry(entry, root_path=ctx["rootPath"], scan_repo_root=ctx["scanRepoRoot"], root_dir=resolved["dir"])
+            _absolutize_entry(entry, root_path=root_path, scan_repo_root=root_path, root_dir=resolved_root["dir"])
             for entry in raw["entries"]
         ]
         return {"schemaVersion": scanner.CAD_CATALOG_SCHEMA_VERSION, "entries": entries}
@@ -314,7 +288,6 @@ class LocalAssetBackend:
         ref = str((entry or {}).get("url") or "")
         if not artifact_mod.owns_entry(entry):
             return {"state": artifact_mod.ARTIFACT_STATE_READY, "ref": ref}
-        ctx = self._scan_context(resolved_root)
         fmt = self._artifact_format(entry)
         try:
             artifact_source = fmt["resolve_source"](file_ref, resolved_root)
@@ -332,7 +305,7 @@ class LocalAssetBackend:
             if progress is not None:
                 status["progress"] = progress
             return status
-        ok, code = fmt["validate"](ctx["scanRepoRoot"], artifact_source)
+        ok, code = fmt["validate"](resolved_root["rootPath"], artifact_source)
         if ok:
             return {"state": artifact_mod.ARTIFACT_STATE_READY, "ref": ref}
         if code in artifact_mod.BUILDABLE_STEP_ARTIFACT_CODES:
@@ -357,7 +330,6 @@ class LocalAssetBackend:
         has_generator = bool(generator) and os.path.isfile(generator)
         if not has_step and not has_generator:
             raise ValueError("CAD Viewer regenerates GLB artifacts only for existing STEP/STP files or their same-stem Python generators.")
-        ctx = self._scan_context(resolved_root)
         args = ["--step", step_path]
         if has_generator:
             # Generated models keep no .step on disk — --source-path selects generator
@@ -365,7 +337,7 @@ class LocalAssetBackend:
             # package (the logical --step path never exists).
             args += ["--source-path", generator]
         result = self._run_artifact_build(
-            "cadgen.step_artifact", args, ctx,
+            "cadgen.step_artifact", args, resolved_root["rootPath"],
             force=force, error_label="STEP render artifact build failed",
         )
         return {**result, "stepPath": step_path}
@@ -376,9 +348,8 @@ class LocalAssetBackend:
     def generate_dxf_artifact(self, file_ref, force, resolved_root, catalog):
         resolved = self.resolve_dxf_source(file_ref, resolved_root)
         source_path = resolved["sourcePath"]
-        ctx = self._scan_context(resolved_root)
         result = self._run_artifact_build(
-            "cadgen.dxf_artifact", ["--source-path", source_path], ctx,
+            "cadgen.dxf_artifact", ["--source-path", source_path], resolved_root["rootPath"],
             force=force, error_label="DXF render artifact build failed",
         )
         return {**result, "sourcePath": source_path}
@@ -388,13 +359,13 @@ class LocalAssetBackend:
     # hash, so there is nothing to touch afterwards — the descriptor mtime bump this
     # used to do existed only to quiet the old mtime staleness trigger after a
     # rebuild that the CLI had correctly skipped as current.
-    def _run_artifact_build(self, module, args, ctx, *, force, error_label):
-        full_args = ["--repo-root", ctx["scanRepoRoot"], *args]
+    def _run_artifact_build(self, module, args, root_path, *, force, error_label):
+        full_args = ["--repo-root", root_path, *args]
         if force:
             full_args += ["--force"]
         if os.environ.get("VIEWER_STEP_ARTIFACT_VERBOSE") == "1":
             full_args += ["--verbose"]
-        result = cadgen_bridge.run_cadgen(module, full_args, ctx["scanRepoRoot"])
+        result = cadgen_bridge.run_cadgen(module, full_args, root_path)
         error = "" if result.get("ok") else str(result.get("error") or error_label)
         return {"ok": bool(result.get("ok")), "error": error, "result": result}
 
@@ -411,8 +382,7 @@ class LocalAssetBackend:
         lock = artifact_mod.generation_lock_path(scanner.render_package_dir(artifact_source))
         if not force and artifact_mod.generation_lock_active(lock):
             artifact_mod.await_generation_lock(lock)
-            ctx = self._scan_context(resolved_root)
-            ok, _code = fmt["validate"](ctx["scanRepoRoot"], artifact_source)
+            ok, _code = fmt["validate"](resolved_root["rootPath"], artifact_source)
             if ok:
                 return {"ok": True, "state": artifact_mod.ARTIFACT_STATE_READY, "ref": ref}
         built = fmt["build"](file_ref, force, resolved_root, catalog)
@@ -436,14 +406,13 @@ class LocalAssetBackend:
         source_path = resolved["sourcePath"]
         if not (step_path == resolved_root["rootPath"] or scanner.path_is_inside(step_path, resolved_root["rootPath"])):
             raise ValueError("Requested file is outside the active CAD Viewer root")
-        ctx = self._scan_context(resolved_root)
         base_name = re.sub(r"\.(step|stp)$", "", os.path.basename(step_path), flags=re.IGNORECASE)
 
         def _export(out_path):
-            args = ["--repo-root", ctx["scanRepoRoot"], "--step", step_path, "--format", normalized, "--out", out_path]
+            args = ["--repo-root", resolved_root["rootPath"], "--step", step_path, "--format", normalized, "--out", out_path]
             if source_path:
                 args += ["--source-path", source_path]
-            return cadgen_bridge.run_cadgen("cadgen.step_export_target", args, ctx["scanRepoRoot"])
+            return cadgen_bridge.run_cadgen("cadgen.step_export_target", args, resolved_root["rootPath"])
 
         return self._export_with_destination(
             resolved_root,
@@ -461,12 +430,11 @@ class LocalAssetBackend:
     def generate_dxf_export(self, file_ref, resolved_root):
         resolved = self.resolve_dxf_source(file_ref, resolved_root)
         source_path = resolved["sourcePath"]
-        ctx = self._scan_context(resolved_root)
         base_name = os.path.basename(source_path)[: -len(".dxf.py")]
 
         def _export(out_path):
-            args = ["--repo-root", ctx["scanRepoRoot"], "--source-path", source_path, "--export", out_path]
-            return cadgen_bridge.run_cadgen("cadgen.dxf_artifact", args, ctx["scanRepoRoot"])
+            args = ["--repo-root", resolved_root["rootPath"], "--source-path", source_path, "--export", out_path]
+            return cadgen_bridge.run_cadgen("cadgen.dxf_artifact", args, resolved_root["rootPath"])
 
         return self._export_with_destination(
             resolved_root,

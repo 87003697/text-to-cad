@@ -18,32 +18,31 @@ live review links. The expected input is one or more explicit file paths.
 
 ## Start Viewer
 
-Start one local CAD Viewer with `npm run start`, passing the absolute artifact
-directory as `--dir`. This serves the prebuilt Viewer bundle plus the CAD API on
-a single fixed port (`3245`). Use the Viewer URL it prints as-is, then add a
-`file=` query value for each artifact you want to review.
+Start one local CAD Viewer with `npm run start`. It serves the prebuilt Viewer
+bundle plus the CAD API on a single fixed port (`3245`). It is NOT started
+against a directory — a URL names the directory, so one Viewer serves any folder.
 
 > The default port `3245` is `0xCAD` — "CAD" in hexadecimal.
-
-Choose `--dir` as the absolute directory that contains the model artifacts and
-sidecars, commonly `<repo>/models` or the consuming project's equivalent model
-directory. The `file=` value must be relative to that `--dir`.
 
 Run from this skill directory:
 
 ```bash
-npm --prefix scripts/viewer run start -- --host 127.0.0.1 --dir <absolute-model-root>
+npm --prefix scripts/viewer run start -- --host 127.0.0.1
 ```
 
-Use the printed Viewer URL and append `file=`:
+## URL shape
 
-```bash
-http://127.0.0.1:3245/?dir=/absolute/project/models&file=path/to/model.step
+A Viewer URL's **path is the absolute directory**, exactly as in a `file://` URL,
+and `file=` selects one artifact inside it:
+
+```text
+http://127.0.0.1:3245/absolute/project/models?file=path/to/model.step
 ```
 
-One running Viewer serves any file (and any directory) — to review more
-artifacts, reuse its URL with the appropriate `file=` (and a new `dir=` for a
-different directory) rather than starting a second Viewer.
+**Always build the path from an absolute directory.** The Viewer runs from an
+arbitrary working directory — usually wherever the skill happens to be installed,
+not the model directory — so a relative path resolves against the wrong place.
+The `file=` value is relative to that directory.
 
 If port `3245` is already in use, the launcher exits with an error rather than
 rolling to another port; rerun with an explicit free port, `--port <n>`, and use
@@ -51,21 +50,21 @@ the URL it prints. In sandboxed agent environments, local binding failures such
 as `EPERM`/`EACCES` can be expected; rerun with the needed permission/escalation.
 
 Add `--json` to also print a machine-readable result as the last stdout line
-beginning with `{` (`{"url": ..., "port": ..., "action": "start"}`).
+beginning with `{` (`{"url": ..., "port": ..., "action": "start"}`). The printed
+URL points at the launch directory; replace its path to review any other folder.
 
 ## Links
 
-- Before returning any `file=` link, resolve `<dir>/<file>` and confirm the
+- Before returning any link, resolve `<directory>/<file>` and confirm the
   artifact exists. Pass the generated artifact (e.g. `.step`), not its
   generator source (e.g. `.py`). If the resolved path is missing, do not
   return the link, and instead report the problem and point to the correct
   generated artifact path.
 - Return one Viewer URL per requested file.
-- Start the Viewer once per absolute directory `--dir`, then append
-  `file=<path>` for each requested file. The file path must be relative to
-  `--dir`.
-- For directory-only review links, return the URL printed by `start`
-  without adding `file=`.
+- Start the Viewer once. For each artifact, build a URL from the absolute
+  directory path plus `?file=<path relative to it>`. Artifacts in different
+  directories just get different URL paths on the same Viewer.
+- For directory-only review links, return the directory URL without `?file=`.
 - Do not stop an existing Viewer server unless the user asks.
 - If Viewer startup fails, report the failure and continue with the owning skill's non-GUI validation or artifacts.
 

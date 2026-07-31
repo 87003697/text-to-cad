@@ -7,7 +7,13 @@ GET /__cad/download, POST /__cad/implicit-export
 /__cad/artifact, and /__cad/step-export are TODO (cadgen-integration + serving
 phases).
 
-Run: python -m server_py.server --dir <abs-models-root> [--port N] [--host H]
+Run: python -m server_py.server [--port N] [--host H]
+
+There is no served root. A page URL's PATH is the absolute directory to open
+(`http://host:port/Users/me/models`), exactly as in a file:// URL; the client
+reads it from location.pathname and passes it to /__cad/* as ?dir=. The bare
+origin names no directory, which the backend reads as the process cwd. The only
+paths that are NOT a directory are the bundle's /assets/* and the /__cad/* API.
 
 Security / trust model: binds to loopback (127.0.0.1) and serves UNAUTHENTICATED.
 Any local process can read files under --dir (GET /__cad/asset), trigger STEP
@@ -40,7 +46,7 @@ else:
     from . import encoding as enc
     from .content_types import content_type_for_static_asset
 
-LOCAL_SERVER_FEATURES = ["dynamic-root", "relative-dir-query", "default-dir"]
+LOCAL_SERVER_FEATURES = ["path-directory"]
 _BAD_PERCENT_RE = re.compile(r"%(?![0-9A-Fa-f]{2})")
 
 
@@ -72,16 +78,13 @@ class _Ctx:
 
 def _server_info(root_dir: str = "") -> dict:
     return server_info_mod.build_viewer_server_info(
-        directory_root=_Ctx.directory_root,
         root_dir=root_dir or "",
         port=_Ctx.port,
         host=_Ctx.host,
         backend="local-fs",
-        dynamic_root=True,
         step_artifact_generation_available=True,
         server_mode="serve",
         server_features=LOCAL_SERVER_FEATURES,
-        active_directories=[],
     )
 
 
@@ -135,7 +138,7 @@ class Handler(BaseHTTPRequestHandler):
             elif path == "/__cad/artifact":
                 root_dir = q.get("dir", "")
                 catalog = _Ctx.backend.read_catalog(root_dir=root_dir, file_ref=q.get("file", ""))
-                resolved = _Ctx.backend.resolve_request_root(root_dir)
+                resolved = _Ctx.backend.resolve_root(root_dir)
                 self._send_json(200, _Ctx.backend.artifact_status(q.get("file", ""), resolved, catalog))
             elif path == "/__cad/asset":
                 self._serve_asset(q, download=False)
@@ -232,6 +235,12 @@ class Handler(BaseHTTPRequestHandler):
 
     def _serve_dist(self, path: str):
         # Static dist + SPA fallback (serve mode). dev mode serves the client via Vite.
+        #
+        # Every path that is not a bundle asset is a DIRECTORY the client will open
+        # (the page URL's path is the absolute directory), so it must fall through to
+        # index.html. That includes directory paths containing dots — `/Users/j/v0.4/models`
+        # is a directory, not a missing file — which is why "has an extension" cannot be
+        # the static-asset test here; only the bundle's own /assets/ prefix can be.
         dist_root = _Ctx.dist_root
         request_path = "/index.html" if path == "/" else path
         try:
@@ -246,8 +255,7 @@ class Handler(BaseHTTPRequestHandler):
         if os.path.isfile(file_path):
             self._serve_static_file(file_path, content_type_for_static_asset(file_path) or None)
             return
-        looks_static = request_path.startswith("/assets/") or bool(os.path.splitext(request_path)[1])
-        if looks_static:
+        if request_path.startswith("/assets/"):
             self.send_response(404)
             self.send_header("content-type", "text/plain; charset=utf-8")
             self.send_header("cache-control", "no-store")
@@ -299,7 +307,7 @@ class Handler(BaseHTTPRequestHandler):
     def _artifact_build(self, q):
         root_dir = q.get("dir", "")
         catalog = _Ctx.backend.read_catalog(root_dir=root_dir, file_ref=q.get("file", ""))
-        resolved = _Ctx.backend.resolve_request_root(root_dir)
+        resolved = _Ctx.backend.resolve_root(root_dir)
         result = _Ctx.backend.resolve_artifact(q.get("file", ""), q.get("force", "") == "1", resolved, catalog)
         # Refresh the catalog AFTER the build (even on failure) and attach it, matching Node.
         next_catalog = _Ctx.backend.read_catalog(root_dir=root_dir, file_ref=q.get("file", ""))
@@ -309,7 +317,7 @@ class Handler(BaseHTTPRequestHandler):
     def _step_export(self, q):
         root_dir = q.get("dir", "")
         catalog = _Ctx.backend.read_catalog(root_dir=root_dir, file_ref=q.get("file", ""))
-        resolved = _Ctx.backend.resolve_request_root(root_dir)
+        resolved = _Ctx.backend.resolve_root(root_dir)
         result = _Ctx.backend.generate_step_export(q.get("file", ""), q.get("format", "step") or "step", resolved, catalog)
         if result.get("cancelled"):
             self._send_json(200, {"ok": False, "cancelled": True})
@@ -334,7 +342,7 @@ class Handler(BaseHTTPRequestHandler):
             self._send_json(400, {"ok": False, "error": "Missing implicit CAD export payload"})
             return
         root_dir = q.get("dir", "")
-        resolved = _Ctx.backend.resolve_request_root(root_dir)
+        resolved = _Ctx.backend.resolve_root(root_dir)
         result = _Ctx.backend.generate_implicit_export(
             file_ref=q.get("file", ""), fmt=q.get("format", "glb") or "glb",
             data=data, resolved_root=resolved, root_dir=root_dir,
@@ -355,16 +363,14 @@ class Handler(BaseHTTPRequestHandler):
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description="Python CAD Viewer backend")
-    parser.add_argument("--dir", default="", help="served catalog root (absolute)")
     parser.add_argument("--port", type=int, default=server_info_mod.DEFAULT_VIEWER_PORT)
     parser.add_argument("--host", default=server_info_mod.DEFAULT_VIEWER_HOST)
     parser.add_argument("--dist-root", default="", help="built SPA dist directory (serve mode)")
     args = parser.parse_args(argv)
 
-    directory_root = os.path.abspath(args.dir or os.getcwd())
-    if not os.path.isdir(directory_root):
-        print(f"--dir is not a directory: {directory_root}", file=sys.stderr)
-        return 1
+    # No served root: the request's URL path IS the directory (see Handler.do_GET).
+    # cwd is only the fallback for a request that names no directory at all.
+    directory_root = os.getcwd()
     if os.environ.get("VIEWER_CAD_BACKEND_VALIDATED") != "1":
         try:
             cadgen_bridge.require_cadgen_runtime(directory_root)
@@ -377,7 +383,7 @@ def main(argv=None):
     _Ctx.dist_root = os.path.abspath(args.dist_root) if args.dist_root else os.path.join(viewer_app_root, "dist")
     _Ctx.port = server_info_mod.normalize_viewer_port(args.port)
     _Ctx.host = args.host
-    _Ctx.backend = backend_mod.LocalAssetBackend(directory_root=directory_root, root_dir=directory_root)
+    _Ctx.backend = backend_mod.LocalAssetBackend()
 
     httpd = ThreadingHTTPServer((args.host, _Ctx.port), Handler)
     print(f"Python CAD Viewer backend listening on http://{args.host}:{_Ctx.port}/ (local-fs)")
