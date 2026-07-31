@@ -4,7 +4,7 @@
     "name": "earthtojake"
   },
   "interface": {
-    "displayName": "Text to CAD"
+    "displayName": "text-to-cad"
   },
   "metadata": {
     "description": "CAD, robotics, fabrication, and local review plugins."
@@ -20,7 +20,7 @@
       "author": {
         "name": "earthtojake"
       },
-      "homepage": "https://www.cadskills.xyz",
+      "homepage": "https://www.texttocad.dev",
       "repository": "https://github.com/earthtojake/text-to-cad",
       "license": "MIT",
       "category": "productivity",

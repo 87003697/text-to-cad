@@ -16,6 +16,13 @@
       "runtimeExecutable": "npm",
       "runtimeArgs": ["--prefix", "viewer", "run", "dev", "--", "--host", "127.0.0.1"],
       "port": 3245
+    },
+    {
+      // Docs site (Next.js). `npm run check` builds it; this serves it with HMR.
+      "name": "docs",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["--prefix", "docs", "run", "dev", "--", "--port", "3000"],
+      "port": 3000
     }
   ]
 }
