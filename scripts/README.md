@@ -12,6 +12,7 @@ Use these durable entrypoints for normal work:
 | Run code tests | `scripts/test/test.sh` |
 | Run docs checks | `scripts/test/test-docs.sh` |
 | Check canonical release version | `scripts/release/check-version.sh` |
+| Pin cadgen to PyPI in a publish tree | `scripts/release/pin-cadgen-requirements.sh` |
 | Install local skills into agents | `scripts/install/install-skills.sh --agent codex` |
 | Uninstall local skill links | `scripts/install/uninstall-skills.sh --agent codex` |
 

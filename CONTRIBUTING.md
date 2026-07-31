@@ -235,10 +235,10 @@ targets.
 
 The publish job also uploads `packages/cadgen` to
 [PyPI](https://pypi.org/project/cadgen/). The upload runs after the production
-bundle is validated but BEFORE `main` is pushed: production plugin bundles pin
-`cadgen==<version>` from PyPI (`scripts/bundle/bundle-plugin.sh` rewrites the
-requirement lines), so a failed PyPI upload must block the release rather than
-ship a `main` whose skill installs cannot resolve. The PyPI version always
+bundle is validated but BEFORE `main` is pushed: the publish tree pins
+`cadgen==<version>` from PyPI (`scripts/release/pin-cadgen-requirements.sh`
+rewrites the editable requirement lines), so a failed PyPI upload must block the
+release rather than ship a `main` whose skill installs cannot resolve. The PyPI version always
 equals `VERSION`; `sync-version.mjs` stamps
 `packages/cadgen/pyproject.toml` and the publish job refuses to upload on a
 mismatch. Uploads use `skip-existing`, so a rerun after a post-upload failure

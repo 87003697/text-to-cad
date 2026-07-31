@@ -373,6 +373,16 @@ jobs:
             exit 1
           fi
 
+      # Published skills have no sibling packages/cadgen to install editable
+      # from, so the publish tree resolves cadgen from PyPI at this release's
+      # version. Runs after the bundle so vendored runtime copies are pinned too,
+      # and is verified below before the tree is committed.
+      - name: Pin cadgen requirements to the published PyPI version
+        if: steps.gate.outputs.should_publish == 'true'
+        run: |
+          scripts/release/pin-cadgen-requirements.sh
+          scripts/release/pin-cadgen-requirements.sh --check
+
       - name: Commit publish result
         if: steps.gate.outputs.should_publish == 'true'
         id: commit
