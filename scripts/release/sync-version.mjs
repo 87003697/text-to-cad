@@ -6,7 +6,7 @@ import { fileURLToPath } from "node:url";
 
 const scriptDir = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(scriptDir, "../..");
-const canonicalVersionPath = "plugins/cad/VERSION";
+const canonicalVersionPath = "VERSION";
 const semverPattern = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/;
 
 const jsonTargets = [
@@ -24,21 +24,14 @@ const jsonTargets = [
     ],
   },
   { path: "skills/cad-viewer/scripts/viewer/package.json", fields: [["version"]] },
-  { path: "plugins/cad/skills/cad-viewer/scripts/viewer/package.json", fields: [["version"]] },
-  { path: "plugins/cad/.claude-plugin/plugin.json", fields: [["version"]] },
-  { path: "plugins/cad/.codex-plugin/plugin.json", fields: [["version"]] },
+  { path: ".claude-plugin/plugin.json", fields: [["version"]] },
+  { path: ".codex-plugin/plugin.json", fields: [["version"]] },
   { path: ".claude-plugin/marketplace.json", fields: [["version"]], pluginEntries: ["cad"] },
   { path: "viewer/packages/cadjs/package.json", fields: [["version"]], required: false },
   { path: "viewer/packages/cadjs/package-lock.json", fields: [["version"], ["packages", "", "version"]], required: false },
   { path: "skills/cad-viewer/scripts/viewer/packages/cadjs/package.json", fields: [["version"]], required: false },
   {
     path: "skills/cad-viewer/scripts/viewer/packages/cadjs/package-lock.json",
-    fields: [["version"], ["packages", "", "version"]],
-    required: false,
-  },
-  { path: "plugins/cad/skills/cad-viewer/scripts/viewer/packages/cadjs/package.json", fields: [["version"]], required: false },
-  {
-    path: "plugins/cad/skills/cad-viewer/scripts/viewer/packages/cadjs/package-lock.json",
     fields: [["version"], ["packages", "", "version"]],
     required: false,
   },
@@ -51,17 +44,14 @@ const tomlTargets = [
   "skills/cad-viewer/scripts/viewer/moveit2_server/pyproject.toml",
   "skills/cad-viewer/scripts/viewer/packages/cadgen/pyproject.toml",
   "skills/cad/scripts/packages/cadgen/pyproject.toml",
-  "plugins/cad/skills/cad/scripts/packages/cadgen/pyproject.toml",
-  "plugins/cad/skills/cad-viewer/scripts/viewer/moveit2_server/pyproject.toml",
-  "plugins/cad/skills/cad-viewer/scripts/viewer/packages/cadgen/pyproject.toml",
 ];
 
 function usage() {
   console.log(`Usage:
   scripts/release/sync-version.mjs [--check]
 
-Synchronizes duplicate package and plugin metadata versions from
-plugins/cad/VERSION. Release preparation edits the canonical VERSION file, then
+Synchronizes duplicate package and plugin metadata versions from the canonical
+VERSION file. Release preparation edits that file, then
 stamps derived metadata from it; the bundle script and the Release workflow
 re-check the same metadata before production output is written.
 

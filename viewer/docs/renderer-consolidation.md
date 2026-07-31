@@ -406,7 +406,7 @@ source with `scripts/bundle/bundle.sh` (requires `rsync`). Run
 `scripts/bundle/bundle.sh --check` before handoff; regenerate when a
 production-output task requires it. `bundle-cad.sh` resolves cadjs's
 implicitjs imports hermetically (NODE_PATH) — keep it that way when adding
-the implicit backend to the snapshot bundle. Do not bump `plugins/cad/VERSION`
+the implicit backend to the snapshot bundle. Do not bump `VERSION`
 during development.
 
 ## Key file map
