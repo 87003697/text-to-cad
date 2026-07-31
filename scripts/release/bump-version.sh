@@ -5,6 +5,11 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 VERSION_PATH="VERSION"
 VERSION_FILE="$REPO_ROOT/$VERSION_PATH"
+# Refs published before the plugin package moved to the repository root keep the
+# canonical version at plugins/cad/VERSION. Release tags are permanent, so
+# comparisons against older tags always need this fallback; it is not
+# transitional and must not be removed once main carries the new path.
+LEGACY_VERSION_PATH="plugins/cad/VERSION"
 
 PART=""
 SET_VERSION=""
@@ -118,7 +123,14 @@ git_text_at_ref() {
   if [[ "$ref" =~ ^0+$ ]]; then
     die "base ref must be a real commit, not an empty all-zero ref"
   fi
-  git -C "$REPO_ROOT" show "$ref:$VERSION_PATH"
+  local candidate
+  for candidate in "$VERSION_PATH" "$LEGACY_VERSION_PATH"; do
+    if git -C "$REPO_ROOT" cat-file -e "$ref:$candidate" 2>/dev/null; then
+      git -C "$REPO_ROOT" show "$ref:$candidate"
+      return 0
+    fi
+  done
+  die "no canonical version file at $ref ($VERSION_PATH or $LEGACY_VERSION_PATH)"
 }
 
 stage_paths() {

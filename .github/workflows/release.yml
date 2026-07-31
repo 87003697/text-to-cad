@@ -298,7 +298,10 @@ jobs:
           current_version="$(tr -d '[:space:]' < VERSION)"
           latest_tag="$(git tag --list '[0-9]*.[0-9]*.[0-9]*' --sort=-version:refname | head -n 1 || true)"
           if ! scripts/release/check-version.sh --incremented-from origin/main >/tmp/publish-main-version-check.log 2>&1; then
-            main_version="$(git show origin/main:VERSION | tr -d '[:space:]')"
+            # main published before the plugin package moved to the repository
+            # root keeps the canonical version at plugins/cad/VERSION.
+            main_version="$(git show origin/main:VERSION 2>/dev/null || git show origin/main:plugins/cad/VERSION)"
+            main_version="$(printf '%s' "$main_version" | tr -d '[:space:]')"
             if [ "$main_version" = "$current_version" ] && ! git rev-parse --verify --quiet "refs/tags/$current_version" >/dev/null; then
               echo "Release version already reached origin/main, but tag $current_version is missing; resuming publish."
             else
