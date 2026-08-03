@@ -9,6 +9,7 @@ import react from "@vitejs/plugin-react";
 
 import { cadPythonExecutable, cadPythonEnv } from "./scripts/cad-python.mjs";
 import { resolveDirectoryRoot as resolveViewerDirectoryRoot } from "./scripts/directoryRoot.mjs";
+import { resolveServerFsAllow } from "./scripts/serverFsAllow.mjs";
 import { assertNoDeprecatedLocalRootEnv } from "./scripts/viewerEnv.mjs";
 import {
   normalizeServerLifetimeMs,
@@ -311,10 +312,11 @@ export default defineConfig(({ command }) => ({
     strictPort: true,
     allowedHosts: viewerAllowedHosts,
     fs: {
-      allow: [
-        viewerAppRoot,
-        cadJsPackageRoot,
-      ],
+      // Real paths too: Vite checks ids after resolution, and the develop layout
+      // reaches cadjs through a symlink. See scripts/serverFsAllow.mjs.
+      allow: resolveServerFsAllow([viewerAppRoot, cadJsPackageRoot], {
+        realpath: fs.realpathSync,
+      }),
     },
   },
   preview: {

@@ -244,6 +244,17 @@ class LocalAssetBackend:
                 return {"stepPath": os.path.join(os.path.dirname(c), step_base), "sourcePath": c, "skipStepWrite": True}
             if ext not in (".step", ".stp"):
                 raise ValueError("Only STEP/STP sources or same-stem Python generators can generate STEP topology artifacts")
+            # A same-stem `<name>.step.py` generator OWNS the entry even when an
+            # exported `<name>.step` sits beside it. The export is the generator's
+            # output, and only the generator can declare the model's `params`
+            # sidecar -- the documented way to attach one to an imported STEP
+            # (skills/cad/references/parameters.md). Resolving it here keeps the
+            # build, the freshness check and STEP export all keyed on the same
+            # source. cadgen's generator mode writes only the render package, so
+            # the exported `.step` beside it is never rewritten.
+            generator = self._same_stem_python_generator_path(c)
+            if generator:
+                return {"stepPath": c, "sourcePath": generator, "skipStepWrite": True}
             return {"stepPath": c, "sourcePath": "", "skipStepWrite": False}
         raise ValueError(f"STEP file not found: {normalized}")
 
@@ -326,7 +337,9 @@ class LocalAssetBackend:
         step_path = resolved["stepPath"]
         ext = os.path.splitext(step_path)[1].lower()
         has_step = ext in (".step", ".stp") and os.path.isfile(step_path)
-        generator = "" if has_step else self._same_stem_python_generator_path(step_path)
+        # resolve_step_source already prefers a same-stem generator over a sibling
+        # export, so both the freshness check and this build key on one source.
+        generator = resolved.get("sourcePath") or ""
         has_generator = bool(generator) and os.path.isfile(generator)
         if not has_step and not has_generator:
             raise ValueError("CAD Viewer regenerates GLB artifacts only for existing STEP/STP files or their same-stem Python generators.")
