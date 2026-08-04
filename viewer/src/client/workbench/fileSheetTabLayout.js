@@ -14,9 +14,9 @@ import { FILE_SHEET_SECTION_IDS } from "./fileSheetSections.js";
 // existing reveal-on-select behavior keeps working.
 
 // Bumped to reset saved arrangements when the default pane assignment changes
-// (Reference first in the bottom pane; Parameters in the top pane after Tree),
-// since a stored layout would otherwise keep the old pane/order.
-export const FILE_SHEET_TAB_LAYOUT_STORAGE_KEY = "cad-viewer:file-sheet-tab-layout:v3";
+// (Tree alone on top; Parameters down in the bottom pane between Reference and
+// Display), since a stored layout would otherwise keep the old pane/order.
+export const FILE_SHEET_TAB_LAYOUT_STORAGE_KEY = "cad-viewer:file-sheet-tab-layout:v4";
 
 export const DEFAULT_FILE_SHEET_SPLIT_RATIO = 0.5;
 export const MIN_FILE_SHEET_SPLIT_RATIO = 0.2;
@@ -25,16 +25,6 @@ export const MAX_FILE_SHEET_SPLIT_RATIO = 0.8;
 export const FILE_SHEET_TAB_PANES = Object.freeze({ TOP: "top", BOTTOM: "bottom" });
 
 const SPLITTABLE_KINDS = Object.freeze(new Set(["step"]));
-
-// The default-active tab for a pane when the per-file open list names none of
-// its tabs. Top pane prefers the Tree; bottom pane leads with the Reference
-// inspector (which shows a prompt until geometry is selected).
-const DEFAULT_PANE_ACTIVE = Object.freeze({
-  step: {
-    [FILE_SHEET_TAB_PANES.TOP]: FILE_SHEET_SECTION_IDS.STEP_TREE,
-    [FILE_SHEET_TAB_PANES.BOTTOM]: FILE_SHEET_SECTION_IDS.STEP_REFERENCE
-  }
-});
 
 function normalizeString(value) {
   return String(value == null ? "" : value).trim();
@@ -59,12 +49,31 @@ export function clampSplitRatio(ratio) {
   return Math.min(MAX_FILE_SHEET_SPLIT_RATIO, Math.max(MIN_FILE_SHEET_SPLIT_RATIO, numericRatio));
 }
 
-// Tabs that live in the top pane of the split STEP layout (Tree, then
-// Parameters); everything else defaults to the bottom pane.
+// Tabs that live in the top pane of the split STEP layout; everything else —
+// Reference, Parameters, Display — defaults to the bottom pane, in render order.
 const TOP_PANE_SECTION_IDS = Object.freeze(new Set([
-  FILE_SHEET_SECTION_IDS.STEP_TREE,
-  FILE_SHEET_SECTION_IDS.STEP_PARAMETERS
+  FILE_SHEET_SECTION_IDS.STEP_TREE
 ]));
+
+// Where to slot a tab that the stored arrangement has never seen: at its
+// render-order position among the tabs already in the pane, not at the end.
+//
+// Issues and Parameters render only for some files, so appending would park them
+// at the end of a strip carried over from a file that had neither — Issues would
+// stop being leftmost (and so stop being the default-active tab), and Parameters
+// would land after Display instead of between Reference and Display. Tabs the
+// user has explicitly dragged are already in the arrangement and keep the
+// position they were dropped at; this only places tabs that are not in it yet.
+function renderOrderInsertIndex(pane, id, renderIndex) {
+  const target = renderIndex.get(id);
+  for (let index = 0; index < pane.length; index += 1) {
+    const other = renderIndex.get(pane[index]);
+    if (other != null && other > target) {
+      return index;
+    }
+  }
+  return pane.length;
+}
 
 // Which pane a freshly-rendered tab belongs to in the default layout.
 function defaultPaneForSection(kind, sectionId) {
@@ -123,16 +132,15 @@ export function normalizeFileSheetTabArrangement(arrangement, kind, sectionIds) 
   let top = filterPane(arrangement.top);
   let bottom = kindSupportsSplit(kind) ? filterPane(arrangement.bottom) : [];
 
-  // Append any rendered tab not yet placed, in render order, to its default pane.
+  // Place any rendered tab not yet in the arrangement into its default pane, at
+  // its render-order position among that pane's existing tabs.
+  const renderIndex = new Map(rendered.map((id, index) => [id, index]));
   for (const id of rendered) {
     if (assigned.has(id)) {
       continue;
     }
-    if (defaultPaneForSection(kind, id) === FILE_SHEET_TAB_PANES.TOP) {
-      top.push(id);
-    } else {
-      bottom.push(id);
-    }
+    const pane = defaultPaneForSection(kind, id) === FILE_SHEET_TAB_PANES.TOP ? top : bottom;
+    pane.splice(renderOrderInsertIndex(pane, id, renderIndex), 0, id);
     assigned.add(id);
   }
 
@@ -209,17 +217,11 @@ export function setFileSheetTabRatio(arrangement, ratio) {
   return { ...arrangement, ratio: clampSplitRatio(ratio) };
 }
 
-function defaultActiveForPane(kind, pane, paneTabs) {
-  const preferred = DEFAULT_PANE_ACTIVE[normalizeString(kind)]?.[pane];
-  if (preferred && paneTabs.includes(preferred)) {
-    return preferred;
-  }
-  return paneTabs[0] || "";
-}
-
 // Resolve the active tab for a pane from the per-file open list: the last open
-// id that lives in the pane wins, falling back to the pane default.
-function resolveActiveTab(kind, pane, paneTabs, openSectionIds) {
+// id that lives in the pane wins, falling back to the pane's leftmost tab. That
+// fallback is why Issues is pinned leftmost — it makes a file's problems the tab
+// you land on without needing a separate "preferred active tab" table.
+function resolveActiveTab(paneTabs, openSectionIds) {
   const open = uniqueStrings(openSectionIds);
   let active = "";
   for (const id of open) {
@@ -227,7 +229,7 @@ function resolveActiveTab(kind, pane, paneTabs, openSectionIds) {
       active = id;
     }
   }
-  return active || defaultActiveForPane(kind, pane, paneTabs);
+  return active || paneTabs[0] || "";
 }
 
 // Build the panes the surface renders: one entry per visible pane, each with
@@ -244,7 +246,7 @@ export function resolveFileSheetTabPanes(arrangement, kind, openSectionIds) {
       panes: [{
         pane: FILE_SHEET_TAB_PANES.TOP,
         tabs,
-        activeId: resolveActiveTab(kind, FILE_SHEET_TAB_PANES.TOP, tabs, openSectionIds)
+        activeId: resolveActiveTab(tabs, openSectionIds)
       }]
     };
   }
@@ -255,12 +257,12 @@ export function resolveFileSheetTabPanes(arrangement, kind, openSectionIds) {
       {
         pane: FILE_SHEET_TAB_PANES.TOP,
         tabs: top,
-        activeId: resolveActiveTab(kind, FILE_SHEET_TAB_PANES.TOP, top, openSectionIds)
+        activeId: resolveActiveTab(top, openSectionIds)
       },
       {
         pane: FILE_SHEET_TAB_PANES.BOTTOM,
         tabs: bottom,
-        activeId: resolveActiveTab(kind, FILE_SHEET_TAB_PANES.BOTTOM, bottom, openSectionIds)
+        activeId: resolveActiveTab(bottom, openSectionIds)
       }
     ]
   };

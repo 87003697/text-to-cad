@@ -173,11 +173,6 @@ test("vibrant ships as a bright photoreal stage after cinematic", () => {
   assert.equal(getThemePresetIdForSettings(vibrant), "vibrant");
 });
 
-test("removed beach preset resolves to vibrant", () => {
-  assert.equal(THEME_PRESETS.some((preset) => preset.id === "beach"), false);
-  assert.deepEqual(cloneThemePresetSettings("beach"), cloneThemePresetSettings("vibrant"));
-});
-
 test("projection is a per-theme trait: canvases orthographic, stages perspective", () => {
   const orthographic = ["workbench-light", "workbench-dark"];
   const perspective = ["cinematic", "vibrant", "blue", "pink", "clay-sunrise", "terminal"];
@@ -292,16 +287,6 @@ test("themes without fill and rim lights normalize to the viewer's legacy rig", 
   assert.deepEqual(customized.lighting.fill.position, { x: 1, y: 2, z: 3 });
   assert.equal(customized.lighting.rim.color, "#6db6e8");
   assert.equal(customized.lighting.rim.intensity, 0);
-});
-
-test("legacy darkoal and charcoal ids resolve to workbench-dark", () => {
-  const workbenchDark = cloneThemePresetSettings("workbench-dark");
-
-  assert.equal(THEME_PRESETS.some((preset) => preset.id === "darkoal"), false);
-  assert.equal(THEME_PRESETS.some((preset) => preset.id === "charcoal"), false);
-  assert.deepEqual(cloneThemePresetSettings("darkoal"), workbenchDark);
-  assert.deepEqual(cloneThemePresetSettings("charcoal"), workbenchDark);
-  assert.deepEqual(cloneThemePresetSettings("dark-2"), workbenchDark);
 });
 
 test("stylized presets keep their palettes and declare an opinionated color mode", () => {
@@ -445,7 +430,7 @@ test("system default preset follows the OS preference for the first-load pick", 
 test("scene tone is inferred from the dominant background color", () => {
   assert.equal(inferThemeSettingsSceneTone(cloneThemePresetSettings("workbench-light")), "light");
   assert.equal(inferThemeSettingsSceneTone(cloneThemePresetSettings("workbench-dark")), "dark");
-  assert.equal(inferThemeSettingsSceneTone(cloneThemePresetSettings("charcoal")), "dark");
+  assert.equal(inferThemeSettingsSceneTone(cloneThemePresetSettings("workbench-dark")), "dark");
   assert.equal(inferThemeSettingsSceneTone(cloneThemePresetSettings("blue")), "dark");
   assert.equal(inferThemeSettingsSceneTone(cloneThemePresetSettings("clay-sunrise")), "light");
   // The background drives tone, not the floor: a dark-canvas theme reads dark
@@ -483,172 +468,6 @@ test("normalizeThemeSettings migrates legacy tint color into default color", () 
 
   assert.equal(normalized.materials.defaultColor, "#abc123");
   assert.equal(Object.hasOwn(normalized.materials, "tintColor"), false);
-});
-
-test("normalizeThemeSettings migrates persisted legacy cinematic preset values", () => {
-  const legacyCinematic = cloneThemePresetSettings("workbench-light");
-  delete legacyCinematic.colorMode;
-  delete legacyCinematic.modeColors;
-  delete legacyCinematic.materials.fillColors;
-  delete legacyCinematic.materials.overrideSourceColors;
-  delete legacyCinematic.materials.tintMode;
-  delete legacyCinematic.materials.emissiveIntensity;
-  legacyCinematic.materials.defaultColor = "#aeb9c3";
-  legacyCinematic.materials.tintStrength = 0.28;
-  legacyCinematic.materials.saturation = 0.42;
-  legacyCinematic.materials.contrast = 1.02;
-  legacyCinematic.materials.brightness = 0.94;
-  legacyCinematic.materials.roughness = 0.46;
-  legacyCinematic.materials.metalness = 0.02;
-  legacyCinematic.materials.clearcoat = 0.18;
-  legacyCinematic.materials.clearcoatRoughness = 0.34;
-  legacyCinematic.materials.opacity = 1;
-  legacyCinematic.materials.envMapIntensity = 0.58;
-  legacyCinematic.background.solidColor = "#050711";
-  legacyCinematic.background.linearStart = "#02040b";
-  legacyCinematic.background.linearEnd = "#252f47";
-  legacyCinematic.background.linearAngle = 90;
-  legacyCinematic.background.radialInner = "#171d30";
-  legacyCinematic.background.radialOuter = "#02040b";
-  legacyCinematic.floor.color = "#141a29";
-  legacyCinematic.floor.roughness = 0.62;
-  legacyCinematic.floor.reflectivity = 0.22;
-  legacyCinematic.floor.shadowOpacity = 0.24;
-  legacyCinematic.floor.horizonBlend = 0.28;
-  legacyCinematic.environment.enabled = true;
-  legacyCinematic.environment.intensity = 0.46;
-  legacyCinematic.environment.rotationY = -0.35;
-  legacyCinematic.lighting.toneMappingExposure = 1.2;
-  legacyCinematic.lighting.directional.color = "#f1f6fb";
-  legacyCinematic.lighting.directional.intensity = 2.45;
-  legacyCinematic.lighting.directional.position = { x: -190, y: 300, z: 210 };
-  legacyCinematic.lighting.spot.color = "#dbeafe";
-  legacyCinematic.lighting.spot.intensity = 1.34;
-  legacyCinematic.lighting.spot.angle = 0.72;
-  legacyCinematic.lighting.spot.position = { x: 160, y: 245, z: 126 };
-  legacyCinematic.lighting.point.color = "#8fb6d8";
-  legacyCinematic.lighting.point.intensity = 0.34;
-  legacyCinematic.lighting.point.position = { x: -260, y: 95, z: -220 };
-  legacyCinematic.lighting.ambient.color = "#1e293b";
-  legacyCinematic.lighting.ambient.intensity = 0.2;
-  legacyCinematic.lighting.hemisphere.skyColor = "#dbe7f3";
-  legacyCinematic.lighting.hemisphere.groundColor = "#070a14";
-  legacyCinematic.lighting.hemisphere.intensity = 0.68;
-
-  assert.deepEqual(normalizeThemeSettings(legacyCinematic), cloneThemePresetSettings("workbench"));
-});
-
-test("normalizeThemeSettings migrates previous cinematic preset values", () => {
-  const transitionalCinematic = cloneThemePresetSettings("workbench-light");
-  delete transitionalCinematic.colorMode;
-  delete transitionalCinematic.modeColors;
-  delete transitionalCinematic.materials.fillColors;
-  delete transitionalCinematic.materials.overrideSourceColors;
-  transitionalCinematic.materials.defaultColor = "#aeb9c3";
-  transitionalCinematic.materials.tintStrength = 0.08;
-  transitionalCinematic.materials.saturation = 1;
-  transitionalCinematic.materials.contrast = 1.04;
-  transitionalCinematic.materials.brightness = 1.02;
-  transitionalCinematic.materials.roughness = 0.46;
-  transitionalCinematic.materials.metalness = 0.02;
-  transitionalCinematic.materials.clearcoat = 0.18;
-  transitionalCinematic.materials.clearcoatRoughness = 0.34;
-  transitionalCinematic.materials.opacity = 1;
-  transitionalCinematic.materials.envMapIntensity = 0.58;
-  transitionalCinematic.materials.emissiveIntensity = 0.06;
-  transitionalCinematic.background.solidColor = "#050711";
-  transitionalCinematic.background.linearStart = "#02040b";
-  transitionalCinematic.background.linearEnd = "#252f47";
-  transitionalCinematic.background.linearAngle = 90;
-  transitionalCinematic.background.radialInner = "#171d30";
-  transitionalCinematic.background.radialOuter = "#02040b";
-  transitionalCinematic.floor.color = "#141a29";
-  transitionalCinematic.floor.roughness = 0.62;
-  transitionalCinematic.floor.reflectivity = 0.06;
-  transitionalCinematic.floor.shadowOpacity = 0.24;
-  transitionalCinematic.floor.horizonBlend = 0.12;
-  transitionalCinematic.lighting.toneMappingExposure = 1.2;
-  transitionalCinematic.lighting.directional.color = "#f1f6fb";
-  transitionalCinematic.lighting.directional.intensity = 2.45;
-  transitionalCinematic.lighting.directional.position = { x: -190, y: 300, z: 210 };
-  transitionalCinematic.lighting.spot.color = "#dbeafe";
-  transitionalCinematic.lighting.spot.intensity = 1.34;
-  transitionalCinematic.lighting.spot.angle = 0.72;
-  transitionalCinematic.lighting.spot.position = { x: 160, y: 245, z: 126 };
-  transitionalCinematic.lighting.point.color = "#8fb6d8";
-  transitionalCinematic.lighting.point.intensity = 0.34;
-  transitionalCinematic.lighting.point.position = { x: -260, y: 95, z: -220 };
-  transitionalCinematic.lighting.ambient.color = "#1e293b";
-  transitionalCinematic.lighting.ambient.intensity = 0.2;
-  transitionalCinematic.lighting.hemisphere.skyColor = "#dbe7f3";
-  transitionalCinematic.lighting.hemisphere.groundColor = "#070a14";
-  transitionalCinematic.lighting.hemisphere.intensity = 0.68;
-
-  assert.deepEqual(normalizeThemeSettings(transitionalCinematic), cloneThemePresetSettings("workbench"));
-});
-
-test("normalizeThemeSettings migrates dim cinematic preset values", () => {
-  const dimCinematic = cloneThemePresetSettings("workbench-light");
-  delete dimCinematic.colorMode;
-  delete dimCinematic.modeColors;
-  delete dimCinematic.materials.fillColors;
-  delete dimCinematic.materials.overrideSourceColors;
-  dimCinematic.materials.defaultColor = "#aeb9c3";
-  dimCinematic.materials.tintMode = "blend";
-  dimCinematic.materials.tintStrength = 0;
-  dimCinematic.materials.saturation = 1.34;
-  dimCinematic.materials.contrast = 1.02;
-  dimCinematic.materials.brightness = 0.82;
-  dimCinematic.materials.roughness = 0.76;
-  dimCinematic.materials.metalness = 0;
-  dimCinematic.materials.clearcoat = 0;
-  dimCinematic.materials.clearcoatRoughness = 0.72;
-  dimCinematic.materials.opacity = 1;
-  dimCinematic.materials.envMapIntensity = 0.08;
-  dimCinematic.materials.emissiveIntensity = 0.01;
-  dimCinematic.background.solidColor = "#0a0f18";
-  dimCinematic.background.linearStart = "#08111c";
-  dimCinematic.background.linearEnd = "#1f2c3d";
-  dimCinematic.background.linearAngle = 90;
-  dimCinematic.background.radialInner = "#182337";
-  dimCinematic.background.radialOuter = "#08111c";
-  dimCinematic.floor.color = "#121a24";
-  dimCinematic.floor.roughness = 0.86;
-  dimCinematic.floor.reflectivity = 0.06;
-  dimCinematic.floor.shadowOpacity = 0.24;
-  dimCinematic.floor.horizonBlend = 0.28;
-  dimCinematic.environment.enabled = false;
-  dimCinematic.environment.intensity = 0;
-  dimCinematic.environment.rotationY = -0.35;
-  dimCinematic.lighting.toneMappingExposure = 1.03;
-  dimCinematic.lighting.directional.color = "#f1f6fb";
-  dimCinematic.lighting.directional.intensity = 1.28;
-  dimCinematic.lighting.directional.position = { x: -190, y: 300, z: 210 };
-  dimCinematic.lighting.spot.color = "#dbeafe";
-  dimCinematic.lighting.spot.intensity = 0.18;
-  dimCinematic.lighting.spot.angle = 0.72;
-  dimCinematic.lighting.spot.position = { x: 160, y: 245, z: 126 };
-  dimCinematic.lighting.point.color = "#8fb6d8";
-  dimCinematic.lighting.point.intensity = 0.08;
-  dimCinematic.lighting.point.position = { x: -260, y: 95, z: -220 };
-  dimCinematic.lighting.ambient.color = "#1e293b";
-  dimCinematic.lighting.ambient.intensity = 0.42;
-  dimCinematic.lighting.hemisphere.skyColor = "#dbe7f3";
-  dimCinematic.lighting.hemisphere.groundColor = "#070a14";
-  dimCinematic.lighting.hemisphere.intensity = 0.92;
-
-  assert.deepEqual(normalizeThemeSettings(dimCinematic), cloneThemePresetSettings("workbench"));
-});
-
-test("normalizeThemeSettings preserves non-cinematic legacy material defaults", () => {
-  const legacyWorkbench = cloneThemePresetSettings("workbench");
-  delete legacyWorkbench.materials.tintMode;
-  delete legacyWorkbench.materials.emissiveIntensity;
-  const normalized = normalizeThemeSettings(legacyWorkbench);
-
-  assert.equal(normalized.materials.tintMode, "multiply");
-  assert.equal(normalized.materials.emissiveIntensity, 0);
-  assert.notDeepEqual(normalized, cloneThemePresetSettings("workbench"));
 });
 
 test("built-in theme presets preserve source colors by default", () => {

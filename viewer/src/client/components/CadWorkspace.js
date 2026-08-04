@@ -8,10 +8,8 @@ import DxfFileSheet from "./workbench/DxfFileSheet";
 import GcodeFileSheet from "./workbench/GcodeFileSheet";
 import FileViewerSidebar from "./workbench/FileViewerSidebar";
 import {
-  AppearanceEditorPanel,
-  buildClipSettingsTab,
-  buildDisplaySettingsTab,
-  buildExplodedSettingsTab
+  ThemeEditorPanel,
+  buildDisplaySettingsTab
 } from "./workbench/ThemeSettingsPopover";
 import MeshFileSheet from "./workbench/MeshFileSheet";
 import ImplicitFileSheet from "./workbench/ImplicitFileSheet";
@@ -39,6 +37,8 @@ import {
   LIGHT_COLOR_SCHEME_ID
 } from "@/ui/colorScheme";
 import {
+  CUSTOM_THEME_ID,
+  getThemePresetIdForSettings,
   inferThemeSettingsSceneTone,
   normalizeThemeSettings,
   resolveThemeSettingsBackdropColor,
@@ -48,8 +48,7 @@ import {
   displayModeForcesEdges,
   displayModeIsWireframe,
   normalizeDisplayEdgeSettings,
-  normalizeDisplaySettings,
-  resolveDisplayEdgeSettings
+  normalizeDisplaySettings
 } from "cadjs/lib/displaySettings";
 import { clonePerspectiveSnapshot } from "cadjs/lib/perspective";
 import {
@@ -109,26 +108,17 @@ import {
   isLargeStepGlbEntry
 } from "cadjs/lib/render/meshCost";
 import {
-  buildAvailableThemePresets,
   cadWorkspaceDefaultFileSheetWidthForViewport,
   createDirectorySessionThemeSlice,
   cloneDrawingStrokes,
   cloneTabSnapshot,
   createTabRecord,
-  deleteCustomThemePreset,
   drawingStrokesEqual,
-  getAvailableThemePresetIdForSettings,
   readCadDirectorySessionState,
-  readCustomThemePresets,
   readThemeSettingsState,
-  readThemeSettingsStateFromAppearanceQuery,
   readDirectoryThemeSettingsState,
-  resetThemePresetToDefault,
-  restoreDefaultThemePresets,
-  saveAndActivateCustomThemePreset,
-  updateThemePresetSettings,
   writeCadDirectorySessionState,
-  writeCustomThemePresets,
+  writeThemeState,
   writeThemeSettings,
   tabSnapshotEqual,
   CAD_WORKSPACE_DEFAULT_SIDEBAR_WIDTH,
@@ -1149,27 +1139,32 @@ export default function CadWorkspace({
   const [fileSheetOpenIntent, setFileSheetOpenIntent] = useState(readInitialFileSheetOpen);
   const [viewerAlertOpen, setViewerAlertOpen] = useState(false);
   const [viewerRuntimeAlert, setViewerRuntimeAlert] = useState(null);
-  const [customThemePresets, setCustomThemePresets] = useState(readCustomThemePresets);
-  const [themeState, setThemeState] = useState(() => readDirectoryThemeSettingsState(readCustomThemePresets()));
+  // One active theme id plus at most one custom settings blob. Presets are
+  // read-only; editing anything moves the active theme to "custom".
+  const [themeState, setThemeState] = useState(() => readDirectoryThemeSettingsState());
   const themeSettings = themeState.settings;
-  const themePresetId = themeState.presetId;
-  const availableThemePresets = useMemo(() => buildAvailableThemePresets(customThemePresets), [customThemePresets]);
-  const [appearanceEditing, setAppearanceEditing] = useState(false);
+  const themeId = themeState.themeId;
+  const customThemeSettings = themeState.custom;
+  const [themeEditing, setThemeEditing] = useState(false);
   const resolvedThemeSettings = useMemo(
     () => resolveThemeSettingsForColorMode(themeSettings, { prefersDark: false }),
     [themeSettings]
   );
   const resolvedDisplayEdgeSettings = useMemo(() => {
-    const base = resolveDisplayEdgeSettings(displaySettings);
-    // A theme may define its own outline (e.g. Terminal's neon-green linework).
-    // When it opts in, the theme edges take over as the base appearance; every
-    // other theme leaves edges entirely to the per-file display settings.
+    // Edge appearance — colour, opacity, thickness — is fixed, not a user
+    // setting. It comes from the cadjs defaults, or from a theme that styles its
+    // own linework (e.g. Terminal's neon-green outline). Whether edges draw at
+    // all is still decided by the display MODE, not here.
+    //
+    // Persisted per-file edge settings written by an older build are ignored
+    // rather than merged: with the controls gone they could never be changed
+    // back, so a stale value would be stuck forever.
     const themeEdges = resolvedThemeSettings.edges;
     if (themeEdges && themeEdges.enabled === true) {
-      return normalizeDisplayEdgeSettings({ ...base, ...themeEdges });
+      return normalizeDisplayEdgeSettings(themeEdges);
     }
-    return base;
-  }, [displaySettings, resolvedThemeSettings]);
+    return normalizeDisplayEdgeSettings();
+  }, [resolvedThemeSettings]);
   // App light/dark is inferred from the active theme's dominant background color
   // (not a user preference). The nav/sidebars float over the transparent
   // viewport, so their contrast must track whatever canvas sits behind them.
@@ -3236,8 +3231,8 @@ export default function CadWorkspace({
     ));
   }, []);
   const directorySessionThemeSlice = useMemo(
-    () => createDirectorySessionThemeSlice(themeState, customThemePresets),
-    [customThemePresets, themeState]
+    () => createDirectorySessionThemeSlice(themeState),
+    [themeState]
   );
   useEffect(() => {
     writeCadDirectorySessionState({
@@ -3270,48 +3265,41 @@ export default function CadWorkspace({
     }
     setTabToolsWidth(defaultFileSheetWidth);
   }, [defaultFileSheetWidth, fileSheetWidthIsCustom]);
-  const desktopFileSheetOpen = isDesktop && tabToolsOpen && !!selectedFileSheetKind && selectedFileSheetHasSections && !previewMode;
+  // The file sheet and the theme sidebar are the same right-hand panel with
+  // different contents: one open flag, one width, one resize handle, one inset
+  // on the 3D viewport. Anything that sizes or offsets the panel uses this.
+  const desktopRightPanelOpen = isDesktop && !previewMode && (
+    themeEditing ||
+    (tabToolsOpen && !!selectedFileSheetKind && selectedFileSheetHasSections)
+  );
   const effectiveSidebarOpen = sidebarOpen && !previewMode;
   const desktopSidebarOpen = isDesktop && effectiveSidebarOpen && !previewMode;
 
-  const setThemeMenuOpen = useCallback(() => {}, []);
+  // Selecting a preset (or System) is the only "reset": it swaps the active
+  // theme wholesale. The custom slot is kept so the user can flip back to it.
+  const selectTheme = useCallback((nextThemeId) => {
+    writeThemeState(nextThemeId, { onWriteError: handlePersistenceWriteError });
+    setThemeState(readThemeSettingsState());
+  }, [handlePersistenceWriteError]);
 
-  const readGlobalThemeState = useCallback(() => (
-    readThemeSettingsState(readCustomThemePresets())
-  ), []);
-
-  const updateThemeSettings = useCallback((updater, options = {}) => {
-    const persistGlobal = options.persistGlobal === true;
-    const requestedPresetId = String(options.presetId || "").trim();
-    if (persistGlobal && typeof updater !== "function") {
-      const settings = normalizeThemeSettings(updater);
-      const presetId = requestedPresetId || getAvailableThemePresetIdForSettings(settings, customThemePresets) || themePresetId || "";
-      setThemeState({
-        presetId,
-        settings
-      });
-      if (presetId) {
-        writeThemeSettings(settings, {
-          presetId,
-          customPresets: customThemePresets,
-          onWriteError: handlePersistenceWriteError
-        });
-      }
-      return;
-    }
-
+  // Any settings edit lands in the single custom slot and makes it active,
+  // unless it happens to reproduce a preset exactly.
+  const updateThemeSettings = useCallback((updater) => {
     setThemeState((current) => {
       const next = typeof updater === "function" ? updater(current.settings) : updater;
       const settings = normalizeThemeSettings(next);
+      writeThemeSettings(settings, { onWriteError: handlePersistenceWriteError });
+      const matchingPresetId = getThemePresetIdForSettings(settings);
       return {
-        presetId: current.presetId || getAvailableThemePresetIdForSettings(settings, customThemePresets) || "",
+        themeId: matchingPresetId || CUSTOM_THEME_ID,
+        custom: matchingPresetId ? current.custom : settings,
         settings
       };
     });
-  }, [customThemePresets, handlePersistenceWriteError, themePresetId]);
+  }, [handlePersistenceWriteError]);
 
   // Projection is a theme trait; the viewport toolbar edits it as a live
-  // theme-settings draft, the same as any appearance-editor change.
+  // theme-settings draft, the same as any theme-editor change.
   const updateThemeProjection = useCallback((nextProjection) => {
     updateThemeSettings((current) => ({
       ...current,
@@ -3319,115 +3307,24 @@ export default function CadWorkspace({
     }));
   }, [updateThemeSettings]);
 
-  const handleResetThemeSettings = useCallback(() => {
-    const activeThemePreset = availableThemePresets.find((preset) => preset.id === themePresetId);
-    if (!activeThemePreset) {
-      setThemeState(readGlobalThemeState());
-      return;
-    }
-    setThemeState({
-      presetId: activeThemePreset.id,
-      settings: normalizeThemeSettings(activeThemePreset.settings)
-    });
-  }, [availableThemePresets, readGlobalThemeState, themePresetId]);
-
-  // Appearance editing is a global sidebar mode (mutually exclusive with the
-  // per-file sheet). Opening with a presetId loads that theme as a live, in-state
-  // draft; edits are not persisted until the user saves inside the editor.
-  const openAppearanceEditor = useCallback((presetId = "") => {
-    const targetId = String(presetId || "").trim();
-    if (targetId) {
-      const preset = availableThemePresets.find((candidate) => candidate.id === targetId);
-      if (preset) {
-        setThemeState({
-          presetId: preset.id,
-          settings: normalizeThemeSettings(preset.settings)
-        });
-      }
-    }
-    setViewerAlertOpen(false);
-    setAppearanceEditing(true);
-  }, [availableThemePresets]);
-
-  const closeAppearanceEditor = useCallback(() => {
-    setAppearanceEditing(false);
+  // The theme sidebar and the file sheet are mutually exclusive. Opening one
+  // closes the other outright — rather than merely hiding it behind the new
+  // panel — so that closing the panel you opened leaves nothing open, and the
+  // other sidebar has to be reopened deliberately.
+  const closeThemeEditor = useCallback(() => {
+    setThemeEditing(false);
   }, []);
 
-  const handleSaveCustomThemePreset = useCallback((themeName) => {
-    const savedTheme = saveAndActivateCustomThemePreset(themeName, themeSettings, {
-      customPresets: customThemePresets,
-      sourceThemeId: themePresetId,
-      onWriteError: handlePersistenceWriteError
-    });
-    if (!savedTheme) {
-      return null;
-    }
-    const savedPreset = savedTheme.preset;
-    setCustomThemePresets(savedTheme.customPresets);
-    setThemeState({
-      presetId: savedPreset.id,
-      settings: normalizeThemeSettings(savedPreset.settings)
-    });
-    return savedPreset;
-  }, [customThemePresets, handlePersistenceWriteError, themePresetId, themeSettings]);
-
-  const handleDeleteCustomThemePreset = useCallback((presetId) => {
-    const normalizedPresetId = String(presetId || "").trim();
-    if (!deleteCustomThemePreset(normalizedPresetId, { onWriteError: handlePersistenceWriteError })) {
-      return false;
-    }
-    const nextCustomThemePresets = readCustomThemePresets();
-    setCustomThemePresets(nextCustomThemePresets);
-    setThemeState((current) => {
-      if (current.presetId !== normalizedPresetId) {
-        return current;
+  const handleToggleThemeEditor = useCallback(() => {
+    setThemeEditing((current) => {
+      if (current) {
+        return false;
       }
-      return readThemeSettingsState(nextCustomThemePresets);
+      setViewerAlertOpen(false);
+      setTabToolsOpen(false);
+      return true;
     });
-    return true;
-  }, [handlePersistenceWriteError]);
-
-  const handleUpdateThemePresetSettings = useCallback((presetId = themePresetId) => {
-    const normalizedPresetId = String(presetId || "").trim();
-    if (!normalizedPresetId) {
-      return false;
-    }
-    if (!updateThemePresetSettings(normalizedPresetId, themeSettings, { onWriteError: handlePersistenceWriteError })) {
-      return false;
-    }
-    const nextCustomThemePresets = readCustomThemePresets();
-    setCustomThemePresets(nextCustomThemePresets);
-    setThemeState(readThemeSettingsState(nextCustomThemePresets));
-    return true;
-  }, [handlePersistenceWriteError, themePresetId, themeSettings]);
-
-  const handleResetThemePresetToDefault = useCallback((presetId) => {
-    const normalizedPresetId = String(presetId || "").trim();
-    if (!normalizedPresetId) {
-      return false;
-    }
-    if (!resetThemePresetToDefault(normalizedPresetId, { onWriteError: handlePersistenceWriteError })) {
-      return false;
-    }
-    const nextCustomThemePresets = readCustomThemePresets();
-    setCustomThemePresets(nextCustomThemePresets);
-    setThemeState((current) => (
-      current.presetId === normalizedPresetId
-        ? readThemeSettingsState(nextCustomThemePresets)
-        : current
-    ));
-    return true;
-  }, [handlePersistenceWriteError]);
-
-  const handleRestoreDefaultThemePresets = useCallback(() => {
-    if (!restoreDefaultThemePresets({ onWriteError: handlePersistenceWriteError })) {
-      return false;
-    }
-    const nextCustomThemePresets = readCustomThemePresets();
-    setCustomThemePresets(nextCustomThemePresets);
-    setThemeState(readThemeSettingsState(nextCustomThemePresets));
-    return true;
-  }, [handlePersistenceWriteError]);
+  }, [setTabToolsOpen]);
 
   const handleViewerAlertChange = useCallback((nextAlert) => {
     setViewerRuntimeAlert(nextAlert || null);
@@ -3462,7 +3359,7 @@ export default function CadWorkspace({
     const nextWidth = resolveDesktopPanelWidths({
       viewportWidth: layoutViewportWidth,
       sidebarOpen: desktopSidebarOpen,
-      sheetOpen: desktopFileSheetOpen,
+      sheetOpen: desktopRightPanelOpen,
       sidebarWidth,
       sheetWidth: tabToolsWidth,
       sidebarMinWidth: DESKTOP_SIDEBAR_MIN_WIDTH,
@@ -3479,7 +3376,7 @@ export default function CadWorkspace({
     document.body.style.cursor = "col-resize";
     document.body.style.userSelect = "none";
   }, [
-    desktopFileSheetOpen,
+    desktopRightPanelOpen,
     desktopSidebarOpen,
     effectiveSidebarOpen,
     isDesktop,
@@ -3507,11 +3404,9 @@ export default function CadWorkspace({
   }, [isDesktop, setTabToolsOpen]);
 
   const handleStartFileSheetResize = useCallback((event) => {
-    if (event.button !== 0) {
-      return;
-    }
-    const rightSheetOpen = !previewMode && tabToolsOpen && !!selectedFileSheetKind && selectedFileSheetHasSections;
-    if (!isDesktop || !rightSheetOpen) {
+    // Gate on the shared right-panel flag, not the file sheet specifically:
+    // the theme sidebar is the same panel and resizes the same width.
+    if (event.button !== 0 || !desktopRightPanelOpen) {
       return;
     }
 
@@ -3520,7 +3415,7 @@ export default function CadWorkspace({
     const nextWidth = resolveDesktopPanelWidths({
       viewportWidth: layoutViewportWidth,
       sidebarOpen: desktopSidebarOpen,
-      sheetOpen: desktopFileSheetOpen,
+      sheetOpen: desktopRightPanelOpen,
       sidebarWidth,
       sheetWidth: tabToolsWidth,
       sidebarMinWidth: DESKTOP_SIDEBAR_MIN_WIDTH,
@@ -3535,16 +3430,11 @@ export default function CadWorkspace({
     document.body.style.cursor = "col-resize";
     document.body.style.userSelect = "none";
   }, [
-    isDesktop,
-    desktopFileSheetOpen,
+    desktopRightPanelOpen,
     desktopSidebarOpen,
     layoutViewportWidth,
-    previewMode,
     sidebarWidth,
-    selectedFileSheetKind,
-    selectedFileSheetHasSections,
     setFileSheetWidthIsCustom,
-    tabToolsOpen,
     tabToolsWidth
   ]);
 
@@ -3709,20 +3599,6 @@ export default function CadWorkspace({
     effectiveFileSheetOpenSectionIds,
     renderedSelectedFileSheetSectionIds,
     setTabToolsOpen
-  ]);
-
-  const handleEditThemePreset = useCallback((presetId) => {
-    const preset = availableThemePresets.find((candidate) => candidate.id === presetId);
-    if (!preset) {
-      return false;
-    }
-    // Editing a preset opens the global appearance editor with that preset
-    // loaded as a local draft (state-only); saving persists it.
-    openAppearanceEditor(preset.id);
-    return true;
-  }, [
-    availableThemePresets,
-    openAppearanceEditor
   ]);
 
   useEffect(() => {
@@ -3950,11 +3826,6 @@ export default function CadWorkspace({
       return;
     }
     const sessionState = fileSessionState || readEntrySessionState(normalizedKey);
-    const queryThemeState = readThemeSettingsStateFromAppearanceQuery(availableThemePresets);
-    if (queryThemeState) {
-      setThemeState(queryThemeState);
-    }
-
     setLargeFileState(normalizeLargeFileState(sessionState?.slices?.largeFile));
     const entry = entryMap.get(normalizedKey);
     setDisplaySettings(
@@ -4022,7 +3893,7 @@ export default function CadWorkspace({
         return next;
       });
     }
-  }, [availableThemePresets, entryMap, readEntrySessionState]);
+  }, [entryMap, readEntrySessionState]);
 
   const handleDxfBendSettingChange = useCallback((bendIndex, patch) => {
     setDxfBendSettings((current) => {
@@ -4307,12 +4178,6 @@ export default function CadWorkspace({
   }, [resolvedColorSchemeMode]);
 
   useEffect(() => {
-    writeCustomThemePresets(customThemePresets, {
-      onWriteError: handlePersistenceWriteError
-    });
-  }, [customThemePresets, handlePersistenceWriteError]);
-
-  useEffect(() => {
     document.documentElement.dataset.glassTone = cadWorkspaceGlassTone;
     return () => {
       delete document.documentElement.dataset.glassTone;
@@ -4338,11 +4203,7 @@ export default function CadWorkspace({
         return;
       }
       try {
-        const nextCustomThemePresets = readCustomThemePresets();
-        setCustomThemePresets(nextCustomThemePresets);
-        setThemeState((current) => (
-          current.presetId ? readThemeSettingsState(nextCustomThemePresets) : current
-        ));
+        setThemeState(readThemeSettingsState());
       } catch (error) {
         console.warn("Failed to sync theme from another tab", error);
       }
@@ -4484,7 +4345,7 @@ export default function CadWorkspace({
   const resolvedDesktopPanelWidths = useMemo(() => resolveDesktopPanelWidths({
     viewportWidth: layoutViewportWidth,
     sidebarOpen: desktopSidebarOpen,
-    sheetOpen: desktopFileSheetOpen,
+    sheetOpen: desktopRightPanelOpen,
     sidebarWidth,
     sheetWidth: tabToolsWidth,
     sidebarMinWidth: DESKTOP_SIDEBAR_MIN_WIDTH,
@@ -4492,7 +4353,7 @@ export default function CadWorkspace({
     sidebarMaxWidth: DESKTOP_SIDEBAR_MAX_WIDTH,
     sheetMaxWidth: DESKTOP_TAB_TOOLS_MAX_WIDTH
   }), [
-    desktopFileSheetOpen,
+    desktopRightPanelOpen,
     desktopSidebarOpen,
     layoutViewportWidth,
     sidebarWidth,
@@ -4503,7 +4364,7 @@ export default function CadWorkspace({
     return resolveDesktopPanelWidths({
       viewportWidth: layoutViewportWidth,
       sidebarOpen: desktopSidebarOpen,
-      sheetOpen: desktopFileSheetOpen,
+      sheetOpen: desktopRightPanelOpen,
       sidebarWidth: value,
       sheetWidth: tabToolsWidth,
       sidebarMinWidth: DESKTOP_SIDEBAR_MIN_WIDTH,
@@ -4511,13 +4372,13 @@ export default function CadWorkspace({
       sidebarMaxWidth: DESKTOP_SIDEBAR_MAX_WIDTH,
       sheetMaxWidth: DESKTOP_TAB_TOOLS_MAX_WIDTH
     }).sidebarWidth;
-  }, [desktopFileSheetOpen, desktopSidebarOpen, layoutViewportWidth, tabToolsWidth]);
+  }, [desktopRightPanelOpen, desktopSidebarOpen, layoutViewportWidth, tabToolsWidth]);
 
   const clampTabToolsWidth = useCallback((value) => {
     return resolveDesktopPanelWidths({
       viewportWidth: layoutViewportWidth,
       sidebarOpen: desktopSidebarOpen,
-      sheetOpen: desktopFileSheetOpen,
+      sheetOpen: desktopRightPanelOpen,
       sidebarWidth,
       sheetWidth: value,
       sidebarMinWidth: DESKTOP_SIDEBAR_MIN_WIDTH,
@@ -4525,7 +4386,7 @@ export default function CadWorkspace({
       sidebarMaxWidth: DESKTOP_SIDEBAR_MAX_WIDTH,
       sheetMaxWidth: DESKTOP_TAB_TOOLS_MAX_WIDTH
     }).sheetWidth;
-  }, [desktopFileSheetOpen, desktopSidebarOpen, layoutViewportWidth, sidebarWidth]);
+  }, [desktopRightPanelOpen, desktopSidebarOpen, layoutViewportWidth, sidebarWidth]);
 
   useCadWorkspaceLayout({
     isDesktop,
@@ -7907,18 +7768,19 @@ export default function CadWorkspace({
   }, [selectedEntry, selectedEntryHasReferences]);
 
   const handleToggleFileSheet = useCallback(() => {
-    if (appearanceEditing) {
-      setAppearanceEditing(false);
-      if (selectedFileSheetKind) {
-        setTabToolsOpen(true);
-      }
-      return;
-    }
     if (!selectedFileSheetKind) {
       return;
     }
-    setThemeMenuOpen(false);
     setViewerAlertOpen(false);
+    // Opening the file sheet while the theme sidebar is up replaces it.
+    if (themeEditing) {
+      setThemeEditing(false);
+      setTabToolsOpen(true);
+      if (!isDesktop) {
+        setSidebarOpen(false);
+      }
+      return;
+    }
     setTabToolsOpen((current) => {
       const nextOpen = !current;
       if (nextOpen && !isDesktop) {
@@ -7926,7 +7788,7 @@ export default function CadWorkspace({
       }
       return nextOpen;
     });
-  }, [appearanceEditing, isDesktop, selectedFileSheetKind, setThemeMenuOpen, setTabToolsOpen]);
+  }, [themeEditing, isDesktop, selectedFileSheetKind, setTabToolsOpen]);
 
   const handleDownloadFileAsset = useCallback((entry, asset = "output", assetInfo = null) => {
     const fileRef = entry ? fileKey(entry) : "";
@@ -8187,7 +8049,7 @@ export default function CadWorkspace({
     handleRedoDrawing,
     setPreviewMode,
     setViewerAlertOpen,
-    setThemeMenuOpen,
+    setThemeEditing,
     setTabToolsOpen,
     setSidebarOpen,
     setTabToolMode
@@ -8223,7 +8085,7 @@ export default function CadWorkspace({
       sidebarOpen,
       tabToolsOpen,
       tabToolMode,
-      themeMenuOpen: false,
+      themeEditing,
       viewerAlertOpen
     };
     setCopyStatus("");
@@ -8232,7 +8094,7 @@ export default function CadWorkspace({
     setDrawingUndoStack([]);
     setDrawingRedoStack([]);
     setViewerAlertOpen(false);
-    setThemeMenuOpen(false);
+    setThemeEditing(false);
     setSidebarOpen(false);
     setTabToolsOpen(false);
     setPreviewMode(true);
@@ -8240,7 +8102,6 @@ export default function CadWorkspace({
     effectiveRenderFormat,
     previewMode,
     sidebarOpen,
-    setThemeMenuOpen,
     setTabToolsOpen,
     selectedImplicitRuntimeModel,
     selectedMeshData,
@@ -8262,7 +8123,7 @@ export default function CadWorkspace({
     setPreviewMode(false);
     if (previousUiState) {
       setViewerAlertOpen(previousUiState.viewerAlertOpen);
-      setThemeMenuOpen(previousUiState.themeMenuOpen);
+      setThemeEditing(previousUiState.themeEditing);
       setSidebarOpen(previousUiState.sidebarOpen);
       setTabToolsOpen(previousUiState.tabToolsOpen);
       setTabToolMode(previousUiState.tabToolMode);
@@ -8272,7 +8133,6 @@ export default function CadWorkspace({
     setSidebarOpen,
     setTabToolMode,
     setTabToolsOpen,
-    setThemeMenuOpen,
     setViewerAlertOpen
   ]);
 
@@ -8317,12 +8177,11 @@ export default function CadWorkspace({
     activeReferenceTreeNodeId;
   const canUndoDrawing = drawingUndoStack.length > 0;
   const canRedoDrawing = drawingRedoStack.length > 0;
-  const fileSheetOpen = !!selectedFileSheetKind && selectedFileSheetHasSections && tabToolsOpen && !previewMode && !appearanceEditing;
-  const appearancePanelOpen = isDesktop && appearanceEditing && !previewMode;
+  const fileSheetOpen = !!selectedFileSheetKind && selectedFileSheetHasSections && tabToolsOpen && !previewMode && !themeEditing;
   const activeSidebarWidth = desktopSidebarOpen
     ? resolvedDesktopPanelWidths.sidebarWidth
     : 0;
-  const activeSheetWidth = (desktopFileSheetOpen && !appearanceEditing) || appearancePanelOpen
+  const activeSheetWidth = desktopRightPanelOpen
     ? resolvedDesktopPanelWidths.sheetWidth
     : 0;
   const sidebarShellWidth = isDesktop && desktopSidebarOpen
@@ -8362,32 +8221,18 @@ export default function CadWorkspace({
   ];
   const renderDisplaySettings = isStepView ? displaySettings : null;
   const themeTabs = [
+    // One tab for everything about how this file is drawn right now: display
+    // mode, plus the section-plane and exploded-view transforms. All three are
+    // per-file session state. The theme is global, not file-specific —
+    // it lives in the navbar-triggered theme editor (ThemeEditorPanel).
     isStepView
       ? buildDisplaySettingsTab({
           displaySettings,
-          updateDisplaySettings
-        })
-      : null,
-    // Clip (section plane) is its own tab so the axis sliders have room and the
-    // Display tab stays focused on appearance/edges.
-    isStepView
-      ? buildClipSettingsTab({
-          displaySettings,
           updateDisplaySettings,
-          clipBounds: selectedMeshData?.bounds || null
-        })
-      : null,
-    // Exploded view is its own tab so the auto-first layout controls and the
-    // optional per-part step authoring have room to be self-explanatory.
-    isStepView
-      ? buildExplodedSettingsTab({
-          displaySettings,
-          updateDisplaySettings,
+          clipBounds: selectedMeshData?.bounds || null,
           explodeMeshData: selectedMeshData || null
         })
       : null
-    // Appearance is global theming, not file-specific — it lives in the
-    // navbar-triggered appearance editor (AppearanceEditorPanel), not here.
   ].filter(Boolean);
 
   return (
@@ -8505,17 +8350,6 @@ export default function CadWorkspace({
           entryHasUrdf={entryHasUrdf}
           activeStepArtifactGenerationFile={activeStepArtifactGenerationFiles}
           stepArtifactGenerationAvailable={stepArtifactGenerationAvailable}
-          themePresets={availableThemePresets}
-          themeSettings={themeSettings}
-          themePresetId={themePresetId}
-          updateThemeSettings={updateThemeSettings}
-          handleResetThemeSettings={handleResetThemeSettings}
-          handleSaveCustomThemePreset={handleSaveCustomThemePreset}
-          handleUpdateThemePresetSettings={handleUpdateThemePresetSettings}
-          handleDeleteCustomThemePreset={handleDeleteCustomThemePreset}
-          handleEditThemePreset={handleEditThemePreset}
-          handleResetThemePresetToDefault={handleResetThemePresetToDefault}
-          handleRestoreDefaultThemePresets={handleRestoreDefaultThemePresets}
           filenameLoadActivity={filenameLoadActivity}
           selectedStepSourceStatus={selectedStepSourceStatus}
           canRevealFileAssets={fileRevealAvailable}
@@ -8531,9 +8365,8 @@ export default function CadWorkspace({
           fileSheetKind={selectedFileSheetHasSections ? selectedFileSheetKind : ""}
           fileSheetOpen={fileSheetOpen}
           onToggleFileSheet={handleToggleFileSheet}
-          appearanceEditing={appearanceEditing}
-          onOpenAppearanceEditor={openAppearanceEditor}
-          onCloseAppearanceEditor={closeAppearanceEditor}
+          themeEditing={themeEditing}
+          onToggleThemeEditor={handleToggleThemeEditor}
         />
 
         <div className="pointer-events-none relative min-h-0 flex-1 overflow-hidden">
@@ -8903,21 +8736,19 @@ export default function CadWorkspace({
               />
             ) : null}
 
-            {appearanceEditing ? (
-              <AppearanceEditorPanel
+            {themeEditing ? (
+              <ThemeEditorPanel
                 open
                 isDesktop={isDesktop}
                 width={activeSheetWidth || tabToolsWidth}
-                onClose={closeAppearanceEditor}
+                onClose={closeThemeEditor}
                 onStartResize={handleStartFileSheetResize}
-                themePresets={availableThemePresets}
                 themeSettings={themeSettings}
-                themePresetId={themePresetId}
+                themeId={themeId}
+                hasCustomTheme={Boolean(customThemeSettings)}
                 resolvedColorSchemeMode={resolvedColorSchemeMode}
+                onSelectTheme={selectTheme}
                 updateThemeSettings={updateThemeSettings}
-                handleResetThemeSettings={handleResetThemeSettings}
-                handleSaveCustomThemePreset={handleSaveCustomThemePreset}
-                handleUpdateThemePresetSettings={handleUpdateThemePresetSettings}
               />
             ) : null}
           </div>

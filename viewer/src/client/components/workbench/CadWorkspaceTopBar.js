@@ -5,6 +5,7 @@ import {
   Check,
   CircleCheck,
   Code,
+  Contrast,
   Copy,
   Cuboid,
   DraftingCompass,
@@ -58,7 +59,6 @@ import {
   entryIconKind
 } from "@/workbench/entryIconKind";
 import { entryIconStatus } from "@/workbench/entryIconStatus";
-import { ThemePresetDropdown } from "./ThemeSettingsPopover";
 import FileAccessContextMenu from "./FileAccessContextMenu";
 import {
   fileKey,
@@ -1053,17 +1053,6 @@ export default function CadWorkspaceTopBar({
   entryHasUrdf,
   activeStepArtifactGenerationFile = "",
   stepArtifactGenerationAvailable = true,
-  themePresets = [],
-  themeSettings,
-  themePresetId = "",
-  updateThemeSettings,
-  handleResetThemeSettings,
-  handleSaveCustomThemePreset,
-  handleUpdateThemePresetSettings,
-  handleDeleteCustomThemePreset,
-  handleEditThemePreset,
-  handleResetThemePresetToDefault,
-  handleRestoreDefaultThemePresets,
   filenameLoadActivity = null,
   selectedStepSourceStatus = null,
   canRevealFileAssets = false,
@@ -1079,9 +1068,8 @@ export default function CadWorkspaceTopBar({
   fileSheetKind = "",
   fileSheetOpen = false,
   onToggleFileSheet,
-  appearanceEditing = false,
-  onOpenAppearanceEditor,
-  onCloseAppearanceEditor,
+  themeEditing = false,
+  onToggleThemeEditor,
   navigationAvailable = true
 }) {
   const viewerVersion = String(viewerPackage.version || "").trim();
@@ -1128,6 +1116,7 @@ export default function CadWorkspaceTopBar({
   const fileSheetToggleLabel = fileSheetOpen
     ? `Collapse ${fileSheetLabel(fileSheetKind)}`
     : `Expand ${fileSheetLabel(fileSheetKind)}`;
+  const themeToggleLabel = themeEditing ? "Close theme settings" : "Open theme settings";
 
   return (
     <header
@@ -1286,24 +1275,21 @@ export default function CadWorkspaceTopBar({
             </Button>
           ) : null}
 
-          <ThemePresetDropdown
-            themePresets={themePresets}
-            themeSettings={themeSettings}
-            themePresetId={themePresetId}
-            updateThemeSettings={updateThemeSettings}
-            handleResetThemeSettings={handleResetThemeSettings}
-            handleSaveCustomThemePreset={handleSaveCustomThemePreset}
-            handleUpdateThemePresetSettings={handleUpdateThemePresetSettings}
-            handleDeleteCustomThemePreset={handleDeleteCustomThemePreset}
-            handleEditThemePreset={handleEditThemePreset}
-            handleResetThemePresetToDefault={handleResetThemePresetToDefault}
-            handleRestoreDefaultThemePresets={handleRestoreDefaultThemePresets}
-            appearanceEditing={appearanceEditing}
-            onOpenAppearanceEditor={onOpenAppearanceEditor}
-            onCloseAppearanceEditor={onCloseAppearanceEditor}
-            triggerClassName={topBarIconButtonClasses}
-            iconClassName={topBarIconClasses}
-          />
+          {/* A plain toggle for the theme sidebar, matching the file-sheet
+              button beside it. Theme selection lives inside the sidebar. */}
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon"
+            aria-label={themeToggleLabel}
+            title={themeToggleLabel}
+            aria-pressed={themeEditing}
+            onClick={onToggleThemeEditor}
+            className={`${topBarIconButtonClasses} ${themeEditing ? activeIconButtonClasses : ""}`}
+          >
+            <Contrast className={topBarIconClasses} strokeWidth={2} aria-hidden="true" />
+            <span className="sr-only">{themeToggleLabel}</span>
+          </Button>
 
           {showFileSheetToggle ? (
             <Button
@@ -1312,9 +1298,9 @@ export default function CadWorkspaceTopBar({
               size="icon"
               aria-label={fileSheetToggleLabel}
               title={fileSheetToggleLabel}
-              aria-pressed={fileSheetOpen && !appearanceEditing}
+              aria-pressed={fileSheetOpen && !themeEditing}
               onClick={onToggleFileSheet}
-              className={`${topBarIconButtonClasses} ${fileSheetOpen && !appearanceEditing ? activeIconButtonClasses : ""}`}
+              className={`${topBarIconButtonClasses} ${fileSheetOpen && !themeEditing ? activeIconButtonClasses : ""}`}
             >
               <SlidersHorizontal className={topBarIconClasses} />
               <span className="sr-only">{fileSheetToggleLabel}</span>

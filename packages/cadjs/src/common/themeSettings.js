@@ -1493,294 +1493,55 @@ export const THEME_PRESETS = Object.freeze([
   }
 ]);
 
-// "cinematic" is intentionally NOT an alias: it is a real preset now. Stored
-// settings from the pre-Workbench cinematic era still migrate via
-// isMigratableCinematicThemeSettings.
 const THEME_PRESET_ID_ALIASES = Object.freeze({
-  beach: "vibrant",
   workbench: "workbench-light",
   light: "workbench-light",
-  dark: "workbench-dark",
-  charcoal: "workbench-dark",
-  darkoal: "workbench-dark",
-  "dark-2": "workbench-dark"
+  dark: "workbench-dark"
 });
 
 export const DEFAULT_THEME_PRESET_ID = "workbench-light";
+
+// The two ids that are not presets. "system" follows prefers-color-scheme;
+// "custom" is the single slot holding whatever the user has edited. Everything
+// else is a built-in preset, and presets are read-only.
+export const SYSTEM_THEME_ID = "system";
+export const CUSTOM_THEME_ID = "custom";
+export const DEFAULT_THEME_ID = SYSTEM_THEME_ID;
 
 export const DEFAULT_THEME_PRESET = Object.freeze(
   THEME_PRESETS.find((preset) => preset.id === DEFAULT_THEME_PRESET_ID) || THEME_PRESETS[0]
 );
 
 export const DEFAULT_THEME_SETTINGS = Object.freeze(DEFAULT_THEME_PRESET.settings);
-export const THEMES = THEME_PRESETS;
-export const DEFAULT_THEME_ID = DEFAULT_THEME_PRESET_ID;
-export const DEFAULT_THEME = DEFAULT_THEME_PRESET;
 
 export function resolveSystemThemePresetId({ prefersDark = false } = {}) {
-  // Used only to pick the first-load default; afterwards the app tone follows
-  // whichever theme is active (inferred from its background).
   return prefersDark === true ? "workbench-dark" : "workbench-light";
 }
 
+// The id the UI shows as selected, and the only ids that may be stored.
+export function normalizeThemeId(themeId) {
+  const normalized = String(themeId || "").trim();
+  if (normalized === SYSTEM_THEME_ID || normalized === CUSTOM_THEME_ID) {
+    return normalized;
+  }
+  return normalizeThemePresetId(normalized);
+}
+
+// Resolve an active theme id to the settings it renders with. "custom" uses the
+// stored custom settings; "system" and presets resolve to preset settings, which
+// is why selecting a preset is all it takes to reset a customized theme.
+export function resolveThemeSettingsForId(themeId, { custom = null, prefersDark = false } = {}) {
+  const normalizedThemeId = normalizeThemeId(themeId) || DEFAULT_THEME_ID;
+  if (normalizedThemeId === CUSTOM_THEME_ID && custom) {
+    return normalizeThemeSettings(custom);
+  }
+  const presetId = normalizedThemeId === CUSTOM_THEME_ID || normalizedThemeId === SYSTEM_THEME_ID
+    ? resolveSystemThemePresetId({ prefersDark })
+    : normalizedThemeId;
+  return cloneThemePresetSettings(presetId);
+}
+
 const PRESET_ID_SET = new Set(ENVIRONMENT_PRESETS.map((preset) => preset.id));
-const LEGACY_CINEMATIC_MATERIALS = Object.freeze({
-  defaultColor: "#aeb9c3",
-  tintStrength: 0.28,
-  saturation: 0.42,
-  contrast: 1.02,
-  brightness: 0.94,
-  roughness: 0.46,
-  metalness: 0.02,
-  clearcoat: 0.18,
-  clearcoatRoughness: 0.34,
-  opacity: 1,
-  envMapIntensity: 0.58
-});
-const PREVIOUS_CINEMATIC_MATERIALS = Object.freeze({
-  defaultColor: "#aeb9c3",
-  tintMode: "blend",
-  tintStrength: 0.08,
-  saturation: 1,
-  contrast: 1.04,
-  brightness: 1.02,
-  roughness: 0.46,
-  metalness: 0.02,
-  clearcoat: 0.18,
-  clearcoatRoughness: 0.34,
-  opacity: 1,
-  envMapIntensity: 0.58,
-  emissiveIntensity: 0.06
-});
-const DIM_CINEMATIC_MATERIALS = Object.freeze({
-  defaultColor: "#aeb9c3",
-  tintMode: "blend",
-  tintStrength: 0,
-  saturation: 1.34,
-  contrast: 1.02,
-  brightness: 0.82,
-  roughness: 0.76,
-  metalness: 0,
-  clearcoat: 0,
-  clearcoatRoughness: 0.72,
-  opacity: 1,
-  envMapIntensity: 0.08,
-  emissiveIntensity: 0.01
-});
-const LOW_CONTRAST_CINEMATIC_MATERIALS = Object.freeze({
-  defaultColor: "#bcc8d4",
-  tintMode: "blend",
-  tintStrength: 0,
-  saturation: 1.18,
-  contrast: 1.07,
-  brightness: 1.04,
-  roughness: 0.58,
-  metalness: 0.02,
-  clearcoat: 0.12,
-  clearcoatRoughness: 0.42,
-  opacity: 1,
-  envMapIntensity: 0.42,
-  emissiveIntensity: 0.02
-});
-const SOFT_CONTRAST_CINEMATIC_MATERIALS = Object.freeze({
-  defaultColor: "#748899",
-  tintMode: "blend",
-  tintStrength: 0,
-  saturation: 1.18,
-  contrast: 1.07,
-  brightness: 1.04,
-  roughness: 0.58,
-  metalness: 0.02,
-  clearcoat: 0.12,
-  clearcoatRoughness: 0.42,
-  opacity: 1,
-  envMapIntensity: 0.42,
-  emissiveIntensity: 0.02
-});
-const FEATURE_CONTRAST_CINEMATIC_MATERIALS = Object.freeze({
-  defaultColor: "#556c7f",
-  tintMode: "blend",
-  tintStrength: 0,
-  saturation: 1.18,
-  contrast: 1.12,
-  brightness: 1.02,
-  roughness: 0.58,
-  metalness: 0.02,
-  clearcoat: 0.12,
-  clearcoatRoughness: 0.42,
-  opacity: 1,
-  envMapIntensity: 0.42,
-  emissiveIntensity: 0.02
-});
-const LEGACY_CINEMATIC_EDGES = Object.freeze({
-  enabled: false,
-  color: "#8fa1b5",
-  thickness: 1
-});
-const PREVIOUS_CINEMATIC_EDGES = Object.freeze({
-  enabled: true,
-  color: "#8fa1b5",
-  thickness: 1.65
-});
-const DIM_CINEMATIC_EDGES = Object.freeze({
-  enabled: false,
-  color: "#8fa1b5",
-  thickness: 1
-});
-const LOW_CONTRAST_CINEMATIC_EDGES = Object.freeze({
-  enabled: false,
-  color: "#8fa1b5",
-  thickness: 1
-});
-const LEGACY_CINEMATIC_BACKGROUND = Object.freeze({
-  solidColor: "#050711",
-  linearStart: "#02040b",
-  linearEnd: "#252f47",
-  linearAngle: 90,
-  radialInner: "#171d30",
-  radialOuter: "#02040b"
-});
-const PREVIOUS_CINEMATIC_BACKGROUND = LEGACY_CINEMATIC_BACKGROUND;
-const DIM_CINEMATIC_BACKGROUND = Object.freeze({
-  solidColor: "#0a0f18",
-  linearStart: "#08111c",
-  linearEnd: "#1f2c3d",
-  linearAngle: 90,
-  radialInner: "#182337",
-  radialOuter: "#08111c"
-});
-const LEGACY_CINEMATIC_FLOOR = Object.freeze({
-  mode: THEME_FLOOR_MODES.STAGE,
-  color: "#141a29",
-  roughness: 0.62,
-  reflectivity: 0.22,
-  shadowOpacity: 0.24,
-  horizonBlend: 0.28
-});
-const PREVIOUS_CINEMATIC_FLOOR = Object.freeze({
-  mode: THEME_FLOOR_MODES.STAGE,
-  color: "#141a29",
-  roughness: 0.62,
-  reflectivity: 0.06,
-  shadowOpacity: 0.24,
-  horizonBlend: 0.12
-});
-const DIM_CINEMATIC_FLOOR = Object.freeze({
-  mode: THEME_FLOOR_MODES.STAGE,
-  color: "#121a24",
-  roughness: 0.86,
-  reflectivity: 0.06,
-  shadowOpacity: 0.24,
-  horizonBlend: 0.28
-});
-const LEGACY_CINEMATIC_ENVIRONMENT = Object.freeze({
-  enabled: true,
-  presetId: "studio-hdri-43",
-  intensity: 0.46,
-  rotationY: -0.35,
-  useAsBackground: false
-});
-const DIM_CINEMATIC_ENVIRONMENT = Object.freeze({
-  enabled: false,
-  presetId: "studio-hdri-43",
-  intensity: 0,
-  rotationY: -0.35,
-  useAsBackground: false
-});
-const PREVIOUS_CINEMATIC_LIGHTING = Object.freeze({
-  toneMappingExposure: 1.2,
-  directional: {
-    enabled: true,
-    color: "#f1f6fb",
-    intensity: 2.45,
-    position: {
-      x: -190,
-      y: 300,
-      z: 210
-    }
-  },
-  spot: {
-    enabled: true,
-    color: "#dbeafe",
-    intensity: 1.34,
-    angle: 0.72,
-    distance: 0,
-    position: {
-      x: 160,
-      y: 245,
-      z: 126
-    }
-  },
-  point: {
-    enabled: true,
-    color: "#8fb6d8",
-    intensity: 0.34,
-    distance: 0,
-    position: {
-      x: -260,
-      y: 95,
-      z: -220
-    }
-  },
-  ambient: {
-    enabled: true,
-    color: "#1e293b",
-    intensity: 0.2
-  },
-  hemisphere: {
-    enabled: true,
-    skyColor: "#dbe7f3",
-    groundColor: "#070a14",
-    intensity: 0.68
-  }
-});
-const DIM_CINEMATIC_LIGHTING = Object.freeze({
-  toneMappingExposure: 1.03,
-  directional: {
-    enabled: true,
-    color: "#f1f6fb",
-    intensity: 1.28,
-    position: {
-      x: -190,
-      y: 300,
-      z: 210
-    }
-  },
-  spot: {
-    enabled: true,
-    color: "#dbeafe",
-    intensity: 0.18,
-    angle: 0.72,
-    distance: 0,
-    position: {
-      x: 160,
-      y: 245,
-      z: 126
-    }
-  },
-  point: {
-    enabled: true,
-    color: "#8fb6d8",
-    intensity: 0.08,
-    distance: 0,
-    position: {
-      x: -260,
-      y: 95,
-      z: -220
-    }
-  },
-  ambient: {
-    enabled: true,
-    color: "#1e293b",
-    intensity: 0.42
-  },
-  hemisphere: {
-    enabled: true,
-    skyColor: "#dbe7f3",
-    groundColor: "#070a14",
-    intensity: 0.92
-  }
-});
 
 function normalizeEnvironmentPresetId(value) {
   const normalized = String(value || "").trim();
@@ -1812,67 +1573,6 @@ function createThemeSettingsSignature(value = {}) {
   });
 }
 
-function valuesMatch(value, expected) {
-  if (typeof expected === "number") {
-    return Math.abs((Number(value) || 0) - expected) < 1e-6;
-  }
-  if (expected && typeof expected === "object") {
-    if (!value || typeof value !== "object") {
-      return false;
-    }
-    return Object.entries(expected).every(([key, nestedExpected]) => (
-      valuesMatch(value[key], nestedExpected)
-    ));
-  }
-  return value === expected;
-}
-
-function valuesMatchAny(value, expectedValues) {
-  return expectedValues.some((expected) => valuesMatch(value, expected));
-}
-
-function isMigratableCinematicThemeSettings(settings) {
-  const materialMatches = valuesMatchAny(settings?.materials, [
-    LEGACY_CINEMATIC_MATERIALS,
-    PREVIOUS_CINEMATIC_MATERIALS,
-    DIM_CINEMATIC_MATERIALS,
-    LOW_CONTRAST_CINEMATIC_MATERIALS,
-    SOFT_CONTRAST_CINEMATIC_MATERIALS,
-    FEATURE_CONTRAST_CINEMATIC_MATERIALS,
-    CINEMATIC_THEME_SETTINGS.materials
-  ]);
-  const floorMatches = valuesMatchAny(settings?.floor, [
-    LEGACY_CINEMATIC_FLOOR,
-    PREVIOUS_CINEMATIC_FLOOR,
-    DIM_CINEMATIC_FLOOR,
-    CINEMATIC_THEME_SETTINGS.floor
-  ]);
-  const environmentMatches = valuesMatchAny(settings?.environment, [
-    LEGACY_CINEMATIC_ENVIRONMENT,
-    DIM_CINEMATIC_ENVIRONMENT,
-    CINEMATIC_THEME_SETTINGS.environment,
-    WORKBENCH_THEME_SETTINGS.environment
-  ]);
-  const backgroundMatches = valuesMatchAny(settings?.background, [
-    LEGACY_CINEMATIC_BACKGROUND,
-    PREVIOUS_CINEMATIC_BACKGROUND,
-    DIM_CINEMATIC_BACKGROUND,
-    CINEMATIC_THEME_SETTINGS.background
-  ]);
-  const lightingMatches = valuesMatchAny(settings?.lighting, [
-    PREVIOUS_CINEMATIC_LIGHTING,
-    DIM_CINEMATIC_LIGHTING,
-    CINEMATIC_THEME_SETTINGS.lighting
-  ]);
-  return (
-    materialMatches &&
-    backgroundMatches &&
-    floorMatches &&
-    environmentMatches &&
-    lightingMatches
-  );
-}
-
 export function normalizeThemeSettings(value = {}) {
   const source = value && typeof value === "object" ? value : {};
   const materials = source.materials && typeof source.materials === "object"
@@ -1890,9 +1590,6 @@ export function normalizeThemeSettings(value = {}) {
   const lighting = source.lighting && typeof source.lighting === "object"
     ? source.lighting
     : {};
-  const hasMaterialSettings = !!(source.materials && typeof source.materials === "object");
-  const missingLegacyTintMode = hasMaterialSettings && !Object.hasOwn(materials, "tintMode");
-  const missingLegacyEmissiveIntensity = hasMaterialSettings && !Object.hasOwn(materials, "emissiveIntensity");
   const normalizedDefaultColor = normalizeColor(
     materials.defaultColor || materials.tintColor,
     DEFAULT_THEME_SETTINGS.materials.defaultColor
@@ -1951,7 +1648,7 @@ export function normalizeThemeSettings(value = {}) {
       ),
       tintMode: normalizeMaterialTintMode(
         materials.tintMode,
-        missingLegacyTintMode ? "multiply" : DEFAULT_THEME_SETTINGS.materials.tintMode
+        DEFAULT_THEME_SETTINGS.materials.tintMode
       ),
       tintStrength: normalizeNumber(materials.tintStrength, DEFAULT_THEME_SETTINGS.materials.tintStrength, 0, 1),
       saturation: normalizeNumber(materials.saturation, DEFAULT_THEME_SETTINGS.materials.saturation, 0, 2.5),
@@ -1970,7 +1667,7 @@ export function normalizeThemeSettings(value = {}) {
       envMapIntensity: normalizeNumber(materials.envMapIntensity, DEFAULT_THEME_SETTINGS.materials.envMapIntensity, 0, 4),
       emissiveIntensity: normalizeNumber(
         materials.emissiveIntensity,
-        missingLegacyEmissiveIntensity ? 0 : DEFAULT_THEME_SETTINGS.materials.emissiveIntensity,
+        DEFAULT_THEME_SETTINGS.materials.emissiveIntensity,
         0,
         2
       )
@@ -2102,14 +1799,6 @@ export function normalizeThemeSettings(value = {}) {
   }
   normalized.modeColors = normalizeThemeModeColors(source.modeColors, normalized);
 
-  if (
-    !Object.hasOwn(source, "colorMode") &&
-    !Object.hasOwn(source, "modeColors") &&
-    isMigratableCinematicThemeSettings(normalized)
-  ) {
-    return normalizeThemeSettings(deepClone(WORKBENCH_THEME_SETTINGS));
-  }
-
   return normalized;
 }
 
@@ -2137,6 +1826,10 @@ export function cloneThemeSettings(themeId) {
 }
 
 export function getThemePresetIdForSettings(themeSettings) {
+  return getMatchingThemePresetId(themeSettings);
+}
+
+function getMatchingThemePresetId(themeSettings) {
   const currentSignature = createThemeSettingsSignature(normalizeThemeSettings(themeSettings));
   for (const preset of THEME_PRESETS) {
     const presetSignature = createThemeSettingsSignature(normalizeThemeSettings(preset.settings));
@@ -2145,10 +1838,6 @@ export function getThemePresetIdForSettings(themeSettings) {
     }
   }
   return null;
-}
-
-export function getThemeIdForSettings(themeSettings) {
-  return getThemePresetIdForSettings(themeSettings);
 }
 
 export function resolveThemeSettingsColorMode(themeSettings = {}, { prefersDark = false, systemFallback = THEME_COLOR_MODES.LIGHT } = {}) {

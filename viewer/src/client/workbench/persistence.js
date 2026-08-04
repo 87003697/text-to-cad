@@ -1,13 +1,13 @@
 import { clonePerspectiveSnapshot, perspectiveSnapshotEqual } from "cadjs/lib/perspective.js";
 import {
-  cloneThemePresetSettings,
+  CUSTOM_THEME_ID,
+  DEFAULT_THEME_ID,
   DEFAULT_THEME_PRESET,
-  DEFAULT_THEME_PRESET_ID,
-  getThemePresetById,
+  getThemePresetIdForSettings,
   inferThemeSettingsSceneTone,
-  THEME_PRESETS,
-  normalizeThemePresetId,
-  normalizeThemeSettings
+  normalizeThemeId,
+  normalizeThemeSettings,
+  resolveThemeSettingsForId
 } from "cadjs/lib/themeSettings.js";
 import { THEME_STORAGE_KEY } from "../ui/colorScheme.js";
 import { normalizeRenderFormat } from "cadjs/lib/fileFormats.js";
@@ -15,9 +15,7 @@ import { isCadWorkspaceCompactFileSheetViewport } from "./breakpoints.js";
 import { DRAWING_TOOL, RENDER_FORMAT, TAB_TOOL_MODE } from "./constants.js";
 
 export { THEME_STORAGE_KEY };
-const THEME_STORAGE_VERSION = 11;
-const CUSTOM_THEME_PRESET_ID_PREFIX = "custom:";
-export const THEME_APPEARANCE_QUERY_PARAM = "appearance";
+export const THEME_STORAGE_VERSION = 12;
 
 export const CAD_DIRECTORY_SESSION_STORAGE_VERSION = 1;
 export const CAD_DIRECTORY_SESSION_STORAGE_KEY = `cad-viewer:directory-session:v${CAD_DIRECTORY_SESSION_STORAGE_VERSION}`;
@@ -573,565 +571,169 @@ function readSystemPrefersDark() {
   }
 }
 
-function normalizeThemeLibraryId(value) {
-  return String(value || "").trim();
-}
-
-function normalizeThemeLibraryThemeId(value, themes = []) {
-  const normalizedThemeId = normalizeThemeLibraryId(value);
-  return normalizedThemeId && themes.some((theme) => theme.id === normalizedThemeId)
-    ? normalizedThemeId
-    : "";
-}
-
-function slugifyCustomThemePresetName(value) {
-  return String(value || "")
-    .trim()
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-+|-+$/g, "")
-    || "theme";
-}
-
-function normalizeThemeLibraryLabel(value) {
-  return String(value || "").trim().replace(/\s+/g, " ");
-}
-
-function createCustomThemePresetId(label) {
-  return `${CUSTOM_THEME_PRESET_ID_PREFIX}${slugifyCustomThemePresetName(label)}`;
-}
-
-function createUniqueThemePresetId(label, themes = []) {
-  const baseId = createCustomThemePresetId(label);
-  const existingIds = new Set(themes.map((theme) => theme.id));
-  if (!existingIds.has(baseId)) {
-    return baseId;
-  }
-  for (let index = 2; index < 1000; index += 1) {
-    const nextId = `${baseId}-${index}`;
-    if (!existingIds.has(nextId)) {
-      return nextId;
-    }
-  }
-  return `${baseId}-${Date.now().toString(36)}`;
-}
-
-function backgroundPreviewForThemeSettings(settings) {
-  const background = settings?.background || {};
-  const type = String(background.type || "").trim().toLowerCase();
-  if (type === "radial") {
-    return `radial-gradient(circle at 32% 24%, ${background.radialInner || background.solidColor || "#111827"} 0%, ${background.radialOuter || background.solidColor || "#030712"} 100%)`;
-  }
-  if (type === "linear") {
-    return `linear-gradient(135deg, ${background.linearStart || background.solidColor || "#111827"} 0%, ${background.solidColor || background.linearStart || "#111827"} 52%, ${background.linearEnd || background.solidColor || "#030712"} 100%)`;
-  }
-  const color = background.solidColor || settings?.floor?.color || "#111827";
-  return `linear-gradient(135deg, ${color} 0%, ${color} 100%)`;
-}
-
-function createCustomThemePresetPreview(settings) {
-  const modelColor = settings?.materials?.fillColors?.[0] ||
-    settings?.materials?.defaultColor ||
-    DEFAULT_THEME_PRESET.settings.materials.defaultColor;
+// Theme state is one active id plus, at most, one customized settings blob.
+//
+// `themeId` is "system", a built-in preset id, or "custom". Presets are
+// read-only: editing any setting writes the result into the single custom slot
+// and makes "custom" active, and picking a preset again is what resets it. There
+// is deliberately no saved-theme library, and no save/restore action.
+function createThemeState(themeId = DEFAULT_THEME_ID, custom = null, { prefersDark = false } = {}) {
+  const normalizedThemeId = normalizeThemeId(themeId) || DEFAULT_THEME_ID;
+  const normalizedCustom = custom ? normalizeThemeSettings(custom) : null;
   return {
-    background: backgroundPreviewForThemeSettings(settings),
-    modelColor,
-    accentColor: settings?.floor?.color || modelColor || DEFAULT_THEME_PRESET.settings.floor.color
+    themeId: normalizedThemeId === CUSTOM_THEME_ID && !normalizedCustom
+      ? DEFAULT_THEME_ID
+      : normalizedThemeId,
+    custom: normalizedCustom,
+    settings: resolveThemeSettingsForId(normalizedThemeId, {
+      custom: normalizedCustom,
+      prefersDark
+    })
   };
 }
 
-function createThemeRecordFromPreset(preset) {
-  const settings = normalizeThemeSettings(preset?.settings);
-  return {
-    id: normalizeThemeLibraryId(preset?.id),
-    label: normalizeThemeLibraryLabel(preset?.label) || normalizeThemeLibraryId(preset?.id),
-    description: String(preset?.description || "Built-in theme"),
-    presetId: normalizeThemePresetId(preset?.id),
-    preview: preset?.preview || createCustomThemePresetPreview(settings),
-    settings
-  };
-}
-
-function createDefaultThemeLibrary() {
-  return THEME_PRESETS
-    .map(createThemeRecordFromPreset)
-    .filter((theme) => theme.id && theme.label);
-}
-
-function isCustomThemePresetId(value) {
-  return normalizeThemeLibraryId(value).startsWith(CUSTOM_THEME_PRESET_ID_PREFIX);
-}
-
-function normalizeCustomThemeLibraryThemeId(value, themes = []) {
-  const normalizedThemeId = normalizeThemeLibraryId(value);
-  return isCustomThemePresetId(normalizedThemeId) && themes.some((theme) => theme.id === normalizedThemeId)
-    ? normalizedThemeId
-    : "";
-}
-
-function normalizeStoredCustomThemePreset(value) {
-  const rawId = normalizeThemeLibraryId(value?.id);
-  const builtInId = normalizeThemePresetId(rawId);
-  if (rawId && builtInId) {
-    return null;
+function prefersDarkColorScheme() {
+  if (typeof window === "undefined" || typeof window.matchMedia !== "function") {
+    return false;
   }
-  const rawPresetId = normalizeThemeLibraryId(value?.presetId || value?.sourcePresetId);
-  const fallbackPresetId = normalizeThemePresetId(rawPresetId);
-  if (rawPresetId && !fallbackPresetId) {
-    return null;
+  try {
+    return window.matchMedia("(prefers-color-scheme: dark)").matches === true;
+  } catch {
+    return false;
   }
-  const fallbackPreset = fallbackPresetId ? getThemePresetById(fallbackPresetId) : null;
-  const id = rawId || createCustomThemePresetId(value?.label || value?.name);
-  const label = normalizeThemeLibraryLabel(value?.label || value?.name || fallbackPreset?.label || id);
-  const rawTheme = value?.theme && typeof value.theme === "object" ? value.theme : value?.settings;
-  const settings = normalizeThemeSettings(
-    rawTheme && typeof rawTheme === "object"
-      ? rawTheme
-      : fallbackPreset?.settings
-  );
-  if (!id || !label || !settings || normalizeThemePresetId(id)) {
-    return null;
-  }
-  const presetId = fallbackPresetId || "";
-  return {
-    id,
-    label,
-    description: String(value?.description || "Saved theme"),
-    presetId,
-    preview: createCustomThemePresetPreview(settings),
-    settings
-  };
 }
 
-function normalizeStoredCustomThemePresets(rawValue) {
-  const values = Array.isArray(rawValue) ? rawValue : rawValue?.themes;
-  if (!Array.isArray(values)) {
-    return [];
-  }
-  const seenIds = new Set();
-  const themes = [];
-  for (const value of values) {
-    const theme = normalizeStoredCustomThemePreset(value);
-    if (!theme || seenIds.has(theme.id)) {
-      continue;
-    }
-    seenIds.add(theme.id);
-    themes.push(theme);
-  }
-  return themes;
-}
-
-function normalizeThemeLibraryPayload(rawValue, options = {}) {
-  const fallbackToDefault = options.fallbackToDefault !== false;
-  const defaultThemes = fallbackToDefault ? createDefaultThemeLibrary() : [];
-  return [
-    ...defaultThemes,
-    ...normalizeStoredCustomThemePresets(rawValue)
-  ];
-}
-
-function storedThemePresetPayload(preset) {
-  return {
-    id: preset.id,
-    label: preset.label,
-    description: preset.description,
-    presetId: preset.presetId || "",
-    theme: preset.settings
-  };
-}
-
-function settingsSignature(settings) {
-  return JSON.stringify(normalizeThemeSettings(settings));
-}
-
-function resolveDefaultActiveThemeId(themes = createDefaultThemeLibrary()) {
-  return normalizeThemeLibraryThemeId(DEFAULT_THEME_PRESET_ID, themes) || themes[0]?.id || DEFAULT_THEME_PRESET_ID;
-}
-
-function buildThemeStoragePayload({ activeThemeId = "", themeId = "", customPresets = [], themes = null } = {}) {
-  const themeLibrary = normalizeThemeLibraryPayload(themes || customPresets);
-  const customThemes = normalizeStoredCustomThemePresets(themeLibrary);
-  const normalizedThemeId = normalizeThemeLibraryThemeId(activeThemeId || themeId, themeLibrary);
-  const defaultThemeId = resolveDefaultActiveThemeId(themeLibrary);
-  if (!customThemes.length && (!normalizedThemeId || normalizedThemeId === defaultThemeId)) {
-    return null;
-  }
-  return {
-    version: THEME_STORAGE_VERSION,
-    activeThemeId: normalizedThemeId === defaultThemeId ? "" : normalizedThemeId,
-    themes: customThemes.map(storedThemePresetPayload)
-  };
-}
-
-function readThemeStorageState() {
-  const defaultThemes = createDefaultThemeLibrary();
+function readThemeStoragePayload() {
   if (typeof window === "undefined") {
-    return {
-      customPresets: defaultThemes,
-      themeId: resolveDefaultActiveThemeId(defaultThemes)
-    };
+    return null;
   }
   const rawValue = readStorageJson(window.localStorage, THEME_STORAGE_KEY);
-  if (!rawValue || rawValue.version !== THEME_STORAGE_VERSION) {
-    return {
-      customPresets: defaultThemes,
-      themeId: resolveDefaultActiveThemeId(defaultThemes)
-    };
-  }
-  const customPresets = normalizeThemeLibraryPayload(rawValue);
-  return {
-    customPresets,
-    themeId: normalizeThemeLibraryThemeId(rawValue.activeThemeId, customPresets) ||
-      resolveDefaultActiveThemeId(customPresets)
-  };
+  return rawValue?.version === THEME_STORAGE_VERSION ? rawValue : null;
 }
 
-function writeThemeStorageState(state = {}, options = {}) {
-  if (typeof window === "undefined") {
-    return true;
-  }
-  const payload = buildThemeStoragePayload(state);
-  if (!payload) {
-    return removeStorageItem(window.localStorage, THEME_STORAGE_KEY, options);
-  }
-  return writeStorageJson(window.localStorage, THEME_STORAGE_KEY, payload, options);
-}
-
-export function readCustomThemePresets() {
-  return readThemeStorageState().customPresets;
-}
-
-export function writeCustomThemePresets(customPresets, options = {}) {
-  const currentThemeState = readThemeStorageState();
-  const presets = normalizeThemeLibraryPayload(customPresets);
-  return writeThemeStorageState({
-    themeId: currentThemeState.themeId,
-    customPresets: presets
-  }, options);
-}
-
-export function writeCustomThemePresetLibrary(customPresets, options = {}) {
-  const presets = normalizeThemeLibraryPayload(customPresets);
-  return writeThemeStorageState({
-    themeId: "",
-    customPresets: presets
-  }, options);
-}
-
-function createCustomThemePresetRecord(label, themeSettings, existingPresets, options = {}) {
-  const normalizedLabel = normalizeThemeLibraryLabel(label);
-  if (!normalizedLabel) {
-    return null;
-  }
-  const settings = normalizeThemeSettings(themeSettings);
-  const sourceTheme = getAvailableThemePresetById(options.sourceThemeId || options.presetId, existingPresets);
-  return normalizeStoredCustomThemePreset({
-    id: createUniqueThemePresetId(normalizedLabel, existingPresets),
-    label: normalizedLabel,
-    presetId: normalizeThemePresetId(options.sourcePresetId || sourceTheme?.presetId || sourceTheme?.id),
-    settings
-  });
-}
-
-export function saveCustomThemePreset(label, themeSettings, options = {}) {
-  const existingPresets = normalizeThemeLibraryPayload(options.customPresets || readCustomThemePresets());
-  const preset = createCustomThemePresetRecord(label, themeSettings, existingPresets, options);
-  if (!preset) {
-    return null;
-  }
-  const nextPresets = [
-    ...existingPresets,
-    preset
-  ];
-  if (!writeCustomThemePresets(nextPresets, options)) {
-    return null;
-  }
-  return preset;
-}
-
-export function saveAndActivateCustomThemePreset(label, themeSettings, options = {}) {
-  const existingPresets = normalizeThemeLibraryPayload(options.customPresets || readCustomThemePresets());
-  const preset = createCustomThemePresetRecord(label, themeSettings, existingPresets, options);
-  if (!preset) {
-    return null;
-  }
-  const customPresets = [
-    ...existingPresets,
-    preset
-  ];
-  if (!writeThemeStorageState({
-    activeThemeId: preset.id,
-    customPresets
-  }, options)) {
-    return null;
-  }
-  return {
-    preset,
-    customPresets
-  };
-}
-
-export function deleteCustomThemePreset(presetId, options = {}) {
-  const currentThemeState = readThemeStorageState();
-  const existingPresets = normalizeStoredCustomThemePresets(currentThemeState.customPresets);
-  const normalizedPresetId = normalizeCustomThemeLibraryThemeId(presetId, existingPresets);
-  if (!normalizedPresetId) {
-    return false;
-  }
-  const nextPresets = existingPresets.filter((preset) => preset.id !== normalizedPresetId);
-  if (nextPresets.length === existingPresets.length) {
-    return true;
-  }
-  const nextThemeId = currentThemeState.themeId === normalizedPresetId
-    ? ""
-    : currentThemeState.themeId;
-  return writeThemeStorageState({
-    themeId: nextThemeId,
-    customPresets: nextPresets
-  }, options);
-}
-
-export function updateThemePresetSettings(presetId, themeSettings, options = {}) {
-  const currentThemeState = readThemeStorageState();
-  const existingPresets = normalizeStoredCustomThemePresets(currentThemeState.customPresets);
-  const normalizedPresetId = normalizeCustomThemeLibraryThemeId(presetId, existingPresets);
-  if (!normalizedPresetId) {
-    return false;
-  }
-  const settings = normalizeThemeSettings(themeSettings);
-  const nextPresets = existingPresets.map((preset) => (
-    preset.id === normalizedPresetId
-      ? {
-          ...preset,
-          preview: createCustomThemePresetPreview(settings),
-          settings
-        }
-      : preset
-  ));
-  return writeThemeStorageState({
-    themeId: normalizedPresetId,
-    customPresets: nextPresets
-  }, options);
-}
-
-export function resetThemePresetToDefault(presetId, options = {}) {
-  const currentThemeState = readThemeStorageState();
-  const existingPresets = normalizeStoredCustomThemePresets(currentThemeState.customPresets);
-  const normalizedPresetId = normalizeCustomThemeLibraryThemeId(presetId, existingPresets);
-  const theme = existingPresets.find((candidate) => candidate.id === normalizedPresetId);
-  const sourcePresetId = normalizeThemePresetId(theme?.presetId || theme?.id);
-  if (!theme || !sourcePresetId) {
-    return false;
-  }
-  const presetRecord = createThemeRecordFromPreset(getThemePresetById(sourcePresetId));
-  const nextTheme = {
-    ...theme,
-    presetId: sourcePresetId,
-    preview: createCustomThemePresetPreview(presetRecord.settings),
-    settings: presetRecord.settings
-  };
-  const nextPresets = existingPresets.map((candidate) => (
-    candidate.id === normalizedPresetId ? nextTheme : candidate
-  ));
-  return writeThemeStorageState({
-    themeId: currentThemeState.themeId,
-    customPresets: nextPresets
-  }, options);
-}
-
-export function restoreDefaultThemePresets(options = {}) {
-  if (typeof window === "undefined") {
-    return true;
-  }
-  return removeStorageItem(window.localStorage, THEME_STORAGE_KEY, options);
-}
-
-export function buildAvailableThemePresets(customPresets = readCustomThemePresets()) {
-  return normalizeThemeLibraryPayload(customPresets);
-}
-
-export function getAvailableThemePresetById(presetId, customPresets = readCustomThemePresets()) {
-  const normalizedCustomPresets = normalizeThemeLibraryPayload(customPresets);
-  const normalizedPresetId = normalizeThemeLibraryThemeId(presetId, normalizedCustomPresets);
-  return buildAvailableThemePresets(customPresets).find((preset) => preset.id === normalizedPresetId) || null;
-}
-
-export function cloneAvailableThemePresetSettings(presetId, customPresets = readCustomThemePresets()) {
-  const preset = getAvailableThemePresetById(presetId, customPresets);
-  return normalizeThemeSettings(preset?.settings || cloneThemePresetSettings(presetId));
-}
-
-export function getAvailableThemePresetIdForSettings(themeSettings, customPresets = readCustomThemePresets()) {
-  const normalizedSettings = normalizeThemeSettings(themeSettings);
-  const normalizedSignature = JSON.stringify(normalizedSettings);
-  for (const preset of normalizeThemeLibraryPayload(customPresets)) {
-    if (JSON.stringify(normalizeThemeSettings(preset.settings)) === normalizedSignature) {
-      return preset.id;
-    }
-  }
-  return null;
-}
-
-function cloneThemeSettingsState(
-  presetId = "",
-  settings = null,
-  customPresets = readCustomThemePresets()
-) {
-  const themes = normalizeThemeLibraryPayload(customPresets);
-  const normalizedPresetId = normalizeThemeLibraryThemeId(
-    presetId || resolveDefaultActiveThemeId(themes),
-    themes
-  ) || themes[0]?.id || DEFAULT_THEME_PRESET_ID;
-  return {
-    presetId: normalizedPresetId,
-    settings: normalizeThemeSettings(settings || cloneAvailableThemePresetSettings(normalizedPresetId, customPresets))
-  };
-}
-
-export function readThemeSettingsStateFromAppearanceQuery(customPresets = readCustomThemePresets()) {
-  if (typeof window === "undefined") {
-    return null;
-  }
-  const search = String(window.location?.search || "").trim();
-  if (!search) {
-    return null;
-  }
-  let params;
-  try {
-    params = new URLSearchParams(search);
-  } catch {
-    return null;
-  }
-  const requestedPresetId = String(params.get(THEME_APPEARANCE_QUERY_PARAM) || "").trim();
-  if (!requestedPresetId) {
-    return null;
-  }
-  // Canonicalize legacy/alias ids (e.g. ?appearance=workbench -> workbench-light)
-  // so older URLs keep resolving after the preset split.
-  const canonicalPresetId = getThemePresetById(requestedPresetId)?.id || requestedPresetId;
-  const presets = normalizeThemeLibraryPayload(customPresets);
-  const normalizedPresetId = normalizeThemeLibraryThemeId(canonicalPresetId, presets);
-  return normalizedPresetId ? cloneThemeSettingsState(normalizedPresetId, null, presets) : null;
-}
-
-function isPlainStorageObject(value) {
-  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
-}
-
-function normalizeDirectorySessionThemeSlice(value) {
-  if (!isPlainStorageObject(value) || !isPlainStorageObject(value.settings)) {
-    return null;
-  }
-  const settings = normalizeThemeSettings(value.settings);
-  if (!settings) {
-    return null;
-  }
-  return {
-    presetId: normalizeThemeLibraryId(value.presetId),
-    settings
-  };
-}
-
-export function createDirectorySessionThemeSlice(themeState = {}, customPresets = readCustomThemePresets()) {
-  if (!isPlainStorageObject(themeState) || !isPlainStorageObject(themeState.settings)) {
-    return null;
-  }
-  const themes = normalizeThemeLibraryPayload(customPresets);
-  const settings = normalizeThemeSettings(themeState.settings);
-  const presetId = normalizeThemeLibraryThemeId(themeState.presetId, themes) ||
-    getAvailableThemePresetIdForSettings(settings, themes) ||
-    resolveDefaultActiveThemeId(themes);
-  const savedPreset = getAvailableThemePresetById(presetId, themes);
-  if (savedPreset && settingsSignature(settings) === settingsSignature(savedPreset.settings)) {
-    return null;
-  }
-  return {
-    presetId,
-    settings
-  };
-}
-
-export function isDirectorySessionThemeSlice(themeSlice) {
-  return normalizeDirectorySessionThemeSlice(themeSlice) !== null;
-}
-
-export function readDirectoryThemeSettingsState(customPresets = readCustomThemePresets()) {
-  const queryState = readThemeSettingsStateFromAppearanceQuery(customPresets);
-  if (queryState) {
-    return queryState;
-  }
-  const globalThemeState = readThemeSettingsState(customPresets);
-  const sessionTheme = readCadDirectorySessionState({ customPresets }).theme;
-  if (!isDirectorySessionThemeSlice(sessionTheme)) {
-    return globalThemeState;
-  }
-  const themes = normalizeThemeLibraryPayload(customPresets);
-  const presetId = normalizeThemeLibraryThemeId(sessionTheme.presetId, themes) ||
-    globalThemeState.presetId;
-  return {
-    presetId,
-    settings: normalizeThemeSettings(sessionTheme.settings)
-  };
-}
-
-export function serializeThemeSettingsForStorage(themeSettings, options = {}) {
-  const customPresets = normalizeThemeLibraryPayload(options.themes || options.customPresets || readCustomThemePresets());
-  const presetId = normalizeThemeLibraryThemeId(
-    options.presetId || getAvailableThemePresetIdForSettings(themeSettings, customPresets),
-    customPresets
-  ) || resolveDefaultActiveThemeId(customPresets);
-  return buildThemeStoragePayload({
-    themeId: presetId,
-    customPresets
-  });
-}
-
-function storageValuesEqual(a, b) {
-  return JSON.stringify(a) === JSON.stringify(b);
-}
-
-export function parseThemeSettingsStateFromStorage(rawValue, customPresets = null) {
-  const presets = rawValue?.version === THEME_STORAGE_VERSION
-    ? normalizeThemeLibraryPayload(rawValue)
-    : normalizeThemeLibraryPayload(customPresets);
-  const storedPresetId = rawValue?.version === THEME_STORAGE_VERSION
-    ? normalizeThemeLibraryThemeId(rawValue.activeThemeId, presets)
-    : "";
-  return cloneThemeSettingsState(storedPresetId, null, presets);
+export function parseThemeSettingsStateFromStorage(rawValue, options = {}) {
+  const payload = rawValue?.version === THEME_STORAGE_VERSION ? rawValue : null;
+  return createThemeState(payload?.themeId, payload?.custom, options);
 }
 
 export function parseThemeSettingsFromStorage(rawValue) {
   return parseThemeSettingsStateFromStorage(rawValue).settings;
 }
 
-export function readThemeSettingsState(customPresets = readCustomThemePresets()) {
-  const queryState = readThemeSettingsStateFromAppearanceQuery(customPresets);
-  if (queryState) {
-    return queryState;
-  }
-  if (typeof window === "undefined") {
-    return cloneThemeSettingsState("", null, customPresets);
-  }
-  const storageState = readThemeStorageState();
-  const presets = customPresets ? normalizeThemeLibraryPayload(customPresets) : storageState.customPresets;
-  const storedPresetId = normalizeThemeLibraryThemeId(storageState.themeId, presets);
-  return cloneThemeSettingsState(storedPresetId, null, presets);
+export function readThemeSettingsState(options = {}) {
+  const payload = readThemeStoragePayload();
+  return createThemeState(payload?.themeId, payload?.custom, {
+    prefersDark: options.prefersDark ?? prefersDarkColorScheme()
+  });
 }
 
 export function readThemeSettings() {
   return readThemeSettingsState().settings;
 }
 
+// Select a theme. Presets and "system" clear nothing — the custom slot is kept so
+// the user can flip back to it — but they do become the active, rendered theme.
+export function writeThemeState(themeId, options = {}) {
+  if (typeof window === "undefined") {
+    return true;
+  }
+  const payload = readThemeStoragePayload();
+  const custom = payload?.custom ? normalizeThemeSettings(payload.custom) : null;
+  // "custom" with nothing in the slot is not a selectable theme; fall back first
+  // so the cleared-storage check below sees the id that will actually be stored.
+  const requestedThemeId = normalizeThemeId(themeId) || DEFAULT_THEME_ID;
+  const normalizedThemeId = requestedThemeId === CUSTOM_THEME_ID && !custom
+    ? DEFAULT_THEME_ID
+    : requestedThemeId;
+  if (normalizedThemeId === DEFAULT_THEME_ID && !custom) {
+    return removeStorageItem(window.localStorage, THEME_STORAGE_KEY, options);
+  }
+  return writeStorageJson(window.localStorage, THEME_STORAGE_KEY, {
+    version: THEME_STORAGE_VERSION,
+    themeId: normalizedThemeId,
+    custom
+  }, options);
+}
+
+// Any settings edit lands in the custom slot and activates it, overwriting
+// whatever was there: there is only ever one custom theme.
 export function writeThemeSettings(themeSettings, options = {}) {
   if (typeof window === "undefined") {
     return true;
   }
-  const serialized = serializeThemeSettingsForStorage(themeSettings, options);
-  if (!serialized) {
-    return removeStorageItem(window.localStorage, THEME_STORAGE_KEY, options);
+  const settings = normalizeThemeSettings(themeSettings);
+  const matchingPresetId = getThemePresetIdForSettings(settings);
+  if (matchingPresetId) {
+    // Edited back to a preset exactly — record the preset, not a custom copy.
+    return writeStorageJson(window.localStorage, THEME_STORAGE_KEY, {
+      version: THEME_STORAGE_VERSION,
+      themeId: matchingPresetId,
+      custom: readThemeStoragePayload()?.custom || null
+    }, options);
   }
-  return writeStorageJson(window.localStorage, THEME_STORAGE_KEY, serialized, options);
+  return writeStorageJson(window.localStorage, THEME_STORAGE_KEY, {
+    version: THEME_STORAGE_VERSION,
+    themeId: CUSTOM_THEME_ID,
+    custom: settings
+  }, options);
 }
+
+
+function isPlainStorageObject(value) {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+// A directory may pin its own theme, overriding the global one for that folder.
+// Same shape as global theme state: an id plus the custom slot it may point at.
+function normalizeDirectorySessionThemeSlice(value) {
+  if (!isPlainStorageObject(value)) {
+    return null;
+  }
+  const themeId = normalizeThemeId(value.themeId);
+  if (!themeId) {
+    return null;
+  }
+  const custom = isPlainStorageObject(value.custom) ? normalizeThemeSettings(value.custom) : null;
+  if (themeId === CUSTOM_THEME_ID && !custom) {
+    return null;
+  }
+  return { themeId, custom };
+}
+
+export function createDirectorySessionThemeSlice(themeState = {}) {
+  const slice = normalizeDirectorySessionThemeSlice(themeState);
+  if (!slice) {
+    return null;
+  }
+  // Only store a slice that actually overrides something. Persisting one that
+  // merely restates the global theme would later shadow a global theme change.
+  const globalPayload = readThemeStoragePayload();
+  const globalThemeId = normalizeThemeId(globalPayload?.themeId) || DEFAULT_THEME_ID;
+  const globalCustom = globalPayload?.custom ? normalizeThemeSettings(globalPayload.custom) : null;
+  if (
+    slice.themeId === globalThemeId &&
+    JSON.stringify(slice.custom) === JSON.stringify(globalCustom)
+  ) {
+    return null;
+  }
+  return slice;
+}
+
+export function isDirectorySessionThemeSlice(themeSlice) {
+  return normalizeDirectorySessionThemeSlice(themeSlice) !== null;
+}
+
+export function readDirectoryThemeSettingsState(options = {}) {
+  const resolveOptions = {
+    prefersDark: options.prefersDark ?? prefersDarkColorScheme()
+  };
+  const sessionTheme = normalizeDirectorySessionThemeSlice(readCadDirectorySessionState(options).theme);
+  if (!sessionTheme) {
+    return readThemeSettingsState(resolveOptions);
+  }
+  return createThemeState(sessionTheme.themeId, sessionTheme.custom, resolveOptions);
+}
+
 
 export function normalizeCadWorkspaceGlassTone(value, fallback = CAD_WORKSPACE_DEFAULT_GLASS_TONE) {
   const normalized = String(value || "").trim().toLowerCase();

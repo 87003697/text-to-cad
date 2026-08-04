@@ -50,24 +50,21 @@ import {
 import { ToggleGroup, ToggleGroupItem } from "../ui/toggle-group";
 import { cn } from "@/ui/utils";
 import {
-  cloneThemePresetSettings,
+  CUSTOM_THEME_ID,
   DEFAULT_FILL_LIGHT_SETTINGS,
   DEFAULT_RIM_LIGHT_SETTINGS,
-  DEFAULT_THEME_PRESET_ID,
+  DEFAULT_THEME_ID,
   ENVIRONMENT_PRESETS,
-  THEME_PRESETS,
-  THEME_COLOR_MODES,
+  getThemePresetById,
   MAX_THEME_FILL_COLORS,
-  normalizeThemePresetId,
-  normalizeThemeSettings,
-  resolveSystemThemePresetId
+  resolveSystemThemePresetId,
+  SYSTEM_THEME_ID,
+  THEME_COLOR_MODES,
+  THEME_PRESETS
 } from "cadjs/lib/themeSettings";
 import {
-  CAD_EDGE_COLOR,
-  CAD_EDGE_HIGHLIGHT_COLOR,
   DEFAULT_EXPLODED_VIEW_SETTINGS,
   CAMERA_PROJECTION,
-  normalizeDisplayEdgeSettings,
   normalizeDisplaySettings,
   normalizeExplodedViewSettings
 } from "cadjs/lib/displaySettings";
@@ -99,9 +96,7 @@ import FileSheet, {
   FileSheetControlRow,
   FileSheetSliderField,
   FileSheetSubsection,
-  FileSheetSubsubsection,
   FileSheetToggleRow,
-  FileSheetValueInput,
   parseFileSheetNumberInput
 } from "./FileSheet";
 
@@ -138,6 +133,7 @@ const EXPLODE_ORDER_OPTIONS = [
   { value: "sequential", label: "Sequence", title: "Parts separate in order across the Amount slider" }
 ];
 
+
 const PRIMARY_LIGHT_OPTIONS = [
   { value: "directional", label: "Key" },
   { value: "fill", label: "Fill" },
@@ -161,13 +157,6 @@ const compactInputClasses = FILE_SHEET_COMPACT_INPUT_CLASSES;
 const precisionSliderClasses = FILE_SHEET_PRECISION_SLIDER_CLASSES;
 const SLIDER_COMMIT_DELAY_MS = 120;
 const AXIS_OPTIONS = Object.freeze(["x", "y", "z"]);
-const EDGE_CLASS_CONTROLS = Object.freeze([
-  Object.freeze({ id: "feature", label: "Feature", defaultColor: CAD_EDGE_COLOR, defaultOpacity: 1, defaultThickness: 1.15 }),
-  Object.freeze({ id: "tangent", label: "Tangent", defaultColor: CAD_EDGE_COLOR, defaultOpacity: 0.5, defaultThickness: 1.15 }),
-  Object.freeze({ id: "seam", label: "Seam", defaultColor: CAD_EDGE_COLOR, defaultOpacity: 0.85, defaultThickness: 1.15 }),
-  Object.freeze({ id: "degenerate", label: "Degenerate", defaultColor: CAD_EDGE_COLOR, defaultOpacity: 1, defaultThickness: 0 })
-]);
-
 function clamp(value, min, max) {
   return Math.min(Math.max(value, min), max);
 }
@@ -208,10 +197,27 @@ function Field({ label, value, trailing, children, className, contentClassName }
   );
 }
 
-function ControlSubsection({ title, trailing = null, children, className, hideFirstSeparator = true }) {
+// A section whose contents are gated by an on/off switch renders that switch
+// tight against its heading — "Floor [switch]" reads as one statement, where a
+// switch pushed to the far edge of the header reads as an unrelated control.
+// `toggle` is the on/off for this section; `trailing` stays for anything that
+// genuinely belongs at the opposite edge.
+function ControlSubsection({
+  title,
+  toggle = null,
+  trailing = null,
+  children,
+  className,
+  hideFirstSeparator = true
+}) {
   return (
     <FileSheetSubsection
-      title={title}
+      title={toggle ? (
+        <span className="flex items-center gap-2">
+          <span>{title}</span>
+          {toggle}
+        </span>
+      ) : title}
       trailing={trailing}
       className={className}
       hideFirstSeparator={hideFirstSeparator}
@@ -221,15 +227,15 @@ function ControlSubsection({ title, trailing = null, children, className, hideFi
   );
 }
 
-function NestedControlGroup({ title, children, className, contentClassName }) {
+// The switch that gates a ControlSubsection's contents.
+function SubsectionToggle({ label, checked, onCheckedChange, disabled = false }) {
   return (
-    <FileSheetSubsubsection
-      title={title}
-      className={className}
-      contentClassName={contentClassName}
-    >
-      {children}
-    </FileSheetSubsubsection>
+    <FileSheetBooleanToggle
+      checked={checked}
+      onCheckedChange={onCheckedChange}
+      disabled={disabled}
+      ariaLabel={label}
+    />
   );
 }
 
@@ -331,115 +337,6 @@ function SliderInput({ value, min, max, step = 0.01, onChange }) {
       onValueChange={(nextValue) => scheduleCommitValue(nextValue[0] ?? draftValue)}
       onValueCommit={(nextValue) => commitValue(nextValue[0] ?? draftValue)}
       className={precisionSliderClasses}
-    />
-  );
-}
-
-function CompactNumberInput({
-  value,
-  min = 0,
-  max = 6,
-  digits = 2,
-  disabled = false,
-  ariaLabel,
-  onChange
-}) {
-  const numericValue = Number.isFinite(Number(value)) ? Number(value) : min;
-  const formattedValue = formatNumber(numericValue, digits);
-  const commitValue = (nextValue) => {
-    const resolvedValue = parseFileSheetNumberInput(nextValue, {
-      fallback: numericValue,
-      min,
-      max
-    });
-    if (Math.abs(resolvedValue - numericValue) > 1e-9) {
-      onChange?.(resolvedValue);
-    }
-  };
-
-  return (
-    <FileSheetValueInput
-      value={formattedValue}
-      onValueCommit={commitValue}
-      disabled={disabled}
-      ariaLabel={ariaLabel}
-      inputMode="decimal"
-      className="h-full w-16 shrink-0 rounded-none border-0 bg-transparent px-1.5 py-0 text-right !text-[11px] font-medium tabular-nums shadow-none focus-visible:ring-0 dark:bg-transparent"
-    />
-  );
-}
-
-function EdgeMetricInput({
-  label,
-  color,
-  opacity,
-  thickness,
-  min = 0,
-  max = 6,
-  digits = 2,
-  disabled = false,
-  onColorChange,
-  onOpacityChange,
-  onThicknessChange
-}) {
-  return (
-    <div
-      className={cn(
-        "inline-flex h-7 shrink-0 items-center overflow-hidden rounded-md border border-input bg-transparent shadow-xs dark:bg-input/30",
-        disabled && "opacity-50"
-      )}
-    >
-      <ColorInput
-        value={color}
-        opacity={opacity}
-        showOpacity
-        showValue={false}
-        disabled={disabled}
-        onChange={onColorChange}
-        onOpacityChange={onOpacityChange}
-        className="h-7 w-7 rounded-none border-0 border-r border-input bg-transparent px-1.5 shadow-none"
-        swatchClassName="size-3.5"
-        title={`${label} edge color`}
-        aria-label={`${label} edge color`}
-      />
-      <CompactNumberInput
-        value={thickness}
-        min={min}
-        max={max}
-        digits={digits}
-        disabled={disabled}
-        ariaLabel={`${label} edge thickness`}
-        onChange={onThicknessChange}
-      />
-      <span className="pr-1.5 text-[10px] font-medium text-muted-foreground">px</span>
-    </div>
-  );
-}
-
-function EdgeClassControlRow({
-  label,
-  color,
-  thickness,
-  opacity,
-  onColorChange,
-  onThicknessChange,
-  onOpacityChange
-}) {
-  return (
-    <FileSheetControlRow
-      label={label}
-      trailing={(
-        <EdgeMetricInput
-          label={label}
-          color={color}
-          opacity={opacity}
-          thickness={thickness}
-          onColorChange={onColorChange}
-          onOpacityChange={onOpacityChange}
-          onThicknessChange={onThicknessChange}
-        />
-      )}
-      contentClassName="hidden"
     />
   );
 }
@@ -683,698 +580,99 @@ function SegmentedControl({ value, onChange, options }) {
   );
 }
 
-export function PresetSwatch({ preset = null }) {
-  if (!preset) {
-    return (
-      <span
-        className="h-4 w-8 shrink-0 rounded-md border border-dashed bg-muted"
-        aria-hidden="true"
-      />
-    );
-  }
-
+function PresetSwatch({ preview = null }) {
   return (
     <span
-      className="relative h-4 w-8 shrink-0 overflow-hidden rounded-md border shadow-[inset_0_0_0_1px_rgba(255,255,255,0.12)]"
-      style={{ background: preset.preview.background }}
+      className="inline-block size-3.5 shrink-0 rounded-[3px] border border-border/70"
+      style={{ background: preview?.accentColor || "var(--muted)" }}
       aria-hidden="true"
-    >
-      <span
-        className="absolute inset-y-0 right-0 w-3"
-        style={{ backgroundColor: preset.preview.accentColor, opacity: 0.9 }}
-      />
-    </span>
-  );
-}
-
-export function useSystemDefaultThemePresetId() {
-  const [systemDefaultPresetId, setSystemDefaultPresetId] = useState(() => {
-    if (typeof window === "undefined" || typeof window.matchMedia !== "function") {
-      return DEFAULT_THEME_PRESET_ID;
-    }
-    return resolveSystemThemePresetId({
-      prefersDark: window.matchMedia("(prefers-color-scheme: dark)").matches === true
-    });
-  });
-
-  useEffect(() => {
-    if (typeof window === "undefined" || typeof window.matchMedia !== "function") {
-      return undefined;
-    }
-
-    const colorSchemeQuery = window.matchMedia("(prefers-color-scheme: dark)");
-    const updateSystemDefaultPreset = () => {
-      setSystemDefaultPresetId(resolveSystemThemePresetId({
-        prefersDark: colorSchemeQuery.matches === true
-      }));
-    };
-
-    updateSystemDefaultPreset();
-    colorSchemeQuery.addEventListener?.("change", updateSystemDefaultPreset);
-    return () => {
-      colorSchemeQuery.removeEventListener?.("change", updateSystemDefaultPreset);
-    };
-  }, []);
-
-  return systemDefaultPresetId;
-}
-
-function orderedThemePresets(presets, systemDefaultPresetId) {
-  const defaultPresetIndex = presets.findIndex((preset) => preset.id === systemDefaultPresetId);
-  if (defaultPresetIndex <= 0) {
-    return presets;
-  }
-  return [
-    presets[defaultPresetIndex],
-    ...presets.slice(0, defaultPresetIndex),
-    ...presets.slice(defaultPresetIndex + 1)
-  ];
-}
-
-function resolveActiveThemePreset(themePresets, themePresetId, themeSettings) {
-  const directPreset = themePresets.find((preset) => preset.id === themePresetId) || null;
-  if (directPreset) {
-    return directPreset;
-  }
-  const currentThemeSettingsSignature = settingsSignature(themeSettings);
-  return themePresets.find((preset) => settingsSignature(preset.settings) === currentThemeSettingsSignature) || null;
-}
-
-function themeSettingsChangedFromPreset(preset, themeSettings) {
-  return !preset || settingsSignature(preset.settings) !== settingsSignature(themeSettings);
-}
-
-function themePresetIsCustom(preset) {
-  return String(preset?.id || "").startsWith("custom:");
-}
-
-function themePresetCanResetToDefault(preset) {
-  const presetId = normalizeThemePresetId(preset?.presetId || preset?.id);
-  return Boolean(
-    themePresetIsCustom(preset) &&
-    presetId &&
-    settingsSignature(preset.settings) !== settingsSignature(cloneThemePresetSettings(presetId))
-  );
-}
-
-function themePresetCanUpdate(preset) {
-  return themePresetIsCustom(preset);
-}
-
-function themePresetCanDelete(preset) {
-  return themePresetIsCustom(preset);
-}
-
-function themeLibraryChangedFromDefaults(themePresets = []) {
-  if (!Array.isArray(themePresets) || !themePresets.length) {
-    return false;
-  }
-  if (themePresets.length !== THEME_PRESETS.length) {
-    return true;
-  }
-  for (let index = 0; index < THEME_PRESETS.length; index += 1) {
-    const defaultPreset = THEME_PRESETS[index];
-    const theme = themePresets[index];
-    if (!theme || theme.id !== defaultPreset.id || theme.label !== defaultPreset.label) {
-      return true;
-    }
-    if (normalizeThemePresetId(theme.presetId || theme.id) !== defaultPreset.id) {
-      return true;
-    }
-    if (settingsSignature(theme.settings) !== settingsSignature(defaultPreset.settings)) {
-      return true;
-    }
-  }
-  return false;
-}
-
-function ThemeDirtyIndicator({ className }) {
-  return (
-    <span
-      aria-hidden="true"
-      className={cn("h-2 w-2 shrink-0 rounded-full bg-blue-500", className)}
     />
   );
 }
 
-function ThemePresetOverflowMenu({
-  preset,
-  canDeleteTheme,
-  canResetToDefault,
-  onActionActiveChange,
-  onDelete,
-  onEdit,
-  onReset
-}) {
-  const [open, setOpen] = useState(false);
-  const label = String(preset?.label || "theme").trim() || "theme";
-  const actionsLabel = `Theme actions for ${label}`;
-
-  const setActionActive = (nextActive) => {
-    onActionActiveChange?.(nextActive);
-  };
-
-  const handleOpenChange = (nextOpen) => {
-    setOpen(nextOpen);
-    setActionActive(nextOpen);
-  };
-
-  const stopMenuPropagation = (event) => {
-    event.stopPropagation();
-  };
-  const handleActionSelect = (event, action) => {
-    event.preventDefault();
-    event.stopPropagation();
-    setActionActive(false);
-    action?.();
-  };
-
-  const handleTriggerBlur = (event) => {
-    if (!open && !event.currentTarget.contains(event.relatedTarget)) {
-      setActionActive(false);
-    }
-  };
-
-  return (
-    <DropdownMenuSub open={open} onOpenChange={handleOpenChange}>
-      <DropdownMenuSubTrigger
-        showChevron={false}
-        data-theme-menu-action=""
-        aria-label={actionsLabel}
-        title={actionsLabel}
-        className={cn(
-          "theme-preset-overflow-trigger flex size-7 shrink-0 items-center justify-center rounded-md p-0",
-          "text-muted-foreground transition-colors hover:bg-accent hover:text-accent-foreground",
-          "focus:bg-accent focus:text-accent-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-        )}
-        onPointerEnter={() => setActionActive(true)}
-        onPointerLeave={() => {
-          if (!open) {
-            setActionActive(false);
-          }
-        }}
-        onFocus={() => setActionActive(true)}
-        onBlur={handleTriggerBlur}
-        onMouseDown={stopMenuPropagation}
-        onPointerDown={stopMenuPropagation}
-        onKeyDown={stopMenuPropagation}
-      >
-        <MoreHorizontal className="h-4 w-4" strokeWidth={2} aria-hidden="true" />
-      </DropdownMenuSubTrigger>
-      <DropdownMenuSubContent sideOffset={6} className="w-40">
-        <DropdownMenuItem
-          className="gap-2 text-xs"
-          onSelect={(event) => handleActionSelect(event, onEdit)}
-        >
-          <Pencil className="h-3.5 w-3.5" strokeWidth={2} aria-hidden="true" />
-          <span>Edit</span>
-        </DropdownMenuItem>
-        {canResetToDefault ? (
-          <DropdownMenuItem
-            className="gap-2 text-xs"
-            onSelect={(event) => handleActionSelect(event, onReset)}
-          >
-            <RotateCcw className="h-3.5 w-3.5" strokeWidth={2} aria-hidden="true" />
-            <span>Reset to preset</span>
-          </DropdownMenuItem>
-        ) : null}
-        <DropdownMenuSeparator />
-        <DropdownMenuItem
-          variant="destructive"
-          disabled={!canDeleteTheme}
-          className="gap-2 text-xs"
-          onSelect={(event) => handleActionSelect(event, canDeleteTheme ? onDelete : null)}
-        >
-          <Trash2 className="h-3.5 w-3.5" strokeWidth={2} aria-hidden="true" />
-          <span>Delete</span>
-        </DropdownMenuItem>
-      </DropdownMenuSubContent>
-    </DropdownMenuSub>
-  );
-}
-
-function ThemeWarningDialog({
-  open,
-  onOpenChange,
-  title,
-  description,
-  actionLabel,
-  onConfirm
-}) {
-  return (
-    <AlertDialog open={open} onOpenChange={onOpenChange}>
-      <AlertDialogContent className="sm:max-w-sm">
-        <AlertDialogHeader>
-          <AlertDialogTitle>{title}</AlertDialogTitle>
-          <AlertDialogDescription>{description}</AlertDialogDescription>
-        </AlertDialogHeader>
-        <AlertDialogFooter>
-          <AlertDialogCancel>Cancel</AlertDialogCancel>
-          <AlertDialogAction
-            className="bg-destructive text-white hover:bg-destructive/90"
-            onClick={onConfirm}
-          >
-            {actionLabel}
-          </AlertDialogAction>
-        </AlertDialogFooter>
-      </AlertDialogContent>
-    </AlertDialog>
-  );
-}
-
-function SaveThemeDialog({
-  defaultName,
-  onOpenChange,
-  onSave,
-  open
-}) {
-  const inputId = useId();
-  const [draftName, setDraftName] = useState(defaultName);
-  const normalizedDraftName = draftName.trim();
-
+// Tracks the OS light/dark preference so the System entry can name the preset it
+// currently resolves to.
+export function useSystemDefaultThemePresetId() {
+  const [prefersDark, setPrefersDark] = useState(false);
   useEffect(() => {
-    if (open) {
-      setDraftName(defaultName);
+    if (typeof window === "undefined" || typeof window.matchMedia !== "function") {
+      return undefined;
     }
-  }, [defaultName, open]);
-
-  const handleSubmit = (event) => {
-    event.preventDefault();
-    if (!normalizedDraftName || typeof onSave !== "function") {
-      return;
+    let query;
+    try {
+      query = window.matchMedia("(prefers-color-scheme: dark)");
+    } catch {
+      return undefined;
     }
-    const savedPreset = onSave(normalizedDraftName);
-    if (savedPreset) {
-      onOpenChange?.(false);
-    }
-  };
-
-  return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="p-5 sm:max-w-sm">
-        <form className="grid gap-4" onSubmit={handleSubmit}>
-          <DialogHeader className="gap-1.5">
-            <DialogTitle className="text-base">Save Theme</DialogTitle>
-            <DialogDescription className="sr-only">
-              Enter a name for this theme.
-            </DialogDescription>
-          </DialogHeader>
-          <div className="grid gap-1.5">
-            <label className={fieldLabelClasses} htmlFor={inputId}>
-              Theme name
-            </label>
-            <Input
-              id={inputId}
-              value={draftName}
-              autoFocus
-              onChange={(event) => setDraftName(event.target.value)}
-            />
-          </div>
-          <DialogFooter>
-            <DialogClose asChild>
-              <Button type="button" variant="outline" size="sm">
-                Cancel
-              </Button>
-            </DialogClose>
-            <Button type="submit" size="sm" disabled={!normalizedDraftName}>
-              Save theme
-            </Button>
-          </DialogFooter>
-        </form>
-      </DialogContent>
-    </Dialog>
-  );
+    const sync = () => setPrefersDark(query.matches === true);
+    sync();
+    query.addEventListener?.("change", sync);
+    return () => query.removeEventListener?.("change", sync);
+  }, []);
+  return resolveSystemThemePresetId({ prefersDark });
 }
 
-export function ThemePresetDropdown({
-  themePresets = [],
-  themeSettings,
-  themePresetId = "",
-  updateThemeSettings,
-  handleDeleteCustomThemePreset,
-  handleEditThemePreset,
-  handleResetThemePresetToDefault,
-  handleRestoreDefaultThemePresets,
-  appearanceEditing = false,
-  onOpenAppearanceEditor,
-  onCloseAppearanceEditor,
-  triggerClassName,
-  iconClassName
+// The theme picker: System, then the built-in presets, then Custom once the user
+// has edited something. Presets are read-only, so picking one is both "apply"
+// and "reset" — there is no save, restore, rename, or delete.
+function ThemePresetSection({
+  themeId = DEFAULT_THEME_ID,
+  hasCustomTheme = false,
+  onSelectTheme
 }) {
-  const [menuOpen, setMenuOpen] = useState(false);
-  const [deleteThemeId, setDeleteThemeId] = useState("");
-  const [resetThemeId, setResetThemeId] = useState("");
-  const [restoreThemesDialogOpen, setRestoreThemesDialogOpen] = useState(false);
-  const [activeActionThemeId, setActiveActionThemeId] = useState("");
-  const systemDefaultPresetId = useSystemDefaultThemePresetId();
-  const orderedPresets = useMemo(
-    () => orderedThemePresets(themePresets, systemDefaultPresetId),
-    [themePresets, systemDefaultPresetId]
-  );
-  const activeThemePreset = useMemo(
-    () => resolveActiveThemePreset(themePresets, themePresetId, themeSettings),
-    [themePresets, themePresetId, themeSettings]
-  );
-  const activeThemePresetId = activeThemePreset?.id || "";
-  const activeThemeLabel = activeThemePreset?.label || "Theme";
-  const deleteThemePreset = themePresets.find((preset) => preset.id === deleteThemeId) || null;
-  const resetThemePreset = themePresets.find((preset) => preset.id === resetThemeId) || null;
-  const themeLibraryHasChanged = useMemo(
-    () => themeLibraryChangedFromDefaults(themePresets),
-    [themePresets]
-  );
+  const systemPresetId = useSystemDefaultThemePresetId();
+  const systemPreset = getThemePresetById(systemPresetId);
+  const options = useMemo(() => [
+    {
+      value: SYSTEM_THEME_ID,
+      label: "System",
+      hint: systemPreset?.label || "",
+      preview: systemPreset?.preview || null
+    },
+    ...THEME_PRESETS.map((preset) => ({
+      value: preset.id,
+      label: preset.label,
+      hint: "",
+      preview: preset.preview || null
+    })),
+    ...(hasCustomTheme ? [{
+      value: CUSTOM_THEME_ID,
+      label: "None",
+      hint: "",
+      preview: null
+    }] : [])
+  ], [hasCustomTheme, systemPreset]);
 
-  const handleMenuOpenChange = (nextOpen) => {
-    // While the appearance editor is open, the trigger acts as a toggle:
-    // clicking it closes the editor instead of reopening this menu.
-    if (nextOpen && appearanceEditing) {
-      onCloseAppearanceEditor?.();
-      setMenuOpen(false);
-      return;
-    }
-    setMenuOpen(nextOpen);
-    if (!nextOpen) {
-      setActiveActionThemeId("");
-    }
-  };
-
-  const clearThemeMenuActionState = (presetId) => {
-    setActiveActionThemeId((currentThemeId) => (
-      currentThemeId === presetId ? "" : currentThemeId
-    ));
-  };
-
-  const applyThemePreset = (presetId) => {
-    const preset = themePresets.find((candidate) => candidate.id === presetId);
-    if (!preset) {
-      return;
-    }
-    updateThemeSettings?.(preset.settings, {
-      persistGlobal: true,
-      presetId: preset.id
-    });
-  };
-
-  const handleDeleteThemePreset = (presetId) => {
-    const preset = themePresets.find((candidate) => candidate.id === presetId);
-    if (themePresetCanDelete(preset) && typeof handleDeleteCustomThemePreset === "function") {
-      setDeleteThemeId(presetId);
-      setMenuOpen(false);
-    }
-  };
-
-  const handleConfirmDeleteTheme = () => {
-    if (deleteThemePreset && typeof handleDeleteCustomThemePreset === "function") {
-      handleDeleteCustomThemePreset(deleteThemePreset.id);
-    }
-    setDeleteThemeId("");
-  };
-
-  const handleEditTheme = (presetId) => {
-    setMenuOpen(false);
-    if (typeof onOpenAppearanceEditor === "function") {
-      onOpenAppearanceEditor(presetId);
-      return;
-    }
-    const didEdit = typeof handleEditThemePreset === "function"
-      ? handleEditThemePreset(presetId)
-      : false;
-    if (!didEdit) {
-      applyThemePreset(presetId);
-    }
-    setMenuOpen(false);
-  };
-
-  const handleResetThemePreset = (presetId) => {
-    setResetThemeId(presetId);
-    setMenuOpen(false);
-  };
-
-  const handleConfirmResetTheme = () => {
-    if (resetThemePreset && typeof handleResetThemePresetToDefault === "function") {
-      handleResetThemePresetToDefault(resetThemePreset.id);
-    }
-    setResetThemeId("");
-  };
-
-  const handleConfirmRestoreThemes = () => {
-    if (typeof handleRestoreDefaultThemePresets === "function") {
-      handleRestoreDefaultThemePresets();
-    }
-    setRestoreThemesDialogOpen(false);
-  };
+  const activeOption = options.find((option) => option.value === themeId) || options[0];
 
   return (
-    <>
-      <DropdownMenu open={menuOpen} onOpenChange={handleMenuOpenChange}>
-        <DropdownMenuTrigger asChild>
-          <Button
-            type="button"
-            variant="ghost"
-            size="icon-sm"
-            aria-label={`Appearance: ${activeThemeLabel}`}
-            title={`Appearance: ${activeThemeLabel}`}
-            aria-pressed={appearanceEditing}
-            className={cn(
-              triggerClassName,
-              // Match the file-sheet toggle's open/active state (activeIconButtonClasses).
-              appearanceEditing && "bg-accent text-accent-foreground"
-            )}
-          >
-            <Contrast className={iconClassName} strokeWidth={2} aria-hidden="true" />
-            <span className="sr-only">Appearance</span>
-          </Button>
-        </DropdownMenuTrigger>
-        <DropdownMenuContent align="end" sideOffset={6} className="w-64">
-          <DropdownMenuLabel className="px-2 py-1.5 text-xs text-muted-foreground">
-            Theme
-          </DropdownMenuLabel>
-          {orderedPresets.map((preset) => {
-            const active = preset.id === activeThemePresetId;
-            const canResetToDefault = themePresetCanResetToDefault(preset);
-            const canDeleteTheme = themePresetCanDelete(preset);
-            const actionActive = activeActionThemeId === preset.id;
-            return (
-              <div
-                key={preset.id}
-                data-active={active ? "true" : undefined}
-                data-action-hover={actionActive ? "true" : undefined}
-                aria-current={active ? "true" : undefined}
-                className={cn(
-                  "theme-preset-menu-item flex min-w-0 items-center gap-1 rounded-sm text-xs"
-                )}
-              >
-                <DropdownMenuItem
-                  className={cn(
-                    "theme-preset-menu-row min-w-0 flex-1 gap-2 px-2 py-1.5 text-xs",
-                    active && "font-semibold"
-                  )}
-                  data-theme-menu-row-surface=""
-                  onSelect={() => applyThemePreset(preset.id)}
-                >
-                  <PresetSwatch preset={preset} />
-                  <span className="min-w-0 flex-1 truncate">{preset.label}</span>
-                </DropdownMenuItem>
-                <span
-                  className="theme-preset-menu-actions ml-auto flex shrink-0 items-center gap-0.5 rounded-sm px-0.5 py-0.5"
-                >
-                  <ThemePresetOverflowMenu
-                    preset={preset}
-                    canDeleteTheme={canDeleteTheme}
-                    canResetToDefault={canResetToDefault}
-                    onActionActiveChange={(nextActive) => {
-                      if (nextActive) {
-                        setActiveActionThemeId(preset.id);
-                      } else {
-                        clearThemeMenuActionState(preset.id);
-                      }
-                    }}
-                    onEdit={() => handleEditTheme(preset.id)}
-                    onReset={() => handleResetThemePreset(preset.id)}
-                    onDelete={() => handleDeleteThemePreset(preset.id)}
-                  />
-                </span>
-              </div>
-            );
-          })}
-          {typeof onOpenAppearanceEditor === "function" ? (
-            <>
-              <DropdownMenuSeparator />
-              <DropdownMenuItem
+    <ControlSubsection title="Preset">
+      <Field>
+        <Select
+          value={activeOption.value}
+          onValueChange={(nextValue) => onSelectTheme?.(nextValue)}
+        >
+          <SelectTrigger size="sm" className="h-7 !text-[11px]" aria-label="Theme preset">
+            <span className="flex min-w-0 items-center gap-2">
+              <PresetSwatch preview={activeOption.preview} />
+              <SelectValue />
+            </span>
+          </SelectTrigger>
+          <SelectContent>
+            {options.map((option) => (
+              <SelectItem
+                key={option.value}
+                value={option.value}
                 className="text-xs"
-                onSelect={(event) => {
-                  event.preventDefault();
-                  setMenuOpen(false);
-                  onOpenAppearanceEditor("");
-                }}
+                icon={<PresetSwatch preview={option.preview} />}
               >
-                <Plus className="h-3.5 w-3.5" strokeWidth={2} aria-hidden="true" />
-                <span>Custom</span>
-              </DropdownMenuItem>
-            </>
-          ) : null}
-          {themeLibraryHasChanged ? (
-            <>
-              <DropdownMenuSeparator />
-              <DropdownMenuItem
-                className="text-xs"
-                onSelect={(event) => {
-                  event.preventDefault();
-                  setRestoreThemesDialogOpen(true);
-                  setMenuOpen(false);
-                }}
-              >
-                <RotateCcw className="h-3.5 w-3.5" strokeWidth={2} aria-hidden="true" />
-                <span>Restore defaults</span>
-              </DropdownMenuItem>
-            </>
-          ) : null}
-        </DropdownMenuContent>
-      </DropdownMenu>
-      <ThemeWarningDialog
-        open={Boolean(deleteThemePreset)}
-        onOpenChange={(nextOpen) => {
-          if (!nextOpen) {
-            setDeleteThemeId("");
-          }
-        }}
-        title="Delete Theme"
-        description={`Delete ${deleteThemePreset?.label || "this theme"}? This removes it from your theme list.`}
-        actionLabel="Delete theme"
-        onConfirm={handleConfirmDeleteTheme}
-      />
-      <ThemeWarningDialog
-        open={Boolean(resetThemePreset)}
-        onOpenChange={(nextOpen) => {
-          if (!nextOpen) {
-            setResetThemeId("");
-          }
-        }}
-        title="Reset Theme"
-        description={`Reset ${resetThemePreset?.label || "this theme"} to its built-in preset settings?`}
-        actionLabel="Reset theme"
-        onConfirm={handleConfirmResetTheme}
-      />
-      <ThemeWarningDialog
-        open={restoreThemesDialogOpen}
-        onOpenChange={setRestoreThemesDialogOpen}
-        title="Restore Defaults"
-        description="This clears saved theme changes, removes saved themes, and restores deleted presets."
-        actionLabel="Restore defaults"
-        onConfirm={handleConfirmRestoreThemes}
-      />
-    </>
-  );
-}
-
-function ThemeAppearanceSection({
-  themePresets = [],
-  themeSettings,
-  themePresetId = "",
-  updateThemeSettings,
-  handleResetThemeSettings,
-  handleSaveCustomThemePreset,
-  handleUpdateThemePresetSettings
-}) {
-  const [saveThemeDialogOpen, setSaveThemeDialogOpen] = useState(false);
-  const activeThemePreset = useMemo(
-    () => resolveActiveThemePreset(themePresets, themePresetId, themeSettings),
-    [themePresets, themePresetId, themeSettings]
-  );
-  const activeThemeId = activeThemePreset?.id || "";
-  const canUpdateActiveTheme = themePresetCanUpdate(activeThemePreset);
-  const themeHasChanged = themeSettingsChangedFromPreset(activeThemePreset, themeSettings);
-  const fallbackThemeName = activeThemePreset?.label
-    ? `${activeThemePreset.label} copy`
-    : "Theme copy";
-  // The primary action is "Update" for editable (custom) themes and "Save as"
-  // for built-ins, which can't be overwritten in place.
-  const canUpdate = canUpdateActiveTheme && typeof handleUpdateThemePresetSettings === "function";
-  const canSaveAs = typeof handleSaveCustomThemePreset === "function";
-  const primarySaveLabel = canUpdate ? "Update theme" : "Save as theme";
-  const primarySaveDisabled = !themeHasChanged || (canUpdate ? !activeThemeId : !canSaveAs);
-  const handlePrimarySave = () => {
-    if (canUpdate) {
-      handleUpdateTheme();
-    } else {
-      setSaveThemeDialogOpen(true);
-    }
-  };
-
-  const handleSaveTheme = (themeName) => {
-    if (!themeHasChanged || typeof handleSaveCustomThemePreset !== "function") {
-      return null;
-    }
-    return handleSaveCustomThemePreset(themeName);
-  };
-
-  const handleUpdateTheme = () => {
-    if (!themeHasChanged || !activeThemeId || !canUpdateActiveTheme || typeof handleUpdateThemePresetSettings !== "function") {
-      return;
-    }
-    handleUpdateThemePresetSettings(activeThemeId);
-  };
-
-  return (
-    <>
-      <ControlSubsection title="Theme">
-        <FileSheetControlRow>
-          <div className="w-full space-y-1.5">
-            <Button
-              type="button"
-              variant="default"
-              size="sm"
-              className={cn(
-                compactButtonClasses,
-                "relative w-full justify-center",
-                // Keep the disabled (nothing-to-save) state legible on dark
-                // backgrounds instead of fading the primary fill to invisibility.
-                "disabled:opacity-100 disabled:bg-muted disabled:text-muted-foreground"
-              )}
-              disabled={primarySaveDisabled}
-              onClick={handlePrimarySave}
-            >
-              <Save className="h-3 w-3" strokeWidth={2} aria-hidden="true" />
-              <span>{primarySaveLabel}</span>
-              {themeHasChanged ? (
-                <ThemeDirtyIndicator className="absolute right-1.5 top-1.5 h-1.5 w-1.5" />
-              ) : null}
-            </Button>
-            <div className="flex gap-1.5">
-              {canUpdate ? (
-                <Button
-                  type="button"
-                  variant="outline"
-                  size="sm"
-                  className={cn(compactButtonClasses, "flex-1 justify-center")}
-                  disabled={!themeHasChanged || !canSaveAs}
-                  onClick={() => setSaveThemeDialogOpen(true)}
-                >
-                  <span>Save as new</span>
-                </Button>
-              ) : null}
-              <Button
-                type="button"
-                variant="ghost"
-                size="sm"
-                className={cn(compactButtonClasses, "flex-1 justify-center text-muted-foreground")}
-                disabled={!themeHasChanged || !activeThemeId || typeof handleResetThemeSettings !== "function"}
-                onClick={() => handleResetThemeSettings?.()}
-              >
-                <RotateCcw className="h-3 w-3" strokeWidth={2} aria-hidden="true" />
-                <span>Restore</span>
-              </Button>
-            </div>
-          </div>
-        </FileSheetControlRow>
-      </ControlSubsection>
-      <SaveThemeDialog
-        defaultName={fallbackThemeName}
-        onOpenChange={setSaveThemeDialogOpen}
-        onSave={handleSaveTheme}
-        open={saveThemeDialogOpen}
-      />
-    </>
+                {option.hint ? `${option.label} · ${option.hint}` : option.label}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+      </Field>
+    </ControlSubsection>
   );
 }
 
@@ -1557,161 +855,17 @@ function explodeStepLabel(step, nameMap) {
   return names.length > 1 ? `${head} +${names.length - 1}` : head;
 }
 
-export function DisplaySettingsSection({
-  displaySettings,
-  updateDisplaySettings
-}) {
-  const normalizedDisplaySettings = useMemo(
-    () => normalizeDisplaySettings(displaySettings),
-    [displaySettings]
-  );
-  const normalizedEdgeSettings = useMemo(
-    () => normalizeDisplayEdgeSettings(normalizedDisplaySettings.edges),
-    [normalizedDisplaySettings.edges]
-  );
-  const setDisplay = (patch) => {
-    updateDisplaySettings?.((current) => ({
-      ...normalizeDisplaySettings(current),
-      ...patch
-    }));
-  };
-  const setEdges = (patch) => {
-    updateDisplaySettings?.((current) => {
-      const currentSettings = normalizeDisplaySettings(current);
-      return {
-        ...currentSettings,
-        edges: normalizeDisplayEdgeSettings({
-          ...currentSettings.edges,
-          ...patch
-        })
-      };
-    });
-  };
-  const setEdgeClass = (classId, patch) => {
-    updateDisplaySettings?.((current) => {
-      const currentSettings = normalizeDisplaySettings(current);
-      return {
-        ...currentSettings,
-        edges: normalizeDisplayEdgeSettings({
-          ...currentSettings.edges,
-          classes: {
-            ...(currentSettings.edges?.classes || {}),
-            [classId]: {
-              ...(currentSettings.edges?.classes?.[classId] || {}),
-              ...patch
-            }
-          }
-        })
-      };
-    });
-  };
-  const resetEdges = () => {
-    setDisplay({ edges: normalizeDisplayEdgeSettings() });
-  };
-
-  return (
-    <div className="py-2" data-cad-display-settings-section="true">
-      <ControlSubsection title="Mode">
-        <Field label="Style">
-          <Select
-            value={normalizedDisplaySettings.mode}
-            onValueChange={(nextValue) => setDisplay({ mode: nextValue })}
-          >
-            <SelectTrigger size="sm" className="h-7 !text-[11px]" aria-label="Display mode">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              {DISPLAY_MODE_OPTIONS.map((option) => (
-                <SelectItem
-                  key={option.value}
-                  value={option.value}
-                  className="text-xs"
-                  title={option.title}
-                >
-                  {option.label}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-        </Field>
-      </ControlSubsection>
-
-      <ControlSubsection title="Edges">
-        {EDGE_CLASS_CONTROLS.map((edgeClass) => {
-          const settings = normalizedEdgeSettings.classes?.[edgeClass.id] || {};
-          const color = settings.color || edgeClass.defaultColor;
-          const thickness = settings.thickness ?? edgeClass.defaultThickness;
-          const opacity = settings.opacity ?? edgeClass.defaultOpacity;
-          return (
-            <EdgeClassControlRow
-              key={edgeClass.id}
-              label={edgeClass.label}
-              color={color}
-              thickness={thickness}
-              opacity={opacity}
-              onColorChange={(nextValue) => setEdgeClass(edgeClass.id, { color: nextValue })}
-              onThicknessChange={(nextValue) => setEdgeClass(edgeClass.id, { thickness: nextValue })}
-              onOpacityChange={(nextValue) => setEdgeClass(edgeClass.id, { opacity: nextValue })}
-            />
-          );
-        })}
-
-        <FileSheetControlRow
-          label="Highlight"
-          trailing={(
-            <EdgeMetricInput
-              label="Highlight"
-              color={normalizedEdgeSettings.highlightColor || CAD_EDGE_HIGHLIGHT_COLOR}
-              opacity={normalizedEdgeSettings.highlightOpacity ?? 1}
-              thickness={normalizedEdgeSettings.highlightThickness ?? 3}
-              min={0.5}
-              max={6}
-              digits={1}
-              onColorChange={(nextValue) => setEdges({ highlightColor: nextValue })}
-              onOpacityChange={(nextValue) => setEdges({ highlightOpacity: nextValue })}
-              onThicknessChange={(nextValue) => setEdges({ highlightThickness: nextValue })}
-            />
-          )}
-          contentClassName="hidden"
-        />
-
-        <FileSheetControlRow>
-          <Button
-            type="button"
-            variant="outline"
-            size="sm"
-            className={compactButtonClasses}
-            onClick={resetEdges}
-            title="Reset edge display"
-          >
-            <RotateCcw className="h-3 w-3" strokeWidth={2} aria-hidden="true" />
-            <span>Reset</span>
-          </Button>
-        </FileSheetControlRow>
-      </ControlSubsection>
-    </div>
-  );
-}
-
-// Build the "Display" tab descriptor (STEP scene/display controls).
-export function buildDisplaySettingsTab(props) {
-  return {
-    id: FILE_SHEET_SECTION_IDS.THEME_DISPLAY,
-    title: "Display",
-    content: <DisplaySettingsSection {...props} />
-  };
-}
-
-// The dedicated "Clip" tab: slice the STEP model with an axis-aligned section
-// plane. The X/Y/Z sliders move the cut; Flip swaps the kept side. Sliders are
-// disabled until model bounds are known.
-export function ClipSettingsSection({
+// Clip: slice the STEP model with an axis-aligned section plane. The X/Y/Z
+// sliders move the cut; Flip swaps the kept side. Sliders are disabled until
+// model bounds are known. Always visible — there is no separate on/off, because
+// an offset of 0 already means "no cut".
+function ClipSubsection({
   displaySettings,
   updateDisplaySettings,
   clipBounds = null
 }) {
   const clip = useMemo(
-    () => normalizeStepClipSettings(normalizeDisplaySettings(displaySettings).clip),
+    () => normalizeStepClipSettings(displaySettings.clip),
     [displaySettings]
   );
   const setClip = (patch) => {
@@ -1738,113 +892,101 @@ export function ClipSettingsSection({
   };
 
   return (
-    <div className="py-2.5" data-cad-clip-settings-section="true">
-      <div className={FILE_SHEET_ROW_STACK_CLASSES}>
-        {AXIS_OPTIONS.map((axis) => {
-          const axisOffset = clip.offsets?.[axis] ?? DEFAULT_STEP_CLIP_SETTINGS.offsets[axis];
-          const axisSettings = {
-            ...clip,
-            axis,
-            offset: axisOffset,
-            offsets: { ...clip.offsets, [axis]: axisOffset }
-          };
-          const boundsForAxis = clipAxisBounds(clipBounds, axis);
-          const axisRange = Math.max(boundsForAxis.max - boundsForAxis.min, 0);
-          const clipPosition = clipAxisPosition(clipBounds, axisSettings);
-          return (
-            <FileSheetSliderField
-              key={axis}
-              label={axis.toUpperCase()}
-              value={`${formatMm(clipPosition)} mm`}
-              onValueCommit={(nextValue) => {
-                const nextPosition = parseFileSheetNumberInput(nextValue, {
-                  fallback: clipPosition,
-                  min: boundsForAxis.min,
-                  max: boundsForAxis.max
-                });
-                updateClipAxisOffset(
-                  axis,
-                  axisRange > 0 ? (nextPosition - boundsForAxis.min) / axisRange : axisOffset
-                );
+    <ControlSubsection title="Clip">
+      {AXIS_OPTIONS.map((axis) => {
+        const axisOffset = clip.offsets?.[axis] ?? DEFAULT_STEP_CLIP_SETTINGS.offsets[axis];
+        const axisSettings = {
+          ...clip,
+          axis,
+          offset: axisOffset,
+          offsets: { ...clip.offsets, [axis]: axisOffset }
+        };
+        const boundsForAxis = clipAxisBounds(clipBounds, axis);
+        const axisRange = Math.max(boundsForAxis.max - boundsForAxis.min, 0);
+        const clipPosition = clipAxisPosition(clipBounds, axisSettings);
+        return (
+          <FileSheetSliderField
+            key={axis}
+            label={axis.toUpperCase()}
+            value={`${formatMm(clipPosition)} mm`}
+            onValueCommit={(nextValue) => {
+              const nextPosition = parseFileSheetNumberInput(nextValue, {
+                fallback: clipPosition,
+                min: boundsForAxis.min,
+                max: boundsForAxis.max
+              });
+              updateClipAxisOffset(
+                axis,
+                axisRange > 0 ? (nextPosition - boundsForAxis.min) / axisRange : axisOffset
+              );
+            }}
+            valueInputProps={{
+              disabled: !axisRange,
+              ariaLabel: `Clip ${axis.toUpperCase()} position`
+            }}
+          >
+            <Slider
+              className={precisionSliderClasses}
+              value={[axisOffset]}
+              min={0}
+              max={1}
+              step={0.001}
+              disabled={!axisRange}
+              onValueChange={(value) => {
+                const nextOffset = Array.isArray(value) ? value[0] : value;
+                updateClipAxisOffset(axis, nextOffset);
               }}
-              valueInputProps={{
-                disabled: !axisRange,
-                ariaLabel: `Clip ${axis.toUpperCase()} position`
-              }}
-            >
-              <Slider
-                className={precisionSliderClasses}
-                value={[axisOffset]}
-                min={0}
-                max={1}
-                step={0.001}
-                disabled={!axisRange}
-                onValueChange={(value) => {
-                  const nextOffset = Array.isArray(value) ? value[0] : value;
-                  updateClipAxisOffset(axis, nextOffset);
-                }}
-                aria-label={`Clip ${axis.toUpperCase()} axis`}
-              />
-              <div className="mt-1 flex justify-between text-[10px] text-[var(--ui-text-muted)]">
-                <span>{formatMm(boundsForAxis.min)}</span>
-                <span>{formatMm(boundsForAxis.max)}</span>
-              </div>
-            </FileSheetSliderField>
-          );
-        })}
+              aria-label={`Clip ${axis.toUpperCase()} axis`}
+            />
+            <div className="mt-1 flex justify-between text-[10px] text-[var(--ui-text-muted)]">
+              <span>{formatMm(boundsForAxis.min)}</span>
+              <span>{formatMm(boundsForAxis.max)}</span>
+            </div>
+          </FileSheetSliderField>
+        );
+      })}
 
-        <div className="flex gap-1.5 px-2 pt-0.5">
-          <Button
-            type="button"
-            variant="outline"
-            size="sm"
-            className={cn(compactButtonClasses, "flex-1 justify-center")}
-            onClick={() => setClip({ invert: !clip.invert })}
-            aria-pressed={clip.invert}
-            title="Flip clip side"
-          >
-            <FlipHorizontal2 className="h-3 w-3" strokeWidth={2} aria-hidden="true" />
-            <span>Flip</span>
-          </Button>
-          <Button
-            type="button"
-            variant="ghost"
-            size="sm"
-            className={cn(compactButtonClasses, "flex-1 justify-center text-muted-foreground")}
-            onClick={resetClip}
-            title="Reset clip plane"
-          >
-            <RotateCcw className="h-3 w-3" strokeWidth={2} aria-hidden="true" />
-            <span>Reset</span>
-          </Button>
-        </div>
+      <div className="flex gap-1.5 px-2 pt-0.5">
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          className={cn(compactButtonClasses, "flex-1 justify-center")}
+          onClick={() => setClip({ invert: !clip.invert })}
+          aria-pressed={clip.invert}
+          title="Flip clip side"
+        >
+          <FlipHorizontal2 className="h-3 w-3" strokeWidth={2} aria-hidden="true" />
+          <span>Flip</span>
+        </Button>
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          className={cn(compactButtonClasses, "flex-1 justify-center text-muted-foreground")}
+          onClick={resetClip}
+          title="Reset clip plane"
+        >
+          <RotateCcw className="h-3 w-3" strokeWidth={2} aria-hidden="true" />
+          <span>Reset</span>
+        </Button>
       </div>
-    </div>
+    </ControlSubsection>
   );
 }
 
-// Build the "Clip" tab descriptor (STEP section-plane controls).
-export function buildClipSettingsTab(props) {
-  return {
-    id: FILE_SHEET_SECTION_IDS.THEME_CLIP,
-    title: "Clip",
-    content: <ClipSettingsSection {...props} />
-  };
-}
-
-// The dedicated "Exploded" tab. On/off lives in the Amount value (0 = fully
-// assembled); the Enable/Disable button just toggles Amount to/from zero, so
-// every control stays visible whether or not the view is currently exploded.
-// Automatic layout covers the common case; the Automatic/Custom switch — kept at
-// the top, above the controls it swaps — brings in an editable per-part step
-// list. Model: lib/viewer/explodedViewSteps.js.
-export function ExplodedSettingsSection({
+// Exploded view. On/off lives in the Amount value (0 = fully assembled), so the
+// header switch just moves Amount to/from zero and remembers the last non-zero
+// value. Automatic layout covers the common case; the Layout switch — kept above
+// the controls it swaps — brings in an editable per-part step list.
+// Model: lib/viewer/explodedViewSteps.js.
+function ExplodedSubsection({
   displaySettings,
   updateDisplaySettings,
   explodeMeshData = null
 }) {
   const exploded = useMemo(
-    () => normalizeExplodedViewSettings(normalizeDisplaySettings(displaySettings).exploded),
+    () => normalizeExplodedViewSettings(displaySettings.exploded),
     [displaySettings]
   );
 
@@ -1883,7 +1025,7 @@ export function ExplodedSettingsSection({
 
   // On/off is expressed through Amount: 0 assembles the model. Keep the viewer's
   // `enabled` flag in step so a non-zero amount actually explodes, and remember
-  // the last non-zero amount so Enable restores it rather than jumping to 100%.
+  // the last non-zero amount so the switch restores it rather than jumping to 100%.
   const lastAmountRef = useRef(exploded.amount > 0 ? exploded.amount : 1);
   useEffect(() => {
     if (exploded.amount > 0) {
@@ -1894,7 +1036,6 @@ export function ExplodedSettingsSection({
     const clamped = clamp(nextAmount, 0, 1);
     setExploded({ amount: clamped, enabled: clamped > 0 });
   };
-  const toggleActive = () => setAmount(active ? 0 : (lastAmountRef.current || 1));
 
   const convertToSteps = () => {
     const records = explodePseudoRecords(explodeMeshData);
@@ -1939,27 +1080,21 @@ export function ExplodedSettingsSection({
   };
 
   return (
-    <div className="py-2.5" data-cad-exploded-settings-section="true">
-      <div className="px-2">
-        <Button
-          type="button"
-          variant={active ? "outline" : "default"}
-          size="sm"
-          aria-pressed={active}
-          className="h-7 px-3 text-[11px] font-medium"
-          onClick={toggleActive}
-          title={active ? "Collapse the assembly" : "Explode the assembly"}
-        >
-          <span>{active ? "Disable" : "Enable"}</span>
-        </Button>
-      </div>
-
+    <ControlSubsection
+      title="Exploded"
+      toggle={(
+        <SubsectionToggle
+          label="Exploded view"
+          checked={active}
+          onCheckedChange={(checked) => setAmount(checked ? (lastAmountRef.current || 1) : 0)}
+          disabled={singlePart}
+        />
+      )}
+    >
       {singlePart ? (
-        <div className={cn(FILE_SHEET_ROW_STACK_CLASSES, "pt-2.5")}>
-          <div className="px-2 text-[11px] text-muted-foreground">Single part — nothing to explode.</div>
-        </div>
-      ) : (
-        <div className={cn(FILE_SHEET_ROW_STACK_CLASSES, "pt-2.5")}>
+        <div className="px-2 text-[11px] text-muted-foreground">Single part — nothing to explode.</div>
+      ) : active ? (
+        <>
           <FileSheetSliderField
             label="Amount"
             value={`${amountPercent}%`}
@@ -2140,9 +1275,9 @@ export function ExplodedSettingsSection({
           <div className="flex px-2 pt-0.5">
             <Button
               type="button"
-              variant="ghost"
+              variant="outline"
               size="sm"
-              className="h-7 px-2 text-[11px] text-muted-foreground hover:text-foreground"
+              className={compactButtonClasses}
               onClick={() => setExploded({ ...DEFAULT_EXPLODED_VIEW_SETTINGS, amount: 0, enabled: false })}
               title="Reset the exploded view to defaults"
             >
@@ -2150,32 +1285,102 @@ export function ExplodedSettingsSection({
               <span>Reset</span>
             </Button>
           </div>
-        </div>
-      )}
+        </>
+      ) : null}
+    </ControlSubsection>
+  );
+}
+
+// The single "Display" tab: how the model is drawn, then the two optional view
+// transforms. Style always applies, so it sits at the top with no group header
+// of its own; Section and Exploded are off most of the time, so each is a titled
+// group whose switch gates its controls. The tab therefore rests at three rows
+// and only grows for the transform actually in use.
+export function DisplaySettingsSection({
+  displaySettings,
+  updateDisplaySettings,
+  clipBounds = null,
+  explodeMeshData = null
+}) {
+  const normalizedDisplaySettings = useMemo(
+    () => normalizeDisplaySettings(displaySettings),
+    [displaySettings]
+  );
+  const setDisplay = (patch) => {
+    updateDisplaySettings?.((current) => ({
+      ...normalizeDisplaySettings(current),
+      ...patch
+    }));
+  };
+  return (
+    <div className="py-2" data-cad-display-settings-section="true">
+      <div className={FILE_SHEET_ROW_STACK_CLASSES}>
+        <Field label="Mode">
+          <Select
+            value={normalizedDisplaySettings.mode}
+            onValueChange={(nextValue) => setDisplay({ mode: nextValue })}
+          >
+            <SelectTrigger size="sm" className="h-7 !text-[11px]" aria-label="Display mode">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {DISPLAY_MODE_OPTIONS.map((option) => (
+                <SelectItem
+                  key={option.value}
+                  value={option.value}
+                  className="text-xs"
+                  title={option.title}
+                >
+                  {option.label}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </Field>
+      </div>
+
+      <ClipSubsection
+        displaySettings={normalizedDisplaySettings}
+        updateDisplaySettings={updateDisplaySettings}
+        clipBounds={clipBounds}
+      />
+      <ExplodedSubsection
+        displaySettings={normalizedDisplaySettings}
+        updateDisplaySettings={updateDisplaySettings}
+        explodeMeshData={explodeMeshData}
+      />
     </div>
   );
 }
 
-// Build the "Exploded" tab descriptor (STEP assembly explode controls).
-export function buildExplodedSettingsTab(props) {
+// Build the "Display" tab descriptor: display mode plus the section-plane and
+// exploded-view transforms, all of which are per-file state (unlike theme settings,
+// which is persistent theme config and lives in the navbar editor).
+export function buildDisplaySettingsTab(props) {
   return {
-    id: FILE_SHEET_SECTION_IDS.THEME_EXPLODED,
-    title: "Exploded",
-    content: <ExplodedSettingsSection {...props} />
+    id: FILE_SHEET_SECTION_IDS.THEME_DISPLAY,
+    title: "Display",
+    content: <DisplaySettingsSection {...props} />
   };
 }
 
-function ThemeAppearanceContent({
-  themePresets = [],
+function ThemeSettingsContent({
   themeSettings,
-  themePresetId = "",
+  themeId = DEFAULT_THEME_ID,
+  hasCustomTheme = false,
   resolvedColorSchemeMode = THEME_COLOR_MODES.LIGHT,
-  updateThemeSettings,
-  handleResetThemeSettings,
-  handleSaveCustomThemePreset,
-  handleUpdateThemePresetSettings
+  onSelectTheme,
+  updateThemeSettings
 }) {
   const [activePrimaryLight, setActivePrimaryLight] = useState("directional");
+  // The Lights heading switch acts on whichever light the tab strip below it has
+  // selected, so it needs that light's option record and current settings.
+  const activePrimaryLightOption = PRIMARY_LIGHT_OPTIONS.find(
+    (option) => option.value === activePrimaryLight
+  ) || PRIMARY_LIGHT_OPTIONS[0];
+  const activePrimaryLightSettings = themeSettings.lighting[activePrimaryLight] ||
+    PRIMARY_LIGHT_FALLBACKS[activePrimaryLight] ||
+    { enabled: false };
 
   const setMaterials = (patch) => {
     updateThemeSettings((current) => ({
@@ -2299,18 +1504,16 @@ function ThemeAppearanceContent({
   };
 
   return (
-    <div className="py-2" data-cad-theme-appearance-section="true">
-      <ThemeAppearanceSection
-        themePresets={themePresets}
-        themeSettings={themeSettings}
-        themePresetId={themePresetId}
-        updateThemeSettings={updateThemeSettings}
-        handleResetThemeSettings={handleResetThemeSettings}
-        handleSaveCustomThemePreset={handleSaveCustomThemePreset}
-        handleUpdateThemePresetSettings={handleUpdateThemePresetSettings}
+    <div className="py-2" data-cad-theme-settings-section="true">
+      <ThemePresetSection
+        themeId={themeId}
+        hasCustomTheme={hasCustomTheme}
+        onSelectTheme={onSelectTheme}
       />
 
-      <ControlSubsection title="View">
+      {/* Scene-wide output settings: they belong to no named group, and a
+          heading over them would only restate "these two are settings". */}
+      <ControlSubsection>
         <Field label="Projection">
           <SegmentedControl
             value={themeSettings.projection}
@@ -2321,6 +1524,15 @@ function ThemeAppearanceContent({
             options={PROJECTION_MODE_OPTIONS}
           />
         </Field>
+        <SliderField label="Tone mapping" value={formatNumber(themeSettings.lighting.toneMappingExposure)}>
+          <SliderInput
+            value={themeSettings.lighting.toneMappingExposure}
+            min={0.05}
+            max={6}
+            step={0.01}
+            onChange={(nextValue) => setLighting({ toneMappingExposure: nextValue })}
+          />
+        </SliderField>
       </ControlSubsection>
 
       <ControlSubsection title="Surface">
@@ -2360,35 +1572,6 @@ function ThemeAppearanceContent({
           onChange={(nextValue) => setMaterials({ overrideSourceColors: nextValue })}
         />
 
-        <SliderField label="Saturation" value={formatNumber(themeSettings.materials.saturation)}>
-          <SliderInput
-            value={themeSettings.materials.saturation}
-            min={0}
-            max={2.5}
-            step={0.01}
-            onChange={(nextValue) => setMaterials({ saturation: nextValue })}
-          />
-        </SliderField>
-
-        <SliderField label="Contrast" value={formatNumber(themeSettings.materials.contrast)}>
-          <SliderInput
-            value={themeSettings.materials.contrast}
-            min={0}
-            max={2.5}
-            step={0.01}
-            onChange={(nextValue) => setMaterials({ contrast: nextValue })}
-          />
-        </SliderField>
-
-        <SliderField label="Brightness" value={formatNumber(themeSettings.materials.brightness)}>
-          <SliderInput
-            value={themeSettings.materials.brightness}
-            min={0}
-            max={2}
-            step={0.01}
-            onChange={(nextValue) => setMaterials({ brightness: nextValue })}
-          />
-        </SliderField>
         <SliderField label="Roughness" value={formatNumber(themeSettings.materials.roughness)}>
           <SliderInput
             value={themeSettings.materials.roughness}
@@ -2427,8 +1610,40 @@ function ThemeAppearanceContent({
         </SliderField>
       </ControlSubsection>
 
+      {/* Post-adjustments to whatever colour the surface resolved to, as opposed
+          to the material's own physical properties above. */}
+      <ControlSubsection title="Color grading">
+        <SliderField label="Saturation" value={formatNumber(themeSettings.materials.saturation)}>
+          <SliderInput
+            value={themeSettings.materials.saturation}
+            min={0}
+            max={2.5}
+            step={0.01}
+            onChange={(nextValue) => setMaterials({ saturation: nextValue })}
+          />
+        </SliderField>
+        <SliderField label="Contrast" value={formatNumber(themeSettings.materials.contrast)}>
+          <SliderInput
+            value={themeSettings.materials.contrast}
+            min={0}
+            max={2.5}
+            step={0.01}
+            onChange={(nextValue) => setMaterials({ contrast: nextValue })}
+          />
+        </SliderField>
+        <SliderField label="Brightness" value={formatNumber(themeSettings.materials.brightness)}>
+          <SliderInput
+            value={themeSettings.materials.brightness}
+            min={0}
+            max={2}
+            step={0.01}
+            onChange={(nextValue) => setMaterials({ brightness: nextValue })}
+          />
+        </SliderField>
+      </ControlSubsection>
+
       <ControlSubsection title="Backdrop">
-        <Field label="Style">
+        <Field>
           <SegmentedControl
             value={themeSettings.background.type}
             onChange={(nextValue) => setBackground({ type: nextValue })}
@@ -2486,11 +1701,11 @@ function ThemeAppearanceContent({
 
       <ControlSubsection
         title="Floor"
-        trailing={(
-          <FileSheetBooleanToggle
+        toggle={(
+          <SubsectionToggle
+            label="Enable floor"
             checked={themeSettings.floor?.enabled === true}
             onCheckedChange={(nextValue) => setFloor({ enabled: nextValue })}
-            ariaLabel="Enable floor"
           />
         )}
       >
@@ -2548,21 +1763,20 @@ function ThemeAppearanceContent({
 
       <ControlSubsection
         title="Grid"
-        trailing={(
-          <FileSheetBooleanToggle
+        toggle={(
+          <SubsectionToggle
+            label="Enable grid"
             checked={themeSettings.floor?.grid?.enabled === true}
             onCheckedChange={(nextValue) => setFloorGrid({ enabled: nextValue })}
-            ariaLabel="Enable grid"
           />
         )}
       >
         {themeSettings.floor?.grid?.enabled === true ? (
           <>
-            <ColorModeField
-              label="Floor color"
-              path={["floor", "color"]}
-              {...themeColorFieldProps}
-            />
+            {/* No floor colour here: it is the same ["floor","color"] the Floor
+                section owns, and the grid only falls back to it when the line
+                colours below are unset (see renderOptions applyFloor). Two
+                controls writing one value silently moved each other. */}
             <ColorModeField
               label="Center line"
               path={["floor", "grid", "centerColor"]}
@@ -2595,65 +1809,77 @@ function ThemeAppearanceContent({
         ) : null}
       </ControlSubsection>
 
-      <ControlSubsection title="Lighting">
-        <ThemeToggleRow
-          label="Environment light"
-          checked={themeSettings.environment.enabled}
-          onChange={(nextValue) => setEnvironment({ enabled: nextValue })}
-        />
-        <Field label="Environment map">
-          <Select
-            value={themeSettings.environment.presetId}
-            onValueChange={(nextValue) => setEnvironment({ presetId: nextValue })}
-          >
-            <SelectTrigger size="sm" className="h-7 !text-[11px]" aria-label="Environment map">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              {ENVIRONMENT_PRESETS.map((option) => (
-                <SelectItem key={option.id} value={option.id} className="text-xs">
-                  {option.label}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-        </Field>
-        <SliderField label="Environment intensity" value={formatNumber(themeSettings.environment.intensity)}>
-          <SliderInput
-            value={themeSettings.environment.intensity}
-            min={0}
-            max={4}
-            step={0.01}
-            onChange={(nextValue) => setEnvironment({ intensity: nextValue })}
+      {/* Lighting used to be one section holding all of this — 18 rows and every
+          nested sub-subsection in the file, four levels deep at the light tabs.
+          It is now four flat siblings, each with its enable switch in the header
+          like Floor and Grid, so a light you are not using costs one row. */}
+      <ControlSubsection
+        title="Environment"
+        toggle={(
+          <SubsectionToggle
+            label="Enable environment light"
+            checked={themeSettings.environment.enabled}
+            onCheckedChange={(nextValue) => setEnvironment({ enabled: nextValue })}
           />
-        </SliderField>
-        <SliderField label="Environment rotation" value={formatNumber(themeSettings.environment.rotationY)}>
-          <SliderInput
-            value={themeSettings.environment.rotationY}
-            min={-Math.PI}
-            max={Math.PI}
-            step={0.01}
-            onChange={(nextValue) => setEnvironment({ rotationY: nextValue })}
-          />
-        </SliderField>
-        <ThemeToggleRow
-          label="Use as backdrop"
-          checked={themeSettings.environment.useAsBackground}
-          onChange={(nextValue) => setEnvironment({ useAsBackground: nextValue })}
-        />
+        )}
+      >
+        {themeSettings.environment.enabled ? (
+          <>
+            <Field label="Map">
+              <Select
+                value={themeSettings.environment.presetId}
+                onValueChange={(nextValue) => setEnvironment({ presetId: nextValue })}
+              >
+                <SelectTrigger size="sm" className="h-7 !text-[11px]" aria-label="Environment map">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {ENVIRONMENT_PRESETS.map((option) => (
+                    <SelectItem key={option.id} value={option.id} className="text-xs">
+                      {option.label}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </Field>
+            <SliderField label="Intensity" value={formatNumber(themeSettings.environment.intensity)}>
+              <SliderInput
+                value={themeSettings.environment.intensity}
+                min={0}
+                max={4}
+                step={0.01}
+                onChange={(nextValue) => setEnvironment({ intensity: nextValue })}
+              />
+            </SliderField>
+            <SliderField label="Rotation" value={formatNumber(themeSettings.environment.rotationY)}>
+              <SliderInput
+                value={themeSettings.environment.rotationY}
+                min={-Math.PI}
+                max={Math.PI}
+                step={0.01}
+                onChange={(nextValue) => setEnvironment({ rotationY: nextValue })}
+              />
+            </SliderField>
+            <ThemeToggleRow
+              label="Use as backdrop"
+              checked={themeSettings.environment.useAsBackground}
+              onChange={(nextValue) => setEnvironment({ useAsBackground: nextValue })}
+            />
+          </>
+        ) : null}
+      </ControlSubsection>
 
-        <SliderField label="Tone mapping" value={formatNumber(themeSettings.lighting.toneMappingExposure)}>
-          <SliderInput
-            value={themeSettings.lighting.toneMappingExposure}
-            min={0.05}
-            max={6}
-            step={0.01}
-            onChange={(nextValue) => setLighting({ toneMappingExposure: nextValue })}
+      <ControlSubsection
+        title="Lights"
+        toggle={(
+          <SubsectionToggle
+            label={`Enable ${activePrimaryLightOption.label.toLowerCase()} light`}
+            checked={activePrimaryLightSettings.enabled}
+            onCheckedChange={(nextValue) => setLightConfig(activePrimaryLight, { enabled: nextValue })}
           />
-        </SliderField>
-
-        <NestedControlGroup title="Primary">
-          <Tabs value={activePrimaryLight} onValueChange={setActivePrimaryLight} className="gap-0">
+        )}
+      >
+        <Tabs value={activePrimaryLight} onValueChange={setActivePrimaryLight} className="gap-0">
             <div className="px-2 py-1">
               <TabsList className="grid h-7 w-full grid-cols-5 rounded-md p-0.5">
                 {PRIMARY_LIGHT_OPTIONS.map((option) => (
@@ -2675,172 +1901,164 @@ function ThemeAppearanceContent({
                   className={cn("mt-2", FILE_SHEET_ROW_STACK_CLASSES)}
                   data-file-sheet-row-stack=""
                 >
-                  <ThemeToggleRow
-                    label={`${option.label} light`}
-                    checked={light.enabled}
-                    onChange={(nextValue) => setLightConfig(option.value, { enabled: nextValue })}
-                  />
-                  {supportsModeColors ? (
-                    <ColorModeField
-                      label="Color"
-                      path={["lighting", option.value, "color"]}
-                      {...themeColorFieldProps}
-                    />
-                  ) : (
-                    <ColorField
-                      label="Color"
-                      value={light.color}
-                      onChange={(nextValue) => setLightConfig(option.value, { color: nextValue })}
-                    />
-                  )}
-                  <SliderField label="Intensity" value={formatNumber(light.intensity)}>
-                    <SliderInput
-                      value={light.intensity}
-                      min={0}
-                      max={20}
-                      step={0.01}
-                      onChange={(nextValue) => setLightConfig(option.value, { intensity: nextValue })}
-                    />
-                  </SliderField>
-                  {option.value === "spot" ? (
-                    <SliderField label="Angle" value={formatNumber(light.angle)}>
+                  {light.enabled ? (
+                    <>
+                      {supportsModeColors ? (
+                      <ColorModeField
+                        label="Color"
+                        path={["lighting", option.value, "color"]}
+                        {...themeColorFieldProps}
+                      />
+                    ) : (
+                      <ColorField
+                        label="Color"
+                        value={light.color}
+                        onChange={(nextValue) => setLightConfig(option.value, { color: nextValue })}
+                      />
+                    )}
+                    <SliderField label="Intensity" value={formatNumber(light.intensity)}>
                       <SliderInput
-                        value={light.angle}
-                        min={0.01}
-                        max={1.57}
+                        value={light.intensity}
+                        min={0}
+                        max={20}
                         step={0.01}
-                        onChange={(nextValue) => setLightConfig(option.value, { angle: nextValue })}
+                        onChange={(nextValue) => setLightConfig(option.value, { intensity: nextValue })}
                       />
                     </SliderField>
-                  ) : null}
-                  {supportsDistance ? (
-                    <SliderField label="Distance" value={formatNumber(light.distance, 0)}>
+                    {option.value === "spot" ? (
+                      <SliderField label="Angle" value={formatNumber(light.angle)}>
+                        <SliderInput
+                          value={light.angle}
+                          min={0.01}
+                          max={1.57}
+                          step={0.01}
+                          onChange={(nextValue) => setLightConfig(option.value, { angle: nextValue })}
+                        />
+                      </SliderField>
+                    ) : null}
+                    {supportsDistance ? (
+                      <SliderField label="Distance" value={formatNumber(light.distance, 0)}>
+                        <SliderInput
+                          value={light.distance}
+                          min={0}
+                          max={5000}
+                          step={1}
+                          onChange={(nextValue) => setLightConfig(option.value, { distance: nextValue })}
+                        />
+                      </SliderField>
+                    ) : null}
+                    <Field label="Position (X/Z)">
+                      <PositionPad
+                        value={light.position}
+                        onChange={(axis, nextValue) => setLightPosition(option.value, axis, nextValue)}
+                      />
+                    </Field>
+                    <SliderField label="Height (Y)" value={formatNumber(light.position.y, 0)}>
                       <SliderInput
-                        value={light.distance}
-                        min={0}
+                        value={light.position.y}
+                        min={-5000}
                         max={5000}
                         step={1}
-                        onChange={(nextValue) => setLightConfig(option.value, { distance: nextValue })}
+                        onChange={(nextValue) => setLightPosition(option.value, "y", nextValue)}
                       />
                     </SliderField>
+                    </>
                   ) : null}
-                  <Field label="Position (X/Z)">
-                    <PositionPad
-                      value={light.position}
-                      onChange={(axis, nextValue) => setLightPosition(option.value, axis, nextValue)}
-                    />
-                  </Field>
-                  <SliderField label="Height (Y)" value={formatNumber(light.position.y, 0)}>
-                    <SliderInput
-                      value={light.position.y}
-                      min={-5000}
-                      max={5000}
-                      step={1}
-                      onChange={(nextValue) => setLightPosition(option.value, "y", nextValue)}
-                    />
-                  </SliderField>
                 </TabsContent>
               );
             })}
-          </Tabs>
-        </NestedControlGroup>
+        </Tabs>
+      </ControlSubsection>
 
-        <NestedControlGroup title="Ambient">
-          <ThemeToggleRow
-            label="Ambient light"
+      <ControlSubsection
+        title="Ambient"
+        toggle={(
+          <SubsectionToggle
+            label="Enable ambient light"
             checked={themeSettings.lighting.ambient.enabled}
-            onChange={(nextValue) => setLightConfig("ambient", { enabled: nextValue })}
+            onCheckedChange={(nextValue) => setLightConfig("ambient", { enabled: nextValue })}
           />
-          <ColorModeField
-            label="Ambient color"
-            path={["lighting", "ambient", "color"]}
-            {...themeColorFieldProps}
-          />
-          <SliderField label="Ambient intensity" value={formatNumber(themeSettings.lighting.ambient.intensity)}>
-            <SliderInput
-              value={themeSettings.lighting.ambient.intensity}
-              min={0}
-              max={20}
-              step={0.01}
-              onChange={(nextValue) => setLightConfig("ambient", { intensity: nextValue })}
+        )}
+      >
+        {themeSettings.lighting.ambient.enabled ? (
+          <>
+            <ColorModeField
+              label="Color"
+              path={["lighting", "ambient", "color"]}
+              {...themeColorFieldProps}
             />
-          </SliderField>
-        </NestedControlGroup>
+            <SliderField label="Intensity" value={formatNumber(themeSettings.lighting.ambient.intensity)}>
+              <SliderInput
+                value={themeSettings.lighting.ambient.intensity}
+                min={0}
+                max={20}
+                step={0.01}
+                onChange={(nextValue) => setLightConfig("ambient", { intensity: nextValue })}
+              />
+            </SliderField>
+          </>
+        ) : null}
+      </ControlSubsection>
 
-        <NestedControlGroup title="Hemisphere">
-          <ThemeToggleRow
-            label="Hemisphere light"
+      <ControlSubsection
+        title="Hemisphere"
+        toggle={(
+          <SubsectionToggle
+            label="Enable hemisphere light"
             checked={themeSettings.lighting.hemisphere.enabled}
-            onChange={(nextValue) => setLightConfig("hemisphere", { enabled: nextValue })}
+            onCheckedChange={(nextValue) => setLightConfig("hemisphere", { enabled: nextValue })}
           />
-          <ColorModeField
-            label="Sky color"
-            path={["lighting", "hemisphere", "skyColor"]}
-            {...themeColorFieldProps}
-          />
-          <ColorModeField
-            label="Ground color"
-            path={["lighting", "hemisphere", "groundColor"]}
-            {...themeColorFieldProps}
-          />
-          <SliderField label="Hemisphere intensity" value={formatNumber(themeSettings.lighting.hemisphere.intensity)}>
-            <SliderInput
-              value={themeSettings.lighting.hemisphere.intensity}
-              min={0}
-              max={20}
-              step={0.01}
-              onChange={(nextValue) => setLightConfig("hemisphere", { intensity: nextValue })}
+        )}
+      >
+        {themeSettings.lighting.hemisphere.enabled ? (
+          <>
+            <ColorModeField
+              label="Sky color"
+              path={["lighting", "hemisphere", "skyColor"]}
+              {...themeColorFieldProps}
             />
-          </SliderField>
-        </NestedControlGroup>
+            <ColorModeField
+              label="Ground color"
+              path={["lighting", "hemisphere", "groundColor"]}
+              {...themeColorFieldProps}
+            />
+            <SliderField label="Intensity" value={formatNumber(themeSettings.lighting.hemisphere.intensity)}>
+              <SliderInput
+                value={themeSettings.lighting.hemisphere.intensity}
+                min={0}
+                max={20}
+                step={0.01}
+                onChange={(nextValue) => setLightConfig("hemisphere", { intensity: nextValue })}
+              />
+            </SliderField>
+          </>
+        ) : null}
       </ControlSubsection>
     </div>
   );
 }
 
-// Build the "Appearance" tab descriptor (theme presets, surface, scene, lighting).
-export function buildThemeAppearanceTab(props) {
-  const activeThemePreset = resolveActiveThemePreset(
-    props.themePresets || [],
-    props.themePresetId || "",
-    props.themeSettings
-  );
-  const themeHasChanged = themeSettingsChangedFromPreset(activeThemePreset, props.themeSettings);
-  return {
-    id: FILE_SHEET_SECTION_IDS.THEME_APPEARANCE,
-    title: (
-      <span className="flex min-w-0 items-center gap-1.5">
-        <span>Appearance</span>
-        {themeHasChanged ? <ThemeDirtyIndicator className="h-1.5 w-1.5" /> : null}
-      </span>
-    ),
-    content: <ThemeAppearanceContent {...props} />
-  };
-}
-
-// Full-sidebar appearance editor (global theme). Mutually exclusive with the
+// Full-sidebar theme editor (global theme settings). Mutually exclusive with the
 // per-file sheet; opened from the navbar theme dropdown. Reuses the FileSheet
-// aside frame (width + resize) and the ThemeAppearanceContent editor body
+// aside frame (width + resize) and the ThemeSettingsContent editor body
 // (which already holds the preset select + Save-as/Update/Restore actions).
-export function AppearanceEditorPanel({
+export function ThemeEditorPanel({
   open,
   isDesktop,
   width,
   onClose,
   onStartResize,
-  themePresets = [],
   themeSettings,
-  themePresetId = "",
+  themeId = DEFAULT_THEME_ID,
+  hasCustomTheme = false,
   resolvedColorSchemeMode = THEME_COLOR_MODES.LIGHT,
-  updateThemeSettings,
-  handleResetThemeSettings,
-  handleSaveCustomThemePreset,
-  handleUpdateThemePresetSettings
+  onSelectTheme,
+  updateThemeSettings
 }) {
   return (
     <FileSheet
       open={open}
-      title="Appearance"
+      title="Theme"
       isDesktop={isDesktop}
       width={width}
       onOpenChange={(nextOpen) => {
@@ -2852,11 +2070,11 @@ export function AppearanceEditorPanel({
       scrollBody={false}
     >
       <div className="flex h-8 shrink-0 items-center justify-between gap-2 border-b border-sidebar-border/70 px-2">
-        <span className="text-[11px] font-medium text-sidebar-foreground">Appearance</span>
+        <span className="text-[11px] font-medium text-sidebar-foreground">Theme</span>
         <button
           type="button"
           onClick={() => onClose?.()}
-          aria-label="Close appearance editor"
+          aria-label="Close theme editor"
           title="Close"
           className="flex size-6 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
         >
@@ -2864,15 +2082,13 @@ export function AppearanceEditorPanel({
         </button>
       </div>
       <ScrollArea className="min-h-0 flex-1" viewportClassName="h-full">
-        <ThemeAppearanceContent
-          themePresets={themePresets}
+        <ThemeSettingsContent
           themeSettings={themeSettings}
-          themePresetId={themePresetId}
+          themeId={themeId}
+          hasCustomTheme={hasCustomTheme}
           resolvedColorSchemeMode={resolvedColorSchemeMode}
+          onSelectTheme={onSelectTheme}
           updateThemeSettings={updateThemeSettings}
-          handleResetThemeSettings={handleResetThemeSettings}
-          handleSaveCustomThemePreset={handleSaveCustomThemePreset}
-          handleUpdateThemePresetSettings={handleUpdateThemePresetSettings}
         />
       </ScrollArea>
     </FileSheet>

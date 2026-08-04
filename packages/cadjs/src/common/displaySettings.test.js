@@ -56,12 +56,10 @@ test("display settings normalize mode and clip independently from appearance set
 test("display settings normalize edge styling independently from appearance settings", () => {
   assert.deepEqual(normalizeDisplayEdgeSettings({
     enabled: false,
-    contrastMode: "auto",
     color: "#ABC",
     thickness: 2,
     classes: {
       tangent: {
-        enabled: false,
         color: "#456",
         opacity: 0.25,
         thickness: 4
@@ -74,12 +72,11 @@ test("display settings normalize edge styling independently from appearance sett
     silhouetteScale: 0.01
   }), {
     enabled: false,
-    contrastMode: "auto",
     color: "#aabbcc",
     thickness: 2,
     classes: {
       feature: { color: "#aabbcc", opacity: 1, thickness: 1.15 },
-      tangent: { color: "#445566", opacity: 0.25, thickness: 0 },
+      tangent: { color: "#445566", opacity: 0.25, thickness: 4 },
       seam: { color: "#aabbcc", opacity: 0.85, thickness: 1.15 },
       degenerate: { color: "#aabbcc", opacity: 1, thickness: 0 }
     },

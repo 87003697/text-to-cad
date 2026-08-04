@@ -69,7 +69,6 @@ export const DEFAULT_DISPLAY_EDGE_CLASS_SETTINGS = Object.freeze({
 
 export const DEFAULT_DISPLAY_EDGE_SETTINGS = Object.freeze({
   enabled: true,
-  contrastMode: "manual",
   color: CAD_EDGE_COLOR,
   thickness: 1,
   classes: DEFAULT_DISPLAY_EDGE_CLASS_SETTINGS,
@@ -132,13 +131,6 @@ function normalizeBoolean(value, fallback = false) {
   return typeof value === "boolean" ? value : fallback;
 }
 
-function normalizeDisplayEdgeContrastMode(value, fallback = "manual") {
-  const normalized = String(value || "").trim().toLowerCase();
-  return ["auto", "manual"].includes(normalized)
-    ? normalized
-    : fallback;
-}
-
 export function normalizeDisplayEdgeClassSettings(
   value = {},
   fallback = DEFAULT_DISPLAY_EDGE_CLASS_SETTINGS,
@@ -149,13 +141,10 @@ export function normalizeDisplayEdgeClassSettings(
   return Object.fromEntries(CAD_EDGE_CLASS_IDS.map((classId) => {
     const classSource = isObject(source[classId]) ? source[classId] : {};
     const classFallback = fallback?.[classId] || DEFAULT_DISPLAY_EDGE_CLASS_SETTINGS[classId];
-    const legacyDisabled = classSource.enabled === false;
     return [classId, {
       color: normalizeColor(classSource.color, fallbackColor),
       opacity: normalizeNumber(classSource.opacity, classFallback.opacity, 0, 1),
-      thickness: legacyDisabled
-        ? 0
-        : normalizeNumber(classSource.thickness, classFallback.thickness, 0, 6)
+      thickness: normalizeNumber(classSource.thickness, classFallback.thickness, 0, 6)
     }];
   }));
 }
@@ -165,7 +154,6 @@ export function normalizeDisplayEdgeSettings(value = null, fallback = DEFAULT_DI
   const color = normalizeColor(source.color, fallback.color);
   const normalized = {
     enabled: normalizeBoolean(source.enabled, fallback.enabled),
-    contrastMode: normalizeDisplayEdgeContrastMode(source.contrastMode, fallback.contrastMode),
     color,
     thickness: normalizeNumber(source.thickness, fallback.thickness, 0.5, 6),
     classes: normalizeDisplayEdgeClassSettings(source.classes, fallback.classes, color),

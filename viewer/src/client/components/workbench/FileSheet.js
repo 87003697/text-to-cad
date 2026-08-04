@@ -33,7 +33,6 @@ export const FILE_SHEET_SECTION_BODY_CLASSES = `${FILE_SHEET_ROW_STACK_CLASSES} 
 export const FILE_SHEET_SLIDER_FIELD_CLASSES = "space-y-1 px-2 py-1";
 export const FILE_SHEET_INLINE_CONTROL_ROW_CLASSES = "px-2 py-1";
 export const FILE_SHEET_FIELD_LABEL_CLASSES = "block min-w-0 truncate text-[11px] font-medium leading-4 text-muted-foreground";
-export const FILE_SHEET_SUBSUBSECTION_HEADER_CLASSES = "px-2 py-1 text-[11px] font-normal leading-4 text-sidebar-foreground";
 export const FILE_SHEET_VALUE_BADGE_CLASSES = "shrink-0 rounded bg-muted px-1.5 py-0.5 font-mono text-[10px] font-medium leading-none tabular-nums text-muted-foreground";
 export const FILE_SHEET_VALUE_BADGE_INPUT_CLASSES = [
   "h-7 w-20 shrink-0 rounded-md border border-input bg-transparent px-2 py-1 text-right text-[11px] font-medium leading-none tabular-nums text-foreground shadow-xs outline-none",
@@ -125,35 +124,15 @@ export function FileSheetSubsection({
       )}
     >
       <div className="cad-sheet-subsection-separator mx-2 mb-2 h-px bg-border/60" />
-      <div className="flex min-w-0 items-center justify-between gap-2 px-2 pb-1 text-[12px] font-normal leading-5 text-sidebar-foreground/80">
-        <span className="min-w-0 truncate">{title}</span>
-        {trailing ? <span className="shrink-0">{trailing}</span> : null}
-      </div>
-      <div
-        className={cn(FILE_SHEET_ROW_STACK_CLASSES, contentClassName)}
-        data-file-sheet-row-stack=""
-      >
-        {children}
-      </div>
-    </div>
-  );
-}
-
-// Use sparingly for rare third-level groups inside a FileSheet subsection.
-export function FileSheetSubsubsection({
-  title,
-  children,
-  className,
-  contentClassName
-}) {
-  return (
-    <div
-      className={cn("py-1", className)}
-      data-file-sheet-subsubsection=""
-    >
-      <div className={FILE_SHEET_SUBSUBSECTION_HEADER_CLASSES}>
-        {title}
-      </div>
+      {/* Titleless subsections are a rule plus rows: for a couple of settings
+          that belong to the sheet as a whole rather than to any named group, and
+          would otherwise need a heading invented for them. */}
+      {title ? (
+        <div className="flex min-w-0 items-center justify-between gap-2 px-2 pb-1 text-[12px] font-normal leading-5 text-sidebar-foreground/80">
+          <span className="min-w-0 truncate">{title}</span>
+          {trailing ? <span className="shrink-0">{trailing}</span> : null}
+        </div>
+      ) : null}
       <div
         className={cn(FILE_SHEET_ROW_STACK_CLASSES, contentClassName)}
         data-file-sheet-row-stack=""

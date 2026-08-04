@@ -1911,7 +1911,6 @@ const CadViewer = forwardRef(function CadViewer({
     return wireframeMode
       ? {
           ...forcedSettings,
-          contrastMode: "manual",
           color: wireframeEdgeColor,
           opacity: wireframeEdgeOpacity
         }

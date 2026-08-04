@@ -18,7 +18,6 @@ import {
   writeCadParam
 } from "./sidebar.js";
 import {
-  buildAvailableThemePresets,
   cadWorkspaceDefaultFileSheetWidthForViewport,
   CAD_WORKSPACE_COMPACT_TAB_TOOLS_WIDTH,
   CAD_WORKSPACE_DEFAULT_SIDEBAR_WIDTH,
@@ -26,31 +25,23 @@ import {
   CAD_DIRECTORY_SESSION_STORAGE_KEY,
   createDirectorySessionThemeSlice,
   createTabRecord,
-  deleteCustomThemePreset,
-  getAvailableThemePresetIdForSettings,
   isDirectorySessionThemeSlice,
   readCadDirectorySessionState,
   readCadWorkspaceGlassTone,
-  readCustomThemePresets,
   readThemeSettings,
   readThemeSettingsState,
-  readThemeSettingsStateFromAppearanceQuery,
   readDirectoryThemeSettingsState,
-  resetThemePresetToDefault,
-  restoreDefaultThemePresets,
-  saveAndActivateCustomThemePreset,
-  saveCustomThemePreset,
-  serializeThemeSettingsForStorage,
   THEME_STORAGE_KEY,
-  updateThemePresetSettings,
+  THEME_STORAGE_VERSION,
   writeCadDirectorySessionState,
-  writeCustomThemePresets,
-  writeCustomThemePresetLibrary,
-  writeThemeSettings
+  writeThemeSettings,
+  writeThemeState
 } from "./persistence.js";
 import {
   cloneThemePresetSettings,
-  normalizeThemeSettings
+  CUSTOM_THEME_ID,
+  normalizeThemeSettings,
+  SYSTEM_THEME_ID
 } from "cadjs/lib/themeSettings.js";
 import {
   CAD_WORKSPACE_MIN_MODEL_VIEWPORT_WIDTH,
@@ -1091,647 +1082,177 @@ test("workspace glass tone defaults to inferred light tone", () => {
   assert.equal(readCadWorkspaceGlassTone(), "light");
 });
 
-test("built-in theme selection persists active id without theme snapshots", () => {
+// Theme state is one active id plus at most one custom settings blob. Presets
+// are read-only, there is no saved-theme library, and selecting a preset is the
+// only reset.
+function withThemeStorage(run) {
   const originalWindow = globalThis.window;
   globalThis.window = {
     localStorage: createMemoryStorage()
   };
-
   try {
-    assert.equal(writeThemeSettings(cloneThemePresetSettings("blue"), { presetId: "blue" }), true);
-    assert.deepEqual(
-      JSON.parse(globalThis.window.localStorage.getItem(THEME_STORAGE_KEY)),
-      {
-        version: 11,
-        activeThemeId: "blue",
-        themes: []
-      }
-    );
-    assert.deepEqual(readThemeSettingsState(), {
-      presetId: "blue",
-      settings: cloneThemePresetSettings("blue")
+    return run(globalThis.window.localStorage);
+  } finally {
+    if (originalWindow === undefined) {
+      delete globalThis.window;
+    } else {
+      globalThis.window = originalWindow;
+    }
+  }
+}
+
+function storedTheme(storage) {
+  const raw = storage.getItem(THEME_STORAGE_KEY);
+  return raw ? JSON.parse(raw) : null;
+}
+
+test("selecting a preset stores just the id, with no settings snapshot", () => {
+  withThemeStorage((storage) => {
+    assert.equal(writeThemeState("blue"), true);
+    assert.deepEqual(storedTheme(storage), {
+      version: THEME_STORAGE_VERSION,
+      themeId: "blue",
+      custom: null
     });
     assert.deepEqual(readThemeSettings(), cloneThemePresetSettings("blue"));
+    assert.equal(readThemeSettingsState().themeId, "blue");
+  });
+});
 
-    assert.equal(writeThemeSettings(cloneThemePresetSettings("workbench"), { presetId: "workbench" }), true);
+test("the default theme is system, and storing it clears the key", () => {
+  withThemeStorage((storage) => {
+    assert.equal(readThemeSettingsState().themeId, SYSTEM_THEME_ID);
+    assert.equal(writeThemeState("blue"), true);
+    assert.notEqual(storage.getItem(THEME_STORAGE_KEY), null);
+    assert.equal(writeThemeState(SYSTEM_THEME_ID), true);
+    assert.equal(storage.getItem(THEME_STORAGE_KEY), null);
+  });
+});
 
+test("system resolves to the light or dark preset from the OS preference", () => {
+  withThemeStorage(() => {
     assert.deepEqual(
-      globalThis.window.localStorage.getItem(THEME_STORAGE_KEY),
-      null
+      readThemeSettingsState({ prefersDark: false }).settings,
+      cloneThemePresetSettings("workbench-light")
     );
-  } finally {
-    if (originalWindow === undefined) {
-      delete globalThis.window;
-    } else {
-      globalThis.window = originalWindow;
-    }
-  }
+    assert.deepEqual(
+      readThemeSettingsState({ prefersDark: true }).settings,
+      cloneThemePresetSettings("workbench-dark")
+    );
+  });
 });
 
-test("theme URL param is ignored in favor of stored theme state", () => {
-  const originalWindow = globalThis.window;
-  globalThis.window = {
-    location: {
-      search: "?file=gcode%2Fsample.gcode&theme=blue"
-    },
-    localStorage: createMemoryStorage()
-  };
+test("editing settings moves the active theme into the single custom slot", () => {
+  withThemeStorage((storage) => {
+    writeThemeState("blue");
+    const edited = cloneThemePresetSettings("blue");
+    edited.materials.roughness = 0.9123;
 
-  try {
-    assert.equal(writeThemeSettings(cloneThemePresetSettings("workbench")), true);
-    assert.deepEqual(readThemeSettingsState(), {
-      presetId: "workbench-light",
-      settings: cloneThemePresetSettings("workbench-light")
-    });
-  } finally {
-    if (originalWindow === undefined) {
-      delete globalThis.window;
-    } else {
-      globalThis.window = originalWindow;
-    }
-  }
-});
-
-test("appearance URL param overrides stored theme state without mutating persistence", () => {
-  const originalWindow = globalThis.window;
-  globalThis.window = {
-    location: {
-      search: "?file=parts%2Ffixture.step&appearance=workbench"
-    },
-    localStorage: createMemoryStorage()
-  };
-
-  try {
-    assert.equal(writeThemeSettings(cloneThemePresetSettings("blue"), { presetId: "blue" }), true);
-    const storedTheme = JSON.parse(globalThis.window.localStorage.getItem(THEME_STORAGE_KEY));
-    assert.equal(storedTheme.activeThemeId, "blue");
-    assert.deepEqual(readThemeSettingsStateFromAppearanceQuery(), {
-      presetId: "workbench-light",
-      settings: cloneThemePresetSettings("workbench-light")
-    });
-    assert.deepEqual(readThemeSettingsState(), {
-      presetId: "workbench-light",
-      settings: cloneThemePresetSettings("workbench-light")
-    });
-    assert.equal(
-      JSON.parse(globalThis.window.localStorage.getItem(THEME_STORAGE_KEY)).activeThemeId,
-      "blue"
-    );
-  } finally {
-    if (originalWindow === undefined) {
-      delete globalThis.window;
-    } else {
-      globalThis.window = originalWindow;
-    }
-  }
-});
-
-test("theme persistence ignores stale stored built-in workbench snapshots", () => {
-  const originalWindow = globalThis.window;
-  globalThis.window = {
-    localStorage: createMemoryStorage()
-  };
-
-  try {
-    const staleWorkbenchTheme = cloneThemePresetSettings("workbench");
-    staleWorkbenchTheme.modeColors.dark.background.solidColor = "#d1d5db";
-    staleWorkbenchTheme.modeColors.dark.background.linearEnd = "#9ca3af";
-    staleWorkbenchTheme.modeColors.dark.floor.color = "#d1d5db";
-    staleWorkbenchTheme.modeColors.dark.floor.gridCellColor = "#9ca3af";
-    globalThis.window.localStorage.setItem(
-      THEME_STORAGE_KEY,
-      JSON.stringify({
-        version: 11,
-        activeThemeId: "workbench",
-        themes: [{
-          id: "workbench",
-          label: "Workbench",
-          presetId: "workbench",
-          theme: staleWorkbenchTheme
-        }]
-      })
-    );
+    assert.equal(writeThemeSettings(edited), true);
+    const payload = storedTheme(storage);
+    assert.equal(payload.themeId, CUSTOM_THEME_ID);
+    assert.equal(payload.custom.materials.roughness, 0.9123);
 
     const state = readThemeSettingsState();
-    const availableWorkbenchPresets = readCustomThemePresets().filter((preset) => preset.id === "workbench-light");
-    assert.equal(state.presetId, "workbench-light");
-    assert.deepEqual(state.settings, cloneThemePresetSettings("workbench-light"));
-    assert.equal(availableWorkbenchPresets.length, 1);
-    assert.deepEqual(availableWorkbenchPresets[0].settings, cloneThemePresetSettings("workbench"));
-  } finally {
-    if (originalWindow === undefined) {
-      delete globalThis.window;
-    } else {
-      globalThis.window = originalWindow;
-    }
-  }
-});
-
-test("theme default stays on workbench under system dark mode", () => {
-  const originalWindow = globalThis.window;
-  globalThis.window = {
-    localStorage: createMemoryStorage(),
-    matchMedia: () => ({ matches: true })
-  };
-
-  try {
-    assert.deepEqual(readThemeSettingsState(), {
-      presetId: "workbench-light",
-      settings: cloneThemePresetSettings("workbench-light")
-    });
-  } finally {
-    if (originalWindow === undefined) {
-      delete globalThis.window;
-    } else {
-      globalThis.window = originalWindow;
-    }
-  }
-});
-
-test("theme persistence does not store unsaved built-in theme edits", () => {
-  const blueThemeSettings = cloneThemePresetSettings("blue");
-  const customThemeSettings = normalizeThemeSettings({
-    ...blueThemeSettings,
-    materials: {
-      ...blueThemeSettings.materials,
-      brightness: 1.17
-    }
-  });
-
-  const serialized = serializeThemeSettingsForStorage(customThemeSettings, { presetId: "blue" });
-  assert.deepEqual(serialized, {
-    version: 11,
-    activeThemeId: "blue",
-    themes: []
+    assert.equal(state.themeId, CUSTOM_THEME_ID);
+    assert.equal(state.settings.materials.roughness, 0.9123);
   });
 });
 
-test("directory session theme slices keep dirty settings against the active theme", () => {
-  const blueThemeSettings = cloneThemePresetSettings("blue");
-  const customThemeSettings = normalizeThemeSettings({
-    ...blueThemeSettings,
-    materials: {
-      ...blueThemeSettings.materials,
-      brightness: 1.17
-    }
-  });
+test("there is only one custom theme: a second edit overwrites the first", () => {
+  withThemeStorage((storage) => {
+    const first = cloneThemePresetSettings("blue");
+    first.materials.roughness = 0.11;
+    writeThemeSettings(first);
 
-  assert.equal(createDirectorySessionThemeSlice({
-    presetId: "blue",
-    settings: blueThemeSettings
-  }), null);
+    const second = cloneThemePresetSettings("clay-sunrise");
+    second.materials.roughness = 0.88;
+    writeThemeSettings(second);
 
-  const slice = createDirectorySessionThemeSlice({
-    presetId: "blue",
-    settings: customThemeSettings
+    const payload = storedTheme(storage);
+    assert.equal(payload.themeId, CUSTOM_THEME_ID);
+    assert.equal(payload.custom.materials.roughness, 0.88);
   });
-  assert.deepEqual(slice, {
-    presetId: "blue",
-    settings: customThemeSettings
-  });
-  assert.equal(isDirectorySessionThemeSlice(slice), true);
 });
 
-test("directory theme state restores unsaved session settings globally", () => {
-  const originalWindow = globalThis.window;
-  const blueThemeSettings = cloneThemePresetSettings("blue");
-  const customThemeSettings = normalizeThemeSettings({
-    ...blueThemeSettings,
-    materials: {
-      ...blueThemeSettings.materials,
-      brightness: 1.17
-    }
-  });
-  globalThis.window = {
-    location: { search: "" },
-    localStorage: createMemoryStorage(),
-    sessionStorage: createMemoryStorage()
-  };
+test("selecting a preset resets the active theme but keeps the custom slot", () => {
+  withThemeStorage((storage) => {
+    const edited = cloneThemePresetSettings("blue");
+    edited.materials.roughness = 0.42;
+    writeThemeSettings(edited);
 
-  try {
-    assert.equal(writeThemeSettings(blueThemeSettings, { presetId: "blue" }), true);
-    globalThis.window.sessionStorage.setItem(CAD_DIRECTORY_SESSION_STORAGE_KEY, JSON.stringify({
-      version: 1,
-      theme: {
-        presetId: "blue",
-        settings: customThemeSettings
-      }
+    // Picking a preset is the reset: settings become the preset's again...
+    assert.equal(writeThemeState("clay-sunrise"), true);
+    assert.deepEqual(readThemeSettings(), cloneThemePresetSettings("clay-sunrise"));
+
+    // ...but the one custom theme survives so it stays selectable.
+    assert.equal(storedTheme(storage).custom.materials.roughness, 0.42);
+    writeThemeState(CUSTOM_THEME_ID);
+    assert.equal(readThemeSettings().materials.roughness, 0.42);
+  });
+});
+
+test("editing back to an exact preset records the preset, not a custom copy", () => {
+  withThemeStorage((storage) => {
+    writeThemeSettings(cloneThemePresetSettings("blue"));
+    assert.equal(storedTheme(storage).themeId, "blue");
+    assert.equal(readThemeSettingsState().themeId, "blue");
+  });
+});
+
+test("custom cannot be active without a custom slot to point at", () => {
+  withThemeStorage((storage) => {
+    assert.equal(writeThemeState(CUSTOM_THEME_ID), true);
+    assert.equal(storage.getItem(THEME_STORAGE_KEY), null);
+    assert.equal(readThemeSettingsState().themeId, SYSTEM_THEME_ID);
+  });
+});
+
+test("theme persistence ignores payloads from older storage versions", () => {
+  withThemeStorage((storage) => {
+    storage.setItem(THEME_STORAGE_KEY, JSON.stringify({
+      version: THEME_STORAGE_VERSION - 1,
+      activeThemeId: "custom:shop-dark",
+      themes: [{ id: "custom:shop-dark", label: "Shop dark", theme: cloneThemePresetSettings("blue") }]
     }));
-    assert.deepEqual(readDirectoryThemeSettingsState(), {
-      presetId: "blue",
-      settings: customThemeSettings
-    });
-  } finally {
-    if (originalWindow === undefined) {
-      delete globalThis.window;
-    } else {
-      globalThis.window = originalWindow;
-    }
-  }
+    const state = readThemeSettingsState();
+    assert.equal(state.themeId, SYSTEM_THEME_ID);
+    assert.deepEqual(state.settings, cloneThemePresetSettings("workbench-light"));
+  });
 });
 
-test("theme persistence ignores legacy stored theme state", () => {
-  const originalWindow = globalThis.window;
-  globalThis.window = {
-    localStorage: createMemoryStorage()
-  };
+test("a directory session may pin its own theme over the global one", () => {
+  withThemeStorage(() => {
+    globalThis.window.sessionStorage = createMemoryStorage();
+    writeThemeState("blue");
+    assert.equal(readThemeSettingsState().themeId, "blue");
 
-  try {
-    globalThis.window.localStorage.setItem(
-      THEME_STORAGE_KEY,
-      JSON.stringify({
-        version: 1,
-        themeId: "blue",
-        customSettings: {
-          materials: {
-            brightness: 1.17
-          }
-        }
-      })
-    );
+    const slice = createDirectorySessionThemeSlice({ themeId: "terminal", custom: null });
+    assert.deepEqual(slice, { themeId: "terminal", custom: null });
+    assert.equal(isDirectorySessionThemeSlice(slice), true);
 
-    assert.deepEqual(readThemeSettingsState(), {
-      presetId: "workbench-light",
-      settings: cloneThemePresetSettings("workbench-light")
-    });
-  } finally {
-    if (originalWindow === undefined) {
-      delete globalThis.window;
-    } else {
-      globalThis.window = originalWindow;
-    }
-  }
+    writeCadDirectorySessionState({ theme: slice });
+    assert.equal(readDirectoryThemeSettingsState().themeId, "terminal");
+  });
 });
 
-test("theme persistence ignores previous theme library versions", () => {
-  const originalWindow = globalThis.window;
-  globalThis.window = {
-    localStorage: createMemoryStorage()
-  };
-
-  try {
-    const previousWorkbenchTheme = normalizeThemeSettings({
-      ...cloneThemePresetSettings("workbench"),
-      materials: {
-        ...cloneThemePresetSettings("workbench").materials,
-        brightness: 1.08
-      }
-    });
-    globalThis.window.localStorage.setItem(
-      THEME_STORAGE_KEY,
-      JSON.stringify({
-        version: 8,
-        activeThemeId: "workbench",
-        themes: [{
-          id: "workbench",
-          label: "Workbench",
-          presetId: "workbench",
-          theme: previousWorkbenchTheme
-        }]
-      })
-    );
-
-    const availableWorkbenchPresets = readCustomThemePresets().filter((preset) => preset.id === "workbench-light");
-    assert.equal(availableWorkbenchPresets.length, 1);
-    assert.deepEqual(availableWorkbenchPresets[0].settings, cloneThemePresetSettings("workbench"));
-    assert.deepEqual(readThemeSettingsState(), {
-      presetId: "workbench-light",
-      settings: cloneThemePresetSettings("workbench-light")
-    });
-  } finally {
-    if (originalWindow === undefined) {
-      delete globalThis.window;
-    } else {
-      globalThis.window = originalWindow;
-    }
-  }
-});
-
-test("theme persistence ignores stored themes with removed source presets", () => {
-  const originalWindow = globalThis.window;
-  globalThis.window = {
-    localStorage: createMemoryStorage()
-  };
-
-  try {
-    const retiredTheme = normalizeThemeSettings({
-      ...cloneThemePresetSettings("workbench"),
-      background: {
-        ...cloneThemePresetSettings("workbench").background,
-        solidColor: "#123456"
-      }
-    });
-    globalThis.window.localStorage.setItem(
-      THEME_STORAGE_KEY,
-      JSON.stringify({
-        version: 11,
-        activeThemeId: "custom:retired-shop",
-        themes: [{
-          id: "custom:retired-shop",
-          label: "Retired shop",
-          presetId: "retired-preset",
-          theme: retiredTheme
-        }]
-      })
-    );
-
-    assert.equal(readCustomThemePresets().some((preset) => preset.id === "custom:retired-shop"), false);
-    assert.deepEqual(readThemeSettingsState(), {
-      presetId: "workbench-light",
-      settings: cloneThemePresetSettings("workbench-light")
-    });
-  } finally {
-    if (originalWindow === undefined) {
-      delete globalThis.window;
-    } else {
-      globalThis.window = originalWindow;
-    }
-  }
-});
-
-test("custom themes save to local storage and can be selected by id", () => {
-  const originalWindow = globalThis.window;
-  globalThis.window = {
-    localStorage: createMemoryStorage()
-  };
-
-  try {
-    const customThemeSettings = normalizeThemeSettings({
-      ...cloneThemePresetSettings("blue"),
-      background: {
-        ...cloneThemePresetSettings("blue").background,
-        solidColor: "#101418"
-      }
-    });
-    const savedPreset = saveCustomThemePreset("Shop dark", customThemeSettings);
-
-    assert.equal(savedPreset.label, "Shop dark");
-    assert.equal(savedPreset.id, "custom:shop-dark");
-    assert.equal(readCustomThemePresets().some((preset) => preset.id === savedPreset.id), true);
-    const availableThemePresets = buildAvailableThemePresets(readCustomThemePresets());
-    assert.equal(availableThemePresets.some((preset) => preset.id === savedPreset.id), true);
-    assert.equal(availableThemePresets.at(-1)?.id, savedPreset.id);
+test("a directory slice that only restates the global theme is not stored", () => {
+  withThemeStorage(() => {
+    writeThemeState("blue");
+    // Same as global: nothing to override.
+    assert.equal(createDirectorySessionThemeSlice({ themeId: "blue", custom: null }), null);
+    // Different from global: a real override.
     assert.deepEqual(
-      availableThemePresets.find((preset) => preset.id === "blue").settings,
-      cloneThemePresetSettings("blue")
+      createDirectorySessionThemeSlice({ themeId: "terminal", custom: null }),
+      { themeId: "terminal", custom: null }
     );
-    assert.equal(getAvailableThemePresetIdForSettings(customThemeSettings, readCustomThemePresets()), savedPreset.id);
-
-    assert.equal(writeThemeSettings(savedPreset.settings, {
-      presetId: savedPreset.id,
-      customPresets: readCustomThemePresets()
-    }), true);
-    const storedTheme = JSON.parse(globalThis.window.localStorage.getItem(THEME_STORAGE_KEY));
-    assert.equal(storedTheme.version, 11);
-    assert.equal(storedTheme.activeThemeId, savedPreset.id);
-    assert.equal(storedTheme.themes.some((theme) => theme.id === "blue"), false);
-    const storedSavedTheme = storedTheme.themes.find((theme) => theme.id === savedPreset.id);
-    assert.deepEqual(storedSavedTheme.theme, savedPreset.settings);
-    assert.deepEqual(readThemeSettingsState(readCustomThemePresets()), {
-      presetId: savedPreset.id,
-      settings: savedPreset.settings
-    });
-  } finally {
-    if (originalWindow === undefined) {
-      delete globalThis.window;
-    } else {
-      globalThis.window = originalWindow;
-    }
-  }
+  });
 });
 
-test("custom themes can be saved and selected atomically", () => {
-  const originalWindow = globalThis.window;
-  globalThis.window = {
-    localStorage: createMemoryStorage()
-  };
-
-  try {
-    assert.equal(writeThemeSettings(cloneThemePresetSettings("blue"), { presetId: "blue" }), true);
-    const customThemeSettings = normalizeThemeSettings({
-      ...cloneThemePresetSettings("blue"),
-      background: {
-        ...cloneThemePresetSettings("blue").background,
-        solidColor: "#101418"
-      }
-    });
-    const savedTheme = saveAndActivateCustomThemePreset("Shop dark", customThemeSettings, {
-      sourceThemeId: "blue",
-      customPresets: readCustomThemePresets()
-    });
-
-    assert.equal(savedTheme.preset.id, "custom:shop-dark");
-    assert.equal(readCustomThemePresets().some((preset) => preset.id === savedTheme.preset.id), true);
-    assert.deepEqual(
-      buildAvailableThemePresets(readCustomThemePresets()).find((preset) => preset.id === "blue").settings,
-      cloneThemePresetSettings("blue")
-    );
-    assert.deepEqual(readThemeSettingsState(readCustomThemePresets()), {
-      presetId: savedTheme.preset.id,
-      settings: savedTheme.preset.settings
-    });
-    const storedTheme = JSON.parse(globalThis.window.localStorage.getItem(THEME_STORAGE_KEY));
-    assert.equal(storedTheme.activeThemeId, savedTheme.preset.id);
-  } finally {
-    if (originalWindow === undefined) {
-      delete globalThis.window;
-    } else {
-      globalThis.window = originalWindow;
-    }
-  }
-});
-
-test("themes can be deleted from local storage while at least one remains", () => {
-  const originalWindow = globalThis.window;
-  globalThis.window = {
-    localStorage: createMemoryStorage()
-  };
-
-  try {
-    const shopPreset = saveCustomThemePreset("Shop dark", cloneThemePresetSettings("blue"));
-    const warmPreset = saveCustomThemePreset("Warm bench", cloneThemePresetSettings("clay"));
-    assert.equal(readCustomThemePresets().some((preset) => preset.id === shopPreset.id), true);
-    assert.equal(readCustomThemePresets().some((preset) => preset.id === warmPreset.id), true);
-    assert.equal(writeThemeSettings(warmPreset.settings, {
-      presetId: warmPreset.id,
-      customPresets: readCustomThemePresets()
-    }), true);
-
-    assert.equal(deleteCustomThemePreset(warmPreset.id), true);
-    const customPresets = readCustomThemePresets();
-    assert.equal(customPresets.some((preset) => preset.id === shopPreset.id), true);
-    assert.equal(customPresets.some((preset) => preset.id === warmPreset.id), false);
-    const storedTheme = JSON.parse(globalThis.window.localStorage.getItem(THEME_STORAGE_KEY));
-    assert.equal(storedTheme.activeThemeId, "");
-    assert.equal(storedTheme.themes.some((preset) => preset.id === shopPreset.id), true);
-    assert.deepEqual(readThemeSettingsState(readCustomThemePresets()), {
-      presetId: "workbench-light",
-      settings: cloneThemePresetSettings("workbench-light")
-    });
-    assert.equal(deleteCustomThemePreset("workbench-light"), false);
-    assert.equal(readCustomThemePresets().some((preset) => preset.id === "workbench-light"), true);
-  } finally {
-    if (originalWindow === undefined) {
-      delete globalThis.window;
-    } else {
-      globalThis.window = originalWindow;
-    }
-  }
-});
-
-test("custom themes can be updated, reset to their source preset, and fully restored", () => {
-  const originalWindow = globalThis.window;
-  globalThis.window = {
-    localStorage: createMemoryStorage()
-  };
-
-  try {
-    const savedPreset = saveCustomThemePreset("Shop blue", cloneThemePresetSettings("blue"), {
-      sourceThemeId: "blue"
-    });
-    const updatedBlueTheme = normalizeThemeSettings({
-      ...cloneThemePresetSettings("blue"),
-      materials: {
-        ...cloneThemePresetSettings("blue").materials,
-        brightness: 1.31
-      }
-    });
-
-    assert.equal(updateThemePresetSettings("blue", updatedBlueTheme), false);
-    assert.equal(updateThemePresetSettings(savedPreset.id, updatedBlueTheme), true);
-    assert.deepEqual(
-      readCustomThemePresets().find((preset) => preset.id === savedPreset.id).settings,
-      updatedBlueTheme
-    );
-
-    assert.equal(resetThemePresetToDefault("blue"), false);
-    assert.equal(resetThemePresetToDefault(savedPreset.id), true);
-    assert.deepEqual(
-      readCustomThemePresets().find((preset) => preset.id === savedPreset.id).settings,
-      cloneThemePresetSettings("blue")
-    );
-
-    assert.equal(deleteCustomThemePreset("blue"), false);
-    assert.equal(deleteCustomThemePreset(savedPreset.id), true);
-    assert.equal(readCustomThemePresets().some((preset) => preset.id === savedPreset.id), false);
-
-    assert.equal(restoreDefaultThemePresets(), true);
-    assert.equal(globalThis.window.localStorage.getItem(THEME_STORAGE_KEY), null);
-    assert.equal(readCustomThemePresets().some((preset) => preset.id === "blue"), true);
-  } finally {
-    if (originalWindow === undefined) {
-      delete globalThis.window;
-    } else {
-      globalThis.window = originalWindow;
-    }
-  }
-});
-
-test("custom theme library persistence clears the active global theme id", () => {
-  const originalWindow = globalThis.window;
-  globalThis.window = {
-    localStorage: createMemoryStorage()
-  };
-
-  try {
-    assert.equal(writeThemeSettings(cloneThemePresetSettings("blue")), true);
-    assert.equal(writeCustomThemePresetLibrary([]), true);
-    assert.equal(globalThis.window.localStorage.getItem(THEME_STORAGE_KEY), null);
-  } finally {
-    if (originalWindow === undefined) {
-      delete globalThis.window;
-    } else {
-      globalThis.window = originalWindow;
-    }
-  }
-});
-
-test("custom theme preset updates preserve the active global theme id", () => {
-  const originalWindow = globalThis.window;
-  globalThis.window = {
-    localStorage: createMemoryStorage()
-  };
-
-  try {
-    const savedTheme = saveAndActivateCustomThemePreset("Shop dark", cloneThemePresetSettings("blue"), {
-      sourceThemeId: "blue"
-    });
-    assert.equal(writeCustomThemePresets(readCustomThemePresets()), true);
-    const storedTheme = JSON.parse(globalThis.window.localStorage.getItem(THEME_STORAGE_KEY));
-    assert.equal(storedTheme.version, 11);
-    assert.equal(storedTheme.activeThemeId, savedTheme.preset.id);
-    assert.equal(storedTheme.themes.some((theme) => theme.id === savedTheme.preset.id), true);
-    assert.equal(storedTheme.themes.some((theme) => theme.id === "blue"), false);
-  } finally {
-    if (originalWindow === undefined) {
-      delete globalThis.window;
-    } else {
-      globalThis.window = originalWindow;
-    }
-  }
-});
-
-test("theme persistence ignores legacy full preset payloads", () => {
-  const originalWindow = globalThis.window;
-  globalThis.window = {
-    localStorage: createMemoryStorage()
-  };
-
-  try {
-    const legacyCinematic = cloneThemePresetSettings("light");
-    delete legacyCinematic.materials.tintMode;
-    delete legacyCinematic.materials.emissiveIntensity;
-    legacyCinematic.materials.defaultColor = "#aeb9c3";
-    legacyCinematic.materials.tintStrength = 0.28;
-    legacyCinematic.materials.saturation = 0.42;
-    legacyCinematic.materials.contrast = 1.02;
-    legacyCinematic.materials.brightness = 0.94;
-    legacyCinematic.materials.roughness = 0.46;
-    legacyCinematic.materials.metalness = 0.02;
-    legacyCinematic.materials.clearcoat = 0.18;
-    legacyCinematic.materials.clearcoatRoughness = 0.34;
-    legacyCinematic.materials.envMapIntensity = 0.58;
-    legacyCinematic.background.solidColor = "#050711";
-    legacyCinematic.background.linearStart = "#02040b";
-    legacyCinematic.background.linearEnd = "#252f47";
-    legacyCinematic.background.linearAngle = 90;
-    legacyCinematic.background.radialInner = "#171d30";
-    legacyCinematic.background.radialOuter = "#02040b";
-    legacyCinematic.floor.color = "#141a29";
-    legacyCinematic.floor.roughness = 0.62;
-    legacyCinematic.floor.reflectivity = 0.22;
-    legacyCinematic.floor.shadowOpacity = 0.24;
-    legacyCinematic.floor.horizonBlend = 0.28;
-    legacyCinematic.environment.enabled = true;
-    legacyCinematic.environment.intensity = 0.46;
-    legacyCinematic.environment.rotationY = -0.35;
-    legacyCinematic.lighting.toneMappingExposure = 1.2;
-    legacyCinematic.lighting.directional.color = "#f1f6fb";
-    legacyCinematic.lighting.directional.intensity = 2.45;
-    legacyCinematic.lighting.directional.position = { x: -190, y: 300, z: 210 };
-    legacyCinematic.lighting.spot.color = "#dbeafe";
-    legacyCinematic.lighting.spot.intensity = 1.34;
-    legacyCinematic.lighting.spot.angle = 0.72;
-    legacyCinematic.lighting.spot.position = { x: 160, y: 245, z: 126 };
-    legacyCinematic.lighting.point.color = "#8fb6d8";
-    legacyCinematic.lighting.point.intensity = 0.34;
-    legacyCinematic.lighting.point.position = { x: -260, y: 95, z: -220 };
-    legacyCinematic.lighting.ambient.color = "#1e293b";
-    legacyCinematic.lighting.ambient.intensity = 0.2;
-    legacyCinematic.lighting.hemisphere.skyColor = "#dbe7f3";
-    legacyCinematic.lighting.hemisphere.groundColor = "#070a14";
-    legacyCinematic.lighting.hemisphere.intensity = 0.68;
-
-    globalThis.window.localStorage.setItem(THEME_STORAGE_KEY, JSON.stringify(legacyCinematic));
-
-    assert.deepEqual(readThemeSettings(), cloneThemePresetSettings("workbench"));
-  } finally {
-    if (originalWindow === undefined) {
-      delete globalThis.window;
-    } else {
-      globalThis.window = originalWindow;
-    }
-  }
+test("a directory theme slice needs a real id, and custom needs its settings", () => {
+  assert.equal(createDirectorySessionThemeSlice({ themeId: "nope" }), null);
+  assert.equal(createDirectorySessionThemeSlice({ themeId: CUSTOM_THEME_ID, custom: null }), null);
+  assert.equal(isDirectorySessionThemeSlice(null), false);
 });
 
 test("selectedEntryKeyFromUrl restores the selected file query param", () => {

@@ -25,7 +25,6 @@ const CAD_EDGE_CLASS_SETTINGS = Object.freeze({
 
 const CAD_THEME_EDGE_SETTINGS = Object.freeze({
   enabled: true,
-  contrastMode: "manual",
   color: CAD_EDGE_COLOR,
   thickness: 1,
   classes: CAD_EDGE_CLASS_SETTINGS,
@@ -128,13 +127,6 @@ function normalizeBackgroundType(value, fallback = "solid") {
 function normalizeMaterialTintMode(value, fallback = "multiply") {
   const normalized = String(value || "").trim().toLowerCase();
   return ["multiply", "blend"].includes(normalized)
-    ? normalized
-    : fallback;
-}
-
-function normalizeEdgeContrastMode(value, fallback = "manual") {
-  const normalized = String(value || "").trim().toLowerCase();
-  return ["auto", "manual"].includes(normalized)
     ? normalized
     : fallback;
 }
@@ -1516,7 +1508,6 @@ export function normalizeThemeSettings(value = {}) {
     },
     edges: {
       enabled: normalizeBoolean(edges.enabled, DEFAULT_THEME_SETTINGS.edges.enabled),
-      contrastMode: normalizeEdgeContrastMode(edges.contrastMode, DEFAULT_THEME_SETTINGS.edges.contrastMode),
       color: normalizeColor(edges.color, DEFAULT_THEME_SETTINGS.edges.color),
       thickness: normalizeNumber(edges.thickness, DEFAULT_THEME_SETTINGS.edges.thickness, 0.5, 6),
       classes: normalizeEdgeClassSettings(edges.classes, DEFAULT_THEME_SETTINGS.edges.classes),

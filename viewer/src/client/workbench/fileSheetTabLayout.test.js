@@ -26,12 +26,21 @@ test("only step supports the split", () => {
   assert.equal(kindSupportsSplit("gcode"), false);
 });
 
-test("default step arrangement puts tree and parameters on top, the rest on the bottom", () => {
+test("default step arrangement puts the tree on top and everything else on the bottom", () => {
   const arrangement = defaultFileSheetTabArrangement("step", STEP_SECTIONS);
   assert.equal(arrangement.split, true);
-  assert.deepEqual(arrangement.top, ["tree", "parameters"]);
-  assert.deepEqual(arrangement.bottom, ["display", "appearance", "metadata"]);
+  assert.deepEqual(arrangement.top, ["tree"]);
+  assert.deepEqual(arrangement.bottom, ["parameters", "display", "appearance", "metadata"]);
   assert.equal(arrangement.ratio, 0.5);
+});
+
+test("parameters sits between reference and display in the bottom pane", () => {
+  const arrangement = defaultFileSheetTabArrangement(
+    "step",
+    ["tree", "reference", "parameters", "display"]
+  );
+  assert.deepEqual(arrangement.top, ["tree"]);
+  assert.deepEqual(arrangement.bottom, ["reference", "parameters", "display"]);
 });
 
 test("default non-step arrangement is a single strip", () => {
@@ -47,14 +56,38 @@ test("step with only a tree collapses to a single strip", () => {
   assert.deepEqual(arrangement.top, ["tree"]);
 });
 
-test("normalize drops missing tabs and appends new ones to their default pane", () => {
+test("normalize drops missing tabs and slots new ones into their default pane", () => {
   const stored = { split: true, top: ["tree"], bottom: ["display", "appearance"], ratio: 0.6 };
   const normalized = normalizeFileSheetTabArrangement(stored, "step", STEP_SECTIONS);
-  // parameters + metadata are newly rendered, appended to their default panes
-  // (parameters -> top, metadata -> bottom).
-  assert.deepEqual(normalized.top, ["tree", "parameters"]);
-  assert.deepEqual(normalized.bottom, ["display", "appearance", "metadata"]);
+  // parameters + metadata are newly rendered; both default to the bottom pane and
+  // land at their render-order position (parameters before display, metadata last).
+  assert.deepEqual(normalized.top, ["tree"]);
+  assert.deepEqual(normalized.bottom, ["parameters", "display", "appearance", "metadata"]);
   assert.equal(normalized.ratio, 0.6);
+});
+
+test("issues and parameters slot into render order when they first appear", () => {
+  // Stored from a plain STEP file; the next one has both issues and parameters.
+  const stored = { split: true, top: ["tree"], bottom: ["reference", "display"] };
+  const normalized = normalizeFileSheetTabArrangement(
+    stored,
+    "step",
+    ["status", "tree", "reference", "parameters", "display"]
+  );
+  // Issues leads, parameters sits between reference and display — not appended.
+  assert.deepEqual(normalized.bottom, ["status", "reference", "parameters", "display"]);
+  // Leftmost is the pane fallback, so Issues is what you land on.
+  assert.equal(resolveFileSheetTabPanes(normalized, "step", []).panes[1].activeId, "status");
+});
+
+test("a tab the user dragged keeps its stored position", () => {
+  const stored = { split: true, top: ["tree"], bottom: ["reference", "status", "display"] };
+  const normalized = normalizeFileSheetTabArrangement(
+    stored,
+    "step",
+    ["status", "tree", "reference", "display"]
+  );
+  assert.deepEqual(normalized.bottom, ["reference", "status", "display"]);
 });
 
 test("normalize de-dupes a tab present in both panes (top wins)", () => {
@@ -68,8 +101,8 @@ test("normalize re-derives the default split when a requested split has an empty
   const stored = { split: true, top: ["tree", "parameters", "display", "appearance", "metadata"], bottom: [] };
   const normalized = normalizeFileSheetTabArrangement(stored, "step", STEP_SECTIONS);
   assert.equal(normalized.split, true);
-  assert.deepEqual(normalized.top, ["tree", "parameters"]);
-  assert.deepEqual(normalized.bottom, ["display", "appearance", "metadata"]);
+  assert.deepEqual(normalized.top, ["tree"]);
+  assert.deepEqual(normalized.bottom, ["parameters", "display", "appearance", "metadata"]);
 });
 
 test("normalize forces a single strip for non-split kinds", () => {
@@ -83,8 +116,8 @@ test("normalize forces a single strip for non-split kinds", () => {
 test("moving a tab across panes updates assignment", () => {
   const arrangement = defaultFileSheetTabArrangement("step", STEP_SECTIONS);
   const next = moveFileSheetTab(arrangement, "step", "display", FILE_SHEET_TAB_PANES.TOP, 1);
-  assert.deepEqual(next.top, ["tree", "display", "parameters"]);
-  assert.deepEqual(next.bottom, ["appearance", "metadata"]);
+  assert.deepEqual(next.top, ["tree", "display"]);
+  assert.deepEqual(next.bottom, ["parameters", "appearance", "metadata"]);
   assert.equal(next.split, true);
 });
 
@@ -104,8 +137,8 @@ test("toggling the split off merges panes, on restores the default split", () =>
 
   const reSplit = setFileSheetTabSplit(merged, "step", true, STEP_SECTIONS);
   assert.equal(reSplit.split, true);
-  assert.deepEqual(reSplit.top, ["tree", "parameters"]);
-  assert.deepEqual(reSplit.bottom, ["display", "appearance", "metadata"]);
+  assert.deepEqual(reSplit.top, ["tree"]);
+  assert.deepEqual(reSplit.bottom, ["parameters", "display", "appearance", "metadata"]);
 });
 
 test("split ratio is clamped", () => {
@@ -115,13 +148,18 @@ test("split ratio is clamped", () => {
   assert.equal(setFileSheetTabRatio({ top: [], bottom: [] }, 0.7).ratio, 0.7);
 });
 
-test("resolve panes: default active is tree on top, reference on bottom", () => {
+test("resolve panes: each pane defaults to its leftmost tab", () => {
   const sections = ["tree", "reference", "parameters", "display", "appearance", "metadata"];
   const arrangement = defaultFileSheetTabArrangement("step", sections);
   const resolved = resolveFileSheetTabPanes(arrangement, "step", []);
   assert.equal(resolved.split, true);
   assert.equal(resolved.panes[0].activeId, "tree");
   assert.equal(resolved.panes[1].activeId, "reference");
+
+  // Reorder the bottom pane and the default follows the new leftmost tab, rather
+  // than staying pinned to a hardcoded preference.
+  const reordered = moveFileSheetTab(arrangement, "step", "display", FILE_SHEET_TAB_PANES.BOTTOM, 0);
+  assert.equal(resolveFileSheetTabPanes(reordered, "step", []).panes[1].activeId, "display");
 });
 
 test("resolve panes: an open id activates its tab (last in pane wins)", () => {

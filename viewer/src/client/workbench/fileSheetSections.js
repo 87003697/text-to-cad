@@ -13,9 +13,6 @@ export const FILE_SHEET_SECTION_IDS = Object.freeze({
   ROBOT_JOINTS: "joints",
   IMPLICIT_GRAPHICS: "graphics",
   THEME_DISPLAY: "display",
-  THEME_CLIP: "clip",
-  THEME_EXPLODED: "exploded",
-  THEME_APPEARANCE: "appearance",
   FILE_METADATA: "metadata"
 });
 
@@ -28,13 +25,6 @@ function normalizeSectionIds(value) {
     return [];
   }
   return [...new Set(value.map(normalizeString).filter(Boolean))];
-}
-
-function migrateLegacySectionId(sectionId) {
-  if (sectionId === "plate" || sectionId === "bends") {
-    return FILE_SHEET_SECTION_IDS.DXF;
-  }
-  return sectionId;
 }
 
 export function renderedFileSheetSectionIds(kind, options = {}) {
@@ -54,16 +44,15 @@ export function renderedFileSheetSectionIds(kind, options = {}) {
         FILE_SHEET_SECTION_IDS.GCODE_BOUNDS
       ];
     case "step":
-      // Display, Clip, and Exploded are the theme tabs rendered in the sheet
-      // (appearance is the global navbar editor), and only for STEP views.
+      // Display is the one theme-adjacent tab rendered in the sheet — display
+      // mode plus the section-plane and exploded-view transforms, all per-file
+      // state. Theme settings are global and live in the navbar theme editor.
       return [
         ...status,
         FILE_SHEET_SECTION_IDS.STEP_TREE,
         FILE_SHEET_SECTION_IDS.STEP_REFERENCE,
         ...(options.hasStepModulePanel ? [FILE_SHEET_SECTION_IDS.STEP_PARAMETERS] : []),
-        FILE_SHEET_SECTION_IDS.THEME_DISPLAY,
-        FILE_SHEET_SECTION_IDS.THEME_CLIP,
-        FILE_SHEET_SECTION_IDS.THEME_EXPLODED
+        FILE_SHEET_SECTION_IDS.THEME_DISPLAY
       ];
     case "urdf":
     case "srdf":
@@ -140,7 +129,6 @@ export function normalizeFileSheetOpenSectionIds(sectionIds, renderedSectionIds)
     return [];
   }
   return [...new Set(normalizeSectionIds(sectionIds)
-    .map(migrateLegacySectionId)
     .filter((sectionId) => rendered.has(sectionId)))];
 }
 
