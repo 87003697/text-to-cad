@@ -1529,10 +1529,31 @@ def scene_occurrence_shape(scene: LoadedStepScene, node: OccurrenceNode) -> Any:
     return _located_shape(scene.prototype_shapes[node.prototype_key], node.location)
 
 
-def scene_to_build123d_compound(scene: LoadedStepScene, *, label: str | None = None) -> Any:
-    """Reconstruct a build123d ``Compound`` from a loaded scene.
+def _leaf_shape(obj: Any) -> Any:
+    """Wrap a raw OCCT leaf in its matching build123d type (Solid, Shell, ...).
 
-    Mirrors what ``build123d.import_step`` produces topologically AND chromatically:
+    ``build123d.Shape(obj=...)`` yields an untyped ``Shape`` that is missing the
+    per-type API (``.volume`` and friends). build123d's own importer downcasts and
+    looks the concrete class up in ``topods_lut``; do the same so a single-solid
+    STEP round-trips to a ``Solid``, not a bare ``Shape``.
+    """
+    import build123d
+    from build123d.importers import topods_lut
+    from build123d.topology import downcast
+
+    downcast_obj = downcast(obj)
+    factory = topods_lut.get(type(downcast_obj))
+    if factory is None:
+        return build123d.Shape(obj=downcast_obj)
+    return factory(downcast_obj)
+
+
+def scene_to_build123d_compound(scene: LoadedStepScene, *, label: str | None = None) -> Any:
+    """Reconstruct the scene's shape from a loaded scene.
+
+    Mirrors what ``build123d.import_step`` produces topologically AND chromatically,
+    including its root handling: a single-root STEP returns that root directly and a
+    multi-root STEP is wrapped in a container Compound. Otherwise it is
     the occurrence tree with each leaf prototype placed by its world transform,
     labeled by its occurrence name, and tagged with its STEP color (per-occurrence
     color first, prototype color second). Geometry is the exact BREP from the scene,
@@ -1564,7 +1585,7 @@ def scene_to_build123d_compound(scene: LoadedStepScene, *, label: str | None = N
             if color is not None:
                 compound.color = color
             return compound
-        shape = build123d.Shape(obj=scene_occurrence_shape(scene, node))
+        shape = _leaf_shape(scene_occurrence_shape(scene, node))
         shape.label = node_label(node)
         color = node_color(node)
         if color is not None:
@@ -1574,13 +1595,27 @@ def scene_to_build123d_compound(scene: LoadedStepScene, *, label: str | None = N
     roots = [build_node(root) for root in scene.roots]
     if not roots:
         raise RuntimeError(f"STEP scene has no geometry: {scene.step_path}")
+    if len(roots) == 1:
+        # A single-root STEP is returned as that root, never wrapped: build123d's
+        # own import_step does the same ("Remove empty Compound wrapper if single
+        # free object"). Wrapping would add an assembly level that is not in the
+        # file, pushing every occurrence path one segment deeper (o1.1 -> o1.1.1)
+        # so selector refs differ depending on whether the STEP was opened
+        # directly or returned from a generator's gen_step().
+        single = roots[0]
+        if label:
+            single.label = label
+        return single
+    # Multiple free roots still need a container to be one shape, which is also
+    # what build123d falls back to.
     return build123d.Compound(children=roots, label=label or scene.step_path.stem)
 
 
 def import_step(step_path: Path, *, label: str | None = None) -> Any:
     """``build123d.import_step`` backed by the inline ``__cadgen__`` scene cache.
 
-    Returns a build123d ``Compound`` topologically identical to ``import_step`` but
+    Returns a shape topologically identical to ``import_step`` — including the root
+    itself, not a wrapper around it — but
     reuses the cached binary BREP, so warm loads are ~tens of ms instead of a full
     text-STEP re-parse. Cold loads cost the same as ``import_step`` (plus a small
     cache write). Per-occurrence and prototype STEP colors are applied via
@@ -1592,7 +1627,10 @@ def import_step(step_path: Path, *, label: str | None = None) -> Any:
     resolved = Path(step_path).expanduser().resolve()
     try:
         scene = load_step_scene_cached(resolved)
-        return scene_to_build123d_compound(scene, label=label or resolved.stem)
+        # No filename fallback for the label: build123d keeps the STEP's own root
+        # name, and deriving it from the path would make identical STEP content
+        # produce different trees depending on where the file happens to live.
+        return scene_to_build123d_compound(scene, label=label)
     except Exception:
         return build123d.import_step(resolved)
 
