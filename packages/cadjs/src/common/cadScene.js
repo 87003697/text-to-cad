@@ -1750,7 +1750,7 @@ function resolveMaterialSettings(theme, settings = {}) {
   return theme.materials || {};
 }
 
-function resolvePartsToRender(meshData, theme, settings) {
+export function resolvePartsToRender(meshData, theme, settings) {
   if (Array.isArray(settings.parts)) {
     return settings.parts.filter((part) => toNumber(part?.vertexCount) > 0 && toNumber(part?.triangleCount) > 0);
   }
@@ -1765,6 +1765,16 @@ function resolvePartsToRender(meshData, theme, settings) {
     const pickableParts = toArray(settings.pickableParts).filter((part) => toNumber(part?.vertexCount) > 0 && toNumber(part?.triangleCount) > 0);
     if (pickableParts.length) {
       return pickableParts;
+    }
+    // A composed package's top-level arrays hold each unique COMPONENT's geometry in its
+    // own local frame — placement lives solely in the per-occurrence transform. Returning
+    // [] here drops to the whole-mesh fallback, which draws each shared component once at
+    // the origin: parts authored in world space still look right (their local frame IS
+    // world), but anything genuinely placed by its transform lands in the wrong spot. That
+    // is how a car loses all four wheels and grows one under its middle when the STEP
+    // parameter module is switched off. Per-part rendering is the only correct mode here.
+    if (meshData?.partTransformsBaked === false) {
+      return parts;
     }
     if (meshUsesPartSourceColors(meshData, parts) || meshUsesPartSourceOpacity(parts)) {
       return parts;

@@ -2,6 +2,7 @@
 
 __all__ = [
     "AssemblyHelper",
+    "srgb",
     "MateRelation",
     "MateTarget",
     "compound_from_instances",
@@ -32,6 +33,10 @@ def __getattr__(name: str):
             "label_shape": label_shape,
             "target": target,
         }[name]
+    if name in {"srgb", "srgb_to_linear", "linear_to_srgb"}:
+        from cadgen import color
+
+        return getattr(color, name)
     if name == "compound_from_instances":
         from cadgen.instances import compound_from_instances
 

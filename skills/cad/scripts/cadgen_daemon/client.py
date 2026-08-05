@@ -21,6 +21,15 @@ SCRIPTS_DIR = Path(__file__).resolve().parents[1]
 REPO_ROOT = SCRIPTS_DIR.parents[2]
 
 SPAWN_WAIT_SECONDS = 30.0  # first daemon start pays the full OCP import
+
+# The daemon handles requests STRICTLY SEQUENTIALLY. A client that connects while
+# the daemon is still finishing someone else's build — including an orphaned one
+# whose client was killed — is accepted by the listen backlog and then simply
+# waits. Without a deadline that wait is unbounded, which is how a warm call ends
+# up hanging for minutes on a model that builds cold in seconds. Bound it: a
+# legitimate large build can be silent for a long time, so the default is
+# generous, but it is finite, so the documented cold fallback actually happens.
+DEFAULT_REQUEST_TIMEOUT_SECONDS = 600.0
 # Trees whose .py mtimes define the daemon's version token: the shared cadgen
 # package plus the skill CLIs themselves. A newer file anywhere in these trees
 # means the running daemon may hold stale code and must be restarted.
@@ -39,6 +48,23 @@ def socket_path() -> Path:
 
 def log_path(sock_path: Path) -> Path:
     return sock_path.with_suffix(".log")
+
+
+def request_timeout() -> float:
+    """Seconds to wait for the daemon before giving up and running cold.
+
+    ``CADGEN_DAEMON_TIMEOUT`` overrides; 0 or a negative value disables the
+    deadline entirely (the old, unbounded behaviour) for anyone who genuinely
+    wants to wait out a very long queued build.
+    """
+    raw = os.environ.get("CADGEN_DAEMON_TIMEOUT", "").strip()
+    if not raw:
+        return DEFAULT_REQUEST_TIMEOUT_SECONDS
+    try:
+        value = float(raw)
+    except ValueError:
+        return DEFAULT_REQUEST_TIMEOUT_SECONDS
+    return value if value > 0 else 0.0
 
 
 def compute_version_token(root: Path | None = None) -> int:
@@ -157,6 +183,11 @@ def _run_request(conn: socket.socket, payload: dict) -> int | object | None:
         conn.shutdown(socket.SHUT_WR)
     except OSError:
         return None
+    timeout = request_timeout()
+    if timeout:
+        # Applies per read, not to the whole request: a daemon that is streaming
+        # output keeps resetting it, so only genuine silence trips the deadline.
+        conn.settimeout(timeout)
     streams = {"stdout": sys.stdout, "stderr": sys.stderr}
     try:
         with conn.makefile("r", encoding="utf-8") as reader:
@@ -180,6 +211,19 @@ def _run_request(conn: socket.socket, payload: dict) -> int | object | None:
                     return None
                 target.write(data)
                 target.flush()
+    except TimeoutError:
+        # Silent past the deadline: either the daemon is wedged, or it is still
+        # grinding through a queued build we cannot see. Either way, fall back to
+        # a cold in-process run so THIS invocation still completes. Say so on
+        # stderr — a silent 10-minute stall that then "just works" is the exact
+        # confusion this deadline exists to prevent.
+        print(
+            f"cadgen-daemon: no response for {timeout:.0f}s; running cold "
+            "(set CADGEN_DAEMON_TIMEOUT to change or 0 to wait indefinitely)",
+            file=sys.stderr,
+            flush=True,
+        )
+        return None
     except (OSError, ValueError):
         return None
     return None  # EOF without an exit frame

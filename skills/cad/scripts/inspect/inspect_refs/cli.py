@@ -145,6 +145,38 @@ def build_parser() -> argparse.ArgumentParser:
     _add_output_arguments(align_parser)
     align_parser.set_defaults(handler=run_align)
 
+    interfere_parser = subparsers.add_parser(
+        "interfere",
+        help="Report part-vs-part interpenetration as boolean intersection volume.",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog=(
+            "examples:\n"
+            "  inspect interfere models/car/car.step.py\n"
+            "  inspect interfere models/car/car.step.py --refs o1.1,o1.7\n"
+            "  inspect interfere models/car/car.step --tolerance 25\n"
+        ),
+    )
+    interfere_parser.add_argument("entry", help="CAD STEP path or CAD entry target.")
+    interfere_parser.add_argument(
+        "--refs",
+        default="",
+        help="Comma-separated occurrence refs to restrict the check to. A ref matches its whole subtree.",
+    )
+    interfere_parser.add_argument(
+        "--tolerance",
+        type=float,
+        default=None,
+        help="Intersection volume (mm^3) below which an overlap counts as contact, not a clash.",
+    )
+    interfere_parser.add_argument(
+        "--max-pairs",
+        type=int,
+        default=None,
+        help="Cap the number of boolean tests. Truncated pairs are reported in stats.",
+    )
+    _add_output_arguments(interfere_parser)
+    interfere_parser.set_defaults(handler=run_interfere)
+
     worker_parser = subparsers.add_parser(
         "worker",
         help="Run a persistent JSONL inspect worker.",
@@ -269,6 +301,36 @@ def run_frame(args: argparse.Namespace) -> int:
         }
 
     _emit_result(args, result, _format_frame_text)
+    return 0 if bool(result.get("ok")) else 2
+
+
+def run_interfere(args: argparse.Namespace) -> int:
+    inspect = _inspect_api()
+    from cadgen import interference
+
+    refs = [ref for ref in str(getattr(args, "refs", "") or "").split(",") if ref.strip()]
+    tolerance = args.tolerance if args.tolerance is not None else interference.DEFAULT_TOLERANCE_MM3
+    try:
+        result = interference.inspect_interference(
+            args.entry,
+            refs=refs,
+            tolerance=tolerance,
+            max_pairs=args.max_pairs,
+        )
+    except inspect.CadRefError as exc:
+        result = {
+            "ok": False,
+            "entry": args.entry,
+            "errors": [inspect.cad_ref_error_payload(exc)],
+        }
+    except (OSError, RuntimeError, ValueError) as exc:
+        result = {
+            "ok": False,
+            "entry": args.entry,
+            "errors": [{"message": str(exc)}],
+        }
+
+    _emit_result(args, result, _format_interfere_text)
     return 0 if bool(result.get("ok")) else 2
 
 
@@ -542,6 +604,39 @@ def _format_diff_text(result: dict[str, object], *, quiet: bool, verbose: bool) 
         lines.append(f"faceDelta={diff.get('faceCountDelta')} edgeDelta={diff.get('edgeCountDelta')}")
     if verbose:
         lines.append(f"sizeDelta={diff.get('sizeDelta')} centerDelta={diff.get('centerDelta')}")
+    return "\n".join(lines)
+
+
+def _format_interfere_text(result: dict, *, quiet: bool = False, verbose: bool = False) -> str:
+    errors = result.get("errors") or []
+    if errors:
+        return "\n".join(str(error.get("message") or error) for error in errors)
+    stats = result.get("stats") or {}
+    clashes = result.get("clashes") or []
+    lines = [
+        f"entry     : {result.get('entry', '')}",
+        f"tolerance : {result.get('tolerance')} mm^3",
+        (
+            f"pairs     : {stats.get('pairs_tested', 0)} tested, "
+            f"{stats.get('pairs_skipped_bbox', 0)} rejected by bbox, "
+            f"{stats.get('pairs_total', 0)} total "
+            f"({stats.get('occurrences', 0)} occurrences)"
+        ),
+    ]
+    truncated = int(stats.get("pairs_truncated", 0) or 0)
+    if truncated:
+        lines.append(f"TRUNCATED : {truncated} pairs were not tested (--max-pairs)")
+    if not clashes:
+        lines.append("result    : PASS - no interpenetration above tolerance")
+        return "\n".join(lines)
+    lines.append(f"result    : FAIL - {len(clashes)} clash(es)")
+    for clash in clashes:
+        a = clash.get("a") or {}
+        b = clash.get("b") or {}
+        lines.append(
+            f"  {clash.get('volume', 0.0):12.1f} mm^3  "
+            f"{a.get('name', '')} [{a.get('ref', '')}]  x  {b.get('name', '')} [{b.get('ref', '')}]"
+        )
     return "\n".join(lines)
 
 

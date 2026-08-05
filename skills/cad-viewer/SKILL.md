@@ -55,11 +55,14 @@ URL points at the launch directory; replace its path to review any other folder.
 
 ## Links
 
-- Before returning any link, resolve `<directory>/<file>` and confirm the
-  artifact exists. Pass the generated artifact (e.g. `.step`), not its
-  generator source (e.g. `.py`). If the resolved path is missing, do not
-  return the link, and instead report the problem and point to the correct
-  generated artifact path.
+- Before returning any link, resolve `<directory>/<file>` and confirm it
+  exists. For a **generated** model pass the generator source (`<name>.step.py`)
+  — that is what the catalog itself lists, the backend resolves it directly and
+  builds the render artifacts on demand, and no `.step` file needs to exist. It
+  is also the only form that carries a `params` sidecar, because a same-stem
+  `<name>.step.py` shadows `<name>.step` anyway. For an **imported** STEP with no
+  generator, pass the `.step`/`.stp` itself. If the resolved path is missing, do
+  not return the link; report the problem and point to the correct path.
 - Return one Viewer URL per requested file.
 - Start the Viewer once. For each artifact, build a URL from the absolute
   directory path plus `?file=<path relative to it>`. Artifacts in different

@@ -142,10 +142,39 @@ Occurrence and shape labels are exported through STEP names and surfaced in `STE
 
 For repeated parts, keep occurrence labels, transforms, or joint connections explicit and inspect frames/positioning after generation.
 
+## Colour
+
+Two rules, both of which fail silently — no error, just a model that looks wrong.
+
+**Channels are LINEAR RGB, not sRGB.** The renderer converts them to sRGB on the
+way to the screen, so `Color(0.5, 0.5, 0.5)` displays as roughly `#BCBCBC`, not
+`#808080`. Picking channel values off a hex palette by eye gives a washed-out,
+desaturated model. Author with `cadgen.srgb()`, which takes the hex you want to
+see:
+
+```python
+from cadgen import srgb
+
+body.color = srgb("#2E3742")
+glass.color = srgb("#38414D", 0.42)   # with alpha
+```
+
+**Colour on a group compound is ignored.** Only *leaf* occurrences carry colour
+into the render package, so a colour set on a `Compound` that has children never
+reaches the screen. It does reach the STEP file's XCAF label, which is why this
+looks like it worked if you only check the STEP. Colour every leaf.
+
 ## Common failure modes
 
 - Fillet radius larger than local edge geometry.
 - Open sketch profile produces invalid or missing face.
+- Smooth `loft()` failing with `BRep_API: command not done` even though every
+  section is individually valid and they all share one edge count. Try
+  `loft(..., ruled=True)`; with densely spaced sections the result is visually
+  equivalent.
+- `solid += helper()` where the helper returns a *list*: the accumulator becomes
+  a `ShapeList`, and the failure surfaces much later as an anytree
+  `Cannot add non-node object` from inside `Compound(children=...)`.
 - Face selector changes after a boolean or fillet.
 - Part origin is arbitrary and later alignment checks become ambiguous.
 - Source-level joints are treated as if they were persistent STEP constraints rather than one-time source placement operations.
