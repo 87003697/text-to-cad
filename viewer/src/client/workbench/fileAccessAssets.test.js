@@ -137,6 +137,7 @@ test("file access copy targets include absolute and directory-relative local pat
 
   assert.deepEqual(targets, {
     path: "/project/text-to-cad/models/assemblies/robot-arm/robot-arm.step",
+    filename: "robot-arm.step",
     relativePath: "assemblies/robot-arm/robot-arm.step",
   });
 });
@@ -153,6 +154,7 @@ test("file access copy targets prefer loaded source directory-relative paths", (
 
   assert.deepEqual(targets, {
     path: "/project/text-to-cad/models/generated/source/robot_module.py",
+    filename: "robot_module.py",
     relativePath: "generated/source/robot_module.py",
   });
 });
@@ -164,6 +166,26 @@ test("file access copy targets preserve directory-relative paths outside the vie
 
   assert.deepEqual(targets, {
     path: "/project/text-to-cad/cad/source/robot_module.py",
+    filename: "robot_module.py",
     relativePath: "cad/source/robot_module.py",
   });
+});
+
+test("copy targets take the filename the asset already carries", () => {
+  // The generated-source asset's display filename is not the basename of the
+  // path it resolves to, so the asset's own value has to win.
+  const targets = copyTargetsForFileAccessAsset({
+    filename: "robot.step.py",
+    directoryRelativePath: "cad/source/robot_module.py",
+  }, viewerServerInfo);
+
+  assert.equal(targets.filename, "robot.step.py");
+});
+
+test("copy targets fall back to the path basename when the asset has no filename", () => {
+  const targets = copyTargetsForFileAccessAsset({
+    directoryRelativePath: "cad/source/robot_module.py",
+  }, viewerServerInfo);
+
+  assert.equal(targets.filename, "robot_module.py");
 });

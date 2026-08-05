@@ -4,6 +4,7 @@ import CadWorkspace from "./components/CadWorkspace";
 import faviconUrl from "./assets/favicon.ico";
 import "./styles/globals.css";
 import { getCadManifestSnapshot, subscribeCadManifest } from "./workbench/cadManifestStore.js";
+import { applyTutorialTipResetQueryParam } from "./workbench/persistence.js";
 
 const ROOT_ID = "root";
 const ROOT_CACHE_KEY = "__cadViewerRoot";
@@ -29,6 +30,8 @@ function bootstrap() {
     throw new Error(`Missing #${ROOT_ID} mount point.`);
   }
   ensureFavicon();
+  // Before anything renders, so a re-armed tip can fire on this page load.
+  applyTutorialTipResetQueryParam();
   document.title = "CAD Viewer";
   const cachedRoot = globalThis[ROOT_CACHE_KEY];
   const root = cachedRoot?.element === rootElement && cachedRoot?.root

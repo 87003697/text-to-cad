@@ -109,7 +109,11 @@ test("workbench-light preset uses neutral material treatment while preserving so
   assert.equal(cinematic.background.linearEnd, "#f0f4f9");
   assert.equal(cinematic.floor.mode, THEME_FLOOR_MODES.STAGE);
   assert.equal(cinematic.floor.enabled, false);
-  assert.equal(cinematic.floor.grid.enabled, false);
+  // No stage floor plane, but a faint ground grid and an origin axis to read
+  // part position against.
+  assert.equal(cinematic.floor.grid.enabled, true);
+  assert.equal(cinematic.floor.grid.opacity, 0.16);
+  assert.equal(cinematic.floor.axis.enabled, true);
   assert.equal(cinematic.floor.followModel, true);
   assert.equal(cinematic.floor.reflectivity, 0.14);
   assert.equal(cinematic.lighting.toneMappingExposure, 1.16);

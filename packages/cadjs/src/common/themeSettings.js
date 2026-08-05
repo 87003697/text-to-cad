@@ -140,6 +140,7 @@ const THEME_MODE_COLOR_PATHS = Object.freeze([
   Object.freeze(["floor", "gridCellColor"]),
   Object.freeze(["floor", "grid", "centerColor"]),
   Object.freeze(["floor", "grid", "cellColor"]),
+  Object.freeze(["floor", "axis", "color"]),
   Object.freeze(["lighting", "directional", "color"]),
   Object.freeze(["lighting", "spot", "color"]),
   Object.freeze(["lighting", "point", "color"]),
@@ -219,6 +220,22 @@ function applyThemeModeColorOverrides(target, overrides = {}) {
 
 export const MIN_FLOOR_GRID_DENSITY = 0.25;
 export const MAX_FLOOR_GRID_DENSITY = 4;
+// The vertical line through the world origin, running the full height of the
+// scene in both directions -- up from the floor and down through it. A ground
+// grid says where the floor is; this says where 0,0 is on it, which is what you
+// actually align parts against. It has no length setting: it is meant to read as
+// an infinite construction line, so it is sized off the scene radius to always
+// leave frame.
+export const DEFAULT_FLOOR_AXIS_SETTINGS = Object.freeze({
+  enabled: false,
+  color: "#6b7280",
+  opacity: 0.5
+});
+// Half-length as a multiple of scene radius. Large enough to exit any sane
+// framing; the camera's far plane trims the rest, which is what makes it read as
+// unbounded rather than as a very tall stick.
+export const FLOOR_AXIS_RADIUS_MULTIPLE = 1000;
+
 export const DEFAULT_FLOOR_GRID_SETTINGS = Object.freeze({
   enabled: true,
   gridCenterColor: "#6b7280",
@@ -383,6 +400,23 @@ function midpointPalette(primaryColors, secondaryColors) {
     const secondaryColor = secondary[index] || secondary.at(-1) || primaryColor;
     return mixHexColors(primaryColor, secondaryColor);
   }));
+}
+
+function createFloorAxisSettings(floorColor, options = {}) {
+  const normalizedFloorColor = normalizeColor(floorColor, "#f1f5f9");
+  const lightFloor = relativeLuminance(normalizedFloorColor) >= 0.36;
+  return {
+    axis: {
+      enabled: normalizeBoolean(options.enabled, false),
+      color: normalizeColor(
+        options.color,
+        lightFloor
+          ? mixHexColors(normalizedFloorColor, "#0f172a", 0.62)
+          : mixHexColors(normalizedFloorColor, "#f8fafc", 0.58)
+      ),
+      opacity: normalizeNumber(options.opacity, DEFAULT_FLOOR_AXIS_SETTINGS.opacity, 0, 1)
+    }
+  };
 }
 
 function createFloorGridSettings(floorColor, options = {}) {
@@ -1072,13 +1106,16 @@ const WORKBENCH_BASE_THEME_SETTINGS = Object.freeze({
     radialInner: WORKBENCH_LIGHT_CANVAS_COLOR,
     radialOuter: WORKBENCH_LIGHT_CANVAS_COLOR
   },
-  // Workbench is a clean engineering canvas: no stage floor or grid; the
-  // floor colors stay authored so derived fallbacks and mode overlays hold.
+  // Workbench is a clean engineering canvas: no stage floor plane, but a faint
+  // ground grid and a line up the origin give parts something to read position
+  // against. Both are deliberately low-contrast so they sit under the model
+  // rather than competing with it.
   floor: {
     ...CINEMATIC_THEME_SETTINGS.floor,
     color: WORKBENCH_LIGHT_FLOOR_COLOR,
     enabled: false,
-    ...createFloorGridSettings(WORKBENCH_LIGHT_FLOOR_COLOR, { enabled: false, opacity: 0.2 })
+    ...createFloorGridSettings(WORKBENCH_LIGHT_FLOOR_COLOR, { enabled: true, opacity: 0.16 }),
+    ...createFloorAxisSettings(WORKBENCH_LIGHT_FLOOR_COLOR, { enabled: true, opacity: 0.28 })
   },
   environment: {
     ...CINEMATIC_THEME_SETTINGS.environment,
@@ -1116,7 +1153,11 @@ const WORKBENCH_DARK_THEME_SETTINGS = Object.freeze({
     ...DARKOAL_THEME_SETTINGS.floor,
     color: WORKBENCH_DARK_FLOOR_COLOR,
     enabled: false,
-    ...createFloorGridSettings(WORKBENCH_DARK_FLOOR_COLOR, { enabled: false, opacity: 0.22 })
+    // Only the colors here reach the dark preset: mode overrides swap colors,
+    // not booleans or opacities, so enablement and opacity come from the light
+    // base above and are deliberately not restated.
+    ...createFloorGridSettings(WORKBENCH_DARK_FLOOR_COLOR, { enabled: true, opacity: 0.16 }),
+    ...createFloorAxisSettings(WORKBENCH_DARK_FLOOR_COLOR, { enabled: true, opacity: 0.28 })
   },
   lighting: {
     ...DARKOAL_THEME_SETTINGS.lighting,
@@ -1600,6 +1641,9 @@ export function normalizeThemeSettings(value = {}) {
   const grid = floor.grid && typeof floor.grid === "object" && !Array.isArray(floor.grid)
     ? floor.grid
     : {};
+  const axis = floor.axis && typeof floor.axis === "object" && !Array.isArray(floor.axis)
+    ? floor.axis
+    : {};
   const fallbackGridSettings = createFloorGridSettings(normalizedFloorColor);
   const normalizedGridCenterColor = normalizeColor(
     grid.centerColor ?? floor.gridCenterColor ?? floor.gridCenter,
@@ -1700,6 +1744,11 @@ export function normalizeThemeSettings(value = {}) {
         cellColor: normalizedGridCellColor,
         opacity: normalizedGridOpacity,
         density: normalizedGridDensity
+      },
+      axis: {
+        enabled: normalizeBoolean(axis.enabled, DEFAULT_FLOOR_AXIS_SETTINGS.enabled),
+        color: normalizeColor(axis.color, normalizedGridCenterColor),
+        opacity: normalizeNumber(axis.opacity, DEFAULT_FLOOR_AXIS_SETTINGS.opacity, 0, 1)
       }
     },
     environment: {

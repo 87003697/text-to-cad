@@ -1144,7 +1144,6 @@ export default function CadWorkspace({
   const [themeState, setThemeState] = useState(() => readDirectoryThemeSettingsState());
   const themeSettings = themeState.settings;
   const themeId = themeState.themeId;
-  const customThemeSettings = themeState.custom;
   const [themeEditing, setThemeEditing] = useState(false);
   const resolvedThemeSettings = useMemo(
     () => resolveThemeSettingsForColorMode(themeSettings, { prefersDark: false }),
@@ -6297,6 +6296,10 @@ export default function CadWorkspace({
     () => buildSelectionCopyButtonLabel(canonicalCopySelectionLines, { count: copySelectionPayload.copiedCount }),
     [canonicalCopySelectionLines, copySelectionPayload.copiedCount]
   );
+  // The tip teaches reference syntax, so it fires on the first pick that yields
+  // a reference to copy — a component, a subassembly, or a face/edge. Gating it
+  // on topology alone would hide it from anyone who only ever clicks parts.
+  const copyReferenceTipActive = canonicalCopySelectionLines.length > 0;
   const expandStepTreeAroundNode = useCallback((nodeId, {
     expandSelf = false,
     includeVisualOnlyAncestors = true
@@ -7832,7 +7835,10 @@ export default function CadWorkspace({
         statusLabel = "Copied link";
       } else {
         const targets = copyTargetsForFileAccessAsset(assetInfo, viewerServerInfo);
-        if (kind === "relativePath") {
+        if (kind === "filename") {
+          copyText = targets.filename;
+          statusLabel = "Copied filename";
+        } else if (kind === "relativePath") {
           copyText = targets.relativePath;
           statusLabel = "Copied relative path";
         } else {
@@ -7847,7 +7853,8 @@ export default function CadWorkspace({
 
       await copyTextToClipboard(copyText);
       const filename = String(assetInfo?.filename || "").trim();
-      setCopyStatus(filename ? `${statusLabel} for ${filename}` : statusLabel);
+      // Naming the file after "Copied filename" would just repeat what was copied.
+      setCopyStatus(filename && copyText !== filename ? `${statusLabel} for ${filename}` : statusLabel);
     } catch (error) {
       setCopyStatus(error instanceof Error ? error.message : "Failed to copy file reference");
     }
@@ -8325,6 +8332,7 @@ export default function CadWorkspace({
           handleStepModuleTransformDetectedChange={handleStepModuleTransformDetectedChange}
           selectionCount={selectionCount}
           copyButtonLabel={copyButtonLabel}
+          copyReferenceTipActive={copyReferenceTipActive}
           handleCopySelection={handleCopySelection}
           handleScreenshotCopy={handleScreenshotCopy}
           urdfPosePicker={isUrdfView && selectedUrdfMoveIt2ActionsEnabled ? {
@@ -8746,7 +8754,6 @@ export default function CadWorkspace({
                 onStartResize={handleStartFileSheetResize}
                 themeSettings={themeSettings}
                 themeId={themeId}
-                hasCustomTheme={Boolean(customThemeSettings)}
                 resolvedColorSchemeMode={resolvedColorSchemeMode}
                 onSelectTheme={selectTheme}
                 updateThemeSettings={updateThemeSettings}

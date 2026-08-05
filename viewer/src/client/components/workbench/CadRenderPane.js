@@ -14,8 +14,10 @@ import {
 } from "../ui/dropdown-menu";
 import { ToggleGroup, ToggleGroupItem } from "../ui/toggle-group";
 import AssemblyContextMenuItems from "./AssemblyContextMenuItems";
+import TutorialTip from "./TutorialTip";
 import { cn } from "@/ui/utils";
 import { RENDER_FORMAT } from "@/workbench/constants";
+import { TUTORIAL_TIP_IDS } from "@/workbench/persistence";
 import {
   isMeshRenderFormat,
   isRobotRenderFormat
@@ -366,6 +368,7 @@ export default function CadRenderPane({
   handleStepModuleTransformDetectedChange,
   selectionCount,
   copyButtonLabel,
+  copyReferenceTipActive = false,
   handleCopySelection,
   handleScreenshotCopy,
   urdfPosePicker = null
@@ -759,23 +762,30 @@ export default function CadRenderPane({
           className="pointer-events-none absolute z-20 flex min-w-0 justify-center"
           style={ctaOverlayStyle}
         >
-          <Button
-            type="button"
-            variant="default"
-            size="sm"
-            className="pointer-events-auto h-9 w-fit min-w-0 max-w-[min(28rem,100%)] shrink overflow-hidden border border-primary/20 bg-primary/85 px-4 text-[12px] font-semibold text-primary-foreground shadow-lg shadow-black/20 hover:bg-primary/75 focus-visible:ring-primary/35 max-sm:w-full"
-            disabled={ctaDisabled}
-            onClick={() => {
-              if (ctaMode === "screenshot") {
-                void handleScreenshotCopy?.();
-                return;
-              }
-              void handleCopySelection();
-            }}
-            title={ctaTitle}
+          <TutorialTip
+            tipId={TUTORIAL_TIP_IDS.COPY_REFERENCE}
+            active={ctaMode !== "screenshot" && copyReferenceTipActive}
+            side="top"
+            align="center"
           >
-            <span className="block min-w-0 max-w-full truncate">{ctaLabel}</span>
-          </Button>
+            <Button
+              type="button"
+              variant="default"
+              size="sm"
+              className="pointer-events-auto h-9 w-fit min-w-0 max-w-[min(28rem,100%)] shrink overflow-hidden border border-primary/20 bg-primary/85 px-4 text-[12px] font-semibold text-primary-foreground shadow-lg shadow-black/20 hover:bg-primary/75 focus-visible:ring-primary/35 max-sm:w-full"
+              disabled={ctaDisabled}
+              onClick={() => {
+                if (ctaMode === "screenshot") {
+                  void handleScreenshotCopy?.();
+                  return;
+                }
+                void handleCopySelection();
+              }}
+              title={ctaTitle}
+            >
+              <span className="block min-w-0 max-w-full truncate">{ctaLabel}</span>
+            </Button>
+          </TutorialTip>
         </div>
       ) : null}
     </div>

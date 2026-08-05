@@ -211,6 +211,10 @@ export function copyTargetsForFileAccessAsset(asset, viewerServerInfo = {}) {
 
   return {
     path: absolutePath,
+    // The asset carries its own display filename; fall back to the basename of
+    // whichever path we could resolve so this is never empty when a path is not.
+    filename: String(asset?.filename || "").trim() ||
+      basenameFromFileRef(relativePath || absolutePath),
     relativePath,
   };
 }

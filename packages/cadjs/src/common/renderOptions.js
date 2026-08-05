@@ -9,7 +9,9 @@ import {
 } from "./camera.js";
 import {
   cloneThemeSettings,
+  DEFAULT_FLOOR_AXIS_SETTINGS,
   DEFAULT_FLOOR_GRID_SETTINGS,
+  FLOOR_AXIS_RADIUS_MULTIPLE,
   getEnvironmentPresetById,
   MAX_FLOOR_GRID_DENSITY,
   MIN_FLOOR_GRID_DENSITY,
@@ -352,7 +354,11 @@ export function addFloor(scene, bounds, themeSettings, sceneScale, settingsBySca
     ? floor.grid
     : {};
   const gridEnabled = gridSettings.enabled === true || mode === THEME_FLOOR_MODES.GRID;
-  if (!floorEnabled && !gridEnabled) {
+  const axisSettings = floor.axis && typeof floor.axis === "object" && !Array.isArray(floor.axis)
+    ? floor.axis
+    : {};
+  const axisEnabled = axisSettings.enabled === true;
+  if (!floorEnabled && !gridEnabled && !axisEnabled) {
     return;
   }
   const settings = renderSceneScaleSettings(sceneScale, settingsByScale);
@@ -394,6 +400,30 @@ export function addFloor(scene, bounds, themeSettings, sceneScale, settingsBySca
     grid.rotation.x = Math.PI / 2;
     grid.position.set(center.x, center.y, minZ - 0.02);
     scene.add(grid);
+  }
+  if (axisEnabled) {
+    // Vertical line through the world origin, matching the viewer's
+    // updateOriginAxis so a snapshot shows the same reference the viewer does,
+    // depth-tested so model surfaces in front of it hide it.
+    const axisLength = Math.max(radius, 1) * FLOOR_AXIS_RADIUS_MULTIPLE;
+    const axis = new THREE.Line(
+      new THREE.BufferGeometry().setFromPoints([
+        new THREE.Vector3(0, 0, -axisLength),
+        new THREE.Vector3(0, 0, axisLength)
+      ]),
+      new THREE.LineBasicMaterial({
+        color: axisSettings.color
+          || gridSettings.centerColor
+          || floor.gridCenterColor
+          || DEFAULT_FLOOR_GRID_SETTINGS.gridCenterColor,
+        transparent: true,
+        opacity: clamp(toFiniteNumber(axisSettings.opacity, DEFAULT_FLOOR_AXIS_SETTINGS.opacity), 0, 1),
+        depthWrite: false,
+        toneMapped: false
+      })
+    );
+    axis.position.set(0, 0, minZ);
+    scene.add(axis);
   }
   if (!floorEnabled) {
     return;

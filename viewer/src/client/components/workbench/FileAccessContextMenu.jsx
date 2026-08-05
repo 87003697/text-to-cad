@@ -76,6 +76,14 @@ function FileAccessSection({
           <ContextMenuItem
             className="text-xs"
             onSelect={() => {
+              onCopyFileAssetReference(entry, asset.asset, asset, "filename");
+            }}
+          >
+            <span className="min-w-0 truncate">Copy Filename</span>
+          </ContextMenuItem>
+          <ContextMenuItem
+            className="text-xs"
+            onSelect={() => {
               onCopyFileAssetReference(entry, asset.asset, asset, "path");
             }}
           >

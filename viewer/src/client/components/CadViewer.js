@@ -53,6 +53,7 @@ import {
   syncUrdfPosePickerHoverObjects
 } from "cadjs/lib/viewer/urdfPosePicker";
 import {
+  clampSceneModelRadius,
   defaultSceneGridRadius,
   getLightingScopeRadius,
   getProportionalLightingScopeRadius,
@@ -74,7 +75,10 @@ import {
   resolveWireframeEdgeColor,
   updateSpotLightTarget
 } from "cadjs/lib/viewer/stageTheme";
-import { updateGridHelper as updateStageGridHelper } from "cadjs/lib/viewer/stageGrid";
+import {
+  updateGridHelper as updateStageGridHelper,
+  updateOriginAxis as updateStageOriginAxis
+} from "cadjs/lib/viewer/stageGrid";
 import {
   autoZoomFrameForBounds,
   DEFAULT_AUTO_ZOOM_PADDING,
@@ -174,7 +178,8 @@ import {
 } from "./viewer/viewportCameraKit";
 import { normalizeViewerRenderState } from "./viewer/renderState";
 import {
-  buildModel
+  buildModel,
+  effectiveBoundsFromRecords
 } from "cadjs/common/cadScene";
 import {
   resolveTopologyDisplayEdgeRuntimes,
@@ -469,17 +474,63 @@ function readOrthographicHalfHeight(runtime) {
   return Number.isFinite(derivedHalfHeight) && derivedHalfHeight > 1e-6 ? derivedHalfHeight : null;
 }
 
+// Radius of a bounds box, matching applyRuntimeModelBounds so the base and posed
+// radii are directly comparable.
+function boundsModelRadius(THREE, bounds, sceneScaleMode) {
+  const min = Array.isArray(bounds?.min) ? bounds.min : null;
+  const max = Array.isArray(bounds?.max) ? bounds.max : null;
+  if (!THREE || !min || !max) {
+    return 0;
+  }
+  return clampSceneModelRadius(
+    new THREE.Vector3(
+      toNumber(max[0]) - toNumber(min[0]),
+      toNumber(max[1]) - toNumber(min[1]),
+      toNumber(max[2]) - toNumber(min[2])
+    ).length() / 2,
+    sceneScaleMode
+  );
+}
+
+// 100% means "framed to the model at rest". The camera is always fitted to the
+// CURRENT pose, so when a parameter sidecar opens a model mid-animation -- an
+// extended lift, an exploded assembly -- fitting that pose would define the
+// enlarged framing as 100%. Framing distance and orthographic half-height are
+// both proportional to model radius, so scaling the captured value by
+// base/fitted radius recovers the at-rest baseline. A model whose animation
+// opens 1.5x larger now reads ~67%, which is what it is.
+//
+// zoomFitModelRadius is the radius of the bounds the camera was last fitted to;
+// runtime.modelRadius is only a fallback because it tracks whichever bounds were
+// applied last, which is not always what the camera framed.
+function runtimeZoomBaselineScale(runtime) {
+  const baseRadius = Number(runtime?.zoomBaseModelRadius);
+  const fittedRadius = Number(runtime?.zoomFitModelRadius) > 1e-6
+    ? Number(runtime.zoomFitModelRadius)
+    : Number(runtime?.modelRadius);
+  if (
+    !Number.isFinite(baseRadius) || baseRadius <= 1e-6 ||
+    !Number.isFinite(fittedRadius) || fittedRadius <= 1e-6
+  ) {
+    return 1;
+  }
+  return baseRadius / fittedRadius;
+}
+
 function resetRuntimeZoomBaseline(runtime) {
+  const scale = runtimeZoomBaselineScale(runtime);
   if (runtime?.camera?.isOrthographicCamera) {
     const halfHeight = readOrthographicHalfHeight(runtime);
     if (halfHeight) {
-      runtime.zoomBaseHalfHeight = halfHeight;
+      runtime.zoomBaseHalfHeight = halfHeight * scale;
+      return runtime.zoomBaseHalfHeight;
     }
     return halfHeight;
   }
   const distance = readCameraTargetDistance(runtime);
   if (distance) {
-    runtime.zoomBaseDistance = distance;
+    runtime.zoomBaseDistance = distance * scale;
+    return runtime.zoomBaseDistance;
   }
   return distance;
 }
@@ -672,8 +723,8 @@ function ZoomControl({
       </button>
       <button
         type="button"
-        aria-label="Reset zoom"
-        title="Reset zoom"
+        aria-label="Reset view"
+        title="Reset view"
         className={DISPLAY_TOOLBAR_BUTTON_CLASSES}
         onClick={(event) => {
           event.stopPropagation();
@@ -1238,6 +1289,21 @@ function currentDisplayRecordTranslationByRecord(THREE, records = []) {
   return translations;
 }
 
+// What "reset" and "fit" frame: the model in its current parameter pose, which
+// is the same thing the loader framed. Framing runtime.modelBounds instead would
+// crop a model a sidecar has posed larger than its at-rest box, because that
+// field tracks whichever bounds were applied last rather than the live pose.
+function runtimeFramingBounds(runtime, fallbackBounds = null) {
+  if (!runtime?.THREE?.Matrix4 || !Array.isArray(runtime.displayRecords) || !runtime.displayRecords.length) {
+    return runtime?.modelBounds || fallbackBounds;
+  }
+  return effectiveBoundsFromRecords(
+    runtime.THREE,
+    runtime.displayRecords,
+    runtime.modelBounds || fallbackBounds
+  );
+}
+
 function displayRecordBoundsForPartIds(runtime, partIds = []) {
   const normalizedPartIds = normalizePartIdList(partIds);
   if (!normalizedPartIds.length || !Array.isArray(runtime?.displayRecords)) {
@@ -1275,6 +1341,9 @@ function zoomRuntimeToBounds(runtime, bounds, sceneScaleMode, {
   });
   if (!frame) {
     return false;
+  }
+  if (resetZoomBaseline) {
+    runtime.zoomFitModelRadius = boundsModelRadius(runtime.THREE, normalizedBounds, sceneScaleMode);
   }
   const snapshot = {
     position: frame.position.toArray(),
@@ -1728,6 +1797,10 @@ function updateGridHelper(
   floorMode = THEME_FLOOR_MODES.STAGE,
   floorSettings = {}
 ) {
+  updateStageOriginAxis(runtime, viewerTheme, radius, floorZ, {
+    disposeSceneObject,
+    floorSettings
+  });
   return updateStageGridHelper(runtime, viewerTheme, radius, floorZ, sceneScaleMode, floorMode, {
     disposeSceneObject,
     floorSettings
@@ -2228,7 +2301,7 @@ const CadViewer = forwardRef(function CadViewer({
     const runtime = runtimeRef.current;
     const reset = zoomRuntimeToBounds(
       runtime,
-      runtime?.modelBounds || meshData?.bounds,
+      runtimeFramingBounds(runtime, meshData?.bounds),
       sceneScaleModeRef.current,
       {
         animate,
@@ -2580,7 +2653,7 @@ const CadViewer = forwardRef(function CadViewer({
       const runtime = runtimeRef.current;
       const fitted = zoomRuntimeToBounds(
         runtime,
-        runtime?.modelBounds || meshData?.bounds,
+        runtimeFramingBounds(runtime, meshData?.bounds),
         sceneScaleModeRef.current,
         {
           animate,
@@ -3289,6 +3362,9 @@ const CadViewer = forwardRef(function CadViewer({
     });
 
     const displayBounds = cadScene.bounds || meshData.bounds;
+    // meshData.bounds is the model at rest; displayBounds may be a posed
+    // (animated or exploded) superset of it.
+    runtime.zoomBaseModelRadius = boundsModelRadius(THREE, meshData.bounds, normalizedSceneScaleMode);
     const boundsMin = Array.isArray(displayBounds?.min) ? displayBounds.min : [0, 0, 0];
     const boundsMax = Array.isArray(displayBounds?.max) ? displayBounds.max : [0, 0, 0];
     const center = new THREE.Vector3(
@@ -3414,6 +3490,9 @@ const CadViewer = forwardRef(function CadViewer({
           runtime.requestRender();
         }
       });
+      // The initial framing fits displayBounds, so that is the radius the
+      // baseline is measured against.
+      runtime.zoomFitModelRadius = radius;
       resetRuntimeZoomBaseline(runtime);
       syncCameraZoomPercent(runtime);
       framedModelKeyRef.current = modelKey || "";
@@ -4489,7 +4568,13 @@ const CadViewer = forwardRef(function CadViewer({
           zoomPercent={cameraZoomPercent}
           onZoomPercentChange={applyZoomPercent}
           onZoomReset={() => {
-            resetZoomAndPan({ animate: true });
+            // Reset the whole view, not just the zoom: refit the framing first
+            // (instant, so it just establishes the correct target and distance),
+            // then animate back to the default orientation. Both paths drive the
+            // same runtime.cameraTransition, so animating both would leave the
+            // second tween overwriting the first and the orientation unchanged.
+            resetZoomAndPan({ animate: false });
+            activateDefaultViewPlane();
           }}
           viewPlaneOffsetRight={viewPlaneOffsetRight}
           viewPlaneOffsetBottom={viewPlaneOffsetBottom}

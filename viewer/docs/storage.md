@@ -11,12 +11,13 @@ GLB/topology artifacts, and hosted Blob uploads are backend concerns; use
 
 Use query params only for shareable state that should survive copying a URL:
 
-- `file`: active catalog entry, always relative to the active `dir` directory.
-- `dir`: local filesystem directory to scan. It may be absolute or relative to
-  the directory where the Viewer server was started. When omitted, the Viewer
-  uses the active directory remembered for the tab, or the directory where the
-  server was started when that is the only active directory.
+- `file`: active catalog entry, always relative to the directory in the URL path.
+  The path itself is the directory the Viewer scans — there is no `dir` param on
+  the page URL (`dir` survives only inside `/__cad/asset` request URLs).
 - `moveit2Ws`: explicit MoveIt2 websocket override for local or hosted sessions.
+- `resetTips`: debug-only. Clears the record of seen one-shot tutorial tips so
+  they fire again. It applies once during bootstrap and is then stripped from
+  the address bar, so it is a reset action rather than a persistent mode.
 
 Do not put dense viewer state, panel state, drawing state, or per-file controls
 in the URL.
@@ -32,6 +33,10 @@ Current intended use:
   `custom`) plus the single custom settings blob, if the user has edited one.
   Presets are read-only and are never stored — only named. The key is absent
   while the theme is `system` with no custom slot.
+- `cad-viewer:tutorial-tips:v1`: ids of the one-shot tutorial tips the user has
+  dismissed. A tip is recorded only when its close button is pressed — clicking
+  away, Escape, and reloads all leave it unrecorded, so it comes back on the next
+  chance until it is actually acknowledged. Cleared by `?resetTips=1`.
 
 Avoid adding file-specific state to `localStorage`. If the value depends on the
 selected file, the active root directory, a generated asset hash, or a tab

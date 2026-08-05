@@ -580,14 +580,38 @@ function SegmentedControl({ value, onChange, options }) {
   );
 }
 
+// Two boxes: the canvas the theme paints behind the model, and the colour parts
+// are filled with by default. One box alone can't tell a light theme with dark
+// parts from a dark theme with light parts.
 function PresetSwatch({ preview = null }) {
   return (
-    <span
-      className="inline-block size-3.5 shrink-0 rounded-[3px] border border-border/70"
-      style={{ background: preview?.accentColor || "var(--muted)" }}
-      aria-hidden="true"
-    />
+    <span className="inline-flex shrink-0 overflow-hidden rounded-[3px] border border-border/70" aria-hidden="true">
+      <span
+        className="block size-3.5"
+        style={{ background: preview?.background || "var(--muted)" }}
+      />
+      <span
+        className="block size-3.5 border-l border-border/70"
+        style={{ background: preview?.modelColor || "var(--muted)" }}
+      />
+    </span>
   );
+}
+
+// The custom slot has no authored preview, so read the same two colours out of
+// the settings the user has actually edited.
+function customThemePreview(themeSettings) {
+  const background = themeSettings?.background || {};
+  const fillColors = themeSettings?.materials?.fillColors;
+  const backgroundCss = background.type === "radial"
+    ? `radial-gradient(circle at 42% 32%, ${background.radialInner} 0%, ${background.radialOuter} 78%)`
+    : background.type === "linear"
+    ? `linear-gradient(${Number(background.linearAngle) || 135}deg, ${background.linearStart} 0%, ${background.linearEnd} 100%)`
+    : background.solidColor;
+  return {
+    background: backgroundCss || "",
+    modelColor: (Array.isArray(fillColors) ? fillColors[0] : "") || ""
+  };
 }
 
 // Tracks the OS light/dark preference so the System entry can name the preset it
@@ -612,12 +636,14 @@ export function useSystemDefaultThemePresetId() {
   return resolveSystemThemePresetId({ prefersDark });
 }
 
-// The theme picker: System, then the built-in presets, then Custom once the user
-// has edited something. Presets are read-only, so picking one is both "apply"
-// and "reset" — there is no save, restore, rename, or delete.
+// The theme picker: System, then the built-in presets. Presets are read-only, so
+// picking one is both "apply" and "reset" — there is no save, restore, rename, or
+// delete. Editing any setting moves the theme into the custom slot, which is not
+// a list item: it is only ever the trigger's label, because "Custom" is a state
+// you leave by picking a preset, not something you can pick.
 function ThemePresetSection({
+  themeSettings,
   themeId = DEFAULT_THEME_ID,
-  hasCustomTheme = false,
   onSelectTheme
 }) {
   const systemPresetId = useSystemDefaultThemePresetId();
@@ -626,36 +652,33 @@ function ThemePresetSection({
     {
       value: SYSTEM_THEME_ID,
       label: "System",
-      hint: systemPreset?.label || "",
       preview: systemPreset?.preview || null
     },
     ...THEME_PRESETS.map((preset) => ({
       value: preset.id,
       label: preset.label,
-      hint: "",
       preview: preset.preview || null
-    })),
-    ...(hasCustomTheme ? [{
-      value: CUSTOM_THEME_ID,
-      label: "None",
-      hint: "",
-      preview: null
-    }] : [])
-  ], [hasCustomTheme, systemPreset]);
+    }))
+  ], [systemPreset]);
 
-  const activeOption = options.find((option) => option.value === themeId) || options[0];
+  const isCustom = themeId === CUSTOM_THEME_ID;
+  const activeOption = options.find((option) => option.value === themeId) || null;
+  const triggerLabel = isCustom ? "Custom" : (activeOption?.label || options[0].label);
+  const triggerPreview = isCustom
+    ? customThemePreview(themeSettings)
+    : (activeOption?.preview || options[0].preview);
 
   return (
     <ControlSubsection title="Preset">
       <Field>
         <Select
-          value={activeOption.value}
+          value={isCustom ? "" : (activeOption?.value || options[0].value)}
           onValueChange={(nextValue) => onSelectTheme?.(nextValue)}
         >
           <SelectTrigger size="sm" className="h-7 !text-[11px]" aria-label="Theme preset">
             <span className="flex min-w-0 items-center gap-2">
-              <PresetSwatch preview={activeOption.preview} />
-              <SelectValue />
+              <PresetSwatch preview={triggerPreview} />
+              <span className="truncate">{triggerLabel}</span>
             </span>
           </SelectTrigger>
           <SelectContent>
@@ -666,7 +689,7 @@ function ThemePresetSection({
                 className="text-xs"
                 icon={<PresetSwatch preview={option.preview} />}
               >
-                {option.hint ? `${option.label} · ${option.hint}` : option.label}
+                {option.label}
               </SelectItem>
             ))}
           </SelectContent>
@@ -1367,7 +1390,6 @@ export function buildDisplaySettingsTab(props) {
 function ThemeSettingsContent({
   themeSettings,
   themeId = DEFAULT_THEME_ID,
-  hasCustomTheme = false,
   resolvedColorSchemeMode = THEME_COLOR_MODES.LIGHT,
   onSelectTheme,
   updateThemeSettings
@@ -1411,6 +1433,22 @@ function ThemeSettingsContent({
       }
     }));
   };
+  const setFloorAxis = (patch) => {
+    updateThemeSettings((current) => {
+      const currentFloor = current.floor || {};
+      return {
+        ...current,
+        floor: {
+          ...currentFloor,
+          axis: {
+            ...(currentFloor.axis || {}),
+            ...patch
+          }
+        }
+      };
+    });
+  };
+
   const setFloorGrid = (patch) => {
     updateThemeSettings((current) => {
       const currentFloor = current.floor || {};
@@ -1506,8 +1544,8 @@ function ThemeSettingsContent({
   return (
     <div className="py-2" data-cad-theme-settings-section="true">
       <ThemePresetSection
+        themeSettings={themeSettings}
         themeId={themeId}
-        hasCustomTheme={hasCustomTheme}
         onSelectTheme={onSelectTheme}
       />
 
@@ -1807,7 +1845,36 @@ function ThemeSettingsContent({
             </SliderField>
           </>
         ) : null}
+
+        {/* The origin axis lives here because it is the other ground reference,
+            but it is deliberately outside the grid-enabled branch above: gating
+            it on the grid would hide its switch whenever the grid is off and
+            leave a rendering axis with no way to turn it off. */}
+        <ThemeToggleRow
+          label="Origin axis"
+          checked={themeSettings.floor?.axis?.enabled === true}
+          onChange={(nextValue) => setFloorAxis({ enabled: nextValue })}
+        />
+        {themeSettings.floor?.axis?.enabled === true ? (
+          <>
+            <ColorModeField
+              label="Axis color"
+              path={["floor", "axis", "color"]}
+              {...themeColorFieldProps}
+            />
+            <SliderField label="Axis opacity" value={formatNumber(themeSettings.floor?.axis?.opacity ?? 0.5)}>
+              <SliderInput
+                value={themeSettings.floor?.axis?.opacity ?? 0.5}
+                min={0}
+                max={1}
+                step={0.01}
+                onChange={(nextValue) => setFloorAxis({ opacity: nextValue })}
+              />
+            </SliderField>
+          </>
+        ) : null}
       </ControlSubsection>
+
 
       {/* Lighting used to be one section holding all of this — 18 rows and every
           nested sub-subsection in the file, four levels deep at the light tabs.
@@ -2039,9 +2106,9 @@ function ThemeSettingsContent({
 }
 
 // Full-sidebar theme editor (global theme settings). Mutually exclusive with the
-// per-file sheet; opened from the navbar theme dropdown. Reuses the FileSheet
-// aside frame (width + resize) and the ThemeSettingsContent editor body
-// (which already holds the preset select + Save-as/Update/Restore actions).
+// per-file sheet; opened from the navbar theme button. Reuses the FileSheet
+// aside frame (width + resize) and the ThemeSettingsContent editor body, which
+// already holds the preset select.
 export function ThemeEditorPanel({
   open,
   isDesktop,
@@ -2050,7 +2117,6 @@ export function ThemeEditorPanel({
   onStartResize,
   themeSettings,
   themeId = DEFAULT_THEME_ID,
-  hasCustomTheme = false,
   resolvedColorSchemeMode = THEME_COLOR_MODES.LIGHT,
   onSelectTheme,
   updateThemeSettings
@@ -2085,7 +2151,6 @@ export function ThemeEditorPanel({
         <ThemeSettingsContent
           themeSettings={themeSettings}
           themeId={themeId}
-          hasCustomTheme={hasCustomTheme}
           resolvedColorSchemeMode={resolvedColorSchemeMode}
           onSelectTheme={onSelectTheme}
           updateThemeSettings={updateThemeSettings}

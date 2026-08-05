@@ -36,13 +36,22 @@ A Viewer URL's **path is the absolute directory**, exactly as in a `file://` URL
 and `file=` selects one artifact inside it:
 
 ```text
-http://127.0.0.1:3245/absolute/project/models?file=path/to/model.step
+http://127.0.0.1:3245/absolute/project/models?file=mechanisms/lift_table.step.py
 ```
 
 **Always build the path from an absolute directory.** The Viewer runs from an
 arbitrary working directory — usually wherever the skill happens to be installed,
 not the model directory — so a relative path resolves against the wrong place.
 The `file=` value is relative to that directory.
+
+**The path is the workspace, not the file's folder.** The Viewer scans it
+recursively, so the file browser lists every model beneath it and the user can
+switch files without a new link. Pick the directory the user thinks of as their
+model workspace — typically the project's `models/` directory, or the nearest
+common parent of the files you were asked to review — and put the rest of the
+path in `file=`. Naming the artifact's own deep folder
+(`.../models/mechanisms?file=lift_table.step.py`) opens the same model but hides
+the rest of the project, which is almost never what the user wants.
 
 If port `3245` is already in use, the launcher exits with an error rather than
 rolling to another port; rerun with an explicit free port, `--port <n>`, and use
@@ -64,9 +73,10 @@ URL points at the launch directory; replace its path to review any other folder.
   generator, pass the `.step`/`.stp` itself. If the resolved path is missing, do
   not return the link; report the problem and point to the correct path.
 - Return one Viewer URL per requested file.
-- Start the Viewer once. For each artifact, build a URL from the absolute
-  directory path plus `?file=<path relative to it>`. Artifacts in different
-  directories just get different URL paths on the same Viewer.
+- Start the Viewer once and pick one workspace root for the session. Every link
+  is that same absolute root plus `?file=<path relative to it>`, so all of them
+  share one browsable catalog. Only use a second root for an artifact that lives
+  outside the first.
 - For directory-only review links, return the directory URL without `?file=`.
 - Do not stop an existing Viewer server unless the user asks.
 - If Viewer startup fails, report the failure and continue with the owning skill's non-GUI validation or artifacts.

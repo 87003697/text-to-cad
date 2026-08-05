@@ -1428,10 +1428,15 @@ function mergeBoundsList(boundsList) {
   return count > 0 && min.every(Number.isFinite) && max.every(Number.isFinite) ? { min, max } : null;
 }
 
-function effectiveBoundsFromRecords(THREE, records, fallbackBounds) {
+// Bounds of the model in its current parameter pose: the at-rest part bounds
+// moved by the module-effect delta. This is what the loader frames the camera
+// on, so callers that re-frame later (reset, fit) use it to land back on the
+// same view. Exploded-view offsets are deliberately excluded -- exploding is a
+// temporary inspection state, not a change to how big the model is.
+export function effectiveBoundsFromRecords(THREE, records, fallbackBounds = null) {
   const boundsList = [];
   for (const record of Array.isArray(records) ? records : []) {
-    if (record.effectVisible === false) {
+    if (!record || record.effectVisible === false) {
       continue;
     }
     // record.partBounds is world-space at rest pose: composed packages fold the
