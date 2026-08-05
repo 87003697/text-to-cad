@@ -42,8 +42,38 @@ Pass selector refs as `#...` tokens. The STEP/CAD file path or entry target is a
 
 1. Generation completed and the STEP/STP file exists.
 2. `refs --facts --planes --positioning` confirms scale, labels, major planes, and placement-ready references. Run this for every generated artifact.
-3. Spec-driven checks: `measure` for every user-specified dimension, offset, or clearance; `align` for interfaces that should be flush or centered; `frame` for orientation and occurrence-placement expectations; `diff` for modifications that could affect unrelated geometry.
-4. Snapshot the primary STEP/STP per `snapshot-review.md`, then convert every visual concern into a deterministic geometry check before it becomes a validation claim.
+3. `validate` confirms the geometry is sound: valid topology, closed shells, no self-intersection, and positive volume on every solid. Run this for every generated artifact.
+4. Spec-driven checks: `measure` for every user-specified dimension, offset, or clearance; `align` for interfaces that should be flush or centered; `frame` for orientation and occurrence-placement expectations; `diff` for modifications that could affect unrelated geometry.
+5. Snapshot the primary STEP/STP per `snapshot-review.md`, then convert every visual concern into a deterministic geometry check before it becomes a validation claim.
+
+### `refs --facts` "ok" is not a geometry claim
+
+`refs --facts` reports counts, bounds, labels and references. Its `ok` field is
+a command-success flag: it is true when every requested ref resolved, and it
+says nothing about whether the geometry is sound. A five-face open box reports
+`"ok": true` with `"faceCount": 5`, and a solid with inverted orientation —
+which renders as a hole in the world — reports `"ok": true` as well.
+
+Use `validate` for that question:
+
+```bash
+inspect validate models/part/part.step.py
+inspect validate models/part/part.step.py --refs o1.2      # one subassembly
+inspect validate models/panel/panel.step.py --allow-open   # surfaces intended
+```
+
+It reports, per occurrence, any of `invalidTopology`, `openShell`,
+`nonPositiveVolume`, `noSolid`, `selfIntersecting`, and exits non-zero when any
+occurrence fails.
+
+Two subtleties worth knowing. `BRepCheck_Analyzer` returns **true** for a
+reversed solid, so topological validity alone cannot catch an inverted body —
+only the sign of the volume can. And volume is measured per solid, never
+aggregated: a `+1000` and a `-1000` inside one compound sum to zero, so any
+check reading a compound's total volume sees nothing wrong.
+
+Pass `--skip-self-intersection` on large assemblies if the boolean test
+dominates runtime.
 
 ## Reference discovery
 

@@ -213,6 +213,54 @@ until the next boolean, which then fails with `Null TopoDS_Shape object` from a
 call nowhere near the cause. `ShapeFix_Shape` repairs many of these; gate every
 boolean result rather than trusting the last operation.
 
+`scripts/inspect validate` runs both of these gates plus closure and
+self-intersection over every occurrence, so this does not have to be hand-rolled
+per model. Note it measures volume **per solid**: an inverted member inside a
+compound cancels against a sound one, so anything reading a compound's aggregate
+volume sees nothing wrong.
+
+## A revolve puts its seam at +X
+
+A 360-degree `revolve` leaves a seam edge where its profile started, and
+sketching on `Plane.XZ` places that seam at **+X**. If the presentation camera
+looks down +X, every revolved casting renders with a thin panel line down its
+visible face — on parts whose whole point is a smooth, sealed surface.
+
+This is not limited to `revolve`: a plain `Cylinder` primitive seams at +X too,
+verified with a marker probe. Any large smooth camera-facing cylinder is
+affected.
+
+Rotate the finished body about Z so the seam lands away from the camera. Two
+cautions:
+
+- A body carrying discrete features (a bolt ring, a stud circle) must be rotated
+  by a whole number of feature pitches, or left alone and its *prototype*
+  rotated instead — `bolt_ring`-style helpers only translate their prototype, so
+  seam-hiding the prototype does not move the ring.
+- A body offset from the origin must be rotated about **its own** axis: build it
+  at the origin, rotate, then translate. Rotating in place about global Z flies
+  it across the model.
+
+Prove the fix with two renders — the seam absent from the camera face **and**
+present on the far side. Without the second render you cannot tell a hidden seam
+from one that was never visible at that angle.
+
+## Fillet retry ladders degrade silently
+
+The `pipe()`-style retry ladder (`[bend, .7, .5, .3, 20]` around
+`FilletPolyline`) exists for a good reason: one oversized corner otherwise kills
+an entire build with `BRep_API: command not done`. But it converts a hard
+failure into an invisible cosmetic regression.
+
+Where a profile cannot accept the nominal radius, the ladder silently falls back
+— a 6 mm rim fillet became ~2 mm on a 660 mm-diameter flange, which tessellates
+as a visible sawtooth. The build reports success; only a render cropped to ~5x
+shows it.
+
+Do not rely on the ladder for cosmetic radii. Reshape the profile so the
+intended radius genuinely fits (a knife-edged wafer cannot take any fillet;
+merge it into its neighbour), then verify by cropping the render.
+
 ## Common failure modes
 
 - Fillet radius larger than local edge geometry.

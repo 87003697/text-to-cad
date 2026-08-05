@@ -177,6 +177,38 @@ def build_parser() -> argparse.ArgumentParser:
     _add_output_arguments(interfere_parser)
     interfere_parser.set_defaults(handler=run_interfere)
 
+    validate_parser = subparsers.add_parser(
+        "validate",
+        help="Report per-solid geometric validity: topology, closure, and orientation.",
+        description=(
+            "Check each leaf occurrence for topological validity, watertightness, "
+            "self-intersection, and positive volume. This is the geometry-soundness "
+            "check; `refs --facts` reports counts and bounds and its \"ok\" field "
+            "covers ref resolution only.\n"
+            "  inspect validate models/car/car.step.py\n"
+            "  inspect validate models/car/car.step.py --refs o1.1,o1.7\n"
+            "  inspect validate models/panel/panel.step.py --allow-open\n"
+        ),
+    )
+    validate_parser.add_argument("entry", help="CAD STEP path or CAD entry target.")
+    validate_parser.add_argument(
+        "--refs",
+        default="",
+        help="Comma-separated occurrence refs to restrict the check to. A ref matches its whole subtree.",
+    )
+    validate_parser.add_argument(
+        "--allow-open",
+        action="store_true",
+        help="Treat surface/shell geometry as intended, suppressing openShell and noSolid findings.",
+    )
+    validate_parser.add_argument(
+        "--skip-self-intersection",
+        action="store_true",
+        help="Skip the boolean self-intersection test, which dominates runtime on large assemblies.",
+    )
+    _add_output_arguments(validate_parser)
+    validate_parser.set_defaults(handler=run_validate)
+
     worker_parser = subparsers.add_parser(
         "worker",
         help="Run a persistent JSONL inspect worker.",
@@ -331,6 +363,36 @@ def run_interfere(args: argparse.Namespace) -> int:
         }
 
     _emit_result(args, result, _format_interfere_text)
+    return 0 if bool(result.get("ok")) else 2
+
+
+def run_validate(args: argparse.Namespace) -> int:
+    inspect = _inspect_api()
+    # Imported here, not at module scope: `inspect --help` must not pull OCP in.
+    from cadgen import validity
+
+    refs = [ref for ref in str(getattr(args, "refs", "") or "").split(",") if ref.strip()]
+    try:
+        result = validity.inspect_validity(
+            args.entry,
+            refs=refs,
+            allow_open=bool(getattr(args, "allow_open", False)),
+            check_self_intersection=not bool(getattr(args, "skip_self_intersection", False)),
+        )
+    except inspect.CadRefError as exc:
+        result = {
+            "ok": False,
+            "entry": args.entry,
+            "errors": [inspect.cad_ref_error_payload(exc)],
+        }
+    except (OSError, RuntimeError, ValueError) as exc:
+        result = {
+            "ok": False,
+            "entry": args.entry,
+            "errors": [{"message": str(exc)}],
+        }
+
+    _emit_result(args, result, _format_validate_text)
     return 0 if bool(result.get("ok")) else 2
 
 
@@ -637,6 +699,28 @@ def _format_interfere_text(result: dict, *, quiet: bool = False, verbose: bool =
             f"  {clash.get('volume', 0.0):12.1f} mm^3  "
             f"{a.get('name', '')} [{a.get('ref', '')}]  x  {b.get('name', '')} [{b.get('ref', '')}]"
         )
+    return "\n".join(lines)
+
+
+def _format_validate_text(result: dict, *, quiet: bool = False, verbose: bool = False) -> str:
+    errors = result.get("errors") or []
+    if errors:
+        return "\n".join(str(error.get("message") or error) for error in errors)
+    parts = result.get("parts") or []
+    lines = [
+        f"entry       : {result.get('entry', '')}",
+        f"occurrences : {result.get('occurrenceCount', 0)}",
+    ]
+    if not parts:
+        lines.append("result      : PASS - all solids valid, closed, and positive volume")
+        return "\n".join(lines)
+    lines.append(f"result      : FAIL - {len(parts)} occurrence(s)")
+    for part in parts:
+        reasons = ", ".join(part.get("reasons") or [])
+        lines.append(f"  {reasons:44s} {part.get('name', '')} [{part.get('ref', '')}]")
+        if verbose:
+            volumes = part.get("volumes") or []
+            lines.append(f"      solids={part.get('solidCount', 0)} volumes={volumes}")
     return "\n".join(lines)
 
 
