@@ -75,13 +75,13 @@ export const metadata: Metadata = {
   },
   icons: {
     icon: [
-      { url: "/favicon.ico?v=star-22-18", type: "image/x-icon" },
+      { url: "/favicon.ico?v=star-navy-tile-2", type: "image/x-icon" },
     ],
     shortcut: [
-      { url: "/favicon.ico?v=star-22-18", type: "image/x-icon" },
+      { url: "/favicon.ico?v=star-navy-tile-2", type: "image/x-icon" },
     ],
     apple: [
-      { url: "/favicon.png?v=star-22-18", type: "image/png" },
+      { url: "/favicon.png?v=star-navy-tile-2", type: "image/png" },
     ],
   },
   robots: {

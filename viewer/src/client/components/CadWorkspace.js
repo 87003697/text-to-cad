@@ -53,6 +53,7 @@ import {
 import { clonePerspectiveSnapshot } from "cadjs/lib/perspective";
 import {
   ASSET_STATUS,
+  DOCUMENT_TITLE,
   DRAWING_TOOL,
   RENDER_FORMAT,
   REFERENCE_STATUS,
@@ -296,7 +297,6 @@ import {
   stepExportFormatLabel
 } from "@/workbench/stepExport";
 
-const DEFAULT_DOCUMENT_TITLE = "CAD Viewer";
 // Single user-facing label for "the viewer is (re)generating the render artifacts a STEP model
 // needs before it can render" — used for both the filename status chip and its tooltip across every
 // artifact-generation trigger (first build, stale rebuild, source-changed regen). Browser-side
@@ -4128,7 +4128,7 @@ export default function CadWorkspace({
     },
     upsertTabRecord,
     selectedEntry,
-    defaultDocumentTitle: DEFAULT_DOCUMENT_TITLE,
+    defaultDocumentTitle: DOCUMENT_TITLE,
     selectedKey,
     entryMap,
     buildActiveTabSnapshot,

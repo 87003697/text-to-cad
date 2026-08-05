@@ -5,6 +5,7 @@ import faviconUrl from "./assets/favicon.ico";
 import "./styles/globals.css";
 import { getCadManifestSnapshot, subscribeCadManifest } from "./workbench/cadManifestStore.js";
 import { applyTutorialTipResetQueryParam } from "./workbench/persistence.js";
+import { DOCUMENT_TITLE } from "./workbench/constants.js";
 
 const ROOT_ID = "root";
 const ROOT_CACHE_KEY = "__cadViewerRoot";
@@ -21,7 +22,7 @@ function ensureFavicon() {
     document.head.appendChild(icon);
   }
   icon.type = "image/x-icon";
-  icon.href = `${faviconUrl}?v=planetary-gear-workbench`;
+  icon.href = `${faviconUrl}?v=star-navy-tile-2`;
 }
 
 function bootstrap() {
@@ -32,7 +33,7 @@ function bootstrap() {
   ensureFavicon();
   // Before anything renders, so a re-armed tip can fire on this page load.
   applyTutorialTipResetQueryParam();
-  document.title = "CAD Viewer";
+  document.title = DOCUMENT_TITLE;
   const cachedRoot = globalThis[ROOT_CACHE_KEY];
   const root = cachedRoot?.element === rootElement && cachedRoot?.root
     ? cachedRoot.root
