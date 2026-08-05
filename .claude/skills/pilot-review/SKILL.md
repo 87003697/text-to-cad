@@ -25,7 +25,7 @@ SKILL.md" 的具体建议，让 CAD skill 的 iteration loop 从主观感受收�
    - `skills/mesh-to-cad/references/output-schemas.md`
    - `skills/mesh-compare/references/compare-metrics.md`
    - `skills/mesh-to-cad/references/routing-rubric.md`
-3. **对每个 exp dir 执行 9 类检查**（每 check 独立，失败不阻断其他）：
+3. **对每个 exp dir 执行 10 类检查**（每 check 独立，失败不阻断其他）：
    1. **notes.md 7-section schema**：Read `<exp>/notes.md`，正则匹配 7 个 `##` heading
       顺序 == `output-schemas.md § notes.md seven sections`。
    2. **route.json completeness**：Read `<exp>/route.json`，`considered_alternative`
@@ -42,11 +42,15 @@ SKILL.md" 的具体建议，让 CAD skill 的 iteration loop 从主观感受收�
    7. **Preservation heuristic**（severity=warn，允许假阳）：Read mesh_stats
       face_count + notes.md `## Preserved Structural Features` 段；若 face
       > 5万且 preserved 段没显式提到复数结构（buttons/wings/wheels/legs）→ warn。
-   8. **Cost**：Read `<exp>/usage.json`（若存在）；baseline **USD 0.30 per pilot**
-      （handoff 2026-07-23 明确；用 "USD 0.30" 避开 `$0` args 替换）；> 2× warn，
+   8. **Cost**：新 pilot 从 `<exp>/rollout.jsonl` 调
+      `scripts/utils/rollout-usage.py` 计算；只有旧实验缺少 rollout 时才回退读取
+      `usage.json`。baseline **USD 0.30 per pilot**（handoff 2026-07-23 明确；
+      用 "USD 0.30" 避开 `$0` args 替换）；> 2× warn，
       > 5× error；同时报 `cache_hit_rate` if present。
    9. **Route replay**：Read mesh_stats.json；按 `routing-rubric.md` 5-priority
       手动重放决策，对比 `route.json.route`；不符 → warn。
+   10. **Terminal manifest**：Read `artifact_manifest.json`，确认 `final_status`
+       的 JSON 类型是整数；missing/invalid 记 incomplete，非零不得描述为成功。
 4. **产报告**（见 § Handoff）。
 
 ## Non-negotiable
@@ -70,8 +74,10 @@ SKILL.md" 的具体建议，让 CAD skill 的 iteration loop 从主观感受收�
   不 crash。
 - 不依赖 CAD skill 的运行时代码，只 Read 它们的 references 里的 markdown。
 - 不发起网络请求，不调 model，不装依赖。纯本地 Read + jq/grep 逻辑。
-- 单 exp 走 9 check；批量走 N × 9 check + summary 跨 exp。**没有 sampling**：
-  10 个 exp 就跑 90 check，慢但完整。
+- 单 exp 走 10 check；批量走 N × 10 check + summary 跨 exp。**没有 sampling**：
+  10 个 exp 就跑 100 check，慢但完整。
+- `rollout.jsonl + scripts/utils/rollout-usage.py` 是新 pilot 的 cost 真相源；
+  `usage.json` 只是旧实验兼容文件，不能列为新产物必需项。
 - Iteration playbook 表格是 **empirical accumulate**，不是完整枚举。空 row ≠
   没问题，是"这类问题以前没撞过"。
 - **`outputs/` 是 symlink 到 rclone mount**（2026-07-23 之后布局）：读文件走
@@ -108,13 +114,14 @@ Iteration playbook（**表格是活的**，每次新型 issue 检出加一行；
 | cost > 3× baseline AND cache_hit < 60% | skills/mesh-to-cad/SKILL.md + references (phase 拆分) |
 | preservation heuristic warn | skills/mesh-to-cad/SKILL.md § Non-negotiables (structural count) |
 | route disagrees with rubric replay | skills/mesh-to-cad/references/routing-rubric.md |
+| artifact_manifest missing/invalid or final_status nonzero | scripts/pilot/runner.py artifact contract + owning workflow |
 
 ## 如何更新
 
 本 skill 明显比 cvm-{push,pull} 更需要持续演化，因为它检的是 CAD skill 的
 **产物形态**——CAD skill 每次改，本 skill 就有可能要跟。四类触发：
 
-1. **新 pilot 病症**（现有 9 类 check 都没覆盖到的漂移）→ 加新 check 段
+1. **新 pilot 病症**（现有 10 类 check 都没覆盖到的漂移）→ 加新 check 段
    （在 § Workflow step 3 加编号）+ § Handoff Iteration playbook 加 row。
 2. **CAD product skill 权威 schema 变化**（`output-schemas.md` /
    `compare-metrics.md` / `routing-rubric.md` 改字段或阈值）→ 本 skill

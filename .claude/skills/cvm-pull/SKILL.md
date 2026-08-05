@@ -21,14 +21,30 @@ description: >-
 
 ## Workflow
 
+脚本内部固定按六个逻辑模块执行：
+
+```text
+Parse request → Discover plan → Qualify terminal/postmortem
+→ Publish transaction (upload → verify → cleanup)
+→ Expose through mount → Report
+```
+
+前 3 个模块只读；`Publish transaction` 是唯一的 S3 写入和 CVM cleanup
+模块。每个 exp 必须 verify 成功后才进入 cleanup。
+
 1. 解析 flags：
    - `--include-byproducts`：上传 `.codex-upper` 等副产物后才清理失败实验；
    - `--discard-postmortem`：显式丢弃未上传的 postmortem 后清理失败实验；
-   - 默认：失败实验或存在 `.codex-upper` 的实验保留在 CVM，不上传、不清理。
+   - `--exp <group>/<exp>`：只处理一个 child handle；
+   - `--group <group>`：处理一个 batch group；
+   - 默认无 scope：扫描全部实验；
+   - 失败实验或存在 `.codex-upper` 的实验保留在 CVM，不上传、不清理。
    两个 flags 互斥；`--discard-postmortem` 是不可恢复操作，只有用户明确授权丢弃
    本轮列出的失败实验状态时才能使用，不能由 agent 推断。
+   `$cvm-monitor` 返回 handle `<group>/<exp>` 时原样传给 `--exp`；`--group` 用于
+   显式处理同一 group 下的多个独立 pilot，不依赖 batch job handle。
 2. 调脚本：用 Bash tool 跑
-   `scripts/pilot/cvm-pull.sh [--include-byproducts|--discard-postmortem]`，
+   `scripts/pilot/cvm-pull.sh [--exp <handle>|--group <group>] [--include-byproducts|--discard-postmortem]`，
    把 `run_in_background` 设为 `true`。记下 log 路径。
 3. arm Monitor tool tail log：
    `tail -F <log> | grep -E --line-buffered '(===|verify|Complete|upload:|cleaning|preserving|visible|error|failed)'`
@@ -39,11 +55,11 @@ description: >-
 - **方案 α — 上传 S3，不写 Mac 本地磁盘**：CVM 用 `aws s3 cp --recursive` 传到
   `s3://arcwm-code-us-west-2/ericzyma/text-to-cad/outputs/<group>/<exp>/`；Mac 通过
   现有 rclone mount `~/threed-code/ericzyma/text-to-cad/outputs/` 看。
-- **Method W — 只上传 S3 里还没有的 exp**：脚本用
+- **Method W — 用 S3 prefix 作为恢复提示，不把“存在”当作“完整”**：脚本用
   `rclone lsf threed-code:arcwm-code-us-west-2/ericzyma/... --max-depth 2`
-  直读 S3 prefix，不把可能陈旧的 VFS mount cache 当作 source of truth；再用
-  `comm -23` 只上传差集。
-  **依赖 pilot dir immutable 假设**。
+  直读 S3 prefix，不把可能陈旧的 VFS mount cache 当作 source of truth。已有
+  prefix 仍必须与 immutable CVM source 验证：完整则恢复 cleanup；少对象则重试
+  upload 后再验；多出对象则 fail closed、保留 CVM source。
 - **上传后 verify 通过才清理 CVM 本地**：`find CVM local -type f | wc -l` ==
   `aws s3 ls --recursive | wc -l`。**verify fail 保留 CVM local + exit 5**，
   绝不盲删源。
@@ -52,11 +68,16 @@ description: >-
   只有显式 `--include-byproducts` 或 `--discard-postmortem` 才能越过。
 - **不得擅自 discard postmortem**：调用 `--discard-postmortem` 前必须向用户列出
   将受影响的失败 exp 并取得明确授权；普通“拉结果”只使用默认安全模式。
-- **`usage.json` + `rollout.jsonl` 默认上传**（cost 分析 + 事故排查两个用途都要）。
+- **terminal manifest 是独立硬门**：每个候选都必须有合法且含整数
+  `final_status` 的 `artifact_manifest.json`；missing/invalid 时 exit 9，不上传、不
+  清理，并回到 `$cvm-monitor`。monitor 返回不能代替 pull 重验。
+- **`rollout.jsonl` 默认上传**，它是新 pilot 的 cost/事故真相源；`usage.json`
+  只作为旧实验可选兼容文件。
 - **`stderr.log` + `.codex/` + `__pycache__/` 默认排除**；`--include-byproducts` opt-in。
 - **rclone mount 必须健康**：跑前直接探测 `127.0.0.1:5572` RC endpoint；
   不依赖 macOS process table，探测失败则 exit 4。
-- **不重拉已有 exp**：mount 里已存在 = 完成品；想重拉参见 § 边界条件。
+- **不以 mount existence 判完成**：mount 只用于最终 visibility；S3 prefix
+  existence 也只是恢复提示，必须与 CVM immutable source 做 count verify。
 - **cleanup target 必须是安全的两段相对路径**：不符合
   `[A-Za-z0-9._-]+/[A-Za-z0-9._-]+` 或任一组件为 `.`/`..` 时 exit 7，
   绝不拼进 remote `rm`。
@@ -76,9 +97,9 @@ description: >-
   （git SHA 精准）。
 - **Empirical 上传速度**（2026-07-23 实测）：CVM→AWS 跨云约 1.5-2 MB/s；
   20MB exp ≈ 10s，60MB 3-pilot ≈ 30-45s。
-- **重拉一个 exp**：`rm -rf $MOUNT_PATH/<group>/<exp>` OR
-  `aws s3 rm --recursive $S3_PREFIX/<group>/<exp>/` 后再跑 `/cvm-pull`。若
-  CVM local 已清、S3 也删了，就只能靠 pilot 重跑（另一个流程）。
+- **已有 prefix 的恢复**：CVM source 仍在时直接以同一 `--exp` 重跑；
+  脚本会验证、补齐 partial upload 或恢复 cleanup，不要求先删 mount/S3。只有
+  CVM source 已清且需要主动替换 S3 内容时，才另行请求删除授权。
 - **循环内 SSH 必须使用 `ssh -n cvm`**：exp loop 通过 stdin 读取待处理路径；
   普通 `ssh cvm` 会吞掉后续路径，表现为只处理第一个 exp 就提前结束。
 - **rclone VFS refresh**：新 group 不能直接 refresh。脚本按
@@ -89,6 +110,10 @@ description: >-
 - **从 mount 只读 SQLite**：使用
   `sqlite3 "file:/absolute/path/traces.sqlite3?immutable=1"`；普通打开可能因
   SQLite 尝试创建辅助文件而失败。
+- `immutable=1` 只用于 pull 后的 finalized trace；活跃 job 只能由 CVM 侧
+  `$cvm-monitor` 以只读 WAL 方式观察。
+- Monitor 成功不会自动触发 pull；S3 upload、CVM cleanup 和 discard postmortem
+  仍是独立授权边界。Pull 也不删除 `.cvm-jobs/` records。
 
 ## Handoff
 
@@ -96,7 +121,7 @@ description: >-
 - 上传的新 exp dir 清单（本轮 uploaded + cleaned）
 - 因失败态/postmortem 默认保留在 CVM 的 exp 清单
 - 每 exp artifact 存在性 check（从 mount 侧读）：`notes.md` / `compare_metrics.json` /
-  `usage.json` / `rollout.jsonl` / `previews/` 各标 ✓/✗
+  `rollout.jsonl` / `previews/` 各标 ✓/✗；`usage.json` 仅兼容旧实验
 - 下一步提示：`/pilot-review outputs/<group>/`（推荐指向刚上传的整个 group，
   一次审多个 exp；`outputs/` 是 symlink 指向 mount）
 
@@ -110,6 +135,8 @@ description: >-
 - exit 6（S3 已验证且 CVM 已清，但 mount 尚不可见）→ 明确数据已安全上传，
   刷新 `ericzyma/text-to-cad/outputs` 后重查；不得重跑上传或声称数据丢失
 - exit 7（unsafe exp path）→ 不上传、不清理，检查 CVM 目录命名
+- exit 9（missing/invalid terminal manifest）→ 不上传、不清理；使用同一 handle
+  回到 `$cvm-monitor`，不得自动 resubmit
 - 单 exp upload 中途失败 → 脚本 `set -euo pipefail` 中止；已成功的 exp 已 verify
   + 已清理（安全）；失败的 exp CVM local 保留
 
