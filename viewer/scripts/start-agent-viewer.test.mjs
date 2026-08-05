@@ -71,7 +71,7 @@ test("forwardedDefaultRootDir reads and strips default directory flags", () => {
   );
 });
 
-test("parseAgentStartArgs requires agent:start --dir to be an absolute existing directory", async (t) => {
+test("parseAgentStartArgs requires viewer:open --dir to be an absolute existing directory", async (t) => {
   const directory = await fs.mkdtemp(path.join(os.tmpdir(), "cad-viewer-agent-start-directory-"));
   t.after(() => fs.rm(directory, { recursive: true, force: true }));
   const filePath = path.join(directory, "not-a-dir");
@@ -202,6 +202,27 @@ test("resolveAgentStartCommand keeps server-only flags on the production server 
     "/project/viewer/src/server/server.mjs",
     "--dir",
     directory,
+  ]);
+});
+
+test("buildAgentStartCommand selects the bundled production server", async (t) => {
+  const packageRoot = await fs.mkdtemp(path.join(os.tmpdir(), "cad-viewer-runtime-"));
+  t.after(() => fs.rm(packageRoot, { recursive: true, force: true }));
+  await fs.mkdir(path.join(packageRoot, "backend"));
+  await fs.writeFile(path.join(packageRoot, "backend", "server.mjs"), "// bundled\n");
+
+  const command = buildAgentStartCommand({
+    mode: "serve",
+    packageRoot,
+    forwardedArgs: ["--dir", "/tmp/models"],
+    env: {},
+    nodePath: "/node",
+  });
+
+  assert.deepEqual(command.args, [
+    path.join(packageRoot, "backend", "server.mjs"),
+    "--dir",
+    "/tmp/models",
   ]);
 });
 

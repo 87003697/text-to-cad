@@ -41,7 +41,7 @@ npm run dev -- --host 127.0.0.1
 Open the URL printed by Vite and add paths, for example
 `?dir=/path/to/root&file=assemblies/robot-arm/robot-arm.step`.
 Local tools should not assume a fixed port. Use
-`npm run agent:start -- --dir /path/to/root` for agent-driven review. It starts
+`npm run viewer:open -- --dir /path/to/root` for agent-driven review. It starts
 at port `4178`, reuses a compatible existing Viewer, skips viewers with a
 different launcher-provided `git` value or a different requested default
 `--dir`, and starts on the first free candidate port. Use Vite's standard
@@ -97,7 +97,7 @@ snapshot, and export logic in the source packages.
 
 ```bash
 npm run dev          # Vite dev server with local CAD API middleware
-npm run agent:start  # Launcher that chooses mode and reuses/selects a local port
+npm run viewer:open  # Launcher that chooses mode and reuses/selects a local port
 npm run build        # Production frontend build
 npm run serve        # Serve dist/ with the local or hosted backend
 npm run test         # Discover and run all JS tests
@@ -119,7 +119,7 @@ Important environment variables:
 - `VIEWER_ASSET_BACKEND`: `local-fs` for local files or `vercel-blob` for hosted
   Blob assets.
 - `VIEWER_DEFAULT_DIR`: default local directory used by Vite dev mode.
-  `npm run agent:start -- --dir <path>` sets this automatically when it launches
+  `npm run viewer:open -- --dir <path>` sets this automatically when it launches
   Vite.
 - `VIEWER_DEFAULT_FILE`: active-directory-relative file opened when `?file=`
   is absent and a `?dir=` or stored active directory is available.
@@ -138,7 +138,7 @@ Important environment variables:
   the `cadpy` package.
 - `VIEWER_SERVER_REGISTRY`: optional local server registry JSON path.
 - `VIEWER_GIT`: optional launcher-provided git identity, exposed as `git` by
-  `/__cad/server` and used by `npm run agent:start` to avoid reusing viewers
+  `/__cad/server` and used by `npm run viewer:open` to avoid reusing viewers
   from other git worktrees or branches. Ordinary users should not need to set it
   manually.
 
