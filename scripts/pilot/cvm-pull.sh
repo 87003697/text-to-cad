@@ -8,9 +8,9 @@
 #   - CVM AWS user = ericzyma，S3 前缀 = ericzyma/text-to-cad/outputs/
 #
 # Usage:
-#   scripts/utils/cvm-pull.sh
-#   scripts/utils/cvm-pull.sh --include-byproducts
-#   scripts/utils/cvm-pull.sh --discard-postmortem
+#   scripts/pilot/cvm-pull.sh
+#   scripts/pilot/cvm-pull.sh --include-byproducts
+#   scripts/pilot/cvm-pull.sh --discard-postmortem
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
@@ -46,7 +46,7 @@ rclone rc --rc-addr="$RCLONE_RC_ADDR" core/version >/dev/null 2>&1 \
 
 # --- 预检 2: 列 CVM 上的 exp（<group>/<exp> 两层深度）
 # _snapshot 目录属于 Mac 端产物，S3 侧已存在；CVM 不会有；无需特殊排除
-CVM_EXPS="$(ssh cvm 'find ~/text-to-cad/outputs/ -mindepth 2 -maxdepth 2 -type d -printf "%P\n" 2>/dev/null' | sort)"
+CVM_EXPS="$(ssh -n cvm 'find ~/text-to-cad/outputs/ -mindepth 2 -maxdepth 2 -type d -printf "%P\n" 2>/dev/null' | sort)"
 [[ -z "$CVM_EXPS" ]] && { echo "No exp on CVM. Nothing to do."; exit 0; }
 
 # cleanup target 会进入 remote shell command；只允许两段安全目录名。
@@ -138,10 +138,12 @@ while IFS= read -r exp; do
 
     # v4 Runner 会为非零状态保留 .codex-upper 供 postmortem。默认 pull 不能
     # exclude 这份状态后又删除整个 CVM exp；只有两个显式 flag 能越过此门。
-    REMOTE_STATUS="$(ssh cvm "python3 -c \
+    # -n is required here and for every SSH below: this loop reads MISSING
+    # from stdin, and a normal ssh client would consume the remaining exp rows.
+    REMOTE_STATUS="$(ssh -n cvm "python3 -c \
         'import json,pathlib; p=pathlib.Path.home()/\"text-to-cad/outputs/$exp/artifact_manifest.json\"; print(json.loads(p.read_text()).get(\"final_status\", \"missing\") if p.is_file() else \"missing\")'")"
     HAS_POSTMORTEM=0
-    if ssh cvm "test -d ~/text-to-cad/outputs/$exp/.codex-upper"; then
+    if ssh -n cvm "test -d ~/text-to-cad/outputs/$exp/.codex-upper"; then
         HAS_POSTMORTEM=1
     fi
     IS_FAILED=0
@@ -176,7 +178,7 @@ while IFS= read -r exp; do
     # so exit=2 (warnings-only) is safe to continue on; only exit >2
     # or exit=1 is a real transfer failure.
     set +e
-    ssh cvm "aws s3 cp --recursive \
+    ssh -n cvm "aws s3 cp --recursive \
         ~/text-to-cad/outputs/$exp/ $S3_PREFIX/$exp/${EXCLUDE_CMD}" \
         2>&1 | tee -a "$LOG"
     aws_rc=${PIPESTATUS[0]}
@@ -188,15 +190,15 @@ while IFS= read -r exp; do
 
     # 2. Verify file count (CVM local vs S3)。两侧都应用 EXCLUDES 才能对齐。
     if [[ -n "$LOCAL_FILTER_RGX" ]]; then
-        LOCAL_N=$(ssh cvm "find ~/text-to-cad/outputs/$exp/ -type f | grep -Ev '$LOCAL_FILTER_RGX' | wc -l")
+        LOCAL_N=$(ssh -n cvm "find ~/text-to-cad/outputs/$exp/ -type f | grep -Ev '$LOCAL_FILTER_RGX' | wc -l")
     else
-        LOCAL_N=$(ssh cvm "find ~/text-to-cad/outputs/$exp/ -type f | wc -l")
+        LOCAL_N=$(ssh -n cvm "find ~/text-to-cad/outputs/$exp/ -type f | wc -l")
     fi
-    S3_N=$(ssh cvm "aws s3 ls --recursive $S3_PREFIX/$exp/ | wc -l")
+    S3_N=$(ssh -n cvm "aws s3 ls --recursive $S3_PREFIX/$exp/ | wc -l")
 
     if [[ "$LOCAL_N" -eq "$S3_N" ]]; then
         echo "  verify OK ($LOCAL_N files); cleaning CVM local..." | tee -a "$LOG"
-        ssh cvm "rm -rf -- ~/text-to-cad/outputs/$exp"
+        ssh -n cvm "rm -rf -- ~/text-to-cad/outputs/$exp"
         UPLOADED="${UPLOADED}${UPLOADED:+$'\n'}$exp"
     else
         echo "  VERIFY FAILED (local=$LOCAL_N s3=$S3_N); keeping CVM local. Investigate." | tee -a "$LOG"

@@ -17,7 +17,7 @@ description: >-
 
 ## Workflow
 
-1. 调脚本：用 Bash tool 跑 `scripts/utils/cvm-push.sh`，把 `run_in_background` 设为 `true`。
+1. 调脚本：用 Bash tool 跑 `scripts/pilot/cvm-push.sh`，把 `run_in_background` 设为 `true`。
    记下 stdout 里的 `Log: ${TMPDIR:-/tmp}/cvm-push-<ts>.log`。
 2. arm Monitor tool tail log：
    `tail -F <log> | grep -E --line-buffered '(Source:|xfer#|sent [0-9]+ bytes|total size|Remote Git base|error|failed|rsync:)'`
@@ -55,7 +55,7 @@ description: >-
 - 下一步提示（推荐先做 group snapshot 再跑 pilot）：
   ```
   # Mac 端（新 batch 首次）：
-  scripts/utils/snapshot-batch.sh <YYYYMMDD-HHMMSS-slug>
+  scripts/pilot/snapshot-batch.sh <YYYYMMDD-HHMMSS-slug>
   # CVM 端：
   ssh cvm 'cd ~/text-to-cad && ./scripts/pilot/toys4k-pilot.sh <obj> <same-group>'
   ```

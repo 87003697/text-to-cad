@@ -28,7 +28,7 @@ description: >-
    两个 flags 互斥；`--discard-postmortem` 是不可恢复操作，只有用户明确授权丢弃
    本轮列出的失败实验状态时才能使用，不能由 agent 推断。
 2. 调脚本：用 Bash tool 跑
-   `scripts/utils/cvm-pull.sh [--include-byproducts|--discard-postmortem]`，
+   `scripts/pilot/cvm-pull.sh [--include-byproducts|--discard-postmortem]`，
    把 `run_in_background` 设为 `true`。记下 log 路径。
 3. arm Monitor tool tail log：
    `tail -F <log> | grep -E --line-buffered '(===|verify|Complete|upload:|cleaning|preserving|visible|error|failed)'`
@@ -79,6 +79,8 @@ description: >-
 - **重拉一个 exp**：`rm -rf $MOUNT_PATH/<group>/<exp>` OR
   `aws s3 rm --recursive $S3_PREFIX/<group>/<exp>/` 后再跑 `/cvm-pull`。若
   CVM local 已清、S3 也删了，就只能靠 pilot 重跑（另一个流程）。
+- **循环内 SSH 必须使用 `ssh -n cvm`**：exp loop 通过 stdin 读取待处理路径；
+  普通 `ssh cvm` 会吞掉后续路径，表现为只处理第一个 exp 就提前结束。
 - **rclone VFS refresh**：新 group 不能直接 refresh。脚本按
   `outputs parent → group → exp` 顺序做 non-recursive refresh，随后逐个检查 mount
   可见性。S3/cleanup 已成功但 mount 仍不可见时 exit 6，不能打印完整成功。

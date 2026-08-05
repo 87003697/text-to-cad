@@ -10,9 +10,9 @@
 # fail through FUSE; staging locally sidesteps both.
 #
 # Usage:
-#   scripts/utils/snapshot-batch.sh <group>
+#   scripts/pilot/snapshot-batch.sh <group>
 # Example:
-#   scripts/utils/snapshot-batch.sh 20260724-093000-baseline
+#   scripts/pilot/snapshot-batch.sh 20260724-093000-baseline
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"

@@ -4,7 +4,7 @@
 # 永不加 --delete。改名 / 删文件后 CVM 上残留靠手动 `ssh cvm 'rm ...'` 清。
 #
 # Usage:
-#   scripts/utils/cvm-push.sh
+#   scripts/pilot/cvm-push.sh
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
