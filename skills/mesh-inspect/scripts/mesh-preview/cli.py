@@ -8,11 +8,20 @@ from __future__ import annotations
 
 import argparse
 import json
+import shutil
 import subprocess
 import sys
 import tempfile
 from pathlib import Path
 from typing import Sequence
+
+_BUNDLED_MESHSCOPE = (
+    Path(__file__).resolve().parents[1] / "packages" / "meshscope" / "src"
+)
+if _BUNDLED_MESHSCOPE.is_dir():
+    sys.path.insert(0, str(_BUNDLED_MESHSCOPE))
+
+from meshscope.viewer_glb import export_viewer_glb
 
 
 REPO_ROOT = Path(__file__).resolve().parents[4]
@@ -21,21 +30,27 @@ SNAPSHOT_CLI = REPO_ROOT / "skills" / "cad" / "scripts" / "snapshot"
 DEFAULT_CAMERAS = ("iso", "front", "right", "top")
 
 
-def _ensure_glb(mesh_path: Path, tmp_dir: Path) -> Path:
+def _ensure_glb(
+    mesh_path: Path,
+    tmp_dir: Path,
+    persistent_output: Path | None = None,
+) -> Path:
     """cad snapshot's browser-side render only accepts `.glb`.
 
     For `.ply`/`.obj`/`.stl`/`.3mf`, load via trimesh and export a GLB
     sidecar into `tmp_dir`; return the path handed to `cad snapshot`.
     """
     if mesh_path.suffix.lower() in {".glb", ".gltf"}:
+        if persistent_output is not None:
+            if mesh_path.suffix.lower() != ".glb":
+                raise ValueError("--glb-output cannot copy a .gltf source as binary GLB")
+            persistent_output.parent.mkdir(parents=True, exist_ok=True)
+            if persistent_output.resolve() != mesh_path.resolve():
+                shutil.copyfile(mesh_path, persistent_output)
+            return persistent_output
         return mesh_path
-    import trimesh  # deferred import — mesh-preview runs against a real venv
-
-    tmp_dir.mkdir(parents=True, exist_ok=True)
-    out = tmp_dir / f"{mesh_path.stem}.glb"
-    mesh = trimesh.load(str(mesh_path), force="mesh")
-    mesh.export(str(out))
-    return out
+    out = persistent_output or (tmp_dir / f"{mesh_path.stem}.glb")
+    return export_viewer_glb(mesh_path, out)
 
 
 def _snapshot_view(mesh_path: Path, output: Path, camera: str) -> None:
@@ -75,8 +90,12 @@ def _composite_grid(image_paths: Sequence[Path], output: Path) -> None:
 
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description="Render a multi-view preview PNG of a mesh.")
-    parser.add_argument("input", help="Path to mesh file (GLB/OBJ/STL/PLY/3MF/GLTF)")
+    parser.add_argument("input", help="Path to mesh file (GLB/OBJ/STL/PLY/3MF)")
     parser.add_argument("--output", required=True, help="Output PNG path")
+    parser.add_argument(
+        "--glb-output",
+        help="Optional persistent preview GLB, used for CAD Viewer handoff",
+    )
     parser.add_argument(
         "--cameras",
         default=",".join(DEFAULT_CAMERAS),
@@ -86,6 +105,10 @@ def main(argv=None) -> int:
 
     mesh_path = Path(args.input).resolve()
     output_path = Path(args.output).resolve()
+    glb_output = Path(args.glb_output).resolve() if args.glb_output else None
+    if glb_output is not None and glb_output.suffix.lower() != ".glb":
+        print(json.dumps({"ok": False, "errors": ["--glb-output must end in .glb"]}))
+        return 2
     cameras = [c.strip() for c in args.cameras.split(",") if c.strip()]
     if len(cameras) != 4:
         print(
@@ -96,7 +119,7 @@ def main(argv=None) -> int:
     try:
         with tempfile.TemporaryDirectory(prefix="mesh_preview_") as tmp:
             tmp_dir = Path(tmp)
-            glb_path = _ensure_glb(mesh_path, tmp_dir / "glb")
+            glb_path = _ensure_glb(mesh_path, tmp_dir / "glb", glb_output)
             tile_paths = []
             for idx, camera in enumerate(cameras):
                 tile_path = tmp_dir / f"tile_{idx}_{camera}.png"
@@ -116,7 +139,12 @@ def main(argv=None) -> int:
         print(json.dumps({"ok": False, "errors": [str(exc)]}))
         return 2
 
-    print(json.dumps({"ok": True, "output": str(output_path), "cameras": cameras}))
+    print(json.dumps({
+        "ok": True,
+        "output": str(output_path),
+        "glb": str(glb_path) if glb_output is not None else None,
+        "cameras": cameras,
+    }))
     return 0
 
 

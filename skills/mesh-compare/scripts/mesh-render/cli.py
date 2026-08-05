@@ -20,7 +20,14 @@ import tempfile
 from pathlib import Path
 from typing import Sequence
 
+_BUNDLED_MESHSCOPE = (
+    Path(__file__).resolve().parents[1] / "packages" / "meshscope" / "src"
+)
+if _BUNDLED_MESHSCOPE.is_dir():
+    sys.path.insert(0, str(_BUNDLED_MESHSCOPE))
+
 from meshscope.compare import prepare, vertex_distances
+from meshscope.viewer_glb import export_viewer_glb
 from meshscope.viz import colorize, side_by_side
 
 
@@ -35,13 +42,22 @@ def _ensure_glb(mesh_path: Path, tmp_dir: Path) -> Path:
     """
     if mesh_path.suffix.lower() in {".glb", ".gltf"}:
         return mesh_path
-    import trimesh
-
     tmp_dir.mkdir(parents=True, exist_ok=True)
     out = tmp_dir / f"{mesh_path.stem}.glb"
-    mesh = trimesh.load(str(mesh_path), force="mesh")
-    mesh.export(str(out))
-    return out
+    return export_viewer_glb(mesh_path, out)
+
+
+def _prepare_side_by_side_inputs(
+    mesh_a: Path,
+    mesh_b: Path,
+    tmp_dir: Path,
+) -> tuple[Path, Path]:
+    """Prepare independent Viewer inputs even when A/B share a basename."""
+
+    return (
+        _ensure_glb(mesh_a, tmp_dir / "glb" / "a"),
+        _ensure_glb(mesh_b, tmp_dir / "glb" / "b"),
+    )
 
 
 def _snapshot(mesh_path: Path, output: Path, camera: str) -> Path:
@@ -93,8 +109,11 @@ def _cmd_side_by_side(args) -> dict:
 
     with tempfile.TemporaryDirectory(prefix="mesh_render_") as tmp:
         tmp_dir = Path(tmp)
-        glb_a = _ensure_glb(Path(args.mesh_a), tmp_dir / "glb")
-        glb_b = _ensure_glb(Path(args.mesh_b), tmp_dir / "glb")
+        glb_a, glb_b = _prepare_side_by_side_inputs(
+            Path(args.mesh_a),
+            Path(args.mesh_b),
+            tmp_dir,
+        )
         rows: list[Path] = []
         for cam in cameras:
             per_cam_tiles: list[Path] = []
