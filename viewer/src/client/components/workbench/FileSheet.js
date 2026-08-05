@@ -37,13 +37,14 @@ const FILE_SHEET_CONTROL_TEXT_CLASSES = [
 export const FILE_SHEET_SECTION_TRIGGER_CLASSES = "px-2 py-2 text-sm font-normal text-sidebar-foreground/90";
 export const FILE_SHEET_SECTION_CONTENT_CLASSES = "py-2";
 export const FILE_SHEET_CONTROL_ROW_CLASSES = "space-y-1 px-2";
-export const FILE_SHEET_ROW_STACK_CLASSES = "space-y-2";
+export const FILE_SHEET_ROW_STACK_CLASSES = "space-y-3";
 export const FILE_SHEET_SECTION_BODY_CLASSES = `${FILE_SHEET_ROW_STACK_CLASSES} py-2`;
 export const FILE_SHEET_SLIDER_FIELD_CLASSES = "space-y-1 px-2";
 export const FILE_SHEET_INLINE_CONTROL_ROW_CLASSES = "px-2";
-// Section headers are uppercase micro-labels so they can never be confused
-// with row labels (11px sentence-case, one step below).
-export const FILE_SHEET_SECTION_TITLE_CLASSES = "text-[10px] font-medium uppercase tracking-wider text-muted-foreground";
+// Section headers match the row-label size exactly and separate from them by
+// weight of color alone: header is full-strength foreground, row labels are
+// muted. One type size across the panel, two roles.
+export const FILE_SHEET_SECTION_TITLE_CLASSES = "text-[11px] font-medium text-sidebar-foreground";
 export const FILE_SHEET_FIELD_LABEL_CLASSES = "block min-w-0 truncate text-[11px] font-medium leading-4 text-muted-foreground";
 export const FILE_SHEET_STATUS_TEXT_CLASSES = "px-2 text-[11px] leading-4 text-muted-foreground";
 export const FILE_SHEET_UNIT_SUFFIX_CLASSES = "pointer-events-none absolute inset-y-0 right-2 flex items-center text-[10px] text-muted-foreground";
@@ -131,19 +132,25 @@ export function FileSheetSubsection({
   hideFirstSeparator = true
 }) {
   return (
+    // The rule belongs to the top of a section, so a section owns the gap below
+    // its own last row (pb-6) and the rule owns the gap down to the heading
+    // (mb-6). Both are 24px, which is what makes the space above a heading and
+    // below a section's last row read as equal. Inside a section everything —
+    // heading to first row, row to row — sits on one 12px rhythm, half the
+    // section padding, so groups read as groups.
     <div
       className={cn(
-        "py-2.5",
-        hideFirstSeparator && "first:pt-2 first:[&_.cad-sheet-subsection-separator]:hidden",
+        "pb-6",
+        hideFirstSeparator && "first:pt-4 first:[&_.cad-sheet-subsection-separator]:hidden",
         className
       )}
     >
-      <div className="cad-sheet-subsection-separator mx-2 mb-2 h-px bg-border/60" />
+      <div className="cad-sheet-subsection-separator mx-2 mb-6 h-px bg-border/60" />
       {/* Titleless subsections are a rule plus rows: for a couple of settings
           that belong to the sheet as a whole rather than to any named group, and
           would otherwise need a heading invented for them. */}
       {title ? (
-        <div className="flex min-h-5 min-w-0 items-center justify-between gap-2 px-2 pb-1">
+        <div className="flex min-h-5 min-w-0 items-center justify-between gap-2 px-2 pb-3">
           <span className={cn("min-w-0 truncate leading-4", FILE_SHEET_SECTION_TITLE_CLASSES)}>{title}</span>
           {/* Trailing holds the section's control — most often its gate switch,
               kept on the shared right-edge control axis like every other row. */}
@@ -185,6 +192,11 @@ export function FileSheetControlRow({
   labelClassName,
   rowKind = "control"
 }) {
+  // A row whose control lives in the trailing slot (a color picker, a value
+  // readout) has no block content. Rendering the content div anyway left an
+  // empty box carrying the stack's 4px top margin, so those rows stood 4px
+  // taller than every switch row beside them.
+  const hasContent = Children.toArray(children).length > 0;
   return (
     <div
       className={cn(FILE_SHEET_CONTROL_ROW_CLASSES, className)}
@@ -192,7 +204,7 @@ export function FileSheetControlRow({
       data-file-sheet-row-kind={rowKind}
     >
       {label != null || value != null || trailing != null ? (
-        <div className="flex min-h-4 items-center justify-between gap-2">
+        <div className="flex min-h-7 items-center justify-between gap-2">
           {label != null ? (
             <span className={cn(FILE_SHEET_FIELD_LABEL_CLASSES, labelClassName)}>{label}</span>
           ) : <span />}
@@ -201,7 +213,9 @@ export function FileSheetControlRow({
           ) : null}
         </div>
       ) : null}
-      <div className={cn("min-w-0", contentClassName)}>{children}</div>
+      {hasContent ? (
+        <div className={cn("min-w-0", contentClassName)}>{children}</div>
+      ) : null}
     </div>
   );
 }

@@ -705,10 +705,7 @@ export default function UrdfFileSheet({
       content: (
             movableJoints.length ? (
               <>
-                {/* Headerless: "Controls" / "Values" said nothing the Joints
-                    tab title doesn't; the rule between the sections carries
-                    the grouping. */}
-                <FileSheetSubsection>
+                <FileSheetSubsection title="Pose">
                   {groupStatePresets.length ? (
                     <FileSheetSelectRow
                       label="Group state"
@@ -758,7 +755,7 @@ export default function UrdfFileSheet({
                     </Button>
                   </FileSheetButtonRow>
                 </FileSheetSubsection>
-                <FileSheetSubsection>
+                <FileSheetSubsection title="Values">
                 {movableJoints.map((joint) => (
                   <UrdfJointRow
                     key={joint.name}

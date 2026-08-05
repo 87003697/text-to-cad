@@ -13,7 +13,6 @@ import FileSheet, {
   FILE_SHEET_COMPACT_NUMERIC_INPUT_CLASSES,
   FILE_SHEET_UNIT_SUFFIX_CLASSES,
   FileSheetControlRow,
-  FileSheetSectionBody,
   FileSheetSegmentedControl,
   FileSheetStatusText,
   FileSheetSubsection
@@ -151,11 +150,9 @@ export default function DxfFileSheet({
       id: "dxf",
       title: "DXF",
       content: (
-          <FileSheetSectionBody>
-            <FileSheetSubsection title="Thickness">
-              {/* The section header already says Thickness; a row label would
-                  only restate it. */}
-              <FileSheetControlRow>
+          <div className="py-2">
+            <FileSheetSubsection title="Material">
+              <FileSheetControlRow label="Thickness">
                 <div className="grid grid-cols-[2rem_minmax(0,1fr)_2rem] items-center gap-2">
                   <Button
                     type="button"
@@ -227,7 +224,7 @@ export default function DxfFileSheet({
                 </FileSheetStatusText>
               )}
             </FileSheetSubsection>
-          </FileSheetSectionBody>
+          </div>
       )
     },
     ...themeTabs

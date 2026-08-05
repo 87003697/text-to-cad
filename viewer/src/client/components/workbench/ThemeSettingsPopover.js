@@ -580,8 +580,9 @@ function ThemePresetSection({
     : (activeOption?.preview || options[0].preview);
 
   return (
-    <ControlSubsection title="Preset">
+    <ControlSubsection title="Appearance">
       <FileSheetSelectRow
+        label="Preset"
         value={isCustom ? "" : (activeOption?.value || options[0].value)}
         onValueChange={(nextValue) => onSelectTheme?.(nextValue)}
         ariaLabel="Theme preset"
@@ -1224,7 +1225,7 @@ export function DisplaySettingsSection({
   };
   return (
     <div className="py-2" data-cad-display-settings-section="true">
-      <div className={FILE_SHEET_ROW_STACK_CLASSES}>
+      <ControlSubsection title="Model">
         <FileSheetSelectRow
           label="Mode"
           value={normalizedDisplaySettings.mode}
@@ -1232,7 +1233,7 @@ export function DisplaySettingsSection({
           ariaLabel="Display mode"
           options={DISPLAY_MODE_OPTIONS}
         />
-      </div>
+      </ControlSubsection>
 
       <ClipSubsection
         displaySettings={normalizedDisplaySettings}
@@ -1421,9 +1422,9 @@ function ThemeSettingsContent({
         onSelectTheme={onSelectTheme}
       />
 
-      {/* Scene-wide output settings: they belong to no named group, and a
-          heading over them would only restate "these two are settings". */}
-      <ControlSubsection>
+      {/* Scene-wide output: how the camera projects and how bright the result
+          is graded, as opposed to the per-material settings below. */}
+      <ControlSubsection title="Render">
         <Field label="Projection">
           <SegmentedControl
             value={themeSettings.projection}
@@ -1553,7 +1554,7 @@ function ThemeSettingsContent({
       </ControlSubsection>
 
       <ControlSubsection title="Backdrop">
-        <Field>
+        <Field label="Type">
           <SegmentedControl
             value={themeSettings.background.type}
             onChange={(nextValue) => setBackground({ type: nextValue })}
@@ -1825,7 +1826,7 @@ function ThemeSettingsContent({
         )}
       >
         <Tabs value={activePrimaryLight} onValueChange={setActivePrimaryLight} className="gap-0">
-            <div className="px-2">
+            <FileSheetControlRow label="Light">
               <TabsList className={cn("grid grid-cols-5", FILE_SHEET_SEGMENTED_TABS_LIST_CLASSES)}>
                 {PRIMARY_LIGHT_OPTIONS.map((option) => (
                   <TabsTrigger
@@ -1837,7 +1838,7 @@ function ThemeSettingsContent({
                   </TabsTrigger>
                 ))}
               </TabsList>
-            </div>
+            </FileSheetControlRow>
 
             {PRIMARY_LIGHT_OPTIONS.map((option) => {
               const light = themeSettings.lighting[option.value] || PRIMARY_LIGHT_FALLBACKS[option.value];
@@ -1847,7 +1848,7 @@ function ThemeSettingsContent({
                 <TabsContent
                   key={option.value}
                   value={option.value}
-                  className={cn("mt-2", FILE_SHEET_ROW_STACK_CLASSES)}
+                  className={cn("mt-3", FILE_SHEET_ROW_STACK_CLASSES)}
                   data-file-sheet-row-stack=""
                 >
                   {light.enabled ? (

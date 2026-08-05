@@ -17,13 +17,20 @@ first, then use it — never inline a one-off.
 Tab body                    px-0, vertical stack of sections
 └─ Section                  FileSheetSubsection: hairline rule + header + rows
    ├─ Header row            title (+ optional trailing control, e.g. gate switch)
-   └─ Row stack             rows, 8px apart
+   └─ Row stack             rows, 12px apart
       └─ Row                one setting: inline | slider | block | field grid
 ```
 
 - A tab body is a flat list of sections. Sections never nest.
-- A section without a meaningful name renders headerless (rule + rows only) —
-  invented headings like "General" or "Settings" are noise.
+- **Every section carries a heading, and every row carries a label** — including
+  a section that holds a single row, which shows both (`Material` / `Thickness`,
+  `Appearance` / `Preset`, `Model` / `Mode`). A heading never stands in for a row's label: a labelless
+  row reads as an orphaned control, and a row whose only name is the heading
+  above it cannot be scanned in a list. Name the group and the control
+  differently; if the only honest name for both is the same word, the group is
+  wrong, not the label.
+- Action rows are the one exception: a button says what it does, so a row of
+  buttons (Reset, Flip, Play) takes no label.
 - Everyday settings stay visible. Progressive disclosure is allowed only when a
   gate switch turns a whole feature off (Floor, Grid, Environment, a light):
   the switch stays, the dependent rows unmount.
@@ -38,11 +45,20 @@ gutter — one label axis, one control axis, no exceptions.
 | --- | --- | --- |
 | Row height (inline) | `min-h-7` (28px) | switch, color, value, select-trailing rows |
 | Control height | `h-7` (28px) | every input, select, button, stepper, picker |
-| Gap between rows | 8px (`space-y-2` stack) | within a section |
-| Gap between sections | ~20px (`py-2.5` + rule) | `FileSheetSubsection` owns it |
-| Header → first row | 4px (`pb-1`) | `FileSheetSubsection` owns it |
+| Gap between rows | 12px (`space-y-3` stack) | within a section |
+| Rule → heading | 24px (`mb-6` on the rule) | `FileSheetSubsection` owns it |
+| Heading → first row | 12px (`pb-3`) | `FileSheetSubsection` owns it |
+| Last row → next rule | 24px (`pb-6`) | `FileSheetSubsection` owns it |
 | Row gutter | `px-2` | every row, list, and message |
 | Grid gap (field grids, button rows) | `gap-2` / `gap-1.5` | see Field grids, Buttons |
+
+A section's dividing rule belongs to its own top edge, so the 24px above a
+heading and the 24px below the previous section's last row are the same
+measurement seen twice: **the space on either side of every rule is equal.**
+
+Inside a section everything sits on one 12px rhythm — heading to first row, and
+row to row alike — exactly half the 24px that separates sections. Two spacings
+for the whole panel: 12px binds a group together, 24px holds groups apart.
 
 Never add ad-hoc `py-*`/`mt-*` spacing inside a tab; spacing belongs to the
 stack and section primitives so rhythm cannot drift per surface.
@@ -51,15 +67,16 @@ stack and section primitives so rhythm cannot drift per surface.
 
 | Role | Style |
 | --- | --- |
-| Section header | 10px, medium, uppercase, `tracking-wider`, muted |
+| Section header | 11px, medium, full-strength `sidebar-foreground` |
 | Row label | 11px, medium, muted (`FILE_SHEET_FIELD_LABEL_CLASSES`) |
 | Control text / values | 11px, medium; numerics `tabular-nums`; hex/coords mono |
 | Secondary line, units, meta | 10px, muted |
 | Status / empty / loading text | 11px, muted, `px-2` |
 
-Section headers are visually distinct from row labels by *case and size*, not
-by guesswork. If a header and a label look interchangeable, the header is
-styled wrong.
+Headers and row labels are the same size and case; they separate by *color
+alone* — a header is full-strength, a label is muted. One type size across the
+panel, two roles. Never reach for uppercase, tracking, or a smaller size to
+mark a header.
 
 - Muted text is always `text-muted-foreground`. `var(--ui-text-muted)` is a
   legacy alias; do not introduce new uses.
@@ -160,6 +177,7 @@ a fixed color pair (e.g. the switch track), it is defined once in
 1. Pick the row kind (inline / slider / block / field grid) from the tables
    above — the control type decides, not taste.
 2. Use the `FileSheet.js` primitive; pass `aria-label` for unlabeled controls.
-3. Label: sentence case, 1–3 words, no verb prefix, no colon.
-4. Value strings carry their unit; degrees are `°`.
-5. No ad-hoc spacing, font sizes, or colors — tokens only.
+3. Label the row *and* its section, even when the section holds only this row.
+4. Label: sentence case, 1–3 words, no verb prefix, no colon.
+5. Value strings carry their unit; degrees are `°`.
+6. No ad-hoc spacing, font sizes, or colors — tokens only.
