@@ -17,7 +17,7 @@ first, then use it — never inline a one-off.
 Tab body                    px-0, vertical stack of sections
 └─ Section                  FileSheetSubsection: hairline rule + header + rows
    ├─ Header row            title (+ optional trailing control, e.g. gate switch)
-   └─ Row stack             rows, 12px apart
+   └─ Row stack             rows, 8px apart
       └─ Row                one setting: inline | slider | block | field grid
 ```
 
@@ -45,20 +45,25 @@ gutter — one label axis, one control axis, no exceptions.
 | --- | --- | --- |
 | Row height (inline) | `min-h-7` (28px) | switch, color, value, select-trailing rows |
 | Control height | `h-7` (28px) | every input, select, button, stepper, picker |
-| Gap between rows | 12px (`space-y-3` stack) | within a section |
-| Rule → heading | 24px (`mb-6` on the rule) | `FileSheetSubsection` owns it |
-| Heading → first row | 12px (`pb-3`) | `FileSheetSubsection` owns it |
-| Last row → next rule | 24px (`pb-6`) | `FileSheetSubsection` owns it |
+| Gap between rows | 8px (`space-y-2` stack) | within a section |
+| Label → control, stacked | 4px (`space-y-1`) | inside one block row |
+| Rule → heading | 16px (`mb-4` on the rule) | `FileSheetSubsection` owns it |
+| Heading → first row | 8px (`pb-2`) | `FileSheetSubsection` owns it |
+| Last row → next rule | 16px (`pb-4`) | `FileSheetSubsection` owns it |
 | Row gutter | `px-2` | every row, list, and message |
 | Grid gap (field grids, button rows) | `gap-2` / `gap-1.5` | see Field grids, Buttons |
 
-A section's dividing rule belongs to its own top edge, so the 24px above a
-heading and the 24px below the previous section's last row are the same
+A section's dividing rule belongs to its own top edge, so the 16px above a
+heading and the 16px below the previous section's last row are the same
 measurement seen twice: **the space on either side of every rule is equal.**
+This holds when a gated section collapses to its heading alone: the heading's
+bottom gap exists only to clear the first row, so with no rows it is dropped
+and the collapsed section stays 16px on both sides.
 
-Inside a section everything sits on one 12px rhythm — heading to first row, and
-row to row alike — exactly half the 24px that separates sections. Two spacings
-for the whole panel: 12px binds a group together, 24px holds groups apart.
+Inside a section everything sits on one 8px rhythm — heading to first row, and
+row to row alike — exactly half the 16px that separates sections. Three
+spacings for the whole panel: 4px binds a label to its control, 8px binds a
+group together, 16px holds groups apart. Each level is half the one above it.
 
 Never add ad-hoc `py-*`/`mt-*` spacing inside a tab; spacing belongs to the
 stack and section primitives so rhythm cannot drift per surface.
@@ -122,6 +127,13 @@ allowed.
 Label line on top (label left, optional value/trailing right), full-width
 control underneath. For controls that need the whole gutter width: selects,
 segmented controls, editors (fill-color grid, position pad, step list).
+
+The label and its control are **one item**: the label line stays compact
+(16px) and sits 4px above the control, tighter than the 8px between rows, so a
+stacked pair reads as a unit rather than as two rows. Only a row whose control
+lives in the trailing slot takes the full 28px line, matching the switch rows
+beside it — `FileSheetControlRow` picks the right one from whether it was given
+block content.
 
 - **Selects** always render as a block row with a full-width trigger:
   `SelectTrigger size="sm"`, 28px, 11px text; items 12px. Always pass an

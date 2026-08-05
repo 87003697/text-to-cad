@@ -37,7 +37,7 @@ const FILE_SHEET_CONTROL_TEXT_CLASSES = [
 export const FILE_SHEET_SECTION_TRIGGER_CLASSES = "px-2 py-2 text-sm font-normal text-sidebar-foreground/90";
 export const FILE_SHEET_SECTION_CONTENT_CLASSES = "py-2";
 export const FILE_SHEET_CONTROL_ROW_CLASSES = "space-y-1 px-2";
-export const FILE_SHEET_ROW_STACK_CLASSES = "space-y-3";
+export const FILE_SHEET_ROW_STACK_CLASSES = "space-y-2";
 export const FILE_SHEET_SECTION_BODY_CLASSES = `${FILE_SHEET_ROW_STACK_CLASSES} py-2`;
 export const FILE_SHEET_SLIDER_FIELD_CLASSES = "space-y-1 px-2";
 export const FILE_SHEET_INLINE_CONTROL_ROW_CLASSES = "px-2";
@@ -131,38 +131,50 @@ export function FileSheetSubsection({
   contentClassName,
   hideFirstSeparator = true
 }) {
+  // A gated section collapses to its heading alone. The heading's bottom gap
+  // exists to separate it from the first row, so with no rows it must go —
+  // otherwise a collapsed section carries 16px above its heading and 24px
+  // below, which is where the padding visibly stopped being even.
+  const hasRows = Children.toArray(children).length > 0;
   return (
     // The rule belongs to the top of a section, so a section owns the gap below
-    // its own last row (pb-6) and the rule owns the gap down to the heading
-    // (mb-6). Both are 24px, which is what makes the space above a heading and
+    // its own last row (pb-4) and the rule owns the gap down to the heading
+    // (mb-4). Both are 16px, which is what makes the space above a heading and
     // below a section's last row read as equal. Inside a section everything —
-    // heading to first row, row to row — sits on one 12px rhythm, half the
+    // heading to first row, row to row — sits on one 8px rhythm, half the
     // section padding, so groups read as groups.
     <div
       className={cn(
-        "pb-6",
-        hideFirstSeparator && "first:pt-4 first:[&_.cad-sheet-subsection-separator]:hidden",
+        "pb-4",
+        hideFirstSeparator && "first:pt-2 first:[&_.cad-sheet-subsection-separator]:hidden",
         className
       )}
     >
-      <div className="cad-sheet-subsection-separator mx-2 mb-6 h-px bg-border/60" />
+      <div className="cad-sheet-subsection-separator mx-2 mb-4 h-px bg-border/60" />
       {/* Titleless subsections are a rule plus rows: for a couple of settings
           that belong to the sheet as a whole rather than to any named group, and
           would otherwise need a heading invented for them. */}
       {title ? (
-        <div className="flex min-h-5 min-w-0 items-center justify-between gap-2 px-2 pb-3">
+        <div
+          className={cn(
+            "flex min-h-5 min-w-0 items-center justify-between gap-2 px-2",
+            hasRows && "pb-2"
+          )}
+        >
           <span className={cn("min-w-0 truncate leading-4", FILE_SHEET_SECTION_TITLE_CLASSES)}>{title}</span>
           {/* Trailing holds the section's control — most often its gate switch,
               kept on the shared right-edge control axis like every other row. */}
           {trailing ? <span className="flex shrink-0 items-center">{trailing}</span> : null}
         </div>
       ) : null}
-      <div
-        className={cn(FILE_SHEET_ROW_STACK_CLASSES, contentClassName)}
-        data-file-sheet-row-stack=""
-      >
-        {children}
-      </div>
+      {hasRows ? (
+        <div
+          className={cn(FILE_SHEET_ROW_STACK_CLASSES, contentClassName)}
+          data-file-sheet-row-stack=""
+        >
+          {children}
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -204,7 +216,12 @@ export function FileSheetControlRow({
       data-file-sheet-row-kind={rowKind}
     >
       {label != null || value != null || trailing != null ? (
-        <div className="flex min-h-7 items-center justify-between gap-2">
+        <div
+          className={cn(
+            "flex items-center justify-between gap-2",
+            hasContent ? "min-h-4" : "min-h-7"
+          )}
+        >
           {label != null ? (
             <span className={cn(FILE_SHEET_FIELD_LABEL_CLASSES, labelClassName)}>{label}</span>
           ) : <span />}

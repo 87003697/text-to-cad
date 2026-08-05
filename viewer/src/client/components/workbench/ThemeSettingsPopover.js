@@ -1848,7 +1848,7 @@ function ThemeSettingsContent({
                 <TabsContent
                   key={option.value}
                   value={option.value}
-                  className={cn("mt-3", FILE_SHEET_ROW_STACK_CLASSES)}
+                  className={cn("mt-2", FILE_SHEET_ROW_STACK_CLASSES)}
                   data-file-sheet-row-stack=""
                 >
                   {light.enabled ? (
