@@ -375,6 +375,31 @@ test("local asset middleware resolves legacy URDF mesh URLs from referrer file",
 });
 
 
+test("local asset middleware survives malformed percent-encoding in legacy CAD paths", async () => {
+  const middleware = createLocalAssetMiddleware({
+    backend: {
+      assetPathForFileRef: () => {
+        assert.fail("assetPathForFileRef must not be called for a malformed path");
+      },
+      contentTypeForPath: () => "model/stl",
+    },
+  });
+  const req = {
+    method: "GET",
+    url: "/__cad/foo%zz.step",
+    headers: {},
+  };
+  const res = createResponse();
+  let nextCalled = false;
+
+  middleware(req, res, () => {
+    nextCalled = true;
+  });
+
+  assert.equal(nextCalled, true, "malformed legacy CAD path should fall through to the next middleware");
+});
+
+
 test("CAD Viewer API middleware reveals file assets with POST reveal route", async () => {
   const calls = [];
   const middleware = createCadViewerApiMiddleware({
