@@ -1289,6 +1289,23 @@ function currentDisplayRecordTranslationByRecord(THREE, records = []) {
   return translations;
 }
 
+// Aim the controls back at the model centre without touching orientation or
+// distance. The model group is positioned at -center, so the model's centre in
+// world space is the origin — the same target the initial framing uses.
+function recenterRuntimeTarget(runtime) {
+  const controls = runtime?.controls;
+  const camera = runtime?.camera;
+  if (!controls?.target || !camera || !runtime?.THREE) {
+    return false;
+  }
+  const offset = new runtime.THREE.Vector3().copy(camera.position).sub(controls.target);
+  controls.target.set(0, 0, 0);
+  camera.position.copy(offset);
+  camera.lookAt(controls.target);
+  controls.update?.();
+  return true;
+}
+
 // What "reset" and "fit" frame: the model in its current parameter pose, which
 // is the same thing the loader framed. Framing runtime.modelBounds instead would
 // crop a model a sidecar has posed larger than its at-rest box, because that
@@ -1828,6 +1845,7 @@ const CadViewer = forwardRef(function CadViewer({
   viewportFrameInsets = null,
   isLoading = false,
   pickMode = VIEWER_PICK_MODE.AUTO,
+  panToolActive = false,
   renderPartsIndividually = false,
   scale = "",
   sceneScaleMode = VIEWER_SCENE_SCALE.CAD,
@@ -1891,6 +1909,11 @@ const CadViewer = forwardRef(function CadViewer({
   const viewerAlertChangeRef = useRef(onViewerAlertChange);
   const stepModuleTransformDetectedChangeRef = useRef(onStepModuleTransformDetectedChange);
   const urdfPosePickerRef = useRef(urdfPosePicker);
+  // The pose picker shares the canvas cursor with the pan tool, so it may only
+  // reset what it actually set. Its pointer-move handler runs for every file
+  // kind, and blindly clearing on each move wiped the pan cursor after one
+  // mouse movement.
+  const urdfPosePickerOwnsCursorRef = useRef(false);
   const posePickerPointerRef = useRef(null);
   const lastEmittedPerspectiveRef = useRef(null);
   const lastProjectionRef = useRef(normalizedProjection);
@@ -2202,6 +2225,51 @@ const CadViewer = forwardRef(function CadViewer({
     normalizedViewportFrameInsets.left,
     viewerReadyTick
   ]);
+  // The pan tool remaps the primary drag from orbit to pan. Right-drag stays
+  // pan either way, so the habitual gesture keeps working while the tool is on.
+  //
+  // The cursor closes to "grabbing" for the duration of a drag, which is what
+  // makes the tool feel like dragging the scene rather than just hovering over
+  // it. Driven by listeners instead of React state so a pan does not re-render
+  // the viewer on every press.
+  useEffect(() => {
+    const runtime = runtimeRef.current;
+    const controls = runtime?.controls;
+    const MOUSE = runtime?.THREE?.MOUSE;
+    const canvas = runtime?.renderer?.domElement;
+    if (!controls?.mouseButtons || !MOUSE) {
+      return undefined;
+    }
+    controls.mouseButtons.LEFT = panToolActive ? MOUSE.PAN : MOUSE.ROTATE;
+    if (!canvas) {
+      return undefined;
+    }
+    if (!panToolActive) {
+      canvas.style.cursor = "";
+      return () => {
+        if (controls.mouseButtons) {
+          controls.mouseButtons.LEFT = MOUSE.ROTATE;
+        }
+      };
+    }
+
+    canvas.style.cursor = "grab";
+    const grab = () => { canvas.style.cursor = "grab"; };
+    const grabbing = () => { canvas.style.cursor = "grabbing"; };
+    canvas.addEventListener("pointerdown", grabbing);
+    window.addEventListener("pointerup", grab);
+    window.addEventListener("pointercancel", grab);
+    return () => {
+      canvas.removeEventListener("pointerdown", grabbing);
+      window.removeEventListener("pointerup", grab);
+      window.removeEventListener("pointercancel", grab);
+      canvas.style.cursor = "";
+      if (controls.mouseButtons) {
+        controls.mouseButtons.LEFT = MOUSE.ROTATE;
+      }
+    };
+  }, [panToolActive, viewerReadyTick]);
+
   const runWithoutPerspectiveEvents = (callback) => {
     suppressPerspectiveEventsRef.current += 1;
     try {
@@ -2317,6 +2385,12 @@ const CadViewer = forwardRef(function CadViewer({
     if (reset) {
       return true;
     }
+    // Fallback for when the refit bails — no usable bounds yet, so there is
+    // nothing to frame. It still has to undo the pan: resetting only the zoom
+    // leaves the controls aimed wherever the user dragged to, and the caller's
+    // orientation tween carries that target through, so the view snaps back in
+    // zoom and angle while staying panned off-centre.
+    recenterRuntimeTarget(runtime);
     if (!setRuntimeZoomPercent(runtime, 100)) {
       return false;
     }
@@ -2442,8 +2516,9 @@ const CadViewer = forwardRef(function CadViewer({
       if (runtime) {
         runtime.urdfPosePickerPointerNdc = null;
         syncUrdfPosePickerHoverObjects(runtime, picker);
-        if (canvas?.style) {
-          canvas.style.cursor = "auto";
+        if (canvas?.style && urdfPosePickerOwnsCursorRef.current) {
+          canvas.style.cursor = "";
+          urdfPosePickerOwnsCursorRef.current = false;
         }
         runtime.requestRender?.();
       }
@@ -2464,6 +2539,7 @@ const CadViewer = forwardRef(function CadViewer({
     syncUrdfPosePickerHoverObjects(runtime, picker);
     if (canvas.style) {
       canvas.style.cursor = pick?.point ? "pointer" : "crosshair";
+      urdfPosePickerOwnsCursorRef.current = true;
     }
     setUrdfPosePickerHoverActive(Boolean(pick?.point));
     setUrdfPosePickerGuidePoint((current) => {
@@ -2559,8 +2635,9 @@ const CadViewer = forwardRef(function CadViewer({
     if (runtime) {
       runtime.urdfPosePickerPointerNdc = null;
       syncUrdfPosePickerHoverObjects(runtime, urdfPosePickerRef.current);
-      if (runtime.renderer?.domElement?.style) {
-        runtime.renderer.domElement.style.cursor = "auto";
+      if (runtime.renderer?.domElement?.style && urdfPosePickerOwnsCursorRef.current) {
+        runtime.renderer.domElement.style.cursor = "";
+        urdfPosePickerOwnsCursorRef.current = false;
       }
       runtime.requestRender?.();
     }
@@ -2573,8 +2650,9 @@ const CadViewer = forwardRef(function CadViewer({
     if (runtime) {
       runtime.urdfPosePickerPointerNdc = null;
       syncUrdfPosePickerHoverObjects(runtime, urdfPosePickerRef.current);
-      if (runtime.renderer?.domElement?.style) {
-        runtime.renderer.domElement.style.cursor = "auto";
+      if (runtime.renderer?.domElement?.style && urdfPosePickerOwnsCursorRef.current) {
+        runtime.renderer.domElement.style.cursor = "";
+        urdfPosePickerOwnsCursorRef.current = false;
       }
       runtime.requestRender?.();
     }
@@ -2780,8 +2858,9 @@ const CadViewer = forwardRef(function CadViewer({
     const runtime = runtimeRef.current;
     if (runtime) {
       runtime.urdfPosePickerPointerNdc = null;
-      if (runtime.renderer?.domElement?.style) {
-        runtime.renderer.domElement.style.cursor = "auto";
+      if (runtime.renderer?.domElement?.style && urdfPosePickerOwnsCursorRef.current) {
+        runtime.renderer.domElement.style.cursor = "";
+        urdfPosePickerOwnsCursorRef.current = false;
       }
     }
     setUrdfPosePickerHoverActive(false);

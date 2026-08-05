@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import {
   Crosshair,
   Focus,
+  Hand,
   MousePointer2,
   Orbit,
   Pause,
@@ -112,6 +113,7 @@ function DesktopFloatingToolBar({
   stepAnimationDisabled = false,
   handleStepAnimationPlayToggle,
   drawToolActive,
+  panToolActive,
   handleSelectTabToolMode,
   displayMode,
   onDisplayModeChange,
@@ -216,6 +218,16 @@ function DesktopFloatingToolBar({
                     aria-pressed={referenceSelectionDeferred ? false : selectionToolActive}
                   >
                     <MousePointer2 className="size-3" strokeWidth={2} aria-hidden="true" />
+                  </ToolbarButton>
+
+                  <ToolbarButton
+                    label="Pan"
+                    active={panToolActive}
+                    onClick={() => handleSelectTabToolMode("pan")}
+                    disabled={viewerLoading || !selectedMeshData}
+                    aria-pressed={panToolActive}
+                  >
+                    <Hand className="size-3" strokeWidth={2} aria-hidden="true" />
                   </ToolbarButton>
 
                   <ToolbarButton

@@ -22,7 +22,7 @@ function ensureFavicon() {
     document.head.appendChild(icon);
   }
   icon.type = "image/x-icon";
-  icon.href = `${faviconUrl}?v=star-navy-tile-2`;
+  icon.href = `${faviconUrl}?v=star-tile`;
 }
 
 function bootstrap() {

@@ -3186,6 +3186,7 @@ export default function CadWorkspace({
     viewerSelectableAssemblyNodeIds.length > 0;
   const viewerMode = viewerInAssemblyMode ? "assembly" : "part";
   const drawModeActive = selectedEntrySourceFormat === RENDER_FORMAT.STEP && tabToolMode === TAB_TOOL_MODE.DRAW;
+  const panToolActive = tabToolMode === TAB_TOOL_MODE.PAN;
   const selectionCountBase = selectedPartIds.length + selectedReferenceIds.length + selectedMateIds.length;
 
   const selectedReferenceIdsRef = useRef(selectedReferenceIds);
@@ -7749,7 +7750,11 @@ export default function CadWorkspace({
 
   const handleSelectTabToolMode = useCallback((mode) => {
     setViewerAlertOpen(false);
-    const normalizedMode = mode === TAB_TOOL_MODE.DRAW ? TAB_TOOL_MODE.DRAW : TAB_TOOL_MODE.REFERENCES;
+    // Anything unrecognized falls back to selection rather than sticking the
+    // viewer in a mode with no tool behind it.
+    const normalizedMode = mode === TAB_TOOL_MODE.DRAW || mode === TAB_TOOL_MODE.PAN
+      ? mode
+      : TAB_TOOL_MODE.REFERENCES;
     setTabToolMode(normalizedMode);
     if (normalizedMode === TAB_TOOL_MODE.DRAW && drawingTool === DRAWING_TOOL.SURFACE_LINE) {
       setDrawingTool(DRAWING_TOOL.FREEHAND);
@@ -8333,6 +8338,7 @@ export default function CadWorkspace({
           selectionCount={selectionCount}
           copyButtonLabel={copyButtonLabel}
           copyReferenceTipActive={copyReferenceTipActive}
+          panToolActive={panToolActive}
           handleCopySelection={handleCopySelection}
           handleScreenshotCopy={handleScreenshotCopy}
           urdfPosePicker={isUrdfView && selectedUrdfMoveIt2ActionsEnabled ? {
@@ -8433,6 +8439,7 @@ export default function CadWorkspace({
                 stepAnimationDisabled={!stepModuleEnabled}
                 handleStepAnimationPlayToggle={handleStepModuleAnimationPlayToggle}
                 drawToolActive={drawToolActive}
+                panToolActive={panToolActive}
                 handleSelectTabToolMode={handleSelectTabToolMode}
                 displayMode={isStepView ? displaySettings.mode : undefined}
                 onDisplayModeChange={isStepView ? updateDisplayMode : undefined}

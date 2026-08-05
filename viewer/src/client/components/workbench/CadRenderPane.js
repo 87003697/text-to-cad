@@ -369,6 +369,7 @@ export default function CadRenderPane({
   selectionCount,
   copyButtonLabel,
   copyReferenceTipActive = false,
+  panToolActive = false,
   handleCopySelection,
   handleScreenshotCopy,
   urdfPosePicker = null
@@ -572,6 +573,7 @@ export default function CadRenderPane({
             : viewerPickModeForRenderPane({
               dxfMode,
               pathPreviewMode,
+              panToolActive,
               topologySelectionPending,
               topologySelectionUnavailable,
               topologySelectionDeferred,
@@ -584,6 +586,7 @@ export default function CadRenderPane({
               assemblyPickingActive,
               focusedPartIds
             })}
+          panToolActive={panToolActive}
           renderPartsIndividually={urdfMode ? true : (renderPartsIndividually || Boolean(resolvedStepParameters?.definition))}
           pickableParts={dxfMode || urdfMode || pathPreviewMode ? EMPTY_LIST : assemblyParts}
           hiddenPartIds={dxfMode || pathPreviewMode ? [] : hiddenPartIds}
