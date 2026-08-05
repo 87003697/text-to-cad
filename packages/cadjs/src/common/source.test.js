@@ -73,6 +73,16 @@ test("loadSource rejects STEP parameter options for non-STEP sources", async () 
   );
 });
 
+test("loadSource accepts GLB without STEP parameter options", async () => {
+  const source = await loadSource({
+    kind: "glb",
+    meshData: meshData()
+  });
+
+  assert.equal(source.kind, "glb");
+  assert.equal(source.stepParameterSource, null);
+});
+
 test("loadSource accepts STEP parameter sidecars for STEP sources", async () => {
   await withTempModule(async (stepParameterUrl) => {
     const source = await loadSource({

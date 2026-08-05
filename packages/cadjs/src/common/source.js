@@ -185,7 +185,7 @@ export async function loadSource(input, options = {}) {
   const stepParameters = inputObject.stepParameters ?? options.stepParameters;
   const stepParameterUrl = String(
     inputObject.stepParameterUrl || resolved.stepParameterUrl || options.stepParameterUrl || ""
-  ).trim();
+  ).trim() || undefined;
   const cadPath = String(inputObject.cadPath || resolved.inputPath || options.cadPath || "").trim();
   assertStepOnlyOption(kind, stepParameters, "stepParameters");
   assertStepOnlyOption(kind, stepParameterUrl, "stepParameterUrl");
