@@ -162,6 +162,12 @@ import {
   setStepAnimationFrame
 } from "@/workbench/stepAnimationStore";
 import {
+  applyMeasureRulerDelete,
+  applyMeasureRulerHover,
+  applyMeasureRulerPick,
+  measureRulerStateForChange
+} from "@/workbench/measureRulerState";
+import {
   buildDefaultParameterAnimationState,
   findParameterAnimation
 } from "@/workbench/parameterAnimation";
@@ -5509,6 +5515,30 @@ export default function CadWorkspace({
     viewerPickableEdges.length ||
     viewerPickableVertices.length
   );
+  const measureModeActive = selectedEntrySourceFormat === RENDER_FORMAT.STEP &&
+    tabToolMode === TAB_TOOL_MODE.MEASURE &&
+    hasViewerPickableTopology &&
+    !viewerInAssemblyMode;
+  const [measureRulerState, setMeasureRulerState] = useState(null);
+  const handleMeasurePick = useCallback((pick) => {
+    setMeasureRulerState((current) => applyMeasureRulerPick(current, pick));
+  }, []);
+  const handleMeasureHoverPoint = useCallback((hover) => {
+    setMeasureRulerState((current) => applyMeasureRulerHover(current, hover));
+  }, []);
+  const handleMeasureDelete = useCallback((measurementId) => {
+    setMeasureRulerState((current) => applyMeasureRulerDelete(current, measurementId));
+  }, []);
+  useEffect(() => {
+    setMeasureRulerState((current) => measureRulerStateForChange(current, { entryChanged: true }));
+  }, [selectedKey]);
+  useEffect(() => {
+    setMeasureRulerState((current) => measureRulerStateForChange(current, { toolActive: measureModeActive }));
+  }, [measureModeActive]);
+  const measureToolDisabled = viewerLoading ||
+    !selectedMeshData ||
+    !hasViewerPickableTopology ||
+    viewerInAssemblyMode;
   const topologySelectionActive =
     (isAssemblyView && requestedStepTreeTopologyNodeIds.length > 0) ||
     topLevelReferenceSelectionActive;
@@ -8136,7 +8166,11 @@ export default function CadWorkspace({
 
   const handleSelectTabToolMode = useCallback((mode) => {
     setViewerAlertOpen(false);
-    const normalizedMode = mode === TAB_TOOL_MODE.DRAW ? TAB_TOOL_MODE.DRAW : TAB_TOOL_MODE.REFERENCES;
+    const normalizedMode = mode === TAB_TOOL_MODE.DRAW
+      ? TAB_TOOL_MODE.DRAW
+      : mode === TAB_TOOL_MODE.MEASURE
+        ? TAB_TOOL_MODE.MEASURE
+        : TAB_TOOL_MODE.REFERENCES;
     setTabToolMode(normalizedMode);
     if (normalizedMode === TAB_TOOL_MODE.DRAW && drawingTool === DRAWING_TOOL.SURFACE_LINE) {
       setDrawingTool(DRAWING_TOOL.FREEHAND);
@@ -8625,6 +8659,7 @@ export default function CadWorkspace({
           focusedPartIds={viewerFocusedPartIds}
           boundsAnimationActive={robotBoundsAnimationActive}
           drawToolActive={drawToolActive}
+          measureModeActive={measureModeActive}
           drawingTool={drawingTool}
           drawingStrokes={drawingStrokes}
           handleDrawingStrokesChange={handleDrawingStrokesChange}
@@ -8633,6 +8668,10 @@ export default function CadWorkspace({
           handleModelReferenceActivate={handleModelReferenceActivate}
           handleModelReferenceDoubleActivate={handleModelReferenceDoubleActivate}
           handleModelReferenceContext={handleModelReferenceContext}
+          onMeasurePick={handleMeasurePick}
+          onMeasureHoverPoint={handleMeasureHoverPoint}
+          onMeasureDelete={handleMeasureDelete}
+          measureState={measureRulerState}
           viewerContextMenu={viewerContextMenu}
           onViewerContextMenuClose={closeViewerContextMenu}
           onViewerContextMenuCopyReference={copyViewerContextMenuReference}
@@ -8770,6 +8809,8 @@ export default function CadWorkspace({
                 stepAnimationDisabled={!stepModuleEnabled}
                 handleStepAnimationPlayToggle={handleStepModuleAnimationPlayToggle}
                 drawToolActive={drawToolActive}
+                measureModeActive={measureModeActive}
+                measureDisabled={measureToolDisabled}
                 handleSelectTabToolMode={handleSelectTabToolMode}
                 displayMode={isStepView ? displaySettings.mode : undefined}
                 onDisplayModeChange={isStepView ? updateDisplayMode : undefined}

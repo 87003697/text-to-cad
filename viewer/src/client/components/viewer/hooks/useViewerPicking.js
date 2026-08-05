@@ -1,7 +1,8 @@
 import { useEffect, useRef } from "react";
-import { VIEWER_PICK_MODE } from "cadjs/lib/viewer/constants";
-import { pointVisibleByClipPlane } from "cadjs/lib/viewer/clipPlane";
-import { screenLimitedPickThreshold } from "cadjs/lib/viewer/pickingThresholds";
+import { VIEWER_PICK_MODE } from "cadjs/lib/viewer/constants.js";
+import { classifyMeasurePick, isFinitePoint } from "cadjs/lib/viewer/measurement.js";
+import { pointVisibleByClipPlane } from "cadjs/lib/viewer/clipPlane.js";
+import { screenLimitedPickThreshold } from "cadjs/lib/viewer/pickingThresholds.js";
 import { createViewerContextMenuGestureState } from "./viewerContextMenuGesture.js";
 
 const FACE_BOUNDS_EPSILON = 0.25;
@@ -26,6 +27,32 @@ const HOVER_PICK_MIN_MOVE_PX = 2;
 const FINE_POINTER_TAP_SLOP_PX = 4;
 const COARSE_POINTER_TAP_SLOP_PX = 12;
 export const VIEWER_DOUBLE_CLICK_ACTIVATION_DELAY_MS = 220;
+
+export function measureHitPointFromWorldIntersection(intersection) {
+  if (!intersection?.point) {
+    return null;
+  }
+  const x = Number(intersection.point.x);
+  const y = Number(intersection.point.y);
+  const z = Number(intersection.point.z);
+  if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(z)) {
+    return null;
+  }
+  return [x, y, z];
+}
+
+export function measurePickForPosition({
+  reference = null,
+  worldHitPoint = null,
+  referenceId = "",
+  bypassTopology = false
+} = {}) {
+  const hitPoint = isFinitePoint(worldHitPoint) ? worldHitPoint : null;
+  if (bypassTopology) {
+    return classifyMeasurePick({ reference: null, hitPoint, referenceId: "" });
+  }
+  return classifyMeasurePick({ reference, hitPoint, referenceId: referenceId || "" });
+}
 
 function clamp(value, min, max) {
   return Math.min(Math.max(value, min), max);
@@ -440,6 +467,8 @@ export function useViewerPicking({
   onActivateReference,
   onDoubleActivateReference,
   onContextReference,
+  onMeasurePick,
+  onMeasureHoverPoint,
   viewerReadyTick
 }) {
   // Keep pointer listeners stable across parent rerenders; hover itself updates parent state.
@@ -454,6 +483,8 @@ export function useViewerPicking({
   const onActivateReferenceRef = useRef(onActivateReference);
   const onDoubleActivateReferenceRef = useRef(onDoubleActivateReference);
   const onContextReferenceRef = useRef(onContextReference);
+  const onMeasurePickRef = useRef(onMeasurePick);
+  const onMeasureHoverPointRef = useRef(onMeasureHoverPoint);
   const allowedFaceReferenceIdsRef = useRef(new Set());
   const allowedEdgeReferenceIdsRef = useRef(new Set());
   const allowedVertexReferenceIdsRef = useRef(new Set());
@@ -469,6 +500,8 @@ export function useViewerPicking({
   onActivateReferenceRef.current = onActivateReference;
   onDoubleActivateReferenceRef.current = onDoubleActivateReference;
   onContextReferenceRef.current = onContextReference;
+  onMeasurePickRef.current = onMeasurePick;
+  onMeasureHoverPointRef.current = onMeasureHoverPoint;
   allowedFaceReferenceIdsRef.current = new Set(
     (Array.isArray(pickableFaces) ? pickableFaces : [])
       .map((reference) => String(reference?.id || "").trim())
@@ -527,7 +560,8 @@ export function useViewerPicking({
       y: 0,
       lastX: NaN,
       lastY: NaN,
-      hoveredReferenceId: ""
+      hoveredReferenceId: "",
+      measureTickEmitted: false
     };
     const doubleClickEnabled = !defaultToCoarsePointer;
     let activationTimerId = 0;
@@ -967,6 +1001,32 @@ export function useViewerPicking({
       return edgeCandidate?.reference?.id || faceReference?.id || vertexCandidate?.reference?.id || null;
     }
 
+    function measureReferenceById(referenceId) {
+      const selectorRuntime = selectorRuntimeRef.current;
+      const reference = selectorRuntime?.referenceMap?.get?.(referenceId) || null;
+      if (reference) {
+        return reference;
+      }
+      return (Array.isArray(selectorRuntime?.references) ? selectorRuntime.references : [])
+        .find((candidate) => String(candidate?.id || "").trim() === String(referenceId || "").trim()) || null;
+    }
+
+    function measureReferenceFromPosition(clientX, clientY, { hover = false, bypassTopology = false } = {}) {
+      setPointerFromPosition(clientX, clientY);
+      const modelIntersections = intersectVisibleModelMeshes();
+      const worldHitPoint = frontMostModelIntersections(modelIntersections)
+        .map((intersection) => measureHitPointFromWorldIntersection(intersection))
+        .find(Boolean) || null;
+      const referenceId = bypassTopology ? "" : (pickTopologyReference(modelIntersections, clientX, clientY, { hover }) || "");
+      const reference = referenceId ? measureReferenceById(referenceId) : null;
+      return measurePickForPosition({
+        reference,
+        worldHitPoint,
+        referenceId,
+        bypassTopology
+      });
+    }
+
     function pickReferenceAtPosition(clientX, clientY, { hover = false, preferTopology = false } = {}) {
       setPointerFromPosition(clientX, clientY);
       const modelIntersections = intersectVisibleModelMeshes();
@@ -986,6 +1046,9 @@ export function useViewerPicking({
       if (pickMode === VIEWER_PICK_MODE.AUTO) {
         return pickTopologyReference(modelIntersections, clientX, clientY, { hover }) ||
           pickPartReferenceFromIntersections(modelIntersections);
+      }
+      if (pickMode === VIEWER_PICK_MODE.MEASURE) {
+        return pickTopologyReference(modelIntersections, clientX, clientY, { hover });
       }
       return null;
     }
@@ -1048,11 +1111,16 @@ export function useViewerPicking({
       hoverState.lastX = NaN;
       hoverState.lastY = NaN;
       container.style.cursor = "";
-      if (!hoverState.hoveredReferenceId) {
+      const hadMeasureTick = hoverState.measureTickEmitted;
+      hoverState.measureTickEmitted = false;
+      if (!hoverState.hoveredReferenceId && !hadMeasureTick) {
         return;
       }
       hoverState.hoveredReferenceId = "";
       onHoverReferenceChangeRef.current?.("");
+      if (hadMeasureTick) {
+        onMeasureHoverPointRef.current?.(null);
+      }
     }
 
     function clearPendingActivation() {
@@ -1087,6 +1155,10 @@ export function useViewerPicking({
       }
       hoverState.lastX = hoverState.x;
       hoverState.lastY = hoverState.y;
+      if (pickModeRef.current === VIEWER_PICK_MODE.MEASURE) {
+        hoverState.measureTickEmitted = true;
+        onMeasureHoverPointRef.current?.(measureReferenceFromPosition(hoverState.x, hoverState.y, { hover: true }));
+      }
       commitHoverState(pickReferenceAtPosition(hoverState.x, hoverState.y, { hover: true }));
     }
 
@@ -1350,6 +1422,12 @@ export function useViewerPicking({
       pointerDown.active = false;
       pointerDown.pointerType = "";
       pointerDown.referenceId = "";
+      if (pickModeRef.current === VIEWER_PICK_MODE.MEASURE) {
+        onMeasurePickRef.current?.(measureReferenceFromPosition(pointerDown.x, pointerDown.y, {
+          bypassTopology: !!event.shiftKey
+        }));
+        return;
+      }
       const referenceId = pointerDownReferenceId || pickActivationReference(event.clientX, event.clientY, event.pointerType || "");
       scheduleActivation(referenceId || "", { multiSelect: !!event.shiftKey });
     }

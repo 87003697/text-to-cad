@@ -141,7 +141,9 @@ import {
   THEME_FLOOR_MODES
 } from "cadjs/lib/themeSettings";
 import ViewPlaneControl from "./viewer/ViewPlaneControl";
+import MeasureChipLayer from "./viewer/MeasureChipLayer";
 import { useViewerDrawingOverlay } from "./viewer/hooks/useViewerDrawingOverlay";
+import { useViewerMeasureOverlay } from "./viewer/hooks/useViewerMeasureOverlay";
 import { useViewerPicking } from "./viewer/hooks/useViewerPicking";
 import { useViewerRuntime } from "./viewer/hooks/useViewerRuntime";
 import { PREVIEW_AUTO_ROTATE_SPEED } from "./viewer/orbitControls";
@@ -2091,6 +2093,10 @@ const CadViewer = forwardRef(function CadViewer({
   onActivateReference,
   onDoubleActivateReference,
   onContextReference,
+  onMeasurePick,
+  onMeasureHoverPoint,
+  onMeasureDelete,
+  measureState = null,
   onViewerAlertChange,
   onStepModuleTransformDetectedChange,
   urdfPosePicker = null
@@ -2114,6 +2120,7 @@ const CadViewer = forwardRef(function CadViewer({
   const interactionHostRef = useRef(null);
   const mountRef = useRef(null);
   const drawingCanvasRef = useRef(null);
+  const measureCanvasRef = useRef(null);
   const drawingDraftRef = useRef(null);
   const drawingStrokesRef = useRef(Array.isArray(drawingStrokes) ? drawingStrokes : []);
   const drawingChangeRef = useRef(onDrawingStrokesChange);
@@ -2158,6 +2165,7 @@ const CadViewer = forwardRef(function CadViewer({
   const [cameraZoomPercent, setCameraZoomPercent] = useState(100);
   const [urdfPosePickerGuidePoint, setUrdfPosePickerGuidePoint] = useState(null);
   const [urdfPosePickerHoverActive, setUrdfPosePickerHoverActive] = useState(false);
+  const [measureChips, setMeasureChips] = useState([]);
   const activeViewPlaneFaceRef = useRef("");
   const defaultPerspectiveResettingRef = useRef(false);
   const previewModeRef = useRef(previewMode);
@@ -4710,6 +4718,16 @@ const CadViewer = forwardRef(function CadViewer({
     drawingMinStrokeLengthPx: DRAWING_MIN_STROKE_LENGTH_PX
   });
 
+  useViewerMeasureOverlay({
+    measureCanvasRef,
+    measureState,
+    onMeasureChipsChange: setMeasureChips,
+    runtimeRef,
+    mountRef,
+    previewMode,
+    viewerReadyTick
+  });
+
   useViewerPicking({
     runtimeRef,
     mountRef: interactionHostRef,
@@ -4727,6 +4745,8 @@ const CadViewer = forwardRef(function CadViewer({
     onActivateReference,
     onDoubleActivateReference,
     onContextReference,
+    onMeasurePick,
+    onMeasureHoverPoint,
     viewerReadyTick
   });
 
@@ -4742,6 +4762,15 @@ const CadViewer = forwardRef(function CadViewer({
       onPointerLeave={handlePosePickerPointerLeave}
     >
       <div className="h-full w-full" ref={mountRef} />
+      <canvas
+        ref={measureCanvasRef}
+        className="absolute inset-0 z-10 h-full w-full touch-none"
+        style={{ pointerEvents: "none" }}
+        aria-hidden="true"
+      />
+      {!previewMode ? (
+        <MeasureChipLayer chips={measureChips} onDelete={onMeasureDelete} />
+      ) : null}
       <canvas
         ref={drawingCanvasRef}
         className="absolute inset-0 z-10 h-full w-full touch-none"

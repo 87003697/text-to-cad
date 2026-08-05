@@ -345,6 +345,11 @@ export default function CadRenderPane({
   handleModelReferenceActivate,
   handleModelReferenceDoubleActivate,
   handleModelReferenceContext,
+  onMeasurePick,
+  onMeasureHoverPoint,
+  onMeasureDelete,
+  measureState = null,
+  measureModeActive = false,
   viewerContextMenu = null,
   onViewerContextMenuClose,
   onViewerContextMenuCopyReference,
@@ -560,7 +565,8 @@ export default function CadRenderPane({
               ),
               viewerMode,
               assemblyPickingActive,
-              focusedPartIds
+              focusedPartIds,
+              measureMode: measureModeActive
             })}
           renderPartsIndividually={urdfMode ? true : (renderPartsIndividually || Boolean(resolvedStepParameters?.definition))}
           pickableParts={dxfMode || urdfMode || pathPreviewMode ? EMPTY_LIST : assemblyParts}
@@ -589,6 +595,10 @@ export default function CadRenderPane({
           onActivateReference={handleModelReferenceActivate}
           onDoubleActivateReference={handleModelReferenceDoubleActivate}
           onContextReference={handleModelReferenceContext}
+          onMeasurePick={onMeasurePick}
+          onMeasureHoverPoint={onMeasureHoverPoint}
+          onMeasureDelete={onMeasureDelete}
+          measureState={measureState}
           onViewerAlertChange={handleViewerAlertChange}
           onStepModuleTransformDetectedChange={handleStepModuleTransformDetectedChange}
           urdfPosePicker={urdfPosePicker}

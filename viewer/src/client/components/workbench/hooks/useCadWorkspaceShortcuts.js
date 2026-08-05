@@ -38,7 +38,7 @@ export function useCadWorkspaceShortcuts({
   }, [copyStatus, screenshotStatus, setCopyStatus, setScreenshotStatus]);
 
   useEffect(() => {
-    if (!(previewMode || viewerAlertOpen || themeSheetOpen || tabToolsOpen || (!isDesktop && sidebarOpen))) {
+    if (!(previewMode || viewerAlertOpen || themeSheetOpen || tabToolsOpen || (!isDesktop && sidebarOpen) || tabToolMode === TAB_TOOL_MODE.MEASURE)) {
       return undefined;
     }
 
@@ -81,6 +81,10 @@ export function useCadWorkspaceShortcuts({
           }
           return;
         }
+        if (tabToolMode === TAB_TOOL_MODE.MEASURE) {
+          setTabToolMode(TAB_TOOL_MODE.REFERENCES);
+          return;
+        }
         setViewerAlertOpen(false);
         setThemeMenuOpen(false);
         setTabToolsOpen(false);
@@ -110,6 +114,7 @@ export function useCadWorkspaceShortcuts({
     setTabToolsOpen,
     setViewerAlertOpen,
     sidebarOpen,
+    tabToolMode,
     tabToolsOpen,
     viewerAlertOpen
   ]);

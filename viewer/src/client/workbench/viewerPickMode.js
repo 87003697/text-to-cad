@@ -9,13 +9,17 @@ export function viewerPickModeForRenderPane({
   topologyPickingActive = false,
   viewerMode = "",
   assemblyPickingActive = false,
-  focusedPartIds = ""
+  focusedPartIds = "",
+  measureMode = false
 } = {}) {
   if (topologySelectionPending || topologySelectionUnavailable || topologySelectionDeferred) {
     return VIEWER_PICK_MODE.NONE;
   }
   if (dxfMode || pathPreviewMode) {
     return VIEWER_PICK_MODE.NONE;
+  }
+  if (measureMode && topologyPickingActive && viewerMode !== "assembly") {
+    return VIEWER_PICK_MODE.MEASURE;
   }
   if (
     viewerMode === "assembly" &&

@@ -3,9 +3,17 @@ import test from "node:test";
 
 import { screenLimitedPickThreshold, worldUnitsPerPixelAtDistance } from "cadjs/lib/viewer/pickingThresholds.js";
 import {
+  classifyMeasurePick,
+  measurementFromPicks
+} from "cadjs/lib/viewer/measurement.js";
+import {
   createViewerContextMenuGestureState,
   VIEWER_CONTEXT_MENU_SUPPRESSION_MS
 } from "./viewerContextMenuGesture.js";
+import {
+  measureHitPointFromWorldIntersection,
+  measurePickForPosition
+} from "./useViewerPicking.js";
 
 test("worldUnitsPerPixelAtDistance converts perspective depth to screen scale", () => {
   const camera = {
@@ -82,4 +90,125 @@ test("viewer context menu gesture suppression expires", () => {
 
   assert.equal(gesture.isSuppressed(), false);
   assert.equal(gesture.consumeSuppression(), false);
+});
+
+test("measure hit point stays in world space and never converts through the mesh local frame", () => {
+  const intersection = {
+    point: { x: 3.25, y: -4.5, z: 10.75 },
+    object: {
+      worldToLocal() {
+        throw new Error("worldToLocal must not be called for measure hits");
+      }
+    }
+  };
+  assert.deepEqual(measureHitPointFromWorldIntersection(intersection), [3.25, -4.5, 10.75]);
+  assert.equal(measureHitPointFromWorldIntersection({ point: { x: NaN, y: 0, z: 0 } }), null);
+  assert.equal(measureHitPointFromWorldIntersection({}), null);
+  assert.equal(measureHitPointFromWorldIntersection(null), null);
+});
+
+test("measure picks snap onto transformed world-space references with world-space hits", () => {
+  const baseEdge = [[0, 0, 0], [4, 0, 0]];
+  const worldEdge = baseEdge.map(([x, y, z]) => [-y + 10, x + 20, z - 5]);
+  const reference = {
+    id: "topology|1|edge|2",
+    selectorType: "edge",
+    pickData: { selectorType: "edge", points: worldEdge }
+  };
+  const pick = measurePickForPosition({
+    reference,
+    worldHitPoint: [10, 22, -5],
+    referenceId: "topology|1|edge|2",
+    bypassTopology: false
+  });
+  assert.deepEqual(pick, {
+    referenceId: "topology|1|edge|2",
+    reference,
+    snapKind: "edge",
+    point: [10, 22, -5]
+  });
+});
+
+test("shift bypasses topology and classifies the tap as a free point", () => {
+  const reference = {
+    id: "topology|1|face|3",
+    selectorType: "face",
+    pickData: { selectorType: "face", surfaceType: "plane", normal: [0, 0, 1] }
+  };
+  const pick = measurePickForPosition({
+    reference,
+    worldHitPoint: [1, 2, 3],
+    referenceId: "topology|1|face|3",
+    bypassTopology: true
+  });
+  assert.deepEqual(pick, {
+    referenceId: "",
+    reference: null,
+    snapKind: "free",
+    point: [1, 2, 3]
+  });
+});
+
+test("measure taps without a reference classify the surface point as free", () => {
+  const pick = measurePickForPosition({
+    reference: null,
+    worldHitPoint: [0.5, 2, -2.25],
+    referenceId: "",
+    bypassTopology: false
+  });
+  assert.deepEqual(pick, {
+    referenceId: "",
+    reference: null,
+    snapKind: "free",
+    point: [0.5, 2, -2.25]
+  });
+  assert.equal(measurePickForPosition({ reference: null, worldHitPoint: null }), null);
+});
+
+test("measure clicks on empty space produce no pick", () => {
+  const emptyHit = measurePickForPosition({
+    reference: null,
+    worldHitPoint: null,
+    referenceId: "",
+    bypassTopology: false
+  });
+  assert.equal(emptyHit, null);
+  assert.equal(
+    measurePickForPosition({
+      reference: null,
+      worldHitPoint: null,
+      referenceId: "",
+      bypassTopology: true
+    }),
+    null
+  );
+});
+
+test("measure tap payload keeps the resolved reference for face-to-face distance", () => {
+  const faceReference = {
+    id: "topology|1|face|3",
+    selectorType: "face",
+    pickData: {
+      selectorType: "face",
+      surfaceType: "plane",
+      normal: [0, 0, 1],
+      center: [0, 0, 2]
+    }
+  };
+  const pickA = measurePickForPosition({
+    reference: faceReference,
+    worldHitPoint: [0, 0, 2],
+    referenceId: faceReference.id
+  });
+  assert.equal(pickA.snapKind, "face");
+  assert.equal(pickA.reference, faceReference);
+
+  const pickB = classifyMeasurePick({
+    reference: faceReference,
+    hitPoint: [0, 0, 7],
+    referenceId: faceReference.id
+  });
+  const measurement = measurementFromPicks(pickA, pickB);
+  assert.equal(measurement.perpendicular, 5);
+  assert.equal(measurement.euclidean, 5);
 });
