@@ -356,7 +356,7 @@ class SnapshotCliTests(unittest.TestCase):
                 snapshot_main.ensure_step_topology_artifact = fake_ensure
                 with self.assertRaisesRegex(
                     SnapshotError,
-                    "Snapshot supports only STEP/STP inputs or same-stem Python generators",
+                    "Snapshot supports only STEP/STP/mesh inputs or same-stem Python generators",
                 ):
                     resolve_render_job_packet(
                         {
