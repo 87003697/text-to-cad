@@ -33,9 +33,7 @@ export default function ImplicitFileSheet({
       loadingLabel: "Loading implicit parameters...",
       noParametersLabel: "No implicit parameters.",
       hideWhenEmpty: true,
-      animationAriaLabel: "Implicit animation",
-      copyTitle: "Copy implicit parameter JSON",
-      pasteTitle: "Paste implicit parameter JSON"
+      animationAriaLabel: "Implicit animation"
     }),
     {
       id: "graphics",

@@ -1,4 +1,4 @@
-import { ClipboardPaste, Copy, Pause, Play, RotateCcw } from "lucide-react";
+import { Pause, Play, RotateCcw } from "lucide-react";
 import { cn } from "@/ui/utils";
 import { resolveParameterNumberControlStep } from "@/workbench/parameterControls";
 import { Button } from "../ui/button";
@@ -66,8 +66,6 @@ export default function ParameterControlsSection({
   showEnableToggle = false,
   enableLabel = "Enable",
   animationAriaLabel = "Animation",
-  copyTitle = "Copy parameter JSON",
-  pasteTitle = "Paste parameter JSON",
   resetTitle = "Reset parameters"
 }) {
   const definition = runtime?.definition || null;
@@ -79,6 +77,7 @@ export default function ParameterControlsSection({
   const animationState = runtime?.animationState || {};
   const animationDuration = Math.max(Number(animationState.duration) || 1, 0.001);
   const enabled = runtime?.enabled !== false;
+  const hasControls = parameters.length > 0 || animations.length > 0;
   if (!parameterControlsHasContent(runtime, { hideWhenEmpty })) {
     return null;
   }
@@ -340,54 +339,27 @@ export default function ParameterControlsSection({
             </FileSheetSliderField>
           );
         })}
-        {definition && parameters.length ? (
-          <>
-            <FileSheetControlRow className="pt-2">
-              <div className="grid grid-cols-2 gap-2">
-                <Button
-                  type="button"
-                  variant="outline"
-                  size="sm"
-                  className={cn(compactButtonClasses, "justify-center")}
-                  onClick={() => {
-                    void runtime?.onCopyParams?.();
-                  }}
-                  title={copyTitle}
-                >
-                  <Copy className="h-3.5 w-3.5" strokeWidth={2} aria-hidden="true" />
-                  <span>Copy parameters</span>
-                </Button>
-                <Button
-                  type="button"
-                  variant="outline"
-                  size="sm"
-                  className={cn(compactButtonClasses, "justify-center")}
-                  onClick={() => {
-                    void runtime?.onPasteParams?.();
-                  }}
-                  title={pasteTitle}
-                >
-                  <ClipboardPaste className="h-3.5 w-3.5" strokeWidth={2} aria-hidden="true" />
-                  <span>Paste parameters</span>
-                </Button>
-              </div>
-            </FileSheetControlRow>
-            {runtime?.onResetParameters ? (
-              <FileSheetControlRow>
-                <Button
-                  type="button"
-                  variant="outline"
-                  size="sm"
-                  className={cn(compactButtonClasses, "w-full justify-center")}
-                  onClick={() => runtime.onResetParameters()}
-                  title={resetTitle}
-                >
-                  <RotateCcw className="h-3.5 w-3.5" strokeWidth={2} aria-hidden="true" />
-                  <span>Reset parameters</span>
-                </Button>
-              </FileSheetControlRow>
-            ) : null}
-          </>
+        {/*
+          Reset is available whenever this panel shows ANY control, animation or
+          not. It used to be nested inside the parameter-list branch, so a model
+          whose only control was an animation offered no way back to defaults —
+          the animation row's own "Reset" restarts playback, which is a
+          different thing. Gate on `hasControls`, not on `parameters.length`.
+        */}
+        {definition && hasControls && runtime?.onResetParameters ? (
+          <FileSheetControlRow className="pt-2">
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              className={cn(compactButtonClasses, "w-full justify-center")}
+              onClick={() => runtime.onResetParameters()}
+              title={resetTitle}
+            >
+              <RotateCcw className="h-3.5 w-3.5" strokeWidth={2} aria-hidden="true" />
+              <span>Reset parameters</span>
+            </Button>
+          </FileSheetControlRow>
         ) : null}
       </FileSheetSectionBody>
   );

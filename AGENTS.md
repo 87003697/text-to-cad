@@ -172,12 +172,24 @@ http://127.0.0.1:3245/absolute/model/root?file=path/relative/to/that/root
 ```
 
 The Viewer is not started against a directory — it opens whatever a URL names, so
-one instance serves any folder. When reviewing repo fixtures, use the repo
+one instance serves any folder **under its own served root**. That qualifier
+matters in a worktree: an instance started from another checkout resolves paths
+against ITS root, so an absolute path into a different clone is simply not found
+and the pane reports it as outside this viewer's root. If a Viewer from another
+checkout already holds the default port, start one for this workspace on a free
+port (`--port <n>`) rather than pointing the running one at your path.
+
+When reviewing repo fixtures, use the repo
 `models/` directory as the path and keep permanent or generated
 CAD/robot-description files there so the catalog and artifacts stay in one place.
 Always use an absolute path: the Viewer runs from an arbitrary working directory,
 so a relative one resolves against the wrong place. Do not stop another Viewer
 unless the user asks.
+
+Editing `viewer/` or `packages/cadjs` source and not seeing the change? Vite's
+server-side transform cache can outlive both HMR and a hard reload — the browser
+keeps serving the old module while the file on disk is already correct. Restart
+the dev server and delete `viewer/node_modules/.vite`.
 
 ### Dev by default, prod only for e2e
 

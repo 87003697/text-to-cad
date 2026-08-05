@@ -164,10 +164,65 @@ into the render package, so a colour set on a `Compound` that has children never
 reaches the screen. It does reach the STEP file's XCAF label, which is why this
 looks like it worked if you only check the STEP. Colour every leaf.
 
+## Rotating a plane
+
+`Plane.rotated()` composes its matrix in **WORLD axes, not the plane's own**.
+On a plane whose axes are not the global ones this is the single most expensive
+trap in the library, because the result is a valid solid of the wrong shape.
+
+For a spanwise aerofoil section — `x_dir=(-1,0,0)`, `z_dir=(0,1,0)`, i.e. local
++x rearward and the normal along +Y — `plane.rotated((0, 0, twist))` reads like
+a pitch and is actually a **yaw about world Z**. Measured on a 200 mm chord: a
+20 deg "twist" put the trailing edge at `(812.0, -68.4, 99.4)` when it should
+be at `(812.1, 0.0, 168.4)`. The section slid 68 mm sideways out of its own
+spanwise station and rose nothing.
+
+Nothing downstream catches it. The loft succeeds, the solid is closed,
+watertight and free of self-intersections, and `scripts/inspect refs --facts`
+passes it. Only looking at a render finds it.
+
+Build the frame from explicit direction vectors instead:
+
+```python
+# incidence about the span axis, then yaw the whole frame
+t, s = math.radians(twist_deg), math.radians(sweep_deg)
+x_dir  = Vector(-math.cos(t) * math.cos(s), -math.cos(t) * math.sin(s), math.sin(t))
+normal = Vector(-math.sin(s), math.cos(s), 0.0)
+plane = Plane(origin=Vector(*origin), x_dir=x_dir, z_dir=normal)
+```
+
+The same applies to rolling a section about a swept member's own axis: use a
+Rodrigues rotation about that axis rather than `Plane.rotated()`.
+
+## Validity is not positive volume
+
+`Shape.is_valid` (and `BRepCheck_Analyzer`) can return **True for a shell with a
+large negative volume** — an inverted orientation. Such a body exports and
+renders as a hole in the world. Check both:
+
+```python
+def is_valid_shape(shape):
+    return (shape is not None
+            and BRepCheck_Analyzer(shape.wrapped).IsValid()
+            and shape.volume > 0.0)
+```
+
+Related: a boolean can leave a body that is geometrically right but
+topologically invalid — correct bounds and volume, one bad face. It survives
+until the next boolean, which then fails with `Null TopoDS_Shape object` from a
+call nowhere near the cause. `ShapeFix_Shape` repairs many of these; gate every
+boolean result rather than trusting the last operation.
+
 ## Common failure modes
 
 - Fillet radius larger than local edge geometry.
 - Open sketch profile produces invalid or missing face.
+- A loft whose SECTION WIRE self-intersects. `make_face` accepts a
+  self-intersecting periodic spline and reports a valid, positive-area face, so
+  each station looks fine in isolation; the loft then fails on whichever
+  adjacent pair is worst. Bisect by lofting adjacent pairs to find the station.
+  Common cause: two points straddling a crease offset along the corner's
+  TANGENT lines rather than placed on the curve, so the outline doubles back.
 - Smooth `loft()` failing with `BRep_API: command not done` even though every
   section is individually valid and they all share one edge count. Try
   `loft(..., ruled=True)`; with densely spaced sections the result is visually

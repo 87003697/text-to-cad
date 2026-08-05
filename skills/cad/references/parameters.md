@@ -35,6 +35,19 @@ Use snake_case semantic names that describe intent, matching the build123d Pytho
 A JS sidecar is declared by the model's generator, not by a filename convention.
 The sidecar file itself can have any name; `<name>.params.js` is the convention.
 
+**A sidecar must be ONE self-contained file — it cannot import a sibling
+module.** Only the exact path a package descriptor names as `paramsPath` is
+served (`_is_declared_params_sidecar` in `viewer/server_py/scanner.py`), so
+`import { solve } from "./my_kinematics.js"` 404s in the browser. It resolves
+fine under node, so the failure appears only in the viewer. Splitting the maths
+out for testability is the natural first move and it does not work; inline it
+and use named exports alongside the default export if you want it node-testable:
+
+```js
+export function solveLinkage(t) { /* ... */ }   // testable under node
+export default { manifest: { /* ... */ }, update({ params, effects }) { /* ... */ } };
+```
+
 - A generated model declares the sidecar through the `gen_step()` envelope by
   returning a `params` filepath alongside its `shape`. The path is relative to
   the generator file:

@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef } from "react";
-import { Box, Boxes, ChevronRight, ClipboardPaste, Copy, Eye, EyeOff, Link2, Pause, Play, RotateCcw, X } from "lucide-react";
+import { Box, Boxes, ChevronRight, Eye, EyeOff, Link2, Pause, Play, RotateCcw, X } from "lucide-react";
 import { cn } from "@/ui/utils";
 import {
   STEP_MODEL_ROOT_ID,
@@ -1540,36 +1540,28 @@ export default function StepFileSheet({
                     </FileSheetSliderField>
                   );
                 })}
-                {stepModuleDefinition && stepModuleParameters.length ? (
+                {/*
+                  Reset shows whenever this sheet renders ANY control, animation
+                  or not. Gating it on `stepModuleParameters.length` alone left a
+                  model whose only control was an animation with no way back to
+                  defaults — the animation row's own "Reset" restarts playback,
+                  which is a different action.
+                */}
+                {stepModuleDefinition
+                && (stepModuleParameters.length || stepModuleAnimations.length)
+                && stepModule?.onResetParameters ? (
                   <FileSheetControlRow className="pt-2">
-                    <div className="grid grid-cols-2 gap-2">
-                      <Button
-                        type="button"
-                        variant="outline"
-                        size="sm"
-                        className={cn(compactButtonClasses, "justify-center")}
-                        onClick={() => {
-                          void stepModule?.onCopyParams?.();
-                        }}
-                        title="Copy STEP parameter JSON"
-                      >
-                        <Copy className="h-3.5 w-3.5" strokeWidth={2} aria-hidden="true" />
-                        <span>Copy parameters</span>
-                      </Button>
-                      <Button
-                        type="button"
-                        variant="outline"
-                        size="sm"
-                        className={cn(compactButtonClasses, "justify-center")}
-                        onClick={() => {
-                          void stepModule?.onPasteParams?.();
-                        }}
-                        title="Paste STEP parameter JSON"
-                      >
-                        <ClipboardPaste className="h-3.5 w-3.5" strokeWidth={2} aria-hidden="true" />
-                        <span>Paste parameters</span>
-                      </Button>
-                    </div>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      className={cn(compactButtonClasses, "w-full justify-center")}
+                      onClick={() => stepModule.onResetParameters()}
+                      title="Reset STEP parameters"
+                    >
+                      <RotateCcw className="h-3.5 w-3.5" strokeWidth={2} aria-hidden="true" />
+                      <span>Reset parameters</span>
+                    </Button>
                   </FileSheetControlRow>
                 ) : null}
               </FileSheetSectionBody>

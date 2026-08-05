@@ -1337,3 +1337,79 @@ class SnapshotCliTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class JobAppearanceResolutionTests(unittest.TestCase):
+    """A job's own `appearance` string must get the same treatment as the
+    `--appearance` flag. It used to fall through to a saved-theme-id lookup,
+    miss, and silently render on the default workbench theme with diagnostic
+    dimensions — exit 0, no warning, a plausible but wrong image."""
+
+    def _packet_for(self, appearance_value, *, theme_body=None):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            models = root / "models"
+            models.mkdir(parents=True)
+            (models / "part.step").write_text("ISO-10303-21;\nEND-ISO-10303-21;\n", encoding="utf-8")
+            write_package(models / "part.step")
+            if theme_body is not None:
+                (models / "stage.appearance.json").write_text(
+                    json.dumps(theme_body), encoding="utf-8"
+                )
+            original_ensure = snapshot_main.ensure_step_topology_artifact
+            try:
+                snapshot_main.ensure_step_topology_artifact = lambda *a, **k: None
+                return resolve_render_job_packet(
+                    {
+                        "input": "models/part.step",
+                        "appearance": appearance_value,
+                        "outputs": [{"path": "tmp/iso.png", "camera": "iso"}],
+                    },
+                    cwd=root,
+                )
+            finally:
+                snapshot_main.ensure_step_topology_artifact = original_ensure
+
+    def test_job_appearance_file_path_is_loaded_into_settings(self):
+        theme = {
+            "_comment": "why these numbers are what they are",
+            "colorMode": "dark",
+            "projection": "perspective",
+            "materials": {"roughness": 0.56},
+        }
+        packet = self._packet_for("models/stage.appearance.json", theme_body=theme)
+        appearance = packet["jobs"][0]["appearance"]
+        self.assertIsInstance(
+            appearance, dict, "a theme FILE PATH must resolve to settings, not stay a string"
+        )
+        self.assertEqual(appearance["materials"]["roughness"], 0.56)
+        # keys the renderer genuinely consumes must survive validation
+        self.assertEqual(appearance["projection"], "perspective")
+        self.assertEqual(appearance["colorMode"], "dark")
+        # underscore-prefixed keys are comments, dropped rather than rejected
+        self.assertNotIn("_comment", appearance)
+
+    def test_job_appearance_rejects_edges_and_names_its_real_home(self):
+        """Edge settings belong in display JSON. Rejecting them is correct; the
+        message must say where they go rather than just 'unsupported keys'."""
+        with self.assertRaises(snapshot_main.SnapshotError) as ctx:
+            self._packet_for(
+                "models/stage.appearance.json",
+                theme_body={"materials": {"roughness": 0.5}, "edges": {"enabled": False}},
+            )
+        message = str(ctx.exception)
+        self.assertIn("unsupported keys: edges", message)
+        self.assertIn("edges belongs in display JSON", message)
+
+    def test_job_appearance_saved_theme_name_stays_a_name(self):
+        packet = self._packet_for("workbench")
+        self.assertEqual(packet["jobs"][0]["appearance"], "workbench")
+
+    def test_job_appearance_missing_file_raises(self):
+        with self.assertRaises(snapshot_main.SnapshotError) as ctx:
+            self._packet_for("models/no_such_theme.json")
+        self.assertIn("does not exist", str(ctx.exception))
+
+
+if __name__ == "__main__":
+    unittest.main()

@@ -128,6 +128,44 @@ async function loadDisplayEdgeRuntime(glbUrl) {
   }
 }
 
+// A component GLB can vanish for a moment while a concurrent `scripts/gen`
+// swaps the package directory: the descriptor we already read names a
+// content-addressed cid, the rebuild rewrites that tree, and a fetch landing in
+// the gap 404s. The asset is normally back within a few hundred ms, so a short
+// bounded retry turns a hard failure into a pause.
+//
+// This does NOT cover the case where a rebuild genuinely changed the geometry —
+// then the cid is gone for good and the descriptor in hand is stale. Fixing
+// that properly means re-reading the descriptor and recomposing, which needs a
+// descriptor URL threaded into this function; there isn't one today. So the
+// final error says which of the two happened instead of just reporting a 404.
+const COMPONENT_FETCH_ATTEMPTS = 3;
+const COMPONENT_FETCH_BACKOFF_MS = [120, 320];
+
+async function fetchComponentGlbBuffer(url, cid) {
+  let lastStatus = 0;
+  for (let attempt = 0; attempt < COMPONENT_FETCH_ATTEMPTS; attempt += 1) {
+    const response = await fetch(url, { cache: "no-store" });
+    if (response.ok) {
+      return response.arrayBuffer();
+    }
+    lastStatus = response.status;
+    // Only a missing asset is worth retrying. A 4xx that is not 404, or any
+    // 5xx, is a real error and retrying just delays the report.
+    if (response.status !== 404 || attempt === COMPONENT_FETCH_ATTEMPTS - 1) {
+      break;
+    }
+    const delay = COMPONENT_FETCH_BACKOFF_MS[attempt] || 320;
+    await new Promise((resolve) => { setTimeout(resolve, delay); });
+  }
+  const hint = lastStatus === 404
+    ? " — the component is missing after retries, which means either a rebuild "
+      + "is still in flight or this descriptor is stale relative to the package "
+      + "on disk (regenerate the model)"
+    : "";
+  throw new Error(`Failed to load component GLB ${cid}: HTTP ${lastStatus}${hint}`);
+}
+
 async function loadPackageMeshData(packageInfo) {
   const descriptor = isObject(packageInfo.descriptor) ? packageInfo.descriptor : null;
   if (!descriptor) {
@@ -141,11 +179,9 @@ async function loadPackageMeshData(packageInfo) {
     if (!url) {
       throw new Error(`Assembly package component ${cid} has no resolved URL`);
     }
-    const response = await fetch(url, { cache: "no-store" });
-    if (!response.ok) {
-      throw new Error(`Failed to load component GLB ${cid}: HTTP ${response.status}`);
-    }
-    componentMeshDataByCid[cid] = await buildMeshDataFromGlbBuffer(await response.arrayBuffer());
+    componentMeshDataByCid[cid] = await buildMeshDataFromGlbBuffer(
+      await fetchComponentGlbBuffer(url, cid)
+    );
   }
   return buildComposedPackageMeshData(descriptor, componentMeshDataByCid);
 }
@@ -327,3 +363,11 @@ export async function loadSource(input, options = {}) {
     setRenderAssetSourceScope(previousSourceScope);
   }
 }
+
+// Exported for tests only: the component-fetch retry is the recovery path for a
+// package directory being swapped mid-read, and it is not otherwise reachable
+// without standing up a real package + server.
+export const __testing = {
+  fetchComponentGlbBuffer,
+  COMPONENT_FETCH_ATTEMPTS
+};

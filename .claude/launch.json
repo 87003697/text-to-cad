@@ -18,6 +18,16 @@
       "port": 3245
     },
     {
+      // Second Viewer for this worktree. A CAD Viewer from another checkout is
+      // often already holding 3245, and it resolves paths against ITS OWN root,
+      // so an absolute path into this worktree comes back "file does not exist".
+      // Port 3246 gets a Viewer that serves THIS worktree's sources.
+      "name": "cad-viewer-f1",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["--prefix", "viewer", "run", "dev", "--", "--host", "127.0.0.1", "--port", "3246"],
+      "port": 3246
+    },
+    {
       // Docs site (Next.js). `npm run check` builds it; this serves it with HMR.
       "name": "docs",
       "runtimeExecutable": "npm",

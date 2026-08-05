@@ -123,12 +123,40 @@ DISPLAY_MODE_ALIASES = {
     "wire_frame": "wireframe",
     "wire": "wireframe",
 }
+# Must stay in step with what cadjs `normalizeThemeSettings()` actually reads.
+# `colorMode` and `projection` were missing even though the renderer consumes
+# both (themeSettings.js reads `source.colorMode` / `source.projection`) and the
+# CLI help states "Projection is a theme trait taken from the appearance" — so
+# an authored theme carrying either was rejected as malformed.
+#
+# `edges` is deliberately NOT here: edge settings belong in display JSON, which
+# is a real separation (edges are a per-render display choice, not part of the
+# saved theme) and is covered by test_edge_settings_belong_to_display_json.
 APPEARANCE_OPTION_KEYS = {
     "materials",
     "background",
     "floor",
     "environment",
     "lighting",
+    "colorMode",
+    "projection",
+}
+
+# Keys that are valid settings, just in the OTHER payload. Naming the right
+# home turns "unsupported keys: edges" — which reads like the file is broken —
+# into an instruction.
+SETTINGS_KEY_HOMES = {
+    "edges": "display",
+    "mode": "display",
+    "exploded": "display",
+    "clip": "display",
+    "materials": "appearance",
+    "background": "appearance",
+    "floor": "appearance",
+    "environment": "appearance",
+    "lighting": "appearance",
+    "colorMode": "appearance",
+    "projection": "appearance",
 }
 
 
@@ -381,15 +409,26 @@ def validate_direct_settings_payload(
 ) -> dict[str, object]:
     if not is_plain_object(parsed):
         raise SnapshotError(f"{option_name} JSON must be a {setting_label} object: {source_label}")
-    unknown_keys = [key for key in parsed if key not in allowed_keys]
+    # Underscore-prefixed keys are comments. JSON has none of its own, and an
+    # authored theme is exactly the kind of file that needs to explain why its
+    # numbers are what they are; rejecting `_comment` as an unsupported setting
+    # pushes that rationale out of the file.
+    payload = {key: value for key, value in parsed.items() if not str(key).startswith("_")}
+    unknown_keys = [key for key in payload if key not in allowed_keys]
     if unknown_keys:
+        misplaced = [
+            f"{key} belongs in {SETTINGS_KEY_HOMES[key]} JSON"
+            for key in unknown_keys
+            if key in SETTINGS_KEY_HOMES
+        ]
+        detail = f"; {', '.join(misplaced)}" if misplaced else ""
         raise SnapshotError(
             f"{option_name} JSON must be the {setting_label} object directly; "
-            f"unsupported keys: {', '.join(unknown_keys)}"
+            f"unsupported keys: {', '.join(unknown_keys)}{detail}"
         )
-    if not parsed:
+    if not payload:
         raise SnapshotError(f"{option_name} JSON must include at least one {setting_label} field: {source_label}")
-    return dict(parsed)
+    return payload
 
 
 def validate_display_settings_values(payload: Mapping[str, object], *, source_label: str) -> None:
@@ -1019,6 +1058,21 @@ def normalize_common_job(
                     "--params values for a parameter-sweep GIF"
                 )
 
+    # A job's own `appearance` string gets the SAME treatment as the
+    # `--appearance` flag: a saved-theme name stays a name, but a path or an
+    # inline JSON object is loaded into real settings here.
+    #
+    # Without this a job saying `"appearance": "path/to/theme.json"` fell all
+    # the way through to `appearance_theme_id_for_job()`, which lowercases the
+    # string and treats it as a saved-theme id. The lookup missed, the renderer
+    # silently used the default workbench theme, and — because the resolved id
+    # was then `workbench` — the size-profile logic further down also quietly
+    # switched to diagnostic dimensions. Exit 0, no warning, a plausible but
+    # wrong image. The CLI help has always promised that a file path works.
+    raw_appearance = job.get("appearance")
+    if isinstance(raw_appearance, str) and raw_appearance.strip():
+        job["appearance"] = load_appearance_option(raw_appearance, cwd=resolved_cwd)
+
     normalized_render = dict(job.get("render") if is_plain_object(job.get("render")) else {})
     normalized_render.pop("clip", None)
     normalized_render.pop("clipSettings", None)
@@ -1049,6 +1103,40 @@ def normalize_common_job(
                 "camera": output_object.get("camera") or job.get("camera") or "iso",
             }
         )
+
+    # Preflight the animation frame budget.
+    #
+    # Every frame of an animated render is held before the GIF is encoded, so
+    # the cost is frames x pixels, not frames alone. Past roughly 120 Mpx the
+    # headless browser is killed mid-run and the whole render is lost:
+    #
+    #     playwright._impl._errors.TargetClosedError:
+    #     Target page, context or browser has been closed
+    #
+    # Measured on this machine: 144 frames @1200x750 (130 Mpx) fine,
+    # 203 @860x645 (113 Mpx) fine, 252 @1000x740 (186 Mpx) killed. The failure
+    # arrives minutes in, after all the expensive work, so say so up front.
+    # This is advisory: the ceiling is machine-dependent and a bigger box may
+    # well cope, so it must not block a render that would have succeeded.
+    if step_parameter_render_values_are_animated(job.get("stepParameters")):
+        raw_params = job.get("stepParameters") if is_plain_object(job.get("stepParameters")) else {}
+        fps = float(raw_params.get("fps") or 18)
+        seconds = float(raw_params.get("durationSeconds") or raw_params.get("duration") or 4)
+        frames = max(2, min(round(fps * seconds), 720))
+        pixels = sum(
+            int(out.get("width") or 0) * int(out.get("height") or 0)
+            for out in normalized_outputs
+        )
+        megapixels = frames * pixels / 1_000_000
+        if megapixels > 120:
+            sys.stderr.write(
+                f"warning: animated render is about {megapixels:.0f} Mpx "
+                f"({frames} frames x {pixels / 1_000_000:.2f} Mpx). Past roughly "
+                "120 Mpx the headless browser is often killed mid-run "
+                "(TargetClosedError) and the render is lost after doing all the "
+                "work. Lower fps, shorten durationSeconds, or reduce the output "
+                "size — or render in segments and stitch.\n"
+            )
 
     job.pop("clip", None)
     job.pop("clipSettings", None)

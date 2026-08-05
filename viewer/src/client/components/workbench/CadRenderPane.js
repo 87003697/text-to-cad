@@ -302,6 +302,7 @@ export default function CadRenderPane({
   selectedKey,
   selectedDxfKey,
   missingFileRef = "",
+  viewerServerInfo = null,
   viewerPerspective,
   viewerPerspectiveRef,
   themeSettings,
@@ -409,6 +410,21 @@ export default function CadRenderPane({
   const stepBoundsAnimationActive = Boolean(resolvedStepParameters?.animationState?.playing);
   const cadViewerBoundsAnimationActive = Boolean(boundsAnimationActive || stepBoundsAnimationActive);
   const missingFileLabel = String(missingFileRef || "").trim();
+  // A Viewer resolves paths against ITS OWN served root. Point one at an
+  // absolute path belonging to a different checkout — easy to do when an
+  // instance from another clone is already holding the default port — and the
+  // file is simply not found. Reporting that as "file does not exist" blames
+  // the model and sends you looking for a build problem that isn't there, so
+  // say which of the two it actually is.
+  const servedRoot = String(
+    viewerServerInfo?.rootPath || viewerServerInfo?.directoryRoot || ""
+  ).trim();
+  const missingFileOutsideRoot = Boolean(
+    missingFileLabel
+    && servedRoot
+    && missingFileLabel.startsWith("/")
+    && !missingFileLabel.startsWith(servedRoot.endsWith("/") ? servedRoot : `${servedRoot}/`)
+  );
   const topologySelectionPending = Boolean(referenceSelectionPending && !dxfMode && !urdfMode && !pathPreviewMode);
   const topologySelectionUnavailable = Boolean(referenceSelectionUnavailable && !dxfMode && !urdfMode && !pathPreviewMode);
   const topologySelectionDeferred = Boolean(referenceSelectionDeferred && activeMeshData && !dxfMode && !urdfMode && !pathPreviewMode);
@@ -628,11 +644,22 @@ export default function CadRenderPane({
             className="cad-glass-popover pointer-events-auto w-full max-w-xl min-w-0 p-4 text-center shadow-lg"
           >
             <p className="col-start-1 text-[11px] font-semibold uppercase tracking-[0.16em] text-destructive">
-              File does not exist
+              {missingFileOutsideRoot ? "Outside this viewer's root" : "File does not exist"}
             </p>
-            <AlertTitle className="col-start-1 mt-1 line-clamp-none text-lg text-foreground">File does not exist</AlertTitle>
+            <AlertTitle className="col-start-1 mt-1 line-clamp-none text-lg text-foreground">
+              {missingFileOutsideRoot ? "Outside this viewer's root" : "File does not exist"}
+            </AlertTitle>
             <AlertDescription className="col-start-1 mt-1 text-sm leading-6 text-muted-foreground">
               <code className="rounded-md bg-muted px-2 py-1 text-xs text-foreground">{missingFileLabel}</code>
+              {missingFileOutsideRoot ? (
+                <span className="mt-2 block text-xs leading-5">
+                  This viewer serves{" "}
+                  <code className="rounded bg-muted px-1 py-0.5 text-foreground">{servedRoot}</code>.
+                  The path above is outside it — most likely a viewer from another
+                  checkout is holding this port. Start one for this workspace on a
+                  free port instead.
+                </span>
+              ) : null}
             </AlertDescription>
           </Alert>
         </div>

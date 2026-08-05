@@ -8262,6 +8262,7 @@ export default function CadWorkspace({
           selectedKey={selectedKey}
           selectedDxfKey={selectedDxfPreviewKey}
           missingFileRef={missingFileRef}
+          viewerServerInfo={viewerServerInfo}
           viewerPerspective={viewerPerspective}
           viewerPerspectiveRef={activePerspectiveRef}
           themeSettings={resolvedThemeSettings}
