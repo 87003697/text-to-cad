@@ -5,6 +5,7 @@
 # 产物 / pilot outputs / LFS assets
 outputs
 models
+.cvm-jobs
 
 # 依赖包（lock 文件在 .git 里保版本；deps 本身可 rebuild）
 .venv
