@@ -24,7 +24,7 @@ Two independent CLIs, sharing the underlying `meshscope` package:
 
 ```bash
 # Quantitative: numeric similarity metrics → JSON on stdout
-python skills/mesh-compare/scripts/mesh-compare <mesh_a> <mesh_b> [--samples N] [--include-distances]
+python skills/mesh-compare/scripts/mesh-compare <mesh_a> <mesh_b> [--samples N] [--seed N] [--include-distances]
 
 # Visualization: distance-colored or side-by-side render → PNG on disk
 python skills/mesh-compare/scripts/mesh-render heatmap <mesh_a> <mesh_b> --output <png>
@@ -38,15 +38,16 @@ when to use `heatmap` vs `side-by-side`.
 ## Required workflow
 
 1. Confirm both mesh files exist and are readable.
-2. Run `mesh-compare` (numeric CLI) with default samples (10000) or
-   higher for large meshes to obtain quantitative metrics.
+2. Run `mesh-compare` (numeric CLI) with its deterministic defaults
+   (`--samples 50000 --seed 0`) to obtain threshold-comparable metrics.
 3. Parse the JSON output; read `references/compare-metrics.md` for
    threshold interpretation.
 4. If `chamfer > 0.1` on two meshes that visually look similar,
    report to the caller that coordinate frames likely disagree
    upstream — do not attempt to fix it here.
-5. If the metrics indicate significant divergence (`chamfer > 0.02`,
-   high `p95`, or `hausdorff` outliers), invoke `mesh-render heatmap`
+5. If the metrics indicate significant divergence (`chamfer > 0.01`,
+   either directional `p95 > 0.03`, or `hausdorff` outliers), invoke
+   `mesh-render heatmap`
    to identify where the divergence concentrates spatially. See
    `references/render-modes.md` for mode selection.
 6. Include both the numeric summary and any generated PNG paths in
@@ -81,11 +82,18 @@ static PNG renders, not interactive CAD artifacts.
 - Coordinate frames must match; this skill does not align meshes.
 - Meshes are normalized to `[-0.5, 0.5]^3` (Trellis2 standard) before
   comparison. Chamfer values are unit-less and cross-comparable.
+- Threshold decisions require the fixed 50000-sample, seed-0 protocol.
+  The JSON `meta` block records both values; do not compare runs that use
+  different sampling protocols as though they were equivalent.
+- Pass original mesh paths directly to `mesh-render`; do not perform an ad-hoc
+  GLB conversion or inject `PYTHONPATH`. Follow `references/render-modes.md`
+  for the Viewer input, camera, material, and failure contracts.
 
 ## Progressive references
 
 - `references/compare-metrics.md` — Chamfer/Hausdorff/percentile
   threshold interpretation and coordinate-frame prerequisite (for
   the `mesh-compare` numeric CLI).
-- `references/render-modes.md` — when to use `heatmap` vs
-  `side-by-side` mode (for the `mesh-render` visualization CLI).
+- `references/render-modes.md` — mode selection plus Viewer input,
+  coordinate, material, camera-parity, and failure contracts (for the
+  `mesh-render` visualization CLI).

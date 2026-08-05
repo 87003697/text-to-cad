@@ -25,7 +25,8 @@ and B. This is the primary "how close overall?" number.
 Interpretation on normalized meshes:
 
 - `< 0.005` — excellent (self-compare noise floor).
-- `< 0.02` — acceptable reconstruction.
+- `≤ 0.01` — acceptable overall reconstruction under the fixed
+  50000-sample, seed-0 protocol.
 - `< 0.05` — degraded but recognizable.
 - `> 0.1` — likely a coordinate-frame mismatch, not a fidelity problem.
 
@@ -40,14 +41,8 @@ useful for locating spatial outliers, not for overall quality scoring.
 `stats.p90_a2b` / `stats.p95_a2b` (and symmetric `_b2a`) locate the
 tail of the error distribution. When the chamfer is acceptable but
 `p95` is much higher than `mean`, a small region diverges strongly —
-run `mesh-render heatmap` to see where.
-
-## IoU (bulk shape match)
-
-Optional bulk metric: intersection-over-union of the voxelized
-occupancy grids. `iou < 0.75` on a normalized mesh indicates a bulk
-shape mismatch and suggests the caller should re-route (choose a
-different modeling paradigm) rather than continue refining.
+run `mesh-render heatmap` to see where. The mesh-to-cad hard tail gate
+requires both directional p95 values to be `≤ 0.03`.
 
 ## `compare_metrics.json` schema (authoritative)
 
@@ -66,7 +61,9 @@ The `mesh-compare` numeric CLI emits (top-level, on stdout):
     "max_a2b": 0.088, "max_b2a": 0.092
   },
   "meta": {
-    "n_samples": 10000,
+    "n_samples": 50000,
+    "sample_seed": 0,
+    "sampling": "trimesh_surface_seeded",
     "normalization": "trellis2",
     "scale_a": 12.4,
     "scale_b": 12.1
@@ -75,11 +72,11 @@ The `mesh-compare` numeric CLI emits (top-level, on stdout):
 ```
 
 Callers that persist this JSON on disk (for example `$mesh-to-cad`
-writing `${EXP_DIR}/compare_metrics.json`) may add a top-level alias
-`chamfer_l2` matching `chamfer` and top-level `iou`, `input_mesh`,
-`reconstructed_mesh`, `p50`, `p90`, `p95`, `p99`, `sample_count`, and
-`normalized: true` fields for convenience. These aliases must not
-contradict the numeric CLI's own fields.
+writing `${EXP_DIR}/compare_metrics.json`) must preserve every emitted field
+unchanged. The documented `ai_vision` extension below may be added when
+requested; do not append a separately computed IoU, caller-defined metric, or
+alias. Read `chamfer` and the directional percentile fields at their canonical
+locations.
 
 ## `ai_vision` block (optional, appended by caller)
 

@@ -9,6 +9,15 @@ from __future__ import annotations
 
 import argparse
 import json
+import sys
+from pathlib import Path
+
+
+_BUNDLED_MESHSCOPE = (
+    Path(__file__).resolve().parents[1] / "packages" / "meshscope" / "src"
+)
+if _BUNDLED_MESHSCOPE.is_dir():
+    sys.path.insert(0, str(_BUNDLED_MESHSCOPE))
 
 from meshscope.compare import compare, prepare
 
@@ -17,7 +26,13 @@ def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description="Compute similarity metrics between two mesh files.")
     parser.add_argument("mesh_a", help="Path to first mesh (source / generated)")
     parser.add_argument("mesh_b", help="Path to second mesh (target / reference)")
-    parser.add_argument("--samples", type=int, default=10000, help="Point-sample count per mesh (default: 10000)")
+    parser.add_argument("--samples", type=int, default=50000, help="Point-sample count per mesh (default: 50000)")
+    parser.add_argument(
+        "--seed",
+        type=int,
+        default=0,
+        help="Deterministic surface-sampling seed (default: 0)",
+    )
     parser.add_argument(
         "--include-distances",
         action="store_true",
@@ -32,6 +47,7 @@ def main(argv=None) -> int:
             pair,
             n_samples=args.samples,
             include_distances=args.include_distances,
+            seed=args.seed,
         )
     except Exception as exc:
         payload = {"ok": False, "errors": [str(exc)]}

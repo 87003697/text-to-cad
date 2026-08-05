@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import unittest
+import importlib
 from pathlib import Path
+from unittest import mock
 
 import trimesh
 from scipy.spatial import cKDTree
@@ -19,6 +21,7 @@ from meshscope.compare import (  # noqa: E402
     prepare,
     vertex_distances,
 )
+compare_module = importlib.import_module("meshscope.compare")
 
 
 REPO_ROOT = Path(__file__).resolve().parents[4]
@@ -111,6 +114,50 @@ class TestCompare(unittest.TestCase):
         self.assertIn("stats", result)
         self.assertIn("meta", result)
         self.assertEqual(result["meta"]["normalization"], "trellis2")
+        self.assertEqual(result["meta"]["sample_seed"], 0)
+        self.assertEqual(result["meta"]["sampling"], "trimesh_surface_seeded")
+
+    def test_sampling_is_deterministic(self):
+        pair = prepare(CUBE, TETRA)
+        first = compare(pair, n_samples=1000, seed=17)
+        second = compare(pair, n_samples=1000, seed=17)
+        self.assertEqual(first, second)
+
+    def test_sampling_does_not_require_new_trimesh_method_seed_api(self):
+        norm_a, scale_a, center_a = normalize(trimesh.creation.box())
+        norm_b, scale_b, center_b = normalize(trimesh.creation.icosphere(subdivisions=1))
+        pair = PreparedPair(
+            norm_a=norm_a,
+            norm_b=norm_b,
+            scale_a=scale_a,
+            scale_b=scale_b,
+            center_a=center_a,
+            center_b=center_b,
+        )
+        with mock.patch.object(
+            trimesh.Trimesh,
+            "sample",
+            side_effect=AssertionError("Trimesh.sample must not be used"),
+        ):
+            result = compare(pair, n_samples=1000, seed=17)
+        self.assertEqual(result["meta"]["sample_seed"], 17)
+
+    def test_rejects_invalid_sampling_parameters(self):
+        pair = prepare(CUBE, TETRA)
+        with self.assertRaisesRegex(ValueError, "n_samples must be positive"):
+            compare(pair, n_samples=0)
+        with self.assertRaisesRegex(ValueError, "seed must be non-negative"):
+            compare(pair, n_samples=100, seed=-1)
+
+    def test_vertex_distances_uses_compare_target_stream(self):
+        pair = prepare(CUBE, TETRA)
+        with mock.patch(
+            "meshscope.compare._sample_surface",
+            wraps=compare_module._sample_surface,
+        ) as sample_surface:
+            vertex_distances(pair, n_samples=100, seed=17)
+
+        sample_surface.assert_called_once_with(pair.norm_b, 100, 18)
 
     def test_different_shapes_large_distance(self):
         pair = prepare(CUBE, TETRA)
@@ -132,10 +179,9 @@ class TestCompare(unittest.TestCase):
 
     @unittest.skipUnless(TOYS4K_AVAILABLE, "Toys4K meshes not hydrated (LFS)")
     def test_toys4k_self_compare(self):
-        # Real meshes have ~0.010-0.011 sampling variance at 10K samples;
-        # 0.02 stays well below the "acceptable reconstruction" threshold
-        # in mesh-to-cad output-schemas.md but comfortably above the noise
-        # floor for any real toys4k mesh.
+        # This package-level test intentionally stays at 10K for CI speed.
+        # The mesh-to-cad acceptance protocol uses 50K deterministic samples
+        # so its 0.01 threshold remains above the self-compare noise floor.
         for path in (TOYS4K_CUP, TOYS4K_CHAIR):
             pair = prepare(path, path)
             result = compare(pair, n_samples=10000)
