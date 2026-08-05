@@ -87,7 +87,12 @@ function legacyCadAssetFileRef(requestUrl, req) {
   if (!requestUrl.pathname.startsWith("/__cad/") || requestUrl.pathname === "/__cad/asset") {
     return "";
   }
-  const relativePath = decodeURIComponent(requestUrl.pathname.slice("/__cad/".length));
+  let relativePath = "";
+  try {
+    relativePath = decodeURIComponent(requestUrl.pathname.slice("/__cad/".length));
+  } catch {
+    return "";
+  }
   if (!relativePath || !path.extname(relativePath)) {
     return "";
   }
