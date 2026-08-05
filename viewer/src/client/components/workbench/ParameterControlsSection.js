@@ -2,29 +2,23 @@ import { Pause, Play, RotateCcw } from "lucide-react";
 import { cn } from "@/ui/utils";
 import { resolveParameterNumberControlStep } from "@/workbench/parameterControls";
 import { Button } from "../ui/button";
-import { ColorPicker } from "../ui/color-picker";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue
-} from "../ui/select";
 import { Slider } from "../ui/slider";
 import {
   FILE_SHEET_COMPACT_BUTTON_CLASSES,
-  FILE_SHEET_COMPACT_INPUT_CLASSES,
   FILE_SHEET_PRECISION_SLIDER_CLASSES,
+  FileSheetButtonRow,
+  FileSheetColorPicker,
   FileSheetControlRow,
   FileSheetSectionBody,
+  FileSheetSelectRow,
   FileSheetSliderField,
+  FileSheetStatusText,
   FileSheetToggleRow,
   FileSheetValueInput,
   parseFileSheetNumberInput
 } from "./FileSheet";
 
 const compactButtonClasses = FILE_SHEET_COMPACT_BUTTON_CLASSES;
-const compactInputClasses = FILE_SHEET_COMPACT_INPUT_CLASSES;
 const PARAMETER_ANIMATION_SPEED_MIN = 0.1;
 const PARAMETER_ANIMATION_SPEED_MAX = 3;
 
@@ -94,36 +88,29 @@ export default function ParameterControlsSection({
         ) : null}
 
         {status === "loading" ? (
-          <p className="px-2 py-2 text-xs text-[var(--ui-text-muted)]">{loadingLabel}</p>
+          <FileSheetStatusText>{loadingLabel}</FileSheetStatusText>
         ) : null}
         {error ? (
-          <p className="whitespace-pre-line px-2 py-2 text-xs text-destructive">{error}</p>
+          <FileSheetStatusText tone="error">{error}</FileSheetStatusText>
         ) : null}
 
         {definition && animations.length ? (
           <>
             {animations.length > 1 ? (
-              <FileSheetControlRow label="Animation">
-                <Select
-                  value={String(animationState.activeId || animations[0]?.id || "")}
-                  onValueChange={(nextValue) => runtime?.onAnimationSelect?.(nextValue)}
-                  disabled={!enabled}
-                >
-                  <SelectTrigger size="sm" className="h-7 !text-[11px]" aria-label={animationAriaLabel}>
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {animations.map((animation) => (
-                      <SelectItem key={animation.id} value={animation.id}>
-                        {animation.label}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </FileSheetControlRow>
+              <FileSheetSelectRow
+                label="Animation"
+                value={String(animationState.activeId || animations[0]?.id || "")}
+                onValueChange={(nextValue) => runtime?.onAnimationSelect?.(nextValue)}
+                disabled={!enabled}
+                ariaLabel={animationAriaLabel}
+                options={animations.map((animation) => ({
+                  value: animation.id,
+                  label: animation.label
+                }))}
+              />
             ) : null}
             <FileSheetControlRow>
-              <div className="grid grid-cols-2 gap-2">
+              <FileSheetButtonRow columns={2} className="px-0">
                 <Button
                   type="button"
                   variant="outline"
@@ -154,7 +141,7 @@ export default function ParameterControlsSection({
                   <RotateCcw className="h-3.5 w-3.5" strokeWidth={2} aria-hidden="true" />
                   <span>Reset</span>
                 </Button>
-              </div>
+              </FileSheetButtonRow>
             </FileSheetControlRow>
             <FileSheetToggleRow
               label="Loop"
@@ -217,7 +204,7 @@ export default function ParameterControlsSection({
         ) : null}
 
         {definition && !parameters.length ? (
-          <p className="px-2 py-2 text-xs text-[var(--ui-text-muted)]">{noParametersLabel}</p>
+          <FileSheetStatusText>{noParametersLabel}</FileSheetStatusText>
         ) : null}
         {parameters.map((parameter) => {
           const currentValue = values?.[parameter.id] ?? parameter.defaultValue;
@@ -236,24 +223,15 @@ export default function ParameterControlsSection({
           }
           if (parameter.type === "enum") {
             return (
-              <FileSheetControlRow key={parameter.id} label={parameter.label}>
-                <Select
-                  value={String(currentValue ?? "")}
-                  onValueChange={(nextValue) => runtime?.onParameterChange?.(parameter.id, nextValue)}
-                  disabled={!enabled}
-                >
-                  <SelectTrigger size="sm" className="h-7 !text-[11px]" aria-label={parameter.label}>
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {parameter.options.map((option) => (
-                      <SelectItem key={option.value} value={option.value}>
-                        {option.label}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </FileSheetControlRow>
+              <FileSheetSelectRow
+                key={parameter.id}
+                label={parameter.label}
+                value={String(currentValue ?? "")}
+                onValueChange={(nextValue) => runtime?.onParameterChange?.(parameter.id, nextValue)}
+                disabled={!enabled}
+                ariaLabel={parameter.label}
+                options={parameter.options}
+              />
             );
           }
           if (parameter.type === "color") {
@@ -262,13 +240,10 @@ export default function ParameterControlsSection({
                 key={parameter.id}
                 label={parameter.label}
                 trailing={(
-                  <ColorPicker
+                  <FileSheetColorPicker
                     value={String(currentValue || "#ffffff")}
                     onChange={(nextValue) => runtime?.onParameterChange?.(parameter.id, nextValue)}
                     disabled={!enabled}
-                    className={cn(compactInputClasses, "w-fit justify-start gap-1.5 px-1.5")}
-                    swatchClassName="size-3.5"
-                    popoverAlign="end"
                     aria-label={parameter.label}
                   />
                 )}
@@ -347,7 +322,7 @@ export default function ParameterControlsSection({
           different thing. Gate on `hasControls`, not on `parameters.length`.
         */}
         {definition && hasControls && runtime?.onResetParameters ? (
-          <FileSheetControlRow className="pt-2">
+          <FileSheetControlRow>
             <Button
               type="button"
               variant="outline"

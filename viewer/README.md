@@ -137,6 +137,8 @@ assets are served by the local backend and are not copied into `dist/`.
 
 ## Reference Docs
 
+- [Settings UI guidelines](./docs/settings-ui.md): the mandatory row grammar,
+  spacing, and control standards for file-sheet and theme settings panels.
 - [Backend storage](./docs/backend.md): local filesystem backend contracts.
 - [Browser storage](./docs/storage.md): URL, `localStorage`, and
   `sessionStorage` ownership.

@@ -1,11 +1,19 @@
-import { useEffect, useRef, useState } from "react";
+import { Children, useEffect, useRef, useState } from "react";
 import { cn } from "@/ui/utils";
 import {
   AccordionContent,
   AccordionItem,
   AccordionTrigger
 } from "../ui/accordion";
+import { ColorPicker } from "../ui/color-picker";
 import { ScrollArea } from "../ui/scroll-area";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue
+} from "../ui/select";
 import {
   Sheet,
   SheetContent,
@@ -14,6 +22,7 @@ import {
   SheetTitle
 } from "../ui/sheet";
 import { Switch } from "../ui/switch";
+import { ToggleGroup, ToggleGroupItem } from "../ui/toggle-group";
 
 const DEFAULT_FILE_SHEET_WIDTH = 365;
 const DESKTOP_FILE_SHEET_MIN_WIDTH = 240;
@@ -27,12 +36,18 @@ const FILE_SHEET_CONTROL_TEXT_CLASSES = [
 
 export const FILE_SHEET_SECTION_TRIGGER_CLASSES = "px-2 py-2 text-sm font-normal text-sidebar-foreground/90";
 export const FILE_SHEET_SECTION_CONTENT_CLASSES = "py-2";
-export const FILE_SHEET_CONTROL_ROW_CLASSES = "space-y-1 px-2 py-1";
+export const FILE_SHEET_CONTROL_ROW_CLASSES = "space-y-1 px-2";
 export const FILE_SHEET_ROW_STACK_CLASSES = "space-y-2";
 export const FILE_SHEET_SECTION_BODY_CLASSES = `${FILE_SHEET_ROW_STACK_CLASSES} py-2`;
-export const FILE_SHEET_SLIDER_FIELD_CLASSES = "space-y-1 px-2 py-1";
-export const FILE_SHEET_INLINE_CONTROL_ROW_CLASSES = "px-2 py-1";
+export const FILE_SHEET_SLIDER_FIELD_CLASSES = "space-y-1 px-2";
+export const FILE_SHEET_INLINE_CONTROL_ROW_CLASSES = "px-2";
+// Section headers are uppercase micro-labels so they can never be confused
+// with row labels (11px sentence-case, one step below).
+export const FILE_SHEET_SECTION_TITLE_CLASSES = "text-[10px] font-medium uppercase tracking-wider text-muted-foreground";
 export const FILE_SHEET_FIELD_LABEL_CLASSES = "block min-w-0 truncate text-[11px] font-medium leading-4 text-muted-foreground";
+export const FILE_SHEET_STATUS_TEXT_CLASSES = "px-2 text-[11px] leading-4 text-muted-foreground";
+export const FILE_SHEET_UNIT_SUFFIX_CLASSES = "pointer-events-none absolute inset-y-0 right-2 flex items-center text-[10px] text-muted-foreground";
+export const FILE_SHEET_SELECT_TRIGGER_CLASSES = "h-7 w-full !text-[11px]";
 export const FILE_SHEET_VALUE_BADGE_CLASSES = "shrink-0 rounded bg-muted px-1.5 py-0.5 font-mono text-[10px] font-medium leading-none tabular-nums text-muted-foreground";
 export const FILE_SHEET_VALUE_BADGE_INPUT_CLASSES = [
   "h-7 w-20 shrink-0 rounded-md border border-input bg-transparent px-2 py-1 text-right text-[11px] font-medium leading-none tabular-nums text-foreground shadow-xs outline-none",
@@ -128,9 +143,11 @@ export function FileSheetSubsection({
           that belong to the sheet as a whole rather than to any named group, and
           would otherwise need a heading invented for them. */}
       {title ? (
-        <div className="flex min-w-0 items-center justify-between gap-2 px-2 pb-1 text-[12px] font-normal leading-5 text-sidebar-foreground/80">
-          <span className="min-w-0 truncate">{title}</span>
-          {trailing ? <span className="shrink-0">{trailing}</span> : null}
+        <div className="flex min-h-5 min-w-0 items-center justify-between gap-2 px-2 pb-1">
+          <span className={cn("min-w-0 truncate leading-4", FILE_SHEET_SECTION_TITLE_CLASSES)}>{title}</span>
+          {/* Trailing holds the section's control — most often its gate switch,
+              kept on the shared right-edge control axis like every other row. */}
+          {trailing ? <span className="flex shrink-0 items-center">{trailing}</span> : null}
         </div>
       ) : null}
       <div
@@ -424,6 +441,215 @@ export function FileSheetToggleRow({
     </FileSheetInlineControlRow>
   );
 }
+
+// Loading / empty / info line, or an error with tone="error". The one style
+// for every in-sheet message.
+export function FileSheetStatusText({ children, tone = "muted", className }) {
+  return (
+    <p
+      className={cn(
+        FILE_SHEET_STATUS_TEXT_CLASSES,
+        tone === "error" && "whitespace-pre-line text-destructive",
+        className
+      )}
+    >
+      {children}
+    </p>
+  );
+}
+
+// Micro-labelled cell for a FileSheetFieldGrid: 11px label above a 28px control.
+// The one sanctioned label-above arrangement — reserved for tightly coupled
+// tuples (coordinates, solver numerics); independent settings use rows.
+export function FileSheetField({ label, children, className }) {
+  return (
+    <label className={cn("block min-w-0", className)}>
+      <span className={FILE_SHEET_FIELD_LABEL_CLASSES}>{label}</span>
+      <div className="mt-1 min-w-0">{children}</div>
+    </label>
+  );
+}
+
+// Read-only fact in a field grid: same silhouette as an input, muted fill so it
+// reads as data, not an editable control.
+export function FileSheetValueField({ label, value, mono = false }) {
+  const displayValue = String(value ?? "");
+  return (
+    <div className="block min-w-0">
+      <span className={FILE_SHEET_FIELD_LABEL_CLASSES}>{label}</span>
+      <div
+        className={cn(
+          "mt-1 min-h-7 truncate rounded-md border border-border/70 bg-muted/25 px-2 py-1 text-[11px] font-medium leading-4 text-foreground",
+          mono && "font-mono tabular-nums"
+        )}
+        title={displayValue}
+      >
+        {displayValue}
+      </div>
+    </div>
+  );
+}
+
+export function FileSheetFieldGrid({ columns = 2, children, className }) {
+  return (
+    <div
+      className={cn("grid gap-2 px-2", className)}
+      style={{ gridTemplateColumns: `repeat(${columns}, minmax(0, 1fr))` }}
+      data-file-sheet-field-grid=""
+    >
+      {children}
+    </div>
+  );
+}
+
+// Sibling actions as equal-width columns; a single child renders full width
+// (the Reset convention: outline + RotateCcw, last row of what it resets).
+export function FileSheetButtonRow({ children, columns, className }) {
+  const columnCount = Math.max(1, columns || Children.count(children));
+  return (
+    <div
+      className={cn("grid gap-1.5 px-2", className)}
+      style={{ gridTemplateColumns: `repeat(${columnCount}, minmax(0, 1fr))` }}
+      data-file-sheet-button-row=""
+    >
+      {children}
+    </div>
+  );
+}
+
+// Mutually exclusive modes with 2-5 short options; 6+ options use a select.
+export function FileSheetSegmentedControl({ value, onChange, options, ariaLabel }) {
+  const columnCount = Math.max(1, Math.min(options.length, options.length > 4 ? 3 : 4));
+  return (
+    <ToggleGroup
+      type="single"
+      variant="outline"
+      size="sm"
+      value={value}
+      onValueChange={(nextValue) => {
+        if (!nextValue) {
+          return;
+        }
+        onChange(nextValue);
+      }}
+      className="grid min-h-7 w-full min-w-0 auto-rows-[1.75rem]"
+      style={{ gridTemplateColumns: `repeat(${columnCount}, minmax(0, 1fr))` }}
+      aria-label={ariaLabel}
+    >
+      {options.map((option) => {
+        const Icon = option.Icon;
+        return (
+          <ToggleGroupItem
+            key={option.value}
+            value={option.value}
+            disabled={option.disabled === true}
+            className={cn("min-w-0 gap-1.5 !h-7 px-1.5 text-[11px]", FILE_SHEET_SEGMENTED_ITEM_CLASSES)}
+            title={option.title || option.label}
+            aria-label={option.label}
+          >
+            {Icon ? <Icon className="size-3" strokeWidth={2} aria-hidden="true" /> : null}
+            <span className="truncate">{option.label}</span>
+          </ToggleGroupItem>
+        );
+      })}
+    </ToggleGroup>
+  );
+}
+
+// The standard select: block row with a full-width 28px trigger. Pass
+// triggerContent to replace the plain SelectValue (e.g. a swatch + label).
+export function FileSheetSelectRow({
+  label,
+  value,
+  onValueChange,
+  options,
+  ariaLabel,
+  disabled = false,
+  placeholder,
+  triggerContent,
+  className
+}) {
+  return (
+    <FileSheetControlRow label={label} className={className}>
+      <Select value={value} onValueChange={onValueChange} disabled={disabled}>
+        <SelectTrigger
+          size="sm"
+          className={FILE_SHEET_SELECT_TRIGGER_CLASSES}
+          aria-label={ariaLabel || (typeof label === "string" ? label : undefined)}
+        >
+          {triggerContent ?? <SelectValue placeholder={placeholder} />}
+        </SelectTrigger>
+        <SelectContent>
+          {options.map((option) => (
+            <SelectItem
+              key={option.value}
+              value={option.value}
+              className="text-xs"
+              title={option.title}
+              icon={option.icon}
+            >
+              {option.label}
+            </SelectItem>
+          ))}
+        </SelectContent>
+      </Select>
+    </FileSheetControlRow>
+  );
+}
+
+// Compact color picker trigger for inline rows and parameter rows.
+export function FileSheetColorPicker({
+  value,
+  onChange,
+  className,
+  swatchClassName,
+  ...props
+}) {
+  return (
+    <ColorPicker
+      value={value}
+      onChange={onChange}
+      className={cn(
+        FILE_SHEET_COMPACT_INPUT_CLASSES,
+        "w-fit justify-start gap-1.5 px-1.5",
+        className
+      )}
+      swatchClassName={cn("size-3.5", swatchClassName)}
+      popoverAlign="end"
+      {...props}
+    />
+  );
+}
+
+// Label left, color picker on the control axis.
+export function FileSheetColorRow({ label, value, onChange, disabled = false, className, labelClassName }) {
+  return (
+    <FileSheetControlRow
+      label={label}
+      trailing={(
+        <FileSheetColorPicker
+          value={value}
+          onChange={onChange}
+          disabled={disabled}
+          aria-label={typeof label === "string" ? label : undefined}
+        />
+      )}
+      className={className}
+      labelClassName={labelClassName}
+    />
+  );
+}
+
+// Radix Tabs strips inside a sheet (e.g. the Lights target selector) share the
+// segmented-control silhouette so a sheet has exactly one row-of-buttons look.
+export const FILE_SHEET_SEGMENTED_TABS_LIST_CLASSES = "grid h-7 w-full rounded-md bg-transparent p-0 shadow-xs";
+export const FILE_SHEET_SEGMENTED_TAB_TRIGGER_CLASSES = [
+  "h-7 min-w-0 rounded-none border border-l-0 border-input px-1.5 text-[11px] font-medium shadow-none",
+  "first:rounded-l-md first:border-l last:rounded-r-md focus-visible:z-10",
+  "text-muted-foreground hover:text-foreground",
+  "data-[state=active]:!bg-accent data-[state=active]:!text-foreground data-[state=active]:font-semibold",
+  "data-[state=active]:ring-1 data-[state=active]:ring-inset data-[state=active]:ring-border/80 data-[state=active]:shadow-none"
+].join(" ");
 
 function normalizeFileSheetWidth(width) {
   const numericWidth = Number(width);

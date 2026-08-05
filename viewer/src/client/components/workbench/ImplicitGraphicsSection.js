@@ -124,7 +124,7 @@ export default function ImplicitGraphicsSection({
           onCheckedChange={(checked) => updateSetting(runtime, "rimLight", checked)}
           ariaLabel="Rim light"
         />
-        <FileSheetControlRow className="pt-2">
+        <FileSheetControlRow>
           <Button
             type="button"
             variant="outline"

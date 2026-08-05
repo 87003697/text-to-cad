@@ -1,9 +1,12 @@
 import FileSheet, {
-  FILE_SHEET_FIELD_LABEL_CLASSES,
   FILE_SHEET_PRECISION_SLIDER_CLASSES,
+  FileSheetFieldGrid,
+  FileSheetSectionBody,
   FileSheetSliderField,
+  FileSheetStatusText,
   FileSheetSubsection,
   FileSheetToggleRow,
+  FileSheetValueField,
   parseFileSheetNumberInput
 } from "./FileSheet";
 import FileSheetTabbedSurface from "./FileSheetTabbedSurface";
@@ -15,7 +18,6 @@ import {
   GCODE_PREVIEW_DETAIL_MIN
 } from "cadjs/lib/gcode/buildPreviewMesh";
 import { buildFileStatusTab } from "./FileStatusSection";
-const fieldLabelClasses = FILE_SHEET_FIELD_LABEL_CLASSES;
 const compactNumberBadgeClasses = "h-4 rounded-sm px-1.5 py-0 text-[10px] font-medium leading-none";
 
 function formatNumber(value, digits = 2) {
@@ -117,20 +119,7 @@ function parseVisibleLayerInput(value, fallbackVisibleCount, layerCount) {
   }) - 1;
 }
 
-function GcodeValueField({ label, value, mono = false }) {
-  const displayValue = String(value ?? "");
-  return (
-    <div className="block min-w-0">
-      <span className={fieldLabelClasses}>{label}</span>
-      <div
-        className={`mt-1 min-h-7 truncate rounded-md border border-border/70 bg-muted/25 px-2 py-1 text-[11px] font-medium leading-4 text-foreground ${mono ? "font-mono" : ""}`}
-        title={displayValue}
-      >
-        {displayValue}
-      </div>
-    </div>
-  );
-}
+const GcodeValueField = FileSheetValueField;
 
 export default function GcodeFileSheet({
   open,
@@ -200,26 +189,18 @@ export default function GcodeFileSheet({
       content: (
             <div>
               {!hasGcodeData ? (
-                <p className="px-2 py-1 text-xs text-muted-foreground">Loading G-code...</p>
+                <FileSheetStatusText className="py-1">Loading G-code...</FileSheetStatusText>
               ) : null}
 
-              <FileSheetSubsection title="Summary" contentClassName="px-2">
-                <div className="flex flex-wrap gap-1.5">
-                  <Badge variant="secondary" className="font-normal">
-                    {formatCount(layerCount)} layer{layerCount === 1 ? "" : "s"}
-                  </Badge>
-                  <Badge variant="outline" className="font-normal">
-                    {formatCount(stats.extrusionMoves)} path{formatCount(stats.extrusionMoves) === "1" ? "" : "s"}
-                  </Badge>
-                  <Badge variant={hasSupports ? "secondary" : "outline"} className="font-normal">
-                    Supports {hasSupports ? "yes" : "no"}
-                  </Badge>
+              <FileSheetSubsection title="Summary">
+                <FileSheetFieldGrid columns={3}>
+                  <FileSheetValueField label="Layers" value={formatCount(layerCount)} />
+                  <FileSheetValueField label="Paths" value={formatCount(stats.extrusionMoves)} />
+                  <FileSheetValueField label="Supports" value={hasSupports ? "Yes" : "No"} />
                   {decimatedPreview ? (
-                    <Badge variant="outline" className="font-normal">
-                      Layer preview
-                    </Badge>
+                    <FileSheetValueField label="Preview" value="Layer sampled" />
                   ) : null}
-                </div>
+                </FileSheetFieldGrid>
               </FileSheetSubsection>
 
               <FileSheetSubsection title="Layers">
@@ -266,6 +247,7 @@ export default function GcodeFileSheet({
                   }}
                   valueInputProps={{
                     disabled: fullDetail,
+                    className: "w-28",
                     ariaLabel: "G-code preview detail value",
                     inputMode: "numeric"
                   }}
@@ -325,9 +307,9 @@ export default function GcodeFileSheet({
       content: (
             <div className="space-y-2 px-2 py-2">
               {!features.length ? (
-                <p className="text-xs leading-5 text-muted-foreground">
+                <FileSheetStatusText className="px-0">
                   No slicer feature annotations found. The preview can still show layers, extrusion paths, and travel moves.
-                </p>
+                </FileSheetStatusText>
               ) : (
                 <>
                   <div className="flex flex-wrap gap-1.5 text-[11px]">
@@ -381,25 +363,29 @@ export default function GcodeFileSheet({
       id: "stats",
       title: "Stats",
       content: (
-            <div className="grid grid-cols-2 gap-2 px-2 py-2">
-              <GcodeValueField label="Extrusion" value={formatDistance(stats.extrusionMm, 1)} />
-              <GcodeValueField label="Path length" value={formatDistance(stats.pathMm, 1)} />
-              <GcodeValueField label="Retracts" value={formatCount(stats.retractMoves)} />
-              <GcodeValueField label="Temperature" value={formatCommandCount(stats.temperatureCommands)} />
-              <GcodeValueField label="Move commands" value={formatCommandCount(stats.movementCommands)} />
-              <GcodeValueField label="Prime moves" value={formatCount(stats.primeMoves)} />
-            </div>
+            <FileSheetSectionBody>
+              <FileSheetFieldGrid columns={2}>
+                <GcodeValueField label="Extrusion" value={formatDistance(stats.extrusionMm, 1)} />
+                <GcodeValueField label="Path length" value={formatDistance(stats.pathMm, 1)} />
+                <GcodeValueField label="Retracts" value={formatCount(stats.retractMoves)} />
+                <GcodeValueField label="Temperature" value={formatCommandCount(stats.temperatureCommands)} />
+                <GcodeValueField label="Move commands" value={formatCommandCount(stats.movementCommands)} />
+                <GcodeValueField label="Prime moves" value={formatCount(stats.primeMoves)} />
+              </FileSheetFieldGrid>
+            </FileSheetSectionBody>
       )
     },
     {
       id: "bounds",
       title: "Bounds",
       content: (
-            <div className="grid grid-cols-1 gap-2 px-2 py-2">
-              <GcodeValueField label="X" value={boundsAxisText(gcodeData?.bounds, 0, 1)} mono />
-              <GcodeValueField label="Y" value={boundsAxisText(gcodeData?.bounds, 1, 1)} mono />
-              <GcodeValueField label="Z" value={boundsAxisText(gcodeData?.bounds, 2, 2)} mono />
-            </div>
+            <FileSheetSectionBody>
+              <FileSheetFieldGrid columns={1}>
+                <GcodeValueField label="X" value={boundsAxisText(gcodeData?.bounds, 0, 1)} mono />
+                <GcodeValueField label="Y" value={boundsAxisText(gcodeData?.bounds, 1, 1)} mono />
+                <GcodeValueField label="Z" value={boundsAxisText(gcodeData?.bounds, 2, 2)} mono />
+              </FileSheetFieldGrid>
+            </FileSheetSectionBody>
       )
     },
     ...themeTabs

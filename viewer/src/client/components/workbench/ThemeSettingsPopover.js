@@ -1,4 +1,4 @@
-import { Children, isValidElement, useEffect, useId, useMemo, useRef, useState } from "react";
+import { Children, isValidElement, useEffect, useMemo, useRef, useState } from "react";
 import { ChevronDown, ChevronUp, Contrast, FlipHorizontal2, Moon, MoreHorizontal, Pencil, Plus, RotateCcw, Save, Sun, Trash2, X } from "lucide-react";
 import {
   AlertDialog,
@@ -11,7 +11,6 @@ import {
   AlertDialogTitle
 } from "../ui/alert-dialog";
 import { Button } from "../ui/button";
-import { ColorPicker } from "../ui/color-picker";
 import {
   Dialog,
   DialogClose,
@@ -33,13 +32,6 @@ import {
   DropdownMenuTrigger
 } from "../ui/dropdown-menu";
 import { Input } from "../ui/input";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue
-} from "../ui/select";
 import { Slider } from "../ui/slider";
 import {
   Tabs,
@@ -47,7 +39,6 @@ import {
   TabsList,
   TabsTrigger
 } from "../ui/tabs";
-import { ToggleGroup, ToggleGroupItem } from "../ui/toggle-group";
 import { cn } from "@/ui/utils";
 import {
   CUSTOM_THEME_ID,
@@ -87,14 +78,20 @@ import { FILE_SHEET_SECTION_IDS } from "@/workbench/fileSheetSections";
 import { ScrollArea } from "../ui/scroll-area";
 import FileSheet, {
   FILE_SHEET_COMPACT_BUTTON_CLASSES,
-  FILE_SHEET_COMPACT_INPUT_CLASSES,
-  FILE_SHEET_FIELD_LABEL_CLASSES,
+  FILE_SHEET_COMPACT_NUMERIC_INPUT_CLASSES,
   FILE_SHEET_PRECISION_SLIDER_CLASSES,
   FILE_SHEET_ROW_STACK_CLASSES,
-  FILE_SHEET_SEGMENTED_ITEM_CLASSES,
+  FILE_SHEET_SEGMENTED_TAB_TRIGGER_CLASSES,
+  FILE_SHEET_SEGMENTED_TABS_LIST_CLASSES,
   FileSheetBooleanToggle,
+  FileSheetButtonRow,
+  FileSheetColorPicker,
+  FileSheetColorRow,
   FileSheetControlRow,
+  FileSheetSegmentedControl,
+  FileSheetSelectRow,
   FileSheetSliderField,
+  FileSheetStatusText,
   FileSheetSubsection,
   FileSheetToggleRow,
   parseFileSheetNumberInput
@@ -151,9 +148,7 @@ const PRIMARY_LIGHT_FALLBACKS = Object.freeze({
 // Fill and rim colors are not mode-color paths, so they use a plain color field.
 const MODE_COLOR_LIGHT_KEYS = Object.freeze(["directional", "spot", "point"]);
 
-const fieldLabelClasses = FILE_SHEET_FIELD_LABEL_CLASSES;
 const compactButtonClasses = FILE_SHEET_COMPACT_BUTTON_CLASSES;
-const compactInputClasses = FILE_SHEET_COMPACT_INPUT_CLASSES;
 const precisionSliderClasses = FILE_SHEET_PRECISION_SLIDER_CLASSES;
 const SLIDER_COMMIT_DELAY_MS = 120;
 const AXIS_OPTIONS = Object.freeze(["x", "y", "z"]);
@@ -198,10 +193,10 @@ function Field({ label, value, trailing, children, className, contentClassName }
 }
 
 // A section whose contents are gated by an on/off switch renders that switch
-// tight against its heading — "Floor [switch]" reads as one statement, where a
-// switch pushed to the far edge of the header reads as an unrelated control.
-// `toggle` is the on/off for this section; `trailing` stays for anything that
-// genuinely belongs at the opposite edge.
+// in the header's trailing slot, on the same right-edge control axis as every
+// row switch below it — one vertical line of switches per panel (see
+// viewer/docs/settings-ui.md). `toggle` is the on/off for this section;
+// `trailing` stays for anything else that belongs at that edge.
 function ControlSubsection({
   title,
   toggle = null,
@@ -212,13 +207,8 @@ function ControlSubsection({
 }) {
   return (
     <FileSheetSubsection
-      title={toggle ? (
-        <span className="flex items-center gap-2">
-          <span>{title}</span>
-          {toggle}
-        </span>
-      ) : title}
-      trailing={trailing}
+      title={title}
+      trailing={toggle || trailing}
       className={className}
       hideFirstSeparator={hideFirstSeparator}
     >
@@ -341,50 +331,8 @@ function SliderInput({ value, min, max, step = 0.01, onChange }) {
   );
 }
 
-function ColorInput({
-  value,
-  onChange,
-  className,
-  swatchClassName,
-  valueClassName,
-  showValue = true,
-  disabled = false,
-  ...props
-}) {
-  return (
-    <ColorPicker
-      value={value}
-      onChange={onChange}
-      className={cn(
-        compactInputClasses,
-        "w-fit justify-start gap-1.5 px-1.5",
-        className
-      )}
-      swatchClassName={cn("size-3.5", swatchClassName)}
-      valueClassName={valueClassName}
-      popoverAlign="end"
-      showValue={showValue}
-      disabled={disabled}
-      {...props}
-    />
-  );
-}
-
-function ColorField({ label, value, onChange, className, labelClassName }) {
-  return (
-    <FileSheetControlRow
-      label={label}
-      trailing={(
-        <ColorInput
-          value={value}
-          onChange={onChange}
-        />
-      )}
-      className={className}
-      labelClassName={labelClassName}
-    />
-  );
-}
+const ColorInput = FileSheetColorPicker;
+const ColorField = FileSheetColorRow;
 
 function getPathValue(source, path) {
   return path.reduce((value, key) => (
@@ -541,44 +489,7 @@ function FillColorEditor({ colors, onChange }) {
   );
 }
 
-function SegmentedControl({ value, onChange, options }) {
-  const columnCount = Math.max(1, Math.min(options.length, options.length > 4 ? 3 : 4));
-  const templateColumns = `repeat(${columnCount}, minmax(0, 1fr))`;
-  return (
-    <ToggleGroup
-      type="single"
-      variant="outline"
-      size="sm"
-      value={value}
-      onValueChange={(nextValue) => {
-        if (!nextValue) {
-          return;
-        }
-        onChange(nextValue);
-      }}
-      className="grid min-h-7 w-full min-w-0 auto-rows-[1.75rem]"
-      style={{ gridTemplateColumns: templateColumns }}
-    >
-      {options.map((option) => {
-        const Icon = option.Icon;
-        const disabled = option.disabled === true;
-        return (
-          <ToggleGroupItem
-            key={option.value}
-            value={option.value}
-            disabled={disabled}
-            className={cn("min-w-0 gap-1.5 !h-7 px-1.5 text-[11px]", FILE_SHEET_SEGMENTED_ITEM_CLASSES)}
-            title={option.title || option.label}
-            aria-label={option.label}
-          >
-            {Icon ? <Icon className="size-3" strokeWidth={2} aria-hidden="true" /> : null}
-            <span className="truncate">{option.label}</span>
-          </ToggleGroupItem>
-        );
-      })}
-    </ToggleGroup>
-  );
-}
+const SegmentedControl = FileSheetSegmentedControl;
 
 // Two boxes: the canvas the theme paints behind the model, and the colour parts
 // are filled with by default. One box alone can't tell a light theme with dark
@@ -670,31 +581,22 @@ function ThemePresetSection({
 
   return (
     <ControlSubsection title="Preset">
-      <Field>
-        <Select
-          value={isCustom ? "" : (activeOption?.value || options[0].value)}
-          onValueChange={(nextValue) => onSelectTheme?.(nextValue)}
-        >
-          <SelectTrigger size="sm" className="h-7 !text-[11px]" aria-label="Theme preset">
-            <span className="flex min-w-0 items-center gap-2">
-              <PresetSwatch preview={triggerPreview} />
-              <span className="truncate">{triggerLabel}</span>
-            </span>
-          </SelectTrigger>
-          <SelectContent>
-            {options.map((option) => (
-              <SelectItem
-                key={option.value}
-                value={option.value}
-                className="text-xs"
-                icon={<PresetSwatch preview={option.preview} />}
-              >
-                {option.label}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
-      </Field>
+      <FileSheetSelectRow
+        value={isCustom ? "" : (activeOption?.value || options[0].value)}
+        onValueChange={(nextValue) => onSelectTheme?.(nextValue)}
+        ariaLabel="Theme preset"
+        triggerContent={(
+          <span className="flex min-w-0 items-center gap-2">
+            <PresetSwatch preview={triggerPreview} />
+            <span className="truncate">{triggerLabel}</span>
+          </span>
+        )}
+        options={options.map((option) => ({
+          value: option.value,
+          label: option.label,
+          icon: <PresetSwatch preview={option.preview} />
+        }))}
+      />
     </ControlSubsection>
   );
 }
@@ -804,7 +706,7 @@ function PositionPad({ value, onChange }) {
       <div className="flex items-center justify-between text-[10px] text-muted-foreground">
         <span>X {Math.round(x)}</span>
         <span>Z {Math.round(z)}</span>
-        <span>range +/-{extent}</span>
+        <span>range ±{extent}</span>
       </div>
     </div>
   );
@@ -845,7 +747,7 @@ function ExplodeStepMagnitudeInput({ value, step, onCommit, ariaLabel, title }) 
   return (
     <input
       type="number"
-      className="h-6 w-16 rounded border border-input bg-transparent px-1 text-right text-[11px]"
+      className={cn(FILE_SHEET_COMPACT_NUMERIC_INPUT_CLASSES, "w-16 rounded-md border border-input bg-transparent text-right")}
       value={text}
       step={step}
       onChange={(event) => setText(event.target.value)}
@@ -961,7 +863,7 @@ function ClipSubsection({
               }}
               aria-label={`Clip ${axis.toUpperCase()} axis`}
             />
-            <div className="mt-1 flex justify-between text-[10px] text-[var(--ui-text-muted)]">
+            <div className="mt-1 flex justify-between text-[10px] text-muted-foreground">
               <span>{formatMm(boundsForAxis.min)}</span>
               <span>{formatMm(boundsForAxis.max)}</span>
             </div>
@@ -969,12 +871,12 @@ function ClipSubsection({
         );
       })}
 
-      <div className="flex gap-1.5 px-2 pt-0.5">
+      <FileSheetButtonRow>
         <Button
           type="button"
           variant="outline"
           size="sm"
-          className={cn(compactButtonClasses, "flex-1 justify-center")}
+          className={cn(compactButtonClasses, "justify-center")}
           onClick={() => setClip({ invert: !clip.invert })}
           aria-pressed={clip.invert}
           title="Flip clip side"
@@ -986,14 +888,14 @@ function ClipSubsection({
           type="button"
           variant="outline"
           size="sm"
-          className={cn(compactButtonClasses, "flex-1 justify-center text-muted-foreground")}
+          className={cn(compactButtonClasses, "justify-center")}
           onClick={resetClip}
           title="Reset clip plane"
         >
           <RotateCcw className="h-3 w-3" strokeWidth={2} aria-hidden="true" />
           <span>Reset</span>
         </Button>
-      </div>
+      </FileSheetButtonRow>
     </ControlSubsection>
   );
 }
@@ -1115,7 +1017,7 @@ function ExplodedSubsection({
       )}
     >
       {singlePart ? (
-        <div className="px-2 text-[11px] text-muted-foreground">Single part — nothing to explode.</div>
+        <FileSheetStatusText>Single part — nothing to explode.</FileSheetStatusText>
       ) : active ? (
         <>
           <FileSheetSliderField
@@ -1205,28 +1107,13 @@ function ExplodedSubsection({
             </div>
           ) : (
             <>
-              <Field label="Direction">
-                <Select
-                  value={exploded.auto.mode}
-                  onValueChange={(nextValue) => setExplodedAuto({ mode: nextValue })}
-                >
-                  <SelectTrigger size="sm" className="h-7 !text-[11px]" aria-label="Explode direction">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {EXPLODE_DIRECTION_OPTIONS.map((option) => (
-                      <SelectItem
-                        key={option.value}
-                        value={option.value}
-                        className="text-xs"
-                        title={option.title}
-                      >
-                        {option.label}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </Field>
+              <FileSheetSelectRow
+                label="Direction"
+                value={exploded.auto.mode}
+                onValueChange={(nextValue) => setExplodedAuto({ mode: nextValue })}
+                ariaLabel="Explode direction"
+                options={EXPLODE_DIRECTION_OPTIONS}
+              />
               <FileSheetToggleRow
                 label="Reverse"
                 checked={exploded.auto.direction === "negative"}
@@ -1295,19 +1182,19 @@ function ExplodedSubsection({
             onCheckedChange={(checked) => setExploded({ trails: checked })}
           />
 
-          <div className="flex px-2 pt-0.5">
+          <FileSheetButtonRow>
             <Button
               type="button"
               variant="outline"
               size="sm"
-              className={compactButtonClasses}
+              className={cn(compactButtonClasses, "justify-center")}
               onClick={() => setExploded({ ...DEFAULT_EXPLODED_VIEW_SETTINGS, amount: 0, enabled: false })}
               title="Reset the exploded view to defaults"
             >
               <RotateCcw className="h-3 w-3" strokeWidth={2} aria-hidden="true" />
               <span>Reset</span>
             </Button>
-          </div>
+          </FileSheetButtonRow>
         </>
       ) : null}
     </ControlSubsection>
@@ -1338,28 +1225,13 @@ export function DisplaySettingsSection({
   return (
     <div className="py-2" data-cad-display-settings-section="true">
       <div className={FILE_SHEET_ROW_STACK_CLASSES}>
-        <Field label="Mode">
-          <Select
-            value={normalizedDisplaySettings.mode}
-            onValueChange={(nextValue) => setDisplay({ mode: nextValue })}
-          >
-            <SelectTrigger size="sm" className="h-7 !text-[11px]" aria-label="Display mode">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              {DISPLAY_MODE_OPTIONS.map((option) => (
-                <SelectItem
-                  key={option.value}
-                  value={option.value}
-                  className="text-xs"
-                  title={option.title}
-                >
-                  {option.label}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-        </Field>
+        <FileSheetSelectRow
+          label="Mode"
+          value={normalizedDisplaySettings.mode}
+          onValueChange={(nextValue) => setDisplay({ mode: nextValue })}
+          ariaLabel="Display mode"
+          options={DISPLAY_MODE_OPTIONS}
+        />
       </div>
 
       <ClipSubsection
@@ -1709,7 +1581,7 @@ function ThemeSettingsContent({
               path={["background", "linearEnd"]}
               {...themeColorFieldProps}
             />
-            <SliderField label="Angle" value={`${formatNumber(themeSettings.background.linearAngle, 0)} deg`}>
+            <SliderField label="Angle" value={`${formatNumber(themeSettings.background.linearAngle, 0)}°`}>
               <SliderInput
                 value={themeSettings.background.linearAngle}
                 min={-360}
@@ -1892,23 +1764,16 @@ function ThemeSettingsContent({
       >
         {themeSettings.environment.enabled ? (
           <>
-            <Field label="Map">
-              <Select
-                value={themeSettings.environment.presetId}
-                onValueChange={(nextValue) => setEnvironment({ presetId: nextValue })}
-              >
-                <SelectTrigger size="sm" className="h-7 !text-[11px]" aria-label="Environment map">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  {ENVIRONMENT_PRESETS.map((option) => (
-                    <SelectItem key={option.id} value={option.id} className="text-xs">
-                      {option.label}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </Field>
+            <FileSheetSelectRow
+              label="Map"
+              value={themeSettings.environment.presetId}
+              onValueChange={(nextValue) => setEnvironment({ presetId: nextValue })}
+              ariaLabel="Environment map"
+              options={ENVIRONMENT_PRESETS.map((option) => ({
+                value: option.id,
+                label: option.label
+              }))}
+            />
             <SliderField label="Intensity" value={formatNumber(themeSettings.environment.intensity)}>
               <SliderInput
                 value={themeSettings.environment.intensity}
@@ -1918,7 +1783,20 @@ function ThemeSettingsContent({
                 onChange={(nextValue) => setEnvironment({ intensity: nextValue })}
               />
             </SliderField>
-            <SliderField label="Rotation" value={formatNumber(themeSettings.environment.rotationY)}>
+            {/* Stored in radians; shown and typed in degrees like every other
+                angle, so the commit path converts explicitly. */}
+            <SliderField
+              label="Rotation"
+              value={`${formatNumber((themeSettings.environment.rotationY * 180) / Math.PI, 0)}°`}
+              onValueCommit={(nextValue) => {
+                const nextDegrees = parseFileSheetNumberInput(nextValue, {
+                  fallback: (themeSettings.environment.rotationY * 180) / Math.PI,
+                  min: -180,
+                  max: 180
+                });
+                setEnvironment({ rotationY: (nextDegrees * Math.PI) / 180 });
+              }}
+            >
               <SliderInput
                 value={themeSettings.environment.rotationY}
                 min={-Math.PI}
@@ -1947,10 +1825,14 @@ function ThemeSettingsContent({
         )}
       >
         <Tabs value={activePrimaryLight} onValueChange={setActivePrimaryLight} className="gap-0">
-            <div className="px-2 py-1">
-              <TabsList className="grid h-7 w-full grid-cols-5 rounded-md p-0.5">
+            <div className="px-2">
+              <TabsList className={cn("grid grid-cols-5", FILE_SHEET_SEGMENTED_TABS_LIST_CLASSES)}>
                 {PRIMARY_LIGHT_OPTIONS.map((option) => (
-                  <TabsTrigger key={option.value} value={option.value} className="text-[11px]">
+                  <TabsTrigger
+                    key={option.value}
+                    value={option.value}
+                    className={FILE_SHEET_SEGMENTED_TAB_TRIGGER_CLASSES}
+                  >
                     {option.label}
                   </TabsTrigger>
                 ))}
@@ -1993,7 +1875,19 @@ function ThemeSettingsContent({
                       />
                     </SliderField>
                     {option.value === "spot" ? (
-                      <SliderField label="Angle" value={formatNumber(light.angle)}>
+                      // Stored in radians; shown and typed in degrees.
+                      <SliderField
+                        label="Angle"
+                        value={`${formatNumber((light.angle * 180) / Math.PI, 0)}°`}
+                        onValueCommit={(nextValue) => {
+                          const nextDegrees = parseFileSheetNumberInput(nextValue, {
+                            fallback: (light.angle * 180) / Math.PI
+                          });
+                          setLightConfig(option.value, {
+                            angle: clamp((nextDegrees * Math.PI) / 180, 0.01, 1.57)
+                          });
+                        }}
+                      >
                         <SliderInput
                           value={light.angle}
                           min={0.01}

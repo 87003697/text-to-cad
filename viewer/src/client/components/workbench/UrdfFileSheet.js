@@ -13,19 +13,24 @@ import {
 import { Slider } from "../ui/slider";
 import FileSheet, {
   FILE_SHEET_COMPACT_BUTTON_CLASSES,
-  FILE_SHEET_COMPACT_INPUT_CLASSES,
+  FILE_SHEET_COMPACT_NUMERIC_INPUT_CLASSES,
   FILE_SHEET_FIELD_LABEL_CLASSES,
   FILE_SHEET_PRECISION_SLIDER_CLASSES,
-  FileSheetControlRow,
+  FILE_SHEET_SELECT_TRIGGER_CLASSES,
+  FileSheetButtonRow,
+  FileSheetField,
+  FileSheetFieldGrid,
+  FileSheetSelectRow,
   FileSheetSliderField,
+  FileSheetStatusText,
   FileSheetSubsection,
+  FileSheetValueField,
   parseFileSheetNumberInput
 } from "./FileSheet";
 import FileSheetTabbedSurface from "./FileSheetTabbedSurface";
 import { buildFileStatusTab } from "./FileStatusSection";
 
-const fieldLabelClasses = FILE_SHEET_FIELD_LABEL_CLASSES;
-const compactInputClasses = FILE_SHEET_COMPACT_INPUT_CLASSES;
+const compactNumericInputClasses = FILE_SHEET_COMPACT_NUMERIC_INPUT_CLASSES;
 const compactButtonClasses = FILE_SHEET_COMPACT_BUTTON_CLASSES;
 const JOINT_CONTROL_SYNC_EPSILON = 0.001;
 const JOINT_CONTROL_LOCAL_OVERRIDE_MS = 3500;
@@ -231,8 +236,7 @@ const MotionCoordinateInput = memo(function MotionCoordinateInput({
   };
 
   return (
-    <label className="block min-w-0">
-      <span className={fieldLabelClasses}>{axis}</span>
+    <FileSheetField label={axis}>
       <Input
         type="number"
         step="0.001"
@@ -256,27 +260,14 @@ const MotionCoordinateInput = memo(function MotionCoordinateInput({
             event.currentTarget.blur();
           }
         }}
-        className={`${compactInputClasses} mt-1 text-right`}
+        className={`${compactNumericInputClasses} text-right`}
         aria-label={`Target ${axis} coordinate`}
       />
-    </label>
+    </FileSheetField>
   );
 });
 
-function SdfValueField({ label, value }) {
-  const displayValue = String(value ?? "");
-  return (
-    <div className="block min-w-0">
-      <span className={fieldLabelClasses}>{label}</span>
-      <div
-        className="mt-1 min-h-7 truncate rounded-md border border-border/70 bg-muted/25 px-2 py-1 text-[11px] font-medium leading-4 text-foreground"
-        title={displayValue}
-      >
-        {displayValue}
-      </div>
-    </div>
-  );
-}
+const SdfValueField = FileSheetValueField;
 
 function formatSdfMetadataItem(item, fields) {
   if (!item || typeof item !== "object") {
@@ -297,7 +288,7 @@ function SdfMetadataList({ title, items, fields }) {
   }
   return (
     <div className="space-y-1.5 rounded-md border border-border/80 bg-background/40 p-2">
-      <span className={fieldLabelClasses}>{title}</span>
+      <span className={FILE_SHEET_FIELD_LABEL_CLASSES}>{title}</span>
       <div className="space-y-1">
         {records.slice(0, 5).map((record, index) => (
           <div
@@ -309,7 +300,7 @@ function SdfMetadataList({ title, items, fields }) {
           </div>
         ))}
         {records.length > 5 ? (
-          <div className="text-xs text-muted-foreground">{records.length - 5} more</div>
+          <div className="text-[11px] leading-4 text-muted-foreground">{records.length - 5} more</div>
         ) : null}
       </div>
     </div>
@@ -398,8 +389,8 @@ export default function UrdfFileSheet({
       title: "SDF",
       content: (
               <div>
-                <FileSheetSubsection title="Document" contentClassName="px-2">
-                <div className="grid grid-cols-2 gap-2">
+                <FileSheetSubsection title="Document">
+                <FileSheetFieldGrid columns={2}>
                   <SdfValueField label="Version" value={String(sdfInfo.version || "unknown")} />
                   <SdfValueField label="Document" value={String(sdfInfo.documentKind || "model")} />
                   {sdfInfo.worldName ? (
@@ -408,11 +399,11 @@ export default function UrdfFileSheet({
                   <SdfValueField label="Frame mode" value={sdfInfo.nativeFrameSemantics ? "native" : "compat"} />
                   <SdfValueField label="Root link" value={String(sdfInfo.rootLink || "")} />
                   <SdfValueField label="Model" value={String(sdfInfo.modelName || title || "model")} />
-                </div>
+                </FileSheetFieldGrid>
                 </FileSheetSubsection>
 
-                <FileSheetSubsection title="Counts" contentClassName="px-2">
-                <div className="grid grid-cols-3 gap-2">
+                <FileSheetSubsection title="Counts">
+                <FileSheetFieldGrid columns={3}>
                   <SdfValueField label="Links" value={String(sdfInfo.linkCount ?? movableJoints.length)} />
                   <SdfValueField label="Joints" value={String(sdfInfo.jointCount ?? joints?.length ?? 0)} />
                   <SdfValueField label="Frames" value={String(sdfInfo.frameCount ?? 0)} />
@@ -423,7 +414,7 @@ export default function UrdfFileSheet({
                   <SdfValueField label="Physics" value={String(sdfPhysics.length)} />
                   <SdfValueField label="Nested models" value={formatSdfNumber(sdfNestedModelCount)} />
                   <SdfValueField label="Unsupported geom." value={`${formatSdfNumber(sdfInfo.unsupportedVisualCount)} / ${formatSdfNumber(sdfInfo.unsupportedCollisionCount)}`} />
-                </div>
+                </FileSheetFieldGrid>
                 </FileSheetSubsection>
 
                 {hasSdfMetadata ? (
@@ -444,37 +435,18 @@ export default function UrdfFileSheet({
       content: (
               <div>
                 <FileSheetSubsection title="Status">
-                <FileSheetControlRow>
-                <div className="grid grid-cols-2 gap-2">
-                  <label className="block min-w-0">
-                    <span className={fieldLabelClasses}>SRDF</span>
-                    <Input
-                      value={motion?.srdf?.srdf || motion?.srdf?.srdfHash || "linked"}
-                      readOnly
-                      disabled
-                      className={`${compactInputClasses} mt-1`}
-                      aria-label="SRDF status"
-                    />
-                  </label>
-                  <label className="block min-w-0">
-                    <span className={fieldLabelClasses}>MoveIt2 server</span>
-                    <Input
-                      value={motionServerStatus}
-                      readOnly
-                      disabled
-                      className={`${compactInputClasses} mt-1`}
-                    aria-label="MoveIt2 server status"
+                <FileSheetFieldGrid columns={2}>
+                  <SdfValueField
+                    label="SRDF"
+                    value={motion?.srdf?.srdf || motion?.srdf?.srdfHash || "linked"}
                   />
-                </label>
-              </div>
-                </FileSheetControlRow>
+                  <SdfValueField label="MoveIt2 server" value={motionServerStatus} />
+                </FileSheetFieldGrid>
                 </FileSheetSubsection>
 
                 <FileSheetSubsection title="Target">
-                <FileSheetControlRow>
-                <div className="grid grid-cols-2 gap-2">
-                  <label className="block min-w-0">
-                    <span className={fieldLabelClasses}>Planning group</span>
+                <FileSheetFieldGrid columns={2}>
+                  <FileSheetField label="Planning group">
                     <Select
                       value={activeMotionPlanningGroupName}
                       disabled={motionBusy || motionPlanningGroups.length <= 1}
@@ -482,47 +454,45 @@ export default function UrdfFileSheet({
                         motion?.onMoveIt2SettingChange?.("activePlanningGroupName", value);
                       }}
                     >
-                      <SelectTrigger size="sm" className="mt-1 h-7 !text-[11px]">
+                      <SelectTrigger size="sm" className={FILE_SHEET_SELECT_TRIGGER_CLASSES} aria-label="Planning group">
                         <SelectValue placeholder="Select group" />
                       </SelectTrigger>
                       <SelectContent>
                         {motionPlanningGroups.map((group) => {
                           const name = String(group?.name || "").trim();
                           return name ? (
-                            <SelectItem key={name} value={name}>
+                            <SelectItem key={name} value={name} className="text-xs">
                               {name}
                             </SelectItem>
                           ) : null;
                         })}
                       </SelectContent>
                     </Select>
-                  </label>
-                  <label className="block min-w-0">
-                    <span className={fieldLabelClasses}>End effector</span>
-                  <Select
-                    value={activeMotionEndEffectorName}
-                    disabled={motionBusy || motionEndEffectors.length <= 1}
-                    onValueChange={(value) => {
-                      motion?.onEndEffectorChange?.(value);
-                    }}
-                  >
-                    <SelectTrigger size="sm" className="mt-1 h-7 !text-[11px]">
-                      <SelectValue placeholder="Select end effector" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {motionEndEffectors.map((endEffector) => {
-                        const name = String(endEffector?.name || "").trim();
-                        return name ? (
-                          <SelectItem key={name} value={name}>
-                            {name}
-                          </SelectItem>
-                        ) : null;
-                      })}
-                    </SelectContent>
-                  </Select>
-                  </label>
-                  <label className="block min-w-0">
-                    <span className={fieldLabelClasses}>Target frame</span>
+                  </FileSheetField>
+                  <FileSheetField label="End effector">
+                    <Select
+                      value={activeMotionEndEffectorName}
+                      disabled={motionBusy || motionEndEffectors.length <= 1}
+                      onValueChange={(value) => {
+                        motion?.onEndEffectorChange?.(value);
+                      }}
+                    >
+                      <SelectTrigger size="sm" className={FILE_SHEET_SELECT_TRIGGER_CLASSES} aria-label="End effector">
+                        <SelectValue placeholder="Select end effector" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {motionEndEffectors.map((endEffector) => {
+                          const name = String(endEffector?.name || "").trim();
+                          return name ? (
+                            <SelectItem key={name} value={name} className="text-xs">
+                              {name}
+                            </SelectItem>
+                          ) : null;
+                        })}
+                      </SelectContent>
+                    </Select>
+                  </FileSheetField>
+                  <FileSheetField label="Target frame">
                     <Select
                       value={activeMotionTargetFrameName}
                       disabled={motionBusy || motionTargetFrames.length <= 1}
@@ -530,26 +500,24 @@ export default function UrdfFileSheet({
                         motion?.onMoveIt2SettingChange?.("targetFrame", value);
                       }}
                     >
-                      <SelectTrigger size="sm" className="mt-1 h-7 !text-[11px]">
+                      <SelectTrigger size="sm" className={FILE_SHEET_SELECT_TRIGGER_CLASSES} aria-label="Target frame">
                         <SelectValue placeholder="Select frame" />
                       </SelectTrigger>
                       <SelectContent>
                         {motionTargetFrames.map((frame) => {
                           const name = String(frame || "").trim();
                           return name ? (
-                            <SelectItem key={name} value={name}>
+                            <SelectItem key={name} value={name} className="text-xs">
                               {name}
                             </SelectItem>
                           ) : null;
                         })}
                       </SelectContent>
-                  </Select>
-                  </label>
-                </div>
-                </FileSheetControlRow>
+                    </Select>
+                  </FileSheetField>
+                </FileSheetFieldGrid>
 
-                <FileSheetControlRow>
-                <div className="grid grid-cols-3 gap-2">
+                <FileSheetFieldGrid columns={3}>
                   {["X", "Y", "Z"].map((axis, index) => (
                     <MotionCoordinateInput
                       key={axis}
@@ -561,15 +529,12 @@ export default function UrdfFileSheet({
                       }}
                     />
                   ))}
-                </div>
-                </FileSheetControlRow>
+                </FileSheetFieldGrid>
                 </FileSheetSubsection>
 
                 <FileSheetSubsection title="Solver">
-                <FileSheetControlRow>
-                <div className="grid grid-cols-3 gap-2">
-                  <label className="block min-w-0">
-                    <span className={fieldLabelClasses}>IK timeout</span>
+                <FileSheetFieldGrid columns={3}>
+                  <FileSheetField label="IK timeout">
                     <Input
                       type="number"
                       step="0.01"
@@ -577,11 +542,11 @@ export default function UrdfFileSheet({
                       value={moveit2Settings.ikTimeout ?? 0.05}
                       disabled={motionBusy}
                       onChange={(event) => motion?.onMoveIt2SettingChange?.("ikTimeout", event.target.value)}
-                      className={`${compactInputClasses} mt-1 text-right`}
+                      className={`${compactNumericInputClasses} text-right`}
+                      aria-label="IK timeout"
                     />
-                  </label>
-                  <label className="block min-w-0">
-                    <span className={fieldLabelClasses}>IK attempts</span>
+                  </FileSheetField>
+                  <FileSheetField label="IK attempts">
                     <Input
                       type="number"
                       step="1"
@@ -589,11 +554,11 @@ export default function UrdfFileSheet({
                       value={moveit2Settings.ikAttempts ?? 1}
                       disabled={motionBusy}
                       onChange={(event) => motion?.onMoveIt2SettingChange?.("ikAttempts", event.target.value)}
-                      className={`${compactInputClasses} mt-1 text-right`}
+                      className={`${compactNumericInputClasses} text-right`}
+                      aria-label="IK attempts"
                     />
-                  </label>
-                  <label className="block min-w-0">
-                    <span className={fieldLabelClasses}>Tolerance</span>
+                  </FileSheetField>
+                  <FileSheetField label="Tolerance">
                     <Input
                       type="number"
                       step="0.001"
@@ -601,41 +566,37 @@ export default function UrdfFileSheet({
                       value={moveit2Settings.ikTolerance ?? 0.002}
                       disabled={motionBusy}
                       onChange={(event) => motion?.onMoveIt2SettingChange?.("ikTolerance", event.target.value)}
-                      className={`${compactInputClasses} mt-1 text-right`}
+                      className={`${compactNumericInputClasses} text-right`}
+                      aria-label="IK tolerance"
                     />
-                  </label>
-                </div>
-                </FileSheetControlRow>
+                  </FileSheetField>
+                </FileSheetFieldGrid>
                 </FileSheetSubsection>
 
                 <FileSheetSubsection title="Planning">
-                <FileSheetControlRow>
-                <div className="grid grid-cols-2 gap-2">
-                  <label className="block min-w-0">
-                    <span className={fieldLabelClasses}>Planning pipeline</span>
+                <FileSheetFieldGrid columns={2}>
+                  <FileSheetField label="Planning pipeline">
                     <Input
                       value={moveit2Settings.planningPipeline ?? "ompl"}
                       disabled={motionBusy}
                       onChange={(event) => motion?.onMoveIt2SettingChange?.("planningPipeline", event.target.value)}
-                      className={`${compactInputClasses} mt-1`}
+                      className={compactNumericInputClasses}
+                      aria-label="Planning pipeline"
                     />
-                  </label>
-                  <label className="block min-w-0">
-                    <span className={fieldLabelClasses}>Planner ID</span>
+                  </FileSheetField>
+                  <FileSheetField label="Planner ID">
                     <Input
                       value={moveit2Settings.plannerId ?? "RRTConnectkConfigDefault"}
                       disabled={motionBusy}
                       onChange={(event) => motion?.onMoveIt2SettingChange?.("plannerId", event.target.value)}
-                      className={`${compactInputClasses} mt-1`}
+                      className={compactNumericInputClasses}
+                      aria-label="Planner ID"
                     />
-                  </label>
-                </div>
-                </FileSheetControlRow>
+                  </FileSheetField>
+                </FileSheetFieldGrid>
 
-                <FileSheetControlRow>
-                <div className="grid grid-cols-3 gap-2">
-                  <label className="block min-w-0">
-                    <span className={fieldLabelClasses}>Plan time</span>
+                <FileSheetFieldGrid columns={3}>
+                  <FileSheetField label="Plan time">
                     <Input
                       type="number"
                       step="0.1"
@@ -643,11 +604,11 @@ export default function UrdfFileSheet({
                       value={moveit2Settings.planningTime ?? 1}
                       disabled={motionBusy}
                       onChange={(event) => motion?.onMoveIt2SettingChange?.("planningTime", event.target.value)}
-                      className={`${compactInputClasses} mt-1 text-right`}
+                      className={`${compactNumericInputClasses} text-right`}
+                      aria-label="Plan time"
                     />
-                  </label>
-                  <label className="block min-w-0">
-                    <span className={fieldLabelClasses}>Velocity</span>
+                  </FileSheetField>
+                  <FileSheetField label="Velocity">
                     <Input
                       type="number"
                       step="0.05"
@@ -656,11 +617,11 @@ export default function UrdfFileSheet({
                       value={moveit2Settings.maxVelocityScalingFactor ?? 1}
                       disabled={motionBusy}
                       onChange={(event) => motion?.onMoveIt2SettingChange?.("maxVelocityScalingFactor", event.target.value)}
-                      className={`${compactInputClasses} mt-1 text-right`}
+                      className={`${compactNumericInputClasses} text-right`}
+                      aria-label="Velocity scaling"
                     />
-                  </label>
-                  <label className="block min-w-0">
-                    <span className={fieldLabelClasses}>Acceleration</span>
+                  </FileSheetField>
+                  <FileSheetField label="Acceleration">
                     <Input
                       type="number"
                       step="0.05"
@@ -669,21 +630,20 @@ export default function UrdfFileSheet({
                       value={moveit2Settings.maxAccelerationScalingFactor ?? 1}
                       disabled={motionBusy}
                       onChange={(event) => motion?.onMoveIt2SettingChange?.("maxAccelerationScalingFactor", event.target.value)}
-                      className={`${compactInputClasses} mt-1 text-right`}
+                      className={`${compactNumericInputClasses} text-right`}
+                      aria-label="Acceleration scaling"
                     />
-                  </label>
-                </div>
-                </FileSheetControlRow>
+                  </FileSheetField>
+                </FileSheetFieldGrid>
                 </FileSheetSubsection>
 
                 <FileSheetSubsection title="Actions">
-                <FileSheetControlRow>
-                <div className="flex flex-wrap gap-1.5">
+                <FileSheetButtonRow columns={2}>
                   <Button
                     type="button"
                     variant={motionSelectPoseActive ? "secondary" : "outline"}
                     size="sm"
-                    className={compactButtonClasses}
+                    className={cn(compactButtonClasses, "justify-center")}
                     disabled={motionBusy || !motionActionsEnabled}
                     onClick={() => {
                       if (motionSelectPoseActive) {
@@ -694,14 +654,14 @@ export default function UrdfFileSheet({
                     }}
                     aria-pressed={motionSelectPoseActive}
                   >
-                    <span>Select Pose</span>
+                    <span>Select pose</span>
                   </Button>
                   {!motionTargetMatchesCurrentPosition ? (
                     <Button
                       type="button"
                       variant="outline"
                       size="sm"
-                      className={compactButtonClasses}
+                      className={cn(compactButtonClasses, "justify-center")}
                       disabled={motionBusy}
                       onClick={() => {
                         motion?.onUseCurrentPosition?.();
@@ -714,7 +674,7 @@ export default function UrdfFileSheet({
                     type="button"
                     variant="default"
                     size="sm"
-                    className={compactButtonClasses}
+                    className={cn(compactButtonClasses, "justify-center")}
                     disabled={motionBusy || !motionActionsEnabled || motionTargetMatchesCurrentPosition}
                     onClick={() => {
                       void motion?.onSolve?.();
@@ -726,7 +686,7 @@ export default function UrdfFileSheet({
                     type="button"
                     variant="default"
                     size="sm"
-                    className={compactButtonClasses}
+                    className={cn(compactButtonClasses, "justify-center")}
                     disabled={motionBusy || !motionActionsEnabled || motionTargetMatchesCurrentPosition}
                     onClick={() => {
                       void motion?.onPlan?.();
@@ -734,8 +694,7 @@ export default function UrdfFileSheet({
                   >
                     <span>{motionBusy ? "Planning..." : "Plan to pose"}</span>
                   </Button>
-                </div>
-                </FileSheetControlRow>
+                </FileSheetButtonRow>
                 </FileSheetSubsection>
               </div>
       )
@@ -746,45 +705,40 @@ export default function UrdfFileSheet({
       content: (
             movableJoints.length ? (
               <>
-                <FileSheetSubsection title="Controls">
+                {/* Headerless: "Controls" / "Values" said nothing the Joints
+                    tab title doesn't; the rule between the sections carries
+                    the grouping. */}
+                <FileSheetSubsection>
                   {groupStatePresets.length ? (
-                    <FileSheetControlRow label="Group state">
-                      <Select
-                        value={activeGroupStateValue}
-                        onValueChange={(value) => {
-                          if (value === "__custom__") {
-                            return;
-                          }
-                          const groupState = groupStatePresets.find((candidate) => String(candidate?.id || "").trim() === value);
-                          if (groupState) {
-                            onGroupStateSelect?.(groupState);
-                          }
-                        }}
-                      >
-                        <SelectTrigger size="sm" className="h-7 !text-[11px]">
-                          <span className="truncate">{activeGroupStateLabel}</span>
-                        </SelectTrigger>
-                        <SelectContent>
-                          {groupStatePresets.map((groupState) => {
-                            const groupStateId = String(groupState?.id || "").trim();
-                            const groupStateName = String(groupState?.label || groupState?.name || "").trim() || "State";
-                            return (
-                              <SelectItem key={groupStateId} value={groupStateId}>
-                                {groupStateName}
-                              </SelectItem>
-                            );
-                          })}
-                        </SelectContent>
-                      </Select>
-                    </FileSheetControlRow>
+                    <FileSheetSelectRow
+                      label="Group state"
+                      value={activeGroupStateValue}
+                      onValueChange={(value) => {
+                        if (value === "__custom__") {
+                          return;
+                        }
+                        const groupState = groupStatePresets.find((candidate) => String(candidate?.id || "").trim() === value);
+                        if (groupState) {
+                          onGroupStateSelect?.(groupState);
+                        }
+                      }}
+                      ariaLabel="Group state"
+                      triggerContent={<span className="truncate">{activeGroupStateLabel}</span>}
+                      options={groupStatePresets.map((groupState) => {
+                        const groupStateId = String(groupState?.id || "").trim();
+                        return {
+                          value: groupStateId,
+                          label: String(groupState?.label || groupState?.name || "").trim() || "State"
+                        };
+                      })}
+                    />
                   ) : null}
-                  <FileSheetControlRow>
-                  <div className="flex flex-wrap gap-1.5">
+                  <FileSheetButtonRow>
                     <Button
                       type="button"
                       variant="outline"
                       size="sm"
-                      className={compactButtonClasses}
+                      className={cn(compactButtonClasses, "justify-center")}
                       onClick={onResetPose}
                     >
                       <RotateCcw className="h-3.5 w-3.5" strokeWidth={2} aria-hidden="true" />
@@ -794,7 +748,7 @@ export default function UrdfFileSheet({
                       type="button"
                       variant="outline"
                       size="sm"
-                      className={compactButtonClasses}
+                      className={cn(compactButtonClasses, "justify-center")}
                       onClick={() => {
                         void onCopyJointAngles?.();
                       }}
@@ -802,10 +756,9 @@ export default function UrdfFileSheet({
                       <Copy className="h-3.5 w-3.5" strokeWidth={2} aria-hidden="true" />
                       <span>{isSdf ? "Copy values" : "Copy angles"}</span>
                     </Button>
-                  </div>
-                  </FileSheetControlRow>
+                  </FileSheetButtonRow>
                 </FileSheetSubsection>
-                <FileSheetSubsection title="Values">
+                <FileSheetSubsection>
                 {movableJoints.map((joint) => (
                   <UrdfJointRow
                     key={joint.name}
@@ -817,7 +770,7 @@ export default function UrdfFileSheet({
                 </FileSheetSubsection>
               </>
             ) : (
-              <p className="px-2 py-1 text-xs text-muted-foreground">No movable joints are available.</p>
+              <FileSheetStatusText className="py-2">No movable joints.</FileSheetStatusText>
             )
       )
     } : null,

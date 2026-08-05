@@ -16,22 +16,17 @@ import {
   ContextMenuSeparator,
   ContextMenuTrigger
 } from "../ui/context-menu";
-import { ColorPicker } from "../ui/color-picker";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue
-} from "../ui/select";
 import { Slider } from "../ui/slider";
 import FileSheet, {
   FILE_SHEET_COMPACT_BUTTON_CLASSES,
-  FILE_SHEET_COMPACT_INPUT_CLASSES,
   FILE_SHEET_PRECISION_SLIDER_CLASSES,
+  FileSheetButtonRow,
+  FileSheetColorPicker,
   FileSheetControlRow,
   FileSheetSectionBody,
+  FileSheetSelectRow,
   FileSheetSliderField,
+  FileSheetStatusText,
   FileSheetSubsection,
   FileSheetToggleRow,
   parseFileSheetNumberInput
@@ -42,7 +37,6 @@ import { buildFileStatusTab } from "./FileStatusSection";
 import { buildStepReferenceTab } from "./StepReferenceSection";
 
 const compactButtonClasses = FILE_SHEET_COMPACT_BUTTON_CLASSES;
-const compactInputClasses = FILE_SHEET_COMPACT_INPUT_CLASSES;
 const treeChevronButtonClasses = "grid h-5 w-5 shrink-0 place-items-center rounded-sm px-0 text-current/60 hover:bg-sidebar-accent/45 hover:text-sidebar-accent-foreground focus-visible:bg-sidebar-accent/45";
 const treeRowActionButtonClasses = "h-5 w-5 rounded-sm px-0 text-current/60 shadow-none hover:bg-sidebar-accent/45 hover:text-sidebar-accent-foreground focus-visible:bg-sidebar-accent/45 focus-visible:text-sidebar-accent-foreground";
 const treeRowContentClasses = "h-7 min-w-0 text-xs font-normal";
@@ -790,9 +784,9 @@ export default function StepFileSheet({
               ) : null}
 
               {viewerLoading && !visibleRows.length ? (
-                <p className="px-2 py-1 text-xs text-[var(--ui-text-muted)]">
+                <FileSheetStatusText className="py-1">
                   Loading STEP tree...
-                </p>
+                </FileSheetStatusText>
               ) : null}
 
               {hasAssemblyTree
@@ -1220,9 +1214,9 @@ export default function StepFileSheet({
                 : null}
 
               {!hasAssemblyTree && !viewerLoading ? (
-                <p className="px-2 py-1 text-xs text-[var(--ui-text-muted)]">
+                <FileSheetStatusText className="py-1">
                   No assembly tree
-                </p>
+                </FileSheetStatusText>
               ) : null}
 
               {showMateSections ? (
@@ -1335,36 +1329,29 @@ export default function StepFileSheet({
                 ) : null}
 
                 {stepModuleStatus === "loading" ? (
-                  <p className="px-2 py-1 text-xs text-[var(--ui-text-muted)]">Loading STEP module...</p>
+                  <FileSheetStatusText>Loading STEP module...</FileSheetStatusText>
                 ) : null}
                 {stepModuleError ? (
-                  <p className="whitespace-pre-line px-2 py-1 text-xs text-destructive">{stepModuleError}</p>
+                  <FileSheetStatusText tone="error">{stepModuleError}</FileSheetStatusText>
                 ) : null}
 
                 {stepModuleDefinition && stepModuleAnimations.length ? (
                   <>
                     {stepModuleAnimations.length > 1 ? (
-                      <FileSheetControlRow label="Animation">
-                        <Select
-                          value={String(stepModuleAnimationState.activeId || stepModuleAnimations[0]?.id || "")}
-                          onValueChange={(nextValue) => stepModule?.onAnimationSelect?.(nextValue)}
-                          disabled={!stepModuleEnabled}
-                        >
-                          <SelectTrigger size="sm" className="h-7 !text-[11px]" aria-label="STEP animation">
-                            <SelectValue />
-                          </SelectTrigger>
-                          <SelectContent>
-                            {stepModuleAnimations.map((animation) => (
-                              <SelectItem key={animation.id} value={animation.id}>
-                                {animation.label}
-                              </SelectItem>
-                            ))}
-                          </SelectContent>
-                        </Select>
-                      </FileSheetControlRow>
+                      <FileSheetSelectRow
+                        label="Animation"
+                        value={String(stepModuleAnimationState.activeId || stepModuleAnimations[0]?.id || "")}
+                        onValueChange={(nextValue) => stepModule?.onAnimationSelect?.(nextValue)}
+                        disabled={!stepModuleEnabled}
+                        ariaLabel="STEP animation"
+                        options={stepModuleAnimations.map((animation) => ({
+                          value: animation.id,
+                          label: animation.label
+                        }))}
+                      />
                     ) : null}
                     <FileSheetControlRow>
-                      <div className="grid grid-cols-2 gap-2">
+                      <FileSheetButtonRow columns={2} className="px-0">
                         <Button
                           type="button"
                           variant="outline"
@@ -1393,7 +1380,7 @@ export default function StepFileSheet({
                           <RotateCcw className="h-3.5 w-3.5" strokeWidth={2} aria-hidden="true" />
                           <span>Reset</span>
                         </Button>
-                      </div>
+                      </FileSheetButtonRow>
                     </FileSheetControlRow>
                     <FileSheetToggleRow
                       label="Loop"
@@ -1436,7 +1423,7 @@ export default function StepFileSheet({
                 ) : null}
 
                 {stepModuleDefinition && !stepModuleParameters.length ? (
-                  <p className="px-2 py-1 text-xs text-[var(--ui-text-muted)]">No module parameters.</p>
+                  <FileSheetStatusText>No module parameters.</FileSheetStatusText>
                 ) : null}
                 {stepModuleParameters.map((parameter) => {
                   const value = stepModuleValues?.[parameter.id] ?? parameter.defaultValue;
@@ -1455,24 +1442,15 @@ export default function StepFileSheet({
                   }
                   if (parameter.type === "enum") {
                     return (
-                      <FileSheetControlRow key={parameter.id} label={parameter.label}>
-                        <Select
-                          value={String(value ?? "")}
-                          onValueChange={(nextValue) => stepModule?.onParameterChange?.(parameter.id, nextValue)}
-                          disabled={!stepModuleEnabled}
-                        >
-                          <SelectTrigger size="sm" className="h-7 !text-[11px]" aria-label={parameter.label}>
-                            <SelectValue />
-                          </SelectTrigger>
-                          <SelectContent>
-                            {parameter.options.map((option) => (
-                              <SelectItem key={option.value} value={option.value}>
-                                {option.label}
-                              </SelectItem>
-                            ))}
-                          </SelectContent>
-                        </Select>
-                      </FileSheetControlRow>
+                      <FileSheetSelectRow
+                        key={parameter.id}
+                        label={parameter.label}
+                        value={String(value ?? "")}
+                        onValueChange={(nextValue) => stepModule?.onParameterChange?.(parameter.id, nextValue)}
+                        disabled={!stepModuleEnabled}
+                        ariaLabel={parameter.label}
+                        options={parameter.options}
+                      />
                     );
                   }
                   if (parameter.type === "color") {
@@ -1481,13 +1459,10 @@ export default function StepFileSheet({
                         key={parameter.id}
                         label={parameter.label}
                         trailing={(
-                          <ColorPicker
+                          <FileSheetColorPicker
                             value={String(value || "#ffffff")}
                             onChange={(nextValue) => stepModule?.onParameterChange?.(parameter.id, nextValue)}
                             disabled={!stepModuleEnabled}
-                            className={cn(compactInputClasses, "w-fit justify-start gap-1.5 px-1.5")}
-                            swatchClassName="size-3.5"
-                            popoverAlign="end"
                             aria-label={parameter.label}
                           />
                         )}
@@ -1550,7 +1525,7 @@ export default function StepFileSheet({
                 {stepModuleDefinition
                 && (stepModuleParameters.length || stepModuleAnimations.length)
                 && stepModule?.onResetParameters ? (
-                  <FileSheetControlRow className="pt-2">
+                  <FileSheetControlRow>
                     <Button
                       type="button"
                       variant="outline"
