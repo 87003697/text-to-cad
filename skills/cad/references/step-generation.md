@@ -28,8 +28,15 @@ When a generated STEP file's `gen_step()` builds on another STEP file, that othe
 
 A **STEP entry generator** — a Python script that defines `gen_step()` and is meant to be built, inspected, snapshotted, or shown in the viewer on its own — is named `<name>.step.py`. That filename is the marker the viewer catalog and the build tools scan for. Ordinary **helper / library modules** (shared geometry functions, `*_parts/` packages, `*_common.py`, anything imported by other generators but not built on its own) stay `<name>.py` and are NOT treated as entries even if they define `gen_step` — the viewer scans for `.step.py`, not every Python file. So: if a `.py` script is a buildable model on its own, name it `<name>.step.py`; if it only exists to be imported by other generators, leave it `<name>.py`.
 
-- A `<name>.step.py` entry produces the logical STEP `<name>.step` (the filename minus the trailing `.py`); its render package lives at `<dir>/__cadgen__/models/<name>.step/`. Build/inspect it by passing the `.step.py` path to the CLI, exactly like any generator source.
+- A `<name>.step.py` entry produces the logical STEP `<name>.step` (the filename minus the trailing `.py`); its render package lives at `<dir>/__cadgen__/models/<name>.step.py/`. Build/inspect it by passing the `.step.py` path to the CLI, exactly like any generator source.
 - **A `.step.py` file cannot be imported by name.** `import foo` does not find `foo.step.py`, and `import foo.step` makes Python look for a `foo` package (a `foo/` directory) — neither exists. Load an entry generator by PATH (`importlib.util.spec_from_file_location`), which is how the CLI, the viewer, and assembly composition already load generators. If generators must share constants/functions, put the shared code in a plain `<name>.py` helper they both import, or path-load the entry. When a generated assembly composes a generated child (see "Child dependencies" in `positioning.md`), it path-loads the child `.step.py` and calls its `gen_step()` — it never `import`s it by name.
+
+  **`sys.path` does not survive into `gen_step()`.** The CLI restores `sys.path`
+  after loading your generator module, so a path inserted at import time is gone
+  by the time `gen_step()` runs — an import attempted inside the function fails
+  with a bare `No module named ...` that points at the module rather than at the
+  path. Import sibling helper modules at module top level and only *call* them
+  inside `gen_step()`.
 
   Minimal path-load (cache it with `functools.lru_cache` if a child is composed many times):
 

@@ -357,7 +357,16 @@ export function addFloor(scene, bounds, themeSettings, sceneScale, settingsBySca
   }
   const settings = renderSceneScaleSettings(sceneScale, settingsByScale);
   const { center, radius } = centerAndRadiusFromBounds(bounds, sceneScale, settingsByScale);
-  const minZ = Array.isArray(bounds?.min) ? toFiniteNumber(bounds.min[2]) : 0;
+  // The stage floor sits at world z=0, matching the viewer
+  // (resolveRuntimeModelFloorZ in lib/viewer/modelRuntime.js). This path used to
+  // glue the floor to bounds.min[2], which silently re-grounded EVERY model: a
+  // part authored 200 mm above the floor rendered as if it were resting on it,
+  // and snapshots could never agree with the viewer about whether something was
+  // grounded. Follow the model only downward, so geometry below z=0 pushes the
+  // floor down rather than clipping through it.
+  const boundsMinZ = Array.isArray(bounds?.min) ? toFiniteNumber(bounds.min[2]) : 0;
+  const followModel = floor.followModel !== false;
+  const minZ = followModel ? Math.min(0, boundsMinZ) : 0;
   const gridSize = Math.max(radius * 3, settings.minFloorSize);
   if (gridEnabled) {
     const gridDensity = clamp(

@@ -567,6 +567,42 @@ def _mesh_angular_tolerance_is_explicit(spec: EntrySpec) -> bool:
     )
 
 
+# How much finer than the adaptive floor an explicit tolerance has to be before
+# it is almost certainly a mistake rather than a deliberate choice.
+_TOLERANCE_WARN_RATIO = 8.0
+
+
+def _warn_if_tolerance_defeats_scale_floor(spec: EntrySpec, adaptive: object) -> None:
+    """Say something when ``--mesh-tolerance`` silently defeats the size floor.
+
+    For anything larger than desk scale the adaptive resolver floors the linear
+    deflection proportionally to the model diagonal, because meshing a metre-scale
+    part at micron-class chord error costs minutes and hundreds of megabytes. An
+    explicit ``--mesh-tolerance`` overrides that floor completely — which is
+    correct, but silent, and 0.02 looks like a safe "default" value to pass. On a
+    5.4 m car it is 80x finer than the floor and turns a 15-second build into a
+    six-minute one with nothing in the output to explain why.
+    """
+    settings = getattr(adaptive, "settings", None)
+    floor = float(getattr(settings, "tolerance", 0.0) or 0.0)
+    requested = float(spec.mesh_tolerance)
+    if floor <= 0.0 or requested <= 0.0 or requested >= floor / _TOLERANCE_WARN_RATIO:
+        return
+    hints = getattr(adaptive, "hints", None)
+    diagonal = 0.0
+    if isinstance(hints, Mapping):
+        raw = hints.get("bboxDiag")
+        diagonal = float(raw) if isinstance(raw, (int, float)) else 0.0
+    print(
+        f"[cadgen] warning: --mesh-tolerance {requested:g} mm is "
+        f"{floor / requested:.0f}x finer than the {floor:g} mm this model's size "
+        f"({diagonal:.0f} mm diagonal) would otherwise use. Meshing will be much "
+        f"slower and the package much larger. Omit --mesh-tolerance to let it scale.",
+        file=sys.stderr,
+        flush=True,
+    )
+
+
 def _selector_options_for_part(spec: EntrySpec, *, scene: LoadedStepScene | None = None) -> SelectorOptions:
     defaults = SelectorOptions()
     linear_deflection = spec.mesh_tolerance
@@ -584,6 +620,8 @@ def _selector_options_for_part(spec: EntrySpec, *, scene: LoadedStepScene | None
         adaptive = adaptive_mesh_resolution_for_scene(scene)
         if not linear_explicit:
             linear_deflection = adaptive.settings.tolerance
+        else:
+            _warn_if_tolerance_defeats_scale_floor(spec, adaptive)
         if not angular_explicit:
             angular_deflection = adaptive.settings.angular_tolerance
         edge_visibility_classes = _edge_visibility_classes_for_resolution(adaptive.profile, adaptive.hints)
