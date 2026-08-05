@@ -198,3 +198,40 @@ test("snapshot floors render grid independently from the stage floor", () => {
   assert.equal(plane.receiveShadow, true);
   assert.equal(plane.material.opacity, 0.25);
 });
+
+test("resolveAppearanceSettings applies colorMode to object appearances", () => {
+  // colorMode was previously honoured only for saved-theme-id STRINGS, which
+  // made it an accepted-but-inert key in appearance JSON: "light" and "dark"
+  // produced byte-identical renders.
+  const base = normalizeThemeSettings(cloneThemeSettings("workbench"));
+  const withModes = {
+    ...base,
+    modeColors: {
+      light: { background: { solidColor: "#ffffff" } },
+      dark: { background: { solidColor: "#000000" } }
+    }
+  };
+
+  const light = resolveAppearanceSettings({
+    appearance: { ...withModes, colorMode: "light" }
+  });
+  const dark = resolveAppearanceSettings({
+    appearance: { ...withModes, colorMode: "dark" }
+  });
+
+  assert.equal(light.background.solidColor, "#ffffff");
+  assert.equal(dark.background.solidColor, "#000000");
+});
+
+test("resolveAppearanceSettings is the identity for settings without modeColors", () => {
+  // The safety property of applying colorMode unconditionally: when no explicit
+  // modeColors block is supplied, normalizeThemeModeColors derives it from the
+  // settings themselves, so re-applying it must not alter anything.
+  const settings = normalizeThemeSettings(cloneThemeSettings("workbench"));
+  const explicit = { ...settings, background: { ...settings.background, solidColor: "#123456" } };
+  delete explicit.modeColors;
+
+  const resolved = resolveAppearanceSettings({ appearance: explicit });
+
+  assert.equal(resolved.background.solidColor, "#123456");
+});

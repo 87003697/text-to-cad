@@ -300,6 +300,35 @@ class SnapshotCliTests(unittest.TestCase):
         with self.assertRaisesRegex(SnapshotError, "unsupported keys: edges"):
             load_job_from_options(appearance_options, stdin=_TtyStringIO(), cwd=Path.cwd())
 
+    def test_appearance_accepts_a_full_theme_preset_clone(self) -> None:
+        # cloneThemePresetSettings() emits colorMode, projection and modeColors
+        # alongside the five settings blocks. Rejecting any of them meant the
+        # repo's own theme-clone output could not be passed back to
+        # --appearance without hand-stripping keys first.
+        options = parse_snapshot_args(
+            [
+                "--input",
+                "models/simple/cylindrical_cap.step",
+                "--output",
+                "tmp/cap.png",
+                "--appearance",
+                json.dumps(
+                    {
+                        "colorMode": "light",
+                        "projection": "perspective",
+                        "materials": {"roughness": 0.5},
+                        "background": {"solidColor": "#ffffff"},
+                        "floor": {"color": "#b7b6b2"},
+                        "environment": {"enabled": True},
+                        "lighting": {"toneMappingExposure": 1.1},
+                        "modeColors": {"light": {"background": {"solidColor": "#ffffff"}}},
+                    }
+                ),
+            ]
+        )
+        job = load_job_from_options(options, stdin=_TtyStringIO(), cwd=Path.cwd())
+        self.assertIn("modeColors", job["appearance"])
+
     def test_display_shortcut_rejects_unknown_modes(self) -> None:
         options = parse_snapshot_args(
             [
@@ -1409,6 +1438,96 @@ class JobAppearanceResolutionTests(unittest.TestCase):
         with self.assertRaises(snapshot_main.SnapshotError) as ctx:
             self._packet_for("models/no_such_theme.json")
         self.assertIn("does not exist", str(ctx.exception))
+
+
+class JobOutputResolutionTests(unittest.TestCase):
+    """`outputs` element types were never validated. A bare string was coerced
+    to {} and the caller's path discarded, so the render ran to completion and
+    then wrote nothing, printed nothing, and exited 0."""
+
+    def _packet_for(self, outputs):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            models = root / "models"
+            models.mkdir(parents=True)
+            (models / "part.step").write_text("ISO-10303-21;\nEND-ISO-10303-21;\n", encoding="utf-8")
+            write_package(models / "part.step")
+            original_ensure = snapshot_main.ensure_step_topology_artifact
+            original_timestamp = snapshot_main.snapshot_timestamp
+            try:
+                snapshot_main.ensure_step_topology_artifact = lambda *a, **k: None
+                snapshot_main.snapshot_timestamp = lambda: "20260527T163012Z"
+                packet = resolve_render_job_packet(
+                    {"input": "models/part.step", "outputs": outputs},
+                    cwd=root,
+                )
+                return packet, root
+            finally:
+                snapshot_main.ensure_step_topology_artifact = original_ensure
+                snapshot_main.snapshot_timestamp = original_timestamp
+
+    def test_render_job_output_path_string_is_accepted(self):
+        packet, root = self._packet_for(["tmp/iso.png"])
+        resolved = Path(packet["jobs"][0]["outputs"][0]["path"]).resolve()
+        self.assertEqual(
+            resolved.relative_to(root.resolve()).as_posix(),
+            "tmp/iso_20260527T163012Z.png",
+        )
+
+    def test_render_job_output_without_path_is_rejected(self):
+        with self.assertRaises(SnapshotError) as ctx:
+            self._packet_for([{"camera": "iso"}])
+        self.assertIn("has no path", str(ctx.exception))
+
+
+class JobDisplayResolutionTests(unittest.TestCase):
+    """A job's own `display` string must get the same treatment as the
+    `--display` flag. It used to be discarded in favour of {"mode": "solid"},
+    so a mode name, a file path, and an outright typo all rendered the default."""
+
+    def _packet_for(self, display_value, *, display_body=None):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            models = root / "models"
+            models.mkdir(parents=True)
+            (models / "part.step").write_text("ISO-10303-21;\nEND-ISO-10303-21;\n", encoding="utf-8")
+            write_package(models / "part.step")
+            if display_body is not None:
+                (models / "stage.display.json").write_text(
+                    json.dumps(display_body), encoding="utf-8"
+                )
+            original_ensure = snapshot_main.ensure_step_topology_artifact
+            try:
+                snapshot_main.ensure_step_topology_artifact = lambda *a, **k: None
+                return resolve_render_job_packet(
+                    {
+                        "input": "models/part.step",
+                        "display": display_value,
+                        "outputs": [{"path": "tmp/iso.png", "camera": "iso"}],
+                    },
+                    cwd=root,
+                )
+            finally:
+                snapshot_main.ensure_step_topology_artifact = original_ensure
+
+    def test_job_display_mode_string_is_resolved(self):
+        packet = self._packet_for("wireframe")
+        self.assertEqual(packet["jobs"][0]["display"]["mode"], "wireframe")
+
+    def test_job_display_file_path_is_loaded_into_settings(self):
+        body = {"mode": "wireframe", "edges": {"enabled": False}}
+        packet = self._packet_for("models/stage.display.json", display_body=body)
+        display = packet["jobs"][0]["display"]
+        self.assertEqual(display["mode"], "wireframe")
+        self.assertEqual(display["edges"]["enabled"], False)
+
+    def test_job_display_invalid_mode_raises(self):
+        with self.assertRaises(SnapshotError):
+            self._packet_for("totally_not_a_mode")
+
+    def test_job_display_object_is_unchanged(self):
+        packet = self._packet_for({"mode": "wireframe"})
+        self.assertEqual(packet["jobs"][0]["display"]["mode"], "wireframe")
 
 
 if __name__ == "__main__":

@@ -133,9 +133,13 @@ export function resolveAppearanceSettings(job = {}, { defaultThemeId = "workbenc
   const appearance = resolveAppearanceJobConfig(job, { defaultThemeId });
   const themeSettings = cloneThemeSettings(appearance.themeId || defaultThemeId);
   const normalized = normalizeThemeSettings(appearance.settings || themeSettings);
-  return typeof job.appearance === "string"
-    ? resolveThemeSettingsForColorMode(normalized, { prefersDark: false })
-    : normalized;
+  // Applied for object appearances too, not just saved-theme-id strings.
+  // resolveThemeSettingsForColorMode is the ONLY consumer of colorMode, so
+  // skipping it here made colorMode an accepted-but-inert key in appearance
+  // JSON: "light" and "dark" produced byte-identical renders. For settings
+  // without an explicit modeColors block this is the identity, because
+  // normalizeThemeModeColors derives modeColors from the settings themselves.
+  return resolveThemeSettingsForColorMode(normalized, { prefersDark: false });
 }
 
 export function resolveRenderView(camera = "iso", viewPresets = RENDER_VIEW_PRESETS, {

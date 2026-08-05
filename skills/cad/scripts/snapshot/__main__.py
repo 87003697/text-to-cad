@@ -140,6 +140,11 @@ APPEARANCE_OPTION_KEYS = {
     "lighting",
     "colorMode",
     "projection",
+    # normalizeThemeSettings() emits modeColors unconditionally, so it is part
+    # of the settings shape by construction. Rejecting it meant the repo's own
+    # cloneThemePresetSettings() output could not be passed back to
+    # --appearance without hand-stripping a key first.
+    "modeColors",
 }
 
 # Keys that are valid settings, just in the OTHER payload. Naming the right
@@ -157,6 +162,7 @@ SETTINGS_KEY_HOMES = {
     "lighting": "appearance",
     "colorMode": "appearance",
     "projection": "appearance",
+    "modeColors": "appearance",
 }
 
 
@@ -1089,10 +1095,23 @@ def normalize_common_job(
 
     normalized_outputs: list[dict[str, object]] = []
     resolved_timestamp = timestamp or snapshot_timestamp()
-    for output in outputs:
+    for index, output in enumerate(outputs):
+        # A bare string is the obvious shorthand and the .gif guard above
+        # already reads one as a path; without this it was coerced to {} and the
+        # caller's path silently discarded, producing a full-cost render that
+        # wrote nothing and said nothing.
+        if isinstance(output, str):
+            output = {"path": output}
         output_object = dict(output if is_plain_object(output) else {})
         width, height = resolve_output_size({**job, "mode": mode}, output_object)
         output_path = str(output_object.get("path") or "")
+        if mode != "list" and not output_path:
+            # list mode legitimately carries no output files; every other mode
+            # rendering to nowhere is a silent no-op, not a valid request.
+            raise SnapshotError(
+                f"render output {index} has no path; each output must be a path "
+                'string or an object with a "path"'
+            )
         timestamped_output_path = timestamp_output_path(output_path, resolved_timestamp)
         normalized_outputs.append(
             {
@@ -1319,6 +1338,15 @@ def resolve_render_job(
     raw_input = str(job.get("input") or "").strip()
     if not raw_input:
         raise SnapshotError("render job is missing input")
+
+    # A job's own `display` string gets the same treatment as the --display
+    # flag: a mode name, an inline JSON object, or a path to a display JSON.
+    # Without this it fell through to normalize_common_job, which accepts only
+    # a plain object and silently substituted {"mode": "solid"} -- so
+    # "wireframe", a file path, and an outright typo all rendered the default.
+    raw_display = job.get("display")
+    if isinstance(raw_display, str) and raw_display.strip():
+        job["display"] = load_display_option(raw_display, cwd=resolved_cwd)
 
     # Closed-set display values are validated for the --display flag path in
     # load_display_option; a display object embedded in a full JSON job must get
