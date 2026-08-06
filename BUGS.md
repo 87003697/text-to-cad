@@ -251,3 +251,96 @@ helpers at documented datums.
   existing multi-tool boolean guidance; possibly a lint for `Polygon` winding
   in helpers.
 - **Blocked:** ~30 min across two debug rounds. **Fixed:** in model source.
+
+## Per-component STEP/GLB export silently drops the color of bare-`Compound` leaves (cadgen)
+
+- **Where found:** `models/one-shots/moonwatch/_bracelet.py` bracelet rebuild
+  (2026-08-06). 25 of 57 leaf bodies (all boolean/chamfer chains that happened
+  to return a bare `build123d.Compound` instead of `Part`) rendered without
+  their assigned `.color` even though `part.color` was set and the assembly
+  STEP looked correct.
+- **Mechanism:** `packages/cadgen/src/cadgen/step_export.py` has two color
+  paths. The assembly-tree path (`is_assembly=True`) colors every child label
+  and is fine. But the per-shape path used when a leaf is exported ALONE (the
+  component-GLB cache builds one doc per component) only recognizes
+  `Part`/`Sketch`/`Curve` when picking the sub-shape explorer; any other
+  `Compound` subtype hits `warnings.warn("Unknown Compound type, color not
+  set")` and exports uncolored geometry. The warning is easy to miss (it
+  deduplicates per callsite and interleaves with gen output), so the model
+  ships with silently washed-out parts — here it erased the brushed-outer vs
+  polished-center bracelet contrast that the source colors specify.
+- **Workaround (adopted):** coerce every leaf to `Part` before assembling the
+  labeled `Compound` (`Part(shape.wrapped)` + reattach `.color`), see
+  `build_bracelet()`.
+- **Suggestion:** in `_create_bin_xcaf_doc`, treat an unknown one-solid
+  `Compound` like a `Part` (explore `TopAbs_SOLID`) instead of warning, or
+  raise loudly; silent color loss on valid colored input is a data bug.
+- **Blocked:** no; found while chasing weak finish contrast in renders.
+
+## Mirrored `Polygon` points flip the face normal, so `extrude()` runs the OTHER way (build123d, silent misplaced boolean)
+
+- **Where found:** `models/one-shots/moonwatch/_bracelet.py`
+  `_corner_relief()` (2026-08-06): corner-relief pockets built from a point
+  list mirrored with `[(-y, z) for y, z in pts]` for the opposite link end.
+- **Symptom (silent, exit 0, `inspect validate` clean, 57 occurrences):**
+  mirroring the 2D profile reverses its winding, which reverses the planar
+  face normal, and `extrude(face, amount)` extrudes along the normal — so
+  every mirrored-end pocket extruded in -X instead of +X. The cutter gouged a
+  strip 0.7 mm AWAY from the intended corner (it ate the end link's left
+  prong tail, and the far-recess corner pockets on center links landed inside
+  the crown), while the intended fang was left uncut. Point-classifier
+  probing (`BRepClass3d_SolidClassifier` on mirrored coordinates) was what
+  exposed the asymmetry; renders alone were ambiguous.
+- **Workaround (adopted):** when mirroring a profile, also reverse the point
+  order (`[(-y, z) for y, z in reversed(pts)]`) so the winding — and the face
+  normal — is preserved.
+- **Related:** same root class as the CW-polygon entry above (winding decides
+  normals decides extrude direction); this instance is about MIRRORED point
+  lists specifically, which look innocent in review.
+- **Blocked:** ~20 min. **Fixed:** in model source.
+
+## OCC `chamfer` on blob-outline top rings: whole-ring fails, singles refuse concave junctions, grouped-after-neighbors SEGFAULTS
+
+- **Where found:** `models/one-shots/moonwatch/_mvt_base.py` bridge anglage
+  (2026-08-06, movement-base finishing pass). The bridges are extrusions of
+  multi-circle union ("blob") profiles clipped to a disk.
+- **Symptoms (probe-measured on plain extrusions, BEFORE any boolean):**
+  - `chamfer(all_top_edges, length)` fails at EVERY width on the barrel
+    bridge outline and only succeeds at ~0.10 on the train bridge / balance
+    cock, so `_finishing.anglage_top`'s whole-list retry ladder shipped
+    bridges with zero or ~0.10 anglage (the blind critic's "plain vertical
+    extruded walls").
+  - Single-edge `chamfer` raises catchable ValueError on any arc bounded by
+    a concave circle-circle junction (most of the visually large arcs).
+  - Single- or multi-edge `chamfer` on a body that already carries bevels on
+    NEIGHBORING arcs can SEGFAULT the process (exit 139, uncatchable, killed
+    `scripts/gen`). Reproduced on the train-bridge wheel-reveal cutout rim
+    after 3 neighboring arcs were beveled.
+- **Workaround (adopted):** never chamfer these rings; BAKE the 45-degree
+  anglage into construction — extrude to `z_top - w`, then a tapered cap via
+  `extrude(..., taper=45)`; when the draft prism itself fails (barrel
+  outline: "BRepFill_TrimSurfaceTool ... incoherent intersection", and loft
+  to `offset(prof, -w)` also fails), union per-circle `Cone(r, r-w, w)` caps
+  clipped by the rim cone plus the inward-offset profile extruded through
+  the band. Baked bevels also survive later booleans.
+- **Suggestion:** extend the "no 3D fillet after big booleans" guidance: on
+  multi-arc blob outlines, OCC chamfer is unreliable even BEFORE booleans,
+  and sequential chamfering can hard-crash; prefer constructive bevels.
+- **Blocked:** ~45 min. **Fixed:** in model source (`_bevel_extrude`).
+
+## build123d 0.10: `Part(solid.wrapped)` reports `volume == 0`
+
+- **Where found:** `models/one-shots/moonwatch/_mvt_base.py` stripe-shadow
+  overlays (2026-08-06), splitting a multi-solid boolean result into one
+  part per connected solid.
+- **Symptom:** re-wrapping a `Solid`'s `TopoDS_Solid` as `Part(sol.wrapped)`
+  yields a shape whose `.volume` is 0 (probe: `Box(1,1,1)` solid -> Part
+  wrap -> volume 0). Any volume-based guard then silently discards real
+  geometry — a `shadow.volume < 1e-6: shadow = None` check threw away the
+  balance-cock overlay bands with no error.
+- **Workaround:** use the `Solid` objects directly as labeled/colored
+  compound children (Shape carries `label`/`color` fine), or fuse before
+  measuring. Do not `Part(x.wrapped)` a bare solid.
+- **Blocked:** ~15 min (bands present in `inspect validate` count yet
+  invisible; traced via descriptor + volume probes). **Fixed:** in model
+  source.
