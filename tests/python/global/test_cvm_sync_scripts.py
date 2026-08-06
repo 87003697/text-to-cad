@@ -84,6 +84,13 @@ class CvmSyncContractTests(unittest.TestCase):
         self.assertIn("exit 7", script)
         self.assertIn("?immutable=1", skill)
 
+        loop = script[
+            script.index("# --- Loop：") : script.index('done <<< "$MISSING"')
+        ]
+        self.assertNotIn("ssh cvm", loop)
+        self.assertGreaterEqual(loop.count("ssh -n cvm"), 7)
+        self.assertIn("循环内 SSH 必须使用 `ssh -n cvm`", skill)
+
         parent = 'refresh_dir "ericzyma/text-to-cad/outputs"'
         group = 'refresh_dir "ericzyma/text-to-cad/outputs/$group"'
         exp = 'refresh_dir "ericzyma/text-to-cad/outputs/$exp"'
