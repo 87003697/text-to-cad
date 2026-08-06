@@ -6,6 +6,9 @@ node_modules/
 outputs
 __pycache__/
 *.pyc
+*.so
+*.dylib
+*.pyd
 .claude/
 .agents/sessions/
 models/

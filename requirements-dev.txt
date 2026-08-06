@@ -15,6 +15,7 @@
 # - skills/sdf/requirements.txt
 --editable ./packages/cadpy
 --editable ./packages/cadpy_metadata
+--editable ./packages/meshscope
 --editable ./viewer/moveit2_server
 
 # Extra third-party requirements mirrored from skill-local runtime files.

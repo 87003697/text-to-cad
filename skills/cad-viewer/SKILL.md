@@ -15,14 +15,14 @@ live review links. The expected input is one or more explicit file paths.
 
 ## Start Viewer
 
-Start or reuse one local CAD Viewer with `npm run agent:start`, passing the
-absolute artifact directory as `--dir`. The `agent:start` launcher owns port
+Start or reuse one local CAD Viewer with `npm run viewer:open`, passing the
+absolute artifact directory as `--dir`. The `viewer:open` launcher owns port
 selection, compatible-server reuse, directory activation, and the `?dir=` query
 parameter. Dev-mode viewers are reused only for matching git identities; dist
 bundle viewers can be reused across git branches when their viewer versions
 match. It activates reused servers through the Viewer's lightweight directory
 activation API, without requiring agents to probe ports or trigger catalog
-scans manually. Use the Viewer URL printed by `agent:start` as-is, then add only
+scans manually. Use the Viewer URL printed by `viewer:open` as-is, then add only
 a `file=` query value for the artifact you want to review.
 
 Choose `--dir` as the absolute directory that contains the model
@@ -34,7 +34,7 @@ separate Viewer just to change directories.
 Run from this skill directory:
 
 ```bash
-npm --prefix scripts/viewer run agent:start -- --host 127.0.0.1 --dir <absolute-model-root>
+npm --prefix scripts/viewer run viewer:open -- --host 127.0.0.1 --dir <absolute-model-root>
 ```
 
 Use the printed Viewer URL and append `file=`:
@@ -59,7 +59,7 @@ rerun the same command with the needed permission/escalation.
 - Start/reuse the Viewer once per absolute directory `--dir`, then append
   `file=<path>` for each requested file. The file path must be relative to
   `--dir`.
-- For directory-only review links, return the URL printed by `agent:start`
+- For directory-only review links, return the URL printed by `viewer:open`
   without adding `file=`.
 - Do not stop an existing Viewer server unless the user asks.
 - If Viewer startup fails, report the failure and continue with the owning skill's non-GUI validation or artifacts.
@@ -68,10 +68,10 @@ rerun the same command with the needed permission/escalation.
 
 The viewer port is dynamic — it is chosen at startup and may differ across
 worktrees. To integrate with the Claude Preview tool, add `--json` to the
-`agent:start` command:
+`viewer:open` command:
 
 ```bash
-npm --prefix scripts/viewer run agent:start -- --host 127.0.0.1 --dir <absolute-model-root> --json
+npm --prefix scripts/viewer run viewer:open -- --host 127.0.0.1 --dir <absolute-model-root> --json
 ```
 
 The launcher writes a JSON result line to stdout after the human-readable lines.

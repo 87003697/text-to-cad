@@ -25,7 +25,8 @@ and B. This is the primary "how close overall?" number.
 Interpretation on normalized meshes:
 
 - `< 0.005` — excellent (self-compare noise floor).
-- `< 0.02` — acceptable reconstruction.
+- `≤ 0.01` — acceptable overall reconstruction under the fixed
+  50000-sample, seed-0 protocol.
 - `< 0.05` — degraded but recognizable.
 - `> 0.1` — likely a coordinate-frame mismatch, not a fidelity problem.
 
@@ -40,14 +41,8 @@ useful for locating spatial outliers, not for overall quality scoring.
 `stats.p90_a2b` / `stats.p95_a2b` (and symmetric `_b2a`) locate the
 tail of the error distribution. When the chamfer is acceptable but
 `p95` is much higher than `mean`, a small region diverges strongly —
-run `mesh-render heatmap` to see where.
-
-## IoU (bulk shape match)
-
-Optional bulk metric: intersection-over-union of the voxelized
-occupancy grids. `iou < 0.75` on a normalized mesh indicates a bulk
-shape mismatch and suggests the caller should re-route (choose a
-different modeling paradigm) rather than continue refining.
+run `mesh-render heatmap` to see where. The mesh-to-cad hard tail gate
+requires both directional p95 values to be `≤ 0.03`.
 
 ## `compare_metrics.json` schema (authoritative)
 
@@ -66,7 +61,9 @@ The `mesh-compare` numeric CLI emits (top-level, on stdout):
     "max_a2b": 0.088, "max_b2a": 0.092
   },
   "meta": {
-    "n_samples": 10000,
+    "n_samples": 50000,
+    "sample_seed": 0,
+    "sampling": "trimesh_surface_seeded",
     "normalization": "trellis2",
     "scale_a": 12.4,
     "scale_b": 12.1
@@ -75,11 +72,11 @@ The `mesh-compare` numeric CLI emits (top-level, on stdout):
 ```
 
 Callers that persist this JSON on disk (for example `$mesh-to-cad`
-writing `${EXP_DIR}/compare_metrics.json`) may add a top-level alias
-`chamfer_l2` matching `chamfer` and top-level `iou`, `input_mesh`,
-`reconstructed_mesh`, `p50`, `p90`, `p95`, `p99`, `sample_count`, and
-`normalized: true` fields for convenience. These aliases must not
-contradict the numeric CLI's own fields.
+writing `${EXP_DIR}/compare_metrics.json`) must preserve every emitted field
+unchanged. The documented `ai_vision` extension below may be added when
+requested; do not append a separately computed IoU, caller-defined metric, or
+alias. Read `chamfer` and the directional percentile fields at their canonical
+locations.
 
 ## `ai_vision` block (optional, appended by caller)
 
@@ -107,6 +104,68 @@ Each layer score is 0-1; the five layers are fixed (do not add or
 rename). Skills that own the workflow (e.g. `$mesh-to-cad`) are
 responsible for adding this block when needed; `mesh-compare` itself
 never invents scores.
+
+## `voxblame` block (optional, emitted by numeric CLI)
+
+When `--voxblame-dir` and `--step` are supplied together, the CLI appends one
+compact localization summary without changing any legacy numeric field:
+
+```json
+{
+  "voxblame": {
+    "schema": "voxblame.summary/1",
+    "step": 2,
+    "compare_to": 1,
+    "report": "voxblame/steps/000002/report.json",
+    "max_depth": 8,
+    "frame": {"center": [0, 0, 0], "scale": 1},
+    "reference": {
+      "storage_schema": "voxblame.svo/1",
+      "logical_sha256": "<sha256>"
+    },
+    "candidate": {
+      "storage_schema": "voxblame.svo/1",
+      "logical_sha256": "<sha256>"
+    },
+    "no_observable_geometry_change": false,
+    "remaining_error_count": 7,
+    "coarsest_first_error_depth": 3,
+    "change_counts": {
+      "introduced": 0, "regressed": 1, "changed": 0,
+      "improved": 2, "resolved": 4
+    },
+    "next_action": {
+      "reason": "regressed",
+      "direction": "excess",
+      "first_error_depth": 3,
+      "region_handle": {"depth": 3, "octant_prefix": "17"},
+      "bounds_world": {"min": [0, 0, 0], "max": [1, 1, 1]}
+    }
+  }
+}
+```
+
+`next_action` is null when no surface-occupancy error remains. Consumers must
+not copy full `current.errors` or `changes` from `report.json` into the prompt;
+those arrays are disk evidence. Numeric Chamfer/Hausdorff still use the legacy
+per-mesh Trellis2 normalization. VoxBlame instead uses the first positional
+mesh as the fixed reference frame. Candidate surface outside that frame is
+ignored; its in-frame surface (including an empty result) is still graded and
+persisted so geometric failure remains visible in the normal comparison.
+VoxBlame uses deterministic conservative triangle/AABB occupancy; it does not
+claim voxel-for-voxel equivalence with TRELLIS.2's scan-line/QEF O-Voxel
+construction. Its `.vbsvo` snapshots borrow TRELLIS.2's preorder child-mask
+hierarchy, then add a validated subtree-span index for early mismatch traversal.
+This is a VoxBlame-specific uncompressed container, not VXZ and not a claim of
+format compatibility with TRELLIS.2. `session.json` owns the reference frame and
+mesh digest; each `.vbsvo` is a complete immutable surface snapshot. Callers and
+agents should consume the JSON summary/report and must not dump the binary tree
+into the prompt. `region_handle` is a stable logical
+`{depth, octant_prefix}` address, never a node row or byte offset. The frame,
+storage schema, and logical digests bind a summary to one reference-owned
+lattice. `no_observable_geometry_change=true` means the current and selected
+previous candidate have identical occupancy at this schema/depth/frame; it does
+not prove that the source meshes are exactly equal.
 
 ## `--include-distances`
 

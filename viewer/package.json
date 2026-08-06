@@ -5,7 +5,7 @@
   "version": "0.3.9",
   "scripts": {
     "dev": "vite dev",
-    "agent:start": "node scripts/start-agent-viewer.mjs",
+    "viewer:open": "node scripts/start-agent-viewer.mjs",
     "serve": "node src/server/server.mjs",
     "upload:blob": "node scripts/upload-catalog-to-blob.mjs",
     "start": "node src/server/server.mjs",

@@ -46,6 +46,18 @@ class PreparedPair:
     center_b: np.ndarray
 
 
+def _sample_surface(mesh: trimesh.Trimesh, count: int, seed: int) -> np.ndarray:
+    """Sample deterministically across supported trimesh releases.
+
+    ``Trimesh.sample(seed=...)`` was added after the CVM-pinned trimesh
+    release.  The module-level sampler already accepts ``seed`` there, so use
+    that stable API directly instead of relying on the newer convenience
+    method.
+    """
+    points, _ = trimesh.sample.sample_surface(mesh, count, seed=seed)
+    return points
+
+
 def prepare(path_a: str | Path, path_b: str | Path) -> PreparedPair:
     """Load + normalize two meshes; return the shared prepared state.
 
@@ -70,12 +82,21 @@ def prepare(path_a: str | Path, path_b: str | Path) -> PreparedPair:
 
 def compare(
     pair: PreparedPair,
-    n_samples: int = 10000,
+    n_samples: int = 50000,
     include_distances: bool = False,
+    seed: int = 0,
 ) -> dict:
-    """Compute Chamfer / Hausdorff / percentile stats from a PreparedPair."""
-    pts_a = pair.norm_a.sample(n_samples)
-    pts_b = pair.norm_b.sample(n_samples)
+    """Compute deterministic Chamfer / tail stats from a PreparedPair."""
+    if n_samples <= 0:
+        raise ValueError("n_samples must be positive")
+    if seed < 0:
+        raise ValueError("seed must be non-negative")
+
+    # Use different fixed streams for the two surfaces.  Reusing one stream
+    # can make identical-topology meshes look artificially perfect, while
+    # leaving the streams implicit makes threshold decisions non-reproducible.
+    pts_a = _sample_surface(pair.norm_a, n_samples, seed)
+    pts_b = _sample_surface(pair.norm_b, n_samples, seed + 1)
 
     tree_a = cKDTree(pts_a)
     tree_b = cKDTree(pts_b)
@@ -103,6 +124,8 @@ def compare(
         },
         "meta": {
             "n_samples": n_samples,
+            "sample_seed": seed,
+            "sampling": "trimesh_surface_seeded",
             "normalization": "trellis2",
             "scale_a": float(pair.scale_a),
             "scale_b": float(pair.scale_b),
@@ -116,13 +139,18 @@ def compare(
     return result
 
 
-def vertex_distances(pair: PreparedPair, n_samples: int = 10000) -> np.ndarray:
+def vertex_distances(
+    pair: PreparedPair,
+    n_samples: int = 50000,
+    seed: int = 0,
+) -> np.ndarray:
     """Per-vertex distance from `norm_a.vertices` to the sampled `norm_b` surface.
 
-    Shares the same PreparedPair with `compare()`, so the heatmap values and
-    the chamfer number reference the same normalized coordinate frame.
+    Shares the same PreparedPair and B-surface random stream with `compare()`,
+    so the heatmap values and chamfer number use the same normalized frame and
+    deterministic target sample.
     """
-    pts_b = pair.norm_b.sample(n_samples)
+    pts_b = _sample_surface(pair.norm_b, n_samples, seed + 1)
     tree_b = cKDTree(pts_b)
     dists, _ = tree_b.query(pair.norm_a.vertices)
     return dists

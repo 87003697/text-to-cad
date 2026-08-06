@@ -65,34 +65,50 @@ a complex assembly may converge over several refinements.
    `.glb` is the mesh export consumed by step 4.
 4. **Measure similarity (numeric).** Run `$mesh-compare` (numeric CLI)
    with the input mesh and the reconstructed `<basename>.glb` (produced
-   at step 3) → `${EXP_DIR}/compare_metrics.json`. Interpret against
-   thresholds in `references/output-schemas.md`.
+   at step 3), using the fixed measurement protocol `--samples 50000
+   --seed 0 --voxblame-dir "${EXP_DIR}/voxblame" --step <N> --max-depth
+   8` → `${EXP_DIR}/compare_metrics.json`. Do not append or compute IoU.
+   Step N defaults to comparison with N-1; step 0 has no baseline.
+   Interpret numeric metrics against thresholds in
+   `references/output-schemas.md`.
 5. **Decide next action and commit (or discard) the iter.** Read
    `compare_metrics.json` (iter N, on disk) and, for N ≥ 1, iter N-1's
    metrics via `git show HEAD:compare_metrics.json` (HEAD is iter N-1's
    commit; iter N has not been committed yet). Apply exit logic:
 
-   - **Accept**: metrics within thresholds (chamfer_l2 and iou both
-     within `references/output-schemas.md` thresholds) →
+   - **Accept**: all three hard gates in
+     `references/output-schemas.md` pass: `chamfer`, both directional
+     `stats.p95_*` values, and the VoxBlame coarse-error gate →
      `git add . && git commit -m "iter <N>: chamfer=<X>, verdict=accept"`;
      iter N is `<final>`; exit loop to step 6.
-   - **Continue refine**: metrics exceed thresholds AND iter N
-     chamfer_l2 dropped by ≥ 10% vs iter N-1 (or N=0, no baseline) →
-     invoke `$mesh-compare` **heatmap** mode →
-     `${EXP_DIR}/previews/heatmap_iter_<N>.png`. `git add . && git
+   - **Continue refine**: any hard gate fails AND (N=0, or at least one
+     progress signal improved vs iter N-1: `chamfer` dropped by ≥ 10%,
+     `max(stats.p95_a2b, stats.p95_b2a)` dropped by ≥ 10%, or
+     `voxblame.coarsest_first_error_depth` moved deeper; null is best) →
+     consume at most the single `voxblame.next_action`. When it is non-null,
+     prioritize modifying that world-space bounds; when it is null, invoke
+     `$mesh-compare` **heatmap** mode as the fallback diagnosis →
+     `${EXP_DIR}/previews/heatmap_iter_<N>.png`. Do not load the full
+     VoxBlame report into the agent prompt. `git add . && git
      commit -m "iter <N>: chamfer=<X>, verdict=refine, diagnosis=<one-line>"`.
-     Use the JSON magnitude to prioritize the largest error mode and
-     the heatmap to locate which region diverged; adjust the modeling
-     source accordingly, increment N, loop back to step 3.
-   - **Plateau stop**: metrics exceed thresholds BUT chamfer_l2
-     dropped less than 10% vs iter N-1 → `git add . && git commit -m
+     Adjust only that one localized action (or the heatmap diagnosis), generate
+     a new candidate, increment N, and loop back to step 3 before requesting
+     another action.
+   - **Plateau stop**: a hard gate still fails, no progress signal above
+     improved enough, and the divergence condition below is false →
+     `git add . && git commit -m
      "iter <N>: chamfer=<X>, verdict=plateau"`; iter N is `<final>`;
      declare "converged below threshold; further refinement not
      improving" in step 7's `notes.md § Verification`; exit loop.
-   - **Divergence stop**: iter N chamfer_l2 WORSE than iter N-1 →
-     `git checkout .` to discard iter N's uncommitted changes; iter
-     N-1 (current HEAD) is `<final>`; declare "iter N regressed from
-     iter N-1" in step 7's `notes.md § Verification`; exit loop.
+   - **Divergence stop**: iter N `chamfer` and max directional p95 are
+     both WORSE than iter N-1, while the coarsest VoxBlame error did not
+     move deeper →
+     record iter N's measured values, then `git checkout .` to discard its
+     uncommitted modeling changes. Create an explicit empty terminal commit:
+     `git commit --allow-empty -m "iter <N>: chamfer=<X>,
+     verdict=plateau_via_divergence, kept=iter <N-1>"`. Iter N-1 remains
+     `<final>`; declare "iter N regressed from iter N-1" and both iterations'
+     key metrics in step 7's `notes.md § Verification`; exit loop.
 
 ### Finalization phase (once, on loop exit)
 
@@ -115,7 +131,8 @@ Include the following in the final response:
 - **Primary artifact**: the reconstructed `.step` / `.stp` (cad route)
   or `.implicit.js` (implicit route) path.
 - **Objective verification**: `compare_metrics.json` path AND the key
-  metric values (chamfer_l2, hausdorff, iou) inline.
+  metric values (`chamfer`, `hausdorff`, both directional p95 values,
+  and VoxBlame's coarsest error depth) inline.
 - **Visual verification** (authoritative): `${EXP_DIR}/previews/side_by_side_iter_<final>.png`
   path — the multi-view side-by-side rendered at the accepted iteration.
 - **Routing transparency**: `route.json` path.
@@ -137,7 +154,11 @@ If any artifact is unavailable (loop exited via plateau / divergence,
 - Follow all schemas in `references/output-schemas.md` verbatim: file naming, `route.json` (including `considered_alternative`), `notes.md` seven sections, and refinement thresholds. `compare_metrics.json` schema itself is defined in `$mesh-compare`'s `references/compare-metrics.md`.
 - Preserve structural features by count and class (repeated elements > 3, multi-wing/-wheel/-leg, hole patterns). Any omission or agent-initiated simplification must be declared in `## Omitted Surface Details`.
 - Run the measure step (workflow step 4) and record `compare_metrics.json`; do not invent numbers. If the loop exits via plateau or divergence (not accept), declare the reason and residual metrics in `notes.md § Verification`.
-- Commit at the end of each workflow phase in `${EXP_DIR}/`: one commit per Setup step (1, 2), one commit per reconstruction iteration (steps 3-5 together, at end of step 5's decision), one commit per Finalization step (6, 7). Divergence stop discards iter changes via `git checkout .` without committing. Commit message format per `references/output-schemas.md § Git commit conventions`.
+- Apply all three hard acceptance gates; a coarse VoxBlame error is a veto,
+  not merely a diagnosis. Fine VoxBlame errors at depth 4 or deeper do not
+  independently block acceptance. Hausdorff is warning-only and IoU is not
+  part of measurement or verdicts.
+- Commit at the end of each workflow phase in `${EXP_DIR}/`: one commit per Setup step (1, 2), one commit per reconstruction iteration (steps 3-5 together, at end of step 5's decision), one commit per Finalization step (6, 7). Divergence stop discards the regressed modeling changes via `git checkout .`, then creates the empty `plateau_via_divergence` audit commit required by `references/output-schemas.md § Git commit conventions`.
 - Report only checks that actually ran or are directly supported by tool output.
 
 ## Progressive references
