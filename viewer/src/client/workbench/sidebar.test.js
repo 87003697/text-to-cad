@@ -653,6 +653,17 @@ test("filenameLabelForEntry shows canonical step, stl, 3mf, glb, gcode, dxf, urd
     "sample_plate.dxf"
   );
 
+  // A `<name>.dxf.py` drawing-generator entry keeps a single .dxf suffix,
+  // not `<name>.dxf.dxf`.
+  assert.equal(
+    filenameLabelForEntry({
+      file: "drawings/gasket_plate.dxf.py",
+      kind: "dxf",
+      source: { format: "python", path: "drawings/gasket_plate.dxf.py" }
+    }),
+    "gasket_plate.dxf"
+  );
+
   assert.equal(
     filenameLabelForEntry({
       file: "fixtures/bracket.stl",
