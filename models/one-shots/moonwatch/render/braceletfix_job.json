@@ -1,0 +1,13 @@
+{
+  "input": "bracelet.step.py",
+  "mode": "view",
+  "appearance": "render/presentation_theme.json",
+  "display": { "mode": "rendered" },
+  "outputs": [
+    { "path": "/tmp/moonwatch/braceletfix_top.png", "camera": "top", "sizeProfile": "presentation-large" },
+    { "path": "/tmp/moonwatch/braceletfix_three_quarter.png", "camera": { "position": [130, -50, 70], "target": [0, -8, -10] }, "sizeProfile": "presentation-large" },
+    { "path": "/tmp/moonwatch/braceletfix_link_macro.png", "camera": { "position": [14, 22, 16], "target": [0, 31, 1.5] }, "sizeProfile": "presentation-large" },
+    { "path": "/tmp/moonwatch/braceletfix_clasp_macro.png", "camera": { "position": [45, -108, 12], "target": [0, -72, -16] }, "sizeProfile": "presentation-large" }
+  ],
+  "render": { "padding": 0.08 }
+}

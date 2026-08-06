@@ -8,8 +8,9 @@ bracelet resting over an invisible wrist form.
 
 Construction vocabulary (all rows share it):
 
-- A row is three separate bodies: two wider brushed outer links (STEEL)
-  and a narrower polished center link (STEEL_BRIGHT).
+- A row is three separate bodies: two wider brushed outer links
+  (BRACELET_OUTER) and a narrower polished center link (BRACELET_CENTER),
+  so the center row reads brighter than the brushed outers.
 - Row ends articulate on shared pin axes. At every joint the earlier
   row's OUTER links carry convex knuckle eyes (radius EYE_R, centered on
   the axis) and the later row's CENTER link carries the mating eye; the
@@ -22,9 +23,20 @@ Construction vocabulary (all rows share it):
 - Width tapers linearly BRACELET_WIDTH_AT_LUG -> BRACELET_WIDTH_AT_CLASP
   over each strap; every link is planned as a trapezoid so the taper is
   smooth link to link.
-- The outer surface of each row is trimmed by one large shared dome
-  cylinder (gently domed flat-link profile) and edges get safe_chamfer
-  ladders.
+- Every link carries a crowned cross-section baked into its planned
+  SECTION (never post-chamfered): the top is a shallow arc across the
+  link's own width (sagitta CROWN_SAG) flanked by crisp 45-degree bevel
+  facets of leg BEVEL; the bottom is a flatter dome (CROWN_SAG_BOT) with
+  the same bevels. The clasp outer plate, inner cover, and flip-lock bow
+  sweep the same crowned+beveled section along the clasp curvature arc.
+- Joint reveals: at every pin axis each link's crowned top is pulled back
+  with its own crisp 45-degree reveal facet (see REVEAL_EYE /
+  REVEAL_RECESS), so adjacent rows meet across a real shadowed top gap
+  instead of a colinear engraved-looking seam. Laterally, the bevels on
+  the center<->outer facing edges are widened (BEVEL_INNER) so the
+  side-to-side joints open into visible V-grooves. All reveals only
+  REMOVE material, so the 0.06 articulation clearance and the 0.12
+  lateral wall gap are untouched.
 """
 
 from __future__ import annotations
@@ -33,17 +45,22 @@ import math
 
 from build123d import (
     Box,
+    CenterArc,
     Circle,
     Color,
     Compound,
     Cylinder,
     Plane,
     Polygon,
+    Polyline,
     Pos,
     RectangleRounded,
     Rot,
+    ThreePointArc,
     extrude,
     loft,
+    make_face,
+    sweep,
 )
 
 import _spec as S
@@ -61,9 +78,16 @@ RECESS_R = EYE_R + JOINT_CLEARANCE  # concave mating cut radius
 PIN_R = 0.9                         # link pin body radius
 BORE_R = 0.95                       # knuckle bore radius (0.05 pin clearance)
 CENTER_FRAC = 0.34                  # center link share of the row width
-LINK_GAP = 0.12                     # lateral gap center <-> outer links
-DOME_R = 400.0                      # outer-surface dome cylinder radius
-BEVEL = 0.15                        # built-in 45-degree side-edge bevel
+LINK_GAP = 0.12                     # lateral WALL gap center <-> outer links
+BEVEL = 0.15                        # built-in 45-degree edge-break bevel leg
+BEVEL_INNER = 0.20                  # wider bevel on center<->outer facing edges
+# top-face joint reveals (edge setback from the pin axis, 45-degree facet
+# depth below the crown, flat deck run past the axis over the knuckle)
+REVEAL_EYE = (0.10, 0.30, 1.2)      # convex knuckle-eye link ends
+REVEAL_RECESS = (0.50, 0.18, 0.0)   # concave recess link ends (wedge only)
+CROWN_SAG = 0.30                    # top crown sagitta across each link width
+CROWN_SAG_BOT = 0.10                # gentler dome on the wrist side
+CROWN_APEX = T2 - 0.02              # crown apex 0.02 inside the eye envelope
 P = S.LINK_PITCH
 
 # first pin axis (end link -> row 1), watch frame, +Y strap
@@ -95,31 +119,69 @@ def _prism_x(profile2d, half_width):
     return extrude(Plane.YZ * profile2d, amount=half_width, both=True)
 
 
-def _plan_prism(xa0, xb0, xa1, xb1, y0, y1, bev=BEVEL):
-    """Tapered side-wall prism with built-in 45-degree bevels.
+def _crowned_face(xa, xb, z_top, z_bot, s_top, bev, s_bot=0.0):
+    """Closed crowned cross-section face in local (x, z) coordinates.
 
-    Lofted between two octagonal XZ sections (x in [xa, xb] at y0
-    linearly to y1): vertical side walls whose top/bottom edges carry a
-    `bev` chamfer as part of the section, replacing a 3D edge chamfer.
-    OCC's chamfer on the link perimeter is unusable here — the dome face
-    is tangent to the knuckle-eye cap cylinders, and depending on the
-    exact link width the chamfer silently fails, churns for minutes, or
-    segfaults (all three observed); the lofted section is deterministic.
+    Top: shallow arc (sagitta `s_top`, apex at `z_top`) flanked by crisp
+    45-degree bevel facets of leg `bev` meeting vertical side walls at
+    x = xa / xb; `bev` may be a (left, right) pair so the facing edges of
+    adjacent links carry a wider polished bevel than the outer flanks.
+    Bottom: flat at `z_bot` when `s_bot` == 0, else a gentler downward
+    arc with the same bevels. Baking the crown and bevels into the
+    SECTION replaces 3D edge chamfers entirely — OCC's chamfer on link
+    perimeters that touch dome/eye-cap tangent chains silently fails,
+    churns for minutes, or segfaults (see /BUGS.md).
+    """
+    ba, bb = bev if isinstance(bev, tuple) else (bev, bev)
+    xc = (xa + xb) / 2.0
+    top = ThreePointArc(
+        (xb - bb, z_top - s_top), (xc, z_top), (xa + ba, z_top - s_top)
+    )
+    if s_bot > 0.0:
+        left = Polyline(
+            (xa + ba, z_top - s_top),
+            (xa, z_top - s_top - ba),
+            (xa, z_bot + s_bot + ba),
+            (xa + ba, z_bot + s_bot),
+        )
+        bottom = ThreePointArc(
+            (xa + ba, z_bot + s_bot), (xc, z_bot), (xb - bb, z_bot + s_bot)
+        )
+        right = Polyline(
+            (xb - bb, z_bot + s_bot),
+            (xb, z_bot + s_bot + bb),
+            (xb, z_top - s_top - bb),
+            (xb - bb, z_top - s_top),
+        )
+    else:
+        left = Polyline(
+            (xa + ba, z_top - s_top), (xa, z_top - s_top - ba), (xa, z_bot)
+        )
+        bottom = Polyline((xa, z_bot), (xb, z_bot))
+        right = Polyline(
+            (xb, z_bot), (xb, z_top - s_top - bb), (xb - bb, z_top - s_top)
+        )
+    return make_face(top + left + bottom + right)
+
+
+def _plan_prism(xa0, xb0, xa1, xb1, y0, y1, bev=BEVEL):
+    """Tapered side-wall prism with a crowned, edge-broken section.
+
+    Lofted between two crowned XZ sections (x in [xa, xb] at y0 linearly
+    to y1): the top of each section is a shallow arc across the link's
+    own width (sagitta CROWN_SAG) flanked by 45-degree bevel facets, the
+    bottom a flatter dome (CROWN_SAG_BOT) with the same bevels. The apex
+    sits at CROWN_APEX, 0.02 below the stadium/eye-cap envelope, so the
+    knuckle-eye cylinders cross the crown transversally (no tangent
+    contact) and only a short realistic knuckle crest pokes through at
+    each pin axis. See `_crowned_face` for why no 3D chamfer is used.
     """
 
     def section(xa, xb, y):
-        pts = [
-            (xa + bev, -T2 - 0.12),
-            (xb - bev, -T2 - 0.12),
-            (xb, -(T2 - bev)),
-            (xb, T2 - bev),
-            (xb - bev, T2 + 0.12),
-            (xa + bev, T2 + 0.12),
-            (xa, T2 - bev),
-            (xa, -(T2 - bev)),
-        ]
         plane = Plane(origin=(0, y, 0), x_dir=(1, 0, 0), z_dir=(0, -1, 0))
-        return plane * Polygon(*pts, align=None)
+        return plane * _crowned_face(
+            xa, xb, CROWN_APEX, -CROWN_APEX, CROWN_SAG, bev, s_bot=CROWN_SAG_BOT
+        )
 
     return loft([section(xa0, xb0, y0), section(xa1, xb1, y1)], ruled=True)
 
@@ -129,9 +191,56 @@ def _xcyl(r, length, y, z, x_mid=0.0):
     return Pos(x_mid, y, z) * Rot(0, 90, 0) * Cylinder(r, length)
 
 
-def _dome(y_mid, top_z=T2, length=30.0):
-    """Large shared cylinder trimming the outer surface into a gentle dome."""
-    return Pos(0, y_mid, top_z - DOME_R) * Rot(90, 0, 0) * Cylinder(DOME_R, length)
+def _crown_cap(half_w, length, s_top=CROWN_SAG, bev=BEVEL):
+    """Crowning cap prism (intersect with it): crowned top arc with apex
+    at local z = 0 and 45-degree bevel facets at x = +/-half_w, side
+    walls dropping far below — bakes the crown + top edge breaks into a
+    body whose plan is not a `_plan_prism` trapezoid (end link)."""
+    plane = Plane(origin=(0, 0, 0), x_dir=(1, 0, 0), z_dir=(0, -1, 0))
+    face = plane * _crowned_face(-half_w, half_w, 0.0, -12.0, s_top, bev)
+    return extrude(face, amount=length, both=True)
+
+
+def _reveal_face(xa, xb, y, drop, bev):
+    """Loft section for `_reveal_cutter`: the region ABOVE the link's own
+    crown arc lowered by `drop`, up to z = +3, extended 0.3 past the plan
+    width on both sides so the cutter side walls sit in air."""
+    ba, bb = bev if isinstance(bev, tuple) else (bev, bev)
+    z_apex = CROWN_APEX - drop
+    z_sh = z_apex - CROWN_SAG
+    xc = (xa + xb) / 2.0
+    arc = ThreePointArc((xb - bb, z_sh), (xc, z_apex), (xa + ba, z_sh))
+    lid = Polyline(
+        (xa + ba, z_sh),
+        (xa - 0.3, z_sh),
+        (xa - 0.3, 3.0),
+        (xb + 0.3, 3.0),
+        (xb + 0.3, z_sh),
+        (xb - bb, z_sh),
+    )
+    plane = Plane(origin=(0, y, 0), x_dir=(1, 0, 0), z_dir=(0, -1, 0))
+    return plane * make_face(arc + lid)
+
+
+def _reveal_cutter(xa, xb, axis_y, direction, edge, depth, run, bev=BEVEL):
+    """Top-face joint reveal cutter about a pin axis.
+
+    Subtracting it pulls the link's crowned top back to a CRISP edge at
+    y = axis_y - direction*edge, drops a 45-degree reveal facet to `depth`
+    below the crown (following the crown arc across x, so the pullback is
+    uniform over the whole width), and with `run` > 0 keeps a flat deck at
+    that depth across the knuckle so the joint reads as a real shadowed
+    gap. direction = +1 for the far end (link body at y < axis), -1 for
+    the near end. Removal only: articulation clearances are untouched.
+    """
+    lead = 0.06  # start the loft slightly above the crown: transversal cut
+    y0 = axis_y - direction * (edge + lead)
+    stations = [(y0, -lead), (y0 + direction * (depth + lead), depth)]
+    if run > 0.0:
+        stations.append((y0 + direction * (depth + lead + run), depth))
+    return loft(
+        [_reveal_face(xa, xb, y, d, bev) for y, d in stations], ruled=True
+    )
 
 
 def _stadium_side(pitch):
@@ -159,18 +268,23 @@ def _chamfer_link(part):
 # Links, rows, pins
 # ---------------------------------------------------------------------------
 
-def _make_link(xn0, xn1, xf0, xf1, pitch, near, far, color):
+def _make_link(xn0, xn1, xf0, xf1, pitch, near, far, color, bev=BEVEL):
     """One link body in row-local frame (origin = near pin axis, +Y along
     the strap, z = 0 mid-thickness). `near`/`far` are 'eye' or 'recess'."""
     ya, yb = -EYE_R - 0.3, pitch + EYE_R + 0.3
     body = (
         _prism_x(_stadium_side(pitch), 12.0)
-        & _plan_prism(xn0, xn1, xf0, xf1, ya, yb)
-        & _dome(pitch / 2.0)
+        & _plan_prism(xn0, xn1, xf0, xf1, ya, yb, bev=bev)
     )
     tools = []
     tools.append(_xcyl(RECESS_R if near == "recess" else BORE_R, 30.0, 0.0, 0.0))
     tools.append(_xcyl(RECESS_R if far == "recess" else BORE_R, 30.0, pitch, 0.0))
+    for axis_y, direction, kind, x0, x1 in (
+        (0.0, -1.0, near, xn0, xn1),
+        (pitch, 1.0, far, xf0, xf1),
+    ):
+        e, d, r = REVEAL_EYE if kind == "eye" else REVEAL_RECESS
+        tools.append(_reveal_cutter(x0, x1, axis_y, direction, e, d, r, bev=bev))
     body = body - tools
     body = _chamfer_link(body)
     body.color = Color(*color)
@@ -195,28 +309,34 @@ def make_row(w0, w1, pitch=P, terminal=False):
     center = _make_link(
         -ch(ya), ch(ya), -ch(yb), ch(yb), pitch,
         near="eye", far=("eye" if terminal else "recess"),
-        color=S.STEEL_BRIGHT,
+        color=S.BRACELET_CENTER, bev=(BEVEL_INNER, BEVEL_INNER),
     )
     left = _make_link(
         -hw(ya), -(ch(ya) + LINK_GAP), -hw(yb), -(ch(yb) + LINK_GAP), pitch,
-        near="recess", far="eye", color=S.STEEL,
+        near="recess", far="eye", color=S.BRACELET_OUTER,
+        bev=(BEVEL, BEVEL_INNER),
     )
     right = _make_link(
         ch(ya) + LINK_GAP, hw(ya), ch(yb) + LINK_GAP, hw(yb), pitch,
-        near="recess", far="eye", color=S.STEEL,
+        near="recess", far="eye", color=S.BRACELET_OUTER,
+        bev=(BEVEL_INNER, BEVEL),
     )
     return left, center, right
 
 
 def make_pin(length):
-    """Link pin body along X, visible ends on the link flanks."""
+    """Link pin body along X, visible ends on the link flanks.
+
+    Ends are flat discs with only a 0.05 edge break, sitting near-flush
+    in the bore — a 0.18 end chamfer on the 0.9 radius read as a pointed
+    cone tip recessed in the bore at macro scale."""
     pin = Rot(0, 90, 0) * Cylinder(PIN_R, length)
     ends = [
         e
         for e in pin.edges()
         if (e.bounding_box().max.X - e.bounding_box().min.X) < 0.01
     ]
-    pin, _ = F.safe_chamfer(pin, ends, 0.18)
+    pin, _ = F.safe_chamfer(pin, ends, 0.05)
     pin.color = Color(*S.STEEL_DARK)
     return pin
 
@@ -260,33 +380,52 @@ def make_end_link():
     ) + Pos(jy, jz) * Circle(EYE_R)
 
     half_w = END_LINK_WIDTH / 2.0
-    body = _prism_x(prof, half_w) & _dome(22.8, top_z=top_nose, length=12.0)
+    # crown + 45-degree top edge bevels baked in, pitched to follow the
+    # nose->tail top slope so the crown runs the full link length
+    cap = (
+        Pos(0, nose_y, top_nose)
+        * Rot(-slope_deg, 0, 0)
+        * _crown_cap(half_w, 14.0)
+    )
+    body = _prism_x(prof, half_w) & cap
 
     cw1 = CENTER_FRAC * S.BRACELET_WIDTH_AT_LUG      # center width at joint 1
     slot_half = cw1 / 2.0 + LINK_GAP
 
     # groove pair continuing the three-link separation lines over the top
+    # (centered boxes: align=(None,None,None) is corner-origin, which left
+    # the old grooves floating above the surface and cutting nothing)
     def groove(x):
         y_mid = 22.9
         z_top = top_nose - slope * (y_mid - nose_y)
         return (
-            Pos(x, y_mid, z_top - 0.25 + 0.3)
+            Pos(x, y_mid, z_top)
             * Rot(-slope_deg, 0, 0)
-            * Box(0.34, 4.6, 0.6, align=(None, None, None))
+            * Box(0.50, 4.6, 0.6)
         )
 
     tools = [
         Cylinder(NOSE_HUG_R, 20.0, align=(None, None, None)),  # case-hugging nose arc
         _xcyl(S.SPRING_BAR_DIAMETER / 2.0 + 0.1, 30.0, S.SPRING_BAR_Y, S.SPRING_BAR_Z),
-        Pos(0, 23.05, 1.7) * Box(16.6, 3.7, 2.4, align=(None, None, None)),  # hollow back
+        Pos(0, 23.05, 1.7) * Box(16.6, 3.7, 2.4),    # hollow back (centered)
         _xcyl(RECESS_R, 2 * slot_half, jy, jz),      # center-link recess slot
         _xcyl(BORE_R, 30.0, jy, jz),                 # pin bore
         groove(cw1 / 2.0 + LINK_GAP / 2.0),
         groove(-(cw1 / 2.0 + LINK_GAP / 2.0)),
     ]
     body = body - tools
-    body, _ = F.safe_chamfer(body, body.edges(), 0.12)
-    body.color = Color(*S.STEEL)
+
+    # break remaining edges, but keep the profile-baked crown/bevel facet
+    # lines (along Y at the outer widths, near the top) crisp
+    def _keep(e):
+        bb = e.bounding_box()
+        on_bevel_band = (
+            bb.min.Z > 3.0 and min(abs(bb.min.X), abs(bb.max.X)) > 9.3
+        )
+        return not on_bevel_band
+
+    body, _ = F.safe_chamfer(body, [e for e in body.edges() if _keep(e)], 0.12)
+    body.color = Color(*S.BRACELET_OUTER)
     return body
 
 
@@ -309,6 +448,23 @@ def _band(r_out, r_in, phi0_deg, phi1_deg, half_w):
     return _prism_x(ann & wedge, half_w)
 
 
+def _crowned_band(r_out, r_in, phi0_deg, phi1_deg, half_w, s_top, bev):
+    """Curved crowned plate: the crowned + 45-degree-beveled cross-section
+    (see `_crowned_face`) swept along the clasp curvature arc, so the edge
+    breaks are baked into the profile instead of post-chamfered."""
+    zc = T2 - CLASP_R
+    t = r_out - r_in
+    r_mid = (r_out + r_in) / 2.0
+    path = Plane.YZ * CenterArc(
+        (0, zc), r_mid,
+        start_angle=90.0 - phi1_deg,
+        arc_size=phi1_deg - phi0_deg,
+    )
+    plane = Plane(origin=path @ 0, x_dir=(1, 0, 0), z_dir=path % 0)
+    section = plane * _crowned_face(-half_w, half_w, t / 2.0, -t / 2.0, s_top, bev)
+    return sweep(section, path=path)
+
+
 def _arc_point(phi_deg, radius):
     """(y, z) of a point on the clasp curvature arc (clasp-local)."""
     zc = T2 - CLASP_R
@@ -324,11 +480,15 @@ def make_clasp():
     brushed outer plate, chamfered edges only.
     """
     parts = []
-    # pusher axis sits 0.2 below the outer face: hole top = R-1.8+1.6 = R-0.2
-    y_push, z_push = _arc_point(26.0, CLASP_R - 1.8)
+    # pusher axis sits 0.55 below the outer face so the through-hole stays
+    # clear of the crown's edge bevels (crown drop at the flank = 0.45)
+    y_push, z_push = _arc_point(26.0, CLASP_R - 2.15)
 
-    # --- outer plate (brushed, curved) + center hinge tab -------------------
-    plate = _band(CLASP_R, CLASP_R - CLASP_PLATE_T, 1.0, 31.0, CLASP_HALF_W)
+    # --- outer plate (brushed, curved, crowned) + center hinge tab ----------
+    plate = _crowned_band(
+        CLASP_R, CLASP_R - CLASP_PLATE_T, 1.0, 31.0, CLASP_HALF_W,
+        CROWN_SAG, BEVEL,
+    )
     plan = extrude(
         Pos(0, 18.3) * RectangleRounded(S.CLASP_WIDTH, 35.0, 3.0),
         amount=40.0, both=True,
@@ -343,14 +503,21 @@ def make_clasp():
     )
     tab = _prism_x(tab_prof, 2.65) - _xcyl(BORE_R, 30.0, 0.0, 0.0)
     body = plate + tab
-    body, _ = F.safe_chamfer(body, body.edges(), 0.12)
-    body.color = Color(*S.STEEL)
+    # break only the short cut/end edges; the long swept facets already
+    # carry their profile-baked bevels and must stay crisp
+    short_edges = [
+        e
+        for e in body.edges()
+        if (e.bounding_box().max.Y - e.bounding_box().min.Y) < 12.0
+    ]
+    body, _ = F.safe_chamfer(body, short_edges, 0.12)
+    body.color = Color(*S.BRACELET_OUTER)
     parts.append((body, "clasp_body"))
 
     # --- inner cover plate (folded closed under the outer plate) ------------
-    cover = _band(CLASP_R - 2.3, CLASP_R - 3.5, 4.0, 29.5, 7.0)
-    cover, _ = F.safe_chamfer(cover, cover.edges(), 0.1)
-    cover.color = Color(*S.STEEL)
+    # crowned + beveled section baked in; no post chamfer
+    cover = _crowned_band(CLASP_R - 2.3, CLASP_R - 3.5, 4.0, 29.5, 7.0, 0.18, 0.10)
+    cover.color = Color(*S.BRACELET_OUTER)
     parts.append((cover, "clasp_cover"))
 
     # --- internal spring blade ----------------------------------------------
@@ -367,7 +534,7 @@ def make_clasp():
             if (e.bounding_box().max.X - e.bounding_box().min.X) < 0.01
         ]
         push, _ = F.safe_chamfer(push, ends, 0.3)
-        push.color = Color(*S.STEEL)
+        push.color = Color(*S.BRACELET_CENTER)
         parts.append((push, f"clasp_pusher_{side}"))
 
     # --- fold hinge knuckle --------------------------------------------------
@@ -383,14 +550,25 @@ def make_clasp():
     parts.append((knuckle, "clasp_hinge_knuckle"))
 
     # --- flip-lock bow (polished stirrup hugging the outer plate) -----------
-    bow = _band(CLASP_R + 0.66, CLASP_R + 0.06, 20.6, 30.4, 4.5)
+    # crowned + beveled section baked in; only the window-cut edges (all
+    # strictly inside the window plan) still need a break
+    bow = _crowned_band(CLASP_R + 0.66, CLASP_R + 0.06, 20.6, 30.4, 4.5, 0.15, 0.08)
     y_w, _zw = _arc_point(25.5, CLASP_R + 0.45)
     window = extrude(
         Pos(0, y_w) * RectangleRounded(7.0, 9.8, 2.2), amount=60.0, both=True
     )
     bow = bow - window
-    bow, _ = F.safe_chamfer(bow, bow.edges(), 0.08)
-    bow.color = Color(*S.STEEL_BRIGHT)
+
+    def _in_window(e):
+        bb = e.bounding_box()
+        return (
+            max(abs(bb.min.X), abs(bb.max.X)) < 3.8
+            and bb.min.Y > y_w - 5.3
+            and bb.max.Y < y_w + 5.3
+        )
+
+    bow, _ = F.safe_chamfer(bow, [e for e in bow.edges() if _in_window(e)], 0.08)
+    bow.color = Color(*S.BRACELET_CENTER)
     parts.append((bow, "clasp_flip_lock"))
 
     return parts
@@ -459,7 +637,7 @@ def _build_strap(side):
         parts.append((world(place * right), f"link_{side}_r{i + 1}_right"))
 
     for k, (jy, jz) in enumerate(joints, start=1):
-        pin = make_pin(_joint_width(k, n) - 0.12)
+        pin = make_pin(_joint_width(k, n) - 0.10)
         parts.append((world(Pos(0, jy, jz) * pin), f"pin_{side}_j{k}"))
 
     clasp_parts = []

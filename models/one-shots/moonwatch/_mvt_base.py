@@ -10,6 +10,9 @@ imports READ-ONLY to route its levers around these bridges.
 Bridge outlines are unions of circles `(x, y, r)` in movement XY, clipped to
 `*_CLIP_R` about the movement center. Anything inside an outline between
 `BRIDGE_SEAT_Z` and `BRIDGE_TOP_Z` (or the pallet/cock z-ranges) is occupied.
+Raised jewel bosses (r 1.5 at every `JEWEL_POSITIONS_UPPER` entry) rise a
+further 0.14 above `BRIDGE_TOP_Z`; the winding square + ratchet screw reach
+`RATCHET_SCREW_TOP_Z` over `BARREL_POS`.
 
 NOTE: `_finishing.py` helpers assume `align=(None,None,None)` centers
 primitives; it actually leaves the raw OCC datum (see /BUGS.md). This module
@@ -63,8 +66,7 @@ TRAIN_BRIDGE_OUTLINE = (
     (-2.5, -1.3, 1.4),
     (-5.0, -2.6, 1.9),
     (-6.8, -4.3, 1.6),
-    (-8.6, -6.0, 2.6),
-    (-7.6, -5.2, 1.6),
+    (-7.6, -5.2, 1.6),   # slim terminal finger: the escape wheel stays visible
     (-10.9, -3.2, 2.5),
     (-11.2, -1.8, 1.9),
     (-10.2, 0.0, 2.0),
@@ -75,7 +77,21 @@ TRAIN_BRIDGE_OUTLINE = (
 TRAIN_BRIDGE_CUTOUTS = ((-8.9, -2.4, 1.0),)
 #: Pallet bridge (z PALLET_BRIDGE_Z) and balance cock (z COCK_Z) outlines.
 PALLET_BRIDGE_OUTLINE = ((-4.9, -7.2, 1.15), (-5.4, -8.05, 0.9), (-5.9, -8.9, 1.05))
-BALANCE_COCK_OUTLINE = ((-0.4, -7.6, 2.1), (-0.6, -9.8, 1.55), (-0.85, -11.9, 1.9), (1.6, -9.3, 1.0))
+#: Balance cock: tapered finger — wide foot at the rim, waisted neck, round
+#: head over the shock setting, small stud-holder lobe on the +X side.
+BALANCE_COCK_OUTLINE = (
+    (-0.40, -7.60, 1.95),    # head over the shock setting
+    (-0.45, -8.15, 1.70),
+    (-0.50, -8.70, 1.48),
+    (-0.55, -9.20, 1.32),
+    (-0.60, -9.70, 1.22),    # waist
+    (-0.65, -10.20, 1.26),
+    (-0.70, -10.70, 1.38),
+    (-0.75, -11.15, 1.55),
+    (-0.80, -11.60, 1.78),
+    (-0.90, -12.30, 2.30),   # foot (clipped at COCK_CLIP_R)
+    (1.35, -9.15, 0.80),     # stud-holder lobe
+)
 BRIDGE_CLIP_R = 12.85
 COCK_CLIP_R = 13.2
 
@@ -105,10 +121,12 @@ JEWEL_POSITIONS_UPPER = {
     "pallet": S.PALLET_FORK_POS,
 }
 #: Ratchet / crown wheel occupy z [RATCHET_Z0, RATCHET_TOP_Z] above the
-#: barrel bridge; screw domes reach RATCHET_SCREW_TOP_Z.
+#: barrel bridge; the raised winding square + blued screw reach
+#: RATCHET_SCREW_TOP_Z (chronograph levers must clear a 1.3 mm radius there).
 RATCHET_Z0 = 2.88
 RATCHET_TOP_Z = 3.14
-RATCHET_SCREW_TOP_Z = 3.38
+RATCHET_SQUARE_TOP_Z = 3.46
+RATCHET_SCREW_TOP_Z = 3.58
 BALANCE_RIM_Z = (2.0, 2.45)              # balance rim ring z band (r 4.1..4.8)
 
 # --- internal z plan -------------------------------------------------------
@@ -217,25 +235,48 @@ def _window_cutter(od, frac):
 
 # ---------------------------------------------------------------------------
 # Bridge factory: extrude blob, anglage, circular stripes about (0,0),
-# jewel countersinks + polished screw sinks, all in batched booleans.
+# raised polished jewel bosses, jewel countersinks + polished screw sinks,
+# all in batched booleans.
 # ---------------------------------------------------------------------------
 
+_BOSS_R = 1.5                            # raised jewel boss radius
+_BOSS_H = 0.14                           # boss rise above the striped top
+# Circular-striping V grooves about (0,0): depth sets the facet slope that
+# makes the stripes READ under the presentation light (0.07 -> 4.3 deg was
+# invisible, 0.13 -> 8 deg still washed out; 0.22 -> ~13 deg reads like the
+# ratchet snailing at macro).
+_STRIPE_DEPTH = 0.22
+
+
 def _bridge(circles, clip_r, z0, z1, jewel_xy, screw_xy, cutouts=(),
-            extra_cuts=(), stripe=True):
+            extra_cuts=(), stripe=True, boss_xy=()):
     prof = _blob(circles, clip_r, cutouts)
     body = Pos(0, 0, z0) * extrude(prof, amount=z1 - z0)
     body, _ = F.anglage_top(body, S.ANGLAGE_WIDTH)
 
+    if boss_xy:
+        adds = []
+        for x, y in boss_xy:
+            adds.append(Pos(x, y, 0) * (
+                _cyl(_BOSS_R, z1 - z0, z0)
+                + Pos(0, 0, z1 + _BOSS_H / 2) * Cone(_BOSS_R, _BOSS_R - 0.14,
+                                                     _BOSS_H)))
+        body = body + adds
+
     cuts = list(extra_cuts)
     if stripe:
         rings = F.snailing_cutter(2 * clip_r + 2.0, 2.4, pitch=S.GENEVA_STRIPE_PITCH,
-                                  groove_depth=0.07, groove_width=1.85)
+                                  groove_depth=_STRIPE_DEPTH, groove_width=1.85)
         inset = _blob([(x, y, max(r - 0.4, 0.2)) for x, y, r in circles],
                       clip_r - 0.4)
+        for x, y in boss_xy:
+            inset = inset - Pos(x, y) * Circle(_BOSS_R + 0.05)
         band = Pos(0, 0, z1 - 0.3) * extrude(inset, amount=0.6)
         cuts.append((Pos(0, 0, z1) * rings) & band)
     for x, y in jewel_xy:
         cuts.append(Pos(x, y, z1) * _sink_tool())
+    for x, y in boss_xy:
+        cuts.append(Pos(x, y, z1 + _BOSS_H) * _sink_tool())
     for x, y in screw_xy:
         sink = _cyl(0.875, 0.30, -0.30) + Pos(0, 0, -0.12) * Cone(0.875, 1.05, 0.12)
         cuts.append(Pos(x, y, z1) * sink
@@ -255,19 +296,23 @@ def _plate_parts():
                  or abs(e.bounding_box().min.Z + S.PLATE_THICKNESS) < 1e-6]
     plate, _ = F.safe_chamfer(plate, rim_edges, 0.15)
 
+    bx, by = S.BARREL_POS
+    lx, ly = S.BALANCE_POS
+
     # bosses/pillars where bridges land (heights limited by wheel clearances)
+    # + a crescent platform under the balance-cock foot (relieved around the
+    # balance rim sweep so the wheel spins free below the cock)
+    foot_prof = ((Pos(-0.9, -12.3) * Circle(1.9)) & Circle(13.4)
+                 - Pos(lx, ly) * Circle(4.95))
     bosses = [
         Pos(-7.9, 9.9, 0) * _cyl(1.1, 1.38, 0),
         Pos(11.2, 3.4, 0) * _cyl(1.1, 1.80, 0),
         Pos(-11.4, -4.4, 0) * _cyl(1.0, 1.25, 0),
         Pos(-11.5, 2.2, 0) * _cyl(1.0, 1.26, 0),
         Pos(-5.9, -8.9, 0) * _cyl(0.8, 1.55, 0),
-        Pos(-0.83, -12.87, 0) * _cyl(0.45, 2.70, 0),
+        extrude(foot_prof, amount=2.70),
     ]
     plate = plate + bosses
-
-    bx, by = S.BARREL_POS
-    lx, ly = S.BALANCE_POS
     cuts = [
         Pos(bx, by, 0) * _cyl(6.4, 0.55, -0.35),          # barrel recess
         Pos(lx, ly, 0) * _cyl(5.3, 0.50, -0.30),          # balance recess
@@ -288,7 +333,7 @@ def _plate_parts():
     keep_out = [(x, y, r - 0.45) for x, y, r in
                 (BARREL_BRIDGE_OUTLINE + TRAIN_BRIDGE_OUTLINE
                  + PALLET_BRIDGE_OUTLINE + BALANCE_COCK_OUTLINE)]
-    keep_out += [(bx, by, 6.5), (lx, ly, 5.4)]
+    keep_out += [(bx, by, 6.5), (lx, ly, 5.4), (-0.9, -12.3, 2.4)]
     step, row = S.PERLAGE_DIAMETER + 0.05, (S.PERLAGE_DIAMETER + 0.05) * 0.8660
     n = int(12.6 / step) + 1
     for j in range(-n - 2, n + 3):
@@ -346,10 +391,20 @@ def _barrel_parts():
         coils = coils + _ring(r, r + 0.16, 0.6, 0.7)
     parts.append(_finish(Pos(bx, by, 0) * coils, "mainspring", S.STEEL_DARK))
 
+    # raised polished winding square: proud of the ratchet wheel with a
+    # chamfered crown so it reads clearly 3D under the blued ratchet screw
+    square = Pos(0, 0, (2.80 + RATCHET_SQUARE_TOP_Z) / 2.0) * Box(
+        1.42, 1.42, RATCHET_SQUARE_TOP_Z - 2.80)
+    square, _ = F.safe_chamfer(
+        square,
+        [e for e in square.edges()
+         if abs(e.bounding_box().max.Z - RATCHET_SQUARE_TOP_Z) < 1e-6
+         and abs(e.bounding_box().min.Z - RATCHET_SQUARE_TOP_Z) < 1e-6],
+        0.12)
     arbor = (
         _cyl(0.5, 1.75, -1.30)             # lower pivot into the plate
         + _cyl(0.675, 2.42, 0.45)          # body through drum/lid/bridge jewel
-        + Pos(0, 0, 2.995) * Box(1.5, 1.5, 0.25)
+        + square
     )
     parts.append(_finish(Pos(bx, by, 0) * arbor, "barrel_arbor", S.STEEL_DARK))
     return parts
@@ -404,66 +459,80 @@ def _bridge_parts():
         Pos(3.74, 3.87, 0) * _cyl(0.3, 1.2, z1 - 0.7),    # click screw bore
         Pos(5.3, 4.6, 0) * _cyl(0.26, 1.2, z1 - 0.7),     # click-spring screw bore
     ]
-    bb = _bridge(BARREL_BRIDGE_OUTLINE, BRIDGE_CLIP_R, z0, z1,
-                 [S.BARREL_POS],
+    zb = z1 + _BOSS_H                     # striped-top + raised jewel boss
+    bb = _bridge(BARREL_BRIDGE_OUTLINE, BRIDGE_CLIP_R, z0, z1, [],
                  [BRIDGE_SCREW_POSITIONS["barrel_bridge:left"],
                   BRIDGE_SCREW_POSITIONS["barrel_bridge:right"],
                   BRIDGE_SCREW_POSITIONS["barrel_bridge:top"]],
-                 extra_cuts=extra)
+                 extra_cuts=extra, boss_xy=[S.BARREL_POS])
     parts.append(_finish(bb, "barrel_bridge", S.COPPER_GOLD))
     ruby = F.jeweled_bearing(surface_z=0.0) - _cyl(0.725, 1.4, -1.2)
-    parts.append(_finish(Pos(bx, by, z1) * ruby, "bridge_jewel:barrel", S.RUBY))
+    parts.append(_finish(Pos(bx, by, zb) * ruby, "bridge_jewel:barrel", S.RUBY))
 
     # train bridge --------------------------------------------------------
     train_jewels = [S.CENTER_WHEEL_POS, S.THIRD_WHEEL_POS,
                     S.FOURTH_WHEEL_POS, S.ESCAPE_WHEEL_POS]
-    tb = _bridge(TRAIN_BRIDGE_OUTLINE, BRIDGE_CLIP_R, z0, z1, train_jewels,
+    tb = _bridge(TRAIN_BRIDGE_OUTLINE, BRIDGE_CLIP_R, z0, z1, [],
                  [BRIDGE_SCREW_POSITIONS["train_bridge:foot"],
                   BRIDGE_SCREW_POSITIONS["train_bridge:fourth"],
                   BRIDGE_SCREW_POSITIONS["train_bridge:center"]],
-                 cutouts=TRAIN_BRIDGE_CUTOUTS)
+                 cutouts=TRAIN_BRIDGE_CUTOUTS, boss_xy=train_jewels)
     parts.append(_finish(tb, "train_bridge", S.COPPER_GOLD))
     for (x, y), name in zip(train_jewels, ("center", "third", "fourth", "escape")):
-        parts.append(_finish(Pos(x, y, z1) * F.jeweled_bearing(),
+        parts.append(_finish(Pos(x, y, zb) * F.jeweled_bearing(),
                              f"bridge_jewel:{name}", S.RUBY))
-        chaton = Pos(x, y, 0) * _ring(0.78, 1.05, 0.07, z1 - S.JEWEL_COUNTERSINK_DEPTH - 0.02)
+        chaton = Pos(x, y, 0) * _ring(0.78, 1.05, 0.07, zb - S.JEWEL_COUNTERSINK_DEPTH - 0.02)
         parts.append(_finish(chaton, f"chaton:{name}", S.BRASS_MOVEMENT))
 
-    # bridge screws -------------------------------------------------------
-    for name, shank in (("barrel_bridge:left", 1.2), ("barrel_bridge:right", 1.2),
-                        ("barrel_bridge:top", 0.75), ("train_bridge:foot", 1.2),
-                        ("train_bridge:fourth", 1.2), ("train_bridge:center", 0.75)):
+    # bridge screws (shanks stay inside the bridge bore: longer ones hung
+    # visibly in the open gap between the low plate bosses and the seat)
+    for name, shank in (("barrel_bridge:left", 0.9), ("barrel_bridge:right", 0.9),
+                        ("barrel_bridge:top", 0.75), ("train_bridge:foot", 0.9),
+                        ("train_bridge:fourth", 0.9), ("train_bridge:center", 0.75)):
         x, y = BRIDGE_SCREW_POSITIONS[name]
         parts.append(_finish(_place_screw(x, y, z1, shank=shank),
                              f"screw:{name}", S.BLUED))
 
-    # ratchet wheel + screw ----------------------------------------------
+    # ratchet wheel + raised winding square + blued screw ------------------
     ratchet = F.train_wheel(48, S.RATCHET_WHEEL_DIAMETER, web_thickness=0.26,
                             spoke_count=0, tooth_depth_frac=0.06)
-    ratchet = ratchet - [Pos(0, 0, 0.13) * F.snailing_cutter(9.2, 2.2),
-                         Box(1.56, 1.56, 1.0)]
+    ratchet = ratchet - Pos(0, 0, 0.13) * F.snailing_cutter(9.2, 2.2)
     beak_gap = _ang(S.BARREL_POS, (2.52, 4.9)) + 3.75
     ratchet = Pos(bx, by, (RATCHET_Z0 + RATCHET_TOP_Z) / 2.0) * Rot(0, 0, beak_gap) * ratchet
+    # square hole cut AFTER the mesh-phasing rotation so it stays aligned
+    # with the arbor's raised winding square (they clashed when the hole
+    # rotated with the wheel)
+    ratchet = ratchet - Pos(bx, by, 3.0) * Box(1.52, 1.52, 1.0)
     parts.append(_finish(ratchet, "ratchet_wheel", S.GILT))
     parts.append(_finish(
-        _place_screw(bx, by, RATCHET_TOP_Z, proud=0.0, head_d=2.2, hh=0.22,
-                     shank=0.01, slot_w=0.30),
+        _place_screw(bx, by, RATCHET_SQUARE_TOP_Z, proud=0.04, head_d=1.3,
+                     hh=0.34, shank=1.4, slot_w=0.30),
         "screw:ratchet", S.BLUED))
 
-    # crown wheel + polished steel core screw -----------------------------
+    # crown wheel + recessed polished steel core --------------------------
     crown = F.train_wheel(30, S.CROWN_WHEEL_DIAMETER, web_thickness=0.24,
                           spoke_count=0, tooth_depth_frac=0.08)
-    crown = crown - [Pos(0, 0, 0.12) * F.snailing_cutter(5.6, 1.8), _cyl(0.62, 1.0, -0.5)]
+    crown = crown - [Pos(0, 0, 0.12) * F.snailing_cutter(5.6, 1.8),
+                     _cyl(0.62, 1.0, -0.5),
+                     _cyl(1.35, 0.4, 0.02)]     # core recess in the snailed top
     parts.append(_finish(Pos(cwx, cwy, 2.99) * crown, "crown_wheel", S.GILT))
     parts.append(_finish(
-        _place_screw(cwx, cwy, 3.11, proud=0.0, head_d=2.0, hh=0.2, shank=0.55,
-                     slot_w=0.30, color=S.STEEL_BRIGHT),
-        "screw:crown_wheel", S.STEEL_BRIGHT))
+        _place_screw(cwx, cwy, 3.11, proud=0.08, head_d=2.2, hh=0.18, shank=0.9,
+                     slot_w=0.34, color=S.STEEL_BRIGHT),
+        "crown_wheel_core", S.STEEL_BRIGHT))
 
     # click + click spring (polished steel, engaging the ratchet) ---------
-    click_prof = _blob(((3.74, 3.87, 0.52), (3.09, 4.42, 0.34), (2.78, 4.67, 0.30),
-                        (2.52, 4.9, 0.22), (4.4, 3.35, 0.38), (4.85, 3.05, 0.30)),
-                       14.0)
+    # smooth polished lever: dense disk chain beak -> pivot -> tail so the
+    # envelope reads as one continuous curve (sparse chains scallop)
+    click_pts = []
+    for (xa, ya, ra), (xb, yb, rb), n in (((2.52, 4.90, 0.22), (3.74, 3.87, 0.55), 12),
+                                          ((3.74, 3.87, 0.55), (4.75, 3.12, 0.32), 10)):
+        for i in range(n + 1):
+            t = i / n
+            tt = t * t * (3 - 2 * t)      # smoothstep radius blend
+            click_pts.append((xa + (xb - xa) * t, ya + (yb - ya) * t,
+                              ra + (rb - ra) * tt))
+    click_prof = _blob(click_pts, 14.0)
     click = Pos(0, 0, 2.9) * extrude(click_prof, amount=0.16)
     click, _ = F.anglage_top(click, 0.06)
     click = click - Pos(3.74, 3.87, 0) * _cyl(0.3, 1.0, 2.6)
@@ -472,21 +541,17 @@ def _bridge_parts():
         _place_screw(3.74, 3.87, 3.06, proud=0.0, head_d=1.0, hh=0.24, shank=0.7),
         "screw:click", S.BLUED))
 
+    # blade drawn as a dense chain of overlapping disks along the Bezier
+    # (an offset-strip Polygon self-crossed at the tight bend; validate
+    # flagged it selfIntersecting)
     p0, p1, p2 = (5.2, 4.3), (5.5, 3.7), (4.98, 3.28)
-    pts, nrm = [], []
-    for i in range(13):
-        t = i / 12.0
+    blade = []
+    for i in range(25):
+        t = i / 24.0
         x = (1 - t) ** 2 * p0[0] + 2 * (1 - t) * t * p1[0] + t ** 2 * p2[0]
         y = (1 - t) ** 2 * p0[1] + 2 * (1 - t) * t * p1[1] + t ** 2 * p2[1]
-        dx = 2 * (1 - t) * (p1[0] - p0[0]) + 2 * t * (p2[0] - p1[0])
-        dy = 2 * (1 - t) * (p1[1] - p0[1]) + 2 * t * (p2[1] - p1[1])
-        n = math.hypot(dx, dy)
-        pts.append((x, y))
-        nrm.append((-dy / n, dx / n))
-    strip = [(x + 0.08 * nx, y + 0.08 * ny) for (x, y), (nx, ny) in zip(pts, nrm)]
-    strip += [(x - 0.08 * nx, y - 0.08 * ny) for (x, y), (nx, ny)
-              in zip(reversed(pts), reversed(nrm))]
-    spring_prof = Polygon(*strip, align=None) + Pos(5.3, 4.6) * Circle(0.4)
+        blade.append((x, y, 0.09))
+    spring_prof = _blob(blade, 14.0) + Pos(5.3, 4.6) * Circle(0.4)
     spring = Pos(0, 0, 2.9) * extrude(spring_prof, amount=0.14)
     spring = spring - Pos(5.3, 4.6, 0) * _cyl(0.26, 1.0, 2.6)
     parts.append(_finish(spring, "click_spring", S.STEEL_LEVER))
@@ -501,7 +566,10 @@ def _bridge_parts():
 # ---------------------------------------------------------------------------
 
 def _escape_wheel():
-    tooth = Polygon((1.70, 0.30), (1.70, -0.05), (2.30, -0.45), (2.62, -0.55),
+    # inner chord sunk to r1.55 so every tooth overlaps the rim band (a
+    # chord at exactly r1.70 touched the rim at ONE point -> 15 disjoint
+    # tooth solids, caught by inspect validate)
+    tooth = Polygon((1.55, 0.30), (1.55, -0.05), (2.30, -0.45), (2.62, -0.55),
                     (2.70, -0.30), (2.48, -0.12), (2.02, 0.24), align=None)
     prof = Circle(1.70) + [Rot(0, 0, 360.0 * k / S.ESCAPE_WHEEL_TEETH) * tooth
                            for k in range(S.ESCAPE_WHEEL_TEETH)]
@@ -599,12 +667,12 @@ def _balance_parts():
     slits = [Rot(0, 0, 120 + 180 * k) * Pos(4.45, 0, 2.225) * Box(0.9, 0.12, 0.6)
              for k in range(2)]
     wheel = (rim + arms + hub) - (slits + [_cyl(0.28, 1.0, 1.8)])
-    parts.append(_finish(Pos(lx, ly, 0) * wheel, "balance_wheel", S.STEEL_DARK))
+    parts.append(_finish(Pos(lx, ly, 0) * wheel, "balance_wheel", S.BRASS_MOVEMENT))
 
     for k in range(16):
         a = 11.25 + k * 22.5
-        s = (Pos(4.78, 0, 2.225) * Rot(0, 90, 0) * Cylinder(0.17, 0.5)
-             + Pos(5.06, 0, 2.225) * Rot(0, 90, 0) * Cylinder(0.21, 0.12))
+        s = (Pos(4.85, 0, 2.225) * Rot(0, 90, 0) * Cylinder(0.16, 0.30)
+             + Pos(5.03, 0, 2.225) * Rot(0, 90, 0) * Cylinder(0.22, 0.14))
         s = Pos(lx, ly, 0) * Rot(0, 0, a) * s
         parts.append(_finish(s, f"timing_screw:{k}", S.BRASS_MOVEMENT))
 
@@ -637,19 +705,20 @@ def _balance_parts():
     spring = Pos(lx, ly, 2.52) * extrude(poly, amount=0.12)
     parts.append(_finish(spring, "hairspring", S.STEEL_DARK))
 
-    # stud + holder hanging from the cock underside at the spring's outer end
+    # stud: steel pin dropping from the stud holder to the spring's outer end
+    cz0, cz1 = COCK_Z
     sx = lx + 2.85 * math.cos(math.radians(-40))
     sy = ly + 2.85 * math.sin(math.radians(-40))
-    stud = Pos(sx, sy, 0) * (_cyl(0.3, 0.22, 2.48) + _cyl(0.12, 0.14, 2.34))
+    stud = Pos(sx, sy, 0) * (_cyl(0.15, cz1 - 2.34, 2.34) + _cyl(0.22, 0.20, 2.42))
     parts.append(_finish(stud, "hairspring_stud", S.STEEL_DARK))
 
     # balance cock ---------------------------------------------------------
-    cz0, cz1 = COCK_Z
     bootx = lx + 2.85 * math.cos(math.radians(-95))
     booty = ly + 2.85 * math.sin(math.radians(-95))
     extra = [
-        Pos(lx, ly, 0) * _cyl(0.95, 1.2, cz0 - 0.3),        # shock-setting bore
+        Pos(lx, ly, 0) * _cyl(1.28, 1.2, cz0 - 0.3),        # shock-setting seat
         Pos(bootx, booty, 0) * _cyl(0.17, 1.2, cz0 - 0.3),  # regulator boot bore
+        Pos(sx, sy, 0) * _cyl(0.18, 1.2, cz0 - 0.3),        # stud bore
     ]
     cock = _bridge(BALANCE_COCK_OUTLINE, COCK_CLIP_R, cz0, cz1, [],
                    [BRIDGE_SCREW_POSITIONS["balance_cock"]], extra_cuts=extra)
@@ -657,6 +726,18 @@ def _balance_parts():
     x, y = BRIDGE_SCREW_POSITIONS["balance_cock"]
     parts.append(_finish(_place_screw(x, y, cz1, shank=0.8),
                          "screw:balance_cock", S.BLUED))
+
+    # stud holder: small polished plate on the cock's side lobe, clamping
+    # the stud with its own tiny blued screw
+    holder2d = _blob(((sx, sy, 0.45), (1.45, -9.20, 0.42), (1.12, -8.98, 0.40)), 14.0)
+    holder = Pos(0, 0, cz1) * extrude(holder2d, amount=0.12)
+    holder, _ = F.anglage_top(holder, 0.05)
+    holder = holder - Pos(1.12, -8.98, 0) * _cyl(0.14, 1.0, cz1 - 0.4)
+    parts.append(_finish(holder, "stud_holder", S.STEEL_LEVER))
+    parts.append(_finish(
+        _place_screw(1.12, -8.98, cz1 + 0.12, proud=0.02, head_d=0.8, hh=0.2,
+                     shank=0.5),
+        "screw:stud_holder", S.BLUED))
 
     # shock setting: polished bezel, gold chaton, cap jewel, lyre spring
     bezel = Pos(lx, ly, 0) * (_ring(0.85, 1.25, 0.66, 2.72)
@@ -674,15 +755,17 @@ def _balance_parts():
     lyre = Pos(lx, ly, 3.30) * extrude(ring2d + feet, amount=0.08)
     parts.append(_finish(lyre, "shock_lyre_spring", S.STEEL_BRIGHT))
 
-    # regulator: polished ring + index tail + boot through the cock
+    # regulator: black-polished ring + tapered index lever + boot through
+    # the cock (curb pins gripping the hairspring's outer coil)
     tail_a = -95.0
-    reg2d = Pos(lx, ly) * (Circle(1.65) - Circle(1.33))
-    tail = Polygon((-0.21, 1.6), (0.21, 1.6), (0.12, 3.9), (-0.12, 3.9), align=None)
-    tip = Polygon((-0.08, 3.9), (0.08, 3.9), (0.0, 4.4), align=None)
+    reg2d = Pos(lx, ly) * (Circle(1.72) - Circle(1.36))
+    tail = Polygon((-0.27, 1.42), (0.27, 1.42), (0.10, 4.05), (-0.10, 4.05),
+                   align=None)
+    tip = Polygon((-0.10, 4.05), (0.10, 4.05), (0.0, 4.55), align=None)
     reg2d = reg2d + Pos(lx, ly) * Rot(0, 0, tail_a - 90) * (tail + tip)
-    reg = Pos(0, 0, cz1) * extrude(reg2d, amount=0.07)
+    reg = Pos(0, 0, cz1 + 0.01) * extrude(reg2d, amount=0.08)
     boot = Pos(bootx, booty, 0) * _cyl(0.14, 0.82, 2.50)
-    parts.append(_finish(reg + boot, "regulator", S.STEEL_LEVER))
+    parts.append(_finish(reg + boot, "regulator", S.STEEL_DARK))
     return parts
 
 

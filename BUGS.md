@@ -202,3 +202,52 @@ helper output) without editing `_finishing.py`. Proper fix: change
 `_finishing.py` to use default (centered) alignment and re-verify the
 sampler; other movement builders should audit any direct use of these
 helpers at documented datums.
+
+## `_bracelet.py` end link hit the same `align=(None,None,None)` corner-origin footgun (silent, shipped)
+
+- **Where found:** `models/one-shots/moonwatch/_bracelet.py` `make_end_link`
+  (2026-08-06, while giving the bracelet links crowned sections). Same root
+  cause as the `_finishing.py` entry above: `align=(None, None, None)` is the
+  RAW OCC datum (Box corner at origin), not "centered".
+- **Symptom:** two silent geometry defects in the shipped bracelet model, both
+  probe-confirmed on the pre-fix source:
+  - the "hollow back" cutter `Pos(0, 23.05, 1.7) * Box(16.6, 3.7, 2.4,
+    align=(None,None,None))` spanned x [0, 16.6], z [1.7, 4.1] — it hollowed
+    ONLY the +X half and cut up through the top surface (material probe at
+    (+4, 24.5, 3.0) = empty, (-4, 24.5, 3.0) = solid);
+  - the groove-pair cutters sat with their corner ON the top surface and
+    extended upward, so the three-link separation grooves removed nothing.
+- **Fix:** switched both cutters to default (centered) alignment in the same
+  change that crowned the links. The class of bug is already documented above;
+  this entry records a second independent module that shipped with it —
+  auditing other `align=(None,None,None)` uses across `models/` is warranted.
+- **Blocked:** no. **Fixed:** in `_bracelet.py` (this entry's instance only).
+
+## build123d 2D sketch algebra: pairwise `+` decays, CW polygons shatter the fuse, and `ShapeList & Sketch` is silently EMPTY (keyless builder)
+
+- **Where found:** `models/one-shots/moonwatch/_mvt_keyless.py` lever/spring
+  profiles (circle+quad capsule chains for the setting lever, yoke, setting
+  lever spring).
+- **Symptoms (all silent, exit 0, `inspect validate` clean):** parts extruded
+  to NOTHING (a lever reduced to its pin+boss debris), or to 5-8 disjoint
+  solid piles, or extruded DOWNWARD from the sketch plane. Three stacked
+  causes, verified empirically:
+  1. Pairwise 2D algebra decays: `Circle + Circle` returns a fused `Face`
+     (not `Sketch`), and the NEXT `Face + Polygon` falls into raw shape fuse
+     that returns an unregularized face pile; once any step yields a
+     `ShapeList`, later `+` is Python list concatenation, not geometry.
+  2. A CLOCKWISE-wound `Polygon(..., align=None)` fuses as a reversed face:
+     the union "succeeds" but shatters into +Z/-Z mixed-normal fragments,
+     and `extrude()` of that runs along the reversed normals (solids appear
+     mirrored below the plane) as disconnected pieces.
+  3. `ShapeList & Circle` (intersection used as a regularizing clip) returns
+     an EMPTY ShapeList with no error, so the following extrude quietly
+     produces a zero-volume part.
+- **Workaround (adopted, same as `F.train_wheel`'s internal pattern):** build
+  every 2D profile as ONE multi-operand list fuse `first + [rest...]` with all
+  polygons wound CCW, and apply the `& Circle(clip)` regularizer exactly once,
+  LAST. Never accumulate 2D unions pairwise, never `+` two clipped results.
+- **Suggestion:** a note in `references/build123d-modeling.md` next to the
+  existing multi-tool boolean guidance; possibly a lint for `Polygon` winding
+  in helpers.
+- **Blocked:** ~30 min across two debug rounds. **Fixed:** in model source.

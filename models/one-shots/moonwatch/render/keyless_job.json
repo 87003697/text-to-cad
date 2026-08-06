@@ -1,0 +1,13 @@
+{
+  "input": "keyless_works.step.py",
+  "mode": "view",
+  "appearance": "render/presentation_theme.json",
+  "display": { "mode": "rendered" },
+  "outputs": [
+    { "path": "/tmp/moonwatch/keyless_dial_side.png", "camera": { "position": [4, 0, -30], "target": [4, 0, -2] }, "sizeProfile": "presentation-large" },
+    { "path": "/tmp/moonwatch/keyless_stem_macro.png", "camera": { "position": [20, -9, -9], "target": [10.8, 0, -1.2] }, "sizeProfile": "presentation-large" },
+    { "path": "/tmp/moonwatch/keyless_motion_macro.png", "camera": { "position": [7, -9, -11], "target": [1.2, -0.7, -2.4] }, "sizeProfile": "presentation-large" },
+    { "path": "/tmp/moonwatch/keyless_levers_macro.png", "camera": { "position": [16, -12, -10], "target": [10.5, -2.5, -1.9] }, "sizeProfile": "presentation-large" }
+  ],
+  "render": { "padding": 0.08 }
+}
