@@ -179,7 +179,7 @@ class SnapshotCliTests(unittest.TestCase):
                 "--output",
                 "tmp/cap.png",
                 "--display",
-                '{"projection":"perspective","mode":"rendered","exploded":{"enabled":true,"axis":"radial","spacing":1.6}}',
+                '{"projection":"perspective","mode":"rendered","exploded":{"enabled":true,"amount":0.7}}',
             ]
         )
         job = load_job_from_options(options, stdin=_TtyStringIO(), cwd=Path.cwd())
@@ -188,7 +188,7 @@ class SnapshotCliTests(unittest.TestCase):
             {
                 "projection": "perspective",
                 "mode": "rendered",
-                "exploded": {"enabled": True, "axis": "radial", "spacing": 1.6},
+                "exploded": {"enabled": True, "amount": 0.7},
             },
         )
 
@@ -213,17 +213,22 @@ class SnapshotCliTests(unittest.TestCase):
         with self.assertRaisesRegex(SnapshotError, "--display mode must be one of"):
             self._display_job('{"mode":"shadedd"}')
 
-    def test_display_json_rejects_bad_exploded_axis_value(self) -> None:
-        with self.assertRaisesRegex(SnapshotError, "exploded.axis must be one of x, y, z, radial"):
-            self._display_job('{"exploded":{"axis":"q"}}')
+    def test_display_json_rejects_retired_exploded_keys(self) -> None:
+        # The exploded view is enabled + amount only; retired step-document/auto-hint
+        # fields would silently no-op in the renderer, so the CLI rejects them loudly.
+        with self.assertRaisesRegex(SnapshotError, "exploded supports only enabled and amount"):
+            self._display_job('{"exploded":{"axis":"z"}}')
+        with self.assertRaisesRegex(SnapshotError, "exploded supports only enabled and amount"):
+            self._display_job('{"exploded":{"enabled":true,"auto":{"mode":"radial"}}}')
+        with self.assertRaisesRegex(SnapshotError, "exploded supports only enabled and amount"):
+            self._display_job('{"exploded":{"enabled":true,"steps":[]}}')
 
     def test_display_json_accepts_valid_closed_set_values(self) -> None:
         self.assertEqual(self._display_job('{"projection":"orthographic"}')["display"], {"projection": "orthographic"})
         self.assertEqual(self._display_job('{"mode":"shaded"}')["display"], {"mode": "shaded"})
-        # A leading '-' axis (e.g. reverse direction) stays valid.
         self.assertEqual(
-            self._display_job('{"exploded":{"axis":"-z"}}')["display"],
-            {"exploded": {"axis": "-z"}},
+            self._display_job('{"exploded":{"enabled":true,"amount":1}}')["display"],
+            {"exploded": {"enabled": True, "amount": 1}},
         )
 
     def test_display_json_treats_empty_string_values_as_unset(self) -> None:
@@ -231,47 +236,6 @@ class SnapshotCliTests(unittest.TestCase):
         # validation must not false-reject empty strings an agent emits for unset fields.
         self.assertEqual(self._display_job('{"projection":""}')["display"], {"projection": ""})
         self.assertEqual(self._display_job('{"mode":""}')["display"], {"mode": ""})
-        self.assertEqual(self._display_job('{"exploded":{"axis":""}}')["display"], {"exploded": {"axis": ""}})
-
-    def test_display_json_rejects_bad_exploded_auto_mode_value(self) -> None:
-        # auto.mode is the field the renderer actually reads for auto-explode; a typo there
-        # silently renders the auto-picked axis (the exact wrong-image case the guard prevents).
-        with self.assertRaisesRegex(SnapshotError, "exploded.auto.mode must be one of auto, x, y, z, radial"):
-            self._display_job('{"exploded":{"auto":{"mode":"radal"}}}')
-        # A '-'-prefixed x/y/z is not a valid auto.mode (the renderer defaults it to "auto").
-        with self.assertRaisesRegex(SnapshotError, "exploded.auto.mode must be one of"):
-            self._display_job('{"exploded":{"auto":{"mode":"-z"}}}')
-
-    def test_display_json_accepts_valid_exploded_auto_mode(self) -> None:
-        for mode in ("auto", "x", "y", "z", "radial"):
-            self.assertEqual(
-                self._display_job('{"exploded":{"auto":{"mode":"%s"}}}' % mode)["display"],
-                {"exploded": {"auto": {"mode": mode}}},
-            )
-        # auto.axis is an accepted alias for auto.mode; an empty value is treated as unset.
-        self.assertEqual(
-            self._display_job('{"exploded":{"auto":{"axis":"radial"}}}')["display"],
-            {"exploded": {"auto": {"axis": "radial"}}},
-        )
-        self.assertEqual(
-            self._display_job('{"exploded":{"auto":{"mode":""}}}')["display"],
-            {"exploded": {"auto": {"mode": ""}}},
-        )
-
-    def test_exploded_axis_shorthand_translates_to_auto_mode(self) -> None:
-        # The CLI's top-level exploded.axis shorthand must reach the renderer as auto.mode
-        # (normalizeExplodedViewDocument drops a top-level axis), else it silently no-ops.
-        job = {"display": {"exploded": {"enabled": True, "axis": "z"}}}
-        snapshot_main.normalize_exploded_axis_shorthand(job)
-        self.assertEqual(job["display"]["exploded"]["auto"], {"mode": "z"})
-        # An explicit auto.mode wins over the shorthand (never silently overridden).
-        job_explicit = {"display": {"exploded": {"enabled": True, "axis": "z", "auto": {"mode": "radial"}}}}
-        snapshot_main.normalize_exploded_axis_shorthand(job_explicit)
-        self.assertEqual(job_explicit["display"]["exploded"]["auto"], {"mode": "radial"})
-        # No shorthand -> no spurious auto hint injected.
-        job_none = {"display": {"exploded": {"enabled": True}}}
-        snapshot_main.normalize_exploded_axis_shorthand(job_none)
-        self.assertNotIn("auto", job_none["display"]["exploded"])
 
     def test_edge_settings_belong_to_display_json(self) -> None:
         options = parse_snapshot_args(
@@ -906,7 +870,7 @@ class SnapshotCliTests(unittest.TestCase):
                 resolve_render_job_packet(
                     {
                         "input": "models/widget.glb",
-                        "display": {"exploded": {"enabled": True, "axis": "z"}},
+                        "display": {"exploded": {"enabled": True, "amount": 1}},
                         "outputs": [{"path": "tmp/iso.png", "camera": "iso"}],
                     },
                     cwd=root,
@@ -1060,7 +1024,7 @@ class SnapshotCliTests(unittest.TestCase):
                 resolve_render_job_packet({**base, "display": {"mode": "wireframe"}}, cwd=root)
             with self.assertRaisesRegex(SnapshotError, "exploded view requires STEP assembly"):
                 resolve_render_job_packet(
-                    {**base, "display": {"exploded": {"enabled": True, "axis": "z"}}}, cwd=root
+                    {**base, "display": {"exploded": {"enabled": True, "amount": 1}}}, cwd=root
                 )
             # stepParameters and section mode are STEP-only for implicit inputs too.
             with self.assertRaisesRegex(SnapshotError, "stepParameters require a STEP model"):

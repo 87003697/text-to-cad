@@ -132,9 +132,8 @@ allowed.
 
 - Units live inside the value string: `52.0 mm`, `1.00x`, `45°`, `78%`, `1.2s`.
 - Degrees are always `°`, never `deg`.
-- Optional min/max micro-labels under the track (10px muted) are allowed when
-  bounds are model-dependent (e.g. clip position); omit them for fixed 0–1
-  ranges.
+- No min/max micro-labels under the track: the value box already carries the
+  number, and a second text row under the slider breaks the row rhythm.
 
 ### 3. Block row — `FileSheetControlRow`
 

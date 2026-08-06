@@ -100,11 +100,9 @@ import {
 import {
   applyExplodedViewProgress,
   clearExplodedViewRecords,
-  compileExplodedView,
-  easeExplodedViewProgress,
-  explodedViewTrailSegments
-} from "cadjs/lib/viewer/explodedViewSteps";
-import { generateExplodedViewDocument } from "cadjs/lib/viewer/explodedView";
+  computeExplodedViewLayout,
+  easeExplodedViewProgress
+} from "cadjs/lib/viewer/explodedView";
 import {
   applyDisplayRecordTransform,
   applyRuntimeModelBounds,
@@ -347,96 +345,6 @@ function displayRecordExplodedViewTranslation(THREE, record) {
     toNumber(elements[13]),
     toNumber(elements[14])
   );
-}
-
-// Resolve the exploded-view document to render: the authored step list, or a
-// document generated from the auto-explode hints when no steps were authored.
-function resolveViewerExplodeDocument(THREE, settings, records, bounds) {
-  if (settings?.steps?.length) {
-    return settings;
-  }
-  return generateExplodedViewDocument(THREE, records, bounds, settings?.auto, {
-    enabled: settings?.enabled,
-    amount: settings?.amount,
-    order: settings?.order,
-    trails: settings?.trails
-  });
-}
-
-// -- explode trails (explode lines) ----------------------------------------
-// Faded overlay lines tracing each moved group from its assembled position to
-// its current exploded position. Built in model space and parented to the edges
-// group so they inherit the model offset; rebuilt each frame during a scrub.
-
-function ensureExplodeTrailGroup(runtime) {
-  const parent = runtime.edgesGroup || runtime.modelGroup;
-  if (runtime.explodeTrailGroup) {
-    // Re-attach if a scene reset (clearSceneGroup) detached the trail group.
-    if (parent && runtime.explodeTrailGroup.parent !== parent) {
-      parent.add(runtime.explodeTrailGroup);
-    }
-    return runtime.explodeTrailGroup;
-  }
-  const THREE = runtime.THREE;
-  const group = new THREE.Group();
-  group.name = "explodeTrails";
-  group.renderOrder = 15;
-  parent?.add(group);
-  runtime.explodeTrailGroup = group;
-  return group;
-}
-
-function clearExplodeTrails(runtime) {
-  const group = runtime?.explodeTrailGroup;
-  if (!group) {
-    return;
-  }
-  for (const child of [...group.children]) {
-    group.remove(child);
-    child.geometry?.dispose?.();
-    child.material?.dispose?.();
-  }
-}
-
-function updateExplodeTrails(runtime, compiled, progress) {
-  const THREE = runtime?.THREE;
-  if (!THREE) {
-    return;
-  }
-  if (!compiled?.trails || !compiled.groups?.length) {
-    clearExplodeTrails(runtime);
-    return;
-  }
-  const segments = explodedViewTrailSegments(THREE, compiled, progress);
-  clearExplodeTrails(runtime);
-  if (!segments.length) {
-    return;
-  }
-  const group = ensureExplodeTrailGroup(runtime);
-  const positions = new Float32Array(segments.length * 6);
-  segments.forEach((segment, index) => {
-    const offset = index * 6;
-    positions[offset] = segment.from[0];
-    positions[offset + 1] = segment.from[1];
-    positions[offset + 2] = segment.from[2];
-    positions[offset + 3] = segment.to[0];
-    positions[offset + 4] = segment.to[1];
-    positions[offset + 5] = segment.to[2];
-  });
-  const geometry = new THREE.BufferGeometry();
-  geometry.setAttribute("position", new THREE.BufferAttribute(positions, 3));
-  const color = runtime.baseTheme?.exploded?.trailColor || 0x8a94a6;
-  const material = new THREE.LineBasicMaterial({
-    color,
-    transparent: true,
-    opacity: 0.55,
-    depthTest: false,
-    depthWrite: false
-  });
-  const lines = new THREE.LineSegments(geometry, material);
-  lines.renderOrder = 16;
-  lines.frustumCulled = false;
-  group.add(lines);
 }
 
 function normalizeZoomPercent(value, fallback = 100) {
@@ -773,11 +681,11 @@ function ZoomToolbar({
   );
 }
 
-function applyExplodedViewRuntimeProgress(runtime, compiled, progress) {
+function applyExplodedViewRuntimeProgress(runtime, layout, progress) {
   if (!runtime?.THREE || !Array.isArray(runtime.displayRecords)) {
     return;
   }
-  applyExplodedViewProgress(runtime.THREE, compiled, progress);
+  applyExplodedViewProgress(runtime.THREE, layout, progress);
   for (const record of runtime.displayRecords) {
     applyDisplayRecordTransform(runtime.THREE, record);
   }
@@ -786,7 +694,6 @@ function applyExplodedViewRuntimeProgress(runtime, compiled, progress) {
   if (runtime.topologyDisplayEdgeTransformByRecord === true) {
     syncRecordTopologyDisplayEdgeTransforms(runtime, runtime.displayRecords);
   }
-  updateExplodeTrails(runtime, compiled, progress);
   runtime.requestRender?.();
 }
 
@@ -1925,7 +1832,7 @@ const CadViewer = forwardRef(function CadViewer({
     progress: 0,
     modelKey: "",
     enabled: false,
-    compiled: null
+    layout: null
   });
   const viewportFrameInsetsRef = useRef(normalizedViewportFrameInsets);
   const framedModelKeyRef = useRef("");
@@ -3958,7 +3865,7 @@ const CadViewer = forwardRef(function CadViewer({
       animation.progress = 0;
       animation.modelKey = "";
       animation.enabled = false;
-      animation.compiled = null;
+      animation.layout = null;
       return undefined;
     }
 
@@ -3978,27 +3885,24 @@ const CadViewer = forwardRef(function CadViewer({
       for (const record of runtime.displayRecords) {
         applyDisplayRecordTransform(THREE, record);
       }
-      clearExplodeTrails(runtime);
       syncRecordTopologyDisplayEdgeTransforms(runtime, runtime.displayRecords);
       runtime.requestRender?.();
       animation.progress = 0;
-      animation.compiled = null;
+      animation.layout = null;
       return undefined;
     }
 
-    // Resolve + compile the step document from the current settings. On disable
-    // the authored/generated steps are still available, so collapse can animate
-    // from the current progress down to 0.
-    const doc = resolveViewerExplodeDocument(THREE, normalizedExplodedSettings, runtime.displayRecords, baseBounds);
-    const compiled = compileExplodedView(THREE, doc, runtime.displayRecords, baseBounds);
-    animation.compiled = compiled;
+    // Compute the radial layout from the current records. On disable the
+    // layout is still resolvable, so collapse can animate from the current
+    // progress down to 0.
+    const layout = computeExplodedViewLayout(runtime.displayRecords, baseBounds);
+    animation.layout = layout;
 
-    if (!compiled.entries.length) {
+    if (!layout.entries.length) {
       clearExplodedViewRecords(runtime.displayRecords);
       for (const record of runtime.displayRecords) {
         applyDisplayRecordTransform(THREE, record);
       }
-      clearExplodeTrails(runtime);
       syncRecordTopologyDisplayEdgeTransforms(runtime, runtime.displayRecords);
       runtime.requestRender?.();
       animation.progress = 0;
@@ -4006,33 +3910,33 @@ const CadViewer = forwardRef(function CadViewer({
     }
 
     // Animate only the enable/disable transition (explode/collapse). Amount
-    // scrubs, step edits, and gizmo drags snap directly for a responsive feel.
+    // scrubs snap directly for a responsive feel — the slider is the timeline.
     const startProgress = clamp(toNumber(animation.progress, 0), 0, 1);
     const shouldAnimate = wasEnabled !== explodedViewActive && !modelChanged
       && Math.abs(targetProgress - startProgress) > 1e-4;
 
     if (!shouldAnimate) {
       animation.progress = targetProgress;
-      applyExplodedViewRuntimeProgress(runtime, compiled, targetProgress);
+      applyExplodedViewRuntimeProgress(runtime, layout, targetProgress);
       return undefined;
     }
 
+    // Multi-level cascades get more time so each stage of the disassembly
+    // still reads at a calm pace.
+    const durationMs = EXPLODED_VIEW_ANIMATION_DURATION_MS
+      * (1 + 0.35 * Math.max(layout.levelCount - 1, 0));
     const startedAt = typeof performance !== "undefined" && typeof performance.now === "function"
       ? performance.now()
       : Date.now();
-    applyExplodedViewRuntimeProgress(runtime, compiled, startProgress);
+    applyExplodedViewRuntimeProgress(runtime, layout, startProgress);
 
     const step = (timestamp) => {
       const now = Number.isFinite(Number(timestamp)) ? Number(timestamp) : Date.now();
-      const linearProgress = clamp(
-        (now - startedAt) / EXPLODED_VIEW_ANIMATION_DURATION_MS,
-        0,
-        1
-      );
+      const linearProgress = clamp((now - startedAt) / durationMs, 0, 1);
       const eased = easeExplodedViewProgress(linearProgress);
       const progress = startProgress + (targetProgress - startProgress) * eased;
       animation.progress = progress;
-      applyExplodedViewRuntimeProgress(runtime, compiled, progress);
+      applyExplodedViewRuntimeProgress(runtime, layout, progress);
       if (linearProgress < 1) {
         animation.rafId = window.requestAnimationFrame(step);
       } else {

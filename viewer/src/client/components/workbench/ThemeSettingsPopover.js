@@ -1,5 +1,5 @@
 import { Children, isValidElement, useEffect, useMemo, useRef, useState } from "react";
-import { ChevronDown, ChevronUp, Contrast, FlipHorizontal2, Moon, MoreHorizontal, Pencil, Plus, RotateCcw, Save, Sun, Trash2, X } from "lucide-react";
+import { Contrast, Moon, MoreHorizontal, Pencil, Plus, Save, Sun, X } from "lucide-react";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -48,12 +48,10 @@ import {
   THEME_PRESETS
 } from "cadjs/lib/themeSettings";
 import {
-  DEFAULT_EXPLODED_VIEW_SETTINGS,
   CAMERA_PROJECTION,
   normalizeDisplaySettings,
   normalizeExplodedViewSettings
 } from "cadjs/lib/displaySettings";
-import { generateExplodedViewDocument } from "cadjs/lib/viewer/explodedView";
 import {
   DISPLAY_MODE_OPTIONS
 } from "../viewer/DisplayModeOptions";
@@ -71,17 +69,13 @@ import {
 import { FILE_SHEET_SECTION_IDS } from "@/workbench/fileSheetSections";
 import { ScrollArea } from "../ui/scroll-area";
 import FileSheet, {
-  FILE_SHEET_COMPACT_BUTTON_CLASSES,
-  FILE_SHEET_COMPACT_NUMERIC_INPUT_CLASSES,
   FILE_SHEET_PRECISION_SLIDER_CLASSES,
   FileSheetBooleanToggle,
-  FileSheetButtonRow,
   FileSheetColorPicker,
   FileSheetColorRow,
   FileSheetControlRow,
   FileSheetSelectRow,
   FileSheetSliderField,
-  FileSheetStatusText,
   FileSheetSubsection,
   FileSheetToggleRow,
   parseFileSheetNumberInput
@@ -97,27 +91,6 @@ const BACKGROUND_MODE_OPTIONS = [
 const PROJECTION_MODE_OPTIONS = [
   { value: CAMERA_PROJECTION.ORTHOGRAPHIC, label: "Orthographic", title: "Parallel projection for CAD inspection", Icon: OrthographicProjectionIcon },
   { value: CAMERA_PROJECTION.PERSPECTIVE, label: "Perspective", title: "Depth projection with vanishing lines", Icon: PerspectiveProjectionIcon }
-];
-
-
-// Explosion direction: the axis parts travel along as they separate. Tooltips
-// (title) carry the detail so the visible labels stay short.
-const EXPLODE_DIRECTION_OPTIONS = [
-  { value: "auto", label: "Auto (best fit)", title: "Pick the clearest axis automatically" },
-  { value: "x", label: "X axis", title: "Separate left to right" },
-  { value: "y", label: "Y axis", title: "Separate bottom to top" },
-  { value: "z", label: "Z axis", title: "Separate front to back" },
-  { value: "radial", label: "Radial", title: "Fan outward from the center" }
-];
-
-const EXPLODE_MODE_OPTIONS = [
-  { value: "automatic", label: "Automatic" },
-  { value: "custom", label: "Custom" }
-];
-
-const EXPLODE_ORDER_OPTIONS = [
-  { value: "simultaneous", label: "Together", title: "Every part moves as you drag Amount" },
-  { value: "sequential", label: "Sequence", title: "Parts separate in order across the Amount slider" }
 ];
 
 
@@ -138,7 +111,6 @@ const PRIMARY_LIGHT_FALLBACKS = Object.freeze({
 // Fill and rim colors are not mode-color paths, so they use a plain color field.
 const MODE_COLOR_LIGHT_KEYS = Object.freeze(["directional", "spot", "point"]);
 
-const compactButtonClasses = FILE_SHEET_COMPACT_BUTTON_CLASSES;
 const precisionSliderClasses = FILE_SHEET_PRECISION_SLIDER_CLASSES;
 const SLIDER_COMMIT_DELAY_MS = 120;
 const AXIS_OPTIONS = Object.freeze(["x", "y", "z"]);
@@ -706,72 +678,15 @@ function PositionPad({ value, onChange }) {
   );
 }
 
-// Pseudo display-records built from a mesh-data part list, sufficient for the
-// pure auto-explode generator (it only reads partId + partBounds).
-function explodePseudoRecords(meshData) {
+// How many parts the exploded view could move, from the mesh-data part list
+// (parts with bounds and a real id — the same gate the layout applies).
+function explodablePartCount(meshData) {
   const parts = Array.isArray(meshData?.parts) ? meshData.parts : [];
-  return parts
-    .filter((part) => part && (part.bounds || part.sourceBounds))
-    .map((part) => ({
-      // Match the display-record id precedence (id || occurrenceId) so generated
-      // step targets resolve against the runtime records.
-      partId: String(part.id || part.occurrenceId || "").trim(),
-      partBounds: part.bounds || part.sourceBounds,
-      mesh: true
-    }))
-    .filter((record) => record.partId);
-}
-
-// Numeric step magnitude editor with local text state so partial input
-// (empty, "-", "1.") is allowed while typing; commits a finite value on blur or
-// Enter and reverts to the last valid value otherwise.
-function ExplodeStepMagnitudeInput({ value, step, onCommit, ariaLabel, title }) {
-  const [text, setText] = useState(String(value));
-  useEffect(() => {
-    setText(String(value));
-  }, [value]);
-  const commit = () => {
-    const next = Number(text);
-    if (text.trim() !== "" && Number.isFinite(next)) {
-      onCommit(next);
-    } else {
-      setText(String(value));
-    }
-  };
-  return (
-    <input
-      type="number"
-      className={cn(FILE_SHEET_COMPACT_NUMERIC_INPUT_CLASSES, "w-16 rounded-md border border-input bg-transparent text-right")}
-      value={text}
-      step={step}
-      onChange={(event) => setText(event.target.value)}
-      onBlur={commit}
-      onKeyDown={(event) => {
-        if (event.key === "Enter") {
-          event.currentTarget.blur();
-        }
-      }}
-      aria-label={ariaLabel}
-      title={title}
-    />
-  );
-}
-
-function explodeTargetNameMap(meshData) {
-  const map = new Map();
-  for (const part of Array.isArray(meshData?.parts) ? meshData.parts : []) {
-    const id = String(part?.occurrenceId || part?.id || "").trim();
-    if (id) {
-      map.set(id, String(part?.name || part?.label || id).trim() || id);
-    }
-  }
-  return map;
-}
-
-function explodeStepLabel(step, nameMap) {
-  const names = (step.targets || []).map((target) => nameMap.get(target) || target);
-  const head = names[0] || "part";
-  return names.length > 1 ? `${head} +${names.length - 1}` : head;
+  return parts.filter((part) => (
+    part &&
+    (part.bounds || part.sourceBounds) &&
+    String(part.id || part.occurrenceId || "").trim()
+  )).length;
 }
 
 // Clip: slice the STEP model with an axis-aligned section plane. The X/Y/Z
@@ -792,12 +707,6 @@ function ClipSubsection({
       const currentSettings = normalizeDisplaySettings(current);
       return { ...currentSettings, clip: buildStepClipPatch(currentSettings.clip, patch) };
     });
-  };
-  const resetClip = () => {
-    updateDisplaySettings?.((current) => ({
-      ...normalizeDisplaySettings(current),
-      clip: normalizeStepClipSettings(DEFAULT_STEP_CLIP_SETTINGS)
-    }));
   };
   const updateClipAxisOffset = (axis, nextOffset) => {
     const numericOffset = Number(nextOffset);
@@ -857,347 +766,63 @@ function ClipSubsection({
               }}
               aria-label={`Clip ${axis.toUpperCase()} axis`}
             />
-            <div className="mt-1 flex justify-between text-[10px] text-muted-foreground">
-              <span>{formatMm(boundsForAxis.min)}</span>
-              <span>{formatMm(boundsForAxis.max)}</span>
-            </div>
           </FileSheetSliderField>
         );
       })}
-
-      <FileSheetButtonRow>
-        <Button
-          type="button"
-          variant="outline"
-          size="sm"
-          className={cn(compactButtonClasses, "justify-center")}
-          onClick={() => setClip({ invert: !clip.invert })}
-          aria-pressed={clip.invert}
-          title="Flip clip side"
-        >
-          <FlipHorizontal2 className="h-3 w-3" strokeWidth={2} aria-hidden="true" />
-          <span>Flip</span>
-        </Button>
-        <Button
-          type="button"
-          variant="outline"
-          size="sm"
-          className={cn(compactButtonClasses, "justify-center")}
-          onClick={resetClip}
-          title="Reset clip plane"
-        >
-          <RotateCcw className="h-3 w-3" strokeWidth={2} aria-hidden="true" />
-          <span>Reset</span>
-        </Button>
-      </FileSheetButtonRow>
     </ControlSubsection>
   );
 }
 
-// Exploded view. On/off lives in the Amount value (0 = fully assembled), so the
-// header switch just moves Amount to/from zero and remembers the last non-zero
-// value. Automatic layout covers the common case; the Layout switch — kept above
-// the controls it swaps — brings in an editable per-part step list.
-// Model: lib/viewer/explodedViewSteps.js.
-function ExplodedSubsection({
-  displaySettings,
-  updateDisplaySettings,
-  explodeMeshData = null
-}) {
+// Exploded view: one slider, 0% = assembled. The radial layout is fully
+// automatic (lib/viewer/explodedView.js), so how far apart the assembly sits
+// is the only state; there is no separate on/off.
+function ExplodedSliderRow({ displaySettings, updateDisplaySettings, explodeMeshData = null }) {
   const exploded = useMemo(
     () => normalizeExplodedViewSettings(displaySettings.exploded),
     [displaySettings]
   );
-
-  const setExploded = (patch) => {
-    updateDisplaySettings?.((current) => {
-      const currentSettings = normalizeDisplaySettings(current);
-      return {
-        ...currentSettings,
-        exploded: normalizeExplodedViewSettings({ ...currentSettings.exploded, ...patch })
-      };
-    });
-  };
-  const setExplodedAuto = (autoPatch) => {
-    updateDisplaySettings?.((current) => {
-      const currentSettings = normalizeDisplaySettings(current);
-      return {
-        ...currentSettings,
-        exploded: normalizeExplodedViewSettings({
-          ...currentSettings.exploded,
-          auto: { ...currentSettings.exploded.auto, ...autoPatch }
-        })
-      };
-    });
-  };
-
-  const nameMap = useMemo(() => explodeTargetNameMap(explodeMeshData), [explodeMeshData]);
-  const partCount = useMemo(() => explodePseudoRecords(explodeMeshData).length, [explodeMeshData]);
-  const hasSteps = exploded.steps.length > 0;
-  const singlePart = Boolean(explodeMeshData) && partCount <= 1 && !hasSteps;
-  const canCustomize = partCount > 1 || hasSteps;
-  const active = exploded.enabled && exploded.amount > 0;
-  // While disabled the slider reads 0% (assembled), regardless of the stored
-  // amount, so on/off and the Amount value always agree.
-  const displayAmount = active ? exploded.amount : 0;
-  const amountPercent = Math.round(displayAmount * 100);
-
-  // On/off is expressed through Amount: 0 assembles the model. Keep the viewer's
-  // `enabled` flag in step so a non-zero amount actually explodes, and remember
-  // the last non-zero amount so the switch restores it rather than jumping to 100%.
-  const lastAmountRef = useRef(exploded.amount > 0 ? exploded.amount : 1);
-  useEffect(() => {
-    if (exploded.amount > 0) {
-      lastAmountRef.current = exploded.amount;
-    }
-  }, [exploded.amount]);
+  const partCount = useMemo(() => explodablePartCount(explodeMeshData), [explodeMeshData]);
+  const singlePart = Boolean(explodeMeshData) && partCount <= 1;
+  const amount = exploded.enabled ? exploded.amount : 0;
+  const amountPercent = Math.round(amount * 100);
   const setAmount = (nextAmount) => {
     const clamped = clamp(nextAmount, 0, 1);
-    setExploded({ amount: clamped, enabled: clamped > 0 });
+    updateDisplaySettings?.((current) => ({
+      ...normalizeDisplaySettings(current),
+      exploded: { amount: clamped, enabled: clamped > 0 }
+    }));
   };
-
-  const convertToSteps = () => {
-    const records = explodePseudoRecords(explodeMeshData);
-    const generated = generateExplodedViewDocument(
-      null,
-      records,
-      explodeMeshData?.bounds || null,
-      exploded.auto,
-      {
-        enabled: exploded.enabled,
-        amount: exploded.amount,
-        order: exploded.order,
-        trails: exploded.trails
-      }
-    );
-    setExploded({ steps: generated.steps });
-  };
-  const discardSteps = () => setExploded({ steps: [] });
-  const setMode = (mode) => {
-    if (mode === "custom" && !hasSteps) {
-      convertToSteps();
-    } else if (mode === "automatic" && hasSteps) {
-      discardSteps();
-    }
-  };
-  const updateStep = (index, patch) => {
-    setExploded({
-      steps: exploded.steps.map((step, i) => (i === index ? { ...step, ...patch } : step))
-    });
-  };
-  const removeStep = (index) => {
-    setExploded({ steps: exploded.steps.filter((_, i) => i !== index) });
-  };
-  const moveStep = (index, delta) => {
-    const steps = [...exploded.steps];
-    const target = index + delta;
-    if (target < 0 || target >= steps.length) {
-      return;
-    }
-    [steps[index], steps[target]] = [steps[target], steps[index]];
-    setExploded({ steps });
-  };
-
   return (
-    <ControlSubsection
-      title="Exploded"
-      toggle={(
-        <SubsectionToggle
-          label="Exploded view"
-          checked={active}
-          onCheckedChange={(checked) => setAmount(checked ? (lastAmountRef.current || 1) : 0)}
-          disabled={singlePart}
-        />
-      )}
+    <FileSheetSliderField
+      label="Exploded"
+      value={`${amountPercent}%`}
+      onValueCommit={(nextValue) => {
+        setAmount(parseFileSheetNumberInput(nextValue, {
+          fallback: amountPercent,
+          min: 0,
+          max: 100
+        }) / 100);
+      }}
+      valueInputProps={{ disabled: singlePart, ariaLabel: "Exploded amount" }}
     >
-      {singlePart ? (
-        <FileSheetStatusText>Single part — nothing to explode.</FileSheetStatusText>
-      ) : active ? (
-        <>
-          <FileSheetSliderField
-            label="Amount"
-            value={`${amountPercent}%`}
-            onValueCommit={(nextValue) => {
-              setAmount(parseFileSheetNumberInput(nextValue, {
-                fallback: amountPercent,
-                min: 0,
-                max: 100
-              }) / 100);
-            }}
-          >
-            <Slider
-              className={precisionSliderClasses}
-              value={[displayAmount]}
-              min={0}
-              max={1}
-              step={0.01}
-              onValueChange={(value) => setAmount(Array.isArray(value) ? value[0] : value)}
-              aria-label="Explode amount"
-            />
-          </FileSheetSliderField>
-
-          {canCustomize ? (
-            <FileSheetSelectRow
-              label="Layout"
-              value={hasSteps ? "custom" : "automatic"}
-              options={EXPLODE_MODE_OPTIONS}
-              onValueChange={setMode}
-            />
-          ) : null}
-
-          {hasSteps ? (
-            <div className="flex flex-col gap-1 px-2">
-              {exploded.steps.map((step, index) => {
-                const isRotate = step.type === "rotate";
-                const typeLabel = step.type === "rotate" ? "Rotate" : step.type === "radial" ? "Radial" : "Move";
-                const unit = isRotate ? "°" : "mm";
-                const magnitude = isRotate ? step.angleDeg : step.distance;
-                const label = explodeStepLabel(step, nameMap);
-                return (
-                  <div key={step.id || index} className="flex items-center gap-1.5 text-[11px]">
-                    <span className="w-4 shrink-0 text-right tabular-nums text-muted-foreground">{index + 1}</span>
-                    <span className="min-w-0 flex-1 truncate" title={`${label} — ${typeLabel}`}>{label}</span>
-                    <ExplodeStepMagnitudeInput
-                      value={Number.isFinite(magnitude) ? magnitude : 0}
-                      step={isRotate ? 5 : 1}
-                      onCommit={(next) => updateStep(index, isRotate ? { angleDeg: next } : { distance: next })}
-                      ariaLabel={`Step ${index + 1} ${isRotate ? "angle" : "distance"}`}
-                      title={isRotate ? "Angle (degrees)" : "Distance (mm)"}
-                    />
-                    <span className="w-4 shrink-0 text-[10px] text-muted-foreground">{unit}</span>
-                    <button
-                      type="button"
-                      className="p-0.5 text-muted-foreground hover:text-foreground disabled:opacity-30"
-                      disabled={index === 0}
-                      onClick={() => moveStep(index, -1)}
-                      aria-label={`Move step ${index + 1} earlier`}
-                      title="Move earlier"
-                    >
-                      <ChevronUp className="h-3.5 w-3.5" strokeWidth={2} aria-hidden="true" />
-                    </button>
-                    <button
-                      type="button"
-                      className="p-0.5 text-muted-foreground hover:text-foreground disabled:opacity-30"
-                      disabled={index === exploded.steps.length - 1}
-                      onClick={() => moveStep(index, 1)}
-                      aria-label={`Move step ${index + 1} later`}
-                      title="Move later"
-                    >
-                      <ChevronDown className="h-3.5 w-3.5" strokeWidth={2} aria-hidden="true" />
-                    </button>
-                    <button
-                      type="button"
-                      className="p-0.5 text-muted-foreground hover:text-destructive"
-                      onClick={() => removeStep(index)}
-                      aria-label={`Delete step ${index + 1}`}
-                      title="Delete step"
-                    >
-                      <Trash2 className="h-3.5 w-3.5" strokeWidth={2} aria-hidden="true" />
-                    </button>
-                  </div>
-                );
-              })}
-            </div>
-          ) : (
-            <>
-              <FileSheetSelectRow
-                label="Direction"
-                value={exploded.auto.mode}
-                onValueChange={(nextValue) => setExplodedAuto({ mode: nextValue })}
-                ariaLabel="Explode direction"
-                options={EXPLODE_DIRECTION_OPTIONS}
-              />
-              <FileSheetToggleRow
-                label="Reverse"
-                checked={exploded.auto.direction === "negative"}
-                onCheckedChange={(checked) => setExplodedAuto({ direction: checked ? "negative" : "positive" })}
-              />
-              <FileSheetSliderField
-                label="Spread"
-                value={`${exploded.auto.gapScale.toFixed(2)}×`}
-                onValueCommit={(nextValue) => {
-                  setExplodedAuto({
-                    gapScale: parseFileSheetNumberInput(nextValue, {
-                      fallback: exploded.auto.gapScale,
-                      min: 0.25,
-                      max: 4
-                    })
-                  });
-                }}
-              >
-                <Slider
-                  className={precisionSliderClasses}
-                  value={[exploded.auto.gapScale]}
-                  min={0.25}
-                  max={4}
-                  step={0.05}
-                  onValueChange={(value) => setExplodedAuto({ gapScale: Array.isArray(value) ? value[0] : value })}
-                  aria-label="Explode spread"
-                />
-              </FileSheetSliderField>
-              <FileSheetSliderField
-                label="Detail"
-                value={`${exploded.auto.depth}`}
-                onValueCommit={(nextValue) => {
-                  setExplodedAuto({
-                    depth: parseFileSheetNumberInput(nextValue, {
-                      fallback: exploded.auto.depth,
-                      min: 1,
-                      max: 8,
-                      integer: true
-                    })
-                  });
-                }}
-              >
-                <Slider
-                  className={precisionSliderClasses}
-                  value={[exploded.auto.depth]}
-                  min={1}
-                  max={8}
-                  step={1}
-                  onValueChange={(value) => setExplodedAuto({ depth: Array.isArray(value) ? value[0] : value })}
-                  aria-label="Explode detail"
-                />
-              </FileSheetSliderField>
-            </>
-          )}
-
-          <FileSheetSelectRow
-            label="Order"
-            value={exploded.order}
-            options={EXPLODE_ORDER_OPTIONS}
-            onValueChange={(nextValue) => setExploded({ order: nextValue })}
-          />
-          <FileSheetToggleRow
-            label="Explode lines"
-            checked={exploded.trails}
-            onCheckedChange={(checked) => setExploded({ trails: checked })}
-          />
-
-          <FileSheetButtonRow>
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              className={cn(compactButtonClasses, "justify-center")}
-              onClick={() => setExploded({ ...DEFAULT_EXPLODED_VIEW_SETTINGS, amount: 0, enabled: false })}
-              title="Reset the exploded view to defaults"
-            >
-              <RotateCcw className="h-3 w-3" strokeWidth={2} aria-hidden="true" />
-              <span>Reset</span>
-            </Button>
-          </FileSheetButtonRow>
-        </>
-      ) : null}
-    </ControlSubsection>
+      <Slider
+        className={precisionSliderClasses}
+        value={[amount]}
+        min={0}
+        max={1}
+        step={0.01}
+        disabled={singlePart}
+        onValueChange={(value) => setAmount(Array.isArray(value) ? value[0] : value)}
+        aria-label="Exploded amount"
+      />
+    </FileSheetSliderField>
   );
 }
 
-// The single "Display" tab: how the model is drawn, then the two optional view
-// transforms. Style always applies, so it sits at the top with no group header
-// of its own; Section and Exploded are off most of the time, so each is a titled
-// group whose switch gates its controls. The tab therefore rests at three rows
-// and only grows for the transform actually in use.
+// The single "Display" tab: the View section (how the model is drawn, and how
+// far apart the exploded view sits), then the section-plane transform. The
+// exploded slider lives beside Mode because both are always-available view
+// state; 0% simply means assembled.
 export function DisplaySettingsSection({
   displaySettings,
   updateDisplaySettings,
@@ -1216,16 +841,18 @@ export function DisplaySettingsSection({
   };
   return (
     <div className="py-2" data-cad-display-settings-section="true">
-      <ControlSubsection title="Model">
-        {/* The tab's primary control — how the model is drawn — so it takes the
-            stacked full-width treatment. */}
+      <ControlSubsection title="View">
         <FileSheetSelectRow
-          stacked
           label="Mode"
           value={normalizedDisplaySettings.mode}
           onValueChange={(nextValue) => setDisplay({ mode: nextValue })}
           ariaLabel="Display mode"
           options={DISPLAY_MODE_OPTIONS}
+        />
+        <ExplodedSliderRow
+          displaySettings={normalizedDisplaySettings}
+          updateDisplaySettings={updateDisplaySettings}
+          explodeMeshData={explodeMeshData}
         />
       </ControlSubsection>
 
@@ -1233,11 +860,6 @@ export function DisplaySettingsSection({
         displaySettings={normalizedDisplaySettings}
         updateDisplaySettings={updateDisplaySettings}
         clipBounds={clipBounds}
-      />
-      <ExplodedSubsection
-        displaySettings={normalizedDisplaySettings}
-        updateDisplaySettings={updateDisplaySettings}
-        explodeMeshData={explodeMeshData}
       />
     </div>
   );

@@ -210,7 +210,7 @@ def help_text() -> str:
   python scripts/snapshot --job -
   python scripts/snapshot --input models/part.step --output /tmp/part.png --appearance workbench
 
-Shortcut flags are for common STEP/STP snapshots. --job accepts one render job, an array of render jobs, or { "jobs": [...] }. Every job input must be a relative or absolute .step/.stp path, a same-stem Python generator, a direct .glb/.stl/.3mf mesh, or a .implicit.js model; direct DXF/G-code/robot-description inputs are unsupported. Mesh inputs render shaded solid through the shared mesh path and support camera, display projection (orthographic/perspective), appearance, size-profile, orbit, and list output, but reject STEP-only options: --params/stepParameters, --focus/--hide selector refs, exploded and non-solid display modes, and section mode. Implicit (.implicit.js) inputs render through the shared runtime's raymarch backend and support camera, appearance, and orbit output; they reject the same STEP-only options plus list/section modes (no part topology). The default appearance is the workbench saved theme. --appearance accepts a saved theme name, an inline JSON appearance settings object, or a JSON appearance settings file path. --display accepts solid, rendered, transparent, hidden_edges, hidden_lines_removed, unshaded, wireframe, an inline JSON display settings object, or a JSON display settings file path. Projection is a theme trait taken from the appearance (the default workbench/light theme is orthographic; the presentation stage themes are perspective); pass {"projection":"perspective"} in display JSON only to override it for a one-off. Exploded view and edge styling belong in display JSON. The exploded view is an ordered step document: {"mode":"rendered","exploded":{"enabled":true,"amount":1,"steps":[{"type":"translate","targets":["o1.2"],"axis":[0,0,1],"distance":40}]},"edges":{"color":"#132232"}} moves the o1.2 subtree 40mm up. Steps may be "translate" (axis+distance), "rotate" (axis+origin+angleDeg), or "radial" (axis+center+distance); "targets" are occurrence-path prefixes; "amount" is the 0..1 scrub. Omit "steps" to auto-generate from hints: {"exploded":{"enabled":true,"auto":{"mode":"auto","gapScale":1.4,"depth":1}}} where mode is auto|x|y|z|radial. Use --mode to pick the render mode: view (default, one still image per output), orbit (360-degree turntable GIF), section (cutaway sweep), or list (returns part occurrence refs as JSON; no output files). A .gif output is only valid in orbit mode or with animated --params values; static jobs must save stills. --camera accepts a preset, azimuth:elevation pair, or JSON object with preset, position, target, up, and zoom fields. --focus and --hide accept one or more selector refs such as #o1.2 for parts or subassemblies; pass the flag repeatedly or list refs after the flag. Option JSON is direct settings JSON, not a wrapped job fragment. Full JSON jobs use top-level appearance and display. Use --view-labels to burn the camera/view label into shortcut outputs. Use --params with STEP parameter sidecar JSON values, and --size-profile for default dimensions such as simple, diagnostic, labeled, assembly, presentation, orbit, or contact-sheet. Output file names are saved with a shared UTC seconds timestamp before the extension. Use --debug (or a job-level "debug": true field) to add a "debug" section to --json output reporting how each STEP/STP artifact was resolved: source ("generated" from a .step.py generator vs. "imported" direct STEP), whether it was an assembly, whether it was served from cache or rebuilt, whether assembly selectors were re-extracted, and how long artifact resolution took. Everyday snapshot usage does not need --debug; it exists for diagnosing slow or unexpected renders.
+Shortcut flags are for common STEP/STP snapshots. --job accepts one render job, an array of render jobs, or { "jobs": [...] }. Every job input must be a relative or absolute .step/.stp path, a same-stem Python generator, a direct .glb/.stl/.3mf mesh, or a .implicit.js model; direct DXF/G-code/robot-description inputs are unsupported. Mesh inputs render shaded solid through the shared mesh path and support camera, display projection (orthographic/perspective), appearance, size-profile, orbit, and list output, but reject STEP-only options: --params/stepParameters, --focus/--hide selector refs, exploded and non-solid display modes, and section mode. Implicit (.implicit.js) inputs render through the shared runtime's raymarch backend and support camera, appearance, and orbit output; they reject the same STEP-only options plus list/section modes (no part topology). The default appearance is the workbench saved theme. --appearance accepts a saved theme name, an inline JSON appearance settings object, or a JSON appearance settings file path. --display accepts solid, rendered, transparent, hidden_edges, hidden_lines_removed, unshaded, wireframe, an inline JSON display settings object, or a JSON display settings file path. Projection is a theme trait taken from the appearance (the default workbench/light theme is orthographic; the presentation stage themes are perspective); pass {"projection":"perspective"} in display JSON only to override it for a one-off. Exploded view and edge styling belong in display JSON. The exploded view is a single slider: {"mode":"rendered","exploded":{"enabled":true,"amount":0.7},"edges":{"color":"#132232"}}. "amount" is the 0..1 spread; the layout itself is automatic (hierarchical radial explode about the assembly center) with nothing else to configure. Use --mode to pick the render mode: view (default, one still image per output), orbit (360-degree turntable GIF), section (cutaway sweep), or list (returns part occurrence refs as JSON; no output files). A .gif output is only valid in orbit mode or with animated --params values; static jobs must save stills. --camera accepts a preset, azimuth:elevation pair, or JSON object with preset, position, target, up, and zoom fields. --focus and --hide accept one or more selector refs such as #o1.2 for parts or subassemblies; pass the flag repeatedly or list refs after the flag. Option JSON is direct settings JSON, not a wrapped job fragment. Full JSON jobs use top-level appearance and display. Use --view-labels to burn the camera/view label into shortcut outputs. Use --params with STEP parameter sidecar JSON values, and --size-profile for default dimensions such as simple, diagnostic, labeled, assembly, presentation, orbit, or contact-sheet. Output file names are saved with a shared UTC seconds timestamp before the extension. Use --debug (or a job-level "debug": true field) to add a "debug" section to --json output reporting how each STEP/STP artifact was resolved: source ("generated" from a .step.py generator vs. "imported" direct STEP), whether it was an assembly, whether it was served from cache or rebuilt, whether assembly selectors were re-extracted, and how long artifact resolution took. Everyday snapshot usage does not need --debug; it exists for diagnosing slow or unexpected renders.
 """
 
 
@@ -439,13 +439,12 @@ def validate_direct_settings_payload(
 
 def validate_display_settings_values(payload: Mapping[str, object], *, source_label: str) -> None:
     """Reject typo'd closed-set display VALUES up front. The renderer silently falls back
-    to defaults on unknown projection/mode/exploded axis (e.g. ``projection:"ortho"`` renders
-    perspective, and an unknown ``exploded.auto.mode`` renders the auto-picked axis), so a
-    late no-op produces a wrong image with no error — catch it here.
+    to defaults on unknown projection/mode values (e.g. ``projection:"ortho"`` renders
+    perspective), so a late no-op produces a wrong image with no error — catch it here.
 
-    Only closed-set, typo-prone fields are validated; the alias-rich/coerced exploded fields
-    (enabled, spacing, direction, ...) are left to the renderer's lenient normalization to
-    avoid false rejections of inputs the browser accepts."""
+    Only closed-set, typo-prone fields are validated; alias-rich/coerced fields are left
+    to the renderer's lenient normalization to avoid false rejections of inputs the
+    browser accepts."""
     # An empty/whitespace value means "unset": the renderer treats it as absent and falls
     # back to the default (it does not error), so validating it here would be a false
     # rejection of input the browser accepts. Only validate genuinely-present values.
@@ -465,54 +464,16 @@ def validate_display_settings_values(payload: Mapping[str, object], *, source_la
             )
     exploded = payload.get("exploded")
     if is_plain_object(exploded):
-        # ``exploded.axis`` is a CLI shorthand for the auto-explode axis; resolve time
-        # translates it into ``exploded.auto.mode`` (the field the renderer reads — see
-        # normalize_exploded_axis_shorthand). Validate the shorthand AND the canonical
-        # ``auto.mode``/``auto.axis`` so a typo in either is caught here instead of silently
-        # rendering the default (auto-picked) axis.
-        axis = str(exploded.get("axis") or "").strip().lower()
-        if axis:
-            axis_base = axis[1:] if axis.startswith("-") else axis
-            if axis_base not in {"x", "y", "z", "radial"}:
-                raise SnapshotError(
-                    f"--display exploded.axis must be one of x, y, z, radial (optionally '-'-prefixed); "
-                    f"got {exploded.get('axis')!r} ({source_label})"
-                )
-        auto = exploded.get("auto")
-        if is_plain_object(auto):
-            raw_auto_mode = auto.get("mode") if auto.get("mode") is not None else auto.get("axis")
-            auto_mode = str(raw_auto_mode or "").strip().lower()
-            # The renderer (normalizeExplodeAutoHints) coerces any unrecognized auto.mode to
-            # "auto" — a silent wrong-axis render. Only {auto,x,y,z,radial} (and a '-'/'+'-
-            # prefixed radial) survive un-defaulted, so anything else is a typo to reject.
-            if auto_mode and auto_mode not in {"auto", "x", "y", "z", "radial"} and auto_mode.lstrip("-+") != "radial":
-                raise SnapshotError(
-                    f"--display exploded.auto.mode must be one of auto, x, y, z, radial; "
-                    f"got {raw_auto_mode!r} ({source_label})"
-                )
-
-
-def normalize_exploded_axis_shorthand(job: dict[str, object]) -> None:
-    """Translate the CLI's top-level ``exploded.axis`` shorthand into ``exploded.auto.mode``,
-    the field the renderer's auto-explode actually reads. Without this the shorthand is a
-    silent no-op: normalizeExplodedViewDocument drops the top-level axis and the renderer
-    auto-picks the principal axis instead. An explicit ``auto.mode``/``auto.axis`` (or a
-    per-step doc, which the renderer prefers over auto hints) wins over the shorthand."""
-    display = job.get("display")
-    if not is_plain_object(display):
-        return
-    exploded = display.get("exploded")
-    if not is_plain_object(exploded):
-        return
-    axis = str(exploded.get("axis") or "").strip()
-    if not axis:
-        return
-    auto = exploded.get("auto")
-    auto = dict(auto) if is_plain_object(auto) else {}
-    if str(auto.get("mode") if auto.get("mode") is not None else auto.get("axis") or "").strip():
-        return  # explicit auto hint already set; do not override it with the shorthand
-    auto["mode"] = axis
-    exploded["auto"] = auto
+        # The exploded view is enabled + amount only; the layout is automatic.
+        # Any other key is a typo or a retired step-document/auto-hint field the
+        # renderer now ignores entirely — reject loudly instead of rendering a
+        # default the caller did not ask for.
+        unknown = sorted(set(exploded) - {"enabled", "amount"})
+        if unknown:
+            raise SnapshotError(
+                f"--display exploded supports only enabled and amount (the exploded layout "
+                f"is automatic); unsupported keys: {', '.join(unknown)} ({source_label})"
+            )
 
 
 def load_display_option(raw_display: object, *, cwd: Path) -> dict[str, object]:
@@ -1460,10 +1421,6 @@ def resolve_step_render_job(
     if normalized_selection is not None:
         job["selection"] = normalized_selection
 
-    # STEP assemblies are the only kind that renders an exploded view, so translate the
-    # top-level exploded.axis shorthand into the renderer's auto.mode field here (mesh/
-    # implicit reject exploded upstream).
-    normalize_exploded_axis_shorthand(job)
     normalized = normalize_common_job(job, mode=mode, resolved_cwd=resolved_cwd, timestamp=timestamp)
     normalized["resolved"] = resolved
     return normalized

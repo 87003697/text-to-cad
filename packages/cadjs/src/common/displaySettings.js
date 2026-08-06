@@ -7,24 +7,7 @@ import {
   CAMERA_PROJECTION,
   normalizeCameraProjection
 } from "../lib/perspective.js";
-import {
-  EXPLODED_VIEW_AUTO_MODES,
-  EXPLODED_VIEW_DIRECTIONS,
-  EXPLODED_VIEW_ORDERS,
-  EXPLODED_VIEW_STEP_TYPES,
-  MAX_EXPLODED_VIEW_DEPTH,
-  normalizeExplodedViewDocument
-} from "../lib/viewer/explodedViewSteps.js";
-
 export { CAMERA_PROJECTION, normalizeCameraProjection };
-export {
-  EXPLODED_VIEW_AUTO_MODES,
-  EXPLODED_VIEW_DIRECTIONS,
-  EXPLODED_VIEW_ORDERS,
-  EXPLODED_VIEW_STEP_TYPES,
-  MAX_EXPLODED_VIEW_DEPTH,
-  normalizeExplodedViewDocument
-};
 
 export const CAD_DISPLAY_MODE = Object.freeze({
   HIDDEN_EDGES: "hidden_edges",
@@ -84,14 +67,13 @@ export const DISABLED_DISPLAY_EDGE_SETTINGS = Object.freeze({
   enabled: false
 });
 
-// The exploded-view display setting is now an ordered step *document* (see
-// lib/viewer/explodedViewSteps.js). `steps` is the authored/generated explode;
-// when empty and enabled, the viewer auto-generates from `auto` hints. `amount`
-// is the 0..1 scrub position.
+// The exploded view is a single slider: `amount` is the 0..1 spread and 0
+// means assembled (`enabled` mirrors amount > 0 for consumers that gate on
+// it). The layout itself is always computed automatically (see
+// lib/viewer/explodedView.js) — there is nothing else to configure.
 export const DEFAULT_EXPLODED_VIEW_SETTINGS = Object.freeze({
-  ...normalizeExplodedViewDocument({}),
-  auto: Object.freeze(normalizeExplodedViewDocument({}).auto),
-  steps: Object.freeze([])
+  enabled: false,
+  amount: 0
 });
 
 export const DEFAULT_DISPLAY_SETTINGS = Object.freeze({
@@ -234,20 +216,20 @@ export function normalizeDisplayMode(value) {
     : CAD_DISPLAY_MODE.SOLID;
 }
 
-export function normalizeExplodedViewSettings(value = null, overrides = {}) {
-  return normalizeExplodedViewDocument(value, isObject(overrides) ? overrides : {});
+export function normalizeExplodedViewSettings(value = null) {
+  const source = isObject(value) ? value : {};
+  return {
+    enabled: Boolean(source.enabled),
+    amount: normalizeNumber(source.amount, DEFAULT_EXPLODED_VIEW_SETTINGS.amount, 0, 1)
+  };
 }
 
 export function normalizeDisplaySettings(value = null) {
   const source = isObject(value) ? value : {};
-  const explodedOverrides = {};
-  if (isObject(source.exploded) && source.exploded.enabled !== undefined) {
-    explodedOverrides.enabled = source.exploded.enabled;
-  }
   return {
     mode: normalizeDisplayMode(source.mode),
     clip: normalizeStepClipSettings(source.clip),
-    exploded: normalizeExplodedViewSettings(source.exploded, explodedOverrides),
+    exploded: normalizeExplodedViewSettings(source.exploded),
     edges: normalizeDisplayEdgeSettings(source.edges)
   };
 }

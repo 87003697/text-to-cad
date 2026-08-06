@@ -105,30 +105,20 @@ test("display settings normalize edge styling independently from appearance sett
   });
 });
 
-test("display settings normalize the exploded-view step document independently from mode", () => {
-  const doc = normalizeExplodedViewSettings({
-    enabled: true,
-    amount: 0.5,
-    order: "sequential",
-    trails: true,
-    auto: { mode: "x", direction: "negative", depth: 4, gapScale: 2, keepBaseGrounded: false },
-    steps: [{ id: "s1", type: "translate", targets: ["o1.2"], axis: [0, 0, 3], distance: 12 }]
-  });
-  assert.equal(doc.enabled, true);
-  assert.equal(doc.amount, 0.5);
-  assert.equal(doc.order, "sequential");
-  assert.equal(doc.trails, true);
-  assert.deepEqual(doc.auto, { mode: "x", direction: "negative", depth: 4, gapScale: 2, keepBaseGrounded: false });
-  assert.equal(doc.steps.length, 1);
-  assert.deepEqual(doc.steps[0].axis, [0, 0, 1]); // normalized to unit
-  assert.equal(doc.steps[0].distance, 12);
-
-  // Unknown auto modes fall back to "auto"; "radial" is preserved.
-  assert.equal(normalizeExplodedViewSettings({ auto: { mode: "diagonal" } }).auto.mode, "auto");
-  assert.equal(normalizeExplodedViewSettings({ auto: { mode: "radial" } }).auto.mode, "radial");
-  // Amount clamps and invalid steps drop.
+test("display settings normalize the exploded view to enabled + amount", () => {
+  assert.deepEqual(
+    normalizeExplodedViewSettings({ enabled: true, amount: 0.5 }),
+    { enabled: true, amount: 0.5 }
+  );
+  // Amount clamps; missing amount defaults to 0 (assembled).
   assert.equal(normalizeExplodedViewSettings({ amount: 9 }).amount, 1);
-  assert.equal(normalizeExplodedViewSettings({ steps: [{ type: "translate", targets: [] }] }).steps.length, 0);
+  assert.equal(normalizeExplodedViewSettings({ amount: -1 }).amount, 0);
+  assert.deepEqual(normalizeExplodedViewSettings({ enabled: 1 }), { enabled: true, amount: 0 });
+  // Legacy step-document fields are simply dropped.
+  assert.deepEqual(
+    normalizeExplodedViewSettings({ enabled: true, steps: [{}], auto: { mode: "x" }, order: "sequential" }),
+    { enabled: true, amount: 0 }
+  );
 
   assert.equal(normalizeDisplaySettings({ exploded: true }).exploded.enabled, false);
   assert.equal(normalizeDisplaySettings({ mode: "exploded", exploded: { enabled: true } }).exploded.enabled, true);

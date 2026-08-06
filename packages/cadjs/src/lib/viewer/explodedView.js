@@ -1,130 +1,206 @@
-// Auto-explode generator: turn display records + bounds + hints into an ordered
-// explode-step *document* (see explodedViewSteps.js for the model/evaluator).
+// Exploded view: hierarchical radial layout + evaluator.
 //
-// This replaces the former global-heuristic solver. It still reads the
-// occurrence tree and per-part bounds (no mate/contact data is available at view
-// time), but emits editable per-group steps and fixes the wonky behaviours of
-// the old layout:
-//   - principal explode axis is detected from the component layout ("auto"),
-//     not hardcoded to Z;
-//   - coplanar groups separate laterally instead of serializing into a stack;
-//   - coaxial groups explode along the axis instead of scattering sideways;
-//   - distances are absolute model units, swept so groups clear one another.
+// One methodology, no knobs — the standard automatic explode used by
+// mainstream CAD viewers (SolidWorks auto-explode, Autodesk's hierarchy
+// explode), driven by a single 0..1 slider:
 //
-// The generated steps are ordinary steps the user can edit, reorder, or delete.
+//   - the occurrence tree is walked top-down, level by level;
+//   - at each level every child group moves RADIALLY away from its parent
+//     group's center — direction = (child center − parent center) in full 3D,
+//     so parts spread into the space they already occupy relative to each
+//     other: left parts go left, top parts go up, a bolt circle blooms as a
+//     ring. Nothing is serialized onto a single world axis;
+//   - distance is the child's assembled offset scaled up plus a size-aware
+//     clearance, so the explode reads as an inflated copy of the assembly —
+//     neighbors stay neighbors and every gap opens in proportion;
+//   - concentric children (center on the parent center: a shaft in a housing)
+//     have no radial direction; the largest anchors as the core and the rest
+//     telescope out along their own longest axis, fanned when tied;
+//   - levels cascade over the 0..1 scrub with overlapping windows, so the
+//     slider walks the disassembly: subassemblies separate first, then bloom
+//     internally.
+//
+// The layout is computed from display records ({partId, partBounds, mesh})
+// and evaluated to a per-record `record.explodedViewMatrix` — the single
+// hand-off contract the renderer, topology edges, snapshot export, and
+// zoom-to-part read. THREE is dependency-injected for the matrix writes; the
+// layout math itself is pure arrays.
 
-import {
-  EPSILON,
-  MAX_EXPLODED_VIEW_DEPTH,
-  boundsCenterArray,
-  boundsRadius,
-  boundsSize,
-  clamp,
-  mergeBounds,
-  normalizeExplodeAutoHints,
-  normalizeExplodedViewDocument,
-  occurrenceSegments,
-  recordBounds,
-  recordCanExplode,
-  toNumber
-} from "./explodedViewSteps.js";
+export const EPSILON = 1e-6;
+export const GOLDEN_ANGLE = Math.PI * (3 - Math.sqrt(5));
 
-const AXIS_VECTORS = Object.freeze({
-  x: [1, 0, 0],
-  y: [0, 1, 0],
-  z: [0, 0, 1]
-});
+// How many hierarchy levels explode. Deeper nesting still moves rigidly with
+// its level-3 ancestor; more levels than this reads as scatter, not structure.
+export const MAX_EXPLODED_VIEW_LEVELS = 3;
 
-function commonOccurrencePrefix(records = []) {
-  const paths = records
-    .map((record) => occurrenceSegments(record?.partId))
-    .filter((segments) => segments.length > 1);
-  if (!paths.length) {
-    return [];
-  }
-  const prefix = [];
-  const shortest = Math.min(...paths.map((segments) => segments.length));
-  for (let index = 0; index < shortest; index += 1) {
-    const value = paths[0][index];
-    if (!paths.every((segments) => segments[index] === value)) {
-      break;
-    }
-    prefix.push(value);
-  }
-  return prefix.length >= shortest ? prefix.slice(0, -1) : prefix;
+// Radial distance = assembled offset × SPREAD + child radius × CLEARANCE.
+// SPREAD inflates the arrangement (1.5 ≈ gaps comparable to the parts
+// themselves); CLEARANCE gives near-center parts a size-proportional push so
+// tight clusters still separate visibly.
+const RADIAL_SPREAD = 1.5;
+const RADIAL_CLEARANCE = 0.45;
+// Deeper levels move proportionally less, keeping subassembly clusters
+// visually grouped after they bloom.
+const LEVEL_FALLOFF = 0.8;
+// A child whose center sits within this fraction of the parent radius from
+// the parent center is treated as concentric (no meaningful radial direction).
+const CONCENTRIC_THRESHOLD = 0.05;
+// Cascade scheduling: fraction of a level's window shared with the next level.
+const WINDOW_OVERLAP = 0.5;
+// Clearance kept between exploded siblings (fraction of the parent radius),
+// and the cap on separation sweeps per node.
+const SEPARATION_MARGIN = 0.05;
+const MAX_SEPARATION_PASSES = 10;
+
+export function clamp(value, min, max) {
+  return Math.min(Math.max(value, min), max);
 }
 
-// Occurrence-path prefix that groups a record at the requested depth below the
-// assembly's common prefix, so sub-assemblies move rigidly at depth 1 and split
-// into deeper components as depth grows.
-export function explodedViewGroupKey(partId, { depth = 1, commonPrefix = [] } = {}) {
+export function toNumber(value, fallback = 0) {
+  const numericValue = Number(value);
+  return Number.isFinite(numericValue) ? numericValue : fallback;
+}
+
+function isFiniteVectorArray(value) {
+  return (Array.isArray(value) || ArrayBuffer.isView(value)) && value.length >= 3;
+}
+
+// -- occurrence path helpers ------------------------------------------------
+// Occurrence ids look like "o1.2.3": the first segment is o<number>, the rest
+// are numeric. Non-occurrence part ids (e.g. "part:3") are opaque leaves.
+
+export function occurrenceSegments(partId) {
   const text = String(partId || "").trim();
-  const segments = occurrenceSegments(text);
-  if (!segments.length) {
-    return text;
-  }
-  const safeDepth = Math.max(1, Math.min(Math.round(Number(depth)) || 1, MAX_EXPLODED_VIEW_DEPTH));
-  const prefixLength = Math.min(commonPrefix.length, Math.max(segments.length - 1, 0));
-  const groupLength = Math.min(segments.length, prefixLength + safeDepth);
-  return segments.slice(0, groupLength).join(".") || text;
+  const match = text.match(/^o\d+(?:\.\d+)*/i);
+  return match ? match[0].split(".").filter(Boolean) : [];
 }
 
-function groupRecords(records, depth) {
-  const commonPrefix = commonOccurrencePrefix(records);
-  const groupsByKey = new Map();
-  records.forEach((record, recordIndex) => {
-    const groupKey = explodedViewGroupKey(record?.partId, { depth, commonPrefix })
-      || String(record?.partId || `part:${recordIndex}`);
-    const existing = groupsByKey.get(groupKey) || {
-      key: groupKey,
-      records: [],
-      recordIndex,
-      boundsList: []
-    };
-    existing.records.push(record);
-    const bounds = recordBounds(record);
-    if (bounds) {
-      existing.boundsList.push(bounds);
-    }
-    groupsByKey.set(groupKey, existing);
-  });
-  return [...groupsByKey.values()].map((group) => {
-    const bounds = mergeBounds(group.boundsList) || recordBounds(group.records[0]) || null;
-    return {
-      key: group.key,
-      records: group.records,
-      recordIndex: group.recordIndex,
-      bounds,
-      center: boundsCenterArray(bounds, [0, 0, 0]),
-      radius: boundsRadius(bounds)
-    };
-  });
+// -- bounds helpers ---------------------------------------------------------
+
+export function boundsCenterArray(bounds, fallback = [0, 0, 0]) {
+  const min = isFiniteVectorArray(bounds?.min) ? bounds.min : null;
+  const max = isFiniteVectorArray(bounds?.max) ? bounds.max : null;
+  if (!min || !max) {
+    return [...fallback];
+  }
+  return [
+    (toNumber(min[0]) + toNumber(max[0])) / 2,
+    (toNumber(min[1]) + toNumber(max[1])) / 2,
+    (toNumber(min[2]) + toNumber(max[2])) / 2
+  ];
 }
 
-// Choose the explode axis. World axes come straight through; "auto" picks the
-// world axis with the greatest spread of group centers (robust, axis-aligned
-// analogue of PCA snapped to a principal axis), tie-broken toward Z.
-function resolveExplodeAxisIndex(mode, groups) {
-  if (mode === "x") return 0;
-  if (mode === "y") return 1;
-  if (mode === "z") return 2;
-  const centers = groups.map((group) => group.center);
-  const mean = [0, 1, 2].map((axis) => centers.reduce((sum, c) => sum + c[axis], 0) / (centers.length || 1));
-  const variance = [0, 1, 2].map(
-    (axis) => centers.reduce((sum, c) => sum + (c[axis] - mean[axis]) ** 2, 0)
-  );
-  let best = 2;
-  let bestValue = -Infinity;
-  for (const axis of [0, 1, 2]) {
-    // Bias ties toward Z (the usual CAD stacking axis) with a tiny nudge.
-    const value = variance[axis] + (axis === 2 ? EPSILON : 0);
-    if (value > bestValue) {
-      bestValue = value;
-      best = axis;
+export function boundsSize(bounds, axis) {
+  const min = isFiniteVectorArray(bounds?.min) ? bounds.min : null;
+  const max = isFiniteVectorArray(bounds?.max) ? bounds.max : null;
+  if (!min || !max) {
+    return 0;
+  }
+  return Math.max(toNumber(max[axis]) - toNumber(min[axis]), 0);
+}
+
+export function boundsRadius(bounds) {
+  const x = boundsSize(bounds, 0);
+  const y = boundsSize(bounds, 1);
+  const z = boundsSize(bounds, 2);
+  return Math.sqrt(x * x + y * y + z * z) / 2;
+}
+
+export function mergeBounds(boundsList) {
+  const min = [Infinity, Infinity, Infinity];
+  const max = [-Infinity, -Infinity, -Infinity];
+  let count = 0;
+  for (const bounds of Array.isArray(boundsList) ? boundsList : []) {
+    if (!isFiniteVectorArray(bounds?.min) || !isFiniteVectorArray(bounds?.max)) {
+      continue;
+    }
+    count += 1;
+    for (let axis = 0; axis < 3; axis += 1) {
+      min[axis] = Math.min(min[axis], toNumber(bounds.min[axis]));
+      max[axis] = Math.max(max[axis], toNumber(bounds.max[axis]));
     }
   }
-  return best;
+  return count > 0 && min.every(Number.isFinite) && max.every(Number.isFinite)
+    ? { min, max }
+    : null;
 }
+
+export function recordBounds(record) {
+  const bounds = record?.partBounds;
+  return isFiniteVectorArray(bounds?.min) && isFiniteVectorArray(bounds?.max) ? bounds : null;
+}
+
+export function recordCanExplode(record) {
+  const partId = String(record?.partId || "").trim();
+  return Boolean(record?.mesh && partId && partId !== "__model__");
+}
+
+// -- hierarchy --------------------------------------------------------------
+
+// Longest occurrence-path prefix shared by every record, clamped so at least
+// one segment is left to distinguish records (an assembly of "o1.1", "o1.2"
+// has prefix ["o1"], not ["o1", "1"]).
+function commonPrefixLength(segmentLists) {
+  const paths = segmentLists.filter((segments) => segments.length > 0);
+  if (!paths.length) {
+    return 0;
+  }
+  const shortest = Math.min(...paths.map((segments) => segments.length));
+  let length = 0;
+  while (length < shortest && paths.every((segments) => segments[length] === paths[0][length])) {
+    length += 1;
+  }
+  return Math.min(length, shortest - 1);
+}
+
+// Group node entries by the next occurrence segment. Entries whose path is
+// exhausted (the record sits at this node's own path, or has a non-occurrence
+// id) become singleton leaf groups keyed by their part id.
+function childGroups(entries, depth) {
+  const groups = new Map();
+  for (const entry of entries) {
+    const key = entry.segments.length > depth
+      ? entry.segments.slice(0, depth + 1).join(".")
+      : entry.partId;
+    const group = groups.get(key) || { key, entries: [], depth: entry.segments.length > depth ? depth + 1 : depth };
+    group.entries.push(entry);
+    groups.set(key, group);
+  }
+  return [...groups.values()];
+}
+
+function buildNode(key, entries, depth, levelsLeft) {
+  const bounds = mergeBounds(entries.map((entry) => entry.bounds));
+  const node = {
+    key,
+    entries,
+    bounds,
+    center: boundsCenterArray(bounds, [0, 0, 0]),
+    radius: boundsRadius(bounds),
+    order: Math.min(...entries.map((entry) => entry.index)),
+    children: []
+  };
+  if (levelsLeft <= 0 || entries.length < 2) {
+    return node;
+  }
+  // Collapse single-child chains (every record continues through the same
+  // segment) so a wrapper occurrence does not burn an explode level.
+  let groups = childGroups(entries, depth);
+  let nextDepth = depth;
+  while (groups.length === 1 && groups[0].depth > nextDepth) {
+    nextDepth = groups[0].depth;
+    groups = childGroups(entries, nextDepth);
+  }
+  if (groups.length < 2) {
+    return node;
+  }
+  node.children = groups
+    .map((group) => buildNode(group.key, group.entries, group.depth, levelsLeft - 1))
+    .sort((left, right) => left.order - right.order);
+  return node;
+}
+
+// -- layout -----------------------------------------------------------------
 
 function scaleVec(vec, scalar) {
   return [vec[0] * scalar, vec[1] * scalar, vec[2] * scalar];
@@ -138,233 +214,341 @@ function vecLength(vec) {
   return Math.hypot(vec[0], vec[1], vec[2]);
 }
 
-// Do two groups sit side-by-side in the plane perpendicular to the explode axis
-// (footprints clear of each other) rather than nested/concentric? Side-by-side
-// coplanar groups can separate laterally; nested ones must telescope axially.
-function footprintsDisjoint(a, b, axisIndex) {
-  const perp = [0, 1, 2].filter((axis) => axis !== axisIndex);
-  const dist = Math.hypot(
-    a.center[perp[0]] - b.center[perp[0]],
-    a.center[perp[1]] - b.center[perp[1]]
-  );
-  const halfA = Math.max(boundsSize(a.bounds, perp[0]), boundsSize(a.bounds, perp[1])) / 2;
-  const halfB = Math.max(boundsSize(b.bounds, perp[0]), boundsSize(b.bounds, perp[1])) / 2;
-  return dist > (halfA + halfB) * 0.75;
+// In-plane fan for tied concentric children: golden-angle directions in the
+// plane perpendicular to the child's long axis sibling rank.
+function fanDirection(axisIndex, rank) {
+  const angle = rank * GOLDEN_ANGLE;
+  const direction = [0, 0, 0];
+  const [a, b] = [0, 1, 2].filter((axis) => axis !== axisIndex);
+  direction[a] = Math.cos(angle);
+  direction[b] = Math.sin(angle);
+  return direction;
 }
 
-// Build layers along the explode axis. Groups at the same axial station are
-// merged into one lateral layer ONLY when their footprints are mutually
-// disjoint (side-by-side, e.g. a bolt circle); concentric/overlapping groups
-// (a shaft in a housing, stacked gears) stay as separate layers so the axial
-// sweep telescopes them apart instead of scattering them sideways.
-function buildLayers(groups, axisIndex, tolerance) {
-  const sorted = [...groups].sort((left, right) => {
-    const delta = left.center[axisIndex] - right.center[axisIndex];
-    return Math.abs(delta) > EPSILON ? delta : left.recordIndex - right.recordIndex;
-  });
-  const layers = [];
-  for (const group of sorted) {
-    const previous = layers[layers.length - 1];
-    const coplanar = previous && Math.abs(group.center[axisIndex] - previous.center) <= tolerance;
-    const sideBySide = coplanar && previous.groups.every((existing) => footprintsDisjoint(group, existing, axisIndex));
-    if (sideBySide) {
-      previous.groups.push(group);
-      previous.bounds = mergeBounds([previous.bounds, group.bounds]) || previous.bounds;
-      previous.center = boundsCenterArray(previous.bounds)[axisIndex];
-    } else {
-      layers.push({ center: group.center[axisIndex], bounds: group.bounds, groups: [group] });
-    }
-  }
-  return layers;
-}
-
-// Lateral (perpendicular-to-axis) unit direction for a coplanar group, snapped
-// to the stronger of the two perpendicular world axes; fans by index when the
-// group sits on the axis (coaxial, no intrinsic side).
-function lateralDirection(group, layerCenter, axisIndex, index) {
-  const perpAxes = [0, 1, 2].filter((axis) => axis !== axisIndex);
-  const delta = [
-    group.center[0] - layerCenter[0],
-    group.center[1] - layerCenter[1],
-    group.center[2] - layerCenter[2]
+// Radial displacement for one child about its parent center, or null for the
+// anchored core.
+function radialVector(node, child, level, concentricRank) {
+  const falloff = LEVEL_FALLOFF ** (level - 1);
+  const relative = [
+    child.center[0] - node.center[0],
+    child.center[1] - node.center[1],
+    child.center[2] - node.center[2]
   ];
-  delta[axisIndex] = 0;
-  const [pa, pb] = perpAxes;
-  if (Math.hypot(delta[pa], delta[pb]) <= EPSILON) {
-    // Coaxial: fan alternately along the two perpendicular axes.
-    const axis = perpAxes[index % 2];
-    const sign = (Math.floor(index / 2) % 2 === 0) ? 1 : -1;
-    const dir = [0, 0, 0];
-    dir[axis] = sign;
-    return dir;
+  const distance = Math.hypot(relative[0], relative[1], relative[2]);
+  const concentric = distance <= Math.max(node.radius * CONCENTRIC_THRESHOLD, EPSILON);
+  if (!concentric) {
+    const direction = scaleVec(relative, 1 / distance);
+    const magnitude = (distance * RADIAL_SPREAD + child.radius * RADIAL_CLEARANCE) * falloff;
+    return scaleVec(direction, magnitude);
   }
-  const dominant = Math.abs(delta[pa]) >= Math.abs(delta[pb]) ? pa : pb;
-  const dir = [0, 0, 0];
-  dir[dominant] = delta[dominant] >= 0 ? 1 : -1;
-  return dir;
+  if (concentricRank.count === 0) {
+    concentricRank.count += 1;
+    return null; // largest concentric child anchors as the core
+  }
+  const rank = concentricRank.count;
+  concentricRank.count += 1;
+  // Telescope along the child's own longest axis; alternate sides and stagger
+  // distances so successive concentric parts clear each other and the core.
+  const extents = [boundsSize(child.bounds, 0), boundsSize(child.bounds, 1), boundsSize(child.bounds, 2)];
+  const axisIndex = extents.indexOf(Math.max(...extents));
+  const nodeExtent = boundsSize(node.bounds, axisIndex);
+  const sign = rank % 2 === 1 ? 1 : -1;
+  const step = Math.ceil(rank / 2);
+  const magnitude = (nodeExtent + extents[axisIndex]) * 0.55 * step * (LEVEL_FALLOFF ** (level - 1));
+  if (magnitude <= EPSILON) {
+    return scaleVec(fanDirection(axisIndex, rank), Math.max(child.radius, EPSILON));
+  }
+  const direction = [0, 0, 0];
+  direction[axisIndex] = sign;
+  return scaleVec(direction, magnitude);
 }
 
-// Horizontal (XY) outward direction for a group about the vertical axis, or null
-// when the group sits on the axis (no intrinsic radial direction — it is the
-// core and stays put, the way a radial engine's crankcase anchors the cylinders).
-function radialBloomDirection(modelCenter, groupCenter) {
-  const dx = groupCenter[0] - modelCenter[0];
-  const dy = groupCenter[1] - modelCenter[1];
-  const length = Math.hypot(dx, dy);
-  return length > EPSILON ? [dx / length, dy / length, 0] : null;
+function shiftedBoundsByVector(bounds, vector) {
+  if (!vector) {
+    return bounds;
+  }
+  return {
+    min: [
+      toNumber(bounds.min[0]) + vector[0],
+      toNumber(bounds.min[1]) + vector[1],
+      toNumber(bounds.min[2]) + vector[2]
+    ],
+    max: [
+      toNumber(bounds.max[0]) + vector[0],
+      toNumber(bounds.max[1]) + vector[1],
+      toNumber(bounds.max[2]) + vector[2]
+    ]
+  };
 }
 
-// Radial mode blooms each off-axis group straight outward from the vertical
-// axis (one editable translate step per group); on-axis "core" groups stay put.
-function generateRadialSteps(groups, modelBounds, hints) {
-  const modelCenter = boundsCenterArray(modelBounds, [0, 0, 0]);
-  const modelRadiusXY = Math.max(
-    Math.hypot(boundsSize(modelBounds, 0), boundsSize(modelBounds, 1)) / 2,
-    EPSILON
-  );
-  // Anchor groups whose centre is within this radius of the axis (the core).
-  const coreThreshold = modelRadiusXY * 0.12;
-  const baseDistance = modelRadiusXY * 0.75 * hints.gapScale;
-  const sign = hints.direction === "negative" ? -1 : 1;
-  const steps = [];
-  const sorted = [...groups].sort((left, right) => left.recordIndex - right.recordIndex);
-  sorted.forEach((group, index) => {
-    const dx = group.center[0] - modelCenter[0];
-    const dy = group.center[1] - modelCenter[1];
-    const direction = radialBloomDirection(modelCenter, group.center);
-    if (!direction || Math.hypot(dx, dy) <= coreThreshold) {
-      return; // core group stays put
+// Per-axis positive overlap extents between two AABBs, or null when disjoint.
+function overlapExtents(a, b) {
+  const extents = [];
+  for (let axis = 0; axis < 3; axis += 1) {
+    const overlap = Math.min(toNumber(a.max[axis]), toNumber(b.max[axis]))
+      - Math.max(toNumber(a.min[axis]), toNumber(b.min[axis]));
+    if (overlap <= 0) {
+      return null;
     }
-    const distance = (baseDistance + group.radius * 1.1 * hints.gapScale) * sign;
-    if (Math.abs(distance) <= EPSILON) {
+    extents.push(overlap);
+  }
+  return extents;
+}
+
+// Collision relief: proportional radial distances alone cannot guarantee
+// clearance (two large parts with nearby centers barely separate), so sweep
+// the siblings and push any still-intersecting mover further OUT along its own
+// explode direction until every pair clears with a margin — the interval
+// stacking CAD auto-explode performs. An anchored core never moves; pushes
+// stay on the mover's ray, so the layout remains radial.
+function relaxSiblingOverlaps(node, vectorByChild) {
+  const children = node.children;
+  if (children.length < 2) {
+    return;
+  }
+  const gap = Math.max(node.radius * SEPARATION_MARGIN, EPSILON);
+  for (let pass = 0; pass < MAX_SEPARATION_PASSES; pass += 1) {
+    let pushed = false;
+    for (let i = 0; i < children.length; i += 1) {
+      for (let j = i + 1; j < children.length; j += 1) {
+        const a = children[i];
+        const b = children[j];
+        const va = vectorByChild.get(a) || null;
+        const vb = vectorByChild.get(b) || null;
+        if (!va && !vb) {
+          continue;
+        }
+        const overlap = overlapExtents(
+          shiftedBoundsByVector(a.bounds, va),
+          shiftedBoundsByVector(b.bounds, vb)
+        );
+        if (!overlap) {
+          continue;
+        }
+        // Push the outer mover (the core, when involved, always stays).
+        const target = !va ? b : (!vb ? a : (vecLength(va) >= vecLength(vb) ? a : b));
+        const vector = vectorByChild.get(target);
+        const length = vecLength(vector);
+        if (length <= EPSILON) {
+          continue;
+        }
+        const unit = scaleVec(vector, 1 / length);
+        // Travel needed to clear the overlap along the mover's own ray: the
+        // cheapest axis whose direction component is significant.
+        let travel = Infinity;
+        for (let axis = 0; axis < 3; axis += 1) {
+          if (Math.abs(unit[axis]) > 0.25) {
+            travel = Math.min(travel, (overlap[axis] + gap) / Math.abs(unit[axis]));
+          }
+        }
+        if (!Number.isFinite(travel)) {
+          continue;
+        }
+        vectorByChild.set(target, addVec(vector, scaleVec(unit, travel)));
+        pushed = true;
+      }
+    }
+    if (!pushed) {
       return;
     }
-    steps.push({
-      id: `s${index + 1}`,
-      type: "translate",
-      targets: [group.key],
-      axis: direction,
-      distance
-    });
-  });
-  return steps;
+  }
 }
 
-function generateAxialSteps(groups, modelBounds, axisIndex, hints) {
-  const modelSpan = Math.max(boundsSize(modelBounds, axisIndex), EPSILON);
-  const modelRadius = Math.max(boundsRadius(modelBounds), EPSILON);
-  const axisVec = AXIS_VECTORS[["x", "y", "z"][axisIndex]];
-  const sign = hints.direction === "negative" ? -1 : 1;
-
-  const thicknesses = groups
-    .map((group) => boundsSize(group.bounds, axisIndex))
-    .filter((value) => value > EPSILON)
-    .sort((left, right) => left - right);
-  const medianThickness = thicknesses.length
-    ? thicknesses[Math.floor(thicknesses.length / 2)]
-    : modelSpan * 0.1;
-  const tolerance = Math.max(modelSpan * 0.025, medianThickness * 0.18, EPSILON);
-  // Default gap is sized to read clearly (comparable to a typical part's
-  // thickness / a healthy fraction of the model span), so the un-tuned explode
-  // is obviously separated rather than timid. `gapScale` tunes it further.
-  const minimumGap = Math.max(modelSpan * 0.16, medianThickness * 1.1, modelRadius * 0.07, EPSILON)
-    * hints.gapScale;
-
-  const layers = buildLayers(groups, axisIndex, tolerance);
-
-  // Axial offset per layer: spread outward from the base with a real gap. Each
-  // successive layer moves at least `minimumGap` further than the previous one
-  // (so already-separated parts still visibly separate) and never overlaps the
-  // previous exploded extent (so thick parts get extra room).
-  const layerOffset = new Map();
-  let previousExplodedMax = null;
-  let previousOffset = 0;
-  layers.forEach((layer, layerIndex) => {
-    const layerMin = toNumber(layer.bounds.min[axisIndex]);
-    const layerMax = toNumber(layer.bounds.max[axisIndex]);
-    let offset = 0;
-    if (layerIndex === 0) {
-      offset = 0; // base layer stays put (grounds the explode)
-    } else {
-      const clearance = previousExplodedMax + minimumGap - layerMin;
-      offset = Math.max(clearance, previousOffset + minimumGap);
-    }
-    previousOffset = offset;
-    previousExplodedMax = layerMax + offset;
-    layerOffset.set(layer, offset);
+// Overlapping cascade windows: level i of L animates over its own slice of the
+// 0..1 scrub, sharing WINDOW_OVERLAP of it with the next level. One level
+// spans the whole scrub.
+function levelWindows(levelCount) {
+  if (levelCount <= 1) {
+    return [[0, 1]];
+  }
+  const span = 1 / (1 + (levelCount - 1) * (1 - WINDOW_OVERLAP));
+  return Array.from({ length: levelCount }, (_, index) => {
+    const start = index * span * (1 - WINDOW_OVERLAP);
+    return [start, Math.min(start + span, 1)];
   });
-
-  const perpAxes = [0, 1, 2].filter((axis) => axis !== axisIndex);
-  const steps = [];
-  let stepIndex = 0;
-  layers.forEach((layer) => {
-    const axialOffset = layerOffset.get(layer) * sign;
-    const layerCenter = boundsCenterArray(layer.bounds, [0, 0, 0]);
-    const multiGroup = layer.groups.length > 1;
-    const layerLateralRadius = Math.max(
-      boundsSize(layer.bounds, perpAxes[0]),
-      boundsSize(layer.bounds, perpAxes[1])
-    ) / 2;
-    // Stagger groups that share a lateral direction so they don't overlap at the
-    // same distance (only a few snapped directions exist).
-    const lateralRankByDir = new Map();
-    layer.groups.forEach((group, groupIndexInLayer) => {
-      let displacement = scaleVec(axisVec, axialOffset);
-      if (multiGroup) {
-        // Coplanar groups: separate laterally so they don't stack into a column.
-        const lateralDir = lateralDirection(group, layerCenter, axisIndex, groupIndexInLayer);
-        const dirKey = lateralDir.join(",");
-        const rank = lateralRankByDir.get(dirKey) || 0;
-        lateralRankByDir.set(dirKey, rank + 1);
-        // minimumGap already carries gapScale; do not scale it again here.
-        const lateralDistance = layerLateralRadius + group.radius * 0.75 + minimumGap
-          + rank * (group.radius * 2 + minimumGap);
-        displacement = addVec(displacement, scaleVec(lateralDir, lateralDistance));
-      }
-      const distance = vecLength(displacement);
-      stepIndex += 1;
-      if (distance <= EPSILON) {
-        return;
-      }
-      steps.push({
-        id: `s${stepIndex}`,
-        type: "translate",
-        targets: [group.key],
-        axis: [displacement[0] / distance, displacement[1] / distance, displacement[2] / distance],
-        distance
-      });
-    });
-  });
-  return steps;
 }
 
-// Generate a normalized explode document from records + bounds + hints.
-export function generateExplodedViewDocument(THREE, records = [], modelBounds = null, hints = {}, options = {}) {
-  const autoHints = normalizeExplodeAutoHints(hints);
+// Compute the exploded-view layout for a set of display records.
+// Returns { entries, records, levelCount }:
+//   - entries: per moved record, the contribution list [{ vector, window }]
+//     scheduled by level windows;
+//   - records: every explodable record (moved or not), for clearing.
+export function computeExplodedViewLayout(records = [], modelBounds = null) {
   const explodable = (Array.isArray(records) ? records : []).filter(recordCanExplode);
-  const base = {
-    enabled: options.enabled !== undefined ? options.enabled : true,
-    amount: options.amount,
-    order: options.order,
-    trails: options.trails,
-    auto: autoHints,
-    steps: []
-  };
+  const empty = { entries: [], records: explodable, levelCount: 0 };
   if (explodable.length < 2) {
-    return normalizeExplodedViewDocument(base);
+    return empty;
   }
-  const groups = groupRecords(explodable, autoHints.depth).filter((group) => group.records.length && group.bounds);
-  if (groups.length < 2) {
-    return normalizeExplodedViewDocument(base);
+  const nodeEntries = explodable
+    .map((record, index) => ({
+      record,
+      index,
+      partId: String(record.partId || "").trim(),
+      segments: occurrenceSegments(record.partId),
+      bounds: recordBounds(record)
+    }))
+    .filter((entry) => entry.bounds);
+  if (nodeEntries.length < 2) {
+    return empty;
   }
 
-  let steps;
-  if (autoHints.mode === "radial") {
-    steps = generateRadialSteps(groups, modelBounds, autoHints);
-  } else {
-    const axisIndex = resolveExplodeAxisIndex(autoHints.mode, groups);
-    steps = generateAxialSteps(groups, modelBounds, axisIndex, autoHints);
+  const prefixLength = commonPrefixLength(nodeEntries.map((entry) => entry.segments));
+  const root = buildNode("", nodeEntries, prefixLength, MAX_EXPLODED_VIEW_LEVELS);
+  if (!root.children.length) {
+    return empty;
+  }
+  if (modelBounds && isFiniteVectorArray(modelBounds.min) && isFiniteVectorArray(modelBounds.max)) {
+    // Prefer the true model bounds for the root so the top-level bloom radiates
+    // from the same center the viewer frames.
+    root.bounds = modelBounds;
+    root.center = boundsCenterArray(modelBounds, root.center);
+    root.radius = boundsRadius(modelBounds);
   }
 
-  return normalizeExplodedViewDocument({ ...base, steps });
+  // Walk the tree breadth-first, collecting one radial contribution per moved
+  // child group per level.
+  const contributionsByRecord = new Map();
+  let levelCount = 0;
+  const queue = [{ node: root, level: 1 }];
+  while (queue.length) {
+    const { node, level } = queue.shift();
+    const concentricRank = { count: 0 };
+    // Rank concentric children by size so the largest anchors as the core.
+    const children = [...node.children].sort((left, right) => right.radius - left.radius);
+    const vectorByChild = new Map();
+    for (const child of children) {
+      vectorByChild.set(child, radialVector(node, child, level, concentricRank));
+    }
+    relaxSiblingOverlaps(node, vectorByChild);
+    for (const child of node.children) {
+      const vector = vectorByChild.get(child);
+      if (vector) {
+        levelCount = Math.max(levelCount, level);
+        for (const entry of child.entries) {
+          const list = contributionsByRecord.get(entry.record) || [];
+          list.push({ vector, level });
+          contributionsByRecord.set(entry.record, list);
+        }
+      }
+      if (child.children.length) {
+        queue.push({ node: child, level: level + 1 });
+      }
+    }
+  }
+
+  if (!levelCount) {
+    return empty;
+  }
+  const windows = levelWindows(levelCount);
+  const windowForLevel = (level) => windows[Math.min(level, levelCount) - 1];
+  const entries = [];
+  for (const [record, contributions] of contributionsByRecord) {
+    entries.push({
+      record,
+      partId: String(record.partId || "").trim(),
+      contributions: contributions.map((contribution) => ({
+        vector: contribution.vector,
+        window: windowForLevel(contribution.level)
+      }))
+    });
+  }
+  return { entries, records: explodable, levelCount };
+}
+
+// -- evaluation -------------------------------------------------------------
+
+// Local progress of one contribution at a global 0..1 scrub position:
+// linear ramp inside the contribution's window, smoothstepped so each cascade
+// stage starts and lands softly.
+function contributionProgress(window, progress) {
+  const t0 = window?.[0] ?? 0;
+  const t1 = window?.[1] ?? 1;
+  const t = clamp((clamp(toNumber(progress), 0, 1) - t0) / Math.max(t1 - t0, EPSILON), 0, 1);
+  return t * t * (3 - 2 * t);
+}
+
+function entryOffset(entry, progress) {
+  const offset = [0, 0, 0];
+  for (const contribution of entry?.contributions || []) {
+    const local = contributionProgress(contribution.window, progress);
+    if (local <= EPSILON) {
+      continue;
+    }
+    offset[0] += contribution.vector[0] * local;
+    offset[1] += contribution.vector[1] * local;
+    offset[2] += contribution.vector[2] * local;
+  }
+  return offset;
+}
+
+// Write record.explodedViewMatrix for every explodable record at `progress`.
+// Records with no active offset are explicitly cleared to null so stale
+// offsets never persist (the matrix is the sole downstream contract).
+export function applyExplodedViewProgress(THREE, layout, progress = 1) {
+  if (!THREE?.Matrix4 || !layout) {
+    return;
+  }
+  const moved = new Set();
+  for (const entry of layout.entries || []) {
+    const record = entry?.record;
+    if (!record) {
+      continue;
+    }
+    const offset = entryOffset(entry, progress);
+    record.explodedViewMatrix = Math.hypot(offset[0], offset[1], offset[2]) > EPSILON
+      ? new THREE.Matrix4().makeTranslation(offset[0], offset[1], offset[2])
+      : null;
+    moved.add(record);
+  }
+  for (const record of layout.records || []) {
+    if (record && !moved.has(record)) {
+      record.explodedViewMatrix = null;
+    }
+  }
+}
+
+export function clearExplodedViewRecords(records = []) {
+  for (const record of Array.isArray(records) ? records : []) {
+    if (record) {
+      record.explodedViewMatrix = null;
+    }
+  }
+}
+
+// Bounds of the assembly at a given scrub progress, for auto-framing. Offsets
+// are pure translations, so each moved record's bounds just shift.
+export function explodedViewBounds(layout, fallbackBounds = null, progress = 1) {
+  if (!layout?.records?.length) {
+    return fallbackBounds;
+  }
+  const offsetByRecord = new Map();
+  for (const entry of layout.entries || []) {
+    offsetByRecord.set(entry.record, entryOffset(entry, progress));
+  }
+  const boundsList = [];
+  for (const record of layout.records) {
+    const bounds = recordBounds(record);
+    if (!bounds) {
+      continue;
+    }
+    const offset = offsetByRecord.get(record) || [0, 0, 0];
+    boundsList.push({
+      min: [
+        toNumber(bounds.min[0]) + offset[0],
+        toNumber(bounds.min[1]) + offset[1],
+        toNumber(bounds.min[2]) + offset[2]
+      ],
+      max: [
+        toNumber(bounds.max[0]) + offset[0],
+        toNumber(bounds.max[1]) + offset[1],
+        toNumber(bounds.max[2]) + offset[2]
+      ]
+    });
+  }
+  return mergeBounds(boundsList) || fallbackBounds;
+}
+
+export function easeExplodedViewProgress(value) {
+  const amount = clamp(toNumber(value), 0, 1);
+  return 1 - (1 - amount) ** 3;
 }
