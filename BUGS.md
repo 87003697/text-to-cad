@@ -119,6 +119,13 @@ output, workaround, blocked?, fixed?
 - **Suggestion:** reject or warn on unrecognized top-level job keys; the help
   text describes `--focus`/`--hide` flags but not the job-JSON field shape.
 - **Blocked:** ~10 min. **Fixed:** no (workaround: use `selection.hide`).
+- **Same trap, per-output variant (case lug fix, 2026-08-06):** a
+  `"selection": {"hide": [...]}` object nested inside an `outputs[]` entry is
+  ALSO silently ignored — `selection` is read only at job level
+  (`__main__.py` `job.get("selection")`), and unknown per-output keys are
+  dropped without warning, so the render completes with nothing hidden. To
+  hide parts in one view of a multi-view job, split it into separate jobs in
+  a `{"jobs": [...]}` array.
 
 ## OCC chamfer on dome/eye-cap tangent chains: silent fail, minutes-long churn, or segfault (bracelet)
 

@@ -17,10 +17,11 @@ Coordinate conventions:
   joint plane.
 - MOVEMENT local frame: bridge side up (+Z toward the caseback viewer),
   z = 0 at the main plate's bridge-side surface. The dial side lies at
-  negative z. The movement is flipped (rotated 180 about X) and lifted
-  when composed into the watch, so 3 o'clock stays at +X in both frames
-  after the flip maps movement +X to +X and movement 12 o'clock to
-  watch 12 o'clock via a 180 Z pre-rotation, handled in the assembly.
+  negative z. Cased transform (moonwatch.step.py): rotate 180 about X,
+  then lift — local (x, y, z) -> watch (x, -y, MOVT_Z_OFFSET - z). The
+  stem/crown at local +X stays at watch +X (3 o'clock); local +Y maps to
+  watch -Y, so a dial-side register that must land at watch 6 o'clock
+  sits at local +Y.
 """
 
 # ---------------------------------------------------------------------------
@@ -132,10 +133,18 @@ COLUMN_WHEEL_POS = (8.3, 3.6)
 COLUMN_WHEEL_DIAMETER = 4.6
 COLUMN_COUNT = 7
 MINUTE_RECORDER_POS = (10.2, 0.0)   # 30-min register at 3
-HOUR_RECORDER_POS = (0.0, -10.2)    # 12-hour register at 6 (dial side)
+HOUR_RECORDER_POS = (0.0, 10.2)    # 12-hour register: local +Y = watch 6
+#   (the movement flips about X when cased: local (x,y,z) -> watch (x,-y,-z),
+#   so dial-side features that must land at watch 6 o'clock sit at local +Y)
 COUPLING_WHEEL_POS = (5.6, -4.6)    # swinging intermediate wheel
 
 STEM_AXIS_Z_LOCAL = -0.55           # stem axis below plate top (dial side)
+
+# Cased movement placement (watch frame): watch_z = MOVT_Z_OFFSET - local_z.
+# Derivation: dial underside (DIAL_Z - DIAL_THICKNESS = 7.7) seats on the
+# movement's dial-side extreme (local z = -(PLATE_THICKNESS + DIAL_SIDE_DEPTH)
+# = -2.64), so MOVT_Z_OFFSET = 7.7 - 2.64 = 5.06.
+MOVT_Z_OFFSET = 5.06
 
 # ---------------------------------------------------------------------------
 # Going train tooth counts (ratios stated + verified in the assembly)

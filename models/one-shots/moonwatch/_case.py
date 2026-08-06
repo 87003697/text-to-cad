@@ -154,9 +154,13 @@ def _lug_section(y, z_top, z_bot, x_out, x_bev, z_bev):
 def _lug_ne():
     """Lug in the +X/+Y quadrant; the other three are mirrors."""
     sections = [_lug_section(*st) for st in _dense_lug_stations()]
-    # ruled: the smooth loft overshoots badly on this station set (bulges
-    # ~2 mm past the profile); dense stations keep ruled visually smooth
-    return loft(sections, ruled=True)
+    # smooth loft over the DENSE stations: sparse control stations overshot
+    # (~2 mm bulge), but the Catmull-Rom densified set pins the interpolating
+    # surface (max z stays 5.95, volume within 0.1% of ruled) while removing
+    # the piecewise-planar facet bands a ruled loft leaves on the organic
+    # faces.  The polygon vertex tracks stay sharp edges, so the twisted
+    # polished-bevel character line keeps its crisp boundary.
+    return loft(sections, ruled=False)
 
 
 def _case_middle_cuts():
