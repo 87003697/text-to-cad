@@ -146,7 +146,10 @@ export default function ParameterControlsSection({
       {definition && animations.length ? (
         <FileSheetSubsection title="Animation">
           {animations.length > 1 ? (
+            // The section's primary control: which clip is selected reframes the
+            // transport and the time/speed rows beneath it.
             <FileSheetSelectRow
+              stacked
               label="Clip"
               value={String(animationState.activeId || animations[0]?.id || "")}
               onValueChange={(nextValue) => runtime?.onAnimationSelect?.(nextValue)}
@@ -158,7 +161,10 @@ export default function ParameterControlsSection({
               }))}
             />
           ) : null}
-          <FileSheetButtonRow>
+          {/* Transport sits under the clip it drives. "Restart" is deliberately
+              not called "Reset": it returns playback to zero, where the tab's
+              one Reset returns the parameters to their defaults. */}
+          <FileSheetButtonRow columns={2}>
             <Button
               type="button"
               variant="outline"
@@ -175,6 +181,19 @@ export default function ParameterControlsSection({
                 <Play className="h-3.5 w-3.5" strokeWidth={2} aria-hidden="true" />
               )}
               <span>{animationState.playing ? "Pause" : "Play"}</span>
+            </Button>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              className={cn(compactButtonClasses, "justify-center")}
+              onClick={() => runtime?.onAnimationReset?.()}
+              disabled={!enabled}
+              aria-label={`Restart ${label} animation`}
+              title="Restart"
+            >
+              <RotateCcw className="h-3.5 w-3.5" strokeWidth={2} aria-hidden="true" />
+              <span>Restart</span>
             </Button>
           </FileSheetButtonRow>
           <FileSheetToggleRow

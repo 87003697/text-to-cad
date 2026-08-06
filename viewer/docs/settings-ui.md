@@ -176,12 +176,12 @@ than the dropdown would — in practice a two-option pair of single short words
 - Never use a Radix `Tabs` strip to switch an edit target inside a sheet — that
   was how the five-light selector ended up as a full-width row of tabs.
 
-**The stacked exception.** A select is stacked full-width only when it is the
-surface's *primary* control: the first row of the first section, whose value
-reframes everything under it. There are exactly three — Theme › `Preset`,
-Display › `Mode`, Joints › `Group state`. Pass `stacked` for those and for
-nothing else; a second stacked select on one surface means one of them is not
-primary.
+**The stacked exception.** A select is stacked full-width only when it is a
+*primary* control: the first row of its group, whose value reframes everything
+under it. There are exactly four — Theme › `Preset`, Display › `Mode`,
+Joints › `Group state`, and Animation › `Clip`, which reframes the transport
+and the time/speed rows beneath it. Pass `stacked` for those and for nothing
+else; a second stacked select in one group means one of them is not primary.
 
 ### 4. Field grid — `FileSheetFieldGrid` + `FileSheetField`
 
@@ -206,11 +206,13 @@ one sanctioned label-above pattern; independent settings never use it.
   as the last row of the section it resets. Its section names the scope, so the
   label is just "Reset".
 - **One reset per tab.** Two buttons reading "Reset" in one tab is a bug even
-  when they act on different things: the parameters tab used to carry a
-  playback restart beside Play and a parameter reset at the bottom. A restart
-  is not a reset. The surviving reset must not be conditioned on a neighbouring
-  feature either — parameters stay resettable whether or not the model has an
-  animation.
+  when they act on different things. The parameters tab carries both a playback
+  restart and a parameter reset, so they are named for what they do: the
+  transport button is **Restart** (playback back to zero) and only the
+  parameter button is **Reset** (values back to defaults). Name the action;
+  never let two controls share a label they do not share a meaning with. The
+  reset must not be conditioned on a neighbouring feature either — parameters
+  stay resettable whether or not the model has an animation.
 
 ## States
 
