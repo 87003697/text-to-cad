@@ -1,22 +1,14 @@
 import { Fragment, useEffect, useRef, useState } from "react";
 import {
-  Bot,
-  Boxes,
   Check,
   CircleCheck,
-  Code,
   Contrast,
   Copy,
-  Cuboid,
-  DraftingCompass,
-  FileBox,
   Folder,
-  Layers3,
   LoaderCircle,
-  Package,
-  Route,
   SlidersHorizontal
 } from "lucide-react";
+import EntryIcon from "./EntryIcon";
 import {
   DEFAULT_VIEWER_SKILLS_INSTALL_COMMAND,
   isViewerReleaseMajorMinorNewer,
@@ -54,10 +46,6 @@ import {
 } from "@/components/ui/tooltip";
 import { cn } from "@/ui/utils";
 import { copyTextToClipboard } from "@/ui/clipboard";
-import {
-  ENTRY_ICON_KIND,
-  entryIconKind
-} from "@/workbench/entryIconKind";
 import { entryIconStatus } from "@/workbench/entryIconStatus";
 import FileAccessContextMenu from "./FileAccessContextMenu";
 import {
@@ -127,24 +115,6 @@ function entryStatusForMenu(entry, {
   });
 }
 
-const ENTRY_ICON_COMPONENTS = {
-  [ENTRY_ICON_KIND.LOADING]: LoaderCircle,
-  [ENTRY_ICON_KIND.ASSEMBLY]: Boxes,
-  [ENTRY_ICON_KIND.DXF]: DraftingCompass,
-  [ENTRY_ICON_KIND.GCODE]: Route,
-  [ENTRY_ICON_KIND.IMPLICIT]: Code,
-  [ENTRY_ICON_KIND.ROBOT]: Bot,
-  [ENTRY_ICON_KIND.STEP_GENERATED]: Code,
-  [ENTRY_ICON_KIND.STEP_PART]: Package,
-  [ENTRY_ICON_KIND.STL_MESH]: Cuboid,
-  [ENTRY_ICON_KIND.THREE_MF_MESH]: Layers3,
-  [ENTRY_ICON_KIND.GLB_MESH]: FileBox
-};
-
-function iconForEntry(entry, sourceFormat, status) {
-  return ENTRY_ICON_COMPONENTS[entryIconKind(entry, { sourceFormat, status })] || Package;
-}
-
 function BreadcrumbEntryMenuItem({
   entry,
   selectedKey,
@@ -173,7 +143,6 @@ function BreadcrumbEntryMenuItem({
     stepArtifactGenerationAvailable
   });
   const { sourceFormat } = status;
-  const EntryIcon = iconForEntry(entry, sourceFormat, status);
   const title = [
     label,
     status.statusLabel,
@@ -198,11 +167,11 @@ function BreadcrumbEntryMenuItem({
       }}
     >
       <EntryIcon
-        className={cn(
-          "size-3.5 shrink-0",
-          status.loading && "animate-spin"
-        )}
-        aria-hidden="true"
+        entry={entry}
+        sourceFormat={sourceFormat}
+        status={status}
+        className="size-3.5 shrink-0"
+        spinning={status.loading}
       />
       <span className="block min-w-0 flex-1 truncate">{label}</span>
     </DropdownMenuItem>

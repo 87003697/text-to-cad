@@ -1,50 +1,19 @@
-import {
-  Bot,
-  Boxes,
-  ChevronRight,
-  Code,
-  Cuboid,
-  DraftingCompass,
-  FileBox,
-  Layers3,
-  Package,
-  Route
-} from "lucide-react";
+import { ChevronRight } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/ui/utils";
 import { RENDER_FORMAT } from "@/workbench/constants";
+import EntryIcon from "./EntryIcon";
 import {
   entrySourceFormat,
   isMeshRenderFormat,
   isRobotRenderFormat
 } from "cadjs/lib/fileFormats";
 import {
-  ENTRY_ICON_KIND,
-  entryIconKind
-} from "@/workbench/entryIconKind";
-import {
   fileKey,
   sidebarLabelForEntry
 } from "@/workbench/sidebar";
 
 const MAX_HOME_OPTIONS = 6;
-
-const ENTRY_ICON_COMPONENTS = {
-  [ENTRY_ICON_KIND.ASSEMBLY]: Boxes,
-  [ENTRY_ICON_KIND.DXF]: DraftingCompass,
-  [ENTRY_ICON_KIND.GCODE]: Route,
-  [ENTRY_ICON_KIND.IMPLICIT]: Code,
-  [ENTRY_ICON_KIND.ROBOT]: Bot,
-  [ENTRY_ICON_KIND.STEP_GENERATED]: Code,
-  [ENTRY_ICON_KIND.STEP_PART]: Package,
-  [ENTRY_ICON_KIND.STL_MESH]: Cuboid,
-  [ENTRY_ICON_KIND.THREE_MF_MESH]: Layers3,
-  [ENTRY_ICON_KIND.GLB_MESH]: FileBox
-};
-
-function iconForEntry(entry, sourceFormat) {
-  return ENTRY_ICON_COMPONENTS[entryIconKind(entry, { sourceFormat })] || Package;
-}
 
 function formatLabelForEntry(entry, sourceFormat) {
   if (entry?.kind === "assembly") {
@@ -152,7 +121,6 @@ export default function CadWorkspaceHome({
           {hasEntries ? homeEntries.map((entry) => {
             const key = fileKey(entry);
             const sourceFormat = entrySourceFormat(entry);
-            const EntryIcon = iconForEntry(entry, sourceFormat);
             const label = sidebarLabelForEntry(entry) || key;
             const pathLabel = pathLabelForEntry(entry);
             const formatLabel = formatLabelForEntry(entry, sourceFormat);
@@ -170,7 +138,11 @@ export default function CadWorkspaceHome({
                 }}
                 title={pathLabel || label}
               >
-                <EntryIcon className="size-4 shrink-0 text-muted-foreground group-hover:text-foreground" aria-hidden="true" />
+                <EntryIcon
+                  entry={entry}
+                  sourceFormat={sourceFormat}
+                  className="size-4 shrink-0 text-muted-foreground group-hover:text-foreground"
+                />
                 <span className="min-w-0 flex-1">
                   <span className="block min-w-0 truncate text-sm font-medium text-foreground">
                     {label}

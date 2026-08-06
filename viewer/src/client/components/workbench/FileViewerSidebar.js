@@ -1,17 +1,4 @@
-import {
-  ArrowUpFromLine,
-  Bot,
-  Boxes,
-  ChevronRight,
-  Code,
-  Cuboid,
-  DraftingCompass,
-  FileBox,
-  Layers3,
-  LoaderCircle,
-  Package,
-  Route
-} from "lucide-react";
+import { ChevronRight } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
   Collapsible,
@@ -40,42 +27,19 @@ import {
   useSidebar
 } from "@/components/ui/sidebar";
 import { cn } from "@/ui/utils";
-import {
-  ENTRY_ICON_KIND,
-  entryIconKind
-} from "@/workbench/entryIconKind";
-import {
-  entryIconStatus,
-  entryStepSourceKind
-} from "@/workbench/entryIconStatus";
+import { entryIconStatus } from "@/workbench/entryIconStatus";
+import { isCodeDerivedEntry } from "@/workbench/entryIconKind";
 import {
   fileKey,
   listSidebarItems,
   sidebarLabelForEntry
 } from "@/workbench/sidebar";
+import EntryIcon from "./EntryIcon";
 import FileAccessContextMenu from "./FileAccessContextMenu";
 
 const DESKTOP_FILE_VIEWER_MIN_WIDTH = 150;
 const DESKTOP_FILE_VIEWER_MAX_WIDTH = "calc(100vw - 0.75rem)";
 const MOBILE_FILE_VIEWER_WIDTH = "min(18rem, calc(100vw - 0.75rem))";
-
-const ENTRY_ICON_COMPONENTS = {
-  [ENTRY_ICON_KIND.LOADING]: LoaderCircle,
-  [ENTRY_ICON_KIND.ASSEMBLY]: Boxes,
-  [ENTRY_ICON_KIND.DXF]: DraftingCompass,
-  [ENTRY_ICON_KIND.GCODE]: Route,
-  [ENTRY_ICON_KIND.IMPLICIT]: Code,
-  [ENTRY_ICON_KIND.ROBOT]: Bot,
-  [ENTRY_ICON_KIND.STEP_GENERATED]: Code,
-  [ENTRY_ICON_KIND.STEP_PART]: Package,
-  [ENTRY_ICON_KIND.STL_MESH]: Cuboid,
-  [ENTRY_ICON_KIND.THREE_MF_MESH]: Layers3,
-  [ENTRY_ICON_KIND.GLB_MESH]: FileBox
-};
-
-function iconForEntry(entry, sourceFormat, status) {
-  return ENTRY_ICON_COMPONENTS[entryIconKind(entry, { sourceFormat, status })] || Package;
-}
 
 function FileEntryButton({
   entry,
@@ -118,18 +82,9 @@ function FileEntryButton({
     activeStepArtifactGenerationFile,
     stepArtifactGenerationAvailable
   });
-  const EntryIcon = iconForEntry(entry, sourceFormat, status);
-  const stepSourceKind = entryStepSourceKind(entry);
-  const SourceBadgeIcon = stepSourceKind === "python"
-    ? Code
-    : stepSourceKind === "step"
-      ? ArrowUpFromLine
-      : null;
-  const showSourceBadge = Boolean(SourceBadgeIcon);
   const title = [
     label,
-    stepSourceKind === "python" ? "Python-backed" : "",
-    stepSourceKind === "step" ? "STEP-backed" : "",
+    isCodeDerivedEntry(entry) ? "Python-backed" : "",
     status.statusLabel,
     entry?.kind,
     String(entry?.file || "")
@@ -154,16 +109,12 @@ function FileEntryButton({
     >
       <span className="relative flex size-4 shrink-0 items-center justify-center" aria-hidden="true">
         <EntryIcon
-          className={cn(
-            "size-4",
-            status.loading && "animate-spin"
-          )}
+          entry={entry}
+          sourceFormat={sourceFormat}
+          status={status}
+          className="size-4"
+          spinning={status.loading}
         />
-        {showSourceBadge ? (
-          <span className="absolute -bottom-1 -right-1 flex size-2.5 items-center justify-center rounded-[3px] border border-sidebar bg-sidebar text-sidebar-foreground shadow-sm">
-            <SourceBadgeIcon className="size-2" strokeWidth={2.5} />
-          </span>
-        ) : null}
       </span>
       <span className="block min-w-0 flex-1 max-w-full overflow-hidden text-ellipsis whitespace-nowrap">{label}</span>
     </SidebarMenuButton>
