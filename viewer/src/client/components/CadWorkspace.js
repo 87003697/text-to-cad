@@ -930,12 +930,37 @@ function buildStepModuleAnimationFrameValues({
   return nextValues;
 }
 
+// The values throttled here are rebuilt objects — a useMemo over animation
+// state, a map of parameter values — so their identity churns on renders where
+// nothing about their contents changed. Comparing by identity made this hook
+// re-emit values that were already current, and since an emit is itself a state
+// update that causes the next render, each redundant emit bought another render
+// of the whole workspace. Emit on a change of value, not of identity.
+function throttledValuesEqual(left, right) {
+  if (Object.is(left, right)) {
+    return true;
+  }
+  const bothPlainObjects = left && right &&
+    typeof left === "object" && typeof right === "object" &&
+    !Array.isArray(left) && !Array.isArray(right);
+  return bothPlainObjects ? shallowObjectValuesEqual(left, right) : false;
+}
+
 function useThrottledValue(value, intervalMs, resetKey = "") {
   const [throttledValue, setThrottledValue] = useState(value);
   const latestValueRef = useRef(value);
+  const lastEmittedRef = useRef(value);
   const resetKeyRef = useRef(resetKey);
   const lastEmitTimeRef = useRef(0);
   const timerIdRef = useRef(0);
+
+  const emitValue = useCallback((nextValue) => {
+    if (throttledValuesEqual(lastEmittedRef.current, nextValue)) {
+      return;
+    }
+    lastEmittedRef.current = nextValue;
+    setThrottledValue(nextValue);
+  }, []);
 
   useEffect(() => {
     return () => {
@@ -960,13 +985,14 @@ function useThrottledValue(value, intervalMs, resetKey = "") {
         timerIdRef.current = 0;
       }
       lastEmitTimeRef.current = now;
+      lastEmittedRef.current = value;
       setThrottledValue(value);
       return;
     }
 
     if (interval <= 0 || typeof window === "undefined") {
       lastEmitTimeRef.current = now;
-      setThrottledValue(value);
+      emitValue(value);
       return;
     }
 
@@ -977,7 +1003,7 @@ function useThrottledValue(value, intervalMs, resetKey = "") {
         timerIdRef.current = 0;
       }
       lastEmitTimeRef.current = now;
-      setThrottledValue(value);
+      emitValue(value);
       return;
     }
 
@@ -987,10 +1013,10 @@ function useThrottledValue(value, intervalMs, resetKey = "") {
         lastEmitTimeRef.current = typeof performance !== "undefined" && typeof performance.now === "function"
           ? performance.now()
           : Date.now();
-        setThrottledValue(latestValueRef.current);
+        emitValue(latestValueRef.current);
       }, interval - elapsed);
     }
-  }, [intervalMs, resetKey, value]);
+  }, [emitValue, intervalMs, resetKey, value]);
 
   return throttledValue;
 }
