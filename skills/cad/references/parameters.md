@@ -75,13 +75,15 @@ export default { manifest: { /* ... */ }, update({ params, effects }) { /* ... *
   models/mechanisms/gear_rack_gripper.step.js   # its sidecar
   ```
 
-  This applies to `.step` and `.stp`, and it is **viewer-only** — nothing in the
-  CAD pipeline reads it, and no render package records it. Serving stays gated:
-  a `.js` is served under this rule only when the STEP file it is named after
-  actually exists beside it (`is_step_sidecar_path` in
-  `viewer/server_py/scanner.py`). Do not add a wrapper `<name>.step.py` that
-  only re-imports the `.step` to declare `params`; it makes the imported file
-  look generated and buys nothing.
+  This applies to `.step` and `.stp`. The *filename convention* is viewer-only —
+  nothing in the CAD pipeline reads it, and no render package records it.
+  Serving stays gated: a `.js` is served under this rule only when the STEP file
+  it is named after actually exists beside it (`is_step_sidecar_path` in
+  `viewer/server_py/scanner.py`). `scripts/snapshot` renders the same file, but
+  you must name it explicitly with `--params-path` (see Validation below); it
+  never guesses by filename. Do not add a wrapper `<name>.step.py` that only
+  re-imports the `.step` to declare `params`; it makes the imported file look
+  generated and buys nothing.
 
 ### `manifest.step.path` link
 
@@ -183,6 +185,21 @@ Use deterministic checks first:
 Use CAD `scripts/snapshot` review for visual semantics, following `snapshot-review.md` for packet sizing and PNG-vs-GIF mode selection:
 
 - Review several parameter poses, with GIFs for motion/animation review.
+- `--params` takes sidecar parameter *values*; the sidecar file itself comes
+  from wherever the model declares it. A generated model needs nothing extra.
+  An imported `.step`/`.stp` declares nothing, so name its sidecar with
+  `--params-path` (job field `stepParametersPath`) — `--params` alone is
+  rejected there, and `--params-path` is rejected on a generated model, whose
+  sidecar belongs in its `gen_step()`. The path must sit inside the model
+  folder, since the renderer serves assets relative to it.
+
+  ```bash
+  python scripts/snapshot --input models/mechanisms/gear_rack_gripper.step \
+    --params-path models/mechanisms/gear_rack_gripper.step.js \
+    --params '{"animate":{"stroke":{"from":0,"to":1}}}' \
+    --output tmp/gripper.gif
+  ```
+
 - Compare sidecar enabled vs disabled when viewer-time presentation is involved.
 - Check for disconnected hinges, drifting pivots, collisions, impossible branch blends, and looping jumps.
 - Convert visual concerns into measurements or explicit geometric facts before calling them fixed.
