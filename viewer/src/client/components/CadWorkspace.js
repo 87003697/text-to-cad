@@ -946,6 +946,22 @@ function throttledValuesEqual(left, right) {
   return bothPlainObjects ? shallowObjectValuesEqual(left, right) : false;
 }
 
+// React re-invokes state updaters, and it only stops re-rendering when the
+// result is Object.is-equal to what it already has. The implicit animation
+// updaters each built a fresh object every invocation, so a single click could
+// be re-applied indefinitely: identical values, a new identity each time, never
+// settling. Re-publishing the object already in the ref gives React the
+// identity it needs to bail out, and keeps the ref write the animation tick
+// depends on (it reads the ref synchronously between renders).
+function publishAnimationState(stateRef, current, nextState) {
+  const published = stateRef.current;
+  if (published && shallowObjectValuesEqual(published, nextState)) {
+    return published;
+  }
+  stateRef.current = nextState;
+  return nextState;
+}
+
 function useThrottledValue(value, intervalMs, resetKey = "") {
   const [throttledValue, setThrottledValue] = useState(value);
   const latestValueRef = useRef(value);
@@ -2584,8 +2600,7 @@ export default function CadWorkspace({
         elapsedSec: 0,
         loopEnabled: animation?.loop !== false
       };
-      implicitAnimationStateRef.current = nextState;
-      return nextState;
+      return publishAnimationState(implicitAnimationStateRef, current, nextState);
     });
   }, [selectedImplicitDefinition]);
 
@@ -2603,8 +2618,7 @@ export default function CadWorkspace({
         elapsedSec,
         playing: !current.playing
       };
-      implicitAnimationStateRef.current = nextState;
-      return nextState;
+      return publishAnimationState(implicitAnimationStateRef, current, nextState);
     });
   }, [selectedImplicitDefinition]);
 
@@ -2615,8 +2629,7 @@ export default function CadWorkspace({
         elapsedSec: 0,
         playing: false
       };
-      implicitAnimationStateRef.current = nextState;
-      return nextState;
+      return publishAnimationState(implicitAnimationStateRef, current, nextState);
     });
   }, []);
 
@@ -2628,8 +2641,7 @@ export default function CadWorkspace({
         ...current,
         elapsedSec: clampNumber(elapsedSec, 0, duration)
       };
-      implicitAnimationStateRef.current = nextState;
-      return nextState;
+      return publishAnimationState(implicitAnimationStateRef, current, nextState);
     });
   }, [markImplicitParameterInteraction, selectedImplicitActiveAnimation]);
 
@@ -2639,8 +2651,7 @@ export default function CadWorkspace({
         ...current,
         speed: clampNumber(speed, 0.1, 5)
       };
-      implicitAnimationStateRef.current = nextState;
-      return nextState;
+      return publishAnimationState(implicitAnimationStateRef, current, nextState);
     });
   }, []);
 
@@ -2656,8 +2667,7 @@ export default function CadWorkspace({
         ...current,
         loopEnabled
       };
-      implicitAnimationStateRef.current = nextState;
-      return nextState;
+      return publishAnimationState(implicitAnimationStateRef, current, nextState);
     });
   }, [selectedImplicitDefinition]);
 
