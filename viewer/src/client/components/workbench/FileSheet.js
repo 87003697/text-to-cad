@@ -37,7 +37,7 @@ const FILE_SHEET_CONTROL_TEXT_CLASSES = [
 export const FILE_SHEET_SECTION_TRIGGER_CLASSES = "px-2 py-2 text-sm font-normal text-sidebar-foreground/90";
 export const FILE_SHEET_SECTION_CONTENT_CLASSES = "py-2";
 export const FILE_SHEET_CONTROL_ROW_CLASSES = "space-y-1 px-2";
-export const FILE_SHEET_ROW_STACK_CLASSES = "space-y-2";
+export const FILE_SHEET_ROW_STACK_CLASSES = "space-y-3";
 export const FILE_SHEET_SECTION_BODY_CLASSES = `${FILE_SHEET_ROW_STACK_CLASSES} py-2`;
 export const FILE_SHEET_SLIDER_FIELD_CLASSES = "space-y-1 px-2";
 export const FILE_SHEET_INLINE_CONTROL_ROW_CLASSES = "px-2";
@@ -151,9 +151,8 @@ export function FileSheetSubsection({
     // The rule belongs to the top of a section, so a section owns the gap below
     // its own last row (pb-4) and the rule owns the gap down to the heading
     // (mb-4). Both are 16px, which is what makes the space above a heading and
-    // below a section's last row read as equal. Inside a section everything —
-    // heading to first row, row to row — sits on one 8px rhythm, half the
-    // section padding, so groups read as groups.
+    // below a section's last row read as equal. Inside, rows sit 12px apart and
+    // the heading takes 12px to clear them.
     <div
       className={cn(
         "pb-4",

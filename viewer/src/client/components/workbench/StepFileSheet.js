@@ -23,7 +23,6 @@ import FileSheet, {
   FileSheetButtonRow,
   FileSheetColorPicker,
   FileSheetControlRow,
-  FileSheetSectionBody,
   FileSheetSelectRow,
   FileSheetSliderField,
   FileSheetStatusText,
@@ -1318,28 +1317,32 @@ export default function StepFileSheet({
       id: "parameters",
       title: "Parameters",
       content: (
-              <FileSheetSectionBody>
-                {stepModuleDefinition ? (
-                  <FileSheetToggleRow
-                    label="Enable"
-                    checked={stepModuleEnabled}
-                    onCheckedChange={(checked) => stepModule?.onEnabledChange?.(checked)}
-                    ariaLabel="Enable STEP module"
-                  />
-                ) : null}
-
+              <div className="py-2">
                 {stepModuleStatus === "loading" ? (
-                  <FileSheetStatusText>Loading STEP module...</FileSheetStatusText>
+                  <FileSheetStatusText className="py-2">Loading STEP module...</FileSheetStatusText>
                 ) : null}
                 {stepModuleError ? (
-                  <FileSheetStatusText tone="error">{stepModuleError}</FileSheetStatusText>
+                  <FileSheetStatusText tone="error" className="py-2">{stepModuleError}</FileSheetStatusText>
                 ) : null}
 
+                {stepModuleDefinition ? (
+                  <FileSheetSubsection title="Module">
+                    <FileSheetToggleRow
+                      label="Enable"
+                      checked={stepModuleEnabled}
+                      onCheckedChange={(checked) => stepModule?.onEnabledChange?.(checked)}
+                      ariaLabel="Enable STEP module"
+                    />
+                  </FileSheetSubsection>
+                ) : null}
+
+                {/* Playback is its own group above the parameters: it acts on
+                    time, not on the model's inputs, and most models have none. */}
                 {stepModuleDefinition && stepModuleAnimations.length ? (
-                  <>
+                  <FileSheetSubsection title="Animation">
                     {stepModuleAnimations.length > 1 ? (
                       <FileSheetSelectRow
-                        label="Animation"
+                        label="Clip"
                         value={String(stepModuleAnimationState.activeId || stepModuleAnimations[0]?.id || "")}
                         onValueChange={(nextValue) => stepModule?.onAnimationSelect?.(nextValue)}
                         disabled={!stepModuleEnabled}
@@ -1350,38 +1353,23 @@ export default function StepFileSheet({
                         }))}
                       />
                     ) : null}
-                    <FileSheetControlRow>
-                      <FileSheetButtonRow columns={2} className="px-0">
-                        <Button
-                          type="button"
-                          variant="outline"
-                          size="sm"
-                          className={cn(compactButtonClasses, "justify-center")}
-                          onClick={() => stepModule?.onAnimationPlayToggle?.()}
-                          disabled={!stepModuleEnabled}
-                        >
-                          {stepModuleAnimationState.playing ? (
-                            <Pause className="h-3.5 w-3.5" strokeWidth={2} aria-hidden="true" />
-                          ) : (
-                            <Play className="h-3.5 w-3.5" strokeWidth={2} aria-hidden="true" />
-                          )}
-                          <span>{stepModuleAnimationState.playing ? "Pause" : "Play"}</span>
-                        </Button>
-                        <Button
-                          type="button"
-                          variant="outline"
-                          size="sm"
-                          className={cn(compactButtonClasses, "justify-center")}
-                          onClick={() => stepModule?.onAnimationReset?.()}
-                          disabled={!stepModuleEnabled}
-                          aria-label="Restart STEP animation"
-                          title="Restart"
-                        >
-                          <RotateCcw className="h-3.5 w-3.5" strokeWidth={2} aria-hidden="true" />
-                          <span>Reset</span>
-                        </Button>
-                      </FileSheetButtonRow>
-                    </FileSheetControlRow>
+                    <FileSheetButtonRow>
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        className={cn(compactButtonClasses, "justify-center")}
+                        onClick={() => stepModule?.onAnimationPlayToggle?.()}
+                        disabled={!stepModuleEnabled}
+                      >
+                        {stepModuleAnimationState.playing ? (
+                          <Pause className="h-3.5 w-3.5" strokeWidth={2} aria-hidden="true" />
+                        ) : (
+                          <Play className="h-3.5 w-3.5" strokeWidth={2} aria-hidden="true" />
+                        )}
+                        <span>{stepModuleAnimationState.playing ? "Pause" : "Play"}</span>
+                      </Button>
+                    </FileSheetButtonRow>
                     <FileSheetToggleRow
                       label="Loop"
                       checked={stepModuleAnimationState.loopEnabled !== false}
@@ -1419,127 +1407,129 @@ export default function StepFileSheet({
                         aria-label="STEP animation speed"
                       />
                     </FileSheetSliderField>
-                  </>
+                  </FileSheetSubsection>
                 ) : null}
 
-                {stepModuleDefinition && !stepModuleParameters.length ? (
-                  <FileSheetStatusText>No module parameters.</FileSheetStatusText>
-                ) : null}
-                {stepModuleParameters.map((parameter) => {
-                  const value = stepModuleValues?.[parameter.id] ?? parameter.defaultValue;
-                  const controlStep = resolveStepModuleNumberControlStep(parameter);
-                  if (parameter.type === "boolean") {
-                    return (
-                      <FileSheetToggleRow
-                        key={parameter.id}
-                        label={parameter.label}
-                        checked={value === true}
-                        onCheckedChange={(checked) => stepModule?.onParameterChange?.(parameter.id, checked)}
-                        disabled={!stepModuleEnabled}
-                        ariaLabel={parameter.label}
-                      />
-                    );
-                  }
-                  if (parameter.type === "enum") {
-                    return (
-                      <FileSheetSelectRow
-                        key={parameter.id}
-                        label={parameter.label}
-                        value={String(value ?? "")}
-                        onValueChange={(nextValue) => stepModule?.onParameterChange?.(parameter.id, nextValue)}
-                        disabled={!stepModuleEnabled}
-                        ariaLabel={parameter.label}
-                        options={parameter.options}
-                      />
-                    );
-                  }
-                  if (parameter.type === "color") {
-                    return (
-                      <FileSheetControlRow
-                        key={parameter.id}
-                        label={parameter.label}
-                        trailing={(
-                          <FileSheetColorPicker
-                            value={String(value || "#ffffff")}
-                            onChange={(nextValue) => stepModule?.onParameterChange?.(parameter.id, nextValue)}
+                {stepModuleDefinition ? (
+                  <FileSheetSubsection title="Parameters">
+                    {!stepModuleParameters.length ? (
+                      <FileSheetStatusText>No module parameters.</FileSheetStatusText>
+                    ) : null}
+                    {stepModuleParameters.map((parameter) => {
+                      const value = stepModuleValues?.[parameter.id] ?? parameter.defaultValue;
+                      const controlStep = resolveStepModuleNumberControlStep(parameter);
+                      if (parameter.type === "boolean") {
+                        return (
+                          <FileSheetToggleRow
+                            key={parameter.id}
+                            label={parameter.label}
+                            checked={value === true}
+                            onCheckedChange={(checked) => stepModule?.onParameterChange?.(parameter.id, checked)}
+                            disabled={!stepModuleEnabled}
+                            ariaLabel={parameter.label}
+                          />
+                        );
+                      }
+                      if (parameter.type === "enum") {
+                        return (
+                          <FileSheetSelectRow
+                            key={parameter.id}
+                            label={parameter.label}
+                            value={String(value ?? "")}
+                            onValueChange={(nextValue) => stepModule?.onParameterChange?.(parameter.id, nextValue)}
+                            disabled={!stepModuleEnabled}
+                            ariaLabel={parameter.label}
+                            options={parameter.options}
+                          />
+                        );
+                      }
+                      if (parameter.type === "color") {
+                        return (
+                          <FileSheetControlRow
+                            key={parameter.id}
+                            label={parameter.label}
+                            trailing={(
+                              <FileSheetColorPicker
+                                value={String(value || "#ffffff")}
+                                onChange={(nextValue) => stepModule?.onParameterChange?.(parameter.id, nextValue)}
+                                disabled={!stepModuleEnabled}
+                                aria-label={parameter.label}
+                              />
+                            )}
+                          />
+                        );
+                      }
+                      if (parameter.type === "button") {
+                        return (
+                          <FileSheetButtonRow key={parameter.id}>
+                            <Button
+                              type="button"
+                              variant="outline"
+                              size="sm"
+                              className={cn(compactButtonClasses, "justify-center")}
+                              onClick={() => stepModule?.onParameterChange?.(parameter.id, Number(value || 0) + 1)}
+                              disabled={!stepModuleEnabled}
+                            >
+                              {parameter.label}
+                            </Button>
+                          </FileSheetButtonRow>
+                        );
+                      }
+                      return (
+                        <FileSheetSliderField
+                          key={parameter.id}
+                          label={parameter.label}
+                          value={`${formatControlNumber(value)}${parameter.unit ? ` ${parameter.unit}` : ""}`}
+                          onValueCommit={(nextValue) => {
+                            stepModule?.onParameterChange?.(parameter.id, parseFileSheetNumberInput(nextValue, {
+                              fallback: value,
+                              min: parameter.min,
+                              max: parameter.max
+                            }));
+                          }}
+                          valueInputProps={{
+                            disabled: !stepModuleEnabled,
+                            ariaLabel: `${parameter.label} slider value`
+                          }}
+                        >
+                          <Slider
+                            className={FILE_SHEET_PRECISION_SLIDER_CLASSES}
+                            value={[Number(value) || 0]}
+                            min={parameter.min}
+                            max={parameter.max}
+                            step={controlStep}
+                            onValueChange={(nextValue) => stepModule?.onParameterChange?.(parameter.id, nextValue?.[0] ?? value)}
                             disabled={!stepModuleEnabled}
                             aria-label={parameter.label}
                           />
-                        )}
-                      />
-                    );
-                  }
-                  if (parameter.type === "button") {
-                    return (
-                      <FileSheetControlRow key={parameter.id}>
+                        </FileSheetSliderField>
+                      );
+                    })}
+                    {/*
+                      The one reset in this tab, and it belongs to the
+                      parameters. It does not depend on there being an animation
+                      to reset alongside them — the animation's own restart
+                      button was a second thing called "Reset" acting on
+                      something else entirely.
+                    */}
+                    {stepModule?.onResetParameters ? (
+                      <FileSheetButtonRow>
                         <Button
                           type="button"
                           variant="outline"
                           size="sm"
-                          className={cn(compactButtonClasses, "w-full justify-center")}
-                          onClick={() => stepModule?.onParameterChange?.(parameter.id, Number(value || 0) + 1)}
-                          disabled={!stepModuleEnabled}
+                          className={cn(compactButtonClasses, "justify-center")}
+                          onClick={() => stepModule.onResetParameters()}
+                          title="Reset STEP parameters"
                         >
-                          {parameter.label}
+                          <RotateCcw className="h-3.5 w-3.5" strokeWidth={2} aria-hidden="true" />
+                          <span>Reset</span>
                         </Button>
-                      </FileSheetControlRow>
-                    );
-                  }
-                  return (
-                    <FileSheetSliderField
-                      key={parameter.id}
-                      label={parameter.label}
-                      value={`${formatControlNumber(value)}${parameter.unit ? ` ${parameter.unit}` : ""}`}
-                      onValueCommit={(nextValue) => {
-                        stepModule?.onParameterChange?.(parameter.id, parseFileSheetNumberInput(nextValue, {
-                          fallback: value,
-                          min: parameter.min,
-                          max: parameter.max
-                        }));
-                      }}
-                      valueInputProps={{
-                        disabled: !stepModuleEnabled,
-                        ariaLabel: `${parameter.label} slider value`
-                      }}
-                    >
-                      <Slider
-                        className={FILE_SHEET_PRECISION_SLIDER_CLASSES}
-                        value={[Number(value) || 0]}
-                        min={parameter.min}
-                        max={parameter.max}
-                        step={controlStep}
-                        onValueChange={(nextValue) => stepModule?.onParameterChange?.(parameter.id, nextValue?.[0] ?? value)}
-                        disabled={!stepModuleEnabled}
-                        aria-label={parameter.label}
-                      />
-                    </FileSheetSliderField>
-                  );
-                })}
-                {/*
-                  Reset shows whenever this sheet renders ANY control, animation
-                  or not. Gating it on `stepModuleParameters.length` alone left a
-                  model whose only control was an animation with no way back to
-                  defaults — the animation row's own "Reset" restarts playback,
-                  which is a different action.
-                */}
-                {stepModuleDefinition
-                && (stepModuleParameters.length || stepModuleAnimations.length)
-                && stepModule?.onResetParameters ? (
-                  <FileSheetControlRow>
-                    <Button
-                      type="button"
-                      variant="outline"
-                      size="sm"
-                      className={cn(compactButtonClasses, "w-full justify-center")}
-                      onClick={() => stepModule.onResetParameters()}
-                      title="Reset STEP parameters"
-                    >
-                      <RotateCcw className="h-3.5 w-3.5" strokeWidth={2} aria-hidden="true" />
-                      <span>Reset parameters</span>
-                    </Button>
-                  </FileSheetControlRow>
+                      </FileSheetButtonRow>
+                    ) : null}
+                  </FileSheetSubsection>
                 ) : null}
-              </FileSheetSectionBody>
+              </div>
       )
     } : null,
     ...themeTabs,

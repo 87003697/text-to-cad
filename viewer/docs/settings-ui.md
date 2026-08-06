@@ -34,6 +34,11 @@ Tab body                    px-0, vertical stack of sections
 - Everyday settings stay visible. Progressive disclosure is allowed only when a
   gate switch turns a whole feature off (Floor, Grid, Environment, a light):
   the switch stays, the dependent rows unmount.
+- Split a tab by *what the controls act on*, not by what fits. The parameters
+  tab is `Module` (the enable switch), then `Animation` (playback: clip, play,
+  loop, time, speed) when the model has one, then `Parameters` (the model's own
+  inputs). Playback sits above the inputs because it is the thing you reach for
+  while watching, and it is absent for most models.
 
 ## Spacing and sizing tokens
 
@@ -46,7 +51,7 @@ gutter — one label axis, one control axis, no exceptions.
 | Row height (inline) | `min-h-7` (28px) | switch, color, value, select-trailing rows |
 | Control height | `h-7` (28px) | every input, select, button, stepper, picker |
 | Dropdown width | `w-fit`, `min-w-20`, `max-w-44` | inline select trigger |
-| Gap between rows | 8px (`space-y-2` stack) | within a section |
+| Gap between rows | 12px (`space-y-3` stack) | within a section |
 | Label → control, stacked | 4px (`space-y-1`) | inside one block row |
 | Rule → heading | 16px (`mb-4` on the rule) | `FileSheetSubsection` owns it |
 | Heading → first row | 12px (`pb-3`) | `FileSheetSubsection` owns it |
@@ -61,10 +66,10 @@ This holds when a gated section collapses to its heading alone: the heading's
 bottom gap exists only to clear the first row, so with no rows it is dropped
 and the collapsed section stays 16px on both sides.
 
-Inside a section, rows sit 8px apart and the heading takes 12px to clear the
-group it names. Four spacings for the whole panel, each a step on the 4px
-grid: 4px binds a label to its control, 8px binds rows into a group, 12px sets
-a heading off from its rows, 16px holds groups apart.
+Inside a section, rows sit 12px apart and the heading takes 12px to clear the
+group it names. Three spacings for the whole panel, each a step on the 4px
+grid: 4px binds a label to its control, 12px separates rows within a group,
+16px holds groups apart.
 
 **Every control is exactly 28px tall** — input, select, colour picker, stepper,
 button, segmented item — so a column of them shares one rhythm and one right
@@ -197,8 +202,14 @@ one sanctioned label-above pattern; independent settings never use it.
   (`grid grid-cols-N gap-1.5` inside a `FileSheetControlRow`), icon + label,
   centered. No ragged `flex-wrap` clusters.
 - Reset is an outline button with the `RotateCcw` icon, full row width, placed
-  as the last row of the section or tab it resets. Its label names the scope:
-  "Reset", "Reset parameters", "Reset graphics".
+  as the last row of the section it resets. Its section names the scope, so the
+  label is just "Reset".
+- **One reset per tab.** Two buttons reading "Reset" in one tab is a bug even
+  when they act on different things: the parameters tab used to carry a
+  playback restart beside Play and a parameter reset at the bottom. A restart
+  is not a reset. The surviving reset must not be conditioned on a neighbouring
+  feature either — parameters stay resettable whether or not the model has an
+  animation.
 
 ## States
 
