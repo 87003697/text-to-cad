@@ -19,7 +19,12 @@ inside `${EXP_DIR}/`:
 - `route.json` — the routing decision (schema below).
 - `compare_metrics.json` — the `$mesh-compare` numeric output for the
   latest iteration (each iter overwrites; use git history to retrieve
-  prior iters).
+  prior iters). Its optional `voxblame` field contains only an overview and
+  one next action.
+- `voxblame/session.json`, `voxblame/reference.vbsvo`, and
+  `voxblame/steps/<N>/{candidate.vbsvo,report.json}` — immutable hierarchical
+  surface-grading snapshots and full reports. Each snapshot is complete, not
+  a delta; `.tmp-*` directories are unpublished crash residue.
 - `notes.md` — reconstruction notes (schema below).
 
 **Basename-based (per-iter overwrite)**
@@ -80,8 +85,9 @@ obvious. Declaring the rejected option makes the decision auditable.
 
    If the reconstruction loop exited via **plateau** or **divergence**
    (not accept), the section must also declare the residual metrics and
-   the exit reason (e.g., "plateau at chamfer_l2=0.028, iou=0.71 after
-   3 iterations" or "iter 2 regressed vs iter 1; iter 1 kept as final").
+   the exit reason (e.g., "plateau at chamfer=0.018,
+   max_directional_p95=0.041 after 3 iterations" or "iter 2 regressed
+   vs iter 1; iter 1 kept as final").
 
 7. `## Self-Assessed Quality` — score 0-10 + one-sentence rationale.
 
@@ -90,20 +96,38 @@ Any renamed, reordered, added, or omitted section violates the contract.
 ## Refinement thresholds
 
 The full `compare_metrics.json` schema is authoritative in
-`$mesh-compare`'s `references/compare-metrics.md`. Workflow step 5
-consumes these workflow-specific thresholds (normalized coordinates,
-Trellis2 `[-0.5, 0.5]^3`):
+`$mesh-compare`'s `references/compare-metrics.md`. Workflow step 4 must use
+exactly `--samples 50000 --seed 0` in normalized Trellis2
+`[-0.5, 0.5]^3` coordinates. A result measured with another sample count or
+seed is diagnostic only and cannot receive an accept verdict.
 
-- `chamfer_l2 > 0.02` — structural loss; refinement warranted.
-- `hausdorff > 0.10` — one region diverges strongly; run
-  `$mesh-compare` **heatmap** mode to locate before adjusting.
-- `iou < 0.75` — bulk shape mismatch; consider re-routing before
-  refining.
+**Accept** requires all three hard gates:
 
-**Accept** requires `chamfer_l2 ≤ 0.02` AND `iou ≥ 0.75`. Below both
-thresholds → accept; skip refinement and proceed to step 6.
+1. `chamfer ≤ 0.01`.
+2. `stats.p95_a2b ≤ 0.03` AND `stats.p95_b2a ≤ 0.03`.
+3. `voxblame.coarsest_first_error_depth` is null or greater than 3.
 
-Numbers are placeholders; recalibrate after the first pilot batch.
+If any hard gate fails, the verdict is refine (subject to the existing
+plateau/divergence exit rules). Consume the single `voxblame.next_action` when
+non-null; otherwise fall back to `$mesh-compare` heatmap mode. Never embed the
+full report's `current.errors` or `changes` arrays in
+`compare_metrics.json`.
+
+Across iterations, define `max_directional_p95` as the maximum of the two p95
+fields. Meaningful progress is a 10% reduction in `chamfer`, a 10% reduction
+in `max_directional_p95`, or a deeper
+`voxblame.coarsest_first_error_depth` (null is best). This keeps a localized
+tail improvement from being mislabeled as a plateau merely because the global
+mean changed by less than 10%.
+
+`hausdorff > 0.10` is a warning for a potentially severe isolated outlier;
+record it in `notes.md § Verification` and use a heatmap when diagnosis is
+needed, but it does not independently veto acceptance. Do not compute, append,
+or use IoU for this workflow: voxel occupancy is resolution-dependent and is
+unstable for thin structures such as wings.
+
+These thresholds are the post-cup-pilot policy. Recalibrate only with a
+recorded benchmark batch; do not change them inside an individual experiment.
 
 ## Git commit conventions
 
@@ -118,7 +142,12 @@ workflow phase:
   - Accept: `iter <N>: chamfer=<X>, verdict=accept`
   - Refine: `iter <N>: chamfer=<X>, verdict=refine, diagnosis=<one-line>`
   - Plateau: `iter <N>: chamfer=<X>, verdict=plateau`
-  - Divergence: do NOT commit; run `git checkout .` to discard iter N.
+  - Divergence: save iter N's measured values, run `git checkout .` to discard
+    its uncommitted modeling changes, then create an empty audit commit:
+    `git commit --allow-empty -m "iter <N>: chamfer=<X>,
+    verdict=plateau_via_divergence, kept=iter <N-1>"`. The kept final artifact
+    and `compare_metrics.json` remain from iter N-1; the commit message and
+    `notes.md § Verification` retain the discarded iteration's evidence.
 - **Finalization phase (one commit per step):**
   - `step 6: verify (side-by-side rendered)`
   - `step 7: notes + verification (final chamfer=<X>)`
