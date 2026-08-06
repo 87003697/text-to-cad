@@ -368,10 +368,15 @@ export function buildAgentStartCommand({
     };
   }
 
+  const bundledServer = path.join(resolvedPackageRoot, "backend", "server.mjs");
+  const serverEntrypoint = fs.existsSync(bundledServer)
+    ? bundledServer
+    : path.join(resolvedPackageRoot, "src", "server", "server.mjs");
+
   return {
     command: nodePath,
     args: [
-      path.join(resolvedPackageRoot, "src", "server", "server.mjs"),
+      serverEntrypoint,
       ...forwardedArgs,
     ],
     cwd: resolvedPackageRoot,

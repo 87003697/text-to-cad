@@ -205,6 +205,50 @@ test("resolveAgentStartCommand keeps server-only flags on the production server 
   ]);
 });
 
+test("buildAgentStartCommand uses the bundled production backend when present", async (t) => {
+  const packageRoot = await fs.mkdtemp(path.join(os.tmpdir(), "cad-viewer-bundled-runtime-"));
+  t.after(() => fs.rm(packageRoot, { recursive: true, force: true }));
+  await fs.mkdir(path.join(packageRoot, "backend"), { recursive: true });
+  await fs.writeFile(path.join(packageRoot, "backend", "server.mjs"), "export {};\n");
+
+  const command = buildAgentStartCommand({
+    mode: "serve",
+    packageRoot,
+    forwardedArgs: ["--port", "4178"],
+    env: {},
+    nodePath: "/node",
+    git: "",
+  });
+
+  assert.deepEqual(command.args, [
+    path.join(packageRoot, "backend", "server.mjs"),
+    "--port",
+    "4178",
+  ]);
+});
+
+test("buildAgentStartCommand uses the source backend in a development package", async (t) => {
+  const packageRoot = await fs.mkdtemp(path.join(os.tmpdir(), "cad-viewer-source-runtime-"));
+  t.after(() => fs.rm(packageRoot, { recursive: true, force: true }));
+  await fs.mkdir(path.join(packageRoot, "src", "server"), { recursive: true });
+  await fs.writeFile(path.join(packageRoot, "src", "server", "server.mjs"), "export {};\n");
+
+  const command = buildAgentStartCommand({
+    mode: "serve",
+    packageRoot,
+    forwardedArgs: ["--port", "4178"],
+    env: {},
+    nodePath: "/node",
+    git: "",
+  });
+
+  assert.deepEqual(command.args, [
+    path.join(packageRoot, "src", "server", "server.mjs"),
+    "--port",
+    "4178",
+  ]);
+});
+
 test("isReusableAgentViewerServer uses git only when both sides report it", () => {
   assert.equal(
     isReusableAgentViewerServer({
