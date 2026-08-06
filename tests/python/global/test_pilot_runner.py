@@ -100,6 +100,15 @@ class RunnerTests(unittest.TestCase):
             "UNRELATED_SECRET": "must-not-cross-sandbox",
         }
 
+    def test_production_prompt_and_workload_have_no_monitor_control_channel(self) -> None:
+        pilot_script = (PILOT_ROOT / "toys4k-pilot.sh").read_text(encoding="utf-8")
+        self.assertNotIn("pilot-feedback", pilot_script)
+        self.assertNotIn("CVM_JOB", pilot_script)
+        prompt = pilot_script[pilot_script.index("PROMPT=$(cat") : pilot_script.index("echo \"[pilot]")]
+        self.assertNotIn("monitor", prompt.lower())
+        workload = pilot_script[pilot_script.index("WORKLOAD=(") : pilot_script.index("PILOT_EXIT=0")]
+        self.assertNotIn("cvm", workload.lower())
+
     def tearDown(self) -> None:
         self.temp.cleanup()
 

@@ -8,7 +8,8 @@ MODE="write"
 CLEAN=0
 
 IMPLICITJS_PACKAGE_DIR="$REPO_ROOT/packages/implicitjs"
-IMPLICITJS_RUNTIME_DIR="$REPO_ROOT/skills/implicit-cad/scripts/packages/implicitjs"
+IMPLICITJS_RUNTIME_DIR="${IMPLICITJS_RUNTIME_DIR:-$REPO_ROOT/skills/implicit-cad/scripts/packages/implicitjs}"
+RUNTIME_NODE_MODULES_SOURCE="${IMPLICITJS_RUNTIME_NODE_MODULES_SOURCE:-}"
 CHECK_DIR="${IMPLICIT_CAD_SKILL_BUNDLE_CHECK_DIR:-$REPO_ROOT/tmp/implicit-cad-skill-runtime-check}"
 
 usage() {
@@ -82,6 +83,35 @@ sync_implicitjs_package() {
     "$IMPLICITJS_PACKAGE_DIR/" "$target_dir/"
 }
 
+validate_runtime_node_modules_source() {
+  local dependency
+  [ -n "$RUNTIME_NODE_MODULES_SOURCE" ] || return 0
+  for dependency in playwright playwright-core three gifenc; do
+    require_dir \
+      "$RUNTIME_NODE_MODULES_SOURCE/$dependency" \
+      "implicit CAD runtime dependency $dependency"
+  done
+}
+
+sync_runtime_node_modules() {
+  local target_dir="$1"
+  local dependency stage_dir
+  [ -n "$RUNTIME_NODE_MODULES_SOURCE" ] || return 0
+  stage_dir="${target_dir}.node_modules-stage.$$"
+  rm -rf "$stage_dir"
+  mkdir -p "$stage_dir"
+  for dependency in playwright playwright-core three gifenc; do
+    if ! rsync -a \
+      "$RUNTIME_NODE_MODULES_SOURCE/$dependency/" \
+      "$stage_dir/$dependency/"; then
+      rm -rf "$stage_dir"
+      return 1
+    fi
+  done
+  rm -rf "$target_dir/node_modules"
+  mv "$stage_dir" "$target_dir/node_modules"
+}
+
 check_implicitjs_package() {
   local expected_dir="$CHECK_DIR/packages/implicitjs"
   local label="${IMPLICITJS_RUNTIME_DIR#$REPO_ROOT/}"
@@ -139,6 +169,8 @@ if [ "$MODE" = "check" ]; then
   fi
   echo "Implicit CAD skill production outputs are up to date."
 else
+  validate_runtime_node_modules_source
   sync_implicitjs_package "$IMPLICITJS_RUNTIME_DIR"
+  sync_runtime_node_modules "$IMPLICITJS_RUNTIME_DIR"
   echo "Bundled skills/implicit-cad/scripts/packages/implicitjs"
 fi

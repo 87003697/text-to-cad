@@ -59,20 +59,20 @@ function parsePositiveInteger(value, flag) {
 export function normalizeAgentDirectory(value, { fsImpl = fs } = {}) {
   const rawDir = String(value || "").trim();
   if (!rawDir) {
-    throw new Error("viewer:open requires --dir <absolute-directory>");
+    throw new Error("agent:start requires --dir <absolute-directory>");
   }
   if (!path.isAbsolute(rawDir)) {
-    throw new Error("viewer:open --dir must be an absolute path");
+    throw new Error("agent:start --dir must be an absolute path");
   }
   const resolvedDir = path.resolve(rawDir);
   let stats = null;
   try {
     stats = fsImpl.statSync(resolvedDir);
   } catch {
-    throw new Error(`viewer:open --dir directory not found: ${resolvedDir}`);
+    throw new Error(`agent:start --dir directory not found: ${resolvedDir}`);
   }
   if (!stats?.isDirectory?.()) {
-    throw new Error(`viewer:open --dir is not a directory: ${resolvedDir}`);
+    throw new Error(`agent:start --dir is not a directory: ${resolvedDir}`);
   }
   return resolvedDir;
 }
@@ -132,7 +132,7 @@ export function parseAgentStartArgs(argv = [], { fsImpl = fs } = {}) {
       continue;
     }
     if (arg.startsWith("--shutdown-after=") || arg === "--shutdown-after") {
-      throw new Error("viewer:open does not support --shutdown-after");
+      throw new Error("agent:start does not support --shutdown-after");
     }
     if (arg === "--json") {
       options.jsonResult = true;
@@ -574,7 +574,7 @@ export async function activateAgentViewerDirectory({
     }, timeoutMs);
   } catch (error) {
     if (probeBlockedByPermissions(error)) {
-      throw new Error(`CAD Viewer directory activation was blocked for ${baseUrl}; rerun viewer:open with local network permission.`);
+      throw new Error(`CAD Viewer directory activation was blocked for ${baseUrl}; rerun agent:start with local network permission.`);
     }
     throw error;
   }
@@ -627,7 +627,7 @@ export async function resolveAgentViewerPort({
     const host = registryHost(serverInfo, target.host);
     const probe = await probePort({ host, port: serverInfo.port });
     if (probe.status === "blocked") {
-      throw new Error(`CAD Viewer port probe was blocked for ${probe.baseUrl}; rerun viewer:open with local network permission.`);
+      throw new Error(`CAD Viewer port probe was blocked for ${probe.baseUrl}; rerun agent:start with local network permission.`);
     }
     if (probe.status === "viewer" && isReusableAgentViewerServer(probe.serverInfo, reuseContext)) {
       return {
@@ -647,7 +647,7 @@ export async function resolveAgentViewerPort({
     }
     const probe = await probePort({ host: target.host, port });
     if (probe.status === "blocked") {
-      throw new Error(`CAD Viewer port probe was blocked for ${probe.baseUrl}; rerun viewer:open with local network permission.`);
+      throw new Error(`CAD Viewer port probe was blocked for ${probe.baseUrl}; rerun agent:start with local network permission.`);
     }
     if (probe.status === "viewer" && isReusableAgentViewerServer(probe.serverInfo, reuseContext)) {
       return {

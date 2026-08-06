@@ -71,7 +71,7 @@ test("forwardedDefaultRootDir reads and strips default directory flags", () => {
   );
 });
 
-test("parseAgentStartArgs requires viewer:open --dir to be an absolute existing directory", async (t) => {
+test("parseAgentStartArgs requires agent:start --dir to be an absolute existing directory", async (t) => {
   const directory = await fs.mkdtemp(path.join(os.tmpdir(), "cad-viewer-agent-start-directory-"));
   t.after(() => fs.rm(directory, { recursive: true, force: true }));
   const filePath = path.join(directory, "not-a-dir");
@@ -205,24 +205,47 @@ test("resolveAgentStartCommand keeps server-only flags on the production server 
   ]);
 });
 
-test("buildAgentStartCommand selects the bundled production server", async (t) => {
-  const packageRoot = await fs.mkdtemp(path.join(os.tmpdir(), "cad-viewer-runtime-"));
+test("buildAgentStartCommand uses the bundled production backend when present", async (t) => {
+  const packageRoot = await fs.mkdtemp(path.join(os.tmpdir(), "cad-viewer-bundled-runtime-"));
   t.after(() => fs.rm(packageRoot, { recursive: true, force: true }));
-  await fs.mkdir(path.join(packageRoot, "backend"));
-  await fs.writeFile(path.join(packageRoot, "backend", "server.mjs"), "// bundled\n");
+  await fs.mkdir(path.join(packageRoot, "backend"), { recursive: true });
+  await fs.writeFile(path.join(packageRoot, "backend", "server.mjs"), "export {};\n");
 
   const command = buildAgentStartCommand({
     mode: "serve",
     packageRoot,
-    forwardedArgs: ["--dir", "/tmp/models"],
+    forwardedArgs: ["--port", "4178"],
     env: {},
     nodePath: "/node",
+    git: "",
   });
 
   assert.deepEqual(command.args, [
     path.join(packageRoot, "backend", "server.mjs"),
-    "--dir",
-    "/tmp/models",
+    "--port",
+    "4178",
+  ]);
+});
+
+test("buildAgentStartCommand uses the source backend in a development package", async (t) => {
+  const packageRoot = await fs.mkdtemp(path.join(os.tmpdir(), "cad-viewer-source-runtime-"));
+  t.after(() => fs.rm(packageRoot, { recursive: true, force: true }));
+  await fs.mkdir(path.join(packageRoot, "src", "server"), { recursive: true });
+  await fs.writeFile(path.join(packageRoot, "src", "server", "server.mjs"), "export {};\n");
+
+  const command = buildAgentStartCommand({
+    mode: "serve",
+    packageRoot,
+    forwardedArgs: ["--port", "4178"],
+    env: {},
+    nodePath: "/node",
+    git: "",
+  });
+
+  assert.deepEqual(command.args, [
+    path.join(packageRoot, "src", "server", "server.mjs"),
+    "--port",
+    "4178",
   ]);
 });
 

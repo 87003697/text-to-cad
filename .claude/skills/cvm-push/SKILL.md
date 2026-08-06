@@ -17,10 +17,15 @@ description: >-
 
 ## Workflow
 
-1. 调脚本：用 Bash tool 跑 `scripts/utils/cvm-push.sh`，把 `run_in_background` 设为 `true`。
+1. 调脚本：用 Bash tool 跑 `scripts/pilot/cvm-push.sh`，把 `run_in_background` 设为 `true`。
    记下 stdout 里的 `Log: ${TMPDIR:-/tmp}/cvm-push-<ts>.log`。
+   脚本会把当前 checkout 复制到隔离 staging，在 staging 内物化全部 production
+   skill runtime，再把实体 bundle 上传到 CVM；不会修改 source checkout 的开发
+   symlink 或共享依赖缓存。稳定 shell 入口只负责调用 `cvm_push.py`；Python workflow
+   按 `Preflight → Resolve inputs → Stage → Validate/attest → Transfer → Verify`
+   编排，并用同一份 runtime contract 做本地和远端验收。
 2. arm Monitor tool tail log：
-   `tail -F <log> | grep -E --line-buffered '(Source:|xfer#|sent [0-9]+ bytes|total size|Remote Git base|error|failed|rsync:)'`
+   `tail -F <log> | grep -E --line-buffered '(Source:|Building physical|CVM runtime verified|xfer#|sent [0-9]+ bytes|total size|Remote Git base|error|failed|rsync:)'`
 3. 汇报（见 § Handoff）。
 
 ## Non-negotiable
@@ -33,15 +38,37 @@ description: >-
   `AGENTS.md` 缺失则 exit 1）。
 - **`.git/` 和 `.git` 都不得传输**：前者覆盖普通 checkout，后者覆盖 linked
   worktree 的 gitfile；不得让 rsync 尝试用 gitfile 覆盖 CVM 的 `.git/` 目录。
+- **`.cvm-jobs/` 不得传输**：它是 CVM 侧权威运行状态，Mac 同名目录不能覆盖。
+- **CVM skill runtime 永远采用实体 production bundle**：Mac checkout 可以是开发
+  symlink；push 不在远端预先 `unlink`，而由经过验证的 staging 作为 rsync source
+  完成 symlink→目录转换。
+- **一个完整 stage 只做一次远端 rsync**：精确 include implicit runtime 的四个
+  `node_modules` 依赖，再应用全局 exclude。不得把主代码和运行依赖拆成两个可能只
+  成功一个的网络传输。
+- **不得把主 checkout 的依赖目录直接 symlink 进 staging**：Viewer 与 CAD build
+  dependencies 必须复制到 staging，避免构建读取错误 worktree 或修改共享缓存。
+- **source → staging 必须排除本地状态**：`.agents/`、`.claude/`、`.codex/`、
+  `.git`、`.venv`、outputs/models、缓存和构建产物不能成为 deployment material；
+  但当前 dirty worktree 的源码必须保留。
+- Push 只部署代码；不创建、查询、等待、重试或清理 job。
 
 ## 边界条件
 
 - 假定 `ssh cvm` alias 已配（见 `.agents/DEVCLOUD.md`）；未配 → 用户先配。
 - 假定 CVM 上 `~/text-to-cad/` 已存在；不做 bootstrap。
 - 只做 code push；`models/` 靠 CVM 本地已 hydrate 的 LFS content，不通过 skill 推。
+- linked worktree 缺少 `viewer/node_modules` 或 `tmp/cad-snapshot-build` 时，脚本自动
+  查找 primary checkout；仅存在半成品目录不算可用，会继续回退。也可用
+  `CVM_PUSH_VIEWER_NODE_MODULES_SOURCE` 和 `CVM_PUSH_CAD_BUILD_DEPS_SOURCE`
+  显式指定。自动候选不完整时会继续回退；显式候选不完整则 fail closed，不静默换源。
+  依赖只作为 staging 输入，不直接上传 root `node_modules`。
 - 一次 skill 调用 = 一次完整同步（无 partial / resume 概念）；rsync 天然增量。
 - rsync 不更新 CVM `.git`。CVM HEAD 只是远端 checkout 基线，不是本次部署内容的
   identity；真正的 source provenance 是脚本输出的 branch/HEAD/dirty state。
+- push 结束前必须按同一 runtime contract 确认 Viewer/implicit runtime 是实体目录、
+  launcher/backend/dist/snapshot 与四个 implicit dependency 文件存在，并比较
+  Viewer backend、launcher、snapshot CLI 和 Playwright browser manifest 的
+  SHA-256；同时确认 host cache 中有对应 Chromium revision。任一失败均不得进入 pilot。
 - 改名或删除仍不会自动清理 CVM stale path；必须先解析精确目标，再显式删除，
   不能通过 `--delete` 扩大同步权限。
 
@@ -52,18 +79,28 @@ description: >-
 - source branch / HEAD / clean-or-dirty state（从 `Source:` 行读取）
 - CVM Git base（从 `Remote Git base:` 行读取，并明确它不是 deployment identity）
 - 关键运行文件如需严格部署证明，比较 source/CVM SHA-256；不能只引用 CVM HEAD
-- 下一步提示（推荐先做 group snapshot 再跑 pilot）：
+- 下一步提示（推荐先做 group snapshot，再 submit + monitor）：
   ```
-  # Mac 端（新 batch 首次）：
-  scripts/utils/snapshot-batch.sh <YYYYMMDD-HHMMSS-slug>
-  # CVM 端：
-  ssh cvm 'cd ~/text-to-cad && ./scripts/pilot/toys4k-pilot.sh <obj> <same-group>'
+  scripts/pilot/snapshot-batch.sh <YYYYMMDD-HHMMSS-slug>
+  scripts/pilot/cvm-push.sh
+  scripts/pilot/cvm-submit.sh pilot <obj> <same-group>
+  scripts/pilot/cvm-monitor.sh --wait <returned-handle>
   ```
+
+Do not replace submit or monitoring with raw SSH. For strict deployment proof,
+compare SHA-256 for `scripts/pilot/cvm_job/`, `toys4k-pilot.sh`, and
+`toys4k-batch.sh`; remote Git HEAD is not deployment identity.
 
 失败：
 - exit 1（cwd 错） → 提示切 repo 根
 - exit 2（CVM 目标缺） → 提示 `ssh cvm 'ls ~/'`
 - exit 3（磁盘 <3G） → 汇报剩余 GB + 提示 `ssh cvm 'du -sh ~/*'` 清理
+- exit 4（production staging 失败）→ 检查 log 中缺失的 Viewer/CAD build dependency、
+  bundle command 或残留 skill symlink；此时脚本保证尚未传输任何文件
+- exit 5（远端 runtime 缺失或 attested hash 不同）→ 不得 submit pilot；比较
+  staging 与 CVM 的精确 runtime 文件
+- exit 6（Playwright browser revision 缺失）→ 在 CVM host 安装脚本报告的 revision，
+  随后重新 push
 - rsync code 23 且包含 `could not make way for new regular file: .git` →
   检查 `.cvmignore` 同时包含 `.git/` 和 `.git`
 - 其他 → 贴 log 尾 20 行

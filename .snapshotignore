@@ -1,10 +1,11 @@
-# rsync exclude list for scripts/utils/snapshot-batch.sh
+# rsync exclude list for scripts/pilot/snapshot-batch.sh
 # 目标：保留 agent 相关代码 + .git，排除所有产物和衍生物。
 # 与 .cvmignore 语义不同：.snapshotignore 保留 .git/，用于代码状态可复现。
 
 # 产物 / pilot outputs / LFS assets
 outputs
 models
+.cvm-jobs
 
 # 依赖包（lock 文件在 .git 里保版本；deps 本身可 rebuild）
 .venv

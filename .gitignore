@@ -42,6 +42,7 @@ tmp/
 # Pilot/experiment outputs (not committed; use models/ for durable artifacts)
 outputs
 outputs/
+.cvm-jobs/
 
 # Local printer credentials
 /bambu-printers.json

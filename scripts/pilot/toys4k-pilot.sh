@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# scripts/pilot/toys4k-pilot.sh <object_name> <group>
+# scripts/pilot/toys4k-pilot.sh <object_name> <group> [exp_name]
 # Toys4K mesh-to-CAD benchmark pilot. Reads models/toys4k/<name>.ply,
 # writes outputs/<group>/<TS>-<name>/. Group format: YYYYMMDD-HHMMSS-<slug>.
 
@@ -27,7 +27,13 @@ GROUP="${2:?Usage: toys4k-pilot.sh <object_name> <group>}"
 PLY="models/toys4k/${OBJ}.ply"
 [[ -f "$PLY" ]] || { echo "Missing mesh: $PLY" >&2; exit 1; }
 
-EXP_DIR="outputs/${GROUP}/$(date +%Y%m%d-%H%M%S)-${OBJ}"
+EXP_NAME="${3:-$(date +%Y%m%d-%H%M%S)-${OBJ}}"
+if [[ ! "$EXP_NAME" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ \
+    || "$EXP_NAME" == "." || "$EXP_NAME" == ".." ]]; then
+    echo "Unsafe exp name: '$EXP_NAME'" >&2
+    exit 1
+fi
+EXP_DIR="outputs/${GROUP}/${EXP_NAME}"
 
 # Minimal orchestrator prompt — peer skills, references, and commit
 # conventions live in skills/mesh-to-cad/SKILL.md; duplicating them here
