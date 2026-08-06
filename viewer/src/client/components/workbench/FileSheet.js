@@ -48,8 +48,18 @@ export const FILE_SHEET_SECTION_TITLE_CLASSES = "text-[11px] font-medium text-si
 export const FILE_SHEET_FIELD_LABEL_CLASSES = "block min-w-0 truncate text-[11px] font-medium leading-4 text-muted-foreground";
 export const FILE_SHEET_STATUS_TEXT_CLASSES = "px-2 text-[11px] leading-4 text-muted-foreground";
 export const FILE_SHEET_UNIT_SUFFIX_CLASSES = "pointer-events-none absolute inset-y-0 right-2 flex items-center text-[10px] text-muted-foreground";
-export const FILE_SHEET_SELECT_TRIGGER_CLASSES = "h-7 w-full !text-[11px]";
-export const FILE_SHEET_INLINE_SELECT_TRIGGER_CLASSES = "h-7 w-36 !text-[11px]";
+// A trigger must clip and ellipsize its own value: the Radix trigger only sets
+// whitespace-nowrap, so without this a long option pushes its chevron out
+// through the border instead of truncating.
+const FILE_SHEET_SELECT_TRIGGER_BASE_CLASSES = "!h-7 px-2 !text-[11px] overflow-hidden [&_svg]:size-3.5 [&>span]:min-w-0 [&>span]:truncate";
+export const FILE_SHEET_SELECT_TRIGGER_CLASSES = `${FILE_SHEET_SELECT_TRIGGER_BASE_CLASSES} w-full`;
+// Inline triggers hug their value between two fixed bounds: never narrower than
+// the standard control (the 80px value input / colour swatch) so a column of
+// dropdowns, inputs and pickers shares one minimum size, and never wide enough
+// to crowd the label. A percentage max-width cannot be used here — the wrapper
+// is shrink-to-fit, so the percentage resolves against a width the trigger
+// itself determines.
+export const FILE_SHEET_INLINE_SELECT_TRIGGER_CLASSES = `${FILE_SHEET_SELECT_TRIGGER_BASE_CLASSES} w-fit min-w-20 max-w-44`;
 export const FILE_SHEET_VALUE_BADGE_CLASSES = "shrink-0 rounded bg-muted px-1.5 py-0.5 font-mono text-[10px] font-medium leading-none tabular-nums text-muted-foreground";
 export const FILE_SHEET_VALUE_BADGE_INPUT_CLASSES = [
   "h-7 w-20 shrink-0 rounded-md border border-input bg-transparent px-2 py-1 text-right text-[11px] font-medium leading-none tabular-nums text-foreground shadow-xs outline-none",
@@ -159,7 +169,7 @@ export function FileSheetSubsection({
         <div
           className={cn(
             "flex min-h-5 min-w-0 items-center justify-between gap-2 px-2",
-            hasRows && "pb-2"
+            hasRows && "pb-3"
           )}
         >
           <span className={cn("min-w-0 truncate leading-4", FILE_SHEET_SECTION_TITLE_CLASSES)}>{title}</span>
@@ -599,20 +609,6 @@ export function FileSheetSegmentedControl({ value, onChange, options, ariaLabel,
   );
 }
 
-// Label left, segmented control on the control axis.
-export function FileSheetSegmentedRow({ label, value, onChange, options, ariaLabel, className }) {
-  return (
-    <FileSheetInlineControlRow label={label} className={className}>
-      <FileSheetSegmentedControl
-        fit
-        value={value}
-        onChange={onChange}
-        options={options}
-        ariaLabel={ariaLabel || (typeof label === "string" ? label : undefined)}
-      />
-    </FileSheetInlineControlRow>
-  );
-}
 
 // The standard select: an inline row, trigger on the control axis. `stacked`
 // gives the block-row treatment — label above, full width — and is reserved for

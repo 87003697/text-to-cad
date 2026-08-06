@@ -45,10 +45,11 @@ gutter — one label axis, one control axis, no exceptions.
 | --- | --- | --- |
 | Row height (inline) | `min-h-7` (28px) | switch, color, value, select-trailing rows |
 | Control height | `h-7` (28px) | every input, select, button, stepper, picker |
+| Dropdown width | `w-fit`, `min-w-20`, `max-w-44` | inline select trigger |
 | Gap between rows | 8px (`space-y-2` stack) | within a section |
 | Label → control, stacked | 4px (`space-y-1`) | inside one block row |
 | Rule → heading | 16px (`mb-4` on the rule) | `FileSheetSubsection` owns it |
-| Heading → first row | 8px (`pb-2`) | `FileSheetSubsection` owns it |
+| Heading → first row | 12px (`pb-3`) | `FileSheetSubsection` owns it |
 | Last row → next rule | 16px (`pb-4`) | `FileSheetSubsection` owns it |
 | Row gutter | `px-2` | every row, list, and message |
 | Grid gap (field grids, button rows) | `gap-2` / `gap-1.5` | see Field grids, Buttons |
@@ -60,10 +61,16 @@ This holds when a gated section collapses to its heading alone: the heading's
 bottom gap exists only to clear the first row, so with no rows it is dropped
 and the collapsed section stays 16px on both sides.
 
-Inside a section everything sits on one 8px rhythm — heading to first row, and
-row to row alike — exactly half the 16px that separates sections. Three
-spacings for the whole panel: 4px binds a label to its control, 8px binds a
-group together, 16px holds groups apart. Each level is half the one above it.
+Inside a section, rows sit 8px apart and the heading takes 12px to clear the
+group it names. Four spacings for the whole panel, each a step on the 4px
+grid: 4px binds a label to its control, 8px binds rows into a group, 12px sets
+a heading off from its rows, 16px holds groups apart.
+
+**Every control is exactly 28px tall** — input, select, colour picker, stepper,
+button, segmented item — so a column of them shares one rhythm and one right
+edge. Selects need `!h-7`, not `h-7`: the shadcn trigger carries
+`data-[size=sm]:h-8`, and an attribute selector outranks a plain utility class,
+which is how every dropdown in the panel silently stood 32px tall.
 
 Never add ad-hoc `py-*`/`mt-*` spacing inside a tab; spacing belongs to the
 stack and section primitives so rhythm cannot drift per surface.
@@ -144,19 +151,23 @@ label left, control right, on the shared control axis. A strip stretched across
 the full width is not a settings row — it reads as a toolbar, and a column of
 them turns the panel into a stack of unrelated widgets.
 
-| Options | Labels | Control |
-| --- | --- | --- |
-| 2–3 | short | segmented, sized to content — `FileSheetSegmentedRow` |
-| 4 or more, **or** labels long enough to crowd the row | | select — `FileSheetSelectRow` (`w-36` trigger) |
+**A dropdown is the default.** `FileSheetSelectRow` handles every mode control
+unless the options are short enough that a button group costs no more width
+than the dropdown would — in practice a two-option pair of single short words
+(a DXF bend's `Up`/`Down`). Two words as long as `Orthographic` and
+`Perspective` are already too wide: that is a dropdown.
 
-- Segmented strips in an inline row are content-sized (`fit`), never stretched.
-  Worked examples: `Projection` (2), `Layout` (2), `Order` (2), a DXF bend's
-  `Up`/`Down`.
-- Past three options the strip stops being scannable and starts truncating, so
-  it becomes a select: `Light` (5), `Backdrop` `Type` (4), explode `Direction`
-  (5), `Map`, animation pickers, every enum parameter.
-- One segmented style everywhere (`FILE_SHEET_SEGMENTED_ITEM_CLASSES`, 28px).
-  Never use a Radix `Tabs` strip to switch an edit target inside a sheet — that
+- Dropdowns: `Projection`, `Light` (5), `Backdrop` `Type` (4), explode
+  `Direction` (5), `Layout`, `Order`, `Map`, animation pickers, every enum
+  parameter.
+- Segmented (`FileSheetSegmentedControl` with `fit`, sized to content, never
+  stretched): DXF bend direction, and nothing else today.
+- An inline trigger hugs its value between two bounds — never narrower than the
+  standard 80px control, never wider than 176px — and truncates past that. Use
+  a fixed max width, not a percentage: the row wrapper is shrink-to-fit, so a
+  percentage resolves against a width the trigger itself sets, and the value
+  overflows its own border instead of ellipsizing.
+- Never use a Radix `Tabs` strip to switch an edit target inside a sheet — that
   was how the five-light selector ended up as a full-width row of tabs.
 
 **The stacked exception.** A select is stacked full-width only when it is the

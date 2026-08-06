@@ -79,7 +79,6 @@ import FileSheet, {
   FileSheetColorPicker,
   FileSheetColorRow,
   FileSheetControlRow,
-  FileSheetSegmentedRow,
   FileSheetSelectRow,
   FileSheetSliderField,
   FileSheetStatusText,
@@ -570,7 +569,7 @@ function ThemePresetSection({
     : (activeOption?.preview || options[0].preview);
 
   return (
-    <ControlSubsection title="Appearance">
+    <ControlSubsection title="Theme">
       {/* The panel's primary control: picking a preset rewrites every setting
           below it, so this is one of the few selects that gets the full-width
           stacked treatment. */}
@@ -1038,11 +1037,11 @@ function ExplodedSubsection({
           </FileSheetSliderField>
 
           {canCustomize ? (
-            <FileSheetSegmentedRow
+            <FileSheetSelectRow
               label="Layout"
               value={hasSteps ? "custom" : "automatic"}
               options={EXPLODE_MODE_OPTIONS}
-              onChange={setMode}
+              onValueChange={setMode}
             />
           ) : null}
 
@@ -1163,11 +1162,11 @@ function ExplodedSubsection({
             </>
           )}
 
-          <FileSheetSegmentedRow
+          <FileSheetSelectRow
             label="Order"
             value={exploded.order}
             options={EXPLODE_ORDER_OPTIONS}
-            onChange={(nextValue) => setExploded({ order: nextValue })}
+            onValueChange={(nextValue) => setExploded({ order: nextValue })}
           />
           <FileSheetToggleRow
             label="Explode lines"
@@ -1420,14 +1419,19 @@ function ThemeSettingsContent({
       {/* Scene-wide output: how the camera projects and how bright the result
           is graded, as opposed to the per-material settings below. */}
       <ControlSubsection title="Render">
-        <FileSheetSegmentedRow
+        <FileSheetSelectRow
           label="Projection"
           value={themeSettings.projection}
-          onChange={(nextValue) => updateThemeSettings((current) => ({
+          onValueChange={(nextValue) => updateThemeSettings((current) => ({
             ...current,
             projection: nextValue
           }))}
-          options={PROJECTION_MODE_OPTIONS}
+          options={PROJECTION_MODE_OPTIONS.map((option) => ({
+            value: option.value,
+            label: option.label,
+            title: option.title,
+            icon: <option.Icon className="size-3.5" strokeWidth={2} aria-hidden="true" />
+          }))}
         />
         <SliderField label="Tone mapping" value={formatNumber(themeSettings.lighting.toneMappingExposure)}>
           <SliderInput
@@ -2005,18 +2009,6 @@ export function ThemeEditorPanel({
       onStartResize={onStartResize}
       scrollBody={false}
     >
-      <div className="flex h-8 shrink-0 items-center justify-between gap-2 border-b border-sidebar-border/70 px-2">
-        <span className="text-[11px] font-medium text-sidebar-foreground">Theme</span>
-        <button
-          type="button"
-          onClick={() => onClose?.()}
-          aria-label="Close theme editor"
-          title="Close"
-          className="flex size-6 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
-        >
-          <X className="size-3.5" strokeWidth={2} aria-hidden="true" />
-        </button>
-      </div>
       <ScrollArea className="min-h-0 flex-1" viewportClassName="h-full">
         <ThemeSettingsContent
           themeSettings={themeSettings}
