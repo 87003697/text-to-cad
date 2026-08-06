@@ -41,10 +41,10 @@ export const FILE_SHEET_ROW_STACK_CLASSES = "space-y-3";
 export const FILE_SHEET_SECTION_BODY_CLASSES = `${FILE_SHEET_ROW_STACK_CLASSES} py-2`;
 export const FILE_SHEET_SLIDER_FIELD_CLASSES = "space-y-1 px-2";
 export const FILE_SHEET_INLINE_CONTROL_ROW_CLASSES = "px-2";
-// Section headers match the row-label size exactly and separate from them by
-// weight of color alone: header is full-strength foreground, row labels are
-// muted. One type size across the panel, two roles.
-export const FILE_SHEET_SECTION_TITLE_CLASSES = "text-[11px] font-medium text-sidebar-foreground";
+// Section headers sit at the navbar's size (12px medium) — a sheet's headings
+// and the chrome above it read as the same level of structure. Row labels stay
+// 11px muted, so a header separates from its rows by both size and colour.
+export const FILE_SHEET_SECTION_TITLE_CLASSES = "text-xs font-medium text-sidebar-foreground";
 export const FILE_SHEET_FIELD_LABEL_CLASSES = "block min-w-0 truncate text-[11px] font-medium leading-4 text-muted-foreground";
 export const FILE_SHEET_STATUS_TEXT_CLASSES = "px-2 text-[11px] leading-4 text-muted-foreground";
 export const FILE_SHEET_UNIT_SUFFIX_CLASSES = "pointer-events-none absolute inset-y-0 right-2 flex items-center text-[10px] text-muted-foreground";

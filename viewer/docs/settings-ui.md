@@ -84,16 +84,17 @@ stack and section primitives so rhythm cannot drift per surface.
 
 | Role | Style |
 | --- | --- |
-| Section header | 11px, medium, full-strength `sidebar-foreground` |
+| Section header | 12px, medium, full-strength `sidebar-foreground` (the navbar's size) |
 | Row label | 11px, medium, muted (`FILE_SHEET_FIELD_LABEL_CLASSES`) |
 | Control text / values | 11px, medium; numerics `tabular-nums`; hex/coords mono |
 | Secondary line, units, meta | 10px, muted |
 | Status / empty / loading text | 11px, muted, `px-2` |
 
-Headers and row labels are the same size and case; they separate by *color
-alone* — a header is full-strength, a label is muted. One type size across the
-panel, two roles. Never reach for uppercase, tracking, or a smaller size to
-mark a header.
+A section header matches the navbar's 12px medium, so a sheet's headings and
+the chrome above them read as one level of structure. Row labels stay 11px and
+muted, so a header separates from its rows by size *and* colour. Never reach
+for uppercase or letter-spacing to mark a header — and never make it smaller
+than its rows.
 
 - Muted text is always `text-muted-foreground`. `var(--ui-text-muted)` is a
   legacy alias; do not introduce new uses.
