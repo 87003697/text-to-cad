@@ -9,7 +9,7 @@ import importlib.util
 from functools import lru_cache
 from pathlib import Path
 
-from build123d import Compound, Location
+from build123d import Color, Compound, Cylinder, Location, Pos
 
 import _spec as S
 
@@ -58,5 +58,19 @@ def gen_step():
             Location((0, 0, S.MOVT_Z_OFFSET), (1, 0, 0), 180) * movement.location
         )
         children.append(movement)
+
+        # movement ring: fills the annulus between the movement OD and the
+        # case interior so the caseback window shows metal, not void.
+        # align=(None,None,None) leaves the cylinder base at the origin, so
+        # Pos sets the ring's bottom; the cut over/under-shoots to avoid
+        # coplanar-face booleans. Cased movement spans watch z 0.96..7.7.
+        ring = Pos(0, 0, 1.0) * Cylinder(
+            15.6, 6.7, align=(None, None, None)
+        ) - Pos(0, 0, 0.9) * Cylinder(
+            S.MOVEMENT_DIAMETER / 2 + 0.05, 7.0, align=(None, None, None)
+        )
+        ring.color = Color(*S.STEEL_DARK)
+        ring.label = "movement_ring"
+        children.append(ring)
 
     return Compound(children=children, label="moonwatch")
