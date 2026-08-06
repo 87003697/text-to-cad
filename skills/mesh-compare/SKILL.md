@@ -26,6 +26,10 @@ Two independent CLIs, sharing the underlying `meshscope` package:
 # Quantitative: numeric similarity metrics → JSON on stdout
 python skills/mesh-compare/scripts/mesh-compare <mesh_a> <mesh_b> [--samples N] [--seed N] [--include-distances]
 
+# Optional persistent grading; here mesh A is reference and mesh B is candidate
+python skills/mesh-compare/scripts/mesh-compare <reference_mesh> <candidate_mesh> \
+  --voxblame-dir "${EXP_DIR}/voxblame" --step <N> --max-depth 8 [--compare-to <M>]
+
 # Visualization: distance-colored or side-by-side render → PNG on disk
 python skills/mesh-compare/scripts/mesh-render heatmap <mesh_a> <mesh_b> --output <png>
 python skills/mesh-compare/scripts/mesh-render side-by-side <mesh_a> <mesh_b> --output <png>
@@ -58,6 +62,12 @@ when to use `heatmap` vs `side-by-side`.
    with an `ai_vision` block per `references/compare-metrics.md`
    (5-layer schema: silhouette / structure / form_detail / surface /
    proportion, each 0-1).
+8. **(Optional) Persistent surface localization.** When the caller owns an
+   iterative reconstruction EXP, pass `--voxblame-dir` and `--step` together.
+   Read only the returned `voxblame.summary/1` and its single `next_action`;
+   the complete immutable report remains at the returned `report` path. Step
+   0 has no baseline, later steps default to N-1, and `--compare-to` may select
+   any earlier published step.
 
 ## Handoff
 
@@ -65,7 +75,9 @@ Return outputs based on which CLI(s) were invoked:
 
 - **Numeric CLI (`mesh-compare`)**: return the `compare_metrics.json`
   path in the final response, including all computed fields (numeric
-  metrics + `ai_vision` block if added by the caller).
+  metrics + `ai_vision` block if added by the caller). When VoxBlame was
+  requested, also return the full-report path and one action (or state that
+  `next_action` is null).
 - **Render CLI (`mesh-render`)**: return the PNG path(s) produced
   (`heatmap` and/or `side-by-side` mode).
 - **Both invoked (workflow-typical)**: return both JSON and PNG paths.
@@ -88,6 +100,14 @@ static PNG renders, not interactive CAD artifacts.
 - Pass original mesh paths directly to `mesh-render`; do not perform an ad-hoc
   GLB conversion or inject `PYTHONPATH`. Follow `references/render-modes.md`
   for the Viewer input, camera, material, and failure contracts.
+- VoxBlame is opt-in and uses a separate reference-owned frame: the first
+  mesh's bbox defines one isotropic lattice shared by all candidates.
+  Candidate surface outside that lattice is ignored rather than independently
+  normalized; the in-frame result is still graded and persisted.
+- `--voxblame-dir` and `--step` are an inseparable pair. Published steps are
+  immutable; retrying a step with a different surface tree fails closed. The
+  agent consumes the compact JSON summary/report contract, not the binary
+  `.vbsvo` snapshot.
 
 ## Progressive references
 

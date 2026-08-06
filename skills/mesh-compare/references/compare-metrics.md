@@ -105,6 +105,68 @@ rename). Skills that own the workflow (e.g. `$mesh-to-cad`) are
 responsible for adding this block when needed; `mesh-compare` itself
 never invents scores.
 
+## `voxblame` block (optional, emitted by numeric CLI)
+
+When `--voxblame-dir` and `--step` are supplied together, the CLI appends one
+compact localization summary without changing any legacy numeric field:
+
+```json
+{
+  "voxblame": {
+    "schema": "voxblame.summary/1",
+    "step": 2,
+    "compare_to": 1,
+    "report": "voxblame/steps/000002/report.json",
+    "max_depth": 8,
+    "frame": {"center": [0, 0, 0], "scale": 1},
+    "reference": {
+      "storage_schema": "voxblame.svo/1",
+      "logical_sha256": "<sha256>"
+    },
+    "candidate": {
+      "storage_schema": "voxblame.svo/1",
+      "logical_sha256": "<sha256>"
+    },
+    "no_observable_geometry_change": false,
+    "remaining_error_count": 7,
+    "coarsest_first_error_depth": 3,
+    "change_counts": {
+      "introduced": 0, "regressed": 1, "changed": 0,
+      "improved": 2, "resolved": 4
+    },
+    "next_action": {
+      "reason": "regressed",
+      "direction": "excess",
+      "first_error_depth": 3,
+      "region_handle": {"depth": 3, "octant_prefix": "17"},
+      "bounds_world": {"min": [0, 0, 0], "max": [1, 1, 1]}
+    }
+  }
+}
+```
+
+`next_action` is null when no surface-occupancy error remains. Consumers must
+not copy full `current.errors` or `changes` from `report.json` into the prompt;
+those arrays are disk evidence. Numeric Chamfer/Hausdorff still use the legacy
+per-mesh Trellis2 normalization. VoxBlame instead uses the first positional
+mesh as the fixed reference frame. Candidate surface outside that frame is
+ignored; its in-frame surface (including an empty result) is still graded and
+persisted so geometric failure remains visible in the normal comparison.
+VoxBlame uses deterministic conservative triangle/AABB occupancy; it does not
+claim voxel-for-voxel equivalence with TRELLIS.2's scan-line/QEF O-Voxel
+construction. Its `.vbsvo` snapshots borrow TRELLIS.2's preorder child-mask
+hierarchy, then add a validated subtree-span index for early mismatch traversal.
+This is a VoxBlame-specific uncompressed container, not VXZ and not a claim of
+format compatibility with TRELLIS.2. `session.json` owns the reference frame and
+mesh digest; each `.vbsvo` is a complete immutable surface snapshot. Callers and
+agents should consume the JSON summary/report and must not dump the binary tree
+into the prompt. `region_handle` is a stable logical
+`{depth, octant_prefix}` address, never a node row or byte offset. The frame,
+storage schema, and logical digests bind a summary to one reference-owned
+lattice. `no_observable_geometry_change=true` means the current and selected
+previous candidate have identical occupancy at this schema/depth/frame; it does
+not prove that the source meshes are exactly equal.
+
 ## `--include-distances`
 
 When `--include-distances` is set, the CLI appends `distances_a2b`
