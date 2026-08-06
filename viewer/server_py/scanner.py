@@ -401,9 +401,41 @@ def create_step_entry(repo_root, root_path, source_path, extension, include_arti
         if source_hash:
             source["sourceHash"] = source_hash
         entry["source"] = source
+    if not entry_is_python and not step_module_asset:
+        # Imported STEP: no descriptor to declare a module, so look beside it.
+        sidecar_path = step_sidecar_path(source_path)
+        if os.path.isfile(sidecar_path):
+            step_module_asset = asset_for_path(repo_root, sidecar_path)
     if step_module_asset:
         entry["moduleUrl"] = step_module_asset["url"]
     return entry
+
+
+# --- viewer-only sidecar for imported STEP files ---
+# A generated model declares its parameter/animation module through the render
+# package descriptor, because a `.step.py` can name any file it likes. An
+# imported `.step`/`.stp` has no generator to declare anything, so the viewer
+# also accepts a sidecar sitting beside it under the same name plus `.js`:
+#
+#     models/mechanisms/gear_rack_gripper.step
+#     models/mechanisms/gear_rack_gripper.step.js
+#
+# This is viewer-only. Nothing in the CAD pipeline reads it, and the convention
+# is deliberately rigid — same directory, same stem — so that an imported file
+# needs no wrapper script just to carry parameters.
+STEP_SIDECAR_SUFFIX = ".js"
+
+
+def step_sidecar_path(step_path: str) -> str:
+    return f"{step_path}{STEP_SIDECAR_SUFFIX}"
+
+
+def is_step_sidecar_path(file_path: str) -> bool:
+    """True for `<name>.step.js` / `<name>.stp.js` whose STEP file exists."""
+    lowered = str(file_path or "").lower()
+    if not (lowered.endswith(".step.js") or lowered.endswith(".stp.js")):
+        return False
+    return os.path.isfile(file_path[: -len(STEP_SIDECAR_SUFFIX)])
 
 
 # --- served-asset gate (security: which on-disk files /__cad/asset may serve) ---
@@ -441,7 +473,9 @@ def is_served_cad_asset(file_path: str) -> bool:
         return False
     if is_inside_cadgen_dir(file_path):
         return True
-    if extension in (".js", ".mjs") and _is_declared_params_sidecar(file_path):
+    if extension in (".js", ".mjs") and (
+        _is_declared_params_sidecar(file_path) or is_step_sidecar_path(file_path)
+    ):
         return True
     if extension in SOURCE_EXTENSIONS or path_is_implicit_cad_source(file_path):
         return True

@@ -13,12 +13,10 @@ assemblies and their sidecars directly.
 - `*.step`: canonical mechanism assemblies.
 - `*.step.glb/`: generated render/selector package paired with each STEP file;
   per-folder content-addressed render content lives under `__cadgen__`.
-- `<name>.params.js`: optional JS parameter/animation sidecar. It is declared
-  through the model's `gen_step()` envelope (`{"shape": ..., "params":
-  "<name>.params.js"}`) and recorded as `paramsPath` in the package descriptor;
-  the CAD Viewer loads it from that descriptor entry.
-- `<name>.step.py`: thin generator beside an imported STEP that re-imports the
-  `.step` with `import_step` and declares its `params` sidecar.
+- `<name>.step.js`: optional JS parameter/animation sidecar for an imported
+  STEP. CAD Viewer picks it up by name — a `.js` sitting beside `<name>.step`
+  — so an imported assembly gets parameters without a generator standing in
+  for it. This is viewer-only; nothing in the CAD pipeline reads it.
 
 Extracted source archives, Inventor files, SDF working files, videos, and
 intermediate generation scripts are intentionally omitted from this fixture
@@ -32,11 +30,11 @@ params sidecar is listed per mechanism below.
 
 | Mechanism | STEP | Params sidecar | Source |
 |---|---|---|---|
-| 180 deg. flip mechanism | [180_degree_flip_mechanism.step](180_degree_flip_mechanism.step) | `180_degree_flip_mechanism.params.js` | [Video](https://www.youtube.com/watch?v=IGexfslM_5Y), [STEP archive](https://www.mediafire.com/file/pcjk004x96r6ibu/180FlipMechanismSTEP.zip/file) |
-| Table of adjustable height 2 | [adjustable_height_table_2.step](adjustable_height_table_2.step) | `adjustable_height_table_2.params.js` | [Video](https://www.youtube.com/watch?v=c30g2UszMws), [STEP archive](https://www.mediafire.com/file/ulf0n6zbbp1veo4/TableAdjustHeight2STEP.zip/file) |
+| 180 deg. flip mechanism | [180_degree_flip_mechanism.step](180_degree_flip_mechanism.step) | `180_degree_flip_mechanism.step.js` | [Video](https://www.youtube.com/watch?v=IGexfslM_5Y), [STEP archive](https://www.mediafire.com/file/pcjk004x96r6ibu/180FlipMechanismSTEP.zip/file) |
+| Table of adjustable height 2 | [adjustable_height_table_2.step](adjustable_height_table_2.step) | `adjustable_height_table_2.step.js` | [Video](https://www.youtube.com/watch?v=c30g2UszMws), [STEP archive](https://www.mediafire.com/file/ulf0n6zbbp1veo4/TableAdjustHeight2STEP.zip/file) |
 | Circular window iris shutter 2 | [circular_iris_shutter_2.step](circular_iris_shutter_2.step) |  | [Video](https://www.youtube.com/watch?v=4ckPpHpe4TM), [STEP archive](https://www.mediafire.com/file/sz86hz0w9aknnen/CircularIrisShutter2STEP.zip/file) |
 | Deployable drone | [deployable_drone.step](deployable_drone.step) |  | [Video](https://www.youtube.com/watch?v=QYt_wUP52T0), [STEP archive](https://www.mediafire.com/file/7533syysab1zhrg/DeployableDroneSTEP.zip/file) |
-| Robot gripper of gear-rack drives | [gear_rack_gripper.step](gear_rack_gripper.step) | `gear_rack_gripper.params.js` | [Video](https://www.youtube.com/watch?v=CP5q6YxyeQ8), user upload `RobotGripperGearRackSTEP.zip` |
+| Robot gripper of gear-rack drives | [gear_rack_gripper.step](gear_rack_gripper.step) | `gear_rack_gripper.step.js` | [Video](https://www.youtube.com/watch?v=CP5q6YxyeQ8), user upload `RobotGripperGearRackSTEP.zip` |
 | Hinge of 2 DoF | [hinge_2_dof.step](hinge_2_dof.step) |  | [Video](https://www.youtube.com/watch?v=Mvmi2AyNqx0), [STEP archive](https://www.mediafire.com/file/nl2m3asaa31dvnf/Hinge2DoFSTEP.zip/file) |
 | Kinetic pyramid facade | [kinetic_pyramid_facade.step](kinetic_pyramid_facade.step) |  | [Video](https://www.youtube.com/watch?v=wA9d9uJIBGw), [STEP archive](https://www.mediafire.com/file/vri2hopfzj0k731/KineticPyramidFacadeSTEP.zip/file) |
 | Knuckle joint press | [knuckle_joint_press.step](knuckle_joint_press.step) |  | [Video](https://www.youtube.com/watch?v=Vd-vErlQPPk), [STEP archive](https://www.mediafire.com/file/8cy26hg2dlovi1b/KnuckleJointPressSTEP.zip/file) |

@@ -22,3 +22,7 @@ while IFS= read -r skill; do
 done < <("$LIST_SKILLS_SCRIPT")
 
 run_python_unittest "MoveIt2 server Python tests" "tests/python/viewer/moveit2_server" "viewer/moveit2_server"
+
+# The CAD Viewer backend keeps its tests beside the package it covers rather
+# than under tests/, so name the directory explicitly.
+run_python_unittest "CAD Viewer backend Python tests" "viewer/server_py/tests" "viewer"

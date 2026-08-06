@@ -32,12 +32,15 @@ Use snake_case semantic names that describe intent, matching the build123d Pytho
 
 ### Declaring and discovering the sidecar
 
-A JS sidecar is declared by the model's generator, not by a filename convention.
-The sidecar file itself can have any name; `<name>.params.js` is the convention.
+A generated model declares its JS sidecar from `gen_step()`, and the file can
+have any name; `<name>.params.js` is the convention. An imported `.step` has no
+generator, so it uses the `<name>.step.js` filename convention below instead.
 
 **A sidecar must be ONE self-contained file — it cannot import a sibling
-module.** Only the exact path a package descriptor names as `paramsPath` is
-served (`_is_declared_params_sidecar` in `viewer/server_py/scanner.py`), so
+module.** Only the sidecar itself is served — the exact path a package
+descriptor names as `paramsPath`, or the `<name>.step.js` beside an imported
+STEP (`_is_declared_params_sidecar` / `is_step_sidecar_path` in
+`viewer/server_py/scanner.py`) — so
 `import { solve } from "./my_kinematics.js"` 404s in the browser. It resolves
 fine under node, so the failure appears only in the viewer. Splitting the maths
 out for testability is the natural first move and it does not work; inline it
@@ -61,22 +64,24 @@ export default { manifest: { /* ... */ }, update({ params, effects }) { /* ... *
   (`assembly.json`, under `__cadgen__`), model-folder-relative. The CAD Viewer
   reads `paramsPath` from the descriptor to load the sidecar. JS serving is
   descriptor-gated: only a file a descriptor declares is served, never arbitrary
-  workspace JS. There is no hidden-dot or `.step.js` filename requirement.
+  workspace JS.
 
-- An imported `.step` model has no `gen_step()`. To attach a sidecar, add a thin
-  generator `<name>.step.py` beside the `.step` that re-imports the STEP and
-  declares `params`:
+- An imported `.step` model has no `gen_step()` to declare anything, so the CAD
+  Viewer falls back to a filename convention for that case alone: a sidecar
+  named after the STEP file plus `.js`, in the same directory.
 
-  ```python
-  from pathlib import Path
-  from cadgen.step_scene import import_step
-
-  def gen_step():
-      return {
-          "shape": import_step(Path(__file__).parent / "<name>.step"),
-          "params": "<name>.params.js",
-      }
+  ```text
+  models/mechanisms/gear_rack_gripper.step      # the imported assembly
+  models/mechanisms/gear_rack_gripper.step.js   # its sidecar
   ```
+
+  This applies to `.step` and `.stp`, and it is **viewer-only** — nothing in the
+  CAD pipeline reads it, and no render package records it. Serving stays gated:
+  a `.js` is served under this rule only when the STEP file it is named after
+  actually exists beside it (`is_step_sidecar_path` in
+  `viewer/server_py/scanner.py`). Do not add a wrapper `<name>.step.py` that
+  only re-imports the `.step` to declare `params`; it makes the imported file
+  look generated and buys nothing.
 
 ### `manifest.step.path` link
 
