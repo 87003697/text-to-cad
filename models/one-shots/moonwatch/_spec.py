@@ -28,8 +28,8 @@ Coordinate conventions:
 # neutral grade — the theme does not override source colors).
 # ---------------------------------------------------------------------------
 
-STEEL = (0.780, 0.785, 0.800, 1.0)          # polished/brushed stainless
-STEEL_BRIGHT = (0.870, 0.875, 0.890, 1.0)   # mirror bevels, hands
+STEEL = (0.670, 0.680, 0.710, 1.0)          # polished/brushed stainless
+STEEL_BRIGHT = (0.820, 0.830, 0.860, 1.0)   # mirror bevels, hands
 STEEL_DARK = (0.520, 0.530, 0.555, 1.0)     # recessed steel, springs
 STEEL_LEVER = (0.700, 0.705, 0.720, 1.0)    # straight-grained chrono levers
 COPPER_GOLD = (0.720, 0.455, 0.310, 1.0)    # salmon copper-gold bridges/plate

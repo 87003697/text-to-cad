@@ -67,3 +67,43 @@ output, workaround, blocked?, fixed?
   crash and cost several kill/retry cycles.
 - **Workaround:** watch the progress JSON + process CPU by hand.
 - **Blocked:** contributed to the ~45 min above. **Fixed:** no (logged).
+
+## 5. Near-tangent boolean tools are dropped SILENTLY (OCC kernel via build123d)
+
+- **Doing:** case cluster — flat crystal/crown/pusher domes built by intersecting
+  huge near-tangent spheres (R≈1700 mm) with small revolves; also a crystal
+  multi-tool subtract.
+- **Wrong output:** no error, exit 0, `inspect validate` clean — but half a
+  tool's material was silently not removed (pusher head half-vanished), and one
+  subtract left a stray disjoint 21.6 mm³ solid floating inside the crystal.
+  Classic silent-no-op/degenerate-geometry behavior at near-tangency; only
+  visual snapshot review caught it.
+- **Workaround:** avoid near-tangent booleans entirely — build such domes as a
+  single revolved profile (RadiusArc in the profile), which is also crisper.
+- **Blocked:** no (caught in builder self-review). **Fixed:** in model source.
+
+## 6. Snapshot renderer shows transparent parts (alpha < 1 source colors) as milky-opaque
+
+- **Doing:** case cluster snapshots; `crystal` has color alpha 0.16, sapphire
+  0.14 (confirmed present in the artifact descriptor).
+- **Wrong output:** in `scripts/snapshot` renders the crystal reads as a milky
+  solid dome rather than glass; unclear whether the GLB bakes alpha and the
+  snapshot material ignores it, or alpha is dropped earlier.
+- **Workaround:** none yet; to be re-checked at whole-watch compose (may need
+  `display.mode` tweaks or a transparent-materials fix).
+- **Blocked:** not yet (cosmetic until final renders). **Fixed:** no.
+- **Root cause (traced):** two independent alpha drops.
+  1. `packages/cadgen/src/cadgen/_internal/glb.py add_material()` bakes the
+     RGBA into `baseColorFactor` but never sets `alphaMode: "BLEND"`, and glTF
+     defaults to OPAQUE → alpha ignored by conformant loaders. **Fixed in root
+     source** (BLEND set when alpha < 1) — helps standalone GLB exports.
+  2. The component-package compose path drops alpha entirely: descriptor
+     occurrence override colors go through
+     `packages/cadjs/src/lib/assembly/meshData.js linearRgbToHex()` (3
+     channels only), and `lib/viewer/surfaceMaterials.js` derives opacity
+     solely from theme/display-mode settings — there is no per-part opacity
+     concept at all. A real fix means threading alpha through part records
+     into per-material `transparent`/`opacity`; too invasive for this
+     project's "minimal targeted fixes" rule.
+- **Adopted workaround:** snapshot renders `--hide` the glass occurrences
+  (crystal, caseback sapphire); optically defensible for macro shots.

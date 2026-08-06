@@ -1,0 +1,613 @@
+"""Case cluster for the moonwatch chronograph.
+
+Case middle with twisted lyre lugs and asymmetric crown guard, tachymeter
+bezel (steel ring + black insert + filled scale), hesalite-style domed
+crystal, display caseback (sapphire + retaining ring), crown, pushers with
+tubes and coil springs, gaskets, and spring bars.
+
+Frame: WATCH frame per `_spec` — z = 0 at the case-middle / caseback joint
+plane, +Z through the crystal, crown at +X.  All `build_*` functions return
+parts already positioned in the watch frame; `build_case_parts()` returns the
+full labeled, colored list.
+"""
+
+from __future__ import annotations
+
+import math
+
+from build123d import (
+    Align,
+    Axis,
+    BuildLine,
+    BuildSketch,
+    Circle,
+    Color,
+    Cylinder,
+    Helix,
+    Line,
+    Plane,
+    Polygon,
+    Pos,
+    RadiusArc,
+    Rectangle,
+    Rot,
+    Sphere,
+    Text,
+    Torus,
+    extrude,
+    loft,
+    make_face,
+    mirror,
+    revolve,
+    sweep,
+)
+
+import _spec as S
+import _finishing as F
+
+# ---------------------------------------------------------------------------
+# Derived case-middle geometry (local modeling choices only; every shared
+# dimension comes from _spec).
+# ---------------------------------------------------------------------------
+
+R_BAND = S.CASE_MIDDLE_DIAMETER / 2.0          # 20.5
+GUARD_CENTER_X = 4.0                            # offset circle forming the
+GUARD_RADIUS = 18.0                             # asymmetric crown guard:
+# reach = GUARD_CENTER_X + GUARD_RADIUS = 22.0 (+1.5 over the band at +X),
+# blending to the round band at roughly +/-47 degrees.
+
+BORE_RADIUS = 15.1                              # movement bore
+SEAT_RADIUS = 19.55                             # crystal/gasket seat rebate
+SEAT_Z = 6.0                                    # rebate floor
+BACK_RECESS_RADIUS = 18.3                       # caseback boss recess
+BACK_RECESS_TOP = 1.3
+
+BEZEL_TOP_Z = S.CASE_MIDDLE_HEIGHT + S.BEZEL_HEIGHT          # 9.2
+CRYSTAL_APEX_Z = BEZEL_TOP_Z + S.CRYSTAL_DOME_RISE           # 10.9
+
+LUG_HALF_GAP = S.LUG_WIDTH / 2.0                # 10.0 (lug inner faces)
+LUG_TIP_Y = S.LUG_TO_LUG / 2.0                  # 24.0
+
+# Lyre-lug loft stations: (y, z_top, z_bot, x_out, x_bevel_top, z_bevel_out).
+# The polished facet runs from (x_bevel_top, z_top) to (x_out, z_bevel_out):
+# nearly horizontal at the root (a top bevel) rotating to nearly vertical at
+# the tip (a flank bevel) — the twisted-facet read.  Root station is fully
+# buried inside the case band so the loft emerges from the flank.
+_LUG_STATIONS = (
+    (10.5, 5.95, 0.30, 17.40, 15.80, 5.30),
+    (14.0, 5.85, 0.85, 16.90, 15.10, 4.50),
+    (17.5, 5.60, 1.35, 15.90, 14.10, 3.55),
+    (20.5, 5.10, 1.75, 14.55, 13.00, 2.90),
+    (22.8, 4.45, 2.00, 13.30, 12.25, 2.55),
+    (23.7, 4.05, 2.15, 12.60, 11.85, 2.45),
+    (LUG_TIP_Y, 3.35, 2.35, 11.95, 11.35, 2.60),
+)
+
+
+def _catmull_rom(p0, p1, p2, p3, t):
+    return 0.5 * (
+        2 * p1
+        + (-p0 + p2) * t
+        + (2 * p0 - 5 * p1 + 4 * p2 - p3) * t * t
+        + (-p0 + 3 * p1 - 3 * p2 + p3) * t * t * t
+    )
+
+
+def _dense_lug_stations(n_sub: int = 3):
+    """Catmull-Rom interpolation of the control stations so the ruled loft
+    reads as a smooth sculpted horn instead of creased planar panels."""
+    rows = [tuple(map(float, r)) for r in _LUG_STATIONS]
+    ext = [rows[0]] + rows + [rows[-1]]
+    out = []
+    for i in range(1, len(ext) - 2):
+        p0, p1, p2, p3 = ext[i - 1], ext[i], ext[i + 1], ext[i + 2]
+        for k in range(n_sub):
+            t = k / n_sub
+            out.append(tuple(
+                _catmull_rom(p0[j], p1[j], p2[j], p3[j], t) for j in range(6)
+            ))
+    out.append(rows[-1])
+    return out
+
+STEEL_C = Color(*S.STEEL)
+STEEL_DARK_C = Color(*S.STEEL_DARK)
+GASKET_C = Color(*S.GASKET)
+
+
+# ---------------------------------------------------------------------------
+# Case middle with lugs
+# ---------------------------------------------------------------------------
+
+def _band_profile(scale: float):
+    """Plan profile of the case band: round band + crown-guard bulge."""
+    return Circle(R_BAND * scale) + Pos(GUARD_CENTER_X * scale, 0) * Circle(
+        GUARD_RADIUS * scale
+    )
+
+
+def _case_band():
+    sections = [
+        Pos(0, 0, 0.0) * _band_profile(0.985),
+        Pos(0, 0, 3.2) * _band_profile(1.0),
+        Pos(0, 0, S.CASE_MIDDLE_HEIGHT) * _band_profile(0.975),
+    ]
+    band = loft(sections)
+    bottom_edges = [e for e in band.edges() if e.bounding_box().max.Z < 1e-4]
+    band, _ = F.safe_chamfer(band, bottom_edges, 0.35)
+    return band
+
+
+def _lug_section(y, z_top, z_bot, x_out, x_bev, z_bev):
+    # bottom-outer chamfer; must stay below the facet's lower edge
+    ch = min(0.6, (z_bev - z_bot) * 0.45)
+    pts = (
+        (LUG_HALF_GAP, z_bot),
+        (x_out - 0.5, z_bot),
+        (x_out, z_bot + ch),
+        (x_out, z_bev),
+        (x_bev, z_top),
+        (LUG_HALF_GAP, z_top),
+    )
+    return Plane.XZ.offset(-y) * Polygon(*pts, align=None)
+
+
+def _lug_ne():
+    """Lug in the +X/+Y quadrant; the other three are mirrors."""
+    sections = [_lug_section(*st) for st in _dense_lug_stations()]
+    # ruled: the smooth loft overshoots badly on this station set (bulges
+    # ~2 mm past the profile); dense stations keep ruled visually smooth
+    return loft(sections, ruled=True)
+
+
+def _case_middle_cuts():
+    cuts = []
+    # movement bore, through
+    cuts.append(Pos(0, 0, 3.5) * Cylinder(BORE_RADIUS, 7.6))
+    # crystal / gasket seat rebate at the top
+    cuts.append(
+        Pos(0, 0, (SEAT_Z + 7.2) / 2)
+        * Cylinder(SEAT_RADIUS, 7.2 - SEAT_Z)
+    )
+    # caseback boss recess at the bottom
+    cuts.append(
+        Pos(0, 0, (BACK_RECESS_TOP - 0.1) / 2)
+        * Cylinder(BACK_RECESS_RADIUS, BACK_RECESS_TOP + 0.1)
+    )
+    # crown tube seat + stem channel at +X
+    cuts.append(
+        Pos(21.1, 0, S.CROWN_Z) * Rot(0, 90, 0) * Cylinder(1.6, 3.0)
+    )
+    cuts.append(
+        Pos(17.0, 0, S.CROWN_Z) * Rot(0, 90, 0) * Cylinder(0.8, 6.0)
+    )
+    # pusher tube seats + pin channels at the pusher angles
+    for ang in S.PUSHER_ANGLES:
+        cuts.append(
+            Rot(0, 0, ang)
+            * Pos(20.1, 0, S.PUSHER_Z)
+            * Rot(0, 90, 0)
+            * Cylinder(1.78, 3.4)
+        )
+        cuts.append(
+            Rot(0, 0, ang)
+            * Pos(17.15, 0, S.PUSHER_Z)
+            * Rot(0, 90, 0)
+            * Cylinder(1.1, 3.3)
+        )
+    # spring-bar holes in the lug inner faces (one long cutter per pair)
+    for sy in (S.SPRING_BAR_Y, -S.SPRING_BAR_Y):
+        cuts.append(
+            Pos(0, sy, S.SPRING_BAR_Z)
+            * Rot(0, 90, 0)
+            * Cylinder(0.85, 23.0)
+        )
+    return cuts
+
+
+def build_case_middle():
+    band = _case_band()
+    lug = _lug_ne()
+    lugs = [
+        lug,
+        mirror(lug, about=Plane.YZ),
+        mirror(lug, about=Plane.XZ),
+        mirror(mirror(lug, about=Plane.YZ), about=Plane.XZ),
+    ]
+    body = band + lugs
+    body = body - _case_middle_cuts()
+    body.label = "case_middle"
+    body.color = STEEL_C
+    return body
+
+
+# ---------------------------------------------------------------------------
+# Bezel: steel ring + black tachymeter insert + filled scale
+# ---------------------------------------------------------------------------
+
+_BEZEL_RING_PROFILE = (
+    (20.00, 7.00),
+    (21.00, 7.35),
+    (21.00, 8.90),
+    (20.85, 9.20),
+    (20.55, 9.20),
+    (20.55, 8.42),
+    (19.00, 8.42),
+    (19.00, 9.05),
+    (18.80, 8.95),
+    (18.80, 8.20),
+    (19.55, 7.55),
+    (19.55, 7.00),
+)
+
+_INSERT_PROFILE = (
+    (19.05, 8.44),
+    (20.50, 8.44),
+    (20.50, 9.10),
+    (20.42, 9.16),
+    (19.13, 9.16),
+    (19.05, 9.10),
+)
+
+
+def build_bezel_ring():
+    ring = revolve(Plane.XZ * Polygon(*_BEZEL_RING_PROFILE, align=None), Axis.Z)
+    ring.label = "bezel_ring"
+    ring.color = STEEL_C
+    return ring
+
+
+def build_bezel_insert():
+    ins = revolve(Plane.XZ * Polygon(*_INSERT_PROFILE, align=None), Axis.Z)
+    ins.label = "bezel_insert"
+    ins.color = Color(*S.BEZEL_BLACK)
+    return ins
+
+
+TACHY_VALUES = (
+    500, 400, 350, 300, 275, 250, 225, 200, 190, 180, 170, 160,
+    150, 140, 130, 120, 110, 100, 95, 90, 85, 80, 75, 70, 65, 60,
+)
+
+_TACHY_FONT = "Helvetica Neue"
+_NUM_R = 19.95        # numeral centerline radius
+_NUM_SIZE = 0.92
+_TICK_R = 19.33       # major tick center radius (inner band)
+_LABEL_R = 19.90      # TACHYMETRE letter radius
+
+
+def _tachy_angle(value: float) -> float:
+    """Clockwise degrees from 12 o'clock for a tachymeter value."""
+    return 6.0 * 3600.0 / value
+
+
+def _at_angle(a_cw: float, r: float, obj):
+    return Rot(0, 0, -a_cw) * Pos(0, r) * obj
+
+
+def _tachy_text(txt: str, size: float):
+    return Text(txt, size, font=_TACHY_FONT, align=(Align.CENTER, Align.CENTER))
+
+
+def build_tachymeter_scale():
+    shapes = []
+    # numerals + major ticks
+    for v in TACHY_VALUES:
+        a = _tachy_angle(v) % 360.0
+        num_a = 352.0 if v == 60 else a       # nudge 60 clear of 12
+        shapes.append(_at_angle(num_a, _NUM_R, _tachy_text(str(v), _NUM_SIZE)))
+        shapes.append(_at_angle(a, _TICK_R, Rectangle(0.13, 0.36)))
+    # intermediate marks: unit ticks below 100, dots above
+    for hi, lo in zip(TACHY_VALUES, TACHY_VALUES[1:]):
+        if hi <= 100:
+            for v in range(lo + 1, hi):
+                shapes.append(
+                    _at_angle(_tachy_angle(v) % 360.0, 19.28, Rectangle(0.09, 0.26))
+                )
+        else:
+            mid = (hi + lo) / 2.0
+            shapes.append(_at_angle(_tachy_angle(mid), _NUM_R, Circle(0.12)))
+    # TACHYMETRE label arcing right of 12
+    label = "TACHYMÈTRE"
+    start_a, step_a = 10.5, 2.55
+    for i, ch in enumerate(label):
+        shapes.append(_at_angle(start_a + i * step_a, _LABEL_R, _tachy_text(ch, 0.78)))
+
+    sk = shapes[0] + shapes[1:]
+    scale = Pos(0, 0, 9.14) * extrude(sk, amount=0.07)   # 0.05 proud of insert
+    scale.label = "tachymeter_scale"
+    scale.color = Color(*S.BEZEL_FILL)
+    return scale
+
+
+# ---------------------------------------------------------------------------
+# Crystal (hesalite read: steep toroidal shoulder, near-flat top)
+# ---------------------------------------------------------------------------
+
+def build_crystal():
+    """Hesalite-read domed crystal as one revolved shell profile: near-flat
+    top arc, tight toroidal shoulder, straight outer wall, Ø38.4 seating
+    skirt, and an inner cavity clearing the dial edge and hands."""
+    r_skirt = S.CRYSTAL_DIAMETER / 2.0            # 19.2
+    apex = CRYSTAL_APEX_Z                          # 10.9
+    # outer dome: top arc sagging `sag` over its radius, blended to the wall
+    # by a tight shoulder arc tangent to vertical at (18.7, 8.9)
+    sag = 0.85
+    sh_minor = apex - sag - 8.9                    # shoulder arc radius
+    r_top = 18.7 - sh_minor                        # top arc outer radius
+    top_r = (r_top**2 + sag**2) / (2 * sag)
+    sag_i = 0.6
+    shi_minor = 0.75
+    r_top_i = 17.9 - shi_minor
+    z_shi = (apex - 0.6) - sag_i                   # inner shoulder top z
+    top_r_i = (r_top_i**2 + sag_i**2) / (2 * sag_i)
+    with BuildSketch(Plane.XZ) as sk:
+        with BuildLine():
+            # outer surface
+            RadiusArc((0, apex), (r_top, apex - sag), top_r)        # dome top
+            RadiusArc((r_top, apex - sag), (18.7, 8.9), sh_minor)   # shoulder
+            Line((18.7, 8.9), (18.7, 8.1))                          # upper wall
+            Line((18.7, 8.1), (r_skirt, 8.1))
+            Line((r_skirt, 8.1), (r_skirt, 6.6))                    # skirt
+            Line((r_skirt, 6.6), (18.65, 6.6))
+            # inner cavity
+            Line((18.65, 6.6), (18.65, 8.3))                        # dial edge
+            Line((18.65, 8.3), (17.9, 8.5))
+            Line((17.9, 8.5), (17.9, z_shi - shi_minor))
+            RadiusArc((17.9, z_shi - shi_minor), (r_top_i, z_shi), -shi_minor)
+            RadiusArc((r_top_i, z_shi), (0, apex - 0.6), -top_r_i)  # under-dome
+            Line((0, apex - 0.6), (0, apex))
+        make_face()
+    body = revolve(sk.sketch, Axis.Z)
+    body.label = "crystal"
+    body.color = Color(*S.CRYSTAL)
+    return body
+
+
+# ---------------------------------------------------------------------------
+# Display caseback
+# ---------------------------------------------------------------------------
+
+_CASEBACK_PROFILE = (
+    (14.20, -S.CASEBACK_DEPTH),
+    (14.20, -2.05),
+    (15.35, -2.05),
+    (15.35, -0.50),
+    (15.00, -0.50),
+    (15.00, 1.20),
+    (17.95, 1.20),        # thread boss (CASEBACK_THREAD_DIAMETER ~ 36)
+    (17.95, -0.02),
+    (19.30, -0.02),
+    (19.30, -S.CASEBACK_DEPTH),
+)
+
+
+def build_caseback():
+    body = revolve(Plane.XZ * Polygon(*_CASEBACK_PROFILE, align=None), Axis.Z)
+    # slight outer dome on the back face
+    dome_r = 450.0
+    body = body & Pos(0, 0, dome_r - S.CASEBACK_DEPTH) * Sphere(dome_r)
+
+    cuts = []
+    # thread relief grooves on the boss flank
+    for gz in (0.35, 0.75):
+        cuts.append(Pos(0, 0, gz) * Torus(17.98, 0.13))
+    # fine knurl ring on the flank (grip / thread suggestion)
+    knurl = Pos(19.46, 0, -1.25) * Cylinder(0.18, 1.1)
+    for k in range(120):
+        cuts.append(Rot(0, 0, k * 3.0) * knurl)
+    # opener tool notches on the back rim (centered box cutter)
+    notch = Pos(17.6 - 0.75, -1.3, -2.5) * F._box(1.5, 2.6, 0.5)
+    for k in range(8):
+        cuts.append(Rot(0, 0, 22.5 + k * 45.0) * notch)
+    body = body - cuts
+    body.label = "caseback"
+    body.color = STEEL_C
+    return body
+
+
+def build_caseback_sapphire():
+    r = S.CASEBACK_SAPPHIRE_DIAMETER / 2.0 + 0.3   # seats in the 15.35 rebate
+    disk = Pos(0, 0, -1.0) * Cylinder(r, 1.0)
+    disk.label = "caseback_sapphire"
+    disk.color = Color(*S.SAPPHIRE)
+    return disk
+
+
+def build_caseback_retaining_ring():
+    outer = Pos(0, 0, -1.775) * Cylinder(15.3, 0.45)
+    ring = outer - Pos(0, 0, -1.775) * Cylinder(14.25, 0.6)
+    ring.label = "caseback_retaining_ring"
+    ring.color = STEEL_DARK_C
+    return ring
+
+
+def build_caseback_o_ring():
+    o = Pos(0, 0, 0.25) * Torus(18.1, 0.25)
+    o.label = "caseback_o_ring"
+    o.color = GASKET_C
+    return o
+
+
+# ---------------------------------------------------------------------------
+# Crown + tube
+# ---------------------------------------------------------------------------
+
+CROWN_INNER_X = 23.0     # crown inner face (1.0 mm reveal off the guard)
+
+
+def build_crown():
+    """Crown, stem, and retaining collar as one revolved profile (local +Z =
+    outward crown axis), fluted by a polar pattern of cylinder cuts."""
+    r = S.CROWN_DIAMETER / 2.0
+    t = S.CROWN_THICKNESS
+    sag = 0.35
+    sph_r = (r**2 + sag**2) / (2 * sag)
+    with BuildSketch(Plane.XZ) as sk:
+        with BuildLine():
+            Line((0.001, -4.4), (0.45, -4.4))          # stem
+            Line((0.45, -4.4), (0.45, -1.2))
+            Line((0.45, -1.2), (0.95, -1.2))           # collar
+            Line((0.95, -1.2), (0.95, 0.1))
+            Line((0.95, 0.1), (0.45, 0.1))
+            Line((0.45, 0.1), (0.45, 1.1))
+            Line((0.45, 1.1), (1.75, 1.1))             # tube recess floor
+            Line((1.75, 1.1), (1.75, 0.0))
+            Line((1.75, 0.0), (2.65, 0.0))             # inner face
+            Line((2.65, 0.0), (r, 0.25))               # rim chamfer
+            Line((r, 0.25), (r, t - sag))              # fluted band
+            RadiusArc((r, t - sag), (0.001, t), -sph_r)  # domed outer face
+            Line((0.001, t), (0.001, -4.4))
+        make_face()
+    body = revolve(sk.sketch, Axis.Z)
+
+    flute = Pos(3.02, 0, t / 2) * Cylinder(0.42, t + 1.6)
+    body = body - [Rot(0, 0, k * 15.0) * flute for k in range(24)]
+
+    crown = Pos(CROWN_INNER_X, 0, S.CROWN_Z) * Rot(0, 90, 0) * body
+    crown.label = "crown"
+    crown.color = STEEL_C
+    return crown
+
+
+def build_crown_tube():
+    tube = Cylinder(1.55, 3.1) - Cylinder(
+        0.55, 3.4
+    )
+    tube = Pos(21.55, 0, S.CROWN_Z) * Rot(0, 90, 0) * tube
+    tube.label = "crown_tube"
+    tube.color = STEEL_DARK_C
+    return tube
+
+
+def build_crown_o_ring():
+    o = Pos(20.2, 0, S.CROWN_Z) * Rot(0, 90, 0) * Torus(1.15, 0.28)
+    o.label = "crown_o_ring"
+    o.color = GASKET_C
+    return o
+
+
+# ---------------------------------------------------------------------------
+# Pushers (cap + tube + coil spring + o-ring), local +Z = radially outward
+# ---------------------------------------------------------------------------
+
+_PUSHER_FLANK_R = 21.0   # local origin radius on the guard flank
+
+
+def _pusher_transform(angle_deg: float):
+    return Rot(0, 0, angle_deg) * Pos(_PUSHER_FLANK_R, 0, S.PUSHER_Z) * Rot(0, 90, 0)
+
+
+def _pusher_cap_local():
+    head = Pos(0, 0, 4.05) * Cylinder(
+        S.PUSHER_DIAMETER / 2.0, 2.3
+    )
+    sag = 0.5
+    r = S.PUSHER_DIAMETER / 2.0
+    sph_r = (r**2 + sag**2) / (2 * sag)
+    head = head & Pos(0, 0, 5.2 - sph_r) * Sphere(sph_r)
+    base_edges = [e for e in head.edges() if abs(e.bounding_box().min.Z - 2.9) < 1e-3]
+    head, _ = F.safe_chamfer(head, base_edges, 0.3)
+    rod = Pos(0, 0, 0.75) * Cylinder(0.62, 4.5)
+    return head + rod
+
+
+def _pusher_tube_local():
+    return Pos(0, 0, 0.05) * Cylinder(1.75, 4.1) - Pos(
+        0, 0, 0.05
+    ) * Cylinder(1.05, 4.5)
+
+
+def _pusher_spring_local():
+    helix = Pos(0, 0, 0.3) * Helix(0.8, 2.4, 0.83)
+    section = Plane(origin=helix @ 0, z_dir=helix % 0) * Circle(0.19)
+    return sweep(section, path=helix, is_frenet=True)
+
+
+def build_pusher(angle_deg: float, role: str):
+    tf = _pusher_transform(angle_deg)
+    cap = tf * _pusher_cap_local()
+    cap.label = f"pusher_cap:{role}"
+    cap.color = STEEL_C
+    tube = tf * _pusher_tube_local()
+    tube.label = f"pusher_tube:{role}"
+    tube.color = STEEL_DARK_C
+    spring = tf * _pusher_spring_local()
+    spring.label = f"pusher_spring:{role}"
+    spring.color = STEEL_DARK_C
+    o_ring = tf * (Pos(0, 0, -1.0) * Torus(0.85, 0.22))
+    o_ring.label = f"pusher_o_ring:{role}"
+    o_ring.color = GASKET_C
+    return [cap, tube, spring, o_ring]
+
+
+# ---------------------------------------------------------------------------
+# Gaskets + spring bars
+# ---------------------------------------------------------------------------
+
+def build_crystal_gasket():
+    g = Pos(0, 0, 7.0) * Cylinder(19.52, 1.0) - Pos(
+        0, 0, 7.0
+    ) * Cylinder(19.22, 1.2)
+    g.label = "crystal_gasket"
+    g.color = GASKET_C
+    return g
+
+
+def build_spring_bar(role: str, y_sign: float):
+    body = Cylinder(S.SPRING_BAR_DIAMETER / 2.0, 19.4)
+    pistons = [
+        Pos(0, 0, sz * 10.5) * Cylinder(0.5, 1.6)
+        for sz in (1.0, -1.0)
+    ]
+    bar = body + pistons
+    bar = Pos(0, y_sign * S.SPRING_BAR_Y, S.SPRING_BAR_Z) * Rot(0, 90, 0) * bar
+    bar.label = f"spring_bar:{role}"
+    bar.color = STEEL_C
+    return bar
+
+
+# ---------------------------------------------------------------------------
+# Full cluster
+# ---------------------------------------------------------------------------
+
+def build_case_parts():
+    parts = [
+        build_case_middle(),
+        build_bezel_ring(),
+        build_bezel_insert(),
+        build_tachymeter_scale(),
+        build_crystal(),
+        build_crystal_gasket(),
+        build_caseback(),
+        build_caseback_sapphire(),
+        build_caseback_retaining_ring(),
+        build_caseback_o_ring(),
+        build_crown(),
+        build_crown_tube(),
+        build_crown_o_ring(),
+    ]
+    parts += build_pusher(S.PUSHER_ANGLES[0], "2oclock")
+    parts += build_pusher(S.PUSHER_ANGLES[1], "4oclock")
+    parts.append(build_spring_bar("12", 1.0))
+    parts.append(build_spring_bar("6", -1.0))
+    return parts
+
+
+__all__ = [
+    "build_case_middle",
+    "build_bezel_ring",
+    "build_bezel_insert",
+    "build_tachymeter_scale",
+    "build_crystal",
+    "build_crystal_gasket",
+    "build_caseback",
+    "build_caseback_sapphire",
+    "build_caseback_retaining_ring",
+    "build_caseback_o_ring",
+    "build_crown",
+    "build_crown_tube",
+    "build_crown_o_ring",
+    "build_pusher",
+    "build_spring_bar",
+    "build_case_parts",
+]

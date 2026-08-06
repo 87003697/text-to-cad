@@ -453,6 +453,11 @@ class _GlbBuilder:
             },
             "doubleSided": True,
         }
+        # glTF defaults alphaMode to OPAQUE, so a translucent source color's
+        # alpha channel is silently ignored by conformant renderers unless the
+        # material opts into blending.
+        if float(color[3]) < 1.0:
+            material["alphaMode"] = "BLEND"
         if source_color is not None:
             material["extras"] = {"cadSourceColor": bool(source_color)}
         materials.append(material)
