@@ -38,6 +38,7 @@ from build123d import (
     Polygon,
     Pos,
     Rot,
+    Sphere,
     extrude,
     revolve,
 )
@@ -223,10 +224,13 @@ def _add_shadow(parts, shadow, label):
 # Polished-anglage ribbon tone: the constructive 45-deg bevels share the
 # bridge COPPER_GOLD and the renderer applies uniform material properties, so
 # the geometry rendered invisibly (blind critic: "raw extruded edges"). The
-# ribbon overlay carries the mirror-polish read purely by tone — a bright
-# copper-gold highlight well above COPPER_GOLD, inline by design (not a spec
+# ribbon overlay carries the mirror-polish read purely by tone. The first
+# pass (0.88, 0.66, 0.46) was still hue-adjacent to COPPER_GOLD and washed
+# into the same specular pool at macro (blind critic round 7: "no polished
+# anglage chamfer"); this near-white warm-gold mirror tone stays clearly
+# distinct from the striped tops at any angle. Inline by design (not a spec
 # finish color: it stands in for specular pickup, not a material).
-_ANGLAGE_COLOR = (0.88, 0.66, 0.46, 1.0)
+_ANGLAGE_COLOR = (0.97, 0.82, 0.62, 1.0)
 
 
 def _add_anglage(parts, ribbon, label):
@@ -292,15 +296,38 @@ def _sink_tool(cone_r=0.97, wall_r=0.72, cone_z=0.20, seat_z=0.60, bore_r=0.45):
 
 
 def _ruby_disc(r=0.46, t=0.30, ch=0.05, hole_r=0.14):
-    """Flat-topped ruby jewel disc, top face at z=0: cylinder + a tiny 45-deg
-    top-edge chamfer baked in as a cone cap (no dome — F.jewel's domed bead
-    read as an oversized proud pink sphere at macro, the blind critic's #1
-    unreality), with an optional pivot-hole bore that renders as the dark
-    oil-sink dot at the center of every reference jewel."""
-    body = _cyl(r, t - ch, -t) + Pos(0, 0, -ch / 2) * Cone(r, r - ch, ch)
+    """Ruby jewel disc, rim at z=0 with a SHALLOW polished dome (apex +0.08):
+    cylinder body + the spherical cap through the z=0 rim circle. The first
+    flat-top pass killed F.jewel's oversized proud bead but overshot into
+    "flat decal" (blind critic) — a 0.08 rise over a 0.9 dia is the gentle
+    crown of a real polished jewel, catching one bright point highlight.
+    Callers seat the rim <= 0.05 under the surrounding face, so the apex
+    stays <= face + 0.05. The optional pivot-hole bore (dark oil-sink dot)
+    pierces the dome. (`ch` kept for signature stability; the dome
+    supersedes the old flat-top edge chamfer.)"""
+    h = 0.08
+    c = (h * h - r * r) / (2.0 * h)          # sphere center z (below rim)
+    dome = Pos(0, 0, c) * Sphere(h - c) & _cyl(r, h + 0.05, 0.0)
+    body = _cyl(r, t, -t) + dome
     if hole_r > 0:
-        body = body - _cyl(hole_r, t + 0.2, -t - 0.1)
+        body = body - _cyl(hole_r, t + 0.3, -t - 0.1)
     return body
+
+
+def _grain(span_l, span_w, cx, cy, z_top, angle, clip=None):
+    """Directional satin-grain tools: F.straight_grain_cutter's V-groove
+    field (surface at z=0, grooves along X) rotated so the grain runs along
+    `angle` (degrees), centered at (cx, cy) with the finished surface at
+    z_top. Returns a LIST for one multi-tool subtract. With `clip` (a solid),
+    the tools are fused and intersected with it first — REQUIRED wherever
+    overshoot would carve internal voids (recess floors inside a thicker
+    solid) or nick a polished anglage bevel (grain stays off bevels)."""
+    tools = [Pos(cx, cy, z_top) * Rot(0, 0, angle) * t
+             for t in F.straight_grain_cutter(span_l, span_w)]
+    if clip is None:
+        return tools
+    fused = tools[0] + tools[1:] if len(tools) > 1 else tools[0]
+    return [fused & clip]
 
 
 def _window_cutter(od, frac):
@@ -339,7 +366,10 @@ _BOSS_H = 0.06                           # table rise above the striped top
 # facets, the one cut texture that DID read in that A/B. Capped per bridge so
 # thin cocks are not pierced.
 _STRIPE_DEPTH = 0.40
-_BRIDGE_ANGLAGE = 0.30                   # 45-deg bevel, wide of spec 0.22 min
+# 45-deg bevel, deliberately wide of the 0.22 spec minimum: at 0.30 the
+# bright band was ~2 px at the presentation framing and never read (blind
+# critic round 7); 0.42 puts an unmistakable ribbon on every contour.
+_BRIDGE_ANGLAGE = 0.42
 
 
 def _bevel_extrude(circles, clip_r, z0, z1, w):
@@ -433,10 +463,13 @@ def _bridge(circles, clip_r, z0, z1, jewel_xy, screw_xy, cutouts=(),
         depth = min(_STRIPE_DEPTH, 0.55 * (z1 - z0))
         rings = F.snailing_cutter(2 * clip_r + 2.0, 2.4, pitch=S.GENEVA_STRIPE_PITCH,
                                   groove_depth=depth, groove_width=1.85)
-        inset = _blob([(x, y, max(r - 0.4, 0.2)) for x, y, r in circles],
-                      clip_r - 0.4)
+        # stripe field stays clear of the (widened) bevel + a small flat
+        # margin so the deep V's never scallop the polished ribbon
+        m = bevel_w + 0.08
+        inset = _blob([(x, y, max(r - m, 0.2)) for x, y, r in circles],
+                      clip_r - m)
         for x, y, r in cutouts:
-            inset = inset - Pos(x, y) * Circle(r + 0.4)
+            inset = inset - Pos(x, y) * Circle(r + m)
         for x, y in boss_xy:
             inset = inset - Pos(x, y) * Circle(_BOSS_R + 0.05)
         for x, y in jewel_xy:
@@ -479,15 +512,18 @@ def _bridge(circles, clip_r, z0, z1, jewel_xy, screw_xy, cutouts=(),
         cuts.append((Pos(0, 0, z1) * rings) & band)
 
     # polished anglage ribbon: a second bevel cap grown OUTWARD by
-    # d = 0.03 * sqrt(2) (so the skin is ~0.03 thick normal to the 45-deg
-    # face) minus the body and the same cuts — purely constructive, it can
-    # never bury or erase the baked bevel, tops out flush at z1, and hugs
-    # the outline everywhere including the clip-rim arc. Wheel-reveal
-    # cutout rims get the mirrored treatment: the cut's own flare cone
-    # minus an INWARD-shifted copy, a shell living inside the cut void so
-    # it cannot interpenetrate the bridge (its own cut tool would erase it
-    # if it went through the shared `cuts` subtraction).
-    rib_d = 0.03 * math.sqrt(2.0)
+    # d = 0.07 * sqrt(2) (so the skin is ~0.07 thick normal to the 45-deg
+    # face — the 0.03 skin thinned to slivers at cone-fallback junctions and
+    # let base copper peek through mid-facet) minus the body and the same
+    # cuts — purely constructive, it can never bury or erase the baked
+    # bevel, tops out flush at z1 (where it also leaves a ~0.1 flush bright
+    # ring inside the bevel's top edge), and hugs the outline everywhere
+    # including the clip-rim arc. Wheel-reveal cutout rims get the mirrored
+    # treatment: the cut's own flare cone minus an INWARD-shifted copy, a
+    # shell living inside the cut void so it cannot interpenetrate the
+    # bridge (its own cut tool would erase it if it went through the shared
+    # `cuts` subtraction).
+    rib_d = 0.07 * math.sqrt(2.0)
     outer = _anglage_cap([(x, y, r + rib_d) for x, y, r in circles],
                          clip_r + rib_d, z1, bevel_w)
     ribs = [outer - ([body] + cuts)]
@@ -561,6 +597,14 @@ def _plate_parts():
             if any(math.hypot(x - kx, y - ky) < kr for kx, ky, kr in keep_out):
                 continue
             cuts.append(Pos(x, y, -0.033) * proto)
+    # directional satin grain on the two recess floors — the big perlage
+    # keep-out fields that read as blank glossy copper through the bridge
+    # gaps. Tools are fused + clipped INSIDE each recess wall (radius a hair
+    # under the recess cut) so nothing carves voids in the surrounding solid.
+    for cx, cy, rr, zf in ((bx, by, 6.32, -0.35), (lx, ly, 5.22, -0.30)):
+        gclip = Pos(cx, cy, 0) * _cyl(rr, 0.6, zf - 0.3)
+        cuts.extend(_grain(2 * rr + 0.5, 2 * rr + 0.5, cx, cy, zf,
+                           _ang((cx, cy), (0.0, 0.0)), clip=gclip))
     plate = plate - cuts
     parts.append(_finish(plate, "main_plate", S.COPPER_GOLD))
 
@@ -791,8 +835,16 @@ def _bridge_parts():
     click, _ = F.anglage_top(click, 0.06)
     # pivot bore + a shallow spot-face (counterbore Ø = head Ø + 0.14) so the
     # Ø1.0 screw head shows a machined ring gap instead of lying loose on top
-    click = click - [Pos(3.74, 3.87, 0) * _cyl(0.3, 1.0, 2.6),
-                     Pos(3.74, 3.87, 0) * _cyl(0.57, 0.5, 3.00)]
+    # + straight satin grain along the beak->tail axis, clipped 0.12 inside
+    # the outline so it never nicks the anglage bevel
+    grain_clip = Pos(0, 0, 2.98) * extrude(
+        _blob([(x, y, max(r - 0.12, 0.08)) for x, y, r in click_pts], 14.0),
+        amount=0.30)
+    click = click - ([Pos(3.74, 3.87, 0) * _cyl(0.3, 1.0, 2.6),
+                      Pos(3.74, 3.87, 0) * _cyl(0.57, 0.5, 3.00)]
+                     + _grain(3.2, 2.0, 3.63, 4.01, 3.06,
+                              _ang((2.52, 4.90), (4.75, 3.12)),
+                              clip=grain_clip))
     parts.append(_finish(click, "click", S.STEEL_LEVER))
     parts.append(_finish(
         _place_screw(3.74, 3.87, 3.06, proud=0.05, head_d=1.0, hh=0.24, shank=0.7),
@@ -810,8 +862,12 @@ def _bridge_parts():
         blade.append((x, y, 0.09))
     spring_prof = _blob(blade, 14.0) + Pos(5.3, 4.6) * Circle(0.62)
     spring = Pos(0, 0, 2.9) * extrude(spring_prof, amount=0.14)
-    spring = spring - [Pos(5.3, 4.6, 0) * _cyl(0.26, 1.0, 2.6),
-                       Pos(5.3, 4.6, 0) * _cyl(0.52, 0.5, 2.99)]  # spot-face
+    # screw bore + spot-face + satin grain along the blade axis (no anglage
+    # on the spring, so the unclipped tools only cut where they overlap)
+    spring = spring - ([Pos(5.3, 4.6, 0) * _cyl(0.26, 1.0, 2.6),
+                        Pos(5.3, 4.6, 0) * _cyl(0.52, 0.5, 2.99)]
+                       + _grain(2.4, 1.4, 5.18, 3.95, 3.04,
+                                _ang((5.3, 4.6), (4.98, 3.28))))
     parts.append(_finish(spring, "click_spring", S.STEEL_LEVER))
     parts.append(_finish(
         _place_screw(5.3, 4.6, 3.04, proud=0.04, head_d=0.9, hh=0.2, shank=0.6),
@@ -886,7 +942,15 @@ def _pallet_parts():
         pad = Pos(sx, sy, 1.30) * Rot(0, 0, ax) * Box(0.66, 0.30, 0.44)
         stone_cuts.append(pad)
         stone_parts.append(_finish(slab, f"pallet_stone:{name}", S.RUBY_BRIGHT))
-    fork = fork - (stone_cuts + [Pos(pp[0], pp[1], 0) * _cyl(0.21, 1.0, 0.9)])
+    # satin grain along the fork's long (pivot->horns) axis on the exposed
+    # top, clipped 0.12 inside the outline to stay off the anglage bevel
+    grain_clip = Pos(0, 0, _FORK_Z[0]) * extrude(
+        _blob([(x, y, max(r - 0.12, 0.06)) for x, y, r in circles], 14.0),
+        amount=0.30)
+    fork = fork - (stone_cuts
+                   + [Pos(pp[0], pp[1], 0) * _cyl(0.21, 1.0, 0.9)]
+                   + _grain(9.0, 9.0, pp[0], pp[1], _FORK_Z[1],
+                            _ang(pp, bal), clip=grain_clip))
     gx, gy = along(3.6)
     fork = fork + Pos(gx, gy, 0) * _cyl(0.07, 0.18, 1.13)   # guard pin
     parts.append(_finish(fork, "pallet_fork", S.STEEL_BRIGHT))
@@ -1063,6 +1127,11 @@ def _balance_parts():
     tip = Polygon((-0.10, 4.05), (0.10, 4.05), (0.0, 4.55), align=None)
     reg2d = reg2d + Pos(lx, ly) * Rot(0, 0, tail_a - 90) * (tail + tip)
     reg = Pos(0, 0, cz1 + 0.01) * extrude(reg2d, amount=0.08)
+    # satin grain along the index lever's long axis (field starts outside
+    # the r1.72 ring so the black-polished ring stays mirror-clean)
+    gx = lx + 3.2 * math.cos(math.radians(tail_a))
+    gy = ly + 3.2 * math.sin(math.radians(tail_a))
+    reg = reg - _grain(2.8, 0.9, gx, gy, cz1 + 0.09, tail_a)
     boot = Pos(bootx, booty, 0) * _cyl(0.14, 0.82, 2.50)
     parts.append(_finish(reg + boot, "regulator", S.STEEL_DARK))
     return parts

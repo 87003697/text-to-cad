@@ -51,6 +51,14 @@ Construction vocabulary (all rows share it):
   baked into the lofted SECTION, so the three columns also read as
   separate convex bodies over parallel shadow grooves. All shutline cuts
   only REMOVE material, so the 0.06 articulation clearance is untouched.
+- Directional finish: every link, end link, and clasp plate carries axial
+  satin brushing on its crown — fine parallel V-grooves (shared
+  `_finishing.straight_grain_cutter`, pitch GRAIN_PITCH, depth
+  GRAIN_DEPTH) along the LOCAL strap axis, seated groove-by-groove onto
+  the crown arc (`_grain_field`) and cut in the construction frame before
+  posing so the grain drapes with each link. Bevels, rolled shoulders,
+  lateral shoulder rounds, and flanks are never grained: they stay
+  mirror-polished against the satin field.
 """
 
 from __future__ import annotations
@@ -127,6 +135,16 @@ CROWN_SAG = 0.30                    # top crown sagitta across each link width
 CROWN_SAG_BOT = 0.10                # gentler dome on the wrist side
 CROWN_APEX = T2 - 0.02              # crown apex just inside the stadium envelope
 P = S.LINK_PITCH
+
+# directional satin brushing on every link/clasp TOP crown: fine parallel
+# V-grooves (shared _finishing.straight_grain_cutter) running along each
+# part's LOCAL strap axis, cut in the construction frame BEFORE posing so
+# the grain drapes with the link. Only the flat-ish crown field is grained
+# — bevels, rolled shoulders, lateral shoulder rounds, and flanks stay
+# un-cut and read mirror-polished against the satin field.
+GRAIN_PITCH = 0.14                  # groove spacing (helper default)
+GRAIN_DEPTH = 0.018                 # groove depth (helper default)
+GRAIN_INSET = 0.35                  # field inset from every bevel/shoulder
 
 # first pin axis (end link -> row 1), watch frame, +Y strap
 JOINT1_Y = 26.0
@@ -259,6 +277,52 @@ def _crown_cap(half_w, length, s_top=CROWN_SAG, bev=BEVEL):
     plane = Plane(origin=(0, 0, 0), x_dir=(1, 0, 0), z_dir=(0, -1, 0))
     face = plane * _crowned_face(-half_w, half_w, 0.0, -12.0, s_top, bev)
     return extrude(face, amount=length, both=True)
+
+
+def _crown_drop(u, half_chord, sag):
+    """Depth of a crown arc (sagitta `sag` over half-chord `half_chord`)
+    below its apex at transverse offset `u` from the apex."""
+    r = (half_chord * half_chord + sag * sag) / (2.0 * sag)
+    if abs(u) >= r:
+        return sag
+    return r - math.sqrt(r * r - u * u)
+
+
+def _grain_field(x_lo, x_hi, y_lo, y_hi, crown_xc, half_chord, sag, z_apex,
+                 skew_deg=0.0):
+    """Brushed-grain tool list conformed to a crowned top.
+
+    Grooves run along Y (the strap direction) over the plan rectangle
+    [x_lo, x_hi] x [y_lo, y_hi]. The shared straight_grain_cutter emits
+    its V-prisms on a flat z = 0 plane; each groove is re-seated here at
+    the crown's own height at that groove's x (arc apex `z_apex` at
+    x = crown_xc, sagitta `sag` over `half_chord`), so the shallow
+    GRAIN_DEPTH bite stays uniform across the crowned width instead of
+    fading off the apex. `skew_deg` leans the grooves onto a tapered
+    link's own centerline so the crown's apex drift along Y stays within
+    the V-prism's 0.02 top margin (a groove whose surface climbs past
+    that margin would seal into a subsurface void). Returns tools for
+    ONE multi-tool subtract; overshoot along Y is pre-divided out of the
+    helper's 1.15 length factor so groove ends stop at y_lo/y_hi, and
+    where a rolled shoulder curves away below the field the grooves
+    simply fade out (removal only, never a void)."""
+    span_x = x_hi - x_lo
+    if span_x < GRAIN_PITCH or y_hi - y_lo < 0.5:
+        return []
+    tools = F.straight_grain_cutter(
+        span_x, (y_hi - y_lo) / 1.15, pitch=GRAIN_PITCH, depth=GRAIN_DEPTH,
+        along_x=False,
+    )
+    xm, ym = (x_lo + x_hi) / 2.0, (y_lo + y_hi) / 2.0
+    place = Pos(xm, ym, z_apex) * Rot(0, 0, skew_deg)
+    out = []
+    for i, tool in enumerate(tools):
+        off = -span_x / 2.0 + i * GRAIN_PITCH  # helper's groove offsets
+        if off > span_x / 2.0 + 1e-9:
+            continue  # helper over-emits +2 rows past the far edge
+        drop = _crown_drop(xm + off - crown_xc, half_chord, sag)
+        out.append(place * Pos(0, 0, -drop) * tool)
+    return out
 
 
 def _reveal_face(xa, xb, y, drop, bev, z_apex=CROWN_APEX, sag=CROWN_SAG):
@@ -405,6 +469,25 @@ def _make_link(
                 )
             )
         tools.append(cut)
+
+    # axial satin brushing on the crown field between the rolled shoulders:
+    # grooves along local +Y, skewed onto the tapered link's own centerline,
+    # inset off the bevels/shoulder rounds so those stay mirror-polished.
+    # Same batched subtract as the joint cutters (ONE boolean per link).
+    ba, bb = bev if isinstance(bev, tuple) else (bev, bev)
+    xc_near, xc_far = (xn0 + xn1) / 2.0, (xf0 + xf1) / 2.0
+    half_chord = ((xn1 - xn0) + (xf1 - xf0)) / 4.0 - (ba + bb) / 2.0
+    tools += _grain_field(
+        max(xn0, xf0) + ba + GRAIN_INSET,
+        min(xn1, xf1) - bb - GRAIN_INSET,
+        SHUT_EDGE + ROLL_R,
+        pitch - (SHUT_EDGE + ROLL_R),
+        (xc_near + xc_far) / 2.0,
+        half_chord,
+        CROWN_SAG,
+        CROWN_APEX,
+        skew_deg=math.degrees(math.atan2(xc_far - xc_near, yb - ya)),
+    )
     body = body - tools
     body = _chamfer_link(body)
     body.color = Color(*color)
@@ -584,6 +667,33 @@ def make_end_link():
         return not (on_bevel_band or on_shutline or on_groove)
 
     body, _ = F.safe_chamfer(body, [e for e in body.edges() if _keep(e)], 0.12)
+
+    # axial satin brushing on the three crown bands between the groove
+    # pair, in the pitched crown-cap frame (grain follows the nose->tail
+    # top slope). Applied AFTER the edge-break chamfer so the groove
+    # micro-edges never enter the chamfer candidate set; still ONE
+    # batched multi-tool subtract. Bevels, groove shoulders, and the
+    # joint-1 rolled shoulder stay un-grained (mirror-polished).
+    x_g = cw1 / 2.0 + LINK_GAP / 2.0            # groove pair centerlines
+    band_in = x_g - (LINK_GAP / 2.0 + R_LAT) - GRAIN_INSET
+    out_lo = x_g + LINK_GAP / 2.0 + R_LAT + GRAIN_INSET
+    out_hi = half_w - BEVEL - GRAIN_INSET
+    y_roll = (jy - (SHUT_EDGE + ROLL_R)) - nose_y - 0.05  # tail roll start
+    y_nose_c = NOSE_HUG_R - nose_y + GRAIN_INSET          # case-hugging arc
+    y_nose_o = (
+        math.sqrt(NOSE_HUG_R * NOSE_HUG_R - out_lo * out_lo)
+        - nose_y + GRAIN_INSET
+    )
+    frame = Pos(0, nose_y, top_nose) * Rot(-slope_deg, 0, 0)
+    grain = (
+        _grain_field(-band_in, band_in, y_nose_c, y_roll,
+                     0.0, half_w - BEVEL, CROWN_SAG, 0.0)
+        + _grain_field(out_lo, out_hi, y_nose_o, y_roll,
+                       0.0, half_w - BEVEL, CROWN_SAG, 0.0)
+        + _grain_field(-out_hi, -out_lo, y_nose_o, y_roll,
+                       0.0, half_w - BEVEL, CROWN_SAG, 0.0)
+    )
+    body = body - [frame * t for t in grain]
     body.color = Color(*S.BRACELET_OUTER)
     return body
 
@@ -631,6 +741,38 @@ def _arc_point(phi_deg, radius):
     return radius * math.sin(p), zc + radius * math.cos(p)
 
 
+def _clasp_grain(r_out, phi0_deg, phi1_deg, half_w, s_top, bev, seg_deg=1.9):
+    """Axial brushed-grain tools for a curved crowned clasp plate.
+
+    Straight V-prisms cannot follow the CLASP_R longitudinal curve (its
+    sagitta over the plate is ~150x the groove depth), so the arc is split
+    into ~seg_deg chords and one crown-conformed `_grain_field` is seated
+    tangent at each chord's midpoint, sunk by half the chord's own sagitta
+    (~0.005) so the grooves bite over the whole chord instead of fading at
+    its ends. Groove x-offsets repeat identically segment to segment, so
+    the grain lines run continuously along the clasp; each segment's
+    grooves overrun the chord by 0.2 so consecutive segments genuinely
+    interpenetrate at the seams — butted end faces meet the neighbor's
+    tool in tangent contact and shed sliver solids in the cut. Same inset
+    rules as the links: the field stays off the profile-baked bevels."""
+    n = max(1, int(math.ceil((phi1_deg - phi0_deg) / seg_deg)))
+    dphi = (phi1_deg - phi0_deg) / n
+    half = math.radians(dphi) / 2.0
+    chord = r_out * math.sin(half) + 0.2       # chord half-length + overrun
+    sink = r_out * (1.0 - math.cos(half)) / 2.0
+    half_chord = half_w - bev
+    tools = []
+    for k in range(n):
+        pm = phi0_deg + (k + 0.5) * dphi
+        y, z = _arc_point(pm, r_out)
+        seg = _grain_field(
+            -half_chord + GRAIN_INSET, half_chord - GRAIN_INSET,
+            -chord, chord, 0.0, half_chord, s_top, -sink,
+        )
+        tools += [Pos(0, y, z) * Rot(-pm, 0, 0) * t for t in seg]
+    return tools
+
+
 def make_clasp():
     """Closed fold-over clasp in clasp-local frame (origin = hinge pin
     axis to the last 6-o'clock row, +Y along the strap, +Z outward).
@@ -670,12 +812,20 @@ def make_clasp():
         if (e.bounding_box().max.Y - e.bounding_box().min.Y) < 12.0
     ]
     body, _ = F.safe_chamfer(body, short_edges, 0.12)
+    # axial satin brushing along the clasp's long axis (after the edge
+    # break so groove micro-edges never enter the chamfer set); one
+    # batched subtract, field inset from the swept bevels and stopped
+    # short of the hinge relief and the rounded plan corners
+    body = body - _clasp_grain(CLASP_R, 2.0, 27.5, CLASP_HALF_W,
+                               CROWN_SAG, BEVEL)
     body.color = Color(*S.BRACELET_OUTER)
     parts.append((body, "clasp_body"))
 
     # --- inner cover plate (folded closed under the outer plate) ------------
-    # crowned + beveled section baked in; no post chamfer
+    # crowned + beveled section baked in; no post chamfer. Same axial
+    # brushing as the outer plate on its crowned face.
     cover = _crowned_band(CLASP_R - 2.3, CLASP_R - 3.5, 4.0, 29.5, 7.0, 0.18, 0.10)
+    cover = cover - _clasp_grain(CLASP_R - 2.3, 5.0, 28.5, 7.0, 0.18, 0.10)
     cover.color = Color(*S.BRACELET_OUTER)
     parts.append((cover, "clasp_cover"))
 

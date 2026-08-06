@@ -15,7 +15,8 @@ and scale markings only.
 - `_finishing.py` — shared finishing vocabulary: `anglage_top`,
   `safe_chamfer`/`safe_fillet` (retry ladders), `slotted_screw`, `jewel*`,
   `snailing_cutter`, `geneva_stripes_cutter`, `perlage_cutter`,
-  `train_wheel`, `pinion`, `heart_cam`. Use these — do not fork private
+  `straight_grain_cutter`, `train_wheel`, `pinion`, `heart_cam`. Use
+  these — do not fork private
   variants of the same vocabulary.
 - `finishing_sampler.step.py` — standing coupon exercising the vocabulary.
 - Cluster helpers: `_case.py`, `_dial.py`, `_mvt_base.py`, `_mvt_keyless.py`,
