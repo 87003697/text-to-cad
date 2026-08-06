@@ -10,7 +10,7 @@ __pycache__/
 .agents/sessions/
 models/
 plugins/
-viewer/
+/viewer/
 docs/
 worktrees/
 tmp/
