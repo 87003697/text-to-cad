@@ -10,6 +10,9 @@ text files.
 
 - [benchmarks/](benchmarks/README.md): build123d benchmark generators plus STEP
   and mesh outputs.
+- [dxf/](dxf/README.md): small 2D DXF fixtures — Python `gen_dxf()` generator
+  examples and imported permissively licensed `.dxf` files for tooling
+  robustness tests.
 - [fun/](fun/README.md): standalone generated CAD examples and printable
   outputs.
 - [gcode/](gcode/README.md): small slicer input/output fixtures.
