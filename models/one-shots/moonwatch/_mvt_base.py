@@ -10,15 +10,16 @@ imports READ-ONLY to route its levers around these bridges.
 Bridge outlines are unions of circles `(x, y, r)` in movement XY, clipped to
 `*_CLIP_R` about the movement center. Anything inside an outline between
 `BRIDGE_SEAT_Z` and `BRIDGE_TOP_Z` (or the pallet/cock z-ranges) is occupied.
-Raised jewel bosses (r 1.5 at every `JEWEL_POSITIONS_UPPER` entry) rise a
-further 0.14 above `BRIDGE_TOP_Z`; the winding square + ratchet screw reach
-`RATCHET_SCREW_TOP_Z` over `BARREL_POS`.
+Low polished jewel tables (r 1.15 at the train `JEWEL_POSITIONS_UPPER`
+entries) rise a further 0.06 above `BRIDGE_TOP_Z`; the winding square +
+ratchet screw reach `RATCHET_SCREW_TOP_Z` over `BARREL_POS`.
 
 NOTE: `_finishing.py` helpers assume `align=(None,None,None)` centers
 primitives; it actually leaves the raw OCC datum (see /BUGS.md). This module
-compensates with corrective cuts (proper screw slots, countersink cones,
-full-depth wheel windows, perlage z-shift) while still building on the
-shared helpers.
+compensates with corrective cuts (countersink cones, full-depth wheel
+windows, perlage z-shift) or constructive local replacements (`_screw`:
+flat slotted heads — F.slotted_screw's domed cap read as a featureless blob
+at macro) while still building on the shared helpers.
 """
 
 from __future__ import annotations
@@ -219,42 +220,87 @@ def _add_shadow(parts, shadow, label):
                              _STRIPE_SHADOW_COLOR))
 
 
+# Polished-anglage ribbon tone: the constructive 45-deg bevels share the
+# bridge COPPER_GOLD and the renderer applies uniform material properties, so
+# the geometry rendered invisibly (blind critic: "raw extruded edges"). The
+# ribbon overlay carries the mirror-polish read purely by tone — a bright
+# copper-gold highlight well above COPPER_GOLD, inline by design (not a spec
+# finish color: it stands in for specular pickup, not a material).
+_ANGLAGE_COLOR = (0.88, 0.66, 0.46, 1.0)
+
+
+def _add_anglage(parts, ribbon, label):
+    """Append a bridge's polished-bevel ribbon overlay (list of connected
+    solids), one part per solid — same pattern/rationale as `_add_shadow`
+    (disjoint arcs in one part trip validation; `Part(sol.wrapped)` loses
+    `.volume` on build123d 0.10, see /BUGS.md)."""
+    if not ribbon:
+        return
+    if len(ribbon) == 1:
+        parts.append(_finish(ribbon[0], f"{label}:anglage", _ANGLAGE_COLOR))
+        return
+    for i, sol in enumerate(ribbon):
+        parts.append(_finish(sol, f"{label}:anglage:{i}", _ANGLAGE_COLOR))
+
+
 def _screw(head_d=S.SCREW_HEAD_DIAMETER, hh=0.34, shank=0.8,
-           slot_w=S.SCREW_SLOT_WIDTH, color=S.BLUED):
-    """F.slotted_screw + corrective cuts: flatten the shank stub that pokes
-    through the dome, then cut a proper centered full-length slot. Head top
-    lands at the returned part's local z = its `top` (~0.06..0.09)."""
-    s = F.slotted_screw(head_diameter=head_d, head_height=hh,
-                        shank_length=shank, slot_width=slot_w, color=color)
+           slot_w=None, slot_angle=0.0, color=S.BLUED):
+    """Flat mirror-top slotted screw, head top at z = 0, shank hanging below.
+
+    Fully constructive local replacement for F.slotted_screw: its domed cap
+    (a 2.6r sphere intersection) rendered as a featureless glossy blob at
+    macro — no flat disc for the key light, so the slot never read. Here the
+    head is a flat-top cylinder with a small bright 45-deg rim chamfer baked
+    in as a truncated-cone cap (no OCC chamfer), and ONE full-width slot cut
+    at `slot_angle` deep enough to read as a crisp dark line across the
+    light-catching disc. Slot floor stays inside the head so the part is one
+    solid at every head height."""
     r = head_d / 2.0
-    apex = min(hh / 2.0, 0.2 * r)
-    top = apex - 0.038
-    s = s - Pos(0, 0, top + 0.5) * Box(head_d * 3, head_d * 3, 1.0)
-    depth = min(0.16, hh * 0.5)
-    s = s - Pos(0, 0, top + 0.3 - depth) * Box(head_d * 2.2, slot_w, 0.6)
+    if slot_w is None:
+        slot_w = 0.20 * head_d                # 0.26 at the 1.3 spec head
+    ch = min(0.09, 0.30 * hh, 0.25 * r)       # bright 45-deg rim chamfer
+    depth = min(0.22, hh - 0.06)              # 0.22 at the 0.34 spec head
+    head = _cyl(r, hh - ch, -hh) + Pos(0, 0, -ch / 2) * Cone(r, r - ch, ch)
+    shank_p = _cyl(0.275 * head_d, shank + 0.05, -hh - shank)
+    slot = Rot(0, 0, slot_angle) * Box(head_d + 0.6, slot_w, 2 * depth)
+    s = (head + shank_p) - slot
     s.color = Color(*color)
-    return s, top
+    return s
 
 
-def _place_screw(x, y, surface_z, proud=0.06, **kw):
-    s, top = _screw(**kw)
-    return Pos(x, y, surface_z + proud - top) * s
+def _place_screw(x, y, surface_z, proud=0.06, slot_angle=None, **kw):
+    """Screw with its flat head top `proud` above `surface_z`. Slot angle is
+    a fixed pseudo-random function of position — like a serviced movement,
+    every slot points its own way, none of them animated/parametric."""
+    if slot_angle is None:
+        slot_angle = (x * 47.9 + y * 83.3) * 57.29578 % 180.0
+    return Pos(x, y, surface_z + proud) * _screw(slot_angle=slot_angle, **kw)
 
 
-def _sink_tool(wall_r=0.98, wall_z=0.46, cham=0.22, seat_r=0.80, seat_z=0.72,
-               bore_r=0.70):
-    """Polished jewel counterbore cutter, target surface at z=0: 45-degree
-    rim chamfer ring -> crisp cylindrical counterbore wall -> chaton/jewel
-    seat -> through bore. Built locally: F.jewel_countersink_cut's cone is
-    half above the surface AND inverted (raw-OCC-datum bug, /BUGS.md), so at
-    any parameterization its opening bulges widest just under the rim and the
-    ruby dome fills the whole recess — it cannot produce the counterbore-and-
-    chamfer-ring read of a real jewel setting."""
-    tool = (Pos(0, 0, -cham / 2) * Cone(wall_r, wall_r + cham, cham)
-            + _cyl(wall_r, wall_z, -wall_z))
-    if seat_r > 0:
-        tool = tool + _cyl(seat_r, seat_z, -seat_z)
+def _sink_tool(cone_r=0.97, wall_r=0.72, cone_z=0.20, seat_z=0.60, bore_r=0.45):
+    """Polished jewel countersink cutter, target surface at z=0: a SHALLOW
+    inverted conical ring (opening cone_r at the surface, narrowing to wall_r
+    at depth cone_z — the bright polished ring of a real sink), a cylindrical
+    seat counterbore holding chaton + jewel, then the through bore. Built
+    locally: F.jewel_countersink_cut's cone is half above the surface AND
+    inverted (raw-OCC-datum bug, /BUGS.md), so at any parameterization its
+    opening bulges widest just under the rim — it cannot produce the
+    countersink-ring read of a real jewel setting."""
+    tool = (Pos(0, 0, -cone_z / 2 + 0.001) * Cone(wall_r, cone_r, cone_z)
+            + _cyl(wall_r, seat_z, -seat_z))
     return tool + _cyl(bore_r, 3.0, -3.0)
+
+
+def _ruby_disc(r=0.46, t=0.30, ch=0.05, hole_r=0.14):
+    """Flat-topped ruby jewel disc, top face at z=0: cylinder + a tiny 45-deg
+    top-edge chamfer baked in as a cone cap (no dome — F.jewel's domed bead
+    read as an oversized proud pink sphere at macro, the blind critic's #1
+    unreality), with an optional pivot-hole bore that renders as the dark
+    oil-sink dot at the center of every reference jewel."""
+    body = _cyl(r, t - ch, -t) + Pos(0, 0, -ch / 2) * Cone(r, r - ch, ch)
+    if hole_r > 0:
+        body = body - _cyl(hole_r, t + 0.2, -t - 0.1)
+    return body
 
 
 def _window_cutter(od, frac):
@@ -280,8 +326,11 @@ def _window_cutter(od, frac):
 # all in batched booleans.
 # ---------------------------------------------------------------------------
 
-_BOSS_R = 1.5                            # raised jewel boss radius
-_BOSS_H = 0.14                           # boss rise above the striped top
+# Jewel "boss" flattened to a low polished table: the old r1.5 x 0.14 raised
+# donut + domed jewel bulged like beads at macro; real settings are flush
+# discs in shallow conical sinks with at most a slightly proud polished table.
+_BOSS_R = 1.15                           # polished table radius around a sink
+_BOSS_H = 0.06                           # table rise above the striped top
 # Circular-striping V grooves about (0,0): depth sets the facet slope that
 # makes the stripes READ under the presentation light. Facet angle is
 # atan(depth / (groove_width/2)): 0.07 -> 4.3 deg invisible, 0.13 -> 8 deg
@@ -323,10 +372,28 @@ def _bevel_extrude(circles, clip_r, z0, z1, w):
         return base + [caps, fill]
 
 
+def _anglage_cap(circles, clip_r, z1, w):
+    """Just the 45-degree tapered cap of `_bevel_extrude` spanning
+    [z1 - w, z1]: taper extrude first, per-circle cones clipped by the rim
+    cone when the draft prism fails (barrel outline — same failure/fallback
+    as `_bevel_extrude`, minus the interior junction fill, which the ribbon
+    subtraction below never reaches)."""
+    prof = _blob(circles, clip_r)
+    try:
+        return extrude(Pos(0, 0, z1 - w) * prof, amount=w, taper=45)
+    except Exception:
+        pieces = [Pos(x, y, z1 - w / 2) * Cone(r, max(r - w, 0.05), w)
+                  for x, y, r in circles]
+        return ((pieces[0] + pieces[1:])
+                & Pos(0, 0, z1 - w / 2) * Cone(clip_r, clip_r - w, w))
+
+
 def _bridge(circles, clip_r, z0, z1, jewel_xy, screw_xy, cutouts=(),
             extra_cuts=(), stripe=True, boss_xy=(), jewel_sink_kw=None,
             boss_sink_kw=None):
-    """Returns (bridge_body, stripe_shadow_or_None). The stripe shadow is a
+    """Returns (bridge_body, stripe_shadow_or_None, anglage_ribbon_or_None).
+    The anglage ribbon is a ~0.03-thick polished skin over the 45-deg bevel
+    loop (outline + wheel-reveal rims). The stripe shadow is a
     0.035 skin over every SECOND stripe band (COPPER_GOLD_DEEP two-tone
     assist): even at ~23-degree facets the presentation light's specular pool
     still washed the narrow train-bridge / cock fields flat at macro, so the
@@ -340,7 +407,7 @@ def _bridge(circles, clip_r, z0, z1, jewel_xy, screw_xy, cutouts=(),
         for x, y in boss_xy:
             adds.append(Pos(x, y, 0) * (
                 _cyl(_BOSS_R, z1 - z0, z0)
-                + Pos(0, 0, z1 + _BOSS_H / 2) * Cone(_BOSS_R, _BOSS_R - 0.14,
+                + Pos(0, 0, z1 + _BOSS_H / 2) * Cone(_BOSS_R, _BOSS_R - _BOSS_H,
                                                      _BOSS_H)))
         body = body + adds
 
@@ -372,6 +439,11 @@ def _bridge(circles, clip_r, z0, z1, jewel_xy, screw_xy, cutouts=(),
             inset = inset - Pos(x, y) * Circle(r + 0.4)
         for x, y in boss_xy:
             inset = inset - Pos(x, y) * Circle(_BOSS_R + 0.05)
+        for x, y in jewel_xy:
+            # keep the stripe grooves off the polished sink cone: the 0.4-deep
+            # V's are deeper than the 0.2 cone and would scallop its rim
+            inset = inset - Pos(x, y) * Circle(
+                (jewel_sink_kw or {}).get("cone_r", 0.97) + 0.15)
         # band must reach below the deepest V (0.3 clipped the 0.4 grooves
         # into flat-bottomed slots, killing the facet read)
         band = Pos(0, 0, z1 - depth - 0.1) * extrude(inset, amount=depth + 0.2)
@@ -405,7 +477,27 @@ def _bridge(circles, clip_r, z0, z1, jewel_xy, screw_xy, cutouts=(),
                     pieces = [s for shp in trimmed for s in shp.solids()]
                 shadow = [s for s in pieces if s.volume > 1e-6] or None
         cuts.append((Pos(0, 0, z1) * rings) & band)
-    return body - cuts, shadow
+
+    # polished anglage ribbon: a second bevel cap grown OUTWARD by
+    # d = 0.03 * sqrt(2) (so the skin is ~0.03 thick normal to the 45-deg
+    # face) minus the body and the same cuts — purely constructive, it can
+    # never bury or erase the baked bevel, tops out flush at z1, and hugs
+    # the outline everywhere including the clip-rim arc. Wheel-reveal
+    # cutout rims get the mirrored treatment: the cut's own flare cone
+    # minus an INWARD-shifted copy, a shell living inside the cut void so
+    # it cannot interpenetrate the bridge (its own cut tool would erase it
+    # if it went through the shared `cuts` subtraction).
+    rib_d = 0.03 * math.sqrt(2.0)
+    outer = _anglage_cap([(x, y, r + rib_d) for x, y, r in circles],
+                         clip_r + rib_d, z1, bevel_w)
+    ribs = [outer - ([body] + cuts)]
+    for x, y, r in cutouts:
+        ribs.append(Pos(x, y, z1 - bevel_w / 2) * (
+            Cone(r, r + bevel_w, bevel_w)
+            - Cone(r - rib_d, r + bevel_w - rib_d, bevel_w)))
+    ribbon = [s for shp in ribs for s in shp.solids()
+              if s.volume > 1e-4] or None
+    return body - cuts, shadow, ribbon
 
 
 # ---------------------------------------------------------------------------
@@ -474,7 +566,11 @@ def _plate_parts():
 
     for (x, y), name in zip(lower, ("center", "third", "fourth", "escape",
                                     "pallet", "balance")):
-        ruby = Pos(x, y, -S.PLATE_THICKNESS) * Rot(180, 0, 0) * F.jeweled_bearing()
+        # flat disc flush 0.05 inside the sink (0.15 at the balance, where the
+        # dial-side shock ring + cap jewel stack sits below it)
+        drop = 0.15 if name == "balance" else 0.05
+        ruby = (Pos(x, y, -S.PLATE_THICKNESS) * Rot(180, 0, 0)
+                * Pos(0, 0, -drop) * _ruby_disc())
         parts.append(_finish(ruby, f"plate_jewel:{name}", S.RUBY))
     # Incabloc-style polished setting hint at the balance, dial side
     ring = Pos(lx, ly, 0) * _ring(0.65, 1.2, 0.18, -1.68)
@@ -516,9 +612,13 @@ def _barrel_parts():
     parts.append(_finish(Pos(bx, by, 0) * coils, "mainspring", S.STEEL_DARK))
 
     # raised polished winding square: proud of the ratchet wheel with a
-    # chamfered crown so it reads clearly 3D under the blued ratchet screw
+    # chamfered crown, wide enough (1.70; half-diagonal 1.20 clears the
+    # exported 1.3 lever keep-out) to carry a machined spot-face for the
+    # blued ratchet screw — head Ø1.3 seated IN a Ø1.44 counterbore with a
+    # bright flared rim, top 0.04 proud of the square, instead of the old
+    # dome perched loose on the square top
     square = Pos(0, 0, (2.80 + RATCHET_SQUARE_TOP_Z) / 2.0) * Box(
-        1.42, 1.42, RATCHET_SQUARE_TOP_Z - 2.80)
+        1.70, 1.70, RATCHET_SQUARE_TOP_Z - 2.80)
     square, _ = F.safe_chamfer(
         square,
         [e for e in square.edges()
@@ -530,6 +630,13 @@ def _barrel_parts():
         + _cyl(0.675, 2.42, 0.45)          # body through drum/lid/bridge jewel
         + square
     )
+    arbor = arbor - [
+        # ratchet-screw spot-face: floor 0.02 under the head bottom (head top
+        # RATCHET_SQUARE_TOP_Z + 0.04, hh 0.34), flare cone = the bright
+        # machined rim ring of a real screw sink
+        _cyl(0.72, 0.6, RATCHET_SQUARE_TOP_Z - 0.32),
+        Pos(0, 0, RATCHET_SQUARE_TOP_Z - 0.05) * Cone(0.72, 0.85, 0.10),
+    ]
     parts.append(_finish(Pos(bx, by, 0) * arbor, "barrel_arbor", S.STEEL_DARK))
     return parts
 
@@ -583,40 +690,46 @@ def _bridge_parts():
         Pos(3.74, 3.87, 0) * _cyl(0.3, 1.2, z1 - 0.7),    # click screw bore
         Pos(5.3, 4.6, 0) * _cyl(0.26, 1.2, z1 - 0.7),     # click-spring screw bore
     ]
-    zb = z1 + _BOSS_H                     # striped-top + raised jewel boss
-    # barrel boss sink widened so the winding square's corners (half-diagonal
-    # 1.004) clear the counterbore wall
-    bb, bb_shadow = _bridge(BARREL_BRIDGE_OUTLINE, BRIDGE_CLIP_R, z0, z1, [],
+    zb = z1 + _BOSS_H                     # polished jewel-table top
+    # barrel sink cut flush into the striped top (no table: the ratchet wheel
+    # starts only 0.03 above it) and widened so the winding square's corners
+    # (half-diagonal 1.004) clear the cone at the square's z2.80 base
+    bb, bb_shadow, bb_rib = _bridge(BARREL_BRIDGE_OUTLINE, BRIDGE_CLIP_R, z0, z1,
+                            [S.BARREL_POS],
                             [BRIDGE_SCREW_POSITIONS["barrel_bridge:left"],
                              BRIDGE_SCREW_POSITIONS["barrel_bridge:right"],
                              BRIDGE_SCREW_POSITIONS["barrel_bridge:top"]],
-                            extra_cuts=extra, boss_xy=[S.BARREL_POS],
-                            boss_sink_kw=dict(wall_r=1.06))
+                            extra_cuts=extra,
+                            jewel_sink_kw=dict(cone_r=1.30, wall_r=1.06,
+                                               cone_z=0.20, seat_z=0.55,
+                                               bore_r=0.72))
     parts.append(_finish(bb, "barrel_bridge", S.COPPER_GOLD))
     _add_shadow(parts, bb_shadow, "barrel_bridge")
+    _add_anglage(parts, bb_rib, "barrel_bridge")
     # ruby ring recessed in the counterbore around the arbor (the old jewel
-    # minus arbor bore left a 0.025 shell perched at the surface); top stays
-    # under the winding square's z2.80 base
-    ruby = _ring(0.69, 1.04, 0.20, zb - 0.40)
+    # minus arbor bore left a 0.025 shell perched at the surface); top z1-0.10
+    # stays under the winding square's z2.80 base
+    ruby = _ring(0.70, 1.03, 0.20, z1 - 0.30)
     parts.append(_finish(Pos(bx, by, 0) * ruby, "bridge_jewel:barrel", S.RUBY))
 
     # train bridge --------------------------------------------------------
     train_jewels = [S.CENTER_WHEEL_POS, S.THIRD_WHEEL_POS,
                     S.FOURTH_WHEEL_POS, S.ESCAPE_WHEEL_POS]
-    tb, tb_shadow = _bridge(TRAIN_BRIDGE_OUTLINE, BRIDGE_CLIP_R, z0, z1, [],
+    tb, tb_shadow, tb_rib = _bridge(TRAIN_BRIDGE_OUTLINE, BRIDGE_CLIP_R, z0, z1, [],
                             [BRIDGE_SCREW_POSITIONS["train_bridge:foot"],
                              BRIDGE_SCREW_POSITIONS["train_bridge:fourth"],
                              BRIDGE_SCREW_POSITIONS["train_bridge:center"]],
                             cutouts=TRAIN_BRIDGE_CUTOUTS, boss_xy=train_jewels)
     parts.append(_finish(tb, "train_bridge", S.COPPER_GOLD))
     _add_shadow(parts, tb_shadow, "train_bridge")
-    # ruby dome apex 0.05 UNDER the boss rim, gold chaton ring visible in the
-    # counterbore wall around it (F.jeweled_bearing left the dome filling the
-    # whole shallow-cone opening -> proud pink bead at macro)
+    _add_anglage(parts, tb_rib, "train_bridge")
+    # flush flat ruby disc (visible dia 0.92, top 0.05 UNDER the table top),
+    # thin gold chaton ring between the ruby and the bright sink cone — the
+    # ruby/gold/dark-moat/polished-cone concentric read of the reference
     for (x, y), name in zip(train_jewels, ("center", "third", "fourth", "escape")):
-        parts.append(_finish(Pos(x, y, zb - 0.23) * F.jewel(),
+        parts.append(_finish(Pos(x, y, zb - 0.05) * _ruby_disc(),
                              f"bridge_jewel:{name}", S.RUBY))
-        chaton = Pos(x, y, 0) * _ring(0.77, 0.97, 0.24, zb - 0.40)
+        chaton = Pos(x, y, 0) * _ring(0.47, 0.70, 0.32, zb - 0.42)
         parts.append(_finish(chaton, f"chaton:{name}", S.BRASS_MOVEMENT))
 
     # bridge screws (shanks stay inside the bridge bore: longer ones hung
@@ -636,12 +749,12 @@ def _bridge_parts():
     ratchet = Pos(bx, by, (RATCHET_Z0 + RATCHET_TOP_Z) / 2.0) * Rot(0, 0, beak_gap) * ratchet
     # square hole cut AFTER the mesh-phasing rotation so it stays aligned
     # with the arbor's raised winding square (they clashed when the hole
-    # rotated with the wheel)
-    ratchet = ratchet - Pos(bx, by, 3.0) * Box(1.52, 1.52, 1.0)
+    # rotated with the wheel); 1.80 clears the widened 1.70 square
+    ratchet = ratchet - Pos(bx, by, 3.0) * Box(1.80, 1.80, 1.0)
     parts.append(_finish(ratchet, "ratchet_wheel", S.GILT))
     parts.append(_finish(
         _place_screw(bx, by, RATCHET_SQUARE_TOP_Z, proud=0.04, head_d=1.3,
-                     hh=0.34, shank=1.4, slot_w=0.30),
+                     hh=0.34, shank=1.4),
         "screw:ratchet", S.BLUED))
 
     # crown wheel + recessed polished steel core --------------------------
@@ -657,16 +770,17 @@ def _bridge_parts():
     core = Pos(cwx, cwy, 0) * (_cyl(1.24, 0.14, 3.01) - _cyl(0.40, 1.0, 2.8))
     parts.append(_finish(core, "crown_wheel_core", S.STEEL_BRIGHT))
     parts.append(_finish(
-        _place_screw(cwx, cwy, 3.15, proud=0.04, head_d=1.3, hh=0.30, shank=1.0,
-                     slot_w=0.28),
+        _place_screw(cwx, cwy, 3.15, proud=0.04, head_d=1.3, hh=0.30, shank=1.0),
         "screw:crown_wheel", S.BLUED))
 
     # click + click spring (polished steel, engaging the ratchet) ---------
     # smooth polished lever: dense disk chain beak -> pivot -> tail so the
     # envelope reads as one continuous curve (sparse chains scallop)
     click_pts = []
-    for (xa, ya, ra), (xb, yb, rb), n in (((2.52, 4.90, 0.22), (3.74, 3.87, 0.55), 12),
-                                          ((3.74, 3.87, 0.55), (4.75, 3.12, 0.32), 10)):
+    # pivot boss r 0.68: wide enough that the Ø1.14 screw spot-face leaves a
+    # machined rim (still clear of the ratchet teeth in the shared z band)
+    for (xa, ya, ra), (xb, yb, rb), n in (((2.52, 4.90, 0.22), (3.74, 3.87, 0.68), 12),
+                                          ((3.74, 3.87, 0.68), (4.75, 3.12, 0.32), 10)):
         for i in range(n + 1):
             t = i / n
             tt = t * t * (3 - 2 * t)      # smoothstep radius blend
@@ -675,10 +789,13 @@ def _bridge_parts():
     click_prof = _blob(click_pts, 14.0)
     click = Pos(0, 0, 2.9) * extrude(click_prof, amount=0.16)
     click, _ = F.anglage_top(click, 0.06)
-    click = click - Pos(3.74, 3.87, 0) * _cyl(0.3, 1.0, 2.6)
+    # pivot bore + a shallow spot-face (counterbore Ø = head Ø + 0.14) so the
+    # Ø1.0 screw head shows a machined ring gap instead of lying loose on top
+    click = click - [Pos(3.74, 3.87, 0) * _cyl(0.3, 1.0, 2.6),
+                     Pos(3.74, 3.87, 0) * _cyl(0.57, 0.5, 3.00)]
     parts.append(_finish(click, "click", S.STEEL_LEVER))
     parts.append(_finish(
-        _place_screw(3.74, 3.87, 3.06, proud=0.0, head_d=1.0, hh=0.24, shank=0.7),
+        _place_screw(3.74, 3.87, 3.06, proud=0.05, head_d=1.0, hh=0.24, shank=0.7),
         "screw:click", S.BLUED))
 
     # blade drawn as a dense chain of overlapping disks along the Bezier
@@ -691,12 +808,13 @@ def _bridge_parts():
         x = (1 - t) ** 2 * p0[0] + 2 * (1 - t) * t * p1[0] + t ** 2 * p2[0]
         y = (1 - t) ** 2 * p0[1] + 2 * (1 - t) * t * p1[1] + t ** 2 * p2[1]
         blade.append((x, y, 0.09))
-    spring_prof = _blob(blade, 14.0) + Pos(5.3, 4.6) * Circle(0.4)
+    spring_prof = _blob(blade, 14.0) + Pos(5.3, 4.6) * Circle(0.62)
     spring = Pos(0, 0, 2.9) * extrude(spring_prof, amount=0.14)
-    spring = spring - Pos(5.3, 4.6, 0) * _cyl(0.26, 1.0, 2.6)
+    spring = spring - [Pos(5.3, 4.6, 0) * _cyl(0.26, 1.0, 2.6),
+                       Pos(5.3, 4.6, 0) * _cyl(0.52, 0.5, 2.99)]  # spot-face
     parts.append(_finish(spring, "click_spring", S.STEEL_LEVER))
     parts.append(_finish(
-        _place_screw(5.3, 4.6, 3.04, proud=0.0, head_d=0.9, hh=0.2, shank=0.6),
+        _place_screw(5.3, 4.6, 3.04, proud=0.04, head_d=0.9, hh=0.2, shank=0.6),
         "screw:click_spring", S.BLUED))
     return parts
 
@@ -781,14 +899,19 @@ def _pallet_parts():
     # (sink shallow + narrow: the cock is only 0.36 thick and its jewel lobe
     # is r 1.15, so the default counterbore would pierce/eat it)
     pbz0, pbz1 = PALLET_BRIDGE_Z
-    pb, pb_shadow = _bridge(PALLET_BRIDGE_OUTLINE, COCK_CLIP_R, pbz0, pbz1,
+    pb, pb_shadow, pb_rib = _bridge(PALLET_BRIDGE_OUTLINE, COCK_CLIP_R, pbz0, pbz1,
                             [pp], [BRIDGE_SCREW_POSITIONS["pallet_bridge"]],
-                            jewel_sink_kw=dict(wall_r=0.80, wall_z=0.30, cham=0.14,
-                                               seat_r=0.0, seat_z=0.0, bore_r=0.60))
+                            jewel_sink_kw=dict(cone_r=0.75, wall_r=0.52,
+                                               cone_z=0.10, seat_z=0.22,
+                                               bore_r=0.26))
     parts.append(_finish(pb, "pallet_bridge", S.COPPER_GOLD))
     _add_shadow(parts, pb_shadow, "pallet_bridge")
-    ruby = Pos(pp[0], pp[1], pbz1 - 0.21) * F.jewel(thickness=0.26)
+    _add_anglage(parts, pb_rib, "pallet_bridge")
+    ruby = Pos(pp[0], pp[1], pbz1 - 0.04) * _ruby_disc(r=0.36, t=0.16, ch=0.04,
+                                                       hole_r=0.10)
     parts.append(_finish(ruby, "bridge_jewel:pallet", S.RUBY))
+    chaton = Pos(pp[0], pp[1], 0) * _ring(0.37, 0.50, 0.14, pbz1 - 0.22)
+    parts.append(_finish(chaton, "chaton:pallet", S.BRASS_MOVEMENT))
     x, y = BRIDGE_SCREW_POSITIONS["pallet_bridge"]
     parts.append(_finish(_place_screw(x, y, pbz1, shank=0.6),
                          "screw:pallet_bridge", S.BLUED))
@@ -876,40 +999,46 @@ def _balance_parts():
         Pos(bootx, booty, 0) * _cyl(0.17, 1.2, cz0 - 0.3),  # regulator boot bore
         Pos(sx, sy, 0) * _cyl(0.18, 1.2, cz0 - 0.3),        # stud bore
     ]
-    cock, cock_shadow = _bridge(BALANCE_COCK_OUTLINE, COCK_CLIP_R, cz0, cz1, [],
-                                [BRIDGE_SCREW_POSITIONS["balance_cock"]],
-                                extra_cuts=extra)
+    cock, cock_shadow, cock_rib = _bridge(BALANCE_COCK_OUTLINE, COCK_CLIP_R,
+                                          cz0, cz1, [],
+                                          [BRIDGE_SCREW_POSITIONS["balance_cock"]],
+                                          extra_cuts=extra)
     parts.append(_finish(cock, "balance_cock", S.COPPER_GOLD))
     _add_shadow(parts, cock_shadow, "balance_cock")
+    _add_anglage(parts, cock_rib, "balance_cock")
     x, y = BRIDGE_SCREW_POSITIONS["balance_cock"]
     parts.append(_finish(_place_screw(x, y, cz1, shank=0.8),
                          "screw:balance_cock", S.BLUED))
 
     # stud holder: small polished plate on the cock's side lobe, clamping
     # the stud with its own tiny blued screw
-    holder2d = _blob(((sx, sy, 0.45), (1.45, -9.20, 0.42), (1.12, -8.98, 0.40)), 14.0)
+    holder2d = _blob(((sx, sy, 0.45), (1.45, -9.20, 0.42), (1.12, -8.98, 0.52)), 14.0)
     holder = Pos(0, 0, cz1) * extrude(holder2d, amount=0.12)
     holder, _ = F.anglage_top(holder, 0.05)
-    holder = holder - Pos(1.12, -8.98, 0) * _cyl(0.14, 1.0, cz1 - 0.4)
+    holder = holder - [Pos(1.12, -8.98, 0) * _cyl(0.14, 1.0, cz1 - 0.4),
+                       Pos(1.12, -8.98, 0) * _cyl(0.47, 0.5, cz1 + 0.07)]
     parts.append(_finish(holder, "stud_holder", S.STEEL_LEVER))
     parts.append(_finish(
-        _place_screw(1.12, -8.98, cz1 + 0.12, proud=0.02, head_d=0.8, hh=0.2,
+        _place_screw(1.12, -8.98, cz1 + 0.12, proud=0.03, head_d=0.8, hh=0.2,
                      shank=0.5),
         "screw:stud_holder", S.BLUED))
 
-    # shock setting: polished bezel, gold chaton, cap jewel, lyre spring
-    bezel = Pos(lx, ly, 0) * (_ring(0.85, 1.25, 0.66, 2.72)
-                              - Pos(0, 0, 3.38) * Cone(1.3, 0.9, 0.16))
+    # shock setting: polished bezel, gold chaton, cap jewel, lyre spring —
+    # whole stack sunk ~0.1 vs the first pass (the bezel topped 0.13 proud of
+    # the cock and the domed cap bead bulged through the lyre; the cap is now
+    # a flat 0.9-dia disc, no pivot hole: cap jewels are blind)
+    bezel = Pos(lx, ly, 0) * (_ring(0.85, 1.25, 0.56, 2.72)
+                              - Pos(0, 0, 3.28) * Cone(1.3, 0.9, 0.16))
     parts.append(_finish(bezel, "shock_bezel", S.STEEL_BRIGHT))
-    gold = Pos(lx, ly, 0) * _ring(0.48, 0.83, 0.42, 2.84)   # top 3.26, under lyre
+    gold = Pos(lx, ly, 0) * _ring(0.48, 0.83, 0.36, 2.84)   # top 3.20, under lyre
     parts.append(_finish(gold, "shock_chaton", S.BRASS_MOVEMENT))
-    cap = Pos(lx, ly, 3.25) * F.jewel(diameter=0.95, thickness=0.3)
+    cap = Pos(lx, ly, 3.18) * _ruby_disc(r=0.45, t=0.24, hole_r=0.0)
     parts.append(_finish(cap, "shock_cap_jewel", S.RUBY_BRIGHT))
     # lyre spring: crisp wire form — thin outer arc ring, three radial arms
     # into a small hub ring circling the cap jewel dome, two feet flanking the
     # opening (the old 0.20-wide band + fat feet fused into one white blob at
     # macro). One multi-operand 2D fuse, gap wedge subtracted LAST (/BUGS.md).
-    # z 3.30..3.39 stays inside COCK_SHOCK_TOP_Z = 3.4.
+    # z 3.20..3.29 stays inside COCK_SHOCK_TOP_Z = 3.4.
     gap_a = -40.0
     outer_ring = Circle(1.06) - Circle(0.95)
     hub_ring = Circle(0.64) - Circle(0.50)
@@ -922,7 +1051,7 @@ def _balance_parts():
            for s in (14.0, -14.0)])
     lyre2d = lyre2d - Rot(0, 0, gap_a) * Polygon(
         (0.0, 0.0), (2.4, -0.55), (2.4, 0.55), align=None)
-    lyre = Pos(lx, ly, 3.30) * extrude(lyre2d, amount=0.09)
+    lyre = Pos(lx, ly, 3.20) * extrude(lyre2d, amount=0.09)
     parts.append(_finish(lyre, "shock_lyre_spring", S.STEEL_BRIGHT))
 
     # regulator: black-polished ring + tapered index lever + boot through

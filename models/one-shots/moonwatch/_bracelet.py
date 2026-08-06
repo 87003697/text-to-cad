@@ -13,11 +13,16 @@ Construction vocabulary (all rows share it):
   so the center row reads brighter than the brushed outers.
 - Row ends articulate on shared pin axes. At every joint the earlier
   row's OUTER links carry convex knuckle eyes (radius EYE_R, centered on
-  the axis) and the later row's CENTER link carries the mating eye; the
-  complementary ends are cut back with a concave recess of radius
-  EYE_R + JOINT_CLEARANCE about the same axis, so any relative pitch
-  articulates with a constant 0.06 radial clearance and zero
-  interpenetration.
+  the axis, deliberately SMALLER than the link half-thickness so the
+  hinge stays below the top surface) and the later row's CENTER link
+  carries the mating eye; the complementary ends are cut back with a
+  concave recess of radius EYE_R + JOINT_CLEARANCE about the same axis,
+  so any relative pitch articulates with a constant 0.06 radial
+  clearance and zero interpenetration. Above and below the hinge the
+  link ends are flat walls, cut PARALLEL TO THE JOINT BISECTOR (each
+  end tilted by half the joint's posed relative pitch), so the two
+  walls of every joint are parallel planes 2*SHUT_EDGE apart at every
+  drape angle.
 - Every joint gets a steel pin body (visible ends on the link flanks)
   passing through bores in the knuckle eyes.
 - Width tapers linearly BRACELET_WIDTH_AT_LUG -> BRACELET_WIDTH_AT_CLASP
@@ -29,20 +34,23 @@ Construction vocabulary (all rows share it):
   facets of leg BEVEL; the bottom is a flatter dome (CROWN_SAG_BOT) with
   the same bevels. The clasp outer plate, inner cover, and flip-lock bow
   sweep the same crowned+beveled section along the clasp curvature arc.
-- Joint shutlines: at every pin axis the link whose end carries the
-  knuckle EYE has its crowned top milled back to a crisp straight edge
-  SHUT_EDGE before the axis, a shallow crown-parallel floor SHUT_DEPTH
-  below the crown, and a vertical wall SHUT_EDGE past the axis — ONE
-  straight, constant-width (2*SHUT_EDGE = 0.28) shutline per joint,
-  parallel to that joint's pin axis, crossing all three links. The
-  mating recess end keeps its natural wrap lip: over the knuckle it
-  reads as a hairline, not a second gap (pulling it back instead opens
-  a wedge, because the wrap lip's plan curve runs 0.49 -> 1.02 from the
-  axis across the crown sag). Laterally the center<->outer walls sit
-  LINK_GAP apart under small BEVEL_INNER edge breaks — a constant
-  LINK_GAP + 2*BEVEL_INNER = 0.22 opening, the two grooves parallel
-  along the whole strap. All shutline cuts only REMOVE material, so the
-  0.06 articulation clearance is untouched.
+- Joint shutlines: every row end is finished as a ROLLED SHOULDER about
+  its pin axis. The shutline walls stay parallel planes 2*SHUT_EDGE =
+  0.28 apart (leaned onto each joint's bisector), but instead of meeting
+  the crowned top at a scribed edge, each link's crown rolls over a
+  convex quarter-round of radius ROLL_R — tangent to the crown ROLL_R
+  before the wall and tangent to the wall itself — so the surface normal
+  rotates through ~86-90 degrees at every link end and each row reads as
+  its own convex pillow with a dark shadow valley at the joint. On
+  knuckle-EYE ends the roll stops EYE_ROLL_DEPTH below the crown and a
+  flat deck runs across the opening (shaving the knuckle crest), the
+  whole cutter clamped above the pin bore roof (FLOOR_Z_MIN); on RECESS
+  ends the roll runs the full quarter round into the full-height end
+  wall. Laterally the center<->outer walls sit LINK_GAP apart and the
+  facing top edges carry the same rolled treatment at radius R_LAT,
+  baked into the lofted SECTION, so the three columns also read as
+  separate convex bodies over parallel shadow grooves. All shutline cuts
+  only REMOVE material, so the 0.06 articulation clearance is untouched.
 """
 
 from __future__ import annotations
@@ -78,30 +86,46 @@ import _finishing as F
 # values are defined here)
 # ---------------------------------------------------------------------------
 
-T2 = S.LINK_THICKNESS / 2.0        # link half thickness (stadium radius)
-EYE_R = T2                          # knuckle eye radius = half thickness
+T2 = S.LINK_THICKNESS / 2.0        # link half thickness
+EYE_R = 1.10                        # knuckle eye radius — deliberately SUB-surface:
+#                                     with a full-height eye (T2) the mating wrap
+#                                     crests through the crowned top and its lip
+#                                     traces a 0.49 -> 1.02 plan curve (crescent
+#                                     voids at every joint, uncorrectable by cuts)
 JOINT_CLEARANCE = 0.06              # radial clearance at every articulation
-RECESS_R = EYE_R + JOINT_CLEARANCE  # concave mating cut radius
+RECESS_R = EYE_R + JOINT_CLEARANCE  # 1.16 < flank crown height (1.18): the wrap
+#                                     never breaks the top surface, so joint edges
+#                                     can be straight walls across the full width
 PIN_R = 0.9                         # link pin body radius
 BORE_R = 0.95                       # knuckle bore radius (0.05 pin clearance)
 CENTER_FRAC = 0.34                  # center link share of the row width
 LINK_GAP = 0.12                     # lateral WALL gap center <-> outer links
 BEVEL = 0.15                        # built-in 45-degree edge-break bevel leg
-BEVEL_INNER = 0.05                  # small break on center<->outer facing edges
-#                                     (lateral opening = LINK_GAP + 0.10 = 0.22)
-# top-face joint shutline, cut into the knuckle-EYE end only (see module
-# docstring): crown-edge setback from the pin axis, groove floor depth
-# below the crown, and floor run past the 45-degree facet foot
-SHUT_EDGE = 0.14                    # 2 * 0.14 = 0.28 surface opening
-SHUT_DEPTH = 0.18                   # shallow floor — a line, not a canyon
-SHUT_RUN = 0.10                     # facet foot (+0.04) -> wall at +SHUT_EDGE
-SHUT_RUN_TUCK = 0.86                # row-1 center near end: run the floor to
-#                                     -0.90 so the knuckle ducks 0.07 BELOW the
-#                                     end-link slot mouth instead of standing
-#                                     0.11 proud of it
+R_LAT = 0.18                        # rounded-shoulder radius on the facing
+#                                     center<->outer top edges: the walls stay
+#                                     LINK_GAP apart, but each top edge rolls
+#                                     over a convex quarter-round so the three
+#                                     columns read as separate convex bodies
+#                                     over a shadow groove, not scribed lines
+# row-to-row joint: ROLLED SHOULDERS about every pin axis (see module
+# docstring). The shutline walls stay parallel planes 2*SHUT_EDGE apart;
+# each link's crowned top rolls over a convex quarter-round into the gap.
+SHUT_EDGE = 0.14                    # 2 * 0.14 = 0.28 wall-to-wall opening
+ROLL_R = 0.32                       # quarter-round shoulder radius at row joints
+EYE_ROLL_DEPTH = 0.30               # eye-end roll stops here (~86 deg of
+#                                     surface-normal rotation); the shadow deck
+#                                     then runs across the knuckle at this
+#                                     depth below the crown
+FLOOR_Z_MIN = 1.02                  # clamp for eye-end joint cutters: at the
+#                                     flanks the crown-following deck would
+#                                     otherwise dip below the pin bore roof
+#                                     (BORE_R 0.95) and open pinholes
+SHUT_RUN = 0.78                     # deck run past the shoulder's wall tangent:
+#                                     spans the whole opening and shaves the
+#                                     knuckle crest where it pokes above deck
 CROWN_SAG = 0.30                    # top crown sagitta across each link width
 CROWN_SAG_BOT = 0.10                # gentler dome on the wrist side
-CROWN_APEX = T2 - 0.02              # crown apex 0.02 inside the eye envelope
+CROWN_APEX = T2 - 0.02              # crown apex just inside the stadium envelope
 P = S.LINK_PITCH
 
 # first pin axis (end link -> row 1), watch frame, +Y strap
@@ -133,28 +157,45 @@ def _prism_x(profile2d, half_width):
     return extrude(Plane.YZ * profile2d, amount=half_width, both=True)
 
 
-def _crowned_face(xa, xb, z_top, z_bot, s_top, bev, s_bot=0.0):
+def _crowned_face(xa, xb, z_top, z_bot, s_top, bev, s_bot=0.0, rnd=(False, False)):
     """Closed crowned cross-section face in local (x, z) coordinates.
 
-    Top: shallow arc (sagitta `s_top`, apex at `z_top`) flanked by crisp
-    45-degree bevel facets of leg `bev` meeting vertical side walls at
-    x = xa / xb; `bev` may be a (left, right) pair so the facing edges of
-    adjacent links carry a wider polished bevel than the outer flanks.
-    Bottom: flat at `z_bot` when `s_bot` == 0, else a gentler downward
-    arc with the same bevels. Baking the crown and bevels into the
-    SECTION replaces 3D edge chamfers entirely — OCC's chamfer on link
-    perimeters that touch dome/eye-cap tangent chains silently fails,
-    churns for minutes, or segfaults (see /BUGS.md).
+    Top: shallow arc (sagitta `s_top`, apex at `z_top`) flanked by top
+    corner treatments meeting vertical side walls at x = xa / xb. Each
+    side is a crisp 45-degree bevel facet of leg `bev` or, when that
+    side's `rnd` flag is set, a convex quarter-round of radius `bev`
+    (same endpoints, tangent to the crown shoulder and to the wall) so
+    the surface normal ROLLS through the corner instead of breaking —
+    the rounded-shoulder read of the lateral center<->outer gaps. `bev`
+    may be a (left, right) pair. Bottom: flat at `z_bot` when `s_bot`
+    == 0, else a gentler downward arc; bottom corners always stay
+    45-degree bevels (wrist side). Baking crown, bevels, and shoulder
+    rounds into the SECTION replaces 3D edge chamfers/fillets entirely
+    — OCC's chamfer on link perimeters that touch dome/eye-cap tangent
+    chains silently fails, churns for minutes, or segfaults (see
+    /BUGS.md).
     """
     ba, bb = bev if isinstance(bev, tuple) else (bev, bev)
+    ra, rb = rnd
+    k = 1.0 - math.sqrt(0.5)  # 45-degree midpoint pull-in of a corner round
     xc = (xa + xb) / 2.0
-    top = ThreePointArc(
-        (xb - bb, z_top - s_top), (xc, z_top), (xa + ba, z_top - s_top)
-    )
+    z_sh = z_top - s_top
+    top = ThreePointArc((xb - bb, z_sh), (xc, z_top), (xa + ba, z_sh))
+
+    def corner(x_wall, b, rounded, sgn):
+        """Top corner from the crown-arc end down onto the side wall;
+        sgn = +1 on the left (xa) side, -1 on the right (xb) side."""
+        p_arc = (x_wall + sgn * b, z_sh)
+        p_wall = (x_wall, z_sh - b)
+        if rounded:
+            return ThreePointArc(
+                p_arc, (x_wall + sgn * b * k, z_sh - b * k), p_wall
+            )
+        return Polyline(p_arc, p_wall)
+
     if s_bot > 0.0:
         left = Polyline(
-            (xa + ba, z_top - s_top),
-            (xa, z_top - s_top - ba),
+            (xa, z_sh - ba),
             (xa, z_bot + s_bot + ba),
             (xa + ba, z_bot + s_bot),
         )
@@ -164,37 +205,42 @@ def _crowned_face(xa, xb, z_top, z_bot, s_top, bev, s_bot=0.0):
         right = Polyline(
             (xb - bb, z_bot + s_bot),
             (xb, z_bot + s_bot + bb),
-            (xb, z_top - s_top - bb),
-            (xb - bb, z_top - s_top),
+            (xb, z_sh - bb),
         )
     else:
-        left = Polyline(
-            (xa + ba, z_top - s_top), (xa, z_top - s_top - ba), (xa, z_bot)
-        )
+        left = Polyline((xa, z_sh - ba), (xa, z_bot))
         bottom = Polyline((xa, z_bot), (xb, z_bot))
-        right = Polyline(
-            (xb, z_bot), (xb, z_top - s_top - bb), (xb - bb, z_top - s_top)
-        )
-    return make_face(top + left + bottom + right)
+        right = Polyline((xb, z_bot), (xb, z_sh - bb))
+    return make_face(
+        top
+        + corner(xa, ba, ra, +1.0)
+        + left
+        + bottom
+        + right
+        + corner(xb, bb, rb, -1.0)
+    )
 
 
-def _plan_prism(xa0, xb0, xa1, xb1, y0, y1, bev=BEVEL):
+def _plan_prism(xa0, xb0, xa1, xb1, y0, y1, bev=BEVEL, rnd=(False, False)):
     """Tapered side-wall prism with a crowned, edge-broken section.
 
     Lofted between two crowned XZ sections (x in [xa, xb] at y0 linearly
     to y1): the top of each section is a shallow arc across the link's
-    own width (sagitta CROWN_SAG) flanked by 45-degree bevel facets, the
-    bottom a flatter dome (CROWN_SAG_BOT) with the same bevels. The apex
-    sits at CROWN_APEX, 0.02 below the stadium/eye-cap envelope, so the
-    knuckle-eye cylinders cross the crown transversally (no tangent
-    contact) and only a short realistic knuckle crest pokes through at
-    each pin axis. See `_crowned_face` for why no 3D chamfer is used.
+    own width (sagitta CROWN_SAG) flanked by 45-degree bevel facets or,
+    per `rnd` side flags, convex quarter-round shoulders (R_LAT on the
+    facing center<->outer edges); the bottom a flatter dome
+    (CROWN_SAG_BOT) with plain bevels. The apex sits at CROWN_APEX, 0.02
+    below the stadium/eye-cap envelope, so the knuckle-eye cylinders
+    cross the crown transversally (no tangent contact) and only a short
+    realistic knuckle crest pokes through at each pin axis. See
+    `_crowned_face` for why no 3D chamfer is used.
     """
 
     def section(xa, xb, y):
         plane = Plane(origin=(0, y, 0), x_dir=(1, 0, 0), z_dir=(0, -1, 0))
         return plane * _crowned_face(
-            xa, xb, CROWN_APEX, -CROWN_APEX, CROWN_SAG, bev, s_bot=CROWN_SAG_BOT
+            xa, xb, CROWN_APEX, -CROWN_APEX, CROWN_SAG, bev,
+            s_bot=CROWN_SAG_BOT, rnd=rnd,
         )
 
     return loft([section(xa0, xb0, y0), section(xa1, xb1, y1)], ruled=True)
@@ -215,7 +261,7 @@ def _crown_cap(half_w, length, s_top=CROWN_SAG, bev=BEVEL):
     return extrude(face, amount=length, both=True)
 
 
-def _reveal_face(xa, xb, y, drop, bev):
+def _reveal_face(xa, xb, y, drop, bev, z_apex=CROWN_APEX, sag=CROWN_SAG):
     """Loft section for `_reveal_cutter`: the region ABOVE the link's own
     crowned top arc lowered by `drop`, up to z = +3, extended 0.3 past
     the plan width so the side walls sit in air. The floor runs FLAT at
@@ -224,10 +270,10 @@ def _reveal_face(xa, xb, y, drop, bev):
     below the knuckle bore's top (0.95) and open pinholes into the bore
     at every groove corner."""
     ba, bb = bev if isinstance(bev, tuple) else (bev, bev)
-    z_apex = CROWN_APEX - drop
-    z_sh = z_apex - CROWN_SAG
+    z_ap = z_apex - drop
+    z_sh = z_ap - sag
     xc = (xa + xb) / 2.0
-    arc = ThreePointArc((xb - bb, z_sh), (xc, z_apex), (xa + ba, z_sh))
+    arc = ThreePointArc((xb - bb, z_sh), (xc, z_ap), (xa + ba, z_sh))
     lid = Polyline(
         (xa + ba, z_sh),
         (xa - 0.3, z_sh),
@@ -240,24 +286,44 @@ def _reveal_face(xa, xb, y, drop, bev):
     return plane * make_face(arc + lid)
 
 
-def _reveal_cutter(xa, xb, axis_y, direction, edge, depth, run, bev=BEVEL):
-    """Top-face joint reveal cutter about a pin axis.
+def _reveal_cutter(xa, xb, axis_y, direction, edge, depth, run, bev=BEVEL,
+                   roll_r=ROLL_R, z_apex=CROWN_APEX, sag=CROWN_SAG):
+    """Rolled-shoulder joint cutter about a pin axis.
 
-    Subtracting it pulls the link's crowned top back to a CRISP edge at
-    y = axis_y - direction*edge, drops a 45-degree reveal facet to `depth`
-    below the crown (following the crown arc across x, so the pullback is
-    uniform over the whole width), and with `run` > 0 keeps a flat deck at
-    that depth across the knuckle so the joint reads as a real shadowed
-    gap. direction = +1 for the far end (link body at y < axis), -1 for
-    the near end. Removal only: articulation clearances are untouched.
+    Subtracting it rolls the link's crowned top over a convex
+    quarter-round shoulder of radius `roll_r`: tangent to the crown at
+    y = axis_y - direction*(edge + roll_r) and tangent to a vertical
+    wall at y = axis_y - direction*edge, so the surface normal rotates
+    through up to 90 degrees while the shutline wall (and the
+    2*SHUT_EDGE opening) stays put. The roll follows the crown arc
+    across x — stations loft the crown lowered by the roll's drop, in
+    15-degree steps (chord sagitta < 0.003, invisible). It stops at
+    `depth` below the crown; with `run` > 0 a flat shadow deck at that
+    depth continues `run` further (over the knuckle). direction = +1
+    for the far end (link body at y < axis), -1 for the near end.
+    Removal only: articulation clearances are untouched. Callers must
+    clamp eye-end cutters above the pin bore roof (FLOOR_Z_MIN): at the
+    link flanks the crown-following deck otherwise dips below it.
     """
     lead = 0.06  # start the loft slightly above the crown: transversal cut
-    y0 = axis_y - direction * (edge + lead)
-    stations = [(y0, -lead), (y0 + direction * (depth + lead), depth)]
+    pts = [(edge + roll_r + lead, -lead)]
+    for th_deg in range(15, 91, 15):
+        th = math.radians(th_deg)
+        d = roll_r * (1.0 - math.cos(th))
+        if d < depth - 1e-9:
+            pts.append((edge + roll_r * (1.0 - math.sin(th)), d))
+        else:
+            th_d = math.acos(1.0 - depth / roll_r)
+            pts.append((edge + roll_r * (1.0 - math.sin(th_d)), depth))
+            break
     if run > 0.0:
-        stations.append((y0 + direction * (depth + lead + run), depth))
+        pts.append((pts[-1][0] - run, depth))
     return loft(
-        [_reveal_face(xa, xb, y, d, bev) for y, d in stations], ruled=True
+        [
+            _reveal_face(xa, xb, axis_y - direction * u, d, bev, z_apex, sag)
+            for u, d in pts
+        ],
+        ruled=True,
     )
 
 
@@ -287,48 +353,71 @@ def _chamfer_link(part):
 # ---------------------------------------------------------------------------
 
 def _make_link(
-    xn0, xn1, xf0, xf1, pitch, near, far, color, bev=BEVEL, near_run=SHUT_RUN
+    xn0, xn1, xf0, xf1, pitch, near, far, color, bev=BEVEL, rnd=(False, False),
+    tilt_near=0.0, tilt_far=0.0,
 ):
     """One link body in row-local frame (origin = near pin axis, +Y along
     the strap, z = 0 mid-thickness). `near`/`far` are 'eye' or 'recess'.
 
-    The joint shutline is cut into EYE ends only: a recess end's crown
-    already terminates at its wrap lip, and any straight pullback wide
-    enough to swallow that curved lip (>= 1.02 at the flanks) gapes
-    (see module docstring). `near_run` extends the near shutline's floor
-    past its wall (SHUT_RUN_TUCK for the row-1 center link).
+    Every end is finished as a rolled shoulder (see `_reveal_cutter`).
+    EYE ends: the crown rolls a ROLL_R quarter-round down to a shadow
+    deck EYE_ROLL_DEPTH below the crown that runs across the opening
+    (the sub-surface knuckle crest is shaved to the deck); the cutter is
+    clamped above FLOOR_Z_MIN so it cannot pinhole into the pin bore.
+    RECESS ends: the same ROLL_R roll carries the crown a full quarter
+    round onto a full-height flat wall SHUT_EDGE past the axis (the
+    wrap opening sits entirely below the surface). `tilt_near`/
+    `tilt_far` (degrees) lean each end cut onto the joint's bisector —
+    half the posed relative pitch, positive magnitude — so both walls
+    of a joint are parallel and the wall opening stays 2*SHUT_EDGE at
+    every drape angle (untilted walls close to ~0.05 and cross at the
+    bottom on the 9-degree joints).
     """
     ya, yb = -EYE_R - 0.3, pitch + EYE_R + 0.3
     body = (
         _prism_x(_stadium_side(pitch), 12.0)
-        & _plan_prism(xn0, xn1, xf0, xf1, ya, yb, bev=bev)
+        & _plan_prism(xn0, xn1, xf0, xf1, ya, yb, bev=bev, rnd=rnd)
     )
     tools = []
     tools.append(_xcyl(RECESS_R if near == "recess" else BORE_R, 30.0, 0.0, 0.0))
     tools.append(_xcyl(RECESS_R if far == "recess" else BORE_R, 30.0, pitch, 0.0))
-    for axis_y, direction, kind, x0, x1, run in (
-        (0.0, -1.0, near, xn0, xn1, near_run),
-        (pitch, 1.0, far, xf0, xf1, SHUT_RUN),
+    for axis_y, direction, kind, x0, x1, tilt in (
+        (0.0, -1.0, near, xn0, xn1, tilt_near),
+        (pitch, 1.0, far, xf0, xf1, -tilt_far),
     ):
+        place = Pos(0, axis_y, 0) * Rot(tilt, 0, 0)
         if kind == "eye":
-            tools.append(
-                _reveal_cutter(
-                    x0, x1, axis_y, direction, SHUT_EDGE, SHUT_DEPTH, run, bev=bev
+            cut = place * _reveal_cutter(
+                x0, x1, 0.0, direction, SHUT_EDGE, EYE_ROLL_DEPTH, SHUT_RUN,
+                bev=bev,
+            )
+            # clamp horizontal in the ROW frame (the bore is too), so the
+            # tilted crown-following deck stays above the bore roof
+            cut = cut & (Pos(0, axis_y, FLOOR_Z_MIN + 3.0) * Box(26.0, 8.0, 6.0))
+        else:
+            # full-height end wall SHUT_EDGE past the axis (slab away from
+            # the body), its top rolled over the same quarter-round; the
+            # roll overruns the slab by 0.05 so no faces coincide
+            cut = place * (
+                Pos(0, direction * (0.27 - SHUT_EDGE), 0) * Box(30.0, 0.54, 3.6)
+                + _reveal_cutter(
+                    x0, x1, 0.0, direction, SHUT_EDGE, ROLL_R, 0.05, bev=bev
                 )
             )
+        tools.append(cut)
     body = body - tools
     body = _chamfer_link(body)
     body.color = Color(*color)
     return body
 
 
-def make_row(w0, w1, pitch=P, terminal=False, first=False):
+def make_row(w0, w1, pitch=P, terminal=False, tilt_near=0.0, tilt_far=0.0):
     """One bracelet row: (left, center, right) bodies in row-local frame.
 
     w0/w1: row width at the near/far pin axis (taper is smooth link to
     link). Outer links: recess near / eye far. Center link: eye near /
-    recess far (eye both ends when `terminal`). `first` marks the row at
-    the end link, whose center knuckle must duck under the slot mouth.
+    recess far (eye both ends when `terminal`). `tilt_near`/`tilt_far`:
+    joint-bisector half-angles (degrees) for the end cuts.
     """
     ya, yb = -EYE_R - 0.3, pitch + EYE_R + 0.3
 
@@ -338,21 +427,21 @@ def make_row(w0, w1, pitch=P, terminal=False, first=False):
     def ch(y):
         return CENTER_FRAC * (w0 + (w1 - w0) * y / pitch) / 2.0
 
+    tilts = {"tilt_near": tilt_near, "tilt_far": tilt_far}
     center = _make_link(
         -ch(ya), ch(ya), -ch(yb), ch(yb), pitch,
         near="eye", far=("eye" if terminal else "recess"),
-        color=S.BRACELET_CENTER, bev=(BEVEL_INNER, BEVEL_INNER),
-        near_run=(SHUT_RUN_TUCK if first else SHUT_RUN),
+        color=S.BRACELET_CENTER, bev=(R_LAT, R_LAT), rnd=(True, True), **tilts,
     )
     left = _make_link(
         -hw(ya), -(ch(ya) + LINK_GAP), -hw(yb), -(ch(yb) + LINK_GAP), pitch,
         near="recess", far="eye", color=S.BRACELET_OUTER,
-        bev=(BEVEL, BEVEL_INNER),
+        bev=(BEVEL, R_LAT), rnd=(False, True), **tilts,
     )
     right = _make_link(
         ch(ya) + LINK_GAP, hw(ya), ch(yb) + LINK_GAP, hw(yb), pitch,
         near="recess", far="eye", color=S.BRACELET_OUTER,
-        bev=(BEVEL_INNER, BEVEL),
+        bev=(R_LAT, BEVEL), rnd=(True, False), **tilts,
     )
     return left, center, right
 
@@ -406,8 +495,8 @@ def make_end_link():
         (nose_y, bot_nose),
         (nose_y, top_nose),
         (24.8, top_tail),
-        (jy, 3.6),
-        (jy, 1.6),
+        (jy, 3.95),   # deck stays at cap height to the axis: the sub-surface
+        (jy, 1.6),    # eye (r 1.10, top 3.70) no longer carries the tail
         (24.8, bot_tail),
         align=None,
     ) + Pos(jy, jz) * Circle(EYE_R)
@@ -425,29 +514,42 @@ def make_end_link():
     cw1 = CENTER_FRAC * S.BRACELET_WIDTH_AT_LUG      # center width at joint 1
     slot_half = cw1 / 2.0 + LINK_GAP
 
-    # groove pair continuing the three-link separation lines over the top,
-    # matching the 0.22 lateral shutline opening between center and outers
-    # (centered boxes: align=(None,None,None) is corner-origin, which left
-    # the old grooves floating above the surface and cutting nothing)
+    # groove pair continuing the three-column separation over the top: a
+    # LINK_GAP slot flanked by R_LAT rounded shoulders, matching the rows'
+    # lateral rolled edges (profile extruded along the strap, pitched with
+    # the nose->tail top slope)
     def groove(x):
         y_mid = 22.9
         z_top = top_nose - slope * (y_mid - nose_y)
-        return (
-            Pos(x, y_mid, z_top)
-            * Rot(-slope_deg, 0, 0)
-            * Box(LINK_GAP + 2 * BEVEL_INNER, 4.6, 2 * SHUT_DEPTH)
+        g = LINK_GAP / 2.0
+        r = R_LAT
+        k = 1.0 - math.sqrt(0.5)
+        prof = make_face(
+            Polyline((-g - r, 0.8), (-g - r, 0.0))
+            + ThreePointArc((-g - r, 0.0), (-g - r * k, -r * k), (-g, -r))
+            + Polyline((-g, -r), (-g, -0.34), (g, -0.34), (g, -r))
+            + ThreePointArc((g, -r), (g + r * k, -r * k), (g + r, 0.0))
+            + Polyline((g + r, 0.0), (g + r, 0.8), (-g - r, 0.8))
         )
+        plane = Plane(origin=(0, 0, 0), x_dir=(1, 0, 0), z_dir=(0, -1, 0))
+        prism = extrude(plane * prof, amount=2.3, both=True)
+        return Pos(x, y_mid, z_top) * Rot(-slope_deg, 0, 0) * prism
 
-    # joint-1 shutline: straight vertical-walled band across the tail at
-    # the pin axis, floor following the crown cap lowered SHUT_DEPTH. The
-    # band bottom is clamped at 3.60 (bore roof at the shutline is 3.54)
-    # so the floor cannot pinhole into the pin bore under the side bevels.
-    shut_band = Pos(0, jy, 4.6) * Box(END_LINK_WIDTH + 1.0, 2 * SHUT_EDGE, 2.0)
-    shut_floor = (
-        Pos(0, nose_y, top_nose - SHUT_DEPTH)
-        * Rot(-slope_deg, 0, 0)
-        * _crown_cap(half_w, 14.0)
-    )
+    # joint-1 rolled shoulder: the same vocabulary as the row joints — the
+    # tail deck rolls over a ROLL_R quarter-round whose vertical-tangent
+    # wall sits SHUT_EDGE before the pin axis, leaned onto the joint
+    # bisector (row 1 sits at 3 degrees); the shadow deck past the wall
+    # shaves the eye knuckle crest. The whole cutter is clamped at
+    # z >= 3.62 (bore roof at the shutline is 3.55) so it cannot pinhole
+    # into the pin bore.
+    tail_roll = (
+        Pos(0, jy, jz)
+        * Rot(-1.5, 0, 0)
+        * _reveal_cutter(
+            -half_w, half_w, 0.0, 1.0, SHUT_EDGE, EYE_ROLL_DEPTH, 0.40,
+            bev=BEVEL, z_apex=3.95 - jz,
+        )
+    ) & (Pos(0, jy, 3.62 + 3.0) * Box(26.0, 8.0, 6.0))
 
     tools = [
         Cylinder(NOSE_HUG_R, 20.0, align=(None, None, None)),  # case-hugging nose arc
@@ -457,20 +559,29 @@ def make_end_link():
         _xcyl(BORE_R, 30.0, jy, jz),                 # pin bore
         groove(cw1 / 2.0 + LINK_GAP / 2.0),
         groove(-(cw1 / 2.0 + LINK_GAP / 2.0)),
-        shut_band - shut_floor,
+        tail_roll,
     ]
     body = body - tools
 
     # break remaining edges, but keep the profile-baked crown/bevel facet
-    # lines (along Y at the outer widths, near the top) AND the joint-1
-    # shutline walls crisp (a 0.12 chamfer on a 0.28 groove is a glint)
+    # lines (along Y at the outer widths, near the top), the joint-1
+    # rolled shoulder (chamfering its loft-station seams would flatten
+    # the roll — and OCC chamfers on such tangent chains fail or
+    # segfault, see /BUGS.md), and the groove shoulders crisp
     def _keep(e):
         bb = e.bounding_box()
         on_bevel_band = (
             bb.min.Z > 3.0 and min(abs(bb.min.X), abs(bb.max.X)) > 9.3
         )
-        on_shutline = bb.max.Y > jy - 0.30 and bb.min.Z > 3.2
-        return not (on_bevel_band or on_shutline)
+        on_shutline = bb.max.Y > jy - 0.85 and bb.min.Z > 3.2
+        xs = sorted((abs(bb.min.X), abs(bb.max.X)))
+        on_groove = (
+            bb.min.Z > 3.2
+            and bb.min.X * bb.max.X > 0.0
+            and xs[0] > 2.9
+            and xs[1] < 4.1
+        )
+        return not (on_bevel_band or on_shutline or on_groove)
 
     body, _ = F.safe_chamfer(body, [e for e in body.edges() if _keep(e)], 0.12)
     body.color = Color(*S.BRACELET_OUTER)
@@ -679,7 +790,17 @@ def _build_strap(side):
         th = angles[i]
         jy, jz = joints[i]
         place = Pos(0, jy, jz) * Rot(-th, 0, 0)
-        left, center, right = make_row(w0, w1, terminal=terminal, first=(i == 0))
+        # joint-bisector half-angles: previous body is the end link (0 deg);
+        # past the last row sits the clasp (6 side) or nothing (12 side)
+        th_prev = angles[i - 1] if i > 0 else 0.0
+        if i + 1 < n:
+            th_next = angles[i + 1]
+        else:
+            th_next = CLASP_PITCH_DEG if side == "6" else th
+        left, center, right = make_row(
+            w0, w1, terminal=terminal,
+            tilt_near=(th - th_prev) / 2.0, tilt_far=(th_next - th) / 2.0,
+        )
         parts.append((world(place * left), f"link_{side}_r{i + 1}_left"))
         parts.append((world(place * center), f"link_{side}_r{i + 1}_center"))
         parts.append((world(place * right), f"link_{side}_r{i + 1}_right"))

@@ -47,7 +47,7 @@ BEZEL_FILL = (0.920, 0.920, 0.910, 1.0)     # filled tachymeter engraving
 CRYSTAL = (0.760, 0.800, 0.830, 0.16)       # domed crystal (transparent)
 SAPPHIRE = (0.780, 0.810, 0.850, 0.14)      # display back glass
 GASKET = (0.080, 0.080, 0.085, 1.0)         # black nitrile
-BRACELET_OUTER = (0.585, 0.600, 0.635, 1.0) # brushed outer links (darker)
+BRACELET_OUTER = (0.500, 0.515, 0.555, 1.0) # brushed outer links (darker)
 BRACELET_CENTER = (0.840, 0.850, 0.880, 1.0)  # polished center links
 BRASS_MOVEMENT = (0.700, 0.560, 0.330, 1.0) # unplated brass small parts
 

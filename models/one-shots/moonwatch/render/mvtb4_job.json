@@ -1,0 +1,13 @@
+{
+  "input": "movement_base.step.py",
+  "mode": "view",
+  "appearance": "render/presentation_theme.json",
+  "display": { "mode": "rendered" },
+  "outputs": [
+    { "path": "/tmp/moonwatch/mvtb4_34.png", "camera": { "position": [18, -22, 24], "target": [0, 0, 1.5] }, "sizeProfile": "presentation-large" },
+    { "path": "/tmp/moonwatch/mvtb4_train_macro.png", "camera": { "position": [7, -13, 13], "target": [-6.0, -2.4, 2.2] }, "sizeProfile": "presentation-large" },
+    { "path": "/tmp/moonwatch/mvtb4_jewel_macro.png", "camera": { "position": [-1.5, -8, 10], "target": [-5.0, -2.6, 2.9] }, "sizeProfile": "presentation-large" },
+    { "path": "/tmp/moonwatch/mvtb4_balance_macro.png", "camera": { "position": [7, -18, 11], "target": [-0.6, -8.6, 2.6] }, "sizeProfile": "presentation-large" }
+  ],
+  "render": { "padding": 0.06 }
+}

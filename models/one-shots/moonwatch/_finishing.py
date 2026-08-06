@@ -451,3 +451,36 @@ __all__ = [
     "pinion",
     "heart_cam",
 ]
+
+
+def straight_grain_cutter(
+    span_x: float,
+    span_y: float,
+    pitch: float = 0.14,
+    depth: float = 0.018,
+    along_x: bool = True,
+) -> list:
+    """Directional brushed-grain cutter: fine parallel V-grooves covering a
+    span_x x span_y field centered at the origin, grooves running along X
+    (along_x=True) or Y. Returns a LIST of disjoint prism tools for ONE
+    multi-tool subtract with the finished surface at z=0 (grooves cut down).
+
+    The V-section (no flat land) makes every groove flank a sloped facet, so
+    the field shows the anisotropic light response of satin brushing at
+    render scale — same principle as snailing_cutter/geneva stripes. Keep
+    fields per-part (clip by intersecting the target before subtracting is
+    unnecessary; overshoot is fine since tools only cut where they overlap).
+    """
+    length = (span_x if along_x else span_y) * 1.15
+    across = span_y if along_x else span_x
+    w = pitch * 0.5
+    proto = Plane.XZ * Polygon((-w, 0.02), (w, 0.02), (0.0, -depth), align=None)
+    proto = extrude(proto, amount=length / 2, both=True)
+    if along_x:
+        proto = Rot(0, 0, 90) * proto  # groove axis along X
+    n = int(across / pitch) + 2
+    tools = []
+    for i in range(n):
+        off = -across / 2 + i * pitch
+        tools.append(Pos(0, off, 0) * proto if along_x else Pos(off, 0, 0) * proto)
+    return tools
