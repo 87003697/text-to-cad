@@ -107,3 +107,91 @@ output, workaround, blocked?, fixed?
      project's "minimal targeted fixes" rule.
 - **Adopted workaround:** snapshot renders `--hide` the glass occurrences
   (crystal, caseback sapphire); optically defensible for macro shots.
+
+## 7. Snapshot JSON jobs silently ignore unknown top-level keys (`hide` vs `selection.hide`)
+
+- **Doing:** hiding the crystal in a `--job` render; wrote top-level
+  `"hide": ["#o1.5"]` by analogy with the `--hide` CLI flag.
+- **Wrong output:** no error, no warning — the job rendered normally with
+  nothing hidden (two identical renders before the cause was found). The
+  correct schema is `"selection": {"hide": [...]}`; the CLI flag maps to it
+  internally (`merge_focus_hide_options`).
+- **Suggestion:** reject or warn on unrecognized top-level job keys; the help
+  text describes `--focus`/`--hide` flags but not the job-JSON field shape.
+- **Blocked:** ~10 min. **Fixed:** no (workaround: use `selection.hide`).
+
+## OCC chamfer on dome/eye-cap tangent chains: silent fail, minutes-long churn, or segfault (bracelet)
+
+- **Where found:** `models/one-shots/moonwatch/_bracelet.py` (flat three-link
+  bracelet rows: gently domed top face tangent to knuckle-eye cap cylinders at
+  both link ends).
+- **Symptom:** `chamfer()` on the link top/bottom perimeter edges behaved three
+  different ways depending only on the exact link width (taper step): silent
+  failure (safe_chamfer returns unchanged), ~90 s per attempt CPU churn (366 s
+  through the retry ladder for ONE link — one row cost 265 s), or a hard
+  uncatchable SIGSEGV inside OCC. First full gen took 11 min and standalone
+  builds segfaulted at reproducible-but-width-dependent links.
+- **Amplifier:** `_finishing.safe_chamfer`'s 0.7x retry ladder multiplies the
+  churn 4-5x before giving up, and gives no signal that it degraded/failed.
+- **Workaround (adopted):** never 3D-chamfer edges belonging to a tangent chain.
+  The bracelet links now carry the side bevel in the extruded/lofted SECTION
+  (octagonal profile with built-in 45-degree bevels, `_plan_prism`) and only
+  chamfer isolated flank arc edges. Gen dropped 11 min -> ~28 s.
+- **Blocked:** no. **Fixed:** worked around in model source; the underlying
+  fragility is OCC's; consider a max-attempt-time guard in `safe_chamfer`.
+
+## step_export warns "Unknown Compound type, color not set" for uncolored group compounds
+
+- **Where found:** every `scripts/gen` run of
+  `models/one-shots/moonwatch/bracelet.step.py` (labeled assembly with
+  `strap_12`/`strap_6`/`clasp` group compounds; colors on leaves only, per the
+  documented rule that color on a group compound is ignored anyway).
+- **Symptom:** `packages/cadgen/src/cadgen/step_export.py:379` emits
+  `UserWarning: Unknown Compound type, color not set` for each intentionally
+  uncolored group node, so the recommended color-the-leaves pattern always
+  builds with warning noise.
+- **Expected:** group compounds without colors are the documented normal case
+  and should not warn.
+- **Blocked:** no (cosmetic/noise). **Fixed:** no.
+
+## models/one-shots/moonwatch/_finishing.py: `align=(None,None,None)` is not "centered"
+
+Found by the movement-base builder (2026-08-06). In build123d,
+`align=(None, None, None)` places primitives at their RAW OCC datum —
+`Cylinder`/`Cone` base at z=0 (XY centered), `Box` corner at the origin —
+while `_finishing.py` (and `finishing_sampler.step.py`) were written assuming
+it means centered. Verified empirically:
+
+- `Cylinder(1, 2, align=(None,None,None))` -> z [0, 2] (not [-1, 1]).
+- `Box(2, 2, 2, align=(None,None,None))` -> [0,2]x[0,2]x[0,2].
+
+Downstream effects in `_finishing.py` (all silently wrong, no errors):
+
+- `slotted_screw`: the slot cut box is corner-origin, so the "slot" is an
+  off-center notch buried at mid-head height (x [0, 1.2*d], y [0, w]); the
+  head-top datum is +head_height/2, not 0; the shank is shifted up by
+  head_height/2 and pokes ~0.13 through the dome as a stub; the rim chamfer
+  edge selector never matches (selects at -head_height, actual -h/2).
+- `jewel_countersink_cut`: the cone is half above the surface and its flare
+  is inverted (wider at depth -> undercut, not a polished countersink).
+- `jewel`: top at +thickness/2, not 0 (jeweled_bearing partly compensates).
+- `perlage_cutter`: the lens-cap prototype is clipped to z >= 0 by the raw
+  cylinder, so at the documented "surface at z=0" datum the stamps remove
+  NOTHING. (The sampler coupon only shows perlage because its plate is also
+  built corner-origin with its top at +0.6.)
+- `geneva_stripes_cutter`: bands are corner-origin: the field is offset +y
+  by span_y*0.65 and the cutting band sits ~+0.46..+0.53 above the
+  documented z=0 surface (again accidentally compensated in the sampler).
+- `train_wheel`: the crossing-out ring/spoke cutters span z [0, web+0.02]
+  against a web extruded both=True (z [-web/2, +web/2]), so spoke windows
+  are only cut through the TOP HALF; a membrane floor remains in every
+  window.
+- `pinion`: body spans z [0, length] (not mid-plane 0) and the leaf boxes
+  are offset half a leaf-width tangentially.
+
+`_mvt_base.py` works around all of these locally (centered primitives via
+default align, corrective cones/slots/window-cutters layered on top of the
+helper output) without editing `_finishing.py`. Proper fix: change
+`_finishing.py` to use default (centered) alignment and re-verify the
+sampler; other movement builders should audit any direct use of these
+helpers at documented datums.

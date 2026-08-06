@@ -193,4 +193,4 @@ CLASP_WIDTH = 17.0
 SPRING_BAR_Y = 21.8             # spring-bar axis distance from case center
 SPRING_BAR_Z = 3.2              # spring-bar axis height
 SPRING_BAR_DIAMETER = 1.5
-END_LINK_SEAT_Y = 20.4          # end link nose tucks under the lug tips
+END_LINK_SEAT_Y = 20.6          # end link nose clears the 20.5 case band
