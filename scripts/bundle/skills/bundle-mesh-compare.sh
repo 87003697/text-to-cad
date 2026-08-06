@@ -67,6 +67,9 @@ sync_runtime() {
     --exclude .pytest_cache \
     --exclude '*.pyc' \
     --exclude '*.egg-info' \
+    --exclude '*.so' \
+    --exclude '*.dylib' \
+    --exclude '*.pyd' \
     --exclude build \
     --exclude dist \
     --exclude tests \
@@ -85,6 +88,9 @@ check_runtime() {
     -x .pytest_cache \
     -x '*.pyc' \
     -x '*.egg-info' \
+    -x '*.so' \
+    -x '*.dylib' \
+    -x '*.pyd' \
     -x build \
     -x dist \
     -x tests \
