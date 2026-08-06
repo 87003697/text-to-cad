@@ -49,6 +49,50 @@ function parseAnimationSpeedInput(value, fallbackValue = 1) {
   });
 }
 
+// The default animation time control: it reads elapsed time straight off the
+// runtime's animation state. A consumer whose elapsed time lives in a store
+// that ticks during playback (the STEP module) passes its own through the
+// `TimeControl` prop so the slider tracks the animation instead of sitting
+// still between renders. Contract: { animationState, duration, enabled,
+// onScrub, label }.
+export function ParameterAnimationTimeControl({
+  animationState = {},
+  duration,
+  enabled,
+  onScrub,
+  label = "parameter"
+}) {
+  const elapsedSec = Number(animationState.elapsedSec) || 0;
+  return (
+    <FileSheetSliderField
+      label="Time"
+      value={formatSeconds(elapsedSec)}
+      onValueCommit={(nextValue) => {
+        onScrub?.(parseFileSheetNumberInput(nextValue, {
+          fallback: elapsedSec,
+          min: 0,
+          max: duration
+        }));
+      }}
+      valueInputProps={{
+        disabled: !enabled,
+        ariaLabel: `${label} animation time value`
+      }}
+    >
+      <Slider
+        className={FILE_SHEET_PRECISION_SLIDER_CLASSES}
+        value={[elapsedSec]}
+        min={0}
+        max={duration}
+        step={0.01}
+        onValueChange={(nextValue) => onScrub?.(nextValue?.[0] ?? 0)}
+        disabled={!enabled}
+        aria-label={`${label} animation time`}
+      />
+    </FileSheetSliderField>
+  );
+}
+
 export default function ParameterControlsSection({
   value = "parameters",
   title = "Parameters",
@@ -59,8 +103,10 @@ export default function ParameterControlsSection({
   hideWhenEmpty = false,
   showEnableToggle = false,
   enableLabel = "Enable",
+  enableAriaLabel = "",
   animationAriaLabel = "Animation",
-  resetTitle = "Reset parameters"
+  resetTitle = "Reset parameters",
+  TimeControl = ParameterAnimationTimeControl
 }) {
   const definition = runtime?.definition || null;
   const parameters = Array.isArray(definition?.parameters) ? definition.parameters : [];
@@ -90,7 +136,7 @@ export default function ParameterControlsSection({
             label={enableLabel}
             checked={enabled}
             onCheckedChange={(checked) => runtime?.onEnabledChange?.(checked)}
-            ariaLabel={enableLabel}
+            ariaLabel={enableAriaLabel || enableLabel}
           />
         </FileSheetSubsection>
       ) : null}
@@ -138,32 +184,13 @@ export default function ParameterControlsSection({
             disabled={!enabled}
             ariaLabel="Loop animation playback"
           />
-          <FileSheetSliderField
-            label="Time"
-            value={formatSeconds(animationState.elapsedSec)}
-            onValueCommit={(nextValue) => {
-              runtime?.onAnimationScrub?.(parseFileSheetNumberInput(nextValue, {
-                fallback: animationState.elapsedSec,
-                min: 0,
-                max: animationDuration
-              }));
-            }}
-            valueInputProps={{
-              disabled: !enabled,
-              ariaLabel: `${label} animation time value`
-            }}
-          >
-            <Slider
-              className={FILE_SHEET_PRECISION_SLIDER_CLASSES}
-              value={[Number(animationState.elapsedSec) || 0]}
-              min={0}
-              max={animationDuration}
-              step={0.01}
-              onValueChange={(nextValue) => runtime?.onAnimationScrub?.(nextValue?.[0] ?? 0)}
-              disabled={!enabled}
-              aria-label={`${label} animation time`}
-            />
-          </FileSheetSliderField>
+          <TimeControl
+            animationState={animationState}
+            duration={animationDuration}
+            enabled={enabled}
+            onScrub={runtime?.onAnimationScrub}
+            label={label}
+          />
           <FileSheetSliderField
             label="Speed"
             value={`${formatControlNumber(animationState.speed || 1)}x`}
