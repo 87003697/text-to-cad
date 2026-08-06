@@ -98,8 +98,9 @@ There are exactly four row kinds. Every setting uses one of them.
 
 ### 1. Inline row — `FileSheetInlineControlRow` / `FileSheetToggleRow`
 
-Label left, control right, single 28px line. For: switches, color pickers,
-read-only values, short numeric/text inputs.
+Label left, control right, single 28px line. **This is the default row.** For:
+switches, color pickers, read-only values, short numeric/text inputs, steppers,
+and — the point most easily got wrong — selects and segmented controls.
 
 - **Switches are always right-aligned at the control axis.** This includes
   section gate switches, which sit in the section header's trailing slot —
@@ -125,8 +126,9 @@ allowed.
 ### 3. Block row — `FileSheetControlRow`
 
 Label line on top (label left, optional value/trailing right), full-width
-control underneath. For controls that need the whole gutter width: selects,
-segmented controls, editors (fill-color grid, position pad, step list).
+control underneath. For controls that genuinely need the whole gutter width:
+editors (fill-color grid, position pad, explode-step list) and the one select
+per surface that earns it (see below).
 
 The label and its control are **one item**: the label line stays compact
 (16px) and sits 4px above the control, tighter than the 8px between rows, so a
@@ -135,13 +137,34 @@ lives in the trailing slot takes the full 28px line, matching the switch rows
 beside it — `FileSheetControlRow` picks the right one from whether it was given
 block content.
 
-- **Selects** always render as a block row with a full-width trigger:
-  `SelectTrigger size="sm"`, 28px, 11px text; items 12px. Always pass an
-  `aria-label`. No inline right-hand selects.
-- **Segmented controls** (`ToggleGroup`, 2–5 short options) are the choice for
-  mutually exclusive modes; 6+ options or long labels use a select. One
-  segmented style (`FILE_SHEET_SEGMENTED_ITEM_CLASSES`, 28px) everywhere —
-  including strips that switch an edit target (e.g. the Lights selector).
+## Choosing a mode control
+
+A control that picks one of several values is an **inline row like any other**:
+label left, control right, on the shared control axis. A strip stretched across
+the full width is not a settings row — it reads as a toolbar, and a column of
+them turns the panel into a stack of unrelated widgets.
+
+| Options | Labels | Control |
+| --- | --- | --- |
+| 2–3 | short | segmented, sized to content — `FileSheetSegmentedRow` |
+| 4 or more, **or** labels long enough to crowd the row | | select — `FileSheetSelectRow` (`w-36` trigger) |
+
+- Segmented strips in an inline row are content-sized (`fit`), never stretched.
+  Worked examples: `Projection` (2), `Layout` (2), `Order` (2), a DXF bend's
+  `Up`/`Down`.
+- Past three options the strip stops being scannable and starts truncating, so
+  it becomes a select: `Light` (5), `Backdrop` `Type` (4), explode `Direction`
+  (5), `Map`, animation pickers, every enum parameter.
+- One segmented style everywhere (`FILE_SHEET_SEGMENTED_ITEM_CLASSES`, 28px).
+  Never use a Radix `Tabs` strip to switch an edit target inside a sheet — that
+  was how the five-light selector ended up as a full-width row of tabs.
+
+**The stacked exception.** A select is stacked full-width only when it is the
+surface's *primary* control: the first row of the first section, whose value
+reframes everything under it. There are exactly three — Theme › `Preset`,
+Display › `Mode`, Joints › `Group state`. Pass `stacked` for those and for
+nothing else; a second stacked select on one surface means one of them is not
+primary.
 
 ### 4. Field grid — `FileSheetFieldGrid` + `FileSheetField`
 
@@ -189,7 +212,9 @@ a fixed color pair (e.g. the switch track), it is defined once in
 1. Pick the row kind (inline / slider / block / field grid) from the tables
    above — the control type decides, not taste.
 2. Use the `FileSheet.js` primitive; pass `aria-label` for unlabeled controls.
-3. Label the row *and* its section, even when the section holds only this row.
-4. Label: sentence case, 1–3 words, no verb prefix, no colon.
-5. Value strings carry their unit; degrees are `°`.
-6. No ad-hoc spacing, font sizes, or colors — tokens only.
+3. Selects and segmented controls go inline on the right; `stacked` is only for
+   a surface's primary control.
+4. Label the row *and* its section, even when the section holds only this row.
+5. Label: sentence case, 1–3 words, no verb prefix, no colon.
+6. Value strings carry their unit; degrees are `°`.
+7. No ad-hoc spacing, font sizes, or colors — tokens only.

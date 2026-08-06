@@ -33,12 +33,6 @@ import {
 } from "../ui/dropdown-menu";
 import { Input } from "../ui/input";
 import { Slider } from "../ui/slider";
-import {
-  Tabs,
-  TabsContent,
-  TabsList,
-  TabsTrigger
-} from "../ui/tabs";
 import { cn } from "@/ui/utils";
 import {
   CUSTOM_THEME_ID,
@@ -80,15 +74,12 @@ import FileSheet, {
   FILE_SHEET_COMPACT_BUTTON_CLASSES,
   FILE_SHEET_COMPACT_NUMERIC_INPUT_CLASSES,
   FILE_SHEET_PRECISION_SLIDER_CLASSES,
-  FILE_SHEET_ROW_STACK_CLASSES,
-  FILE_SHEET_SEGMENTED_TAB_TRIGGER_CLASSES,
-  FILE_SHEET_SEGMENTED_TABS_LIST_CLASSES,
   FileSheetBooleanToggle,
   FileSheetButtonRow,
   FileSheetColorPicker,
   FileSheetColorRow,
   FileSheetControlRow,
-  FileSheetSegmentedControl,
+  FileSheetSegmentedRow,
   FileSheetSelectRow,
   FileSheetSliderField,
   FileSheetStatusText,
@@ -489,7 +480,6 @@ function FillColorEditor({ colors, onChange }) {
   );
 }
 
-const SegmentedControl = FileSheetSegmentedControl;
 
 // Two boxes: the canvas the theme paints behind the model, and the colour parts
 // are filled with by default. One box alone can't tell a light theme with dark
@@ -581,7 +571,11 @@ function ThemePresetSection({
 
   return (
     <ControlSubsection title="Appearance">
+      {/* The panel's primary control: picking a preset rewrites every setting
+          below it, so this is one of the few selects that gets the full-width
+          stacked treatment. */}
       <FileSheetSelectRow
+        stacked
         label="Preset"
         value={isCustom ? "" : (activeOption?.value || options[0].value)}
         onValueChange={(nextValue) => onSelectTheme?.(nextValue)}
@@ -1044,13 +1038,12 @@ function ExplodedSubsection({
           </FileSheetSliderField>
 
           {canCustomize ? (
-            <Field label="Layout">
-              <SegmentedControl
-                value={hasSteps ? "custom" : "automatic"}
-                options={EXPLODE_MODE_OPTIONS}
-                onChange={setMode}
-              />
-            </Field>
+            <FileSheetSegmentedRow
+              label="Layout"
+              value={hasSteps ? "custom" : "automatic"}
+              options={EXPLODE_MODE_OPTIONS}
+              onChange={setMode}
+            />
           ) : null}
 
           {hasSteps ? (
@@ -1170,13 +1163,12 @@ function ExplodedSubsection({
             </>
           )}
 
-          <Field label="Order">
-            <SegmentedControl
-              value={exploded.order}
-              options={EXPLODE_ORDER_OPTIONS}
-              onChange={(nextValue) => setExploded({ order: nextValue })}
-            />
-          </Field>
+          <FileSheetSegmentedRow
+            label="Order"
+            value={exploded.order}
+            options={EXPLODE_ORDER_OPTIONS}
+            onChange={(nextValue) => setExploded({ order: nextValue })}
+          />
           <FileSheetToggleRow
             label="Explode lines"
             checked={exploded.trails}
@@ -1226,7 +1218,10 @@ export function DisplaySettingsSection({
   return (
     <div className="py-2" data-cad-display-settings-section="true">
       <ControlSubsection title="Model">
+        {/* The tab's primary control — how the model is drawn — so it takes the
+            stacked full-width treatment. */}
         <FileSheetSelectRow
+          stacked
           label="Mode"
           value={normalizedDisplaySettings.mode}
           onValueChange={(nextValue) => setDisplay({ mode: nextValue })}
@@ -1425,16 +1420,15 @@ function ThemeSettingsContent({
       {/* Scene-wide output: how the camera projects and how bright the result
           is graded, as opposed to the per-material settings below. */}
       <ControlSubsection title="Render">
-        <Field label="Projection">
-          <SegmentedControl
-            value={themeSettings.projection}
-            onChange={(nextValue) => updateThemeSettings((current) => ({
-              ...current,
-              projection: nextValue
-            }))}
-            options={PROJECTION_MODE_OPTIONS}
-          />
-        </Field>
+        <FileSheetSegmentedRow
+          label="Projection"
+          value={themeSettings.projection}
+          onChange={(nextValue) => updateThemeSettings((current) => ({
+            ...current,
+            projection: nextValue
+          }))}
+          options={PROJECTION_MODE_OPTIONS}
+        />
         <SliderField label="Tone mapping" value={formatNumber(themeSettings.lighting.toneMappingExposure)}>
           <SliderInput
             value={themeSettings.lighting.toneMappingExposure}
@@ -1554,13 +1548,12 @@ function ThemeSettingsContent({
       </ControlSubsection>
 
       <ControlSubsection title="Backdrop">
-        <Field label="Type">
-          <SegmentedControl
-            value={themeSettings.background.type}
-            onChange={(nextValue) => setBackground({ type: nextValue })}
-            options={BACKGROUND_MODE_OPTIONS}
-          />
-        </Field>
+        <FileSheetSelectRow
+          label="Type"
+          value={themeSettings.background.type}
+          onValueChange={(nextValue) => setBackground({ type: nextValue })}
+          options={BACKGROUND_MODE_OPTIONS}
+        />
 
         {themeSettings.background.type === "solid" ? (
           <ColorModeField
@@ -1825,111 +1818,93 @@ function ThemeSettingsContent({
           />
         )}
       >
-        <Tabs value={activePrimaryLight} onValueChange={setActivePrimaryLight} className="gap-0">
-            <FileSheetControlRow label="Light">
-              <TabsList className={cn("grid grid-cols-5", FILE_SHEET_SEGMENTED_TABS_LIST_CLASSES)}>
-                {PRIMARY_LIGHT_OPTIONS.map((option) => (
-                  <TabsTrigger
-                    key={option.value}
-                    value={option.value}
-                    className={FILE_SHEET_SEGMENTED_TAB_TRIGGER_CLASSES}
-                  >
-                    {option.label}
-                  </TabsTrigger>
-                ))}
-              </TabsList>
-            </FileSheetControlRow>
-
-            {PRIMARY_LIGHT_OPTIONS.map((option) => {
-              const light = themeSettings.lighting[option.value] || PRIMARY_LIGHT_FALLBACKS[option.value];
-              const supportsDistance = option.value === "spot" || option.value === "point";
-              const supportsModeColors = MODE_COLOR_LIGHT_KEYS.includes(option.value);
-              return (
-                <TabsContent
-                  key={option.value}
-                  value={option.value}
-                  className={cn("mt-2", FILE_SHEET_ROW_STACK_CLASSES)}
-                  data-file-sheet-row-stack=""
-                >
-                  {light.enabled ? (
-                    <>
-                      {supportsModeColors ? (
-                      <ColorModeField
-                        label="Color"
-                        path={["lighting", option.value, "color"]}
-                        {...themeColorFieldProps}
-                      />
-                    ) : (
-                      <ColorField
-                        label="Color"
-                        value={light.color}
-                        onChange={(nextValue) => setLightConfig(option.value, { color: nextValue })}
-                      />
-                    )}
-                    <SliderField label="Intensity" value={formatNumber(light.intensity)}>
-                      <SliderInput
-                        value={light.intensity}
-                        min={0}
-                        max={20}
-                        step={0.01}
-                        onChange={(nextValue) => setLightConfig(option.value, { intensity: nextValue })}
-                      />
-                    </SliderField>
-                    {option.value === "spot" ? (
-                      // Stored in radians; shown and typed in degrees.
-                      <SliderField
-                        label="Angle"
-                        value={`${formatNumber((light.angle * 180) / Math.PI, 0)}°`}
-                        onValueCommit={(nextValue) => {
-                          const nextDegrees = parseFileSheetNumberInput(nextValue, {
-                            fallback: (light.angle * 180) / Math.PI
-                          });
-                          setLightConfig(option.value, {
-                            angle: clamp((nextDegrees * Math.PI) / 180, 0.01, 1.57)
-                          });
-                        }}
-                      >
-                        <SliderInput
-                          value={light.angle}
-                          min={0.01}
-                          max={1.57}
-                          step={0.01}
-                          onChange={(nextValue) => setLightConfig(option.value, { angle: nextValue })}
-                        />
-                      </SliderField>
-                    ) : null}
-                    {supportsDistance ? (
-                      <SliderField label="Distance" value={formatNumber(light.distance, 0)}>
-                        <SliderInput
-                          value={light.distance}
-                          min={0}
-                          max={5000}
-                          step={1}
-                          onChange={(nextValue) => setLightConfig(option.value, { distance: nextValue })}
-                        />
-                      </SliderField>
-                    ) : null}
-                    <Field label="Position (X/Z)">
-                      <PositionPad
-                        value={light.position}
-                        onChange={(axis, nextValue) => setLightPosition(option.value, axis, nextValue)}
-                      />
-                    </Field>
-                    <SliderField label="Height (Y)" value={formatNumber(light.position.y, 0)}>
-                      <SliderInput
-                        value={light.position.y}
-                        min={-5000}
-                        max={5000}
-                        step={1}
-                        onChange={(nextValue) => setLightPosition(option.value, "y", nextValue)}
-                      />
-                    </SliderField>
-                    </>
-                  ) : null}
-                </TabsContent>
-              );
-            })}
-        </Tabs>
+        {/* Five lights share one set of controls, so the target is a select on
+            the control axis and the rows below belong to whichever light it
+            names — not five tab panels of identical fields. */}
+        <FileSheetSelectRow
+          label="Light"
+          value={activePrimaryLight}
+          onValueChange={setActivePrimaryLight}
+          options={PRIMARY_LIGHT_OPTIONS.map((option) => ({
+            value: option.value,
+            label: option.label
+          }))}
+        />
+        {activePrimaryLightSettings.enabled ? (
+          <>
+            {MODE_COLOR_LIGHT_KEYS.includes(activePrimaryLight) ? (
+              <ColorModeField
+                label="Color"
+                path={["lighting", activePrimaryLight, "color"]}
+                {...themeColorFieldProps}
+              />
+            ) : (
+              <ColorField
+                label="Color"
+                value={activePrimaryLightSettings.color}
+                onChange={(nextValue) => setLightConfig(activePrimaryLight, { color: nextValue })}
+              />
+            )}
+            <SliderField label="Intensity" value={formatNumber(activePrimaryLightSettings.intensity)}>
+              <SliderInput
+                value={activePrimaryLightSettings.intensity}
+                min={0}
+                max={20}
+                step={0.01}
+                onChange={(nextValue) => setLightConfig(activePrimaryLight, { intensity: nextValue })}
+              />
+            </SliderField>
+            {activePrimaryLight === "spot" ? (
+              // Stored in radians; shown and typed in degrees.
+              <SliderField
+                label="Angle"
+                value={`${formatNumber((activePrimaryLightSettings.angle * 180) / Math.PI, 0)}°`}
+                onValueCommit={(nextValue) => {
+                  const nextDegrees = parseFileSheetNumberInput(nextValue, {
+                    fallback: (activePrimaryLightSettings.angle * 180) / Math.PI
+                  });
+                  setLightConfig(activePrimaryLight, {
+                    angle: clamp((nextDegrees * Math.PI) / 180, 0.01, 1.57)
+                  });
+                }}
+              >
+                <SliderInput
+                  value={activePrimaryLightSettings.angle}
+                  min={0.01}
+                  max={1.57}
+                  step={0.01}
+                  onChange={(nextValue) => setLightConfig(activePrimaryLight, { angle: nextValue })}
+                />
+              </SliderField>
+            ) : null}
+            {activePrimaryLight === "spot" || activePrimaryLight === "point" ? (
+              <SliderField label="Distance" value={formatNumber(activePrimaryLightSettings.distance, 0)}>
+                <SliderInput
+                  value={activePrimaryLightSettings.distance}
+                  min={0}
+                  max={5000}
+                  step={1}
+                  onChange={(nextValue) => setLightConfig(activePrimaryLight, { distance: nextValue })}
+                />
+              </SliderField>
+            ) : null}
+            <Field label="Position (X/Z)">
+              <PositionPad
+                value={activePrimaryLightSettings.position}
+                onChange={(axis, nextValue) => setLightPosition(activePrimaryLight, axis, nextValue)}
+              />
+            </Field>
+            <SliderField label="Height (Y)" value={formatNumber(activePrimaryLightSettings.position.y, 0)}>
+              <SliderInput
+                value={activePrimaryLightSettings.position.y}
+                min={-5000}
+                max={5000}
+                step={1}
+                onChange={(nextValue) => setLightPosition(activePrimaryLight, "y", nextValue)}
+              />
+            </SliderField>
+          </>
+        ) : null}
       </ControlSubsection>
 
       <ControlSubsection

@@ -12,7 +12,7 @@ import FileSheet, {
   FILE_SHEET_COMPACT_ICON_BUTTON_CLASSES,
   FILE_SHEET_COMPACT_NUMERIC_INPUT_CLASSES,
   FILE_SHEET_UNIT_SUFFIX_CLASSES,
-  FileSheetControlRow,
+  FileSheetInlineControlRow,
   FileSheetSegmentedControl,
   FileSheetStatusText,
   FileSheetSubsection
@@ -56,9 +56,10 @@ function DxfBendRow({
   const direction = normalizeDxfBendDirection(setting?.direction);
 
   return (
-    <FileSheetControlRow label={`B${index + 1}`}>
-      <div className="grid grid-cols-[minmax(0,1fr)_5.75rem] gap-2">
+    <FileSheetInlineControlRow label={`B${index + 1}`}>
+      <div className="flex items-center gap-1.5">
         <FileSheetSegmentedControl
+          fit
           value={direction}
           onChange={(nextDirection) => {
             onChange(index, { direction: nextDirection });
@@ -69,7 +70,7 @@ function DxfBendRow({
             { value: DXF_BEND_DIRECTION.DOWN, label: "Down" }
           ]}
         />
-        <label className="block">
+        <label className="block w-16">
           <span className="sr-only">Angle</span>
           <div className="relative">
             <Input
@@ -103,7 +104,7 @@ function DxfBendRow({
           </div>
         </label>
       </div>
-    </FileSheetControlRow>
+    </FileSheetInlineControlRow>
   );
 }
 
@@ -152,8 +153,8 @@ export default function DxfFileSheet({
       content: (
           <div className="py-2">
             <FileSheetSubsection title="Material">
-              <FileSheetControlRow label="Thickness">
-                <div className="grid grid-cols-[2rem_minmax(0,1fr)_2rem] items-center gap-2">
+              <FileSheetInlineControlRow label="Thickness">
+                <div className="flex items-center gap-1.5">
                   <Button
                     type="button"
                     variant="ghost"
@@ -168,7 +169,7 @@ export default function DxfFileSheet({
                   >
                     <Minus className="h-3.5 w-3.5" strokeWidth={2} aria-hidden="true" />
                   </Button>
-                  <div className="relative block">
+                  <div className="relative block w-20">
                     <Input
                       type="number"
                       min="0.2"
@@ -208,7 +209,7 @@ export default function DxfFileSheet({
                     <Plus className="h-3.5 w-3.5" strokeWidth={2} aria-hidden="true" />
                   </Button>
                 </div>
-              </FileSheetControlRow>
+              </FileSheetInlineControlRow>
             </FileSheetSubsection>
             <FileSheetSubsection title="Bends">
               {normalizedBendSettings.length ? normalizedBendSettings.map((setting, index) => (

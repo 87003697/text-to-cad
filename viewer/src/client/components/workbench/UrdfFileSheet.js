@@ -707,7 +707,10 @@ export default function UrdfFileSheet({
               <>
                 <FileSheetSubsection title="Pose">
                   {groupStatePresets.length ? (
+                    // The tab's primary control: a named state rewrites every
+                    // joint value below it.
                     <FileSheetSelectRow
+                      stacked
                       label="Group state"
                       value={activeGroupStateValue}
                       onValueChange={(value) => {

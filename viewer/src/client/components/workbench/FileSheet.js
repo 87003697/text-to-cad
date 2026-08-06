@@ -49,6 +49,7 @@ export const FILE_SHEET_FIELD_LABEL_CLASSES = "block min-w-0 truncate text-[11px
 export const FILE_SHEET_STATUS_TEXT_CLASSES = "px-2 text-[11px] leading-4 text-muted-foreground";
 export const FILE_SHEET_UNIT_SUFFIX_CLASSES = "pointer-events-none absolute inset-y-0 right-2 flex items-center text-[10px] text-muted-foreground";
 export const FILE_SHEET_SELECT_TRIGGER_CLASSES = "h-7 w-full !text-[11px]";
+export const FILE_SHEET_INLINE_SELECT_TRIGGER_CLASSES = "h-7 w-36 !text-[11px]";
 export const FILE_SHEET_VALUE_BADGE_CLASSES = "shrink-0 rounded bg-muted px-1.5 py-0.5 font-mono text-[10px] font-medium leading-none tabular-nums text-muted-foreground";
 export const FILE_SHEET_VALUE_BADGE_INPUT_CLASSES = [
   "h-7 w-20 shrink-0 rounded-md border border-input bg-transparent px-2 py-1 text-right text-[11px] font-medium leading-none tabular-nums text-foreground shadow-xs outline-none",
@@ -548,8 +549,12 @@ export function FileSheetButtonRow({ children, columns, className }) {
   );
 }
 
-// Mutually exclusive modes with 2-5 short options; 6+ options use a select.
-export function FileSheetSegmentedControl({ value, onChange, options, ariaLabel }) {
+// Mutually exclusive modes, 2-3 short options. `fit` sizes the strip to its
+// content so it can sit on the control axis of an inline row; without it the
+// strip fills the row width, which is only for a block row's full-width slot.
+// More options than that, or labels long enough to crowd the label, is a
+// select — never a wide strip of tabs.
+export function FileSheetSegmentedControl({ value, onChange, options, ariaLabel, fit = false }) {
   const columnCount = Math.max(1, Math.min(options.length, options.length > 4 ? 3 : 4));
   return (
     <ToggleGroup
@@ -563,8 +568,11 @@ export function FileSheetSegmentedControl({ value, onChange, options, ariaLabel 
         }
         onChange(nextValue);
       }}
-      className="grid min-h-7 w-full min-w-0 auto-rows-[1.75rem]"
-      style={{ gridTemplateColumns: `repeat(${columnCount}, minmax(0, 1fr))` }}
+      className={cn(
+        "min-h-7",
+        fit ? "flex w-fit" : "grid w-full min-w-0 auto-rows-[1.75rem]"
+      )}
+      style={fit ? undefined : { gridTemplateColumns: `repeat(${columnCount}, minmax(0, 1fr))` }}
       aria-label={ariaLabel}
     >
       {options.map((option) => {
@@ -574,7 +582,11 @@ export function FileSheetSegmentedControl({ value, onChange, options, ariaLabel 
             key={option.value}
             value={option.value}
             disabled={option.disabled === true}
-            className={cn("min-w-0 gap-1.5 !h-7 px-1.5 text-[11px]", FILE_SHEET_SEGMENTED_ITEM_CLASSES)}
+            className={cn(
+              "min-w-0 gap-1.5 !h-7 px-1.5 text-[11px]",
+              fit && "!flex-none px-2",
+              FILE_SHEET_SEGMENTED_ITEM_CLASSES
+            )}
             title={option.title || option.label}
             aria-label={option.label}
           >
@@ -587,8 +599,26 @@ export function FileSheetSegmentedControl({ value, onChange, options, ariaLabel 
   );
 }
 
-// The standard select: block row with a full-width 28px trigger. Pass
-// triggerContent to replace the plain SelectValue (e.g. a swatch + label).
+// Label left, segmented control on the control axis.
+export function FileSheetSegmentedRow({ label, value, onChange, options, ariaLabel, className }) {
+  return (
+    <FileSheetInlineControlRow label={label} className={className}>
+      <FileSheetSegmentedControl
+        fit
+        value={value}
+        onChange={onChange}
+        options={options}
+        ariaLabel={ariaLabel || (typeof label === "string" ? label : undefined)}
+      />
+    </FileSheetInlineControlRow>
+  );
+}
+
+// The standard select: an inline row, trigger on the control axis. `stacked`
+// gives the block-row treatment — label above, full width — and is reserved for
+// a surface's primary control, the first row that reframes everything under it
+// (Theme > Preset, Display > Mode, Joints > Group state). Nothing else.
+// Pass triggerContent to replace the plain SelectValue (e.g. a swatch + label).
 export function FileSheetSelectRow({
   label,
   value,
@@ -598,33 +628,44 @@ export function FileSheetSelectRow({
   disabled = false,
   placeholder,
   triggerContent,
+  stacked = false,
   className
 }) {
+  const select = (
+    <Select value={value} onValueChange={onValueChange} disabled={disabled}>
+      <SelectTrigger
+        size="sm"
+        className={stacked ? FILE_SHEET_SELECT_TRIGGER_CLASSES : FILE_SHEET_INLINE_SELECT_TRIGGER_CLASSES}
+        aria-label={ariaLabel || (typeof label === "string" ? label : undefined)}
+      >
+        {triggerContent ?? <SelectValue placeholder={placeholder} />}
+      </SelectTrigger>
+      <SelectContent>
+        {options.map((option) => (
+          <SelectItem
+            key={option.value}
+            value={option.value}
+            className="text-xs"
+            title={option.title}
+            icon={option.icon}
+          >
+            {option.label}
+          </SelectItem>
+        ))}
+      </SelectContent>
+    </Select>
+  );
+  if (stacked) {
+    return (
+      <FileSheetControlRow label={label} className={className}>
+        {select}
+      </FileSheetControlRow>
+    );
+  }
   return (
-    <FileSheetControlRow label={label} className={className}>
-      <Select value={value} onValueChange={onValueChange} disabled={disabled}>
-        <SelectTrigger
-          size="sm"
-          className={FILE_SHEET_SELECT_TRIGGER_CLASSES}
-          aria-label={ariaLabel || (typeof label === "string" ? label : undefined)}
-        >
-          {triggerContent ?? <SelectValue placeholder={placeholder} />}
-        </SelectTrigger>
-        <SelectContent>
-          {options.map((option) => (
-            <SelectItem
-              key={option.value}
-              value={option.value}
-              className="text-xs"
-              title={option.title}
-              icon={option.icon}
-            >
-              {option.label}
-            </SelectItem>
-          ))}
-        </SelectContent>
-      </Select>
-    </FileSheetControlRow>
+    <FileSheetInlineControlRow label={label} className={className}>
+      {select}
+    </FileSheetInlineControlRow>
   );
 }
 
@@ -670,17 +711,6 @@ export function FileSheetColorRow({ label, value, onChange, disabled = false, cl
     />
   );
 }
-
-// Radix Tabs strips inside a sheet (e.g. the Lights target selector) share the
-// segmented-control silhouette so a sheet has exactly one row-of-buttons look.
-export const FILE_SHEET_SEGMENTED_TABS_LIST_CLASSES = "grid h-7 w-full rounded-md bg-transparent p-0 shadow-xs";
-export const FILE_SHEET_SEGMENTED_TAB_TRIGGER_CLASSES = [
-  "h-7 min-w-0 rounded-none border border-l-0 border-input px-1.5 text-[11px] font-medium shadow-none",
-  "first:rounded-l-md first:border-l last:rounded-r-md focus-visible:z-10",
-  "text-muted-foreground hover:text-foreground",
-  "data-[state=active]:!bg-accent data-[state=active]:!text-foreground data-[state=active]:font-semibold",
-  "data-[state=active]:ring-1 data-[state=active]:ring-inset data-[state=active]:ring-border/80 data-[state=active]:shadow-none"
-].join(" ");
 
 function normalizeFileSheetWidth(width) {
   const numericWidth = Number(width);
