@@ -369,3 +369,28 @@ helpers at documented datums.
   results; group tools so each batch is internally disjoint-ish.
 - **Blocked:** ~20 min (typed probes per builder, then staged-subtract
   bisection). **Fixed:** in model source (two-stage subtract).
+
+## 9. No per-part material properties in the component-GLB render path (missing feature; the project's aesthetic ceiling)
+
+- **Doing:** whole-watch and movement blind A/B comparisons against professional
+  macro photography (the moonwatch project's core acceptance loop).
+- **Limitation:** the presentation theme applies ONE global
+  roughness/metalness/clearcoat to every part; descriptor occurrence colors
+  carry only RGB (see entry 6). There is no way to render brushed steel next
+  to mirror-polished steel next to matte lacquer as *different material
+  responses* — only albedo differs. Across ~20 fresh-context critic rounds,
+  after all geometric finishing (anglage ribbons, V-groove striping, satin
+  grain, snailing, perlage) was modeled and visible, every remaining loss
+  verdict converged on the same sentence: "the metal has only one finish /
+  uniform material response / reads as primed plastic."
+- **Workarounds used:** geometric micro-texture (V-grooves at 0.14–0.2 mm
+  pitch) + albedo deltas + bright overlay "ribbon" bodies for polished zones +
+  raking key light + strong neutral HDRI. These moved every render
+  substantially but cannot produce anisotropic specular contrast.
+- **Suggestion (follow-up feature):** thread optional per-occurrence
+  `roughness`/`metalness` (and finish the alpha channel from entry 6) from
+  cadgen's descriptor into `packages/cadjs` part records and per-part
+  materials; the snapshot runtime picks it up on rebundle. This is the single
+  highest-leverage renderer change for photoreal CAD presentation.
+- **Blocked:** the blind-A/B win condition, not the modeling. **Fixed:** no
+  (out of minimal-fix scope; documented).
