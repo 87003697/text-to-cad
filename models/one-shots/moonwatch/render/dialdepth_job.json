@@ -1,0 +1,12 @@
+{
+  "input": "dial.step.py",
+  "mode": "view",
+  "appearance": "render/presentation_theme.json",
+  "display": { "mode": "rendered" },
+  "outputs": [
+    { "path": "/tmp/moonwatch/dialdepth_top.png", "camera": { "position": [0, 0, 60], "target": [0, 0, 8.2] }, "sizeProfile": "presentation-large" },
+    { "path": "/tmp/moonwatch/dialdepth_three_quarter.png", "camera": { "position": [18, -30, 30], "target": [0, 0, 8.2] }, "sizeProfile": "presentation-large" },
+    { "path": "/tmp/moonwatch/dialdepth_register_macro.png", "camera": { "position": [16, -6, 18], "target": [10.2, 0, 8.0] }, "sizeProfile": "presentation-large" }
+  ],
+  "render": { "padding": 0.08 }
+}

@@ -7,7 +7,9 @@ at +X, dial top surface at `S.DIAL_Z`.
 Anatomy (matched to Speedmaster-professional macro references):
 
 - step dial: main lacquer surface at DIAL_Z, outer minute-track ring dropped
-  by a crisp step; three recessed, snailed registers with a stepped rim ring
+  by a crisp step; three registers sunk 0.5 below the surface behind a bright
+  45-degree chamfered rim step, each floored by a slightly darker snailed disc
+  (the classic tri-compax depth read)
 - applied hour indices: raised white frames with inset lume bars, doubled
   baton at 12 with two lume dots outboard on the track ring
 - printed minute track: 60 minute ticks + 4 fine subdivisions between each
@@ -24,6 +26,7 @@ import math
 from build123d import (
     Circle,
     Color,
+    Cone,
     Cylinder,
     Plane,
     Polygon,
@@ -43,17 +46,18 @@ import _finishing as F
 # ---------------------------------------------------------------------------
 
 DIAL_R = S.DIAL_DIAMETER / 2.0          # 18.6
-DIAL_TOP = S.DIAL_Z                     # 8.2
-DIAL_BOT = DIAL_TOP - S.DIAL_THICKNESS  # 7.7
+DIAL_TOP = S.DIAL_Z                     # 8.35
+DIAL_BOT = DIAL_TOP - S.DIAL_THICKNESS  # 7.7 — movement seat plane (unchanged)
 
 STEP_R = 16.35                          # step-dial shoulder radius
 STEP_DROP = 0.12
 STEP_TOP = DIAL_TOP - STEP_DROP         # minute-track ring surface
 
 RECESS_R = S.SUBDIAL_DIAMETER / 2.0     # 4.1
-RECESS_FLOOR = DIAL_TOP - S.SUBDIAL_RECESS  # 7.92
-RING_R = RECESS_R + 0.25                # crisp step ring around each recess
-RING_DEPTH = 0.07
+RECESS_FLOOR = DIAL_TOP - S.SUBDIAL_RECESS  # 7.85 — visible snailed floor
+FLOOR_THICK = 0.05                      # darker floor disc set into the pocket
+POCKET_FLOOR = RECESS_FLOOR - FLOOR_THICK   # 7.80 plate pocket under the disc
+RIM_CHAMFER = 0.15                      # 45-deg bright rim step at each recess
 
 TRACK_OUTER_R = 18.1                    # minute-track tick outer radius
 PRINT_RAISE = 0.02                      # printed features stand this proud
@@ -63,7 +67,7 @@ INDEX_R_IN = 12.4                       # hour baton radial span
 INDEX_R_OUT = 16.1
 INDEX_R_MID = (INDEX_R_IN + INDEX_R_OUT) / 2.0
 INDEX_LEN = INDEX_R_OUT - INDEX_R_IN
-INDEX_RAISE = 0.12                      # applied-index relief height
+INDEX_RAISE = 0.18                      # applied-index relief height
 INDEX_EMBED = 0.06
 
 # registers: role -> center in watch frame
@@ -106,25 +110,50 @@ def build_dial_plate():
     annulus = Cylinder(DIAL_R + 1.0, 1.0) - Cylinder(STEP_R, 1.2)
     cutters.append(Pos(0, 0, STEP_TOP + 0.5) * annulus)
 
-    # subdial recesses: stepped rim ring + snailed floor + hand hole
-    snail = F.snailing_cutter(
-        S.SUBDIAL_DIAMETER, inner_diameter=0.7, pitch=0.3, groove_depth=0.015
-    )
+    # subdial recesses: one revolved-step cut per register — a 45-degree
+    # chamfered rim (the bright ring that telegraphs depth head-on), a
+    # straight wall, and a pocket floor that receives the darker snailed
+    # floor disc (build_register_floors); plus the hand hole
     for cx, cy in REGISTERS.values():
         cutters.append(
-            Pos(cx, cy, DIAL_TOP - RING_DEPTH + 0.5) * Cylinder(RING_R, 1.0)
+            Pos(cx, cy, DIAL_TOP - RIM_CHAMFER / 2.0)
+            * Cone(RECESS_R, RECESS_R + RIM_CHAMFER, RIM_CHAMFER)
         )
-        cutters.append(Pos(cx, cy, RECESS_FLOOR + 0.5) * Cylinder(RECESS_R, 1.0))
-        cutters.append(Pos(cx, cy, RECESS_FLOOR) * snail)
-        cutters.append(Pos(cx, cy, 7.9) * Cylinder(0.25, 2.0))
+        cutters.append(
+            Pos(cx, cy, DIAL_TOP + 0.25) * Cylinder(RECESS_R + RIM_CHAMFER, 0.5)
+        )
+        cutters.append(Pos(cx, cy, POCKET_FLOOR + 0.5) * Cylinder(RECESS_R, 1.0))
+        cutters.append(Pos(cx, cy, DIAL_TOP - 0.3) * Cylinder(0.25, 2.0))
 
     # center post hole (cannon pinion / chrono staff)
-    cutters.append(Pos(0, 0, 7.9) * Cylinder(0.75, 2.0))
+    cutters.append(Pos(0, 0, DIAL_TOP - 0.3) * Cylinder(0.75, 2.0))
 
     dial = base - cutters
     dial.label = "dial_plate"
     dial.color = Color(*S.DIAL_BLACK)
     return dial
+
+
+def build_register_floors():
+    """Snailed counter floors: thin discs set into the plate pockets so they
+    can carry their own tone — ~12% darker than DIAL_BLACK (inline color),
+    the tri-compax floor contrast that reads as depth even head-on."""
+    snail = F.snailing_cutter(
+        S.SUBDIAL_DIAMETER, inner_diameter=0.7, pitch=0.3, groove_depth=0.015
+    )
+    floors = []
+    for role, (cx, cy) in REGISTERS.items():
+        disc = Pos(cx, cy, (POCKET_FLOOR + RECESS_FLOOR) / 2.0) * Cylinder(
+            RECESS_R + 0.03, FLOOR_THICK  # 0.03 embeds into the pocket wall
+        )
+        disc = disc - [
+            Pos(cx, cy, RECESS_FLOOR) * snail,
+            Pos(cx, cy, RECESS_FLOOR - 0.5) * Cylinder(0.25, 2.0),
+        ]
+        disc.label = f"subdial_floor:{role}"
+        disc.color = Color(0.033, 0.033, 0.039, 1.0)  # ~12% under DIAL_BLACK
+        floors.append(disc)
+    return floors
 
 
 def build_dial_feet():
@@ -146,10 +175,19 @@ def build_indices():
     frame_out, frame_in, lume_in = [], [], []
 
     for h in range(1, 12):  # single batons at 1..11
-        loc = Rot(0, 0, -h * 30.0) * Pos(0, INDEX_R_MID)
-        frame_out.append(loc * Rectangle(1.05, INDEX_LEN))
-        frame_in.append(loc * Rectangle(0.67, INDEX_LEN - 0.38))
-        lume_in.append(loc * Rectangle(0.61, INDEX_LEN - 0.44))
+        if h in (3, 6, 9):
+            # truncated at the register recesses (period-correct): the sunken
+            # counters reach r = 14.45, so these batons start outboard of the
+            # rim instead of overhanging the pits
+            r_in = 14.75
+        else:
+            r_in = INDEX_R_IN
+        r_mid = (r_in + INDEX_R_OUT) / 2.0
+        length = INDEX_R_OUT - r_in
+        loc = Rot(0, 0, -h * 30.0) * Pos(0, r_mid)
+        frame_out.append(loc * Rectangle(1.05, length))
+        frame_in.append(loc * Rectangle(0.67, length - 0.38))
+        lume_in.append(loc * Rectangle(0.61, length - 0.44))
 
     for dx in (-0.72, 0.72):  # doubled baton at 12
         loc = Pos(dx, INDEX_R_MID)
@@ -285,17 +323,17 @@ def build_hands():
         align=None,
     )
     hour_window = Pos(0, 7.1) * Rectangle(0.52, 5.4)     # y 4.4..9.8
-    hour = _faceted_blade(hour_plan - hour_window, 0.75, 0.22, 8.30)
+    hour = _faceted_blade(hour_plan - hour_window, 0.75, 0.22, 8.45)
     hour = Rot(0, 0, -HOUR_ANGLE) * hour
     hour.label = "hand:hour"
     hour.color = Color(*S.DIAL_PRINT)
 
-    hour_lume = Pos(0, 0, 8.30) * extrude(Pos(0, 7.1) * Rectangle(0.46, 5.34), 0.10)
+    hour_lume = Pos(0, 0, 8.45) * extrude(Pos(0, 7.1) * Rectangle(0.46, 5.34), 0.10)
     hour_lume = Rot(0, 0, -HOUR_ANGLE) * hour_lume
     hour_lume.label = "hand:hour_lume"
     hour_lume.color = Color(*S.LUME)
 
-    hour_hub = Pos(0, 0, 8.32) * Cylinder(1.15, 0.20) + Pos(0, 0, 8.48) * Cylinder(
+    hour_hub = Pos(0, 0, 8.47) * Cylinder(1.15, 0.20) + Pos(0, 0, 8.63) * Cylinder(
         0.72, 0.12
     )
     hour_hub.label = "hub:hour"
@@ -310,12 +348,12 @@ def build_hands():
         align=None,
     )
     minute_window = Pos(0, 9.6) * Rectangle(0.38, 8.4)   # y 5.4..13.8
-    minute = _faceted_blade(minute_plan - minute_window, 0.65, 0.20, 8.58)
+    minute = _faceted_blade(minute_plan - minute_window, 0.65, 0.20, 8.73)
     minute = Rot(0, 0, -MINUTE_ANGLE) * minute
     minute.label = "hand:minute"
     minute.color = Color(*S.DIAL_PRINT)
 
-    minute_lume = Pos(0, 0, 8.58) * extrude(
+    minute_lume = Pos(0, 0, 8.73) * extrude(
         Pos(0, 9.6) * Rectangle(0.32, 8.34), 0.08
     )
     minute_lume = Rot(0, 0, -MINUTE_ANGLE) * minute_lume
@@ -323,7 +361,7 @@ def build_hands():
     minute_lume.color = Color(*S.LUME)
 
     # cannon-pinion cap under the chrono hand: turned two-step collar
-    minute_hub = Pos(0, 0, 8.64) * Cylinder(0.95, 0.16) + Pos(0, 0, 8.765) * Cylinder(
+    minute_hub = Pos(0, 0, 8.79) * Cylinder(0.95, 0.16) + Pos(0, 0, 8.915) * Cylinder(
         0.55, 0.09
     )
     minute_hub.label = "hub:minute"
@@ -342,14 +380,14 @@ def build_hands():
     teardrop = Polygon(
         (-0.42, -3.5), (0.42, -3.5), (0.135, -0.8), (-0.135, -0.8), align=None
     ) + Pos(0, -3.85) * Circle(0.5)
-    chrono = _faceted_blade(needle + teardrop, 0.62, 0.16, 8.84)
+    chrono = _faceted_blade(needle + teardrop, 0.62, 0.16, 8.99)
     chrono = Rot(0, 0, -CHRONO_ANGLE) * chrono
     chrono.label = "hand:chrono_seconds"
     chrono.color = Color(*S.DIAL_PRINT)
     parts.append(chrono)
 
     # polished domed cap over the chrono staff — top of the center stack
-    cap = _domed_cap(0.72, 8.82, 8.98, 2.0)
+    cap = _domed_cap(0.72, 8.97, 9.13, 2.0)
     cap.label = "hand:chrono_cap"
     cap.color = Color(*S.STEEL_BRIGHT)
     parts.append(cap)
@@ -368,8 +406,10 @@ def build_hands():
             (-0.075, 0.0), (-0.10, -0.9),
             align=None,
         )
-        blade = _faceted_blade(plan, 0.13, 0.10, 8.02)
-        hub = Pos(0, 0, 8.04) * Cylinder(0.40, 0.16)
+        # dropped with the deepened counters: ride just above the 7.85 floors
+        # (floor print tops at 7.87), still well below the 8.35 main surface
+        blade = _faceted_blade(plan, 0.13, 0.10, 7.95)
+        hub = Pos(0, 0, 7.97) * Cylinder(0.40, 0.16)
         hand = blade + hub
         cx, cy = REGISTERS[role]
         hand = Pos(cx, cy, 0) * (Rot(0, 0, -angle) * hand)
@@ -386,6 +426,7 @@ def build_hands():
 
 def build_dial_parts():
     parts = [build_dial_plate()]
+    parts += build_register_floors()
     parts += build_dial_feet()
     parts += build_indices()
     parts.append(build_minute_track())

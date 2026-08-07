@@ -157,7 +157,11 @@ def _band_profile(scale: float):
     )
 
 
+_BAND_CHAMFER_APPLIED = 0.0     # set by _case_band (safe_chamfer retry ladder)
+
+
 def _case_band():
+    global _BAND_CHAMFER_APPLIED
     sections = [
         Pos(0, 0, 0.0) * _band_profile(0.985),
         Pos(0, 0, 3.2) * _band_profile(1.0),
@@ -165,7 +169,8 @@ def _case_band():
     ]
     band = loft(sections)
     bottom_edges = [e for e in band.edges() if e.bounding_box().max.Z < 1e-4]
-    band, _ = F.safe_chamfer(band, bottom_edges, 0.35)
+    band, applied = F.safe_chamfer(band, bottom_edges, 0.35)
+    _BAND_CHAMFER_APPLIED = applied or 0.0
     return band
 
 
@@ -366,6 +371,151 @@ def build_case_middle():
     body.label = "case_middle"
     body.color = STEEL_C
     return body
+
+
+# ---------------------------------------------------------------------------
+# Polished ribbon overlays — SEPARATE material zones over the brushed body.
+#
+# The case middle is ONE solid, so its twisted lug bevel facets inherit the
+# body's BRUSHED material no matter how the geometry reads. Exactly like the
+# movement's anglage ribbons (`_mvt_base._anglage_cap`/`_add_anglage`), thin
+# skins hover POLISH_GAP off each polished facet and carry a true mirror PBR
+# set inline on the part: the `case_polish:*` labels deliberately match NO
+# `_materials.RULES` pattern (fnmatch-verified), so `M.apply` leaves the
+# inline `cad_material` untouched.
+# ---------------------------------------------------------------------------
+
+POLISH_GAP = 0.02           # hover off the facet — no z-fighting
+POLISH_THICKNESS = 0.05
+POLISH_EDGE_INSET = 0.04    # stay just inside the facet's crease lines
+STEEL_BRIGHT_C = Color(*S.STEEL_BRIGHT)
+# Mirror-polish PBR (same channel values as _materials.ANGLAGE_MIRROR,
+# restated inline: these zones must not depend on a rule-table match).
+_POLISH_MATERIAL = {"roughness": 0.08, "metalness": 0.95,
+                    "clearcoat": 0.3, "clearcoatRoughness": 0.05}
+
+
+def _polish_part(sol, label):
+    sol.label = label
+    sol.color = STEEL_BRIGHT_C
+    sol.cad_material = dict(_POLISH_MATERIAL)
+    return sol
+
+
+def _lug_polish_ribbon():
+    """Thin skin lofted over the NE lug's twisted polished bevel facet: at
+    each dense station the facet segment runs (x_bev, z_top) -> (x_out,
+    z_bev); the section quad is that segment inset POLISH_EDGE_INSET from
+    both crease lines and offset [POLISH_GAP, POLISH_GAP+POLISH_THICKNESS]
+    along the facet's outward normal. Lofted ruled=False with the same
+    station parameterization as `_lug_ne`, so the skin follows the same
+    smooth interpolating surface (a ruled skin would drift off the smooth
+    facet between stations). Root stations are buried inside the case band;
+    callers clip with `- band` after mirroring so each quadrant emerges at
+    its own flank (the crown-guard side covers more of the root)."""
+    sections = []
+    for y, z_top, z_bot, x_out, x_bev, z_bev in _dense_lug_stations():
+        ux, uz = x_out - x_bev, z_bev - z_top
+        n = math.hypot(ux, uz)
+        ux, uz = ux / n, uz / n
+        nx, nz = -uz, ux                    # outward facet normal (+x, +z)
+        e = POLISH_EDGE_INSET
+        quads = []
+        for d in (POLISH_GAP, POLISH_GAP + POLISH_THICKNESS):
+            quads.append((
+                (x_bev + e * ux + d * nx, z_top + e * uz + d * nz),
+                (x_out - e * ux + d * nx, z_bev - e * uz + d * nz),
+            ))
+        (a1, b1), (a2, b2) = quads
+        sections.append(
+            Plane.XZ.offset(-y) * Polygon(a1, b1, b2, a2, align=None)
+        )
+    return loft(sections, ruled=False)
+
+
+def _bezel_polish_ring():
+    """Polished skin over the bezel ring's outer wall (r 21.0, z 7.35-8.90)
+    and its top rim chamfer ((21.0, 8.9) -> (20.85, 9.2)) — the grained top
+    annulus starts at r 20.85 and stays uncovered. One revolved quad-chain:
+    wall offset radially, chamfer offset along its (2,1)/sqrt(5) normal, the
+    shared corner at the offset-line intersection (21+d, 8.9+0.2361d)."""
+    profile = Plane.XZ * Polygon(
+        (21.0200, 7.4200),      # inner wall, above the base cone corner
+        (21.0200, 8.9047),      # inner wall/chamfer offset corner (d=0.02)
+        (20.8813, 9.1821),      # inner chamfer end, inset off the top crease
+        (20.9260, 9.2045),      # outer chamfer end (d=0.07)
+        (21.0700, 8.9165),      # outer wall/chamfer offset corner
+        (21.0700, 7.4200),      # outer wall, bottom
+        align=None,
+    )
+    return revolve(profile, Axis.Z)
+
+
+def _band_lower_polish():
+    """Polished skin over the case band's bottom-edge chamfer (the 0.35
+    `safe_chamfer` in `_case_band`): the chamfer face at height z sits at
+    constant 2D offset from the z=0 plan outline, so the skin lofts between
+    two offset-ring sections following the full band+guard outline. Returns
+    None when the retry ladder dropped the chamfer entirely.
+
+    Deliberately NOT clipped `- band`: measured overlap between this ring
+    and the band is exactly 0 (the constant-offset model deviates < 0.01
+    normal from the real chamfer face, inside the 0.02 gap), and the
+    subtraction manufactures tangent-face slivers near the band/guard seam
+    corners that trip the BOPAlgo self-intersection check (measured)."""
+    from build123d import Kind, offset
+
+    ch = _BAND_CHAMFER_APPLIED
+    if ch < 0.1:
+        return None
+    k = R_BAND * (1.0 - 0.985) / 3.2        # wall lean dR/dz at the base
+    z_top = ch / math.sqrt(1.0 + k * k)     # chamfer face top height
+    m = k + math.sqrt(1.0 + k * k)          # chamfer face slope dr/dz
+    perp = math.sqrt(1.0 + m * m)           # normal offset -> radial offset
+    za, zb = 0.14 * z_top, 0.86 * z_top
+    prof = _band_profile(0.985)
+
+    def rings(z):
+        faces = []
+        for d in (POLISH_GAP + POLISH_THICKNESS, POLISH_GAP):
+            faces.append(offset(prof, m * z + d * perp - ch, kind=Kind.ARC))
+        return faces
+    outer_a, inner_a = rings(za)
+    outer_b, inner_b = rings(zb)
+    return (
+        loft([Pos(0, 0, za) * outer_a, Pos(0, 0, zb) * outer_b])
+        - loft([Pos(0, 0, za) * inner_a, Pos(0, 0, zb) * inner_b])
+    )
+
+
+def build_case_polish_parts():
+    band = _case_band()
+    ribbon = _lug_polish_ribbon()
+    quadrants = (
+        ("ne", ribbon),
+        ("nw", mirror(ribbon, about=Plane.YZ)),
+        ("se", mirror(ribbon, about=Plane.XZ)),
+        ("sw", mirror(mirror(ribbon, about=Plane.YZ), about=Plane.XZ)),
+    )
+    parts = []
+    for name, rib in quadrants:
+        clipped = rib - band
+        sols = [s for s in clipped.solids() if s.volume > 1e-4]
+        if len(sols) == 1:
+            parts.append(_polish_part(sols[0], f"case_polish:lug_{name}"))
+        else:   # disjoint slivers in one part trip validation (_mvt_base)
+            for i, s in enumerate(sols):
+                parts.append(_polish_part(s, f"case_polish:lug_{name}:{i}"))
+    parts.append(_polish_part(_bezel_polish_ring(), "case_polish:bezel"))
+    lower = _band_lower_polish()
+    if lower is not None:
+        sols = [s for s in lower.solids() if s.volume > 1e-4]
+        if len(sols) == 1:
+            parts.append(_polish_part(sols[0], "case_polish:band_lower"))
+        else:
+            for i, s in enumerate(sols):
+                parts.append(_polish_part(s, f"case_polish:band_lower:{i}"))
+    return parts
 
 
 # ---------------------------------------------------------------------------
@@ -796,11 +946,13 @@ def build_case_parts():
     parts += build_pusher(S.PUSHER_ANGLES[1], "4oclock")
     parts.append(build_spring_bar("12", 1.0))
     parts.append(build_spring_bar("6", -1.0))
+    parts += build_case_polish_parts()
     return parts
 
 
 __all__ = [
     "build_case_middle",
+    "build_case_polish_parts",
     "build_bezel_ring",
     "build_bezel_insert",
     "build_tachymeter_scale",

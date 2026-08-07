@@ -86,11 +86,13 @@ PUSHER_Z = 3.6
 # ---------------------------------------------------------------------------
 
 DIAL_DIAMETER = 37.2
-DIAL_THICKNESS = 0.5
-DIAL_Z = 8.2                    # dial top surface z in the watch frame
+DIAL_THICKNESS = 0.65           # thickened upward: underside stays at 7.7
+DIAL_Z = 8.35                   # dial top surface z in the watch frame
+#   (DIAL_Z - DIAL_THICKNESS = 7.7 — the movement seat plane is unchanged;
+#    the extra 0.15 keeps a solid floor under the deep register recesses)
 SUBDIAL_RADIUS = 10.2           # center offset of the three registers
 SUBDIAL_DIAMETER = 8.2
-SUBDIAL_RECESS = 0.28
+SUBDIAL_RECESS = 0.5            # visible counter depth below the dial top
 # registers: 3 o'clock (+X) = 30-min recorder, 6 (-Y) = 12-hour recorder,
 # 9 (-X) = small seconds; chronograph seconds from the center post.
 

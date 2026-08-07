@@ -48,6 +48,7 @@ RULES: list[tuple[str, dict]] = [
     ("*gasket*", RUBBER),
     # dial furniture
     ("dial_plate", BLACK_LACQUER),
+    ("subdial_floor*", BLACK_LACQUER),
     ("subdial_print*", MATTE_PRINT),
     ("minute_track", MATTE_PRINT),
     ("index_lume", LUME_PLOT),
