@@ -127,53 +127,55 @@ JUMPER_SPRING_STUD = (11.35, -3.3)  # open plate
 #: CHRONO_LAYER_TOP 4.1 (screw heads proud 0.04 top out flush at 4.10).
 CHRONO_BRIDGE_Z = (3.68, 4.06)
 
-#: One flowing 321-style plate (smooth traced `_mvt_base._Outline`, built by
-#: the `_mvt_base._bridge` factory): jeweled heads over the runner (0,0) and
-#: minute recorder (10.2,0) poking north from a slim two-armed span, a stem
-#: over the coupling wheel down to a south foot, an east rim body. Routing
+#: One flowing 321-style Y plate (smooth traced `_mvt_base._Outline`, built
+#: by the `_mvt_base._bridge` factory): jeweled heads over the runner (0,0)
+#: and minute recorder (10.2,0) on a broad two-armed PLATE — the old crotch
+#: gap between the north arm and the coupling stem is filled solid, the arm
+#: over the runner is a wide span whose flanks sweep concentric to the
+#: wheel, and a round WINDOW over the coupling wheel (rim beveled+ribboned
+#: like every other edge) shows its hub and blued screw below. Routing
 #: (plan-verified against every exported keep-out):
-#: - column wheel stays FULLY visible: every edge >= 2.9 from (8.3,3.6);
-#: - hammer strike faces stay visible: edges clear pad_a (1.67,-0.32) and
-#:   pad_b (8.77,-0.21) by >= 0.25; the hammer PIVOT screw head (top 3.92)
-#:   pierces the band, cleared by > 2.2;
+#: - column wheel stays FULLY visible: every edge >= 2.75 from (8.3,3.6);
+#: - hammer strike faces stay visible: edges clear the yoke capsules by
+#:   >= 0.2; the hammer PIVOT screw head (top 3.92) pierces the band,
+#:   cleared by > 1.35;
 #: - reset pivot / reset spring screw heads (tops 3.86 / 3.82) cleared by
-#:   > 1.6; the reset lever itself (top 3.60) passes UNDER one arm with the
-#:   pusher end, pivot and nose all visible — exactly the reference routing;
+#:   > 0.98 / 0.85; the reset lever itself (top 3.60) dives UNDER the
+#:   filled plate with the pusher end, pivot and nose all visible;
 #: - ratchet wheel, balance, escape wheel, brake, operating lever, minute
-#:   jumper nose all stay uncovered;
+#:   jumper nose all stay uncovered (jumper notch kept in the outline);
 #: - full-height feet drop only through wheel-free plate: the east foot
 #:   clears the minute-recorder tip circle (2.41 vs 2.30), the south foot
 #:   clears the coupling wheel's swept circle (4.36 vs 4.00) and the balance
 #:   rim / timing-screw sweep (5.42 vs 5.25).
 CHRONO_BRIDGE_OUTLINE = M._Outline(
-    M._arcpts(0, 0, 1.47, 272, -40, 9)       # runner head cap (S->W->N->E)
-    + [(1.9, -1.15)]                         # past strike pad a's south side
-    + [(2.7, -1.62), (4.2, -1.85), (5.9, -2.35), (7.3, -2.9), (8.6, -3.2),
-       (9.55, -3.45)]                        # north edge OVER the reset lever
+    M._arcpts(0, 0, 1.55, 268, -42, 9)       # runner head cap (S->W->N->E)
+    + [(2.0, -1.28), (3.0, -1.70), (4.2, -1.95), (5.9, -2.45), (7.3, -2.95),
+       (8.55, -3.28), (9.5, -3.5)]           # north edge OVER the reset lever
     + [(10.62, -3.18)]                       # jumper-window turn (nose visible)
     + [(10.1, -1.55)]
-    + M._arcpts(10.2, 0.0, 1.16, 235, 62, 5)  # minute-recorder head
+    + M._arcpts(10.2, 0.0, 1.18, 235, 62, 5)  # minute-recorder head
     + [(11.5, 0.62)]
     + M._arcpts(12.05, -0.65, 1.3, 78, 45, 1)  # east rim body
     + M._arcpts(0, 0, 13.13, 3, -7, 2)       # rim arc
-    + [(12.55, -1.9), (11.8, -2.45), (10.9, -3.6), (10.1, -4.5),
-       (9.3, -4.65), (8.4, -4.78)]           # band south edge
-    + [(7.35, -5.05)]                        # crotch into the stem east flank
-    + [(7.12, -5.85), (6.65, -7.1), (6.15, -8.5)]  # stem over coupling wheel
-    + M._arcpts(5.3, -9.55, 0.80, -35, -145, 3)    # south foot cap
-    + [(4.5, -8.55), (4.52, -7.1), (4.70, -5.95)]  # stem west flank
-    + [(4.42, -4.65), (3.45, -4.2)]          # crotch into the arm south edge
-    + [(2.3, -3.98), (1.15, -3.38), (0.42, -2.65)],
-    anchors=((0.0, 0.0, 1.47), (1.1, -2.0, 1.0), (2.5, -2.7, 1.15),
-             (4.0, -3.1, 1.3), (6.4, -3.6, 1.3), (8.45, -3.85, 0.9),
-             (9.4, -3.9, 0.7), (10.3, -3.75, 0.85), (11.0, -2.9, 0.8),
-             (11.4, -2.2, 0.9), (12.05, -0.65, 1.3), (10.2, 0.0, 1.16),
-             (5.8, -5.5, 1.25), (5.55, -7.1, 1.0), (5.35, -8.6, 0.8),
-             (5.3, -9.55, 0.8)))
+    + [(12.55, -1.9), (11.8, -2.45), (10.9, -3.6), (10.15, -4.55),
+       (9.2, -4.9), (8.15, -5.2), (7.35, -5.75), (6.85, -6.6),
+       (6.5, -7.6), (6.3, -8.6)]             # filled south edge into the stem
+    + M._arcpts(5.3, -9.55, 0.85, -30, -150, 3)    # south foot cap
+    + [(4.42, -8.5), (4.35, -7.0), (4.3, -5.9), (3.88, -5.22)]  # west flank
+    + [(3.3, -4.5), (2.4, -4.1), (1.35, -3.6), (0.55, -2.85)],  # runner sweep
+    anchors=((0.0, 0.0, 1.55), (1.6, -2.3, 1.1), (2.9, -2.9, 1.2),
+             (4.3, -3.3, 1.4), (6.1, -3.7, 1.5), (7.9, -4.1, 1.1),
+             (9.3, -4.0, 0.85), (10.3, -3.75, 0.85), (11.0, -2.9, 0.8),
+             (11.4, -2.2, 0.9), (12.05, -0.65, 1.3), (10.2, 0.0, 1.18),
+             (5.6, -6.2, 1.3), (5.4, -7.7, 1.1), (5.3, -9.55, 0.8)))
+#: Round window (x, y, r) cut over the coupling wheel: hub, spokes and blued
+#: retaining screw (head top 3.60, 0.08 under the plate) visible through it.
+CHRONO_BRIDGE_WINDOWS = ((5.6, -4.6, 1.15),)
 #: Blued bridge screws (sink flare r0.85 + 0.22 bevel fit inside the local
-#: lobe at each spot; shanks stay short — everything below is under an
+#: plate at each spot; shanks stay short — everything below is under an
 #: opaque plate hovering 0.02 above the hammer plane).
-CHRONO_BRIDGE_SCREWS = ((11.95, -0.7), (5.8, -5.5), (4.0, -3.1))
+CHRONO_BRIDGE_SCREWS = ((11.95, -0.7), (5.55, -7.2), (3.6, -3.3))
 #: Full-height turned feet: (x, y, r, base_z) — welded 0.02 into the plate.
 CHRONO_BRIDGE_FEET = ((12.75, -1.05, 0.35, 0.01), (5.3, -9.55, 0.60, 0.01))
 
@@ -809,6 +811,7 @@ def _chrono_bridge_parts():
     body, shadow, ribbon = M._bridge(
         CHRONO_BRIDGE_OUTLINE, z0, z1,
         [(0.0, 0.0), (MRX, MRY)], CHRONO_BRIDGE_SCREWS,
+        cutouts=CHRONO_BRIDGE_WINDOWS,
         jewel_sink_kw=_CHRONO_SINK_KW)
     # full-height turned feet through wheel-free plate (bottom face of the
     # plate is un-beveled, so the 0.02 weld overlap fuses cleanly)

@@ -10,8 +10,11 @@ Anatomy (matched to Speedmaster-professional macro references):
   by a crisp step; three registers sunk 0.5 below the surface behind a bright
   45-degree chamfered rim step, each floored by a slightly darker snailed disc
   (the classic tri-compax depth read)
-- applied hour indices: raised white frames with inset lume bars, doubled
-  baton at 12 with two lume dots outboard on the track ring
+- applied hour indices: polished-steel picture-frame batons — 45-degree
+  chamfered outer top edges and an inner bevel falling into the pocket, both
+  built constructively with tapered extrudes — around a recessed off-white
+  lume fill (lume top 0.05 below the frame rim); doubled baton at 12 with two
+  lume dots outboard on the track ring
 - printed minute track: 60 minute ticks + 4 fine subdivisions between each
   (300 ticks, exact 1.2 degree pitch)
 - printed register tracks + numerals (30-min: 10/20/30, 12-h: 3/6/9/12,
@@ -69,6 +72,20 @@ INDEX_R_MID = (INDEX_R_IN + INDEX_R_OUT) / 2.0
 INDEX_LEN = INDEX_R_OUT - INDEX_R_IN
 INDEX_RAISE = 0.18                      # applied-index relief height
 INDEX_EMBED = 0.06
+INDEX_CHAMFER = 0.08                    # 45-deg bevel on the frame's outer top edges
+INDEX_RIM_BEVEL = 0.05                  # 45-deg inner bevel falling into the lume pocket
+INDEX_LUME_DROP = 0.05                  # lume fill sits this far below the frame rim
+
+# inline PBR override for polished dial furniture (frames + steel hands).
+# These labels deliberately do NOT match any _materials rule so this inline
+# cad_material survives _materials.apply() (rules would otherwise repaint
+# them matte/painted).
+POLISHED_FURNITURE = {
+    "roughness": 0.10,
+    "metalness": 0.95,
+    "clearcoat": 0.2,
+    "clearcoatRoughness": 0.08,
+}
 
 # registers: role -> center in watch frame
 REGISTERS = {
@@ -195,16 +212,35 @@ def build_indices():
         frame_in.append(loc * Rectangle(0.49, INDEX_LEN - 0.38))
         lume_in.append(loc * Rectangle(0.43, INDEX_LEN - 0.44))
 
-    frame_sk = _fuse(frame_out) - _fuse(frame_in)
-    frames = Pos(0, 0, DIAL_TOP - INDEX_EMBED) * extrude(
-        frame_sk, INDEX_EMBED + INDEX_RAISE
+    # polished-steel picture-frame batons, bevels built constructively:
+    # - straight prism up to (rim - chamfer)
+    # - tapered cap extrude (+45 deg shrinks) = chamfered outer top edges
+    # - tapered cavity cutter (-45 deg flares) = inner bevel into the pocket
+    # leaving a narrow flat top land between two light-catching facets
+    z0 = DIAL_TOP - INDEX_EMBED
+    rim = DIAL_TOP + INDEX_RAISE
+    outer_sk = _fuse(frame_out)
+    inner_sk = _fuse(frame_in)
+    body = Pos(0, 0, z0) * extrude(
+        outer_sk, INDEX_EMBED + INDEX_RAISE - INDEX_CHAMFER
     )
-    frames.label = "index_frames"
-    frames.color = Color(*S.DIAL_PRINT)
+    cap = Pos(0, 0, rim - INDEX_CHAMFER) * extrude(
+        outer_sk, INDEX_CHAMFER, taper=45
+    )
+    pocket = Pos(0, 0, z0 - 0.1) * extrude(
+        inner_sk, INDEX_EMBED + INDEX_RAISE + 0.2
+    )
+    rim_bevel = Pos(0, 0, rim - INDEX_RIM_BEVEL) * extrude(
+        inner_sk, INDEX_RIM_BEVEL + 0.05, taper=-45
+    )
+    frames = (body + cap) - [pocket, rim_bevel]
+    frames.label = "index_frame:batons"
+    frames.color = Color(*S.STEEL_BRIGHT)
+    frames.cad_material = dict(POLISHED_FURNITURE)
 
     lume_sk = _fuse(lume_in)
-    lume = Pos(0, 0, DIAL_TOP - INDEX_EMBED) * extrude(
-        lume_sk, INDEX_EMBED + INDEX_RAISE - 0.02
+    lume = Pos(0, 0, z0) * extrude(
+        lume_sk, INDEX_EMBED + INDEX_RAISE - INDEX_LUME_DROP
     )
 
     # two lume dots outboard of the doubled 12 baton, on the track ring
@@ -325,8 +361,12 @@ def build_hands():
     hour_window = Pos(0, 7.1) * Rectangle(0.52, 5.4)     # y 4.4..9.8
     hour = _faceted_blade(hour_plan - hour_window, 0.75, 0.22, 8.45)
     hour = Rot(0, 0, -HOUR_ANGLE) * hour
-    hour.label = "hand:hour"
-    hour.color = Color(*S.DIAL_PRINT)
+    # polished-steel blade: the facet ridge splits it into two mirror bevels
+    # and the through-cut lume window leaves raised rails either side of the
+    # recessed fill (rail tops ~0.14 above base vs 0.10 lume)
+    hour.label = "hand_polished:hour"
+    hour.color = Color(*S.STEEL_BRIGHT)
+    hour.cad_material = dict(POLISHED_FURNITURE)
 
     hour_lume = Pos(0, 0, 8.45) * extrude(Pos(0, 7.1) * Rectangle(0.46, 5.34), 0.10)
     hour_lume = Rot(0, 0, -HOUR_ANGLE) * hour_lume
@@ -350,8 +390,9 @@ def build_hands():
     minute_window = Pos(0, 9.6) * Rectangle(0.38, 8.4)   # y 5.4..13.8
     minute = _faceted_blade(minute_plan - minute_window, 0.65, 0.20, 8.73)
     minute = Rot(0, 0, -MINUTE_ANGLE) * minute
-    minute.label = "hand:minute"
-    minute.color = Color(*S.DIAL_PRINT)
+    minute.label = "hand_polished:minute"
+    minute.color = Color(*S.STEEL_BRIGHT)
+    minute.cad_material = dict(POLISHED_FURNITURE)
 
     minute_lume = Pos(0, 0, 8.73) * extrude(
         Pos(0, 9.6) * Rectangle(0.32, 8.34), 0.08

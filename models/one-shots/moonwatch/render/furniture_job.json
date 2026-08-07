@@ -1,0 +1,13 @@
+{
+  "input": "dial.step.py",
+  "mode": "view",
+  "appearance": "render/presentation_theme.json",
+  "display": { "mode": "rendered" },
+  "outputs": [
+    { "path": "/tmp/moonwatch/furniture_dial_on.png", "camera": { "position": [0, 0, 60], "target": [0, 0, 8.2] }, "sizeProfile": "presentation-large" },
+    { "path": "/tmp/moonwatch/furniture_three_quarter.png", "camera": { "position": [18, -30, 30], "target": [0, 0, 8.2] }, "sizeProfile": "presentation-large" },
+    { "path": "/tmp/moonwatch/furniture_index_macro.png", "camera": { "position": [4, 5.5, 16], "target": [0.3, 14.4, 8.35], "zoom": 1.0 }, "sizeProfile": "presentation-large" },
+    { "path": "/tmp/moonwatch/furniture_hands_macro.png", "camera": { "position": [9, -13, 19], "target": [-1.5, 2.5, 8.7], "zoom": 1.0 }, "sizeProfile": "presentation-large" }
+  ],
+  "render": { "padding": 0.08 }
+}

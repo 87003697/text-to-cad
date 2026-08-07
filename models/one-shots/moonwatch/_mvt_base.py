@@ -239,38 +239,54 @@ class _Outline:
 BRIDGE_SEAT_Z = S.BRIDGE_SEAT_Z          # 1.8
 BRIDGE_TOP_Z = S.BRIDGE_SEAT_Z + S.BRIDGE_THICKNESS  # 2.85
 
-#: Barrel bridge: broad kidney — the rim arc sweeps the north half, then
-#: ONE long S lower edge runs east from the west flank under the brake
-#: studs, over the train-bridge center finger, under the click and the
-#: column-wheel seat, out to the east rim corner.
+#: Barrel bridge: broad kidney plate — the rim arc sweeps the north half,
+#: then ONE long S lower edge runs east from the west flank under the brake
+#: studs, over the train-bridge center finger, dips SOUTH under the click,
+#: the column-wheel seat and the minute-recorder head (the plate owns the
+#: whole winding quadrant down to y ~ 1.3), out to the east rim corner.
 BARREL_BRIDGE_OUTLINE = _Outline(
     _arcpts(0, 0, 12.80, 3, 143, 10) + [
         (-9.85, 6.55),          # rounded west rim corner (loft validity)
         (-9.4, 5.9), (-7.9, 4.35), (-6.4, 3.1), (-4.9, 1.9), (-2.9, 1.55),
-        (-0.7, 2.0), (1.2, 2.25), (3.2, 2.35), (5.4, 2.15), (7.6, 1.95),
-        (9.6, 1.85), (11.42, 2.3), (12.38, 1.5),
+        (-0.7, 2.0), (1.2, 2.25), (3.2, 2.35),
+        (4.6, 1.70), (6.2, 1.38), (7.8, 1.30), (9.3, 1.40), (10.4, 1.62),
+        (11.42, 2.3), (12.38, 1.5),
         (12.62, 1.05)],         # rounded east rim corner
     anchors=((-1.6, 8.0, 6.0), (6.9, 8.3, 3.9), (4.3, 4.1, 2.6),
-             (10.6, 4.2, 3.4), (9.2, 6.6, 3.0)))
-#: Train bridge: a crab — body on the west rim (north lobe at the fourth
-#: screw, foot lobe at the south screw), one finger tapering through the
-#: third boss to the center jewel, one shorter finger to the escape jewel;
-#: waists between bosses run ~55-65% of the boss diameters.
+             (10.6, 4.2, 3.4), (9.2, 6.6, 3.0), (5.3, 2.6, 1.2),
+             (7.6, 2.5, 1.1), (9.6, 2.7, 1.2)))
+#: Shallow machined pockets (x, y, r, depth) in the barrel bridge top: the
+#: snailed ratchet wheel nests in a circular moat opening (rim r 5.20 around
+#: the r 5.0 wheel) and the crown wheel sits in a scalloped notch (r 3.30
+#: around the r 3.2 wheel). The two pockets merge into one figure-8
+#: winding-works recess and both breach the rim edge — the "purposeful
+#: cutout around each wheel" read of the reference; rims carry the same
+#: 45-deg bevel + polished ribbon as the outline edges.
+BARREL_BRIDGE_RECESSES = ((-1.6, 8.0, 5.20, 0.30), (6.9, 8.3, 3.30, 0.22))
+#: Train bridge: a broad crab PLATE — wide body on the west rim, one wide
+#: finger sweeping through the third boss to the center jewel with its south
+#: edge scalloped around the balance (bulged out at the timing-screw
+#: azimuths, dipping between them), one wide finger to the escape jewel; a
+#: round window between the bosses reveals the third/fourth wheel teeth.
 TRAIN_BRIDGE_OUTLINE = _Outline(
-    [(-11.45, 3.55), (-10.25, 3.45), (-9.55, 2.6), (-8.8, 1.2),
-     (-8.55, -0.25), (-7.85, -0.62), (-7.0, -0.8), (-5.4, -1.02),
-     (-4.3, -0.35), (-3.5, 0.2), (-2.65, 0.6), (-1.5, 0.85)]
-    + _arcpts(0, 0, 1.68, 110, -100, 6)
-    + [(-2.4, -2.4), (-3.3, -3.25), (-4.0, -4.05), (-5.6, -4.8)]
-    + _arcpts(-7.6, -5.2, 1.68, 32, -150, 4)
-    + [(-9.9, -5.45), (-10.9, -5.6)]
-    + _arcpts(0, 0, 12.80, 206, 168, 3),
-    anchors=((0.0, 0.0, 1.7), (-2.7, -0.9, 1.6), (-5.0, -2.6, 1.8),
-             (-6.4, -3.9, 1.3), (-7.6, -5.2, 1.75), (-10.2, 0.0, 1.9),
-             (-11.0, 2.3, 1.7), (-11.2, -4.4, 1.7), (-9.7, -4.3, 1.4),
-             (-12.2, -1.5, 1.3)))
-#: Circles SUBTRACTED from the train-bridge outline (wheel-reveal cutout).
-TRAIN_BRIDGE_CUTOUTS = ((-8.9, -2.4, 1.0),)
+    [(-11.6, 3.6), (-10.4, 3.45), (-9.4, 2.6), (-8.7, 1.7), (-8.3, 1.05),
+     (-7.2, 1.1), (-5.9, 1.0), (-4.6, 0.75), (-3.4, 0.5),
+     (-2.5, 0.7), (-1.6, 1.0)]
+    + _arcpts(0, 0, 1.68, 112, -100, 6)
+    + [(-1.2, -2.2),
+       _on(-0.4, -7.6, 5.42, 112.0), _on(-0.4, -7.6, 5.42, 123.75),
+       _on(-0.4, -7.6, 5.00, 135.0), _on(-0.4, -7.6, 5.52, 146.25)]
+    + _arcpts(-7.6, -5.2, 1.78, 20, -150, 5)
+    + [(-9.9, -5.7), (-10.9, -5.8)]
+    + _arcpts(0, 0, 12.80, 208, 164, 4),
+    anchors=((0.0, 0.0, 1.7), (-2.2, -1.1, 1.7), (-3.6, -1.9, 1.9),
+             (-5.0, -2.6, 2.1), (-6.5, -3.6, 1.9), (-7.6, -5.2, 1.8),
+             (-6.0, 0.1, 1.3), (-7.4, 0.1, 1.4), (-8.85, -2.55, 1.7),
+             (-10.2, 0.0, 2.0), (-10.5, 2.2, 1.7), (-11.0, -4.4, 1.8),
+             (-9.7, -4.4, 1.5), (-12.2, -1.5, 1.4), (-9.4, 1.6, 1.2)))
+#: Circles SUBTRACTED from the train-bridge outline (wheel-reveal window
+#: over the third/fourth wheel teeth; rim gets the bevel + ribbon).
+TRAIN_BRIDGE_CUTOUTS = ((-8.85, -2.55, 1.25),)
 #: Pallet bridge (z PALLET_BRIDGE_Z): small waisted cock, jewel head to
 #: screwed foot.
 PALLET_BRIDGE_OUTLINE = _Outline(
@@ -301,10 +317,13 @@ COCK_SHOCK_TOP_Z = 3.4                   # lyre-spring shock setting apex
 #: Four screws shifted <= 0.4 from the round-1 spots so the smooth outlines'
 #: necks and rim arcs keep full sink coverage (the old barrel:left spot was
 #: 0.58 OUTSIDE its circle-chain outline — the screw floated off the edge).
+#: barrel:top moved to the west wing: its old (1.6, 11.3) spot is inside the
+#: ratchet moat recess AND under the r 5.0 ratchet wheel — the proud head
+#: (top 2.91) clipped the wheel web (bottom 2.88) by 0.03, probe-caught.
 BRIDGE_SCREW_POSITIONS = {
     "barrel_bridge:left": (-7.65, 9.59),
     "barrel_bridge:right": (11.2, 3.4),
-    "barrel_bridge:top": (1.6, 11.3),
+    "barrel_bridge:top": (-8.9, 7.4),
     "train_bridge:foot": (-11.03, -4.26),
     "train_bridge:fourth": (-11.2, 2.15),
     "train_bridge:center": (-2.75, -0.95),
@@ -603,10 +622,17 @@ def _cap(outline, z1, w):
                  Pos(0, 0, z1) * outline.face(-w)], ruled=True)
 
 
-def _bridge(outline, z0, z1, jewel_xy, screw_xy, cutouts=(),
+def _bridge(outline, z0, z1, jewel_xy, screw_xy, cutouts=(), recesses=(),
             extra_cuts=(), stripe=True, boss_xy=(), jewel_sink_kw=None,
             boss_sink_kw=None):
     """Returns (bridge_body, stripe_shadow_or_None, anglage_ribbon_or_None).
+    `recesses` — (x, y, r, depth) shallow machined pockets in the top face
+    (wheel seats / winding moats): full circular rim with the same 45-deg
+    bevel + polished ribbon as the through-cutouts, but the floor stays at
+    z1 - depth so the plate below keeps carrying its bores and jewels.
+    Pockets may overlap each other (merged figure-8 moat) and may breach the
+    outer wall (scalloped notch): ribbons are clipped to the plan silhouette
+    and carved by sibling pockets so nothing floats in a void.
     The anglage ribbon is a ~0.03-thick polished skin over the 45-deg bevel
     loop (outline + wheel-reveal rims). The stripe shadow is a
     0.035 skin over every SECOND stripe band (COPPER_GOLD_DEEP two-tone
@@ -632,6 +658,14 @@ def _bridge(outline, z0, z1, jewel_xy, screw_xy, cutouts=(),
         cuts.append(Pos(x, y, 0) * (
             _cyl(r, z1 - z0 + 1.0, z0 - 0.5)
             + Pos(0, 0, z1 - bevel_w / 2) * Cone(r, r + bevel_w, bevel_w)))
+    recess_tools = []
+    for x, y, r, d in recesses:
+        # shallow machined pocket: floor at z1 - d, beveled rim like a cutout
+        tool = Pos(x, y, 0) * (
+            _cyl(r, d + 1.0, z1 - d)
+            + Pos(0, 0, z1 - bevel_w / 2) * Cone(r, r + bevel_w, bevel_w))
+        recess_tools.append(tool)
+        cuts.append(tool)
     for x, y in jewel_xy:
         cuts.append(Pos(x, y, z1) * _sink_tool(**(jewel_sink_kw or {})))
     for x, y in boss_xy:
@@ -658,6 +692,10 @@ def _bridge(outline, z0, z1, jewel_xy, screw_xy, cutouts=(),
         m = bevel_w + 0.02
         inset = outline.face(-m)
         for x, y, r in cutouts:
+            inset = inset - Pos(x, y) * Circle(r + m)
+        for x, y, r, _d in recesses:
+            # keep the grooves off the pocket rim bevel AND the pocket floor
+            # (the 0.4 V's are deeper than the shallow floors)
             inset = inset - Pos(x, y) * Circle(r + m)
         for x, y in boss_xy:
             inset = inset - Pos(x, y) * Circle(_BOSS_R + 0.05)
@@ -721,6 +759,22 @@ def _bridge(outline, z0, z1, jewel_xy, screw_xy, cutouts=(),
         ribs.append(Pos(x, y, z1 - bevel_w / 2) * (
             Cone(r, r + bevel_w, bevel_w)
             - Cone(r - rib_d, r + bevel_w - rib_d, bevel_w)))
+    if recesses:
+        # pocket-rim ribbons: same shell-in-the-void construction as the
+        # cutout rims, but clipped to the plan silhouette (a pocket may
+        # breach the outer wall) and carved by sibling pockets (merged
+        # moats) so no ribbon arc floats over open air
+        prism = Pos(0, 0, z1 - bevel_w - 0.2) * extrude(
+            outline.face(-bevel_w), amount=bevel_w + 0.4)
+        for i, (x, y, r, d) in enumerate(recesses):
+            ring = Pos(x, y, z1 - bevel_w / 2) * (
+                Cone(r, r + bevel_w, bevel_w)
+                - Cone(r - rib_d, r + bevel_w - rib_d, bevel_w))
+            ring = ring & prism
+            others = [t for j, t in enumerate(recess_tools) if j != i]
+            if others:
+                ring = ring - others
+            ribs.append(ring)
     ribbon = [s for shp in ribs for s in shp.solids()
               if s.volume > 1e-4] or None
     return body - cuts, shadow, ribbon
@@ -935,6 +989,7 @@ def _bridge_parts():
                             [BRIDGE_SCREW_POSITIONS["barrel_bridge:left"],
                              BRIDGE_SCREW_POSITIONS["barrel_bridge:right"],
                              BRIDGE_SCREW_POSITIONS["barrel_bridge:top"]],
+                            recesses=BARREL_BRIDGE_RECESSES,
                             extra_cuts=extra,
                             jewel_sink_kw=dict(cone_r=1.30, wall_r=1.06,
                                                cone_z=0.20, seat_z=0.55,
