@@ -8,12 +8,12 @@
     "saturation": 1.1,
     "contrast": 1.12,
     "brightness": 0.99,
-    "roughness": 0.3,
-    "metalness": 0.52,
-    "clearcoat": 0.52,
+    "roughness": 0.26,
+    "metalness": 0.62,
+    "clearcoat": 0.35,
     "clearcoatRoughness": 0.13,
     "opacity": 1,
-    "envMapIntensity": 1.35,
+    "envMapIntensity": 1.7,
     "emissiveIntensity": 0.02,
     "defaultColor": "#c9c2bb",
     "fillColors": [
@@ -58,13 +58,13 @@
   },
   "environment": {
     "enabled": true,
-    "presetId": "studio-hdri-43",
-    "intensity": 0.78,
+    "presetId": "studio-hdri-17",
+    "intensity": 1.0,
     "rotationY": -0.35,
     "useAsBackground": false
   },
   "lighting": {
-    "toneMappingExposure": 1.0,
+    "toneMappingExposure": 0.92,
     "directional": {
       "enabled": true,
       "color": "#fff3e4",

@@ -2,8 +2,9 @@
 
 Case middle with twisted lyre lugs and asymmetric crown guard, tachymeter
 bezel (steel ring + black insert + filled scale), hesalite-style domed
-crystal, display caseback (sapphire + retaining ring), crown, pushers with
-tubes and coil springs, gaskets, and spring bars.
+crystal, display caseback (sapphire + retaining ring), crown, pump pushers
+(machined case bosses, slender collared tubes, short domed caps, coil
+springs), gaskets, and spring bars.
 
 Frame: WATCH frame per `_spec` — z = 0 at the case-middle / caseback joint
 plane, +Z through the crystal, crown at +X.  All `build_*` functions return
@@ -90,10 +91,11 @@ FLANK_RING_REACH = 0.45         # radial overshoot into air outside the wall
 # Clip sectors (start_deg, span_deg). Band-centered rings stay out of the
 # four lug quadrants (lugs cross the band radius there — a full ring would
 # tunnel a subsurface void through the lug roots). The guard-centered family
-# uses angles LOCAL to the guard axis at (4*s, 0): +/-35 deg local stays
-# short of the pushers (+/-42 deg local) and of the band/guard blend seam.
+# uses angles LOCAL to the guard axis at (4*s, 0): +/-27 deg local stays
+# short of the pusher bosses (+/-42 deg local, ~8 deg half-width, so their
+# root edges reach ~34 deg local) and of the band/guard blend seam.
 FLANK_SECTORS_BAND = ((68.0, 44.0), (150.0, 60.0), (248.0, 44.0))
-FLANK_SECTOR_GUARD = (-35.0, 70.0)
+FLANK_SECTOR_GUARD = (-27.0, 54.0)
 
 LUG_HALF_GAP = S.LUG_WIDTH / 2.0                # 10.0 (lug inner faces)
 LUG_TIP_Y = S.LUG_TO_LUG / 2.0                  # 24.0
@@ -214,13 +216,14 @@ def _case_middle_cuts():
     cuts.append(
         Pos(17.0, 0, S.CROWN_Z) * Rot(0, 90, 0) * Cylinder(0.8, 6.0)
     )
-    # pusher tube seats + pin channels at the pusher angles
+    # pusher tube seat bores (drilled through the fused bosses) + pin
+    # channels at the pusher angles
     for ang in S.PUSHER_ANGLES:
         cuts.append(
             Rot(0, 0, ang)
-            * Pos(20.1, 0, S.PUSHER_Z)
+            * Pos(20.5, 0, S.PUSHER_Z)
             * Rot(0, 90, 0)
-            * Cylinder(1.78, 3.4)
+            * Cylinder(1.62, 3.8)
         )
         cuts.append(
             Rot(0, 0, ang)
@@ -259,9 +262,12 @@ def _lug_grain_tools():
         span_x = x_hi - x_lo
         if span_x < GRAIN_PITCH or y2 - y1 < 0.2:
             continue
+        # +0.30 overlap past both segment ends: abutting prisms otherwise
+        # leave a ~0.1 mm unground band at every station (measured) — the
+        # adjacent chord's deviation over 0.15 mm stays within the V margin
         seg_tools = F.straight_grain_cutter(
-            span_x, (y2 - y1) / 1.15, pitch=GRAIN_PITCH, depth=GRAIN_DEPTH,
-            along_x=False,
+            span_x, (y2 - y1 + 0.30) / 1.15, pitch=GRAIN_PITCH,
+            depth=GRAIN_DEPTH, along_x=False,
         )
         tilt = math.degrees(math.atan2(zt2 - zt1, y2 - y1))
         place = Pos((x_lo + x_hi) / 2.0, (y1 + y2) / 2.0, (zt1 + zt2) / 2.0)
@@ -349,11 +355,14 @@ def build_case_middle():
         mirror(lug, about=Plane.XZ),
         mirror(mirror(lug, about=Plane.YZ), about=Plane.XZ),
     ]
-    body = band + lugs
-    # ONE subtract: functional cuts + flank rings + top-shoulder grain
-    body = body - (
-        _case_middle_cuts() + _flank_grain_cuts(band) + _shoulder_grain_tools()
-    )
+    bosses = [_pusher_boss(ang) for ang in S.PUSHER_ANGLES]
+    body = band + (lugs + bosses)
+    # two batched multi-tool subtracts: functional cuts, then the grain
+    # fields.  (One combined BOP is wrong-answer territory: the crown-seat
+    # bore and the flank rings overlap, and OCC leaves the bore plug plus
+    # knife-edge slivers behind as extra solids — measured.)
+    body = body - _case_middle_cuts()
+    body = body - (_flank_grain_cuts(band) + _shoulder_grain_tools())
     body.label = "case_middle"
     body.color = STEEL_C
     return body
@@ -633,44 +642,85 @@ def build_crown_o_ring():
 
 
 # ---------------------------------------------------------------------------
-# Pushers (cap + tube + coil spring + o-ring), local +Z = radially outward
+# Pushers — small turned assemblies seated in machined case bosses.
+# Local frame: +Z = radially outward along the pusher axis (exactly radial
+# through the watch center), origin on the axis at r = _PUSHER_FLANK_R; the
+# guard flank surface sits near local z 0.10.  Stack, inside out: a Ø5.2
+# boss turned on the case band (merged into case_middle, ~1.2 proud of the
+# flank), a slender Ø3.2 barrel with a Ø3.8 collar ring step mid-length,
+# and a short Ø4.4 gently domed pump cap.  Cap apex at local z 4.50 keeps
+# the total protrusion off the flank at ~4.4.  Spring and o-ring hide
+# inside the tube bore.  All revolved profiles — no sphere booleans.
 # ---------------------------------------------------------------------------
 
 _PUSHER_FLANK_R = 21.0   # local origin radius on the guard flank
+_BOSS_R = 2.6            # Ø5.2 machined boss
+_BOSS_FACE = 1.30        # boss face -> ~1.2 proud of the flank
+_TUBE_R = 1.6            # Ø3.2 slender turned barrel
+_COLLAR_R = 1.9          # Ø3.8 collar ring step
+_TUBE_END = 2.90         # barrel end plane
+_CAP_R = 2.2             # Ø4.4 pump-pusher cap (S.PUSHER_DIAMETER is the
+                         # legacy fat-cap envelope; the remodel reads 0.2
+                         # under it so the cap stays slender over the boss)
+_CAP_TIP = 4.50          # domed apex
 
 
 def _pusher_transform(angle_deg: float):
     return Rot(0, 0, angle_deg) * Pos(_PUSHER_FLANK_R, 0, S.PUSHER_Z) * Rot(0, 90, 0)
 
 
+def _pusher_boss(angle_deg: float):
+    """Machined pusher boss: a turned Ø5.2 cylinder emerging from the case
+    flank with a chamfered face rim, fused into case_middle; the tube seat
+    bore is drilled through it afterwards with the other case cuts."""
+    profile = Plane.XZ * Polygon(
+        (0.001, -2.5),
+        (_BOSS_R, -2.5),
+        (_BOSS_R, _BOSS_FACE - 0.25),
+        (_BOSS_R - 0.25, _BOSS_FACE),      # polished face chamfer
+        (0.001, _BOSS_FACE),
+        align=None,
+    )
+    return _pusher_transform(angle_deg) * revolve(profile, Axis.Z)
+
+
 def _pusher_cap_local():
-    head = Pos(0, 0, 4.05) * Cylinder(
-        S.PUSHER_DIAMETER / 2.0, 2.3
-    )
-    sag = 0.5
-    r = S.PUSHER_DIAMETER / 2.0
-    sph_r = (r**2 + sag**2) / (2 * sag)
-    head = head & Pos(0, 0, 5.2 - sph_r) * Sphere(sph_r)
-    base_edges = [e for e in head.edges() if abs(e.bounding_box().min.Z - 2.9) < 1e-3]
-    head, _ = F.safe_chamfer(head, base_edges, 0.3)
-    # crisp turned step: the domed crown sits behind a flat shoulder at
-    # z 4.35 with a vertical land at r 2.08 — the two-tier cap read
-    step = Pos(0, 0, 5.05) * (
-        Cylinder(r + 0.5, 1.4) - Cylinder(2.08, 1.44)
-    )
-    head = head - step
-    rod = Pos(0, 0, 0.75) * Cylinder(0.62, 4.5)
-    return head + rod
+    """Short pump cap: skirt sliding over the barrel, flat turned band, a
+    crisp step ring, and a gently domed top — one revolved profile."""
+    sag = 0.44                              # dome rise over its r 2.0 land
+    dome_r = (2.0**2 + sag**2) / (2 * sag)
+    with BuildSketch(Plane.XZ) as sk:
+        with BuildLine():
+            Line((0.001, -1.6), (0.55, -1.6))      # actuation stem
+            Line((0.55, -1.6), (0.55, 3.10))
+            Line((0.55, 3.10), (1.70, 3.10))       # cavity ceiling
+            Line((1.70, 3.10), (1.70, 2.50))       # skirt inner wall
+            Line((1.70, 2.50), (2.05, 2.50))       # skirt mouth
+            Line((2.05, 2.50), (_CAP_R, 2.65))     # mouth chamfer
+            Line((_CAP_R, 2.65), (_CAP_R, 3.90))   # turned outer band
+            Line((_CAP_R, 3.90), (2.0, 3.90))      # crisp step ring
+            Line((2.0, 3.90), (2.0, 4.06))
+            RadiusArc((2.0, 4.06), (0.001, _CAP_TIP), -dome_r)  # domed top
+            Line((0.001, _CAP_TIP), (0.001, -1.6))
+        make_face()
+    return revolve(sk.sketch, Axis.Z)
 
 
 def _pusher_tube_local():
-    body = Pos(0, 0, 0.05) * Cylinder(1.75, 4.1)
-    # turned collar ring at the case junction: seated into the guard flank
-    # (surface sits near local z 0.13) with a chamfered exposed rim
-    collar = Pos(0, 0, 0.4) * Cylinder(2.10, 1.06)
-    rim = [e for e in collar.edges() if abs(e.bounding_box().max.Z - 0.93) < 1e-3]
-    collar, _ = F.safe_chamfer(collar, rim, 0.12)
-    return body + collar - Pos(0, 0, 0.05) * Cylinder(1.05, 4.5)
+    """Slender turned barrel seated through the case boss, with a chamfered
+    collar ring step mid-length of the exposed run."""
+    profile = Plane.XZ * Polygon(
+        (1.05, -2.0),
+        (_TUBE_R, -2.0),
+        (_TUBE_R, 1.50),
+        (_COLLAR_R, 1.62),                 # collar lower chamfer
+        (_COLLAR_R, 2.00),
+        (_TUBE_R, 2.12),                   # collar upper chamfer
+        (_TUBE_R, _TUBE_END),
+        (1.05, _TUBE_END),
+        align=None,
+    )
+    return revolve(profile, Axis.Z)
 
 
 def _pusher_spring_local():

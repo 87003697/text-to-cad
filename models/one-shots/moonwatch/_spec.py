@@ -29,8 +29,8 @@ Coordinate conventions:
 # neutral grade — the theme does not override source colors).
 # ---------------------------------------------------------------------------
 
-STEEL = (0.670, 0.680, 0.710, 1.0)          # polished/brushed stainless
-STEEL_BRIGHT = (0.820, 0.830, 0.860, 1.0)   # mirror bevels, hands
+STEEL = (0.520, 0.530, 0.560, 1.0)          # polished/brushed stainless
+STEEL_BRIGHT = (0.700, 0.710, 0.740, 1.0)   # mirror bevels, hands
 STEEL_DARK = (0.520, 0.530, 0.555, 1.0)     # recessed steel, springs
 STEEL_LEVER = (0.700, 0.705, 0.720, 1.0)    # straight-grained chrono levers
 COPPER_GOLD = (0.555, 0.305, 0.195, 1.0)    # salmon copper-gold bridges/plate
@@ -47,8 +47,8 @@ BEZEL_FILL = (0.920, 0.920, 0.910, 1.0)     # filled tachymeter engraving
 CRYSTAL = (0.760, 0.800, 0.830, 0.16)       # domed crystal (transparent)
 SAPPHIRE = (0.780, 0.810, 0.850, 0.14)      # display back glass
 GASKET = (0.080, 0.080, 0.085, 1.0)         # black nitrile
-BRACELET_OUTER = (0.500, 0.515, 0.555, 1.0) # brushed outer links (darker)
-BRACELET_CENTER = (0.840, 0.850, 0.880, 1.0)  # polished center links
+BRACELET_OUTER = (0.430, 0.445, 0.480, 1.0) # brushed outer links (darker)
+BRACELET_CENTER = (0.660, 0.670, 0.700, 1.0)  # polished center links
 BRASS_MOVEMENT = (0.700, 0.560, 0.330, 1.0) # unplated brass small parts
 
 # ---------------------------------------------------------------------------

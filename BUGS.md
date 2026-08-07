@@ -344,3 +344,28 @@ helpers at documented datums.
 - **Blocked:** ~15 min (bands present in `inspect validate` count yet
   invisible; traced via descriptor + volume probes). **Fixed:** in model
   source.
+
+## OCC multi-tool subtract with overlapping bore + ring tools leaves junk solids
+
+- **Where found:** `models/one-shots/moonwatch/_case.py` case-middle
+  finishing (2026-08-06): one batched `body - (functional_cuts +
+  flank_ring_cutters + grain_tools)` where the crown-tube seat bore
+  cylinder overlaps a stack of thin circumferential V-ring cutters.
+- **Symptom:** the single multi-tool `BRepAlgoAPI_Cut` returns a ShapeList
+  of 5 solids instead of one: the main body, the crown-seat bore PLUG
+  (volume ~18 mm^3 — material the bore tool should have removed, kept as a
+  detached solid), and knife-edge slivers of the guard wall between
+  adjacent ring cutters (~0.01 mm^3, detached skins). Every individual
+  tool is a valid positive-volume solid; subtracting the same tools in two
+  stages (functional cuts, then ring/grain cuts) yields one clean solid.
+- **Workaround (adopted):** split heavily overlapping tool families into
+  separate batched subtracts — still list-based multi-tool booleans, never
+  pairwise accumulation. Downstream `Compound(children=...)` also fails
+  loudly on the ShapeList ("not a subclass of NodeMixin"), which is how it
+  surfaced.
+- **Suggestion:** the "booleans over many tools: ONE operation" guidance
+  needs a caveat: when tools overlap each other (a bore crossing a stack of
+  near-tangent finishing cutters), OCC's multi-tool cut can emit wrong
+  results; group tools so each batch is internally disjoint-ish.
+- **Blocked:** ~20 min (typed probes per builder, then staged-subtract
+  bisection). **Fixed:** in model source (two-stage subtract).
