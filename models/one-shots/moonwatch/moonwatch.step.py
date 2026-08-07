@@ -76,4 +76,4 @@ def gen_step():
 
     compound = Compound(children=children, label="moonwatch")
     _materials.apply(compound)
-    return compound
+    return {"shape": compound, "params": "moonwatch.params.js"}
