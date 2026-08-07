@@ -294,13 +294,7 @@ export function applyPartVisualState(THREE, records, {
     record.material.opacity = nextSurfaceOpacity;
 
     if (record.baseColor && record.material.color) {
-      record.material.color.copy(
-        isSelected
-          ? selectedSurfaceColor
-          : isHovered
-            ? hoveredSurfaceColor
-            : effectColor || record.baseColor
-      );
+      record.material.color.copy(highlightSurface || effectColor || record.baseColor);
     }
 
     if ("emissive" in record.material && record.material.emissive) {
@@ -325,11 +319,7 @@ export function applyPartVisualState(THREE, records, {
       }
     }
 
-    const nextEdgeColor = isSelected
-      ? selectedEdgeColor
-      : isHovered
-        ? hoveredEdgeColor
-        : effectEdgeColor || baseEdgeColor;
+    const nextEdgeColor = highlightEdge || effectEdgeColor || baseEdgeColor;
     syncCadSurfaceEdgeHighlight(THREE, record, nextEdgeColor, highlightedEdgeOpacity);
 
     if (record.edgeMaterial) {
