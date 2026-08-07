@@ -6,6 +6,7 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
 
 MODE="write"
 CLEAN=0
+PRINT_OUTPUTS=0
 PACKAGE_DIR="$REPO_ROOT/packages/cadpy_metadata"
 RUNTIME_DIR="$REPO_ROOT/skills/srdf/scripts/packages/cadpy_metadata"
 
@@ -19,6 +20,8 @@ Vendors packages/cadpy_metadata into skills/srdf/scripts/packages/cadpy_metadata
 Options:
   --check  Fail if the generated SRDF skill runtime copy is stale.
   --clean  Remove the generated runtime copy before writing it.
+  --print-outputs
+           Print the repo-relative generated output paths, then exit.
   -h, --help
            Show this help.
 EOF
@@ -32,6 +35,9 @@ while [ "$#" -gt 0 ]; do
     --clean)
       CLEAN=1
       ;;
+    --print-outputs)
+      PRINT_OUTPUTS=1
+      ;;
     -h|--help)
       usage
       exit 0
@@ -44,6 +50,11 @@ while [ "$#" -gt 0 ]; do
   esac
   shift
 done
+
+if [ "$PRINT_OUTPUTS" -eq 1 ]; then
+  printf '%s\n' "${RUNTIME_DIR#"$REPO_ROOT"/}"
+  exit 0
+fi
 
 if [ ! -f "$PACKAGE_DIR/pyproject.toml" ] || [ ! -d "$PACKAGE_DIR/src/cadpy_metadata" ]; then
   echo "Missing cadpy_metadata package source: $PACKAGE_DIR" >&2
