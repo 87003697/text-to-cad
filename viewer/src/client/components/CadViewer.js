@@ -141,7 +141,7 @@ import {
   THEME_FLOOR_MODES
 } from "cadjs/lib/themeSettings";
 import ViewPlaneControl from "./viewer/ViewPlaneControl";
-import MeasureChipLayer from "./viewer/MeasureChipLayer";
+import MeasurePanel from "./viewer/MeasurePanel";
 import { useViewerDrawingOverlay } from "./viewer/hooks/useViewerDrawingOverlay";
 import { useViewerMeasureOverlay } from "./viewer/hooks/useViewerMeasureOverlay";
 import { useViewerPicking } from "./viewer/hooks/useViewerPicking";
@@ -2096,7 +2096,10 @@ const CadViewer = forwardRef(function CadViewer({
   onMeasurePick,
   onMeasureHoverPoint,
   onMeasureDelete,
+  onMeasureActivate = null,
+  activeMeasurementId = "",
   measureState = null,
+  measureModeActive = false,
   onViewerAlertChange,
   onStepModuleTransformDetectedChange,
   urdfPosePicker = null
@@ -2165,7 +2168,6 @@ const CadViewer = forwardRef(function CadViewer({
   const [cameraZoomPercent, setCameraZoomPercent] = useState(100);
   const [urdfPosePickerGuidePoint, setUrdfPosePickerGuidePoint] = useState(null);
   const [urdfPosePickerHoverActive, setUrdfPosePickerHoverActive] = useState(false);
-  const [measureChips, setMeasureChips] = useState([]);
   const activeViewPlaneFaceRef = useRef("");
   const defaultPerspectiveResettingRef = useRef(false);
   const previewModeRef = useRef(previewMode);
@@ -4538,6 +4540,11 @@ const CadViewer = forwardRef(function CadViewer({
     const hoveredLineWidth = selectedLineWidth;
     const highlightEdgeColor = getHighlightEdgeColor(displayEdgeSettings);
     const highlightEdgeOpacity = getHighlightEdgeOpacity(displayEdgeSettings);
+    // In measure mode the snapped topology still needs a visible target, but the
+    // full-strength face fill would compete with the amber/cyan annotations.
+    const measureHoverHighlightOpacity = measureModeActive
+      ? Math.max(0.08, highlightEdgeOpacity * 0.35)
+      : highlightEdgeOpacity;
 
     const highlightReferenceStates = new Map();
     const runtimeReferences = Array.isArray(activeSelectorRuntime?.references)
@@ -4647,7 +4654,7 @@ const CadViewer = forwardRef(function CadViewer({
         const lineWidth = isHovered ? hoveredLineWidth : selectedLineWidth;
         const line = createScreenSpaceLineSegments(runtime, linePositions, {
           color: highlightColor,
-          opacity: highlightEdgeOpacity,
+          opacity: isHovered ? measureHoverHighlightOpacity : highlightEdgeOpacity,
           lineWidth,
           renderOrder: 26,
           depthTest: selectorType !== "edge",
@@ -4663,7 +4670,7 @@ const CadViewer = forwardRef(function CadViewer({
         const fillGeometry = buildFaceFillGeometryFromDisplayMeshes(runtime, THREE, topologyReference) ||
           buildFaceFillGeometryFromProxy(runtime, THREE, activeSelectorRuntime, topologyReference);
         if (fillGeometry) {
-          const fillOpacity = highlightEdgeOpacity;
+          const fillOpacity = isHovered ? measureHoverHighlightOpacity : highlightEdgeOpacity;
           const fillMaterial = new THREE.MeshBasicMaterial({
             color: highlightColor,
             transparent: fillOpacity < 0.999,
@@ -4691,7 +4698,7 @@ const CadViewer = forwardRef(function CadViewer({
       clearOverlayGroup(runtime, highlightGroup);
       clearOverlayGroup(runtime, faceFillGroup);
     };
-  }, [activeSelectorRuntime, hoveredReferenceId, pickableReferenceMap, selectedReferenceIds, viewerReadyTick, viewerTheme, displayEdgeSettings]);
+  }, [activeSelectorRuntime, hoveredReferenceId, pickableReferenceMap, selectedReferenceIds, viewerReadyTick, viewerTheme, displayEdgeSettings, measureModeActive]);
 
   useViewerDrawingOverlay({
     drawingCanvasRef,
@@ -4721,7 +4728,7 @@ const CadViewer = forwardRef(function CadViewer({
   useViewerMeasureOverlay({
     measureCanvasRef,
     measureState,
-    onMeasureChipsChange: setMeasureChips,
+    activeMeasurementId,
     runtimeRef,
     mountRef,
     previewMode,
@@ -4769,7 +4776,14 @@ const CadViewer = forwardRef(function CadViewer({
         aria-hidden="true"
       />
       {!previewMode ? (
-        <MeasureChipLayer chips={measureChips} onDelete={onMeasureDelete} />
+        <MeasurePanel
+          measurements={measureState?.measurements || []}
+          activeId={activeMeasurementId}
+          onActivate={onMeasureActivate}
+          onDelete={onMeasureDelete}
+          measureModeActive={measureModeActive}
+          visible={measureModeActive || (measureState?.measurements?.length || 0) > 0}
+        />
       ) : null}
       <canvas
         ref={drawingCanvasRef}

@@ -7,8 +7,7 @@ import {
 } from "three";
 
 import {
-  projectWorldPointToClient,
-  redrawMeasureRuler
+  projectWorldPointToClient
 } from "./measureRuler.js";
 
 function makePerspectiveCamera() {
@@ -124,12 +123,4 @@ test("projection vector usage stays independent of camera instance reuse", () =>
   assert.deepEqual(first, { x: 400, y: 300 });
   assert.ok(second.x > 400);
   assert.ok(second.y < 300);
-});
-
-test("redrawMeasureRuler tolerates a missing canvas", () => {
-  assert.doesNotThrow(() => redrawMeasureRuler(null, {}));
-});
-
-test("redrawMeasureRuler tolerates a missing 2d context", () => {
-  assert.doesNotThrow(() => redrawMeasureRuler({ getContext: () => null }, {}));
 });

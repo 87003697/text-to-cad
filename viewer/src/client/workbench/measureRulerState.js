@@ -81,8 +81,14 @@ export function measureRulerStateForChange(state, { entryChanged = false, toolAc
   if (!state) {
     return null;
   }
-  if (entryChanged || !toolActive) {
+  if (!toolActive) {
     return null;
+  }
+  if (entryChanged) {
+    return {
+      draft: null,
+      measurements: state.measurements || []
+    };
   }
   return state;
 }

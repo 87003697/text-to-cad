@@ -1095,7 +1095,8 @@ export function useViewerPicking({
 
     function commitHoverState(referenceId) {
       const normalizedReferenceId = referenceId || "";
-      container.style.cursor = normalizedReferenceId ? "pointer" : "";
+      const isMeasureMode = pickModeRef.current === VIEWER_PICK_MODE.MEASURE;
+      container.style.cursor = normalizedReferenceId ? "pointer" : (isMeasureMode ? "crosshair" : "");
       if (hoverState.hoveredReferenceId === normalizedReferenceId) {
         return;
       }

@@ -42,6 +42,7 @@ function DesktopFloatingToolBar({
   drawToolActive,
   measureModeActive = false,
   measureDisabled = false,
+  measureGuidance = "",
   handleSelectTabToolMode,
   displayMode,
   onDisplayModeChange,
@@ -120,6 +121,7 @@ function DesktopFloatingToolBar({
                 onClick={() => handleSelectTabToolMode("measure")}
                 disabled={measureDisabled}
                 aria-pressed={measureModeActive}
+                className={measureModeActive ? "ring-2 ring-amber-400/70" : undefined}
               >
                 <Ruler className="size-3" strokeWidth={2} aria-hidden="true" />
               </ToolbarButton>
@@ -190,6 +192,12 @@ function DesktopFloatingToolBar({
           </ToolbarButton>
         </div>
       </TooltipProvider>
+
+      {measureModeActive && measureGuidance ? (
+        <div className="pointer-events-none rounded-md border border-amber-400/40 bg-slate-950/90 px-2 py-1 text-[10px] font-medium text-amber-200 shadow-sm">
+          {measureGuidance}
+        </div>
+      ) : null}
 
       {!dxfMode && !meshOnlyMode && drawToolActive ? (
         <DrawingToolbar

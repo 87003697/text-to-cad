@@ -348,6 +348,8 @@ export default function CadRenderPane({
   onMeasurePick,
   onMeasureHoverPoint,
   onMeasureDelete,
+  onMeasureActivate = null,
+  activeMeasurementId = "",
   measureState = null,
   measureModeActive = false,
   viewerContextMenu = null,
@@ -598,7 +600,10 @@ export default function CadRenderPane({
           onMeasurePick={onMeasurePick}
           onMeasureHoverPoint={onMeasureHoverPoint}
           onMeasureDelete={onMeasureDelete}
+          onMeasureActivate={onMeasureActivate}
+          activeMeasurementId={activeMeasurementId}
           measureState={measureState}
+          measureModeActive={measureModeActive}
           onViewerAlertChange={handleViewerAlertChange}
           onStepModuleTransformDetectedChange={handleStepModuleTransformDetectedChange}
           urdfPosePicker={urdfPosePicker}

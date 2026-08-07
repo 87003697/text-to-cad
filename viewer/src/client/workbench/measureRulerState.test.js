@@ -141,12 +141,17 @@ test("measure ruler clears when the tool deactivates", () => {
   assert.equal(measureRulerStateForChange(draft, { toolActive: false }), null);
 });
 
-test("measure ruler clears on entry change even while the tool stays active", () => {
+test("measure ruler clears draft on entry change while keeping committed measurements", () => {
   const draft = applyMeasureRulerPick(null, FIRST_PICK);
-  assert.equal(measureRulerStateForChange(draft, { entryChanged: true }), null);
-  assert.equal(
-    measureRulerStateForChange(draft, { entryChanged: true, toolActive: true }),
-    null
+  assert.deepEqual(measureRulerStateForChange(draft, { entryChanged: true }), {
+    draft: null,
+    measurements: []
+  });
+
+  const committed = applyMeasureRulerPick(draft, SECOND_PICK);
+  assert.deepEqual(
+    measureRulerStateForChange(committed, { entryChanged: true, toolActive: true }),
+    { draft: null, measurements: committed.measurements }
   );
 });
 
