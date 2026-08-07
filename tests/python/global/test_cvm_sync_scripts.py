@@ -44,6 +44,8 @@ class CvmSyncContractTests(unittest.TestCase):
             if not line.lstrip().startswith("#")
         )
         self.assertNotIn("--delete", production_lines)
+        self.assertIn("rm -rf -- plugins", module)
+        self.assertIn("test ! -e plugins", module)
         self.assertIn('exec python3 "$SCRIPT_DIR/cvm_push.py" "$@"', wrapper)
         self.assertIn('"Source: "', module)
         self.assertIn('"Remote Git base: ', module)

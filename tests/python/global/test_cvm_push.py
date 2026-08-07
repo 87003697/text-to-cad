@@ -439,6 +439,7 @@ class TransferAndVerifyTests(unittest.TestCase):
 
             workflow.verify_remote(attestation)
             command = runner.remote_commands[0]
+            self.assertIn("test ! -e plugins", command)
             for relative in cvm_push.PRODUCTION_RUNTIME.physical_directories:
                 self.assertIn(f"test ! -L {relative}", command)
             for relative in cvm_push.PRODUCTION_RUNTIME.required_files:
@@ -456,6 +457,19 @@ class TransferAndVerifyTests(unittest.TestCase):
                     )
                 )
             self.assertEqual(error.exception.status, 5)
+
+    def test_legacy_plugin_cleanup_is_strictly_scoped(self) -> None:
+        runner = FakeRunner()
+        workflow = cvm_push.CvmPush(runner, repo_root=REPO_ROOT, environ={})
+
+        workflow.remove_legacy_plugin_tree()
+
+        self.assertEqual(len(runner.remote_commands), 1)
+        command = runner.remote_commands[0]
+        self.assertIn("cd ~/text-to-cad", command)
+        self.assertIn("rm -rf -- plugins", command)
+        self.assertIn("test ! -e plugins", command)
+        self.assertNotIn("--delete", command)
 
 
 class WorkflowTests(unittest.TestCase):
@@ -523,6 +537,7 @@ class WorkflowTests(unittest.TestCase):
                 attestation,
             )[1]
             workflow.transfer_stage = lambda stage: events.append("transfer")
+            workflow.remove_legacy_plugin_tree = lambda: events.append("cleanup-plugin")
             workflow.verify_remote = lambda expected: events.append("verify")
             workflow.remote_git_base = lambda: "remote-head"
 
@@ -541,6 +556,7 @@ class WorkflowTests(unittest.TestCase):
                     "validate",
                     "attest",
                     "transfer",
+                    "cleanup-plugin",
                     "verify",
                 ],
             )
