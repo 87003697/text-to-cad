@@ -208,6 +208,31 @@ function revealStages(r) {
   };
 }
 
+// Grand tour timeline (the 4th clip): reveal opens and dwells with the
+// escapement running, then the movement's tiers fan open showcase-style
+// while the floating face stack rises further to make room; everything
+// mirrors closed again so the loop is seamless.
+//   r — reveal openness (trapezoid: open by 0.20, close from 0.83)
+//   f — gear-tier fan (open 0.45..0.55, closed again by 0.83)
+const TOUR_HEADROOM = 32; // extra face-stack lift while the tiers are open
+function tourStages(t) {
+  return {
+    r: Math.min(stage(t, 0.0, 0.2), stage(1 - t, 0.0, 0.17)),
+    f: Math.min(stage(t, 0.45, 0.55), stage(1 - t, 0.17, 0.25)),
+  };
+}
+
+// Face-stack features lifted for tier headroom during the tour fan.
+const TOUR_HEADROOM_FEATURES = [
+  "dial_group",
+  "crystal",
+  "crystal_gasket",
+  "bezel_ring",
+  "bezel_polish",
+  "bezel_insert",
+  "tachymeter_scale",
+];
+
 // --- showcase choreography ---------------------------------------------------
 // The dial, bezel stack and crystal clear out to the SIDES so the movement can
 // rise straight up the middle; the caseback stack and bracelet spread away.
@@ -315,6 +340,14 @@ export default {
         max: 1,
         step: 0.001,
       },
+      tour: {
+        type: "number",
+        label: "Grand tour timeline",
+        default: 0,
+        min: 0,
+        max: 1,
+        step: 0.001,
+      },
     },
     animations: {
       running: {
@@ -349,13 +382,31 @@ export default {
           set("run", progress);
         },
       },
+      grand_tour: {
+        label: "Grand tour",
+        duration: 24,
+        loop: true,
+        update({ progress, set }) {
+          // tour drives the choreography; run + tour together give three
+          // full escapement loops per clip (see effectiveRun in update()).
+          set("tour", progress);
+          set("run", progress);
+        },
+      },
     },
   },
 
   update({ params, effects }) {
-    const reveal = Number(params.reveal) || 0;
     const run = Number(params.run) || 0;
     const showcase = Math.min(1, Math.max(0, Number(params.showcase) || 0));
+    const tour = Math.min(1, Math.max(0, Number(params.tour) || 0));
+    const tr = tourStages(tour);
+    // The tour timeline reuses the reveal choreography for its open/close.
+    const reveal = Math.max(Number(params.reveal) || 0, tr.r);
+    // Three escapement loops per tour cycle: (run + 2*tour) sweeps 0..3 when
+    // the grand tour clip drives both with the same progress, and reduces to
+    // plain `run` whenever tour is 0.
+    const effRun = (run + 2 * tour) % 1;
     const st = showcaseStages(showcase);
 
     // Per-feature accumulator: rotations happen first (about original
@@ -398,14 +449,26 @@ export default {
       }
     }
 
+    // --- grand tour: fan the movement tiers in the reveal pose -------------
+    if (tr.f > 0) {
+      for (const tier of MOVEMENT_TIERS) {
+        for (const feature of tier.ids) {
+          addMove(feature, [0, 0, tier.dz], tr.f);
+        }
+      }
+      for (const feature of TOUR_HEADROOM_FEATURES) {
+        addMove(feature, [0, 0, 1], TOUR_HEADROOM * tr.f);
+      }
+    }
+
     // --- escapement ---------------------------------------------------------
-    const beats = run * BEATS;
+    const beats = effRun * BEATS;
     const beatIndex = Math.min(Math.floor(beats), BEATS - 1);
     const beatFraction = beats - beatIndex;
 
     // Balance: sinusoidal oscillation; beats land on its zero crossings.
     const balanceDeg =
-      BALANCE_AMPLITUDE_DEG * Math.sin(2 * Math.PI * OSCILLATIONS * run);
+      BALANCE_AMPLITUDE_DEG * Math.sin(2 * Math.PI * OSCILLATIONS * effRun);
     for (const feature of BALANCE_GROUP) {
       addRot(feature, spin(BALANCE, balanceDeg));
     }
@@ -426,7 +489,7 @@ export default {
 
     // Going train creeps against the escape wheel: alternating directions,
     // spoke-and-tooth-symmetric 144 deg per loop so the seam is invisible.
-    const trainDeg = 144 * run;
+    const trainDeg = 144 * effRun;
     for (const feature of ["fourth_wheel", "fourth_pinion"]) {
       addRot(feature, spin(FOURTH, -trainDeg));
     }
@@ -440,7 +503,7 @@ export default {
     // Chronograph shown running: the center runner sweeps one full turn per
     // loop (full revolutions are always seam-free), the coupling wheel
     // counter-rotates, and the chrono seconds hand rides the runner arbor.
-    const runnerDeg = -360 * run;
+    const runnerDeg = -360 * effRun;
     for (const feature of [
       "chrono_runner_wheel",
       "chrono_runner_heart_cam",
@@ -450,7 +513,7 @@ export default {
     ]) {
       addRot(feature, spin(CENTER, runnerDeg));
     }
-    addRot("coupling_wheel", spin(COUPLING, 360 * run));
+    addRot("coupling_wheel", spin(COUPLING, 360 * effRun));
 
     // --- emit ---------------------------------------------------------------
     const features = new Set([...rotations.keys(), ...offsets.keys()]);
