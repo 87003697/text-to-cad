@@ -486,3 +486,18 @@ helpers at documented datums.
   note — the blob outlines it tuned no longer exist.)
 - **Blocked:** ~1.5 h across the four failures. **Fixed:** locally
   (helpers in `_mvt_base.py`; kernel behavior unchanged).
+
+### Entry 9 addendum (final, 2026-08-07)
+
+Per-part PBR materials + opacity WERE subsequently implemented (root sources,
+entry 6/9 suggestion; commit "render pipeline: per-occurrence PBR material
+overrides + opacity"). They transformed the renders — real glass, lacquer,
+mirror-vs-brushed steel — and moved blind-critic verdicts from "clay toy" to
+component-level finishing quibbles. Nine further whole-watch rounds still
+lost against professional photographs of the actual reference watch; late
+verdicts repeatedly named features that demonstrably exist in the geometry
+(striping, anglage ribbons, domed jewels, slotted screws), indicating the
+remaining delta is renderer-class: no anisotropic BSDFs, no path-traced
+bounce/DOF/grain. A photoreal path-tracing backend (or export to one) is the
+next real step for the blind-A/B-vs-photograph bar; the modeling side is no
+longer the limiting factor.
