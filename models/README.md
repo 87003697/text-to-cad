@@ -10,12 +10,12 @@ text files.
 
 - [benchmarks/](benchmarks/README.md): build123d benchmark generators plus STEP
   and mesh outputs.
-- [fun/](fun/README.md): standalone generated CAD examples and printable
-  outputs.
 - [gcode/](gcode/README.md): small slicer input/output fixtures.
 - [implicits/](implicits/README.md): browser-native implicit CAD examples.
 - [mechanisms/](mechanisms/README.md): flattened mechanism STEP demos and
   generated render sidecars.
+- `mesh-fixtures/`: durable OBJ and PLY inputs for mesh-processing and
+  meshscope tests.
 - [robots/](robots/README.md): URDF/SRDF robot fixtures, meshes, printable
   outputs, and selected robot STEP sources.
 - [simple/](simple/README.md): compact build123d generators and STEP outputs
@@ -57,7 +57,7 @@ change: update this section and that test together.
 | CAD exchange output | `*.step`, `*.stp` | Git LFS |
 | Mesh output | `*.stl`, `*.3mf`, `*.glb` | Git LFS |
 | Mesh-processing fixture under `models/mesh-fixtures/` | `*.obj`, `*.ply` | Git LFS |
-| CAD Viewer render/selector sidecar | `.<stem>.step.glb` | Git LFS |
+| CAD Viewer render/selector sidecar | `.<stem>.step.glb`, `.<stem>.stp.glb` | Git LFS |
 | 2D output | `*.dxf` | Git LFS |
 | Fabrication output | `*.gcode` | Git LFS |
 
@@ -67,8 +67,9 @@ OBJ and PLY are additionally allowed only under `models/mesh-fixtures/` as
 durable inputs for mesh-processing and meshscope tests; CAD Viewer does not
 currently catalog them as direct source files.
 
-Hidden files are only CAD Viewer sidecars. `.<stem>.step.glb` and
-`.<stem>.step.js` must sit beside the `.step` or `.stp` file they belong to.
+Hidden files are only CAD Viewer sidecars. `.<stem>.step.glb`,
+`.<stem>.stp.glb`, and `.<stem>.step.js` must sit beside the `.step` or `.stp`
+file they belong to.
 
 Commit a generated output only when it is durable—something a workflow, test,
 catalog entry, or print job depends on. Regenerable one-offs stay local.

@@ -6,6 +6,7 @@ same list. The README coverage test keeps widening the policy deliberate.
 
 from __future__ import annotations
 
+import re
 import subprocess
 import unittest
 from pathlib import Path
@@ -46,8 +47,13 @@ MESH_FIXTURE_SUFFIXES = (".obj", ".ply")
 ALLOWED_SUFFIXES = TEXT_SUFFIXES + BINARY_SUFFIXES
 
 # Hidden files under models/ are CAD Viewer sidecars paired with a STEP file.
-HIDDEN_SIDECAR_SUFFIXES = (".step.glb", ".step.js")
+HIDDEN_SIDECAR_SUFFIXES = (".step.glb", ".stp.glb", ".step.js")
 STEP_SUFFIXES = (".step", ".stp")
+LFS_POINTER_PATTERN = re.compile(
+    rb"\Aversion https://git-lfs.github.com/spec/v1\n"
+    rb"oid sha256:[0-9a-f]{64}\n"
+    rb"size [0-9]+\n?\Z"
+)
 
 DISALLOWED_KINDS = (
     (
@@ -143,6 +149,37 @@ def _run_git(*args: str) -> subprocess.CompletedProcess[str]:
 def _tracked_model_paths() -> list[str]:
     completed = _run_git("ls-files", "-z", "--", MODELS_DIR)
     return sorted(entry for entry in completed.stdout.split("\0") if entry)
+
+
+def _index_blobs(paths: list[str]) -> dict[str, bytes]:
+    """Read tracked blobs from the index without applying LFS smudge filters."""
+    completed = subprocess.run(
+        ["git", "cat-file", "--batch"],
+        cwd=REPO_ROOT,
+        input=b"".join(f":{path}\n".encode() for path in paths),
+        capture_output=True,
+        check=True,
+    )
+
+    blobs: dict[str, bytes] = {}
+    output = completed.stdout
+    offset = 0
+    for path in paths:
+        header_end = output.find(b"\n", offset)
+        if header_end < 0:
+            raise AssertionError(f"missing git cat-file header for {path}")
+        header = output[offset:header_end].decode("ascii", errors="replace")
+        fields = header.split()
+        if len(fields) != 3 or fields[1] != "blob":
+            raise AssertionError(f"unexpected git cat-file header for {path}: {header}")
+        size = int(fields[2])
+        blob_start = header_end + 1
+        blob_end = blob_start + size
+        if blob_end >= len(output) or output[blob_end : blob_end + 1] != b"\n":
+            raise AssertionError(f"truncated git cat-file output for {path}")
+        blobs[path] = output[blob_start:blob_end]
+        offset = blob_end + 1
+    return blobs
 
 
 def _matched_suffix(name: str, suffixes: tuple[str, ...]) -> str | None:
@@ -272,7 +309,8 @@ class ModelsDirectoryPolicyTest(unittest.TestCase):
             offenders,
             [],
             "the only hidden files allowed under models/ are CAD Viewer "
-            "sidecars .<stem>.step.glb and .<stem>.step.js:\n"
+            "sidecars .<stem>.step.glb, .<stem>.stp.glb, and "
+            ".<stem>.step.js:\n"
             f"{_format_paths(offenders)}\n{README_REFERENCE}",
         )
         self.assertEqual(
@@ -311,6 +349,21 @@ class ModelsDirectoryPolicyTest(unittest.TestCase):
             [],
             "generated model outputs must be stored in Git LFS; add the missing "
             f"filter rule to .gitattributes:\n{_format_paths(offenders)}",
+        )
+
+        blobs = _index_blobs(binaries)
+        non_pointers = [
+            path
+            for path, blob in blobs.items()
+            if LFS_POINTER_PATTERN.fullmatch(blob) is None
+        ]
+        self.assertEqual(
+            non_pointers,
+            [],
+            "generated model outputs must be committed as Git LFS pointer "
+            "blobs, not only match an LFS attribute. Re-add these files with "
+            "LFS filters enabled:\n"
+            f"{_format_paths(non_pointers)}",
         )
 
     def test_readme_documents_every_allowed_file_type(self) -> None:
