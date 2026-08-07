@@ -64,6 +64,12 @@ The installer discovers each directory under `skills/` that contains
 `SKILL.md`, creates one symlink per skill, and leaves existing non-symlink paths
 untouched.
 
+For provider-native installation, the repository root is the plugin package:
+`.claude-plugin/` and `.codex-plugin/` contain the manifests, and the plugin
+uses the canonical `skills/` tree directly. There is no `plugins/cad/` mirror or
+separate plugin bundle. Codex plugin installation requires Codex 0.142.0 or
+newer; older Codex versions silently skip repository-root plugins.
+
 Supported local-development agent destinations:
 
 | Agent flag  | Destination                                       |
@@ -142,10 +148,9 @@ Canonical source directories are:
   for production.
 
 On `develop`, paths such as `skills/cad-viewer/scripts/viewer`,
-`skills/*/scripts/packages/*`, `viewer/packages/*`, and `plugins/cad/skills/*`
-should be symlinks when they mirror root sources. Treat those paths as
-generated-output aliases, not separate source roots. Edit the canonical source
-path instead.
+`skills/*/scripts/packages/*`, and `viewer/packages/*` should be symlinks when
+they mirror root sources. Treat those paths as generated-output aliases, not
+separate source roots. Edit the canonical source path instead.
 
 Production-output checks are intentionally centralized. Normal development
 should stay in the symlinked `develop` layout. When you specifically need to inspect
@@ -173,19 +178,30 @@ scripts/dev/setup-symlinks.sh --check
 ```
 
 The `main` production branch must be installable from a plain checkout, so it
-contains generated production outputs instead of symlinks. `main` is
-publish-only: do not open PRs to `main` or push it directly. The `Test`
-workflow runs on `develop` and PRs to `develop`: it starts from the symlink
-layout, runs `scripts/bundle/bundle.sh --clean`, checks the production layout
-without rebuilding it, runs documentation checks, and runs the code tests
-against that generated output.
+contains generated production outputs instead of symlinks. The repository root
+is itself the agent plugin package: `.claude-plugin/` and `.codex-plugin/` hold
+the manifests, and `skills/` is the canonical plugin skill tree that installers
+copy directly.
+
+Production trees must not contain symlinks. This is a correctness requirement,
+not a formatting preference: the Skills CLI dereferences symlinks, Claude Code
+preserves them, and Codex `plugin add` can silently omit them and install an
+incomplete skill. `scripts/github-workflows/check-builds.sh` enforces this
+rule.
+
+`main` is publish-only: do not open PRs to `main` or push it directly. The
+`Test` workflow runs on `develop` and PRs to `develop`: it starts from the
+symlink layout, checks generated outputs against their sources, runs
+`scripts/bundle/bundle.sh --clean`, checks the production layout without
+rebuilding it, runs documentation checks, and runs the code tests against that
+generated output.
 
 ## Releases
 
-Normal development PRs should not bump `plugins/cad/VERSION`; release versions
+Normal development PRs should not bump `VERSION`; release versions
 are reserved for release PRs so the canonical repo version, Git tag, and GitHub
 Release describe the same production commit. PRs that do touch release state
-must keep `plugins/cad/VERSION` and derived version metadata valid; the `Test`
+must keep `VERSION` and derived version metadata valid; the `Test`
 workflow checks that metadata in a separate job so code tests still run when it
 is wrong.
 
@@ -203,7 +219,7 @@ not specify one, confirm it rather than assuming:
 gh workflow run release.yml --ref develop -f bump=patch
 ```
 
-One run bumps `plugins/cad/VERSION` plus derived metadata on a
+One run bumps `VERSION` plus derived metadata on a
 `release/<version>` branch, opens a release PR, merges it into `develop`
 immediately, and then runs the publish, models-upload, web-app deploy, and
 tag/GitHub Release jobs in the same run. The release PR does not wait for its own CI checks; the
@@ -311,8 +327,7 @@ npm --prefix docs run check
 ```
 
 Use `AGENTS.md` or `scripts/README.md` for path-specific validation when you are
-working in a particular package, skill, plugin, docs site, or production-output
-path.
+working in a particular package, skill, docs site, or production-output path.
 
 For targeted Python skill-script tests, run the relevant unittest files with the
 repo-local Python runtime, for example:

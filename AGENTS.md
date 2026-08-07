@@ -20,15 +20,24 @@ don't need this file.
   `packages/` and are vendored/generated into consuming skill runtimes.
 - **LFS.** Never disable LFS filters for `git add`, commits, or
   object-writing operations.
-- **Symlinks.** `develop` uses symlinks across generated runtime, viewer,
-  and plugin package paths. Edit the symlink target/source, not the
-  copy. Set up via `scripts/dev/setup-symlinks.sh`.
+- **Plugin root.** The repository root is the plugin package:
+  `.claude-plugin/` and `.codex-plugin/` hold its manifests, and
+  `skills/` is the canonical plugin skill tree. Do not recreate
+  `plugins/cad/` or a separate plugin bundle/copy step. Codex plugin
+  installation requires Codex 0.142.0 or newer.
+- **Symlinks.** `develop` uses symlinks across generated runtime and
+  viewer package paths. Edit the symlink target/source, not the copy.
+  Production trees must contain no symlinks because provider installers
+  handle them inconsistently and Codex can silently omit them. Set up
+  the development layout via `scripts/dev/setup-symlinks.sh`.
 
 ## Where things live
 
 **Code**
 - `skills/`: agent skills + `references/`, `scripts/`
-- `plugins/`: versioned plugin packages bundling repo skills
+- `.claude-plugin/`, `.codex-plugin/`: provider manifests for the
+  repo-root plugin package
+- `VERSION`: canonical repository/plugin release version
 - `packages/cadjs`, `packages/implicitjs`, `packages/cadpy`,
   `packages/cadpy_*`: shared runtime code (framework-agnostic, siblings
   do not import each other)
@@ -62,7 +71,7 @@ Run the smallest path-targeted check that covers the change:
 - Symlink layout: `scripts/dev/setup-symlinks.sh --check`
 - Generated runtime freshness: `scripts/bundle/bundle.sh --check` (run
   `scripts/bundle/bundle.sh` first if source changes affect generated
-  runtimes / plugin packages)
+  runtimes)
 - Viewer / packages: `npm --prefix <path> test|build`
 - Docs: `npm --prefix docs run check`
 - Targeted Python: `./.venv/bin/python -m unittest <changed paths>`
