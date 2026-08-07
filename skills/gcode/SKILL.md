@@ -125,7 +125,8 @@ Pass `.stl`, `.obj`, and unsliced `.3mf` directly to the slicer. Convert `.ply`,
 Reject `.step`, `.stp`, `.dxf`, `.svg`, `.urdf`, and `.sdf` in v1. `inspect` and `slice` fail with a structured `remediation` object naming the skill and command that produce a sliceable mesh; use it instead of inferring a conversion workflow:
 
 - `.step`, `.stp`: boundary-representation CAD, not a mesh. Export an STL sidecar with `$cad` (`python scripts/step --kind part <input> --stl <output>.stl`, or target the generator with `python scripts/step <model>.step.py --stl <output>.stl`), then slice the exported `.stl` here.
-- `.dxf`, `.svg`: 2D drawings with no 2D-to-mesh conversion in this toolchain. Model the 3D solid in `$cad` with `gen_step()` and export an STL sidecar, then slice that. If the part is a flat cut rather than a print, use `$sendcutsend` instead of this skill.
+- `.dxf`: a 2D drawing, not a printable solid. Use `$dxf` to inspect or regenerate it; for an FDM print, model the corresponding 3D solid in `$cad`, export an STL sidecar, and slice that. If it is a flat cut, use `$sendcutsend`.
+- `.svg`: a 2D drawing with no direct 2D-to-mesh conversion in this toolchain. Model the 3D solid in `$cad`, export an STL sidecar, and slice that; use `$sendcutsend` when it is a flat cut.
 - `.urdf`, `.sdf`: robot descriptions that reference per-link mesh files. Slice the referenced `.stl`/`.obj` meshes one at a time; regenerate stale or missing ones from the owning CAD source with `$cad` first. Use `$urdf` or `$sdf` for the robot description itself.
 
 Read `references/slicer-backends.md` when backend behavior, profile expectations, or source links matter.

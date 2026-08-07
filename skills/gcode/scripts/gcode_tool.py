@@ -29,9 +29,19 @@ _STEP_REMEDIATION = {
         "Then slice the exported .stl with this skill."
     ),
 }
-_FLAT_2D_REMEDIATION = {
+_DXF_REMEDIATION = {
+    "skill": "dxf",
+    "reason": "DXF is a 2D drawing, not a printable solid, and this toolchain has no direct DXF-to-mesh conversion.",
+    "next_step": (
+        "Use $dxf to inspect or regenerate the 2D drawing. For an FDM print, model the corresponding 3D solid "
+        "in $cad with `gen_step()` and export an STL sidecar "
+        "(`python scripts/step <model>.step.py --stl <output>.stl`), then slice that .stl here. "
+        "If the part is a flat cut rather than a print, use $sendcutsend instead of this skill."
+    ),
+}
+_SVG_REMEDIATION = {
     "skill": "cad",
-    "reason": "This is a 2D drawing, not a printable solid, and this toolchain has no 2D-to-mesh conversion.",
+    "reason": "SVG is a 2D drawing, not a printable solid, and this toolchain has no direct SVG-to-mesh conversion.",
     "next_step": (
         "For an FDM print, model the 3D solid in $cad with `gen_step()` and export an STL sidecar "
         "(`python scripts/step <model>.step.py --stl <output>.stl`), then slice that .stl here. "
@@ -56,8 +66,8 @@ def _robot_description_remediation(skill: str, label: str) -> dict[str, str]:
 UNSUPPORTED_INPUT_REMEDIATION = {
     ".step": _STEP_REMEDIATION,
     ".stp": _STEP_REMEDIATION,
-    ".dxf": _FLAT_2D_REMEDIATION,
-    ".svg": _FLAT_2D_REMEDIATION,
+    ".dxf": _DXF_REMEDIATION,
+    ".svg": _SVG_REMEDIATION,
     ".urdf": _robot_description_remediation("urdf", "URDF"),
     ".sdf": _robot_description_remediation("sdf", "SDF"),
 }

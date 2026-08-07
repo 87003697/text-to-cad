@@ -166,7 +166,7 @@ class GCodeToolTests(unittest.TestCase):
         expected_skills = {
             ".step": "cad",
             ".stp": "cad",
-            ".dxf": "cad",
+            ".dxf": "dxf",
             ".svg": "cad",
             ".urdf": "urdf",
             ".sdf": "sdf",
