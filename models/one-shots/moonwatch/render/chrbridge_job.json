@@ -1,0 +1,12 @@
+{
+  "input": "movement.step.py",
+  "mode": "view",
+  "appearance": "render/presentation_theme.json",
+  "display": { "mode": "rendered" },
+  "outputs": [
+    { "path": "/tmp/moonwatch/chrbridge_34.png", "camera": { "position": [18, -22, 24], "target": [0, 0, 1.5] }, "sizeProfile": "presentation-large" },
+    { "path": "/tmp/moonwatch/chrbridge_top.png", "camera": { "position": [0, 0, 40], "target": [0, 0, 3.2] }, "sizeProfile": "presentation-large" },
+    { "path": "/tmp/moonwatch/chrbridge_colwheel_macro.png", "camera": { "position": [13.5, -3.5, 10.5], "target": [8.3, 3.6, 3.5] }, "sizeProfile": "presentation-large" }
+  ],
+  "render": { "padding": 0.06 }
+}

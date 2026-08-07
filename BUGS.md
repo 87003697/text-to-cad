@@ -416,3 +416,29 @@ helpers at documented datums.
   here surfaces only at validation time with no pointer to the causing op.
 - **Blocked:** ~15 min. **Fixed:** locally in `_mvt_chrono.py` (helper
   unchanged; other clusters using `anglage_top` on wavy outlines can hit it).
+
+## `snailing_cutter` V-groove cuts can leave BOP-self-intersecting results when a groove wall runs tangent to the target's profile wall
+
+- **Doing:** cutting circular Geneva striping (the `_mvt_base._bridge`
+  pattern: `F.snailing_cutter(...)` rings about the movement center,
+  intersected with a stripe band, subtracted from a blob-outline bridge) into
+  the new chronograph coupling cock in
+  `models/one-shots/moonwatch/_mvt_chrono.py` (2026-08-07).
+- **Symptom:** the cut "succeeds" — one positive-volume solid,
+  `BRepCheck_Analyzer.IsValid()` True — but `BRepAlgoAPI_Check` reports
+  self-intersection, so `inspect validate` flags the part
+  (`selfIntersecting`, 1 failure) with no pointer to the causing operation.
+  Probe-bisected: the plain bevel extrude, jewel countersink and screw sink
+  were all clean; adding the stripe cut alone flipped the part to
+  BOP-faulty. The cock's outline circles sat at radii where a groove's wall
+  cone ran tangent to the stripe-band inset wall (outline centers ~10.2–11.8
+  from origin vs groove edge circles at 10.7 +/- 0.925, 12.6 +/- 0.925).
+- **Workaround:** nudge the outline centers/radii by ~0.03 until the
+  tangency breaks (`COUPLING_COCK_OUTLINE` comment records the tuned
+  values); verify with `BRepAlgoAPI_Check` per part before shipping.
+- **Suggestion:** same class as the `safe_chamfer` entry above — cutters
+  built from `F.snailing_cutter` (and other tangency-prone V-groove tools)
+  should be BOP-checked after the boolean by the shared vocabulary, or
+  `inspect validate` should name the last boolean when a part fails.
+- **Blocked:** ~20 min (bisecting which cut was faulty). **Fixed:** locally
+  (geometry nudged; helper unchanged).

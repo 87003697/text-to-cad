@@ -3,7 +3,9 @@ coupling clutch with swinging intermediate wheel, chronograph runner with
 heart cam, minute recorder with jumper, dial-side hour recorder, hammer yoke
 striking both heart cams, return springs and shoulder studs/screws — the
 grey-steel layer riding above the bridges of the caliber-321-lineage
-movement.
+movement — plus the striped chronograph bridge and coupling cock that cap
+the runner / minute-recorder / coupling-arm upper pivots with jeweled
+countersunk bearings (see the "Chronograph bridge plan" constants).
 
 Frame: MOVEMENT local (see `_spec.py`) — bridge side up, z = 0 at the plate's
 bridge-side face. Bridge-side chronograph parts live in z ~ 2.85..4.1 (the
@@ -75,7 +77,10 @@ OPER_Z = (3.18, 3.34)           # operating lever (engages the raised star)
 CLUTCH_Z = (3.20, 3.38)         # coupling clutch arm plate
 RESET_Z = (3.42, 3.60)          # reset lever plate (hammer striking plane)
 HAMMER_Z = (3.42, 3.66)         # hammer yoke plate
-CAM_Z = (3.36, 3.78)            # heart cams (both on one striking plane)
+CAM_Z = (3.36, 3.60)            # heart cams (compressed under the chrono
+#   bridge at CHRONO_BRIDGE_Z: cams + collets stack below 3.66 so the bridge
+#   can cap the runner/recorder pivots; hammer faces still strike the cams
+#   over the shared 3.42..3.60 band)
 HOUR_Z = (-2.60, -1.55)         # dial-side hour recorder band
 
 # column-wheel geometry
@@ -110,6 +115,82 @@ BRAKE_SPRING_STUD = (-5.4, 3.9)     # barrel bridge
 RESET_SPRING_STUD = (11.5, -5.9)    # open plate
 CLUTCH_SPRING_STUD = (-9.6, -4.2)   # train bridge
 JUMPER_SPRING_STUD = (11.35, -3.3)  # open plate
+
+# ---------------------------------------------------------------------------
+# Chronograph bridge plan (blind-critic fix: the chrono train read as bare
+# wheels on unsupported studs; the real 321 hides most of that train under a
+# large striped chronograph bridge, leaving jeweled pivot points, the column
+# wheel, the balance and the steel lever-work visible on top).
+# ---------------------------------------------------------------------------
+
+#: Bridge band: above the hammer yoke (top 3.66, 0.02 hover), under
+#: CHRONO_LAYER_TOP 4.1 (screw heads proud 0.04 top out flush at 4.10).
+CHRONO_BRIDGE_Z = (3.68, 4.06)
+
+#: One flowing 321-style plate (blob circles, `_mvt_base._bridge` factory):
+#: jeweled heads over the runner (0,0) and minute recorder (10.2,0), a broad
+#: southern body over the coupling wheel, an east rim body and a south foot
+#: lobe. Routing (plan-verified against every exported keep-out):
+#: - column wheel stays FULLY visible: every edge >= 2.9 from (8.3,3.6);
+#: - hammer strike faces stay visible: edges clear pad_a (1.67,-0.32) and
+#:   pad_b (8.77,-0.21) by >= 0.25; the hammer PIVOT screw head (top 3.92)
+#:   pierces the band, cleared by > 2.2;
+#: - reset pivot / reset spring screw heads (tops 3.86 / 3.82) cleared by
+#:   > 1.6; the reset lever itself (top 3.60) passes UNDER one arm with the
+#:   pusher end, pivot and nose all visible — exactly the reference routing;
+#: - ratchet wheel, balance, escape wheel, brake, operating lever, minute
+#:   jumper nose all stay uncovered;
+#: - full-height feet drop only through wheel-free plate: the east foot
+#:   clears the minute-recorder tip circle (2.41 vs 2.30), the south foot
+#:   clears the coupling wheel's swept circle (4.36 vs 4.00) and the balance
+#:   rim / timing-screw sweep (5.42 vs 5.25).
+CHRONO_BRIDGE_OUTLINE = (
+    (0.0, 0.0, 1.45),       # runner head (cam rim + strike faces peek out)
+    (1.1, -2.0, 1.00),
+    (2.5, -2.7, 1.15),
+    (4.0, -3.1, 1.30),
+    (6.4, -3.6, 1.30),
+    (8.45, -3.85, 0.90),    # crosses OVER the reset lever's mid segment
+    (9.4, -3.9, 0.70),      # window: jumper nose + reset nose stay visible
+    (10.3, -3.75, 0.85),
+    (11.0, -2.9, 0.80),
+    (11.4, -2.2, 0.90),
+    (12.05, -0.65, 1.30),   # east rim body (clipped at the 13.2 rim arc)
+    (10.2, 0.0, 1.15),      # minute-recorder head
+    (5.8, -5.5, 1.25),      # southern body over the coupling wheel
+    (5.55, -7.1, 1.00),
+    (5.35, -8.6, 0.80),
+    (5.3, -9.55, 0.75),     # south foot lobe (plate is open here)
+)
+#: Blued bridge screws (sink flare r0.85 + 0.22 bevel fit inside the local
+#: lobe at each spot; shanks stay short — everything below is under an
+#: opaque plate hovering 0.02 above the hammer plane).
+CHRONO_BRIDGE_SCREWS = ((11.95, -0.7), (5.8, -5.5), (4.0, -3.1))
+#: Full-height turned feet: (x, y, r, base_z) — welded 0.02 into the plate.
+CHRONO_BRIDGE_FEET = ((12.75, -1.05, 0.35, 0.01), (5.3, -9.55, 0.60, 0.01))
+
+#: Coupling cock: a small finger cock capping the coupling-arm pivot on the
+#: fourth-wheel axis (-10.2,0) — that pivot cannot reach the main bridge
+#: across the hammer/column corridor, so it gets its own jewel + screw (the
+#: real 321 pattern for isolated chrono pivots). The foot lobe stands on the
+#: train-bridge top (sleeve foot from _BRIDGE_STUD_BASE, bored for the screw
+#: shank, clear of the driving wheel's swept circle 2.59 vs 2.40); the head
+#: hovers over the driving wheel leaving its toothed rim visible.
+COUPLING_COCK_OUTLINE = (
+    (-10.2, 0.0, 1.15),     # jeweled head over the driving arbor
+    (-10.88, -1.52, 0.82),
+    (-11.45, -2.92, 1.15),  # foot lobe over the train bridge
+)
+# (neck/foot centers probe-tuned by 0.03: the original spots left the
+# origin-centered stripe grooves tangent to the inset walls — a BOP
+# self-intersection in the cut result)
+COUPLING_COCK_SCREW = (-11.45, -2.92)
+#: Jewel sink sized for the r1.15 heads (flat top r0.93 after the 0.22
+#: bevel): shallower/narrower than the base default so the polished cone
+#: never nicks the anglage ring, and the seat floor (z1 - 0.28) stays inside
+#: the 0.38 plate.
+_CHRONO_SINK_KW = dict(cone_r=0.88, wall_r=0.66, cone_z=0.14, seat_z=0.28,
+                       bore_r=0.26)
 
 _BRIDGE_TOP = M.BRIDGE_TOP_Z            # 2.85
 _GAP = 0.01
@@ -352,15 +433,19 @@ def _runner_parts():
     cam = Pos(0, 0, CAM_Z[0]) * Rot(0, 0, cam_rot) * cam
     parts.append(_finish(cam, "chrono_runner_heart_cam", S.STEEL_BRIGHT))
 
-    # extended arbor: hovers over the center jewel table, carries wheel, cam,
-    # the minute-recorder drive finger and a top collet
-    # base 2.95: hovers over the raised bridge jewel (probe-measured top
-    # 2.933 in the current _mvt_base)
-    arbor = (_cyl(0.30, 3.99 - 2.95, 2.95)
+    # arbor: hovers over the center jewel table (probe-measured top 2.933 in
+    # the current _mvt_base), carries wheel seat, cam, a retaining collet and
+    # a turned upper pivot running in the chronograph bridge's jewel — the
+    # old bare 3.99-tall post was the blind critics' "unsupported upper
+    # pivot" read
+    arbor = (_cyl(0.30, 3.62 - 2.95, 2.95)
              + _cyl(0.44, 0.10, 3.16)             # wheel seat shoulder
-             + _cyl(0.40, 0.12, CAM_Z[1] + 0.04))  # collet
+             + _cyl(0.40, 0.05, 3.60)             # collet over the cam
+             + _cyl(0.10, 3.92 - 3.60, 3.60))     # pivot into the bridge jewel
+    # minute-recorder drive finger, dropped BELOW the cam (3.18..3.30, over
+    # the wheel top 3.14): the chronograph bridge now owns the band above
     finger2d = _chain([[(0.0, 0.0, 0.34), (1.55, -0.45, 0.17)]], clip_r=3.0)
-    finger = (Pos(0, 0, CAM_Z[1] + 0.06)
+    finger = (Pos(0, 0, 3.18)
               * Rot(0, 0, _ang((0, 0), (MRX, MRY)) + 14)
               * extrude(finger2d, amount=0.12))
     arbor = arbor + finger
@@ -389,9 +474,12 @@ def _minute_recorder_parts():
     cam = Pos(MRX, MRY, CAM_Z[0]) * Rot(0, 0, cam_rot) * cam
     parts.append(_finish(cam, "minute_recorder_heart_cam", S.STEEL_BRIGHT))
 
-    # recorder post: planted in the plate, shoulder under the wheel, collet top
-    post = (_cyl(0.55, 1.2, _GAP) + _cyl(0.36, 3.90, _GAP)
-            + _cyl(0.42, 0.10, 3.80))
+    # recorder post: planted in the plate, shoulder under the wheel, collet
+    # over the cam, turned pivot up into the chronograph bridge's jewel (was
+    # a bare 3.91-tall post — the critics' unsupported-arbor read)
+    post = (_cyl(0.55, 1.2, _GAP) + _cyl(0.36, 3.62 - _GAP, _GAP)
+            + _cyl(0.42, 0.05, 3.60)
+            + _cyl(0.10, 3.92 - 3.60, 3.60))
     parts.append(_finish(Pos(MRX, MRY, 0) * post, "minute_recorder_post",
                          S.STEEL_DARK))
 
@@ -486,11 +574,13 @@ def _clutch_parts():
     drv = _gilt_wheel(54, DRIVING_TIP_R, (FWX, FWY), WHEEL_Z, (CPX, CPY),
                       frac=0.07, bore=0.34)
     parts.append(_finish(drv, "clutch_driving_wheel", S.GILT))
-    arbor = Pos(FWX, FWY, 0) * _cyl(0.32, 3.40 - 2.95, 2.95)
+    # arbor with a retaining collar over the swinging arm's ring boss and a
+    # turned pivot up into the coupling cock's jewel (replaces the old bare
+    # retaining screw head: the cock caps this pivot properly now)
+    arbor = Pos(FWX, FWY, 0) * (_cyl(0.32, 3.42 - 2.95, 2.95)
+                                + _cyl(0.42, 0.06, 3.40)
+                                + _cyl(0.10, 3.92 - 3.42, 3.42))
     parts.append(_finish(arbor, "clutch_driving_arbor", S.STEEL_DARK))
-    head = Pos(FWX, FWY, 3.40 + 0.22) * _screw_head(head_d=1.0, hh=0.22,
-                                                    slot_angle=117.0)
-    parts.append(_finish(head, "screw:clutch_arm", S.BLUED))
 
     # swinging clutch arm: ring boss at the driving arbor, long sculpted
     # sweep south of the train bridge, wheel boss at the coupling wheel,
@@ -682,6 +772,93 @@ def _brake_parts():
     return parts
 
 
+def _trim_skins(shadow, screw_xy, z1):
+    """Clear the stripe-shadow skins around proud screw heads: the base
+    `_bridge` sink tool stops AT z1, but the skins ride 0.02..0.055 above it
+    on the band edges, so a screw head (r0.65, top z1 + 0.04 + hh) can clip a
+    surviving sliver (probe-caught 0.009 overlaps; the base bridges only
+    dodge this by screw placement luck). Subtract a generous r0.90 column at
+    each screw from every skin solid and re-split."""
+    if not shadow:
+        return shadow
+    tools = [Pos(x, y, 0) * _cyl(0.90, 1.0, z1 - 0.6) for x, y in screw_xy]
+    out = []
+    for s in shadow:
+        t = s - tools
+        sols = (t.solids() if hasattr(t, "solids")
+                else [q for shp in t for q in shp.solids()])
+        out.extend(q for q in sols if q.volume > 1e-6)
+    return out or None
+
+
+def _chrono_bridge_parts():
+    """Chronograph bridge + coupling cock: the striped copper layer capping
+    the chrono train's upper pivots (plan constants above). Built with
+    `_mvt_base`'s bridge factory so circular striping about the movement
+    center, the constructive 45-deg anglage + polished ribbon overlay, the
+    jewel countersink/chaton/ruby stack and the screw sinks all match the
+    base bridges exactly — one finishing vocabulary across the movement."""
+    parts = []
+    z0, z1 = CHRONO_BRIDGE_Z
+
+    body, shadow, ribbon = M._bridge(
+        CHRONO_BRIDGE_OUTLINE, 13.2, z0, z1,
+        [(0.0, 0.0), (MRX, MRY)], CHRONO_BRIDGE_SCREWS,
+        jewel_sink_kw=_CHRONO_SINK_KW)
+    # full-height turned feet through wheel-free plate (bottom face of the
+    # plate is un-beveled, so the 0.02 weld overlap fuses cleanly)
+    feet = [Pos(x, y, 0) * _cyl(r, (z0 + 0.02) - bz, bz)
+            for x, y, r, bz in CHRONO_BRIDGE_FEET]
+    body = body + feet
+    parts.append(_finish(body, "chrono_bridge", S.COPPER_GOLD))
+    shadow = _trim_skins(shadow, CHRONO_BRIDGE_SCREWS, z1)
+    M._add_shadow(parts, shadow, "chrono_bridge")
+    M._add_anglage(parts, ribbon, "chrono_bridge")
+
+    # jeweled countersunk bearings: flush ruby disc (rim 0.05 under the
+    # striped top, dome apex z1 + 0.03 <= CHRONO_LAYER_TOP) nested in a gold
+    # chaton ring on the seat floor — the ruby/gold/moat/polished-cone
+    # concentric read of the base train jewels. The runner / recorder /
+    # coupling pivots (r0.10) rise into the ruby's 0.12 bore.
+    jewels = (((0.0, 0.0), "chrono_runner"), ((MRX, MRY), "minute_recorder"))
+    for (x, y), name in jewels:
+        ruby = Pos(x, y, z1 - 0.05) * M._ruby_disc(r=0.42, t=0.16, hole_r=0.12)
+        parts.append(_finish(ruby, f"bridge_jewel:{name}", S.RUBY))
+        chaton = Pos(x, y, 0) * M._ring(0.43, 0.64, 0.18, z1 - 0.28)
+        parts.append(_finish(chaton, f"chaton:{name}", S.BRASS_MOVEMENT))
+    for (x, y), name in zip(CHRONO_BRIDGE_SCREWS, ("east", "south", "west")):
+        parts.append(_finish(
+            M._place_screw(x, y, z1, proud=0.04, shank=0.30),
+            f"screw:chrono_bridge:{name}", S.BLUED))
+
+    # coupling cock --------------------------------------------------------
+    body2, shadow2, ribbon2 = M._bridge(
+        COUPLING_COCK_OUTLINE, 13.2, z0, z1,
+        [(FWX, FWY)], [COUPLING_COCK_SCREW],
+        jewel_sink_kw=_CHRONO_SINK_KW)
+    sx, sy = COUPLING_COCK_SCREW
+    # sleeve foot standing on the train-bridge top: weld the SOLID foot
+    # first, then re-cut one continuous r0.45 screw bore through plate +
+    # foot (pre-boring the foot left coincident bore walls at the weld —
+    # BOP-self-intersecting, probe-verified)
+    foot = Pos(sx, sy, 0) * _cyl(
+        0.60, (z0 + 0.02) - _BRIDGE_STUD_BASE, _BRIDGE_STUD_BASE)
+    body2 = (body2 + foot) - Pos(sx, sy, 0) * _cyl(
+        0.45, (z1 + 0.1) - (_BRIDGE_STUD_BASE - 0.2), _BRIDGE_STUD_BASE - 0.2)
+    parts.append(_finish(body2, "coupling_bridge", S.COPPER_GOLD))
+    shadow2 = _trim_skins(shadow2, [COUPLING_COCK_SCREW], z1)
+    M._add_shadow(parts, shadow2, "coupling_bridge")
+    M._add_anglage(parts, ribbon2, "coupling_bridge")
+    ruby = Pos(FWX, FWY, z1 - 0.05) * M._ruby_disc(r=0.42, t=0.16, hole_r=0.12)
+    parts.append(_finish(ruby, "bridge_jewel:coupling", S.RUBY))
+    chaton = Pos(FWX, FWY, 0) * M._ring(0.43, 0.64, 0.18, z1 - 0.28)
+    parts.append(_finish(chaton, "chaton:coupling", S.BRASS_MOVEMENT))
+    parts.append(_finish(
+        M._place_screw(sx, sy, z1, proud=0.04, shank=0.70),
+        "screw:coupling_bridge", S.BLUED))
+    return parts
+
+
 def build_chrono():
     """All chronograph-works parts, labeled and colored, movement frame."""
     parts = []
@@ -694,6 +871,7 @@ def build_chrono():
     parts += _operating_parts()
     parts += _reset_parts()
     parts += _brake_parts()
+    parts += _chrono_bridge_parts()
 
     # Per-component export drops the color of bare-`Compound` leaves (see
     # /BUGS.md) — coerce every leaf to Part and reattach label/color.
