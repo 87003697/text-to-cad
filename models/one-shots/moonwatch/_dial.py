@@ -364,9 +364,8 @@ def build_hands():
     # polished-steel blade: the facet ridge splits it into two mirror bevels
     # and the through-cut lume window leaves raised rails either side of the
     # recessed fill (rail tops ~0.14 above base vs 0.10 lume)
-    hour.label = "hand_polished:hour"
-    hour.color = Color(*S.STEEL_BRIGHT)
-    hour.cad_material = dict(POLISHED_FURNITURE)
+    hour.label = "hand:hour"
+    hour.color = Color(*S.DIAL_PRINT)
 
     hour_lume = Pos(0, 0, 8.45) * extrude(Pos(0, 7.1) * Rectangle(0.46, 5.34), 0.10)
     hour_lume = Rot(0, 0, -HOUR_ANGLE) * hour_lume
@@ -390,9 +389,8 @@ def build_hands():
     minute_window = Pos(0, 9.6) * Rectangle(0.38, 8.4)   # y 5.4..13.8
     minute = _faceted_blade(minute_plan - minute_window, 0.65, 0.20, 8.73)
     minute = Rot(0, 0, -MINUTE_ANGLE) * minute
-    minute.label = "hand_polished:minute"
-    minute.color = Color(*S.STEEL_BRIGHT)
-    minute.cad_material = dict(POLISHED_FURNITURE)
+    minute.label = "hand:minute"
+    minute.color = Color(*S.DIAL_PRINT)
 
     minute_lume = Pos(0, 0, 8.73) * extrude(
         Pos(0, 9.6) * Rectangle(0.32, 8.34), 0.08
