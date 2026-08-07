@@ -810,6 +810,68 @@ class SnapshotCliTests(unittest.TestCase):
             )
         self.assertEqual(packet["jobs"][0]["resolved"]["debug"], {"implicitSource": {"kind": "implicit"}})
 
+    def test_render_job_rejects_top_level_selection_shaped_keys(self) -> None:
+        # "hide"/"focus" at top level were historically dropped without a word,
+        # so the render completed with nothing hidden. The rejection names the
+        # correct selection-object shape.
+        with self.assertRaisesRegex(SnapshotError, r'move "hide": \[\.\.\.\] into "selection"'):
+            resolve_render_job_packet(
+                {
+                    "input": "models/part.step",
+                    "hide": ["#o1.5"],
+                    "outputs": [{"path": "tmp/iso.png", "camera": "iso"}],
+                }
+            )
+
+    def test_render_job_rejects_unknown_top_level_keys(self) -> None:
+        with self.assertRaisesRegex(SnapshotError, "unknown render job key\\(s\\): framerate"):
+            resolve_render_job_packet(
+                {
+                    "input": "models/part.step",
+                    "framerate": 24,
+                    "outputs": [{"path": "tmp/iso.png", "camera": "iso"}],
+                }
+            )
+
+    def test_render_output_rejects_nested_selection(self) -> None:
+        # A selection nested in an output is the documented multi-view trap:
+        # selection is job-level only, so this used to render with nothing
+        # hidden. The rejection says to split the view into its own job.
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = self._mesh_job_env(temporary_directory, "widget.glb", b"glTF")
+            with self.assertRaisesRegex(SnapshotError, "selection applies at job level only"):
+                resolve_render_job_packet(
+                    {
+                        "input": "models/widget.glb",
+                        "outputs": [
+                            {
+                                "path": "tmp/iso.png",
+                                "camera": "iso",
+                                "selection": {"hide": ["#o1.5"]},
+                            }
+                        ],
+                    },
+                    cwd=root,
+                )
+
+    def test_render_output_rejects_unknown_keys(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = self._mesh_job_env(temporary_directory, "widget.glb", b"glTF")
+            with self.assertRaisesRegex(SnapshotError, "unknown key\\(s\\): stepParameters"):
+                resolve_render_job_packet(
+                    {
+                        "input": "models/widget.glb",
+                        "outputs": [
+                            {
+                                "path": "tmp/iso.png",
+                                "camera": "iso",
+                                "stepParameters": {"width": 5},
+                            }
+                        ],
+                    },
+                    cwd=root,
+                )
+
     def test_render_job_rejects_selection_for_mesh_input(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             root = self._mesh_job_env(temporary_directory, "widget.glb", b"glTF")

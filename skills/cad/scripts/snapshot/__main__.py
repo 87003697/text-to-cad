@@ -67,6 +67,48 @@ IMPLICIT_INPUT_SUFFIX = ".implicit.js"
 IMPLICIT_SUPPORTED_RENDER_MODES = {"view", "orbit"}
 WORKBENCH_RENDER_THEME_IDS = {DEFAULT_RENDER_THEME_ID}
 
+# Closed sets of accepted job/output keys. Anything outside them is rejected
+# up front: an unrecognized key was historically dropped without a word, so a
+# near-miss like top-level "hide" (instead of selection.hide) or a "selection"
+# nested in an output produced a full-cost render that silently ignored the
+# request. Reserved keys with dedicated error messages (theme, params,
+# paramsPath, workspaceRoot, rootDir) are checked separately before this set.
+SUPPORTED_JOB_KEYS = frozenset(
+    {
+        "input",
+        "mode",
+        "outputs",
+        "appearance",
+        "display",
+        "render",
+        "camera",
+        "selection",
+        "stepParameters",
+        "stepParametersPath",
+        "sizeProfile",
+        "width",
+        "height",
+        "scale",
+        "sceneScale",
+        "debug",
+        "timeoutSeconds",
+    }
+)
+SELECTION_SHAPED_JOB_KEYS = ("hide", "focus", "refs")
+SUPPORTED_OUTPUT_KEYS = frozenset(
+    {
+        "path",
+        "width",
+        "height",
+        "sizeProfile",
+        "camera",
+        "label",
+        "viewLabel",
+        "dataUrl",
+        "text",
+    }
+)
+
 SIMPLE_RENDER_WIDTH = 1200
 SIMPLE_RENDER_HEIGHT = 900
 SIMPLE_SQUARE_RENDER_WIDTH = 1024
@@ -1107,6 +1149,21 @@ def normalize_common_job(
         if isinstance(output, str):
             output = {"path": output}
         output_object = dict(output if is_plain_object(output) else {})
+        # Outputs share the job's closed-schema treatment: a "selection" (or
+        # any other job-level key) nested in an output used to be dropped
+        # silently, so the render completed with nothing hidden/focused.
+        unknown_output_keys = sorted(set(output_object) - SUPPORTED_OUTPUT_KEYS)
+        if unknown_output_keys:
+            if "selection" in unknown_output_keys:
+                raise SnapshotError(
+                    f"render output {index} carries a selection; selection applies at job "
+                    "level only — to hide or focus parts for one view, split it into its "
+                    'own job in a "jobs" array'
+                )
+            raise SnapshotError(
+                f"render output {index} has unknown key(s): {', '.join(unknown_output_keys)}; "
+                f"supported output keys: {', '.join(sorted(SUPPORTED_OUTPUT_KEYS))}"
+            )
         width, height = resolve_output_size({**job, "mode": mode}, output_object)
         output_path = str(output_object.get("path") or "")
         if mode != "list" and not output_path:
@@ -1349,6 +1406,24 @@ def resolve_render_job(
     if forbidden_root_fields:
         raise SnapshotError(
             "snapshot jobs no longer accept workspaceRoot or rootDir; pass a relative or absolute input path instead"
+        )
+
+    # Every other key must come from the closed job schema. Selection-shaped
+    # near-misses get the exact fix spelled out; anything else is named with
+    # the supported set so a typo fails here instead of rendering as if the
+    # key were absent.
+    unknown_keys = sorted(set(job) - SUPPORTED_JOB_KEYS)
+    if unknown_keys:
+        selection_shaped = [key for key in SELECTION_SHAPED_JOB_KEYS if key in unknown_keys]
+        if selection_shaped:
+            fields = ", ".join(f'"{key}": [...]' for key in selection_shaped)
+            raise SnapshotError(
+                f"render jobs take part selectors inside the selection object, not at top level; "
+                f"move {fields} into \"selection\": {{...}}"
+            )
+        raise SnapshotError(
+            f"unknown render job key(s): {', '.join(unknown_keys)}; "
+            f"supported keys: {', '.join(sorted(SUPPORTED_JOB_KEYS))}"
         )
 
     resolved_cwd = (cwd or Path.cwd()).resolve()
