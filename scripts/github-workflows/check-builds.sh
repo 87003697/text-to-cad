@@ -57,8 +57,6 @@ check_generated_path() {
     exit 1
   fi
 
-  # Bundling installs dependencies under some roots; only committed paths matter.
-  #
   # This assertion is load-bearing, not tidiness. The three installers each treat
   # symlinks differently, and one of them loses data silently:
   #   - Skills CLI (npx skills): dereferences them into real files.
@@ -70,7 +68,11 @@ check_generated_path() {
   #     error, no warning -- the file is simply missing at runtime.
   # A symlink that reaches the published tree therefore ships a broken skill to
   # every Codex user. Do not relax this check.
-  first_link="$(find "$root" -name node_modules -prune -o -type l -print -quit)"
+  #
+  # Generated roots are production outputs, including any node_modules copied
+  # into a self-contained runtime. Scan all of them; a dependency symlink here
+  # is just as capable of disappearing during installation as any other link.
+  first_link="$(find "$root" -type l -print -quit)"
   if [ -n "$first_link" ]; then
     echo "Production bundle paths must not contain symlinks." >&2
     echo "First symlink: $first_link" >&2
@@ -79,9 +81,35 @@ check_generated_path() {
   fi
 }
 
+check_published_skills_symlinks() {
+  local first_link=""
+  local tracked_path
+
+  # The repo root is the plugin root, so every committed path below skills/ is
+  # part of the publish tree. Inspect symlinks across that whole surface, not
+  # only paths known to a bundler. Use the Git index to distinguish publishable
+  # content from untracked development dependencies such as a local
+  # skills/*/node_modules tree.
+  while IFS= read -r -d '' tracked_path; do
+    if [ -L "$tracked_path" ]; then
+      first_link="$tracked_path"
+      break
+    fi
+  done < <(git ls-files -z -- skills)
+
+  if [ -n "$first_link" ]; then
+    echo "Published skills must not contain symlinks." >&2
+    echo "First tracked symlink: $first_link" >&2
+    echo "Run scripts/bundle/bundle.sh --clean and commit physical production files." >&2
+    exit 1
+  fi
+}
+
 while IFS= read -r generated_path; do
   check_generated_path "$generated_path"
 done < <(generated_paths)
+
+check_published_skills_symlinks
 
 if [ "$RUN_BUNDLE_CHECK" -eq 1 ]; then
   "$REPO_ROOT/scripts/bundle/bundle.sh" --check
