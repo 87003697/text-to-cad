@@ -2,7 +2,7 @@ import { VIEWER_PICK_MODE } from "cadjs/lib/viewer/constants.js";
 
 export function viewerPickModeForRenderPane({
   dxfMode = false,
-  pathPreviewMode = false,
+  meshOnlyMode = false,
   panToolActive = false,
   topologySelectionPending = false,
   topologySelectionUnavailable = false,
@@ -20,7 +20,7 @@ export function viewerPickModeForRenderPane({
   if (topologySelectionPending || topologySelectionUnavailable || topologySelectionDeferred) {
     return VIEWER_PICK_MODE.NONE;
   }
-  if (dxfMode || pathPreviewMode) {
+  if (dxfMode || meshOnlyMode) {
     return VIEWER_PICK_MODE.NONE;
   }
   if (

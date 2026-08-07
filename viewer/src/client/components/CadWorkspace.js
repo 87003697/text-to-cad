@@ -5,7 +5,6 @@ import { ArrowLeftRight, ArrowRight, Circle, Eraser, Minus, PaintBucket, PenTool
 import { SidebarInset, SidebarProvider } from "@/components/ui/sidebar";
 import CadRenderPane from "./workbench/CadRenderPane";
 import DxfFileSheet from "./workbench/DxfFileSheet";
-import GcodeFileSheet from "./workbench/GcodeFileSheet";
 import FileViewerSidebar from "./workbench/FileViewerSidebar";
 import {
   ThemeEditorPanel,
@@ -95,7 +94,6 @@ import {
   entryAssetUrl,
   entryHasDisplayEdges,
   entryHasDxf,
-  entryHasGcode,
   entryHasMesh,
   entryHasReferences,
   entryHasUrdf,
@@ -198,11 +196,6 @@ import {
   DEFAULT_DXF_PREVIEW_THICKNESS_MM,
   normalizeDxfPreviewThicknessMm
 } from "cadjs/lib/dxf/buildPreviewMesh";
-import {
-  buildGcodePreviewMeshData,
-  DEFAULT_GCODE_PREVIEW_DETAIL_LEVEL,
-  normalizeGcodePreviewOptions
-} from "cadjs/lib/gcode/buildPreviewMesh";
 import {
   applyUrdfPoseToMeshData,
   buildDefaultUrdfJointValues,
@@ -1140,10 +1133,6 @@ export default function CadWorkspace({
   const [dxfThicknessMm, setDxfThicknessMm] = useState(0);
   const [dxfBendSettings, setDxfBendSettings] = useState([]);
   const [dxfViewMode, setDxfViewMode] = useState("2d");
-  const [gcodeShowTravel, setGcodeShowTravel] = useState(false);
-  const [gcodeMaxLayer, setGcodeMaxLayer] = useState(null);
-  const [gcodeFullDetail, setGcodeFullDetail] = useState(false);
-  const [gcodePreviewDetailLevel, setGcodePreviewDetailLevel] = useState(DEFAULT_GCODE_PREVIEW_DETAIL_LEVEL);
   const [referenceQuery, setReferenceQuery] = useState("");
   const [selectedReferenceIds, setSelectedReferenceIds] = useState([]);
   const [selectedMateIds, setSelectedMateIds] = useState([]);
@@ -1324,13 +1313,6 @@ export default function CadWorkspace({
     dxfError,
     setDxfError,
     dxfLoadStage,
-    gcodeState,
-    setGcodeState,
-    gcodeStatus,
-    setGcodeStatus,
-    gcodeError,
-    setGcodeError,
-    gcodeLoadStage,
     implicitState,
     setImplicitState,
     implicitStatus,
@@ -1358,19 +1340,16 @@ export default function CadWorkspace({
     getCachedMeshState,
     getCachedReferenceState,
     getCachedDxfState,
-    getCachedGcodeState,
     getCachedImplicitState,
     getCachedUrdfState,
     cancelMeshLoad,
     cancelDxfLoad,
-    cancelGcodeLoad,
     cancelImplicitLoad,
     cancelUrdfLoad,
     cancelReferenceLoad,
     cancelDisplayEdgeLoad,
     loadMeshForEntry,
     loadDxfForEntry,
-    loadGcodeForEntry,
     loadImplicitForEntry,
     loadUrdfForEntry,
     loadReferencesForEntry,
@@ -1380,7 +1359,6 @@ export default function CadWorkspace({
     entryHasReferences,
     entryHasDisplayEdges,
     entryHasDxf,
-    entryHasGcode,
     buildNormalizedReferenceState,
   });
 
@@ -1499,7 +1477,6 @@ export default function CadWorkspace({
       urdfTrajectoryPlaybackRef.current?.frameId
     )
   );
-  const isGcodeView = selectedEntrySourceFormat === RENDER_FORMAT.GCODE;
   const selectedStepModuleUrl = isStepView ? entryStepModuleUrl(selectedEntry) : "";
   const selectedStepModuleCadPath = selectedStepModuleUrl ? cadPathForEntry(selectedEntry) : "";
   const selectedStepModuleDefinition = stepModuleLoadState.url === selectedStepModuleUrl
@@ -1519,7 +1496,6 @@ export default function CadWorkspace({
   const selectedEntryHasReferences = entryHasReferences(selectedEntry);
   const selectedEntryHasDisplayEdges = entryHasDisplayEdges(selectedEntry);
   const selectedEntryHasDxf = entryHasDxf(selectedEntry);
-  const selectedEntryHasGcode = entryHasGcode(selectedEntry);
   const selectedEntryHasImplicit = entryHasImplicitAsset(selectedEntry);
   // The selected entry's render artifact is (re)building -> show the loading state. Replaces the
   // old !entryHasMesh + buildable-code derivation.
@@ -1547,11 +1523,6 @@ export default function CadWorkspace({
     !!selectedEntry &&
     dxfState.file === fileKey(selectedEntry) &&
     dxfState.dxfHash === entryAssetHash(selectedEntry, "dxf");
-  const selectedGcodeMatches =
-    !!gcodeState &&
-    !!selectedEntry &&
-    gcodeState.file === fileKey(selectedEntry) &&
-    gcodeState.gcodeHash === entryAssetHash(selectedEntry, "gcode");
   const selectedImplicitMatches =
     !!implicitState &&
     !!selectedEntry &&
@@ -1565,13 +1536,9 @@ export default function CadWorkspace({
   const selectedUrdfData = selectedUrdfMatches ? urdfState.urdfData : null;
   const selectedUrdfMeshes = selectedUrdfMatches ? urdfState.meshesByUrl : null;
   const selectedDxfData = selectedDxfMatches ? dxfState.dxfData : null;
-  const selectedGcodeData = selectedGcodeMatches ? gcodeState.gcodeData : null;
   const selectedImplicitModel = selectedImplicitMatches ? implicitState.model : null;
   const selectedImplicitDefinition = selectedImplicitModel?.definition || null;
   const selectedDxfFileRef = selectedEntrySourceFormat === RENDER_FORMAT.DXF
-    ? fileKey(selectedEntry)
-    : "";
-  const selectedGcodeFileRef = selectedEntrySourceFormat === RENDER_FORMAT.GCODE
     ? fileKey(selectedEntry)
     : "";
   const selectedUrdfFileRef = isRobotRenderFormat(selectedEntrySourceFormat)
@@ -2000,80 +1967,11 @@ export default function CadWorkspace({
       };
     }
   }, [selectedUrdfData, selectedUrdfJointValues, selectedUrdfMeshGeometryResult]);
-  const selectedGcodeLayerCount = Array.isArray(selectedGcodeData?.layers)
-    ? selectedGcodeData.layers.length
-    : 0;
-  const selectedGcodeMaxLayer = selectedGcodeLayerCount > 0
-    ? Math.min(
-        Math.max(
-          Number.isFinite(Number(gcodeMaxLayer)) ? Math.trunc(Number(gcodeMaxLayer)) : selectedGcodeLayerCount - 1,
-          0
-        ),
-        selectedGcodeLayerCount - 1
-      )
-    : 0;
-  const selectedGcodePreviewOptions = useMemo(() => normalizeGcodePreviewOptions({
-    showTravel: gcodeShowTravel,
-    layerRange: [0, selectedGcodeMaxLayer],
-    detailMode: gcodeFullDetail ? "full" : "adaptive",
-    detailLevel: gcodePreviewDetailLevel
-  }, selectedGcodeLayerCount), [
-    gcodeFullDetail,
-    gcodePreviewDetailLevel,
-    gcodeShowTravel,
-    selectedGcodeLayerCount,
-    selectedGcodeMaxLayer
-  ]);
-  const selectedGcodePreview = useMemo(() => {
-    if (!selectedGcodeData) {
-      return {
-        meshData: null,
-        error: ""
-      };
-    }
-    try {
-      return {
-        meshData: buildGcodePreviewMeshData(selectedGcodeData, selectedGcodePreviewOptions),
-        error: ""
-      };
-    } catch (error) {
-      return {
-        meshData: null,
-        error: error instanceof Error ? error.message : String(error)
-      };
-    }
-  }, [selectedGcodeData, selectedGcodePreviewOptions]);
-  const selectedGcodeMeshData = selectedGcodePreview.meshData;
-  const selectedGcodePreviewError = selectedGcodePreview.error;
-  const selectedGcodePreviewKey = useMemo(() => {
-    if (!selectedGcodeFileRef || !selectedGcodeData) {
-      return selectedGcodeFileRef;
-    }
-    return `${selectedGcodeFileRef}:travel=${gcodeShowTravel ? "1" : "0"}:layer=${selectedGcodeMaxLayer}:detail=${gcodeFullDetail ? "full" : `adaptive-${gcodePreviewDetailLevel}`}`;
-  }, [
-    gcodeFullDetail,
-    gcodePreviewDetailLevel,
-    gcodeShowTravel,
-    selectedGcodeData,
-    selectedGcodeFileRef,
-    selectedGcodeMaxLayer
-  ]);
-  useEffect(() => {
-    if (!selectedGcodeFileRef || selectedGcodeLayerCount <= 0) {
-      setGcodeMaxLayer(null);
-      return;
-    }
-    setGcodeMaxLayer(selectedGcodeLayerCount - 1);
-    setGcodeFullDetail(false);
-    setGcodePreviewDetailLevel(DEFAULT_GCODE_PREVIEW_DETAIL_LEVEL);
-  }, [selectedGcodeFileRef, selectedGcodeLayerCount]);
   const selectedMeshData = isRobotRenderFormat(selectedEntrySourceFormat)
     ? selectedUrdfPreview.meshData
-    : isGcodeView
-      ? selectedGcodeMeshData
-      : selectedMeshMatches
-        ? meshState.meshData
-        : null;
+    : selectedMeshMatches
+      ? meshState.meshData
+      : null;
   const selectedStepModuleActiveAnimation = useMemo(
     () => findStepModuleAnimation(selectedStepModuleDefinition, stepModuleAnimationState.activeId),
     [selectedStepModuleDefinition, stepModuleAnimationState.activeId]
@@ -3053,10 +2951,6 @@ export default function CadWorkspace({
     !!selectedEntry &&
     dxfStatus !== ASSET_STATUS.ERROR &&
     (!selectedDxfMatches || dxfStatus === ASSET_STATUS.LOADING);
-  const gcodeViewerLoading =
-    !!selectedEntry &&
-    gcodeStatus !== ASSET_STATUS.ERROR &&
-    (!selectedGcodeMatches || gcodeStatus === ASSET_STATUS.LOADING);
   const implicitViewerLoading =
     !!selectedEntry &&
     implicitStatus !== ASSET_STATUS.ERROR &&
@@ -3076,13 +2970,11 @@ export default function CadWorkspace({
     (!selectedMeshMatches || status === ASSET_STATUS.LOADING || selectedStepModuleLoading);
   const viewerLoading = effectiveRenderFormat === RENDER_FORMAT.DXF
     ? dxfViewerLoading
-    : effectiveRenderFormat === RENDER_FORMAT.GCODE
-      ? gcodeViewerLoading
-      : effectiveRenderFormat === RENDER_FORMAT.IMPLICIT
-        ? implicitViewerLoading
-      : isRobotRenderFormat(effectiveRenderFormat)
-        ? urdfViewerLoading
-        : stepViewerLoading;
+    : effectiveRenderFormat === RENDER_FORMAT.IMPLICIT
+      ? implicitViewerLoading
+    : isRobotRenderFormat(effectiveRenderFormat)
+      ? urdfViewerLoading
+      : stepViewerLoading;
   const effectiveViewerLoading = viewerLoading || selectedArtifactGenerating || fileParamSelectionPending;
   const assemblySidebarLoading =
     isAssemblyView &&
@@ -3101,10 +2993,8 @@ export default function CadWorkspace({
     ? selectedEntry && !selectedEntryHasDxf
       ? "Generating DXF preview..."
       : "Loading DXF preview..."
-    : effectiveRenderFormat === RENDER_FORMAT.GCODE
-      ? "Loading G-code preview..."
-      : effectiveRenderFormat === RENDER_FORMAT.IMPLICIT
-        ? "Loading implicit CAD..."
+    : effectiveRenderFormat === RENDER_FORMAT.IMPLICIT
+      ? "Loading implicit CAD..."
       : isRobotRenderFormat(effectiveRenderFormat)
         ? `Loading ${effectiveRenderFormat === RENDER_FORMAT.SDF ? "SDF" : "URDF"} robot...`
         : effectiveRenderFormat === RENDER_FORMAT.STL
@@ -3137,13 +3027,6 @@ export default function CadWorkspace({
         selectedDxfPreviewError
       );
     }
-    if (effectiveRenderFormat === RENDER_FORMAT.GCODE) {
-      return buildViewerMeshAlert(
-        selectedEntry,
-        !!selectedMeshData,
-        gcodeStatus === ASSET_STATUS.ERROR ? gcodeError : selectedGcodePreviewError
-      ) || viewerRuntimeAlert;
-    }
     if (effectiveRenderFormat === RENDER_FORMAT.IMPLICIT) {
       return buildViewerImplicitAlert(
         fileKey(selectedEntry),
@@ -3170,14 +3053,11 @@ export default function CadWorkspace({
     dxfStatus,
     effectiveRenderFormat,
     error,
-    gcodeError,
-    gcodeStatus,
     implicitError,
     implicitStatus,
     selectedDxfData,
     selectedEntry,
     selectedArtifactGenerating,
-    selectedGcodePreviewError,
     selectedImplicitRuntimeError,
     selectedImplicitRuntimeModel,
     selectedMeshData,
@@ -3527,7 +3407,6 @@ export default function CadWorkspace({
         entry: selectedEntry,
         fileSheetKind: selectedFileSheetKind,
         stepSourceStatus: selectedStepSourceStatus,
-        gcodeData: selectedGcodeData,
         urdfData: selectedUrdfData,
         viewerAlert,
         stepArtifactGenerationAvailable,
@@ -3538,7 +3417,6 @@ export default function CadWorkspace({
     activeStepArtifactGenerationFiles,
     selectedEntry,
     selectedFileSheetKind,
-    selectedGcodeData,
     selectedArtifactGenerating,
     stepArtifactGenerationAvailable,
     selectedStepSourceStatus,
@@ -4602,41 +4480,6 @@ export default function CadWorkspace({
 
   useEffect(() => {
     if (!selectedEntry) {
-      cancelGcodeLoad();
-      return;
-    }
-    if (effectiveRenderFormat !== RENDER_FORMAT.GCODE) {
-      cancelGcodeLoad();
-      return;
-    }
-    if (!selectedEntryHasGcode) {
-      cancelGcodeLoad();
-      setGcodeState(null);
-      setGcodeStatus(ASSET_STATUS.PENDING);
-      setGcodeError("");
-      return;
-    }
-    if (selectedGcodeMatches) {
-      return;
-    }
-    loadGcodeForEntry(selectedEntry).catch((err) => {
-      setGcodeStatus(ASSET_STATUS.ERROR);
-      setGcodeError(err instanceof Error ? err.message : String(err));
-    });
-  }, [
-    cancelGcodeLoad,
-    effectiveRenderFormat,
-    loadGcodeForEntry,
-    selectedEntry,
-    selectedEntryHasGcode,
-    selectedGcodeMatches,
-    setGcodeError,
-    setGcodeState,
-    setGcodeStatus
-  ]);
-
-  useEffect(() => {
-    if (!selectedEntry) {
       cancelImplicitLoad();
       return;
     }
@@ -5227,14 +5070,6 @@ export default function CadWorkspace({
       };
     }
 
-    if (effectiveRenderFormat === RENDER_FORMAT.GCODE && gcodeViewerLoading) {
-      return {
-        loading: true,
-        label: selectedEntryHasGcode ? (gcodeLoadStage || "loading G-code") : "building",
-        title: viewerLoadingLabel
-      };
-    }
-
     if (effectiveRenderFormat === RENDER_FORMAT.IMPLICIT && implicitViewerLoading) {
       return {
         loading: true,
@@ -5328,8 +5163,6 @@ export default function CadWorkspace({
     dxfLoadStage,
     dxfViewerLoading,
     effectiveRenderFormat,
-    gcodeLoadStage,
-    gcodeViewerLoading,
     implicitLoadStage,
     implicitViewerLoading,
     meshLoadStage,
@@ -5339,7 +5172,6 @@ export default function CadWorkspace({
     referenceSelectionStatus,
     selectedEntry,
     selectedEntryHasDxf,
-    selectedEntryHasGcode,
     selectedEntryHasImplicit,
     selectedEntryHasMesh,
     selectedEntryHasUrdf,
@@ -8397,7 +8229,6 @@ export default function CadWorkspace({
           entrySourceFormat={entrySourceFormat}
           entryHasMesh={entryHasMesh}
           entryHasDxf={entryHasDxf}
-          entryHasGcode={entryHasGcode}
           entryHasUrdf={entryHasUrdf}
           activeStepArtifactGenerationFile={activeStepArtifactGenerationFiles}
           stepArtifactGenerationAvailable={stepArtifactGenerationAvailable}
@@ -8436,7 +8267,6 @@ export default function CadWorkspace({
               entrySourceFormat={entrySourceFormat}
               entryHasMesh={entryHasMesh}
               entryHasDxf={entryHasDxf}
-              entryHasGcode={entryHasGcode}
               entryHasUrdf={entryHasUrdf}
               activeStepArtifactGenerationFile={activeStepArtifactGenerationFiles}
               stepArtifactGenerationAvailable={stepArtifactGenerationAvailable}
@@ -8534,38 +8364,6 @@ export default function CadWorkspace({
                 viewerLoading={viewerLoading}
                 onThicknessChange={setDxfThicknessMm}
                 onBendChange={handleDxfBendSettingChange}
-                fileDownloadAvailable={fileLinkCopyAvailable}
-                viewerServerInfo={viewerServerInfo}
-                localFileOpenAvailable={fileRevealAvailable}
-                fileAccessBusyKey={fileAccessBusyKey}
-                onOpenFileAsset={handleRevealFileAsset}
-                suppressDynamicMetadataStatus={selectedArtifactGenerating}
-                statusItems={selectedFileStatusItems}
-                themeTabs={themeTabs}
-                openSectionIds={effectiveFileSheetOpenSectionIds}
-                onOpenSectionIdsChange={handleFileSheetOpenSectionIdsChange}
-              />
-            ) : null}
-
-            {selectedFileSheetKind === "gcode" ? (
-              <GcodeFileSheet
-                key={`gcode:${selectedKey}`}
-                open={fileSheetOpen}
-                isDesktop={isDesktop}
-                width={activeSheetWidth || tabToolsWidth}
-                onOpenChange={setTabToolsOpen}
-                selectedEntry={selectedEntry}
-                onStartResize={handleStartFileSheetResize}
-                gcodeData={selectedGcodeData}
-                previewMetadata={selectedGcodeMeshData?.metadata || null}
-                maxLayer={selectedGcodeMaxLayer}
-                showTravel={gcodeShowTravel}
-                fullDetail={gcodeFullDetail}
-                previewDetailLevel={gcodePreviewDetailLevel}
-                onMaxLayerChange={setGcodeMaxLayer}
-                onShowTravelChange={setGcodeShowTravel}
-                onFullDetailChange={setGcodeFullDetail}
-                onPreviewDetailLevelChange={setGcodePreviewDetailLevel}
                 fileDownloadAvailable={fileLinkCopyAvailable}
                 viewerServerInfo={viewerServerInfo}
                 localFileOpenAvailable={fileRevealAvailable}

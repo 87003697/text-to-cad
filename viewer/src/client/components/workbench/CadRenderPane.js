@@ -394,16 +394,14 @@ export default function CadRenderPane({
   }, [stepParameters, liveStepAnimation]);
   const viewerAlertIconLabel = "Viewer error. See the Issues section for details.";
   const dxfMode = renderFormat === RENDER_FORMAT.DXF;
-  const gcodeMode = renderFormat === RENDER_FORMAT.GCODE;
   const urdfMode = isRobotRenderFormat(renderFormat);
   const implicitMode = renderFormat === RENDER_FORMAT.IMPLICIT;
   const meshOnlyMode = isMeshRenderFormat(renderFormat);
-  const pathPreviewMode = meshOnlyMode || gcodeMode;
   const dxf3dAvailable = !!selectedDxfMeshData;
   const activeDxfViewMode = dxfViewMode === "3d" && dxf3dAvailable ? "3d" : "2d";
   const dxfMeshPreviewReady = dxfMode && activeDxfViewMode === "3d" && dxf3dAvailable;
   const activeMeshData = dxfMeshPreviewReady ? selectedDxfMeshData : selectedMeshData;
-  const stepDisplaySettingsActive = renderFormat === RENDER_FORMAT.STEP && !!displaySettings && !dxfMode && !pathPreviewMode;
+  const stepDisplaySettingsActive = renderFormat === RENDER_FORMAT.STEP && !!displaySettings && !dxfMode && !meshOnlyMode;
   // Projection is a theme trait now; STEP views take it from the active theme
   // (Light/Dark are orthographic, stage themes perspective), everything else
   // keeps its historical perspective framing.
@@ -429,18 +427,18 @@ export default function CadRenderPane({
     && missingFileLabel.startsWith("/")
     && !missingFileLabel.startsWith(servedRoot.endsWith("/") ? servedRoot : `${servedRoot}/`)
   );
-  const topologySelectionPending = Boolean(referenceSelectionPending && !dxfMode && !urdfMode && !pathPreviewMode);
-  const topologySelectionUnavailable = Boolean(referenceSelectionUnavailable && !dxfMode && !urdfMode && !pathPreviewMode);
-  const topologySelectionDeferred = Boolean(referenceSelectionDeferred && activeMeshData && !dxfMode && !urdfMode && !pathPreviewMode);
+  const topologySelectionPending = Boolean(referenceSelectionPending && !dxfMode && !urdfMode && !meshOnlyMode);
+  const topologySelectionUnavailable = Boolean(referenceSelectionUnavailable && !dxfMode && !urdfMode && !meshOnlyMode);
+  const topologySelectionDeferred = Boolean(referenceSelectionDeferred && activeMeshData && !dxfMode && !urdfMode && !meshOnlyMode);
   const urdfPosePickerActive = Boolean(urdfPosePicker?.active);
   const urdfPosePickerPrompt = "Select target";
   const posePickerExitStyle = {
     left: `calc(${Math.max(Number(viewportFrameInsets?.left) || 0, 0)}px + 0.75rem)`,
     top: `calc(${Math.max(Number(viewportFrameInsets?.top) || 0, 0)}px + 0.75rem)`
   };
-  const ctaMode = !dxfMode && !pathPreviewMode && drawToolActive
+  const ctaMode = !dxfMode && !meshOnlyMode && drawToolActive
     ? "screenshot"
-    : !dxfMode && !pathPreviewMode && selectionCount > 0
+    : !dxfMode && !meshOnlyMode && selectionCount > 0
       ? "selection"
       : "";
   const dxfViewPlaneHeader = dxfMode ? (
@@ -555,12 +553,12 @@ export default function CadRenderPane({
           perspectiveRef={viewerPerspectiveRef}
           onProjectionChange={stepDisplaySettingsActive ? onProjectionChange : undefined}
           onDisplayModeChange={stepDisplaySettingsActive ? onDisplayModeChange : undefined}
-          showEdges={!gcodeMode}
+          showEdges
           recomputeNormals={false}
           themeSettings={themeSettings}
           displaySettings={stepDisplaySettingsActive ? displaySettings : null}
           previewMode={dxfMode ? false : previewMode}
-          showViewPlane={dxfMode || gcodeMode ? true : !previewMode}
+          showViewPlane={dxfMode ? true : !previewMode}
           scale={urdfMode ? VIEWER_SCENE_SCALE.URDF : VIEWER_SCENE_SCALE.CAD}
           viewPlaneOffsetRight={viewPlaneOffsetRight}
           viewPlaneOffsetBottom="1rem"
@@ -572,7 +570,7 @@ export default function CadRenderPane({
             ? VIEWER_PICK_MODE.NONE
             : viewerPickModeForRenderPane({
               dxfMode,
-              pathPreviewMode,
+              meshOnlyMode,
               panToolActive,
               topologySelectionPending,
               topologySelectionUnavailable,
@@ -588,26 +586,26 @@ export default function CadRenderPane({
             })}
           panToolActive={panToolActive}
           renderPartsIndividually={urdfMode ? true : (renderPartsIndividually || Boolean(resolvedStepParameters?.definition))}
-          pickableParts={dxfMode || urdfMode || pathPreviewMode ? EMPTY_LIST : assemblyParts}
-          hiddenPartIds={dxfMode || pathPreviewMode ? [] : hiddenPartIds}
-          selectedPartIds={dxfMode || pathPreviewMode ? [] : selectedPartIds}
-          hoveredPartId={dxfMode || pathPreviewMode ? "" : hoveredPartId}
-          assemblyMates={dxfMode || pathPreviewMode ? [] : assemblyMates}
-          selectedMateIds={dxfMode || pathPreviewMode ? [] : selectedMateIds}
-          hoveredMateId={dxfMode || pathPreviewMode ? "" : hoveredMateId}
-          hoveredReferenceId={dxfMode || pathPreviewMode ? "" : hoveredReferenceId}
-          selectedReferenceIds={dxfMode || pathPreviewMode ? [] : selectedReferenceIds}
-          selectorRuntime={dxfMode || pathPreviewMode ? null : selectorRuntime}
-          displayEdgeRuntime={dxfMode || pathPreviewMode ? null : displayEdgeRuntime}
-          stepParameters={dxfMode || pathPreviewMode ? null : resolvedStepParameters}
-          pickableFaces={dxfMode || pathPreviewMode ? [] : pickableFaces}
-          pickableEdges={dxfMode || pathPreviewMode ? [] : pickableEdges}
-          pickableVertices={dxfMode || pathPreviewMode ? [] : pickableVertices}
-          focusedPartId={dxfMode || pathPreviewMode ? "" : focusedPartIds}
+          pickableParts={dxfMode || urdfMode || meshOnlyMode ? EMPTY_LIST : assemblyParts}
+          hiddenPartIds={dxfMode || meshOnlyMode ? [] : hiddenPartIds}
+          selectedPartIds={dxfMode || meshOnlyMode ? [] : selectedPartIds}
+          hoveredPartId={dxfMode || meshOnlyMode ? "" : hoveredPartId}
+          assemblyMates={dxfMode || meshOnlyMode ? [] : assemblyMates}
+          selectedMateIds={dxfMode || meshOnlyMode ? [] : selectedMateIds}
+          hoveredMateId={dxfMode || meshOnlyMode ? "" : hoveredMateId}
+          hoveredReferenceId={dxfMode || meshOnlyMode ? "" : hoveredReferenceId}
+          selectedReferenceIds={dxfMode || meshOnlyMode ? [] : selectedReferenceIds}
+          selectorRuntime={dxfMode || meshOnlyMode ? null : selectorRuntime}
+          displayEdgeRuntime={dxfMode || meshOnlyMode ? null : displayEdgeRuntime}
+          stepParameters={dxfMode || meshOnlyMode ? null : resolvedStepParameters}
+          pickableFaces={dxfMode || meshOnlyMode ? [] : pickableFaces}
+          pickableEdges={dxfMode || meshOnlyMode ? [] : pickableEdges}
+          pickableVertices={dxfMode || meshOnlyMode ? [] : pickableVertices}
+          focusedPartId={dxfMode || meshOnlyMode ? "" : focusedPartIds}
           boundsAnimationActive={cadViewerBoundsAnimationActive}
-          drawingEnabled={!dxfMode && !pathPreviewMode && drawToolActive}
+          drawingEnabled={!dxfMode && !meshOnlyMode && drawToolActive}
           drawingTool={drawingTool}
-          drawingStrokes={dxfMode || pathPreviewMode ? [] : drawingStrokes}
+          drawingStrokes={dxfMode || meshOnlyMode ? [] : drawingStrokes}
           onDrawingStrokesChange={handleDrawingStrokesChange}
           onPerspectiveChange={handlePerspectiveChange}
           onHoverReferenceChange={handleModelHoverChange}

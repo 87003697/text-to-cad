@@ -6,7 +6,6 @@ import {
   entryAssetBytes,
   entryAssetUrl,
   entryHasDxf,
-  entryHasGcode,
   entryHasDisplayEdges,
   entryHasMesh,
   entryHasReferences,
@@ -81,7 +80,6 @@ test("entry availability helpers preserve existing viewer gates", () => {
   assert.equal(entryHasDisplayEdges(stepEntry({ hash: "" })), false);
   assert.equal(entryHasReferences(stepEntry({ hash: "" })), false);
   assert.equal(entryHasDxf({ kind: "dxf", url: "/plate.dxf", hash: "dxf-hash" }), true);
-  assert.equal(entryHasGcode({ kind: "gcode", url: "/part.gcode", hash: "gcode-hash" }), true);
   assert.equal(entryHasUrdf({ kind: "urdf", url: "/robot.urdf", hash: "urdf-hash" }), true);
   assert.equal(entryHasUrdf({ kind: "sdf", url: "/robot.sdf", hash: "sdf-hash" }), true);
 });

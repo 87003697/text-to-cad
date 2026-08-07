@@ -13,7 +13,6 @@ export function entryIconStatus(entry, {
   sourceFormat = "",
   hasMesh = true,
   hasDxf = true,
-  hasGcode = true,
   hasImplicit = true,
   hasUrdf = true,
   activeStepArtifactGenerationFile = "",
@@ -39,8 +38,6 @@ export function entryIconStatus(entry, {
   );
   const pending = normalizedSourceFormat === RENDER_FORMAT.DXF
     ? !hasDxf
-    : normalizedSourceFormat === RENDER_FORMAT.GCODE
-    ? !hasGcode
     : normalizedSourceFormat === RENDER_FORMAT.IMPLICIT
       ? !hasImplicit
     : isRobotRenderFormat(normalizedSourceFormat)

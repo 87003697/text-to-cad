@@ -93,14 +93,12 @@ function entryStatusForMenu(entry, {
   entrySourceFormat,
   entryHasMesh,
   entryHasDxf,
-  entryHasGcode,
   entryHasUrdf,
   activeStepArtifactGenerationFile = "",
   stepArtifactGenerationAvailable = true
 }) {
   const sourceFormat = sourceFormatForEntry(entry, entrySourceFormat);
   const hasDxf = typeof entryHasDxf === "function" ? entryHasDxf(entry) : true;
-  const hasGcode = typeof entryHasGcode === "function" ? entryHasGcode(entry) : true;
   const hasUrdf = typeof entryHasUrdf === "function" ? entryHasUrdf(entry) : true;
   const hasMesh = typeof entryHasMesh === "function" ? entryHasMesh(entry) : true;
 
@@ -108,7 +106,6 @@ function entryStatusForMenu(entry, {
     sourceFormat,
     hasMesh,
     hasDxf,
-    hasGcode,
     hasUrdf,
     activeStepArtifactGenerationFile,
     stepArtifactGenerationAvailable
@@ -123,7 +120,6 @@ function BreadcrumbEntryMenuItem({
   entrySourceFormat,
   entryHasMesh,
   entryHasDxf,
-  entryHasGcode,
   entryHasUrdf,
   activeStepArtifactGenerationFile = "",
   stepArtifactGenerationAvailable = true
@@ -137,7 +133,6 @@ function BreadcrumbEntryMenuItem({
     entrySourceFormat,
     entryHasMesh,
     entryHasDxf,
-    entryHasGcode,
     entryHasUrdf,
     activeStepArtifactGenerationFile,
     stepArtifactGenerationAvailable
@@ -186,7 +181,6 @@ function BreadcrumbDirectoryMenuItems({
   entrySourceFormat,
   entryHasMesh,
   entryHasDxf,
-  entryHasGcode,
   entryHasUrdf,
   activeStepArtifactGenerationFile = "",
   stepArtifactGenerationAvailable = true,
@@ -223,7 +217,6 @@ function BreadcrumbDirectoryMenuItems({
           entrySourceFormat={entrySourceFormat}
           entryHasMesh={entryHasMesh}
           entryHasDxf={entryHasDxf}
-          entryHasGcode={entryHasGcode}
           entryHasUrdf={entryHasUrdf}
           activeStepArtifactGenerationFile={activeStepArtifactGenerationFile}
           stepArtifactGenerationAvailable={stepArtifactGenerationAvailable}
@@ -250,7 +243,6 @@ function BreadcrumbDirectoryMenuItems({
         entrySourceFormat={entrySourceFormat}
         entryHasMesh={entryHasMesh}
         entryHasDxf={entryHasDxf}
-        entryHasGcode={entryHasGcode}
         entryHasUrdf={entryHasUrdf}
         activeStepArtifactGenerationFile={activeStepArtifactGenerationFile}
         stepArtifactGenerationAvailable={stepArtifactGenerationAvailable}
@@ -290,7 +282,6 @@ function BreadcrumbDirectorySubMenu({
   entrySourceFormat,
   entryHasMesh,
   entryHasDxf,
-  entryHasGcode,
   entryHasUrdf,
   activeStepArtifactGenerationFile = "",
   stepArtifactGenerationAvailable = true,
@@ -326,7 +317,6 @@ function BreadcrumbDirectorySubMenu({
             entrySourceFormat={entrySourceFormat}
             entryHasMesh={entryHasMesh}
             entryHasDxf={entryHasDxf}
-            entryHasGcode={entryHasGcode}
             entryHasUrdf={entryHasUrdf}
             activeStepArtifactGenerationFile={activeStepArtifactGenerationFile}
             stepArtifactGenerationAvailable={stepArtifactGenerationAvailable}
@@ -355,7 +345,6 @@ function BreadcrumbNodeDropdown({
   entrySourceFormat,
   entryHasMesh,
   entryHasDxf,
-  entryHasGcode,
   entryHasUrdf,
   activeStepArtifactGenerationFile = "",
   stepArtifactGenerationAvailable = true,
@@ -480,7 +469,6 @@ function BreadcrumbNodeDropdown({
             entrySourceFormat={entrySourceFormat}
             entryHasMesh={entryHasMesh}
             entryHasDxf={entryHasDxf}
-            entryHasGcode={entryHasGcode}
             entryHasUrdf={entryHasUrdf}
             activeStepArtifactGenerationFile={activeStepArtifactGenerationFile}
             stepArtifactGenerationAvailable={stepArtifactGenerationAvailable}
@@ -508,7 +496,6 @@ function BreadcrumbEllipsisDropdown({
   entrySourceFormat,
   entryHasMesh,
   entryHasDxf,
-  entryHasGcode,
   entryHasUrdf,
   activeStepArtifactGenerationFile = "",
   stepArtifactGenerationAvailable = true,
@@ -555,7 +542,6 @@ function BreadcrumbEllipsisDropdown({
                   entrySourceFormat={entrySourceFormat}
                   entryHasMesh={entryHasMesh}
                   entryHasDxf={entryHasDxf}
-                  entryHasGcode={entryHasGcode}
                   entryHasUrdf={entryHasUrdf}
                   activeStepArtifactGenerationFile={activeStepArtifactGenerationFile}
                   stepArtifactGenerationAvailable={stepArtifactGenerationAvailable}
@@ -583,7 +569,6 @@ function BreadcrumbEllipsisDropdown({
                   entrySourceFormat={entrySourceFormat}
                   entryHasMesh={entryHasMesh}
                   entryHasDxf={entryHasDxf}
-                  entryHasGcode={entryHasGcode}
                   entryHasUrdf={entryHasUrdf}
                   activeStepArtifactGenerationFile={activeStepArtifactGenerationFile}
                   stepArtifactGenerationAvailable={stepArtifactGenerationAvailable}
@@ -1018,7 +1003,6 @@ export default function CadWorkspaceTopBar({
   entrySourceFormat,
   entryHasMesh,
   entryHasDxf,
-  entryHasGcode,
   entryHasUrdf,
   activeStepArtifactGenerationFile = "",
   stepArtifactGenerationAvailable = true,
@@ -1119,7 +1103,6 @@ export default function CadWorkspaceTopBar({
                   entrySourceFormat={entrySourceFormat}
                   entryHasMesh={entryHasMesh}
                   entryHasDxf={entryHasDxf}
-                  entryHasGcode={entryHasGcode}
                   entryHasUrdf={entryHasUrdf}
                   activeStepArtifactGenerationFile={activeStepArtifactGenerationFile}
                   stepArtifactGenerationAvailable={stepArtifactGenerationAvailable}
@@ -1152,7 +1135,6 @@ export default function CadWorkspaceTopBar({
                       entrySourceFormat={entrySourceFormat}
                       entryHasMesh={entryHasMesh}
                       entryHasDxf={entryHasDxf}
-                      entryHasGcode={entryHasGcode}
                       entryHasUrdf={entryHasUrdf}
                       activeStepArtifactGenerationFile={activeStepArtifactGenerationFile}
                       stepArtifactGenerationAvailable={stepArtifactGenerationAvailable}
@@ -1177,7 +1159,6 @@ export default function CadWorkspaceTopBar({
                       entrySourceFormat={entrySourceFormat}
                       entryHasMesh={entryHasMesh}
                       entryHasDxf={entryHasDxf}
-                      entryHasGcode={entryHasGcode}
                       entryHasUrdf={entryHasUrdf}
                       activeStepArtifactGenerationFile={activeStepArtifactGenerationFile}
                       stepArtifactGenerationAvailable={stepArtifactGenerationAvailable}

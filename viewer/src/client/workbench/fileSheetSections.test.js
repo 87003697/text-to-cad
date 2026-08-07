@@ -10,7 +10,6 @@ import {
 
 test("file sheet section defaults match current sheet behavior", () => {
   assert.deepEqual(defaultOpenFileSheetSectionIds("dxf"), ["dxf"]);
-  assert.deepEqual(defaultOpenFileSheetSectionIds("gcode"), ["toolpath"]);
   assert.deepEqual(defaultOpenFileSheetSectionIds("step"), ["tree"]);
   assert.deepEqual(defaultOpenFileSheetSectionIds("step", { hasFileStatus: true }), ["status", "tree"]);
   // In the tabbed layout the Tree is the only default-open section; Display is
@@ -29,13 +28,6 @@ test("rendered file sheet sections include closed-by-default sections", () => {
   assert.deepEqual(renderedFileSheetSectionIds("dxf", { hasFileStatus: true }), [
     "status",
     "dxf"
-  ]);
-  assert.deepEqual(renderedFileSheetSectionIds("gcode", { hasFileStatus: true }), [
-    "status",
-    "toolpath",
-    "features",
-    "stats",
-    "bounds"
   ]);
   assert.deepEqual(renderedFileSheetSectionIds("step", { hasFileStatus: true, hasStepModulePanel: true }), [
     "status",

@@ -363,18 +363,6 @@ export function formatFileStatusItemForAgent(item) {
   return lines.join("\n");
 }
 
-export function gcodeFileStatusItems(gcodeData = null) {
-  const warnings = Array.isArray(gcodeData?.warnings) ? gcodeData.warnings : [];
-  return normalizeFileStatusItems(warnings.map((warning, index) => ({
-    id: `gcode-warning:${index}`,
-    level: FILE_STATUS_LEVELS.WARNING,
-    source: "gcode-parser",
-    code: "gcode_warning",
-    title: "G-code warning",
-    message: warning
-  })));
-}
-
 export function sdfFileStatusItems(sdfInfo = null) {
   const staticMetadata = sdfInfo?.staticMetadata && typeof sdfInfo.staticMetadata === "object"
     ? sdfInfo.staticMetadata
@@ -417,7 +405,6 @@ export function buildFileStatusItems({
   stepArtifactGenerationAvailable = true,
   stepArtifactGenerationState = null,
   activeGenerationFiles = [],
-  gcodeData = null,
   urdfData = null,
   viewerAlert = null,
   viewerServerInfo = null,
@@ -438,9 +425,6 @@ export function buildFileStatusItems({
       activeGenerationFiles,
       viewerServerInfo
     }));
-  }
-  if (kind === "gcode") {
-    items.push(...gcodeFileStatusItems(gcodeData));
   }
   if (kind === "sdf") {
     items.push(...sdfFileStatusItems(urdfData?.sdf || urdfData));

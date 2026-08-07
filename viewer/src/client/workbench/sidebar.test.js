@@ -237,24 +237,6 @@ test("entryIconStatus marks buildable STEP artifacts as generating in production
   );
 
   assert.deepEqual(
-    entryIconStatus({ file: "prints/bracket.gcode", kind: "gcode" }, {
-      sourceFormat: "gcode",
-      hasGcode: false
-    }),
-    {
-      artifactBuildable: false,
-      artifactGenerating: false,
-      artifactStale: false,
-      artifactWarning: false,
-      // An un-built / not-yet-loaded entry is no longer shown as "loading" in the static file list.
-      loading: false,
-      pending: true,
-      sourceFormat: "gcode",
-      statusLabel: "pending"
-    }
-  );
-
-  assert.deepEqual(
     entryIconStatus({
       file: "benchmarks/missing-source.step",
       kind: "part",
@@ -585,7 +567,7 @@ test("workspace panel defaults keep file viewer closed and file sheet open only 
   );
 });
 
-test("filenameLabelForEntry shows canonical step, stl, 3mf, glb, gcode, dxf, urdf, srdf, and sdf suffixes", () => {
+test("filenameLabelForEntry shows canonical step, stl, 3mf, glb, dxf, urdf, srdf, and sdf suffixes", () => {
   assert.equal(
     filenameLabelForEntry({
       file: "sample_mount.step",
@@ -691,14 +673,6 @@ test("filenameLabelForEntry shows canonical step, stl, 3mf, glb, gcode, dxf, urd
     "bracket.glb"
   );
 
-  assert.equal(
-    filenameLabelForEntry({
-      file: "toolpaths/bracket.gcode",
-      kind: "gcode",
-      source: { format: "gcode", path: "toolpaths/bracket.gcode" }
-    }),
-    "bracket.gcode"
-  );
 });
 
 test("filenameLabelForEntry surfaces Python-generated STEP models as .step.py", () => {

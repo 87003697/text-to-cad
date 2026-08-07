@@ -2,8 +2,8 @@
 
 Curated model fixtures and generator assets for text-to-cad workflows.
 
-This tree is intended to be committed with Git LFS for large CAD, mesh, robot,
-and G-code artifacts. Source generators and concise documentation remain normal
+This tree is intended to be committed with Git LFS for large CAD, mesh, and
+robot artifacts. Source generators and concise documentation remain normal
 text files.
 
 ## Directory Map
@@ -15,7 +15,6 @@ text files.
   robustness tests.
 - [fun/](fun/README.md): standalone generated CAD examples and printable
   outputs.
-- [gcode/](gcode/README.md): small slicer input/output fixtures.
 - [implicits/](implicits/README.md): browser-native implicit CAD examples.
 - [mechanisms/](mechanisms/README.md): flattened mechanism STEP demos and
   generated render sidecars.
@@ -46,8 +45,8 @@ git lfs pull --include="models/**" --exclude=""
 
 - Keep canonical sources (`*.py`, `*.implicit.js`, `*.urdf`, `*.srdf`, and docs)
   readable in normal Git.
-- Keep durable generated fixtures (`*.step`, `*.stl`, `*.3mf`, `*.glb`,
-  `*.gcode`, and `*.dxf`) in Git LFS.
+- Keep durable generated fixtures (`*.step`, `*.stl`, `*.3mf`, `*.glb`, and
+  `*.dxf`) in Git LFS.
 - Do not commit supplementary media or sidecar metadata such as `*.png`,
   `*.mp4`, `*.gif`, or `*.json` unless a future workflow defines them as a
   required model artifact.

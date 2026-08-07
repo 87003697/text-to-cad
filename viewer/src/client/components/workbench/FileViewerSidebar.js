@@ -49,7 +49,6 @@ function FileEntryButton({
   entrySourceFormat,
   entryHasMesh,
   entryHasDxf,
-  entryHasGcode,
   entryHasUrdf,
   activeGenerationFiles = [],
   activeStepArtifactGenerationFile = "",
@@ -76,7 +75,6 @@ function FileEntryButton({
     entryKey: key,
     hasMesh: entryHasMesh(entry),
     hasDxf: entryHasDxf(entry),
-    hasGcode: entryHasGcode(entry),
     hasUrdf: entryHasUrdf(entry),
     activeGenerationFiles,
     activeStepArtifactGenerationFile,
@@ -150,7 +148,6 @@ function DirectoryNode({
   entrySourceFormat,
   entryHasMesh,
   entryHasDxf,
-  entryHasGcode,
   entryHasUrdf,
   activeGenerationFiles = [],
   activeStepArtifactGenerationFile = "",
@@ -219,7 +216,6 @@ function DirectoryNode({
                     entrySourceFormat={entrySourceFormat}
                     entryHasMesh={entryHasMesh}
                     entryHasDxf={entryHasDxf}
-                    entryHasGcode={entryHasGcode}
                     entryHasUrdf={entryHasUrdf}
                     activeGenerationFiles={activeGenerationFiles}
                     activeStepArtifactGenerationFile={activeStepArtifactGenerationFile}
@@ -248,7 +244,6 @@ function DirectoryNode({
                     entrySourceFormat={entrySourceFormat}
                     entryHasMesh={entryHasMesh}
                     entryHasDxf={entryHasDxf}
-                    entryHasGcode={entryHasGcode}
                     entryHasUrdf={entryHasUrdf}
                     activeGenerationFiles={activeGenerationFiles}
                     activeStepArtifactGenerationFile={activeStepArtifactGenerationFile}
@@ -310,7 +305,6 @@ function FileViewerContents({
   entrySourceFormat,
   entryHasMesh,
   entryHasDxf,
-  entryHasGcode,
   entryHasUrdf,
   activeGenerationFiles = [],
   activeStepArtifactGenerationFile = "",
@@ -371,7 +365,6 @@ function FileViewerContents({
                           entrySourceFormat={entrySourceFormat}
                           entryHasMesh={entryHasMesh}
                           entryHasDxf={entryHasDxf}
-                          entryHasGcode={entryHasGcode}
                           entryHasUrdf={entryHasUrdf}
                           activeGenerationFiles={activeGenerationFiles}
                           activeStepArtifactGenerationFile={activeStepArtifactGenerationFile}
@@ -399,7 +392,6 @@ function FileViewerContents({
                           entrySourceFormat={entrySourceFormat}
                           entryHasMesh={entryHasMesh}
                           entryHasDxf={entryHasDxf}
-                          entryHasGcode={entryHasGcode}
                           entryHasUrdf={entryHasUrdf}
                           activeGenerationFiles={activeGenerationFiles}
                           activeStepArtifactGenerationFile={activeStepArtifactGenerationFile}
@@ -451,7 +443,6 @@ export default function FileViewerSidebar({
   entrySourceFormat,
   entryHasMesh,
   entryHasDxf,
-  entryHasGcode,
   entryHasUrdf,
   activeGenerationFiles = [],
   activeStepArtifactGenerationFile = "",
@@ -492,7 +483,6 @@ export default function FileViewerSidebar({
       entrySourceFormat={entrySourceFormat}
       entryHasMesh={entryHasMesh}
       entryHasDxf={entryHasDxf}
-      entryHasGcode={entryHasGcode}
       entryHasUrdf={entryHasUrdf}
       activeGenerationFiles={activeGenerationFiles}
       activeStepArtifactGenerationFile={activeStepArtifactGenerationFile}

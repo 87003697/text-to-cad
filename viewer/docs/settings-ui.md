@@ -2,7 +2,7 @@
 
 The contract for every settings surface rendered inside a file sheet tab or the
 theme editor panel: the Theme editor, the per-file Display tab, and the DXF,
-G-code, STEP, URDF/SDF, mesh, and implicit sheets. The tab strip, navbar, and
+STEP, URDF/SDF, mesh, and implicit sheets. The tab strip, navbar, and
 sheet frame are out of scope — this document governs the *contents* of a tab.
 
 Every pattern here has a primitive in

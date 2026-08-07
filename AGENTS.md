@@ -76,7 +76,7 @@ flow, CI/CD-testing and resume options, and local/manual fallbacks.
   explicit derived outputs when a production-output task requires it.
 - Write all test, sample, permanent, and generated CAD/robot-description
   artifacts under `models/`, including STEP/STP, STL, GLB, DXF, URDF, SRDF,
-  SDF, and G-code outputs. Do not create ad hoc artifact directories elsewhere.
+  and SDF outputs. Do not create ad hoc artifact directories elsewhere.
 - Reserve `scripts/` for durable repo commands. Do not write temporary,
   one-off, or local-only helper scripts there; use `tmp/` or `/tmp` instead.
 - Development symlinks mark generated or copied paths. If a file is under a

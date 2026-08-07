@@ -158,10 +158,6 @@ export function entryHasDxf(entry) {
   return Boolean(entryAssetUrl(entry, "dxf") && entryAssetHash(entry, "dxf"));
 }
 
-export function entryHasGcode(entry) {
-  return Boolean(entryAssetUrl(entry, "gcode") && entryAssetHash(entry, "gcode"));
-}
-
 export function entryHasImplicitCad(entry) {
   return Boolean(entryAssetUrl(entry, "implicit") && entryAssetHash(entry, "implicit"));
 }

@@ -41,7 +41,7 @@ generated artifact to render**:
 | **STEP imported** (committed `.step`/`.stp`) | component-GLB package | **yes** — same package |
 | implicit CAD (`.implicit.mjs`) | GPU raymarch **shader**, client-side | no (export is download-only) |
 | urdf / srdf / sdf | committed file + referenced meshes (parsed in browser) | no |
-| dxf / stl / 3mf / glb / gcode | committed file (parsed in browser) | no |
+| dxf / stl / 3mf / glb | committed file (parsed in browser) | no |
 
 So a "render artifact" API has exactly **one producer to wrap today** (the STEP component-GLB
 package). The value is therefore *not* a big plugin framework — it is (a) a clean, type-parametrized
@@ -63,14 +63,14 @@ seam so future producers (a baked implicit mesh, a decimated-mesh cache, a new f
 - Direct-render types are not touched (they have no artifact; they are always `ready`).
 - Implicit *export/download* stays a separate concern (it is not a render artifact). The interface is
   shaped so it *could* adopt the same provider later, but we don't force it.
-- Genuine, non-cache issues stay (a fatal build error; a truly-missing imported file; gcode/urdf
+- Genuine, non-cache issues stay (a fatal build error; a truly-missing imported file; urdf
   parse warnings; the read-only urdf/dxf generator-provenance check). They are orthogonal and small.
 
 ## 3. The model
 
 Every entry resolves to a **render source**, which is one of:
 
-- **Direct** — the committed file *is* the render input (mesh / dxf / urdf / gcode / implicit shader).
+- **Direct** — the committed file *is* the render input (mesh / dxf / urdf / implicit shader).
   No artifact, no freshness; always `ready`.
 - **Derived** — the render input is a generated artifact under `__cadgen__/` derived from a source
   (today: STEP → component-GLB package). Has a freshness check and a build.
@@ -169,7 +169,7 @@ useArtifact(entry) → { status: "ready" | "generating" | "error", ref, error }
 **Kept** (real problems, orthogonal — small surfaces, not a taxonomy):
 - A fatal `error` from `build` (generator threw, OCP failure) — shown as the artifact's error state.
 - A genuinely-missing **imported** `.step` (an imported model whose own source file is gone).
-- gcode/urdf parse warnings; the read-only urdf/srdf/sdf/dxf generator-provenance check (Track C,
+- urdf parse warnings; the read-only urdf/srdf/sdf/dxf generator-provenance check (Track C,
   rescoped to non-STEP text formats per the separate Issues-track audit).
 
 This also fixes the current **stale-flash** (render stale → async status → strip → loading): because

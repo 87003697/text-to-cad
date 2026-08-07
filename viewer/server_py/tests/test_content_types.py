@@ -21,7 +21,6 @@ class AssetContentType(unittest.TestCase):
         "x.step": "application/step",
         "x.STP": "application/step",  # case-insensitive
         "x.dxf": "application/dxf",
-        "x.gcode": "text/plain; charset=utf-8",
         "x.py": "text/plain; charset=utf-8",
         "x.urdf": "application/xml; charset=utf-8",
         "x.srdf": "application/xml; charset=utf-8",

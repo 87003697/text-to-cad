@@ -23,7 +23,7 @@ const STEP_SECTIONS = ["tree", "parameters", "display", "appearance", "metadata"
 test("only step supports the split", () => {
   assert.equal(kindSupportsSplit("step"), true);
   assert.equal(kindSupportsSplit("dxf"), false);
-  assert.equal(kindSupportsSplit("gcode"), false);
+  assert.equal(kindSupportsSplit("urdf"), false);
 });
 
 test("default step arrangement puts the tree on top and everything else on the bottom", () => {
@@ -169,11 +169,11 @@ test("resolve panes: an open id activates its tab (last in pane wins)", () => {
 });
 
 test("resolve panes: single strip for non-step uses first tab by default", () => {
-  const arrangement = defaultFileSheetTabArrangement("gcode", ["toolpath", "features", "display"]);
-  const resolved = resolveFileSheetTabPanes(arrangement, "gcode", []);
+  const arrangement = defaultFileSheetTabArrangement("urdf", ["motion", "joints", "display"]);
+  const resolved = resolveFileSheetTabPanes(arrangement, "urdf", []);
   assert.equal(resolved.split, false);
   assert.equal(resolved.panes.length, 1);
-  assert.equal(resolved.panes[0].activeId, "toolpath");
+  assert.equal(resolved.panes[0].activeId, "motion");
 });
 
 test("activating a tab prunes pane siblings from the open list", () => {

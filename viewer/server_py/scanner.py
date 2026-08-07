@@ -25,7 +25,7 @@ from .encoding import base36, encode_uri_component
 CAD_CATALOG_SCHEMA_VERSION = 4
 
 SOURCE_EXTENSIONS = frozenset(
-    [".step", ".stp", ".stl", ".3mf", ".glb", ".gcode", ".dxf", ".urdf", ".srdf", ".sdf"]
+    [".step", ".stp", ".stl", ".3mf", ".glb", ".dxf", ".urdf", ".srdf", ".sdf"]
 )
 IMPLICIT_CAD_EXTENSIONS = (".implicit.js", ".implicit.mjs")
 # Dot-prefixed (hidden) directories are skipped generically by _should_skip_directory;

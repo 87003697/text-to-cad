@@ -14,7 +14,7 @@ export function cadFileParamForEntry(entry) {
 
 export function cadPathForEntry(entry) {
   const file = cadFileParamForEntry(entry);
-  return file.replace(/\.(step|stp|stl|3mf|glb|gcode|dxf|urdf|srdf|sdf)$/i, "");
+  return file.replace(/\.(step|stp|stl|3mf|glb|dxf|urdf|srdf|sdf)$/i, "");
 }
 
 function writeUrl(url, { history = "replace" } = {}) {
@@ -190,7 +190,7 @@ function normalizedEntryStem(entry) {
     // generator suffix to `<name>` so the label reconstructs as `<name>.step` / `<name>.dxf`
     // (not `<name>.step.step` or `<name>.dxf.dxf`).
     .replace(/\.(step|stp|dxf)\.py$/i, "")
-    .replace(/\.(step|stp|stl|3mf|glb|gcode|dxf|urdf|srdf|sdf|py)$/i, "");
+    .replace(/\.(step|stp|stl|3mf|glb|dxf|urdf|srdf|sdf|py)$/i, "");
 }
 
 export function sidebarDirectoryIdForEntry(entry) {
@@ -212,7 +212,7 @@ export function filenameLabelForEntry(entry) {
     return "";
   }
   const kind = String(entry?.kind || "").trim().toLowerCase();
-  const directSourceFormats = new Set(["dxf", "urdf", "srdf", "sdf", "stl", "3mf", "glb", "gcode", "implicit"]);
+  const directSourceFormats = new Set(["dxf", "urdf", "srdf", "sdf", "stl", "3mf", "glb", "implicit"]);
   const sourceFormat = directSourceFormats.has(kind)
     ? kind
     : String(sourceExtensionForEntry(entry) || "step").trim().toLowerCase();
@@ -237,9 +237,6 @@ export function filenameLabelForEntry(entry) {
   }
   if (sourceFormat === "glb" || entry?.kind === "glb") {
     return `${stem}.glb`;
-  }
-  if (sourceFormat === "gcode" || entry?.kind === "gcode") {
-    return `${stem}.gcode`;
   }
   if (sourceFormat === "implicit" || entry?.kind === "implicit") {
     return entryLeafName(entry);

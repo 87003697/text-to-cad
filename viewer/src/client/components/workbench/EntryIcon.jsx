@@ -7,7 +7,6 @@ import {
   FileBox,
   LoaderCircle,
   Printer,
-  Route,
   Triangle
 } from "lucide-react";
 
@@ -27,9 +26,8 @@ const ENTRY_ICON_COMPONENTS = {
   // actually made of, so mesh and B-rep never read alike.
   [ENTRY_ICON_KIND.STEP]: Box,
   [ENTRY_ICON_KIND.STL_MESH]: Triangle,
-  // 3MF is the 3D-print package; G-code is the toolpath the machine follows.
+  // 3MF is the 3D-print package.
   [ENTRY_ICON_KIND.THREE_MF_MESH]: Printer,
-  [ENTRY_ICON_KIND.GCODE]: Route,
   [ENTRY_ICON_KIND.GLB_MESH]: FileBox,
   [ENTRY_ICON_KIND.DXF]: DraftingCompass,
   [ENTRY_ICON_KIND.ROBOT]: Bot,

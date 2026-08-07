@@ -10,12 +10,12 @@ CAD references, and verify generated assets without leaving the browser.
 
 - Scans the local directory named by the URL's path and mirrors its folder
   structure in the sidebar.
-- Opens `.step`, `.stp`, `.stl`, `.3mf`, `.glb`, `.gcode`, `.dxf`, `.urdf`,
-  `.srdf`, and `.sdf` entries.
+- Opens `.step`, `.stp`, `.stl`, `.3mf`, `.glb`, `.dxf`, `.urdf`, `.srdf`,
+  and `.sdf` entries.
 - Uses hidden STEP GLB/topology sidecars for assembly structure, face/edge
   picking, copied CAD references, and STEP parameter controls.
-- Previews mesh files, DXF flat patterns, G-code toolpaths, URDF/SDF robots,
-  and SRDF group states in one app shell.
+- Previews mesh files, DXF flat patterns, URDF/SDF robots, and SRDF group
+  states in one app shell.
 - Runs against either a local filesystem backend or hosted Vercel Blob storage.
 - Can regenerate STEP GLB/topology artifacts and generated-DXF drawing
   packages when the CAD Python runtime is

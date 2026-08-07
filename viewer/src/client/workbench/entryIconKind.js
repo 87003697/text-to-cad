@@ -7,7 +7,6 @@ import {
 export const ENTRY_ICON_KIND = Object.freeze({
   LOADING: "loading",
   DXF: "dxf",
-  GCODE: "gcode",
   IMPLICIT: "implicit",
   ROBOT: "robot",
   STEP: "step",
@@ -49,9 +48,6 @@ export function entryIconKind(entry, {
   }
   if (normalizedSourceFormat === RENDER_FORMAT.DXF || normalizedKind === RENDER_FORMAT.DXF) {
     return ENTRY_ICON_KIND.DXF;
-  }
-  if (normalizedSourceFormat === RENDER_FORMAT.GCODE || normalizedKind === RENDER_FORMAT.GCODE) {
-    return ENTRY_ICON_KIND.GCODE;
   }
   if (normalizedSourceFormat === RENDER_FORMAT.IMPLICIT || normalizedKind === RENDER_FORMAT.IMPLICIT) {
     return ENTRY_ICON_KIND.IMPLICIT;

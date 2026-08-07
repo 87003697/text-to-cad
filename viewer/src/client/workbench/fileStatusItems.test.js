@@ -7,7 +7,6 @@ import {
   fileStatusWarningOrErrorItems,
   fileStatusHasWarningsOrErrors,
   formatFileStatusItemForAgent,
-  gcodeFileStatusItems,
   mostIntenseFileStatusLevel,
   sdfFileStatusItems,
   stepFileStatusItems,
@@ -197,18 +196,6 @@ test("stepFileStatusItems trims obsolete regeneration prompts from artifact mess
 });
 
 test("parser warnings normalize to status items", () => {
-  assert.deepEqual(gcodeFileStatusItems({ warnings: ["Inch units are not supported."] }).map((item) => ({
-    level: item.level,
-    source: item.source,
-    title: item.title,
-    message: item.message
-  })), [{
-    level: FILE_STATUS_LEVELS.WARNING,
-    source: "gcode-parser",
-    title: "G-code warning",
-    message: "Inch units are not supported."
-  }]);
-
   assert.equal(sdfFileStatusItems({
     staticMetadata: {
       warnings: ["Unsupported geometry was skipped."]

@@ -29,7 +29,7 @@ const skillGroups = [
   {
     name: "CAD Viewer",
     path: "skills/cad-viewer",
-    summary: "Shows local browser previews for CAD, G-code, and robot files.",
+    summary: "Shows local browser previews for CAD and robot files.",
   },
   {
     name: "step.parts",

@@ -1,10 +1,6 @@
 export const FILE_SHEET_SECTION_IDS = Object.freeze({
   FILE_STATUS: "status",
   DXF: "dxf",
-  GCODE_TOOLPATH: "toolpath",
-  GCODE_FEATURES: "features",
-  GCODE_STATS: "stats",
-  GCODE_BOUNDS: "bounds",
   STEP_TREE: "tree",
   STEP_REFERENCE: "reference",
   STEP_PARAMETERS: "parameters",
@@ -35,14 +31,6 @@ export function renderedFileSheetSectionIds(kind, options = {}) {
   switch (normalizedKind) {
     case "dxf":
       return [...status, FILE_SHEET_SECTION_IDS.DXF];
-    case "gcode":
-      return [
-        ...status,
-        FILE_SHEET_SECTION_IDS.GCODE_TOOLPATH,
-        FILE_SHEET_SECTION_IDS.GCODE_FEATURES,
-        FILE_SHEET_SECTION_IDS.GCODE_STATS,
-        FILE_SHEET_SECTION_IDS.GCODE_BOUNDS
-      ];
     case "step":
       // Display is the one theme-adjacent tab rendered in the sheet — display
       // mode plus the section-plane and exploded-view transforms, all per-file
@@ -87,11 +75,6 @@ export function defaultOpenFileSheetSectionIds(kind, options = {}) {
       return [
         ...(options.hasFileStatus ? [FILE_SHEET_SECTION_IDS.FILE_STATUS] : []),
         FILE_SHEET_SECTION_IDS.DXF
-      ];
-    case "gcode":
-      return [
-        ...(options.hasFileStatus ? [FILE_SHEET_SECTION_IDS.FILE_STATUS] : []),
-        FILE_SHEET_SECTION_IDS.GCODE_TOOLPATH
       ];
     case "step":
       // In the tabbed layout the default-active bottom tab is Display, so the

@@ -3,7 +3,6 @@ import {
   isAbortError,
   loadRenderDisplayEdgeBundle,
   loadRenderDxf,
-  loadRenderGcode,
   loadRenderGlb,
   loadRenderJson,
   loadRenderSelectorBundle,
@@ -12,7 +11,6 @@ import {
   loadRenderUrdf,
   peekRenderDxf,
   peekRenderDisplayEdgeBundle,
-  peekRenderGcode,
   peekRenderGlb,
   peekRenderSelectorBundle,
   peekRenderSdf,
@@ -222,7 +220,6 @@ export function useCadAssets({
   entryHasReferences,
   entryHasDisplayEdges = () => false,
   entryHasDxf,
-  entryHasGcode,
   buildNormalizedReferenceState,
 }) {
   const [meshState, setMeshState] = useState(null);
@@ -235,10 +232,6 @@ export function useCadAssets({
   const [dxfStatus, setDxfStatus] = useState(ASSET_STATUS.PENDING);
   const [dxfError, setDxfError] = useState("");
   const [dxfLoadStage, setDxfLoadStage] = useState("");
-  const [gcodeState, setGcodeState] = useState(null);
-  const [gcodeStatus, setGcodeStatus] = useState(ASSET_STATUS.PENDING);
-  const [gcodeError, setGcodeError] = useState("");
-  const [gcodeLoadStage, setGcodeLoadStage] = useState("");
   const [implicitState, setImplicitState] = useState(null);
   const [implicitStatus, setImplicitStatus] = useState(ASSET_STATUS.PENDING);
   const [implicitError, setImplicitError] = useState("");
@@ -258,14 +251,12 @@ export function useCadAssets({
 
   const requestIdRef = useRef(0);
   const dxfRequestIdRef = useRef(0);
-  const gcodeRequestIdRef = useRef(0);
   const implicitRequestIdRef = useRef(0);
   const urdfRequestIdRef = useRef(0);
   const referenceRequestIdRef = useRef(0);
   const displayEdgeRequestIdRef = useRef(0);
   const meshAbortControllerRef = useRef(null);
   const dxfAbortControllerRef = useRef(null);
-  const gcodeAbortControllerRef = useRef(null);
   const implicitAbortControllerRef = useRef(null);
   const urdfAbortControllerRef = useRef(null);
   const referenceAbortControllerRef = useRef(null);
@@ -378,22 +369,6 @@ export function useCadAssets({
     };
   }, [entryHasDxf]);
 
-  const getCachedGcodeState = useCallback((entry) => {
-    if (!entryHasGcode(entry)) {
-      return null;
-    }
-    const gcodeData = peekRenderGcode(entryAssetUrl(entry, "gcode"));
-    if (!gcodeData) {
-      return null;
-    }
-    return {
-      file: entry.file,
-      kind: entry.kind,
-      gcodeHash: entryAssetHash(entry, "gcode"),
-      gcodeData
-    };
-  }, [entryHasGcode]);
-
   const getCachedImplicitState = useCallback((entry) => {
     if (String(entry?.kind || "").trim().toLowerCase() !== RENDER_FORMAT.IMPLICIT) {
       return null;
@@ -457,12 +432,6 @@ export function useCadAssets({
     dxfRequestIdRef.current += 1;
     abortLoad(dxfAbortControllerRef);
     setDxfLoadStage("");
-  }, []);
-
-  const cancelGcodeLoad = useCallback(() => {
-    gcodeRequestIdRef.current += 1;
-    abortLoad(gcodeAbortControllerRef);
-    setGcodeLoadStage("");
   }, []);
 
   const cancelImplicitLoad = useCallback(() => {
@@ -853,60 +822,6 @@ export function useCadAssets({
     }
   }, [cancelDxfLoad, entryHasDxf, getCachedDxfState]);
 
-  const loadGcodeForEntry = useCallback(async (entry) => {
-    cancelGcodeLoad();
-    const requestId = gcodeRequestIdRef.current;
-
-    if (!entryHasGcode(entry)) {
-      setGcodeState(null);
-      setGcodeStatus(ASSET_STATUS.PENDING);
-      setGcodeError("");
-      return;
-    }
-
-    const cachedGcodeState = getCachedGcodeState(entry);
-    if (cachedGcodeState) {
-      setGcodeState(cachedGcodeState);
-      setGcodeStatus(ASSET_STATUS.READY);
-      setGcodeError("");
-      return;
-    }
-
-    const controller = new AbortController();
-    gcodeAbortControllerRef.current = controller;
-    setGcodeStatus(ASSET_STATUS.LOADING);
-    setGcodeError("");
-    setGcodeLoadStage("loading G-code");
-
-    try {
-      const gcodeData = await loadRenderGcode(entryAssetUrl(entry, "gcode"), { signal: controller.signal });
-      if (requestId !== gcodeRequestIdRef.current) {
-        return;
-      }
-      setGcodeLoadStage("building preview");
-      setGcodeState({
-        file: entry.file,
-        kind: entry.kind,
-        gcodeHash: entryAssetHash(entry, "gcode"),
-        gcodeData
-      });
-      setGcodeStatus(ASSET_STATUS.READY);
-    } catch (err) {
-      if (requestId !== gcodeRequestIdRef.current || isAbortError(err) || controller.signal.aborted) {
-        return;
-      }
-      setGcodeStatus(ASSET_STATUS.ERROR);
-      setGcodeError(err instanceof Error ? err.message : String(err));
-    } finally {
-      if (gcodeAbortControllerRef.current === controller) {
-        gcodeAbortControllerRef.current = null;
-      }
-      if (requestId === gcodeRequestIdRef.current) {
-        setGcodeLoadStage("");
-      }
-    }
-  }, [cancelGcodeLoad, entryHasGcode, getCachedGcodeState]);
-
   const loadImplicitForEntry = useCallback(async (entry) => {
     cancelImplicitLoad();
     const requestId = implicitRequestIdRef.current;
@@ -1045,7 +960,6 @@ export function useCadAssets({
   useEffect(() => () => {
     abortLoad(meshAbortControllerRef);
     abortLoad(dxfAbortControllerRef);
-    abortLoad(gcodeAbortControllerRef);
     abortLoad(implicitAbortControllerRef);
     abortLoad(urdfAbortControllerRef);
     abortLoad(referenceAbortControllerRef);
@@ -1069,13 +983,6 @@ export function useCadAssets({
     dxfError,
     setDxfError,
     dxfLoadStage,
-    gcodeState,
-    setGcodeState,
-    gcodeStatus,
-    setGcodeStatus,
-    gcodeError,
-    setGcodeError,
-    gcodeLoadStage,
     implicitState,
     setImplicitState,
     implicitStatus,
@@ -1108,19 +1015,16 @@ export function useCadAssets({
     getCachedReferenceState,
     getCachedDisplayEdgeState,
     getCachedDxfState,
-    getCachedGcodeState,
     getCachedImplicitState,
     getCachedUrdfState,
     cancelMeshLoad,
     cancelDxfLoad,
-    cancelGcodeLoad,
     cancelImplicitLoad,
     cancelUrdfLoad,
     cancelReferenceLoad,
     cancelDisplayEdgeLoad,
     loadMeshForEntry,
     loadDxfForEntry,
-    loadGcodeForEntry,
     loadImplicitForEntry,
     loadUrdfForEntry,
     loadReferencesForEntry,

@@ -22,9 +22,6 @@ function formatLabelForEntry(entry, sourceFormat) {
   if (sourceFormat === RENDER_FORMAT.DXF) {
     return "DXF";
   }
-  if (sourceFormat === RENDER_FORMAT.GCODE) {
-    return "G-code";
-  }
   if (sourceFormat === RENDER_FORMAT.IMPLICIT) {
     return "Implicit";
   }
@@ -71,7 +68,6 @@ export function selectHomeEntries(entries) {
     (entry) => entry?.kind === "assembly",
     (entry) => entrySourceFormat(entry) === RENDER_FORMAT.STEP && entry?.kind !== "assembly",
     (entry) => entrySourceFormat(entry) === RENDER_FORMAT.DXF,
-    (entry) => entrySourceFormat(entry) === RENDER_FORMAT.GCODE,
     (entry) => entrySourceFormat(entry) === RENDER_FORMAT.IMPLICIT,
     (entry) => isRobotRenderFormat(entrySourceFormat(entry)) || entry?.kind === "srdf",
     (entry) => isMeshRenderFormat(entrySourceFormat(entry))

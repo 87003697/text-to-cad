@@ -8,14 +8,12 @@ import {
   gitLfsPointerDetailsFromBuffer,
   loadRender3Mf,
   loadRenderArrayBuffer,
-  loadRenderGcode,
   loadRenderGlb,
   loadRenderJson,
   loadRenderSdf,
   loadRenderDisplayEdgeBundle,
   loadRenderSelectorBundle,
   loadRenderTopologyIndex,
-  peekRenderGcode,
   peekRenderJson,
   peekRenderSdf
 } from "./renderAssetClient.js";
@@ -354,31 +352,6 @@ test("SDF robot descriptions load through the render cache", async (t) => {
   assert.equal(first.rootLink, "base_link");
   assert.equal(second, first);
   assert.equal(peekRenderSdf(url), first);
-  assert.equal(fetchCount, 1);
-});
-
-test("G-code toolpaths load and parse through the render cache", async (t) => {
-  const originalFetch = globalThis.fetch;
-  const url = `/toolpath-${Date.now()}-${Math.random()}.gcode`;
-  let fetchCount = 0;
-
-  globalThis.fetch = async (requestUrl) => {
-    fetchCount += 1;
-    assert.equal(String(requestUrl), url);
-    return new Response("G21\nG90\nM82\nG0 X0 Y0 Z0.2\nG1 X5 Y0 E0.2\n", { status: 200 });
-  };
-
-  t.after(() => {
-    globalThis.fetch = originalFetch;
-  });
-
-  const first = await loadRenderGcode(url);
-  const second = await loadRenderGcode(url);
-
-  assert.equal(first.layers.length, 1);
-  assert.equal(first.stats.extrusionMoves, 1);
-  assert.equal(second, first);
-  assert.equal(peekRenderGcode(url), first);
   assert.equal(fetchCount, 1);
 });
 
