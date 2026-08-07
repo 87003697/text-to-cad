@@ -19,6 +19,7 @@ import DrawingToolbar from "./DrawingToolbar";
 import { ToolbarButton } from "./ToolbarButton";
 import { CAD_WORKSPACE_TOOLBAR_DESKTOP_WIDTH_CLASS } from "./ToolbarShell";
 import { DisplayProjectionControl } from "../viewer/DisplayProjectionControl";
+import MeasurePanel from "../viewer/MeasurePanel";
 
 const FLOATING_TOOL_BAR_SURFACE_CLASS =
   "cad-glass-surface border border-sidebar-border text-sidebar-foreground shadow-sm";
@@ -42,7 +43,10 @@ function DesktopFloatingToolBar({
   drawToolActive,
   measureModeActive = false,
   measureDisabled = false,
-  measureGuidance = "",
+  measureState = null,
+  activeMeasurementId = "",
+  onMeasureActivate = null,
+  onMeasureDelete = null,
   handleSelectTabToolMode,
   displayMode,
   onDisplayModeChange,
@@ -86,6 +90,9 @@ function DesktopFloatingToolBar({
     typeof onDisplayModeChange === "function" &&
     typeof onProjectionChange === "function";
 
+  const measurementsCount = measureState?.measurements?.length || 0;
+  const showMeasurePanel = !dxfMode && !meshOnlyMode && (measureModeActive || measurementsCount > 0);
+
   return (
     <div
       className="absolute z-20 flex flex-col items-end gap-1"
@@ -121,7 +128,6 @@ function DesktopFloatingToolBar({
                 onClick={() => handleSelectTabToolMode("measure")}
                 disabled={measureDisabled}
                 aria-pressed={measureModeActive}
-                className={measureModeActive ? "ring-2 ring-amber-400/70" : undefined}
               >
                 <Ruler className="size-3" strokeWidth={2} aria-hidden="true" />
               </ToolbarButton>
@@ -193,10 +199,14 @@ function DesktopFloatingToolBar({
         </div>
       </TooltipProvider>
 
-      {measureModeActive && measureGuidance ? (
-        <div className="pointer-events-none rounded-md border border-amber-400/40 bg-slate-950/90 px-2 py-1 text-[10px] font-medium text-amber-200 shadow-sm">
-          {measureGuidance}
-        </div>
+      {showMeasurePanel ? (
+        <MeasurePanel
+          measurements={measureState?.measurements || []}
+          activeId={activeMeasurementId}
+          onActivate={onMeasureActivate}
+          onDelete={onMeasureDelete}
+          measureModeActive={measureModeActive}
+        />
       ) : null}
 
       {!dxfMode && !meshOnlyMode && drawToolActive ? (

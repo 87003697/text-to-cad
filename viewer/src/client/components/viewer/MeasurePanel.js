@@ -11,33 +11,32 @@ export default function MeasurePanel({
   activeId = "",
   onActivate = null,
   onDelete = null,
-  measureModeActive = false,
-  visible = false
+  measureModeActive = false
 }) {
-  if (!visible) {
-    return null;
-  }
   return (
-    <div className="pointer-events-auto absolute left-3 top-3 z-20 w-60 overflow-hidden rounded-lg border border-cyan-400/30 bg-slate-950/90 text-white shadow-lg backdrop-blur-sm">
-      <div className="flex items-center justify-between border-b border-white/10 px-3 py-1.5 text-[11px]">
-        <span className="font-semibold text-cyan-300">Measurements</span>
-        <span className="tabular-nums text-white/50">
+    <div className="pointer-events-auto inline-flex w-52 max-w-[calc(100vw-2rem)] flex-col overflow-hidden rounded-md border border-sidebar-border cad-glass-surface text-sidebar-foreground shadow-sm">
+      <div className="flex items-center justify-between px-2.5 pt-1.5 pb-1 text-[10px] font-medium text-sidebar-foreground/60">
+        <span>Measurements</span>
+        <span className="tabular-nums">
           {measurements.length}/{MEASURE_RULER_MAX_MEASUREMENTS}
         </span>
       </div>
-      <div className="max-h-52 overflow-y-auto py-1">
+      <div className="max-h-40 overflow-y-auto px-1 pb-1">
         {measurements.length === 0 ? (
-          <div className="px-3 py-2 text-[11px] leading-relaxed text-white/50">
-            {measureModeActive ? "Click two points on the model to measure" : "No measurements yet"}
+          <div className="px-1.5 py-1 text-[11px] leading-snug text-sidebar-foreground/60">
+            {measureModeActive ? "Click two points on model to measure" : "No measurements"}
           </div>
         ) : (
           measurements.map((item, index) => {
             const active = item.id === activeId;
+            const labelText = measureLabelText(item.measurement);
+            const deltaText = formatMeasurementDelta(item.measurement);
             return (
               <div
                 key={item.id}
                 role="button"
                 tabIndex={0}
+                title={deltaText ? `${labelText} (${deltaText})` : labelText}
                 onClick={() => onActivate?.(item.id)}
                 onKeyDown={(event) => {
                   if (event.key === "Enter" || event.key === " ") {
@@ -46,28 +45,26 @@ export default function MeasurePanel({
                   }
                 }}
                 className={cn(
-                  "mx-1 flex cursor-pointer items-start justify-between gap-2 rounded-md px-2 py-1.5 transition",
+                  "flex h-7 cursor-pointer items-center justify-between gap-1.5 rounded-sm px-1.5 text-[11px] transition",
                   active
-                    ? "border-l-2 border-cyan-300 bg-cyan-400/10"
-                    : "border-l-2 border-transparent hover:bg-white/5"
+                    ? "bg-sidebar-accent font-medium text-sidebar-accent-foreground"
+                    : "text-sidebar-foreground/80 hover:bg-sidebar-accent/50 hover:text-sidebar-accent-foreground"
                 )}
               >
-                <div className="min-w-0">
-                  <div className="text-xs font-semibold tabular-nums">{measureLabelText(item.measurement)}</div>
-                  <div className="truncate text-[10px] leading-tight text-white/55">
-                    {formatMeasurementDelta(item.measurement)}
-                  </div>
-                </div>
+                <span className="truncate tabular-nums">
+                  <span className="mr-1 text-[10px] text-sidebar-foreground/50">#{index + 1}</span>
+                  {labelText}
+                </span>
                 <button
                   type="button"
                   aria-label={`Delete measurement ${index + 1}`}
-                  className="mt-0.5 grid size-4 shrink-0 place-items-center rounded-sm text-white/60 transition hover:bg-white/10 hover:text-white"
+                  className="grid size-4 shrink-0 place-items-center rounded-sm text-sidebar-foreground/50 transition hover:bg-sidebar-accent hover:text-sidebar-accent-foreground"
                   onClick={(event) => {
                     event.stopPropagation();
                     onDelete?.(item.id);
                   }}
                 >
-                  <X className="size-3" strokeWidth={2.5} aria-hidden="true" />
+                  <X className="size-3" strokeWidth={2} aria-hidden="true" />
                 </button>
               </div>
             );

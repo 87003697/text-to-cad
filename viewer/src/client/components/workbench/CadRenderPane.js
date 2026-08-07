@@ -347,8 +347,6 @@ export default function CadRenderPane({
   handleModelReferenceContext,
   onMeasurePick,
   onMeasureHoverPoint,
-  onMeasureDelete,
-  onMeasureActivate = null,
   activeMeasurementId = "",
   measureState = null,
   measureModeActive = false,
@@ -599,8 +597,6 @@ export default function CadRenderPane({
           onContextReference={handleModelReferenceContext}
           onMeasurePick={onMeasurePick}
           onMeasureHoverPoint={onMeasureHoverPoint}
-          onMeasureDelete={onMeasureDelete}
-          onMeasureActivate={onMeasureActivate}
           activeMeasurementId={activeMeasurementId}
           measureState={measureState}
           measureModeActive={measureModeActive}

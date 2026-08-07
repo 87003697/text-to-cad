@@ -141,7 +141,6 @@ import {
   THEME_FLOOR_MODES
 } from "cadjs/lib/themeSettings";
 import ViewPlaneControl from "./viewer/ViewPlaneControl";
-import MeasurePanel from "./viewer/MeasurePanel";
 import { useViewerDrawingOverlay } from "./viewer/hooks/useViewerDrawingOverlay";
 import { useViewerMeasureOverlay } from "./viewer/hooks/useViewerMeasureOverlay";
 import { useViewerPicking } from "./viewer/hooks/useViewerPicking";
@@ -2095,8 +2094,6 @@ const CadViewer = forwardRef(function CadViewer({
   onContextReference,
   onMeasurePick,
   onMeasureHoverPoint,
-  onMeasureDelete,
-  onMeasureActivate = null,
   activeMeasurementId = "",
   measureState = null,
   measureModeActive = false,
@@ -4775,16 +4772,6 @@ const CadViewer = forwardRef(function CadViewer({
         style={{ pointerEvents: "none" }}
         aria-hidden="true"
       />
-      {!previewMode ? (
-        <MeasurePanel
-          measurements={measureState?.measurements || []}
-          activeId={activeMeasurementId}
-          onActivate={onMeasureActivate}
-          onDelete={onMeasureDelete}
-          measureModeActive={measureModeActive}
-          visible={measureModeActive || (measureState?.measurements?.length || 0) > 0}
-        />
-      ) : null}
       <canvas
         ref={drawingCanvasRef}
         className="absolute inset-0 z-10 h-full w-full touch-none"

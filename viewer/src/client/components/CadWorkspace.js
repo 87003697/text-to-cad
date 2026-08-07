@@ -5534,9 +5534,6 @@ export default function CadWorkspace({
     const items = measureRulerState?.measurements || [];
     setActiveMeasureId(items.length ? items[items.length - 1].id : "");
   }, [measureRulerState]);
-  const measureGuidance = measureModeActive
-    ? (measureRulerState?.draft ? "Select second point" : "Select first point")
-    : "";
   useEffect(() => {
     setMeasureRulerState((current) => measureRulerStateForChange(current, { entryChanged: true }));
   }, [selectedKey]);
@@ -8678,8 +8675,6 @@ export default function CadWorkspace({
           handleModelReferenceContext={handleModelReferenceContext}
           onMeasurePick={handleMeasurePick}
           onMeasureHoverPoint={handleMeasureHoverPoint}
-          onMeasureDelete={handleMeasureDelete}
-          onMeasureActivate={setActiveMeasureId}
           activeMeasurementId={activeMeasureId}
           measureState={measureRulerState}
           viewerContextMenu={viewerContextMenu}
@@ -8821,7 +8816,10 @@ export default function CadWorkspace({
                 drawToolActive={drawToolActive}
                 measureModeActive={measureModeActive}
                 measureDisabled={measureToolDisabled}
-                measureGuidance={measureGuidance}
+                measureState={measureRulerState}
+                activeMeasurementId={activeMeasureId}
+                onMeasureActivate={setActiveMeasureId}
+                onMeasureDelete={handleMeasureDelete}
                 handleSelectTabToolMode={handleSelectTabToolMode}
                 displayMode={isStepView ? displaySettings.mode : undefined}
                 onDisplayModeChange={isStepView ? updateDisplayMode : undefined}
