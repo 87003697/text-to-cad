@@ -210,6 +210,46 @@ class CompoundAssemblyGenerationTests(unittest.TestCase):
         messages = [str(item.message) for item in caught]
         self.assertNotIn("Unknown Compound type, color not set", messages)
 
+    def test_colored_bare_compound_leaf_keeps_color_and_does_not_warn(self) -> None:
+        # A boolean/chamfer chain can return a bare `Compound` (not
+        # Part/Sketch/Curve). Exported alone — the per-component doc path —
+        # this used to warn "Unknown Compound type, color not set" and ship
+        # the geometry uncolored. The solids inside must get the color.
+        import build123d
+
+        solid = build123d.Solid.make_box(1, 1, 1)
+        shape = build123d.Compound(obj=[solid])
+        self.assertNotIsInstance(shape, build123d.Part)
+        shape.label = "bare_leaf"
+        shape.color = build123d.Color(1, 0, 0)
+
+        with tempfile.TemporaryDirectory(prefix="cadgen-compound-") as tempdir:
+            with warnings.catch_warnings(record=True) as caught:
+                warnings.simplefilter("always")
+                scene = export_build123d_step_scene(
+                    shape,
+                    Path(tempdir) / "bare_leaf.step",
+                    text_to_cad_entry_kind="part",
+                )
+
+        messages = [str(item.message) for item in caught]
+        self.assertNotIn("Unknown Compound type, color not set", messages)
+
+        colors = {
+            tuple(round(component, 3) for component in color)
+            for color in scene.prototype_colors.values()
+        }
+
+        def collect(node):
+            if node.color is not None:
+                colors.add(tuple(round(component, 3) for component in node.color))
+            for child in node.children:
+                collect(child)
+
+        for root in scene.roots:
+            collect(root)
+        self.assertIn((1.0, 0.0, 0.0, 1.0), colors)
+
     def test_colored_child_shapes_survive_compound_assembly_export(self) -> None:
         import build123d
 

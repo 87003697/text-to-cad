@@ -114,8 +114,6 @@ def quantity_color_rgba_from_color(color: object) -> object | None:
 
 
 def _create_bin_xcaf_doc(to_export: Any) -> Any:
-    import warnings
-
     from OCP.TopLoc import TopLoc_Location
     from build123d.exporters3d import (
         Compound,
@@ -228,8 +226,18 @@ def _create_bin_xcaf_doc(to_export: Any) -> Any:
             elif isinstance(node, Curve):
                 explorer = TopExp_Explorer(node.wrapped, ta.TopAbs_EDGE)
             else:
-                warnings.warn("Unknown Compound type, color not set", stacklevel=2)
-                explorer = TopExp_Explorer()
+                # A bare `Compound` leaf (a boolean/chamfer chain that came
+                # back as plain Compound rather than Part/Sketch/Curve) still
+                # holds valid colored geometry. Warning and skipping here
+                # silently exported it uncolored — the per-component doc path
+                # ships each leaf alone, so the model rendered washed-out.
+                # Color whatever the compound actually contains, most solid
+                # content first.
+                explorer = TopExp_Explorer(node.wrapped, ta.TopAbs_SOLID)
+                if not explorer.More():
+                    explorer = TopExp_Explorer(node.wrapped, ta.TopAbs_FACE)
+                if not explorer.More():
+                    explorer = TopExp_Explorer(node.wrapped, ta.TopAbs_EDGE)
 
             while explorer.More():
                 sub_nodes.append(explorer.Current())
