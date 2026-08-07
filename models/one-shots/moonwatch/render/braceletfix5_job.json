@@ -1,0 +1,11 @@
+{
+  "input": "bracelet.step.py",
+  "mode": "view",
+  "appearance": "render/presentation_theme.json",
+  "display": { "mode": "rendered" },
+  "outputs": [
+    { "path": "/tmp/moonwatch/braceletfix5_catalog.png", "camera": { "position": [14, -52, 26], "target": [0, -34, 0] }, "sizeProfile": "presentation-large" },
+    { "path": "/tmp/moonwatch/braceletfix5_macro.png", "camera": { "position": [9, -46, 13], "target": [0, -36, 0.5] }, "sizeProfile": "presentation-large" }
+  ],
+  "render": { "padding": 0.03 }
+}

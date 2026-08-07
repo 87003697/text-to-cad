@@ -3,8 +3,11 @@
 Frame: WATCH assembly frame from `_spec` — +Z through the crystal, 12
 o'clock at +Y, z = 0 at the case-middle/caseback joint. The bracelet
 attaches at the spring-bar axes (y = +/-SPRING_BAR_Y, z = SPRING_BAR_Z)
-and drapes outward along +/-Y with a progressive downward pitch, like a
-bracelet resting over an invisible wrist form.
+and drapes outward along +/-Y on ONE smooth arc: the per-joint relative
+pitch eases from DRAPE_DELTA0 to DRAPE_DELTA1 (2 -> 7 degrees), so
+curvature grows monotonically like a bracelet resting over an invisible
+wrist form, with no kink at any joint; the clasp chord continues the
+same arc one increment further.
 
 Construction vocabulary (all rows share it):
 
@@ -52,13 +55,16 @@ Construction vocabulary (all rows share it):
   separate convex bodies over parallel shadow grooves. All shutline cuts
   only REMOVE material, so the 0.06 articulation clearance is untouched.
 - Directional finish: every link, end link, and clasp plate carries axial
-  satin brushing on its crown — fine parallel V-grooves (shared
-  `_finishing.straight_grain_cutter`, pitch GRAIN_PITCH, depth
-  GRAIN_DEPTH) along the LOCAL strap axis, seated groove-by-groove onto
-  the crown arc (`_grain_field`) and cut in the construction frame before
-  posing so the grain drapes with each link. Bevels, rolled shoulders,
-  lateral shoulder rounds, and flanks are never grained: they stay
-  mirror-polished against the satin field.
+  satin brushing on its crown — fine parallel V-grooves (pitch
+  GRAIN_PITCH, depth GRAIN_DEPTH) along the LOCAL strap axis. Links and
+  end links subtract shared `_finishing.straight_grain_cutter` tools
+  seated groove-by-groove onto the crown arc (`_grain_field`) in the
+  construction frame before posing, so the grain drapes with each link;
+  the clasp plates bake the same V-notches into their swept section
+  (`_crowned_band(grain=True)`) so the grooves follow the clasp's
+  longitudinal curvature. Bevels, rolled shoulders, lateral shoulder
+  rounds, and flanks are never grained: they stay mirror-polished
+  against the satin field.
 """
 
 from __future__ import annotations
@@ -150,11 +156,13 @@ GRAIN_INSET = 0.35                  # field inset from every bevel/shoulder
 JOINT1_Y = 26.0
 JOINT1_Z = 2.6
 
-# drape: rows 1-2 gentle, then ~9 deg more per row (invisible wrist form)
-DRAPE_START = 3.0
-DRAPE_SECOND = 6.0
-DRAPE_STEP = 9.0
-CLASP_PITCH_DEG = 38.0              # clasp chord pitch below horizontal
+# drape: ONE smooth arc over the invisible wrist form. The per-joint
+# relative pitch eases linearly from DRAPE_DELTA0 (end link -> row 1) to
+# DRAPE_DELTA1 (last joint), so curvature grows monotonically and no
+# joint reads as a kink; the clasp chord continues the same arc exactly
+# one more DRAPE_DELTA1 increment past the last row.
+DRAPE_DELTA0 = 2.0                  # relative pitch at the first joint (deg)
+DRAPE_DELTA1 = 7.0                  # relative pitch at the last joint (deg)
 
 # end link
 END_LINK_WIDTH = S.LUG_WIDTH - 0.2  # 0.1 clearance to each lug inner face
@@ -434,8 +442,8 @@ def _make_link(
     `tilt_far` (degrees) lean each end cut onto the joint's bisector —
     half the posed relative pitch, positive magnitude — so both walls
     of a joint are parallel and the wall opening stays 2*SHUT_EDGE at
-    every drape angle (untilted walls close to ~0.05 and cross at the
-    bottom on the 9-degree joints).
+    every drape angle (untilted walls pinch shut at the bottom on the
+    steepest DRAPE_DELTA1 joints).
     """
     ya, yb = -EYE_R - 0.3, pitch + EYE_R + 0.3
     body = (
@@ -547,8 +555,16 @@ def make_pin(length):
 
 
 def make_spring_bar():
-    """Spring bar on the lug axis (watch frame, +Y side)."""
-    bar = _xcyl(S.SPRING_BAR_DIAMETER / 2.0, 22.0, S.SPRING_BAR_Y, S.SPRING_BAR_Z)
+    """Spring bar on the lug axis (watch frame, +Y side).
+
+    The visible barrel is kept SHORTER than the end link (its ends stop
+    0.1 inside the end-link bore, at x = +/-9.8 vs the end-link flanks at
+    +/-9.9): only the sprung reduced-diameter tips would enter the lug
+    holes on a real bar, and modeling the full barrel through the 0.1
+    flank<->lug slot left a bright exposed stub sliver on each side in
+    dial-side 3/4 views. The bar is fully shielded behind the end-link
+    wings; the lug holes still read as drilled from outside."""
+    bar = _xcyl(S.SPRING_BAR_DIAMETER / 2.0, 19.6, S.SPRING_BAR_Y, S.SPRING_BAR_Z)
     ends = [
         e
         for e in bar.edges()
@@ -621,13 +637,14 @@ def make_end_link():
     # joint-1 rolled shoulder: the same vocabulary as the row joints — the
     # tail deck rolls over a ROLL_R quarter-round whose vertical-tangent
     # wall sits SHUT_EDGE before the pin axis, leaned onto the joint
-    # bisector (row 1 sits at 3 degrees); the shadow deck past the wall
-    # shaves the eye knuckle crest. The whole cutter is clamped at
-    # z >= 3.62 (bore roof at the shutline is 3.55) so it cannot pinhole
-    # into the pin bore.
+    # bisector (half of row 1's DRAPE_DELTA0 pitch, tracking the drape
+    # schedule so the joint-1 walls stay parallel 0.28 apart); the shadow
+    # deck past the wall shaves the eye knuckle crest. The whole cutter is
+    # clamped at z >= 3.62 (bore roof at the shutline is 3.55) so it
+    # cannot pinhole into the pin bore.
     tail_roll = (
         Pos(0, jy, jz)
-        * Rot(-1.5, 0, 0)
+        * Rot(-DRAPE_DELTA0 / 2.0, 0, 0)
         * _reveal_cutter(
             -half_w, half_w, 0.0, 1.0, SHUT_EDGE, EYE_ROLL_DEPTH, 0.40,
             bev=BEVEL, z_apex=3.95 - jz,
@@ -717,20 +734,47 @@ def _band(r_out, r_in, phi0_deg, phi1_deg, half_w):
     return _prism_x(ann & wedge, half_w)
 
 
-def _crowned_band(r_out, r_in, phi0_deg, phi1_deg, half_w, s_top, bev):
+def _crowned_band(r_out, r_in, phi0_deg, phi1_deg, half_w, s_top, bev,
+                  grain=False):
     """Curved crowned plate: the crowned + 45-degree-beveled cross-section
     (see `_crowned_face`) swept along the clasp curvature arc, so the edge
-    breaks are baked into the profile instead of post-chamfered."""
+    breaks are baked into the profile instead of post-chamfered.
+
+    `grain=True` bakes the axial satin brushing into the SECTION: fine
+    V-notches (GRAIN_PITCH / GRAIN_DEPTH, same vocabulary as
+    `_grain_field`) are subtracted from the 2D crown arc before the
+    sweep, so the grooves follow the clasp's longitudinal curvature
+    exactly and continuously — a straight 3D grain tool cannot (the
+    CLASP_R sagitta over the plate is ~150x the groove depth, and chord
+    segmenting both costs minutes of booleans and multiplies the face
+    count ~25x). The notch field keeps GRAIN_INSET off the profile-baked
+    bevels so they stay mirror-polished; each notch is 0.004 narrower
+    than the pitch so mirrored-pair notch corners never meet in exact
+    (sliver-shedding) point tangency."""
     zc = T2 - CLASP_R
     t = r_out - r_in
     r_mid = (r_out + r_in) / 2.0
+    face = _crowned_face(-half_w, half_w, t / 2.0, -t / 2.0, s_top, bev)
+    if grain:
+        half_chord = half_w - bev
+        span = 2.0 * (half_chord - GRAIN_INSET)
+        w = GRAIN_PITCH / 2.0 - 0.002
+        notches = []
+        for i in range(int(span / GRAIN_PITCH) + 1):
+            u = -span / 2.0 + i * GRAIN_PITCH
+            z_i = t / 2.0 - _crown_drop(u, half_chord, s_top)
+            notches.append(Polygon(
+                (u - w, z_i + 0.02), (u + w, z_i + 0.02),
+                (u, z_i - GRAIN_DEPTH), align=None,
+            ))
+        face = face - notches
     path = Plane.YZ * CenterArc(
         (0, zc), r_mid,
         start_angle=90.0 - phi1_deg,
         arc_size=phi1_deg - phi0_deg,
     )
     plane = Plane(origin=path @ 0, x_dir=(1, 0, 0), z_dir=path % 0)
-    section = plane * _crowned_face(-half_w, half_w, t / 2.0, -t / 2.0, s_top, bev)
+    section = plane * face
     return sweep(section, path=path)
 
 
@@ -739,38 +783,6 @@ def _arc_point(phi_deg, radius):
     zc = T2 - CLASP_R
     p = math.radians(phi_deg)
     return radius * math.sin(p), zc + radius * math.cos(p)
-
-
-def _clasp_grain(r_out, phi0_deg, phi1_deg, half_w, s_top, bev, seg_deg=1.9):
-    """Axial brushed-grain tools for a curved crowned clasp plate.
-
-    Straight V-prisms cannot follow the CLASP_R longitudinal curve (its
-    sagitta over the plate is ~150x the groove depth), so the arc is split
-    into ~seg_deg chords and one crown-conformed `_grain_field` is seated
-    tangent at each chord's midpoint, sunk by half the chord's own sagitta
-    (~0.005) so the grooves bite over the whole chord instead of fading at
-    its ends. Groove x-offsets repeat identically segment to segment, so
-    the grain lines run continuously along the clasp; each segment's
-    grooves overrun the chord by 0.2 so consecutive segments genuinely
-    interpenetrate at the seams — butted end faces meet the neighbor's
-    tool in tangent contact and shed sliver solids in the cut. Same inset
-    rules as the links: the field stays off the profile-baked bevels."""
-    n = max(1, int(math.ceil((phi1_deg - phi0_deg) / seg_deg)))
-    dphi = (phi1_deg - phi0_deg) / n
-    half = math.radians(dphi) / 2.0
-    chord = r_out * math.sin(half) + 0.2       # chord half-length + overrun
-    sink = r_out * (1.0 - math.cos(half)) / 2.0
-    half_chord = half_w - bev
-    tools = []
-    for k in range(n):
-        pm = phi0_deg + (k + 0.5) * dphi
-        y, z = _arc_point(pm, r_out)
-        seg = _grain_field(
-            -half_chord + GRAIN_INSET, half_chord - GRAIN_INSET,
-            -chord, chord, 0.0, half_chord, s_top, -sink,
-        )
-        tools += [Pos(0, y, z) * Rot(-pm, 0, 0) * t for t in seg]
-    return tools
 
 
 def make_clasp():
@@ -786,9 +798,11 @@ def make_clasp():
     y_push, z_push = _arc_point(26.0, CLASP_R - 2.15)
 
     # --- outer plate (brushed, curved, crowned) + center hinge tab ----------
+    # axial satin brushing baked into the swept section (grain=True): the
+    # grooves follow the clasp's long axis; bevels stay mirror-polished
     plate = _crowned_band(
         CLASP_R, CLASP_R - CLASP_PLATE_T, 1.0, 31.0, CLASP_HALF_W,
-        CROWN_SAG, BEVEL,
+        CROWN_SAG, BEVEL, grain=True,
     )
     plan = extrude(
         Pos(0, 18.3) * RectangleRounded(S.CLASP_WIDTH, 35.0, 3.0),
@@ -805,27 +819,24 @@ def make_clasp():
     tab = _prism_x(tab_prof, 2.65) - _xcyl(BORE_R, 30.0, 0.0, 0.0)
     body = plate + tab
     # break only the short cut/end edges; the long swept facets already
-    # carry their profile-baked bevels and must stay crisp
+    # carry their profile-baked bevels and must stay crisp, and the grain
+    # micro-edges (groove flanks crossed by the plan end cuts, all well
+    # under 0.6 long) must never enter the chamfer candidate set
     short_edges = [
         e
         for e in body.edges()
         if (e.bounding_box().max.Y - e.bounding_box().min.Y) < 12.0
+        and e.length > 0.6
     ]
     body, _ = F.safe_chamfer(body, short_edges, 0.12)
-    # axial satin brushing along the clasp's long axis (after the edge
-    # break so groove micro-edges never enter the chamfer set); one
-    # batched subtract, field inset from the swept bevels and stopped
-    # short of the hinge relief and the rounded plan corners
-    body = body - _clasp_grain(CLASP_R, 2.0, 27.5, CLASP_HALF_W,
-                               CROWN_SAG, BEVEL)
     body.color = Color(*S.BRACELET_OUTER)
     parts.append((body, "clasp_body"))
 
     # --- inner cover plate (folded closed under the outer plate) ------------
-    # crowned + beveled section baked in; no post chamfer. Same axial
-    # brushing as the outer plate on its crowned face.
-    cover = _crowned_band(CLASP_R - 2.3, CLASP_R - 3.5, 4.0, 29.5, 7.0, 0.18, 0.10)
-    cover = cover - _clasp_grain(CLASP_R - 2.3, 5.0, 28.5, 7.0, 0.18, 0.10)
+    # crowned + beveled section baked in (with the same axial brushing as
+    # the outer plate); no post chamfer
+    cover = _crowned_band(CLASP_R - 2.3, CLASP_R - 3.5, 4.0, 29.5, 7.0,
+                          0.18, 0.10, grain=True)
     cover.color = Color(*S.BRACELET_OUTER)
     parts.append((cover, "clasp_cover"))
 
@@ -835,8 +846,11 @@ def make_clasp():
     parts.append((blade, "clasp_spring_blade"))
 
     # --- flank pushers -------------------------------------------------------
+    # outer end protrudes 1.1 past the plate flank (8.5); inner end stops at
+    # 7.3, clear of the inner cover's 7.0 half-width (a 2.7-long pusher at
+    # x_mid 8.25 penetrated the cover by 0.1 — pairwise-probe clash)
     for sgn, side in ((1.0, "right"), (-1.0, "left")):
-        push = _xcyl(1.5, 2.7, y_push, z_push, x_mid=sgn * 8.25)
+        push = _xcyl(1.5, 2.3, y_push, z_push, x_mid=sgn * 8.45)
         ends = [
             e
             for e in push.edges()
@@ -887,16 +901,25 @@ def make_clasp():
 # Strap assembly (drape chain)
 # ---------------------------------------------------------------------------
 
+def _row_deltas(n):
+    """Per-joint relative pitch (degrees): eases linearly from
+    DRAPE_DELTA0 at the first joint to DRAPE_DELTA1 at the last, so the
+    strap's curvature grows smoothly instead of stepping."""
+    if n <= 1:
+        return [DRAPE_DELTA0] * n
+    return [
+        DRAPE_DELTA0 + (DRAPE_DELTA1 - DRAPE_DELTA0) * k / (n - 1)
+        for k in range(n)
+    ]
+
+
 def _row_angles(n):
-    """Downward pitch per row: gentle for rows 1-2, +DRAPE_STEP after."""
-    out = []
-    for k in range(1, n + 1):
-        if k == 1:
-            out.append(DRAPE_START)
-        elif k == 2:
-            out.append(DRAPE_SECOND)
-        else:
-            out.append(DRAPE_SECOND + DRAPE_STEP * (k - 2))
+    """Cumulative downward pitch per row: one continuous convex arc (the
+    running sum of the eased `_row_deltas`), no kink at any joint."""
+    out, acc = [], 0.0
+    for d in _row_deltas(n):
+        acc += d
+        out.append(acc)
     return out
 
 
@@ -924,6 +947,8 @@ def _build_strap(side):
     n = S.LINKS_PER_SIDE_12 if side == "12" else S.LINKS_PER_SIDE_6
     angles = _row_angles(n)
     joints = _joint_chain(angles)
+    # clasp chord continues the drape arc one more increment (6 side)
+    clasp_pitch = angles[-1] + DRAPE_DELTA1
     flip = Rot(0, 0, 180) if side == "6" else None
 
     def world(p):
@@ -946,7 +971,7 @@ def _build_strap(side):
         if i + 1 < n:
             th_next = angles[i + 1]
         else:
-            th_next = CLASP_PITCH_DEG if side == "6" else th
+            th_next = clasp_pitch if side == "6" else th
         left, center, right = make_row(
             w0, w1, terminal=terminal,
             tilt_near=(th - th_prev) / 2.0, tilt_far=(th_next - th) / 2.0,
@@ -962,7 +987,7 @@ def _build_strap(side):
     clasp_parts = []
     if side == "6":
         jy, jz = joints[-1]
-        place = Pos(0, jy, jz) * Rot(-CLASP_PITCH_DEG, 0, 0)
+        place = Pos(0, jy, jz) * Rot(-clasp_pitch, 0, 0)
         for part, label in make_clasp():
             clasp_parts.append((world(place * part), label))
     return parts, clasp_parts

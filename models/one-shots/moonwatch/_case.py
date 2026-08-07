@@ -9,6 +9,13 @@ Frame: WATCH frame per `_spec` — z = 0 at the case-middle / caseback joint
 plane, +Z through the crystal, crown at +X.  All `build_*` functions return
 parts already positioned in the watch frame; `build_case_parts()` returns the
 full labeled, colored list.
+
+Finishing (geometric, shared `_finishing` vocabulary): the lug top fields and
+the exposed guard-top shoulder carry directional satin grain along Y (the
+strap direction, `straight_grain_cutter`), the case flank's widest zone and
+the bezel steel ring's top annulus carry fine circumferential/circular
+graining, and everything else — the twisted lug bevel facets, bezel edge
+chamfers, crown flutes, pusher caps — stays smooth as the polished contrast.
 """
 
 from __future__ import annotations
@@ -64,6 +71,29 @@ BACK_RECESS_TOP = 1.3
 
 BEZEL_TOP_Z = S.CASE_MIDDLE_HEIGHT + S.BEZEL_HEIGHT          # 9.2
 CRYSTAL_APEX_Z = BEZEL_TOP_Z + S.CRYSTAL_DOME_RISE           # 10.9
+
+# --- Finishing fields (geometric brushed/polished contrast) ----------------
+# Satin fields use the shared straight_grain_cutter vocabulary; the case
+# reads slightly coarser than the bracelet links (0.18 vs 0.14 pitch).
+GRAIN_PITCH = 0.18
+GRAIN_DEPTH = 0.018
+GRAIN_FACET_MARGIN = 0.45       # polished margin kept to the lug facet line
+GRAIN_INNER_MARGIN = 0.30       # margin to the lug inner face
+# Circumferential flank graining (reads as circular brushing on the band's
+# widest zone): stacked V-rings, same V vocabulary as snailing_cutter but
+# revolved on the band/guard radius instead of a flat top face.
+FLANK_RING_PITCH = 0.16
+FLANK_RING_DEPTH = 0.015
+FLANK_RING_Z_LO = 2.04
+FLANK_RING_Z_HI = 4.92
+FLANK_RING_REACH = 0.45         # radial overshoot into air outside the wall
+# Clip sectors (start_deg, span_deg). Band-centered rings stay out of the
+# four lug quadrants (lugs cross the band radius there — a full ring would
+# tunnel a subsurface void through the lug roots). The guard-centered family
+# uses angles LOCAL to the guard axis at (4*s, 0): +/-35 deg local stays
+# short of the pushers (+/-42 deg local) and of the band/guard blend seam.
+FLANK_SECTORS_BAND = ((68.0, 44.0), (150.0, 60.0), (248.0, 44.0))
+FLANK_SECTOR_GUARD = (-35.0, 70.0)
 
 LUG_HALF_GAP = S.LUG_WIDTH / 2.0                # 10.0 (lug inner faces)
 LUG_TIP_Y = S.LUG_TO_LUG / 2.0                  # 24.0
@@ -208,9 +238,111 @@ def _case_middle_cuts():
     return cuts
 
 
+def _lug_grain_tools():
+    """Brushed-grain tools for the NE lug's top field: grooves along Y (the
+    strap direction), seated per dense-station segment and tilted to the
+    segment's own top slope so the shallow bite stays uniform down the
+    descending horn (the crown-following re-seat pattern from _bracelet).
+    The field stops GRAIN_FACET_MARGIN short of the twisted facet line and
+    short of the tip roll-off, so the polished bevel keeps a clean boundary.
+    Returns tools for ONE multi-tool subtract on the un-mirrored lug; grooves
+    still buried inside the case band are re-absorbed by the fuse."""
+    tools = []
+    stations = _dense_lug_stations()
+    x_lo = LUG_HALF_GAP + GRAIN_INNER_MARGIN
+    for st1, st2 in zip(stations, stations[1:]):
+        y1, zt1, xb1 = st1[0], st1[1], st1[4]
+        y2, zt2, xb2 = st2[0], st2[1], st2[4]
+        if y1 < 12.3 or y2 > 22.85:
+            continue  # root segments are buried; the tip roll-off stays polished
+        x_hi = min(xb1, xb2) - GRAIN_FACET_MARGIN
+        span_x = x_hi - x_lo
+        if span_x < GRAIN_PITCH or y2 - y1 < 0.2:
+            continue
+        seg_tools = F.straight_grain_cutter(
+            span_x, (y2 - y1) / 1.15, pitch=GRAIN_PITCH, depth=GRAIN_DEPTH,
+            along_x=False,
+        )
+        tilt = math.degrees(math.atan2(zt2 - zt1, y2 - y1))
+        place = Pos((x_lo + x_hi) / 2.0, (y1 + y2) / 2.0, (zt1 + zt2) / 2.0)
+        place = place * Rot(tilt, 0, 0)
+        for i, tool in enumerate(seg_tools):
+            off = -span_x / 2.0 + i * GRAIN_PITCH  # helper's groove offsets
+            if off > span_x / 2.0 + 1e-9:
+                continue  # helper over-emits past the far (facet-side) edge
+            tools.append(place * tool)
+    return tools
+
+
+def _shoulder_grain_tools():
+    """Grain (along Y) for the exposed case-top shoulder: the guard-side
+    crescent of the band top face (z = 7) proud of the bezel's 21.0 radius.
+    Overshoot inward lands under the bezel or in the seat-rebate air."""
+    span_x = 2.4
+    seg_tools = F.straight_grain_cutter(
+        span_x, 16.0 / 1.15, pitch=GRAIN_PITCH, depth=GRAIN_DEPTH,
+        along_x=False,
+    )
+    out = []
+    for i, tool in enumerate(seg_tools):
+        off = -span_x / 2.0 + i * GRAIN_PITCH
+        if off > span_x / 2.0 + 1e-9:
+            continue
+        out.append(Pos(20.4, 0, S.CASE_MIDDLE_HEIGHT) * tool)
+    return out
+
+
+def _band_metrics_at(band, z):
+    """Measured band radius and profile scale at height z, from a thin wafer
+    intersection: max.Y is the round band radius (the guard bulge lies on +X),
+    max.X is the guard reach = (GUARD_CENTER_X + GUARD_RADIUS) * scale."""
+    wafer = band & Pos(0, 0, z) * Cylinder(24.0, 0.02)
+    bb = wafer.bounding_box()
+    return bb.max.Y, bb.max.X / (GUARD_CENTER_X + GUARD_RADIUS)
+
+
+def _flank_ring(center_x, radius, z, start_deg, arc_deg):
+    """One circumferential V-ring cutter: a 'pencil' profile (V tip backed by
+    a rectangle reaching FLANK_RING_REACH into air) revolved arc_deg about
+    the vertical axis through (center_x, 0), starting start_deg from +X in
+    that axis's local frame. Tolerates small radius error either way: a
+    slightly proud wall gets a hair-wider groove, a shy one a shallower V."""
+    w = FLANK_RING_PITCH * 0.475
+    r_out = center_x + radius + FLANK_RING_REACH
+    profile = Plane.XZ * Polygon(
+        (center_x + radius - FLANK_RING_DEPTH, z),
+        (center_x + radius, z - w),
+        (r_out, z - w),
+        (r_out, z + w),
+        (center_x + radius, z + w),
+        align=None,
+    )
+    ring = revolve(profile, Axis((center_x, 0, 0), (0, 0, 1)),
+                   revolution_arc=arc_deg)
+    return Pos(center_x, 0, 0) * Rot(0, 0, start_deg) * Pos(-center_x, 0, 0) * ring
+
+
+def _flank_grain_cuts(band):
+    """Circumferential flank graining over the band's widest zone: stacked
+    fine V-rings (FLANK_RING_PITCH / FLANK_RING_DEPTH) following the measured
+    band and guard radii, clipped to the sectors that avoid the lugs and
+    pushers — those transitions stay polished against the circular satin."""
+    cuts = []
+    n = int(round((FLANK_RING_Z_HI - FLANK_RING_Z_LO) / FLANK_RING_PITCH)) + 1
+    for k in range(n):
+        z = FLANK_RING_Z_LO + k * FLANK_RING_PITCH
+        r_band, scale = _band_metrics_at(band, z)
+        for start, arc in FLANK_SECTORS_BAND:
+            cuts.append(_flank_ring(0.0, r_band, z, start, arc))
+        cuts.append(_flank_ring(GUARD_CENTER_X * scale, GUARD_RADIUS * scale,
+                                z, *FLANK_SECTOR_GUARD))
+    return cuts
+
+
 def build_case_middle():
     band = _case_band()
     lug = _lug_ne()
+    lug = lug - _lug_grain_tools()      # ONE multi-tool grain subtract
     lugs = [
         lug,
         mirror(lug, about=Plane.YZ),
@@ -218,7 +350,10 @@ def build_case_middle():
         mirror(mirror(lug, about=Plane.YZ), about=Plane.XZ),
     ]
     body = band + lugs
-    body = body - _case_middle_cuts()
+    # ONE subtract: functional cuts + flank rings + top-shoulder grain
+    body = body - (
+        _case_middle_cuts() + _flank_grain_cuts(band) + _shoulder_grain_tools()
+    )
     body.label = "case_middle"
     body.color = STEEL_C
     return body
@@ -255,6 +390,13 @@ _INSERT_PROFILE = (
 
 def build_bezel_ring():
     ring = revolve(Plane.XZ * Polygon(*_BEZEL_RING_PROFILE, align=None), Axis.Z)
+    # fine circular graining on the exposed steel top annulus (r 20.55-20.85
+    # at z 9.20); the rim chamfers and walls stay polished
+    snail = F.snailing_cutter(
+        outer_diameter=41.66, inner_diameter=41.0,
+        pitch=0.14, groove_depth=0.012,
+    )
+    ring = ring - Pos(0, 0, 9.20) * snail
     ring.label = "bezel_ring"
     ring.color = STEEL_C
     return ring
@@ -511,14 +653,24 @@ def _pusher_cap_local():
     head = head & Pos(0, 0, 5.2 - sph_r) * Sphere(sph_r)
     base_edges = [e for e in head.edges() if abs(e.bounding_box().min.Z - 2.9) < 1e-3]
     head, _ = F.safe_chamfer(head, base_edges, 0.3)
+    # crisp turned step: the domed crown sits behind a flat shoulder at
+    # z 4.35 with a vertical land at r 2.08 — the two-tier cap read
+    step = Pos(0, 0, 5.05) * (
+        Cylinder(r + 0.5, 1.4) - Cylinder(2.08, 1.44)
+    )
+    head = head - step
     rod = Pos(0, 0, 0.75) * Cylinder(0.62, 4.5)
     return head + rod
 
 
 def _pusher_tube_local():
-    return Pos(0, 0, 0.05) * Cylinder(1.75, 4.1) - Pos(
-        0, 0, 0.05
-    ) * Cylinder(1.05, 4.5)
+    body = Pos(0, 0, 0.05) * Cylinder(1.75, 4.1)
+    # turned collar ring at the case junction: seated into the guard flank
+    # (surface sits near local z 0.13) with a chamfered exposed rim
+    collar = Pos(0, 0, 0.4) * Cylinder(2.10, 1.06)
+    rim = [e for e in collar.edges() if abs(e.bounding_box().max.Z - 0.93) < 1e-3]
+    collar, _ = F.safe_chamfer(collar, rim, 0.12)
+    return body + collar - Pos(0, 0, 0.05) * Cylinder(1.05, 4.5)
 
 
 def _pusher_spring_local():
