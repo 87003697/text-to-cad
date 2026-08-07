@@ -36,6 +36,15 @@ output, workaround, blocked?, fixed?
   respawn a fresh daemon transparently on the next call).
 - **Suggestion:** the daemon should abort a job when its client disconnects.
 - **Blocked:** ~10 min lost. **Fixed:** no (workaround only).
+- **FIXED in root source (2026-08-07):** the daemon now runs a liveness
+  watchdog thread per request. Clients half-close their write side after the
+  request, so read-EOF is normal — the probe is an empty stdout chunk (a
+  protocol no-op for every client) sent every 0.5 s under a shared send lock;
+  a failed send means the requester is gone, and the daemon logs, unlinks its
+  socket, and exits, so the orphaned job stops burning CPU and the next
+  invocation spawns a fresh daemon (the client already handles a missing
+  socket that way). Test: `test_d_client_disconnect_aborts_orphaned_job` in
+  `tests/python/skills/cad/cadgen_daemon/test_daemon.py`.
 
 ## 3. Sub-mm finishing booleans: overlapping-tool networks are pathological (OCC, not a repo defect per se)
 
@@ -126,6 +135,13 @@ output, workaround, blocked?, fixed?
   dropped without warning, so the render completes with nothing hidden. To
   hide parts in one view of a multi-view job, split it into separate jobs in
   a `{"jobs": [...]}` array.
+- **FIXED in root source (2026-08-07):** `resolve_render_job` and
+  `normalize_common_job` now validate jobs and outputs against closed key
+  schemas (`SUPPORTED_JOB_KEYS` / `SUPPORTED_OUTPUT_KEYS`). Top-level
+  `hide`/`focus`/`refs` get a message naming the `selection` object shape; a
+  per-output `selection` gets the split-into-jobs fix; any other unknown key
+  is rejected with the supported set listed. Covered by four new tests in
+  `tests/python/skills/cad/snapshot/test_cli.py`.
 
 ## OCC chamfer on dome/eye-cap tangent chains: silent fail, minutes-long churn, or segfault (bracelet)
 
@@ -276,6 +292,14 @@ helpers at documented datums.
   `Compound` like a `Part` (explore `TopAbs_SOLID`) instead of warning, or
   raise loudly; silent color loss on valid colored input is a data bug.
 - **Blocked:** no; found while chasing weak finish contrast in renders.
+- **FIXED in root source (2026-08-07):** `_create_bin_xcaf_doc` now explores a
+  bare `Compound` leaf for its actual content (solids, then faces, then
+  edges) and colors it like the recognized types; the "Unknown Compound type"
+  warning is gone. Regression test:
+  `test_colored_bare_compound_leaf_keeps_color_and_does_not_warn` in
+  `tests/python/packages/cadgen/test_compound_assembly_generation.py`. This
+  also removes the constant warning noise from the related "uncolored group
+  compounds" entry above (same warn site).
 
 ## Mirrored `Polygon` points flip the face normal, so `extrude()` runs the OTHER way (build123d, silent misplaced boolean)
 
