@@ -261,6 +261,112 @@ Do not rely on the ladder for cosmetic radii. Reshape the profile so the
 intended radius genuinely fits (a knife-edged wafer cannot take any fillet;
 merge it into its neighbour), then verify by cropping the render.
 
+## Multi-tool booleans: one list operation, internally disjoint batches
+
+Never accumulate boolean tools pairwise — `body - a - b - c` re-runs the whole
+intersection network per step and decays O(n²). Pass every tool in one list
+operand: `body - [a, b, c, ...]`.
+
+Two caveats, both measured:
+
+- **Tools that overlap each other deep below the surface are pathological.**
+  ~200 shallow spherical dimples cut with full spheres (radii ~15 mm for
+  0.02 mm-deep stamps) ran >40 CPU-minutes with zero output; pre-clipping each
+  stamp to a small disjoint "lens cap" (`Sphere & Cylinder` prototype,
+  translated copies) cut the same field in 0.69 s. Keep tools small and
+  mutually disjoint.
+- **A single multi-tool cut whose tools overlap each other can emit wrong
+  results.** A bore cylinder crossing a stack of thin ring cutters returned
+  5 solids: the body, the bore's uncut PLUG kept as a detached solid, and
+  knife-edge slivers. Every tool was individually valid; splitting the same
+  tools into two staged subtracts (functional cuts, then finishing cuts)
+  yielded one clean solid. Batch tool FAMILIES so each batch is
+  internally disjoint-ish — still list-based, never pairwise.
+
+## Near-tangent booleans silently drop material
+
+Intersecting or subtracting nearly tangent surfaces (a huge shallow sphere
+kissing a small revolve, a flat dome tool grazing a face) can succeed with
+exit 0 and a validate-clean result while half a tool's material was simply not
+removed — or a stray disjoint sliver is left floating inside the part. Only
+visual review catches it. Build shallow domes as a single revolved profile
+(`RadiusArc` in the section) instead of near-tangent boolean stacks; it is
+also crisper.
+
+## Do not 3D-chamfer tangent chains or multi-arc outlines
+
+OCC `chamfer`/`fillet` on edges that belong to a tangent chain (a domed face
+meeting cap cylinders) or to a multi-arc "blob" outline behaves three ways
+depending only on exact dimensions: silent failure, minutes of CPU churn per
+attempt, or an **uncatchable SIGSEGV** that kills the whole build. Chamfering
+edges NEXT TO already-beveled arcs can also hard-crash. Retry ladders multiply
+the churn and hide the degradation.
+
+Bake the bevel into construction instead: put it in the extruded/lofted
+SECTION profile, or build the body straight-walled to `z_top - w` and cap it
+with `extrude(..., taper=45)` (or per-arc `Cone` caps when the draft prism
+itself fails). Constructive bevels also survive later booleans, which
+chamfered edges often do not.
+
+## 2D sketch algebra decays; winding decides extrude direction
+
+Chained 2D unions are fragile in three stacked ways, all silent:
+
+- `Circle + Circle` returns a fused `Face`, and the next `Face + Polygon`
+  falls into raw shape fuse returning an unregularized face pile; once any
+  step yields a `ShapeList`, later `+` is Python list concatenation, not
+  geometry. Build each profile as ONE multi-operand fuse:
+  `first + [rest...]`.
+- A CLOCKWISE-wound `Polygon` fuses as a reversed face: the union "succeeds"
+  but shatters into mixed-normal fragments and `extrude()` runs along the
+  reversed normals — solids appear mirrored below the plane. Wind every
+  polygon CCW. **Mirroring a point list reverses its winding**: mirror with
+  `[(-y, z) for y, z in reversed(pts)]`, or the extrude silently runs the
+  other way and the cutter lands off the part.
+- `ShapeList & Sketch` used as a regularizing clip returns an EMPTY list with
+  no error, and the following extrude quietly produces a zero-volume part.
+  Apply the `& clip` intersection exactly once, LAST, on the single fused
+  profile.
+
+## `align=(None, None, None)` is the raw OCC datum, not "centered"
+
+`Cylinder`/`Cone` with `align=(None, None, None)` sit base-at-z=0 (XY
+centered); `Box` sits with its CORNER at the origin. Code written assuming
+"None means centered" produces silently wrong geometry — off-center slots,
+inverted countersinks, cutters that remove nothing because they sit entirely
+above the surface. Two independent modules shipped defects from this exact
+assumption. Default alignment IS centered; reserve `align=None` for when the
+raw datum is genuinely wanted.
+
+## Dense periodic spline profiles: kernel ops to avoid
+
+On faces bounded by one periodic `Spline` fit through hundreds of samples,
+several kernel operations fail or corrupt (verified on build123d 0.10 /
+OCP 7.9): `extrude(face, taper=...)` throws `BRepFill_TrimSurfaceTool:
+incoherent intersection`; kernel wire `offset` returns Null for some inward
+deltas; fusing two valid solids that share a coincident spline-bounded planar
+face can return an EMPTY result; and a ruled loft to an inward offset is
+analyzer-invalid where the outer wire's corner radius is smaller than the
+offset. Compute offsets NUMERICALLY on the sample loop (normal offset, prune
+points closer than |delta| to the source polyline, resample, smooth) and build
+beveled bodies as one multi-section ruled loft so no coincident-face fuse
+exists.
+
+## Gate boolean results with the BOP check, not volume
+
+`result.volume > 0` and even `BRepCheck_Analyzer.IsValid()` both accept
+chamfer and V-groove-cut results whose skinny faces are BOP-faulty
+(`BOPAlgo_SelfIntersect`, `BOPAlgo_TooSmallEdge`). The failure then surfaces
+only in `scripts/inspect validate` (`selfIntersecting`), with no pointer to
+the causing operation. After tangency-prone cuts and chamfers on wavy
+outlines, gate with the same check validation uses — `BRepAlgoAPI_Check` —
+and step the operation down or skip it when the check fails.
+
+Related wrap trap: re-wrapping a bare `Solid` as `Part(solid.wrapped)` yields
+a shape whose `.volume` is 0 (build123d 0.10), so volume-based guards silently
+discard real geometry. Use the `Solid` directly as a compound child (Shape
+carries `label`/`color`), or fuse before measuring.
+
 ## Common failure modes
 
 - Fillet radius larger than local edge geometry.
