@@ -232,6 +232,10 @@ export function replaceForwardedPort(argv = [], port = DEFAULT_VIEWER_PORT) {
   return nextArgs;
 }
 
+export function disableForwardedPortFallback(argv = []) {
+  return [...argv, "--port-scan-limit", "0"];
+}
+
 export function isSymlinkPath(filePath) {
   if (!filePath) {
     return false;
@@ -718,7 +722,9 @@ export async function resolveAgentStartLaunch({
     command: buildAgentStartCommand({
       mode,
       packageRoot,
-      forwardedArgs: replaceForwardedPort(parsed.forwardedArgs, portResolution.port),
+      forwardedArgs: disableForwardedPortFallback(
+        replaceForwardedPort(parsed.forwardedArgs, portResolution.port)
+      ),
       env,
       nodePath,
       git,

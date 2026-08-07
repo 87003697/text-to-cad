@@ -10,6 +10,7 @@ import {
   agentViewerUrl,
   buildAgentViewerGit,
   buildAgentStartCommand,
+  disableForwardedPortFallback,
   forwardedDefaultRootDir,
   forwardedServerTarget,
   normalizeAgentDirectory,
@@ -123,6 +124,13 @@ test("replaceForwardedPort updates or appends the selected port", () => {
   assert.deepEqual(
     replaceForwardedPort(["--host", "127.0.0.1"], 4181),
     ["--host", "127.0.0.1", "--port", "4181"]
+  );
+});
+
+test("disableForwardedPortFallback pins the launcher-selected port", () => {
+  assert.deepEqual(
+    disableForwardedPortFallback(["--host", "127.0.0.1", "--port", "4181"]),
+    ["--host", "127.0.0.1", "--port", "4181", "--port-scan-limit", "0"]
   );
 });
 
@@ -587,6 +595,8 @@ test("resolveAgentStartLaunch starts the selected free port", async (t) => {
     directory,
     "--port",
     "4179",
+    "--port-scan-limit",
+    "0",
   ]);
   assert.equal(new URL(result.viewerUrl).searchParams.get("dir"), directory);
 });
