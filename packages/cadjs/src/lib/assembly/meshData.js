@@ -506,6 +506,22 @@ export function buildComposedPackageMeshData(descriptor, componentMeshDataByCid)
     const occurrenceId = String(occurrence?.id || "").trim();
     const cid = String(occurrence?.component || "").trim();
     const overrideColor = toVectorArray(occurrence?.color);
+    // Optional per-occurrence PBR overrides (descriptor "material") and
+    // opacity (4th color channel or material.opacity). linearRgbToHex drops
+    // alpha by design, so opacity must ride separately.
+    const overrideMaterial =
+      occurrence?.material && typeof occurrence.material === "object" && !Array.isArray(occurrence.material)
+        ? occurrence.material
+        : null;
+    // NB: toVectorArray keeps only RGB, so alpha must come from the raw
+    // descriptor color array.
+    const rawColor = occurrence?.color;
+    const overrideAlpha = Array.isArray(rawColor) && rawColor.length >= 4 && Number.isFinite(Number(rawColor[3]))
+      ? Number(rawColor[3])
+      : null;
+    const overrideOpacity = overrideAlpha !== null && overrideAlpha < 0.999
+      ? overrideAlpha
+      : (overrideMaterial && Number.isFinite(Number(overrideMaterial.opacity)) ? Number(overrideMaterial.opacity) : null);
     const sourceVertices = componentMeshData?.vertices || new Float32Array(0);
     const sourceColors = componentMeshData?.colors || new Float32Array(0);
     const hasComponentColors = sourceColors.length === sourceVertices.length && sourceColors.length > 0;
@@ -538,6 +554,8 @@ export function buildComposedPackageMeshData(descriptor, componentMeshDataByCid)
       bounds,
       sourceBounds: bounds,
       color: (overrideColor && linearRgbToHex(overrideColor)) || sourceParts[0]?.color || null,
+      material: overrideMaterial,
+      opacity: overrideOpacity !== null ? overrideOpacity : undefined,
       hasSourceColors: useComponentVertexColors,
       // Shared component geometry: cadScene caches one BufferGeometry per sourceMeshKey and
       // reuses it across every occurrence of this cid (+ colour mode).

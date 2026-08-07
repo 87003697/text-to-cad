@@ -9,8 +9,11 @@ around the stem axis at 3 o'clock.
 
 from build123d import Compound
 
+import _materials
 import _mvt_keyless as K
 
 
 def gen_step():
-    return Compound(children=K.build_keyless(), label="keyless_works")
+    compound = Compound(children=K.build_keyless(), label="keyless_works")
+    _materials.apply(compound)
+    return compound

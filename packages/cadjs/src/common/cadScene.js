@@ -1046,10 +1046,22 @@ export function applyMaterialSettingsToRecord(THREE, record, materialSettings, {
     return;
   }
   syncRecordVertexColors(THREE, record, materialSettings);
-  record.material.roughness = clamp(Number(materialSettings.roughness) || 0, 0, 1);
-  record.material.metalness = clamp(Number(materialSettings.metalness) || 0, 0, 1);
-  record.material.clearcoat = clamp(Number(materialSettings.clearcoat) || 0, 0, 1);
-  record.material.clearcoatRoughness = clamp(Number(materialSettings.clearcoatRoughness) || 0, 0, 1);
+  // Per-part PBR overrides: descriptor occurrences may carry a "material"
+  // object (cadgen component_package._occurrence_material) so brushed,
+  // polished, lacquered, and transparent parts differ in material RESPONSE,
+  // not just albedo. Theme values remain the per-channel fallback.
+  const partMaterial =
+    record.sourcePart?.material && typeof record.sourcePart.material === "object"
+      ? record.sourcePart.material
+      : null;
+  const materialChannel = (key) => {
+    const override = partMaterial ? Number(partMaterial[key]) : NaN;
+    return clamp(Number.isFinite(override) ? override : Number(materialSettings[key]) || 0, 0, 1);
+  };
+  record.material.roughness = materialChannel("roughness");
+  record.material.metalness = materialChannel("metalness");
+  record.material.clearcoat = materialChannel("clearcoat");
+  record.material.clearcoatRoughness = materialChannel("clearcoatRoughness");
   const sourceOpacity = Number.isFinite(Number(record.sourceOpacity))
     ? clamp(Number(record.sourceOpacity), 0, 1)
     : 1;

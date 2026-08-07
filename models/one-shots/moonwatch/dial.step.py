@@ -8,7 +8,10 @@ Positioned in the WATCH frame (`_spec.py`): dial top at S.DIAL_Z, +Z up,
 from build123d import Compound
 
 import _dial
+import _materials as M
 
 
 def gen_step():
-    return Compound(children=_dial.build_dial_parts(), label="dial")
+    compound = Compound(children=_dial.build_dial_parts(), label="dial")
+    M.apply(compound)
+    return compound

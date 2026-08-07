@@ -6,8 +6,11 @@ colored body; rows articulate about shared pin axes with 0.06 radial
 clearance.
 """
 
+import _materials
 from _bracelet import build_bracelet
 
 
 def gen_step():
-    return build_bracelet()
+    compound = build_bracelet()
+    _materials.apply(compound)
+    return compound

@@ -11,6 +11,7 @@ from pathlib import Path
 
 from build123d import Color, Compound, Cylinder, Location, Pos
 
+import _materials
 import _spec as S
 
 _HERE = Path(__file__).resolve().parent
@@ -73,4 +74,6 @@ def gen_step():
         ring.label = "movement_ring"
         children.append(ring)
 
-    return Compound(children=children, label="moonwatch")
+    compound = Compound(children=children, label="moonwatch")
+    _materials.apply(compound)
+    return compound

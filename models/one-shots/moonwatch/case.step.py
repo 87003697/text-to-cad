@@ -7,7 +7,10 @@ crown at +X (see `_spec`).
 from build123d import Compound
 
 import _case as C
+import _materials as M
 
 
 def gen_step():
-    return Compound(children=C.build_case_parts(), label="case")
+    compound = Compound(children=C.build_case_parts(), label="case")
+    M.apply(compound)
+    return compound

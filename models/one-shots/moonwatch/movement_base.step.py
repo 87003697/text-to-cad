@@ -7,8 +7,11 @@ plate's bridge-side surface.
 
 from build123d import Compound
 
+import _materials
 import _mvt_base as M
 
 
 def gen_step():
-    return Compound(children=M.build_base(), label="movement_base")
+    compound = Compound(children=M.build_base(), label="movement_base")
+    _materials.apply(compound)
+    return compound

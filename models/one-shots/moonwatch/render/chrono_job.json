@@ -1,0 +1,13 @@
+{
+  "input": "chrono_works.step.py",
+  "mode": "view",
+  "appearance": "render/presentation_theme.json",
+  "display": { "mode": "rendered" },
+  "outputs": [
+    { "path": "/tmp/moonwatch/chrono_top.png", "camera": { "position": [0, 0, 40], "target": [0, 0, 3.2] }, "sizeProfile": "presentation-large" },
+    { "path": "/tmp/moonwatch/chrono_34.png", "camera": { "position": [18, -22, 24], "target": [0, 0, 1.5] }, "sizeProfile": "presentation-large" },
+    { "path": "/tmp/moonwatch/chrono_colwheel_macro.png", "camera": { "position": [13.5, -3.5, 10.5], "target": [8.3, 3.6, 3.5] }, "sizeProfile": "presentation-large" },
+    { "path": "/tmp/moonwatch/chrono_hammer_macro.png", "camera": { "position": [10, -12, 12], "target": [4.5, -0.5, 3.5] }, "sizeProfile": "presentation-large" }
+  ],
+  "render": { "padding": 0.06 }
+}

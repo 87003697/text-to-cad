@@ -197,6 +197,30 @@ def _occurrence_color(child: Any) -> list[float] | None:
             return None
 
 
+_MATERIAL_KEYS = ("roughness", "metalness", "clearcoat", "clearcoatRoughness", "opacity")
+
+
+def _occurrence_material(child: Any) -> dict[str, float] | None:
+    """Optional per-occurrence PBR overrides authored as a plain
+    ``cad_material`` dict attribute on the source shape (keys from
+    ``_MATERIAL_KEYS``, values clamped to [0, 1]). Colors alone cannot
+    express brushed-vs-polished finishing; these ride the descriptor so the
+    viewer can override its theme material per part."""
+    material = getattr(child, "cad_material", None)
+    if not isinstance(material, dict):
+        return None
+    resolved: dict[str, float] = {}
+    for key in _MATERIAL_KEYS:
+        value = material.get(key)
+        if value is None:
+            continue
+        try:
+            resolved[key] = min(1.0, max(0.0, float(value)))
+        except (TypeError, ValueError):
+            continue
+    return resolved or None
+
+
 def _unlocated_shape(shape: Any) -> Any:
     """A copy of ``shape`` moved to the identity location (its LOCAL frame), preserving the
     ``label``/``color`` a clean component still carries. Mirrors ``_content_hash_shape``'s
@@ -513,6 +537,9 @@ def build_package_from_compound(
         color = _occurrence_color(node)
         if color is not None:
             occurrence["color"] = color
+        material = _occurrence_material(node)
+        if material is not None:
+            occurrence["material"] = material
         occurrences.append(occurrence)
         # One tick per leaf. The walk has no denominator (the leaf count is only known
         # once it ends), so this drives a count, not a percentage.
