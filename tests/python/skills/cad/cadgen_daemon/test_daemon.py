@@ -78,10 +78,14 @@ class CadgenDaemonTests(unittest.TestCase):
         if build.returncode != 0:
             raise RuntimeError(f"inline warm-up build failed:\n{build.stdout}\n{build.stderr}")
 
+        cls.log_path = Path(cls.socket_dir.name) / "daemon.log"
+        cls._start_server()
+
+    @classmethod
+    def _start_server(cls) -> None:
         env = dict(os.environ)
         env["CADGEN_DAEMON_SOCKET"] = str(cls.socket_path)
         env["CADGEN_DAEMON_IDLE_TIMEOUT"] = "300"  # orphan self-cleans if teardown is skipped
-        cls.log_path = Path(cls.socket_dir.name) / "daemon.log"
         with open(cls.log_path, "ab") as log_file:
             cls.server = subprocess.Popen(
                 [sys.executable, str(DAEMON_DIR / "__main__.py")],
@@ -154,6 +158,49 @@ class CadgenDaemonTests(unittest.TestCase):
             time.sleep(0.1)
         else:
             self.fail("daemon did not exit after the restart reply")
+
+    def test_d_client_disconnect_aborts_orphaned_job(self) -> None:
+        # test_c leaves the daemon exited via the staleness path; start fresh.
+        type(self)._start_server()
+
+        # A model the daemon has NOT built yet, so the request is a real
+        # multi-second build rather than an instant current-skip.
+        (self.model_dir / "box_orphan.step.py").write_text(
+            BOX_SOURCE.replace("10.0, 8.0, 4.0", "9.0, 7.0, 3.0"), encoding="utf-8"
+        )
+
+        # Send a valid request, then close the connection without reading the
+        # response — the daemon-side view of a killed client. The liveness
+        # watchdog must abort the orphaned build by exiting the daemon
+        # (previously it burned CPU to completion while new requests queued
+        # silently behind it).
+        conn = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        try:
+            conn.settimeout(10.0)
+            conn.connect(str(self.socket_path))
+            payload = {
+                "tool": "gen",
+                "argv": ["box_orphan.step.py"],
+                "cwd": str(self.model_dir),
+                "token": daemon_client.compute_version_token(),
+            }
+            conn.sendall(json.dumps(payload).encode("utf-8") + b"\n")
+            conn.shutdown(socket.SHUT_WR)
+            time.sleep(0.3)  # let the job start before the client "dies"
+        finally:
+            conn.close()
+
+        deadline = time.monotonic() + 30.0
+        while time.monotonic() < deadline:
+            if self.server is None or self.server.poll() is not None:
+                break
+            time.sleep(0.2)
+        else:
+            self.fail(
+                "daemon kept running an orphaned job after its client disconnected:\n"
+                f"{self.log_path.read_text()}"
+            )
+        self.assertIn("aborting orphaned job", self.log_path.read_text())
 
 
 if __name__ == "__main__":

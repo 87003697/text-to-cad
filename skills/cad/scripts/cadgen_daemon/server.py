@@ -37,6 +37,7 @@ import os
 import signal
 import socket
 import sys
+import threading
 import time
 import traceback
 from pathlib import Path
@@ -62,6 +63,7 @@ for runtime_path in (SCRIPTS_DIR, PACKAGES_DIR, INSPECT_DIR, CADPY_SRC_DIR):
 
 DEFAULT_IDLE_TIMEOUT_SECONDS = 600.0
 REQUEST_READ_TIMEOUT_SECONDS = 30.0
+CLIENT_LIVENESS_INTERVAL_SECONDS = 0.5
 
 # Tool cli modules are imported directly (not the launcher __main__ files) so
 # the daemon skips the launchers' CADGEN_WARM shim and their name-colliding
@@ -120,16 +122,21 @@ class _StreamProxy(io.TextIOBase):
 
 
 class _ChunkWriter:
-    """File-like sink that forwards writes to the client as protocol frames."""
+    """File-like sink that forwards writes to the client as protocol frames.
 
-    def __init__(self, conn: socket.socket, stream: str) -> None:
+    Shares ``send_lock`` with the liveness watchdog so job output and probe
+    frames cannot interleave bytes on the socket."""
+
+    def __init__(self, conn: socket.socket, stream: str, send_lock: threading.Lock) -> None:
         self._conn = conn
         self._stream = stream
+        self._send_lock = send_lock
 
     def write(self, data) -> int:
         text = data if isinstance(data, str) else str(data)
         if text:
-            _send(self._conn, {"stream": self._stream, "data": text})
+            with self._send_lock:
+                _send(self._conn, {"stream": self._stream, "data": text})
         return len(text)
 
     def flush(self) -> None:
@@ -219,6 +226,37 @@ def _exit_code(exc: SystemExit, err: _ChunkWriter) -> int:
     return 1
 
 
+def _watch_client(
+    conn: socket.socket,
+    send_lock: threading.Lock,
+    done: threading.Event,
+    tool: str,
+) -> None:
+    """Abort the daemon when the requesting client vanishes mid-job.
+
+    Clients half-close their write side right after the request, so read-side
+    EOF is normal and the only reliable death signal is a FAILED SEND (AF_UNIX
+    raises immediately once the peer socket is gone). An empty stdout chunk is
+    a no-op for every client, so it doubles as the liveness probe. Requests
+    are strictly sequential, so the only in-flight work belongs to the dead
+    requester: exiting hard is correct — the killed client's job stops burning
+    CPU, and the next invocation transparently respawns a fresh daemon (the
+    client already treats a missing/refused socket that way) instead of
+    queueing silently behind an orphaned build."""
+    while not done.wait(CLIENT_LIVENESS_INTERVAL_SECONDS):
+        try:
+            with send_lock:
+                _send(conn, {"stream": "stdout", "data": ""})
+        except OSError:
+            if done.is_set():
+                return
+            _log(f"{tool}: client disconnected mid-request; aborting orphaned job "
+                 "(next call spawns a fresh daemon)")
+            with contextlib.suppress(OSError):
+                os.unlink(socket_path())
+            os._exit(0)
+
+
 def _handle_request(
     conn: socket.socket,
     request: dict,
@@ -228,14 +266,17 @@ def _handle_request(
     tool = request.get("tool")
     argv = request.get("argv")
     cwd = request.get("cwd")
-    out = _ChunkWriter(conn, "stdout")
-    err = _ChunkWriter(conn, "stderr")
+    send_lock = threading.Lock()
+    out = _ChunkWriter(conn, "stdout", send_lock)
+    err = _ChunkWriter(conn, "stderr", send_lock)
     previous_cwd = os.getcwd()
     previous_argv = sys.argv
     stdout_proxy.set_target(out)
     stderr_proxy.set_target(err)
     exit_code = 1
     started = time.perf_counter()
+    watchdog_done = threading.Event()
+    watchdog: threading.Thread | None = None
     try:
         if tool not in _TOOL_IMPORTS or not isinstance(argv, list):
             err.write(f"cadgen-daemon: invalid request for tool {tool!r}\n")
@@ -244,6 +285,12 @@ def _handle_request(
                 os.chdir(cwd)
             argv = [str(arg) for arg in argv]
             sys.argv = [f"scripts/{tool}", *argv]
+            watchdog = threading.Thread(
+                target=_watch_client,
+                args=(conn, send_lock, watchdog_done, str(tool)),
+                daemon=True,
+            )
+            watchdog.start()
             try:
                 result = _tool_main(tool)(argv)
                 exit_code = 0 if result is None else int(result)
@@ -254,6 +301,9 @@ def _handle_request(
             except BaseException:  # noqa: BLE001 — a failed build must not kill the daemon
                 err.write(traceback.format_exc())
     finally:
+        watchdog_done.set()
+        if watchdog is not None:
+            watchdog.join(timeout=CLIENT_LIVENESS_INTERVAL_SECONDS + 1.0)
         stdout_proxy.reset()
         stderr_proxy.reset()
         sys.argv = previous_argv
@@ -261,7 +311,8 @@ def _handle_request(
             os.chdir(previous_cwd)
         _evict_first_party_modules()
     _log(f"{tool} {argv!r} -> exit {exit_code} in {time.perf_counter() - started:.2f}s")
-    _send(conn, {"exit": exit_code})
+    with send_lock:
+        _send(conn, {"exit": exit_code})
 
 
 def serve() -> int:
