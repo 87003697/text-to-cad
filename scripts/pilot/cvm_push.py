@@ -26,7 +26,7 @@ IMPLICIT_NODE_MODULES_INCLUDE = (
 )
 
 # Source -> staging is intentionally different from staging -> CVM. The
-# staging copy keeps build-only inputs such as viewer/, packages/, and plugins/
+# staging copy keeps build-only inputs such as viewer/ and packages/
 # while excluding local state that must never become deployment material.
 STAGE_SOURCE_EXCLUDES = (
     "/.git",

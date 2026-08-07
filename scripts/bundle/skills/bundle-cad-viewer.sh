@@ -20,7 +20,7 @@ RUNTIME_DIR="$REPO_ROOT/skills/cad-viewer/scripts/viewer"
 CHECK_DIR="${CAD_VIEWER_RUNTIME_CHECK_DIR:-${RENDER_VIEWER_RUNTIME_CHECK_DIR:-$REPO_ROOT/tmp/cad-viewer-runtime-check}}"
 VIEWER_PACKAGE_MANAGER="${CAD_VIEWER_PACKAGE_MANAGER:-}"
 ESBUILD_BIN="${CAD_VIEWER_ESBUILD_BIN:-}"
-RELEASE_VERSION="$(tr -d '[:space:]' < "$REPO_ROOT/plugins/cad/VERSION")"
+RELEASE_VERSION="$(tr -d '[:space:]' < "$REPO_ROOT/VERSION")"
 
 usage() {
   cat <<'EOF'
