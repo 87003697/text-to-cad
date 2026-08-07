@@ -1,0 +1,12 @@
+{
+  "input": "movement.step.py",
+  "mode": "view",
+  "appearance": "render/presentation_theme.json",
+  "display": { "mode": "rendered" },
+  "outputs": [
+    { "path": "/tmp/moonwatch/finbal_34.png", "camera": { "position": [18, -22, 24], "target": [0, 0, 1.5] }, "sizeProfile": "presentation-large" },
+    { "path": "/tmp/moonwatch/finbal_train_macro.png", "camera": { "position": [7, -13, 13], "target": [-6.0, -2.4, 2.2] }, "sizeProfile": "presentation-large" },
+    { "path": "/tmp/moonwatch/finbal_chrono_macro.png", "camera": { "position": [13, -14, 12], "target": [5.5, -4.0, 3.8] }, "sizeProfile": "presentation-large" }
+  ],
+  "render": { "padding": 0.06 }
+}

@@ -490,16 +490,19 @@ def _sink_tool(cone_r=0.97, wall_r=0.72, cone_z=0.20, seat_z=0.60, bore_r=0.45):
 
 
 def _ruby_disc(r=0.46, t=0.30, ch=0.05, hole_r=0.14):
-    """Ruby jewel disc, rim at z=0 with a SHALLOW polished dome (apex +0.08):
+    """Ruby jewel disc, rim at z=0 with a polished dome cap (apex +0.14):
     cylinder body + the spherical cap through the z=0 rim circle. The first
     flat-top pass killed F.jewel's oversized proud bead but overshot into
-    "flat decal" (blind critic) — a 0.08 rise over a 0.9 dia is the gentle
-    crown of a real polished jewel, catching one bright point highlight.
-    Callers seat the rim <= 0.05 under the surrounding face, so the apex
-    stays <= face + 0.05. The optional pivot-hole bore (dark oil-sink dot)
-    pierces the dome. (`ch` kept for signature stability; the dome
-    supersedes the old flat-top edge chamfer.)"""
-    h = 0.08
+    "flat decal", and the 0.08 sag that replaced it still read as "flat
+    magenta discs" at macro (blind critic round 8) — 0.14 over a 0.9 dia is
+    the visibly crowned stone that catches one bright point highlight.
+    Callers compensate the extra 0.06 sag by seating the rim deeper
+    (~0.11-0.12 under the surrounding face) so every apex stays at its
+    proven clearance height while the curvature doubles. The optional
+    pivot-hole bore (dark oil-sink dot) pierces the dome. (`ch` kept for
+    signature stability; the dome supersedes the old flat-top edge
+    chamfer.)"""
+    h = 0.14
     c = (h * h - r * r) / (2.0 * h)          # sphere center z (below rim)
     dome = Pos(0, 0, c) * Sphere(h - c) & _cyl(r, h + 0.05, 0.0)
     body = _cyl(r, t, -t) + dome
@@ -560,10 +563,13 @@ _BOSS_H = 0.06                           # table rise above the striped top
 # facets, the one cut texture that DID read in that A/B. Capped per bridge so
 # thin cocks are not pierced.
 _STRIPE_DEPTH = 0.40
-# 45-deg bevel, deliberately wide of the 0.22 spec minimum: at 0.30 the
-# bright band was ~2 px at the presentation framing and never read (blind
-# critic round 7); 0.42 puts an unmistakable ribbon on every contour.
-_BRIDGE_ANGLAGE = 0.42
+# 45-deg bevel, a touch wide of the 0.22 spec minimum: at 0.30 the bright
+# band was ~2 px at the presentation framing and never read (blind critic
+# round 7), but the 0.42 counter-swing turned the slimmed spline bridges
+# into "uniform mirror-chrome rims" (round 8) — the ribbon ate ~40% of the
+# narrow necks. 0.26 keeps a legible chamfer LINE tracing every contour
+# while staying <= 25% of the thinnest visible top width.
+_BRIDGE_ANGLAGE = 0.26
 
 
 def _bevel_extrude(outline, z0, z1, w):
@@ -643,9 +649,13 @@ def _bridge(outline, z0, z1, jewel_xy, screw_xy, cutouts=(),
         rings = F.snailing_cutter(2 * outline.max_r + 2.0, 2.4,
                                   pitch=S.GENEVA_STRIPE_PITCH,
                                   groove_depth=depth, groove_width=1.85)
-        # stripe field stays clear of the (widened) bevel + a small flat
-        # margin so the deep V's never scallop the polished ribbon
-        m = bevel_w + 0.08
+        # stripe field runs right up to the bevel: the band extrusion below
+        # clips every groove inside this inset face, so the ribbon can never
+        # be scalloped and only a hairline flat separates it from the first
+        # V — the striped two-tone field owns the whole remaining top (the
+        # old 0.08 margin on top of the 0.42 bevel left a bare copper border
+        # that read as part of the chrome rim)
+        m = bevel_w + 0.02
         inset = outline.face(-m)
         for x, y, r in cutouts:
             inset = inset - Pos(x, y) * Circle(r + m)
@@ -791,9 +801,10 @@ def _plate_parts():
 
     for (x, y), name in zip(lower, ("center", "third", "fourth", "escape",
                                     "pallet", "balance")):
-        # flat disc flush 0.05 inside the sink (0.15 at the balance, where the
-        # dial-side shock ring + cap jewel stack sits below it)
-        drop = 0.15 if name == "balance" else 0.05
+        # domed disc seated 0.11 inside the sink (0.21 at the balance, where
+        # the dial-side shock ring + cap jewel stack sits below it) — drops
+        # deepened 0.06 with the 0.14 dome so each apex keeps its old z
+        drop = 0.21 if name == "balance" else 0.11
         ruby = (Pos(x, y, -S.PLATE_THICKNESS) * Rot(180, 0, 0)
                 * Pos(0, 0, -drop) * _ruby_disc())
         parts.append(_finish(ruby, f"plate_jewel:{name}", S.RUBY))
@@ -948,11 +959,13 @@ def _bridge_parts():
     parts.append(_finish(tb, "train_bridge", S.COPPER_GOLD))
     _add_shadow(parts, tb_shadow, "train_bridge")
     _add_anglage(parts, tb_rib, "train_bridge")
-    # flush flat ruby disc (visible dia 0.92, top 0.05 UNDER the table top),
-    # thin gold chaton ring between the ruby and the bright sink cone — the
-    # ruby/gold/dark-moat/polished-cone concentric read of the reference
+    # domed ruby stone recessed in the sink (rim 0.12 under the table top,
+    # 0.14 dome apex at table + 0.02 — under the chrono arbors hovering at
+    # 2.95), thin gold chaton ring between the ruby and the bright sink cone
+    # — the ruby/gold/dark-moat/polished-cone concentric read of the
+    # reference, now with a point highlight on each stone
     for (x, y), name in zip(train_jewels, ("center", "third", "fourth", "escape")):
-        parts.append(_finish(Pos(x, y, zb - 0.05) * _ruby_disc(),
+        parts.append(_finish(Pos(x, y, zb - 0.12) * _ruby_disc(),
                              f"bridge_jewel:{name}", S.RUBY))
         chaton = Pos(x, y, 0) * _ring(0.47, 0.70, 0.32, zb - 0.42)
         parts.append(_finish(chaton, f"chaton:{name}", S.BRASS_MOVEMENT))

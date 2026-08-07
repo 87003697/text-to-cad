@@ -420,10 +420,16 @@ def _lug_polish_ribbon():
         ux, uz = ux / n, uz / n
         nx, nz = -uz, ux                    # outward facet normal (+x, +z)
         e = POLISH_EDGE_INSET
+        # Only the OUTER band of the facet is mirror-polished — a narrow
+        # highlight hugging the outer crease (a full-facet skin reads as a
+        # big flat chrome slab at 3/4 camera angles; measured in review).
+        t0 = 0.52
+        ax0 = x_bev + t0 * (x_out - x_bev)
+        az0 = z_top + t0 * (z_bev - z_top)
         quads = []
         for d in (POLISH_GAP, POLISH_GAP + POLISH_THICKNESS):
             quads.append((
-                (x_bev + e * ux + d * nx, z_top + e * uz + d * nz),
+                (ax0 + d * nx, az0 + d * nz),
                 (x_out - e * ux + d * nx, z_bev - e * uz + d * nz),
             ))
         (a1, b1), (a2, b2) = quads

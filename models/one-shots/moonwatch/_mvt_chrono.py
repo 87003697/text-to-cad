@@ -820,14 +820,15 @@ def _chrono_bridge_parts():
     M._add_shadow(parts, shadow, "chrono_bridge")
     M._add_anglage(parts, ribbon, "chrono_bridge")
 
-    # jeweled countersunk bearings: flush ruby disc (rim 0.05 under the
-    # striped top, dome apex z1 + 0.03 <= CHRONO_LAYER_TOP) nested in a gold
-    # chaton ring on the seat floor — the ruby/gold/moat/polished-cone
+    # jeweled countersunk bearings: domed ruby stone (rim 0.11 under the
+    # striped top so the 0.14 dome apex stays z1 + 0.03 <= CHRONO_LAYER_TOP;
+    # body bottom z1 - 0.27 clears the z1 - 0.28 seat floor) nested in a
+    # gold chaton ring on the seat floor — the ruby/gold/moat/polished-cone
     # concentric read of the base train jewels. The runner / recorder /
     # coupling pivots (r0.10) rise into the ruby's 0.12 bore.
     jewels = (((0.0, 0.0), "chrono_runner"), ((MRX, MRY), "minute_recorder"))
     for (x, y), name in jewels:
-        ruby = Pos(x, y, z1 - 0.05) * M._ruby_disc(r=0.42, t=0.16, hole_r=0.12)
+        ruby = Pos(x, y, z1 - 0.11) * M._ruby_disc(r=0.42, t=0.16, hole_r=0.12)
         parts.append(_finish(ruby, f"bridge_jewel:{name}", S.RUBY))
         chaton = Pos(x, y, 0) * M._ring(0.43, 0.64, 0.18, z1 - 0.28)
         parts.append(_finish(chaton, f"chaton:{name}", S.BRASS_MOVEMENT))
@@ -854,7 +855,7 @@ def _chrono_bridge_parts():
     shadow2 = _trim_skins(shadow2, [COUPLING_COCK_SCREW], z1)
     M._add_shadow(parts, shadow2, "coupling_bridge")
     M._add_anglage(parts, ribbon2, "coupling_bridge")
-    ruby = Pos(FWX, FWY, z1 - 0.05) * M._ruby_disc(r=0.42, t=0.16, hole_r=0.12)
+    ruby = Pos(FWX, FWY, z1 - 0.11) * M._ruby_disc(r=0.42, t=0.16, hole_r=0.12)
     parts.append(_finish(ruby, "bridge_jewel:coupling", S.RUBY))
     chaton = Pos(FWX, FWY, 0) * M._ring(0.43, 0.64, 0.18, z1 - 0.28)
     parts.append(_finish(chaton, "chaton:coupling", S.BRASS_MOVEMENT))
