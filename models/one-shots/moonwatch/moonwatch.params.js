@@ -175,18 +175,38 @@ const PALLET_GROUP = [
 ];
 
 // Staged reveal translations: [feature, direction, distance, start, end].
+// The bezel stack and crystal lift clear first, then the dial floats up so
+// the face (hands running) and the movement (flipped bridge-side-up in the
+// case mouth, escapement beating) are BOTH visible, vertically separated.
 const REVEAL_MOVES = [
-  ["caseback_o_ring", [0, 0, -1], 9.0, 0.0, 0.7],
-  ["caseback_retaining_ring", [0, 0, -1], 13.0, 0.05, 0.75],
-  ["caseback", [0, 0, -1], 18.0, 0.1, 0.8],
-  ["caseback_sapphire", [0, 0, -1], 24.0, 0.15, 0.85],
-  ["movement_ring", [0, 0, -1], 5.5, 0.0, 0.6],
-  ["crystal", [0, 0, 1], 11.0, 0.15, 0.9],
-  ["crystal_gasket", [0, 0, 1], 7.0, 0.1, 0.85],
-  ["strap_12", [0, 1, 0], 9.0, 0.25, 1.0],
-  ["strap_6", [0, -1, 0], 9.0, 0.25, 1.0],
-  ["clasp", [0, -1, 0], 9.0, 0.25, 1.0],
+  ["caseback_o_ring", [0, 0, -1], 9.0, 0.0, 0.35],
+  ["caseback_retaining_ring", [0, 0, -1], 13.0, 0.03, 0.38],
+  ["caseback", [0, 0, -1], 18.0, 0.06, 0.42],
+  ["caseback_sapphire", [0, 0, -1], 24.0, 0.09, 0.45],
+  ["movement_ring", [0, 0, -1], 5.5, 0.0, 0.3],
+  ["bezel_ring", [0, 0, 1], 34.0, 0.05, 0.45],
+  ["bezel_polish", [0, 0, 1], 34.0, 0.05, 0.45],
+  ["bezel_insert", [0, 0, 1], 37.0, 0.05, 0.45],
+  ["tachymeter_scale", [0, 0, 1], 40.0, 0.05, 0.45],
+  ["crystal", [0, 0, 1], 48.0, 0.05, 0.45],
+  ["crystal_gasket", [0, 0, 1], 43.0, 0.05, 0.45],
+  ["dial_group", [0, 0, 1], 26.0, 0.25, 0.6],
+  ["strap_12", [0, 1, 0], 9.0, 0.1, 0.5],
+  ["strap_6", [0, -1, 0], 9.0, 0.1, 0.5],
+  ["clasp", [0, -1, 0], 9.0, 0.1, 0.5],
 ];
+
+// Reveal movement lift-and-flip: once the caseback stack is away and the
+// dial is rising, the movement climbs into the case mouth and turns
+// bridge-side-up so the beating escapement faces the same camera as the
+// floating dial.
+const REVEAL_RISE = 16;
+function revealStages(r) {
+  return {
+    rise: stage(r, 0.45, 0.85),
+    flip: stage(r, 0.55, 0.92),
+  };
+}
 
 // --- showcase choreography ---------------------------------------------------
 // The dial, bezel stack and crystal clear out to the SIDES so the movement can
@@ -307,13 +327,16 @@ export default {
       },
       reveal: {
         label: "Reveal movement",
-        duration: 8,
+        duration: 12,
         loop: true,
         update({ progress, set }) {
-          // Ping-pong so the loop opens and closes the watch, with the
-          // escapement running throughout.
-          const ping = progress < 0.5 ? progress * 2 : (1 - progress) * 2;
-          set("reveal", smooth(ping));
+          // Trapezoid timeline: open, hold with the face and escapement
+          // both running in view, then close — so the loop is seamless.
+          let r;
+          if (progress < 0.35) r = smooth(progress / 0.35);
+          else if (progress < 0.65) r = 1;
+          else r = smooth((1 - progress) / 0.35);
+          set("reveal", r);
           set("run", progress);
         },
       },
@@ -440,17 +463,22 @@ export default {
 
     // Movement group: flip in place about its own center (child tiers and
     // gear pivots compose in pre-parent space), then rise out of the case.
-    if (showcase > 0) {
+    // Reveal and showcase both drive this; their contributions add (in
+    // practice one is active at a time).
+    const rv = revealStages(reveal);
+    const movementFlip = Math.min(1, st.flip + rv.flip);
+    const movementRise = MOVEMENT_RISE * st.rise + REVEAL_RISE * rv.rise;
+    if (movementFlip > 0 || movementRise > 0) {
       effects.transform("movement_group", {
         transforms: [
           {
             rotate: {
               axis: [1, 0, 0],
               origin: MOVEMENT_CENTER,
-              angleDeg: 180 * st.flip,
+              angleDeg: 180 * movementFlip,
             },
           },
-          { translate: [0, 0, MOVEMENT_RISE * st.rise] },
+          { translate: [0, 0, movementRise] },
         ],
       });
     }
