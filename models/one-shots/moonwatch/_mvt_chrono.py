@@ -127,10 +127,11 @@ JUMPER_SPRING_STUD = (11.35, -3.3)  # open plate
 #: CHRONO_LAYER_TOP 4.1 (screw heads proud 0.04 top out flush at 4.10).
 CHRONO_BRIDGE_Z = (3.68, 4.06)
 
-#: One flowing 321-style plate (blob circles, `_mvt_base._bridge` factory):
-#: jeweled heads over the runner (0,0) and minute recorder (10.2,0), a broad
-#: southern body over the coupling wheel, an east rim body and a south foot
-#: lobe. Routing (plan-verified against every exported keep-out):
+#: One flowing 321-style plate (smooth traced `_mvt_base._Outline`, built by
+#: the `_mvt_base._bridge` factory): jeweled heads over the runner (0,0) and
+#: minute recorder (10.2,0) poking north from a slim two-armed span, a stem
+#: over the coupling wheel down to a south foot, an east rim body. Routing
+#: (plan-verified against every exported keep-out):
 #: - column wheel stays FULLY visible: every edge >= 2.9 from (8.3,3.6);
 #: - hammer strike faces stay visible: edges clear pad_a (1.67,-0.32) and
 #:   pad_b (8.77,-0.21) by >= 0.25; the hammer PIVOT screw head (top 3.92)
@@ -144,24 +145,31 @@ CHRONO_BRIDGE_Z = (3.68, 4.06)
 #:   clears the minute-recorder tip circle (2.41 vs 2.30), the south foot
 #:   clears the coupling wheel's swept circle (4.36 vs 4.00) and the balance
 #:   rim / timing-screw sweep (5.42 vs 5.25).
-CHRONO_BRIDGE_OUTLINE = (
-    (0.0, 0.0, 1.45),       # runner head (cam rim + strike faces peek out)
-    (1.1, -2.0, 1.00),
-    (2.5, -2.7, 1.15),
-    (4.0, -3.1, 1.30),
-    (6.4, -3.6, 1.30),
-    (8.45, -3.85, 0.90),    # crosses OVER the reset lever's mid segment
-    (9.4, -3.9, 0.70),      # window: jumper nose + reset nose stay visible
-    (10.3, -3.75, 0.85),
-    (11.0, -2.9, 0.80),
-    (11.4, -2.2, 0.90),
-    (12.05, -0.65, 1.30),   # east rim body (clipped at the 13.2 rim arc)
-    (10.2, 0.0, 1.15),      # minute-recorder head
-    (5.8, -5.5, 1.25),      # southern body over the coupling wheel
-    (5.55, -7.1, 1.00),
-    (5.35, -8.6, 0.80),
-    (5.3, -9.55, 0.75),     # south foot lobe (plate is open here)
-)
+CHRONO_BRIDGE_OUTLINE = M._Outline(
+    M._arcpts(0, 0, 1.47, 272, -40, 9)       # runner head cap (S->W->N->E)
+    + [(1.9, -1.15)]                         # past strike pad a's south side
+    + [(2.7, -1.62), (4.2, -1.85), (5.9, -2.35), (7.3, -2.9), (8.6, -3.2),
+       (9.55, -3.45)]                        # north edge OVER the reset lever
+    + [(10.62, -3.18)]                       # jumper-window turn (nose visible)
+    + [(10.1, -1.55)]
+    + M._arcpts(10.2, 0.0, 1.16, 235, 62, 5)  # minute-recorder head
+    + [(11.5, 0.62)]
+    + M._arcpts(12.05, -0.65, 1.3, 78, 45, 1)  # east rim body
+    + M._arcpts(0, 0, 13.13, 3, -7, 2)       # rim arc
+    + [(12.55, -1.9), (11.8, -2.45), (10.9, -3.6), (10.1, -4.5),
+       (9.3, -4.65), (8.4, -4.78)]           # band south edge
+    + [(7.35, -5.05)]                        # crotch into the stem east flank
+    + [(7.12, -5.85), (6.65, -7.1), (6.15, -8.5)]  # stem over coupling wheel
+    + M._arcpts(5.3, -9.55, 0.80, -35, -145, 3)    # south foot cap
+    + [(4.5, -8.55), (4.52, -7.1), (4.70, -5.95)]  # stem west flank
+    + [(4.42, -4.65), (3.45, -4.2)]          # crotch into the arm south edge
+    + [(2.3, -3.98), (1.15, -3.38), (0.42, -2.65)],
+    anchors=((0.0, 0.0, 1.47), (1.1, -2.0, 1.0), (2.5, -2.7, 1.15),
+             (4.0, -3.1, 1.3), (6.4, -3.6, 1.3), (8.45, -3.85, 0.9),
+             (9.4, -3.9, 0.7), (10.3, -3.75, 0.85), (11.0, -2.9, 0.8),
+             (11.4, -2.2, 0.9), (12.05, -0.65, 1.3), (10.2, 0.0, 1.16),
+             (5.8, -5.5, 1.25), (5.55, -7.1, 1.0), (5.35, -8.6, 0.8),
+             (5.3, -9.55, 0.8)))
 #: Blued bridge screws (sink flare r0.85 + 0.22 bevel fit inside the local
 #: lobe at each spot; shanks stay short — everything below is under an
 #: opaque plate hovering 0.02 above the hammer plane).
@@ -176,14 +184,11 @@ CHRONO_BRIDGE_FEET = ((12.75, -1.05, 0.35, 0.01), (5.3, -9.55, 0.60, 0.01))
 #: train-bridge top (sleeve foot from _BRIDGE_STUD_BASE, bored for the screw
 #: shank, clear of the driving wheel's swept circle 2.59 vs 2.40); the head
 #: hovers over the driving wheel leaving its toothed rim visible.
-COUPLING_COCK_OUTLINE = (
-    (-10.2, 0.0, 1.15),     # jeweled head over the driving arbor
-    (-10.88, -1.52, 0.82),
-    (-11.45, -2.92, 1.15),  # foot lobe over the train bridge
-)
-# (neck/foot centers probe-tuned by 0.03: the original spots left the
-# origin-centered stripe grooves tangent to the inset walls — a BOP
-# self-intersection in the cut result)
+COUPLING_COCK_OUTLINE = M._Outline(
+    M._stroke_pts([(-10.2, 0.0, 1.22),       # jeweled head over the arbor
+                   (-10.85, -1.5, 0.74),     # waisted neck
+                   (-11.45, -2.92, 1.16)]),  # foot lobe over the train bridge
+    anchors=((-10.2, 0.0, 1.22), (-10.85, -1.5, 0.74), (-11.45, -2.92, 1.16)))
 COUPLING_COCK_SCREW = (-11.45, -2.92)
 #: Jewel sink sized for the r1.15 heads (flat top r0.93 after the 0.22
 #: bevel): shallower/narrower than the base default so the polished cone
@@ -802,7 +807,7 @@ def _chrono_bridge_parts():
     z0, z1 = CHRONO_BRIDGE_Z
 
     body, shadow, ribbon = M._bridge(
-        CHRONO_BRIDGE_OUTLINE, 13.2, z0, z1,
+        CHRONO_BRIDGE_OUTLINE, z0, z1,
         [(0.0, 0.0), (MRX, MRY)], CHRONO_BRIDGE_SCREWS,
         jewel_sink_kw=_CHRONO_SINK_KW)
     # full-height turned feet through wheel-free plate (bottom face of the
@@ -833,7 +838,7 @@ def _chrono_bridge_parts():
 
     # coupling cock --------------------------------------------------------
     body2, shadow2, ribbon2 = M._bridge(
-        COUPLING_COCK_OUTLINE, 13.2, z0, z1,
+        COUPLING_COCK_OUTLINE, z0, z1,
         [(FWX, FWY)], [COUPLING_COCK_SCREW],
         jewel_sink_kw=_CHRONO_SINK_KW)
     sx, sy = COUPLING_COCK_SCREW

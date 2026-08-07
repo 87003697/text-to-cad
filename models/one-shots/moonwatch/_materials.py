@@ -34,15 +34,17 @@ LUME_PLOT = {"roughness": 0.65, "metalness": 0.0, "clearcoat": 0.15, "clearcoatR
 PAINTED_HAND = {"roughness": 0.28, "metalness": 0.25, "clearcoat": 0.6, "clearcoatRoughness": 0.1}
 BEZEL_ANODIZED = {"roughness": 0.5, "metalness": 0.35, "clearcoat": 0.2, "clearcoatRoughness": 0.3}
 GLASS = {"roughness": 0.05, "metalness": 0.0, "clearcoat": 0.3, "clearcoatRoughness": 0.05}
+GLASS_BACK = {"roughness": 0.03, "metalness": 0.0, "clearcoat": 0.02, "clearcoatRoughness": 0.05}
 RUBBER = {"roughness": 0.9, "metalness": 0.0, "clearcoat": 0.0}
 RUBY_JEWEL = {"roughness": 0.05, "metalness": 0.0, "clearcoat": 1.0, "clearcoatRoughness": 0.03}
+POLISHED_LINK = {"roughness": 0.22, "metalness": 0.88, "clearcoat": 0.15, "clearcoatRoughness": 0.1}
 
 # --- ordered label rules (first match wins) ---------------------------------
 
 RULES: list[tuple[str, dict]] = [
     # glass
     ("crystal", GLASS),
-    ("caseback_sapphire", GLASS),
+    ("caseback_sapphire", GLASS_BACK),
     # gaskets / o-rings / rubber
     ("*o_ring*", RUBBER),
     ("*gasket*", RUBBER),
@@ -72,12 +74,12 @@ RULES: list[tuple[str, dict]] = [
     ("pusher_spring*", SATIN_STEEL),
     ("spring_bar*", SATIN_STEEL),
     # bracelet
-    ("link_*_center", POLISHED_STEEL),
+    ("link_*_center", POLISHED_LINK),
     ("link_*", BRUSHED_STEEL),
     ("end_link*", BRUSHED_STEEL),
     ("pin_*", SATIN_STEEL),
-    ("clasp_flip_lock", POLISHED_STEEL),
-    ("clasp_pusher*", POLISHED_STEEL),
+    ("clasp_flip_lock", POLISHED_LINK),
+    ("clasp_pusher*", POLISHED_LINK),
     ("clasp_*", BRUSHED_STEEL),
     # movement: jewels, screws, finishing overlays
     ("*jewel*", RUBY_JEWEL),

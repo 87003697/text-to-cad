@@ -442,3 +442,47 @@ helpers at documented datums.
   `inspect validate` should name the last boolean when a part fails.
 - **Blocked:** ~20 min (bisecting which cut was faulty). **Fixed:** locally
   (geometry nudged; helper unchanged).
+
+## OCC kernel operations are broadly fragile on dense periodic B-spline profile faces (taper extrude, wire offset, coincident-face fuse, ruled loft at sharp corners)
+
+- **Doing:** replacing the moonwatch bridge outlines (blobbed circle chains)
+  with smooth closed silhouettes — ONE periodic `Spline` fit through ~250
+  Catmull-Rom samples per bridge, `make_face`, then the `_bridge` factory's
+  bevel/stripe/ribbon machinery — in
+  `models/one-shots/moonwatch/_mvt_base.py` / `_mvt_chrono.py` (2026-08-07).
+- **Symptoms** (each probe-verified in isolation on build123d 0.10 / OCP
+  7.9):
+  1. `extrude(face, amount, taper=45)` (`LocOpe_DPrism`) throws on EVERY one
+     of the six spline profiles — `BRepFill_TrimSurfaceTool::IntersectWith:
+     incoherent intersection`, `NCollection_DataMap::Find`,
+     `BRepFill_MultiLine: ValueOnFace` — although the same call succeeds on
+     small hand-sampled spline faces (~40 pts).
+  2. `offset(face, -d, kind=Kind.ARC)` (`BRepOffsetAPI_MakeOffset` via
+     `Wire.offset_2d`) returns Null (`ValueError: Null TopoDS_Shape
+     object`) for EVERY inward delta on the balance-cock profile while
+     outward deltas work; barrel/train/pallet profiles offset fine.
+  3. Fusing two individually valid solids that share a coincident
+     spline-bounded planar face (straight-wall extrude + its 45-deg bevel
+     cap, common face = the same spline profile) returns an EMPTY result —
+     `+` succeeds, `volume == 0`, zero solids — on the barrel profile only;
+     the same construction fused clean on the other five.
+  4. `BRepOffsetAPI_ThruSections` (build123d `loft(..., ruled=True)`)
+     between a profile and its inward offset builds but is
+     `BRepCheck_Analyzer`-INVALID when the outer wire has sharp corners
+     (the ruled surface folds where outer corner radius < offset delta).
+- **Workarounds (adopted, in `_mvt_base.py`):** compute ALL profile offsets
+  numerically on the dense sample loop (normal offset + drop points closer
+  than |delta| to the source polyline — the classic offset-validity prune —
+  + resample + light smoothing), never calling kernel offset; build the
+  beveled body as ONE 3-section ruled loft (wall, wall, inward offset) so no
+  coincident-face fuse exists; give outline traces explicit corner-rounding
+  points at rim junctions; derive the polished-ribbon shell from the body's
+  own cap translated vertically (a 45-deg cone translated up by d equals the
+  cone grown horizontally by d) instead of lofting a second grown pair.
+- **Suggestion:** treat `extrude(taper=)`, kernel wire offset and
+  coincident-face fuses as unavailable for interpolated many-point spline
+  profiles; prefer ruled lofts between numerically offset sections. (This
+  also supersedes the previous entry's `COUPLING_COCK_OUTLINE` 0.03-nudge
+  note — the blob outlines it tuned no longer exist.)
+- **Blocked:** ~1.5 h across the four failures. **Fixed:** locally
+  (helpers in `_mvt_base.py`; kernel behavior unchanged).

@@ -378,7 +378,7 @@ def build_case_middle():
 #
 # The case middle is ONE solid, so its twisted lug bevel facets inherit the
 # body's BRUSHED material no matter how the geometry reads. Exactly like the
-# movement's anglage ribbons (`_mvt_base._anglage_cap`/`_add_anglage`), thin
+# movement's anglage ribbons (`_mvt_base._cap`/`_add_anglage`), thin
 # skins hover POLISH_GAP off each polished facet and carry a true mirror PBR
 # set inline on the part: the `case_polish:*` labels deliberately match NO
 # `_materials.RULES` pattern (fnmatch-verified), so `M.apply` leaves the

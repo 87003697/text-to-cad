@@ -44,11 +44,11 @@ DIAL_PRINT = (0.930, 0.930, 0.915, 1.0)     # white print / indices
 LUME = (0.820, 0.850, 0.660, 1.0)           # aged-neutral luminous plots
 BEZEL_BLACK = (0.045, 0.045, 0.050, 1.0)    # anodized tachymeter insert
 BEZEL_FILL = (0.920, 0.920, 0.910, 1.0)     # filled tachymeter engraving
-CRYSTAL = (0.760, 0.800, 0.830, 0.16)       # domed crystal (transparent)
-SAPPHIRE = (0.780, 0.810, 0.850, 0.14)      # display back glass
+CRYSTAL = (0.760, 0.800, 0.830, 0.11)       # domed crystal (transparent)
+SAPPHIRE = (0.780, 0.810, 0.850, 0.05)      # display back glass (AR-coated read)
 GASKET = (0.080, 0.080, 0.085, 1.0)         # black nitrile
 BRACELET_OUTER = (0.580, 0.595, 0.630, 1.0) # brushed outer links (darker)
-BRACELET_CENTER = (0.790, 0.800, 0.830, 1.0)  # polished center links
+BRACELET_CENTER = (0.850, 0.855, 0.870, 1.0)  # polished center links
 BRASS_MOVEMENT = (0.700, 0.560, 0.330, 1.0) # unplated brass small parts
 
 # ---------------------------------------------------------------------------
