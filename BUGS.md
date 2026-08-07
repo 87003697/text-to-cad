@@ -394,3 +394,25 @@ helpers at documented datums.
   highest-leverage renderer change for photoreal CAD presentation.
 - **Blocked:** the blind-A/B win condition, not the modeling. **Fixed:** no
   (out of minimal-fix scope; documented).
+
+## `safe_chamfer`'s volume-only gate accepts BOP-self-intersecting chamfers that `inspect validate` then rejects
+
+- **Where found:** `models/one-shots/moonwatch/_mvt_chrono.py` lever anglage
+  (2026-08-07, chronograph-works cluster). `F.anglage_top` /
+  `F.safe_chamfer` accept a chamfer result when `result.volume > 0`.
+- **Symptom:** on some capsule-chain lever perimeters (reset lever, reset
+  spring, brake lever) OCC `chamfer` at 0.14 returned a positive-volume solid
+  whose skinny chamfer faces are BOP-faulty — `BRepAlgoAPI_Check` reports
+  `BOPAlgo_SelfIntersect` + `BOPAlgo_TooSmallEdge` — so the retry ladder
+  "succeeded" and shipped parts that `inspect validate` flags as
+  `selfIntersecting` (3 failures). `BRepCheck_Analyzer.IsValid()` on the same
+  solids is True, so simple topology validity checks do not catch it either;
+  only the BOP check used by `cadgen.validity` does.
+- **Workaround (adopted):** `_mvt_chrono._lever` wraps the ladder with its own
+  `BRepAlgoAPI_Check` gate and steps the width down (0.7x) until the chamfer
+  passes, else skips the anglage.
+- **Suggestion:** `F.safe_chamfer`/`safe_fillet` should gate on the same BOP
+  check `inspect validate` uses, not just `volume > 0` — silent acceptance
+  here surfaces only at validation time with no pointer to the causing op.
+- **Blocked:** ~15 min. **Fixed:** locally in `_mvt_chrono.py` (helper
+  unchanged; other clusters using `anglage_top` on wavy outlines can hit it).

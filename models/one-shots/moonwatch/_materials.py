@@ -19,21 +19,21 @@ from fnmatch import fnmatchcase
 
 # --- material classes -------------------------------------------------------
 
-POLISHED_STEEL = {"roughness": 0.08, "metalness": 1.0, "clearcoat": 0.25, "clearcoatRoughness": 0.08}
+POLISHED_STEEL = {"roughness": 0.12, "metalness": 0.92, "clearcoat": 0.25, "clearcoatRoughness": 0.08}
 BRUSHED_STEEL = {"roughness": 0.42, "metalness": 0.92, "clearcoat": 0.05, "clearcoatRoughness": 0.4}
 SATIN_STEEL = {"roughness": 0.30, "metalness": 0.95, "clearcoat": 0.1, "clearcoatRoughness": 0.2}
 GRAINED_LEVER = {"roughness": 0.34, "metalness": 0.95, "clearcoat": 0.08, "clearcoatRoughness": 0.2}
 BLUED_SCREW = {"roughness": 0.10, "metalness": 0.92, "clearcoat": 0.55, "clearcoatRoughness": 0.06}
 COPPER_PLATE = {"roughness": 0.34, "metalness": 0.90, "clearcoat": 0.08, "clearcoatRoughness": 0.3}
-ANGLAGE_MIRROR = {"roughness": 0.05, "metalness": 1.0, "clearcoat": 0.3, "clearcoatRoughness": 0.05}
+ANGLAGE_MIRROR = {"roughness": 0.08, "metalness": 0.95, "clearcoat": 0.3, "clearcoatRoughness": 0.05}
 GILT_WHEEL = {"roughness": 0.24, "metalness": 0.95, "clearcoat": 0.1, "clearcoatRoughness": 0.15}
 BRASS_PART = {"roughness": 0.38, "metalness": 0.9}
-BLACK_LACQUER = {"roughness": 0.38, "metalness": 0.0, "clearcoat": 0.9, "clearcoatRoughness": 0.08}
+BLACK_LACQUER = {"roughness": 0.52, "metalness": 0.0, "clearcoat": 0.35, "clearcoatRoughness": 0.15}
 MATTE_PRINT = {"roughness": 0.85, "metalness": 0.0, "clearcoat": 0.0}
 LUME_PLOT = {"roughness": 0.65, "metalness": 0.0, "clearcoat": 0.15, "clearcoatRoughness": 0.3}
 PAINTED_HAND = {"roughness": 0.28, "metalness": 0.25, "clearcoat": 0.6, "clearcoatRoughness": 0.1}
 BEZEL_ANODIZED = {"roughness": 0.5, "metalness": 0.35, "clearcoat": 0.2, "clearcoatRoughness": 0.3}
-GLASS = {"roughness": 0.04, "metalness": 0.0, "clearcoat": 1.0, "clearcoatRoughness": 0.02}
+GLASS = {"roughness": 0.05, "metalness": 0.0, "clearcoat": 0.3, "clearcoatRoughness": 0.05}
 RUBBER = {"roughness": 0.9, "metalness": 0.0, "clearcoat": 0.0}
 RUBY_JEWEL = {"roughness": 0.05, "metalness": 0.0, "clearcoat": 1.0, "clearcoatRoughness": 0.03}
 

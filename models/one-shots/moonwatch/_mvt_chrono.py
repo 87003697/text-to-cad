@@ -66,7 +66,7 @@ FWX, FWY = S.FOURTH_WHEEL_POS                # (-10.2, 0.0)
 # crown wheel ~3.11 (+screw 3.19); click ~3.06 (+screw ~3.16); winding
 # square/screw 3.46/3.58 (r1.3 keep-out at BARREL_POS); cock shock 3.4.
 WHEEL_Z = (2.96, 3.14)          # lateral clutch chain + recorder wheel webs
-STAR_Z = (3.16, 3.40)           # column-wheel ratchet star (probe-driven:
+STAR_Z = (3.20, 3.40)           # column-wheel ratchet star (probe-driven:
 #   above the crown wheel top 3.11 and the recorder wheel top 3.14 — the
 #   star tip circle XY-overlaps both at the spec plan positions)
 COLUMN_Z = (3.40, 3.90)         # the 7 columns
@@ -81,9 +81,9 @@ HOUR_Z = (-2.60, -1.55)         # dial-side hour recorder band
 # column-wheel geometry
 STAR_TEETH = 21
 STAR_TIP_R = 2.30               # = COLUMN_WHEEL_DIAMETER / 2
-STAR_ROOT_R = 1.90
+STAR_ROOT_R = 1.98              # fine crisp ratchet teeth (0.32 deep)
 COL_R_IN, COL_R_OUT = 1.30, 2.00
-COL_HALF_DEG = 13.0             # column angular half-width (~26 of 51.4 pitch)
+COL_HALF_DEG = 11.5             # column angular half-width (23 of 51.4 pitch)
 COL_PITCH = 360.0 / S.COLUMN_COUNT
 COL_PHASE = -145.0              # a column centered here (coupling beak rides it)
 STAR_PHASE = -19.86             # a tooth tip lands at -7 deg (operating beak)
@@ -316,7 +316,7 @@ def _column_wheel_parts():
     # pairwise decay to ShapeList; a real column wheel is one machined piece)
     body = star + (cols + [
         _cyl(0.95, STAR_Z[0] - _BRIDGE_STUD_BASE, _BRIDGE_STUD_BASE),
-        _cyl(0.95, 3.62 - STAR_Z[1], STAR_Z[1] - 0.01),
+        _cyl(0.95, 3.56 - STAR_Z[1], STAR_Z[1] - 0.01),   # core: 0.02 under cap
     ])
     body = body - _cyl(0.35, 2.0, 2.5)
     body = Pos(CWX, CWY, 0) * body
@@ -591,7 +591,7 @@ def _operating_parts():
     # beak: base circle clear of the tooth tip at STAR_PHASE's -10 deg tip,
     # triangular nose (CCW) resting at r 2.15 in the gap at -4.5 deg
     base = (10.95, 3.25)
-    apex = _pol(CWX, CWY, 2.12, -4.5)
+    apex = _pol(CWX, CWY, 2.16, -4.0)
     d = math.hypot(apex[0] - base[0], apex[1] - base[1])
     ux, uy = (apex[0] - base[0]) / d, (apex[1] - base[1]) / d
     heel_a = (base[0] - 0.24 * uy, base[1] + 0.24 * ux)

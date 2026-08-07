@@ -60,7 +60,7 @@
     "enabled": true,
     "presetId": "studio-hdri-17",
     "intensity": 1.0,
-    "rotationY": -0.35,
+    "rotationY": 1.2,
     "useAsBackground": false
   },
   "lighting": {
@@ -87,7 +87,7 @@
     },
     "rim": {
       "enabled": true,
-      "color": "#d9e6f5",
+      "color": "#eef1f5",
       "intensity": 1.45,
       "position": {
         "x": -320,
@@ -109,8 +109,8 @@
     },
     "point": {
       "enabled": true,
-      "color": "#9fc4e8",
-      "intensity": 0.28,
+      "color": "#d8dde4",
+      "intensity": 0.18,
       "distance": 0,
       "position": {
         "x": -240,
