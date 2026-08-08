@@ -112,6 +112,7 @@ async function main() {
     referenceThicknessMm: DXF_PREVIEW_REFERENCE_THICKNESS_MM,
     bytes: bytes.length,
     bendLineCount: stats.bendLineCount,
+    bendAxisX: stats.bendAxisX,
     triangleCount: stats.triangleCount,
     vertexCount: stats.vertexCount,
   });

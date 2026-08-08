@@ -264,6 +264,10 @@ export default function CadRenderPane({
   referenceSelectionUnavailable = false,
   referenceSelectionDeferred = false,
   drawingThicknessScale = 1,
+  planMode = false,
+  bendAxisX = null,
+  bendAngleDeg = 0,
+  bendDirection = "up",
   viewPlaneOffsetRight = 16,
   viewerMode,
   assemblyPickingActive = false,
@@ -477,6 +481,10 @@ export default function CadRenderPane({
           modelKey={selectedKey}
           renderFormat={renderFormat}
           drawingThicknessScale={drawingThicknessScale}
+          planMode={planMode}
+          bendAxisX={bendAxisX}
+          bendAngleDeg={bendAngleDeg}
+          bendDirection={bendDirection}
           perspective={viewerPerspective}
           projection={cadProjection}
           perspectiveRef={viewerPerspectiveRef}

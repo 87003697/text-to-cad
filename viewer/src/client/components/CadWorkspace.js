@@ -8011,6 +8011,10 @@ export default function CadWorkspace({
           viewerRef={viewerRef}
           renderFormat={effectiveRenderFormat}
           drawingThicknessScale={drawingThicknessScale}
+          planMode={drawingViewMode === "2d"}
+          bendAxisX={selectedEntry?.bendAxisX || null}
+          bendAngleDeg={drawingBendAngleDeg}
+          bendDirection={drawingBendDirection}
           renderPartsIndividually={isUrdfView || Boolean(selectedStepParameterRuntime)}
           stepParameters={selectedStepParameterRuntime}
           selectedMeshData={selectedMeshData}

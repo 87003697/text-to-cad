@@ -409,6 +409,9 @@ def create_generated_dxf_entry(repo_root, root_path, source_path):
             # Surfaced on the entry so the viewer can decide whether a Bends tab applies
             # without fetching and parsing the package.
             entry["bendLineCount"] = int(bend_line_count)
+        axes = preview_stats.get("bendAxisX")
+        if isinstance(axes, list) and axes:
+            entry["bendAxisX"] = [float(v) for v in axes]
     glb_relation = render_package_glb_relation(repo_root, root_path, source_path, "dxf")
     if glb_relation:
         entry["relations"] = {"glb": glb_relation}

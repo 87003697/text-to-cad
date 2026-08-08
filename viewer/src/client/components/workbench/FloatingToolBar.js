@@ -197,16 +197,18 @@ function DesktopFloatingToolBar({
       onPointerEnter={onToolbarEnter}
       onPointerLeave={onToolbarLeave}
     >
+      {/* `active`, not `isActive`: ToolbarButton switches variant on `active`, and an unknown
+          prop is silently dropped -- which is why neither button looked selected. */}
       <ToolbarButton
         label="Top-down 2D view"
-        isActive={drawingViewMode === "2d"}
+        active={drawingViewMode === "2d"}
         onClick={() => onDrawingViewModeChange?.("2d")}
       >
         <span className="text-[10px] font-medium leading-none">2D</span>
       </ToolbarButton>
       <ToolbarButton
         label="3D view"
-        isActive={drawingViewMode !== "2d"}
+        active={drawingViewMode !== "2d"}
         onClick={() => onDrawingViewModeChange?.("3d")}
       >
         <span className="text-[10px] font-medium leading-none">3D</span>

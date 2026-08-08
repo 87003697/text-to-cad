@@ -1731,11 +1731,22 @@ function updateGridHelper(
   });
 }
 
+/** The Z scale a zero-thickness drawing renders at: thin enough to read as a face, non-zero
+ *  so the model matrix stays invertible. */
+const FLAT_DRAWING_SCALE = 1e-3;
+
+/** THREE.MOUSE.PAN. Spelled out so plan mode needs no three import in this component. */
+const MOUSE_BUTTON_PAN = 2;
+
 const CadViewer = forwardRef(function CadViewer({
   meshData,
   modelKey,
   renderFormat = "",
   drawingThicknessScale = 1,
+  planMode = false,
+  bendAxisX = null,
+  bendAngleDeg = 0,
+  bendDirection = "up",
   perspective = null,
   perspectiveRef = null,
   projection = CAMERA_PROJECTION.PERSPECTIVE,
@@ -2611,9 +2622,12 @@ const CadViewer = forwardRef(function CadViewer({
     if (!group) {
       return;
     }
-    const scale = Number.isFinite(drawingThicknessScale) && drawingThicknessScale > 0
-      ? drawingThicknessScale
-      : 1;
+    // Zero thickness means "just the face". Scaling by an exact 0 makes the model matrix
+    // singular -- normals degenerate and the sheet lights as black -- so it collapses to a
+    // hair instead. At this scale the walls are sub-pixel at any sane zoom, which is what
+    // "flat" should look like, and the solid stays valid.
+    const requested = Number.isFinite(drawingThicknessScale) ? drawingThicknessScale : 1;
+    const scale = Math.max(requested, FLAT_DRAWING_SCALE);
     if (group.scale.z === scale) {
       return;
     }
@@ -2621,6 +2635,147 @@ const CadViewer = forwardRef(function CadViewer({
     group.updateMatrixWorld(true);
     runtime.requestRender?.();
   }, [drawingThicknessScale, meshData]);
+
+  // PLAN MODE: a generic top-down camera lock, reusable by any model, not a DXF feature.
+  //
+  // Rotation is what makes a view 3D. Disabling it (and moving the left button onto pan) is
+  // the whole mode: the camera keeps looking straight down, dragging slides the model, and
+  // wheel-zoom still works. Everything else that reads as three-dimensional -- the view cube,
+  // the vertical origin axis -- is hidden by the caller through `planMode`, so the viewport
+  // stops advertising an axis you cannot turn towards.
+  useEffect(() => {
+    const runtime = runtimeRef.current;
+    const controls = runtime?.controls;
+    if (!controls) {
+      return undefined;
+    }
+    const previousRotate = controls.enableRotate;
+    const previousButtons = controls.mouseButtons ? { ...controls.mouseButtons } : null;
+    if (planMode) {
+      controls.enableRotate = false;
+      if (controls.mouseButtons) {
+        // Left-drag pans instead of orbiting; a locked view whose primary drag does nothing
+        // reads as broken rather than as locked. THREE.MOUSE.PAN is 2 -- spelled out because
+        // this component does not import three, and a bundler would have shipped the
+        // undefined reference happily (see unboundIdentifiers.test.js, which caught it).
+        controls.mouseButtons = { ...controls.mouseButtons, LEFT: MOUSE_BUTTON_PAN };
+      }
+    }
+    const axis = runtime.originAxis;
+    const previousAxisVisible = axis ? axis.visible : null;
+    if (axis && planMode) {
+      axis.visible = false;
+    }
+    controls.update?.();
+    runtime.requestRender?.();
+    return () => {
+      const activeControls = runtimeRef.current?.controls;
+      if (!activeControls) {
+        return;
+      }
+      activeControls.enableRotate = previousRotate;
+      if (previousButtons) {
+        activeControls.mouseButtons = previousButtons;
+      }
+      const activeAxis = runtimeRef.current?.originAxis;
+      if (activeAxis && previousAxisVisible !== null) {
+        activeAxis.visible = previousAxisVisible;
+      }
+      activeControls.update?.();
+      runtimeRef.current?.requestRender?.();
+    };
+  }, [planMode, viewerReadyTick]);
+
+  // FOLD: bend the flat pattern about its bend lines, live.
+  //
+  // A flat pattern's bend lines are parallel and axis-aligned, so the fold is an accordion:
+  // split the sheet at each bend X, then rotate every strip about the previous bend axis,
+  // accumulating. That is why nothing needs re-meshing -- the geometry beyond a bend is
+  // rigid, and only where it sits changes.
+  //
+  // Splitting by X rather than by a baked strip attribute keeps the bake unchanged: the bend
+  // positions are the only extra fact, and they are in the descriptor already.
+  useEffect(() => {
+    const runtime = runtimeRef.current;
+    const group = runtime?.modelGroup;
+    if (!group) {
+      return undefined;
+    }
+    const axes = Array.isArray(bendAxisX) ? [...bendAxisX].sort((a, b) => a - b) : [];
+    const angle = (Number(bendAngleDeg) || 0) * (Math.PI / 180) * (bendDirection === "down" ? -1 : 1);
+    const restore = [];
+    if (!axes.length || !angle) {
+      return undefined;
+    }
+    // Deferred a frame, and retried: this effect is declared before the one that syncs the
+    // scene, so on a fresh model the group is still empty when it first runs. Folding an
+    // empty group silently did nothing, which is why the sheet stayed flat at whatever angle
+    // it was first shown at.
+    let frame = 0;
+    let attempts = 0;
+    const applyFold = () => {
+      group.traverse((child) => {
+      const position = child.geometry?.getAttribute?.("position");
+      if (!position) {
+        return;
+      }
+      // Fold always from the FLAT coordinates, never from the current pose -- folding a
+      // folded sheet compounds. The flat copy is cached on the mesh, and REUSED on later
+      // runs rather than skipped: skipping left every re-run with nothing to fold, so the
+      // sheet stayed flat at any angle it was first shown at.
+      const original = child.userData.dxfFoldOriginal
+        || (child.userData.dxfFoldOriginal = Float32Array.from(position.array));
+        restore.push({ child, original, position });
+      });
+
+      if (!restore.length) {
+        attempts += 1;
+        if (attempts < 30) {
+          frame = requestAnimationFrame(applyFold);
+        }
+        return;
+      }
+
+      for (const { child, original, position } of restore) {
+      const array = position.array;
+      for (let index = 0; index < original.length; index += 3) {
+        let x = original[index];
+        const y = original[index + 1];
+        let z = original[index + 2];
+        // Walk the chain: every bend the vertex lies BEYOND folds it once more.
+        for (const axisX of axes) {
+          if (x <= axisX) {
+            break;
+          }
+          const dx = x - axisX;
+          const cos = Math.cos(angle);
+          const sin = Math.sin(angle);
+          x = axisX + dx * cos - z * sin;
+          z = dx * sin + z * cos;
+        }
+        array[index] = x;
+        array[index + 1] = y;
+        array[index + 2] = z;
+      }
+        position.needsUpdate = true;
+        child.geometry.computeVertexNormals?.();
+        child.geometry.computeBoundingSphere?.();
+      }
+      runtime.requestRender?.();
+    };
+    frame = requestAnimationFrame(applyFold);
+
+    return () => {
+      cancelAnimationFrame(frame);
+      for (const { child, original, position } of restore) {
+        position.array.set(original);
+        position.needsUpdate = true;
+        child.geometry.computeVertexNormals?.();
+        child.geometry.computeBoundingSphere?.();
+      }
+      runtimeRef.current?.requestRender?.();
+    };
+  }, [bendAxisX, bendAngleDeg, bendDirection, meshData, viewerReadyTick]);
 
   useImperativeHandle(ref, () => ({
     async captureScreenshot({ filename = "cad-screenshot.png", mode = "download" } = {}) {
@@ -4599,7 +4754,7 @@ const CadViewer = forwardRef(function CadViewer({
         />
       ) : null}
       <ViewPlaneControl
-        showViewPlane={showViewPlane}
+        showViewPlane={showViewPlane && !planMode}
         previewMode={previewMode}
         isLoading={isLoading}
         meshData={meshData}

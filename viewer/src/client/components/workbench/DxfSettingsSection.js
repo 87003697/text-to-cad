@@ -28,11 +28,15 @@ import { FILE_SHEET_SECTION_IDS } from "@/workbench/fileSheetSections";
  * permanent place beside one that is always relevant.
  */
 
-/** Sheet-metal thicknesses a drawing plausibly gets cut at, in millimetres. */
-export const DXF_THICKNESS_MIN_MM = 0.1;
+/** Sheet-metal thicknesses a drawing plausibly gets cut at, in millimetres.
+ *
+ * Zero is a real setting, not a degenerate one: a drawing IS a 2D profile, so the honest
+ * default is the face with no material behind it. The renderer collapses the prism to a
+ * sheet at 0 rather than to nothing (see CadViewer's thickness effect). */
+export const DXF_THICKNESS_MIN_MM = 0;
 export const DXF_THICKNESS_MAX_MM = 25;
 export const DXF_THICKNESS_STEP_MM = 0.1;
-export const DXF_DEFAULT_THICKNESS_MM = 2;
+export const DXF_DEFAULT_THICKNESS_MM = 0;
 
 export const DXF_BEND_ANGLE_MIN_DEG = 0;
 export const DXF_BEND_ANGLE_MAX_DEG = 180;
@@ -43,7 +47,7 @@ export const DXF_BEND_DIRECTIONS = Object.freeze(["up", "down"]);
 
 export function normalizeDxfThicknessMm(value, fallback = DXF_DEFAULT_THICKNESS_MM) {
   const numeric = Number(value);
-  if (!Number.isFinite(numeric) || numeric <= 0) {
+  if (!Number.isFinite(numeric) || numeric < 0) {
     return fallback;
   }
   return Math.min(DXF_THICKNESS_MAX_MM, Math.max(DXF_THICKNESS_MIN_MM, numeric));
@@ -110,7 +114,9 @@ export function DxfBendsSection({
       <FileSheetSubsection title="Bends">
         {/* A read-only count is an inline row like any other — the guide's "read-only value"
             case — rather than a sentence explaining what a bend line is. */}
-        <FileSheetInlineControlRow label="Bend lines" value={String(bendLineCount)} />
+        <FileSheetInlineControlRow label="Bend lines">
+          <span className="text-[11px] font-medium tabular-nums">{bendLineCount}</span>
+        </FileSheetInlineControlRow>
         <FileSheetSliderField
           label="Angle"
           value={`${Math.round(angle)}°`}
@@ -133,21 +139,18 @@ export function DxfBendsSection({
         </FileSheetSliderField>
         {/* The one sanctioned segmented control in the panel: two short single words, which
             the guide names explicitly as the DXF bend direction case. */}
-        <FileSheetInlineControlRow
-          label="Direction"
-          trailing={(
-            <FileSheetSegmentedControl
-              fit
-              ariaLabel="Bend direction"
-              value={direction}
-              onChange={(next) => onBendDirectionChange?.(normalizeDxfBendDirection(next, direction))}
-              options={[
-                { value: "up", label: "Up" },
-                { value: "down", label: "Down" }
-              ]}
-            />
-          )}
-        />
+        <FileSheetInlineControlRow label="Direction">
+          <FileSheetSegmentedControl
+            fit
+            ariaLabel="Bend direction"
+            value={direction}
+            onChange={(next) => onBendDirectionChange?.(normalizeDxfBendDirection(next, direction))}
+            options={[
+              { value: "up", label: "Up" },
+              { value: "down", label: "Down" }
+            ]}
+          />
+        </FileSheetInlineControlRow>
       </FileSheetSubsection>
     </FileSheetSectionBody>
   );

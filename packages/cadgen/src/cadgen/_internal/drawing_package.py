@@ -372,6 +372,9 @@ def _preview_descriptor_fields(preview: dict[str, object]) -> dict[str, object]:
         for key in ("triangleCount", "vertexCount", "bytes", "bendLineCount")
         if isinstance(preview.get(key), (int, float)) and not isinstance(preview.get(key), bool)
     }
+    axes = preview.get("bendAxisX")
+    if isinstance(axes, list) and axes:
+        stats["bendAxisX"] = [float(v) for v in axes if isinstance(v, (int, float))]
     if stats:
         fields["previewStats"] = stats
     return fields

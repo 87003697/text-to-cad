@@ -91,6 +91,7 @@ export function dxfPreviewPositions(meshData) {
  */
 export function buildDxfPreviewGlb(dxfData, { encoder, name = "drawing" } = {}) {
   const meshData = buildDxfPreviewMeshData(dxfData, DXF_PREVIEW_REFERENCE_THICKNESS_MM, null);
+  const bendLines = extractOrderedDxfBendLines(dxfData);
   const positions = dxfPreviewPositions(meshData);
   const bytes = writeGlb(
     { primitives: [{ positions, name }], name, units: "mm" },
@@ -104,7 +105,12 @@ export function buildDxfPreviewGlb(dxfData, { encoder, name = "drawing" } = {}) 
       bounds: meshData.bounds,
       // Carried so the viewer can show a Bends tab only for drawings that HAVE bends. It is
       // a fact about the drawing, not a bake setting, so it stays out of bakeHash.
-      bendLineCount: extractOrderedDxfBendLines(dxfData).length,
+      bendLineCount: bendLines.length,
+      // The fold axes, in the CAD frame this GLB is written in. A bend line is vertical in
+      // the flat pattern, so after the Z-up rotation it is a line of constant X running along
+      // Y -- which is all a renderer needs to fold the sheet: split the mesh at these X
+      // values and rotate each strip about the one before it.
+      bendAxisX: bendLines.map((bendLine) => bendLine.start[0] * DXF_MM_TO_GLB_SCALE * 1000),
     },
     meshData,
   };
