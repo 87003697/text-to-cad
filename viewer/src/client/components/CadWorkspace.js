@@ -1473,7 +1473,18 @@ export default function CadWorkspace({
   // What the viewport LOADS, which is not what the user opened: a DXF's geometry is its
   // package's baked preview.glb. Gating the mesh load on the source format instead is what
   // left a built DXF spinning -- the asset was on disk and nothing ever asked for it.
-  const selectedEntryRenderAssetFormat = entryRenderAssetFormat(selectedEntry);
+  //
+  // Not the whole answer, though. Two source kinds are rendered by something other than the
+  // mesh loader and must not take this path even though a mesh EXISTS for them: an implicit
+  // is raymarched from its module (its baked GLB is for export), and a robot is assembled
+  // from per-link meshes by the URDF loader. Both would otherwise download a second copy of
+  // the model and put it in the scene alongside the real one.
+  const selectedEntryRendersItsOwnGeometry =
+    selectedEntrySourceFormat === RENDER_FORMAT.IMPLICIT ||
+    isRobotRenderFormat(selectedEntrySourceFormat);
+  const selectedEntryRenderAssetFormat = selectedEntryRendersItsOwnGeometry
+    ? selectedEntrySourceFormat
+    : entryRenderAssetFormat(selectedEntry);
   const selectedFileSheetKind = fileSheetKindForEntry(selectedEntry);
   // Some kinds (e.g. a mesh/STL) have no file-specific sections; when so, hide
   // the file-sheet toggle and the sheet entirely instead of showing an empty
