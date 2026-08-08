@@ -366,7 +366,10 @@ def _preview_descriptor_fields(preview: dict[str, object]) -> dict[str, object]:
     }
     stats = {
         key: preview[key]
-        for key in ("triangleCount", "vertexCount", "bytes")
+        # bendLineCount rides along: it is a fact about the DRAWING that the viewer needs to
+        # decide whether a Bends tab applies, and re-deriving it would mean parsing the DXF
+        # on a catalog scan.
+        for key in ("triangleCount", "vertexCount", "bytes", "bendLineCount")
         if isinstance(preview.get(key), (int, float)) and not isinstance(preview.get(key), bool)
     }
     if stats:

@@ -25,7 +25,10 @@
 
 import { writeGlb } from "../../glb/writeGlb.js";
 
-import { buildDxfPreviewMeshData } from "./buildPreviewMesh.js";
+import {
+  buildDxfPreviewMeshData,
+  extractOrderedDxfBendLines,
+} from "./buildPreviewMesh.js";
 
 /**
  * Millimetres to glTF metres. The viewer's loader multiplies by 1000 on the way back in
@@ -99,6 +102,9 @@ export function buildDxfPreviewGlb(dxfData, { encoder, name = "drawing" } = {}) 
       triangleCount: meshData.triangle_count,
       vertexCount: meshData.vertex_count,
       bounds: meshData.bounds,
+      // Carried so the viewer can show a Bends tab only for drawings that HAVE bends. It is
+      // a fact about the drawing, not a bake setting, so it stays out of bakeHash.
+      bendLineCount: extractOrderedDxfBendLines(dxfData).length,
     },
     meshData,
   };

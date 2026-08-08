@@ -10,6 +10,14 @@ import {
   buildDisplaySettingsTab
 } from "./workbench/ThemeSettingsPopover";
 import MeshFileSheet from "./workbench/MeshFileSheet";
+import { DXF_PREVIEW_REFERENCE_THICKNESS_MM } from "cadjs/lib/dxf/previewGlb";
+import {
+  buildDxfBendsTab,
+  buildDxfMaterialTab,
+  DXF_DEFAULT_BEND_ANGLE_DEG,
+  DXF_DEFAULT_THICKNESS_MM,
+  normalizeDxfThicknessMm
+} from "./workbench/DxfSettingsSection";
 import ImplicitFileSheet from "./workbench/ImplicitFileSheet";
 import StepFileSheet from "./workbench/StepFileSheet";
 import StatusToast from "./workbench/StatusToast";
@@ -1212,6 +1220,11 @@ export default function CadWorkspace({
   // Which way a drawing is being looked at. Session state on purpose: it is a way of looking
   // at the model open right now, not a preference worth outliving the tab.
   const [drawingViewMode, setDrawingViewMode] = useState("3d");
+  // Render-time drawing settings. Session state, like the view mode: they reshape the
+  // viewport, never the cached package, so there is nothing to persist or invalidate.
+  const [drawingThicknessMm, setDrawingThicknessMm] = useState(DXF_DEFAULT_THICKNESS_MM);
+  const [drawingBendAngleDeg, setDrawingBendAngleDeg] = useState(DXF_DEFAULT_BEND_ANGLE_DEG);
+  const [drawingBendDirection, setDrawingBendDirection] = useState("up");
   const resolvedThemeSettings = useMemo(
     () => resolveThemeSettingsForColorMode(themeSettings, { prefersDark: false }),
     [themeSettings]
@@ -2989,6 +3002,10 @@ export default function CadWorkspace({
                   : selectedEntry && !selectedEntryHasMesh
                     ? ARTIFACT_GENERATING_LABEL
                     : "Loading CAD...";
+  const selectedDrawingBendLineCount = Number(selectedEntry?.bendLineCount) || 0;
+  const drawingThicknessScale = normalizeDxfThicknessMm(drawingThicknessMm)
+    / DXF_PREVIEW_REFERENCE_THICKNESS_MM;
+
   const viewerAlert = useMemo(() => {
     if (viewerRuntimeAlert?.blocking) {
       return viewerRuntimeAlert;
@@ -7993,6 +8010,7 @@ export default function CadWorkspace({
         <CadRenderPane
           viewerRef={viewerRef}
           renderFormat={effectiveRenderFormat}
+          drawingThicknessScale={drawingThicknessScale}
           renderPartsIndividually={isUrdfView || Boolean(selectedStepParameterRuntime)}
           stepParameters={selectedStepParameterRuntime}
           selectedMeshData={selectedMeshData}
@@ -8347,6 +8365,45 @@ export default function CadWorkspace({
                 suppressDynamicMetadataStatus={selectedArtifactGenerating}
                 statusItems={selectedFileStatusItems}
                 themeTabs={themeTabs}
+                openSectionIds={effectiveFileSheetOpenSectionIds}
+                onOpenSectionIdsChange={handleFileSheetOpenSectionIdsChange}
+              />
+            ) : null}
+
+            {selectedFileSheetKind === "dxf" ? (
+              <MeshFileSheet
+                key={`dxf:${selectedKey}`}
+                open={fileSheetOpen}
+                kind="dxf"
+                title="DXF"
+                isDesktop={isDesktop}
+                width={activeSheetWidth || tabToolsWidth}
+                selectedEntry={selectedEntry}
+                onOpenChange={setTabToolsOpen}
+                onStartResize={handleStartFileSheetResize}
+                fileDownloadAvailable={fileLinkCopyAvailable}
+                viewerServerInfo={viewerServerInfo}
+                localFileOpenAvailable={fileRevealAvailable}
+                fileAccessBusyKey={fileAccessBusyKey}
+                onOpenFileAsset={handleRevealFileAsset}
+                suppressDynamicMetadataStatus={selectedArtifactGenerating}
+                statusItems={selectedFileStatusItems}
+                themeTabs={[
+                  buildDxfMaterialTab({
+                    thicknessMm: drawingThicknessMm,
+                    onThicknessChange: setDrawingThicknessMm
+                  }),
+                  // Null for a drawing with no bend lines, so the strip carries no tab that
+                  // would have nothing in it.
+                  buildDxfBendsTab({
+                    bendLineCount: selectedDrawingBendLineCount,
+                    bendAngleDeg: drawingBendAngleDeg,
+                    onBendAngleChange: setDrawingBendAngleDeg,
+                    bendDirection: drawingBendDirection,
+                    onBendDirectionChange: setDrawingBendDirection
+                  }),
+                  ...themeTabs
+                ].filter(Boolean)}
                 openSectionIds={effectiveFileSheetOpenSectionIds}
                 onOpenSectionIdsChange={handleFileSheetOpenSectionIdsChange}
               />

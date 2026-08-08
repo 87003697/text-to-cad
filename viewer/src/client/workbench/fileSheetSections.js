@@ -7,6 +7,8 @@ export const FILE_SHEET_SECTION_IDS = Object.freeze({
   ROBOT_MOTION: "motion",
   ROBOT_JOINTS: "joints",
   IMPLICIT_GRAPHICS: "graphics",
+  DXF_MATERIAL: "material",
+  DXF_BENDS: "bends",
   THEME_DISPLAY: "display",
   FILE_METADATA: "metadata"
 });
@@ -28,13 +30,18 @@ export function renderedFileSheetSectionIds(kind, options = {}) {
   const showJoints = options.showJoints !== false;
   const status = options.hasFileStatus ? [FILE_SHEET_SECTION_IDS.FILE_STATUS] : [];
   switch (normalizedKind) {
-    // DXF and implicit have no controls of their own: their geometry is baked into a render
-    // package by settings the producer owns, so there is nothing here for a user to steer.
-    // Status-only, the same shape as a plain mesh — and like a mesh, with no issue to
-    // report the sheet is hidden entirely. Implicits are NOT in this group: they raymarch
-    // their own GLSL, so their params, animations and graphics settings are live controls.
+    // A drawing HAS controls of its own now. Thickness (and, where the drawing declares
+    // them, bends) are render-time parameters applied to the cached prism rather than bake
+    // settings, so they steer the viewport without touching the package. This used to be
+    // status-only on the grounds that the producer owned every setting; it no longer does.
     case "dxf":
-      return [...status];
+      return [
+        ...status,
+        FILE_SHEET_SECTION_IDS.DXF_MATERIAL,
+        // Bends only render when the drawing declares them; the id stays listed so an
+        // opened Bends tab is remembered rather than dropped on the next render.
+        FILE_SHEET_SECTION_IDS.DXF_BENDS,
+      ];
     case "step":
       // Display is the one theme-adjacent tab rendered in the sheet — display
       // mode plus the section-plane and exploded-view transforms, all per-file

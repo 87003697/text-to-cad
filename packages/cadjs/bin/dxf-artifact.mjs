@@ -111,6 +111,7 @@ async function main() {
     bakeFormat: DXF_PREVIEW_BAKE_FORMAT,
     referenceThicknessMm: DXF_PREVIEW_REFERENCE_THICKNESS_MM,
     bytes: bytes.length,
+    bendLineCount: stats.bendLineCount,
     triangleCount: stats.triangleCount,
     vertexCount: stats.vertexCount,
   });

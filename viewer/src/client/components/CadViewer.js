@@ -1735,6 +1735,7 @@ const CadViewer = forwardRef(function CadViewer({
   meshData,
   modelKey,
   renderFormat = "",
+  drawingThicknessScale = 1,
   perspective = null,
   perspectiveRef = null,
   projection = CAMERA_PROJECTION.PERSPECTIVE,
@@ -2596,6 +2597,30 @@ const CadViewer = forwardRef(function CadViewer({
     }
     return transitioned;
   };
+
+  // Thickness for a drawing, as a scale on the baked prism.
+  //
+  // The flat pattern is a profile swept perpendicular, so stretching it along the sweep axis
+  // IS re-thicknessing it -- walls move, caps and holes are untouched in XY, and normals are
+  // invariant (wall normals stay horizontal, cap normals renormalise to themselves). That is
+  // what lets thickness be a slider instead of a rebuild: nothing is baked, so nothing goes
+  // stale.
+  useEffect(() => {
+    const runtime = runtimeRef.current;
+    const group = runtime?.modelGroup;
+    if (!group) {
+      return;
+    }
+    const scale = Number.isFinite(drawingThicknessScale) && drawingThicknessScale > 0
+      ? drawingThicknessScale
+      : 1;
+    if (group.scale.z === scale) {
+      return;
+    }
+    group.scale.z = scale;
+    group.updateMatrixWorld(true);
+    runtime.requestRender?.();
+  }, [drawingThicknessScale, meshData]);
 
   useImperativeHandle(ref, () => ({
     async captureScreenshot({ filename = "cad-screenshot.png", mode = "download" } = {}) {

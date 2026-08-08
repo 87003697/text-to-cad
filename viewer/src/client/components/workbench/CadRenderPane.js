@@ -263,6 +263,7 @@ export default function CadRenderPane({
   referenceSelectionPending = false,
   referenceSelectionUnavailable = false,
   referenceSelectionDeferred = false,
+  drawingThicknessScale = 1,
   viewPlaneOffsetRight = 16,
   viewerMode,
   assemblyPickingActive = false,
@@ -475,6 +476,7 @@ export default function CadRenderPane({
           meshData={selectedMeshData}
           modelKey={selectedKey}
           renderFormat={renderFormat}
+          drawingThicknessScale={drawingThicknessScale}
           perspective={viewerPerspective}
           projection={cadProjection}
           perspectiveRef={viewerPerspectiveRef}

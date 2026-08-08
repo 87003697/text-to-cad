@@ -32,8 +32,15 @@ test("file sheet section defaults match current sheet behavior", () => {
 });
 
 test("rendered file sheet sections include closed-by-default sections", () => {
-  assert.deepEqual(renderedFileSheetSectionIds("dxf", { hasFileStatus: true }), ["status"]);
-  assert.deepEqual(renderedFileSheetSectionIds("dxf"), []);
+  // A drawing has controls of its own: thickness and bends are render-time parameters on the
+  // cached prism, so they steer the viewport without touching the package.
+  // Material always applies; Bends is listed so an opened Bends tab is remembered, but the
+  // tab itself is only built for a drawing that declares bend lines.
+  assert.deepEqual(
+    renderedFileSheetSectionIds("dxf", { hasFileStatus: true }),
+    ["status", "material", "bends"]
+  );
+  assert.deepEqual(renderedFileSheetSectionIds("dxf"), ["material", "bends"]);
   assert.deepEqual(renderedFileSheetSectionIds("step", { hasFileStatus: true, hasStepModulePanel: true }), [
     "status",
     "tree",
