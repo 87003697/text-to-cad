@@ -292,12 +292,13 @@ const DEFAULT_DOCUMENT_TITLE = "CAD Viewer";
 // implicit entry never blocks on a build and never shows a generating state.
 const ARTIFACT_MANAGED_SOURCE_FORMATS = Object.freeze([
   RENDER_FORMAT.STEP,
+  RENDER_FORMAT.DXF
 ]);
-// geometry moved into a baked package GLB; implicits did too, then left again for the
-// raymarcher. G-code is still parsed and meshed in the browser, and robots compose many
-// meshes through their own loader.
 // File-sheet kinds that render nothing but a status tab. A mesh never had file-specific
-// package, whose settings the producer owns. All three share one sheet.
+// controls; DXF lost its when the geometry moved into a baked render package, whose
+// settings the producer owns. Implicits are NOT here -- they raymarch, so their params,
+// animations and graphics settings are live controls again.
+const STATUS_ONLY_FILE_SHEET_KINDS = Object.freeze(["mesh", "dxf"]);
 
 function statusOnlyFileSheetTitle(sourceFormat) {
   switch (sourceFormat) {
@@ -305,17 +306,17 @@ function statusOnlyFileSheetTitle(sourceFormat) {
       return "3MF";
     case RENDER_FORMAT.GLB:
       return "GLB";
-    case RENDER_FORMAT.IMPLICIT:
-      return "Implicit CAD";
+    case RENDER_FORMAT.DXF:
+      return "DXF";
     default:
       return "STL";
   }
+}
 
 const MESH_LOADED_RENDER_FORMATS = Object.freeze([
   RENDER_FORMAT.STL,
   RENDER_FORMAT.THREE_MF,
-  RENDER_FORMAT.GLB,
-  RENDER_FORMAT.IMPLICIT
+  RENDER_FORMAT.GLB
 ]);
 // Single user-facing label for "the viewer is (re)generating the render artifacts a STEP model
 // needs before it can render" — used for both the filename status chip and its tooltip across every
@@ -1362,10 +1363,10 @@ export default function CadWorkspace({
     setDisplayEdgeError,
     getCachedMeshState,
     getCachedReferenceState,
+    getCachedDxfState,
     getCachedImplicitState,
     getCachedUrdfState,
     cancelMeshLoad,
-    getCachedDxfState,
     cancelDxfLoad,
     cancelImplicitLoad,
     cancelUrdfLoad,
@@ -1521,7 +1522,6 @@ export default function CadWorkspace({
   const selectedEntryHasDisplayEdges = entryHasDisplayEdges(selectedEntry);
   const selectedEntryHasDxf = entryHasDxf(selectedEntry);
   const selectedEntryHasImplicit = entryHasImplicitCad(selectedEntry);
-  const selectedEntryHasImplicit = entryHasImplicitAsset(selectedEntry);
   // The selected entry's render artifact is (re)building -> show the loading state. Replaces the
   // old !entryHasMesh + buildable-code derivation.
   const selectedStepArtifactRenderPending = selectedArtifactGenerating;
@@ -1543,12 +1543,9 @@ export default function CadWorkspace({
     selectedEntry?.kind === "assembly" &&
     selectedMeshMatches &&
     !!meshState?.assemblyBackgroundError;
-    !!selectedEntry &&
-  const selectedDxfMatches =
-    !!dxfState &&
-    dxfState.file === fileKey(selectedEntry) &&
   const selectedImplicitMatches =
     !!implicitState &&
+    !!selectedEntry &&
     implicitState.file === fileKey(selectedEntry) &&
     implicitState.implicitHash === entryAssetHash(selectedEntry, "implicit");
   const selectedUrdfMatches =
@@ -1561,16 +1558,8 @@ export default function CadWorkspace({
   // The loaded .implicit.js module for the selected entry. The raymarch renderer takes the
   // model straight from here -- there is no baked package in this path -- and the file
   // sheet's parameter/animation controls read the definition off it.
-  const selectedImplicitMatches =
-    !!implicitState &&
-    !!selectedEntry &&
-    implicitState.file === fileKey(selectedEntry) &&
-    implicitState.implicitHash === entryAssetHash(selectedEntry, "implicit");
   const selectedImplicitModel = selectedImplicitMatches ? implicitState.model : null;
   const selectedImplicitDefinition = selectedImplicitModel?.definition || null;
-  const selectedDxfData = selectedDxfMatches ? dxfState.dxfData : null;
-    ? fileKey(selectedEntry)
-    : "";
   const selectedUrdfFileRef = isRobotRenderFormat(selectedEntrySourceFormat)
     ? fileKey(selectedEntry)
     : "";
@@ -2942,17 +2931,17 @@ export default function CadWorkspace({
     (selectedStepArtifactRenderPending || !artifactBlocksRender) &&
     status !== ASSET_STATUS.ERROR &&
     (!selectedMeshMatches || status === ASSET_STATUS.LOADING || selectedStepModuleLoading);
+    ? dxfViewerLoading
+    : effectiveRenderFormat === RENDER_FORMAT.IMPLICIT
+      ? implicitViewerLoading
+    : isRobotRenderFormat(effectiveRenderFormat)
+      ? urdfViewerLoading
+      : stepViewerLoading;
   // which IS the mesh path. Only G-code still parses in the browser.
   // Implicits have their own arm again: they raymarch their GLSL, so "loading" means the
   // .implicit.js module is still being fetched, not that a mesh is.
   const viewerLoading = effectiveRenderFormat === RENDER_FORMAT.IMPLICIT
-    ? implicitViewerLoading
-      : isRobotRenderFormat(effectiveRenderFormat)
-        ? urdfViewerLoading
         : meshViewerLoading;
-    ? dxfViewerLoading
-    : effectiveRenderFormat === RENDER_FORMAT.IMPLICIT
-      : stepViewerLoading;
   const effectiveViewerLoading = viewerLoading || selectedArtifactGenerating || fileParamSelectionPending;
   // The file explorer spins the entry the viewer is actually working on. Artifact
   // generation is only half of that -- a built package still has to be fetched and
@@ -2977,10 +2966,10 @@ export default function CadWorkspace({
   const viewerLoadingLabel = selectedArtifactGenerating
     ? "Generating file..."
     : effectiveRenderFormat === RENDER_FORMAT.DXF
-      ? "Loading G-code preview..."
-      : effectiveRenderFormat === RENDER_FORMAT.IMPLICIT
-        ? "Loading implicit CAD..."
     ? selectedEntry && !selectedEntryHasDxf
+    : effectiveRenderFormat === RENDER_FORMAT.IMPLICIT
+      ? "Loading implicit CAD..."
+      ? "Loading G-code preview..."
       : isRobotRenderFormat(effectiveRenderFormat)
         ? `Loading ${effectiveRenderFormat === RENDER_FORMAT.SDF ? "SDF" : "URDF"} robot...`
         : effectiveRenderFormat === RENDER_FORMAT.STL
@@ -3005,16 +2994,16 @@ export default function CadWorkspace({
     if (!selectedEntry || viewerLoading || selectedArtifactGenerating) {
       return null;
     }
-      return buildViewerMeshAlert(
-        selectedEntry,
-        !!selectedMeshData,
-      ) || viewerRuntimeAlert;
       return buildViewerDxfAlert(
         fileKey(selectedEntry),
         !!selectedDxfData,
         dxfStatus === ASSET_STATUS.ERROR ? dxfError : "",
         selectedDxfPreviewError
       );
+      return buildViewerMeshAlert(
+        selectedEntry,
+        !!selectedMeshData,
+      ) || viewerRuntimeAlert;
     }
     if (effectiveRenderFormat === RENDER_FORMAT.IMPLICIT) {
       return buildViewerImplicitAlert(
@@ -4404,13 +4393,9 @@ export default function CadWorkspace({
 
   useEffect(() => {
     if (!selectedEntry) {
+      cancelDxfLoad();
       return;
     }
-    });
-  }, [
-    effectiveRenderFormat,
-    selectedEntry,
-      cancelDxfLoad();
     if (!selectedEntryHasDxf) {
       setDxfState(null);
       setDxfStatus(ASSET_STATUS.PENDING);
@@ -4419,9 +4404,13 @@ export default function CadWorkspace({
     loadDxfForEntry(selectedEntry).catch((err) => {
     setDxfStatus(ASSET_STATUS.ERROR);
     setDxfError(err instanceof Error ? err.message : String(err));
+    });
+  }, [
     cancelDxfLoad,
+    effectiveRenderFormat,
     loadDxfForEntry,
     selectedDxfMatches,
+    selectedEntry,
     selectedEntryHasDxf,
     setDxfError,
     setDxfState,
