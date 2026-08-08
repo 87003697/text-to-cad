@@ -79,7 +79,9 @@ DRAWING_PREVIEW_BUILDER = "dxf-artifact.mjs"
 DEFAULT_PREVIEW_THICKNESS_MM = 2.0
 # Mirrors DXF_PREVIEW_BAKE_FORMAT in packages/cadjs/src/lib/dxf/previewGlb.js. Bump it there
 # and here together when the baked geometry's contract changes.
-DRAWING_PREVIEW_BAKE_FORMAT = "dxf-preview-glb-v1"
+# v2: CAD Z-up positions (see previewGlb.js). Bumping invalidates every v1 package, which
+# is the point: a v1 preview.glb is geometrically wrong, not merely old.
+DRAWING_PREVIEW_BAKE_FORMAT = "dxf-preview-glb-v2"
 # The bend state the preview is baked in. Bend angles were a live client control over a mesh
 # rebuilt in the browser; baked, the flat (unfolded) pattern is what ships (§7.4.3).
 DRAWING_PREVIEW_STATE = "flat"

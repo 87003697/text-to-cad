@@ -30,7 +30,9 @@ import { buildDxfPreviewMeshData } from "./buildPreviewMesh.js";
 export const DXF_MM_TO_GLB_SCALE = 0.001;
 
 /** Identity of this bake's geometry contract, recorded in the descriptor's bake block. */
-export const DXF_PREVIEW_BAKE_FORMAT = "dxf-preview-glb-v1";
+// v2: positions are CAD Z-up. v1 wrote the mesher's Y-up straight through, so every
+// package baked before this renders on its edge — the bump is what makes them rebuild.
+export const DXF_PREVIEW_BAKE_FORMAT = "dxf-preview-glb-v2";
 
 /**
  * The mesher returns an INDEXED triangle list whose vertex array also carries the edge-overlay
@@ -48,9 +50,19 @@ export function dxfPreviewPositions(meshData) {
   for (let slot = 0; slot < indices.length; slot += 1) {
     const source = indices[slot] * 3;
     const target = slot * 3;
+    // Y-up -> CAD Z-up: (x, y, z) -> (x, -z, y).
+    //
+    // The flat-pattern mesher builds Y-up (thickness on Y), but this GLB carries
+    // cadOccurrenceId extras, and the viewer's loader reads those as "already CAD space" and
+    // skips its own conversion. The drawing therefore arrived in a Z-up scene still Y-up and
+    // stood on its edge. Converting HERE keeps that convention true — a GLB with occurrence
+    // ids is CAD-space — instead of teaching the loader a per-format exception.
+    //
+    // (x, -z, y) rather than (x, z, y): the latter has determinant -1 and would mirror the
+    // part, quietly flipping every asymmetric profile.
     positions[target] = vertices[source] * DXF_MM_TO_GLB_SCALE;
-    positions[target + 1] = vertices[source + 1] * DXF_MM_TO_GLB_SCALE;
-    positions[target + 2] = vertices[source + 2] * DXF_MM_TO_GLB_SCALE;
+    positions[target + 1] = -vertices[source + 2] * DXF_MM_TO_GLB_SCALE;
+    positions[target + 2] = vertices[source + 1] * DXF_MM_TO_GLB_SCALE;
   }
   return positions;
 }

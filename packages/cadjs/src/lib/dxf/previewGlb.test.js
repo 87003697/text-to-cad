@@ -45,7 +45,7 @@ async function bake() {
   });
 }
 
-test("preview positions are the triangle soup in glTF metres", () => {
+test("preview positions are the triangle soup in glTF metres, rotated to CAD Z-up", () => {
   const meshData = {
     vertices: new Float32Array([0, 0, 0, 1000, 0, 0, 0, 1000, 0, 7, 7, 7]),
     indices: new Uint32Array([0, 1, 2]),
@@ -54,7 +54,25 @@ test("preview positions are the triangle soup in glTF metres", () => {
   // Three corners, nine floats -- the trailing (edge-overlay) vertex is dropped because it
   // is not referenced by a triangle.
   assert.equal(positions.length, 9);
-  assert.deepEqual([...positions], [0, 0, 0, 1, 0, 0, 0, 1, 0]);
+  // (x, y, z) -> (x, -z, y). The mesher builds Y-up; this GLB carries cadOccurrenceId extras,
+  // which the viewer's loader reads as "already CAD space", so it must leave here Z-up or the
+  // drawing stands on its edge in the scene.
+  assert.deepEqual([...positions].map((v) => v + 0), [0, 0, 0, 1, 0, 0, 0, 0, 1]);
+});
+
+test("the CAD Z-up rotation does not mirror the part", () => {
+  // (x, z, y) would map the axes just as plausibly and has determinant -1, silently flipping
+  // every asymmetric profile. Feed the three unit axes and require a right-handed basis.
+  const meshData = {
+    vertices: new Float32Array([1000, 0, 0, 0, 1000, 0, 0, 0, 1000]),
+    indices: new Uint32Array([0, 1, 2]),
+  };
+  const p = [...dxfPreviewPositions(meshData)];
+  const [ax, ay, az, bx, by, bz, cx, cy, cz] = p;
+  const determinant = ax * (by * cz - bz * cy)
+    - ay * (bx * cz - bz * cx)
+    + az * (bx * cy - by * cx);
+  assert.equal(Math.round(determinant), 1);
 });
 
 test("an empty flat pattern fails loudly rather than baking an empty GLB", () => {
@@ -87,11 +105,12 @@ test("the reloaded preview is the drawing at millimetre scale", async () => {
     bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength)
   );
   // Written in metres, read back in millimetres: the 40x20 outline extruded to 2 mm, with
-  // thickness on Y (the mesher's convention). A dropped unit scale or a dropped node
-  // transform would show up here as 1000x or as the raw SHORT quantization range.
+  // thickness on Z now that the preview is written CAD Z-up. A dropped unit scale or a
+  // dropped node transform would show up here as 1000x or as the raw SHORT quantization
+  // range; a lost rotation would show up as the thickness landing on Y again.
   const { min, max } = meshData.bounds;
-  const expectedMin = [0, -THICKNESS_MM / 2, 0];
-  const expectedMax = [40, THICKNESS_MM / 2, 20];
+  const expectedMin = [0, -20, -THICKNESS_MM / 2];
+  const expectedMax = [40, 0, THICKNESS_MM / 2];
   for (let axis = 0; axis < 3; axis += 1) {
     assert.ok(
       Math.abs(min[axis] - expectedMin[axis]) < 0.05,

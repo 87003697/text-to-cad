@@ -1,3 +1,7 @@
+# Deliberately NOT named `.step.py`. The viewer's catalog scanner treats that suffix as a
+# STEP entry, which put a solid model in a drawings folder and invited a name collision
+# with the sibling `clamp_plate.dxf.py`. This is a helper module the drawing generator
+# path-loads, not a model in its own right.
 # Prompt: Flat clamp plate with rounded corners, two clamping bolt holes, and
 # a central adjustment slot.
 
