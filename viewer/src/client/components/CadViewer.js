@@ -2619,6 +2619,16 @@ const CadViewer = forwardRef(function CadViewer({
       const blob = await blobPromise;
       return triggerBlobDownload(blob, { filename });
     },
+    // Exposed so a toolbar can drive the camera the same way the view-plane widget does.
+    // The DXF 2D/3D toggle is exactly "look straight down" vs "the default three-quarter
+    // view", and reusing these keeps one camera authority rather than a second one that
+    // drifts from the widget's idea of where `top` is.
+    activateViewPlaneFace(faceId) {
+      return activateViewPlaneFace(faceId);
+    },
+    activateDefaultViewPlane() {
+      return activateDefaultViewPlane();
+    },
     getPerspective() {
       return readScopedPerspectiveSnapshot(runtimeRef.current, {
         modelKey,

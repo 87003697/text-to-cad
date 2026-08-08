@@ -96,6 +96,9 @@ const FLOATING_TOOL_BAR_BUTTON_CLASSES =
 function DesktopFloatingToolBar({
   renderFormat,
   floatingCadToolbarPosition,
+  drawingViewToggle = false,
+  drawingViewMode = "3d",
+  onDrawingViewModeChange,
   previewMode = false,
   toolbarHidden = false,
   onToolbarEnter,
@@ -185,12 +188,40 @@ function DesktopFloatingToolBar({
     </ToolbarButton>
   );
 
+  // A drawing's own toolbar, in its own pill to the LEFT of the shared one: 2D and 3D are a
+  // property of the drawing being viewed, not a tool that acts on it, so grouping them with
+  // select/pan/draw would read as a fourth mode of the same kind.
+  const drawingViewToolbar = drawingViewToggle ? (
+    <div
+      className={`${toolbarHidden ? "pointer-events-none" : "pointer-events-auto"} inline-flex h-8 w-fit items-center gap-0.5 rounded-md p-1 ${FLOATING_TOOL_BAR_SURFACE_CLASS}`}
+      onPointerEnter={onToolbarEnter}
+      onPointerLeave={onToolbarLeave}
+    >
+      <ToolbarButton
+        label="Top-down 2D view"
+        isActive={drawingViewMode === "2d"}
+        onClick={() => onDrawingViewModeChange?.("2d")}
+      >
+        <span className="text-[10px] font-medium leading-none">2D</span>
+      </ToolbarButton>
+      <ToolbarButton
+        label="3D view"
+        isActive={drawingViewMode !== "2d"}
+        onClick={() => onDrawingViewModeChange?.("3d")}
+      >
+        <span className="text-[10px] font-medium leading-none">3D</span>
+      </ToolbarButton>
+    </div>
+  ) : null;
+
   return (
     <div
       className={`absolute z-20 flex flex-col items-end gap-1 transition-opacity duration-300 ${toolbarHidden ? "opacity-0" : "opacity-100"}`}
       style={floatingCadToolbarPosition}
     >
       <TooltipProvider delayDuration={250}>
+        <div className="flex w-fit items-center gap-1 self-end">
+        {drawingViewToolbar}
         <div
           className={`${toolbarHidden ? "pointer-events-none" : "pointer-events-auto"} inline-flex h-8 w-fit items-center gap-0.5 self-end rounded-md p-1 ${FLOATING_TOOL_BAR_SURFACE_CLASS}`}
           onPointerEnter={onToolbarEnter}
@@ -280,6 +311,7 @@ function DesktopFloatingToolBar({
               />
             </>
           )}
+        </div>
         </div>
       </TooltipProvider>
 

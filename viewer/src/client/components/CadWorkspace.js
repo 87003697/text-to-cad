@@ -1209,6 +1209,9 @@ export default function CadWorkspace({
   const themeSettings = themeState.settings;
   const themeId = themeState.themeId;
   const [themeEditing, setThemeEditing] = useState(false);
+  // Which way a drawing is being looked at. Session state on purpose: it is a way of looking
+  // at the model open right now, not a preference worth outliving the tab.
+  const [drawingViewMode, setDrawingViewMode] = useState("3d");
   const resolvedThemeSettings = useMemo(
     () => resolveThemeSettingsForColorMode(themeSettings, { prefersDark: false }),
     [themeSettings]
@@ -3177,6 +3180,18 @@ export default function CadWorkspace({
   // other sidebar has to be reopened deliberately.
   const closeThemeEditor = useCallback(() => {
     setThemeEditing(false);
+  }, []);
+
+  const handleDrawingViewModeChange = useCallback((mode) => {
+    const next = mode === "2d" ? "2d" : "3d";
+    setDrawingViewMode(next);
+    if (next === "2d") {
+      // "z" is the top face in VIEW_PLANE_FACES — looking straight down at a flat pattern
+      // IS the 2D view, which is why this needs no separate 2D renderer.
+      viewerRef.current?.activateViewPlaneFace?.("z");
+      return;
+    }
+    viewerRef.current?.activateDefaultViewPlane?.();
   }, []);
 
   const handleToggleThemeEditor = useCallback(() => {
@@ -8139,6 +8154,9 @@ export default function CadWorkspace({
                 selectedEntry={selectedEntry}
                 renderFormat={effectiveRenderFormat}
                 floatingCadToolbarPosition={floatingCadToolbarPosition}
+                drawingViewToggle={selectedEntrySourceFormat === RENDER_FORMAT.DXF}
+                drawingViewMode={drawingViewMode}
+                onDrawingViewModeChange={handleDrawingViewModeChange}
                 selectionToolActive={selectionToolActive}
                 referenceSelectionPending={referenceSelectionPending}
                 referenceSelectionUnavailable={referenceSelectionUnavailable}
