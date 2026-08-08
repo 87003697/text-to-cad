@@ -1,0 +1,22 @@
+{
+  "schema": "voxblame.session/2",
+  "coordinate_contract": "trellis2_canonical/1",
+  "semantic_units": null,
+  "max_depth": 8,
+  "boundary_epsilon": 1e-09,
+  "canonical_reference": {
+    "canonical_reference_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "reference_ply_path": "input/reference.ply",
+    "reference_ply_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "triangle_set_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+    "normalization_json_path": "input/normalization.json",
+    "normalization_json_sha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+    "interior_tree_path": "voxblame/reference.vbsvo",
+    "interior_tree_sha256": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+  },
+  "profiles": {
+    "surface_occupancy": "conservative_surface_occupancy/1",
+    "target_partition": "repair_target_partition/1",
+    "exterior_surface": "signed_exterior_surface/1"
+  }
+}

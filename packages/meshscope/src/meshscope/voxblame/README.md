@@ -31,6 +31,7 @@ mesh inputs
 | `_native.cpp` | C++17 implementation of the same hierarchical conservative SAT builder. |
 | `grading.py` | First-mismatch grading, iteration change overlay, region bounds, and bounded next-action selection. |
 | `reporting.py` | Projection of domain objects into `voxblame.report/2` and `voxblame.summary/1` JSON. |
+| `contracts.py` | Closed-world validators for the frozen replacement canonical session, report, and summary shapes. |
 | `store.py` | Filesystem repository, strict loads, idempotent retry, and atomic session/step publication. |
 | `session.py` | Application orchestration exposed as `run_step(...)`. |
 | `__init__.py` | Curated public API. |
@@ -38,6 +39,10 @@ mesh inputs
 Legacy `meshscope.surface_tree` and `meshscope.octree_error` are thin
 compatibility facades. New production code should import from
 `meshscope.voxblame`.
+
+The replacement shapes are frozen in [CONTRACT.md](CONTRACT.md). They
+intentionally live beside the current production readers until the later
+atomic cutover; the runtime sections below describe the pre-cutover path.
 
 The old flat Morton implementation is not production code. The oracle used to
 prove parity lives under:
