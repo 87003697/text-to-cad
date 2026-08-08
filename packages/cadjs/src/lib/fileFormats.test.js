@@ -84,8 +84,6 @@ test("entryRenderAssetFormat is GLB for every package-baked kind, unconditionall
   // icon/status/reset call sites still ask that question.
   assert.equal(entrySourceFormat({ kind: "dxf" }), RENDER_FORMAT.DXF);
   assert.equal(entrySourceFormat({ kind: "implicit" }), RENDER_FORMAT.IMPLICIT);
-  // G-code is deliberately NOT in this batch: it still parses and meshes in the browser.
-  assert.equal(entryRenderAssetFormat({ kind: "gcode" }), RENDER_FORMAT.GCODE);
   assert.equal(entryRenderAssetFormat({ kind: "part" }), RENDER_FORMAT.STEP);
   assert.equal(entryRenderAssetFormat({ kind: "stl" }), RENDER_FORMAT.STL);
   assert.equal(entryRenderAssetFormat({ kind: "urdf" }), RENDER_FORMAT.URDF);

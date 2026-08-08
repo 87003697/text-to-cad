@@ -510,6 +510,14 @@ export function compileImplicitProgramRuntime(model, source, entryName, env) {
   try {
     const { BUILTINS, tokenize, Parser, helpers } = env;
     const program = new Parser(tokenize(source)).parseProgram();
+    // `inout` needs write-back into the caller's variable, which neither backend implements.
+    // Decline so the interpreter path reports it -- compiling by value would silently return
+    // wrong geometry, the one failure mode this compiler must never introduce.
+    for (const fn of program.functions.values()) {
+      if (fn.params?.some((param) => param.qualifiers?.includes("inout"))) {
+        return null;
+      }
+    }
     if (!program.functions.has(entryName)) {
       // Let the interpreter path produce its canonical "did not define" error.
       return null;

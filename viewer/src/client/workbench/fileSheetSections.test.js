@@ -34,7 +34,6 @@ test("file sheet section defaults match current sheet behavior", () => {
 test("rendered file sheet sections include closed-by-default sections", () => {
   assert.deepEqual(renderedFileSheetSectionIds("dxf", { hasFileStatus: true }), ["status"]);
   assert.deepEqual(renderedFileSheetSectionIds("dxf"), []);
-  ]);
   assert.deepEqual(renderedFileSheetSectionIds("step", { hasFileStatus: true, hasStepModulePanel: true }), [
     "status",
     "tree",

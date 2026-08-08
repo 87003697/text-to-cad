@@ -598,7 +598,12 @@ BUILTINS.implicit_triangular_honeycomb = (p, size) => {
 };
 
 const TYPE_KEYWORDS = new Set(["float", "int", "bool", "vec2", "vec3", "vec4"]);
-const QUALIFIERS = new Set(["const", "highp", "mediump", "lowp", "in", "out", "uniform", "varying"]);
+// `inout` is included so a program using it PARSES rather than dying with a confusing
+// "Expected ), got <name>". It is then rejected explicitly at runtime creation: honouring it
+// needs write-back to the caller's variable, which this evaluator does not implement, and
+// silently passing by value would return wrong geometry instead of an error. Such models
+// still RENDER -- the GPU shader handles inout natively -- only CPU evaluation is refused.
+const QUALIFIERS = new Set(["const", "highp", "mediump", "lowp", "in", "out", "inout", "uniform", "varying"]);
 const OPERATORS = ["<=", ">=", "==", "!=", "&&", "||", "+=", "-=", "*=", "/=", "++", "--"];
 
 function stripComments(source) {
@@ -672,9 +677,11 @@ class Parser {
   }
 
   skipQualifiers() {
+    const seen = [];
     while (QUALIFIERS.has(this.peek()?.value)) {
-      this.consume();
+      seen.push(this.consume().value);
     }
+    return seen;
   }
 
   parseProgram() {
@@ -693,10 +700,10 @@ class Parser {
         const params = [];
         if (!this.match(")")) {
           do {
-            this.skipQualifiers();
+            const qualifiers = this.skipQualifiers();
             const paramType = this.consume().value;
             const paramName = this.consume().value;
-            params.push({ type: paramType, name: paramName });
+            params.push({ type: paramType, name: paramName, qualifiers });
           } while (this.match(","));
           this.consume(")");
         }
@@ -1252,6 +1259,17 @@ vec3 implicit_color(vec3 p, vec3 normal) {
 
 function createImplicitCadProgramRuntime(model, source, functionName) {
   const program = new Parser(tokenize(source)).parseProgram();
+  // `inout` would need write-back into the caller's variable. Passing by value instead would
+  // silently return WRONG geometry, so refuse -- the GPU shader still renders these models.
+  for (const [name, fn] of program.functions) {
+    const bad = fn.params?.find((param) => param.qualifiers?.includes("inout"));
+    if (bad) {
+      throw new Error(
+        `Unsupported GLSL: '${name}' uses an inout parameter ('${bad.name}'). `
+        + "CPU evaluation (baking, export, field checks) cannot honour inout; GPU rendering is unaffected."
+      );
+    }
+  }
   if (!program.functions.has(functionName)) {
     throw new Error(`Implicit CAD GLSL source did not define ${functionName}`);
   }

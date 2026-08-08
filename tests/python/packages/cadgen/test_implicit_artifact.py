@@ -215,9 +215,10 @@ class ImplicitBakeSettingsTests(unittest.TestCase):
         self.assertNotEqual(default, canonical_bake_hash(implicit_bake_settings(64)))
 
     def test_resolution_is_clamped_where_it_is_HASHED(self) -> None:
-        # The mesher clamps to [8, 192] internally. Clamping here too is what stops the
-        # descriptor recording a resolution the mesh was never built at.
-        self.assertEqual(normalize_bake_resolution(4000), 192)
+        # The mesher clamps to [8, 256] internally (normalizeResolution in mesh.js).
+        # Clamping here too is what stops the descriptor recording a resolution the mesh was
+        # never built at -- so this ceiling must track that one, not drift from it.
+        self.assertEqual(normalize_bake_resolution(4000), 256)
         self.assertEqual(normalize_bake_resolution(1), 8)
         self.assertEqual(normalize_bake_resolution("not a number"), normalize_bake_resolution(None))
 

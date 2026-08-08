@@ -95,7 +95,7 @@ def normalize_bake_resolution(resolution: object) -> int:
     """The bake resolution to use, clamped to the mesher's own accepted range.
 
     Clamped HERE rather than in the builder because the number is hashed: if the mesher
-    silently clamped 4000 to 192, the descriptor would record a resolution the mesh was never
+    silently clamped 4000 to 256, the descriptor would record a resolution the mesh was never
     built at, and the two freshness authorities would compare a fiction.
     """
     if resolution is None:

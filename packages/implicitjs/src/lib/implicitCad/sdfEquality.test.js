@@ -159,10 +159,22 @@ function evaluateModel(model) {
   };
 }
 
+// Models the CPU evaluator refuses outright, and why. Baselining a model whose evaluation
+// throws would record the throw as the expectation; excluding it keeps the baseline a
+// statement about fields we can actually compute. Named rather than detected, so this stays
+// a short list somebody has to edit on purpose.
+const CPU_UNSUPPORTED = new Set([
+  // `inout` parameters need write-back into the caller's variable, which the evaluator does
+  // not implement -- it rejects instead of returning wrong geometry. GPU rendering is fine.
+  "small-stellated-dodecahedron.implicit.js",
+  "stellated-icosahedron.implicit.js",
+]);
+
 function corpusModelPaths() {
   return fs
     .readdirSync(CORPUS_DIR)
     .filter((name) => name.endsWith(".implicit.js"))
+    .filter((name) => !CPU_UNSUPPORTED.has(name))
     .sort()
     .map((name) => path.join(CORPUS_DIR, name));
 }

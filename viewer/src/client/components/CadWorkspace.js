@@ -4,7 +4,6 @@ import { startTransition, useCallback, useEffect, useLayoutEffect, useMemo, useR
 import { ArrowLeftRight, ArrowRight, Circle, Eraser, Minus, PaintBucket, PenTool, Square } from "lucide-react";
 import { SidebarInset, SidebarProvider } from "@/components/ui/sidebar";
 import CadRenderPane from "./workbench/CadRenderPane";
-import DxfFileSheet from "./workbench/DxfFileSheet";
 import FileViewerSidebar from "./workbench/FileViewerSidebar";
 import {
   ThemeEditorPanel,
@@ -1333,10 +1332,6 @@ export default function CadWorkspace({
     setStatus,
     error,
     setError,
-    setDxfState,
-    setDxfStatus,
-    setDxfError,
-    dxfLoadStage,
     implicitState,
     setImplicitState,
     implicitStatus,
@@ -1363,17 +1358,14 @@ export default function CadWorkspace({
     setDisplayEdgeError,
     getCachedMeshState,
     getCachedReferenceState,
-    getCachedDxfState,
     getCachedImplicitState,
     getCachedUrdfState,
     cancelMeshLoad,
-    cancelDxfLoad,
     cancelImplicitLoad,
     cancelUrdfLoad,
     cancelReferenceLoad,
     cancelDisplayEdgeLoad,
     loadMeshForEntry,
-    loadDxfForEntry,
     loadImplicitForEntry,
     loadUrdfForEntry,
     loadReferencesForEntry,
@@ -1382,7 +1374,6 @@ export default function CadWorkspace({
     entryHasMesh,
     entryHasReferences,
     entryHasDisplayEdges,
-    entryHasDxf,
     buildNormalizedReferenceState,
   });
 
@@ -2904,18 +2895,10 @@ export default function CadWorkspace({
   ]);
   const selectedUrdfPreviewError = selectedUrdfPreview.error;
   const effectiveRenderFormat = selectedEntrySourceFormat;
-  const dxfViewerLoading =
-    !!selectedEntry &&
-    dxfStatus !== ASSET_STATUS.ERROR &&
-    (!selectedDxfMatches || dxfStatus === ASSET_STATUS.LOADING);
   const implicitViewerLoading =
     !!selectedEntry &&
     implicitStatus !== ASSET_STATUS.ERROR &&
     (!selectedImplicitMatches || implicitStatus === ASSET_STATUS.LOADING);
-  const gcodeViewerLoading =
-    !!selectedEntry &&
-    gcodeStatus !== ASSET_STATUS.ERROR &&
-    (!selectedGcodeMatches || gcodeStatus === ASSET_STATUS.LOADING);
   const urdfViewerLoading =
     !!selectedEntry &&
     urdfStatus !== ASSET_STATUS.ERROR &&
@@ -2931,17 +2914,14 @@ export default function CadWorkspace({
     (selectedStepArtifactRenderPending || !artifactBlocksRender) &&
     status !== ASSET_STATUS.ERROR &&
     (!selectedMeshMatches || status === ASSET_STATUS.LOADING || selectedStepModuleLoading);
-    ? dxfViewerLoading
-    : effectiveRenderFormat === RENDER_FORMAT.IMPLICIT
-      ? implicitViewerLoading
+  // Implicits have their own arm again: they raymarch their GLSL, so "loading" means the
+  // .implicit.js module is still being fetched, not that a mesh is. DXF has no arm -- it
+  // renders its baked preview through the mesh path like everything else.
+  const viewerLoading = effectiveRenderFormat === RENDER_FORMAT.IMPLICIT
+    ? implicitViewerLoading
     : isRobotRenderFormat(effectiveRenderFormat)
       ? urdfViewerLoading
-      : stepViewerLoading;
-  // which IS the mesh path. Only G-code still parses in the browser.
-  // Implicits have their own arm again: they raymarch their GLSL, so "loading" means the
-  // .implicit.js module is still being fetched, not that a mesh is.
-  const viewerLoading = effectiveRenderFormat === RENDER_FORMAT.IMPLICIT
-        : meshViewerLoading;
+      : meshViewerLoading;
   const effectiveViewerLoading = viewerLoading || selectedArtifactGenerating || fileParamSelectionPending;
   // The file explorer spins the entry the viewer is actually working on. Artifact
   // generation is only half of that -- a built package still has to be fetched and
@@ -2965,11 +2945,8 @@ export default function CadWorkspace({
     !selectedAssemblyHydrationFailed;
   const viewerLoadingLabel = selectedArtifactGenerating
     ? "Generating file..."
-    : effectiveRenderFormat === RENDER_FORMAT.DXF
-    ? selectedEntry && !selectedEntryHasDxf
     : effectiveRenderFormat === RENDER_FORMAT.IMPLICIT
       ? "Loading implicit CAD..."
-      ? "Loading G-code preview..."
       : isRobotRenderFormat(effectiveRenderFormat)
         ? `Loading ${effectiveRenderFormat === RENDER_FORMAT.SDF ? "SDF" : "URDF"} robot...`
         : effectiveRenderFormat === RENDER_FORMAT.STL
@@ -2993,17 +2970,6 @@ export default function CadWorkspace({
     }
     if (!selectedEntry || viewerLoading || selectedArtifactGenerating) {
       return null;
-    }
-      return buildViewerDxfAlert(
-        fileKey(selectedEntry),
-        !!selectedDxfData,
-        dxfStatus === ASSET_STATUS.ERROR ? dxfError : "",
-        selectedDxfPreviewError
-      );
-      return buildViewerMeshAlert(
-        selectedEntry,
-        !!selectedMeshData,
-      ) || viewerRuntimeAlert;
     }
     if (effectiveRenderFormat === RENDER_FORMAT.IMPLICIT) {
       return buildViewerImplicitAlert(
@@ -3959,9 +3925,6 @@ export default function CadWorkspace({
     getCachedUrdfState,
     readEntrySessionState,
     selectedKey,
-    setDxfError,
-    setDxfState,
-    setDxfStatus,
     setImplicitError,
     setImplicitState,
     setImplicitStatus,
@@ -4391,31 +4354,6 @@ export default function CadWorkspace({
     selectedMeshMatches
   ]);
 
-  useEffect(() => {
-    if (!selectedEntry) {
-      cancelDxfLoad();
-      return;
-    }
-    if (!selectedEntryHasDxf) {
-      setDxfState(null);
-      setDxfStatus(ASSET_STATUS.PENDING);
-      setDxfError("");
-    if (selectedDxfMatches) {
-    loadDxfForEntry(selectedEntry).catch((err) => {
-    setDxfStatus(ASSET_STATUS.ERROR);
-    setDxfError(err instanceof Error ? err.message : String(err));
-    });
-  }, [
-    cancelDxfLoad,
-    effectiveRenderFormat,
-    loadDxfForEntry,
-    selectedDxfMatches,
-    selectedEntry,
-    selectedEntryHasDxf,
-    setDxfError,
-    setDxfState,
-    setDxfStatus
-  ]);
 
   useEffect(() => {
     if (!selectedEntry) {
@@ -4998,12 +4936,6 @@ export default function CadWorkspace({
         title: frame
           ? `${frame.label}${frame.counts ? ` — ${frame.counts}` : ""}`
           : "Generator script is running"
-      };
-    }
-
-      return {
-        loading: true,
-        title: viewerLoadingLabel
       };
     }
 
@@ -8237,31 +8169,6 @@ export default function CadWorkspace({
               />
             </div>
 
-              <DxfFileSheet
-                open={fileSheetOpen}
-                isDesktop={isDesktop}
-                width={activeSheetWidth || tabToolsWidth}
-                onOpenChange={setTabToolsOpen}
-                selectedEntry={selectedEntry}
-                onStartResize={handleStartFileSheetResize}
-                valueMm={effectiveDxfThicknessMm}
-                bendLines={selectedDxfBendLines}
-                bendSettings={normalizedSelectedDxfBendSettings}
-                hasDxfData={!!selectedDxfData}
-                viewerLoading={viewerLoading}
-                onThicknessChange={setDxfThicknessMm}
-                onBendChange={handleDxfBendSettingChange}
-                fileDownloadAvailable={fileLinkCopyAvailable}
-                viewerServerInfo={viewerServerInfo}
-                localFileOpenAvailable={fileRevealAvailable}
-                fileAccessBusyKey={fileAccessBusyKey}
-                onOpenFileAsset={handleRevealFileAsset}
-                suppressDynamicMetadataStatus={selectedArtifactGenerating}
-                statusItems={selectedFileStatusItems}
-                themeTabs={themeTabs}
-                openSectionIds={effectiveFileSheetOpenSectionIds}
-                onOpenSectionIdsChange={handleFileSheetOpenSectionIdsChange}
-              />
             ) : null}
 
             {selectedFileSheetKind === "step" ? (

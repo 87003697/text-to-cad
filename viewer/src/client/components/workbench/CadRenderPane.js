@@ -344,7 +344,7 @@ export default function CadRenderPane({
   const urdfMode = isRobotRenderFormat(renderFormat);
   const implicitMode = renderFormat === RENDER_FORMAT.IMPLICIT;
   const meshOnlyMode = isMeshRenderFormat(renderFormat);
-  const pathPreviewMode = meshOnlyMode || gcodeMode;
+  const pathPreviewMode = meshOnlyMode;
   const stepDisplaySettingsActive = renderFormat === RENDER_FORMAT.STEP && !!displaySettings && !dxfMode && !pathPreviewMode;
   // Projection is a theme trait now; STEP views take it from the active theme
   // (Light/Dark are orthographic, stage themes perspective), everything else
