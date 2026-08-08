@@ -378,3 +378,29 @@ class StdlibOnlyTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class BuilderErrorMessageTests(unittest.TestCase):
+    """A failed Node builder must carry its reason back to the caller.
+
+    stderr used to be inherited, so the builder's own diagnostic went to whatever console
+    the producer owned. For a viewer-triggered build that is a server log the user never
+    sees, and the error they got named no cause -- it said "see stderr above".
+    """
+
+    def test_the_message_line_is_preferred_over_stack_frames(self) -> None:
+        lines = [
+            "Error: Unsupported DXF entity HATCH",
+            "    at parseDxf (file:///x/parseDxf.js:139:11)",
+            "    at main (file:///x/dxf-artifact.mjs:83:19)",
+        ]
+        self.assertEqual("Unsupported DXF entity HATCH", node_runtime.first_builder_error(lines))
+
+    def test_a_message_without_the_error_prefix_still_reports_something(self) -> None:
+        self.assertEqual("something broke", node_runtime.first_builder_error(["something broke"]))
+
+    def test_stack_only_output_does_not_report_a_frame_as_the_cause(self) -> None:
+        self.assertEqual("", node_runtime.first_builder_error(["    at main (x.js:1:1)"]))
+
+    def test_no_stderr_reports_nothing_rather_than_inventing_a_cause(self) -> None:
+        self.assertEqual("", node_runtime.first_builder_error([]))

@@ -51,6 +51,9 @@ import json
 import os
 import shutil
 import subprocess
+import sys
+import threading
+from collections import deque
 from pathlib import Path
 from typing import Any, Callable, Mapping, Sequence
 from urllib.request import pathname2url
@@ -224,6 +227,29 @@ def _dispatch(message: Mapping[str, Any], run: Any) -> bool:
     return False
 
 
+# How much of a failing builder's stderr to keep for the raised error. A Node stack trace
+# is mostly frames; the first line is the message that names the cause.
+NODE_BUILDER_STDERR_TAIL_LINES = 40
+
+
+def first_builder_error(lines: "deque[str] | list[str]") -> str:
+    """The one line worth putting in front of a user.
+
+    Node prints `Error: <message>` and then a stack. The message is the diagnostic; the
+    frames are noise in a UI error card. Falls back to the last line when nothing matches,
+    so an unusual failure still says something rather than nothing.
+    """
+    for line in lines:
+        stripped = line.strip()
+        if stripped.startswith("Error:"):
+            return stripped[len("Error:") :].strip()
+    for line in lines:
+        stripped = line.strip()
+        if stripped and not stripped.startswith("at "):
+            return stripped
+    return ""
+
+
 def run_node_builder(
     script: Path | str,
     args: Sequence[str] = (),
@@ -286,10 +312,31 @@ def run_node_builder(
         cwd=str(cwd) if cwd is not None else None,
         env=node_child_env(env),
         stdout=subprocess.PIPE,
-        stderr=None,  # inherited: the builder's diagnostics land with the producer's own
+        # Captured AND echoed, not inherited. Inheriting sent the builder's own diagnostic
+        # ("Unsupported DXF entity HATCH") to whatever console the producer happened to own
+        # -- which for a viewer build is a server log the user never sees, leaving them with
+        # a failure that named no cause. Echoing keeps the live CLI behaviour; capturing is
+        # what lets the raised error carry the reason to the UI.
+        stderr=subprocess.PIPE,
         text=True,
         bufsize=1,
     )
+
+    # Drained on a thread: a builder that fills the stderr pipe while we block reading
+    # stdout would deadlock otherwise.
+    stderr_tail: deque[str] = deque(maxlen=NODE_BUILDER_STDERR_TAIL_LINES)
+
+    def _drain_stderr() -> None:
+        if proc.stderr is None:
+            return
+        for raw_line in proc.stderr:
+            sys.stderr.write(raw_line)
+            stripped = raw_line.strip()
+            if stripped:
+                stderr_tail.append(stripped)
+
+    stderr_thread = threading.Thread(target=_drain_stderr, daemon=True)
+    stderr_thread.start()
 
     result: dict[str, Any] | None = None
     killed_after_result = False
@@ -330,11 +377,14 @@ def run_node_builder(
             proc.wait()
         if proc.stdout is not None:
             proc.stdout.close()
+        if proc.stderr is not None:
+            proc.stderr.close()
 
+    stderr_thread.join(timeout=_EXIT_GRACE_S)
     if not killed_after_result and proc.returncode not in (0, None):
         raise NodeBuilderError(
-            f"Node builder failed with exit code {proc.returncode}: "
-            f"{script_path.name} (see stderr above for the builder's own diagnostics)"
+            f"Node builder failed with exit code {proc.returncode}: {script_path.name}"
+            + (f" -- {first_builder_error(stderr_tail)}" if first_builder_error(stderr_tail) else "")
         )
     if result is None:
         raise NodeBuilderError(

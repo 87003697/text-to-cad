@@ -45,7 +45,7 @@ export function buildCadCommand(fileRef, entry = null) {
   return commandForFile(CAD_BUILD_COMMANDS.step, fileRef);
 }
 
-export function buildViewerMeshAlert(entry, hasMeshData, loadError) {
+export function buildViewerMeshAlert(entry, hasMeshData, loadError, artifact = null) {
   const fileRef = fileKey(entry);
   if (!fileRef) {
     return null;
@@ -67,6 +67,22 @@ export function buildViewerMeshAlert(entry, hasMeshData, loadError) {
   const missingResolution = meshSidecarFormat
     ? `Confirm the ${meshSidecarLabel} exists in the repo and reload the page.`
     : "Rebuild the CAD assets for this entry, then reload the page.";
+
+  // A failed render-artifact build is the REASON there is no mesh, so it outranks the
+  // generic "no mesh data" card — and it applies to every artifact-managed kind, not just
+  // STEP. A DXF whose build rejected an entity used to report only that nothing loaded,
+  // which told the user neither what was wrong nor that a rebuild would not help.
+  if (artifact?.status === "error" && !hasMeshData) {
+    const detail = String(artifact.error || "").trim();
+    return {
+      severity: "error",
+      summary: "Build failed",
+      title: "Render artifact build failed",
+      message: detail || "The render artifact for this entry could not be built.",
+      resolution: missingResolution,
+      command
+    };
+  }
 
   const stepArtifactError = sourceFormat === RENDER_FORMAT.STEP && entry?.artifact?.ok === false
     ? entry?.artifact

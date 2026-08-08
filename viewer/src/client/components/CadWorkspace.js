@@ -3010,7 +3010,8 @@ export default function CadWorkspace({
     const meshAlert = buildViewerMeshAlert(
       selectedEntry,
       !!selectedMeshData,
-      status === ASSET_STATUS.ERROR ? error : ""
+      status === ASSET_STATUS.ERROR ? error : "",
+      selectedArtifact
     );
     return meshAlert || viewerRuntimeAlert;
   }, [
@@ -3019,6 +3020,7 @@ export default function CadWorkspace({
     implicitError,
     implicitStatus,
     selectedEntry,
+    selectedArtifact,
     selectedArtifactGenerating,
     selectedImplicitRuntimeError,
     selectedImplicitRuntimeModel,
