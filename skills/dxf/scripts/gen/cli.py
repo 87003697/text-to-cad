@@ -40,7 +40,7 @@ def _targets_include_output_pairs(targets: Sequence[str]) -> bool:
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        prog="dxf",
+        prog="gen",
         description=(
             "Build drawing-package render artifacts (and on-demand DXF exports) from "
             "Python gen_dxf() sources."
@@ -61,11 +61,6 @@ def build_parser() -> argparse.ArgumentParser:
         "--write",
         action="store_true",
         help="Also write the sibling <name>.dxf export (the drawing package is always built).",
-    )
-    parser.add_argument(
-        "--snapshot",
-        action="store_true",
-        help="Also write an SVG snapshot of each drawing into its package for visual review.",
     )
     parser.add_argument(
         "--force",
@@ -89,7 +84,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(list(argv) if argv is not None else None)
     if args.validate:
-        if args.output is not None or args.write or args.force or args.snapshot:
+        if args.output is not None or args.write or args.force:
             parser.error("--validate cannot be combined with generation flags")
         return validate_dxf_files(args.targets)
     if args.output is not None:
@@ -101,7 +96,6 @@ def main(argv: Sequence[str] | None = None) -> int:
         args.targets,
         output=args.output,
         write_dxf=bool(args.write),
-        snapshot=bool(args.snapshot),
         force=bool(args.force),
         verbose=bool(args.verbose),
     )

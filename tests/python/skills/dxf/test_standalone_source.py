@@ -140,15 +140,18 @@ class StandaloneDxfSourceTests(unittest.TestCase):
             with self.assertRaisesRegex(TypeError, "must return an ezdxf document"):
                 cad_generation.generate_dxf_targets([str(script_path)])
 
-    def test_generate_dxf_targets_writes_snapshot_on_demand(self) -> None:
+    def test_generate_dxf_targets_bakes_the_3d_preview(self) -> None:
+        # What replaced the SVG snapshot this test used to assert: visual review of a
+        # drawing is the 3D flat pattern now, and preview.glb is the package member that
+        # carries it — for both the viewer and scripts/snapshot.
         with temporary_directory(prefix="dxf-skill") as root:
             script_path = _write_standalone_source(Path(root))
 
-            self.assertEqual(0, cad_generation.generate_dxf_targets([str(script_path)], snapshot=True))
+            self.assertEqual(0, cad_generation.generate_dxf_targets([str(script_path)]))
 
-            svg_path = Path(root) / "__cadgen__" / "models" / script_path.name / "drawing.svg"
-            self.assertTrue(svg_path.exists())
-            self.assertIn("<svg", svg_path.read_text(encoding="utf-8"))
+            package_dir = Path(root) / "__cadgen__" / "models" / script_path.name
+            self.assertTrue((package_dir / "preview.glb").is_file())
+            self.assertFalse((package_dir / "drawing.svg").exists())
 
 
 if __name__ == "__main__":

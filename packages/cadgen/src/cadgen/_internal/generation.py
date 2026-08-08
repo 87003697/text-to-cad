@@ -2267,14 +2267,13 @@ def generate_dxf_targets(
     *,
     output: str | Path | None = None,
     write_dxf: bool = False,
-    snapshot: bool = False,
     force: bool = False,
     verbose: bool = False,
 ) -> int:
     from cadgen._internal.drawing_package import drawing_package_current
 
     tool_name = "dxf"
-    logger = CliLogger("scripts/dxf", verbose=verbose)
+    logger = CliLogger("scripts/gen", verbose=verbose)
     if output is not None and targets_include_output_pairs(targets):
         raise ValueError(f"{tool_name} --output cannot be combined with SOURCE=OUTPUT targets")
     output_path = _resolve_cli_output_path(output, expected_suffixes=(".dxf",), tool_name=tool_name)
@@ -2305,7 +2304,6 @@ def generate_dxf_targets(
             spec if spec.dxf_export_path is not None else replace(spec, dxf_export_path=spec.dxf_path)
             for spec in selected_specs
         ]
-    snapshot_specs = list(selected_specs) if snapshot else []
     # No-op fast path: skip regenerating a drawing whose source closure is unchanged.
     # An export request on a current package is satisfied from the cache (copy +
     # identity re-point) instead of re-running the generator.
@@ -2353,31 +2351,8 @@ def generate_dxf_targets(
             logger=logger,
             success_message=_generated_dxf_summary,
         )
-    for spec in snapshot_specs:
-        _write_dxf_snapshot(spec, logger=logger)
     logger.total()
     return 0
-
-
-def _write_dxf_snapshot(spec: EntrySpec, *, logger: CliLogger) -> None:
-    """Write an SVG snapshot of the (fresh) drawing package next to its DXF."""
-    from cadgen._internal.drawing_package import drawing_dxf_path, load_drawing_descriptor
-    from cadgen.drawing_render import write_drawing_snapshot_svg
-
-    if spec.script_path is None:
-        return
-    package_dir = render_package_dir(spec.script_path)
-    descriptor = load_drawing_descriptor(package_dir)
-    dxf_ref = str((descriptor or {}).get("dxf") or "").strip()
-    dxf_path = (package_dir / dxf_ref) if dxf_ref else drawing_dxf_path(package_dir)
-    if not dxf_path.is_file():
-        raise RuntimeError(
-            f"Cannot snapshot {spec.source_ref}: drawing package has no built DXF"
-        )
-    svg_path = write_drawing_snapshot_svg(
-        dxf_path, package_dir / "drawing.svg", file_ref=spec.cad_ref
-    )
-    logger.info(f"wrote drawing snapshot: {_display_path(svg_path)}")
 
 
 def run_tool_cli(
