@@ -59,10 +59,10 @@ test("preview positions are the triangle soup in glTF metres, rotated to CAD Z-u
   // Three corners, nine floats -- the trailing (edge-overlay) vertex is dropped because it
   // is not referenced by a triangle.
   assert.equal(positions.length, 9);
-  // (x, y, z) -> (x, -z, y). The mesher builds Y-up; this GLB carries cadOccurrenceId extras,
+  // (x, y, z) -> (x, z, -y). The mesher builds Y-up; this GLB carries cadOccurrenceId extras,
   // which the viewer's loader reads as "already CAD space", so it must leave here Z-up or the
   // drawing stands on its edge in the scene.
-  assert.deepEqual([...positions].map((v) => v + 0), [0, 0, 0, 1, 0, 0, 0, 0, 1]);
+  assert.deepEqual([...positions].map((v) => v + 0), [0, 0, 0, 1, 0, 0, 0, 0, -1]);
 });
 
 test("the CAD Z-up rotation does not mirror the part", () => {
@@ -114,8 +114,8 @@ test("the reloaded preview is the drawing at millimetre scale", async () => {
   // dropped node transform would show up here as 1000x or as the raw SHORT quantization
   // range; a lost rotation would show up as the thickness landing on Y again.
   const { min, max } = meshData.bounds;
-  const expectedMin = [0, -20, -THICKNESS_MM / 2];
-  const expectedMax = [40, 0, THICKNESS_MM / 2];
+  const expectedMin = [0, 0, -THICKNESS_MM / 2];
+  const expectedMax = [40, 20, THICKNESS_MM / 2];
   for (let axis = 0; axis < 3; axis += 1) {
     assert.ok(
       Math.abs(min[axis] - expectedMin[axis]) < 0.05,

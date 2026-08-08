@@ -237,11 +237,18 @@ function buildCutLoops(dxfData) {
     const startKey = pointKey(loopPoints[0]);
     let currentKey = pointKey(loopPoints[loopPoints.length - 1]);
     let guard = 0;
+    let closed = true;
 
     while (currentKey !== startKey) {
       const nextOptions = (adjacency.get(currentKey) || []).filter(({ index }) => !visited.has(index));
       if (!nextOptions.length) {
-        throw new Error("DXF preview requires closed cut contours");
+        // A dead end: this chain does not close. DROP it and keep going rather than failing
+        // the drawing. Real files mix a closed profile with open geometry -- a dimension
+        // witness line, a stray arc, a centre mark -- and refusing the whole part over one
+        // unclosed chain means a perfectly cuttable outline renders nothing at all. The
+        // chain's primitives stay marked visited so the walk cannot retry them forever.
+        closed = false;
+        break;
       }
 
       const nextOption = nextOptions[0];
@@ -256,6 +263,9 @@ function buildCutLoops(dxfData) {
       }
     }
 
+    if (!closed) {
+      continue;
+    }
     loopPoints = removeConsecutiveDuplicates(loopPoints);
     if (loopPoints.length >= 3) {
       loops.push(loopPoints);

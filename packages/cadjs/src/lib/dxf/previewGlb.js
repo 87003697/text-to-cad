@@ -69,11 +69,12 @@ export function dxfPreviewPositions(meshData) {
     // stood on its edge. Converting HERE keeps that convention true — a GLB with occurrence
     // ids is CAD-space — instead of teaching the loader a per-format exception.
     //
-    // (x, -z, y) rather than (x, z, y): the latter has determinant -1 and would mirror the
-    // part, quietly flipping every asymmetric profile.
+    // (x, z, -y): a rotation about X, determinant +1. Handedness is not academic here --
+    // (x, z, y) and (x, -z, y) both map the axes plausibly and both MIRROR the drawing, which
+    // is invisible on a symmetric plate and obvious the moment the profile is lettering.
     positions[target] = vertices[source] * DXF_MM_TO_GLB_SCALE;
-    positions[target + 1] = -vertices[source + 2] * DXF_MM_TO_GLB_SCALE;
-    positions[target + 2] = vertices[source + 1] * DXF_MM_TO_GLB_SCALE;
+    positions[target + 1] = vertices[source + 2] * DXF_MM_TO_GLB_SCALE;
+    positions[target + 2] = -vertices[source + 1] * DXF_MM_TO_GLB_SCALE;
   }
   return positions;
 }
