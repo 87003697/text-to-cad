@@ -78,6 +78,7 @@ skill uses between `scripts/gen` and `scripts/artifact`:
 ```bash
 python scripts/gen targets... [flags]        # gen_dxf() Python generators
 python scripts/artifact target [flags]       # one drawing, INCLUDING an imported .dxf
+python scripts/snapshot --input <drawing> --output <file.png>   # render it
 ```
 
 Use the active project Python interpreter; treat `python` as an interpreter placeholder, and use `--help` for the full interface. Target paths resolve from the command's current working directory; run from the workspace that owns the artifacts with cwd-relative target paths. Keep a drawing generator in the same directory as the geometry it derives from, named `<name>.dxf.py`.
@@ -114,7 +115,20 @@ either source kind, so it is also how you debug a generated drawing's package bu
 Flags: `--write PATH` (also write the package's drawing DXF there), `--force`,
 `--verbose`.
 
-Neither CLI inspects an existing `.dxf`. For entity/layer checks use `ezdxf` directly,
+`scripts/snapshot` renders a drawing's 3D flat pattern to a PNG still or an orbit GIF:
+
+```bash
+python scripts/snapshot --input path/to/imported.dxf --output review.png
+python scripts/snapshot --input path/to/source.dxf.py --output turntable.gif --mode orbit
+```
+
+It builds/refreshes the drawing package first, then renders that package's `preview.glb`
+through the same headless browser runtime the CAD skill's STEP snapshot uses — so a
+snapshot matches what the CAD Viewer shows. Flags: `--mode view|orbit`, `--camera`,
+`--appearance`, `--size-profile`, `--width`/`--height`, `--force`, `--json`. There are no
+selector, parameter, section or exploded options: a drawing carries no CAD topology.
+
+No CLI inspects an existing `.dxf`. For entity/layer checks use `ezdxf` directly,
 and `--validate` for the drawing checks; review geometry visually with `$cad-viewer`.
 
 ## Workflow
