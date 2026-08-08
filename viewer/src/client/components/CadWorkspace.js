@@ -8169,8 +8169,6 @@ export default function CadWorkspace({
               />
             </div>
 
-            ) : null}
-
             {selectedFileSheetKind === "step" ? (
               <StepFileSheet
                 key={`step:${selectedKey}`}
