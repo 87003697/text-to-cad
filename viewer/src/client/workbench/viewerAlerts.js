@@ -9,7 +9,7 @@ import { fileKey } from "./sidebar.js";
 
 export const CAD_BUILD_COMMANDS = Object.freeze({
   dxf: "",
-  step: "python -m cadpy.step_artifact --repo-root . --step",
+  step: "python -m cadgen.step_artifact --repo-root . --step",
   urdf: "",
   sdf: ""
 });
@@ -42,9 +42,6 @@ export function buildCadCommand(fileRef, entry = null) {
   if (sourceFormat === RENDER_FORMAT.GLB) {
     return "";
   }
-  if (sourceFormat === RENDER_FORMAT.GCODE) {
-    return "";
-  }
   return commandForFile(CAD_BUILD_COMMANDS.step, fileRef);
 }
 
@@ -58,15 +55,12 @@ export function buildViewerMeshAlert(entry, hasMeshData, loadError) {
   const command = buildCadCommand(fileRef, entry);
   const meshSidecarFormat = sourceFormat === RENDER_FORMAT.STL ||
     sourceFormat === RENDER_FORMAT.THREE_MF ||
-    sourceFormat === RENDER_FORMAT.GLB ||
-    sourceFormat === RENDER_FORMAT.GCODE;
+    sourceFormat === RENDER_FORMAT.GLB;
   const meshSidecarLabel = sourceFormat === RENDER_FORMAT.THREE_MF
     ? "3MF"
     : sourceFormat === RENDER_FORMAT.GLB
       ? "GLB"
-      : sourceFormat === RENDER_FORMAT.GCODE
-        ? "G-code"
-        : "STL";
+      : "STL";
   const reloadResolution = meshSidecarFormat
     ? `Confirm the ${meshSidecarLabel} exists in the repo and reload the page.`
     : "Try reloading the page. If the problem persists, rebuild the render assets for this entry.";

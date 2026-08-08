@@ -6,23 +6,19 @@ import {
   normalizeDxfBendDirection,
   normalizeDxfPreviewThicknessMm
 } from "cadjs/lib/dxf/buildPreviewMesh";
-import {
-  Accordion
-} from "../ui/accordion";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
-import { ToggleGroup, ToggleGroupItem } from "../ui/toggle-group";
 import FileSheet, {
   FILE_SHEET_COMPACT_ICON_BUTTON_CLASSES,
   FILE_SHEET_COMPACT_NUMERIC_INPUT_CLASSES,
-  FILE_SHEET_SEGMENTED_ITEM_CLASSES,
-  FileSheetControlRow,
-  FileSheetSection,
-  FileSheetSectionBody,
+  FILE_SHEET_UNIT_SUFFIX_CLASSES,
+  FileSheetInlineControlRow,
+  FileSheetSegmentedControl,
+  FileSheetStatusText,
   FileSheetSubsection
 } from "./FileSheet";
-import FileMetadataSection from "./FileMetadataSection";
-import FileStatusSection from "./FileStatusSection";
+import FileSheetTabbedSurface from "./FileSheetTabbedSurface";
+import { buildFileStatusTab } from "./FileStatusSection";
 
 const compactInputClasses = FILE_SHEET_COMPACT_NUMERIC_INPUT_CLASSES;
 const compactIconButtonClasses = FILE_SHEET_COMPACT_ICON_BUTTON_CLASSES;
@@ -60,39 +56,21 @@ function DxfBendRow({
   const direction = normalizeDxfBendDirection(setting?.direction);
 
   return (
-    <FileSheetControlRow label={`B${index + 1}`}>
-      <div className="grid grid-cols-[minmax(0,1fr)_5.75rem] gap-2">
-        <div className="min-w-0">
-          <span className="sr-only">Direction</span>
-          <ToggleGroup
-            type="single"
-            variant="outline"
-            size="sm"
-            value={direction}
-            onValueChange={(nextDirection) => {
-              if (!nextDirection) {
-                return;
-              }
-              onChange(index, { direction: nextDirection });
-            }}
-            className="grid h-7 w-full min-w-0 grid-cols-2"
-            aria-label={`Bend ${index + 1} direction`}
-          >
-            <ToggleGroupItem
-              value={DXF_BEND_DIRECTION.UP}
-              className={`!h-7 text-[11px] ${FILE_SHEET_SEGMENTED_ITEM_CLASSES}`}
-            >
-              Up
-            </ToggleGroupItem>
-            <ToggleGroupItem
-              value={DXF_BEND_DIRECTION.DOWN}
-              className={`!h-7 text-[11px] ${FILE_SHEET_SEGMENTED_ITEM_CLASSES}`}
-            >
-              Down
-            </ToggleGroupItem>
-          </ToggleGroup>
-        </div>
-        <label className="block">
+    <FileSheetInlineControlRow label={`B${index + 1}`}>
+      <div className="flex items-center gap-1.5">
+        <FileSheetSegmentedControl
+          fit
+          value={direction}
+          onChange={(nextDirection) => {
+            onChange(index, { direction: nextDirection });
+          }}
+          ariaLabel={`Bend ${index + 1} direction`}
+          options={[
+            { value: DXF_BEND_DIRECTION.UP, label: "Up" },
+            { value: DXF_BEND_DIRECTION.DOWN, label: "Down" }
+          ]}
+        />
+        <label className="block w-16">
           <span className="sr-only">Angle</span>
           <div className="relative">
             <Input
@@ -119,14 +97,14 @@ function DxfBendRow({
                   event.currentTarget.blur();
                 }
               }}
-              className={`${compactInputClasses} w-full pr-9 text-right`}
+              className={`${compactInputClasses} w-full pr-7 text-right`}
               aria-label={`Bend ${index + 1} angle in degrees`}
             />
-            <span className="pointer-events-none absolute inset-y-0 right-2 flex items-center text-xs text-muted-foreground">deg</span>
+            <span className={FILE_SHEET_UNIT_SUFFIX_CLASSES}>°</span>
           </div>
         </label>
       </div>
-    </FileSheetControlRow>
+    </FileSheetInlineControlRow>
   );
 }
 
@@ -150,7 +128,7 @@ export default function DxfFileSheet({
   onOpenFileAsset,
   suppressDynamicMetadataStatus = false,
   statusItems = [],
-  themeSections = null,
+  themeTabs = [],
   openSectionIds = [],
   onOpenSectionIdsChange
 }) {
@@ -167,28 +145,16 @@ export default function DxfFileSheet({
     setDraftValue(formatThicknessInput(normalizedValue));
   };
 
-  return (
-    <FileSheet
-      open={open}
-      title="DXF"
-      isDesktop={isDesktop}
-      width={width}
-      onOpenChange={onOpenChange}
-      onStartResize={onStartResize}
-    >
-      <Accordion
-        type="multiple"
-        value={openSectionIds}
-        onValueChange={onOpenSectionIdsChange}
-        className="text-sm"
-      >
-        <FileStatusSection items={statusItems} />
-
-        <FileSheetSection value="dxf" title="DXF">
-          <FileSheetSectionBody className="py-0">
-            <FileSheetSubsection title="Thickness">
-              <FileSheetControlRow label="Material">
-                <div className="grid grid-cols-[2rem_minmax(0,1fr)_2rem] items-center gap-1.5">
+  const sections = [
+    buildFileStatusTab(statusItems),
+    {
+      id: "dxf",
+      title: "DXF",
+      content: (
+          <div className="py-2">
+            <FileSheetSubsection title="Material">
+              <FileSheetInlineControlRow label="Thickness">
+                <div className="flex items-center gap-1.5">
                   <Button
                     type="button"
                     variant="ghost"
@@ -203,7 +169,7 @@ export default function DxfFileSheet({
                   >
                     <Minus className="h-3.5 w-3.5" strokeWidth={2} aria-hidden="true" />
                   </Button>
-                  <div className="relative block">
+                  <div className="relative block w-20">
                     <Input
                       type="number"
                       min="0.2"
@@ -226,7 +192,7 @@ export default function DxfFileSheet({
                       className={`${compactInputClasses} w-full pr-9 text-right`}
                       aria-label="DXF material thickness in millimeters"
                     />
-                    <span className="pointer-events-none absolute inset-y-0 right-2 flex items-center text-xs text-muted-foreground">mm</span>
+                    <span className={FILE_SHEET_UNIT_SUFFIX_CLASSES}>mm</span>
                   </div>
                   <Button
                     type="button"
@@ -243,7 +209,7 @@ export default function DxfFileSheet({
                     <Plus className="h-3.5 w-3.5" strokeWidth={2} aria-hidden="true" />
                   </Button>
                 </div>
-              </FileSheetControlRow>
+              </FileSheetInlineControlRow>
             </FileSheetSubsection>
             <FileSheetSubsection title="Bends">
               {normalizedBendSettings.length ? normalizedBendSettings.map((setting, index) => (
@@ -254,24 +220,33 @@ export default function DxfFileSheet({
                   onChange={onBendChange}
                 />
               )) : (
-                <p className="px-3 py-1 text-xs text-muted-foreground">
-                  {viewerLoading ? "Loading bends..." : "No bends are available."}
-                </p>
+                <FileSheetStatusText>
+                  {viewerLoading ? "Loading bends..." : "No bends."}
+                </FileSheetStatusText>
               )}
             </FileSheetSubsection>
-          </FileSheetSectionBody>
-        </FileSheetSection>
-        {themeSections}
-        <FileMetadataSection
-          entry={selectedEntry}
-          fileDownloadAvailable={fileDownloadAvailable}
-          viewerServerInfo={viewerServerInfo}
-          localFileOpenAvailable={localFileOpenAvailable}
-          fileAccessBusyKey={fileAccessBusyKey}
-          onOpenFileAsset={onOpenFileAsset}
-          suppressDynamicStatus={suppressDynamicMetadataStatus}
-        />
-      </Accordion>
+          </div>
+      )
+    },
+    ...themeTabs
+  ];
+
+  return (
+    <FileSheet
+      open={open}
+      title="DXF"
+      isDesktop={isDesktop}
+      width={width}
+      onOpenChange={onOpenChange}
+      onStartResize={onStartResize}
+      scrollBody={false}
+    >
+      <FileSheetTabbedSurface
+        kind="dxf"
+        sections={sections}
+        openSectionIds={openSectionIds}
+        onOpenSectionIdsChange={onOpenSectionIdsChange}
+      />
     </FileSheet>
   );
 }

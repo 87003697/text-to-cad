@@ -13,10 +13,16 @@ import {
 } from "cadjs/lib/viewer/renderQuality";
 import { updateOrbitControls } from "../orbitControls.js";
 
+// Perf experiment: render with a model-fitted depth range instead of a
+// logarithmic depth buffer so early-Z rejection stays enabled. Flip to false
+// to restore the log-depth renderer if depth artifacts appear.
+const FITTED_DEPTH_RANGE_ENABLED = true;
+
 function createWebGlRenderer(THREE) {
   return createCadWebGlRenderer(THREE, {
     allowFallback: true,
-    isRecoverableError: isWebGlContextCreationError
+    isRecoverableError: isWebGlContextCreationError,
+    logarithmicDepthBuffer: !FITTED_DEPTH_RANGE_ENABLED
   });
 }
 
@@ -165,6 +171,9 @@ export function useViewerRuntime({
       renderer.localClippingEnabled = true;
       renderer.shadowMap.enabled = !softwareRendering;
       renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+      // Shadow maps are re-rendered only when the scene changes (see
+      // interactionState.shadowsDirty); camera-only frames reuse the last map.
+      renderer.shadowMap.autoUpdate = false;
       renderer.setPixelRatio(getPixelRatioCap(idlePixelRatioCap));
       renderer.setSize(width, height);
       container.innerHTML = "";
@@ -232,6 +241,11 @@ export function useViewerRuntime({
       const facePickGroup = new THREE.Group();
       const edgePickGroup = new THREE.Group();
       const vertexPickGroup = new THREE.Group();
+      // Pick proxies are opacity-0 raycast targets; keep them out of the render
+      // pass entirely. Raycaster does not check `visible`, so picking still works.
+      facePickGroup.visible = false;
+      edgePickGroup.visible = false;
+      vertexPickGroup.visible = false;
       scene.add(stageGroup);
       scene.add(modelGroup);
       scene.add(edgesGroup);
@@ -248,7 +262,8 @@ export function useViewerRuntime({
         renderQueued: false,
         renderQueuedAt: 0,
         renderFallbackTimerId: 0,
-        restoreTimerId: 0
+        restoreTimerId: 0,
+        shadowsDirty: true
       };
       const keyboardOrbitState = {
         pressedKeys: new Set(),
@@ -297,6 +312,7 @@ export function useViewerRuntime({
         onContextLost?.();
       };
       const handleContextRestored = () => {
+        interactionState.shadowsDirty = true;
         setError("");
         onContextRestored?.();
       };
@@ -316,6 +332,31 @@ export function useViewerRuntime({
         syncScreenSpaceLineMaterials();
         syncDrawingCanvasSize(runtimeRef.current);
         renderDrawingOverlay();
+      };
+
+      const fitCameraDepthRange = (runtime) => {
+        const activeCamera = runtime?.camera;
+        if (
+          !FITTED_DEPTH_RANGE_ENABLED ||
+          !activeCamera?.isPerspectiveCamera ||
+          renderer.capabilities?.logarithmicDepthBuffer
+        ) {
+          return;
+        }
+        const radius = Math.max(Number(runtime?.modelRadius) || 1, 1e-6);
+        const sceneExtent = Math.max(radius, Number(runtime?.gridConfig?.radius) || 0);
+        const target = runtime?.controls?.target || controls.target;
+        const distance = Math.max(activeCamera.position.distanceTo(target), radius * 1e-3);
+        const near = Math.max(distance - radius * 4, distance / 250);
+        const far = Math.max(distance + sceneExtent * 50, near * 16);
+        if (
+          Math.abs(near - activeCamera.near) > activeCamera.near * 0.1 ||
+          Math.abs(far - activeCamera.far) > activeCamera.far * 0.1
+        ) {
+          activeCamera.near = near;
+          activeCamera.far = far;
+          activeCamera.updateProjectionMatrix();
+        }
       };
 
       let rafId = 0;
@@ -368,6 +409,9 @@ export function useViewerRuntime({
         if (cameraTransitionActive || keyboardOrbitMoved) {
           emitPerspectiveChange(runtimeRef.current);
         }
+        fitCameraDepthRange(runtimeRef.current);
+        renderer.shadowMap.needsUpdate = interactionState.shadowsDirty === true;
+        interactionState.shadowsDirty = false;
         renderer.render(scene, runtimeRef.current?.camera || camera);
         const previewOrbitActive = !!runtimeRef.current?.previewOrbitEnabled;
         if (!previewOrbitActive) {
@@ -441,6 +485,76 @@ export function useViewerRuntime({
         : null;
       resizeObserver?.observe(container);
 
+      // Zoom-to-cursor leaves the orbit pivot (controls.target) drifting along the view ray
+      // at the new camera distance. Perspective pan and dolly both scale by the
+      // camera->pivot distance, so a drifted pivot makes panning and zooming feel slow when
+      // zoomed in and fast when zoomed out. After each wheel zoom, re-anchor the pivot depth
+      // onto the geometry under the cursor (falling back to the model centre), keeping it on
+      // the forward axis so the camera never re-orients or jumps the view.
+      const zoomReanchorPointer = new THREE.Vector2();
+      const zoomReanchorForward = new THREE.Vector3();
+      const zoomReanchorScratch = new THREE.Vector3();
+      const zoomReanchorCenter = new THREE.Vector3();
+      let zoomPivotReanchorPending = false;
+
+      const readModelWorldCenter = (out) => {
+        const runtime = runtimeRef.current;
+        const bounds = runtime?.modelBounds;
+        if (bounds && Array.isArray(bounds.min) && Array.isArray(bounds.max)) {
+          out.set(
+            (Number(bounds.min[0]) + Number(bounds.max[0])) / 2,
+            (Number(bounds.min[1]) + Number(bounds.max[1])) / 2,
+            (Number(bounds.min[2]) + Number(bounds.max[2])) / 2
+          );
+          if (runtime.modelGroup?.position) {
+            out.add(runtime.modelGroup.position);
+          }
+          return out;
+        }
+        return out.copy(runtime?.controls?.target || out.set(0, 0, 0));
+      };
+
+      const reanchorZoomPivot = () => {
+        const runtime = runtimeRef.current;
+        const activeCamera = runtime?.camera;
+        const activeControls = runtime?.controls;
+        // Orthographic pan/dolly do not depend on the pivot distance, so leave them alone.
+        if (!activeCamera?.isPerspectiveCamera || !activeControls?.target) {
+          return;
+        }
+        activeCamera.getWorldDirection(zoomReanchorForward);
+        // Depth of a world point along the view axis (never negative / behind the camera).
+        const depthOf = (point) => Math.max(
+          zoomReanchorScratch.copy(point).sub(activeCamera.position).dot(zoomReanchorForward),
+          0
+        );
+        let depth = 0;
+        if (runtime.raycaster && runtime.modelGroup) {
+          runtime.raycaster.setFromCamera(zoomReanchorPointer, activeCamera);
+          // Only the nearest hit matters here; lets BVH-backed meshes early-out.
+          runtime.raycaster.firstHitOnly = true;
+          const hits = runtime.raycaster.intersectObject(runtime.modelGroup, true);
+          runtime.raycaster.firstHitOnly = false;
+          const hit = hits.find((entry) => entry?.point);
+          if (hit) {
+            depth = depthOf(hit.point);
+          }
+        }
+        if (!(depth > 0)) {
+          depth = depthOf(readModelWorldCenter(zoomReanchorCenter));
+        }
+        const minDepth = Math.max(
+          Number.isFinite(activeControls.minDistance) ? activeControls.minDistance : 0,
+          1e-4
+        );
+        const maxDepth = Number.isFinite(activeControls.maxDistance) && activeControls.maxDistance > 0
+          ? activeControls.maxDistance
+          : Number.POSITIVE_INFINITY;
+        depth = Math.min(Math.max(depth, minDepth), maxDepth);
+        // Only the pivot depth changes; the camera keeps looking down the same forward ray.
+        activeControls.target.copy(activeCamera.position).addScaledVector(zoomReanchorForward, depth);
+      };
+
       let controlsStartDistance = null;
       const readControlsDistance = () => {
         const activeRuntime = runtimeRef.current;
@@ -455,6 +569,10 @@ export function useViewerRuntime({
         beginInteraction();
       };
       const handleControlsChange = () => {
+        if (zoomPivotReanchorPending) {
+          zoomPivotReanchorPending = false;
+          reanchorZoomPivot();
+        }
         emitPerspectiveChange(runtimeRef.current);
         requestRender();
       };
@@ -476,6 +594,15 @@ export function useViewerRuntime({
         controls.zoomSpeed = getWheelZoomSpeed(isTrackpadLikeWheelEvent(event)
           ? getPinchZoomSpeed()
           : ACCELERATED_WHEEL_ZOOM_SPEED);
+        // Capture the cursor (NDC) so the post-zoom pivot re-anchor can raycast under it.
+        const rect = renderer.domElement.getBoundingClientRect();
+        if (rect.width > 0 && rect.height > 0) {
+          zoomReanchorPointer.set(
+            ((event.clientX - rect.left) / rect.width) * 2 - 1,
+            -((event.clientY - rect.top) / rect.height) * 2 + 1
+          );
+          zoomPivotReanchorPending = true;
+        }
         beginInteraction();
       };
       const wheelListenerOptions = { passive: true, capture: true };
@@ -617,7 +744,17 @@ export function useViewerRuntime({
         onResize,
         resizeObserver,
         rafId,
-        requestRender,
+        // Renders requested through the runtime come from scene mutations
+        // (model/theme/params/overlay effects), so they also refresh shadows.
+        // Camera-driven paths use the closure-local requestRender and keep the
+        // last shadow map.
+        requestRender: () => {
+          interactionState.shadowsDirty = true;
+          requestRender();
+        },
+        invalidateShadows: () => {
+          interactionState.shadowsDirty = true;
+        },
         beginInteraction,
         scheduleIdleQuality,
         applyCameraFrameInsets,

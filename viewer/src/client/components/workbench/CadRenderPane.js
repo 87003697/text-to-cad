@@ -14,8 +14,10 @@ import {
 } from "../ui/dropdown-menu";
 import { ToggleGroup, ToggleGroupItem } from "../ui/toggle-group";
 import AssemblyContextMenuItems from "./AssemblyContextMenuItems";
+import TutorialTip from "./TutorialTip";
 import { cn } from "@/ui/utils";
 import { RENDER_FORMAT } from "@/workbench/constants";
+import { TUTORIAL_TIP_IDS } from "@/workbench/persistence";
 import {
   isMeshRenderFormat,
   isRobotRenderFormat
@@ -302,6 +304,7 @@ export default function CadRenderPane({
   selectedKey,
   selectedDxfKey,
   missingFileRef = "",
+  viewerServerInfo = null,
   viewerPerspective,
   viewerPerspectiveRef,
   themeSettings,
@@ -370,6 +373,8 @@ export default function CadRenderPane({
   handleStepModuleTransformDetectedChange,
   selectionCount,
   copyButtonLabel,
+  copyReferenceTipActive = false,
+  panToolActive = false,
   handleCopySelection,
   handleScreenshotCopy,
   urdfPosePicker = null
@@ -394,35 +399,51 @@ export default function CadRenderPane({
   }, [stepParameters, liveStepAnimation]);
   const viewerAlertIconLabel = "Viewer error. See the Issues section for details.";
   const dxfMode = renderFormat === RENDER_FORMAT.DXF;
-  const gcodeMode = renderFormat === RENDER_FORMAT.GCODE;
   const urdfMode = isRobotRenderFormat(renderFormat);
   const implicitMode = renderFormat === RENDER_FORMAT.IMPLICIT;
   const meshOnlyMode = isMeshRenderFormat(renderFormat);
-  const pathPreviewMode = meshOnlyMode || gcodeMode;
   const dxf3dAvailable = !!selectedDxfMeshData;
   const activeDxfViewMode = dxfViewMode === "3d" && dxf3dAvailable ? "3d" : "2d";
   const dxfMeshPreviewReady = dxfMode && activeDxfViewMode === "3d" && dxf3dAvailable;
   const activeMeshData = dxfMeshPreviewReady ? selectedDxfMeshData : selectedMeshData;
-  const stepDisplaySettingsActive = renderFormat === RENDER_FORMAT.STEP && !!displaySettings && !dxfMode && !pathPreviewMode;
+  const stepDisplaySettingsActive = renderFormat === RENDER_FORMAT.STEP && !!displaySettings && !dxfMode && !meshOnlyMode;
+  // Projection is a theme trait now; STEP views take it from the active theme
+  // (Light/Dark are orthographic, stage themes perspective), everything else
+  // keeps its historical perspective framing.
   const cadProjection = stepDisplaySettingsActive
-    ? normalizeCameraProjection(displaySettings.projection)
+    ? normalizeCameraProjection(themeSettings?.projection)
     : CAMERA_PROJECTION.PERSPECTIVE;
   const activeModelKey = dxfMeshPreviewReady ? (selectedDxfKey || selectedKey) : selectedKey;
   const stepBoundsAnimationActive = Boolean(resolvedStepParameters?.animationState?.playing);
   const cadViewerBoundsAnimationActive = Boolean(boundsAnimationActive || stepBoundsAnimationActive);
   const missingFileLabel = String(missingFileRef || "").trim();
-  const topologySelectionPending = Boolean(referenceSelectionPending && !dxfMode && !urdfMode && !pathPreviewMode);
-  const topologySelectionUnavailable = Boolean(referenceSelectionUnavailable && !dxfMode && !urdfMode && !pathPreviewMode);
-  const topologySelectionDeferred = Boolean(referenceSelectionDeferred && activeMeshData && !dxfMode && !urdfMode && !pathPreviewMode);
+  // A Viewer resolves paths against ITS OWN served root. Point one at an
+  // absolute path belonging to a different checkout — easy to do when an
+  // instance from another clone is already holding the default port — and the
+  // file is simply not found. Reporting that as "file does not exist" blames
+  // the model and sends you looking for a build problem that isn't there, so
+  // say which of the two it actually is.
+  const servedRoot = String(
+    viewerServerInfo?.rootPath || viewerServerInfo?.directoryRoot || ""
+  ).trim();
+  const missingFileOutsideRoot = Boolean(
+    missingFileLabel
+    && servedRoot
+    && missingFileLabel.startsWith("/")
+    && !missingFileLabel.startsWith(servedRoot.endsWith("/") ? servedRoot : `${servedRoot}/`)
+  );
+  const topologySelectionPending = Boolean(referenceSelectionPending && !dxfMode && !urdfMode && !meshOnlyMode);
+  const topologySelectionUnavailable = Boolean(referenceSelectionUnavailable && !dxfMode && !urdfMode && !meshOnlyMode);
+  const topologySelectionDeferred = Boolean(referenceSelectionDeferred && activeMeshData && !dxfMode && !urdfMode && !meshOnlyMode);
   const urdfPosePickerActive = Boolean(urdfPosePicker?.active);
   const urdfPosePickerPrompt = "Select target";
   const posePickerExitStyle = {
     left: `calc(${Math.max(Number(viewportFrameInsets?.left) || 0, 0)}px + 0.75rem)`,
     top: `calc(${Math.max(Number(viewportFrameInsets?.top) || 0, 0)}px + 0.75rem)`
   };
-  const ctaMode = !dxfMode && !pathPreviewMode && drawToolActive
+  const ctaMode = !dxfMode && !meshOnlyMode && drawToolActive
     ? "screenshot"
-    : !dxfMode && !pathPreviewMode && selectionCount > 0
+    : !dxfMode && !meshOnlyMode && selectionCount > 0
       ? "selection"
       : "";
   const dxfViewPlaneHeader = dxfMode ? (
@@ -537,12 +558,12 @@ export default function CadRenderPane({
           perspectiveRef={viewerPerspectiveRef}
           onProjectionChange={stepDisplaySettingsActive ? onProjectionChange : undefined}
           onDisplayModeChange={stepDisplaySettingsActive ? onDisplayModeChange : undefined}
-          showEdges={!gcodeMode}
+          showEdges
           recomputeNormals={false}
           themeSettings={themeSettings}
           displaySettings={stepDisplaySettingsActive ? displaySettings : null}
           previewMode={dxfMode ? false : previewMode}
-          showViewPlane={dxfMode || gcodeMode ? true : !previewMode}
+          showViewPlane={dxfMode ? true : !previewMode}
           scale={urdfMode ? VIEWER_SCENE_SCALE.URDF : VIEWER_SCENE_SCALE.CAD}
           viewPlaneOffsetRight={viewPlaneOffsetRight}
           viewPlaneOffsetBottom="1rem"
@@ -554,7 +575,8 @@ export default function CadRenderPane({
             ? VIEWER_PICK_MODE.NONE
             : viewerPickModeForRenderPane({
               dxfMode,
-              pathPreviewMode,
+              meshOnlyMode,
+              panToolActive,
               topologySelectionPending,
               topologySelectionUnavailable,
               topologySelectionDeferred,
@@ -568,27 +590,28 @@ export default function CadRenderPane({
               focusedPartIds,
               measureMode: measureModeActive
             })}
+          panToolActive={panToolActive}
           renderPartsIndividually={urdfMode ? true : (renderPartsIndividually || Boolean(resolvedStepParameters?.definition))}
-          pickableParts={dxfMode || urdfMode || pathPreviewMode ? EMPTY_LIST : assemblyParts}
-          hiddenPartIds={dxfMode || pathPreviewMode ? [] : hiddenPartIds}
-          selectedPartIds={dxfMode || pathPreviewMode ? [] : selectedPartIds}
-          hoveredPartId={dxfMode || pathPreviewMode ? "" : hoveredPartId}
-          assemblyMates={dxfMode || pathPreviewMode ? [] : assemblyMates}
-          selectedMateIds={dxfMode || pathPreviewMode ? [] : selectedMateIds}
-          hoveredMateId={dxfMode || pathPreviewMode ? "" : hoveredMateId}
-          hoveredReferenceId={dxfMode || pathPreviewMode ? "" : hoveredReferenceId}
-          selectedReferenceIds={dxfMode || pathPreviewMode ? [] : selectedReferenceIds}
-          selectorRuntime={dxfMode || pathPreviewMode ? null : selectorRuntime}
-          displayEdgeRuntime={dxfMode || pathPreviewMode ? null : displayEdgeRuntime}
-          stepParameters={dxfMode || pathPreviewMode ? null : resolvedStepParameters}
-          pickableFaces={dxfMode || pathPreviewMode ? [] : pickableFaces}
-          pickableEdges={dxfMode || pathPreviewMode ? [] : pickableEdges}
-          pickableVertices={dxfMode || pathPreviewMode ? [] : pickableVertices}
-          focusedPartId={dxfMode || pathPreviewMode ? "" : focusedPartIds}
+          pickableParts={dxfMode || urdfMode || meshOnlyMode ? EMPTY_LIST : assemblyParts}
+          hiddenPartIds={dxfMode || meshOnlyMode ? [] : hiddenPartIds}
+          selectedPartIds={dxfMode || meshOnlyMode ? [] : selectedPartIds}
+          hoveredPartId={dxfMode || meshOnlyMode ? "" : hoveredPartId}
+          assemblyMates={dxfMode || meshOnlyMode ? [] : assemblyMates}
+          selectedMateIds={dxfMode || meshOnlyMode ? [] : selectedMateIds}
+          hoveredMateId={dxfMode || meshOnlyMode ? "" : hoveredMateId}
+          hoveredReferenceId={dxfMode || meshOnlyMode ? "" : hoveredReferenceId}
+          selectedReferenceIds={dxfMode || meshOnlyMode ? [] : selectedReferenceIds}
+          selectorRuntime={dxfMode || meshOnlyMode ? null : selectorRuntime}
+          displayEdgeRuntime={dxfMode || meshOnlyMode ? null : displayEdgeRuntime}
+          stepParameters={dxfMode || meshOnlyMode ? null : resolvedStepParameters}
+          pickableFaces={dxfMode || meshOnlyMode ? [] : pickableFaces}
+          pickableEdges={dxfMode || meshOnlyMode ? [] : pickableEdges}
+          pickableVertices={dxfMode || meshOnlyMode ? [] : pickableVertices}
+          focusedPartId={dxfMode || meshOnlyMode ? "" : focusedPartIds}
           boundsAnimationActive={cadViewerBoundsAnimationActive}
-          drawingEnabled={!dxfMode && !pathPreviewMode && drawToolActive}
+          drawingEnabled={!dxfMode && !meshOnlyMode && drawToolActive}
           drawingTool={drawingTool}
-          drawingStrokes={dxfMode || pathPreviewMode ? [] : drawingStrokes}
+          drawingStrokes={dxfMode || meshOnlyMode ? [] : drawingStrokes}
           onDrawingStrokesChange={handleDrawingStrokesChange}
           onPerspectiveChange={handlePerspectiveChange}
           onHoverReferenceChange={handleModelHoverChange}
@@ -633,14 +656,25 @@ export default function CadRenderPane({
         >
           <Alert
             variant="destructive"
-            className="cad-glass-popover pointer-events-auto w-full max-w-xl min-w-0 p-5 text-center shadow-lg"
+            className="cad-glass-popover pointer-events-auto w-full max-w-xl min-w-0 p-4 text-center shadow-lg"
           >
             <p className="col-start-1 text-[11px] font-semibold uppercase tracking-[0.16em] text-destructive">
-              File does not exist
+              {missingFileOutsideRoot ? "Outside this viewer's root" : "File does not exist"}
             </p>
-            <AlertTitle className="col-start-1 mt-1 line-clamp-none text-lg text-foreground">File does not exist</AlertTitle>
+            <AlertTitle className="col-start-1 mt-1 line-clamp-none text-lg text-foreground">
+              {missingFileOutsideRoot ? "Outside this viewer's root" : "File does not exist"}
+            </AlertTitle>
             <AlertDescription className="col-start-1 mt-1 text-sm leading-6 text-muted-foreground">
               <code className="rounded-md bg-muted px-2 py-1 text-xs text-foreground">{missingFileLabel}</code>
+              {missingFileOutsideRoot ? (
+                <span className="mt-2 block text-xs leading-5">
+                  This viewer serves{" "}
+                  <code className="rounded bg-muted px-1 py-0.5 text-foreground">{servedRoot}</code>.
+                  The path above is outside it — most likely a viewer from another
+                  checkout is holding this port. Start one for this workspace on a
+                  free port instead.
+                </span>
+              ) : null}
             </AlertDescription>
           </Alert>
         </div>
@@ -740,23 +774,30 @@ export default function CadRenderPane({
           className="pointer-events-none absolute z-20 flex min-w-0 justify-center"
           style={ctaOverlayStyle}
         >
-          <Button
-            type="button"
-            variant="default"
-            size="sm"
-            className="pointer-events-auto h-9 w-fit min-w-0 max-w-[min(28rem,100%)] shrink overflow-hidden border border-primary/20 bg-primary/85 px-4 text-[12px] font-semibold text-primary-foreground shadow-lg shadow-black/20 hover:bg-primary/75 focus-visible:ring-primary/35 max-sm:w-full"
-            disabled={ctaDisabled}
-            onClick={() => {
-              if (ctaMode === "screenshot") {
-                void handleScreenshotCopy?.();
-                return;
-              }
-              void handleCopySelection();
-            }}
-            title={ctaTitle}
+          <TutorialTip
+            tipId={TUTORIAL_TIP_IDS.COPY_REFERENCE}
+            active={ctaMode !== "screenshot" && copyReferenceTipActive}
+            side="top"
+            align="center"
           >
-            <span className="block min-w-0 max-w-full truncate">{ctaLabel}</span>
-          </Button>
+            <Button
+              type="button"
+              variant="default"
+              size="sm"
+              className="pointer-events-auto h-9 w-fit min-w-0 max-w-[min(28rem,100%)] shrink overflow-hidden border border-primary/20 bg-primary/85 px-4 text-[12px] font-semibold text-primary-foreground shadow-lg shadow-black/20 hover:bg-primary/75 focus-visible:ring-primary/35 max-sm:w-full"
+              disabled={ctaDisabled}
+              onClick={() => {
+                if (ctaMode === "screenshot") {
+                  void handleScreenshotCopy?.();
+                  return;
+                }
+                void handleCopySelection();
+              }}
+              title={ctaTitle}
+            >
+              <span className="block min-w-0 max-w-full truncate">{ctaLabel}</span>
+            </Button>
+          </TutorialTip>
         </div>
       ) : null}
     </div>

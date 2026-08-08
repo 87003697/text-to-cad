@@ -4,6 +4,7 @@ import { classifyMeasurePick, isFinitePoint } from "cadjs/lib/viewer/measurement
 import { pointVisibleByClipPlane } from "cadjs/lib/viewer/clipPlane.js";
 import { screenLimitedPickThreshold } from "cadjs/lib/viewer/pickingThresholds.js";
 import { createViewerContextMenuGestureState } from "./viewerContextMenuGesture.js";
+import { partIdFromIntersection, shouldRaycastRecordForPick } from "./partPicking.js";
 
 const FACE_BOUNDS_EPSILON = 0.25;
 const PLANE_SURFACE_EPSILON = 0.25;
@@ -469,7 +470,10 @@ export function useViewerPicking({
   onContextReference,
   onMeasurePick,
   onMeasureHoverPoint,
-  viewerReadyTick
+  viewerReadyTick,
+  // While a STEP animation is playing, reference hover/selection is suspended
+  // so playback frames skip raycasts and pick-state rebuilds entirely.
+  suppressTopologyPicking = false
 }) {
   // Keep pointer listeners stable across parent rerenders; hover itself updates parent state.
   const pickModeRef = useRef(pickMode);
@@ -673,18 +677,7 @@ export function useViewerPicking({
       const focusIds = focusedPartIdSet(focusedPartIdRef.current);
       const hiddenIds = focusedPartIdSet(hiddenPartIdsRef.current);
       return runtime.displayRecords
-        .filter((record) => {
-          if (!record?.mesh?.visible) {
-            return false;
-          }
-          if (hiddenIds.has(String(record?.partId || "").trim())) {
-            return false;
-          }
-          if (focusIds.size && !focusIds.has(String(record?.partId || "").trim())) {
-            return false;
-          }
-          return true;
-        })
+        .filter((record) => shouldRaycastRecordForPick(record, { focusIds, hiddenIds }))
         .map((record) => record.mesh);
     }
 
@@ -700,7 +693,7 @@ export function useViewerPicking({
       const focusIds = focusedPartIdSet(focusedPartIdRef.current);
       const hiddenIds = focusedPartIdSet(hiddenPartIdsRef.current);
       for (const intersection of intersections) {
-        const partId = intersection?.object?.userData?.partId;
+        const partId = partIdFromIntersection(intersection);
         if (!partId) {
           continue;
         }
@@ -1028,6 +1021,9 @@ export function useViewerPicking({
     }
 
     function pickReferenceAtPosition(clientX, clientY, { hover = false, preferTopology = false } = {}) {
+      if (suppressTopologyPicking) {
+        return null;
+      }
       setPointerFromPosition(clientX, clientY);
       const modelIntersections = intersectVisibleModelMeshes();
       const pickMode = pickModeRef.current;
@@ -1150,7 +1146,7 @@ export function useViewerPicking({
 
     function flushHoverPick() {
       hoverState.rafId = 0;
-      if (runtime.interactionState.active) {
+      if (runtime.interactionState.active || suppressTopologyPicking) {
         clearHoverState();
         return;
       }
@@ -1423,6 +1419,9 @@ export function useViewerPicking({
       pointerDown.active = false;
       pointerDown.pointerType = "";
       pointerDown.referenceId = "";
+      if (suppressTopologyPicking) {
+        return;
+      }
       if (pickModeRef.current === VIEWER_PICK_MODE.MEASURE) {
         onMeasurePickRef.current?.(measureReferenceFromPosition(pointerDown.x, pointerDown.y, {
           bypassTopology: !!event.shiftKey
@@ -1438,6 +1437,9 @@ export function useViewerPicking({
         return;
       }
       clearPendingActivation();
+      if (suppressTopologyPicking) {
+        return;
+      }
       const referenceId = pickActivationReference(event.clientX, event.clientY, event.pointerType || "");
       onDoubleActivateReferenceRef.current?.(referenceId || "", { multiSelect: !!event.shiftKey });
     }
@@ -1496,6 +1498,7 @@ export function useViewerPicking({
     previewMode,
     runtimeRef,
     sceneMountRef,
+    suppressTopologyPicking,
     viewerReadyTick
   ]);
 }

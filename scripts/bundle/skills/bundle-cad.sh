@@ -3,6 +3,8 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
+# shellcheck source=../lib/vendor.sh
+source "$SCRIPT_DIR/../lib/vendor.sh"
 
 MODE="write"
 CLEAN=0
@@ -17,8 +19,8 @@ BUILD_DEPS_DIR="${CAD_SNAPSHOT_BUILD_DEPS_DIR:-$REPO_ROOT/tmp/cad-snapshot-build
 CHECK_DIR="${CAD_SNAPSHOT_CHECK_DIR:-$REPO_ROOT/tmp/cad-snapshot-runtime-check}"
 RUNTIME_DIR="$REPO_ROOT/skills/cad/scripts/snapshot/runtime"
 ENTRYPOINT="$REPO_ROOT/packages/cadjs/src/common/headlessRenderEntry.js"
-CADPY_PACKAGE_DIR="$REPO_ROOT/packages/cadpy"
-CADPY_RUNTIME_DIR="$REPO_ROOT/skills/cad/scripts/packages/cadpy"
+CADPY_PACKAGE_DIR="$REPO_ROOT/packages/cadgen"
+CADPY_RUNTIME_DIR="$REPO_ROOT/skills/cad/scripts/packages/cadgen"
 
 usage() {
   cat <<'EOF'
@@ -78,9 +80,9 @@ if [ ! -f "$ENTRYPOINT" ]; then
   exit 1
 fi
 
-if [ ! -f "$CADPY_PACKAGE_DIR/pyproject.toml" ] || [ ! -d "$CADPY_PACKAGE_DIR/src/cadpy" ]; then
-  echo "Missing cadpy package source: $CADPY_PACKAGE_DIR" >&2
-  echo "The CAD skill Python runtime is bundled from packages/cadpy." >&2
+if [ ! -f "$CADPY_PACKAGE_DIR/pyproject.toml" ] || [ ! -d "$CADPY_PACKAGE_DIR/src/cadgen" ]; then
+  echo "Missing cadgen package source: $CADPY_PACKAGE_DIR" >&2
+  echo "The CAD skill Python runtime is bundled from packages/cadgen." >&2
   exit 1
 fi
 
@@ -165,7 +167,13 @@ build_runtime() {
   rm -rf "$target_dir"
   mkdir -p "$target_dir"
   write_render_html "$target_dir"
-  "$BUILD_DEPS_DIR/node_modules/.bin/esbuild" "$ENTRYPOINT" \
+  # NODE_PATH resolves cadjs's bare `implicitjs` imports (e.g.
+  # cadjs/common/camera.js re-exports implicitjs/common/camera.js) directly
+  # from packages/ source, honoring implicitjs's exports map, so the bundle
+  # stays hermetic on fresh checkouts with no packages/cadjs/node_modules.
+  # A directory --alias cannot do this: it bypasses the exports map.
+  NODE_PATH="$REPO_ROOT/packages" \
+    "$BUILD_DEPS_DIR/node_modules/.bin/esbuild" "$ENTRYPOINT" \
     --bundle \
     --format=esm \
     --platform=browser \
@@ -178,24 +186,8 @@ build_runtime() {
     --outfile="$target_dir/snapshot-render.js"
 }
 
-sync_cadpy_runtime() {
-  local target_dir="$1"
-  rm -rf "$target_dir"
-  mkdir -p "$target_dir"
-  rsync -a --delete \
-    --delete-excluded \
-    --exclude __pycache__ \
-    --exclude .pytest_cache \
-    --exclude '*.pyc' \
-    --exclude '*.md' \
-    --exclude build \
-    --exclude dist \
-    --exclude '*.egg-info' \
-    --exclude tests \
-    --exclude __tests__ \
-    --exclude 'test_*.py' \
-    --exclude '*_test.py' \
-    "$CADPY_PACKAGE_DIR/" "$target_dir/"
+sync_cadgen_runtime() {
+  vendor_python_package "$CADPY_PACKAGE_DIR" "$1"
 }
 
 check_runtime() {
@@ -219,44 +211,21 @@ check_runtime() {
   echo "CAD snapshot runtime is up to date."
 }
 
-check_cadpy_runtime() {
-  local check_dir="$CHECK_DIR/packages/cadpy"
-  if [ ! -d "$CADPY_RUNTIME_DIR" ]; then
-    echo "Missing generated cadpy runtime: skills/cad/scripts/packages/cadpy" >&2
-    echo "" >&2
-    echo "Run scripts/bundle/bundle-skill.sh cad and commit the updated runtime files." >&2
-    exit 1
-  fi
-  if ! diff -qr \
-    -x __pycache__ \
-    -x .pytest_cache \
-    -x '*.pyc' \
-    -x '*.egg-info' \
-    -x '*.md' \
-    -x tests \
-    -x __tests__ \
-    -x 'test_*.py' \
-    -x '*_test.py' \
-    "$check_dir" "$CADPY_RUNTIME_DIR" >/tmp/cad-skill-cadpy-runtime-diff.txt; then
-    cat /tmp/cad-skill-cadpy-runtime-diff.txt >&2
-    echo "" >&2
-    echo "CAD skill cadpy runtime is stale." >&2
-    echo "Run scripts/bundle/bundle-skill.sh cad and commit skills/cad/scripts/packages/cadpy." >&2
-    exit 1
-  fi
-  echo "CAD skill cadpy runtime is up to date."
+check_cadgen_runtime() {
+  check_python_runtime "$CADPY_PACKAGE_DIR" "$CADPY_RUNTIME_DIR" \
+    "$CHECK_DIR/packages/cadgen" "skills/cad/scripts/packages/cadgen" \
+    "Run scripts/bundle/bundle-skill.sh cad and commit skills/cad/scripts/packages/cadgen."
 }
 
 ensure_deps
 
 if [ "$MODE" = "check" ]; then
   build_runtime "$CHECK_DIR"
-  sync_cadpy_runtime "$CHECK_DIR/packages/cadpy"
   check_runtime
-  check_cadpy_runtime
+  check_cadgen_runtime
 else
   build_runtime "$RUNTIME_DIR"
-  sync_cadpy_runtime "$CADPY_RUNTIME_DIR"
+  sync_cadgen_runtime "$CADPY_RUNTIME_DIR"
   echo "Bundled skills/cad/scripts/snapshot/runtime"
-  echo "Bundled skills/cad/scripts/packages/cadpy"
+  echo "Bundled skills/cad/scripts/packages/cadgen"
 fi

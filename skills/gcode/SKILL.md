@@ -58,10 +58,6 @@ python scripts/gcode_tool.py validate \
   --json
 ```
 
-## CAD Viewer Handoff
-
-After completing G-code work that creates or modifies a plain `.gcode`, you must ALWAYS hand the explicit file path to `$cad-viewer` when that skill is installed. `$cad-viewer` must start CAD Viewer if it is not already running and return link(s) to the relevant created or updated file(s); the preview is diagnostic only and does not replace this skill's static validation. If `$cad-viewer` is unavailable or startup fails, report that instead of silently omitting the handoff.
-
 ## Profile Contract
 
 Every slice requires a wrapper profile JSON with an absolute native slicer profile path:

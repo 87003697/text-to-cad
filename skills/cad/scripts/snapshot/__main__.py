@@ -9,7 +9,7 @@ import os
 import re
 import sys
 import time
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from hashlib import sha256
@@ -17,19 +17,32 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import quote, unquote, urlparse
 
+# Warm-daemon shim: must run BEFORE the cadgen imports below (which load
+# cadgen/OCP at module import time). The daemon sets CADGEN_DAEMON_CHILD so it
+# never recurses; the stdlib-only client keeps the cold path overhead-free.
+if os.environ.get("CADGEN_WARM") == "1" and not os.environ.get("CADGEN_DAEMON_CHILD"):
+    _daemon_scripts_dir = str(Path(__file__).resolve().parents[1])
+    if _daemon_scripts_dir not in sys.path:
+        sys.path.insert(0, _daemon_scripts_dir)
+    from cadgen_daemon.client import run_via_daemon
+
+    _warm_exit = run_via_daemon("snapshot", sys.argv[1:], os.getcwd())
+    if _warm_exit is not None:
+        raise SystemExit(_warm_exit)
+
 
 SCRIPTS_DIR = Path(__file__).resolve().parents[1]
 PACKAGES_DIR = SCRIPTS_DIR / "packages"
-CADPY_SRC_DIR = PACKAGES_DIR / "cadpy" / "src"
+CADPY_SRC_DIR = PACKAGES_DIR / "cadgen" / "src"
 for runtime_path in (SCRIPTS_DIR, PACKAGES_DIR, CADPY_SRC_DIR):
     runtime_path_text = str(runtime_path)
     if runtime_path_text not in sys.path:
         sys.path.insert(0, runtime_path_text)
 
-import cadpy.cad_ref_syntax as cad_ref_syntax
-import cadpy.lookup as lookup
-from cadpy.render import existing_part_glb_path, part_glb_path
-from cadpy.step_targets import ResolvedStepTarget, StepTopologyArtifact, StepTopologyArtifactError
+import cadgen.cad_ref_syntax as cad_ref_syntax
+import cadgen.lookup as lookup
+from cadgen.catalog import render_package_dir
+from cadgen.step_targets import ResolvedStepTarget, StepTopologyArtifact, StepTopologyArtifactError
 
 
 SNAPSHOT_ORIGIN = "http://snapshot.local"
@@ -41,7 +54,60 @@ DEFAULT_RENDER_THEME_ID = "workbench"
 DEFAULT_TIMEOUT_SECONDS = 300
 RENDER_BROWSER_STARTUP_TIMEOUT_MS = 15_000
 SUPPORTED_RENDER_MODES = {"view", "orbit", "section", "list"}
+# Direct mesh inputs (no STEP topology). These render through the shared mesh path but
+# cannot use STEP-only modes/params: section (CAD sectioning), selector focus/hide,
+# stepParameters, exploded assembly views, or CAD-edge display modes.
+MESH_INPUT_KINDS = {"glb", "stl", "3mf"}
+MESH_SUPPORTED_RENDER_MODES = {"view", "orbit", "list"}
+TOPOLOGY_DISPLAY_MODES = {"hidden_edges", "hidden_lines_removed"}
+# Direct implicit CAD inputs (`.implicit.js` raymarch modules). These render through
+# the shared runtime's implicit backend, not the mesh/STEP path: no STEP topology,
+# no selectors, no stepParameters, no exploded/section, no CAD-edge display modes.
+IMPLICIT_INPUT_SUFFIX = ".implicit.js"
+IMPLICIT_SUPPORTED_RENDER_MODES = {"view", "orbit"}
 WORKBENCH_RENDER_THEME_IDS = {DEFAULT_RENDER_THEME_ID}
+
+# Closed sets of accepted job/output keys. Anything outside them is rejected
+# up front: an unrecognized key was historically dropped without a word, so a
+# near-miss like top-level "hide" (instead of selection.hide) or a "selection"
+# nested in an output produced a full-cost render that silently ignored the
+# request. Reserved keys with dedicated error messages (theme, params,
+# paramsPath, workspaceRoot, rootDir) are checked separately before this set.
+SUPPORTED_JOB_KEYS = frozenset(
+    {
+        "input",
+        "mode",
+        "outputs",
+        "appearance",
+        "display",
+        "render",
+        "camera",
+        "selection",
+        "stepParameters",
+        "stepParametersPath",
+        "sizeProfile",
+        "width",
+        "height",
+        "scale",
+        "sceneScale",
+        "debug",
+        "timeoutSeconds",
+    }
+)
+SELECTION_SHAPED_JOB_KEYS = ("hide", "focus", "refs")
+SUPPORTED_OUTPUT_KEYS = frozenset(
+    {
+        "path",
+        "width",
+        "height",
+        "sizeProfile",
+        "camera",
+        "label",
+        "viewLabel",
+        "dataUrl",
+        "text",
+    }
+)
 
 SIMPLE_RENDER_WIDTH = 1200
 SIMPLE_RENDER_HEIGHT = 900
@@ -99,12 +165,46 @@ DISPLAY_MODE_ALIASES = {
     "wire_frame": "wireframe",
     "wire": "wireframe",
 }
+# Must stay in step with what cadjs `normalizeThemeSettings()` actually reads.
+# `colorMode` and `projection` were missing even though the renderer consumes
+# both (themeSettings.js reads `source.colorMode` / `source.projection`) and the
+# CLI help states "Projection is a theme trait taken from the appearance" — so
+# an authored theme carrying either was rejected as malformed.
+#
+# `edges` is deliberately NOT here: edge settings belong in display JSON, which
+# is a real separation (edges are a per-render display choice, not part of the
+# saved theme) and is covered by test_edge_settings_belong_to_display_json.
 APPEARANCE_OPTION_KEYS = {
     "materials",
     "background",
     "floor",
     "environment",
     "lighting",
+    "colorMode",
+    "projection",
+    # normalizeThemeSettings() emits modeColors unconditionally, so it is part
+    # of the settings shape by construction. Rejecting it meant the repo's own
+    # cloneThemePresetSettings() output could not be passed back to
+    # --appearance without hand-stripping a key first.
+    "modeColors",
+}
+
+# Keys that are valid settings, just in the OTHER payload. Naming the right
+# home turns "unsupported keys: edges" — which reads like the file is broken —
+# into an instruction.
+SETTINGS_KEY_HOMES = {
+    "edges": "display",
+    "mode": "display",
+    "exploded": "display",
+    "clip": "display",
+    "materials": "appearance",
+    "background": "appearance",
+    "floor": "appearance",
+    "environment": "appearance",
+    "lighting": "appearance",
+    "colorMode": "appearance",
+    "projection": "appearance",
+    "modeColors": "appearance",
 }
 
 
@@ -128,9 +228,12 @@ class SnapshotOptions:
     size_profile: str = ""
     params: object = None
     params_specified: bool = False
+    params_path: str = ""
+    params_path_specified: bool = False
     focus: list[str] | None = None
     hide: list[str] | None = None
     view_labels: bool = False
+    debug: bool = False
     json: bool = False
     help: bool = False
 
@@ -151,7 +254,7 @@ def help_text() -> str:
   python scripts/snapshot --job -
   python scripts/snapshot --input models/part.step --output /tmp/part.png --appearance workbench
 
-Shortcut flags are for common STEP/STP snapshots. --job accepts one render job, an array of render jobs, or { "jobs": [...] }. Every job input must be a relative or absolute .step/.stp path, or a same-stem Python generator; direct GLB/STL/3MF/DXF/G-code/robot-description inputs are unsupported. The default appearance is the workbench saved theme. --appearance accepts a saved theme name, an inline JSON appearance settings object, or a JSON appearance settings file path. --display accepts solid, rendered, transparent, hidden_edges, hidden_lines_removed, unshaded, wireframe, an inline JSON display settings object, or a JSON display settings file path. Projection, exploded view, and edge styling belong in display JSON, for example {"projection":"orthographic","mode":"rendered","exploded":{"enabled":true,"axis":"z","spacing":1.6},"edges":{"color":"#132232"}}. Use {"axis":"radial"} for outward radial disassembly. --camera accepts a preset, azimuth:elevation pair, or JSON object with preset, position, target, up, and zoom fields. --focus and --hide accept one or more selector refs such as #o1.2 for parts or subassemblies; pass the flag repeatedly or list refs after the flag. Option JSON is direct settings JSON, not a wrapped job fragment. Full JSON jobs use top-level appearance and display. Use --view-labels to burn the camera/view label into shortcut outputs. Use --params with STEP parameter sidecar JSON values, and --size-profile for default dimensions such as simple, diagnostic, labeled, assembly, presentation, orbit, or contact-sheet. Output file names are saved with a shared UTC seconds timestamp before the extension.
+Shortcut flags are for common STEP/STP snapshots. --job accepts one render job, an array of render jobs, or { "jobs": [...] }. Every job input must be a relative or absolute .step/.stp path, a same-stem Python generator, a direct .glb/.stl/.3mf mesh, or a .implicit.js model; direct DXF/G-code/robot-description inputs are unsupported. Mesh inputs render shaded solid through the shared mesh path and support camera, display projection (orthographic/perspective), appearance, size-profile, orbit, and list output, but reject STEP-only options: --params/stepParameters, --focus/--hide selector refs, exploded and non-solid display modes, and section mode. Implicit (.implicit.js) inputs render through the shared runtime's raymarch backend and support camera, appearance, and orbit output; they reject the same STEP-only options plus list/section modes (no part topology). The default appearance is the workbench saved theme. --appearance accepts a saved theme name, an inline JSON appearance settings object, or a JSON appearance settings file path. --display accepts solid, rendered, transparent, hidden_edges, hidden_lines_removed, unshaded, wireframe, an inline JSON display settings object, or a JSON display settings file path. Projection is a theme trait taken from the appearance (the default workbench/light theme is orthographic; the presentation stage themes are perspective); pass {"projection":"perspective"} in display JSON only to override it for a one-off. Exploded view and edge styling belong in display JSON. The exploded view is a single slider: {"mode":"rendered","exploded":{"enabled":true,"amount":0.7},"edges":{"color":"#132232"}}. "amount" is the 0..1 spread; the layout itself is automatic (hierarchical radial explode about the assembly center) with nothing else to configure. Use --mode to pick the render mode: view (default, one still image per output), orbit (360-degree turntable GIF), section (cutaway sweep), or list (returns part occurrence refs as JSON; no output files). A .gif output is only valid in orbit mode or with animated --params values; static jobs must save stills. --camera accepts a preset, azimuth:elevation pair, or JSON object with preset, position, target, up, and zoom fields. --focus and --hide accept one or more selector refs such as #o1.2 for parts or subassemblies; pass the flag repeatedly or list refs after the flag. Option JSON is direct settings JSON, not a wrapped job fragment. Full JSON jobs use top-level appearance and display. Use --view-labels to burn the camera/view label into shortcut outputs. Use --params with STEP parameter sidecar JSON values. A generated model declares its sidecar from gen_step(); an imported .step/.stp declares nothing, so pass --params-path (job field "stepParametersPath") naming the JS sidecar beside it -- --params alone is rejected there, and --params-path is rejected on a generated model, whose sidecar belongs in its .step.py. Use --size-profile for default dimensions such as simple, diagnostic, labeled, assembly, presentation, orbit, or contact-sheet. Output file names are saved with a shared UTC seconds timestamp before the extension. Use --debug (or a job-level "debug": true field) to add a "debug" section to --json output reporting how each STEP/STP artifact was resolved: source ("generated" from a .step.py generator vs. "imported" direct STEP), whether it was an assembly, whether it was served from cache or rebuilt, whether assembly selectors were re-extracted, and how long artifact resolution took. Everyday snapshot usage does not need --debug; it exists for diagnosing slow or unexpected renders.
 """
 
 
@@ -208,6 +311,8 @@ def parse_snapshot_args(argv: Sequence[str]) -> SnapshotOptions:
             raise SnapshotError("--socket has been removed; snapshot no longer uses a daemon")
         elif arg == "--view-labels":
             options.view_labels = True
+        elif arg == "--debug":
+            options.debug = True
         elif arg == "--job":
             options.job = parse_required_value(argv, index, arg)
             index += 1
@@ -249,6 +354,13 @@ def parse_snapshot_args(argv: Sequence[str]) -> SnapshotOptions:
         elif arg.startswith("--params="):
             options.params = arg[len("--params=") :]
             options.params_specified = True
+        elif arg == "--params-path":
+            options.params_path = parse_required_value(argv, index, arg)
+            options.params_path_specified = True
+            index += 1
+        elif arg.startswith("--params-path="):
+            options.params_path = arg[len("--params-path=") :]
+            options.params_path_specified = True
         elif arg == "--focus":
             values, consumed = parse_required_values(argv, index, arg)
             options.focus = [*(options.focus or []), *values]
@@ -354,15 +466,65 @@ def validate_direct_settings_payload(
 ) -> dict[str, object]:
     if not is_plain_object(parsed):
         raise SnapshotError(f"{option_name} JSON must be a {setting_label} object: {source_label}")
-    unknown_keys = [key for key in parsed if key not in allowed_keys]
+    # Underscore-prefixed keys are comments. JSON has none of its own, and an
+    # authored theme is exactly the kind of file that needs to explain why its
+    # numbers are what they are; rejecting `_comment` as an unsupported setting
+    # pushes that rationale out of the file.
+    payload = {key: value for key, value in parsed.items() if not str(key).startswith("_")}
+    unknown_keys = [key for key in payload if key not in allowed_keys]
     if unknown_keys:
+        misplaced = [
+            f"{key} belongs in {SETTINGS_KEY_HOMES[key]} JSON"
+            for key in unknown_keys
+            if key in SETTINGS_KEY_HOMES
+        ]
+        detail = f"; {', '.join(misplaced)}" if misplaced else ""
         raise SnapshotError(
             f"{option_name} JSON must be the {setting_label} object directly; "
-            f"unsupported keys: {', '.join(unknown_keys)}"
+            f"unsupported keys: {', '.join(unknown_keys)}{detail}"
         )
-    if not parsed:
+    if not payload:
         raise SnapshotError(f"{option_name} JSON must include at least one {setting_label} field: {source_label}")
-    return dict(parsed)
+    return payload
+
+
+def validate_display_settings_values(payload: Mapping[str, object], *, source_label: str) -> None:
+    """Reject typo'd closed-set display VALUES up front. The renderer silently falls back
+    to defaults on unknown projection/mode values (e.g. ``projection:"ortho"`` renders
+    perspective), so a late no-op produces a wrong image with no error — catch it here.
+
+    Only closed-set, typo-prone fields are validated; alias-rich/coerced fields are left
+    to the renderer's lenient normalization to avoid false rejections of inputs the
+    browser accepts."""
+    # An empty/whitespace value means "unset": the renderer treats it as absent and falls
+    # back to the default (it does not error), so validating it here would be a false
+    # rejection of input the browser accepts. Only validate genuinely-present values.
+    projection = str(payload.get("projection") or "").strip().lower()
+    if projection and projection not in {"orthographic", "perspective"}:
+        raise SnapshotError(
+            f"--display projection must be orthographic or perspective; "
+            f"got {payload.get('projection')!r} ({source_label})"
+        )
+    mode = str(payload.get("mode") or "").strip()
+    if mode:
+        normalized_mode = re.sub(r"[\s-]+", "_", mode.lower())
+        if normalized_mode not in DISPLAY_MODE_ALIASES:
+            supported = ", ".join(sorted(set(DISPLAY_MODE_ALIASES.values())))
+            raise SnapshotError(
+                f"--display mode must be one of: {supported}; got {payload.get('mode')!r} ({source_label})"
+            )
+    exploded = payload.get("exploded")
+    if is_plain_object(exploded):
+        # The exploded view is enabled + amount only; the layout is automatic.
+        # Any other key is a typo or a retired step-document/auto-hint field the
+        # renderer now ignores entirely — reject loudly instead of rendering a
+        # default the caller did not ask for.
+        unknown = sorted(set(exploded) - {"enabled", "amount"})
+        if unknown:
+            raise SnapshotError(
+                f"--display exploded supports only enabled and amount (the exploded layout "
+                f"is automatic); unsupported keys: {', '.join(unknown)} ({source_label})"
+            )
 
 
 def load_display_option(raw_display: object, *, cwd: Path) -> dict[str, object]:
@@ -370,13 +532,15 @@ def load_display_option(raw_display: object, *, cwd: Path) -> dict[str, object]:
     if not display:
         raise SnapshotError("--display requires a JSON object, JSON file path, or display mode")
     if display.startswith("{"):
-        return validate_direct_settings_payload(
+        payload = validate_direct_settings_payload(
             load_json_text(display, "--display"),
             option_name="--display",
             source_label="--display",
             allowed_keys=DISPLAY_OPTION_KEYS,
             setting_label="display settings",
         )
+        validate_display_settings_values(payload, source_label="--display")
+        return payload
 
     display_path = Path(display) if Path(display).is_absolute() else cwd / display
     looks_like_file = display.lower().endswith(".json") or "/" in display or "\\" in display
@@ -388,13 +552,15 @@ def load_display_option(raw_display: object, *, cwd: Path) -> dict[str, object]:
         return {"mode": DISPLAY_MODE_ALIASES[normalized_mode]}
     if not display_path.exists():
         raise SnapshotError(f"Display JSON file does not exist: {display}")
-    return validate_direct_settings_payload(
+    payload = validate_direct_settings_payload(
         load_json_text(display_path.read_text(encoding="utf-8"), str(display_path)),
         option_name="--display",
         source_label=str(display_path),
         allowed_keys=DISPLAY_OPTION_KEYS,
         setting_label="display settings",
     )
+    validate_display_settings_values(payload, source_label=str(display_path))
+    return payload
 
 
 def load_appearance_option(raw_appearance: object, *, cwd: Path) -> object:
@@ -429,8 +595,10 @@ def apply_option_overrides_to_job(job: object, options: SnapshotOptions, *, cwd:
     if not any(
         [
             options.view_labels,
+            options.debug,
             options.size_profile,
             options.params_specified,
+            options.params_path_specified,
             options.display_specified,
             options.appearance_specified,
             options.camera_specified,
@@ -440,10 +608,14 @@ def apply_option_overrides_to_job(job: object, options: SnapshotOptions, *, cwd:
         return job
     next_job = copy.deepcopy(job)
     merge_focus_hide_options(next_job, options)
+    if options.debug:
+        next_job["debug"] = True
     if options.appearance_specified:
         next_job["appearance"] = load_appearance_option(options.appearance, cwd=cwd)
     if options.params_specified:
         next_job["stepParameters"] = parse_params_option(options.params)
+    if options.params_path_specified:
+        next_job["stepParametersPath"] = options.params_path
     if options.display_specified:
         next_job["display"] = load_display_option(options.display, cwd=cwd)
     if options.camera_specified:
@@ -516,6 +688,10 @@ def load_job_from_options(
         job["display"] = load_display_option(options.display, cwd=resolved_cwd)
     if options.params_specified:
         job["stepParameters"] = parse_params_option(options.params)
+    if options.params_path_specified:
+        job["stepParametersPath"] = options.params_path
+    if options.debug:
+        job["debug"] = True
     merge_focus_hide_options(job, options)
     return job
 
@@ -531,6 +707,10 @@ def path_is_inside_or_equal(child: Path, parent: Path) -> bool:
 
 
 def input_kind(file_path: Path) -> str:
+    # `.implicit.js` is a compound suffix (Path.suffix sees only `.js`), so match
+    # the full name before the single-suffix checks below.
+    if file_path.name.lower().endswith(IMPLICIT_INPUT_SUFFIX):
+        return "implicit"
     suffix = file_path.suffix.lower()
     if suffix == ".step":
         return "step"
@@ -538,15 +718,26 @@ def input_kind(file_path: Path) -> str:
         return "stp"
     if suffix == ".py":
         return "python"
+    if suffix == ".glb":
+        return "glb"
+    if suffix == ".stl":
+        return "stl"
+    if suffix == ".3mf":
+        return "3mf"
     return ""
 
 
 def logical_step_path_for_python_source(source_path: Path) -> Path:
+    # `<name>.step.py` -> `<name>.step` (strip only `.py`; the stem already ends in `.step`).
+    name = source_path.name
+    if name.endswith(".step.py"):
+        return source_path.with_name(name[: -len(".py")])
     return source_path.with_suffix(".step")
 
 
 def same_stem_python_generator_path(step_path: Path) -> Path | None:
-    candidate = step_path.with_suffix(".py")
+    # The generator for `<name>.step` is `<name>.step.py` (append `.py` to the full step filename).
+    candidate = step_path.with_name(step_path.name + ".py")
     try:
         return candidate if re.search(r"\bgen_step\s*\(", candidate.read_text(encoding="utf-8")) else None
     except OSError:
@@ -596,8 +787,47 @@ def asset_url_for_path(file_path: Path, root_path: Path) -> str:
     return f"{base_url}?v={cache_key}"
 
 
-def step_parameter_path_for_step_source(source_path: Path) -> Path:
-    return source_path.with_name(f".{source_path.stem}.step.js")
+def resolve_explicit_step_parameter_path(
+    raw_value: object,
+    *,
+    root_path: Path,
+    resolved_cwd: Path,
+) -> Path:
+    """The sidecar named by --params-path / a job's ``stepParametersPath``.
+
+    Only imported STEP/STP inputs may name one: a generated model declares its
+    sidecar from ``gen_step()``, and letting the command line point somewhere
+    else would render parameters the model itself does not claim."""
+    text = str(raw_value or "").strip()
+    if not text:
+        raise SnapshotError("stepParametersPath must name a JS parameter sidecar")
+    candidate = Path(text)
+    resolved = (candidate if candidate.is_absolute() else resolved_cwd / candidate).resolve()
+    if resolved.suffix.lower() not in (".js", ".mjs"):
+        raise SnapshotError(f"stepParametersPath must be a .js or .mjs parameter sidecar: {text}")
+    if not resolved.is_file():
+        raise SnapshotError(f"stepParametersPath does not exist: {text}")
+    # The renderer fetches assets relative to the STEP's own folder, so a sidecar
+    # outside it has no URL to serve -- reject it here rather than fail mid-render.
+    if not path_is_inside_or_equal(resolved, root_path):
+        raise SnapshotError(
+            f"stepParametersPath must sit inside the STEP model folder ({root_path}): {text}"
+        )
+    return resolved
+
+
+def step_parameter_path_for_step_source(package_dir: Path, input_path: Path) -> Path | None:
+    """The hand-authored JS sidecar a model declares via its package descriptor's
+    ``paramsPath`` (model-folder-relative, set from gen_step()'s ``params``). Returns None
+    when the model declares no sidecar — there is no filename convention."""
+    try:
+        descriptor = json.loads((package_dir / "assembly.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    params_path = str(descriptor.get("paramsPath") or "").strip()
+    if not params_path:
+        return None
+    return (input_path.parent / params_path).resolve()
 
 
 def has_step_parameter_render_values(value: object) -> bool:
@@ -700,7 +930,7 @@ def cad_ref_for_step_path(repo_root: Path, step_path: Path) -> str:
 def load_ensure_step_topology_artifact():
     global ensure_step_topology_artifact
     if ensure_step_topology_artifact is None:
-        from cadpy.step_artifacts import ensure_step_topology_artifact as imported_ensure
+        from cadgen.step_artifacts import ensure_step_topology_artifact as imported_ensure
 
         ensure_step_topology_artifact = imported_ensure
     return ensure_step_topology_artifact
@@ -745,16 +975,24 @@ def ensure_render_job_step_artifact(
     input_path: Path,
     step_path: Path,
     require_selector: bool = False,
+    debug_info: dict[str, object] | None = None,
 ) -> StepTopologyArtifact:
     target = ResolvedStepTarget(
         cad_path=cad_ref_for_step_path(reference_root, step_path),
         kind="part",
         source_path=input_path,
         step_path=step_path,
+        # A job input naming the .py generator must keep using the generator
+        # entry even when a same-stem exported .step exists beside it.
+        explicit_python=input_path.suffix.lower() == ".py",
     )
     try:
         ensure_artifact = load_ensure_step_topology_artifact()
-        return ensure_artifact(target, owner="cad-snapshot", require_selector=require_selector)
+        return ensure_artifact(
+            target,
+            require_selector=require_selector,
+            debug=debug_info,
+        )
     except StepTopologyArtifactError as exc:
         raise SnapshotError(str(exc)) from exc
 
@@ -842,79 +1080,50 @@ def normalize_render_job_selection(
     return normalized
 
 
-def resolve_render_job(
-    raw_job: object,
+def normalize_common_job(
+    job: dict[str, object],
     *,
-    cwd: Path | None = None,
-    timestamp: str | None = None,
+    mode: str,
+    resolved_cwd: Path,
+    timestamp: str | None,
 ) -> dict[str, object]:
-    if not is_plain_object(raw_job):
-        raise SnapshotError("render job must be an object")
-    job = copy.deepcopy(raw_job)
-    if "theme" in job:
-        raise SnapshotError("render jobs use appearance; theme is reserved for saved appearance settings")
-    if "params" in job:
-        raise SnapshotError("render jobs use stepParameters; params is reserved for shortcut --params parsing")
-    forbidden_root_fields = [field for field in ("workspaceRoot", "rootDir") if field in job]
-    if forbidden_root_fields:
-        raise SnapshotError(
-            "snapshot jobs no longer accept workspaceRoot or rootDir; pass a relative or absolute input path instead"
-        )
-
-    resolved_cwd = (cwd or Path.cwd()).resolve()
-    raw_input = str(job.get("input") or "").strip()
-    if not raw_input:
-        raise SnapshotError("render job is missing input")
-
-    input_path = resolve_input_path(raw_input, cwd=resolved_cwd)
-    root_path = input_path.parent.resolve()
-    reference_root = reference_root_for_input(input_path, resolved_cwd)
-    kind = input_kind(input_path)
-    source_path = input_path
-    if kind == "python":
-        input_path = logical_step_path_for_python_source(input_path)
-        root_path = input_path.parent.resolve()
-        kind = "step"
-    if kind not in {"step", "stp"}:
-        raise SnapshotError("Snapshot supports only STEP/STP inputs or same-stem Python generators")
-
-    artifact = ensure_render_job_step_artifact(
-        job,
-        reference_root=reference_root,
-        input_path=source_path,
-        step_path=input_path,
-        require_selector=selection_requires_selector_topology(job),
-    )
-    expected_cad_path = cad_ref_for_step_path(reference_root, input_path)
-    normalized_selection = normalize_render_job_selection(
-        job,
-        expected_cad_path=expected_cad_path,
-        selector_index=artifact_selector_index(artifact),
-    )
-
-    glb_path = existing_part_glb_path(input_path) or part_glb_path(input_path)
-    if not glb_path.exists():
-        raise SnapshotError(f"STEP/STP render input is missing its CAD Viewer GLB artifact: {glb_path}")
-
-    has_param_render = has_step_parameter_render_values(job.get("stepParameters"))
-    animated_params = step_parameter_render_values_are_animated(job.get("stepParameters"))
-    step_parameter_path = step_parameter_path_for_step_source(input_path)
-
-    mode = str(job.get("mode") or "view").strip().lower()
-    if mode not in SUPPORTED_RENDER_MODES:
-        raise SnapshotError(f"Unsupported render mode: {mode or '(missing)'}")
-    if has_param_render and mode != "view":
-        raise SnapshotError("stepParameters support only view mode; set display.mode for display-style changes")
-    if has_param_render and not step_parameter_path.exists():
-        raise SnapshotError(
-            f"STEP/STP render stepParameters require a CAD Viewer STEP parameter sidecar: {step_parameter_path}"
-        )
-
+    """Kind-independent job normalization shared by every input kind: the outputs
+    guard, render clip-stripping + scene-scale coercion, timestamped output
+    resolution with per-output camera defaults, and the common return shape.
+    Kind resolvers run their capability checks first, then call this, so a
+    STEP/mesh/implicit job all normalize identically; the caller attaches its
+    kind-specific ``resolved`` payload to the returned job."""
     outputs = job.get("outputs") if isinstance(job.get("outputs"), list) else []
     if mode != "list" and not outputs:
         raise SnapshotError("render job must include outputs for non-list modes")
-    if animated_params and len(outputs) != 1:
-        raise SnapshotError("animated stepParameters require exactly one output")
+
+    # A .gif output only animates in orbit mode or under animated stepParameters;
+    # anything else would silently save a single-frame GIF that looks like a
+    # broken animation, so reject it with the fix spelled out.
+    if mode != "orbit" and not step_parameter_render_values_are_animated(job.get("stepParameters")):
+        for output in outputs:
+            output_path_text = str((output.get("path") if is_plain_object(output) else output) or "")
+            if output_path_text.strip().lower().endswith(".gif"):
+                raise SnapshotError(
+                    f"a .gif output in {mode} mode with static parameters renders a single frame; "
+                    "use --mode orbit (job \"mode\": \"orbit\") for a turntable GIF or animate "
+                    "--params values for a parameter-sweep GIF"
+                )
+
+    # A job's own `appearance` string gets the SAME treatment as the
+    # `--appearance` flag: a saved-theme name stays a name, but a path or an
+    # inline JSON object is loaded into real settings here.
+    #
+    # Without this a job saying `"appearance": "path/to/theme.json"` fell all
+    # the way through to `appearance_theme_id_for_job()`, which lowercases the
+    # string and treats it as a saved-theme id. The lookup missed, the renderer
+    # silently used the default workbench theme, and — because the resolved id
+    # was then `workbench` — the size-profile logic further down also quietly
+    # switched to diagnostic dimensions. Exit 0, no warning, a plausible but
+    # wrong image. The CLI help has always promised that a file path works.
+    raw_appearance = job.get("appearance")
+    if isinstance(raw_appearance, str) and raw_appearance.strip():
+        job["appearance"] = load_appearance_option(raw_appearance, cwd=resolved_cwd)
 
     normalized_render = dict(job.get("render") if is_plain_object(job.get("render")) else {})
     normalized_render.pop("clip", None)
@@ -932,10 +1141,38 @@ def resolve_render_job(
 
     normalized_outputs: list[dict[str, object]] = []
     resolved_timestamp = timestamp or snapshot_timestamp()
-    for output in outputs:
+    for index, output in enumerate(outputs):
+        # A bare string is the obvious shorthand and the .gif guard above
+        # already reads one as a path; without this it was coerced to {} and the
+        # caller's path silently discarded, producing a full-cost render that
+        # wrote nothing and said nothing.
+        if isinstance(output, str):
+            output = {"path": output}
         output_object = dict(output if is_plain_object(output) else {})
+        # Outputs share the job's closed-schema treatment: a "selection" (or
+        # any other job-level key) nested in an output used to be dropped
+        # silently, so the render completed with nothing hidden/focused.
+        unknown_output_keys = sorted(set(output_object) - SUPPORTED_OUTPUT_KEYS)
+        if unknown_output_keys:
+            if "selection" in unknown_output_keys:
+                raise SnapshotError(
+                    f"render output {index} carries a selection; selection applies at job "
+                    "level only — to hide or focus parts for one view, split it into its "
+                    'own job in a "jobs" array'
+                )
+            raise SnapshotError(
+                f"render output {index} has unknown key(s): {', '.join(unknown_output_keys)}; "
+                f"supported output keys: {', '.join(sorted(SUPPORTED_OUTPUT_KEYS))}"
+            )
         width, height = resolve_output_size({**job, "mode": mode}, output_object)
         output_path = str(output_object.get("path") or "")
+        if mode != "list" and not output_path:
+            # list mode legitimately carries no output files; every other mode
+            # rendering to nowhere is a silent no-op, not a valid request.
+            raise SnapshotError(
+                f"render output {index} has no path; each output must be a path "
+                'string or an object with a "path"'
+            )
         timestamped_output_path = timestamp_output_path(output_path, resolved_timestamp)
         normalized_outputs.append(
             {
@@ -947,31 +1184,418 @@ def resolve_render_job(
             }
         )
 
+    # Preflight the animation frame budget.
+    #
+    # Every frame of an animated render is held before the GIF is encoded, so
+    # the cost is frames x pixels, not frames alone. Past roughly 120 Mpx the
+    # headless browser is killed mid-run and the whole render is lost:
+    #
+    #     playwright._impl._errors.TargetClosedError:
+    #     Target page, context or browser has been closed
+    #
+    # Measured on this machine: 144 frames @1200x750 (130 Mpx) fine,
+    # 203 @860x645 (113 Mpx) fine, 252 @1000x740 (186 Mpx) killed. The failure
+    # arrives minutes in, after all the expensive work, so say so up front.
+    # This is advisory: the ceiling is machine-dependent and a bigger box may
+    # well cope, so it must not block a render that would have succeeded.
+    if step_parameter_render_values_are_animated(job.get("stepParameters")):
+        raw_params = job.get("stepParameters") if is_plain_object(job.get("stepParameters")) else {}
+        fps = float(raw_params.get("fps") or 18)
+        seconds = float(raw_params.get("durationSeconds") or raw_params.get("duration") or 4)
+        frames = max(2, min(round(fps * seconds), 720))
+        pixels = sum(
+            int(out.get("width") or 0) * int(out.get("height") or 0)
+            for out in normalized_outputs
+        )
+        megapixels = frames * pixels / 1_000_000
+        if megapixels > 120:
+            sys.stderr.write(
+                f"warning: animated render is about {megapixels:.0f} Mpx "
+                f"({frames} frames x {pixels / 1_000_000:.2f} Mpx). Past roughly "
+                "120 Mpx the headless browser is often killed mid-run "
+                "(TargetClosedError) and the render is lost after doing all the "
+                "work. Lower fps, shorten durationSeconds, or reduce the output "
+                "size — or render in segments and stitch.\n"
+            )
+
     job.pop("clip", None)
     job.pop("clipSettings", None)
-    resolved: dict[str, object] = {
-        "rootPath": str(root_path),
-        "inputPath": str(input_path),
-        "inputUrl": asset_url_for_path(input_path, root_path),
-        "kind": kind,
-        "glbPath": str(glb_path),
-        "glbUrl": asset_url_for_path(glb_path, root_path),
-    }
-    if step_parameter_path.exists():
-        resolved["stepParameterPath"] = str(step_parameter_path)
-        resolved["stepParameterUrl"] = asset_url_for_path(step_parameter_path, root_path)
-
-    if normalized_selection is not None:
-        job["selection"] = normalized_selection
-
     return {
         **job,
         "mode": mode,
         "display": job.get("display") if is_plain_object(job.get("display")) else {"mode": "solid"},
         "render": normalized_render,
         "outputs": normalized_outputs,
-        "resolved": resolved,
     }
+
+
+def resolve_mesh_render_job(
+    job: dict[str, object],
+    *,
+    kind: str,
+    input_path: Path,
+    root_path: Path,
+    resolved_cwd: Path,
+    timestamp: str | None,
+    **_kind_context: object,
+) -> dict[str, object]:
+    """Resolve a direct mesh input (GLB/STL/3MF) that carries no STEP topology.
+
+    Meshes render through the shared mesh path, so this skips the STEP artifact/package
+    pipeline entirely and hands the renderer a plain asset URL. STEP-only options are
+    rejected up front with clear errors rather than silently ignored downstream."""
+    label = kind.upper()
+
+    # Selector focus/hide/refs need the selector index built from STEP topology.
+    if selection_filter_values(job):
+        raise SnapshotError(
+            f"selection focus/hide/refs require STEP topology; {label} mesh inputs have no "
+            "part/subassembly selectors"
+        )
+    # stepParameters drive a STEP parameter sidecar module.
+    if has_step_parameter_render_values(job.get("stepParameters")):
+        raise SnapshotError(
+            f"stepParameters require a STEP model; {label} mesh inputs are not parametric"
+        )
+    if job.get("stepParametersPath") is not None:
+        raise SnapshotError(
+            f"stepParametersPath requires a STEP model; {label} mesh inputs are not parametric"
+        )
+
+    mode = str(job.get("mode") or "view").strip().lower()
+    if mode not in SUPPORTED_RENDER_MODES:
+        raise SnapshotError(f"Unsupported render mode: {mode or '(missing)'}")
+    if mode not in MESH_SUPPORTED_RENDER_MODES:
+        supported = ", ".join(sorted(MESH_SUPPORTED_RENDER_MODES))
+        raise SnapshotError(
+            f"{mode} mode requires STEP topology; {label} mesh inputs support: {supported}"
+        )
+
+    # Meshes render shaded solid (no CAD topology for edges/materials). Projection is
+    # honored by the renderer, but any non-solid display mode would be silently dropped,
+    # so reject it up front with a clear error instead of returning a misleading image.
+    display = job.get("display") if is_plain_object(job.get("display")) else {}
+    raw_display_mode = re.sub(r"[\s-]+", "_", str(display.get("mode") or "").strip().lower())
+    canonical_display_mode = DISPLAY_MODE_ALIASES.get(raw_display_mode, raw_display_mode)
+    if canonical_display_mode in TOPOLOGY_DISPLAY_MODES:
+        raise SnapshotError(
+            f"{canonical_display_mode} display requires STEP CAD edges; {label} mesh inputs "
+            "render shaded without CAD linework"
+        )
+    if canonical_display_mode and canonical_display_mode != "solid":
+        raise SnapshotError(
+            f"{canonical_display_mode} display mode is not supported for {label} mesh inputs; "
+            "meshes render shaded solid (STEP models support the full display-mode set)"
+        )
+    exploded = display.get("exploded") if is_plain_object(display.get("exploded")) else None
+    if exploded is not None and exploded.get("enabled"):
+        raise SnapshotError(
+            f"exploded view requires STEP assembly occurrence structure; {label} mesh inputs "
+            "cannot be exploded"
+        )
+
+    asset_url = asset_url_for_path(input_path, root_path)
+    resolved: dict[str, object] = {
+        "rootPath": str(root_path),
+        "inputPath": str(input_path),
+        "inputUrl": asset_url,
+        "kind": kind,
+        "url": asset_url,
+    }
+    if bool(job.get("debug")):
+        resolved["debug"] = {"meshSource": {"kind": kind}}
+
+    normalized = normalize_common_job(job, mode=mode, resolved_cwd=resolved_cwd, timestamp=timestamp)
+    normalized["resolved"] = resolved
+    return normalized
+
+
+def resolve_implicit_render_job(
+    job: dict[str, object],
+    *,
+    kind: str,
+    input_path: Path,
+    root_path: Path,
+    resolved_cwd: Path,
+    timestamp: str | None,
+    **_kind_context: object,
+) -> dict[str, object]:
+    """Resolve a direct implicit CAD input (`.implicit.js`).
+
+    Implicit models render through the shared runtime's raymarch backend, so this
+    skips the STEP artifact/package pipeline and hands the renderer the module URL.
+    STEP-only options are rejected up front with clear errors."""
+    # Selector focus/hide/refs need the selector index built from STEP topology.
+    if selection_filter_values(job):
+        raise SnapshotError(
+            "selection focus/hide/refs require STEP topology; implicit models have no "
+            "part/subassembly selectors"
+        )
+    # stepParameters drive a STEP parameter sidecar; implicit models carry their own descriptors.
+    if has_step_parameter_render_values(job.get("stepParameters")):
+        raise SnapshotError(
+            "stepParameters require a STEP model; implicit models are parameterized by their "
+            "own descriptor, not STEP sidecars"
+        )
+    if job.get("stepParametersPath") is not None:
+        raise SnapshotError(
+            "stepParametersPath requires a STEP model; implicit models are parameterized by their "
+            "own descriptor, not STEP sidecars"
+        )
+
+    mode = str(job.get("mode") or "view").strip().lower()
+    if mode not in SUPPORTED_RENDER_MODES:
+        raise SnapshotError(f"Unsupported render mode: {mode or '(missing)'}")
+    if mode not in IMPLICIT_SUPPORTED_RENDER_MODES:
+        supported = ", ".join(sorted(IMPLICIT_SUPPORTED_RENDER_MODES))
+        raise SnapshotError(
+            f"{mode} mode is not supported for implicit inputs; implicit models support: {supported}"
+        )
+
+    # Implicit rendering is raymarched shading — there is no CAD topology for
+    # wireframe/edges/exploded, so reject anything but the default solid shading.
+    display = job.get("display") if is_plain_object(job.get("display")) else {}
+    raw_display_mode = re.sub(r"[\s-]+", "_", str(display.get("mode") or "").strip().lower())
+    canonical_display_mode = DISPLAY_MODE_ALIASES.get(raw_display_mode, raw_display_mode)
+    if canonical_display_mode and canonical_display_mode != "solid":
+        raise SnapshotError(
+            f"{canonical_display_mode} display mode is not supported for implicit inputs; "
+            "implicit models render raymarched shading"
+        )
+    exploded = display.get("exploded") if is_plain_object(display.get("exploded")) else None
+    if exploded is not None and exploded.get("enabled"):
+        raise SnapshotError(
+            "exploded view requires STEP assembly occurrence structure; implicit models "
+            "cannot be exploded"
+        )
+
+    asset_url = asset_url_for_path(input_path, root_path)
+    resolved: dict[str, object] = {
+        "rootPath": str(root_path),
+        "inputPath": str(input_path),
+        "inputUrl": asset_url,
+        "kind": "implicit",
+        "url": asset_url,
+    }
+    if bool(job.get("debug")):
+        resolved["debug"] = {"implicitSource": {"kind": "implicit"}}
+
+    normalized = normalize_common_job(job, mode=mode, resolved_cwd=resolved_cwd, timestamp=timestamp)
+    normalized["resolved"] = resolved
+    return normalized
+
+
+def resolve_render_job(
+    raw_job: object,
+    *,
+    cwd: Path | None = None,
+    timestamp: str | None = None,
+) -> dict[str, object]:
+    if not is_plain_object(raw_job):
+        raise SnapshotError("render job must be an object")
+    job = copy.deepcopy(raw_job)
+    if "theme" in job:
+        raise SnapshotError("render jobs use appearance; theme is reserved for saved appearance settings")
+    if "params" in job:
+        raise SnapshotError("render jobs use stepParameters; params is reserved for shortcut --params parsing")
+    if "paramsPath" in job:
+        raise SnapshotError(
+            "render jobs use stepParametersPath; paramsPath is the descriptor field a generator writes"
+        )
+    forbidden_root_fields = [field for field in ("workspaceRoot", "rootDir") if field in job]
+    if forbidden_root_fields:
+        raise SnapshotError(
+            "snapshot jobs no longer accept workspaceRoot or rootDir; pass a relative or absolute input path instead"
+        )
+
+    # Every other key must come from the closed job schema. Selection-shaped
+    # near-misses get the exact fix spelled out; anything else is named with
+    # the supported set so a typo fails here instead of rendering as if the
+    # key were absent.
+    unknown_keys = sorted(set(job) - SUPPORTED_JOB_KEYS)
+    if unknown_keys:
+        selection_shaped = [key for key in SELECTION_SHAPED_JOB_KEYS if key in unknown_keys]
+        if selection_shaped:
+            fields = ", ".join(f'"{key}": [...]' for key in selection_shaped)
+            raise SnapshotError(
+                f"render jobs take part selectors inside the selection object, not at top level; "
+                f"move {fields} into \"selection\": {{...}}"
+            )
+        raise SnapshotError(
+            f"unknown render job key(s): {', '.join(unknown_keys)}; "
+            f"supported keys: {', '.join(sorted(SUPPORTED_JOB_KEYS))}"
+        )
+
+    resolved_cwd = (cwd or Path.cwd()).resolve()
+    raw_input = str(job.get("input") or "").strip()
+    if not raw_input:
+        raise SnapshotError("render job is missing input")
+
+    # A job's own `display` string gets the same treatment as the --display
+    # flag: a mode name, an inline JSON object, or a path to a display JSON.
+    # Without this it fell through to normalize_common_job, which accepts only
+    # a plain object and silently substituted {"mode": "solid"} -- so
+    # "wireframe", a file path, and an outright typo all rendered the default.
+    raw_display = job.get("display")
+    if isinstance(raw_display, str) and raw_display.strip():
+        job["display"] = load_display_option(raw_display, cwd=resolved_cwd)
+
+    # Closed-set display values are validated for the --display flag path in
+    # load_display_option; a display object embedded in a full JSON job must get
+    # the same guard, or a typo'd projection/mode silently renders the default.
+    if is_plain_object(job.get("display")):
+        validate_display_settings_values(job["display"], source_label="job display")
+
+    input_path = resolve_input_path(raw_input, cwd=resolved_cwd)
+    root_path = input_path.parent.resolve()
+    reference_root = reference_root_for_input(input_path, resolved_cwd)
+    kind = input_kind(input_path)
+    source_path = input_path
+    if kind == "python":
+        input_path = logical_step_path_for_python_source(input_path)
+        root_path = input_path.parent.resolve()
+        kind = "step"
+    resolver = KIND_RESOLVERS.get(kind)
+    if resolver is None:
+        raise SnapshotError(
+            "Snapshot supports STEP/STP inputs, same-stem Python generators, "
+            "direct GLB/STL/3MF meshes, or .implicit.js models"
+        )
+    return resolver(
+        job,
+        kind=kind,
+        input_path=input_path,
+        root_path=root_path,
+        source_path=source_path,
+        reference_root=reference_root,
+        resolved_cwd=resolved_cwd,
+        timestamp=timestamp,
+    )
+
+
+def resolve_step_render_job(
+    job: dict[str, object],
+    *,
+    kind: str,
+    input_path: Path,
+    root_path: Path,
+    source_path: Path,
+    reference_root: Path,
+    resolved_cwd: Path,
+    timestamp: str | None,
+    **_kind_context: object,
+) -> dict[str, object]:
+    has_param_render = has_step_parameter_render_values(job.get("stepParameters"))
+    animated_params = step_parameter_render_values_are_animated(job.get("stepParameters"))
+    # `source_path` is the catalog entry: a `.step.py` generator, or the STEP itself
+    # when the model was imported. Which one it is decides where a sidecar may come
+    # from. Settled before any artifact work so a misuse fails immediately rather
+    # than after a build.
+    entry_is_generated = source_path.suffix.lower() == ".py"
+    explicit_parameter_path: Path | None = None
+    if job.get("stepParametersPath") is not None:
+        if entry_is_generated:
+            raise SnapshotError(
+                "stepParametersPath is for imported STEP/STP files; a generated model declares "
+                f"its sidecar from gen_step() (params: ...) in {source_path.name}"
+            )
+        if not has_param_render:
+            raise SnapshotError("stepParametersPath needs stepParameters values (--params-path needs --params)")
+        explicit_parameter_path = resolve_explicit_step_parameter_path(
+            job["stepParametersPath"],
+            root_path=root_path,
+            resolved_cwd=resolved_cwd,
+        )
+
+    debug_enabled = bool(job.get("debug"))
+    step_artifact_debug: dict[str, object] | None = {} if debug_enabled else None
+    artifact = ensure_render_job_step_artifact(
+        job,
+        reference_root=reference_root,
+        input_path=source_path,
+        step_path=input_path,
+        require_selector=selection_requires_selector_topology(job),
+        debug_info=step_artifact_debug,
+    )
+    expected_cad_path = cad_ref_for_step_path(reference_root, input_path)
+    normalized_selection = normalize_render_job_selection(
+        job,
+        expected_cad_path=expected_cad_path,
+        selector_index=artifact_selector_index(artifact),
+    )
+
+    # The render cache is keyed by the ENTRY filename (`source_path`: the `.step.py` generator for
+    # a generated model, or the `.step`/`.stp` itself), not the logical step path.
+    package_dir = render_package_dir(source_path)
+    if not package_dir.is_dir():
+        raise SnapshotError(f"STEP/STP render input is missing its render package: {package_dir}")
+
+    step_parameter_path = explicit_parameter_path or step_parameter_path_for_step_source(
+        package_dir, input_path
+    )
+
+    mode = str(job.get("mode") or "view").strip().lower()
+    if mode not in SUPPORTED_RENDER_MODES:
+        raise SnapshotError(f"Unsupported render mode: {mode or '(missing)'}")
+    if has_param_render and mode != "view":
+        raise SnapshotError("stepParameters support only view mode; set display.mode for display-style changes")
+    if has_param_render and (step_parameter_path is None or not step_parameter_path.exists()):
+        if entry_is_generated:
+            raise SnapshotError(
+                "STEP/STP render stepParameters require a parameter sidecar the model declares "
+                f"(gen_step params / descriptor paramsPath): {input_path}"
+            )
+        raise SnapshotError(
+            "imported STEP/STP render stepParameters require --params-path naming the JS parameter "
+            f"sidecar; an imported file declares none: {input_path}"
+        )
+
+    outputs = job.get("outputs") if isinstance(job.get("outputs"), list) else []
+    if animated_params and len(outputs) != 1:
+        raise SnapshotError("animated stepParameters require exactly one output")
+
+    resolved: dict[str, object] = {
+        "rootPath": str(root_path),
+        "inputPath": str(input_path),
+        "inputUrl": asset_url_for_path(input_path, root_path),
+        "kind": kind,
+        "packagePath": str(package_dir),
+    }
+    # Component-GLB package (the canonical render artifact for every STEP model): inline
+    # the descriptor and pre-resolve one asset URL per unique component GLB so the renderer
+    # fetches and composes them in world space.
+    descriptor = json.loads((package_dir / "assembly.json").read_text())
+    component_urls = {
+        cid: asset_url_for_path(package_dir / str(entry.get("glb", "")), root_path)
+        for cid, entry in (descriptor.get("components") or {}).items()
+    }
+    resolved["package"] = {"descriptor": descriptor, "componentUrls": component_urls}
+    if step_parameter_path is not None and step_parameter_path.exists():
+        resolved["stepParameterPath"] = str(step_parameter_path)
+        resolved["stepParameterUrl"] = asset_url_for_path(step_parameter_path, root_path)
+    if debug_enabled:
+        resolved["debug"] = {"stepArtifact": step_artifact_debug}
+
+    if normalized_selection is not None:
+        job["selection"] = normalized_selection
+
+    normalized = normalize_common_job(job, mode=mode, resolved_cwd=resolved_cwd, timestamp=timestamp)
+    normalized["resolved"] = resolved
+    return normalized
+
+
+# Kind dispatch for render-job resolution. Every resolver takes the same
+# signature (job plus the resolved input-kind context) and returns the common
+# normalized job shape with a kind-specific ``resolved`` payload — adding a new
+# input kind is one table entry, not another if-chain arm plus a copied tail.
+KIND_RESOLVERS: dict[str, Callable[..., dict[str, object]]] = {
+    "step": resolve_step_render_job,
+    "stp": resolve_step_render_job,
+    "glb": resolve_mesh_render_job,
+    "stl": resolve_mesh_render_job,
+    "3mf": resolve_mesh_render_job,
+    "implicit": resolve_implicit_render_job,
+}
 
 
 def resolve_render_job_packet(raw_payload: object, *, cwd: Path | None = None) -> dict[str, object]:
@@ -994,6 +1618,10 @@ def content_type_for_path(path: Path) -> str:
         return "application/wasm"
     if path.suffix.lower() == ".glb":
         return "model/gltf-binary"
+    if path.suffix.lower() == ".stl":
+        return "model/stl"
+    if path.suffix.lower() == ".3mf":
+        return "model/3mf"
     guessed, _ = mimetypes.guess_type(path)
     return guessed or "application/octet-stream"
 
@@ -1149,6 +1777,13 @@ async def render_resolved_job_packet(packet: Mapping[str, object], *, renderer: 
     try:
         for job in packet["jobs"]:
             result = await snapshot_renderer.render(job)
+            # The browser result knows nothing about artifact resolution; --debug
+            # diagnostics are attached at resolve time, so merge them into the
+            # emitted result here or they never reach --json output.
+            resolved = job.get("resolved") if is_plain_object(job.get("resolved")) else {}
+            debug_info = resolved.get("debug")
+            if is_plain_object(debug_info) and is_plain_object(result):
+                result = {**result, "debug": debug_info}
             results.append(result if packet["single"] else {"input": job.get("input"), **result})
     finally:
         await snapshot_renderer.close()

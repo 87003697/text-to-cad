@@ -10,12 +10,14 @@ import {
   displayModeShowsEdges,
   displayModeShowsThroughEdges,
   CAMERA_PROJECTION,
+  normalizeDisplayEdgeSettings,
   normalizeDisplaySettings,
   normalizeCameraProjection,
   resolveDisplayEdgeSettings
 } from "./displaySettings.js";
 import {
-  buildModel
+  buildModel,
+  normalizedSelectorValues
 } from "./cadScene.js";
 import {
   applyDisplayRecordTransform
@@ -34,8 +36,8 @@ import {
 import {
   applyExplodedViewProgress,
   clearExplodedViewRecords,
-  createExplodedViewRecordStates,
-  explodedViewBoundsFromStates
+  computeExplodedViewLayout,
+  explodedViewBounds
 } from "../lib/viewer/explodedView.js";
 import {
   addFloor as addSharedFloor,
@@ -634,15 +636,37 @@ function renderSectionPng(segments, width, height, themeSettings, {
 }
 
 export function listRenderableParts(meshData) {
-  return toArray(meshData.parts).map((part, index) => ({
-    id: String(part?.id || part?.occurrenceId || `part:${index}`),
-    occurrenceId: String(part?.occurrenceId || part?.id || ""),
-    name: String(part?.name || part?.label || part?.id || `Part ${index + 1}`),
-    label: String(part?.label || part?.name || part?.id || `Part ${index + 1}`),
-    triangleCount: Math.max(0, Math.floor(toFiniteNumber(part?.triangleCount, 0))),
-    vertexCount: Math.max(0, Math.floor(toFiniteNumber(part?.vertexCount, 0))),
-    bounds: part?.bounds || null
-  }));
+  return toArray(meshData.parts).map((part, index) => {
+    const occurrenceId = String(part?.occurrenceId || part?.id || "");
+    return {
+      id: String(part?.id || part?.occurrenceId || `part:${index}`),
+      occurrenceId,
+      // Selector ref an agent can paste straight into snapshot --focus/--hide or inspect.
+      ref: occurrenceId ? `#${occurrenceId}` : "",
+      name: String(part?.name || part?.label || part?.id || `Part ${index + 1}`),
+      label: String(part?.label || part?.name || part?.id || `Part ${index + 1}`),
+      triangleCount: Math.max(0, Math.floor(toFiniteNumber(part?.triangleCount, 0))),
+      vertexCount: Math.max(0, Math.floor(toFiniteNumber(part?.vertexCount, 0))),
+      bounds: part?.bounds || null
+    };
+  });
+}
+
+// The camera used for an output is decided PER OUTPUT: the job/theme projection,
+// plus a forced perspective whenever that output's camera spec carries an explicit
+// position/target/up. Any projection echo must come from this same decision, or an
+// explicit-position camera on an orthographic theme gets reported as orthographic.
+export function resolveOutputCameraProjection(context, cameraSpec) {
+  const displayProjection = normalizeCameraProjection(
+    context?.projection,
+    CAMERA_PROJECTION.ORTHOGRAPHIC
+  );
+  const usePerspectiveCamera = displayProjection === CAMERA_PROJECTION.PERSPECTIVE ||
+    cameraSpecUsesPerspectiveProjection(cameraSpec, {
+      presets: RENDER_VIEW_PRESETS,
+      strict: true
+    });
+  return usePerspectiveCamera ? CAMERA_PROJECTION.PERSPECTIVE : CAMERA_PROJECTION.ORTHOGRAPHIC;
 }
 
 export function renderJobContext(meshData, job = {}) {
@@ -651,9 +675,16 @@ export function renderJobContext(meshData, job = {}) {
   const sceneScale = resolveRenderSceneScale(job, meshData);
   const sourceKind = String(job.resolved?.kind || job.kind || meshData?.sourceFormat || "").trim().toLowerCase();
   const stepDisplayEnabled = sourceKind === "step" || sourceKind === "stp";
-  const displaySettings = stepDisplayEnabled
-    ? normalizeDisplaySettings(job.display)
-    : normalizeDisplaySettings({ projection: CAMERA_PROJECTION.PERSPECTIVE });
+  const displaySettings = normalizeDisplaySettings(stepDisplayEnabled ? job.display : undefined);
+  // Projection is a theme trait (Light/Dark are orthographic, stage themes
+  // perspective); an explicit job display projection still overrides it, and
+  // non-STEP sources keep their historical perspective framing.
+  const projection = normalizeCameraProjection(
+    job.display?.projection,
+    stepDisplayEnabled
+      ? normalizeCameraProjection(theme?.projection, CAMERA_PROJECTION.ORTHOGRAPHIC)
+      : CAMERA_PROJECTION.PERSPECTIVE
+  );
   const displayMode = displaySettings.mode;
   const bounds = meshData.bounds || boundsFromVertices(meshData.vertices || []);
   const outputs = toArray(job.outputs).length ? toArray(job.outputs) : [{ path: job.output || "", camera: job.camera || "iso" }];
@@ -669,7 +700,13 @@ export function renderJobContext(meshData, job = {}) {
     lighting: theme.lighting || null,
     renderScale: job.render?.renderScale ?? job.renderScale ?? DEFAULT_RENDER_SCALE
   });
-  const baseEdgeSettings = resolveDisplayEdgeSettings(displaySettings);
+  const displayEdgeSettings = resolveDisplayEdgeSettings(displaySettings);
+  // A theme that opts into its own outline (e.g. Terminal's neon-green
+  // linework) drives the edge appearance; other themes leave it to display.
+  const themeEdges = theme?.edges;
+  const baseEdgeSettings = themeEdges && themeEdges.enabled === true
+    ? normalizeDisplayEdgeSettings({ ...displayEdgeSettings, ...themeEdges })
+    : displayEdgeSettings;
   const edgeSettings = {
     ...baseEdgeSettings,
     enabled: displayModeForcesEdges(displayMode) ? true : baseEdgeSettings.enabled,
@@ -712,6 +749,7 @@ export function renderJobContext(meshData, job = {}) {
     sourceKind,
     stepDisplayEnabled,
     displaySettings,
+    projection,
     displayMode,
     wireframeMode,
     edgesVisible,
@@ -728,11 +766,22 @@ export function renderJobContext(meshData, job = {}) {
 
 export function modelOptionsForRenderJob(context, job = {}) {
   const selection = job.selection || {};
-  const filterSelection = context.mode === "view" || context.mode === "orbit"
+  const keepsAllParts = context.mode === "view" || context.mode === "orbit";
+  const filterSelection = keepsAllParts
     ? {
         hide: selection.hide
       }
     : selection;
+  // View/orbit focus keeps every part in the scene so the frame retains
+  // assembly context (hide is the removal filter); the focused refs instead
+  // ghost the rest of the model through the same focusedPartId path the
+  // interactive viewer uses. Section mode still isolates via filterSelection.
+  const focusedPartId = keepsAllParts
+    ? [
+        ...normalizedSelectorValues(selection.focus),
+        ...normalizedSelectorValues(selection.refs)
+      ]
+    : [];
   return {
     theme: context.sceneTheme,
     displayMode: context.displayMode,
@@ -743,6 +792,7 @@ export function modelOptionsForRenderJob(context, job = {}) {
     renderPartsIndividually: true,
     selection: {
       ...(job.selection || {}),
+      ...(focusedPartId.length ? { focusedPartId } : {}),
       showEdges: context.edgesVisible
     },
     edgeRendering: {
@@ -834,24 +884,18 @@ function applyViewportExplodedView(viewport, bounds) {
     resetExplodedView();
     return bounds;
   }
-  const states = createExplodedViewRecordStates(
-    THREEImpl,
-    model.displayRecords,
-    bounds,
-    settings
-  );
-  if (!states.length) {
+  const layout = computeExplodedViewLayout(model.displayRecords, bounds);
+  if (!layout.entries.length) {
     resetExplodedView();
     return bounds;
   }
-  applyExplodedViewProgress(THREEImpl, states, 1);
+  const amount = clamp(Number(settings.amount ?? 1), 0, 1);
+  applyExplodedViewProgress(THREEImpl, layout, amount);
   for (const record of model.displayRecords) {
     applyDisplayRecordTransform(THREEImpl, record);
   }
   model.root?.updateMatrixWorld?.(true);
-  return settings.autoFrame === false
-    ? bounds
-    : explodedViewBoundsFromStates(THREEImpl, states, bounds, 1);
+  return explodedViewBounds(layout, bounds, amount);
 }
 
 function syncViewportTopologyDisplayEdges(viewport) {
@@ -993,15 +1037,8 @@ export async function captureModel(viewport, captureOptions = {}) {
     syncViewportTopologyDisplayEdges(viewport);
     syncScreenSpaceLineMaterialResolution(viewport.model.runtime.screenSpaceLineMaterials, width, height);
     const cameraSpec = output.camera || job.camera || "iso";
-    const displayProjection = normalizeCameraProjection(
-      context.displaySettings?.projection,
-      CAMERA_PROJECTION.ORTHOGRAPHIC
-    );
-    const usePerspectiveCamera = displayProjection === CAMERA_PROJECTION.PERSPECTIVE ||
-      cameraSpecUsesPerspectiveProjection(cameraSpec, {
-      presets: RENDER_VIEW_PRESETS,
-      strict: true
-    });
+    const outputProjection = resolveOutputCameraProjection(context, cameraSpec);
+    const usePerspectiveCamera = outputProjection === CAMERA_PROJECTION.PERSPECTIVE;
     const cameraView = usePerspectiveCamera ? null : resolveView(cameraSpec);
     const resolvedCamera = usePerspectiveCamera
       ? fitPerspectiveCamera(viewport.perspectiveCamera, cameraSpec, lockedBounds || outputBounds, width, height, sceneScale)
@@ -1016,6 +1053,9 @@ export async function captureModel(viewport, captureOptions = {}) {
     renderedOutputs.push({
       path: String(output.path || ""),
       camera: resolvedCamera.name,
+      // Authoritative per-output echo: an explicit-position camera forces the
+      // perspective camera even on an orthographic theme.
+      projection: outputProjection,
       width,
       height,
       mimeType: "image/png",
@@ -1026,6 +1066,12 @@ export async function captureModel(viewport, captureOptions = {}) {
   return {
     ok: true,
     mode,
+    // Echo the display state actually applied. The job-level projection is the
+    // resolved theme/display projection; each rendered output additionally carries
+    // its own authoritative projection (explicit-position cameras force perspective
+    // per output, so outputs within one job can differ).
+    displayMode: context.displayMode,
+    projection: context.projection,
     outputs: renderedOutputs,
     timings: {
       sceneBuildMs,

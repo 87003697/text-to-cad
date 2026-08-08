@@ -53,6 +53,7 @@ import {
   syncUrdfPosePickerHoverObjects
 } from "cadjs/lib/viewer/urdfPosePicker";
 import {
+  clampSceneModelRadius,
   defaultSceneGridRadius,
   getLightingScopeRadius,
   getProportionalLightingScopeRadius,
@@ -74,7 +75,10 @@ import {
   resolveWireframeEdgeColor,
   updateSpotLightTarget
 } from "cadjs/lib/viewer/stageTheme";
-import { updateGridHelper as updateStageGridHelper } from "cadjs/lib/viewer/stageGrid";
+import {
+  updateGridHelper as updateStageGridHelper,
+  updateOriginAxis as updateStageOriginAxis
+} from "cadjs/lib/viewer/stageGrid";
 import {
   autoZoomFrameForBounds,
   DEFAULT_AUTO_ZOOM_PADDING,
@@ -96,9 +100,8 @@ import {
 import {
   applyExplodedViewProgress,
   clearExplodedViewRecords,
-  createExplodedViewRecordStates,
-  easeExplodedViewProgress,
-  explodedViewStateTranslationAtProgress
+  computeExplodedViewLayout,
+  easeExplodedViewProgress
 } from "cadjs/lib/viewer/explodedView";
 import {
   applyDisplayRecordTransform,
@@ -115,6 +118,7 @@ import {
   syncDisplayMeshFaceIds,
   syncSelectorPickGroups
 } from "cadjs/lib/viewer/selectorPickGroups";
+import { scheduleRuntimeRaycastBvh } from "cadjs/lib/viewer/raycastBvh";
 import {
   buildSurfaceLinePositions,
   projectPointToSurfaceUv,
@@ -146,9 +150,35 @@ import { useViewerMeasureOverlay } from "./viewer/hooks/useViewerMeasureOverlay"
 import { useViewerPicking } from "./viewer/hooks/useViewerPicking";
 import { useViewerRuntime } from "./viewer/hooks/useViewerRuntime";
 import { PREVIEW_AUTO_ROTATE_SPEED } from "./viewer/orbitControls";
+import {
+  applyOrbitDelta,
+  cameraMatchesViewPreset,
+  clamp,
+  clearKeyboardOrbitState,
+  DEFAULT_VIEW_DIRECTION,
+  DEFAULT_VIEW_PLANE_ORIENTATION,
+  easeInOutCubic,
+  getActiveViewPlaneFaceId,
+  getKeyboardOrbitAxes,
+  getKeyboardOrbitCommand,
+  isTrackpadLikeWheelEvent,
+  KEYBOARD_ORBIT_NUDGE_RAD,
+  normalizeViewportFrameInsets,
+  readViewPlaneOrientation,
+  stepKeyboardOrbit,
+  VIEW_PLANE_DEFAULT_PRESET,
+  VIEW_PLANE_FACE_BY_ID,
+  VIEW_PLANE_FACES,
+  VIEW_PLANE_POLE_DIRECTION_DOT_THRESHOLD,
+  VIEW_PLANE_POLE_DIRECTION_NUDGE,
+  VIEW_PLANE_TRANSITION_MS,
+  viewPlaneOrientationEqual,
+  WORLD_UP
+} from "./viewer/viewportCameraKit";
 import { normalizeViewerRenderState } from "./viewer/renderState";
 import {
-  buildModel
+  buildModel,
+  effectiveBoundsFromRecords
 } from "cadjs/common/cadScene";
 import {
   resolveTopologyDisplayEdgeRuntimes,
@@ -181,35 +211,13 @@ const EXPLODED_VIEW_ANIMATION_DURATION_MS = 1000;
 const ACCELERATED_WHEEL_ZOOM_SPEED = 10;
 const TRACKPAD_PINCH_ZOOM_SPEED = 14;
 const COARSE_POINTER_PINCH_ZOOM_SPEED = 2.4;
-const KEYBOARD_ORBIT_NUDGE_RAD = Math.PI / 32;
-const KEYBOARD_ORBIT_SPEED_RAD_PER_SEC = Math.PI * 0.42;
-const KEYBOARD_POLAR_EPSILON = 0.02;
-const VIEW_PLANE_ACTIVE_DOT_THRESHOLD = 0.994;
-const VIEW_PLANE_TRANSITION_MS = 280;
-const VIEW_PLANE_POLE_DIRECTION_DOT_THRESHOLD = 0.9999;
-const VIEW_PLANE_POLE_DIRECTION_NUDGE = 0.02;
-const DEFAULT_PERSPECTIVE_DIRECTION_DOT_THRESHOLD = 0.999;
-const DEFAULT_PERSPECTIVE_UP_DOT_THRESHOLD = 0.999;
 const CAMERA_TRANSITION_EASING = Object.freeze({
   EASE_IN_OUT_CUBIC: "ease-in-out-cubic",
   EASE_IN_OUT_SINE: "ease-in-out-sine"
 });
-const DEFAULT_VIEW_PLANE_ORIENTATION = Object.freeze({
-  x: [1, 0, 0],
-  y: [0, 1, 0],
-  z: [0, 0, 1]
-});
 const AUTO_ZOOM_PADDING = DEFAULT_AUTO_ZOOM_PADDING;
-const WORLD_UP = Object.freeze([0, 0, 1]);
 const CAD_COORDINATE_SYSTEM = "cad-z-up-v1";
 const ROBOT_COORDINATE_SYSTEM = "cad-z-up-robot-framing-v2";
-const DEFAULT_VIEW_DIRECTION = [2.1, -1.65, 1.08];
-const VIEW_PLANE_DEFAULT_PRESET = {
-  id: "isometric",
-  title: "Reset to default isometric view",
-  direction: DEFAULT_VIEW_DIRECTION,
-  up: WORLD_UP
-};
 const DISPLAY_TOOLBAR_CLASSES = "cad-glass-surface pointer-events-auto absolute z-30 inline-flex h-8 w-fit items-center gap-0.5 rounded-md border border-sidebar-border p-1 text-sidebar-foreground shadow-sm";
 const DISPLAY_TOOLBAR_BUTTON_CLASSES = "grid size-6 shrink-0 place-items-center rounded-sm text-sidebar-foreground/70 transition hover:bg-sidebar-accent hover:text-sidebar-accent-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/45 disabled:pointer-events-none disabled:opacity-50";
 const VIEW_PLANE_CONTROL_SIZE = "7.5rem";
@@ -233,51 +241,6 @@ const DEFAULT_LIGHTING = {
 };
 const BEND_GUIDE_COLOR = "#f59e0b";
 const BEND_GUIDE_WIDTH_MULTIPLIER = 1.35;
-const VIEW_PLANE_FACES = [
-  {
-    id: "z",
-    label: "Z",
-    title: "Jump to top view",
-    direction: [0, 0, 1],
-    up: [0, 1, 0]
-  },
-  {
-    id: "zNeg",
-    label: "-Z",
-    title: "Jump to bottom view",
-    direction: [0, 0, -1],
-    up: [0, 1, 0]
-  },
-  {
-    id: "yNeg",
-    label: "-Y",
-    title: "Jump to front view",
-    direction: [0, -1, 0],
-    up: WORLD_UP
-  },
-  {
-    id: "y",
-    label: "Y",
-    title: "Jump to back view",
-    direction: [0, 1, 0],
-    up: WORLD_UP
-  },
-  {
-    id: "x",
-    label: "X",
-    title: "Jump to right view",
-    direction: [1, 0, 0],
-    up: WORLD_UP
-  },
-  {
-    id: "xNeg",
-    label: "-X",
-    title: "Jump to left view",
-    direction: [-1, 0, 0],
-    up: WORLD_UP
-  }
-];
-const VIEW_PLANE_FACE_BY_ID = Object.fromEntries(VIEW_PLANE_FACES.map((face) => [face.id, face]));
 
 function referenceSelectorType(reference) {
   return String(reference?.selectorType || "").trim();
@@ -326,75 +289,6 @@ function syntheticOccurrenceSelectorFromReferenceId(referenceId) {
   return markerIndex >= 0 ? body.slice(markerIndex + marker.length).trim() : "";
 }
 
-function viewPlaneOrientationEqual(a, b, epsilon = 1e-4) {
-  if (!a || !b) {
-    return false;
-  }
-  for (const axis of ["x", "y", "z"]) {
-    const left = a[axis];
-    const right = b[axis];
-    if (!Array.isArray(left) || !Array.isArray(right) || left.length !== 3 || right.length !== 3) {
-      return false;
-    }
-    for (let index = 0; index < 3; index += 1) {
-      if (Math.abs((left[index] || 0) - (right[index] || 0)) > epsilon) {
-        return false;
-      }
-    }
-  }
-  return true;
-}
-
-function readViewPlaneOrientation(runtime) {
-  if (!runtime?.THREE || !runtime?.camera) {
-    return null;
-  }
-  const inverseCameraRotation = runtime.camera.quaternion.clone().invert();
-  const projectAxis = (x, y, z) => {
-    const projected = new runtime.THREE.Vector3(x, y, z).applyQuaternion(inverseCameraRotation);
-    return [projected.x, projected.y, projected.z];
-  };
-  return {
-    x: projectAxis(1, 0, 0),
-    y: projectAxis(0, 1, 0),
-    z: projectAxis(0, 0, 1)
-  };
-}
-
-function cameraMatchesViewPreset(runtime, preset, {
-  directionDotThreshold = DEFAULT_PERSPECTIVE_DIRECTION_DOT_THRESHOLD,
-  upDotThreshold = DEFAULT_PERSPECTIVE_UP_DOT_THRESHOLD
-} = {}) {
-  if (
-    !runtime?.THREE ||
-    !runtime?.camera ||
-    !runtime?.controls ||
-    !preset ||
-    !Array.isArray(preset.direction) ||
-    !Array.isArray(preset.up)
-  ) {
-    return false;
-  }
-  const currentDirection = runtime.camera.position.clone().sub(runtime.controls.target);
-  const nextDirection = new runtime.THREE.Vector3(...preset.direction);
-  const currentUp = runtime.camera.up.clone();
-  const nextUp = new runtime.THREE.Vector3(...preset.up);
-  if (
-    currentDirection.lengthSq() <= 1e-8 ||
-    nextDirection.lengthSq() <= 1e-8 ||
-    currentUp.lengthSq() <= 1e-8 ||
-    nextUp.lengthSq() <= 1e-8
-  ) {
-    return false;
-  }
-  currentDirection.normalize();
-  nextDirection.normalize();
-  currentUp.normalize();
-  nextUp.normalize();
-  return currentDirection.dot(nextDirection) >= directionDotThreshold &&
-    currentUp.dot(nextUp) >= upDotThreshold;
-}
-
 function isNumericArray(value, stride = 1) {
   return (
     (Array.isArray(value) || ArrayBuffer.isView(value)) &&
@@ -418,16 +312,6 @@ function meshNeedsPartRenderingForSourceColors(meshData) {
     return false;
   }
   return partColors.length !== parts.length || new Set(partColors).size > 1;
-}
-
-function displayRecordsAnimationKey(records = []) {
-  return (Array.isArray(records) ? records : [])
-    .map((record) => [
-      String(record?.partId || "").trim(),
-      String(record?.mesh?.uuid || ""),
-      String(record?.geometry?.uuid || "")
-    ].join(":"))
-    .join("|");
 }
 
 function transformedRuntimeStateEqual(current, next) {
@@ -462,90 +346,6 @@ function displayRecordExplodedViewTranslation(THREE, record) {
     toNumber(elements[13]),
     toNumber(elements[14])
   );
-}
-
-function explodedViewStateTargetTranslation(THREE, state, targetProgress) {
-  const amount = clamp(targetProgress, 0, 1);
-  const translation = state?.translation?.isVector3
-    ? state.translation.clone()
-    : new THREE.Vector3(0, 0, toNumber(state?.distance));
-  return translation.multiplyScalar(amount);
-}
-
-function explodedViewTransitionStateKey(state) {
-  const partId = String(state?.partId || state?.record?.partId || "").trim();
-  return partId || String(state?.groupKey || "").trim();
-}
-
-function createExplodedViewRuntimeTransitionStates(runtime, states, targetProgress, {
-  previousStates = [],
-  previousTransitionProgress = 1,
-  useCurrentTranslations = true
-} = {}) {
-  if (!runtime?.THREE) {
-    return [];
-  }
-  const THREE = runtime.THREE;
-  const previousTranslationsByRecord = new Map();
-  const previousTranslationsByKey = new Map();
-  if (useCurrentTranslations) {
-    for (const previousState of Array.isArray(previousStates) ? previousStates : []) {
-      if (!previousState?.record) {
-        continue;
-      }
-      const translation = explodedViewStateTranslationAtProgress(
-        THREE,
-        previousState,
-        previousTransitionProgress
-      );
-      if (translation) {
-        if (!previousTranslationsByRecord.has(previousState.record)) {
-          previousTranslationsByRecord.set(previousState.record, translation);
-        }
-        const key = explodedViewTransitionStateKey(previousState);
-        if (key && !previousTranslationsByKey.has(key)) {
-          previousTranslationsByKey.set(key, translation);
-        }
-      }
-    }
-  }
-  return (Array.isArray(states) ? states : []).map((state) => ({
-    ...state,
-    fromTranslation: useCurrentTranslations
-      ? (
-        previousTranslationsByRecord.get(state.record) ||
-        previousTranslationsByKey.get(explodedViewTransitionStateKey(state)) ||
-        displayRecordExplodedViewTranslation(THREE, state.record)
-      )
-      : new THREE.Vector3(),
-    translation: explodedViewStateTargetTranslation(THREE, state, targetProgress),
-    matrix: new THREE.Matrix4()
-  }));
-}
-
-function clearExplodedViewRecordsOutsideStates(records = [], states = []) {
-  const stateRecords = new Set((Array.isArray(states) ? states : [])
-    .map((state) => state?.record)
-    .filter(Boolean));
-  for (const record of Array.isArray(records) ? records : []) {
-    if (record && !stateRecords.has(record)) {
-      record.explodedViewMatrix = null;
-    }
-  }
-}
-
-function explodedViewTransitionNeedsAnimation(states = []) {
-  for (const state of Array.isArray(states) ? states : []) {
-    const from = state?.fromTranslation;
-    const to = state?.translation;
-    if (!from?.isVector3 || !to?.isVector3) {
-      return true;
-    }
-    if (from.distanceToSquared(to) > 1e-8) {
-      return true;
-    }
-  }
-  return false;
 }
 
 function normalizeZoomPercent(value, fallback = 100) {
@@ -583,17 +383,63 @@ function readOrthographicHalfHeight(runtime) {
   return Number.isFinite(derivedHalfHeight) && derivedHalfHeight > 1e-6 ? derivedHalfHeight : null;
 }
 
+// Radius of a bounds box, matching applyRuntimeModelBounds so the base and posed
+// radii are directly comparable.
+function boundsModelRadius(THREE, bounds, sceneScaleMode) {
+  const min = Array.isArray(bounds?.min) ? bounds.min : null;
+  const max = Array.isArray(bounds?.max) ? bounds.max : null;
+  if (!THREE || !min || !max) {
+    return 0;
+  }
+  return clampSceneModelRadius(
+    new THREE.Vector3(
+      toNumber(max[0]) - toNumber(min[0]),
+      toNumber(max[1]) - toNumber(min[1]),
+      toNumber(max[2]) - toNumber(min[2])
+    ).length() / 2,
+    sceneScaleMode
+  );
+}
+
+// 100% means "framed to the model at rest". The camera is always fitted to the
+// CURRENT pose, so when a parameter sidecar opens a model mid-animation -- an
+// extended lift, an exploded assembly -- fitting that pose would define the
+// enlarged framing as 100%. Framing distance and orthographic half-height are
+// both proportional to model radius, so scaling the captured value by
+// base/fitted radius recovers the at-rest baseline. A model whose animation
+// opens 1.5x larger now reads ~67%, which is what it is.
+//
+// zoomFitModelRadius is the radius of the bounds the camera was last fitted to;
+// runtime.modelRadius is only a fallback because it tracks whichever bounds were
+// applied last, which is not always what the camera framed.
+function runtimeZoomBaselineScale(runtime) {
+  const baseRadius = Number(runtime?.zoomBaseModelRadius);
+  const fittedRadius = Number(runtime?.zoomFitModelRadius) > 1e-6
+    ? Number(runtime.zoomFitModelRadius)
+    : Number(runtime?.modelRadius);
+  if (
+    !Number.isFinite(baseRadius) || baseRadius <= 1e-6 ||
+    !Number.isFinite(fittedRadius) || fittedRadius <= 1e-6
+  ) {
+    return 1;
+  }
+  return baseRadius / fittedRadius;
+}
+
 function resetRuntimeZoomBaseline(runtime) {
+  const scale = runtimeZoomBaselineScale(runtime);
   if (runtime?.camera?.isOrthographicCamera) {
     const halfHeight = readOrthographicHalfHeight(runtime);
     if (halfHeight) {
-      runtime.zoomBaseHalfHeight = halfHeight;
+      runtime.zoomBaseHalfHeight = halfHeight * scale;
+      return runtime.zoomBaseHalfHeight;
     }
     return halfHeight;
   }
   const distance = readCameraTargetDistance(runtime);
   if (distance) {
-    runtime.zoomBaseDistance = distance;
+    runtime.zoomBaseDistance = distance * scale;
+    return runtime.zoomBaseDistance;
   }
   return distance;
 }
@@ -786,8 +632,8 @@ function ZoomControl({
       </button>
       <button
         type="button"
-        aria-label="Reset zoom"
-        title="Reset zoom"
+        aria-label="Reset view"
+        title="Reset view"
         className={DISPLAY_TOOLBAR_BUTTON_CLASSES}
         onClick={(event) => {
           event.stopPropagation();
@@ -836,11 +682,11 @@ function ZoomToolbar({
   );
 }
 
-function applyExplodedViewRuntimeProgress(runtime, states, progress) {
+function applyExplodedViewRuntimeProgress(runtime, layout, progress) {
   if (!runtime?.THREE || !Array.isArray(runtime.displayRecords)) {
     return;
   }
-  applyExplodedViewProgress(runtime.THREE, states, progress);
+  applyExplodedViewProgress(runtime.THREE, layout, progress);
   for (const record of runtime.displayRecords) {
     applyDisplayRecordTransform(runtime.THREE, record);
   }
@@ -889,6 +735,12 @@ function scaledLightDistance(distance, scale = 1) {
 function syncRuntimeScaledLighting(runtime, lightingSettings = {}, radius, sceneScaleMode = VIEWER_SCENE_SCALE.CAD) {
   const scale = getStageEffectScale(radius, sceneScaleMode);
   setScaledLightPosition(runtime?.keyLight, lightingSettings.directional?.position, scale);
+  if (lightingSettings.fill?.position) {
+    setScaledLightPosition(runtime?.fillLight, lightingSettings.fill.position, scale);
+  }
+  if (lightingSettings.rim?.position) {
+    setScaledLightPosition(runtime?.rimLight, lightingSettings.rim.position, scale);
+  }
   setScaledLightPosition(runtime?.spotLight, lightingSettings.spot?.position, scale);
   setScaledLightPosition(runtime?.pointLight, lightingSettings.point?.position, scale);
   if (runtime?.spotLight) {
@@ -936,23 +788,6 @@ function updateStageEffects(runtime, viewerTheme, themeSettings, radius, floorZ 
   if (shadowPlane) {
     runtime.stageGroup.add(shadowPlane);
   }
-}
-
-function isTrackpadLikeWheelEvent(event) {
-  return event.ctrlKey || (event.deltaMode === 0 && Math.abs(event.deltaY) < 20);
-}
-
-function normalizeViewportFrameInsets(value = {}) {
-  const normalizeInset = (inset) => {
-    const numericInset = Number(inset);
-    return Number.isFinite(numericInset) ? Math.max(0, numericInset) : 0;
-  };
-  return {
-    top: normalizeInset(value?.top),
-    right: normalizeInset(value?.right),
-    bottom: normalizeInset(value?.bottom),
-    left: normalizeInset(value?.left)
-  };
 }
 
 function getViewportFrameMetrics(runtime, frameInsets = {}) {
@@ -1168,16 +1003,6 @@ function syncRuntimeCameraProjection(runtime, projection, { scheduleIdle = true,
   return true;
 }
 
-function easeInOutCubic(t) {
-  if (t <= 0) {
-    return 0;
-  }
-  if (t >= 1) {
-    return 1;
-  }
-  return t < 0.5 ? 4 * t * t * t : 1 - ((-2 * t + 2) ** 3) / 2;
-}
-
 function easeInOutSine(t) {
   if (t <= 0) {
     return 0;
@@ -1219,138 +1044,6 @@ function coordinateSystemForSceneScale(sceneScaleMode) {
   return normalizeSceneScaleMode(sceneScaleMode) === VIEWER_SCENE_SCALE.URDF
     ? ROBOT_COORDINATE_SYSTEM
     : CAD_COORDINATE_SYSTEM;
-}
-
-function getKeyboardOrbitCommand(event) {
-  if (!event) {
-    return null;
-  }
-  if (event.key === "ArrowLeft") {
-    return { direction: "left", keyId: "ArrowLeft" };
-  }
-  if (event.key === "ArrowRight") {
-    return { direction: "right", keyId: "ArrowRight" };
-  }
-  if (event.key === "ArrowUp") {
-    return { direction: "up", keyId: "ArrowUp" };
-  }
-  if (event.key === "ArrowDown") {
-    return { direction: "down", keyId: "ArrowDown" };
-  }
-
-  const key = String(event.key || "").toLowerCase();
-  if (key === "a" || event.code === "KeyA") {
-    return { direction: "left", keyId: event.code || "KeyA" };
-  }
-  if (key === "d" || event.code === "KeyD") {
-    return { direction: "right", keyId: event.code || "KeyD" };
-  }
-  if (key === "w" || event.code === "KeyW") {
-    return { direction: "up", keyId: event.code || "KeyW" };
-  }
-  if (key === "s" || event.code === "KeyS") {
-    return { direction: "down", keyId: event.code || "KeyS" };
-  }
-  return null;
-}
-
-function getKeyboardOrbitAxes(keyboardOrbitState) {
-  return {
-    azimuth:
-      (keyboardOrbitState.directionCounts.right > 0 ? 1 : 0) -
-      (keyboardOrbitState.directionCounts.left > 0 ? 1 : 0),
-    polar:
-      (keyboardOrbitState.directionCounts.down > 0 ? 1 : 0) -
-      (keyboardOrbitState.directionCounts.up > 0 ? 1 : 0)
-  };
-}
-
-function clearKeyboardOrbitState(keyboardOrbitState) {
-  if (!keyboardOrbitState) {
-    return;
-  }
-  keyboardOrbitState.pressedKeys.clear();
-  keyboardOrbitState.directionCounts.left = 0;
-  keyboardOrbitState.directionCounts.right = 0;
-  keyboardOrbitState.directionCounts.up = 0;
-  keyboardOrbitState.directionCounts.down = 0;
-  keyboardOrbitState.lastFrameTime = 0;
-}
-
-function applyOrbitDelta(runtime, azimuthDelta, polarDelta) {
-  if (!runtime?.THREE || !runtime?.camera || !runtime?.controls) {
-    return false;
-  }
-  if (Math.abs(azimuthDelta) < 1e-6 && Math.abs(polarDelta) < 1e-6) {
-    return false;
-  }
-
-  const offset = new runtime.THREE.Vector3().copy(runtime.camera.position).sub(runtime.controls.target);
-  const distance = offset.length();
-  if (!Number.isFinite(distance) || distance <= 1e-6) {
-    return false;
-  }
-  const worldUp = new runtime.THREE.Vector3(...WORLD_UP).normalize();
-  const direction = offset.clone().divideScalar(distance);
-  const minPolar = Math.max(
-    Number.isFinite(runtime.controls.minPolarAngle) ? runtime.controls.minPolarAngle : 0,
-    KEYBOARD_POLAR_EPSILON
-  );
-  const maxPolar = Math.min(
-    Number.isFinite(runtime.controls.maxPolarAngle) ? runtime.controls.maxPolarAngle : Math.PI,
-    Math.PI - KEYBOARD_POLAR_EPSILON
-  );
-  const currentPolar = Math.acos(clamp(direction.dot(worldUp), -1, 1));
-  const requestedPolar = clamp(currentPolar + polarDelta, minPolar, maxPolar);
-  const resolvedPolarDelta = requestedPolar - currentPolar;
-
-  const minAzimuth = Number.isFinite(runtime.controls.minAzimuthAngle) ? runtime.controls.minAzimuthAngle : -Infinity;
-  const maxAzimuth = Number.isFinite(runtime.controls.maxAzimuthAngle) ? runtime.controls.maxAzimuthAngle : Infinity;
-  if (Number.isFinite(minAzimuth) || Number.isFinite(maxAzimuth)) {
-    const currentAzimuth = Math.atan2(offset.y, offset.x);
-    const nextAzimuth = clamp(normalizeAngleAround(currentAzimuth + azimuthDelta, currentAzimuth), minAzimuth, maxAzimuth);
-    azimuthDelta = nextAzimuth - currentAzimuth;
-  }
-
-  if (Math.abs(azimuthDelta) > 1e-6) {
-    offset.applyAxisAngle(worldUp, azimuthDelta);
-  }
-  if (Math.abs(resolvedPolarDelta) > 1e-6) {
-    let orbitRight = new runtime.THREE.Vector3().crossVectors(worldUp, offset).normalize();
-    if (orbitRight.lengthSq() <= 1e-9) {
-      orbitRight = new runtime.THREE.Vector3(1, 0, 0);
-    }
-    offset.applyAxisAngle(orbitRight, resolvedPolarDelta);
-  }
-  runtime.camera.position.copy(runtime.controls.target).add(offset);
-  runtime.camera.up.set(...WORLD_UP);
-  runtime.camera.lookAt(runtime.controls.target);
-  return true;
-}
-
-function stepKeyboardOrbit(runtime, timestamp) {
-  const keyboardOrbitState = runtime?.keyboardOrbitState;
-  if (!keyboardOrbitState) {
-    return false;
-  }
-
-  const axes = getKeyboardOrbitAxes(keyboardOrbitState);
-  if (!axes.azimuth && !axes.polar) {
-    keyboardOrbitState.lastFrameTime = 0;
-    return false;
-  }
-  if (!keyboardOrbitState.lastFrameTime) {
-    keyboardOrbitState.lastFrameTime = timestamp;
-    return false;
-  }
-
-  const deltaSeconds = clamp((timestamp - keyboardOrbitState.lastFrameTime) / 1000, 0, 0.05);
-  keyboardOrbitState.lastFrameTime = timestamp;
-  return applyOrbitDelta(
-    runtime,
-    axes.azimuth * KEYBOARD_ORBIT_SPEED_RAD_PER_SEC * deltaSeconds,
-    axes.polar * KEYBOARD_ORBIT_SPEED_RAD_PER_SEC * deltaSeconds
-  );
 }
 
 function cancelCameraTransition(runtime, { scheduleIdle = true } = {}) {
@@ -1504,6 +1197,38 @@ function currentDisplayRecordTranslationByRecord(THREE, records = []) {
   return translations;
 }
 
+// Aim the controls back at the model centre without touching orientation or
+// distance. The model group is positioned at -center, so the model's centre in
+// world space is the origin — the same target the initial framing uses.
+function recenterRuntimeTarget(runtime) {
+  const controls = runtime?.controls;
+  const camera = runtime?.camera;
+  if (!controls?.target || !camera || !runtime?.THREE) {
+    return false;
+  }
+  const offset = new runtime.THREE.Vector3().copy(camera.position).sub(controls.target);
+  controls.target.set(0, 0, 0);
+  camera.position.copy(offset);
+  camera.lookAt(controls.target);
+  controls.update?.();
+  return true;
+}
+
+// What "reset" and "fit" frame: the model in its current parameter pose, which
+// is the same thing the loader framed. Framing runtime.modelBounds instead would
+// crop a model a sidecar has posed larger than its at-rest box, because that
+// field tracks whichever bounds were applied last rather than the live pose.
+function runtimeFramingBounds(runtime, fallbackBounds = null) {
+  if (!runtime?.THREE?.Matrix4 || !Array.isArray(runtime.displayRecords) || !runtime.displayRecords.length) {
+    return runtime?.modelBounds || fallbackBounds;
+  }
+  return effectiveBoundsFromRecords(
+    runtime.THREE,
+    runtime.displayRecords,
+    runtime.modelBounds || fallbackBounds
+  );
+}
+
 function displayRecordBoundsForPartIds(runtime, partIds = []) {
   const normalizedPartIds = normalizePartIdList(partIds);
   if (!normalizedPartIds.length || !Array.isArray(runtime?.displayRecords)) {
@@ -1541,6 +1266,9 @@ function zoomRuntimeToBounds(runtime, bounds, sceneScaleMode, {
   });
   if (!frame) {
     return false;
+  }
+  if (resetZoomBaseline) {
+    runtime.zoomFitModelRadius = boundsModelRadius(runtime.THREE, normalizedBounds, sceneScaleMode);
   }
   const snapshot = {
     position: frame.position.toArray(),
@@ -1710,30 +1438,6 @@ function transitionCameraToViewPreset(runtime, preset) {
   return true;
 }
 
-function getActiveViewPlaneFaceId(runtime) {
-  if (!runtime?.THREE || !runtime?.camera || !runtime?.controls) {
-    return "";
-  }
-
-  const offset = new runtime.THREE.Vector3().copy(runtime.camera.position).sub(runtime.controls.target);
-  if (offset.lengthSq() < 1e-6) {
-    return "";
-  }
-  offset.normalize();
-
-  let bestId = "";
-  let bestScore = -Infinity;
-  for (const face of VIEW_PLANE_FACES) {
-    const direction = new runtime.THREE.Vector3(...face.direction).normalize();
-    const score = offset.dot(direction);
-    if (score > bestScore) {
-      bestScore = score;
-      bestId = face.id;
-    }
-  }
-  return bestScore >= VIEW_PLANE_ACTIVE_DOT_THRESHOLD ? bestId : "";
-}
-
 function disposeSceneObject(object) {
   if (!object) {
     return;
@@ -1841,21 +1545,6 @@ function clearOverlayGroup(runtime, group) {
   if (group) {
     group.visible = false;
   }
-}
-
-function clamp(value, min, max) {
-  return Math.min(Math.max(value, min), max);
-}
-
-function normalizeAngleAround(angle, center) {
-  let adjusted = angle;
-  while (adjusted - center > Math.PI) {
-    adjusted -= Math.PI * 2;
-  }
-  while (adjusted - center < -Math.PI) {
-    adjusted += Math.PI * 2;
-  }
-  return adjusted;
 }
 
 function parseFaceToken(copyText) {
@@ -2033,6 +1722,10 @@ function updateGridHelper(
   floorMode = THEME_FLOOR_MODES.STAGE,
   floorSettings = {}
 ) {
+  updateStageOriginAxis(runtime, viewerTheme, radius, floorZ, {
+    disposeSceneObject,
+    floorSettings
+  });
   return updateStageGridHelper(runtime, viewerTheme, radius, floorZ, sceneScaleMode, floorMode, {
     disposeSceneObject,
     floorSettings
@@ -2060,6 +1753,7 @@ const CadViewer = forwardRef(function CadViewer({
   viewportFrameInsets = null,
   isLoading = false,
   pickMode = VIEWER_PICK_MODE.AUTO,
+  panToolActive = false,
   renderPartsIndividually = false,
   scale = "",
   sceneScaleMode = VIEWER_SCENE_SCALE.CAD,
@@ -2102,6 +1796,7 @@ const CadViewer = forwardRef(function CadViewer({
   urdfPosePicker = null
 }, ref) {
   const stepParameterRuntime = stepParameters;
+  const stepAnimationPlaying = Boolean(stepParameterRuntime?.animationState?.playing);
   const normalizedSceneScaleMode = normalizeSceneScaleMode(scale || sceneScaleMode);
   const normalizedProjection = normalizeCameraProjection(projection);
   const meshGeometrySource = meshData?.geometrySource && typeof meshData.geometrySource === "object"
@@ -2128,6 +1823,11 @@ const CadViewer = forwardRef(function CadViewer({
   const viewerAlertChangeRef = useRef(onViewerAlertChange);
   const stepModuleTransformDetectedChangeRef = useRef(onStepModuleTransformDetectedChange);
   const urdfPosePickerRef = useRef(urdfPosePicker);
+  // The pose picker shares the canvas cursor with the pan tool, so it may only
+  // reset what it actually set. Its pointer-move handler runs for every file
+  // kind, and blindly clearing on each move wiped the pan cursor after one
+  // mouse movement.
+  const urdfPosePickerOwnsCursorRef = useRef(false);
   const posePickerPointerRef = useRef(null);
   const lastEmittedPerspectiveRef = useRef(null);
   const lastProjectionRef = useRef(normalizedProjection);
@@ -2138,9 +1838,8 @@ const CadViewer = forwardRef(function CadViewer({
     rafId: 0,
     progress: 0,
     modelKey: "",
-    recordKey: "",
-    states: [],
-    transitionProgress: 0
+    enabled: false,
+    layout: null
   });
   const viewportFrameInsetsRef = useRef(normalizedViewportFrameInsets);
   const framedModelKeyRef = useRef("");
@@ -2186,6 +1885,7 @@ const CadViewer = forwardRef(function CadViewer({
   const normalizedDisplaySettings = normalizedViewerRenderState.displaySettings;
   const normalizedDisplayMode = normalizedViewerRenderState.displayMode;
   const normalizedExplodedSettings = normalizedDisplaySettings.exploded;
+  const explodeAmount = clamp(toNumber(normalizedExplodedSettings.amount, 1), 0, 1);
   const explodablePartCount = useMemo(() => renderableMeshParts(meshData).length, [meshData]);
   const explodedViewActive = normalizedExplodedSettings.enabled && explodablePartCount > 1;
   const effectiveRenderPartsIndividually = renderPartsIndividually ||
@@ -2221,7 +1921,6 @@ const CadViewer = forwardRef(function CadViewer({
     return wireframeMode
       ? {
           ...forcedSettings,
-          contrastMode: "manual",
           color: wireframeEdgeColor,
           opacity: wireframeEdgeOpacity
         }
@@ -2261,6 +1960,7 @@ const CadViewer = forwardRef(function CadViewer({
   const resolvedFloorMode = floorModeOverride
     ? normalizeFloorMode(floorModeOverride, defaultFloorMode)
     : defaultFloorMode;
+  const floorFollowsModel = floorSettings.followModel !== false;
   const updateActiveGridHelper = useCallback((
     runtime,
     activeViewerTheme,
@@ -2439,6 +2139,51 @@ const CadViewer = forwardRef(function CadViewer({
     normalizedViewportFrameInsets.left,
     viewerReadyTick
   ]);
+  // The pan tool remaps the primary drag from orbit to pan. Right-drag stays
+  // pan either way, so the habitual gesture keeps working while the tool is on.
+  //
+  // The cursor closes to "grabbing" for the duration of a drag, which is what
+  // makes the tool feel like dragging the scene rather than just hovering over
+  // it. Driven by listeners instead of React state so a pan does not re-render
+  // the viewer on every press.
+  useEffect(() => {
+    const runtime = runtimeRef.current;
+    const controls = runtime?.controls;
+    const MOUSE = runtime?.THREE?.MOUSE;
+    const canvas = runtime?.renderer?.domElement;
+    if (!controls?.mouseButtons || !MOUSE) {
+      return undefined;
+    }
+    controls.mouseButtons.LEFT = panToolActive ? MOUSE.PAN : MOUSE.ROTATE;
+    if (!canvas) {
+      return undefined;
+    }
+    if (!panToolActive) {
+      canvas.style.cursor = "";
+      return () => {
+        if (controls.mouseButtons) {
+          controls.mouseButtons.LEFT = MOUSE.ROTATE;
+        }
+      };
+    }
+
+    canvas.style.cursor = "grab";
+    const grab = () => { canvas.style.cursor = "grab"; };
+    const grabbing = () => { canvas.style.cursor = "grabbing"; };
+    canvas.addEventListener("pointerdown", grabbing);
+    window.addEventListener("pointerup", grab);
+    window.addEventListener("pointercancel", grab);
+    return () => {
+      canvas.removeEventListener("pointerdown", grabbing);
+      window.removeEventListener("pointerup", grab);
+      window.removeEventListener("pointercancel", grab);
+      canvas.style.cursor = "";
+      if (controls.mouseButtons) {
+        controls.mouseButtons.LEFT = MOUSE.ROTATE;
+      }
+    };
+  }, [panToolActive, viewerReadyTick]);
+
   const runWithoutPerspectiveEvents = (callback) => {
     suppressPerspectiveEventsRef.current += 1;
     try {
@@ -2538,7 +2283,7 @@ const CadViewer = forwardRef(function CadViewer({
     const runtime = runtimeRef.current;
     const reset = zoomRuntimeToBounds(
       runtime,
-      runtime?.modelBounds || meshData?.bounds,
+      runtimeFramingBounds(runtime, meshData?.bounds),
       sceneScaleModeRef.current,
       {
         animate,
@@ -2554,6 +2299,12 @@ const CadViewer = forwardRef(function CadViewer({
     if (reset) {
       return true;
     }
+    // Fallback for when the refit bails — no usable bounds yet, so there is
+    // nothing to frame. It still has to undo the pan: resetting only the zoom
+    // leaves the controls aimed wherever the user dragged to, and the caller's
+    // orientation tween carries that target through, so the view snaps back in
+    // zoom and angle while staying panned off-centre.
+    recenterRuntimeTarget(runtime);
     if (!setRuntimeZoomPercent(runtime, 100)) {
       return false;
     }
@@ -2679,8 +2430,9 @@ const CadViewer = forwardRef(function CadViewer({
       if (runtime) {
         runtime.urdfPosePickerPointerNdc = null;
         syncUrdfPosePickerHoverObjects(runtime, picker);
-        if (canvas?.style) {
-          canvas.style.cursor = "auto";
+        if (canvas?.style && urdfPosePickerOwnsCursorRef.current) {
+          canvas.style.cursor = "";
+          urdfPosePickerOwnsCursorRef.current = false;
         }
         runtime.requestRender?.();
       }
@@ -2701,6 +2453,7 @@ const CadViewer = forwardRef(function CadViewer({
     syncUrdfPosePickerHoverObjects(runtime, picker);
     if (canvas.style) {
       canvas.style.cursor = pick?.point ? "pointer" : "crosshair";
+      urdfPosePickerOwnsCursorRef.current = true;
     }
     setUrdfPosePickerHoverActive(Boolean(pick?.point));
     setUrdfPosePickerGuidePoint((current) => {
@@ -2796,8 +2549,9 @@ const CadViewer = forwardRef(function CadViewer({
     if (runtime) {
       runtime.urdfPosePickerPointerNdc = null;
       syncUrdfPosePickerHoverObjects(runtime, urdfPosePickerRef.current);
-      if (runtime.renderer?.domElement?.style) {
-        runtime.renderer.domElement.style.cursor = "auto";
+      if (runtime.renderer?.domElement?.style && urdfPosePickerOwnsCursorRef.current) {
+        runtime.renderer.domElement.style.cursor = "";
+        urdfPosePickerOwnsCursorRef.current = false;
       }
       runtime.requestRender?.();
     }
@@ -2810,8 +2564,9 @@ const CadViewer = forwardRef(function CadViewer({
     if (runtime) {
       runtime.urdfPosePickerPointerNdc = null;
       syncUrdfPosePickerHoverObjects(runtime, urdfPosePickerRef.current);
-      if (runtime.renderer?.domElement?.style) {
-        runtime.renderer.domElement.style.cursor = "auto";
+      if (runtime.renderer?.domElement?.style && urdfPosePickerOwnsCursorRef.current) {
+        runtime.renderer.domElement.style.cursor = "";
+        urdfPosePickerOwnsCursorRef.current = false;
       }
       runtime.requestRender?.();
     }
@@ -2890,7 +2645,7 @@ const CadViewer = forwardRef(function CadViewer({
       const runtime = runtimeRef.current;
       const fitted = zoomRuntimeToBounds(
         runtime,
-        runtime?.modelBounds || meshData?.bounds,
+        runtimeFramingBounds(runtime, meshData?.bounds),
         sceneScaleModeRef.current,
         {
           animate,
@@ -3017,8 +2772,9 @@ const CadViewer = forwardRef(function CadViewer({
     const runtime = runtimeRef.current;
     if (runtime) {
       runtime.urdfPosePickerPointerNdc = null;
-      if (runtime.renderer?.domElement?.style) {
-        runtime.renderer.domElement.style.cursor = "auto";
+      if (runtime.renderer?.domElement?.style && urdfPosePickerOwnsCursorRef.current) {
+        runtime.renderer.domElement.style.cursor = "";
+        urdfPosePickerOwnsCursorRef.current = false;
       }
     }
     setUrdfPosePickerHoverActive(false);
@@ -3152,15 +2908,15 @@ const CadViewer = forwardRef(function CadViewer({
     runtime.keyLight.color.set(normalizedThemeSettings.lighting.directional.color);
     runtime.keyLight.intensity = normalizedThemeSettings.lighting.directional.intensity;
 
-    const fillIntensity = getViewerThemeNumber(viewerTheme, "fillLightIntensity", DEFAULT_LIGHTING.fillLightIntensity);
-    runtime.fillLight.visible = fillIntensity > 0.0001;
-    runtime.fillLight.color.set(getViewerThemeValue(viewerTheme, "fillLightColor", DEFAULT_LIGHTING.fillLightColor));
-    runtime.fillLight.intensity = Math.max(fillIntensity, 0);
+    const fillSettings = normalizedThemeSettings.lighting.fill;
+    runtime.fillLight.visible = fillSettings.enabled && fillSettings.intensity > 0.0001;
+    runtime.fillLight.color.set(fillSettings.color);
+    runtime.fillLight.intensity = Math.max(fillSettings.intensity, 0);
 
-    const rimIntensity = getViewerThemeNumber(viewerTheme, "rimLightIntensity", DEFAULT_LIGHTING.rimLightIntensity);
-    runtime.rimLight.visible = rimIntensity > 0.0001;
-    runtime.rimLight.color.set(getViewerThemeValue(viewerTheme, "rimLightColor", DEFAULT_LIGHTING.rimLightColor));
-    runtime.rimLight.intensity = Math.max(rimIntensity, 0);
+    const rimSettings = normalizedThemeSettings.lighting.rim;
+    runtime.rimLight.visible = rimSettings.enabled && rimSettings.intensity > 0.0001;
+    runtime.rimLight.color.set(rimSettings.color);
+    runtime.rimLight.intensity = Math.max(rimSettings.intensity, 0);
 
     runtime.spotLight.visible = normalizedThemeSettings.lighting.spot.enabled;
     runtime.spotLight.color.set(normalizedThemeSettings.lighting.spot.color);
@@ -3197,11 +2953,17 @@ const CadViewer = forwardRef(function CadViewer({
     }
 
     runtime.gridConfig = null;
+    const themeFloorZCandidate = floorFollowsModel
+      ? runtime.modelFloorZBelowModel
+      : runtime.modelFloorZBase;
+    const themeFloorZ = Number.isFinite(themeFloorZCandidate)
+      ? themeFloorZCandidate
+      : runtime.gridFloorZ ?? 0;
     updateActiveGridHelper(
       runtime,
       viewerTheme,
       runtime.gridRadius ?? defaultGridRadius,
-      runtime.gridFloorZ ?? 0,
+      themeFloorZ,
       normalizedSceneScaleMode,
       resolvedFloorMode
     );
@@ -3212,7 +2974,7 @@ const CadViewer = forwardRef(function CadViewer({
         viewerTheme,
         normalizedThemeSettings,
         runtime.gridRadius ?? defaultGridRadius,
-        runtime.gridFloorZ ?? 0,
+        themeFloorZ,
         resolvedFloorMode,
         normalizedSceneScaleMode
       );
@@ -3226,6 +2988,7 @@ const CadViewer = forwardRef(function CadViewer({
     normalizedThemeSettings,
     normalizedSceneScaleMode,
     resolvedFloorMode,
+    floorFollowsModel,
     viewerReadyTick,
     viewerTheme,
     updateActiveGridHelper
@@ -3592,6 +3355,9 @@ const CadViewer = forwardRef(function CadViewer({
     });
 
     const displayBounds = cadScene.bounds || meshData.bounds;
+    // meshData.bounds is the model at rest; displayBounds may be a posed
+    // (animated or exploded) superset of it.
+    runtime.zoomBaseModelRadius = boundsModelRadius(THREE, meshData.bounds, normalizedSceneScaleMode);
     const boundsMin = Array.isArray(displayBounds?.min) ? displayBounds.min : [0, 0, 0];
     const boundsMax = Array.isArray(displayBounds?.max) ? displayBounds.max : [0, 0, 0];
     const center = new THREE.Vector3(
@@ -3613,11 +3379,24 @@ const CadViewer = forwardRef(function CadViewer({
         previousTransform.offset,
         normalizedSceneScaleMode
       );
+      previousTransform.floorZBelowModel = resolveRuntimeModelFloorZ(
+        displayBounds,
+        previousTransform.offset,
+        normalizedSceneScaleMode,
+        { followModel: true }
+      );
     }
     const modelOffset = previousTransform.offset;
-    const floorZ = Number.isFinite(Number(previousTransform.floorZ))
-      ? Number(previousTransform.floorZ)
-      : resolveRuntimeModelFloorZ(displayBounds, modelOffset, normalizedSceneScaleMode);
+    const cachedFloorZ = floorFollowsModel
+      ? previousTransform.floorZBelowModel
+      : previousTransform.floorZ;
+    const floorZ = Number.isFinite(Number(cachedFloorZ))
+      ? Number(cachedFloorZ)
+      : resolveRuntimeModelFloorZ(displayBounds, modelOffset, normalizedSceneScaleMode, {
+        followModel: floorFollowsModel
+      });
+    runtime.modelFloorZBase = Number(previousTransform.floorZ);
+    runtime.modelFloorZBelowModel = Number(previousTransform.floorZBelowModel);
     const { radius } = applyRuntimeModelBounds(THREE, runtime, displayBounds, normalizedSceneScaleMode);
     syncRuntimeScaledLightingAndShadow(
       THREE,
@@ -3647,6 +3426,7 @@ const CadViewer = forwardRef(function CadViewer({
     edgePickGroup.updateMatrixWorld(true);
     vertexPickGroup.updateMatrixWorld(true);
     syncSelectorPickGroups(runtime, displaySelectorRuntime, modelOffset, { clearSceneGroup });
+    scheduleRuntimeRaycastBvh(runtime);
     syncRuntimeStepClipPlane(runtime, clipSettingsRef.current);
 
     const currentPartVisualState = partVisualStateRef.current;
@@ -3703,6 +3483,9 @@ const CadViewer = forwardRef(function CadViewer({
           runtime.requestRender();
         }
       });
+      // The initial framing fits displayBounds, so that is the radius the
+      // baseline is measured against.
+      runtime.zoomFitModelRadius = radius;
       resetRuntimeZoomBaseline(runtime);
       syncCameraZoomPercent(runtime);
       framedModelKeyRef.current = modelKey || "";
@@ -3734,6 +3517,7 @@ const CadViewer = forwardRef(function CadViewer({
     normalizedDisplayMode,
     normalizedSceneScaleMode,
     resolvedFloorMode,
+    floorFollowsModel,
     viewerTheme,
     normalizedThemeSettings.lighting,
     normalizedThemeSettings.materials,
@@ -3788,12 +3572,16 @@ const CadViewer = forwardRef(function CadViewer({
       meshData.bounds,
       normalizedSceneScaleMode
     );
-    const floorZ = Number.isFinite(Number(modelTransformRef.current.floorZ))
-      ? Number(modelTransformRef.current.floorZ)
+    const cachedFloorZ = floorFollowsModel
+      ? modelTransformRef.current.floorZBelowModel
+      : modelTransformRef.current.floorZ;
+    const floorZ = Number.isFinite(Number(cachedFloorZ))
+      ? Number(cachedFloorZ)
       : resolveRuntimeModelFloorZ(
         meshData.bounds,
         runtime.modelGroup?.position,
-        normalizedSceneScaleMode
+        normalizedSceneScaleMode,
+        { followModel: floorFollowsModel }
       );
     updateActiveGridHelper(
       runtime,
@@ -3814,6 +3602,7 @@ const CadViewer = forwardRef(function CadViewer({
     normalizedSceneScaleMode,
     normalizedThemeSettings,
     resolvedFloorMode,
+    floorFollowsModel,
     viewerTheme,
     viewerReadyTick,
     updateActiveGridHelper
@@ -4037,8 +3826,12 @@ const CadViewer = forwardRef(function CadViewer({
     runtime.modelGroup?.updateMatrixWorld?.(true);
     runtime.edgesGroup?.updateMatrixWorld?.(true);
     const effectiveRuntime = nextEdgeRuntimes.selectorRuntime;
-    syncDisplayMeshFaceIds(runtime, meshData, effectiveRuntime);
-    syncSelectorPickGroups(runtime, effectiveRuntime, modelTransformRef.current.offset, { clearSceneGroup });
+    // Picking is suspended during STEP animation playback, so skip rebuilding
+    // pick-only state per frame; the playing->stopped rerun syncs the final pose.
+    if (!stepAnimationPlaying) {
+      syncDisplayMeshFaceIds(runtime, meshData, effectiveRuntime);
+      syncSelectorPickGroups(runtime, effectiveRuntime, modelTransformRef.current.offset, { clearSceneGroup });
+    }
     runtime.requestRender?.();
   }, [
     visualEdgeSettings,
@@ -4068,10 +3861,6 @@ const CadViewer = forwardRef(function CadViewer({
   useEffect(() => {
     const runtime = runtimeRef.current;
     const animation = explodedViewAnimationRef.current;
-    const previousAnimationStates = Array.isArray(animation.states)
-      ? animation.states
-      : [];
-    const previousAnimationProgress = clamp(animation.transitionProgress, 0, 1);
     cancelExplodedViewAnimation(explodedViewAnimationRef);
 
     if (
@@ -4082,82 +3871,84 @@ const CadViewer = forwardRef(function CadViewer({
     ) {
       animation.progress = 0;
       animation.modelKey = "";
-      animation.recordKey = "";
-      animation.states = [];
-      animation.transitionProgress = 0;
+      animation.enabled = false;
+      animation.layout = null;
       return undefined;
     }
 
+    const THREE = runtime.THREE;
     const animationModelKey = modelKey || "";
-    const recordKey = `${animationModelKey}:${displayRecordsAnimationKey(runtime.displayRecords)}`;
     const modelChanged = animation.modelKey !== animationModelKey;
-    const targetProgress = explodedViewActive ? 1 : 0;
     const baseBounds = runtime.modelBounds || meshData?.bounds;
-    const states = createExplodedViewRecordStates(
-      runtime.THREE,
-      runtime.displayRecords,
-      baseBounds,
-      normalizedExplodedSettings
-    );
+    const targetProgress = explodedViewActive ? explodeAmount : 0;
+    const wasEnabled = animation.enabled === true;
     animation.modelKey = animationModelKey;
-    animation.recordKey = recordKey;
+    animation.enabled = explodedViewActive;
 
-    if (!states.length) {
+    // Steady disabled state: nothing to evaluate. (When disabling from an
+    // exploded state we still evaluate below so the collapse animates.)
+    if (!explodedViewActive && !wasEnabled) {
       clearExplodedViewRecords(runtime.displayRecords);
       for (const record of runtime.displayRecords) {
-        applyDisplayRecordTransform(runtime.THREE, record);
+        applyDisplayRecordTransform(THREE, record);
       }
       syncRecordTopologyDisplayEdgeTransforms(runtime, runtime.displayRecords);
       runtime.requestRender?.();
       animation.progress = 0;
-      animation.states = [];
-      animation.transitionProgress = 0;
+      animation.layout = null;
       return undefined;
     }
 
-    const transitionStates = createExplodedViewRuntimeTransitionStates(runtime, states, targetProgress, {
-      previousStates: previousAnimationStates,
-      previousTransitionProgress: previousAnimationProgress,
-      useCurrentTranslations: !modelChanged
-    });
-    clearExplodedViewRecordsOutsideStates(runtime.displayRecords, transitionStates);
+    // Compute the radial layout from the current records. On disable the
+    // layout is still resolvable, so collapse can animate from the current
+    // progress down to 0.
+    const layout = computeExplodedViewLayout(runtime.displayRecords, baseBounds);
+    animation.layout = layout;
 
-    if (!explodedViewTransitionNeedsAnimation(transitionStates)) {
+    if (!layout.entries.length) {
+      clearExplodedViewRecords(runtime.displayRecords);
+      for (const record of runtime.displayRecords) {
+        applyDisplayRecordTransform(THREE, record);
+      }
+      syncRecordTopologyDisplayEdgeTransforms(runtime, runtime.displayRecords);
+      runtime.requestRender?.();
+      animation.progress = 0;
+      return undefined;
+    }
+
+    // Animate only the enable/disable transition (explode/collapse). Amount
+    // scrubs snap directly for a responsive feel — the slider is the timeline.
+    const startProgress = clamp(toNumber(animation.progress, 0), 0, 1);
+    const shouldAnimate = wasEnabled !== explodedViewActive && !modelChanged
+      && Math.abs(targetProgress - startProgress) > 1e-4;
+
+    if (!shouldAnimate) {
       animation.progress = targetProgress;
-      animation.states = transitionStates;
-      animation.transitionProgress = 1;
-      applyExplodedViewRuntimeProgress(runtime, transitionStates, 1);
+      applyExplodedViewRuntimeProgress(runtime, layout, targetProgress);
       return undefined;
     }
 
+    // Multi-level cascades get more time so each stage of the disassembly
+    // still reads at a calm pace.
+    const durationMs = EXPLODED_VIEW_ANIMATION_DURATION_MS
+      * (1 + 0.35 * Math.max(layout.levelCount - 1, 0));
     const startedAt = typeof performance !== "undefined" && typeof performance.now === "function"
       ? performance.now()
       : Date.now();
-
-    animation.states = transitionStates;
-    animation.transitionProgress = 0;
-    applyExplodedViewRuntimeProgress(runtime, transitionStates, 0);
+    applyExplodedViewRuntimeProgress(runtime, layout, startProgress);
 
     const step = (timestamp) => {
       const now = Number.isFinite(Number(timestamp)) ? Number(timestamp) : Date.now();
-      const linearProgress = clamp(
-        (now - startedAt) / EXPLODED_VIEW_ANIMATION_DURATION_MS,
-        0,
-        1
-      );
-      const easedProgress = easeExplodedViewProgress(linearProgress);
-      animation.progress = targetProgress > 0
-        ? easedProgress
-        : 1 - easedProgress;
-      animation.transitionProgress = easedProgress;
-      applyExplodedViewRuntimeProgress(runtime, transitionStates, easedProgress);
+      const linearProgress = clamp((now - startedAt) / durationMs, 0, 1);
+      const eased = easeExplodedViewProgress(linearProgress);
+      const progress = startProgress + (targetProgress - startProgress) * eased;
+      animation.progress = progress;
+      applyExplodedViewRuntimeProgress(runtime, layout, progress);
       if (linearProgress < 1) {
         animation.rafId = window.requestAnimationFrame(step);
       } else {
         animation.rafId = 0;
         animation.progress = targetProgress;
-        animation.transitionProgress = 1;
-        animation.states = transitionStates;
       }
     };
 
@@ -4167,6 +3958,7 @@ const CadViewer = forwardRef(function CadViewer({
     };
   }, [
     explodedViewActive,
+    explodeAmount,
     normalizedExplodedSettings,
     isLoading,
     meshData?.bounds,
@@ -4751,7 +4543,8 @@ const CadViewer = forwardRef(function CadViewer({
     onContextReference,
     onMeasurePick,
     onMeasureHoverPoint,
-    viewerReadyTick
+    viewerReadyTick,
+    suppressTopologyPicking: stepAnimationPlaying
   });
 
   return (
@@ -4788,7 +4581,13 @@ const CadViewer = forwardRef(function CadViewer({
           zoomPercent={cameraZoomPercent}
           onZoomPercentChange={applyZoomPercent}
           onZoomReset={() => {
-            resetZoomAndPan({ animate: true });
+            // Reset the whole view, not just the zoom: refit the framing first
+            // (instant, so it just establishes the correct target and distance),
+            // then animate back to the default orientation. Both paths drive the
+            // same runtime.cameraTransition, so animating both would leave the
+            // second tween overwriting the first and the orientation unchanged.
+            resetZoomAndPan({ animate: false });
+            activateDefaultViewPlane();
           }}
           viewPlaneOffsetRight={viewPlaneOffsetRight}
           viewPlaneOffsetBottom={viewPlaneOffsetBottom}

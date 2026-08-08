@@ -11,29 +11,15 @@ import {
 
 export function entryIconStatus(entry, {
   sourceFormat = "",
-  entryKey = "",
   hasMesh = true,
   hasDxf = true,
-  hasGcode = true,
   hasImplicit = true,
   hasUrdf = true,
-  activeGenerationFiles = [],
   activeStepArtifactGenerationFile = "",
   activeStepArtifactGenerationFiles = [],
   stepArtifactGenerationAvailable = true
 } = {}) {
   const normalizedSourceFormat = String(sourceFormat || "").trim().toLowerCase();
-  const activeScriptGenerationFileSet = new Set(
-    [
-      ...(Array.isArray(activeGenerationFiles)
-        ? activeGenerationFiles
-        : activeGenerationFiles
-          ? [activeGenerationFiles]
-          : [])
-    ]
-      .map((file) => String(file || "").trim())
-      .filter(Boolean)
-  );
   const activeArtifactGenerationFileSet = new Set(
     [
       ...(Array.isArray(activeStepArtifactGenerationFiles)
@@ -52,17 +38,12 @@ export function entryIconStatus(entry, {
   );
   const pending = normalizedSourceFormat === RENDER_FORMAT.DXF
     ? !hasDxf
-    : normalizedSourceFormat === RENDER_FORMAT.GCODE
-    ? !hasGcode
     : normalizedSourceFormat === RENDER_FORMAT.IMPLICIT
       ? !hasImplicit
     : isRobotRenderFormat(normalizedSourceFormat)
       ? !hasUrdf
       : !hasMesh;
-  const artifactGenerationFiles = [
-    ...activeArtifactGenerationFileSet,
-    ...activeScriptGenerationFileSet
-  ];
+  const artifactGenerationFiles = [...activeArtifactGenerationFileSet];
   const artifactGenerationInProgress = stepArtifactGenerationInProgress({
     entry,
     activeGenerationFiles: artifactGenerationFiles
@@ -74,21 +55,16 @@ export function entryIconStatus(entry, {
   const artifactBuildable = artifactCanGenerate;
   const artifactStale = stepArtifactIsStale(entry, normalizedSourceFormat);
   const artifactErrorCode = String(entry?.artifact?.error || "").trim();
-  const generatorRunning = Boolean(entryKey && activeScriptGenerationFileSet.has(entryKey));
-  const artifactWarning = !generatorRunning &&
-    !artifactGenerationInProgress &&
+  const artifactWarning = !artifactGenerationInProgress &&
     stepArtifactNeedsWarning(entry, normalizedSourceFormat, {
       generationAvailable: stepArtifactGenerationAvailable
     });
-  const artifactGenerating = Boolean(
-    artifactBuildable &&
-    !generatorRunning &&
-    artifactGenerationInProgress
-  );
-  const loading = generatorRunning || artifactGenerating || (pending && !artifactWarning && !artifactBuildable);
-  const statusLabel = generatorRunning
-    ? "generating"
-    : artifactGenerating
+  const artifactGenerating = Boolean(artifactBuildable && artifactGenerationInProgress);
+  // A model that simply lacks a built __cadgen__ artifact is NOT "loading" — nothing loads in a
+  // static file list (generation happens lazily when the model is opened). Only an actively-running
+  // generation shows a spinner; an un-built entry just shows its normal type icon.
+  const loading = artifactGenerating;
+  const statusLabel = artifactGenerating
     ? "generating artifact"
     : artifactWarning
       ? (artifactStale ? "artifact stale" : artifactErrorCode === "missing_glb" ? "artifacts missing" : "artifact warning")

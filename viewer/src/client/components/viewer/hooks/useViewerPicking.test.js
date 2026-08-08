@@ -14,6 +14,7 @@ import {
   measureHitPointFromWorldIntersection,
   measurePickForPosition
 } from "./useViewerPicking.js";
+import { partIdFromIntersection, shouldRaycastRecordForPick } from "./partPicking.js";
 
 test("worldUnitsPerPixelAtDistance converts perspective depth to screen scale", () => {
   const camera = {
@@ -211,4 +212,29 @@ test("measure tap payload keeps the resolved reference for face-to-face distance
   const measurement = measurementFromPicks(pickA, pickB);
   assert.equal(measurement.perpendicular, 5);
   assert.equal(measurement.euclidean, 5);
+});
+
+test("partIdFromIntersection reads a per-occurrence mesh's partId", () => {
+  const hit = { object: { userData: { partId: "o1.5" } } };
+  assert.equal(partIdFromIntersection(hit), "o1.5");
+});
+
+test("partIdFromIntersection returns the mesh's userData.partId, else null", () => {
+  assert.equal(partIdFromIntersection({ object: { userData: { partId: "o1.2" } } }), "o1.2");
+  assert.equal(partIdFromIntersection({ object: { userData: {} } }), null);
+  assert.equal(partIdFromIntersection({}), null);
+});
+
+test("shouldRaycastRecordForPick applies bucket-level focus/hidden to per-mesh records", () => {
+  const focusIds = new Set(["o1.5"]);
+  // in focus -> kept; out of focus -> dropped
+  assert.equal(shouldRaycastRecordForPick({ mesh: { visible: true }, partId: "o1.5" }, { focusIds, hiddenIds: new Set() }), true);
+  assert.equal(shouldRaycastRecordForPick({ mesh: { visible: true }, partId: "o1.9" }, { focusIds, hiddenIds: new Set() }), false);
+  // hidden -> dropped even with no focus
+  assert.equal(
+    shouldRaycastRecordForPick({ mesh: { visible: true }, partId: "o1.5" }, { focusIds: new Set(), hiddenIds: new Set(["o1.5"]) }),
+    false
+  );
+  // invisible -> dropped
+  assert.equal(shouldRaycastRecordForPick({ mesh: { visible: false }, partId: "o1.5" }, { focusIds: new Set(), hiddenIds: new Set() }), false);
 });

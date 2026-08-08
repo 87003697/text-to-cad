@@ -169,7 +169,6 @@ test("file session tab state stores file sheet open section ids", () => {
     slices: {
       tab: {
         inspectedAssemblyNodeId: "module-a",
-        stepTreeRootShowMore: true,
         fileSheetOpenSectionIds: ["tree", "display", "appearance"]
       }
     }
@@ -177,7 +176,6 @@ test("file session tab state stores file sheet open section ids", () => {
 
   const restoredTab = readFileSessionState("models", entry.file, entry, { storage }).slices.tab;
   assert.equal(restoredTab.inspectedAssemblyNodeId, "module-a");
-  assert.equal(restoredTab.stepTreeRootShowMore, true);
   assert.deepEqual(restoredTab.fileSheetOpenSectionIds, [
     "tree",
     "display",

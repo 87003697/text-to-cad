@@ -1,31 +1,10 @@
-import {
-  ArrowUpFromLine,
-  Bot,
-  Boxes,
-  ChevronDown,
-  ChevronRight,
-  Code,
-  Cuboid,
-  DraftingCompass,
-  FileBox,
-  FolderOpen,
-  Layers3,
-  LoaderCircle,
-  Package,
-  Route
-} from "lucide-react";
+import { ChevronRight } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
   Collapsible,
   CollapsibleContent,
   CollapsibleTrigger
 } from "@/components/ui/collapsible";
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuTrigger
-} from "@/components/ui/dropdown-menu";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import {
   Sheet,
@@ -48,41 +27,19 @@ import {
   useSidebar
 } from "@/components/ui/sidebar";
 import { cn } from "@/ui/utils";
-import {
-  ENTRY_ICON_KIND,
-  entryIconKind
-} from "@/workbench/entryIconKind";
-import {
-  entryIconStatus,
-  entryStepSourceKind
-} from "@/workbench/entryIconStatus";
+import { entryIconStatus } from "@/workbench/entryIconStatus";
+import { isCodeDerivedEntry } from "@/workbench/entryIconKind";
 import {
   fileKey,
   listSidebarItems,
   sidebarLabelForEntry
 } from "@/workbench/sidebar";
+import EntryIcon from "./EntryIcon";
 import FileAccessContextMenu from "./FileAccessContextMenu";
 
 const DESKTOP_FILE_VIEWER_MIN_WIDTH = 150;
 const DESKTOP_FILE_VIEWER_MAX_WIDTH = "calc(100vw - 0.75rem)";
 const MOBILE_FILE_VIEWER_WIDTH = "min(18rem, calc(100vw - 0.75rem))";
-
-const ENTRY_ICON_COMPONENTS = {
-  [ENTRY_ICON_KIND.LOADING]: LoaderCircle,
-  [ENTRY_ICON_KIND.ASSEMBLY]: Boxes,
-  [ENTRY_ICON_KIND.DXF]: DraftingCompass,
-  [ENTRY_ICON_KIND.GCODE]: Route,
-  [ENTRY_ICON_KIND.IMPLICIT]: Code,
-  [ENTRY_ICON_KIND.ROBOT]: Bot,
-  [ENTRY_ICON_KIND.STEP_PART]: Package,
-  [ENTRY_ICON_KIND.STL_MESH]: Cuboid,
-  [ENTRY_ICON_KIND.THREE_MF_MESH]: Layers3,
-  [ENTRY_ICON_KIND.GLB_MESH]: FileBox
-};
-
-function iconForEntry(entry, sourceFormat, status) {
-  return ENTRY_ICON_COMPONENTS[entryIconKind(entry, { sourceFormat, status })] || Package;
-}
 
 function FileEntryButton({
   entry,
@@ -92,7 +49,6 @@ function FileEntryButton({
   entrySourceFormat,
   entryHasMesh,
   entryHasDxf,
-  entryHasGcode,
   entryHasUrdf,
   activeGenerationFiles = [],
   activeStepArtifactGenerationFile = "",
@@ -103,6 +59,7 @@ function FileEntryButton({
   fileAccessBusyKey = "",
   onDownloadFileAsset,
   onExportImplicitFile,
+  onExportStepFile,
   onRevealFileAsset,
   onRevealInExplorerView,
   onCopyFileAssetReference,
@@ -118,24 +75,14 @@ function FileEntryButton({
     entryKey: key,
     hasMesh: entryHasMesh(entry),
     hasDxf: entryHasDxf(entry),
-    hasGcode: entryHasGcode(entry),
     hasUrdf: entryHasUrdf(entry),
     activeGenerationFiles,
     activeStepArtifactGenerationFile,
     stepArtifactGenerationAvailable
   });
-  const EntryIcon = iconForEntry(entry, sourceFormat, status);
-  const stepSourceKind = entryStepSourceKind(entry);
-  const SourceBadgeIcon = stepSourceKind === "python"
-    ? Code
-    : stepSourceKind === "step"
-      ? ArrowUpFromLine
-      : null;
-  const showSourceBadge = Boolean(SourceBadgeIcon);
   const title = [
     label,
-    stepSourceKind === "python" ? "Python-backed" : "",
-    stepSourceKind === "step" ? "STEP-backed" : "",
+    isCodeDerivedEntry(entry) ? "Python-backed" : "",
     status.statusLabel,
     entry?.kind,
     String(entry?.file || "")
@@ -160,16 +107,12 @@ function FileEntryButton({
     >
       <span className="relative flex size-4 shrink-0 items-center justify-center" aria-hidden="true">
         <EntryIcon
-          className={cn(
-            "size-4",
-            status.loading && "animate-spin"
-          )}
+          entry={entry}
+          sourceFormat={sourceFormat}
+          status={status}
+          className="size-4"
+          spinning={status.loading}
         />
-        {showSourceBadge ? (
-          <span className="absolute -bottom-1 -right-1 flex size-2.5 items-center justify-center rounded-[3px] border border-sidebar bg-sidebar text-sidebar-foreground shadow-sm">
-            <SourceBadgeIcon className="size-2" strokeWidth={2.5} />
-          </span>
-        ) : null}
       </span>
       <span className="block min-w-0 flex-1 max-w-full overflow-hidden text-ellipsis whitespace-nowrap">{label}</span>
     </SidebarMenuButton>
@@ -184,6 +127,7 @@ function FileEntryButton({
       busyKey={fileAccessBusyKey}
       onDownloadFileAsset={onDownloadFileAsset}
       onExportImplicitFile={onExportImplicitFile}
+      onExportStepFile={onExportStepFile}
       onRevealFileAsset={onRevealFileAsset}
       onRevealInExplorerView={onRevealInExplorerView}
       onCopyFileAssetReference={onCopyFileAssetReference}
@@ -204,7 +148,6 @@ function DirectoryNode({
   entrySourceFormat,
   entryHasMesh,
   entryHasDxf,
-  entryHasGcode,
   entryHasUrdf,
   activeGenerationFiles = [],
   activeStepArtifactGenerationFile = "",
@@ -215,6 +158,7 @@ function DirectoryNode({
   fileAccessBusyKey = "",
   onDownloadFileAsset,
   onExportImplicitFile,
+  onExportStepFile,
   onRevealFileAsset,
   onRevealInExplorerView,
   onCopyFileAssetReference,
@@ -272,7 +216,6 @@ function DirectoryNode({
                     entrySourceFormat={entrySourceFormat}
                     entryHasMesh={entryHasMesh}
                     entryHasDxf={entryHasDxf}
-                    entryHasGcode={entryHasGcode}
                     entryHasUrdf={entryHasUrdf}
                     activeGenerationFiles={activeGenerationFiles}
                     activeStepArtifactGenerationFile={activeStepArtifactGenerationFile}
@@ -283,6 +226,7 @@ function DirectoryNode({
                     fileAccessBusyKey={fileAccessBusyKey}
                     onDownloadFileAsset={onDownloadFileAsset}
                     onExportImplicitFile={onExportImplicitFile}
+                    onExportStepFile={onExportStepFile}
                     onRevealFileAsset={onRevealFileAsset}
                     onRevealInExplorerView={onRevealInExplorerView}
                     onCopyFileAssetReference={onCopyFileAssetReference}
@@ -300,7 +244,6 @@ function DirectoryNode({
                     entrySourceFormat={entrySourceFormat}
                     entryHasMesh={entryHasMesh}
                     entryHasDxf={entryHasDxf}
-                    entryHasGcode={entryHasGcode}
                     entryHasUrdf={entryHasUrdf}
                     activeGenerationFiles={activeGenerationFiles}
                     activeStepArtifactGenerationFile={activeStepArtifactGenerationFile}
@@ -311,6 +254,7 @@ function DirectoryNode({
                     fileAccessBusyKey={fileAccessBusyKey}
                     onDownloadFileAsset={onDownloadFileAsset}
                     onExportImplicitFile={onExportImplicitFile}
+                    onExportStepFile={onExportStepFile}
                     onRevealFileAsset={onRevealFileAsset}
                     onRevealInExplorerView={onRevealInExplorerView}
                     onCopyFileAssetReference={onCopyFileAssetReference}
@@ -343,109 +287,8 @@ function SidebarResizeHandle({ onStartResize }) {
       onPointerDown={onStartResize}
       className="group/sidebar-resize absolute inset-y-0 -right-1.5 z-30 flex h-auto w-3 cursor-col-resize touch-none items-stretch justify-center rounded-none px-0 py-0 hover:bg-transparent"
     >
-      <span className="my-2 w-px rounded-full bg-transparent transition-colors group-hover/sidebar-resize:bg-sidebar-border group-focus-visible/sidebar-resize:bg-ring" />
+      <span className="w-px bg-transparent transition-colors group-hover/sidebar-resize:bg-ring group-focus-visible/sidebar-resize:bg-ring" />
     </Button>
-  );
-}
-
-function directoryLabelForOption(option) {
-  const rootName = String(option?.rootName || "").trim();
-  if (rootName) {
-    return rootName;
-  }
-  const pathLabel = String(option?.rootPath || option?.dir || "").trim().replace(/\\/g, "/").replace(/\/+$/g, "");
-  return pathLabel.split("/").filter(Boolean).pop() || pathLabel || "Directory";
-}
-
-function directoryPathLabelForOption(option) {
-  return String(option?.rootPath || option?.dir || "").trim();
-}
-
-function normalizeDirectoryOptions(options) {
-  const seen = new Set();
-  const result = [];
-  for (const option of Array.isArray(options) ? options : []) {
-    const dir = String(option?.dir || "").trim();
-    const rootPath = String(option?.rootPath || "").trim();
-    const key = rootPath || dir;
-    if (!dir || !key || seen.has(key)) {
-      continue;
-    }
-    seen.add(key);
-    result.push({
-      dir,
-      rootPath,
-      rootName: String(option?.rootName || "").trim()
-    });
-  }
-  return result;
-}
-
-function DirectorySwitcher({
-  directoryOptions = [],
-  activeDirectory = "",
-  onSelectDirectory
-}) {
-  const options = normalizeDirectoryOptions(directoryOptions);
-  if (options.length <= 1) {
-    return null;
-  }
-
-  const activeDir = String(activeDirectory || "").trim();
-  const activeOption = options.find((option) => option.dir === activeDir || option.rootPath === activeDir) || options[0];
-  const activeLabel = directoryLabelForOption(activeOption);
-  const activePathLabel = directoryPathLabelForOption(activeOption);
-
-  return (
-    <DropdownMenu>
-      <DropdownMenuTrigger asChild>
-        <Button
-          type="button"
-          variant="ghost"
-          size="sm"
-          className="h-7 w-full justify-between gap-2 rounded-md p-2 text-xs font-medium text-sidebar-foreground hover:bg-sidebar-accent hover:text-sidebar-accent-foreground"
-          title={activePathLabel || activeLabel}
-        >
-          <span className="flex min-w-0 flex-1 items-center gap-2">
-            <span className="flex size-4 shrink-0 items-center justify-center" aria-hidden="true">
-              <FolderOpen className="size-4 text-muted-foreground" />
-            </span>
-            <span className="min-w-0 truncate">{activeLabel}</span>
-          </span>
-          <ChevronDown className="size-3.5 shrink-0 text-muted-foreground" aria-hidden="true" />
-        </Button>
-      </DropdownMenuTrigger>
-      <DropdownMenuContent align="start" className="w-[--radix-dropdown-menu-trigger-width] max-w-[min(28rem,calc(100vw-1rem))]">
-        {options.map((option) => {
-          const label = directoryLabelForOption(option);
-          const pathLabel = directoryPathLabelForOption(option);
-          const active = option.dir === activeOption.dir || option.rootPath === activeOption.rootPath;
-          return (
-            <DropdownMenuItem
-              key={option.rootPath || option.dir}
-              className={cn(
-                "min-w-0 items-start gap-2 text-xs",
-                active && "bg-accent text-accent-foreground"
-              )}
-              onSelect={() => {
-                if (typeof onSelectDirectory === "function" && option.dir !== activeOption.dir) {
-                  onSelectDirectory(option.dir);
-                }
-              }}
-              title={pathLabel || label}
-            >
-              <FolderOpen className="mt-0.5 size-4 shrink-0 text-muted-foreground" aria-hidden="true" />
-              <span className="min-w-0 flex-1">
-                <span className="block truncate font-medium">{label}</span>
-                {pathLabel ? (
-                  <span className="mt-0.5 block truncate text-[11px] text-muted-foreground">{pathLabel}</span>
-                ) : null}
-              </span>
-            </DropdownMenuItem>
-          );
-        })}
-      </DropdownMenuContent>
-    </DropdownMenu>
   );
 }
 
@@ -462,7 +305,6 @@ function FileViewerContents({
   entrySourceFormat,
   entryHasMesh,
   entryHasDxf,
-  entryHasGcode,
   entryHasUrdf,
   activeGenerationFiles = [],
   activeStepArtifactGenerationFile = "",
@@ -473,15 +315,13 @@ function FileViewerContents({
   fileAccessBusyKey = "",
   onDownloadFileAsset,
   onExportImplicitFile,
+  onExportStepFile,
   onRevealFileAsset,
   onRevealInExplorerView,
   onCopyFileAssetReference,
   catalogHydrated = false,
   catalogRefreshing = false,
   catalogError = "",
-  directoryOptions = [],
-  activeDirectory = "",
-  onSelectDirectory,
   resizable = true,
   onStartResize
 }) {
@@ -494,11 +334,6 @@ function FileViewerContents({
   return (
     <>
       <SidebarHeader className="gap-2">
-        <DirectorySwitcher
-          directoryOptions={directoryOptions}
-          activeDirectory={activeDirectory}
-          onSelectDirectory={onSelectDirectory}
-        />
         <SidebarInput
           type="search"
           placeholder="Search files, ids, or paths..."
@@ -530,7 +365,6 @@ function FileViewerContents({
                           entrySourceFormat={entrySourceFormat}
                           entryHasMesh={entryHasMesh}
                           entryHasDxf={entryHasDxf}
-                          entryHasGcode={entryHasGcode}
                           entryHasUrdf={entryHasUrdf}
                           activeGenerationFiles={activeGenerationFiles}
                           activeStepArtifactGenerationFile={activeStepArtifactGenerationFile}
@@ -541,6 +375,7 @@ function FileViewerContents({
                           fileAccessBusyKey={fileAccessBusyKey}
                           onDownloadFileAsset={onDownloadFileAsset}
                           onExportImplicitFile={onExportImplicitFile}
+                          onExportStepFile={onExportStepFile}
                           onRevealFileAsset={onRevealFileAsset}
                           onRevealInExplorerView={onRevealInExplorerView}
                           onCopyFileAssetReference={onCopyFileAssetReference}
@@ -557,7 +392,6 @@ function FileViewerContents({
                           entrySourceFormat={entrySourceFormat}
                           entryHasMesh={entryHasMesh}
                           entryHasDxf={entryHasDxf}
-                          entryHasGcode={entryHasGcode}
                           entryHasUrdf={entryHasUrdf}
                           activeGenerationFiles={activeGenerationFiles}
                           activeStepArtifactGenerationFile={activeStepArtifactGenerationFile}
@@ -568,6 +402,7 @@ function FileViewerContents({
                           fileAccessBusyKey={fileAccessBusyKey}
                           onDownloadFileAsset={onDownloadFileAsset}
                           onExportImplicitFile={onExportImplicitFile}
+                          onExportStepFile={onExportStepFile}
                           onRevealFileAsset={onRevealFileAsset}
                           onRevealInExplorerView={onRevealInExplorerView}
                           onCopyFileAssetReference={onCopyFileAssetReference}
@@ -577,13 +412,13 @@ function FileViewerContents({
                   })}
                 </SidebarMenu>
               ) : catalogErrorMessage && !hasEntries ? (
-                <p className="px-2 py-3 text-xs text-muted-foreground">CAD catalog unavailable: {catalogErrorMessage}</p>
+                <p className="px-2 py-1 text-xs text-muted-foreground">CAD catalog unavailable: {catalogErrorMessage}</p>
               ) : catalogLoading ? (
-                <p className="px-2 py-3 text-xs text-muted-foreground">Loading CAD catalog...</p>
+                <p className="px-2 py-1 text-xs text-muted-foreground">Loading CAD catalog...</p>
               ) : hasEntries ? (
-                <p className="px-2 py-3 text-xs text-muted-foreground">No CAD entries match this filter.</p>
+                <p className="px-2 py-1 text-xs text-muted-foreground">No CAD entries match this filter.</p>
               ) : (
-                <p className="px-2 py-3 text-xs text-muted-foreground">No CAD entries found.</p>
+                <p className="px-2 py-1 text-xs text-muted-foreground">No CAD entries found.</p>
               )}
             </SidebarGroupContent>
           </SidebarGroup>
@@ -608,7 +443,6 @@ export default function FileViewerSidebar({
   entrySourceFormat,
   entryHasMesh,
   entryHasDxf,
-  entryHasGcode,
   entryHasUrdf,
   activeGenerationFiles = [],
   activeStepArtifactGenerationFile = "",
@@ -619,15 +453,13 @@ export default function FileViewerSidebar({
   fileAccessBusyKey = "",
   onDownloadFileAsset,
   onExportImplicitFile,
+  onExportStepFile,
   onRevealFileAsset,
   onRevealInExplorerView,
   onCopyFileAssetReference,
   catalogHydrated = false,
   catalogRefreshing = false,
   catalogError = "",
-  directoryOptions = [],
-  activeDirectory = "",
-  onSelectDirectory,
   resizable = true,
   onStartResize
 }) {
@@ -651,7 +483,6 @@ export default function FileViewerSidebar({
       entrySourceFormat={entrySourceFormat}
       entryHasMesh={entryHasMesh}
       entryHasDxf={entryHasDxf}
-      entryHasGcode={entryHasGcode}
       entryHasUrdf={entryHasUrdf}
       activeGenerationFiles={activeGenerationFiles}
       activeStepArtifactGenerationFile={activeStepArtifactGenerationFile}
@@ -662,15 +493,13 @@ export default function FileViewerSidebar({
       fileAccessBusyKey={fileAccessBusyKey}
       onDownloadFileAsset={onDownloadFileAsset}
       onExportImplicitFile={onExportImplicitFile}
+      onExportStepFile={onExportStepFile}
       onRevealFileAsset={onRevealFileAsset}
       onRevealInExplorerView={onRevealInExplorerView}
       onCopyFileAssetReference={onCopyFileAssetReference}
       catalogHydrated={catalogHydrated}
       catalogRefreshing={catalogRefreshing}
       catalogError={catalogError}
-      directoryOptions={directoryOptions}
-      activeDirectory={activeDirectory}
-      onSelectDirectory={onSelectDirectory}
       resizable={resizable}
       onStartResize={onStartResize}
     />

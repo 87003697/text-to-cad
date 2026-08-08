@@ -3,7 +3,6 @@ export const RENDER_FORMAT = Object.freeze({
   STL: "stl",
   THREE_MF: "3mf",
   GLB: "glb",
-  GCODE: "gcode",
   DXF: "dxf",
   IMPLICIT: "implicit",
   URDF: "urdf",
@@ -40,7 +39,6 @@ export function normalizeRenderFormat(value, { defaultFormat = RENDER_FORMAT.STE
     normalized === RENDER_FORMAT.STL ||
     normalized === RENDER_FORMAT.THREE_MF ||
     normalized === RENDER_FORMAT.GLB ||
-    normalized === RENDER_FORMAT.GCODE ||
     normalized === RENDER_FORMAT.DXF ||
     normalized === RENDER_FORMAT.IMPLICIT ||
     normalized === RENDER_FORMAT.URDF ||
@@ -69,9 +67,6 @@ export function entrySourceFormat(entry) {
   }
   if (kind === RENDER_FORMAT.GLB || kind === "gltf") {
     return RENDER_FORMAT.GLB;
-  }
-  if (kind === RENDER_FORMAT.GCODE) {
-    return RENDER_FORMAT.GCODE;
   }
   if (kind === RENDER_FORMAT.IMPLICIT) {
     return RENDER_FORMAT.IMPLICIT;
@@ -122,9 +117,6 @@ export function fileSheetKindForEntry(entry) {
   if (kind === RENDER_FORMAT.SDF) {
     return RENDER_FORMAT.SDF;
   }
-  if (kind === RENDER_FORMAT.GCODE) {
-    return RENDER_FORMAT.GCODE;
-  }
   if (kind === RENDER_FORMAT.IMPLICIT) {
     return RENDER_FORMAT.IMPLICIT;
   }
@@ -169,9 +161,6 @@ export function renderFormatFromExtension(extension) {
   }
   if (normalized === "glb" || normalized === "gltf") {
     return RENDER_FORMAT.GLB;
-  }
-  if (normalized === "gcode") {
-    return RENDER_FORMAT.GCODE;
   }
   if (normalized === "implicit" || normalized === "implicit.js" || normalized === "implicit.mjs") {
     return RENDER_FORMAT.IMPLICIT;

@@ -31,10 +31,6 @@ test("buildCadCommand returns portable rebuild commands for generated CAD assets
     buildCadCommand("meshes/part.glb", { file: "meshes/part.glb", kind: "glb" }),
     ""
   );
-  assert.equal(
-    buildCadCommand("toolpaths/part.gcode", { file: "toolpaths/part.gcode", kind: "gcode" }),
-    ""
-  );
 });
 
 test("buildViewerMeshAlert reports missing sidecar meshes without rebuild commands", () => {

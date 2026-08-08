@@ -5,6 +5,10 @@
 # Python
 __pycache__/
 *.py[cod]
+# Per-folder cadgen output home written beside CAD sources: component-GLB render
+# packages (assembly.json + components/*.glb), drawing packages, binary BREP scene
+# caches, and generation locks. Rebuilt on demand; never committed.
+__cadgen__/
 *.egg-info/
 .pytest_cache/
 .mypy_cache/
@@ -54,3 +58,9 @@ models/**/*.mkv
 
 # Local printer credentials
 /bambu-printers.json
+
+# Component-GLB render packages are regenerated on demand (per design/step-generation-rearchitecture.md §7); never committed.
+.*.step.glb/
+.*.step.glb
+.*.stp.glb/
+.*.stp.glb

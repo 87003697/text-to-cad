@@ -11,7 +11,7 @@ repository link is only for provenance and release review.
 
 ## Purpose
 
-Create or modify parametric CAD models from natural-language requirements, generate validated STEP/STP artifacts, inspect geometry references, and return checked outputs. Treat STEP as the primary CAD artifact. Treat STL, 3MF, and native GLB as secondary export workflows that branch from a STEP-first process. For assemblies, prefer `cadpy.assembly.AssemblyHelper` with source-level build123d joints, named mating datums, and native labels when the parts have functional assembly relationships.
+Create or modify parametric CAD models from natural-language requirements, generate validated STEP/STP artifacts, inspect geometry references, and return checked outputs. Treat STEP as the primary CAD artifact. Treat STL, 3MF, and native GLB as secondary export workflows that branch from a STEP-first process. For assemblies, prefer `cadgen.assembly.AssemblyHelper` with source-level build123d joints, named mating datums, and native labels when the parts have functional assembly relationships.
 
 There are two ways into the STEP workflow: generate from build123d Python source (the default when designing from scratch or modifying a generated model), or import an existing STEP/STP file directly (when no generator exists or the user explicitly targets the STEP file). Both produce the same inspectable artifacts.
 
@@ -45,9 +45,11 @@ Ask one focused clarification question only when missing information makes the m
 From the CAD skill directory, the launcher shape is:
 
 ```bash
-python scripts/step ...      # STEP generation, GLB/topology artifacts, mesh sidecars
+python scripts/gen ...       # render GLB/topology packages from gen_step() Python sources
+python scripts/export ...    # STL/3MF/GLB mesh files from Python sources or imported STEP
 python scripts/inspect ...   # refs, measure, align, frame, diff
 python scripts/snapshot ...  # PNG/GIF visual review packets
+python scripts/artifact ...  # debug one on-demand render-package build (imported STEP)
 ```
 
 Use the active project Python interpreter; treat `python` in examples as an interpreter placeholder. Use `python scripts/<tool> --help` for the complete current command interface; reference docs show recommended workflows, not every flag.
@@ -65,9 +67,9 @@ Scale depth to the task: a simple part needs a short brief and few spec-driven c
 3. **Write a natural-language CAD brief.** Extract dimensions, units, coordinate convention, feature intent, output paths, assumptions, and validation targets from all provided inputs — prose, reference images, technical drawings. Use `references/cad-brief.md`.
 4. **Check named purchasable components.** When an assembly includes named off-the-shelf actuators, servos, motors, electronics boards, connectors, or other purchasable components, search `$step-parts` before creating simplified placeholder geometry. If no exact match is found, record the miss and then use a documented envelope.
 5. **Plan before coding.** Define parameters, intent labels, source paths, expected bounding boxes, and any mating/positioning datums before editing.
-6. **Edit source, not generated artifacts.** Author build123d Python with `gen_step()`. When a Python generator exists, run `scripts/step` on the generator, never on its exported STEP. Use direct STEP/STP targets (`--kind part|assembly`) only for imports with no generator or when the user explicitly identifies the STEP/STP file as the target.
-7. **Generate explicit targets.** Run `scripts/step` on explicit targets only; do not run directory-wide generation.
-8. **Validate geometrically.** Run `scripts/inspect refs <step-or-cad-target> --facts --planes --positioning` as the baseline, then verify the dimensions and relationships the user's spec calls out with targeted `measure`, `align`, `frame`, or `diff` checks.
+6. **Edit source, not generated artifacts.** Author build123d Python with `gen_step()`, naming a buildable entry generator `<name>.step.py` (helper/library modules stay `<name>.py`; see `references/step-generation.md`). When a Python generator exists, run `scripts/gen` on the generator, never on its exported STEP. Imported STEP/STP files (no generator) need no build step: inspect, snapshot, and the CAD Viewer generate their render artifacts on demand, and `scripts/export` accepts them directly.
+7. **Generate explicit targets.** Run `scripts/gen` on explicit generator targets only; do not run directory-wide generation. Add `--write-step` when the user needs the `.step` file itself, and use `scripts/export` when they need STL/3MF/GLB mesh files.
+8. **Validate geometrically.** Run `scripts/inspect refs <step-or-cad-target> --facts --planes --positioning` as the baseline, then verify the dimensions and relationships the user's spec calls out with targeted `measure`, `align`, `frame`, or `diff` checks. Run `scripts/inspect validate <step-or-cad-target>` for geometry soundness: `refs --facts` reports counts and bounds, and its `ok` field covers ref resolution only — an open shell and an inverted solid both pass it.
 9. **Snapshot the primary STEP — snapshot validation is mandatory.** After creating or visibly updating a primary STEP/STP part or assembly, ALWAYS run CAD `scripts/snapshot` against it and review the output; deterministic checks passing is not a reason to skip. The only skip cases are documented in `references/snapshot-review.md` (no visible geometry changed, or no valid artifact exists); report the reason when skipping.
 10. **Repair and rerun.** If a check fails, change the smallest responsible source section, regenerate, and rerun the failed validation.
 
@@ -95,8 +97,8 @@ Load these files only when their trigger applies:
 - `references/inspection-and-validation.md` — validation sequence, selector refs, facts, planes, measurements, alignment, diff, frame, and validation reporting.
 - `references/snapshot-review.md` — mandatory snapshot policy, packet sizing, targeted views, and converting visual findings into geometry checks.
 - `references/positioning.md` — part-local datums and origins, assembly transforms, build123d joints, CLI alignment validation, and positioning reports.
-- `references/parameters.md` — parameterizing or animating a STEP model: source parameters, `.step.js` sidecar modules, viewer controls, and animation design.
-- `references/supported-exports.md` — secondary STL/3MF/native GLB sidecar workflows.
+- `references/parameters.md` — parameterizing or animating a STEP model: source parameters, JS parameter/animation sidecars declared via gen_step params, viewer controls, and animation design.
+- `references/supported-exports.md` — STL/3MF/native GLB mesh export workflows via `scripts/export`.
 - `references/repair-loop.md` — diagnosis and repair procedures.
 
 Final responses should include generated files, returned `$cad-viewer` viewer links, verification snapshots, validation actually run, assumptions, and caveats. Use `references/inspection-and-validation.md` for report structure.

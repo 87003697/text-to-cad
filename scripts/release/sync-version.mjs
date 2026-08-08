@@ -38,16 +38,12 @@ const jsonTargets = [
 ];
 
 const tomlTargets = [
-  "packages/cadpy/pyproject.toml",
-  "packages/cadpy_metadata/pyproject.toml",
+  "packages/cadgen/pyproject.toml",
   "viewer/moveit2_server/pyproject.toml",
-  "viewer/packages/cadpy/pyproject.toml",
+  "viewer/packages/cadgen/pyproject.toml",
   "skills/cad-viewer/scripts/viewer/moveit2_server/pyproject.toml",
-  "skills/cad-viewer/scripts/viewer/packages/cadpy/pyproject.toml",
-  "skills/cad/scripts/packages/cadpy/pyproject.toml",
-  "skills/sdf/scripts/packages/cadpy_metadata/pyproject.toml",
-  "skills/srdf/scripts/packages/cadpy_metadata/pyproject.toml",
-  "skills/urdf/scripts/packages/cadpy_metadata/pyproject.toml",
+  "skills/cad-viewer/scripts/viewer/packages/cadgen/pyproject.toml",
+  "skills/cad/scripts/packages/cadgen/pyproject.toml",
 ];
 
 function usage() {

@@ -115,13 +115,13 @@ test("viewer pick mode blocks measure picking while topology assets are pending"
   );
 });
 
-test("viewer pick mode blocks measure picking in dxf and path preview modes", () => {
+test("viewer pick mode blocks measure picking in dxf and mesh-only modes", () => {
   assert.equal(
     viewerPickModeForRenderPane({ measureMode: true, dxfMode: true }),
     VIEWER_PICK_MODE.NONE
   );
   assert.equal(
-    viewerPickModeForRenderPane({ measureMode: true, pathPreviewMode: true }),
+    viewerPickModeForRenderPane({ measureMode: true, meshOnlyMode: true }),
     VIEWER_PICK_MODE.NONE
   );
 });

@@ -5,11 +5,10 @@ import { ArrowLeftRight, ArrowRight, Circle, Eraser, Minus, PaintBucket, PenTool
 import { SidebarInset, SidebarProvider } from "@/components/ui/sidebar";
 import CadRenderPane from "./workbench/CadRenderPane";
 import DxfFileSheet from "./workbench/DxfFileSheet";
-import GcodeFileSheet from "./workbench/GcodeFileSheet";
 import FileViewerSidebar from "./workbench/FileViewerSidebar";
 import {
-  DisplaySettingsSection,
-  ThemeSettingsSections
+  ThemeEditorPanel,
+  buildDisplaySettingsTab
 } from "./workbench/ThemeSettingsPopover";
 import MeshFileSheet from "./workbench/MeshFileSheet";
 import ImplicitFileSheet from "./workbench/ImplicitFileSheet";
@@ -18,6 +17,7 @@ import StatusToast from "./workbench/StatusToast";
 import UrdfFileSheet from "./workbench/UrdfFileSheet";
 import ViewerAlertDialog from "./workbench/ViewerAlertDialog";
 import ViewerLoadingOverlay from "./workbench/ViewerLoadingOverlay";
+import { formatArtifactProgress } from "@/workbench/artifactProgress.js";
 import FloatingToolBar from "./workbench/FloatingToolBar";
 import CadWorkspaceTopBar from "./workbench/CadWorkspaceTopBar";
 import CadWorkspaceHome from "./workbench/CadWorkspaceHome";
@@ -33,26 +33,26 @@ import { useCadWorkspaceShortcuts } from "./workbench/hooks/useCadWorkspaceShort
 import {
   applyColorSchemeToDocument,
   DARK_COLOR_SCHEME_ID,
-  normalizeColorSchemeId,
-  readColorSchemePreference,
-  resolveColorSchemeMode,
-  writeColorSchemePreference
+  LIGHT_COLOR_SCHEME_ID
 } from "@/ui/colorScheme";
 import {
+  CUSTOM_THEME_ID,
+  getThemePresetIdForSettings,
   inferThemeSettingsSceneTone,
   normalizeThemeSettings,
-  resolveThemeSettingsForColorMode,
-  THEME_COLOR_MODES
+  resolveThemeSettingsBackdropColor,
+  resolveThemeSettingsForColorMode
 } from "cadjs/lib/themeSettings";
 import {
   displayModeForcesEdges,
   displayModeIsWireframe,
-  normalizeDisplaySettings,
-  resolveDisplayEdgeSettings
+  normalizeDisplayEdgeSettings,
+  normalizeDisplaySettings
 } from "cadjs/lib/displaySettings";
 import { clonePerspectiveSnapshot } from "cadjs/lib/perspective";
 import {
   ASSET_STATUS,
+  DOCUMENT_TITLE,
   DRAWING_TOOL,
   RENDER_FORMAT,
   REFERENCE_STATUS,
@@ -94,7 +94,6 @@ import {
   entryAssetUrl,
   entryHasDisplayEdges,
   entryHasDxf,
-  entryHasGcode,
   entryHasMesh,
   entryHasReferences,
   entryHasUrdf,
@@ -108,26 +107,17 @@ import {
   isLargeStepGlbEntry
 } from "cadjs/lib/render/meshCost";
 import {
-  buildAvailableThemePresets,
   cadWorkspaceDefaultFileSheetWidthForViewport,
   createDirectorySessionThemeSlice,
   cloneDrawingStrokes,
   cloneTabSnapshot,
   createTabRecord,
-  deleteCustomThemePreset,
   drawingStrokesEqual,
-  getAvailableThemePresetIdForSettings,
   readCadDirectorySessionState,
-  readCustomThemePresets,
   readThemeSettingsState,
-  readThemeSettingsStateFromAppearanceQuery,
   readDirectoryThemeSettingsState,
-  resetThemePresetToDefault,
-  restoreDefaultThemePresets,
-  saveAndActivateCustomThemePreset,
-  updateThemePresetSettings,
   writeCadDirectorySessionState,
-  writeCustomThemePresets,
+  writeThemeState,
   writeThemeSettings,
   tabSnapshotEqual,
   CAD_WORKSPACE_DEFAULT_SIDEBAR_WIDTH,
@@ -195,13 +185,11 @@ import {
   findEntryByUrlPath,
   fileKey,
   missingFileRefForCatalog,
-  readCadDirParam,
   readCadParam,
   selectedEntryKeyFromUrl,
   sidebarDirectoryIdForEntry,
   sidebarLabelForEntry,
   shouldDeferFileParamSelection,
-  writeCadDirParam,
   writeCadParam,
 } from "@/workbench/sidebar";
 import { buildCadRefToken } from "cadjs/lib/cadRefs.js";
@@ -214,11 +202,6 @@ import {
   DEFAULT_DXF_PREVIEW_THICKNESS_MM,
   normalizeDxfPreviewThicknessMm
 } from "cadjs/lib/dxf/buildPreviewMesh";
-import {
-  buildGcodePreviewMeshData,
-  DEFAULT_GCODE_PREVIEW_DETAIL_LEVEL,
-  normalizeGcodePreviewOptions
-} from "cadjs/lib/gcode/buildPreviewMesh";
 import {
   applyUrdfPoseToMeshData,
   buildDefaultUrdfJointValues,
@@ -243,28 +226,14 @@ import {
   URDF_JOINT_ANIMATION_FOLLOW_MS
 } from "cadjs/lib/urdf/jointAnimation";
 import { checkMoveIt2ServerLive, moveit2ServerEnabled, requestMoveIt2Server } from "cadjs/lib/urdf/moveit2ServerClient";
-import {
-  cadViewerUsesHostedCatalog,
-  readActiveCadDir,
-  refreshCadCatalog,
-  refreshCadGenerationStatus,
-  requestStepArtifactGeneration,
-  requestStepSourceStatus
-} from "../workbench/cadManifestStore.js";
-import {
-  STEP_ARTIFACT_GENERATION_FAILURE_DISPLAY_THRESHOLD,
-  runStepArtifactGenerationWithRetries,
-  stepArtifactCanGenerate,
-  stepArtifactGenerationFailureCount,
-  stepArtifactGenerationInProgress,
-  validateGeneratedStepArtifactPayload
-} from "@/workbench/stepArtifactStatus";
+import { readActiveCadDir } from "../workbench/cadManifestStore.js";
 import {
   FILE_STATUS_LEVELS,
   buildFileStatusItems,
   fileStatusHasWarningsOrErrors,
   mostIntenseFileStatusLevel
 } from "@/workbench/fileStatusItems";
+import { useArtifact } from "./workbench/hooks/useArtifact.js";
 import {
   rootAssemblyInspectionNodeId,
   buildAssemblyLeafToNodePickMap,
@@ -299,7 +268,7 @@ import {
 import {
   normalizeParameterValue,
   normalizeParameterValues
-} from "implicitjs/common/parameters.js";
+} from "cadjs/implicit/parameters";
 import { copyTextToClipboard, readTextFromClipboard } from "@/ui/clipboard";
 import { triggerUrlDownload } from "@/ui/download";
 import {
@@ -322,9 +291,17 @@ import {
   DEFAULT_IMPLICIT_EXPORT_RESOLUTION,
   requestImplicitCadExport
 } from "@/workbench/implicitExport";
+import {
+  requestStepExport,
+  stepExportFormatLabel
+} from "@/workbench/stepExport";
 
-const DEFAULT_DOCUMENT_TITLE = "CAD Viewer";
-const LOCAL_ASSET_BACKEND = "local-fs";
+// Single user-facing label for "the viewer is (re)generating the render artifacts a STEP model
+// needs before it can render" — used for both the filename status chip and its tooltip across every
+// artifact-generation trigger (first build, stale rebuild, source-changed regen). Browser-side
+// asset-load/parse stages ("loading mesh", reference "loading topology", etc.) are a different
+// concept and keep their own wording.
+const ARTIFACT_GENERATING_LABEL = "Generating artifacts";
 const EMPTY_LIST = Object.freeze([]);
 const MOVEIT2_SERVER_ENABLED = moveit2ServerEnabled();
 const URDF_POSE_PICKER_DEFAULT_CENTER = Object.freeze([0, 0, 0]);
@@ -342,10 +319,6 @@ const DEFAULT_LARGE_FILE_STATE = Object.freeze({
   selectableTopologyEnabled: false
 });
 
-function viewerAssetBackendFromEnv() {
-  return String(import.meta.env?.VIEWER_ASSET_BACKEND || LOCAL_ASSET_BACKEND).trim().toLowerCase();
-}
-
 function normalizeLargeFileState(value = {}) {
   return {
     selectableTopologyEnabled: value?.selectableTopologyEnabled === true
@@ -358,13 +331,6 @@ function readViewerViewportWidth() {
   }
   const width = Number(window.innerWidth);
   return Number.isFinite(width) && width > 0 ? width : 1600;
-}
-
-function readViewerPrefersDark() {
-  if (typeof window === "undefined" || typeof window.matchMedia !== "function") {
-    return false;
-  }
-  return window.matchMedia("(prefers-color-scheme: dark)").matches === true;
 }
 
 function readViewerLayoutMode() {
@@ -963,12 +929,53 @@ function buildStepModuleAnimationFrameValues({
   return nextValues;
 }
 
+// The values throttled here are rebuilt objects — a useMemo over animation
+// state, a map of parameter values — so their identity churns on renders where
+// nothing about their contents changed. Comparing by identity made this hook
+// re-emit values that were already current, and since an emit is itself a state
+// update that causes the next render, each redundant emit bought another render
+// of the whole workspace. Emit on a change of value, not of identity.
+function throttledValuesEqual(left, right) {
+  if (Object.is(left, right)) {
+    return true;
+  }
+  const bothPlainObjects = left && right &&
+    typeof left === "object" && typeof right === "object" &&
+    !Array.isArray(left) && !Array.isArray(right);
+  return bothPlainObjects ? shallowObjectValuesEqual(left, right) : false;
+}
+
+// React re-invokes state updaters, and it only stops re-rendering when the
+// result is Object.is-equal to what it already has. The implicit animation
+// updaters each built a fresh object every invocation, so a single click could
+// be re-applied indefinitely: identical values, a new identity each time, never
+// settling. Re-publishing the object already in the ref gives React the
+// identity it needs to bail out, and keeps the ref write the animation tick
+// depends on (it reads the ref synchronously between renders).
+function publishAnimationState(stateRef, current, nextState) {
+  const published = stateRef.current;
+  if (published && shallowObjectValuesEqual(published, nextState)) {
+    return published;
+  }
+  stateRef.current = nextState;
+  return nextState;
+}
+
 function useThrottledValue(value, intervalMs, resetKey = "") {
   const [throttledValue, setThrottledValue] = useState(value);
   const latestValueRef = useRef(value);
+  const lastEmittedRef = useRef(value);
   const resetKeyRef = useRef(resetKey);
   const lastEmitTimeRef = useRef(0);
   const timerIdRef = useRef(0);
+
+  const emitValue = useCallback((nextValue) => {
+    if (throttledValuesEqual(lastEmittedRef.current, nextValue)) {
+      return;
+    }
+    lastEmittedRef.current = nextValue;
+    setThrottledValue(nextValue);
+  }, []);
 
   useEffect(() => {
     return () => {
@@ -993,13 +1000,14 @@ function useThrottledValue(value, intervalMs, resetKey = "") {
         timerIdRef.current = 0;
       }
       lastEmitTimeRef.current = now;
+      lastEmittedRef.current = value;
       setThrottledValue(value);
       return;
     }
 
     if (interval <= 0 || typeof window === "undefined") {
       lastEmitTimeRef.current = now;
-      setThrottledValue(value);
+      emitValue(value);
       return;
     }
 
@@ -1010,7 +1018,7 @@ function useThrottledValue(value, intervalMs, resetKey = "") {
         timerIdRef.current = 0;
       }
       lastEmitTimeRef.current = now;
-      setThrottledValue(value);
+      emitValue(value);
       return;
     }
 
@@ -1020,10 +1028,10 @@ function useThrottledValue(value, intervalMs, resetKey = "") {
         lastEmitTimeRef.current = typeof performance !== "undefined" && typeof performance.now === "function"
           ? performance.now()
           : Date.now();
-        setThrottledValue(latestValueRef.current);
+        emitValue(latestValueRef.current);
       }, interval - elapsed);
     }
-  }, [intervalMs, resetKey, value]);
+  }, [emitValue, intervalMs, resetKey, value]);
 
   return throttledValue;
 }
@@ -1076,67 +1084,28 @@ function buildDxfCacheKey(entry) {
   return fileRef && dxfHash ? `${fileRef}:${dxfHash}` : "";
 }
 
-function ownProperty(object, key) {
-  return Object.prototype.hasOwnProperty.call(object || {}, key);
-}
-
 function entryHasImplicitAsset(entry) {
   return Boolean(entryAssetUrl(entry, "implicit") && entryAssetHash(entry, "implicit"));
 }
 
-function mergeStepSourceStatusIntoEntry(entry, stepSourceStatus) {
-  if (!entry || !stepSourceStatus || typeof stepSourceStatus !== "object") {
+// Hide an entry's render assets (url/hash/bytes/assets) so the viewer treats it as "not yet
+// renderable" — used while its render artifact is missing/stale/building or has failed, so the
+// viewer shows a loading/error state and never renders a stale cache. Once the artifact is ready
+// the unstripped catalog entry is used and the mesh loads.
+function entryWithoutRenderAssets(entry) {
+  if (!entry) {
     return entry;
   }
-  const nextEntry = { ...entry };
-  if (ownProperty(stepSourceStatus, "artifact")) {
-    if (stepSourceStatus.artifact && typeof stepSourceStatus.artifact === "object") {
-      nextEntry.artifact = stepSourceStatus.artifact;
-    } else {
-      delete nextEntry.artifact;
-    }
-  }
-
-  const sourceKind = String(stepSourceStatus.sourceKind || "").trim().toLowerCase();
-  if (sourceKind) {
-    nextEntry.sourceKind = sourceKind;
-  }
-  const sourcePath = String(stepSourceStatus.sourcePath || "").trim();
-  if (sourceKind === "python" && sourcePath) {
-    nextEntry.source = {
-      ...(entry.source && typeof entry.source === "object" ? entry.source : {}),
-      file: sourcePath,
-      sourcePath,
-    };
-  } else if (sourceKind === "step" && ownProperty(nextEntry, "source")) {
-    delete nextEntry.source;
-  }
-  return nextEntry;
-}
-
-function normalizeViewerDirectoryOptions(viewerServerInfo) {
-  const seen = new Set();
-  const options = [];
-  for (const option of Array.isArray(viewerServerInfo?.activeDirectories) ? viewerServerInfo.activeDirectories : []) {
-    const dir = String(option?.dir || "").trim();
-    const rootPath = String(option?.rootPath || "").trim();
-    const key = rootPath || dir;
-    if (!dir || !key || seen.has(key)) {
-      continue;
-    }
-    seen.add(key);
-    options.push({
-      dir,
-      rootPath,
-      rootName: String(option?.rootName || "").trim()
-    });
-  }
-  return options;
+  const next = { ...entry };
+  delete next.url;
+  delete next.hash;
+  delete next.bytes;
+  delete next.assets;
+  return next;
 }
 
 export default function CadWorkspace({
   manifestEntries: manifestEntriesProp = [],
-  generationStatus = null,
   manifestRevision = 0,
   catalogHydrated = false,
   catalogRefreshing = false,
@@ -1145,15 +1114,7 @@ export default function CadWorkspace({
 }) {
   const manifestEntries = Array.isArray(manifestEntriesProp) ? manifestEntriesProp : [];
   const catalogEntries = manifestEntries;
-  const explicitDirParam = readCadDirParam();
   const explicitFileParam = readCadParam();
-  const viewerAssetBackend = viewerAssetBackendFromEnv();
-  const activeGeneratorFiles = useMemo(() => (
-    Object.entries(generationStatus?.files || {})
-      .filter(([, status]) => status?.running === true)
-      .map(([file]) => String(file || "").trim())
-      .filter(Boolean)
-  ), [generationStatus]);
   const catalogRootDir = String(activeDir || "").trim();
   const [query, setQuery] = useState("");
   const initialFileViewerDirectoryStateRef = useRef(null);
@@ -1173,18 +1134,11 @@ export default function CadWorkspace({
   const [openTabs, setOpenTabs] = useState([]);
   const [viewerServerInfo, setViewerServerInfo] = useState(null);
   const viewerServerBackend = String(viewerServerInfo?.backend || "").trim().toLowerCase();
-  const directoryCatalogActive = Boolean(catalogRootDir) ||
-    cadViewerUsesHostedCatalog(viewerAssetBackend) ||
-    cadViewerUsesHostedCatalog(viewerServerBackend);
   const [selectedKey, setSelectedKey] = useState("");
   const [fileSheetOpenSectionIds, setFileSheetOpenSectionIds] = useState(null);
   const [dxfThicknessMm, setDxfThicknessMm] = useState(0);
   const [dxfBendSettings, setDxfBendSettings] = useState([]);
   const [dxfViewMode, setDxfViewMode] = useState("2d");
-  const [gcodeShowTravel, setGcodeShowTravel] = useState(false);
-  const [gcodeMaxLayer, setGcodeMaxLayer] = useState(null);
-  const [gcodeFullDetail, setGcodeFullDetail] = useState(false);
-  const [gcodePreviewDetailLevel, setGcodePreviewDetailLevel] = useState(DEFAULT_GCODE_PREVIEW_DETAIL_LEVEL);
   const [referenceQuery, setReferenceQuery] = useState("");
   const [selectedReferenceIds, setSelectedReferenceIds] = useState([]);
   const [selectedMateIds, setSelectedMateIds] = useState([]);
@@ -1196,7 +1150,6 @@ export default function CadWorkspace({
   const [selectedRenderPartIdByAssemblyPartId, setSelectedRenderPartIdByAssemblyPartId] = useState({});
   const [selectedWholeEntryCadRefToken, setSelectedWholeEntryCadRefToken] = useState("");
   const [expandedStepTreeNodeIds, setExpandedStepTreeNodeIds] = useState([]);
-  const [stepTreeRootShowMore, setStepTreeRootShowMore] = useState(false);
   const [activeTreeNodeScrollKey, setActiveTreeNodeScrollKey] = useState("");
   const [hiddenPartIds, setHiddenPartIds] = useState([]);
   const [isolatedAssemblyNodeIds, setIsolatedAssemblyNodeIds] = useState([]);
@@ -1206,14 +1159,6 @@ export default function CadWorkspace({
   const [hoveredModelPartId, setHoveredModelPartId] = useState("");
   const [copyStatus, setCopyStatus] = useState("");
   const [stepUpdateInProgress, setStepUpdateInProgress] = useState(false);
-  const [stepArtifactGenerationStateByKey, setStepArtifactGenerationStateByKey] = useState({});
-  const [stepSourceStatusState, setStepSourceStatusState] = useState({
-    key: "",
-    file: "",
-    status: null,
-    loading: false,
-    error: ""
-  });
   const [screenshotStatus, setScreenshotStatus] = useState("");
   const [fileAccessBusyKey, setFileAccessBusyKey] = useState("");
   const [persistenceStatus, setPersistenceStatus] = useState("");
@@ -1231,28 +1176,38 @@ export default function CadWorkspace({
   const [fileSheetOpenIntent, setFileSheetOpenIntent] = useState(readInitialFileSheetOpen);
   const [viewerAlertOpen, setViewerAlertOpen] = useState(false);
   const [viewerRuntimeAlert, setViewerRuntimeAlert] = useState(null);
-  const [customThemePresets, setCustomThemePresets] = useState(readCustomThemePresets);
-  const [themeState, setThemeState] = useState(() => readDirectoryThemeSettingsState(readCustomThemePresets()));
+  // One active theme id plus at most one custom settings blob. Presets are
+  // read-only; editing anything moves the active theme to "custom".
+  const [themeState, setThemeState] = useState(() => readDirectoryThemeSettingsState());
   const themeSettings = themeState.settings;
-  const themePresetId = themeState.presetId;
-  const availableThemePresets = useMemo(() => buildAvailableThemePresets(customThemePresets), [customThemePresets]);
-  const [systemPrefersDark, setSystemPrefersDark] = useState(readViewerPrefersDark);
-  const [colorSchemePreference, setColorSchemePreference] = useState(readColorSchemePreference);
-  const resolvedColorSchemeMode = useMemo(
-    () => resolveColorSchemeMode(colorSchemePreference, { prefersDark: systemPrefersDark }),
-    [colorSchemePreference, systemPrefersDark]
-  );
+  const themeId = themeState.themeId;
+  const [themeEditing, setThemeEditing] = useState(false);
   const resolvedThemeSettings = useMemo(
-    () => resolveThemeSettingsForColorMode(themeSettings, {
-      prefersDark: resolvedColorSchemeMode === DARK_COLOR_SCHEME_ID
-    }),
-    [resolvedColorSchemeMode, themeSettings]
+    () => resolveThemeSettingsForColorMode(themeSettings, { prefersDark: false }),
+    [themeSettings]
   );
-  const resolvedDisplayEdgeSettings = useMemo(
-    () => resolveDisplayEdgeSettings(displaySettings),
-    [displaySettings]
-  );
+  const resolvedDisplayEdgeSettings = useMemo(() => {
+    // Edge appearance — colour, opacity, thickness — is fixed, not a user
+    // setting. It comes from the cadjs defaults, or from a theme that styles its
+    // own linework (e.g. Terminal's neon-green outline). Whether edges draw at
+    // all is still decided by the display MODE, not here.
+    //
+    // Persisted per-file edge settings written by an older build are ignored
+    // rather than merged: with the controls gone they could never be changed
+    // back, so a stale value would be stuck forever.
+    const themeEdges = resolvedThemeSettings.edges;
+    if (themeEdges && themeEdges.enabled === true) {
+      return normalizeDisplayEdgeSettings(themeEdges);
+    }
+    return normalizeDisplayEdgeSettings();
+  }, [resolvedThemeSettings]);
+  // App light/dark is inferred from the active theme's dominant background color
+  // (not a user preference). The nav/sidebars float over the transparent
+  // viewport, so their contrast must track whatever canvas sits behind them.
   const cadWorkspaceGlassTone = useMemo(() => inferThemeSettingsSceneTone(resolvedThemeSettings), [resolvedThemeSettings]);
+  const resolvedColorSchemeMode = cadWorkspaceGlassTone === "dark"
+    ? DARK_COLOR_SCHEME_ID
+    : LIGHT_COLOR_SCHEME_ID;
   const updateDisplaySettings = useCallback((nextValue) => {
     setDisplaySettings((current) => normalizeDisplaySettings(
       typeof nextValue === "function" ? nextValue(current) : nextValue
@@ -1262,12 +1217,6 @@ export default function CadWorkspace({
     updateDisplaySettings((current) => ({
       ...normalizeDisplaySettings(current),
       mode: nextMode
-    }));
-  }, [updateDisplaySettings]);
-  const updateDisplayProjection = useCallback((nextProjection) => {
-    updateDisplaySettings((current) => ({
-      ...normalizeDisplaySettings(current),
-      projection: nextProjection
     }));
   }, [updateDisplaySettings]);
   const updateImplicitGraphicsSettings = useCallback((nextValue) => {
@@ -1299,7 +1248,8 @@ export default function CadWorkspace({
     activeId: "",
     playing: false,
     elapsedSec: 0,
-    speed: 1
+    speed: 1,
+    loopEnabled: true
   });
   const stepModuleParameterValuesRef = useRef(stepModuleParameterValues);
   const stepModuleAnimationStateRef = useRef(stepModuleAnimationState);
@@ -1308,7 +1258,8 @@ export default function CadWorkspace({
     activeId: "",
     playing: false,
     elapsedSec: 0,
-    speed: 1
+    speed: 1,
+    loopEnabled: true
   });
   const implicitAnimationStateRef = useRef(implicitAnimationState);
   const [implicitGraphicsSettings, setImplicitGraphicsSettings] = useState(() => normalizeImplicitGraphicsSettings());
@@ -1330,9 +1281,6 @@ export default function CadWorkspace({
     smoothingMs: URDF_JOINT_ANIMATION_FOLLOW_MS,
     lastTimestampMs: 0
   });
-  const stepArtifactGenerationRequestsRef = useRef(new Map());
-  const selectedStepArtifactBuildKeyRef = useRef("");
-
   const handlePersistenceWriteError = useCallback(({ key }) => {
     const failureKey = String(key || "browser-storage");
     if (lastPersistenceFailureKeyRef.current === failureKey) {
@@ -1371,13 +1319,6 @@ export default function CadWorkspace({
     dxfError,
     setDxfError,
     dxfLoadStage,
-    gcodeState,
-    setGcodeState,
-    gcodeStatus,
-    setGcodeStatus,
-    gcodeError,
-    setGcodeError,
-    gcodeLoadStage,
     implicitState,
     setImplicitState,
     implicitStatus,
@@ -1405,19 +1346,16 @@ export default function CadWorkspace({
     getCachedMeshState,
     getCachedReferenceState,
     getCachedDxfState,
-    getCachedGcodeState,
     getCachedImplicitState,
     getCachedUrdfState,
     cancelMeshLoad,
     cancelDxfLoad,
-    cancelGcodeLoad,
     cancelImplicitLoad,
     cancelUrdfLoad,
     cancelReferenceLoad,
     cancelDisplayEdgeLoad,
     loadMeshForEntry,
     loadDxfForEntry,
-    loadGcodeForEntry,
     loadImplicitForEntry,
     loadUrdfForEntry,
     loadReferencesForEntry,
@@ -1427,7 +1365,6 @@ export default function CadWorkspace({
     entryHasReferences,
     entryHasDisplayEdges,
     entryHasDxf,
-    entryHasGcode,
     buildNormalizedReferenceState,
   });
 
@@ -1473,58 +1410,69 @@ export default function CadWorkspace({
         catalogRefreshing
       });
   const catalogSelectedEntrySourceFormat = entrySourceFormat(catalogSelectedEntry);
-  const activeStepArtifactGenerationFiles = useMemo(() => {
-    const files = Object.values(stepArtifactGenerationStateByKey)
-      .filter((state) => state?.status === "loading" && state?.file)
-      .map((state) => String(state.file).trim())
-      .filter(Boolean);
-    return [...new Set(files)];
-  }, [stepArtifactGenerationStateByKey]);
-  const selectedGeneratorRunning = Boolean(
-    catalogSelectedEntry &&
-    activeGeneratorFiles.includes(fileKey(catalogSelectedEntry))
+  // Unified render-artifact status for the selected entry: ready (render) | generating (loading) |
+  // error (fatal). A missing/stale cache is not an issue — it just triggers a (re)build. Replaces
+  // the per-entry step-source-status fetch, the mesh-stripping merge, and the build effect.
+  // STEP entries and generated DXF drawings (`.dxf.py`, sourceKind "python") are artifact-managed;
+  // a raw imported `.dxf` renders directly from disk and never hits the artifact route.
+  const selectedArtifact = useArtifact(
+    catalogSelectedEntry ? fileKey(catalogSelectedEntry) : "",
+    {
+      enabled: catalogSelectedEntrySourceFormat === RENDER_FORMAT.STEP ||
+        (catalogSelectedEntrySourceFormat === RENDER_FORMAT.DXF &&
+          catalogSelectedEntry?.sourceKind === "python"),
+      freshnessKey: `${catalogSelectedEntry?.hash || ""}:${manifestRevision}`,
+    }
   );
-  const selectedStepSourceStatusFile = catalogSelectedEntrySourceFormat === RENDER_FORMAT.STEP && catalogSelectedEntry
-    ? fileKey(catalogSelectedEntry)
-    : "";
-  const selectedStepSourceStatusKey = selectedStepSourceStatusFile
-    ? [
-        selectedStepSourceStatusFile,
-        catalogSelectedEntry?.hash || "",
-        manifestRevision
-      ].join(":")
-    : "";
-  const selectedStepSourceStatus =
-    !selectedGeneratorRunning && selectedStepSourceStatusKey && stepSourceStatusState.key === selectedStepSourceStatusKey
-      ? stepSourceStatusState.status
-      : null;
+  const selectedArtifactGenerating = selectedArtifact.status === "generating";
+  // The in-flight build's own report of where it is (null until it reports, and for
+  // every loading state that is not an artifact build). Only meaningful while
+  // generating — a stale frame must not outlive the build that produced it.
+  const selectedArtifactProgress = selectedArtifactGenerating ? selectedArtifact.progress : null;
+  const activeStepArtifactGenerationFiles = useMemo(
+    () => (selectedArtifactGenerating && catalogSelectedEntry ? [fileKey(catalogSelectedEntry)] : []),
+    [selectedArtifactGenerating, catalogSelectedEntry]
+  );
+  // While the artifact is missing/stale/building/broken, hide the (possibly stale) render assets so
+  // the viewer shows a loading or error state and renders only the fresh artifact once ready.
   const selectedEntry = useMemo(
-    () => mergeStepSourceStatusIntoEntry(catalogSelectedEntry, selectedStepSourceStatus),
-    [catalogSelectedEntry, selectedStepSourceStatus]
+    () => (!catalogSelectedEntry || selectedArtifact.status === "ready"
+      ? catalogSelectedEntry
+      : entryWithoutRenderAssets(catalogSelectedEntry)),
+    [catalogSelectedEntry, selectedArtifact.status]
   );
+  // Cache states never become user-facing "issues"; only a fatal build/source failure does.
+  const selectedStepSourceStatus = selectedArtifact.status === "error"
+    ? {
+        artifact: {
+          ok: false,
+          error: "render_artifact_unavailable",
+          message: selectedArtifact.error || "Render artifact is unavailable.",
+          stepPath: catalogSelectedEntry ? fileKey(catalogSelectedEntry) : "",
+        },
+      }
+    : null;
   const selectedEntrySourceFormat = entrySourceFormat(selectedEntry);
   const selectedFileSheetKind = fileSheetKindForEntry(selectedEntry);
-  const directoryOptions = useMemo(
-    () => normalizeViewerDirectoryOptions(viewerServerInfo),
-    [viewerServerInfo]
+  // Some kinds (e.g. a mesh/STL) have no file-specific sections; when so, hide
+  // the file-sheet toggle and the sheet entirely instead of showing an empty
+  // sidebar.
+  const selectedFileSheetHasSections = useMemo(
+    () => renderedFileSheetSectionIds(selectedFileSheetKind).length > 0,
+    [selectedFileSheetKind]
   );
-  const activeViewerDir = readActiveCadDir({ assetBackend: viewerAssetBackend });
-  const activeDirectory = catalogRootDir || activeViewerDir;
-  const directorySelectionEligible = !explicitDirParam && !activeDirectory;
-  const directorySelectionActive = directorySelectionEligible && directoryOptions.length > 1;
-  const directoryAutoEnterDir = directorySelectionEligible && !String(explicitFileParam || "").trim() && directoryOptions.length === 1
-    ? directoryOptions[0].dir
-    : "";
-  const directoryNavigationAvailable = !directorySelectionActive;
+  // The URL's path IS the directory, so there is nothing to select and no state to
+  // reconcile — the Viewer always has exactly one directory, the one it was opened at.
   const stepArtifactGenerationAvailable = viewerServerInfo
     ? viewerServerInfo.stepArtifactGenerationAvailable !== false
-    : viewerAssetBackend === LOCAL_ASSET_BACKEND;
+    : true;
   const fileAccessBackend = viewerServerInfo ? (viewerServerBackend || "local-fs") : "";
   const fileRevealAvailable = fileAccessBackend === "local-fs";
   const filePathCopyAvailable = fileAccessBackend === "local-fs" && Boolean(
     viewerServerInfo?.rootPath || viewerServerInfo?.directoryRoot
   );
-  const fileLinkCopyAvailable = fileAccessBackend === "vercel-blob";
+  // The local-fs viewer has no remote asset links; the copy-link affordance is hosted-only.
+  const fileLinkCopyAvailable = false;
   const isStepView = selectedEntrySourceFormat === RENDER_FORMAT.STEP;
   const isAssemblyView = selectedEntry?.kind === "assembly";
   const isUrdfView = isRobotRenderFormat(selectedEntrySourceFormat);
@@ -1535,7 +1483,6 @@ export default function CadWorkspace({
       urdfTrajectoryPlaybackRef.current?.frameId
     )
   );
-  const isGcodeView = selectedEntrySourceFormat === RENDER_FORMAT.GCODE;
   const selectedStepModuleUrl = isStepView ? entryStepModuleUrl(selectedEntry) : "";
   const selectedStepModuleCadPath = selectedStepModuleUrl ? cadPathForEntry(selectedEntry) : "";
   const selectedStepModuleDefinition = stepModuleLoadState.url === selectedStepModuleUrl
@@ -1555,48 +1502,10 @@ export default function CadWorkspace({
   const selectedEntryHasReferences = entryHasReferences(selectedEntry);
   const selectedEntryHasDisplayEdges = entryHasDisplayEdges(selectedEntry);
   const selectedEntryHasDxf = entryHasDxf(selectedEntry);
-  const selectedEntryHasGcode = entryHasGcode(selectedEntry);
   const selectedEntryHasImplicit = entryHasImplicitAsset(selectedEntry);
-  const selectedStepArtifactExternalGenerationActive = stepArtifactGenerationInProgress({
-    entry: selectedEntry,
-    activeGenerationFiles: activeGeneratorFiles
-  });
-  const selectedStepArtifactBuildFile = !selectedEntryHasMesh && stepArtifactCanGenerate(
-    selectedEntry,
-    selectedEntrySourceFormat,
-    { generationAvailable: stepArtifactGenerationAvailable || selectedStepArtifactExternalGenerationActive }
-  )
-    ? fileKey(selectedEntry)
-    : "";
-  const selectedStepArtifactBuildKey = selectedStepArtifactBuildFile
-      ? [
-          selectedStepArtifactBuildFile,
-          selectedEntry?.hash || "",
-          selectedEntry?.artifact?.error || ""
-        ].join(":")
-    : "";
-  const selectedStepArtifactGenerationState = selectedStepArtifactBuildKey
-    ? stepArtifactGenerationStateByKey[selectedStepArtifactBuildKey]
-    : null;
-  const selectedStepArtifactGenerationStatus = selectedStepArtifactGenerationState?.status || "idle";
-  const selectedStepArtifactGenerationFailureCount = stepArtifactGenerationFailureCount(
-    selectedStepArtifactGenerationState
-  );
-  const selectedStepArtifactGenerationActive = stepArtifactGenerationInProgress({
-    entry: selectedEntry,
-    generationState: selectedStepArtifactGenerationState,
-    activeGenerationFiles: activeGeneratorFiles
-  });
-  const selectedStepArtifactRenderPending = Boolean(
-    selectedStepArtifactBuildKey &&
-    (
-      selectedStepArtifactGenerationActive ||
-      (
-        selectedStepArtifactGenerationStatus !== "error" &&
-        selectedStepArtifactGenerationStatus !== "ready"
-      )
-    )
-  );
+  // The selected entry's render artifact is (re)building -> show the loading state. Replaces the
+  // old !entryHasMesh + buildable-code derivation.
+  const selectedStepArtifactRenderPending = selectedArtifactGenerating;
   const selectedMeshHash = entryMeshAssetSignature(selectedEntry);
   const selectedMeshMatches =
     !!meshState &&
@@ -1620,11 +1529,6 @@ export default function CadWorkspace({
     !!selectedEntry &&
     dxfState.file === fileKey(selectedEntry) &&
     dxfState.dxfHash === entryAssetHash(selectedEntry, "dxf");
-  const selectedGcodeMatches =
-    !!gcodeState &&
-    !!selectedEntry &&
-    gcodeState.file === fileKey(selectedEntry) &&
-    gcodeState.gcodeHash === entryAssetHash(selectedEntry, "gcode");
   const selectedImplicitMatches =
     !!implicitState &&
     !!selectedEntry &&
@@ -1638,13 +1542,9 @@ export default function CadWorkspace({
   const selectedUrdfData = selectedUrdfMatches ? urdfState.urdfData : null;
   const selectedUrdfMeshes = selectedUrdfMatches ? urdfState.meshesByUrl : null;
   const selectedDxfData = selectedDxfMatches ? dxfState.dxfData : null;
-  const selectedGcodeData = selectedGcodeMatches ? gcodeState.gcodeData : null;
   const selectedImplicitModel = selectedImplicitMatches ? implicitState.model : null;
   const selectedImplicitDefinition = selectedImplicitModel?.definition || null;
   const selectedDxfFileRef = selectedEntrySourceFormat === RENDER_FORMAT.DXF
-    ? fileKey(selectedEntry)
-    : "";
-  const selectedGcodeFileRef = selectedEntrySourceFormat === RENDER_FORMAT.GCODE
     ? fileKey(selectedEntry)
     : "";
   const selectedUrdfFileRef = isRobotRenderFormat(selectedEntrySourceFormat)
@@ -1771,19 +1671,6 @@ export default function CadWorkspace({
       controller.abort();
     };
   }, [catalogRootDir, explicitFileParam]);
-
-  useEffect(() => {
-    if (!directoryAutoEnterDir) {
-      return;
-    }
-    writeCadDirParam(directoryAutoEnterDir);
-    refreshCadCatalog({ markRefreshing: true }).catch((error) => {
-      if (import.meta.env.DEV) {
-        console.warn("Failed to refresh CAD catalog", error);
-      }
-    });
-    refreshCadGenerationStatus();
-  }, [directoryAutoEnterDir]);
 
   useEffect(() => {
     let active = true;
@@ -2086,80 +1973,11 @@ export default function CadWorkspace({
       };
     }
   }, [selectedUrdfData, selectedUrdfJointValues, selectedUrdfMeshGeometryResult]);
-  const selectedGcodeLayerCount = Array.isArray(selectedGcodeData?.layers)
-    ? selectedGcodeData.layers.length
-    : 0;
-  const selectedGcodeMaxLayer = selectedGcodeLayerCount > 0
-    ? Math.min(
-        Math.max(
-          Number.isFinite(Number(gcodeMaxLayer)) ? Math.trunc(Number(gcodeMaxLayer)) : selectedGcodeLayerCount - 1,
-          0
-        ),
-        selectedGcodeLayerCount - 1
-      )
-    : 0;
-  const selectedGcodePreviewOptions = useMemo(() => normalizeGcodePreviewOptions({
-    showTravel: gcodeShowTravel,
-    layerRange: [0, selectedGcodeMaxLayer],
-    detailMode: gcodeFullDetail ? "full" : "adaptive",
-    detailLevel: gcodePreviewDetailLevel
-  }, selectedGcodeLayerCount), [
-    gcodeFullDetail,
-    gcodePreviewDetailLevel,
-    gcodeShowTravel,
-    selectedGcodeLayerCount,
-    selectedGcodeMaxLayer
-  ]);
-  const selectedGcodePreview = useMemo(() => {
-    if (!selectedGcodeData) {
-      return {
-        meshData: null,
-        error: ""
-      };
-    }
-    try {
-      return {
-        meshData: buildGcodePreviewMeshData(selectedGcodeData, selectedGcodePreviewOptions),
-        error: ""
-      };
-    } catch (error) {
-      return {
-        meshData: null,
-        error: error instanceof Error ? error.message : String(error)
-      };
-    }
-  }, [selectedGcodeData, selectedGcodePreviewOptions]);
-  const selectedGcodeMeshData = selectedGcodePreview.meshData;
-  const selectedGcodePreviewError = selectedGcodePreview.error;
-  const selectedGcodePreviewKey = useMemo(() => {
-    if (!selectedGcodeFileRef || !selectedGcodeData) {
-      return selectedGcodeFileRef;
-    }
-    return `${selectedGcodeFileRef}:travel=${gcodeShowTravel ? "1" : "0"}:layer=${selectedGcodeMaxLayer}:detail=${gcodeFullDetail ? "full" : `adaptive-${gcodePreviewDetailLevel}`}`;
-  }, [
-    gcodeFullDetail,
-    gcodePreviewDetailLevel,
-    gcodeShowTravel,
-    selectedGcodeData,
-    selectedGcodeFileRef,
-    selectedGcodeMaxLayer
-  ]);
-  useEffect(() => {
-    if (!selectedGcodeFileRef || selectedGcodeLayerCount <= 0) {
-      setGcodeMaxLayer(null);
-      return;
-    }
-    setGcodeMaxLayer(selectedGcodeLayerCount - 1);
-    setGcodeFullDetail(false);
-    setGcodePreviewDetailLevel(DEFAULT_GCODE_PREVIEW_DETAIL_LEVEL);
-  }, [selectedGcodeFileRef, selectedGcodeLayerCount]);
   const selectedMeshData = isRobotRenderFormat(selectedEntrySourceFormat)
     ? selectedUrdfPreview.meshData
-    : isGcodeView
-      ? selectedGcodeMeshData
-      : selectedMeshMatches
-        ? meshState.meshData
-        : null;
+    : selectedMeshMatches
+      ? meshState.meshData
+      : null;
   const selectedStepModuleActiveAnimation = useMemo(
     () => findStepModuleAnimation(selectedStepModuleDefinition, stepModuleAnimationState.activeId),
     [selectedStepModuleDefinition, stepModuleAnimationState.activeId]
@@ -2168,7 +1986,8 @@ export default function CadWorkspace({
     ...stepModuleAnimationState,
     activeId: selectedStepModuleActiveAnimation?.id || stepModuleAnimationState.activeId || "",
     duration: selectedStepModuleActiveAnimation?.duration || 0,
-    loop: selectedStepModuleActiveAnimation?.loop !== false
+    loop: selectedStepModuleActiveAnimation?.loop !== false,
+    loopEnabled: stepModuleAnimationState.loopEnabled ?? (selectedStepModuleActiveAnimation?.loop !== false)
   }), [selectedStepModuleActiveAnimation, stepModuleAnimationState]);
   const selectedStepParameterRuntime = useMemo(() => {
     if (!selectedStepModuleDefinition || !stepModuleEnabled) {
@@ -2274,7 +2093,9 @@ export default function CadWorkspace({
       ...stepModuleAnimationStateRef.current,
       activeId: animation?.id || "",
       playing: false,
-      elapsedSec: 0
+      elapsedSec: 0,
+      // Reset the loop preference to the newly-selected animation's default.
+      loopEnabled: animation?.loop !== false
     };
     stepModuleAnimationStateRef.current = nextState;
     resetStepAnimationStore({
@@ -2371,6 +2192,19 @@ export default function CadWorkspace({
     setStepModuleAnimationState(nextState);
   }, []);
 
+  const handleStepModuleAnimationLoopToggle = useCallback((nextLoopEnabled) => {
+    const currentState = stepModuleAnimationStateRef.current;
+    const animation = findStepModuleAnimation(selectedStepModuleDefinition, currentState.activeId);
+    const currentLoop = currentState.loopEnabled ?? (animation?.loop !== false);
+    const loopEnabled = typeof nextLoopEnabled === "boolean" ? nextLoopEnabled : !currentLoop;
+    const nextState = {
+      ...currentState,
+      loopEnabled
+    };
+    stepModuleAnimationStateRef.current = nextState;
+    setStepModuleAnimationState(nextState);
+  }, [selectedStepModuleDefinition]);
+
   const handleStepModuleEnabledChange = useCallback((enabled) => {
     const nextEnabled = enabled !== false;
     setStepModuleEnabled(nextEnabled);
@@ -2413,7 +2247,8 @@ export default function CadWorkspace({
       const speed = clampNumber(currentState.speed, 0.1, 5);
       let elapsedSec = getStepAnimationElapsed() + (deltaSec * speed);
       let playing = currentState.playing;
-      if (animation.loop !== false) {
+      const loopEnabled = currentState.loopEnabled ?? (animation.loop !== false);
+      if (loopEnabled) {
         elapsedSec %= duration;
       } else if (elapsedSec >= duration) {
         elapsedSec = duration;
@@ -2499,7 +2334,8 @@ export default function CadWorkspace({
     ...implicitAnimationState,
     activeId: selectedImplicitActiveAnimation?.id || implicitAnimationState.activeId || "",
     duration: selectedImplicitActiveAnimation?.duration || 0,
-    loop: selectedImplicitActiveAnimation?.loop !== false
+    loop: selectedImplicitActiveAnimation?.loop !== false,
+    loopEnabled: implicitAnimationState.loopEnabled ?? (selectedImplicitActiveAnimation?.loop !== false)
   }), [implicitAnimationState, selectedImplicitActiveAnimation]);
   const implicitRenderParameterValues = useThrottledValue(
     implicitParameterValues,
@@ -2665,10 +2501,10 @@ export default function CadWorkspace({
         ...current,
         activeId: animation?.id || "",
         playing: false,
-        elapsedSec: 0
+        elapsedSec: 0,
+        loopEnabled: animation?.loop !== false
       };
-      implicitAnimationStateRef.current = nextState;
-      return nextState;
+      return publishAnimationState(implicitAnimationStateRef, current, nextState);
     });
   }, [selectedImplicitDefinition]);
 
@@ -2686,8 +2522,7 @@ export default function CadWorkspace({
         elapsedSec,
         playing: !current.playing
       };
-      implicitAnimationStateRef.current = nextState;
-      return nextState;
+      return publishAnimationState(implicitAnimationStateRef, current, nextState);
     });
   }, [selectedImplicitDefinition]);
 
@@ -2698,8 +2533,7 @@ export default function CadWorkspace({
         elapsedSec: 0,
         playing: false
       };
-      implicitAnimationStateRef.current = nextState;
-      return nextState;
+      return publishAnimationState(implicitAnimationStateRef, current, nextState);
     });
   }, []);
 
@@ -2711,8 +2545,7 @@ export default function CadWorkspace({
         ...current,
         elapsedSec: clampNumber(elapsedSec, 0, duration)
       };
-      implicitAnimationStateRef.current = nextState;
-      return nextState;
+      return publishAnimationState(implicitAnimationStateRef, current, nextState);
     });
   }, [markImplicitParameterInteraction, selectedImplicitActiveAnimation]);
 
@@ -2722,10 +2555,25 @@ export default function CadWorkspace({
         ...current,
         speed: clampNumber(speed, 0.1, 5)
       };
-      implicitAnimationStateRef.current = nextState;
-      return nextState;
+      return publishAnimationState(implicitAnimationStateRef, current, nextState);
     });
   }, []);
+
+  const handleImplicitAnimationLoopToggle = useCallback((nextLoopEnabled) => {
+    const animation = findParameterAnimation(
+      selectedImplicitDefinition,
+      implicitAnimationStateRef.current.activeId
+    );
+    setImplicitAnimationState((current) => {
+      const currentLoop = current.loopEnabled ?? (animation?.loop !== false);
+      const loopEnabled = typeof nextLoopEnabled === "boolean" ? nextLoopEnabled : !currentLoop;
+      const nextState = {
+        ...current,
+        loopEnabled
+      };
+      return publishAnimationState(implicitAnimationStateRef, current, nextState);
+    });
+  }, [selectedImplicitDefinition]);
 
   useEffect(() => {
     if (
@@ -2750,7 +2598,8 @@ export default function CadWorkspace({
         const speed = clampNumber(current.speed, 0.1, 5);
         let elapsedSec = current.elapsedSec + (deltaSec * speed);
         let playing = current.playing;
-        if (selectedImplicitActiveAnimation.loop !== false) {
+        const loopEnabled = current.loopEnabled ?? (selectedImplicitActiveAnimation.loop !== false);
+        if (loopEnabled) {
           elapsedSec %= duration;
         } else if (elapsedSec >= duration) {
           elapsedSec = duration;
@@ -3108,10 +2957,6 @@ export default function CadWorkspace({
     !!selectedEntry &&
     dxfStatus !== ASSET_STATUS.ERROR &&
     (!selectedDxfMatches || dxfStatus === ASSET_STATUS.LOADING);
-  const gcodeViewerLoading =
-    !!selectedEntry &&
-    gcodeStatus !== ASSET_STATUS.ERROR &&
-    (!selectedGcodeMatches || gcodeStatus === ASSET_STATUS.LOADING);
   const implicitViewerLoading =
     !!selectedEntry &&
     implicitStatus !== ASSET_STATUS.ERROR &&
@@ -3120,12 +2965,10 @@ export default function CadWorkspace({
     !!selectedEntry &&
     urdfStatus !== ASSET_STATUS.ERROR &&
     (!selectedUrdfMatches || urdfStatus === ASSET_STATUS.LOADING);
+  // A fatal render-artifact error (not building) stops the loading spinner so the error surfaces.
   const stepArtifactBlocksRender =
     effectiveRenderFormat === RENDER_FORMAT.STEP &&
-    selectedEntry?.artifact &&
-    !selectedEntry.artifact.ok &&
-    !selectedEntryHasMesh &&
-    !selectedStepArtifactRenderPending;
+    selectedArtifact.status === "error";
   const stepViewerLoading =
     !!selectedEntry &&
     (selectedStepArtifactRenderPending || !stepArtifactBlocksRender) &&
@@ -3133,14 +2976,12 @@ export default function CadWorkspace({
     (!selectedMeshMatches || status === ASSET_STATUS.LOADING || selectedStepModuleLoading);
   const viewerLoading = effectiveRenderFormat === RENDER_FORMAT.DXF
     ? dxfViewerLoading
-    : effectiveRenderFormat === RENDER_FORMAT.GCODE
-      ? gcodeViewerLoading
-      : effectiveRenderFormat === RENDER_FORMAT.IMPLICIT
-        ? implicitViewerLoading
-      : isRobotRenderFormat(effectiveRenderFormat)
-        ? urdfViewerLoading
-        : stepViewerLoading;
-  const effectiveViewerLoading = viewerLoading || selectedGeneratorRunning || fileParamSelectionPending;
+    : effectiveRenderFormat === RENDER_FORMAT.IMPLICIT
+      ? implicitViewerLoading
+    : isRobotRenderFormat(effectiveRenderFormat)
+      ? urdfViewerLoading
+      : stepViewerLoading;
+  const effectiveViewerLoading = viewerLoading || selectedArtifactGenerating || fileParamSelectionPending;
   const assemblySidebarLoading =
     isAssemblyView &&
     selectedMeshMatches &&
@@ -3152,16 +2993,14 @@ export default function CadWorkspace({
     selectedAssemblyStructureReady &&
     !selectedAssemblyInteractionReady &&
     !selectedAssemblyHydrationFailed;
-  const viewerLoadingLabel = selectedGeneratorRunning
+  const viewerLoadingLabel = selectedArtifactGenerating
     ? "Generating file..."
     : effectiveRenderFormat === RENDER_FORMAT.DXF
     ? selectedEntry && !selectedEntryHasDxf
       ? "Generating DXF preview..."
       : "Loading DXF preview..."
-    : effectiveRenderFormat === RENDER_FORMAT.GCODE
-      ? "Loading G-code preview..."
-      : effectiveRenderFormat === RENDER_FORMAT.IMPLICIT
-        ? "Loading implicit CAD..."
+    : effectiveRenderFormat === RENDER_FORMAT.IMPLICIT
+      ? "Loading implicit CAD..."
       : isRobotRenderFormat(effectiveRenderFormat)
         ? `Loading ${effectiveRenderFormat === RENDER_FORMAT.SDF ? "SDF" : "URDF"} robot...`
         : effectiveRenderFormat === RENDER_FORMAT.STL
@@ -3171,19 +3010,19 @@ export default function CadWorkspace({
             : effectiveRenderFormat === RENDER_FORMAT.GLB
               ? "Loading GLB..."
               : stepUpdateInProgress
-                ? "STEP changed. Updating/regenerating CAD..."
+                ? ARTIFACT_GENERATING_LABEL
                 : selectedStepArtifactRenderPending
-                  ? "Generating STEP GLB artifact..."
+                  ? ARTIFACT_GENERATING_LABEL
                   : selectedStepModuleLoading
                     ? "Loading STEP module..."
                   : selectedEntry && !selectedEntryHasMesh
-                    ? "Generating CAD assets..."
+                    ? ARTIFACT_GENERATING_LABEL
                     : "Loading CAD...";
   const viewerAlert = useMemo(() => {
     if (viewerRuntimeAlert?.blocking) {
       return viewerRuntimeAlert;
     }
-    if (!selectedEntry || viewerLoading || selectedGeneratorRunning) {
+    if (!selectedEntry || viewerLoading || selectedArtifactGenerating) {
       return null;
     }
     if (effectiveRenderFormat === RENDER_FORMAT.DXF) {
@@ -3193,13 +3032,6 @@ export default function CadWorkspace({
         dxfStatus === ASSET_STATUS.ERROR ? dxfError : "",
         selectedDxfPreviewError
       );
-    }
-    if (effectiveRenderFormat === RENDER_FORMAT.GCODE) {
-      return buildViewerMeshAlert(
-        selectedEntry,
-        !!selectedMeshData,
-        gcodeStatus === ASSET_STATUS.ERROR ? gcodeError : selectedGcodePreviewError
-      ) || viewerRuntimeAlert;
     }
     if (effectiveRenderFormat === RENDER_FORMAT.IMPLICIT) {
       return buildViewerImplicitAlert(
@@ -3227,14 +3059,11 @@ export default function CadWorkspace({
     dxfStatus,
     effectiveRenderFormat,
     error,
-    gcodeError,
-    gcodeStatus,
     implicitError,
     implicitStatus,
     selectedDxfData,
     selectedEntry,
-    selectedGeneratorRunning,
-    selectedGcodePreviewError,
+    selectedArtifactGenerating,
     selectedImplicitRuntimeError,
     selectedImplicitRuntimeModel,
     selectedMeshData,
@@ -3279,6 +3108,7 @@ export default function CadWorkspace({
     viewerSelectableAssemblyNodeIds.length > 0;
   const viewerMode = viewerInAssemblyMode ? "assembly" : "part";
   const drawModeActive = selectedEntrySourceFormat === RENDER_FORMAT.STEP && tabToolMode === TAB_TOOL_MODE.DRAW;
+  const panToolActive = tabToolMode === TAB_TOOL_MODE.PAN;
   const selectionCountBase = selectedPartIds.length + selectedReferenceIds.length + selectedMateIds.length;
 
   const selectedReferenceIdsRef = useRef(selectedReferenceIds);
@@ -3323,8 +3153,8 @@ export default function CadWorkspace({
     ));
   }, []);
   const directorySessionThemeSlice = useMemo(
-    () => createDirectorySessionThemeSlice(themeState, customThemePresets),
-    [customThemePresets, themeState]
+    () => createDirectorySessionThemeSlice(themeState),
+    [themeState]
   );
   useEffect(() => {
     writeCadDirectorySessionState({
@@ -3357,141 +3187,66 @@ export default function CadWorkspace({
     }
     setTabToolsWidth(defaultFileSheetWidth);
   }, [defaultFileSheetWidth, fileSheetWidthIsCustom]);
-  const desktopFileSheetOpen = isDesktop && tabToolsOpen && !!selectedFileSheetKind && !previewMode;
-  const effectiveSidebarOpen = directoryNavigationAvailable && sidebarOpen && !previewMode;
+  // The file sheet and the theme sidebar are the same right-hand panel with
+  // different contents: one open flag, one width, one resize handle, one inset
+  // on the 3D viewport. Anything that sizes or offsets the panel uses this.
+  const desktopRightPanelOpen = isDesktop && !previewMode && (
+    themeEditing ||
+    (tabToolsOpen && !!selectedFileSheetKind && selectedFileSheetHasSections)
+  );
+  const effectiveSidebarOpen = sidebarOpen && !previewMode;
   const desktopSidebarOpen = isDesktop && effectiveSidebarOpen && !previewMode;
 
-  const setThemeMenuOpen = useCallback(() => {}, []);
-
-  const readGlobalThemeState = useCallback(() => (
-    readThemeSettingsState(readCustomThemePresets())
-  ), []);
-
-  const handleColorSchemePreferenceChange = useCallback((nextPreference) => {
-    const normalizedPreference = normalizeColorSchemeId(nextPreference);
-    if (!writeColorSchemePreference(normalizedPreference, { onWriteError: handlePersistenceWriteError })) {
-      return;
-    }
-    setColorSchemePreference(normalizedPreference);
+  // Selecting a preset (or System) is the only "reset": it swaps the active
+  // theme wholesale. The custom slot is kept so the user can flip back to it.
+  const selectTheme = useCallback((nextThemeId) => {
+    writeThemeState(nextThemeId, { onWriteError: handlePersistenceWriteError });
+    setThemeState(readThemeSettingsState());
   }, [handlePersistenceWriteError]);
 
-  const updateThemeSettings = useCallback((updater, options = {}) => {
-    const persistGlobal = options.persistGlobal === true;
-    const requestedPresetId = String(options.presetId || "").trim();
-    if (persistGlobal && typeof updater !== "function") {
-      const settings = normalizeThemeSettings(updater);
-      const presetId = requestedPresetId || getAvailableThemePresetIdForSettings(settings, customThemePresets) || themePresetId || "";
-      setThemeState({
-        presetId,
-        settings
-      });
-      if (presetId) {
-        writeThemeSettings(settings, {
-          presetId,
-          customPresets: customThemePresets,
-          onWriteError: handlePersistenceWriteError
-        });
-      }
-      return;
-    }
-
+  // Any settings edit lands in the single custom slot and makes it active,
+  // unless it happens to reproduce a preset exactly.
+  const updateThemeSettings = useCallback((updater) => {
     setThemeState((current) => {
       const next = typeof updater === "function" ? updater(current.settings) : updater;
       const settings = normalizeThemeSettings(next);
+      writeThemeSettings(settings, { onWriteError: handlePersistenceWriteError });
+      const matchingPresetId = getThemePresetIdForSettings(settings);
       return {
-        presetId: current.presetId || getAvailableThemePresetIdForSettings(settings, customThemePresets) || "",
+        themeId: matchingPresetId || CUSTOM_THEME_ID,
+        custom: matchingPresetId ? current.custom : settings,
         settings
       };
     });
-  }, [customThemePresets, handlePersistenceWriteError, themePresetId]);
+  }, [handlePersistenceWriteError]);
 
-  const handleResetThemeSettings = useCallback(() => {
-    const activeThemePreset = availableThemePresets.find((preset) => preset.id === themePresetId);
-    if (!activeThemePreset) {
-      setThemeState(readGlobalThemeState());
-      return;
-    }
-    setThemeState({
-      presetId: activeThemePreset.id,
-      settings: normalizeThemeSettings(activeThemePreset.settings)
-    });
-  }, [availableThemePresets, readGlobalThemeState, themePresetId]);
+  // Projection is a theme trait; the viewport toolbar edits it as a live
+  // theme-settings draft, the same as any theme-editor change.
+  const updateThemeProjection = useCallback((nextProjection) => {
+    updateThemeSettings((current) => ({
+      ...current,
+      projection: nextProjection
+    }));
+  }, [updateThemeSettings]);
 
-  const handleSaveCustomThemePreset = useCallback((themeName) => {
-    const savedTheme = saveAndActivateCustomThemePreset(themeName, themeSettings, {
-      customPresets: customThemePresets,
-      sourceThemeId: themePresetId,
-      onWriteError: handlePersistenceWriteError
-    });
-    if (!savedTheme) {
-      return null;
-    }
-    const savedPreset = savedTheme.preset;
-    setCustomThemePresets(savedTheme.customPresets);
-    setThemeState({
-      presetId: savedPreset.id,
-      settings: normalizeThemeSettings(savedPreset.settings)
-    });
-    return savedPreset;
-  }, [customThemePresets, handlePersistenceWriteError, themePresetId, themeSettings]);
+  // The theme sidebar and the file sheet are mutually exclusive. Opening one
+  // closes the other outright — rather than merely hiding it behind the new
+  // panel — so that closing the panel you opened leaves nothing open, and the
+  // other sidebar has to be reopened deliberately.
+  const closeThemeEditor = useCallback(() => {
+    setThemeEditing(false);
+  }, []);
 
-  const handleDeleteCustomThemePreset = useCallback((presetId) => {
-    const normalizedPresetId = String(presetId || "").trim();
-    if (!deleteCustomThemePreset(normalizedPresetId, { onWriteError: handlePersistenceWriteError })) {
-      return false;
-    }
-    const nextCustomThemePresets = readCustomThemePresets();
-    setCustomThemePresets(nextCustomThemePresets);
-    setThemeState((current) => {
-      if (current.presetId !== normalizedPresetId) {
-        return current;
+  const handleToggleThemeEditor = useCallback(() => {
+    setThemeEditing((current) => {
+      if (current) {
+        return false;
       }
-      return readThemeSettingsState(nextCustomThemePresets);
+      setViewerAlertOpen(false);
+      setTabToolsOpen(false);
+      return true;
     });
-    return true;
-  }, [handlePersistenceWriteError]);
-
-  const handleUpdateThemePresetSettings = useCallback((presetId = themePresetId) => {
-    const normalizedPresetId = String(presetId || "").trim();
-    if (!normalizedPresetId) {
-      return false;
-    }
-    if (!updateThemePresetSettings(normalizedPresetId, themeSettings, { onWriteError: handlePersistenceWriteError })) {
-      return false;
-    }
-    const nextCustomThemePresets = readCustomThemePresets();
-    setCustomThemePresets(nextCustomThemePresets);
-    setThemeState(readThemeSettingsState(nextCustomThemePresets));
-    return true;
-  }, [handlePersistenceWriteError, themePresetId, themeSettings]);
-
-  const handleResetThemePresetToDefault = useCallback((presetId) => {
-    const normalizedPresetId = String(presetId || "").trim();
-    if (!normalizedPresetId) {
-      return false;
-    }
-    if (!resetThemePresetToDefault(normalizedPresetId, { onWriteError: handlePersistenceWriteError })) {
-      return false;
-    }
-    const nextCustomThemePresets = readCustomThemePresets();
-    setCustomThemePresets(nextCustomThemePresets);
-    setThemeState((current) => (
-      current.presetId === normalizedPresetId
-        ? readThemeSettingsState(nextCustomThemePresets)
-        : current
-    ));
-    return true;
-  }, [handlePersistenceWriteError]);
-
-  const handleRestoreDefaultThemePresets = useCallback(() => {
-    if (!restoreDefaultThemePresets({ onWriteError: handlePersistenceWriteError })) {
-      return false;
-    }
-    const nextCustomThemePresets = readCustomThemePresets();
-    setCustomThemePresets(nextCustomThemePresets);
-    setThemeState(readThemeSettingsState(nextCustomThemePresets));
-    return true;
-  }, [handlePersistenceWriteError]);
+  }, [setTabToolsOpen]);
 
   const handleViewerAlertChange = useCallback((nextAlert) => {
     setViewerRuntimeAlert(nextAlert || null);
@@ -3526,7 +3281,7 @@ export default function CadWorkspace({
     const nextWidth = resolveDesktopPanelWidths({
       viewportWidth: layoutViewportWidth,
       sidebarOpen: desktopSidebarOpen,
-      sheetOpen: desktopFileSheetOpen,
+      sheetOpen: desktopRightPanelOpen,
       sidebarWidth,
       sheetWidth: tabToolsWidth,
       sidebarMinWidth: DESKTOP_SIDEBAR_MIN_WIDTH,
@@ -3543,7 +3298,7 @@ export default function CadWorkspace({
     document.body.style.cursor = "col-resize";
     document.body.style.userSelect = "none";
   }, [
-    desktopFileSheetOpen,
+    desktopRightPanelOpen,
     desktopSidebarOpen,
     effectiveSidebarOpen,
     isDesktop,
@@ -3571,11 +3326,9 @@ export default function CadWorkspace({
   }, [isDesktop, setTabToolsOpen]);
 
   const handleStartFileSheetResize = useCallback((event) => {
-    if (event.button !== 0) {
-      return;
-    }
-    const rightSheetOpen = !previewMode && tabToolsOpen && !!selectedFileSheetKind;
-    if (!isDesktop || !rightSheetOpen) {
+    // Gate on the shared right-panel flag, not the file sheet specifically:
+    // the theme sidebar is the same panel and resizes the same width.
+    if (event.button !== 0 || !desktopRightPanelOpen) {
       return;
     }
 
@@ -3584,7 +3337,7 @@ export default function CadWorkspace({
     const nextWidth = resolveDesktopPanelWidths({
       viewportWidth: layoutViewportWidth,
       sidebarOpen: desktopSidebarOpen,
-      sheetOpen: desktopFileSheetOpen,
+      sheetOpen: desktopRightPanelOpen,
       sidebarWidth,
       sheetWidth: tabToolsWidth,
       sidebarMinWidth: DESKTOP_SIDEBAR_MIN_WIDTH,
@@ -3599,15 +3352,11 @@ export default function CadWorkspace({
     document.body.style.cursor = "col-resize";
     document.body.style.userSelect = "none";
   }, [
-    isDesktop,
-    desktopFileSheetOpen,
+    desktopRightPanelOpen,
     desktopSidebarOpen,
     layoutViewportWidth,
-    previewMode,
     sidebarWidth,
-    selectedFileSheetKind,
     setFileSheetWidthIsCustom,
-    tabToolsOpen,
     tabToolsWidth
   ]);
 
@@ -3658,27 +3407,23 @@ export default function CadWorkspace({
   }, []);
 
   const selectedFileStatusItems = useMemo(() => (
-    selectedGeneratorRunning
+    selectedArtifactGenerating
       ? []
       : buildFileStatusItems({
         entry: selectedEntry,
         fileSheetKind: selectedFileSheetKind,
         stepSourceStatus: selectedStepSourceStatus,
-        gcodeData: selectedGcodeData,
         urdfData: selectedUrdfData,
         viewerAlert,
         stepArtifactGenerationAvailable,
-        stepArtifactGenerationState: selectedStepArtifactGenerationState,
-        activeGenerationFiles: activeGeneratorFiles,
+        activeGenerationFiles: activeStepArtifactGenerationFiles,
         viewerServerInfo
       })
   ), [
-    activeGeneratorFiles,
+    activeStepArtifactGenerationFiles,
     selectedEntry,
     selectedFileSheetKind,
-    selectedGcodeData,
-    selectedGeneratorRunning,
-    selectedStepArtifactGenerationState,
+    selectedArtifactGenerating,
     stepArtifactGenerationAvailable,
     selectedStepSourceStatus,
     selectedUrdfData,
@@ -3776,36 +3521,6 @@ export default function CadWorkspace({
     setTabToolsOpen
   ]);
 
-  const handleEditThemePreset = useCallback((presetId) => {
-    const preset = availableThemePresets.find((candidate) => candidate.id === presetId);
-    if (!preset) {
-      return false;
-    }
-
-    updateThemeSettings(preset.settings, {
-      persistGlobal: true,
-      presetId: preset.id
-    });
-
-    if (openFileSheetSection(FILE_SHEET_SECTION_IDS.THEME_APPEARANCE)) {
-      if (typeof window !== "undefined") {
-        window.requestAnimationFrame(() => {
-          window.requestAnimationFrame(() => {
-            document
-              .querySelector("[data-cad-theme-appearance-section='true']")
-              ?.scrollIntoView({ block: "start", behavior: "instant" });
-          });
-        });
-      }
-    }
-
-    return true;
-  }, [
-    availableThemePresets,
-    openFileSheetSection,
-    updateThemeSettings
-  ]);
-
   useEffect(() => {
     if (!Array.isArray(fileSheetOpenSectionIds)) {
       return;
@@ -3885,7 +3600,6 @@ export default function CadWorkspace({
       selectedPartIds,
       inspectedAssemblyNodeId: "",
       expandedStepTreeNodeIds,
-      stepTreeRootShowMore,
       fileSheetOpenSectionIds: effectiveFileSheetOpenSectionIds,
       hiddenPartIds,
       camera: activePerspectiveRef.current,
@@ -3907,7 +3621,6 @@ export default function CadWorkspace({
     referenceQuery,
     selectedPartIds,
     selectedReferenceIds,
-    stepTreeRootShowMore,
     tabToolMode,
   ]);
 
@@ -4033,11 +3746,6 @@ export default function CadWorkspace({
       return;
     }
     const sessionState = fileSessionState || readEntrySessionState(normalizedKey);
-    const queryThemeState = readThemeSettingsStateFromAppearanceQuery(availableThemePresets);
-    if (queryThemeState) {
-      setThemeState(queryThemeState);
-    }
-
     setLargeFileState(normalizeLargeFileState(sessionState?.slices?.largeFile));
     const entry = entryMap.get(normalizedKey);
     setDisplaySettings(
@@ -4105,7 +3813,7 @@ export default function CadWorkspace({
         return next;
       });
     }
-  }, [availableThemePresets, entryMap, readEntrySessionState]);
+  }, [entryMap, readEntrySessionState]);
 
   const handleDxfBendSettingChange = useCallback((bendIndex, patch) => {
     setDxfBendSettings((current) => {
@@ -4147,7 +3855,6 @@ export default function CadWorkspace({
     setSelectedRenderPartIdByAssemblyPartId({});
     setSelectedWholeEntryCadRefToken("");
     setExpandedStepTreeNodeIds(nextTab.expandedStepTreeNodeIds);
-    setStepTreeRootShowMore(nextTab.stepTreeRootShowMore);
     setFileSheetOpenSectionIds(nextTab.fileSheetOpenSectionIds);
     setHiddenPartIds(nextTab.hiddenPartIds);
     setIsolatedAssemblyNodeIds([]);
@@ -4181,7 +3888,6 @@ export default function CadWorkspace({
     setSelectedPartIds([]);
     setSelectedRenderPartIdByAssemblyPartId({});
     setExpandedStepTreeNodeIds([]);
-    setStepTreeRootShowMore(false);
     setFileSheetOpenSectionIds(null);
     setHiddenPartIds([]);
     setIsolatedAssemblyNodeIds([]);
@@ -4204,12 +3910,6 @@ export default function CadWorkspace({
     setDrawingRedoStack([]);
     setSelectedKey("");
   }, [setTabToolsOpen]);
-
-  useEffect(() => {
-    if (directorySelectionActive && selectedKey) {
-      resetActiveDirectory();
-    }
-  }, [resetActiveDirectory, selectedKey, directorySelectionActive]);
 
   const activateEntryTab = useCallback((key) => {
     if (!key || !entryMap.has(key)) {
@@ -4349,7 +4049,7 @@ export default function CadWorkspace({
     },
     upsertTabRecord,
     selectedEntry,
-    defaultDocumentTitle: DEFAULT_DOCUMENT_TITLE,
+    defaultDocumentTitle: DOCUMENT_TITLE,
     selectedKey,
     entryMap,
     buildActiveTabSnapshot,
@@ -4394,37 +4094,8 @@ export default function CadWorkspace({
   }, [flushActiveFileSession]);
 
   useEffect(() => {
-    const colorSchemeQuery = typeof window !== "undefined"
-      ? window.matchMedia?.("(prefers-color-scheme: dark)")
-      : null;
-    if (!colorSchemeQuery) {
-      return undefined;
-    }
-
-    const handleColorSchemeChange = () => {
-      setSystemPrefersDark(colorSchemeQuery.matches === true);
-    };
-    handleColorSchemeChange();
-    colorSchemeQuery.addEventListener?.("change", handleColorSchemeChange);
-    return () => {
-      colorSchemeQuery.removeEventListener?.("change", handleColorSchemeChange);
-    };
-  }, []);
-
-  useEffect(() => {
-    const documentColorSchemePreference = themeSettings.colorMode === THEME_COLOR_MODES.SYSTEM
-      ? colorSchemePreference
-      : themeSettings.colorMode;
-    applyColorSchemeToDocument(documentColorSchemePreference, document.documentElement, {
-      prefersDark: systemPrefersDark
-    });
-  }, [colorSchemePreference, systemPrefersDark, themeSettings.colorMode]);
-
-  useEffect(() => {
-    writeCustomThemePresets(customThemePresets, {
-      onWriteError: handlePersistenceWriteError
-    });
-  }, [customThemePresets, handlePersistenceWriteError]);
+    applyColorSchemeToDocument(resolvedColorSchemeMode, document.documentElement);
+  }, [resolvedColorSchemeMode]);
 
   useEffect(() => {
     document.documentElement.dataset.glassTone = cadWorkspaceGlassTone;
@@ -4433,22 +4104,26 @@ export default function CadWorkspace({
     };
   }, [cadWorkspaceGlassTone]);
 
+  // Glass chrome (navbar, toolbars, popovers) tints toward the active scene
+  // backdrop so the UI blends with whichever theme is selected.
+  useEffect(() => {
+    document.documentElement.style.setProperty(
+      "--cad-scene-backdrop",
+      resolveThemeSettingsBackdropColor(resolvedThemeSettings)
+    );
+    return () => {
+      document.documentElement.style.removeProperty("--cad-scene-backdrop");
+    };
+  }, [resolvedThemeSettings]);
+
   useEffect(() => {
     const handleStorage = (event) => {
       const action = cadDirectoryStorageEventAction(event.key);
       if (action === CAD_DIRECTORY_STORAGE_EVENT_ACTION.IGNORE) {
         return;
       }
-      if (action === CAD_DIRECTORY_STORAGE_EVENT_ACTION.COLOR_SCHEME) {
-        setColorSchemePreference(readColorSchemePreference());
-        return;
-      }
       try {
-        const nextCustomThemePresets = readCustomThemePresets();
-        setCustomThemePresets(nextCustomThemePresets);
-        setThemeState((current) => (
-          current.presetId ? readThemeSettingsState(nextCustomThemePresets) : current
-        ));
+        setThemeState(readThemeSettingsState());
       } catch (error) {
         console.warn("Failed to sync theme from another tab", error);
       }
@@ -4590,7 +4265,7 @@ export default function CadWorkspace({
   const resolvedDesktopPanelWidths = useMemo(() => resolveDesktopPanelWidths({
     viewportWidth: layoutViewportWidth,
     sidebarOpen: desktopSidebarOpen,
-    sheetOpen: desktopFileSheetOpen,
+    sheetOpen: desktopRightPanelOpen,
     sidebarWidth,
     sheetWidth: tabToolsWidth,
     sidebarMinWidth: DESKTOP_SIDEBAR_MIN_WIDTH,
@@ -4598,7 +4273,7 @@ export default function CadWorkspace({
     sidebarMaxWidth: DESKTOP_SIDEBAR_MAX_WIDTH,
     sheetMaxWidth: DESKTOP_TAB_TOOLS_MAX_WIDTH
   }), [
-    desktopFileSheetOpen,
+    desktopRightPanelOpen,
     desktopSidebarOpen,
     layoutViewportWidth,
     sidebarWidth,
@@ -4609,7 +4284,7 @@ export default function CadWorkspace({
     return resolveDesktopPanelWidths({
       viewportWidth: layoutViewportWidth,
       sidebarOpen: desktopSidebarOpen,
-      sheetOpen: desktopFileSheetOpen,
+      sheetOpen: desktopRightPanelOpen,
       sidebarWidth: value,
       sheetWidth: tabToolsWidth,
       sidebarMinWidth: DESKTOP_SIDEBAR_MIN_WIDTH,
@@ -4617,13 +4292,13 @@ export default function CadWorkspace({
       sidebarMaxWidth: DESKTOP_SIDEBAR_MAX_WIDTH,
       sheetMaxWidth: DESKTOP_TAB_TOOLS_MAX_WIDTH
     }).sidebarWidth;
-  }, [desktopFileSheetOpen, desktopSidebarOpen, layoutViewportWidth, tabToolsWidth]);
+  }, [desktopRightPanelOpen, desktopSidebarOpen, layoutViewportWidth, tabToolsWidth]);
 
   const clampTabToolsWidth = useCallback((value) => {
     return resolveDesktopPanelWidths({
       viewportWidth: layoutViewportWidth,
       sidebarOpen: desktopSidebarOpen,
-      sheetOpen: desktopFileSheetOpen,
+      sheetOpen: desktopRightPanelOpen,
       sidebarWidth,
       sheetWidth: value,
       sidebarMinWidth: DESKTOP_SIDEBAR_MIN_WIDTH,
@@ -4631,7 +4306,7 @@ export default function CadWorkspace({
       sidebarMaxWidth: DESKTOP_SIDEBAR_MAX_WIDTH,
       sheetMaxWidth: DESKTOP_TAB_TOOLS_MAX_WIDTH
     }).sheetWidth;
-  }, [desktopFileSheetOpen, desktopSidebarOpen, layoutViewportWidth, sidebarWidth]);
+  }, [desktopRightPanelOpen, desktopSidebarOpen, layoutViewportWidth, sidebarWidth]);
 
   useCadWorkspaceLayout({
     isDesktop,
@@ -4730,164 +4405,10 @@ export default function CadWorkspace({
     expandFileViewerTreeToEntry(selectedEntry);
   }, [expandFileViewerTreeToEntry, selectedEntry]);
 
-  useEffect(() => {
-    selectedStepArtifactBuildKeyRef.current = selectedStepArtifactBuildKey;
-  }, [selectedStepArtifactBuildKey]);
-
-  useEffect(() => {
-    if (!selectedStepArtifactBuildKey || !selectedStepArtifactBuildFile) {
-      return undefined;
-    }
-
-    if (selectedStepArtifactExternalGenerationActive) {
-      return undefined;
-    }
-
-    if (
-      selectedStepArtifactGenerationStatus === "ready" ||
-      (
-        selectedStepArtifactGenerationStatus === "error" &&
-        selectedStepArtifactGenerationFailureCount >= STEP_ARTIFACT_GENERATION_FAILURE_DISPLAY_THRESHOLD
-      )
-    ) {
-      return undefined;
-    }
-
-    if (stepArtifactGenerationRequestsRef.current.has(selectedStepArtifactBuildKey)) {
-      return undefined;
-    }
-
-    const request = {
-      key: selectedStepArtifactBuildKey,
-      file: selectedStepArtifactBuildFile
-    };
-    stepArtifactGenerationRequestsRef.current.set(selectedStepArtifactBuildKey, request);
-    setStatus(ASSET_STATUS.LOADING);
-    setError("");
-
-    const runGeneration = () => (
-      runStepArtifactGenerationWithRetries({
-        key: selectedStepArtifactBuildKey,
-        file: selectedStepArtifactBuildFile,
-        initialFailureCount: selectedStepArtifactGenerationFailureCount,
-        generate: requestStepArtifactGeneration,
-        isCurrent: () => stepArtifactGenerationRequestsRef.current.get(selectedStepArtifactBuildKey) === request,
-        onState: (state) => {
-          setStepArtifactGenerationStateByKey((current) => ({
-            ...current,
-            [selectedStepArtifactBuildKey]: state
-          }));
-        },
-        onFinalError: (message) => {
-          if (selectedStepArtifactBuildKeyRef.current === selectedStepArtifactBuildKey) {
-            setStatus(ASSET_STATUS.ERROR);
-            setError(message);
-          }
-        },
-        validatePayload: (payload) => validateGeneratedStepArtifactPayload(
-          payload,
-          { file: selectedStepArtifactBuildFile }
-        )
-      })
-    );
-
-    runGeneration()
-      .finally(() => {
-        if (stepArtifactGenerationRequestsRef.current.get(selectedStepArtifactBuildKey) === request) {
-          stepArtifactGenerationRequestsRef.current.delete(selectedStepArtifactBuildKey);
-        }
-      });
-
-    return undefined;
-  }, [
-    selectedStepArtifactBuildFile,
-    selectedStepArtifactBuildKey,
-    selectedStepArtifactExternalGenerationActive,
-    selectedStepArtifactGenerationFailureCount,
-    selectedStepArtifactGenerationStatus,
-    setError,
-    setStatus
-  ]);
-
-  useEffect(() => {
-    if (!selectedStepSourceStatusKey || !selectedStepSourceStatusFile) {
-      setStepSourceStatusState((current) => (
-        current.status === null && !current.loading
-          ? current
-          : {
-              key: "",
-              file: "",
-              status: null,
-              loading: false,
-              error: ""
-            }
-      ));
-      return undefined;
-    }
-
-    let cancelled = false;
-    let retryTimer = 0;
-    let attempts = 0;
-    const controller = new AbortController();
-
-    const loadStatus = () => {
-      setStepSourceStatusState((current) => ({
-        key: selectedStepSourceStatusKey,
-        file: selectedStepSourceStatusFile,
-        status: current.key === selectedStepSourceStatusKey ? current.status : null,
-        loading: true,
-        error: ""
-      }));
-      requestStepSourceStatus(selectedStepSourceStatusFile, { signal: controller.signal })
-        .then((payload) => {
-          if (cancelled || controller.signal.aborted) {
-            return;
-          }
-          setStepSourceStatusState({
-            key: selectedStepSourceStatusKey,
-            file: selectedStepSourceStatusFile,
-            status: payload,
-            loading: false,
-            error: ""
-          });
-          const stepStatus = String(payload?.step?.status || "").trim();
-          if (
-            selectedStepArtifactGenerationStatus === "ready" &&
-            (stepStatus === "missing" || stepStatus === "stale") &&
-            attempts < 6
-          ) {
-            attempts += 1;
-            retryTimer = window.setTimeout(loadStatus, 1500);
-          }
-        })
-        .catch((statusError) => {
-          if (cancelled || controller.signal.aborted) {
-            return;
-          }
-          setStepSourceStatusState({
-            key: selectedStepSourceStatusKey,
-            file: selectedStepSourceStatusFile,
-            status: null,
-            loading: false,
-            error: statusError instanceof Error ? statusError.message : String(statusError)
-          });
-        });
-    };
-
-    loadStatus();
-
-    return () => {
-      cancelled = true;
-      controller.abort();
-      if (retryTimer) {
-        window.clearTimeout(retryTimer);
-      }
-    };
-  }, [
-    selectedStepArtifactGenerationStatus,
-    selectedStepSourceStatusFile,
-    selectedStepSourceStatusKey
-  ]);
+  // The render-artifact (re)build + freshness flow now lives entirely in useArtifact (see
+  // selectedArtifact above): it GETs /__cad/artifact for freshness and POSTs to (re)build when
+  // missing/stale, reporting ready | generating | error. The old build effect + step-source-status
+  // fetch effect that this replaced have been removed.
 
   useEffect(() => {
     if (!selectedEntry) {
@@ -4965,41 +4486,6 @@ export default function CadWorkspace({
 
   useEffect(() => {
     if (!selectedEntry) {
-      cancelGcodeLoad();
-      return;
-    }
-    if (effectiveRenderFormat !== RENDER_FORMAT.GCODE) {
-      cancelGcodeLoad();
-      return;
-    }
-    if (!selectedEntryHasGcode) {
-      cancelGcodeLoad();
-      setGcodeState(null);
-      setGcodeStatus(ASSET_STATUS.PENDING);
-      setGcodeError("");
-      return;
-    }
-    if (selectedGcodeMatches) {
-      return;
-    }
-    loadGcodeForEntry(selectedEntry).catch((err) => {
-      setGcodeStatus(ASSET_STATUS.ERROR);
-      setGcodeError(err instanceof Error ? err.message : String(err));
-    });
-  }, [
-    cancelGcodeLoad,
-    effectiveRenderFormat,
-    loadGcodeForEntry,
-    selectedEntry,
-    selectedEntryHasGcode,
-    selectedGcodeMatches,
-    setGcodeError,
-    setGcodeState,
-    setGcodeStatus
-  ]);
-
-  useEffect(() => {
-    if (!selectedEntry) {
       cancelImplicitLoad();
       return;
     }
@@ -5068,12 +4554,20 @@ export default function CadWorkspace({
     setUrdfStatus
   ]);
 
+  // Stable key over the expanded tree nodes whose topology should be loaded. An assembly's
+  // reference state is only a match if it was composed for exactly this expanded set, so expanding
+  // a new node re-triggers a load (which fetches only the newly-needed component). A single part
+  // has no tree; its loaded key is "*".
+  const requestedTopologyKey = isAssemblyView
+    ? requestedStepTreeTopologyNodeIds.slice().sort().join("|")
+    : "*";
   const selectedReferencesMatch =
     !!referenceState &&
     !!selectedEntry &&
     selectedEntryHasReferences &&
     referenceState.fileRef === fileKey(selectedEntry) &&
-    referenceState.referenceHash === buildReferenceCacheKey(selectedEntry);
+    referenceState.referenceHash === buildReferenceCacheKey(selectedEntry) &&
+    (referenceState.loadedTopologyKey || "*") === requestedTopologyKey;
   const selectedSelectorRuntime = selectedReferencesMatch ? referenceState?.selectorRuntime || null : null;
   const selectedDisplayEdgesMatch =
     !!displayEdgeState &&
@@ -5148,7 +4642,7 @@ export default function CadWorkspace({
     if (selectedReferencesMatch) {
       return;
     }
-    loadReferencesForEntry(selectedEntry).catch((err) => {
+    loadReferencesForEntry(selectedEntry, requestedStepTreeTopologyNodeIds).catch((err) => {
       setReferenceStatus(REFERENCE_STATUS.ERROR);
       setReferenceError(err instanceof Error ? err.message : String(err));
     });
@@ -5157,6 +4651,7 @@ export default function CadWorkspace({
     isAssemblyView,
     loadReferencesForEntry,
     referenceLoadingEnabled,
+    requestedStepTreeTopologyNodeIds,
     selectedEntry,
     selectedEntryHasReferences,
     selectedReferencesMatch
@@ -5203,6 +4698,8 @@ export default function CadWorkspace({
   const {
     currentReferences,
     activeReferenceMap,
+    selectedReferences,
+    selectedParts,
     hoveredReferenceId,
     hoveredPartId,
     visibleReferences
@@ -5223,6 +4720,13 @@ export default function CadWorkspace({
     hoveredListPartId,
     hoveredModelPartId
   });
+
+  // The Reference inspector shows every selected element: topology references
+  // (faces/edges/shapes) plus selected components and subassemblies.
+  const selectedReferenceItems = useMemo(
+    () => [...(selectedReferences || []), ...(selectedParts || [])],
+    [selectedReferences, selectedParts]
+  );
 
   useCadWorkspaceSelection({
     isAssemblyView,
@@ -5582,11 +5086,14 @@ export default function CadWorkspace({
       return null;
     }
 
-    if (selectedGeneratorRunning) {
+    if (selectedArtifactGenerating) {
+      const frame = selectedArtifactProgress ? formatArtifactProgress(selectedArtifactProgress) : null;
       return {
         loading: true,
-        label: "generating",
-        title: "Generator script is running"
+        label: frame ? `${ARTIFACT_GENERATING_LABEL} ${frame.percent}%` : ARTIFACT_GENERATING_LABEL,
+        title: frame
+          ? `${frame.label}${frame.counts ? ` — ${frame.counts}` : ""}`
+          : "Generator script is running"
       };
     }
 
@@ -5594,14 +5101,6 @@ export default function CadWorkspace({
       return {
         loading: true,
         label: selectedEntryHasDxf ? (dxfLoadStage || "loading DXF") : "building",
-        title: viewerLoadingLabel
-      };
-    }
-
-    if (effectiveRenderFormat === RENDER_FORMAT.GCODE && gcodeViewerLoading) {
-      return {
-        loading: true,
-        label: selectedEntryHasGcode ? (gcodeLoadStage || "loading G-code") : "building",
         title: viewerLoadingLabel
       };
     }
@@ -5625,7 +5124,7 @@ export default function CadWorkspace({
     if (effectiveRenderFormat === RENDER_FORMAT.STEP && stepUpdateInProgress) {
       return {
         loading: true,
-        label: "building",
+        label: ARTIFACT_GENERATING_LABEL,
         title: viewerLoadingLabel
       };
     }
@@ -5633,7 +5132,7 @@ export default function CadWorkspace({
     if (effectiveRenderFormat === RENDER_FORMAT.STEP && selectedStepArtifactRenderPending) {
       return {
         loading: true,
-        label: "generating GLB",
+        label: ARTIFACT_GENERATING_LABEL,
         title: viewerLoadingLabel
       };
     }
@@ -5699,8 +5198,6 @@ export default function CadWorkspace({
     dxfLoadStage,
     dxfViewerLoading,
     effectiveRenderFormat,
-    gcodeLoadStage,
-    gcodeViewerLoading,
     implicitLoadStage,
     implicitViewerLoading,
     meshLoadStage,
@@ -5710,11 +5207,11 @@ export default function CadWorkspace({
     referenceSelectionStatus,
     selectedEntry,
     selectedEntryHasDxf,
-    selectedEntryHasGcode,
     selectedEntryHasImplicit,
     selectedEntryHasMesh,
     selectedEntryHasUrdf,
-    selectedGeneratorRunning,
+    selectedArtifactGenerating,
+    selectedArtifactProgress,
     selectedStepArtifactRenderPending,
     selectedStepModuleLoading,
     stepUpdateInProgress,
@@ -6703,6 +6200,10 @@ export default function CadWorkspace({
     () => buildSelectionCopyButtonLabel(canonicalCopySelectionLines, { count: copySelectionPayload.copiedCount }),
     [canonicalCopySelectionLines, copySelectionPayload.copiedCount]
   );
+  // The tip teaches reference syntax, so it fires on the first pick that yields
+  // a reference to copy — a component, a subassembly, or a face/edge. Gating it
+  // on topology alone would hide it from anyone who only ever clicks parts.
+  const copyReferenceTipActive = canonicalCopySelectionLines.length > 0;
   const expandStepTreeAroundNode = useCallback((nodeId, {
     expandSelf = false,
     includeVisualOnlyAncestors = true
@@ -8127,25 +7628,6 @@ export default function CadWorkspace({
     }
   }, [activateEntryTab, entryMap, isDesktop, writeCadParam]);
 
-  const handleSelectDirectory = useCallback((dir) => {
-    const normalizedDir = String(dir || "").trim();
-    if (!normalizedDir) {
-      return;
-    }
-    resetActiveDirectory();
-    setQuery("");
-    writeCadDirParam(normalizedDir, {
-      history: "push",
-      preserveFile: Boolean(directorySelectionActive && explicitFileParam)
-    });
-    refreshCadCatalog({ markRefreshing: true }).catch((error) => {
-      if (import.meta.env.DEV) {
-        console.warn("Failed to refresh CAD catalog", error);
-      }
-    });
-    refreshCadGenerationStatus();
-  }, [explicitFileParam, resetActiveDirectory, directorySelectionActive]);
-
   const handleRevealEntryInExplorerView = useCallback((entry) => {
     const targetKey = fileKey(entry);
     if (!targetKey || !entryMap.has(targetKey)) {
@@ -8171,11 +7653,11 @@ export default function CadWorkspace({
 
   const handleSelectTabToolMode = useCallback((mode) => {
     setViewerAlertOpen(false);
-    const normalizedMode = mode === TAB_TOOL_MODE.DRAW
-      ? TAB_TOOL_MODE.DRAW
-      : mode === TAB_TOOL_MODE.MEASURE
-        ? TAB_TOOL_MODE.MEASURE
-        : TAB_TOOL_MODE.REFERENCES;
+    // Anything unrecognized falls back to selection rather than sticking the
+    // viewer in a mode with no tool behind it.
+    const normalizedMode = mode === TAB_TOOL_MODE.DRAW || mode === TAB_TOOL_MODE.MEASURE || mode === TAB_TOOL_MODE.PAN
+      ? mode
+      : TAB_TOOL_MODE.REFERENCES;
     setTabToolMode(normalizedMode);
     if (normalizedMode === TAB_TOOL_MODE.DRAW && drawingTool === DRAWING_TOOL.SURFACE_LINE) {
       setDrawingTool(DRAWING_TOOL.FREEHAND);
@@ -8200,8 +7682,16 @@ export default function CadWorkspace({
     if (!selectedFileSheetKind) {
       return;
     }
-    setThemeMenuOpen(false);
     setViewerAlertOpen(false);
+    // Opening the file sheet while the theme sidebar is up replaces it.
+    if (themeEditing) {
+      setThemeEditing(false);
+      setTabToolsOpen(true);
+      if (!isDesktop) {
+        setSidebarOpen(false);
+      }
+      return;
+    }
     setTabToolsOpen((current) => {
       const nextOpen = !current;
       if (nextOpen && !isDesktop) {
@@ -8209,7 +7699,7 @@ export default function CadWorkspace({
       }
       return nextOpen;
     });
-  }, [isDesktop, selectedFileSheetKind, setThemeMenuOpen, setTabToolsOpen]);
+  }, [themeEditing, isDesktop, selectedFileSheetKind, setTabToolsOpen]);
 
   const handleDownloadFileAsset = useCallback((entry, asset = "output", assetInfo = null) => {
     const fileRef = entry ? fileKey(entry) : "";
@@ -8253,7 +7743,10 @@ export default function CadWorkspace({
         statusLabel = "Copied link";
       } else {
         const targets = copyTargetsForFileAccessAsset(assetInfo, viewerServerInfo);
-        if (kind === "relativePath") {
+        if (kind === "filename") {
+          copyText = targets.filename;
+          statusLabel = "Copied filename";
+        } else if (kind === "relativePath") {
           copyText = targets.relativePath;
           statusLabel = "Copied relative path";
         } else {
@@ -8268,7 +7761,8 @@ export default function CadWorkspace({
 
       await copyTextToClipboard(copyText);
       const filename = String(assetInfo?.filename || "").trim();
-      setCopyStatus(filename ? `${statusLabel} for ${filename}` : statusLabel);
+      // Naming the file after "Copied filename" would just repeat what was copied.
+      setCopyStatus(filename && copyText !== filename ? `${statusLabel} for ${filename}` : statusLabel);
     } catch (error) {
       setCopyStatus(error instanceof Error ? error.message : "Failed to copy file reference");
     }
@@ -8311,6 +7805,7 @@ export default function CadWorkspace({
       return;
     }
     const busyKey = `${fileRef}:export:${exportFormat}`;
+    const moduleUrl = entry ? entryAssetUrl(entry, "implicit") : "";
     const currentParameterValues = fileRef === selectedKey ? implicitParameterValues : null;
     const currentAnimationState = fileRef === selectedKey ? selectedImplicitAnimationViewState : null;
     setCopyStatus("");
@@ -8320,6 +7815,7 @@ export default function CadWorkspace({
       setCopyStatus(`Exporting ${exportFormat.toUpperCase()}...`);
       const payload = await requestImplicitCadExport({
         file: fileRef,
+        moduleUrl,
         format: exportFormat,
         parameterValues: currentParameterValues,
         animationState: currentAnimationState,
@@ -8343,6 +7839,41 @@ export default function CadWorkspace({
     selectedImplicitAnimationViewState,
     selectedKey
   ]);
+
+  const handleExportStepFile = useCallback(async (entry, format) => {
+    const fileRef = entry ? fileKey(entry) : "";
+    const exportFormat = String(format || "").trim().toLowerCase();
+    if (!fileRef || !exportFormat || typeof window === "undefined") {
+      return;
+    }
+    const busyKey = `${fileRef}:export:${exportFormat}`;
+    setCopyStatus("");
+    setScreenshotStatus("");
+    setFileAccessBusyKey(busyKey);
+    try {
+      setCopyStatus(`Exporting ${stepExportFormatLabel(exportFormat)}...`);
+      const payload = await requestStepExport({ file: fileRef, format: exportFormat });
+      if (payload?.cancelled) {
+        // User dismissed the native save dialog — clear the in-progress status, no error.
+        setCopyStatus("");
+        return;
+      }
+      const filename = String(payload?.filename || "").trim();
+      const downloadUrl = String(payload?.downloadUrl || "").trim();
+      if (downloadUrl) {
+        const result = triggerUrlDownload(downloadUrl, { filename });
+        setCopyStatus(result.message);
+      } else {
+        const savedPath = String(payload?.path || "").trim();
+        const label = filename || stepExportFormatLabel(exportFormat);
+        setCopyStatus(savedPath ? `Exported ${label} to ${savedPath}` : `Exported ${label}`);
+      }
+    } catch (error) {
+      setCopyStatus(error instanceof Error ? error.message : "Export failed");
+    } finally {
+      setFileAccessBusyKey((current) => (current === busyKey ? "" : current));
+    }
+  }, []);
 
   const handleDrawingStrokesChange = useCallback((nextStrokes) => {
     const normalized = cloneDrawingStrokes(nextStrokes);
@@ -8433,7 +7964,7 @@ export default function CadWorkspace({
     handleRedoDrawing,
     setPreviewMode,
     setViewerAlertOpen,
-    setThemeMenuOpen,
+    setThemeEditing,
     setTabToolsOpen,
     setSidebarOpen,
     setTabToolMode
@@ -8469,7 +8000,7 @@ export default function CadWorkspace({
       sidebarOpen,
       tabToolsOpen,
       tabToolMode,
-      themeMenuOpen: false,
+      themeEditing,
       viewerAlertOpen
     };
     setCopyStatus("");
@@ -8478,7 +8009,7 @@ export default function CadWorkspace({
     setDrawingUndoStack([]);
     setDrawingRedoStack([]);
     setViewerAlertOpen(false);
-    setThemeMenuOpen(false);
+    setThemeEditing(false);
     setSidebarOpen(false);
     setTabToolsOpen(false);
     setPreviewMode(true);
@@ -8486,7 +8017,6 @@ export default function CadWorkspace({
     effectiveRenderFormat,
     previewMode,
     sidebarOpen,
-    setThemeMenuOpen,
     setTabToolsOpen,
     selectedImplicitRuntimeModel,
     selectedMeshData,
@@ -8494,6 +8024,31 @@ export default function CadWorkspace({
     tabToolsOpen,
     viewerAlertOpen,
     viewerLoading
+  ]);
+
+  // Exit orbit/preview mode and restore the pre-preview UI, from the floating
+  // toolbar's "Exit orbit" button. Mirrors the Escape-key exit in
+  // useCadWorkspaceShortcuts; keep the two restore paths in sync.
+  const handleExitPreviewMode = useCallback(() => {
+    if (!previewMode) {
+      return;
+    }
+    const previousUiState = previewUiStateRef.current;
+    previewUiStateRef.current = null;
+    setPreviewMode(false);
+    if (previousUiState) {
+      setViewerAlertOpen(previousUiState.viewerAlertOpen);
+      setThemeEditing(previousUiState.themeEditing);
+      setSidebarOpen(previousUiState.sidebarOpen);
+      setTabToolsOpen(previousUiState.tabToolsOpen);
+      setTabToolMode(previousUiState.tabToolMode);
+    }
+  }, [
+    previewMode,
+    setSidebarOpen,
+    setTabToolMode,
+    setTabToolsOpen,
+    setViewerAlertOpen
   ]);
 
   const toggleDirectory = (directoryId) => {
@@ -8537,11 +8092,11 @@ export default function CadWorkspace({
     activeReferenceTreeNodeId;
   const canUndoDrawing = drawingUndoStack.length > 0;
   const canRedoDrawing = drawingRedoStack.length > 0;
-  const fileSheetOpen = !!selectedFileSheetKind && tabToolsOpen && !previewMode;
+  const fileSheetOpen = !!selectedFileSheetKind && selectedFileSheetHasSections && tabToolsOpen && !previewMode && !themeEditing;
   const activeSidebarWidth = desktopSidebarOpen
     ? resolvedDesktopPanelWidths.sidebarWidth
     : 0;
-  const activeSheetWidth = desktopFileSheetOpen
+  const activeSheetWidth = desktopRightPanelOpen
     ? resolvedDesktopPanelWidths.sheetWidth
     : 0;
   const sidebarShellWidth = isDesktop && desktopSidebarOpen
@@ -8580,28 +8135,20 @@ export default function CadWorkspace({
     { id: DRAWING_TOOL.ERASE, label: "Erase", Icon: Eraser }
   ];
   const renderDisplaySettings = isStepView ? displaySettings : null;
-  const themeSections = (
-    <>
-      {isStepView ? (
-        <DisplaySettingsSection
-          displaySettings={displaySettings}
-          updateDisplaySettings={updateDisplaySettings}
-          clipBounds={selectedMeshData?.bounds || null}
-          showClip
-        />
-      ) : null}
-      <ThemeSettingsSections
-        themePresets={availableThemePresets}
-        themeSettings={themeSettings}
-        themePresetId={themePresetId}
-        resolvedColorSchemeMode={resolvedColorSchemeMode}
-        updateThemeSettings={updateThemeSettings}
-        handleResetThemeSettings={handleResetThemeSettings}
-        handleSaveCustomThemePreset={handleSaveCustomThemePreset}
-        handleUpdateThemePresetSettings={handleUpdateThemePresetSettings}
-      />
-    </>
-  );
+  const themeTabs = [
+    // One tab for everything about how this file is drawn right now: display
+    // mode, plus the section-plane and exploded-view transforms. All three are
+    // per-file session state. The theme is global, not file-specific —
+    // it lives in the navbar-triggered theme editor (ThemeEditorPanel).
+    isStepView
+      ? buildDisplaySettingsTab({
+          displaySettings,
+          updateDisplaySettings,
+          clipBounds: selectedMeshData?.bounds || null,
+          explodeMeshData: selectedMeshData || null
+        })
+      : null
+  ].filter(Boolean);
 
   return (
     <SidebarProvider
@@ -8630,11 +8177,12 @@ export default function CadWorkspace({
           selectedKey={selectedKey}
           selectedDxfKey={selectedDxfPreviewKey}
           missingFileRef={missingFileRef}
+          viewerServerInfo={viewerServerInfo}
           viewerPerspective={viewerPerspective}
           viewerPerspectiveRef={activePerspectiveRef}
           themeSettings={resolvedThemeSettings}
           displaySettings={renderDisplaySettings}
-          onProjectionChange={isStepView ? updateDisplayProjection : undefined}
+          onProjectionChange={isStepView ? updateThemeProjection : undefined}
           onDisplayModeChange={isStepView ? updateDisplayMode : undefined}
           previewMode={previewMode}
           viewportFrameInsets={viewportFrameInsets}
@@ -8697,6 +8245,8 @@ export default function CadWorkspace({
           handleStepModuleTransformDetectedChange={handleStepModuleTransformDetectedChange}
           selectionCount={selectionCount}
           copyButtonLabel={copyButtonLabel}
+          copyReferenceTipActive={copyReferenceTipActive}
+          panToolActive={panToolActive}
           handleCopySelection={handleCopySelection}
           handleScreenshotCopy={handleScreenshotCopy}
           urdfPosePicker={isUrdfView && selectedUrdfMoveIt2ActionsEnabled ? {
@@ -8719,24 +8269,9 @@ export default function CadWorkspace({
           entrySourceFormat={entrySourceFormat}
           entryHasMesh={entryHasMesh}
           entryHasDxf={entryHasDxf}
-          entryHasGcode={entryHasGcode}
           entryHasUrdf={entryHasUrdf}
-          activeGenerationFiles={activeGeneratorFiles}
           activeStepArtifactGenerationFile={activeStepArtifactGenerationFiles}
           stepArtifactGenerationAvailable={stepArtifactGenerationAvailable}
-          themePresets={availableThemePresets}
-          themeSettings={themeSettings}
-          themePresetId={themePresetId}
-          resolvedColorSchemeMode={resolvedColorSchemeMode}
-          onColorSchemePreferenceChange={handleColorSchemePreferenceChange}
-          updateThemeSettings={updateThemeSettings}
-          handleResetThemeSettings={handleResetThemeSettings}
-          handleSaveCustomThemePreset={handleSaveCustomThemePreset}
-          handleUpdateThemePresetSettings={handleUpdateThemePresetSettings}
-          handleDeleteCustomThemePreset={handleDeleteCustomThemePreset}
-          handleEditThemePreset={handleEditThemePreset}
-          handleResetThemePresetToDefault={handleResetThemePresetToDefault}
-          handleRestoreDefaultThemePresets={handleRestoreDefaultThemePresets}
           filenameLoadActivity={filenameLoadActivity}
           selectedStepSourceStatus={selectedStepSourceStatus}
           canRevealFileAssets={fileRevealAvailable}
@@ -8745,18 +8280,19 @@ export default function CadWorkspace({
           fileAccessBusyKey={fileAccessBusyKey}
           onDownloadFileAsset={handleDownloadFileAsset}
           onExportImplicitFile={handleExportImplicitFile}
+          onExportStepFile={handleExportStepFile}
           onRevealFileAsset={handleRevealFileAsset}
           onRevealInExplorerView={handleRevealEntryInExplorerView}
           onCopyFileAssetReference={handleCopyFileAssetReference}
-          fileSheetKind={selectedFileSheetKind}
+          fileSheetKind={selectedFileSheetHasSections ? selectedFileSheetKind : ""}
           fileSheetOpen={fileSheetOpen}
           onToggleFileSheet={handleToggleFileSheet}
-          navigationAvailable={directoryNavigationAvailable}
+          themeEditing={themeEditing}
+          onToggleThemeEditor={handleToggleThemeEditor}
         />
 
         <div className="pointer-events-none relative min-h-0 flex-1 overflow-hidden">
           <div className="flex h-full min-w-0">
-            {directoryNavigationAvailable ? (
             <FileViewerSidebar
               previewMode={previewMode}
               query={query}
@@ -8771,9 +8307,7 @@ export default function CadWorkspace({
               entrySourceFormat={entrySourceFormat}
               entryHasMesh={entryHasMesh}
               entryHasDxf={entryHasDxf}
-              entryHasGcode={entryHasGcode}
               entryHasUrdf={entryHasUrdf}
-              activeGenerationFiles={activeGeneratorFiles}
               activeStepArtifactGenerationFile={activeStepArtifactGenerationFiles}
               stepArtifactGenerationAvailable={stepArtifactGenerationAvailable}
               canRevealFileAssets={fileRevealAvailable}
@@ -8782,19 +8316,16 @@ export default function CadWorkspace({
               fileAccessBusyKey={fileAccessBusyKey}
               onDownloadFileAsset={handleDownloadFileAsset}
               onExportImplicitFile={handleExportImplicitFile}
+              onExportStepFile={handleExportStepFile}
               onRevealFileAsset={handleRevealFileAsset}
               onRevealInExplorerView={handleRevealEntryInExplorerView}
               onCopyFileAssetReference={handleCopyFileAssetReference}
               catalogHydrated={catalogHydrated}
               catalogRefreshing={catalogRefreshing}
               catalogError={catalogError}
-              directoryOptions={directoryOptions}
-              activeDirectory={activeDirectory || explicitDirParam || ""}
-              onSelectDirectory={handleSelectDirectory}
               resizable={isDesktop}
               onStartResize={handleStartSidebarResize}
             />
-            ) : null}
 
             <div className="pointer-events-none relative min-w-0 flex-1 overflow-hidden">
               <FloatingToolBar
@@ -8820,11 +8351,12 @@ export default function CadWorkspace({
                 activeMeasurementId={activeMeasureId}
                 onMeasureActivate={setActiveMeasureId}
                 onMeasureDelete={handleMeasureDelete}
+                panToolActive={panToolActive}
                 handleSelectTabToolMode={handleSelectTabToolMode}
                 displayMode={isStepView ? displaySettings.mode : undefined}
                 onDisplayModeChange={isStepView ? updateDisplayMode : undefined}
-                projection={isStepView ? displaySettings.projection : undefined}
-                onProjectionChange={isStepView ? updateDisplayProjection : undefined}
+                projection={isStepView ? resolvedThemeSettings.projection : undefined}
+                onProjectionChange={isStepView ? updateThemeProjection : undefined}
                 viewerLoading={viewerLoading}
                 selectedMeshData={selectedMeshData}
                 selectedDxfData={selectedDxfData}
@@ -8839,25 +8371,26 @@ export default function CadWorkspace({
                 canRedoDrawing={canRedoDrawing}
                 drawingStrokes={drawingStrokes}
                 handleEnterPreviewMode={handleEnterPreviewMode}
+                handleExitPreviewMode={handleExitPreviewMode}
                 handleScreenshotCopy={handleScreenshotCopy}
+                onExportStepFile={handleExportStepFile}
+                fileAccessBusyKey={fileAccessBusyKey}
               />
 
-              {!previewMode && (directorySelectionActive || (!selectedEntry && !missingFileRef && !fileParamSelectionPending)) ? (
+              {!previewMode && !selectedEntry && !missingFileRef && !fileParamSelectionPending ? (
                 <CadWorkspaceHome
                   entries={catalogEntries}
                   onSelectEntry={handleSelectEntry}
                   catalogHydrated={catalogHydrated}
                   catalogRefreshing={catalogRefreshing}
                   catalogError={catalogError}
-                  directorySelectionActive={directorySelectionActive}
-                  directoryOptions={directoryOptions}
-                  onSelectDirectory={handleSelectDirectory}
                 />
               ) : null}
 
               <ViewerLoadingOverlay
                 viewerLoading={effectiveViewerLoading}
                 previewMode={previewMode}
+                progress={selectedArtifactProgress}
               />
             </div>
 
@@ -8882,41 +8415,9 @@ export default function CadWorkspace({
                 localFileOpenAvailable={fileRevealAvailable}
                 fileAccessBusyKey={fileAccessBusyKey}
                 onOpenFileAsset={handleRevealFileAsset}
-                suppressDynamicMetadataStatus={selectedGeneratorRunning}
+                suppressDynamicMetadataStatus={selectedArtifactGenerating}
                 statusItems={selectedFileStatusItems}
-                themeSections={themeSections}
-                openSectionIds={effectiveFileSheetOpenSectionIds}
-                onOpenSectionIdsChange={handleFileSheetOpenSectionIdsChange}
-              />
-            ) : null}
-
-            {selectedFileSheetKind === "gcode" ? (
-              <GcodeFileSheet
-                key={`gcode:${selectedKey}`}
-                open={fileSheetOpen}
-                isDesktop={isDesktop}
-                width={activeSheetWidth || tabToolsWidth}
-                onOpenChange={setTabToolsOpen}
-                selectedEntry={selectedEntry}
-                onStartResize={handleStartFileSheetResize}
-                gcodeData={selectedGcodeData}
-                previewMetadata={selectedGcodeMeshData?.metadata || null}
-                maxLayer={selectedGcodeMaxLayer}
-                showTravel={gcodeShowTravel}
-                fullDetail={gcodeFullDetail}
-                previewDetailLevel={gcodePreviewDetailLevel}
-                onMaxLayerChange={setGcodeMaxLayer}
-                onShowTravelChange={setGcodeShowTravel}
-                onFullDetailChange={setGcodeFullDetail}
-                onPreviewDetailLevelChange={setGcodePreviewDetailLevel}
-                fileDownloadAvailable={fileLinkCopyAvailable}
-                viewerServerInfo={viewerServerInfo}
-                localFileOpenAvailable={fileRevealAvailable}
-                fileAccessBusyKey={fileAccessBusyKey}
-                onOpenFileAsset={handleRevealFileAsset}
-                suppressDynamicMetadataStatus={selectedGeneratorRunning}
-                statusItems={selectedFileStatusItems}
-                themeSections={themeSections}
+                themeTabs={themeTabs}
                 openSectionIds={effectiveFileSheetOpenSectionIds}
                 onOpenSectionIdsChange={handleFileSheetOpenSectionIdsChange}
               />
@@ -8936,11 +8437,10 @@ export default function CadWorkspace({
                 stepTreeRoot={displayStepTreeRoot}
                 assemblyMates={selectedAssemblyMates}
                 expandedTreeNodeIds={expandedStepTreeNodeIds}
-                stepTreeRootShowMore={stepTreeRootShowMore}
-                onStepTreeRootShowMoreChange={setStepTreeRootShowMore}
                 loadableTreeNodeIds={loadableStepTreeTopologyNodeIds}
                 selectedPartIds={selectedPartIds}
                 selectedReferenceIds={selectedReferenceIds}
+                selectedReferences={selectedReferenceItems}
                 selectedMateIds={selectedMateIds}
                 selectableNodeIds={isolatedStepTreeSelectableNodeIds}
                 activeTreeNodeId={activeStepTreeNodeId}
@@ -8985,6 +8485,7 @@ export default function CadWorkspace({
                   onAnimationReset: handleStepModuleAnimationReset,
                   onAnimationScrub: handleStepModuleAnimationScrub,
                   onAnimationSpeedChange: handleStepModuleAnimationSpeedChange,
+                  onAnimationLoopToggle: handleStepModuleAnimationLoopToggle,
                   onEnabledChange: handleStepModuleEnabledChange,
                   onCopyParams: handleCopyStepModuleParams,
                   onPasteParams: handlePasteStepModuleParams
@@ -8994,9 +8495,9 @@ export default function CadWorkspace({
                 localFileOpenAvailable={fileRevealAvailable}
                 fileAccessBusyKey={fileAccessBusyKey}
                 onOpenFileAsset={handleRevealFileAsset}
-                suppressDynamicMetadataStatus={selectedGeneratorRunning}
+                suppressDynamicMetadataStatus={selectedArtifactGenerating}
                 statusItems={selectedFileStatusItems}
-                themeSections={themeSections}
+                themeTabs={themeTabs}
                 openSectionIds={effectiveFileSheetOpenSectionIds}
                 onOpenSectionIdsChange={handleFileSheetOpenSectionIdsChange}
               />
@@ -9055,9 +8556,9 @@ export default function CadWorkspace({
                 localFileOpenAvailable={fileRevealAvailable}
                 fileAccessBusyKey={fileAccessBusyKey}
                 onOpenFileAsset={handleRevealFileAsset}
-                suppressDynamicMetadataStatus={selectedGeneratorRunning}
+                suppressDynamicMetadataStatus={selectedArtifactGenerating}
                 statusItems={selectedFileStatusItems}
-                themeSections={themeSections}
+                themeTabs={themeTabs}
                 openSectionIds={effectiveFileSheetOpenSectionIds}
                 onOpenSectionIdsChange={handleFileSheetOpenSectionIdsChange}
               />
@@ -9078,9 +8579,9 @@ export default function CadWorkspace({
                 localFileOpenAvailable={fileRevealAvailable}
                 fileAccessBusyKey={fileAccessBusyKey}
                 onOpenFileAsset={handleRevealFileAsset}
-                suppressDynamicMetadataStatus={selectedGeneratorRunning}
+                suppressDynamicMetadataStatus={selectedArtifactGenerating}
                 statusItems={selectedFileStatusItems}
-                themeSections={themeSections}
+                themeTabs={themeTabs}
                 openSectionIds={effectiveFileSheetOpenSectionIds}
                 onOpenSectionIdsChange={handleFileSheetOpenSectionIdsChange}
               />
@@ -9109,6 +8610,7 @@ export default function CadWorkspace({
                   onAnimationReset: handleImplicitAnimationReset,
                   onAnimationScrub: handleImplicitAnimationScrub,
                   onAnimationSpeedChange: handleImplicitAnimationSpeedChange,
+                  onAnimationLoopToggle: handleImplicitAnimationLoopToggle,
                   onCopyParams: handleCopyImplicitParams,
                   onPasteParams: handlePasteImplicitParams
                 }}
@@ -9122,11 +8624,26 @@ export default function CadWorkspace({
                 localFileOpenAvailable={fileRevealAvailable}
                 fileAccessBusyKey={fileAccessBusyKey}
                 onOpenFileAsset={handleRevealFileAsset}
-                suppressDynamicMetadataStatus={selectedGeneratorRunning}
+                suppressDynamicMetadataStatus={selectedArtifactGenerating}
                 statusItems={selectedFileStatusItems}
-                themeSections={themeSections}
+                themeTabs={themeTabs}
                 openSectionIds={effectiveFileSheetOpenSectionIds}
                 onOpenSectionIdsChange={handleFileSheetOpenSectionIdsChange}
+              />
+            ) : null}
+
+            {themeEditing ? (
+              <ThemeEditorPanel
+                open
+                isDesktop={isDesktop}
+                width={activeSheetWidth || tabToolsWidth}
+                onClose={closeThemeEditor}
+                onStartResize={handleStartFileSheetResize}
+                themeSettings={themeSettings}
+                themeId={themeId}
+                resolvedColorSchemeMode={resolvedColorSchemeMode}
+                onSelectTheme={selectTheme}
+                updateThemeSettings={updateThemeSettings}
               />
             ) : null}
           </div>

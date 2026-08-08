@@ -38,8 +38,8 @@ npm --prefix viewer install
 When running a tool manually, use that skill's interpreter:
 
 ```bash
-.venv/skills/cad/bin/python skills/cad/scripts/step --help
-.venv/skills/urdf/bin/python skills/urdf/scripts/urdf --help
+.venv/skills/cad/bin/python skills/cad/scripts/gen --help
+python3 skills/urdf/scripts/validate --help  # stdlib-only validator, no venv needed
 ```
 
 ## Link Skills Into Your Agent
@@ -114,13 +114,9 @@ ask it to write files under that scratch path. This keeps skill scripts,
 fixtures, generated sidecars, and Viewer links using the same repo-relative
 paths that CI and local checks expect.
 
-Only commit what belongs there. The File Policy section of
-[models/README.md](models/README.md) lists the file types `models/` accepts —
-CAD/robot sources, the 3D and fabrication outputs generated from them, and
-docs — and `tests/python/global/test_models_directory_policy.py` enforces that
-list against tracked files. Review media such as snapshot PNGs and orbit GIFs
-are not model artifacts: render them under `/tmp` and attach them to the pull
-request instead.
+Review media such as snapshot PNGs and orbit GIFs are not model artifacts:
+render them under `/tmp` and attach them to the pull request instead. `.gitignore`
+keeps them out of `models/`.
 
 ## Source Boundaries
 
@@ -237,6 +233,27 @@ The GitHub Release is published immediately by default; set `publish=false` to
 review it as a draft first. Treat generated outputs as CI products, not edit
 targets.
 
+The publish job also uploads `packages/cadgen` to
+[PyPI](https://pypi.org/project/cadgen/). The upload runs after the production
+bundle is validated but BEFORE `main` is pushed: the publish tree pins
+`cadgen==<version>` from PyPI (`scripts/release/pin-cadgen-requirements.sh`
+rewrites the editable requirement lines), so a failed PyPI upload must block the
+release rather than ship a `main` whose skill installs cannot resolve. The PyPI version always
+equals `VERSION`; `sync-version.mjs` stamps
+`packages/cadgen/pyproject.toml` and the publish job refuses to upload on a
+mismatch. Uploads use `skip-existing`, so a rerun after a post-upload failure
+(for example a failed `main` push) is idempotent and resumes like any other
+failed publish. Local development keeps the editable symlinked installs.
+
+#### One-time PyPI setup
+
+The PyPI upload authenticates with [trusted
+publishing](https://docs.pypi.org/trusted-publishers/) (GitHub OIDC); no API
+token secret is stored. Before the first release that publishes to PyPI, add a
+trusted publisher for the `cadgen` project on PyPI (use "Add a pending
+publisher" if the project does not exist yet): repository
+`earthtojake/text-to-cad`, workflow `release.yml`, environment left blank.
+
 ### Testing CI/CD and build changes
 
 Use `target_branch=build-test` only when explicitly testing changes to the
@@ -253,28 +270,17 @@ tag exists — rerun `Release` with `set_version` pinned to the current version.
 When `develop` already contains that version, the workflow skips the release PR
 and proceeds straight to the publish jobs.
 
-### Redeploying the web apps
+### Redeploying the docs site
 
-The standalone `Deploy Docs` and `Deploy Viewer` workflows redeploy the
-individual web apps to Vercel production without running a release. They
-default to deploying `main` and expect a production-layout ref:
+The standalone `Deploy Docs` workflow redeploys the docs site to Vercel
+production without running a release. It defaults to deploying `main` and
+expects a production-layout ref:
 
 ```bash
 gh workflow run deploy-docs.yml -f ref=main
-gh workflow run deploy-viewer.yml -f ref=main
 ```
 
-### Uploading new models
-
-The standalone `Upload Models` workflow uploads the `models/` catalog and CAD
-Viewer assets to Vercel Blob without running a release or redeploying the
-viewer. It skips assets that already match the remote catalog and fetches only
-the missing Git LFS objects. Upload from a source ref — `main` does not
-contain `models/`:
-
-```bash
-gh workflow run upload-models.yml -f ref=develop
-```
+The CAD Viewer is a local-filesystem app and has no hosted deployment.
 
 ### Local and manual fallbacks
 
@@ -351,8 +357,11 @@ behavior:
 npm --prefix viewer run dev -- --host 127.0.0.1
 ```
 
-Use the printed URL with an absolute `?dir=/path/to/root` and any absolute
-`?file=/path/to/model.step`. Do not assume a fixed dev port unless you pass
+Put the absolute workspace directory in the URL path and the artifact in
+`?file=<path relative to it>` — pick the project's model root, not the file's own
+folder, so the file browser lists the whole project:
+`http://127.0.0.1:<port>/abs/project/models?file=mechanisms/lift_table.step.py`.
+Do not assume a fixed dev port unless you pass
 Vite's standard `--port` flag. Packaged Viewer runtime checks are
 production-output checks; use `scripts/README.md` when you specifically need
 that path.

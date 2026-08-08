@@ -1,10 +1,5 @@
-import {
-  readStoredActiveCadDir,
-  rememberActiveCadDir
-} from "./cadViewerDirectorySession.mjs";
 import { normalizeViewerDefaultFile } from "../../shared/viewerConfig.mjs";
 
-const CAD_DIR_QUERY_PARAM = "dir";
 const CAD_QUERY_PARAM = "file";
 
 export function fileKey(entry) {
@@ -19,7 +14,7 @@ export function cadFileParamForEntry(entry) {
 
 export function cadPathForEntry(entry) {
   const file = cadFileParamForEntry(entry);
-  return file.replace(/\.(step|stp|stl|3mf|glb|gcode|dxf|urdf|srdf|sdf)$/i, "");
+  return file.replace(/\.(step|stp|stl|3mf|glb|dxf|urdf|srdf|sdf)$/i, "");
 }
 
 function writeUrl(url, { history = "replace" } = {}) {
@@ -97,17 +92,6 @@ export function readCadParam() {
   return normalizedValue || null;
 }
 
-export function readCadDirParam() {
-  if (typeof window === "undefined") {
-    return null;
-  }
-  const params = new URLSearchParams(window.location.search);
-  const value = params.get(CAD_DIR_QUERY_PARAM);
-  const normalizedValue = typeof value === "string"
-    ? String(value).trim()
-    : "";
-  return normalizedValue || null;
-}
 
 export function findEntryByUrlPath(entries, urlPath) {
   const normalizedUrlPath = normalizeCadFileQueryParam(urlPath);
@@ -172,39 +156,14 @@ export function writeCadParam(urlPath, { history = "replace" } = {}) {
   const normalizedUrlPath = normalizeCadFileQueryParam(urlPath);
   const url = new URL(window.location.href);
   url.searchParams.delete("refs");
+  // Only the file changes here. The directory lives in the URL's path and is never
+  // rewritten from the client — switching directories means navigating to a new URL.
   if (normalizedUrlPath) {
     url.searchParams.set(CAD_QUERY_PARAM, normalizedUrlPath);
-    if (url.searchParams.has(CAD_DIR_QUERY_PARAM)) {
-      const activeDir = rememberActiveCadDir(url.searchParams.get(CAD_DIR_QUERY_PARAM));
-      if (activeDir && readStoredActiveCadDir() !== activeDir) {
-        writeUrl(url, { history });
-        return;
-      }
-      url.searchParams.delete(CAD_DIR_QUERY_PARAM);
-    }
   } else {
     url.searchParams.delete(CAD_QUERY_PARAM);
   }
   writeUrl(url, { history });
-}
-
-export function writeCadDirParam(dirPath, { history = "replace", preserveFile = false } = {}) {
-  if (typeof window === "undefined") {
-    return false;
-  }
-  const normalizedDirPath = String(dirPath || "").trim();
-  const url = new URL(window.location.href);
-  url.searchParams.delete("refs");
-  if (!preserveFile) {
-    url.searchParams.delete(CAD_QUERY_PARAM);
-  }
-  if (normalizedDirPath) {
-    url.searchParams.set(CAD_DIR_QUERY_PARAM, normalizedDirPath);
-    rememberActiveCadDir(normalizedDirPath);
-  } else {
-    url.searchParams.delete(CAD_DIR_QUERY_PARAM);
-  }
-  return writeUrl(url, { history });
 }
 
 function compareSidebarLabels(a, b) {
@@ -227,7 +186,11 @@ function normalizedEntryStem(entry) {
   return entryLeafName(entry)
     .replace(/\.step\.json$/i, "")
     .replace(/\.urdf\.json$/i, "")
-    .replace(/\.(step|stp|stl|3mf|glb|gcode|dxf|urdf|srdf|sdf|py)$/i, "");
+    // A generator entry's filename is `<name>.step.py` / `<name>.dxf.py` — strip the whole
+    // generator suffix to `<name>` so the label reconstructs as `<name>.step` / `<name>.dxf`
+    // (not `<name>.step.step` or `<name>.dxf.dxf`).
+    .replace(/\.(step|stp|dxf)\.py$/i, "")
+    .replace(/\.(step|stp|stl|3mf|glb|dxf|urdf|srdf|sdf|py)$/i, "");
 }
 
 export function sidebarDirectoryIdForEntry(entry) {
@@ -249,7 +212,7 @@ export function filenameLabelForEntry(entry) {
     return "";
   }
   const kind = String(entry?.kind || "").trim().toLowerCase();
-  const directSourceFormats = new Set(["dxf", "urdf", "srdf", "sdf", "stl", "3mf", "glb", "gcode", "implicit"]);
+  const directSourceFormats = new Set(["dxf", "urdf", "srdf", "sdf", "stl", "3mf", "glb", "implicit"]);
   const sourceFormat = directSourceFormats.has(kind)
     ? kind
     : String(sourceExtensionForEntry(entry) || "step").trim().toLowerCase();
@@ -275,13 +238,17 @@ export function filenameLabelForEntry(entry) {
   if (sourceFormat === "glb" || entry?.kind === "glb") {
     return `${stem}.glb`;
   }
-  if (sourceFormat === "gcode" || entry?.kind === "gcode") {
-    return `${stem}.gcode`;
-  }
   if (sourceFormat === "implicit" || entry?.kind === "implicit") {
     return entryLeafName(entry);
   }
-  return `${stem}.${sourceFormat === "stp" ? "stp" : "step"}`;
+  const stepExtension = sourceFormat === "stp" ? "stp" : "step";
+  // A Python-generated model has no committed STEP — its real source is a `<stem>.py` gen_step
+  // script. Surface that in the explorer as `<stem>.step.py` so it reads as a Python generator
+  // (which the viewer rebuilds on demand) rather than a static, hand-committed STEP file.
+  if (String(entry?.sourceKind || "").trim().toLowerCase() === "python") {
+    return `${stem}.${stepExtension}.py`;
+  }
+  return `${stem}.${stepExtension}`;
 }
 
 export function sidebarLabelForEntry(entry) {

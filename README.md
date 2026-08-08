@@ -5,17 +5,17 @@
 <br>
 
 <pre>
- ██████╗ █████╗ ██████╗       ███████╗██╗  ██╗██╗██╗     ██╗     ███████╗
-██╔════╝██╔══██╗██╔══██╗      ██╔════╝██║ ██╔╝██║██║     ██║     ██╔════╝
-██║     ███████║██║  ██║      ███████╗█████╔╝ ██║██║     ██║     ███████╗
-██║     ██╔══██║██║  ██║      ╚════██║██╔═██╗ ██║██║     ██║     ╚════██║
-╚██████╗██║  ██║██████╔╝      ███████║██║  ██╗██║███████╗███████╗███████║
- ╚═════╝╚═╝  ╚═╝╚═════╝       ╚══════╝╚═╝  ╚═╝╚═╝╚══════╝╚══════╝╚══════╝
+████████╗███████╗██╗  ██╗████████╗   ████████╗ ██████╗     ██████╗ █████╗ ██████╗ 
+╚══██╔══╝██╔════╝╚██╗██╔╝╚══██╔══╝   ╚══██╔══╝██╔═══██╗   ██╔════╝██╔══██╗██╔══██╗
+   ██║   █████╗   ╚███╔╝    ██║         ██║   ██║   ██║   ██║     ███████║██║  ██║
+   ██║   ██╔══╝   ██╔██╗    ██║         ██║   ██║   ██║   ██║     ██╔══██║██║  ██║
+   ██║   ███████╗██╔╝ ██╗   ██║   ██╗   ██║   ╚██████╔╝██╗╚██████╗██║  ██║██████╔╝
+   ╚═╝   ╚══════╝╚═╝  ╚═╝   ╚═╝   ╚═╝   ╚═╝    ╚═════╝ ╚═╝ ╚═════╝╚═╝  ╚═╝╚═════╝ 
 </pre>
 
-A skills library for CAD, robotics, and hardware design agents
+A library of agent skills for CAD, CAE and CAM
 
-[Docs](https://www.cadskills.xyz) | [Demo](https://demo.cadskills.xyz)
+[Docs](https://www.texttocad.dev) | [Demo](https://cad.fun)
 
 [![Tests](https://img.shields.io/github/actions/workflow/status/earthtojake/text-to-cad/test.yml?branch=develop&style=for-the-badge&logo=githubactions&logoColor=white&label=Tests)](https://github.com/earthtojake/text-to-cad/actions/workflows/test.yml?query=branch%3Adevelop)
 [![Join Discord](https://img.shields.io/badge/Discord-Join-5865F2?style=for-the-badge&logo=discord&logoColor=white)](https://discord.gg/5FGB9DwJYU)
@@ -46,7 +46,7 @@ robot description files, simulation, and local review.
 | Skill        | Summary                                                                                                                                            | Source                                              |
 | ------------ | -------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------- |
 | CAD          | Creates and edits CAD models from plain-language or image requests, with STEP as the main output along with options to export to STL, 3MF and GLB. | [skills/cad](skills/cad/SKILL.md)                   |
-| CAD Viewer   | Shows local browser previews for CAD, G-code, and robot files.                                                                                     | [skills/cad-viewer](skills/cad-viewer/SKILL.md)     |
+| CAD Viewer   | Shows local browser previews for CAD and robot files.                                                                                     | [skills/cad-viewer](skills/cad-viewer/SKILL.md)     |
 | step.parts   | Finds off-the-shelf STEP parts like screws, bearings, motors, and connectors.                                                                      | [skills/step-parts](skills/step-parts/SKILL.md)     |
 | DXF          | Creates 2D DXF drawings like profiles, templates, gaskets, and cut layouts from Python sources or CAD geometry.                                    | [skills/dxf](skills/dxf/SKILL.md)                   |
 | URDF         | Writes robot structure files with links, joints, limits, inertials, and meshes.                                                                    | [skills/urdf](skills/urdf/SKILL.md)                 |

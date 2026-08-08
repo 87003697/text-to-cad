@@ -1,3 +1,7 @@
+// Browser tab title. The selected file is appended as "<title> | <filename>";
+// index.html carries the same string so the tab reads correctly before hydration.
+export const DOCUMENT_TITLE = "text-to-cad";
+
 export const ASSET_STATUS = {
   PENDING: "pending",
   LOADING: "loading",
@@ -18,7 +22,8 @@ export { RENDER_FORMAT } from "cadjs/lib/fileFormats.js";
 export const TAB_TOOL_MODE = {
   REFERENCES: "references",
   DRAW: "draw",
-  MEASURE: "measure"
+  MEASURE: "measure",
+  PAN: "pan"
 };
 
 export const DRAWING_TOOL = {

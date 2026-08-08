@@ -7,7 +7,6 @@ import {
   fileStatusWarningOrErrorItems,
   fileStatusHasWarningsOrErrors,
   formatFileStatusItemForAgent,
-  gcodeFileStatusItems,
   mostIntenseFileStatusLevel,
   sdfFileStatusItems,
   stepFileStatusItems,
@@ -54,7 +53,7 @@ test("stepFileStatusItems treats missing STEP source files as warnings", () => {
   assert.equal(items[0].title, "STEP file missing");
   assert.equal(
     items[0].message,
-    "STEP file was not generated for this Python script; only a GLB artifact is available."
+    "STEP file was not generated for this Python script; only the render package is available."
   );
   assert.deepEqual(items[0].details.map((item) => item.label), [
     "STEP file",
@@ -74,10 +73,10 @@ test("stepFileStatusItems marks missing STEP artifacts as errors", () => {
         stale: false,
         sourceKind: "python",
         stepPath: "models/tom/STEP/tom.step",
-        glbPath: "models/tom/STEP/.tom.step.glb",
+        packagePath: "models/tom/STEP/__cadgen__/models/tom.step",
         artifactHash: "",
         currentHash: "new-hash",
-        message: "GLB artifact is missing."
+        message: "Render package is missing."
       }
     },
     stepArtifactGenerationState: failedStepArtifactGenerationState,
@@ -89,7 +88,7 @@ test("stepFileStatusItems marks missing STEP artifacts as errors", () => {
   assert.equal(items[0].title, "STEP artifact missing");
   assert.equal(items[0].message, "Generated GLB is missing.");
   assert.equal(items[0].details.find((item) => item.label === "Code")?.value, "missing_glb");
-  assert.equal(items[0].details.find((item) => item.label === "GLB artifact")?.value, "tom/STEP/.tom.step.glb");
+  assert.equal(items[0].details.find((item) => item.label === "Render package")?.value, "tom/STEP/__cadgen__/models/tom.step");
 });
 
 test("stepFileStatusItems reads artifact warnings from current-file status", () => {
@@ -104,7 +103,7 @@ test("stepFileStatusItems reads artifact warnings from current-file status", () 
         error: "missing_glb",
         sourceKind: "step",
         stepPath: "models/tom/STEP/tom.step",
-        glbPath: "models/tom/STEP/.tom.step.glb"
+        packagePath: "models/tom/STEP/__cadgen__/models/tom.step"
       },
       step: {
         ok: true,
@@ -119,7 +118,7 @@ test("stepFileStatusItems reads artifact warnings from current-file status", () 
 
   assert.equal(items.length, 1);
   assert.equal(items[0].title, "STEP artifact missing");
-  assert.equal(items[0].details.find((item) => item.label === "GLB artifact")?.value, "tom/STEP/.tom.step.glb");
+  assert.equal(items[0].details.find((item) => item.label === "Render package")?.value, "tom/STEP/__cadgen__/models/tom.step");
 });
 
 test("stepFileStatusItems keeps renderable STEP artifact issues as warnings", () => {
@@ -197,18 +196,6 @@ test("stepFileStatusItems trims obsolete regeneration prompts from artifact mess
 });
 
 test("parser warnings normalize to status items", () => {
-  assert.deepEqual(gcodeFileStatusItems({ warnings: ["Inch units are not supported."] }).map((item) => ({
-    level: item.level,
-    source: item.source,
-    title: item.title,
-    message: item.message
-  })), [{
-    level: FILE_STATUS_LEVELS.WARNING,
-    source: "gcode-parser",
-    title: "G-code warning",
-    message: "Inch units are not supported."
-  }]);
-
   assert.equal(sdfFileStatusItems({
     staticMetadata: {
       warnings: ["Unsupported geometry was skipped."]
@@ -252,7 +239,7 @@ test("viewer alerts normalize to status items", () => {
     title: "Failed to load render mesh",
     message: "404",
     resolution: "Reload the page.",
-    command: "python -m cadpy.step_artifact --repo-root . --step model.step"
+    command: "python -m cadgen.step_artifact --repo-root . --step model.step"
   });
 
   assert.equal(item.level, FILE_STATUS_LEVELS.ERROR);
@@ -388,7 +375,7 @@ test("formatFileStatusItemForAgent copies status items with details", () => {
         stale: true,
         sourceKind: "step",
         stepPath: "models/simple/part.step",
-        glbPath: "models/simple/.part.step.glb",
+        packagePath: "models/simple/__cadgen__/models/part.step",
         artifactHash: "old-hash",
         currentHash: "new-hash"
       }
@@ -408,7 +395,7 @@ test("formatFileStatusItemForAgent copies status items with details", () => {
     "Details:",
     "- Code: stale_step_artifact",
     "- STEP file: simple/part.step",
-    "- GLB artifact: simple/.part.step.glb",
+    "- Render package: simple/__cadgen__/models/part.step",
     "- Source kind: step",
     "- Artifact hash: old-hash",
     "- Current hash: new-hash"
