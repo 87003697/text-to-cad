@@ -223,15 +223,21 @@ class DrawingPackageCurrencyGateTests(unittest.TestCase):
             script = self._write(Path(temp), bakeHash=_DROP)
             self.assertFalse(drawing_package_current(script))
 
-    def test_a_changed_default_thickness_is_not_current(self) -> None:
+    def test_a_changed_bake_format_is_not_current(self) -> None:
         # Drive it through the real setting rather than a hand-written hash: an edit to the
         # producer's bake must invalidate packages built under the old one, in this
         # authority AND in the viewer's (viewer/server_py/tests/test_artifact.py pins the
         # other half).
+        #
+        # The format is now the ONLY thing in the bake block. Thickness used to sit here as a
+        # frozen 2.0 mm; it is a render-time scale on the baked prism now, so changing it
+        # must NOT invalidate a package -- a slider cannot make a cache stale.
         with tempfile.TemporaryDirectory() as temp:
             script = self._write(Path(temp))
             self.assertTrue(drawing_package_current(script))
-            with mock.patch.object(drawing_package, "DEFAULT_PREVIEW_THICKNESS_MM", 3.0):
+            with mock.patch.object(
+                drawing_package, "DRAWING_PREVIEW_BAKE_FORMAT", "dxf-preview-glb-vNEXT"
+            ):
                 self.assertFalse(drawing_package_current(script))
 
     def test_missing_preview_glb_is_not_current(self) -> None:

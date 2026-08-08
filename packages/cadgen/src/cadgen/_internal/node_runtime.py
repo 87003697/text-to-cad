@@ -47,6 +47,7 @@ or ezdxf may be reachable from here.
 
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import shutil
@@ -259,6 +260,7 @@ def run_node_builder(
     env: Mapping[str, str] | None = None,
     node: str | None = None,
     on_message: Callable[[Mapping[str, Any]], None] | None = None,
+    stdin_text: str | None = None,
 ) -> dict[str, Any]:
     """Spawn ``node <script> <args...>``, stream its NDJSON progress into ``run``, and return
     the payload it reported.
@@ -311,6 +313,7 @@ def run_node_builder(
         argv,
         cwd=str(cwd) if cwd is not None else None,
         env=node_child_env(env),
+        stdin=subprocess.PIPE if stdin_text is not None else None,
         stdout=subprocess.PIPE,
         # Captured AND echoed, not inherited. Inheriting sent the builder's own diagnostic
         # ("Unsupported DXF entity HATCH") to whatever console the producer happened to own
@@ -337,6 +340,24 @@ def run_node_builder(
 
     stderr_thread = threading.Thread(target=_drain_stderr, daemon=True)
     stderr_thread.start()
+
+    # Written on a thread for the same reason stderr is drained on one: a payload larger than
+    # the pipe buffer (64 KiB on macOS/Linux) would block here while the child blocks writing
+    # progress to a stdout nobody is reading yet. Closing the pipe is what tells the child its
+    # input is complete.
+    def _write_stdin() -> None:
+        try:
+            proc.stdin.write(stdin_text)  # type: ignore[union-attr]
+        except (BrokenPipeError, ValueError):
+            pass  # the child died or closed early; its exit code is the real report
+        finally:
+            with contextlib.suppress(Exception):
+                proc.stdin.close()  # type: ignore[union-attr]
+
+    stdin_thread: threading.Thread | None = None
+    if stdin_text is not None:
+        stdin_thread = threading.Thread(target=_write_stdin, daemon=True)
+        stdin_thread.start()
 
     result: dict[str, Any] | None = None
     killed_after_result = False
@@ -380,6 +401,8 @@ def run_node_builder(
         if proc.stderr is not None:
             proc.stderr.close()
 
+    if stdin_thread is not None:
+        stdin_thread.join(timeout=_EXIT_GRACE_S)
     stderr_thread.join(timeout=_EXIT_GRACE_S)
     if not killed_after_result and proc.returncode not in (0, None):
         raise NodeBuilderError(

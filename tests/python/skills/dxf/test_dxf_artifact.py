@@ -86,7 +86,9 @@ class DxfArtifactTests(unittest.TestCase):
             self.assertTrue(payload["ok"])
             self.assertNotIn("skipped", payload)
             package_dir = self._package_dir(Path(root), "outline.dxf.py")
-            self.assertTrue((package_dir / "drawing.dxf").is_file())
+            # One payload. The cache holds what was computed; the DXF is exported on demand.
+            self.assertTrue((package_dir / "preview.glb").is_file())
+            self.assertFalse((package_dir / "drawing.dxf").exists())
 
             payload = dxf_artifact.build_dxf_artifact(repo_root=Path(root), source_path=script_path)
             self.assertTrue(payload.get("skipped"))
@@ -111,12 +113,10 @@ class DxfArtifactTests(unittest.TestCase):
             package_dir = self._package_dir(Path(root), "outline.dxf.py")
 
             dxf_artifact.build_dxf_artifact(repo_root=Path(root), source_path=script_path)
-            first_dxf = (package_dir / "drawing.dxf").read_bytes()
             first_glb = (package_dir / "preview.glb").read_bytes()
             dxf_artifact.build_dxf_artifact(repo_root=Path(root), source_path=script_path, force=True)
 
-            self.assertEqual(first_dxf, (package_dir / "drawing.dxf").read_bytes())
-            # The bake is deterministic too, or every rebuild would churn a cached payload.
+            # The bake is deterministic, or every rebuild would churn the cached payload.
             self.assertEqual(first_glb, (package_dir / "preview.glb").read_bytes())
 
     @unittest.skipUnless(_NODE_READY, "node + the cadjs dependency graph are required")
@@ -157,9 +157,10 @@ class DrawingPreviewBakeTests(unittest.TestCase):
     def _build_imported(self, root: Path) -> Path:
         # An imported .dxf: produced by the generator once, then treated as a plain file the
         # way a vendor drawing dropped in the folder is.
-        generated = self._build_generated(root)
+        self._build_generated(root)
         imported = root / "vendor.dxf"
-        shutil.copyfile(generated / "drawing.dxf", imported)
+        # Exported on demand, since the package no longer caches a DXF to copy.
+        drawing_package.export_drawing_dxf(root / "outline.dxf.py", imported)
         dxf_artifact.build_dxf_artifact(repo_root=root, source_path=imported)
         return root / "__cadgen__" / "models" / "vendor.dxf"
 
@@ -266,7 +267,9 @@ class DrawingPreviewBakeTests(unittest.TestCase):
         with temporary_directory(prefix="dxf-lock") as root:
             package_dir = self._build_generated(Path(root))
             with self.assertRaises(RuntimeError):
-                drawing_package.build_drawing_preview(package_dir, run=_FakeRun("not-the-holder"))
+                drawing_package.build_drawing_preview(
+                    package_dir, dxf_text="0\nSECTION\n", run=_FakeRun("not-the-holder")
+                )
 
 
 class _FakeRun:
@@ -293,7 +296,7 @@ class DrawingPreviewBakeSettingsTests(unittest.TestCase):
         settings = drawing_package.drawing_preview_bake_settings()
         self.assertEqual(settings, drawing_package.drawing_preview_bake_settings())
         self.assertEqual(
-            settings["defaultThicknessMm"], drawing_package.DEFAULT_PREVIEW_THICKNESS_MM
+            settings["format"], drawing_package.DRAWING_PREVIEW_BAKE_FORMAT
         )
         json.dumps(settings, sort_keys=True, allow_nan=False)
 

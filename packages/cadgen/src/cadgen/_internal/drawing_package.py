@@ -31,6 +31,7 @@ claiming a preview that is missing or half-written.
 from __future__ import annotations
 
 import contextlib
+import io
 import json
 import os
 import shutil
@@ -56,57 +57,43 @@ DRAWING_PACKAGE_KIND = "drawing-package"
 # Bumped from 1 when the package gained ``preview.glb``. This is the stack's single
 # invalidation channel (viewer/server_py/artifact.py, package_freshness): every drawing
 # package written before the preview reports unsupported and rebuilds once, lazily.
-DRAWING_PACKAGE_SCHEMA_VERSION = 2
+DRAWING_PACKAGE_SCHEMA_VERSION = 3
 DRAWING_DESCRIPTOR_NAME = "drawing.json"
-DRAWING_DXF_NAME = "drawing.dxf"
 DRAWING_PREVIEW_NAME = "preview.glb"
 
 # The Node builder that turns drawing.dxf into preview.glb.
 DRAWING_PREVIEW_BUILDER = "dxf-artifact.mjs"
 
 # --- the preview bake -----------------------------------------------------------------
-# What the build FROZE into preview.glb. Nothing else in the freshness stack can see these:
-# the source is unchanged, the payloads are present, the closure still hashes. So they are
-# canonicalized into the descriptor's ``bakeHash`` and compared by BOTH freshness
-# authorities -- this module's ``drawing_package_current`` (which decides a build no-ops) and
-# the viewer's spec table (which decides what a status GET answers). Changing any value here
-# invalidates every drawing package, exactly once, on next open.
+# What the build FROZE into preview.glb, canonicalized into the descriptor's ``bakeHash`` and
+# compared by BOTH freshness authorities -- this module's ``drawing_package_current`` (which
+# decides a build no-ops) and the viewer's spec table (which decides what a status GET
+# answers). Changing any value here invalidates every drawing package, exactly once.
 #
-# The thickness is the producer's, not the drawing's: ``parseDxf`` reports
-# ``defaultThicknessMm`` and the mesher falls back to this when it is 0, which it always is
-# today. Owning the number here is what makes it hashable at all -- the viewer's validator
-# must not parse a DXF to answer a status request.
-DEFAULT_PREVIEW_THICKNESS_MM = 2.0
+# It is now just the geometry contract, because nothing configurable is baked. Thickness and
+# bend angle are RENDER-TIME parameters applied to the baked prism (see previewGlb.js), so
+# they can change per view without invalidating anything -- a slider must not be able to make
+# a cache stale. Thickness in particular used to live here as a frozen 2.0 mm that no user
+# could change and every edit invalidated.
+#
 # Mirrors DXF_PREVIEW_BAKE_FORMAT in packages/cadjs/src/lib/dxf/previewGlb.js. Bump it there
 # and here together when the baked geometry's contract changes.
-# v2: CAD Z-up positions (see previewGlb.js). Bumping invalidates every v1 package, which
-# is the point: a v1 preview.glb is geometrically wrong, not merely old.
-DRAWING_PREVIEW_BAKE_FORMAT = "dxf-preview-glb-v2"
-# The bend state the preview is baked in. Bend angles were a live client control over a mesh
-# rebuilt in the browser; baked, the flat (unfolded) pattern is what ships (§7.4.3).
-DRAWING_PREVIEW_STATE = "flat"
+# v2: CAD Z-up positions. v3: reference-thickness prism, thickness applied at render.
+DRAWING_PREVIEW_BAKE_FORMAT = "dxf-preview-glb-v3"
 
 
 def drawing_preview_bake_settings() -> dict[str, object]:
     """The preview settings this producer bakes, for :func:`canonical_bake_hash`.
 
-    A function rather than a constant so both authorities read the CURRENT values at call
+    A function rather than a constant so both authorities read the CURRENT value at call
     time -- the viewer's spec table stores this callable, and this module calls it -- which is
     what keeps them from drifting apart by one edit.
     """
-    return {
-        "defaultThicknessMm": DEFAULT_PREVIEW_THICKNESS_MM,
-        "format": DRAWING_PREVIEW_BAKE_FORMAT,
-        "state": DRAWING_PREVIEW_STATE,
-    }
+    return {"format": DRAWING_PREVIEW_BAKE_FORMAT}
 
 
 def drawing_descriptor_path(package_dir: Path) -> Path:
     return Path(package_dir) / DRAWING_DESCRIPTOR_NAME
-
-
-def drawing_dxf_path(package_dir: Path) -> Path:
-    return Path(package_dir) / DRAWING_DXF_NAME
 
 
 def drawing_preview_path(package_dir: Path) -> Path:
@@ -175,23 +162,55 @@ def _deterministic_dxf_output(document: object):
             metadata[ezdxf_document.CREATED_BY_EZDXF] = previous_created
 
 
+def serialize_drawing_document(document: object) -> str:
+    """An ezdxf document as DXF text, with volatile metadata pinned.
+
+    Determinism is kept for the EXPORT path rather than for a hash: no `.dxf` is cached any
+    more, so nothing compares these bytes -- but downloading the same drawing twice should
+    still hand back identical files, and ezdxf otherwise stamps julian dates and fresh GUIDs
+    into every save.
+    """
+    saveas = getattr(document, "write", None)
+    if not callable(saveas):
+        raise TypeError(
+            f"gen_dxf() envelope field 'document' must be a DXF document, got {type(document).__name__}"
+        )
+    buffer = io.StringIO()
+    with _deterministic_dxf_output(document):
+        document.write(buffer)  # type: ignore[attr-defined]
+    return buffer.getvalue()
+
+
 def _open_package(package_dir: Path) -> Path:
-    """Create ``package_dir`` and REMOVE its descriptor.
+    """Create ``package_dir`` and CLEAR it.
 
     From here until the descriptor is rewritten the package reports needs-build to every
-    reader, which is exactly right: its payloads are being replaced. Dropping it first is
-    what makes "a failed build leaves no descriptor" true of a REBUILD too -- otherwise a
-    Node-side failure would leave the previous descriptor standing over a freshly written
-    ``drawing.dxf`` and a stale (or absent) ``preview.glb``.
+    reader, which is exactly right: its payloads are being replaced. Dropping the descriptor
+    first is what makes "a failed build leaves no descriptor" true of a REBUILD too --
+    otherwise a Node-side failure would leave the previous descriptor standing over a stale
+    (or absent) ``preview.glb``.
+
+    Clearing the REST is what keeps "the descriptor names its payloads" honest in both
+    directions. Removing a payload from the format used to leave the old file sitting in
+    every existing package forever -- which is how ``drawing.dxf`` would have lingered after
+    the cache stopped holding DXFs at all. A package now contains exactly what the build that
+    wrote it produced.
+
+    Only files are removed, and only inside the package. The lock sentinels live beside the
+    directory, not in it, so a concurrent holder is untouched.
     """
     package_dir.mkdir(parents=True, exist_ok=True)
     drawing_descriptor_path(package_dir).unlink(missing_ok=True)
+    for entry in package_dir.iterdir():
+        if entry.is_file():
+            entry.unlink(missing_ok=True)
     return package_dir
 
 
 def build_drawing_preview(
     package_dir: Path,
     *,
+    dxf_text: str,
     run: object,
     name: str = "",
 ) -> dict[str, object]:
@@ -206,9 +225,8 @@ def build_drawing_preview(
     Raises on any Node-side failure; the caller must then leave no descriptor behind.
     """
     package_dir = Path(package_dir)
-    dxf_path = drawing_dxf_path(package_dir)
-    if not dxf_path.is_file():
-        raise RuntimeError(f"Drawing package has no DXF to build a preview from: {package_dir}")
+    if not str(dxf_text or "").strip():
+        raise RuntimeError(f"No DXF content to build a preview from: {package_dir}")
     run_id = str(getattr(run, "run_id", "") or "")
     if not run_id:
         # No run id means no lock was taken, and the child would refuse the write anyway.
@@ -222,10 +240,10 @@ def build_drawing_preview(
         [
             "--package-dir", str(package_dir),
             "--run-id", run_id,
-            "--thickness-mm", repr(float(DEFAULT_PREVIEW_THICKNESS_MM)),
             "--name", name or package_dir.name,
         ],
         run=run,
+        stdin_text=dxf_text,
     )
     if not payload.get("ok"):
         raise RuntimeError(f"DXF preview build failed: {package_dir}")
@@ -273,20 +291,14 @@ def write_drawing_package(
         )
     resolved_script = script_path.resolve()
     package_dir = _open_package(render_package_dir(resolved_script))
-    dxf_path = drawing_dxf_path(package_dir)
-    with _deterministic_dxf_output(document):
-        saveas(str(dxf_path))
     source_identity = python_source_hash(resolved_script)
-    # The identity comment inside the cached DXF records the generator relative to the
-    # DXF file itself (inside __cadgen__/models/<key>/), so the package stays portable.
-    write_dxf_text_to_cad_metadata(
-        dxf_path,
-        text_to_cad_identity_metadata(
-            source_path=relative_to_file(resolved_script, dxf_path),
-            source_hash=source_identity.source_hash,
-        ),
+    # Serialised to a STRING, never to a file in the package. The drawing is an input to the
+    # bake, not a product of it, and a generated DXF is reproducible on demand -- so it is
+    # streamed to the mesher and nothing lands in __cadgen__ but preview.glb.
+    dxf_text = serialize_drawing_document(document)
+    preview = build_drawing_preview(
+        package_dir, dxf_text=dxf_text, run=run, name=resolved_script.name
     )
-    preview = build_drawing_preview(package_dir, run=run, name=resolved_script.name)
     descriptor: dict[str, object] = {
         "kind": DRAWING_PACKAGE_KIND,
         "packageSchemaVersion": DRAWING_PACKAGE_SCHEMA_VERSION,
@@ -295,8 +307,6 @@ def write_drawing_package(
         # MODEL folder (the directory holding the .dxf.py), not the __cadgen__ dir.
         "sourcePath": resolved_script.name,
         "sourceHash": source_identity.source_hash,
-        "dxf": DRAWING_DXF_NAME,
-        "dxfHash": sha256_file(dxf_path),
         "generatedAt": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         **_preview_descriptor_fields(preview),
     }
@@ -322,11 +332,16 @@ def write_imported_drawing_package(
     if not resolved_dxf.is_file():
         raise FileNotFoundError(f"DXF file does not exist: {resolved_dxf}")
     package_dir = _open_package(render_package_dir(resolved_dxf))
-    cached_dxf = drawing_dxf_path(package_dir)
-    # Copied, not referenced: the descriptor names its payloads and every one of them must be
-    # inside the package for the validator (and for a package that outlives a moved source).
-    shutil.copyfile(resolved_dxf, cached_dxf)
-    preview = build_drawing_preview(package_dir, run=run, name=resolved_dxf.name)
+    # READ, not copied. The user's file is right there and the package is keyed to its path,
+    # so a copy bought no resilience -- only a duplicate of an input and a second hash of the
+    # same bytes. Streaming it is also what makes this indistinguishable from the generated
+    # path inside the builder.
+    preview = build_drawing_preview(
+        package_dir,
+        dxf_text=resolved_dxf.read_text(encoding="utf-8", errors="replace"),
+        run=run,
+        name=resolved_dxf.name,
+    )
     descriptor: dict[str, object] = {
         "kind": DRAWING_PACKAGE_KIND,
         "packageSchemaVersion": DRAWING_PACKAGE_SCHEMA_VERSION,
@@ -335,8 +350,6 @@ def write_imported_drawing_package(
         # The imported digest the spec table names (`source_digest_field`). Fails closed:
         # a descriptor with no digest for a file that is right there is not current.
         "sourceDigest": sha256_file(resolved_dxf),
-        "dxf": DRAWING_DXF_NAME,
-        "dxfHash": sha256_file(cached_dxf),
         "generatedAt": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         **_preview_descriptor_fields(preview),
     }
@@ -362,26 +375,39 @@ def _preview_descriptor_fields(preview: dict[str, object]) -> dict[str, object]:
 
 
 def export_drawing_dxf(script_path: Path, export_path: Path) -> Path:
-    """Copy the (already fresh) cached drawing DXF to ``export_path``, re-pointing
-    its embedded identity comment at the generator relative to the destination.
-    Raises when the package has no built DXF."""
-    import shutil
+    """Write a generated drawing's DXF to ``export_path`` by RUNNING its generator.
+
+    There is no cached `.dxf` to copy: __cadgen__ holds only what the viewer renders, so a
+    download regenerates, exactly as a `.step.py` download does. Measured at roughly two
+    seconds, almost all of it Python start and the ezdxf import rather than the drawing --
+    paid on an explicit click, never on a viewport open.
+
+    The document is validated on the way out for the same reason generation validates it: an
+    export is a deliverable, and shipping a drawing whose cut profile does not close would be
+    worse than failing here.
+    """
+    from cadgen._internal.generation import _normalize_dxf_payload
+    from cadgen.drawing_checks import raise_on_error_findings, validate_drawing_document
+    from cadgen.sources import load_source_module
 
     resolved_script = script_path.resolve()
-    package_dir = render_package_dir(resolved_script)
-    descriptor = load_drawing_descriptor(package_dir) or {}
-    dxf_ref = str(descriptor.get("dxf") or "").strip()
-    cached_dxf = (package_dir / dxf_ref) if dxf_ref else drawing_dxf_path(package_dir)
-    if not cached_dxf.is_file():
-        raise RuntimeError(f"Drawing package has no built DXF to export: {package_dir}")
+    module = load_source_module(resolved_script)
+    generator = getattr(module, "gen_dxf", None)
+    if not callable(generator):
+        raise RuntimeError(f"DXF export requires a gen_dxf() generator: {resolved_script}")
+    envelope = _normalize_dxf_payload(generator(), script_path=resolved_script)
+    document = envelope.get("document")
+    findings = validate_drawing_document(document)
+    raise_on_error_findings(findings, label=str(resolved_script))
+
     export_path = Path(export_path).expanduser().resolve()
     export_path.parent.mkdir(parents=True, exist_ok=True)
-    shutil.copyfile(cached_dxf, export_path)
+    export_path.write_text(serialize_drawing_document(document), encoding="utf-8")
     write_dxf_text_to_cad_metadata(
         export_path,
         text_to_cad_identity_metadata(
             source_path=relative_to_file(resolved_script, export_path),
-            source_hash=str(descriptor.get("sourceHash") or "").strip(),
+            source_hash=python_source_hash(resolved_script).source_hash,
         ),
     )
     return export_path
@@ -413,13 +439,13 @@ def drawing_package_current(source_path: Path) -> bool:
     # rendering its old bake, silently.
     if not bake_hash_matches(descriptor, canonical_bake_hash(drawing_preview_bake_settings())):
         return False
-    # BOTH payloads, named by the descriptor. A missing preview.glb has to be stale here as
-    # well as in the viewer, or the CLI would report "current" over a package the viewer
-    # cannot render.
-    for key in ("dxf", "preview"):
-        ref = str(descriptor.get(key) or "").strip()
-        if not ref or not (package_dir / ref).is_file():
-            return False
+    # The package's one payload, named by the descriptor. A missing preview.glb has to be
+    # stale here as well as in the viewer, or the CLI would report "current" over a package
+    # the viewer cannot render. There is no longer a `dxf` payload to check: the cache holds
+    # what was computed, and a generated drawing's DXF is produced on demand.
+    preview_ref = str(descriptor.get("preview") or "").strip()
+    if not preview_ref or not (package_dir / preview_ref).is_file():
+        return False
     if str(descriptor.get("sourceKind") or "").strip().lower() == "python":
         closure_hash = str(descriptor.get("sourceClosureHash") or "").strip()
         closure_files = descriptor.get("sourceClosureFiles")

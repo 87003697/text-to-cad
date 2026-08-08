@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * The DXF drawing package's Node builder: `drawing.dxf` in, `preview.glb` out.
+ * The DXF drawing package's Node builder: DXF text on stdin, `preview.glb` out.
  *
  * Spawned by `cadgen._internal.node_runtime.run_node_builder` from INSIDE the Python
  * producer's `artifact_build` lock, so it inherits that run's id, status record and progress
@@ -10,14 +10,19 @@
  *   preset, meshopt-compressed).
  *
  * Contract:
- *   node dxf-artifact.mjs --package-dir <abs> --run-id <id> [--thickness-mm N] [--name N]
+ *   node dxf-artifact.mjs --package-dir <abs> --run-id <id> [--name N]  < drawing.dxf
  *   stdout is NDJSON progress + exactly one terminal `result` line (implicitjs progressStream).
- *   Anything it wants to SAY goes to stderr, which the parent inherits.
+ *   Anything it wants to SAY goes to stderr, which the parent captures and echoes.
  *
- * `--thickness-mm` is passed in rather than read from the drawing: the producer owns the bake
- * settings, hashes them into the descriptor's `bakeHash`, and both freshness authorities
- * compare against that one number. A builder that picked its own default would put a setting
- * in the payload that nothing could invalidate.
+ * The drawing arrives on STDIN, never as a path. That is what makes an imported drawing and a
+ * generated one indistinguishable here: the producer either reads the user's file or
+ * serialises the document its generator just built, and this sees the same bytes either way.
+ * It is also why no `.dxf` is written into the package -- __cadgen__ caches what was COMPUTED
+ * (the GLB), not a copy of an input the user already has, nor a file it could regenerate.
+ *
+ * There is no `--thickness-mm`. Thickness is a render-time scale on a prism, not a property of
+ * the bake (see DXF_PREVIEW_REFERENCE_THICKNESS_MM), so nothing configurable is frozen into
+ * preview.glb and nothing about it needs invalidating.
  *
  * `preview.glb` is written temp + rename, and the parent writes the descriptor only after
  * this exits 0 -- so a reader sees a package with no descriptor (needs-build) rather than a
@@ -35,9 +40,12 @@ import {
 } from "implicitjs/glb/progressStream.js";
 
 import { parseDxf } from "../src/lib/dxf/parseDxf.js";
-import { buildDxfPreviewGlb, DXF_PREVIEW_BAKE_FORMAT } from "../src/lib/dxf/previewGlb.js";
+import {
+  buildDxfPreviewGlb,
+  DXF_PREVIEW_BAKE_FORMAT,
+  DXF_PREVIEW_REFERENCE_THICKNESS_MM,
+} from "../src/lib/dxf/previewGlb.js";
 
-const DRAWING_DXF_NAME = "drawing.dxf";
 const PREVIEW_GLB_NAME = "preview.glb";
 
 function parseArgs(argv) {
@@ -68,24 +76,23 @@ async function main() {
   const args = parseArgs(process.argv.slice(2));
   const packageDir = path.resolve(requireArg(args, "package-dir"));
   const runId = requireArg(args, "run-id");
-  const thicknessMm = Number(args["thickness-mm"]);
-  if (!Number.isFinite(thicknessMm) || thicknessMm <= 0) {
-    throw new Error("dxf-artifact.mjs requires a positive --thickness-mm");
-  }
   const name = String(args.name || path.basename(packageDir) || "drawing");
 
   // Before anything is read or written: prove this process was started by the lock holder.
   assertWriteLock(packageDir, runId);
 
   reportPhase("parse");
-  const dxfPath = path.join(packageDir, DRAWING_DXF_NAME);
-  const dxfText = fs.readFileSync(dxfPath, "utf8");
+  // fd 0 read whole: the producer writes the drawing and closes the pipe before we get here,
+  // so there is nothing to stream and no partial-read case to handle.
+  const dxfText = fs.readFileSync(0, "utf8");
+  if (!dxfText.trim()) {
+    throw new Error("dxf-artifact.mjs received no DXF on stdin");
+  }
   const dxfData = parseDxf(dxfText, { fileRef: name });
 
   reportPhase("mesh");
   await MeshoptEncoder.ready;
   const { bytes, stats } = buildDxfPreviewGlb(dxfData, {
-    thicknessMm,
     encoder: MeshoptEncoder,
     name,
   });
@@ -102,7 +109,7 @@ async function main() {
     runId,
     preview: PREVIEW_GLB_NAME,
     bakeFormat: DXF_PREVIEW_BAKE_FORMAT,
-    thicknessMm,
+    referenceThicknessMm: DXF_PREVIEW_REFERENCE_THICKNESS_MM,
     bytes: bytes.length,
     triangleCount: stats.triangleCount,
     vertexCount: stats.vertexCount,

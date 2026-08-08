@@ -176,15 +176,17 @@ def _step_payload_refs(descriptor):
 
 
 def _drawing_payload_refs(descriptor):
-    """BOTH of the drawing package's payloads: the exchange DXF and the render GLB.
+    """The drawing package's one payload: the render GLB.
 
-    Returning only the DXF is a silent failure mode, not a smaller check: a package whose
-    `preview.glb` is missing or half-written would validate as `ready`, the viewer would
-    render nothing, and no `needs-build` would ever explain why (design §4.7, §7.4.2)."""
-    return [
-        str(descriptor.get("dxf") or "").strip(),
-        str(descriptor.get("preview") or "").strip(),
-    ]
+    It used to also carry an exchange DXF. That is gone: __cadgen__ caches what was COMPUTED,
+    and a drawing's DXF is either the user's own file (imported) or reproducible on demand
+    from its generator. Checking `preview.glb` is the check that matters -- a package whose
+    GLB is missing or half-written would otherwise validate as `ready`, the viewer would
+    render nothing, and no `needs-build` would ever explain why (design §4.7, §7.4.2).
+
+    Mirrors ``drawing_package_current`` in cadgen's drawing_package.py; the two authorities
+    must ask the same question or a build and a status GET disagree."""
+    return [str(descriptor.get("preview") or "").strip()]
 
 
 def _implicit_payload_refs(descriptor):

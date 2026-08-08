@@ -588,8 +588,8 @@ def _write_drawing_package(
     preview=True,
 ):
     """A gen_dxf generator + optionally its drawing package, keyed by the
-    .dxf.py name like cadgen writes it. The package carries BOTH payloads: the exchange
-    drawing.dxf and the baked preview.glb the viewport renders."""
+    .dxf.py name like cadgen writes it. The package carries its ONE payload: the baked
+    preview.glb the viewport renders."""
     py_path = os.path.join(root, py_name)
     with open(py_path, "w") as h:
         h.write("def gen_dxf():\n    return None\n")
@@ -600,8 +600,6 @@ def _write_drawing_package(
         return py_path, None
     pkg = os.path.join(root, "__cadgen__", "models", py_name)
     os.makedirs(pkg, exist_ok=True)
-    with open(os.path.join(pkg, "drawing.dxf"), "w") as h:
-        h.write("0\nEOF\n")
     with open(os.path.join(pkg, "preview.glb"), "wb") as h:
         h.write(b"glTF\x02\x00\x00\x00")
     closure_files = [py_name] + list(closure_extra or [])
@@ -610,7 +608,6 @@ def _write_drawing_package(
         "sourceKind": "python",
         "sourcePath": py_name,
         "sourceHash": "abc123",
-        "dxf": "drawing.dxf",
         "sourceClosureFiles": closure_files,
     }
     if preview:
@@ -639,7 +636,6 @@ def _write_imported_drawing_package(root, dxf_name, *, source_digest=True, previ
         digest = hashlib.sha256(h.read()).hexdigest()
     pkg = os.path.join(root, "__cadgen__", "models", dxf_name)
     os.makedirs(pkg, exist_ok=True)
-    shutil.copyfile(dxf_path, os.path.join(pkg, "drawing.dxf"))
     with open(os.path.join(pkg, "preview.glb"), "wb") as h:
         h.write(b"glTF\x02\x00\x00\x00")
     descriptor = {
@@ -689,18 +685,10 @@ class GeneratedDxfFreshness(unittest.TestCase):
             self.assertEqual(code, "missing_dxf_artifact")
             self.assertIn(code, artifact.BUILDABLE_ARTIFACT_CODES)
 
-    def test_missing_drawing_dxf_is_buildable(self):
-        with tempfile.TemporaryDirectory() as root:
-            py, pkg = _write_drawing_package(root, "outline.dxf.py")
-            os.remove(os.path.join(pkg, "drawing.dxf"))
-            ok, code = artifact.validate_dxf_freshness(root, py)
-            self.assertFalse(ok)
-            self.assertEqual(code, "missing_dxf_artifact")
-
     def test_missing_preview_glb_is_buildable(self):
-        # The package has TWO payloads with different jobs, and payload_refs must return
-        # both. Returning only the DXF would validate this package as `ready`, the viewer
-        # would render nothing, and no needs-build would ever explain why (design §4.7).
+        # The package's ONE payload. A missing GLB has to read as needs-build here, or the
+        # request settles `ready` and the viewer renders nothing with no explanation
+        # (design §4.7).
         with tempfile.TemporaryDirectory() as root:
             py, pkg = _write_drawing_package(root, "outline.dxf.py")
             os.remove(os.path.join(pkg, "preview.glb"))
@@ -716,13 +704,15 @@ class GeneratedDxfFreshness(unittest.TestCase):
             self.assertFalse(ok)
             self.assertEqual(code, "missing_dxf_artifact")
 
-    def test_drawing_payload_refs_names_both_payloads(self):
+    def test_drawing_payload_refs_names_the_render_artifact(self):
+        # Only the GLB. A cached `drawing.dxf` is not a payload any more: an imported
+        # drawing's DXF is the user's own file, and a generated one is exported on demand.
         self.assertEqual(
-            ["drawing.dxf", "preview.glb"],
+            ["preview.glb"],
             artifact._drawing_payload_refs({"dxf": "drawing.dxf", "preview": "preview.glb"}),
         )
 
-    def test_a_changed_preview_thickness_makes_every_drawing_stale(self):
+    def test_a_changed_bake_format_makes_every_drawing_stale(self):
         # The other half of the pin in tests/python/skills/cad/cadgen/test_package_freshness:
         # the SAME callable owns the bake on both sides, so an edit to the producer's
         # settings invalidates packages here too instead of rendering an old bake silently.
@@ -730,7 +720,7 @@ class GeneratedDxfFreshness(unittest.TestCase):
             py, _ = _write_drawing_package(root, "outline.dxf.py")
             self.assertEqual(artifact.validate_dxf_freshness(root, py), (True, None))
             with mock.patch.object(
-                _drawing_package, "DEFAULT_PREVIEW_THICKNESS_MM", 3.0
+                _drawing_package, "DRAWING_PREVIEW_BAKE_FORMAT", "dxf-preview-glb-vNEXT"
             ):
                 self.assertEqual(
                     artifact.validate_dxf_freshness(root, py), (False, "stale_dxf_artifact")
@@ -829,15 +819,17 @@ class GeneratedPackageParity(unittest.TestCase):
 
 
 class ScannerDxfEntry(unittest.TestCase):
-    def test_built_drawing_entry_carries_cached_asset(self):
+    def test_built_drawing_entry_has_no_static_dxf_asset(self):
         with tempfile.TemporaryDirectory() as root:
             py, pkg = _write_drawing_package(root, "outline.dxf.py")
             entry = scanner.create_generated_dxf_entry(root, root, py)
             self.assertEqual(entry["kind"], "dxf")
             self.assertEqual(entry["file"], "outline.dxf.py")
             self.assertEqual(entry["sourceKind"], "python")
-            self.assertIn("__cadgen__/models/outline.dxf.py/drawing.dxf", entry["url"])
-            self.assertTrue(entry["hash"])
+            # No static asset: the cache holds no DXF, so a download regenerates through the
+            # export route rather than linking a file.
+            self.assertEqual("", entry["url"])
+            self.assertEqual("abc123", entry["hash"])
             self.assertEqual(entry["source"]["sourceHash"], "abc123")
 
     def test_unbuilt_drawing_entry_has_no_asset(self):

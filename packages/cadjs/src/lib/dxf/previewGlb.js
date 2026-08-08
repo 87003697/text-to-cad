@@ -11,10 +11,16 @@
  * a process: the builder script owns argv, file IO and the NDJSON protocol, and this owns the
  * geometry.
  *
- * **Baked in the FLAT (unfolded) state.** `bendSettings = null` gives every bend line the
- * default 0-degree angle, which is the unfolded pattern. Bend angles were a live client
- * control over a mesh rebuilt in the browser; with the mesh baked they are an accepted loss
- * (§2, §7.4.3) rather than something to bake a combinatorial set of GLBs for.
+ * **Baked flat, at a REFERENCE thickness.** The unfolded pattern is a prism: the 2D profile
+ * swept perpendicular. That is the whole reason thickness need not be baked -- stretching a
+ * prism along its sweep axis is exact, moving the walls and leaving the caps and holes
+ * untouched in XY, and normals are invariant under it (wall normals stay horizontal, cap
+ * normals renormalise to themselves). So the bake stores a 1 mm prism and the renderer scales
+ * Z by whatever thickness the user picks.
+ *
+ * Nothing configurable is therefore frozen here, which is the point: `preview.glb` is a cache
+ * of the expensive part (parsing and meshing the profile), not a snapshot of settings that
+ * would need invalidating when someone moves a slider.
  */
 
 import { writeGlb } from "../../glb/writeGlb.js";
@@ -30,9 +36,14 @@ import { buildDxfPreviewMeshData } from "./buildPreviewMesh.js";
 export const DXF_MM_TO_GLB_SCALE = 0.001;
 
 /** Identity of this bake's geometry contract, recorded in the descriptor's bake block. */
-// v2: positions are CAD Z-up. v1 wrote the mesher's Y-up straight through, so every
-// package baked before this renders on its edge — the bump is what makes them rebuild.
-export const DXF_PREVIEW_BAKE_FORMAT = "dxf-preview-glb-v2";
+// v2: CAD Z-up positions. v3: baked at a reference thickness, thickness applied at render.
+export const DXF_PREVIEW_BAKE_FORMAT = "dxf-preview-glb-v3";
+
+/**
+ * The thickness the prism is baked at. 1 mm so a renderer's Z scale IS the thickness in
+ * millimetres, with no division to get wrong.
+ */
+export const DXF_PREVIEW_REFERENCE_THICKNESS_MM = 1;
 
 /**
  * The mesher returns an INDEXED triangle list whose vertex array also carries the edge-overlay
@@ -71,12 +82,11 @@ export function dxfPreviewPositions(meshData) {
  * `dxfData` (from `parseDxf`) -> `{ bytes, stats }`, where `bytes` is a render-preset GLB.
  *
  * `encoder` is meshoptimizer's `MeshoptEncoder`, already awaited on `.ready`; the render
- * preset requires it. `thicknessMm` is the producer's bake setting, passed in rather than
- * read from the drawing so ONE authority decides it and the descriptor's `bakeHash` can be
- * computed from the same number.
+ * preset requires it. There is no thickness parameter: the prism is baked at
+ * `DXF_PREVIEW_REFERENCE_THICKNESS_MM` and scaled at render time.
  */
-export function buildDxfPreviewGlb(dxfData, { thicknessMm, encoder, name = "drawing" } = {}) {
-  const meshData = buildDxfPreviewMeshData(dxfData, thicknessMm, null);
+export function buildDxfPreviewGlb(dxfData, { encoder, name = "drawing" } = {}) {
+  const meshData = buildDxfPreviewMeshData(dxfData, DXF_PREVIEW_REFERENCE_THICKNESS_MM, null);
   const positions = dxfPreviewPositions(meshData);
   const bytes = writeGlb(
     { primitives: [{ positions, name }], name, units: "mm" },

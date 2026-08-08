@@ -387,20 +387,13 @@ def create_generated_dxf_entry(repo_root, root_path, source_path):
     # reports `needs-build` via /__cad/artifact when opened.
     package_dir = render_package_asset_dir(source_path)
     descriptor = read_drawing_catalog_metadata(package_dir)
-    dxf_ref = str(descriptor.get("dxf") or "").strip()
-    dxf_path = os.path.join(package_dir, dxf_ref) if dxf_ref else ""
-    dxf_stats = _file_stats(dxf_path) if dxf_path else None
     entry_ref = scan_relative_path(root_path, source_path)
-    if dxf_stats:
-        # The descriptor already carries the cached DXF's content hash (dxfHash);
-        # re-hashing the file on every catalog scan would put redundant disk I/O
-        # on the /__cad hot path.
-        version = f"{base36(dxf_stats.st_size)}-{base36(dxf_stats.st_mtime_ns)}"
-        url = f"{_asset_url_for_path(repo_root, dxf_path)}?v={encode_uri_component(version)}"
-        content_hash = str(descriptor.get("dxfHash") or "").strip() or _sha256_file(dxf_path)
-        entry_bytes = int(dxf_stats.st_size)
-    else:
-        url, content_hash, entry_bytes = "", "", 0
+    # A generated drawing has NO static DXF asset. Nothing is committed and the package caches
+    # only what it renders, so there is no file to link: a download runs the generator through
+    # the export route, exactly as a `.step.py` download does. The entry's identity is its
+    # source hash, which the descriptor already carries.
+    url, entry_bytes = "", 0
+    content_hash = str(descriptor.get("sourceHash") or "").strip()
     entry = {
         "file": entry_ref,
         "kind": "dxf",

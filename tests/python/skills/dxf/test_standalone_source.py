@@ -82,9 +82,12 @@ class StandaloneDxfSourceTests(unittest.TestCase):
 
             package_dir = Path(root) / "__cadgen__" / "models" / script_path.name
             self.assertTrue((package_dir / "drawing.json").exists())
-            drawing_path = package_dir / "drawing.dxf"
-            self.assertTrue(drawing_path.exists())
-            self.assertGreater(drawing_path.stat().st_size, 0)
+            preview_path = package_dir / "preview.glb"
+            self.assertTrue(preview_path.exists())
+            self.assertGreater(preview_path.stat().st_size, 0)
+            # The package caches the render artifact and nothing else -- no DXF, because a
+            # generated drawing's DXF is reproducible from its generator on demand.
+            self.assertFalse((package_dir / "drawing.dxf").exists())
             # No sibling export unless requested.
             self.assertFalse(script_path.with_suffix(".dxf").exists())
 

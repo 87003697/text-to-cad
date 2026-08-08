@@ -14,9 +14,15 @@ import { MeshoptEncoder } from "meshoptimizer";
 
 import { buildMeshDataFromGlbBuffer } from "../render/glbMeshData.js";
 import { parseDxf } from "./parseDxf.js";
-import { buildDxfPreviewGlb, dxfPreviewPositions } from "./previewGlb.js";
+import {
+  buildDxfPreviewGlb,
+  DXF_PREVIEW_REFERENCE_THICKNESS_MM,
+  dxfPreviewPositions,
+} from "./previewGlb.js";
 
-const THICKNESS_MM = 2;
+// The bake is parameter-free: the prism is stored at the reference thickness and scaled at
+// render time, so this is what comes back rather than any caller's choice.
+const THICKNESS_MM = DXF_PREVIEW_REFERENCE_THICKNESS_MM;
 
 /** A 40x20 closed rectangle on the CUT layer, as a real DXF document. */
 function rectangleDxf() {
@@ -39,7 +45,6 @@ function rectangleDxf() {
 async function bake() {
   await MeshoptEncoder.ready;
   return buildDxfPreviewGlb(parseDxf(rectangleDxf(), { fileRef: "rect.dxf" }), {
-    thicknessMm: THICKNESS_MM,
     encoder: MeshoptEncoder,
     name: "rect.dxf",
   });
