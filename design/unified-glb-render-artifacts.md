@@ -15,6 +15,38 @@ expected, not a shortfall.
 
 Nothing is pushed. Branch `claude/step-generation-status-tracking-1b7ff6`.
 
+### Rebase onto `release/0.4.0` (2026-08-08)
+
+The branch was squash-merged onto upstream `66c08036` and the resulting conflicts resolved.
+Upstream had meanwhile removed G-code from the viewer, so the renderable set is now **GLB +
+3MF + STL** plus the two self-rendering kinds (implicit raymarch, URDF), and the deleted
+G-code path took its client machinery with it.
+
+Two classes of breakage survived the merge invisibly and are worth recording, because a clean
+`vite build` plus green unit tests certified both:
+
+* **Unbound identifiers.** `gcodeStatus`, `dxfStatus`, `gcodeMode`, `getCachedDxfState`,
+  `loadDxfForEntry` and friends were referenced but never declared. A bundler treats those as
+  globals; only a render throws. Found with a Babel scope pass over `viewer/src` — worth
+  re-running after any large merge (`ReferencedIdentifier` + `scope.hasBinding`).
+* **An orphaned JSX closer.** Deleting the DxfFileSheet branch left its `) : null}` behind,
+  which esbuild downgraded to a warning and shipped as literal page text.
+
+The DXF render path was also dead on arrival for a subtler reason: the mesh-load effect gated
+on the SOURCE format, so a DXF entry whose `preview.glb` was built and published sat at 92%
+forever because nothing ever asked for it. It now gates on `entryRenderAssetFormat`, with
+implicit and robot entries excluded — they render their own geometry, and would otherwise
+download a second copy of the model into a scene that already has one.
+
+**Imported `.dxf` files with open or unsupported geometry no longer render at all.** This is a
+consequence of dropping the 2D view, not a regression in the bake: every generated `.dxf.py`
+drawing builds, but all seven raw fixtures under `models/dxf/` fail —
+`arc1` (open contour), `ellipse` (ELLIPSE), `polylines` (POLYLINE), `splines` (SPLINE),
+`multi_insert_with_attribs` (INSERT), plus two intentionally-invalid ones. The 3D flat-pattern
+mesher needs closed cut contours and supports a narrower entity set than the parser. Closing
+this means either teaching `buildPreviewMesh.js` those entities and an open-contour fallback,
+or bringing back a 2D path for drawings that have no extrudable area.
+
 ### Outstanding follow-ups (none block the batch)
 
 1. **ES-1.00 polyfills for nine GLSL builtins** — `sinh cosh tanh asinh acosh atanh trunc
