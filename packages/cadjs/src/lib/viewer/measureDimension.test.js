@@ -180,7 +180,7 @@ test("drawMeasureDimension clamps the label chip inside the canvas bounds", () =
   });
   assert.ok(calls.length > 0);
   assert.ok(calls[0] >= 4, `label chip starts at ${calls[0]}, expected >= 4`);
-  assert.ok(calls[0] <= 240 - 200 - 16 - 4, `label chip starts at ${calls[0]}, expected <= ${240 - 200 - 16 - 4}`);
+  assert.ok(calls[0] <= 240 - 200 - 12 - 4, `label chip starts at ${calls[0]}, expected <= ${240 - 200 - 12 - 4}`);
 });
 
 test("drawPulsingEndRing tolerates missing context or point", () => {

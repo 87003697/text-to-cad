@@ -9,10 +9,10 @@ export const MEASURE_DIMENSION_COMMITTED_COLOR = "#22d3ee";
 export const MEASURE_DIMENSION_FADED_ALPHA = 0.3;
 export const MEASURE_DIMENSION_LABEL_BACKGROUND = "rgba(15, 23, 42, 0.92)";
 export const MEASURE_DIMENSION_LABEL_FONT =
-  "600 12.5px ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif";
+  "600 8px ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif";
 
-const LABEL_PADDING_X = 8;
-const LABEL_PADDING_Y = 4;
+const LABEL_PADDING_X = 6;
+const LABEL_PADDING_Y = 3;
 const LABEL_MIN_MARGIN = 4;
 
 export function measureLabelText(measurement, { precision = 2 } = {}) {
@@ -257,7 +257,7 @@ export function drawMeasureDimension(context, layout, {
     const paddingX = LABEL_PADDING_X;
     const paddingY = LABEL_PADDING_Y;
     const chipWidth = textWidth + (paddingX * 2);
-    const chipHeight = 18 + (paddingY * 2);
+    const chipHeight = 11 + (paddingY * 2);
     let chipX = layout.label.x - (chipWidth / 2);
     let chipY = layout.label.y - (chipHeight / 2);
     if (bounds && Number(bounds.width) > 0 && Number(bounds.height) > 0) {
