@@ -66,6 +66,7 @@ import {
   shouldOpenFileSheetForSelectionReveal
 } from "@/workbench/fileSheetSections";
 import {
+  entryRenderAssetFormat,
   entrySourceFormat,
   fileSheetKindForEntry,
   isRobotRenderFormat
@@ -312,7 +313,13 @@ function statusOnlyFileSheetTitle(sourceFormat) {
   }
 }
 
+// The render-ASSET formats that come out of the shared mesh loader. Read against
+// `entryRenderAssetFormat`, never the source format: a DXF entry reports GLB here because its
+// geometry is the drawing package's baked preview.glb. STEP stays on the list under its own
+// name -- it is mesh-loaded too, but `entryRenderAssetFormat` reports `step` for it because
+// only DXF and implicit are the package-baked kinds.
 const MESH_LOADED_RENDER_FORMATS = Object.freeze([
+  RENDER_FORMAT.STEP,
   RENDER_FORMAT.STL,
   RENDER_FORMAT.THREE_MF,
   RENDER_FORMAT.GLB
@@ -1463,6 +1470,10 @@ export default function CadWorkspace({
       }
     : null;
   const selectedEntrySourceFormat = entrySourceFormat(selectedEntry);
+  // What the viewport LOADS, which is not what the user opened: a DXF's geometry is its
+  // package's baked preview.glb. Gating the mesh load on the source format instead is what
+  // left a built DXF spinning -- the asset was on disk and nothing ever asked for it.
+  const selectedEntryRenderAssetFormat = entryRenderAssetFormat(selectedEntry);
   const selectedFileSheetKind = fileSheetKindForEntry(selectedEntry);
   // Some kinds (e.g. a mesh/STL) have no file-specific sections; when so, hide
   // the file-sheet toggle and the sheet entirely instead of showing an empty
@@ -4320,7 +4331,7 @@ export default function CadWorkspace({
       cancelMeshLoad();
       return;
     }
-    if (![RENDER_FORMAT.STEP, RENDER_FORMAT.STL, RENDER_FORMAT.THREE_MF, RENDER_FORMAT.GLB].includes(effectiveRenderFormat)) {
+    if (!MESH_LOADED_RENDER_FORMATS.includes(selectedEntryRenderAssetFormat)) {
       cancelMeshLoad();
       return;
     }
@@ -4343,7 +4354,7 @@ export default function CadWorkspace({
     });
   }, [
     cancelMeshLoad,
-    effectiveRenderFormat,
+    selectedEntryRenderAssetFormat,
     isAssemblyView,
     loadMeshForEntry,
     meshLoadInProgress,
