@@ -8,6 +8,9 @@ from pathlib import Path
 
 import trimesh
 
+from tests.python.packages.meshscope.support.mesh_fixtures import (
+    GeneratedMeshFixtures,
+)
 from tests.python.support.paths import add_repo_path
 
 add_repo_path("packages/meshscope/src")
@@ -16,10 +19,13 @@ from meshscope.compare import prepare, vertex_distances  # noqa: E402
 from meshscope.viz import colorize, side_by_side  # noqa: E402
 
 
-REPO_ROOT = Path(__file__).resolve().parents[4]
-FIXTURES = REPO_ROOT / "models" / "mesh-fixtures"
-CUBE = str(FIXTURES / "cube.obj")
-TETRA = str(FIXTURES / "tetrahedron.ply")
+FIXTURES = GeneratedMeshFixtures()
+CUBE = str(FIXTURES.cube)
+TETRA = str(FIXTURES.tetrahedron)
+
+
+def tearDownModule() -> None:
+    FIXTURES.cleanup()
 
 
 class TestColorize(unittest.TestCase):

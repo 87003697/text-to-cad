@@ -10,6 +10,9 @@ from unittest import mock
 import trimesh
 from scipy.spatial import cKDTree
 
+from tests.python.packages.meshscope.support.mesh_fixtures import (
+    GeneratedMeshFixtures,
+)
 from tests.python.support.paths import add_repo_path
 
 add_repo_path("packages/meshscope/src")
@@ -25,12 +28,17 @@ compare_module = importlib.import_module("meshscope.compare")
 
 
 REPO_ROOT = Path(__file__).resolve().parents[4]
-FIXTURES = REPO_ROOT / "models" / "mesh-fixtures"
 TOYS4K = REPO_ROOT / "models" / "toys4k"
 
-CUBE = str(FIXTURES / "cube.obj")
-TETRA = str(FIXTURES / "tetrahedron.ply")
-CUBE_SCALED = str(FIXTURES / "cube_scaled.obj")
+FIXTURES = GeneratedMeshFixtures()
+CUBE = str(FIXTURES.cube)
+TETRA = str(FIXTURES.tetrahedron)
+CUBE_SCALED = str(FIXTURES.cube_scaled)
+
+
+def tearDownModule() -> None:
+    FIXTURES.cleanup()
+
 
 TOYS4K_CUP = str(TOYS4K / "cup_cup_033.ply")
 TOYS4K_CHAIR = str(TOYS4K / "chair_chair_028.ply")
