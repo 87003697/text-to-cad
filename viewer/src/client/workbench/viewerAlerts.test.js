@@ -2,7 +2,6 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   buildCadCommand,
-  buildViewerDxfAlert,
   buildViewerMeshAlert,
   CAD_BUILD_COMMANDS
 } from "./viewerAlerts.js";
@@ -213,42 +212,21 @@ test("buildViewerMeshAlert reports STEP artifact errors only when no mesh render
   );
 });
 
-test("buildViewerDxfAlert distinguishes DXF load, preview, and missing data states", () => {
-  assert.equal(buildViewerDxfAlert("", false, "", ""), null);
-
+test("a DXF entry reports through the ordinary mesh alert", () => {
+  // DXF has no alert builder of its own any more. Its geometry is a baked package GLB, so a
+  // missing or failed one is exactly a missing mesh, and buildViewerMeshAlert already names
+  // the DXF rebuild command for it.
+  const entry = { file: "flat/panel.dxf", kind: "dxf" };
+  assert.equal(buildViewerMeshAlert(entry, true, ""), null);
   assert.deepEqual(
-    buildViewerDxfAlert("flat/panel.dxf", false, "network failed", ""),
+    buildViewerMeshAlert(entry, false, "network failed"),
     {
       severity: "error",
-      summary: "DXF load failed",
-      title: "Failed to load DXF flat pattern",
+      summary: "Mesh load failed",
+      title: "Failed to load render mesh",
       message: "network failed",
-      resolution: "Try reloading the page. If the problem persists, rebuild the CAD assets for this entry.",
-      command: ""
+      resolution: "Try reloading the page. If the problem persists, rebuild the render assets for this entry.",
+      command: CAD_BUILD_COMMANDS.dxf
     }
   );
-
-  assert.deepEqual(
-    buildViewerDxfAlert("flat/panel.dxf", true, "", "bad bend"),
-    {
-      severity: "warning",
-      summary: "DXF 3D preview unavailable",
-      title: "Failed to build the DXF 3D preview",
-      message: "bad bend",
-      resolution: "The flat pattern can still be shown, but the 3D extrusion preview could not be built from the current DXF geometry.",
-      command: ""
-    }
-  );
-
-  assert.equal(
-    buildViewerDxfAlert(
-      "flat/panel.dxf",
-      true,
-      "",
-      "DXF 3D bend preview currently requires vertical bend lines"
-    ),
-    null
-  );
-
-  assert.equal(buildViewerDxfAlert("flat/panel.dxf", true, "", ""), null);
 });

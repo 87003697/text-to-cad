@@ -791,60 +791,14 @@ export function implicitCadCameraState(model, camera = "iso", {
   };
 }
 
-export function implicitCadFragmentShader(model) {
-  const maxSteps = Math.max(16, Math.min(Math.floor(finiteNumber(model.maxSteps, 192)), 768));
-  const uniforms = model.uniforms && typeof model.uniforms === "object" ? model.uniforms : {};
-  const customUniformDeclarations = implicitCadUniformDeclarations(uniforms);
-  const glslSource = normalizeImplicitCadGlslFloatLiterals(model.glslSource || model.distanceSource);
-  const hasColorFunction = /\bvec3\s+color\s*\(\s*vec3\s+\w+\s*,\s*vec3\s+\w+\s*\)/.test(glslSource);
-  return `
-precision highp float;
-
-uniform vec2 uResolution;
-uniform vec3 uCameraPosition;
-uniform mat4 uCameraWorld;
-uniform mat4 uProjectionInverse;
-uniform vec3 uBoundsMin;
-uniform vec3 uBoundsMax;
-uniform vec3 uSurfaceColor;
-uniform vec3 uBackgroundColor;
-uniform vec3 uBackgroundColorA;
-uniform vec3 uBackgroundColorB;
-uniform float uBackgroundMode;
-uniform float uBackgroundAngle;
-uniform float uBackgroundAlpha;
-uniform float uUseProceduralColor;
-uniform float uHitEpsilon;
-uniform float uNormalEpsilon;
-uniform float uMaxDistance;
-uniform float uStepScale;
-uniform float uMaxStep;
-uniform float uStepBudget;
-uniform float uShadowStrength;
-uniform float uAmbientOcclusionStrength;
-uniform float uRimStrength;
-uniform float uExposure;
-uniform vec3 uHemiSky;
-uniform vec3 uHemiGround;
-uniform vec3 uAmbientLight;
-uniform vec3 uKeyColor;
-uniform vec3 uKeyDir;
-uniform vec3 uFillColor;
-uniform vec3 uFillDir;
-uniform vec3 uBounceColor;
-uniform vec3 uBounceDir;
-uniform vec3 uRimColor;
-uniform float uFloorEnabled;
-uniform float uFloorShadowOpacity;
-uniform float uFloorZ;
-uniform vec2 uFloorCenter;
-uniform float uFloorFadeRadius;
-${customUniformDeclarations}
-varying vec2 vUv;
-
-const int IMPLICIT_MAX_STEPS = ${maxSteps};
-
-float implicit_clamp01(float value) {
+// The shader's helper library, lifted out of the fragment-shader template so it has a name.
+//
+// Every function here also exists, hand-written a second time, as a JS entry in the BUILTINS
+// table of `sdfEvaluator.js`: the GPU runs these bodies, the baked render artifact runs those.
+// Two implementations of one contract is the divergence design/unified-glb-render-artifacts.md
+// section 7.2 flags, so `sdfField.test.js` parses THIS text and differentially evaluates it
+// against the JS table. It is interpolated verbatim into the shader below.
+export const IMPLICIT_CAD_GLSL_LIBRARY = `float implicit_clamp01(float value) {
   return clamp(value, 0.0, 1.0);
 }
 
@@ -1296,7 +1250,62 @@ float implicit_triangular_honeycomb(vec3 p, vec2 size) {
     min(abs(dot(shifted, normalP60)), abs(dot(shifted, normalN60)))
   );
   return folded.y < quarterSize.y ? foldedStar : shiftedStar;
-}
+}`;
+
+export function implicitCadFragmentShader(model) {
+  const maxSteps = Math.max(16, Math.min(Math.floor(finiteNumber(model.maxSteps, 192)), 768));
+  const uniforms = model.uniforms && typeof model.uniforms === "object" ? model.uniforms : {};
+  const customUniformDeclarations = implicitCadUniformDeclarations(uniforms);
+  const glslSource = normalizeImplicitCadGlslFloatLiterals(model.glslSource || model.distanceSource);
+  const hasColorFunction = /\bvec3\s+color\s*\(\s*vec3\s+\w+\s*,\s*vec3\s+\w+\s*\)/.test(glslSource);
+  return `
+precision highp float;
+
+uniform vec2 uResolution;
+uniform vec3 uCameraPosition;
+uniform mat4 uCameraWorld;
+uniform mat4 uProjectionInverse;
+uniform vec3 uBoundsMin;
+uniform vec3 uBoundsMax;
+uniform vec3 uSurfaceColor;
+uniform vec3 uBackgroundColor;
+uniform vec3 uBackgroundColorA;
+uniform vec3 uBackgroundColorB;
+uniform float uBackgroundMode;
+uniform float uBackgroundAngle;
+uniform float uBackgroundAlpha;
+uniform float uUseProceduralColor;
+uniform float uHitEpsilon;
+uniform float uNormalEpsilon;
+uniform float uMaxDistance;
+uniform float uStepScale;
+uniform float uMaxStep;
+uniform float uStepBudget;
+uniform float uShadowStrength;
+uniform float uAmbientOcclusionStrength;
+uniform float uRimStrength;
+uniform float uExposure;
+uniform vec3 uHemiSky;
+uniform vec3 uHemiGround;
+uniform vec3 uAmbientLight;
+uniform vec3 uKeyColor;
+uniform vec3 uKeyDir;
+uniform vec3 uFillColor;
+uniform vec3 uFillDir;
+uniform vec3 uBounceColor;
+uniform vec3 uBounceDir;
+uniform vec3 uRimColor;
+uniform float uFloorEnabled;
+uniform float uFloorShadowOpacity;
+uniform float uFloorZ;
+uniform vec2 uFloorCenter;
+uniform float uFloorFadeRadius;
+${customUniformDeclarations}
+varying vec2 vUv;
+
+const int IMPLICIT_MAX_STEPS = ${maxSteps};
+
+${IMPLICIT_CAD_GLSL_LIBRARY}
 
 ${glslSource}
 

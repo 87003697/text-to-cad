@@ -2,10 +2,12 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  estimatedLoadingRatio,
   artifactProgressRatio,
   formatArtifactProgress,
-  normalizeArtifactProgress,
-  renderProgressBar
+  MAX_DISPLAY_PERCENT,
+  continuedLoadingRatio,
+  normalizeArtifactProgress
 } from "./artifactProgress.js";
 
 function componentsPayload(overrides = {}) {
@@ -127,14 +129,48 @@ test("formatArtifactProgress maps null progress to null, not a zeroed bar", () =
   assert.equal(formatArtifactProgress(null), null);
 });
 
-test("renderProgressBar fills proportionally at a fixed width", () => {
-  assert.equal(renderProgressBar(0, 10), "░░░░░░░░░░");
-  assert.equal(renderProgressBar(0.5, 10), "█████░░░░░");
-  assert.equal(renderProgressBar(1, 10), "██████████");
+test("estimatedLoadingRatio moves without a denominator and never reaches 100%", () => {
+  const t0 = 1_000_000;
+  assert.equal(estimatedLoadingRatio(t0, t0), 0);
+  const early = estimatedLoadingRatio(t0, t0 + 1000);
+  const later = estimatedLoadingRatio(t0, t0 + 5000);
+  assert.ok(early > 0 && early < later, "the estimate must advance with elapsed time");
+  // An estimate that hits 100% would sit full while work continued, which reads as a hang.
+  assert.ok(estimatedLoadingRatio(t0, t0 + 10 * 60 * 1000) < 1);
 });
 
-test("renderProgressBar clamps out-of-range input to the bar's width", () => {
-  assert.equal(renderProgressBar(-5, 4), "░░░░");
-  assert.equal(renderProgressBar(42, 4), "████");
-  assert.equal(renderProgressBar(Number.NaN, 4), "░░░░");
+test("estimatedLoadingRatio is 0 before a load has started", () => {
+  assert.equal(estimatedLoadingRatio(0), 0);
+  assert.equal(estimatedLoadingRatio(Number.NaN), 0);
+});
+
+// The "stuck at 92%" regression. An implicit build reports real phases for ~38s (its bar
+// climbing past 0.94 during `polygonize`) and then stops reporting the moment it finishes,
+// while the package GLB is still being fetched and decoded. The old code fell back to
+// estimatedLoadingRatio there, whose clock started when the LOAD started -- so it returned
+// a fully-saturated 0.92: BELOW where the measurement had already reached, and frozen.
+test("continuedLoadingRatio resumes above the measured floor instead of snapping back", () => {
+  const measuredFloor = 0.945;
+  const handover = 1_000_000;
+  // The old behaviour, for contrast: a from-scratch estimate 38s into the load is pinned at
+  // its ceiling and is LOWER than what the build already measured.
+  const staleEstimate = estimatedLoadingRatio(handover - 38_000, handover);
+  assert.ok(staleEstimate < measuredFloor, "precondition: the stale estimate is a step backwards");
+
+  assert.equal(continuedLoadingRatio(measuredFloor, handover, handover), measuredFloor);
+  const tail = continuedLoadingRatio(measuredFloor, handover, handover + 4000);
+  assert.ok(tail > measuredFloor, "the tail must keep moving after the build stops reporting");
+  assert.ok(tail < 1, "the tail must never reach 100%");
+});
+
+test("continuedLoadingRatio stays under the display cap however long the tail runs", () => {
+  const ceiling = MAX_DISPLAY_PERCENT / 100;
+  const forever = continuedLoadingRatio(0.5, 1_000_000, 1_000_000 + 60 * 60 * 1000);
+  assert.ok(forever <= ceiling, `tail ${forever} must not exceed ${ceiling}`);
+});
+
+test("continuedLoadingRatio never walks a floor backwards", () => {
+  // A floor already at/above the ceiling must hold, not be dragged down to it.
+  assert.equal(continuedLoadingRatio(1, 1_000_000, 1_000_000 + 10_000), 1);
+  assert.equal(continuedLoadingRatio(0.6, 0, 1_000_000), 0.6);
 });

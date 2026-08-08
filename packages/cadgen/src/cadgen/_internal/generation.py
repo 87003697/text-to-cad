@@ -30,20 +30,29 @@ from cadgen.catalog import (
 )
 from cadgen.cli_logging import CliLogger
 from cadgen._internal.file_metadata import text_to_cad_identity_metadata, write_dxf_text_to_cad_metadata
+from cadgen._internal.package_freshness import (
+    ASSEMBLY_PACKAGE_SCHEMA_VERSION,
+    bake_hash_matches,
+    schema_version_matches,
+)
 from cadgen._internal.glb import build_step_topology_index_manifest
 from cadgen._internal.glb import read_step_topology_manifest_from_glb
 from cadgen._internal.glb_topology import (
     STEP_EDGE_VISIBILITY_CLASSES,
     normalize_step_edge_render_visibility_classes,
 )
-from cadgen._internal.generation_status import generation_lock_path, track_generation_run
-from cadgen._internal.progress import (
+from cadgen.coordination import (
+    DRAWING_PACKAGE,
     PHASE_GENERATE,
+    STEP_PACKAGE,
     ProgressEvent,
+    artifact_build,
+    generator_busy,
     render_progress_bar,
-    report_build_progress,
     resolve as resolve_progress,
 )
+from cadgen.coordination.lock import exclusive
+from cadgen.coordination.paths import write_lock_path
 from cadgen.metadata import (
     DEFAULT_MESH_ANGULAR_TOLERANCE,
     DEFAULT_MESH_TOLERANCE,
@@ -939,8 +948,14 @@ def run_script_generator(
     force: bool = False,
     reset_runtime_closure: bool = False,
     progress: object | None = None,
+    lock_intent: str = "write",
 ) -> LoadedStepScene | None:
     """Run a generator's ``gen_step``/``gen_dxf`` and return its scene.
+
+    ``lock_intent`` says whether this run will rewrite the model's render package
+    (``"write"``, the default) or merely occupy its generator (``"generate"`` -- an export,
+    a topology extraction, an interference check). See :func:`_track_spec_generation`:
+    getting this wrong makes an export look like a build to the CAD Viewer.
 
     Closure capture is deterministic in every process shape: first-party modules
     are evicted from ``sys.modules`` BEFORE the generator loads (so its full
@@ -965,13 +980,14 @@ def run_script_generator(
     # count, so this reports a phase, not a fraction. Readers estimate it against the
     # duration the model's previous build recorded.
     resolve_progress(progress).phase(PHASE_GENERATE)
-    with _track_spec_generation(spec, generator_name):
+    with _track_spec_generation(spec, generator_name, intent=lock_intent):
         return _run_script_generator_inner(
             spec,
             generator_name,
             logger=logger,
             force=force,
             reset_runtime_closure=reset_runtime_closure,
+            progress=progress,
         )
 
 
@@ -982,6 +998,7 @@ def _run_script_generator_inner(
     logger: CliLogger,
     force: bool = False,
     reset_runtime_closure: bool = False,
+    progress: object | None = None,
 ) -> LoadedStepScene | None:
     del reset_runtime_closure  # superseded by the pre-run eviction below; kept for API compat
     generated_scene: LoadedStepScene | None = None
@@ -1054,10 +1071,15 @@ def _run_script_generator_inner(
             base=spec.script_path.parent,
             executed_files=executed_files,
         )
+        # `progress` is the BuildRun holding this package's lock. It is threaded down here
+        # because writing the package now includes baking preview.glb in a Node child, and
+        # that child reports its phases -- and proves its run id against the lock sentinel --
+        # through the very run that is holding the lock (design §4.3, §7.4.2).
         write_drawing_package(
             envelope.get("document"),
             script_path=spec.script_path,
             source_closure=source_closure,
+            run=progress,
         )
         logger.debug(
             f"wrote drawing package: {_display_path(render_package_dir(spec.script_path))}"
@@ -1227,6 +1249,14 @@ def _package_descriptor_matches_spec(
     views (selector topology is extracted on demand), so routing them through
     the monolith validator always failed and every build re-ran gen_step plus
     the full-scene mesh; validate against the package descriptor instead.
+
+    The schema-version and bake gates below mirror the viewer's validator
+    (``viewer/server_py/artifact.py``) exactly. A check on only one side is worse than
+    no check at all: the viewer would report stale, this predicate would report current,
+    the build would no-op, and the request would settle ``ready`` on the stale package.
+    The imported-STEP digest gate is already fail-closed here
+    (``_artifact_step_hash_matches_spec``: a descriptor recording no ``stepHash`` cannot
+    equal the file's real hash), which is the behaviour the viewer now matches.
     """
     from cadgen._internal.component_package import is_assembly_package, read_package_descriptor
 
@@ -1235,6 +1265,13 @@ def _package_descriptor_matches_spec(
         return None
     manifest = read_package_descriptor(package_dir)
     if not isinstance(manifest, dict):
+        return False
+    if not schema_version_matches(manifest, ASSEMBLY_PACKAGE_SCHEMA_VERSION):
+        return False
+    # The assembly package bakes no format settings into its payload (components are pure
+    # geometry at recorded mesh tolerances, and those are compared below), so the expected
+    # bake is None -- and a descriptor that records one did not come from this producer.
+    if not bake_hash_matches(manifest, None):
         return False
     if not _artifact_source_kind_matches_spec(spec, manifest):
         return False
@@ -1758,38 +1795,71 @@ class _SkippedGeneration:
         self.spec = spec
 
 
-def _track_spec_generation(spec: EntrySpec, generator_name: str) -> contextlib.AbstractContextManager[None]:
-    # Package builds are coordinated with the viewer's artifact pull: lock the model's
-    # __cadgen__ package so a concurrent viewer/CLI build waits for the in-flight run
-    # instead of writing the same package underneath it.
+def _spec_output_dir(spec: EntrySpec, generator_name: str) -> Path | None:
+    """The coordinated output directory for this spec's generator, if it has one."""
     if generator_name == "gen_step" and spec.step_path is not None:
-        return track_generation_run(generation_lock_path(render_package_dir(spec.entry_path)))
+        return render_package_dir(spec.entry_path)
     if generator_name == "gen_dxf" and spec.script_path is not None:
-        return track_generation_run(
-            generation_lock_path(render_package_dir(spec.script_path))
-        )
-    return track_generation_run(None)
+        return render_package_dir(spec.script_path)
+    return None
+
+
+def _track_spec_generation(
+    spec: EntrySpec,
+    generator_name: str,
+    *,
+    intent: str = "write",
+) -> contextlib.AbstractContextManager[object]:
+    """Coordinate a generator run against the model's render package.
+
+    ``intent`` picks the SENTINEL, and the distinction is the whole point of there being
+    two. A run that will rewrite the package takes the writer lock, which makes a reader
+    hide the artifact and show a build. A run that merely OCCUPIES the generator and
+    writes the package nothing -- an export, an on-demand topology extraction, an
+    interference check -- takes the generator lock instead. Taking the writer lock for
+    those made a fully-current model report `generating` with an empty bar for the whole
+    length of an export; taking nothing at all would let a real build run the same
+    generator concurrently.
+    """
+    output_dir = _spec_output_dir(spec, generator_name)
+    if output_dir is None:
+        return contextlib.nullcontext()
+    if intent == "generate":
+        return generator_busy(STEP_PACKAGE, output_dir)
+    return exclusive(write_lock_path(output_dir))
 
 
 def _run_with_spec_generation_status(
     spec: EntrySpec,
     generator_name: str,
-    action: Callable[[EntrySpec], object],
+    action: Callable[..., object],
     *,
     skip_if_current: Callable[[EntrySpec], bool] | None = None,
+    progress_sink: object | None = None,
 ) -> object:
-    """Run ``action`` while holding the model's generation lock.
+    """Run ``action`` while holding the model's build lock, reporting its progress.
 
-    ``skip_if_current`` is re-evaluated AFTER the lock is acquired. The CLI's
-    pre-lock fast path cannot cover the concurrent case: it ran before the other
-    build existed, so a process that queued behind a peer would wake up and redo
-    the full generator+mesh+emit the holder had just finished. Re-checking here
-    turns the second and third contenders into no-ops.
+    Delegates to :func:`cadgen.coordination.artifact_build`, which is the SAME primitive
+    ``cadgen.step_artifact`` uses. That shared implementation is the point: the lock, the
+    status record and the post-lock currency re-check used to be assembled by hand at each
+    producer, and the two producers had drifted -- this one re-checked under the lock,
+    step_artifact's did not, so a queued viewer build redid a peer's whole generator+mesh.
+
+    ``skip_if_current`` is re-evaluated AFTER the lock is acquired. The pre-lock fast path
+    cannot cover the concurrent case: it ran before the other build existed.
+
+    ``action`` is called as ``action(spec, run)``; ``run`` is the progress reporter.
     """
-    with _track_spec_generation(spec, generator_name):
-        if skip_if_current is not None and skip_if_current(spec):
+    kind = DRAWING_PACKAGE if generator_name == "gen_dxf" else STEP_PACKAGE
+    with artifact_build(
+        kind,
+        _spec_output_dir(spec, generator_name),
+        is_current=(lambda: bool(skip_if_current(spec))) if skip_if_current is not None else None,
+        sink=progress_sink,
+    ) as run:
+        if run.skipped:
             return _SkippedGeneration(spec)
-        return action(spec)
+        return action(spec, run)
 
 
 def _progress_status_text(event: ProgressEvent, *, fallback: str) -> str:
@@ -2162,27 +2232,24 @@ def generate_step_targets(
         return _assembly_is_current(spec) and _assembly_glb_package_current(spec)
 
     def generate_step(spec: EntrySpec, progress_sink: object | None = None) -> object:
-        def build(tracked_spec: EntrySpec) -> object:
-            # Progress is reported per MODEL, keyed by the same package dir the
-            # generation lock is, so a CAD Viewer polling this model's artifact status
-            # picks up the sidecar this run writes.
-            with report_build_progress(
-                render_package_dir(tracked_spec.entry_path) if tracked_spec.entry_path else None,
-                sink=progress_sink,
-            ) as reporter:
-                return _generate_step_outputs_for_cli(
-                    tracked_spec,
-                    entries_by_step_path=entries_by_step_path,
-                    logger=logger,
-                    force=force,
-                    progress=reporter,
-                )
+        # The lock and the progress record are now one thing, keyed by the same package
+        # dir, so a CAD Viewer polling this model's artifact status picks up exactly the
+        # run that is holding the lock -- and cannot pick up a previous run's leftovers.
+        def build(tracked_spec: EntrySpec, reporter: object) -> object:
+            return _generate_step_outputs_for_cli(
+                tracked_spec,
+                entries_by_step_path=entries_by_step_path,
+                logger=logger,
+                force=force,
+                progress=reporter,
+            )
 
         return _run_with_spec_generation_status(
             spec,
             "gen_step",
             build,
             skip_if_current=_built_by_a_peer,
+            progress_sink=progress_sink,
         )
 
     _run_selected_specs(
@@ -2278,7 +2345,9 @@ def generate_dxf_targets(
             action=lambda spec, _progress_sink=None: _run_with_spec_generation_status(
                 spec,
                 "gen_dxf",
-                lambda tracked_spec: run_script_generator(tracked_spec, "gen_dxf", logger=logger),
+                lambda tracked_spec, reporter: run_script_generator(
+                    tracked_spec, "gen_dxf", logger=logger, progress=reporter
+                ),
                 skip_if_current=_built_by_a_peer,
             ),
             logger=logger,

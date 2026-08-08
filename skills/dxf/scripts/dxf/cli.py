@@ -58,7 +58,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="Export the generated DXF file to this path. Valid only with one plain generated Python target.",
     )
     parser.add_argument(
-        "--dxf",
+        "--write",
         action="store_true",
         help="Also write the sibling <name>.dxf export (the drawing package is always built).",
     )
@@ -89,7 +89,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(list(argv) if argv is not None else None)
     if args.validate:
-        if args.output is not None or args.dxf or args.force or args.snapshot:
+        if args.output is not None or args.write or args.force or args.snapshot:
             parser.error("--validate cannot be combined with generation flags")
         return validate_dxf_files(args.targets)
     if args.output is not None:
@@ -100,7 +100,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     return generate_dxf_targets(
         args.targets,
         output=args.output,
-        write_dxf=bool(args.dxf),
+        write_dxf=bool(args.write),
         snapshot=bool(args.snapshot),
         force=bool(args.force),
         verbose=bool(args.verbose),

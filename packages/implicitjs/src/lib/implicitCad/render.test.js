@@ -281,12 +281,13 @@ test("async frame-bounds estimate matches the sync estimate and refreshes floor 
 test("camera framing falls back to declared bounds when CPU SDF sampling cannot evaluate GLSL", () => {
   const state = implicitCadCameraState(
     normalizeImplicitCadModel({
+      // The stimulus has to be GLSL the CPU evaluator genuinely cannot run. It used to be
+      // `break`, which the evaluator now supports (a shipped model needs it to mesh), so it
+      // is a call to a function the transpiler does not define -- which still throws, and
+      // still exercises the fallback this test is about.
       glsl: `
 float sdf(vec3 p) {
-  for (int i = 0; i < 2; i += 1) {
-    break;
-  }
-  return length(p) - 1.0;
+  return unsupportedByTheCpuEvaluator(p) - 1.0;
 }
 `,
       bounds: { min: [-10, -10, -10], max: [10, 10, 10] }

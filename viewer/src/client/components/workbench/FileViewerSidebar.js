@@ -52,6 +52,7 @@ function FileEntryButton({
   entryHasUrdf,
   activeGenerationFiles = [],
   activeStepArtifactGenerationFile = "",
+  loadingFiles = [],
   stepArtifactGenerationAvailable = true,
   canRevealFileAssets = false,
   canCopyFileAssetLinks = false,
@@ -78,6 +79,7 @@ function FileEntryButton({
     hasUrdf: entryHasUrdf(entry),
     activeGenerationFiles,
     activeStepArtifactGenerationFile,
+    loadingFiles,
     stepArtifactGenerationAvailable
   });
   const title = [
@@ -151,6 +153,7 @@ function DirectoryNode({
   entryHasUrdf,
   activeGenerationFiles = [],
   activeStepArtifactGenerationFile = "",
+  loadingFiles = [],
   stepArtifactGenerationAvailable = true,
   canRevealFileAssets = false,
   canCopyFileAssetLinks = false,
@@ -219,6 +222,7 @@ function DirectoryNode({
                     entryHasUrdf={entryHasUrdf}
                     activeGenerationFiles={activeGenerationFiles}
                     activeStepArtifactGenerationFile={activeStepArtifactGenerationFile}
+                    loadingFiles={loadingFiles}
                     stepArtifactGenerationAvailable={stepArtifactGenerationAvailable}
                     canRevealFileAssets={canRevealFileAssets}
                     canCopyFileAssetLinks={canCopyFileAssetLinks}
@@ -247,6 +251,7 @@ function DirectoryNode({
                     entryHasUrdf={entryHasUrdf}
                     activeGenerationFiles={activeGenerationFiles}
                     activeStepArtifactGenerationFile={activeStepArtifactGenerationFile}
+                    loadingFiles={loadingFiles}
                     stepArtifactGenerationAvailable={stepArtifactGenerationAvailable}
                     canRevealFileAssets={canRevealFileAssets}
                     canCopyFileAssetLinks={canCopyFileAssetLinks}
@@ -308,6 +313,7 @@ function FileViewerContents({
   entryHasUrdf,
   activeGenerationFiles = [],
   activeStepArtifactGenerationFile = "",
+  loadingFiles = [],
   stepArtifactGenerationAvailable = true,
   canRevealFileAssets = false,
   canCopyFileAssetLinks = false,
@@ -368,6 +374,7 @@ function FileViewerContents({
                           entryHasUrdf={entryHasUrdf}
                           activeGenerationFiles={activeGenerationFiles}
                           activeStepArtifactGenerationFile={activeStepArtifactGenerationFile}
+                    loadingFiles={loadingFiles}
                           stepArtifactGenerationAvailable={stepArtifactGenerationAvailable}
                           canRevealFileAssets={canRevealFileAssets}
                           canCopyFileAssetLinks={canCopyFileAssetLinks}
@@ -395,6 +402,7 @@ function FileViewerContents({
                           entryHasUrdf={entryHasUrdf}
                           activeGenerationFiles={activeGenerationFiles}
                           activeStepArtifactGenerationFile={activeStepArtifactGenerationFile}
+                    loadingFiles={loadingFiles}
                           stepArtifactGenerationAvailable={stepArtifactGenerationAvailable}
                           canRevealFileAssets={canRevealFileAssets}
                           canCopyFileAssetLinks={canCopyFileAssetLinks}
@@ -446,6 +454,7 @@ export default function FileViewerSidebar({
   entryHasUrdf,
   activeGenerationFiles = [],
   activeStepArtifactGenerationFile = "",
+  loadingFiles = [],
   stepArtifactGenerationAvailable = true,
   canRevealFileAssets = false,
   canCopyFileAssetLinks = false,
@@ -486,6 +495,7 @@ export default function FileViewerSidebar({
       entryHasUrdf={entryHasUrdf}
       activeGenerationFiles={activeGenerationFiles}
       activeStepArtifactGenerationFile={activeStepArtifactGenerationFile}
+                    loadingFiles={loadingFiles}
       stepArtifactGenerationAvailable={stepArtifactGenerationAvailable}
       canRevealFileAssets={canRevealFileAssets}
       canCopyFileAssetLinks={canCopyFileAssetLinks}

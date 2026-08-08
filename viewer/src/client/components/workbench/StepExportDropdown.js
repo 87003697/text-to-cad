@@ -8,8 +8,8 @@ import {
 import {
   DXF_EXPORT_FORMATS,
   STEP_EXPORT_FORMATS,
-  stepExportItemLabel
-} from "@/workbench/stepExport";
+  exportItemLabel
+} from "@/workbench/modelExport";
 
 // Dedicated "download" icon dropdown for exporting the open STEP model (part, assembly, or
 // imported STEP) to STEP/3MF/STL/GLB, or a generated DXF drawing to DXF. Hidden unless an
@@ -68,7 +68,7 @@ export function StepExportDropdown({
                 onExportStepFile(selectedEntry, format);
               }}
             >
-              <span className="min-w-0 truncate">{stepExportItemLabel(format)}</span>
+              <span className="min-w-0 truncate">{exportItemLabel(format)}</span>
             </DropdownMenuItem>
           );
         })}

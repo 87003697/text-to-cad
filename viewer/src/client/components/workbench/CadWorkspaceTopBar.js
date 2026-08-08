@@ -377,10 +377,10 @@ function BreadcrumbNodeDropdown({
         )}
         title={title}
       >
-        <span className="block min-w-0 truncate">{label}</span>
         {current && node?.type === "entry" ? (
           <FilenameLoadStatus activity={filenameLoadActivity} />
         ) : null}
+        <span className="block min-w-0 truncate">{label}</span>
       </span>
     );
 
@@ -426,10 +426,10 @@ function BreadcrumbNodeDropdown({
         }
       }}
     >
-      <span className="block min-w-0 truncate">{label}</span>
       {current && node?.type === "entry" ? (
         <FilenameLoadStatus activity={filenameLoadActivity} />
       ) : null}
+      <span className="block min-w-0 truncate">{label}</span>
     </button>
   );
   const dropdownTrigger = (
@@ -597,23 +597,26 @@ function BreadcrumbEllipsisDropdown({
   );
 }
 
+/**
+ * A bare spinner, left of the filename. No chip, no text, no percent.
+ *
+ * The overlay already carries the words and the number; repeating them in the breadcrumb
+ * gave the same state two competing readouts that could disagree mid-poll. This says only
+ * "this file is busy" and leaves the detail to the one place that owns it. The label still
+ * rides on `title` and the screen-reader text, so nothing is lost for a11y or hover.
+ */
 function FilenameLoadStatus({ activity }) {
-  const label = String(activity?.label || "").trim();
-  if (!activity?.loading || !label) {
+  if (!activity?.loading) {
     return null;
   }
 
-  const title = String(activity?.title || label).trim();
+  const label = String(activity?.label || "").trim();
+  const title = String(activity?.title || label || "Loading").trim();
 
   return (
-    <span
-      role="status"
-      aria-live="polite"
-      title={title}
-      className="inline-flex min-w-0 max-w-36 shrink items-center gap-1 rounded-md border border-border/70 bg-sidebar-accent px-1.5 py-0.5 text-[10px] font-medium leading-none text-sidebar-accent-foreground"
-    >
-      <LoaderCircle className="size-3 shrink-0 animate-spin" aria-hidden="true" />
-      <span className="min-w-0 truncate">{label}</span>
+    <span role="status" aria-live="polite" title={title} className="inline-flex shrink-0 items-center">
+      <LoaderCircle className="size-3 shrink-0 animate-spin text-muted-foreground" aria-hidden="true" />
+      <span className="sr-only">{title}</span>
     </span>
   );
 }

@@ -72,10 +72,20 @@ import {
   isRobotRenderFormat
 } from "cadjs/lib/fileFormats";
 import {
-  buildViewerDxfAlert,
   buildViewerImplicitAlert,
   buildViewerMeshAlert
 } from "@/workbench/viewerAlerts";
+import {
+  normalizeImplicitGraphicsSettings
+} from "@/workbench/implicitGraphicsSettings";
+import {
+  DEFAULT_IMPLICIT_EXPORT_RESOLUTION,
+  requestImplicitCadExport
+} from "@/workbench/implicitExport";
+import {
+  buildParameterValuesCopyText,
+  parseParameterValuesPasteText
+} from "@/workbench/parameterControls";
 import {
   buildAssemblyMateCopyText,
   buildNormalizedReferenceState,
@@ -94,6 +104,7 @@ import {
   entryAssetUrl,
   entryHasDisplayEdges,
   entryHasDxf,
+  entryHasImplicitCad,
   entryHasMesh,
   entryHasReferences,
   entryHasUrdf,
@@ -188,15 +199,6 @@ import {
 } from "@/workbench/sidebar";
 import { buildCadRefToken } from "cadjs/lib/cadRefs.js";
 import {
-  buildDxfPreviewMeshData,
-  extractOrderedDxfBendLines,
-  normalizeDxfBendAngleDeg,
-  normalizeDxfBendDirection,
-  normalizeDxfBendSettings,
-  DEFAULT_DXF_PREVIEW_THICKNESS_MM,
-  normalizeDxfPreviewThicknessMm
-} from "cadjs/lib/dxf/buildPreviewMesh";
-import {
   applyUrdfPoseToMeshData,
   buildDefaultUrdfJointValues,
   buildUrdfMeshGeometry,
@@ -275,21 +277,46 @@ import {
   parseStepModuleParamsPasteText
 } from "@/workbench/stepModuleParameterControls";
 import {
-  buildParameterValuesCopyText,
-  parseParameterValuesPasteText
-} from "@/workbench/parameterControls";
-import {
-  normalizeImplicitGraphicsSettings
-} from "@/workbench/implicitGraphicsSettings";
-import {
-  DEFAULT_IMPLICIT_EXPORT_RESOLUTION,
-  requestImplicitCadExport
-} from "@/workbench/implicitExport";
-import {
-  requestStepExport,
-  stepExportFormatLabel
-} from "@/workbench/stepExport";
+  requestModelExport,
+  exportFormatLabel
+} from "@/workbench/modelExport";
 
+const DEFAULT_DOCUMENT_TITLE = "CAD Viewer";
+// The source formats whose renderable geometry lives in a `__cadgen__` render package, and
+// therefore go through the /__cad/artifact state machine before they can render. Mirrors
+// `owns_entry` in viewer/server_py/artifact.py; an entry listed here and not there (or the
+// reverse) is a format that either never builds or reports ready forever.
+// Formats whose viewport content comes from a GENERATED package, so the viewer must check
+// freshness and may trigger a build. Implicits left this set when the raymarch renderer came
+// back: they are rendered from their own GLSL, with nothing baked to be stale, so an
+// implicit entry never blocks on a build and never shows a generating state.
+const ARTIFACT_MANAGED_SOURCE_FORMATS = Object.freeze([
+  RENDER_FORMAT.STEP,
+]);
+// geometry moved into a baked package GLB; implicits did too, then left again for the
+// raymarcher. G-code is still parsed and meshed in the browser, and robots compose many
+// meshes through their own loader.
+// File-sheet kinds that render nothing but a status tab. A mesh never had file-specific
+// package, whose settings the producer owns. All three share one sheet.
+
+function statusOnlyFileSheetTitle(sourceFormat) {
+  switch (sourceFormat) {
+    case RENDER_FORMAT.THREE_MF:
+      return "3MF";
+    case RENDER_FORMAT.GLB:
+      return "GLB";
+    case RENDER_FORMAT.IMPLICIT:
+      return "Implicit CAD";
+    default:
+      return "STL";
+  }
+
+const MESH_LOADED_RENDER_FORMATS = Object.freeze([
+  RENDER_FORMAT.STL,
+  RENDER_FORMAT.THREE_MF,
+  RENDER_FORMAT.GLB,
+  RENDER_FORMAT.IMPLICIT
+]);
 // Single user-facing label for "the viewer is (re)generating the render artifacts a STEP model
 // needs before it can render" — used for both the filename status chip and its tooltip across every
 // artifact-generation trigger (first build, stale rebuild, source-changed regen). Browser-side
@@ -1072,16 +1099,6 @@ async function readResponseError(response, fallback) {
   }
 }
 
-function buildDxfCacheKey(entry) {
-  const fileRef = fileKey(entry);
-  const dxfHash = entryAssetHash(entry, "dxf");
-  return fileRef && dxfHash ? `${fileRef}:${dxfHash}` : "";
-}
-
-function entryHasImplicitAsset(entry) {
-  return Boolean(entryAssetUrl(entry, "implicit") && entryAssetHash(entry, "implicit"));
-}
-
 // Hide an entry's render assets (url/hash/bytes/assets) so the viewer treats it as "not yet
 // renderable" — used while its render artifact is missing/stale/building or has failed, so the
 // viewer shows a loading/error state and never renders a stale cache. Once the artifact is ready
@@ -1095,6 +1112,15 @@ function entryWithoutRenderAssets(entry) {
   delete next.hash;
   delete next.bytes;
   delete next.assets;
+  // The baked mesh of a DXF or implicit entry is published as a `glb` relation rather than
+  // as the entry's own url, so stripping only the url would leave the previous bake
+  // renderable while its replacement is being built -- which is exactly the stale cache this
+  // function exists to hide.
+  if (next.relations?.glb) {
+    const relations = { ...next.relations };
+    delete relations.glb;
+    next.relations = relations;
+  }
   return next;
 }
 
@@ -1306,11 +1332,8 @@ export default function CadWorkspace({
     setStatus,
     error,
     setError,
-    dxfState,
     setDxfState,
-    dxfStatus,
     setDxfStatus,
-    dxfError,
     setDxfError,
     dxfLoadStage,
     implicitState,
@@ -1339,10 +1362,10 @@ export default function CadWorkspace({
     setDisplayEdgeError,
     getCachedMeshState,
     getCachedReferenceState,
-    getCachedDxfState,
     getCachedImplicitState,
     getCachedUrdfState,
     cancelMeshLoad,
+    getCachedDxfState,
     cancelDxfLoad,
     cancelImplicitLoad,
     cancelUrdfLoad,
@@ -1407,14 +1430,15 @@ export default function CadWorkspace({
   // Unified render-artifact status for the selected entry: ready (render) | generating (loading) |
   // error (fatal). A missing/stale cache is not an issue — it just triggers a (re)build. Replaces
   // the per-entry step-source-status fetch, the mesh-stripping merge, and the build effect.
-  // STEP entries and generated DXF drawings (`.dxf.py`, sourceKind "python") are artifact-managed;
-  // a raw imported `.dxf` renders directly from disk and never hits the artifact route.
+  // Every artifact-managed kind: STEP models, DXF drawings (generated `.dxf.py` AND imported
+  // `.dxf` alike) and `.implicit.js` models. An imported `.dxf` used to be excluded because it
+  // "renders directly from disk" -- true only while the client still parsed and extruded DXF
+  // entities in the browser. It renders from the package's baked preview.glb now, so it needs
+  // the build for exactly the reason a generated one does.
   const selectedArtifact = useArtifact(
     catalogSelectedEntry ? fileKey(catalogSelectedEntry) : "",
     {
-      enabled: catalogSelectedEntrySourceFormat === RENDER_FORMAT.STEP ||
-        (catalogSelectedEntrySourceFormat === RENDER_FORMAT.DXF &&
-          catalogSelectedEntry?.sourceKind === "python"),
+      enabled: ARTIFACT_MANAGED_SOURCE_FORMATS.includes(catalogSelectedEntrySourceFormat),
       freshnessKey: `${catalogSelectedEntry?.hash || ""}:${manifestRevision}`,
     }
   );
@@ -1496,6 +1520,7 @@ export default function CadWorkspace({
   const selectedEntryHasReferences = entryHasReferences(selectedEntry);
   const selectedEntryHasDisplayEdges = entryHasDisplayEdges(selectedEntry);
   const selectedEntryHasDxf = entryHasDxf(selectedEntry);
+  const selectedEntryHasImplicit = entryHasImplicitCad(selectedEntry);
   const selectedEntryHasImplicit = entryHasImplicitAsset(selectedEntry);
   // The selected entry's render artifact is (re)building -> show the loading state. Replaces the
   // old !entryHasMesh + buildable-code derivation.
@@ -1518,14 +1543,12 @@ export default function CadWorkspace({
     selectedEntry?.kind === "assembly" &&
     selectedMeshMatches &&
     !!meshState?.assemblyBackgroundError;
+    !!selectedEntry &&
   const selectedDxfMatches =
     !!dxfState &&
-    !!selectedEntry &&
     dxfState.file === fileKey(selectedEntry) &&
-    dxfState.dxfHash === entryAssetHash(selectedEntry, "dxf");
   const selectedImplicitMatches =
     !!implicitState &&
-    !!selectedEntry &&
     implicitState.file === fileKey(selectedEntry) &&
     implicitState.implicitHash === entryAssetHash(selectedEntry, "implicit");
   const selectedUrdfMatches =
@@ -1535,10 +1558,17 @@ export default function CadWorkspace({
     urdfState.urdfHash === entryUrdfAssetHash(selectedEntry);
   const selectedUrdfData = selectedUrdfMatches ? urdfState.urdfData : null;
   const selectedUrdfMeshes = selectedUrdfMatches ? urdfState.meshesByUrl : null;
-  const selectedDxfData = selectedDxfMatches ? dxfState.dxfData : null;
+  // The loaded .implicit.js module for the selected entry. The raymarch renderer takes the
+  // model straight from here -- there is no baked package in this path -- and the file
+  // sheet's parameter/animation controls read the definition off it.
+  const selectedImplicitMatches =
+    !!implicitState &&
+    !!selectedEntry &&
+    implicitState.file === fileKey(selectedEntry) &&
+    implicitState.implicitHash === entryAssetHash(selectedEntry, "implicit");
   const selectedImplicitModel = selectedImplicitMatches ? implicitState.model : null;
   const selectedImplicitDefinition = selectedImplicitModel?.definition || null;
-  const selectedDxfFileRef = selectedEntrySourceFormat === RENDER_FORMAT.DXF
+  const selectedDxfData = selectedDxfMatches ? dxfState.dxfData : null;
     ? fileKey(selectedEntry)
     : "";
   const selectedUrdfFileRef = isRobotRenderFormat(selectedEntrySourceFormat)
@@ -2884,68 +2914,6 @@ export default function CadWorkspace({
     renderPartIdsForAssemblySelection
   ]);
   const selectedUrdfPreviewError = selectedUrdfPreview.error;
-  const selectedDxfBendLines = useMemo(() => {
-    if (!selectedDxfData) {
-      return [];
-    }
-    try {
-      return extractOrderedDxfBendLines(selectedDxfData);
-    } catch {
-      return [];
-    }
-  }, [selectedDxfData]);
-  const normalizedSelectedDxfBendSettings = useMemo(() => {
-    if (!selectedDxfData) {
-      return [];
-    }
-    try {
-      return normalizeDxfBendSettings(selectedDxfData, dxfBendSettings);
-    } catch {
-      return [];
-    }
-  }, [dxfBendSettings, selectedDxfData]);
-  const effectiveDxfThicknessMm = useMemo(() => {
-    return normalizeDxfPreviewThicknessMm(
-      dxfThicknessMm,
-      toFiniteNumber(selectedDxfData?.defaultThicknessMm, DEFAULT_DXF_PREVIEW_THICKNESS_MM)
-    );
-  }, [dxfThicknessMm, selectedDxfData]);
-  const selectedDxfPreview = useMemo(() => {
-    if (!selectedDxfData) {
-      return {
-        meshData: null,
-        error: ""
-      };
-    }
-    try {
-      return {
-        meshData: buildDxfPreviewMeshData(selectedDxfData, effectiveDxfThicknessMm, normalizedSelectedDxfBendSettings),
-        error: ""
-      };
-    } catch (error) {
-      return {
-        meshData: null,
-        error: error instanceof Error ? error.message : String(error)
-      };
-    }
-  }, [effectiveDxfThicknessMm, normalizedSelectedDxfBendSettings, selectedDxfData]);
-  const selectedDxfMeshData = selectedDxfPreview.meshData;
-  const selectedDxfPreviewError = selectedDxfPreview.error;
-  const selectedDxfPreviewKey = useMemo(() => {
-    const baseKey = buildDxfCacheKey(selectedEntry);
-    if (!baseKey || !selectedDxfData) {
-      return baseKey;
-    }
-    const bendsKey = normalizedSelectedDxfBendSettings
-      .map((setting) => `${normalizeDxfBendDirection(setting?.direction)}:${normalizeDxfBendAngleDeg(setting?.angleDeg).toFixed(1)}`)
-      .join("|");
-    return `${baseKey}:t=${effectiveDxfThicknessMm.toFixed(2)}:b=${bendsKey}`;
-  }, [
-    effectiveDxfThicknessMm,
-    normalizedSelectedDxfBendSettings,
-    selectedDxfData,
-    selectedEntry
-  ]);
   const effectiveRenderFormat = selectedEntrySourceFormat;
   const dxfViewerLoading =
     !!selectedEntry &&
@@ -2955,27 +2923,46 @@ export default function CadWorkspace({
     !!selectedEntry &&
     implicitStatus !== ASSET_STATUS.ERROR &&
     (!selectedImplicitMatches || implicitStatus === ASSET_STATUS.LOADING);
+  const gcodeViewerLoading =
+    !!selectedEntry &&
+    gcodeStatus !== ASSET_STATUS.ERROR &&
+    (!selectedGcodeMatches || gcodeStatus === ASSET_STATUS.LOADING);
   const urdfViewerLoading =
     !!selectedEntry &&
     urdfStatus !== ASSET_STATUS.ERROR &&
     (!selectedUrdfMatches || urdfStatus === ASSET_STATUS.LOADING);
-  // A fatal render-artifact error (not building) stops the loading spinner so the error surfaces.
-  const stepArtifactBlocksRender =
-    effectiveRenderFormat === RENDER_FORMAT.STEP &&
+  // A fatal render-artifact error (not building) stops the loading spinner so the error
+  // surfaces. Every artifact-managed format, not just STEP: a DXF or implicit build that
+  // failed would otherwise spin forever behind its own error.
+  const artifactBlocksRender =
+    ARTIFACT_MANAGED_SOURCE_FORMATS.includes(effectiveRenderFormat) &&
     selectedArtifact.status === "error";
-  const stepViewerLoading =
+  const meshViewerLoading =
     !!selectedEntry &&
-    (selectedStepArtifactRenderPending || !stepArtifactBlocksRender) &&
+    (selectedStepArtifactRenderPending || !artifactBlocksRender) &&
     status !== ASSET_STATUS.ERROR &&
     (!selectedMeshMatches || status === ASSET_STATUS.LOADING || selectedStepModuleLoading);
-  const viewerLoading = effectiveRenderFormat === RENDER_FORMAT.DXF
+  // which IS the mesh path. Only G-code still parses in the browser.
+  // Implicits have their own arm again: they raymarch their GLSL, so "loading" means the
+  // .implicit.js module is still being fetched, not that a mesh is.
+  const viewerLoading = effectiveRenderFormat === RENDER_FORMAT.IMPLICIT
+    ? implicitViewerLoading
+      : isRobotRenderFormat(effectiveRenderFormat)
+        ? urdfViewerLoading
+        : meshViewerLoading;
     ? dxfViewerLoading
     : effectiveRenderFormat === RENDER_FORMAT.IMPLICIT
-      ? implicitViewerLoading
-    : isRobotRenderFormat(effectiveRenderFormat)
-      ? urdfViewerLoading
       : stepViewerLoading;
   const effectiveViewerLoading = viewerLoading || selectedArtifactGenerating || fileParamSelectionPending;
+  // The file explorer spins the entry the viewer is actually working on. Artifact
+  // generation is only half of that -- a built package still has to be fetched and
+  // decoded, and an entry sitting un-built is NOT loading (nothing loads in a static
+  // list), so this is deliberately the SELECTED entry while the viewer is busy rather
+  // than "every entry without an artifact".
+  const viewerLoadingFiles = useMemo(
+    () => (effectiveViewerLoading && catalogSelectedEntry ? [fileKey(catalogSelectedEntry)] : []),
+    [effectiveViewerLoading, catalogSelectedEntry]
+  );
   const assemblySidebarLoading =
     isAssemblyView &&
     selectedMeshMatches &&
@@ -2990,11 +2977,10 @@ export default function CadWorkspace({
   const viewerLoadingLabel = selectedArtifactGenerating
     ? "Generating file..."
     : effectiveRenderFormat === RENDER_FORMAT.DXF
+      ? "Loading G-code preview..."
+      : effectiveRenderFormat === RENDER_FORMAT.IMPLICIT
+        ? "Loading implicit CAD..."
     ? selectedEntry && !selectedEntryHasDxf
-      ? "Generating DXF preview..."
-      : "Loading DXF preview..."
-    : effectiveRenderFormat === RENDER_FORMAT.IMPLICIT
-      ? "Loading implicit CAD..."
       : isRobotRenderFormat(effectiveRenderFormat)
         ? `Loading ${effectiveRenderFormat === RENDER_FORMAT.SDF ? "SDF" : "URDF"} robot...`
         : effectiveRenderFormat === RENDER_FORMAT.STL
@@ -3019,7 +3005,10 @@ export default function CadWorkspace({
     if (!selectedEntry || viewerLoading || selectedArtifactGenerating) {
       return null;
     }
-    if (effectiveRenderFormat === RENDER_FORMAT.DXF) {
+      return buildViewerMeshAlert(
+        selectedEntry,
+        !!selectedMeshData,
+      ) || viewerRuntimeAlert;
       return buildViewerDxfAlert(
         fileKey(selectedEntry),
         !!selectedDxfData,
@@ -3048,14 +3037,10 @@ export default function CadWorkspace({
     );
     return meshAlert || viewerRuntimeAlert;
   }, [
-    dxfError,
-    selectedDxfPreviewError,
-    dxfStatus,
     effectiveRenderFormat,
     error,
     implicitError,
     implicitStatus,
-    selectedDxfData,
     selectedEntry,
     selectedArtifactGenerating,
     selectedImplicitRuntimeError,
@@ -3076,22 +3061,6 @@ export default function CadWorkspace({
       viewerAlert.title
     ].join(":")
     : "";
-  useEffect(() => {
-    if (selectedEntrySourceFormat !== RENDER_FORMAT.DXF || !selectedDxfData || dxfThicknessMm > 0) {
-      return;
-    }
-    setDxfThicknessMm(normalizeDxfPreviewThicknessMm(
-      selectedDxfData.defaultThicknessMm,
-      DEFAULT_DXF_PREVIEW_THICKNESS_MM
-    ));
-  }, [dxfThicknessMm, selectedDxfData, selectedEntrySourceFormat]);
-  useEffect(() => {
-    if (!selectedDxfFileRef || !selectedDxfData) {
-      setDxfBendSettings([]);
-      return;
-    }
-    setDxfBendSettings((current) => normalizeDxfBendSettings(selectedDxfData, current));
-  }, [selectedDxfData, selectedDxfFileRef]);
   const focusedAssemblyTopologyActive = Boolean(
     isAssemblyView &&
     requestedStepTreeTopologyNodeIds.length > 0 &&
@@ -3588,7 +3557,6 @@ export default function CadWorkspace({
 
   const buildActiveTabSnapshot = useCallback(() => {
     return cloneTabSnapshot({
-      dxfThicknessMm,
       referenceQuery,
       selectedReferenceIds,
       selectedPartIds,
@@ -3604,7 +3572,6 @@ export default function CadWorkspace({
       drawingRedoStack
     });
   }, [
-    dxfThicknessMm,
     drawingTool,
     drawingRedoStack,
     drawingStrokes,
@@ -3654,18 +3621,10 @@ export default function CadWorkspace({
       slices: {
         ...(entrySourceFormat(targetEntry) === RENDER_FORMAT.STEP ? { display: displaySettings } : {}),
         tab: buildActiveTabSnapshot(),
-        dxf: {
-          thicknessMm: dxfThicknessMm,
-          bendSettings: dxfBendSettings
-        },
         stepModule: {
           enabled: stepModuleEnabled,
           parameterValues: snapshotStepModuleParameterValues,
           animationState: snapshotStepModuleAnimationState
-        },
-        implicit: {
-          parameterValues: implicitParameterValues,
-          animationState: implicitAnimationState
         },
         urdf: {
           jointValues: targetUrdfJointValues,
@@ -3679,8 +3638,6 @@ export default function CadWorkspace({
   }, [
     buildActiveTabSnapshot,
     displaySettings,
-    dxfBendSettings,
-    dxfThicknessMm,
     implicitAnimationState,
     implicitParameterValues,
     jointValuesByFileRef,
@@ -3748,12 +3705,6 @@ export default function CadWorkspace({
         : normalizeDisplaySettings()
     );
 
-    const dxfSlice = sessionState?.slices?.dxf || null;
-    setDxfBendSettings(dxfSlice?.bendSettings || []);
-    if (dxfSlice?.thicknessMm > 0) {
-      setDxfThicknessMm(dxfSlice.thicknessMm);
-    }
-
     const stepModuleSlice = sessionState?.slices?.stepModule || null;
     if (stepModuleSlice) {
       setStepModuleEnabled(stepModuleSlice.enabled !== false);
@@ -3809,24 +3760,47 @@ export default function CadWorkspace({
     }
   }, [entryMap, readEntrySessionState]);
 
-  const handleDxfBendSettingChange = useCallback((bendIndex, patch) => {
-    setDxfBendSettings((current) => {
-      if (!selectedDxfData) {
-        return current;
+  const handleExportImplicitFile = useCallback(async (entry, format) => {
+    const fileRef = entry ? fileKey(entry) : "";
+    const exportFormat = String(format || "").trim().toLowerCase();
+    if (!fileRef || !exportFormat || typeof window === "undefined") {
+      return;
+    }
+    const busyKey = `${fileRef}:export:${exportFormat}`;
+    const moduleUrl = entry ? entryAssetUrl(entry, "implicit") : "";
+    const currentParameterValues = fileRef === selectedKey ? implicitParameterValues : null;
+    const currentAnimationState = fileRef === selectedKey ? selectedImplicitAnimationViewState : null;
+    setCopyStatus("");
+    setScreenshotStatus("");
+    setFileAccessBusyKey(busyKey);
+    try {
+      setCopyStatus(`Exporting ${exportFormat.toUpperCase()}...`);
+      const payload = await requestImplicitCadExport({
+        file: fileRef,
+        moduleUrl,
+        format: exportFormat,
+        parameterValues: currentParameterValues,
+        animationState: currentAnimationState,
+        resolution: DEFAULT_IMPLICIT_EXPORT_RESOLUTION,
+      });
+      const filename = String(payload?.filename || payload?.result?.filename || "").trim();
+      const downloadUrl = String(payload?.downloadUrl || "").trim();
+      if (downloadUrl) {
+        const result = triggerUrlDownload(downloadUrl, { filename });
+        setCopyStatus(result.message);
+      } else {
+        setCopyStatus(filename ? `Exported ${filename}` : `Exported ${exportFormat.toUpperCase()}`);
       }
-      const next = normalizeDxfBendSettings(selectedDxfData, current).map((setting) => ({ ...setting }));
-      if (bendIndex < 0 || bendIndex >= next.length) {
-        return next;
-      }
-      if (Object.prototype.hasOwnProperty.call(patch || {}, "direction")) {
-        next[bendIndex].direction = normalizeDxfBendDirection(patch.direction);
-      }
-      if (Object.prototype.hasOwnProperty.call(patch || {}, "angleDeg")) {
-        next[bendIndex].angleDeg = normalizeDxfBendAngleDeg(patch.angleDeg);
-      }
-      return next;
-    });
-  }, [selectedDxfData]);
+    } catch (error) {
+      setCopyStatus(error instanceof Error ? error.message : "Implicit CAD export failed");
+    } finally {
+      setFileAccessBusyKey((current) => (current === busyKey ? "" : current));
+    }
+  }, [
+    implicitParameterValues,
+    selectedImplicitAnimationViewState,
+    selectedKey
+  ]);
 
   const fileSheetSelectionKeyForTab = useCallback((key) => {
     const normalizedKey = String(key || "").trim();
@@ -3838,7 +3812,6 @@ export default function CadWorkspace({
     const nextTab = createTabRecord(tabRecord?.key || "", tabRecord || {});
     const nextPerspective = clonePerspectiveSnapshot(nextTab.camera);
     selectedFileSheetKeyRef.current = fileSheetSelectionKeyForTab(nextTab.key);
-    setDxfThicknessMm(nextTab.dxfThicknessMm);
     setReferenceQuery(nextTab.referenceQuery);
     selectedReferenceIdsRef.current = nextTab.selectedReferenceIds;
     setSelectedReferenceIds(nextTab.selectedReferenceIds);
@@ -3874,8 +3847,6 @@ export default function CadWorkspace({
     selectedMateIdsRef.current = [];
     selectedPartIdsRef.current = [];
     setSelectedWholeEntryCadRefToken("");
-    setDxfThicknessMm(0);
-    setDxfBendSettings([]);
     setReferenceQuery("");
     setSelectedReferenceIds([]);
     setSelectedMateIds([]);
@@ -3928,7 +3899,6 @@ export default function CadWorkspace({
     });
     const cachedMeshState = nextEntry ? getCachedMeshState(nextEntry) : null;
     const cachedReferenceState = nextEntry ? getCachedReferenceState(nextEntry) : null;
-    const cachedDxfState = nextEntry ? getCachedDxfState(nextEntry) : null;
     const cachedUrdfState = nextEntry ? getCachedUrdfState(nextEntry) : null;
     const cachedImplicitState = nextEntry ? getCachedImplicitState(nextEntry) : null;
     const currentSnapshot = selectedKey ? buildActiveTabSnapshot() : null;
@@ -3959,16 +3929,6 @@ export default function CadWorkspace({
       setReferenceState(cachedReferenceState);
       setReferenceStatus(cachedReferenceState.disabledReason ? REFERENCE_STATUS.DISABLED : REFERENCE_STATUS.READY);
       setReferenceError(cachedReferenceState.disabledReason || "");
-    }
-
-    if (!entryHasDxf(nextEntry)) {
-      setDxfState(null);
-      setDxfStatus(ASSET_STATUS.PENDING);
-      setDxfError("");
-    } else if (cachedDxfState) {
-      setDxfState(cachedDxfState);
-      setDxfStatus(ASSET_STATUS.READY);
-      setDxfError("");
     }
 
     if (entrySourceFormat(nextEntry) !== RENDER_FORMAT.IMPLICIT) {
@@ -4004,7 +3964,6 @@ export default function CadWorkspace({
     drawingTool,
     entryMap,
     flushActiveFileSession,
-    getCachedDxfState,
     getCachedImplicitState,
     getCachedMeshState,
     getCachedReferenceState,
@@ -4445,33 +4404,24 @@ export default function CadWorkspace({
 
   useEffect(() => {
     if (!selectedEntry) {
-      cancelDxfLoad();
       return;
     }
-    if (effectiveRenderFormat !== RENDER_FORMAT.DXF) {
+    });
+  }, [
+    effectiveRenderFormat,
+    selectedEntry,
       cancelDxfLoad();
-      return;
-    }
     if (!selectedEntryHasDxf) {
-      cancelDxfLoad();
       setDxfState(null);
       setDxfStatus(ASSET_STATUS.PENDING);
       setDxfError("");
-      return;
-    }
     if (selectedDxfMatches) {
-      return;
-    }
     loadDxfForEntry(selectedEntry).catch((err) => {
     setDxfStatus(ASSET_STATUS.ERROR);
     setDxfError(err instanceof Error ? err.message : String(err));
-    });
-  }, [
     cancelDxfLoad,
-    effectiveRenderFormat,
     loadDxfForEntry,
     selectedDxfMatches,
-    selectedEntry,
     selectedEntryHasDxf,
     setDxfError,
     setDxfState,
@@ -5062,10 +5012,8 @@ export default function CadWorkspace({
       };
     }
 
-    if (effectiveRenderFormat === RENDER_FORMAT.DXF && dxfViewerLoading) {
       return {
         loading: true,
-        label: selectedEntryHasDxf ? (dxfLoadStage || "loading DXF") : "building",
         title: viewerLoadingLabel
       };
     }
@@ -5110,7 +5058,7 @@ export default function CadWorkspace({
       };
     }
 
-    if ([RENDER_FORMAT.STEP, RENDER_FORMAT.STL, RENDER_FORMAT.THREE_MF, RENDER_FORMAT.GLB].includes(effectiveRenderFormat) && stepViewerLoading) {
+    if ([RENDER_FORMAT.STEP, RENDER_FORMAT.STL, RENDER_FORMAT.THREE_MF, RENDER_FORMAT.GLB].includes(effectiveRenderFormat) && meshViewerLoading) {
       const activeMeshLoadStage = meshLoadTargetFile === fileKey(selectedEntry)
         ? meshLoadStage
         : "";
@@ -5160,8 +5108,6 @@ export default function CadWorkspace({
   }, [
     assemblyHydrationLoading,
     assemblySidebarLoading,
-    dxfLoadStage,
-    dxfViewerLoading,
     effectiveRenderFormat,
     implicitLoadStage,
     implicitViewerLoading,
@@ -5180,7 +5126,7 @@ export default function CadWorkspace({
     selectedStepArtifactRenderPending,
     selectedStepModuleLoading,
     stepUpdateInProgress,
-    stepViewerLoading,
+    meshViewerLoading,
     urdfLoadStage,
     urdfViewerLoading,
     viewerLoadingLabel
@@ -7763,49 +7709,10 @@ export default function CadWorkspace({
     }
   }, [fileRevealAvailable]);
 
-  const handleExportImplicitFile = useCallback(async (entry, format) => {
-    const fileRef = entry ? fileKey(entry) : "";
-    const exportFormat = String(format || "").trim().toLowerCase();
-    if (!fileRef || !exportFormat || typeof window === "undefined") {
-      return;
-    }
-    const busyKey = `${fileRef}:export:${exportFormat}`;
-    const moduleUrl = entry ? entryAssetUrl(entry, "implicit") : "";
-    const currentParameterValues = fileRef === selectedKey ? implicitParameterValues : null;
-    const currentAnimationState = fileRef === selectedKey ? selectedImplicitAnimationViewState : null;
-    setCopyStatus("");
-    setScreenshotStatus("");
-    setFileAccessBusyKey(busyKey);
-    try {
-      setCopyStatus(`Exporting ${exportFormat.toUpperCase()}...`);
-      const payload = await requestImplicitCadExport({
-        file: fileRef,
-        moduleUrl,
-        format: exportFormat,
-        parameterValues: currentParameterValues,
-        animationState: currentAnimationState,
-        resolution: DEFAULT_IMPLICIT_EXPORT_RESOLUTION,
-      });
-      const filename = String(payload?.filename || payload?.result?.filename || "").trim();
-      const downloadUrl = String(payload?.downloadUrl || "").trim();
-      if (downloadUrl) {
-        const result = triggerUrlDownload(downloadUrl, { filename });
-        setCopyStatus(result.message);
-      } else {
-        setCopyStatus(filename ? `Exported ${filename}` : `Exported ${exportFormat.toUpperCase()}`);
-      }
-    } catch (error) {
-      setCopyStatus(error instanceof Error ? error.message : "Implicit CAD export failed");
-    } finally {
-      setFileAccessBusyKey((current) => (current === busyKey ? "" : current));
-    }
-  }, [
-    implicitParameterValues,
-    selectedImplicitAnimationViewState,
-    selectedKey
-  ]);
-
-  const handleExportStepFile = useCallback(async (entry, format) => {
+  // One export handler for every exportable entry — STEP/assembly, DXF drawing, implicit
+  // model. The server picks the producer from the source file, so the only thing that varies
+  // here is the format the menu offered.
+  const handleExportModelFile = useCallback(async (entry, format) => {
     const fileRef = entry ? fileKey(entry) : "";
     const exportFormat = String(format || "").trim().toLowerCase();
     if (!fileRef || !exportFormat || typeof window === "undefined") {
@@ -7816,8 +7723,8 @@ export default function CadWorkspace({
     setScreenshotStatus("");
     setFileAccessBusyKey(busyKey);
     try {
-      setCopyStatus(`Exporting ${stepExportFormatLabel(exportFormat)}...`);
-      const payload = await requestStepExport({ file: fileRef, format: exportFormat });
+      setCopyStatus(`Exporting ${exportFormatLabel(exportFormat)}...`);
+      const payload = await requestModelExport({ file: fileRef, format: exportFormat });
       if (payload?.cancelled) {
         // User dismissed the native save dialog — clear the in-progress status, no error.
         setCopyStatus("");
@@ -7830,7 +7737,7 @@ export default function CadWorkspace({
         setCopyStatus(result.message);
       } else {
         const savedPath = String(payload?.path || "").trim();
-        const label = filename || stepExportFormatLabel(exportFormat);
+        const label = filename || exportFormatLabel(exportFormat);
         setCopyStatus(savedPath ? `Exported ${label} to ${savedPath}` : `Exported ${label}`);
       }
     } catch (error) {
@@ -7955,10 +7862,7 @@ export default function CadWorkspace({
   }, [selectedEntry]);
 
   const handleEnterPreviewMode = useCallback(() => {
-    const previewRenderable = effectiveRenderFormat === RENDER_FORMAT.IMPLICIT
-      ? !!selectedImplicitRuntimeModel
-      : !!selectedMeshData;
-    if (effectiveRenderFormat === RENDER_FORMAT.DXF || viewerLoading || !previewRenderable || previewMode) {
+    if (effectiveRenderFormat === RENDER_FORMAT.DXF || viewerLoading || !selectedMeshData || previewMode) {
       return;
     }
     previewUiStateRef.current = {
@@ -8132,15 +8036,10 @@ export default function CadWorkspace({
           renderPartsIndividually={isUrdfView || Boolean(selectedStepParameterRuntime)}
           stepParameters={selectedStepParameterRuntime}
           selectedMeshData={selectedMeshData}
-          selectedDxfData={selectedDxfData}
-          selectedDxfMeshData={selectedDxfMeshData}
-          dxfViewMode={dxfViewMode}
-          onDxfViewModeChange={setDxfViewMode}
+          selectedKey={selectedKey}
           selectedImplicitModel={selectedImplicitRuntimeModel}
           implicitDynamicRenderActive={implicitDynamicRenderActive}
           implicitGraphicsSettings={implicitGraphicsSettings}
-          selectedKey={selectedKey}
-          selectedDxfKey={selectedDxfPreviewKey}
           missingFileRef={missingFileRef}
           viewerServerInfo={viewerServerInfo}
           viewerPerspective={viewerPerspective}
@@ -8231,6 +8130,7 @@ export default function CadWorkspace({
           entryHasDxf={entryHasDxf}
           entryHasUrdf={entryHasUrdf}
           activeStepArtifactGenerationFile={activeStepArtifactGenerationFiles}
+              loadingFiles={viewerLoadingFiles}
           stepArtifactGenerationAvailable={stepArtifactGenerationAvailable}
           filenameLoadActivity={filenameLoadActivity}
           selectedStepSourceStatus={selectedStepSourceStatus}
@@ -8240,7 +8140,7 @@ export default function CadWorkspace({
           fileAccessBusyKey={fileAccessBusyKey}
           onDownloadFileAsset={handleDownloadFileAsset}
           onExportImplicitFile={handleExportImplicitFile}
-          onExportStepFile={handleExportStepFile}
+          onExportStepFile={handleExportModelFile}
           onRevealFileAsset={handleRevealFileAsset}
           onRevealInExplorerView={handleRevealEntryInExplorerView}
           onCopyFileAssetReference={handleCopyFileAssetReference}
@@ -8269,6 +8169,7 @@ export default function CadWorkspace({
               entryHasDxf={entryHasDxf}
               entryHasUrdf={entryHasUrdf}
               activeStepArtifactGenerationFile={activeStepArtifactGenerationFiles}
+              loadingFiles={viewerLoadingFiles}
               stepArtifactGenerationAvailable={stepArtifactGenerationAvailable}
               canRevealFileAssets={fileRevealAvailable}
               canCopyFileAssetLinks={fileLinkCopyAvailable}
@@ -8276,7 +8177,7 @@ export default function CadWorkspace({
               fileAccessBusyKey={fileAccessBusyKey}
               onDownloadFileAsset={handleDownloadFileAsset}
               onExportImplicitFile={handleExportImplicitFile}
-              onExportStepFile={handleExportStepFile}
+              onExportStepFile={handleExportModelFile}
               onRevealFileAsset={handleRevealFileAsset}
               onRevealInExplorerView={handleRevealEntryInExplorerView}
               onCopyFileAssetReference={handleCopyFileAssetReference}
@@ -8313,7 +8214,6 @@ export default function CadWorkspace({
                 onProjectionChange={isStepView ? updateThemeProjection : undefined}
                 viewerLoading={viewerLoading}
                 selectedMeshData={selectedMeshData}
-                selectedDxfData={selectedDxfData}
                 selectedImplicitModel={selectedImplicitRuntimeModel}
                 drawingToolOptions={drawingToolOptions}
                 drawingTool={drawingTool}
@@ -8327,7 +8227,7 @@ export default function CadWorkspace({
                 handleEnterPreviewMode={handleEnterPreviewMode}
                 handleExitPreviewMode={handleExitPreviewMode}
                 handleScreenshotCopy={handleScreenshotCopy}
-                onExportStepFile={handleExportStepFile}
+                onExportStepFile={handleExportModelFile}
                 fileAccessBusyKey={fileAccessBusyKey}
               />
 
@@ -8348,9 +8248,7 @@ export default function CadWorkspace({
               />
             </div>
 
-            {selectedFileSheetKind === "dxf" ? (
               <DxfFileSheet
-                key={`dxf:${selectedKey}`}
                 open={fileSheetOpen}
                 isDesktop={isDesktop}
                 width={activeSheetWidth || tabToolsWidth}

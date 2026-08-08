@@ -6,7 +6,13 @@ export const STEP_EXPORT_FORMATS = Object.freeze(["step", "3mf", "stl", "glb"]);
 // A generated `.dxf.py` drawing exports its native format only.
 export const DXF_EXPORT_FORMATS = Object.freeze(["dxf"]);
 
-const STEP_EXPORT_FORMAT_LABELS = Object.freeze({
+// An `.implicit.js` model exports to mesh formats only — its own source is the "native"
+// file and there is nothing to download. The mesh is produced by the shipped implicitjs
+// export CLI, run SERVER-side (cadgen.implicit_export): unlike the baked render package it
+// is live-valued, so the exporter's own resolution/params defaults apply.
+export const IMPLICIT_EXPORT_FORMATS = Object.freeze(["stl", "glb", "3mf"]);
+
+const EXPORT_FORMAT_LABELS = Object.freeze({
   step: "STEP",
   "3mf": "3MF",
   stl: "STL",
@@ -14,9 +20,9 @@ const STEP_EXPORT_FORMAT_LABELS = Object.freeze({
   dxf: "DXF",
 });
 
-export function stepExportFormatLabel(format) {
+export function exportFormatLabel(format) {
   const normalized = String(format || "").trim().toLowerCase();
-  return STEP_EXPORT_FORMAT_LABELS[normalized] || normalized.toUpperCase();
+  return EXPORT_FORMAT_LABELS[normalized] || normalized.toUpperCase();
 }
 
 // An imported model's STEP file is its own source (no `.step.py` generator), so exporting it
@@ -27,12 +33,12 @@ export function isImportedStepEntry(entry) {
 
 // Menu label for one export format. STEP/DXF are the entry's native type, so they read as
 // "Download <FORMAT>"; every other format is "Export <FORMAT>".
-export function stepExportItemLabel(format) {
+export function exportItemLabel(format) {
   const normalized = String(format || "").trim().toLowerCase();
   if (normalized === "step" || normalized === "dxf") {
-    return `Download ${stepExportFormatLabel(normalized)}`;
+    return `Download ${exportFormatLabel(normalized)}`;
   }
-  return `Export ${stepExportFormatLabel(normalized)}`;
+  return `Export ${exportFormatLabel(normalized)}`;
 }
 
 function normalizedFileRef(value) {
@@ -45,33 +51,33 @@ function normalizedFileRef(value) {
 
 function normalizedFormat(value) {
   const format = String(value || "").trim().toLowerCase().replace(/^\./, "");
-  return STEP_EXPORT_FORMATS.includes(format) || DXF_EXPORT_FORMATS.includes(format) ? format : "";
+  return STEP_EXPORT_FORMATS.includes(format)
+    || DXF_EXPORT_FORMATS.includes(format)
+    || IMPLICIT_EXPORT_FORMATS.includes(format)
+    ? format
+    : "";
 }
 
-// Request a server-side export of one STEP/assembly model to `format`, written to a path the
-// user picks via the OS-native save dialog. Resolves to one of:
+// Request a server-side export of one model — STEP/assembly, `.dxf.py` drawing, or
+// `.implicit.js` model — to `format`, written to a path the user picks via the OS-native
+// save dialog. ONE route for all three: the server picks the producer from the source file,
+// so nothing about which geometry runtime meshes it reaches the browser. Resolves to one of:
 //   { cancelled: true }                       — user dismissed the save dialog (not an error)
 //   { ok, path, filename, format }            — written directly to the chosen path
 //   { ok, fallback, downloadUrl, filename }   — no native dialog; fetch the file to download it
 // Throws on a genuine failure.
-export async function requestStepExport({ file, format } = {}) {
+export async function requestModelExport({ file, format } = {}) {
   const fileRef = normalizedFileRef(file);
   const exportFormat = normalizedFormat(format);
   if (!fileRef) {
-    throw new Error("Missing STEP file");
+    throw new Error("Missing model file");
   }
   if (!exportFormat) {
     throw new Error(`Unsupported export format: ${format || "(missing)"}`);
   }
   const response = await fetch(
-    `/__cad/step-export?file=${encodeURIComponent(fileRef)}&format=${encodeURIComponent(exportFormat)}`,
-    {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-      },
-      body: JSON.stringify({ file: fileRef, format: exportFormat }),
-    }
+    `/__cad/export?file=${encodeURIComponent(fileRef)}&format=${encodeURIComponent(exportFormat)}`,
+    { method: "POST" }
   );
   let payload = null;
   try {

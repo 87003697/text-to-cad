@@ -119,54 +119,6 @@ export function buildViewerMeshAlert(entry, hasMeshData, loadError) {
   return null;
 }
 
-export function buildViewerDxfAlert(fileRef, hasDxfData, loadError, previewError) {
-  if (!fileRef) {
-    return null;
-  }
-
-  const command = commandForFile(CAD_BUILD_COMMANDS.dxf, fileRef);
-  const normalizedPreviewError = String(previewError || "").trim();
-
-  if (loadError) {
-    return {
-      severity: "error",
-      summary: "DXF load failed",
-      title: "Failed to load DXF flat pattern",
-      message: loadError,
-      resolution: "Try reloading the page. If the problem persists, rebuild the CAD assets for this entry.",
-      command
-    };
-  }
-
-  if (/DXF 3D bend preview currently requires vertical bend lines/i.test(normalizedPreviewError)) {
-    return null;
-  }
-
-  if (normalizedPreviewError) {
-    return {
-      severity: "warning",
-      summary: "DXF 3D preview unavailable",
-      title: "Failed to build the DXF 3D preview",
-      message: normalizedPreviewError,
-      resolution: "The flat pattern can still be shown, but the 3D extrusion preview could not be built from the current DXF geometry.",
-      command
-    };
-  }
-
-  if (!hasDxfData) {
-    return {
-      severity: "error",
-      summary: "DXF unavailable",
-      title: "No DXF flat pattern is available",
-      message: "The selected entry does not have a ready DXF companion asset for the flat-pattern viewer.",
-      resolution: "Rebuild the CAD assets for this entry, then reload the page.",
-      command
-    };
-  }
-
-  return null;
-}
-
 export function buildViewerImplicitAlert(fileRef, hasImplicitData, loadError) {
   if (!fileRef) {
     return null;

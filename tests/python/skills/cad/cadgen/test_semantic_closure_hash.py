@@ -54,16 +54,22 @@ class SemanticClosureHashTests(unittest.TestCase):
             a.write_text("# c\ndef gen_step(:\n    return 1\n", encoding="utf-8")
             self.assertNotEqual(hash_a, _closure(a, root).closure_hash)
 
-    def test_matches_accepts_legacy_byte_recorded_hash(self) -> None:
-        # Migration: a descriptor recorded with the old byte-based digest must
-        # still validate as unchanged so no mass rebuild happens on upgrade.
+    def test_matches_rejects_legacy_byte_recorded_hash(self) -> None:
+        """A byte-recorded digest reports STALE and rebuilds — the fallback is gone.
+
+        There is one digest now. A descriptor written before comment-insensitive hashing
+        reports stale exactly once, rebuilds, and re-records a semantic digest; the old
+        dual-hash acceptance cost a second full-content re-read of every closure file on
+        every miss and was the last data-compatibility path in the freshness stack.
+        """
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            a = self._write(root, "gen.py", "def gen_step():\n    return 1\n")
+            self._write(root, "gen.py", "def gen_step():\n    return 1\n")
             legacy = source_hash._recompute_closure_hash(
                 ["gen.py"], base=root, hasher=source_hash._sha256_file
             )
-            self.assertTrue(source_hash.closure_hash_matches(legacy, ["gen.py"], base=root))
+            self.assertIsNotNone(legacy, "the byte recompute must still be reachable")
+            self.assertFalse(source_hash.closure_hash_matches(legacy, ["gen.py"], base=root))
 
     def test_matches_accepts_semantic_hash_after_comment_edit(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

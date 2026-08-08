@@ -447,26 +447,20 @@ def _recompute_closure_hash(relative_files: object, *, base: Path, hasher) -> st
 def closure_hash_matches(recorded_hash: object, relative_files: object, *, base: Path) -> bool:
     """Whether a recorded closure hash still matches the current sources.
 
-    Accepts EITHER the current semantic (AST) recompute OR the legacy byte
-    recompute: descriptors written before comment-insensitive hashing recorded a
-    byte-based digest, and must keep validating (no mass rebuild on upgrade)
-    until their next genuine rebuild re-records the semantic digest. A missing
-    file (either recompute returns ``None``) is not a match — the caller rebuilds.
+    ONE digest: the semantic (AST) recompute, which is comment- and
+    whitespace-insensitive. A missing file (the recompute returns ``None``) is not a
+    match — the caller rebuilds.
+
+    The legacy byte-digest fallback is deliberately gone. It existed so descriptors
+    written before comment-insensitive hashing kept validating without a mass rebuild,
+    but it cost a second full-content re-read of every closure file on every miss and it
+    was the last data-compatibility path in the freshness stack. A descriptor recording a
+    byte digest now reports stale exactly once, rebuilds, and re-records a semantic
+    digest — self-correcting, lazy (only for an entry someone opens), and against a
+    gitignored derived cache.
     """
     recorded = str(recorded_hash or "").strip()
     if not recorded:
         return False
-    # Semantic pass first: with the stat memo it costs one stat per settled
-    # closure file on the no-edit steady state (every rebuild records semantic
-    # digests), whereas the byte pass re-reads every file's full contents each
-    # check. The byte pass runs only when the semantic recompute misses — i.e.
-    # for legacy (byte-recorded) descriptors, which pay one AST parse per file
-    # per process (memoized thereafter) until their next genuine rebuild
-    # re-records them. Order cannot affect the outcome: a semantic record's
-    # per-file ``ast1:`` hashes can never equal an all-byte recompute's hex
-    # digests.
-    for hasher in (_semantic_source_hash, _sha256_file):
-        current = _recompute_closure_hash(relative_files, base=base, hasher=hasher)
-        if current is not None and current == recorded:
-            return True
-    return False
+    current = _recompute_closure_hash(relative_files, base=base, hasher=_semantic_source_hash)
+    return current is not None and current == recorded

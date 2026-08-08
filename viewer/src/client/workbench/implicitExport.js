@@ -4,7 +4,11 @@ import { exportImplicitCadModel } from "cadjs/implicit/exportModel";
 import { refreshCadCatalog } from "./cadManifestStore.js";
 
 export const IMPLICIT_EXPORT_FORMATS = Object.freeze(["stl", "glb", "3mf"]);
-export const DEFAULT_IMPLICIT_EXPORT_RESOLUTION = 96;
+// Exports are an EXPLICIT action, like exporting STL or 3MF -- nobody triggers one by
+// accident -- so they buy quality rather than speed, and must not look coarser than the
+// raymarched viewport they were taken from. 192 is the practical ceiling the mesher's own
+// cell budget allows without rescaling; the CLI still accepts --resolution up to 256.
+export const DEFAULT_IMPLICIT_EXPORT_RESOLUTION = 192;
 
 function normalizedFileRef(value) {
   return String(value || "").trim().replace(/\\/g, "/").replace(/^\/+/, "");

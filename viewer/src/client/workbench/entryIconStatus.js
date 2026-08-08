@@ -17,6 +17,10 @@ export function entryIconStatus(entry, {
   hasUrdf = true,
   activeStepArtifactGenerationFile = "",
   activeStepArtifactGenerationFiles = [],
+  // Entries the viewer is actively loading RIGHT NOW -- an asset read, a decode, a module
+  // load. Distinct from artifact generation: a built package still has to be fetched and
+  // decoded, and during that the file explorer should say so.
+  loadingFiles = [],
   stepArtifactGenerationAvailable = true
 } = {}) {
   const normalizedSourceFormat = String(sourceFormat || "").trim().toLowerCase();
@@ -63,9 +67,17 @@ export function entryIconStatus(entry, {
   // A model that simply lacks a built __cadgen__ artifact is NOT "loading" — nothing loads in a
   // static file list (generation happens lazily when the model is opened). Only an actively-running
   // generation shows a spinner; an un-built entry just shows its normal type icon.
-  const loading = artifactGenerating;
+  // Same file-ref matching the generation check uses -- reused rather than reimplemented,
+  // so "which entry is this?" cannot answer differently in two places.
+  const assetLoading = stepArtifactGenerationInProgress({
+    entry,
+    activeGenerationFiles: loadingFiles
+  });
+  const loading = artifactGenerating || assetLoading;
   const statusLabel = artifactGenerating
     ? "generating artifact"
+    : assetLoading
+      ? "loading"
     : artifactWarning
       ? (artifactStale ? "artifact stale" : artifactErrorCode === "missing_glb" ? "artifacts missing" : "artifact warning")
       : artifactBuildable

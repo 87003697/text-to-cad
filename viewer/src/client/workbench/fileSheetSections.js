@@ -1,6 +1,5 @@
 export const FILE_SHEET_SECTION_IDS = Object.freeze({
   FILE_STATUS: "status",
-  DXF: "dxf",
   STEP_TREE: "tree",
   STEP_REFERENCE: "reference",
   STEP_PARAMETERS: "parameters",
@@ -29,8 +28,13 @@ export function renderedFileSheetSectionIds(kind, options = {}) {
   const showJoints = options.showJoints !== false;
   const status = options.hasFileStatus ? [FILE_SHEET_SECTION_IDS.FILE_STATUS] : [];
   switch (normalizedKind) {
+    // DXF and implicit have no controls of their own: their geometry is baked into a render
+    // package by settings the producer owns, so there is nothing here for a user to steer.
+    // Status-only, the same shape as a plain mesh — and like a mesh, with no issue to
+    // report the sheet is hidden entirely. Implicits are NOT in this group: they raymarch
+    // their own GLSL, so their params, animations and graphics settings are live controls.
     case "dxf":
-      return [...status, FILE_SHEET_SECTION_IDS.DXF];
+      return [...status];
     case "step":
       // Display is the one theme-adjacent tab rendered in the sheet — display
       // mode plus the section-plane and exploded-view transforms, all per-file
@@ -73,8 +77,7 @@ export function defaultOpenFileSheetSectionIds(kind, options = {}) {
   switch (normalizedKind) {
     case "dxf":
       return [
-        ...(options.hasFileStatus ? [FILE_SHEET_SECTION_IDS.FILE_STATUS] : []),
-        FILE_SHEET_SECTION_IDS.DXF
+        ...(options.hasFileStatus ? [FILE_SHEET_SECTION_IDS.FILE_STATUS] : [])
       ];
     case "step":
       // In the tabbed layout the default-active bottom tab is Display, so the

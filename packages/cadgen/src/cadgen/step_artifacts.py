@@ -6,6 +6,7 @@ from pathlib import Path
 
 from cadgen.catalog import source_from_path
 from cadgen.cli_logging import CliLogger
+from cadgen.coordination import STEP_PACKAGE, artifact_build
 from cadgen._internal.generation import (
     EntrySpec,
     _entry_spec_from_source,
@@ -128,15 +129,23 @@ def _ensure_step_topology_artifact(
         debug["cacheHit"] = False
 
     try:
-        spec, scene = _scene_for_regeneration(spec, logger=logger, force=force)
-        _generate_part_outputs(
-            spec,
-            entries_by_step_path={spec.step_path: spec},
-            preloaded_scene=scene,
-            require_step_file=(spec.source != "generated"),
-            force=True,
-            logger=logger,
-        )
+        # This rebuild REWRITES the render package, so it must hold the package's write
+        # lock for the whole span -- generator run AND emit. It previously held none: the
+        # generator took the lock internally and released it on return, and the package
+        # write that followed was completely uncoordinated. A viewer polling during that
+        # window read "no build in flight", found the package stale, and started a SECOND
+        # full build into the same directory.
+        with artifact_build(STEP_PACKAGE, render_package_dir(spec.entry_path)) as run:
+            spec, scene = _scene_for_regeneration(spec, logger=logger, force=force)
+            _generate_part_outputs(
+                spec,
+                entries_by_step_path={spec.step_path: spec},
+                preloaded_scene=scene,
+                require_step_file=(spec.source != "generated"),
+                force=True,
+                logger=logger,
+                progress=run,
+            )
     except StepTopologyArtifactError:
         raise
     except Exception as exc:

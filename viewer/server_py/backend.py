@@ -12,15 +12,6 @@ import os
 import re
 from urllib.parse import urlsplit, parse_qs, unquote
 
-IMPLICIT_EXPORT_FORMATS = ("glb", "stl", "3mf")
-
-
-def normalize_implicit_export_format(value: str) -> str:
-    fmt = str(value or "").strip().lower().lstrip(".")
-    if fmt in IMPLICIT_EXPORT_FORMATS:
-        return fmt
-    raise ValueError(f"Unsupported implicit CAD export format: {value or '(missing)'}")
-
 from . import artifact as artifact_mod
 from . import cadgen_bridge
 from . import scanner
@@ -29,6 +20,11 @@ from .save_dialog import pick_save_destination
 from .urls import local_asset_url_for_path
 
 _STEP_EXPORT_FORMAT_SUFFIX = {"step": "step", "stl": "stl", "3mf": "3mf", "glb": "glb"}
+
+# The formats an `.implicit.js` model exports to. Rejected here only so a bad request fails
+# before a Node process is spawned; `cadgen.implicit_export` holds the authoritative list
+# beside the exporter it drives, and validates again.
+_IMPLICIT_EXPORT_FORMATS = ("stl", "glb", "3mf")
 
 
 def _to_posix(value: str) -> str:
@@ -259,40 +255,71 @@ class LocalAssetBackend:
         raise ValueError(f"STEP file not found: {normalized}")
 
     def resolve_dxf_source(self, file_ref, resolved_root):
+        # Both DXF inputs resolve here, exactly as both STEP inputs do above: a `.dxf.py`
+        # generator (run it) and an imported `.dxf` (copy it in and bake its preview). An
+        # imported drawing is artifact-managed because the package's preview.glb is the only
+        # 3D DXF renderer there is.
         normalized, candidates = self._source_candidates_for_file_ref(file_ref, resolved_root)
         if not normalized:
-            raise ValueError("Missing DXF generator file")
+            raise ValueError("Missing DXF file")
         for c in candidates:
-            if not scanner.is_dxf_generator_path(c):
-                raise ValueError("Only .dxf.py drawing generators can generate DXF drawing artifacts")
+            if not scanner.is_dxf_generator_path(c) and os.path.splitext(c)[1].lower() != ".dxf":
+                raise ValueError(
+                    "Only .dxf drawings and .dxf.py drawing generators can generate DXF drawing artifacts"
+                )
             return {"sourcePath": c}
-        raise ValueError(f"DXF generator not found: {normalized}")
+        raise ValueError(f"DXF source not found: {normalized}")
 
-    # One record per render-package format. Everything that used to be an
-    # `if owns_dxf_entry(entry): ... else: ...` at three call sites lives here, so
-    # adding a format is additive rather than another branch in each method.
+    def resolve_implicit_source(self, file_ref, resolved_root):
+        # One input, one resolution: the `.implicit.js` model itself. There is no generator
+        # indirection (the model IS the generator) and no exported sibling to prefer.
+        normalized, candidates = self._source_candidates_for_file_ref(file_ref, resolved_root)
+        if not normalized:
+            raise ValueError("Missing implicit CAD file")
+        for c in candidates:
+            if not scanner.path_is_implicit_cad_source(c):
+                raise ValueError(
+                    "Only .implicit.js models can generate implicit CAD render artifacts"
+                )
+            return {"sourcePath": c}
+        raise ValueError(f"Implicit CAD source not found: {normalized}")
+
+    # One record per render-package format, matched in order. Everything that used to be an
+    # `if owns_dxf_entry(entry): ... else: ...` at three call sites lives here, so adding a
+    # format is a row rather than another branch in each method.
+    #
+    # The table is TOTAL by construction: it RAISES when no predicate matches instead of
+    # falling through to STEP. A half-wired format that silently answered as STEP would
+    # validate an assembly.json that does not exist, report `ready` for the missing-source
+    # code, and never build -- the failure mode this shape exists to make impossible.
     def _artifact_format(self, entry):
-        if artifact_mod.owns_dxf_entry(entry):
-            return {
+        formats = (
+            (artifact_mod.owns_dxf_entry, {
                 "validate": artifact_mod.validate_dxf_freshness,
                 "resolve_source": lambda file_ref, root: self.resolve_dxf_source(file_ref, root)["sourcePath"],
                 "build": self.generate_dxf_artifact,
-            }
-        return {
-            "validate": artifact_mod.validate_step_freshness,
-            "resolve_source": self._resolve_step_artifact_source,
-            "build": self.generate_step_artifact,
-        }
+            }),
+            (artifact_mod.owns_implicit_entry, {
+                "validate": artifact_mod.validate_implicit_freshness,
+                "resolve_source": lambda file_ref, root: self.resolve_implicit_source(file_ref, root)["sourcePath"],
+                "build": self.generate_implicit_artifact,
+            }),
+            (artifact_mod.owns_step_entry, {
+                "validate": artifact_mod.validate_step_freshness,
+                "resolve_source": self._resolve_step_artifact_source,
+                "build": self.generate_step_artifact,
+            }),
+        )
+        for owns, record in formats:
+            if owns(entry):
+                return record
+        raise ValueError(
+            f"No render-artifact format owns this entry: {str((entry or {}).get('file') or '(unknown)')}"
+        )
 
     def _resolve_step_artifact_source(self, file_ref, resolved_root):
         resolved = self.resolve_step_source(file_ref, resolved_root)
         return resolved.get("sourcePath") or resolved["stepPath"]
-
-    def _resolve_artifact_source(self, entry, file_ref, resolved_root):
-        """The on-disk source file the entry's render package is keyed by: the
-        .dxf.py for a generated drawing, the .step.py for a generated model, the
-        .step for an imported one."""
-        return self._artifact_format(entry)["resolve_source"](file_ref, resolved_root)
 
     def artifact_status(self, file_ref, resolved_root, catalog):
         entry = self.catalog_entry_for_file_ref(catalog, file_ref)
@@ -305,22 +332,34 @@ class LocalAssetBackend:
         except ValueError as exc:
             return {"state": artifact_mod.ARTIFACT_STATE_ERROR, "error": str(exc)}
         package_dir = scanner.render_package_dir(artifact_source)
-        lock = artifact_mod.generation_lock_path(package_dir)
-        if artifact_mod.generation_lock_active(lock):
-            # The lock decides the state; the sidecar only says how far along it is, and
-            # is omitted when the build has not reported (yet, or at all).
+        snap = artifact_mod.generation_snapshot(package_dir)
+        if snap.writing:
+            # The LOCK decides the state; the record only says how far along it is, and is
+            # omitted when the build has not reported yet, or when the record on disk
+            # belongs to some other (dead) run. runId lets the client tell one run from the
+            # next, so its bar resets on a handoff instead of jumping backwards.
             status = {"state": artifact_mod.ARTIFACT_STATE_GENERATING, "ref": ref}
-            progress = artifact_mod.read_generation_progress(
-                artifact_mod.generation_progress_path(package_dir)
-            )
-            if progress is not None:
-                status["progress"] = progress
+            if snap.run_id:
+                status["runId"] = snap.run_id
+            if snap.progress is not None:
+                status["progress"] = snap.progress
             return status
         ok, code = fmt["validate"](resolved_root["rootPath"], artifact_source)
         if ok:
-            return {"state": artifact_mod.ARTIFACT_STATE_READY, "ref": ref}
-        if code in artifact_mod.BUILDABLE_STEP_ARTIFACT_CODES:
-            return {"state": artifact_mod.ARTIFACT_STATE_NEEDS_BUILD, "reason": code, "ref": ref}
+            # A busy GENERATOR (an export running this model's gen_step) does not hide a
+            # renderable model -- nothing is rewriting the package, so what is on disk is
+            # still valid. Annotated so the client can say why a build is unavailable.
+            status = {"state": artifact_mod.ARTIFACT_STATE_READY, "ref": ref}
+            if snap.busy:
+                status["busy"] = True
+            return status
+        if code in artifact_mod.BUILDABLE_ARTIFACT_CODES:
+            status = {"state": artifact_mod.ARTIFACT_STATE_NEEDS_BUILD, "reason": code, "ref": ref}
+            if snap.busy:
+                # Stale AND the generator is occupied: a build would just block on the
+                # peer. Tell the client to wait rather than POST.
+                status["blocked"] = True
+            return status
         return {"state": artifact_mod.ARTIFACT_STATE_ERROR, "reason": code, "error": code, "ref": ref}
 
     def _same_stem_python_generator_path(self, step_path):
@@ -367,6 +406,19 @@ class LocalAssetBackend:
         )
         return {**result, "sourcePath": source_path}
 
+    # POST /__cad/artifact build for an `.implicit.js` model — subprocess
+    # cadgen.implicit_artifact. Same shape as the DXF build: the cadgen module holds the
+    # generation lock and owns the Node mesher's lifetime, so nothing about "the geometry is
+    # produced in JS" leaks into this process.
+    def generate_implicit_artifact(self, file_ref, force, resolved_root, catalog):
+        resolved = self.resolve_implicit_source(file_ref, resolved_root)
+        source_path = resolved["sourcePath"]
+        result = self._run_artifact_build(
+            "cadgen.implicit_artifact", ["--source-path", source_path], resolved_root["rootPath"],
+            force=force, error_label="Implicit CAD render artifact build failed",
+        )
+        return {**result, "sourcePath": source_path}
+
     # Shared build tail for both artifact formats: run the cadgen module in a
     # subprocess/worker. Freshness is decided by the recorded source-closure CONTENT
     # hash, so there is nothing to touch afterwards — the descriptor mtime bump this
@@ -392,26 +444,37 @@ class LocalAssetBackend:
             artifact_source = fmt["resolve_source"](file_ref, resolved_root)
         except ValueError as exc:
             return {"ok": False, "state": artifact_mod.ARTIFACT_STATE_ERROR, "error": str(exc)}
-        lock = artifact_mod.generation_lock_path(scanner.render_package_dir(artifact_source))
-        if not force and artifact_mod.generation_lock_active(lock):
-            artifact_mod.await_generation_lock(lock)
-            ok, _code = fmt["validate"](resolved_root["rootPath"], artifact_source)
-            if ok:
-                return {"ok": True, "state": artifact_mod.ARTIFACT_STATE_READY, "ref": ref}
+        # A POST NEVER BLOCKS ON A PEER. This used to wait up to 180 SECONDS in
+        # await_generation_lock, discard the timeout's return value, and then build anyway
+        # -- so a user who opened a model during a long `cad gen` waited out the CLI run
+        # and then paid for a full duplicate rebuild, with the bar restarting from zero.
+        # Worse, that queued build then blocked inside the single process-global worker
+        # lock, freezing every OTHER model's build and export for the duration.
+        #
+        # Reporting `generating` immediately lets the client attach to the peer's run and
+        # watch its live progress instead, which is both faster and truthful.
+        snap = artifact_mod.generation_snapshot(scanner.render_package_dir(artifact_source))
+        if not force and snap.writing:
+            result = {"ok": True, "state": artifact_mod.ARTIFACT_STATE_GENERATING, "ref": ref}
+            if snap.run_id:
+                result["runId"] = snap.run_id
+            return result
         built = fmt["build"](file_ref, force, resolved_root, catalog)
         if built["ok"]:
             return {"ok": True, "state": artifact_mod.ARTIFACT_STATE_READY, "ref": ref}
         return {"ok": False, "state": artifact_mod.ARTIFACT_STATE_ERROR, "error": built["error"]}
 
-    # POST /__cad/step-export — native Save dialog (subprocess) + cadgen.step_export_target
-    # (subprocess). Headless fallback writes beside the source + a download URL.
-    # Generated `.dxf.py` drawings export through the same route with format "dxf".
-    def generate_step_export(self, file_ref, fmt, resolved_root, catalog):
+    # POST /__cad/export — native Save dialog (subprocess) + a cadgen export module
+    # (subprocess). Headless fallback writes beside the source + a download URL. One route
+    # for every exportable entry: the source file decides which producer runs.
+    def generate_export(self, file_ref, fmt, resolved_root, catalog):
         normalized = str(fmt or "").strip().lower()
         if scanner.is_dxf_generator_path(str(normalized_file_ref(file_ref))):
             if normalized != "dxf":
                 raise ValueError(f"Unsupported export format for a DXF drawing: {fmt}")
             return self.generate_dxf_export(file_ref, resolved_root)
+        if scanner.path_is_implicit_cad_source(str(normalized_file_ref(file_ref))):
+            return self.generate_implicit_export(file_ref, normalized, resolved_root)
         if normalized not in _STEP_EXPORT_FORMAT_SUFFIX:
             raise ValueError(f"Unsupported export format: {fmt}")
         resolved = self.resolve_step_source(file_ref, resolved_root)
@@ -459,6 +522,40 @@ class LocalAssetBackend:
             error_label="DXF export failed",
         )
 
+    # Export an `.implicit.js` model as STL/GLB/3MF — cadgen.implicit_export runs the
+    # shipped implicitjs export CLI in a Node child, under the model's GENERATOR lock.
+    #
+    # This used to happen in the browser: the client loaded the model module, meshed and
+    # serialized it in the tab, and POSTed the bytes here to be written to disk. That kept a
+    # second live geometry runtime in the viewer for the sake of one menu item. The mesher
+    # is the same JS either way; only the process differs.
+    def generate_implicit_export(self, file_ref, fmt, resolved_root):
+        normalized = str(fmt or "").strip().lower().lstrip(".")
+        if normalized not in _IMPLICIT_EXPORT_FORMATS:
+            raise ValueError(f"Unsupported implicit CAD export format: {fmt or '(missing)'}")
+        resolved = self.resolve_implicit_source(file_ref, resolved_root)
+        source_path = resolved["sourcePath"]
+        base_name = re.sub(r"\.implicit\.(?:mjs|js)$", "", os.path.basename(source_path), flags=re.IGNORECASE)
+
+        def _export(out_path):
+            args = [
+                "--repo-root", resolved_root["rootPath"],
+                "--source-path", source_path,
+                "--format", normalized,
+                "--out", out_path,
+            ]
+            return cadgen_bridge.run_cadgen("cadgen.implicit_export", args, resolved_root["rootPath"])
+
+        return self._export_with_destination(
+            resolved_root,
+            run_export=_export,
+            base_name=base_name,
+            suggested_name=f"{base_name}.{normalized}",
+            default_dir=os.path.dirname(source_path),
+            format_name=normalized,
+            error_label="Implicit CAD export failed",
+        )
+
     # Shared export orchestration for every format: native Save dialog, chosen-path
     # write, or the headless fallback beside the source with a /__cad/download URL.
     def _export_with_destination(
@@ -491,38 +588,3 @@ class LocalAssetBackend:
         return {"ok": True, "fallback": True, "path": output_path, "filename": os.path.basename(output_path),
                 "format": format_name, "catalogChanged": True, "outputFileRef": output_file_ref}
 
-    def file_path_from_ref(self, file_ref: str, resolved_root: dict) -> str:
-        normalized = normalized_file_ref(file_ref)
-        if os.path.isabs(normalized):
-            return os.path.abspath(normalized)
-        return os.path.abspath(os.path.join(resolved_root["rootPath"], normalized))
-
-    # Geometry runs client-side; this only writes the uploaded bytes beside the
-    # source and refreshes the catalog (mirrors the Node generateImplicitExport
-    # after the client-side move).
-    def generate_implicit_export(self, *, file_ref: str, fmt: str, data: bytes, resolved_root: dict, root_dir: str = "") -> dict:
-        export_format = normalize_implicit_export_format(fmt)
-        if not data:
-            raise ValueError("Missing implicit CAD export payload")
-        input_path = self.file_path_from_ref(file_ref, resolved_root)
-        out_name = re.sub(r"\.implicit\.(?:mjs|js)$", f".{export_format}", os.path.basename(input_path), flags=re.IGNORECASE)
-        out_name = re.sub(r"\.(?:mjs|js)$", f".{export_format}", out_name, flags=re.IGNORECASE)
-        output_path = os.path.join(os.path.dirname(input_path), out_name)
-        if not (output_path == resolved_root["rootPath"] or scanner.path_is_inside(output_path, resolved_root["rootPath"])):
-            raise ValueError("Requested file is outside the active CAD Viewer root")
-        os.makedirs(os.path.dirname(output_path), exist_ok=True)
-        with open(output_path, "wb") as handle:
-            handle.write(data)
-        catalog = self.read_catalog(root_dir=resolved_root["dir"])
-        output_file_ref = _to_posix(os.path.relpath(output_path, resolved_root["rootPath"]))
-        entry = next((e for e in catalog["entries"] if e.get("rootRelativeFile") == output_file_ref), None)
-        return {
-            "ok": True,
-            "output": output_path,
-            "format": export_format,
-            "bytes": len(data),
-            "outputFileRef": output_file_ref,
-            "filename": os.path.basename(output_path),
-            "catalog": catalog,
-            "entry": entry,
-        }

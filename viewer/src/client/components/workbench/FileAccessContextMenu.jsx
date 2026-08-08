@@ -7,7 +7,7 @@ import {
 } from "@/components/ui/context-menu";
 import { fileAccessAssetsForEntry } from "@/workbench/fileAccessAssets";
 import { IMPLICIT_EXPORT_FORMATS } from "@/workbench/implicitExport";
-import { STEP_EXPORT_FORMATS, isImportedStepEntry, stepExportItemLabel } from "@/workbench/stepExport";
+import { STEP_EXPORT_FORMATS, isImportedStepEntry, exportItemLabel } from "@/workbench/modelExport";
 
 // Entries whose geometry can be exported to STEP/3MF/STL/GLB via the server export endpoint.
 function isStepExportEntry(entry) {
@@ -172,7 +172,7 @@ function StepExportSection({
               onExportStepFile(entry, format);
             }}
           >
-            <span className="min-w-0 truncate">{stepExportItemLabel(format, { imported })}</span>
+            <span className="min-w-0 truncate">{exportItemLabel(format, { imported })}</span>
           </ContextMenuItem>
         );
       })}

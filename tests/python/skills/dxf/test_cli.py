@@ -41,9 +41,9 @@ class DxfCliTests(unittest.TestCase):
             ["drawings/part.py"], output="DXF/part.dxf", write_dxf=False, snapshot=False, force=False, verbose=False
         )
 
-    def test_passes_dxf_and_force_flags(self) -> None:
+    def test_passes_write_and_force_flags(self) -> None:
         with mock.patch.object(dxf, "generate_dxf_targets", return_value=0) as generate:
-            self.assertEqual(0, dxf.main(["drawings/part.py", "--dxf", "--force"]))
+            self.assertEqual(0, dxf.main(["drawings/part.py", "--write", "--force"]))
 
         generate.assert_called_once_with(
             ["drawings/part.py"], output=None, write_dxf=True, snapshot=False, force=True, verbose=False

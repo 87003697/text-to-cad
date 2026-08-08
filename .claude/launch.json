@@ -12,6 +12,12 @@
   "version": "0.0.1",
   "configurations": [
     {
+      "name": "cad-viewer-worktree",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["--prefix", "viewer", "run", "dev", "--", "--host", "127.0.0.1"],
+      "port": 3247
+    },
+    {
       "name": "cad-viewer",
       "runtimeExecutable": "npm",
       "runtimeArgs": ["--prefix", "viewer", "run", "dev", "--", "--host", "127.0.0.1"],

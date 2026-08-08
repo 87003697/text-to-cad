@@ -143,8 +143,8 @@ function DesktopFloatingToolBar({
   const urdfMode = renderFormat === RENDER_FORMAT.URDF;
   const robotMode = isRobotRenderFormat(renderFormat);
   const meshOnlyMode = isMeshRenderFormat(renderFormat);
-  const renderReady = implicitMode ? !!selectedImplicitModel : dxfMode ? !!selectedDxfData : !!selectedMeshData;
-  const captureDisabled = viewerLoading || !renderReady;
+  // One question for every format now that DXF and implicit render a baked package GLB.
+  const captureDisabled = viewerLoading || !selectedMeshData;
   const selectDisabled = viewerLoading ||
     !selectedMeshData ||
     referenceSelectionPending ||
@@ -260,7 +260,7 @@ function DesktopFloatingToolBar({
                 <ToolbarButton
                   label="Orbit"
                   onClick={handleEnterPreviewMode}
-                  disabled={viewerLoading || !renderReady}
+                  disabled={captureDisabled}
                 >
                   <Orbit className="size-3" strokeWidth={2} aria-hidden="true" />
                 </ToolbarButton>

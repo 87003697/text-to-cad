@@ -18,10 +18,15 @@ The default build product is the **drawing package** — a render artifact the C
 ```
 <model-folder>/__cadgen__/models/<name>.dxf.py/
   drawing.json    # provenance + freshness descriptor
-  drawing.dxf     # the built DXF
+  drawing.dxf     # the built DXF (the exchange artifact)
+  preview.glb     # the baked 3D flat pattern (what the viewer renders)
 ```
 
-The sibling `<name>.dxf` file is written **on demand only** (`--dxf`, `-o`, or a `SOURCE=OUTPUT` pair) for deliverables handed to cutting services or other tools. An exported `.dxf` is a point-in-time deliverable, totally detached from its generator: rebuilds never delete, rewrite, or staleness-track it (same as an exported STEP file) — re-export when you want it refreshed. Do not commit generated `.dxf` outputs; the package cache is gitignored and rebuilt on demand.
+`preview.glb` is baked from `drawing.dxf` by a Node child of the build, inside the same
+generation lock, so a build produces both payloads or neither. It needs `node` on PATH (or
+`CADGEN_NODE`).
+
+The sibling `<name>.dxf` file is written **on demand only** (`--write`, `-o`, or a `SOURCE=OUTPUT` pair) for deliverables handed to cutting services or other tools. An exported `.dxf` is a point-in-time deliverable, totally detached from its generator: rebuilds never delete, rewrite, or staleness-track it (same as an exported STEP file) — re-export when you want it refreshed. Do not commit generated `.dxf` outputs; the package cache is gitignored and rebuilt on demand.
 
 ## The three DXF workflows
 
@@ -85,7 +90,7 @@ def gen_dxf():
 
 Every run builds/refreshes the drawing package. Flags:
 
-- `--dxf` — also write the sibling `<name>.dxf` export.
+- `--write` — also write the sibling `<name>.dxf` export.
 - `-o`/`--output PATH` — export to a custom path; only with one plain generated Python target.
 - `SOURCE.dxf.py=OUTPUT.dxf` positional pairs — per-target custom export paths.
 - `--snapshot` — also write an SVG snapshot (`drawing.svg`) into each drawing package for visual review.
@@ -105,7 +110,7 @@ Do not put output paths in the `gen_dxf()` return value.
 
 ```bash
 python scripts/dxf path/to/source.dxf.py
-python scripts/dxf path/to/source.dxf.py --dxf
+python scripts/dxf path/to/source.dxf.py --write
 python scripts/dxf path/to/source.dxf.py -o path/to/output.dxf
 python scripts/dxf path/to/a.dxf.py=out/a.dxf path/to/b.dxf.py=out/b.dxf
 ```
@@ -114,7 +119,7 @@ python scripts/dxf path/to/a.dxf.py=out/a.dxf path/to/b.dxf.py=out/b.dxf
 
 ## Viewer integration
 
-`<name>.dxf.py` files are CAD Viewer catalog entries, listed whether or not their drawing package has been built. Opening one triggers the unified render-artifact flow: a missing or stale package (any source-closure file — the generator, its path-loaded `.step.py` sources, and helper modules — newer than the descriptor) rebuilds automatically. The viewer's export dropdown offers "Download DXF" on generated drawings (it refreshes the package first, so the export is never stale). Raw imported `.dxf` files render directly and are never rebuilt.
+`<name>.dxf.py` files are CAD Viewer catalog entries, listed whether or not their drawing package has been built. Opening one triggers the unified render-artifact flow: a missing or stale package (any source-closure file — the generator, its path-loaded `.step.py` sources, and helper modules — newer than the descriptor) rebuilds automatically. The viewer's export dropdown offers "Download DXF" on generated drawings (it refreshes the package first, so the export is never stale). An imported `.dxf` is artifact-managed too — the viewer builds its drawing package on demand, exactly as it does for an imported `.step` — but it is never a `dxf` CLI target: the CLI builds `.dxf.py` generators only.
 
 ## Validation
 

@@ -1,11 +1,9 @@
 """Runnable Python CAD Viewer backend (stdlib http.server, zero deps).
 
-Serves the /__cad/* contract the unchanged client consumes. Implemented routes
-(parity-verified core): GET /__cad/server, GET /__cad/catalog, GET /__cad/asset,
-GET /__cad/download, POST /__cad/implicit-export
-(client-side-export write contract). Static dist/SPA, legacy Referer assets,
-/__cad/artifact, and /__cad/step-export are TODO (cadgen-integration + serving
-phases).
+Serves the /__cad/* contract the client consumes: GET /__cad/server,
+GET /__cad/catalog, GET /__cad/asset, GET /__cad/download, GET /__cad/artifact,
+POST /__cad/artifact (build) and POST /__cad/export, plus the static dist/SPA and
+legacy Referer assets.
 
 Run: python -m server_py.server [--port N] [--host H]
 
@@ -119,10 +117,6 @@ class Handler(BaseHTTPRequestHandler):
         q = parse_qs(parts.query)
         return parts.path, {k: (v[0] if v else "") for k, v in q.items()}
 
-    def _read_body(self) -> bytes:
-        length = int(self.headers.get("content-length") or 0)
-        return self.rfile.read(length) if length > 0 else b""
-
     def log_message(self, *args):  # quieter
         pass
 
@@ -158,10 +152,8 @@ class Handler(BaseHTTPRequestHandler):
         try:
             if path == "/__cad/artifact":
                 self._artifact_build(q)
-            elif path == "/__cad/step-export":
-                self._step_export(q)
-            elif path == "/__cad/implicit-export":
-                self._implicit_export(q)
+            elif path == "/__cad/export":
+                self._export(q)
             else:
                 self.send_response(405)
                 self.send_header("allow", "POST")
@@ -314,16 +306,16 @@ class Handler(BaseHTTPRequestHandler):
         status = 500 if result.get("ok") is False else 200
         self._send_json(status, {**result, "catalog": next_catalog})
 
-    def _step_export(self, q):
+    def _export(self, q):
         root_dir = q.get("dir", "")
         catalog = _Ctx.backend.read_catalog(root_dir=root_dir, file_ref=q.get("file", ""))
         resolved = _Ctx.backend.resolve_root(root_dir)
-        result = _Ctx.backend.generate_step_export(q.get("file", ""), q.get("format", "step") or "step", resolved, catalog)
+        result = _Ctx.backend.generate_export(q.get("file", ""), q.get("format", "step") or "step", resolved, catalog)
         if result.get("cancelled"):
             self._send_json(200, {"ok": False, "cancelled": True})
             return
         if not result.get("ok"):
-            self._send_json(400, {"ok": False, "error": result.get("error", "STEP export failed")})
+            self._send_json(400, {"ok": False, "error": result.get("error", "Export failed")})
             return
         payload = {"ok": True, "path": result["path"], "filename": result["filename"], "format": result["format"]}
         if result.get("catalogChanged"):
@@ -335,30 +327,6 @@ class Handler(BaseHTTPRequestHandler):
                 f"&file={enc.encode_uri_component(result['outputFileRef'])}&asset=output"
             )
         self._send_json(200, payload)
-
-    def _implicit_export(self, q):
-        data = self._read_body()
-        if not data:
-            self._send_json(400, {"ok": False, "error": "Missing implicit CAD export payload"})
-            return
-        root_dir = q.get("dir", "")
-        resolved = _Ctx.backend.resolve_root(root_dir)
-        result = _Ctx.backend.generate_implicit_export(
-            file_ref=q.get("file", ""), fmt=q.get("format", "glb") or "glb",
-            data=data, resolved_root=resolved, root_dir=root_dir,
-        )
-        download_url = (
-            f"/__cad/download?dir={enc.encode_uri_component(root_dir)}"
-            f"&file={enc.encode_uri_component(result['outputFileRef'])}&asset=output"
-        )
-        self._send_json(200, {
-            "ok": True,
-            "result": result,
-            "entry": result.get("entry"),
-            "catalog": result.get("catalog"),
-            "downloadUrl": download_url,
-            "filename": result.get("filename"),
-        })
 
 
 def main(argv=None):

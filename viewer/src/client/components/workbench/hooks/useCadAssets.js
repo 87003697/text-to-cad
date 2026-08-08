@@ -353,21 +353,11 @@ export function useCadAssets({
     return bundle ? buildDisplayEdgeState(entry, bundle) : null;
   }, [buildDisplayEdgeState, entryHasDisplayEdges]);
 
-  const getCachedDxfState = useCallback((entry) => {
-    if (!entryHasDxf(entry)) {
-      return null;
-    }
-    const dxfData = peekRenderDxf(entryAssetUrl(entry, "dxf"));
-    if (!dxfData) {
       return null;
     }
     return {
       file: entry.file,
       kind: entry.kind,
-      dxfHash: entryAssetHash(entry, "dxf"),
-      dxfData
-    };
-  }, [entryHasDxf]);
 
   const getCachedImplicitState = useCallback((entry) => {
     if (String(entry?.kind || "").trim().toLowerCase() !== RENDER_FORMAT.IMPLICIT) {
@@ -771,56 +761,20 @@ export function useCadAssets({
   const loadDxfForEntry = useCallback(async (entry) => {
     cancelDxfLoad();
     const requestId = dxfRequestIdRef.current;
-
     if (!entryHasDxf(entry)) {
       setDxfState(null);
       setDxfStatus(ASSET_STATUS.PENDING);
       setDxfError("");
       return;
     }
-
     const cachedDxfState = getCachedDxfState(entry);
     if (cachedDxfState) {
       setDxfState(cachedDxfState);
       setDxfStatus(ASSET_STATUS.READY);
-      setDxfError("");
       return;
     }
 
     const controller = new AbortController();
-    dxfAbortControllerRef.current = controller;
-    setDxfStatus(ASSET_STATUS.LOADING);
-    setDxfError("");
-    setDxfLoadStage("loading DXF");
-
-    try {
-      const dxfData = await loadRenderDxf(entryAssetUrl(entry, "dxf"), { signal: controller.signal });
-      if (requestId !== dxfRequestIdRef.current) {
-        return;
-      }
-      setDxfLoadStage("building preview");
-      setDxfState({
-        file: entry.file,
-        kind: entry.kind,
-        dxfHash: entryAssetHash(entry, "dxf"),
-        dxfData
-      });
-      setDxfStatus(ASSET_STATUS.READY);
-    } catch (err) {
-      if (requestId !== dxfRequestIdRef.current || isAbortError(err) || controller.signal.aborted) {
-        return;
-      }
-      setDxfStatus(ASSET_STATUS.ERROR);
-      setDxfError(err instanceof Error ? err.message : String(err));
-    } finally {
-      if (dxfAbortControllerRef.current === controller) {
-        dxfAbortControllerRef.current = null;
-      }
-      if (requestId === dxfRequestIdRef.current) {
-        setDxfLoadStage("");
-      }
-    }
-  }, [cancelDxfLoad, entryHasDxf, getCachedDxfState]);
 
   const loadImplicitForEntry = useCallback(async (entry) => {
     cancelImplicitLoad();

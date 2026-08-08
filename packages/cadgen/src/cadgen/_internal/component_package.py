@@ -25,10 +25,12 @@ from cadgen._internal.generation import (
     DEFAULT_MESH_TOLERANCE,
 )
 from cadgen._internal.glb import export_assembly_glb_from_scene
-from cadgen._internal.progress import (
+from cadgen._internal.package_freshness import ASSEMBLY_PACKAGE_SCHEMA_VERSION
+from cadgen.coordination import (
     PHASE_COMPONENTS,
     PHASE_FINALIZE,
     PHASE_PACKAGE,
+    require_write_lock,
     resolve as resolve_progress,
 )
 from cadgen.step_export import build_build123d_step_scene
@@ -42,7 +44,10 @@ PACKAGE_KIND = "assembly-package"
 # (which versions each component GLB's embedded topology). Bumped to 2 for the unified
 # part+assembly rearchitecture: one descriptor+components representation, durable
 # ``entryKind``, clean content-addressed components, and per-folder ``__cadgen__`` refs.
-PACKAGE_SCHEMA_VERSION = 2
+# The number itself lives in the stdlib-only _internal.package_freshness so BOTH freshness
+# authorities gate on one constant -- the viewer's validator cannot import this module
+# (it pulls in the CAD runtime), and a second hand-copied number is how the two drift.
+PACKAGE_SCHEMA_VERSION = ASSEMBLY_PACKAGE_SCHEMA_VERSION
 # Self-contained content-addressed packages: each model's components live INSIDE its own package
 # at <folder>/__cadgen__/models/<step-filename>/components/<geomHash>.glb, referenced by the
 # descriptor via the flat relative ref components/<geomHash>.glb. Within-model dedup (repeated
@@ -478,6 +483,12 @@ def build_package_from_compound(
     # components/<hash>.glb. Within-model dedup (repeated parts share one component via a
     # shared cid) is preserved; cross-model dedup is intentionally given up for
     # self-containment (the hit rate is low and a shared store complicates blob upload/GC).
+    # THE mutation boundary for a render package. Every producer that reaches here must be
+    # holding this package's write lock -- previously the lock was taken at call sites, so
+    # whether a write was coordinated depended on which of four producers you arrived
+    # through, and `ensure_step_topology_artifact` arrived through one that took none.
+    require_write_lock(package_dir)
+
     comp_dir = package_dir / COMPONENT_DIRNAME
     comp_dir.mkdir(parents=True, exist_ok=True)
 
@@ -739,7 +750,12 @@ def build_package_from_compound(
     stats.setdefault("shapeCount", len(occurrences))
     descriptor["stats"] = stats
     package_dir.mkdir(parents=True, exist_ok=True)
-    (package_dir / DESCRIPTOR_NAME).write_text(json.dumps(descriptor))
+    # Atomic: a reader polling this package must never observe a truncated descriptor.
+    # write_text() truncates in place, so a concurrent status read could see half a file
+    # and report the package unreadable.
+    _descriptor_tmp = package_dir / f".{DESCRIPTOR_NAME}.tmp{os.getpid()}"
+    _descriptor_tmp.write_text(json.dumps(descriptor))
+    os.replace(_descriptor_tmp, package_dir / DESCRIPTOR_NAME)
     # The lazy whole-assembly topology sidecar was extracted against the
     # previous descriptor's provenance; a rewritten package makes it stale by
     # definition, so drop it and let the next selector query rebuild it.

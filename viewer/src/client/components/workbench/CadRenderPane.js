@@ -1,6 +1,5 @@
 import { useEffect, useMemo } from "react";
 import CadViewer from "../CadViewer";
-import DxfViewer from "../DxfViewer";
 import ImplicitCadViewer from "../ImplicitCadViewer";
 import { CircleAlert, X } from "lucide-react";
 import { Alert, AlertDescription, AlertTitle } from "../ui/alert";
@@ -12,7 +11,6 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger
 } from "../ui/dropdown-menu";
-import { ToggleGroup, ToggleGroupItem } from "../ui/toggle-group";
 import AssemblyContextMenuItems from "./AssemblyContextMenuItems";
 import TutorialTip from "./TutorialTip";
 import { cn } from "@/ui/utils";
@@ -82,52 +80,6 @@ function viewerContextMenuAnchorStyle(menu, viewportFrameInsets) {
     width: "1px",
     height: "1px"
   };
-}
-
-function DxfViewModeControl({
-  value,
-  threeDimensionalAvailable = false,
-  onChange
-}) {
-  const normalizedValue = value === "3d" && threeDimensionalAvailable ? "3d" : "2d";
-
-  return (
-    <div className="cad-glass-surface rounded-md border border-sidebar-border p-0.5 shadow-sm">
-      <ToggleGroup
-        type="single"
-        variant="outline"
-        size="sm"
-        value={normalizedValue}
-        onValueChange={(nextValue) => {
-          if (!nextValue) {
-            return;
-          }
-          if (nextValue === "3d" && !threeDimensionalAvailable) {
-            return;
-          }
-          onChange?.(nextValue);
-        }}
-        className="grid h-7 w-[5.5rem] grid-cols-2"
-        aria-label="DXF view mode"
-      >
-        <ToggleGroupItem
-          value="2d"
-          className="!h-7 px-2 text-[11px] text-muted-foreground hover:text-foreground data-[state=on]:!bg-accent data-[state=on]:!text-foreground data-[state=on]:font-semibold"
-          title="Show DXF flat pattern"
-        >
-          2D
-        </ToggleGroupItem>
-        <ToggleGroupItem
-          value="3d"
-          disabled={!threeDimensionalAvailable}
-          className="!h-7 px-2 text-[11px] text-muted-foreground hover:text-foreground data-[state=on]:!bg-accent data-[state=on]:!text-foreground data-[state=on]:font-semibold"
-          title={threeDimensionalAvailable ? "Show DXF bend preview" : "3D bend preview unavailable"}
-        >
-          3D
-        </ToggleGroupItem>
-      </ToggleGroup>
-    </div>
-  );
 }
 
 function ViewerContextMenu({
@@ -294,15 +246,10 @@ export default function CadRenderPane({
   renderFormat,
   renderPartsIndividually = false,
   selectedMeshData,
-  selectedDxfData,
-  selectedDxfMeshData,
-  dxfViewMode = "2d",
-  onDxfViewModeChange,
   selectedImplicitModel,
   implicitDynamicRenderActive = false,
   implicitGraphicsSettings = null,
   selectedKey,
-  selectedDxfKey,
   missingFileRef = "",
   viewerServerInfo = null,
   viewerPerspective,
@@ -397,18 +344,14 @@ export default function CadRenderPane({
   const urdfMode = isRobotRenderFormat(renderFormat);
   const implicitMode = renderFormat === RENDER_FORMAT.IMPLICIT;
   const meshOnlyMode = isMeshRenderFormat(renderFormat);
-  const dxf3dAvailable = !!selectedDxfMeshData;
-  const activeDxfViewMode = dxfViewMode === "3d" && dxf3dAvailable ? "3d" : "2d";
-  const dxfMeshPreviewReady = dxfMode && activeDxfViewMode === "3d" && dxf3dAvailable;
-  const activeMeshData = dxfMeshPreviewReady ? selectedDxfMeshData : selectedMeshData;
-  const stepDisplaySettingsActive = renderFormat === RENDER_FORMAT.STEP && !!displaySettings && !dxfMode && !meshOnlyMode;
+  const pathPreviewMode = meshOnlyMode || gcodeMode;
+  const stepDisplaySettingsActive = renderFormat === RENDER_FORMAT.STEP && !!displaySettings && !dxfMode && !pathPreviewMode;
   // Projection is a theme trait now; STEP views take it from the active theme
   // (Light/Dark are orthographic, stage themes perspective), everything else
   // keeps its historical perspective framing.
   const cadProjection = stepDisplaySettingsActive
     ? normalizeCameraProjection(themeSettings?.projection)
     : CAMERA_PROJECTION.PERSPECTIVE;
-  const activeModelKey = dxfMeshPreviewReady ? (selectedDxfKey || selectedKey) : selectedKey;
   const stepBoundsAnimationActive = Boolean(resolvedStepParameters?.animationState?.playing);
   const cadViewerBoundsAnimationActive = Boolean(boundsAnimationActive || stepBoundsAnimationActive);
   const missingFileLabel = String(missingFileRef || "").trim();
@@ -427,9 +370,9 @@ export default function CadRenderPane({
     && missingFileLabel.startsWith("/")
     && !missingFileLabel.startsWith(servedRoot.endsWith("/") ? servedRoot : `${servedRoot}/`)
   );
-  const topologySelectionPending = Boolean(referenceSelectionPending && !dxfMode && !urdfMode && !meshOnlyMode);
-  const topologySelectionUnavailable = Boolean(referenceSelectionUnavailable && !dxfMode && !urdfMode && !meshOnlyMode);
-  const topologySelectionDeferred = Boolean(referenceSelectionDeferred && activeMeshData && !dxfMode && !urdfMode && !meshOnlyMode);
+  const topologySelectionPending = Boolean(referenceSelectionPending && !dxfMode && !urdfMode && !pathPreviewMode);
+  const topologySelectionUnavailable = Boolean(referenceSelectionUnavailable && !dxfMode && !urdfMode && !pathPreviewMode);
+  const topologySelectionDeferred = Boolean(referenceSelectionDeferred && selectedMeshData && !dxfMode && !urdfMode && !pathPreviewMode);
   const urdfPosePickerActive = Boolean(urdfPosePicker?.active);
   const urdfPosePickerPrompt = "Select target";
   const posePickerExitStyle = {
@@ -441,13 +384,6 @@ export default function CadRenderPane({
     : !dxfMode && !meshOnlyMode && selectionCount > 0
       ? "selection"
       : "";
-  const dxfViewPlaneHeader = dxfMode ? (
-    <DxfViewModeControl
-      value={activeDxfViewMode}
-      threeDimensionalAvailable={dxf3dAvailable}
-      onChange={onDxfViewModeChange}
-    />
-  ) : null;
   const bottomOverlayStyle = {
     bottom: "1rem"
   };
@@ -469,12 +405,14 @@ export default function CadRenderPane({
   };
   const ctaLabel = ctaMode === "screenshot" ? "Copy Screenshot" : copyButtonLabel;
   const ctaTitle = ctaMode === "screenshot" ? "Copy screenshot to clipboard" : copyButtonLabel;
-  const ctaDisabled = ctaMode === "screenshot" ? viewerLoading || !activeMeshData : false;
-  const viewportHasRenderableContent = implicitMode
-    ? !!selectedImplicitModel
-    : dxfMode && !dxfMeshPreviewReady
-    ? !!selectedDxfData
-    : !!activeMeshData;
+  const ctaDisabled = ctaMode === "screenshot" ? viewerLoading || !selectedMeshData : false;
+  // Is there anything on screen? For every mesh-backed format that means mesh data -- DXF
+  // included, since it lost its 2D fallback in phase 3a and now renders its baked preview,
+  // so a failed build must read as "nothing renderable" and let the viewer alert block.
+  // An IMPLICIT renders by raymarching its own GLSL and never has mesh data, so asking the
+  // same question of it would treat every healthy implicit as an empty viewport; its content
+  // is the loaded model instead.
+  const viewportHasRenderableContent = implicitMode ? !!selectedImplicitModel : !!selectedMeshData;
   const blockingViewerAlert = viewerAlert && viewerAlert.blocking !== false && (
     viewerAlert.blocking ||
     viewerAlert.severity !== "warning" ||
@@ -515,10 +453,10 @@ export default function CadRenderPane({
     <div className="absolute inset-0">
       {implicitMode ? (
         <ImplicitCadViewer
-          key={`implicit:${activeModelKey}`}
+          key={`implicit:${selectedKey}`}
           ref={viewerRef}
           model={selectedImplicitModel}
-          modelKey={activeModelKey}
+          modelKey={selectedKey}
           isLoading={viewerLoading}
           previewMode={previewMode}
           viewportFrameInsets={viewportFrameInsets}
@@ -531,22 +469,11 @@ export default function CadRenderPane({
           onPerspectiveChange={handlePerspectiveChange}
           onViewerAlertChange={handleViewerAlertChange}
         />
-      ) : dxfMode && !dxfMeshPreviewReady ? (
-        <DxfViewer
-          ref={viewerRef}
-          dxfData={selectedDxfData}
-          modelKey={selectedDxfKey}
-          themeSettings={themeSettings}
-          viewPlaneOffsetRight={viewPlaneOffsetRight}
-          viewPlaneOffsetBottom="1rem"
-          viewPlaneHeader={dxfViewPlaneHeader}
-          onViewerAlertChange={handleViewerAlertChange}
-        />
       ) : (
         <CadViewer
           ref={viewerRef}
-          meshData={activeMeshData}
-          modelKey={activeModelKey}
+          meshData={selectedMeshData}
+          modelKey={selectedKey}
           renderFormat={renderFormat}
           perspective={viewerPerspective}
           projection={cadProjection}
@@ -562,7 +489,6 @@ export default function CadRenderPane({
           scale={urdfMode ? VIEWER_SCENE_SCALE.URDF : VIEWER_SCENE_SCALE.CAD}
           viewPlaneOffsetRight={viewPlaneOffsetRight}
           viewPlaneOffsetBottom="1rem"
-          viewPlaneHeader={dxfViewPlaneHeader}
           compactViewPlane={false}
           viewportFrameInsets={viewportFrameInsets}
           isLoading={viewerLoading}
