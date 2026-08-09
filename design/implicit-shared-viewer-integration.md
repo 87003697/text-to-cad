@@ -19,6 +19,64 @@ Decision context this plan builds on — do not relitigate any of it:
 - The workspace data flow (module load, params, animation, 36 ms rebuild throttle) already
   lives in `CadWorkspace`/`useCadAssets` and is format-agnostic state. Unchanged here.
 
+## 0.0 Execution status — steps I1–I4, I6, I7 DONE
+
+| Step | Title | Status |
+|---|---|---|
+| I1 | `useImplicitRaymarch` hook | **DONE** |
+| I2 | CadViewer implicit arm | **DONE** |
+| I3 | CadRenderPane: delete the fork | **DONE** |
+| I4 | CadWorkspace rewiring | **DONE** — zoom pill only; see below |
+| I5 | Dead client export path | **NOT DONE** — separable cleanup, still outstanding |
+| I6 | Delete ImplicitCadViewer | **DONE** (1,140 lines) |
+| I7 | Tests | **DONE** — `viewer/src/client/components/viewer/implicitFit.test.js` |
+
+Corrections to the plan, found while executing:
+
+- **I4's camera-persistence work was unnecessary.** No `fileSessionState` change was
+  needed and the shared validator already rejects foreign snapshots. Verified
+  behaviourally instead: after an orbit, a reload returns an implicit to its default fit —
+  **byte-identical to what a mesh model does in the same flow**, which is the parity the
+  step was really asking for.
+- **`resetZoomAndPan` / `zoomToFit` needed no implicit branch at all.** Both already route
+  through `runtimeFramingBounds(runtime, …)`, which falls back to `runtime.modelBounds` —
+  so setting that via `applyRuntimeModelBounds` in the implicit arm was sufficient. Only
+  `zoomToFitSelection` needed a fallback (an implicit has no sub-part selection).
+- **The mesh-build effect had to stop clearing the runtime's model identity.**
+  `clearDisplayedModel()` runs for an implicit (no mesh data) and reset `activeModelKey`,
+  which made `emitPerspectiveChange` treat every camera move as belonging to a stale model
+  and silently stop persisting the view. It now takes `preserveModelIdentity`.
+- **Stage suppression had to be gated at the funnels, not in an effect.** An effect racing
+  the theme/environment effects is order-dependent; `updateActiveGridHelper` and a new
+  `applyActiveSceneBackground` wrapper are the single funnels every grid/background update
+  goes through, including the runtime's first one.
+- **Resolution scaling needed a shared-runtime hook.** `applyRenderQuality` gained an
+  opt-in `resolveExtraPixelRatioCap` that only ever caps DOWN, so the mesh path (which
+  installs no resolver) is unaffected.
+
+Verified end-to-end in the dev viewer under Metal-backed playwright (`page.screenshot`,
+never canvas `drawImage` — see the METHOD WARNING in the restore doc):
+
+- **46/47 implicits render.** The one exception, `menger-sponge`, is the pre-existing empty
+  -field model defect recorded in `design/implicit-viewer-raymarch-restore.md` §R5, not a
+  regression.
+- Shared controls all drive the raymarch: zoom in (0.228→0.285 coverage), zoom out
+  (→0.229), wheel (→0.963), **Reset view (→0.211, repeatable)**, orbit, view cube.
+- The **zoom percent pill is live** (reads 800% after a wheel zoom) — a capability
+  implicits did not have before.
+- Live parameters still re-render: gear thickness 6.5→12 mm moved 16.8% of sampled pixels;
+  carrier orbit 0→120° moved 3.0%.
+- Theme switch retints the shader (light `223,227,235` → dark `34,42,54`).
+- STL, 3MF, GLB, STEP and DXF all still render, with their grid and stage intact —
+  confirming the suppression is implicit-only.
+- Gates: `viewer` 290 tests, `cadjs` 469, `implicitjs` 364 — all pass; `viewer run build`
+  clean; `scripts/bundle/bundle.sh --check` and `scripts/dev/setup-symlinks.sh --check`
+  clean.
+
+One cosmetic artefact is visible in screenshots and is **pre-existing, not from this
+change**: a faint vertical line at the exact viewport centre, present identically on the
+untouched STL path.
+
 ## 0. Scope fence
 
 **In scope (all client-side):**

@@ -14,6 +14,7 @@ import {
   implicitGraphicsRenderSettings,
   normalizeImplicitGraphicsSettings
 } from "@/workbench/implicitGraphicsSettings";
+import { implicitBoundsKey, implicitModelBounds } from "../implicitFit.js";
 
 // Hosts the implicit raymarch pass inside the SHARED viewer runtime instead of a
 // second renderer. The pass is a fullscreen quad whose vertex shader already
@@ -26,30 +27,6 @@ import {
 // The quad paints its own background and stage-floor shadow (deliberately
 // matched to the mesh stage), so CadViewer suppresses the three.js stage while
 // this pass is active rather than trying to blend the two.
-
-function boundsFromModel(model) {
-  const min = model?.bounds?.min;
-  const max = model?.bounds?.max;
-  if (!Array.isArray(min) || !Array.isArray(max) || min.length < 3 || max.length < 3) {
-    return null;
-  }
-  return { min: [...min], max: [...max] };
-}
-
-// Quantised so a re-fit only happens when the envelope actually moves. Animation
-// advances uniforms every frame without changing the envelope, and re-fitting per
-// frame would fight the user's camera.
-function boundsKey(model) {
-  const bounds = boundsFromModel(model);
-  if (!bounds) {
-    return "";
-  }
-  const radius = Math.max(Number(model?.radius) || 1, 1e-6);
-  const quantum = Math.max(radius * 0.02, 1e-6);
-  return [...bounds.min, ...bounds.max]
-    .map((value) => Math.round((Number(value) || 0) / quantum))
-    .join(",");
-}
 
 export function useImplicitRaymarch({
   runtimeRef,
@@ -234,14 +211,14 @@ export function useImplicitRaymarch({
     if (!enabled || !runtime || !model) {
       return;
     }
-    const declared = boundsFromModel(model);
+    const declared = implicitModelBounds(model);
     if (declared) {
       modelBoundsRef.current?.(declared, { refined: false });
     }
     if (dynamicRenderActiveRef.current) {
       return;
     }
-    const key = boundsKey(model);
+    const key = implicitBoundsKey(model);
     if (key && runtime.implicitRefinedBoundsKey === key) {
       return;
     }
