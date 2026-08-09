@@ -7,7 +7,26 @@ from meshscope.voxblame.codec import (
     read_surface_tree,
     write_surface_tree,
 )
-from meshscope.voxblame.errors import OctreeError, SurfaceTreeError, VoxBlameError
+from meshscope.voxblame.contracts import (
+    BOUNDARY_EPSILON,
+    COORDINATE_CONTRACT,
+    FORBIDDEN_FIELDS,
+    MAX_DEPTH,
+    REPORT_REQUIRED_FIELDS,
+    SESSION_REQUIRED_FIELDS,
+    SUMMARY_REQUIRED_FIELDS,
+    validate_contract_bundle,
+    validate_report_contract,
+    validate_session_contract,
+    validate_summary_contract,
+)
+from meshscope.voxblame.errors import (
+    UNSUPPORTED_OR_INVALID_STATE,
+    OctreeError,
+    SurfaceTreeError,
+    UnsupportedOrInvalidVoxBlameState,
+    VoxBlameError,
+)
 from meshscope.voxblame.frame import CanonicalFrame
 from meshscope.voxblame.grading import (
     ChangeCell,
@@ -30,6 +49,15 @@ __all__ = [
     "ErrorCell",
     "NextAction",
     "OctreeError",
+    "UnsupportedOrInvalidVoxBlameState",
+    "UNSUPPORTED_OR_INVALID_STATE",
+    "BOUNDARY_EPSILON",
+    "COORDINATE_CONTRACT",
+    "FORBIDDEN_FIELDS",
+    "MAX_DEPTH",
+    "REPORT_REQUIRED_FIELDS",
+    "SESSION_REQUIRED_FIELDS",
+    "SUMMARY_REQUIRED_FIELDS",
     "RegionHandle",
     "STORAGE_SCHEMA",
     "SurfaceTree",
@@ -46,6 +74,10 @@ __all__ = [
     "select_next_action",
     "tree_from_codes",
     "voxelize_mesh",
+    "validate_contract_bundle",
+    "validate_report_contract",
+    "validate_session_contract",
+    "validate_summary_contract",
     "world_bounds",
     "write_surface_tree",
 ]

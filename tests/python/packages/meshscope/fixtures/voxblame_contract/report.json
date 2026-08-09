@@ -1,0 +1,85 @@
+{
+  "schema": "voxblame.report/2",
+  "coordinate_contract": "trellis2_canonical/1",
+  "max_depth": 8,
+  "step": 1,
+  "compare_to": 0,
+  "canonical_reference": {
+    "canonical_reference_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "reference_ply_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "triangle_set_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+    "interior_tree_sha256": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+  },
+  "measurement": {
+    "candidate_mesh_sha256": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+    "interior_tree_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+    "exterior_snapshot_sha256": "1111111111111111111111111111111111111111111111111111111111111111",
+    "observable_sha256": "2222222222222222222222222222222222222222222222222222222222222222"
+  },
+  "errors_by_depth": [
+    {"depth": 1, "reference_surface_count": 8, "candidate_surface_count": 7, "missing_surface_count": 1, "excess_surface_count": 0, "union_surface_count": 8, "surface_error_count": 1, "surface_error_rate": 0.125},
+    {"depth": 2, "reference_surface_count": 64, "candidate_surface_count": 63, "missing_surface_count": 1, "excess_surface_count": 0, "union_surface_count": 64, "surface_error_count": 1, "surface_error_rate": 0.015625},
+    {"depth": 3, "reference_surface_count": 512, "candidate_surface_count": 511, "missing_surface_count": 1, "excess_surface_count": 0, "union_surface_count": 512, "surface_error_count": 1, "surface_error_rate": 0.001953125},
+    {"depth": 4, "reference_surface_count": 4096, "candidate_surface_count": 4095, "missing_surface_count": 1, "excess_surface_count": 0, "union_surface_count": 4096, "surface_error_count": 1, "surface_error_rate": 0.000244140625},
+    {"depth": 5, "reference_surface_count": 32768, "candidate_surface_count": 32767, "missing_surface_count": 1, "excess_surface_count": 0, "union_surface_count": 32768, "surface_error_count": 1, "surface_error_rate": 0.000030517578125},
+    {"depth": 6, "reference_surface_count": 262144, "candidate_surface_count": 262143, "missing_surface_count": 1, "excess_surface_count": 0, "union_surface_count": 262144, "surface_error_count": 1, "surface_error_rate": 0.000003814697265625},
+    {"depth": 7, "reference_surface_count": 2097152, "candidate_surface_count": 2097151, "missing_surface_count": 1, "excess_surface_count": 0, "union_surface_count": 2097152, "surface_error_count": 1, "surface_error_rate": 0.000000476837158203125},
+    {"depth": 8, "reference_surface_count": 16777216, "candidate_surface_count": 16777215, "missing_surface_count": 1, "excess_surface_count": 0, "union_surface_count": 16777216, "surface_error_count": 1, "surface_error_rate": 0.000000059604644775390625}
+  ],
+  "depth_8_evidence": {
+    "missing_surface": {
+      "storage_schema": "voxblame.region-set/1",
+      "path": "voxblame/steps/000001/missing-depth8.vbregions",
+      "logical_sha256": "3333333333333333333333333333333333333333333333333333333333333333",
+      "surface_count": 1
+    },
+    "excess_surface": {
+      "storage_schema": "voxblame.region-set/1",
+      "path": "voxblame/steps/000001/excess-depth8.vbregions",
+      "logical_sha256": "4444444444444444444444444444444444444444444444444444444444444444",
+      "surface_count": 0
+    }
+  },
+  "exterior_surface": {
+    "storage_schema": "voxblame.exterior-snapshot/1",
+    "path": "voxblame/steps/000001/exterior.vbexterior",
+    "logical_sha256": "1111111111111111111111111111111111111111111111111111111111111111",
+    "surface_present": false,
+    "surface_cell_count": 0,
+    "bounds_canonical": null,
+    "centroid_canonical": null,
+    "nearest_overrun": null,
+    "farthest_overrun": null,
+    "outside_directions": [],
+    "diagnostic_grid_depth": 8,
+    "coarsened": false
+  },
+  "repair_targets": {
+    "ordering_profile": "repair_target_display/1",
+    "total": 1,
+    "ordered_targets": [
+      {
+        "target_key": "step-000001:target-0000",
+        "source_step": 1,
+        "kind": "interior",
+        "display_rank": 0,
+        "bounds_canonical": {"min": [-0.5, -0.5, -0.5], "max": [-0.49609375, -0.49609375, -0.49609375]},
+        "error_profile": {"missing_surface_count": 1, "excess_surface_count": 0, "surface_error_count": 1},
+        "mask": {
+          "storage_schema": "octree_region_set/1",
+          "path": "voxblame/steps/000001/targets/step-000001-target-0000.vbregions",
+          "logical_sha256": "5555555555555555555555555555555555555555555555555555555555555555",
+          "region_count": 1
+        },
+        "component": {"component_key": "component-0000", "split_index": 0, "split_count": 1, "split_reason": "not_split"},
+        "exterior": null
+      }
+    ]
+  },
+  "objective_facts": {
+    "global_depth_8_zero": false,
+    "out_of_frame_clear": true,
+    "no_evidence_conflict": true
+  },
+  "no_observable_geometry_change": false
+}
