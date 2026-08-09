@@ -32,6 +32,7 @@ mesh inputs
 | `grading.py` | First-mismatch grading, iteration change overlay, region bounds, and bounded next-action selection. |
 | `reporting.py` | Projection of domain objects into `voxblame.report/2` and `voxblame.summary/1` JSON. |
 | `contracts.py` | Closed-world validators for the frozen replacement canonical session, report, and summary shapes. |
+| `prepare_reference.py` | Raw input capture, evaluated-scene normalization, identity, validation, and atomic Canonical Reference publication. |
 | `store.py` | Filesystem repository, strict loads, idempotent retry, and atomic session/step publication. |
 | `session.py` | Application orchestration exposed as `run_step(...)`. |
 | `__init__.py` | Curated public API. |
@@ -54,6 +55,31 @@ tests/python/packages/meshscope/support/morton_oracle.py
 Production modules must not import that test helper.
 
 ## Stable public interfaces
+
+### Canonical Reference preparation
+
+The replacement workflow starts beside the legacy runtime with one public,
+atomic preparation command:
+
+```bash
+.venv/skills/mesh-compare/bin/python skills/mesh-compare/scripts/mesh-compare \
+  voxblame-prepare-reference raw-scene.glb --output EXP/input
+```
+
+On success, `EXP/input` appears as one publication containing the captured raw
+entry and geometry dependencies, `reference.ply`, `normalization.json`, and
+`input.json`. The authoritative PLY is binary little-endian float64 triangle
+geometry in the fixed Trellis2 canonical cube. Failures leave `EXP/input`
+absent and write bounded evidence to `EXP/input.failure.json`.
+
+The corresponding Python boundary is:
+
+```python
+from meshscope.voxblame import prepare_reference
+
+result = prepare_reference(raw_scene, output_directory)
+manifest = result.manifest
+```
 
 ### Application entry point
 

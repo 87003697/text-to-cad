@@ -28,6 +28,15 @@ from meshscope.voxblame.errors import (
     VoxBlameError,
 )
 from meshscope.voxblame.frame import CanonicalFrame
+from meshscope.voxblame.prepare_reference import (
+    CANONICAL_REFERENCE_SCHEMA,
+    NORMALIZATION_SCHEMA,
+    PREPARE_FAILURE_SCHEMA,
+    PrepareReferenceError,
+    PrepareReferenceResult,
+    prepare_reference,
+    publish_prepare_failure,
+)
 from meshscope.voxblame.grading import (
     ChangeCell,
     ErrorCell,
@@ -45,6 +54,7 @@ from meshscope.voxblame.voxelize import build_lattice_tree, voxelize_mesh
 
 __all__ = [
     "CanonicalFrame",
+    "CANONICAL_REFERENCE_SCHEMA",
     "ChangeCell",
     "ErrorCell",
     "NextAction",
@@ -55,6 +65,10 @@ __all__ = [
     "COORDINATE_CONTRACT",
     "FORBIDDEN_FIELDS",
     "MAX_DEPTH",
+    "NORMALIZATION_SCHEMA",
+    "PREPARE_FAILURE_SCHEMA",
+    "PrepareReferenceError",
+    "PrepareReferenceResult",
     "REPORT_REQUIRED_FIELDS",
     "SESSION_REQUIRED_FIELDS",
     "SUMMARY_REQUIRED_FIELDS",
@@ -70,6 +84,8 @@ __all__ = [
     "grade_surface_trees",
     "lattice_bounds",
     "read_surface_tree",
+    "prepare_reference",
+    "publish_prepare_failure",
     "run_step",
     "select_next_action",
     "tree_from_codes",
