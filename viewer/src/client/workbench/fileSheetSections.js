@@ -8,6 +8,7 @@ export const FILE_SHEET_SECTION_IDS = Object.freeze({
   ROBOT_JOINTS: "joints",
   IMPLICIT_GRAPHICS: "graphics",
   DXF_SETTINGS: "drawing",
+  DXF_LAYERS: "dxfLayers",
   THEME_DISPLAY: "display",
   FILE_METADATA: "metadata"
 });
@@ -34,9 +35,15 @@ export function renderedFileSheetSectionIds(kind, options = {}) {
     // settings, so they steer the viewport without touching the package. This used to be
     // status-only on the grounds that the producer owned every setting; it no longer does.
     case "dxf":
-      // One surface: Material stacked over Bends (when present), not tabs — switching
-      // tabs hid half of a two-group panel behind a click for no layout win.
-      return [...status, FILE_SHEET_SECTION_IDS.DXF_SETTINGS];
+      // DXF settings are one surface: Material stacked over Bends (when present) —
+      // switching tabs hid half of a two-group panel behind a click for no layout win.
+      // Layers are the drawing's own STRUCTURE, not a setting, so they get a dedicated
+      // tab (the DXF analogue of STEP's Tree) whenever the file actually uses layers.
+      return [
+        ...status,
+        FILE_SHEET_SECTION_IDS.DXF_SETTINGS,
+        ...(options.hasDxfLayersPanel ? [FILE_SHEET_SECTION_IDS.DXF_LAYERS] : [])
+      ];
     case "step":
       // Display is the one theme-adjacent tab rendered in the sheet — display
       // mode plus the section-plane and exploded-view transforms, all per-file

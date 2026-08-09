@@ -1613,6 +1613,7 @@ const CadViewer = forwardRef(function CadViewer({
   drawingBendRadiusMm = 0,
   drawingKFactor = 0.5,
   drawingHiddenLayers = null,
+  drawingUnitsScale = 1,
   drawingGeometry = null,
   drawingThicknessMm = 0,
   onCameraZoomPercentChange = null,
@@ -2664,15 +2665,23 @@ const CadViewer = forwardRef(function CadViewer({
     if (!group) {
       return undefined;
     }
+    // The units override is a PLAN scale: it reinterprets the drawing's x/y footprint
+    // without touching thickness, which the user sets in real millimetres. Everything flat
+    // — baselines, bend lines, overlays, the curved mesher's contours — scales by it at
+    // this one boundary.
+    const planScale = Number(drawingUnitsScale) > 0 ? Number(drawingUnitsScale) : 1;
+    const scalePoint2 = ([x, y]) => [x * planScale, y * planScale];
     // Bend lines as full 2D segments (orientation matters — the fold handles any direction);
     // the scanner's bare axis-X list is only the fallback until geometry.json lands.
     const foldOptions = {
-      bendLines: Array.isArray(drawingBendLines) && drawingBendLines.length ? drawingBendLines : null,
-      bendAxesX: Array.isArray(bendAxisX) ? bendAxisX : [],
+      bendLines: Array.isArray(drawingBendLines) && drawingBendLines.length
+        ? drawingBendLines.map((line) => ({ start: scalePoint2(line.start), end: scalePoint2(line.end) }))
+        : null,
+      bendAxesX: (Array.isArray(bendAxisX) ? bendAxisX : []).map((axisX) => axisX * planScale),
       bendAnglesRad: Array.isArray(bendAnglesRad) ? bendAnglesRad : [],
       thicknessScale: drawingThicknessScale
     };
-    const identity = dxfFoldIsIdentity(foldOptions);
+    const identity = dxfFoldIsIdentity(foldOptions) && planScale === 1;
     const bendCount = foldOptions.bendLines ? foldOptions.bendLines.length : foldOptions.bendAxesX.length;
     const anyBendAngle = foldOptions.bendAnglesRad.some((angle) => angle !== 0);
 
@@ -2713,7 +2722,7 @@ const CadViewer = forwardRef(function CadViewer({
     if (!curvedRequested && identity && !hasOverlaySource && !runtimeRef.current?.dxfTransformTouched) {
       return undefined;
     }
-    runtimeRef.current.dxfTransformTouched = curvedRequested || !identity;
+    runtimeRef.current.dxfTransformTouched = curvedRequested || !identity || planScale !== 1;
     let frame = 0;
     let attempts = 0;
 
@@ -2800,7 +2809,22 @@ const CadViewer = forwardRef(function CadViewer({
         try {
           // guideElevationSign -1: the (x, z, -y) map below sends the mesher's +Y to CAD
           // -Z, so guides elevated over the mesher's top face would land UNDER the sheet.
-          curvedData = buildDxfPreviewMeshData(effectiveGeometry, meshThicknessMm, bendSettings, {
+          const mesherGeometry = planScale === 1 ? effectiveGeometry : {
+            ...effectiveGeometry,
+            geometry: {
+              ...effectiveGeometry.geometry,
+              lines: (effectiveGeometry.geometry.lines || []).map((line) => ({
+                ...line, start: scalePoint2(line.start), end: scalePoint2(line.end)
+              })),
+              arcs: (effectiveGeometry.geometry.arcs || []).map((arc) => ({
+                ...arc, center: scalePoint2(arc.center), radius: arc.radius * planScale
+              })),
+              circles: (effectiveGeometry.geometry.circles || []).map((circle) => ({
+                ...circle, center: scalePoint2(circle.center), radius: circle.radius * planScale
+              }))
+            }
+          };
+          curvedData = buildDxfPreviewMeshData(mesherGeometry, meshThicknessMm, bendSettings, {
             guideElevationSign: -1,
             bendInsideRadiusMm: drawingBendRadiusMm,
             bendKFactor: drawingKFactor
@@ -2852,6 +2876,15 @@ const CadViewer = forwardRef(function CadViewer({
             }
           }
           flat = targets[0]?.original || null;
+          if (flat && planScale !== 1) {
+            const scaledFlat = new Float32Array(flat.length);
+            for (let index = 0; index < flat.length; index += 3) {
+              scaledFlat[index] = flat[index] * planScale;
+              scaledFlat[index + 1] = flat[index + 1] * planScale;
+              scaledFlat[index + 2] = flat[index + 2];
+            }
+            flat = scaledFlat;
+          }
         }
       }
 
@@ -2864,13 +2897,22 @@ const CadViewer = forwardRef(function CadViewer({
           }
         }
         for (const { geometry, original, position } of targets) {
-          transformDxfPreviewPositions(original, position.array, foldOptions);
+          let flatSource = original;
+          if (planScale !== 1) {
+            flatSource = new Float32Array(original.length);
+            for (let index = 0; index < original.length; index += 3) {
+              flatSource[index] = original[index] * planScale;
+              flatSource[index + 1] = original[index + 1] * planScale;
+              flatSource[index + 2] = original[index + 2];
+            }
+          }
+          transformDxfPreviewPositions(flatSource, position.array, foldOptions);
           position.needsUpdate = true;
           geometry.computeVertexNormals?.();
           geometry.computeBoundingBox?.();
           geometry.computeBoundingSphere?.();
-          if (!flat || original.length > flat.length) {
-            flat = original;
+          if (!flat || flatSource.length > flat.length) {
+            flat = flatSource;
           }
         }
       }
@@ -2939,8 +2981,10 @@ const CadViewer = forwardRef(function CadViewer({
         try {
           for (const polyline of extractDxfScorePolylines(effectiveGeometry)) {
             for (let index = 0; index < polyline.length - 1; index += 1) {
-              const a = foldDxfPoint(polyline[index][0], polyline[index][1], zTop, resolvedFold);
-              const b = foldDxfPoint(polyline[index + 1][0], polyline[index + 1][1], zTop, resolvedFold);
+              const [ax, ay] = scalePoint2(polyline[index]);
+              const [bx, by] = scalePoint2(polyline[index + 1]);
+              const a = foldDxfPoint(ax, ay, zTop, resolvedFold);
+              const b = foldDxfPoint(bx, by, zTop, resolvedFold);
               scoreSegments.push(a[0], a[1], a[2], b[0], b[1], b[2]);
             }
           }
@@ -3018,7 +3062,8 @@ const CadViewer = forwardRef(function CadViewer({
         disposeTextChildren(textGroup);
         for (const text of textMarkings) {
           const value = String(text.value).trim();
-          const heightMm = Math.max(Number(text.heightMm) || 2.5, 0.2);
+          const heightMm = Math.max((Number(text.heightMm) || 2.5) * planScale, 0.2);
+          const anchor = scalePoint2(text.position);
           const rotation = ((Number(text.rotationDeg) || 0) * Math.PI) / 180;
           const ex = [Math.cos(rotation), Math.sin(rotation)];
           const ey = [-Math.sin(rotation), Math.cos(rotation)];
@@ -3046,8 +3091,8 @@ const CadViewer = forwardRef(function CadViewer({
           // The DXF anchor is baseline-left; the plane's centre sits half a width along the
           // text direction and a bit above the baseline. All in FLAT coords, then folded.
           const centerFlat = [
-            text.position[0] + ex[0] * (planeWidth / 2) + ey[0] * (planeHeight * 0.22),
-            text.position[1] + ex[1] * (planeWidth / 2) + ey[1] * (planeHeight * 0.22)
+            anchor[0] + ex[0] * (planeWidth / 2) + ey[0] * (planeHeight * 0.22),
+            anchor[1] + ex[1] * (planeWidth / 2) + ey[1] * (planeHeight * 0.22)
           ];
           const origin3 = foldDxfPoint(centerFlat[0], centerFlat[1], zTop, resolvedFold);
           const step = 0.5;
@@ -3080,7 +3125,7 @@ const CadViewer = forwardRef(function CadViewer({
     return () => {
       cancelAnimationFrame(frame);
     };
-  }, [bendAxisX, drawingBendLines, bendAnglesRad, drawingBends, drawingBendStyle, drawingBendRadiusMm, drawingKFactor, drawingHiddenLayers, drawingGeometry, drawingThicknessMm, drawingThicknessScale, meshData, viewerReadyTick]);
+  }, [bendAxisX, drawingBendLines, bendAnglesRad, drawingBends, drawingBendStyle, drawingBendRadiusMm, drawingKFactor, drawingHiddenLayers, drawingUnitsScale, drawingGeometry, drawingThicknessMm, drawingThicknessScale, meshData, viewerReadyTick]);
 
   useImperativeHandle(ref, () => ({
     async captureScreenshot({ filename = "cad-screenshot.png", mode = "download" } = {}) {

@@ -37,6 +37,10 @@ test("rendered file sheet sections include closed-by-default sections", () => {
   // One stacked surface: Material over Bends, no tab switch between them.
   assert.deepEqual(renderedFileSheetSectionIds("dxf", { hasFileStatus: true }), ["status", "drawing"]);
   assert.deepEqual(renderedFileSheetSectionIds("dxf"), ["drawing"]);
+  assert.deepEqual(
+    renderedFileSheetSectionIds("dxf", { hasDxfLayersPanel: true }),
+    ["drawing", "dxfLayers"]
+  );
   assert.deepEqual(renderedFileSheetSectionIds("step", { hasFileStatus: true, hasStepModulePanel: true }), [
     "status",
     "tree",

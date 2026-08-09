@@ -1077,6 +1077,14 @@ function scaleEntitiesToMm(entities, scale) {
 }
 
 export function parseDxf(dxfText, { fileRef = "", sourceUrl = "" } = {}) {
+  // A Git LFS pointer is 3 lines of metadata, not a drawing. Without this check it fails
+  // as "group code stream is malformed", which sends people debugging the parser instead
+  // of hydrating the file.
+  if (/^version https:\/\/git-lfs/.test(String(dxfText || ""))) {
+    throw new Error(
+      "This DXF is a Git LFS pointer, not the drawing itself. Run `git lfs checkout` on it and rebuild."
+    );
+  }
   const records = parseRecordPairs(dxfText);
   const sections = splitSections(records);
   const header = parseHeader(sections.get("HEADER") || []);

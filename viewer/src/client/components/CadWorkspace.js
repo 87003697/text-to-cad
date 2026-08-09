@@ -19,13 +19,17 @@ import {
   DXF_DEFAULT_BEND_STYLE,
   DXF_DEFAULT_KFACTOR,
   DXF_DEFAULT_THICKNESS_MM,
+  DXF_DEFAULT_UNITS,
+  dxfUnitsPlanScale,
   normalizeDxfBendAngleDeg,
   normalizeDxfBendDirection,
   normalizeDxfBendRadiusMm,
   normalizeDxfBendStyle,
   normalizeDxfKFactor,
-  normalizeDxfThicknessMm
+  normalizeDxfThicknessMm,
+  normalizeDxfUnits
 } from "./workbench/DxfSettingsSection";
+import { buildDxfLayersTab } from "./workbench/DxfLayersSection";
 import ImplicitFileSheet from "./workbench/ImplicitFileSheet";
 import StepFileSheet from "./workbench/StepFileSheet";
 import StatusToast from "./workbench/StatusToast";
@@ -1243,6 +1247,8 @@ export default function CadWorkspace({
   const [drawingKFactor, setDrawingKFactor] = useState(DXF_DEFAULT_KFACTOR);
   // Layer names the user has switched off; everything else renders.
   const [drawingHiddenLayers, setDrawingHiddenLayers] = useState([]);
+  // How to read the drawing's coordinates: "auto" trusts the file's $INSUNITS.
+  const [drawingUnits, setDrawingUnits] = useState(DXF_DEFAULT_UNITS);
   // The package's parsed contours, fetched once per entry and kept by URL. Curved bends
   // re-mesh from these; the URL carries the package version, so a rebuild refetches.
   const drawingGeometryCacheRef = useRef(new Map());
@@ -3255,13 +3261,14 @@ export default function CadWorkspace({
           bendStyle: drawingBendStyle,
           bendRadiusMm: drawingBendRadiusMm,
           kFactor: drawingKFactor,
-          hiddenLayers: drawingHiddenLayers
+          hiddenLayers: drawingHiddenLayers,
+          units: drawingUnits
         })
       );
     } catch (storageError) {
       // Quota or privacy mode: settings simply stop surviving a file switch.
     }
-  }, [selectedEntryIsDrawing, selectedKey, drawingThicknessMm, drawingBends, drawingBendStyle, drawingBendRadiusMm, drawingKFactor, drawingHiddenLayers]);
+  }, [selectedEntryIsDrawing, selectedKey, drawingThicknessMm, drawingBends, drawingBendStyle, drawingBendRadiusMm, drawingKFactor, drawingHiddenLayers, drawingUnits]);
 
   useEffect(() => {
     let stored = null;
@@ -3281,6 +3288,7 @@ export default function CadWorkspace({
     setDrawingHiddenLayers(Array.isArray(stored?.hiddenLayers)
       ? stored.hiddenLayers.filter((name) => typeof name === "string")
       : []);
+    setDrawingUnits(normalizeDxfUnits(stored?.units, DXF_DEFAULT_UNITS));
     setDrawingBends(Array.from({ length: selectedDrawingBendAxisCount }, (_, index) => ({
       angleDeg: normalizeDxfBendAngleDeg(stored?.bends?.[index]?.angleDeg, DXF_DEFAULT_BEND_ANGLE_DEG),
       direction: normalizeDxfBendDirection(stored?.bends?.[index]?.direction)
@@ -3335,6 +3343,7 @@ export default function CadWorkspace({
     setDrawingBendRadiusMm(DXF_DEFAULT_BEND_RADIUS_MM);
     setDrawingKFactor(DXF_DEFAULT_KFACTOR);
     setDrawingHiddenLayers([]);
+    setDrawingUnits(DXF_DEFAULT_UNITS);
     setDrawingBends((current) => current.map(() => ({
       angleDeg: DXF_DEFAULT_BEND_ANGLE_DEG,
       direction: "up"
@@ -3371,6 +3380,11 @@ export default function CadWorkspace({
   const drawingLayers = useMemo(
     () => (Array.isArray(drawingGeometry?.layers) ? drawingGeometry.layers : []),
     [drawingGeometry]
+  );
+
+  const drawingUnitsScale = useMemo(
+    () => dxfUnitsPlanScale(drawingUnits, drawingGeometry?.unitsScaleMm),
+    [drawingUnits, drawingGeometry]
   );
 
   // Memoised: this array is an effect dependency in the viewer, and a fresh identity per
@@ -3618,6 +3632,7 @@ export default function CadWorkspace({
       selectedImplicitDefinition?.animations?.length
     ),
     hasFileStatus: selectedFileHasWarningOrErrorStatus,
+    hasDxfLayersPanel: selectedFileSheetKind === "dxf" && drawingLayers.length > 0,
     isSdf: selectedFileSheetKind === "sdf",
     motionEnabled: selectedFileSheetKind === "srdf" && moveit2ServerLive && selectedUrdfMotionEndEffectors.length > 0,
     showJoints: selectedFileSheetKind === "urdf" || selectedFileSheetKind === "srdf" || selectedFileSheetKind === "sdf"
@@ -3631,7 +3646,8 @@ export default function CadWorkspace({
     selectedStepModuleError,
     selectedStepModuleStatus,
     moveit2ServerLive,
-    selectedUrdfMotionEndEffectors
+    selectedUrdfMotionEndEffectors,
+    drawingLayers
   ]);
 
   const renderedSelectedFileSheetSectionIds = useMemo(
@@ -8215,6 +8231,7 @@ export default function CadWorkspace({
           drawingBendRadiusMm={selectedEntryIsDrawing ? drawingBendRadiusMm : 0}
           drawingKFactor={selectedEntryIsDrawing ? drawingKFactor : DXF_DEFAULT_KFACTOR}
           drawingHiddenLayers={selectedEntryIsDrawing ? drawingHiddenLayers : null}
+          drawingUnitsScale={selectedEntryIsDrawing ? drawingUnitsScale : 1}
           drawingGeometry={selectedEntryIsDrawing ? drawingGeometry : null}
           drawingThicknessMm={selectedEntryIsDrawing ? drawingThicknessMm : 0}
           onCameraZoomPercentChange={setViewerZoomPercent}
@@ -8605,6 +8622,9 @@ export default function CadWorkspace({
                   buildDxfDrawingTab({
                     thicknessMm: drawingThicknessMm,
                     onThicknessChange: setDrawingThicknessMm,
+                    units: drawingUnits,
+                    onUnitsChange: setDrawingUnits,
+                    fileUnitsScaleMm: drawingGeometry?.unitsScaleMm,
                     bends: drawingBends,
                     onBendChange: handleDrawingBendChange,
                     bendStyle: drawingBendStyle,
@@ -8613,11 +8633,13 @@ export default function CadWorkspace({
                     onBendRadiusChange: setDrawingBendRadiusMm,
                     kFactor: drawingKFactor,
                     onKFactorChange: setDrawingKFactor,
-                    layers: drawingLayers,
-                    hiddenLayers: drawingHiddenLayers,
-                    onLayerVisibilityChange: handleDrawingLayerVisibilityChange,
                     onReset: handleDrawingSettingsReset
                   }),
+                  ...(drawingLayers.length > 0 ? [buildDxfLayersTab({
+                    layers: drawingLayers,
+                    hiddenLayers: drawingHiddenLayers,
+                    onLayerVisibilityChange: handleDrawingLayerVisibilityChange
+                  })] : []),
                   ...themeTabs
                 ]}
                 openSectionIds={effectiveFileSheetOpenSectionIds}

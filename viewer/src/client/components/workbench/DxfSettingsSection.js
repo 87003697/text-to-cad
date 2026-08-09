@@ -12,7 +12,6 @@ import {
   FileSheetSelectRow,
   FileSheetSliderField,
   FileSheetSubsection,
-  FileSheetToggleRow,
   FileSheetValueInput
 } from "./FileSheet";
 import { FILE_SHEET_SECTION_IDS } from "@/workbench/fileSheetSections";
@@ -97,9 +96,48 @@ export function normalizeDxfKFactor(value, fallback = DXF_DEFAULT_KFACTOR) {
   return Math.min(DXF_KFACTOR_MAX, Math.max(DXF_KFACTOR_MIN, numeric));
 }
 
+/** Drawing-unit interpretation. "auto" trusts the file's $INSUNITS; picking a unit
+ *  reinterprets the drawing's coordinates in that unit — the fix for the common file that
+ *  says nothing (or lies) about its units. */
+export const DXF_UNIT_OPTIONS = Object.freeze([
+  { value: "auto", label: "Auto", mmPerUnit: null },
+  { value: "mm", label: "Millimetres", mmPerUnit: 1 },
+  { value: "in", label: "Inches", mmPerUnit: 25.4 },
+  { value: "cm", label: "Centimetres", mmPerUnit: 10 },
+  { value: "m", label: "Metres", mmPerUnit: 1000 }
+]);
+export const DXF_DEFAULT_UNITS = "auto";
+
+export function normalizeDxfUnits(value, fallback = DXF_DEFAULT_UNITS) {
+  const text = String(value || "").trim().toLowerCase();
+  return DXF_UNIT_OPTIONS.some((option) => option.value === text) ? text : fallback;
+}
+
+/** How much to scale the drawing's plan, given the file's own mm-per-unit. Auto is 1 (the
+ *  parse already applied the file's units); an override rescales relative to them. */
+export function dxfUnitsPlanScale(units, fileUnitsScaleMm) {
+  const option = DXF_UNIT_OPTIONS.find((candidate) => candidate.value === normalizeDxfUnits(units));
+  if (!option || option.mmPerUnit === null) {
+    return 1;
+  }
+  const fileScale = Number(fileUnitsScaleMm);
+  return option.mmPerUnit / (Number.isFinite(fileScale) && fileScale > 0 ? fileScale : 1);
+}
+
+function fileUnitsShortLabel(fileUnitsScaleMm) {
+  const scale = Number(fileUnitsScaleMm);
+  const match = DXF_UNIT_OPTIONS.find(
+    (option) => option.mmPerUnit !== null && Math.abs(option.mmPerUnit - scale) < 1e-9
+  );
+  return match ? match.value : "mm";
+}
+
 export function DxfDrawingSettings({
   thicknessMm = DXF_DEFAULT_THICKNESS_MM,
   onThicknessChange,
+  units = DXF_DEFAULT_UNITS,
+  onUnitsChange,
+  fileUnitsScaleMm = 1,
   bends = [],
   onBendChange,
   bendStyle = DXF_DEFAULT_BEND_STYLE,
@@ -108,9 +146,6 @@ export function DxfDrawingSettings({
   onBendRadiusChange,
   kFactor = DXF_DEFAULT_KFACTOR,
   onKFactorChange,
-  layers = [],
-  hiddenLayers = [],
-  onLayerVisibilityChange,
   onReset
 }) {
   const thickness = normalizeDxfThicknessMm(thicknessMm);
@@ -118,7 +153,7 @@ export function DxfDrawingSettings({
   const style = normalizeDxfBendStyle(bendStyle);
   const radius = normalizeDxfBendRadiusMm(bendRadiusMm);
   const neutralK = normalizeDxfKFactor(kFactor);
-  const hiddenLayerSet = new Set(Array.isArray(hiddenLayers) ? hiddenLayers : []);
+  const activeUnits = normalizeDxfUnits(units);
 
   return (
     <FileSheetSectionBody>
@@ -143,6 +178,16 @@ export function DxfDrawingSettings({
             onValueChange={([next]) => commitThickness(next)}
           />
         </FileSheetSliderField>
+        {/* Units reinterpret the drawing's coordinates; Auto trusts the file's $INSUNITS
+            (shown so the user can see what the file claims). */}
+        <FileSheetSelectRow
+          label="Units"
+          value={activeUnits}
+          onValueChange={(next) => onUnitsChange?.(normalizeDxfUnits(next, activeUnits))}
+          options={DXF_UNIT_OPTIONS.map((option) => (option.value === "auto"
+            ? { ...option, label: `Auto (${fileUnitsShortLabel(fileUnitsScaleMm)})` }
+            : option))}
+        />
       </FileSheetSubsection>
 
       {bends.length > 0 ? (
@@ -245,34 +290,9 @@ export function DxfDrawingSettings({
         </FileSheetSubsection>
       ) : null}
 
-      {/* Layers are the DXF's own structure: each row toggles one layer's geometry in the
-          preview. A single-layer drawing has nothing to toggle, so the section only appears
-          when the file actually uses layers. */}
-      {layers.length > 1 ? (
-        <FileSheetSubsection title="Layers">
-          {layers.map((layer) => (
-            <FileSheetToggleRow
-              key={layer.name}
-              label={(
-                <span className="flex min-w-0 items-center gap-1.5">
-                  <span
-                    aria-hidden="true"
-                    className="size-2 shrink-0 rounded-full border border-black/20"
-                    style={{ backgroundColor: layer.colorHex || "var(--muted-foreground)" }}
-                  />
-                  <span className="truncate">{layer.name}</span>
-                </span>
-              )}
-              ariaLabel={`Show layer ${layer.name}`}
-              checked={!hiddenLayerSet.has(layer.name)}
-              onCheckedChange={(checked) => onLayerVisibilityChange?.(layer.name, checked)}
-            />
-          ))}
-        </FileSheetSubsection>
-      ) : null}
-
       {/* One Reset per tab (settings-ui.md): full-width outline + RotateCcw as the last
-          row, restoring material AND bends to their defaults. */}
+          row, restoring material AND bends to their defaults. Layer visibility lives in
+          the Layers tab and resets with everything else. */}
       {onReset ? (
         <FileSheetControlRow label={null}>
           <Button
