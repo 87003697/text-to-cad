@@ -21,6 +21,7 @@ htmlcov/
 .venv
 .cache
 .agents/
+graphify-out/
 .vite
 node_modules
 dist

@@ -16,6 +16,8 @@ REPO_ROOT = Path(__file__).resolve().parents[3]
 MODELS_DIR = "models"
 MESH_FIXTURES_DIR = "models/mesh-fixtures"
 README_PATH = REPO_ROOT / MODELS_DIR / "README.md"
+GITIGNORE_PATH = REPO_ROOT / ".gitignore"
+SNAPSHOTIGNORE_PATH = REPO_ROOT / ".snapshotignore"
 
 # Sources and docs that stay readable in normal Git.
 TEXT_SUFFIXES = (
@@ -398,6 +400,15 @@ class ModelsDirectoryPolicyTest(unittest.TestCase):
             "models/README.md must name every disallowed category this policy "
             f"rejects; missing: {undocumented_kinds}",
         )
+
+    def test_models_policy_preserves_existing_graphify_ignores(self) -> None:
+        gitignore_lines = GITIGNORE_PATH.read_text(encoding="utf-8").splitlines()
+        snapshotignore_lines = SNAPSHOTIGNORE_PATH.read_text(
+            encoding="utf-8"
+        ).splitlines()
+
+        self.assertIn("graphify-out/", gitignore_lines)
+        self.assertIn("graphify-out", snapshotignore_lines)
 
 
 if __name__ == "__main__":
