@@ -13,14 +13,14 @@ import MeshFileSheet from "./workbench/MeshFileSheet";
 import { DXF_PREVIEW_REFERENCE_THICKNESS_MM } from "cadjs/lib/dxf/previewGlb";
 import { extractOrderedDxfBendLines } from "cadjs/lib/dxf/buildPreviewMesh";
 import {
-  buildDxfDrawingTab,
+  buildDxfBendsTab,
+  buildDxfMaterialTab,
   DXF_DEFAULT_BEND_ANGLE_DEG,
   DXF_DEFAULT_BEND_RADIUS_MM,
   DXF_DEFAULT_BEND_STYLE,
   DXF_DEFAULT_KFACTOR,
   DXF_DEFAULT_THICKNESS_MM,
   DXF_DEFAULT_UNITS,
-  dxfUnitsPlanScale,
   normalizeDxfBendAngleDeg,
   normalizeDxfBendDirection,
   normalizeDxfBendRadiusMm,
@@ -3336,14 +3336,16 @@ export default function CadWorkspace({
     ));
   }, []);
 
-  // The DXF tab's single Reset: material, bends, and layers back to their defaults together.
-  const handleDrawingSettingsReset = useCallback(() => {
+  // Per-tab resets (settings-ui.md: one Reset per tab, scoped to that tab's settings).
+  const handleDrawingMaterialReset = useCallback(() => {
     setDrawingThicknessMm(DXF_DEFAULT_THICKNESS_MM);
+    setDrawingUnits(DXF_DEFAULT_UNITS);
+  }, []);
+
+  const handleDrawingBendsReset = useCallback(() => {
     setDrawingBendStyle(DXF_DEFAULT_BEND_STYLE);
     setDrawingBendRadiusMm(DXF_DEFAULT_BEND_RADIUS_MM);
     setDrawingKFactor(DXF_DEFAULT_KFACTOR);
-    setDrawingHiddenLayers([]);
-    setDrawingUnits(DXF_DEFAULT_UNITS);
     setDrawingBends((current) => current.map(() => ({
       angleDeg: DXF_DEFAULT_BEND_ANGLE_DEG,
       direction: "up"
@@ -3382,10 +3384,6 @@ export default function CadWorkspace({
     [drawingGeometry]
   );
 
-  const drawingUnitsScale = useMemo(
-    () => dxfUnitsPlanScale(drawingUnits, drawingGeometry?.unitsScaleMm),
-    [drawingUnits, drawingGeometry]
-  );
 
   // Memoised: this array is an effect dependency in the viewer, and a fresh identity per
   // render would re-run the fold transform on every workspace render.
@@ -3632,6 +3630,7 @@ export default function CadWorkspace({
       selectedImplicitDefinition?.animations?.length
     ),
     hasFileStatus: selectedFileHasWarningOrErrorStatus,
+    hasDxfBendsPanel: selectedFileSheetKind === "dxf" && drawingBends.length > 0,
     hasDxfLayersPanel: selectedFileSheetKind === "dxf" && drawingLayers.length > 0,
     isSdf: selectedFileSheetKind === "sdf",
     motionEnabled: selectedFileSheetKind === "srdf" && moveit2ServerLive && selectedUrdfMotionEndEffectors.length > 0,
@@ -3647,6 +3646,7 @@ export default function CadWorkspace({
     selectedStepModuleStatus,
     moveit2ServerLive,
     selectedUrdfMotionEndEffectors,
+    drawingBends,
     drawingLayers
   ]);
 
@@ -8231,7 +8231,6 @@ export default function CadWorkspace({
           drawingBendRadiusMm={selectedEntryIsDrawing ? drawingBendRadiusMm : 0}
           drawingKFactor={selectedEntryIsDrawing ? drawingKFactor : DXF_DEFAULT_KFACTOR}
           drawingHiddenLayers={selectedEntryIsDrawing ? drawingHiddenLayers : null}
-          drawingUnitsScale={selectedEntryIsDrawing ? drawingUnitsScale : 1}
           drawingGeometry={selectedEntryIsDrawing ? drawingGeometry : null}
           drawingThicknessMm={selectedEntryIsDrawing ? drawingThicknessMm : 0}
           onCameraZoomPercentChange={setViewerZoomPercent}
@@ -8619,12 +8618,14 @@ export default function CadWorkspace({
                 suppressDynamicMetadataStatus={selectedArtifactGenerating}
                 statusItems={selectedFileStatusItems}
                 themeTabs={[
-                  buildDxfDrawingTab({
+                  buildDxfMaterialTab({
                     thicknessMm: drawingThicknessMm,
                     onThicknessChange: setDrawingThicknessMm,
                     units: drawingUnits,
                     onUnitsChange: setDrawingUnits,
-                    fileUnitsScaleMm: drawingGeometry?.unitsScaleMm,
+                    onReset: handleDrawingMaterialReset
+                  }),
+                  ...(drawingBends.length > 0 ? [buildDxfBendsTab({
                     bends: drawingBends,
                     onBendChange: handleDrawingBendChange,
                     bendStyle: drawingBendStyle,
@@ -8633,8 +8634,9 @@ export default function CadWorkspace({
                     onBendRadiusChange: setDrawingBendRadiusMm,
                     kFactor: drawingKFactor,
                     onKFactorChange: setDrawingKFactor,
-                    onReset: handleDrawingSettingsReset
-                  }),
+                    units: drawingUnits,
+                    onReset: handleDrawingBendsReset
+                  })] : []),
                   ...(drawingLayers.length > 0 ? [buildDxfLayersTab({
                     layers: drawingLayers,
                     hiddenLayers: drawingHiddenLayers,

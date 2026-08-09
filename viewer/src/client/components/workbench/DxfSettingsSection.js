@@ -17,13 +17,14 @@ import {
 import { FILE_SHEET_SECTION_IDS } from "@/workbench/fileSheetSections";
 
 /**
- * A drawing's settings, per viewer/docs/settings-ui.md: ONE surface, Material on top and
- * Bends below it when the drawing has any. They were separate tabs once; a tab you have to
- * switch to hides half of a two-group panel behind a click for no layout win.
+ * The DXF settings tabs, per viewer/docs/settings-ui.md: Material (units + stock) and
+ * Bends (fold style + per-bend controls), each a tab of its own with its own Reset.
  *
- * Everything here is a RENDER-TIME parameter. Thickness and sharp bends reshape the cached
+ * Everything here is a RENDER-TIME parameter. Thickness and boxed bends reshape the cached
  * prism; curved bends re-mesh live from the package's cached contours (geometry.json).
- * Nothing set here can invalidate a package.
+ * Nothing set here can invalidate a package. All dimensional state is kept in MILLIMETRES;
+ * the Units setting converts what the inputs display and accept — it sits first because it
+ * reframes every dimensional row under it.
  */
 
 export const DXF_THICKNESS_MIN_MM = 0;
@@ -43,6 +44,52 @@ export const DXF_BEND_DIRECTIONS = Object.freeze(["up", "down"]);
  *  the surface around each bend like real sheet metal. */
 export const DXF_BEND_STYLES = Object.freeze(["boxed", "curved"]);
 export const DXF_DEFAULT_BEND_STYLE = "boxed";
+
+/** Inside bend radius in mm; 0 means "auto" (the mesher's visual default, 0.6x thickness). */
+export const DXF_BEND_RADIUS_MAX_MM = 20;
+export const DXF_DEFAULT_BEND_RADIUS_MM = 0;
+
+/** Where the neutral axis sits within the thickness. 0.44 is the common air-bend value;
+ *  0.5 (mid-thickness) is the visual default this preview always used. */
+export const DXF_KFACTOR_MIN = 0.1;
+export const DXF_KFACTOR_MAX = 0.9;
+export const DXF_DEFAULT_KFACTOR = 0.5;
+
+/**
+ * The unit the sheet's dimensional inputs display and accept. State stays millimetres —
+ * this converts at the input boundary only, so switching units never changes the part.
+ */
+export const DXF_UNIT_OPTIONS = Object.freeze([
+  { value: "mm", label: "Millimetres", mmPerUnit: 1, decimals: 1, sliderStep: 0.1 },
+  { value: "cm", label: "Centimetres", mmPerUnit: 10, decimals: 2, sliderStep: 0.01 },
+  { value: "in", label: "Inches", mmPerUnit: 25.4, decimals: 2, sliderStep: 0.01 },
+  { value: "m", label: "Metres", mmPerUnit: 1000, decimals: 4, sliderStep: 0.0001 }
+]);
+export const DXF_DEFAULT_UNITS = "mm";
+
+export function normalizeDxfUnits(value, fallback = DXF_DEFAULT_UNITS) {
+  const text = String(value || "").trim().toLowerCase();
+  return DXF_UNIT_OPTIONS.some((option) => option.value === text) ? text : fallback;
+}
+
+function unitOption(units) {
+  return DXF_UNIT_OPTIONS.find((option) => option.value === normalizeDxfUnits(units))
+    || DXF_UNIT_OPTIONS[0];
+}
+
+function displayLength(mm, option) {
+  return (Number(mm) || 0) / option.mmPerUnit;
+}
+
+function formatLength(mm, option) {
+  return `${displayLength(mm, option).toFixed(option.decimals)} ${option.value}`;
+}
+
+/** Parse a typed length in the active unit back to millimetres. */
+function parseLengthToMm(value, option, fallbackMm) {
+  const numeric = Number(String(value ?? "").replace(new RegExp(`\\s*${option.value}\\s*$`), ""));
+  return Number.isFinite(numeric) ? numeric * option.mmPerUnit : fallbackMm;
+}
 
 export function normalizeDxfThicknessMm(value, fallback = DXF_DEFAULT_THICKNESS_MM) {
   const numeric = Number(value);
@@ -70,16 +117,6 @@ export function normalizeDxfBendStyle(value, fallback = DXF_DEFAULT_BEND_STYLE) 
   return DXF_BEND_STYLES.includes(text) ? text : fallback;
 }
 
-/** Inside bend radius in mm; 0 means "auto" (the mesher's visual default, 0.6x thickness). */
-export const DXF_BEND_RADIUS_MAX_MM = 20;
-export const DXF_DEFAULT_BEND_RADIUS_MM = 0;
-
-/** Where the neutral axis sits within the thickness. 0.44 is the common air-bend value;
- *  0.5 (mid-thickness) is the visual default this preview always used. */
-export const DXF_KFACTOR_MIN = 0.1;
-export const DXF_KFACTOR_MAX = 0.9;
-export const DXF_DEFAULT_KFACTOR = 0.5;
-
 export function normalizeDxfBendRadiusMm(value, fallback = DXF_DEFAULT_BEND_RADIUS_MM) {
   const numeric = Number(value);
   if (!Number.isFinite(numeric) || numeric < 0) {
@@ -96,48 +133,82 @@ export function normalizeDxfKFactor(value, fallback = DXF_DEFAULT_KFACTOR) {
   return Math.min(DXF_KFACTOR_MAX, Math.max(DXF_KFACTOR_MIN, numeric));
 }
 
-/** Drawing-unit interpretation. "auto" trusts the file's $INSUNITS; picking a unit
- *  reinterprets the drawing's coordinates in that unit — the fix for the common file that
- *  says nothing (or lies) about its units. */
-export const DXF_UNIT_OPTIONS = Object.freeze([
-  { value: "auto", label: "Auto", mmPerUnit: null },
-  { value: "mm", label: "Millimetres", mmPerUnit: 1 },
-  { value: "in", label: "Inches", mmPerUnit: 25.4 },
-  { value: "cm", label: "Centimetres", mmPerUnit: 10 },
-  { value: "m", label: "Metres", mmPerUnit: 1000 }
-]);
-export const DXF_DEFAULT_UNITS = "auto";
-
-export function normalizeDxfUnits(value, fallback = DXF_DEFAULT_UNITS) {
-  const text = String(value || "").trim().toLowerCase();
-  return DXF_UNIT_OPTIONS.some((option) => option.value === text) ? text : fallback;
-}
-
-/** How much to scale the drawing's plan, given the file's own mm-per-unit. Auto is 1 (the
- *  parse already applied the file's units); an override rescales relative to them. */
-export function dxfUnitsPlanScale(units, fileUnitsScaleMm) {
-  const option = DXF_UNIT_OPTIONS.find((candidate) => candidate.value === normalizeDxfUnits(units));
-  if (!option || option.mmPerUnit === null) {
-    return 1;
+/** The tab-footer Reset (settings-ui.md: outline + RotateCcw, full row, one per tab). */
+function DxfResetRow({ label, onReset }) {
+  if (!onReset) {
+    return null;
   }
-  const fileScale = Number(fileUnitsScaleMm);
-  return option.mmPerUnit / (Number.isFinite(fileScale) && fileScale > 0 ? fileScale : 1);
-}
-
-function fileUnitsShortLabel(fileUnitsScaleMm) {
-  const scale = Number(fileUnitsScaleMm);
-  const match = DXF_UNIT_OPTIONS.find(
-    (option) => option.mmPerUnit !== null && Math.abs(option.mmPerUnit - scale) < 1e-9
+  return (
+    <FileSheetControlRow label={null}>
+      <Button
+        type="button"
+        variant="outline"
+        size="sm"
+        className={`${FILE_SHEET_COMPACT_BUTTON_CLASSES} w-full justify-center`}
+        onClick={() => onReset()}
+        aria-label={label}
+        title="Reset"
+      >
+        <RotateCcw className="h-3.5 w-3.5" strokeWidth={2} aria-hidden="true" />
+        <span>Reset</span>
+      </Button>
+    </FileSheetControlRow>
   );
-  return match ? match.value : "mm";
 }
 
-export function DxfDrawingSettings({
+export function DxfMaterialSettings({
   thicknessMm = DXF_DEFAULT_THICKNESS_MM,
   onThicknessChange,
   units = DXF_DEFAULT_UNITS,
   onUnitsChange,
-  fileUnitsScaleMm = 1,
+  onReset
+}) {
+  const activeUnits = normalizeDxfUnits(units);
+  const unit = unitOption(activeUnits);
+  const thickness = normalizeDxfThicknessMm(thicknessMm);
+  const commitThickness = (next) => onThicknessChange?.(
+    normalizeDxfThicknessMm(parseLengthToMm(next, unit, thickness), thickness)
+  );
+
+  return (
+    <FileSheetSectionBody>
+      <FileSheetSubsection>
+        {/* Units first: it reframes every dimensional row below it. */}
+        <FileSheetSelectRow
+          label="Units"
+          value={activeUnits}
+          onValueChange={(next) => onUnitsChange?.(normalizeDxfUnits(next, activeUnits))}
+          options={DXF_UNIT_OPTIONS.map(({ value, label }) => ({ value, label }))}
+        />
+        <FileSheetSliderField
+          label="Thickness"
+          value={formatLength(thickness, unit)}
+          onValueCommit={commitThickness}
+          valueInputProps={{
+            ariaLabel: "Thickness value",
+            min: 0,
+            max: displayLength(DXF_THICKNESS_MAX_MM, unit)
+          }}
+        >
+          <Slider
+            aria-label="Thickness"
+            className={FILE_SHEET_PRECISION_SLIDER_CLASSES}
+            value={[displayLength(thickness, unit)]}
+            min={0}
+            max={displayLength(DXF_THICKNESS_MAX_MM, unit)}
+            step={unit.sliderStep}
+            onValueChange={([next]) => onThicknessChange?.(
+              normalizeDxfThicknessMm(next * unit.mmPerUnit, thickness)
+            )}
+          />
+        </FileSheetSliderField>
+      </FileSheetSubsection>
+      <DxfResetRow label="Reset material settings" onReset={onReset} />
+    </FileSheetSectionBody>
+  );
+}
+
+export function DxfBendsSettings({
   bends = [],
   onBendChange,
   bendStyle = DXF_DEFAULT_BEND_STYLE,
@@ -146,177 +217,140 @@ export function DxfDrawingSettings({
   onBendRadiusChange,
   kFactor = DXF_DEFAULT_KFACTOR,
   onKFactorChange,
+  units = DXF_DEFAULT_UNITS,
   onReset
 }) {
-  const thickness = normalizeDxfThicknessMm(thicknessMm);
-  const commitThickness = (next) => onThicknessChange?.(normalizeDxfThicknessMm(next, thickness));
   const style = normalizeDxfBendStyle(bendStyle);
   const radius = normalizeDxfBendRadiusMm(bendRadiusMm);
   const neutralK = normalizeDxfKFactor(kFactor);
-  const activeUnits = normalizeDxfUnits(units);
+  const unit = unitOption(units);
 
   return (
     <FileSheetSectionBody>
-      <FileSheetSubsection title="Material">
-        <FileSheetSliderField
-          label="Thickness"
-          value={`${thickness.toFixed(1)} mm`}
-          onValueCommit={commitThickness}
-          valueInputProps={{
-            ariaLabel: "Thickness value",
-            min: DXF_THICKNESS_MIN_MM,
-            max: DXF_THICKNESS_MAX_MM
-          }}
-        >
-          <Slider
-            aria-label="Thickness"
-            className={FILE_SHEET_PRECISION_SLIDER_CLASSES}
-            value={[thickness]}
-            min={DXF_THICKNESS_MIN_MM}
-            max={DXF_THICKNESS_MAX_MM}
-            step={DXF_THICKNESS_STEP_MM}
-            onValueChange={([next]) => commitThickness(next)}
-          />
-        </FileSheetSliderField>
-        {/* Units reinterpret the drawing's coordinates; Auto trusts the file's $INSUNITS
-            (shown so the user can see what the file claims). */}
+      <FileSheetSubsection>
         <FileSheetSelectRow
-          label="Units"
-          value={activeUnits}
-          onValueChange={(next) => onUnitsChange?.(normalizeDxfUnits(next, activeUnits))}
-          options={DXF_UNIT_OPTIONS.map((option) => (option.value === "auto"
-            ? { ...option, label: `Auto (${fileUnitsShortLabel(fileUnitsScaleMm)})` }
-            : option))}
+          label="Style"
+          value={style}
+          onValueChange={(next) => onBendStyleChange?.(normalizeDxfBendStyle(next, bendStyle))}
+          options={[
+            { value: "boxed", label: "Boxed" },
+            { value: "curved", label: "Curved" }
+          ]}
         />
+        {/* Sheet-metal bend geometry only means anything when the surface actually
+            curves; Boxed is a schematic fold with no radius to size. */}
+        {style === "curved" ? (
+          <FileSheetSliderField
+            label="Radius"
+            value={radius > 0 ? formatLength(radius, unit) : "Auto"}
+            onValueCommit={(next) => onBendRadiusChange?.(
+              normalizeDxfBendRadiusMm(parseLengthToMm(next, unit, radius), radius)
+            )}
+            valueInputProps={{ ariaLabel: "Bend radius value", className: "w-16" }}
+          >
+            <Slider
+              aria-label="Bend radius"
+              className={FILE_SHEET_PRECISION_SLIDER_CLASSES}
+              value={[displayLength(radius, unit)]}
+              min={0}
+              max={displayLength(DXF_BEND_RADIUS_MAX_MM, unit)}
+              step={unit.sliderStep}
+              onValueChange={([next]) => onBendRadiusChange?.(
+                normalizeDxfBendRadiusMm(next * unit.mmPerUnit, radius)
+              )}
+            />
+          </FileSheetSliderField>
+        ) : null}
+        {style === "curved" ? (
+          <FileSheetSliderField
+            label="K-factor"
+            value={neutralK.toFixed(2)}
+            onValueCommit={(next) => onKFactorChange?.(normalizeDxfKFactor(next, neutralK))}
+            valueInputProps={{ ariaLabel: "K-factor value", className: "w-16" }}
+          >
+            <Slider
+              aria-label="K-factor"
+              className={FILE_SHEET_PRECISION_SLIDER_CLASSES}
+              value={[neutralK]}
+              min={DXF_KFACTOR_MIN}
+              max={DXF_KFACTOR_MAX}
+              step={0.01}
+              onValueChange={([next]) => onKFactorChange?.(normalizeDxfKFactor(next, neutralK))}
+            />
+          </FileSheetSliderField>
+        ) : null}
       </FileSheetSubsection>
 
-      {bends.length > 0 ? (
-        <FileSheetSubsection title="Bends">
-          <FileSheetSelectRow
-            label="Style"
-            value={style}
-            onValueChange={(next) => onBendStyleChange?.(normalizeDxfBendStyle(next, bendStyle))}
-            options={[
-              { value: "boxed", label: "Boxed" },
-              { value: "curved", label: "Curved" }
-            ]}
-          />
-          {/* Sheet-metal bend geometry only means anything when the surface actually
-              curves; Boxed is a schematic fold with no radius to size. */}
-          {style === "curved" ? (
+      {/* A titleless subsection renders as a rule plus rows — the separator between the
+          style block above and the per-bend list below. One row per bend: the item label IS
+          the slider label, direction rides inline beside the value box (settings-ui.md
+          "Repeated item groups", single-row form). */}
+      <FileSheetSubsection hideFirstSeparator={false}>
+        {bends.map((bend, index) => {
+          const angle = normalizeDxfBendAngleDeg(bend?.angleDeg);
+          const direction = normalizeDxfBendDirection(bend?.direction);
+          const commitAngle = (next) => onBendChange?.(index, {
+            angleDeg: normalizeDxfBendAngleDeg(next, angle)
+          });
+          return (
             <FileSheetSliderField
-              label="Radius"
-              value={radius > 0 ? `${radius.toFixed(1)} mm` : "Auto"}
-              onValueCommit={(next) => onBendRadiusChange?.(normalizeDxfBendRadiusMm(next, radius))}
-              valueInputProps={{ ariaLabel: "Bend radius value", className: "w-16" }}
+              key={index}
+              label={`Bend ${index + 1}`}
+              value={`${Math.round(angle)}°`}
+              trailing={(
+                <div className="flex shrink-0 items-center gap-1.5">
+                  <FileSheetValueInput
+                    ariaLabel={`Bend ${index + 1} angle value`}
+                    value={`${Math.round(angle)}°`}
+                    onValueCommit={commitAngle}
+                    className="w-12"
+                  />
+                  <FileSheetSegmentedControl
+                    fit
+                    ariaLabel={`Bend ${index + 1} direction`}
+                    value={direction}
+                    onChange={(next) => onBendChange?.(index, {
+                      direction: normalizeDxfBendDirection(next, direction)
+                    })}
+                    options={[
+                      { value: "up", label: "Up", title: "Bend up", Icon: ArrowUp, iconOnly: true },
+                      { value: "down", label: "Down", title: "Bend down", Icon: ArrowDown, iconOnly: true }
+                    ]}
+                  />
+                </div>
+              )}
             >
               <Slider
-                aria-label="Bend radius"
+                aria-label={`Bend ${index + 1} angle`}
                 className={FILE_SHEET_PRECISION_SLIDER_CLASSES}
-                value={[radius]}
-                min={0}
-                max={DXF_BEND_RADIUS_MAX_MM}
-                step={0.5}
-                onValueChange={([next]) => onBendRadiusChange?.(normalizeDxfBendRadiusMm(next, radius))}
+                value={[angle]}
+                min={DXF_BEND_ANGLE_MIN_DEG}
+                max={DXF_BEND_ANGLE_MAX_DEG}
+                step={DXF_BEND_ANGLE_STEP_DEG}
+                onValueChange={([next]) => commitAngle(next)}
               />
             </FileSheetSliderField>
-          ) : null}
-          {style === "curved" ? (
-            <FileSheetSliderField
-              label="K-factor"
-              value={neutralK.toFixed(2)}
-              onValueCommit={(next) => onKFactorChange?.(normalizeDxfKFactor(next, neutralK))}
-              valueInputProps={{ ariaLabel: "K-factor value", className: "w-16" }}
-            >
-              <Slider
-                aria-label="K-factor"
-                className={FILE_SHEET_PRECISION_SLIDER_CLASSES}
-                value={[neutralK]}
-                min={DXF_KFACTOR_MIN}
-                max={DXF_KFACTOR_MAX}
-                step={0.01}
-                onValueChange={([next]) => onKFactorChange?.(normalizeDxfKFactor(next, neutralK))}
-              />
-            </FileSheetSliderField>
-          ) : null}
-          {/* One row per bend: the item label IS the slider label, direction rides inline
-              beside the value box (settings-ui.md "Repeated item groups", single-row form). */}
-          {bends.map((bend, index) => {
-            const angle = normalizeDxfBendAngleDeg(bend?.angleDeg);
-            const direction = normalizeDxfBendDirection(bend?.direction);
-            const commitAngle = (next) => onBendChange?.(index, {
-              angleDeg: normalizeDxfBendAngleDeg(next, angle)
-            });
-            return (
-              <FileSheetSliderField
-                key={index}
-                label={`Bend ${index + 1}`}
-                value={`${Math.round(angle)}°`}
-                trailing={(
-                  <div className="flex shrink-0 items-center gap-1.5">
-                    <FileSheetValueInput
-                      ariaLabel={`Bend ${index + 1} angle value`}
-                      value={`${Math.round(angle)}°`}
-                      onValueCommit={commitAngle}
-                      className="w-12"
-                    />
-                    <FileSheetSegmentedControl
-                      fit
-                      ariaLabel={`Bend ${index + 1} direction`}
-                      value={direction}
-                      onChange={(next) => onBendChange?.(index, {
-                        direction: normalizeDxfBendDirection(next, direction)
-                      })}
-                      options={[
-                        { value: "up", label: "Up", title: "Bend up", Icon: ArrowUp, iconOnly: true },
-                        { value: "down", label: "Down", title: "Bend down", Icon: ArrowDown, iconOnly: true }
-                      ]}
-                    />
-                  </div>
-                )}
-              >
-                <Slider
-                  aria-label={`Bend ${index + 1} angle`}
-                  className={FILE_SHEET_PRECISION_SLIDER_CLASSES}
-                  value={[angle]}
-                  min={DXF_BEND_ANGLE_MIN_DEG}
-                  max={DXF_BEND_ANGLE_MAX_DEG}
-                  step={DXF_BEND_ANGLE_STEP_DEG}
-                  onValueChange={([next]) => commitAngle(next)}
-                />
-              </FileSheetSliderField>
-            );
-          })}
-        </FileSheetSubsection>
-      ) : null}
+          );
+        })}
+      </FileSheetSubsection>
 
-      {/* One Reset per tab (settings-ui.md): full-width outline + RotateCcw as the last
-          row, restoring material AND bends to their defaults. Layer visibility lives in
-          the Layers tab and resets with everything else. */}
-      {onReset ? (
-        <FileSheetControlRow label={null}>
-          <Button
-            type="button"
-            variant="outline"
-            size="sm"
-            className={`${FILE_SHEET_COMPACT_BUTTON_CLASSES} w-full justify-center`}
-            onClick={() => onReset()}
-            aria-label="Reset drawing settings"
-            title="Reset"
-          >
-            <RotateCcw className="h-3.5 w-3.5" strokeWidth={2} aria-hidden="true" />
-            <span>Reset</span>
-          </Button>
-        </FileSheetControlRow>
-      ) : null}
+      <DxfResetRow label="Reset bend settings" onReset={onReset} />
     </FileSheetSectionBody>
   );
 }
 
-export function buildDxfDrawingTab(props) {
+export function buildDxfMaterialTab(props) {
   return {
-    id: FILE_SHEET_SECTION_IDS.DXF_SETTINGS,
-    title: "DXF",
-    content: <DxfDrawingSettings {...props} />
+    id: FILE_SHEET_SECTION_IDS.DXF_MATERIAL,
+    title: "Material",
+    content: <DxfMaterialSettings {...props} />
+  };
+}
+
+export function buildDxfBendsTab(props) {
+  return {
+    id: FILE_SHEET_SECTION_IDS.DXF_BENDS,
+    title: "Bends",
+    content: <DxfBendsSettings {...props} />
   };
 }

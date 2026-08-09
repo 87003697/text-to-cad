@@ -57,11 +57,6 @@ export function DxfLayersSection({
               hidden && "opacity-60"
             )}
           >
-            <span
-              aria-hidden="true"
-              className="size-2.5 shrink-0 rounded-full border border-black/20"
-              style={{ backgroundColor: layer.colorHex || "var(--muted-foreground)" }}
-            />
             <span className="min-w-0 flex-1 truncate font-medium text-sidebar-foreground">
               {layer.name}
             </span>

@@ -35,11 +35,11 @@ test("rendered file sheet sections include closed-by-default sections", () => {
   // A drawing has controls of its own: thickness and bends are render-time parameters on the
   // cached prism, so they steer the viewport without touching the package.
   // One stacked surface: Material over Bends, no tab switch between them.
-  assert.deepEqual(renderedFileSheetSectionIds("dxf", { hasFileStatus: true }), ["status", "drawing"]);
-  assert.deepEqual(renderedFileSheetSectionIds("dxf"), ["drawing"]);
+  assert.deepEqual(renderedFileSheetSectionIds("dxf", { hasFileStatus: true }), ["status", "material"]);
+  assert.deepEqual(renderedFileSheetSectionIds("dxf"), ["material"]);
   assert.deepEqual(
-    renderedFileSheetSectionIds("dxf", { hasDxfLayersPanel: true }),
-    ["drawing", "dxfLayers"]
+    renderedFileSheetSectionIds("dxf", { hasDxfBendsPanel: true, hasDxfLayersPanel: true }),
+    ["material", "bends", "dxfLayers"]
   );
   assert.deepEqual(renderedFileSheetSectionIds("step", { hasFileStatus: true, hasStepModulePanel: true }), [
     "status",
