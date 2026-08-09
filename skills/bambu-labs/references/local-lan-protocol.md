@@ -25,7 +25,9 @@ and cached serials. It is local config and should be ignored by Git.
 - TLS verification is off by default because local printers commonly use
   device/self-signed certificates.
 - The helper rejects public IPs/hostnames unless `--allow-nonprivate-host` is
-  set.
+  set. Host policy and certificate verification are independent:
+  `--allow-nonprivate-host` only overrides the private-host boundary, while
+  `--tls-verify` enables certificate and hostname verification.
 - FTPS data connections may require TLS session reuse. The helper reuses the
   control TLS session for uploads and listings.
 

@@ -34,7 +34,6 @@ docs
 htmlcov
 .coverage
 .coverage.*
-graphify-out
 wandb
 tmp
 worktrees
