@@ -21,6 +21,7 @@ SUMMARY_SCHEMA = "voxblame.summary/1"
 COORDINATE_CONTRACT = "trellis2_canonical/1"
 MAX_DEPTH = 8
 BOUNDARY_EPSILON = 1e-9
+MIN_EXTERIOR_DIAGNOSTIC_GRID_DEPTH = -1022
 
 # These fields belong either to the superseded workflow, sampled-distance
 # evaluation, world-coordinate terminology, or Agent-owned judgment.  They are
@@ -501,15 +502,7 @@ def _validate_exterior(value: Any, path: str) -> Mapping[str, Any]:
         f"{path}.surface_cell_count",
         minimum=0,
     )
-    diagnostic_depth = _integer(
-        exterior["diagnostic_grid_depth"],
-        f"{path}.diagnostic_grid_depth",
-        minimum=-1022,
-        maximum=MAX_DEPTH,
-    )
-    coarsened = _boolean(exterior["coarsened"], f"{path}.coarsened")
-    if coarsened is not (diagnostic_depth < MAX_DEPTH):
-        _fail(f"{path}.coarsened", "contradicts diagnostic grid depth")
+    _validate_exterior_resolution(exterior, path)
     directions = _directions(exterior["outside_directions"], f"{path}.outside_directions")
     nullable_fields = (
         "bounds_canonical",
@@ -717,22 +710,29 @@ def _validate_target(
             f"{path}.exterior.outside_directions",
         ):
             _fail(f"{path}.exterior.outside_directions", "must not be empty")
-        diagnostic_depth = _integer(
+        _integer(
             exterior["diagnostic_grid_depth"],
             f"{path}.exterior.diagnostic_grid_depth",
-            minimum=-1022,
+            minimum=1,
             maximum=MAX_DEPTH,
         )
-        coarsened = _boolean(
-            exterior["coarsened"],
-            f"{path}.exterior.coarsened",
-        )
-        if coarsened is not (diagnostic_depth < MAX_DEPTH):
-            _fail(
-                f"{path}.exterior.coarsened",
-                "contradicts diagnostic grid depth",
-            )
+        _boolean(exterior["coarsened"], f"{path}.exterior.coarsened")
     return key
+
+
+def _validate_exterior_resolution(
+    exterior: Mapping[str, Any],
+    path: str,
+) -> None:
+    diagnostic_depth = _integer(
+        exterior["diagnostic_grid_depth"],
+        f"{path}.diagnostic_grid_depth",
+        minimum=MIN_EXTERIOR_DIAGNOSTIC_GRID_DEPTH,
+        maximum=MAX_DEPTH,
+    )
+    coarsened = _boolean(exterior["coarsened"], f"{path}.coarsened")
+    if coarsened is not (diagnostic_depth < MAX_DEPTH):
+        _fail(f"{path}.coarsened", "contradicts diagnostic grid depth")
 
 
 def _object(value: Any, path: str, required: frozenset[str]) -> Mapping[str, Any]:

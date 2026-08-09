@@ -387,9 +387,9 @@ class VoxBlameMeasurementTests(unittest.TestCase):
     ) -> None:
         vertices = np.array(
             [
-                [0.6, -45.0, -45.0],
-                [0.6, 45.0, -45.0],
-                [0.6, -45.0, 45.0],
+                [0.6, -1.0e20, -1.0e20],
+                [0.6, 1.0e20, -1.0e20],
+                [0.6, -1.0e20, 1.0e20],
             ],
             dtype=np.float64,
         )
@@ -398,8 +398,8 @@ class VoxBlameMeasurementTests(unittest.TestCase):
             faces=[[0, 1, 2]],
             process=False,
         )
-        exterior_path = self.root / "coarsened-exterior.obj"
-        exterior.export(exterior_path)
+        exterior_path = self.root / "coarsened-exterior.ply"
+        _write_double_ply(exterior_path, exterior)
 
         summary = measure_step(
             self.reference,
@@ -410,7 +410,10 @@ class VoxBlameMeasurementTests(unittest.TestCase):
         evidence = summary["exterior_surface"]
         self.assertTrue(evidence["surface_present"])
         self.assertEqual(
-            {"min": [0.6, -45.0, -45.0], "max": [0.6, 45.0, 45.0]},
+            {
+                "min": [0.6, -1.0e20, -1.0e20],
+                "max": [0.6, 1.0e20, 1.0e20],
+            },
             evidence["bounds_canonical"],
         )
         self.assertEqual(
@@ -418,7 +421,7 @@ class VoxBlameMeasurementTests(unittest.TestCase):
             evidence["outside_directions"],
         )
         self.assertAlmostEqual(0.1, evidence["nearest_overrun"])
-        self.assertAlmostEqual(44.5, evidence["farthest_overrun"])
+        self.assertAlmostEqual(1.0e20 - 0.5, evidence["farthest_overrun"])
         self.assertTrue(evidence["coarsened"])
         self.assertLess(evidence["diagnostic_grid_depth"], 1)
         self.assertLessEqual(evidence["surface_cell_count"], 65_536)

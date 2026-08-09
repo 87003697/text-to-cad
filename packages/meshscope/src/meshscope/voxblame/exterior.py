@@ -14,6 +14,7 @@ from meshscope.voxblame.contracts import (
     BOUNDARY_EPSILON,
     COORDINATE_CONTRACT,
     MAX_DEPTH,
+    MIN_EXTERIOR_DIAGNOSTIC_GRID_DEPTH,
 )
 from meshscope.voxblame.errors import OctreeError
 from meshscope.voxblame.voxelize import triangles_intersect_box
@@ -23,7 +24,6 @@ EXTERIOR_SNAPSHOT_SCHEMA = "voxblame.exterior-snapshot/1"
 EXTERIOR_GRID_PROFILE = "signed_exterior_grid/1"
 EXTERIOR_BOUNDARY_POLICY = "canonical-boundary-interior-closed-cells/1"
 EXTERIOR_MAX_DIAGNOSTIC_CANDIDATE_CELLS = 65_536
-EXTERIOR_MIN_DIAGNOSTIC_GRID_DEPTH = -1022
 _DIGEST_DOMAIN = b"voxblame.exterior-snapshot/1\0"
 _DIRECTION_ORDER = ("-x", "+x", "-y", "+y", "-z", "+z")
 
@@ -245,7 +245,7 @@ def _outside_directions(triangle: np.ndarray) -> set[str]:
 def _select_diagnostic_depth(triangles: np.ndarray) -> int:
     for depth in range(
         MAX_DEPTH,
-        EXTERIOR_MIN_DIAGNOSTIC_GRID_DEPTH - 1,
+        MIN_EXTERIOR_DIAGNOSTIC_GRID_DEPTH - 1,
         -1,
     ):
         if _candidate_cell_count(triangles, depth) <= (
@@ -259,9 +259,15 @@ def _candidate_cell_count(triangles: np.ndarray, depth: int) -> int:
     size = math.ldexp(1.0, -depth)
     total = 0
     for triangle in triangles:
-        lower, upper = _diagnostic_index_bounds(triangle, size)
-        spans = upper - lower + 1
-        total += math.prod(int(item) for item in spans)
+        try:
+            lower, upper = _diagnostic_index_bounds(triangle, size)
+        except OverflowError:
+            return EXTERIOR_MAX_DIAGNOSTIC_CANDIDATE_CELLS + 1
+        spans = [
+            int(upper[axis]) - int(lower[axis]) + 1
+            for axis in range(3)
+        ]
+        total += math.prod(spans)
         if total > EXTERIOR_MAX_DIAGNOSTIC_CANDIDATE_CELLS:
             break
     return total
@@ -298,13 +304,19 @@ def _diagnostic_index_bounds(
     triangle: np.ndarray,
     cell_size: float,
 ) -> tuple[np.ndarray, np.ndarray]:
-    lower = (
-        np.floor((triangle.min(axis=0) + 0.5) / cell_size).astype(np.int64) - 1
-    )
-    upper = (
-        np.floor((triangle.max(axis=0) + 0.5) / cell_size).astype(np.int64) + 1
-    )
-    return lower, upper
+    minimum = triangle.min(axis=0)
+    maximum = triangle.max(axis=0)
+    int64 = np.iinfo(np.int64)
+    lower: list[int] = []
+    upper: list[int] = []
+    for axis in range(3):
+        low = math.floor((float(minimum[axis]) + 0.5) / cell_size) - 1
+        high = math.floor((float(maximum[axis]) + 0.5) / cell_size) + 1
+        if low < int64.min or high > int64.max:
+            raise OverflowError("diagnostic grid index exceeds int64")
+        lower.append(low)
+        upper.append(high)
+    return np.asarray(lower, dtype=np.int64), np.asarray(upper, dtype=np.int64)
 
 
 def _snapshot(
@@ -377,18 +389,35 @@ def _exact_facts(triangles: np.ndarray, directions: set[str]) -> dict[str, Any]:
 def _nearest_overrun(triangles: np.ndarray, farthest_overrun: float) -> float:
     """Return the minimum L-infinity expansion needed to touch the surface."""
 
+    scale = max(1.0, float(np.max(np.abs(triangles))))
+    scaled_triangles = triangles / scale
+    canonical_half = 0.5 / scale
     origin = np.zeros(3, dtype=np.float64)
-    if np.any(triangles_intersect_box(triangles, origin, 0.5)):
+    if np.any(
+        triangles_intersect_box(
+            scaled_triangles,
+            origin,
+            canonical_half,
+            tolerance=0.0,
+        )
+    ):
         return 0.0
     lower = 0.0
-    upper = farthest_overrun
-    for _ in range(64):
+    upper = farthest_overrun / scale
+    for _ in range(128):
         middle = (lower + upper) / 2.0
-        if np.any(triangles_intersect_box(triangles, origin, 0.5 + middle)):
+        if np.any(
+            triangles_intersect_box(
+                scaled_triangles,
+                origin,
+                canonical_half + middle,
+                tolerance=0.0,
+            )
+        ):
             upper = middle
         else:
             lower = middle
-    return upper
+    return upper * scale
 
 
 def _json_bytes(value: dict[str, Any]) -> bytes:

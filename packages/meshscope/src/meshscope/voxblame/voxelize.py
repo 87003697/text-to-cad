@@ -115,10 +115,13 @@ def triangles_intersect_box(
     triangles: np.ndarray,
     center: np.ndarray,
     half: float,
+    *,
+    tolerance: float | None = None,
 ) -> np.ndarray:
     """Triangle/AABB SAT with the inclusive closed-cell occupancy policy."""
     vertices = triangles - center[None, None, :]
-    tolerance = max(half * 1e-10, 1e-14)
+    if tolerance is None:
+        tolerance = max(half * 1e-10, 1e-14)
     active = np.all(vertices.min(axis=1) <= half + tolerance, axis=1)
     active &= np.all(vertices.max(axis=1) >= -half - tolerance, axis=1)
     if not np.any(active):
