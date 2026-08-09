@@ -1,9 +1,4 @@
-"""Numeric mesh similarity CLI.
-
-Prints a JSON object to stdout with chamfer / hausdorff / percentile stats.
-See `skills/mesh-compare/references/compare-metrics.md` for the schema
-and threshold interpretation.
-"""
+"""Public mesh comparison commands."""
 
 from __future__ import annotations
 
@@ -22,10 +17,78 @@ if _BUNDLED_MESHSCOPE.is_dir():
 from meshscope.compare import compare, prepare
 from meshscope.voxblame import (
     PrepareReferenceError,
+    measure_step,
     prepare_reference,
     publish_prepare_failure,
     run_step,
 )
+
+
+def _measure_main(argv: list[str]) -> int:
+    parser = argparse.ArgumentParser(
+        prog="mesh-compare voxblame-measure",
+        description="Measure and atomically publish one canonical Measured Step.",
+    )
+    parser.add_argument(
+        "candidate", type=Path, help="In-frame canonical candidate mesh"
+    )
+    parser.add_argument(
+        "--reference",
+        type=Path,
+        required=True,
+        help="Published Canonical Reference directory",
+    )
+    parser.add_argument(
+        "--output",
+        type=Path,
+        required=True,
+        help="VoxBlame measurement-state directory",
+    )
+    parser.add_argument(
+        "--step", type=int, required=True, help="Measured Step number"
+    )
+    parser.add_argument(
+        "--compare-to",
+        type=int,
+        help="Explicit earlier Measured Step for a nonzero step",
+    )
+    args = parser.parse_args(argv)
+    try:
+        result = measure_step(
+            args.reference,
+            args.candidate,
+            args.output,
+            step=args.step,
+            compare_to=args.compare_to,
+        )
+    except Exception as exc:
+        detail = str(exc)
+        print(
+            json.dumps(
+                {
+                    "ok": False,
+                    "error": {
+                        "classification": "measurement_failed",
+                        "detail": detail,
+                    },
+                },
+                separators=(",", ":"),
+            )
+        )
+        print(f"measurement_failed: {detail}", file=sys.stderr)
+        return 2
+    print(
+        json.dumps(
+            {
+                "ok": True,
+                "output": str(args.output),
+                "idempotent": result.idempotent,
+                "measurement": result.summary,
+            },
+            separators=(",", ":"),
+        )
+    )
+    return 0
 
 
 def _prepare_reference_main(argv: list[str]) -> int:
@@ -81,6 +144,8 @@ def _prepare_reference_main(argv: list[str]) -> int:
 
 def main(argv=None) -> int:
     argv = list(argv) if argv is not None else sys.argv[1:]
+    if argv and argv[0] == "voxblame-measure":
+        return _measure_main(argv[1:])
     if argv and argv[0] == "voxblame-prepare-reference":
         return _prepare_reference_main(argv[1:])
     parser = argparse.ArgumentParser(description="Compute similarity metrics between two mesh files.")

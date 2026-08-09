@@ -28,6 +28,12 @@ from meshscope.voxblame.errors import (
     VoxBlameError,
 )
 from meshscope.voxblame.frame import CanonicalFrame
+from meshscope.voxblame.measurement import (
+    MEASUREMENT_SCHEMA,
+    MEASUREMENT_SUMMARY_SCHEMA,
+    MeasureStepResult,
+    measure_step,
+)
 from meshscope.voxblame.prepare_reference import (
     CANONICAL_REFERENCE_SCHEMA,
     NORMALIZATION_SCHEMA,
@@ -65,6 +71,9 @@ __all__ = [
     "COORDINATE_CONTRACT",
     "FORBIDDEN_FIELDS",
     "MAX_DEPTH",
+    "MEASUREMENT_SCHEMA",
+    "MEASUREMENT_SUMMARY_SCHEMA",
+    "MeasureStepResult",
     "NORMALIZATION_SCHEMA",
     "PREPARE_FAILURE_SCHEMA",
     "PrepareReferenceError",
@@ -83,6 +92,7 @@ __all__ = [
     "encode_surface_tree",
     "grade_surface_trees",
     "lattice_bounds",
+    "measure_step",
     "read_surface_tree",
     "prepare_reference",
     "publish_prepare_failure",
