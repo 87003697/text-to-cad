@@ -28,12 +28,18 @@ Use these defaults unless the user specifies otherwise:
 
 ## Tools and paths
 
-This skill is a pure orchestrator; it does not ship its own CLI. Each
-workflow step delegates to a peer skill: `$mesh-inspect` for mesh
+This skill delegates modeling and objective geometry work to peer skills:
+`$mesh-inspect` for mesh
 statistics, `$cad` or `$implicit-cad` for modeling, `$mesh-compare`
 for similarity measurement and multi-view rendering, and
 (optionally) `$cad-viewer` for interactive review. See § Required
 workflow for the concrete step-to-skill mapping.
+
+The skill also ships the self-contained
+`scripts/mesh-to-cad-workspace` helper. It publishes and validates the
+canonical immutable Workspace graph introduced by the repair-workspace
+protocol; see `references/workspace-contract.md`. The helper owns workflow
+state and Git evidence, not CAD execution or VoxBlame facts.
 
 ## Required workflow
 
@@ -179,3 +185,6 @@ Load these files or peer skills only when their trigger applies:
   trigger: workflow step 3.
 - `$cad-viewer` — optional interactive review of the reconstructed
   CAD; trigger: workflow step 6.
+- `references/workspace-contract.md` — public immutable Workspace helper,
+  transaction recovery, attempt/cycle budgets, and protocol-scoped Git
+  publication; trigger: canonical repair-workspace execution.
