@@ -10,7 +10,9 @@ import { ScrollArea } from "../ui/scroll-area";
 import {
   Select,
   SelectContent,
+  SelectGroup,
   SelectItem,
+  SelectLabel,
   SelectTrigger,
   SelectValue
 } from "../ui/select";
@@ -674,17 +676,39 @@ export function FileSheetSelectRow({
         {triggerContent ?? <SelectValue placeholder={placeholder} />}
       </SelectTrigger>
       <SelectContent>
-        {options.map((option) => (
-          <SelectItem
-            key={option.value}
-            value={option.value}
-            className="text-xs"
-            title={option.title}
-            icon={option.icon}
-          >
-            {option.label}
-          </SelectItem>
-        ))}
+        {(() => {
+          // Options may carry a `group`: grouped ones render under SelectGroup headings in
+          // first-appearance order, ungrouped ones (e.g. a leading "None") stay at the top.
+          const renderItem = (option) => (
+            <SelectItem
+              key={option.value}
+              value={option.value}
+              className="text-xs"
+              title={option.title}
+              icon={option.icon}
+            >
+              {option.label}
+            </SelectItem>
+          );
+          const ungrouped = options.filter((option) => !option.group);
+          const groupNames = [...new Set(options.map((option) => option.group).filter(Boolean))];
+          if (!groupNames.length) {
+            return options.map(renderItem);
+          }
+          return (
+            <>
+              {ungrouped.map(renderItem)}
+              {groupNames.map((groupName) => (
+                <SelectGroup key={groupName}>
+                  <SelectLabel className="text-[10px] uppercase tracking-wide text-muted-foreground">
+                    {groupName}
+                  </SelectLabel>
+                  {options.filter((option) => option.group === groupName).map(renderItem)}
+                </SelectGroup>
+              ))}
+            </>
+          );
+        })()}
       </SelectContent>
     </Select>
   );

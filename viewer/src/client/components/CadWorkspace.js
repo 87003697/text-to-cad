@@ -11,7 +11,7 @@ import {
 } from "./workbench/ThemeSettingsPopover";
 import MeshFileSheet from "./workbench/MeshFileSheet";
 import { DXF_PREVIEW_REFERENCE_THICKNESS_MM } from "cadjs/lib/dxf/previewGlb";
-import { computeDxfFlatStats, extractOrderedDxfBendLines } from "cadjs/lib/dxf/buildPreviewMesh";
+import { extractOrderedDxfBendLines } from "cadjs/lib/dxf/buildPreviewMesh";
 import {
   buildDxfBendsTab,
   buildDxfMaterialTab,
@@ -3406,16 +3406,6 @@ export default function CadWorkspace({
     [drawingGeometry]
   );
 
-  const drawingFlatStats = useMemo(() => {
-    if (!drawingGeometry?.geometry) {
-      return null;
-    }
-    try {
-      return computeDxfFlatStats(drawingGeometry);
-    } catch {
-      return null;
-    }
-  }, [drawingGeometry]);
 
 
   // Memoised: this array is an effect dependency in the viewer, and a fresh identity per
@@ -8660,7 +8650,6 @@ export default function CadWorkspace({
                     onUnitsChange: setDrawingUnits,
                     material: drawingMaterial,
                     onMaterialChange: setDrawingMaterial,
-                    flatStats: drawingFlatStats,
                     onReset: handleDrawingMaterialReset
                   }),
                   ...(drawingBends.length > 0 ? [buildDxfBendsTab({
