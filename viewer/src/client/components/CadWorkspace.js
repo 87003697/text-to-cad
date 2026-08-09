@@ -11,10 +11,13 @@ import {
 } from "./workbench/ThemeSettingsPopover";
 import MeshFileSheet from "./workbench/MeshFileSheet";
 import { DXF_PREVIEW_REFERENCE_THICKNESS_MM } from "cadjs/lib/dxf/previewGlb";
+import { extractOrderedDxfBendLines } from "cadjs/lib/dxf/buildPreviewMesh";
 import {
   buildDxfDrawingTab,
   DXF_DEFAULT_BEND_ANGLE_DEG,
+  DXF_DEFAULT_BEND_RADIUS_MM,
   DXF_DEFAULT_BEND_STYLE,
+  DXF_DEFAULT_KFACTOR,
   DXF_DEFAULT_THICKNESS_MM,
   normalizeDxfBendAngleDeg,
   normalizeDxfThicknessMm
@@ -1231,6 +1234,11 @@ export default function CadWorkspace({
   // a thing the moment a drawing had two bends that want different angles.
   const [drawingBends, setDrawingBends] = useState([]);
   const [drawingBendStyle, setDrawingBendStyle] = useState(DXF_DEFAULT_BEND_STYLE);
+  // Sheet-metal bend geometry for the curved style: inside radius (0 = auto) and K-factor.
+  const [drawingBendRadiusMm, setDrawingBendRadiusMm] = useState(DXF_DEFAULT_BEND_RADIUS_MM);
+  const [drawingKFactor, setDrawingKFactor] = useState(DXF_DEFAULT_KFACTOR);
+  // Layer names the user has switched off; everything else renders.
+  const [drawingHiddenLayers, setDrawingHiddenLayers] = useState([]);
   // The package's parsed contours, fetched once per entry and kept by URL. Curved bends
   // re-mesh from these; the URL carries the package version, so a rebuild refetches.
   const drawingGeometryCacheRef = useRef(new Map());
@@ -3228,6 +3236,14 @@ export default function CadWorkspace({
     })));
   }, [selectedKey, selectedDrawingBendAxisCount]);
 
+  // Every other drawing setting is per-entry session state too: a new selection starts
+  // from the defaults, not from whatever the previous drawing was set to.
+  useEffect(() => {
+    setDrawingBendRadiusMm(DXF_DEFAULT_BEND_RADIUS_MM);
+    setDrawingKFactor(DXF_DEFAULT_KFACTOR);
+    setDrawingHiddenLayers([]);
+  }, [selectedKey]);
+
   const drawingGeometryUrl = selectedEntryIsDrawing
     ? String(selectedEntry?.relations?.drawingGeometry?.url || "")
     : "";
@@ -3269,15 +3285,50 @@ export default function CadWorkspace({
     ));
   }, []);
 
-  // The DXF tab's single Reset: material and bends back to their defaults together.
+  // The DXF tab's single Reset: material, bends, and layers back to their defaults together.
   const handleDrawingSettingsReset = useCallback(() => {
     setDrawingThicknessMm(DXF_DEFAULT_THICKNESS_MM);
     setDrawingBendStyle(DXF_DEFAULT_BEND_STYLE);
+    setDrawingBendRadiusMm(DXF_DEFAULT_BEND_RADIUS_MM);
+    setDrawingKFactor(DXF_DEFAULT_KFACTOR);
+    setDrawingHiddenLayers([]);
     setDrawingBends((current) => current.map(() => ({
       angleDeg: DXF_DEFAULT_BEND_ANGLE_DEG,
       direction: "up"
     })));
   }, []);
+
+  const handleDrawingLayerVisibilityChange = useCallback((layerName, visible) => {
+    setDrawingHiddenLayers((current) => {
+      const next = current.filter((name) => name !== layerName);
+      if (!visible) {
+        next.push(layerName);
+      }
+      return next;
+    });
+  }, []);
+
+  // The bend LINES (full 2D segments — orientation matters now) come from the package's
+  // parsed geometry; the scanner's bendLineCount only sizes the settings rows before the
+  // geometry fetch lands.
+  const drawingBendLines = useMemo(() => {
+    if (!drawingGeometry?.geometry) {
+      return null;
+    }
+    try {
+      return extractOrderedDxfBendLines(drawingGeometry).map((bendLine) => ({
+        start: bendLine.start,
+        end: bendLine.end
+      }));
+    } catch {
+      return null;
+    }
+  }, [drawingGeometry]);
+
+  const drawingLayers = useMemo(
+    () => (Array.isArray(drawingGeometry?.layers) ? drawingGeometry.layers : []),
+    [drawingGeometry]
+  );
 
   // Memoised: this array is an effect dependency in the viewer, and a fresh identity per
   // render would re-run the fold transform on every workspace render.
@@ -8114,9 +8165,13 @@ export default function CadWorkspace({
           drawingThicknessScale={drawingThicknessScale}
           planMode={selectedEntryIsDrawing && drawingViewMode === "2d"}
           bendAxisX={selectedEntryIsDrawing ? selectedEntry?.bendAxisX || null : null}
+          drawingBendLines={selectedEntryIsDrawing ? drawingBendLines : null}
           bendAnglesRad={selectedEntryIsDrawing ? drawingBendAnglesRad : null}
           drawingBends={selectedEntryIsDrawing ? drawingBends : null}
           drawingBendStyle={selectedEntryIsDrawing ? drawingBendStyle : "boxed"}
+          drawingBendRadiusMm={selectedEntryIsDrawing ? drawingBendRadiusMm : 0}
+          drawingKFactor={selectedEntryIsDrawing ? drawingKFactor : DXF_DEFAULT_KFACTOR}
+          drawingHiddenLayers={selectedEntryIsDrawing ? drawingHiddenLayers : null}
           drawingGeometry={selectedEntryIsDrawing ? drawingGeometry : null}
           drawingThicknessMm={selectedEntryIsDrawing ? drawingThicknessMm : 0}
           onCameraZoomPercentChange={setViewerZoomPercent}
@@ -8509,6 +8564,13 @@ export default function CadWorkspace({
                     onBendChange: handleDrawingBendChange,
                     bendStyle: drawingBendStyle,
                     onBendStyleChange: setDrawingBendStyle,
+                    bendRadiusMm: drawingBendRadiusMm,
+                    onBendRadiusChange: setDrawingBendRadiusMm,
+                    kFactor: drawingKFactor,
+                    onKFactorChange: setDrawingKFactor,
+                    layers: drawingLayers,
+                    hiddenLayers: drawingHiddenLayers,
+                    onLayerVisibilityChange: handleDrawingLayerVisibilityChange,
                     onReset: handleDrawingSettingsReset
                   }),
                   ...themeTabs

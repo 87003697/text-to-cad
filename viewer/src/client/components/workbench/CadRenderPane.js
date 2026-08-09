@@ -266,9 +266,13 @@ export default function CadRenderPane({
   drawingThicknessScale = 1,
   planMode = false,
   bendAxisX = null,
+  drawingBendLines = null,
   bendAnglesRad = null,
   drawingBends = null,
   drawingBendStyle = "boxed",
+  drawingBendRadiusMm = 0,
+  drawingKFactor = 0.5,
+  drawingHiddenLayers = null,
   drawingGeometry = null,
   drawingThicknessMm = 0,
   onCameraZoomPercentChange = null,
@@ -487,9 +491,13 @@ export default function CadRenderPane({
           drawingThicknessScale={drawingThicknessScale}
           planMode={planMode}
           bendAxisX={bendAxisX}
+          drawingBendLines={drawingBendLines}
           bendAnglesRad={bendAnglesRad}
           drawingBends={drawingBends}
           drawingBendStyle={drawingBendStyle}
+          drawingBendRadiusMm={drawingBendRadiusMm}
+          drawingKFactor={drawingKFactor}
+          drawingHiddenLayers={drawingHiddenLayers}
           drawingGeometry={drawingGeometry}
           drawingThicknessMm={drawingThicknessMm}
           onCameraZoomPercentChange={onCameraZoomPercentChange}

@@ -8,9 +8,11 @@ import {
   dxfBendGuideSegments,
   dxfFlatPatternExtents,
   dxfFoldIsIdentity,
+  foldDxfPoint,
+  normalizeDxfFoldOptions,
   transformDxfPreviewPositions
 } from "cadjs/lib/dxf/foldPreview";
-import { buildDxfPreviewMeshData } from "cadjs/lib/dxf/buildPreviewMesh";
+import { buildDxfPreviewMeshData, extractDxfScorePolylines } from "cadjs/lib/dxf/buildPreviewMesh";
 import { STEP_TREE_TOPOLOGY_NODE_PREFIX } from "cadjs/lib/step/stepTree";
 import { copyImageBlobToClipboard } from "@/ui/clipboard";
 import { triggerBlobDownload } from "@/ui/download";
@@ -1595,9 +1597,13 @@ const CadViewer = forwardRef(function CadViewer({
   drawingThicknessScale = 1,
   planMode = false,
   bendAxisX = null,
+  drawingBendLines = null,
   bendAnglesRad = null,
   drawingBends = null,
   drawingBendStyle = "boxed",
+  drawingBendRadiusMm = 0,
+  drawingKFactor = 0.5,
+  drawingHiddenLayers = null,
   drawingGeometry = null,
   drawingThicknessMm = 0,
   onCameraZoomPercentChange = null,
@@ -2532,20 +2538,53 @@ const CadViewer = forwardRef(function CadViewer({
     if (!group) {
       return undefined;
     }
+    // Bend lines as full 2D segments (orientation matters — the fold handles any direction);
+    // the scanner's bare axis-X list is only the fallback until geometry.json lands.
     const foldOptions = {
+      bendLines: Array.isArray(drawingBendLines) && drawingBendLines.length ? drawingBendLines : null,
       bendAxesX: Array.isArray(bendAxisX) ? bendAxisX : [],
       bendAnglesRad: Array.isArray(bendAnglesRad) ? bendAnglesRad : [],
       thicknessScale: drawingThicknessScale
     };
     const identity = dxfFoldIsIdentity(foldOptions);
+    const bendCount = foldOptions.bendLines ? foldOptions.bendLines.length : foldOptions.bendAxesX.length;
+    const anyBendAngle = foldOptions.bendAnglesRad.some((angle) => angle !== 0);
+
+    // Layer visibility: hiding a cut layer changes the SOLID, which only a live re-mesh can
+    // express — the baked prism has the hidden geometry welded in.
+    const hiddenLayers = new Set(Array.isArray(drawingHiddenLayers) ? drawingHiddenLayers : []);
+    const geometryLayers = Array.isArray(drawingGeometry?.layers) ? drawingGeometry.layers : [];
+    const anyCutLayerHidden = hiddenLayers.size > 0
+      && geometryLayers.some((layer) => hiddenLayers.has(layer.name) && layer.kind === "cut");
+    const filterByLayer = (records) => (Array.isArray(records)
+      ? records.filter((record) => !hiddenLayers.has(record?.layer))
+      : []);
+    const effectiveGeometry = drawingGeometry?.geometry
+      ? (hiddenLayers.size
+        ? {
+          ...drawingGeometry,
+          geometry: {
+            lines: filterByLayer(drawingGeometry.geometry.lines),
+            arcs: filterByLayer(drawingGeometry.geometry.arcs),
+            circles: filterByLayer(drawingGeometry.geometry.circles),
+            texts: filterByLayer(drawingGeometry.geometry.texts)
+          }
+        }
+        : drawingGeometry)
+      : null;
+
     // Curved re-meshes from the package's cached contours: the flat prism has no vertices
     // inside a bend region to curve, so a curved bend is a FRESH mesh (the full mesher, the
-    // old live path), not a transform of the baked one. Sharp stays the vertex fold.
-    const curvedRequested = drawingBendStyle === "curved"
-      && !!drawingGeometry?.geometry
-      && foldOptions.bendAxesX.length > 0
-      && foldOptions.bendAnglesRad.some((angle) => angle !== 0);
-    if (!curvedRequested && identity && !runtimeRef.current?.dxfTransformTouched) {
+    // old live path), not a transform of the baked one. Boxed stays the vertex fold — but a
+    // hidden cut layer forces the re-mesh path too (its bends then render curved; the mesher
+    // has one bend geometry).
+    const curvedRequested = !!effectiveGeometry
+      && ((drawingBendStyle === "curved" && bendCount > 0 && anyBendAngle) || anyCutLayerHidden);
+
+    // Overlays (dotted guides, score lines, text markings) exist for any drawing whose
+    // geometry is loaded, even flat at identity.
+    const hasOverlaySource = !!effectiveGeometry;
+    if (!curvedRequested && identity && !hasOverlaySource && !runtimeRef.current?.dxfTransformTouched) {
       return undefined;
     }
     runtimeRef.current.dxfTransformTouched = curvedRequested || !identity;
@@ -2560,7 +2599,12 @@ const CadViewer = forwardRef(function CadViewer({
       const targets = [];
       const seenGeometries = new Set();
       group.traverse((child) => {
-        if (child.userData?.dxfBendGuide || child.userData?.dxfCurvedPreview) {
+        if (
+          child.userData?.dxfBendGuide
+          || child.userData?.dxfCurvedPreview
+          || child.userData?.dxfScoreOverlay
+          || child.userData?.dxfTextMarking
+        ) {
           return;
         }
         const geometry = child.geometry;
@@ -2591,7 +2635,7 @@ const CadViewer = forwardRef(function CadViewer({
       if (!targets.length) {
         // First load only: this effect is declared before the scene sync, so a fresh model's
         // group can still be empty. Retry a few frames rather than silently doing nothing.
-        if (!identity && attempts < 60) {
+        if ((!identity || curvedRequested || hasOverlaySource) && attempts < 60) {
           attempts += 1;
           frame = requestAnimationFrame(apply);
         }
@@ -2630,8 +2674,10 @@ const CadViewer = forwardRef(function CadViewer({
         try {
           // guideElevationSign -1: the (x, z, -y) map below sends the mesher's +Y to CAD
           // -Z, so guides elevated over the mesher's top face would land UNDER the sheet.
-          curvedData = buildDxfPreviewMeshData(drawingGeometry, meshThicknessMm, bendSettings, {
-            guideElevationSign: -1
+          curvedData = buildDxfPreviewMeshData(effectiveGeometry, meshThicknessMm, bendSettings, {
+            guideElevationSign: -1,
+            bendInsideRadiusMm: drawingBendRadiusMm,
+            bendKFactor: drawingKFactor
           });
         } catch (curveError) {
           // A drawing the bend mesher cannot band (a hole crossing a bend region) falls
@@ -2712,10 +2758,15 @@ const CadViewer = forwardRef(function CadViewer({
         overlay = null;
         runtimeRef.current.dxfBendGuideOverlay = null;
       }
-      const segments = guideSegments
-        || (flat && foldOptions.bendAxesX.length
-          ? dxfBendGuideSegments(flat, foldOptions)
-          : new Float32Array(0));
+      // Hiding a bend layer hides its dashed guides too — the crease marks ARE that layer.
+      const bendLayerHidden = hiddenLayers.size > 0
+        && geometryLayers.some((layer) => hiddenLayers.has(layer.name) && layer.kind === "bend");
+      const segments = bendLayerHidden
+        ? new Float32Array(0)
+        : guideSegments
+          || (flat && bendCount
+            ? dxfBendGuideSegments(flat, foldOptions)
+            : new Float32Array(0));
       if (!segments.length) {
         if (overlay) {
           overlay.parent?.remove(overlay);
@@ -2747,6 +2798,155 @@ const CadViewer = forwardRef(function CadViewer({
         overlay.computeLineDistances();
         overlay.geometry.computeBoundingSphere?.();
       }
+
+      // SCORE LINES and TEXT MARKINGS: the drawing's annotations, overlaid on the sheet's
+      // top face and folded through the same chain as the geometry. In curved mode the fold
+      // used here is the vertex fold, so a score crossing a bend band chords across the arc
+      // — an accepted approximation; annotations rarely sit inside a bend.
+      const resolvedFold = normalizeDxfFoldOptions(foldOptions);
+      const layerColorByName = new Map(geometryLayers.map((layer) => [layer.name, layer.colorHex]));
+      const flatExtents = flat ? dxfFlatPatternExtents(flat) : { zMax: 0.5 };
+      const zTop = flatExtents.zMax + 0.3 / Math.max(resolvedFold.scale, 1e-6);
+
+      let scoreSegments = [];
+      if (effectiveGeometry) {
+        try {
+          for (const polyline of extractDxfScorePolylines(effectiveGeometry)) {
+            for (let index = 0; index < polyline.length - 1; index += 1) {
+              const a = foldDxfPoint(polyline[index][0], polyline[index][1], zTop, resolvedFold);
+              const b = foldDxfPoint(polyline[index + 1][0], polyline[index + 1][1], zTop, resolvedFold);
+              scoreSegments.push(a[0], a[1], a[2], b[0], b[1], b[2]);
+            }
+          }
+        } catch (scoreError) {
+          scoreSegments = [];
+        }
+      }
+      let scoreOverlay = runtimeRef.current?.dxfScoreOverlay || null;
+      if (scoreOverlay && scoreOverlay.parent !== group) {
+        scoreOverlay = null;
+        runtimeRef.current.dxfScoreOverlay = null;
+      }
+      if (!scoreSegments.length) {
+        if (scoreOverlay) {
+          scoreOverlay.parent?.remove(scoreOverlay);
+          scoreOverlay.geometry?.dispose?.();
+          scoreOverlay.material?.dispose?.();
+          runtimeRef.current.dxfScoreOverlay = null;
+        }
+      } else {
+        if (!scoreOverlay) {
+          scoreOverlay = new THREE.LineSegments(
+            new THREE.BufferGeometry(),
+            new THREE.LineBasicMaterial({
+              color: 0x8a93a3,
+              transparent: true,
+              opacity: 0.95,
+              depthWrite: false
+            })
+          );
+          scoreOverlay.userData.dxfScoreOverlay = true;
+          scoreOverlay.frustumCulled = false;
+          group.add(scoreOverlay);
+          runtimeRef.current.dxfScoreOverlay = scoreOverlay;
+        }
+        scoreOverlay.geometry.setAttribute(
+          "position",
+          new THREE.BufferAttribute(Float32Array.from(scoreSegments), 3)
+        );
+        scoreOverlay.geometry.computeBoundingSphere?.();
+      }
+
+      // Text markings render as canvas-textured planes lying on the sheet — string, height,
+      // rotation from the DXF; no font tables, no glyph outlines. Rebuilt per apply: a
+      // drawing carries a handful of labels, not thousands.
+      let textGroup = runtimeRef.current?.dxfTextGroup || null;
+      if (textGroup && textGroup.parent !== group) {
+        textGroup = null;
+        runtimeRef.current.dxfTextGroup = null;
+      }
+      const disposeTextChildren = (container) => {
+        for (const child of [...container.children]) {
+          container.remove(child);
+          child.geometry?.dispose?.();
+          child.material?.map?.dispose?.();
+          child.material?.dispose?.();
+        }
+      };
+      const textMarkings = Array.isArray(effectiveGeometry?.geometry?.texts)
+        ? effectiveGeometry.geometry.texts.filter((text) => String(text?.value || "").trim())
+        : [];
+      if (!textMarkings.length) {
+        if (textGroup) {
+          disposeTextChildren(textGroup);
+          textGroup.parent?.remove(textGroup);
+          runtimeRef.current.dxfTextGroup = null;
+        }
+      } else if (typeof document !== "undefined") {
+        if (!textGroup) {
+          textGroup = new THREE.Group();
+          textGroup.userData.dxfTextMarking = true;
+          group.add(textGroup);
+          runtimeRef.current.dxfTextGroup = textGroup;
+        }
+        disposeTextChildren(textGroup);
+        for (const text of textMarkings) {
+          const value = String(text.value).trim();
+          const heightMm = Math.max(Number(text.heightMm) || 2.5, 0.2);
+          const rotation = ((Number(text.rotationDeg) || 0) * Math.PI) / 180;
+          const ex = [Math.cos(rotation), Math.sin(rotation)];
+          const ey = [-Math.sin(rotation), Math.cos(rotation)];
+          const fontPx = 64;
+          const canvas = document.createElement("canvas");
+          const context = canvas.getContext("2d");
+          if (!context) {
+            continue;
+          }
+          const fontSpec = `600 ${fontPx}px ui-sans-serif, system-ui, sans-serif`;
+          context.font = fontSpec;
+          const firstLine = value.split("\n")[0];
+          const textWidthPx = Math.max(context.measureText(firstLine).width, fontPx * 0.5);
+          canvas.width = Math.ceil(textWidthPx) + 8;
+          canvas.height = Math.ceil(fontPx * 1.35);
+          const drawContext = canvas.getContext("2d");
+          drawContext.font = fontSpec;
+          drawContext.fillStyle = layerColorByName.get(text.layer) || "#8a93a3";
+          drawContext.textBaseline = "alphabetic";
+          drawContext.fillText(firstLine, 4, fontPx);
+          const texture = new THREE.CanvasTexture(canvas);
+          texture.colorSpace = THREE.SRGBColorSpace;
+          const planeWidth = heightMm * (canvas.width / fontPx);
+          const planeHeight = heightMm * (canvas.height / fontPx);
+          // The DXF anchor is baseline-left; the plane's centre sits half a width along the
+          // text direction and a bit above the baseline. All in FLAT coords, then folded.
+          const centerFlat = [
+            text.position[0] + ex[0] * (planeWidth / 2) + ey[0] * (planeHeight * 0.22),
+            text.position[1] + ex[1] * (planeWidth / 2) + ey[1] * (planeHeight * 0.22)
+          ];
+          const origin3 = foldDxfPoint(centerFlat[0], centerFlat[1], zTop, resolvedFold);
+          const step = 0.5;
+          const alongX = foldDxfPoint(centerFlat[0] + ex[0] * step, centerFlat[1] + ex[1] * step, zTop, resolvedFold);
+          const alongY = foldDxfPoint(centerFlat[0] + ey[0] * step, centerFlat[1] + ey[1] * step, zTop, resolvedFold);
+          const basisX = new THREE.Vector3(alongX[0] - origin3[0], alongX[1] - origin3[1], alongX[2] - origin3[2]).normalize();
+          const basisY = new THREE.Vector3(alongY[0] - origin3[0], alongY[1] - origin3[1], alongY[2] - origin3[2]).normalize();
+          const basisZ = new THREE.Vector3().crossVectors(basisX, basisY).normalize();
+          const marking = new THREE.Mesh(
+            new THREE.PlaneGeometry(planeWidth, planeHeight),
+            new THREE.MeshBasicMaterial({
+              map: texture,
+              transparent: true,
+              depthWrite: false,
+              side: THREE.DoubleSide
+            })
+          );
+          marking.userData.dxfTextMarking = true;
+          marking.position.set(origin3[0], origin3[1], origin3[2]);
+          marking.quaternion.setFromRotationMatrix(new THREE.Matrix4().makeBasis(basisX, basisY, basisZ));
+          marking.renderOrder = 2;
+          textGroup.add(marking);
+        }
+      }
+
       runtime.requestRender?.();
     };
 
@@ -2754,7 +2954,7 @@ const CadViewer = forwardRef(function CadViewer({
     return () => {
       cancelAnimationFrame(frame);
     };
-  }, [bendAxisX, bendAnglesRad, drawingBends, drawingBendStyle, drawingGeometry, drawingThicknessMm, drawingThicknessScale, meshData, viewerReadyTick]);
+  }, [bendAxisX, drawingBendLines, bendAnglesRad, drawingBends, drawingBendStyle, drawingBendRadiusMm, drawingKFactor, drawingHiddenLayers, drawingGeometry, drawingThicknessMm, drawingThicknessScale, meshData, viewerReadyTick]);
 
   useImperativeHandle(ref, () => ({
     async captureScreenshot({ filename = "cad-screenshot.png", mode = "download" } = {}) {

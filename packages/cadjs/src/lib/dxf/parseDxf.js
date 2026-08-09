@@ -175,6 +175,84 @@ function parseHeader(records) {
   };
 }
 
+/**
+ * $INSUNITS -> millimetres per drawing unit. The whole downstream stack (mesher, viewer,
+ * thickness sliders) is millimetre-denominated, so geometry is scaled to mm at parse time.
+ * Unitless (0) is treated as mm — the de-facto convention for laser-cutter DXF — and codes
+ * this table does not carry fall back to 1 rather than guessing.
+ */
+const INSUNITS_TO_MM = new Map([
+  [0, 1], // unspecified: assume mm
+  [1, 25.4], // inches
+  [2, 304.8], // feet
+  [4, 1], // millimetres
+  [5, 10], // centimetres
+  [6, 1000], // metres
+  [7, 1_000_000], // kilometres
+  [8, 0.0000254], // microinches
+  [9, 0.0254], // mils
+  [10, 914.4], // yards
+  [13, 0.001], // microns
+  [14, 100] // decimetres
+]);
+
+export function dxfUnitsScaleMm(sourceUnits) {
+  return INSUNITS_TO_MM.get(Math.trunc(toFiniteNumber(sourceUnits, 0))) ?? 1;
+}
+
+/**
+ * ACI (AutoCAD Color Index) -> hex. The standard palette's first nine plus the grayscale
+ * band cover what real layer tables use; anything else falls back to a neutral so an exotic
+ * index degrades to "no color", never to a crash.
+ */
+const ACI_BASE_COLORS = new Map([
+  [1, "#ff3b30"], [2, "#ffd60a"], [3, "#34c759"], [4, "#32ade6"],
+  [5, "#3a5cff"], [6, "#ff2ddf"], [7, "#e5e7eb"], [8, "#8e8e93"], [9, "#c7c7cc"]
+]);
+
+export function aciColorHex(aci) {
+  const index = Math.trunc(toFiniteNumber(aci, 7));
+  if (ACI_BASE_COLORS.has(index)) {
+    return ACI_BASE_COLORS.get(index);
+  }
+  if (index >= 250 && index <= 255) {
+    const level = Math.round(51 + ((index - 250) * (255 - 51)) / 5);
+    const channel = level.toString(16).padStart(2, "0");
+    return `#${channel}${channel}${channel}`;
+  }
+  return null;
+}
+
+/**
+ * TABLES section -> layer name -> {aci}. A negative color code means the layer is switched
+ * OFF in the authoring tool; the sign is preserved as `visibleDefault` so the viewer can
+ * start the layer hidden the way the file says.
+ */
+function parseLayerTable(records) {
+  const layers = new Map();
+  let index = 0;
+  while (index < records.length) {
+    const record = records[index];
+    if (record.code !== 0 || String(record.value || "").trim().toUpperCase() !== "LAYER") {
+      index += 1;
+      continue;
+    }
+    index += 1;
+    const body = [];
+    while (index < records.length && records[index].code !== 0) {
+      body.push(records[index]);
+      index += 1;
+    }
+    const name = normalizeLayerName(body.find((entry) => entry.code === 2)?.value);
+    const colorValue = Math.trunc(toFiniteNumber(body.find((entry) => entry.code === 62)?.value, 7));
+    layers.set(name, {
+      aci: Math.abs(colorValue),
+      visibleDefault: colorValue >= 0
+    });
+  }
+  return layers;
+}
+
 function parseLineEntity(records) {
   const layer = normalizeLayerName(records.find((record) => record.code === 8)?.value);
   const startX = toFiniteNumber(records.find((record) => record.code === 10)?.value);
@@ -545,13 +623,114 @@ function parseHatchEntity(records) {
 
 /** Entities that carry no cut geometry. Skipped rather than rejected: a drawing is not
  *  unrenderable because it is annotated, and refusing one over a dimension line is how a
- *  perfectly good profile ends up showing an error card. */
+ *  perfectly good profile ends up showing an error card. (TEXT/MTEXT/DIMENSION are no longer
+ *  here — they parse into flat text markings the viewer engraves onto the sheet.) */
 const NON_GEOMETRIC_ENTITY_TYPES = new Set([
-  "DIMENSION", "TEXT", "MTEXT", "ATTRIB", "ATTDEF", "LEADER", "MLEADER", "MULTILEADER",
+  "ATTRIB", "ATTDEF", "LEADER", "MLEADER", "MULTILEADER",
   "POINT", "VIEWPORT", "SEQEND", "TOLERANCE", "OLE2FRAME", "WIPEOUT", "IMAGE", "RAY", "XLINE",
   "ACAD_PROXY_ENTITY", "ACAD_TABLE", "BODY", "REGION", "SHAPE", "SOLID", "TRACE", "3DFACE",
   "HELIX", "MESH", "SPLINE_PROXY",
 ]);
+
+// --- text markings --------------------------------------------------------------------
+//
+// TEXT/MTEXT/DIMENSION carry no cut geometry, but a laser workflow engraves them, so they
+// are captured as flat MARKINGS: an anchor, a height, a rotation, and the string. Glyph
+// outlines are deliberately NOT generated here — the viewer draws the string onto the sheet
+// itself, which needs no font tables in the parser.
+
+/** MTEXT strings carry inline formatting: {\fArial|b0;...}, \P paragraph breaks, %%
+ *  escapes. Strip to the readable text the way every DXF viewer's tooltip does. */
+export function stripMtextFormatting(raw) {
+  let text = String(raw ?? "");
+  // \P is a paragraph break, \~ a hard space; \\ and \{ \} escape literals.
+  text = text.replace(/\\P/gi, "\n").replace(/\\~/g, " ");
+  // Inline property runs: \f...; \H...; \C...; \T...; \Q...; \W...; \A...; — command up to ;
+  text = text.replace(/\\[fFhHcCtTqQwWaA][^;]*;/g, "");
+  // Stacking \S...^...; renders as the plain parts.
+  text = text.replace(/\\S([^^;]*)\^([^;]*);/g, "$1/$2");
+  // Grouping braces are structure, not content.
+  text = text.replace(/[{}]/g, "");
+  // %%d degree, %%p plus-minus, %%c diameter, %%u/%%o toggles.
+  text = text.replace(/%%d/gi, "°").replace(/%%p/gi, "±").replace(/%%c/gi, "∅");
+  text = text.replace(/%%[uo]/gi, "");
+  return text.trim();
+}
+
+function parseTextEntity(records) {
+  const layer = normalizeLayerName(records.find((record) => record.code === 8)?.value);
+  const value = String(records.find((record) => record.code === 1)?.value ?? "").trim();
+  if (!value) {
+    return null;
+  }
+  return {
+    layer,
+    position: [
+      toFiniteNumber(records.find((record) => record.code === 10)?.value),
+      toFiniteNumber(records.find((record) => record.code === 20)?.value)
+    ],
+    heightMm: Math.max(toFiniteNumber(records.find((record) => record.code === 40)?.value, 2.5), 0.01),
+    rotationDeg: toFiniteNumber(records.find((record) => record.code === 50)?.value, 0),
+    value
+  };
+}
+
+function parseMtextEntity(records) {
+  const layer = normalizeLayerName(records.find((record) => record.code === 8)?.value);
+  // The string is code 1, preceded by any number of code-3 continuation chunks.
+  const chunks = records.filter((record) => record.code === 3).map((record) => String(record.value ?? ""));
+  const tail = String(records.find((record) => record.code === 1)?.value ?? "");
+  const value = stripMtextFormatting(chunks.join("") + tail);
+  if (!value) {
+    return null;
+  }
+  return {
+    layer,
+    position: [
+      toFiniteNumber(records.find((record) => record.code === 10)?.value),
+      toFiniteNumber(records.find((record) => record.code === 20)?.value)
+    ],
+    heightMm: Math.max(toFiniteNumber(records.find((record) => record.code === 40)?.value, 2.5), 0.01),
+    rotationDeg: toFiniteNumber(records.find((record) => record.code === 50)?.value, 0),
+    value
+  };
+}
+
+/** DIMENSION: the graphics live in an anonymous block we do not expand (witness lines are
+ *  not part geometry); what matters on a part preview is the measurement text. Code 1 is
+ *  the override ("<>" means "the measured value", which the file does not store), code 11/21
+ *  the text midpoint. */
+function parseDimensionEntity(records) {
+  const layer = normalizeLayerName(records.find((record) => record.code === 8)?.value);
+  const override = String(records.find((record) => record.code === 1)?.value ?? "").trim();
+  if (!override || override === "<>") {
+    return null;
+  }
+  return {
+    layer,
+    position: [
+      toFiniteNumber(records.find((record) => record.code === 11)?.value),
+      toFiniteNumber(records.find((record) => record.code === 21)?.value)
+    ],
+    heightMm: 2.5,
+    rotationDeg: toFiniteNumber(records.find((record) => record.code === 53)?.value, 0),
+    value: stripMtextFormatting(override)
+  };
+}
+
+function transformTextMarking(text, transform) {
+  if (!transform) {
+    return text;
+  }
+  const scale = Math.abs(transform.sx) || 1;
+  const rotationDeg = (Math.atan2(transform.sin, transform.cos) * 180) / Math.PI;
+  return {
+    ...text,
+    position: transformPoint(text.position, transform),
+    heightMm: text.heightMm * scale,
+    rotationDeg: text.rotationDeg + rotationDeg
+  };
+}
 
 function transformPoint(point, transform) {
   if (!transform) {
@@ -637,6 +816,7 @@ function parseEntities(records, { blocks = new Map(), transform = null, depth = 
   const lines = [];
   const arcs = [];
   const circles = [];
+  const texts = [];
   const push = (geometry) => {
     const placed = transformGeometry(
       { lines: geometry.lines || [], arcs: geometry.arcs || [], circles: geometry.circles || [] },
@@ -645,6 +825,11 @@ function parseEntities(records, { blocks = new Map(), transform = null, depth = 
     lines.push(...placed.lines);
     arcs.push(...placed.arcs);
     circles.push(...placed.circles);
+  };
+  const pushText = (text) => {
+    if (text) {
+      texts.push(transformTextMarking(text, transform));
+    }
   };
 
   let index = 0;
@@ -691,6 +876,18 @@ function parseEntities(records, { blocks = new Map(), transform = null, depth = 
     }
     if (entityType === "HATCH") {
       push(parseHatchEntity(entityRecords));
+      continue;
+    }
+    if (entityType === "TEXT") {
+      pushText(parseTextEntity(entityRecords));
+      continue;
+    }
+    if (entityType === "MTEXT") {
+      pushText(parseMtextEntity(entityRecords));
+      continue;
+    }
+    if (entityType === "DIMENSION") {
+      pushText(parseDimensionEntity(entityRecords));
       continue;
     }
     if (entityType === "POLYLINE") {
@@ -747,6 +944,7 @@ function parseEntities(records, { blocks = new Map(), transform = null, depth = 
         lines.push(...nested.lines);
         arcs.push(...nested.arcs);
         circles.push(...nested.circles);
+        texts.push(...nested.texts);
       }
       continue;
     }
@@ -756,7 +954,7 @@ function parseEntities(records, { blocks = new Map(), transform = null, depth = 
     throw new Error(`Unsupported DXF entity ${entityType}`);
   }
 
-  return { lines, arcs, circles };
+  return { lines, arcs, circles, texts };
 }
 
 /** BLOCKS as name -> its entity records, so an INSERT can be expanded in place.
@@ -840,18 +1038,55 @@ function touchLayer(layerSummary, layerName) {
     name: layerName,
     kind: semanticKindForLayer(layerName),
     pathCount: 0,
-    circleCount: 0
+    circleCount: 0,
+    textCount: 0
   };
   layerSummary.set(layerName, next);
   return next;
+}
+
+/** Scale every parsed coordinate to millimetres. Lengths (radii, text heights) scale with
+ *  positions; angles are unit-free. */
+function scaleEntitiesToMm(entities, scale) {
+  if (scale === 1) {
+    return entities;
+  }
+  const scalePoint = (point) => [point[0] * scale, point[1] * scale];
+  return {
+    lines: entities.lines.map((line) => ({
+      ...line,
+      start: scalePoint(line.start),
+      end: scalePoint(line.end)
+    })),
+    arcs: entities.arcs.map((arc) => ({
+      ...arc,
+      center: scalePoint(arc.center),
+      radius: arc.radius * scale
+    })),
+    circles: entities.circles.map((circle) => ({
+      ...circle,
+      center: scalePoint(circle.center),
+      radius: circle.radius * scale
+    })),
+    texts: entities.texts.map((text) => ({
+      ...text,
+      position: scalePoint(text.position),
+      heightMm: text.heightMm * scale
+    }))
+  };
 }
 
 export function parseDxf(dxfText, { fileRef = "", sourceUrl = "" } = {}) {
   const records = parseRecordPairs(dxfText);
   const sections = splitSections(records);
   const header = parseHeader(sections.get("HEADER") || []);
+  const layerTable = parseLayerTable(sections.get("TABLES") || []);
   const blocks = parseBlocks(sections.get("BLOCKS") || []);
-  const entities = parseEntities(sections.get("ENTITIES") || [], { blocks });
+  const unitsScaleMm = dxfUnitsScaleMm(header.sourceUnits);
+  const entities = scaleEntitiesToMm(
+    parseEntities(sections.get("ENTITIES") || [], { blocks }),
+    unitsScaleMm
+  );
 
   let rawBounds = null;
   for (const line of entities.lines) {
@@ -919,11 +1154,16 @@ export function parseDxf(dxfText, { fileRef = "", sourceUrl = "" } = {}) {
     touchLayer(layerSummary, circle.layer).circleCount += 1;
   }
 
+  for (const text of entities.texts) {
+    touchLayer(layerSummary, text.layer).textCount += 1;
+  }
+
   return {
     schemaVersion: DXF_RENDER_SCHEMA_VERSION,
     fileRef,
     sourceUrl,
     sourceUnits: header.sourceUnits,
+    unitsScaleMm,
     defaultThicknessMm: formatNumber(header.defaultThicknessMm),
     bounds: {
       minX: 0,
@@ -938,7 +1178,16 @@ export function parseDxf(dxfText, { fileRef = "", sourceUrl = "" } = {}) {
       circles: circleRecords.length,
       entities: pathRecords.length + circleRecords.length
     },
-    layers: [...layerSummary.keys()].sort().map((name) => layerSummary.get(name)),
+    layers: [...layerSummary.keys()].sort().map((name) => {
+      const summary = layerSummary.get(name);
+      const tableEntry = layerTable.get(name);
+      return {
+        ...summary,
+        colorAci: tableEntry ? tableEntry.aci : null,
+        colorHex: tableEntry ? aciColorHex(tableEntry.aci) : null,
+        visibleDefault: tableEntry ? tableEntry.visibleDefault : true
+      };
+    }),
     geometry: {
       lines: entities.lines.map((line) => ({
         layer: line.layer,
@@ -959,6 +1208,14 @@ export function parseDxf(dxfText, { fileRef = "", sourceUrl = "" } = {}) {
         kind: semanticKindForLayer(circle.layer),
         center: [formatNumber(circle.center[0]), formatNumber(circle.center[1])],
         radius: formatNumber(circle.radius)
+      })),
+      texts: entities.texts.map((text) => ({
+        layer: text.layer,
+        kind: semanticKindForLayer(text.layer),
+        position: [formatNumber(text.position[0]), formatNumber(text.position[1])],
+        heightMm: formatNumber(text.heightMm),
+        rotationDeg: formatNumber(text.rotationDeg),
+        value: text.value
       }))
     },
     paths: pathRecords,

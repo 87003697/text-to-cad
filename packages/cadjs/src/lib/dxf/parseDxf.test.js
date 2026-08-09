@@ -180,3 +180,73 @@ test("a genuinely unknown entity is still reported", () => {
 
   assert.throws(() => parseDxf(dxf, { fileRef: "u.dxf" }), /Unsupported DXF entity NOTAREALENTITY/u);
 });
+
+test("$INSUNITS scales geometry to millimetres", () => {
+  const inches = parseDxf(dxfText([
+    "0", "SECTION", "2", "HEADER",
+    "9", "$INSUNITS", "70", "1",
+    "0", "ENDSEC",
+    "0", "SECTION", "2", "ENTITIES",
+    "0", "LWPOLYLINE", "8", "CUT", "90", "4", "70", "1",
+    "10", "0", "20", "0",
+    "10", "2", "20", "0",
+    "10", "2", "20", "1",
+    "10", "0", "20", "1",
+    "0", "ENDSEC", "0", "EOF"
+  ]));
+  assert.equal(inches.unitsScaleMm, 25.4);
+  assert.equal(inches.bounds.width, 50.8, "a 2-inch blank is 50.8 mm wide");
+  assert.equal(inches.bounds.height, 25.4);
+});
+
+test("TEXT and MTEXT parse into flat text markings", () => {
+  const parsed = parseDxf(dxfText([
+    "0", "SECTION", "2", "ENTITIES",
+    "0", "LWPOLYLINE", "8", "CUT", "90", "4", "70", "1",
+    "10", "0", "20", "0",
+    "10", "100", "20", "0",
+    "10", "100", "20", "50",
+    "10", "0", "20", "50",
+    "0", "TEXT", "8", "ENGRAVE",
+    "10", "10", "20", "20", "40", "5", "50", "15",
+    "1", "SN-042",
+    "0", "MTEXT", "8", "NOTES",
+    "10", "10", "20", "40", "40", "3",
+    "1", "{\\fArial|b0;Handle}\\Pwith care %%d",
+    "0", "ENDSEC", "0", "EOF"
+  ]));
+  assert.equal(parsed.geometry.texts.length, 2);
+  const [label, note] = parsed.geometry.texts;
+  assert.equal(label.value, "SN-042");
+  assert.deepEqual(label.position, [10, 20]);
+  assert.equal(label.heightMm, 5);
+  assert.equal(label.rotationDeg, 15);
+  assert.equal(label.kind, "engrave");
+  assert.equal(note.value, "Handle\nwith care °");
+  assert.equal(note.kind, "reference");
+});
+
+test("the LAYER table's colors reach the layer summary", () => {
+  const parsed = parseDxf(dxfText([
+    "0", "SECTION", "2", "TABLES",
+    "0", "TABLE", "2", "LAYER",
+    "0", "LAYER", "2", "CUT", "62", "1",
+    "0", "LAYER", "2", "BEND", "62", "5",
+    "0", "ENDTAB",
+    "0", "ENDSEC",
+    "0", "SECTION", "2", "ENTITIES",
+    "0", "LWPOLYLINE", "8", "CUT", "90", "4", "70", "1",
+    "10", "0", "20", "0",
+    "10", "10", "20", "0",
+    "10", "10", "20", "10",
+    "10", "0", "20", "10",
+    "0", "LINE", "8", "BEND",
+    "10", "5", "20", "0", "11", "5", "21", "10",
+    "0", "ENDSEC", "0", "EOF"
+  ]));
+  const byName = new Map(parsed.layers.map((layer) => [layer.name, layer]));
+  assert.equal(byName.get("CUT").colorAci, 1);
+  assert.equal(byName.get("CUT").colorHex, "#ff3b30");
+  assert.equal(byName.get("BEND").colorHex, "#3a5cff");
+  assert.equal(byName.get("CUT").visibleDefault, true);
+});

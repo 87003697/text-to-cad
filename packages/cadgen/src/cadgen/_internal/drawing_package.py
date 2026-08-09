@@ -61,7 +61,10 @@ DRAWING_PACKAGE_KIND = "drawing-package"
 # not merely old -- its Bends tab can never fold -- so every v3 package must rebuild.
 # v5: the package gained geometry.json (the parsed 2D contours), which the viewer's curved
 # bend mode re-meshes from. A package without it cannot render curved bends.
-DRAWING_PACKAGE_SCHEMA_VERSION = 5
+# v6: geometry.json grew text markings, the layer summary (colors, kinds), and the source
+# units scale (dxf-geometry/2), and the parser now honors $INSUNITS — an inch-unit package
+# built before v6 is both missing overlays and 25.4x too small.
+DRAWING_PACKAGE_SCHEMA_VERSION = 6
 DRAWING_DESCRIPTOR_NAME = "drawing.json"
 DRAWING_PREVIEW_NAME = "preview.glb"
 
@@ -83,7 +86,8 @@ DRAWING_PREVIEW_BUILDER = "dxf-artifact.mjs"
 # Mirrors DXF_PREVIEW_BAKE_FORMAT in packages/cadjs/src/lib/dxf/previewGlb.js. Bump it there
 # and here together when the baked geometry's contract changes.
 # v2: CAD Z-up positions. v3: reference-thickness prism, thickness applied at render.
-DRAWING_PREVIEW_BAKE_FORMAT = "dxf-preview-glb-v3"
+# v4: $INSUNITS honored, geometry scaled to mm at parse time.
+DRAWING_PREVIEW_BAKE_FORMAT = "dxf-preview-glb-v4"
 
 
 def drawing_preview_bake_settings() -> dict[str, object]:

@@ -104,15 +104,19 @@ async function main() {
   fs.writeFileSync(tempPath, bytes);
   fs.renameSync(tempPath, previewPath);
 
-  // The parsed 2D geometry, cached so the viewer can RE-MESH live. Curved bends need
-  // tessellated bend bands, and the flat prism has no vertices inside the bend region to
-  // curve -- so a curved preview is a fresh mesh from the contours, not a transform of the
-  // baked one. Slim on purpose: exactly the fields buildDxfPreviewMeshData reads.
+  // The parsed 2D geometry, cached so the viewer can RE-MESH live and overlay the drawing's
+  // annotations. Curved bends need tessellated bend bands, and the flat prism has no
+  // vertices inside the bend region to curve -- so a curved preview is a fresh mesh from the
+  // contours, not a transform of the baked one. v2 adds text markings (inside `geometry`),
+  // the layer summary (names, semantic kinds, ACI colors) for the viewer's layer toggles,
+  // and the source units scale; coordinates are always millimetres.
   const geometryPath = path.join(packageDir, GEOMETRY_JSON_NAME);
   const geometryTemp = `${geometryPath}.tmp-${process.pid}`;
   fs.writeFileSync(geometryTemp, JSON.stringify({
-    schema: "dxf-geometry/1",
+    schema: "dxf-geometry/2",
     geometry: dxfData.geometry,
+    layers: dxfData.layers ?? [],
+    unitsScaleMm: dxfData.unitsScaleMm ?? 1,
     defaultThicknessMm: dxfData.defaultThicknessMm ?? 0,
   }));
   fs.renameSync(geometryTemp, geometryPath);

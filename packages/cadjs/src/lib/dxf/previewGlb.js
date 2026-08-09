@@ -40,7 +40,9 @@ export const DXF_MM_TO_GLB_SCALE = 0.001;
 
 /** Identity of this bake's geometry contract, recorded in the descriptor's bake block. */
 // v2: CAD Z-up positions. v3: baked at a reference thickness, thickness applied at render.
-export const DXF_PREVIEW_BAKE_FORMAT = "dxf-preview-glb-v3";
+// v4: $INSUNITS honored — the parser scales geometry to mm, so an inch-unit drawing's bake
+// is 25.4x the one v3 produced from the same file.
+export const DXF_PREVIEW_BAKE_FORMAT = "dxf-preview-glb-v4";
 
 /**
  * The thickness the prism is baked at. 1 mm so a renderer's Z scale IS the thickness in

@@ -21,7 +21,7 @@ const close = (actual, expected, label) => {
 test("a 90-degree fold stands geometry beyond the axis straight up", () => {
   const [x, y, z] = foldDxfPoint(1, 5, 0, resolve([0], [Math.PI / 2]));
   close(x, 0, "x lands on the axis");
-  assert.equal(y, 5, "y is untouched by a fold about an X axis");
+  close(y, 5, "y is untouched by a fold about an X axis");
   close(z, 1, "the run beyond the axis becomes rise");
 });
 
@@ -136,4 +136,82 @@ test("bend guides ride their creases through earlier folds", () => {
 
 test("no bends means no guides", () => {
   assert.equal(dxfBendGuideSegments(Float32Array.from([0, 0, 0]), { bendAxesX: [] }).length, 0);
+});
+
+// --- arbitrary bend-line orientation ---------------------------------------------------
+
+const resolveLines = (bendLines, bendAnglesRad, thicknessScale = 1) =>
+  normalizeDxfFoldOptions({ bendLines, bendAnglesRad, thicknessScale });
+
+test("a bend line given as a segment folds identically to its bare axis X", () => {
+  const viaAxis = resolve([30], [Math.PI / 3]);
+  const viaSegment = resolveLines([{ start: [30, 0], end: [30, 70] }], [Math.PI / 3]);
+  for (const [x, y, z] of [[50, 10, 0.5], [10, 60, -0.5], [30, 35, 0.5]]) {
+    const a = foldDxfPoint(x, y, z, viaAxis);
+    const b = foldDxfPoint(x, y, z, viaSegment);
+    close(a[0], b[0], `x at (${x},${y})`);
+    close(a[1], b[1], `y at (${x},${y})`);
+    close(a[2], b[2], `z at (${x},${y})`);
+  }
+});
+
+test("a horizontal bend line folds the +Y side up", () => {
+  // Line y=10 along X. The moving side is +Y (the oriented-normal convention), and a
+  // positive angle lifts it: a point 5 beyond the line rises to z=5 at 90 degrees.
+  const options = resolveLines([{ start: [0, 10], end: [100, 10] }], [Math.PI / 2]);
+  const [x, y, z] = foldDxfPoint(50, 15, 0, options);
+  close(x, 50, "x is untouched by a fold about a Y-axis line");
+  close(y, 10, "the run beyond the line lands on it");
+  close(z, 5, "and becomes rise");
+  const fixed = foldDxfPoint(50, 5, 0, options);
+  close(fixed[1], 5, "the -Y side is anchored");
+  close(fixed[2], 0, "and stays flat");
+});
+
+test("a 45-degree bend line folds about its own direction", () => {
+  // Line through the origin along (1,1). A point on the perpendicular at distance d from
+  // the line rotates 90 degrees: it lands on the line's vertical plane at height d.
+  const options = resolveLines([{ start: [0, 0], end: [10, 10] }], [Math.PI / 2]);
+  const d = Math.SQRT2; // (2,0) is sqrt(2) from the line y=x
+  const [x, y, z] = foldDxfPoint(2, 0, 0, options);
+  close(x, 1, "folds onto the foot of its perpendicular");
+  close(y, 1, "which sits on the line");
+  close(z, d, "rising by its flat distance");
+});
+
+test("the whole fold is invariant under rotating the flat pattern", () => {
+  // The strongest check the general math can face: rotate the entire configuration
+  // (bend lines AND the query point) by 45 degrees, and the folded result must be the
+  // upright chain's result rotated by the same 45 degrees. Uses the two-bend accumulation
+  // case whose upright answer is pinned above: axes 0 and 1 at 90/90, point (2,0) -> (-1,0,1).
+  const theta = Math.PI / 4;
+  const rot = ([x, y]) => [
+    x * Math.cos(theta) - y * Math.sin(theta),
+    x * Math.sin(theta) + y * Math.cos(theta)
+  ];
+  const options = resolveLines(
+    [
+      { start: rot([0, -10]), end: rot([0, 10]) },
+      { start: rot([1, -10]), end: rot([1, 10]) }
+    ],
+    [Math.PI / 2, Math.PI / 2]
+  );
+  const [qx, qy] = rot([2, 0]);
+  const [x, y, z] = foldDxfPoint(qx, qy, 0, options);
+  const [ex, ey] = rot([-1, 0]);
+  close(x, ex, "x is the upright answer rotated");
+  close(y, ey, "y is the upright answer rotated");
+  close(z, 1, "height is rotation-invariant");
+});
+
+test("guides from segment bends use the segment's own endpoints", () => {
+  const flat = Float32Array.from([0, 0, 0.5, 100, 100, -0.5]);
+  const segments = dxfBendGuideSegments(flat, {
+    bendLines: [{ start: [20, 5], end: [20, 45] }],
+    bendAnglesRad: [0],
+    thicknessScale: 1
+  });
+  assert.equal(segments.length, 6);
+  close(segments[1], 5, "guide starts at the bend line's own start");
+  close(segments[4], 45, "and ends at its end");
 });

@@ -12,6 +12,7 @@ import {
   FileSheetSelectRow,
   FileSheetSliderField,
   FileSheetSubsection,
+  FileSheetToggleRow,
   FileSheetValueInput
 } from "./FileSheet";
 import { FILE_SHEET_SECTION_IDS } from "@/workbench/fileSheetSections";
@@ -70,6 +71,32 @@ export function normalizeDxfBendStyle(value, fallback = DXF_DEFAULT_BEND_STYLE) 
   return DXF_BEND_STYLES.includes(text) ? text : fallback;
 }
 
+/** Inside bend radius in mm; 0 means "auto" (the mesher's visual default, 0.6x thickness). */
+export const DXF_BEND_RADIUS_MAX_MM = 20;
+export const DXF_DEFAULT_BEND_RADIUS_MM = 0;
+
+/** Where the neutral axis sits within the thickness. 0.44 is the common air-bend value;
+ *  0.5 (mid-thickness) is the visual default this preview always used. */
+export const DXF_KFACTOR_MIN = 0.1;
+export const DXF_KFACTOR_MAX = 0.9;
+export const DXF_DEFAULT_KFACTOR = 0.5;
+
+export function normalizeDxfBendRadiusMm(value, fallback = DXF_DEFAULT_BEND_RADIUS_MM) {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric) || numeric < 0) {
+    return fallback;
+  }
+  return Math.min(DXF_BEND_RADIUS_MAX_MM, numeric);
+}
+
+export function normalizeDxfKFactor(value, fallback = DXF_DEFAULT_KFACTOR) {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) {
+    return fallback;
+  }
+  return Math.min(DXF_KFACTOR_MAX, Math.max(DXF_KFACTOR_MIN, numeric));
+}
+
 export function DxfDrawingSettings({
   thicknessMm = DXF_DEFAULT_THICKNESS_MM,
   onThicknessChange,
@@ -77,10 +104,21 @@ export function DxfDrawingSettings({
   onBendChange,
   bendStyle = DXF_DEFAULT_BEND_STYLE,
   onBendStyleChange,
+  bendRadiusMm = DXF_DEFAULT_BEND_RADIUS_MM,
+  onBendRadiusChange,
+  kFactor = DXF_DEFAULT_KFACTOR,
+  onKFactorChange,
+  layers = [],
+  hiddenLayers = [],
+  onLayerVisibilityChange,
   onReset
 }) {
   const thickness = normalizeDxfThicknessMm(thicknessMm);
   const commitThickness = (next) => onThicknessChange?.(normalizeDxfThicknessMm(next, thickness));
+  const style = normalizeDxfBendStyle(bendStyle);
+  const radius = normalizeDxfBendRadiusMm(bendRadiusMm);
+  const neutralK = normalizeDxfKFactor(kFactor);
+  const hiddenLayerSet = new Set(Array.isArray(hiddenLayers) ? hiddenLayers : []);
 
   return (
     <FileSheetSectionBody>
@@ -111,13 +149,51 @@ export function DxfDrawingSettings({
         <FileSheetSubsection title="Bends">
           <FileSheetSelectRow
             label="Style"
-            value={normalizeDxfBendStyle(bendStyle)}
+            value={style}
             onValueChange={(next) => onBendStyleChange?.(normalizeDxfBendStyle(next, bendStyle))}
             options={[
               { value: "boxed", label: "Boxed" },
               { value: "curved", label: "Curved" }
             ]}
           />
+          {/* Sheet-metal bend geometry only means anything when the surface actually
+              curves; Boxed is a schematic fold with no radius to size. */}
+          {style === "curved" ? (
+            <FileSheetSliderField
+              label="Radius"
+              value={radius > 0 ? `${radius.toFixed(1)} mm` : "Auto"}
+              onValueCommit={(next) => onBendRadiusChange?.(normalizeDxfBendRadiusMm(next, radius))}
+              valueInputProps={{ ariaLabel: "Bend radius value", className: "w-16" }}
+            >
+              <Slider
+                aria-label="Bend radius"
+                className={FILE_SHEET_PRECISION_SLIDER_CLASSES}
+                value={[radius]}
+                min={0}
+                max={DXF_BEND_RADIUS_MAX_MM}
+                step={0.5}
+                onValueChange={([next]) => onBendRadiusChange?.(normalizeDxfBendRadiusMm(next, radius))}
+              />
+            </FileSheetSliderField>
+          ) : null}
+          {style === "curved" ? (
+            <FileSheetSliderField
+              label="K-factor"
+              value={neutralK.toFixed(2)}
+              onValueCommit={(next) => onKFactorChange?.(normalizeDxfKFactor(next, neutralK))}
+              valueInputProps={{ ariaLabel: "K-factor value", className: "w-16" }}
+            >
+              <Slider
+                aria-label="K-factor"
+                className={FILE_SHEET_PRECISION_SLIDER_CLASSES}
+                value={[neutralK]}
+                min={DXF_KFACTOR_MIN}
+                max={DXF_KFACTOR_MAX}
+                step={0.01}
+                onValueChange={([next]) => onKFactorChange?.(normalizeDxfKFactor(next, neutralK))}
+              />
+            </FileSheetSliderField>
+          ) : null}
           {/* One row per bend: the item label IS the slider label, direction rides inline
               beside the value box (settings-ui.md "Repeated item groups", single-row form). */}
           {bends.map((bend, index) => {
@@ -166,6 +242,32 @@ export function DxfDrawingSettings({
               </FileSheetSliderField>
             );
           })}
+        </FileSheetSubsection>
+      ) : null}
+
+      {/* Layers are the DXF's own structure: each row toggles one layer's geometry in the
+          preview. A single-layer drawing has nothing to toggle, so the section only appears
+          when the file actually uses layers. */}
+      {layers.length > 1 ? (
+        <FileSheetSubsection title="Layers">
+          {layers.map((layer) => (
+            <FileSheetToggleRow
+              key={layer.name}
+              label={(
+                <span className="flex min-w-0 items-center gap-1.5">
+                  <span
+                    aria-hidden="true"
+                    className="size-2 shrink-0 rounded-full border border-black/20"
+                    style={{ backgroundColor: layer.colorHex || "var(--muted-foreground)" }}
+                  />
+                  <span className="truncate">{layer.name}</span>
+                </span>
+              )}
+              ariaLabel={`Show layer ${layer.name}`}
+              checked={!hiddenLayerSet.has(layer.name)}
+              onCheckedChange={(checked) => onLayerVisibilityChange?.(layer.name, checked)}
+            />
+          ))}
         </FileSheetSubsection>
       ) : null}
 
