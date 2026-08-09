@@ -142,6 +142,7 @@ def _append_face_payload(
     nodes: Sequence[Sequence[float]],
     node_normals: Sequence[Sequence[float]],
     triangles: Sequence[Sequence[int]],
+    coordinate_scale: float,
 ) -> None:
     if not nodes or not triangles:
         return
@@ -162,9 +163,9 @@ def _append_face_payload(
         vertex_offset = len(positions) // 3
         for node_index in range(len(nodes)):
             point = nodes[node_index]
-            x = float(point[0]) * CAD_TO_GLB_SCALE
-            y = float(point[1]) * CAD_TO_GLB_SCALE
-            z = float(point[2]) * CAD_TO_GLB_SCALE
+            x = float(point[0]) * coordinate_scale
+            y = float(point[1]) * coordinate_scale
+            z = float(point[2]) * coordinate_scale
             positions.extend((x, y, z))
             min_values[0] = min(min_values[0], x)
             min_values[1] = min(min_values[1], y)
@@ -208,9 +209,9 @@ def _append_face_payload(
         for local_vertex, node_index in enumerate(triangle):
             source_node_index = int(node_index)
             point = nodes[source_node_index]
-            x = float(point[0]) * CAD_TO_GLB_SCALE
-            y = float(point[1]) * CAD_TO_GLB_SCALE
-            z = float(point[2]) * CAD_TO_GLB_SCALE
+            x = float(point[0]) * coordinate_scale
+            y = float(point[1]) * coordinate_scale
+            z = float(point[2]) * coordinate_scale
             positions.extend((x, y, z))
             min_values[0] = min(min_values[0], x)
             min_values[1] = min(min_values[1], y)
@@ -232,6 +233,7 @@ def prototype_glb_mesh_payload(
     default_color: ColorRGBA,
     face_colors: Mapping[int, ColorRGBA],
     include_surface_edges: bool = False,
+    coordinate_scale: float = CAD_TO_GLB_SCALE,
 ) -> ShapeGlbMeshPayload:
     positions = array("f")
     normals = array("f")
@@ -279,6 +281,7 @@ def prototype_glb_mesh_payload(
             nodes=nodes,
             node_normals=node_normals,
             triangles=triangles,
+            coordinate_scale=coordinate_scale,
         )
 
     if not positions or not all(math.isfinite(value) for value in min_values + max_values):
@@ -309,6 +312,7 @@ def shape_glb_mesh_payload(
     default_color: ColorRGBA,
     face_colors: Mapping[int, ColorRGBA],
     include_surface_edges: bool = False,
+    coordinate_scale: float = CAD_TO_GLB_SCALE,
 ) -> ShapeGlbMeshPayload:
     face_entries: list[dict[str, Any]] = []
     explorer = TopExp_Explorer(shape, TopAbs_FACE)
@@ -355,6 +359,7 @@ def shape_glb_mesh_payload(
         default_color=default_color,
         face_colors=face_colors,
         include_surface_edges=include_surface_edges,
+        coordinate_scale=coordinate_scale,
     )
 
 
@@ -366,6 +371,7 @@ def scene_glb_mesh_payload_key(
     suppress_face_colors: bool,
     include_surface_edges: bool = False,
     surface_edge_class_signature: Sequence[str] | tuple[str, ...] = (),
+    coordinate_scale: float = CAD_TO_GLB_SCALE,
 ) -> tuple[object, ...]:
     return (
         int(prototype_key),
@@ -373,6 +379,7 @@ def scene_glb_mesh_payload_key(
         bool(suppress_face_colors),
         bool(include_surface_edges),
         tuple(str(item) for item in surface_edge_class_signature),
+        float(coordinate_scale),
         getattr(scene, "mesh_signature", None),
     )
 
@@ -386,6 +393,7 @@ def scene_glb_mesh_payload(
     prototype: Mapping[str, Any] | None = None,
     include_surface_edges: bool = False,
     surface_edge_class_signature: Sequence[str] | tuple[str, ...] = (),
+    coordinate_scale: float = CAD_TO_GLB_SCALE,
 ) -> ShapeGlbMeshPayload:
     key = scene_glb_mesh_payload_key(
         scene,
@@ -394,6 +402,7 @@ def scene_glb_mesh_payload(
         suppress_face_colors=suppress_face_colors,
         include_surface_edges=include_surface_edges,
         surface_edge_class_signature=surface_edge_class_signature,
+        coordinate_scale=coordinate_scale,
     )
     cache = getattr(scene, "glb_mesh_payloads", None)
     if cache is None:
@@ -414,6 +423,7 @@ def scene_glb_mesh_payload(
             default_color=normalize_rgba(default_color),
             face_colors=face_colors,
             include_surface_edges=include_surface_edges,
+            coordinate_scale=coordinate_scale,
         )
     else:
         shape = getattr(scene, "prototype_shapes", {}).get(prototype_key)
@@ -425,6 +435,7 @@ def scene_glb_mesh_payload(
                 default_color=normalize_rgba(default_color),
                 face_colors=face_colors,
                 include_surface_edges=include_surface_edges,
+                coordinate_scale=coordinate_scale,
             )
         )
     cache[key] = payload

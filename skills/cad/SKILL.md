@@ -46,6 +46,7 @@ From the CAD skill directory, the launcher shape is:
 
 ```bash
 python scripts/step ...      # STEP generation, GLB/topology artifacts, mesh sidecars
+python scripts/canonical-build ... # canonical repair-route artifacts and offline rebuilds
 python scripts/inspect ...   # refs, measure, align, frame, diff
 python scripts/snapshot ...  # PNG/GIF visual review packets
 ```
@@ -53,6 +54,29 @@ python scripts/snapshot ...  # PNG/GIF visual review packets
 Use the active project Python interpreter; treat `python` in examples as an interpreter placeholder. Use `python scripts/<tool> --help` for the complete current command interface; reference docs show recommended workflows, not every flag.
 
 Target paths resolve from the command's current working directory, not from the skill directory. Run commands from the workspace that owns the artifacts and pass cwd-relative target paths so project CAD files never resolve accidentally under the skill directory. Keep a STEP output and its Python generator in the same directory with the same basename unless the user explicitly requests otherwise.
+
+## Canonical repair-route builds
+
+When a mesh-to-CAD workspace selects the CAD route, build through the registered adapter from the source-bundle root:
+
+```bash
+python scripts/canonical-build build \
+  --source source/model.py \
+  --input source/declared-sidecar.json \
+  --output-dir artifacts
+```
+
+Omit `--input` when the generator has no local sidecars; repeat it for every file the generator reads. A successful build is complete when `build.json`, `profile.json`, `rebuild.json`, `canonical.step`, and `measurement.glb` exist in the explicit output directory.
+
+Rebuild a saved bundle through its registered recipe:
+
+```bash
+python scripts/canonical-build rebuild \
+  --recipe candidate/rebuild.json \
+  --output-dir final-rebuild
+```
+
+Keep source, inputs, recipe, and output paths relative to the bundle root. The adapter freezes the canonical profile, rejects ambient clock/random/environment inputs, rereads the formal STEP before tessellating the measurement GLB, and confines declared outputs. `gen_step()` defines the delivery geometry: construction, helper, and debug shapes must remain local intermediates and must not be included in its return value. Use `scripts/step` for ordinary CAD generation and Viewer artifacts; use `scripts/canonical-build` for the canonical repair-route contract.
 
 CAD references are `#...` selector tokens local to a target, for example `#o1.2` or `#o1.2.f1`. Pass the STEP/CAD file as a separate target argument when using CAD CLIs.
 
