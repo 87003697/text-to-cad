@@ -11,6 +11,7 @@ cd "$REPO_ROOT"
 run_python_unittest "cadpy package Python tests" "tests/python/packages/cadpy" "packages/cadpy/src"
 run_python_unittest "cadpy_metadata package Python tests" "tests/python/packages/cadpy_metadata" "packages/cadpy_metadata/src"
 run_python_unittest "meshscope package Python tests" "tests/python/packages/meshscope" "packages/meshscope/src"
+run_python_unittest "meshshot package Python tests" "tests/python/packages/meshshot" "packages/meshshot/src"
 
 while IFS= read -r skill; do
   test_dir="tests/python/skills/$skill"

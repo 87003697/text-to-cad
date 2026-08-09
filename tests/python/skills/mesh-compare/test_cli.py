@@ -58,7 +58,9 @@ class _CliCase(unittest.TestCase):
 class TestBundledRuntime(unittest.TestCase):
     def test_cli_bootstraps_bundled_meshscope_first(self):
         self.assertTrue(cli._BUNDLED_MESHSCOPE.is_dir())
+        self.assertTrue(cli._BUNDLED_MESHSHOT.is_dir())
         self.assertEqual(str(cli._BUNDLED_MESHSCOPE), sys.path[0])
+        self.assertEqual(str(cli._BUNDLED_MESHSHOT), sys.path[1])
 
 
 class TestLegacyCliCompatibility(_CliCase):

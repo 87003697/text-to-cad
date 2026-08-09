@@ -1,0 +1,5 @@
+numpy
+Pillow
+playwright
+scipy
+trimesh[easy]

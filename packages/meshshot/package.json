@@ -1,0 +1,16 @@
+{
+  "name": "meshshot",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Shared browser renderer for canonical mesh residual previews.",
+  "scripts": {
+    "test": "node --check browser/residualRenderEntry.js"
+  },
+  "dependencies": {
+    "three": "0.160.0"
+  },
+  "devDependencies": {
+    "esbuild": "0.27.7"
+  }
+}

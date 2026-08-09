@@ -3,20 +3,18 @@ requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "meshscope"
+name = "meshshot"
 version = "0.1.0"
-description = "Mesh inspection and comparison toolkit for CAD reconstruction."
+description = "Versioned browser renderer for canonical mesh residual previews."
 requires-python = ">=3.11"
 dependencies = [
-  "trimesh[easy]",
-  "numpy",
   "Pillow",
-  "scipy",
+  "playwright",
 ]
-
-[project.optional-dependencies]
-viz = ["Pillow"]
 
 [tool.setuptools.packages.find]
 where = ["src"]
-include = ["meshscope*"]
+include = ["meshshot*"]
+
+[tool.setuptools.package-data]
+meshshot = ["profiles/*.json", "runtime/*"]
