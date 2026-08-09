@@ -317,15 +317,13 @@ function DesktopFloatingToolBar({
                 </ToolbarButton>
               ) : null}
 
-              {!dxfMode ? (
-                <ToolbarButton
-                  label="Orbit"
-                  onClick={handleEnterPreviewMode}
-                  disabled={captureDisabled}
-                >
-                  <Orbit className="size-3" strokeWidth={2} aria-hidden="true" />
-                </ToolbarButton>
-              ) : null}
+              <ToolbarButton
+                label="Orbit"
+                onClick={handleEnterPreviewMode}
+                disabled={captureDisabled}
+              >
+                <Orbit className="size-3" strokeWidth={2} aria-hidden="true" />
+              </ToolbarButton>
 
               {screenshotButton}
 

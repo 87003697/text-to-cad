@@ -1,4 +1,5 @@
 import { Children, useEffect, useRef, useState } from "react";
+import { ChevronDown } from "lucide-react";
 import { cn } from "@/ui/utils";
 import {
   AccordionContent,
@@ -6,6 +7,15 @@ import {
   AccordionTrigger
 } from "../ui/accordion";
 import { ColorPicker } from "../ui/color-picker";
+import {
+  DropdownMenu,
+  DropdownMenuCheckboxItem,
+  DropdownMenuContent,
+  DropdownMenuSub,
+  DropdownMenuSubContent,
+  DropdownMenuSubTrigger,
+  DropdownMenuTrigger
+} from "../ui/dropdown-menu";
 import { ScrollArea } from "../ui/scroll-area";
 import {
   Select,
@@ -727,6 +737,66 @@ export function FileSheetSelectRow({
 }
 
 // Compact color picker trigger for inline rows and parameter rows.
+/**
+ * A select whose options nest one level: ungrouped entries render directly, each group is
+ * a hover submenu (folder). For long grouped lists — the DXF material catalog — where a
+ * flat strip of headings would scroll forever. The trigger mirrors the inline select
+ * trigger, so a column of selects reads uniformly.
+ */
+export function FileSheetCascadeSelectRow({
+  label,
+  value,
+  onValueChange,
+  options,
+  ariaLabel,
+  className
+}) {
+  const selected = options.find((option) => option.value === value) || null;
+  const ungrouped = options.filter((option) => !option.group);
+  const groupNames = [...new Set(options.map((option) => option.group).filter(Boolean))];
+  const renderItem = (option) => (
+    <DropdownMenuCheckboxItem
+      key={option.value}
+      checked={option.value === value}
+      onCheckedChange={() => onValueChange?.(option.value)}
+      className="text-xs"
+    >
+      {option.label}
+    </DropdownMenuCheckboxItem>
+  );
+  return (
+    <FileSheetInlineControlRow label={label} className={className}>
+      <DropdownMenu>
+        <DropdownMenuTrigger asChild>
+          <button
+            type="button"
+            aria-label={ariaLabel || (typeof label === "string" ? label : undefined)}
+            className={cn(
+              "flex !h-7 w-fit min-w-20 max-w-44 items-center justify-between gap-1 overflow-hidden",
+              "rounded-md border border-input bg-transparent px-2 !text-[11px] shadow-xs outline-none",
+              "focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50 dark:bg-input/30"
+            )}
+          >
+            <span className="min-w-0 truncate">{selected?.label ?? ""}</span>
+            <ChevronDown className="size-3.5 shrink-0 opacity-60" aria-hidden="true" />
+          </button>
+        </DropdownMenuTrigger>
+        <DropdownMenuContent align="end" sideOffset={4} className="w-52">
+          {ungrouped.map(renderItem)}
+          {groupNames.map((groupName) => (
+            <DropdownMenuSub key={groupName}>
+              <DropdownMenuSubTrigger className="text-xs">{groupName}</DropdownMenuSubTrigger>
+              <DropdownMenuSubContent className="max-h-80 w-56 overflow-y-auto">
+                {options.filter((option) => option.group === groupName).map(renderItem)}
+              </DropdownMenuSubContent>
+            </DropdownMenuSub>
+          ))}
+        </DropdownMenuContent>
+      </DropdownMenu>
+    </FileSheetInlineControlRow>
+  );
+}
+
 export function FileSheetColorPicker({
   value,
   onChange,

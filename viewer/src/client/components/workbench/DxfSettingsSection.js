@@ -7,6 +7,7 @@ import {
   FILE_SHEET_COMPACT_BUTTON_CLASSES,
   FILE_SHEET_PRECISION_SLIDER_CLASSES,
   FileSheetButtonRow,
+  FileSheetCascadeSelectRow,
   FileSheetControlRow,
   FileSheetSectionBody,
   FileSheetSegmentedControl,
@@ -280,7 +281,7 @@ export function DxfMaterialSettings({
           onValueChange={(next) => onUnitsChange?.(normalizeDxfUnits(next, activeUnits))}
           options={DXF_UNIT_OPTIONS.map(({ value, label }) => ({ value, label }))}
         />
-        <FileSheetSelectRow
+        <FileSheetCascadeSelectRow
           label="Material"
           value={preset.value}
           onValueChange={(next) => onMaterialChange?.(normalizeDxfMaterial(next, preset.value))}
@@ -386,9 +387,9 @@ export function DxfBendsSettings({
         })}
       </FileSheetSubsection>
 
-      <FileSheetSubsection title="Style">
+      <FileSheetSubsection title="Fold">
         <FileSheetSelectRow
-          label="Style"
+          label="Corners"
           value={style}
           onValueChange={(next) => onBendStyleChange?.(normalizeDxfBendStyle(next, bendStyle))}
           options={[
