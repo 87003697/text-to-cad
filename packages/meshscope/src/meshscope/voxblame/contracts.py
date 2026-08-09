@@ -17,6 +17,7 @@ from meshscope.voxblame.errors import UnsupportedOrInvalidVoxBlameState
 
 SESSION_SCHEMA = "voxblame.session/2"
 REPORT_SCHEMA = "voxblame.report/2"
+MEASUREMENT_SCHEMA = "voxblame.measurement/1"
 SUMMARY_SCHEMA = "voxblame.summary/1"
 COORDINATE_CONTRACT = "trellis2_canonical/1"
 MAX_DEPTH = 8
@@ -275,6 +276,15 @@ def validate_report_contract(value: Mapping[str, Any]) -> Mapping[str, Any]:
 
     root = _object(value, "$", REPORT_REQUIRED_FIELDS)
     _const(root["schema"], REPORT_SCHEMA, "$.schema")
+    _validate_measurement_document(root, report=True)
+    return value
+
+
+def validate_measurement_contract(value: Mapping[str, Any]) -> Mapping[str, Any]:
+    """Validate one persisted canonical Measured Step document."""
+
+    root = _object(value, "$", REPORT_REQUIRED_FIELDS)
+    _const(root["schema"], MEASUREMENT_SCHEMA, "$.schema")
     _validate_measurement_document(root, report=True)
     return value
 

@@ -25,6 +25,25 @@ from meshscope.voxblame import (
 )
 
 
+def _emit_error(classification: str, detail: str) -> int:
+    """Write one stable public error envelope."""
+
+    print(
+        json.dumps(
+            {
+                "ok": False,
+                "error": {
+                    "classification": classification,
+                    "detail": detail,
+                },
+            },
+            separators=(",", ":"),
+        )
+    )
+    print(f"{classification}: {detail}", file=sys.stderr)
+    return 2
+
+
 def _measure_main(argv: list[str]) -> int:
     parser = argparse.ArgumentParser(
         prog="mesh-compare voxblame-measure",
@@ -63,21 +82,7 @@ def _measure_main(argv: list[str]) -> int:
             compare_to=args.compare_to,
         )
     except Exception as exc:
-        detail = str(exc)
-        print(
-            json.dumps(
-                {
-                    "ok": False,
-                    "error": {
-                        "classification": "measurement_failed",
-                        "detail": detail,
-                    },
-                },
-                separators=(",", ":"),
-            )
-        )
-        print(f"measurement_failed: {detail}", file=sys.stderr)
-        return 2
+        return _emit_error("measurement_failed", str(exc))
     print(
         json.dumps(
             {
@@ -165,21 +170,12 @@ def _targets_main(argv: list[str]) -> int:
     try:
         page = page_repair_targets(args.output, step=args.step, offset=args.offset)
     except Exception as exc:
-        detail = str(exc)
-        print(
-            json.dumps(
-                {
-                    "ok": False,
-                    "error": {
-                        "classification": "target_page_failed",
-                        "detail": detail,
-                    },
-                },
-                separators=(",", ":"),
-            )
-        )
-        print(f"target_page_failed: {detail}", file=sys.stderr)
-        return 2
+        classification = getattr(exc, "classification", "target_page_failed")
+        detail = getattr(exc, "detail", str(exc))
+        path = getattr(exc, "path", None)
+        if path:
+            detail = f"{path}: {detail}"
+        return _emit_error(classification, detail)
     print(
         json.dumps(
             {

@@ -10,9 +10,12 @@ from pathlib import Path
 from pathlib import PurePosixPath
 from typing import Any, Iterable, TYPE_CHECKING
 
-from meshscope.voxblame.contracts import MAX_DEPTH
 from meshscope.voxblame.codec import read_surface_tree
-from meshscope.voxblame.errors import OctreeError
+from meshscope.voxblame.contracts import MAX_DEPTH, validate_measurement_contract
+from meshscope.voxblame.errors import (
+    OctreeError,
+    UnsupportedOrInvalidVoxBlameState,
+)
 from meshscope.voxblame.grading import decode_octant_prefix
 from meshscope.voxblame.tree import SurfaceTree
 
@@ -42,25 +45,9 @@ _NEIGHBOR_OFFSETS = tuple(
 
 
 @dataclass(frozen=True)
-class RepairTarget:
-    """One exact source-step-local interior error partition."""
+class _RepairTargetPartition:
+    """Internal frozen report metadata plus canonical mask artifact bytes."""
 
-    target_key: str
-    source_step: int
-    component_key: str
-    split_index: int
-    split_count: int
-    split_reason: str
-    missing_codes: frozenset[int]
-    excess_codes: frozenset[int]
-    mask_codes: frozenset[int]
-
-
-@dataclass(frozen=True)
-class RepairTargetPartition:
-    """Frozen report metadata plus canonical mask artifact bytes."""
-
-    targets: tuple[RepairTarget, ...]
     report: dict[str, Any]
     mask_bytes: dict[str, bytes]
 
@@ -84,17 +71,12 @@ def partition_repair_targets(
     missing_tree: SurfaceTree,
     excess_tree: SurfaceTree,
     *,
-    source_step: int | None = None,
-    step: int | None = None,
+    source_step: int,
     step_root: str | None = None,
     exterior: ExteriorMeasurement | None = None,
-) -> RepairTargetPartition:
+) -> _RepairTargetPartition:
     """Partition all depth-8 interior error cells with frozen 18-connectivity."""
 
-    if source_step is None:
-        source_step = step
-    elif step is not None and step != source_step:
-        raise OctreeError("Repair Target source step is inconsistent")
     if (
         not isinstance(source_step, int)
         or isinstance(source_step, bool)
@@ -149,7 +131,6 @@ def partition_repair_targets(
 
     candidates.sort(key=_display_order)
     ordered: list[dict[str, Any]] = []
-    public_targets: list[RepairTarget] = []
     mask_artifacts: dict[str, bytes] = {}
     for display_rank, candidate in enumerate(candidates):
         target_key = _interior_target_key(source_step, candidate)
@@ -181,19 +162,6 @@ def partition_repair_targets(
             }
         )
         mask_artifacts[file_name] = candidate.mask_bytes
-        public_targets.append(
-            RepairTarget(
-                target_key=target_key,
-                source_step=source_step,
-                component_key=candidate.component_key,
-                split_index=candidate.split_index,
-                split_count=candidate.split_count,
-                split_reason=candidate.split_reason,
-                missing_codes=frozenset(candidate.cells & missing),
-                excess_codes=frozenset(candidate.cells & excess),
-                mask_codes=candidate.cells,
-            )
-        )
 
     if exterior is not None and exterior.surface_cell_count:
         exterior_bytes, exterior_digest = _exterior_region_set(exterior)
@@ -258,8 +226,7 @@ def partition_repair_targets(
         missing,
         excess,
     )
-    return RepairTargetPartition(
-        targets=tuple(public_targets),
+    return _RepairTargetPartition(
         report={
             "ordering_profile": TARGET_ORDERING_PROFILE,
             "total": len(ordered),
@@ -306,24 +273,39 @@ def page_repair_targets(
 ) -> dict[str, Any]:
     """Page the frozen Repair Targets of one published Measured Step."""
 
+    try:
+        return _page_repair_targets(workspace, step=step, offset=offset)
+    except UnsupportedOrInvalidVoxBlameState:
+        raise
+    except Exception as exc:
+        _invalid("$", f"invalid persisted Repair Target state: {exc}")
+
+
+def _page_repair_targets(
+    workspace: str | Path, *, step: int, offset: int
+) -> dict[str, Any]:
+    """Validated implementation for :func:`page_repair_targets`."""
+
     if not isinstance(step, int) or isinstance(step, bool) or step < 0:
         raise OctreeError("Repair Target step must be a non-negative integer")
+    if not isinstance(offset, int) or isinstance(offset, bool) or offset < 0:
+        raise OctreeError("Repair Target offset must be a non-negative integer")
     root = Path(workspace)
     report_path = root / "steps" / f"{step:06d}" / "measurement.json"
     try:
         report = json.loads(report_path.read_text(encoding="utf-8"))
     except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
         raise OctreeError("Measured Step Repair Target report is unavailable") from exc
-    if report.get("schema") != "voxblame.measurement/1" or report.get("step") != step:
-        raise OctreeError("Measured Step Repair Target report is invalid")
-    targets = report.get("repair_targets")
-    if (
-        not isinstance(targets, dict)
-        or targets.get("ordering_profile") != TARGET_ORDERING_PROFILE
-        or targets.get("total") != len(targets.get("ordered_targets", ()))
-    ):
-        raise OctreeError("Measured Step Repair Target report is invalid")
+    validate_measurement_contract(report)
+    if report["step"] != step:
+        _invalid("$.step", "does not match the requested Measured Step")
+    if report["repair_targets"]["ordering_profile"] != TARGET_ORDERING_PROFILE:
+        _invalid(
+            "$.repair_targets.ordering_profile",
+            "unsupported Repair Target display profile",
+        )
     _validate_published_partition(root, step, report)
+    targets = report["repair_targets"]
     return repair_target_page(targets, offset=offset)
 
 
@@ -404,7 +386,7 @@ def _validate_published_partition(
         "diagnostic_grid_depth": resolution.get("diagnostic_grid_depth"),
         "cells": exterior_cells,
     }
-    if mask != expected_mask:
+    if mask != expected_mask or data != _json_bytes(expected_mask):
         raise OctreeError("exterior Repair Target mask conflicts with its snapshot")
     surface_count = len(exterior_cells)
     if (
@@ -427,10 +409,19 @@ def _validate_published_partition(
             "diagnostic_grid_depth": resolution["diagnostic_grid_depth"],
             "coarsened": resolution["coarsened"],
         }
+        or target.get("bounds_canonical")
+        != exterior_snapshot["exact"]["bounds_canonical"]
         or measurement["exterior_surface"]["surface_cell_count"] != surface_count
     ):
         raise OctreeError("exterior Repair Target evidence is inconsistent")
     component = target["component"]
+    if component != {
+        "component_key": f"exterior-component-{digest[:16]}",
+        "split_index": 0,
+        "split_count": 1,
+        "split_reason": "not_split",
+    }:
+        raise OctreeError("exterior Repair Target split provenance is invalid")
     expected_key = _target_identity_key(
         source_step=step,
         mask_sha256=digest,
@@ -594,12 +585,14 @@ def _expand_region_set(data: bytes) -> set[int]:
     except (UnicodeDecodeError, json.JSONDecodeError) as exc:
         raise OctreeError("Repair Target mask is invalid") from exc
     if (
-        snapshot.get("schema") != INTERIOR_REGION_SET_SCHEMA
+        set(snapshot) != {"schema", "max_depth", "regions"}
+        or snapshot.get("schema") != INTERIOR_REGION_SET_SCHEMA
         or snapshot.get("max_depth") != MAX_DEPTH
         or not isinstance(snapshot.get("regions"), list)
     ):
         raise OctreeError("Repair Target mask is unsupported")
     result: set[int] = set()
+    expanded_count = 0
     for region in snapshot["regions"]:
         if set(region) != {"depth", "prefix"}:
             raise OctreeError("Repair Target mask region is invalid")
@@ -615,10 +608,16 @@ def _expand_region_set(data: bytes) -> set[int]:
         ):
             raise OctreeError("Repair Target mask region is invalid")
         remaining = 3 * (MAX_DEPTH - depth)
+        expanded_count += 1 << remaining
+        if expanded_count > TARGET_SPLIT_MAX_CELLS:
+            raise OctreeError("Repair Target mask exceeds its split profile")
         expanded = range(prefix << remaining, (prefix + 1) << remaining)
         if result.intersection(expanded):
             raise OctreeError("Repair Target mask regions overlap")
         result.update(expanded)
+    canonical, _, _ = _region_set(result)
+    if canonical != data:
+        raise OctreeError("Repair Target mask is not canonical and minimal")
     return result
 
 
@@ -648,6 +647,23 @@ def _validate_interior_partition(
     missing: set[int],
     excess: set[int],
 ) -> None:
+    directions = {code: _MISSING for code in missing}
+    for code in excess:
+        directions[code] = directions.get(code, 0) | _EXCESS
+    expected_splits: dict[frozenset[int], dict[str, Any]] = {}
+    for component_cells in _connected_components(directions):
+        component_key = _component_key(component_cells, directions)
+        splits = _split_component(component_cells)
+        for split_index, split_cells in enumerate(splits):
+            expected_splits[frozenset(split_cells)] = {
+                "component_key": component_key,
+                "split_index": split_index,
+                "split_count": len(splits),
+                "split_reason": (
+                    "not_split" if len(splits) == 1 else "coarse_octree_locality"
+                ),
+            }
+
     observed: set[int] = set()
     for target in targets:
         path = Path(target["mask"]["path"])
@@ -658,6 +674,15 @@ def _validate_interior_partition(
         if digest != target["mask"]["logical_sha256"]:
             raise OctreeError("Repair Target mask identity mismatch")
         cells = _expand_region_set(data)
+        snapshot = json.loads(data)
+        if (
+            target["mask"].get("storage_schema")
+            != INTERIOR_REGION_SET_SCHEMA
+            or target["mask"]["region_count"] != len(snapshot["regions"])
+        ):
+            raise OctreeError("Repair Target mask region count mismatch")
+        if target.get("bounds_canonical") != _canonical_bounds(cells):
+            raise OctreeError("Repair Target bounds conflict with its exact mask")
         if observed.intersection(cells):
             raise OctreeError("Repair Target masks overlap")
         observed.update(cells)
@@ -669,6 +694,10 @@ def _validate_interior_partition(
         ):
             raise OctreeError("Repair Target error profile conflicts with its mask")
         component = target["component"]
+        if component != expected_splits.get(frozenset(cells)):
+            raise OctreeError(
+                "Repair Target connectivity or split provenance is invalid"
+            )
         expected_key = _target_identity_key(
             source_step=target["source_step"],
             mask_sha256=target["mask"]["logical_sha256"],
@@ -690,17 +719,10 @@ def _json_bytes(value: dict[str, Any]) -> bytes:
     ).encode("utf-8")
 
 
+def _invalid(path: str, detail: str) -> None:
+    raise UnsupportedOrInvalidVoxBlameState(path=path, detail=detail)
+
+
 __all__ = [
-    "EXTERIOR_GRID_REGION_SET_SCHEMA",
-    "INTERIOR_REGION_SET_SCHEMA",
-    "RepairTarget",
-    "RepairTargetPartition",
-    "TARGET_ORDERING_PROFILE",
-    "TARGET_PAGE_SIZE",
-    "TARGET_PARTITION_PROFILE",
-    "TARGET_SPLIT_DEPTH",
-    "TARGET_SPLIT_MAX_CELLS",
-    "partition_repair_targets",
     "page_repair_targets",
-    "repair_target_page",
 ]

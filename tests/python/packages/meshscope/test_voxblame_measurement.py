@@ -17,6 +17,7 @@ add_repo_path("packages/meshscope/src")
 
 from meshscope.voxblame import (  # noqa: E402
     MEASUREMENT_SUMMARY_SCHEMA,
+    UnsupportedOrInvalidVoxBlameState,
     measure_step,
     page_repair_targets,
     prepare_reference,
@@ -55,6 +56,27 @@ def _write_double_ply(path: Path, mesh: trimesh.Trimesh) -> None:
     )
     lines.extend(f"3 {int(face[0])} {int(face[1])} {int(face[2])}" for face in faces)
     path.write_text("\n".join(lines) + "\n", encoding="ascii")
+
+
+def _retarget_key(target: dict, mask_sha256: str) -> str:
+    profile = target["error_profile"]
+    component = target["component"]
+    identity = {
+        "schema": "voxblame.repair-target-identity/1",
+        "source_step": target["source_step"],
+        "partition_profile": "repair_target_partition/1",
+        "mask_sha256": mask_sha256,
+        "missing_surface_count": profile["missing_surface_count"],
+        "excess_surface_count": profile["excess_surface_count"],
+        "component_key": component["component_key"],
+        "split_index": component["split_index"],
+        "split_count": component["split_count"],
+    }
+    data = (
+        json.dumps(identity, indent=2, sort_keys=True, separators=(",", ": "))
+        + "\n"
+    ).encode("utf-8")
+    return f"step-{target['source_step']:06d}:target-{hashlib.sha256(data).hexdigest()[:16]}"
 
 
 def _disconnected_triangle_row(count: int) -> trimesh.Trimesh:
@@ -278,8 +300,9 @@ class VoxBlameMeasurementTests(unittest.TestCase):
         (self.state.parent / exterior_mask["path"]).write_text(
             "{}\n", encoding="utf-8"
         )
-        with self.assertRaisesRegex(ValueError, "exterior mask identity mismatch"):
+        with self.assertRaises(UnsupportedOrInvalidVoxBlameState) as raised:
             page_repair_targets(self.state, step=0)
+        self.assertIn("exterior mask identity mismatch", raised.exception.detail)
 
     def test_boundary_crossing_triangle_matches_its_clipped_interior_identity(
         self,
@@ -774,13 +797,44 @@ class VoxBlameMeasurementTests(unittest.TestCase):
             "step-000000:target-corrupt"
         )
         report_path.write_text(json.dumps(report), encoding="utf-8")
-        with self.assertRaisesRegex(ValueError, "target identity mismatch"):
+        with self.assertRaises(UnsupportedOrInvalidVoxBlameState) as raised:
             page_repair_targets(state, step=0, offset=0)
+        self.assertIn("target identity mismatch", raised.exception.detail)
         report_path.write_text(report_text, encoding="utf-8")
         mask_path = state.parent / first_mask["path"]
         mask_path.write_text("{}\n", encoding="utf-8")
-        with self.assertRaisesRegex(ValueError, "mask identity mismatch"):
+        with self.assertRaises(UnsupportedOrInvalidVoxBlameState) as raised:
             page_repair_targets(state, step=0, offset=0)
+        self.assertIn("mask identity mismatch", raised.exception.detail)
+
+    def test_paging_rejects_semantically_equal_noncanonical_mask_bytes(self) -> None:
+        translated = trimesh.load(self.candidate, force="mesh", process=False)
+        translated.apply_translation([0.0, 0.05, 0.0])
+        candidate = self.root / "translated-noncanonical-mask.ply"
+        _write_double_ply(candidate, translated)
+        measure_step(self.reference, candidate, self.state, step=0)
+
+        report_path = self.state / "steps/000000/measurement.json"
+        report = json.loads(report_path.read_text(encoding="utf-8"))
+        target = next(
+            item
+            for item in report["repair_targets"]["ordered_targets"]
+            if item["kind"] == "interior"
+        )
+        mask_path = self.state.parent / target["mask"]["path"]
+        semantic_mask = json.loads(mask_path.read_text(encoding="utf-8"))
+        noncanonical = json.dumps(semantic_mask, separators=(",", ":")).encode(
+            "utf-8"
+        )
+        digest = hashlib.sha256(b"octree_region_set/1\0" + noncanonical).hexdigest()
+        target["mask"]["logical_sha256"] = digest
+        target["target_key"] = _retarget_key(target, digest)
+        mask_path.write_bytes(noncanonical)
+        report_path.write_text(json.dumps(report), encoding="utf-8")
+
+        with self.assertRaises(UnsupportedOrInvalidVoxBlameState) as raised:
+            page_repair_targets(self.state, step=0)
+        self.assertIn("canonical and minimal", raised.exception.detail)
 
     def test_identical_rerun_is_idempotent_and_conflict_cannot_overwrite_step(self) -> None:
         first = measure_step(self.reference, self.candidate, self.state, step=0)

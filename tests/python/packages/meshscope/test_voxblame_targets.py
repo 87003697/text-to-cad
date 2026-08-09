@@ -1,223 +1,204 @@
-"""Public Repair Target partition and paging behavior."""
+"""Repair Target behavior through the public measurement and paging seams."""
 
 from __future__ import annotations
 
+from pathlib import Path
+import tempfile
 import unittest
+
+import numpy as np
+import trimesh
 
 from tests.python.support.paths import add_repo_path
 
 add_repo_path("packages/meshscope/src")
 
 from meshscope.voxblame import (  # noqa: E402
-    TARGET_PARTITION_PROFILE,
-    TARGET_SPLIT_DEPTH,
-    TARGET_SPLIT_MAX_CELLS,
-    partition_repair_targets,
-    repair_target_page,
-    tree_from_codes,
+    measure_step,
+    page_repair_targets,
+    prepare_reference,
 )
 
 
-def _morton_encode(x: int, y: int, z: int, depth: int = 8) -> int:
-    code = 0
-    for shift in range(depth - 1, -1, -1):
-        code = (
-            (code << 3)
-            | (((x >> shift) & 1) << 2)
-            | (((y >> shift) & 1) << 1)
-            | ((z >> shift) & 1)
+def _write_double_ply(path: Path, mesh: trimesh.Trimesh) -> None:
+    vertices = np.asarray(mesh.vertices, dtype=np.float64)
+    faces = np.asarray(mesh.faces, dtype=np.int64)
+    lines = [
+        "ply",
+        "format ascii 1.0",
+        f"element vertex {len(vertices)}",
+        "property double x",
+        "property double y",
+        "property double z",
+        f"element face {len(faces)}",
+        "property list uchar int vertex_indices",
+        "end_header",
+    ]
+    lines.extend(
+        " ".join(format(float(value), ".17g") for value in vertex)
+        for vertex in vertices
+    )
+    lines.extend(
+        f"3 {int(face[0])} {int(face[1])} {int(face[2])}" for face in faces
+    )
+    path.write_text("\n".join(lines) + "\n", encoding="ascii")
+
+
+def _thin_triangle() -> trimesh.Trimesh:
+    return trimesh.Trimesh(
+        vertices=[[-0.5, -0.001, 0.0], [0.5, -0.001, 0.0], [-0.5, 0.001, 0.0]],
+        faces=[[0, 1, 2]],
+        process=False,
+    )
+
+
+def _narrow_rectangle() -> trimesh.Trimesh:
+    return trimesh.Trimesh(
+        vertices=[[-0.5, -0.04, 0.0], [0.5, -0.04, 0.0], [0.5, 0.04, 0.0], [-0.5, 0.04, 0.0]],
+        faces=[[0, 1, 2], [0, 2, 3]],
+        process=False,
+    )
+
+
+def _triangle_row(count: int) -> trimesh.Trimesh:
+    vertices: list[list[float]] = []
+    faces: list[list[int]] = []
+    for x in np.linspace(-0.45, 0.45, count):
+        start = len(vertices)
+        vertices.extend(
+            [
+                [float(x) - 0.01, -0.01, 0.0],
+                [float(x) + 0.01, -0.01, 0.0],
+                [float(x) - 0.01, 0.01, 0.0],
+            ]
         )
-    return code
+        faces.append([start, start + 1, start + 2])
+    return trimesh.Trimesh(vertices=vertices, faces=faces, process=False)
 
 
-class RepairTargetPartitionTests(unittest.TestCase):
-    def test_eighteen_connected_mixed_error_is_one_complete_exact_target(self) -> None:
-        missing = tree_from_codes([0, 3], 8)
-        excess = tree_from_codes([1], 8)
+class RepairTargetPublicSeamTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temporary.cleanup)
+        self.root = Path(self.temporary.name)
 
-        partition = partition_repair_targets(missing, excess, source_step=2)
-
-        self.assertEqual(1, len(partition.targets))
-        target = partition.targets[0]
-        self.assertEqual(frozenset({0, 3}), target.missing_codes)
-        self.assertEqual(frozenset({1}), target.excess_codes)
-        self.assertEqual(frozenset({0, 1, 3}), target.mask_codes)
-        self.assertEqual("not_split", target.split_reason)
-        self.assertEqual(0, target.split_index)
-        self.assertEqual(1, target.split_count)
-        self.assertEqual(
-            frozenset({0, 1, 3}),
-            frozenset().union(*(item.mask_codes for item in partition.targets)),
+    def publish(self, source: trimesh.Trimesh, transform=None) -> tuple[dict, Path]:
+        raw = self.root / "raw-reference.ply"
+        _write_double_ply(raw, source)
+        reference = self.root / "reference"
+        prepare_reference(raw, reference)
+        candidate_mesh = trimesh.load(
+            reference / "reference.ply", force="mesh", process=False
         )
+        if transform is not None:
+            transform(candidate_mesh)
+        candidate = self.root / "candidate.ply"
+        _write_double_ply(candidate, candidate_mesh)
+        workspace = self.root / "voxblame"
+        summary = measure_step(reference, candidate, workspace, step=0).summary
+        return summary, workspace
 
-    def test_corner_touching_cells_are_disconnected_under_eighteen_connectivity(
-        self,
-    ) -> None:
-        partition = partition_repair_targets(
-            tree_from_codes([0, 7], 8),
-            tree_from_codes([], 8),
-            source_step=0,
-        )
+    def all_pages(self, workspace: Path) -> list[dict]:
+        items: list[dict] = []
+        offset = 0
+        while True:
+            page = page_repair_targets(workspace, step=0, offset=offset)
+            items.extend(page["items"])
+            if page["next_offset"] is None:
+                self.assertEqual(page["total"], len(items))
+                return items
+            offset = page["next_offset"]
 
-        self.assertEqual(2, len(partition.targets))
-        self.assertEqual(
-            [frozenset({0}), frozenset({7})],
-            [target.mask_codes for target in partition.targets],
-        )
+    def test_empty_error_publishes_empty_terminal_first_page(self) -> None:
+        summary, workspace = self.publish(_thin_triangle())
 
-    def test_target_identity_binds_missing_and_excess_direction_facts(self) -> None:
-        missing = partition_repair_targets(
-            tree_from_codes([0], 8),
-            tree_from_codes([], 8),
-            source_step=6,
-        )
-        excess = partition_repair_targets(
-            tree_from_codes([], 8),
-            tree_from_codes([0], 8),
-            source_step=6,
-        )
-
-        self.assertEqual(
-            missing.report["ordered_targets"][0]["mask"]["logical_sha256"],
-            excess.report["ordered_targets"][0]["mask"]["logical_sha256"],
-        )
-        self.assertNotEqual(
-            missing.targets[0].target_key,
-            excess.targets[0].target_key,
-        )
-
-    def test_oversized_component_uses_versioned_coarse_octree_split_profile(
-        self,
-    ) -> None:
-        first_block = {
-            _morton_encode(x, y, z)
-            for x in range(16)
-            for y in range(16)
-            for z in range(16)
+        expected = {
+            "ordering_profile": "repair_target_display/1",
+            "total": 0,
+            "returned": 0,
+            "remaining": 0,
+            "offset": 0,
+            "next_offset": None,
+            "items": [],
         }
-        connected_next_block_cell = _morton_encode(16, 0, 0)
-        codes = first_block | {connected_next_block_cell}
-        self.assertEqual(TARGET_SPLIT_MAX_CELLS + 1, len(codes))
-        self.assertEqual(4, TARGET_SPLIT_DEPTH)
-        self.assertEqual("repair_target_partition/1", TARGET_PARTITION_PROFILE)
+        self.assertEqual(expected, summary["repair_targets"])
+        self.assertEqual(expected, page_repair_targets(workspace, step=0))
 
-        first = partition_repair_targets(
-            tree_from_codes(codes, 8),
-            tree_from_codes([], 8),
-            source_step=4,
-        )
-        second = partition_repair_targets(
-            tree_from_codes(reversed(sorted(codes)), 8),
-            tree_from_codes([], 8),
-            source_step=4,
+    def test_mixed_direction_error_stays_in_a_shared_target(self) -> None:
+        summary, workspace = self.publish(
+            _thin_triangle(),
+            lambda mesh: mesh.apply_translation([0.0, 2 / 256, 0.0]),
         )
 
-        self.assertEqual(first, second)
-        self.assertEqual(2, len(first.targets))
-        self.assertEqual({2}, {target.split_count for target in first.targets})
-        self.assertEqual([0, 1], sorted(target.split_index for target in first.targets))
-        self.assertEqual(
-            {"coarse_octree_locality"},
-            {target.split_reason for target in first.targets},
-        )
-        self.assertEqual(1, len({target.component_key for target in first.targets}))
-        self.assertEqual(codes, set().union(*(target.mask_codes for target in first.targets)))
+        targets = self.all_pages(workspace)
         self.assertTrue(
-            all(target.target_key.startswith("step-000004:target-") for target in first.targets)
+            any(
+                target["error_profile"]["missing_surface_count"] > 0
+                and target["error_profile"]["excess_surface_count"] > 0
+                for target in targets
+                if target["kind"] == "interior"
+            )
+        )
+        self.assertEqual(summary["repair_targets"]["items"], targets[:8])
+
+    def test_oversized_component_splits_and_every_chunk_is_pageable(self) -> None:
+        summary, workspace = self.publish(
+            _narrow_rectangle(),
+            lambda mesh: mesh.apply_translation([0.0, 0.0, 0.03]),
         )
 
-    def test_oversized_split_keeps_each_coarse_locality_chunk_connected(self) -> None:
-        second_block = {
-            _morton_encode(x, y, z)
-            for x in range(16, 32)
-            for y in range(16)
-            for z in range(16)
-        }
-        separated_first_block_cells = {
-            _morton_encode(15, 0, 0),
-            _morton_encode(15, 15, 15),
-        }
-        codes = second_block | separated_first_block_cells
-
-        partition = partition_repair_targets(
-            tree_from_codes(codes, 8),
-            tree_from_codes([], 8),
-            source_step=5,
+        targets = self.all_pages(workspace)
+        split = [
+            target
+            for target in targets
+            if target["kind"] == "interior"
+            and target["component"]["split_reason"] == "coarse_octree_locality"
+        ]
+        self.assertTrue(split)
+        self.assertGreater(
+            max(target["component"]["split_count"] for target in split), 1
         )
-
-        self.assertEqual(3, len(partition.targets))
+        self.assertEqual(summary["repair_targets"]["total"], len(targets))
         self.assertEqual(
-            [1, 1, TARGET_SPLIT_MAX_CELLS],
-            sorted(len(target.mask_codes) for target in partition.targets),
-        )
-        self.assertEqual(codes, set().union(*(target.mask_codes for target in partition.targets)))
-
-    def test_thin_component_keeps_exact_one_cell_wide_bounds(self) -> None:
-        codes = {_morton_encode(x, 40, 80) for x in range(12, 44)}
-
-        partition = partition_repair_targets(
-            tree_from_codes(codes, 8),
-            tree_from_codes([], 8),
-            source_step=1,
+            list(range(len(targets))),
+            [target["display_rank"] for target in targets],
         )
 
-        self.assertEqual(1, len(partition.targets))
-        target = partition.report["ordered_targets"][0]
-        self.assertEqual(32, target["error_profile"]["missing_surface_count"])
-        self.assertEqual(
-            1 / 256,
-            target["bounds_canonical"]["max"][1]
-            - target["bounds_canonical"]["min"][1],
-        )
-        self.assertEqual(
-            1 / 256,
-            target["bounds_canonical"]["max"][2]
-            - target["bounds_canonical"]["min"][2],
+    def test_thin_error_keeps_a_voxel_thin_exact_bound(self) -> None:
+        summary, workspace = self.publish(
+            _thin_triangle(),
+            lambda mesh: mesh.apply_translation([0.0, 0.0, 1 / 256]),
         )
 
-    def test_empty_error_has_an_empty_terminal_page(self) -> None:
-        partition = partition_repair_targets(
-            tree_from_codes([], 8),
-            tree_from_codes([], 8),
-            source_step=0,
+        target = next(
+            target
+            for target in self.all_pages(workspace)
+            if target["kind"] == "interior"
         )
+        widths = [
+            upper - lower
+            for lower, upper in zip(
+                target["bounds_canonical"]["min"],
+                target["bounds_canonical"]["max"],
+                strict=True,
+            )
+        ]
+        self.assertLessEqual(min(widths), 2 / 256)
+        self.assertEqual(summary["repair_targets"]["items"][0], target)
 
-        self.assertEqual((), partition.targets)
-        self.assertEqual(
-            {
-                "ordering_profile": "repair_target_display/1",
-                "total": 0,
-                "returned": 0,
-                "remaining": 0,
-                "offset": 0,
-                "next_offset": None,
-                "items": [],
-            },
-            repair_target_page(partition.report),
-        )
+    def test_disconnected_targets_are_all_reachable_in_stable_order(self) -> None:
+        def keep_first_patch(mesh: trimesh.Trimesh) -> None:
+            mesh.update_faces([0])
+            mesh.remove_unreferenced_vertices()
 
-    def test_every_disconnected_target_is_reachable_through_stable_pages(self) -> None:
-        codes = {_morton_encode(x, 0, 0) for x in range(0, 30, 3)}
-        partition = partition_repair_targets(
-            tree_from_codes(codes, 8),
-            tree_from_codes([], 8),
-            source_step=3,
-        )
+        summary, workspace = self.publish(_triangle_row(10), keep_first_patch)
+        first = page_repair_targets(workspace, step=0)
+        targets = self.all_pages(workspace)
 
-        first = repair_target_page(partition.report)
-        second = repair_target_page(partition.report, offset=first["next_offset"])
-
+        self.assertGreater(summary["repair_targets"]["total"], 8)
         self.assertEqual(8, first["returned"])
-        self.assertEqual(2, first["remaining"])
-        self.assertEqual(8, first["next_offset"])
-        self.assertEqual(2, second["returned"])
-        self.assertEqual(0, second["remaining"])
-        self.assertIsNone(second["next_offset"])
-        self.assertEqual(first, repair_target_page(partition.report))
-        self.assertEqual(
-            [target.target_key for target in partition.targets],
-            [item["target_key"] for item in first["items"] + second["items"]],
-        )
+        self.assertEqual(summary["repair_targets"]["items"], targets[:8])
+        self.assertEqual(targets, self.all_pages(workspace))
 
 
 if __name__ == "__main__":

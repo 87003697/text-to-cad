@@ -55,16 +55,7 @@ from meshscope.voxblame.grading import (
     world_bounds,
 )
 from meshscope.voxblame.session import run_step
-from meshscope.voxblame.targets import (
-    RepairTarget,
-    RepairTargetPartition,
-    TARGET_PARTITION_PROFILE,
-    TARGET_SPLIT_DEPTH,
-    TARGET_SPLIT_MAX_CELLS,
-    page_repair_targets,
-    partition_repair_targets,
-    repair_target_page,
-)
+from meshscope.voxblame.targets import page_repair_targets
 from meshscope.voxblame.tree import SurfaceTree, tree_from_codes
 from meshscope.voxblame.voxelize import build_lattice_tree, voxelize_mesh
 
@@ -91,12 +82,7 @@ __all__ = [
     "REPORT_REQUIRED_FIELDS",
     "SESSION_REQUIRED_FIELDS",
     "SUMMARY_REQUIRED_FIELDS",
-    "TARGET_PARTITION_PROFILE",
-    "TARGET_SPLIT_DEPTH",
-    "TARGET_SPLIT_MAX_CELLS",
     "RegionHandle",
-    "RepairTarget",
-    "RepairTargetPartition",
     "STORAGE_SCHEMA",
     "SurfaceTree",
     "SurfaceTreeError",
@@ -111,9 +97,7 @@ __all__ = [
     "page_repair_targets",
     "read_surface_tree",
     "prepare_reference",
-    "partition_repair_targets",
     "publish_prepare_failure",
-    "repair_target_page",
     "run_step",
     "select_next_action",
     "tree_from_codes",

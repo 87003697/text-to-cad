@@ -23,6 +23,7 @@ from meshscope.voxblame.contracts import (
     BOUNDARY_EPSILON,
     COORDINATE_CONTRACT,
     MAX_DEPTH,
+    MEASUREMENT_SCHEMA,
     validate_session_contract,
 )
 from meshscope.voxblame.errors import OctreeError
@@ -45,7 +46,6 @@ from meshscope.voxblame.tree import SurfaceTree, tree_from_codes
 from meshscope.voxblame.voxelize import Backend, build_lattice_tree, voxelize_mesh
 
 
-MEASUREMENT_SCHEMA = "voxblame.measurement/1"
 MEASUREMENT_SUMMARY_SCHEMA = "voxblame.measurement-summary/1"
 _SURFACE_PROFILE = "conservative_surface_occupancy/1"
 _TARGET_PROFILE = "repair_target_partition/1"
@@ -127,7 +127,7 @@ def measure_step(
     repair_targets = partition_repair_targets(
         missing_tree,
         excess_tree,
-        step=step,
+        source_step=step,
         step_root=step_root,
         exterior=exterior,
     )
