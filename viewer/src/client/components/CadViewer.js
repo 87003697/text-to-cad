@@ -2533,24 +2533,47 @@ const CadViewer = forwardRef(function CadViewer({
       thicknessScale: drawingThicknessScale
     };
     const identity = dxfFoldIsIdentity(foldOptions);
+    if (identity && !runtimeRef.current?.dxfTransformTouched) {
+      return undefined;
+    }
+    runtimeRef.current.dxfTransformTouched = !identity;
     let frame = 0;
     let attempts = 0;
 
     const apply = () => {
+      // Everything here keys on the GEOMETRY, never the mesh. Geometries are cached and
+      // reused across mounts while meshes are rebuilt per scene — a baseline stored on the
+      // mesh is lost on remount, and the next visit then snapshots the previous visit's
+      // POSE as "flat" (measured: reopening a 5 mm drawing made 8 mm render 40 mm tall).
       const targets = [];
+      const seenGeometries = new Set();
       group.traverse((child) => {
         if (child.userData?.dxfBendGuide) {
           return;
         }
-        const position = child.geometry?.getAttribute?.("position");
+        const geometry = child.geometry;
+        let position = geometry?.getAttribute?.("position");
         if (!position) {
           return;
         }
-        // Always transform from the FLAT copy, cached once per geometry — folding the
-        // current pose compounds.
-        const original = child.userData.dxfFoldOriginal
-          || (child.userData.dxfFoldOriginal = Float32Array.from(position.array));
-        targets.push({ child, original, position });
+        if (seenGeometries.has(geometry)) {
+          // Occurrences share geometry; transforming it once per apply is both correct and
+          // what keeps the fold from compounding across instances.
+          return;
+        }
+        seenGeometries.add(geometry);
+        // First touch of this geometry, ever: snapshot the FLAT baseline and DETACH the
+        // attribute onto a private buffer. The scene wraps the mesh cache's own vertex
+        // array when it is already a Float32Array (cadScene sourceMesh path, no copy) —
+        // writing through it would corrupt the cache's flat baseline for every future
+        // mount. The transform may only ever own memory nothing else reads.
+        if (!geometry.userData.dxfFoldOriginal) {
+          geometry.userData.dxfFoldOriginal = Float32Array.from(position.array);
+          const privateAttribute = new THREE.BufferAttribute(Float32Array.from(position.array), 3);
+          geometry.setAttribute("position", privateAttribute);
+          position = privateAttribute;
+        }
+        targets.push({ geometry, original: geometry.userData.dxfFoldOriginal, position });
       });
 
       if (!targets.length) {
@@ -2564,12 +2587,12 @@ const CadViewer = forwardRef(function CadViewer({
       }
 
       let flat = null;
-      for (const { child, original, position } of targets) {
+      for (const { geometry, original, position } of targets) {
         transformDxfPreviewPositions(original, position.array, foldOptions);
         position.needsUpdate = true;
-        child.geometry.computeVertexNormals?.();
-        child.geometry.computeBoundingBox?.();
-        child.geometry.computeBoundingSphere?.();
+        geometry.computeVertexNormals?.();
+        geometry.computeBoundingBox?.();
+        geometry.computeBoundingSphere?.();
         if (!flat || original.length > flat.length) {
           flat = original;
         }

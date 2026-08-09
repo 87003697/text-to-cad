@@ -189,6 +189,26 @@ export function FileSheetSubsection({
   );
 }
 
+export function FileSheetItemGroup({ label, children, className }) {
+  // A repeated instance inside one section (settings-ui.md "Repeated item groups"): the
+  // section names the kind, this names the instance. The label sits between a section
+  // header and a row label in weight — full-strength foreground at row size — and binds to
+  // its rows with the tight 4px stacked gap rather than a heading's 12px clearance. Groups
+  // are separated by the section's 16px rhythm with no rule: the next label is the boundary.
+  return (
+    <div className={cn("space-y-1 [&:not(:first-child)]:mt-4", className)} data-file-sheet-item-group="">
+      <div className="flex min-h-4 items-center px-2">
+        <span className="min-w-0 truncate text-[11px] font-medium leading-4 text-sidebar-foreground">
+          {label}
+        </span>
+      </div>
+      <div className={FILE_SHEET_ROW_STACK_CLASSES} data-file-sheet-row-stack="">
+        {children}
+      </div>
+    </div>
+  );
+}
+
 export function FileSheetSectionBody({
   children,
   className

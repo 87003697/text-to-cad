@@ -349,6 +349,24 @@ def render_package_glb_relation(repo_root, root_path, source_path, kind):
 
 
 # --- entry builders ---
+def _apply_drawing_preview_stats(entry, package_dir):
+    """Copy the drawing descriptor's previewStats facts onto a catalog entry.
+
+    One helper for BOTH drawing kinds. Imported and generated drawings bake the identical
+    package, and the viewer folds from these facts — an imported drawing that skipped them
+    would show no Bends tab and never fold, which is exactly the asymmetry this closes."""
+    descriptor = read_drawing_catalog_metadata(package_dir)
+    preview_stats = descriptor.get("previewStats")
+    if not isinstance(preview_stats, dict):
+        return
+    bend_line_count = preview_stats.get("bendLineCount")
+    if isinstance(bend_line_count, (int, float)) and not isinstance(bend_line_count, bool):
+        entry["bendLineCount"] = int(bend_line_count)
+    axes = preview_stats.get("bendAxisX")
+    if isinstance(axes, list) and axes:
+        entry["bendAxisX"] = [float(v) for v in axes]
+
+
 def create_single_asset_entry(repo_root, root_path, source_path, extension):
     kind = source_format_for_path(source_path, extension)
     asset = asset_for_path(repo_root, source_path)
@@ -363,6 +381,8 @@ def create_single_asset_entry(repo_root, root_path, source_path, extension):
     glb_relation = render_package_glb_relation(repo_root, root_path, source_path, kind)
     if glb_relation:
         entry["relations"] = {"glb": glb_relation}
+    if kind == "dxf":
+        _apply_drawing_preview_stats(entry, render_package_asset_dir(source_path))
     if kind == "srdf":
         paired_urdf = _paired_urdf_path_for_srdf(source_path, repo_root)
         if paired_urdf:
@@ -402,16 +422,7 @@ def create_generated_dxf_entry(repo_root, root_path, source_path):
         "bytes": entry_bytes,
         "sourceKind": "python",
     }
-    preview_stats = descriptor.get("previewStats")
-    if isinstance(preview_stats, dict):
-        bend_line_count = preview_stats.get("bendLineCount")
-        if isinstance(bend_line_count, (int, float)) and not isinstance(bend_line_count, bool):
-            # Surfaced on the entry so the viewer can decide whether a Bends tab applies
-            # without fetching and parsing the package.
-            entry["bendLineCount"] = int(bend_line_count)
-        axes = preview_stats.get("bendAxisX")
-        if isinstance(axes, list) and axes:
-            entry["bendAxisX"] = [float(v) for v in axes]
+    _apply_drawing_preview_stats(entry, package_dir)
     glb_relation = render_package_glb_relation(repo_root, root_path, source_path, "dxf")
     if glb_relation:
         entry["relations"] = {"glb": glb_relation}

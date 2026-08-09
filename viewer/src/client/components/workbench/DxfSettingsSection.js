@@ -3,6 +3,7 @@ import { Slider } from "@/components/ui/slider";
 import {
   FILE_SHEET_PRECISION_SLIDER_CLASSES,
   FileSheetInlineControlRow,
+  FileSheetItemGroup,
   FileSheetSectionBody,
   FileSheetSegmentedControl,
   FileSheetSliderField,
@@ -41,7 +42,9 @@ export const DXF_DEFAULT_THICKNESS_MM = 0;
 export const DXF_BEND_ANGLE_MIN_DEG = 0;
 export const DXF_BEND_ANGLE_MAX_DEG = 180;
 export const DXF_BEND_ANGLE_STEP_DEG = 1;
-export const DXF_DEFAULT_BEND_ANGLE_DEG = 90;
+/** Zero: a flat pattern IS flat, and the dashed bend lines already say where it can fold.
+ *  Any other default would be a value the drawing never asked for. */
+export const DXF_DEFAULT_BEND_ANGLE_DEG = 0;
 
 export const DXF_BEND_DIRECTIONS = Object.freeze(["up", "down"]);
 
@@ -101,54 +104,56 @@ export function DxfMaterialSection({ thicknessMm = DXF_DEFAULT_THICKNESS_MM, onT
 export function DxfBendsSection({ bends = [], onBendChange }) {
   return (
     <FileSheetSectionBody>
-      {/* One section per bend, in axis order — "the bend angle" stopped being a single
-          setting the moment a drawing had two bends that want different angles. Sections
-          never nest (settings-ui.md): the tab body is the flat list Bend 1, Bend 2, ... */}
-      {bends.map((bend, index) => {
-        const angle = normalizeDxfBendAngleDeg(bend?.angleDeg);
-        const direction = normalizeDxfBendDirection(bend?.direction);
-        const commitAngle = (next) => onBendChange?.(index, {
-          angleDeg: normalizeDxfBendAngleDeg(next, angle)
-        });
-        return (
-          <FileSheetSubsection title={`Bend ${index + 1}`} key={index}>
-            <FileSheetSliderField
-              label="Angle"
-              value={`${Math.round(angle)}°`}
-              onValueCommit={commitAngle}
-              valueInputProps={{
-                ariaLabel: `Bend ${index + 1} angle value`,
-                min: DXF_BEND_ANGLE_MIN_DEG,
-                max: DXF_BEND_ANGLE_MAX_DEG
-              }}
-            >
-              <Slider
-                aria-label={`Bend ${index + 1} angle`}
-                className={FILE_SHEET_PRECISION_SLIDER_CLASSES}
-                value={[angle]}
-                min={DXF_BEND_ANGLE_MIN_DEG}
-                max={DXF_BEND_ANGLE_MAX_DEG}
-                step={DXF_BEND_ANGLE_STEP_DEG}
-                onValueChange={([next]) => commitAngle(next)}
-              />
-            </FileSheetSliderField>
-            <FileSheetInlineControlRow label="Direction">
-              <FileSheetSegmentedControl
-                fit
-                ariaLabel={`Bend ${index + 1} direction`}
-                value={direction}
-                onChange={(next) => onBendChange?.(index, {
-                  direction: normalizeDxfBendDirection(next, direction)
-                })}
-                options={[
-                  { value: "up", label: "Up" },
-                  { value: "down", label: "Down" }
-                ]}
-              />
-            </FileSheetInlineControlRow>
-          </FileSheetSubsection>
-        );
-      })}
+      {/* ONE section — "Bends" is the kind, each group an instance (settings-ui.md
+          "Repeated item groups"). Sibling "Bend 1" sections promoted an index to a concept
+          and filled the panel with rules. */}
+      <FileSheetSubsection title="Bends">
+        {bends.map((bend, index) => {
+          const angle = normalizeDxfBendAngleDeg(bend?.angleDeg);
+          const direction = normalizeDxfBendDirection(bend?.direction);
+          const commitAngle = (next) => onBendChange?.(index, {
+            angleDeg: normalizeDxfBendAngleDeg(next, angle)
+          });
+          return (
+            <FileSheetItemGroup label={`Bend ${index + 1}`} key={index}>
+              <FileSheetSliderField
+                label="Angle"
+                value={`${Math.round(angle)}°`}
+                onValueCommit={commitAngle}
+                valueInputProps={{
+                  ariaLabel: `Bend ${index + 1} angle value`,
+                  min: DXF_BEND_ANGLE_MIN_DEG,
+                  max: DXF_BEND_ANGLE_MAX_DEG
+                }}
+              >
+                <Slider
+                  aria-label={`Bend ${index + 1} angle`}
+                  className={FILE_SHEET_PRECISION_SLIDER_CLASSES}
+                  value={[angle]}
+                  min={DXF_BEND_ANGLE_MIN_DEG}
+                  max={DXF_BEND_ANGLE_MAX_DEG}
+                  step={DXF_BEND_ANGLE_STEP_DEG}
+                  onValueChange={([next]) => commitAngle(next)}
+                />
+              </FileSheetSliderField>
+              <FileSheetInlineControlRow label="Direction">
+                <FileSheetSegmentedControl
+                  fit
+                  ariaLabel={`Bend ${index + 1} direction`}
+                  value={direction}
+                  onChange={(next) => onBendChange?.(index, {
+                    direction: normalizeDxfBendDirection(next, direction)
+                  })}
+                  options={[
+                    { value: "up", label: "Up" },
+                    { value: "down", label: "Down" }
+                  ]}
+                />
+              </FileSheetInlineControlRow>
+            </FileSheetItemGroup>
+          );
+        })}
+      </FileSheetSubsection>
     </FileSheetSectionBody>
   );
 }

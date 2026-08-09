@@ -182,6 +182,27 @@ Joints › `Group state`, and Animation › `Clip`, which reframes the transport
 and the time/speed rows beneath it. Pass `stacked` for those and for nothing
 else; a second stacked select in one group means one of them is not primary.
 
+### Repeated item groups — `FileSheetItemGroup`
+
+When one section holds the same controls repeated per item — a drawing's bends,
+a light per index — the section keeps its single heading and each item renders
+as an **item group**: an item label row, then that item's rows. The section is
+the *kind* of thing ("Bends"); the groups are the *instances* ("Bend 1",
+"Bend 2"). Splitting the instances into sibling sections is wrong — it promotes
+an index to a concept and fills the panel with rules.
+
+- Item label: 11px, medium, full-strength `sidebar-foreground` — heavier than a
+  muted row label, smaller than the 12px section header, so the three levels
+  (section › item › row) read as three levels.
+- Rows inside a group sit the standard 12px apart; the label takes 4px to bind
+  to its first row (it names the group the way a stacked label names its
+  control, not the way a heading clears a section).
+- Groups sit 16px apart with **no rule between them** — the next item label is
+  the boundary. Rules stay reserved for sections.
+- Items are numbered from 1 in the artifact's own order; the label is
+  `<Thing> <n>` and nothing else. Per-item state (an angle readout) belongs in
+  the item's rows, not in its label.
+
 ### 4. Field grid — `FileSheetFieldGrid` + `FileSheetField`
 
 A 2–3 column grid of micro-labelled fields, used **only** for tightly coupled
