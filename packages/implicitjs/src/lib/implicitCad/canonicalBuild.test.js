@@ -459,6 +459,21 @@ test("canonical adapter confines paths and rejects noncanonical source and recip
     outputDirectory: "auto-bounds-output",
   }), /automatic bounds fit is not permitted/u);
 
+  const degenerateBoundsSource = path.join(workspaceDirectory, "degenerate-bounds.implicit.js");
+  fs.writeFileSync(
+    degenerateBoundsSource,
+    fs.readFileSync(sourcePath, "utf-8").replace(
+      "bounds: [[-0.5, -0.5, -0.5], [0.5, 0.5, 0.5]],",
+      "bounds: [[0, -0.5, -0.5], [0, 0.5, 0.5]],",
+    ),
+    "utf-8",
+  );
+  await assert.rejects(buildCanonicalImplicitCad({
+    workspaceDirectory,
+    sourcePath: path.basename(degenerateBoundsSource),
+    outputDirectory: "degenerate-bounds-output",
+  }), /exact.*bounds/u);
+
   await buildCanonicalImplicitCad({
     workspaceDirectory,
     sourcePath: path.basename(sourcePath),

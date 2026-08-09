@@ -5,12 +5,44 @@ import { IMPLICIT_CANONICAL_PROFILE } from "./canonicalBuild.js";
 import { exportImplicitCadModel } from "./exportModel.js";
 import { normalizeImplicitCadModel } from "./model.js";
 
-function canonicalBoundsMatch(model) {
+function canonicalVectorMatch(value, expected) {
+  return (Array.isArray(value) || ArrayBuffer.isView(value))
+    && value.length === expected.length
+    && expected.every((coordinate, axis) => value[axis] === coordinate);
+}
+
+function authoredCanonicalBoundsMatch(value) {
+  const bounds = Array.isArray(value) && value.length === 2
+    ? { min: value[0], max: value[1] }
+    : value;
+  return bounds !== null
+    && typeof bounds === "object"
+    && canonicalVectorMatch(bounds.min, IMPLICIT_CANONICAL_PROFILE.canonical_bounds[0])
+    && canonicalVectorMatch(bounds.max, IMPLICIT_CANONICAL_PROFILE.canonical_bounds[1]);
+}
+
+function canonicalBoundsMatch(definition, model) {
   const expected = IMPLICIT_CANONICAL_PROFILE.canonical_bounds;
-  return model.boundsSource === "explicit" && [0, 1, 2].every((axis) => (
-    model.bounds.min[axis] === expected[0][axis]
-    && model.bounds.max[axis] === expected[1][axis]
-  ));
+  return authoredCanonicalBoundsMatch(definition?.bounds)
+    && model.boundsSource === "explicit"
+    && [0, 1, 2].every((axis) => (
+      model.bounds.min[axis] === expected[0][axis]
+      && model.bounds.max[axis] === expected[1][axis]
+    ));
+}
+
+function unwrapCanonicalModule(moduleNamespace) {
+  if (moduleNamespace.default !== undefined) {
+    return typeof moduleNamespace.default === "function"
+      ? moduleNamespace.default()
+      : moduleNamespace.default;
+  }
+  if (moduleNamespace.model !== undefined) {
+    return typeof moduleNamespace.model === "function"
+      ? moduleNamespace.model()
+      : moduleNamespace.model;
+  }
+  return moduleNamespace;
 }
 
 async function readStdin() {
@@ -99,9 +131,13 @@ async function loadRestrictedSource(sourceText) {
     throw new Error("canonical implicit source imports are not permitted");
   });
   await module.evaluate({ timeout: 1000 });
-  return normalizeImplicitCadModel(module.namespace, {
-    sourceUrl: "source/canonical-source.implicit.js",
-  });
+  const definition = unwrapCanonicalModule(module.namespace);
+  return {
+    definition,
+    model: normalizeImplicitCadModel({ default: definition }, {
+      sourceUrl: "source/canonical-source.implicit.js",
+    }),
+  };
 }
 
 async function main() {
@@ -110,12 +146,12 @@ async function main() {
     throw new Error("Missing restricted export output path");
   }
   const sourceText = await readStdin();
-  const model = await loadRestrictedSource(sourceText);
+  const { definition, model } = await loadRestrictedSource(sourceText);
   if (model.units !== "unitless") {
     throw new Error("Canonical implicit source must declare units: \"unitless\"; unit conversion is not permitted");
   }
-  if (!canonicalBoundsMatch(model)) {
-    throw new Error("Canonical implicit source must declare exact [-0.5, 0.5]^3 bounds; automatic bounds fit is not permitted");
+  if (!canonicalBoundsMatch(definition, model)) {
+    throw new Error("Canonical implicit source must declare exact [-0.5, 0.5]^3 authored bounds; automatic bounds fit is not permitted");
   }
   const result = exportImplicitCadModel(model, {
     format: IMPLICIT_CANONICAL_PROFILE.export.format,
