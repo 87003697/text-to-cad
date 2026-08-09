@@ -132,7 +132,6 @@ PRODUCTION_RUNTIME = RuntimeContract(
     physical_directories=(
         "skills/cad-viewer/scripts/viewer",
         "skills/implicit-cad/scripts/packages/implicitjs",
-        "plugins/cad/skills",
     ),
     required_files=(
         "skills/cad-viewer/scripts/viewer/package.json",
@@ -160,9 +159,6 @@ PRODUCTION_RUNTIME = RuntimeContract(
             "skills/implicit-cad/scripts/packages/implicitjs/"
             "node_modules/gifenc/package.json"
         ),
-        "plugins/cad/VERSION",
-        "plugins/cad/.codex-plugin/plugin.json",
-        "plugins/cad/.claude-plugin/plugin.json",
     ),
     hash_files=(
         "skills/cad-viewer/scripts/viewer/backend/server.mjs",
@@ -175,9 +171,6 @@ PRODUCTION_RUNTIME = RuntimeContract(
             "skills/implicit-cad/scripts/packages/implicitjs/"
             "node_modules/playwright-core/browsers.json"
         ),
-        "plugins/cad/VERSION",
-        "plugins/cad/.codex-plugin/plugin.json",
-        "plugins/cad/.claude-plugin/plugin.json",
     ),
 )
 
@@ -838,8 +831,8 @@ class CvmPush:
             raise
 
         self._log(
-            "CVM runtime verified: physical Viewer + implicit runtime + cad "
-            "plugin, matching hashes, and Playwright browser revision"
+            "CVM runtime verified: physical Viewer + implicit runtime, "
+            "matching hashes, and Playwright browser revision"
         )
         remote_head = self.remote_git_base()
         self._log(

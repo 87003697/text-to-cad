@@ -12,6 +12,7 @@ __pycache__/
 .claude/
 .agents/sessions/
 models/
+plugins/
 /viewer/
 docs/
 worktrees/

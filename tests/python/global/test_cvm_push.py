@@ -346,8 +346,8 @@ class StageTests(unittest.TestCase):
             ):
                 workflow.validate_stage(stage)
 
-    def test_runtime_contract_covers_versioned_plugin_package(self) -> None:
-        self.assertIn(
+    def test_remote_runtime_contract_does_not_claim_plugin_freshness(self) -> None:
+        self.assertNotIn(
             "plugins/cad/skills",
             cvm_push.PRODUCTION_RUNTIME.physical_directories,
         )
@@ -356,8 +356,8 @@ class StageTests(unittest.TestCase):
             "plugins/cad/.codex-plugin/plugin.json",
             "plugins/cad/.claude-plugin/plugin.json",
         ):
-            self.assertIn(relative, cvm_push.PRODUCTION_RUNTIME.required_files)
-            self.assertIn(relative, cvm_push.PRODUCTION_RUNTIME.hash_files)
+            self.assertNotIn(relative, cvm_push.PRODUCTION_RUNTIME.required_files)
+            self.assertNotIn(relative, cvm_push.PRODUCTION_RUNTIME.hash_files)
 
     def test_validate_stage_rejects_symlink_in_published_plugin_skills(self) -> None:
         with tempfile.TemporaryDirectory() as root_text:
@@ -441,7 +441,9 @@ class TransferAndVerifyTests(unittest.TestCase):
             ):
                 path.parent.mkdir(parents=True, exist_ok=True)
                 path.write_text("x\n", encoding="utf-8")
-            target.mkdir()
+            remote_plugin_marker = target / "plugins/cad/remote-marker.txt"
+            remote_plugin_marker.parent.mkdir(parents=True)
+            remote_plugin_marker.write_text("keep remote\n", encoding="utf-8")
 
             result = subprocess.run(
                 [
@@ -470,8 +472,12 @@ class TransferAndVerifyTests(unittest.TestCase):
                     "node_modules/playwright/package.json"
                 ).is_file()
             )
-            self.assertTrue(
-                (target / "plugins/cad/skills/example/SKILL.md").is_file()
+            self.assertFalse(
+                (target / "plugins/cad/skills/example/SKILL.md").exists()
+            )
+            self.assertEqual(
+                remote_plugin_marker.read_text(encoding="utf-8"),
+                "keep remote\n",
             )
 
     def test_remote_verification_uses_full_contract_and_exact_hashes(self) -> None:

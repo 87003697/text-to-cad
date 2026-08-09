@@ -38,7 +38,7 @@ class CvmSyncContractTests(unittest.TestCase):
         self.assertIn("/viewer/", ignores)
         self.assertNotIn("viewer/", ignores)
         self.assertIn(".cvm-jobs/", ignores)
-        self.assertNotIn("plugins/", ignores)
+        self.assertIn("plugins/", ignores)
         production_lines = "\n".join(
             line
             for line in module.splitlines()
