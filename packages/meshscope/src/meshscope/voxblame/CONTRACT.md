@@ -2,11 +2,12 @@
 
 Status: Frozen for the canonical repair-workspace implementation.
 
-The executable authority is `contracts.py`. Every object below is closed:
-listed fields are required, unlisted fields are invalid, and there are no
-extension fields. A nullable field is still required. Any unsupported schema,
-legacy shape, mixed shape, corrupt value, or unknown field has the single
-public classification:
+The executable authorities are `contracts.py` for Measured Step documents and
+`region_diff.py` for Repair Batch/Region Diff documents. Every object below is
+closed: listed fields are required, unlisted fields are invalid, and there are
+no extension fields. A nullable field is still required. Any unsupported
+Measured Step schema, legacy shape, mixed shape, corrupt value, or unknown
+field has the single public classification:
 
 ```text
 unsupported_or_invalid_voxblame_state
@@ -148,6 +149,66 @@ likewise must not publish a conflicting Measured Step.
 The summary repeats objective evidence rather than inventing a score. It may
 contain at most eight target items. The page is an exact path-free projection
 of the corresponding slice in the report's frozen order.
+
+## `voxblame.repair-batch/1`
+
+A Repair Batch is Agent-authored input to Region Diff. Its closed root contains
+`schema`, `from_step`, `selected_targets`, `planned_edits`, `rationale`, and
+`preview_observation`.
+
+- `selected_targets` contains one or more unique
+  `{target_key, mask_sha256}` identities from `from_step`.
+- `planned_edits` contains one or more unique stable `edit_key` values, a
+  non-empty `target_keys` subset, and a short `description`.
+- Every selected target is mapped by at least one Planned Edit. Edits and
+  targets may map many-to-many.
+
+The plan digest is SHA-256 over canonical JSON bytes with the
+`voxblame.repair-batch/1\0` domain prefix. It therefore freezes target
+selection, mask identities, Planned Edit keys and mappings, rationale, and the
+pre-edit preview observation without copying Agent-authored judgment into
+objective evidence fields.
+
+## `voxblame.region-diff/1`
+
+The public Region Diff binds one explicit published edge (`from_step` to a
+Measured Step whose `compare_to` is that source), the Repair Batch digest,
+selected target/mask identities, and Planned Edit mappings. Its required
+evidence is:
+
+- global depth-1 through depth-8 before/after/delta trajectories and
+  Observable Geometry identities;
+- each selected target's fixed source-step exact mask and its one-cell halo;
+- an interior and exterior batch union kept in their native domains;
+- interior and signed-exterior outside-selected counts, deltas, new error
+  counts, and up to three largest spatial components;
+- exact exterior containment facts when an exterior target is selected.
+
+Interior coarse-depth target metrics use explicit depth-8-equivalent counts;
+they are never serialized as native coarse surface-cell counts. Interior halo
+is fixed at depth 8. Exterior exact and halo evidence uses the selected
+target's frozen signed-grid depth. Bounds are diagnostic; selected membership
+always comes from exact masks.
+
+With a fixed Canonical Reference, one spatial cell cannot literally change
+from missing to excess or vice versa. Direction transitions are therefore
+reported without false cell pairing: over each selected exact-mask-plus-halo
+region, the evidence separately counts source-direction cells absent afterward
+and new opposite-direction cells absent from the source error set. Both ends
+are objective; the tool does not infer that one particular cell caused another.
+
+Finer exterior snapshots project exactly to a selected target's frozen grid.
+A later snapshot coarser than that frozen grid cannot supply authoritative
+fine-cell exact/halo counts and fails closed. When no exterior target is
+selected, outside-selected evidence uses the coarser common grid of the two
+snapshots, so neither side is expanded into invented child occupancy.
+
+The artifact identity is SHA-256 over the complete canonical Region Diff
+document before its `identity` object, with the `voxblame.region-diff/1\0`
+domain prefix. Publication uses an atomic no-clobber link: identical concurrent
+publication is idempotent and conflicting publication cannot replace the
+winner. The contract emits objective counts and identities only. It never labels
+a change improved, regressed, resolved, introduced, keep, or revert.
 
 ## Forbidden fields
 

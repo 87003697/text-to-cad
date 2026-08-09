@@ -43,6 +43,13 @@ from meshscope.voxblame.prepare_reference import (
     prepare_reference,
     publish_prepare_failure,
 )
+from meshscope.voxblame.region_diff import (
+    REGION_DIFF_SCHEMA,
+    REPAIR_BATCH_SCHEMA,
+    RegionDiffResult,
+    publish_region_diff,
+    validate_region_diff_contract,
+)
 from meshscope.voxblame.grading import (
     ChangeCell,
     ErrorCell,
@@ -79,6 +86,9 @@ __all__ = [
     "PREPARE_FAILURE_SCHEMA",
     "PrepareReferenceError",
     "PrepareReferenceResult",
+    "REGION_DIFF_SCHEMA",
+    "REPAIR_BATCH_SCHEMA",
+    "RegionDiffResult",
     "REPORT_REQUIRED_FIELDS",
     "SESSION_REQUIRED_FIELDS",
     "SUMMARY_REQUIRED_FIELDS",
@@ -98,6 +108,8 @@ __all__ = [
     "read_surface_tree",
     "prepare_reference",
     "publish_prepare_failure",
+    "publish_region_diff",
+    "validate_region_diff_contract",
     "run_step",
     "select_next_action",
     "tree_from_codes",

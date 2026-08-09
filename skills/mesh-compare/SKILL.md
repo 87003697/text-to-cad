@@ -39,6 +39,12 @@ python skills/mesh-compare/scripts/mesh-compare voxblame-measure <candidate_mesh
 python skills/mesh-compare/scripts/mesh-compare voxblame-targets \
   --output "${EXP_DIR}/voxblame" --step <N> [--offset <OFFSET>]
 
+# Publish objective evidence for one frozen multi-target Repair Batch
+python skills/mesh-compare/scripts/mesh-compare voxblame-diff \
+  --workspace "${EXP_DIR}/voxblame" --from-step <M> --to-step <N> \
+  --repair-plan "${EXP_DIR}/work/repair-batch.json" \
+  --output "${EXP_DIR}/cycles/<N>/region-diff.json"
+
 # Visualization: distance-colored or side-by-side render → PNG on disk
 python skills/mesh-compare/scripts/mesh-render heatmap <mesh_a> <mesh_b> --output <png>
 python skills/mesh-compare/scripts/mesh-render side-by-side <mesh_a> <mesh_b> --output <png>
@@ -91,6 +97,15 @@ when to use `heatmap` vs `side-by-side`.
    exterior candidates are valid bad Measured Steps: the command publishes exact
    containment facts and signed diagnostic exterior occupancy with
    `out_of_frame_clear: false`.
+10. **(Repair Batch evidence.)** Before editing, freeze a
+    `voxblame.repair-batch/1` plan that selects one or more current Repair
+    Targets by key and mask digest and maps stable Planned Edit keys to that
+    selection. After publishing the explicit child Measured Step, run
+    `voxblame-diff`. Read exact-mask, interior/exterior halo,
+    outside-selected, and two-step trajectory evidence as counts and identities
+    only. Direction transitions report their before and after ends separately;
+    do not infer a one-cell flip. The command does not decide whether to keep,
+    revise, or revert edits.
 
 ## Handoff
 
@@ -107,6 +122,9 @@ Return outputs based on which CLI(s) were invoked:
   exterior snapshot paths under the published step directory. Page through any
   remaining targets before claiming the target set was inspected. Do not infer
   a modeling decision from these facts.
+- **Repair Batch comparison (`voxblame-diff`)**: return the immutable
+  `voxblame.region-diff/1` path plus its plan and artifact identities. Report
+  objective before/after/delta facts; leave edit assessment to the Agent.
 - **Render CLI (`mesh-render`)**: return the PNG path(s) produced
   (`heatmap` and/or `side-by-side` mode).
 - **Both invoked (workflow-typical)**: return both JSON and PNG paths.
@@ -140,6 +158,12 @@ static PNG renders, not interactive CAD artifacts.
 - Repair Targets completely partition the current missing/excess evidence.
   Treat `display_rank` as non-prescriptive and keep target selection, repair
   strategy, verdicts, and workflow stop decisions Agent-owned.
+- Region Diff accepts only current-step target identities and exact mask
+  digests. Its explicit `to_step` must name `from_step` as `compare_to`.
+  Interior and exterior grids remain separate, and identical output retries are
+  idempotent while conflicting overwrites fail closed. If later exterior
+  evidence is coarser than a selected target's frozen grid, comparison also
+  fails closed rather than fabricating fine-cell counts.
 
 ## Progressive references
 

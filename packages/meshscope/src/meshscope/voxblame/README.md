@@ -36,6 +36,7 @@ mesh inputs
 | `exterior.py` | Canonical-cube clipping, exact exterior facts, signed diagnostic occupancy, and snapshot identity. |
 | `targets.py` | Complete 18-connected error partitioning, stable target identities, exact mask artifacts, and deterministic paging. |
 | `measurement.py` | Multiresolution interior/exterior measurement and atomic Measured Step publication. |
+| `region_diff.py` | Repair Batch validation, fixed-mask Region Diff evidence, trajectories, and atomic publication. |
 | `store.py` | Filesystem repository, strict loads, idempotent retry, and atomic session/step publication. |
 | `session.py` | Application orchestration exposed as `run_step(...)`. |
 | `__init__.py` | Curated public API. |
@@ -141,6 +142,37 @@ page = page_repair_targets(experiment / "voxblame", step=0, offset=8)
 The corresponding CLI is `mesh-compare voxblame-targets --output EXP/voxblame
 --step 0 --offset 8`. Follow `next_offset` until it is null. `display_rank` is
 non-prescriptive; `error_profile` records missing/excess direction facts.
+
+### Repair Batch Region Diff
+
+After a later Measured Step is published with an explicit comparison parent,
+freeze one Agent-authored Repair Batch and compare it through the public
+Workspace boundary:
+
+```python
+from meshscope.voxblame import publish_region_diff
+
+result = publish_region_diff(
+    experiment / "voxblame",
+    from_step=0,
+    to_step=3,
+    repair_plan=experiment / "work" / "repair-batch.json",
+    output=experiment / "cycles" / "000003" / "region-diff.json",
+)
+```
+
+The plan selects one or more current target keys and mask digests, then maps
+stable Planned Edit keys many-to-many to that selection. Region Diff preserves
+the source exact masks, separates interior and exterior halos, accounts for all
+outside-selected space, and records an explicit two-step trajectory. Counts,
+deltas, identities, containment facts, and new spatial components are evidence;
+the tool issues no repair verdict.
+
+Direction-transition evidence records the two observable ends separately over
+the fixed exact-mask-plus-halo region; it never claims an impossible
+missing-to-excess change at one fixed-reference cell. Finer exterior evidence
+projects to a selected target's frozen grid. Coarser destination evidence fails
+closed instead of inventing fine child occupancy.
 
 ### Application entry point
 

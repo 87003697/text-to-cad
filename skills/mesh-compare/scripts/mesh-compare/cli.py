@@ -20,6 +20,7 @@ from meshscope.voxblame import (
     measure_step,
     page_repair_targets,
     prepare_reference,
+    publish_region_diff,
     publish_prepare_failure,
     run_step,
 )
@@ -190,6 +191,51 @@ def _targets_main(argv: list[str]) -> int:
     return 0
 
 
+def _diff_main(argv: list[str]) -> int:
+    parser = argparse.ArgumentParser(
+        prog="mesh-compare voxblame-diff",
+        description="Publish objective Region Diff evidence for a Repair Batch.",
+    )
+    parser.add_argument(
+        "--workspace",
+        type=Path,
+        required=True,
+        help="VoxBlame measurement-state directory",
+    )
+    parser.add_argument("--from-step", type=int, required=True)
+    parser.add_argument("--to-step", type=int, required=True)
+    parser.add_argument("--repair-plan", type=Path, required=True)
+    parser.add_argument("--output", type=Path, required=True)
+    args = parser.parse_args(argv)
+    try:
+        result = publish_region_diff(
+            args.workspace,
+            from_step=args.from_step,
+            to_step=args.to_step,
+            repair_plan=args.repair_plan,
+            output=args.output,
+        )
+    except Exception as exc:
+        classification = getattr(exc, "classification", "region_diff_failed")
+        detail = getattr(exc, "detail", str(exc))
+        path = getattr(exc, "path", None)
+        if path:
+            detail = f"{path}: {detail}"
+        return _emit_error(classification, detail)
+    print(
+        json.dumps(
+            {
+                "ok": True,
+                "output": str(args.output),
+                "idempotent": result.idempotent,
+                "region_diff": result.region_diff,
+            },
+            separators=(",", ":"),
+        )
+    )
+    return 0
+
+
 def main(argv=None) -> int:
     argv = list(argv) if argv is not None else sys.argv[1:]
     if argv and argv[0] == "voxblame-measure":
@@ -198,6 +244,8 @@ def main(argv=None) -> int:
         return _prepare_reference_main(argv[1:])
     if argv and argv[0] == "voxblame-targets":
         return _targets_main(argv[1:])
+    if argv and argv[0] == "voxblame-diff":
+        return _diff_main(argv[1:])
     parser = argparse.ArgumentParser(description="Compute similarity metrics between two mesh files.")
     parser.add_argument("mesh_a", help="Path to first mesh (source / generated)")
     parser.add_argument("mesh_b", help="Path to second mesh (target / reference)")
