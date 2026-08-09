@@ -104,10 +104,6 @@ import {
   normalizeImplicitGraphicsSettings
 } from "@/workbench/implicitGraphicsSettings";
 import {
-  DEFAULT_IMPLICIT_EXPORT_RESOLUTION,
-  requestImplicitCadExport
-} from "@/workbench/implicitExport";
-import {
   buildParameterValuesCopyText,
   parseParameterValuesPasteText
 } from "@/workbench/parameterControls";
@@ -3117,8 +3113,11 @@ export default function CadWorkspace({
   // shared mesh scene, nothing STEP-specific. This gate was the last place that said
   // otherwise: the toolbar showed Draw for a DXF while this kept it inert, so the drag fell
   // through to orbit.
-  const drawModeActive = (selectedEntrySourceFormat === RENDER_FORMAT.STEP || selectedEntryIsDrawing)
-    && tabToolMode === TAB_TOOL_MODE.DRAW;
+  const drawModeActive = (
+    selectedEntrySourceFormat === RENDER_FORMAT.STEP ||
+    selectedEntrySourceFormat === RENDER_FORMAT.IMPLICIT ||
+    selectedEntryIsDrawing
+  ) && tabToolMode === TAB_TOOL_MODE.DRAW;
   const panToolActive = tabToolMode === TAB_TOOL_MODE.PAN;
   const selectionCountBase = selectedPartIds.length + selectedReferenceIds.length + selectedMateIds.length;
 
@@ -4004,48 +4003,6 @@ export default function CadWorkspace({
       });
     }
   }, [entryMap, readEntrySessionState]);
-
-  const handleExportImplicitFile = useCallback(async (entry, format) => {
-    const fileRef = entry ? fileKey(entry) : "";
-    const exportFormat = String(format || "").trim().toLowerCase();
-    if (!fileRef || !exportFormat || typeof window === "undefined") {
-      return;
-    }
-    const busyKey = `${fileRef}:export:${exportFormat}`;
-    const moduleUrl = entry ? entryAssetUrl(entry, "implicit") : "";
-    const currentParameterValues = fileRef === selectedKey ? implicitParameterValues : null;
-    const currentAnimationState = fileRef === selectedKey ? selectedImplicitAnimationViewState : null;
-    setCopyStatus("");
-    setScreenshotStatus("");
-    setFileAccessBusyKey(busyKey);
-    try {
-      setCopyStatus(`Exporting ${exportFormat.toUpperCase()}...`);
-      const payload = await requestImplicitCadExport({
-        file: fileRef,
-        moduleUrl,
-        format: exportFormat,
-        parameterValues: currentParameterValues,
-        animationState: currentAnimationState,
-        resolution: DEFAULT_IMPLICIT_EXPORT_RESOLUTION,
-      });
-      const filename = String(payload?.filename || payload?.result?.filename || "").trim();
-      const downloadUrl = String(payload?.downloadUrl || "").trim();
-      if (downloadUrl) {
-        const result = triggerUrlDownload(downloadUrl, { filename });
-        setCopyStatus(result.message);
-      } else {
-        setCopyStatus(filename ? `Exported ${filename}` : `Exported ${exportFormat.toUpperCase()}`);
-      }
-    } catch (error) {
-      setCopyStatus(error instanceof Error ? error.message : "Implicit CAD export failed");
-    } finally {
-      setFileAccessBusyKey((current) => (current === busyKey ? "" : current));
-    }
-  }, [
-    implicitParameterValues,
-    selectedImplicitAnimationViewState,
-    selectedKey
-  ]);
 
   const fileSheetSelectionKeyForTab = useCallback((key) => {
     const normalizedKey = String(key || "").trim();
@@ -8073,7 +8030,10 @@ export default function CadWorkspace({
   }, [selectedEntry]);
 
   const handleEnterPreviewMode = useCallback(() => {
-    if (effectiveRenderFormat === RENDER_FORMAT.DXF || viewerLoading || !selectedMeshData || previewMode) {
+    const viewportContent = effectiveRenderFormat === RENDER_FORMAT.IMPLICIT
+      ? selectedImplicitRuntimeModel
+      : selectedMeshData;
+    if (effectiveRenderFormat === RENDER_FORMAT.DXF || viewerLoading || !viewportContent || previewMode) {
       return;
     }
     previewUiStateRef.current = {
@@ -8365,8 +8325,7 @@ export default function CadWorkspace({
           canCopyFileAssetPaths={filePathCopyAvailable}
           fileAccessBusyKey={fileAccessBusyKey}
           onDownloadFileAsset={handleDownloadFileAsset}
-          onExportImplicitFile={handleExportImplicitFile}
-          onExportStepFile={handleExportModelFile}
+          onExportModelFile={handleExportModelFile}
           onRevealFileAsset={handleRevealFileAsset}
           onRevealInExplorerView={handleRevealEntryInExplorerView}
           onCopyFileAssetReference={handleCopyFileAssetReference}
@@ -8402,8 +8361,7 @@ export default function CadWorkspace({
               canCopyFileAssetPaths={filePathCopyAvailable}
               fileAccessBusyKey={fileAccessBusyKey}
               onDownloadFileAsset={handleDownloadFileAsset}
-              onExportImplicitFile={handleExportImplicitFile}
-              onExportStepFile={handleExportModelFile}
+              onExportModelFile={handleExportModelFile}
               onRevealFileAsset={handleRevealFileAsset}
               onRevealInExplorerView={handleRevealEntryInExplorerView}
               onCopyFileAssetReference={handleCopyFileAssetReference}
@@ -8462,7 +8420,7 @@ export default function CadWorkspace({
                 handleEnterPreviewMode={handleEnterPreviewMode}
                 handleExitPreviewMode={handleExitPreviewMode}
                 handleScreenshotCopy={handleScreenshotCopy}
-                onExportStepFile={handleExportModelFile}
+                onExportModelFile={handleExportModelFile}
                 fileAccessBusyKey={fileAccessBusyKey}
               />
 

@@ -189,8 +189,7 @@ function BreadcrumbDirectoryMenuItems({
   canCopyFileAssetPaths = false,
   fileAccessBusyKey = "",
   onDownloadFileAsset,
-  onExportImplicitFile,
-  onExportStepFile,
+  onExportModelFile,
   onRevealFileAsset,
   onCopyFileAssetReference
 }) {
@@ -225,8 +224,7 @@ function BreadcrumbDirectoryMenuItems({
           canCopyFileAssetPaths={canCopyFileAssetPaths}
           fileAccessBusyKey={fileAccessBusyKey}
           onDownloadFileAsset={onDownloadFileAsset}
-          onExportImplicitFile={onExportImplicitFile}
-          onExportStepFile={onExportStepFile}
+          onExportModelFile={onExportModelFile}
           onRevealFileAsset={onRevealFileAsset}
           onCopyFileAssetReference={onCopyFileAssetReference}
         />
@@ -251,8 +249,7 @@ function BreadcrumbDirectoryMenuItems({
         canCopyFileAssetPaths={canCopyFileAssetPaths}
         fileAccessBusyKey={fileAccessBusyKey}
         onDownloadFileAsset={onDownloadFileAsset}
-        onExportImplicitFile={onExportImplicitFile}
-        onExportStepFile={onExportStepFile}
+        onExportModelFile={onExportModelFile}
         onRevealFileAsset={onRevealFileAsset}
         onCopyFileAssetReference={onCopyFileAssetReference}
       />
@@ -290,8 +287,7 @@ function BreadcrumbDirectorySubMenu({
   canCopyFileAssetPaths = false,
   fileAccessBusyKey = "",
   onDownloadFileAsset,
-  onExportImplicitFile,
-  onExportStepFile,
+  onExportModelFile,
   onRevealFileAsset,
   onCopyFileAssetReference
 }) {
@@ -325,8 +321,7 @@ function BreadcrumbDirectorySubMenu({
             canCopyFileAssetPaths={canCopyFileAssetPaths}
             fileAccessBusyKey={fileAccessBusyKey}
             onDownloadFileAsset={onDownloadFileAsset}
-            onExportImplicitFile={onExportImplicitFile}
-            onExportStepFile={onExportStepFile}
+            onExportModelFile={onExportModelFile}
             onRevealFileAsset={onRevealFileAsset}
             onCopyFileAssetReference={onCopyFileAssetReference}
           />
@@ -354,8 +349,7 @@ function BreadcrumbNodeDropdown({
   canCopyFileAssetPaths = false,
   fileAccessBusyKey = "",
   onDownloadFileAsset,
-  onExportImplicitFile,
-  onExportStepFile,
+  onExportModelFile,
   onRevealFileAsset,
   onRevealInExplorerView,
   onCopyFileAssetReference,
@@ -397,8 +391,7 @@ function BreadcrumbNodeDropdown({
         canCopyFileAssetPaths={canCopyFileAssetPaths}
         busyKey={fileAccessBusyKey}
         onDownloadFileAsset={onDownloadFileAsset}
-        onExportImplicitFile={onExportImplicitFile}
-        onExportStepFile={onExportStepFile}
+        onExportModelFile={onExportModelFile}
         onRevealFileAsset={onRevealFileAsset}
         onRevealInExplorerView={onRevealInExplorerView}
         onCopyFileAssetReference={onCopyFileAssetReference}
@@ -446,8 +439,7 @@ function BreadcrumbNodeDropdown({
       canCopyFileAssetPaths={canCopyFileAssetPaths}
       busyKey={fileAccessBusyKey}
       onDownloadFileAsset={onDownloadFileAsset}
-      onExportImplicitFile={onExportImplicitFile}
-      onExportStepFile={onExportStepFile}
+      onExportModelFile={onExportModelFile}
       onRevealFileAsset={onRevealFileAsset}
       onRevealInExplorerView={onRevealInExplorerView}
       onCopyFileAssetReference={onCopyFileAssetReference}
@@ -477,8 +469,7 @@ function BreadcrumbNodeDropdown({
             canCopyFileAssetPaths={canCopyFileAssetPaths}
             fileAccessBusyKey={fileAccessBusyKey}
             onDownloadFileAsset={onDownloadFileAsset}
-            onExportImplicitFile={onExportImplicitFile}
-            onExportStepFile={onExportStepFile}
+            onExportModelFile={onExportModelFile}
             onRevealFileAsset={onRevealFileAsset}
             onCopyFileAssetReference={onCopyFileAssetReference}
           />
@@ -504,8 +495,7 @@ function BreadcrumbEllipsisDropdown({
   canCopyFileAssetPaths = false,
   fileAccessBusyKey = "",
   onDownloadFileAsset,
-  onExportImplicitFile,
-  onExportStepFile,
+  onExportModelFile,
   onRevealFileAsset,
   onCopyFileAssetReference,
   title
@@ -550,8 +540,7 @@ function BreadcrumbEllipsisDropdown({
                   canCopyFileAssetPaths={canCopyFileAssetPaths}
                   fileAccessBusyKey={fileAccessBusyKey}
                   onDownloadFileAsset={onDownloadFileAsset}
-                  onExportImplicitFile={onExportImplicitFile}
-                  onExportStepFile={onExportStepFile}
+                  onExportModelFile={onExportModelFile}
                   onRevealFileAsset={onRevealFileAsset}
                   onCopyFileAssetReference={onCopyFileAssetReference}
                 />
@@ -577,8 +566,7 @@ function BreadcrumbEllipsisDropdown({
                   canCopyFileAssetPaths={canCopyFileAssetPaths}
                   fileAccessBusyKey={fileAccessBusyKey}
                   onDownloadFileAsset={onDownloadFileAsset}
-                  onExportImplicitFile={onExportImplicitFile}
-                  onExportStepFile={onExportStepFile}
+                  onExportModelFile={onExportModelFile}
                   onRevealFileAsset={onRevealFileAsset}
                   onCopyFileAssetReference={onCopyFileAssetReference}
                 />
@@ -1016,8 +1004,7 @@ export default function CadWorkspaceTopBar({
   canCopyFileAssetPaths = false,
   fileAccessBusyKey = "",
   onDownloadFileAsset,
-  onExportImplicitFile,
-  onExportStepFile,
+  onExportModelFile,
   onRevealFileAsset,
   onRevealInExplorerView,
   onCopyFileAssetReference,
@@ -1115,8 +1102,7 @@ export default function CadWorkspaceTopBar({
                   canCopyFileAssetPaths={canCopyFileAssetPaths}
                   fileAccessBusyKey={fileAccessBusyKey}
                   onDownloadFileAsset={onDownloadFileAsset}
-                  onExportImplicitFile={onExportImplicitFile}
-                  onExportStepFile={onExportStepFile}
+                  onExportModelFile={onExportModelFile}
                   onRevealFileAsset={onRevealFileAsset}
                   onRevealInExplorerView={onRevealInExplorerView}
                   onCopyFileAssetReference={onCopyFileAssetReference}
@@ -1146,8 +1132,7 @@ export default function CadWorkspaceTopBar({
                       canCopyFileAssetPaths={canCopyFileAssetPaths}
                       fileAccessBusyKey={fileAccessBusyKey}
                       onDownloadFileAsset={onDownloadFileAsset}
-                      onExportImplicitFile={onExportImplicitFile}
-                      onExportStepFile={onExportStepFile}
+                      onExportModelFile={onExportModelFile}
                       onRevealFileAsset={onRevealFileAsset}
                       onCopyFileAssetReference={onCopyFileAssetReference}
                       title={selectedFileTitle}
@@ -1171,8 +1156,7 @@ export default function CadWorkspaceTopBar({
                       canCopyFileAssetPaths={canCopyFileAssetPaths}
                       fileAccessBusyKey={fileAccessBusyKey}
                       onDownloadFileAsset={onDownloadFileAsset}
-                      onExportImplicitFile={onExportImplicitFile}
-                      onExportStepFile={onExportStepFile}
+                      onExportModelFile={onExportModelFile}
                       onRevealFileAsset={onRevealFileAsset}
                       onRevealInExplorerView={onRevealInExplorerView}
                       onCopyFileAssetReference={onCopyFileAssetReference}

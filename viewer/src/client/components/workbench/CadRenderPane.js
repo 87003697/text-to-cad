@@ -397,6 +397,13 @@ export default function CadRenderPane({
     left: `calc(${Math.max(Number(viewportFrameInsets?.left) || 0, 0)}px + 0.75rem)`,
     top: `calc(${Math.max(Number(viewportFrameInsets?.top) || 0, 0)}px + 0.75rem)`
   };
+  // Is there anything on screen? For every mesh-backed format that means mesh data -- DXF
+  // included, since it lost its 2D fallback in phase 3a and now renders its baked preview,
+  // so a failed build must read as "nothing renderable" and let the viewer alert block.
+  // An IMPLICIT renders by raymarching its own GLSL and never has mesh data, so asking the
+  // same question of it would treat every healthy implicit as an empty viewport; its content
+  // is the loaded model instead.
+  const viewportHasRenderableContent = implicitMode ? !!selectedImplicitModel : !!selectedMeshData;
   const ctaMode = !meshOnlyMode && drawToolActive
     ? "screenshot"
     : !meshOnlyMode && selectionCount > 0
@@ -423,14 +430,9 @@ export default function CadRenderPane({
   };
   const ctaLabel = ctaMode === "screenshot" ? "Copy Screenshot" : copyButtonLabel;
   const ctaTitle = ctaMode === "screenshot" ? "Copy screenshot to clipboard" : copyButtonLabel;
-  const ctaDisabled = ctaMode === "screenshot" ? viewerLoading || !selectedMeshData : false;
-  // Is there anything on screen? For every mesh-backed format that means mesh data -- DXF
-  // included, since it lost its 2D fallback in phase 3a and now renders its baked preview,
-  // so a failed build must read as "nothing renderable" and let the viewer alert block.
-  // An IMPLICIT renders by raymarching its own GLSL and never has mesh data, so asking the
-  // same question of it would treat every healthy implicit as an empty viewport; its content
-  // is the loaded model instead.
-  const viewportHasRenderableContent = implicitMode ? !!selectedImplicitModel : !!selectedMeshData;
+  const ctaDisabled = ctaMode === "screenshot"
+    ? viewerLoading || !viewportHasRenderableContent
+    : false;
   const blockingViewerAlert = viewerAlert && viewerAlert.blocking !== false && (
     viewerAlert.blocking ||
     viewerAlert.severity !== "warning" ||
@@ -546,9 +548,9 @@ export default function CadRenderPane({
         pickableVertices={bodyOnlyMode ? [] : pickableVertices}
         focusedPartId={bodyOnlyMode ? "" : focusedPartIds}
         boundsAnimationActive={cadViewerBoundsAnimationActive}
-        drawingEnabled={!bodyOnlyMode && drawToolActive}
+        drawingEnabled={!meshOnlyMode && drawToolActive}
         drawingTool={drawingTool}
-        drawingStrokes={bodyOnlyMode ? [] : drawingStrokes}
+        drawingStrokes={meshOnlyMode ? [] : drawingStrokes}
         onDrawingStrokesChange={handleDrawingStrokesChange}
         onPerspectiveChange={handlePerspectiveChange}
         onHoverReferenceChange={handleModelHoverChange}

@@ -1679,6 +1679,10 @@ const CadViewer = forwardRef(function CadViewer({
   const stepParameterRuntime = stepParameters;
   const stepAnimationPlaying = Boolean(stepParameterRuntime?.animationState?.playing);
   const implicitActive = renderFormat === RENDER_FORMAT.IMPLICIT;
+  // What counts as "something is on screen" for overlays and the view cube:
+  // an implicit has a model instead of mesh data.
+  const viewportContent = implicitActive ? implicitModel : meshData;
+  const hasViewportContent = !!viewportContent;
   const normalizedSceneScaleMode = normalizeSceneScaleMode(scale || sceneScaleMode);
   const normalizedProjection = normalizeCameraProjection(projection);
   const meshGeometrySource = meshData?.geometrySource && typeof meshData.geometrySource === "object"
@@ -5128,7 +5132,7 @@ const CadViewer = forwardRef(function CadViewer({
     drawingIdRef,
     drawingEnabled,
     drawingTool,
-    meshData,
+    meshData: viewportContent,
     previewMode,
     viewerReadyTick,
     renderDrawingOverlay,
@@ -5182,8 +5186,8 @@ const CadViewer = forwardRef(function CadViewer({
         ref={drawingCanvasRef}
         className="absolute inset-0 z-10 h-full w-full touch-none"
         style={{
-          pointerEvents: drawingEnabled && !previewMode && !!meshData ? "auto" : "none",
-          cursor: drawingEnabled && !previewMode && !!meshData
+          pointerEvents: drawingEnabled && !previewMode && hasViewportContent ? "auto" : "none",
+          cursor: drawingEnabled && !previewMode && hasViewportContent
             ? (drawingTool === DRAWING_TOOL.ERASE ? "cell" : drawingTool === DRAWING_TOOL.FILL ? "copy" : "crosshair")
             : "default"
         }}
@@ -5195,7 +5199,7 @@ const CadViewer = forwardRef(function CadViewer({
         isLoading={isLoading}
         // "Is there anything on screen?" — for an implicit that is the loaded
         // model, since it never has mesh data.
-        meshData={implicitActive ? implicitModel : meshData}
+        meshData={viewportContent}
         viewPlaneOffsetRight={viewPlaneOffsetRight}
         viewPlaneOffsetBottom={viewPlaneOffsetBottom}
         viewPlaneSize={VIEW_PLANE_CONTROL_SIZE}
