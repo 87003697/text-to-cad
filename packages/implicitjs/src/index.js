@@ -17,3 +17,4 @@ export {
   normalizeImplicitExportFormat
 } from "./lib/implicitCad/exportModel.js";
 export * from "./lib/implicitCad/export.js";
+export * from "./lib/implicitCad/canonicalBuild.js";

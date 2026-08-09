@@ -190,7 +190,7 @@ export function meshToBinaryStl(mesh, { name = "implicit-cad" } = {}) {
   return buffer;
 }
 
-export function meshToGlb(mesh, { name = "Implicit CAD", color = "#d4d4d8" } = {}) {
+export function meshToGlb(mesh, { name = "Implicit CAD", color = "#d4d4d8", units = "mm" } = {}) {
   const positions = mesh.positions || new Float32Array();
   const normals = mesh.normals && mesh.normals.length === positions.length
     ? mesh.normals
@@ -210,7 +210,7 @@ export function meshToGlb(mesh, { name = "Implicit CAD", color = "#d4d4d8" } = {
       extras: {
         cadOccurrenceId: "implicit-cad:0",
         cadSourceKind: "implicit-cad",
-        cadUnits: "mm",
+        cadUnits: String(units || "mm"),
       },
     }],
     meshes: [{

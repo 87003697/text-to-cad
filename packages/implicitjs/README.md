@@ -175,6 +175,39 @@ npm run export -- --input examples/model.implicit.js --format 3mf --params '{"ra
 Exports sample the model's SDF inside its bounds. Higher resolutions produce
 denser meshes and take longer.
 
+## Canonical Delivery Builds
+
+The canonical build adapter is the public route boundary for Mesh-to-CAD
+measurement and offline final rebuilds. Canonical source must be a
+self-contained `.implicit.js`/`.implicit.mjs` module with `units: "unitless"`
+and explicit `[-0.5, 0.5]^3` bounds. The adapter preserves authored
+coordinates and rejects bounds fitting, alignment, unit scaling, sampling
+overrides, imports, network APIs, absolute paths, and paths outside the working
+directory. Source evaluation and meshing run in a permission-restricted child
+process with imports, network, external filesystem access, dynamic code
+generation, ambient environment variables, time, and randomness unavailable.
+
+From a package checkout, use relative paths from the working directory:
+
+```bash
+npm run canonical-build -- \
+  --source models/candidate.implicit.js \
+  --output-dir outputs/candidate \
+  --json
+
+cd outputs/candidate
+node /path/to/implicitjs/scripts/canonical-build.mjs \
+  --recipe rebuild.json \
+  --output-dir rebuilt \
+  --json
+```
+
+Each build publishes the archived editable source, `artifacts/model.glb`, the
+frozen `implicit_voxblame_depth8/1` profile, `mesh-to-cad.build/1` provenance,
+and a `mesh-to-cad.rebuild-recipe/1` recipe. Rebuild mode accepts only that
+registered recipe contract and uses the archived source; it does not depend on
+the original source path or a historical experiment directory.
+
 ## Package Layout
 
 - `src/index.js`: public package entrypoint.

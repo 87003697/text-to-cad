@@ -179,6 +179,7 @@ export function exportImplicitCadModel(modelValue, {
   const exported = meshToFormat(mesh, format, {
     name: model.name,
     color: sampleImplicitCadMeshColor(model, mesh),
+    units: model.units,
   });
   return {
     ...exported,
