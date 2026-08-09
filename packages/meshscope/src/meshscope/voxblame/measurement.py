@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import hashlib
-import io
 import json
 from pathlib import Path
 import shutil
@@ -18,6 +17,11 @@ from meshscope.voxblame.codec import (
     STORAGE_SCHEMA,
     read_surface_tree,
     write_surface_tree,
+)
+from meshscope.voxblame.canonical_artifacts import (
+    load_canonical_reference,
+    load_mesh_bytes,
+    read_artifact_bytes,
 )
 from meshscope.voxblame.contracts import (
     BOUNDARY_EPSILON,
@@ -34,10 +38,6 @@ from meshscope.voxblame.exterior import (
     validate_exterior_measurement,
 )
 from meshscope.voxblame.frame import CanonicalFrame, mesh_vertices
-from meshscope.voxblame.prepare_reference import (
-    CANONICAL_REFERENCE_SCHEMA,
-    NORMALIZATION_SCHEMA,
-)
 from meshscope.voxblame.targets import (
     partition_repair_targets,
     repair_target_page,
@@ -86,16 +86,16 @@ def measure_step(
     reference_root = Path(canonical_reference)
     candidate_path = Path(candidate_mesh)
     output_root = Path(output)
-    manifest, normalization, reference_bytes = _load_canonical_reference(
+    manifest, normalization, reference_bytes = load_canonical_reference(
         reference_root
     )
-    reference_mesh = _load_mesh(
+    reference_mesh = load_mesh_bytes(
         reference_bytes,
         suffix=Path(manifest["reference_ply"]["path"]).suffix,
         label="reference",
     )
-    candidate_bytes = _read_artifact_bytes(candidate_path)
-    candidate = _load_mesh(
+    candidate_bytes = read_artifact_bytes(candidate_path)
+    candidate = load_mesh_bytes(
         candidate_bytes, suffix=candidate_path.suffix, label="candidate"
     )
     frame = CanonicalFrame((0.0, 0.0, 0.0), 1.0)
@@ -211,54 +211,6 @@ def _validate_ancestry(step: int, compare_to: int | None) -> None:
         raise OctreeError("nonzero step requires an explicit earlier compare_to")
 
 
-def _load_canonical_reference(
-    root: Path,
-) -> tuple[dict[str, Any], dict[str, Any], bytes]:
-    try:
-        manifest = json.loads(_read_artifact_bytes(root / "input.json"))
-        normalization_path = root / manifest["normalization_json"]["path"]
-        normalization_bytes = _read_artifact_bytes(normalization_path)
-        normalization = json.loads(normalization_bytes)
-        reference_path = root / manifest["reference_ply"]["path"]
-    except (KeyError, TypeError, UnicodeDecodeError, json.JSONDecodeError) as exc:
-        raise OctreeError("canonical reference publication is incomplete or invalid") from exc
-    if manifest.get("schema") != CANONICAL_REFERENCE_SCHEMA:
-        raise OctreeError("canonical reference schema is unsupported")
-    try:
-        expected_reference_identity = hashlib.sha256(
-            b"voxblame.canonical-reference/1\0"
-            + bytes.fromhex(manifest["normalization_json"]["sha256"])
-        ).hexdigest()
-    except (KeyError, TypeError, ValueError) as exc:
-        raise OctreeError("canonical reference identity mismatch") from exc
-    if (
-        normalization.get("schema") != NORMALIZATION_SCHEMA
-        or manifest.get("coordinate_contract") != COORDINATE_CONTRACT
-        or normalization.get("coordinate_contract") != COORDINATE_CONTRACT
-        or manifest.get("semantic_units") is not None
-        or normalization.get("semantic_units") is not None
-        or manifest.get("boundary_epsilon") != BOUNDARY_EPSILON
-        or normalization.get("boundary_epsilon") != BOUNDARY_EPSILON
-        or manifest.get("reference_ply") != normalization.get("reference_ply")
-        or manifest.get("triangle_set_sha256")
-        != normalization.get("triangle_set_sha256")
-        or manifest.get("canonical_reference_sha256") != expected_reference_identity
-    ):
-        raise OctreeError("canonical reference identity mismatch")
-    reference_bytes = _read_artifact_bytes(reference_path)
-    if (
-        hashlib.sha256(reference_bytes).hexdigest()
-        != manifest["reference_ply"]["sha256"]
-    ):
-        raise OctreeError("canonical reference PLY identity mismatch")
-    if (
-        hashlib.sha256(normalization_bytes).hexdigest()
-        != manifest["normalization_json"]["sha256"]
-    ):
-        raise OctreeError("canonical reference normalization identity mismatch")
-    return manifest, normalization, reference_bytes
-
-
 def _validate_existing_session(
     output: Path,
     expected_session: dict[str, Any],
@@ -290,20 +242,6 @@ def _load_parent_measurement(output: Path, step: int) -> dict[str, Any]:
     ):
         raise OctreeError(f"compare_to step {step} is invalid")
     return measurement
-
-
-def _load_mesh(data: bytes, *, suffix: str, label: str) -> trimesh.Trimesh:
-    try:
-        mesh = trimesh.load(
-            io.BytesIO(data),
-            file_type=suffix.lower().removeprefix("."),
-            force="mesh",
-            process=False,
-        )
-    except Exception as exc:
-        raise OctreeError(f"cannot load {label} mesh bytes") from exc
-    mesh_vertices(mesh, label)
-    return mesh
 
 
 def _assert_canonical_bounds(mesh: trimesh.Trimesh, label: str) -> None:
@@ -706,13 +644,6 @@ def _published_target_masks_match(
     return set(files) == set(expected) and all(
         files[name].read_bytes() == data for name, data in expected.items()
     )
-
-
-def _read_artifact_bytes(path: Path) -> bytes:
-    try:
-        return path.read_bytes()
-    except OSError as exc:
-        raise OctreeError(f"cannot read artifact bytes: {path}") from exc
 
 
 def _json_bytes(value: dict[str, Any]) -> bytes:

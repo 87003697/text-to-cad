@@ -33,10 +33,12 @@ mesh inputs
 | `reporting.py` | Projection of domain objects into `voxblame.report/2` and `voxblame.summary/1` JSON. |
 | `contracts.py` | Closed-world validators for the frozen replacement canonical session, report, and summary shapes. |
 | `prepare_reference.py` | Raw input capture, evaluated-scene normalization, identity, validation, and atomic Canonical Reference publication. |
+| `canonical_artifacts.py` | Shared fail-closed readers for published Canonical Reference and candidate bytes. |
 | `exterior.py` | Canonical-cube clipping, exact exterior facts, signed diagnostic occupancy, and snapshot identity. |
 | `targets.py` | Complete 18-connected error partitioning, stable target identities, exact mask artifacts, and deterministic paging. |
 | `measurement.py` | Multiresolution interior/exterior measurement and atomic Measured Step publication. |
 | `region_diff.py` | Repair Batch validation, fixed-mask Region Diff evidence, trajectories, and atomic publication. |
+| `preview.py` | Canonical render channels, preview identity, exterior-marker binding, and atomic publication. |
 | `store.py` | Filesystem repository, strict loads, idempotent retry, and atomic session/step publication. |
 | `session.py` | Application orchestration exposed as `run_step(...)`. |
 | `__init__.py` | Curated public API. |
@@ -173,6 +175,26 @@ the fixed exact-mask-plus-halo region; it never claims an impossible
 missing-to-excess change at one fixed-reference cell. Finer exterior evidence
 projects to a selected target's frozen grid. Coarser destination evidence fails
 closed instead of inventing fine child occupancy.
+
+### Formal residual preview
+
+The preview boundary prepares the exact reference/candidate channels and binds
+the browser result to canonical, profile, image, and exterior identities:
+
+```bash
+python skills/mesh-compare/scripts/mesh-compare voxblame-preview candidate.glb \
+  --reference EXP/input --experiment EXP/experiment.json \
+  --output EXP/preview --variant step
+```
+
+The command publishes `preview.png` and `voxblame.preview/1` metadata as one
+immutable directory. `cadena_residual_eight_view/1` fixes the six axial depth
+views, two perspective views, framing, colors, dimensions, cameras, lighting,
+padding, downsampling, and renderer version. `experiment.json` must freeze that
+identity as `preview_profile: {name, sha256}`. Final previews use `--variant
+final --selected-step N --selected-summary EXP/voxblame/steps/NNNNNN/summary.json`;
+the candidate and reference digests must match that canonical summary. Exterior markers retain the exact objective exterior
+snapshot identity and do not expand the canonical camera.
 
 ### Application entry point
 

@@ -12,5 +12,8 @@ npm --prefix packages/cadjs test
 section "implicitjs tests"
 npm --prefix packages/implicitjs test
 
+section "meshshot tests"
+npm --prefix packages/meshshot test
+
 section "CAD Viewer tests"
 npm --prefix viewer run test
