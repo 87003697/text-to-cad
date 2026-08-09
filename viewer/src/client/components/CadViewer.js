@@ -1618,6 +1618,7 @@ const CadViewer = forwardRef(function CadViewer({
   drawingKFactor = 0.5,
   drawingHiddenLayers = null,
   drawingOrientation = null,
+  drawingMaterialColor = null,
   drawingGeometry = null,
   drawingThicknessMm = 0,
   onCameraZoomPercentChange = null,
@@ -2755,7 +2756,8 @@ const CadViewer = forwardRef(function CadViewer({
     // Overlays (dotted guides, score lines, text markings) exist for any drawing whose
     // geometry is loaded, even flat at identity.
     const hasOverlaySource = !!effectiveGeometry;
-    if (!curvedRequested && identity && !orientationActive && !hasOverlaySource && !runtimeRef.current?.dxfTransformTouched) {
+    if (!curvedRequested && identity && !orientationActive && !hasOverlaySource
+      && !drawingMaterialColor && !runtimeRef.current?.dxfTransformTouched) {
       return undefined;
     }
     runtimeRef.current.dxfTransformTouched = curvedRequested || !identity || orientationActive;
@@ -2799,6 +2801,15 @@ const CadViewer = forwardRef(function CadViewer({
           const privateAttribute = new THREE.BufferAttribute(Float32Array.from(position.array), 3);
           geometry.setAttribute("position", privateAttribute);
           position = privateAttribute;
+        }
+        // The material-preset tint rides the mesh as a claim (like dxfHiddenForCurved):
+        // partVisualState re-asserts surface colors on every selection/hover pass, and it
+        // honours this in place of the record's base color. The curved preview shares this
+        // mesh's material, so it follows automatically.
+        if (drawingMaterialColor) {
+          child.userData.dxfMaterialTint = new THREE.Color(drawingMaterialColor);
+        } else {
+          delete child.userData.dxfMaterialTint;
         }
         targets.push({ child, geometry, original: geometry.userData.dxfFoldOriginal, position });
       });
@@ -3178,7 +3189,7 @@ const CadViewer = forwardRef(function CadViewer({
     return () => {
       cancelAnimationFrame(frame);
     };
-  }, [bendAxisX, drawingBendLines, bendAnglesRad, drawingBends, drawingBendStyle, drawingBendRadiusMm, drawingKFactor, drawingHiddenLayers, drawingOrientation, drawingGeometry, drawingThicknessMm, drawingThicknessScale, meshData, viewerReadyTick]);
+  }, [bendAxisX, drawingBendLines, bendAnglesRad, drawingBends, drawingBendStyle, drawingBendRadiusMm, drawingKFactor, drawingHiddenLayers, drawingOrientation, drawingMaterialColor, drawingGeometry, drawingThicknessMm, drawingThicknessScale, meshData, viewerReadyTick]);
 
   useImperativeHandle(ref, () => ({
     async captureScreenshot({ filename = "cad-screenshot.png", mode = "download" } = {}) {

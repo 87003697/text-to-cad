@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { buildDxfPreviewMeshData, extractDxfScorePolylines } from "./buildPreviewMesh.js";
+import { buildDxfPreviewMeshData, computeDxfFlatStats, extractDxfScorePolylines } from "./buildPreviewMesh.js";
 import { parseDxf } from "./parseDxf.js";
 
 function dxfText(lines) {
@@ -169,4 +169,23 @@ test("DXF preview extrudes bulged lwpolyline contours", () => {
   assert.equal(meshData.guide_line_segments.length, 0);
   assert.deepEqual(meshData.bounds.min, [0, -1, 0]);
   assert.deepEqual(meshData.bounds.max, [10, 1, 10]);
+});
+
+test("flat stats report net area and bounding size", () => {
+  const dxfData = {
+    geometry: {
+      lines: [...rectangle(0, 0, 100, 50)],
+      arcs: [],
+      circles: [
+        { kind: "cut", center: [20, 25], radius: 10 }
+      ]
+    },
+    defaultThicknessMm: 2
+  };
+  const stats = computeDxfFlatStats(dxfData);
+  assert.equal(stats.widthMm, 100);
+  assert.equal(stats.heightMm, 50);
+  const expected = 100 * 50 - Math.PI * 10 * 10;
+  // Tolerance covers the circle's polygonal sampling (the hole is a sampled polygon).
+  assert.ok(Math.abs(stats.areaMm2 - expected) < 12, `net area ~${expected}, got ${stats.areaMm2}`);
 });

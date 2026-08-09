@@ -8,6 +8,7 @@ import {
   FILE_SHEET_PRECISION_SLIDER_CLASSES,
   FileSheetButtonRow,
   FileSheetControlRow,
+  FileSheetInlineControlRow,
   FileSheetSectionBody,
   FileSheetSegmentedControl,
   FileSheetSelectRow,
@@ -67,6 +68,31 @@ export const DXF_UNIT_OPTIONS = Object.freeze([
   { value: "m", label: "Metres", mmPerUnit: 1000, decimals: 4, sliderStep: 0.0001 }
 ]);
 export const DXF_DEFAULT_UNITS = "mm";
+
+/**
+ * Sheet material presets: an appearance tint for the preview and a density for the weight
+ * fact. Steel is the default and keeps the theme's own surface color (tint null) so the
+ * default look never changes out from under the theme presets.
+ */
+export const DXF_MATERIAL_PRESETS = Object.freeze([
+  { value: "steel", label: "Steel", densityGcm3: 7.85, colorHex: null },
+  { value: "aluminium", label: "Aluminium", densityGcm3: 2.7, colorHex: "#d7dade" },
+  { value: "brass", label: "Brass", densityGcm3: 8.5, colorHex: "#c9a94f" },
+  { value: "copper", label: "Copper", densityGcm3: 8.96, colorHex: "#c47e5a" },
+  { value: "acrylic", label: "Acrylic", densityGcm3: 1.18, colorHex: "#9fc4d8" },
+  { value: "plywood", label: "Plywood", densityGcm3: 0.6, colorHex: "#c9a877" }
+]);
+export const DXF_DEFAULT_MATERIAL = "steel";
+
+export function normalizeDxfMaterial(value, fallback = DXF_DEFAULT_MATERIAL) {
+  const text = String(value || "").trim().toLowerCase();
+  return DXF_MATERIAL_PRESETS.some((preset) => preset.value === text) ? text : fallback;
+}
+
+export function dxfMaterialPreset(value) {
+  return DXF_MATERIAL_PRESETS.find((preset) => preset.value === normalizeDxfMaterial(value))
+    || DXF_MATERIAL_PRESETS[0];
+}
 
 export function normalizeDxfUnits(value, fallback = DXF_DEFAULT_UNITS) {
   const text = String(value || "").trim().toLowerCase();
@@ -174,16 +200,39 @@ function DxfResetRow({ label, onReset }) {
   );
 }
 
+/** "142 g" under a kilogram, "1.42 kg" above; an em dash when the sheet has no volume. */
+function formatWeight(areaMm2, thicknessMm, densityGcm3) {
+  const grams = ((Number(areaMm2) || 0) * (Number(thicknessMm) || 0) * densityGcm3) / 1000;
+  if (!(grams > 0)) {
+    return "—";
+  }
+  return grams >= 1000 ? `${(grams / 1000).toFixed(2)} kg` : `${Math.round(grams)} g`;
+}
+
+function DxfFactRow({ label, children }) {
+  return (
+    <FileSheetInlineControlRow label={label}>
+      <span className="text-[11px] font-medium tabular-nums text-muted-foreground">
+        {children}
+      </span>
+    </FileSheetInlineControlRow>
+  );
+}
+
 export function DxfMaterialSettings({
   thicknessMm = DXF_DEFAULT_THICKNESS_MM,
   onThicknessChange,
   units = DXF_DEFAULT_UNITS,
   onUnitsChange,
+  material = DXF_DEFAULT_MATERIAL,
+  onMaterialChange,
+  flatStats = null,
   onReset
 }) {
   const activeUnits = normalizeDxfUnits(units);
   const unit = unitOption(activeUnits);
   const thickness = normalizeDxfThicknessMm(thicknessMm);
+  const preset = dxfMaterialPreset(material);
   const commitThickness = (next) => onThicknessChange?.(
     normalizeDxfThicknessMm(parseLengthToMm(next, unit, thickness), thickness)
   );
@@ -197,6 +246,12 @@ export function DxfMaterialSettings({
           value={activeUnits}
           onValueChange={(next) => onUnitsChange?.(normalizeDxfUnits(next, activeUnits))}
           options={DXF_UNIT_OPTIONS.map(({ value, label }) => ({ value, label }))}
+        />
+        <FileSheetSelectRow
+          label="Material"
+          value={preset.value}
+          onValueChange={(next) => onMaterialChange?.(normalizeDxfMaterial(next, preset.value))}
+          options={DXF_MATERIAL_PRESETS.map(({ value, label }) => ({ value, label }))}
         />
         <FileSheetSliderField
           label="Thickness"
@@ -221,6 +276,20 @@ export function DxfMaterialSettings({
           />
         </FileSheetSliderField>
       </FileSheetSubsection>
+
+      {/* Read-only facts derived from the flat pattern: bounding size in the active unit,
+          and estimated weight from net area x thickness x the preset's density. */}
+      {flatStats ? (
+        <FileSheetSubsection title="Sheet">
+          <DxfFactRow label="Size">
+            {`${displayLength(flatStats.widthMm, unit).toFixed(unit.decimals)} × ${formatLength(flatStats.heightMm, unit)}`}
+          </DxfFactRow>
+          <DxfFactRow label="Weight">
+            {formatWeight(flatStats.areaMm2, thickness, preset.densityGcm3)}
+          </DxfFactRow>
+        </FileSheetSubsection>
+      ) : null}
+
       <DxfResetRow label="Reset material settings" onReset={onReset} />
     </FileSheetSectionBody>
   );
@@ -246,61 +315,7 @@ export function DxfBendsSettings({
 
   return (
     <FileSheetSectionBody>
-      <FileSheetSubsection title="Style">
-        <FileSheetSelectRow
-          label="Style"
-          value={style}
-          onValueChange={(next) => onBendStyleChange?.(normalizeDxfBendStyle(next, bendStyle))}
-          options={[
-            { value: "boxed", label: "Boxed" },
-            { value: "curved", label: "Curved" }
-          ]}
-        />
-        {/* Sheet-metal bend geometry only means anything when the surface actually
-            curves; Boxed is a schematic fold with no radius to size. */}
-        {style === "curved" ? (
-          <FileSheetSliderField
-            label="Radius"
-            value={radius > 0 ? formatLength(radius, unit) : "Auto"}
-            onValueCommit={(next) => onBendRadiusChange?.(
-              normalizeDxfBendRadiusMm(parseLengthToMm(next, unit, radius), radius)
-            )}
-            valueInputProps={{ ariaLabel: "Bend radius value", className: "w-16" }}
-          >
-            <Slider
-              aria-label="Bend radius"
-              className={FILE_SHEET_PRECISION_SLIDER_CLASSES}
-              value={[displayLength(radius, unit)]}
-              min={0}
-              max={displayLength(DXF_BEND_RADIUS_MAX_MM, unit)}
-              step={unit.sliderStep}
-              onValueChange={([next]) => onBendRadiusChange?.(
-                normalizeDxfBendRadiusMm(next * unit.mmPerUnit, radius)
-              )}
-            />
-          </FileSheetSliderField>
-        ) : null}
-        {style === "curved" ? (
-          <FileSheetSliderField
-            label="K-factor"
-            value={neutralK.toFixed(2)}
-            onValueCommit={(next) => onKFactorChange?.(normalizeDxfKFactor(next, neutralK))}
-            valueInputProps={{ ariaLabel: "K-factor value", className: "w-16" }}
-          >
-            <Slider
-              aria-label="K-factor"
-              className={FILE_SHEET_PRECISION_SLIDER_CLASSES}
-              value={[neutralK]}
-              min={DXF_KFACTOR_MIN}
-              max={DXF_KFACTOR_MAX}
-              step={0.01}
-              onValueChange={([next]) => onKFactorChange?.(normalizeDxfKFactor(next, neutralK))}
-            />
-          </FileSheetSliderField>
-        ) : null}
-      </FileSheetSubsection>
-
-      {/* One row per bend: the item label IS the slider label, direction rides inline
+      {/* The per-bend list leads: the angles are what you touch most. One row per bend: the item label IS the slider label, direction rides inline
           beside the value box (settings-ui.md "Repeated item groups", single-row form). */}
       <FileSheetSubsection title="Bends">
         {bends.map((bend, index) => {
@@ -349,6 +364,60 @@ export function DxfBendsSettings({
             </FileSheetSliderField>
           );
         })}
+      </FileSheetSubsection>
+
+      <FileSheetSubsection title="Style">
+        <FileSheetSelectRow
+          label="Style"
+          value={style}
+          onValueChange={(next) => onBendStyleChange?.(normalizeDxfBendStyle(next, bendStyle))}
+          options={[
+            { value: "curved", label: "Curved" },
+            { value: "boxed", label: "Boxed" }
+          ]}
+        />
+        {/* Sheet-metal bend geometry only means anything when the surface actually
+            curves; Boxed is a schematic fold with no radius to size. */}
+        {style === "curved" ? (
+          <FileSheetSliderField
+            label="Radius"
+            value={radius > 0 ? formatLength(radius, unit) : "Auto"}
+            onValueCommit={(next) => onBendRadiusChange?.(
+              normalizeDxfBendRadiusMm(parseLengthToMm(next, unit, radius), radius)
+            )}
+            valueInputProps={{ ariaLabel: "Bend radius value", className: "w-16" }}
+          >
+            <Slider
+              aria-label="Bend radius"
+              className={FILE_SHEET_PRECISION_SLIDER_CLASSES}
+              value={[displayLength(radius, unit)]}
+              min={0}
+              max={displayLength(DXF_BEND_RADIUS_MAX_MM, unit)}
+              step={unit.sliderStep}
+              onValueChange={([next]) => onBendRadiusChange?.(
+                normalizeDxfBendRadiusMm(next * unit.mmPerUnit, radius)
+              )}
+            />
+          </FileSheetSliderField>
+        ) : null}
+        {style === "curved" ? (
+          <FileSheetSliderField
+            label="K-factor"
+            value={neutralK.toFixed(2)}
+            onValueCommit={(next) => onKFactorChange?.(normalizeDxfKFactor(next, neutralK))}
+            valueInputProps={{ ariaLabel: "K-factor value", className: "w-16" }}
+          >
+            <Slider
+              aria-label="K-factor"
+              className={FILE_SHEET_PRECISION_SLIDER_CLASSES}
+              value={[neutralK]}
+              min={DXF_KFACTOR_MIN}
+              max={DXF_KFACTOR_MAX}
+              step={0.01}
+              onValueChange={([next]) => onKFactorChange?.(normalizeDxfKFactor(next, neutralK))}
+            />
+          </FileSheetSliderField>
+        ) : null}
       </FileSheetSubsection>
 
       {/* Model orientation: a folded part often lands facing the wrong way. Sibling

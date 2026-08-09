@@ -11,7 +11,7 @@ import {
 } from "./workbench/ThemeSettingsPopover";
 import MeshFileSheet from "./workbench/MeshFileSheet";
 import { DXF_PREVIEW_REFERENCE_THICKNESS_MM } from "cadjs/lib/dxf/previewGlb";
-import { extractOrderedDxfBendLines } from "cadjs/lib/dxf/buildPreviewMesh";
+import { computeDxfFlatStats, extractOrderedDxfBendLines } from "cadjs/lib/dxf/buildPreviewMesh";
 import {
   buildDxfBendsTab,
   buildDxfMaterialTab,
@@ -19,6 +19,7 @@ import {
   DXF_DEFAULT_BEND_RADIUS_MM,
   DXF_DEFAULT_BEND_STYLE,
   DXF_DEFAULT_KFACTOR,
+  DXF_DEFAULT_MATERIAL,
   DXF_DEFAULT_ORIENTATION,
   DXF_DEFAULT_THICKNESS_MM,
   DXF_DEFAULT_UNITS,
@@ -26,7 +27,9 @@ import {
   normalizeDxfBendDirection,
   normalizeDxfBendRadiusMm,
   normalizeDxfBendStyle,
+  dxfMaterialPreset,
   normalizeDxfKFactor,
+  normalizeDxfMaterial,
   normalizeDxfOrientation,
   normalizeDxfThicknessMm,
   normalizeDxfUnits
@@ -1253,6 +1256,8 @@ export default function CadWorkspace({
   const [drawingUnits, setDrawingUnits] = useState(DXF_DEFAULT_UNITS);
   // Post-fold model orientation, in quarter-turns about each world axis.
   const [drawingOrientation, setDrawingOrientation] = useState(DXF_DEFAULT_ORIENTATION);
+  // Sheet material preset: appearance tint + density for the weight fact.
+  const [drawingMaterial, setDrawingMaterial] = useState(DXF_DEFAULT_MATERIAL);
   // The package's parsed contours, fetched once per entry and kept by URL. Curved bends
   // re-mesh from these; the URL carries the package version, so a rebuild refetches.
   const drawingGeometryCacheRef = useRef(new Map());
@@ -3267,13 +3272,14 @@ export default function CadWorkspace({
           kFactor: drawingKFactor,
           hiddenLayers: drawingHiddenLayers,
           units: drawingUnits,
-          orientation: drawingOrientation
+          orientation: drawingOrientation,
+          material: drawingMaterial
         })
       );
     } catch (storageError) {
       // Quota or privacy mode: settings simply stop surviving a file switch.
     }
-  }, [selectedEntryIsDrawing, selectedKey, drawingThicknessMm, drawingBends, drawingBendStyle, drawingBendRadiusMm, drawingKFactor, drawingHiddenLayers, drawingUnits, drawingOrientation]);
+  }, [selectedEntryIsDrawing, selectedKey, drawingThicknessMm, drawingBends, drawingBendStyle, drawingBendRadiusMm, drawingKFactor, drawingHiddenLayers, drawingUnits, drawingOrientation, drawingMaterial]);
 
   useEffect(() => {
     let stored = null;
@@ -3295,6 +3301,7 @@ export default function CadWorkspace({
       : []);
     setDrawingUnits(normalizeDxfUnits(stored?.units, DXF_DEFAULT_UNITS));
     setDrawingOrientation(normalizeDxfOrientation(stored?.orientation));
+    setDrawingMaterial(normalizeDxfMaterial(stored?.material, DXF_DEFAULT_MATERIAL));
     setDrawingBends(Array.from({ length: selectedDrawingBendAxisCount }, (_, index) => ({
       angleDeg: normalizeDxfBendAngleDeg(stored?.bends?.[index]?.angleDeg, DXF_DEFAULT_BEND_ANGLE_DEG),
       direction: normalizeDxfBendDirection(stored?.bends?.[index]?.direction)
@@ -3346,6 +3353,7 @@ export default function CadWorkspace({
   const handleDrawingMaterialReset = useCallback(() => {
     setDrawingThicknessMm(DXF_DEFAULT_THICKNESS_MM);
     setDrawingUnits(DXF_DEFAULT_UNITS);
+    setDrawingMaterial(DXF_DEFAULT_MATERIAL);
   }, []);
 
   const handleDrawingBendsReset = useCallback(() => {
@@ -3397,6 +3405,17 @@ export default function CadWorkspace({
     () => (Array.isArray(drawingGeometry?.layers) ? drawingGeometry.layers : []),
     [drawingGeometry]
   );
+
+  const drawingFlatStats = useMemo(() => {
+    if (!drawingGeometry?.geometry) {
+      return null;
+    }
+    try {
+      return computeDxfFlatStats(drawingGeometry);
+    } catch {
+      return null;
+    }
+  }, [drawingGeometry]);
 
 
   // Memoised: this array is an effect dependency in the viewer, and a fresh identity per
@@ -8246,6 +8265,7 @@ export default function CadWorkspace({
           drawingKFactor={selectedEntryIsDrawing ? drawingKFactor : DXF_DEFAULT_KFACTOR}
           drawingHiddenLayers={selectedEntryIsDrawing ? drawingHiddenLayers : null}
           drawingOrientation={selectedEntryIsDrawing ? drawingOrientation : null}
+          drawingMaterialColor={selectedEntryIsDrawing ? dxfMaterialPreset(drawingMaterial).colorHex : null}
           drawingGeometry={selectedEntryIsDrawing ? drawingGeometry : null}
           drawingThicknessMm={selectedEntryIsDrawing ? drawingThicknessMm : 0}
           onCameraZoomPercentChange={setViewerZoomPercent}
@@ -8638,6 +8658,9 @@ export default function CadWorkspace({
                     onThicknessChange: setDrawingThicknessMm,
                     units: drawingUnits,
                     onUnitsChange: setDrawingUnits,
+                    material: drawingMaterial,
+                    onMaterialChange: setDrawingMaterial,
+                    flatStats: drawingFlatStats,
                     onReset: handleDrawingMaterialReset
                   }),
                   ...(drawingBends.length > 0 ? [buildDxfBendsTab({

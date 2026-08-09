@@ -298,7 +298,12 @@ export function applyPartVisualState(THREE, records, {
     record.material.opacity = nextSurfaceOpacity;
 
     if (record.baseColor && record.material.color) {
-      record.material.color.copy(highlightSurface || effectColor || record.baseColor);
+      // dxfMaterialTint is the drawing viewer's material-preset claim, set on the mesh the
+      // same way dxfHiddenForCurved claims visibility: this sync re-runs on every
+      // selection/hover pass, so a one-shot material.color write would be stomped.
+      record.material.color.copy(
+        highlightSurface || effectColor || record.mesh.userData?.dxfMaterialTint || record.baseColor
+      );
     }
 
     if ("emissive" in record.material && record.material.emissive) {

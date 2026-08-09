@@ -323,6 +323,44 @@ function buildCutLoops(dxfData) {
 }
 
 /**
+ * Flat-pattern facts for the Material sheet: bounding size and the NET area (outer loops
+ * minus holes, holes-in-holes adding back — the even/odd containment rule the mesher
+ * triangulates by). Millimetres in, mm/mm^2 out; weight is the caller's multiply.
+ */
+export function computeDxfFlatStats(dxfData) {
+  const { cutPrimitives, cutCircleLoops } = readGeometryRecords(dxfData);
+  const { loops } = chainCutPrimitives(cutPrimitives);
+  for (const circleLoop of cutCircleLoops) {
+    if (circleLoop.length >= 3) {
+      loops.push(circleLoop);
+    }
+  }
+  let minX = Infinity;
+  let minY = Infinity;
+  let maxX = -Infinity;
+  let maxY = -Infinity;
+  for (const loop of loops) {
+    for (const [x, y] of loop) {
+      if (x < minX) minX = x;
+      if (x > maxX) maxX = x;
+      if (y < minY) minY = y;
+      if (y > maxY) maxY = y;
+    }
+  }
+  const sorted = [...loops].sort((a, b) => Math.abs(polygonSignedArea(b)) - Math.abs(polygonSignedArea(a)));
+  const nodes = loopContainmentNodes(sorted);
+  let areaMm2 = 0;
+  for (const node of nodes) {
+    areaMm2 += (node.depth % 2 === 0 ? 1 : -1) * node.area;
+  }
+  return {
+    areaMm2: Math.max(areaMm2, 0),
+    widthMm: Number.isFinite(minX) ? Math.max(maxX - minX, 0) : 0,
+    heightMm: Number.isFinite(minY) ? Math.max(maxY - minY, 0) : 0
+  };
+}
+
+/**
  * Every polyline that should render as a SCORE — an engraved/etched path lying on the
  * sheet's surface rather than cut through it: engrave-layer geometry, plus any cut-layer
  * chain that does not close (a witness line, a centre mark, a decorative score). Returned

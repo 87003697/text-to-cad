@@ -273,6 +273,7 @@ export default function CadRenderPane({
   drawingKFactor = 0.5,
   drawingHiddenLayers = null,
   drawingOrientation = null,
+  drawingMaterialColor = null,
   drawingGeometry = null,
   drawingThicknessMm = 0,
   onCameraZoomPercentChange = null,
@@ -487,6 +488,7 @@ export default function CadRenderPane({
         drawingKFactor={drawingKFactor}
         drawingHiddenLayers={drawingHiddenLayers}
         drawingOrientation={drawingOrientation}
+        drawingMaterialColor={drawingMaterialColor}
         drawingGeometry={drawingGeometry}
         drawingThicknessMm={drawingThicknessMm}
         onCameraZoomPercentChange={onCameraZoomPercentChange}
