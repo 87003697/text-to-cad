@@ -254,9 +254,13 @@ export function applyPartVisualState(THREE, records, {
         ? hoveredEdgeColor
         : null;
 
-    record.mesh.visible = !effectHidden && !isHidden;
+    // dxfHiddenForCurved is the drawing viewer's claim: a curved-bend preview mesh is
+    // standing in for this baked mesh, which must stay hidden however often this sync
+    // re-asserts visibility (it runs on every selection/hover/effect pass).
+    const displacedByCurvedPreview = record.mesh.userData?.dxfHiddenForCurved === true;
+    record.mesh.visible = !effectHidden && !isHidden && !displacedByCurvedPreview;
     if (record.edges) {
-      record.edges.visible = showEdges && !effectHidden && !isHidden;
+      record.edges.visible = showEdges && !effectHidden && !isHidden && !displacedByCurvedPreview;
     }
     syncHighlightRenderOrder(record, record.mesh, "baseMeshRenderOrder", isHighlighted, PART_HIGHLIGHT_SURFACE_RENDER_ORDER);
     syncHighlightRenderOrder(record, record.edges, "baseEdgeRenderOrder", isHighlighted, PART_HIGHLIGHT_EDGE_RENDER_ORDER);

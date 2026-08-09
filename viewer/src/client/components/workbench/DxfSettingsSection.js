@@ -127,6 +127,11 @@ export function DxfDrawingSettings({
                 value={`${Math.round(angle)}°`}
                 trailing={(
                   <div className="flex shrink-0 items-center gap-1.5">
+                    <FileSheetValueInput
+                      ariaLabel={`Bend ${index + 1} angle value`}
+                      value={`${Math.round(angle)}°`}
+                      onValueCommit={commitAngle}
+                    />
                     <FileSheetSegmentedControl
                       fit
                       ariaLabel={`Bend ${index + 1} direction`}
@@ -138,11 +143,6 @@ export function DxfDrawingSettings({
                         { value: "up", label: "Up" },
                         { value: "down", label: "Down" }
                       ]}
-                    />
-                    <FileSheetValueInput
-                      ariaLabel={`Bend ${index + 1} angle value`}
-                      value={`${Math.round(angle)}°`}
-                      onValueCommit={commitAngle}
                     />
                   </div>
                 )}

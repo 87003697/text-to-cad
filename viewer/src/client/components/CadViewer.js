@@ -2613,8 +2613,15 @@ const CadViewer = forwardRef(function CadViewer({
         // Full remesh, exactly the geometry the old live viewer built: tessellated bend
         // bands, constant thickness around the arc. The baked meshes are hidden, not
         // touched — the curved preview is its own object, so nothing cached is at risk.
+        // Direction flips on the way in. The mesher bends "up" toward ITS +Y, and the only
+        // proper rotation into CAD Z-up that keeps the pattern footprint un-mirrored,
+        // (x, y, z) -> (x, z, -y), sends mesher +Y to CAD -Z. Handing the mesher the
+        // opposite direction is what makes the UI's Up fold up on screen.
         const bendSettings = Array.isArray(drawingBends)
-          ? drawingBends.map((bend) => ({ angleDeg: bend?.angleDeg, direction: bend?.direction }))
+          ? drawingBends.map((bend) => ({
+            angleDeg: bend?.angleDeg,
+            direction: bend?.direction === "down" ? "up" : "down"
+          }))
           : [];
         // The mesher treats <= 0 as "use the drawing default" (2 mm); a hair keeps the
         // 0 mm setting meaning FLAT-thin rather than jumping to the default.
