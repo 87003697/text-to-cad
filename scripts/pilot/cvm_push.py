@@ -132,6 +132,7 @@ PRODUCTION_RUNTIME = RuntimeContract(
     physical_directories=(
         "skills/cad-viewer/scripts/viewer",
         "skills/implicit-cad/scripts/packages/implicitjs",
+        "plugins/cad/skills",
     ),
     required_files=(
         "skills/cad-viewer/scripts/viewer/package.json",
@@ -159,6 +160,9 @@ PRODUCTION_RUNTIME = RuntimeContract(
             "skills/implicit-cad/scripts/packages/implicitjs/"
             "node_modules/gifenc/package.json"
         ),
+        "plugins/cad/VERSION",
+        "plugins/cad/.codex-plugin/plugin.json",
+        "plugins/cad/.claude-plugin/plugin.json",
     ),
     hash_files=(
         "skills/cad-viewer/scripts/viewer/backend/server.mjs",
@@ -171,6 +175,9 @@ PRODUCTION_RUNTIME = RuntimeContract(
             "skills/implicit-cad/scripts/packages/implicitjs/"
             "node_modules/playwright-core/browsers.json"
         ),
+        "plugins/cad/VERSION",
+        "plugins/cad/.codex-plugin/plugin.json",
+        "plugins/cad/.claude-plugin/plugin.json",
     ),
 )
 
@@ -594,7 +601,7 @@ class CvmPush:
             ),
         }
         status = self.runner.stream(
-            ["scripts/bundle/bundle-skill.sh", "--all"],
+            ["scripts/bundle/bundle.sh"],
             cwd=stage,
             log_path=self.log_path,
             env=env,
@@ -609,13 +616,17 @@ class CvmPush:
     @staticmethod
     def _skill_symlinks(stage: Path) -> tuple[Path, ...]:
         links: list[Path] = []
-        skills = stage / "skills"
-        for root, directories, files in os.walk(skills, followlinks=False):
-            root_path = Path(root)
-            for name in (*directories, *files):
-                path = root_path / name
-                if path.is_symlink():
-                    links.append(path)
+        skill_roots = (
+            stage / "skills",
+            stage / "plugins/cad/skills",
+        )
+        for skills in skill_roots:
+            for root, directories, files in os.walk(skills, followlinks=False):
+                root_path = Path(root)
+                for name in (*directories, *files):
+                    path = root_path / name
+                    if path.is_symlink():
+                        links.append(path)
         return tuple(links)
 
     def validate_stage(self, stage: Path) -> None:
@@ -827,8 +838,8 @@ class CvmPush:
             raise
 
         self._log(
-            "CVM runtime verified: physical Viewer + implicit runtime, "
-            "matching hashes, and Playwright browser revision"
+            "CVM runtime verified: physical Viewer + implicit runtime + cad "
+            "plugin, matching hashes, and Playwright browser revision"
         )
         remote_head = self.remote_git_base()
         self._log(

@@ -19,9 +19,26 @@ VIEWER_BUNDLE = (
     REPO_ROOT / "scripts" / "bundle" / "skills" / "bundle-cad-viewer.sh"
 )
 VIEWER_SKILL = REPO_ROOT / "skills" / "cad-viewer" / "SKILL.md"
+MASTER_BUNDLE = REPO_ROOT / "scripts" / "bundle" / "bundle.sh"
 
 
 class CadRuntimeBundleTests(unittest.TestCase):
+    def test_master_bundle_reports_all_generated_output_roots(self) -> None:
+        result = subprocess.run(
+            [os.fspath(MASTER_BUNDLE), "--print-outputs"],
+            cwd=REPO_ROOT,
+            check=False,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        outputs = set(result.stdout.splitlines())
+        self.assertIn("skills/cad-viewer/scripts/viewer", outputs)
+        self.assertIn("skills/cad/scripts/snapshot/runtime", outputs)
+        self.assertIn("plugins/cad/skills", outputs)
+
     def test_implicit_runtime_dependency_copy_is_complete_and_replaces_stale_data(
         self,
     ) -> None:

@@ -83,6 +83,26 @@ class PluginManifestPolicyTest(unittest.TestCase):
             "plugins/cad/skills must contain every product skill and no stale skill",
         )
 
+    def test_plugin_skills_use_a_supported_develop_or_production_layout(self) -> None:
+        for skill in product_skills(REPO_ROOT / "skills"):
+            packaged_skill = PLUGIN_ROOT / "skills" / skill
+            if packaged_skill.is_symlink():
+                self.assertEqual(
+                    packaged_skill.resolve(),
+                    (REPO_ROOT / "skills" / skill).resolve(),
+                )
+                continue
+
+            self.assertTrue(packaged_skill.is_dir())
+            first_link = next(
+                (path for path in packaged_skill.rglob("*") if path.is_symlink()),
+                None,
+            )
+            self.assertIsNone(
+                first_link,
+                f"production plugin skill must be self-contained: {first_link}",
+            )
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -38,12 +38,17 @@ class CvmSyncContractTests(unittest.TestCase):
         self.assertIn("/viewer/", ignores)
         self.assertNotIn("viewer/", ignores)
         self.assertIn(".cvm-jobs/", ignores)
+        self.assertNotIn("plugins/", ignores)
         production_lines = "\n".join(
             line
             for line in module.splitlines()
             if not line.lstrip().startswith("#")
         )
         self.assertNotIn("--delete", production_lines)
+        self.assertNotIn("remove_legacy_plugin_tree", production_lines)
+        self.assertNotIn("rm -rf -- plugins", production_lines)
+        self.assertNotIn("test ! -e plugins", production_lines)
+        self.assertIn('["scripts/bundle/bundle.sh"]', module)
         self.assertIn('exec python3 "$SCRIPT_DIR/cvm_push.py" "$@"', wrapper)
         self.assertIn('"Source: "', module)
         self.assertIn('"Remote Git base: ', module)
