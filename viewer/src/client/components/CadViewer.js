@@ -557,6 +557,10 @@ function applyExplodedViewRuntimeProgress(runtime, layout, progress) {
   runtime.requestRender?.();
 }
 
+// An implicit is never re-centred (its SDF is evaluated in world space), so the
+// stage helpers that take a model position get the origin.
+const ORIGIN_MODEL_POSITION = Object.freeze({ x: 0, y: 0, z: 0 });
+
 function getPixelRatioCap(cap) {
   if (typeof window === "undefined") {
     return 1;
@@ -1845,7 +1849,7 @@ const CadViewer = forwardRef(function CadViewer({
     sceneScaleMode = VIEWER_SCENE_SCALE.CAD,
     floorMode = THEME_FLOOR_MODES.STAGE
   ) => {
-    const helper = updateGridHelper(
+    return updateGridHelper(
       runtime,
       activeViewerTheme,
       radius,
@@ -1854,25 +1858,10 @@ const CadViewer = forwardRef(function CadViewer({
       floorMode,
       normalizedThemeSettings.floor
     );
-    // The raymarch pass draws its own floor, so the three.js grid stays down for
-    // implicits. Gated here rather than at each call site: this is the single
-    // funnel every grid update goes through, including the runtime's first one.
-    if (implicitActive && runtime?.gridHelper) {
-      runtime.gridHelper.visible = false;
-    }
-    return helper;
-  }, [implicitActive, normalizedThemeSettings.floor]);
-  // Same reasoning as the grid: the shader paints the background, so the scene
-  // must not paint a second one behind it.
-  const applyActiveSceneBackground = useCallback((runtime, activeViewerTheme, background) => {
-    if (implicitActive) {
-      if (runtime?.scene) {
-        runtime.scene.background = null;
-      }
-      return;
-    }
-    applySceneBackground(runtime, activeViewerTheme, background);
-  }, [implicitActive]);
+  }, [normalizedThemeSettings.floor]);
+  // The implicit raymarch pass composites over the shared stage rather than
+  // replacing it, so every format paints its background the same way.
+  const applyActiveSceneBackground = applySceneBackground;
   const edgesVisible = showEdges && shouldUseCadEdgeSource && displayModeShowsEdges(normalizedDisplayMode, visualEdgeSettings);
   const topologyDisplayEdgesVisible = shouldRenderTopologyDisplayEdges({
     edgesVisible,
@@ -2242,6 +2231,33 @@ const CadViewer = forwardRef(function CadViewer({
     runtime.zoomBaseModelRadius = boundsModelRadius(THREE, bounds, sceneScale);
     runtime.hasVisibleModel = true;
     runtime.activeModelKey = modelKeyRef.current || "";
+
+    // Size the shared stage to the model, exactly as the mesh path does, so an
+    // implicit gets the same themed grid, floor and lighting scope as every
+    // other format. An implicit is never re-centred (the SDF is evaluated in
+    // world space), so its model position is the origin.
+    const floorZ = resolveRuntimeModelFloorZ(bounds, ORIGIN_MODEL_POSITION, sceneScale, {
+      followModel: floorFollowsModel
+    });
+    syncRuntimeScaledLightingAndShadow(
+      THREE,
+      runtime,
+      normalizedThemeSettings.lighting,
+      radius,
+      bounds,
+      sceneScale
+    );
+    updateActiveGridHelper(runtime, viewerTheme, radius, floorZ, sceneScale, resolvedFloorMode);
+    updateSpotLightTarget(runtime);
+    updateStageEffects(
+      runtime,
+      viewerTheme,
+      normalizedThemeSettings,
+      radius,
+      runtime.gridFloorZ ?? 0,
+      resolvedFloorMode,
+      sceneScale
+    );
     syncRuntimeCameraClipPlanes(runtime, Math.max(radius / 1200, 0.01), Math.max(radius * 600, 2000));
     applyCameraFrameInsets(runtime, viewportFrameInsetsRef.current, { updateProjection: false });
     controls.minDistance = Math.max(radius / 2200, 0.02);
@@ -2295,10 +2311,15 @@ const CadViewer = forwardRef(function CadViewer({
     implicitFitSignatureRef.current = cameraSignature();
     runtime.requestRender();
   }, [
+    floorFollowsModel,
+    normalizedThemeSettings,
     perspective,
     perspectiveRef,
+    resolvedFloorMode,
     syncCameraZoomPercent,
-    syncViewPlaneOrientation
+    syncViewPlaneOrientation,
+    updateActiveGridHelper,
+    viewerTheme
   ]);
 
   const handleImplicitShaderError = useCallback((message) => {
@@ -3412,42 +3433,6 @@ const CadViewer = forwardRef(function CadViewer({
     onShaderError: handleImplicitShaderError
   });
 
-  // The raymarch pass paints its own background and stage-floor shadow, matched
-  // to the mesh stage on purpose. Leaving the three.js stage up as well would
-  // draw a second floor and grid through it, so the stage is suppressed for as
-  // long as an implicit is on screen. Runs after the theme/environment effects
-  // so it wins over whatever they just applied.
-  useEffect(() => {
-    const runtime = runtimeRef.current;
-    if (!runtime?.scene) {
-      return;
-    }
-    if (implicitActive) {
-      runtime.scene.background = null;
-      runtime.scene.environment = null;
-      if (runtime.gridHelper) {
-        runtime.gridHelper.visible = false;
-      }
-      if (runtime.stageGroup) {
-        runtime.stageGroup.visible = false;
-      }
-    } else {
-      if (runtime.gridHelper) {
-        runtime.gridHelper.visible = true;
-      }
-      if (runtime.stageGroup) {
-        runtime.stageGroup.visible = true;
-      }
-    }
-    runtime.requestRender();
-  }, [
-    implicitActive,
-    normalizedThemeSettings,
-    resolvedFloorMode,
-    viewerReadyTick,
-    viewerTheme
-  ]);
-
   useEffect(() => {
     const runtime = runtimeRef.current;
     if (!runtime) {
@@ -3648,7 +3633,7 @@ const CadViewer = forwardRef(function CadViewer({
       if (runtime.scene.environmentRotation?.set) {
         runtime.scene.environmentRotation.set(0, environmentSettings.rotationY, 0);
       }
-      if (environmentSettings.useAsBackground && !implicitActive) {
+      if (environmentSettings.useAsBackground) {
         runtime.scene.background = runtime.environmentTexture;
         if (runtime.scene.backgroundRotation?.set) {
           runtime.scene.backgroundRotation.set(0, environmentSettings.rotationY, 0);

@@ -1,5 +1,60 @@
 # Implicit raymarch performance: findings and plan of attack
 
+## 0. Execution status — P1–P5 DONE, P6 not needed
+
+| Step | Status |
+|---|---|
+| P1 demand-driven re-queue | **DONE** |
+| P2 interaction-quality uniforms for camera moves | **DONE** |
+| P3 idle-restore hysteresis (400 ms, two-stage) | **DONE** |
+| P4 fixed interaction pixel budget | **DONE** |
+| P5 background out of the shader | **DONE** (scissor half: **not needed**, see below) |
+| P6 shader-side tuning | **NOT NEEDED** — measurements below leave nothing to chase |
+
+Measured on `planetary-gear.implicit.js` at 2560×1330 css @ DPR 2 (≈13.6 M pixels),
+Metal-backed Chromium. OLD = pre-integration `ImplicitCadViewer`:
+
+| Scenario | OLD | Before P1 | **After P1–P5** |
+|---|---|---|---|
+| Orbit drag | 45.1 fps | 54.6 fps | **116.4 fps** |
+| Discrete wheel | 51.2 fps | 18.2 fps | **113.5 fps** |
+| 60 Hz trackpad pinch | 27.9 fps, p95 84 ms | 16.0 fps, p95 250 ms | **100.9 fps, p95 16.7 ms** |
+| Idle | 0 app frames | 0 app frames | **0 app frames** |
+| Gesture-end restore | — | — | **one 25 ms frame, none over 50 ms** |
+
+Frame counts confirm this is real rendering, not a starved loop: a 4.4 s orbit drag issues
+**524 app frames (119 fps)** and a 60 Hz pinch **339 frames (78 fps)**, while idle issues
+**zero**. Quality is deferred, never lost — with the camera held still, triggering the
+interaction tier and letting it restore returns a **pixel-identical** frame (0.000 % of
+pixels differ); mid-gesture 12.5 % differ, which is the cheap tier doing its job.
+
+### Why the scissor half of P5 was dropped
+
+P5's scissor was justified by an expected 2–4× on fill cost. After P1–P4 the renderer is
+vsync-bound in every interactive scenario and idle costs nothing, so a scissor would buy
+headroom no user can observe, in exchange for per-frame bounds projection and scissor
+state in the shared loop. It is recorded here as the first lever to pull if a slower GPU
+ever needs one; nothing in the current code blocks it.
+
+### P5's background split shipped for CONSISTENCY, not speed
+
+The shader used to paint its own background, which is why the integration had to suppress
+the shared grid, stage floor and scene background: the pass was opaque and drew over them.
+That left implicits as the only format without the themed grid — a real divergence, and
+the reason this half shipped anyway.
+
+The pass now composites instead of replacing. `uPaintBackground` (default 1, so the
+snapshot CLI and `renderImplicitCadToDataUrl` are untouched) is turned off by the viewer;
+misses emit the stage-floor shadow as black-with-alpha, so ordinary blending darkens the
+shared floor exactly as multiplying the background used to. The quad draws last with
+depth off. `CadViewer` no longer suppresses anything, and `handleImplicitModelBounds`
+sizes the shared grid, stage and lighting scope from the implicit's own bounds.
+
+Result: implicits render the **same** themed background, grid, stage floor and lighting as
+STL/GLB/3MF/STEP/DXF. Verified pixel-identical background against an STL under the Dark
+theme (delta 0 at every sample point). A side effect: the full-corpus sweep is now **47/47
+non-blank** — `menger-sponge`, whose field is empty, at least draws the shared stage.
+
 Investigation of "the implicit renderer in the viewer is extremely slow" after the
 shared-render-type integration (`design/implicit-shared-viewer-integration.md`). The
 verdict is **both**: one real regression introduced by the integration, sitting on top of

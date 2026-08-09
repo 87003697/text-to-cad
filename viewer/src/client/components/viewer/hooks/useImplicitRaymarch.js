@@ -4,6 +4,7 @@ import {
   estimateImplicitCadFrameBoundsAsync,
   implicitCadModelShaderKey,
   refreshImplicitCadFloorBounds,
+  setImplicitCadBackgroundPainting,
   updateImplicitCadAppearanceUniforms,
   updateImplicitCadGraphicsUniforms,
   updateImplicitCadMaterialUniforms,
@@ -28,6 +29,15 @@ import { implicitBoundsKey, implicitModelBounds } from "../implicitFit.js";
 // matched to the mesh stage), so CadViewer suppresses the three.js stage while
 // this pass is active rather than trying to blend the two.
 
+// Interaction frames get a fixed pixel budget rather than a fixed pixel ratio, so
+// gesture cost stops scaling with window size. Without this, the same 1.25 ratio
+// that is comfortable in a 1440x900 pane is four times the work fullscreen on a
+// retina display — the difference between smooth and unusable.
+const INTERACTION_PIXEL_BUDGET = 2_500_000;
+const MIN_INTERACTION_PIXEL_RATIO = 0.5;
+// Long enough that discrete wheel ticks do not each pay a full-quality restore.
+const IMPLICIT_IDLE_QUALITY_DELAY_MS = 400;
+
 export function useImplicitRaymarch({
   runtimeRef,
   viewerReadyTick = 0,
@@ -46,59 +56,95 @@ export function useImplicitRaymarch({
   );
   const graphicsSettingsRef = useRef(normalizedGraphicsSettings);
   graphicsSettingsRef.current = normalizedGraphicsSettings;
-  const interactionQualityRef = useRef(false);
-  interactionQualityRef.current = dynamicRenderActive === true || previewMode === true;
   const dynamicRenderActiveRef = useRef(dynamicRenderActive === true);
   dynamicRenderActiveRef.current = dynamicRenderActive === true;
+  const previewModeRef = useRef(previewMode === true);
+  previewModeRef.current = previewMode === true;
+  const themeSettingsRef = useRef(themeSettings);
+  themeSettingsRef.current = themeSettings;
+  const modelRef = useRef(model);
+  modelRef.current = model;
   const modelBoundsRef = useRef(onModelBounds);
   modelBoundsRef.current = onModelBounds;
   const shaderErrorRef = useRef(onShaderError);
   shaderErrorRef.current = onShaderError;
   const passRef = useRef(null);
 
-  const applyUniforms = (runtime, activeModel) => {
+  // The reduced-quality tier (step budget 96, detail 0.75, no shadows/AO) used to
+  // engage only for parameter drags and preview orbit. Plain camera interaction
+  // dropped resolution but kept paying for shadows, AO and a 192-step march —
+  // the single biggest cost during an orbit or pinch. Motion hides the
+  // difference, and the idle restore repaints at full quality.
+  const interactionQuality = (runtime) => (
+    dynamicRenderActiveRef.current ||
+    previewModeRef.current ||
+    runtime?.interactionState?.active === true
+  );
+
+  const applyUniforms = (runtime, activeModel, interaction) => {
     const material = passRef.current?.material;
     if (!material || !runtime?.THREE || !activeModel) {
       return;
     }
-    const interaction = interactionQualityRef.current;
-    updateImplicitCadAppearanceUniforms(runtime.THREE, material, activeModel, {
-      themeSettings,
-      graphicsSettings: implicitGraphicsRenderSettings(graphicsSettingsRef.current, { interaction })
+    const tier = interaction === undefined ? interactionQuality(runtime) : interaction;
+    const tierSettings = implicitGraphicsRenderSettings(graphicsSettingsRef.current, {
+      interaction: tier
     });
-    updateImplicitCadGraphicsUniforms(
-      material,
-      activeModel,
-      implicitGraphicsRenderSettings(graphicsSettingsRef.current, { interaction })
-    );
+    updateImplicitCadAppearanceUniforms(runtime.THREE, material, activeModel, {
+      themeSettings: themeSettingsRef.current,
+      graphicsSettings: tierSettings
+    });
+    updateImplicitCadGraphicsUniforms(material, activeModel, tierSettings);
+    if (passRef.current) {
+      passRef.current.appliedTier = tier;
+    }
   };
 
-  // Resolution cap: the raymarcher is fill-rate bound, so it renders at a lower
-  // pixel ratio while the camera or a parameter is moving and restores on idle.
+  // Tune the shared render loop for this render type's frame cost. Every hook
+  // here is inert unless installed, so the mesh path keeps its current
+  // behaviour exactly.
   useEffect(() => {
     const runtime = runtimeRef.current;
     if (!runtime) {
       return undefined;
     }
-    if (!enabled) {
-      if (runtime.resolveExtraPixelRatioCap) {
-        runtime.resolveExtraPixelRatioCap = null;
-        runtime.refreshRenderQuality?.();
+    const release = (activeRuntime) => {
+      if (!activeRuntime) {
+        return;
       }
+      activeRuntime.renderOnDemandOnly = false;
+      activeRuntime.idleQualityDelayMs = 0;
+      activeRuntime.onIdleQualityRestore = null;
+      activeRuntime.resolveExtraPixelRatioCap = null;
+      activeRuntime.refreshRenderQuality?.();
+    };
+    if (!enabled) {
+      release(runtime);
       return undefined;
     }
-    runtime.resolveExtraPixelRatioCap = (interaction) => implicitGraphicsRenderResolutionScale(
-      graphicsSettingsRef.current,
-      { interaction: interaction === true || interactionQualityRef.current }
-    );
-    runtime.refreshRenderQuality?.();
-    return () => {
-      const activeRuntime = runtimeRef.current;
-      if (activeRuntime?.resolveExtraPixelRatioCap) {
-        activeRuntime.resolveExtraPixelRatioCap = null;
-        activeRuntime.refreshRenderQuality?.();
-      }
+
+    runtime.renderOnDemandOnly = true;
+    runtime.idleQualityDelayMs = IMPLICIT_IDLE_QUALITY_DELAY_MS;
+    runtime.onIdleQualityRestore = () => {
+      applyUniforms(runtimeRef.current, modelRef.current, false);
     };
+    runtime.resolveExtraPixelRatioCap = (interaction) => {
+      const active = interaction === true || interactionQuality(runtimeRef.current);
+      const scale = implicitGraphicsRenderResolutionScale(graphicsSettingsRef.current, {
+        interaction: active
+      });
+      if (!active) {
+        return scale;
+      }
+      const canvas = runtimeRef.current?.renderer?.domElement;
+      const width = Math.max(canvas?.clientWidth || 0, 1);
+      const height = Math.max(canvas?.clientHeight || 0, 1);
+      const budgetRatio = Math.sqrt(INTERACTION_PIXEL_BUDGET / (width * height));
+      return Math.min(scale, Math.max(budgetRatio, MIN_INTERACTION_PIXEL_RATIO));
+    };
+    runtime.refreshRenderQuality?.();
+    return () => release(runtimeRef.current);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [enabled, normalizedGraphicsSettings, runtimeRef, viewerReadyTick]);
 
   // Dynamic render (slider drag, animation playback) swaps in the interaction
@@ -155,16 +201,30 @@ export function useImplicitRaymarch({
 
     const { quad, material } = nextPass;
     quad.frustumCulled = false;
-    // Nothing else is in the scene for an implicit, but keep the pass from
-    // participating in depth so a future overlay composites predictably.
+    // Composite over the shared scene rather than replacing it. The pass stops
+    // painting its own background, so the themed background, grid and stage
+    // floor every other format renders show through and the model blends on
+    // top — which is what keeps an implicit looking like the rest of the viewer
+    // instead of a separate world. It draws LAST and ignores depth: the shared
+    // stage has no depth relationship with an SDF body.
+    setImplicitCadBackgroundPainting(material, false);
+    material.transparent = true;
     material.depthTest = false;
     material.depthWrite = false;
-    quad.renderOrder = -1000;
+    quad.renderOrder = 1000;
     // Feed the SHARED camera to the shader every frame. This single line is what
     // replaces the deleted viewer's entire camera stack.
+    const drawingBufferSize = new THREE.Vector2();
     quad.onBeforeRender = (renderer, _scene, camera) => {
-      const size = renderer.getDrawingBufferSize(new THREE.Vector2());
-      updateImplicitCadMaterialUniforms(material, camera, size.x, size.y);
+      renderer.getDrawingBufferSize(drawingBufferSize);
+      updateImplicitCadMaterialUniforms(material, camera, drawingBufferSize.x, drawingBufferSize.y);
+      // Swap quality tiers the moment the gesture starts or ends. Cheap: a
+      // boolean compare per frame, uniform writes only on the transition.
+      const runtime = runtimeRef.current;
+      const tier = interactionQuality(runtime);
+      if (passRef.current === nextPass && passRef.current.appliedTier !== tier) {
+        applyUniforms(runtime, modelRef.current, tier);
+      }
     };
     // Hide until the program links: the shared loop would otherwise compile it
     // synchronously on the next frame and freeze the tab on a heavy model.

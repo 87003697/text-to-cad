@@ -1274,6 +1274,7 @@ uniform vec3 uBackgroundColorB;
 uniform float uBackgroundMode;
 uniform float uBackgroundAngle;
 uniform float uBackgroundAlpha;
+uniform float uPaintBackground;
 uniform float uUseProceduralColor;
 uniform float uHitEpsilon;
 uniform float uNormalEpsilon;
@@ -1445,27 +1446,41 @@ float implicit_floor_shadow(vec3 origin, vec3 direction, float maxDistance) {
   return clamp(shadow, 0.0, 1.0);
 }
 
-// Stage-floor shadow matte for rays that miss the model, matching the mesh
-// viewer's shadow-catcher plane under the part.
-vec3 implicit_floor_shadowed_background(vec3 backgroundColor, vec3 rayOrigin, vec3 rayDirection) {
+// How much a ray that misses the model is darkened by the stage-floor shadow,
+// matching the mesh viewer's shadow-catcher plane under the part. 0 = unshadowed.
+float implicit_floor_shadow_strength(vec3 rayOrigin, vec3 rayDirection) {
   float shadowStrength = clamp(uShadowStrength, 0.0, 1.0);
   if (uFloorEnabled < 0.5 || shadowStrength < 0.001 || rayDirection.z > -1.0e-5) {
-    return backgroundColor;
+    return 0.0;
   }
   float tFloor = (uFloorZ - rayOrigin.z) / rayDirection.z;
   if (tFloor <= 0.0) {
-    return backgroundColor;
+    return 0.0;
   }
   vec3 floorPoint = rayOrigin + rayDirection * tFloor;
   float fade = 1.0 - smoothstep(uFloorFadeRadius * 0.5, uFloorFadeRadius, length(floorPoint.xy - uFloorCenter));
   if (fade < 0.002) {
-    return backgroundColor;
+    return 0.0;
   }
   vec3 shadowOrigin = vec3(floorPoint.xy, uFloorZ + max(uHitEpsilon * 6.0, uFloorFadeRadius * 0.0001));
   float lit = implicit_floor_shadow(shadowOrigin, uKeyDir, uFloorFadeRadius * 1.5);
   float occlusion = clamp(1.0 - lit, 0.0, 1.0);
-  float strength = occlusion * fade * clamp(uFloorShadowOpacity, 0.0, 1.0) * shadowStrength;
-  return backgroundColor * (1.0 - strength);
+  return occlusion * fade * clamp(uFloorShadowOpacity, 0.0, 1.0) * shadowStrength;
+}
+
+// A miss either paints this pass's own background (standalone renderers: the
+// snapshot CLI and renderImplicitCadToDataUrl) or leaves the pixel to whatever
+// is already in the framebuffer (the CAD Viewer, where the shared scene draws
+// the themed background, grid and stage floor and this pass composites over
+// them). In the composited case the shadow is emitted as black-with-alpha, so
+// ordinary blending darkens the floor underneath exactly as multiplying the
+// background used to.
+vec4 implicit_miss_color(vec3 backgroundColor, vec3 rayOrigin, vec3 rayDirection) {
+  float strength = implicit_floor_shadow_strength(rayOrigin, rayDirection);
+  if (uPaintBackground > 0.5) {
+    return vec4(backgroundColor * (1.0 - strength), uBackgroundAlpha);
+  }
+  return vec4(0.0, 0.0, 0.0, strength);
 }
 
 vec3 implicit_background_color(vec2 uv) {
@@ -1498,7 +1513,7 @@ void main() {
   float t = max(boundsHit.x, 0.0);
   float tEnd = min(boundsHit.y, uMaxDistance);
   if (boundsHit.x > boundsHit.y || tEnd < 0.0) {
-    gl_FragColor = vec4(implicit_floor_shadowed_background(backgroundColor, rayOrigin, rayDirection), uBackgroundAlpha);
+    gl_FragColor = implicit_miss_color(backgroundColor, rayOrigin, rayDirection);
     return;
   }
 
@@ -1525,7 +1540,7 @@ void main() {
   }
 
   if (!hit) {
-    gl_FragColor = vec4(implicit_floor_shadowed_background(backgroundColor, rayOrigin, rayDirection), uBackgroundAlpha);
+    gl_FragColor = implicit_miss_color(backgroundColor, rayOrigin, rayDirection);
     return;
   }
 
@@ -1624,6 +1639,9 @@ export function createImplicitCadMaterial(THREE, model) {
       uBackgroundMode: { value: 0 },
       uBackgroundAngle: { value: Math.PI },
       uBackgroundAlpha: { value: normalized.background.transparent ? 0 : 1 },
+      // Standalone renderers paint their own background; the CAD Viewer turns
+      // this off so the shared themed background/grid/stage show through.
+      uPaintBackground: { value: 1 },
       uUseProceduralColor: { value: normalized.colorSource ? 1 : 0 },
       uHitEpsilon: { value: normalized.epsilon },
       uNormalEpsilon: { value: normalized.normalEpsilon },
@@ -1865,6 +1883,19 @@ export function updateImplicitCadGraphicsUniforms(material, model, graphicsSetti
     uniforms.uRimStrength.value = settings.rimLight ? 1 : 0;
   }
   return settings;
+}
+
+// Composited mode: the pass stops painting its own background and emits the
+// stage-floor shadow as black-with-alpha instead, so a host that already draws a
+// themed background, grid and floor (the CAD Viewer) shows through and gets the
+// shadow blended onto its own floor. Standalone renderers leave this alone.
+export function setImplicitCadBackgroundPainting(material, paintBackground) {
+  const uniform = material?.uniforms?.uPaintBackground;
+  if (!uniform) {
+    return false;
+  }
+  uniform.value = paintBackground === false ? 0 : 1;
+  return true;
 }
 
 export function updateImplicitCadMaterialUniforms(material, camera, width, height) {
