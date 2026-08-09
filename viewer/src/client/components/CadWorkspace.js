@@ -8339,7 +8339,9 @@ export default function CadWorkspace({
                 drawingViewToggle={selectedEntryIsDrawing}
                 drawingViewMode={drawingViewMode}
                 onDrawingViewModeChange={handleDrawingViewModeChange}
-                zoomControlsVisible={effectiveRenderFormat !== RENDER_FORMAT.IMPLICIT && !!selectedMeshData}
+                zoomControlsVisible={effectiveRenderFormat === RENDER_FORMAT.IMPLICIT
+                  ? !!selectedImplicitModel
+                  : !!selectedMeshData}
                 zoomPercent={viewerZoomPercent}
                 onZoomPercentChange={handleViewerZoomPercentChange}
                 onZoomReset={handleViewerZoomReset}

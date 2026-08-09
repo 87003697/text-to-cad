@@ -1,6 +1,5 @@
 import { useEffect, useMemo } from "react";
 import CadViewer from "../CadViewer";
-import ImplicitCadViewer from "../ImplicitCadViewer";
 import { CircleAlert, X } from "lucide-react";
 import { Alert, AlertDescription, AlertTitle } from "../ui/alert";
 import { Button } from "../ui/button";
@@ -357,6 +356,10 @@ export default function CadRenderPane({
   const urdfMode = isRobotRenderFormat(renderFormat);
   const implicitMode = renderFormat === RENDER_FORMAT.IMPLICIT;
   const meshOnlyMode = isMeshRenderFormat(renderFormat);
+  // Formats with no per-part topology to select, annotate or explode: a plain
+  // mesh has no parts, and an implicit is a single SDF body. Both hand the
+  // viewer the same stripped-down prop set.
+  const bodyOnlyMode = meshOnlyMode || implicitMode;
   const pathPreviewMode = meshOnlyMode;
   const stepDisplaySettingsActive = renderFormat === RENDER_FORMAT.STEP && !!displaySettings && !dxfMode && !pathPreviewMode;
   // Projection is a theme trait now; STEP views take it from the active theme
@@ -464,111 +467,94 @@ export default function CadRenderPane({
 
   return (
     <div className="absolute inset-0">
-      {implicitMode ? (
-        <ImplicitCadViewer
-          key={`implicit:${selectedKey}`}
-          ref={viewerRef}
-          model={selectedImplicitModel}
-          modelKey={selectedKey}
-          isLoading={viewerLoading}
-          previewMode={previewMode}
-          viewportFrameInsets={viewportFrameInsets}
-          viewPlaneOffsetRight={viewPlaneOffsetRight}
-          themeSettings={themeSettings}
-          graphicsSettings={implicitGraphicsSettings}
-          dynamicRenderActive={implicitDynamicRenderActive}
-          perspective={viewerPerspective}
-          perspectiveRef={viewerPerspectiveRef}
-          onPerspectiveChange={handlePerspectiveChange}
-          onViewerAlertChange={handleViewerAlertChange}
-        />
-      ) : (
-        <CadViewer
-          ref={viewerRef}
-          meshData={selectedMeshData}
-          modelKey={selectedKey}
-          renderFormat={renderFormat}
-          drawingThicknessScale={drawingThicknessScale}
-          planMode={planMode}
-          bendAxisX={bendAxisX}
-          drawingBendLines={drawingBendLines}
-          bendAnglesRad={bendAnglesRad}
-          drawingBends={drawingBends}
-          drawingBendStyle={drawingBendStyle}
-          drawingBendRadiusMm={drawingBendRadiusMm}
-          drawingKFactor={drawingKFactor}
-          drawingHiddenLayers={drawingHiddenLayers}
-          drawingGeometry={drawingGeometry}
-          drawingThicknessMm={drawingThicknessMm}
-          onCameraZoomPercentChange={onCameraZoomPercentChange}
-          perspective={viewerPerspective}
-          projection={cadProjection}
-          perspectiveRef={viewerPerspectiveRef}
-          onProjectionChange={stepDisplaySettingsActive ? onProjectionChange : undefined}
-          onDisplayModeChange={stepDisplaySettingsActive ? onDisplayModeChange : undefined}
-          showEdges
-          recomputeNormals={false}
-          themeSettings={themeSettings}
-          displaySettings={stepDisplaySettingsActive ? displaySettings : null}
-          previewMode={dxfMode ? false : previewMode}
-          showViewPlane={dxfMode ? true : !previewMode}
-          scale={urdfMode ? VIEWER_SCENE_SCALE.URDF : VIEWER_SCENE_SCALE.CAD}
-          viewPlaneOffsetRight={viewPlaneOffsetRight}
-          viewPlaneOffsetBottom="1rem"
-          compactViewPlane={false}
-          viewportFrameInsets={viewportFrameInsets}
-          isLoading={viewerLoading}
-          pickMode={urdfMode
-            ? VIEWER_PICK_MODE.NONE
-            : viewerPickModeForRenderPane({
-              dxfMode,
-              meshOnlyMode,
-              panToolActive,
-              topologySelectionPending,
-              topologySelectionUnavailable,
-              topologySelectionDeferred,
-              topologyPickingActive: Boolean(
-                pickableFaces?.length ||
-                pickableEdges?.length ||
-                pickableVertices?.length
-              ),
-              viewerMode,
-              assemblyPickingActive,
-              focusedPartIds
-            })}
-          panToolActive={panToolActive}
-          renderPartsIndividually={urdfMode ? true : (renderPartsIndividually || Boolean(resolvedStepParameters?.definition))}
-          pickableParts={urdfMode || meshOnlyMode ? EMPTY_LIST : assemblyParts}
-          hiddenPartIds={meshOnlyMode ? [] : hiddenPartIds}
-          selectedPartIds={meshOnlyMode ? [] : selectedPartIds}
-          hoveredPartId={meshOnlyMode ? "" : hoveredPartId}
-          assemblyMates={meshOnlyMode ? [] : assemblyMates}
-          selectedMateIds={meshOnlyMode ? [] : selectedMateIds}
-          hoveredMateId={meshOnlyMode ? "" : hoveredMateId}
-          hoveredReferenceId={meshOnlyMode ? "" : hoveredReferenceId}
-          selectedReferenceIds={meshOnlyMode ? [] : selectedReferenceIds}
-          selectorRuntime={meshOnlyMode ? null : selectorRuntime}
-          displayEdgeRuntime={meshOnlyMode ? null : displayEdgeRuntime}
-          stepParameters={meshOnlyMode ? null : resolvedStepParameters}
-          pickableFaces={meshOnlyMode ? [] : pickableFaces}
-          pickableEdges={meshOnlyMode ? [] : pickableEdges}
-          pickableVertices={meshOnlyMode ? [] : pickableVertices}
-          focusedPartId={meshOnlyMode ? "" : focusedPartIds}
-          boundsAnimationActive={cadViewerBoundsAnimationActive}
-          drawingEnabled={!meshOnlyMode && drawToolActive}
-          drawingTool={drawingTool}
-          drawingStrokes={meshOnlyMode ? [] : drawingStrokes}
-          onDrawingStrokesChange={handleDrawingStrokesChange}
-          onPerspectiveChange={handlePerspectiveChange}
-          onHoverReferenceChange={handleModelHoverChange}
-          onActivateReference={handleModelReferenceActivate}
-          onDoubleActivateReference={handleModelReferenceDoubleActivate}
-          onContextReference={handleModelReferenceContext}
-          onViewerAlertChange={handleViewerAlertChange}
-          onStepModuleTransformDetectedChange={handleStepModuleTransformDetectedChange}
-          urdfPosePicker={urdfPosePicker}
-        />
-      )}
+      <CadViewer
+        ref={viewerRef}
+        meshData={selectedMeshData}
+        implicitModel={implicitMode ? selectedImplicitModel : null}
+        implicitGraphicsSettings={implicitMode ? implicitGraphicsSettings : null}
+        implicitDynamicRenderActive={implicitMode ? implicitDynamicRenderActive : false}
+        modelKey={selectedKey}
+        renderFormat={renderFormat}
+        drawingThicknessScale={drawingThicknessScale}
+        planMode={planMode}
+        bendAxisX={bendAxisX}
+        drawingBendLines={drawingBendLines}
+        bendAnglesRad={bendAnglesRad}
+        drawingBends={drawingBends}
+        drawingBendStyle={drawingBendStyle}
+        drawingBendRadiusMm={drawingBendRadiusMm}
+        drawingKFactor={drawingKFactor}
+        drawingHiddenLayers={drawingHiddenLayers}
+        drawingGeometry={drawingGeometry}
+        drawingThicknessMm={drawingThicknessMm}
+        onCameraZoomPercentChange={onCameraZoomPercentChange}
+        perspective={viewerPerspective}
+        projection={cadProjection}
+        perspectiveRef={viewerPerspectiveRef}
+        onProjectionChange={stepDisplaySettingsActive ? onProjectionChange : undefined}
+        onDisplayModeChange={stepDisplaySettingsActive ? onDisplayModeChange : undefined}
+        showEdges
+        recomputeNormals={false}
+        themeSettings={themeSettings}
+        displaySettings={stepDisplaySettingsActive ? displaySettings : null}
+        previewMode={dxfMode ? false : previewMode}
+        showViewPlane={dxfMode ? true : !previewMode}
+        scale={urdfMode ? VIEWER_SCENE_SCALE.URDF : VIEWER_SCENE_SCALE.CAD}
+        viewPlaneOffsetRight={viewPlaneOffsetRight}
+        viewPlaneOffsetBottom="1rem"
+        compactViewPlane={false}
+        viewportFrameInsets={viewportFrameInsets}
+        isLoading={viewerLoading}
+        pickMode={urdfMode || implicitMode
+          ? VIEWER_PICK_MODE.NONE
+          : viewerPickModeForRenderPane({
+            dxfMode,
+            meshOnlyMode,
+            panToolActive,
+            topologySelectionPending,
+            topologySelectionUnavailable,
+            topologySelectionDeferred,
+            topologyPickingActive: Boolean(
+              pickableFaces?.length ||
+              pickableEdges?.length ||
+              pickableVertices?.length
+            ),
+            viewerMode,
+            assemblyPickingActive,
+            focusedPartIds
+          })}
+        panToolActive={panToolActive}
+        renderPartsIndividually={urdfMode ? true : (renderPartsIndividually || Boolean(resolvedStepParameters?.definition))}
+        pickableParts={urdfMode || bodyOnlyMode ? EMPTY_LIST : assemblyParts}
+        hiddenPartIds={bodyOnlyMode ? [] : hiddenPartIds}
+        selectedPartIds={bodyOnlyMode ? [] : selectedPartIds}
+        hoveredPartId={bodyOnlyMode ? "" : hoveredPartId}
+        assemblyMates={bodyOnlyMode ? [] : assemblyMates}
+        selectedMateIds={bodyOnlyMode ? [] : selectedMateIds}
+        hoveredMateId={bodyOnlyMode ? "" : hoveredMateId}
+        hoveredReferenceId={bodyOnlyMode ? "" : hoveredReferenceId}
+        selectedReferenceIds={bodyOnlyMode ? [] : selectedReferenceIds}
+        selectorRuntime={bodyOnlyMode ? null : selectorRuntime}
+        displayEdgeRuntime={bodyOnlyMode ? null : displayEdgeRuntime}
+        stepParameters={bodyOnlyMode ? null : resolvedStepParameters}
+        pickableFaces={bodyOnlyMode ? [] : pickableFaces}
+        pickableEdges={bodyOnlyMode ? [] : pickableEdges}
+        pickableVertices={bodyOnlyMode ? [] : pickableVertices}
+        focusedPartId={bodyOnlyMode ? "" : focusedPartIds}
+        boundsAnimationActive={cadViewerBoundsAnimationActive}
+        drawingEnabled={!bodyOnlyMode && drawToolActive}
+        drawingTool={drawingTool}
+        drawingStrokes={bodyOnlyMode ? [] : drawingStrokes}
+        onDrawingStrokesChange={handleDrawingStrokesChange}
+        onPerspectiveChange={handlePerspectiveChange}
+        onHoverReferenceChange={handleModelHoverChange}
+        onActivateReference={handleModelReferenceActivate}
+        onDoubleActivateReference={handleModelReferenceDoubleActivate}
+        onContextReference={handleModelReferenceContext}
+        onViewerAlertChange={handleViewerAlertChange}
+        onStepModuleTransformDetectedChange={handleStepModuleTransformDetectedChange}
+        urdfPosePicker={urdfPosePicker}
+      />
       {!previewMode ? (
         <ViewerContextMenu
           menu={viewerContextMenu}

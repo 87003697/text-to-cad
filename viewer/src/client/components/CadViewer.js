@@ -155,6 +155,7 @@ import {
   THEME_FLOOR_MODES
 } from "cadjs/lib/themeSettings";
 import ViewPlaneControl from "./viewer/ViewPlaneControl";
+import { useImplicitRaymarch } from "./viewer/hooks/useImplicitRaymarch";
 import { useViewerDrawingOverlay } from "./viewer/hooks/useViewerDrawingOverlay";
 import { useViewerPicking } from "./viewer/hooks/useViewerPicking";
 import { useViewerRuntime } from "./viewer/hooks/useViewerRuntime";
@@ -1594,6 +1595,14 @@ const CadViewer = forwardRef(function CadViewer({
   meshData,
   modelKey,
   renderFormat = "",
+  // Implicit entries have no mesh: their geometry is GLSL, raymarched into this
+  // same scene by useImplicitRaymarch. Everything else about the viewport —
+  // camera, controls, zoom, fit, view cube, screenshots — is shared with the
+  // mesh formats, which is why implicit is a render type here rather than a
+  // separate component.
+  implicitModel = null,
+  implicitGraphicsSettings = null,
+  implicitDynamicRenderActive = false,
   drawingThicknessScale = 1,
   planMode = false,
   bendAxisX = null,
@@ -1663,6 +1672,7 @@ const CadViewer = forwardRef(function CadViewer({
 }, ref) {
   const stepParameterRuntime = stepParameters;
   const stepAnimationPlaying = Boolean(stepParameterRuntime?.animationState?.playing);
+  const implicitActive = renderFormat === RENDER_FORMAT.IMPLICIT;
   const normalizedSceneScaleMode = normalizeSceneScaleMode(scale || sceneScaleMode);
   const normalizedProjection = normalizeCameraProjection(projection);
   const meshGeometrySource = meshData?.geometrySource && typeof meshData.geometrySource === "object"
@@ -1833,15 +1843,35 @@ const CadViewer = forwardRef(function CadViewer({
     floorZ = 0,
     sceneScaleMode = VIEWER_SCENE_SCALE.CAD,
     floorMode = THEME_FLOOR_MODES.STAGE
-  ) => updateGridHelper(
-    runtime,
-    activeViewerTheme,
-    radius,
-    floorZ,
-    sceneScaleMode,
-    floorMode,
-    normalizedThemeSettings.floor
-  ), [normalizedThemeSettings.floor]);
+  ) => {
+    const helper = updateGridHelper(
+      runtime,
+      activeViewerTheme,
+      radius,
+      floorZ,
+      sceneScaleMode,
+      floorMode,
+      normalizedThemeSettings.floor
+    );
+    // The raymarch pass draws its own floor, so the three.js grid stays down for
+    // implicits. Gated here rather than at each call site: this is the single
+    // funnel every grid update goes through, including the runtime's first one.
+    if (implicitActive && runtime?.gridHelper) {
+      runtime.gridHelper.visible = false;
+    }
+    return helper;
+  }, [implicitActive, normalizedThemeSettings.floor]);
+  // Same reasoning as the grid: the shader paints the background, so the scene
+  // must not paint a second one behind it.
+  const applyActiveSceneBackground = useCallback((runtime, activeViewerTheme, background) => {
+    if (implicitActive) {
+      if (runtime?.scene) {
+        runtime.scene.background = null;
+      }
+      return;
+    }
+    applySceneBackground(runtime, activeViewerTheme, background);
+  }, [implicitActive]);
   const edgesVisible = showEdges && shouldUseCadEdgeSource && displayModeShowsEdges(normalizedDisplayMode, visualEdgeSettings);
   const topologyDisplayEdgesVisible = shouldRenderTopologyDisplayEdges({
     edgesVisible,
@@ -2189,6 +2219,102 @@ const CadViewer = forwardRef(function CadViewer({
     syncCameraZoomPercent,
     syncViewPlaneOrientation
   ]);
+  // An implicit publishes its envelope instead of a mesh. Framing it through the
+  // same helpers the mesh path uses is what gives implicits the shared zoom
+  // baseline, zoom-percent readout, reset and fit behaviour: once
+  // runtime.modelBounds is set, runtimeFramingBounds() feeds resetZoomAndPan and
+  // zoomToFit with no implicit-specific branch in either.
+  const implicitFitSignatureRef = useRef("");
+  const handleImplicitModelBounds = useCallback((bounds, { refined = false } = {}) => {
+    const runtime = runtimeRef.current;
+    if (!runtime?.THREE || !runtime?.controls || !bounds) {
+      return;
+    }
+    const { THREE, controls } = runtime;
+    const sceneScale = sceneScaleModeRef.current;
+    const cameraSignature = () => [
+      ...runtime.camera.position.toArray(),
+      ...controls.target.toArray()
+    ].map((value) => Math.round(Number(value) * 1000) / 1000).join(",");
+
+    const { radius } = applyRuntimeModelBounds(THREE, runtime, bounds, sceneScale);
+    runtime.zoomBaseModelRadius = boundsModelRadius(THREE, bounds, sceneScale);
+    runtime.hasVisibleModel = true;
+    runtime.activeModelKey = modelKeyRef.current || "";
+    syncRuntimeCameraClipPlanes(runtime, Math.max(radius / 1200, 0.01), Math.max(radius * 600, 2000));
+    applyCameraFrameInsets(runtime, viewportFrameInsetsRef.current, { updateProjection: false });
+    controls.minDistance = Math.max(radius / 2200, 0.02);
+    controls.maxDistance = Math.max(radius * 140, 50);
+
+    const activeModelKey = modelKeyRef.current || "";
+    const firstFrame = framedModelKeyRef.current !== activeModelKey;
+    // A refined envelope may only move the camera if the user has not touched it
+    // since our own fit; otherwise the CPU scan would yank the view out from
+    // under an orbit or pan seconds after load.
+    if (!firstFrame && !(refined && implicitFitSignatureRef.current === cameraSignature())) {
+      runtime.requestRender();
+      return;
+    }
+
+    if (firstFrame) {
+      const nextPerspective = resolvePerspectiveSnapshot(
+        perspectiveRef ? perspectiveRef.current : undefined,
+        perspective
+      );
+      const restored = perspectiveSnapshotMatchesScene(nextPerspective, {
+        modelKey: activeModelKey,
+        sceneScaleMode: sceneScale,
+        coordinateSystem: coordinateSystemForSceneScale(sceneScale),
+        requireModelKey: true,
+        requireSceneScaleMode: true,
+        requireCoordinateSystem: true
+      }) && runWithoutPerspectiveEvents(
+        () => applyPerspectiveSnapshot(runtime, nextPerspective, { scheduleIdle: false })
+      );
+      framedModelKeyRef.current = activeModelKey;
+      if (restored) {
+        runtime.zoomFitModelRadius = radius;
+        resetRuntimeZoomBaseline(runtime);
+        syncCameraZoomPercent(runtime);
+        implicitFitSignatureRef.current = "";
+        runtime.requestRender();
+        return;
+      }
+    }
+
+    runWithoutPerspectiveEvents(() => {
+      zoomRuntimeToBounds(runtime, bounds, sceneScale, {
+        animate: false,
+        resetZoomBaseline: true
+      });
+    });
+    syncCameraZoomPercent(runtime);
+    emitPerspectiveChange(runtime);
+    syncViewPlaneOrientation(runtime);
+    implicitFitSignatureRef.current = cameraSignature();
+    runtime.requestRender();
+  }, [
+    perspective,
+    perspectiveRef,
+    syncCameraZoomPercent,
+    syncViewPlaneOrientation
+  ]);
+
+  const handleImplicitShaderError = useCallback((message) => {
+    if (!message) {
+      viewerAlertChangeRef.current?.(null);
+      setError("");
+      return;
+    }
+    setError(message);
+    viewerAlertChangeRef.current?.({
+      severity: "error",
+      compact: true,
+      title: "Implicit CAD shader failed",
+      message
+    });
+  }, []);
+
   const buildSurfaceLineFaceAnchor = (event, canvas, lockedReferenceId = "", startUv = null) => {
     const runtime = runtimeRef.current;
     if (!runtime?.raycaster || !runtime?.camera || !activeSelectorRuntime?.faceReferenceByRowIndex) {
@@ -3032,10 +3158,13 @@ const CadViewer = forwardRef(function CadViewer({
     },
     zoomToFitSelection({ partIds = [], referenceIds = [], animate = true } = {}) {
       const runtime = runtimeRef.current;
+      // An implicit is a single SDF body with no sub-part selection, so a "fit
+      // selection" request has no narrower target than the model itself. Fit the
+      // model rather than silently no-oping the shared context-menu action.
       const bounds = mergeBoundsList([
         selectorReferenceBounds(activeSelectorRuntime, referenceIds),
         displayRecordBoundsForPartIds(runtime, partIds)
-      ]);
+      ]) || (implicitActive ? runtimeFramingBounds(runtime, null) : null);
       const fitted = zoomRuntimeToBounds(
         runtime,
         bounds,
@@ -3057,6 +3186,7 @@ const CadViewer = forwardRef(function CadViewer({
     }
   }), [
     activeSelectorRuntime,
+    implicitActive,
     meshData?.bounds,
     modelKey,
     normalizedSceneScaleMode,
@@ -3194,7 +3324,7 @@ const CadViewer = forwardRef(function CadViewer({
     applyOrbitDelta,
     getViewerThemeValue,
     getPixelRatioCap,
-    applySceneBackground,
+    applySceneBackground: applyActiveSceneBackground,
     applyCameraFrameInsets,
     frameInsetsRef: viewportFrameInsetsRef,
     applyInitialPerspective,
@@ -3223,6 +3353,55 @@ const CadViewer = forwardRef(function CadViewer({
     preserveInteractionPixelRatio,
     runtimeResetToken
   });
+
+  useImplicitRaymarch({
+    runtimeRef,
+    viewerReadyTick,
+    enabled: implicitActive,
+    model: implicitModel,
+    themeSettings: normalizedThemeSettings,
+    graphicsSettings: implicitGraphicsSettings,
+    dynamicRenderActive: implicitDynamicRenderActive,
+    previewMode,
+    onModelBounds: handleImplicitModelBounds,
+    onShaderError: handleImplicitShaderError
+  });
+
+  // The raymarch pass paints its own background and stage-floor shadow, matched
+  // to the mesh stage on purpose. Leaving the three.js stage up as well would
+  // draw a second floor and grid through it, so the stage is suppressed for as
+  // long as an implicit is on screen. Runs after the theme/environment effects
+  // so it wins over whatever they just applied.
+  useEffect(() => {
+    const runtime = runtimeRef.current;
+    if (!runtime?.scene) {
+      return;
+    }
+    if (implicitActive) {
+      runtime.scene.background = null;
+      runtime.scene.environment = null;
+      if (runtime.gridHelper) {
+        runtime.gridHelper.visible = false;
+      }
+      if (runtime.stageGroup) {
+        runtime.stageGroup.visible = false;
+      }
+    } else {
+      if (runtime.gridHelper) {
+        runtime.gridHelper.visible = true;
+      }
+      if (runtime.stageGroup) {
+        runtime.stageGroup.visible = true;
+      }
+    }
+    runtime.requestRender();
+  }, [
+    implicitActive,
+    normalizedThemeSettings,
+    resolvedFloorMode,
+    viewerReadyTick,
+    viewerTheme
+  ]);
 
   useEffect(() => {
     const runtime = runtimeRef.current;
@@ -3263,7 +3442,7 @@ const CadViewer = forwardRef(function CadViewer({
       return;
     }
 
-    applySceneBackground(runtime, viewerTheme, normalizedThemeSettings.background);
+    applyActiveSceneBackground(runtime, viewerTheme, normalizedThemeSettings.background);
     runtime.renderer.toneMappingExposure = Math.max(normalizedThemeSettings.lighting.toneMappingExposure, 0.05);
 
     runtime.hemisphereLight.visible = normalizedThemeSettings.lighting.hemisphere.enabled;
@@ -3381,7 +3560,7 @@ const CadViewer = forwardRef(function CadViewer({
     };
     const applyBackgroundFallback = () => {
       clearEnvironmentTexture();
-      applySceneBackground(runtime, viewerTheme, normalizedThemeSettings.background);
+      applyActiveSceneBackground(runtime, viewerTheme, normalizedThemeSettings.background);
       runtime.requestRender();
     };
 
@@ -3424,13 +3603,13 @@ const CadViewer = forwardRef(function CadViewer({
       if (runtime.scene.environmentRotation?.set) {
         runtime.scene.environmentRotation.set(0, environmentSettings.rotationY, 0);
       }
-      if (environmentSettings.useAsBackground) {
+      if (environmentSettings.useAsBackground && !implicitActive) {
         runtime.scene.background = runtime.environmentTexture;
         if (runtime.scene.backgroundRotation?.set) {
           runtime.scene.backgroundRotation.set(0, environmentSettings.rotationY, 0);
         }
       } else {
-        applySceneBackground(runtime, viewerTheme, normalizedThemeSettings.background);
+        applyActiveSceneBackground(runtime, viewerTheme, normalizedThemeSettings.background);
       }
       runtime.requestRender();
     };
@@ -3452,7 +3631,7 @@ const CadViewer = forwardRef(function CadViewer({
     return () => {
       cancelled = true;
     };
-  }, [viewerReadyTick, viewerTheme, normalizedThemeSettings.background, normalizedThemeSettings.environment]);
+  }, [implicitActive, viewerReadyTick, viewerTheme, normalizedThemeSettings.background, normalizedThemeSettings.environment]);
 
   useEffect(() => {
     const runtime = runtimeRef.current;
@@ -3532,7 +3711,7 @@ const CadViewer = forwardRef(function CadViewer({
       vertexPickGroup
     } = runtime;
 
-    const clearDisplayedModel = () => {
+    const clearDisplayedModel = ({ preserveModelIdentity = false } = {}) => {
       cancelCameraTransition(runtime);
       runtime.cadScene?.dispose?.();
       runtime.cadScene = null;
@@ -3549,10 +3728,22 @@ const CadViewer = forwardRef(function CadViewer({
       runtime.topologyDisplayEdgeLine = null;
       runtime.topologyDisplayEdgeTransformByRecord = false;
       runtime.displayRecords = [];
-      runtime.hasVisibleModel = false;
-      runtime.activeModelKey = "";
+      if (!preserveModelIdentity) {
+        runtime.hasVisibleModel = false;
+        runtime.activeModelKey = "";
+      }
       runtime.requestRender();
     };
+
+    // An implicit never has mesh data — the raymarch pass is its geometry. Drop
+    // whatever mesh was on screen before, but leave the runtime's model identity
+    // to the implicit arm: clearing activeModelKey here would make
+    // emitPerspectiveChange treat every camera move as belonging to a stale
+    // model and silently stop persisting the view.
+    if (implicitActive) {
+      clearDisplayedModel({ preserveModelIdentity: true });
+      return;
+    }
 
     if (isLoading) {
       clearDisplayedModel();
@@ -3877,6 +4068,7 @@ const CadViewer = forwardRef(function CadViewer({
     surfaceStepEdgesVisible,
     topologyDisplayEdgesVisible,
     recomputeNormals,
+    implicitActive,
     isLoading,
     viewerReadyTick,
     pickMode,
@@ -4928,7 +5120,9 @@ const CadViewer = forwardRef(function CadViewer({
         showViewPlane={showViewPlane && !planMode}
         previewMode={previewMode}
         isLoading={isLoading}
-        meshData={meshData}
+        // "Is there anything on screen?" — for an implicit that is the loaded
+        // model, since it never has mesh data.
+        meshData={implicitActive ? implicitModel : meshData}
         viewPlaneOffsetRight={viewPlaneOffsetRight}
         viewPlaneOffsetBottom={viewPlaneOffsetBottom}
         viewPlaneSize={VIEW_PLANE_CONTROL_SIZE}

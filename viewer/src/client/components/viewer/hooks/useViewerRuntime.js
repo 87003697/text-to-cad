@@ -263,7 +263,8 @@ export function useViewerRuntime({
         renderQueuedAt: 0,
         renderFallbackTimerId: 0,
         restoreTimerId: 0,
-        shadowsDirty: true
+        shadowsDirty: true,
+        interactionQuality: false
       };
       const keyboardOrbitState = {
         pressedKeys: new Set(),
@@ -317,9 +318,24 @@ export function useViewerRuntime({
         onContextRestored?.();
       };
 
-      const applyRenderQuality = (pixelRatioCap) => {
-        const nextPixelRatio = getPixelRatioCap(pixelRatioCap);
+      // A render type may tighten the pixel ratio further than the shared
+      // idle/interaction caps (the implicit raymarcher trades resolution for
+      // step budget while the camera moves). It only ever caps DOWN, so the
+      // mesh path — which installs no resolver — is unaffected.
+      const resolveRenderPixelRatio = (pixelRatioCap, interaction) => {
+        const base = getPixelRatioCap(pixelRatioCap);
+        const extraCap = Number(runtimeRef.current?.resolveExtraPixelRatioCap?.(interaction));
+        return Number.isFinite(extraCap) && extraCap > 0 ? Math.min(base, extraCap) : base;
+      };
+
+      const applyRenderQuality = (pixelRatioCap, { force = false, interaction = null } = {}) => {
+        const nextInteraction = interaction === null
+          ? interactionState.interactionQuality === true
+          : interaction === true;
+        interactionState.interactionQuality = nextInteraction;
+        const nextPixelRatio = resolveRenderPixelRatio(pixelRatioCap, nextInteraction);
         if (
+          !force &&
           Math.abs(interactionState.pixelRatioCap - pixelRatioCap) < 1e-4 &&
           Math.abs((interactionState.pixelRatio || 0) - nextPixelRatio) < 1e-4
         ) {
@@ -444,7 +460,7 @@ export function useViewerRuntime({
           interactionPixelRatioCap,
           preservePixelRatio: runtimeRef.current?.preserveInteractionPixelRatio === true,
           screenSpaceLineMaterialCount: getScreenSpaceLineMaterialCount()
-        }));
+        }), { interaction: true });
         requestRender();
       };
 
@@ -458,7 +474,7 @@ export function useViewerRuntime({
           controls.enableDamping = true;
           controls.dampingFactor = DEFAULT_DAMPING_FACTOR;
           controls.zoomSpeed = getDefaultZoomSpeed();
-          applyRenderQuality(idlePixelRatioCap);
+          applyRenderQuality(idlePixelRatioCap, { interaction: false });
           requestRender();
         }, INTERACTION_IDLE_DELAY_MS);
       };
@@ -757,6 +773,12 @@ export function useViewerRuntime({
         },
         beginInteraction,
         scheduleIdleQuality,
+        // Installed by a render type that caps resolution beyond the shared
+        // idle/interaction caps; null for the mesh path.
+        resolveExtraPixelRatioCap: null,
+        refreshRenderQuality: () => {
+          applyRenderQuality(interactionState.pixelRatioCap, { force: true });
+        },
         applyCameraFrameInsets,
         frameInsetsRef,
         onManualCameraInteraction,
