@@ -1,4 +1,4 @@
-import { ArrowDown, ArrowUp, RotateCcw } from "lucide-react";
+import { ArrowDown, ArrowUp, RotateCcw, RotateCw } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Slider } from "@/components/ui/slider";
@@ -6,6 +6,7 @@ import { Slider } from "@/components/ui/slider";
 import {
   FILE_SHEET_COMPACT_BUTTON_CLASSES,
   FILE_SHEET_PRECISION_SLIDER_CLASSES,
+  FileSheetButtonRow,
   FileSheetControlRow,
   FileSheetSectionBody,
   FileSheetSegmentedControl,
@@ -133,6 +134,23 @@ export function normalizeDxfKFactor(value, fallback = DXF_DEFAULT_KFACTOR) {
   return Math.min(DXF_KFACTOR_MAX, Math.max(DXF_KFACTOR_MIN, numeric));
 }
 
+/** Model orientation as quarter-turns about each world axis, applied after the fold. A
+ *  folded part often lands facing the wrong way (a U opening down, a flange toward the
+ *  camera); quarter-turns re-seat it without free-rotation fiddliness. */
+export const DXF_DEFAULT_ORIENTATION = Object.freeze({ x: 0, y: 0, z: 0 });
+
+export function normalizeDxfOrientation(value) {
+  const quarter = (component) => {
+    const numeric = Math.trunc(Number(component));
+    return Number.isFinite(numeric) ? ((numeric % 4) + 4) % 4 : 0;
+  };
+  return {
+    x: quarter(value?.x),
+    y: quarter(value?.y),
+    z: quarter(value?.z)
+  };
+}
+
 /** The tab-footer Reset (settings-ui.md: outline + RotateCcw, full row, one per tab). */
 function DxfResetRow({ label, onReset }) {
   if (!onReset) {
@@ -218,6 +236,7 @@ export function DxfBendsSettings({
   kFactor = DXF_DEFAULT_KFACTOR,
   onKFactorChange,
   units = DXF_DEFAULT_UNITS,
+  onRotateOrientation,
   onReset
 }) {
   const style = normalizeDxfBendStyle(bendStyle);
@@ -333,6 +352,31 @@ export function DxfBendsSettings({
           );
         })}
       </FileSheetSubsection>
+
+      {/* Model orientation: a folded part often lands facing the wrong way. Sibling
+          actions form a button row (equal columns, icon + label, no row label); each click
+          turns the model 90 degrees about that world axis. */}
+      {onRotateOrientation ? (
+        <FileSheetSubsection hideFirstSeparator={false}>
+          <FileSheetButtonRow columns={3}>
+            {["x", "y", "z"].map((axis) => (
+              <Button
+                key={axis}
+                type="button"
+                variant="outline"
+                size="sm"
+                className={`${FILE_SHEET_COMPACT_BUTTON_CLASSES} justify-center`}
+                aria-label={`Rotate model 90 degrees about ${axis.toUpperCase()}`}
+                title={`Rotate 90° about ${axis.toUpperCase()}`}
+                onClick={() => onRotateOrientation(axis)}
+              >
+                <RotateCw className="h-3.5 w-3.5" strokeWidth={2} aria-hidden="true" />
+                <span>{axis.toUpperCase()} 90°</span>
+              </Button>
+            ))}
+          </FileSheetButtonRow>
+        </FileSheetSubsection>
+      ) : null}
 
       <DxfResetRow label="Reset bend settings" onReset={onReset} />
     </FileSheetSectionBody>

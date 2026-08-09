@@ -19,6 +19,7 @@ import {
   DXF_DEFAULT_BEND_RADIUS_MM,
   DXF_DEFAULT_BEND_STYLE,
   DXF_DEFAULT_KFACTOR,
+  DXF_DEFAULT_ORIENTATION,
   DXF_DEFAULT_THICKNESS_MM,
   DXF_DEFAULT_UNITS,
   normalizeDxfBendAngleDeg,
@@ -26,6 +27,7 @@ import {
   normalizeDxfBendRadiusMm,
   normalizeDxfBendStyle,
   normalizeDxfKFactor,
+  normalizeDxfOrientation,
   normalizeDxfThicknessMm,
   normalizeDxfUnits
 } from "./workbench/DxfSettingsSection";
@@ -1247,8 +1249,10 @@ export default function CadWorkspace({
   const [drawingKFactor, setDrawingKFactor] = useState(DXF_DEFAULT_KFACTOR);
   // Layer names the user has switched off; everything else renders.
   const [drawingHiddenLayers, setDrawingHiddenLayers] = useState([]);
-  // How to read the drawing's coordinates: "auto" trusts the file's $INSUNITS.
+  // The unit the DXF sheet's dimensional inputs display and accept.
   const [drawingUnits, setDrawingUnits] = useState(DXF_DEFAULT_UNITS);
+  // Post-fold model orientation, in quarter-turns about each world axis.
+  const [drawingOrientation, setDrawingOrientation] = useState(DXF_DEFAULT_ORIENTATION);
   // The package's parsed contours, fetched once per entry and kept by URL. Curved bends
   // re-mesh from these; the URL carries the package version, so a rebuild refetches.
   const drawingGeometryCacheRef = useRef(new Map());
@@ -3262,13 +3266,14 @@ export default function CadWorkspace({
           bendRadiusMm: drawingBendRadiusMm,
           kFactor: drawingKFactor,
           hiddenLayers: drawingHiddenLayers,
-          units: drawingUnits
+          units: drawingUnits,
+          orientation: drawingOrientation
         })
       );
     } catch (storageError) {
       // Quota or privacy mode: settings simply stop surviving a file switch.
     }
-  }, [selectedEntryIsDrawing, selectedKey, drawingThicknessMm, drawingBends, drawingBendStyle, drawingBendRadiusMm, drawingKFactor, drawingHiddenLayers, drawingUnits]);
+  }, [selectedEntryIsDrawing, selectedKey, drawingThicknessMm, drawingBends, drawingBendStyle, drawingBendRadiusMm, drawingKFactor, drawingHiddenLayers, drawingUnits, drawingOrientation]);
 
   useEffect(() => {
     let stored = null;
@@ -3289,6 +3294,7 @@ export default function CadWorkspace({
       ? stored.hiddenLayers.filter((name) => typeof name === "string")
       : []);
     setDrawingUnits(normalizeDxfUnits(stored?.units, DXF_DEFAULT_UNITS));
+    setDrawingOrientation(normalizeDxfOrientation(stored?.orientation));
     setDrawingBends(Array.from({ length: selectedDrawingBendAxisCount }, (_, index) => ({
       angleDeg: normalizeDxfBendAngleDeg(stored?.bends?.[index]?.angleDeg, DXF_DEFAULT_BEND_ANGLE_DEG),
       direction: normalizeDxfBendDirection(stored?.bends?.[index]?.direction)
@@ -3346,10 +3352,18 @@ export default function CadWorkspace({
     setDrawingBendStyle(DXF_DEFAULT_BEND_STYLE);
     setDrawingBendRadiusMm(DXF_DEFAULT_BEND_RADIUS_MM);
     setDrawingKFactor(DXF_DEFAULT_KFACTOR);
+    setDrawingOrientation(DXF_DEFAULT_ORIENTATION);
     setDrawingBends((current) => current.map(() => ({
       angleDeg: DXF_DEFAULT_BEND_ANGLE_DEG,
       direction: "up"
     })));
+  }, []);
+
+  const handleDrawingRotateOrientation = useCallback((axis) => {
+    setDrawingOrientation((current) => {
+      const normalized = normalizeDxfOrientation(current);
+      return { ...normalized, [axis]: (normalized[axis] + 1) % 4 };
+    });
   }, []);
 
   const handleDrawingLayerVisibilityChange = useCallback((layerName, visible) => {
@@ -3631,7 +3645,7 @@ export default function CadWorkspace({
     ),
     hasFileStatus: selectedFileHasWarningOrErrorStatus,
     hasDxfBendsPanel: selectedFileSheetKind === "dxf" && drawingBends.length > 0,
-    hasDxfLayersPanel: selectedFileSheetKind === "dxf" && drawingLayers.length > 0,
+    hasDxfLayersPanel: selectedFileSheetKind === "dxf" && drawingLayers.length > 1,
     isSdf: selectedFileSheetKind === "sdf",
     motionEnabled: selectedFileSheetKind === "srdf" && moveit2ServerLive && selectedUrdfMotionEndEffectors.length > 0,
     showJoints: selectedFileSheetKind === "urdf" || selectedFileSheetKind === "srdf" || selectedFileSheetKind === "sdf"
@@ -8231,6 +8245,7 @@ export default function CadWorkspace({
           drawingBendRadiusMm={selectedEntryIsDrawing ? drawingBendRadiusMm : 0}
           drawingKFactor={selectedEntryIsDrawing ? drawingKFactor : DXF_DEFAULT_KFACTOR}
           drawingHiddenLayers={selectedEntryIsDrawing ? drawingHiddenLayers : null}
+          drawingOrientation={selectedEntryIsDrawing ? drawingOrientation : null}
           drawingGeometry={selectedEntryIsDrawing ? drawingGeometry : null}
           drawingThicknessMm={selectedEntryIsDrawing ? drawingThicknessMm : 0}
           onCameraZoomPercentChange={setViewerZoomPercent}
@@ -8635,9 +8650,10 @@ export default function CadWorkspace({
                     kFactor: drawingKFactor,
                     onKFactorChange: setDrawingKFactor,
                     units: drawingUnits,
+                    onRotateOrientation: handleDrawingRotateOrientation,
                     onReset: handleDrawingBendsReset
                   })] : []),
-                  ...(drawingLayers.length > 0 ? [buildDxfLayersTab({
+                  ...(drawingLayers.length > 1 ? [buildDxfLayersTab({
                     layers: drawingLayers,
                     hiddenLayers: drawingHiddenLayers,
                     onLayerVisibilityChange: handleDrawingLayerVisibilityChange

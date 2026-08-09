@@ -41,7 +41,7 @@ export default function MeshFileSheet({
       scrollBody={false}
     >
       <FileSheetTabbedSurface
-        kind="mesh"
+        kind={kind}
         sections={sections}
         openSectionIds={openSectionIds}
         onOpenSectionIdsChange={onOpenSectionIdsChange}

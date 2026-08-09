@@ -1617,6 +1617,7 @@ const CadViewer = forwardRef(function CadViewer({
   drawingBendRadiusMm = 0,
   drawingKFactor = 0.5,
   drawingHiddenLayers = null,
+  drawingOrientation = null,
   drawingGeometry = null,
   drawingThicknessMm = 0,
   onCameraZoomPercentChange = null,
@@ -2695,6 +2696,29 @@ const CadViewer = forwardRef(function CadViewer({
     };
     const identity = dxfFoldIsIdentity(foldOptions);
     const bendCount = foldOptions.bendLines ? foldOptions.bendLines.length : foldOptions.bendAxesX.length;
+
+    // Post-fold model orientation: quarter-turns about each world axis, rotating the folded
+    // part about the flat pattern's own centre so it stays where the camera is looking.
+    // Exact by construction (sin/cos of k*90 degrees are integers), and applied to the SAME
+    // buffers the fold writes, so overlays, picking, and fit all follow.
+    const quarterTurn = (component) => {
+      const numeric = Math.trunc(Number(component));
+      return Number.isFinite(numeric) ? ((numeric % 4) + 4) % 4 : 0;
+    };
+    const orientation = {
+      x: quarterTurn(drawingOrientation?.x),
+      y: quarterTurn(drawingOrientation?.y),
+      z: quarterTurn(drawingOrientation?.z)
+    };
+    const orientationActive = orientation.x !== 0 || orientation.y !== 0 || orientation.z !== 0;
+    const orientationMatrix = orientationActive
+      ? new THREE.Matrix4().makeRotationFromEuler(new THREE.Euler(
+        (orientation.x * Math.PI) / 2,
+        (orientation.y * Math.PI) / 2,
+        (orientation.z * Math.PI) / 2,
+        "XYZ"
+      ))
+      : null;
     const anyBendAngle = foldOptions.bendAnglesRad.some((angle) => angle !== 0);
 
     // Layer visibility: hiding a cut layer changes the SOLID, which only a live re-mesh can
@@ -2731,10 +2755,10 @@ const CadViewer = forwardRef(function CadViewer({
     // Overlays (dotted guides, score lines, text markings) exist for any drawing whose
     // geometry is loaded, even flat at identity.
     const hasOverlaySource = !!effectiveGeometry;
-    if (!curvedRequested && identity && !hasOverlaySource && !runtimeRef.current?.dxfTransformTouched) {
+    if (!curvedRequested && identity && !orientationActive && !hasOverlaySource && !runtimeRef.current?.dxfTransformTouched) {
       return undefined;
     }
-    runtimeRef.current.dxfTransformTouched = curvedRequested || !identity;
+    runtimeRef.current.dxfTransformTouched = curvedRequested || !identity || orientationActive;
     let frame = 0;
     let attempts = 0;
 
@@ -2798,6 +2822,56 @@ const CadViewer = forwardRef(function CadViewer({
         }
       };
 
+      // Orientation helpers (no-ops when inactive), rotating about the flat pattern's own
+      // centre so the reoriented part stays under the camera.
+      let orientCenter = null;
+      if (orientationMatrix && targets.length) {
+        const source = targets[0].original;
+        let minX = Infinity;
+        let maxX = -Infinity;
+        let minY = Infinity;
+        let maxY = -Infinity;
+        for (let index = 0; index < source.length; index += 3) {
+          const x = source[index];
+          const y = source[index + 1];
+          if (x < minX) minX = x;
+          if (x > maxX) maxX = x;
+          if (y < minY) minY = y;
+          if (y > maxY) maxY = y;
+        }
+        orientCenter = [(minX + maxX) / 2, (minY + maxY) / 2, 0];
+      }
+      const orientElements = orientationMatrix?.elements || null;
+      const orientBuffer = (array) => {
+        if (!orientElements || !orientCenter) {
+          return array;
+        }
+        const e = orientElements;
+        for (let index = 0; index < array.length; index += 3) {
+          const x = array[index] - orientCenter[0];
+          const y = array[index + 1] - orientCenter[1];
+          const z = array[index + 2] - orientCenter[2];
+          array[index] = e[0] * x + e[4] * y + e[8] * z + orientCenter[0];
+          array[index + 1] = e[1] * x + e[5] * y + e[9] * z + orientCenter[1];
+          array[index + 2] = e[2] * x + e[6] * y + e[10] * z + orientCenter[2];
+        }
+        return array;
+      };
+      const orientPoint = (point) => {
+        if (!orientElements || !orientCenter) {
+          return point;
+        }
+        const e = orientElements;
+        const x = point[0] - orientCenter[0];
+        const y = point[1] - orientCenter[1];
+        const z = point[2] - orientCenter[2];
+        return [
+          e[0] * x + e[4] * y + e[8] * z + orientCenter[0],
+          e[1] * x + e[5] * y + e[9] * z + orientCenter[1],
+          e[2] * x + e[6] * y + e[10] * z + orientCenter[2]
+        ];
+      };
+
       let guideSegments = null;
       let flat = null;
       if (curvedRequested) {
@@ -2840,6 +2914,7 @@ const CadViewer = forwardRef(function CadViewer({
             mapped[index + 1] = source[index + 2];
             mapped[index + 2] = -source[index + 1];
           }
+          orientBuffer(mapped);
           let curved = runtimeRef.current?.dxfCurvedPreview || null;
           if (curved && curved.parent !== group) {
             curved = null;
@@ -2886,6 +2961,7 @@ const CadViewer = forwardRef(function CadViewer({
         }
         for (const { geometry, original, position } of targets) {
           transformDxfPreviewPositions(original, position.array, foldOptions);
+          orientBuffer(position.array);
           position.needsUpdate = true;
           geometry.computeVertexNormals?.();
           geometry.computeBoundingBox?.();
@@ -2941,7 +3017,7 @@ const CadViewer = forwardRef(function CadViewer({
           group.add(overlay);
           runtimeRef.current.dxfBendGuideOverlay = overlay;
         }
-        overlay.geometry.setAttribute("position", new THREE.BufferAttribute(segments, 3));
+        overlay.geometry.setAttribute("position", new THREE.BufferAttribute(orientBuffer(segments), 3));
         overlay.computeLineDistances();
         overlay.geometry.computeBoundingSphere?.();
       }
@@ -2999,7 +3075,7 @@ const CadViewer = forwardRef(function CadViewer({
         }
         scoreOverlay.geometry.setAttribute(
           "position",
-          new THREE.BufferAttribute(Float32Array.from(scoreSegments), 3)
+          new THREE.BufferAttribute(orientBuffer(Float32Array.from(scoreSegments)), 3)
         );
         scoreOverlay.geometry.computeBoundingSphere?.();
       }
@@ -3071,10 +3147,10 @@ const CadViewer = forwardRef(function CadViewer({
             anchor[0] + ex[0] * (planeWidth / 2) + ey[0] * (planeHeight * 0.22),
             anchor[1] + ex[1] * (planeWidth / 2) + ey[1] * (planeHeight * 0.22)
           ];
-          const origin3 = foldDxfPoint(centerFlat[0], centerFlat[1], zTop, resolvedFold);
+          const origin3 = orientPoint(foldDxfPoint(centerFlat[0], centerFlat[1], zTop, resolvedFold));
           const step = 0.5;
-          const alongX = foldDxfPoint(centerFlat[0] + ex[0] * step, centerFlat[1] + ex[1] * step, zTop, resolvedFold);
-          const alongY = foldDxfPoint(centerFlat[0] + ey[0] * step, centerFlat[1] + ey[1] * step, zTop, resolvedFold);
+          const alongX = orientPoint(foldDxfPoint(centerFlat[0] + ex[0] * step, centerFlat[1] + ex[1] * step, zTop, resolvedFold));
+          const alongY = orientPoint(foldDxfPoint(centerFlat[0] + ey[0] * step, centerFlat[1] + ey[1] * step, zTop, resolvedFold));
           const basisX = new THREE.Vector3(alongX[0] - origin3[0], alongX[1] - origin3[1], alongX[2] - origin3[2]).normalize();
           const basisY = new THREE.Vector3(alongY[0] - origin3[0], alongY[1] - origin3[1], alongY[2] - origin3[2]).normalize();
           const basisZ = new THREE.Vector3().crossVectors(basisX, basisY).normalize();
@@ -3102,7 +3178,7 @@ const CadViewer = forwardRef(function CadViewer({
     return () => {
       cancelAnimationFrame(frame);
     };
-  }, [bendAxisX, drawingBendLines, bendAnglesRad, drawingBends, drawingBendStyle, drawingBendRadiusMm, drawingKFactor, drawingHiddenLayers, drawingGeometry, drawingThicknessMm, drawingThicknessScale, meshData, viewerReadyTick]);
+  }, [bendAxisX, drawingBendLines, bendAnglesRad, drawingBends, drawingBendStyle, drawingBendRadiusMm, drawingKFactor, drawingHiddenLayers, drawingOrientation, drawingGeometry, drawingThicknessMm, drawingThicknessScale, meshData, viewerReadyTick]);
 
   useImperativeHandle(ref, () => ({
     async captureScreenshot({ filename = "cad-screenshot.png", mode = "download" } = {}) {
