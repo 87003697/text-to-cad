@@ -30,6 +30,11 @@ python skills/mesh-compare/scripts/mesh-compare <mesh_a> <mesh_b> [--samples N] 
 python skills/mesh-compare/scripts/mesh-compare <reference_mesh> <candidate_mesh> \
   --voxblame-dir "${EXP_DIR}/voxblame" --step <N> --max-depth 8 [--compare-to <M>]
 
+# Canonical in-frame measurement against a prepared Canonical Reference
+python skills/mesh-compare/scripts/mesh-compare voxblame-measure <candidate_mesh> \
+  --reference "${EXP_DIR}/input" --output "${EXP_DIR}/voxblame" \
+  --step <N> [--compare-to <M>]
+
 # Visualization: distance-colored or side-by-side render → PNG on disk
 python skills/mesh-compare/scripts/mesh-render heatmap <mesh_a> <mesh_b> --output <png>
 python skills/mesh-compare/scripts/mesh-render side-by-side <mesh_a> <mesh_b> --output <png>
@@ -68,6 +73,16 @@ when to use `heatmap` vs `side-by-side`.
    the complete immutable report remains at the returned `report` path. Step
    0 has no baseline, later steps default to N-1, and `--compare-to` may select
    any earlier published step.
+9. **(Incremental canonical measurement surface.)** Use `voxblame-measure`
+   only when `--reference` is an already published Canonical Reference and the
+   candidate already uses its unitless `trellis2_canonical/1` coordinates.
+   Step 0 has no parent; every nonzero step requires an explicit earlier
+   `--compare-to`. The command atomically publishes `voxblame.measurement/1`
+   plus a compact `voxblame.measurement-summary/1` containing objective depth
+   1-8 facts only. It does not emit Repair Targets, CAD advice, a verdict, or a
+   workflow stop decision. This incremental command accepts in-frame candidates
+   only; exterior measurement and the final target-complete report contract are
+   separate later workflow slices.
 
 ## Handoff
 
@@ -78,6 +93,10 @@ Return outputs based on which CLI(s) were invoked:
   metrics + `ai_vision` block if added by the caller). When VoxBlame was
   requested, also return the full-report path and one action (or state that
   `next_action` is null).
+- **Canonical measurement (`voxblame-measure`)**: return the compact JSON
+  summary and the immutable `measurement.json`, depth-8 missing/excess
+  snapshots, candidate tree, and exterior-placeholder paths under the
+  published step directory. Do not infer a modeling decision from these facts.
 - **Render CLI (`mesh-render`)**: return the PNG path(s) produced
   (`heatmap` and/or `side-by-side` mode).
 - **Both invoked (workflow-typical)**: return both JSON and PNG paths.
