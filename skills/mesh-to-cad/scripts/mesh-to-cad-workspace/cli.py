@@ -10,6 +10,7 @@ import sys
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from workspace_core import (
+    FAILED_ATTEMPT_RESULTS,
     WorkspaceError,
     begin_attempt,
     initialize_workspace,
@@ -24,6 +25,35 @@ from workspace_core import (
 )
 
 
+class _HelpRequested(Exception):
+    pass
+
+
+class _JsonArgumentParser(argparse.ArgumentParser):
+    """Convert command-line contract errors into the public JSON error shape."""
+
+    def error(self, message: str) -> None:
+        raise WorkspaceError("invalid_arguments", message, "$.argv")
+
+    def print_help(self, file=None) -> None:
+        target = file if file is not None else sys.stdout
+        print(
+            json.dumps(
+                {
+                    "ok": True,
+                    "help": {"program": self.prog, "text": self.format_help()},
+                },
+                separators=(",", ":"),
+            ),
+            file=target,
+        )
+
+    def exit(self, status: int = 0, message: str | None = None) -> None:
+        if status == 0 and message is None:
+            raise _HelpRequested
+        super().exit(status, message)
+
+
 def _emit(value: dict) -> None:
     print(json.dumps(value, separators=(",", ":")))
 
@@ -33,7 +63,7 @@ def _workspace_argument(parser: argparse.ArgumentParser) -> None:
 
 
 def _parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(prog="mesh-to-cad-workspace")
+    parser = _JsonArgumentParser(prog="mesh-to-cad-workspace")
     commands = parser.add_subparsers(dest="command", required=True)
 
     init = commands.add_parser("init", help="Publish prepared canonical setup")
@@ -68,7 +98,7 @@ def _parser() -> argparse.ArgumentParser:
     record.add_argument("--attempt", type=int, required=True)
     record.add_argument(
         "--result",
-        choices=("tool_failure", "strategy_changed", "no_feasible_strategy"),
+        choices=FAILED_ATTEMPT_RESULTS,
         required=True,
     )
     record.add_argument("--classification", required=True)
@@ -99,8 +129,8 @@ def _parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str] | None = None) -> int:
-    args = _parser().parse_args(argv)
     try:
+        args = _parser().parse_args(argv)
         if args.command == "init":
             value = initialize_workspace(args.workspace, args.prepared)
             _emit({"ok": True, "workspace": value})
@@ -180,6 +210,8 @@ def main(argv: list[str] | None = None) -> int:
         )
         print(f"{exc.classification}: {exc.path}: {exc.detail}", file=sys.stderr)
         return 2
+    except _HelpRequested:
+        return 0
     return 0
 
 

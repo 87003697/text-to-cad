@@ -28,8 +28,10 @@ run returns the wrapped command's exit code.
 - begin-attempt freezes either an initial plan or a validated
   voxblame.repair-batch/1.
 - publish-step-zero cross-checks the candidate mesh, formal preview,
-  measurement, Canonical Reference, canonical frame, and preview profile before
-  publishing steps/000000/.
+  canonical `voxblame.summary/1` measurement, Canonical Reference, canonical
+  frame, and preview profile before publishing steps/000000/. Objective facts
+  are recomputed from depth-8 and exterior evidence; the preview identity is
+  recomputed from its canonical metadata.
 - publish-cycle publishes a marker-last transaction containing both
   steps/NNNNNN/ and cycles/NNNNNN/. Its plan identity, Region Diff edge,
   source-change evidence, assessment, ancestry, and Observable Geometry
@@ -58,8 +60,11 @@ arguments and Authorization headers.
 Setup, Measured Step, Repair Cycle, Attempt, and index writes use validated
 temporary staging and atomic rename or replacement. A marker-last transaction
 interrupted between Step and Cycle rename is invalid authority; recover
-finishes only a staged transaction whose identities cross-check. Unknown staged
-state fails closed.
+finishes only a staged transaction whose identities cross-check. The marker is
+removed only after index publication and the scoped Git commit succeed, so a
+post-rename interruption remains recoverable, including failed Attempt
+publication. Protocol-scoped VoxBlame paths are checked before any authority
+rename. Unknown staged state fails closed.
 
 ## Git and telemetry boundary
 
@@ -71,7 +76,11 @@ existing rules, LFS attributes for protocol binary artifacts. Publication:
 - stages only the paths declared by that protocol transaction;
 - verifies the LFS filter before committing binary artifacts; and
 - binds Workspace, Attempt, Step, Cycle, plan, candidate, and Observable
-  Geometry identities through commit trailers.
+  Geometry identities through commit trailers. Validation checks the current
+  publishing commit for each authority path, not any older matching message.
+
+`workspace.json` also freezes input and setup tree identities. Validation
+recomputes them so mutation of prepared authority is reported as corruption.
 
 The helper never uses broad staging or disables LFS filters. run/ and work/
 are ignored mutable areas. Runner logs or transfer manifests are never

@@ -9,6 +9,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 import hashlib
 import json
+import math
 import os
 from pathlib import Path, PurePosixPath
 import re
@@ -35,6 +36,12 @@ MAX_TOOL_FAILURES_PER_STEP = 2
 MAX_COMMANDS_PER_ATTEMPT = 8
 MAX_LOG_BYTES = 65536
 MAX_COMMAND_SECONDS = 900
+TOOL_FAILURE_RESULT = "tool_failure"
+FAILED_ATTEMPT_RESULTS = (
+    TOOL_FAILURE_RESULT,
+    "strategy_changed",
+    "no_feasible_strategy",
+)
 
 _EXPERIMENT_FIELDS = {
     "schema",
@@ -51,6 +58,8 @@ _WORKSPACE_FIELDS = {
     "canonical_reference_sha256",
     "preview_profile",
     "route",
+    "input_identity_sha256",
+    "setup_identity_sha256",
     "limits",
 }
 _STEP_FIELDS = {
@@ -160,6 +169,15 @@ class ValidationResult:
     recovery: list[dict[str, Any]]
 
 
+@dataclass(frozen=True)
+class _PreparedStepEvidence:
+    candidate: Path
+    preview: Path
+    measurement: Path
+    measurement_document: Mapping[str, Any]
+    identities: dict[str, str]
+
+
 def initialize_workspace(workspace: Path, prepared: Path) -> dict[str, Any]:
     workspace = workspace.resolve()
     prepared = prepared.resolve()
@@ -191,6 +209,8 @@ def initialize_workspace(workspace: Path, prepared: Path) -> dict[str, Any]:
         "canonical_reference_sha256": experiment["canonical_reference_sha256"],
         "preview_profile": experiment["preview_profile"],
         "route": experiment["route"],
+        "input_identity_sha256": _path_digest(prepared / "input"),
+        "setup_identity_sha256": _path_digest(prepared / "setup"),
         "limits": {
             "repair_cycles": MAX_REPAIR_CYCLES,
             "attempts_per_step": MAX_ATTEMPTS_PER_STEP,
@@ -219,8 +239,6 @@ def initialize_workspace(workspace: Path, prepared: Path) -> dict[str, Any]:
         (stage / "setup").rename(workspace / "setup")
         (stage / "experiment.json").rename(workspace / "experiment.json")
         (stage / "workspace.json").rename(workspace / "workspace.json")
-        (stage / "transaction.json").unlink()
-        stage.rmdir()
     except Exception:
         # Keep incomplete setup evidence. Validation reports it as recoverable,
         # never as published authority.
@@ -245,8 +263,13 @@ def initialize_workspace(workspace: Path, prepared: Path) -> dict[str, Any]:
             "Canonical-Reference-SHA256": workspace_document[
                 "canonical_reference_sha256"
             ],
+            "Workspace-SHA256": _identity(WORKSPACE_SCHEMA, workspace_document),
+            "Input-SHA256": workspace_document["input_identity_sha256"],
+            "Setup-SHA256": workspace_document["setup_identity_sha256"],
         },
     )
+    (stage / "transaction.json").unlink()
+    stage.rmdir()
     return {**workspace_document, "graph": graph}
 
 
@@ -323,26 +346,17 @@ def publish_step_zero(
     active_root, active, plan = _load_active_attempt(workspace, attempt)
     if active["intended_step"] != 0 or active["from_step"] is not None:
         _fail("parent_mismatch", "attempt does not belong to Step 0")
-    candidate = candidate.resolve()
-    preview = preview.resolve()
-    measurement = measurement.resolve()
-    _validate_tree_source(candidate, "$.candidate")
-    _validate_tree_source(preview, "$.preview")
-    mesh_path = _relative_member(candidate, candidate_mesh, "$.candidate_mesh")
-    measurement_document = _read_json(measurement, "$.measurement")
-    preview_document = _read_json(preview / "preview.json", "$.preview")
-    experiment = _load_workspace_document(workspace)
-    identities = _validate_step_evidence(
+    evidence = _prepare_step_evidence(
         workspace,
-        experiment,
         step=0,
         parent_step=None,
-        mesh_path=mesh_path,
-        measurement_path=measurement,
-        measurement=measurement_document,
-        preview_root=preview,
-        preview=preview_document,
+        parent_observable_sha256=None,
+        candidate=candidate,
+        candidate_mesh=candidate_mesh,
+        measurement=measurement,
+        preview=preview,
     )
+    voxblame_paths = _step_zero_voxblame_paths(workspace, evidence.measurement)
     steps_root = workspace / "steps"
     steps_root.mkdir(exist_ok=True)
     transaction = workspace / "work" / (
@@ -350,9 +364,7 @@ def publish_step_zero(
     )
     stage = transaction / "step"
     stage.mkdir(parents=True)
-    shutil.copytree(candidate, stage / "candidate")
-    shutil.copytree(preview, stage / "preview")
-    shutil.copy2(measurement, stage / "measurement.json")
+    _copy_step_evidence(evidence, stage)
     _write_json(stage / "plan.json", plan)
     successful_attempt = {**active, "result": "measured_step_published"}
     _write_json(stage / "attempt.json", successful_attempt)
@@ -363,11 +375,11 @@ def publish_step_zero(
         "parent_step": None,
         "cycle": None,
         "attempt_ids": [attempt],
-        **identities,
-        "measurement_path": _workspace_relative(workspace, measurement),
+        **evidence.identities,
+        "measurement_path": _workspace_relative(workspace, evidence.measurement),
         "compare_to": None,
-        "accepted": _accepted(measurement_document),
-        "no_observable_geometry_change": measurement_document[
+        "accepted": _accepted(evidence.measurement_document),
+        "no_observable_geometry_change": evidence.measurement_document[
             "no_observable_geometry_change"
         ],
         "files": files,
@@ -385,10 +397,7 @@ def publish_step_zero(
     )
     _validate_step_directory(workspace, stage, expected_step=0)
     stage.rename(workspace / "steps/000000")
-    (transaction / "transaction.json").unlink()
-    transaction.rmdir()
     graph = rebuild_index(workspace, validate=False)
-    voxblame_paths = _step_zero_voxblame_paths(workspace, measurement)
     _commit_protocol_paths(
         workspace,
         ["steps/000000", "step_index.json", *voxblame_paths],
@@ -398,8 +407,13 @@ def publish_step_zero(
             "Workspace-Attempt": str(attempt),
             "Candidate-SHA256": document["candidate_mesh_sha256"],
             "Observable-SHA256": document["observable_sha256"],
+            "Preview-SHA256": document["preview_identity_sha256"],
+            "Step-SHA256": document["identity_sha256"],
+            "Workspace-SHA256": _workspace_identity(workspace),
         },
     )
+    (transaction / "transaction.json").unlink()
+    transaction.rmdir()
     shutil.rmtree(active_root)
     return {**document, "graph": graph}
 
@@ -454,6 +468,11 @@ def run_attempt_command(
         stdout = exc.stdout or b""
         stderr = (exc.stderr or b"") + b"\ncommand timed out\n"
         timed_out = True
+    except OSError as exc:
+        exit_code = 127
+        stdout = b""
+        stderr = f"command launch failed: {exc}\n".encode("utf-8", errors="replace")
+        timed_out = False
     duration_ms = max(0, round((time.monotonic() - started) * 1000))
     stored_stdout, stdout_metadata = _bounded_log(stdout)
     stored_stderr, stderr_metadata = _bounded_log(stderr)
@@ -491,24 +510,36 @@ def record_attempt(
     workspace = workspace.resolve()
     validate_workspace(workspace)
     active_root, active, _plan = _load_active_attempt(workspace, attempt)
-    if result not in {"tool_failure", "strategy_changed", "no_feasible_strategy"}:
+    if result not in FAILED_ATTEMPT_RESULTS:
         _fail("invalid_attempt", "unsupported terminal Attempt result")
     _nonempty_string(classification, "$.classification")
     command_documents = _load_command_documents(active_root)
-    if result == "tool_failure" and not any(
+    if result == TOOL_FAILURE_RESULT and not any(
         command["exit_code"] != 0 for command in command_documents
     ):
         _fail(
             "invalid_attempt",
             "tool_failure requires at least one recorded failing command",
         )
+    if (
+        result == TOOL_FAILURE_RESULT
+        and _published_tool_failure_count(workspace, active["intended_step"])
+        >= MAX_TOOL_FAILURES_PER_STEP
+    ):
+        _fail(
+            "budget_violation",
+            "intended step already has two published tool failures",
+        )
     attempts_root = workspace / "attempts"
     attempts_root.mkdir(exist_ok=True)
     target = attempts_root / f"{attempt:06d}"
     if target.exists():
         _fail("workspace_conflict", f"Attempt {attempt} is already published")
-    stage = attempts_root / f".tmp-{attempt:06d}-{uuid.uuid4().hex}"
-    stage.mkdir()
+    transaction = workspace / "work" / (
+        f".tmp-attempt-{attempt:06d}-{uuid.uuid4().hex}"
+    )
+    stage = transaction / "attempt"
+    stage.mkdir(parents=True)
     shutil.copy2(active_root / "plan.json", stage / "plan.json")
     if (active_root / "commands").exists():
         shutil.copytree(active_root / "commands", stage / "commands")
@@ -522,6 +553,15 @@ def record_attempt(
     }
     document["identity_sha256"] = _identity(ATTEMPT_SCHEMA, document)
     _write_json(stage / "attempt.json", document)
+    _write_json(
+        transaction / "transaction.json",
+        {
+            "schema": "mesh-to-cad.transaction/1",
+            "kind": "attempt",
+            "attempt": attempt,
+            "attempt_identity_sha256": document["identity_sha256"],
+        },
+    )
     _validate_published_attempt(stage, expected_attempt=attempt)
     stage.rename(target)
     graph = rebuild_index(workspace, validate=False)
@@ -534,8 +574,12 @@ def record_attempt(
             "Intended-Step": str(document["intended_step"]),
             "Attempt-Result": result,
             "Plan-SHA256": document["plan_digest"],
+            "Attempt-SHA256": document["identity_sha256"],
+            "Workspace-SHA256": _workspace_identity(workspace),
         },
     )
+    (transaction / "transaction.json").unlink()
+    transaction.rmdir()
     shutil.rmtree(active_root)
     return {**document, "graph": graph}
 
@@ -575,28 +619,21 @@ def publish_cycle(
     parent_manifest = _read_json(
         workspace / "steps" / f"{from_step:06d}" / "step.json", "$.parent_step"
     )
-    candidate = candidate.resolve()
-    preview = preview.resolve()
-    measurement = measurement.resolve()
     region_diff = region_diff.resolve()
     assessment = assessment.resolve()
     source_changes = source_changes.resolve()
-    _validate_tree_source(candidate, "$.candidate")
-    _validate_tree_source(preview, "$.preview")
-    mesh_path = _relative_member(candidate, candidate_mesh, "$.candidate_mesh")
-    measurement_document = _read_json(measurement, "$.measurement")
-    preview_document = _read_json(preview / "preview.json", "$.preview")
-    experiment = _load_workspace_document(workspace)
-    identities = _validate_step_evidence(
+    evidence = _prepare_step_evidence(
         workspace,
-        experiment,
         step=intended_step,
         parent_step=from_step,
-        mesh_path=mesh_path,
-        measurement_path=measurement,
-        measurement=measurement_document,
-        preview_root=preview,
-        preview=preview_document,
+        parent_observable_sha256=parent_manifest["observable_sha256"],
+        candidate=candidate,
+        candidate_mesh=candidate_mesh,
+        measurement=measurement,
+        preview=preview,
+    )
+    voxblame_path = _voxblame_step_path(
+        workspace, evidence.measurement, intended_step
     )
     diff_document = _read_json(region_diff, "$.region_diff")
     _validate_region_diff_boundary(
@@ -606,7 +643,7 @@ def publish_cycle(
         from_step=from_step,
         to_step=intended_step,
         before_observable=parent_manifest["observable_sha256"],
-        after_observable=identities["observable_sha256"],
+        after_observable=evidence.identities["observable_sha256"],
     )
     assessment_document = _read_json(assessment, "$.assessment")
     _validate_assessment(
@@ -616,7 +653,13 @@ def publish_cycle(
     _validate_source_changes(
         source_changes_document, from_step=from_step, to_step=intended_step
     )
-    attempt_ids = _cycle_attempt_ids(workspace, intended_step, attempt)
+    attempt_ids = _cycle_attempt_ids(
+        workspace,
+        intended_step,
+        from_step,
+        active["plan_digest"],
+        attempt,
+    )
     transaction = workspace / "work" / (
         f".tmp-cycle-{intended_step:06d}-{uuid.uuid4().hex}"
     )
@@ -624,9 +667,7 @@ def publish_cycle(
     cycle_stage = transaction / "cycle"
     step_stage.mkdir(parents=True)
     cycle_stage.mkdir()
-    shutil.copytree(candidate, step_stage / "candidate")
-    shutil.copytree(preview, step_stage / "preview")
-    shutil.copy2(measurement, step_stage / "measurement.json")
+    _copy_step_evidence(evidence, step_stage)
     step_files = _inventory(step_stage)
     step_document: dict[str, Any] = {
         "schema": STEP_SCHEMA,
@@ -634,11 +675,11 @@ def publish_cycle(
         "parent_step": from_step,
         "cycle": intended_step,
         "attempt_ids": attempt_ids,
-        **identities,
-        "measurement_path": _workspace_relative(workspace, measurement),
+        **evidence.identities,
+        "measurement_path": _workspace_relative(workspace, evidence.measurement),
         "compare_to": from_step,
-        "accepted": _accepted(measurement_document),
-        "no_observable_geometry_change": measurement_document[
+        "accepted": _accepted(evidence.measurement_document),
+        "no_observable_geometry_change": evidence.measurement_document[
             "no_observable_geometry_change"
         ],
         "files": step_files,
@@ -666,8 +707,8 @@ def publish_cycle(
         "assessment_sha256": _file_sha256(assessment),
         "source_changes_sha256": _file_sha256(source_changes),
         "from_observable_sha256": parent_manifest["observable_sha256"],
-        "to_observable_sha256": identities["observable_sha256"],
-        "no_observable_geometry_change": measurement_document[
+        "to_observable_sha256": evidence.identities["observable_sha256"],
+        "no_observable_geometry_change": evidence.measurement_document[
             "no_observable_geometry_change"
         ],
         "files": cycle_files,
@@ -698,10 +739,7 @@ def publish_cycle(
         _fail("workspace_conflict", "Repair Cycle target already exists")
     step_stage.rename(step_target)
     cycle_stage.rename(cycle_target)
-    (transaction / "transaction.json").unlink()
-    transaction.rmdir()
     graph = rebuild_index(workspace, validate=False)
-    voxblame_path = _voxblame_step_path(workspace, measurement, intended_step)
     _commit_protocol_paths(
         workspace,
         [
@@ -719,8 +757,14 @@ def publish_cycle(
             "Plan-SHA256": active["plan_digest"],
             "Candidate-SHA256": step_document["candidate_mesh_sha256"],
             "Observable-SHA256": step_document["observable_sha256"],
+            "Preview-SHA256": step_document["preview_identity_sha256"],
+            "Step-SHA256": step_document["identity_sha256"],
+            "Cycle-SHA256": cycle_document["identity_sha256"],
+            "Workspace-SHA256": _workspace_identity(workspace),
         },
     )
+    (transaction / "transaction.json").unlink()
+    transaction.rmdir()
     shutil.rmtree(active_root)
     return {**cycle_document, "step": step_document, "graph": graph}
 
@@ -820,7 +864,7 @@ def workspace_status(workspace: Path) -> dict[str, Any]:
         "schema": "mesh-to-cad.workspace-status/1",
         "workspace_id": document["workspace_id"],
         "base_step": 0 if steps else None,
-        "head_steps": _graph_heads(graph),
+        "head_steps": list(graph["heads"]),
         "completed_cycles": graph["budget"]["completed_cycles"],
         "remaining_cycles": graph["budget"]["remaining_cycles"],
         "next_intended_step": (
@@ -853,6 +897,11 @@ def recover_workspace(workspace: Path) -> dict[str, Any]:
         for path in (workspace / "work").glob(".tmp-step-zero-*")
         if path.is_dir() and (path / "transaction.json").is_file()
     ) if (workspace / "work").exists() else []
+    attempt_transactions = sorted(
+        path
+        for path in (workspace / "work").glob(".tmp-attempt-*")
+        if path.is_dir() and (path / "transaction.json").is_file()
+    ) if (workspace / "work").exists() else []
     transaction_roots = sorted(
         path
         for path in (workspace / "work").glob(".tmp-cycle-*")
@@ -860,7 +909,12 @@ def recover_workspace(workspace: Path) -> dict[str, Any]:
     ) if (workspace / "work").exists() else []
     known = {
         path.resolve()
-        for root in [*setup_transactions, *step_transactions, *transaction_roots]
+        for root in [
+            *setup_transactions,
+            *attempt_transactions,
+            *step_transactions,
+            *transaction_roots,
+        ]
         for path in (root, *root.rglob("*"))
     }
     unknown = [
@@ -877,11 +931,16 @@ def recover_workspace(workspace: Path) -> dict[str, Any]:
         )
     recovered: list[int] = []
     recovered_steps: list[int] = []
+    recovered_attempts: list[int] = []
+    for transaction in attempt_transactions:
+        recovered_attempts.append(
+            _recover_attempt_transaction(workspace, transaction)
+        )
     for transaction in step_transactions:
         recovered_steps.append(_recover_step_zero_transaction(workspace, transaction))
     for transaction in transaction_roots:
         recovered.append(_recover_cycle_transaction(workspace, transaction))
-    if not recovered and not recovered_steps:
+    if not recovered and not recovered_steps and not recovered_attempts:
         orphans = [
             item
             for item in _find_incomplete_transactions(workspace)
@@ -896,6 +955,7 @@ def recover_workspace(workspace: Path) -> dict[str, Any]:
     result = validate_workspace(workspace)
     return {
         "recovered_setup": recovered_setup,
+        "recovered_attempts": recovered_attempts,
         "recovered_steps": recovered_steps,
         "recovered_cycles": recovered,
         "graph": result.graph,
@@ -925,6 +985,8 @@ def _load_workspace_document(workspace: Path) -> dict[str, Any]:
     _const(root["schema"], WORKSPACE_SCHEMA, "$.workspace.schema")
     _const(root["coordinate_contract"], COORDINATE_CONTRACT, "$.workspace.coordinate_contract")
     _sha256(root["canonical_reference_sha256"], "$.workspace.canonical_reference_sha256")
+    _sha256(root["input_identity_sha256"], "$.workspace.input_identity_sha256")
+    _sha256(root["setup_identity_sha256"], "$.workspace.setup_identity_sha256")
     _closed_object(root["preview_profile"], {"name", "sha256"}, "$.workspace.preview_profile")
     limits = _closed_object(
         root["limits"],
@@ -938,6 +1000,13 @@ def _load_workspace_document(workspace: Path) -> dict[str, Any]:
     }
     if limits != expected:
         _fail("budget_violation", "Workspace budget contract is unsupported")
+    for name, identity_field in (
+        ("input", "input_identity_sha256"),
+        ("setup", "setup_identity_sha256"),
+    ):
+        path = workspace / name
+        if not path.is_dir() or _path_digest(path) != root[identity_field]:
+            _fail("corrupt_workspace", f"{name} artifact digest mismatch")
     return dict(root)
 
 
@@ -949,12 +1018,59 @@ def _validate_staged_setup(stage: Path, expected: dict[str, Any]) -> None:
     _validate_tree_source(stage / "setup", "$.setup")
 
 
+def _prepare_step_evidence(
+    workspace: Path,
+    *,
+    step: int,
+    parent_step: int | None,
+    parent_observable_sha256: str | None,
+    candidate: Path,
+    candidate_mesh: str,
+    measurement: Path,
+    preview: Path,
+) -> _PreparedStepEvidence:
+    candidate = candidate.resolve()
+    preview = preview.resolve()
+    measurement = measurement.resolve()
+    _validate_tree_source(candidate, "$.candidate")
+    _validate_tree_source(preview, "$.preview")
+    mesh_path = _relative_member(candidate, candidate_mesh, "$.candidate_mesh")
+    measurement_document = _read_json(measurement, "$.measurement")
+    preview_document = _read_json(preview / "preview.json", "$.preview")
+    identities = _validate_step_evidence(
+        workspace,
+        _load_workspace_document(workspace),
+        step=step,
+        parent_step=parent_step,
+        parent_observable_sha256=parent_observable_sha256,
+        mesh_path=mesh_path,
+        measurement_path=measurement,
+        measurement=measurement_document,
+        preview_root=preview,
+        preview=preview_document,
+    )
+    return _PreparedStepEvidence(
+        candidate=candidate,
+        preview=preview,
+        measurement=measurement,
+        measurement_document=measurement_document,
+        identities=identities,
+    )
+
+
+def _copy_step_evidence(evidence: _PreparedStepEvidence, stage: Path) -> None:
+    shutil.copytree(evidence.candidate, stage / "candidate")
+    shutil.copytree(evidence.preview, stage / "preview")
+    shutil.copy2(evidence.measurement, stage / "measurement.json")
+
+
 def _validate_step_evidence(
     workspace: Path,
     experiment: Mapping[str, Any],
     *,
     step: int,
     parent_step: int | None,
+    parent_observable_sha256: str | None,
     mesh_path: Path,
     measurement_path: Path,
     measurement: Mapping[str, Any],
@@ -963,6 +1079,16 @@ def _validate_step_evidence(
 ) -> dict[str, str]:
     _validate_measurement_boundary(measurement, step=step, compare_to=parent_step)
     _validate_preview_boundary(preview, preview_root)
+    expected_no_op = (
+        parent_observable_sha256 is not None
+        and measurement["measurement"]["observable_sha256"]
+        == parent_observable_sha256
+    )
+    if measurement["no_observable_geometry_change"] is not expected_no_op:
+        _fail(
+            "identity_conflict",
+            "Observable Geometry no-op fact contradicts parent identity",
+        )
     candidate_sha = _file_sha256(mesh_path)
     reference_sha = experiment["canonical_reference_sha256"]
     profile = experiment["preview_profile"]
@@ -990,54 +1116,227 @@ def _validate_step_evidence(
 def _validate_measurement_boundary(
     value: Mapping[str, Any], *, step: int, compare_to: int | None
 ) -> None:
-    required = {
+    fields = {
         "schema",
         "coordinate_contract",
         "max_depth",
         "step",
         "compare_to",
+        "report",
         "canonical_reference",
         "measurement",
         "errors_by_depth",
         "exterior_surface",
+        "repair_targets",
         "objective_facts",
         "no_observable_geometry_change",
     }
-    if not isinstance(value, Mapping) or not required.issubset(value):
-        _fail("unsupported_or_invalid_voxblame_state", "measurement summary is incomplete")
-    if value["schema"] not in {"voxblame.measurement-summary/1", "voxblame.summary/1"}:
-        _fail("unsupported_or_invalid_voxblame_state", "measurement summary schema is unsupported")
+    root = _closed_voxblame_object(value, fields, "$.measurement")
+    if root["schema"] != "voxblame.summary/1":
+        _fail(
+            "unsupported_or_invalid_voxblame_state",
+            "Measured Steps require canonical voxblame.summary/1 evidence",
+        )
     if (
-        value["coordinate_contract"] != COORDINATE_CONTRACT
-        or value["max_depth"] != MAX_DEPTH
-        or value["step"] != step
-        or value["compare_to"] != compare_to
+        root["coordinate_contract"] != COORDINATE_CONTRACT
+        or root["max_depth"] != MAX_DEPTH
+        or root["step"] != step
+        or root["compare_to"] != compare_to
     ):
         _fail("parent_mismatch", "measurement ancestry or canonical frame conflicts")
-    reference = value["canonical_reference"]
-    measurement = value["measurement"]
-    if not isinstance(reference, Mapping) or not isinstance(measurement, Mapping):
-        _fail("unsupported_or_invalid_voxblame_state", "measurement identities are invalid")
-    _sha256(reference.get("canonical_reference_sha256"), "$.measurement.canonical_reference.canonical_reference_sha256")
-    for key in (
-        "candidate_mesh_sha256",
-        "interior_tree_sha256",
-        "exterior_snapshot_sha256",
-        "observable_sha256",
+    _relative_workspace_path(root["report"], "$.measurement.report")
+    reference = _closed_voxblame_object(
+        root["canonical_reference"],
+        {
+            "canonical_reference_sha256",
+            "reference_ply_sha256",
+            "triangle_set_sha256",
+            "interior_tree_sha256",
+        },
+        "$.measurement.canonical_reference",
+    )
+    measurement = _closed_voxblame_object(
+        root["measurement"],
+        {
+            "candidate_mesh_sha256",
+            "interior_tree_sha256",
+            "exterior_snapshot_sha256",
+            "observable_sha256",
+        },
+        "$.measurement.measurement",
+    )
+    for key, digest in (*reference.items(), *measurement.items()):
+        _sha256(digest, f"$.measurement.{key}")
+    errors = root["errors_by_depth"]
+    if not isinstance(errors, list) or len(errors) != MAX_DEPTH:
+        _fail(
+            "unsupported_or_invalid_voxblame_state",
+            "measurement must contain ordered depths 1 through 8",
+        )
+    depth_fields = {
+        "depth",
+        "reference_surface_count",
+        "candidate_surface_count",
+        "missing_surface_count",
+        "excess_surface_count",
+        "union_surface_count",
+        "surface_error_count",
+        "surface_error_rate",
+    }
+    for expected_depth, raw in enumerate(errors, start=1):
+        item = _closed_voxblame_object(
+            raw, depth_fields, f"$.measurement.errors_by_depth[{expected_depth - 1}]"
+        )
+        counts = {
+            key: item[key]
+            for key in depth_fields - {"depth", "surface_error_rate"}
+        }
+        if item["depth"] != expected_depth or any(
+            not isinstance(count, int) or isinstance(count, bool) or count < 0
+            for count in counts.values()
+        ):
+            _fail(
+                "unsupported_or_invalid_voxblame_state",
+                "measurement depth counts are invalid",
+            )
+        if (
+            item["missing_surface_count"] > item["reference_surface_count"]
+            or item["excess_surface_count"] > item["candidate_surface_count"]
+            or item["union_surface_count"]
+            != item["reference_surface_count"] + item["excess_surface_count"]
+            or item["union_surface_count"]
+            != item["candidate_surface_count"] + item["missing_surface_count"]
+            or item["surface_error_count"]
+            != item["missing_surface_count"] + item["excess_surface_count"]
+        ):
+            _fail(
+                "unsupported_or_invalid_voxblame_state",
+                "measurement depth set-count identities conflict",
+            )
+        rate = item["surface_error_rate"]
+        expected_rate = (
+            item["surface_error_count"] / item["union_surface_count"]
+            if item["union_surface_count"]
+            else 0.0
+        )
+        if (
+            not isinstance(rate, (int, float))
+            or isinstance(rate, bool)
+            or not math.isfinite(rate)
+            or not math.isclose(rate, expected_rate, rel_tol=0.0, abs_tol=1e-15)
+        ):
+            _fail(
+                "unsupported_or_invalid_voxblame_state",
+                "measurement depth error rate conflicts with counts",
+            )
+    exterior = _closed_voxblame_object(
+        root["exterior_surface"],
+        {
+            "storage_schema",
+            "path",
+            "logical_sha256",
+            "surface_present",
+            "surface_cell_count",
+            "bounds_canonical",
+            "centroid_canonical",
+            "nearest_overrun",
+            "farthest_overrun",
+            "outside_directions",
+            "diagnostic_grid_depth",
+            "coarsened",
+        },
+        "$.measurement.exterior_surface",
+    )
+    if exterior["storage_schema"] != "voxblame.exterior-snapshot/1":
+        _fail("unsupported_or_invalid_voxblame_state", "exterior schema is invalid")
+    _relative_workspace_path(exterior["path"], "$.measurement.exterior_surface.path")
+    _sha256(exterior["logical_sha256"], "$.measurement.exterior_surface.logical_sha256")
+    if exterior["logical_sha256"] != measurement["exterior_snapshot_sha256"]:
+        _fail("identity_conflict", "exterior snapshot identity conflicts")
+    present = exterior["surface_present"]
+    count = exterior["surface_cell_count"]
+    directions = exterior["outside_directions"]
+    if (
+        not isinstance(present, bool)
+        or not isinstance(count, int)
+        or isinstance(count, bool)
+        or count < 0
+        or not isinstance(directions, list)
+        or not isinstance(exterior["diagnostic_grid_depth"], int)
+        or not isinstance(exterior["coarsened"], bool)
     ):
-        _sha256(measurement.get(key), f"$.measurement.measurement.{key}")
-    errors = value["errors_by_depth"]
-    if not isinstance(errors, list) or [item.get("depth") for item in errors if isinstance(item, Mapping)] != list(range(1, 9)):
-        _fail("unsupported_or_invalid_voxblame_state", "measurement must contain ordered depths 1 through 8")
-    facts = value["objective_facts"]
+        _fail("unsupported_or_invalid_voxblame_state", "exterior evidence is invalid")
+    if present:
+        if count == 0 or not _valid_directions(directions):
+            _fail("unsupported_or_invalid_voxblame_state", "exterior presence conflicts")
+        _validate_bounds(exterior["bounds_canonical"], "$.measurement.exterior_surface.bounds_canonical")
+        _validate_vector3(exterior["centroid_canonical"], "$.measurement.exterior_surface.centroid_canonical")
+        nearest = _finite_number(exterior["nearest_overrun"], "$.measurement.exterior_surface.nearest_overrun")
+        farthest = _finite_number(exterior["farthest_overrun"], "$.measurement.exterior_surface.farthest_overrun")
+        if nearest < 0 or nearest > farthest:
+            _fail("unsupported_or_invalid_voxblame_state", "exterior overrun evidence is invalid")
+    elif count != 0 or directions or any(
+        exterior[key] is not None
+        for key in (
+            "bounds_canonical",
+            "centroid_canonical",
+            "nearest_overrun",
+            "farthest_overrun",
+        )
+    ):
+        _fail("unsupported_or_invalid_voxblame_state", "clear exterior evidence conflicts")
+    targets = _closed_voxblame_object(
+        root["repair_targets"],
+        {"ordering_profile", "total", "returned", "remaining", "offset", "next_offset", "items"},
+        "$.measurement.repair_targets",
+    )
+    if (
+        not isinstance(targets["ordering_profile"], str)
+        or not targets["ordering_profile"]
+        or any(
+            not isinstance(targets[key], int)
+            or isinstance(targets[key], bool)
+            or targets[key] < 0
+            for key in ("total", "returned", "remaining", "offset")
+        )
+        or targets["returned"] > 8
+        or not isinstance(targets["items"], list)
+        or len(targets["items"]) != targets["returned"]
+        or targets["returned"] + targets["remaining"]
+        != max(targets["total"] - targets["offset"], 0)
+        or targets["next_offset"]
+        != (targets["offset"] + targets["returned"] if targets["remaining"] else None)
+    ):
+        _fail("unsupported_or_invalid_voxblame_state", "repair target page is invalid")
+    for index, target in enumerate(targets["items"]):
+        _validate_summary_target(
+            target,
+            step=step,
+            expected_rank=targets["offset"] + index,
+            path=f"$.measurement.repair_targets.items[{index}]",
+        )
+    facts = root["objective_facts"]
     if not isinstance(facts, Mapping) or set(facts) != {
         "global_depth_8_zero",
         "out_of_frame_clear",
         "no_evidence_conflict",
     } or any(not isinstance(facts[key], bool) for key in facts):
         _fail("unsupported_or_invalid_voxblame_state", "measurement objective facts are invalid")
-    if not isinstance(value["no_observable_geometry_change"], bool):
+    depth_eight = errors[-1]
+    expected_zero = (
+        depth_eight["missing_surface_count"] == 0
+        and depth_eight["excess_surface_count"] == 0
+    )
+    if facts["global_depth_8_zero"] is not expected_zero:
+        _fail("identity_conflict", "global depth-8 fact contradicts evidence")
+    if facts["out_of_frame_clear"] is present:
+        _fail("identity_conflict", "out-of-frame fact contradicts exterior evidence")
+    if not facts["no_evidence_conflict"]:
+        _fail("identity_conflict", "conflicting measurement evidence cannot publish")
+    if not isinstance(root["no_observable_geometry_change"], bool):
         _fail("unsupported_or_invalid_voxblame_state", "measurement no-op fact is invalid")
+    if step == 0 and root["no_observable_geometry_change"]:
+        _fail("parent_mismatch", "Step 0 cannot be an Observable Geometry no-op")
 
 
 def _validate_preview_boundary(value: Mapping[str, Any], root: Path) -> None:
@@ -1069,12 +1368,184 @@ def _validate_preview_boundary(value: Mapping[str, Any], root: Path) -> None:
     if not isinstance(identity, Mapping) or set(identity) != {"name", "sha256"}:
         _fail("invalid_preview", "preview profile experiment identity is invalid")
     _sha256(value["preview_identity_sha256"], "$.preview.preview_identity_sha256")
+    identity_source = dict(value)
+    identity = identity_source.pop("preview_identity_sha256")
+    expected_identity = hashlib.sha256(
+        b"voxblame.preview/1\0" + _json_bytes(identity_source)
+    ).hexdigest()
+    if identity != expected_identity:
+        _fail("corrupt_workspace", "formal preview identity digest mismatch")
     image = value["image"]
     if not isinstance(image, Mapping) or image.get("path") != "preview.png":
         _fail("invalid_preview", "preview image path is invalid")
     _sha256(image.get("sha256"), "$.preview.image.sha256")
     if _file_sha256(root / "preview.png") != image["sha256"]:
         _fail("corrupt_workspace", "preview PNG digest mismatch")
+
+
+def _closed_voxblame_object(
+    value: Any, fields: set[str], path: str
+) -> Mapping[str, Any]:
+    if not isinstance(value, Mapping) or set(value) != fields:
+        _fail(
+            "unsupported_or_invalid_voxblame_state",
+            "canonical VoxBlame object fields are invalid",
+            path,
+        )
+    return value
+
+
+def _relative_workspace_path(value: Any, path: str) -> None:
+    if not isinstance(value, str):
+        _fail("unsupported_or_invalid_voxblame_state", "path must be relative", path)
+    pure = PurePosixPath(value)
+    if pure.is_absolute() or not pure.parts or any(part in {"", ".", ".."} for part in pure.parts):
+        _fail("unsupported_or_invalid_voxblame_state", "path must be relative", path)
+
+
+def _validate_summary_target(
+    value: Any, *, step: int, expected_rank: int, path: str
+) -> None:
+    target = _closed_voxblame_object(
+        value,
+        {
+            "target_key",
+            "source_step",
+            "kind",
+            "display_rank",
+            "bounds_canonical",
+            "error_profile",
+            "mask",
+            "component",
+            "exterior",
+        },
+        path,
+    )
+    if (
+        not isinstance(target["target_key"], str)
+        or not target["target_key"].startswith(f"step-{step:06d}:")
+        or target["source_step"] != step
+        or target["display_rank"] != expected_rank
+        or target["kind"] not in {"interior", "exterior"}
+    ):
+        _fail("unsupported_or_invalid_voxblame_state", "repair target identity is invalid", path)
+    _validate_bounds(target["bounds_canonical"], f"{path}.bounds_canonical")
+    profile = _closed_voxblame_object(
+        target["error_profile"],
+        {"missing_surface_count", "excess_surface_count", "surface_error_count"},
+        f"{path}.error_profile",
+    )
+    if any(
+        not isinstance(profile[key], int)
+        or isinstance(profile[key], bool)
+        or profile[key] < 0
+        for key in profile
+    ) or profile["surface_error_count"] != (
+        profile["missing_surface_count"] + profile["excess_surface_count"]
+    ):
+        _fail("unsupported_or_invalid_voxblame_state", "repair target error profile is invalid", path)
+    mask = _closed_voxblame_object(
+        target["mask"],
+        {"storage_schema", "logical_sha256", "region_count"},
+        f"{path}.mask",
+    )
+    expected_mask_schema = (
+        "octree_region_set/1"
+        if target["kind"] == "interior"
+        else "exterior_grid_region_set/1"
+    )
+    if (
+        mask["storage_schema"] != expected_mask_schema
+        or not isinstance(mask["region_count"], int)
+        or isinstance(mask["region_count"], bool)
+        or mask["region_count"] < 1
+    ):
+        _fail("unsupported_or_invalid_voxblame_state", "repair target mask is invalid", path)
+    _sha256(mask["logical_sha256"], f"{path}.mask.logical_sha256")
+    component = _closed_voxblame_object(
+        target["component"],
+        {"component_key", "split_index", "split_count", "split_reason"},
+        f"{path}.component",
+    )
+    if (
+        not isinstance(component["component_key"], str)
+        or not component["component_key"]
+        or not isinstance(component["split_reason"], str)
+        or not component["split_reason"]
+        or not isinstance(component["split_index"], int)
+        or isinstance(component["split_index"], bool)
+        or component["split_index"] < 0
+        or not isinstance(component["split_count"], int)
+        or isinstance(component["split_count"], bool)
+        or component["split_count"] < 1
+        or component["split_index"] >= component["split_count"]
+    ):
+        _fail("unsupported_or_invalid_voxblame_state", "repair target component is invalid", path)
+    if target["kind"] == "interior":
+        if target["exterior"] is not None:
+            _fail("unsupported_or_invalid_voxblame_state", "interior target has exterior evidence", path)
+        return
+    exterior = _closed_voxblame_object(
+        target["exterior"],
+        {
+            "centroid_canonical",
+            "surface_cell_count",
+            "nearest_overrun",
+            "farthest_overrun",
+            "outside_directions",
+            "diagnostic_grid_depth",
+            "coarsened",
+        },
+        f"{path}.exterior",
+    )
+    _validate_vector3(exterior["centroid_canonical"], f"{path}.exterior.centroid_canonical")
+    if (
+        not isinstance(exterior["surface_cell_count"], int)
+        or isinstance(exterior["surface_cell_count"], bool)
+        or exterior["surface_cell_count"] < 1
+        or not _valid_directions(exterior["outside_directions"])
+        or not isinstance(exterior["diagnostic_grid_depth"], int)
+        or isinstance(exterior["diagnostic_grid_depth"], bool)
+        or not isinstance(exterior["coarsened"], bool)
+    ):
+        _fail("unsupported_or_invalid_voxblame_state", "exterior target evidence is invalid", path)
+    nearest = _finite_number(exterior["nearest_overrun"], f"{path}.exterior.nearest_overrun")
+    farthest = _finite_number(exterior["farthest_overrun"], f"{path}.exterior.farthest_overrun")
+    if nearest < 0 or nearest > farthest:
+        _fail("unsupported_or_invalid_voxblame_state", "exterior overrun evidence is invalid", path)
+
+
+def _validate_bounds(value: Any, path: str) -> None:
+    bounds = _closed_voxblame_object(value, {"min", "max"}, path)
+    minimum = _validate_vector3(bounds["min"], f"{path}.min")
+    maximum = _validate_vector3(bounds["max"], f"{path}.max")
+    if any(lower > upper for lower, upper in zip(minimum, maximum, strict=True)):
+        _fail("unsupported_or_invalid_voxblame_state", "bounds are inverted", path)
+
+
+def _validate_vector3(value: Any, path: str) -> tuple[float, float, float]:
+    if not isinstance(value, list) or len(value) != 3:
+        _fail("unsupported_or_invalid_voxblame_state", "expected a 3-vector", path)
+    return tuple(_finite_number(item, path) for item in value)  # type: ignore[return-value]
+
+
+def _finite_number(value: Any, path: str) -> float:
+    if (
+        not isinstance(value, (int, float))
+        or isinstance(value, bool)
+        or not math.isfinite(value)
+    ):
+        _fail("unsupported_or_invalid_voxblame_state", "expected a finite number", path)
+    return float(value)
+
+
+def _valid_directions(value: Any) -> bool:
+    return (
+        isinstance(value, list)
+        and bool(value)
+        and len(value) == len(set(value))
+        and all(item in {"-x", "+x", "-y", "+y", "-z", "+z"} for item in value)
+    )
 
 
 def _validate_step_directory(workspace: Path, root: Path, *, expected_step: int) -> dict[str, Any]:
@@ -1120,11 +1591,22 @@ def _validate_step_directory(workspace: Path, root: Path, *, expected_step: int)
     if candidate_mesh_rel is None:
         _fail("corrupt_workspace", "Measured Step candidate mesh is missing")
     experiment = _load_workspace_document(workspace)
+    parent_observable = None
+    if document["parent_step"] is not None:
+        parent_document = _read_json(
+            workspace
+            / "steps"
+            / f"{document['parent_step']:06d}"
+            / "step.json",
+            "$.step.parent",
+        )
+        parent_observable = parent_document.get("observable_sha256")
     identities = _validate_step_evidence(
         workspace,
         experiment,
         step=expected_step,
         parent_step=document["parent_step"],
+        parent_observable_sha256=parent_observable,
         mesh_path=root / candidate_mesh_rel,
         measurement_path=workspace / document["measurement_path"],
         measurement=measurement,
@@ -1139,6 +1621,18 @@ def _validate_step_directory(workspace: Path, root: Path, *, expected_step: int)
     if expected_step == 0:
         if document["parent_step"] is not None or document["cycle"] is not None:
             _fail("parent_mismatch", "Measured Step 0 cannot have a parent or cycle")
+        successful_attempt = _read_json(root / "attempt.json", "$.step.attempt")
+        successful_attempt = _closed_object(
+            successful_attempt, _ACTIVE_ATTEMPT_FIELDS, "$.step.attempt"
+        )
+        if (
+            document["attempt_ids"] != [successful_attempt["attempt"]]
+            or successful_attempt["result"] != "measured_step_published"
+            or successful_attempt["intended_cycle"] is not None
+            or successful_attempt["intended_step"] != 0
+            or successful_attempt["from_step"] is not None
+        ):
+            _fail("parent_mismatch", "Step 0 successful Attempt ancestry conflicts")
     elif (
         not isinstance(document["parent_step"], int)
         or document["parent_step"] < 0
@@ -1265,7 +1759,7 @@ def _build_graph(workspace: Path, *, validate_steps: bool) -> dict[str, Any]:
     for item in failed_attempts:
         step = item["intended_step"]
         attempt_ids_by_step.setdefault(step, set()).add(item["attempt"])
-        if item["result"] == "tool_failure":
+        if item["result"] == TOOL_FAILURE_RESULT:
             tool_failure_counts[step] = tool_failure_counts.get(step, 0) + 1
     for item in steps:
         manifest = _read_json(
@@ -1304,40 +1798,73 @@ def _build_graph(workspace: Path, *, validate_steps: bool) -> dict[str, Any]:
 
 def _validate_git_evidence(workspace: Path, graph: Mapping[str, Any]) -> None:
     _require_git_root(workspace)
-    setup_messages = _git(
-        workspace, "log", "--format=%B", "--", "workspace.json"
-    ).stdout
-    if f"Workspace-Schema: {WORKSPACE_SCHEMA}" not in setup_messages:
-        _fail("missing_git_evidence", "Git metadata is missing Workspace setup identity")
+    workspace_document = _load_workspace_document(workspace)
+    workspace_identity = _identity(WORKSPACE_SCHEMA, workspace_document)
+    _require_current_commit_trailers(
+        workspace,
+        "workspace.json",
+        {
+            "Workspace-Schema": WORKSPACE_SCHEMA,
+            "Workspace-Id": workspace_document["workspace_id"],
+            "Canonical-Reference-SHA256": workspace_document[
+                "canonical_reference_sha256"
+            ],
+            "Workspace-SHA256": workspace_identity,
+            "Input-SHA256": workspace_document["input_identity_sha256"],
+            "Setup-SHA256": workspace_document["setup_identity_sha256"],
+        },
+    )
     for step in graph["steps"]:
-        trailer = f"Workspace-Step: {step['step']}"
-        messages = _git(
-            workspace, "log", "--format=%B", "--", f"steps/{step['step']:06d}"
-        ).stdout
-        if trailer not in messages:
-            _fail("missing_git_evidence", f"Git metadata is missing {trailer}")
+        document = _read_json(
+            workspace / "steps" / f"{step['step']:06d}" / "step.json",
+            "$.git.step",
+        )
+        _require_current_commit_trailers(
+            workspace,
+            f"steps/{step['step']:06d}/step.json",
+            {
+                "Workspace-Step": str(step["step"]),
+                "Candidate-SHA256": document["candidate_mesh_sha256"],
+                "Observable-SHA256": document["observable_sha256"],
+                "Preview-SHA256": document["preview_identity_sha256"],
+                "Step-SHA256": document["identity_sha256"],
+                "Workspace-SHA256": workspace_identity,
+            },
+        )
     for attempt in graph["failed_attempts"]:
-        trailer = f"Workspace-Attempt: {attempt['attempt']}"
-        messages = _git(
+        document = _read_json(
+            workspace / "attempts" / f"{attempt['attempt']:06d}" / "attempt.json",
+            "$.git.attempt",
+        )
+        _require_current_commit_trailers(
             workspace,
-            "log",
-            "--format=%B",
-            "--",
-            f"attempts/{attempt['attempt']:06d}",
-        ).stdout
-        if trailer not in messages:
-            _fail("missing_git_evidence", f"Git metadata is missing {trailer}")
+            f"attempts/{attempt['attempt']:06d}/attempt.json",
+            {
+                "Workspace-Attempt": str(attempt["attempt"]),
+                "Intended-Step": str(document["intended_step"]),
+                "Attempt-Result": document["result"],
+                "Plan-SHA256": document["plan_digest"],
+                "Attempt-SHA256": document["identity_sha256"],
+                "Workspace-SHA256": workspace_identity,
+            },
+        )
     for cycle in graph["cycles"]:
-        trailer = f"Repair-Cycle: {cycle['cycle']}"
-        messages = _git(
+        document = _read_json(
+            workspace / "cycles" / f"{cycle['cycle']:06d}" / "cycle.json",
+            "$.git.cycle",
+        )
+        _require_current_commit_trailers(
             workspace,
-            "log",
-            "--format=%B",
-            "--",
-            f"cycles/{cycle['cycle']:06d}",
-        ).stdout
-        if trailer not in messages:
-            _fail("missing_git_evidence", f"Git metadata is missing {trailer}")
+            f"cycles/{cycle['cycle']:06d}/cycle.json",
+            {
+                "Repair-Cycle": str(cycle["cycle"]),
+                "Workspace-Step": str(document["to_step"]),
+                "From-Step": str(document["from_step"]),
+                "Plan-SHA256": document["plan_digest"],
+                "Cycle-SHA256": document["identity_sha256"],
+                "Workspace-SHA256": workspace_identity,
+            },
+        )
     tracked = _git(workspace, "ls-files", "-s").stdout
     for line in tracked.splitlines():
         path = line.split("\t", 1)[-1]
@@ -1345,6 +1872,31 @@ def _validate_git_evidence(workspace: Path, graph: Mapping[str, Any]) -> None:
             attr = _git(workspace, "check-attr", "filter", "--", path).stdout.strip()
             if not attr.endswith(": lfs"):
                 _fail("lfs_contract_violation", f"LFS filter is not active for {path}")
+
+
+def _require_current_commit_trailers(
+    workspace: Path, path: str, expected: Mapping[str, str]
+) -> None:
+    result = _git(
+        workspace,
+        "log",
+        "-1",
+        "--format=%B",
+        "--",
+        path,
+        check=False,
+    )
+    lines = set(result.stdout.splitlines()) if result.returncode == 0 else set()
+    missing = [
+        f"{key}: {value}"
+        for key, value in expected.items()
+        if f"{key}: {value}" not in lines
+    ]
+    if missing:
+        _fail(
+            "missing_git_evidence",
+            f"current publishing commit for {path} is missing {missing[0]}",
+        )
 
 
 def _accepted(measurement: Mapping[str, Any]) -> bool:
@@ -1416,11 +1968,9 @@ def _commit_protocol_paths(
     trailers: Mapping[str, str],
     *,
     allow_noop: bool = False,
+    allow_existing_protocol_staging: bool = False,
 ) -> bool:
-    _reject_staged_changes(workspace)
     normalized = sorted(set(paths))
-    _git(workspace, "add", "--", *normalized)
-    staged = set(_git(workspace, "diff", "--cached", "--name-only").stdout.splitlines())
     allowed_files: set[str] = set()
     for declared in normalized:
         path = workspace / declared
@@ -1432,6 +1982,16 @@ def _commit_protocol_paths(
             )
         elif path.exists():
             allowed_files.add(declared)
+    existing_staged = set(
+        _git(workspace, "diff", "--cached", "--name-only").stdout.splitlines()
+    )
+    if existing_staged and (
+        not allow_existing_protocol_staging
+        or not existing_staged.issubset(allowed_files)
+    ):
+        _fail("git_scope_violation", "Workspace refuses pre-existing staged paths")
+    _git(workspace, "add", "--", *normalized)
+    staged = set(_git(workspace, "diff", "--cached", "--name-only").stdout.splitlines())
     if not staged and allow_noop:
         return False
     if not staged or not staged.issubset(allowed_files):
@@ -1527,11 +2087,7 @@ def _validate_published_attempt(root: Path, *, expected_attempt: int) -> dict[st
     document = _closed_object(value, _PUBLISHED_ATTEMPT_FIELDS, "$.attempt")
     if document["schema"] != ATTEMPT_SCHEMA or document["attempt"] != expected_attempt:
         _fail("corrupt_workspace", "Attempt identity mismatch")
-    if document["result"] not in {
-        "tool_failure",
-        "strategy_changed",
-        "no_feasible_strategy",
-    }:
+    if document["result"] not in FAILED_ATTEMPT_RESULTS:
         _fail("corrupt_workspace", "Attempt result is unsupported")
     identity_document = dict(document)
     identity = identity_document.pop("identity_sha256")
@@ -1565,7 +2121,7 @@ def _validate_published_attempt(root: Path, *, expected_attempt: int) -> dict[st
     commands = _load_command_documents(root)
     if document["command_ids"] != [item["command"] for item in commands]:
         _fail("corrupt_workspace", "Attempt command index mismatch")
-    if document["result"] == "tool_failure" and not any(
+    if document["result"] == TOOL_FAILURE_RESULT and not any(
         item["exit_code"] != 0 for item in commands
     ):
         _fail("corrupt_workspace", "tool_failure has no failing command")
@@ -1602,6 +2158,18 @@ def _redact_argv(argv: list[str]) -> list[str]:
         if lowered.startswith("authorization:"):
             redacted.append("Authorization: <redacted>")
             continue
+        header_assignment = next(
+            (
+                prefix
+                for prefix in ("--header=", "-h=", "-h")
+                if lowered.startswith(prefix + "authorization:")
+            ),
+            None,
+        )
+        if header_assignment is not None:
+            original_prefix = value[: len(header_assignment)]
+            redacted.append(original_prefix + "Authorization: <redacted>")
+            continue
         redacted.append(value)
         if lowered in _SECRET_ARGUMENTS:
             hide_next = True
@@ -1630,14 +2198,12 @@ def _bounded_log(data: bytes) -> tuple[bytes, dict[str, Any]]:
 
 def _check_attempt_budget(workspace: Path, intended_step: int) -> None:
     attempts = 0
-    tool_failures = 0
     attempts_root = workspace / "attempts"
     if attempts_root.exists():
         for path in attempts_root.glob("[0-9][0-9][0-9][0-9][0-9][0-9]/attempt.json"):
             value = _read_json(path, "$.attempt")
             if value.get("intended_step") == intended_step:
                 attempts += 1
-                tool_failures += value.get("result") == "tool_failure"
     active_root = workspace / "work/attempts"
     if active_root.exists():
         for path in active_root.glob("[0-9][0-9][0-9][0-9][0-9][0-9]/attempt.json"):
@@ -1646,8 +2212,21 @@ def _check_attempt_budget(workspace: Path, intended_step: int) -> None:
                 attempts += 1
     if attempts >= MAX_ATTEMPTS_PER_STEP:
         _fail("budget_violation", "intended step has exhausted its three attempts")
-    if tool_failures >= MAX_TOOL_FAILURES_PER_STEP:
-        _fail("budget_violation", "intended step has exhausted its two tool failures")
+
+
+def _published_tool_failure_count(workspace: Path, intended_step: int) -> int:
+    attempts_root = workspace / "attempts"
+    if not attempts_root.exists():
+        return 0
+    return sum(
+        1
+        for path in attempts_root.glob("[0-9][0-9][0-9][0-9][0-9][0-9]/attempt.json")
+        if (
+            (value := _read_json(path, "$.attempt")).get("intended_step")
+            == intended_step
+            and value.get("result") == TOOL_FAILURE_RESULT
+        )
+    )
 
 
 def _next_attempt_id(workspace: Path) -> int:
@@ -1818,10 +2397,6 @@ def _recover_cycle_transaction(workspace: Path, transaction: Path) -> int:
         cycle_target.parent.mkdir(exist_ok=True)
         cycle_stage.rename(cycle_target)
 
-    (transaction / "transaction.json").unlink()
-    if any(transaction.iterdir()):
-        _fail("unknown_staged_state", "transaction contains unknown recovery files")
-    transaction.rmdir()
     graph = rebuild_index(workspace, validate=False)
     cycle_document = _read_json(cycle_target / "cycle.json", "$.recovery.cycle")
     step_document = _read_json(step_target / "step.json", "$.recovery.step")
@@ -1843,9 +2418,18 @@ def _recover_cycle_transaction(workspace: Path, transaction: Path) -> int:
             "Plan-SHA256": cycle_document["plan_digest"],
             "Candidate-SHA256": step_document["candidate_mesh_sha256"],
             "Observable-SHA256": step_document["observable_sha256"],
+            "Preview-SHA256": step_document["preview_identity_sha256"],
+            "Step-SHA256": step_document["identity_sha256"],
+            "Cycle-SHA256": cycle_document["identity_sha256"],
+            "Workspace-SHA256": _workspace_identity(workspace),
         },
         allow_noop=True,
+        allow_existing_protocol_staging=True,
     )
+    (transaction / "transaction.json").unlink()
+    if any(transaction.iterdir()):
+        _fail("unknown_staged_state", "transaction contains unknown recovery files")
+    transaction.rmdir()
     active = workspace / "work/attempts" / f"{cycle_document['attempt_ids'][-1]:06d}"
     if active.exists():
         shutil.rmtree(active)
@@ -1853,6 +2437,76 @@ def _recover_cycle_transaction(workspace: Path, transaction: Path) -> int:
     if graph["budget"]["completed_cycles"] < cycle:
         _fail("incomplete_transaction", "recovered cycle is absent from graph")
     return cycle
+
+
+def _recover_attempt_transaction(workspace: Path, transaction: Path) -> int:
+    marker = _read_json(transaction / "transaction.json", "$.transaction")
+    root = _closed_object(
+        marker,
+        {"schema", "kind", "attempt", "attempt_identity_sha256"},
+        "$.transaction",
+    )
+    if (
+        root["schema"] != "mesh-to-cad.transaction/1"
+        or root["kind"] != "attempt"
+        or not isinstance(root["attempt"], int)
+        or isinstance(root["attempt"], bool)
+        or root["attempt"] <= 0
+    ):
+        _fail("unknown_staged_state", "Attempt transaction marker is unsupported")
+    _sha256(root["attempt_identity_sha256"], "$.transaction.attempt_identity_sha256")
+    attempt = root["attempt"]
+    target = workspace / "attempts" / f"{attempt:06d}"
+    staged = transaction / "attempt"
+    if target.exists():
+        published = _read_json(target / "attempt.json", "$.recovery.attempt")
+        if published.get("identity_sha256") != root["attempt_identity_sha256"]:
+            _fail("identity_conflict", "published Attempt conflicts with transaction")
+        _validate_published_attempt(target, expected_attempt=attempt)
+        if staged.exists():
+            staged_document = _read_json(
+                staged / "attempt.json", "$.recovery.attempt"
+            )
+            if staged_document.get("identity_sha256") != root[
+                "attempt_identity_sha256"
+            ]:
+                _fail("identity_conflict", "staged Attempt conflicts with transaction")
+            shutil.rmtree(staged)
+    else:
+        if not staged.is_dir():
+            _fail("incomplete_transaction", "transaction cannot recover its Attempt")
+        document = _validate_published_attempt(staged, expected_attempt=attempt)
+        if document["identity_sha256"] != root["attempt_identity_sha256"]:
+            _fail("identity_conflict", "staged Attempt identity conflicts")
+        target.parent.mkdir(exist_ok=True)
+        staged.rename(target)
+    graph = rebuild_index(workspace, validate=False)
+    document = _read_json(target / "attempt.json", "$.recovery.attempt")
+    _commit_protocol_paths(
+        workspace,
+        [f"attempts/{attempt:06d}", "step_index.json"],
+        f"attempt {attempt}: recover {document['result']}",
+        {
+            "Workspace-Attempt": str(attempt),
+            "Intended-Step": str(document["intended_step"]),
+            "Attempt-Result": document["result"],
+            "Plan-SHA256": document["plan_digest"],
+            "Attempt-SHA256": document["identity_sha256"],
+            "Workspace-SHA256": _workspace_identity(workspace),
+        },
+        allow_noop=True,
+        allow_existing_protocol_staging=True,
+    )
+    active = workspace / "work/attempts" / f"{attempt:06d}"
+    if active.exists():
+        shutil.rmtree(active)
+    (transaction / "transaction.json").unlink()
+    if any(transaction.iterdir()):
+        _fail("unknown_staged_state", "Attempt transaction contains unknown files")
+    transaction.rmdir()
+    if not any(item["attempt"] == attempt for item in graph["failed_attempts"]):
+        _fail("incomplete_transaction", "recovered Attempt is absent from graph")
+    return attempt
 
 
 def _recover_setup_transaction(workspace: Path, transaction: Path) -> None:
@@ -1894,10 +2548,6 @@ def _recover_setup_transaction(workspace: Path, transaction: Path) -> None:
         != root["workspace_identity_sha256"]
     ):
         _fail("identity_conflict", "setup transaction identity conflicts")
-    (transaction / "transaction.json").unlink()
-    if any(transaction.iterdir()):
-        _fail("unknown_staged_state", "setup transaction contains unknown files")
-    transaction.rmdir()
     graph = rebuild_index(workspace, validate=False)
     _commit_protocol_paths(
         workspace,
@@ -1917,9 +2567,17 @@ def _recover_setup_transaction(workspace: Path, transaction: Path) -> None:
             "Canonical-Reference-SHA256": workspace_document[
                 "canonical_reference_sha256"
             ],
+            "Workspace-SHA256": _identity(WORKSPACE_SCHEMA, workspace_document),
+            "Input-SHA256": workspace_document["input_identity_sha256"],
+            "Setup-SHA256": workspace_document["setup_identity_sha256"],
         },
         allow_noop=True,
+        allow_existing_protocol_staging=True,
     )
+    (transaction / "transaction.json").unlink()
+    if any(transaction.iterdir()):
+        _fail("unknown_staged_state", "setup transaction contains unknown files")
+    transaction.rmdir()
     if graph["steps"]:
         _fail("identity_conflict", "setup recovery unexpectedly contains steps")
 
@@ -1964,10 +2622,6 @@ def _recover_step_zero_transaction(workspace: Path, transaction: Path) -> int:
             _fail("identity_conflict", "staged Step 0 identity conflicts")
         target.parent.mkdir(exist_ok=True)
         staged.rename(target)
-    (transaction / "transaction.json").unlink()
-    if any(transaction.iterdir()):
-        _fail("unknown_staged_state", "Step 0 transaction contains unknown files")
-    transaction.rmdir()
     graph = rebuild_index(workspace, validate=False)
     document = _read_json(target / "step.json", "$.recovery.step")
     measurement = workspace / document["measurement_path"]
@@ -1980,9 +2634,17 @@ def _recover_step_zero_transaction(workspace: Path, transaction: Path) -> int:
             "Workspace-Attempt": str(root["attempt"]),
             "Candidate-SHA256": document["candidate_mesh_sha256"],
             "Observable-SHA256": document["observable_sha256"],
+            "Preview-SHA256": document["preview_identity_sha256"],
+            "Step-SHA256": document["identity_sha256"],
+            "Workspace-SHA256": _workspace_identity(workspace),
         },
         allow_noop=True,
+        allow_existing_protocol_staging=True,
     )
+    (transaction / "transaction.json").unlink()
+    if any(transaction.iterdir()):
+        _fail("unknown_staged_state", "Step 0 transaction contains unknown files")
+    transaction.rmdir()
     active = workspace / "work/attempts" / f"{root['attempt']:06d}"
     if active.exists():
         shutil.rmtree(active)
@@ -2122,6 +2784,20 @@ def _validate_cycle_directory(
 ) -> dict[str, Any]:
     value = _read_json(root / "cycle.json", f"$.cycles[{expected_cycle}]")
     document = _closed_object(value, _CYCLE_FIELDS, f"$.cycles[{expected_cycle}]")
+    attempt_ids = document["attempt_ids"]
+    if (
+        not isinstance(attempt_ids, list)
+        or not attempt_ids
+        or len(attempt_ids) > MAX_ATTEMPTS_PER_STEP
+        or len(set(attempt_ids)) != len(attempt_ids)
+        or any(
+            not isinstance(attempt_id, int)
+            or isinstance(attempt_id, bool)
+            or attempt_id <= 0
+            for attempt_id in attempt_ids
+        )
+    ):
+        _fail("budget_violation", "Repair Cycle Attempt identities are invalid")
     if (
         document["schema"] != CYCLE_SCHEMA
         or document["cycle"] != expected_cycle
@@ -2141,6 +2817,32 @@ def _validate_cycle_directory(
     )
     if parent["observable_sha256"] != document["from_observable_sha256"]:
         _fail("identity_conflict", "Repair Cycle parent Observable Geometry conflicts")
+    successful_attempt = _read_json(root / "attempt.json", "$.cycle.attempt")
+    successful_attempt = _closed_object(
+        successful_attempt, _ACTIVE_ATTEMPT_FIELDS, "$.cycle.attempt"
+    )
+    if (
+        successful_attempt["result"] != "repair_cycle_published"
+        or successful_attempt["attempt"] != document["attempt_ids"][-1]
+        or successful_attempt["intended_cycle"] != document["cycle"]
+        or successful_attempt["intended_step"] != document["to_step"]
+        or successful_attempt["from_step"] != document["from_step"]
+        or successful_attempt["plan_digest"] != document["plan_digest"]
+    ):
+        _fail("parent_mismatch", "successful Attempt ancestry conflicts with Cycle")
+    for attempt_id in document["attempt_ids"][:-1]:
+        attempt_document = _read_json(
+            workspace / "attempts" / f"{attempt_id:06d}" / "attempt.json",
+            "$.cycle.failed_attempt",
+        )
+        if (
+            attempt_document.get("attempt") != attempt_id
+            or attempt_document.get("intended_step") != document["to_step"]
+            or attempt_document.get("from_step") != document["from_step"]
+            or attempt_document.get("plan_digest") != document["plan_digest"]
+            or attempt_document.get("result") not in FAILED_ATTEMPT_RESULTS
+        ):
+            _fail("parent_mismatch", "failed Attempt ancestry conflicts with Cycle")
     identity_document = dict(document)
     identity = identity_document.pop("identity_sha256")
     if identity != _identity(CYCLE_SCHEMA, identity_document):
@@ -2199,14 +2901,22 @@ def _validate_cycle_directory(
 
 
 def _cycle_attempt_ids(
-    workspace: Path, intended_step: int, successful_attempt: int
+    workspace: Path,
+    intended_step: int,
+    from_step: int,
+    plan_digest: str,
+    successful_attempt: int,
 ) -> list[int]:
     ids: list[int] = []
     attempts_root = workspace / "attempts"
     if attempts_root.exists():
         for path in sorted(attempts_root.glob("*/attempt.json")):
             value = _read_json(path, "$.attempt")
-            if value.get("intended_step") == intended_step:
+            if (
+                value.get("intended_step") == intended_step
+                and value.get("from_step") == from_step
+                and value.get("plan_digest") == plan_digest
+            ):
                 ids.append(value["attempt"])
     ids.append(successful_attempt)
     if len(ids) > MAX_ATTEMPTS_PER_STEP:
@@ -2238,8 +2948,8 @@ def _path_digest(path: Path) -> str:
     return hashlib.sha256(_json_bytes({"files": document})).hexdigest()
 
 
-def _graph_heads(graph: Mapping[str, Any]) -> list[int]:
-    return list(graph["heads"])
+def _workspace_identity(workspace: Path) -> str:
+    return _identity(WORKSPACE_SCHEMA, _load_workspace_document(workspace))
 
 
 def _heads_from_steps(steps: list[dict[str, Any]]) -> list[int]:
