@@ -266,8 +266,8 @@ export default function CadRenderPane({
   drawingThicknessScale = 1,
   planMode = false,
   bendAxisX = null,
-  bendAngleDeg = 0,
-  bendDirection = "up",
+  bendAnglesRad = null,
+  onCameraZoomPercentChange = null,
   viewPlaneOffsetRight = 16,
   viewerMode,
   assemblyPickingActive = false,
@@ -384,9 +384,9 @@ export default function CadRenderPane({
     left: `calc(${Math.max(Number(viewportFrameInsets?.left) || 0, 0)}px + 0.75rem)`,
     top: `calc(${Math.max(Number(viewportFrameInsets?.top) || 0, 0)}px + 0.75rem)`
   };
-  const ctaMode = !dxfMode && !meshOnlyMode && drawToolActive
+  const ctaMode = !meshOnlyMode && drawToolActive
     ? "screenshot"
-    : !dxfMode && !meshOnlyMode && selectionCount > 0
+    : !meshOnlyMode && selectionCount > 0
       ? "selection"
       : "";
   const bottomOverlayStyle = {
@@ -483,8 +483,8 @@ export default function CadRenderPane({
           drawingThicknessScale={drawingThicknessScale}
           planMode={planMode}
           bendAxisX={bendAxisX}
-          bendAngleDeg={bendAngleDeg}
-          bendDirection={bendDirection}
+          bendAnglesRad={bendAnglesRad}
+          onCameraZoomPercentChange={onCameraZoomPercentChange}
           perspective={viewerPerspective}
           projection={cadProjection}
           perspectiveRef={viewerPerspectiveRef}
@@ -522,26 +522,26 @@ export default function CadRenderPane({
             })}
           panToolActive={panToolActive}
           renderPartsIndividually={urdfMode ? true : (renderPartsIndividually || Boolean(resolvedStepParameters?.definition))}
-          pickableParts={dxfMode || urdfMode || meshOnlyMode ? EMPTY_LIST : assemblyParts}
-          hiddenPartIds={dxfMode || meshOnlyMode ? [] : hiddenPartIds}
-          selectedPartIds={dxfMode || meshOnlyMode ? [] : selectedPartIds}
-          hoveredPartId={dxfMode || meshOnlyMode ? "" : hoveredPartId}
-          assemblyMates={dxfMode || meshOnlyMode ? [] : assemblyMates}
-          selectedMateIds={dxfMode || meshOnlyMode ? [] : selectedMateIds}
-          hoveredMateId={dxfMode || meshOnlyMode ? "" : hoveredMateId}
-          hoveredReferenceId={dxfMode || meshOnlyMode ? "" : hoveredReferenceId}
-          selectedReferenceIds={dxfMode || meshOnlyMode ? [] : selectedReferenceIds}
-          selectorRuntime={dxfMode || meshOnlyMode ? null : selectorRuntime}
-          displayEdgeRuntime={dxfMode || meshOnlyMode ? null : displayEdgeRuntime}
-          stepParameters={dxfMode || meshOnlyMode ? null : resolvedStepParameters}
-          pickableFaces={dxfMode || meshOnlyMode ? [] : pickableFaces}
-          pickableEdges={dxfMode || meshOnlyMode ? [] : pickableEdges}
-          pickableVertices={dxfMode || meshOnlyMode ? [] : pickableVertices}
-          focusedPartId={dxfMode || meshOnlyMode ? "" : focusedPartIds}
+          pickableParts={urdfMode || meshOnlyMode ? EMPTY_LIST : assemblyParts}
+          hiddenPartIds={meshOnlyMode ? [] : hiddenPartIds}
+          selectedPartIds={meshOnlyMode ? [] : selectedPartIds}
+          hoveredPartId={meshOnlyMode ? "" : hoveredPartId}
+          assemblyMates={meshOnlyMode ? [] : assemblyMates}
+          selectedMateIds={meshOnlyMode ? [] : selectedMateIds}
+          hoveredMateId={meshOnlyMode ? "" : hoveredMateId}
+          hoveredReferenceId={meshOnlyMode ? "" : hoveredReferenceId}
+          selectedReferenceIds={meshOnlyMode ? [] : selectedReferenceIds}
+          selectorRuntime={meshOnlyMode ? null : selectorRuntime}
+          displayEdgeRuntime={meshOnlyMode ? null : displayEdgeRuntime}
+          stepParameters={meshOnlyMode ? null : resolvedStepParameters}
+          pickableFaces={meshOnlyMode ? [] : pickableFaces}
+          pickableEdges={meshOnlyMode ? [] : pickableEdges}
+          pickableVertices={meshOnlyMode ? [] : pickableVertices}
+          focusedPartId={meshOnlyMode ? "" : focusedPartIds}
           boundsAnimationActive={cadViewerBoundsAnimationActive}
-          drawingEnabled={!dxfMode && !meshOnlyMode && drawToolActive}
+          drawingEnabled={!meshOnlyMode && drawToolActive}
           drawingTool={drawingTool}
-          drawingStrokes={dxfMode || meshOnlyMode ? [] : drawingStrokes}
+          drawingStrokes={meshOnlyMode ? [] : drawingStrokes}
           onDrawingStrokesChange={handleDrawingStrokesChange}
           onPerspectiveChange={handlePerspectiveChange}
           onHoverReferenceChange={handleModelHoverChange}

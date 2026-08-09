@@ -16,6 +16,7 @@ import {
   buildDxfMaterialTab,
   DXF_DEFAULT_BEND_ANGLE_DEG,
   DXF_DEFAULT_THICKNESS_MM,
+  normalizeDxfBendAngleDeg,
   normalizeDxfThicknessMm
 } from "./workbench/DxfSettingsSection";
 import ImplicitFileSheet from "./workbench/ImplicitFileSheet";
@@ -1220,11 +1221,15 @@ export default function CadWorkspace({
   // Which way a drawing is being looked at. Session state on purpose: it is a way of looking
   // at the model open right now, not a preference worth outliving the tab.
   const [drawingViewMode, setDrawingViewMode] = useState("3d");
+  // The zoom pill lives in the top-right toolbar row now; the viewer reports its live
+  // percent up, and the pill drives the camera back through the imperative handle.
+  const [viewerZoomPercent, setViewerZoomPercent] = useState(100);
   // Render-time drawing settings. Session state, like the view mode: they reshape the
   // viewport, never the cached package, so there is nothing to persist or invalidate.
   const [drawingThicknessMm, setDrawingThicknessMm] = useState(DXF_DEFAULT_THICKNESS_MM);
-  const [drawingBendAngleDeg, setDrawingBendAngleDeg] = useState(DXF_DEFAULT_BEND_ANGLE_DEG);
-  const [drawingBendDirection, setDrawingBendDirection] = useState("up");
+  // One entry per bend line, in axis order. An array because "the bend angle" stopped being
+  // a thing the moment a drawing had two bends that want different angles.
+  const [drawingBends, setDrawingBends] = useState([]);
   const resolvedThemeSettings = useMemo(
     () => resolveThemeSettingsForColorMode(themeSettings, { prefersDark: false }),
     [themeSettings]
@@ -3002,7 +3007,9 @@ export default function CadWorkspace({
                   : selectedEntry && !selectedEntryHasMesh
                     ? ARTIFACT_GENERATING_LABEL
                     : "Loading CAD...";
-  const selectedDrawingBendLineCount = Number(selectedEntry?.bendLineCount) || 0;
+  const selectedDrawingBendAxisCount = Array.isArray(selectedEntry?.bendAxisX)
+    ? selectedEntry.bendAxisX.length
+    : 0;
   // Gated to drawings HERE, not downstream. The thickness state defaults to 0 mm, and
   // passing its scale unconditionally squashed every STEP/STL/3MF model to a hair the moment
   // the default changed -- a drawing setting must not be able to touch any other format.
@@ -3074,7 +3081,12 @@ export default function CadWorkspace({
     isAssemblyView &&
     viewerSelectableAssemblyNodeIds.length > 0;
   const viewerMode = viewerInAssemblyMode ? "assembly" : "part";
-  const drawModeActive = selectedEntrySourceFormat === RENDER_FORMAT.STEP && tabToolMode === TAB_TOOL_MODE.DRAW;
+  // STEP and drawings share the markup tool — the strokes are a screen-space overlay on the
+  // shared mesh scene, nothing STEP-specific. This gate was the last place that said
+  // otherwise: the toolbar showed Draw for a DXF while this kept it inert, so the drag fell
+  // through to orbit.
+  const drawModeActive = (selectedEntrySourceFormat === RENDER_FORMAT.STEP || selectedEntryIsDrawing)
+    && tabToolMode === TAB_TOOL_MODE.DRAW;
   const panToolActive = tabToolMode === TAB_TOOL_MODE.PAN;
   const selectionCountBase = selectedPartIds.length + selectedReferenceIds.length + selectedMateIds.length;
 
@@ -3204,6 +3216,29 @@ export default function CadWorkspace({
     setThemeEditing(false);
   }, []);
 
+  useEffect(() => {
+    setDrawingBends(Array.from({ length: selectedDrawingBendAxisCount }, () => ({
+      angleDeg: DXF_DEFAULT_BEND_ANGLE_DEG,
+      direction: "up"
+    })));
+  }, [selectedKey, selectedDrawingBendAxisCount]);
+
+  const handleDrawingBendChange = useCallback((index, patch) => {
+    setDrawingBends((current) => current.map(
+      (bend, bendIndex) => (bendIndex === index ? { ...bend, ...patch } : bend)
+    ));
+  }, []);
+
+  // Memoised: this array is an effect dependency in the viewer, and a fresh identity per
+  // render would re-run the fold transform on every workspace render.
+  const drawingBendAnglesRad = useMemo(
+    () => drawingBends.map((bend) => (
+      (normalizeDxfBendAngleDeg(bend.angleDeg) * Math.PI / 180)
+        * (bend.direction === "down" ? -1 : 1)
+    )),
+    [drawingBends]
+  );
+
   const handleDrawingViewModeChange = useCallback((mode) => {
     const next = mode === "2d" ? "2d" : "3d";
     setDrawingViewMode(next);
@@ -3215,6 +3250,17 @@ export default function CadWorkspace({
     }
     viewerRef.current?.activateDefaultViewPlane?.();
   }, []);
+
+  const handleViewerZoomPercentChange = useCallback((nextZoomPercent) => {
+    viewerRef.current?.applyZoomPercent?.(nextZoomPercent);
+  }, []);
+  const handleViewerZoomReset = useCallback(() => {
+    viewerRef.current?.resetView?.();
+    if (drawingViewMode === "2d") {
+      // A locked plan view resets to its own top-down, not to the 3D default orientation.
+      viewerRef.current?.activateViewPlaneFace?.("z");
+    }
+  }, [drawingViewMode]);
 
   const handleToggleThemeEditor = useCallback(() => {
     setThemeEditing((current) => {
@@ -8018,8 +8064,8 @@ export default function CadWorkspace({
           drawingThicknessScale={drawingThicknessScale}
           planMode={selectedEntryIsDrawing && drawingViewMode === "2d"}
           bendAxisX={selectedEntryIsDrawing ? selectedEntry?.bendAxisX || null : null}
-          bendAngleDeg={drawingBendAngleDeg}
-          bendDirection={drawingBendDirection}
+          bendAnglesRad={selectedEntryIsDrawing ? drawingBendAnglesRad : null}
+          onCameraZoomPercentChange={setViewerZoomPercent}
           renderPartsIndividually={isUrdfView || Boolean(selectedStepParameterRuntime)}
           stepParameters={selectedStepParameterRuntime}
           selectedMeshData={selectedMeshData}
@@ -8184,6 +8230,10 @@ export default function CadWorkspace({
                 drawingViewToggle={selectedEntryIsDrawing}
                 drawingViewMode={drawingViewMode}
                 onDrawingViewModeChange={handleDrawingViewModeChange}
+                zoomControlsVisible={effectiveRenderFormat !== RENDER_FORMAT.IMPLICIT && !!selectedMeshData}
+                zoomPercent={viewerZoomPercent}
+                onZoomPercentChange={handleViewerZoomPercentChange}
+                onZoomReset={handleViewerZoomReset}
                 selectionToolActive={selectionToolActive}
                 referenceSelectionPending={referenceSelectionPending}
                 referenceSelectionUnavailable={referenceSelectionUnavailable}
@@ -8405,11 +8455,8 @@ export default function CadWorkspace({
                   // Null for a drawing with no bend lines, so the strip carries no tab that
                   // would have nothing in it.
                   buildDxfBendsTab({
-                    bendLineCount: selectedDrawingBendLineCount,
-                    bendAngleDeg: drawingBendAngleDeg,
-                    onBendAngleChange: setDrawingBendAngleDeg,
-                    bendDirection: drawingBendDirection,
-                    onBendDirectionChange: setDrawingBendDirection
+                    bends: drawingBends,
+                    onBendChange: handleDrawingBendChange
                   }),
                   ...themeTabs
                 ].filter(Boolean)}

@@ -529,163 +529,12 @@ function setRuntimeZoomPercent(runtime, percent) {
   return true;
 }
 
-function ZoomControl({
-  zoomPercent,
-  onZoomPercentChange,
-  onZoomReset
-}) {
-  const [editing, setEditing] = useState(false);
-  const [inputValue, setInputValue] = useState(formatZoomPercent(zoomPercent));
-  const selectOnFocusRef = useRef(false);
-  useEffect(() => {
-    if (!editing) {
-      setInputValue(formatZoomPercent(zoomPercent));
-    }
-  }, [editing, zoomPercent]);
-
-  const commitInputValue = () => {
-    const numericValue = Number(String(inputValue || "").replace(/%/g, "").trim());
-    setEditing(false);
-    if (!Number.isFinite(numericValue) || numericValue <= 0) {
-      const resetValue = 100;
-      setInputValue(formatZoomPercent(resetValue));
-      onZoomPercentChange?.(resetValue);
-      return;
-    }
-    onZoomPercentChange?.(normalizeZoomPercent(numericValue));
-  };
-  const adjustZoom = (delta) => {
-    onZoomPercentChange?.(normalizeZoomPercent(Math.round(zoomPercent) + delta));
-  };
-
-  return (
-    <div
-      className="flex h-6 items-center gap-0.5"
-      style={{ width: ZOOM_CONTROL_CONTENT_WIDTH }}
-      aria-label="Zoom controls"
-      onPointerDown={(event) => {
-        event.stopPropagation();
-      }}
-    >
-      <button
-        type="button"
-        aria-label="Zoom out"
-        title="Zoom out"
-        className={DISPLAY_TOOLBAR_BUTTON_CLASSES}
-        onClick={(event) => {
-          event.stopPropagation();
-          adjustZoom(-ZOOM_CONTROL_STEP_PERCENT);
-        }}
-      >
-        <Minus className="size-3" strokeWidth={2.25} aria-hidden="true" />
-      </button>
-      <input
-        type="text"
-        inputMode="numeric"
-        aria-label="Zoom level percent"
-        className="h-6 w-8 min-w-0 rounded-sm border border-transparent bg-transparent px-0 text-center text-xs font-medium tabular-nums text-sidebar-foreground outline-none transition focus-visible:border-ring focus-visible:bg-sidebar-accent/40 focus-visible:ring-2 focus-visible:ring-ring/35"
-        value={inputValue}
-        onFocus={(event) => {
-          const input = event.currentTarget;
-          selectOnFocusRef.current = true;
-          setEditing(true);
-          setInputValue(String(Math.round(zoomPercent)));
-          window.requestAnimationFrame(() => {
-            input.select();
-            selectOnFocusRef.current = false;
-          });
-        }}
-        onMouseUp={(event) => {
-          if (!selectOnFocusRef.current) {
-            return;
-          }
-          event.preventDefault();
-          event.currentTarget.select();
-          selectOnFocusRef.current = false;
-        }}
-        onClick={(event) => {
-          if (String(event.currentTarget.value || "").includes("%")) {
-            event.currentTarget.select();
-          }
-        }}
-        onChange={(event) => {
-          setInputValue(event.target.value);
-        }}
-        onBlur={commitInputValue}
-        onKeyDown={(event) => {
-          if (event.key === "Enter") {
-            event.preventDefault();
-            commitInputValue();
-          } else if (event.key === "Escape") {
-            event.preventDefault();
-            setEditing(false);
-            setInputValue(formatZoomPercent(zoomPercent));
-            event.currentTarget.blur();
-          }
-        }}
-      />
-      <button
-        type="button"
-        aria-label="Zoom in"
-        title="Zoom in"
-        className={DISPLAY_TOOLBAR_BUTTON_CLASSES}
-        onClick={(event) => {
-          event.stopPropagation();
-          adjustZoom(ZOOM_CONTROL_STEP_PERCENT);
-        }}
-      >
-        <Plus className="size-3" strokeWidth={2.25} aria-hidden="true" />
-      </button>
-      <button
-        type="button"
-        aria-label="Reset view"
-        title="Reset view"
-        className={DISPLAY_TOOLBAR_BUTTON_CLASSES}
-        onClick={(event) => {
-          event.stopPropagation();
-          onZoomReset?.();
-        }}
-      >
-        <RotateCcw className="size-3" strokeWidth={2.1} aria-hidden="true" />
-      </button>
-    </div>
-  );
-}
-
 function cssLength(value, fallback = "0px") {
   if (typeof value === "number" && Number.isFinite(value)) {
     return `${value}px`;
   }
   const text = String(value || "").trim();
   return text || fallback;
-}
-
-function ZoomToolbar({
-  zoomPercent,
-  onZoomPercentChange,
-  onZoomReset,
-  viewPlaneOffsetRight = 16,
-  viewPlaneOffsetBottom = 16
-}) {
-  return (
-    <div
-      className={DISPLAY_TOOLBAR_CLASSES}
-      style={{
-        right: cssLength(viewPlaneOffsetRight, "16px"),
-        bottom: `calc(${cssLength(viewPlaneOffsetBottom, "16px")} + ${VIEW_PLANE_CONTROL_SIZE} + ${VIEW_PLANE_CONTROL_GAP})`
-      }}
-      aria-label="Zoom controls"
-      onPointerDown={(event) => {
-        event.stopPropagation();
-      }}
-    >
-      <ZoomControl
-        zoomPercent={zoomPercent}
-        onZoomPercentChange={onZoomPercentChange}
-        onZoomReset={onZoomReset}
-      />
-    </div>
-  );
 }
 
 function applyExplodedViewRuntimeProgress(runtime, layout, progress) {
@@ -1745,8 +1594,8 @@ const CadViewer = forwardRef(function CadViewer({
   drawingThicknessScale = 1,
   planMode = false,
   bendAxisX = null,
-  bendAngleDeg = 0,
-  bendDirection = "up",
+  bendAnglesRad = null,
+  onCameraZoomPercentChange = null,
   perspective = null,
   perspectiveRef = null,
   projection = CAMERA_PROJECTION.PERSPECTIVE,
@@ -2207,6 +2056,13 @@ const CadViewer = forwardRef(function CadViewer({
       Math.abs(current - nextZoomPercent) < 0.5 ? current : nextZoomPercent
     ));
   }, []);
+  // The zoom pill lives in the workspace's top-right toolbar row now, so the live percent
+  // has to travel up — the viewer keeps the camera math, the toolbar keeps the control.
+  const onCameraZoomPercentChangeRef = useRef(onCameraZoomPercentChange);
+  onCameraZoomPercentChangeRef.current = onCameraZoomPercentChange;
+  useEffect(() => {
+    onCameraZoomPercentChangeRef.current?.(cameraZoomPercent);
+  }, [cameraZoomPercent]);
   const emitPerspectiveChange = (runtime = runtimeRef.current) => {
     const currentModelKey = modelKeyRef.current;
     if (!runtimeModelKeyMatches(runtime, currentModelKey)) {
@@ -2660,9 +2516,11 @@ const CadViewer = forwardRef(function CadViewer({
   // DRAWING TRANSFORM: thickness and fold, one vertex rewrite, math from
   // cadjs/lib/dxf/foldPreview (node-tested; the snapshot runtime shares it by construction).
   //
-  // Thickness scales Z BEFORE the fold. The previous split -- fold here, thickness as a
-  // group scale after -- flattened every folded flange back into the sheet plane, so at the
-  // 0 mm default the fold was invisible. Order is the whole bug.
+  // Applied SYNCHRONOUSLY when the meshes already exist. The previous version restored flat
+  // positions in its cleanup and re-folded on the next animation frame — so every slider
+  // tick painted one flat frame between the two, which is the flicker. Cleanup now only
+  // cancels a pending first-load retry: the next run overwrites positions from the cached
+  // flat copy anyway, and an identity run writes the flat values back explicitly.
   useEffect(() => {
     const runtime = runtimeRef.current;
     const group = runtime?.modelGroup;
@@ -2671,28 +2529,13 @@ const CadViewer = forwardRef(function CadViewer({
     }
     const foldOptions = {
       bendAxesX: Array.isArray(bendAxisX) ? bendAxisX : [],
-      bendAngleRad:
-        (Number(bendAngleDeg) || 0) * (Math.PI / 180) * (bendDirection === "down" ? -1 : 1),
+      bendAnglesRad: Array.isArray(bendAnglesRad) ? bendAnglesRad : [],
       thicknessScale: drawingThicknessScale
     };
     const identity = dxfFoldIsIdentity(foldOptions);
-
-    const removeGuideOverlay = () => {
-      const overlay = runtimeRef.current?.dxfBendGuideOverlay;
-      if (overlay) {
-        overlay.parent?.remove(overlay);
-        overlay.geometry?.dispose?.();
-        overlay.material?.dispose?.();
-        runtimeRef.current.dxfBendGuideOverlay = null;
-      }
-    };
-
-    // Deferred a frame and retried: this effect is declared before the one that syncs the
-    // scene, so on a fresh model the group is still empty when it first runs. Folding an
-    // empty group silently does nothing -- which is exactly how the fold shipped invisible
-    // once already.
     let frame = 0;
     let attempts = 0;
+
     const apply = () => {
       const targets = [];
       group.traverse((child) => {
@@ -2703,7 +2546,7 @@ const CadViewer = forwardRef(function CadViewer({
         if (!position) {
           return;
         }
-        // Always transform from the FLAT copy, cached once per geometry -- folding the
+        // Always transform from the FLAT copy, cached once per geometry — folding the
         // current pose compounds.
         const original = child.userData.dxfFoldOriginal
           || (child.userData.dxfFoldOriginal = Float32Array.from(position.array));
@@ -2711,11 +2554,10 @@ const CadViewer = forwardRef(function CadViewer({
       });
 
       if (!targets.length) {
-        if (identity) {
-          return;
-        }
-        attempts += 1;
-        if (attempts < 60) {
+        // First load only: this effect is declared before the scene sync, so a fresh model's
+        // group can still be empty. Retry a few frames rather than silently doing nothing.
+        if (!identity && attempts < 60) {
+          attempts += 1;
           frame = requestAnimationFrame(apply);
         }
         return;
@@ -2734,51 +2576,56 @@ const CadViewer = forwardRef(function CadViewer({
       }
 
       // The dotted bend lines, folded through the same chain so each stays on its crease.
-      // Rebuilt per change rather than re-posed: a handful of segments, and one code path.
-      removeGuideOverlay();
-      if (flat && foldOptions.bendAxesX.length) {
-        const segments = dxfBendGuideSegments(flat, foldOptions);
-        if (segments.length) {
-          const geometry = new THREE.BufferGeometry();
-          geometry.setAttribute("position", new THREE.BufferAttribute(segments, 3));
+      // The overlay OBJECT persists and its buffer is swapped — removing and re-adding it
+      // per slider tick made the dashes blink alongside the old geometry flicker.
+      let overlay = runtimeRef.current?.dxfBendGuideOverlay || null;
+      if (overlay && overlay.parent !== group) {
+        // The scene sync cleared the group under us; the ref is a dangling object.
+        overlay = null;
+        runtimeRef.current.dxfBendGuideOverlay = null;
+      }
+      const segments = flat && foldOptions.bendAxesX.length
+        ? dxfBendGuideSegments(flat, foldOptions)
+        : new Float32Array(0);
+      if (!segments.length) {
+        if (overlay) {
+          overlay.parent?.remove(overlay);
+          overlay.geometry?.dispose?.();
+          overlay.material?.dispose?.();
+          runtimeRef.current.dxfBendGuideOverlay = null;
+        }
+      } else {
+        if (!overlay) {
           const { yMin, yMax } = dxfFlatPatternExtents(flat);
           const span = Math.max(yMax - yMin, 1);
-          const material = new THREE.LineDashedMaterial({
-            color: 0x5f6775,
-            dashSize: span / 24,
-            gapSize: span / 36,
-            transparent: true,
-            opacity: 0.9,
-            depthWrite: false
-          });
-          const overlay = new THREE.LineSegments(geometry, material);
-          overlay.computeLineDistances();
+          overlay = new THREE.LineSegments(
+            new THREE.BufferGeometry(),
+            new THREE.LineDashedMaterial({
+              color: 0x5f6775,
+              dashSize: span / 24,
+              gapSize: span / 36,
+              transparent: true,
+              opacity: 0.9,
+              depthWrite: false
+            })
+          );
           overlay.userData.dxfBendGuide = true;
+          overlay.frustumCulled = false;
           group.add(overlay);
           runtimeRef.current.dxfBendGuideOverlay = overlay;
         }
+        overlay.geometry.setAttribute("position", new THREE.BufferAttribute(segments, 3));
+        overlay.computeLineDistances();
+        overlay.geometry.computeBoundingSphere?.();
       }
       runtime.requestRender?.();
     };
-    frame = requestAnimationFrame(apply);
 
+    apply();
     return () => {
       cancelAnimationFrame(frame);
-      removeGuideOverlay();
-      group.traverse((child) => {
-        const original = child.userData?.dxfFoldOriginal;
-        const position = child.geometry?.getAttribute?.("position");
-        if (!original || !position) {
-          return;
-        }
-        position.array.set(original);
-        position.needsUpdate = true;
-        child.geometry.computeVertexNormals?.();
-        child.geometry.computeBoundingSphere?.();
-      });
-      runtimeRef.current?.requestRender?.();
     };
-  }, [bendAxisX, bendAngleDeg, bendDirection, drawingThicknessScale, meshData, viewerReadyTick]);
+  }, [bendAxisX, bendAnglesRad, drawingThicknessScale, meshData, viewerReadyTick]);
 
   useImperativeHandle(ref, () => ({
     async captureScreenshot({ filename = "cad-screenshot.png", mode = "download" } = {}) {
@@ -2808,6 +2655,15 @@ const CadViewer = forwardRef(function CadViewer({
     // drifts from the widget's idea of where `top` is.
     activateViewPlaneFace(faceId) {
       return activateViewPlaneFace(faceId);
+    },
+    applyZoomPercent(nextZoomPercent) {
+      return applyZoomPercent(nextZoomPercent);
+    },
+    resetView() {
+      // Refit instantly (establishes target and distance), then animate the orientation —
+      // both drive the same cameraTransition, so animating both would fight.
+      resetZoomAndPan({ animate: false });
+      activateDefaultViewPlane();
     },
     activateDefaultViewPlane() {
       return activateDefaultViewPlane();
@@ -4739,23 +4595,6 @@ const CadViewer = forwardRef(function CadViewer({
         }}
         aria-hidden="true"
       />
-      {showViewPlane && !previewMode && !isLoading && meshData ? (
-        <ZoomToolbar
-          zoomPercent={cameraZoomPercent}
-          onZoomPercentChange={applyZoomPercent}
-          onZoomReset={() => {
-            // Reset the whole view, not just the zoom: refit the framing first
-            // (instant, so it just establishes the correct target and distance),
-            // then animate back to the default orientation. Both paths drive the
-            // same runtime.cameraTransition, so animating both would leave the
-            // second tween overwriting the first and the orientation unchanged.
-            resetZoomAndPan({ animate: false });
-            activateDefaultViewPlane();
-          }}
-          viewPlaneOffsetRight={viewPlaneOffsetRight}
-          viewPlaneOffsetBottom={viewPlaneOffsetBottom}
-        />
-      ) : null}
       <ViewPlaneControl
         showViewPlane={showViewPlane && !planMode}
         previewMode={previewMode}

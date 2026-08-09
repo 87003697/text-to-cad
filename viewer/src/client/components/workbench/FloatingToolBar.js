@@ -18,6 +18,7 @@ import {
 import { TooltipProvider } from "../ui/tooltip";
 import DrawingToolbar from "./DrawingToolbar";
 import { ToolbarButton } from "./ToolbarButton";
+import { ZoomControl } from "../viewer/ZoomControl";
 import { CAD_WORKSPACE_TOOLBAR_DESKTOP_WIDTH_CLASS } from "./ToolbarShell";
 import { StepExportDropdown } from "./StepExportDropdown";
 
@@ -96,6 +97,10 @@ const FLOATING_TOOL_BAR_BUTTON_CLASSES =
 function DesktopFloatingToolBar({
   renderFormat,
   floatingCadToolbarPosition,
+  zoomControlsVisible = false,
+  zoomPercent = 100,
+  onZoomPercentChange,
+  onZoomReset,
   drawingViewToggle = false,
   drawingViewMode = "3d",
   onDrawingViewModeChange,
@@ -216,6 +221,20 @@ function DesktopFloatingToolBar({
     </div>
   ) : null;
 
+  const zoomToolbar = zoomControlsVisible ? (
+    <div
+      className={`${toolbarHidden ? "pointer-events-none" : "pointer-events-auto"} inline-flex h-8 w-fit items-center gap-0.5 rounded-md p-1 ${FLOATING_TOOL_BAR_SURFACE_CLASS}`}
+      onPointerEnter={onToolbarEnter}
+      onPointerLeave={onToolbarLeave}
+    >
+      <ZoomControl
+        zoomPercent={zoomPercent}
+        onZoomPercentChange={onZoomPercentChange}
+        onZoomReset={onZoomReset}
+      />
+    </div>
+  ) : null;
+
   return (
     <div
       className={`absolute z-20 flex flex-col items-end gap-1 transition-opacity duration-300 ${toolbarHidden ? "opacity-0" : "opacity-100"}`}
@@ -223,6 +242,7 @@ function DesktopFloatingToolBar({
     >
       <TooltipProvider delayDuration={250}>
         <div className="flex w-fit items-center gap-1 self-end">
+        {zoomToolbar}
         {drawingViewToolbar}
         <div
           className={`${toolbarHidden ? "pointer-events-none" : "pointer-events-auto"} inline-flex h-8 w-fit items-center gap-0.5 self-end rounded-md p-1 ${FLOATING_TOOL_BAR_SURFACE_CLASS}`}
@@ -241,7 +261,7 @@ function DesktopFloatingToolBar({
             </>
           ) : (
             <>
-              {!dxfMode && !implicitMode && !robotMode && !meshOnlyMode ? (
+              {!implicitMode && !robotMode && !meshOnlyMode ? (
                 <>
                   <ToolbarButton
                     label={selectLabel}
@@ -317,7 +337,7 @@ function DesktopFloatingToolBar({
         </div>
       </TooltipProvider>
 
-      {!previewMode && !dxfMode && !meshOnlyMode && drawToolActive ? (
+      {!previewMode && !meshOnlyMode && drawToolActive ? (
         <DrawingToolbar
           className={CAD_WORKSPACE_TOOLBAR_DESKTOP_WIDTH_CLASS}
           drawingToolOptions={drawingToolOptions}

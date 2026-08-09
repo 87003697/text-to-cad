@@ -98,60 +98,57 @@ export function DxfMaterialSection({ thicknessMm = DXF_DEFAULT_THICKNESS_MM, onT
   );
 }
 
-export function DxfBendsSection({
-  bendLineCount = 0,
-  bendAngleDeg = DXF_DEFAULT_BEND_ANGLE_DEG,
-  onBendAngleChange,
-  bendDirection = "up",
-  onBendDirectionChange
-}) {
-  const angle = normalizeDxfBendAngleDeg(bendAngleDeg);
-  const direction = normalizeDxfBendDirection(bendDirection);
-  const commitAngle = (next) => onBendAngleChange?.(normalizeDxfBendAngleDeg(next, angle));
-
+export function DxfBendsSection({ bends = [], onBendChange }) {
   return (
     <FileSheetSectionBody>
-      <FileSheetSubsection title="Bends">
-        {/* A read-only count is an inline row like any other — the guide's "read-only value"
-            case — rather than a sentence explaining what a bend line is. */}
-        <FileSheetInlineControlRow label="Bend lines">
-          <span className="text-[11px] font-medium tabular-nums">{bendLineCount}</span>
-        </FileSheetInlineControlRow>
-        <FileSheetSliderField
-          label="Angle"
-          value={`${Math.round(angle)}°`}
-          onValueCommit={commitAngle}
-          valueInputProps={{
-            ariaLabel: "Angle value",
-            min: DXF_BEND_ANGLE_MIN_DEG,
-            max: DXF_BEND_ANGLE_MAX_DEG
-          }}
-        >
-          <Slider
-            aria-label="Angle"
-            className={FILE_SHEET_PRECISION_SLIDER_CLASSES}
-            value={[angle]}
-            min={DXF_BEND_ANGLE_MIN_DEG}
-            max={DXF_BEND_ANGLE_MAX_DEG}
-            step={DXF_BEND_ANGLE_STEP_DEG}
-            onValueChange={([next]) => commitAngle(next)}
-          />
-        </FileSheetSliderField>
-        {/* The one sanctioned segmented control in the panel: two short single words, which
-            the guide names explicitly as the DXF bend direction case. */}
-        <FileSheetInlineControlRow label="Direction">
-          <FileSheetSegmentedControl
-            fit
-            ariaLabel="Bend direction"
-            value={direction}
-            onChange={(next) => onBendDirectionChange?.(normalizeDxfBendDirection(next, direction))}
-            options={[
-              { value: "up", label: "Up" },
-              { value: "down", label: "Down" }
-            ]}
-          />
-        </FileSheetInlineControlRow>
-      </FileSheetSubsection>
+      {/* One section per bend, in axis order — "the bend angle" stopped being a single
+          setting the moment a drawing had two bends that want different angles. Sections
+          never nest (settings-ui.md): the tab body is the flat list Bend 1, Bend 2, ... */}
+      {bends.map((bend, index) => {
+        const angle = normalizeDxfBendAngleDeg(bend?.angleDeg);
+        const direction = normalizeDxfBendDirection(bend?.direction);
+        const commitAngle = (next) => onBendChange?.(index, {
+          angleDeg: normalizeDxfBendAngleDeg(next, angle)
+        });
+        return (
+          <FileSheetSubsection title={`Bend ${index + 1}`} key={index}>
+            <FileSheetSliderField
+              label="Angle"
+              value={`${Math.round(angle)}°`}
+              onValueCommit={commitAngle}
+              valueInputProps={{
+                ariaLabel: `Bend ${index + 1} angle value`,
+                min: DXF_BEND_ANGLE_MIN_DEG,
+                max: DXF_BEND_ANGLE_MAX_DEG
+              }}
+            >
+              <Slider
+                aria-label={`Bend ${index + 1} angle`}
+                className={FILE_SHEET_PRECISION_SLIDER_CLASSES}
+                value={[angle]}
+                min={DXF_BEND_ANGLE_MIN_DEG}
+                max={DXF_BEND_ANGLE_MAX_DEG}
+                step={DXF_BEND_ANGLE_STEP_DEG}
+                onValueChange={([next]) => commitAngle(next)}
+              />
+            </FileSheetSliderField>
+            <FileSheetInlineControlRow label="Direction">
+              <FileSheetSegmentedControl
+                fit
+                ariaLabel={`Bend ${index + 1} direction`}
+                value={direction}
+                onChange={(next) => onBendChange?.(index, {
+                  direction: normalizeDxfBendDirection(next, direction)
+                })}
+                options={[
+                  { value: "up", label: "Up" },
+                  { value: "down", label: "Down" }
+                ]}
+              />
+            </FileSheetInlineControlRow>
+          </FileSheetSubsection>
+        );
+      })}
     </FileSheetSectionBody>
   );
 }
@@ -167,7 +164,7 @@ export function buildDxfMaterialTab(props) {
 /** Only when the drawing HAS bend lines: a tab that is empty for most files does not earn a
  *  permanent place in the strip. */
 export function buildDxfBendsTab(props) {
-  if (!(props?.bendLineCount > 0)) {
+  if (!(props?.bends?.length > 0)) {
     return null;
   }
   return {
