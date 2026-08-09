@@ -43,6 +43,15 @@ from meshscope.voxblame.prepare_reference import (
     prepare_reference,
     publish_prepare_failure,
 )
+from meshscope.voxblame.preview import (
+    PREVIEW_SCHEMA,
+    PreviewScene,
+    PublishPreviewResult,
+    ValidatedPreviewIdentity,
+    prepare_preview_scene,
+    publish_preview,
+    validate_preview_identity,
+)
 from meshscope.voxblame.region_diff import (
     REGION_DIFF_SCHEMA,
     REPAIR_BATCH_SCHEMA,
@@ -84,8 +93,12 @@ __all__ = [
     "MeasureStepResult",
     "NORMALIZATION_SCHEMA",
     "PREPARE_FAILURE_SCHEMA",
+    "PREVIEW_SCHEMA",
     "PrepareReferenceError",
     "PrepareReferenceResult",
+    "PreviewScene",
+    "PublishPreviewResult",
+    "ValidatedPreviewIdentity",
     "REGION_DIFF_SCHEMA",
     "REPAIR_BATCH_SCHEMA",
     "RegionDiffResult",
@@ -107,6 +120,9 @@ __all__ = [
     "page_repair_targets",
     "read_surface_tree",
     "prepare_reference",
+    "prepare_preview_scene",
+    "publish_preview",
+    "validate_preview_identity",
     "publish_prepare_failure",
     "publish_region_diff",
     "validate_region_diff_contract",

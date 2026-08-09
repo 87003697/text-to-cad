@@ -45,6 +45,18 @@ python skills/mesh-compare/scripts/mesh-compare voxblame-diff \
   --repair-plan "${EXP_DIR}/work/repair-batch.json" \
   --output "${EXP_DIR}/cycles/<N>/region-diff.json"
 
+# Render one formal eight-view residual preview
+python skills/mesh-compare/scripts/mesh-compare voxblame-preview <candidate_mesh> \
+  --reference "${EXP_DIR}/input" --experiment "${EXP_DIR}/experiment.json" \
+  --output "${EXP_DIR}/preview" \
+  --variant step
+
+# Render the high-resolution final variant from the Selected Step
+python skills/mesh-compare/scripts/mesh-compare voxblame-preview <candidate_mesh> \
+  --reference "${EXP_DIR}/input" --experiment "${EXP_DIR}/experiment.json" \
+  --output "${EXP_DIR}/final-preview" --variant final --selected-step <N> \
+  --selected-summary "${EXP_DIR}/voxblame/steps/<NNNNNN>/summary.json"
+
 # Visualization: distance-colored or side-by-side render → PNG on disk
 python skills/mesh-compare/scripts/mesh-render heatmap <mesh_a> <mesh_b> --output <png>
 python skills/mesh-compare/scripts/mesh-render side-by-side <mesh_a> <mesh_b> --output <png>
@@ -106,6 +118,14 @@ when to use `heatmap` vs `side-by-side`.
     only. Direction transitions report their before and after ends separately;
     do not infer a one-cell flip. The command does not decide whether to keep,
     revise, or revert edits.
+11. **(Formal residual preview.)** Run `voxblame-preview` on the same canonical
+    candidate that will be measured. Inspect the frozen `+Z|-Z`, `+Y|-Y`,
+    `+X|-X`, `Iso|-Iso` layout: reference is green, candidate red, and shared
+    projected surface yellow. The command keeps reference-owned framing and
+    publishes `preview.png` plus `voxblame.preview/1` metadata atomically.
+    Exterior markers point toward off-frame candidate surface while the bound
+    exterior snapshot identity remains objective measurement evidence. Use
+    `--variant final --selected-step <N>` only for the Selected Step.
 
 ## Handoff
 
@@ -125,6 +145,9 @@ Return outputs based on which CLI(s) were invoked:
 - **Repair Batch comparison (`voxblame-diff`)**: return the immutable
   `voxblame.region-diff/1` path plus its plan and artifact identities. Report
   objective before/after/delta facts; leave edit assessment to the Agent.
+- **Formal preview (`voxblame-preview`)**: return `preview.png` and
+  `preview.json`. Report the profile digest, candidate/reference identities,
+  render variant, and any exterior directions from the metadata.
 - **Render CLI (`mesh-render`)**: return the PNG path(s) produced
   (`heatmap` and/or `side-by-side` mode).
 - **Both invoked (workflow-typical)**: return both JSON and PNG paths.
@@ -164,6 +187,14 @@ static PNG renders, not interactive CAD artifacts.
   idempotent while conflicting overwrites fail closed. If later exterior
   evidence is coarser than a selected target's frozen grid, comparison also
   fails closed rather than fabricating fine-cell counts.
+- Formal previews use `cadena_residual_eight_view/1`. The candidate is never
+  fitted or normalized by the renderer. Existing preview outputs are immutable:
+  identical reruns are idempotent and identity conflicts fail closed.
+- Pass the owning `experiment.json` to every preview; its exact
+  `preview_profile: {name, sha256}` identity must match the bundled renderer.
+  Final previews additionally require the selected step's canonical
+  `voxblame.summary/1`, whose step, reference, and candidate identities are
+  checked before rendering.
 
 ## Progressive references
 

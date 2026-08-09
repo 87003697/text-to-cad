@@ -12,7 +12,7 @@ usage() {
 Usage:
   scripts/dev/setup-skill-symlink.sh mesh-compare [--check]
 
-Sets up the mesh-compare skill development meshscope symlink.
+Sets up the mesh-compare skill development shared-package symlinks.
 
 Options:
   --check     Verify the symlink without changing files.
@@ -46,3 +46,7 @@ setup_link \
   "$MODE" \
   "skills/mesh-compare/scripts/packages/meshscope" \
   "../../../../packages/meshscope"
+setup_link \
+  "$MODE" \
+  "skills/mesh-compare/scripts/packages/meshshot" \
+  "../../../../packages/meshshot"

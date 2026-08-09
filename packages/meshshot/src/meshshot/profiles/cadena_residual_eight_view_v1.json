@@ -1,0 +1,97 @@
+{
+  "schema": "meshshot.camera-profile/1",
+  "name": "cadena_residual_eight_view/1",
+  "renderer": {
+    "name": "meshshot-three-webgl",
+    "version": 1,
+    "three_version": "0.160.0"
+  },
+  "canonical_frame": {
+    "coordinate_contract": "trellis2_canonical/1",
+    "minimum": [-0.5, -0.5, -0.5],
+    "maximum": [0.5, 0.5, 0.5],
+    "canonical_to_renderer": [
+      [1.0, 0.0, 0.0, 0.0],
+      [0.0, 1.0, 0.0, 0.0],
+      [0.0, 0.0, 1.0, 0.0],
+      [0.0, 0.0, 0.0, 1.0]
+    ]
+  },
+  "layout": {
+    "columns": 2,
+    "rows": 4
+  },
+  "views": [
+    {"name": "+Z", "kind": "axial_depth", "direction": [0, 0, 1], "up": [0, 1, 0], "horizontal_flip": false},
+    {"name": "-Z", "kind": "axial_depth", "direction": [0, 0, -1], "up": [0, 1, 0], "horizontal_flip": true},
+    {"name": "+Y", "kind": "axial_depth", "direction": [0, 1, 0], "up": [0, 0, -1], "horizontal_flip": false},
+    {"name": "-Y", "kind": "axial_depth", "direction": [0, -1, 0], "up": [0, 0, 1], "horizontal_flip": true},
+    {"name": "+X", "kind": "axial_depth", "direction": [1, 0, 0], "up": [0, 1, 0], "horizontal_flip": false},
+    {"name": "-X", "kind": "axial_depth", "direction": [-1, 0, 0], "up": [0, 1, 0], "horizontal_flip": true},
+    {"name": "Iso", "kind": "perspective_shaded", "direction": [1, 1, 1], "up": [0, 1, 0], "horizontal_flip": false},
+    {"name": "-Iso", "kind": "perspective_shaded", "direction": [-1, -1, -1], "up": [0, 1, 0], "horizontal_flip": false}
+  ],
+  "variants": {
+    "step": {
+      "tile_pixels": [252, 252],
+      "image_pixels": [504, 1008],
+      "render_scale": 2
+    },
+    "final": {
+      "tile_pixels": [504, 504],
+      "image_pixels": [1008, 2016],
+      "render_scale": 1
+    }
+  },
+  "camera": {
+    "orthographic": {
+      "position_distance": 2.0,
+      "half_extent": 0.58,
+      "near": 0.1,
+      "far": 4.0
+    },
+    "perspective": {
+      "position_distance": 2.4,
+      "vertical_fov_degrees": 32.0,
+      "near": 0.1,
+      "far": 6.0
+    }
+  },
+  "padding": {
+    "canonical_margin": 0.08,
+    "policy": "fixed_reference_frame/1"
+  },
+  "depth": {
+    "canonical_range": [-0.5, 0.5],
+    "farthest_intensity": 64,
+    "nearest_intensity": 255
+  },
+  "lighting": {
+    "ambient_intensity": 0.55,
+    "directional_intensity": 0.85,
+    "direction": [1, 2, 3]
+  },
+  "colors": {
+    "reference": [0, 255, 0],
+    "candidate": [255, 0, 0],
+    "overlap": [255, 255, 0],
+    "background": [0, 0, 0]
+  },
+  "composition": {
+    "method": "independent_red_green_channels/1",
+    "source_materials": "ignored",
+    "alpha": false,
+    "pixel_format": "rgb8"
+  },
+  "annotations": {
+    "labels": true,
+    "canonical_axes": true,
+    "compact_legend": true,
+    "exterior_edge_markers": true
+  },
+  "downsampling": {
+    "method": "browser_canvas_bilinear/1",
+    "same_environment_repeatability": true,
+    "cross_platform_png_bytes": false
+  }
+}
