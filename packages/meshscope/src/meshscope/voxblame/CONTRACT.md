@@ -85,6 +85,22 @@ The report freezes the complete target order. Interior targets have
 `exterior: null`; exterior targets require the complete diagnostic object.
 `display_rank` is a stable order, not priority.
 
+`repair_target_partition/1` groups the union of missing and excess depth-8
+cells with 18-connectivity. Components above 4096 cells split deterministically
+at depth-4 coarse-octree locality boundaries; split chunks remain connected.
+Target masks are exact minimal octree covers. `error_profile` carries the
+missing/excess direction facts without introducing a prescriptive direction,
+priority, strategy, verdict, or `next_action` field.
+
+An interior `octree_region_set/1` mask is canonical JSON containing
+`schema`, `max_depth`, and ordered `{depth, prefix}` regions; no region overlaps
+another and expanding the minimal cover reproduces the target's exact depth-8
+cells. An exterior `exterior_grid_region_set/1` mask contains the frozen signed
+diagnostic grid depth and ordered cells from the authoritative exterior
+snapshot. Their domain-separated logical digests bind the target keys together
+with source step, missing/excess counts, component key, and split provenance.
+Paging revalidates these artifacts before returning any frozen report slice.
+
 ### Exterior snapshot identity
 
 Each Measured Step persists an authoritative

@@ -37,6 +37,10 @@ from meshscope.voxblame.prepare_reference import (
     CANONICAL_REFERENCE_SCHEMA,
     NORMALIZATION_SCHEMA,
 )
+from meshscope.voxblame.targets import (
+    partition_repair_targets,
+    repair_target_page,
+)
 from meshscope.voxblame.tree import SurfaceTree, tree_from_codes
 from meshscope.voxblame.voxelize import Backend, build_lattice_tree, voxelize_mesh
 
@@ -62,6 +66,7 @@ class _StepArtifacts:
     missing_tree: SurfaceTree
     excess_tree: SurfaceTree
     exterior_bytes: bytes
+    target_mask_bytes: dict[str, bytes]
     measurement: dict[str, Any]
     summary: dict[str, Any]
 
@@ -118,6 +123,14 @@ def measure_step(
     errors_by_depth = _errors_by_depth(reference_sets, candidate_sets)
     missing_tree = tree_from_codes(reference_sets[-1] - candidate_sets[-1], MAX_DEPTH)
     excess_tree = tree_from_codes(candidate_sets[-1] - reference_sets[-1], MAX_DEPTH)
+    step_root = f"{output_root.name}/steps/{step:06d}"
+    repair_targets = partition_repair_targets(
+        missing_tree,
+        excess_tree,
+        step=step,
+        step_root=step_root,
+        exterior=exterior,
+    )
     observable_digest = _observable_sha256(candidate_tree.logical_sha256, exterior)
 
     session = _session_document(
@@ -144,6 +157,7 @@ def measure_step(
         errors_by_depth=errors_by_depth,
         missing_tree=missing_tree,
         excess_tree=excess_tree,
+        repair_targets=repair_targets.report,
         exterior=exterior,
         observable_digest=observable_digest,
         no_observable_geometry_change=(
@@ -160,6 +174,7 @@ def measure_step(
         missing_tree=missing_tree,
         excess_tree=excess_tree,
         exterior_bytes=exterior.snapshot_bytes,
+        target_mask_bytes=repair_targets.mask_bytes,
         measurement=measurement,
         summary=summary,
     )
@@ -379,6 +394,7 @@ def _measurement_document(
     errors_by_depth: list[dict[str, Any]],
     missing_tree: SurfaceTree,
     excess_tree: SurfaceTree,
+    repair_targets: dict[str, Any],
     exterior: ExteriorMeasurement,
     observable_digest: str,
     no_observable_geometry_change: bool,
@@ -434,6 +450,7 @@ def _measurement_document(
                 "surface_count": excess_tree.leaf_count,
             },
         },
+        "repair_targets": repair_targets,
         "exterior_surface": exterior_document,
         "objective_facts": {
             "global_depth_8_zero": errors_by_depth[-1]["surface_error_count"] == 0,
@@ -460,6 +477,7 @@ def _summary_document(measurement: dict[str, Any]) -> dict[str, Any]:
         "measurement": measurement["measurement"],
         "errors_by_depth": measurement["errors_by_depth"],
         "exterior_surface": measurement["exterior_surface"],
+        "repair_targets": repair_target_page(measurement["repair_targets"]),
         "objective_facts": measurement["objective_facts"],
         "no_observable_geometry_change": measurement[
             "no_observable_geometry_change"
@@ -511,6 +529,21 @@ def _validate_measurement_slice(
         != depth_eight["excess_surface_count"]
     ):
         raise OctreeError("depth-8 set evidence count mismatch")
+    targets = measurement["repair_targets"]
+    if summary["repair_targets"] != repair_target_page(targets):
+        raise OctreeError("measurement Repair Target page mismatch")
+    if sum(
+        target["error_profile"]["surface_error_count"]
+        for target in targets["ordered_targets"]
+        if target["kind"] == "interior"
+    ) != depth_eight["surface_error_count"]:
+        raise OctreeError("Repair Targets do not cover depth-8 error evidence")
+    if sum(
+        target["error_profile"]["surface_error_count"]
+        for target in targets["ordered_targets"]
+        if target["kind"] == "exterior"
+    ) != measurement["exterior_surface"]["surface_cell_count"]:
+        raise OctreeError("Repair Targets do not cover exterior error evidence")
 
 
 def _observable_sha256(
@@ -603,6 +636,8 @@ def _published_step_matches(
         "measurement.json",
         "summary.json",
     }
+    if artifacts.target_mask_bytes:
+        expected_names.add("targets")
     try:
         if (
             not root.is_dir()
@@ -617,6 +652,7 @@ def _published_step_matches(
             and read_surface_tree(root / "excess-depth8.vbsvo").logical_sha256
             == artifacts.excess_tree.logical_sha256
             and (root / "exterior.json").read_bytes() == artifacts.exterior_bytes
+            and _published_target_masks_match(root, artifacts.target_mask_bytes)
             and json.loads(
                 (root / "measurement.json").read_text(encoding="utf-8")
             )
@@ -634,6 +670,11 @@ def _write_step(root: Path, artifacts: _StepArtifacts) -> None:
     write_surface_tree(artifacts.missing_tree, root / "missing-depth8.vbsvo")
     write_surface_tree(artifacts.excess_tree, root / "excess-depth8.vbsvo")
     (root / "exterior.json").write_bytes(artifacts.exterior_bytes)
+    if artifacts.target_mask_bytes:
+        target_root = root / "targets"
+        target_root.mkdir()
+        for name, data in sorted(artifacts.target_mask_bytes.items()):
+            (target_root / name).write_bytes(data)
     _write_json(root / "measurement.json", artifacts.measurement)
     _write_json(root / "summary.json", artifacts.summary)
     if (
@@ -651,6 +692,20 @@ def _write_step(root: Path, artifacts: _StepArtifacts) -> None:
         != artifacts.excess_tree.logical_sha256
     ):
         raise OctreeError("staged excess-surface identity mismatch")
+
+
+def _published_target_masks_match(
+    root: Path, expected: dict[str, bytes]
+) -> bool:
+    target_root = root / "targets"
+    if not expected:
+        return not target_root.exists()
+    if not target_root.is_dir():
+        return False
+    files = {path.name: path for path in target_root.iterdir()}
+    return set(files) == set(expected) and all(
+        files[name].read_bytes() == data for name, data in expected.items()
+    )
 
 
 def _read_artifact_bytes(path: Path) -> bytes:

@@ -34,6 +34,7 @@ mesh inputs
 | `contracts.py` | Closed-world validators for the frozen replacement canonical session, report, and summary shapes. |
 | `prepare_reference.py` | Raw input capture, evaluated-scene normalization, identity, validation, and atomic Canonical Reference publication. |
 | `exterior.py` | Canonical-cube clipping, exact exterior facts, signed diagnostic occupancy, and snapshot identity. |
+| `targets.py` | Complete 18-connected error partitioning, stable target identities, exact mask artifacts, and deterministic paging. |
 | `measurement.py` | Multiresolution interior/exterior measurement and atomic Measured Step publication. |
 | `store.py` | Filesystem repository, strict loads, idempotent retry, and atomic session/step publication. |
 | `session.py` | Application orchestration exposed as `run_step(...)`. |
@@ -118,6 +119,28 @@ unresolved evidence conflict (`no_evidence_conflict`).
 Exact containment, signed occupancy, snapshot bytes, resolution metadata, and
 their identities are cross-checked before publication; any conflict fails the
 measurement instead of publishing a Measured Step with contradictory facts.
+
+Each Measured Step also freezes the complete Repair Target order. Interior
+missing/excess cells are grouped over their union with 18-connectivity. The
+versioned `repair_target_partition/1` profile splits components larger than
+4096 cells at depth-4 coarse-octree locality boundaries while keeping every
+resulting chunk connected. Exact minimal-cover masks are published under the
+step's `targets/` directory. Exterior diagnostic occupancy is retained as a
+separate target when present. Target identity binds the source step, exact mask,
+missing/excess direction counts, and split provenance.
+
+The measurement summary returns the first eight targets. Read later pages from
+the immutable publication without remeasurement:
+
+```python
+from meshscope.voxblame import page_repair_targets
+
+page = page_repair_targets(experiment / "voxblame", step=0, offset=8)
+```
+
+The corresponding CLI is `mesh-compare voxblame-targets --output EXP/voxblame
+--step 0 --offset 8`. Follow `next_offset` until it is null. `display_rank` is
+non-prescriptive; `error_profile` records missing/excess direction facts.
 
 ### Application entry point
 
@@ -407,6 +430,7 @@ errors
   └── tree + frame <- voxelize
 
 tree + frame <- grading <- reporting
+tree + exterior <- targets
 
 codec + voxelize + grading + reporting <- store/session <- CLI
 ```
@@ -419,6 +443,7 @@ Important boundaries:
 - `voxelize.py` returns a validated tree and does not know persistence or JSON.
 - `grading.py` is pure tree/domain logic and does not read files.
 - `reporting.py` owns versioned JSON.
+- `targets.py` owns target partition, exact target-mask identity, and paging.
 - `store.py` owns filesystem publication.
 - `session.py` composes the modules.
 - CLI code imports only `run_step`.
@@ -433,6 +458,7 @@ Important boundaries:
 | Change `.vbsvo` bytes or validation | `codec.py` |
 | Change SAT or backend dispatch | `voxelize.py` and `_native.cpp` |
 | Change mismatch or progress semantics | `grading.py` |
+| Change Repair Target partition or paging | `targets.py` |
 | Change report/summary fields | `reporting.py` |
 | Change retry or atomic publication | `store.py` |
 | Change end-to-end step orchestration | `session.py` |
@@ -455,6 +481,7 @@ Focused package tests cover:
 - immutable retry and crash residue
 - fully out-of-frame candidates
 - report/snapshot digest agreement
+- complete, disjoint 18-connected Repair Target partitioning and stable paging
 
 The production bundle intentionally excludes `.so`, `.dylib`, and `.pyd`.
 Therefore verification must include both:

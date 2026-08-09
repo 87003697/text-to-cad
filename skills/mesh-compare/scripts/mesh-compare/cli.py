@@ -18,6 +18,7 @@ from meshscope.compare import compare, prepare
 from meshscope.voxblame import (
     PrepareReferenceError,
     measure_step,
+    page_repair_targets,
     prepare_reference,
     publish_prepare_failure,
     run_step,
@@ -142,12 +143,65 @@ def _prepare_reference_main(argv: list[str]) -> int:
     return 0
 
 
+def _targets_main(argv: list[str]) -> int:
+    parser = argparse.ArgumentParser(
+        prog="mesh-compare voxblame-targets",
+        description="Page the frozen Repair Targets of a Measured Step.",
+    )
+    parser.add_argument(
+        "--output",
+        type=Path,
+        required=True,
+        help="VoxBlame measurement-state directory",
+    )
+    parser.add_argument("--step", type=int, required=True, help="Measured Step number")
+    parser.add_argument(
+        "--offset",
+        type=int,
+        default=0,
+        help="Zero-based offset in the frozen target order (default: 0)",
+    )
+    args = parser.parse_args(argv)
+    try:
+        page = page_repair_targets(args.output, step=args.step, offset=args.offset)
+    except Exception as exc:
+        detail = str(exc)
+        print(
+            json.dumps(
+                {
+                    "ok": False,
+                    "error": {
+                        "classification": "target_page_failed",
+                        "detail": detail,
+                    },
+                },
+                separators=(",", ":"),
+            )
+        )
+        print(f"target_page_failed: {detail}", file=sys.stderr)
+        return 2
+    print(
+        json.dumps(
+            {
+                "ok": True,
+                "output": str(args.output),
+                "step": args.step,
+                "repair_targets": page,
+            },
+            separators=(",", ":"),
+        )
+    )
+    return 0
+
+
 def main(argv=None) -> int:
     argv = list(argv) if argv is not None else sys.argv[1:]
     if argv and argv[0] == "voxblame-measure":
         return _measure_main(argv[1:])
     if argv and argv[0] == "voxblame-prepare-reference":
         return _prepare_reference_main(argv[1:])
+    if argv and argv[0] == "voxblame-targets":
+        return _targets_main(argv[1:])
     parser = argparse.ArgumentParser(description="Compute similarity metrics between two mesh files.")
     parser.add_argument("mesh_a", help="Path to first mesh (source / generated)")
     parser.add_argument("mesh_b", help="Path to second mesh (target / reference)")

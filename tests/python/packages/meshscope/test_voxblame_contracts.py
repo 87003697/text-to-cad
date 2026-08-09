@@ -155,6 +155,19 @@ class CanonicalVoxBlameContractTests(unittest.TestCase):
             path="$.summary.repair_targets.items[0]",
         )
 
+    def test_target_kind_requires_its_exact_mask_storage_schema(self):
+        wrong = deepcopy(self.report)
+        wrong["repair_targets"]["ordered_targets"][0]["mask"][
+            "storage_schema"
+        ] = "exterior_grid_region_set/1"
+
+        self.assert_invalid(
+            lambda: validate_report_contract(wrong),
+            path=(
+                "$.repair_targets.ordered_targets[0].mask.storage_schema"
+            ),
+        )
+
     def test_exterior_resolution_accepts_signed_coarsening_levels(self):
         for document in (self.report, self.summary):
             document["exterior_surface"]["diagnostic_grid_depth"] = 0
@@ -168,6 +181,70 @@ class CanonicalVoxBlameContractTests(unittest.TestCase):
             lambda: validate_report_contract(inconsistent),
             path="$.exterior_surface.coarsened",
         )
+
+    def test_exterior_target_keeps_its_signed_diagnostic_resolution(self):
+        report = deepcopy(self.report)
+        report["exterior_surface"].update(
+            {
+                "surface_present": True,
+                "surface_cell_count": 1,
+                "bounds_canonical": {
+                    "min": [0.6, 0.0, 0.0],
+                    "max": [0.7, 0.1, 0.1],
+                },
+                "centroid_canonical": [0.6333333333333333, 0.0333333333333333, 0.0333333333333333],
+                "nearest_overrun": 0.1,
+                "farthest_overrun": 0.2,
+                "outside_directions": ["+x"],
+                "diagnostic_grid_depth": 0,
+                "coarsened": True,
+            }
+        )
+        exterior_target = deepcopy(
+            report["repair_targets"]["ordered_targets"][0]
+        )
+        exterior_target.update(
+            {
+                "target_key": "step-000001:target-exterior",
+                "kind": "exterior",
+                "display_rank": 1,
+                "bounds_canonical": report["exterior_surface"]["bounds_canonical"],
+                "error_profile": {
+                    "missing_surface_count": 0,
+                    "excess_surface_count": 1,
+                    "surface_error_count": 1,
+                },
+                "exterior": {
+                    key: report["exterior_surface"][key]
+                    for key in (
+                        "centroid_canonical",
+                        "surface_cell_count",
+                        "nearest_overrun",
+                        "farthest_overrun",
+                        "outside_directions",
+                        "diagnostic_grid_depth",
+                        "coarsened",
+                    )
+                },
+            }
+        )
+        exterior_target["mask"] = {
+            "storage_schema": "exterior_grid_region_set/1",
+            "path": "voxblame/steps/000001/targets/exterior.vbregions",
+            "logical_sha256": "6" * 64,
+            "region_count": 1,
+        }
+        exterior_target["component"] = {
+            "component_key": "exterior-component",
+            "split_index": 0,
+            "split_count": 1,
+            "split_reason": "not_split",
+        }
+        report["repair_targets"]["ordered_targets"].append(exterior_target)
+        report["repair_targets"]["total"] = 2
+        report["objective_facts"]["out_of_frame_clear"] = False
+
+        validate_report_contract(report)
 
 
 if __name__ == "__main__":

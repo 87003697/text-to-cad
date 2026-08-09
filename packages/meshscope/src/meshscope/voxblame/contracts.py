@@ -652,7 +652,15 @@ def _validate_target(
         )
     mask_fields = _COMPACT_MASK_FIELDS if compact else _MASK_FIELDS
     mask = _object(target["mask"], f"{path}.mask", mask_fields)
-    _string(mask["storage_schema"], f"{path}.mask.storage_schema")
+    _const(
+        mask["storage_schema"],
+        (
+            "octree_region_set/1"
+            if kind == "interior"
+            else "exterior_grid_region_set/1"
+        ),
+        f"{path}.mask.storage_schema",
+    )
     if not compact:
         _relative_path(mask["path"], f"{path}.mask.path")
     _sha256(mask["logical_sha256"], f"{path}.mask.logical_sha256")
@@ -710,13 +718,7 @@ def _validate_target(
             f"{path}.exterior.outside_directions",
         ):
             _fail(f"{path}.exterior.outside_directions", "must not be empty")
-        _integer(
-            exterior["diagnostic_grid_depth"],
-            f"{path}.exterior.diagnostic_grid_depth",
-            minimum=1,
-            maximum=MAX_DEPTH,
-        )
-        _boolean(exterior["coarsened"], f"{path}.exterior.coarsened")
+        _validate_exterior_resolution(exterior, f"{path}.exterior")
     return key
 
 

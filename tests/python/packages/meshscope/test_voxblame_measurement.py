@@ -18,6 +18,7 @@ add_repo_path("packages/meshscope/src")
 from meshscope.voxblame import (  # noqa: E402
     MEASUREMENT_SUMMARY_SCHEMA,
     measure_step,
+    page_repair_targets,
     prepare_reference,
     read_surface_tree,
 )
@@ -54,6 +55,26 @@ def _write_double_ply(path: Path, mesh: trimesh.Trimesh) -> None:
     )
     lines.extend(f"3 {int(face[0])} {int(face[1])} {int(face[2])}" for face in faces)
     path.write_text("\n".join(lines) + "\n", encoding="ascii")
+
+
+def _disconnected_triangle_row(count: int) -> trimesh.Trimesh:
+    vertices = []
+    faces = []
+    for index, x in enumerate(np.linspace(-0.45, 0.45, count)):
+        start = len(vertices)
+        vertices.extend(
+            [
+                [x - 0.01, -0.01, 0.0],
+                [x + 0.01, -0.01, 0.0],
+                [x - 0.01, 0.01, 0.0],
+            ]
+        )
+        faces.append([start, start + 1, start + 2])
+    return trimesh.Trimesh(
+        vertices=np.asarray(vertices, dtype=np.float64),
+        faces=np.asarray(faces, dtype=np.int64),
+        process=False,
+    )
 
 
 class VoxBlameMeasurementTests(unittest.TestCase):
@@ -220,6 +241,45 @@ class VoxBlameMeasurementTests(unittest.TestCase):
             evidence["logical_sha256"],
             summary["measurement"]["exterior_snapshot_sha256"],
         )
+        targets = summary["repair_targets"]
+        self.assertEqual(
+            {"interior", "exterior"},
+            {target["kind"] for target in targets["items"]},
+        )
+        exterior_target = next(
+            target for target in targets["items"] if target["kind"] == "exterior"
+        )
+        self.assertEqual(
+            "exterior_grid_region_set/1",
+            exterior_target["mask"]["storage_schema"],
+        )
+        self.assertEqual(
+            evidence["surface_cell_count"],
+            exterior_target["error_profile"]["excess_surface_count"],
+        )
+        self.assertEqual(
+            evidence["surface_cell_count"],
+            exterior_target["exterior"]["surface_cell_count"],
+        )
+        self.assertEqual(
+            evidence["outside_directions"],
+            exterior_target["exterior"]["outside_directions"],
+        )
+        report = json.loads(
+            (self.state / "steps/000000/measurement.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        exterior_mask = next(
+            target["mask"]
+            for target in report["repair_targets"]["ordered_targets"]
+            if target["kind"] == "exterior"
+        )
+        (self.state.parent / exterior_mask["path"]).write_text(
+            "{}\n", encoding="utf-8"
+        )
+        with self.assertRaisesRegex(ValueError, "exterior mask identity mismatch"):
+            page_repair_targets(self.state, step=0)
 
     def test_boundary_crossing_triangle_matches_its_clipped_interior_identity(
         self,
@@ -636,7 +696,91 @@ class VoxBlameMeasurementTests(unittest.TestCase):
                 "logical_sha256"
             ],
         )
-        self.assertNotIn("repair_targets", measurement)
+        targets = measurement["repair_targets"]
+        self.assertEqual("repair_target_display/1", targets["ordering_profile"])
+        self.assertEqual(len(targets["ordered_targets"]), targets["total"])
+        self.assertGreaterEqual(targets["total"], 2)
+        self.assertEqual(
+            depth_eight["surface_error_count"],
+            sum(
+                target["error_profile"]["surface_error_count"]
+                for target in targets["ordered_targets"]
+                if target["kind"] == "interior"
+            ),
+        )
+        self.assertEqual(
+            list(range(targets["total"])),
+            [target["display_rank"] for target in targets["ordered_targets"]],
+        )
+        self.assertEqual(
+            [
+                {
+                    **target,
+                    "mask": {
+                        key: value
+                        for key, value in target["mask"].items()
+                        if key != "path"
+                    },
+                }
+                for target in targets["ordered_targets"][
+                    : result.summary["repair_targets"]["returned"]
+                ]
+            ],
+            result.summary["repair_targets"]["items"],
+        )
+
+    def test_disconnected_targets_are_reachable_through_stable_pages(self) -> None:
+        raw = self.root / "ten-patches.ply"
+        _write_double_ply(raw, _disconnected_triangle_row(10))
+        reference = self.root / "paged-input"
+        state = self.root / "paged-voxblame"
+        prepare_reference(raw, reference)
+        canonical = trimesh.load(
+            reference / "reference.ply", force="mesh", process=False
+        )
+        first_patch = trimesh.Trimesh(
+            vertices=np.asarray(canonical.triangles[0], dtype=np.float64),
+            faces=[[0, 1, 2]],
+            process=False,
+        )
+        candidate = self.root / "one-patch.ply"
+        _write_double_ply(candidate, first_patch)
+
+        first_page = measure_step(
+            reference, candidate, state, step=0
+        ).summary["repair_targets"]
+        second_page = page_repair_targets(state, step=0, offset=8)
+
+        self.assertEqual(9, first_page["total"])
+        self.assertEqual(8, first_page["returned"])
+        self.assertEqual(1, first_page["remaining"])
+        self.assertEqual(8, first_page["next_offset"])
+        self.assertEqual(9, second_page["total"])
+        self.assertEqual(1, second_page["returned"])
+        self.assertEqual(0, second_page["remaining"])
+        self.assertIsNone(second_page["next_offset"])
+        self.assertEqual(
+            list(range(9)),
+            [
+                target["display_rank"]
+                for target in first_page["items"] + second_page["items"]
+            ],
+        )
+        report_path = state / "steps/000000/measurement.json"
+        report_text = report_path.read_text(encoding="utf-8")
+        report = json.loads(report_text)
+        first_mask = report["repair_targets"]["ordered_targets"][0]["mask"]
+        report["repair_targets"]["ordered_targets"][0]["target_key"] = (
+            "step-000000:target-corrupt"
+        )
+        report_path.write_text(json.dumps(report), encoding="utf-8")
+        with self.assertRaisesRegex(ValueError, "target identity mismatch"):
+            page_repair_targets(state, step=0, offset=0)
+        report_path.write_text(report_text, encoding="utf-8")
+        mask_path = state.parent / first_mask["path"]
+        mask_path.write_text("{}\n", encoding="utf-8")
+        with self.assertRaisesRegex(ValueError, "mask identity mismatch"):
+            page_repair_targets(state, step=0, offset=0)
 
     def test_identical_rerun_is_idempotent_and_conflict_cannot_overwrite_step(self) -> None:
         first = measure_step(self.reference, self.candidate, self.state, step=0)

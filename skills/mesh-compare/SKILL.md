@@ -35,6 +35,10 @@ python skills/mesh-compare/scripts/mesh-compare voxblame-measure <candidate_mesh
   --reference "${EXP_DIR}/input" --output "${EXP_DIR}/voxblame" \
   --step <N> [--compare-to <M>]
 
+# Page the complete frozen Repair Target order without remeasurement
+python skills/mesh-compare/scripts/mesh-compare voxblame-targets \
+  --output "${EXP_DIR}/voxblame" --step <N> [--offset <OFFSET>]
+
 # Visualization: distance-colored or side-by-side render → PNG on disk
 python skills/mesh-compare/scripts/mesh-render heatmap <mesh_a> <mesh_b> --output <png>
 python skills/mesh-compare/scripts/mesh-render side-by-side <mesh_a> <mesh_b> --output <png>
@@ -79,11 +83,14 @@ when to use `heatmap` vs `side-by-side`.
    Step 0 has no parent; every nonzero step requires an explicit earlier
    `--compare-to`. The command atomically publishes `voxblame.measurement/1`
    plus a compact `voxblame.measurement-summary/1` containing objective depth
-   1-8 facts only. It does not emit Repair Targets, CAD advice, a verdict, or a
-   workflow stop decision. Candidate triangles crossing the canonical cube are
-   clipped into interior and exterior fragments. Fully exterior candidates are
-   valid bad Measured Steps: the command publishes exact containment facts and
-   signed diagnostic exterior occupancy with `out_of_frame_clear: false`.
+   1-8 facts and the first Repair Target page. Follow each non-null
+   `next_offset` with `voxblame-targets` until every target is inspected. Target
+   `display_rank` is a stable display order; use the missing/excess counts as
+   direction facts, not as CAD advice or priority. Candidate triangles crossing
+   the canonical cube are clipped into interior and exterior fragments. Fully
+   exterior candidates are valid bad Measured Steps: the command publishes exact
+   containment facts and signed diagnostic exterior occupancy with
+   `out_of_frame_clear: false`.
 
 ## Handoff
 
@@ -96,8 +103,10 @@ Return outputs based on which CLI(s) were invoked:
   `next_action` is null).
 - **Canonical measurement (`voxblame-measure`)**: return the compact JSON
   summary and the immutable `measurement.json`, depth-8 missing/excess
-  snapshots, candidate tree, and authoritative exterior snapshot paths under the
-  published step directory. Do not infer a modeling decision from these facts.
+  snapshots, Repair Target mask paths, candidate tree, and authoritative
+  exterior snapshot paths under the published step directory. Page through any
+  remaining targets before claiming the target set was inspected. Do not infer
+  a modeling decision from these facts.
 - **Render CLI (`mesh-render`)**: return the PNG path(s) produced
   (`heatmap` and/or `side-by-side` mode).
 - **Both invoked (workflow-typical)**: return both JSON and PNG paths.
@@ -128,6 +137,9 @@ static PNG renders, not interactive CAD artifacts.
   immutable; retrying a step with a different surface tree fails closed. The
   agent consumes the compact JSON summary/report contract, not the binary
   `.vbsvo` snapshot.
+- Repair Targets completely partition the current missing/excess evidence.
+  Treat `display_rank` as non-prescriptive and keep target selection, repair
+  strategy, verdicts, and workflow stop decisions Agent-owned.
 
 ## Progressive references
 
