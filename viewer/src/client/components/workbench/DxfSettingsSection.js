@@ -41,10 +41,10 @@ export const DXF_DEFAULT_BEND_ANGLE_DEG = 0;
 
 export const DXF_BEND_DIRECTIONS = Object.freeze(["up", "down"]);
 
-/** Boxed is the mitered fold — crisp square corners, the schematic default; Curved wraps
- *  the surface around each bend like real sheet metal. */
+/** Curved wraps the surface around each bend like real sheet metal — the default, because
+ *  the preview should look like the part; Boxed is the mitered fold for a schematic look. */
 export const DXF_BEND_STYLES = Object.freeze(["boxed", "curved"]);
-export const DXF_DEFAULT_BEND_STYLE = "boxed";
+export const DXF_DEFAULT_BEND_STYLE = "curved";
 
 /** Inside bend radius in mm; 0 means "auto" (the mesher's visual default, 0.6x thickness). */
 export const DXF_BEND_RADIUS_MAX_MM = 20;
@@ -246,7 +246,7 @@ export function DxfBendsSettings({
 
   return (
     <FileSheetSectionBody>
-      <FileSheetSubsection>
+      <FileSheetSubsection title="Style">
         <FileSheetSelectRow
           label="Style"
           value={style}
@@ -300,11 +300,9 @@ export function DxfBendsSettings({
         ) : null}
       </FileSheetSubsection>
 
-      {/* A titleless subsection renders as a rule plus rows — the separator between the
-          style block above and the per-bend list below. One row per bend: the item label IS
-          the slider label, direction rides inline beside the value box (settings-ui.md
-          "Repeated item groups", single-row form). */}
-      <FileSheetSubsection hideFirstSeparator={false}>
+      {/* One row per bend: the item label IS the slider label, direction rides inline
+          beside the value box (settings-ui.md "Repeated item groups", single-row form). */}
+      <FileSheetSubsection title="Bends">
         {bends.map((bend, index) => {
           const angle = normalizeDxfBendAngleDeg(bend?.angleDeg);
           const direction = normalizeDxfBendDirection(bend?.direction);
@@ -357,7 +355,7 @@ export function DxfBendsSettings({
           actions form a button row (equal columns, icon + label, no row label); each click
           turns the model 90 degrees about that world axis. */}
       {onRotateOrientation ? (
-        <FileSheetSubsection hideFirstSeparator={false}>
+        <FileSheetSubsection title="Orientation">
           <FileSheetButtonRow columns={3}>
             {["x", "y", "z"].map((axis) => (
               <Button
