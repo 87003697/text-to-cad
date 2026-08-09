@@ -30,7 +30,7 @@ def _measure_main(argv: list[str]) -> int:
         description="Measure and atomically publish one canonical Measured Step.",
     )
     parser.add_argument(
-        "candidate", type=Path, help="In-frame canonical candidate mesh"
+        "candidate", type=Path, help="Canonical candidate mesh"
     )
     parser.add_argument(
         "--reference",

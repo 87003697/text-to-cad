@@ -133,6 +133,44 @@ class MeasureStepCliTests(unittest.TestCase):
         self.assertIn("measurement_failed", stderr)
         self.assertFalse((self.output / "steps/000001").exists())
 
+    def test_measure_command_accepts_and_publishes_exterior_candidate_facts(
+        self,
+    ) -> None:
+        exterior = trimesh.Trimesh(
+            vertices=np.array(
+                [[0.6, -0.05, 0.0], [0.7, -0.05, 0.0], [0.6, 0.05, 0.0]],
+                dtype=np.float64,
+            ),
+            faces=[[0, 1, 2]],
+            process=False,
+        )
+        candidate = self.root / "exterior.obj"
+        exterior.export(candidate)
+
+        status, payload, stderr = self.invoke(
+            "voxblame-measure",
+            str(candidate),
+            "--reference",
+            str(self.reference),
+            "--output",
+            str(self.output),
+            "--step",
+            "0",
+        )
+
+        self.assertEqual(0, status, stderr)
+        self.assertTrue(payload["ok"])
+        evidence = payload["measurement"]["exterior_surface"]
+        self.assertTrue(evidence["surface_present"])
+        self.assertEqual(["+x"], evidence["outside_directions"])
+        self.assertFalse(
+            payload["measurement"]["objective_facts"]["out_of_frame_clear"]
+        )
+        snapshot = json.loads(
+            (self.output / "steps/000000/exterior.json").read_text(encoding="utf-8")
+        )
+        self.assertEqual("voxblame.exterior-snapshot/1", snapshot["schema"])
+
 
 if __name__ == "__main__":
     unittest.main()

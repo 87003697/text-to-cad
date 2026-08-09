@@ -85,6 +85,26 @@ The report freezes the complete target order. Interior targets have
 `exterior: null`; exterior targets require the complete diagnostic object.
 `display_rank` is a stable order, not priority.
 
+### Exterior snapshot identity
+
+Each Measured Step persists an authoritative
+`voxblame.exterior-snapshot/1`. Its closed implementation shape records:
+
+- the coordinate contract and `boundary_epsilon`;
+- exact surface presence, clipped exterior bounds and area centroid,
+  nearest/farthest L-infinity overrun, and canonically ordered outside
+  directions;
+- signed diagnostic cells plus a resolution object containing the grid profile,
+  depth, canonical cell size and origin, index mapping, boundary policy, and
+  `coarsened` fact.
+
+The logical snapshot digest is SHA-256 over the canonical JSON bytes with the
+`voxblame.exterior-snapshot/1\0` domain prefix. Resource pressure may reduce
+only diagnostic grid depth and cells; it does not change the exact facts.
+`measurement.observable_sha256` binds the interior-tree digest, authoritative
+exterior-snapshot digest, exterior profile, and complete exterior-resolution
+object.
+
 ## `voxblame.summary/1`
 
 | Object | Exhaustive required fields |

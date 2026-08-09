@@ -26,16 +26,20 @@ from meshscope.voxblame.contracts import (
     validate_session_contract,
 )
 from meshscope.voxblame.errors import OctreeError
+from meshscope.voxblame.exterior import (
+    EXTERIOR_SNAPSHOT_SCHEMA,
+    ExteriorMeasurement,
+    measure_exterior_surface,
+)
 from meshscope.voxblame.frame import CanonicalFrame, mesh_vertices
 from meshscope.voxblame.prepare_reference import (
     CANONICAL_REFERENCE_SCHEMA,
     NORMALIZATION_SCHEMA,
 )
 from meshscope.voxblame.tree import SurfaceTree, tree_from_codes
-from meshscope.voxblame.voxelize import Backend, voxelize_mesh
+from meshscope.voxblame.voxelize import Backend, build_lattice_tree, voxelize_mesh
 
 
-_EXTERIOR_SCHEMA = "voxblame.exterior-placeholder/1"
 MEASUREMENT_SCHEMA = "voxblame.measurement/1"
 MEASUREMENT_SUMMARY_SCHEMA = "voxblame.measurement-summary/1"
 _SURFACE_PROFILE = "conservative_surface_occupancy/1"
@@ -70,7 +74,7 @@ def measure_step(
     compare_to: int | None = None,
     backend: Backend = "auto",
 ) -> MeasureStepResult:
-    """Measure one in-frame candidate and publish a canonical Measured Step."""
+    """Measure one canonical candidate and publish a canonical Measured Step."""
 
     _validate_ancestry(step, compare_to)
     reference_root = Path(canonical_reference)
@@ -90,22 +94,29 @@ def measure_step(
     )
     frame = CanonicalFrame((0.0, 0.0, 0.0), 1.0)
     _assert_canonical_bounds(reference_mesh, "reference")
-    _assert_canonical_bounds(candidate, "candidate")
 
     reference_tree = voxelize_mesh(reference_mesh, frame, MAX_DEPTH, backend=backend)
     candidate_digest = hashlib.sha256(candidate_bytes).hexdigest()
+    exterior = measure_exterior_surface(
+        np.asarray(candidate.triangles, dtype=np.float64)
+    )
     if candidate_digest == manifest["reference_ply"]["sha256"]:
         candidate_tree = reference_tree
+    elif len(exterior.interior_triangles):
+        candidate_tree = build_lattice_tree(
+            exterior.interior_triangles,
+            MAX_DEPTH,
+            backend=backend,
+        )
     else:
-        candidate_tree = voxelize_mesh(candidate, frame, MAX_DEPTH, backend=backend)
+        candidate_tree = SurfaceTree.empty(MAX_DEPTH)
 
     reference_sets = _occupancy_by_depth(reference_tree)
     candidate_sets = _occupancy_by_depth(candidate_tree)
     errors_by_depth = _errors_by_depth(reference_sets, candidate_sets)
     missing_tree = tree_from_codes(reference_sets[-1] - candidate_sets[-1], MAX_DEPTH)
     excess_tree = tree_from_codes(candidate_sets[-1] - reference_sets[-1], MAX_DEPTH)
-    exterior_bytes, exterior_digest = _clear_exterior_snapshot()
-    observable_digest = _observable_sha256(candidate_tree.logical_sha256, exterior_digest)
+    observable_digest = _observable_sha256(candidate_tree.logical_sha256, exterior)
 
     session = _session_document(
         reference_root,
@@ -131,7 +142,7 @@ def measure_step(
         errors_by_depth=errors_by_depth,
         missing_tree=missing_tree,
         excess_tree=excess_tree,
-        exterior_digest=exterior_digest,
+        exterior=exterior,
         observable_digest=observable_digest,
         no_observable_geometry_change=(
             parent_measurement is not None
@@ -146,7 +157,7 @@ def measure_step(
         candidate_tree=candidate_tree,
         missing_tree=missing_tree,
         excess_tree=excess_tree,
-        exterior_bytes=exterior_bytes,
+        exterior_bytes=exterior.snapshot_bytes,
         measurement=measurement,
         summary=summary,
     )
@@ -366,25 +377,27 @@ def _measurement_document(
     errors_by_depth: list[dict[str, Any]],
     missing_tree: SurfaceTree,
     excess_tree: SurfaceTree,
-    exterior_digest: str,
+    exterior: ExteriorMeasurement,
     observable_digest: str,
     no_observable_geometry_change: bool,
 ) -> dict[str, Any]:
     step_root = f"{output_root.name}/steps/{step:06d}"
     reference = session["canonical_reference"]
-    exterior = {
-        "storage_schema": _EXTERIOR_SCHEMA,
+    exact_exterior = exterior.exact
+    resolution = exterior.resolution
+    exterior_document = {
+        "storage_schema": EXTERIOR_SNAPSHOT_SCHEMA,
         "path": f"{step_root}/exterior.json",
-        "logical_sha256": exterior_digest,
-        "surface_present": False,
-        "surface_cell_count": 0,
-        "bounds_canonical": None,
-        "centroid_canonical": None,
-        "nearest_overrun": None,
-        "farthest_overrun": None,
-        "outside_directions": [],
-        "diagnostic_grid_depth": MAX_DEPTH,
-        "coarsened": False,
+        "logical_sha256": exterior.logical_sha256,
+        "surface_present": exact_exterior["surface_present"],
+        "surface_cell_count": exterior.surface_cell_count,
+        "bounds_canonical": exact_exterior["bounds_canonical"],
+        "centroid_canonical": exact_exterior["centroid_canonical"],
+        "nearest_overrun": exact_exterior["nearest_overrun"],
+        "farthest_overrun": exact_exterior["farthest_overrun"],
+        "outside_directions": exact_exterior["outside_directions"],
+        "diagnostic_grid_depth": resolution["diagnostic_grid_depth"],
+        "coarsened": resolution["coarsened"],
     }
     return {
         "schema": MEASUREMENT_SCHEMA,
@@ -401,7 +414,7 @@ def _measurement_document(
         "measurement": {
             "candidate_mesh_sha256": candidate_mesh_sha256,
             "interior_tree_sha256": candidate_tree.logical_sha256,
-            "exterior_snapshot_sha256": exterior_digest,
+            "exterior_snapshot_sha256": exterior.logical_sha256,
             "observable_sha256": observable_digest,
         },
         "errors_by_depth": errors_by_depth,
@@ -419,10 +432,10 @@ def _measurement_document(
                 "surface_count": excess_tree.leaf_count,
             },
         },
-        "exterior_surface": exterior,
+        "exterior_surface": exterior_document,
         "objective_facts": {
             "global_depth_8_zero": errors_by_depth[-1]["surface_error_count"] == 0,
-            "out_of_frame_clear": True,
+            "out_of_frame_clear": not exact_exterior["surface_present"],
             "no_evidence_conflict": True,
         },
         "no_observable_geometry_change": no_observable_geometry_change,
@@ -498,25 +511,16 @@ def _validate_measurement_slice(
         raise OctreeError("depth-8 set evidence count mismatch")
 
 
-def _clear_exterior_snapshot() -> tuple[bytes, str]:
-    value = {
-        "schema": _EXTERIOR_SCHEMA,
-        "coordinate_contract": COORDINATE_CONTRACT,
-        "diagnostic_grid_depth": MAX_DEPTH,
-        "surface_present": False,
-    }
-    data = _json_bytes(value)
-    digest = hashlib.sha256(b"voxblame.exterior-placeholder/1\0" + data).hexdigest()
-    return data, digest
-
-
-def _observable_sha256(interior_sha256: str, exterior_sha256: str) -> str:
+def _observable_sha256(
+    interior_sha256: str,
+    exterior: ExteriorMeasurement,
+) -> str:
     identity = {
         "schema": "voxblame.observable/1",
         "interior_tree_sha256": interior_sha256,
-        "exterior_snapshot_sha256": exterior_sha256,
+        "exterior_snapshot_sha256": exterior.logical_sha256,
         "exterior_profile": _EXTERIOR_PROFILE,
-        "diagnostic_grid_depth": MAX_DEPTH,
+        "exterior_resolution": exterior.resolution,
     }
     return hashlib.sha256(_json_bytes(identity)).hexdigest()
 

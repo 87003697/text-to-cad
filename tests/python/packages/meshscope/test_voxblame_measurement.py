@@ -34,6 +34,28 @@ def _thin_triangle() -> trimesh.Trimesh:
     )
 
 
+def _write_double_ply(path: Path, mesh: trimesh.Trimesh) -> None:
+    vertices = np.asarray(mesh.vertices, dtype=np.float64)
+    faces = np.asarray(mesh.faces, dtype=np.int64)
+    lines = [
+        "ply",
+        "format ascii 1.0",
+        f"element vertex {len(vertices)}",
+        "property double x",
+        "property double y",
+        "property double z",
+        f"element face {len(faces)}",
+        "property list uchar int vertex_indices",
+        "end_header",
+    ]
+    lines.extend(
+        " ".join(format(float(value), ".17g") for value in vertex)
+        for vertex in vertices
+    )
+    lines.extend(f"3 {int(face[0])} {int(face[1])} {int(face[2])}" for face in faces)
+    path.write_text("\n".join(lines) + "\n", encoding="ascii")
+
+
 class VoxBlameMeasurementTests(unittest.TestCase):
     def setUp(self) -> None:
         self.temporary = tempfile.TemporaryDirectory()
@@ -135,6 +157,253 @@ class VoxBlameMeasurementTests(unittest.TestCase):
 
         self.assertGreater(summary["errors_by_depth"][-1]["surface_error_count"], 0)
         self.assertFalse(summary["objective_facts"]["global_depth_8_zero"])
+
+    def test_fully_exterior_candidate_publishes_complete_veto_evidence(self) -> None:
+        exterior = trimesh.Trimesh(
+            vertices=np.array(
+                [
+                    [0.6, -0.05, 0.0],
+                    [0.7, -0.05, 0.0],
+                    [0.6, 0.05, 0.0],
+                ],
+                dtype=np.float64,
+            ),
+            faces=[[0, 1, 2]],
+            process=False,
+        )
+        exterior_path = self.root / "fully-exterior.obj"
+        exterior.export(exterior_path)
+
+        summary = measure_step(
+            self.reference,
+            exterior_path,
+            self.state,
+            step=0,
+        ).summary
+
+        depth_eight = summary["errors_by_depth"][-1]
+        self.assertEqual(0, depth_eight["candidate_surface_count"])
+        self.assertEqual(
+            depth_eight["reference_surface_count"],
+            depth_eight["missing_surface_count"],
+        )
+        self.assertEqual(0, depth_eight["excess_surface_count"])
+        evidence = summary["exterior_surface"]
+        self.assertTrue(evidence["surface_present"])
+        self.assertGreater(evidence["surface_cell_count"], 0)
+        self.assertEqual(["+x"], evidence["outside_directions"])
+        self.assertEqual(
+            {"min": [0.6, -0.05, 0.0], "max": [0.7, 0.05, 0.0]},
+            evidence["bounds_canonical"],
+        )
+        self.assertAlmostEqual(0.1, evidence["nearest_overrun"])
+        self.assertAlmostEqual(0.2, evidence["farthest_overrun"])
+        self.assertEqual(
+            {
+                "global_depth_8_zero": False,
+                "out_of_frame_clear": False,
+                "no_evidence_conflict": True,
+            },
+            summary["objective_facts"],
+        )
+        snapshot_path = self.state / "steps/000000/exterior.json"
+        snapshot_bytes = snapshot_path.read_bytes()
+        snapshot = json.loads(snapshot_bytes)
+        self.assertEqual("voxblame.exterior-snapshot/1", snapshot["schema"])
+        self.assertEqual(
+            hashlib.sha256(
+                b"voxblame.exterior-snapshot/1\0" + snapshot_bytes
+            ).hexdigest(),
+            evidence["logical_sha256"],
+        )
+        self.assertEqual(
+            evidence["logical_sha256"],
+            summary["measurement"]["exterior_snapshot_sha256"],
+        )
+
+    def test_boundary_crossing_triangle_matches_its_clipped_interior_identity(
+        self,
+    ) -> None:
+        crossing = trimesh.Trimesh(
+            vertices=np.array(
+                [
+                    [-0.25, -0.1, 0.0],
+                    [0.75, -0.1, 0.0],
+                    [-0.25, 0.1, 0.0],
+                ],
+                dtype=np.float64,
+            ),
+            faces=[[0, 1, 2]],
+            process=False,
+        )
+        crossing_path = self.root / "crossing.obj"
+        crossing.export(crossing_path)
+        clipped = trimesh.Trimesh(
+            vertices=np.array(
+                [
+                    [-0.25, -0.1, 0.0],
+                    [0.5, -0.1, 0.0],
+                    [0.5, -0.05, 0.0],
+                    [-0.25, 0.1, 0.0],
+                ],
+                dtype=np.float64,
+            ),
+            faces=[[0, 1, 2], [0, 2, 3]],
+            process=False,
+        )
+        clipped_path = self.root / "clipped.obj"
+        clipped.export(clipped_path)
+
+        crossing_summary = measure_step(
+            self.reference,
+            crossing_path,
+            self.state,
+            step=0,
+        ).summary
+        clipped_summary = measure_step(
+            self.reference,
+            clipped_path,
+            self.state,
+            step=1,
+            compare_to=0,
+        ).summary
+
+        self.assertEqual(
+            crossing_summary["measurement"]["interior_tree_sha256"],
+            clipped_summary["measurement"]["interior_tree_sha256"],
+        )
+        self.assertNotEqual(
+            crossing_summary["measurement"]["exterior_snapshot_sha256"],
+            clipped_summary["measurement"]["exterior_snapshot_sha256"],
+        )
+        self.assertNotEqual(
+            crossing_summary["measurement"]["observable_sha256"],
+            clipped_summary["measurement"]["observable_sha256"],
+        )
+        crossing_exterior = crossing_summary["exterior_surface"]
+        self.assertTrue(crossing_exterior["surface_present"])
+        self.assertEqual(["+x"], crossing_exterior["outside_directions"])
+        self.assertAlmostEqual(
+            0.5,
+            crossing_exterior["bounds_canonical"]["min"][0],
+        )
+        self.assertAlmostEqual(0.0, crossing_exterior["nearest_overrun"])
+        self.assertFalse(crossing_summary["objective_facts"]["out_of_frame_clear"])
+        self.assertTrue(clipped_summary["objective_facts"]["out_of_frame_clear"])
+
+    def test_boundary_epsilon_distinguishes_clear_from_true_exterior(self) -> None:
+        canonical = trimesh.load(self.candidate, force="mesh", process=False)
+        boundary_vertex = int(np.argmax(np.asarray(canonical.vertices)[:, 0]))
+        within_epsilon = canonical.copy()
+        within_epsilon.vertices[boundary_vertex, 0] = 0.5 + 0.5e-9
+        within_path = self.root / "within-epsilon.ply"
+        _write_double_ply(within_path, within_epsilon)
+        beyond_epsilon = canonical.copy()
+        beyond_epsilon.vertices[boundary_vertex, 0] = 0.5 + 2.0e-9
+        beyond_path = self.root / "beyond-epsilon.ply"
+        _write_double_ply(beyond_path, beyond_epsilon)
+
+        within = measure_step(
+            self.reference,
+            within_path,
+            self.state,
+            step=0,
+        ).summary
+        beyond = measure_step(
+            self.reference,
+            beyond_path,
+            self.state,
+            step=1,
+            compare_to=0,
+        ).summary
+
+        self.assertEqual(
+            {
+                "global_depth_8_zero": True,
+                "out_of_frame_clear": True,
+                "no_evidence_conflict": True,
+            },
+            within["objective_facts"],
+        )
+        self.assertTrue(beyond["objective_facts"]["global_depth_8_zero"])
+        self.assertFalse(beyond["objective_facts"]["out_of_frame_clear"])
+        self.assertTrue(beyond["exterior_surface"]["surface_present"])
+        self.assertEqual(["+x"], beyond["exterior_surface"]["outside_directions"])
+
+    def test_resource_coarsening_changes_only_diagnostic_exterior_evidence(
+        self,
+    ) -> None:
+        vertices = np.array(
+            [
+                [0.6, -1.0, -1.0],
+                [0.6, 1.0, -1.0],
+                [0.6, -1.0, 1.0],
+            ],
+            dtype=np.float64,
+        )
+        exterior = trimesh.Trimesh(
+            vertices=vertices,
+            faces=[[0, 1, 2]],
+            process=False,
+        )
+        exterior_path = self.root / "coarsened-exterior.obj"
+        exterior.export(exterior_path)
+
+        summary = measure_step(
+            self.reference,
+            exterior_path,
+            self.state,
+            step=0,
+        ).summary
+        evidence = summary["exterior_surface"]
+        self.assertTrue(evidence["surface_present"])
+        self.assertEqual(
+            {"min": [0.6, -1.0, -1.0], "max": [0.6, 1.0, 1.0]},
+            evidence["bounds_canonical"],
+        )
+        self.assertEqual(
+            ["+x", "-y", "+y", "-z", "+z"],
+            evidence["outside_directions"],
+        )
+        self.assertAlmostEqual(0.1, evidence["nearest_overrun"])
+        self.assertAlmostEqual(0.5, evidence["farthest_overrun"])
+        self.assertTrue(evidence["coarsened"])
+        self.assertLess(evidence["diagnostic_grid_depth"], 8)
+        snapshot = json.loads(
+            (self.state / "steps/000000/exterior.json").read_text(encoding="utf-8")
+        )
+        self.assertEqual(
+            evidence["diagnostic_grid_depth"],
+            snapshot["resolution"]["diagnostic_grid_depth"],
+        )
+        self.assertEqual(
+            "canonical-boundary-interior-closed-cells/1",
+            snapshot["resolution"]["boundary_policy"],
+        )
+        expected_observable = {
+            "schema": "voxblame.observable/1",
+            "interior_tree_sha256": summary["measurement"]["interior_tree_sha256"],
+            "exterior_snapshot_sha256": summary["measurement"][
+                "exterior_snapshot_sha256"
+            ],
+            "exterior_profile": "signed_exterior_surface/1",
+            "exterior_resolution": snapshot["resolution"],
+        }
+        expected_digest = hashlib.sha256(
+            (
+                json.dumps(
+                    expected_observable,
+                    indent=2,
+                    sort_keys=True,
+                    separators=(",", ": "),
+                )
+                + "\n"
+            ).encode("utf-8")
+        ).hexdigest()
+        self.assertEqual(
+            expected_digest,
+            summary["measurement"]["observable_sha256"],
+        )
 
     def test_missing_and_excess_candidates_report_separate_directions(self) -> None:
         raw = trimesh.Trimesh(

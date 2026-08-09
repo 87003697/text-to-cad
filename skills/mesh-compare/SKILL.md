@@ -30,7 +30,7 @@ python skills/mesh-compare/scripts/mesh-compare <mesh_a> <mesh_b> [--samples N] 
 python skills/mesh-compare/scripts/mesh-compare <reference_mesh> <candidate_mesh> \
   --voxblame-dir "${EXP_DIR}/voxblame" --step <N> --max-depth 8 [--compare-to <M>]
 
-# Canonical in-frame measurement against a prepared Canonical Reference
+# Canonical measurement against a prepared Canonical Reference
 python skills/mesh-compare/scripts/mesh-compare voxblame-measure <candidate_mesh> \
   --reference "${EXP_DIR}/input" --output "${EXP_DIR}/voxblame" \
   --step <N> [--compare-to <M>]
@@ -80,9 +80,10 @@ when to use `heatmap` vs `side-by-side`.
    `--compare-to`. The command atomically publishes `voxblame.measurement/1`
    plus a compact `voxblame.measurement-summary/1` containing objective depth
    1-8 facts only. It does not emit Repair Targets, CAD advice, a verdict, or a
-   workflow stop decision. This incremental command accepts in-frame candidates
-   only; exterior measurement and the final target-complete report contract are
-   separate later workflow slices.
+   workflow stop decision. Candidate triangles crossing the canonical cube are
+   clipped into interior and exterior fragments. Fully exterior candidates are
+   valid bad Measured Steps: the command publishes exact containment facts and
+   signed diagnostic exterior occupancy with `out_of_frame_clear: false`.
 
 ## Handoff
 
@@ -95,7 +96,7 @@ Return outputs based on which CLI(s) were invoked:
   `next_action` is null).
 - **Canonical measurement (`voxblame-measure`)**: return the compact JSON
   summary and the immutable `measurement.json`, depth-8 missing/excess
-  snapshots, candidate tree, and exterior-placeholder paths under the
+  snapshots, candidate tree, and authoritative exterior snapshot paths under the
   published step directory. Do not infer a modeling decision from these facts.
 - **Render CLI (`mesh-render`)**: return the PNG path(s) produced
   (`heatmap` and/or `side-by-side` mode).

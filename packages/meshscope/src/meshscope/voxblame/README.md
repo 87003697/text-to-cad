@@ -33,6 +33,8 @@ mesh inputs
 | `reporting.py` | Projection of domain objects into `voxblame.report/2` and `voxblame.summary/1` JSON. |
 | `contracts.py` | Closed-world validators for the frozen replacement canonical session, report, and summary shapes. |
 | `prepare_reference.py` | Raw input capture, evaluated-scene normalization, identity, validation, and atomic Canonical Reference publication. |
+| `exterior.py` | Canonical-cube clipping, exact exterior facts, signed diagnostic occupancy, and snapshot identity. |
+| `measurement.py` | Multiresolution interior/exterior measurement and atomic Measured Step publication. |
 | `store.py` | Filesystem repository, strict loads, idempotent retry, and atomic session/step publication. |
 | `session.py` | Application orchestration exposed as `run_step(...)`. |
 | `__init__.py` | Curated public API. |
@@ -80,6 +82,36 @@ from meshscope.voxblame import prepare_reference
 result = prepare_reference(raw_scene, output_directory)
 manifest = result.manifest
 ```
+
+### Canonical Measured Step
+
+The replacement measurement boundary accepts any candidate already expressed
+in Canonical Reference coordinates, including boundary-crossing and fully
+exterior geometry:
+
+```python
+from meshscope.voxblame import measure_step
+
+result = measure_step(
+    canonical_reference=experiment / "input",
+    candidate_mesh=candidate,
+    output=experiment / "voxblame",
+    step=0,
+)
+```
+
+Triangles that cross `[-0.5, 0.5]^3` are geometrically partitioned before
+occupancy is built. Interior fragments supply the depth-1 through depth-8
+surface evidence. Exterior fragments supply exact containment, canonical
+bounds, centroid, outside directions, and nearest/farthest L-infinity overrun,
+plus a signed diagnostic grid. Resource limits may reduce only the diagnostic
+grid depth; exact facts remain unchanged. The persisted exterior snapshot and
+its resolution metadata participate in the Observable Geometry identity.
+
+VoxBlame publishes objective facts rather than an `accepted` verdict. Complete
+acceptance requires all three facts to be true: exact depth-8 equality
+(`global_depth_8_zero`), a clear exterior (`out_of_frame_clear`), and no
+unresolved evidence conflict (`no_evidence_conflict`).
 
 ### Application entry point
 
