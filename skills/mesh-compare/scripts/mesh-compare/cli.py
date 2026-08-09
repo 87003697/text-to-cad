@@ -20,10 +20,69 @@ if _BUNDLED_MESHSCOPE.is_dir():
     sys.path.insert(0, str(_BUNDLED_MESHSCOPE))
 
 from meshscope.compare import compare, prepare
-from meshscope.voxblame import run_step
+from meshscope.voxblame import (
+    PrepareReferenceError,
+    prepare_reference,
+    publish_prepare_failure,
+    run_step,
+)
+
+
+def _prepare_reference_main(argv: list[str]) -> int:
+    parser = argparse.ArgumentParser(
+        prog="mesh-compare voxblame-prepare-reference",
+        description="Prepare and atomically publish a Canonical Reference.",
+    )
+    parser.add_argument("source", help="Raw input scene or mesh")
+    parser.add_argument(
+        "--output",
+        type=Path,
+        required=True,
+        help="Canonical input publication directory",
+    )
+    args = parser.parse_args(argv)
+    try:
+        result = prepare_reference(args.source, args.output)
+    except PrepareReferenceError as error:
+        failure_path = publish_prepare_failure(
+            source=args.source,
+            output=args.output,
+            error=error,
+        )
+        print(
+            json.dumps(
+                {
+                    "ok": False,
+                    "error": {
+                        "classification": error.classification,
+                        "phase": error.phase,
+                        "detail": error.detail,
+                    },
+                    "failure_evidence": str(failure_path),
+                },
+                separators=(",", ":"),
+            )
+        )
+        print(f"{error.classification}: {error.detail}", file=sys.stderr)
+        return 2
+    print(
+        json.dumps(
+            {
+                "ok": True,
+                "output": str(args.output),
+                "idempotent": result.idempotent,
+                "canonical_reference": result.manifest,
+            },
+            separators=(",", ":"),
+        )
+    )
+    return 0
 
 
 def main(argv=None) -> int:
+    argv = list(argv) if argv is not None else sys.argv[1:]
+    if argv and argv[0] == "voxblame-prepare-reference":
+        return _prepare_reference_main(argv[1:])
     parser = argparse.ArgumentParser(description="Compute similarity metrics between two mesh files.")
     parser.add_argument("mesh_a", help="Path to first mesh (source / generated)")
     parser.add_argument("mesh_b", help="Path to second mesh (target / reference)")
