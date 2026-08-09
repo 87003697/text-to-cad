@@ -186,7 +186,10 @@ def _drawing_payload_refs(descriptor):
 
     Mirrors ``drawing_package_current`` in cadgen's drawing_package.py; the two authorities
     must ask the same question or a build and a status GET disagree."""
-    return [str(descriptor.get("preview") or "").strip()]
+    return [
+        str(descriptor.get("preview") or "").strip(),
+        str(descriptor.get("geometry") or "").strip(),
+    ]
 
 
 def _implicit_payload_refs(descriptor):

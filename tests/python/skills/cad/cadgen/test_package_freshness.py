@@ -175,6 +175,7 @@ class DrawingPackageCurrencyGateTests(unittest.TestCase):
         package_dir.mkdir(parents=True)
         (package_dir / "drawing.dxf").write_text("0\nEOF\n", encoding="utf-8")
         (package_dir / "preview.glb").write_bytes(b"glTF\x02\x00\x00\x00")
+        (package_dir / "geometry.json").write_text("{}", encoding="utf-8")
         closure = closure_for_files(script, [], base=root)
         descriptor = {
             "kind": DRAWING_PACKAGE_KIND,
@@ -183,6 +184,7 @@ class DrawingPackageCurrencyGateTests(unittest.TestCase):
             "sourcePath": script.name,
             "dxf": "drawing.dxf",
             "preview": "preview.glb",
+            "geometry": "geometry.json",
             "bakeHash": canonical_bake_hash(drawing_preview_bake_settings()),
             "sourceClosureHash": closure.closure_hash,
             "sourceClosureFiles": list(closure.files),

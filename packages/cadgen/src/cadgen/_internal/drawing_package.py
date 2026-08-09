@@ -59,7 +59,9 @@ DRAWING_PACKAGE_KIND = "drawing-package"
 # package written before the preview reports unsupported and rebuilds once, lazily.
 # v4: previewStats gained bendAxisX, which the viewer's fold needs. A package without it is
 # not merely old -- its Bends tab can never fold -- so every v3 package must rebuild.
-DRAWING_PACKAGE_SCHEMA_VERSION = 4
+# v5: the package gained geometry.json (the parsed 2D contours), which the viewer's curved
+# bend mode re-meshes from. A package without it cannot render curved bends.
+DRAWING_PACKAGE_SCHEMA_VERSION = 5
 DRAWING_DESCRIPTOR_NAME = "drawing.json"
 DRAWING_PREVIEW_NAME = "preview.glb"
 
@@ -363,6 +365,7 @@ def _preview_descriptor_fields(preview: dict[str, object]) -> dict[str, object]:
     bake = drawing_preview_bake_settings()
     fields: dict[str, object] = {
         "preview": DRAWING_PREVIEW_NAME,
+        "geometry": str(preview.get("geometryFile") or "").strip() or None,
         "bake": bake,
         "bakeHash": canonical_bake_hash(bake),
     }
@@ -451,9 +454,10 @@ def drawing_package_current(source_path: Path) -> bool:
     # stale here as well as in the viewer, or the CLI would report "current" over a package
     # the viewer cannot render. There is no longer a `dxf` payload to check: the cache holds
     # what was computed, and a generated drawing's DXF is produced on demand.
-    preview_ref = str(descriptor.get("preview") or "").strip()
-    if not preview_ref or not (package_dir / preview_ref).is_file():
-        return False
+    for payload_key in ("preview", "geometry"):
+        payload_ref = str(descriptor.get(payload_key) or "").strip()
+        if not payload_ref or not (package_dir / payload_ref).is_file():
+            return False
     if str(descriptor.get("sourceKind") or "").strip().lower() == "python":
         closure_hash = str(descriptor.get("sourceClosureHash") or "").strip()
         closure_files = descriptor.get("sourceClosureFiles")

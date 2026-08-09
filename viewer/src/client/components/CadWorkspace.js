@@ -12,9 +12,9 @@ import {
 import MeshFileSheet from "./workbench/MeshFileSheet";
 import { DXF_PREVIEW_REFERENCE_THICKNESS_MM } from "cadjs/lib/dxf/previewGlb";
 import {
-  buildDxfBendsTab,
-  buildDxfMaterialTab,
+  buildDxfDrawingTab,
   DXF_DEFAULT_BEND_ANGLE_DEG,
+  DXF_DEFAULT_BEND_STYLE,
   DXF_DEFAULT_THICKNESS_MM,
   normalizeDxfBendAngleDeg,
   normalizeDxfThicknessMm
@@ -1230,6 +1230,11 @@ export default function CadWorkspace({
   // One entry per bend line, in axis order. An array because "the bend angle" stopped being
   // a thing the moment a drawing had two bends that want different angles.
   const [drawingBends, setDrawingBends] = useState([]);
+  const [drawingBendStyle, setDrawingBendStyle] = useState(DXF_DEFAULT_BEND_STYLE);
+  // The package's parsed contours, fetched once per entry and kept by URL. Curved bends
+  // re-mesh from these; the URL carries the package version, so a rebuild refetches.
+  const drawingGeometryCacheRef = useRef(new Map());
+  const [drawingGeometry, setDrawingGeometry] = useState(null);
   const resolvedThemeSettings = useMemo(
     () => resolveThemeSettingsForColorMode(themeSettings, { prefersDark: false }),
     [themeSettings]
@@ -3222,6 +3227,41 @@ export default function CadWorkspace({
       direction: "up"
     })));
   }, [selectedKey, selectedDrawingBendAxisCount]);
+
+  const drawingGeometryUrl = selectedEntryIsDrawing
+    ? String(selectedEntry?.relations?.drawingGeometry?.url || "")
+    : "";
+  useEffect(() => {
+    if (!drawingGeometryUrl) {
+      setDrawingGeometry(null);
+      return undefined;
+    }
+    const cache = drawingGeometryCacheRef.current;
+    if (cache.has(drawingGeometryUrl)) {
+      setDrawingGeometry(cache.get(drawingGeometryUrl));
+      return undefined;
+    }
+    let cancelled = false;
+    fetch(drawingGeometryUrl)
+      .then((response) => (response.ok ? response.json() : null))
+      .then((payload) => {
+        if (cancelled) {
+          return;
+        }
+        if (payload) {
+          cache.set(drawingGeometryUrl, payload);
+        }
+        setDrawingGeometry(payload);
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setDrawingGeometry(null);
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [drawingGeometryUrl]);
 
   const handleDrawingBendChange = useCallback((index, patch) => {
     setDrawingBends((current) => current.map(
@@ -8065,6 +8105,10 @@ export default function CadWorkspace({
           planMode={selectedEntryIsDrawing && drawingViewMode === "2d"}
           bendAxisX={selectedEntryIsDrawing ? selectedEntry?.bendAxisX || null : null}
           bendAnglesRad={selectedEntryIsDrawing ? drawingBendAnglesRad : null}
+          drawingBends={selectedEntryIsDrawing ? drawingBends : null}
+          drawingBendStyle={selectedEntryIsDrawing ? drawingBendStyle : "sharp"}
+          drawingGeometry={selectedEntryIsDrawing ? drawingGeometry : null}
+          drawingThicknessMm={selectedEntryIsDrawing ? drawingThicknessMm : 0}
           onCameraZoomPercentChange={setViewerZoomPercent}
           renderPartsIndividually={isUrdfView || Boolean(selectedStepParameterRuntime)}
           stepParameters={selectedStepParameterRuntime}
@@ -8448,18 +8492,16 @@ export default function CadWorkspace({
                 suppressDynamicMetadataStatus={selectedArtifactGenerating}
                 statusItems={selectedFileStatusItems}
                 themeTabs={[
-                  buildDxfMaterialTab({
+                  buildDxfDrawingTab({
                     thicknessMm: drawingThicknessMm,
-                    onThicknessChange: setDrawingThicknessMm
-                  }),
-                  // Null for a drawing with no bend lines, so the strip carries no tab that
-                  // would have nothing in it.
-                  buildDxfBendsTab({
+                    onThicknessChange: setDrawingThicknessMm,
                     bends: drawingBends,
-                    onBendChange: handleDrawingBendChange
+                    onBendChange: handleDrawingBendChange,
+                    bendStyle: drawingBendStyle,
+                    onBendStyleChange: setDrawingBendStyle
                   }),
                   ...themeTabs
-                ].filter(Boolean)}
+                ]}
                 openSectionIds={effectiveFileSheetOpenSectionIds}
                 onOpenSectionIdsChange={handleFileSheetOpenSectionIdsChange}
               />

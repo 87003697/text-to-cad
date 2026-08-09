@@ -315,10 +315,20 @@ export function FileSheetValueInput({
     inputRef.current?.select?.();
   }, [editing, visibleValue]);
 
+  const pendingSelectFrameRef = useRef(0);
   const selectInputValue = (input) => {
     input?.select?.();
     if (typeof window !== "undefined") {
-      window.requestAnimationFrame?.(() => input?.select?.());
+      // The deferred re-select exists for the format swap on focus ("2.0 mm" -> "2"). It
+      // must die the moment the user types: firing after the first keystroke re-selects the
+      // typed digit, and the second keystroke then overwrites the first.
+      window.cancelAnimationFrame?.(pendingSelectFrameRef.current);
+      pendingSelectFrameRef.current = window.requestAnimationFrame?.(() => {
+        if (selectOnEditRef.current === false) {
+          return;
+        }
+        input?.select?.();
+      }) || 0;
     }
   };
 
@@ -331,6 +341,12 @@ export function FileSheetValueInput({
       disabled={disabled}
       data-editing={editing ? "true" : "false"}
       onChange={(event) => {
+        // Typing cancels every pending select — the selection belongs to focus, never to a
+        // frame that lands mid-word.
+        selectOnEditRef.current = false;
+        if (typeof window !== "undefined") {
+          window.cancelAnimationFrame?.(pendingSelectFrameRef.current);
+        }
         setDraftValue(event.target.value);
       }}
       onFocus={(event) => {

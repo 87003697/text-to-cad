@@ -602,12 +602,15 @@ def _write_drawing_package(
     os.makedirs(pkg, exist_ok=True)
     with open(os.path.join(pkg, "preview.glb"), "wb") as h:
         h.write(b"glTF\x02\x00\x00\x00")
+    with open(os.path.join(pkg, "geometry.json"), "w") as h:
+        h.write("{}")
     closure_files = [py_name] + list(closure_extra or [])
     descriptor = {
         "kind": kind,
         "sourceKind": "python",
         "sourcePath": py_name,
         "sourceHash": "abc123",
+        "geometry": "geometry.json",
         "sourceClosureFiles": closure_files,
     }
     if preview:
@@ -638,6 +641,8 @@ def _write_imported_drawing_package(root, dxf_name, *, source_digest=True, previ
     os.makedirs(pkg, exist_ok=True)
     with open(os.path.join(pkg, "preview.glb"), "wb") as h:
         h.write(b"glTF\x02\x00\x00\x00")
+    with open(os.path.join(pkg, "geometry.json"), "w") as h:
+        h.write("{}")
     descriptor = {
         "kind": "drawing-package",
         "packageSchemaVersion": _DXF_SCHEMA_VERSION,
@@ -645,6 +650,7 @@ def _write_imported_drawing_package(root, dxf_name, *, source_digest=True, previ
         "sourcePath": dxf_name,
         "dxf": "drawing.dxf",
         "dxfHash": digest,
+        "geometry": "geometry.json",
         "bakeHash": canonical_bake_hash(drawing_preview_bake_settings()),
     }
     if preview:
@@ -704,12 +710,17 @@ class GeneratedDxfFreshness(unittest.TestCase):
             self.assertFalse(ok)
             self.assertEqual(code, "missing_dxf_artifact")
 
-    def test_drawing_payload_refs_names_the_render_artifact(self):
-        # Only the GLB. A cached `drawing.dxf` is not a payload any more: an imported
-        # drawing's DXF is the user's own file, and a generated one is exported on demand.
+    def test_drawing_payload_refs_names_the_render_artifacts(self):
+        # The GLB and the parsed contours the curved-bend remesh reads. A cached
+        # `drawing.dxf` is still not a payload: an imported drawing's DXF is the user's own
+        # file, and a generated one is exported on demand.
         self.assertEqual(
-            ["preview.glb"],
-            artifact._drawing_payload_refs({"dxf": "drawing.dxf", "preview": "preview.glb"}),
+            ["preview.glb", "geometry.json"],
+            artifact._drawing_payload_refs({
+                "dxf": "drawing.dxf",
+                "preview": "preview.glb",
+                "geometry": "geometry.json",
+            }),
         )
 
     def test_a_changed_bake_format_makes_every_drawing_stale(self):

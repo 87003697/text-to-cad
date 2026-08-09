@@ -2,38 +2,25 @@ import { Slider } from "@/components/ui/slider";
 
 import {
   FILE_SHEET_PRECISION_SLIDER_CLASSES,
-  FileSheetInlineControlRow,
-  FileSheetItemGroup,
   FileSheetSectionBody,
   FileSheetSegmentedControl,
+  FileSheetSelectRow,
   FileSheetSliderField,
-  FileSheetSubsection
+  FileSheetSubsection,
+  FileSheetValueInput
 } from "./FileSheet";
 import { FILE_SHEET_SECTION_IDS } from "@/workbench/fileSheetSections";
 
 /**
- * A drawing's own settings, per viewer/docs/settings-ui.md.
+ * A drawing's settings, per viewer/docs/settings-ui.md: ONE surface, Material on top and
+ * Bends below it when the drawing has any. They were separate tabs once; a tab you have to
+ * switch to hides half of a two-group panel behind a click for no layout win.
  *
- * Everything here is a RENDER-TIME parameter, never a bake setting. The package caches one
- * prism at a reference thickness (previewGlb.js), and these reshape it in the viewport:
- * thickness is a scale along the sweep axis, exact because a flat pattern is a profile swept
- * perpendicular. Nothing set here can make a cached package stale, which is the property
- * that lets them be sliders rather than rebuild buttons.
- *
- * Values live in workspace session state — not persistence, not __cadgen__. They describe
- * how the drawing open right now is being looked at.
- *
- * Two tabs, not two sections of one: thickness is a property of the MATERIAL the profile is
- * cut from and applies to every drawing, while bends are a property of THIS drawing's
- * geometry and most drawings have none. A tab that is empty for most files does not earn a
- * permanent place beside one that is always relevant.
+ * Everything here is a RENDER-TIME parameter. Thickness and sharp bends reshape the cached
+ * prism; curved bends re-mesh live from the package's cached contours (geometry.json).
+ * Nothing set here can invalidate a package.
  */
 
-/** Sheet-metal thicknesses a drawing plausibly gets cut at, in millimetres.
- *
- * Zero is a real setting, not a degenerate one: a drawing IS a 2D profile, so the honest
- * default is the face with no material behind it. The renderer collapses the prism to a
- * sheet at 0 rather than to nothing (see CadViewer's thickness effect). */
 export const DXF_THICKNESS_MIN_MM = 0;
 export const DXF_THICKNESS_MAX_MM = 25;
 export const DXF_THICKNESS_STEP_MM = 0.1;
@@ -42,11 +29,15 @@ export const DXF_DEFAULT_THICKNESS_MM = 0;
 export const DXF_BEND_ANGLE_MIN_DEG = 0;
 export const DXF_BEND_ANGLE_MAX_DEG = 180;
 export const DXF_BEND_ANGLE_STEP_DEG = 1;
-/** Zero: a flat pattern IS flat, and the dashed bend lines already say where it can fold.
- *  Any other default would be a value the drawing never asked for. */
+/** Zero: a flat pattern IS flat, and the dashed bend lines already say where it can fold. */
 export const DXF_DEFAULT_BEND_ANGLE_DEG = 0;
 
 export const DXF_BEND_DIRECTIONS = Object.freeze(["up", "down"]);
+
+/** Curved is how sheet metal actually bends; Sharp is the mitered fold for a schematic
+ *  look. Curved is the default because the preview should look like the part. */
+export const DXF_BEND_STYLES = Object.freeze(["curved", "sharp"]);
+export const DXF_DEFAULT_BEND_STYLE = "curved";
 
 export function normalizeDxfThicknessMm(value, fallback = DXF_DEFAULT_THICKNESS_MM) {
   const numeric = Number(value);
@@ -69,9 +60,21 @@ export function normalizeDxfBendDirection(value, fallback = "up") {
   return DXF_BEND_DIRECTIONS.includes(text) ? text : fallback;
 }
 
-export function DxfMaterialSection({ thicknessMm = DXF_DEFAULT_THICKNESS_MM, onThicknessChange }) {
+export function normalizeDxfBendStyle(value, fallback = DXF_DEFAULT_BEND_STYLE) {
+  const text = String(value || "").trim().toLowerCase();
+  return DXF_BEND_STYLES.includes(text) ? text : fallback;
+}
+
+export function DxfDrawingSettings({
+  thicknessMm = DXF_DEFAULT_THICKNESS_MM,
+  onThicknessChange,
+  bends = [],
+  onBendChange,
+  bendStyle = DXF_DEFAULT_BEND_STYLE,
+  onBendStyleChange
+}) {
   const thickness = normalizeDxfThicknessMm(thicknessMm);
-  const commit = (next) => onThicknessChange?.(normalizeDxfThicknessMm(next, thickness));
+  const commitThickness = (next) => onThicknessChange?.(normalizeDxfThicknessMm(next, thickness));
 
   return (
     <FileSheetSectionBody>
@@ -79,7 +82,7 @@ export function DxfMaterialSection({ thicknessMm = DXF_DEFAULT_THICKNESS_MM, onT
         <FileSheetSliderField
           label="Thickness"
           value={`${thickness.toFixed(1)} mm`}
-          onValueCommit={commit}
+          onValueCommit={commitThickness}
           valueInputProps={{
             ariaLabel: "Thickness value",
             min: DXF_THICKNESS_MIN_MM,
@@ -93,38 +96,56 @@ export function DxfMaterialSection({ thicknessMm = DXF_DEFAULT_THICKNESS_MM, onT
             min={DXF_THICKNESS_MIN_MM}
             max={DXF_THICKNESS_MAX_MM}
             step={DXF_THICKNESS_STEP_MM}
-            onValueChange={([next]) => commit(next)}
+            onValueChange={([next]) => commitThickness(next)}
           />
         </FileSheetSliderField>
       </FileSheetSubsection>
-    </FileSheetSectionBody>
-  );
-}
 
-export function DxfBendsSection({ bends = [], onBendChange }) {
-  return (
-    <FileSheetSectionBody>
-      {/* ONE section — "Bends" is the kind, each group an instance (settings-ui.md
-          "Repeated item groups"). Sibling "Bend 1" sections promoted an index to a concept
-          and filled the panel with rules. */}
-      <FileSheetSubsection title="Bends">
-        {bends.map((bend, index) => {
-          const angle = normalizeDxfBendAngleDeg(bend?.angleDeg);
-          const direction = normalizeDxfBendDirection(bend?.direction);
-          const commitAngle = (next) => onBendChange?.(index, {
-            angleDeg: normalizeDxfBendAngleDeg(next, angle)
-          });
-          return (
-            <FileSheetItemGroup label={`Bend ${index + 1}`} key={index}>
+      {bends.length > 0 ? (
+        <FileSheetSubsection title="Bends">
+          <FileSheetSelectRow
+            label="Style"
+            value={normalizeDxfBendStyle(bendStyle)}
+            onValueChange={(next) => onBendStyleChange?.(normalizeDxfBendStyle(next, bendStyle))}
+            options={[
+              { value: "curved", label: "Curved" },
+              { value: "sharp", label: "Sharp" }
+            ]}
+          />
+          {/* One row per bend: the item label IS the slider label, direction rides inline
+              beside the value box (settings-ui.md "Repeated item groups", single-row form). */}
+          {bends.map((bend, index) => {
+            const angle = normalizeDxfBendAngleDeg(bend?.angleDeg);
+            const direction = normalizeDxfBendDirection(bend?.direction);
+            const commitAngle = (next) => onBendChange?.(index, {
+              angleDeg: normalizeDxfBendAngleDeg(next, angle)
+            });
+            return (
               <FileSheetSliderField
-                label="Angle"
+                key={index}
+                label={`Bend ${index + 1}`}
                 value={`${Math.round(angle)}°`}
-                onValueCommit={commitAngle}
-                valueInputProps={{
-                  ariaLabel: `Bend ${index + 1} angle value`,
-                  min: DXF_BEND_ANGLE_MIN_DEG,
-                  max: DXF_BEND_ANGLE_MAX_DEG
-                }}
+                trailing={(
+                  <div className="flex shrink-0 items-center gap-1.5">
+                    <FileSheetSegmentedControl
+                      fit
+                      ariaLabel={`Bend ${index + 1} direction`}
+                      value={direction}
+                      onChange={(next) => onBendChange?.(index, {
+                        direction: normalizeDxfBendDirection(next, direction)
+                      })}
+                      options={[
+                        { value: "up", label: "Up" },
+                        { value: "down", label: "Down" }
+                      ]}
+                    />
+                    <FileSheetValueInput
+                      ariaLabel={`Bend ${index + 1} angle value`}
+                      value={`${Math.round(angle)}°`}
+                      onValueCommit={commitAngle}
+                    />
+                  </div>
+                )}
               >
                 <Slider
                   aria-label={`Bend ${index + 1} angle`}
@@ -136,45 +157,18 @@ export function DxfBendsSection({ bends = [], onBendChange }) {
                   onValueChange={([next]) => commitAngle(next)}
                 />
               </FileSheetSliderField>
-              <FileSheetInlineControlRow label="Direction">
-                <FileSheetSegmentedControl
-                  fit
-                  ariaLabel={`Bend ${index + 1} direction`}
-                  value={direction}
-                  onChange={(next) => onBendChange?.(index, {
-                    direction: normalizeDxfBendDirection(next, direction)
-                  })}
-                  options={[
-                    { value: "up", label: "Up" },
-                    { value: "down", label: "Down" }
-                  ]}
-                />
-              </FileSheetInlineControlRow>
-            </FileSheetItemGroup>
-          );
-        })}
-      </FileSheetSubsection>
+            );
+          })}
+        </FileSheetSubsection>
+      ) : null}
     </FileSheetSectionBody>
   );
 }
 
-export function buildDxfMaterialTab(props) {
+export function buildDxfDrawingTab(props) {
   return {
-    id: FILE_SHEET_SECTION_IDS.DXF_MATERIAL,
-    title: "Material",
-    content: <DxfMaterialSection {...props} />
-  };
-}
-
-/** Only when the drawing HAS bend lines: a tab that is empty for most files does not earn a
- *  permanent place in the strip. */
-export function buildDxfBendsTab(props) {
-  if (!(props?.bends?.length > 0)) {
-    return null;
-  }
-  return {
-    id: FILE_SHEET_SECTION_IDS.DXF_BENDS,
-    title: "Bends",
-    content: <DxfBendsSection {...props} />
+    id: FILE_SHEET_SECTION_IDS.DXF_SETTINGS,
+    title: "Drawing",
+    content: <DxfDrawingSettings {...props} />
   };
 }

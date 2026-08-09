@@ -367,6 +367,25 @@ def _apply_drawing_preview_stats(entry, package_dir):
         entry["bendAxisX"] = [float(v) for v in axes]
 
 
+def _apply_drawing_geometry_relation(entry, repo_root, package_dir):
+    """The package's parsed-contours payload as a relation, for the viewer's curved-bend
+    remesh. Same versioning scheme as the GLB relation, same reason."""
+    descriptor = read_drawing_catalog_metadata(package_dir)
+    geometry_ref = str(descriptor.get("geometry") or "").strip()
+    geometry_path = os.path.join(package_dir, geometry_ref) if geometry_ref else ""
+    stats = _file_stats(geometry_path) if geometry_path else None
+    if not stats:
+        return
+    version = f"{base36(stats.st_size)}-{base36(stats.st_mtime_ns)}"
+    base_url = _asset_url_for_path(repo_root, geometry_path)
+    separator = "&" if "?" in base_url else "?"
+    entry.setdefault("relations", {})["drawingGeometry"] = {
+        "file": geometry_path,
+        "url": f"{base_url}{separator}v={encode_uri_component(version)}",
+        "bytes": int(stats.st_size),
+    }
+
+
 def create_single_asset_entry(repo_root, root_path, source_path, extension):
     kind = source_format_for_path(source_path, extension)
     asset = asset_for_path(repo_root, source_path)
@@ -380,9 +399,11 @@ def create_single_asset_entry(repo_root, root_path, source_path, extension):
     }
     glb_relation = render_package_glb_relation(repo_root, root_path, source_path, kind)
     if glb_relation:
-        entry["relations"] = {"glb": glb_relation}
+        entry.setdefault("relations", {})["glb"] = glb_relation
     if kind == "dxf":
-        _apply_drawing_preview_stats(entry, render_package_asset_dir(source_path))
+        package_dir = render_package_asset_dir(source_path)
+        _apply_drawing_preview_stats(entry, package_dir)
+        _apply_drawing_geometry_relation(entry, repo_root, package_dir)
     if kind == "srdf":
         paired_urdf = _paired_urdf_path_for_srdf(source_path, repo_root)
         if paired_urdf:
@@ -423,9 +444,10 @@ def create_generated_dxf_entry(repo_root, root_path, source_path):
         "sourceKind": "python",
     }
     _apply_drawing_preview_stats(entry, package_dir)
+    _apply_drawing_geometry_relation(entry, repo_root, package_dir)
     glb_relation = render_package_glb_relation(repo_root, root_path, source_path, "dxf")
     if glb_relation:
-        entry["relations"] = {"glb": glb_relation}
+        entry.setdefault("relations", {})["glb"] = glb_relation
     source = {"file": entry_ref, "sourcePath": entry_ref}
     source_hash = str(descriptor.get("sourceHash") or "").strip()
     if source_hash:

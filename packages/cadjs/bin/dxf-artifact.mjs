@@ -47,6 +47,7 @@ import {
 } from "../src/lib/dxf/previewGlb.js";
 
 const PREVIEW_GLB_NAME = "preview.glb";
+const GEOMETRY_JSON_NAME = "geometry.json";
 
 function parseArgs(argv) {
   const args = {};
@@ -103,11 +104,25 @@ async function main() {
   fs.writeFileSync(tempPath, bytes);
   fs.renameSync(tempPath, previewPath);
 
+  // The parsed 2D geometry, cached so the viewer can RE-MESH live. Curved bends need
+  // tessellated bend bands, and the flat prism has no vertices inside the bend region to
+  // curve -- so a curved preview is a fresh mesh from the contours, not a transform of the
+  // baked one. Slim on purpose: exactly the fields buildDxfPreviewMeshData reads.
+  const geometryPath = path.join(packageDir, GEOMETRY_JSON_NAME);
+  const geometryTemp = `${geometryPath}.tmp-${process.pid}`;
+  fs.writeFileSync(geometryTemp, JSON.stringify({
+    schema: "dxf-geometry/1",
+    geometry: dxfData.geometry,
+    defaultThicknessMm: dxfData.defaultThicknessMm ?? 0,
+  }));
+  fs.renameSync(geometryTemp, geometryPath);
+
   reportResult({
     ok: true,
     // Echoed so the parent can assert that ONE run id spanned both runtimes.
     runId,
     preview: PREVIEW_GLB_NAME,
+    geometryFile: GEOMETRY_JSON_NAME,
     bakeFormat: DXF_PREVIEW_BAKE_FORMAT,
     referenceThicknessMm: DXF_PREVIEW_REFERENCE_THICKNESS_MM,
     bytes: bytes.length,

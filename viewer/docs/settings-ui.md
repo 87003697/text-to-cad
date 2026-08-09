@@ -202,6 +202,10 @@ an index to a concept and fills the panel with rules.
 - Items are numbered from 1 in the artifact's own order; the label is
   `<Thing> <n>` and nothing else. Per-item state (an angle readout) belongs in
   the item's rows, not in its label.
+- **Single-row items need no group wrapper.** When an item's controls fit one
+  row, the item label *is* that row's label (`Bend 2` on a slider row, its
+  direction toggle inline beside the value box) and `FileSheetItemGroup` is not
+  used. The group form exists for items that genuinely need several rows.
 
 ### 4. Field grid — `FileSheetFieldGrid` + `FileSheetField`
 

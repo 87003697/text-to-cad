@@ -267,6 +267,10 @@ export default function CadRenderPane({
   planMode = false,
   bendAxisX = null,
   bendAnglesRad = null,
+  drawingBends = null,
+  drawingBendStyle = "sharp",
+  drawingGeometry = null,
+  drawingThicknessMm = 0,
   onCameraZoomPercentChange = null,
   viewPlaneOffsetRight = 16,
   viewerMode,
@@ -484,6 +488,10 @@ export default function CadRenderPane({
           planMode={planMode}
           bendAxisX={bendAxisX}
           bendAnglesRad={bendAnglesRad}
+          drawingBends={drawingBends}
+          drawingBendStyle={drawingBendStyle}
+          drawingGeometry={drawingGeometry}
+          drawingThicknessMm={drawingThicknessMm}
           onCameraZoomPercentChange={onCameraZoomPercentChange}
           perspective={viewerPerspective}
           projection={cadProjection}

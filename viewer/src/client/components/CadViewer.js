@@ -10,6 +10,7 @@ import {
   dxfFoldIsIdentity,
   transformDxfPreviewPositions
 } from "cadjs/lib/dxf/foldPreview";
+import { buildDxfPreviewMeshData } from "cadjs/lib/dxf/buildPreviewMesh";
 import { STEP_TREE_TOPOLOGY_NODE_PREFIX } from "cadjs/lib/step/stepTree";
 import { copyImageBlobToClipboard } from "@/ui/clipboard";
 import { triggerBlobDownload } from "@/ui/download";
@@ -1595,6 +1596,10 @@ const CadViewer = forwardRef(function CadViewer({
   planMode = false,
   bendAxisX = null,
   bendAnglesRad = null,
+  drawingBends = null,
+  drawingBendStyle = "sharp",
+  drawingGeometry = null,
+  drawingThicknessMm = 0,
   onCameraZoomPercentChange = null,
   perspective = null,
   perspectiveRef = null,
@@ -2533,10 +2538,17 @@ const CadViewer = forwardRef(function CadViewer({
       thicknessScale: drawingThicknessScale
     };
     const identity = dxfFoldIsIdentity(foldOptions);
-    if (identity && !runtimeRef.current?.dxfTransformTouched) {
+    // Curved re-meshes from the package's cached contours: the flat prism has no vertices
+    // inside a bend region to curve, so a curved bend is a FRESH mesh (the full mesher, the
+    // old live path), not a transform of the baked one. Sharp stays the vertex fold.
+    const curvedRequested = drawingBendStyle === "curved"
+      && !!drawingGeometry?.geometry
+      && foldOptions.bendAxesX.length > 0
+      && foldOptions.bendAnglesRad.some((angle) => angle !== 0);
+    if (!curvedRequested && identity && !runtimeRef.current?.dxfTransformTouched) {
       return undefined;
     }
-    runtimeRef.current.dxfTransformTouched = !identity;
+    runtimeRef.current.dxfTransformTouched = curvedRequested || !identity;
     let frame = 0;
     let attempts = 0;
 
@@ -2548,7 +2560,7 @@ const CadViewer = forwardRef(function CadViewer({
       const targets = [];
       const seenGeometries = new Set();
       group.traverse((child) => {
-        if (child.userData?.dxfBendGuide) {
+        if (child.userData?.dxfBendGuide || child.userData?.dxfCurvedPreview) {
           return;
         }
         const geometry = child.geometry;
@@ -2573,7 +2585,7 @@ const CadViewer = forwardRef(function CadViewer({
           geometry.setAttribute("position", privateAttribute);
           position = privateAttribute;
         }
-        targets.push({ geometry, original: geometry.userData.dxfFoldOriginal, position });
+        targets.push({ child, geometry, original: geometry.userData.dxfFoldOriginal, position });
       });
 
       if (!targets.length) {
@@ -2586,15 +2598,97 @@ const CadViewer = forwardRef(function CadViewer({
         return;
       }
 
+      const removeCurvedPreview = () => {
+        const curved = runtimeRef.current?.dxfCurvedPreview;
+        if (curved) {
+          curved.parent?.remove(curved);
+          curved.geometry?.dispose?.();
+          runtimeRef.current.dxfCurvedPreview = null;
+        }
+      };
+
+      let guideSegments = null;
       let flat = null;
-      for (const { geometry, original, position } of targets) {
-        transformDxfPreviewPositions(original, position.array, foldOptions);
-        position.needsUpdate = true;
-        geometry.computeVertexNormals?.();
-        geometry.computeBoundingBox?.();
-        geometry.computeBoundingSphere?.();
-        if (!flat || original.length > flat.length) {
-          flat = original;
+      if (curvedRequested) {
+        // Full remesh, exactly the geometry the old live viewer built: tessellated bend
+        // bands, constant thickness around the arc. The baked meshes are hidden, not
+        // touched — the curved preview is its own object, so nothing cached is at risk.
+        const bendSettings = Array.isArray(drawingBends)
+          ? drawingBends.map((bend) => ({ angleDeg: bend?.angleDeg, direction: bend?.direction }))
+          : [];
+        // The mesher treats <= 0 as "use the drawing default" (2 mm); a hair keeps the
+        // 0 mm setting meaning FLAT-thin rather than jumping to the default.
+        const meshThicknessMm = Math.max(Number(drawingThicknessMm) || 0, 0.05);
+        let curvedData = null;
+        try {
+          curvedData = buildDxfPreviewMeshData(drawingGeometry, meshThicknessMm, bendSettings);
+        } catch (curveError) {
+          // A drawing the bend mesher cannot band (a hole crossing a bend region) falls
+          // back to the sharp fold rather than rendering nothing.
+          curvedData = null;
+        }
+        if (curvedData) {
+          // Mesher output is Y-up; the scene is CAD Z-up: (x, y, z) -> (x, z, -y).
+          const source = curvedData.vertices;
+          const mapped = new Float32Array(source.length);
+          for (let index = 0; index < source.length; index += 3) {
+            mapped[index] = source[index];
+            mapped[index + 1] = source[index + 2];
+            mapped[index + 2] = -source[index + 1];
+          }
+          let curved = runtimeRef.current?.dxfCurvedPreview || null;
+          if (curved && curved.parent !== group) {
+            curved = null;
+            runtimeRef.current.dxfCurvedPreview = null;
+          }
+          if (!curved) {
+            curved = new THREE.Mesh(new THREE.BufferGeometry(), targets[0].child.material);
+            curved.userData.dxfCurvedPreview = true;
+            group.add(curved);
+            runtimeRef.current.dxfCurvedPreview = curved;
+          }
+          curved.material = targets[0].child.material;
+          curved.geometry.setAttribute("position", new THREE.BufferAttribute(mapped, 3));
+          curved.geometry.setIndex(new THREE.BufferAttribute(curvedData.indices, 1));
+          curved.geometry.computeVertexNormals();
+          curved.geometry.computeBoundingBox?.();
+          curved.geometry.computeBoundingSphere?.();
+          for (const { child } of targets) {
+            if (child.visible) {
+              child.userData.dxfHiddenForCurved = true;
+              child.visible = false;
+            }
+          }
+          const guides = curvedData.guide_line_segments;
+          if (guides?.length) {
+            guideSegments = new Float32Array(guides.length);
+            for (let index = 0; index < guides.length; index += 3) {
+              guideSegments[index] = guides[index];
+              guideSegments[index + 1] = guides[index + 2];
+              guideSegments[index + 2] = -guides[index + 1];
+            }
+          }
+          flat = targets[0]?.original || null;
+        }
+      }
+
+      if (!curvedRequested || !runtimeRef.current?.dxfCurvedPreview) {
+        removeCurvedPreview();
+        for (const { child } of targets) {
+          if (child.userData.dxfHiddenForCurved) {
+            child.visible = true;
+            delete child.userData.dxfHiddenForCurved;
+          }
+        }
+        for (const { geometry, original, position } of targets) {
+          transformDxfPreviewPositions(original, position.array, foldOptions);
+          position.needsUpdate = true;
+          geometry.computeVertexNormals?.();
+          geometry.computeBoundingBox?.();
+          geometry.computeBoundingSphere?.();
+          if (!flat || original.length > flat.length) {
+            flat = original;
+          }
         }
       }
 
@@ -2607,9 +2701,10 @@ const CadViewer = forwardRef(function CadViewer({
         overlay = null;
         runtimeRef.current.dxfBendGuideOverlay = null;
       }
-      const segments = flat && foldOptions.bendAxesX.length
-        ? dxfBendGuideSegments(flat, foldOptions)
-        : new Float32Array(0);
+      const segments = guideSegments
+        || (flat && foldOptions.bendAxesX.length
+          ? dxfBendGuideSegments(flat, foldOptions)
+          : new Float32Array(0));
       if (!segments.length) {
         if (overlay) {
           overlay.parent?.remove(overlay);
@@ -2648,7 +2743,7 @@ const CadViewer = forwardRef(function CadViewer({
     return () => {
       cancelAnimationFrame(frame);
     };
-  }, [bendAxisX, bendAnglesRad, drawingThicknessScale, meshData, viewerReadyTick]);
+  }, [bendAxisX, bendAnglesRad, drawingBends, drawingBendStyle, drawingGeometry, drawingThicknessMm, drawingThicknessScale, meshData, viewerReadyTick]);
 
   useImperativeHandle(ref, () => ({
     async captureScreenshot({ filename = "cad-screenshot.png", mode = "download" } = {}) {

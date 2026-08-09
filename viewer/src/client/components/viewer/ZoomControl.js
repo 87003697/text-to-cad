@@ -85,6 +85,9 @@ export function ZoomControl({
           setEditing(true);
           setInputValue(String(Math.round(zoomPercent)));
           window.requestAnimationFrame(() => {
+            if (!selectOnFocusRef.current) {
+              return;
+            }
             input.select();
             selectOnFocusRef.current = false;
           });
@@ -103,6 +106,9 @@ export function ZoomControl({
           }
         }}
         onChange={(event) => {
+          // Typing cancels the deferred focus-select, or the first digit gets re-selected
+          // and the second overwrites it.
+          selectOnFocusRef.current = false;
           setInputValue(event.target.value);
         }}
         onBlur={commitInputValue}
