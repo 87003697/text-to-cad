@@ -125,6 +125,23 @@ def export_native_glb_from_scene(
     ).write(target_path)
 
 
+def export_canonical_measurement_glb_from_scene(
+    target_path: Path,
+    scene: LoadedStepScene,
+    *,
+    linear_deflection: float,
+    angular_deflection: float,
+) -> Path:
+    """Write a Z-up GLB without changing canonical CAD coordinates."""
+    _ = (linear_deflection, angular_deflection)
+    return _HierarchicalGlbWriter(
+        scene,
+        color=None,
+        coordinate_scale=1.0,
+        include_cad_extras=False,
+    ).write(target_path)
+
+
 def write_empty_glb(target_path: Path) -> Path:
     json_chunk = b'{"asset":{"version":"2.0"},"scenes":[{"nodes":[]}],"scene":0,"nodes":[]}'
     json_chunk += b" " * ((4 - (len(json_chunk) % 4)) % 4)
@@ -236,16 +253,20 @@ def build_step_surface_edge_manifest(
     }
 
 
-def _gltf_matrix_from_transform(transform: tuple[float, ...]) -> list[float]:
+def _gltf_matrix_from_transform(
+    transform: tuple[float, ...],
+    *,
+    coordinate_scale: float = CAD_TO_GLB_SCALE,
+) -> list[float]:
     if len(transform) != 16:
         transform = IDENTITY_TRANSFORM
     return [
         float(transform[0]), float(transform[4]), float(transform[8]), 0.0,
         float(transform[1]), float(transform[5]), float(transform[9]), 0.0,
         float(transform[2]), float(transform[6]), float(transform[10]), 0.0,
-        float(transform[3]) * CAD_TO_GLB_SCALE,
-        float(transform[7]) * CAD_TO_GLB_SCALE,
-        float(transform[11]) * CAD_TO_GLB_SCALE,
+        float(transform[3]) * coordinate_scale,
+        float(transform[7]) * coordinate_scale,
+        float(transform[11]) * coordinate_scale,
         1.0,
     ]
 
@@ -261,7 +282,11 @@ def _native_y_up_vector(x: float, y: float, z: float) -> tuple[float, float, flo
     return (float(x), float(z), -float(y))
 
 
-def _native_y_up_matrix_from_transform(transform: tuple[float, ...]) -> list[float]:
+def _native_y_up_matrix_from_transform(
+    transform: tuple[float, ...],
+    *,
+    coordinate_scale: float = CAD_TO_GLB_SCALE,
+) -> list[float]:
     if len(transform) != 16:
         transform = IDENTITY_TRANSFORM
     rotation = (
@@ -281,9 +306,9 @@ def _native_y_up_matrix_from_transform(transform: tuple[float, ...]) -> list[flo
     )
     converted = _matmul3(_matmul3(cad_to_y_up, rotation), y_up_to_cad)
     tx, ty, tz = _native_y_up_vector(
-        float(transform[3]) * CAD_TO_GLB_SCALE,
-        float(transform[7]) * CAD_TO_GLB_SCALE,
-        float(transform[11]) * CAD_TO_GLB_SCALE,
+        float(transform[3]) * coordinate_scale,
+        float(transform[7]) * coordinate_scale,
+        float(transform[11]) * coordinate_scale,
     )
     return [
         converted[0][0], converted[1][0], converted[2][0], 0.0,
@@ -711,12 +736,14 @@ class _HierarchicalGlbWriter:
         occurrence_colors: Mapping[str, ColorRGBA] | None = None,
         native_y_up: bool = False,
         include_cad_extras: bool = True,
+        coordinate_scale: float = CAD_TO_GLB_SCALE,
     ) -> None:
         self.scene = scene
         self.color = color
         self.occurrence_colors = dict(occurrence_colors or {})
         self.native_y_up = native_y_up
         self.include_cad_extras = include_cad_extras
+        self.coordinate_scale = float(coordinate_scale)
         self.builder = _GlbBuilder()
         self.materials_by_color: dict[tuple[tuple[int, int, int, int], bool | None], int] = {}
         self.meshes_by_key: dict[tuple[object, ...], int | None] = {}
@@ -791,6 +818,7 @@ class _HierarchicalGlbWriter:
             suppress_face_colors=suppress_face_colors,
             include_surface_edges=self.include_surface_edges,
             surface_edge_class_signature=self.surface_edge_class_signature,
+            coordinate_scale=self.coordinate_scale,
         )
         if key in self.meshes_by_key:
             return self.meshes_by_key[key]
@@ -801,6 +829,7 @@ class _HierarchicalGlbWriter:
             suppress_face_colors=suppress_face_colors,
             include_surface_edges=self.include_surface_edges,
             surface_edge_class_signature=self.surface_edge_class_signature,
+            coordinate_scale=self.coordinate_scale,
         )
         if self.include_surface_edges:
             payload = _apply_surface_edge_classes_to_payload(
@@ -854,8 +883,8 @@ class _HierarchicalGlbWriter:
                 "cadName": occurrence.name or occurrence.source_name or "",
             }
         matrix_for_transform = _native_y_up_matrix_from_transform if self.native_y_up else _gltf_matrix_from_transform
-        matrix = matrix_for_transform(occurrence.local_transform)
-        if matrix != matrix_for_transform(IDENTITY_TRANSFORM):
+        matrix = matrix_for_transform(occurrence.local_transform, coordinate_scale=self.coordinate_scale)
+        if matrix != matrix_for_transform(IDENTITY_TRANSFORM, coordinate_scale=self.coordinate_scale):
             node["matrix"] = matrix
         mesh = self._mesh_index(occurrence)
         if mesh is not None:
