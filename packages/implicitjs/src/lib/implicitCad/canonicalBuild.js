@@ -102,9 +102,7 @@ async function resolveWorkspaceFile(workspaceRoot, relativePath, label) {
 
 function validateSelfContainedSource(sourceText) {
   if (
-    /\bimport\s*(?!\.)/u.test(sourceText)
-    || /\bexport\s+(?:\*|\{[^}]*\})\s+from\b/us.test(sourceText)
-    || /\brequire\s*\(/u.test(sourceText)
+    /\brequire\s*\(/u.test(sourceText)
     || /\bprocess\s*\.\s*getBuiltinModule\s*\(/u.test(sourceText)
   ) {
     throw new Error("Canonical implicit source must be self-contained; import and undeclared file dependencies are not permitted");
@@ -156,6 +154,13 @@ function permissionFlag() {
   throw new Error("Canonical implicit build requires a Node runtime with the permission model");
 }
 
+function restrictedWorkerEnvironment() {
+  const runtimeKeys = new Set(["systemroot", "windir"]);
+  return Object.fromEntries(Object.entries(process.env).filter(([key, value]) => (
+    value !== undefined && runtimeKeys.has(key.toLowerCase())
+  )));
+}
+
 async function exportInRestrictedProcess(sourceText, outputPath) {
   const packageRoot = path.resolve(
     path.dirname(fileURLToPath(import.meta.url)),
@@ -177,7 +182,7 @@ async function exportInRestrictedProcess(sourceText, outputPath) {
   return new Promise((resolve, reject) => {
     const child = spawn(process.execPath, args, {
       cwd: packageRoot,
-      env: {},
+      env: restrictedWorkerEnvironment(),
       stdio: ["pipe", "pipe", "pipe"],
     });
     const stdout = [];

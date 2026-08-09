@@ -114,6 +114,71 @@ test("canonical implicit build publishes traceable artifacts without moving sour
   assert.equal(gltf.nodes[0].extras.cadUnits, "unitless");
 });
 
+test("canonical implicit build accepts import-like text that is not a module dependency", async () => {
+  const workspaceDirectory = fs.mkdtempSync(path.join(os.tmpdir(), "implicit-canonical-import-text-"));
+  const sourcePath = path.join(workspaceDirectory, "documented.implicit.mjs");
+  fs.writeFileSync(sourcePath, `
+const importantRadius = 0.1;
+const documentation = "import is not a module dependency";
+// The word import in documentation must not change source validity.
+export default {
+  schema: "implicit.js/0.1.0",
+  name: documentation,
+  units: "unitless",
+  bounds: [[-0.5, -0.5, -0.5], [0.5, 0.5, 0.5]],
+  glsl: \`float sdf(vec3 p) { return length(p) - 0.1; }\`
+};
+void importantRadius;
+`, "utf-8");
+
+  const result = await buildCanonicalImplicitCad({
+    workspaceDirectory,
+    sourcePath: path.basename(sourcePath),
+    outputDirectory: "documented-output",
+  });
+
+  assert.equal(result.ok, true);
+  assert.equal(fs.existsSync(path.join(workspaceDirectory, "documented-output", "build.json")), true);
+});
+
+test("canonical implicit build preserves runtime-critical worker environment", {
+  skip: process.platform === "win32",
+}, async () => {
+  const workspaceDirectory = fs.mkdtempSync(path.join(os.tmpdir(), "implicit-canonical-worker-env-"));
+  const sourcePath = writeCanonicalSphere(workspaceDirectory);
+  const wrapperPath = path.join(workspaceDirectory, "node-runtime-wrapper");
+  const originalExecPathDescriptor = Object.getOwnPropertyDescriptor(process, "execPath");
+  const originalSystemRoot = process.env.SystemRoot;
+  fs.writeFileSync(wrapperPath, `#!/bin/sh
+if [ "$SystemRoot" != "canonical-required-root" ]; then
+  echo "missing runtime-critical SystemRoot" >&2
+  exit 91
+fi
+exec ${JSON.stringify(process.execPath)} "$@"
+`, { encoding: "utf-8", mode: 0o755 });
+  process.env.SystemRoot = "canonical-required-root";
+  Object.defineProperty(process, "execPath", {
+    ...originalExecPathDescriptor,
+    value: wrapperPath,
+  });
+
+  try {
+    const result = await buildCanonicalImplicitCad({
+      workspaceDirectory,
+      sourcePath: path.basename(sourcePath),
+      outputDirectory: "worker-env-output",
+    });
+    assert.equal(result.ok, true);
+  } finally {
+    Object.defineProperty(process, "execPath", originalExecPathDescriptor);
+    if (originalSystemRoot === undefined) {
+      delete process.env.SystemRoot;
+    } else {
+      process.env.SystemRoot = originalSystemRoot;
+    }
+  }
+});
+
 test("registered implicit recipe rebuilds offline through the skill entry", async () => {
   const workspaceDirectory = fs.mkdtempSync(path.join(os.tmpdir(), "implicit-canonical-rebuild-"));
   const sourcePath = writeCanonicalSphere(workspaceDirectory, "portable.implicit.js");
@@ -214,7 +279,7 @@ export default {
       sourcePath: path.basename(importedSource),
       outputDirectory: "import-output",
     }),
-    /self-contained.*import/u,
+    /imports are not permitted/u,
   );
 
   const networkSource = path.join(workspaceDirectory, "network.implicit.js");
