@@ -268,7 +268,7 @@ export default function CadRenderPane({
   bendAxisX = null,
   bendAnglesRad = null,
   drawingBends = null,
-  drawingBendStyle = "sharp",
+  drawingBendStyle = "boxed",
   drawingGeometry = null,
   drawingThicknessMm = 0,
   onCameraZoomPercentChange = null,

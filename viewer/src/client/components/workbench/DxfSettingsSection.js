@@ -1,3 +1,5 @@
+import { ArrowDown, ArrowUp } from "lucide-react";
+
 import { Slider } from "@/components/ui/slider";
 
 import {
@@ -34,10 +36,10 @@ export const DXF_DEFAULT_BEND_ANGLE_DEG = 0;
 
 export const DXF_BEND_DIRECTIONS = Object.freeze(["up", "down"]);
 
-/** Curved is how sheet metal actually bends; Sharp is the mitered fold for a schematic
- *  look. Curved is the default because the preview should look like the part. */
-export const DXF_BEND_STYLES = Object.freeze(["curved", "sharp"]);
-export const DXF_DEFAULT_BEND_STYLE = "curved";
+/** Boxed is the mitered fold — crisp square corners, the schematic default; Curved wraps
+ *  the surface around each bend like real sheet metal. */
+export const DXF_BEND_STYLES = Object.freeze(["boxed", "curved"]);
+export const DXF_DEFAULT_BEND_STYLE = "boxed";
 
 export function normalizeDxfThicknessMm(value, fallback = DXF_DEFAULT_THICKNESS_MM) {
   const numeric = Number(value);
@@ -108,8 +110,8 @@ export function DxfDrawingSettings({
             value={normalizeDxfBendStyle(bendStyle)}
             onValueChange={(next) => onBendStyleChange?.(normalizeDxfBendStyle(next, bendStyle))}
             options={[
-              { value: "curved", label: "Curved" },
-              { value: "sharp", label: "Sharp" }
+              { value: "boxed", label: "Boxed" },
+              { value: "curved", label: "Curved" }
             ]}
           />
           {/* One row per bend: the item label IS the slider label, direction rides inline
@@ -131,6 +133,7 @@ export function DxfDrawingSettings({
                       ariaLabel={`Bend ${index + 1} angle value`}
                       value={`${Math.round(angle)}°`}
                       onValueCommit={commitAngle}
+                      className="w-12"
                     />
                     <FileSheetSegmentedControl
                       fit
@@ -140,8 +143,8 @@ export function DxfDrawingSettings({
                         direction: normalizeDxfBendDirection(next, direction)
                       })}
                       options={[
-                        { value: "up", label: "Up" },
-                        { value: "down", label: "Down" }
+                        { value: "up", label: "Up", title: "Bend up", Icon: ArrowUp, iconOnly: true },
+                        { value: "down", label: "Down", title: "Bend down", Icon: ArrowDown, iconOnly: true }
                       ]}
                     />
                   </div>

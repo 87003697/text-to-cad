@@ -8106,7 +8106,7 @@ export default function CadWorkspace({
           bendAxisX={selectedEntryIsDrawing ? selectedEntry?.bendAxisX || null : null}
           bendAnglesRad={selectedEntryIsDrawing ? drawingBendAnglesRad : null}
           drawingBends={selectedEntryIsDrawing ? drawingBends : null}
-          drawingBendStyle={selectedEntryIsDrawing ? drawingBendStyle : "sharp"}
+          drawingBendStyle={selectedEntryIsDrawing ? drawingBendStyle : "boxed"}
           drawingGeometry={selectedEntryIsDrawing ? drawingGeometry : null}
           drawingThicknessMm={selectedEntryIsDrawing ? drawingThicknessMm : 0}
           onCameraZoomPercentChange={setViewerZoomPercent}

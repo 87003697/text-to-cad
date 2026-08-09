@@ -158,15 +158,19 @@ them turns the panel into a stack of unrelated widgets.
 
 **A dropdown is the default.** `FileSheetSelectRow` handles every mode control
 unless the options are short enough that a button group costs no more width
-than the dropdown would — in practice a two-option pair of single short words
-(a DXF bend's `Up`/`Down`). Two words as long as `Orthographic` and
+than the dropdown would — in practice a two-option pair of universally readable
+glyphs (a DXF bend's `↑`/`↓`). Two words as long as `Orthographic` and
 `Perspective` are already too wide: that is a dropdown.
 
 - Dropdowns: `Projection`, `Light` (5), `Backdrop` `Type` (4), explode
   `Direction` (5), `Layout`, `Order`, `Map`, animation pickers, every enum
   parameter.
 - Segmented (`FileSheetSegmentedControl` with `fit`, sized to content, never
-  stretched): DXF bend direction, and nothing else today.
+  stretched): DXF bend direction, and nothing else today. Options may set
+  `iconOnly` with an `Icon` to render as a glyph pair; the `label` still feeds
+  the accessible name and the `title` tooltip says what the glyph does
+  ("Bend up") — icon-only is only for glyphs as unambiguous as a direction
+  arrow.
 - An inline trigger hugs its value between two bounds — never narrower than the
   standard 80px control, never wider than 176px — and truncates past that. Use
   a fixed max width, not a percentage: the row wrapper is shrink-to-fit, so a

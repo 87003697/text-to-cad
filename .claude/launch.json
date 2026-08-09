@@ -14,7 +14,7 @@
     {
       "name": "cad-viewer-worktree",
       "runtimeExecutable": "npm",
-      "runtimeArgs": ["--prefix", "viewer", "run", "dev", "--", "--host", "127.0.0.1"],
+      "runtimeArgs": ["--prefix", "viewer", "run", "dev", "--", "--host", "127.0.0.1", "--port", "3247"],
       "port": 3247
     },
     {

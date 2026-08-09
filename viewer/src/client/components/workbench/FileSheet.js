@@ -630,13 +630,15 @@ export function FileSheetSegmentedControl({ value, onChange, options, ariaLabel,
             className={cn(
               "min-w-0 gap-1.5 !h-7 px-1.5 text-[11px]",
               fit && "!flex-none px-2",
+              option.iconOnly && "px-1",
               FILE_SHEET_SEGMENTED_ITEM_CLASSES
             )}
             title={option.title || option.label}
             aria-label={option.label}
           >
             {Icon ? <Icon className="size-3" strokeWidth={2} aria-hidden="true" /> : null}
-            <span className="truncate">{option.label}</span>
+            {/* iconOnly keeps the label for the tooltip and screen readers only. */}
+            {Icon && option.iconOnly ? null : <span className="truncate">{option.label}</span>}
           </ToggleGroupItem>
         );
       })}
