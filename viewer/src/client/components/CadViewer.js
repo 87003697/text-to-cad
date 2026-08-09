@@ -1,8 +1,15 @@
 "use client";
 
 import { forwardRef, useCallback, useEffect, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState } from "react";
+import * as THREE from "three";
 import { Minus, Plus, RotateCcw } from "lucide-react";
 import { parseCadRefToken } from "cadjs/lib/cadRefs";
+import {
+  dxfBendGuideSegments,
+  dxfFlatPatternExtents,
+  dxfFoldIsIdentity,
+  transformDxfPreviewPositions
+} from "cadjs/lib/dxf/foldPreview";
 import { STEP_TREE_TOPOLOGY_NODE_PREFIX } from "cadjs/lib/step/stepTree";
 import { copyImageBlobToClipboard } from "@/ui/clipboard";
 import { triggerBlobDownload } from "@/ui/download";
@@ -1731,13 +1738,6 @@ function updateGridHelper(
   });
 }
 
-/** The Z scale a zero-thickness drawing renders at: thin enough to read as a face, non-zero
- *  so the model matrix stays invertible. */
-const FLAT_DRAWING_SCALE = 1e-3;
-
-/** THREE.MOUSE.PAN. Spelled out so plan mode needs no three import in this component. */
-const MOUSE_BUTTON_PAN = 2;
-
 const CadViewer = forwardRef(function CadViewer({
   meshData,
   modelKey,
@@ -2609,33 +2609,6 @@ const CadViewer = forwardRef(function CadViewer({
     return transitioned;
   };
 
-  // Thickness for a drawing, as a scale on the baked prism.
-  //
-  // The flat pattern is a profile swept perpendicular, so stretching it along the sweep axis
-  // IS re-thicknessing it -- walls move, caps and holes are untouched in XY, and normals are
-  // invariant (wall normals stay horizontal, cap normals renormalise to themselves). That is
-  // what lets thickness be a slider instead of a rebuild: nothing is baked, so nothing goes
-  // stale.
-  useEffect(() => {
-    const runtime = runtimeRef.current;
-    const group = runtime?.modelGroup;
-    if (!group) {
-      return;
-    }
-    // Zero thickness means "just the face". Scaling by an exact 0 makes the model matrix
-    // singular -- normals degenerate and the sheet lights as black -- so it collapses to a
-    // hair instead. At this scale the walls are sub-pixel at any sane zoom, which is what
-    // "flat" should look like, and the solid stays valid.
-    const requested = Number.isFinite(drawingThicknessScale) ? drawingThicknessScale : 1;
-    const scale = Math.max(requested, FLAT_DRAWING_SCALE);
-    if (group.scale.z === scale) {
-      return;
-    }
-    group.scale.z = scale;
-    group.updateMatrixWorld(true);
-    runtime.requestRender?.();
-  }, [drawingThicknessScale, meshData]);
-
   // PLAN MODE: a generic top-down camera lock, reusable by any model, not a DXF feature.
   //
   // Rotation is what makes a view 3D. Disabling it (and moving the left button onto pan) is
@@ -2655,10 +2628,8 @@ const CadViewer = forwardRef(function CadViewer({
       controls.enableRotate = false;
       if (controls.mouseButtons) {
         // Left-drag pans instead of orbiting; a locked view whose primary drag does nothing
-        // reads as broken rather than as locked. THREE.MOUSE.PAN is 2 -- spelled out because
-        // this component does not import three, and a bundler would have shipped the
-        // undefined reference happily (see unboundIdentifiers.test.js, which caught it).
-        controls.mouseButtons = { ...controls.mouseButtons, LEFT: MOUSE_BUTTON_PAN };
+        // reads as broken rather than as locked.
+        controls.mouseButtons = { ...controls.mouseButtons, LEFT: THREE.MOUSE.PAN };
       }
     }
     const axis = runtime.originAxis;
@@ -2686,96 +2657,128 @@ const CadViewer = forwardRef(function CadViewer({
     };
   }, [planMode, viewerReadyTick]);
 
-  // FOLD: bend the flat pattern about its bend lines, live.
+  // DRAWING TRANSFORM: thickness and fold, one vertex rewrite, math from
+  // cadjs/lib/dxf/foldPreview (node-tested; the snapshot runtime shares it by construction).
   //
-  // A flat pattern's bend lines are parallel and axis-aligned, so the fold is an accordion:
-  // split the sheet at each bend X, then rotate every strip about the previous bend axis,
-  // accumulating. That is why nothing needs re-meshing -- the geometry beyond a bend is
-  // rigid, and only where it sits changes.
-  //
-  // Splitting by X rather than by a baked strip attribute keeps the bake unchanged: the bend
-  // positions are the only extra fact, and they are in the descriptor already.
+  // Thickness scales Z BEFORE the fold. The previous split -- fold here, thickness as a
+  // group scale after -- flattened every folded flange back into the sheet plane, so at the
+  // 0 mm default the fold was invisible. Order is the whole bug.
   useEffect(() => {
     const runtime = runtimeRef.current;
     const group = runtime?.modelGroup;
     if (!group) {
       return undefined;
     }
-    const axes = Array.isArray(bendAxisX) ? [...bendAxisX].sort((a, b) => a - b) : [];
-    const angle = (Number(bendAngleDeg) || 0) * (Math.PI / 180) * (bendDirection === "down" ? -1 : 1);
-    const restore = [];
-    if (!axes.length || !angle) {
-      return undefined;
-    }
-    // Deferred a frame, and retried: this effect is declared before the one that syncs the
+    const foldOptions = {
+      bendAxesX: Array.isArray(bendAxisX) ? bendAxisX : [],
+      bendAngleRad:
+        (Number(bendAngleDeg) || 0) * (Math.PI / 180) * (bendDirection === "down" ? -1 : 1),
+      thicknessScale: drawingThicknessScale
+    };
+    const identity = dxfFoldIsIdentity(foldOptions);
+
+    const removeGuideOverlay = () => {
+      const overlay = runtimeRef.current?.dxfBendGuideOverlay;
+      if (overlay) {
+        overlay.parent?.remove(overlay);
+        overlay.geometry?.dispose?.();
+        overlay.material?.dispose?.();
+        runtimeRef.current.dxfBendGuideOverlay = null;
+      }
+    };
+
+    // Deferred a frame and retried: this effect is declared before the one that syncs the
     // scene, so on a fresh model the group is still empty when it first runs. Folding an
-    // empty group silently did nothing, which is why the sheet stayed flat at whatever angle
-    // it was first shown at.
+    // empty group silently does nothing -- which is exactly how the fold shipped invisible
+    // once already.
     let frame = 0;
     let attempts = 0;
-    const applyFold = () => {
+    const apply = () => {
+      const targets = [];
       group.traverse((child) => {
-      const position = child.geometry?.getAttribute?.("position");
-      if (!position) {
-        return;
-      }
-      // Fold always from the FLAT coordinates, never from the current pose -- folding a
-      // folded sheet compounds. The flat copy is cached on the mesh, and REUSED on later
-      // runs rather than skipped: skipping left every re-run with nothing to fold, so the
-      // sheet stayed flat at any angle it was first shown at.
-      const original = child.userData.dxfFoldOriginal
-        || (child.userData.dxfFoldOriginal = Float32Array.from(position.array));
-        restore.push({ child, original, position });
+        if (child.userData?.dxfBendGuide) {
+          return;
+        }
+        const position = child.geometry?.getAttribute?.("position");
+        if (!position) {
+          return;
+        }
+        // Always transform from the FLAT copy, cached once per geometry -- folding the
+        // current pose compounds.
+        const original = child.userData.dxfFoldOriginal
+          || (child.userData.dxfFoldOriginal = Float32Array.from(position.array));
+        targets.push({ child, original, position });
       });
 
-      if (!restore.length) {
+      if (!targets.length) {
+        if (identity) {
+          return;
+        }
         attempts += 1;
-        if (attempts < 30) {
-          frame = requestAnimationFrame(applyFold);
+        if (attempts < 60) {
+          frame = requestAnimationFrame(apply);
         }
         return;
       }
 
-      for (const { child, original, position } of restore) {
-      const array = position.array;
-      for (let index = 0; index < original.length; index += 3) {
-        let x = original[index];
-        const y = original[index + 1];
-        let z = original[index + 2];
-        // Walk the chain: every bend the vertex lies BEYOND folds it once more.
-        for (const axisX of axes) {
-          if (x <= axisX) {
-            break;
-          }
-          const dx = x - axisX;
-          const cos = Math.cos(angle);
-          const sin = Math.sin(angle);
-          x = axisX + dx * cos - z * sin;
-          z = dx * sin + z * cos;
-        }
-        array[index] = x;
-        array[index + 1] = y;
-        array[index + 2] = z;
-      }
+      let flat = null;
+      for (const { child, original, position } of targets) {
+        transformDxfPreviewPositions(original, position.array, foldOptions);
         position.needsUpdate = true;
         child.geometry.computeVertexNormals?.();
+        child.geometry.computeBoundingBox?.();
         child.geometry.computeBoundingSphere?.();
+        if (!flat || original.length > flat.length) {
+          flat = original;
+        }
+      }
+
+      // The dotted bend lines, folded through the same chain so each stays on its crease.
+      // Rebuilt per change rather than re-posed: a handful of segments, and one code path.
+      removeGuideOverlay();
+      if (flat && foldOptions.bendAxesX.length) {
+        const segments = dxfBendGuideSegments(flat, foldOptions);
+        if (segments.length) {
+          const geometry = new THREE.BufferGeometry();
+          geometry.setAttribute("position", new THREE.BufferAttribute(segments, 3));
+          const { yMin, yMax } = dxfFlatPatternExtents(flat);
+          const span = Math.max(yMax - yMin, 1);
+          const material = new THREE.LineDashedMaterial({
+            color: 0x5f6775,
+            dashSize: span / 24,
+            gapSize: span / 36,
+            transparent: true,
+            opacity: 0.9,
+            depthWrite: false
+          });
+          const overlay = new THREE.LineSegments(geometry, material);
+          overlay.computeLineDistances();
+          overlay.userData.dxfBendGuide = true;
+          group.add(overlay);
+          runtimeRef.current.dxfBendGuideOverlay = overlay;
+        }
       }
       runtime.requestRender?.();
     };
-    frame = requestAnimationFrame(applyFold);
+    frame = requestAnimationFrame(apply);
 
     return () => {
       cancelAnimationFrame(frame);
-      for (const { child, original, position } of restore) {
+      removeGuideOverlay();
+      group.traverse((child) => {
+        const original = child.userData?.dxfFoldOriginal;
+        const position = child.geometry?.getAttribute?.("position");
+        if (!original || !position) {
+          return;
+        }
         position.array.set(original);
         position.needsUpdate = true;
         child.geometry.computeVertexNormals?.();
         child.geometry.computeBoundingSphere?.();
-      }
+      });
       runtimeRef.current?.requestRender?.();
     };
-  }, [bendAxisX, bendAngleDeg, bendDirection, meshData, viewerReadyTick]);
+  }, [bendAxisX, bendAngleDeg, bendDirection, drawingThicknessScale, meshData, viewerReadyTick]);
 
   useImperativeHandle(ref, () => ({
     async captureScreenshot({ filename = "cad-screenshot.png", mode = "download" } = {}) {

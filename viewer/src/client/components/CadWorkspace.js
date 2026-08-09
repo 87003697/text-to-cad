@@ -3003,8 +3003,13 @@ export default function CadWorkspace({
                     ? ARTIFACT_GENERATING_LABEL
                     : "Loading CAD...";
   const selectedDrawingBendLineCount = Number(selectedEntry?.bendLineCount) || 0;
-  const drawingThicknessScale = normalizeDxfThicknessMm(drawingThicknessMm)
-    / DXF_PREVIEW_REFERENCE_THICKNESS_MM;
+  // Gated to drawings HERE, not downstream. The thickness state defaults to 0 mm, and
+  // passing its scale unconditionally squashed every STEP/STL/3MF model to a hair the moment
+  // the default changed -- a drawing setting must not be able to touch any other format.
+  const selectedEntryIsDrawing = selectedEntrySourceFormat === RENDER_FORMAT.DXF;
+  const drawingThicknessScale = selectedEntryIsDrawing
+    ? normalizeDxfThicknessMm(drawingThicknessMm) / DXF_PREVIEW_REFERENCE_THICKNESS_MM
+    : 1;
 
   const viewerAlert = useMemo(() => {
     if (viewerRuntimeAlert?.blocking) {
@@ -8011,8 +8016,8 @@ export default function CadWorkspace({
           viewerRef={viewerRef}
           renderFormat={effectiveRenderFormat}
           drawingThicknessScale={drawingThicknessScale}
-          planMode={drawingViewMode === "2d"}
-          bendAxisX={selectedEntry?.bendAxisX || null}
+          planMode={selectedEntryIsDrawing && drawingViewMode === "2d"}
+          bendAxisX={selectedEntryIsDrawing ? selectedEntry?.bendAxisX || null : null}
           bendAngleDeg={drawingBendAngleDeg}
           bendDirection={drawingBendDirection}
           renderPartsIndividually={isUrdfView || Boolean(selectedStepParameterRuntime)}
@@ -8176,7 +8181,7 @@ export default function CadWorkspace({
                 selectedEntry={selectedEntry}
                 renderFormat={effectiveRenderFormat}
                 floatingCadToolbarPosition={floatingCadToolbarPosition}
-                drawingViewToggle={selectedEntrySourceFormat === RENDER_FORMAT.DXF}
+                drawingViewToggle={selectedEntryIsDrawing}
                 drawingViewMode={drawingViewMode}
                 onDrawingViewModeChange={handleDrawingViewModeChange}
                 selectionToolActive={selectionToolActive}

@@ -57,7 +57,9 @@ DRAWING_PACKAGE_KIND = "drawing-package"
 # Bumped from 1 when the package gained ``preview.glb``. This is the stack's single
 # invalidation channel (viewer/server_py/artifact.py, package_freshness): every drawing
 # package written before the preview reports unsupported and rebuilds once, lazily.
-DRAWING_PACKAGE_SCHEMA_VERSION = 3
+# v4: previewStats gained bendAxisX, which the viewer's fold needs. A package without it is
+# not merely old -- its Bends tab can never fold -- so every v3 package must rebuild.
+DRAWING_PACKAGE_SCHEMA_VERSION = 4
 DRAWING_DESCRIPTOR_NAME = "drawing.json"
 DRAWING_PREVIEW_NAME = "preview.glb"
 
