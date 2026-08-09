@@ -23,6 +23,7 @@ EXTERIOR_SNAPSHOT_SCHEMA = "voxblame.exterior-snapshot/1"
 EXTERIOR_GRID_PROFILE = "signed_exterior_grid/1"
 EXTERIOR_BOUNDARY_POLICY = "canonical-boundary-interior-closed-cells/1"
 EXTERIOR_MAX_DIAGNOSTIC_CANDIDATE_CELLS = 65_536
+EXTERIOR_MIN_DIAGNOSTIC_GRID_DEPTH = -1022
 _DIGEST_DOMAIN = b"voxblame.exterior-snapshot/1\0"
 _DIRECTION_ORDER = ("-x", "+x", "-y", "+y", "-z", "+z")
 
@@ -73,7 +74,10 @@ def measure_exterior_surface(triangles: np.ndarray) -> ExteriorMeasurement:
     for triangle in geometry:
         triangle_directions = _outside_directions(triangle)
         if not triangle_directions:
-            interior.append(triangle)
+            # The fixed epsilon is a containment policy, not an unmeasured
+            # gap.  Snap its tolerance band onto the canonical boundary so a
+            # surface wholly within that band remains interior occupancy.
+            interior.append(np.clip(triangle, -0.5, 0.5))
             continue
         directions.update(triangle_directions)
         clipped_interior, clipped_exterior = _partition_triangle(triangle)
@@ -92,6 +96,32 @@ def measure_exterior_surface(triangles: np.ndarray) -> ExteriorMeasurement:
         directions,
         diagnostic_depth,
     )
+
+
+def validate_exterior_measurement(value: ExteriorMeasurement) -> None:
+    """Fail closed when exact, diagnostic, byte, or identity evidence conflicts."""
+
+    try:
+        decoded = json.loads(value.snapshot_bytes)
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise OctreeError("exterior snapshot bytes are invalid") from exc
+    if decoded != value.snapshot:
+        raise OctreeError("exterior snapshot bytes conflict with measured evidence")
+    expected_digest = hashlib.sha256(
+        _DIGEST_DOMAIN + value.snapshot_bytes
+    ).hexdigest()
+    if expected_digest != value.logical_sha256:
+        raise OctreeError("exterior snapshot identity conflict")
+    exact = value.exact
+    resolution = value.resolution
+    present = exact["surface_present"]
+    if present is not bool(value.snapshot["cells"]):
+        raise OctreeError("exterior containment conflicts with diagnostic occupancy")
+    if present is not bool(exact["outside_directions"]):
+        raise OctreeError("exterior containment conflicts with overrun directions")
+    depth = resolution["diagnostic_grid_depth"]
+    if resolution["coarsened"] is not (depth < MAX_DEPTH):
+        raise OctreeError("exterior coarsening metadata conflict")
 
 
 def _partition_triangle(
@@ -213,20 +243,23 @@ def _outside_directions(triangle: np.ndarray) -> set[str]:
 
 
 def _select_diagnostic_depth(triangles: np.ndarray) -> int:
-    for depth in range(MAX_DEPTH, 0, -1):
+    for depth in range(
+        MAX_DEPTH,
+        EXTERIOR_MIN_DIAGNOSTIC_GRID_DEPTH - 1,
+        -1,
+    ):
         if _candidate_cell_count(triangles, depth) <= (
             EXTERIOR_MAX_DIAGNOSTIC_CANDIDATE_CELLS
         ):
             return depth
-    return 1
+    raise OctreeError("exterior geometry exceeds the diagnostic grid range")
 
 
 def _candidate_cell_count(triangles: np.ndarray, depth: int) -> int:
-    size = 1.0 / (1 << depth)
+    size = math.ldexp(1.0, -depth)
     total = 0
     for triangle in triangles:
-        lower = np.floor((triangle.min(axis=0) + 0.5) / size).astype(np.int64) - 1
-        upper = np.floor((triangle.max(axis=0) + 0.5) / size).astype(np.int64) + 1
+        lower, upper = _diagnostic_index_bounds(triangle, size)
         spans = upper - lower + 1
         total += math.prod(int(item) for item in spans)
         if total > EXTERIOR_MAX_DIAGNOSTIC_CANDIDATE_CELLS:
@@ -235,20 +268,21 @@ def _candidate_cell_count(triangles: np.ndarray, depth: int) -> int:
 
 
 def _diagnostic_cells(triangles: np.ndarray, depth: int) -> list[list[int]]:
-    size = 1.0 / (1 << depth)
+    size = math.ldexp(1.0, -depth)
     half = size / 2.0
-    canonical_span = 1 << depth
     occupied: set[tuple[int, int, int]] = set()
     for triangle in triangles:
-        lower = np.floor((triangle.min(axis=0) + 0.5) / size).astype(np.int64) - 1
-        upper = np.floor((triangle.max(axis=0) + 0.5) / size).astype(np.int64) + 1
+        lower, upper = _diagnostic_index_bounds(triangle, size)
         axes = [
             np.arange(lower[axis], upper[axis] + 1, dtype=np.int64)
             for axis in range(3)
         ]
         indices = np.stack(np.meshgrid(*axes, indexing="ij"), axis=-1).reshape(-1, 3)
+        cell_minimum = -0.5 + indices.astype(np.float64) * size
+        cell_maximum = cell_minimum + size
         exterior_domain = np.any(
-            (indices < 0) | (indices >= canonical_span), axis=1
+            (cell_minimum < -0.5) | (cell_maximum > 0.5),
+            axis=1,
         )
         indices = indices[exterior_domain]
         if not len(indices):
@@ -258,6 +292,19 @@ def _diagnostic_cells(triangles: np.ndarray, depth: int) -> list[list[int]]:
         hits = triangles_intersect_box(translated, np.zeros(3), half)
         occupied.update(tuple(int(item) for item in index) for index in indices[hits])
     return [list(cell) for cell in sorted(occupied)]
+
+
+def _diagnostic_index_bounds(
+    triangle: np.ndarray,
+    cell_size: float,
+) -> tuple[np.ndarray, np.ndarray]:
+    lower = (
+        np.floor((triangle.min(axis=0) + 0.5) / cell_size).astype(np.int64) - 1
+    )
+    upper = (
+        np.floor((triangle.max(axis=0) + 0.5) / cell_size).astype(np.int64) + 1
+    )
+    return lower, upper
 
 
 def _snapshot(
@@ -279,7 +326,7 @@ def _snapshot(
     resolution = {
         "profile": EXTERIOR_GRID_PROFILE,
         "diagnostic_grid_depth": diagnostic_depth,
-        "cell_size_canonical": 1.0 / (1 << diagnostic_depth),
+        "cell_size_canonical": math.ldexp(1.0, -diagnostic_depth),
         "origin_canonical": [-0.5, -0.5, -0.5],
         "index_to_canonical": "center=origin+(index+0.5)*cell_size",
         "boundary_policy": EXTERIOR_BOUNDARY_POLICY,
@@ -356,4 +403,5 @@ __all__ = [
     "EXTERIOR_SNAPSHOT_SCHEMA",
     "ExteriorMeasurement",
     "measure_exterior_surface",
+    "validate_exterior_measurement",
 ]

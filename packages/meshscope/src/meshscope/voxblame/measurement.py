@@ -30,6 +30,7 @@ from meshscope.voxblame.exterior import (
     EXTERIOR_SNAPSHOT_SCHEMA,
     ExteriorMeasurement,
     measure_exterior_surface,
+    validate_exterior_measurement,
 )
 from meshscope.voxblame.frame import CanonicalFrame, mesh_vertices
 from meshscope.voxblame.prepare_reference import (
@@ -100,6 +101,7 @@ def measure_step(
     exterior = measure_exterior_surface(
         np.asarray(candidate.triangles, dtype=np.float64)
     )
+    validate_exterior_measurement(exterior)
     if candidate_digest == manifest["reference_ply"]["sha256"]:
         candidate_tree = reference_tree
     elif len(exterior.interior_triangles):

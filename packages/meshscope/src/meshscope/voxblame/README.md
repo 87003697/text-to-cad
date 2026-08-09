@@ -106,12 +106,18 @@ surface evidence. Exterior fragments supply exact containment, canonical
 bounds, centroid, outside directions, and nearest/farthest L-infinity overrun,
 plus a signed diagnostic grid. Resource limits may reduce only the diagnostic
 grid depth; exact facts remain unchanged. The persisted exterior snapshot and
-its resolution metadata participate in the Observable Geometry identity.
+its resolution metadata participate in the Observable Geometry identity. The
+signed grid-depth exponent may pass below zero for very distant geometry, so
+the diagnostic mask stays resource-bounded without weakening containment.
 
 VoxBlame publishes objective facts rather than an `accepted` verdict. Complete
 acceptance requires all three facts to be true: exact depth-8 equality
 (`global_depth_8_zero`), a clear exterior (`out_of_frame_clear`), and no
 unresolved evidence conflict (`no_evidence_conflict`).
+
+Exact containment, signed occupancy, snapshot bytes, resolution metadata, and
+their identities are cross-checked before publication; any conflict fails the
+measurement instead of publishing a Measured Step with contradictory facts.
 
 ### Application entry point
 

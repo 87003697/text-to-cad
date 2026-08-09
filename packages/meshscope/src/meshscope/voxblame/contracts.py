@@ -501,13 +501,15 @@ def _validate_exterior(value: Any, path: str) -> Mapping[str, Any]:
         f"{path}.surface_cell_count",
         minimum=0,
     )
-    _integer(
+    diagnostic_depth = _integer(
         exterior["diagnostic_grid_depth"],
         f"{path}.diagnostic_grid_depth",
-        minimum=1,
+        minimum=-1022,
         maximum=MAX_DEPTH,
     )
-    _boolean(exterior["coarsened"], f"{path}.coarsened")
+    coarsened = _boolean(exterior["coarsened"], f"{path}.coarsened")
+    if coarsened is not (diagnostic_depth < MAX_DEPTH):
+        _fail(f"{path}.coarsened", "contradicts diagnostic grid depth")
     directions = _directions(exterior["outside_directions"], f"{path}.outside_directions")
     nullable_fields = (
         "bounds_canonical",
@@ -715,13 +717,21 @@ def _validate_target(
             f"{path}.exterior.outside_directions",
         ):
             _fail(f"{path}.exterior.outside_directions", "must not be empty")
-        _integer(
+        diagnostic_depth = _integer(
             exterior["diagnostic_grid_depth"],
             f"{path}.exterior.diagnostic_grid_depth",
-            minimum=1,
+            minimum=-1022,
             maximum=MAX_DEPTH,
         )
-        _boolean(exterior["coarsened"], f"{path}.exterior.coarsened")
+        coarsened = _boolean(
+            exterior["coarsened"],
+            f"{path}.exterior.coarsened",
+        )
+        if coarsened is not (diagnostic_depth < MAX_DEPTH):
+            _fail(
+                f"{path}.exterior.coarsened",
+                "contradicts diagnostic grid depth",
+            )
     return key
 
 

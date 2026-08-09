@@ -330,14 +330,66 @@ class VoxBlameMeasurementTests(unittest.TestCase):
         self.assertTrue(beyond["exterior_surface"]["surface_present"])
         self.assertEqual(["+x"], beyond["exterior_surface"]["outside_directions"])
 
+    def test_surface_wholly_within_boundary_epsilon_belongs_to_interior(
+        self,
+    ) -> None:
+        tolerance_band = trimesh.Trimesh(
+            vertices=np.array(
+                [
+                    [0.5 + 0.5e-9, -0.1, -0.1],
+                    [0.5 + 0.5e-9, 0.1, -0.1],
+                    [0.5 + 0.5e-9, -0.1, 0.1],
+                ],
+                dtype=np.float64,
+            ),
+            faces=[[0, 1, 2]],
+            process=False,
+        )
+        tolerance_path = self.root / "tolerance-band.ply"
+        _write_double_ply(tolerance_path, tolerance_band)
+        boundary = tolerance_band.copy()
+        boundary.vertices[:, 0] = 0.5
+        boundary_path = self.root / "boundary.ply"
+        _write_double_ply(boundary_path, boundary)
+
+        tolerance_summary = measure_step(
+            self.reference,
+            tolerance_path,
+            self.state,
+            step=0,
+        ).summary
+        boundary_summary = measure_step(
+            self.reference,
+            boundary_path,
+            self.state,
+            step=1,
+            compare_to=0,
+        ).summary
+
+        self.assertTrue(
+            tolerance_summary["objective_facts"]["out_of_frame_clear"]
+        )
+        self.assertGreater(
+            tolerance_summary["errors_by_depth"][-1]["candidate_surface_count"],
+            0,
+        )
+        self.assertEqual(
+            boundary_summary["measurement"]["interior_tree_sha256"],
+            tolerance_summary["measurement"]["interior_tree_sha256"],
+        )
+        self.assertEqual(
+            boundary_summary["measurement"]["observable_sha256"],
+            tolerance_summary["measurement"]["observable_sha256"],
+        )
+
     def test_resource_coarsening_changes_only_diagnostic_exterior_evidence(
         self,
     ) -> None:
         vertices = np.array(
             [
-                [0.6, -1.0, -1.0],
-                [0.6, 1.0, -1.0],
-                [0.6, -1.0, 1.0],
+                [0.6, -45.0, -45.0],
+                [0.6, 45.0, -45.0],
+                [0.6, -45.0, 45.0],
             ],
             dtype=np.float64,
         )
@@ -358,7 +410,7 @@ class VoxBlameMeasurementTests(unittest.TestCase):
         evidence = summary["exterior_surface"]
         self.assertTrue(evidence["surface_present"])
         self.assertEqual(
-            {"min": [0.6, -1.0, -1.0], "max": [0.6, 1.0, 1.0]},
+            {"min": [0.6, -45.0, -45.0], "max": [0.6, 45.0, 45.0]},
             evidence["bounds_canonical"],
         )
         self.assertEqual(
@@ -366,9 +418,10 @@ class VoxBlameMeasurementTests(unittest.TestCase):
             evidence["outside_directions"],
         )
         self.assertAlmostEqual(0.1, evidence["nearest_overrun"])
-        self.assertAlmostEqual(0.5, evidence["farthest_overrun"])
+        self.assertAlmostEqual(44.5, evidence["farthest_overrun"])
         self.assertTrue(evidence["coarsened"])
-        self.assertLess(evidence["diagnostic_grid_depth"], 8)
+        self.assertLess(evidence["diagnostic_grid_depth"], 1)
+        self.assertLessEqual(evidence["surface_cell_count"], 65_536)
         snapshot = json.loads(
             (self.state / "steps/000000/exterior.json").read_text(encoding="utf-8")
         )

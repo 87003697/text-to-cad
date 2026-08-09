@@ -155,6 +155,20 @@ class CanonicalVoxBlameContractTests(unittest.TestCase):
             path="$.summary.repair_targets.items[0]",
         )
 
+    def test_exterior_resolution_accepts_signed_coarsening_levels(self):
+        for document in (self.report, self.summary):
+            document["exterior_surface"]["diagnostic_grid_depth"] = 0
+            document["exterior_surface"]["coarsened"] = True
+
+        validate_contract_bundle(self.session, self.report, self.summary)
+
+        inconsistent = deepcopy(self.report)
+        inconsistent["exterior_surface"]["coarsened"] = False
+        self.assert_invalid(
+            lambda: validate_report_contract(inconsistent),
+            path="$.exterior_surface.coarsened",
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

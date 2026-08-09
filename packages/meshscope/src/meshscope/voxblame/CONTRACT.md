@@ -101,9 +101,19 @@ Each Measured Step persists an authoritative
 The logical snapshot digest is SHA-256 over the canonical JSON bytes with the
 `voxblame.exterior-snapshot/1\0` domain prefix. Resource pressure may reduce
 only diagnostic grid depth and cells; it does not change the exact facts.
+Diagnostic grid depth is a signed base-2 resolution exponent: depth 8 aligns
+to canonical depth-8 cells, depth 0 uses canonical-cube-sized cells, and
+negative depths remain valid for bounded evidence of very distant geometry.
 `measurement.observable_sha256` binds the interior-tree digest, authoritative
 exterior-snapshot digest, exterior profile, and complete exterior-resolution
 object.
+
+Snapshot bytes, logical identity, exact containment, outside directions,
+diagnostic occupancy, and coarsening metadata are cross-checked before a
+Measured Step is published. A conflict fails publication; therefore a
+published step may truthfully carry `no_evidence_conflict: true`. Preview and
+measurement identity conflicts remain a later pre-publication cross-check and
+likewise must not publish a conflicting Measured Step.
 
 ## `voxblame.summary/1`
 
