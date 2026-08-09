@@ -9,6 +9,16 @@ import build123d
 from cadgen._internal import component_package as cp
 
 
+def _build_package_cp(compound, **kwargs):
+    """Drive cp.build_package_from_compound holding the package's write lock, as every
+    real producer does (see cadgen.coordination.require_write_lock)."""
+    from cadgen.coordination.lock import exclusive
+    from cadgen.coordination.paths import write_lock_path
+
+    with exclusive(write_lock_path(kwargs["package_dir"])):
+        return cp.build_package_from_compound(compound, **kwargs)
+
+
 class ComponentWorkerDeterminismTests(unittest.TestCase):
     @staticmethod
     def _glb_json(path: Path) -> dict:
@@ -93,7 +103,7 @@ class OrphanComponentPruningTests(unittest.TestCase):
             orphan = comp_dir / "deadbeefdeadbeef.glb"
             orphan.write_bytes(b"stale bytes from an earlier geometry revision")
 
-            stats = cp.build_package_from_compound(
+            stats = _build_package_cp(
                 compound,
                 package_dir=package_dir,
                 root_name="asm",
@@ -129,7 +139,7 @@ class PayloadUnreadableFallbackTests(unittest.TestCase):
                 "_build123d_shape_from_brep_bytes",
                 side_effect=RuntimeError("NCollection_IndexedMap::FindKey"),
             ):
-                stats = cp.build_package_from_compound(
+                stats = _build_package_cp(
                     root,
                     package_dir=package_dir,
                     root_name="rig",

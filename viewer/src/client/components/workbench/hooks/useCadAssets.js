@@ -2,14 +2,12 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import {
   isAbortError,
   loadRenderDisplayEdgeBundle,
-  loadRenderDxf,
   loadRenderGlb,
   loadRenderJson,
   loadRenderSelectorBundle,
   loadRenderSdf,
   loadRenderSrdf,
   loadRenderUrdf,
-  peekRenderDxf,
   peekRenderDisplayEdgeBundle,
   peekRenderGlb,
   peekRenderSelectorBundle,
@@ -219,7 +217,6 @@ export function useCadAssets({
   entryHasMesh,
   entryHasReferences,
   entryHasDisplayEdges = () => false,
-  entryHasDxf,
   buildNormalizedReferenceState,
 }) {
   const [meshState, setMeshState] = useState(null);
@@ -228,10 +225,6 @@ export function useCadAssets({
   const [meshLoadStage, setMeshLoadStage] = useState("");
   const [status, setStatus] = useState(ASSET_STATUS.READY);
   const [error, setError] = useState("");
-  const [dxfState, setDxfState] = useState(null);
-  const [dxfStatus, setDxfStatus] = useState(ASSET_STATUS.PENDING);
-  const [dxfError, setDxfError] = useState("");
-  const [dxfLoadStage, setDxfLoadStage] = useState("");
   const [implicitState, setImplicitState] = useState(null);
   const [implicitStatus, setImplicitStatus] = useState(ASSET_STATUS.PENDING);
   const [implicitError, setImplicitError] = useState("");
@@ -250,13 +243,11 @@ export function useCadAssets({
   const [displayEdgeLoadStage, setDisplayEdgeLoadStage] = useState("");
 
   const requestIdRef = useRef(0);
-  const dxfRequestIdRef = useRef(0);
   const implicitRequestIdRef = useRef(0);
   const urdfRequestIdRef = useRef(0);
   const referenceRequestIdRef = useRef(0);
   const displayEdgeRequestIdRef = useRef(0);
   const meshAbortControllerRef = useRef(null);
-  const dxfAbortControllerRef = useRef(null);
   const implicitAbortControllerRef = useRef(null);
   const urdfAbortControllerRef = useRef(null);
   const referenceAbortControllerRef = useRef(null);
@@ -353,22 +344,6 @@ export function useCadAssets({
     return bundle ? buildDisplayEdgeState(entry, bundle) : null;
   }, [buildDisplayEdgeState, entryHasDisplayEdges]);
 
-  const getCachedDxfState = useCallback((entry) => {
-    if (!entryHasDxf(entry)) {
-      return null;
-    }
-    const dxfData = peekRenderDxf(entryAssetUrl(entry, "dxf"));
-    if (!dxfData) {
-      return null;
-    }
-    return {
-      file: entry.file,
-      kind: entry.kind,
-      dxfHash: entryAssetHash(entry, "dxf"),
-      dxfData
-    };
-  }, [entryHasDxf]);
-
   const getCachedImplicitState = useCallback((entry) => {
     if (String(entry?.kind || "").trim().toLowerCase() !== RENDER_FORMAT.IMPLICIT) {
       return null;
@@ -426,12 +401,6 @@ export function useCadAssets({
     setMeshLoadInProgress(false);
     setMeshLoadTargetFile("");
     setMeshLoadStage("");
-  }, []);
-
-  const cancelDxfLoad = useCallback(() => {
-    dxfRequestIdRef.current += 1;
-    abortLoad(dxfAbortControllerRef);
-    setDxfLoadStage("");
   }, []);
 
   const cancelImplicitLoad = useCallback(() => {
@@ -768,60 +737,6 @@ export function useCadAssets({
     }
   }, [buildDisplayEdgeState, cancelDisplayEdgeLoad, entryHasDisplayEdges, getCachedDisplayEdgeState]);
 
-  const loadDxfForEntry = useCallback(async (entry) => {
-    cancelDxfLoad();
-    const requestId = dxfRequestIdRef.current;
-
-    if (!entryHasDxf(entry)) {
-      setDxfState(null);
-      setDxfStatus(ASSET_STATUS.PENDING);
-      setDxfError("");
-      return;
-    }
-
-    const cachedDxfState = getCachedDxfState(entry);
-    if (cachedDxfState) {
-      setDxfState(cachedDxfState);
-      setDxfStatus(ASSET_STATUS.READY);
-      setDxfError("");
-      return;
-    }
-
-    const controller = new AbortController();
-    dxfAbortControllerRef.current = controller;
-    setDxfStatus(ASSET_STATUS.LOADING);
-    setDxfError("");
-    setDxfLoadStage("loading DXF");
-
-    try {
-      const dxfData = await loadRenderDxf(entryAssetUrl(entry, "dxf"), { signal: controller.signal });
-      if (requestId !== dxfRequestIdRef.current) {
-        return;
-      }
-      setDxfLoadStage("building preview");
-      setDxfState({
-        file: entry.file,
-        kind: entry.kind,
-        dxfHash: entryAssetHash(entry, "dxf"),
-        dxfData
-      });
-      setDxfStatus(ASSET_STATUS.READY);
-    } catch (err) {
-      if (requestId !== dxfRequestIdRef.current || isAbortError(err) || controller.signal.aborted) {
-        return;
-      }
-      setDxfStatus(ASSET_STATUS.ERROR);
-      setDxfError(err instanceof Error ? err.message : String(err));
-    } finally {
-      if (dxfAbortControllerRef.current === controller) {
-        dxfAbortControllerRef.current = null;
-      }
-      if (requestId === dxfRequestIdRef.current) {
-        setDxfLoadStage("");
-      }
-    }
-  }, [cancelDxfLoad, entryHasDxf, getCachedDxfState]);
-
   const loadImplicitForEntry = useCallback(async (entry) => {
     cancelImplicitLoad();
     const requestId = implicitRequestIdRef.current;
@@ -959,7 +874,6 @@ export function useCadAssets({
 
   useEffect(() => () => {
     abortLoad(meshAbortControllerRef);
-    abortLoad(dxfAbortControllerRef);
     abortLoad(implicitAbortControllerRef);
     abortLoad(urdfAbortControllerRef);
     abortLoad(referenceAbortControllerRef);
@@ -976,13 +890,6 @@ export function useCadAssets({
     setStatus,
     error,
     setError,
-    dxfState,
-    setDxfState,
-    dxfStatus,
-    setDxfStatus,
-    dxfError,
-    setDxfError,
-    dxfLoadStage,
     implicitState,
     setImplicitState,
     implicitStatus,
@@ -1014,17 +921,14 @@ export function useCadAssets({
     getCachedMeshState,
     getCachedReferenceState,
     getCachedDisplayEdgeState,
-    getCachedDxfState,
     getCachedImplicitState,
     getCachedUrdfState,
     cancelMeshLoad,
-    cancelDxfLoad,
     cancelImplicitLoad,
     cancelUrdfLoad,
     cancelReferenceLoad,
     cancelDisplayEdgeLoad,
     loadMeshForEntry,
-    loadDxfForEntry,
     loadImplicitForEntry,
     loadUrdfForEntry,
     loadReferencesForEntry,

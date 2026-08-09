@@ -25,7 +25,9 @@ export const ARTIFACT_PROGRESS_POLL_MS = 400;
 // noticeable beat later. The build reports its opening phase immediately, so there is
 // something to read this early.
 export const ARTIFACT_PROGRESS_FIRST_POLL_MS = 120;
-const MAX_DISPLAY_PERCENT = 99;
+// Progress never displays 100%: the artifact is not ready until the build's own request
+// resolves, and a bar that sits full while the viewer still shows a spinner reads as a hang.
+export const MAX_DISPLAY_PERCENT = 99;
 
 function clamp01(value) {
   const numeric = Number(value);
@@ -104,10 +106,56 @@ export function formatArtifactProgress(progress, nowMs = Date.now()) {
   };
 }
 
-// A fixed-width monospace bar, matching the loading overlay's ASCII treatment. Same
-// glyphs the CLI uses, so the two surfaces read as one feature.
-export function renderProgressBar(ratio, width = 18) {
-  const cells = Math.max(1, Math.round(width));
-  const filled = Math.round(clamp01(ratio) * cells);
-  return `${"█".repeat(filled)}${"░".repeat(cells - filled)}`;
+// How long a load with no reported progress is assumed to take. Not a promise -- it only
+// sets how fast the estimate creeps.
+const ESTIMATED_LOAD_MS = 6000;
+// An estimate must never reach 100%: the bar would sit full while work continued, which
+// reads as a hang. It approaches this ceiling and stops.
+const ESTIMATED_CEILING = 0.92;
+// The ceiling for the TAIL of a load whose measured phase already finished. Higher than
+// ESTIMATED_CEILING because we know strictly more here: the build is done and only the
+// download/decode is left, so promising most of the bar is honest rather than optimistic.
+const CONTINUED_CEILING = MAX_DISPLAY_PERCENT / 100;
+
+// Eases from `floor` toward `ceiling` on an exponential curve. Deliberately NOT linear: a
+// linear estimate that outruns the real work has to jump backwards or freeze, and both
+// look broken. This moves quickly at first (when most short loads finish) and slows rather
+// than stalling at a hard stop.
+function easedEstimate(floor, ceiling, sinceMs, nowMs) {
+  const low = clamp01(floor);
+  const high = Math.max(low, clamp01(ceiling));
+  if (!Number.isFinite(sinceMs) || sinceMs <= 0) {
+    return low;
+  }
+  const elapsed = Math.max(0, nowMs - sinceMs);
+  return clamp01(low + (high - low) * (1 - Math.exp(-elapsed / ESTIMATED_LOAD_MS)));
+}
+
+/**
+ * A time-based ratio for a load that has reported no progress at all.
+ *
+ * Most loads have no denominator -- reading a GLB off disk, decoding it in a worker -- and
+ * the alternative to estimating is a bar that sits at zero, which tells the user less than
+ * nothing.
+ */
+export function estimatedLoadingRatio(startedAtMs, nowMs = Date.now()) {
+  return easedEstimate(0, ESTIMATED_CEILING, startedAtMs, nowMs);
+}
+
+/**
+ * The estimate for the TAIL of a load whose measured phase has ended.
+ *
+ * An artifact build reports real progress and then stops reporting the moment it finishes
+ * -- but the load is not over: the package GLB still has to be fetched and decoded, and for
+ * a large implicit mesh that is the longer half. Falling back to `estimatedLoadingRatio`
+ * there is wrong twice over: its clock started when the LOAD started, so after a 38s build
+ * the curve has fully saturated and the bar freezes at ESTIMATED_CEILING; and because the
+ * measured ratio had already climbed past that ceiling, the bar first jumps BACKWARDS.
+ * That pair is exactly what reads as "stuck at 92%".
+ *
+ * So the tail eases from where the measurement actually left off, on a clock that starts at
+ * the handover.
+ */
+export function continuedLoadingRatio(floorRatio, sinceMs, nowMs = Date.now()) {
+  return easedEstimate(floorRatio, CONTINUED_CEILING, sinceMs, nowMs);
 }

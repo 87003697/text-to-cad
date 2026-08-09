@@ -7,9 +7,10 @@ import {
 } from "@/components/ui/dropdown-menu";
 import {
   DXF_EXPORT_FORMATS,
+  IMPLICIT_EXPORT_FORMATS,
   STEP_EXPORT_FORMATS,
-  stepExportItemLabel
-} from "@/workbench/stepExport";
+  exportItemLabel
+} from "@/workbench/modelExport";
 
 // Dedicated "download" icon dropdown for exporting the open STEP model (part, assembly, or
 // imported STEP) to STEP/3MF/STL/GLB, or a generated DXF drawing to DXF. Hidden unless an
@@ -18,7 +19,7 @@ import {
 export function StepExportDropdown({
   selectedEntry,
   fileAccessBusyKey = "",
-  onExportStepFile,
+  onExportModelFile,
   triggerClassName = "",
   iconClassName = "size-3",
   contentAlign = "end",
@@ -29,10 +30,21 @@ export function StepExportDropdown({
   const isStepEntry = kind === "step" || kind === "assembly" || kind === "part";
   // Only generated drawings export (a raw imported .dxf is already the deliverable).
   const isGeneratedDxfEntry = kind === "dxf" && selectedEntry?.sourceKind === "python";
-  if (!selectedEntry || (!isStepEntry && !isGeneratedDxfEntry) || typeof onExportStepFile !== "function") {
+  // An implicit's own source IS its native file, so it exports to mesh formats only —
+  // meshed server-side by cadgen.implicit_export through the same /__cad/export route.
+  const isImplicitEntry = kind === "implicit";
+  if (
+    !selectedEntry ||
+    (!isStepEntry && !isGeneratedDxfEntry && !isImplicitEntry) ||
+    typeof onExportModelFile !== "function"
+  ) {
     return null;
   }
-  const exportFormats = isGeneratedDxfEntry ? DXF_EXPORT_FORMATS : STEP_EXPORT_FORMATS;
+  const exportFormats = isGeneratedDxfEntry
+    ? DXF_EXPORT_FORMATS
+    : isImplicitEntry
+      ? IMPLICIT_EXPORT_FORMATS
+      : STEP_EXPORT_FORMATS;
   const fileRef = String(selectedEntry?.file || selectedEntry?.id || "").trim();
   const label = isGeneratedDxfEntry ? "Export drawing" : "Export model";
   return (
@@ -65,10 +77,10 @@ export function StepExportDropdown({
               className="text-xs"
               disabled={fileAccessBusyKey === key}
               onSelect={() => {
-                onExportStepFile(selectedEntry, format);
+                onExportModelFile(selectedEntry, format);
               }}
             >
-              <span className="min-w-0 truncate">{stepExportItemLabel(format)}</span>
+              <span className="min-w-0 truncate">{exportItemLabel(format)}</span>
             </DropdownMenuItem>
           );
         })}

@@ -7,7 +7,7 @@ tooling, not the fixture.
 
 ## Generated sources (`.dxf.py` / `.step.py`)
 
-Build them with the DXF skill CLI (`python skills/dxf/scripts/dxf <source>`);
+Build them with the DXF skill CLI (`python skills/dxf/scripts/gen <source>`);
 drawing packages land in the gitignored `__cadgen__/` cache and `.dxf` exports
 are written on demand only, so no generated DXF output is committed. Together
 they cover the skill's standalone-drafting and STEP-projection workflows.
@@ -24,44 +24,80 @@ they cover the skill's standalone-drafting and STEP-projection workflows.
 
 ## Imported files (`.dxf`)
 
-Raw DXF files downloaded from permissively licensed (MIT) test suites,
-committed via Git LFS. They cover both R12 (AC1009) and R2013+ (AC1027)
-flavors and a spread of entity types, including files that intentionally fail
-the skill's drawing checks — useful fixtures for validator and viewer
-robustness.
+Raw DXF files from permissively licensed (MIT) test suites, committed via Git
+LFS. They cover R12 (AC1009) and R2013+ (AC1027) flavors and a spread of entity
+types.
 
-Each entry lists two robustness datapoints: the skill validator verdict
-(`scripts/dxf --validate`) and how the CAD Viewer's DXF flat-pattern renderer
-handles the file. As of 0.4.0 the viewer renderer handles LINE, ARC, CIRCLE,
-and LWPOLYLINE; everything else fails gracefully with a typed error card.
+**Every file here encloses at least one closed area.** That is the selection
+rule, and it exists because the viewer renders a DXF by extruding its closed cut
+contours into a 3D flat pattern — a drawing with no area has nothing to extrude
+and nothing to show. Files that were only open paths (a lone arc, two open
+splines, an INSERT grid of open flag symbols), an empty modelspace, or purely
+degenerate geometry were removed for that reason; see the removal note below.
+
+Several of these deliberately mix closed cut profiles with open annotation
+(dimension extension lines, stray arcs), because real drawings do — layer intent
+is what separates the two, not the entity type.
+
+From [skymakerolof/dxf](https://github.com/skymakerolof/dxf) (`test/resources`,
+MIT):
+
+- `alu_extrusion_profile.dxf` — an aluminium extrusion cross-section: nine
+  nested closed LWPOLYLINE chambers, two HATCH regions, and seven DIMENSION
+  annotations across several layers and colors. The most realistic engineering
+  part in the set. Upstream name: `alu-profile.dxf`.
+- `plate_four_holes.dxf` — an OpenSCAD 2D export: a plate outline with four
+  circular holes, written as 452 individual LINE segments that chain into closed
+  loops with no dangling ends. Exercises the contour walk hard, since not one
+  entity is closed on its own. Upstream name: `openscad_export.dxf`.
+- `square_and_circle.dxf` — a square outline with an inscribed circle on
+  separate colored layers; the circle is tangent to the square, a useful
+  near-degenerate case for contour resolution. Upstream name:
+  `squareandcircle.dxf`.
+- `block_square_in_circle.dxf` — a circle plus an INSERT whose block holds a
+  closed square, and a second standalone circle. Small, and the simplest file
+  here that requires block expansion. Upstream name: `accumulatortest.dxf`.
+- `circles_ellipses_arcs.dxf` — two closed ELLIPSE entities and a CIRCLE
+  alongside two open ARCs. Closed-area ellipse coverage with open geometry
+  mixed in. Upstream name: `circlesellipsesarcs.dxf`.
 
 From [gdsestimating/dxf-parser](https://github.com/gdsestimating/dxf-parser)
 (`test/data`, MIT):
 
-- `arc1.dxf` — single ARC on a non-cut-named layer (R12). Validation: FAIL
-  (`open_cut_profile`), as expected for an open arc. Viewer: renders.
-- `ellipse.dxf` — two ELLIPSE entities (R12). Validation: ok. Viewer: error
-  card "Unsupported DXF entity ELLIPSE".
-- `splines.dxf` — two SPLINE entities (R12). Validation: FAIL
-  (`units_not_set`, `open_cut_profile`), as expected for open splines.
-  Viewer: error card "Unsupported DXF entity SPLINE".
-- `polylines.dxf` — twelve legacy POLYLINE entities (R12). Validation: ok.
-  Viewer: error card "Unsupported DXF entity POLYLINE".
+- `laser_text_outlines.dxf` — the word "LaserWeb" as twelve legacy POLYLINE
+  letter outlines, including the counters inside `a`, `e` and `b`. Closed by
+  coincident first/last vertices rather than the closed flag, so it also covers
+  that distinction. A genuine laser-cut profile. Upstream name: `polylines.dxf`.
+- `overlapping_ellipses.dxf` — two full closed ELLIPSE entities that overlap.
+  Minimal ellipse coverage. Upstream name: `ellipse.dxf`.
 
 From [mozman/ezdxf](https://github.com/mozman/ezdxf) (`examples_dxf`, MIT):
 
-- `minimal_r12.dxf` — the 35-byte minimal R12 skeleton
-  (`Minimal_DXF_AC1009.dxf`). Validation: FAIL (`empty_drawing`), as expected
-  for an empty modelspace. Viewer: error card "No supported DXF entities
-  found".
-- `multi_insert_with_attribs.dxf` — block INSERT with attributes (R2013).
-  Validation: ok. Viewer: error card "Unsupported DXF entity INSERT".
-- `circle_radius_le_0.dxf` — two zero-radius CIRCLE entities (R2013).
-  Validation: FAIL (`zero_length_entity` x2), as expected for degenerate
-  geometry. Viewer: error card "Invalid DXF circle radius".
+- `nested_hole_shapes.dxf` — eight shapes with nested holes: rectangles inside
+  rectangles, notched profiles, and pentagons, as sixteen closed LWPOLYLINE
+  boundaries with ten HATCH fills. The best coverage of holes and nesting depth.
+  Upstream name: `hatches_1.dxf`.
+
+### Removed fixtures
+
+These were dropped when the folder was reset around the closed-area rule. All
+were MIT-licensed and are trivially recoverable from the upstream repositories
+above if a validator-robustness suite ever wants them back:
+
+- `arc1.dxf` — a single open ARC.
+- `splines.dxf` — two open SPLINE entities.
+- `multi_insert_with_attribs.dxf` — an INSERT grid of open flag symbols.
+- `minimal_r12.dxf` — the 35-byte minimal R12 skeleton, no modelspace entities.
+- `circle_radius_le_0.dxf` — two degenerate CIRCLE entities (radius `0.0` and
+  `-1.0`), so no drawable area at all.
+
+Note that the last two were also the folder's intentional-failure fixtures for
+the drawing validator (`empty_drawing`, `zero_length_entity`). Nothing under
+`tests/` referenced them, so no test coverage was lost, but the validator no
+longer has a committed example of either condition.
 
 Validate any of them post-hoc with:
 
 ```bash
-python skills/dxf/scripts/dxf --validate models/dxf/<file>.dxf
+python skills/dxf/scripts/gen --validate models/dxf/<file>.dxf
 ```

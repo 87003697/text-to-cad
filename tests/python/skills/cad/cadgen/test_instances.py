@@ -7,7 +7,23 @@ import build123d
 from build123d import Compound, Location
 
 from cadgen.instances import compound_from_instances
-from cadgen._internal.component_package import build_package_from_compound
+from cadgen._internal.component_package import (
+    build_package_from_compound as _RAW_BUILD_PACKAGE,
+)
+
+
+def _build_package(compound, **kwargs):
+    """Drive the package writer holding its write lock, as every real producer does.
+
+    _build_package() asserts the lock at the mutation boundary (see
+    cadgen.coordination.require_write_lock) so a producer cannot be added that writes a
+    package uncoordinated. These tests call the writer directly, so they take it too.
+    """
+    from cadgen.coordination.lock import exclusive
+    from cadgen.coordination.paths import write_lock_path
+
+    with exclusive(write_lock_path(kwargs["package_dir"])):
+        return _RAW_BUILD_PACKAGE(compound, **kwargs)
 
 
 def _labeled(shape, label):
@@ -31,7 +47,7 @@ def _descriptor_summary(descriptor: dict) -> tuple[set, set, int]:
 class CompoundFromInstancesTests(unittest.TestCase):
     def _build(self, shape, tmp: Path, key: str) -> dict:
         package_dir = tmp / "__cadgen__" / "models" / key
-        build_package_from_compound(
+        _build_package(
             shape,
             package_dir=package_dir,
             root_name=key,

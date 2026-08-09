@@ -62,6 +62,9 @@ check_no_generated_runtimes() {
 
 cd "$REPO_ROOT"
 setup_link "$MODE" "skills/implicit-cad/scripts/packages/implicitjs" "../../../../packages/implicitjs"
+# scripts/gen runs cadgen.implicit_artifact, so the skill vendors cadgen exactly as `cad` and
+# `dxf` do; in the development layout that vendored copy is a link to the package source.
+setup_link "$MODE" "skills/implicit-cad/scripts/packages/cadgen" "../../../../packages/cadgen"
 if [ "$MODE" = "check" ]; then
   check_no_generated_runtimes
 fi

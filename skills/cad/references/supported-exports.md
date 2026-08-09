@@ -1,6 +1,6 @@
 # Supported exports
 
-Read this file when the user requests STL, 3MF, or native GLB output files from CAD geometry. For a `.step` file, use `scripts/gen --write-step` (see `step-generation.md`) — `scripts/export` writes mesh formats only. For 2D DXF output, use the `$dxf` skill; DXF uses a separate `gen_dxf()` contract in a dedicated `<name>.dxf.py` drawing generator (never inside a `.step.py`).
+Read this file when the user requests STL, 3MF, or native GLB output files from CAD geometry. For a `.step` file, use `scripts/gen --write` (see `step-generation.md`) — `scripts/export` writes mesh formats only. For 2D DXF output, use the `$dxf` skill; DXF uses a separate `gen_dxf()` contract in a dedicated `<name>.dxf.py` drawing generator (never inside a `.step.py`).
 
 ## Policy
 
@@ -31,7 +31,7 @@ When a generator exists, export from the generator. Pass an imported STEP/STP fi
 python scripts/export path/to/imported.step --stl --3mf
 ```
 
-`scripts/export` never writes a `.step` file. A generated model's STEP comes from `scripts/gen <name>.step.py --write-step` in the generation run; an imported model's STEP is already the file on disk.
+`scripts/export` never writes a `.step` file. A generated model's STEP comes from `scripts/gen <name>.step.py --write` in the generation run; an imported model's STEP is already the file on disk.
 
 ## Mesh tolerance
 
@@ -55,7 +55,7 @@ Use tighter tolerances for small curved parts or visual fidelity. Use looser tol
 Example — write the STEP during generation, then mesh exports from the same generator:
 
 ```bash
-python scripts/gen models/bracket.step.py --write-step
+python scripts/gen models/bracket.step.py --write
 
 python scripts/export models/bracket.step.py \
   --stl meshes/bracket.stl \

@@ -18,6 +18,7 @@ import {
 import { TooltipProvider } from "../ui/tooltip";
 import DrawingToolbar from "./DrawingToolbar";
 import { ToolbarButton } from "./ToolbarButton";
+import { ZoomControl } from "../viewer/ZoomControl";
 import { CAD_WORKSPACE_TOOLBAR_DESKTOP_WIDTH_CLASS } from "./ToolbarShell";
 import { StepExportDropdown } from "./StepExportDropdown";
 
@@ -96,6 +97,13 @@ const FLOATING_TOOL_BAR_BUTTON_CLASSES =
 function DesktopFloatingToolBar({
   renderFormat,
   floatingCadToolbarPosition,
+  zoomControlsVisible = false,
+  zoomPercent = 100,
+  onZoomPercentChange,
+  onZoomReset,
+  drawingViewToggle = false,
+  drawingViewMode = "3d",
+  onDrawingViewModeChange,
   previewMode = false,
   toolbarHidden = false,
   onToolbarEnter,
@@ -135,7 +143,7 @@ function DesktopFloatingToolBar({
   handleEnterPreviewMode,
   handleScreenshotCopy,
   selectedEntry,
-  onExportStepFile,
+  onExportModelFile,
   fileAccessBusyKey = ""
 }) {
   const dxfMode = renderFormat === RENDER_FORMAT.DXF;
@@ -143,10 +151,14 @@ function DesktopFloatingToolBar({
   const urdfMode = renderFormat === RENDER_FORMAT.URDF;
   const robotMode = isRobotRenderFormat(renderFormat);
   const meshOnlyMode = isMeshRenderFormat(renderFormat);
-  const renderReady = implicitMode ? !!selectedImplicitModel : dxfMode ? !!selectedDxfData : !!selectedMeshData;
-  const captureDisabled = viewerLoading || !renderReady;
+  // "Is there anything on screen?" — asked once, for every format. An implicit
+  // raymarches its own GLSL and never loads mesh data, so asking only about
+  // selectedMeshData left its screenshot and orbit buttons permanently disabled
+  // even though both underlying paths work.
+  const viewportContent = implicitMode ? selectedImplicitModel : selectedMeshData;
+  const captureDisabled = viewerLoading || !viewportContent;
   const selectDisabled = viewerLoading ||
-    !selectedMeshData ||
+    !viewportContent ||
     referenceSelectionPending ||
     referenceSelectionUnavailable ||
     referenceSelectionDeferred;
@@ -185,12 +197,57 @@ function DesktopFloatingToolBar({
     </ToolbarButton>
   );
 
+  // A drawing's own toolbar, in its own pill to the LEFT of the shared one: 2D and 3D are a
+  // property of the drawing being viewed, not a tool that acts on it, so grouping them with
+  // select/pan/draw would read as a fourth mode of the same kind.
+  const drawingViewToolbar = drawingViewToggle ? (
+    <div
+      className={`${toolbarHidden ? "pointer-events-none" : "pointer-events-auto"} inline-flex h-8 w-fit items-center gap-0.5 rounded-md p-1 ${FLOATING_TOOL_BAR_SURFACE_CLASS}`}
+      onPointerEnter={onToolbarEnter}
+      onPointerLeave={onToolbarLeave}
+    >
+      {/* `active`, not `isActive`: ToolbarButton switches variant on `active`, and an unknown
+          prop is silently dropped -- which is why neither button looked selected. */}
+      <ToolbarButton
+        label="Top-down 2D view"
+        active={drawingViewMode === "2d"}
+        onClick={() => onDrawingViewModeChange?.("2d")}
+      >
+        <span className="text-[10px] font-medium leading-none">2D</span>
+      </ToolbarButton>
+      <ToolbarButton
+        label="3D view"
+        active={drawingViewMode !== "2d"}
+        onClick={() => onDrawingViewModeChange?.("3d")}
+      >
+        <span className="text-[10px] font-medium leading-none">3D</span>
+      </ToolbarButton>
+    </div>
+  ) : null;
+
+  const zoomToolbar = zoomControlsVisible ? (
+    <div
+      className={`${toolbarHidden ? "pointer-events-none" : "pointer-events-auto"} inline-flex h-8 w-fit items-center gap-0.5 rounded-md p-1 ${FLOATING_TOOL_BAR_SURFACE_CLASS}`}
+      onPointerEnter={onToolbarEnter}
+      onPointerLeave={onToolbarLeave}
+    >
+      <ZoomControl
+        zoomPercent={zoomPercent}
+        onZoomPercentChange={onZoomPercentChange}
+        onZoomReset={onZoomReset}
+      />
+    </div>
+  ) : null;
+
   return (
     <div
       className={`absolute z-20 flex flex-col items-end gap-1 transition-opacity duration-300 ${toolbarHidden ? "opacity-0" : "opacity-100"}`}
       style={floatingCadToolbarPosition}
     >
       <TooltipProvider delayDuration={250}>
+        <div className="flex w-fit items-center gap-1 self-end">
+        {zoomToolbar}
+        {drawingViewToolbar}
         <div
           className={`${toolbarHidden ? "pointer-events-none" : "pointer-events-auto"} inline-flex h-8 w-fit items-center gap-0.5 self-end rounded-md p-1 ${FLOATING_TOOL_BAR_SURFACE_CLASS}`}
           onPointerEnter={onToolbarEnter}
@@ -208,7 +265,11 @@ function DesktopFloatingToolBar({
             </>
           ) : (
             <>
-              {!dxfMode && !implicitMode && !robotMode && !meshOnlyMode ? (
+              {/* Select/Pan/Draw. Pan and Draw are camera and 2D-overlay tools that
+                  work against any viewport, so an implicit gets them like STEP and
+                  DXF do. Select is inert for an implicit (a single SDF body has no
+                  sub-parts to pick), exactly as it already is for DXF. */}
+              {!robotMode && !meshOnlyMode ? (
                 <>
                   <ToolbarButton
                     label={selectLabel}
@@ -224,7 +285,7 @@ function DesktopFloatingToolBar({
                     label="Pan"
                     active={panToolActive}
                     onClick={() => handleSelectTabToolMode("pan")}
-                    disabled={viewerLoading || !selectedMeshData}
+                    disabled={viewerLoading || !viewportContent}
                     aria-pressed={panToolActive}
                   >
                     <Hand className="size-3" strokeWidth={2} aria-hidden="true" />
@@ -234,7 +295,7 @@ function DesktopFloatingToolBar({
                     label="Draw"
                     active={drawToolActive}
                     onClick={() => handleSelectTabToolMode("draw")}
-                    disabled={viewerLoading || !selectedMeshData}
+                    disabled={viewerLoading || !viewportContent}
                     aria-pressed={drawToolActive}
                   >
                     <PenTool className="size-3" strokeWidth={2} aria-hidden="true" />
@@ -256,21 +317,19 @@ function DesktopFloatingToolBar({
                 </ToolbarButton>
               ) : null}
 
-              {!dxfMode ? (
-                <ToolbarButton
-                  label="Orbit"
-                  onClick={handleEnterPreviewMode}
-                  disabled={viewerLoading || !renderReady}
-                >
-                  <Orbit className="size-3" strokeWidth={2} aria-hidden="true" />
-                </ToolbarButton>
-              ) : null}
+              <ToolbarButton
+                label="Orbit"
+                onClick={handleEnterPreviewMode}
+                disabled={captureDisabled}
+              >
+                <Orbit className="size-3" strokeWidth={2} aria-hidden="true" />
+              </ToolbarButton>
 
               {screenshotButton}
 
               <StepExportDropdown
                 selectedEntry={selectedEntry}
-                onExportStepFile={onExportStepFile}
+                onExportModelFile={onExportModelFile}
                 fileAccessBusyKey={fileAccessBusyKey}
                 triggerClassName={FLOATING_TOOL_BAR_BUTTON_CLASSES}
                 iconClassName="size-3"
@@ -281,9 +340,10 @@ function DesktopFloatingToolBar({
             </>
           )}
         </div>
+        </div>
       </TooltipProvider>
 
-      {!previewMode && !dxfMode && !meshOnlyMode && drawToolActive ? (
+      {!previewMode && !meshOnlyMode && drawToolActive ? (
         <DrawingToolbar
           className={CAD_WORKSPACE_TOOLBAR_DESKTOP_WIDTH_CLASS}
           drawingToolOptions={drawingToolOptions}

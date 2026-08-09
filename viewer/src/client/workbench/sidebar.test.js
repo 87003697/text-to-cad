@@ -635,15 +635,16 @@ test("filenameLabelForEntry shows canonical step, stl, 3mf, glb, dxf, urdf, srdf
     "sample_plate.dxf"
   );
 
-  // A `<name>.dxf.py` drawing-generator entry keeps a single .dxf suffix,
-  // not `<name>.dxf.dxf`.
+  // A `<name>.dxf.py` drawing generator keeps its REAL name. Collapsing it to
+  // `gasket_plate.dxf` made it indistinguishable from an imported drawing of the same stem
+  // sitting beside it — two entries, one label.
   assert.equal(
     filenameLabelForEntry({
       file: "drawings/gasket_plate.dxf.py",
       kind: "dxf",
       source: { format: "python", path: "drawings/gasket_plate.dxf.py" }
     }),
-    "gasket_plate.dxf"
+    "gasket_plate.dxf.py"
   );
 
   assert.equal(
@@ -675,15 +676,16 @@ test("filenameLabelForEntry shows canonical step, stl, 3mf, glb, dxf, urdf, srdf
 
 });
 
-test("filenameLabelForEntry surfaces Python-generated STEP models as .step.py", () => {
-  // A gen_step Python model has no committed STEP (logical `<stem>.step`, real source `<stem>.py`);
-  // show it as `<stem>.step.py` so the explorer distinguishes generators from static STEP files.
+test("filenameLabelForEntry names the source file, not the logical output", () => {
+  // A gen_step model can carry its logical STEP in `file` while the file the user edits is
+  // the generator recorded in sourcePath. The label follows the source, so a generator never
+  // masquerades as a committed STEP.
   assert.equal(
     filenameLabelForEntry({
       file: "simple/spur_gear_blank.step",
       kind: "part",
       sourceKind: "python",
-      sourcePath: "simple/spur_gear_blank.py"
+      sourcePath: "simple/spur_gear_blank.step.py"
     }),
     "spur_gear_blank.step.py"
   );

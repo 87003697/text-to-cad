@@ -263,7 +263,8 @@ export function useViewerRuntime({
         renderQueuedAt: 0,
         renderFallbackTimerId: 0,
         restoreTimerId: 0,
-        shadowsDirty: true
+        shadowsDirty: true,
+        interactionQuality: false
       };
       const keyboardOrbitState = {
         pressedKeys: new Set(),
@@ -317,9 +318,24 @@ export function useViewerRuntime({
         onContextRestored?.();
       };
 
-      const applyRenderQuality = (pixelRatioCap) => {
-        const nextPixelRatio = getPixelRatioCap(pixelRatioCap);
+      // A render type may tighten the pixel ratio further than the shared
+      // idle/interaction caps (the implicit raymarcher trades resolution for
+      // step budget while the camera moves). It only ever caps DOWN, so the
+      // mesh path — which installs no resolver — is unaffected.
+      const resolveRenderPixelRatio = (pixelRatioCap, interaction) => {
+        const base = getPixelRatioCap(pixelRatioCap);
+        const extraCap = Number(runtimeRef.current?.resolveExtraPixelRatioCap?.(interaction));
+        return Number.isFinite(extraCap) && extraCap > 0 ? Math.min(base, extraCap) : base;
+      };
+
+      const applyRenderQuality = (pixelRatioCap, { force = false, interaction = null } = {}) => {
+        const nextInteraction = interaction === null
+          ? interactionState.interactionQuality === true
+          : interaction === true;
+        interactionState.interactionQuality = nextInteraction;
+        const nextPixelRatio = resolveRenderPixelRatio(pixelRatioCap, nextInteraction);
         if (
+          !force &&
           Math.abs(interactionState.pixelRatioCap - pixelRatioCap) < 1e-4 &&
           Math.abs((interactionState.pixelRatio || 0) - nextPixelRatio) < 1e-4
         ) {
@@ -426,7 +442,14 @@ export function useViewerRuntime({
           cameraTransitionActive ||
           keyboardOrbitMoved ||
           needsMoreFrames ||
-          interactionState.active ||
+          // Hold the loop open for the whole gesture so a mesh scene keeps
+          // repainting at interaction quality. A render type whose frame costs
+          // tens of milliseconds (the implicit raymarcher) opts out: it would
+          // otherwise re-render every vsync between wheel ticks even though the
+          // camera has not moved, and a 60 Hz pinch saturates the queue. Camera
+          // movement still repaints through the controls `change` handler, and
+          // damping/transition/keyboard/preview keep their own terms above.
+          (interactionState.active && runtimeRef.current?.renderOnDemandOnly !== true) ||
           previewOrbitActive
         ) {
           requestRender();
@@ -444,7 +467,7 @@ export function useViewerRuntime({
           interactionPixelRatioCap,
           preservePixelRatio: runtimeRef.current?.preserveInteractionPixelRatio === true,
           screenSpaceLineMaterialCount: getScreenSpaceLineMaterialCount()
-        }));
+        }), { interaction: true });
         requestRender();
       };
 
@@ -452,15 +475,36 @@ export function useViewerRuntime({
         if (interactionState.restoreTimerId) {
           window.clearTimeout(interactionState.restoreTimerId);
         }
+        // Restoring full quality costs one expensive frame plus a drawing-buffer
+        // reallocation. At 140 ms that lands BETWEEN discrete wheel ticks, so a
+        // slow render type pays it repeatedly mid-gesture; such a type raises the
+        // delay past a comfortable tick cadence.
+        const idleDelayMs = Math.max(
+          Number(runtimeRef.current?.idleQualityDelayMs) || 0,
+          INTERACTION_IDLE_DELAY_MS
+        );
         interactionState.restoreTimerId = window.setTimeout(() => {
           interactionState.restoreTimerId = 0;
           interactionState.active = false;
           controls.enableDamping = true;
           controls.dampingFactor = DEFAULT_DAMPING_FACTOR;
           controls.zoomSpeed = getDefaultZoomSpeed();
-          applyRenderQuality(idlePixelRatioCap);
+          // Two-stage restore: give the render type its idle quality and let it
+          // repaint, then raise the pixel ratio on the next tick so the costly
+          // frame and the buffer reallocation do not land on the same vsync.
+          const onIdleQuality = runtimeRef.current?.onIdleQualityRestore;
+          if (typeof onIdleQuality === "function") {
+            onIdleQuality();
+            requestRender();
+            window.setTimeout(() => {
+              applyRenderQuality(idlePixelRatioCap, { interaction: false });
+              requestRender();
+            }, 0);
+            return;
+          }
+          applyRenderQuality(idlePixelRatioCap, { interaction: false });
           requestRender();
-        }, INTERACTION_IDLE_DELAY_MS);
+        }, idleDelayMs);
       };
 
       const onResize = () => {
@@ -757,6 +801,21 @@ export function useViewerRuntime({
         },
         beginInteraction,
         scheduleIdleQuality,
+        // Hooks a render type installs to tune the shared loop for its own frame
+        // cost. All are inert on the mesh path, which leaves them at these
+        // defaults.
+        //
+        // renderOnDemandOnly  - do not hold the loop open for the whole gesture
+        // idleQualityDelayMs  - raise the idle-restore delay above the default
+        // onIdleQualityRestore- restore full quality before the pixel ratio
+        // resolveExtraPixelRatioCap - cap resolution below the shared caps
+        renderOnDemandOnly: false,
+        idleQualityDelayMs: 0,
+        onIdleQualityRestore: null,
+        resolveExtraPixelRatioCap: null,
+        refreshRenderQuality: () => {
+          applyRenderQuality(interactionState.pixelRatioCap, { force: true });
+        },
         applyCameraFrameInsets,
         frameInsetsRef,
         onManualCameraInteraction,

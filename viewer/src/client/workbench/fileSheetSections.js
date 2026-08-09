@@ -1,6 +1,5 @@
 export const FILE_SHEET_SECTION_IDS = Object.freeze({
   FILE_STATUS: "status",
-  DXF: "dxf",
   STEP_TREE: "tree",
   STEP_REFERENCE: "reference",
   STEP_PARAMETERS: "parameters",
@@ -8,6 +7,9 @@ export const FILE_SHEET_SECTION_IDS = Object.freeze({
   ROBOT_MOTION: "motion",
   ROBOT_JOINTS: "joints",
   IMPLICIT_GRAPHICS: "graphics",
+  DXF_MATERIAL: "material",
+  DXF_BENDS: "bends",
+  DXF_LAYERS: "dxfLayers",
   THEME_DISPLAY: "display",
   FILE_METADATA: "metadata"
 });
@@ -29,8 +31,20 @@ export function renderedFileSheetSectionIds(kind, options = {}) {
   const showJoints = options.showJoints !== false;
   const status = options.hasFileStatus ? [FILE_SHEET_SECTION_IDS.FILE_STATUS] : [];
   switch (normalizedKind) {
+    // A drawing HAS controls of its own now. Thickness (and, where the drawing declares
+    // them, bends) are render-time parameters applied to the cached prism rather than bake
+    // settings, so they steer the viewport without touching the package. This used to be
+    // status-only on the grounds that the producer owned every setting; it no longer does.
     case "dxf":
-      return [...status, FILE_SHEET_SECTION_IDS.DXF];
+      // One tab per concern: Material (units + stock), Bends (only when the drawing has
+      // bend lines), and Layers — the drawing's own STRUCTURE, the DXF analogue of STEP's
+      // Tree — whenever the file actually uses layers.
+      return [
+        ...status,
+        FILE_SHEET_SECTION_IDS.DXF_MATERIAL,
+        ...(options.hasDxfBendsPanel ? [FILE_SHEET_SECTION_IDS.DXF_BENDS] : []),
+        ...(options.hasDxfLayersPanel ? [FILE_SHEET_SECTION_IDS.DXF_LAYERS] : [])
+      ];
     case "step":
       // Display is the one theme-adjacent tab rendered in the sheet — display
       // mode plus the section-plane and exploded-view transforms, all per-file
@@ -73,8 +87,7 @@ export function defaultOpenFileSheetSectionIds(kind, options = {}) {
   switch (normalizedKind) {
     case "dxf":
       return [
-        ...(options.hasFileStatus ? [FILE_SHEET_SECTION_IDS.FILE_STATUS] : []),
-        FILE_SHEET_SECTION_IDS.DXF
+        ...(options.hasFileStatus ? [FILE_SHEET_SECTION_IDS.FILE_STATUS] : [])
       ];
     case "step":
       // In the tabbed layout the default-active bottom tab is Display, so the

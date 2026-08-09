@@ -35,14 +35,24 @@ VIEWER_SKIPPED_DIRECTORIES = frozenset(
         "__cadgen__", "__pycache__", "build", "coverage", "dist", "node_modules", "viewer",
     ]
 )
-# --- per-folder __cadgen__ render-package paths (mirrors cadgen.catalog) ---
-CADGEN_DIRNAME = "__cadgen__"
-CADGEN_MODELS_DIRNAME = "models"
+# --- per-folder __cadgen__ render-package paths ---
+# IMPORTED, not hand-copied. These were four literals under a "mirrors cadgen.catalog"
+# comment, and after the mirror test was deleted nothing cross-checked them -- so renaming
+# `drawing.json` in cadgen would have silently stopped the viewer recognising drawing
+# packages, with no test to catch it. Both modules are stdlib-only (verified: importing
+# either pulls in no OCP/build123d/ezdxf), so the server process stays free of a CAD runtime,
+# which is the invariant that actually matters here.
+from cadgen.catalog import CADGEN_DIRNAME, CADGEN_MODELS_DIRNAME  # noqa: E402
+from cadgen._internal.drawing_package import (  # noqa: E402
+    DRAWING_DESCRIPTOR_NAME,
+    DRAWING_PACKAGE_KIND,
+)
+from cadgen._internal.implicit_package import (  # noqa: E402
+    IMPLICIT_DESCRIPTOR_NAME,
+    IMPLICIT_PACKAGE_KIND,
+)
 
-# --- drawing package (generated DXF render artifact) ---
 DXF_GENERATOR_SUFFIX = ".dxf.py"
-DRAWING_DESCRIPTOR_NAME = "drawing.json"
-DRAWING_PACKAGE_KIND = "drawing-package"
 
 
 def is_dxf_generator_path(file_path: str) -> bool:
@@ -66,9 +76,35 @@ def is_render_package_path(file_path: str) -> bool:
 
 
 def render_package_dir(entry_path: str) -> str:
+    """The render package directory for an entry file.
+
+    Resolved, to match cadgen.catalog.render_package_dir exactly. This side used to do a
+    plain dirname/basename join: for a SYMLINKED entry file the two derived different
+    package dirs, hence different lock sentinels, so the viewer and a CLI build silently
+    failed to exclude each other and each rebuilt a package the other could not see. The
+    mirror test hid it by calling .resolve() on this result before comparing.
+    """
+    base = os.path.realpath(entry_path)
+    return os.path.realpath(
+        os.path.join(
+            os.path.dirname(base), CADGEN_DIRNAME, CADGEN_MODELS_DIRNAME, os.path.basename(base)
+        )
+    )
+
+
+def render_package_asset_dir(entry_path: str) -> str:
+    """The render package directory AS THE SCANNER WALKED IT — deliberately NOT resolved.
+
+    Two derivations of one directory, and conflating them breaks one of two things
+    (design §8). ``render_package_dir`` above realpaths, which is what mutual exclusion
+    needs: two paths reaching the same package must take the same lock sentinel. An asset
+    URL is the opposite case — it is relative to the scan root, so a realpath that leaves
+    that root (a symlinked model folder, or macOS's ``/var`` -> ``/private/var``) yields a
+    URL that escapes the root and 404s. Package CONTENT is read through either path
+    identically, because the OS follows the symlink; only the URL cares."""
+    base = os.path.abspath(entry_path)
     return os.path.join(
-        os.path.dirname(entry_path), CADGEN_DIRNAME, CADGEN_MODELS_DIRNAME,
-        os.path.basename(entry_path),
+        os.path.dirname(base), CADGEN_DIRNAME, CADGEN_MODELS_DIRNAME, os.path.basename(base)
     )
 
 
@@ -257,7 +293,99 @@ def _paired_urdf_path_for_srdf(source_path, repo_root):
     return matches[0] if _file_stats(matches[0]) else None
 
 
+# --- render-package payload assets ---
+# Which baked GLB a catalog entry renders from, per kind. A DXF and an implicit model have
+# no renderable geometry of their own -- one is 2D entities, the other is GLSL -- so each
+# bakes a mesh into its entry-keyed __cadgen__ package and the scanner publishes THAT as the
+# entry's `glb` relation. The client then resolves it through the ordinary
+# entryMeshAssetUrl path with no per-format branch, which is the whole point: one render
+# path, fed by one asset key.
+_RENDER_PACKAGE_GLB_PAYLOADS = {
+    # kind: (descriptor file, descriptor kind, the descriptor field naming the GLB)
+    "dxf": (DRAWING_DESCRIPTOR_NAME, DRAWING_PACKAGE_KIND, "preview"),
+    "implicit": (IMPLICIT_DESCRIPTOR_NAME, IMPLICIT_PACKAGE_KIND, "glb"),
+}
+
+
+def _read_package_descriptor(package_dir, descriptor_name, package_kind):
+    """Read one render-package descriptor (pure JSON; no cadgen runtime import)."""
+    try:
+        with open(os.path.join(package_dir, descriptor_name), "r", encoding="utf-8") as handle:
+            descriptor = json.load(handle)
+    except (OSError, ValueError):
+        return {}
+    if not isinstance(descriptor, dict) or descriptor.get("kind") != package_kind:
+        return {}
+    return descriptor
+
+
+def render_package_glb_relation(repo_root, root_path, source_path, kind):
+    """The entry's baked GLB as a catalog relation, or None when the package is unbuilt.
+
+    An unbuilt package is not an error here: the entry still lists, reports `needs-build`
+    via /__cad/artifact, and gets its relation on the next scan after the build."""
+    payload = _RENDER_PACKAGE_GLB_PAYLOADS.get(kind)
+    if not payload:
+        return None
+    descriptor_name, package_kind, payload_field = payload
+    package_dir = render_package_asset_dir(source_path)
+    descriptor = _read_package_descriptor(package_dir, descriptor_name, package_kind)
+    glb_ref = str(descriptor.get(payload_field) or "").strip()
+    glb_path = os.path.join(package_dir, glb_ref) if glb_ref else ""
+    stats = _file_stats(glb_path) if glb_path else None
+    if not stats:
+        return None
+    # size+mtime, not sha256: a baked mesh runs to tens of megabytes and neither descriptor
+    # records a digest for it, so hashing it would put a full re-read of every package's GLB
+    # on the /__cad catalog hot path. The token changes on every rebuild, which is all the
+    # client's cache key and session signatures need it to do.
+    version = f"{base36(stats.st_size)}-{base36(stats.st_mtime_ns)}"
+    return {
+        "file": scan_relative_path(root_path, glb_path),
+        "url": f"{_asset_url_for_path(repo_root, glb_path)}?v={encode_uri_component(version)}",
+        "hash": version,
+        "bytes": int(stats.st_size),
+    }
+
+
 # --- entry builders ---
+def _apply_drawing_preview_stats(entry, package_dir):
+    """Copy the drawing descriptor's previewStats facts onto a catalog entry.
+
+    One helper for BOTH drawing kinds. Imported and generated drawings bake the identical
+    package, and the viewer folds from these facts — an imported drawing that skipped them
+    would show no Bends tab and never fold, which is exactly the asymmetry this closes."""
+    descriptor = read_drawing_catalog_metadata(package_dir)
+    preview_stats = descriptor.get("previewStats")
+    if not isinstance(preview_stats, dict):
+        return
+    bend_line_count = preview_stats.get("bendLineCount")
+    if isinstance(bend_line_count, (int, float)) and not isinstance(bend_line_count, bool):
+        entry["bendLineCount"] = int(bend_line_count)
+    axes = preview_stats.get("bendAxisX")
+    if isinstance(axes, list) and axes:
+        entry["bendAxisX"] = [float(v) for v in axes]
+
+
+def _apply_drawing_geometry_relation(entry, repo_root, package_dir):
+    """The package's parsed-contours payload as a relation, for the viewer's curved-bend
+    remesh. Same versioning scheme as the GLB relation, same reason."""
+    descriptor = read_drawing_catalog_metadata(package_dir)
+    geometry_ref = str(descriptor.get("geometry") or "").strip()
+    geometry_path = os.path.join(package_dir, geometry_ref) if geometry_ref else ""
+    stats = _file_stats(geometry_path) if geometry_path else None
+    if not stats:
+        return
+    version = f"{base36(stats.st_size)}-{base36(stats.st_mtime_ns)}"
+    base_url = _asset_url_for_path(repo_root, geometry_path)
+    separator = "&" if "?" in base_url else "?"
+    entry.setdefault("relations", {})["drawingGeometry"] = {
+        "file": geometry_path,
+        "url": f"{base_url}{separator}v={encode_uri_component(version)}",
+        "bytes": int(stats.st_size),
+    }
+
+
 def create_single_asset_entry(repo_root, root_path, source_path, extension):
     kind = source_format_for_path(source_path, extension)
     asset = asset_for_path(repo_root, source_path)
@@ -269,6 +397,13 @@ def create_single_asset_entry(repo_root, root_path, source_path, extension):
         "hash": (asset or {}).get("hash") or "",
         "bytes": (asset or {}).get("bytes") or 0,
     }
+    glb_relation = render_package_glb_relation(repo_root, root_path, source_path, kind)
+    if glb_relation:
+        entry.setdefault("relations", {})["glb"] = glb_relation
+    if kind == "dxf":
+        package_dir = render_package_asset_dir(source_path)
+        _apply_drawing_preview_stats(entry, package_dir)
+        _apply_drawing_geometry_relation(entry, repo_root, package_dir)
     if kind == "srdf":
         paired_urdf = _paired_urdf_path_for_srdf(source_path, repo_root)
         if paired_urdf:
@@ -282,36 +417,24 @@ def create_single_asset_entry(repo_root, root_path, source_path, extension):
 
 def read_drawing_catalog_metadata(package_dir):
     """Read a generated-DXF drawing package descriptor (pure JSON; no cadgen import)."""
-    try:
-        with open(os.path.join(package_dir, DRAWING_DESCRIPTOR_NAME), "r", encoding="utf-8") as handle:
-            descriptor = json.load(handle)
-    except (OSError, ValueError):
-        return {}
-    if not isinstance(descriptor, dict) or descriptor.get("kind") != DRAWING_PACKAGE_KIND:
-        return {}
-    return descriptor
+    return _read_package_descriptor(package_dir, DRAWING_DESCRIPTOR_NAME, DRAWING_PACKAGE_KIND)
 
 
 def create_generated_dxf_entry(repo_root, root_path, source_path):
-    # A `<name>.dxf.py` drawing generator entry. The render asset is the cached
-    # drawing.dxf inside the entry-keyed __cadgen__ package; an unbuilt entry has
-    # no asset yet and reports `needs-build` via /__cad/artifact when opened.
-    package_dir = render_package_dir(source_path)
+    # A `<name>.dxf.py` drawing generator entry. Its `url` is the cached drawing.dxf inside
+    # the entry-keyed __cadgen__ package (the exchange artifact, which is what Export and
+    # the file metadata are about); the geometry the viewport renders is the package's
+    # preview.glb, published as the `glb` relation. An unbuilt entry has neither yet and
+    # reports `needs-build` via /__cad/artifact when opened.
+    package_dir = render_package_asset_dir(source_path)
     descriptor = read_drawing_catalog_metadata(package_dir)
-    dxf_ref = str(descriptor.get("dxf") or "").strip()
-    dxf_path = os.path.join(package_dir, dxf_ref) if dxf_ref else ""
-    dxf_stats = _file_stats(dxf_path) if dxf_path else None
     entry_ref = scan_relative_path(root_path, source_path)
-    if dxf_stats:
-        # The descriptor already carries the cached DXF's content hash (dxfHash);
-        # re-hashing the file on every catalog scan would put redundant disk I/O
-        # on the /__cad hot path.
-        version = f"{base36(dxf_stats.st_size)}-{base36(dxf_stats.st_mtime_ns)}"
-        url = f"{_asset_url_for_path(repo_root, dxf_path)}?v={encode_uri_component(version)}"
-        content_hash = str(descriptor.get("dxfHash") or "").strip() or _sha256_file(dxf_path)
-        entry_bytes = int(dxf_stats.st_size)
-    else:
-        url, content_hash, entry_bytes = "", "", 0
+    # A generated drawing has NO static DXF asset. Nothing is committed and the package caches
+    # only what it renders, so there is no file to link: a download runs the generator through
+    # the export route, exactly as a `.step.py` download does. The entry's identity is its
+    # source hash, which the descriptor already carries.
+    url, entry_bytes = "", 0
+    content_hash = str(descriptor.get("sourceHash") or "").strip()
     entry = {
         "file": entry_ref,
         "kind": "dxf",
@@ -320,6 +443,11 @@ def create_generated_dxf_entry(repo_root, root_path, source_path):
         "bytes": entry_bytes,
         "sourceKind": "python",
     }
+    _apply_drawing_preview_stats(entry, package_dir)
+    _apply_drawing_geometry_relation(entry, repo_root, package_dir)
+    glb_relation = render_package_glb_relation(repo_root, root_path, source_path, "dxf")
+    if glb_relation:
+        entry.setdefault("relations", {})["glb"] = glb_relation
     source = {"file": entry_ref, "sourcePath": entry_ref}
     source_hash = str(descriptor.get("sourceHash") or "").strip()
     if source_hash:

@@ -82,9 +82,12 @@ class StandaloneDxfSourceTests(unittest.TestCase):
 
             package_dir = Path(root) / "__cadgen__" / "models" / script_path.name
             self.assertTrue((package_dir / "drawing.json").exists())
-            drawing_path = package_dir / "drawing.dxf"
-            self.assertTrue(drawing_path.exists())
-            self.assertGreater(drawing_path.stat().st_size, 0)
+            preview_path = package_dir / "preview.glb"
+            self.assertTrue(preview_path.exists())
+            self.assertGreater(preview_path.stat().st_size, 0)
+            # The package caches the render artifact and nothing else -- no DXF, because a
+            # generated drawing's DXF is reproducible from its generator on demand.
+            self.assertFalse((package_dir / "drawing.dxf").exists())
             # No sibling export unless requested.
             self.assertFalse(script_path.with_suffix(".dxf").exists())
 
@@ -140,15 +143,18 @@ class StandaloneDxfSourceTests(unittest.TestCase):
             with self.assertRaisesRegex(TypeError, "must return an ezdxf document"):
                 cad_generation.generate_dxf_targets([str(script_path)])
 
-    def test_generate_dxf_targets_writes_snapshot_on_demand(self) -> None:
+    def test_generate_dxf_targets_bakes_the_3d_preview(self) -> None:
+        # What replaced the SVG snapshot this test used to assert: visual review of a
+        # drawing is the 3D flat pattern now, and preview.glb is the package member that
+        # carries it — for both the viewer and scripts/snapshot.
         with temporary_directory(prefix="dxf-skill") as root:
             script_path = _write_standalone_source(Path(root))
 
-            self.assertEqual(0, cad_generation.generate_dxf_targets([str(script_path)], snapshot=True))
+            self.assertEqual(0, cad_generation.generate_dxf_targets([str(script_path)]))
 
-            svg_path = Path(root) / "__cadgen__" / "models" / script_path.name / "drawing.svg"
-            self.assertTrue(svg_path.exists())
-            self.assertIn("<svg", svg_path.read_text(encoding="utf-8"))
+            package_dir = Path(root) / "__cadgen__" / "models" / script_path.name
+            self.assertTrue((package_dir / "preview.glb").is_file())
+            self.assertFalse((package_dir / "drawing.svg").exists())
 
 
 if __name__ == "__main__":

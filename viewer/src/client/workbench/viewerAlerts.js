@@ -45,7 +45,7 @@ export function buildCadCommand(fileRef, entry = null) {
   return commandForFile(CAD_BUILD_COMMANDS.step, fileRef);
 }
 
-export function buildViewerMeshAlert(entry, hasMeshData, loadError) {
+export function buildViewerMeshAlert(entry, hasMeshData, loadError, artifact = null) {
   const fileRef = fileKey(entry);
   if (!fileRef) {
     return null;
@@ -67,6 +67,22 @@ export function buildViewerMeshAlert(entry, hasMeshData, loadError) {
   const missingResolution = meshSidecarFormat
     ? `Confirm the ${meshSidecarLabel} exists in the repo and reload the page.`
     : "Rebuild the CAD assets for this entry, then reload the page.";
+
+  // A failed render-artifact build is the REASON there is no mesh, so it outranks the
+  // generic "no mesh data" card — and it applies to every artifact-managed kind, not just
+  // STEP. A DXF whose build rejected an entity used to report only that nothing loaded,
+  // which told the user neither what was wrong nor that a rebuild would not help.
+  if (artifact?.status === "error" && !hasMeshData) {
+    const detail = String(artifact.error || "").trim();
+    return {
+      severity: "error",
+      summary: "Build failed",
+      title: "Render artifact build failed",
+      message: detail || "The render artifact for this entry could not be built.",
+      resolution: missingResolution,
+      command
+    };
+  }
 
   const stepArtifactError = sourceFormat === RENDER_FORMAT.STEP && entry?.artifact?.ok === false
     ? entry?.artifact
@@ -112,54 +128,6 @@ export function buildViewerMeshAlert(entry, hasMeshData, loadError) {
       title: "No mesh data is available",
       message: "The selected entry is listed in the CAD catalog but no renderable mesh data could be loaded for it.",
       resolution: missingResolution,
-      command
-    };
-  }
-
-  return null;
-}
-
-export function buildViewerDxfAlert(fileRef, hasDxfData, loadError, previewError) {
-  if (!fileRef) {
-    return null;
-  }
-
-  const command = commandForFile(CAD_BUILD_COMMANDS.dxf, fileRef);
-  const normalizedPreviewError = String(previewError || "").trim();
-
-  if (loadError) {
-    return {
-      severity: "error",
-      summary: "DXF load failed",
-      title: "Failed to load DXF flat pattern",
-      message: loadError,
-      resolution: "Try reloading the page. If the problem persists, rebuild the CAD assets for this entry.",
-      command
-    };
-  }
-
-  if (/DXF 3D bend preview currently requires vertical bend lines/i.test(normalizedPreviewError)) {
-    return null;
-  }
-
-  if (normalizedPreviewError) {
-    return {
-      severity: "warning",
-      summary: "DXF 3D preview unavailable",
-      title: "Failed to build the DXF 3D preview",
-      message: normalizedPreviewError,
-      resolution: "The flat pattern can still be shown, but the 3D extrusion preview could not be built from the current DXF geometry.",
-      command
-    };
-  }
-
-  if (!hasDxfData) {
-    return {
-      severity: "error",
-      summary: "DXF unavailable",
-      title: "No DXF flat pattern is available",
-      message: "The selected entry does not have a ready DXF companion asset for the flat-pattern viewer.",
-      resolution: "Rebuild the CAD assets for this entry, then reload the page.",
       command
     };
   }

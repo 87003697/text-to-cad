@@ -56,10 +56,12 @@ def _module_dispatch():
     """Map a cadgen CLI module name to its in-process payload entrypoint. Imported
     lazily inside the worker process so the (warm) OCP import happens here, not in
     the parent server."""
-    from cadgen import dxf_artifact, step_artifact, step_export_target
+    from cadgen import dxf_artifact, implicit_artifact, implicit_export, step_artifact, step_export_target
 
     return {
         "cadgen.dxf_artifact": dxf_artifact.run_cli_payload,
+        "cadgen.implicit_artifact": implicit_artifact.run_cli_payload,
+        "cadgen.implicit_export": implicit_export.run_cli_payload,
         "cadgen.step_artifact": step_artifact.run_cli_payload,
         "cadgen.step_export_target": step_export_target.run_cli_payload,
     }

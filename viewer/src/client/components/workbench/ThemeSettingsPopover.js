@@ -42,6 +42,7 @@ import {
   ENVIRONMENT_PRESETS,
   getThemePresetById,
   MAX_THEME_FILL_COLORS,
+  normalizeThemeSettings,
   resolveSystemThemePresetId,
   SYSTEM_THEME_ID,
   THEME_COLOR_MODES,
@@ -385,10 +386,6 @@ function resolveFillColors(materials = {}) {
     ? materials.fillColors
     : [materials.defaultColor || "#ffffff"];
   return colors.slice(0, MAX_THEME_FILL_COLORS);
-}
-
-function settingsSignature(settings) {
-  return JSON.stringify(normalizeThemeSettings(settings));
 }
 
 function FillColorEditor({ colors, onChange }) {

@@ -641,7 +641,7 @@ class SnapshotCliTests(unittest.TestCase):
 
         result = asyncio.run(
             snapshot_main.render_resolved_job_packet(
-                {"single": True, "jobs": [job]}, renderer=StubRenderer()
+                {"single": True, "jobs": [job]}, runtime_dir=snapshot_main.RUNTIME_DIR, renderer=StubRenderer()
             )
         )
         self.assertEqual(result["debug"], debug_payload)
@@ -651,7 +651,7 @@ class SnapshotCliTests(unittest.TestCase):
 
         multi = asyncio.run(
             snapshot_main.render_resolved_job_packet(
-                {"single": False, "jobs": [job]}, renderer=StubRenderer()
+                {"single": False, "jobs": [job]}, runtime_dir=snapshot_main.RUNTIME_DIR, renderer=StubRenderer()
             )
         )
         self.assertEqual(multi["jobs"][0]["debug"], debug_payload)
@@ -1299,11 +1299,15 @@ class SnapshotCliTests(unittest.TestCase):
 
     def test_runtime_routes_are_self_contained(self) -> None:
         self.assertEqual(
-            resolve_snapshot_route_file("http://snapshot.local/render.html"),
+            resolve_snapshot_route_file(
+                "http://snapshot.local/render.html", runtime_dir=snapshot_main.RUNTIME_DIR
+            ),
             RENDER_HTML_PATH,
         )
         self.assertEqual(
-            resolve_snapshot_route_file("http://snapshot.local/snapshot-render.js"),
+            resolve_snapshot_route_file(
+                "http://snapshot.local/snapshot-render.js", runtime_dir=snapshot_main.RUNTIME_DIR
+            ),
             RUNTIME_DIR / "snapshot-render.js",
         )
 
@@ -1364,7 +1368,7 @@ class SnapshotCliTests(unittest.TestCase):
             sys.modules["playwright.async_api"] = async_api_module
 
             async def start_renderer() -> None:
-                renderer = snapshot_main.BatchSnapshotRenderer()
+                renderer = snapshot_main.BatchSnapshotRenderer(snapshot_main.RUNTIME_DIR)
                 try:
                     await renderer.start()
                 finally:

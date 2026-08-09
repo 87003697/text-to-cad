@@ -158,15 +158,19 @@ them turns the panel into a stack of unrelated widgets.
 
 **A dropdown is the default.** `FileSheetSelectRow` handles every mode control
 unless the options are short enough that a button group costs no more width
-than the dropdown would — in practice a two-option pair of single short words
-(a DXF bend's `Up`/`Down`). Two words as long as `Orthographic` and
+than the dropdown would — in practice a two-option pair of universally readable
+glyphs (a DXF bend's `↑`/`↓`). Two words as long as `Orthographic` and
 `Perspective` are already too wide: that is a dropdown.
 
 - Dropdowns: `Projection`, `Light` (5), `Backdrop` `Type` (4), explode
   `Direction` (5), `Layout`, `Order`, `Map`, animation pickers, every enum
   parameter.
 - Segmented (`FileSheetSegmentedControl` with `fit`, sized to content, never
-  stretched): DXF bend direction, and nothing else today.
+  stretched): DXF bend direction, and nothing else today. Options may set
+  `iconOnly` with an `Icon` to render as a glyph pair; the `label` still feeds
+  the accessible name and the `title` tooltip says what the glyph does
+  ("Bend up") — icon-only is only for glyphs as unambiguous as a direction
+  arrow.
 - An inline trigger hugs its value between two bounds — never narrower than the
   standard 80px control, never wider than 176px — and truncates past that. Use
   a fixed max width, not a percentage: the row wrapper is shrink-to-fit, so a
@@ -181,6 +185,31 @@ under it. There are exactly four — Theme › `Preset`, Display › `Mode`,
 Joints › `Group state`, and Animation › `Clip`, which reframes the transport
 and the time/speed rows beneath it. Pass `stacked` for those and for nothing
 else; a second stacked select in one group means one of them is not primary.
+
+### Repeated item groups — `FileSheetItemGroup`
+
+When one section holds the same controls repeated per item — a drawing's bends,
+a light per index — the section keeps its single heading and each item renders
+as an **item group**: an item label row, then that item's rows. The section is
+the *kind* of thing ("Bends"); the groups are the *instances* ("Bend 1",
+"Bend 2"). Splitting the instances into sibling sections is wrong — it promotes
+an index to a concept and fills the panel with rules.
+
+- Item label: 11px, medium, full-strength `sidebar-foreground` — heavier than a
+  muted row label, smaller than the 12px section header, so the three levels
+  (section › item › row) read as three levels.
+- Rows inside a group sit the standard 12px apart; the label takes 4px to bind
+  to its first row (it names the group the way a stacked label names its
+  control, not the way a heading clears a section).
+- Groups sit 16px apart with **no rule between them** — the next item label is
+  the boundary. Rules stay reserved for sections.
+- Items are numbered from 1 in the artifact's own order; the label is
+  `<Thing> <n>` and nothing else. Per-item state (an angle readout) belongs in
+  the item's rows, not in its label.
+- **Single-row items need no group wrapper.** When an item's controls fit one
+  row, the item label *is* that row's label (`Bend 2` on a slider row, its
+  direction toggle inline beside the value box) and `FileSheetItemGroup` is not
+  used. The group form exists for items that genuinely need several rows.
 
 ### 4. Field grid — `FileSheetFieldGrid` + `FileSheetField`
 

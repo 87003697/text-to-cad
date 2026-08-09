@@ -7,7 +7,7 @@ from pathlib import Path
 from cadgen.catalog import StepImportOptions
 from cadgen.metadata import normalize_mesh_numeric
 
-# Sentinel for --write-step without a path: write each target's sibling <name>.step.
+# Sentinel for --write without a path: write each target's sibling <name>.step.
 DEFAULT_STEP_OUTPUT = "__default_sibling_step__"
 
 
@@ -32,7 +32,7 @@ def _add_gen_arguments(parser: argparse.ArgumentParser) -> None:
         help="Explicit gen_step() Python generator source(s) to build.",
     )
     parser.add_argument(
-        "--write-step",
+        "--write",
         nargs="?",
         const=DEFAULT_STEP_OUTPUT,
         metavar="OUTPUT",
@@ -70,7 +70,7 @@ def _validate_python_targets(targets: Sequence[str], *, parser: argparse.Argumen
         target_text = str(target)
         if "=" in target_text:
             parser.error(
-                "SOURCE=OUTPUT pairs are no longer supported. Use --write-step to also "
+                "SOURCE=OUTPUT pairs are no longer supported. Use --write to also "
                 "write the .step file, or scripts/export for STL/3MF/GLB files."
             )
         suffix = Path(target_text).suffix.lower()
@@ -97,14 +97,14 @@ def _targets_with_step_outputs(
     *,
     parser: argparse.ArgumentParser,
 ) -> list[str]:
-    """Translate --write-step into the SOURCE=OUTPUT pair targets that
+    """Translate --write into the SOURCE=OUTPUT pair targets that
     cadgen.generation already resolves per target."""
     if write_step is None:
         return list(targets)
     if write_step == DEFAULT_STEP_OUTPUT:
         return [f"{target}={_sibling_step_output(target)}" for target in targets]
     if len(targets) != 1:
-        parser.error("--write-step with an explicit path requires exactly one target")
+        parser.error("--write with an explicit path requires exactly one target")
     return [f"{targets[0]}={write_step}"]
 
 
@@ -113,7 +113,7 @@ def build_parser() -> argparse.ArgumentParser:
         prog="scripts/gen",
         description=(
             "Build CAD Viewer render packages (GLB/topology) for explicit gen_step() "
-            "Python targets. Writes a .step file only with --write-step; use "
+            "Python targets. Writes a .step file only with --write; use "
             "scripts/export for STL/3MF/GLB files."
         ),
     )
@@ -138,7 +138,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         ),
     )
     return generate_step_targets(
-        _targets_with_step_outputs(args.targets, args.write_step, parser=parser),
+        _targets_with_step_outputs(args.targets, args.write, parser=parser),
         step_options=step_options,
         force=bool(args.force),
         verbose=bool(args.verbose),

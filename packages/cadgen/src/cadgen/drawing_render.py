@@ -1,9 +1,12 @@
-"""DXF drawing render payload + SVG snapshot writer.
+"""DXF drawing render payload.
 
-Converts a .dxf file into a normalized 2D render payload (SVG path data in
-y-down screen coordinates, layer summaries, bounds) and renders that payload
-as a standalone SVG snapshot for visual verification of drawings without the
-CAD Viewer. ezdxf is imported lazily so cadgen imports stay light.
+Converts a .dxf file into a normalized 2D render payload (path data in y-down
+screen coordinates, layer summaries, bounds). ezdxf is imported lazily so cadgen
+imports stay light.
+
+The SVG snapshot writer this module used to carry is gone: visual review of a
+drawing is the 3D flat-pattern render now, which comes from the drawing package's
+preview.glb rather than a second, 2D-only rendering of the same geometry.
 """
 
 from __future__ import annotations
@@ -459,48 +462,3 @@ _SNAPSHOT_STROKES = {
     "unknown": ("#6b7280", "2 2"),
 }
 _SNAPSHOT_MARGIN_RATIO = 0.05
-
-
-def render_drawing_snapshot_svg(payload: dict[str, object]) -> str:
-    """Render a drawing render payload as a standalone SVG document string."""
-    bounds = payload.get("bounds") or {}
-    width = float(bounds.get("width") or 0.0)
-    height = float(bounds.get("height") or 0.0)
-    margin = max(width, height, 1.0) * _SNAPSHOT_MARGIN_RATIO
-    stroke_width = max(width, height, 1.0) / 400.0
-    view_box = (
-        f"{-margin:.3f} {-margin:.3f} "
-        f"{width + (2.0 * margin):.3f} {height + (2.0 * margin):.3f}"
-    )
-    parts = [
-        f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="{view_box}">',
-        f'<rect x="{-margin:.3f}" y="{-margin:.3f}" width="{width + (2.0 * margin):.3f}" '
-        f'height="{height + (2.0 * margin):.3f}" fill="#ffffff"/>',
-    ]
-
-    def stroke_attrs(kind: str) -> str:
-        color, dashes = _SNAPSHOT_STROKES.get(kind, _SNAPSHOT_STROKES["unknown"])
-        dash_attr = f' stroke-dasharray="{dashes}"' if dashes else ""
-        return (
-            f'fill="none" stroke="{color}" stroke-width="{stroke_width:.4f}"'
-            f' stroke-linecap="round" stroke-linejoin="round"{dash_attr}'
-        )
-
-    for record in payload.get("paths") or []:
-        parts.append(f'<path d="{record["d"]}" {stroke_attrs(str(record.get("kind")))}/>')
-    for record in payload.get("circles") or []:
-        parts.append(
-            f'<circle cx="{record["cx"]}" cy="{record["cy"]}" r="{record["r"]}" '
-            f"{stroke_attrs(str(record.get('kind')))}/>"
-        )
-    parts.append("</svg>")
-    return "\n".join(parts) + "\n"
-
-
-def write_drawing_snapshot_svg(dxf_path: Path, svg_path: Path, *, file_ref: str = "") -> Path:
-    """Build the render payload for ``dxf_path`` and write it as an SVG snapshot."""
-    payload = build_dxf_render_payload(Path(dxf_path), file_ref=file_ref or Path(dxf_path).name)
-    svg_path = Path(svg_path)
-    svg_path.parent.mkdir(parents=True, exist_ok=True)
-    svg_path.write_text(render_drawing_snapshot_svg(payload), encoding="utf-8")
-    return svg_path

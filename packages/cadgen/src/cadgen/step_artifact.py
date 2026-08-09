@@ -8,13 +8,14 @@ from pathlib import Path
 from cadgen.cli_logging import CliLogger
 from cadgen._internal.generation import (
     EntrySpec,
+    _assembly_glb_package_current,
     _existing_topology_artifact_matches_spec_without_scene,
     _entry_spec_from_source,
     _generate_part_outputs,
+    _generated_assembly_glb_closure_current,
     run_script_generator,
 )
-from cadgen._internal.generation_status import generation_lock_path, track_generation_run
-from cadgen._internal.progress import PHASE_GENERATE, report_build_progress
+from cadgen.coordination import PHASE_GENERATE, STEP_PACKAGE, artifact_build
 from cadgen.metadata import DEFAULT_MESH_ANGULAR_TOLERANCE, DEFAULT_MESH_TOLERANCE, normalize_mesh_numeric
 from cadgen.catalog import render_package_dir
 from cadgen.render import relative_to_cwd
@@ -188,6 +189,40 @@ def _existing_result_payload(spec: EntrySpec, artifact: StepTopologyArtifact) ->
 def _current_artifact_for_spec(spec: EntrySpec) -> StepTopologyArtifact | None:
     if not _existing_topology_artifact_matches_spec_without_scene(spec):
         return None
+    package_dir = render_package_dir(spec.entry_path)
+    # A component-GLB package is a DIRECTORY, and validate_step_topology_artifact() gates on
+    # `.is_file()` (step_targets.py) -- so routing a package through it always raised
+    # missing_glb, this whole fast path returned None, and EVERY build re-ran gen_step().
+    # The descriptor comparison above (_package_descriptor_matches_spec) IS the package's
+    # freshness gate; there is nothing further to validate. Packages carry no whole-assembly
+    # selector topology either -- it is extracted on demand -- so require_selector cannot be
+    # satisfied from the package and must not be asked of it.
+    from cadgen._internal.component_package import is_assembly_package, read_package_descriptor
+
+    if is_assembly_package(package_dir):
+        # _package_descriptor_matches_spec (above) compares kind/stepHash/mesh options but
+        # NOT the generator's source closure, so it alone would serve a stale package after
+        # an edited generator. These are the same two predicates the CLI's currency gate
+        # uses (generation.py's "is current; skipped recompose" path), so the two entry
+        # points cannot disagree about what "current" means:
+        #   closure  -- generated models re-hash the recorded import reach; imported ones
+        #               return True and rely on the stepHash gate above.
+        #   package  -- the descriptor's referenced components are all present on disk.
+        if not (
+            _generated_assembly_glb_closure_current(spec) and _assembly_glb_package_current(spec)
+        ):
+            return None
+        manifest = read_package_descriptor(package_dir)
+        if not isinstance(manifest, dict):
+            return None
+        return StepTopologyArtifact(
+            cad_path=spec.cad_ref,
+            kind=spec.kind,
+            source_path=spec.source_path,
+            step_path=spec.step_path,
+            artifact_path=package_dir,
+            manifest=manifest,
+        )
     try:
         return validate_step_topology_artifact(
             ResolvedStepTarget(
@@ -196,7 +231,7 @@ def _current_artifact_for_spec(spec: EntrySpec) -> StepTopologyArtifact | None:
                 source_path=spec.source_path,
                 step_path=spec.step_path,
             ),
-            artifact_path=render_package_dir(spec.entry_path),
+            artifact_path=package_dir,
             require_selector=True,
         )
     except StepTopologyArtifactError:
@@ -316,19 +351,36 @@ def build_step_artifact(
             mesh_tolerance_explicit=mesh_tolerance is not None,
             mesh_angular_tolerance_explicit=mesh_angular_tolerance is not None,
         )
+    # Cheap pre-lock exit for the overwhelmingly common "nothing to do" call, so an
+    # already-current model never pays for a lock acquisition. It is NOT the real gate --
+    # see the is_current= re-check below, which is the one that has to be right.
     if not force:
         existing_artifact = _current_artifact_for_spec(existing_spec)
         if existing_artifact is not None:
             return _existing_result_payload(existing_spec, existing_artifact)
 
-    # Hold the model's generation lock across the WHOLE build, not just the generator
-    # run. run_script_generator takes this same lock internally (re-entrantly, so the
-    # nesting is a no-op), but it releases on return — leaving the meshing, which is
-    # the long part, unlocked. A viewer polling artifact status during that window
-    # would read "no build in flight", find the package stale, and start a second one.
+    # The lock covers the WHOLE build, not just the generator run. run_script_generator
+    # takes this same lock internally (re-entrantly, so the nesting is a no-op), but it
+    # releases on return — leaving the meshing, which is the long part, unlocked. A viewer
+    # polling artifact status during that window would read "no build in flight", find the
+    # package stale, and start a second one.
+    #
+    # is_current is re-evaluated UNDER the lock. The pre-lock check above cannot cover the
+    # concurrent case: it ran before the peer's build existed, so a process that queued
+    # behind one used to wake up and redo the full generator+mesh the holder had just
+    # finished. Measured before this: two processes 0.3s apart on a cold package both ran
+    # gen_step(), the second for a further 2.5s after waiting 2.67s for the lock.
     package_dir = render_package_dir(existing_spec.entry_path) if existing_spec.entry_path else None
-    lock_path = generation_lock_path(package_dir) if package_dir is not None else None
-    with track_generation_run(lock_path), report_build_progress(package_dir) as progress:
+    with artifact_build(
+        STEP_PACKAGE,
+        package_dir,
+        is_current=lambda: _current_artifact_for_spec(existing_spec) is not None,
+        force=force,
+    ) as progress:
+        if progress.skipped:
+            artifact = _current_artifact_for_spec(existing_spec)
+            if artifact is not None:
+                return _existing_result_payload(existing_spec, artifact)
         if from_generator:
             scene = run_script_generator(
                 existing_spec,
