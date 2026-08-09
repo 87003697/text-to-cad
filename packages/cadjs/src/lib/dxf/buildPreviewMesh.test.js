@@ -46,6 +46,31 @@ test("DXF preview extrudes multiple disconnected no-bend flat contours", () => {
   assert.deepEqual(meshData.bounds.max, [15, 1, 30]);
 });
 
+test("bend guides can hover over either face", () => {
+  // The guides are one-sided. A consumer whose axis mapping turns this mesher's +Y into
+  // its own "down" (the CAD viewer) asks for guideElevationSign -1 so the dotted bend
+  // lines sit on the face the user sees, not under the sheet.
+  const dxfData = {
+    geometry: {
+      lines: [
+        ...rectangle(0, 0, 60, 30),
+        { kind: "bend", start: [30, 0], end: [30, 30] }
+      ],
+      arcs: [],
+      circles: []
+    },
+    defaultThicknessMm: 2
+  };
+
+  const above = buildDxfPreviewMeshData(dxfData, 2);
+  const below = buildDxfPreviewMeshData(dxfData, 2, null, { guideElevationSign: -1 });
+
+  assert.equal(above.guide_line_segments.length, 6);
+  assert.equal(above.guide_line_segments[1] > 1, true, "default guide floats over +Y");
+  assert.equal(below.guide_line_segments[1] < -1, true, "flipped guide floats over -Y");
+  assert.equal(above.guide_line_segments[1], -below.guide_line_segments[1]);
+});
+
 test("DXF preview extrudes bulged lwpolyline contours", () => {
   const quarterBulge = Math.tan(Math.PI / 8);
   const dxfData = parseDxf(dxfText([

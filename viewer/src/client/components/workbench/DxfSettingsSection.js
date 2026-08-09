@@ -1,9 +1,12 @@
-import { ArrowDown, ArrowUp } from "lucide-react";
+import { ArrowDown, ArrowUp, RotateCcw } from "lucide-react";
 
+import { Button } from "@/components/ui/button";
 import { Slider } from "@/components/ui/slider";
 
 import {
+  FILE_SHEET_COMPACT_BUTTON_CLASSES,
   FILE_SHEET_PRECISION_SLIDER_CLASSES,
+  FileSheetControlRow,
   FileSheetSectionBody,
   FileSheetSegmentedControl,
   FileSheetSelectRow,
@@ -73,7 +76,8 @@ export function DxfDrawingSettings({
   bends = [],
   onBendChange,
   bendStyle = DXF_DEFAULT_BEND_STYLE,
-  onBendStyleChange
+  onBendStyleChange,
+  onReset
 }) {
   const thickness = normalizeDxfThicknessMm(thicknessMm);
   const commitThickness = (next) => onThicknessChange?.(normalizeDxfThicknessMm(next, thickness));
@@ -164,6 +168,25 @@ export function DxfDrawingSettings({
           })}
         </FileSheetSubsection>
       ) : null}
+
+      {/* One Reset per tab (settings-ui.md): full-width outline + RotateCcw as the last
+          row, restoring material AND bends to their defaults. */}
+      {onReset ? (
+        <FileSheetControlRow label={null}>
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            className={`${FILE_SHEET_COMPACT_BUTTON_CLASSES} w-full justify-center`}
+            onClick={() => onReset()}
+            aria-label="Reset drawing settings"
+            title="Reset"
+          >
+            <RotateCcw className="h-3.5 w-3.5" strokeWidth={2} aria-hidden="true" />
+            <span>Reset</span>
+          </Button>
+        </FileSheetControlRow>
+      ) : null}
     </FileSheetSectionBody>
   );
 }
@@ -171,7 +194,7 @@ export function DxfDrawingSettings({
 export function buildDxfDrawingTab(props) {
   return {
     id: FILE_SHEET_SECTION_IDS.DXF_SETTINGS,
-    title: "Drawing",
+    title: "DXF",
     content: <DxfDrawingSettings {...props} />
   };
 }

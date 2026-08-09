@@ -876,18 +876,23 @@ function buildBendContinuationMatrix(bendProfile) {
   return translateToEnd.multiply(rotate).multiply(translateToTangent);
 }
 
-function buildSegmentTransforms(bendProfiles, halfThickness) {
+function buildSegmentTransforms(bendProfiles, halfThickness, guideElevationSign = 1) {
   const transforms = [new Matrix4().identity()];
   const bendTransforms = [];
   const guideLineSegments = [];
+  // Which face the bend guides hover over. The guides are one-sided (the solid is
+  // symmetric, they are not): a consumer whose axis convention maps this mesher's +Y to
+  // its own "down" (the CAD viewer's Z-up mapping does) asks for -1 so the guides land on
+  // the face the user is looking at instead of under the sheet.
+  const guideY = guideElevationSign * (halfThickness + BEND_LINE_ELEVATION_MM);
   let currentMatrix = new Matrix4().identity();
 
   for (const bendProfile of bendProfiles) {
     const bendLine = bendProfile.bendLine;
     const baseMatrix = currentMatrix.clone();
     guideLineSegments.push(
-      ...applyMatrixToPoint(baseMatrix, [bendLine.start[0], halfThickness + BEND_LINE_ELEVATION_MM, bendLine.start[1]]),
-      ...applyMatrixToPoint(baseMatrix, [bendLine.end[0], halfThickness + BEND_LINE_ELEVATION_MM, bendLine.end[1]])
+      ...applyMatrixToPoint(baseMatrix, [bendLine.start[0], guideY, bendLine.start[1]]),
+      ...applyMatrixToPoint(baseMatrix, [bendLine.end[0], guideY, bendLine.end[1]])
     );
 
     bendTransforms.push({
@@ -1186,7 +1191,8 @@ function buildTriangulatedFlatPattern(dxfData) {
   };
 }
 
-export function buildDxfPreviewMeshData(dxfData, thicknessMm, bendSettings = null) {
+export function buildDxfPreviewMeshData(dxfData, thicknessMm, bendSettings = null, options = null) {
+  const guideElevationSign = options?.guideElevationSign === -1 ? -1 : 1;
   const { loops, outerLoop, holeLoops, bendLines } = buildTriangulatedFlatPattern(dxfData);
   const normalizedThicknessMm = normalizeDxfPreviewThicknessMm(
     thicknessMm,
@@ -1202,7 +1208,7 @@ export function buildDxfPreviewMeshData(dxfData, thicknessMm, bendSettings = nul
     const outerBounds = loopBounds(outerLoop);
     const bendProfiles = buildBendProfiles(outerBounds, bendLines, normalizedBendSettings, halfThickness);
     ({ strips } = buildStripDefinitions(outerLoop, holeLoops, bendProfiles));
-    ({ transforms, bendTransforms, guideLineSegments } = buildSegmentTransforms(bendProfiles, halfThickness));
+    ({ transforms, bendTransforms, guideLineSegments } = buildSegmentTransforms(bendProfiles, halfThickness, guideElevationSign));
   } else {
     strips = buildFlatStripDefinitions(loops);
     transforms = [new Matrix4().identity()];

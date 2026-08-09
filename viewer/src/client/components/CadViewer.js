@@ -2628,7 +2628,11 @@ const CadViewer = forwardRef(function CadViewer({
         const meshThicknessMm = Math.max(Number(drawingThicknessMm) || 0, 0.05);
         let curvedData = null;
         try {
-          curvedData = buildDxfPreviewMeshData(drawingGeometry, meshThicknessMm, bendSettings);
+          // guideElevationSign -1: the (x, z, -y) map below sends the mesher's +Y to CAD
+          // -Z, so guides elevated over the mesher's top face would land UNDER the sheet.
+          curvedData = buildDxfPreviewMeshData(drawingGeometry, meshThicknessMm, bendSettings, {
+            guideElevationSign: -1
+          });
         } catch (curveError) {
           // A drawing the bend mesher cannot band (a hole crossing a bend region) falls
           // back to the sharp fold rather than rendering nothing.

@@ -3269,6 +3269,16 @@ export default function CadWorkspace({
     ));
   }, []);
 
+  // The DXF tab's single Reset: material and bends back to their defaults together.
+  const handleDrawingSettingsReset = useCallback(() => {
+    setDrawingThicknessMm(DXF_DEFAULT_THICKNESS_MM);
+    setDrawingBendStyle(DXF_DEFAULT_BEND_STYLE);
+    setDrawingBends((current) => current.map(() => ({
+      angleDeg: DXF_DEFAULT_BEND_ANGLE_DEG,
+      direction: "up"
+    })));
+  }, []);
+
   // Memoised: this array is an effect dependency in the viewer, and a fresh identity per
   // render would re-run the fold transform on every workspace render.
   const drawingBendAnglesRad = useMemo(
@@ -8498,7 +8508,8 @@ export default function CadWorkspace({
                     bends: drawingBends,
                     onBendChange: handleDrawingBendChange,
                     bendStyle: drawingBendStyle,
-                    onBendStyleChange: setDrawingBendStyle
+                    onBendStyleChange: setDrawingBendStyle,
+                    onReset: handleDrawingSettingsReset
                   }),
                   ...themeTabs
                 ]}
