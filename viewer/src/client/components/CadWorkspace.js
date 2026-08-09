@@ -20,6 +20,10 @@ import {
   DXF_DEFAULT_KFACTOR,
   DXF_DEFAULT_THICKNESS_MM,
   normalizeDxfBendAngleDeg,
+  normalizeDxfBendDirection,
+  normalizeDxfBendRadiusMm,
+  normalizeDxfBendStyle,
+  normalizeDxfKFactor,
   normalizeDxfThicknessMm
 } from "./workbench/DxfSettingsSection";
 import ImplicitFileSheet from "./workbench/ImplicitFileSheet";
@@ -3229,20 +3233,59 @@ export default function CadWorkspace({
     setThemeEditing(false);
   }, []);
 
+  // DXF settings are PER FILE, remembered for the session: each drawing keeps its own
+  // thickness/bends/style/layers in sessionStorage under its entry key, so switching files
+  // never leaks one drawing's settings into another, and switching BACK restores what you
+  // set. Session-scoped on purpose — nothing here may outlive the tab or invalidate a cache.
+  //
+  // Ordering matters: the persist effect is declared BEFORE the load effect and only writes
+  // once the load effect has stamped the current key, so the commit that switches files can
+  // never save the previous file's values under the new file's key.
+  const drawingSettingsLoadedKeyRef = useRef(null);
   useEffect(() => {
-    setDrawingBends(Array.from({ length: selectedDrawingBendAxisCount }, () => ({
-      angleDeg: DXF_DEFAULT_BEND_ANGLE_DEG,
-      direction: "up"
-    })));
-  }, [selectedKey, selectedDrawingBendAxisCount]);
+    if (!selectedEntryIsDrawing || !selectedKey || drawingSettingsLoadedKeyRef.current !== selectedKey) {
+      return;
+    }
+    try {
+      window.sessionStorage?.setItem(
+        `cadViewer.dxfSettings:${selectedKey}`,
+        JSON.stringify({
+          thicknessMm: drawingThicknessMm,
+          bends: drawingBends,
+          bendStyle: drawingBendStyle,
+          bendRadiusMm: drawingBendRadiusMm,
+          kFactor: drawingKFactor,
+          hiddenLayers: drawingHiddenLayers
+        })
+      );
+    } catch (storageError) {
+      // Quota or privacy mode: settings simply stop surviving a file switch.
+    }
+  }, [selectedEntryIsDrawing, selectedKey, drawingThicknessMm, drawingBends, drawingBendStyle, drawingBendRadiusMm, drawingKFactor, drawingHiddenLayers]);
 
-  // Every other drawing setting is per-entry session state too: a new selection starts
-  // from the defaults, not from whatever the previous drawing was set to.
   useEffect(() => {
-    setDrawingBendRadiusMm(DXF_DEFAULT_BEND_RADIUS_MM);
-    setDrawingKFactor(DXF_DEFAULT_KFACTOR);
-    setDrawingHiddenLayers([]);
-  }, [selectedKey]);
+    let stored = null;
+    if (selectedEntryIsDrawing && selectedKey) {
+      try {
+        const raw = window.sessionStorage?.getItem(`cadViewer.dxfSettings:${selectedKey}`);
+        stored = raw ? JSON.parse(raw) : null;
+      } catch (storageError) {
+        stored = null;
+      }
+    }
+    drawingSettingsLoadedKeyRef.current = selectedKey;
+    setDrawingThicknessMm(normalizeDxfThicknessMm(stored?.thicknessMm, DXF_DEFAULT_THICKNESS_MM));
+    setDrawingBendStyle(normalizeDxfBendStyle(stored?.bendStyle, DXF_DEFAULT_BEND_STYLE));
+    setDrawingBendRadiusMm(normalizeDxfBendRadiusMm(stored?.bendRadiusMm, DXF_DEFAULT_BEND_RADIUS_MM));
+    setDrawingKFactor(normalizeDxfKFactor(stored?.kFactor, DXF_DEFAULT_KFACTOR));
+    setDrawingHiddenLayers(Array.isArray(stored?.hiddenLayers)
+      ? stored.hiddenLayers.filter((name) => typeof name === "string")
+      : []);
+    setDrawingBends(Array.from({ length: selectedDrawingBendAxisCount }, (_, index) => ({
+      angleDeg: normalizeDxfBendAngleDeg(stored?.bends?.[index]?.angleDeg, DXF_DEFAULT_BEND_ANGLE_DEG),
+      direction: normalizeDxfBendDirection(stored?.bends?.[index]?.direction)
+    })));
+  }, [selectedKey, selectedDrawingBendAxisCount, selectedEntryIsDrawing]);
 
   const drawingGeometryUrl = selectedEntryIsDrawing
     ? String(selectedEntry?.relations?.drawingGeometry?.url || "")
