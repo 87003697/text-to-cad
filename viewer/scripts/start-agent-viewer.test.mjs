@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
+import { EventEmitter } from "node:events";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -10,6 +11,8 @@ import {
   agentViewerUrl,
   buildAgentViewerGit,
   buildAgentStartCommand,
+  disableForwardedPortFallback,
+  executeAgentStartLaunch,
   forwardedDefaultRootDir,
   forwardedServerTarget,
   normalizeAgentDirectory,
@@ -22,7 +25,103 @@ import {
   resolveAgentViewerPort,
   selectAgentStartMode,
   stripDefaultRootDirArgs,
+  waitForAgentViewerReady,
 } from "./start-agent-viewer.mjs";
+
+function controlledStartLaunch() {
+  return {
+    action: "start",
+    host: "127.0.0.1",
+    port: 4178,
+    baseUrl: "http://127.0.0.1:4178",
+    git: "git-a",
+    directory: "/project/models",
+    viewerUrl: "http://127.0.0.1:4178/?dir=%2Fproject%2Fmodels",
+    jsonResult: true,
+    command: {
+      command: "/node",
+      args: ["/project/viewer/backend/server.mjs"],
+      cwd: "/project/viewer",
+      env: {},
+      mode: "serve",
+    },
+  };
+}
+
+function controlledLauncherRuntime(child) {
+  const spawned = [];
+  const stdout = [];
+  const stderr = [];
+  const exits = [];
+  const signals = [];
+  return {
+    spawned,
+    stdout,
+    stderr,
+    exits,
+    signals,
+    runtime: {
+      spawnImpl(command, args, options) {
+        spawned.push({ command, args, options });
+        return child;
+      },
+      writeStdout(line) {
+        stdout.push(line);
+      },
+      writeStderr(line) {
+        stderr.push(line);
+      },
+      processImpl: {
+        exit(code) {
+          exits.push(code);
+        },
+        kill(pid, signal) {
+          signals.push({ pid, signal });
+        },
+        pid: 123,
+      },
+    },
+  };
+}
+
+function controlledReadiness() {
+  let resolveReady;
+  let rejectReady;
+  const calls = [];
+  const promise = new Promise((resolve, reject) => {
+    resolveReady = resolve;
+    rejectReady = reject;
+  });
+  return {
+    waitForReady: (options) => {
+      calls.push(options);
+      return promise;
+    },
+    calls,
+    resolveReady,
+    rejectReady,
+  };
+}
+
+test("waitForAgentViewerReady ignores a Viewer owned by another process", async () => {
+  const serverInfos = [
+    { app: "cad-viewer", pid: 111 },
+    { app: "cad-viewer", pid: 222 },
+  ];
+  const result = await waitForAgentViewerReady({
+    host: "127.0.0.1",
+    port: 4178,
+    expectedPid: 222,
+    fetchImpl: async () => ({
+      ok: true,
+      json: async () => serverInfos.shift(),
+    }),
+    timeoutMs: 100,
+    pollIntervalMs: 0,
+  });
+
+  assert.equal(result.serverInfo.pid, 222);
+});
 
 test("parseAgentStartArgs consumes launcher mode and preserves server flags", async (t) => {
   const directory = await fs.mkdtemp(path.join(os.tmpdir(), "cad-viewer-agent-start-directory-"));
@@ -123,6 +222,13 @@ test("replaceForwardedPort updates or appends the selected port", () => {
   assert.deepEqual(
     replaceForwardedPort(["--host", "127.0.0.1"], 4181),
     ["--host", "127.0.0.1", "--port", "4181"]
+  );
+});
+
+test("disableForwardedPortFallback pins the launcher-selected port", () => {
+  assert.deepEqual(
+    disableForwardedPortFallback(["--host", "127.0.0.1", "--port", "4181"]),
+    ["--host", "127.0.0.1", "--port", "4181", "--port-scan-limit", "0"]
   );
 });
 
@@ -587,6 +693,85 @@ test("resolveAgentStartLaunch starts the selected free port", async (t) => {
     directory,
     "--port",
     "4179",
+    "--port-scan-limit",
+    "0",
   ]);
   assert.equal(new URL(result.viewerUrl).searchParams.get("dir"), directory);
+});
+
+test("executeAgentStartLaunch --json emits one startup object only after readiness", async () => {
+  const child = new EventEmitter();
+  child.pid = 4242;
+  const controlled = controlledLauncherRuntime(child);
+  const readiness = controlledReadiness();
+  const launch = controlledStartLaunch();
+
+  const result = await executeAgentStartLaunch(launch, {
+    ...controlled.runtime,
+    waitForReady: readiness.waitForReady,
+  });
+
+  assert.equal(result, child);
+  assert.deepEqual(controlled.stdout, []);
+  assert.deepEqual(controlled.stderr, []);
+  assert.deepEqual(controlled.spawned, [{
+    command: "/node",
+    args: ["/project/viewer/backend/server.mjs"],
+    options: {
+      cwd: "/project/viewer",
+      env: {},
+      stdio: ["inherit", "ignore", "inherit"],
+    },
+  }]);
+
+  child.emit("spawn");
+
+  assert.deepEqual(controlled.stdout, []);
+  assert.deepEqual(readiness.calls, [{
+    host: launch.host,
+    port: launch.port,
+    fetchImpl: globalThis.fetch,
+    expectedPid: 4242,
+  }]);
+
+  readiness.resolveReady();
+  await Promise.resolve();
+
+  assert.deepEqual(controlled.stdout, [JSON.stringify({
+    url: launch.viewerUrl,
+    port: 4178,
+    action: "start",
+  })]);
+  assert.deepEqual(controlled.exits, []);
+});
+
+test("executeAgentStartLaunch --json reports a pre-spawn failure without success output", async () => {
+  const child = new EventEmitter();
+  const controlled = controlledLauncherRuntime(child);
+
+  await executeAgentStartLaunch(controlledStartLaunch(), controlled.runtime);
+  child.emit("error", new Error("spawn denied"));
+
+  assert.deepEqual(controlled.stdout, []);
+  assert.deepEqual(controlled.stderr, [
+    "Failed to start CAD Viewer serve server: spawn denied",
+  ]);
+  assert.deepEqual(controlled.exits, [1]);
+});
+
+test("executeAgentStartLaunch propagates a nonzero exit after spawn", async () => {
+  const child = new EventEmitter();
+  const controlled = controlledLauncherRuntime(child);
+  const readiness = controlledReadiness();
+
+  await executeAgentStartLaunch(controlledStartLaunch(), {
+    ...controlled.runtime,
+    waitForReady: readiness.waitForReady,
+  });
+  child.emit("spawn");
+  child.emit("exit", 7, null);
+
+  assert.deepEqual(controlled.stdout, []);
+  assert.deepEqual(controlled.exits, [7]);
+  assert.deepEqual(controlled.signals, []);
 });

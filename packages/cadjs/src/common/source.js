@@ -14,6 +14,12 @@ import {
   buildSelectorRuntime
 } from "../lib/selectors/runtime.js";
 import {
+  isRenderAssetSourceScopeError,
+  renderAssetSourceScope,
+  renderAssetSourceScopeForJob,
+  setRenderAssetSourceScope
+} from "../lib/renderAssetSourceScope.js";
+import {
   loadStepModuleDefinition
 } from "./stepModule.js";
 import {
@@ -97,7 +103,13 @@ async function loadSelectorRuntime(glbUrl, { cadPath = "" } = {}) {
     return buildSelectorRuntime(selectorBundle, {
       copyCadPath: cadPath
     });
-  } catch {
+  } catch (error) {
+    // Missing or unreadable selector topology is a normal condition and degrades to null. A
+    // cross-source cache collision is not: swallowing it would render a plausible wrong image at
+    // exit 0, which is the failure this scope check exists to make loud.
+    if (isRenderAssetSourceScopeError(error)) {
+      throw error;
+    }
     return null;
   }
 }
@@ -108,7 +120,10 @@ async function loadDisplayEdgeRuntime(glbUrl) {
   }
   try {
     return buildDisplayEdgeRuntime(await loadRenderDisplayEdgeBundle(glbUrl));
-  } catch {
+  } catch (error) {
+    if (isRenderAssetSourceScopeError(error)) {
+      throw error;
+    }
     return null;
   }
 }
@@ -193,32 +208,46 @@ export async function loadSource(input, options = {}) {
   let meshData = explicitMeshData;
   const glbUrl = String(inputObject.glbUrl || resolved.glbUrl || options.glbUrl || "").trim();
   const url = String(typeof input === "string" ? input : inputObject.url || resolved.url || glbUrl || "").trim();
-  if (!meshData) {
-    if (!url) {
-      throw new Error("loadSource requires meshData, a source URL, or resolved.glbUrl");
-    }
-    meshData = await loadMeshDataFromUrl(sourceIsStep(kind) ? glbUrl || url : url, kind);
+
+  // Render asset caches live for the whole page, so every entry a resolved job populates must be
+  // tagged with the source it belongs to. This is the only place a resolved job meets those caches,
+  // so it is where the scope is declared; the scope is restored afterwards so one job can never
+  // leave its identity attached to another caller's loads. Callers with no resolved job keep the
+  // unscoped default and are unaffected.
+  const previousSourceScope = renderAssetSourceScope();
+  if (glbUrl || url) {
+    setRenderAssetSourceScope(renderAssetSourceScopeForJob(inputObject));
   }
+  try {
+    if (!meshData) {
+      if (!url) {
+        throw new Error("loadSource requires meshData, a source URL, or resolved.glbUrl");
+      }
+      meshData = await loadMeshDataFromUrl(sourceIsStep(kind) ? glbUrl || url : url, kind);
+    }
 
-  const selectorRuntime = inputObject.selectorRuntime || options.selectorRuntime || await loadSelectorRuntime(glbUrl || url, { cadPath });
-  const displayEdgeRuntime = inputObject.displayEdgeRuntime || options.displayEdgeRuntime || await loadDisplayEdgeRuntime(glbUrl || url);
-  const stepParameterSource = await loadStepParameters({
-    kind,
-    stepParameters,
-    stepParameterUrl,
-    cadPath,
-    selectorRuntime
-  });
+    const selectorRuntime = inputObject.selectorRuntime || options.selectorRuntime || await loadSelectorRuntime(glbUrl || url, { cadPath });
+    const displayEdgeRuntime = inputObject.displayEdgeRuntime || options.displayEdgeRuntime || await loadDisplayEdgeRuntime(glbUrl || url);
+    const stepParameterSource = await loadStepParameters({
+      kind,
+      stepParameters,
+      stepParameterUrl,
+      cadPath,
+      selectorRuntime
+    });
 
-  return {
-    kind,
-    meshData,
-    selectorRuntime,
-    displayEdgeRuntime,
-    stepParameterSource,
-    resolved,
-    url,
-    glbUrl,
-    cadPath
-  };
+    return {
+      kind,
+      meshData,
+      selectorRuntime,
+      displayEdgeRuntime,
+      stepParameterSource,
+      resolved,
+      url,
+      glbUrl,
+      cadPath
+    };
+  } finally {
+    setRenderAssetSourceScope(previousSourceScope);
+  }
 }

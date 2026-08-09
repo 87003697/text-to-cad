@@ -667,6 +667,40 @@ class BambuLanPrintTests(unittest.TestCase):
         with self.assertRaisesRegex(bambu.BambuPrintError, "non-private"):
             bambu.validate_local_host("8.8.8.8", allow_nonprivate=False)
 
+    def test_tls_verification_is_independent_of_nonprivate_host_override(self) -> None:
+        def run_discovery(*, tls_verify: bool):
+            context = mock.MagicMock()
+            context.check_hostname = True
+            context.verify_mode = bambu.ssl.CERT_REQUIRED
+            raw_socket = mock.MagicMock()
+            tls_socket = mock.MagicMock()
+            context.wrap_socket.return_value = tls_socket
+            tls_socket.getpeercert.return_value = b"certificate"
+            with (
+                mock.patch.object(bambu.ssl, "create_default_context", return_value=context),
+                mock.patch.object(bambu.socket, "create_connection", return_value=raw_socket),
+                mock.patch.object(
+                    bambu,
+                    "decode_der_certificate",
+                    return_value={"subject": ((('commonName', '00M00A000000000'),),)},
+                ),
+            ):
+                serial = bambu.discover_printer_serial(
+                    host="printer.example.com",
+                    tls_verify=tls_verify,
+                    allow_nonprivate_host=True,
+                )
+            self.assertEqual(serial, "00M00A000000000")
+            return context
+
+        verified_context = run_discovery(tls_verify=True)
+        self.assertTrue(verified_context.check_hostname)
+        self.assertEqual(verified_context.verify_mode, bambu.ssl.CERT_REQUIRED)
+
+        unverified_context = run_discovery(tls_verify=False)
+        self.assertFalse(unverified_context.check_hostname)
+        self.assertEqual(unverified_context.verify_mode, bambu.ssl.CERT_NONE)
+
     def test_upload_start_reports_published_start_request_not_confirmed_start(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             job = Path(tmp) / "job.gcode"
