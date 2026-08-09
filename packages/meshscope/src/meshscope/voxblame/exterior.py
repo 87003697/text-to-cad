@@ -61,10 +61,10 @@ def measure_exterior_surface(triangles: np.ndarray) -> ExteriorMeasurement:
         or not np.all(np.isfinite(geometry))
     ):
         raise OctreeError("candidate triangles must contain finite geometry")
-    edges_a = geometry[:, 1] - geometry[:, 0]
-    edges_b = geometry[:, 2] - geometry[:, 0]
-    doubled_areas = np.linalg.norm(np.cross(edges_a, edges_b), axis=1)
-    geometry = np.ascontiguousarray(geometry[doubled_areas > 1e-15])
+    log_areas = _triangle_log_doubled_areas(geometry)
+    geometry = np.ascontiguousarray(
+        geometry[log_areas > math.log(1e-15)]
+    )
     if not len(geometry):
         raise OctreeError("mesh contains no non-degenerate triangles")
 
@@ -176,8 +176,11 @@ def _split_polygon(
         current_distance = signed(current)
         current_inside = current_distance <= 0.0
         if current_inside != previous_inside:
-            ratio = previous_distance / (previous_distance - current_distance)
-            intersection = previous + ratio * (current - previous)
+            distance_scale = max(abs(previous_distance), abs(current_distance))
+            previous_weight = abs(previous_distance) / distance_scale
+            current_weight = abs(current_distance) / distance_scale
+            ratio = previous_weight / (previous_weight + current_weight)
+            intersection = (1.0 - ratio) * previous + ratio * current
             inside.append(intersection)
             outside.append(intersection)
         if current_inside:
@@ -211,14 +214,11 @@ def _triangulate_polygons(polygons: Iterable[np.ndarray]) -> list[np.ndarray]:
                 [polygon[0], polygon[index], polygon[index + 1]],
                 dtype=np.float64,
             )
-            doubled_area = np.linalg.norm(
-                np.cross(triangle[1] - triangle[0], triangle[2] - triangle[0])
-            )
             # A fragment may be arbitrarily thin when it crosses the fixed
             # boundary just beyond the canonical epsilon.  It is still true
             # exterior surface and therefore cannot use the input-mesh
             # degeneracy tolerance as a deletion threshold.
-            if doubled_area > 0.0:
+            if math.isfinite(_triangle_log_doubled_areas(triangle[None, :, :])[0]):
                 triangles.append(triangle)
     return triangles
 
@@ -295,7 +295,13 @@ def _diagnostic_cells(triangles: np.ndarray, depth: int) -> list[list[int]]:
             continue
         centers = -0.5 + (indices.astype(np.float64) + 0.5) * size
         translated = triangle[None, :, :] - centers[:, None, :]
-        hits = triangles_intersect_box(translated, np.zeros(3), half)
+        sat_scale = max(half, float(np.max(np.abs(translated))))
+        hits = triangles_intersect_box(
+            translated / sat_scale,
+            np.zeros(3),
+            half / sat_scale,
+            tolerance=0.0,
+        )
         occupied.update(tuple(int(item) for item in index) for index in indices[hits])
     return [list(cell) for cell in sorted(occupied)]
 
@@ -363,12 +369,16 @@ def _snapshot(
 
 def _exact_facts(triangles: np.ndarray, directions: set[str]) -> dict[str, Any]:
     vertices = triangles.reshape(-1, 3)
-    areas = np.linalg.norm(
-        np.cross(triangles[:, 1] - triangles[:, 0], triangles[:, 2] - triangles[:, 0]),
-        axis=1,
-    )
-    centroids = triangles.mean(axis=1)
-    centroid = np.average(centroids, axis=0, weights=areas)
+    log_areas = _triangle_log_doubled_areas(triangles)
+    weights = np.exp(log_areas - float(log_areas.max()))
+    centroid_values = []
+    for triangle in triangles:
+        coordinate_scale = max(1.0, float(np.max(np.abs(triangle))))
+        centroid_values.append(
+            (triangle / coordinate_scale).mean(axis=0) * coordinate_scale
+        )
+    centroids = np.asarray(centroid_values, dtype=np.float64)
+    centroid = np.sum(centroids * (weights / weights.sum())[:, None], axis=0)
     overruns = np.max(np.maximum(np.abs(vertices) - 0.5, 0.0), axis=1)
     farthest_overrun = float(overruns.max())
     return {
@@ -404,7 +414,8 @@ def _nearest_overrun(triangles: np.ndarray, farthest_overrun: float) -> float:
         return 0.0
     lower = 0.0
     upper = farthest_overrun / scale
-    for _ in range(128):
+    iterations = min(1100, max(128, math.frexp(scale)[1] + 80))
+    for _ in range(iterations):
         middle = (lower + upper) / 2.0
         if np.any(
             triangles_intersect_box(
@@ -418,6 +429,25 @@ def _nearest_overrun(triangles: np.ndarray, farthest_overrun: float) -> float:
         else:
             lower = middle
     return upper * scale
+
+
+def _triangle_log_doubled_areas(triangles: np.ndarray) -> np.ndarray:
+    """Compute log doubled areas without overflow or global-scale underflow."""
+
+    result = np.full(len(triangles), -math.inf, dtype=np.float64)
+    for index, triangle in enumerate(triangles):
+        scale = float(np.max(np.abs(triangle)))
+        if not math.isfinite(scale) or scale == 0.0:
+            continue
+        scaled = triangle / scale
+        edge_a = scaled[1] - scaled[0]
+        edge_b = scaled[2] - scaled[0]
+        normalized_area = float(
+            np.linalg.norm(np.cross(edge_a, edge_b))
+        )
+        if normalized_area > 0.0:
+            result[index] = math.log(normalized_area) + 2.0 * math.log(scale)
+    return result
 
 
 def _json_bytes(value: dict[str, Any]) -> bytes:
