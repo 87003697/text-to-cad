@@ -1,5 +1,5 @@
 import { Children, useEffect, useRef, useState } from "react";
-import { ChevronDown } from "lucide-react";
+import { Check, ChevronDown } from "lucide-react";
 import { cn } from "@/ui/utils";
 import {
   AccordionContent,
@@ -9,8 +9,8 @@ import {
 import { ColorPicker } from "../ui/color-picker";
 import {
   DropdownMenu,
-  DropdownMenuCheckboxItem,
   DropdownMenuContent,
+  DropdownMenuItem,
   DropdownMenuSub,
   DropdownMenuSubContent,
   DropdownMenuSubTrigger,
@@ -754,15 +754,20 @@ export function FileSheetCascadeSelectRow({
   const selected = options.find((option) => option.value === value) || null;
   const ungrouped = options.filter((option) => !option.group);
   const groupNames = [...new Set(options.map((option) => option.group).filter(Boolean))];
+  // The tick sits on the RIGHT: a checkbox item's left indicator gutter indents checked
+  // and unchecked rows differently from the plain submenu triggers, which reads as ragged
+  // left padding. Right-side ticks keep every row's text on one left edge.
   const renderItem = (option) => (
-    <DropdownMenuCheckboxItem
+    <DropdownMenuItem
       key={option.value}
-      checked={option.value === value}
-      onCheckedChange={() => onValueChange?.(option.value)}
-      className="text-xs"
+      className="justify-between gap-2 text-xs"
+      onSelect={() => onValueChange?.(option.value)}
     >
-      {option.label}
-    </DropdownMenuCheckboxItem>
+      <span className="min-w-0 truncate">{option.label}</span>
+      {option.value === value ? (
+        <Check className="size-3.5 shrink-0" strokeWidth={2} aria-hidden="true" />
+      ) : null}
+    </DropdownMenuItem>
   );
   return (
     <FileSheetInlineControlRow label={label} className={className}>

@@ -3356,14 +3356,14 @@ export default function CadWorkspace({
   }, []);
 
   const handleDrawingBendsReset = useCallback(() => {
-    setDrawingBendStyle(DXF_DEFAULT_BEND_STYLE);
-    setDrawingBendRadiusMm(DXF_DEFAULT_BEND_RADIUS_MM);
-    setDrawingKFactor(DXF_DEFAULT_KFACTOR);
-    setDrawingOrientation(DXF_DEFAULT_ORIENTATION);
     setDrawingBends((current) => current.map(() => ({
       angleDeg: DXF_DEFAULT_BEND_ANGLE_DEG,
       direction: "up"
     })));
+  }, []);
+
+  const handleDrawingOrientationReset = useCallback(() => {
+    setDrawingOrientation(DXF_DEFAULT_ORIENTATION);
   }, []);
 
   const handleDrawingRotateOrientation = useCallback((axis) => {
@@ -8621,7 +8621,8 @@ export default function CadWorkspace({
                     onKFactorChange: setDrawingKFactor,
                     units: drawingUnits,
                     onRotateOrientation: handleDrawingRotateOrientation,
-                    onReset: handleDrawingBendsReset
+                    onBendsReset: handleDrawingBendsReset,
+                    onOrientationReset: handleDrawingOrientationReset
                   })] : []),
                   ...(drawingLayers.length > 1 ? [buildDxfLayersTab({
                     layers: drawingLayers,

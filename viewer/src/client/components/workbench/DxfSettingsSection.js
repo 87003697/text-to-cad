@@ -327,7 +327,8 @@ export function DxfBendsSettings({
   onKFactorChange,
   units = DXF_DEFAULT_UNITS,
   onRotateOrientation,
-  onReset
+  onBendsReset,
+  onOrientationReset
 }) {
   const style = normalizeDxfBendStyle(bendStyle);
   const radius = normalizeDxfBendRadiusMm(bendRadiusMm);
@@ -385,6 +386,7 @@ export function DxfBendsSettings({
             </FileSheetSliderField>
           );
         })}
+        <DxfResetRow label="Reset bend angles" onReset={onBendsReset} />
       </FileSheetSubsection>
 
       <FileSheetSubsection title="Fold">
@@ -446,7 +448,7 @@ export function DxfBendsSettings({
           turns the model 90 degrees about that world axis. */}
       {onRotateOrientation ? (
         <FileSheetSubsection title="Orientation">
-          <FileSheetButtonRow columns={3}>
+          <FileSheetButtonRow columns={4}>
             {["x", "y", "z"].map((axis) => (
               <Button
                 key={axis}
@@ -462,11 +464,22 @@ export function DxfBendsSettings({
                 <span>{axis.toUpperCase()} 90°</span>
               </Button>
             ))}
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              className={`${FILE_SHEET_COMPACT_BUTTON_CLASSES} justify-center`}
+              aria-label="Reset model orientation"
+              title="Reset orientation"
+              onClick={() => onOrientationReset?.()}
+              disabled={!onOrientationReset}
+            >
+              <RotateCcw className="h-3.5 w-3.5" strokeWidth={2} aria-hidden="true" />
+              <span>Reset</span>
+            </Button>
           </FileSheetButtonRow>
         </FileSheetSubsection>
       ) : null}
-
-      <DxfResetRow label="Reset bend settings" onReset={onReset} />
     </FileSheetSectionBody>
   );
 }
