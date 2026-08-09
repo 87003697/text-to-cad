@@ -167,3 +167,49 @@ node scripts/export.mjs --help
 ```
 
 Supported export formats are `glb`, `stl`, and `3mf`. The exporter samples the implicit SDF inside the declared bounds and extracts a triangle mesh. If `--output` is omitted, the mesh is written next to the source file using the same stem, such as `<model>.glb` for `<model>.implicit.js`. Use `node scripts/export.mjs --help` for the complete current command interface.
+
+## Canonical Delivery Build
+
+Use the canonical build entry for Mesh-to-CAD measured steps and final
+rebuilds. Do not use the general export command for that route boundary.
+
+Canonical source requirements are stricter than normal interactive authoring:
+
+- declare `units: "unitless"`;
+- declare exact bounds `[[ -0.5, -0.5, -0.5 ], [ 0.5, 0.5, 0.5 ]]`;
+- work directly in those coordinates without centering, bounds fitting,
+  normalization, alignment, or unit conversion;
+- keep the source self-contained, with no imports, undeclared sidecars, or
+  network APIs;
+- keep source evaluation deterministic: do not read clocks, randomness,
+  environment variables, or process state. The canonical adapter runs source
+  evaluation in a permission-restricted VM and rejects those dependencies.
+
+From a workspace root, pass only relative source/output paths:
+
+```bash
+node scripts/canonical-build.mjs \
+  --source work/model.implicit.js \
+  --output-dir work/canonical-build \
+  --json
+```
+
+The output contains the archived editable source, `artifacts/model.glb`,
+`profile.json`, `build.json`, and `rebuild.json`. Sampling and export behavior
+are frozen by `implicit_voxblame_depth8/1`; do not pass per-step sampling
+overrides.
+
+To verify the portable offline recipe, change into the delivery directory and
+rebuild to a new relative directory:
+
+```bash
+cd work/canonical-build
+node /path/to/implicit-cad/scripts/canonical-build.mjs \
+  --recipe rebuild.json \
+  --output-dir rebuilt \
+  --json
+```
+
+Use the rebuilt `artifacts/model.glb` for final observable-geometry
+verification. The primary delivery artifact remains the archived implicit
+source; never fabricate a STEP file for this route.

@@ -145,6 +145,9 @@ require_file "$IMPLICITJS_PACKAGE_DIR/package.json" "implicitjs package"
 require_dir "$IMPLICITJS_PACKAGE_DIR/src" "implicitjs source"
 require_file "$IMPLICITJS_PACKAGE_DIR/scripts/snapshot.mjs" "implicit CAD snapshot CLI"
 require_file "$IMPLICITJS_PACKAGE_DIR/scripts/export.mjs" "implicit CAD export CLI"
+require_file "$IMPLICITJS_PACKAGE_DIR/scripts/canonical-build.mjs" "implicit CAD canonical build CLI"
+require_file "$IMPLICITJS_PACKAGE_DIR/src/lib/implicitCad/canonicalBuildWorker.mjs" "implicit CAD restricted build worker"
+require_file "$REPO_ROOT/skills/implicit-cad/scripts/canonical-build.mjs" "implicit CAD skill canonical build entry"
 
 if [ "$MODE" = "check" ] && [ -L "$IMPLICITJS_RUNTIME_DIR" ]; then
   check_development_layout

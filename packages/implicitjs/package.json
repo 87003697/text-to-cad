@@ -21,6 +21,7 @@
     "./meshQuality": "./src/lib/implicitCad/meshQuality.js",
     "./exportModel": "./src/lib/implicitCad/exportModel.js",
     "./export": "./src/lib/implicitCad/export.js",
+    "./canonicalBuild": "./src/lib/implicitCad/canonicalBuild.js",
     "./exporters": "./src/lib/implicitCad/exporters.js",
     "./sdfEvaluator": "./src/lib/implicitCad/sdfEvaluator.js",
     "./headlessRenderEntry": "./src/common/implicitHeadlessRenderEntry.js",
@@ -28,6 +29,7 @@
     "./lib/implicitCad/*": "./src/lib/implicitCad/*"
   },
   "scripts": {
+    "canonical-build": "node scripts/canonical-build.mjs",
     "export": "node scripts/export.mjs",
     "snapshot": "node scripts/snapshot.mjs",
     "test": "node scripts/run-tests.mjs",
