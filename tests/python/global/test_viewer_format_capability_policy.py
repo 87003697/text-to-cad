@@ -28,8 +28,8 @@ CLIENT_ROOT = REPO_ROOT / "viewer" / "src" / "client"
 
 # Every remaining identity check is a unification candidate. Lower these as phases land;
 # never raise them.
-MAX_RENDER_FORMAT_CHECKS = 77
-MAX_FORMAT_PREDICATE_CALLS = 14
+MAX_RENDER_FORMAT_CHECKS = 34
+MAX_FORMAT_PREDICATE_CALLS = 3
 
 # Files allowed to know about concrete formats, because deciding *which* format an entry
 # is, or loading it, is their whole job. Everything else must go through capabilities.
@@ -123,6 +123,13 @@ class ViewerFormatCapabilityPolicyTest(unittest.TestCase):
             # The renderer itself: it draws every format, so a format check here is a
             # feature one format gets and the others silently do not.
             "components/CadViewer.js",
+            # Status, alerts and the file list: every one of these was a per-format
+            # cascade, and each cascade was a place a new format inherited the wrong
+            # advice, the wrong icon or no spinner at all.
+            "workbench/viewerAlerts.js",
+            "workbench/entryIconKind.js",
+            "workbench/entryIconStatus.js",
+            "components/workbench/CadWorkspaceHome.js",
         ):
             source = (CLIENT_ROOT / relative).read_text(encoding="utf-8")
             self.assertEqual(

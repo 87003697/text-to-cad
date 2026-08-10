@@ -38,8 +38,34 @@ export const PARAMETER_SOURCE = Object.freeze({
   MODULE: "module"
 });
 
+// WHICH ASSET the viewer loads for this format — not the same question as `content`, which
+// is what ends up drawn. A DXF loads a DRAWING and renders it as a mesh, so it shares the
+// mesh viewport but not the mesh loader, and every "is it loaded yet?" check has to ask
+// about the drawing. Loader implementations stay per-format; this only names which one.
+export const ASSET_KIND = Object.freeze({
+  MESH: "mesh",
+  DRAWING: "drawing",
+  IMPLICIT: "implicit",
+  ROBOT: "robot"
+});
+
+// The file-list glyph. A table rather than a cascade of format tests: the icon is the most
+// purely per-format fact in the client, and it was the longest identity cascade.
+export const ENTRY_ICON_KIND = Object.freeze({
+  LOADING: "loading",
+  DXF: "dxf",
+  IMPLICIT: "implicit",
+  ROBOT: "robot",
+  STEP: "step",
+  STL_MESH: "stl-mesh",
+  THREE_MF_MESH: "3mf-mesh",
+  GLB_MESH: "glb-mesh"
+});
+
 const MESH_CAPABILITIES = Object.freeze({
   content: VIEWPORT_CONTENT.MESH,
+  assetKind: ASSET_KIND.MESH,
+  iconKind: ENTRY_ICON_KIND.STL_MESH,
   sheetKind: "mesh",
   label: "STL",
   // A plain mesh is one body with no topology, no parts and no per-file settings: the
@@ -60,6 +86,8 @@ const MESH_CAPABILITIES = Object.freeze({
 
 const ROBOT_CAPABILITIES = Object.freeze({
   content: VIEWPORT_CONTENT.ROBOT,
+  assetKind: ASSET_KIND.ROBOT,
+  iconKind: ENTRY_ICON_KIND.ROBOT,
   sheetKind: RENDER_FORMAT.URDF,
   label: "URDF",
   sceneScale: "urdf",
@@ -80,6 +108,8 @@ const ROBOT_CAPABILITIES = Object.freeze({
 
 const DEFAULT_CAPABILITIES = Object.freeze({
   content: VIEWPORT_CONTENT.MESH,
+  assetKind: ASSET_KIND.MESH,
+  iconKind: ENTRY_ICON_KIND.STEP,
   sheetKind: "",
   label: "",
   sceneScale: "cad",
@@ -96,17 +126,27 @@ const DEFAULT_CAPABILITIES = Object.freeze({
   params: null,
   animations: false,
   posePicker: false,
-  // Formats whose viewport content comes from a GENERATED package, so the viewer checks
-  // freshness and may trigger a build. MUST mirror `owns_entry` in
-  // viewer/server_py/artifact.py — a format listed here and not there (or the reverse)
-  // either blocks forever or reports ready forever.
+  // Formats whose VIEWPORT CONTENT comes from a generated package, so the viewer checks
+  // freshness and may block on a build.
+  //
+  // This is a SUBSET of `owns_entry` in viewer/server_py/artifact.py, not a mirror of it.
+  // The server also owns implicit entries — it builds their packages for export and
+  // snapshot — but an implicit renders live from its own GLSL, so the viewer must never
+  // wait on that build. Anything listed here and NOT owned by the server blocks forever;
+  // adding implicit here to "fix the drift" would block a format that has nothing to wait
+  // for.
   artifactManaged: false,
+  // The command that rebuilds this entry's assets by hand, shown on a build-failure card.
+  // Empty for everything the viewer can rebuild itself or that IS its own asset — which is
+  // every format but an imported STEP. Eight identity checks used to say that.
+  rebuildCommand: "",
   exportFormats: Object.freeze([])
 });
 
 export const RENDER_CAPABILITIES = Object.freeze({
   [RENDER_FORMAT.STEP]: Object.freeze({
     ...DEFAULT_CAPABILITIES,
+    iconKind: ENTRY_ICON_KIND.STEP,
     sheetKind: RENDER_FORMAT.STEP,
     label: "STEP",
     tools: Object.freeze({ select: true, pan: true, draw: true, orbit: true, screenshot: true }),
@@ -118,13 +158,26 @@ export const RENDER_CAPABILITIES = Object.freeze({
     params: PARAMETER_SOURCE.SIDECAR,
     animations: true,
     artifactManaged: true,
+    rebuildCommand: "python -m cadgen.step_artifact --repo-root . --step",
     exportFormats: Object.freeze(["step", "3mf", "stl", "glb"])
   }),
   [RENDER_FORMAT.STL]: Object.freeze({ ...DEFAULT_CAPABILITIES, ...MESH_CAPABILITIES, label: "STL" }),
-  [RENDER_FORMAT.THREE_MF]: Object.freeze({ ...DEFAULT_CAPABILITIES, ...MESH_CAPABILITIES, label: "3MF" }),
-  [RENDER_FORMAT.GLB]: Object.freeze({ ...DEFAULT_CAPABILITIES, ...MESH_CAPABILITIES, label: "GLB" }),
+  [RENDER_FORMAT.THREE_MF]: Object.freeze({
+    ...DEFAULT_CAPABILITIES,
+    ...MESH_CAPABILITIES,
+    iconKind: ENTRY_ICON_KIND.THREE_MF_MESH,
+    label: "3MF"
+  }),
+  [RENDER_FORMAT.GLB]: Object.freeze({
+    ...DEFAULT_CAPABILITIES,
+    ...MESH_CAPABILITIES,
+    iconKind: ENTRY_ICON_KIND.GLB_MESH,
+    label: "GLB"
+  }),
   [RENDER_FORMAT.DXF]: Object.freeze({
     ...DEFAULT_CAPABILITIES,
+    assetKind: ASSET_KIND.DRAWING,
+    iconKind: ENTRY_ICON_KIND.DXF,
     sheetKind: RENDER_FORMAT.DXF,
     label: "DXF",
     // Select is inert (a drawing has no pickable topology) but stays visible so the
@@ -137,6 +190,8 @@ export const RENDER_CAPABILITIES = Object.freeze({
   [RENDER_FORMAT.IMPLICIT]: Object.freeze({
     ...DEFAULT_CAPABILITIES,
     content: VIEWPORT_CONTENT.IMPLICIT,
+    assetKind: ASSET_KIND.IMPLICIT,
+    iconKind: ENTRY_ICON_KIND.IMPLICIT,
     sheetKind: RENDER_FORMAT.IMPLICIT,
     label: "Implicit",
     tools: Object.freeze({ select: true, pan: true, draw: true, orbit: true, screenshot: true }),
@@ -213,4 +268,19 @@ export function exportFormatsForRenderFormat(renderFormat) {
 
 export function isArtifactManagedFormat(renderFormat) {
   return renderCapabilities(renderFormat).artifactManaged === true;
+}
+
+export function assetKindForRenderFormat(renderFormat) {
+  return renderCapabilities(renderFormat).assetKind;
+}
+
+export function entryIconKindForRenderFormat(renderFormat) {
+  return renderCapabilities(renderFormat).iconKind;
+}
+
+// The manual rebuild command for an entry, or "" when there is nothing to run by hand.
+export function rebuildCommandForEntry(renderFormat, fileRef) {
+  const command = String(renderCapabilities(renderFormat).rebuildCommand || "").trim();
+  const ref = String(fileRef || "").trim();
+  return command && ref ? `${command} ${ref}` : "";
 }

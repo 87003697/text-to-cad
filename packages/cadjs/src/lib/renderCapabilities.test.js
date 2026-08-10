@@ -107,8 +107,10 @@ test("implicit renders live: parameters from its module, never artifact-managed"
 });
 
 test("artifact-managed formats are exactly STEP and DXF", () => {
-  // Mirrors owns_entry in viewer/server_py/artifact.py. Drifting from the server means an
-  // entry either blocks on a build that never runs or reports ready forever.
+  // A SUBSET of owns_entry in viewer/server_py/artifact.py, which also owns implicit
+  // entries — the server builds implicit packages for export and snapshot, but the viewer
+  // raymarches the model live and must never wait on that build. A format listed here that
+  // the server does not own blocks forever; implicit is the reverse case and belongs out.
   const managed = Object.values(RENDER_FORMAT).filter((format) => isArtifactManagedFormat(format));
   assert.deepEqual(managed.sort(), [RENDER_FORMAT.DXF, RENDER_FORMAT.STEP].sort());
 });

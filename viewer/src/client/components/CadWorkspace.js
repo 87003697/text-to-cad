@@ -97,12 +97,14 @@ import {
   isRobotRenderFormat
 } from "cadjs/lib/fileFormats";
 import {
+  assetKindForRenderFormat,
   hasCapability,
   isArtifactManagedFormat,
   parameterSourceKind,
   renderFormatLabel,
   supportsTool,
   viewportContentKind,
+  ASSET_KIND,
   PARAMETER_SOURCE,
   VIEWPORT_CONTENT
 } from "cadjs/lib/renderCapabilities";
@@ -331,12 +333,7 @@ function statusOnlyFileSheetTitle(sourceFormat) {
 // geometry is the drawing package's baked preview.glb. STEP stays on the list under its own
 // name -- it is mesh-loaded too, but `entryRenderAssetFormat` reports `step` for it because
 // only DXF and implicit are the package-baked kinds.
-const MESH_LOADED_RENDER_FORMATS = Object.freeze([
-  RENDER_FORMAT.STEP,
-  RENDER_FORMAT.STL,
-  RENDER_FORMAT.THREE_MF,
-  RENDER_FORMAT.GLB
-]);
+
 // Single user-facing label for "the viewer is (re)generating the render artifacts a STEP model
 // needs before it can render" — used for both the filename status chip and its tooltip across every
 // artifact-generation trigger (first build, stale rebuild, source-changed regen). Browser-side
@@ -1515,8 +1512,8 @@ export default function CadWorkspace({
   // from per-link meshes by the URDF loader. Both would otherwise download a second copy of
   // the model and put it in the scene alongside the real one.
   const selectedEntryRendersItsOwnGeometry =
-    selectedEntrySourceFormat === RENDER_FORMAT.IMPLICIT ||
-    isRobotRenderFormat(selectedEntrySourceFormat);
+    assetKindForRenderFormat(selectedEntrySourceFormat) !== ASSET_KIND.MESH &&
+    assetKindForRenderFormat(selectedEntrySourceFormat) !== ASSET_KIND.DRAWING;
   const selectedEntryRenderAssetFormat = selectedEntryRendersItsOwnGeometry
     ? selectedEntrySourceFormat
     : entryRenderAssetFormat(selectedEntry);
@@ -1544,13 +1541,14 @@ export default function CadWorkspace({
   // format meant auditing every one of its ~15 uses to work out which sense was meant.
   // They are separate capabilities; today only STEP declares them, and that is a fact
   // about the table rather than about this file.
+  const selectedEntryContentKind = viewportContentKind(selectedEntrySourceFormat);
   const supportsParts = hasCapability(selectedEntrySourceFormat, "parts");
   const supportsTopology = hasCapability(selectedEntrySourceFormat, "topology");
   const supportsDisplayModes = hasCapability(selectedEntrySourceFormat, "displayModes");
   const supportsSidecarParams =
     parameterSourceKind(selectedEntrySourceFormat) === PARAMETER_SOURCE.SIDECAR;
   const isAssemblyView = selectedEntry?.kind === "assembly";
-  const isUrdfView = isRobotRenderFormat(selectedEntrySourceFormat);
+  const isUrdfView = selectedEntryContentKind === VIEWPORT_CONTENT.ROBOT;
   const robotBoundsAnimationActive = Boolean(
     isUrdfView &&
     (
@@ -1615,7 +1613,7 @@ export default function CadWorkspace({
   // sheet's parameter/animation controls read the definition off it.
   const selectedImplicitModel = selectedImplicitMatches ? implicitState.model : null;
   const selectedImplicitDefinition = selectedImplicitModel?.definition || null;
-  const selectedUrdfFileRef = isRobotRenderFormat(selectedEntrySourceFormat)
+  const selectedUrdfFileRef = selectedEntryContentKind === VIEWPORT_CONTENT.ROBOT
     ? fileKey(selectedEntry)
     : "";
   const defaultSelectedUrdfJointValues = useMemo(
@@ -2041,7 +2039,7 @@ export default function CadWorkspace({
       };
     }
   }, [selectedUrdfData, selectedUrdfJointValues, selectedUrdfMeshGeometryResult]);
-  const selectedMeshData = isRobotRenderFormat(selectedEntrySourceFormat)
+  const selectedMeshData = selectedEntryContentKind === VIEWPORT_CONTENT.ROBOT
     ? selectedUrdfPreview.meshData
     : selectedMeshMatches
       ? meshState.meshData
@@ -3045,11 +3043,14 @@ export default function CadWorkspace({
   // Implicits have their own arm again: they raymarch their GLSL, so "loading" means the
   // .implicit.js module is still being fetched, not that a mesh is. DXF has no arm -- it
   // renders its baked preview through the mesh path like everything else.
-  const viewerLoading = effectiveRenderFormat === RENDER_FORMAT.IMPLICIT
-    ? implicitViewerLoading
-    : isRobotRenderFormat(effectiveRenderFormat)
-      ? urdfViewerLoading
-      : meshViewerLoading;
+  const viewerLoading = {
+    [ASSET_KIND.IMPLICIT]: implicitViewerLoading,
+    [ASSET_KIND.ROBOT]: urdfViewerLoading,
+    [ASSET_KIND.MESH]: meshViewerLoading,
+    // A DXF loads a drawing but RENDERS the drawing package's baked preview through the
+    // mesh path, so its readiness is the mesh loader's.
+    [ASSET_KIND.DRAWING]: meshViewerLoading
+  }[assetKindForRenderFormat(effectiveRenderFormat)];
   const effectiveViewerLoading = viewerLoading || selectedArtifactGenerating || fileParamSelectionPending;
   // The file explorer spins the entry the viewer is actually working on. Artifact
   // generation is only half of that -- a built package still has to be fetched and
@@ -3071,19 +3072,23 @@ export default function CadWorkspace({
     selectedAssemblyStructureReady &&
     !selectedAssemblyInteractionReady &&
     !selectedAssemblyHydrationFailed;
+  // Six format arms said one thing: name the asset being fetched. Formats the viewer does
+  // not build ARE their own asset, so the label is just their name; artifact-managed ones
+  // fall through to the build/parameter progression below, which is about the package
+  // rather than the file.
+  const simpleLoadingLabel = selectedArtifactGenerating || isArtifactManagedFormat(effectiveRenderFormat)
+    ? ""
+    : {
+        [ASSET_KIND.IMPLICIT]: "Loading implicit CAD...",
+        [ASSET_KIND.ROBOT]: `Loading ${renderFormatLabel(effectiveRenderFormat)} robot...`,
+        [ASSET_KIND.MESH]: `Loading ${renderFormatLabel(effectiveRenderFormat)}...`,
+        [ASSET_KIND.DRAWING]: ""
+      }[assetKindForRenderFormat(effectiveRenderFormat)];
   const viewerLoadingLabel = selectedArtifactGenerating
     ? "Generating file..."
-    : effectiveRenderFormat === RENDER_FORMAT.IMPLICIT
-      ? "Loading implicit CAD..."
-      : isRobotRenderFormat(effectiveRenderFormat)
-        ? `Loading ${effectiveRenderFormat === RENDER_FORMAT.SDF ? "SDF" : "URDF"} robot...`
-        : effectiveRenderFormat === RENDER_FORMAT.STL
-          ? "Loading STL..."
-          : effectiveRenderFormat === RENDER_FORMAT.THREE_MF
-            ? "Loading 3MF..."
-            : effectiveRenderFormat === RENDER_FORMAT.GLB
-              ? "Loading GLB..."
-              : stepUpdateInProgress
+    : simpleLoadingLabel
+      ? simpleLoadingLabel
+      : stepUpdateInProgress
                 ? ARTIFACT_GENERATING_LABEL
                 : selectedStepArtifactRenderPending
                   ? ARTIFACT_GENERATING_LABEL
@@ -4612,7 +4617,7 @@ export default function CadWorkspace({
       cancelMeshLoad();
       return;
     }
-    if (!MESH_LOADED_RENDER_FORMATS.includes(selectedEntryRenderAssetFormat)) {
+    if (assetKindForRenderFormat(selectedEntryRenderAssetFormat) !== ASSET_KIND.MESH) {
       cancelMeshLoad();
       return;
     }

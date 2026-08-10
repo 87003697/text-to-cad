@@ -130,6 +130,19 @@ export function stepArtifactIssueShouldSuppress({
     STEP_ARTIFACT_GENERATION_FAILURE_DISPLAY_THRESHOLD;
 }
 
+// The entry's failed STEP artifact record, or null.
+//
+// STEP-shaped on purpose, and NOT `artifactManaged`: DXF is artifact-managed too, but the
+// error codes, the `stale` flag and the renderable-GLB fallback below are all STEP package
+// vocabulary. Generalising the gate without generalising the vocabulary would show a DXF a
+// card about a STEP artifact. The generic "render artifact build failed" card in
+// viewerAlerts already covers every artifact-managed kind; this is the STEP detail on top.
+export function failedStepArtifact(entry, sourceFormat) {
+  return sourceFormat === RENDER_FORMAT.STEP && entry?.artifact?.ok === false
+    ? entry.artifact
+    : null;
+}
+
 export function stepArtifactIsStale(entry, sourceFormat) {
   return (
     sourceFormat === RENDER_FORMAT.STEP &&

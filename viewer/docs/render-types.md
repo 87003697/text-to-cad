@@ -22,8 +22,11 @@ format. Pure data: no behaviour, no imports beyond the format enum.
 | Capability | Meaning |
 |---|---|
 | `content` | Which loaded object is the viewport's content: `mesh`, `implicit`, `robot`. Resolved once into `selectedViewportContent`. |
+| `assetKind` | Which asset the viewer LOADS: `mesh`, `drawing`, `implicit`, `robot`. Not the same question as `content` — a DXF loads a drawing and renders it through the mesh viewport, so it shares the viewport but not the loader. |
+| `iconKind` | The file-list glyph. |
 | `sheetKind` | Which file-sheet section set mounts. |
-| `label` | User-facing format name (status chips, sheet titles). |
+| `label` | User-facing format name (status chips, sheet titles, loading labels). |
+| `rebuildCommand` | The manual rebuild command shown on a build-failure card, or `""` when the viewer builds it or the file IS the asset. |
 | `sceneScale` | `cad` or `urdf`; picks the scene-scale profile. |
 | `tools` | `select`, `pan`, `draw`, `orbit`, `screenshot`. Orbit and screenshot are true for everything — they act on the viewport, not the geometry. |
 | `parts` | Per-part selection, hiding, isolate, assembly tree. |
@@ -34,7 +37,7 @@ format. Pure data: no behaviour, no imports beyond the format enum.
 | `params` | `sidecar` (`.step.js`), `module` (in-`.implicit.js`), or `null`. |
 | `animations` | Has animation clips, so transport controls apply. |
 | `posePicker` | Robot pose picking. |
-| `artifactManaged` | Builds a package before it can render. **Must mirror `owns_entry` in `viewer/server_py/artifact.py`** — drift means an entry blocks on a build that never runs, or reports ready forever. |
+| `artifactManaged` | Builds a package before it can render. A **subset** of `owns_entry` in `viewer/server_py/artifact.py`, not a mirror: the server also owns implicit entries (it builds their packages for export and snapshot) but an implicit raymarches live and must never wait on that build. A format listed here that the server does not own blocks forever. |
 | `exportFormats` | What `/__cad/export` can produce for it. |
 
 ### Rules
@@ -83,10 +86,18 @@ shell. If you find yourself adding a format check to `FloatingToolBar`, `CadRend
 ## Enforcement
 
 `tests/python/global/test_viewer_format_capability_policy.py` counts identity checks in
-non-test client code and **ratchets**: the number may only go down. It also asserts that
-`FloatingToolBar` and `CadRenderPane` contain zero format checks, since those are the
-components every format flows through. Lower the budgets in the same commit that removes
-checks.
+non-test client code and **ratchets**: the number may only go down. It also asserts a
+growing set of files at **zero** — the toolbar, the render pane, `CadViewer`, the alert
+builder, the file-list icon and status, and the home screen — since those are the surfaces
+every format flows through. Lower the budgets in the same commit that removes checks.
+
+What is left is deliberate. `useCadAssets` is allowlisted: choosing and running a loader
+per format is its whole job, and the `assetKind` field names *which* loader without
+pretending the implementations are the same. `stepArtifactStatus.js` keeps its checks
+because STEP package error codes, the `stale` flag and the renderable-GLB fallback are
+STEP vocabulary — generalising the gate without the vocabulary would show a DXF a card
+about a STEP artifact. The generic build-failure card in `viewerAlerts` already covers
+every artifact-managed kind.
 
 ## Standing gate
 

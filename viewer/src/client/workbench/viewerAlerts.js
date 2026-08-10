@@ -1,48 +1,29 @@
 import { entrySourceFormat } from "cadjs/lib/fileFormats.js";
-import { RENDER_FORMAT } from "./constants.js";
+import {
+  isArtifactManagedFormat,
+  rebuildCommandForEntry,
+  renderFormatLabel
+} from "cadjs/lib/renderCapabilities.js";
 import {
   stepArtifactHasRenderableGlb,
   stepArtifactStatusMessage
 } from "./fileStatusItems.js";
+import { failedStepArtifact } from "./stepArtifactStatus.js";
 import { entryStepSourceKind } from "./entryIconStatus.js";
 import { fileKey } from "./sidebar.js";
 
-export const CAD_BUILD_COMMANDS = Object.freeze({
-  dxf: "",
-  step: "python -m cadgen.step_artifact --repo-root . --step",
-  urdf: "",
-  sdf: ""
-});
-
-function commandForFile(command, fileRef) {
-  const normalizedCommand = String(command || "").trim();
-  return normalizedCommand ? `${normalizedCommand} ${fileRef}` : "";
-}
-
+// The command to rebuild an entry by hand, shown on build-failure cards.
+//
+// This was eight format checks that all returned "" except one — every branch but imported
+// STEP existed only to say "nothing to run here". The command now lives on the registry row
+// and the only rule left is the one that is genuinely about the ENTRY rather than the
+// format: a generator-backed STEP is rebuilt by the viewer, so telling the user to run the
+// importer against it would be wrong.
 export function buildCadCommand(fileRef, entry = null) {
-  const sourceFormat = entrySourceFormat(entry);
-  if (sourceFormat === RENDER_FORMAT.STEP && entryStepSourceKind(entry) === "python") {
+  if (entryStepSourceKind(entry) === "python") {
     return "";
   }
-  if (sourceFormat === RENDER_FORMAT.DXF) {
-    return commandForFile(CAD_BUILD_COMMANDS.dxf, fileRef);
-  }
-  if (sourceFormat === RENDER_FORMAT.URDF || sourceFormat === RENDER_FORMAT.SRDF) {
-    return String(entry?.kind || "").trim().toLowerCase() === "srdf" ? "" : commandForFile(CAD_BUILD_COMMANDS.urdf, fileRef);
-  }
-  if (sourceFormat === RENDER_FORMAT.SDF) {
-    return commandForFile(CAD_BUILD_COMMANDS.sdf, fileRef);
-  }
-  if (sourceFormat === RENDER_FORMAT.STL) {
-    return "";
-  }
-  if (sourceFormat === RENDER_FORMAT.THREE_MF) {
-    return "";
-  }
-  if (sourceFormat === RENDER_FORMAT.GLB) {
-    return "";
-  }
-  return commandForFile(CAD_BUILD_COMMANDS.step, fileRef);
+  return rebuildCommandForEntry(entrySourceFormat(entry), fileRef);
 }
 
 export function buildViewerMeshAlert(entry, hasMeshData, loadError, artifact = null) {
@@ -53,19 +34,16 @@ export function buildViewerMeshAlert(entry, hasMeshData, loadError, artifact = n
 
   const sourceFormat = entrySourceFormat(entry);
   const command = buildCadCommand(fileRef, entry);
-  const meshSidecarFormat = sourceFormat === RENDER_FORMAT.STL ||
-    sourceFormat === RENDER_FORMAT.THREE_MF ||
-    sourceFormat === RENDER_FORMAT.GLB;
-  const meshSidecarLabel = sourceFormat === RENDER_FORMAT.THREE_MF
-    ? "3MF"
-    : sourceFormat === RENDER_FORMAT.GLB
-      ? "GLB"
-      : "STL";
-  const reloadResolution = meshSidecarFormat
-    ? `Confirm the ${meshSidecarLabel} exists in the repo and reload the page.`
+  // A format the viewer does not build is its own asset: there is nothing to rebuild, so
+  // the only useful advice is "is the file there?". That is `artifactManaged`, not a list
+  // of the three mesh formats — a fourth would have inherited the wrong advice.
+  const ownAsset = !isArtifactManagedFormat(sourceFormat);
+  const ownAssetResolution = `Confirm the ${renderFormatLabel(sourceFormat) || "source file"} exists in the repo and reload the page.`;
+  const reloadResolution = ownAsset
+    ? ownAssetResolution
     : "Try reloading the page. If the problem persists, rebuild the render assets for this entry.";
-  const missingResolution = meshSidecarFormat
-    ? `Confirm the ${meshSidecarLabel} exists in the repo and reload the page.`
+  const missingResolution = ownAsset
+    ? ownAssetResolution
     : "Rebuild the CAD assets for this entry, then reload the page.";
 
   // A failed render-artifact build is the REASON there is no mesh, so it outranks the
@@ -84,9 +62,7 @@ export function buildViewerMeshAlert(entry, hasMeshData, loadError, artifact = n
     };
   }
 
-  const stepArtifactError = sourceFormat === RENDER_FORMAT.STEP && entry?.artifact?.ok === false
-    ? entry?.artifact
-    : null;
+  const stepArtifactError = failedStepArtifact(entry, sourceFormat);
   if (stepArtifactError && !hasMeshData) {
     const code = String(stepArtifactError.error || "").trim();
     const stale = stepArtifactError.stale === true || code === "stale_step_artifact";

@@ -2,14 +2,15 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   buildCadCommand,
-  buildViewerMeshAlert,
-  CAD_BUILD_COMMANDS
+  buildViewerMeshAlert
 } from "./viewerAlerts.js";
+import { RENDER_FORMAT } from "cadjs/lib/fileFormats.js";
+import { rebuildCommandForEntry } from "cadjs/lib/renderCapabilities.js";
 
 test("buildCadCommand returns portable rebuild commands for generated CAD assets", () => {
   assert.equal(
     buildCadCommand("fun/part.step", { file: "fun/part.step", kind: "step" }),
-    `${CAD_BUILD_COMMANDS.step} fun/part.step`
+    rebuildCommandForEntry(RENDER_FORMAT.STEP, "fun/part.step")
   );
   assert.equal(
     buildCadCommand("fun/generated.step", {
@@ -63,7 +64,7 @@ test("buildViewerMeshAlert reports STEP artifact errors only when no mesh render
       summary: "STEP artifact unavailable",
       title: "STEP artifact unavailable",
       message: "Generated GLB metadata is missing its source path.",
-      command: `${CAD_BUILD_COMMANDS.step} fun/part.step`
+      command: rebuildCommandForEntry(RENDER_FORMAT.STEP, "fun/part.step")
     }
   );
 
@@ -97,7 +98,7 @@ test("buildViewerMeshAlert reports STEP artifact errors only when no mesh render
       summary: "STEP artifact stale",
       title: "STEP artifact stale",
       message: "Generated GLB doesn't match the hash of the STEP file.",
-      command: `${CAD_BUILD_COMMANDS.step} fun/stale.step`
+      command: rebuildCommandForEntry(RENDER_FORMAT.STEP, "fun/stale.step")
     }
   );
 
@@ -121,7 +122,7 @@ test("buildViewerMeshAlert reports STEP artifact errors only when no mesh render
       summary: "STEP artifact stale",
       title: "STEP artifact stale",
       message: "Generated GLB doesn't match the hash of the STEP file.",
-      command: `${CAD_BUILD_COMMANDS.step} fun/renderable-stale.step`
+      command: rebuildCommandForEntry(RENDER_FORMAT.STEP, "fun/renderable-stale.step")
     }
   );
 
@@ -144,7 +145,7 @@ test("buildViewerMeshAlert reports STEP artifact errors only when no mesh render
       title: "Failed to load render mesh",
       message: "GLB parser failed",
       resolution: "Try reloading the page. If the problem persists, rebuild the render assets for this entry.",
-      command: `${CAD_BUILD_COMMANDS.step} fun/renderable-stale.step`
+      command: rebuildCommandForEntry(RENDER_FORMAT.STEP, "fun/renderable-stale.step")
     }
   );
 
@@ -187,7 +188,7 @@ test("buildViewerMeshAlert reports STEP artifact errors only when no mesh render
       summary: "STEP artifact missing",
       title: "STEP artifact missing",
       message: "Generated GLB is missing.",
-      command: `${CAD_BUILD_COMMANDS.step} fun/missing.step`
+      command: rebuildCommandForEntry(RENDER_FORMAT.STEP, "fun/missing.step")
     }
   );
 
@@ -207,7 +208,7 @@ test("buildViewerMeshAlert reports STEP artifact errors only when no mesh render
       summary: "STEP artifact missing",
       title: "STEP artifact missing",
       message: "Generated GLB is missing.",
-      command: `${CAD_BUILD_COMMANDS.step} fun/missing.step`
+      command: rebuildCommandForEntry(RENDER_FORMAT.STEP, "fun/missing.step")
     }
   );
 });
@@ -226,7 +227,7 @@ test("a DXF entry reports through the ordinary mesh alert", () => {
       title: "Failed to load render mesh",
       message: "network failed",
       resolution: "Try reloading the page. If the problem persists, rebuild the render assets for this entry.",
-      command: CAD_BUILD_COMMANDS.dxf
+      command: ""
     }
   );
 });
