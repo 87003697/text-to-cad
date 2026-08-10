@@ -55,7 +55,7 @@ const FIXTURES = [
   // The robot family had no fixture here at all, which is how it kept missing features
   // nobody was looking at. Needs `git lfs checkout models/robots/so101` first, like the
   // mesh and DXF fixtures.
-  { format: "urdf", file: "robots/so101/so101.urdf", parts: false }
+  { format: "urdf", file: "robots/so101/so101.urdf", parts: true }
 ];
 
 // Select, pan and draw act on the VIEWPORT, so every format gets them. They were off for

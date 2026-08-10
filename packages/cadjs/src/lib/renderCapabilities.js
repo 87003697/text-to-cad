@@ -107,7 +107,10 @@ const ROBOT_CAPABILITIES = Object.freeze({
   sheetKind: RENDER_FORMAT.URDF,
   label: "URDF",
   sceneScale: "urdf",
-  parts: false,
+  // A URDF is a link/joint TREE — the most literal assembly structure the viewer holds,
+  // and the reason `parts` exists. Topology stays false: a robot's links are meshes, with
+  // no BREP faces or edges to reference.
+  parts: true,
   topology: false,
   exploded: false,
   displayModes: false,

@@ -31,6 +31,17 @@ test("file sheet section defaults match current sheet behavior", () => {
   assert.deepEqual(defaultOpenFileSheetSectionIds("sdf"), ["sdf", "joints"]);
 });
 
+test("a robot's sheet does not advertise a Tree tab it cannot render", () => {
+  // Robot links ARE selectable parts in the viewport as of R1, but the Tree PANEL still
+  // lives inside StepFileSheet. Listing "tree" here without a section to render would put
+  // an id in the rendered list that no sheet answers. See R1b.
+  assert.deepEqual(renderedFileSheetSectionIds("urdf"), ["joints"]);
+  assert.deepEqual(
+    renderedFileSheetSectionIds("sdf", { hasFileStatus: true }),
+    ["status", "sdf", "joints"]
+  );
+});
+
 test("rendered file sheet sections include closed-by-default sections", () => {
   // A drawing has controls of its own: thickness and bends are render-time parameters on the
   // cached prism, so they steer the viewport without touching the package.

@@ -240,6 +240,7 @@ import {
   linkOriginInFrame,
   rootPointInFrame
 } from "cadjs/lib/urdf/kinematics";
+import { buildRobotAssemblyRoot } from "cadjs/lib/urdf/robotTree";
 import {
   jointValuesByNameToNative,
   measureUrdfMotionResult,
@@ -1547,7 +1548,12 @@ export default function CadWorkspace({
   const supportsDisplayModes = hasCapability(selectedEntrySourceFormat, "displayModes");
   const supportsSidecarParams =
     parameterSourceKind(selectedEntrySourceFormat) === PARAMETER_SOURCE.SIDECAR;
-  const isAssemblyView = selectedEntry?.kind === "assembly";
+  // "Does this entry have a part TREE?" A STEP assembly says so with its kind; a robot is
+  // one by construction, since a URDF is a link/joint tree. Everything downstream — the
+  // Tree panel, selection, hide, isolate, zoom-to-fit-selection — reads this, so declaring
+  // it is the whole of what a robot needed to become selectable.
+  const isAssemblyView = selectedEntry?.kind === "assembly" ||
+    selectedEntryContentKind === VIEWPORT_CONTENT.ROBOT;
   const isUrdfView = selectedEntryContentKind === VIEWPORT_CONTENT.ROBOT;
   const robotBoundsAnimationActive = Boolean(
     isUrdfView &&
@@ -2795,9 +2801,20 @@ export default function CadWorkspace({
     selectedImplicitActiveAnimation,
     selectedImplicitDefinition
   ]);
-  const assemblyRoot = selectedAssemblyStructureReady
+  // The robot's tree is built from its URDF rather than baked into the render package, so
+  // it is assembled here and handed to exactly the same machinery.
+  const robotAssemblyRoot = useMemo(() => (
+    selectedEntryContentKind === VIEWPORT_CONTENT.ROBOT
+      ? buildRobotAssemblyRoot({
+          urdfData: selectedUrdfData,
+          meshData: selectedMeshData,
+          label: sidebarLabelForEntry(selectedEntry)
+        })
+      : null
+  ), [selectedEntry, selectedEntryContentKind, selectedMeshData, selectedUrdfData]);
+  const assemblyRoot = robotAssemblyRoot || (selectedAssemblyStructureReady
     ? selectedMeshData?.assemblyRoot || null
-    : null;
+    : null);
   const selectedAssemblyMates = selectedAssemblyStructureReady && Array.isArray(selectedMeshData?.assemblyMates)
     ? selectedMeshData.assemblyMates
     : [];
@@ -2935,7 +2952,7 @@ export default function CadWorkspace({
     return buildAssemblyLeafToNodePickMap(assemblyParts);
   }, [assemblyParts]);
   const assemblyPartsLoaded = isAssemblyView
-    ? selectedAssemblyStructureReady
+    ? selectedAssemblyStructureReady || !!robotAssemblyRoot
     : supportsParts && selectedMeshMatches && !!selectedMeshData;
   const supportsPartSelection = supportsParts && assemblyPartsLoaded && stepLeafParts.length > 0;
   const assemblyPartMap = useMemo(() => {
