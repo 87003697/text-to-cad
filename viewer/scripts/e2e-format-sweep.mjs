@@ -193,10 +193,9 @@ async function main() {
     await page.goto(url, { waitUntil: "domcontentloaded" });
     // STEP builds its package on first open and a robot assembles from per-link meshes;
     // give the slowest paths room.
-    // A robot loads EVERY link mesh before anything draws (so101: 13 meshes, 16 MB, ~15 s
-    // on localhost), so its window is the widest here. See the robot-parity plan in
-    // design/viewer-robot-parity.md.
-    await page.waitForTimeout(fixture.format === "urdf" ? 26000 : fixture.format === "step" ? 16000 : 9000);
+    // A robot draws its links as they arrive (R3), so it is live in ~2 s and settles in
+    // ~8 s; the extra window over the mesh formats is for the tail, not for a blank wait.
+    await page.waitForTimeout(fixture.format === "urdf" ? 12000 : fixture.format === "step" ? 16000 : 9000);
 
     const buffer = await page.screenshot({ clip: CLIP });
     if (args.out) {

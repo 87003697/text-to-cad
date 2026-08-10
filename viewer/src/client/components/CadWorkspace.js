@@ -340,6 +340,13 @@ function statusOnlyFileSheetTitle(sourceFormat) {
 // artifact-generation trigger (first build, stale rebuild, source-changed regen). Browser-side
 // asset-load/parse stages ("loading mesh", reference "loading topology", etc.) are a different
 // concept and keep their own wording.
+// The URDF loader reports its stage in lower case ("loading meshes 7/13") because the
+// file-list chip reads that way; the viewport card is a sentence and needs a capital.
+function capitalizeFirst(value) {
+  const text = String(value || "").trim();
+  return text ? `${text.slice(0, 1).toUpperCase()}${text.slice(1)}` : "";
+}
+
 const ARTIFACT_GENERATING_LABEL = "Generating artifacts";
 const EMPTY_LIST = Object.freeze([]);
 const MOVEIT2_SERVER_ENABLED = moveit2ServerEnabled();
@@ -3042,10 +3049,15 @@ export default function CadWorkspace({
     !!selectedEntry &&
     implicitStatus !== ASSET_STATUS.ERROR &&
     (!selectedImplicitMatches || implicitStatus === ASSET_STATUS.LOADING);
+  // "Is there nothing to draw yet?", not "is the fetch still running?". A robot now
+  // publishes its links as they land and the renderer clears the model outright while
+  // loading, so keying this on ASSET_STATUS.LOADING would hold the blank card up until the
+  // slowest link arrived — the 15 s wait this was meant to fix. Once any link is on
+  // screen the viewport is live; the remaining count keeps reporting in the file chip.
   const urdfViewerLoading =
     !!selectedEntry &&
     urdfStatus !== ASSET_STATUS.ERROR &&
-    (!selectedUrdfMatches || urdfStatus === ASSET_STATUS.LOADING);
+    (!selectedUrdfMatches || !selectedUrdfPreview.meshData?.parts?.length);
   // A fatal render-artifact error (not building) stops the loading spinner so the error
   // surfaces. Every artifact-managed format, not just STEP: a DXF or implicit build that
   // failed would otherwise spin forever behind its own error.
@@ -3093,11 +3105,18 @@ export default function CadWorkspace({
   // not build ARE their own asset, so the label is just their name; artifact-managed ones
   // fall through to the build/parameter progression below, which is about the package
   // rather than the file.
+  // A robot assembles from many meshes and the loader already counts them off. Reporting
+  // "loading meshes 7/13" instead of a static card is the difference between a 15-second
+  // wait that looks like progress and one that looks like a hang; the count was already
+  // computed and only ever reached the file-list chip.
+  const robotLoadingLabel = `Loading ${renderFormatLabel(effectiveRenderFormat)} robot...`;
   const simpleLoadingLabel = selectedArtifactGenerating || isArtifactManagedFormat(effectiveRenderFormat)
     ? ""
     : {
         [ASSET_KIND.IMPLICIT]: "Loading implicit CAD...",
-        [ASSET_KIND.ROBOT]: `Loading ${renderFormatLabel(effectiveRenderFormat)} robot...`,
+        [ASSET_KIND.ROBOT]: urdfLoadStage
+          ? `${capitalizeFirst(urdfLoadStage)}...`
+          : robotLoadingLabel,
         [ASSET_KIND.MESH]: `Loading ${renderFormatLabel(effectiveRenderFormat)}...`,
         [ASSET_KIND.DRAWING]: ""
       }[assetKindForRenderFormat(effectiveRenderFormat)];

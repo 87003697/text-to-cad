@@ -173,7 +173,7 @@ function urdfMeshUrls(urdfData) {
   )];
 }
 
-async function loadRenderRobotMeshes(meshUrls, { signal, onProgress } = {}) {
+async function loadRenderRobotMeshes(meshUrls, { signal, onProgress, onMesh } = {}) {
   const total = meshUrls.length;
   let completed = 0;
   onProgress?.(completed, total);
@@ -184,6 +184,9 @@ async function loadRenderRobotMeshes(meshUrls, { signal, onProgress } = {}) {
     await browserYield();
     const mesh = await loadRenderMeshByUrl(meshUrl, { signal, fallback: RENDER_FORMAT.STL });
     completed += 1;
+    // Hand the mesh over the moment it lands, not just its count: a robot that waits for
+    // the whole set shows nothing for as long as its slowest link takes.
+    onMesh?.(meshUrl, mesh);
     onProgress?.(completed, total);
     await browserYield();
     return mesh;
@@ -835,8 +838,30 @@ export function useCadAssets({
       const urdfData = payload.urdfData;
       const meshUrls = urdfMeshUrls(urdfData);
       setUrdfLoadStage(meshUrls.length ? "loading meshes" : "building robot");
+      // Publish the robot as it arrives. buildUrdfMeshGeometry already skips a visual whose
+      // mesh is absent, so a partial map renders the links that have landed and grows.
+      // Each publish is a NEW Map: the downstream memos compare by identity, and mutating
+      // one in place would draw the first link and then nothing further.
+      const partialMeshes = new Map();
+      const publishRobot = () => {
+        setUrdfState({
+          file: entry.file,
+          kind: entry.kind,
+          urdfHash: entryUrdfAssetHash(entry),
+          urdfData,
+          meshesByUrl: new Map(partialMeshes),
+          complete: partialMeshes.size >= meshUrls.length
+        });
+      };
       const meshes = await loadRenderRobotMeshes(meshUrls, {
         signal: controller.signal,
+        onMesh: (meshUrl, mesh) => {
+          if (requestId !== urdfRequestIdRef.current || !mesh) {
+            return;
+          }
+          partialMeshes.set(meshUrl, mesh);
+          publishRobot();
+        },
         onProgress: (completed, total) => {
           if (requestId === urdfRequestIdRef.current && total > 0) {
             setUrdfLoadStage(`loading meshes ${completed}/${total}`);
@@ -853,7 +878,8 @@ export function useCadAssets({
         kind: entry.kind,
         urdfHash: entryUrdfAssetHash(entry),
         urdfData,
-        meshesByUrl
+        meshesByUrl,
+        complete: true
       });
       setUrdfStatus(ASSET_STATUS.READY);
     } catch (err) {
