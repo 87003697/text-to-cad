@@ -120,8 +120,24 @@ class SurfaceTree:
             yield from visit(0, 0, 0)
 
     def leaf_codes(self) -> np.ndarray:
-        """Materialize leaves for compatibility with existing tests/debuggers."""
+        """Materialize leaves for bounded tests and diagnostics."""
         return np.fromiter(self.iter_leaf_codes(), dtype=_UINT64_LE)
+
+
+def decode_octant_prefix(code: int, depth: int) -> tuple[int, int, int]:
+    """Decode one logical Morton prefix using the canonical xyz child order."""
+
+    validate_depth(depth)
+    value = int(code)
+    if value < 0 or value >= 1 << (3 * depth):
+        raise SurfaceTreeError("Morton prefix lies outside its depth")
+    coordinates = [0, 0, 0]
+    for shift in range(depth - 1, -1, -1):
+        child = (value >> (3 * shift)) & 7
+        coordinates[0] = (coordinates[0] << 1) | ((child >> 2) & 1)
+        coordinates[1] = (coordinates[1] << 1) | ((child >> 1) & 1)
+        coordinates[2] = (coordinates[2] << 1) | (child & 1)
+    return tuple(coordinates)
 
 
 def tree_from_codes(

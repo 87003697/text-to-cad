@@ -1,190 +1,187 @@
 ---
 name: mesh-to-cad
-description: Reconstruct parametric or implicit CAD from a 3D mesh file.
+description: Reconstruct a mesh through the bounded canonical repair Workspace and publish a rebuilt, verified Final Delivery.
 ---
 
-# Mesh-to-CAD reconstruction
+# Mesh-to-CAD canonical repair Workspace
 
 ## Purpose
 
-Reconstruct a parametric or implicit CAD model from a 3D mesh file.
-Route the mesh to `$cad` or `$implicit-cad` based on measured mesh
-statistics; see `references/routing-rubric.md` for the rubric.
+Reconstruct a raw mesh through one auditable protocol:
 
-## Use this skill when
+```text
+Canonical Reference
+  → Measured Step 0
+  → zero to five Repair Cycles
+  → Selected Step
+  → isolated rebuild and Observable Geometry verification
+  → Final Delivery
+```
 
-Use this skill when the user provides a 3D mesh file (`.ply`, `.obj`,
-`.stl`, `.glb`) and asks for a parametric CAD or implicit CAD
-reconstruction.
+The Workspace is the authority. Its Measured Steps, Repair Cycles, Attempts,
+Repair Batches, previews, measurements, selection, and Final Delivery are
+immutable evidence. Mutable modeling files live only under `work/`.
 
-## Default assumptions
+## Ownership
 
-Use these defaults unless the user specifies otherwise:
+- `$mesh-inspect` supplies routing evidence.
+- `$cad` or `$implicit-cad` owns source authoring and the registered canonical
+  build/rebuild recipe.
+- `$mesh-compare` owns Canonical Reference preparation, Measured Step facts,
+  Repair Targets, Region Diff, previews, and rebuild verification.
+- `scripts/mesh-to-cad-workspace` owns publication, budgets, ancestry,
+  protocol-scoped Git/LFS commits, recovery, selection, and Final Delivery.
+- The Agent owns route choice, Repair Batch selection, Planned Edits,
+  assessments, stop reasons, and the Selected Step.
 
-- Units: millimeters (or as declared by the source dataset).
-- Coordinate frame: PCA-based canonical frame, principal axis along +Z.
-- Output directory: the `EXP_DIR` path handed by the caller; all
-  artifacts live inside it.
-
-## Tools and paths
-
-This skill delegates modeling and objective geometry work to peer skills:
-`$mesh-inspect` for mesh
-statistics, `$cad` or `$implicit-cad` for modeling, `$mesh-compare`
-for similarity measurement and multi-view rendering, and
-(optionally) `$cad-viewer` for interactive review. See § Required
-workflow for the concrete step-to-skill mapping.
-
-The skill also ships the self-contained
-`scripts/mesh-to-cad-workspace` helper. It publishes and validates the
-canonical immutable Workspace graph introduced by the repair-workspace
-protocol; see `references/workspace-contract.md`. The helper owns workflow
-state and Git evidence, not CAD execution or VoxBlame facts.
+Read `references/workspace-contract.md` for helper commands and transaction
+semantics. Read `references/output-schemas.md` before authoring any setup,
+plan, assessment, selection, or notes document.
 
 ## Required workflow
 
-The iteration counter `N` starts at 0 and increments each time step 5
-loops back to step 3. Loop exit is **metric-driven**, not count-based:
-the loop stops when metrics either meet thresholds, plateau, or
-regress. Scale depth to the task — a simple mesh may accept at N=0;
-a complex assembly may converge over several refinements.
+### 1. Prepare and initialize
 
-### Setup phase (once per experiment)
+1. Inspect the raw input and choose `cad` or `implicit-cad` using
+   `references/routing-rubric.md`. Record both the chosen route and the rejected
+   alternative under `<PREPARED>/setup/route.json`.
+2. Run `$mesh-compare voxblame-prepare-reference` into `<PREPARED>/input`.
+   This is the experiment's only normalization.
+3. Freeze `<PREPARED>/experiment.json` with Workspace ID, canonical-reference
+   identity, route, coordinate contract, and residual-preview profile.
+4. Ensure `<EXP_DIR>` is a Git repository root with no pre-staged paths, then
+   initialize:
 
-1. **Inspect the mesh.** Invoke `$mesh-inspect` on the input mesh. The
-   skill will produce `${EXP_DIR}/mesh_stats.json` (used for routing),
-   `${EXP_DIR}/mesh_preview.png` (multi-view input preview), and for
-   `.ply` / `.obj` inputs `${EXP_DIR}/input_preview.glb` (sidecar for
-   `$cad-viewer`). Optionally returns a `$cad-viewer` link. Keep all
-   handoff artifacts alongside the stats for later reference.
-2. **Route by rubric.** Apply the rubric in `references/routing-rubric.md`
-   against the mesh stats; write `route.json` per the schema in
-   `references/output-schemas.md`, including the rejected alternative.
+```bash
+python skills/mesh-to-cad/scripts/mesh-to-cad-workspace init \
+  --workspace <EXP_DIR> --prepared <PREPARED>
+```
 
-### Reconstruction loop (iter N from 0; metric-driven exit)
+Do not write authority files directly after initialization.
 
-3. **Model or remodel.** Use `$cad` or `$implicit-cad` SKILL.md as the
-   authoritative modeling contract. Save primary artifacts to
-   `${EXP_DIR}/` with basename matching the input mesh id:
-   `<basename>.py` + `<basename>.step` + `<basename>.glb` (cad route)
-   OR `<basename>.implicit.js` + `<basename>.glb` (implicit route). The
-   `.glb` is the mesh export consumed by step 4.
-4. **Measure similarity (numeric).** Run `$mesh-compare` (numeric CLI)
-   with the input mesh and the reconstructed `<basename>.glb` (produced
-   at step 3), using the fixed measurement protocol `--samples 50000
-   --seed 0 --voxblame-dir "${EXP_DIR}/voxblame" --step <N> --max-depth
-   8` → `${EXP_DIR}/compare_metrics.json`. Do not append or compute IoU.
-   Step N defaults to comparison with N-1; step 0 has no baseline.
-   Interpret numeric metrics against thresholds in
-   `references/output-schemas.md`.
-5. **Decide next action and commit (or discard) the iter.** Read
-   `compare_metrics.json` (iter N, on disk) and, for N ≥ 1, iter N-1's
-   metrics via `git show HEAD:compare_metrics.json` (HEAD is iter N-1's
-   commit; iter N has not been committed yet). Apply exit logic:
+### 2. Publish Measured Step 0
 
-   - **Accept**: all three hard gates in
-     `references/output-schemas.md` pass: `chamfer`, both directional
-     `stats.p95_*` values, and the VoxBlame coarse-error gate →
-     `git add . && git commit -m "iter <N>: chamfer=<X>, verdict=accept"`;
-     iter N is `<final>`; exit loop to step 6.
-   - **Continue refine**: any hard gate fails AND (N=0, or at least one
-     progress signal improved vs iter N-1: `chamfer` dropped by ≥ 10%,
-     `max(stats.p95_a2b, stats.p95_b2a)` dropped by ≥ 10%, or
-     `voxblame.coarsest_first_error_depth` moved deeper; null is best) →
-     consume at most the single `voxblame.next_action`. When it is non-null,
-     prioritize modifying that world-space bounds; when it is null, invoke
-     `$mesh-compare` **heatmap** mode as the fallback diagnosis →
-     `${EXP_DIR}/previews/heatmap_iter_<N>.png`. Do not load the full
-     VoxBlame report into the agent prompt. `git add . && git
-     commit -m "iter <N>: chamfer=<X>, verdict=refine, diagnosis=<one-line>"`.
-     Adjust only that one localized action (or the heatmap diagnosis), generate
-     a new candidate, increment N, and loop back to step 3 before requesting
-     another action.
-   - **Plateau stop**: a hard gate still fails, no progress signal above
-     improved enough, and the divergence condition below is false →
-     `git add . && git commit -m
-     "iter <N>: chamfer=<X>, verdict=plateau"`; iter N is `<final>`;
-     declare "converged below threshold; further refinement not
-     improving" in step 7's `notes.md § Verification`; exit loop.
-   - **Divergence stop**: iter N `chamfer` and max directional p95 are
-     both WORSE than iter N-1, while the coarsest VoxBlame error did not
-     move deeper →
-     record iter N's measured values, then `git checkout .` to discard its
-     uncommitted modeling changes. Create an explicit empty terminal commit:
-     `git commit --allow-empty -m "iter <N>: chamfer=<X>,
-     verdict=plateau_via_divergence, kept=iter <N-1>"`. Iter N-1 remains
-     `<final>`; declare "iter N regressed from iter N-1" and both iterations'
-     key metrics in step 7's `notes.md § Verification`; exit loop.
+1. Author `mesh-to-cad.initial-plan/1` and begin Attempt 0:
 
-### Finalization phase (once, on loop exit)
+```bash
+python skills/mesh-to-cad/scripts/mesh-to-cad-workspace begin-attempt \
+  --workspace <EXP_DIR> --plan <initial-plan.json> --intended-step 0
+```
 
-6. **Verify visually.** Invoke `$mesh-compare` **side-by-side** mode →
-   `${EXP_DIR}/previews/side_by_side_iter_<final>.png` where `<final>`
-   is the accepted iteration number from step 5. Optionally hand off
-   to `$cad-viewer` for interactive inspection of the reconstructed
-   CAD. See § Handoff.
-7. **Write `notes.md`** per the schema in `references/output-schemas.md`
-   (seven sections, fixed order), including final `compare_metrics.json`
-   values and any unresolved divergence.
+2. Run each build operation through the bounded `run` command. The route skill
+   must build directly in canonical coordinates and leave a complete source
+   bundle, registered offline rebuild recipe, route artifacts, and measurement
+   GLB under the Attempt's candidate directory.
+3. Run `$mesh-compare voxblame-preview` on the candidate and inspect all eight
+   views.
+4. Run `$mesh-compare voxblame-measure` with `--step 0` and no parent.
+5. Publish only after candidate, preview, measurement, Canonical Reference,
+   and profile identities agree:
+
+```bash
+python skills/mesh-to-cad/scripts/mesh-to-cad-workspace publish-step-zero \
+  --workspace <EXP_DIR> --attempt <A> --candidate <candidate-dir> \
+  --candidate-mesh <candidate-relative-glb> \
+  --measurement <measurement-dir> --preview <preview-dir>
+```
+
+### 3. Run bounded Repair Cycles
+
+For the chosen parent Measured Step:
+
+1. Page every current Repair Target. Inspect its formal preview and objective
+   missing/excess evidence.
+2. Decide whether one coherent repair is plausible. If so, author one
+   `voxblame.repair-batch/1` selecting one or more Repair Targets and mapping
+   stable Planned Edit keys to them.
+3. Begin an Attempt with an explicit `--from-step <M>` and a new intended step.
+4. Execute the Planned Edits through bounded `run` calls, rebuild the route
+   artifacts, render the child preview, and measure the child with explicit
+   `--compare-to <M>`.
+5. Run `$mesh-compare voxblame-diff` for the frozen parent/child edge. Inspect
+   exact-mask, halo, outside-selected, trajectory, and Exterior Surface facts.
+6. Write Agent assessment and source-change evidence, then atomically publish
+   the Measured Step and Repair Cycle:
+
+```bash
+python skills/mesh-to-cad/scripts/mesh-to-cad-workspace publish-cycle \
+  --workspace <EXP_DIR> --attempt <A> --candidate <candidate-dir> \
+  --candidate-mesh <candidate-relative-glb> \
+  --measurement <measurement-dir> --preview <preview-dir> \
+  --region-diff <region-diff.json> --assessment <assessment.json> \
+  --source-changes <source-changes.json>
+```
+
+An Attempt that cannot publish a Measured Step must be frozen with
+`record-attempt`. A failed Attempt consumes no Repair Cycle. A successfully
+measured geometric no-op consumes one. The Workspace permits at most five
+successful Repair Cycles, three Attempts per intended step, and two actual tool
+failures per intended step.
+
+Stop repair immediately when the objective facts establish acceptance. The
+Agent may stop earlier when no feasible coherent repair remains. Branching from
+any earlier Measured Step is allowed; numeric adjacency never implies ancestry.
+
+### 4. Select and finalize
+
+1. Compare the strongest plausible Measured Steps, including any plausible
+   superior competitor. Inspect their previews and objective evidence.
+2. Author `mesh-to-cad.final-selection/1`. The Selected Step may be unaccepted;
+   record the honest stop reason and retain its acceptance state unchanged.
+3. Write `notes.md` with the seven fixed domain-glossary sections.
+4. Finalize with orchestrator-supplied trusted entrypoints and tool registry:
+
+```bash
+python skills/mesh-to-cad/scripts/mesh-to-cad-workspace finalize \
+  --workspace <EXP_DIR> --selection <final-selection.json> \
+  --notes <notes.md> --rebuild-entrypoint <registered-route-adapter> \
+  --geometry-entrypoint <mesh-compare-entrypoint> \
+  --tool-registry <trusted-tool-registry.json>
+```
+
+Finalization copies the Selected Step source into isolated staging, performs
+the registered offline rebuild without source edits, validates build
+provenance, verifies Observable Geometry against the Selected Step, renders the
+final preview, and atomically publishes Final Delivery. It never upgrades an
+unaccepted selection and never substitutes a historical artifact.
+
+5. Run `validate`. If interrupted, run `recover` and validate again; do not
+   repair authority files by hand.
 
 ## Handoff
 
-Include the following in the final response:
+Return:
 
-- **Structured summary**: `notes.md` path — canonical write-up of
-  routing, modeling operations, preserved/omitted features, and
-  verification.
-- **Primary artifact**: the reconstructed `.step` / `.stp` (cad route)
-  or `.implicit.js` (implicit route) path.
-- **Objective verification**: `compare_metrics.json` path AND the key
-  metric values (`chamfer`, `hausdorff`, both directional p95 values,
-  and VoxBlame's coarsest error depth) inline.
-- **Visual verification** (authoritative): `${EXP_DIR}/previews/side_by_side_iter_<final>.png`
-  path — the multi-view side-by-side rendered at the accepted iteration.
-- **Routing transparency**: `route.json` path.
-- **Iteration trajectory**: `${EXP_DIR}/previews/` (all
-  `heatmap_iter_<N>.png` refine diagnoses) + `git log --oneline` in
-  `${EXP_DIR}/` for full iteration history.
-- **Interactive 3D** (optional): hand the reconstructed
-  `<basename>.step` / `<basename>.stp` (cad route) or
-  `<basename>.implicit.js` (implicit route) file path to `$cad-viewer`
-  when that skill is installed; include the live viewer link(s). Skip
-  cleanly if unavailable — the multi-view PNG is sufficient
-  verification.
+- `notes.md` and `step_index.json`;
+- Selected Step number, inherited acceptance, stop reason, and considered
+  competitors;
+- `final/source/`, `final/artifacts/`, `final/build.json`, and
+  `final/rebuild.json`;
+- unchanged `final/measurement.json` and separate
+  `final/verification.json`;
+- `final/preview.png`, `final/preview.json`, `final/selection.json`, and
+  `final/manifest.json`;
+- the final `validate` result and protocol-scoped Git commit.
 
-If any artifact is unavailable (loop exited via plateau / divergence,
-`$cad-viewer` not installed, etc.), explicitly note which and why.
+If Final Delivery was not published, report the exact classification and the
+last valid Measured Step/Attempt. Never claim acceptance, rebuild provenance,
+or verification without the corresponding authority artifact.
 
 ## Non-negotiables
 
-- Follow all schemas in `references/output-schemas.md` verbatim: file naming, `route.json` (including `considered_alternative`), `notes.md` seven sections, and refinement thresholds. `compare_metrics.json` schema itself is defined in `$mesh-compare`'s `references/compare-metrics.md`.
-- Preserve structural features by count and class (repeated elements > 3, multi-wing/-wheel/-leg, hole patterns). Any omission or agent-initiated simplification must be declared in `## Omitted Surface Details`.
-- Run the measure step (workflow step 4) and record `compare_metrics.json`; do not invent numbers. If the loop exits via plateau or divergence (not accept), declare the reason and residual metrics in `notes.md § Verification`.
-- Apply all three hard acceptance gates; a coarse VoxBlame error is a veto,
-  not merely a diagnosis. Fine VoxBlame errors at depth 4 or deeper do not
-  independently block acceptance. Hausdorff is warning-only and IoU is not
-  part of measurement or verdicts.
-- Commit at the end of each workflow phase in `${EXP_DIR}/`: one commit per Setup step (1, 2), one commit per reconstruction iteration (steps 3-5 together, at end of step 5's decision), one commit per Finalization step (6, 7). Divergence stop discards the regressed modeling changes via `git checkout .`, then creates the empty `plateau_via_divergence` audit commit required by `references/output-schemas.md § Git commit conventions`.
-- Report only checks that actually ran or are directly supported by tool output.
+- One Canonical Reference; no candidate alignment or independent normalization.
+- Use only the public Workspace helper for authority publication and Git/LFS.
+- Every nonzero Measured Step, Repair Cycle, Attempt, Region Diff, and
+  assessment names the same explicit parent.
+- VoxBlame facts never prescribe CAD changes or decide when the Agent stops.
+- Keep runner telemetry outside Workspace authority.
+- Final Delivery is rebuilt from archived Selected Step source and verified;
+  historical outputs are not substitutes.
+- Report only checks and artifacts actually observed.
 
 ## Progressive references
 
-Load these files or peer skills only when their trigger applies:
-
-- `references/routing-rubric.md` — routing decision table with thresholds
-  (PCA λ1/λ2, face count, Euler characteristic, organic scan whitelist);
-  trigger: workflow step 2.
-- `references/output-schemas.md` — `route.json` schema, `notes.md`
-  seven-section spec, file naming rules, and `compare_metrics.json`
-  thresholds; trigger: workflow steps 2, 3, 4, 5, 7.
-- `$mesh-inspect` — mesh statistics computation; trigger: workflow
-  step 1.
-- `$mesh-compare` — similarity metrics (numeric) and multi-view render
-  (visual mode); trigger: workflow steps 4, 5, 6.
-- `$cad` / `$implicit-cad` — modeling contracts for the routed skill;
-  trigger: workflow step 3.
-- `$cad-viewer` — optional interactive review of the reconstructed
-  CAD; trigger: workflow step 6.
-- `references/workspace-contract.md` — public immutable Workspace helper,
-  transaction recovery, attempt/cycle budgets, and protocol-scoped Git
-  publication; trigger: canonical repair-workspace execution.
+- `references/routing-rubric.md`: route selection.
+- `references/output-schemas.md`: Agent-authored setup and evidence documents.
+- `references/workspace-contract.md`: helper commands, bounds, recovery, Git,
+  LFS, and Final Delivery publication.

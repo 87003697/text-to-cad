@@ -16,6 +16,7 @@ old, mixed, corrupt, and unknown-field state with
 ## Consequences
 
 Every canonical repair workflow starts with fresh state. There is no marker,
-compatibility facade, or mixed reader. The old production path remains wired
-only until the later atomic cutover; the frozen canonical validator lives
-beside it meanwhile.
+compatibility facade, or mixed reader. The production cutover is complete:
+execution skills, public commands, bundled runtimes, plugins, and reviewers
+expose only the canonical Workspace protocol. Closed validators retain the
+forbidden-name table solely to reject old or mixed documents.

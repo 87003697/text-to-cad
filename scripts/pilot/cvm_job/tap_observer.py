@@ -10,8 +10,10 @@ from urllib.parse import quote
 
 SUPPORTED_SCHEMA = 4
 _CLASSIFIERS = (
-    ("voxblame", ("voxblame", "octree_error")),
-    ("compare", ("compare_metrics", "mesh-compare", "chamfer", "hausdorff")),
+    ("finalize", ("mesh-to-cad-workspace finalize", "final delivery", "voxblame-verify")),
+    ("preview", ("voxblame-preview", "preview.png", "preview.json")),
+    ("workspace", ("mesh-to-cad-workspace", "workspace.json", "step_index.json")),
+    ("voxblame", ("voxblame-", "repair target", "region-diff", "measured step")),
     ("review", ("pilot-review", "review.png", "review.gif", "reviews/")),
     ("export", ("snapshot", "export", ".glb", ".step", ".stp")),
     ("checkpoint", ("git commit",)),

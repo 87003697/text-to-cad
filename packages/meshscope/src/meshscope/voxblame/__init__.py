@@ -59,18 +59,6 @@ from meshscope.voxblame.region_diff import (
     publish_region_diff,
     validate_region_diff_contract,
 )
-from meshscope.voxblame.grading import (
-    ChangeCell,
-    ErrorCell,
-    NextAction,
-    RegionHandle,
-    compare_error_trees,
-    grade_surface_trees,
-    lattice_bounds,
-    select_next_action,
-    world_bounds,
-)
-from meshscope.voxblame.session import run_step
 from meshscope.voxblame.targets import page_repair_targets
 from meshscope.voxblame.tree import SurfaceTree, tree_from_codes
 from meshscope.voxblame.verification import (
@@ -83,9 +71,6 @@ from meshscope.voxblame.voxelize import build_lattice_tree, voxelize_mesh
 __all__ = [
     "CanonicalFrame",
     "CANONICAL_REFERENCE_SCHEMA",
-    "ChangeCell",
-    "ErrorCell",
-    "NextAction",
     "OctreeError",
     "UnsupportedOrInvalidVoxBlameState",
     "UNSUPPORTED_OR_INVALID_STATE",
@@ -112,17 +97,13 @@ __all__ = [
     "REPORT_REQUIRED_FIELDS",
     "SESSION_REQUIRED_FIELDS",
     "SUMMARY_REQUIRED_FIELDS",
-    "RegionHandle",
     "STORAGE_SCHEMA",
     "SurfaceTree",
     "SurfaceTreeError",
     "VoxBlameError",
     "build_lattice_tree",
-    "compare_error_trees",
     "decode_surface_tree",
     "encode_surface_tree",
-    "grade_surface_trees",
-    "lattice_bounds",
     "measure_step",
     "page_repair_targets",
     "read_surface_tree",
@@ -133,8 +114,6 @@ __all__ = [
     "publish_prepare_failure",
     "publish_region_diff",
     "validate_region_diff_contract",
-    "run_step",
-    "select_next_action",
     "tree_from_codes",
     "voxelize_mesh",
     "validate_contract_bundle",
@@ -142,6 +121,5 @@ __all__ = [
     "validate_session_contract",
     "validate_summary_contract",
     "verify_step",
-    "world_bounds",
     "write_surface_tree",
 ]

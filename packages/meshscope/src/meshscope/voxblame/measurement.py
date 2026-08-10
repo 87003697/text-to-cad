@@ -78,7 +78,7 @@ def measure_step(
     *,
     step: int,
     compare_to: int | None = None,
-    backend: Backend = "auto",
+    backend: Backend = "native",
 ) -> MeasureStepResult:
     """Measure one canonical candidate and publish a canonical Measured Step."""
 

@@ -1,544 +1,143 @@
-# VoxBlame Architecture
+# VoxBlame canonical surface evidence
 
-VoxBlame localizes conservative surface-occupancy differences between a fixed
-reference mesh and a sequence of candidate meshes. It complements sampled
-Chamfer and percentile metrics; it does not replace exact distance metrics,
-solid inside/outside tests, or CAD feature provenance.
+VoxBlame is the framework-agnostic geometry engine for the canonical repair
+Workspace. It compares candidates already expressed in one immutable Canonical
+Reference frame and publishes conservative surface-occupancy evidence. It does
+not choose CAD edits, issue repair verdicts, control Workspace state, or select
+the final result.
 
-The subsystem is organized as a one-way pipeline:
+## Pipeline
 
 ```text
-mesh inputs
-  -> reference-owned frame
-  -> hierarchical surface voxelization
-  -> immutable SurfaceTree / .vbsvo snapshots
-  -> reference/candidate grading
-  -> previous/current change analysis
-  -> report + compact summary
-  -> atomic workflow publication
-  -> mesh-compare CLI
+raw evaluated scene
+  → one Canonical Reference preparation
+  → canonical candidate
+  → depth-1–8 interior occupancy + Exterior Surface snapshot
+  → exact depth-8 missing/excess evidence
+  → complete Repair Target partition
+  → Measured Step report and summary
+  → optional Region Diff / formal preview / rebuild verification
 ```
 
-## Package layout
+## Modules
 
 | Module | Responsibility |
 |---|---|
-| `errors.py` | Shared `VoxBlameError`, `OctreeError`, and `SurfaceTreeError` hierarchy. |
-| `frame.py` | Reference-owned world ↔ canonical-lattice transform and mesh vertex validation. |
-| `tree.py` | Immutable logical `SurfaceTree`, tree invariants, traversal, digest, and test/debug leaf iteration. |
-| `codec.py` | Strict `.vbsvo` v1 byte encoding, decoding, file reads, and file writes. |
-| `voxelize.py` | Mesh-to-tree adapter, Python hierarchical SAT builder, and optional native dispatch. |
-| `_native.cpp` | C++17 implementation of the same hierarchical conservative SAT builder. |
-| `grading.py` | First-mismatch grading, iteration change overlay, region bounds, and bounded next-action selection. |
-| `reporting.py` | Projection of domain objects into `voxblame.report/2` and `voxblame.summary/1` JSON. |
-| `contracts.py` | Closed-world validators for the frozen replacement canonical session, report, and summary shapes. |
-| `prepare_reference.py` | Raw input capture, evaluated-scene normalization, identity, validation, and atomic Canonical Reference publication. |
-| `canonical_artifacts.py` | Shared fail-closed readers for published Canonical Reference and candidate bytes. |
-| `exterior.py` | Canonical-cube clipping, exact exterior facts, signed diagnostic occupancy, and snapshot identity. |
-| `targets.py` | Complete 18-connected error partitioning, stable target identities, exact mask artifacts, and deterministic paging. |
-| `measurement.py` | Multiresolution interior/exterior measurement and atomic Measured Step publication. |
-| `region_diff.py` | Repair Batch validation, fixed-mask Region Diff evidence, trajectories, and atomic publication. |
-| `preview.py` | Canonical render channels, preview identity, exterior-marker binding, and atomic publication. |
-| `store.py` | Filesystem repository, strict loads, idempotent retry, and atomic session/step publication. |
-| `session.py` | Application orchestration exposed as `run_step(...)`. |
-| `__init__.py` | Curated public API. |
+| `prepare_reference.py` | Evaluated-scene capture, one-time normalization, identities, validation, atomic publication. |
+| `canonical_artifacts.py` | Fail-closed Canonical Reference and candidate readers. |
+| `frame.py` | Fixed canonical-lattice transform and finite triangle validation. |
+| `tree.py` | Immutable indexed surface tree, traversal, identities, and Morton coordinate decoding. |
+| `codec.py` | Strict `.vbsvo` encoding, decoding, and atomic file I/O. |
+| `voxelize.py` / `_native.cpp` | Conservative Python/native triangle-AABB surface occupancy. |
+| `exterior.py` | Canonical-cube clipping, exact exterior facts, signed diagnostic occupancy, and identity. |
+| `targets.py` | Complete deterministic Repair Target partition, masks, identities, and paging. |
+| `measurement.py` | Depth-1–8 measurement and atomic Measured Step evidence publication. |
+| `region_diff.py` | Closed Repair Batch validation and objective fixed-region evidence. |
+| `preview.py` | Formal residual channels, identity validation, and atomic preview publication. |
+| `verification.py` | Non-publishing rebuilt Observable Geometry comparison. |
+| `contracts.py` | Closed validators for session, report, and summary documents. |
 
-Legacy `meshscope.surface_tree` and `meshscope.octree_error` are thin
-compatibility facades. New production code should import from
-`meshscope.voxblame`.
+The exhaustive schemas and cross-document invariants are in
+[CONTRACT.md](CONTRACT.md).
 
-The replacement shapes are frozen in [CONTRACT.md](CONTRACT.md). They
-intentionally live beside the current production readers until the later
-atomic cutover; the runtime sections below describe the pre-cutover path.
-
-The old flat Morton implementation is not production code. The oracle used to
-prove parity lives under:
-
-```text
-tests/python/packages/meshscope/support/morton_oracle.py
-```
-
-Production modules must not import that test helper.
-
-## Stable public interfaces
-
-### Canonical Reference preparation
-
-The replacement workflow starts beside the legacy runtime with one public,
-atomic preparation command:
-
-```bash
-.venv/skills/mesh-compare/bin/python skills/mesh-compare/scripts/mesh-compare \
-  voxblame-prepare-reference raw-scene.glb --output EXP/input
-```
-
-On success, `EXP/input` appears as one publication containing the captured raw
-entry and geometry dependencies, `reference.ply`, `normalization.json`, and
-`input.json`. The authoritative PLY is binary little-endian float64 triangle
-geometry in the fixed Trellis2 canonical cube. Failures leave `EXP/input`
-absent and write bounded evidence to `EXP/input.failure.json`.
-
-The corresponding Python boundary is:
+## Public Python boundary
 
 ```python
-from meshscope.voxblame import prepare_reference
-
-result = prepare_reference(raw_scene, output_directory)
-manifest = result.manifest
+from meshscope.voxblame import (
+    measure_step,
+    page_repair_targets,
+    prepare_reference,
+    publish_region_diff,
+    verify_step,
+)
 ```
 
-### Canonical Measured Step
-
-The replacement measurement boundary accepts any candidate already expressed
-in Canonical Reference coordinates, including boundary-crossing and fully
-exterior geometry:
+### Canonical Reference
 
 ```python
-from meshscope.voxblame import measure_step
+result = prepare_reference(raw_scene, experiment / "input")
+```
 
+Preparation evaluates scene transforms and instances, removes only strictly
+zero-area triangles, uses float64 geometry, centers evaluated bounds, and
+applies one uniform inverse-max-extent scale. It publishes `reference.ply`,
+`normalization.json`, captured geometry dependencies, and `input.json` as one
+immutable directory.
+
+### Measured Step
+
+```python
 result = measure_step(
     canonical_reference=experiment / "input",
     candidate_mesh=candidate,
     output=experiment / "voxblame",
-    step=0,
+    step=3,
+    compare_to=1,
 )
 ```
 
-Triangles that cross `[-0.5, 0.5]^3` are geometrically partitioned before
-occupancy is built. Interior fragments supply the depth-1 through depth-8
-surface evidence. Exterior fragments supply exact containment, canonical
-bounds, centroid, outside directions, and nearest/farthest L-infinity overrun,
-plus a signed diagnostic grid. Resource limits may reduce only the diagnostic
-grid depth; exact facts remain unchanged. The persisted exterior snapshot and
-its resolution metadata participate in the Observable Geometry identity. The
-signed grid-depth exponent may pass below zero for very distant geometry, so
-the diagnostic mask stays resource-bounded without weakening containment.
+Step 0 uses `compare_to=None`. Every nonzero step names an explicit earlier
+parent. The candidate is never fitted or normalized. Boundary-crossing
+triangles contribute to both interior and exterior evidence; fully exterior
+geometry is a valid bad candidate rather than malformed input.
 
-VoxBlame publishes objective facts rather than an `accepted` verdict. Complete
-acceptance requires all three facts to be true: exact depth-8 equality
-(`global_depth_8_zero`), a clear exterior (`out_of_frame_clear`), and no
-unresolved evidence conflict (`no_evidence_conflict`).
+The result publishes:
 
-Exact containment, signed occupancy, snapshot bytes, resolution metadata, and
-their identities are cross-checked before publication; any conflict fails the
-measurement instead of publishing a Measured Step with contradictory facts.
+- authoritative integer surface counts at depths 1 through 8;
+- exact depth-8 missing and excess sets;
+- exact and diagnostic Exterior Surface evidence;
+- the complete stable Repair Target order and exact masks;
+- candidate interior, exterior, and combined Observable Geometry identities;
+- three objective acceptance facts.
 
-Each Measured Step also freezes the complete Repair Target order. Interior
-missing/excess cells are grouped over their union with 18-connectivity. The
-versioned `repair_target_partition/1` profile splits components larger than
-4096 cells at depth-4 coarse-octree locality boundaries while keeping every
-resulting chunk connected. Exact minimal-cover masks are published under the
-step's `targets/` directory. Exterior diagnostic occupancy is retained as a
-separate target when present. Target identity binds the source step, exact mask,
-missing/excess direction counts, and split provenance.
-
-The measurement summary returns the first eight targets. Read later pages from
-the immutable publication without remeasurement:
+### Repair Targets and Region Diff
 
 ```python
-from meshscope.voxblame import page_repair_targets
+page = page_repair_targets(experiment / "voxblame", step=3, offset=8)
 
-page = page_repair_targets(experiment / "voxblame", step=0, offset=8)
-```
-
-The corresponding CLI is `mesh-compare voxblame-targets --output EXP/voxblame
---step 0 --offset 8`. Follow `next_offset` until it is null. `display_rank` is
-non-prescriptive; `error_profile` records missing/excess direction facts.
-
-### Repair Batch Region Diff
-
-After a later Measured Step is published with an explicit comparison parent,
-freeze one Agent-authored Repair Batch and compare it through the public
-Workspace boundary:
-
-```python
-from meshscope.voxblame import publish_region_diff
-
-result = publish_region_diff(
+diff = publish_region_diff(
     experiment / "voxblame",
-    from_step=0,
+    from_step=1,
     to_step=3,
-    repair_plan=experiment / "work" / "repair-batch.json",
-    output=experiment / "cycles" / "000003" / "region-diff.json",
+    repair_plan=experiment / "work/repair-batch.json",
+    output=experiment / "work/region-diff.json",
 )
 ```
 
-The plan selects one or more current target keys and mask digests, then maps
-stable Planned Edit keys many-to-many to that selection. Region Diff preserves
-the source exact masks, separates interior and exterior halos, accounts for all
-outside-selected space, and records an explicit two-step trajectory. Counts,
-deltas, identities, containment facts, and new spatial components are evidence;
-the tool issues no repair verdict.
+Paging revalidates frozen artifacts and never remeasures. Region Diff binds one
+Repair Batch and one explicit parent/child edge, preserves interior and
+exterior domains, and reports exact-mask, halo, outside-selected, component,
+and trajectory facts without Agent judgment.
 
-Direction-transition evidence records the two observable ends separately over
-the fixed exact-mask-plus-halo region; it never claims an impossible
-missing-to-excess change at one fixed-reference cell. Finer exterior evidence
-projects to a selected target's frozen grid. Coarser destination evidence fails
-closed instead of inventing fine child occupancy.
-
-### Formal residual preview
-
-The preview boundary prepares the exact reference/candidate channels and binds
-the browser result to canonical, profile, image, and exterior identities:
-
-```bash
-python skills/mesh-compare/scripts/mesh-compare voxblame-preview candidate.glb \
-  --reference EXP/input --experiment EXP/experiment.json \
-  --output EXP/preview --variant step
-```
-
-The command publishes `preview.png` and `voxblame.preview/1` metadata as one
-immutable directory. `cadena_residual_eight_view/1` fixes the six axial depth
-views, two perspective views, framing, colors, dimensions, cameras, lighting,
-padding, downsampling, and renderer version. `experiment.json` must freeze that
-identity as `preview_profile: {name, sha256}`. Final previews use `--variant
-final --selected-step N --selected-summary EXP/voxblame/steps/NNNNNN/summary.json`;
-the candidate and reference digests must match that canonical summary. Exterior markers retain the exact objective exterior
-snapshot identity and do not expand the canonical camera.
-
-### Application entry point
+### Rebuild verification
 
 ```python
-from meshscope.voxblame import run_step
-
-summary = run_step(
-    reference_mesh,
-    candidate_mesh,
-    state_dir,
-    step,
-    max_depth=8,
-    compare_to=None,
+result = verify_step(
+    experiment / "input",
+    rebuilt_mesh,
+    experiment / "voxblame",
+    against_step=3,
+    output=experiment / "work/verification.json",
 )
 ```
 
-This is the only interface required by the `mesh-compare` CLI. It returns a
-compact `voxblame.summary/1` dictionary and publishes the full immutable
-evidence below `state_dir`.
-
-### Tree construction
-
-```python
-from meshscope.voxblame import CanonicalFrame, voxelize_mesh
-
-frame = CanonicalFrame.from_reference(reference)
-tree = voxelize_mesh(candidate, frame, max_depth=8, backend="auto")
-```
-
-`backend` may be:
-
-- `"auto"` — use the native extension when importable, otherwise Python.
-- `"python"` — force the correctness fallback.
-- `"native"` — require the C++ extension and fail if unavailable.
-
-For already transformed lattice-space triangles:
-
-```python
-tree = build_lattice_tree(triangles, max_depth=8, backend="auto")
-```
-
-### Tree and codec
-
-```python
-from meshscope.voxblame import (
-    SurfaceTree,
-    decode_surface_tree,
-    encode_surface_tree,
-    read_surface_tree,
-    write_surface_tree,
-)
-```
-
-The byte-oriented functions are pure format operations and are preferred for
-golden/fuzz tests. File-oriented functions are thin filesystem adapters.
-
-### Grading
-
-```python
-errors = grade_surface_trees(reference_tree, candidate_tree)
-changes = compare_error_trees(previous_errors, errors, max_depth)
-action = select_next_action(changes, errors, frame)
-```
-
-Domain objects remain typed until `reporting.py` converts them to versioned
-JSON:
-
-- `RegionHandle`
-- `ErrorCell`
-- `ChangeCell`
-- `NextAction`
-
-## Core data contracts
-
-### Canonical frame
-
-The reference mesh exclusively defines:
-
-```text
-center = reference bounding-box center
-scale  = maximum reference bounding-box extent
-lattice = [-0.5, 0.5]^3
-```
-
-Every candidate and historical step is evaluated in that same frame. Candidate
-geometry outside the root cube is ignored; in-frame intersections are still
-graded. A fully out-of-frame candidate therefore produces a valid empty tree,
-not a session error.
-
-### SurfaceTree
-
-`SurfaceTree` contains:
-
-```python
-SurfaceTree(
-    max_depth: int,
-    masks: bytes,
-    spans: np.ndarray,  # little-endian uint32, immutable backing storage
-    leaf_count: int,
-)
-```
-
-- One mask represents one internal octree node.
-- Child bits use `(x << 2) | (y << 1) | z`.
-- Internal nodes are stored in child-order preorder.
-- A max-depth leaf is represented only by its parent mask bit.
-- `spans[i]` is the number of internal-node rows in node `i`'s subtree,
-  including itself.
-- The empty tree is one zero root mask with span 1 and leaf count 0.
-- Non-root zero masks are invalid.
-
-Masks are the logical identity. Spans are a derived acceleration index and are
-recomputed during validation.
-
-### Logical digest
-
-The tree digest is:
-
-```text
-SHA256(
-  b"voxblame.svo/1\0"
-  + uint8(max_depth)
-  + uint8(xyz_child_order)
-  + masks
-)
-```
-
-Spans are deliberately excluded. A digest comparison is meaningful only with
-the accompanying storage schema, max depth, and reference frame.
-
-### `.vbsvo` v1
-
-The binary snapshot is:
-
-```text
-56-byte little-endian header
-uint8 masks[node_count]
-little-endian uint32 spans[node_count]
-```
-
-The decoder validates:
-
-- magic, version, child order, flags, and depth
-- node-count bounds and exact byte length
-- complete preorder node consumption
-- non-root mask rules
-- recomputed spans and leaf count
-- logical digest
-
-Malformed input fails closed with `SurfaceTreeError`.
-
-## Complete workflow
-
-### 1. Load and identify meshes
-
-`session.run_step()` loads both meshes, validates finite triangle geometry, and
-computes source digests. File inputs use the exact source bytes; in-memory mesh
-inputs use canonical little-endian triangle bytes.
-
-### 2. Initialize or validate the session
-
-For a new state directory:
-
-```text
-reference mesh
-  -> CanonicalFrame
-  -> voxelize_mesh(reference)
-  -> reference.vbsvo
-  -> session.json
-```
-
-For an existing session, the store validates:
-
-- `voxblame.session/2`
-- max depth
-- reference frame
-- reference source digest
-- strict `reference.vbsvo` decode
-- reference logical metadata
-
-The experimental `voxblame.session/1` format is rejected rather than migrated.
-
-### 3. Build the candidate tree
-
-If reference and candidate source digests match, the immutable reference tree
-is reused. Otherwise, `voxelize_mesh()`:
-
-1. transforms triangles into the canonical frame;
-2. discards zero-area triangles;
-3. recursively runs conservative triangle/AABB SAT;
-4. emits preorder masks directly without materializing Morton leaves;
-5. validates native or Python output through `SurfaceTree`.
-
-### 4. Grade against the reference
-
-`grade_surface_trees()` synchronously traverses both trees:
-
-```text
-reference occupied, candidate empty -> missing
-reference empty, candidate occupied -> excess
-both empty                           -> skip
-both occupied                        -> descend
-```
-
-Traversal stops at the first mismatch on each branch. The result is an
-adaptive, non-overlapping set of `ErrorCell` values.
-
-### 5. Compare with a previous step
-
-For `compare_to`, the selected historical candidate snapshot is loaded and
-graded against the same reference:
-
-```text
-reference vs previous -> previous errors
-reference vs current  -> current errors
-previous/current overlay -> changes
-```
-
-Changes are classified as:
-
-- `introduced`
-- `regressed`
-- `changed`
-- `improved`
-- `resolved`
-
-The workflow does not define progress by directly comparing candidate trees;
-both states are interpreted relative to the fixed reference.
-
-### 6. Select one bounded action
-
-`select_next_action()` selects one deterministic action in this order:
-
-```text
-regressed -> introduced -> changed -> remaining
-```
-
-The action includes:
-
-- reason
-- missing/excess direction
-- first-error depth
-- stable `{depth, octant_prefix}` region handle
-- world-space AABB
-
-The agent receives this single bounded action, not the full error arrays.
-
-### 7. Build report and summary
-
-`reporting.py` produces:
-
-- `voxblame.report/2` — full errors, changes, metadata, and overview
-- `voxblame.summary/1` — compact provenance, counts, coarse depth, and one
-  next action
-
-Grading code does not know JSON field names. Schema changes belong in
-`reporting.py`.
-
-### 8. Atomically publish
-
-`VoxBlameStore` first writes:
-
-```text
-.tmp-<step>-<uuid>/
-  candidate.vbsvo
-  report.json
-```
-
-It reloads and validates both artifacts before renaming the directory to:
-
-```text
-steps/<step>/
-```
-
-An existing identical step is an idempotent retry. An existing step with
-different content is rejected. `.tmp-*` directories are intentionally retained
-as ignored crash evidence.
-
-## Dependency direction
-
-Keep dependencies one-way:
-
-```text
-errors
-  ├── frame
-  ├── tree <- codec
-  └── tree + frame <- voxelize
-
-tree + frame <- grading <- reporting
-tree + exterior <- targets
-
-codec + voxelize + grading + reporting <- store/session <- CLI
-```
-
-Important boundaries:
-
-- `tree.py` must not import voxelization, grading, reporting, or session code.
-- `codec.py` may depend on the tree model, but the tree model does not depend
-  on the codec.
-- `voxelize.py` returns a validated tree and does not know persistence or JSON.
-- `grading.py` is pure tree/domain logic and does not read files.
-- `reporting.py` owns versioned JSON.
-- `targets.py` owns target partition, exact target-mask identity, and paging.
-- `store.py` owns filesystem publication.
-- `session.py` composes the modules.
-- CLI code imports only `run_step`.
-- Production code never imports the flat Morton test oracle.
-
-## Where to make changes
-
-| Desired change | Module |
-|---|---|
-| Change frame construction or transforms | `frame.py` |
-| Change tree representation or traversal | `tree.py` |
-| Change `.vbsvo` bytes or validation | `codec.py` |
-| Change SAT or backend dispatch | `voxelize.py` and `_native.cpp` |
-| Change mismatch or progress semantics | `grading.py` |
-| Change Repair Target partition or paging | `targets.py` |
-| Change report/summary fields | `reporting.py` |
-| Change retry or atomic publication | `store.py` |
-| Change end-to-end step orchestration | `session.py` |
-| Change CLI flags | `skills/mesh-compare/scripts/mesh-compare/cli.py` |
-| Change flat-oracle parity tests | test support `morton_oracle.py` |
-
-## Test strategy
-
-Focused package tests cover:
-
-- `.vbsvo` golden bytes and corruption rejection
-- immutable tree invariants
-- randomized Morton-set/tree parity
-- flat SAT vs Python hierarchy parity
-- Python/native bit parity
-- first-mismatch grading
-- error-tree overlay and action priority
-- session mismatch and `session/1` rejection
-- arbitrary `compare_to`
-- immutable retry and crash residue
-- fully out-of-frame candidates
-- report/snapshot digest agreement
-- complete, disjoint 18-connected Repair Target partitioning and stable paging
-
-The production bundle intentionally excludes `.so`, `.dylib`, and `.pyd`.
-Therefore verification must include both:
-
-1. native import/parity in an editable build environment; and
-2. Python fallback in a clean physical skill bundle.
+Verification recomputes temporary evidence, compares interior, exterior,
+multiresolution, and combined Observable Geometry identities, and publishes no
+Measured Step. Route build manifests separately prove source-to-artifact
+derivation.
+
+## Invariants
+
+- Coordinate contract is `trellis2_canonical/1`, cube `[-0.5, 0.5]^3`,
+  boundary epsilon `1e-9`, and maximum depth 8.
+- Integer occupancy evidence and persisted set identities are authoritative.
+- Repair Target masks are disjoint and their union is the complete current
+  depth-8 error set.
+- Display order is deterministic but non-prescriptive.
+- Published directories are immutable; identical retries are idempotent and
+  conflicting retries fail closed.
+- Public measurement defaults to the native C++ occupancy backend and fails
+  closed if the extension is unavailable. Python occupancy is selected only
+  explicitly for parity and tests.
+- Unknown, corrupt, or mixed measurement documents receive
+  `unsupported_or_invalid_voxblame_state`.

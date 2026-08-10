@@ -1,4 +1,4 @@
 interface:
   display_name: "Mesh Compare"
-  short_description: "Compute similarity metrics between two 3D mesh files."
-  default_prompt: "Use $mesh-compare to compute deterministic Chamfer, Hausdorff, and directional percentile metrics between two meshes and optionally render a heatmap or side-by-side comparison."
+  short_description: "Produce canonical VoxBlame evidence and residual previews."
+  default_prompt: "Use $mesh-compare to prepare a Canonical Reference, publish Measured Step evidence and Repair Targets, compute Region Diff artifacts, render formal residual previews, or verify rebuilt Observable Geometry."

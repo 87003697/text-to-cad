@@ -71,8 +71,7 @@ Parse request → Discover plan → Qualify terminal/postmortem
 - **terminal manifest 是独立硬门**：每个候选都必须有合法且含整数
   `final_status` 的 `artifact_manifest.json`；missing/invalid 时 exit 9，不上传、不
   清理，并回到 `$cvm-monitor`。monitor 返回不能代替 pull 重验。
-- **`rollout.jsonl` 默认上传**，它是新 pilot 的 cost/事故真相源；`usage.json`
-  只作为旧实验可选兼容文件。
+- **`rollout.jsonl` 默认上传**，它是 pilot 的 cost/事故真相源。
 - **`stderr.log` + `.codex/` + `__pycache__/` 默认排除**；`--include-byproducts` opt-in。
 - **rclone mount 必须健康**：跑前直接探测 `127.0.0.1:5572` RC endpoint；
   不依赖 macOS process table，探测失败则 exit 4。
@@ -120,8 +119,9 @@ Parse request → Discover plan → Qualify terminal/postmortem
 脚本退出后回给用户：
 - 上传的新 exp dir 清单（本轮 uploaded + cleaned）
 - 因失败态/postmortem 默认保留在 CVM 的 exp 清单
-- 每 exp artifact 存在性 check（从 mount 侧读）：`notes.md` / `compare_metrics.json` /
-  `rollout.jsonl` / `previews/` 各标 ✓/✗；`usage.json` 仅兼容旧实验
+- 每 exp artifact 存在性 check（从 mount 侧读）：`workspace.json` /
+  `step_index.json` / `notes.md` / `final/manifest.json` / `rollout.jsonl`
+  各标 ✓/✗；未发布 Final Delivery 时必须说明对应 Workspace 状态
 - 下一步提示：`/pilot-review outputs/<group>/`（推荐指向刚上传的整个 group，
   一次审多个 exp；`outputs/` 是 symlink 指向 mount）
 

@@ -16,7 +16,7 @@ from meshscope.voxblame.errors import (
     OctreeError,
     UnsupportedOrInvalidVoxBlameState,
 )
-from meshscope.voxblame.grading import decode_octant_prefix
+from meshscope.voxblame.tree import decode_octant_prefix
 from meshscope.voxblame.tree import SurfaceTree
 
 if TYPE_CHECKING:

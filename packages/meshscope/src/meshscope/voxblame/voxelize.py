@@ -12,7 +12,7 @@ from meshscope.voxblame.frame import CanonicalFrame, mesh_vertices
 from meshscope.voxblame.tree import SurfaceTree, validate_depth
 
 
-Backend = Literal["auto", "python", "native"]
+Backend = Literal["python", "native"]
 
 
 def voxelize_mesh(
@@ -20,7 +20,7 @@ def voxelize_mesh(
     frame: CanonicalFrame,
     max_depth: int,
     *,
-    backend: Backend = "auto",
+    backend: Backend = "native",
 ) -> SurfaceTree:
     """Convert a validated world-space mesh into canonical surface occupancy."""
     validate_depth(max_depth)
@@ -44,7 +44,7 @@ def build_lattice_tree(
     triangles: np.ndarray,
     max_depth: int,
     *,
-    backend: Backend = "auto",
+    backend: Backend = "native",
 ) -> SurfaceTree:
     """Build a tree directly from canonical-lattice float64 triangles."""
     validate_depth(max_depth)
@@ -53,22 +53,19 @@ def build_lattice_tree(
         raise SurfaceTreeError("triangles must have shape [F, 3, 3]")
     if not len(geometry) or not np.all(np.isfinite(geometry)):
         raise SurfaceTreeError("triangles must contain finite geometry")
-    if backend not in {"auto", "python", "native"}:
-        raise SurfaceTreeError("backend must be auto, python, or native")
-    native = None
-    if backend != "python":
-        try:
-            from meshscope.voxblame import _native as native
-        except ImportError:
-            if backend == "native":
-                raise SurfaceTreeError(
-                    "native octree backend is unavailable"
-                ) from None
-    if native is not None:
-        masks, span_bytes, leaf_count = native.build(geometry, max_depth)
-        spans = np.frombuffer(span_bytes, dtype=np.dtype("<u4"))
-        return SurfaceTree(max_depth, masks, spans, int(leaf_count))
-    return _build_python(geometry, max_depth)
+    if backend not in {"python", "native"}:
+        raise SurfaceTreeError("backend must be python or native")
+    if backend == "python":
+        return _build_python(geometry, max_depth)
+    try:
+        from meshscope.voxblame import _native as native
+    except ImportError:
+        raise SurfaceTreeError(
+            "native octree backend is unavailable"
+        ) from None
+    masks, span_bytes, leaf_count = native.build(geometry, max_depth)
+    spans = np.frombuffer(span_bytes, dtype=np.dtype("<u4"))
+    return SurfaceTree(max_depth, masks, spans, int(leaf_count))
 
 
 def _build_python(triangles: np.ndarray, max_depth: int) -> SurfaceTree:

@@ -21,7 +21,7 @@ from meshscope.voxblame.errors import (
     OctreeError,
     UnsupportedOrInvalidVoxBlameState,
 )
-from meshscope.voxblame.grading import decode_octant_prefix
+from meshscope.voxblame.tree import decode_octant_prefix
 from meshscope.voxblame.targets import _expand_region_set, page_repair_targets
 from meshscope.voxblame.tree import SurfaceTree
 

@@ -1,5 +1,2 @@
-numpy
-Pillow
-playwright
-scipy
-trimesh[easy]
+./scripts/packages/meshscope
+./scripts/packages/meshshot

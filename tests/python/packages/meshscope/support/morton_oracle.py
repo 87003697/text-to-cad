@@ -1,6 +1,6 @@
 """Flat Morton leaf oracle used only by VoxBlame tests.
 
-Production voxelization, persistence, and grading must not import this module.
+Production voxelization and persistence must not import this module.
 """
 
 from __future__ import annotations
@@ -20,7 +20,6 @@ from meshscope.voxblame.frame import (
     LATTICE_MIN as _LATTICE_MIN,
     mesh_vertices,
 )
-from meshscope.voxblame.grading import ErrorCell
 from meshscope.voxblame.tree import validate_depth as _validate_tree_depth
 
 _UINT64_LE = np.dtype("<u8")
@@ -120,59 +119,6 @@ def codes_digest(codes: np.ndarray) -> str:
     return hashlib.sha256(np.ascontiguousarray(canonical).tobytes()).hexdigest()
 
 
-def prefix_interval(prefix: int, depth: int, max_depth: int) -> tuple[int, int]:
-    _validate_depth(max_depth)
-    if depth < 0 or depth > max_depth:
-        raise OctreeError("prefix depth lies outside max_depth")
-    if prefix < 0 or prefix >= (1 << (3 * depth)):
-        raise OctreeError("prefix lies outside its depth")
-    remaining = 3 * (max_depth - depth)
-    return prefix << remaining, (prefix + 1) << remaining
-
-
-def prefix_occupied(codes: np.ndarray, prefix: int, depth: int, max_depth: int) -> bool:
-    lower, upper = prefix_interval(prefix, depth, max_depth)
-    left = int(np.searchsorted(codes, np.uint64(lower), side="left"))
-    if left >= len(codes):
-        return False
-    return int(codes[left]) < upper
-
-
-def grade_codes(
-    reference_codes: np.ndarray,
-    candidate_codes: np.ndarray,
-    max_depth: int,
-    *,
-    visit_counts: dict[str, int] | None = None,
-) -> list[ErrorCell]:
-    """Return flat-oracle first mismatches."""
-    reference = validate_codes(reference_codes, max_depth)
-    candidate = validate_codes(candidate_codes, max_depth)
-    errors: list[ErrorCell] = []
-
-    def visit(prefix: int, depth: int) -> None:
-        if visit_counts is not None:
-            visit_counts["visited"] = visit_counts.get("visited", 0) + 1
-        reference_valid = prefix_occupied(reference, prefix, depth, max_depth)
-        candidate_valid = prefix_occupied(candidate, prefix, depth, max_depth)
-        if reference_valid != candidate_valid:
-            errors.append(
-                ErrorCell(
-                    prefix,
-                    depth,
-                    "missing" if reference_valid else "excess",
-                )
-            )
-            return
-        if not reference_valid or depth == max_depth:
-            return
-        for child in range(8):
-            visit((prefix << 3) | child, depth + 1)
-
-    visit(0, 0)
-    return errors
-
-
 def build_surface_codes(
     mesh: trimesh.Trimesh | str | Path,
     frame: CanonicalFrame,
@@ -186,7 +132,9 @@ def build_surface_codes(
     """
     _validate_depth(max_depth)
     resolved = _load_mesh(mesh, "mesh")
-    lattice_triangles = frame.to_lattice(np.asarray(resolved.triangles, dtype=np.float64))
+    lattice_triangles = frame.world_to_lattice(
+        np.asarray(resolved.triangles, dtype=np.float64)
+    )
     edges_a = lattice_triangles[:, 1] - lattice_triangles[:, 0]
     edges_b = lattice_triangles[:, 2] - lattice_triangles[:, 0]
     doubled_areas = np.linalg.norm(np.cross(edges_a, edges_b), axis=1)
