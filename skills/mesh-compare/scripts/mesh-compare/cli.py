@@ -31,6 +31,7 @@ from meshscope.voxblame import (
     publish_prepare_failure,
     run_step,
     validate_preview_identity,
+    verify_step,
 )
 from meshshot import MeshGeometry, load_profile, render_residual_preview
 
@@ -171,6 +172,39 @@ def _prepare_reference_main(argv: list[str]) -> int:
         )
     )
     return 0
+
+
+def _verify_main(argv: list[str]) -> int:
+    parser = argparse.ArgumentParser(
+        prog="mesh-compare voxblame-verify",
+        description="Verify a rebuilt mesh without publishing a Measured Step.",
+    )
+    parser.add_argument("candidate", type=Path, help="Rebuilt canonical mesh")
+    parser.add_argument("--reference", type=Path, required=True)
+    parser.add_argument("--workspace", type=Path, required=True)
+    parser.add_argument("--against-step", type=int, required=True)
+    parser.add_argument("--output", type=Path, required=True)
+    args = parser.parse_args(argv)
+    try:
+        result = verify_step(
+            args.reference,
+            args.candidate,
+            args.workspace,
+            against_step=args.against_step,
+            output=args.output,
+        )
+    except Exception as exc:
+        return _emit_error("verification_failed", _compact_detail(exc))
+    payload = {
+        "ok": result.verification["verified"],
+        "output": str(args.output) if result.published else None,
+        "verification": result.verification,
+    }
+    print(json.dumps(payload, separators=(",", ":")))
+    if result.verification["verified"]:
+        return 0
+    print("verification_mismatch: rebuilt Observable Geometry differs", file=sys.stderr)
+    return 2
 
 
 def _targets_main(argv: list[str]) -> int:
@@ -386,6 +420,8 @@ def main(argv=None) -> int:
         return _measure_main(argv[1:])
     if argv and argv[0] == "voxblame-prepare-reference":
         return _prepare_reference_main(argv[1:])
+    if argv and argv[0] == "voxblame-verify":
+        return _verify_main(argv[1:])
     if argv and argv[0] == "voxblame-targets":
         return _targets_main(argv[1:])
     if argv and argv[0] == "voxblame-diff":

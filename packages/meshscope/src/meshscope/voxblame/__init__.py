@@ -73,6 +73,11 @@ from meshscope.voxblame.grading import (
 from meshscope.voxblame.session import run_step
 from meshscope.voxblame.targets import page_repair_targets
 from meshscope.voxblame.tree import SurfaceTree, tree_from_codes
+from meshscope.voxblame.verification import (
+    VERIFICATION_SCHEMA,
+    VerifyStepResult,
+    verify_step,
+)
 from meshscope.voxblame.voxelize import build_lattice_tree, voxelize_mesh
 
 __all__ = [
@@ -99,6 +104,8 @@ __all__ = [
     "PreviewScene",
     "PublishPreviewResult",
     "ValidatedPreviewIdentity",
+    "VERIFICATION_SCHEMA",
+    "VerifyStepResult",
     "REGION_DIFF_SCHEMA",
     "REPAIR_BATCH_SCHEMA",
     "RegionDiffResult",
@@ -134,6 +141,7 @@ __all__ = [
     "validate_report_contract",
     "validate_session_contract",
     "validate_summary_contract",
+    "verify_step",
     "world_bounds",
     "write_surface_tree",
 ]

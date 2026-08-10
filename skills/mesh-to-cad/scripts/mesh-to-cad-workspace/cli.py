@@ -13,6 +13,7 @@ from workspace_core import (
     FAILED_ATTEMPT_RESULTS,
     WorkspaceError,
     begin_attempt,
+    finalize_workspace,
     initialize_workspace,
     publish_step_zero,
     publish_cycle,
@@ -114,6 +115,13 @@ def _parser() -> argparse.ArgumentParser:
     cycle.add_argument("--assessment", type=Path, required=True)
     cycle.add_argument("--source-changes", type=Path, required=True)
 
+    finalize = commands.add_parser(
+        "finalize", help="Rebuild, verify, and publish Final Delivery"
+    )
+    _workspace_argument(finalize)
+    finalize.add_argument("--selection", type=Path, required=True)
+    finalize.add_argument("--notes", type=Path, required=True)
+
     validate = commands.add_parser("validate", help="Validate Workspace authority")
     _workspace_argument(validate)
 
@@ -186,6 +194,13 @@ def main(argv: list[str] | None = None) -> int:
                 source_changes=args.source_changes,
             )
             _emit({"ok": True, "cycle": value})
+        elif args.command == "finalize":
+            value = finalize_workspace(
+                args.workspace,
+                selection=args.selection,
+                notes=args.notes,
+            )
+            _emit({"ok": True, "final": value})
         elif args.command == "validate":
             result = validate_workspace(args.workspace)
             _emit({"ok": True, "valid": True, "graph": result.graph, "recovery": result.recovery})

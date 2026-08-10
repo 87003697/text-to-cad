@@ -12,6 +12,8 @@ Invoke it with the active project Python:
     python skills/mesh-to-cad/scripts/mesh-to-cad-workspace record-attempt ...
     python skills/mesh-to-cad/scripts/mesh-to-cad-workspace publish-step-zero ...
     python skills/mesh-to-cad/scripts/mesh-to-cad-workspace publish-cycle ...
+    python skills/mesh-to-cad/scripts/mesh-to-cad-workspace finalize \
+      --workspace <EXP_DIR> --selection <final-selection.json> --notes <notes.md>
     python skills/mesh-to-cad/scripts/mesh-to-cad-workspace status ...
     python skills/mesh-to-cad/scripts/mesh-to-cad-workspace rebuild-index ...
     python skills/mesh-to-cad/scripts/mesh-to-cad-workspace recover ...
@@ -38,8 +40,14 @@ run returns the wrapped command's exit code.
   identities must agree.
 - record-attempt publishes failed or strategy-changed Attempts without
   creating a Measured Step.
+- finalize validates Agent-owned selection evidence, copies only the selected
+  recipe's declared inputs into isolated staging, executes the registered CAD
+  or implicit rebuild, proves build provenance, runs non-publishing VoxBlame
+  equivalence, renders the final preview, and atomically publishes `final/`.
+  `measurement.json` is an unchanged Selected Step summary; verification is a
+  separate non-step artifact.
 - step_index.json is a compact derived graph. rebuild-index recreates it
-  from immutable step, cycle, and attempt authority.
+  from immutable step, cycle, attempt, and Final Delivery authority.
 
 Step numbers do not imply ancestry. Every nonzero measurement, Measured Step,
 Repair Cycle, Region Diff, assessment, and source-change document names the
@@ -66,6 +74,15 @@ post-rename interruption remains recoverable, including failed Attempt
 publication. Protocol-scoped VoxBlame paths are checked before any authority
 rename. Unknown staged state fails closed.
 
+Final Delivery contains `source/`, rebuilt `artifacts/`, `build.json`,
+`rebuild.json`, the unchanged Selected Step `measurement.json`, independent
+`verification.json`, final `preview.png`/`preview.json`, `selection.json`, and
+`manifest.json`. Rebuild success never upgrades an unaccepted selection.
+Source mutation, network-enabled recipes, provenance or Observable Geometry
+mismatch, Agent semantic conflict, and exhausted render retries publish no
+`final/`; historical artifacts and previews are never fallbacks. After the
+scoped final commit succeeds, mutable `work/` contents are removed.
+
 ## Git and telemetry boundary
 
 The experiment directory must already be a Git repository root. Initialization
@@ -76,8 +93,10 @@ existing rules, LFS attributes for protocol binary artifacts. Publication:
 - stages only the paths declared by that protocol transaction;
 - verifies the LFS filter before committing binary artifacts; and
 - binds Workspace, Attempt, Step, Cycle, plan, candidate, and Observable
-  Geometry identities through commit trailers. Validation checks the current
-  publishing commit for each authority path, not any older matching message.
+  Geometry identities through commit trailers. Final publication additionally
+  binds Selected Step, inherited acceptance, and Final Delivery identity.
+  Validation checks the current publishing commit for each authority path, not
+  any older matching message.
 
 `workspace.json` also freezes input and setup tree identities. Validation
 recomputes them so mutation of prepared authority is reported as corruption.

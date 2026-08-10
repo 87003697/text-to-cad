@@ -90,6 +90,11 @@ class MeasureStepCliTests(unittest.TestCase):
         self.assertEqual(str(self.output), payload["output"])
         summary = payload["measurement"]
         self.assertEqual(MEASUREMENT_SUMMARY_SCHEMA, summary["schema"])
+        self.assertEqual("voxblame.summary/1", summary["schema"])
+        self.assertEqual(
+            "voxblame/steps/000000/measurement.json",
+            summary["report"],
+        )
         self.assertEqual(
             list(range(1, 9)),
             [item["depth"] for item in summary["errors_by_depth"]],
@@ -102,6 +107,104 @@ class MeasureStepCliTests(unittest.TestCase):
                     encoding="utf-8"
                 )
             ),
+        )
+
+    def test_verify_command_proves_rebuilt_geometry_without_publishing_a_step(
+        self,
+    ) -> None:
+        self.assertEqual(
+            0,
+            self.invoke(
+                "voxblame-measure",
+                str(self.candidate),
+                "--reference",
+                str(self.reference),
+                "--output",
+                str(self.output),
+                "--step",
+                "0",
+            )[0],
+        )
+        verification_path = self.root / "verification.json"
+
+        status, payload, stderr = self.invoke(
+            "voxblame-verify",
+            str(self.candidate),
+            "--reference",
+            str(self.reference),
+            "--workspace",
+            str(self.output),
+            "--against-step",
+            "0",
+            "--output",
+            str(verification_path),
+        )
+
+        self.assertEqual(0, status, stderr)
+        self.assertTrue(payload["ok"])
+        verification = payload["verification"]
+        self.assertEqual("voxblame.verification/1", verification["schema"])
+        self.assertEqual(0, verification["against_step"])
+        self.assertEqual(
+            {
+                "interior": True,
+                "exterior": True,
+                "observable": True,
+                "errors_by_depth": True,
+            },
+            verification["equality"],
+        )
+        self.assertTrue(verification["verified"])
+        self.assertEqual(
+            verification,
+            json.loads(verification_path.read_text(encoding="utf-8")),
+        )
+        self.assertEqual(
+            ["000000"],
+            sorted(path.name for path in (self.output / "steps").iterdir()),
+        )
+
+    def test_verify_mismatch_publishes_no_verification_or_measured_step(self) -> None:
+        self.assertEqual(
+            0,
+            self.invoke(
+                "voxblame-measure",
+                str(self.candidate),
+                "--reference",
+                str(self.reference),
+                "--output",
+                str(self.output),
+                "--step",
+                "0",
+            )[0],
+        )
+        shifted = trimesh.load(self.candidate, force="mesh", process=False)
+        shifted.apply_translation([0.0, 0.05, 0.0])
+        rebuilt = self.root / "shifted.ply"
+        shifted.export(rebuilt)
+        verification_path = self.root / "mismatch-verification.json"
+
+        status, payload, stderr = self.invoke(
+            "voxblame-verify",
+            str(rebuilt),
+            "--reference",
+            str(self.reference),
+            "--workspace",
+            str(self.output),
+            "--against-step",
+            "0",
+            "--output",
+            str(verification_path),
+        )
+
+        self.assertEqual(2, status)
+        self.assertFalse(payload["ok"])
+        self.assertFalse(payload["verification"]["verified"])
+        self.assertFalse(verification_path.exists())
+        self.assertIn("verification_mismatch", stderr)
+        self.assertEqual(
+            ["000000"],
+            sorted(path.name for path in (self.output / "steps").iterdir()),
         )
 
     def test_measure_command_reports_failure_as_one_json_object(self) -> None:

@@ -46,7 +46,7 @@ from meshscope.voxblame.tree import SurfaceTree, tree_from_codes
 from meshscope.voxblame.voxelize import Backend, build_lattice_tree, voxelize_mesh
 
 
-MEASUREMENT_SUMMARY_SCHEMA = "voxblame.measurement-summary/1"
+MEASUREMENT_SUMMARY_SCHEMA = "voxblame.summary/1"
 _SURFACE_PROFILE = "conservative_surface_occupancy/1"
 _TARGET_PROFILE = "repair_target_partition/1"
 _EXTERIOR_PROFILE = "signed_exterior_surface/1"
@@ -410,7 +410,7 @@ def _summary_document(measurement: dict[str, Any]) -> dict[str, Any]:
         "max_depth": measurement["max_depth"],
         "step": measurement["step"],
         "compare_to": measurement["compare_to"],
-        "artifact": artifact_path,
+        "report": artifact_path,
         "canonical_reference": measurement["canonical_reference"],
         "measurement": measurement["measurement"],
         "errors_by_depth": measurement["errors_by_depth"],

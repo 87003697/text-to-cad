@@ -39,6 +39,11 @@ python skills/mesh-compare/scripts/mesh-compare voxblame-measure <candidate_mesh
 python skills/mesh-compare/scripts/mesh-compare voxblame-targets \
   --output "${EXP_DIR}/voxblame" --step <N> [--offset <OFFSET>]
 
+# Verify a rebuilt candidate without publishing another Measured Step
+python skills/mesh-compare/scripts/mesh-compare voxblame-verify <rebuilt_mesh> \
+  --reference "${EXP_DIR}/input" --workspace "${EXP_DIR}/voxblame" \
+  --against-step <N> --output "${EXP_DIR}/work/verification.json"
+
 # Publish objective evidence for one frozen multi-target Repair Batch
 python skills/mesh-compare/scripts/mesh-compare voxblame-diff \
   --workspace "${EXP_DIR}/voxblame" --from-step <M> --to-step <N> \
@@ -100,7 +105,7 @@ when to use `heatmap` vs `side-by-side`.
    candidate already uses its unitless `trellis2_canonical/1` coordinates.
    Step 0 has no parent; every nonzero step requires an explicit earlier
    `--compare-to`. The command atomically publishes `voxblame.measurement/1`
-   plus a compact `voxblame.measurement-summary/1` containing objective depth
+   plus a compact `voxblame.summary/1` containing objective depth
    1-8 facts and the first Repair Target page. Follow each non-null
    `next_offset` with `voxblame-targets` until every target is inspected. Target
    `display_rank` is a stable display order; use the missing/excess counts as
@@ -126,6 +131,12 @@ when to use `heatmap` vs `side-by-side`.
     Exterior markers point toward off-frame candidate surface while the bound
     exterior snapshot identity remains objective measurement evidence. Use
     `--variant final --selected-step <N>` only for the Selected Step.
+12. **(Final rebuild equivalence.)** Run `voxblame-verify` only on the GLB
+    emitted by the registered final rebuild recipe. It recomputes candidate
+    evidence in temporary state and compares interior tree, exterior snapshot,
+    combined Observable Geometry, and depth-1–8 evidence with the named
+    Measured Step. It never publishes a new step; mismatch writes no successful
+    verification artifact.
 
 ## Handoff
 
@@ -148,6 +159,10 @@ Return outputs based on which CLI(s) were invoked:
 - **Formal preview (`voxblame-preview`)**: return `preview.png` and
   `preview.json`. Report the profile digest, candidate/reference identities,
   render variant, and any exterior directions from the metadata.
+- **Final verification (`voxblame-verify`)**: return
+  `voxblame.verification/1`, its Selected Step and rebuilt identities, and all
+  four equality facts. Keep route build provenance separate; the build manifest
+  owns source-to-GLB derivation.
 - **Render CLI (`mesh-render`)**: return the PNG path(s) produced
   (`heatmap` and/or `side-by-side` mode).
 - **Both invoked (workflow-typical)**: return both JSON and PNG paths.
