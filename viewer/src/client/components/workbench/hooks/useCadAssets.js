@@ -48,7 +48,11 @@ import { RENDER_FORMAT, entrySourceFormat } from "cadjs/lib/fileFormats";
 import { buildDisplayEdgeRuntime, buildSelectorRuntime, composeSelectorRuntimes } from "cadjs/lib/selectors/runtime";
 import { selectRequestedAssemblyComponents } from "../../../workbench/referenceSelection";
 
-const ROBOT_MESH_LOAD_CONCURRENCY = 3;
+// Robot link meshes are STLs, and `loadRenderStl` parses them in the STL worker — the
+// fetch and the parse both happen off the main thread. The cap used to be 3 with a
+// main-thread yield either side of every mesh, which was right when parsing blocked the
+// UI and is pure latency now: it serialised 13 fetches three at a time for no benefit.
+const ROBOT_MESH_LOAD_CONCURRENCY = 8;
 
 function toVectorArray(value) {
   if (!Array.isArray(value) || value.length < 3) {
@@ -119,15 +123,6 @@ function abortLoad(controllerRef) {
   controllerRef.current = null;
 }
 
-function browserYield() {
-  if (typeof window === "undefined" || typeof window.setTimeout !== "function") {
-    return Promise.resolve();
-  }
-  return new Promise((resolve) => {
-    window.setTimeout(resolve, 0);
-  });
-}
-
 function abortError() {
   if (typeof DOMException === "function") {
     return new DOMException("The operation was aborted.", "AbortError");
@@ -144,7 +139,8 @@ function robotMeshLoadConcurrency() {
   if (!Number.isFinite(hardwareConcurrency) || hardwareConcurrency <= 0) {
     return ROBOT_MESH_LOAD_CONCURRENCY;
   }
-  return Math.max(2, Math.min(ROBOT_MESH_LOAD_CONCURRENCY, Math.floor(hardwareConcurrency / 2)));
+  // Bounded by cores because the worker still parses serially; going wider only queues.
+  return Math.max(2, Math.min(ROBOT_MESH_LOAD_CONCURRENCY, hardwareConcurrency));
 }
 
 // Component-GLB packages fan out to many small content-addressed GLBs (141 for
@@ -181,11 +177,9 @@ async function loadRenderRobotMeshes(meshUrls, { signal, onProgress } = {}) {
     if (signal?.aborted) {
       throw abortError();
     }
-    await browserYield();
     const mesh = await loadRenderMeshByUrl(meshUrl, { signal, fallback: RENDER_FORMAT.STL });
     completed += 1;
     onProgress?.(completed, total);
-    await browserYield();
     return mesh;
   });
 }
@@ -835,6 +829,10 @@ export function useCadAssets({
       const urdfData = payload.urdfData;
       const meshUrls = urdfMeshUrls(urdfData);
       setUrdfLoadStage(meshUrls.length ? "loading meshes" : "building robot");
+      // The robot is published ONCE, complete. Drawing links as they arrive was tried and
+      // rejected: a half-built robot on screen with the loading card already gone gives no
+      // sign whether more is coming, so it reads as a broken model rather than a loading
+      // one. The counted stage below is the progress signal instead.
       const meshes = await loadRenderRobotMeshes(meshUrls, {
         signal: controller.signal,
         onProgress: (completed, total) => {
@@ -853,7 +851,8 @@ export function useCadAssets({
         kind: entry.kind,
         urdfHash: entryUrdfAssetHash(entry),
         urdfData,
-        meshesByUrl
+        meshesByUrl,
+        complete: true
       });
       setUrdfStatus(ASSET_STATUS.READY);
     } catch (err) {

@@ -7,26 +7,10 @@ import {
 } from "@/components/ui/context-menu";
 import { fileAccessAssetsForEntry } from "@/workbench/fileAccessAssets";
 import {
-  IMPLICIT_EXPORT_FORMATS,
-  STEP_EXPORT_FORMATS,
+  exportFormatsForEntry,
   isImportedStepEntry,
   exportItemLabel
 } from "@/workbench/modelExport";
-
-// Kinds the server can export through /__cad/export, with the formats each offers.
-// An implicit exports to mesh formats only: its `.implicit.js` source IS the native
-// file, so there is nothing to "download", and cadgen.implicit_export meshes it
-// server-side from the live model.
-function modelExportFormatsForEntry(entry) {
-  const kind = String(entry?.kind || "").trim().toLowerCase();
-  if (kind === "step" || kind === "assembly") {
-    return STEP_EXPORT_FORMATS;
-  }
-  if (kind === "implicit") {
-    return IMPLICIT_EXPORT_FORMATS;
-  }
-  return null;
-}
 
 function ExplorerViewSection({
   entry,
@@ -131,8 +115,8 @@ function ModelExportSection({
   busyKey = "",
   onExportModelFile
 }) {
-  const exportFormats = modelExportFormatsForEntry(entry);
-  if (typeof onExportModelFile !== "function" || !exportFormats) {
+  const exportFormats = exportFormatsForEntry(entry);
+  if (typeof onExportModelFile !== "function" || !exportFormats.length) {
     return null;
   }
   const fileRef = String(entry?.file || entry?.id || "").trim();
@@ -176,7 +160,7 @@ export default function FileAccessContextMenu({
   const assetActionsAvailable = entry && typeof onDownloadFileAsset === "function";
   const modelExportAvailable = entry &&
     typeof onExportModelFile === "function" &&
-    !!modelExportFormatsForEntry(entry);
+    exportFormatsForEntry(entry).length > 0;
   if (!revealInExplorerViewAvailable && !assetActionsAvailable && !modelExportAvailable) {
     return children;
   }

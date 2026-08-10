@@ -16,9 +16,12 @@ import { cn } from "@/ui/utils";
 import { RENDER_FORMAT } from "@/workbench/constants";
 import { TUTORIAL_TIP_IDS } from "@/workbench/persistence";
 import {
-  isMeshRenderFormat,
-  isRobotRenderFormat
-} from "cadjs/lib/fileFormats";
+  PARAMETER_SOURCE,
+  renderCapabilities,
+  supportsTool,
+  viewportContentKind,
+  VIEWPORT_CONTENT
+} from "cadjs/lib/renderCapabilities";
 import {
   CAMERA_PROJECTION,
   normalizeCameraProjection
@@ -163,6 +166,13 @@ function ViewerContextMenu({
                 >
                   Reset Zoom
                 </DropdownMenuItem>
+                <DropdownMenuItem
+                  className={itemClassName}
+                  disabled={menu.zoomToFitDisabled === true}
+                  onSelect={() => handleAction(onZoomToFit)}
+                >
+                  Zoom To Fit
+                </DropdownMenuItem>
               </>
             ) : null}
             {menu.showCameraActions !== false && menu.showExpandCollapse === true ? (
@@ -297,8 +307,6 @@ export default function CadRenderPane({
   pickableVertices,
   focusedPartIds = "",
   displaySettings = null,
-  onProjectionChange,
-  onDisplayModeChange,
   boundsAnimationActive = false,
   drawToolActive,
   drawingTool,
@@ -354,22 +362,28 @@ export default function CadRenderPane({
     };
   }, [stepParameters, liveStepAnimation]);
   const viewerAlertIconLabel = "Viewer error. See the Issues section for details.";
-  const dxfMode = renderFormat === RENDER_FORMAT.DXF;
-  const urdfMode = isRobotRenderFormat(renderFormat);
-  const implicitMode = renderFormat === RENDER_FORMAT.IMPLICIT;
-  const meshOnlyMode = isMeshRenderFormat(renderFormat);
-  // Formats with no per-part topology to select, annotate or explode: a plain
-  // mesh has no parts, and an implicit is a single SDF body. Both hand the
-  // viewer the same stripped-down prop set.
-  const bodyOnlyMode = meshOnlyMode || implicitMode;
-  const pathPreviewMode = meshOnlyMode;
-  const stepDisplaySettingsActive = renderFormat === RENDER_FORMAT.STEP && !!displaySettings && !dxfMode && !pathPreviewMode;
-  // Projection is a theme trait now; STEP views take it from the active theme
-  // (Light/Dark are orthographic, stage themes perspective), everything else
-  // keeps its historical perspective framing.
-  const cadProjection = stepDisplaySettingsActive
-    ? normalizeCameraProjection(themeSettings?.projection)
-    : CAMERA_PROJECTION.PERSPECTIVE;
+  // One capability lookup replaces the per-format mode booleans. Every gate below asks
+  // what this format CAN do; none of them ask what it IS.
+  const capabilities = renderCapabilities(renderFormat);
+  const implicitMode = viewportContentKind(renderFormat) === VIEWPORT_CONTENT.IMPLICIT;
+  const drawEnabled = supportsTool(renderFormat, "draw");
+  // Formats with no per-part topology to select, annotate or explode: a plain mesh has
+  // no parts, and an implicit is a single SDF body. Both hand the viewer the same
+  // stripped-down prop set.
+  const hasParts = capabilities.parts;
+  const hasTopology = capabilities.topology;
+  const displaySettingsActive = capabilities.displayModes && !!displaySettings;
+  // Projection is a THEME trait, honoured by every format that declares it — not a
+  // STEP privilege. Leaving the others pinned to perspective meant the default
+  // workbench theme (which is orthographic) was being ignored by four formats out of
+  // five. A plan view additionally forces orthographic: a top-down lock still
+  // foreshortens off-centre under perspective, which is exactly what a plan view must
+  // not do.
+  const cadProjection = planMode
+    ? CAMERA_PROJECTION.ORTHOGRAPHIC
+    : capabilities.themeProjection
+      ? normalizeCameraProjection(themeSettings?.projection)
+      : CAMERA_PROJECTION.PERSPECTIVE;
   const stepBoundsAnimationActive = Boolean(resolvedStepParameters?.animationState?.playing);
   const cadViewerBoundsAnimationActive = Boolean(boundsAnimationActive || stepBoundsAnimationActive);
   const missingFileLabel = String(missingFileRef || "").trim();
@@ -388,9 +402,9 @@ export default function CadRenderPane({
     && missingFileLabel.startsWith("/")
     && !missingFileLabel.startsWith(servedRoot.endsWith("/") ? servedRoot : `${servedRoot}/`)
   );
-  const topologySelectionPending = Boolean(referenceSelectionPending && !dxfMode && !urdfMode && !pathPreviewMode);
-  const topologySelectionUnavailable = Boolean(referenceSelectionUnavailable && !dxfMode && !urdfMode && !pathPreviewMode);
-  const topologySelectionDeferred = Boolean(referenceSelectionDeferred && selectedMeshData && !dxfMode && !urdfMode && !pathPreviewMode);
+  const topologySelectionPending = Boolean(referenceSelectionPending && hasTopology);
+  const topologySelectionUnavailable = Boolean(referenceSelectionUnavailable && hasTopology);
+  const topologySelectionDeferred = Boolean(referenceSelectionDeferred && selectedMeshData && hasTopology);
   const urdfPosePickerActive = Boolean(urdfPosePicker?.active);
   const urdfPosePickerPrompt = "Select target";
   const posePickerExitStyle = {
@@ -404,9 +418,9 @@ export default function CadRenderPane({
   // same question of it would treat every healthy implicit as an empty viewport; its content
   // is the loaded model instead.
   const viewportHasRenderableContent = implicitMode ? !!selectedImplicitModel : !!selectedMeshData;
-  const ctaMode = !meshOnlyMode && drawToolActive
+  const ctaMode = drawEnabled && drawToolActive
     ? "screenshot"
-    : !meshOnlyMode && selectionCount > 0
+    : (hasParts || hasTopology) && selectionCount > 0
       ? "selection"
       : "";
   const bottomOverlayStyle = {
@@ -497,25 +511,21 @@ export default function CadRenderPane({
         perspective={viewerPerspective}
         projection={cadProjection}
         perspectiveRef={viewerPerspectiveRef}
-        onProjectionChange={stepDisplaySettingsActive ? onProjectionChange : undefined}
-        onDisplayModeChange={stepDisplaySettingsActive ? onDisplayModeChange : undefined}
         showEdges
         recomputeNormals={false}
         themeSettings={themeSettings}
-        displaySettings={stepDisplaySettingsActive ? displaySettings : null}
-        previewMode={dxfMode ? false : previewMode}
-        showViewPlane={dxfMode ? true : !previewMode}
-        scale={urdfMode ? VIEWER_SCENE_SCALE.URDF : VIEWER_SCENE_SCALE.CAD}
+        displaySettings={displaySettingsActive ? displaySettings : null}
+        previewMode={previewMode}
+        showViewPlane={!previewMode}
+        scale={capabilities.sceneScale === "urdf" ? VIEWER_SCENE_SCALE.URDF : VIEWER_SCENE_SCALE.CAD}
         viewPlaneOffsetRight={viewPlaneOffsetRight}
         viewPlaneOffsetBottom="1rem"
         compactViewPlane={false}
         viewportFrameInsets={viewportFrameInsets}
         isLoading={viewerLoading}
-        pickMode={urdfMode || implicitMode
+        pickMode={!hasTopology && !hasParts
           ? VIEWER_PICK_MODE.NONE
           : viewerPickModeForRenderPane({
-            dxfMode,
-            meshOnlyMode,
             panToolActive,
             topologySelectionPending,
             topologySelectionUnavailable,
@@ -530,27 +540,29 @@ export default function CadRenderPane({
             focusedPartIds
           })}
         panToolActive={panToolActive}
-        renderPartsIndividually={urdfMode ? true : (renderPartsIndividually || Boolean(resolvedStepParameters?.definition))}
-        pickableParts={urdfMode || bodyOnlyMode ? EMPTY_LIST : assemblyParts}
-        hiddenPartIds={bodyOnlyMode ? [] : hiddenPartIds}
-        selectedPartIds={bodyOnlyMode ? [] : selectedPartIds}
-        hoveredPartId={bodyOnlyMode ? "" : hoveredPartId}
-        assemblyMates={bodyOnlyMode ? [] : assemblyMates}
-        selectedMateIds={bodyOnlyMode ? [] : selectedMateIds}
-        hoveredMateId={bodyOnlyMode ? "" : hoveredMateId}
-        hoveredReferenceId={bodyOnlyMode ? "" : hoveredReferenceId}
-        selectedReferenceIds={bodyOnlyMode ? [] : selectedReferenceIds}
-        selectorRuntime={bodyOnlyMode ? null : selectorRuntime}
-        displayEdgeRuntime={bodyOnlyMode ? null : displayEdgeRuntime}
-        stepParameters={bodyOnlyMode ? null : resolvedStepParameters}
-        pickableFaces={bodyOnlyMode ? [] : pickableFaces}
-        pickableEdges={bodyOnlyMode ? [] : pickableEdges}
-        pickableVertices={bodyOnlyMode ? [] : pickableVertices}
-        focusedPartId={bodyOnlyMode ? "" : focusedPartIds}
+        renderPartsIndividually={capabilities.sceneScale === "urdf"
+          ? true
+          : (renderPartsIndividually || Boolean(resolvedStepParameters?.definition))}
+        pickableParts={hasParts ? assemblyParts : EMPTY_LIST}
+        hiddenPartIds={hasParts ? hiddenPartIds : []}
+        selectedPartIds={hasParts ? selectedPartIds : []}
+        hoveredPartId={hasParts ? hoveredPartId : ""}
+        assemblyMates={hasParts ? assemblyMates : []}
+        selectedMateIds={hasParts ? selectedMateIds : []}
+        hoveredMateId={hasParts ? hoveredMateId : ""}
+        hoveredReferenceId={hasTopology ? hoveredReferenceId : ""}
+        selectedReferenceIds={hasTopology ? selectedReferenceIds : []}
+        selectorRuntime={hasTopology ? selectorRuntime : null}
+        displayEdgeRuntime={hasTopology ? displayEdgeRuntime : null}
+        stepParameters={capabilities.params === PARAMETER_SOURCE.SIDECAR ? resolvedStepParameters : null}
+        pickableFaces={hasTopology ? pickableFaces : []}
+        pickableEdges={hasTopology ? pickableEdges : []}
+        pickableVertices={hasTopology ? pickableVertices : []}
+        focusedPartId={hasParts ? focusedPartIds : ""}
         boundsAnimationActive={cadViewerBoundsAnimationActive}
-        drawingEnabled={!meshOnlyMode && drawToolActive}
+        drawingEnabled={drawEnabled && drawToolActive}
         drawingTool={drawingTool}
-        drawingStrokes={meshOnlyMode ? [] : drawingStrokes}
+        drawingStrokes={drawEnabled ? drawingStrokes : []}
         onDrawingStrokesChange={handleDrawingStrokesChange}
         onPerspectiveChange={handlePerspectiveChange}
         onHoverReferenceChange={handleModelHoverChange}

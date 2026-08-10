@@ -1,8 +1,8 @@
 import { VIEWER_PICK_MODE } from "cadjs/lib/viewer/constants.js";
 
+// Callers gate on capabilities before reaching here: a format with neither parts nor
+// topology never picks, so this function no longer needs to know which format it is.
 export function viewerPickModeForRenderPane({
-  dxfMode = false,
-  meshOnlyMode = false,
   panToolActive = false,
   topologySelectionPending = false,
   topologySelectionUnavailable = false,
@@ -18,9 +18,6 @@ export function viewerPickModeForRenderPane({
     return VIEWER_PICK_MODE.NONE;
   }
   if (topologySelectionPending || topologySelectionUnavailable || topologySelectionDeferred) {
-    return VIEWER_PICK_MODE.NONE;
-  }
-  if (dxfMode || meshOnlyMode) {
     return VIEWER_PICK_MODE.NONE;
   }
   if (

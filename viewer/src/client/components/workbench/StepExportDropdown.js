@@ -6,9 +6,7 @@ import {
   DropdownMenuTrigger
 } from "@/components/ui/dropdown-menu";
 import {
-  DXF_EXPORT_FORMATS,
-  IMPLICIT_EXPORT_FORMATS,
-  STEP_EXPORT_FORMATS,
+  exportFormatsForEntry,
   exportItemLabel
 } from "@/workbench/modelExport";
 
@@ -26,25 +24,11 @@ export function StepExportDropdown({
   contentSide = "bottom",
   contentSideOffset = 6
 }) {
-  const kind = String(selectedEntry?.kind || "").trim().toLowerCase();
-  const isStepEntry = kind === "step" || kind === "assembly" || kind === "part";
-  // Only generated drawings export (a raw imported .dxf is already the deliverable).
-  const isGeneratedDxfEntry = kind === "dxf" && selectedEntry?.sourceKind === "python";
-  // An implicit's own source IS its native file, so it exports to mesh formats only —
-  // meshed server-side by cadgen.implicit_export through the same /__cad/export route.
-  const isImplicitEntry = kind === "implicit";
-  if (
-    !selectedEntry ||
-    (!isStepEntry && !isGeneratedDxfEntry && !isImplicitEntry) ||
-    typeof onExportModelFile !== "function"
-  ) {
+  const exportFormats = exportFormatsForEntry(selectedEntry);
+  if (!selectedEntry || !exportFormats.length || typeof onExportModelFile !== "function") {
     return null;
   }
-  const exportFormats = isGeneratedDxfEntry
-    ? DXF_EXPORT_FORMATS
-    : isImplicitEntry
-      ? IMPLICIT_EXPORT_FORMATS
-      : STEP_EXPORT_FORMATS;
+  const isGeneratedDxfEntry = String(selectedEntry?.kind || "").trim().toLowerCase() === "dxf";
   const fileRef = String(selectedEntry?.file || selectedEntry?.id || "").trim();
   const label = isGeneratedDxfEntry ? "Export drawing" : "Export model";
   return (

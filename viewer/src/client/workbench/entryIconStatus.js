@@ -1,7 +1,7 @@
 import {
-  isRobotRenderFormat,
-  RENDER_FORMAT
-} from "cadjs/lib/fileFormats.js";
+  assetKindForRenderFormat,
+  ASSET_KIND
+} from "cadjs/lib/renderCapabilities.js";
 import {
   stepArtifactCanGenerate,
   stepArtifactGenerationInProgress,
@@ -40,13 +40,16 @@ export function entryIconStatus(entry, {
       .map((file) => String(file || "").trim())
       .filter(Boolean)
   );
-  const pending = normalizedSourceFormat === RENDER_FORMAT.DXF
-    ? !hasDxf
-    : normalizedSourceFormat === RENDER_FORMAT.IMPLICIT
-      ? !hasImplicit
-    : isRobotRenderFormat(normalizedSourceFormat)
-      ? !hasUrdf
-      : !hasMesh;
+  // "Has this entry's asset arrived yet?" — one question, asked against whichever asset the
+  // format actually loads. The caller still passes one flag per asset kind because the file
+  // list holds all of them at once; the format no longer decides which flag by name.
+  const loadedByAssetKind = {
+    [ASSET_KIND.MESH]: hasMesh,
+    [ASSET_KIND.DRAWING]: hasDxf,
+    [ASSET_KIND.IMPLICIT]: hasImplicit,
+    [ASSET_KIND.ROBOT]: hasUrdf
+  };
+  const pending = loadedByAssetKind[assetKindForRenderFormat(normalizedSourceFormat)] === false;
   const artifactGenerationFiles = [...activeArtifactGenerationFileSet];
   const artifactGenerationInProgress = stepArtifactGenerationInProgress({
     entry,

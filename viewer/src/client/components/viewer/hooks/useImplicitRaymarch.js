@@ -81,6 +81,24 @@ export function useImplicitRaymarch({
     runtime?.interactionState?.active === true
   );
 
+  // three's compileAsync polls `material.program.isReady()` from an internal timer.
+  // Disposing the material while that poll is live makes the poll read `.isReady` off an
+  // undefined program and throw — asynchronously, so it escapes the promise's own catch
+  // and surfaces as an uncaught TypeError. Switching models faster than shaders link
+  // (a corpus sweep, or a user scrubbing the file tree) hits it. So a pass with a compile
+  // in flight is disposed only once that compile settles.
+  const disposePass = (pass) => {
+    if (!pass) {
+      return;
+    }
+    pass.quad?.removeFromParent?.();
+    if (pass.pendingCompile) {
+      pass.pendingCompile.then(() => pass.dispose?.());
+      return;
+    }
+    pass.dispose?.();
+  };
+
   const applyUniforms = (runtime, activeModel, interaction) => {
     const material = passRef.current?.material;
     if (!material || !runtime?.THREE || !activeModel) {
@@ -194,10 +212,7 @@ export function useImplicitRaymarch({
       return;
     }
 
-    if (existing) {
-      existing.quad.removeFromParent?.();
-      existing.dispose?.();
-    }
+    disposePass(existing);
 
     const { quad, material } = nextPass;
     quad.frustumCulled = false;
@@ -241,9 +256,13 @@ export function useImplicitRaymarch({
       }
     };
     if (typeof runtime.renderer?.compileAsync === "function") {
-      runtime.renderer.compileAsync(runtime.scene, runtime.camera)
-        .catch(() => {})
-        .finally(reveal);
+      const compiling = runtime.renderer.compileAsync(runtime.scene, runtime.camera)
+        .catch(() => {});
+      nextPass.pendingCompile = compiling;
+      compiling.then(() => {
+        nextPass.pendingCompile = null;
+        reveal();
+      });
     } else {
       reveal();
     }
@@ -330,9 +349,8 @@ export function useImplicitRaymarch({
     }
     const pass = passRef.current;
     if (pass) {
-      pass.quad.removeFromParent?.();
-      pass.dispose?.();
       passRef.current = null;
+      disposePass(pass);
       runtimeRef.current?.requestRender?.();
     }
     return undefined;
@@ -341,9 +359,8 @@ export function useImplicitRaymarch({
   useEffect(() => () => {
     const pass = passRef.current;
     if (pass) {
-      pass.quad.removeFromParent?.();
-      pass.dispose?.();
       passRef.current = null;
+      disposePass(pass);
     }
   }, []);
 }
