@@ -10,11 +10,12 @@ import {
   PenTool,
   X
 } from "lucide-react";
-import { RENDER_FORMAT } from "@/workbench/constants";
 import {
-  isMeshRenderFormat,
-  isRobotRenderFormat
-} from "cadjs/lib/fileFormats";
+  renderCapabilities,
+  supportsTool,
+  viewportContentKind,
+  VIEWPORT_CONTENT
+} from "cadjs/lib/renderCapabilities";
 import { TooltipProvider } from "../ui/tooltip";
 import DrawingToolbar from "./DrawingToolbar";
 import { ToolbarButton } from "./ToolbarButton";
@@ -146,26 +147,30 @@ function DesktopFloatingToolBar({
   onExportModelFile,
   fileAccessBusyKey = ""
 }) {
-  const dxfMode = renderFormat === RENDER_FORMAT.DXF;
-  const implicitMode = renderFormat === RENDER_FORMAT.IMPLICIT;
-  const urdfMode = renderFormat === RENDER_FORMAT.URDF;
-  const robotMode = isRobotRenderFormat(renderFormat);
-  const meshOnlyMode = isMeshRenderFormat(renderFormat);
+  // What this format can do, from the one capability table — never re-derived from
+  // its identity, so a new format inherits the toolbar by declaring a row.
+  const capabilities = renderCapabilities(renderFormat);
   // "Is there anything on screen?" — asked once, for every format. An implicit
   // raymarches its own GLSL and never loads mesh data, so asking only about
   // selectedMeshData left its screenshot and orbit buttons permanently disabled
   // even though both underlying paths work.
-  const viewportContent = implicitMode ? selectedImplicitModel : selectedMeshData;
+  const viewportContent = viewportContentKind(renderFormat) === VIEWPORT_CONTENT.IMPLICIT
+    ? selectedImplicitModel
+    : selectedMeshData;
+  const showToolCluster = supportsTool(renderFormat, "select") ||
+    supportsTool(renderFormat, "pan") ||
+    supportsTool(renderFormat, "draw");
   const captureDisabled = viewerLoading || !viewportContent;
   const selectDisabled = viewerLoading ||
     !viewportContent ||
     referenceSelectionPending ||
     referenceSelectionUnavailable ||
     referenceSelectionDeferred;
-  const posePickerDisabled = viewerLoading || !selectedMeshData || !urdfPosePickerAvailable;
+  const posePickerDisabled = viewerLoading || !viewportContent || !urdfPosePickerAvailable;
   const selectLabel = referenceSelectionPending ? "Preparing selection" : "Select";
-  const showStepAnimationPlay = renderFormat === RENDER_FORMAT.STEP && stepAnimationAvailable;
-  const stepAnimationPlayDisabled = viewerLoading || !selectedMeshData || stepAnimationDisabled;
+  // Any format with animation clips gets transport controls, whichever store backs them.
+  const showStepAnimationPlay = capabilities.animations && stepAnimationAvailable;
+  const stepAnimationPlayDisabled = viewerLoading || !viewportContent || stepAnimationDisabled;
   const stepAnimationLabel = stepAnimationPlaying ? "Pause" : "Play";
 
   // Buttons shared between the full toolbar and the reduced orbit-mode toolbar.
@@ -266,10 +271,10 @@ function DesktopFloatingToolBar({
           ) : (
             <>
               {/* Select/Pan/Draw. Pan and Draw are camera and 2D-overlay tools that
-                  work against any viewport, so an implicit gets them like STEP and
-                  DXF do. Select is inert for an implicit (a single SDF body has no
-                  sub-parts to pick), exactly as it already is for DXF. */}
-              {!robotMode && !meshOnlyMode ? (
+                  work against any viewport; Select is only meaningful where there is
+                  something to pick. Each button asks the capability table, so enabling
+                  one for a new format is a data change. */}
+              {showToolCluster ? (
                 <>
                   <ToolbarButton
                     label={selectLabel}
@@ -305,7 +310,7 @@ function DesktopFloatingToolBar({
                 </>
               ) : null}
 
-              {!dxfMode && urdfMode ? (
+              {capabilities.posePicker ? (
                 <ToolbarButton
                   label="Select Pose"
                   active={urdfPosePickerActive}
@@ -343,7 +348,7 @@ function DesktopFloatingToolBar({
         </div>
       </TooltipProvider>
 
-      {!previewMode && !meshOnlyMode && drawToolActive ? (
+      {!previewMode && supportsTool(renderFormat, "draw") && drawToolActive ? (
         <DrawingToolbar
           className={CAD_WORKSPACE_TOOLBAR_DESKTOP_WIDTH_CLASS}
           drawingToolOptions={drawingToolOptions}

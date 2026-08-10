@@ -1,3 +1,5 @@
+import { entryKind } from "cadjs/lib/fileFormats.js";
+import { exportFormatsForRenderFormat } from "cadjs/lib/renderCapabilities.js";
 import { refreshCadCatalog } from "./cadManifestStore.js";
 
 // "Export model" formats for a STEP/assembly entry, in dropdown/menu order.
@@ -11,6 +13,8 @@ export const DXF_EXPORT_FORMATS = Object.freeze(["dxf"]);
 // export CLI, run SERVER-side (cadgen.implicit_export): unlike the baked render package it
 // is live-valued, so the exporter's own resolution/params defaults apply.
 export const IMPLICIT_EXPORT_FORMATS = Object.freeze(["stl", "glb", "3mf"]);
+
+const EMPTY_EXPORT_FORMATS = Object.freeze([]);
 
 const EXPORT_FORMAT_LABELS = Object.freeze({
   step: "STEP",
@@ -97,4 +101,28 @@ export async function requestModelExport({ file, format } = {}) {
     refreshCadCatalog({ markRefreshing: false }).catch(() => {});
   }
   return payload;
+}
+
+// The single answer to "what can this entry export to?", read from the capability table.
+// Both menus (the toolbar dropdown and the file context menu) used to re-derive this from
+// entry.kind independently, which is how implicit ended up in one and not the other.
+// Returns an empty list for entries with nothing to export.
+export function exportFormatsForEntry(entry) {
+  if (!entry) {
+    return EMPTY_EXPORT_FORMATS;
+  }
+  const kind = entryKind(entry);
+  // Only GENERATED drawings export; a raw imported .dxf is already the deliverable.
+  if (kind === "dxf" && entry?.sourceKind !== "python") {
+    return EMPTY_EXPORT_FORMATS;
+  }
+  // A STEP part/assembly reports its kind as part/assembly, not "step".
+  if (kind === "part" || kind === "assembly") {
+    return exportFormatsForRenderFormat("step");
+  }
+  return exportFormatsForRenderFormat(kind);
+}
+
+export function entryCanExport(entry) {
+  return exportFormatsForEntry(entry).length > 0;
 }

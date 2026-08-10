@@ -97,6 +97,14 @@ import {
   isRobotRenderFormat
 } from "cadjs/lib/fileFormats";
 import {
+  hasCapability,
+  isArtifactManagedFormat,
+  renderFormatLabel,
+  supportsTool,
+  viewportContentKind,
+  VIEWPORT_CONTENT
+} from "cadjs/lib/renderCapabilities";
+import {
   buildViewerImplicitAlert,
   buildViewerMeshAlert
 } from "@/workbench/viewerAlerts";
@@ -307,14 +315,8 @@ const DEFAULT_DOCUMENT_TITLE = "CAD Viewer";
 // therefore go through the /__cad/artifact state machine before they can render. Mirrors
 // `owns_entry` in viewer/server_py/artifact.py; an entry listed here and not there (or the
 // reverse) is a format that either never builds or reports ready forever.
-// Formats whose viewport content comes from a GENERATED package, so the viewer must check
-// freshness and may trigger a build. Implicits left this set when the raymarch renderer came
-// back: they are rendered from their own GLSL, with nothing baked to be stale, so an
-// implicit entry never blocks on a build and never shows a generating state.
-const ARTIFACT_MANAGED_SOURCE_FORMATS = Object.freeze([
-  RENDER_FORMAT.STEP,
-  RENDER_FORMAT.DXF
-]);
+// Which formats build a package before they can render is a capability
+// (`artifactManaged`), declared once and mirrored against the server's `owns_entry`.
 // File-sheet kinds that render nothing but a status tab. A mesh never had file-specific
 // controls; DXF lost its when the geometry moved into a baked render package, whose
 // settings the producer owns. Implicits are NOT here -- they raymarch, so their params,
@@ -322,16 +324,7 @@ const ARTIFACT_MANAGED_SOURCE_FORMATS = Object.freeze([
 const STATUS_ONLY_FILE_SHEET_KINDS = Object.freeze(["mesh", "dxf"]);
 
 function statusOnlyFileSheetTitle(sourceFormat) {
-  switch (sourceFormat) {
-    case RENDER_FORMAT.THREE_MF:
-      return "3MF";
-    case RENDER_FORMAT.GLB:
-      return "GLB";
-    case RENDER_FORMAT.DXF:
-      return "DXF";
-    default:
-      return "STL";
-  }
+  return renderFormatLabel(sourceFormat) || "STL";
 }
 
 // The render-ASSET formats that come out of the shared mesh loader. Read against
@@ -1486,7 +1479,7 @@ export default function CadWorkspace({
   const selectedArtifact = useArtifact(
     catalogSelectedEntry ? fileKey(catalogSelectedEntry) : "",
     {
-      enabled: ARTIFACT_MANAGED_SOURCE_FORMATS.includes(catalogSelectedEntrySourceFormat),
+      enabled: isArtifactManagedFormat(catalogSelectedEntrySourceFormat),
       freshnessKey: `${catalogSelectedEntry?.hash || ""}:${manifestRevision}`,
     }
   );
@@ -2457,6 +2450,14 @@ export default function CadWorkspace({
   ]);
   const selectedImplicitRuntimeModel = selectedImplicitRuntime.model;
   const selectedImplicitRuntimeError = selectedImplicitRuntime.error;
+  // THE content signal: "is there anything on screen?", answered once for every format
+  // from the capability table. Consumers (toolbar gates, CTA, preview mode, zoom pill,
+  // alert blocking) read this instead of guessing which loaded object backs the viewport
+  // — guessing `!selectedMeshData` is what left an implicit's buttons dead.
+  const selectedViewportContent =
+    viewportContentKind(selectedEntrySourceFormat) === VIEWPORT_CONTENT.IMPLICIT
+      ? selectedImplicitRuntimeModel
+      : selectedMeshData;
   useEffect(() => {
     implicitAnimationStateRef.current = implicitAnimationState;
   }, [implicitAnimationState]);
@@ -2978,7 +2979,7 @@ export default function CadWorkspace({
   // surfaces. Every artifact-managed format, not just STEP: a DXF or implicit build that
   // failed would otherwise spin forever behind its own error.
   const artifactBlocksRender =
-    ARTIFACT_MANAGED_SOURCE_FORMATS.includes(effectiveRenderFormat) &&
+    isArtifactManagedFormat(effectiveRenderFormat) &&
     selectedArtifact.status === "error";
   const meshViewerLoading =
     !!selectedEntry &&
@@ -3113,11 +3114,8 @@ export default function CadWorkspace({
   // shared mesh scene, nothing STEP-specific. This gate was the last place that said
   // otherwise: the toolbar showed Draw for a DXF while this kept it inert, so the drag fell
   // through to orbit.
-  const drawModeActive = (
-    selectedEntrySourceFormat === RENDER_FORMAT.STEP ||
-    selectedEntrySourceFormat === RENDER_FORMAT.IMPLICIT ||
-    selectedEntryIsDrawing
-  ) && tabToolMode === TAB_TOOL_MODE.DRAW;
+  const drawModeActive = supportsTool(selectedEntrySourceFormat, "draw") &&
+    tabToolMode === TAB_TOOL_MODE.DRAW;
   const panToolActive = tabToolMode === TAB_TOOL_MODE.PAN;
   const selectionCountBase = selectedPartIds.length + selectedReferenceIds.length + selectedMateIds.length;
 
@@ -4804,14 +4802,6 @@ export default function CadWorkspace({
     setDisplayEdgeState,
     setDisplayEdgeStatus
   ]);
-
-  useEffect(() => {
-    if (effectiveRenderFormat !== RENDER_FORMAT.DXF || !previewMode) {
-      return;
-    }
-    previewUiStateRef.current = null;
-    setPreviewMode(false);
-  }, [effectiveRenderFormat, previewMode]);
 
   const {
     currentReferences,
@@ -8030,10 +8020,8 @@ export default function CadWorkspace({
   }, [selectedEntry]);
 
   const handleEnterPreviewMode = useCallback(() => {
-    const viewportContent = effectiveRenderFormat === RENDER_FORMAT.IMPLICIT
-      ? selectedImplicitRuntimeModel
-      : selectedMeshData;
-    if (effectiveRenderFormat === RENDER_FORMAT.DXF || viewerLoading || !viewportContent || previewMode) {
+    const viewportContent = selectedViewportContent;
+    if (viewerLoading || !viewportContent || previewMode) {
       return;
     }
     previewUiStateRef.current = {
@@ -8054,12 +8042,10 @@ export default function CadWorkspace({
     setTabToolsOpen(false);
     setPreviewMode(true);
   }, [
-    effectiveRenderFormat,
     previewMode,
     sidebarOpen,
     setTabToolsOpen,
-    selectedImplicitRuntimeModel,
-    selectedMeshData,
+    selectedViewportContent,
     tabToolMode,
     tabToolsOpen,
     viewerAlertOpen,
@@ -8103,7 +8089,8 @@ export default function CadWorkspace({
       return next;
     });
   };
-  const selectionToolActive = effectiveRenderFormat === RENDER_FORMAT.STEP && tabToolMode === TAB_TOOL_MODE.REFERENCES;
+  const selectionToolActive = hasCapability(effectiveRenderFormat, "topology") &&
+    tabToolMode === TAB_TOOL_MODE.REFERENCES;
   const drawToolActive = drawModeActive;
   const selectionCount = selectionCountBase;
   const activeReferenceId = String(selectedReferenceIds[selectedReferenceIds.length - 1] || "").trim();
@@ -8381,9 +8368,7 @@ export default function CadWorkspace({
                 drawingViewToggle={selectedEntryIsDrawing}
                 drawingViewMode={drawingViewMode}
                 onDrawingViewModeChange={handleDrawingViewModeChange}
-                zoomControlsVisible={effectiveRenderFormat === RENDER_FORMAT.IMPLICIT
-                  ? !!selectedImplicitModel
-                  : !!selectedMeshData}
+                zoomControlsVisible={!!selectedViewportContent}
                 zoomPercent={viewerZoomPercent}
                 onZoomPercentChange={handleViewerZoomPercentChange}
                 onZoomReset={handleViewerZoomReset}
@@ -8640,7 +8625,7 @@ export default function CadWorkspace({
               <MeshFileSheet
                 key={`mesh:${selectedKey}`}
                 open={fileSheetOpen}
-                title={selectedEntrySourceFormat === RENDER_FORMAT.THREE_MF ? "3MF" : selectedEntrySourceFormat === RENDER_FORMAT.GLB ? "GLB" : "STL"}
+                title={statusOnlyFileSheetTitle(selectedEntrySourceFormat)}
                 isDesktop={isDesktop}
                 width={activeSheetWidth || tabToolsWidth}
                 selectedEntry={selectedEntry}
