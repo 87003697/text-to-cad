@@ -123,6 +123,21 @@ def classify_activity(tool: str, arguments: Any) -> str:
     return "other_tool"
 
 
+def classify_phases(tool: str, arguments: Any) -> tuple[str, ...]:
+    """Return every canonical phase represented by one observed tool call."""
+
+    if isinstance(arguments, (dict, list)):
+        rendered = json.dumps(arguments, sort_keys=True)
+    else:
+        rendered = str(arguments or "")
+    evidence = f"{tool} {rendered}".lower()
+    if "mesh-to-cad-workspace finalize" in evidence:
+        # Finalization owns both the isolated rebuild and its internal,
+        # non-publishing VoxBlame verification transaction.
+        return ("final_rebuild", "verification")
+    return (classify_activity(tool, arguments),)
+
+
 def _function_evidence(payloads: list[Any]) -> dict[str, Any] | None:
     calls: list[tuple[str, str, Any]] = []
     outputs: set[str] = set()
@@ -143,10 +158,12 @@ def _function_evidence(payloads: list[Any]) -> dict[str, Any] | None:
         return None
     call_id, tool, arguments = calls[-1]
     pending = bool(call_id) and call_id not in outputs
+    phases = classify_phases(tool, arguments)
     return {
         "kind": "awaiting_tool_result" if pending else "tool_completed",
         "tool": tool[:80],
-        "classification": classify_activity(tool, arguments),
+        "classification": phases[0],
+        "phases": list(phases),
         "source": "tap.function_call",
         "confidence": "high",
     }

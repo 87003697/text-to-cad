@@ -206,6 +206,13 @@ class TapObserverTests(unittest.TestCase):
         for command, expected in cases.items():
             with self.subTest(command=command):
                 self.assertEqual(tap_observer.classify_activity("exec_command", command), expected)
+        self.assertEqual(
+            ("final_rebuild", "verification"),
+            tap_observer.classify_phases(
+                "exec_command",
+                "mesh-to-cad-workspace finalize --selection chosen.json",
+            ),
+        )
 
     def test_unsupported_bad_json_and_missing_blob_fail_soft(self) -> None:
         with temporary_directory(prefix="tap-observer-") as root_text:

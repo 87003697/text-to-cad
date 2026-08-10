@@ -262,6 +262,12 @@ class PilotReviewTests(unittest.TestCase):
             if node["type"] == "attempt"
         }
         self.assertEqual({"attempt:0", "attempt:1", "attempt:2"}, attempt_ids)
+        cycle_contributors = {
+            edge["from"]
+            for edge in review["graph"]["edges"]
+            if edge["type"] == "attempt_contributes_to_cycle"
+        }
+        self.assertEqual({"attempt:2"}, cycle_contributors)
         self.assertEqual(
             "not_auditable",
             review["verdicts"]["production_runtime_integration"],

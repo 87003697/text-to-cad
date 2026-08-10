@@ -340,14 +340,13 @@ def _canonical_graph(
         _edge(edges, diff_id, assessment_id, "diff_assessed_by_agent")
         _edge(edges, assessment_id, cycle_id, "assessment_publishes_cycle")
         _edge(edges, cycle_id, f"step:{cycle['to_step']}", "cycle_publishes_step")
-        for attempt_number in cycle.get("attempt_ids", []):
-            if any(
-                node["id"] == f"attempt:{attempt_number}"
-                for node in nodes
-            ):
+        attempt_ids = cycle.get("attempt_ids", [])
+        if attempt_ids:
+            successful_attempt = attempt_ids[-1]
+            if any(node["id"] == f"attempt:{successful_attempt}" for node in nodes):
                 _edge(
                     edges,
-                    f"attempt:{attempt_number}",
+                    f"attempt:{successful_attempt}",
                     cycle_id,
                     "attempt_contributes_to_cycle",
                 )
