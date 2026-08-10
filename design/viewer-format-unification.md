@@ -6,14 +6,16 @@
 |---|---|
 | U0 registry + content signal + ratchet | **DONE** `f4d9495c` |
 | U1 projection as a viewport trait | **DONE** |
-| U2 one params/animation surface | partial — toolbar Play now gates on `animations` (U0); the copy/paste handler merge is outstanding |
-| U3 context menu + camera actions everywhere | not started |
-| U4 theme wiring fixes + capability table | partial — the capability table shipped in `viewer/docs/render-types.md`; the `lighting.rim`/`lighting.fill` wiring fixes are outstanding |
-| U5 loading/alerts/artifact state | not started |
+| U2 one params/animation surface | **DONE** `3826d4da` |
+| U3 context menu + camera actions everywhere | **DONE** `bcaf9f7a` |
+| U4 theme wiring fixes + capability table | **DONE** `b4725fae` |
+| U5 loading/alerts/artifact state | **DONE** `7dcbd2e1` |
 
-Identity-check count: **93 → 80**, locked in by
-`tests/python/global/test_viewer_format_capability_policy.py`. `FloatingToolBar` and
-`CadRenderPane` are at **zero** and asserted so.
+Identity-check count: **93 → 34**, predicate calls **→ 3**, locked in by
+`tests/python/global/test_viewer_format_capability_policy.py`. `FloatingToolBar`,
+`CadRenderPane`, `CadViewer`, `viewerAlerts`, `entryIconKind`, `entryIconStatus` and
+`CadWorkspaceHome` are at **zero** and asserted so. What remains is deliberate:
+`useCadAssets` is the loader, and `stepArtifactStatus` speaks STEP package vocabulary.
 
 ### What U0/U1 found that the plan did not predict
 
@@ -37,8 +39,49 @@ Identity-check count: **93 → 80**, locked in by
   left when its file sheet is open. With the pane measured properly, STL sits at +28px of
   centre (no sheet) and STEP/implicit at ~-163px (sheet open, inset applied) — all
   correct. Nothing to fix.
-- **DXF auto-fit frames its drawing far too small**, in every projection. Pre-existing,
-  unrelated to this work, and still open.
+
+### What U2–U5 found that the plan did not predict
+
+- **U0 half-shipped the toolbar Play button.** It flipped the gate to the `animations`
+  capability but left the button fed from STEP state, so an implicit's clips still could
+  not be played — the button was hidden, because `stepAnimationAvailable` is false for a
+  format with no sidecar. A capability without the data behind it is not a capability.
+  Fixed in U2 and A/B-measured.
+- **The viewport display/projection control had been dead since `f75c2696`
+  (2026-07-06).** Its prop chain survived — CadWorkspace → CadRenderPane → CadViewer,
+  gated on `isStepView` — so projection *looked* STEP-gated when nothing rendered it at
+  all. Deleted in U3 along with the orphaned `DisplayProjectionControl`.
+- **`isStepView` was four capabilities wearing one name** (parts, topology, displayModes,
+  sidecar params). That is why every one of its ~15 uses had to be re-read to work out
+  which sense was meant. Gone as of U3.
+- **U4's wiring fix was the smaller half.** `applyImplicitLightingUniforms` did read the
+  wrong fields, but fixing only that would have changed nothing: implicitjs's OWN
+  `normalizeThemeSettings` did not know `lighting.fill` or `lighting.rim` existed and
+  dropped them before any uniform could read them. The theme schema is duplicated across
+  `packages/cadjs` and `packages/implicitjs` (the latter may not import the former), and a
+  field added to one is silently disabled for the other.
+- **`artifactManaged` does NOT mirror the server's `owns_entry`,** despite the note U0
+  wrote saying it must. The server owns implicit entries too — it builds their packages
+  for export and snapshot — but an implicit raymarches live and must never block on that
+  build. Corrected in U5; the old note would have led someone to make implicit wait for a
+  build it has no use for.
+- **The "DXF auto-fit frames its drawing far too small" bug was not a camera bug.**
+  `parseHatchEntity` read HATCH seed points as boundary vertices; two seeds 62 m off a
+  1.8 m sheet inflated the drawing's bounds 35×, and auto-fit was faithfully framing them.
+  Fixed in `72daa145` (bounds 63817×21822 mm → 1879×1979 mm; sweep coverage 0.0055 →
+  0.0685 against a 0.005 blank threshold, so the standing gate had been one stray seed
+  away from failing for an unrelated reason).
+
+### Open
+
+- **Background parity drift in four themes** (cinematic 7.0, clay-sunrise 5.4, pink 4.7,
+  blue 4.5, out of 255), found by the U4 conformance harness. Ruled out by measurement:
+  the U4 lighting work, the implicit shader's own gradient ramp (the viewer composites the
+  raymarch over the shared stage, so that ramp is not what is on screen), and the
+  environment map. Budgeted per theme so it cannot grow or spread.
+- **The implicit's two backdrops disagree.** The shader's own ramp (headless/standalone
+  renders) is a `smoothstep`; the canvas path the mesh renderer bakes is a linear ramp
+  between stops. Unmeasured in the headless path.
 
 Execution plan. The goal, in the owner's words: unify, standardize and reuse as much
 viewer logic across file formats as possible, **so that an improvement to one file
@@ -281,6 +324,16 @@ Gate: e2e sweep incl. artifact-build flows (fresh STEP and DXF build from a clea
 `__cadgen__`), unchanged loading/alert UX per format, ratchet strictly lower.
 
 ### U6 — horizon (separate efforts, recorded so they are not re-litigated)
+
+Not started; U0–U5 are complete. Two items gained evidence on the way through:
+
+- **The theme schema is duplicated** across `packages/cadjs/src/common/themeSettings.js`
+  and `packages/implicitjs/src/common/themeSettings.js`, because implicitjs may not import
+  cadjs. U4 proved this silently disables fields (`lighting.fill`, `lighting.rim`).
+  Extracting the schema to a third dependency-free package would close the class; the
+  conformance harness catches it meanwhile.
+- **The two implicit backdrops** (shader ramp vs baked canvas gradient) belong with the
+  headless-snapshot unification below, since that is where the shader ramp is what paints.
 
 - **Per-file settings persistence**: three mechanisms exist (shared camera slice,
   `slices.implicit` params/animation, and the new DXF per-file sessionStorage from
