@@ -99,9 +99,11 @@ import {
 import {
   hasCapability,
   isArtifactManagedFormat,
+  parameterSourceKind,
   renderFormatLabel,
   supportsTool,
   viewportContentKind,
+  PARAMETER_SOURCE,
   VIEWPORT_CONTENT
 } from "cadjs/lib/renderCapabilities";
 import {
@@ -193,7 +195,8 @@ import {
 } from "@/workbench/stepAnimationStore";
 import {
   buildDefaultParameterAnimationState,
-  findParameterAnimation
+  findParameterAnimation,
+  hasParameterAnimations
 } from "@/workbench/parameterAnimation";
 import {
   buildUrdfJointAnglesCopyText,
@@ -301,10 +304,6 @@ import {
   downloadUrlForFileAsset,
   openUrlForFileAsset
 } from "@/workbench/fileAccessAssets";
-import {
-  buildStepModuleParamsCopyText,
-  parseStepModuleParamsPasteText
-} from "@/workbench/stepModuleParameterControls";
 import {
   requestModelExport,
   exportFormatLabel
@@ -1562,8 +1561,7 @@ export default function CadWorkspace({
   const selectedStepModuleDefinition = stepModuleLoadState.url === selectedStepModuleUrl
     ? stepModuleLoadState.definition
     : null;
-  const selectedStepModuleHasAnimations = Array.isArray(selectedStepModuleDefinition?.animations) &&
-    selectedStepModuleDefinition.animations.length > 0;
+  const selectedStepModuleHasAnimations = hasParameterAnimations(selectedStepModuleDefinition);
   const selectedStepModuleStatus = selectedStepModuleUrl
     ? (stepModuleLoadState.url === selectedStepModuleUrl ? stepModuleLoadState.status : "loading")
     : "idle";
@@ -2100,41 +2098,12 @@ export default function CadWorkspace({
     }));
   }, [selectedStepModuleDefinition]);
 
-  const handleCopyStepModuleParams = useCallback(async () => {
-    setScreenshotStatus("");
-    if (!selectedStepModuleDefinition?.parameters?.length) {
-      setCopyStatus("No STEP parameters to copy");
-      return;
-    }
-    try {
-      await copyTextToClipboard(buildStepModuleParamsCopyText(
-        selectedStepModuleDefinition,
-        stepModuleParameterValues
-      ));
-      setCopyStatus("Copied STEP parameters");
-    } catch (error) {
-      setCopyStatus(error instanceof Error ? error.message : "Clipboard write failed");
-    }
-  }, [selectedStepModuleDefinition, stepModuleParameterValues]);
-
-  const handlePasteStepModuleParams = useCallback(async () => {
-    setScreenshotStatus("");
-    if (!selectedStepModuleDefinition?.parameters?.length) {
-      setCopyStatus("No STEP parameters to paste");
-      return;
-    }
-    try {
-      const clipboardText = await readTextFromClipboard();
-      const { values, count } = parseStepModuleParamsPasteText(selectedStepModuleDefinition, clipboardText);
-      setStepModuleParameterValues((current) => ({
-        ...current,
-        ...values
-      }));
-      setCopyStatus(`Pasted ${count} STEP param${count === 1 ? "" : "s"}`);
-    } catch (error) {
-      setCopyStatus(error instanceof Error ? error.message : "Clipboard paste failed");
-    }
-  }, [selectedStepModuleDefinition]);
+  const applyStepModuleParameterValues = useCallback((values) => {
+    setStepModuleParameterValues((current) => ({
+      ...current,
+      ...values
+    }));
+  }, []);
 
   const handleResetStepModuleParameters = useCallback(() => {
     if (!selectedStepModuleDefinition) {
@@ -2516,45 +2485,13 @@ export default function CadWorkspace({
     ));
   }, [markImplicitParameterInteraction, selectedImplicitDefinition]);
 
-  const handleCopyImplicitParams = useCallback(async () => {
-    setScreenshotStatus("");
-    if (!selectedImplicitDefinition?.parameters?.length) {
-      setCopyStatus("No implicit parameters to copy");
-      return;
-    }
-    try {
-      await copyTextToClipboard(buildParameterValuesCopyText(
-        selectedImplicitDefinition,
-        implicitParameterValues
-      ));
-      setCopyStatus("Copied implicit parameters");
-    } catch (error) {
-      setCopyStatus(error instanceof Error ? error.message : "Clipboard write failed");
-    }
-  }, [implicitParameterValues, selectedImplicitDefinition]);
-
-  const handlePasteImplicitParams = useCallback(async () => {
-    setScreenshotStatus("");
-    if (!selectedImplicitDefinition?.parameters?.length) {
-      setCopyStatus("No implicit parameters to paste");
-      return;
-    }
-    try {
-      const clipboardText = await readTextFromClipboard();
-      const { values, count } = parseParameterValuesPasteText(selectedImplicitDefinition, clipboardText, {
-        label: "implicit parameter",
-        unknownLabel: "implicit parameter"
-      });
-      markImplicitParameterInteraction();
-      setImplicitParameterValues((current) => ({
-        ...current,
-        ...values
-      }));
-      setCopyStatus(`Pasted ${count} implicit param${count === 1 ? "" : "s"}`);
-    } catch (error) {
-      setCopyStatus(error instanceof Error ? error.message : "Clipboard paste failed");
-    }
-  }, [markImplicitParameterInteraction, selectedImplicitDefinition]);
+  const applyImplicitParameterValues = useCallback((values) => {
+    markImplicitParameterInteraction();
+    setImplicitParameterValues((current) => ({
+      ...current,
+      ...values
+    }));
+  }, [markImplicitParameterInteraction]);
 
   const handleResetImplicitParameters = useCallback(() => {
     if (!selectedImplicitDefinition) {
@@ -2569,6 +2506,86 @@ export default function CadWorkspace({
     implicitAnimationStateRef.current = nextAnimationState;
     setImplicitAnimationState(nextAnimationState);
   }, [markImplicitParameterInteraction, selectedImplicitDefinition]);
+
+  // THE parameter runtime: which store backs the selected entry's parameters, resolved
+  // once from the capability table. Copy/paste/reset are written against this and work
+  // for any format that declares a `params` source — a third store means one more arm
+  // here, not a third copy of three clipboard handlers.
+  //
+  // The stores stay separate on purpose: they drive different recompute pipelines (a
+  // STEP sidecar re-runs a build, an implicit re-uploads uniforms). Only the consumer
+  // surface is shared.
+  const activeParameterRuntime = useMemo(() => {
+    switch (parameterSourceKind(selectedEntrySourceFormat)) {
+      case PARAMETER_SOURCE.SIDECAR:
+        return {
+          label: "STEP",
+          definition: selectedStepModuleDefinition,
+          values: stepModuleParameterValues,
+          applyValues: applyStepModuleParameterValues,
+          reset: handleResetStepModuleParameters
+        };
+      case PARAMETER_SOURCE.MODULE:
+        return {
+          label: "implicit",
+          definition: selectedImplicitDefinition,
+          values: implicitParameterValues,
+          applyValues: applyImplicitParameterValues,
+          reset: handleResetImplicitParameters
+        };
+      default:
+        return null;
+    }
+  }, [
+    applyImplicitParameterValues,
+    applyStepModuleParameterValues,
+    handleResetImplicitParameters,
+    handleResetStepModuleParameters,
+    implicitParameterValues,
+    selectedEntrySourceFormat,
+    selectedImplicitDefinition,
+    selectedStepModuleDefinition,
+    stepModuleParameterValues
+  ]);
+
+  const handleCopyParameters = useCallback(async () => {
+    setScreenshotStatus("");
+    const runtime = activeParameterRuntime;
+    if (!runtime?.definition?.parameters?.length) {
+      setCopyStatus(`No ${runtime?.label || "model"} parameters to copy`);
+      return;
+    }
+    try {
+      await copyTextToClipboard(buildParameterValuesCopyText(runtime.definition, runtime.values));
+      setCopyStatus(`Copied ${runtime.label} parameters`);
+    } catch (error) {
+      setCopyStatus(error instanceof Error ? error.message : "Clipboard write failed");
+    }
+  }, [activeParameterRuntime]);
+
+  const handlePasteParameters = useCallback(async () => {
+    setScreenshotStatus("");
+    const runtime = activeParameterRuntime;
+    if (!runtime?.definition?.parameters?.length) {
+      setCopyStatus(`No ${runtime?.label || "model"} parameters to paste`);
+      return;
+    }
+    try {
+      const clipboardText = await readTextFromClipboard();
+      const { values, count } = parseParameterValuesPasteText(runtime.definition, clipboardText, {
+        label: `${runtime.label} parameter`,
+        unknownLabel: `${runtime.label} parameter`
+      });
+      runtime.applyValues(values);
+      setCopyStatus(`Pasted ${count} ${runtime.label} param${count === 1 ? "" : "s"}`);
+    } catch (error) {
+      setCopyStatus(error instanceof Error ? error.message : "Clipboard paste failed");
+    }
+  }, [activeParameterRuntime]);
+
+  const handleResetParameters = useCallback(() => {
+    activeParameterRuntime?.reset();
+  }, [activeParameterRuntime]);
 
   const handleImplicitAnimationSelect = useCallback((animationId) => {
     const animation = findParameterAnimation(selectedImplicitDefinition, animationId);
@@ -2650,6 +2667,43 @@ export default function CadWorkspace({
       return publishAnimationState(implicitAnimationStateRef, current, nextState);
     });
   }, [selectedImplicitDefinition]);
+
+  // The animation half of the same idea as `activeParameterRuntime`: the toolbar's
+  // Play button is a viewport control, so it asks the active runtime "do you have
+  // clips, are you playing, can I toggle you" instead of reading the STEP store by
+  // name. U0 flipped the button's gate to the `animations` capability but left it fed
+  // from STEP state, so an implicit's clips still could not be played from the toolbar.
+  const activeAnimationRuntime = useMemo(() => {
+    switch (parameterSourceKind(selectedEntrySourceFormat)) {
+      case PARAMETER_SOURCE.SIDECAR:
+        return {
+          available: selectedStepModuleHasAnimations,
+          playing: selectedStepModuleAnimationViewState.playing,
+          // A disabled sidecar is still loaded and still lists its clips; playing one
+          // would drive a build nobody asked for.
+          disabled: !stepModuleEnabled,
+          onPlayToggle: handleStepModuleAnimationPlayToggle
+        };
+      case PARAMETER_SOURCE.MODULE:
+        return {
+          available: hasParameterAnimations(selectedImplicitDefinition),
+          playing: selectedImplicitAnimationViewState.playing,
+          disabled: false,
+          onPlayToggle: handleImplicitAnimationPlayToggle
+        };
+      default:
+        return null;
+    }
+  }, [
+    handleImplicitAnimationPlayToggle,
+    handleStepModuleAnimationPlayToggle,
+    selectedEntrySourceFormat,
+    selectedImplicitAnimationViewState.playing,
+    selectedImplicitDefinition,
+    selectedStepModuleAnimationViewState.playing,
+    selectedStepModuleHasAnimations,
+    stepModuleEnabled
+  ]);
 
   useEffect(() => {
     if (
@@ -8379,10 +8433,10 @@ export default function CadWorkspace({
                 urdfPosePickerAvailable={selectedUrdfMoveIt2ActionsEnabled}
                 urdfPosePickerActive={urdfPosePickerActive}
                 handleToggleUrdfPosePicker={handleToggleUrdfPosePicker}
-                stepAnimationAvailable={selectedStepModuleHasAnimations}
-                stepAnimationPlaying={selectedStepModuleAnimationViewState.playing}
-                stepAnimationDisabled={!stepModuleEnabled}
-                handleStepAnimationPlayToggle={handleStepModuleAnimationPlayToggle}
+                animationAvailable={!!activeAnimationRuntime?.available}
+                animationPlaying={!!activeAnimationRuntime?.playing}
+                animationDisabled={!!activeAnimationRuntime?.disabled}
+                handleAnimationPlayToggle={activeAnimationRuntime?.onPlayToggle}
                 drawToolActive={drawToolActive}
                 panToolActive={panToolActive}
                 handleSelectTabToolMode={handleSelectTabToolMode}
@@ -8482,7 +8536,7 @@ export default function CadWorkspace({
                   parameterValues: stepModuleParameterValues,
                   animationState: selectedStepModuleAnimationViewState,
                   onParameterChange: handleStepModuleParameterChange,
-                  onResetParameters: handleResetStepModuleParameters,
+                  onResetParameters: handleResetParameters,
                   onAnimationSelect: handleStepModuleAnimationSelect,
                   onAnimationPlayToggle: handleStepModuleAnimationPlayToggle,
                   onAnimationReset: handleStepModuleAnimationReset,
@@ -8490,8 +8544,8 @@ export default function CadWorkspace({
                   onAnimationSpeedChange: handleStepModuleAnimationSpeedChange,
                   onAnimationLoopToggle: handleStepModuleAnimationLoopToggle,
                   onEnabledChange: handleStepModuleEnabledChange,
-                  onCopyParams: handleCopyStepModuleParams,
-                  onPasteParams: handlePasteStepModuleParams
+                  onCopyParams: handleCopyParameters,
+                  onPasteParams: handlePasteParameters
                 }}
                 fileDownloadAvailable={fileLinkCopyAvailable}
                 viewerServerInfo={viewerServerInfo}
@@ -8661,15 +8715,15 @@ export default function CadWorkspace({
                   parameterValues: implicitParameterValues,
                   animationState: selectedImplicitAnimationViewState,
                   onParameterChange: handleImplicitParameterChange,
-                  onResetParameters: handleResetImplicitParameters,
+                  onResetParameters: handleResetParameters,
                   onAnimationSelect: handleImplicitAnimationSelect,
                   onAnimationPlayToggle: handleImplicitAnimationPlayToggle,
                   onAnimationReset: handleImplicitAnimationReset,
                   onAnimationScrub: handleImplicitAnimationScrub,
                   onAnimationSpeedChange: handleImplicitAnimationSpeedChange,
                   onAnimationLoopToggle: handleImplicitAnimationLoopToggle,
-                  onCopyParams: handleCopyImplicitParams,
-                  onPasteParams: handlePasteImplicitParams
+                  onCopyParams: handleCopyParameters,
+                  onPasteParams: handlePasteParameters
                 }}
                 graphicsRuntime={{
                   model: selectedImplicitRuntimeModel,

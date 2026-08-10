@@ -196,6 +196,13 @@ export function viewportContentKind(renderFormat) {
   return renderCapabilities(renderFormat).content;
 }
 
+// Which parameter store backs this format, or "" when it has no parameters. The viewer
+// resolves it once into a single active parameter runtime, so copy/paste/reset are
+// written once rather than once per store.
+export function parameterSourceKind(renderFormat) {
+  return renderCapabilities(renderFormat).params || "";
+}
+
 export function renderFormatLabel(renderFormat) {
   return renderCapabilities(renderFormat).label;
 }

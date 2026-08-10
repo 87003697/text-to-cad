@@ -117,10 +117,10 @@ function DesktopFloatingToolBar({
   urdfPosePickerAvailable = false,
   urdfPosePickerActive = false,
   handleToggleUrdfPosePicker,
-  stepAnimationAvailable = false,
-  stepAnimationPlaying = false,
-  stepAnimationDisabled = false,
-  handleStepAnimationPlayToggle,
+  animationAvailable = false,
+  animationPlaying = false,
+  animationDisabled = false,
+  handleAnimationPlayToggle,
   drawToolActive,
   panToolActive,
   handleSelectTabToolMode,
@@ -169,20 +169,20 @@ function DesktopFloatingToolBar({
   const posePickerDisabled = viewerLoading || !viewportContent || !urdfPosePickerAvailable;
   const selectLabel = referenceSelectionPending ? "Preparing selection" : "Select";
   // Any format with animation clips gets transport controls, whichever store backs them.
-  const showStepAnimationPlay = capabilities.animations && stepAnimationAvailable;
-  const stepAnimationPlayDisabled = viewerLoading || !viewportContent || stepAnimationDisabled;
-  const stepAnimationLabel = stepAnimationPlaying ? "Pause" : "Play";
+  const showAnimationPlay = capabilities.animations && animationAvailable;
+  const animationPlayDisabled = viewerLoading || !viewportContent || animationDisabled;
+  const animationLabel = animationPlaying ? "Pause" : "Play";
 
   // Buttons shared between the full toolbar and the reduced orbit-mode toolbar.
-  const stepAnimationButton = showStepAnimationPlay ? (
+  const animationButton = showAnimationPlay ? (
     <ToolbarButton
-      label={stepAnimationLabel}
-      active={stepAnimationPlaying}
-      onClick={handleStepAnimationPlayToggle}
-      disabled={stepAnimationPlayDisabled}
-      aria-pressed={stepAnimationPlaying}
+      label={animationLabel}
+      active={animationPlaying}
+      onClick={handleAnimationPlayToggle}
+      disabled={animationPlayDisabled}
+      aria-pressed={animationPlaying}
     >
-      {stepAnimationPlaying ? (
+      {animationPlaying ? (
         <Pause className="size-3" strokeWidth={2} aria-hidden="true" />
       ) : (
         <Play className="size-3" strokeWidth={2} aria-hidden="true" />
@@ -262,7 +262,7 @@ function DesktopFloatingToolBar({
             // Orbit mode: only tools that make sense while orbiting, plus an
             // explicit exit (X). No select/draw/pose/orbit/export here.
             <>
-              {stepAnimationButton}
+              {animationButton}
               {screenshotButton}
               <ToolbarButton label="Exit orbit" onClick={handleExitPreviewMode}>
                 <X className="size-3" strokeWidth={2} aria-hidden="true" />
@@ -306,7 +306,7 @@ function DesktopFloatingToolBar({
                     <PenTool className="size-3" strokeWidth={2} aria-hidden="true" />
                   </ToolbarButton>
 
-                  {stepAnimationButton}
+                  {animationButton}
                 </>
               ) : null}
 
