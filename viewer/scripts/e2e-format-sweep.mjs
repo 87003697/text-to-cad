@@ -130,11 +130,6 @@ function menuProblem(items, fixture) {
   return "";
 }
 
-// NOTE on the robot's coverage number: it varies run to run (0.15-0.57 observed) because
-// links stream in and the camera re-fits as the model grows, so the sample lands at a
-// different point in that settle. The assertion is only "not blank"; the number is
-// informational for robots. The settled framing is stable — verified by screenshot.
-
 // Below this fraction of non-background pixels the viewport is effectively empty.
 const MIN_COVERAGE = 0.005;
 const VIEWPORT = { width: 1440, height: 900 };
@@ -196,11 +191,9 @@ async function main() {
     const url = `${args.url}${modelsRoot}?dir=${encodeURIComponent(modelsRoot)}` +
       `&file=${encodeURIComponent(fixture.file)}`;
     await page.goto(url, { waitUntil: "domcontentloaded" });
-    // STEP builds its package on first open and a robot assembles from per-link meshes;
-    // give the slowest paths room.
-    // A robot draws its links as they arrive (R3), so it is live in ~2 s and settles in
-    // ~8 s; the extra window over the mesh formats is for the tail, not for a blank wait.
-    await page.waitForTimeout(fixture.format === "urdf" ? 12000 : fixture.format === "step" ? 16000 : 9000);
+    // STEP builds its package on first open; everything else, robots included, is well
+    // inside this window.
+    await page.waitForTimeout(fixture.format === "step" ? 16000 : 9000);
 
     const buffer = await page.screenshot({ clip: CLIP });
     if (args.out) {

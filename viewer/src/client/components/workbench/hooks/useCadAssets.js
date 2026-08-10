@@ -48,7 +48,11 @@ import { RENDER_FORMAT, entrySourceFormat } from "cadjs/lib/fileFormats";
 import { buildDisplayEdgeRuntime, buildSelectorRuntime, composeSelectorRuntimes } from "cadjs/lib/selectors/runtime";
 import { selectRequestedAssemblyComponents } from "../../../workbench/referenceSelection";
 
-const ROBOT_MESH_LOAD_CONCURRENCY = 3;
+// Robot link meshes are STLs, and `loadRenderStl` parses them in the STL worker — the
+// fetch and the parse both happen off the main thread. The cap used to be 3 with a
+// main-thread yield either side of every mesh, which was right when parsing blocked the
+// UI and is pure latency now: it serialised 13 fetches three at a time for no benefit.
+const ROBOT_MESH_LOAD_CONCURRENCY = 8;
 
 function toVectorArray(value) {
   if (!Array.isArray(value) || value.length < 3) {
@@ -119,15 +123,6 @@ function abortLoad(controllerRef) {
   controllerRef.current = null;
 }
 
-function browserYield() {
-  if (typeof window === "undefined" || typeof window.setTimeout !== "function") {
-    return Promise.resolve();
-  }
-  return new Promise((resolve) => {
-    window.setTimeout(resolve, 0);
-  });
-}
-
 function abortError() {
   if (typeof DOMException === "function") {
     return new DOMException("The operation was aborted.", "AbortError");
@@ -144,7 +139,8 @@ function robotMeshLoadConcurrency() {
   if (!Number.isFinite(hardwareConcurrency) || hardwareConcurrency <= 0) {
     return ROBOT_MESH_LOAD_CONCURRENCY;
   }
-  return Math.max(2, Math.min(ROBOT_MESH_LOAD_CONCURRENCY, Math.floor(hardwareConcurrency / 2)));
+  // Bounded by cores because the worker still parses serially; going wider only queues.
+  return Math.max(2, Math.min(ROBOT_MESH_LOAD_CONCURRENCY, hardwareConcurrency));
 }
 
 // Component-GLB packages fan out to many small content-addressed GLBs (141 for
@@ -173,7 +169,7 @@ function urdfMeshUrls(urdfData) {
   )];
 }
 
-async function loadRenderRobotMeshes(meshUrls, { signal, onProgress, onMesh } = {}) {
+async function loadRenderRobotMeshes(meshUrls, { signal, onProgress } = {}) {
   const total = meshUrls.length;
   let completed = 0;
   onProgress?.(completed, total);
@@ -181,14 +177,9 @@ async function loadRenderRobotMeshes(meshUrls, { signal, onProgress, onMesh } = 
     if (signal?.aborted) {
       throw abortError();
     }
-    await browserYield();
     const mesh = await loadRenderMeshByUrl(meshUrl, { signal, fallback: RENDER_FORMAT.STL });
     completed += 1;
-    // Hand the mesh over the moment it lands, not just its count: a robot that waits for
-    // the whole set shows nothing for as long as its slowest link takes.
-    onMesh?.(meshUrl, mesh);
     onProgress?.(completed, total);
-    await browserYield();
     return mesh;
   });
 }
@@ -838,30 +829,12 @@ export function useCadAssets({
       const urdfData = payload.urdfData;
       const meshUrls = urdfMeshUrls(urdfData);
       setUrdfLoadStage(meshUrls.length ? "loading meshes" : "building robot");
-      // Publish the robot as it arrives. buildUrdfMeshGeometry already skips a visual whose
-      // mesh is absent, so a partial map renders the links that have landed and grows.
-      // Each publish is a NEW Map: the downstream memos compare by identity, and mutating
-      // one in place would draw the first link and then nothing further.
-      const partialMeshes = new Map();
-      const publishRobot = () => {
-        setUrdfState({
-          file: entry.file,
-          kind: entry.kind,
-          urdfHash: entryUrdfAssetHash(entry),
-          urdfData,
-          meshesByUrl: new Map(partialMeshes),
-          complete: partialMeshes.size >= meshUrls.length
-        });
-      };
+      // The robot is published ONCE, complete. Drawing links as they arrive was tried and
+      // rejected: a half-built robot on screen with the loading card already gone gives no
+      // sign whether more is coming, so it reads as a broken model rather than a loading
+      // one. The counted stage below is the progress signal instead.
       const meshes = await loadRenderRobotMeshes(meshUrls, {
         signal: controller.signal,
-        onMesh: (meshUrl, mesh) => {
-          if (requestId !== urdfRequestIdRef.current || !mesh) {
-            return;
-          }
-          partialMeshes.set(meshUrl, mesh);
-          publishRobot();
-        },
         onProgress: (completed, total) => {
           if (requestId === urdfRequestIdRef.current && total > 0) {
             setUrdfLoadStage(`loading meshes ${completed}/${total}`);

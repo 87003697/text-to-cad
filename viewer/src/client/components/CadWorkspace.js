@@ -3049,15 +3049,13 @@ export default function CadWorkspace({
     !!selectedEntry &&
     implicitStatus !== ASSET_STATUS.ERROR &&
     (!selectedImplicitMatches || implicitStatus === ASSET_STATUS.LOADING);
-  // "Is there nothing to draw yet?", not "is the fetch still running?". A robot now
-  // publishes its links as they land and the renderer clears the model outright while
-  // loading, so keying this on ASSET_STATUS.LOADING would hold the blank card up until the
-  // slowest link arrived — the 15 s wait this was meant to fix. Once any link is on
-  // screen the viewport is live; the remaining count keeps reporting in the file chip.
+  // A robot is loading until EVERY link mesh has landed. It is published once, complete,
+  // so this stays true for the whole fetch and the card keeps reporting "loading meshes
+  // 7/13" — a partially-drawn robot with no card gives no sign whether more is coming.
   const urdfViewerLoading =
     !!selectedEntry &&
     urdfStatus !== ASSET_STATUS.ERROR &&
-    (!selectedUrdfMatches || !selectedUrdfPreview.meshData?.parts?.length);
+    (!selectedUrdfMatches || urdfStatus === ASSET_STATUS.LOADING);
   // A fatal render-artifact error (not building) stops the loading spinner so the error
   // surfaces. Every artifact-managed format, not just STEP: a DXF or implicit build that
   // failed would otherwise spin forever behind its own error.
