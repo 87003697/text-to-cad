@@ -117,19 +117,75 @@ from a cold start. Isolate a single suspect model rather than trusting one bulk 
 
 Recorded so they are not mistaken for bugs, and so the next person knows the cost:
 
-- **Implicit cannot render orthographic.** Its shader marches from a single
-  `rayOrigin = uCameraPosition`; an ortho camera needs per-pixel origins and a shared
-  direction. Measured: forcing ortho makes the model vanish. STL/3MF/DXF render ortho
-  correctly today with no code change, so `themeProjection` is honoured by the shell and
-  only the implicit backend needs work (~15 lines: a `uOrthographic` uniform and a ray
-  branch).
 - **Implicit material support is partial.** The raymarcher has a fixed BRDF: theme
   `roughness`/`metalness`/`clearcoat`/`opacity`/`emissiveIntensity` are ignored and
   environment reflections are absent (the shader samples no textures); `environment.intensity`
   is folded into a flat ambient term. Colour shaping (tint/saturation/contrast/brightness)
-  does apply, via the shared `shapeSourceColor`.
-- **Implicit lighting is an approximation rig.** Exposure, hemisphere, ambient and key
-  track the theme; `lighting.rim` is hardcoded and `lighting.fill` is unused (its "fill"
-  is driven by `lighting.spot`). Fixing those two is pure wiring.
+  does apply, via the shared `shapeSourceColor`. This one is structural, not wiring: a
+  raymarched SDF has no material graph to hang those on.
 - **Select is inert for DXF and implicit.** Both keep the button for a uniform toolbar
   shape; neither has pickable topology.
+
+## Theme conformance per render type
+
+Every theme field, and what each render type does with it. `honoured` means the value
+reaches the renderer and changes the picture; `approximated` means it is folded into
+something cheaper; `unsupported` means it is structurally out of reach and is *declared*
+here rather than silently dropped.
+
+| Theme field | Mesh (STEP/STL/3MF/GLB/DXF) | Implicit (raymarch) |
+|---|---|---|
+| `background` (colour, gradient, angle) | honoured | honoured — asserted pixel-identical to mesh by the sweep |
+| `floor` (mode, colour, grid, shadow) | honoured | honoured — the implicit composites over the same shared stage |
+| `projection` | honoured | honoured (`uOrthographic` + parallel-ray branch, U1) |
+| `lighting.toneMappingExposure` | honoured | honoured |
+| `lighting.hemisphere` | honoured | honoured |
+| `lighting.ambient` | honoured | honoured |
+| `lighting.directional` (key) | honoured | honoured |
+| `lighting.fill` | honoured | honoured (U4) |
+| `lighting.rim` | honoured | honoured (U4) |
+| `lighting.point` (bounce) | honoured | honoured |
+| `lighting.spot` | honoured | unsupported — no cone/attenuation term in the shader |
+| `environment.intensity` | honoured (IBL) | approximated — folded into a flat white ambient term |
+| `environment.presetId` / reflections | honoured | unsupported — the shader samples no textures |
+| `materials.*` tint/saturation/contrast/brightness | honoured | honoured (shared `shapeSourceColor`) |
+| `materials.*` roughness/metalness/clearcoat/opacity/emissive | honoured | unsupported — fixed BRDF |
+| per-part fill cycling | honoured | unsupported — one SDF body, no parts |
+
+**The schema lives in two files.** `packages/implicitjs` may not import `packages/cadjs`,
+so `common/themeSettings.js` is duplicated in both. A field added to one and not the other
+is silently dropped for that renderer at normalization time, before any uniform wiring can
+matter — that is exactly how `lighting.fill` and `lighting.rim` came to be ignored. Change
+both, together.
+
+**The implicit has two backdrops.** In the viewer the raymarch pass composites over the
+shared stage, so what you see behind an implicit model is `cadjs/lib/viewer/stageTheme.js`,
+the same code every other format uses. The shader's own `uBackgroundMode` ramp only paints
+in headless/standalone renders. The two are not the same function — the canvas path ramps
+linearly between stops (radial: inner 0.1, outer 0.75 of the texture width), the shader
+uses `smoothstep(0.0, 0.72, ...)` — so a headless implicit render and a headless mesh
+render of the same theme have different gradient falloff. Unmeasured; recorded here so it
+is not rediscovered as a viewer bug, which it is not.
+
+### Conformance harness
+
+```bash
+node viewer/scripts/e2e-theme-conformance.mjs --dir <abs-models-root> [--out <dir>] [--baseline <file>]
+```
+
+Loads one mesh scene and one implicit scene under all eight presets and asserts:
+
+1. **Background parity** between renderers, per theme — the backdrop is shared code, so the
+   target is zero. Four themes carry a budgeted, pre-existing drift (`cinematic` 7.0,
+   `clay-sunrise` 5.4, `pink` 4.7, `blue` 4.5, out of 255); the budgets ratchet down the
+   same way the identity-check counts do. Verified NOT caused by the U4 lighting work
+   (A/B identical), NOT the shader gradient above (swapping it moved the numbers by 0.0),
+   and NOT the environment map (forcing `environment.enabled = false` on cinematic leaves
+   7.1). Cause open.
+2. **Surface response** — each renderer's model pixels must actually differ across themes.
+   A renderer that ignores the theme passes any background check while rendering all eight
+   identically, which is exactly what the raymarcher did while `lighting.fill` and
+   `lighting.rim` were being dropped at normalization.
+
+`viewer/scripts/theme-conformance-baseline.json` records the measured means so a change of
+look is visible in a diff rather than only in a pass/fail.

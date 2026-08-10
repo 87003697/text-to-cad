@@ -5,7 +5,9 @@ import {
   resolveAppearanceSettings
 } from "../../common/renderOptions.js";
 import {
-  normalizeThemeSettings
+  normalizeThemeSettings,
+  DEFAULT_FILL_LIGHT_SETTINGS,
+  DEFAULT_RIM_LIGHT_SETTINGS
 } from "../../common/themeSettings.js";
 import {
   normalizeImplicitGraphicsSettings
@@ -1488,6 +1490,12 @@ vec3 implicit_background_color(vec2 uv) {
   if (uBackgroundMode < 0.5) {
     return uBackgroundColor;
   }
+  // NOTE: this backdrop only paints in HEADLESS/standalone implicit renders. In the viewer
+  // the raymarch pass composites over the shared stage, so the on-screen backdrop comes
+  // from cadjs/lib/viewer/stageTheme.js and these ramps are not what you are looking at.
+  // The two do NOT agree: the canvas path ramps linearly between stops (radial 0.1 -> 0.75
+  // of the texture width), this one uses a smoothstep over 0..0.72. See the theme
+  // conformance section of viewer/docs/render-types.md before changing either.
   if (uBackgroundMode < 1.5) {
     vec2 direction = normalize(vec2(cos(uBackgroundAngle), sin(uBackgroundAngle)));
     float t = dot(uv - vec2(0.5), direction) * 0.7071067811865476 + 0.5;
@@ -1777,13 +1785,15 @@ function applyImplicitLightingUniforms(uniforms, normalizedTheme) {
   if (uniforms.uKeyDir) {
     uniforms.uKeyDir.value.set(...lightDirectionFromPosition(directional.position, rig.directional.position));
   }
-  const spot = lighting.spot || rig.spot;
+  // Fill is the theme's FILL light. This used to read `lighting.spot`, so every theme's
+  // fill settings were ignored and the spot was doing double duty.
+  const fill = lighting.fill || DEFAULT_FILL_LIGHT_SETTINGS;
   if (uniforms.uFillColor) {
-    const spotIntensity = spot.enabled === false ? 0 : finiteNumber(spot.intensity, rig.spot.intensity);
-    uniforms.uFillColor.value.set(...linearLightRgb(spot.color, spotIntensity, rig.spot.color));
+    const fillIntensity = fill.enabled === false ? 0 : finiteNumber(fill.intensity, DEFAULT_FILL_LIGHT_SETTINGS.intensity);
+    uniforms.uFillColor.value.set(...linearLightRgb(fill.color, fillIntensity, DEFAULT_FILL_LIGHT_SETTINGS.color));
   }
   if (uniforms.uFillDir) {
-    uniforms.uFillDir.value.set(...lightDirectionFromPosition(spot.position, rig.spot.position));
+    uniforms.uFillDir.value.set(...lightDirectionFromPosition(fill.position, DEFAULT_FILL_LIGHT_SETTINGS.position));
   }
   const point = lighting.point || rig.point;
   if (uniforms.uBounceColor) {
@@ -1793,8 +1803,12 @@ function applyImplicitLightingUniforms(uniforms, normalizedTheme) {
   if (uniforms.uBounceDir) {
     uniforms.uBounceDir.value.set(...lightDirectionFromPosition(point.position, rig.point.position));
   }
+  // Rim was pinned to the built-in rig, so switching theme moved the mesh renderer's rim
+  // and left the raymarcher's where it was — the single most visible way the two diverged.
+  const rim = lighting.rim || DEFAULT_RIM_LIGHT_SETTINGS;
   if (uniforms.uRimColor) {
-    uniforms.uRimColor.value.set(...linearLightRgb(rig.rimColor, rig.rimIntensity, rig.rimColor));
+    const rimIntensity = rim.enabled === false ? 0 : finiteNumber(rim.intensity, DEFAULT_RIM_LIGHT_SETTINGS.intensity);
+    uniforms.uRimColor.value.set(...linearLightRgb(rim.color, rimIntensity, DEFAULT_RIM_LIGHT_SETTINGS.color));
   }
   const floor = normalizedTheme?.floor || {};
   if (uniforms.uFloorEnabled) {
