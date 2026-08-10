@@ -587,6 +587,14 @@ function parsePolylineEntity(records, vertexGroups) {
   return { lines, arcs };
 }
 
+/** A HATCH writes its boundary paths FIRST, then pattern-definition lines, then seed points,
+ *  then optional gradient data. Code 75 (hatch style) opens that tail and code 98 counts the
+ *  seed points -- and a seed point is written as another 10/20 pair. Reading to the end of the
+ *  entity therefore appends the seed to the last boundary path, and a seed may sit ANYWHERE:
+ *  in models/dxf/alu_extrusion_profile.dxf one sits 62 m off a 1.8 m sheet, which inflated the
+ *  drawing's bounds ~35x and left auto-fit framing the whole drawing as a speck. */
+const HATCH_BOUNDARY_END_CODES = new Set([75, 98]);
+
 /** HATCH boundary paths (codes 10/20 per path). A hatch is a FILL, and its boundary is the
  *  region outline -- exactly the closed contour a flat pattern wants. The pattern itself is
  *  decoration and is ignored: extruding hatch lines would produce hair, not a part. */
@@ -601,6 +609,9 @@ function parseHatchEntity(records) {
     points = [];
   };
   for (const record of records) {
+    if (HATCH_BOUNDARY_END_CODES.has(record.code)) {
+      break;
+    }
     // 92 opens a boundary path; 10/20 are its vertices. A new path flushes the previous one.
     if (record.code === 92) {
       flush();

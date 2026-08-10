@@ -250,3 +250,50 @@ test("the LAYER table's colors reach the layer summary", () => {
   assert.equal(byName.get("BEND").colorHex, "#3a5cff");
   assert.equal(byName.get("CUT").visibleDefault, true);
 });
+
+test("a HATCH's seed point is not read as another boundary vertex", () => {
+  // A seed point is written as a 10/20 pair like a boundary vertex, but it lives after the
+  // pattern definition (code 75 opens that tail, 98 counts the seeds) and may sit anywhere on
+  // the drawing. Reading to the end of the entity drags the seed into the boundary, which in
+  // a real fixture put a vertex 62 m off a 1.8 m sheet and reduced the drawing to a speck
+  // under auto-fit. The bounds below are the assertion that matters.
+  const parsed = parseDxf(dxfText([
+    "0", "SECTION", "2", "ENTITIES",
+    "0", "HATCH",
+    "8", "FILL",
+    "91", "1",
+    "92", "1",
+    "72", "0",
+    "93", "4",
+    "10", "0", "20", "0",
+    "10", "10", "20", "0",
+    "10", "10", "20", "10",
+    "10", "0", "20", "10",
+    "97", "0",
+    // Pattern definition and seed data — everything below must be ignored.
+    "75", "0",
+    "76", "1",
+    "52", "0",
+    "41", "1",
+    "77", "0",
+    "78", "1",
+    "53", "45",
+    "43", "-2438.5", "44", "856.8",
+    "45", "-0.22", "46", "0.22",
+    "79", "0",
+    "98", "1",
+    "10", "-2438.5", "20", "856.8",
+    "0", "ENDSEC", "0", "EOF"
+  ]));
+
+  assert.equal(parsed.bounds.width, 10, "the seed point must not widen the drawing");
+  assert.equal(parsed.bounds.height, 10, "the seed point must not heighten the drawing");
+  for (const line of parsed.geometry.lines) {
+    for (const point of [line.start, line.end]) {
+      assert.ok(
+        point[0] >= 0 && point[0] <= 10 && point[1] >= 0 && point[1] <= 10,
+        `hatch boundary escaped the square: ${JSON.stringify(point)}`
+      );
+    }
+  }
+});
