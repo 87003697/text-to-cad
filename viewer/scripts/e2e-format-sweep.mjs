@@ -130,6 +130,11 @@ function menuProblem(items, fixture) {
   return "";
 }
 
+// NOTE on the robot's coverage number: it varies run to run (0.15-0.57 observed) because
+// links stream in and the camera re-fits as the model grows, so the sample lands at a
+// different point in that settle. The assertion is only "not blank"; the number is
+// informational for robots. The settled framing is stable — verified by screenshot.
+
 // Below this fraction of non-background pixels the viewport is effectively empty.
 const MIN_COVERAGE = 0.005;
 const VIEWPORT = { width: 1440, height: 900 };

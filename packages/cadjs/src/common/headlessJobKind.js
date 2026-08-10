@@ -15,6 +15,8 @@ export function resolveHeadlessJobKind(job) {
     return "implicit";
   }
   if (kind) {
+    // A robot resolves to ordinary mesh data (loadSource assembles it), so it renders
+    // through the mesh backend rather than needing a third one.
     return "mesh";
   }
   const url = String(

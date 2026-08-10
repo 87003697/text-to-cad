@@ -56,6 +56,9 @@ SUPPORTED_JOB_KEYS = frozenset(
         "selection",
         "stepParameters",
         "stepParametersPath",
+        # A robot's pose. The STEP analogue is stepParameters; a robot is posed by joint
+        # angle, so it gets its own key rather than overloading one that means a sidecar.
+        "jointValues",
         "sizeProfile",
         "width",
         "height",
@@ -461,7 +464,13 @@ def normalize_common_job(
         or ""
     ).strip().lower()
     if raw_scale:
-        normalized_render["scale"] = "cad"
+        # Honour the requested scale. This used to force "cad" unconditionally, so a job
+        # asking for the URDF profile (robots are authored in metres, CAD in millimetres)
+        # was accepted, validated, and then silently overwritten — the model rendered
+        # correctly but framed for a workpiece a thousand times its size.
+        if raw_scale not in {"cad", "urdf"}:
+            raise SnapshotError(f"Unsupported scene scale: {raw_scale} (expected cad or urdf)")
+        normalized_render["scale"] = raw_scale
 
     normalized_outputs: list[dict[str, object]] = []
     resolved_timestamp = timestamp or snapshot_timestamp()
