@@ -182,6 +182,20 @@ function entryLeafName(entry) {
   return parts[parts.length - 1] || file;
 }
 
+function sourceLeafName(entry) {
+  const source = entry?.source;
+  const candidate = String(
+    entry?.sourcePath
+    || (source && typeof source === "object" ? (source.sourcePath || source.path || source.file) : "")
+    || ""
+  ).trim();
+  if (!candidate) {
+    return "";
+  }
+  const parts = candidate.split("/");
+  return parts[parts.length - 1] || "";
+}
+
 function normalizedEntryStem(entry) {
   return entryLeafName(entry)
     .replace(/\.step\.json$/i, "")
@@ -207,48 +221,20 @@ function sourceExtensionForEntry(entry) {
 }
 
 export function filenameLabelForEntry(entry) {
-  const stem = normalizedEntryStem(entry);
-  if (!stem) {
-    return "";
-  }
-  const kind = String(entry?.kind || "").trim().toLowerCase();
-  const directSourceFormats = new Set(["dxf", "urdf", "srdf", "sdf", "stl", "3mf", "glb", "implicit"]);
-  const sourceFormat = directSourceFormats.has(kind)
-    ? kind
-    : String(sourceExtensionForEntry(entry) || "step").trim().toLowerCase();
-
-  if (sourceFormat === "dxf") {
-    return `${stem}.dxf`;
-  }
-  if (sourceFormat === "urdf" || entry?.kind === "urdf") {
-    return `${stem}.urdf`;
-  }
-  if (sourceFormat === "srdf" || entry?.kind === "srdf") {
-    return `${stem}.srdf`;
-  }
-  if (sourceFormat === "sdf" || entry?.kind === "sdf") {
-    return `${stem}.sdf`;
-  }
-  if (sourceFormat === "stl" || entry?.kind === "stl") {
-    return `${stem}.stl`;
-  }
-  if (sourceFormat === "3mf" || entry?.kind === "3mf") {
-    return `${stem}.3mf`;
-  }
-  if (sourceFormat === "glb" || entry?.kind === "glb") {
-    return `${stem}.glb`;
-  }
-  if (sourceFormat === "implicit" || entry?.kind === "implicit") {
-    return entryLeafName(entry);
-  }
-  const stepExtension = sourceFormat === "stp" ? "stp" : "step";
-  // A Python-generated model has no committed STEP — its real source is a `<stem>.py` gen_step
-  // script. Surface that in the explorer as `<stem>.step.py` so it reads as a Python generator
-  // (which the viewer rebuilds on demand) rather than a static, hand-committed STEP file.
-  if (String(entry?.sourceKind || "").trim().toLowerCase() === "python") {
-    return `${stem}.${stepExtension}.py`;
-  }
-  return `${stem}.${stepExtension}`;
+  // The entry's REAL filename, never a reconstruction.
+  //
+  // This used to rebuild a label from a stem plus a canonical extension, which erased what
+  // the file is actually called: `gasket_plate.dxf.py` displayed as `gasket_plate.dxf`, so a
+  // generated drawing and an imported one beside it were indistinguishable in the explorer,
+  // the breadcrumb and the tab. Two different files, one label — and the one you clicked was
+  // whichever the list happened to hold.
+  //
+  // Showing the filename verbatim also means new source kinds need no case here.
+  //
+  // Prefer the recorded SOURCE path over `file`: a generated model can carry its logical
+  // output there (`<stem>.step`) while the file a user edits is the generator beside it.
+  // The source path is what they opened, so it is what the label should say.
+  return sourceLeafName(entry) || entryLeafName(entry);
 }
 
 export function sidebarLabelForEntry(entry) {

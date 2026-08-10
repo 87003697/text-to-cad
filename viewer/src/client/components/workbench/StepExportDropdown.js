@@ -6,10 +6,9 @@ import {
   DropdownMenuTrigger
 } from "@/components/ui/dropdown-menu";
 import {
-  DXF_EXPORT_FORMATS,
-  STEP_EXPORT_FORMATS,
-  stepExportItemLabel
-} from "@/workbench/stepExport";
+  exportFormatsForEntry,
+  exportItemLabel
+} from "@/workbench/modelExport";
 
 // Dedicated "download" icon dropdown for exporting the open STEP model (part, assembly, or
 // imported STEP) to STEP/3MF/STL/GLB, or a generated DXF drawing to DXF. Hidden unless an
@@ -18,21 +17,18 @@ import {
 export function StepExportDropdown({
   selectedEntry,
   fileAccessBusyKey = "",
-  onExportStepFile,
+  onExportModelFile,
   triggerClassName = "",
   iconClassName = "size-3",
   contentAlign = "end",
   contentSide = "bottom",
   contentSideOffset = 6
 }) {
-  const kind = String(selectedEntry?.kind || "").trim().toLowerCase();
-  const isStepEntry = kind === "step" || kind === "assembly" || kind === "part";
-  // Only generated drawings export (a raw imported .dxf is already the deliverable).
-  const isGeneratedDxfEntry = kind === "dxf" && selectedEntry?.sourceKind === "python";
-  if (!selectedEntry || (!isStepEntry && !isGeneratedDxfEntry) || typeof onExportStepFile !== "function") {
+  const exportFormats = exportFormatsForEntry(selectedEntry);
+  if (!selectedEntry || !exportFormats.length || typeof onExportModelFile !== "function") {
     return null;
   }
-  const exportFormats = isGeneratedDxfEntry ? DXF_EXPORT_FORMATS : STEP_EXPORT_FORMATS;
+  const isGeneratedDxfEntry = String(selectedEntry?.kind || "").trim().toLowerCase() === "dxf";
   const fileRef = String(selectedEntry?.file || selectedEntry?.id || "").trim();
   const label = isGeneratedDxfEntry ? "Export drawing" : "Export model";
   return (
@@ -65,10 +61,10 @@ export function StepExportDropdown({
               className="text-xs"
               disabled={fileAccessBusyKey === key}
               onSelect={() => {
-                onExportStepFile(selectedEntry, format);
+                onExportModelFile(selectedEntry, format);
               }}
             >
-              <span className="min-w-0 truncate">{stepExportItemLabel(format)}</span>
+              <span className="min-w-0 truncate">{exportItemLabel(format)}</span>
             </DropdownMenuItem>
           );
         })}

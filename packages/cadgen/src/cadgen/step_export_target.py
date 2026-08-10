@@ -117,12 +117,17 @@ def _resolve_spec_and_scene(
                 step_path=step_path,
             )
         spec = _apply_mesh_overrides(spec, mesh_tolerance, mesh_angular_tolerance)
+        # An export runs the generator but writes the render package NOTHING -- its output
+        # is a STEP/STL/3MF/GLB file somewhere else entirely. Claiming the writer lock here
+        # made a fully-current model report `generating` with an empty bar for the whole
+        # length of the export.
         scene = run_script_generator(
             spec,
             "gen_step",
             logger=logger,
             force=True,
             reset_runtime_closure=reset_runtime_closure,
+            lock_intent="generate",
         )
         if scene is None:
             raise RuntimeError(f"Generator did not produce a STEP scene: {spec.source_ref}")

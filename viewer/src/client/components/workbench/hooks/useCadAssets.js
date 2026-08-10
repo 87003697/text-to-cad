@@ -2,14 +2,12 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import {
   isAbortError,
   loadRenderDisplayEdgeBundle,
-  loadRenderDxf,
   loadRenderGlb,
   loadRenderJson,
   loadRenderSelectorBundle,
   loadRenderSdf,
   loadRenderSrdf,
   loadRenderUrdf,
-  peekRenderDxf,
   peekRenderDisplayEdgeBundle,
   peekRenderGlb,
   peekRenderSelectorBundle,
@@ -50,7 +48,11 @@ import { RENDER_FORMAT, entrySourceFormat } from "cadjs/lib/fileFormats";
 import { buildDisplayEdgeRuntime, buildSelectorRuntime, composeSelectorRuntimes } from "cadjs/lib/selectors/runtime";
 import { selectRequestedAssemblyComponents } from "../../../workbench/referenceSelection";
 
-const ROBOT_MESH_LOAD_CONCURRENCY = 3;
+// Robot link meshes are STLs, and `loadRenderStl` parses them in the STL worker — the
+// fetch and the parse both happen off the main thread. The cap used to be 3 with a
+// main-thread yield either side of every mesh, which was right when parsing blocked the
+// UI and is pure latency now: it serialised 13 fetches three at a time for no benefit.
+const ROBOT_MESH_LOAD_CONCURRENCY = 8;
 
 function toVectorArray(value) {
   if (!Array.isArray(value) || value.length < 3) {
@@ -121,15 +123,6 @@ function abortLoad(controllerRef) {
   controllerRef.current = null;
 }
 
-function browserYield() {
-  if (typeof window === "undefined" || typeof window.setTimeout !== "function") {
-    return Promise.resolve();
-  }
-  return new Promise((resolve) => {
-    window.setTimeout(resolve, 0);
-  });
-}
-
 function abortError() {
   if (typeof DOMException === "function") {
     return new DOMException("The operation was aborted.", "AbortError");
@@ -146,7 +139,8 @@ function robotMeshLoadConcurrency() {
   if (!Number.isFinite(hardwareConcurrency) || hardwareConcurrency <= 0) {
     return ROBOT_MESH_LOAD_CONCURRENCY;
   }
-  return Math.max(2, Math.min(ROBOT_MESH_LOAD_CONCURRENCY, Math.floor(hardwareConcurrency / 2)));
+  // Bounded by cores because the worker still parses serially; going wider only queues.
+  return Math.max(2, Math.min(ROBOT_MESH_LOAD_CONCURRENCY, hardwareConcurrency));
 }
 
 // Component-GLB packages fan out to many small content-addressed GLBs (141 for
@@ -183,11 +177,9 @@ async function loadRenderRobotMeshes(meshUrls, { signal, onProgress } = {}) {
     if (signal?.aborted) {
       throw abortError();
     }
-    await browserYield();
     const mesh = await loadRenderMeshByUrl(meshUrl, { signal, fallback: RENDER_FORMAT.STL });
     completed += 1;
     onProgress?.(completed, total);
-    await browserYield();
     return mesh;
   });
 }
@@ -219,7 +211,6 @@ export function useCadAssets({
   entryHasMesh,
   entryHasReferences,
   entryHasDisplayEdges = () => false,
-  entryHasDxf,
   buildNormalizedReferenceState,
 }) {
   const [meshState, setMeshState] = useState(null);
@@ -228,10 +219,6 @@ export function useCadAssets({
   const [meshLoadStage, setMeshLoadStage] = useState("");
   const [status, setStatus] = useState(ASSET_STATUS.READY);
   const [error, setError] = useState("");
-  const [dxfState, setDxfState] = useState(null);
-  const [dxfStatus, setDxfStatus] = useState(ASSET_STATUS.PENDING);
-  const [dxfError, setDxfError] = useState("");
-  const [dxfLoadStage, setDxfLoadStage] = useState("");
   const [implicitState, setImplicitState] = useState(null);
   const [implicitStatus, setImplicitStatus] = useState(ASSET_STATUS.PENDING);
   const [implicitError, setImplicitError] = useState("");
@@ -250,13 +237,11 @@ export function useCadAssets({
   const [displayEdgeLoadStage, setDisplayEdgeLoadStage] = useState("");
 
   const requestIdRef = useRef(0);
-  const dxfRequestIdRef = useRef(0);
   const implicitRequestIdRef = useRef(0);
   const urdfRequestIdRef = useRef(0);
   const referenceRequestIdRef = useRef(0);
   const displayEdgeRequestIdRef = useRef(0);
   const meshAbortControllerRef = useRef(null);
-  const dxfAbortControllerRef = useRef(null);
   const implicitAbortControllerRef = useRef(null);
   const urdfAbortControllerRef = useRef(null);
   const referenceAbortControllerRef = useRef(null);
@@ -353,22 +338,6 @@ export function useCadAssets({
     return bundle ? buildDisplayEdgeState(entry, bundle) : null;
   }, [buildDisplayEdgeState, entryHasDisplayEdges]);
 
-  const getCachedDxfState = useCallback((entry) => {
-    if (!entryHasDxf(entry)) {
-      return null;
-    }
-    const dxfData = peekRenderDxf(entryAssetUrl(entry, "dxf"));
-    if (!dxfData) {
-      return null;
-    }
-    return {
-      file: entry.file,
-      kind: entry.kind,
-      dxfHash: entryAssetHash(entry, "dxf"),
-      dxfData
-    };
-  }, [entryHasDxf]);
-
   const getCachedImplicitState = useCallback((entry) => {
     if (String(entry?.kind || "").trim().toLowerCase() !== RENDER_FORMAT.IMPLICIT) {
       return null;
@@ -426,12 +395,6 @@ export function useCadAssets({
     setMeshLoadInProgress(false);
     setMeshLoadTargetFile("");
     setMeshLoadStage("");
-  }, []);
-
-  const cancelDxfLoad = useCallback(() => {
-    dxfRequestIdRef.current += 1;
-    abortLoad(dxfAbortControllerRef);
-    setDxfLoadStage("");
   }, []);
 
   const cancelImplicitLoad = useCallback(() => {
@@ -768,60 +731,6 @@ export function useCadAssets({
     }
   }, [buildDisplayEdgeState, cancelDisplayEdgeLoad, entryHasDisplayEdges, getCachedDisplayEdgeState]);
 
-  const loadDxfForEntry = useCallback(async (entry) => {
-    cancelDxfLoad();
-    const requestId = dxfRequestIdRef.current;
-
-    if (!entryHasDxf(entry)) {
-      setDxfState(null);
-      setDxfStatus(ASSET_STATUS.PENDING);
-      setDxfError("");
-      return;
-    }
-
-    const cachedDxfState = getCachedDxfState(entry);
-    if (cachedDxfState) {
-      setDxfState(cachedDxfState);
-      setDxfStatus(ASSET_STATUS.READY);
-      setDxfError("");
-      return;
-    }
-
-    const controller = new AbortController();
-    dxfAbortControllerRef.current = controller;
-    setDxfStatus(ASSET_STATUS.LOADING);
-    setDxfError("");
-    setDxfLoadStage("loading DXF");
-
-    try {
-      const dxfData = await loadRenderDxf(entryAssetUrl(entry, "dxf"), { signal: controller.signal });
-      if (requestId !== dxfRequestIdRef.current) {
-        return;
-      }
-      setDxfLoadStage("building preview");
-      setDxfState({
-        file: entry.file,
-        kind: entry.kind,
-        dxfHash: entryAssetHash(entry, "dxf"),
-        dxfData
-      });
-      setDxfStatus(ASSET_STATUS.READY);
-    } catch (err) {
-      if (requestId !== dxfRequestIdRef.current || isAbortError(err) || controller.signal.aborted) {
-        return;
-      }
-      setDxfStatus(ASSET_STATUS.ERROR);
-      setDxfError(err instanceof Error ? err.message : String(err));
-    } finally {
-      if (dxfAbortControllerRef.current === controller) {
-        dxfAbortControllerRef.current = null;
-      }
-      if (requestId === dxfRequestIdRef.current) {
-        setDxfLoadStage("");
-      }
-    }
-  }, [cancelDxfLoad, entryHasDxf, getCachedDxfState]);
-
   const loadImplicitForEntry = useCallback(async (entry) => {
     cancelImplicitLoad();
     const requestId = implicitRequestIdRef.current;
@@ -920,6 +829,10 @@ export function useCadAssets({
       const urdfData = payload.urdfData;
       const meshUrls = urdfMeshUrls(urdfData);
       setUrdfLoadStage(meshUrls.length ? "loading meshes" : "building robot");
+      // The robot is published ONCE, complete. Drawing links as they arrive was tried and
+      // rejected: a half-built robot on screen with the loading card already gone gives no
+      // sign whether more is coming, so it reads as a broken model rather than a loading
+      // one. The counted stage below is the progress signal instead.
       const meshes = await loadRenderRobotMeshes(meshUrls, {
         signal: controller.signal,
         onProgress: (completed, total) => {
@@ -938,7 +851,8 @@ export function useCadAssets({
         kind: entry.kind,
         urdfHash: entryUrdfAssetHash(entry),
         urdfData,
-        meshesByUrl
+        meshesByUrl,
+        complete: true
       });
       setUrdfStatus(ASSET_STATUS.READY);
     } catch (err) {
@@ -959,7 +873,6 @@ export function useCadAssets({
 
   useEffect(() => () => {
     abortLoad(meshAbortControllerRef);
-    abortLoad(dxfAbortControllerRef);
     abortLoad(implicitAbortControllerRef);
     abortLoad(urdfAbortControllerRef);
     abortLoad(referenceAbortControllerRef);
@@ -976,13 +889,6 @@ export function useCadAssets({
     setStatus,
     error,
     setError,
-    dxfState,
-    setDxfState,
-    dxfStatus,
-    setDxfStatus,
-    dxfError,
-    setDxfError,
-    dxfLoadStage,
     implicitState,
     setImplicitState,
     implicitStatus,
@@ -1014,17 +920,14 @@ export function useCadAssets({
     getCachedMeshState,
     getCachedReferenceState,
     getCachedDisplayEdgeState,
-    getCachedDxfState,
     getCachedImplicitState,
     getCachedUrdfState,
     cancelMeshLoad,
-    cancelDxfLoad,
     cancelImplicitLoad,
     cancelUrdfLoad,
     cancelReferenceLoad,
     cancelDisplayEdgeLoad,
     loadMeshForEntry,
-    loadDxfForEntry,
     loadImplicitForEntry,
     loadUrdfForEntry,
     loadReferencesForEntry,

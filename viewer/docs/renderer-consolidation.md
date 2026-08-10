@@ -91,7 +91,7 @@ cannot: it bypasses implicitjs's exports map).
   `?dir=` at the repo `models/` root. Fixtures: dozens of
   `models/implicits/*.implicit.js` (e.g. `parametric-pulse.implicit.js`); for
   mesh use a direct GLB/STL (e.g.
-  `models/fun/miniature_spiral_staircase_highres.glb`) — a raw `*.step`
+  `models/mesh/glb/miniature_spiral_staircase_highres.glb`) — a raw `*.step`
   triggers slow on-demand artifact generation (backend delay, not a render
   bug). The mesh renderer has no `preserveDrawingBuffer`, so in-page canvas
   readback reads blank — trust the composited `page.screenshot`.

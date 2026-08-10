@@ -11,14 +11,17 @@ import {
   Ruler,
   X
 } from "lucide-react";
-import { RENDER_FORMAT } from "@/workbench/constants";
 import {
-  isMeshRenderFormat,
-  isRobotRenderFormat
-} from "cadjs/lib/fileFormats";
+  hasCapability,
+  renderCapabilities,
+  supportsTool,
+  viewportContentKind,
+  VIEWPORT_CONTENT
+} from "cadjs/lib/renderCapabilities";
 import { TooltipProvider } from "../ui/tooltip";
 import DrawingToolbar from "./DrawingToolbar";
 import { ToolbarButton } from "./ToolbarButton";
+import { ZoomControl } from "../viewer/ZoomControl";
 import { CAD_WORKSPACE_TOOLBAR_DESKTOP_WIDTH_CLASS } from "./ToolbarShell";
 import { StepExportDropdown } from "./StepExportDropdown";
 import MeasurePanel from "../viewer/MeasurePanel";
@@ -98,6 +101,13 @@ const FLOATING_TOOL_BAR_BUTTON_CLASSES =
 function DesktopFloatingToolBar({
   renderFormat,
   floatingCadToolbarPosition,
+  zoomControlsVisible = false,
+  zoomPercent = 100,
+  onZoomPercentChange,
+  onZoomReset,
+  drawingViewToggle = false,
+  drawingViewMode = "3d",
+  onDrawingViewModeChange,
   previewMode = false,
   toolbarHidden = false,
   onToolbarEnter,
@@ -110,10 +120,10 @@ function DesktopFloatingToolBar({
   urdfPosePickerAvailable = false,
   urdfPosePickerActive = false,
   handleToggleUrdfPosePicker,
-  stepAnimationAvailable = false,
-  stepAnimationPlaying = false,
-  stepAnimationDisabled = false,
-  handleStepAnimationPlayToggle,
+  animationAvailable = false,
+  animationPlaying = false,
+  animationDisabled = false,
+  handleAnimationPlayToggle,
   drawToolActive,
   measureModeActive = false,
   measureDisabled = false,
@@ -123,10 +133,6 @@ function DesktopFloatingToolBar({
   onMeasureDelete = null,
   panToolActive,
   handleSelectTabToolMode,
-  displayMode,
-  onDisplayModeChange,
-  projection,
-  onProjectionChange,
   viewerLoading,
   selectedMeshData,
   selectedDxfData,
@@ -143,37 +149,45 @@ function DesktopFloatingToolBar({
   handleEnterPreviewMode,
   handleScreenshotCopy,
   selectedEntry,
-  onExportStepFile,
+  onExportModelFile,
   fileAccessBusyKey = ""
 }) {
-  const dxfMode = renderFormat === RENDER_FORMAT.DXF;
-  const implicitMode = renderFormat === RENDER_FORMAT.IMPLICIT;
-  const urdfMode = renderFormat === RENDER_FORMAT.URDF;
-  const robotMode = isRobotRenderFormat(renderFormat);
-  const meshOnlyMode = isMeshRenderFormat(renderFormat);
-  const renderReady = implicitMode ? !!selectedImplicitModel : dxfMode ? !!selectedDxfData : !!selectedMeshData;
-  const captureDisabled = viewerLoading || !renderReady;
+  // What this format can do, from the one capability table — never re-derived from
+  // its identity, so a new format inherits the toolbar by declaring a row.
+  const capabilities = renderCapabilities(renderFormat);
+  // "Is there anything on screen?" — asked once, for every format. An implicit
+  // raymarches its own GLSL and never loads mesh data, so asking only about
+  // selectedMeshData left its screenshot and orbit buttons permanently disabled
+  // even though both underlying paths work.
+  const viewportContent = viewportContentKind(renderFormat) === VIEWPORT_CONTENT.IMPLICIT
+    ? selectedImplicitModel
+    : selectedMeshData;
+  const showToolCluster = supportsTool(renderFormat, "select") ||
+    supportsTool(renderFormat, "pan") ||
+    supportsTool(renderFormat, "draw");
+  const captureDisabled = viewerLoading || !viewportContent;
   const selectDisabled = viewerLoading ||
-    !selectedMeshData ||
+    !viewportContent ||
     referenceSelectionPending ||
     referenceSelectionUnavailable ||
     referenceSelectionDeferred;
-  const posePickerDisabled = viewerLoading || !selectedMeshData || !urdfPosePickerAvailable;
+  const posePickerDisabled = viewerLoading || !viewportContent || !urdfPosePickerAvailable;
   const selectLabel = referenceSelectionPending ? "Preparing selection" : "Select";
-  const showStepAnimationPlay = renderFormat === RENDER_FORMAT.STEP && stepAnimationAvailable;
-  const stepAnimationPlayDisabled = viewerLoading || !selectedMeshData || stepAnimationDisabled;
-  const stepAnimationLabel = stepAnimationPlaying ? "Pause" : "Play";
+  // Any format with animation clips gets transport controls, whichever store backs them.
+  const showAnimationPlay = capabilities.animations && animationAvailable;
+  const animationPlayDisabled = viewerLoading || !viewportContent || animationDisabled;
+  const animationLabel = animationPlaying ? "Pause" : "Play";
 
   // Buttons shared between the full toolbar and the reduced orbit-mode toolbar.
-  const stepAnimationButton = showStepAnimationPlay ? (
+  const animationButton = showAnimationPlay ? (
     <ToolbarButton
-      label={stepAnimationLabel}
-      active={stepAnimationPlaying}
-      onClick={handleStepAnimationPlayToggle}
-      disabled={stepAnimationPlayDisabled}
-      aria-pressed={stepAnimationPlaying}
+      label={animationLabel}
+      active={animationPlaying}
+      onClick={handleAnimationPlayToggle}
+      disabled={animationPlayDisabled}
+      aria-pressed={animationPlaying}
     >
-      {stepAnimationPlaying ? (
+      {animationPlaying ? (
         <Pause className="size-3" strokeWidth={2} aria-hidden="true" />
       ) : (
         <Play className="size-3" strokeWidth={2} aria-hidden="true" />
@@ -194,7 +208,49 @@ function DesktopFloatingToolBar({
   );
 
   const measurementsCount = measureState?.measurements?.length || 0;
-  const showMeasurePanel = !dxfMode && !meshOnlyMode && (measureModeActive || measurementsCount > 0);
+  const showMeasurePanel = hasCapability(renderFormat, "topology") && (measureModeActive || measurementsCount > 0);
+
+  // A drawing's own toolbar, in its own pill to the LEFT of the shared one: 2D and 3D are a
+  // property of the drawing being viewed, not a tool that acts on it, so grouping them with
+  // select/pan/draw would read as a fourth mode of the same kind.
+  const drawingViewToolbar = drawingViewToggle ? (
+    <div
+      className={`${toolbarHidden ? "pointer-events-none" : "pointer-events-auto"} inline-flex h-8 w-fit items-center gap-0.5 rounded-md p-1 ${FLOATING_TOOL_BAR_SURFACE_CLASS}`}
+      onPointerEnter={onToolbarEnter}
+      onPointerLeave={onToolbarLeave}
+    >
+      {/* `active`, not `isActive`: ToolbarButton switches variant on `active`, and an unknown
+          prop is silently dropped -- which is why neither button looked selected. */}
+      <ToolbarButton
+        label="Top-down 2D view"
+        active={drawingViewMode === "2d"}
+        onClick={() => onDrawingViewModeChange?.("2d")}
+      >
+        <span className="text-[10px] font-medium leading-none">2D</span>
+      </ToolbarButton>
+      <ToolbarButton
+        label="3D view"
+        active={drawingViewMode !== "2d"}
+        onClick={() => onDrawingViewModeChange?.("3d")}
+      >
+        <span className="text-[10px] font-medium leading-none">3D</span>
+      </ToolbarButton>
+    </div>
+  ) : null;
+
+  const zoomToolbar = zoomControlsVisible ? (
+    <div
+      className={`${toolbarHidden ? "pointer-events-none" : "pointer-events-auto"} inline-flex h-8 w-fit items-center gap-0.5 rounded-md p-1 ${FLOATING_TOOL_BAR_SURFACE_CLASS}`}
+      onPointerEnter={onToolbarEnter}
+      onPointerLeave={onToolbarLeave}
+    >
+      <ZoomControl
+        zoomPercent={zoomPercent}
+        onZoomPercentChange={onZoomPercentChange}
+        onZoomReset={onZoomReset}
+      />
+    </div>
+  ) : null;
 
   return (
     <div
@@ -202,6 +258,9 @@ function DesktopFloatingToolBar({
       style={floatingCadToolbarPosition}
     >
       <TooltipProvider delayDuration={250}>
+        <div className="flex w-fit items-center gap-1 self-end">
+        {zoomToolbar}
+        {drawingViewToolbar}
         <div
           className={`${toolbarHidden ? "pointer-events-none" : "pointer-events-auto"} inline-flex h-8 w-fit items-center gap-0.5 self-end rounded-md p-1 ${FLOATING_TOOL_BAR_SURFACE_CLASS}`}
           onPointerEnter={onToolbarEnter}
@@ -211,7 +270,7 @@ function DesktopFloatingToolBar({
             // Orbit mode: only tools that make sense while orbiting, plus an
             // explicit exit (X). No select/draw/pose/orbit/export here.
             <>
-              {stepAnimationButton}
+              {animationButton}
               {screenshotButton}
               <ToolbarButton label="Exit orbit" onClick={handleExitPreviewMode}>
                 <X className="size-3" strokeWidth={2} aria-hidden="true" />
@@ -219,7 +278,11 @@ function DesktopFloatingToolBar({
             </>
           ) : (
             <>
-              {!dxfMode && !implicitMode && !robotMode && !meshOnlyMode ? (
+              {/* Select/Pan/Draw. Pan and Draw are camera and 2D-overlay tools that
+                  work against any viewport; Select is only meaningful where there is
+                  something to pick. Each button asks the capability table, so enabling
+                  one for a new format is a data change. */}
+              {showToolCluster ? (
                 <>
                   <ToolbarButton
                     label={selectLabel}
@@ -235,7 +298,7 @@ function DesktopFloatingToolBar({
                     label="Pan"
                     active={panToolActive}
                     onClick={() => handleSelectTabToolMode("pan")}
-                    disabled={viewerLoading || !selectedMeshData}
+                    disabled={viewerLoading || !viewportContent}
                     aria-pressed={panToolActive}
                   >
                     <Hand className="size-3" strokeWidth={2} aria-hidden="true" />
@@ -255,17 +318,17 @@ function DesktopFloatingToolBar({
                     label="Draw"
                     active={drawToolActive}
                     onClick={() => handleSelectTabToolMode("draw")}
-                    disabled={viewerLoading || !selectedMeshData}
+                    disabled={viewerLoading || !viewportContent}
                     aria-pressed={drawToolActive}
                   >
                     <PenTool className="size-3" strokeWidth={2} aria-hidden="true" />
                   </ToolbarButton>
 
-                  {stepAnimationButton}
+                  {animationButton}
                 </>
               ) : null}
 
-              {!dxfMode && urdfMode ? (
+              {capabilities.posePicker ? (
                 <ToolbarButton
                   label="Select Pose"
                   active={urdfPosePickerActive}
@@ -277,21 +340,19 @@ function DesktopFloatingToolBar({
                 </ToolbarButton>
               ) : null}
 
-              {!dxfMode ? (
-                <ToolbarButton
-                  label="Orbit"
-                  onClick={handleEnterPreviewMode}
-                  disabled={viewerLoading || !renderReady}
-                >
-                  <Orbit className="size-3" strokeWidth={2} aria-hidden="true" />
-                </ToolbarButton>
-              ) : null}
+              <ToolbarButton
+                label="Orbit"
+                onClick={handleEnterPreviewMode}
+                disabled={captureDisabled}
+              >
+                <Orbit className="size-3" strokeWidth={2} aria-hidden="true" />
+              </ToolbarButton>
 
               {screenshotButton}
 
               <StepExportDropdown
                 selectedEntry={selectedEntry}
-                onExportStepFile={onExportStepFile}
+                onExportModelFile={onExportModelFile}
                 fileAccessBusyKey={fileAccessBusyKey}
                 triggerClassName={FLOATING_TOOL_BAR_BUTTON_CLASSES}
                 iconClassName="size-3"
@@ -301,6 +362,7 @@ function DesktopFloatingToolBar({
               />
             </>
           )}
+        </div>
         </div>
       </TooltipProvider>
 
@@ -314,7 +376,7 @@ function DesktopFloatingToolBar({
         />
       ) : null}
 
-      {!previewMode && !dxfMode && !meshOnlyMode && drawToolActive ? (
+      {!previewMode && supportsTool(renderFormat, "draw") && drawToolActive ? (
         <DrawingToolbar
           className={CAD_WORKSPACE_TOOLBAR_DESKTOP_WIDTH_CLASS}
           drawingToolOptions={drawingToolOptions}

@@ -22,7 +22,7 @@ const STEP_SECTIONS = ["tree", "parameters", "display", "appearance", "metadata"
 
 test("only step supports the split", () => {
   assert.equal(kindSupportsSplit("step"), true);
-  assert.equal(kindSupportsSplit("dxf"), false);
+  assert.equal(kindSupportsSplit("dxf"), true);
   assert.equal(kindSupportsSplit("urdf"), false);
 });
 
@@ -43,11 +43,24 @@ test("parameters sits between reference and display in the bottom pane", () => {
   assert.deepEqual(arrangement.bottom, ["reference", "parameters", "display"]);
 });
 
-test("default non-step arrangement is a single strip", () => {
-  const arrangement = defaultFileSheetTabArrangement("dxf", ["dxf", "display", "appearance", "metadata"]);
+test("default non-split-kind arrangement is a single strip", () => {
+  const arrangement = defaultFileSheetTabArrangement("urdf", ["joints", "display", "metadata"]);
   assert.equal(arrangement.split, false);
-  assert.deepEqual(arrangement.top, ["dxf", "display", "appearance", "metadata"]);
+  assert.deepEqual(arrangement.top, ["joints", "display", "metadata"]);
   assert.deepEqual(arrangement.bottom, []);
+});
+
+test("default dxf arrangement keeps Material on top, conditional tabs below", () => {
+  const arrangement = defaultFileSheetTabArrangement("dxf", ["material", "bends", "dxfLayers"]);
+  assert.equal(arrangement.split, true);
+  assert.deepEqual(arrangement.top, ["material"]);
+  assert.deepEqual(arrangement.bottom, ["bends", "dxfLayers"]);
+});
+
+test("dxf with only Material collapses to a single strip", () => {
+  const arrangement = defaultFileSheetTabArrangement("dxf", ["material"]);
+  assert.equal(arrangement.split, false);
+  assert.deepEqual(arrangement.top, ["material"]);
 });
 
 test("step with only a tree collapses to a single strip", () => {
@@ -106,10 +119,10 @@ test("normalize re-derives the default split when a requested split has an empty
 });
 
 test("normalize forces a single strip for non-split kinds", () => {
-  const stored = { split: true, top: ["dxf"], bottom: ["display"] };
-  const normalized = normalizeFileSheetTabArrangement(stored, "dxf", ["dxf", "display", "metadata"]);
+  const stored = { split: true, top: ["joints"], bottom: ["display"] };
+  const normalized = normalizeFileSheetTabArrangement(stored, "urdf", ["joints", "display", "metadata"]);
   assert.equal(normalized.split, false);
-  assert.deepEqual(normalized.top, ["dxf", "display", "metadata"]);
+  assert.deepEqual(normalized.top, ["joints", "display", "metadata"]);
   assert.deepEqual(normalized.bottom, []);
 });
 

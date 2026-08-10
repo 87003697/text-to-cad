@@ -52,14 +52,14 @@ function FileEntryButton({
   entryHasUrdf,
   activeGenerationFiles = [],
   activeStepArtifactGenerationFile = "",
+  loadingFiles = [],
   stepArtifactGenerationAvailable = true,
   canRevealFileAssets = false,
   canCopyFileAssetLinks = false,
   canCopyFileAssetPaths = false,
   fileAccessBusyKey = "",
   onDownloadFileAsset,
-  onExportImplicitFile,
-  onExportStepFile,
+  onExportModelFile,
   onRevealFileAsset,
   onRevealInExplorerView,
   onCopyFileAssetReference,
@@ -78,6 +78,7 @@ function FileEntryButton({
     hasUrdf: entryHasUrdf(entry),
     activeGenerationFiles,
     activeStepArtifactGenerationFile,
+    loadingFiles,
     stepArtifactGenerationAvailable
   });
   const title = [
@@ -126,8 +127,7 @@ function FileEntryButton({
       canCopyFileAssetPaths={canCopyFileAssetPaths}
       busyKey={fileAccessBusyKey}
       onDownloadFileAsset={onDownloadFileAsset}
-      onExportImplicitFile={onExportImplicitFile}
-      onExportStepFile={onExportStepFile}
+      onExportModelFile={onExportModelFile}
       onRevealFileAsset={onRevealFileAsset}
       onRevealInExplorerView={onRevealInExplorerView}
       onCopyFileAssetReference={onCopyFileAssetReference}
@@ -151,14 +151,14 @@ function DirectoryNode({
   entryHasUrdf,
   activeGenerationFiles = [],
   activeStepArtifactGenerationFile = "",
+  loadingFiles = [],
   stepArtifactGenerationAvailable = true,
   canRevealFileAssets = false,
   canCopyFileAssetLinks = false,
   canCopyFileAssetPaths = false,
   fileAccessBusyKey = "",
   onDownloadFileAsset,
-  onExportImplicitFile,
-  onExportStepFile,
+  onExportModelFile,
   onRevealFileAsset,
   onRevealInExplorerView,
   onCopyFileAssetReference,
@@ -219,14 +219,14 @@ function DirectoryNode({
                     entryHasUrdf={entryHasUrdf}
                     activeGenerationFiles={activeGenerationFiles}
                     activeStepArtifactGenerationFile={activeStepArtifactGenerationFile}
+                    loadingFiles={loadingFiles}
                     stepArtifactGenerationAvailable={stepArtifactGenerationAvailable}
                     canRevealFileAssets={canRevealFileAssets}
                     canCopyFileAssetLinks={canCopyFileAssetLinks}
                     canCopyFileAssetPaths={canCopyFileAssetPaths}
                     fileAccessBusyKey={fileAccessBusyKey}
                     onDownloadFileAsset={onDownloadFileAsset}
-                    onExportImplicitFile={onExportImplicitFile}
-                    onExportStepFile={onExportStepFile}
+                    onExportModelFile={onExportModelFile}
                     onRevealFileAsset={onRevealFileAsset}
                     onRevealInExplorerView={onRevealInExplorerView}
                     onCopyFileAssetReference={onCopyFileAssetReference}
@@ -247,14 +247,14 @@ function DirectoryNode({
                     entryHasUrdf={entryHasUrdf}
                     activeGenerationFiles={activeGenerationFiles}
                     activeStepArtifactGenerationFile={activeStepArtifactGenerationFile}
+                    loadingFiles={loadingFiles}
                     stepArtifactGenerationAvailable={stepArtifactGenerationAvailable}
                     canRevealFileAssets={canRevealFileAssets}
                     canCopyFileAssetLinks={canCopyFileAssetLinks}
                     canCopyFileAssetPaths={canCopyFileAssetPaths}
                     fileAccessBusyKey={fileAccessBusyKey}
                     onDownloadFileAsset={onDownloadFileAsset}
-                    onExportImplicitFile={onExportImplicitFile}
-                    onExportStepFile={onExportStepFile}
+                    onExportModelFile={onExportModelFile}
                     onRevealFileAsset={onRevealFileAsset}
                     onRevealInExplorerView={onRevealInExplorerView}
                     onCopyFileAssetReference={onCopyFileAssetReference}
@@ -308,14 +308,14 @@ function FileViewerContents({
   entryHasUrdf,
   activeGenerationFiles = [],
   activeStepArtifactGenerationFile = "",
+  loadingFiles = [],
   stepArtifactGenerationAvailable = true,
   canRevealFileAssets = false,
   canCopyFileAssetLinks = false,
   canCopyFileAssetPaths = false,
   fileAccessBusyKey = "",
   onDownloadFileAsset,
-  onExportImplicitFile,
-  onExportStepFile,
+  onExportModelFile,
   onRevealFileAsset,
   onRevealInExplorerView,
   onCopyFileAssetReference,
@@ -368,14 +368,14 @@ function FileViewerContents({
                           entryHasUrdf={entryHasUrdf}
                           activeGenerationFiles={activeGenerationFiles}
                           activeStepArtifactGenerationFile={activeStepArtifactGenerationFile}
+                    loadingFiles={loadingFiles}
                           stepArtifactGenerationAvailable={stepArtifactGenerationAvailable}
                           canRevealFileAssets={canRevealFileAssets}
                           canCopyFileAssetLinks={canCopyFileAssetLinks}
                           canCopyFileAssetPaths={canCopyFileAssetPaths}
                           fileAccessBusyKey={fileAccessBusyKey}
                           onDownloadFileAsset={onDownloadFileAsset}
-                          onExportImplicitFile={onExportImplicitFile}
-                          onExportStepFile={onExportStepFile}
+                          onExportModelFile={onExportModelFile}
                           onRevealFileAsset={onRevealFileAsset}
                           onRevealInExplorerView={onRevealInExplorerView}
                           onCopyFileAssetReference={onCopyFileAssetReference}
@@ -395,14 +395,14 @@ function FileViewerContents({
                           entryHasUrdf={entryHasUrdf}
                           activeGenerationFiles={activeGenerationFiles}
                           activeStepArtifactGenerationFile={activeStepArtifactGenerationFile}
+                    loadingFiles={loadingFiles}
                           stepArtifactGenerationAvailable={stepArtifactGenerationAvailable}
                           canRevealFileAssets={canRevealFileAssets}
                           canCopyFileAssetLinks={canCopyFileAssetLinks}
                           canCopyFileAssetPaths={canCopyFileAssetPaths}
                           fileAccessBusyKey={fileAccessBusyKey}
                           onDownloadFileAsset={onDownloadFileAsset}
-                          onExportImplicitFile={onExportImplicitFile}
-                          onExportStepFile={onExportStepFile}
+                          onExportModelFile={onExportModelFile}
                           onRevealFileAsset={onRevealFileAsset}
                           onRevealInExplorerView={onRevealInExplorerView}
                           onCopyFileAssetReference={onCopyFileAssetReference}
@@ -446,14 +446,14 @@ export default function FileViewerSidebar({
   entryHasUrdf,
   activeGenerationFiles = [],
   activeStepArtifactGenerationFile = "",
+  loadingFiles = [],
   stepArtifactGenerationAvailable = true,
   canRevealFileAssets = false,
   canCopyFileAssetLinks = false,
   canCopyFileAssetPaths = false,
   fileAccessBusyKey = "",
   onDownloadFileAsset,
-  onExportImplicitFile,
-  onExportStepFile,
+  onExportModelFile,
   onRevealFileAsset,
   onRevealInExplorerView,
   onCopyFileAssetReference,
@@ -486,14 +486,14 @@ export default function FileViewerSidebar({
       entryHasUrdf={entryHasUrdf}
       activeGenerationFiles={activeGenerationFiles}
       activeStepArtifactGenerationFile={activeStepArtifactGenerationFile}
+                    loadingFiles={loadingFiles}
       stepArtifactGenerationAvailable={stepArtifactGenerationAvailable}
       canRevealFileAssets={canRevealFileAssets}
       canCopyFileAssetLinks={canCopyFileAssetLinks}
       canCopyFileAssetPaths={canCopyFileAssetPaths}
       fileAccessBusyKey={fileAccessBusyKey}
       onDownloadFileAsset={onDownloadFileAsset}
-      onExportImplicitFile={onExportImplicitFile}
-      onExportStepFile={onExportStepFile}
+      onExportModelFile={onExportModelFile}
       onRevealFileAsset={onRevealFileAsset}
       onRevealInExplorerView={onRevealInExplorerView}
       onCopyFileAssetReference={onCopyFileAssetReference}

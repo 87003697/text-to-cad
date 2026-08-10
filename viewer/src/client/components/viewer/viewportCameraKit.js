@@ -1,5 +1,5 @@
 // Shared, renderer-agnostic viewport/camera helpers used by both the mesh CAD
-// viewer (CadViewer) and the implicit CAD viewer (ImplicitCadViewer). These
+// viewer (CadViewer) and its implicit raymarch pass (useImplicitRaymarch). These
 // helpers operate on a generic `runtime` shape that exposes at least
 // `{ THREE, camera, controls, keyboardOrbitState }`; they make no assumption
 // about how the scene itself is rendered (mesh scene graph vs raymarch quad).

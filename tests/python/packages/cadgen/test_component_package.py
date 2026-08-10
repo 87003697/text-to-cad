@@ -13,6 +13,20 @@ add_repo_path("packages/cadgen/src")
 from build123d import Box, Compound, Pos
 
 from cadgen._internal import component_package
+from cadgen.coordination.lock import exclusive
+from cadgen.coordination.paths import write_lock_path
+
+
+def _build_package(compound, **kwargs):
+    """Drive the package writer holding its write lock, as every real producer does.
+
+    build_package_from_compound() asserts the lock at the mutation boundary (see
+    require_write_lock) precisely so a producer cannot be added that writes a package
+    uncoordinated -- which is the bug that made a cold `cad inspect` build invisible to
+    the CAD Viewer. These unit tests call the writer directly, so they take the lock too.
+    """
+    with exclusive(write_lock_path(kwargs["package_dir"])):
+        return component_package.build_package_from_compound(compound, **kwargs)
 
 
 def _glb_json_chunk(glb_path: Path) -> dict:
@@ -41,7 +55,7 @@ class ComponentPackageTests(unittest.TestCase):
         compound = _demo_compound()
         with tempfile.TemporaryDirectory() as tmp:
             package_dir = Path(tmp) / "__cadgen__" / "models" / "demo.step"
-            stats = component_package.build_package_from_compound(
+            stats = _build_package(
                 compound, package_dir=package_dir, root_name="demo"
             )
             self.assertEqual(stats["occurrences"], 3)
@@ -85,11 +99,11 @@ class ComponentPackageTests(unittest.TestCase):
         compound = _demo_compound()
         with tempfile.TemporaryDirectory() as tmp:
             package_dir = Path(tmp) / "__cadgen__" / "models" / "demo.step"
-            component_package.build_package_from_compound(
+            _build_package(
                 compound, package_dir=package_dir, root_name="demo"
             )
             # A second build over an unchanged compound reuses every component GLB.
-            stats = component_package.build_package_from_compound(
+            stats = _build_package(
                 compound, package_dir=package_dir, root_name="demo"
             )
             self.assertEqual(stats["components_built"], 0)
@@ -99,12 +113,12 @@ class ComponentPackageTests(unittest.TestCase):
         compound = _demo_compound()
         with tempfile.TemporaryDirectory() as tmp:
             package_dir = Path(tmp) / "__cadgen__" / "models" / "demo.step"
-            component_package.build_package_from_compound(
+            _build_package(
                 compound, package_dir=package_dir, root_name="demo"
             )
             # force ignores the content-addressed cache (mesh/selector code changed,
             # not the geometry) and rebuilds every component.
-            stats = component_package.build_package_from_compound(
+            stats = _build_package(
                 compound, package_dir=package_dir, root_name="demo", force=True
             )
             self.assertEqual(stats["components_built"], 2)
@@ -119,7 +133,7 @@ class ComponentPackageTests(unittest.TestCase):
             package_dir = component_package.render_package_dir(step_path)
             self.assertFalse(component_package.assembly_package_current(step_path))
 
-            component_package.build_package_from_compound(
+            _build_package(
                 compound, package_dir=package_dir, root_name="demo"
             )
             self.assertTrue(component_package.assembly_package_current(step_path))
@@ -138,10 +152,10 @@ class ComponentPackageTests(unittest.TestCase):
             pkg_a = Path(tmp_a) / ".demo.step.glb"
             pkg_b = Path(tmp_b) / ".demo.step.glb"
             provenance = {"schemaVersion": 2, "sourceKind": "python", "stepHash": "abc"}
-            component_package.build_package_from_compound(
+            _build_package(
                 compound, package_dir=pkg_a, root_name="demo", provenance=provenance
             )
-            component_package.build_package_from_compound(
+            _build_package(
                 compound, package_dir=pkg_b, root_name="demo", provenance=provenance, force=True
             )
 
@@ -173,7 +187,7 @@ class ComponentPackageTests(unittest.TestCase):
         compound = _demo_compound()
         with tempfile.TemporaryDirectory() as tmp:
             package_dir = Path(tmp) / "__cadgen__" / "models" / "demo.step"
-            component_package.build_package_from_compound(
+            _build_package(
                 compound, package_dir=package_dir, root_name="demo"
             )
             descriptor = json.loads((package_dir / "assembly.json").read_text())
@@ -220,7 +234,7 @@ class ComponentPackageTests(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as tmp:
             package_dir = Path(tmp) / "__cadgen__" / "models" / "demo.step"
-            component_package.build_package_from_compound(
+            _build_package(
                 compound, package_dir=package_dir, root_name="demo"
             )
             descriptor = json.loads((package_dir / "assembly.json").read_text())

@@ -21,7 +21,7 @@ import { cloneThemeSettings } from "cadjs/common/themeSettings.js";
 
 const HERO_STEP_URL = "/hero/planetary_gear_assembly.step.glb";
 const HERO_STEP_PARAMETER_URL = "/hero/planetary_gear_assembly.step.js";
-const HERO_STEP_CAD_PATH = "models/fun/planetary_gear_assembly.step";
+const HERO_STEP_CAD_PATH = "models/step/assemblies/planetary_gear_assembly.step";
 const HERO_STEP_DEMO_URL =
   "https://cad.fun/?file=fun%2Fplanetary_gear_assembly.step";
 const HERO_STEP_LABEL = "PLANETARY_GEAR_ASSEMBLY.STEP";

@@ -1,4 +1,5 @@
 import { Children, useEffect, useRef, useState } from "react";
+import { Check, ChevronDown } from "lucide-react";
 import { cn } from "@/ui/utils";
 import {
   AccordionContent,
@@ -6,11 +7,22 @@ import {
   AccordionTrigger
 } from "../ui/accordion";
 import { ColorPicker } from "../ui/color-picker";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSub,
+  DropdownMenuSubContent,
+  DropdownMenuSubTrigger,
+  DropdownMenuTrigger
+} from "../ui/dropdown-menu";
 import { ScrollArea } from "../ui/scroll-area";
 import {
   Select,
   SelectContent,
+  SelectGroup,
   SelectItem,
+  SelectLabel,
   SelectTrigger,
   SelectValue
 } from "../ui/select";
@@ -189,6 +201,26 @@ export function FileSheetSubsection({
   );
 }
 
+export function FileSheetItemGroup({ label, children, className }) {
+  // A repeated instance inside one section (settings-ui.md "Repeated item groups"): the
+  // section names the kind, this names the instance. The label sits between a section
+  // header and a row label in weight — full-strength foreground at row size — and binds to
+  // its rows with the tight 4px stacked gap rather than a heading's 12px clearance. Groups
+  // are separated by the section's 16px rhythm with no rule: the next label is the boundary.
+  return (
+    <div className={cn("space-y-1 [&:not(:first-child)]:mt-4", className)} data-file-sheet-item-group="">
+      <div className="flex min-h-4 items-center px-2">
+        <span className="min-w-0 truncate text-[11px] font-medium leading-4 text-sidebar-foreground">
+          {label}
+        </span>
+      </div>
+      <div className={FILE_SHEET_ROW_STACK_CLASSES} data-file-sheet-row-stack="">
+        {children}
+      </div>
+    </div>
+  );
+}
+
 export function FileSheetSectionBody({
   children,
   className
@@ -295,10 +327,20 @@ export function FileSheetValueInput({
     inputRef.current?.select?.();
   }, [editing, visibleValue]);
 
+  const pendingSelectFrameRef = useRef(0);
   const selectInputValue = (input) => {
     input?.select?.();
     if (typeof window !== "undefined") {
-      window.requestAnimationFrame?.(() => input?.select?.());
+      // The deferred re-select exists for the format swap on focus ("2.0 mm" -> "2"). It
+      // must die the moment the user types: firing after the first keystroke re-selects the
+      // typed digit, and the second keystroke then overwrites the first.
+      window.cancelAnimationFrame?.(pendingSelectFrameRef.current);
+      pendingSelectFrameRef.current = window.requestAnimationFrame?.(() => {
+        if (selectOnEditRef.current === false) {
+          return;
+        }
+        input?.select?.();
+      }) || 0;
     }
   };
 
@@ -311,6 +353,12 @@ export function FileSheetValueInput({
       disabled={disabled}
       data-editing={editing ? "true" : "false"}
       onChange={(event) => {
+        // Typing cancels every pending select — the selection belongs to focus, never to a
+        // frame that lands mid-word.
+        selectOnEditRef.current = false;
+        if (typeof window !== "undefined") {
+          window.cancelAnimationFrame?.(pendingSelectFrameRef.current);
+        }
         setDraftValue(event.target.value);
       }}
       onFocus={(event) => {
@@ -594,13 +642,15 @@ export function FileSheetSegmentedControl({ value, onChange, options, ariaLabel,
             className={cn(
               "min-w-0 gap-1.5 !h-7 px-1.5 text-[11px]",
               fit && "!flex-none px-2",
+              option.iconOnly && "px-1",
               FILE_SHEET_SEGMENTED_ITEM_CLASSES
             )}
             title={option.title || option.label}
             aria-label={option.label}
           >
             {Icon ? <Icon className="size-3" strokeWidth={2} aria-hidden="true" /> : null}
-            <span className="truncate">{option.label}</span>
+            {/* iconOnly keeps the label for the tooltip and screen readers only. */}
+            {Icon && option.iconOnly ? null : <span className="truncate">{option.label}</span>}
           </ToggleGroupItem>
         );
       })}
@@ -636,17 +686,39 @@ export function FileSheetSelectRow({
         {triggerContent ?? <SelectValue placeholder={placeholder} />}
       </SelectTrigger>
       <SelectContent>
-        {options.map((option) => (
-          <SelectItem
-            key={option.value}
-            value={option.value}
-            className="text-xs"
-            title={option.title}
-            icon={option.icon}
-          >
-            {option.label}
-          </SelectItem>
-        ))}
+        {(() => {
+          // Options may carry a `group`: grouped ones render under SelectGroup headings in
+          // first-appearance order, ungrouped ones (e.g. a leading "None") stay at the top.
+          const renderItem = (option) => (
+            <SelectItem
+              key={option.value}
+              value={option.value}
+              className="text-xs"
+              title={option.title}
+              icon={option.icon}
+            >
+              {option.label}
+            </SelectItem>
+          );
+          const ungrouped = options.filter((option) => !option.group);
+          const groupNames = [...new Set(options.map((option) => option.group).filter(Boolean))];
+          if (!groupNames.length) {
+            return options.map(renderItem);
+          }
+          return (
+            <>
+              {ungrouped.map(renderItem)}
+              {groupNames.map((groupName) => (
+                <SelectGroup key={groupName}>
+                  <SelectLabel className="text-[10px] uppercase tracking-wide text-muted-foreground">
+                    {groupName}
+                  </SelectLabel>
+                  {options.filter((option) => option.group === groupName).map(renderItem)}
+                </SelectGroup>
+              ))}
+            </>
+          );
+        })()}
       </SelectContent>
     </Select>
   );
@@ -665,6 +737,71 @@ export function FileSheetSelectRow({
 }
 
 // Compact color picker trigger for inline rows and parameter rows.
+/**
+ * A select whose options nest one level: ungrouped entries render directly, each group is
+ * a hover submenu (folder). For long grouped lists — the DXF material catalog — where a
+ * flat strip of headings would scroll forever. The trigger mirrors the inline select
+ * trigger, so a column of selects reads uniformly.
+ */
+export function FileSheetCascadeSelectRow({
+  label,
+  value,
+  onValueChange,
+  options,
+  ariaLabel,
+  className
+}) {
+  const selected = options.find((option) => option.value === value) || null;
+  const ungrouped = options.filter((option) => !option.group);
+  const groupNames = [...new Set(options.map((option) => option.group).filter(Boolean))];
+  // The tick sits on the RIGHT: a checkbox item's left indicator gutter indents checked
+  // and unchecked rows differently from the plain submenu triggers, which reads as ragged
+  // left padding. Right-side ticks keep every row's text on one left edge.
+  const renderItem = (option) => (
+    <DropdownMenuItem
+      key={option.value}
+      className="justify-between gap-2 text-xs"
+      onSelect={() => onValueChange?.(option.value)}
+    >
+      <span className="min-w-0 truncate">{option.label}</span>
+      {option.value === value ? (
+        <Check className="size-3.5 shrink-0" strokeWidth={2} aria-hidden="true" />
+      ) : null}
+    </DropdownMenuItem>
+  );
+  return (
+    <FileSheetInlineControlRow label={label} className={className}>
+      <DropdownMenu>
+        <DropdownMenuTrigger asChild>
+          <button
+            type="button"
+            aria-label={ariaLabel || (typeof label === "string" ? label : undefined)}
+            className={cn(
+              "flex !h-7 w-fit min-w-20 max-w-44 items-center justify-between gap-1 overflow-hidden",
+              "rounded-md border border-input bg-transparent px-2 !text-[11px] shadow-xs outline-none",
+              "focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50 dark:bg-input/30"
+            )}
+          >
+            <span className="min-w-0 truncate">{selected?.label ?? ""}</span>
+            <ChevronDown className="size-3.5 shrink-0 opacity-60" aria-hidden="true" />
+          </button>
+        </DropdownMenuTrigger>
+        <DropdownMenuContent align="end" sideOffset={4} className="w-52">
+          {ungrouped.map(renderItem)}
+          {groupNames.map((groupName) => (
+            <DropdownMenuSub key={groupName}>
+              <DropdownMenuSubTrigger className="text-xs">{groupName}</DropdownMenuSubTrigger>
+              <DropdownMenuSubContent className="max-h-80 w-56 overflow-y-auto">
+                {options.filter((option) => option.group === groupName).map(renderItem)}
+              </DropdownMenuSubContent>
+            </DropdownMenuSub>
+          ))}
+        </DropdownMenuContent>
+      </DropdownMenu>
+    </FileSheetInlineControlRow>
+  );
+}
+
 export function FileSheetColorPicker({
   value,
   onChange,

@@ -22,11 +22,11 @@ sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[2]))
 from server_py import cadgen_bridge, worker, worker_client  # noqa: E402
 
 _WORKTREE = pathlib.Path(__file__).resolve().parents[3]
-_FIXTURE = _WORKTREE / "models/simple/basic_shape_mating_test_fixture.step.py"
-_LOGICAL_STEP = _WORKTREE / "models/simple/basic_shape_mating_test_fixture.step"
+_FIXTURE = _WORKTREE / "models/step/parts/basic_shape_mating_test_fixture.step.py"
+_LOGICAL_STEP = _WORKTREE / "models/step/parts/basic_shape_mating_test_fixture.step"
 _DESCRIPTOR = (
     _WORKTREE
-    / "models/simple/__cadgen__/models/basic_shape_mating_test_fixture.step.py/assembly.json"
+    / "models/step/parts/__cadgen__/models/basic_shape_mating_test_fixture.step.py/assembly.json"
 )
 
 

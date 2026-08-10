@@ -83,6 +83,28 @@ export function entrySourceFormat(entry) {
   return RENDER_FORMAT.STEP;
 }
 
+// The kinds whose renderable geometry is BAKED into a __cadgen__ render package rather
+// than parsed in the browser: a DXF is 2D entities and an implicit model is GLSL, so
+// neither has a mesh of its own. The producer writes one, the scanner publishes it as the
+// entry's `glb` asset, and the viewport loads it through the same path a native .glb takes.
+const PACKAGE_BAKED_RENDER_KINDS = Object.freeze([RENDER_FORMAT.DXF, RENDER_FORMAT.IMPLICIT]);
+
+/**
+ * The format of the asset the viewport actually LOADS for an entry, as opposed to the
+ * format of the file the user opened (`entrySourceFormat`).
+ *
+ * For a baked kind this is GLB unconditionally — it does not consult whether a package has
+ * been built. A missing package is not a reason to fall back to an in-browser parse; it is
+ * `needs-build`, reported by the artifact state machine and fixed by building. The
+ * per-entry "GLB only when a package exists" form this replaced was a phasing device that
+ * let the bake ship before the client deletions, and it died with them.
+ */
+export function entryRenderAssetFormat(entry) {
+  return PACKAGE_BAKED_RENDER_KINDS.includes(entryKind(entry))
+    ? RENDER_FORMAT.GLB
+    : entrySourceFormat(entry);
+}
+
 export function isMeshRenderFormat(format) {
   return MESH_RENDER_FORMATS.includes(normalizeFormat(format));
 }
@@ -97,7 +119,7 @@ export function meshAssetKeyForFormat(format) {
 }
 
 export function meshAssetKeyForEntry(entry) {
-  return meshAssetKeyForFormat(entrySourceFormat(entry));
+  return meshAssetKeyForFormat(entryRenderAssetFormat(entry));
 }
 
 export function fileSheetKindForEntry(entry) {

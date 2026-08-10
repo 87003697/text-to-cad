@@ -35,7 +35,7 @@ const HERE = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(HERE, "../../..");
 const DEFAULT_PACKAGE = path.join(
   REPO_ROOT,
-  "models/one-shots/falcon_heavy/__cadgen__/models/falcon_heavy.step.py",
+  "models/renders/falcon_heavy/__cadgen__/models/falcon_heavy.step.py",
 );
 
 function sumPartBytes(meshData) {

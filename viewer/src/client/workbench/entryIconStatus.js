@@ -1,7 +1,7 @@
 import {
-  isRobotRenderFormat,
-  RENDER_FORMAT
-} from "cadjs/lib/fileFormats.js";
+  assetKindForRenderFormat,
+  ASSET_KIND
+} from "cadjs/lib/renderCapabilities.js";
 import {
   stepArtifactCanGenerate,
   stepArtifactGenerationInProgress,
@@ -17,6 +17,10 @@ export function entryIconStatus(entry, {
   hasUrdf = true,
   activeStepArtifactGenerationFile = "",
   activeStepArtifactGenerationFiles = [],
+  // Entries the viewer is actively loading RIGHT NOW -- an asset read, a decode, a module
+  // load. Distinct from artifact generation: a built package still has to be fetched and
+  // decoded, and during that the file explorer should say so.
+  loadingFiles = [],
   stepArtifactGenerationAvailable = true
 } = {}) {
   const normalizedSourceFormat = String(sourceFormat || "").trim().toLowerCase();
@@ -36,13 +40,16 @@ export function entryIconStatus(entry, {
       .map((file) => String(file || "").trim())
       .filter(Boolean)
   );
-  const pending = normalizedSourceFormat === RENDER_FORMAT.DXF
-    ? !hasDxf
-    : normalizedSourceFormat === RENDER_FORMAT.IMPLICIT
-      ? !hasImplicit
-    : isRobotRenderFormat(normalizedSourceFormat)
-      ? !hasUrdf
-      : !hasMesh;
+  // "Has this entry's asset arrived yet?" — one question, asked against whichever asset the
+  // format actually loads. The caller still passes one flag per asset kind because the file
+  // list holds all of them at once; the format no longer decides which flag by name.
+  const loadedByAssetKind = {
+    [ASSET_KIND.MESH]: hasMesh,
+    [ASSET_KIND.DRAWING]: hasDxf,
+    [ASSET_KIND.IMPLICIT]: hasImplicit,
+    [ASSET_KIND.ROBOT]: hasUrdf
+  };
+  const pending = loadedByAssetKind[assetKindForRenderFormat(normalizedSourceFormat)] === false;
   const artifactGenerationFiles = [...activeArtifactGenerationFileSet];
   const artifactGenerationInProgress = stepArtifactGenerationInProgress({
     entry,
@@ -63,9 +70,17 @@ export function entryIconStatus(entry, {
   // A model that simply lacks a built __cadgen__ artifact is NOT "loading" — nothing loads in a
   // static file list (generation happens lazily when the model is opened). Only an actively-running
   // generation shows a spinner; an un-built entry just shows its normal type icon.
-  const loading = artifactGenerating;
+  // Same file-ref matching the generation check uses -- reused rather than reimplemented,
+  // so "which entry is this?" cannot answer differently in two places.
+  const assetLoading = stepArtifactGenerationInProgress({
+    entry,
+    activeGenerationFiles: loadingFiles
+  });
+  const loading = artifactGenerating || assetLoading;
   const statusLabel = artifactGenerating
     ? "generating artifact"
+    : assetLoading
+      ? "loading"
     : artifactWarning
       ? (artifactStale ? "artifact stale" : artifactErrorCode === "missing_glb" ? "artifacts missing" : "artifact warning")
       : artifactBuildable

@@ -43,3 +43,6 @@ include = ["cadgen*"]
 
 [tool.setuptools.package-data]
 cadgen = ["py.typed"]
+# The Node builder bridge (cadgen/_internal/node_runtime.py) spawns node with
+# `--import node_resolve_register.mjs`; both .mjs files must ship with the package.
+"cadgen._internal" = ["*.mjs"]

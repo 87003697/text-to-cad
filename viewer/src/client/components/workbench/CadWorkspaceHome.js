@@ -1,13 +1,13 @@
 import { ChevronRight } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/ui/utils";
-import { RENDER_FORMAT } from "@/workbench/constants";
 import EntryIcon from "./EntryIcon";
+import { entrySourceFormat } from "cadjs/lib/fileFormats";
 import {
-  entrySourceFormat,
-  isMeshRenderFormat,
-  isRobotRenderFormat
-} from "cadjs/lib/fileFormats";
+  renderCapabilities,
+  renderFormatLabel,
+  VIEWPORT_CONTENT
+} from "cadjs/lib/renderCapabilities";
 import {
   fileKey,
   sidebarLabelForEntry
@@ -15,29 +15,29 @@ import {
 
 const MAX_HOME_OPTIONS = 6;
 
+const HOME_GROUP_ORDER = ["assembly", "step", "dxf", "implicit", "robot", "mesh"];
+
+function homeGroupForEntry(entry) {
+  if (entry?.kind === "assembly") {
+    return "assembly";
+  }
+  const capabilities = renderCapabilities(entrySourceFormat(entry));
+  if (capabilities.content === VIEWPORT_CONTENT.ROBOT || entry?.kind === "srdf") {
+    return "robot";
+  }
+  return capabilities.sheetKind;
+}
+
+// The registry already names every format for the UI; this only adds the two labels that
+// come from the ENTRY rather than its format.
 function formatLabelForEntry(entry, sourceFormat) {
   if (entry?.kind === "assembly") {
     return "Assembly";
   }
-  if (sourceFormat === RENDER_FORMAT.DXF) {
-    return "DXF";
-  }
-  if (sourceFormat === RENDER_FORMAT.IMPLICIT) {
-    return "Implicit";
-  }
   if (entry?.kind === "srdf") {
     return "SRDF";
   }
-  if (sourceFormat === RENDER_FORMAT.URDF) {
-    return "URDF";
-  }
-  if (sourceFormat === RENDER_FORMAT.SDF) {
-    return "SDF";
-  }
-  if (isMeshRenderFormat(sourceFormat)) {
-    return sourceFormat.toUpperCase();
-  }
-  return "STEP";
+  return renderFormatLabel(sourceFormat) || "STEP";
 }
 
 function pathLabelForEntry(entry) {
@@ -64,17 +64,11 @@ export function selectHomeEntries(entries) {
   const sortedEntries = [...(Array.isArray(entries) ? entries : [])].sort(compareEntryLabels);
   const result = [];
   const seenKeys = new Set();
-  const groups = [
-    (entry) => entry?.kind === "assembly",
-    (entry) => entrySourceFormat(entry) === RENDER_FORMAT.STEP && entry?.kind !== "assembly",
-    (entry) => entrySourceFormat(entry) === RENDER_FORMAT.DXF,
-    (entry) => entrySourceFormat(entry) === RENDER_FORMAT.IMPLICIT,
-    (entry) => isRobotRenderFormat(entrySourceFormat(entry)) || entry?.kind === "srdf",
-    (entry) => isMeshRenderFormat(entrySourceFormat(entry))
-  ];
-
-  for (const matchesGroup of groups) {
-    const match = sortedEntries.find((entry) => matchesGroup(entry));
+  // One representative per SHEET KIND, in this order — a sampler of what the catalog holds.
+  // Sheet kinds are the registry's own vocabulary, so a new format joins the home screen by
+  // declaring a row; "assembly" and "robot" are the two groups that are not one.
+  for (const group of HOME_GROUP_ORDER) {
+    const match = sortedEntries.find((entry) => homeGroupForEntry(entry) === group);
     addHomeEntry(result, seenKeys, match);
   }
 

@@ -18,10 +18,15 @@ The default build product is the **drawing package** — a render artifact the C
 ```
 <model-folder>/__cadgen__/models/<name>.dxf.py/
   drawing.json    # provenance + freshness descriptor
-  drawing.dxf     # the built DXF
+  drawing.dxf     # the built DXF (the exchange artifact)
+  preview.glb     # the baked 3D flat pattern (what the viewer renders)
 ```
 
-The sibling `<name>.dxf` file is written **on demand only** (`--dxf`, `-o`, or a `SOURCE=OUTPUT` pair) for deliverables handed to cutting services or other tools. An exported `.dxf` is a point-in-time deliverable, totally detached from its generator: rebuilds never delete, rewrite, or staleness-track it (same as an exported STEP file) — re-export when you want it refreshed. Do not commit generated `.dxf` outputs; the package cache is gitignored and rebuilt on demand.
+`preview.glb` is baked from `drawing.dxf` by a Node child of the build, inside the same
+generation lock, so a build produces both payloads or neither. It needs `node` on PATH (or
+`CADGEN_NODE`).
+
+The sibling `<name>.dxf` file is written **on demand only** (`--write`, `-o`, or a `SOURCE=OUTPUT` pair) for deliverables handed to cutting services or other tools. An exported `.dxf` is a point-in-time deliverable, totally detached from its generator: rebuilds never delete, rewrite, or staleness-track it (same as an exported STEP file) — re-export when you want it refreshed. Do not commit generated `.dxf` outputs; the package cache is gitignored and rebuilt on demand.
 
 ## The three DXF workflows
 
@@ -67,10 +72,13 @@ Use these defaults unless the user specifies otherwise:
 
 ## Tool
 
-The launcher lives in the DXF skill directory:
+The skill has two launchers, split on who the source is — the same split the CAD
+skill uses between `scripts/gen` and `scripts/artifact`:
 
 ```bash
-python scripts/dxf targets... [flags]
+python scripts/gen targets... [flags]        # gen_dxf() Python generators
+python scripts/artifact target [flags]       # one drawing, INCLUDING an imported .dxf
+python scripts/snapshot --input <drawing> --output <file.png>   # render it
 ```
 
 Use the active project Python interpreter; treat `python` as an interpreter placeholder, and use `--help` for the full interface. Target paths resolve from the command's current working directory; run from the workspace that owns the artifacts with cwd-relative target paths. Keep a drawing generator in the same directory as the geometry it derives from, named `<name>.dxf.py`.
@@ -85,36 +93,63 @@ def gen_dxf():
 
 Every run builds/refreshes the drawing package. Flags:
 
-- `--dxf` — also write the sibling `<name>.dxf` export.
+- `--write` — also write the sibling `<name>.dxf` export.
 - `-o`/`--output PATH` — export to a custom path; only with one plain generated Python target.
 - `SOURCE.dxf.py=OUTPUT.dxf` positional pairs — per-target custom export paths.
-- `--snapshot` — also write an SVG snapshot (`drawing.svg`) into each drawing package for visual review.
 - `--force` — rebuild even when the cached drawing package is current (an unchanged source closure is otherwise skipped).
 - `--validate` — validate existing `.dxf` FILES with the generation-time drawing checks instead of generating.
 
 Do not put output paths in the `gen_dxf()` return value.
 
-`scripts/dxf` is a generator; it does not inspect existing `.dxf` files. For existing DXF inspection, use `ezdxf` for entity/layer checks and `$cad-viewer` for visual review.
+`scripts/gen` runs generators only. An imported `.dxf` has no generator to run, so it
+goes through `scripts/artifact` instead:
+
+```bash
+python scripts/artifact path/to/imported.dxf
+python scripts/artifact path/to/source.dxf.py --force
+```
+
+That builds the same hidden `__cadgen__` drawing package the CAD Viewer builds on
+demand — the drawing DXF plus the 3D `preview.glb` the viewport renders — and accepts
+either source kind, so it is also how you debug a generated drawing's package build.
+Flags: `--write PATH` (also write the package's drawing DXF there), `--force`,
+`--verbose`.
+
+`scripts/snapshot` renders a drawing's 3D flat pattern to a PNG still or an orbit GIF:
+
+```bash
+python scripts/snapshot --input path/to/imported.dxf --output review.png
+python scripts/snapshot --input path/to/source.dxf.py --output turntable.gif --mode orbit
+```
+
+It builds/refreshes the drawing package first, then renders that package's `preview.glb`
+through the same headless browser runtime the CAD skill's STEP snapshot uses — so a
+snapshot matches what the CAD Viewer shows. Flags: `--mode view|orbit`, `--camera`,
+`--appearance`, `--size-profile`, `--width`/`--height`, `--force`, `--json`. There are no
+selector, parameter, section or exploded options: a drawing carries no CAD topology.
+
+No CLI inspects an existing `.dxf`. For entity/layer checks use `ezdxf` directly,
+and `--validate` for the drawing checks; review geometry visually with `$cad-viewer`.
 
 ## Workflow
 
 1. Convert the request into a short brief: outline dimensions, holes and slots, layers, units, output path, and validation targets.
 2. Pick the workflow: standalone drafting, projection of a generated STEP (create and validate the STEP geometry with `$cad` first), or projection of an imported STEP (declare it in `sources`).
 3. Write or edit the `<name>.dxf.py` source with meaningful dimensions as named parameters, reusing the STEP source's geometry helpers instead of duplicating formulas.
-4. Run `scripts/dxf` on explicit Python source targets only; do not run directory-wide generation.
+4. Run `scripts/gen` on explicit Python source targets only; do not run directory-wide generation.
 
 ```bash
-python scripts/dxf path/to/source.dxf.py
-python scripts/dxf path/to/source.dxf.py --dxf
-python scripts/dxf path/to/source.dxf.py -o path/to/output.dxf
-python scripts/dxf path/to/a.dxf.py=out/a.dxf path/to/b.dxf.py=out/b.dxf
+python scripts/gen path/to/source.dxf.py
+python scripts/gen path/to/source.dxf.py --write
+python scripts/gen path/to/source.dxf.py -o path/to/output.dxf
+python scripts/gen path/to/a.dxf.py=out/a.dxf path/to/b.dxf.py=out/b.dxf
 ```
 
 5. Validate the generated DXF deterministically, then hand off and report.
 
 ## Viewer integration
 
-`<name>.dxf.py` files are CAD Viewer catalog entries, listed whether or not their drawing package has been built. Opening one triggers the unified render-artifact flow: a missing or stale package (any source-closure file — the generator, its path-loaded `.step.py` sources, and helper modules — newer than the descriptor) rebuilds automatically. The viewer's export dropdown offers "Download DXF" on generated drawings (it refreshes the package first, so the export is never stale). Raw imported `.dxf` files render directly and are never rebuilt.
+`<name>.dxf.py` files are CAD Viewer catalog entries, listed whether or not their drawing package has been built. Opening one triggers the unified render-artifact flow: a missing or stale package (any source-closure file — the generator, its path-loaded `.step.py` sources, and helper modules — newer than the descriptor) rebuilds automatically. The viewer's export dropdown offers "Download DXF" on generated drawings (it refreshes the package first, so the export is never stale). An imported `.dxf` is artifact-managed too — the viewer builds its drawing package on demand, exactly as it does for an imported `.step` — but it is never a `dxf` CLI target: the CLI builds `.dxf.py` generators only.
 
 ## Validation
 
@@ -123,10 +158,10 @@ Validation happens IN generation, not after: every `gen_dxf()` build runs the dr
 The same checks run post-hoc on any existing `.dxf` file:
 
 ```bash
-python scripts/dxf --validate path/to/file.dxf
+python scripts/gen --validate path/to/file.dxf
 ```
 
-Beyond the built-in checks, verify requested dimensions with targeted `ezdxf` reads (entity counts by layer, drawing extents, every dimension the user specified) against the built DXF in the drawing package (or the exported path when one was requested), and review geometry visually with `--snapshot` or the CAD Viewer:
+Beyond the built-in checks, verify requested dimensions with targeted `ezdxf` reads (entity counts by layer, drawing extents, every dimension the user specified) against the built DXF in the drawing package (or the exported path when one was requested), and review geometry visually in the CAD Viewer:
 
 ```python
 import ezdxf

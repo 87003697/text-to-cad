@@ -115,7 +115,7 @@ class SnapshotCliTests(unittest.TestCase):
         options = parse_snapshot_args(
             [
                 "--input",
-                "models/simple/cylindrical_cap.step",
+                "models/step/parts/cylindrical_cap.step",
                 "--output",
                 "tmp/cap.png",
                 "--display",
@@ -127,7 +127,7 @@ class SnapshotCliTests(unittest.TestCase):
 
         job = load_job_from_options(options, stdin=_TtyStringIO(), cwd=Path.cwd())
 
-        self.assertEqual(job["input"], "models/simple/cylindrical_cap.step")
+        self.assertEqual(job["input"], "models/step/parts/cylindrical_cap.step")
         self.assertNotIn("workspaceRoot", job)
         self.assertNotIn("rootDir", job)
         self.assertEqual(job["outputs"][0]["path"], "tmp/cap.png")
@@ -161,7 +161,7 @@ class SnapshotCliTests(unittest.TestCase):
             options = parse_snapshot_args(
                 [
                     "--input",
-                    "models/simple/cylindrical_cap.step",
+                    "models/step/parts/cylindrical_cap.step",
                     "--output",
                     "tmp/cap.png",
                     "--display",
@@ -175,7 +175,7 @@ class SnapshotCliTests(unittest.TestCase):
         options = parse_snapshot_args(
             [
                 "--input",
-                "models/simple/cylindrical_cap.step",
+                "models/step/parts/cylindrical_cap.step",
                 "--output",
                 "tmp/cap.png",
                 "--display",
@@ -196,7 +196,7 @@ class SnapshotCliTests(unittest.TestCase):
         options = parse_snapshot_args(
             [
                 "--input",
-                "models/simple/cylindrical_cap.step",
+                "models/step/parts/cylindrical_cap.step",
                 "--output",
                 "tmp/cap.png",
                 "--display",
@@ -241,7 +241,7 @@ class SnapshotCliTests(unittest.TestCase):
         options = parse_snapshot_args(
             [
                 "--input",
-                "models/simple/cylindrical_cap.step",
+                "models/step/parts/cylindrical_cap.step",
                 "--output",
                 "tmp/cap.png",
                 "--display",
@@ -254,7 +254,7 @@ class SnapshotCliTests(unittest.TestCase):
         appearance_options = parse_snapshot_args(
             [
                 "--input",
-                "models/simple/cylindrical_cap.step",
+                "models/step/parts/cylindrical_cap.step",
                 "--output",
                 "tmp/cap.png",
                 "--appearance",
@@ -272,7 +272,7 @@ class SnapshotCliTests(unittest.TestCase):
         options = parse_snapshot_args(
             [
                 "--input",
-                "models/simple/cylindrical_cap.step",
+                "models/step/parts/cylindrical_cap.step",
                 "--output",
                 "tmp/cap.png",
                 "--appearance",
@@ -297,7 +297,7 @@ class SnapshotCliTests(unittest.TestCase):
         options = parse_snapshot_args(
             [
                 "--input",
-                "models/simple/cylindrical_cap.step",
+                "models/step/parts/cylindrical_cap.step",
                 "--output",
                 "tmp/cap.png",
                 "--display",
@@ -311,7 +311,7 @@ class SnapshotCliTests(unittest.TestCase):
         options = parse_snapshot_args(
             [
                 "--input",
-                "models/simple/cylindrical_cap.step",
+                "models/step/parts/cylindrical_cap.step",
                 "--output",
                 "tmp/cap.png",
                 "--display",
@@ -554,7 +554,7 @@ class SnapshotCliTests(unittest.TestCase):
         options = parse_snapshot_args(
             [
                 "--input",
-                "models/simple/cylindrical_cap.step",
+                "models/step/parts/cylindrical_cap.step",
                 "--output",
                 "tmp/cap.png",
                 "--debug",
@@ -641,7 +641,7 @@ class SnapshotCliTests(unittest.TestCase):
 
         result = asyncio.run(
             snapshot_main.render_resolved_job_packet(
-                {"single": True, "jobs": [job]}, renderer=StubRenderer()
+                {"single": True, "jobs": [job]}, runtime_dir=snapshot_main.RUNTIME_DIR, renderer=StubRenderer()
             )
         )
         self.assertEqual(result["debug"], debug_payload)
@@ -651,7 +651,7 @@ class SnapshotCliTests(unittest.TestCase):
 
         multi = asyncio.run(
             snapshot_main.render_resolved_job_packet(
-                {"single": False, "jobs": [job]}, renderer=StubRenderer()
+                {"single": False, "jobs": [job]}, runtime_dir=snapshot_main.RUNTIME_DIR, renderer=StubRenderer()
             )
         )
         self.assertEqual(multi["jobs"][0]["debug"], debug_payload)
@@ -692,7 +692,9 @@ class SnapshotCliTests(unittest.TestCase):
             root = Path(temporary_directory).resolve()
             models = root / "models"
             models.mkdir()
-            (models / "robot.urdf").write_text("<robot name=\"r\" />\n", encoding="utf-8")
+            # A DXF: still genuinely unsupported as a direct snapshot input. This used to
+            # be a .urdf, which the robot resolver now accepts.
+            (models / "panel.dxf").write_text("0\nSECTION\n", encoding="utf-8")
             calls = []
 
             def fake_ensure(target, **kwargs):
@@ -705,11 +707,12 @@ class SnapshotCliTests(unittest.TestCase):
                 with self.assertRaisesRegex(
                     SnapshotError,
                     "Snapshot supports STEP/STP inputs, same-stem Python generators, "
-                    "direct GLB/STL/3MF meshes, or .implicit.js models",
+                    "direct GLB/STL/3MF meshes, .implicit.js models, or "
+                    r"\.urdf/\.srdf/\.sdf robot descriptions",
                 ):
                     resolve_render_job_packet(
                         {
-                            "input": "models/robot.urdf",
+                            "input": "models/panel.dxf",
                             "outputs": [{"path": "tmp/iso.png", "camera": "iso"}],
                         },
                         cwd=root,
@@ -1107,6 +1110,77 @@ class SnapshotCliTests(unittest.TestCase):
             with self.assertRaisesRegex(SnapshotError, "section mode is not supported for implicit"):
                 resolve_render_job_packet({**base, "mode": "section"}, cwd=root)
 
+    def test_input_kind_detects_robot_descriptions(self) -> None:
+        self.assertEqual(snapshot_main.input_kind(Path("robots/arm.urdf")), "urdf")
+        self.assertEqual(snapshot_main.input_kind(Path("robots/arm.srdf")), "srdf")
+        self.assertEqual(snapshot_main.input_kind(Path("robots/arm.sdf")), "sdf")
+
+    def test_render_job_resolves_robot_description_without_step_artifact(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = self._mesh_job_env(temporary_directory, "arm.urdf", b"<robot name='arm'/>\n")
+            calls = []
+
+            def fake_ensure(target, **kwargs):
+                calls.append(kwargs)
+                return None
+
+            original_ensure = snapshot_main.ensure_step_topology_artifact
+            try:
+                snapshot_main.ensure_step_topology_artifact = fake_ensure
+                packet = resolve_render_job_packet(
+                    {"input": "models/arm.urdf", "outputs": [{"path": "tmp/iso.png"}]},
+                    cwd=root,
+                )
+            finally:
+                snapshot_main.ensure_step_topology_artifact = original_ensure
+
+        # A robot assembles in the browser from its own description; no STEP pipeline.
+        self.assertEqual(calls, [])
+        job = packet["jobs"][0]
+        resolved = job["resolved"]
+        self.assertEqual(resolved["kind"], "urdf")
+        self.assertTrue(urlparse(str(resolved["inputUrl"])).path.endswith("arm.urdf"))
+        self.assertEqual(resolved["inputUrl"], resolved["url"])
+        # Robots are authored in metres; the CAD profile would frame one for a workpiece a
+        # thousand times its size.
+        self.assertEqual(job["render"]["scale"], "urdf")
+
+    def test_render_job_poses_a_robot_with_joint_values(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = self._mesh_job_env(temporary_directory, "arm.urdf", b"<robot name='arm'/>\n")
+            packet = resolve_render_job_packet(
+                {
+                    "input": "models/arm.urdf",
+                    "jointValues": {"shoulder_pan": 55, "elbow_flex": -20},
+                    "outputs": [{"path": "tmp/iso.png"}],
+                },
+                cwd=root,
+            )
+            resolved = packet["jobs"][0]["resolved"]
+            self.assertEqual(resolved["jointValues"], {"shoulder_pan": 55, "elbow_flex": -20})
+
+            base = {"input": "models/arm.urdf", "outputs": [{"path": "tmp/iso.png"}]}
+            with self.assertRaisesRegex(SnapshotError, "jointValues must be an object"):
+                resolve_render_job_packet({**base, "jointValues": [1, 2]}, cwd=root)
+            with self.assertRaisesRegex(SnapshotError, "must be a number"):
+                resolve_render_job_packet({**base, "jointValues": {"j": "45"}}, cwd=root)
+
+    def test_render_job_rejects_step_only_options_for_robot_input(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = self._mesh_job_env(temporary_directory, "arm.urdf", b"<robot name='arm'/>\n")
+            base = {"input": "models/arm.urdf", "outputs": [{"path": "tmp/iso.png"}]}
+            with self.assertRaisesRegex(SnapshotError, "selection focus/hide/refs require STEP topology"):
+                resolve_render_job_packet({**base, "selection": {"focus": ["#o1"]}}, cwd=root)
+            # A robot IS parametric, just not by STEP sidecar — the error says which key to use.
+            with self.assertRaisesRegex(SnapshotError, "pose a URDF robot with jointValues"):
+                resolve_render_job_packet({**base, "stepParameters": {"width": 5}}, cwd=root)
+            with self.assertRaisesRegex(SnapshotError, "cannot be exploded"):
+                resolve_render_job_packet(
+                    {**base, "display": {"exploded": {"enabled": True, "amount": 1}}}, cwd=root
+                )
+            with self.assertRaisesRegex(SnapshotError, "section mode requires STEP topology"):
+                resolve_render_job_packet({**base, "mode": "section"}, cwd=root)
+
     def test_render_job_missing_mesh_file_errors(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             root = Path(temporary_directory).resolve()
@@ -1299,11 +1373,15 @@ class SnapshotCliTests(unittest.TestCase):
 
     def test_runtime_routes_are_self_contained(self) -> None:
         self.assertEqual(
-            resolve_snapshot_route_file("http://snapshot.local/render.html"),
+            resolve_snapshot_route_file(
+                "http://snapshot.local/render.html", runtime_dir=snapshot_main.RUNTIME_DIR
+            ),
             RENDER_HTML_PATH,
         )
         self.assertEqual(
-            resolve_snapshot_route_file("http://snapshot.local/snapshot-render.js"),
+            resolve_snapshot_route_file(
+                "http://snapshot.local/snapshot-render.js", runtime_dir=snapshot_main.RUNTIME_DIR
+            ),
             RUNTIME_DIR / "snapshot-render.js",
         )
 
@@ -1364,7 +1442,7 @@ class SnapshotCliTests(unittest.TestCase):
             sys.modules["playwright.async_api"] = async_api_module
 
             async def start_renderer() -> None:
-                renderer = snapshot_main.BatchSnapshotRenderer()
+                renderer = snapshot_main.BatchSnapshotRenderer(snapshot_main.RUNTIME_DIR)
                 try:
                     await renderer.start()
                 finally:

@@ -87,7 +87,7 @@ Do not copy bundled helper files out of this skill. If helper functions are usef
 5. Add optional procedural color with `vec3 color(vec3 p, vec3 normal)` when the model benefits from local material variation. Keep color values in 0..1 RGB.
 6. Rely on automatic SDF bounds first. Add explicit bounds when an animated, periodic, translated, or very thin model needs tighter or more reliable framing/export sampling.
 7. Run the lightweight visual verification flow below after visible geometry, color, params, animation, bounds, render, or export-affecting changes.
-8. Run `node scripts/export.mjs --input <model.implicit.js> --format glb` when a mesh artifact is needed for downstream viewers, slicers, or file handoff.
+8. Run `python scripts/gen <model.implicit.js>` to build (or refresh) the render package the CAD Viewer opens. Add `--write` when a sibling `<name>.glb` is also wanted, or use `node scripts/export.mjs --input <model.implicit.js> --glb` for STL/3MF, non-default parameters, or an animation.
 
 ## Visual Verification
 
@@ -155,15 +155,40 @@ node scripts/snapshot.mjs --help
 
 Use `node scripts/snapshot.mjs --help` for the complete current command interface. The tool appends a UTC timestamp before the output extension. JSON jobs may be a single job, one job with multiple `outputs`, a raw array of jobs, or `{ "jobs": [...] }`; prefer a multi-output job for review packets because it avoids rebuilding the same artifact for each camera.
 
+## Generate Tool
+
+From this skill directory:
+
+```bash
+python scripts/gen <model.implicit.js>
+python scripts/gen <model.implicit.js> --write
+python scripts/gen models/implicits/*.implicit.js --force
+python scripts/gen <model.implicit.js> --resolution 128 --threads 4
+python scripts/gen --help
+```
+
+`scripts/gen` builds the model's **render package** — the baked mesh the CAD Viewer opens,
+under the model folder's `__cadgen__/models/<name>.implicit.js/` (`implicit.json` +
+`model.glb`). The package is baked at the model's parameter DEFAULTS: it carries no live
+parameters and no animation. It is also what the viewer builds on demand, through the same
+producer, so a package built here and one built by opening the model are the same artifact.
+
+A model whose package is current is skipped; `--force` rebuilds anyway. `--write` also leaves
+the sibling `<name>.glb` beside the source, from the same mesh pass — that file is an ordinary
+export-preset GLB (the package's own `model.glb` is compressed for the viewer and is not a
+substitute). Use `scripts/export` when you want STL or 3MF, non-default parameters, or an
+animation.
+
 ## Export Tool
 
 From this skill directory:
 
 ```bash
-node scripts/export.mjs --input <model.implicit.js> --format glb
-node scripts/export.mjs --input <model.implicit.js> --output <mesh.stl> --resolution <resolution>
-node scripts/export.mjs --input <model.implicit.js> --format 3mf --params '<parameter-json>' --json
+node scripts/export.mjs --input <model.implicit.js> --glb
+node scripts/export.mjs --input <model.implicit.js> --stl <mesh.stl> --resolution <resolution>
+node scripts/export.mjs --input <model.implicit.js> --stl --3mf --glb
+node scripts/export.mjs --input <model.implicit.js> --3mf --params '<parameter-json>' --json
 node scripts/export.mjs --help
 ```
 
-Supported export formats are `glb`, `stl`, and `3mf`. The exporter samples the implicit SDF inside the declared bounds and extracts a triangle mesh. If `--output` is omitted, the mesh is written next to the source file using the same stem, such as `<model>.glb` for `<model>.implicit.js`. Use `node scripts/export.mjs --help` for the complete current command interface.
+One flag per format — `--stl`, `--3mf`, `--glb` — and several are allowed in one run, matching the CAD skill's export CLI. At least one is required; without any, the command exits 2. The model is meshed once per run, so every requested format comes from identical geometry. A format flag with no path writes next to the source file using the same stem, such as `<model>.glb` for `<model>.implicit.js`; a supplied path resolves against the current directory. Use `node scripts/export.mjs --help` for the complete current command interface.

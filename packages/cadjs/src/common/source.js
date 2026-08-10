@@ -23,6 +23,11 @@ import {
   loadStepModuleDefinition
 } from "./stepModule.js";
 import {
+  isRobotSourceKind,
+  loadRobotMeshData,
+  robotSourceKindFromUrl
+} from "../lib/urdf/loadRobot.js";
+import {
   hasStepParameterRenderValues,
   normalizeStepParameterRenderValues,
   stepParameterRenderFrameState,
@@ -45,6 +50,9 @@ function isObject(value) {
 function normalizeKind(value = "") {
   const kind = String(value || "").trim().toLowerCase();
   if (kind === "step" || kind === "stp" || kind === "glb" || kind === "stl" || kind === "3mf") {
+    return kind;
+  }
+  if (isRobotSourceKind(kind)) {
     return kind;
   }
   return SOURCE_KIND.UNKNOWN;
@@ -311,6 +319,28 @@ export async function loadSource(input, options = {}) {
   }
   const glbUrl = String(inputObject.glbUrl || resolved.glbUrl || options.glbUrl || "").trim();
   const url = String(typeof input === "string" ? input : inputObject.url || resolved.url || glbUrl || "").trim();
+
+  // A robot is not one mesh: it is a description plus a mesh per link, assembled and posed.
+  // Doing that here is what lets every mesh-path consumer — snapshot stills, orbit GIFs —
+  // render a robot without knowing it is one.
+  if (!meshData && (isRobotSourceKind(kind) || robotSourceKindFromUrl(url))) {
+    const robot = await loadRobotMeshData(url, {
+      kind,
+      jointValues: inputObject.jointValues || resolved.jointValues || options.jointValues || null,
+      urdfUrl: String(resolved.urdfUrl || inputObject.urdfUrl || "").trim()
+    });
+    return {
+      kind,
+      meshData: robot.meshData,
+      selectorRuntime: null,
+      displayEdgeRuntime: null,
+      stepParameterSource: null,
+      resolved,
+      url,
+      glbUrl: "",
+      cadPath
+    };
+  }
 
   // Render asset caches live for the whole page, so every entry a resolved job populates must be
   // tagged with the source it belongs to. This is the only place a resolved job meets those caches,

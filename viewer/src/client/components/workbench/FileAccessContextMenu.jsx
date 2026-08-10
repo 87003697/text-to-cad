@@ -6,14 +6,11 @@ import {
   ContextMenuTrigger
 } from "@/components/ui/context-menu";
 import { fileAccessAssetsForEntry } from "@/workbench/fileAccessAssets";
-import { IMPLICIT_EXPORT_FORMATS } from "@/workbench/implicitExport";
-import { STEP_EXPORT_FORMATS, isImportedStepEntry, stepExportItemLabel } from "@/workbench/stepExport";
-
-// Entries whose geometry can be exported to STEP/3MF/STL/GLB via the server export endpoint.
-function isStepExportEntry(entry) {
-  const kind = String(entry?.kind || "").trim().toLowerCase();
-  return kind === "step" || kind === "assembly";
-}
+import {
+  exportFormatsForEntry,
+  isImportedStepEntry,
+  exportItemLabel
+} from "@/workbench/modelExport";
 
 function ExplorerViewSection({
   entry,
@@ -113,47 +110,13 @@ function FileAccessSection({
   );
 }
 
-function ImplicitExportSection({
+function ModelExportSection({
   entry,
   busyKey = "",
-  onExportImplicitFile
+  onExportModelFile
 }) {
-  if (
-    String(entry?.kind || "").trim().toLowerCase() !== "implicit" ||
-    typeof onExportImplicitFile !== "function"
-  ) {
-    return null;
-  }
-  const fileRef = String(entry?.file || entry?.id || "").trim();
-  return (
-    <>
-      <ContextMenuSeparator />
-      {IMPLICIT_EXPORT_FORMATS.map((format) => {
-        const upperFormat = format.toUpperCase();
-        const key = `${fileRef}:export:${format}`;
-        return (
-          <ContextMenuItem
-            key={format}
-            className="text-xs"
-            disabled={busyKey === key}
-            onSelect={() => {
-              onExportImplicitFile(entry, format);
-            }}
-          >
-            <span className="min-w-0 truncate">Export to {upperFormat}</span>
-          </ContextMenuItem>
-        );
-      })}
-    </>
-  );
-}
-
-function StepExportSection({
-  entry,
-  busyKey = "",
-  onExportStepFile
-}) {
-  if (typeof onExportStepFile !== "function" || !isStepExportEntry(entry)) {
+  const exportFormats = exportFormatsForEntry(entry);
+  if (typeof onExportModelFile !== "function" || !exportFormats.length) {
     return null;
   }
   const fileRef = String(entry?.file || entry?.id || "").trim();
@@ -161,7 +124,7 @@ function StepExportSection({
   return (
     <>
       <ContextMenuSeparator />
-      {STEP_EXPORT_FORMATS.map((format) => {
+      {exportFormats.map((format) => {
         const key = `${fileRef}:export:${format}`;
         return (
           <ContextMenuItem
@@ -169,10 +132,10 @@ function StepExportSection({
             className="text-xs"
             disabled={busyKey === key}
             onSelect={() => {
-              onExportStepFile(entry, format);
+              onExportModelFile(entry, format);
             }}
           >
-            <span className="min-w-0 truncate">{stepExportItemLabel(format, { imported })}</span>
+            <span className="min-w-0 truncate">{exportItemLabel(format, { imported })}</span>
           </ContextMenuItem>
         );
       })}
@@ -187,8 +150,7 @@ export default function FileAccessContextMenu({
   canCopyFileAssetPaths = false,
   busyKey = "",
   onDownloadFileAsset,
-  onExportImplicitFile,
-  onExportStepFile,
+  onExportModelFile,
   onRevealFileAsset,
   onRevealInExplorerView,
   onCopyFileAssetReference,
@@ -196,15 +158,15 @@ export default function FileAccessContextMenu({
 }) {
   const revealInExplorerViewAvailable = entry && typeof onRevealInExplorerView === "function";
   const assetActionsAvailable = entry && typeof onDownloadFileAsset === "function";
-  const implicitExportAvailable = entry && typeof onExportImplicitFile === "function" &&
-    String(entry?.kind || "").trim().toLowerCase() === "implicit";
-  const stepExportAvailable = entry && typeof onExportStepFile === "function" && isStepExportEntry(entry);
-  if (!revealInExplorerViewAvailable && !assetActionsAvailable && !implicitExportAvailable && !stepExportAvailable) {
+  const modelExportAvailable = entry &&
+    typeof onExportModelFile === "function" &&
+    exportFormatsForEntry(entry).length > 0;
+  if (!revealInExplorerViewAvailable && !assetActionsAvailable && !modelExportAvailable) {
     return children;
   }
 
   const assets = fileAccessAssetsForEntry(entry);
-  if (!revealInExplorerViewAvailable && !assets.output && !implicitExportAvailable && !stepExportAvailable) {
+  if (!revealInExplorerViewAvailable && !assets.output && !modelExportAvailable) {
     return children;
   }
 
@@ -233,15 +195,10 @@ export default function FileAccessContextMenu({
             onCopyFileAssetReference={onCopyFileAssetReference}
           />
         ) : null}
-        <ImplicitExportSection
+        <ModelExportSection
           entry={entry}
           busyKey={busyKey}
-          onExportImplicitFile={onExportImplicitFile}
-        />
-        <StepExportSection
-          entry={entry}
-          busyKey={busyKey}
-          onExportStepFile={onExportStepFile}
+          onExportModelFile={onExportModelFile}
         />
       </ContextMenuContent>
     </ContextMenu>
