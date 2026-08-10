@@ -106,6 +106,13 @@ preserved, and the software rasteriser hides real GPU failures. It has already e
 keep — it caught a temporal-dead-zone crash that blanked all six formats and that the
 build and unit tests both passed.
 
+**Method warning: do not run large sweeps back to back.** Chaining full 47-model
+`--all-implicits` runs (or launching several browsers in quick succession) exhausts GPU
+contexts and reports large numbers of *false* blanks — a run that reported 33 blank models
+reported zero on a clean run of the same build, twice. Let the previous run's browser fully
+exit before starting another, and treat any mass-blank result as suspect until reproduced
+from a cold start. Isolate a single suspect model rather than trusting one bulk run.
+
 ## Known non-uniformities
 
 Recorded so they are not mistaken for bugs, and so the next person knows the cost:

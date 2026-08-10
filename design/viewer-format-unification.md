@@ -1,5 +1,45 @@
 # Viewer format unification: capabilities, not identities
 
+## 0. Execution status
+
+| Phase | Status |
+|---|---|
+| U0 registry + content signal + ratchet | **DONE** `f4d9495c` |
+| U1 projection as a viewport trait | **DONE** |
+| U2 one params/animation surface | partial — toolbar Play now gates on `animations` (U0); the copy/paste handler merge is outstanding |
+| U3 context menu + camera actions everywhere | not started |
+| U4 theme wiring fixes + capability table | partial — the capability table shipped in `viewer/docs/render-types.md`; the `lighting.rim`/`lighting.fill` wiring fixes are outstanding |
+| U5 loading/alerts/artifact state | not started |
+
+Identity-check count: **93 → 80**, locked in by
+`tests/python/global/test_viewer_format_capability_policy.py`. `FloatingToolBar` and
+`CadRenderPane` are at **zero** and asserted so.
+
+### What U0/U1 found that the plan did not predict
+
+- **Upstream's "Orbit for DXF" (`5d5bc3ae`) was incomplete.** It enabled the button while
+  FOUR other format checks kept preview mode unreachable: the workspace handler bail, the
+  pane's `previewMode={dxfMode ? false : previewMode}`, and an effect that force-exited
+  DXF from preview. This is the thesis in miniature — one feature, four hand-maintained
+  gates. Orbit is now verified working on DXF, STL, STEP and implicit.
+- **`normalizeRenderFormat` resolves unknown formats to STEP.** Correct when picking a
+  loader, catastrophic for capabilities: an unrecognised entry would have inherited
+  STEP's full set (parts, topology, clip, artifact gating), failing open on every one.
+  `renderCapabilities` does its own normalization and falls back to a conservative row.
+  Caught by the registry's own test, not by review.
+- **The e2e sweep paid for itself immediately**, catching a temporal-dead-zone crash
+  (`selectedViewportContent` referencing `effectiveRenderFormat`, declared 500 lines
+  later) that blanked all six formats and that both the production build and the 292 unit
+  tests passed.
+- **CORRECTION — there is no ortho "first-fit off-centre bug".** U1 step 4 as originally
+  written was wrong. Measured: the apparent off-centring was an artifact of the sweep's
+  900px clip over a 1440px viewport, plus the frame insets that deliberately bias a model
+  left when its file sheet is open. With the pane measured properly, STL sits at +28px of
+  centre (no sheet) and STEP/implicit at ~-163px (sheet open, inset applied) — all
+  correct. Nothing to fix.
+- **DXF auto-fit frames its drawing far too small**, in every projection. Pre-existing,
+  unrelated to this work, and still open.
+
 Execution plan. The goal, in the owner's words: unify, standardize and reuse as much
 viewer logic across file formats as possible, **so that an improvement to one file
 format is inherited by all of the others**. The mechanism: viewer code stops asking

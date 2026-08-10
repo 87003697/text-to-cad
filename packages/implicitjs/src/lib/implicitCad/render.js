@@ -1275,6 +1275,7 @@ uniform float uBackgroundMode;
 uniform float uBackgroundAngle;
 uniform float uBackgroundAlpha;
 uniform float uPaintBackground;
+uniform float uOrthographic;
 uniform float uUseProceduralColor;
 uniform float uHitEpsilon;
 uniform float uNormalEpsilon;
@@ -1496,19 +1497,40 @@ vec3 implicit_background_color(vec2 uv) {
   return mix(uBackgroundColorA, uBackgroundColorB, radial);
 }
 
-vec3 implicit_ray_direction(vec2 uv) {
+// Perspective and orthographic are opposite constructions, and the difference is the
+// whole reason an implicit could not render under an ortho camera: a pinhole fans ONE
+// origin into per-pixel directions, while a parallel projection shares ONE direction
+// across per-pixel origins. Feeding an ortho projection matrix to the pinhole path
+// yields garbage directions, and the model vanishes.
+struct ImplicitRay {
+  vec3 origin;
+  vec3 direction;
+};
+
+ImplicitRay implicit_camera_ray(vec2 uv) {
   vec2 ndc = uv * 2.0 - 1.0;
   vec4 clip = vec4(ndc, -1.0, 1.0);
   vec4 view = uProjectionInverse * clip;
-  view = vec4(view.xy, -1.0, 0.0);
-  return normalize((uCameraWorld * view).xyz);
+  ImplicitRay ray;
+  if (uOrthographic > 0.5) {
+    // Unproject to a point on the near plane, then march along the camera's forward
+    // axis: every ray is parallel, offset across the image plane.
+    vec3 viewPoint = view.xyz / max(abs(view.w), 1.0e-6);
+    ray.origin = (uCameraWorld * vec4(viewPoint.xy, viewPoint.z, 1.0)).xyz;
+    ray.direction = normalize(-uCameraWorld[2].xyz);
+    return ray;
+  }
+  ray.origin = uCameraPosition;
+  ray.direction = normalize((uCameraWorld * vec4(view.xy, -1.0, 0.0)).xyz);
+  return ray;
 }
 
 void main() {
-  vec3 rayOrigin = uCameraPosition;
   vec2 screenUv = gl_FragCoord.xy / uResolution;
   vec3 backgroundColor = implicit_background_color(screenUv);
-  vec3 rayDirection = implicit_ray_direction(screenUv);
+  ImplicitRay cameraRay = implicit_camera_ray(screenUv);
+  vec3 rayOrigin = cameraRay.origin;
+  vec3 rayDirection = cameraRay.direction;
   vec2 boundsHit = implicit_ray_bounds(rayOrigin, rayDirection, uBoundsMin, uBoundsMax);
   float t = max(boundsHit.x, 0.0);
   float tEnd = min(boundsHit.y, uMaxDistance);
@@ -1642,6 +1664,8 @@ export function createImplicitCadMaterial(THREE, model) {
       // Standalone renderers paint their own background; the CAD Viewer turns
       // this off so the shared themed background/grid/stage show through.
       uPaintBackground: { value: 1 },
+      // Perspective unless a host says otherwise, so snapshot/export are unchanged.
+      uOrthographic: { value: 0 },
       uUseProceduralColor: { value: normalized.colorSource ? 1 : 0 },
       uHitEpsilon: { value: normalized.epsilon },
       uNormalEpsilon: { value: normalized.normalEpsilon },
@@ -1900,6 +1924,9 @@ export function setImplicitCadBackgroundPainting(material, paintBackground) {
 
 export function updateImplicitCadMaterialUniforms(material, camera, width, height) {
   camera.updateMatrixWorld(true);
+  if (material.uniforms.uOrthographic) {
+    material.uniforms.uOrthographic.value = camera.isOrthographicCamera ? 1 : 0;
+  }
   material.uniforms.uResolution.value.set(Math.max(width, 1), Math.max(height, 1));
   material.uniforms.uCameraPosition.value.copy(camera.position);
   material.uniforms.uCameraWorld.value.copy(camera.matrixWorld);

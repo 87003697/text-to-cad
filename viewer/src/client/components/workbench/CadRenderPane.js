@@ -368,12 +368,17 @@ export default function CadRenderPane({
   const hasParts = capabilities.parts;
   const hasTopology = capabilities.topology;
   const displaySettingsActive = capabilities.displayModes && !!displaySettings;
-  // Projection is a theme trait now; STEP views take it from the active theme
-  // (Light/Dark are orthographic, stage themes perspective), everything else
-  // keeps its historical perspective framing.
-  const cadProjection = displaySettingsActive
-    ? normalizeCameraProjection(themeSettings?.projection)
-    : CAMERA_PROJECTION.PERSPECTIVE;
+  // Projection is a THEME trait, honoured by every format that declares it — not a
+  // STEP privilege. Leaving the others pinned to perspective meant the default
+  // workbench theme (which is orthographic) was being ignored by four formats out of
+  // five. A plan view additionally forces orthographic: a top-down lock still
+  // foreshortens off-centre under perspective, which is exactly what a plan view must
+  // not do.
+  const cadProjection = planMode
+    ? CAMERA_PROJECTION.ORTHOGRAPHIC
+    : capabilities.themeProjection
+      ? normalizeCameraProjection(themeSettings?.projection)
+      : CAMERA_PROJECTION.PERSPECTIVE;
   const stepBoundsAnimationActive = Boolean(resolvedStepParameters?.animationState?.playing);
   const cadViewerBoundsAnimationActive = Boolean(boundsAnimationActive || stepBoundsAnimationActive);
   const missingFileLabel = String(missingFileRef || "").trim();
