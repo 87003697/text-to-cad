@@ -142,11 +142,11 @@ test("STEP module local feature refs resolve against the sidecar parent CAD path
       }
     }
   }, {
-    url: "/models/mechanisms/.box.step.js?v=abc",
-    cadPath: "models/mechanisms/box"
+    url: "/models/step/mechanisms/.box.step.js?v=abc",
+    cadPath: "models/step/mechanisms/box"
   });
 
-  assert.equal(definition.cadPath, "models/mechanisms/box");
+  assert.equal(definition.cadPath, "models/step/mechanisms/box");
   assert.equal(definition.features[0].ref, "#o1.2");
   assert.equal(definition.features[1].ref, "#o1.3,o1.4");
   assert.equal(definition.features[2].ref, "#o1.5");
@@ -157,7 +157,7 @@ test("STEP module local feature refs prefer explicit relative STEP path", () => 
     manifest: {
       schemaVersion: 1,
       step: {
-        path: "models/mechanisms/actual-box.step"
+        path: "models/step/mechanisms/actual-box.step"
       },
       features: {
         lid: {
@@ -166,18 +166,18 @@ test("STEP module local feature refs prefer explicit relative STEP path", () => 
       }
     }
   }, {
-    url: "/models/mechanisms/.legacy-name.step.js?v=abc",
-    cadPath: "models/mechanisms/legacy-name"
+    url: "/models/step/mechanisms/.legacy-name.step.js?v=abc",
+    cadPath: "models/step/mechanisms/legacy-name"
   });
 
   assert.deepEqual(definition.step, {
-    path: "models/mechanisms/actual-box.step",
-    cadPath: "models/mechanisms/actual-box",
+    path: "models/step/mechanisms/actual-box.step",
+    cadPath: "models/step/mechanisms/actual-box",
     explicit: true,
     inferred: false
   });
-  assert.equal(definition.manifest.step.path, "models/mechanisms/actual-box.step");
-  assert.equal(definition.cadPath, "models/mechanisms/actual-box");
+  assert.equal(definition.manifest.step.path, "models/step/mechanisms/actual-box.step");
+  assert.equal(definition.cadPath, "models/step/mechanisms/actual-box");
   assert.equal(definition.features[0].ref, "#o1.2");
 });
 

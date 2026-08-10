@@ -20,7 +20,7 @@ class DxfSnapshotCliTests(unittest.TestCase):
     """
 
     def test_renders_the_packages_preview_glb(self) -> None:
-        payload = {"previewPath": "models/dxf/__cadgen__/models/x.dxf/preview.glb"}
+        payload = {"previewPath": "models/drawings/dxf/__cadgen__/models/x.dxf/preview.glb"}
         with mock.patch.object(snapshot, "build_dxf_artifact", return_value=payload) as build:
             with mock.patch.object(Path, "is_file", return_value=True):
                 resolved = snapshot.preview_path_for_input(Path("/models/x.dxf"), force=False)

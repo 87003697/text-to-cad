@@ -106,7 +106,7 @@ test("buildViewerMeshAlert reports STEP artifact errors only when no mesh render
     buildViewerMeshAlert({
       file: "fun/renderable-stale.step",
       kind: "part",
-      url: "/models/fun/.renderable-stale.step.glb?v=hash",
+      url: "/models/step/parts/.renderable-stale.step.glb?v=hash",
       hash: "glb-hash",
       artifact: {
         ok: false,
@@ -130,7 +130,7 @@ test("buildViewerMeshAlert reports STEP artifact errors only when no mesh render
     buildViewerMeshAlert({
       file: "fun/renderable-stale.step",
       kind: "part",
-      url: "/models/fun/.renderable-stale.step.glb?v=hash",
+      url: "/models/step/parts/.renderable-stale.step.glb?v=hash",
       hash: "glb-hash",
       artifact: {
         ok: false,

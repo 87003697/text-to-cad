@@ -49,7 +49,7 @@ switch files without a new link. Pick the directory the user thinks of as their
 model workspace — typically the project's `models/` directory, or the nearest
 common parent of the files you were asked to review — and put the rest of the
 path in `file=`. Naming the artifact's own deep folder
-(`.../models/mechanisms?file=lift_table.step.py`) opens the same model but hides
+(`.../models/step/mechanisms?file=lift_table.step.py`) opens the same model but hides
 the rest of the project, which is almost never what the user wants.
 
 If port `3245` is already in use, the launcher exits with an error rather than

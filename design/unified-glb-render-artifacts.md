@@ -40,7 +40,7 @@ download a second copy of the model into a scene that already has one.
 
 **Imported `.dxf` files with open or unsupported geometry no longer render at all.** This is a
 consequence of dropping the 2D view, not a regression in the bake: every generated `.dxf.py`
-drawing builds, but all seven raw fixtures under `models/dxf/` fail —
+drawing builds, but all seven raw fixtures under `models/drawings/dxf/` fail —
 `arc1` (open contour), `ellipse` (ELLIPSE), `polylines` (POLYLINE), `splines` (SPLINE),
 `multi_insert_with_attribs` (INSERT), plus two intentionally-invalid ones. The 3D flat-pattern
 mesher needs closed cut contours and supports a narrower entity set than the parser. Closing
@@ -313,8 +313,8 @@ that it is out of scope.
 
 Standing authorization. The legacy byte-digest fallback in `closure_hash_matches`
 (`source_hash.py:447-472`) is deleted in phase 0. **Measured cost: 2 packages rebuild once**,
-lazily, on next open — `models/one-shots/mars_rover_concept.step.py` and
-`models/one-shots/raptor3/raptor3.step.py`. 22 other local packages already record semantic
+lazily, on next open — `models/step/assemblies/mars_rover_concept.step.py` and
+`models/renders/raptor3/raptor3.step.py`. 22 other local packages already record semantic
 digests and are unaffected. `__cadgen__/` is gitignored, so a fresh clone has nothing to
 invalidate. The same posture applies to any other legacy path found while executing.
 
