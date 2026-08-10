@@ -149,7 +149,12 @@ import {
   REFERENCE_SELECTED_COLOR
 } from "cadjs/lib/viewer/referenceGeometry";
 import { buildRuntimeInitializationAlert } from "cadjs/lib/viewer/webglSupport";
-import { DRAWING_TOOL, RENDER_FORMAT } from "@/workbench/constants";
+import { DRAWING_TOOL } from "@/workbench/constants";
+import {
+  hasCapability,
+  viewportContentKind,
+  VIEWPORT_CONTENT
+} from "cadjs/lib/renderCapabilities";
 import {
   getEnvironmentPresetById,
   THEME_FLOOR_MODES
@@ -1666,8 +1671,6 @@ const CadViewer = forwardRef(function CadViewer({
   drawingStrokes = [],
   onDrawingStrokesChange,
   onPerspectiveChange,
-  onProjectionChange,
-  onDisplayModeChange,
   onHoverReferenceChange,
   onActivateReference,
   onDoubleActivateReference,
@@ -1678,7 +1681,7 @@ const CadViewer = forwardRef(function CadViewer({
 }, ref) {
   const stepParameterRuntime = stepParameters;
   const stepAnimationPlaying = Boolean(stepParameterRuntime?.animationState?.playing);
-  const implicitActive = renderFormat === RENDER_FORMAT.IMPLICIT;
+  const implicitActive = viewportContentKind(renderFormat) === VIEWPORT_CONTENT.IMPLICIT;
   // What counts as "something is on screen" for overlays and the view cube:
   // an implicit has a model instead of mesh data.
   const viewportContent = implicitActive ? implicitModel : meshData;
@@ -1775,7 +1778,9 @@ const CadViewer = forwardRef(function CadViewer({
   const explodedViewActive = normalizedExplodedSettings.enabled && explodablePartCount > 1;
   const effectiveRenderPartsIndividually = renderPartsIndividually ||
     explodedViewActive;
-  const shouldUseCadEdgeSource = renderFormat === RENDER_FORMAT.STEP;
+  // CAD edges come from the topology package, so this is the `topology` capability, not
+  // "is this STEP". A second format that ships topology inherits the edge rendering.
+  const shouldUseCadEdgeSource = hasCapability(renderFormat, "topology");
   const displayEdgeSettings = useMemo(
     () => resolveDisplayEdgeSettings(normalizedDisplaySettings),
     [normalizedDisplaySettings]
@@ -3269,15 +3274,16 @@ const CadViewer = forwardRef(function CadViewer({
       }
       return fitted;
     },
-    zoomToFitSelection({ partIds = [], referenceIds = [], animate = true } = {}) {
+    zoomToFitSelection({ partIds = [], referenceIds = [], fallbackToModel = false, animate = true } = {}) {
       const runtime = runtimeRef.current;
-      // An implicit is a single SDF body with no sub-part selection, so a "fit
-      // selection" request has no narrower target than the model itself. Fit the
-      // model rather than silently no-oping the shared context-menu action.
+      // `fallbackToModel` is the CALLER saying "there is no narrower target here" — the
+      // global viewport menu, which every format now opens. Deciding that from inside on
+      // `implicitActive` made the fallback implicit-only, and it is not: a plain mesh has
+      // no sub-part selection either.
       const bounds = mergeBoundsList([
         selectorReferenceBounds(activeSelectorRuntime, referenceIds),
         displayRecordBoundsForPartIds(runtime, partIds)
-      ]) || (implicitActive ? runtimeFramingBounds(runtime, null) : null);
+      ]) || (fallbackToModel ? runtimeFramingBounds(runtime, meshData?.bounds) : null);
       const fitted = zoomRuntimeToBounds(
         runtime,
         bounds,
@@ -3299,7 +3305,6 @@ const CadViewer = forwardRef(function CadViewer({
     }
   }), [
     activeSelectorRuntime,
-    implicitActive,
     meshData?.bounds,
     modelKey,
     normalizedSceneScaleMode,

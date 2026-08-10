@@ -166,6 +166,13 @@ function ViewerContextMenu({
                 >
                   Reset Zoom
                 </DropdownMenuItem>
+                <DropdownMenuItem
+                  className={itemClassName}
+                  disabled={menu.zoomToFitDisabled === true}
+                  onSelect={() => handleAction(onZoomToFit)}
+                >
+                  Zoom To Fit
+                </DropdownMenuItem>
               </>
             ) : null}
             {menu.showCameraActions !== false && menu.showExpandCollapse === true ? (
@@ -300,8 +307,6 @@ export default function CadRenderPane({
   pickableVertices,
   focusedPartIds = "",
   displaySettings = null,
-  onProjectionChange,
-  onDisplayModeChange,
   boundsAnimationActive = false,
   drawToolActive,
   drawingTool,
@@ -506,8 +511,6 @@ export default function CadRenderPane({
         perspective={viewerPerspective}
         projection={cadProjection}
         perspectiveRef={viewerPerspectiveRef}
-        onProjectionChange={displaySettingsActive ? onProjectionChange : undefined}
-        onDisplayModeChange={displaySettingsActive ? onDisplayModeChange : undefined}
         showEdges
         recomputeNormals={false}
         themeSettings={themeSettings}

@@ -28,7 +28,7 @@ CLIENT_ROOT = REPO_ROOT / "viewer" / "src" / "client"
 
 # Every remaining identity check is a unification candidate. Lower these as phases land;
 # never raise them.
-MAX_RENDER_FORMAT_CHECKS = 80
+MAX_RENDER_FORMAT_CHECKS = 77
 MAX_FORMAT_PREDICATE_CALLS = 14
 
 # Files allowed to know about concrete formats, because deciding *which* format an entry
@@ -120,6 +120,9 @@ class ViewerFormatCapabilityPolicyTest(unittest.TestCase):
         for relative in (
             "components/workbench/FloatingToolBar.js",
             "components/workbench/CadRenderPane.js",
+            # The renderer itself: it draws every format, so a format check here is a
+            # feature one format gets and the others silently do not.
+            "components/CadViewer.js",
         ):
             source = (CLIENT_ROOT / relative).read_text(encoding="utf-8")
             self.assertEqual(

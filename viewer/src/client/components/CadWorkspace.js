@@ -1281,12 +1281,6 @@ export default function CadWorkspace({
       typeof nextValue === "function" ? nextValue(current) : nextValue
     ));
   }, []);
-  const updateDisplayMode = useCallback((nextMode) => {
-    updateDisplaySettings((current) => ({
-      ...normalizeDisplaySettings(current),
-      mode: nextMode
-    }));
-  }, [updateDisplaySettings]);
   const updateImplicitGraphicsSettings = useCallback((nextValue) => {
     setImplicitGraphicsSettings((current) => normalizeImplicitGraphicsSettings(
       typeof nextValue === "function" ? nextValue(current) : nextValue
@@ -1546,7 +1540,15 @@ export default function CadWorkspace({
   );
   // The local-fs viewer has no remote asset links; the copy-link affordance is hosted-only.
   const fileLinkCopyAvailable = false;
-  const isStepView = selectedEntrySourceFormat === RENDER_FORMAT.STEP;
+  // `isStepView` used to stand in for all four of these at once, which is why adding a
+  // format meant auditing every one of its ~15 uses to work out which sense was meant.
+  // They are separate capabilities; today only STEP declares them, and that is a fact
+  // about the table rather than about this file.
+  const supportsParts = hasCapability(selectedEntrySourceFormat, "parts");
+  const supportsTopology = hasCapability(selectedEntrySourceFormat, "topology");
+  const supportsDisplayModes = hasCapability(selectedEntrySourceFormat, "displayModes");
+  const supportsSidecarParams =
+    parameterSourceKind(selectedEntrySourceFormat) === PARAMETER_SOURCE.SIDECAR;
   const isAssemblyView = selectedEntry?.kind === "assembly";
   const isUrdfView = isRobotRenderFormat(selectedEntrySourceFormat);
   const robotBoundsAnimationActive = Boolean(
@@ -1556,7 +1558,7 @@ export default function CadWorkspace({
       urdfTrajectoryPlaybackRef.current?.frameId
     )
   );
-  const selectedStepModuleUrl = isStepView ? entryStepModuleUrl(selectedEntry) : "";
+  const selectedStepModuleUrl = supportsSidecarParams ? entryStepModuleUrl(selectedEntry) : "";
   const selectedStepModuleCadPath = selectedStepModuleUrl ? cadPathForEntry(selectedEntry) : "";
   const selectedStepModuleDefinition = stepModuleLoadState.url === selectedStepModuleUrl
     ? stepModuleLoadState.definition
@@ -2812,7 +2814,7 @@ export default function CadWorkspace({
     return map;
   }, [selectedAssemblyMates]);
   const stepTreeRoot = useMemo(() => {
-    if (!isStepView) {
+    if (!supportsParts) {
       return null;
     }
     return buildStepTreeRoot({
@@ -2820,7 +2822,7 @@ export default function CadWorkspace({
       assemblyRoot,
       meshData: selectedMeshData
     });
-  }, [assemblyRoot, isStepView, selectedEntry, selectedMeshData]);
+  }, [assemblyRoot, supportsParts, selectedEntry, selectedMeshData]);
   const assemblyLeafParts = useMemo(() => {
     return Array.isArray(selectedMeshData?.parts) ? selectedMeshData.parts : flattenAssemblyLeafParts(assemblyRoot);
   }, [assemblyRoot, selectedMeshData?.parts]);
@@ -2867,12 +2869,12 @@ export default function CadWorkspace({
     isAssemblyView
   ]);
   const loadableStepTreeTopologyNodeIds = useMemo(() => (
-    isStepView && isAssemblyView && selectedEntryHasReferences
+    supportsTopology && isAssemblyView && selectedEntryHasReferences
       ? collectStepTreeTopologyLoadableNodeIds(stepTreeRoot)
       : []
   ), [
     isAssemblyView,
-    isStepView,
+    supportsTopology,
     selectedEntryHasReferences,
     stepTreeRoot
   ]);
@@ -2881,7 +2883,7 @@ export default function CadWorkspace({
     [loadableStepTreeTopologyNodeIds]
   );
   const requestedStepTreeTopologyNodeIds = useMemo(() => {
-    if (!isStepView || !isAssemblyView || !selectedEntryHasReferences) {
+    if (!supportsTopology || !isAssemblyView || !selectedEntryHasReferences) {
       return [];
     }
     return uniqueStringList(
@@ -2892,7 +2894,7 @@ export default function CadWorkspace({
   }, [
     expandedStepTreeNodeIds,
     isAssemblyView,
-    isStepView,
+    supportsTopology,
     loadableStepTreeTopologyNodeIdSet,
     selectedEntryHasReferences
   ]);
@@ -2936,8 +2938,8 @@ export default function CadWorkspace({
   }, [assemblyParts]);
   const assemblyPartsLoaded = isAssemblyView
     ? selectedAssemblyStructureReady
-    : isStepView && selectedMeshMatches && !!selectedMeshData;
-  const supportsPartSelection = isStepView && assemblyPartsLoaded && stepLeafParts.length > 0;
+    : supportsParts && selectedMeshMatches && !!selectedMeshData;
+  const supportsPartSelection = supportsParts && assemblyPartsLoaded && stepLeafParts.length > 0;
   const assemblyPartMap = useMemo(() => {
     const map = new Map();
     for (const node of stepTreeNodes) {
@@ -3281,15 +3283,6 @@ export default function CadWorkspace({
       };
     });
   }, [handlePersistenceWriteError]);
-
-  // Projection is a theme trait; the viewport toolbar edits it as a live
-  // theme-settings draft, the same as any theme-editor change.
-  const updateThemeProjection = useCallback((nextProjection) => {
-    updateThemeSettings((current) => ({
-      ...current,
-      projection: nextProjection
-    }));
-  }, [updateThemeSettings]);
 
   // The theme sidebar and the file sheet are mutually exclusive. Opening one
   // closes the other outright — rather than merely hiding it behind the new
@@ -4966,14 +4959,14 @@ export default function CadWorkspace({
   }, []);
 
   const assemblyStepTreeTopologyReferences = useMemo(() => {
-    if (!isStepView || !isAssemblyView || !selectedReferencesMatch) {
+    if (!supportsTopology || !isAssemblyView || !selectedReferencesMatch) {
       return [];
     }
     return assignStepTreeTopologyReferencePartIds(stepTreeRoot, currentReferences);
   }, [
     currentReferences,
     isAssemblyView,
-    isStepView,
+    supportsTopology,
     selectedReferencesMatch,
     stepTreeRoot
   ]);
@@ -5023,7 +5016,7 @@ export default function CadWorkspace({
     visibleReferences
   ]);
   const stepTreeTopologyReferences = useMemo(() => {
-    if (!isStepView) {
+    if (!supportsTopology) {
       return [];
     }
     if (isAssemblyView) {
@@ -5036,7 +5029,7 @@ export default function CadWorkspace({
     assemblyStepTreeTopologyReferences,
     currentReferences,
     isAssemblyView,
-    isStepView,
+    supportsTopology,
     requestedStepTreeTopologyNodeIds
   ]);
   const displayStepTreeRoot = useMemo(() => buildStepTreeRootWithTopology({
@@ -5065,7 +5058,7 @@ export default function CadWorkspace({
     stepTreeRoot
   ]);
   const visibleStepTreeTopologyReferenceIds = useMemo(() => (
-    isStepView && isAssemblyView
+    supportsTopology && isAssemblyView
       ? visibleStepTreeTopologyReferenceIdsForWorkspace(displayStepTreeRoot, expandedStepTreeNodeIds, {
         isAssemblyView
       })
@@ -5074,7 +5067,7 @@ export default function CadWorkspace({
     displayStepTreeRoot,
     expandedStepTreeNodeIds,
     isAssemblyView,
-    isStepView
+    supportsTopology
   ]);
   const visibleStepTreeTopologyReferenceIdSet = useMemo(
     () => new Set(visibleStepTreeTopologyReferenceIds),
@@ -7222,27 +7215,39 @@ export default function CadWorkspace({
     setViewerContextMenu(null);
   }, [selectedKey]);
 
+  // Right-clicking empty space is a VIEWPORT gesture, so the menu it opens belongs to
+  // every format that draws something — camera actions are not a STEP feature. Only the
+  // assembly-tree entries below are capability-gated; a format with no parts simply gets
+  // the camera section. This also un-strands `zoomToFitSelection`'s whole-model fallback,
+  // which shipped with the implicit render type and was unreachable while this handler
+  // bailed on anything but STEP.
   const openGlobalViewerContextMenu = useCallback(({ clientX = 0, clientY = 0 } = {}) => {
-    if (!isStepView) {
+    if (!selectedViewportContent) {
       setViewerContextMenu(null);
       return;
     }
-    const expansionState = buildStepTreeExpansionMenuState({
-      root: displayStepTreeRoot,
-      isAssemblyView,
-      expandedTreeNodeIds: expandedStepTreeNodeIds,
-      loadableTreeNodeIds: loadableStepTreeTopologyNodeIds,
-      actionNodeIds: []
-    });
+    const hasPartsMenu = hasCapability(selectedEntrySourceFormat, "parts");
+    const expansionState = hasPartsMenu
+      ? buildStepTreeExpansionMenuState({
+          root: displayStepTreeRoot,
+          isAssemblyView,
+          expandedTreeNodeIds: expandedStepTreeNodeIds,
+          loadableTreeNodeIds: loadableStepTreeTopologyNodeIds,
+          actionNodeIds: []
+        })
+      : { showExpandCollapse: false, collapsedExpandableTreeNodeIds: [] };
     setViewerContextMenu({
       x: Number(clientX) || 0,
       y: Number(clientY) || 0,
       global: true,
       label: "Viewer",
       hidden: true,
-      showShowAll: hiddenPartIds.length > 0,
+      showShowAll: hasPartsMenu && hiddenPartIds.length > 0,
       showCameraActions: true,
-      showExpandCollapse: expansionState.showExpandCollapse || expandedStepTreeNodeIds.length > 0,
+      // Nothing narrower is selected here, so "Zoom To Fit" means the whole model.
+      fitWholeModel: true,
+      showExpandCollapse: hasPartsMenu &&
+        (expansionState.showExpandCollapse || expandedStepTreeNodeIds.length > 0),
       collapsedExpandableTreeNodeIds: expansionState.collapsedExpandableTreeNodeIds,
       expandedExpandableTreeNodeIds: expandedStepTreeNodeIds,
       expandAllDisabled: expansionState.collapsedExpandableTreeNodeIds.length < 1,
@@ -7253,8 +7258,9 @@ export default function CadWorkspace({
     expandedStepTreeNodeIds,
     hiddenPartIds.length,
     isAssemblyView,
-    isStepView,
-    loadableStepTreeTopologyNodeIds
+    loadableStepTreeTopologyNodeIds,
+    selectedEntrySourceFormat,
+    selectedViewportContent
   ]);
 
   const handleModelReferenceContext = useCallback((referenceId, { clientX = 0, clientY = 0 } = {}) => {
@@ -7703,13 +7709,17 @@ export default function CadWorkspace({
         .map((id) => String(id || "").trim())
         .filter(Boolean)
     );
-    if (!fitPartIds.length && !fitReferenceIds.length) {
+    // The global menu has no narrower target by construction, so it asks for the model.
+    // A part menu that resolved no ids is a real failure and still says so.
+    const fitWholeModel = menu?.fitWholeModel === true;
+    if (!fitWholeModel && !fitPartIds.length && !fitReferenceIds.length) {
       setCopyStatus("No geometry to fit");
       return;
     }
     if (!viewerRef.current?.zoomToFitSelection?.({
       partIds: fitPartIds,
       referenceIds: fitReferenceIds,
+      fallbackToModel: fitWholeModel,
       animate: true
     })) {
       setCopyStatus("No geometry to fit");
@@ -8215,13 +8225,15 @@ export default function CadWorkspace({
     { id: DRAWING_TOOL.FILL, label: "Fill", Icon: PaintBucket },
     { id: DRAWING_TOOL.ERASE, label: "Erase", Icon: Eraser }
   ];
-  const renderDisplaySettings = isStepView ? displaySettings : null;
+  // Handed over unconditionally: the pane gates it on the `displayModes` capability, so
+  // gating it a second time here only creates a place for the two to disagree.
+  const renderDisplaySettings = displaySettings;
   const themeTabs = [
     // One tab for everything about how this file is drawn right now: display
     // mode, plus the section-plane and exploded-view transforms. All three are
     // per-file session state. The theme is global, not file-specific —
     // it lives in the navbar-triggered theme editor (ThemeEditorPanel).
-    isStepView
+    supportsDisplayModes
       ? buildDisplaySettingsTab({
           displaySettings,
           updateDisplaySettings,
@@ -8273,8 +8285,6 @@ export default function CadWorkspace({
           viewerPerspectiveRef={activePerspectiveRef}
           themeSettings={resolvedThemeSettings}
           displaySettings={renderDisplaySettings}
-          onProjectionChange={isStepView ? updateThemeProjection : undefined}
-          onDisplayModeChange={isStepView ? updateDisplayMode : undefined}
           previewMode={previewMode}
           viewportFrameInsets={viewportFrameInsets}
           viewerLoading={viewerLoading}
@@ -8440,10 +8450,6 @@ export default function CadWorkspace({
                 drawToolActive={drawToolActive}
                 panToolActive={panToolActive}
                 handleSelectTabToolMode={handleSelectTabToolMode}
-                displayMode={isStepView ? displaySettings.mode : undefined}
-                onDisplayModeChange={isStepView ? updateDisplayMode : undefined}
-                projection={isStepView ? resolvedThemeSettings.projection : undefined}
-                onProjectionChange={isStepView ? updateThemeProjection : undefined}
                 viewerLoading={viewerLoading}
                 selectedMeshData={selectedMeshData}
                 selectedImplicitModel={selectedImplicitRuntimeModel}
