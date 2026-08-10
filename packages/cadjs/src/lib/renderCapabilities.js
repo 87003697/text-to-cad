@@ -107,10 +107,13 @@ const ROBOT_CAPABILITIES = Object.freeze({
   sheetKind: RENDER_FORMAT.URDF,
   label: "URDF",
   sceneScale: "urdf",
-  // A URDF is a link/joint TREE — the most literal assembly structure the viewer holds,
-  // and the reason `parts` exists. Topology stays false: a robot's links are meshes, with
-  // no BREP faces or edges to reference.
-  parts: true,
+  // No selection. A URDF is a link tree, so links CAN be made pickable — that was tried and
+  // removed: selecting one gives you nothing to do with it. There is no copyable reference
+  // for a link the way there is for a STEP face or occurrence, so the whole affordance was
+  // a selection highlight and no payload. On every non-STEP format the select TOOL stays
+  // visible and inert: it is the default mode, and in it the left button orbits and the
+  // right button pans, which is all a robot needs.
+  parts: false,
   topology: false,
   exploded: false,
   displayModes: false,

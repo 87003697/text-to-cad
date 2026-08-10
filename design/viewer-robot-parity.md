@@ -15,7 +15,7 @@ same theme, same camera, one registry row, its own `fileSessionState` slice — 
 
 - no headless render path at all (the snapshot CLI rejects robot inputs outright),
 - no export route,
-- no structure panel, despite a URDF being a link tree,
+- no structure panel (a URDF is a link tree, but see R1: selection has no payload),
 - no display modes, no clip plane, no exploded view,
 - a load that takes ~20× longer than a mesh of comparable size, all-or-nothing.
 
@@ -127,25 +127,36 @@ producing them, so there is nothing to export. Everything else is done.
 | Phase | Status |
 |---|---|
 | R0 robot in the standing sweep | **DONE** `4456420f` |
-| R1 links are parts | **DONE** `116495de` — except the Tree PANEL, see R1b |
+| R1 links are parts | built, then **REMOVED** — selection had no payload |
 | R2 display modes / clip / exploded | **dropped** (not wanted) |
 | R3 progressive loading | **DONE** `b2052a75` |
 | R4 robots in the headless renderer | **DONE** `e849884f` |
 | R5 export | **dropped** (robots are end of the line) |
 | R6 framing | **ANSWERED by R3**, no bug — see below |
 
-### R1 — links are parts (done, one piece deferred)
+### R1 — links are parts: BUILT, THEN REMOVED
 
-`buildRobotAssemblyRoot` turns urdfData plus the preview's parts into exactly the node
-shape `buildStepTreeRoot` returns, and `isAssemblyView` became "does this entry have a part
-tree?" rather than "is the entry kind assembly". A robot's links are now selectable,
-hideable, isolatable and zoom-to-fit-able in the viewport, and the part context menu works.
+Shipped and reverted in the same branch, which is worth recording so it is not rebuilt.
 
-**R1b — the Tree PANEL is still missing**, deliberately. It is 556 lines inside
-`StepFileSheet` reading 20 props and 33 derived locals. Sharing it means extracting it,
-with the viewer's most-used surface as the blast radius; writing a second, simpler tree for
-robots is the parallel stack this whole effort exists to remove. The robot section list
-does NOT claim a `tree` id it cannot render. Sized here so the next person can judge it.
+`buildRobotAssemblyRoot` turned urdfData plus the preview's parts into the node shape
+`buildStepTreeRoot` returns, and a robot's links became selectable, hideable, isolatable
+and zoom-to-fit-able. It worked. It was also **useless**: selecting a link gives you
+nothing to do with it. A STEP face or occurrence has a copyable reference — `#o1.2` — that
+a user pastes into a generator or a snapshot job. A URDF link has no such currency, so the
+whole affordance was a highlight and no payload.
+
+Removed at the owner's call, and `parts` is back to false for robots. On every non-STEP
+format the select TOOL stays visible and inert: it is the default mode, and in it the left
+button orbits and the right button pans — which is all a robot needs. Verified on URDF,
+STL and implicit: a click selects nothing, left-drag orbits, right-drag pans; STEP still
+selects.
+
+This also retires **R1b** (the shared Tree panel, 556 lines inside `StepFileSheet` reading
+20 props and 33 derived locals). With no selection there is nothing for a robot Tree tab to
+drive. Do not extract it for robots' sake.
+
+The lesson generalises: `parts` is not "does this format have sub-objects" but "can a user
+DO something with one". A format earns it by having a reference worth carrying away.
 
 ### R3 — progressive loading (done)
 
