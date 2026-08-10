@@ -82,6 +82,26 @@ class EscalatingProcess(FakeProcess):
         return self.returncode or 0
 
 
+class FakeRetryProxy:
+    """Controllable in-process retry proxy for runner lifecycle tests."""
+
+    def __init__(self) -> None:
+        self.url = "http://127.0.0.1:17777/v1"
+        self.started = False
+        self.stopped = False
+
+    def start(self):
+        """Record lifecycle start and return this proxy."""
+
+        self.started = True
+        return self
+
+    def stop(self) -> None:
+        """Record lifecycle stop."""
+
+        self.stopped = True
+
+
 class RunnerTests(unittest.TestCase):
     """Validate mandatory tap behavior without bwrap, network, or Venus."""
 
@@ -187,6 +207,7 @@ class RunnerTests(unittest.TestCase):
                 "/fake/claude-tap",
                 self.exp_dir,
                 environ,
+                "http://127.0.0.1:17777/v1",
             )
         self.assertIs(returned, process)
         argv = popen.call_args.args[0]
@@ -194,7 +215,7 @@ class RunnerTests(unittest.TestCase):
         self.assertEqual(argv[argv.index("--tap-port") + 1], "0")
         self.assertEqual(
             argv[argv.index("--tap-target") + 1],
-            self.supervisor.TAP_TARGET,
+            "http://127.0.0.1:17777/v1",
         )
         self.assertIn("--tap-no-launch", argv)
         self.assertEqual(
@@ -351,13 +372,24 @@ class RunnerTests(unittest.TestCase):
     def test_success_injects_only_loopback_tap_url_and_requires_trace(self) -> None:
         tap = FakeProcess()
         workload = FakeProcess(returncode=0)
+        retry_proxy = FakeRetryProxy()
         with (
             mock.patch.object(
                 self.supervisor,
                 "resolve_tap",
                 return_value="/fake/claude-tap",
             ),
-            mock.patch.object(self.supervisor, "start_tap", return_value=tap),
+            mock.patch.object(
+                self.supervisor,
+                "RetryProxy",
+                create=True,
+                return_value=retry_proxy,
+            ) as retry_proxy_type,
+            mock.patch.object(
+                self.supervisor,
+                "start_tap",
+                return_value=tap,
+            ) as start_tap,
             mock.patch.object(self.supervisor, "wait_ready", return_value=18888),
             mock.patch.object(
                 self.supervisor,
@@ -389,6 +421,13 @@ class RunnerTests(unittest.TestCase):
                 self.environ,
             )
         self.assertEqual(status, 0)
+        retry_proxy_type.assert_called_once_with(
+            self.supervisor.TAP_TARGET,
+            self.exp_dir / "run/venus-retry.jsonl",
+        )
+        self.assertTrue(retry_proxy.started)
+        self.assertTrue(retry_proxy.stopped)
+        self.assertEqual(start_tap.call_args.args[-1], retry_proxy.url)
         self.assertEqual(
             popen.call_args.kwargs["env"]["CLAUDE_TAP_URL"],
             "http://127.0.0.1:18888/v1",
@@ -408,6 +447,11 @@ class RunnerTests(unittest.TestCase):
                 self.supervisor,
                 "resolve_tap",
                 return_value="/fake/claude-tap",
+            ),
+            mock.patch.object(
+                self.supervisor,
+                "RetryProxy",
+                return_value=FakeRetryProxy(),
             ),
             mock.patch.object(self.supervisor, "start_tap", return_value=tap),
             mock.patch.object(self.supervisor, "wait_ready", return_value=18888),
@@ -451,6 +495,11 @@ class RunnerTests(unittest.TestCase):
                 "resolve_tap",
                 return_value="/fake/claude-tap",
             ),
+            mock.patch.object(
+                self.supervisor,
+                "RetryProxy",
+                return_value=FakeRetryProxy(),
+            ),
             mock.patch.object(self.supervisor, "start_tap", return_value=tap),
             mock.patch.object(self.supervisor, "wait_ready", return_value=18888),
             mock.patch.object(
@@ -486,6 +535,7 @@ class RunnerTests(unittest.TestCase):
 
     def test_signal_status_wins_and_workload_is_not_started(self) -> None:
         tap = FakeProcess()
+        retry_proxy = FakeRetryProxy()
         relay = mock.MagicMock()
         relay.signum = signal.SIGINT
         relay.cancelled = True
@@ -496,6 +546,11 @@ class RunnerTests(unittest.TestCase):
                 self.supervisor,
                 "resolve_tap",
                 return_value="/fake/claude-tap",
+            ),
+            mock.patch.object(
+                self.supervisor,
+                "RetryProxy",
+                return_value=retry_proxy,
             ),
             mock.patch.object(self.supervisor, "SignalRelay", return_value=relay),
             mock.patch.object(self.supervisor, "start_tap", return_value=tap),
@@ -521,11 +576,26 @@ class RunnerTests(unittest.TestCase):
                 self.environ,
             )
         self.assertEqual(status, 130)
+        self.assertTrue(retry_proxy.stopped)
         popen.assert_not_called()
 
 
 class ProductionPathContractTests(unittest.TestCase):
     """Keep the production entrypoint mandatory-tap and status preserving."""
+
+    def test_runner_direct_entrypoint_loads_retry_proxy(self) -> None:
+        result = subprocess.run(
+            [
+                os.environ.get("PYTHON_BIN", "python3"),
+                str(PILOT_ROOT / "runner.py"),
+                "--help",
+            ],
+            cwd=REPO_ROOT,
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
 
     def test_production_path_uses_tap_only_gateway(self) -> None:
         pilot = (PILOT_ROOT / "toys4k-pilot.sh").read_text(encoding="utf-8")
@@ -693,6 +763,10 @@ class ProductionPathContractTests(unittest.TestCase):
             (exp_dir / "run/.codex-upper").mkdir(parents=True)
             (exp_dir / "run/.codex-upper/state.db").write_bytes(b"private")
             (exp_dir / "run/stderr.log").write_text("diagnostic\n", encoding="utf-8")
+            (exp_dir / "run/venus-retry.jsonl").write_text(
+                '{"attempt":1,"status":200,"error_code":null}\n',
+                encoding="utf-8",
+            )
             load_runner().write_artifact_manifest(exp_dir, 0, 0)
             manifest = json.loads(
                 (exp_dir / "artifact_manifest.json").read_text(encoding="utf-8")
@@ -705,6 +779,7 @@ class ProductionPathContractTests(unittest.TestCase):
                 ".part.step/topology.json",
                 "reviews/iso_20260730T120000Z.png",
                 "run/stderr.log",
+                "run/venus-retry.jsonl",
             ],
         )
         self.assertNotIn("run/.codex-upper/state.db", paths)

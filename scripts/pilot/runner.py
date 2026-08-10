@@ -19,6 +19,13 @@ from pathlib import Path
 from types import FrameType
 from typing import Callable, Mapping
 
+try:
+    from scripts.pilot.venus_retry_proxy import RetryProxy
+except ModuleNotFoundError as exc:
+    if exc.name != "scripts":
+        raise
+    from venus_retry_proxy import RetryProxy
+
 
 READY_PATTERN = re.compile(r"listening on http://127\.0\.0\.1:(\d+)")
 FINAL_SESSION_STATUSES = {"complete", "error", "empty"}
@@ -210,6 +217,7 @@ def start_tap(
     tap_bin: str,
     exp_dir: Path,
     environ: Mapping[str, str],
+    target_url: str,
 ) -> subprocess.Popen[bytes]:
     """Start one loopback-only proxy whose database belongs to EXP_DIR."""
 
@@ -233,7 +241,7 @@ def start_tap(
         # claude-tap owns bind(0), avoiding a reserve-close-rebind race.
         "0",
         "--tap-target",
-        TAP_TARGET,
+        target_url,
         "--tap-allow-path",
         "/v1",
         "--tap-max-traces",
@@ -724,39 +732,57 @@ def run_supervised(
     # Install signal handlers before tap Popen. This prevents an INT/TERM in
     # the start_tap -> relay-enter window from orphaning the new proxy.
     with SignalRelay() as relay:
-        tap = start_tap(tap_bin, exp_dir, environ)
+        retry_proxy = RetryProxy(
+            TAP_TARGET,
+            exp_dir / "run/venus-retry.jsonl",
+        )
+        retry_proxy.start()
         try:
-            port = wait_ready(
-                tap,
-                exp_dir / "run/.claude-tap.log",
-                ready_timeout,
-                lambda: relay.cancelled,
-            )
-            if port is not None:
-                tap_url = f"http://127.0.0.1:{port}/v1"
-                child_env = build_sandbox_environment(environ, tap_url)
-                workload = subprocess.Popen(
-                    bwrap_argv,
-                    # Inherit wrapper redirections so Codex continues to write
-                    # run/stderr.log and remains non-interactive exactly as before.
-                    stdin=None,
-                    stdout=None,
-                    stderr=None,
-                    env=child_env,
-                    start_new_session=True,
-                )
-                state.workload_started = True
-                relay.attach(workload)
-                try:
-                    child_status, tap_failed = wait_workload(workload, tap)
-                finally:
-                    relay.detach()
-        finally:
-            tap_exited_before_stop = tap.poll() is not None
+            tap = start_tap(tap_bin, exp_dir, environ, retry_proxy.url)
             try:
-                stop_tap(tap, stop_timeout)
-            except (OSError, subprocess.TimeoutExpired) as exc:
-                print(f"warning: failed to stop claude-tap: {exc}", file=sys.stderr)
+                port = wait_ready(
+                    tap,
+                    exp_dir / "run/.claude-tap.log",
+                    ready_timeout,
+                    lambda: relay.cancelled,
+                )
+                if port is not None:
+                    tap_url = f"http://127.0.0.1:{port}/v1"
+                    child_env = build_sandbox_environment(environ, tap_url)
+                    workload = subprocess.Popen(
+                        bwrap_argv,
+                        # Inherit wrapper redirections so Codex continues to write
+                        # run/stderr.log and remains non-interactive exactly as before.
+                        stdin=None,
+                        stdout=None,
+                        stderr=None,
+                        env=child_env,
+                        start_new_session=True,
+                    )
+                    state.workload_started = True
+                    relay.attach(workload)
+                    try:
+                        child_status, tap_failed = wait_workload(workload, tap)
+                    finally:
+                        relay.detach()
+            finally:
+                tap_exited_before_stop = tap.poll() is not None
+                try:
+                    stop_tap(tap, stop_timeout)
+                except (OSError, subprocess.TimeoutExpired) as exc:
+                    print(
+                        f"warning: failed to stop claude-tap: {exc}",
+                        file=sys.stderr,
+                    )
+                    tap_failed = True
+        finally:
+            try:
+                retry_proxy.stop()
+            except OSError as exc:
+                print(
+                    f"warning: failed to stop Venus retry proxy: {exc}",
+                    file=sys.stderr,
+                )
                 tap_failed = True
 
         try:
