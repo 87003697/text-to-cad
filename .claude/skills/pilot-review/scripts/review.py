@@ -354,6 +354,8 @@ def _canonical_graph(
     delivery = graph.get("final_delivery")
     if isinstance(delivery, dict):
         selection = _read_json(workspace / "final/selection.json")
+        manifest_path = str(delivery.get("manifest") or "final/manifest.json")
+        manifest = _read_json(workspace / manifest_path)
         _node(
             nodes,
             "selection",
@@ -364,9 +366,27 @@ def _canonical_graph(
         )
         _node(
             nodes,
+            "rebuild",
+            "rebuild",
+            "final/rebuild.json",
+            identity=manifest.get("rebuild_sha256"),
+            execution=manifest.get("rebuild_execution"),
+        )
+        _node(
+            nodes,
+            "verification",
+            "verification",
+            "final/verification.json",
+            identity=manifest.get("verification_sha256"),
+            verification_identity=manifest.get(
+                "verification_identity_sha256"
+            ),
+        )
+        _node(
+            nodes,
             "final-delivery",
             "final_delivery",
-            str(delivery.get("manifest") or "final/manifest.json"),
+            manifest_path,
             selected_step=delivery.get("selected_step"),
             accepted=delivery.get("accepted"),
             identity_sha256=delivery.get("identity_sha256"),
@@ -378,11 +398,18 @@ def _canonical_graph(
                 "selection",
                 "step_considered_for_selection",
             )
+        _edge(edges, "selection", "rebuild", "selection_triggers_rebuild")
         _edge(
             edges,
-            "selection",
+            "rebuild",
+            "verification",
+            "rebuild_verified_independently",
+        )
+        _edge(
+            edges,
+            "verification",
             "final-delivery",
-            "selection_publishes_delivery",
+            "verification_supports_delivery",
         )
     return {"nodes": nodes, "edges": edges}
 
