@@ -94,7 +94,6 @@ test("a plain mesh is the minimal row", () => {
     assert.equal(row.topology, false);
     assert.equal(row.params, null);
     assert.equal(row.artifactManaged, false);
-    assert.equal(supportsTool(format, "select"), false);
   }
 });
 
@@ -113,6 +112,20 @@ test("artifact-managed formats are exactly STEP and DXF", () => {
   // the server does not own blocks forever; implicit is the reverse case and belongs out.
   const managed = Object.values(RENDER_FORMAT).filter((format) => isArtifactManagedFormat(format));
   assert.deepEqual(managed.sort(), [RENDER_FORMAT.DXF, RENDER_FORMAT.STEP].sort());
+});
+
+test("every format gets the whole toolbar: the tools act on the viewport, not the geometry", () => {
+  // Select, pan and draw were off for plain meshes and for robots, so opening an STL lost
+  // three buttons that have nothing to do with what the file contains. Select is inert
+  // without `topology` — it stays visible so the toolbar keeps one shape.
+  for (const format of Object.values(RENDER_FORMAT)) {
+    for (const tool of ["select", "pan", "draw", "orbit", "screenshot"]) {
+      assert.equal(supportsTool(format, tool), true, `${format} is missing the ${tool} tool`);
+    }
+  }
+  // An unrecognised format still gets the viewport tools: they cannot misbehave without
+  // geometry-level capabilities behind them.
+  assert.equal(supportsTool("totally-unknown", "pan"), true);
 });
 
 test("only DXF offers the plan view today", () => {
@@ -148,6 +161,5 @@ test("unknown formats fall back to the conservative row instead of throwing", ()
   const row = renderCapabilities("totally-unknown");
   assert.equal(row.parts, false);
   assert.equal(row.topology, false);
-  assert.equal(supportsTool("totally-unknown", "select"), false);
   assert.equal(hasCapability("", "parts"), false);
 });

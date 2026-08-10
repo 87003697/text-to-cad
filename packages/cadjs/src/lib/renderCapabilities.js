@@ -62,6 +62,23 @@ export const ENTRY_ICON_KIND = Object.freeze({
   GLB_MESH: "glb-mesh"
 });
 
+// The toolbar cluster. ALL of these act on the VIEWPORT, not on the geometry, so every
+// format gets every one of them — a mesh can be panned and annotated exactly as a STEP
+// assembly can. Select is the only one that needs a caveat: on a format without `topology`
+// it is inert, and stays visible so the toolbar keeps one shape rather than reflowing as
+// you move between files.
+//
+// Kept as a map rather than dropped now that every row agrees, because this is the place a
+// format would DECLINE a tool, and because the shell reads it through `supportsTool`. A
+// row that overrides it is making a claim; today none do.
+const VIEWPORT_TOOLS = Object.freeze({
+  select: true,
+  pan: true,
+  draw: true,
+  orbit: true,
+  screenshot: true
+});
+
 const MESH_CAPABILITIES = Object.freeze({
   content: VIEWPORT_CONTENT.MESH,
   assetKind: ASSET_KIND.MESH,
@@ -70,7 +87,6 @@ const MESH_CAPABILITIES = Object.freeze({
   label: "STL",
   // A plain mesh is one body with no topology, no parts and no per-file settings: the
   // minimal row, and the useful floor for what "shared" has to mean.
-  tools: Object.freeze({ select: false, pan: false, draw: false, orbit: true, screenshot: true }),
   parts: false,
   topology: false,
   exploded: false,
@@ -91,7 +107,6 @@ const ROBOT_CAPABILITIES = Object.freeze({
   sheetKind: RENDER_FORMAT.URDF,
   label: "URDF",
   sceneScale: "urdf",
-  tools: Object.freeze({ select: false, pan: false, draw: false, orbit: true, screenshot: true }),
   parts: false,
   topology: false,
   exploded: false,
@@ -113,7 +128,7 @@ const DEFAULT_CAPABILITIES = Object.freeze({
   sheetKind: "",
   label: "",
   sceneScale: "cad",
-  tools: Object.freeze({ select: false, pan: false, draw: false, orbit: true, screenshot: true }),
+  tools: VIEWPORT_TOOLS,
   parts: false,
   topology: false,
   exploded: false,
@@ -149,7 +164,6 @@ export const RENDER_CAPABILITIES = Object.freeze({
     iconKind: ENTRY_ICON_KIND.STEP,
     sheetKind: RENDER_FORMAT.STEP,
     label: "STEP",
-    tools: Object.freeze({ select: true, pan: true, draw: true, orbit: true, screenshot: true }),
     parts: true,
     topology: true,
     exploded: true,
@@ -180,9 +194,6 @@ export const RENDER_CAPABILITIES = Object.freeze({
     iconKind: ENTRY_ICON_KIND.DXF,
     sheetKind: RENDER_FORMAT.DXF,
     label: "DXF",
-    // Select is inert (a drawing has no pickable topology) but stays visible so the
-    // toolbar keeps one shape; pan and draw act on the viewport, not the geometry.
-    tools: Object.freeze({ select: true, pan: true, draw: true, orbit: true, screenshot: true }),
     planView: true,
     artifactManaged: true,
     exportFormats: Object.freeze(["dxf"])
@@ -194,7 +205,6 @@ export const RENDER_CAPABILITIES = Object.freeze({
     iconKind: ENTRY_ICON_KIND.IMPLICIT,
     sheetKind: RENDER_FORMAT.IMPLICIT,
     label: "Implicit",
-    tools: Object.freeze({ select: true, pan: true, draw: true, orbit: true, screenshot: true }),
     params: PARAMETER_SOURCE.MODULE,
     animations: true,
     // Rendered live from its own GLSL: there is no baked artifact to be stale, so an

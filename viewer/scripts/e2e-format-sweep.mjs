@@ -15,9 +15,9 @@
 //   node viewer/scripts/e2e-format-sweep.mjs --dir <models-root> [--url http://127.0.0.1:3245]
 //                                            [--all-implicits] [--out <dir>]
 //
-// Asserts, per format: the viewport is not blank, no page errors, and the right-click
-// viewport menu offers the camera actions (with assembly-tree entries only where the
-// `parts` capability is declared).
+// Asserts, per format: the viewport is not blank, no page errors, the whole viewport tool
+// cluster is present and usable, and the right-click viewport menu offers the camera
+// actions (with assembly-tree entries only where the `parts` capability is declared).
 //
 // Requires a viewer already serving <models-root> (npm --prefix viewer run start) and
 // playwright available. Exits non-zero on the first failing format.
@@ -51,8 +51,35 @@ const FIXTURES = [
   { format: "glb", file: "fun/miniature_spiral_staircase_highres.glb", parts: false },
   { format: "step", file: "simple/cam_follower_roller.step.py", parts: true },
   { format: "dxf", file: "dxf/alu_extrusion_profile.dxf", parts: false },
-  { format: "implicit", file: "implicits/rounded-orb.implicit.js", parts: false }
+  { format: "implicit", file: "implicits/rounded-orb.implicit.js", parts: false },
+  // The robot family had no fixture here at all, which is how it kept missing features
+  // nobody was looking at. Needs `git lfs checkout models/robots/so101` first, like the
+  // mesh and DXF fixtures.
+  { format: "urdf", file: "robots/so101/so101.urdf", parts: false }
 ];
+
+// Select, pan and draw act on the VIEWPORT, so every format gets them. They were off for
+// plain meshes and for robots until the capability rows were made uniform: opening an STL
+// lost three buttons that have nothing to do with what the file contains.
+const VIEWPORT_TOOL_LABELS = ["Select", "Pan", "Draw", "Orbit", "Copy screenshot"];
+
+async function toolProblem(page) {
+  const missing = [];
+  const disabled = [];
+  for (const label of VIEWPORT_TOOL_LABELS) {
+    const button = page.locator(`button[aria-label="${label}"]`).first();
+    if (!(await button.count())) {
+      missing.push(label);
+      continue;
+    }
+    if (!(await button.isEnabled())) disabled.push(label);
+  }
+  if (missing.length) return `toolbar is missing ${missing.join(", ")}`;
+  // Disabled is legitimate only while there is nothing on screen; the caller has already
+  // asserted the viewport is not blank by this point.
+  if (disabled.length) return `toolbar has ${disabled.join(", ")} disabled with content on screen`;
+  return "";
+}
 
 // Camera actions are viewport-level, so every format's right-click menu must offer them.
 // They were STEP-only until U3, and the failure was invisible: right-clicking simply did
@@ -164,8 +191,12 @@ async function main() {
     const url = `${args.url}${modelsRoot}?dir=${encodeURIComponent(modelsRoot)}` +
       `&file=${encodeURIComponent(fixture.file)}`;
     await page.goto(url, { waitUntil: "domcontentloaded" });
-    // STEP and DXF build their package on first open; give the slowest path room.
-    await page.waitForTimeout(fixture.format === "step" ? 14000 : 9000);
+    // STEP builds its package on first open and a robot assembles from per-link meshes;
+    // give the slowest paths room.
+    // A robot loads EVERY link mesh before anything draws (so101: 13 meshes, 16 MB, ~15 s
+    // on localhost), so its window is the widest here. See the robot-parity plan in
+    // design/viewer-robot-parity.md.
+    await page.waitForTimeout(fixture.format === "urdf" ? 26000 : fixture.format === "step" ? 16000 : 9000);
 
     const buffer = await page.screenshot({ clip: CLIP });
     if (args.out) {
@@ -173,12 +204,14 @@ async function main() {
       fs.writeFileSync(path.join(args.out, `${fixture.file.replace(/[^a-z0-9]/gi, "_")}.png`), buffer);
     }
     const covered = coverage(PNG.sync.read(buffer));
+    const tools = covered < MIN_COVERAGE ? "" : await toolProblem(page);
     const menu = menuProblem(await viewportMenuItems(page), fixture);
     results.push({
       format: fixture.format,
       file: fixture.file,
       coverage: Number(covered.toFixed(4)),
       blank: covered < MIN_COVERAGE,
+      tools,
       menu,
       errors: errors.slice(0, 3)
     });
@@ -189,10 +222,19 @@ async function main() {
 
   await browser.close();
 
-  const failures = results.filter((result) => result.blank || result.menu || result.errors.length);
+  const failures = results.filter(
+    (result) => result.blank || result.tools || result.menu || result.errors.length
+  );
   for (const result of results) {
-    const status = result.blank ? "BLANK" : result.menu ? "MENU" : result.errors.length ? "ERRORS" : "ok";
+    const status = result.blank
+      ? "BLANK"
+      : result.tools
+        ? "TOOLS"
+        : result.menu
+          ? "MENU"
+          : result.errors.length ? "ERRORS" : "ok";
     console.log(`${status.padEnd(6)} ${result.format.padEnd(9)} cov=${result.coverage} ${result.file}`);
+    if (result.tools) console.log(`         ${result.tools}`);
     if (result.menu) console.log(`         ${result.menu}`);
     for (const error of result.errors) console.log(`         ${error}`);
   }
