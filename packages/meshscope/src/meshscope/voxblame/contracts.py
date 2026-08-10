@@ -1,8 +1,8 @@
 """Frozen canonical VoxBlame JSON contracts and strict structural validators.
 
-The replacement contracts deliberately reuse the public schema identifiers of
-the pre-canonical workflow.  They live beside the current production readers
-until the later cutover tickets replace those readers atomically.
+The canonical contracts deliberately reuse the public schema identifiers of
+the pre-canonical workflow. The breaking cutover is complete: these validators
+are the only supported readers and reject legacy or mixed-shape state.
 """
 
 from __future__ import annotations

@@ -7,6 +7,8 @@ import subprocess
 import sys
 import unittest
 
+import meshscope.voxblame as voxblame
+
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 
@@ -49,13 +51,64 @@ FORBIDDEN_EXECUTION_LANGUAGE = (
     "sampled Chamfer",
 )
 
+REMOVED_PUBLIC_SYMBOLS = (
+    "ChangeCell",
+    "ErrorCell",
+    "NextAction",
+    "RegionHandle",
+    "compare_error_trees",
+    "grade_surface_trees",
+    "lattice_bounds",
+    "run_step",
+    "select_next_action",
+    "world_bounds",
+)
+
 CONTRACT_ROOTS = (
+    "packages/meshscope/src/meshscope/voxblame",
     "skills/mesh-compare",
+    "skills/mesh-compare/scripts/packages/meshscope",
     "skills/mesh-to-cad",
+    "plugins/cad/skills/mesh-compare",
+    "plugins/cad/skills/mesh-to-cad",
     ".claude/skills/pilot-review",
     ".claude/skills/cvm-pull",
     "scripts/pilot",
+    "tests/python/packages/meshscope",
+    "tests/python/skills/mesh-compare",
+    "tests/python/skills/mesh-to-cad",
+    "tests/python/global",
 )
+
+ALLOWED_REJECTION_OCCURRENCES = {
+    "packages/meshscope/src/meshscope/voxblame/CONTRACT.md": {
+        "change_counts": 1,
+        "coarsest_first_error_depth": 1,
+        "next_action": 2,
+        "remaining_error_count": 1,
+    },
+    "packages/meshscope/src/meshscope/voxblame/contracts.py": {
+        "change_counts": 1,
+        "coarsest_first_error_depth": 1,
+        "next_action": 1,
+        "remaining_error_count": 1,
+    },
+    "skills/mesh-to-cad/scripts/mesh-to-cad-workspace/workspace_core.py": {
+        "compare_metrics.json": 1,
+    },
+    "tests/python/packages/meshscope/test_voxblame_contracts.py": {
+        "change_counts": 1,
+        "coarsest_first_error_depth": 1,
+        "next_action": 3,
+        "remaining_error_count": 1,
+    },
+    "tests/python/skills/mesh-compare/test_measure_step_cli.py": {
+        "next_action": 1,
+    },
+    "tests/python/skills/mesh-to-cad/test_workspace_cli.py": {
+        "compare_metrics.json": 1,
+    },
+}
 
 
 def _contract_files() -> list[Path]:
@@ -63,19 +116,20 @@ def _contract_files() -> list[Path]:
     for relative in CONTRACT_ROOTS:
         root = (REPO_ROOT / relative).resolve()
         for path in root.rglob("*"):
-            if not path.is_file() or path.suffix not in {".md", ".py", ".yaml", ".yml"}:
+            if not path.is_file() or path.suffix not in {
+                ".json",
+                ".md",
+                ".py",
+                ".txt",
+                ".yaml",
+                ".yml",
+            }:
                 continue
-            relative_path = path.relative_to(root).as_posix()
-            if relative_path.startswith("scripts/packages/"):
+            resolved = path.resolve()
+            repo_relative = resolved.relative_to(REPO_ROOT).as_posix()
+            if repo_relative == "tests/python/global/test_voxblame_workflow_contract.py":
                 continue
-            if relative_path == "scripts/mesh-to-cad-workspace/workspace_core.py":
-                continue
-            files.add(path.resolve())
-    for relative in (
-        "plugins/cad/skills/mesh-compare/SKILL.md",
-        "plugins/cad/skills/mesh-to-cad/SKILL.md",
-    ):
-        files.add((REPO_ROOT / relative).resolve())
+            files.add(resolved)
     return sorted(files)
 
 
@@ -97,6 +151,10 @@ class VoxBlameWorkflowContractTests(unittest.TestCase):
         ):
             with self.subTest(module=module):
                 self.assertIsNone(importlib.util.find_spec(module))
+
+        for symbol in REMOVED_PUBLIC_SYMBOLS:
+            with self.subTest(symbol=symbol):
+                self.assertFalse(hasattr(voxblame, symbol))
 
     def test_distance_only_dependency_is_removed(self) -> None:
         for relative in (
@@ -148,9 +206,13 @@ class VoxBlameWorkflowContractTests(unittest.TestCase):
     def test_execution_contracts_use_only_canonical_workspace_language(self) -> None:
         for path in _contract_files():
             text = path.read_text(encoding="utf-8")
+            relative = path.relative_to(REPO_ROOT).as_posix()
             for forbidden in FORBIDDEN_EXECUTION_LANGUAGE:
-                with self.subTest(path=path.relative_to(REPO_ROOT), forbidden=forbidden):
-                    self.assertNotIn(forbidden, text)
+                expected = ALLOWED_REJECTION_OCCURRENCES.get(relative, {}).get(
+                    forbidden, 0
+                )
+                with self.subTest(path=relative, forbidden=forbidden):
+                    self.assertEqual(expected, text.count(forbidden))
 
     def test_execution_contracts_name_the_canonical_workflow(self) -> None:
         mesh_compare = (REPO_ROOT / "skills/mesh-compare/SKILL.md").read_text(
