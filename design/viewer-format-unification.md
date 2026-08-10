@@ -325,7 +325,14 @@ Gate: e2e sweep incl. artifact-build flows (fresh STEP and DXF build from a clea
 
 ### U6 — horizon (separate efforts, recorded so they are not re-litigated)
 
-Not started; U0–U5 are complete. Two items gained evidence on the way through:
+Not started; U0–U5 are complete. Three items gained evidence on the way through:
+
+- **The robot family was carried along, not audited.** URDF/SRDF/SDF are structurally
+  inside the shared stack but functionally the thinnest render type: no headless render
+  path at all, no export, no structure panel despite a URDF being a link tree, no display
+  modes, and a load ~20× slower than a mesh. The sweep had no robot fixture until it was
+  added here, which is how it stayed invisible. Own plan:
+  `design/viewer-robot-parity.md`.
 
 - **The theme schema is duplicated** across `packages/cadjs/src/common/themeSettings.js`
   and `packages/implicitjs/src/common/themeSettings.js`, because implicitjs may not import
