@@ -606,6 +606,41 @@ class CvmPush:
                 4,
             )
 
+    def materialize_skill_symlinks(self, stage: Path) -> None:
+        """Replace stage-internal development skill links with physical copies."""
+
+        stage_root = stage.resolve()
+        for link in self._skill_symlinks(stage):
+            try:
+                source = link.resolve(strict=True)
+                source.relative_to(stage_root)
+            except (FileNotFoundError, ValueError) as exc:
+                raise PushError(
+                    "CVM production stage has an unsafe skill symlink: "
+                    f"{link.relative_to(stage)}",
+                    4,
+                ) from exc
+
+            temporary = link.with_name(f".{link.name}.cvm-materialize")
+            if temporary.exists() or temporary.is_symlink():
+                raise PushError(
+                    "CVM production stage has a materialization collision: "
+                    f"{temporary.relative_to(stage)}",
+                    4,
+                )
+            if source.is_dir():
+                shutil.copytree(source, temporary, symlinks=True)
+            elif source.is_file():
+                shutil.copy2(source, temporary, follow_symlinks=False)
+            else:
+                raise PushError(
+                    "CVM production stage skill symlink has unsupported target: "
+                    f"{link.relative_to(stage)}",
+                    4,
+                )
+            link.unlink()
+            temporary.rename(link)
+
     @staticmethod
     def _skill_symlinks(stage: Path) -> tuple[Path, ...]:
         links: list[Path] = []
@@ -813,6 +848,7 @@ class CvmPush:
             with self.deployment_stage() as stage:
                 self.copy_source_to_stage(stage)
                 self.copy_build_inputs(stage, inputs)
+                self.materialize_skill_symlinks(stage)
                 self.bundle_stage(stage)
                 self.validate_stage(stage)
                 attestation = self.attest_stage(stage)

@@ -5,6 +5,9 @@ import json
 import os
 import re
 import shlex
+import subprocess
+import sys
+import tempfile
 import tomllib
 import unittest
 from pathlib import Path
@@ -375,6 +378,78 @@ def _check_lookup_path(
 
 
 class SkillSelfContainmentTest(unittest.TestCase):
+    def test_mesh_compare_registered_cli_loads_vendored_packages_without_editable_installs(self) -> None:
+        site_packages = next(
+            path for path in sys.path if path.endswith("site-packages")
+        )
+        entrypoint = (
+            SKILLS_ROOT / "mesh-compare/scripts/mesh-compare/cli.py"
+        )
+        probe = (
+            "import runpy, sys\n"
+            f"sys.path.append({site_packages!r})\n"
+            f"sys.argv = [{os.fspath(entrypoint)!r}]\n"
+            f"runpy.run_path({os.fspath(entrypoint)!r}, run_name='__main__')\n"
+        )
+
+        result = subprocess.run(
+            [sys.executable, "-S", "-c", probe],
+            cwd=REPO_ROOT,
+            check=False,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+
+        self.assertEqual(2, result.returncode, result.stderr)
+        self.assertIn('"classification":"unsupported_command"', result.stdout)
+        self.assertIn("voxblame-preview", result.stderr)
+
+    def test_mesh_compare_registered_cli_prefers_an_installed_native_package(self) -> None:
+        site_packages = next(
+            path for path in sys.path if path.endswith("site-packages")
+        )
+        entrypoint = (
+            SKILLS_ROOT / "mesh-compare/scripts/mesh-compare/cli.py"
+        )
+        with tempfile.TemporaryDirectory() as root_text:
+            installed = Path(root_text)
+            package = installed / "meshscope"
+            voxblame = package / "voxblame"
+            voxblame.mkdir(parents=True)
+            (package / "__init__.py").write_text("", encoding="utf-8")
+            (voxblame / "__init__.py").write_text(
+                "PrepareReferenceError = Exception\n"
+                "measure_step = page_repair_targets = prepare_preview_scene = "
+                "prepare_reference = publish_preview = publish_region_diff = "
+                "publish_prepare_failure = validate_preview_identity = "
+                "verify_step = lambda *args, **kwargs: None\n",
+                encoding="utf-8",
+            )
+            probe = (
+                "import runpy, sys\n"
+                f"sys.path.append({site_packages!r})\n"
+                f"sys.path.insert(0, {os.fspath(installed)!r})\n"
+                f"sys.argv = [{os.fspath(entrypoint)!r}]\n"
+                "try:\n"
+                f"    runpy.run_path({os.fspath(entrypoint)!r}, run_name='__main__')\n"
+                "except SystemExit:\n"
+                "    import meshscope\n"
+                "    print(meshscope.__file__)\n"
+            )
+
+            result = subprocess.run(
+                [sys.executable, "-S", "-c", probe],
+                cwd=REPO_ROOT,
+                check=False,
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+            )
+
+            self.assertEqual(0, result.returncode, result.stderr)
+            self.assertIn(os.fspath(package / "__init__.py"), result.stdout)
+
     def test_dependency_manifests_use_only_skill_local_path_dependencies(self) -> None:
         errors: list[str] = []
         manifest_names = {

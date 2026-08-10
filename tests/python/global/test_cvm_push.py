@@ -218,6 +218,26 @@ class BuildInputTests(unittest.TestCase):
 
 
 class StageTests(unittest.TestCase):
+    def test_materialize_skill_symlinks_replaces_internal_links_before_bundle(self) -> None:
+        with tempfile.TemporaryDirectory() as root_text:
+            stage = Path(root_text)
+            package = stage / "packages/meshshot"
+            package.mkdir(parents=True)
+            (package / "pyproject.toml").write_text("[project]\n", encoding="utf-8")
+            runtime = stage / "skills/mesh-compare/scripts/packages/meshshot"
+            runtime.parent.mkdir(parents=True)
+            os.symlink("../../../../packages/meshshot", runtime)
+            workflow = cvm_push.CvmPush(FakeRunner(), repo_root=stage, environ={})
+
+            workflow.materialize_skill_symlinks(stage)
+
+            self.assertTrue(runtime.is_dir())
+            self.assertFalse(runtime.is_symlink())
+            self.assertEqual(
+                (runtime / "pyproject.toml").read_text(encoding="utf-8"),
+                "[project]\n",
+            )
+
     def test_source_copy_excludes_private_state_and_keeps_dirty_source(self) -> None:
         with tempfile.TemporaryDirectory() as root_text:
             root = Path(root_text)
@@ -516,6 +536,9 @@ class WorkflowTests(unittest.TestCase):
             workflow.copy_build_inputs = (
                 lambda stage, selected: events.append("copy-inputs")
             )
+            workflow.materialize_skill_symlinks = (
+                lambda stage: events.append("materialize-links")
+            )
             workflow.bundle_stage = lambda stage: events.append("bundle")
             workflow.validate_stage = lambda stage: events.append("validate")
             workflow.attest_stage = lambda stage: (
@@ -537,6 +560,7 @@ class WorkflowTests(unittest.TestCase):
                     "inputs",
                     "copy-source",
                     "copy-inputs",
+                    "materialize-links",
                     "bundle",
                     "validate",
                     "attest",

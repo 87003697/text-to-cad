@@ -9,7 +9,9 @@ import unittest
 
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
-REVIEWER_PATH = REPO_ROOT / ".claude/skills/pilot-review/scripts/review.py"
+REVIEWER_PATH = (
+    REPO_ROOT / "skills/mesh-to-cad/scripts/mesh-to-cad-review/__main__.py"
+)
 
 
 def load_reviewer():

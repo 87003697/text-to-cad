@@ -33,7 +33,9 @@ PREVIEW_PROFILE_PATH = (
     / "packages/meshshot/src/meshshot/profiles/cadena_residual_eight_view_v1.json"
 )
 PILOT_RUNNER_PATH = REPO_ROOT / "scripts/pilot/runner.py"
-PILOT_REVIEW_PATH = REPO_ROOT / ".claude/skills/pilot-review/scripts/review.py"
+PILOT_REVIEW_PATH = (
+    REPO_ROOT / "skills/mesh-to-cad/scripts/mesh-to-cad-review/__main__.py"
+)
 
 
 def _load_cli():
