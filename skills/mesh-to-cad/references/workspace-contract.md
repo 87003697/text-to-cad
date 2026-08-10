@@ -13,7 +13,10 @@ Invoke it with the active project Python:
     python skills/mesh-to-cad/scripts/mesh-to-cad-workspace publish-step-zero ...
     python skills/mesh-to-cad/scripts/mesh-to-cad-workspace publish-cycle ...
     python skills/mesh-to-cad/scripts/mesh-to-cad-workspace finalize \
-      --workspace <EXP_DIR> --selection <final-selection.json> --notes <notes.md>
+      --workspace <EXP_DIR> --selection <final-selection.json> --notes <notes.md> \
+      --rebuild-entrypoint <registered-cad-or-implicit-adapter> \
+      --geometry-entrypoint <mesh-compare-entrypoint> \
+      --tool-registry <trusted-tool-registry.json>
     python skills/mesh-to-cad/scripts/mesh-to-cad-workspace status ...
     python skills/mesh-to-cad/scripts/mesh-to-cad-workspace rebuild-index ...
     python skills/mesh-to-cad/scripts/mesh-to-cad-workspace recover ...
@@ -40,10 +43,17 @@ run returns the wrapped command's exit code.
   identities must agree.
 - record-attempt publishes failed or strategy-changed Attempts without
   creating a Measured Step.
-- finalize validates Agent-owned selection evidence, copies only the selected
-  recipe's declared inputs into isolated staging, executes the registered CAD
-  or implicit rebuild, proves build provenance, runs non-publishing VoxBlame
-  equivalence, renders the final preview, and atomically publishes `final/`.
+- finalize validates Agent-owned selection evidence, copies every selected
+  recipe input into isolated staging, executes the explicitly supplied
+  registered CAD or implicit rebuild adapter, proves the complete source to
+  primary artifact to measurement-mesh provenance chain, runs non-publishing
+  VoxBlame equivalence through the supplied geometry entrypoint, renders the
+  final preview, and atomically publishes `final/`. Explicit entrypoints keep
+  the helper installable without locating or importing sibling skills. The
+  caller's trusted registry is the explicit authority boundary: it binds the
+  route-specific registered adapter and VoxBlame IDs to the exact entrypoint
+  digests executed. Do not generate or alter this registry from model output;
+  installation/orchestration must supply it.
   `measurement.json` is an unchanged Selected Step summary; verification is a
   separate non-step artifact.
 - step_index.json is a compact derived graph. rebuild-index recreates it
@@ -65,16 +75,20 @@ Attempt, caps time at 900 seconds, stores at most 64 KiB from each output
 stream using a versioned head/tail policy, and redacts known secret-bearing
 arguments and Authorization headers.
 
-Setup, Measured Step, Repair Cycle, Attempt, and index writes use validated
+Setup, Measured Step, Repair Cycle, Attempt, Final Delivery, and index writes use validated
 temporary staging and atomic rename or replacement. A marker-last transaction
 interrupted between Step and Cycle rename is invalid authority; recover
 finishes only a staged transaction whose identities cross-check. The marker is
 removed only after index publication and the scoped Git commit succeed, so a
-post-rename interruption remains recoverable, including failed Attempt
-publication. Protocol-scoped VoxBlame paths are checked before any authority
-rename. Unknown staged state fails closed.
+post-rename interruption remains recoverable, including failed Attempt and
+Final Delivery publication. Recovery keeps an already committed Final Delivery
+or rolls an uncommitted rename back to the exact pre-finalization notes/index,
+so the operation can be retried. Protocol-scoped VoxBlame paths are checked
+before any authority rename. Unknown staged state fails closed.
 
-Final Delivery contains `source/`, rebuilt `artifacts/`, `build.json`,
+Final Delivery contains `source/` with every recipe-declared input at its
+reproducible relative path, rebuilt `artifacts/`, `build.json`, the pinned
+`tool-registry.json`,
 `rebuild.json`, the unchanged Selected Step `measurement.json`, independent
 `verification.json`, final `preview.png`/`preview.json`, `selection.json`, and
 `manifest.json`. Rebuild success never upgrades an unaccepted selection.

@@ -41,6 +41,7 @@ TOOL_FAILURE_RESULT = "tool_failure"
 FINAL_SELECTION_SCHEMA = "mesh-to-cad.final-selection/1"
 FINAL_DELIVERY_SCHEMA = "mesh-to-cad.final-delivery/1"
 VERIFICATION_SCHEMA = "voxblame.verification/1"
+TOOL_REGISTRY_SCHEMA = "mesh-to-cad.tool-registry/1"
 FAILED_ATTEMPT_RESULTS = (
     TOOL_FAILURE_RESULT,
     "strategy_changed",
@@ -796,6 +797,9 @@ def finalize_workspace(
     *,
     selection: Path,
     notes: Path,
+    rebuild_entrypoint: Path,
+    geometry_entrypoint: Path,
+    tool_registry: Path,
 ) -> dict[str, Any]:
     """Rebuild the Selected Step and atomically publish Final Delivery."""
 
@@ -815,6 +819,19 @@ def finalize_workspace(
     recipe_path, recipe = _find_registered_recipe(
         candidate_root,
         route=_load_workspace_document(workspace)["route"],
+    )
+    rebuild_entrypoint = _external_entrypoint(
+        rebuild_entrypoint, "$.rebuild_entrypoint"
+    )
+    geometry_entrypoint = _external_entrypoint(
+        geometry_entrypoint, "$.geometry_entrypoint"
+    )
+    tool_registry_path = tool_registry.resolve()
+    tool_registry_document = _load_tool_registry(
+        tool_registry_path,
+        route=recipe["route"],
+        rebuild_entrypoint=rebuild_entrypoint,
+        geometry_entrypoint=geometry_entrypoint,
     )
 
     transaction = workspace / "work" / f".tmp-final-{uuid.uuid4().hex}"
@@ -837,21 +854,34 @@ def finalize_workspace(
         build_root, rebuild_command = _run_registered_rebuild(
             rebuild_root,
             route=recipe["route"],
+            entrypoint=rebuild_entrypoint,
         )
+        rebuild_command["entrypoint_sha256"] = tool_registry_document["rebuild"][
+            "entrypoint_sha256"
+        ]
         _verify_rebuild_inputs_unchanged(rebuild_root, input_records)
         build = _read_json(build_root / "build.json", "$.rebuild.build")
+        if (build_root / "rebuild.json").read_bytes() != (
+            rebuild_root / "rebuild.json"
+        ).read_bytes():
+            _fail(
+                "build_provenance_conflict",
+                "rebuilt recipe differs from the selected registered recipe",
+            )
         measurement_mesh = _validate_build_provenance(
             rebuild_root,
             build_root,
             build,
             route=recipe["route"],
+            recipe=recipe,
         )
 
-        shutil.copytree(rebuild_root / "source", package / "source")
+        _copy_delivery_source(rebuild_root, package / "source", input_records)
         shutil.copytree(build_root, package / "artifacts")
         shutil.copy2(build_root / "build.json", package / "build.json")
         shutil.copy2(build_root / "rebuild.json", package / "rebuild.json")
         shutil.copy2(selected_root / "measurement.json", package / "measurement.json")
+        shutil.copy2(tool_registry_path, package / "tool-registry.json")
         _write_json(package / "selection.json", selection_document)
 
         _run_voxblame_verify(
@@ -859,6 +889,7 @@ def finalize_workspace(
             measurement_mesh,
             selected_step=selected_step,
             output=package / "verification.json",
+            entrypoint=geometry_entrypoint,
         )
         preview_root = transaction / "preview"
         _run_final_preview(
@@ -867,6 +898,7 @@ def finalize_workspace(
             selected_step=selected_step,
             selected_summary=selected_root / "measurement.json",
             output=preview_root,
+            entrypoint=geometry_entrypoint,
         )
         shutil.copy2(preview_root / "preview.png", package / "preview.png")
         shutil.copy2(preview_root / "preview.json", package / "preview.json")
@@ -894,16 +926,44 @@ def finalize_workspace(
             "selection_sha256": _file_sha256(package / "selection.json"),
             "rebuild_execution": rebuild_command,
             "registered_recipe_sha256": recipe_sha256,
+            "tool_registry_sha256": _file_sha256(package / "tool-registry.json"),
+            "tool_registry_identity_sha256": tool_registry_document[
+                "identity_sha256"
+            ],
+            "geometry_execution": dict(tool_registry_document["geometry"]),
             "files": _inventory(package),
         }
         manifest["identity_sha256"] = _identity(FINAL_DELIVERY_SCHEMA, manifest)
         _write_json(package / "manifest.json", manifest)
         _validate_final_directory(workspace, package, graph=graph)
+
+        (transaction / "previous-step-index.json").write_bytes(previous_index)
+        if previous_notes is not None:
+            (transaction / "previous-notes.md").write_bytes(previous_notes)
+        shutil.rmtree(rebuild_root)
+        shutil.rmtree(preview_root)
+        _write_json(
+            transaction / "transaction.json",
+            {
+                "schema": "mesh-to-cad.transaction/1",
+                "kind": "final_delivery",
+                "selected_step": selected_step,
+                "final_delivery_sha256": manifest["identity_sha256"],
+                "previous_notes_exists": previous_notes is not None,
+            },
+        )
         package.rename(workspace / "final")
         final_published = True
         (transaction / "notes.md").write_bytes(notes_bytes)
         os.replace(transaction / "notes.md", workspace / "notes.md")
         graph = rebuild_index(workspace, validate=False)
+        for child in list((workspace / "work").iterdir()):
+            if child.resolve() == transaction.resolve():
+                continue
+            if child.is_dir() and not child.is_symlink():
+                shutil.rmtree(child)
+            else:
+                child.unlink()
         _commit_protocol_paths(
             workspace,
             ["final", "notes.md", "step_index.json"],
@@ -918,36 +978,17 @@ def finalize_workspace(
         )
         final_committed = True
         shutil.rmtree(transaction)
-        for child in list((workspace / "work").iterdir()):
-            if child.is_dir() and not child.is_symlink():
-                shutil.rmtree(child)
-            else:
-                child.unlink()
         validation = validate_workspace(workspace)
         return {**manifest, "graph": validation.graph}
     except Exception:
         if transaction.exists():
             shutil.rmtree(transaction, ignore_errors=True)
         if final_published and not final_committed:
-            _git(
+            _rollback_final_publication(
                 workspace,
-                "restore",
-                "--staged",
-                "--",
-                "final",
-                "notes.md",
-                "step_index.json",
-                check=False,
+                previous_notes=previous_notes,
+                previous_index=previous_index,
             )
-            final_root = workspace / "final"
-            if final_root.is_dir() and not final_root.is_symlink():
-                shutil.rmtree(final_root)
-            if previous_notes is None:
-                if (workspace / "notes.md").is_file():
-                    (workspace / "notes.md").unlink()
-            else:
-                (workspace / "notes.md").write_bytes(previous_notes)
-            (workspace / "step_index.json").write_bytes(previous_index)
         raise
 
 
@@ -1045,6 +1086,13 @@ def _find_registered_recipe(
     if len(recipes) != 1:
         _fail("invalid_rebuild_recipe", "Selected source bundle must contain exactly one rebuild.json")
     recipe = _read_json(recipes[0], "$.rebuild_recipe")
+    _validate_registered_recipe_document(recipe, route=route)
+    return recipes[0], recipe
+
+
+def _validate_registered_recipe_document(
+    recipe: Mapping[str, Any], *, route: str
+) -> None:
     if recipe.get("schema") != "mesh-to-cad.rebuild-recipe/1" or recipe.get("route") != route:
         _fail("invalid_rebuild_recipe", "registered recipe schema or route conflicts")
     if route == "cad":
@@ -1064,7 +1112,6 @@ def _find_registered_recipe(
     inputs = recipe.get("inputs")
     if not isinstance(inputs, list) or not inputs:
         _fail("invalid_rebuild_recipe", "registered recipe inputs are missing")
-    return recipes[0], recipe
 
 
 def _copy_rebuild_inputs(
@@ -1094,18 +1141,99 @@ def _verify_rebuild_inputs_unchanged(root: Path, records: list[dict[str, str]]) 
             _fail("source_mutation", "registered rebuild mutated archived source")
 
 
-def _skills_root() -> Path:
-    return Path(__file__).resolve().parents[3]
+def _copy_delivery_source(
+    rebuild_root: Path,
+    delivery_root: Path,
+    records: list[dict[str, str]],
+) -> None:
+    """Archive every declared input under a reproducible source-bundle root."""
+
+    delivery_root.mkdir()
+    for item in records:
+        source = _relative_member(rebuild_root, item["path"], "$.rebuild.inputs")
+        target = delivery_root.joinpath(*PurePosixPath(item["path"]).parts)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(source, target)
+
+
+def _external_entrypoint(path: Path, field: str) -> Path:
+    try:
+        resolved = path.resolve(strict=True)
+    except OSError:
+        _fail("invalid_arguments", "external tool entrypoint does not exist", field)
+    if not resolved.is_file():
+        _fail("invalid_arguments", "external tool entrypoint is not executable code", field)
+    return resolved
+
+
+def _load_tool_registry(
+    path: Path,
+    *,
+    route: str,
+    rebuild_entrypoint: Path,
+    geometry_entrypoint: Path,
+) -> dict[str, Any]:
+    registry = _validate_tool_registry_document(
+        _read_json(path, "$.tool_registry"), route=route
+    )
+    rebuild = registry["rebuild"]
+    geometry = registry["geometry"]
+    for entry, entrypoint, field in (
+        (rebuild, rebuild_entrypoint, "$.tool_registry.rebuild.entrypoint_sha256"),
+        (geometry, geometry_entrypoint, "$.tool_registry.geometry.entrypoint_sha256"),
+    ):
+        if _file_sha256(entrypoint) != entry["entrypoint_sha256"]:
+            _fail("untrusted_tool", "tool entrypoint digest conflicts with registry", field)
+    return registry
+
+
+def _validate_tool_registry_document(
+    value: Mapping[str, Any], *, route: str
+) -> dict[str, Any]:
+    registry = _closed_object(
+        value,
+        {"schema", "rebuild", "geometry", "identity_sha256"},
+        "$.tool_registry",
+    )
+    _const(registry["schema"], TOOL_REGISTRY_SCHEMA, "$.tool_registry.schema")
+    rebuild = _closed_object(
+        registry["rebuild"],
+        {"id", "entrypoint_sha256"},
+        "$.tool_registry.rebuild",
+    )
+    geometry = _closed_object(
+        registry["geometry"],
+        {"id", "entrypoint_sha256"},
+        "$.tool_registry.geometry",
+    )
+    expected_rebuild = (
+        "cad.canonical-build/1"
+        if route == "cad"
+        else "implicit-cad.canonical-build/1"
+    )
+    if rebuild["id"] != expected_rebuild:
+        _fail("untrusted_tool", "tool registry rebuild identity conflicts with route")
+    if geometry["id"] != "mesh-compare.voxblame/1":
+        _fail("untrusted_tool", "tool registry geometry identity is not VoxBlame")
+    for entry, field in (
+        (rebuild, "$.tool_registry.rebuild.entrypoint_sha256"),
+        (geometry, "$.tool_registry.geometry.entrypoint_sha256"),
+    ):
+        _sha256(entry["entrypoint_sha256"], field)
+    identity_source = dict(registry)
+    identity = identity_source.pop("identity_sha256")
+    if identity != _identity(TOOL_REGISTRY_SCHEMA, identity_source):
+        _fail("untrusted_tool", "tool registry identity digest conflicts")
+    return {**dict(registry), "rebuild": dict(rebuild), "geometry": dict(geometry)}
 
 
 def _run_registered_rebuild(
-    rebuild_root: Path, *, route: str
+    rebuild_root: Path, *, route: str, entrypoint: Path
 ) -> tuple[Path, dict[str, Any]]:
-    skills_root = _skills_root()
     if route == "cad":
         argv = [
             sys.executable,
-            str(skills_root / "cad/scripts/canonical-build"),
+            str(entrypoint),
             "rebuild",
             "--recipe",
             "rebuild.json",
@@ -1118,7 +1246,7 @@ def _run_registered_rebuild(
             _fail("rebuild_failed", "node executable is unavailable")
         argv = [
             node,
-            str(skills_root / "implicit-cad/scripts/canonical-build.mjs"),
+            str(entrypoint),
             "--recipe",
             "rebuild.json",
             "--output-dir",
@@ -1156,25 +1284,78 @@ def _validate_build_provenance(
     build: Mapping[str, Any],
     *,
     route: str,
+    recipe: Mapping[str, Any],
 ) -> Path:
     if build.get("schema") != "mesh-to-cad.build/1" or build.get("route") != route:
         _fail("build_provenance_conflict", "rebuilt manifest schema or route conflicts")
+    recipe_inputs = recipe.get("inputs")
+    if not isinstance(recipe_inputs, list) or not recipe_inputs or any(
+        not isinstance(item, Mapping) for item in recipe_inputs
+    ):
+        _fail("build_provenance_conflict", "rebuild recipe input records are missing")
     if route == "cad":
         primary = build.get("primaryArtifact")
         measurement = build.get("measurementGlb")
         if not isinstance(primary, Mapping) or not isinstance(measurement, Mapping):
             _fail("build_provenance_conflict", "CAD build artifact identities are missing")
+        files = build.get("files")
+        if not isinstance(files, list) or any(
+            not isinstance(item, Mapping) for item in files
+        ):
+            _fail("build_provenance_conflict", "CAD build file records are missing")
+        by_id = {
+            item.get("id"): item
+            for item in files
+            if isinstance(item.get("id"), str)
+        }
+        if len(by_id) != len(files):
+            _fail("build_provenance_conflict", "CAD build file identities conflict")
+        primary_id = primary.get("fileId")
+        measurement_id = measurement.get("fileId")
+        if not isinstance(primary_id, str) or not isinstance(measurement_id, str):
+            _fail("build_provenance_conflict", "CAD artifact file identities are invalid")
         primary_path = _relative_member(build_root, primary.get("path"), "$.build.primaryArtifact.path")
         measurement_path = _relative_member(build_root, measurement.get("path"), "$.build.measurementGlb.path")
         if _file_sha256(primary_path) != primary.get("sha256") or _file_sha256(measurement_path) != measurement.get("sha256"):
             _fail("build_provenance_conflict", "CAD build artifact digest mismatch")
         derivation = build.get("derivation")
-        if not isinstance(derivation, list) or not any(
-            edge.get("from") == primary.get("fileId")
-            and edge.get("to") == measurement.get("fileId")
+        if not isinstance(derivation, list):
+            _fail("build_provenance_conflict", "CAD derivation is missing")
+        edges = {
+            (edge.get("from"), edge.get("to"))
             for edge in derivation
             if isinstance(edge, Mapping)
+        }
+        for index, declared in enumerate(recipe_inputs):
+            input_id = declared.get("id")
+            record = by_id.get(f"input:{input_id}")
+            if (
+                not isinstance(input_id, str)
+                or not isinstance(record, Mapping)
+                or record.get("path") != declared.get("path")
+                or record.get("sha256") != declared.get("sha256")
+                or _file_sha256(
+                    _relative_member(
+                        rebuild_root,
+                        declared.get("path"),
+                        f"$.rebuild_recipe.inputs[{index}].path",
+                    )
+                )
+                != declared.get("sha256")
+                or (f"input:{input_id}", primary_id) not in edges
+            ):
+                _fail(
+                    "build_provenance_conflict",
+                    "CAD source input is not bound to the rebuilt STEP",
+                )
+        if (
+            by_id.get(primary_id, {}).get("sha256")
+            != primary.get("sha256")
+            or by_id.get(measurement_id, {}).get("sha256")
+            != measurement.get("sha256")
         ):
+            _fail("build_provenance_conflict", "CAD artifact records conflict")
+        if (primary_id, measurement_id) not in edges:
             _fail("build_provenance_conflict", "CAD STEP-to-GLB derivation is missing")
         return measurement_path
     artifacts = build.get("artifacts")
@@ -1188,6 +1369,23 @@ def _validate_build_provenance(
     measurement_path = _relative_member(build_root, measurement.get("path"), "$.build.artifacts.measurement.path")
     if _file_sha256(primary_path) != primary.get("sha256") or _file_sha256(measurement_path) != measurement.get("sha256"):
         _fail("build_provenance_conflict", "implicit build artifact digest mismatch")
+    if (
+        len(recipe_inputs) != 1
+        or primary.get("path") != recipe_inputs[0].get("path")
+        or primary.get("sha256") != recipe_inputs[0].get("sha256")
+        or _file_sha256(
+            _relative_member(
+                rebuild_root,
+                recipe_inputs[0].get("path"),
+                "$.rebuild_recipe.inputs[0].path",
+            )
+        )
+        != primary.get("sha256")
+    ):
+        _fail(
+            "build_provenance_conflict",
+            "implicit source input is not bound to the rebuilt GLB",
+        )
     edges = build.get("derivation", {}).get("edges") if isinstance(build.get("derivation"), Mapping) else None
     if not isinstance(edges, list) or not any(
         edge.get("from") == primary.get("sha256")
@@ -1196,6 +1394,14 @@ def _validate_build_provenance(
         if isinstance(edge, Mapping)
     ):
         _fail("build_provenance_conflict", "implicit source-to-GLB derivation is missing")
+    dependencies = build.get("dependencies")
+    execution_policy = build.get("execution_policy")
+    if not isinstance(dependencies, Mapping) or not isinstance(
+        execution_policy, Mapping
+    ) or dependencies.get("network") is not False or execution_policy.get(
+        "network"
+    ) is not False:
+        _fail("build_provenance_conflict", "implicit rebuild did not prove offline execution")
     return measurement_path
 
 
@@ -1205,10 +1411,11 @@ def _run_voxblame_verify(
     *,
     selected_step: int,
     output: Path,
+    entrypoint: Path,
 ) -> None:
     argv = [
         sys.executable,
-        str(_skills_root() / "mesh-compare/scripts/mesh-compare"),
+        str(entrypoint),
         "voxblame-verify",
         str(candidate),
         "--reference",
@@ -1232,10 +1439,11 @@ def _run_final_preview(
     selected_step: int,
     selected_summary: Path,
     output: Path,
+    entrypoint: Path,
 ) -> None:
     argv = [
         sys.executable,
-        str(_skills_root() / "mesh-compare/scripts/mesh-compare"),
+        str(entrypoint),
         "voxblame-preview",
         str(candidate),
         "--reference",
@@ -1291,6 +1499,9 @@ def _validate_final_directory(
         "selection_sha256",
         "rebuild_execution",
         "registered_recipe_sha256",
+        "tool_registry_sha256",
+        "tool_registry_identity_sha256",
+        "geometry_execution",
         "files",
         "identity_sha256",
     }
@@ -1313,6 +1524,8 @@ def _validate_final_directory(
         "preview_identity_sha256",
         "selection_sha256",
         "registered_recipe_sha256",
+        "tool_registry_sha256",
+        "tool_registry_identity_sha256",
         "identity_sha256",
     ):
         _sha256(document[key], f"$.final.manifest.{key}")
@@ -1326,6 +1539,7 @@ def _validate_final_directory(
         "selected_measurement_sha256": "measurement.json",
         "verification_sha256": "verification.json",
         "selection_sha256": "selection.json",
+        "tool_registry_sha256": "tool-registry.json",
     }
     for key, relative in digest_paths.items():
         if _file_sha256(root / relative) != document[key]:
@@ -1353,6 +1567,35 @@ def _validate_final_directory(
     measurement = _read_json(root / "measurement.json", "$.final.measurement")
     if measurement.get("step") != selected_step:
         _fail("identity_conflict", "final measurement lost its original step number")
+
+    rebuild = _read_json(root / "rebuild.json", "$.final.rebuild")
+    _validate_registered_recipe_document(rebuild, route=document["route"])
+    if _file_sha256(root / "rebuild.json") != document["registered_recipe_sha256"]:
+        _fail("build_provenance_conflict", "Final registered recipe digest conflicts")
+    tool_registry = _validate_tool_registry_document(
+        _read_json(root / "tool-registry.json", "$.final.tool_registry"),
+        route=document["route"],
+    )
+    rebuild_execution = document["rebuild_execution"]
+    if not isinstance(rebuild_execution, Mapping):
+        _fail("untrusted_tool", "Final rebuild execution identity is invalid")
+    if (
+        tool_registry["identity_sha256"]
+        != document["tool_registry_identity_sha256"]
+        or tool_registry["geometry"] != document["geometry_execution"]
+        or tool_registry["rebuild"]["id"]
+        != rebuild_execution.get("registered_executable")
+        or tool_registry["rebuild"]["entrypoint_sha256"]
+        != rebuild_execution.get("entrypoint_sha256")
+    ):
+        _fail("untrusted_tool", "Final tool execution identity conflicts with registry")
+    rebuilt_mesh = _validate_build_provenance(
+        root / "source",
+        root / "artifacts",
+        _read_json(root / "build.json", "$.final.build"),
+        route=document["route"],
+        recipe=rebuild,
+    )
 
     verification = _closed_object(
         _read_json(root / "verification.json", "$.final.verification"),
@@ -1384,6 +1627,14 @@ def _validate_final_directory(
         _fail("identity_conflict", "Final verification selected identity conflicts")
     if verification_identity != document["verification_identity_sha256"]:
         _fail("identity_conflict", "Final verification manifest identity conflicts")
+    if (
+        _file_sha256(rebuilt_mesh)
+        != verification["rebuilt_measurement"].get("candidate_mesh_sha256")
+    ):
+        _fail(
+            "build_provenance_conflict",
+            "Final verification does not identify the rebuilt provenance mesh",
+        )
 
     preview = _read_json(root / "preview.json", "$.final.preview")
     if (
@@ -1540,6 +1791,11 @@ def recover_workspace(workspace: Path) -> dict[str, Any]:
         recovered_setup = True
     _load_workspace_document(workspace)
     _require_git_root(workspace)
+    final_transactions = sorted(
+        path
+        for path in (workspace / "work").glob(".tmp-final-*")
+        if path.is_dir() and (path / "transaction.json").is_file()
+    ) if (workspace / "work").exists() else []
     step_transactions = sorted(
         path
         for path in (workspace / "work").glob(".tmp-step-zero-*")
@@ -1562,6 +1818,7 @@ def recover_workspace(workspace: Path) -> dict[str, Any]:
             *attempt_transactions,
             *step_transactions,
             *transaction_roots,
+            *final_transactions,
         ]
         for path in (root, *root.rglob("*"))
     }
@@ -1580,6 +1837,10 @@ def recover_workspace(workspace: Path) -> dict[str, Any]:
     recovered: list[int] = []
     recovered_steps: list[int] = []
     recovered_attempts: list[int] = []
+    recovered_final = [
+        _recover_final_transaction(workspace, transaction)
+        for transaction in final_transactions
+    ]
     for transaction in attempt_transactions:
         recovered_attempts.append(
             _recover_attempt_transaction(workspace, transaction)
@@ -1588,7 +1849,7 @@ def recover_workspace(workspace: Path) -> dict[str, Any]:
         recovered_steps.append(_recover_step_zero_transaction(workspace, transaction))
     for transaction in transaction_roots:
         recovered.append(_recover_cycle_transaction(workspace, transaction))
-    if not recovered and not recovered_steps and not recovered_attempts:
+    if not recovered and not recovered_steps and not recovered_attempts and not recovered_final:
         orphans = [
             item
             for item in _find_incomplete_transactions(workspace)
@@ -1606,6 +1867,7 @@ def recover_workspace(workspace: Path) -> dict[str, Any]:
         "recovered_attempts": recovered_attempts,
         "recovered_steps": recovered_steps,
         "recovered_cycles": recovered,
+        "recovered_final": recovered_final,
         "graph": result.graph,
     }
 
@@ -2596,7 +2858,17 @@ def _step_zero_voxblame_paths(workspace: Path, measurement: Path) -> list[str]:
     relative = _workspace_relative(workspace, measurement)
     if not relative.startswith("voxblame/steps/000000/"):
         _fail("invalid_workspace_path", "Step 0 measurement must be under voxblame/steps/000000")
-    required = ["voxblame/session.json", "voxblame/reference.vbsvo", "voxblame/steps/000000"]
+    ignore = workspace / "voxblame/.gitignore"
+    if ignore.exists() and ignore.read_text(encoding="utf-8") != ".tmp-*\n":
+        _fail("unsupported_or_invalid_voxblame_state", "invalid voxblame/.gitignore")
+    if not ignore.exists():
+        ignore.write_text(".tmp-*\n", encoding="utf-8")
+    required = [
+        "voxblame/.gitignore",
+        "voxblame/session.json",
+        "voxblame/reference.vbsvo",
+        "voxblame/steps/000000",
+    ]
     for path in required:
         if not (workspace / path).exists():
             _fail("unsupported_or_invalid_voxblame_state", f"missing {path}")
@@ -2998,6 +3270,127 @@ def _find_incomplete_transactions(workspace: Path) -> list[dict[str, Any]]:
                     }
                 )
     return sorted(recovery, key=lambda item: item["path"])
+
+
+def _rollback_final_publication(
+    workspace: Path,
+    *,
+    previous_notes: bytes | None,
+    previous_index: bytes,
+) -> None:
+    _git(
+        workspace,
+        "restore",
+        "--staged",
+        "--",
+        "final",
+        "notes.md",
+        "step_index.json",
+        check=False,
+    )
+    final_root = workspace / "final"
+    if final_root.is_dir() and not final_root.is_symlink():
+        shutil.rmtree(final_root)
+    elif final_root.exists():
+        _fail("incomplete_transaction", "Final Delivery rollback target is unsafe")
+    if previous_notes is None:
+        if (workspace / "notes.md").is_file():
+            (workspace / "notes.md").unlink()
+    else:
+        (workspace / "notes.md").write_bytes(previous_notes)
+    (workspace / "step_index.json").write_bytes(previous_index)
+
+
+def _recover_final_transaction(workspace: Path, transaction: Path) -> str:
+    """Resolve an interrupted Final Delivery at the atomic Git commit boundary."""
+
+    marker = _closed_object(
+        _read_json(transaction / "transaction.json", "$.transaction"),
+        {
+            "schema",
+            "kind",
+            "selected_step",
+            "final_delivery_sha256",
+            "previous_notes_exists",
+        },
+        "$.transaction",
+    )
+    if (
+        marker["schema"] != "mesh-to-cad.transaction/1"
+        or marker["kind"] != "final_delivery"
+        or not isinstance(marker["selected_step"], int)
+        or isinstance(marker["selected_step"], bool)
+        or not isinstance(marker["previous_notes_exists"], bool)
+    ):
+        _fail("incomplete_transaction", "Final Delivery transaction marker is invalid")
+    _sha256(marker["final_delivery_sha256"], "$.transaction.final_delivery_sha256")
+    previous_index = transaction / "previous-step-index.json"
+    if not previous_index.is_file():
+        _fail("incomplete_transaction", "Final Delivery recovery index is missing")
+    previous_notes = transaction / "previous-notes.md"
+    if marker["previous_notes_exists"] is not previous_notes.is_file():
+        _fail("incomplete_transaction", "Final Delivery recovery notes conflict")
+
+    final_root = workspace / "final"
+    committed = False
+    if final_root.is_dir() and not final_root.is_symlink():
+        manifest = _read_json(final_root / "manifest.json", "$.final.manifest")
+        if (
+            manifest.get("identity_sha256") != marker["final_delivery_sha256"]
+            or manifest.get("selected_step") != marker["selected_step"]
+        ):
+            _fail("identity_conflict", "published Final Delivery conflicts with recovery marker")
+        committed = (
+            _git(
+                workspace,
+                "ls-files",
+                "--error-unmatch",
+                "final/manifest.json",
+                check=False,
+            ).returncode
+            == 0
+            and _git(
+                workspace,
+                "diff",
+                "--quiet",
+                "HEAD",
+                "--",
+                "final",
+                "notes.md",
+                "step_index.json",
+                check=False,
+            ).returncode
+            == 0
+            and _git(
+                workspace,
+                "diff",
+                "--cached",
+                "--quiet",
+                "--",
+                "final",
+                "notes.md",
+                "step_index.json",
+                check=False,
+            ).returncode
+            == 0
+        )
+    elif final_root.exists():
+        _fail("incomplete_transaction", "Final Delivery recovery target is unsafe")
+
+    if committed:
+        _build_graph(workspace, validate_steps=True)
+        shutil.rmtree(transaction)
+        return "committed"
+
+    _rollback_final_publication(
+        workspace,
+        previous_notes=(
+            previous_notes.read_bytes() if marker["previous_notes_exists"] else None
+        ),
+        previous_index=previous_index.read_bytes(),
+    )
+    shutil.rmtree(transaction)
+    return "rolled_back"
 
 
 def _recover_cycle_transaction(workspace: Path, transaction: Path) -> int:

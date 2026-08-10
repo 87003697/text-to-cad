@@ -23,6 +23,8 @@ CLI_PATH = (
 MESH_COMPARE_PATH = REPO_ROOT / "skills/mesh-compare/scripts/mesh-compare"
 CAD_BUILD_PATH = REPO_ROOT / "skills/cad/scripts/canonical-build"
 IMPLICIT_BUILD_PATH = REPO_ROOT / "skills/implicit-cad/scripts/canonical-build.mjs"
+MESH_COMPARE_ENTRYPOINT = MESH_COMPARE_PATH / "cli.py"
+CAD_BUILD_ENTRYPOINT = CAD_BUILD_PATH / "__main__.py"
 PREVIEW_PROFILE_PATH = (
     REPO_ROOT
     / "packages/meshshot/src/meshshot/profiles/cadena_residual_eight_view_v1.json"
@@ -48,6 +50,13 @@ def _write_json(path: Path, value: dict) -> None:
         json.dumps(value, indent=2, sort_keys=True, separators=(",", ": ")) + "\n",
         encoding="utf-8",
     )
+
+
+def _identity(schema: str, value: dict) -> str:
+    body = (
+        json.dumps(value, indent=2, sort_keys=True, separators=(",", ": ")) + "\n"
+    ).encode("utf-8")
+    return hashlib.sha256(schema.encode("utf-8") + b"\0" + body).hexdigest()
 
 
 class WorkspaceCliTests(unittest.TestCase):
@@ -490,6 +499,7 @@ class WorkspaceCliTests(unittest.TestCase):
     def canonical_cad_flow(self, *, accepted: bool = True) -> tuple[Path, Path]:
         candidate = self.workspace / "work" / "canonical-cad"
         (candidate / "source").mkdir(parents=True)
+        (candidate / "config.txt").write_text("declared rebuild input\n", encoding="utf-8")
 
         def write_source(length: float) -> None:
             (candidate / "source/model.py").write_text(
@@ -513,6 +523,8 @@ class WorkspaceCliTests(unittest.TestCase):
                     "build",
                     "--source",
                     "source/model.py",
+                    "--input",
+                    "config.txt",
                     "--output-dir",
                     "built",
                 ),
@@ -717,6 +729,40 @@ class WorkspaceCliTests(unittest.TestCase):
         )
         return path
 
+    def final_tool_arguments(self) -> list[str]:
+        route = json.loads(
+            (self.workspace / "setup/route.json").read_text(encoding="utf-8")
+        )["route"]
+        rebuild = CAD_BUILD_ENTRYPOINT if route == "cad" else IMPLICIT_BUILD_PATH
+        registry = self.root / f"{route}-tool-registry.json"
+        registry_value = {
+            "schema": "mesh-to-cad.tool-registry/1",
+            "rebuild": {
+                "id": (
+                    "cad.canonical-build/1"
+                    if route == "cad"
+                    else "implicit-cad.canonical-build/1"
+                ),
+                "entrypoint_sha256": _sha(rebuild.read_bytes()),
+            },
+            "geometry": {
+                "id": "mesh-compare.voxblame/1",
+                "entrypoint_sha256": _sha(MESH_COMPARE_ENTRYPOINT.read_bytes()),
+            },
+        }
+        registry_value["identity_sha256"] = _identity(
+            "mesh-to-cad.tool-registry/1", registry_value
+        )
+        _write_json(registry, registry_value)
+        return [
+            "--rebuild-entrypoint",
+            str(rebuild),
+            "--geometry-entrypoint",
+            str(MESH_COMPARE_ENTRYPOINT),
+            "--tool-registry",
+            str(registry),
+        ]
+
     def execute_final_case(
         self,
         *,
@@ -789,6 +835,7 @@ class WorkspaceCliTests(unittest.TestCase):
             str(self.final_selection(accepted=accepted)),
             "--notes",
             str(self.final_notes()),
+            *self.final_tool_arguments(),
         )
         self.assertEqual(0, status, stderr)
         self.assertIs(accepted, finalized["final"]["accepted"])
@@ -943,6 +990,7 @@ class WorkspaceCliTests(unittest.TestCase):
             str(self.final_selection(accepted=True)),
             "--notes",
             str(self.final_notes()),
+            *self.final_tool_arguments(),
         )
 
         self.assertEqual(0, status, stderr)
@@ -958,6 +1006,7 @@ class WorkspaceCliTests(unittest.TestCase):
             "preview.png",
             "preview.json",
             "selection.json",
+            "tool-registry.json",
             "manifest.json",
         ):
             self.assertTrue((final / relative).exists(), relative)
@@ -972,6 +1021,33 @@ class WorkspaceCliTests(unittest.TestCase):
         self.assertTrue(all(verification["equality"].values()))
         self.assertEqual([], list((self.workspace / "work").iterdir()))
         self.assertIn("Final-Selected-Step: 0", self.git("log", "-1", "--format=%B"))
+        self.assertTrue((final / "source/source/model.py").is_file())
+        self.assertTrue((final / "source/config.txt").is_file())
+
+        build_path = final / "build.json"
+        build = json.loads(build_path.read_text(encoding="utf-8"))
+        build["derivation"] = build["derivation"][1:]
+        _write_json(build_path, build)
+        manifest_path = final / "manifest.json"
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        manifest["build_sha256"] = _sha(build_path.read_bytes())
+        for item in manifest["files"]:
+            if item["path"] == "build.json":
+                item["sha256"] = manifest["build_sha256"]
+                item["size_bytes"] = build_path.stat().st_size
+        manifest_without_identity = dict(manifest)
+        manifest_without_identity.pop("identity_sha256")
+        manifest["identity_sha256"] = _identity(
+            "mesh-to-cad.final-delivery/1", manifest_without_identity
+        )
+        _write_json(manifest_path, manifest)
+        status, rejected, _stderr = self.invoke(
+            "validate", "--workspace", str(self.workspace)
+        )
+        self.assertEqual(2, status)
+        self.assertEqual(
+            "build_provenance_conflict", rejected["error"]["classification"]
+        )
 
     def test_finalize_rebuilds_verifies_without_upgrading_unaccepted_implicit(
         self,
@@ -1040,6 +1116,7 @@ class WorkspaceCliTests(unittest.TestCase):
             str(self.final_selection(accepted=False)),
             "--notes",
             str(self.final_notes()),
+            *self.final_tool_arguments(),
         )
 
         self.assertEqual(0, status, stderr)
@@ -1097,6 +1174,7 @@ class WorkspaceCliTests(unittest.TestCase):
             str(selection_path),
             "--notes",
             str(self.final_notes()),
+            *self.final_tool_arguments(),
         )
 
         self.assertEqual(2, status)
@@ -1105,6 +1183,64 @@ class WorkspaceCliTests(unittest.TestCase):
         )
         self.assertFalse((self.workspace / "final").exists())
         self.assertFalse(list((self.workspace / "work").glob(".tmp-final-*")))
+
+    def test_recover_rolls_back_interrupted_uncommitted_final_delivery(self) -> None:
+        prepared, candidate = self.canonical_cad_flow()
+        final = self.execute_final_case(
+            prepared=prepared,
+            candidate=candidate,
+            candidate_mesh_relative="built/measurement.glb",
+            accepted=True,
+        )
+        prior_index = subprocess.run(
+            ("git", "show", "HEAD^:step_index.json"),
+            cwd=self.workspace,
+            stdout=subprocess.PIPE,
+            check=True,
+        ).stdout
+        prior_notes = subprocess.run(
+            ("git", "show", "HEAD^:notes.md"),
+            cwd=self.workspace,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+        transaction = self.workspace / "work/.tmp-final-interrupted"
+        transaction.mkdir()
+        (transaction / "previous-step-index.json").write_bytes(prior_index)
+        if prior_notes.returncode == 0:
+            (transaction / "previous-notes.md").write_bytes(prior_notes.stdout)
+        _write_json(
+            transaction / "transaction.json",
+            {
+                "schema": "mesh-to-cad.transaction/1",
+                "kind": "final_delivery",
+                "selected_step": 0,
+                "final_delivery_sha256": final["identity_sha256"],
+                "previous_notes_exists": prior_notes.returncode == 0,
+            },
+        )
+        subprocess.run(
+            ("git", "reset", "--mixed", "HEAD^"),
+            cwd=self.workspace,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            check=True,
+        )
+
+        status, invalid, _stderr = self.invoke(
+            "validate", "--workspace", str(self.workspace)
+        )
+        self.assertEqual(2, status)
+        self.assertEqual("incomplete_transaction", invalid["error"]["classification"])
+        status, recovered, stderr = self.invoke(
+            "recover", "--workspace", str(self.workspace)
+        )
+
+        self.assertEqual(0, status, stderr)
+        self.assertEqual(["rolled_back"], recovered["recovery"]["recovered_final"])
+        self.assertFalse((self.workspace / "final").exists())
+        self.assertFalse(transaction.exists())
+        self.assertEqual("", self.git("status", "--short"))
 
     def test_failed_attempt_is_auditable_but_does_not_consume_cycle_budget(self) -> None:
         self.publish_initial_flow()

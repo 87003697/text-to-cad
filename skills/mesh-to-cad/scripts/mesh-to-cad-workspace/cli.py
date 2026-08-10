@@ -121,6 +121,9 @@ def _parser() -> argparse.ArgumentParser:
     _workspace_argument(finalize)
     finalize.add_argument("--selection", type=Path, required=True)
     finalize.add_argument("--notes", type=Path, required=True)
+    finalize.add_argument("--rebuild-entrypoint", type=Path, required=True)
+    finalize.add_argument("--geometry-entrypoint", type=Path, required=True)
+    finalize.add_argument("--tool-registry", type=Path, required=True)
 
     validate = commands.add_parser("validate", help="Validate Workspace authority")
     _workspace_argument(validate)
@@ -199,6 +202,9 @@ def main(argv: list[str] | None = None) -> int:
                 args.workspace,
                 selection=args.selection,
                 notes=args.notes,
+                rebuild_entrypoint=args.rebuild_entrypoint,
+                geometry_entrypoint=args.geometry_entrypoint,
+                tool_registry=args.tool_registry,
             )
             _emit({"ok": True, "final": value})
         elif args.command == "validate":
