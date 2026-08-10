@@ -545,8 +545,8 @@ def create_step_entry(repo_root, root_path, source_path, extension, include_arti
 # imported `.step`/`.stp` has no generator to declare anything, so the viewer
 # also accepts a sidecar sitting beside it under the same name plus `.js`:
 #
-#     models/mechanisms/gear_rack_gripper.step
-#     models/mechanisms/gear_rack_gripper.step.js
+#     models/step/mechanisms/gear_rack_gripper.step
+#     models/step/mechanisms/gear_rack_gripper.step.js
 #
 # This is viewer-only. Nothing in the CAD pipeline reads it, and the convention
 # is deliberately rigid — same directory, same stem — so that an imported file

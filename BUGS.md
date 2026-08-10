@@ -1,7 +1,7 @@
 # BUGS.md — text-to-cad repo issues hit during the chronograph build
 
 Running log of repo bugs, unexpected behavior, and doc gaps found while
-building `models/one-shots/moonwatch/`. Watch-model problems do not belong
+building `models/renders/moonwatch/`. Watch-model problems do not belong
 here. Format per entry: what I was doing, exact command, exact error/wrong
 output, workaround, blocked?, fixed?
 
@@ -49,7 +49,7 @@ output, workaround, blocked?, fixed?
 ## 3. Sub-mm finishing booleans: overlapping-tool networks are pathological (OCC, not a repo defect per se)
 
 - **Doing:** perlage (overlapping 0.02 mm-deep spherical dimples) on a
-  14×8 mm coupon for `models/one-shots/moonwatch/_finishing.py`.
+  14×8 mm coupon for `models/renders/moonwatch/_finishing.py`.
 - **Wrong output:** no error — `scripts/gen` sat in "Building geometry"
   indefinitely (>40 CPU-minutes for ~200 stamps; even ~60 stamps took
   minutes). Two escalating causes, both silent: (a) pairwise `a + b`
@@ -145,7 +145,7 @@ output, workaround, blocked?, fixed?
 
 ## OCC chamfer on dome/eye-cap tangent chains: silent fail, minutes-long churn, or segfault (bracelet)
 
-- **Where found:** `models/one-shots/moonwatch/_bracelet.py` (flat three-link
+- **Where found:** `models/renders/moonwatch/_bracelet.py` (flat three-link
   bracelet rows: gently domed top face tangent to knuckle-eye cap cylinders at
   both link ends).
 - **Symptom:** `chamfer()` on the link top/bottom perimeter edges behaved three
@@ -166,7 +166,7 @@ output, workaround, blocked?, fixed?
 ## step_export warns "Unknown Compound type, color not set" for uncolored group compounds
 
 - **Where found:** every `scripts/gen` run of
-  `models/one-shots/moonwatch/bracelet.step.py` (labeled assembly with
+  `models/renders/moonwatch/bracelet.step.py` (labeled assembly with
   `strap_12`/`strap_6`/`clasp` group compounds; colors on leaves only, per the
   documented rule that color on a group compound is ignored anyway).
 - **Symptom:** `packages/cadgen/src/cadgen/step_export.py:379` emits
@@ -177,7 +177,7 @@ output, workaround, blocked?, fixed?
   and should not warn.
 - **Blocked:** no (cosmetic/noise). **Fixed:** no.
 
-## models/one-shots/moonwatch/_finishing.py: `align=(None,None,None)` is not "centered"
+## models/renders/moonwatch/_finishing.py: `align=(None,None,None)` is not "centered"
 
 Found by the movement-base builder (2026-08-06). In build123d,
 `align=(None, None, None)` places primitives at their RAW OCC datum —
@@ -221,7 +221,7 @@ helpers at documented datums.
 
 ## `_bracelet.py` end link hit the same `align=(None,None,None)` corner-origin footgun (silent, shipped)
 
-- **Where found:** `models/one-shots/moonwatch/_bracelet.py` `make_end_link`
+- **Where found:** `models/renders/moonwatch/_bracelet.py` `make_end_link`
   (2026-08-06, while giving the bracelet links crowned sections). Same root
   cause as the `_finishing.py` entry above: `align=(None, None, None)` is the
   RAW OCC datum (Box corner at origin), not "centered".
@@ -241,7 +241,7 @@ helpers at documented datums.
 
 ## build123d 2D sketch algebra: pairwise `+` decays, CW polygons shatter the fuse, and `ShapeList & Sketch` is silently EMPTY (keyless builder)
 
-- **Where found:** `models/one-shots/moonwatch/_mvt_keyless.py` lever/spring
+- **Where found:** `models/renders/moonwatch/_mvt_keyless.py` lever/spring
   profiles (circle+quad capsule chains for the setting lever, yoke, setting
   lever spring).
 - **Symptoms (all silent, exit 0, `inspect validate` clean):** parts extruded
@@ -270,7 +270,7 @@ helpers at documented datums.
 
 ## Per-component STEP/GLB export silently drops the color of bare-`Compound` leaves (cadgen)
 
-- **Where found:** `models/one-shots/moonwatch/_bracelet.py` bracelet rebuild
+- **Where found:** `models/renders/moonwatch/_bracelet.py` bracelet rebuild
   (2026-08-06). 25 of 57 leaf bodies (all boolean/chamfer chains that happened
   to return a bare `build123d.Compound` instead of `Part`) rendered without
   their assigned `.color` even though `part.color` was set and the assembly
@@ -303,7 +303,7 @@ helpers at documented datums.
 
 ## Mirrored `Polygon` points flip the face normal, so `extrude()` runs the OTHER way (build123d, silent misplaced boolean)
 
-- **Where found:** `models/one-shots/moonwatch/_bracelet.py`
+- **Where found:** `models/renders/moonwatch/_bracelet.py`
   `_corner_relief()` (2026-08-06): corner-relief pockets built from a point
   list mirrored with `[(-y, z) for y, z in pts]` for the opposite link end.
 - **Symptom (silent, exit 0, `inspect validate` clean, 57 occurrences):**
@@ -325,7 +325,7 @@ helpers at documented datums.
 
 ## OCC `chamfer` on blob-outline top rings: whole-ring fails, singles refuse concave junctions, grouped-after-neighbors SEGFAULTS
 
-- **Where found:** `models/one-shots/moonwatch/_mvt_base.py` bridge anglage
+- **Where found:** `models/renders/moonwatch/_mvt_base.py` bridge anglage
   (2026-08-06, movement-base finishing pass). The bridges are extrusions of
   multi-circle union ("blob") profiles clipped to a disk.
 - **Symptoms (probe-measured on plain extrusions, BEFORE any boolean):**
@@ -354,7 +354,7 @@ helpers at documented datums.
 
 ## build123d 0.10: `Part(solid.wrapped)` reports `volume == 0`
 
-- **Where found:** `models/one-shots/moonwatch/_mvt_base.py` stripe-shadow
+- **Where found:** `models/renders/moonwatch/_mvt_base.py` stripe-shadow
   overlays (2026-08-06), splitting a multi-solid boolean result into one
   part per connected solid.
 - **Symptom:** re-wrapping a `Solid`'s `TopoDS_Solid` as `Part(sol.wrapped)`
@@ -371,7 +371,7 @@ helpers at documented datums.
 
 ## OCC multi-tool subtract with overlapping bore + ring tools leaves junk solids
 
-- **Where found:** `models/one-shots/moonwatch/_case.py` case-middle
+- **Where found:** `models/renders/moonwatch/_case.py` case-middle
   finishing (2026-08-06): one batched `body - (functional_cuts +
   flank_ring_cutters + grain_tools)` where the crown-tube seat bore
   cylinder overlaps a stack of thin circumferential V-ring cutters.
@@ -421,7 +421,7 @@ helpers at documented datums.
 
 ## `safe_chamfer`'s volume-only gate accepts BOP-self-intersecting chamfers that `inspect validate` then rejects
 
-- **Where found:** `models/one-shots/moonwatch/_mvt_chrono.py` lever anglage
+- **Where found:** `models/renders/moonwatch/_mvt_chrono.py` lever anglage
   (2026-08-07, chronograph-works cluster). `F.anglage_top` /
   `F.safe_chamfer` accept a chamfer result when `result.volume > 0`.
 - **Symptom:** on some capsule-chain lever perimeters (reset lever, reset
@@ -447,7 +447,7 @@ helpers at documented datums.
   pattern: `F.snailing_cutter(...)` rings about the movement center,
   intersected with a stripe band, subtracted from a blob-outline bridge) into
   the new chronograph coupling cock in
-  `models/one-shots/moonwatch/_mvt_chrono.py` (2026-08-07).
+  `models/renders/moonwatch/_mvt_chrono.py` (2026-08-07).
 - **Symptom:** the cut "succeeds" — one positive-volume solid,
   `BRepCheck_Analyzer.IsValid()` True — but `BRepAlgoAPI_Check` reports
   self-intersection, so `inspect validate` flags the part
@@ -473,7 +473,7 @@ helpers at documented datums.
   with smooth closed silhouettes — ONE periodic `Spline` fit through ~250
   Catmull-Rom samples per bridge, `make_face`, then the `_bridge` factory's
   bevel/stripe/ribbon machinery — in
-  `models/one-shots/moonwatch/_mvt_base.py` / `_mvt_chrono.py` (2026-08-07).
+  `models/renders/moonwatch/_mvt_base.py` / `_mvt_chrono.py` (2026-08-07).
 - **Symptoms** (each probe-verified in isolation on build123d 0.10 / OCP
   7.9):
   1. `extrude(face, amount, taper=45)` (`LocOpe_DPrism`) throws on EVERY one

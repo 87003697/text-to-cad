@@ -71,8 +71,8 @@ export default { manifest: { /* ... */ }, update({ params, effects }) { /* ... *
   named after the STEP file plus `.js`, in the same directory.
 
   ```text
-  models/mechanisms/gear_rack_gripper.step      # the imported assembly
-  models/mechanisms/gear_rack_gripper.step.js   # its sidecar
+  models/step/mechanisms/gear_rack_gripper.step      # the imported assembly
+  models/step/mechanisms/gear_rack_gripper.step.js   # its sidecar
   ```
 
   This applies to `.step` and `.stp`. The *filename convention* is viewer-only —
@@ -194,8 +194,8 @@ Use CAD `scripts/snapshot` review for visual semantics, following `snapshot-revi
   folder, since the renderer serves assets relative to it.
 
   ```bash
-  python scripts/snapshot --input models/mechanisms/gear_rack_gripper.step \
-    --params-path models/mechanisms/gear_rack_gripper.step.js \
+  python scripts/snapshot --input models/step/mechanisms/gear_rack_gripper.step \
+    --params-path models/step/mechanisms/gear_rack_gripper.step.js \
     --params '{"animate":{"stroke":{"from":0,"to":1}}}' \
     --output tmp/gripper.gif
   ```

@@ -28,14 +28,14 @@ const failedStepArtifactGenerationState = Object.freeze({
 test("stepFileStatusItems treats missing STEP source files as warnings", () => {
   const items = stepFileStatusItems({
     entry: {
-      file: "simple/cylindrical_cap.step",
+      file: "step/parts/cylindrical_cap.step",
       kind: "part"
     },
     stepSourceStatus: {
-      file: "models/simple/cylindrical_cap.step",
-      stepPath: "models/simple/cylindrical_cap.step",
+      file: "models/step/parts/cylindrical_cap.step",
+      stepPath: "models/step/parts/cylindrical_cap.step",
       sourceKind: "python",
-      sourcePath: "models/simple/cylindrical_cap.py",
+      sourcePath: "models/step/parts/cylindrical_cap.py",
       step: {
         ok: false,
         status: "missing",
@@ -137,9 +137,9 @@ test("stepFileStatusItems keeps renderable STEP artifact issues as warnings", ()
   for (const [error, stale, title, message] of renderableArtifactCases) {
     const items = stepFileStatusItems({
       entry: {
-        file: "simple/part.step",
+        file: "step/parts/part.step",
         kind: "part",
-        url: "/models/simple/.part.step.glb?v=hash",
+        url: "/models/step/parts/.part.step.glb?v=hash",
         hash: "glb-hash",
         artifact: {
           ok: false,
@@ -160,7 +160,7 @@ test("stepFileStatusItems keeps renderable STEP artifact issues as warnings", ()
 test("stepFileStatusItems marks non-renderable STEP artifact issues as errors", () => {
   const items = stepFileStatusItems({
     entry: {
-      file: "simple/part.step",
+      file: "step/parts/part.step",
       kind: "part",
       artifact: {
         ok: false,
@@ -180,7 +180,7 @@ test("stepFileStatusItems marks non-renderable STEP artifact issues as errors", 
 test("stepFileStatusItems trims obsolete regeneration prompts from artifact messages", () => {
   const items = stepFileStatusItems({
     entry: {
-      file: "simple/part.step",
+      file: "step/parts/part.step",
       kind: "part",
       artifact: {
         ok: false,
@@ -251,7 +251,7 @@ test("viewer alerts normalize to status items", () => {
 test("buildFileStatusItems combines producers and exposes the most intense level", () => {
   const items = buildFileStatusItems({
     entry: {
-      file: "simple/part.step",
+      file: "step/parts/part.step",
       kind: "part",
       artifact: {
         ok: false,
@@ -282,7 +282,7 @@ test("buildFileStatusItems combines producers and exposes the most intense level
 test("stepFileStatusItems hides regenerable STEP artifact issues until three generation failures", () => {
   for (const code of BUILDABLE_STEP_ARTIFACT_ERROR_CODES) {
     const entry = {
-      file: "simple/part.step",
+      file: "step/parts/part.step",
       kind: "part",
       artifact: {
         ok: false,
@@ -301,7 +301,7 @@ test("stepFileStatusItems hides regenerable STEP artifact issues until three gen
     assert.deepEqual(stepFileStatusItems({
       entry,
       stepArtifactGenerationState: failedStepArtifactGenerationState,
-      activeGenerationFiles: ["simple/.part.step.glb"]
+      activeGenerationFiles: ["step/parts/.part.step.glb"]
     }), [], code);
 
     assert.equal(stepFileStatusItems({
@@ -312,7 +312,7 @@ test("stepFileStatusItems hides regenerable STEP artifact issues until three gen
     assert.deepEqual(stepFileStatusItems({
       entry,
       stepArtifactGenerationAvailable: false,
-      activeGenerationFiles: ["simple/.part.step.glb"]
+      activeGenerationFiles: ["step/parts/.part.step.glb"]
     }), [], code);
 
     assert.equal(stepFileStatusItems({
@@ -325,7 +325,7 @@ test("stepFileStatusItems hides regenerable STEP artifact issues until three gen
 test("stepFileStatusItems does not hide non-regenerable STEP artifact issues", () => {
   const items = stepFileStatusItems({
     entry: {
-      file: "simple/part.step",
+      file: "step/parts/part.step",
       kind: "part",
       artifact: {
         ok: false,
@@ -367,15 +367,15 @@ test("fileStatusWarningOrErrorItems renders errors before warnings", () => {
 test("formatFileStatusItemForAgent copies status items with details", () => {
   const item = stepFileStatusItems({
     entry: {
-      file: "simple/part.step",
+      file: "step/parts/part.step",
       kind: "part",
       artifact: {
         ok: false,
         error: "stale_step_artifact",
         stale: true,
         sourceKind: "step",
-        stepPath: "models/simple/part.step",
-        packagePath: "models/simple/__cadgen__/models/part.step",
+        stepPath: "models/step/parts/part.step",
+        packagePath: "models/step/parts/__cadgen__/models/part.step",
         artifactHash: "old-hash",
         currentHash: "new-hash"
       }
@@ -394,8 +394,8 @@ test("formatFileStatusItemForAgent copies status items with details", () => {
     "",
     "Details:",
     "- Code: stale_step_artifact",
-    "- STEP file: simple/part.step",
-    "- Render package: simple/__cadgen__/models/part.step",
+    "- STEP file: step/parts/part.step",
+    "- Render package: step/parts/__cadgen__/models/part.step",
     "- Source kind: step",
     "- Artifact hash: old-hash",
     "- Current hash: new-hash"

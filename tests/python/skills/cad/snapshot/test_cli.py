@@ -115,7 +115,7 @@ class SnapshotCliTests(unittest.TestCase):
         options = parse_snapshot_args(
             [
                 "--input",
-                "models/simple/cylindrical_cap.step",
+                "models/step/parts/cylindrical_cap.step",
                 "--output",
                 "tmp/cap.png",
                 "--display",
@@ -127,7 +127,7 @@ class SnapshotCliTests(unittest.TestCase):
 
         job = load_job_from_options(options, stdin=_TtyStringIO(), cwd=Path.cwd())
 
-        self.assertEqual(job["input"], "models/simple/cylindrical_cap.step")
+        self.assertEqual(job["input"], "models/step/parts/cylindrical_cap.step")
         self.assertNotIn("workspaceRoot", job)
         self.assertNotIn("rootDir", job)
         self.assertEqual(job["outputs"][0]["path"], "tmp/cap.png")
@@ -161,7 +161,7 @@ class SnapshotCliTests(unittest.TestCase):
             options = parse_snapshot_args(
                 [
                     "--input",
-                    "models/simple/cylindrical_cap.step",
+                    "models/step/parts/cylindrical_cap.step",
                     "--output",
                     "tmp/cap.png",
                     "--display",
@@ -175,7 +175,7 @@ class SnapshotCliTests(unittest.TestCase):
         options = parse_snapshot_args(
             [
                 "--input",
-                "models/simple/cylindrical_cap.step",
+                "models/step/parts/cylindrical_cap.step",
                 "--output",
                 "tmp/cap.png",
                 "--display",
@@ -196,7 +196,7 @@ class SnapshotCliTests(unittest.TestCase):
         options = parse_snapshot_args(
             [
                 "--input",
-                "models/simple/cylindrical_cap.step",
+                "models/step/parts/cylindrical_cap.step",
                 "--output",
                 "tmp/cap.png",
                 "--display",
@@ -241,7 +241,7 @@ class SnapshotCliTests(unittest.TestCase):
         options = parse_snapshot_args(
             [
                 "--input",
-                "models/simple/cylindrical_cap.step",
+                "models/step/parts/cylindrical_cap.step",
                 "--output",
                 "tmp/cap.png",
                 "--display",
@@ -254,7 +254,7 @@ class SnapshotCliTests(unittest.TestCase):
         appearance_options = parse_snapshot_args(
             [
                 "--input",
-                "models/simple/cylindrical_cap.step",
+                "models/step/parts/cylindrical_cap.step",
                 "--output",
                 "tmp/cap.png",
                 "--appearance",
@@ -272,7 +272,7 @@ class SnapshotCliTests(unittest.TestCase):
         options = parse_snapshot_args(
             [
                 "--input",
-                "models/simple/cylindrical_cap.step",
+                "models/step/parts/cylindrical_cap.step",
                 "--output",
                 "tmp/cap.png",
                 "--appearance",
@@ -297,7 +297,7 @@ class SnapshotCliTests(unittest.TestCase):
         options = parse_snapshot_args(
             [
                 "--input",
-                "models/simple/cylindrical_cap.step",
+                "models/step/parts/cylindrical_cap.step",
                 "--output",
                 "tmp/cap.png",
                 "--display",
@@ -311,7 +311,7 @@ class SnapshotCliTests(unittest.TestCase):
         options = parse_snapshot_args(
             [
                 "--input",
-                "models/simple/cylindrical_cap.step",
+                "models/step/parts/cylindrical_cap.step",
                 "--output",
                 "tmp/cap.png",
                 "--display",
@@ -554,7 +554,7 @@ class SnapshotCliTests(unittest.TestCase):
         options = parse_snapshot_args(
             [
                 "--input",
-                "models/simple/cylindrical_cap.step",
+                "models/step/parts/cylindrical_cap.step",
                 "--output",
                 "tmp/cap.png",
                 "--debug",
