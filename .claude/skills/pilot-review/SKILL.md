@@ -77,9 +77,10 @@ separate finding; current source is not retroactive law.
 
 ### 2. Validate authority first
 
-- Run `python .claude/skills/pilot-review/scripts/review.py <exp>` first. It
-  invokes the bundled Workspace helper's `validate` command read-only and
-  publishes only `review.md` and `review.json`.
+- Run `./.venv/bin/python .claude/skills/pilot-review/scripts/review.py <exp>
+  --workspace-helper skills/mesh-to-cad/scripts/mesh-to-cad-workspace` first.
+  It invokes the Workspace skill's public `validate` process interface
+  read-only and publishes only `review.md` and `review.json`.
 - Confirm `workspace.json`, `experiment.json`, Canonical Reference identities,
   setup identity, `step_index.json`, immutable steps/cycles/attempts, and their
   publishing commits agree.

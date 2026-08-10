@@ -7,12 +7,15 @@ import hashlib
 import importlib.util
 import io
 import json
+import os
 from pathlib import Path
 import shutil
+import sqlite3
 import subprocess
 import sys
 import tempfile
 import unittest
+from unittest import mock
 
 
 REPO_ROOT = Path(__file__).resolve().parents[4]
@@ -1172,24 +1175,87 @@ class WorkspaceCliTests(unittest.TestCase):
         runner = importlib.util.module_from_spec(runner_spec)
         runner_spec.loader.exec_module(runner)
         self.workspace = self.root / "runner-driven-experiment"
-        runner.prepare_exp(self.workspace)
-        prepared, candidate = self.canonical_cad_flow()
-        final = self.execute_final_case(
-            prepared=prepared,
-            candidate=candidate,
-            candidate_mesh_relative="built/measurement.glb",
-            accepted=True,
-        )
-        rollout = (
-            self.workspace
-            / "run/.codex-upper/sessions/a/b/c/rollout-synthetic.jsonl"
-        )
-        rollout.parent.mkdir(parents=True)
-        rollout.write_text("{}\n", encoding="utf-8")
+        workload = [
+            sys.executable,
+            str(Path(__file__).resolve()),
+            "--synthetic-runner-workload",
+            str(self.workspace),
+        ]
 
-        runner_status = runner.finalize_pilot(self.workspace, 0, {})
+        class SyntheticTap:
+            def __init__(self) -> None:
+                self.stopped = False
+
+            def poll(self) -> int | None:
+                return 0 if self.stopped else None
+
+            def send_signal(self, _signum: int) -> None:
+                self.stopped = True
+
+            def wait(self, timeout: float | None = None) -> int:
+                del timeout
+                self.stopped = True
+                return 0
+
+            terminate = send_signal
+            kill = send_signal
+
+        def start_synthetic_tap(_tap_bin, exp_dir, _environ):
+            run_dir = exp_dir / "run"
+            run_dir.mkdir(parents=True, exist_ok=True)
+            (run_dir / ".claude-tap.log").write_text(
+                "listening on http://127.0.0.1:43123\n",
+                encoding="utf-8",
+            )
+            with sqlite3.connect(run_dir / "traces.sqlite3") as connection:
+                connection.execute(
+                    "CREATE TABLE sessions "
+                    "(id TEXT, status TEXT, record_count INTEGER, started_at TEXT)"
+                )
+                connection.execute(
+                    "INSERT INTO sessions VALUES (?,?,?,?)",
+                    ("synthetic-session", "complete", 1, "2026-08-10T00:00:00Z"),
+                )
+            return SyntheticTap()
+
+        def export_synthetic_trace(_tap_bin, exp_dir, _session_id, _environ):
+            (exp_dir / "run/trace.html").write_text(
+                "<html>synthetic trace</html>\n",
+                encoding="utf-8",
+            )
+
+        with (
+            mock.patch.object(runner, "resolve_tap", return_value="synthetic-tap"),
+            mock.patch.object(
+                runner,
+                "build_bwrap_argv",
+                return_value=workload,
+            ),
+            mock.patch.object(
+                runner,
+                "build_sandbox_environment",
+                return_value=dict(os.environ),
+            ),
+            mock.patch.object(
+                runner,
+                "start_tap",
+                side_effect=start_synthetic_tap,
+            ),
+            mock.patch.object(
+                runner,
+                "export_html",
+                side_effect=export_synthetic_trace,
+            ),
+        ):
+            runner_status = runner.run_pilot(self.workspace, [], workload, {})
         reviewed = subprocess.run(
-            (sys.executable, str(PILOT_REVIEW_PATH), str(self.workspace)),
+            (
+                sys.executable,
+                str(PILOT_REVIEW_PATH),
+                str(self.workspace),
+                "--workspace-helper",
+                str(CLI_PATH.parent),
+            ),
             cwd=REPO_ROOT,
             text=True,
             stdout=subprocess.PIPE,
@@ -1200,6 +1266,8 @@ class WorkspaceCliTests(unittest.TestCase):
         self.assertEqual(0, reviewed.returncode, reviewed.stderr)
         self.assertFalse((self.workspace / "reviews").exists())
         self.assertTrue((self.workspace / "run/rollout.jsonl").is_file())
+        self.assertTrue((self.workspace / "run/traces.sqlite3").is_file())
+        self.assertTrue((self.workspace / "run/trace.html").is_file())
         review = json.loads(
             (self.workspace / "review.json").read_text(encoding="utf-8")
         )
@@ -1207,7 +1275,9 @@ class WorkspaceCliTests(unittest.TestCase):
         self.assertEqual("pass", review["verdicts"]["workspace_protocol"])
         self.assertEqual("accepted", review["verdicts"]["reconstruction_quality"])
         self.assertIn(
-            final["identity_sha256"],
+            json.loads(
+                (self.workspace / "final/manifest.json").read_text(encoding="utf-8")
+            )["identity_sha256"],
             {
                 node.get("identity_sha256")
                 for node in review["graph"]["nodes"]
@@ -2083,5 +2153,30 @@ class WorkspaceCliTests(unittest.TestCase):
         self.assertFalse(list((self.workspace / "work").glob(".tmp-step-zero-*")))
 
 
+def _run_synthetic_runner_workload(workspace: Path) -> int:
+    case = WorkspaceCliTests(
+        methodName="test_runner_accepts_and_reviewer_audits_real_synthetic_delivery"
+    )
+    case.root = workspace.parent / "synthetic-workload"
+    case.root.mkdir(parents=True, exist_ok=True)
+    case.workspace = workspace
+    case.cli = _load_cli()
+    case.reference_sha = "1" * 64
+    case.profile_sha = "2" * 64
+    prepared, candidate = case.canonical_cad_flow()
+    case.execute_final_case(
+        prepared=prepared,
+        candidate=candidate,
+        candidate_mesh_relative="built/measurement.glb",
+        accepted=True,
+    )
+    rollout = workspace / "run/.codex-upper/sessions/a/b/c/rollout-synthetic.jsonl"
+    rollout.parent.mkdir(parents=True, exist_ok=True)
+    rollout.write_text("{}\n", encoding="utf-8")
+    return 0
+
+
 if __name__ == "__main__":
+    if len(sys.argv) == 3 and sys.argv[1] == "--synthetic-runner-workload":
+        raise SystemExit(_run_synthetic_runner_workload(Path(sys.argv[2])))
     unittest.main()

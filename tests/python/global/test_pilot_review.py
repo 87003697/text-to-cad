@@ -110,6 +110,24 @@ class PilotReviewTests(unittest.TestCase):
             },
         )
         write_json(
+            self.exp / "steps/000000/attempt.json",
+            {
+                "attempt": 0,
+                "intended_step": 0,
+                "from_step": None,
+                "result": "measured_step_published",
+            },
+        )
+        write_json(
+            self.exp / "cycles/000001/attempt.json",
+            {
+                "attempt": 2,
+                "intended_step": 1,
+                "from_step": 0,
+                "result": "repair_cycle_published",
+            },
+        )
+        write_json(
             self.exp / "final/selection.json",
             {
                 "schema": "mesh-to-cad.final-selection/1",
@@ -138,8 +156,20 @@ class PilotReviewTests(unittest.TestCase):
             "graph": {
                 "schema": "mesh-to-cad.step-index/1",
                 "steps": [
-                    {"step": 0, "parent_step": None, "accepted": False},
-                    {"step": 1, "parent_step": 0, "accepted": True},
+                    {
+                        "step": 0,
+                        "parent_step": None,
+                        "accepted": False,
+                        "preview": "steps/000000/preview/preview.json",
+                        "measurement": "steps/000000/measurement.json",
+                    },
+                    {
+                        "step": 1,
+                        "parent_step": 0,
+                        "accepted": True,
+                        "preview": "steps/000001/preview/preview.json",
+                        "measurement": "steps/000001/measurement.json",
+                    },
                 ],
                 "cycles": [
                     {
@@ -197,6 +227,9 @@ class PilotReviewTests(unittest.TestCase):
             {
                 "canonical_reference",
                 "measured_step",
+                "attempt",
+                "formal_preview",
+                "measurement",
                 "repair_target",
                 "repair_batch",
                 "planned_edit",
@@ -214,10 +247,25 @@ class PilotReviewTests(unittest.TestCase):
             "edit_has_source_change",
             "source_change_measured_by_diff",
             "diff_assessed_by_agent",
+            "measured_step_descends_from",
+            "attempt_produces_preview",
+            "preview_has_measurement",
+            "measurement_publishes_step",
+            "attempt_contributes_to_cycle",
             "step_considered_for_selection",
             "selection_publishes_delivery",
         ):
             self.assertIn(expected, edge_types)
+        attempt_ids = {
+            node["id"]
+            for node in review["graph"]["nodes"]
+            if node["type"] == "attempt"
+        }
+        self.assertEqual({"attempt:0", "attempt:1", "attempt:2"}, attempt_ids)
+        self.assertEqual(
+            "not_auditable",
+            review["verdicts"]["production_runtime_integration"],
+        )
         self.assertTrue((self.exp / "review.md").is_file())
 
     def test_reviewer_classifies_legacy_without_partial_graph(self) -> None:

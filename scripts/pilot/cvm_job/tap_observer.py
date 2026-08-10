@@ -26,14 +26,17 @@ _CLASSIFIERS = (
     ),
     (
         "final_rebuild",
-        ("mesh-to-cad-workspace finalize", "final delivery", "canonical-build"),
+        ("mesh-to-cad-workspace finalize", "final delivery"),
     ),
     ("workspace", ("mesh-to-cad-workspace", "workspace.json", "step_index.json")),
     ("voxblame", ("voxblame-",)),
     ("review", ("pilot-review", "review.png", "review.gif", "reviews/")),
     ("export", ("snapshot", "export", ".glb", ".step", ".stp")),
     ("checkpoint", ("git commit",)),
-    ("reconstruct", ("build123d", "freecad", "implicit-cad", "cadquery")),
+    (
+        "reconstruct",
+        ("canonical-build", "build123d", "freecad", "implicit-cad", "cadquery"),
+    ),
     ("inspect", ("mesh-inspect", "mesh_stats", "trimesh", "file ")),
 )
 

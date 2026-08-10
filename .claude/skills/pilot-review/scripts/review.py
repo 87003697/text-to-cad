@@ -11,10 +11,7 @@ import sys
 from typing import Any
 
 
-REPO_ROOT = Path(__file__).resolve().parents[4]
-DEFAULT_WORKSPACE_HELPER = (
-    REPO_ROOT / "skills/mesh-to-cad/scripts/mesh-to-cad-workspace"
-)
+DEFAULT_WORKSPACE_HELPER = "mesh-to-cad-workspace"
 
 
 class ReviewError(RuntimeError):
@@ -33,13 +30,18 @@ def _read_json(path: Path) -> dict[str, Any]:
 
 def _validate(
     workspace: Path,
-    helper: Path,
+    helper: str | Path,
 ) -> tuple[int, dict[str, Any]]:
+    helper_text = str(helper)
+    helper_path = Path(helper_text).expanduser()
+    if helper_path.exists() and (helper_path.is_dir() or helper_path.suffix == ".py"):
+        command = [sys.executable, str(helper_path)]
+    else:
+        command = [helper_text]
     try:
         completed = subprocess.run(
             [
-                sys.executable,
-                str(helper),
+                *command,
                 "validate",
                 "--workspace",
                 str(workspace),
@@ -83,7 +85,7 @@ def _runner_verdict(workspace: Path) -> tuple[str, list[dict[str, str]]]:
     return ("pass" if manifest.get("final_status") == 0 else "fail"), []
 
 
-def _legacy_review(
+def _invalid_workspace_review(
     workspace: Path,
     payload: dict[str, Any],
 ) -> dict[str, Any]:
@@ -161,6 +163,8 @@ def _canonical_graph(
     for step in steps:
         number = int(step["step"])
         step_id = f"step:{number}"
+        preview_id = f"preview:{number}"
+        measurement_id = f"measurement:{number}"
         _node(
             nodes,
             step_id,
@@ -169,8 +173,58 @@ def _canonical_graph(
             accepted=bool(step.get("accepted")),
             parent_step=step.get("parent_step"),
         )
+        _node(
+            nodes,
+            preview_id,
+            "formal_preview",
+            str(step.get("preview") or f"steps/{number:06d}/preview/preview.json"),
+        )
+        _node(
+            nodes,
+            measurement_id,
+            "measurement",
+            str(step.get("measurement") or f"steps/{number:06d}/measurement.json"),
+        )
+        parent = step.get("parent_step")
         if number == 0:
             _edge(edges, "workspace", step_id, "workspace_publishes_initial_step")
+        else:
+            _edge(
+                edges,
+                f"step:{parent}",
+                step_id,
+                "measured_step_descends_from",
+            )
+
+        cycle_number = step.get("cycle")
+        attempt_path = (
+            workspace / "steps/000000/attempt.json"
+            if number == 0
+            else workspace
+            / "cycles"
+            / f"{int(cycle_number if cycle_number is not None else number):06d}"
+            / "attempt.json"
+        )
+        attempt = _read_json(attempt_path)
+        attempt_number = int(attempt["attempt"])
+        attempt_id = f"attempt:{attempt_number}"
+        _node(
+            nodes,
+            attempt_id,
+            "attempt",
+            attempt_path.relative_to(workspace).as_posix(),
+            result=attempt.get("result"),
+            intended_step=attempt.get("intended_step"),
+        )
+        _edge(
+            edges,
+            "workspace" if parent is None else f"step:{parent}",
+            attempt_id,
+            "attempt_branches_from_step",
+        )
+        _edge(edges, attempt_id, preview_id, "attempt_produces_preview")
+        _edge(edges, preview_id, measurement_id, "preview_has_measurement")
+        _edge(edges, measurement_id, step_id, "measurement_publishes_step")
 
     failed_attempts = (
         graph.get("failed_attempts")
@@ -180,14 +234,15 @@ def _canonical_graph(
     for attempt in failed_attempts:
         attempt_number = int(attempt["attempt"])
         attempt_id = f"attempt:{attempt_number}"
-        _node(
-            nodes,
-            attempt_id,
-            "attempt",
-            f"attempts/{attempt_number:06d}/attempt.json",
-            result=attempt.get("result"),
-            classification=attempt.get("classification"),
-        )
+        if not any(node["id"] == attempt_id for node in nodes):
+            _node(
+                nodes,
+                attempt_id,
+                "attempt",
+                f"attempts/{attempt_number:06d}/attempt.json",
+                result=attempt.get("result"),
+                classification=attempt.get("classification"),
+            )
         parent = attempt.get("from_step")
         _edge(
             edges,
@@ -342,7 +397,6 @@ def _canonical_review(
         raise ReviewError("valid Workspace response omitted its graph")
     delivery = graph.get("final_delivery")
     runner, issues = _runner_verdict(workspace)
-    runtime = "pass" if runner == "pass" and isinstance(delivery, dict) else "fail"
     accepted = bool(delivery.get("accepted")) if isinstance(delivery, dict) else False
     return {
         "verdicts": {
@@ -351,7 +405,7 @@ def _canonical_review(
             "reconstruction_quality": (
                 "accepted" if accepted else "delivered_with_residual"
             ),
-            "production_runtime_integration": runtime,
+            "production_runtime_integration": "not_auditable",
         },
         "contract_provenance": {
             "workspace": "workspace.json",
@@ -368,17 +422,20 @@ def _canonical_review(
         "graph": _canonical_graph(workspace, graph),
         "issues": issues,
         "unresolved": [],
-        "evidence_gaps": [],
+        "evidence_gaps": [
+            "production runtime integration requires shipped snapshot, invoked "
+            "installed-skill, bundle, parity, and isolation gate evidence"
+        ],
     }
 
 
-def review_workspace(workspace: Path, helper: Path) -> tuple[int, dict[str, Any]]:
+def review_workspace(workspace: Path, helper: str | Path) -> tuple[int, dict[str, Any]]:
     """Validate and reconstruct one experiment without changing its authority."""
 
     workspace = workspace.resolve()
-    status, payload = _validate(workspace, helper.resolve())
+    status, payload = _validate(workspace, helper)
     if status != 0 or payload.get("ok") is not True:
-        review = _legacy_review(workspace, payload)
+        review = _invalid_workspace_review(workspace, payload)
         classification = review["workspace_validation"]["classification"]
         return (2 if classification == "unsupported_legacy_workspace" else 1), review
     return 0, _canonical_review(workspace, payload)
@@ -433,7 +490,6 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("workspace", type=Path)
     parser.add_argument(
         "--workspace-helper",
-        type=Path,
         default=DEFAULT_WORKSPACE_HELPER,
     )
     return parser

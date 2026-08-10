@@ -197,6 +197,7 @@ class TapObserverTests(unittest.TestCase):
             "voxblame-preview candidate.glb": "preview",
             "voxblame-region-diff --repair-batch plan.json": "repair",
             "mesh-to-cad-workspace finalize --selection chosen.json": "final_rebuild",
+            "python skills/cad/scripts/canonical-build --job candidate.json": "reconstruct",
             "voxblame-verify rebuilt.glb": "verification",
             "open reviews/final.png": "review",
             "git commit -m done": "checkpoint",
