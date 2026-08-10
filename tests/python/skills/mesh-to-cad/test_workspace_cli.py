@@ -29,6 +29,8 @@ PREVIEW_PROFILE_PATH = (
     REPO_ROOT
     / "packages/meshshot/src/meshshot/profiles/cadena_residual_eight_view_v1.json"
 )
+PILOT_RUNNER_PATH = REPO_ROOT / "scripts/pilot/runner.py"
+PILOT_REVIEW_PATH = REPO_ROOT / ".claude/skills/pilot-review/scripts/review.py"
 
 
 def _load_cli():
@@ -1157,6 +1159,61 @@ class WorkspaceCliTests(unittest.TestCase):
 
         self.assertEqual("implicit", final["route"])
         self.assertEqual("acceptance_satisfied", final["stop_reason"])
+
+    def test_runner_accepts_and_reviewer_audits_real_synthetic_delivery(
+        self,
+    ) -> None:
+        runner_spec = importlib.util.spec_from_file_location(
+            "synthetic_pilot_runner",
+            PILOT_RUNNER_PATH,
+        )
+        self.assertIsNotNone(runner_spec)
+        self.assertIsNotNone(runner_spec.loader)
+        runner = importlib.util.module_from_spec(runner_spec)
+        runner_spec.loader.exec_module(runner)
+        self.workspace = self.root / "runner-driven-experiment"
+        runner.prepare_exp(self.workspace)
+        prepared, candidate = self.canonical_cad_flow()
+        final = self.execute_final_case(
+            prepared=prepared,
+            candidate=candidate,
+            candidate_mesh_relative="built/measurement.glb",
+            accepted=True,
+        )
+        rollout = (
+            self.workspace
+            / "run/.codex-upper/sessions/a/b/c/rollout-synthetic.jsonl"
+        )
+        rollout.parent.mkdir(parents=True)
+        rollout.write_text("{}\n", encoding="utf-8")
+
+        runner_status = runner.finalize_pilot(self.workspace, 0, {})
+        reviewed = subprocess.run(
+            (sys.executable, str(PILOT_REVIEW_PATH), str(self.workspace)),
+            cwd=REPO_ROOT,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+
+        self.assertEqual(0, runner_status)
+        self.assertEqual(0, reviewed.returncode, reviewed.stderr)
+        self.assertFalse((self.workspace / "reviews").exists())
+        self.assertTrue((self.workspace / "run/rollout.jsonl").is_file())
+        review = json.loads(
+            (self.workspace / "review.json").read_text(encoding="utf-8")
+        )
+        self.assertEqual("pass", review["verdicts"]["runner_completion"])
+        self.assertEqual("pass", review["verdicts"]["workspace_protocol"])
+        self.assertEqual("accepted", review["verdicts"]["reconstruction_quality"])
+        self.assertIn(
+            final["identity_sha256"],
+            {
+                node.get("identity_sha256")
+                for node in review["graph"]["nodes"]
+                if node["type"] == "final_delivery"
+            },
+        )
 
     def test_finalize_conflict_publishes_no_final_delivery(self) -> None:
         self.publish_initial_flow()

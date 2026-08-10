@@ -288,7 +288,7 @@ complete = type(value) is int
 print(json.dumps({
     "complete": complete,
     "final_status": value if complete else None,
-    "has_postmortem": (exp / ".codex-upper").is_dir(),
+    "has_postmortem": (exp / "run/.codex-upper").is_dir(),
 }, separators=(",", ":")))
 """.strip()
         command = " ".join(

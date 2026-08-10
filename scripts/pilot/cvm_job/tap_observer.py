@@ -10,10 +10,26 @@ from urllib.parse import quote
 
 SUPPORTED_SCHEMA = 4
 _CLASSIFIERS = (
-    ("finalize", ("mesh-to-cad-workspace finalize", "final delivery", "voxblame-verify")),
+    (
+        "canonical_preparation",
+        ("voxblame-prepare-reference", "canonical reference", "prepare-reference"),
+    ),
     ("preview", ("voxblame-preview", "preview.png", "preview.json")),
+    ("measurement", ("voxblame-measure", "measured step", "measurement.json")),
+    (
+        "repair",
+        ("voxblame-region-diff", "region-diff", "repair target", "repair batch", "publish-cycle"),
+    ),
+    (
+        "verification",
+        ("voxblame-verify", "verification.json", "observable geometry verification"),
+    ),
+    (
+        "final_rebuild",
+        ("mesh-to-cad-workspace finalize", "final delivery", "canonical-build"),
+    ),
     ("workspace", ("mesh-to-cad-workspace", "workspace.json", "step_index.json")),
-    ("voxblame", ("voxblame-", "repair target", "region-diff", "measured step")),
+    ("voxblame", ("voxblame-",)),
     ("review", ("pilot-review", "review.png", "review.gif", "reviews/")),
     ("export", ("snapshot", "export", ".glb", ".step", ".stp")),
     ("checkpoint", ("git commit",)),
@@ -258,4 +274,4 @@ def observe(db_path: Path) -> dict[str, Any]:
 
 
 def observe_exp(exp_dir: Path) -> dict[str, Any]:
-    return observe(Path(exp_dir) / "traces.sqlite3")
+    return observe(Path(exp_dir) / "run/traces.sqlite3")

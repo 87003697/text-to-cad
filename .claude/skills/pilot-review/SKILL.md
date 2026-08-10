@@ -66,7 +66,7 @@ Build a provenance matrix before judging behavior:
 
 | Layer | Preferred evidence | Meaning |
 |---|---|---|
-| Prompted | user messages and injected skill blocks in `rollout.jsonl` | Instructions visible to the Agent |
+| Prompted | user messages and injected skill blocks in `run/rollout.jsonl` | Instructions visible to the Agent |
 | Shipped | `<group>/_snapshot/` and invoked installed-skill paths | Runtime intended to execute |
 | Executed | tool calls, outputs, Workspace artifacts, and Git commits | What actually happened |
 | Current | current source checkout | Forward-looking comparison only |
@@ -77,7 +77,9 @@ separate finding; current source is not retroactive law.
 
 ### 2. Validate authority first
 
-- Run the bundled Workspace helper's `validate` command read-only.
+- Run `python .claude/skills/pilot-review/scripts/review.py <exp>` first. It
+  invokes the bundled Workspace helper's `validate` command read-only and
+  publishes only `review.md` and `review.json`.
 - Confirm `workspace.json`, `experiment.json`, Canonical Reference identities,
   setup identity, `step_index.json`, immutable steps/cycles/attempts, and their
   publishing commits agree.
@@ -97,7 +99,7 @@ and the next dependent Agent decision. Treat Agent prose as a claim until a
 tool result or authority artifact confirms it.
 
 Use `artifact_manifest.json` for runner publication state and
-`scripts/utils/rollout-usage.py <exp>/rollout.jsonl` for cost. Trace artifacts
+`scripts/utils/rollout-usage.py <exp>/run/rollout.jsonl` for cost. Trace artifacts
 are optional cross-checks, never authority substitutes.
 
 ### 4. Audit each graph edge

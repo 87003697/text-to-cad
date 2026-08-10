@@ -29,8 +29,9 @@ SANDBOX_REPO_ROOT = Path("/workspace/repo")
 SANDBOX_HOME = Path("/home/pilot")
 SANDBOX_CODEX_HOME = SANDBOX_HOME / ".codex"
 ARTIFACT_CONTRACT_STATUS = 4
-REVIEW_SUFFIXES = {".png", ".gif"}
-MANIFEST_EXCLUDED_ROOTS = {".git", ".codex-upper"}
+MANIFEST_EXCLUDED_ROOTS = {".git"}
+MANIFEST_EXCLUDED_PREFIXES = {"run/.codex-upper"}
+WORKSPACE_HELPER = REPO_ROOT / "skills/mesh-to-cad/scripts/mesh-to-cad-workspace"
 SYSTEM_RO_PATHS = (
     Path("/usr"),
     Path("/etc/alternatives"),
@@ -60,20 +61,9 @@ SANDBOX_ENV_PASSTHROUGH = (
     "TZ",
 )
 GITIGNORE = """\
-stderr.log
-rollout.jsonl
-prompt.txt
-trace.html
-traces.sqlite3
-traces.sqlite3-shm
-traces.sqlite3-wal
-traces.sqlite3.write.lock
-.claude-tap.log
-.claude-tap.log.export
-.trace.html.tmp.*
+run/
 artifact_manifest.json
 .artifact_manifest.json.tmp
-.codex-upper/
 __pycache__/
 *.pyc
 .codex/
@@ -226,7 +216,9 @@ def start_tap(
     tap_env = dict(environ)
     # Per-EXP storage prevents concurrent pilots from sharing trace state.
     # Unbuffered output makes the ready marker observable immediately.
-    tap_env["CLOUDTAP_DB"] = str(exp_dir / "traces.sqlite3")
+    run_dir = exp_dir / "run"
+    run_dir.mkdir(parents=True, exist_ok=True)
+    tap_env["CLOUDTAP_DB"] = str(run_dir / "traces.sqlite3")
     tap_env["PYTHONUNBUFFERED"] = "1"
     argv = [
         tap_bin,
@@ -249,7 +241,7 @@ def start_tap(
         "0",
     ]
     try:
-        log_file = (exp_dir / ".claude-tap.log").open("wb")
+        log_file = (run_dir / ".claude-tap.log").open("wb")
     except OSError as exc:
         raise TapError(f"cannot open claude-tap log: {exc}") from exc
     try:
@@ -350,7 +342,7 @@ def wait_workload(
 def read_trace(exp_dir: Path) -> tuple[str, str, int]:
     """Return the latest session id, status, and captured record count."""
 
-    db_path = exp_dir / "traces.sqlite3"
+    db_path = exp_dir / "run/traces.sqlite3"
     if not db_path.is_file():
         raise TapError("required traces.sqlite3 is missing")
     try:
@@ -374,12 +366,14 @@ def export_html(
 ) -> None:
     """Best-effort export of an atomic HTML viewer from finalized SQLite."""
 
-    temporary = exp_dir / f".trace.html.tmp.{os.getpid()}"
-    output = exp_dir / "trace.html"
-    export_log = exp_dir / ".claude-tap.log.export"
+    run_dir = exp_dir / "run"
+    run_dir.mkdir(parents=True, exist_ok=True)
+    temporary = run_dir / f".trace.html.tmp.{os.getpid()}"
+    output = run_dir / "trace.html"
+    export_log = run_dir / ".claude-tap.log.export"
     temporary.unlink(missing_ok=True)
     export_env = dict(environ)
-    export_env["CLOUDTAP_DB"] = str(exp_dir / "traces.sqlite3")
+    export_env["CLOUDTAP_DB"] = str(run_dir / "traces.sqlite3")
     try:
         with export_log.open("wb") as log_file:
             result = subprocess.run(
@@ -416,7 +410,7 @@ def export_html(
 def prepare_sandbox(exp_dir: Path, skill_dirs: list[Path]) -> Path:
     """Create the isolated Codex home and skill mount points."""
 
-    upper = exp_dir / ".codex-upper"
+    upper = exp_dir / "run/.codex-upper"
     try:
         upper.mkdir(parents=True, exist_ok=True)
         for skill_dir in skill_dirs:
@@ -734,7 +728,7 @@ def run_supervised(
         try:
             port = wait_ready(
                 tap,
-                exp_dir / ".claude-tap.log",
+                exp_dir / "run/.claude-tap.log",
                 ready_timeout,
                 lambda: relay.cancelled,
             )
@@ -744,7 +738,7 @@ def run_supervised(
                 workload = subprocess.Popen(
                     bwrap_argv,
                     # Inherit wrapper redirections so Codex continues to write
-                    # stderr.log and remains non-interactive exactly as before.
+                    # run/stderr.log and remains non-interactive exactly as before.
                     stdin=None,
                     stdout=None,
                     stderr=None,
@@ -819,7 +813,7 @@ def prepare_exp(exp_dir: Path) -> None:
 
     try:
         exp_dir.mkdir(parents=True, exist_ok=True)
-        (exp_dir / "reviews").mkdir(exist_ok=True)
+        (exp_dir / "run").mkdir(exist_ok=True)
         (exp_dir / ".gitignore").write_text(GITIGNORE, encoding="utf-8")
     except OSError as exc:
         raise PilotError(f"cannot prepare EXP_DIR: {exc}") from exc
@@ -840,23 +834,45 @@ def prepare_exp(exp_dir: Path) -> None:
         )
 
 
-def validate_reviews(exp_dir: Path) -> list[Path]:
-    """Return durable review images or reject a successful incomplete pilot."""
+def validate_workspace_delivery(exp_dir: Path) -> dict[str, object]:
+    """Validate canonical Workspace authority and return its Final Delivery."""
 
-    reviews_dir = exp_dir / "reviews"
     try:
-        reviews = sorted(
-            path
-            for path in reviews_dir.rglob("*")
-            if path.is_file() and path.suffix.lower() in REVIEW_SUFFIXES
+        completed = subprocess.run(
+            [
+                sys.executable,
+                str(WORKSPACE_HELPER),
+                "validate",
+                "--workspace",
+                str(exp_dir),
+            ],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=60,
         )
-    except OSError as exc:
-        raise PilotError(f"cannot inspect durable reviews: {exc}") from exc
-    if not reviews:
-        raise PilotError(
-            f"successful workload produced no PNG/GIF review under {reviews_dir}"
+    except (OSError, subprocess.SubprocessError) as exc:
+        raise PilotError(f"cannot validate canonical Workspace: {exc}") from exc
+    try:
+        payload = json.loads(completed.stdout)
+    except json.JSONDecodeError as exc:
+        raise PilotError("canonical Workspace validator returned invalid JSON") from exc
+    if not isinstance(payload, dict):
+        raise PilotError("canonical Workspace validator returned a non-object")
+    if completed.returncode != 0 or payload.get("ok") is not True:
+        error = payload.get("error")
+        classification = (
+            error.get("classification") if isinstance(error, dict) else "invalid_workspace"
         )
-    return reviews
+        detail = error.get("detail") if isinstance(error, dict) else "validation failed"
+        raise PilotError(f"canonical Workspace validation failed ({classification}): {detail}")
+    graph = payload.get("graph")
+    if not isinstance(graph, dict):
+        raise PilotError("canonical Workspace validator returned no graph")
+    delivery = graph.get("final_delivery")
+    if not isinstance(delivery, dict):
+        raise PilotError("canonical Workspace has no complete Final Delivery")
+    return delivery
 
 
 def write_artifact_manifest(
@@ -873,6 +889,11 @@ def write_artifact_manifest(
             if (
                 not relative.parts
                 or relative.parts[0] in MANIFEST_EXCLUDED_ROOTS
+                or any(
+                    relative.as_posix() == prefix
+                    or relative.as_posix().startswith(prefix + "/")
+                    for prefix in MANIFEST_EXCLUDED_PREFIXES
+                )
                 or relative.as_posix()
                 in {"artifact_manifest.json", ".artifact_manifest.json.tmp"}
                 or not path.is_file()
@@ -918,7 +939,7 @@ def publish_artifact_manifest(
 def cleanup_sandbox(exp_dir: Path) -> None:
     """Remove the deterministic isolated Codex home if present."""
 
-    for name in (".codex-upper",):
+    for name in ("run/.codex-upper",):
         path = exp_dir / name
         try:
             if path.exists():
@@ -936,7 +957,7 @@ def finalize_pilot(
 ) -> int:
     """Collect the unique rollout, apply cleanup policy, and choose final status."""
 
-    upper = exp_dir / ".codex-upper"
+    upper = exp_dir / "run/.codex-upper"
     if not require_rollout:
         final_status = workload_status
         if not publish_artifact_manifest(
@@ -962,7 +983,7 @@ def finalize_pilot(
         publish_artifact_manifest(exp_dir, workload_status, 3)
         return 3
     try:
-        rollouts[0].replace(exp_dir / "rollout.jsonl")
+        rollouts[0].replace(exp_dir / "run/rollout.jsonl")
     except OSError as exc:
         print(f"cannot collect rollout: {exc}", file=sys.stderr)
         print(f"sandbox preserved for postmortem at {upper}", file=sys.stderr)
@@ -972,7 +993,7 @@ def finalize_pilot(
     final_status = workload_status
     if workload_status == 0:
         try:
-            validate_reviews(exp_dir)
+            validate_workspace_delivery(exp_dir)
         except PilotError as exc:
             print(f"pilot-runner: {exc}", file=sys.stderr)
             final_status = ARTIFACT_CONTRACT_STATUS

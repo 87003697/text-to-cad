@@ -46,10 +46,10 @@ Input mesh: ${PLY}
 Experiment directory (already an initialized local git repo, write ALL
 artifacts here): ${EXP_DIR}
 
-Save every final CAD/Implicit snapshot review PNG or GIF under
-${EXP_DIR}/reviews/. Do not leave the only copy of any review under /tmp.
-Keep mesh comparison checkpoints under ${EXP_DIR}/previews/ as required by
-the mesh-to-cad skill; previews do not replace the routed skill review packet.
+The canonical Workspace and its atomically published Final Delivery define
+success. Optional additional human review material belongs under
+${EXP_DIR}/reviews/ and never substitutes for formal Measured Step or Final
+Delivery previews.
 
 Stay under ${EXP_DIR}; do not modify skills/, packages/, or files outside.
 EOF
@@ -57,8 +57,8 @@ EOF
 
 echo "[pilot] $OBJ → $EXP_DIR"
 
-mkdir -p "$EXP_DIR"
-printf '%s' "$PROMPT" > "${EXP_DIR}/prompt.txt"
+mkdir -p "$EXP_DIR/run"
+printf '%s' "$PROMPT" > "${EXP_DIR}/run/prompt.txt"
 
 WORKLOAD=(
     "gateway/codex-tap-gpt56"
@@ -73,7 +73,7 @@ WORKLOAD=(
 PILOT_EXIT=0
 "$PYTHON_BIN" "$SCRIPT_DIR/runner.py" run --input "$PLY" "$EXP_DIR" -- \
     "${WORKLOAD[@]}" < /dev/null > /dev/null \
-    2> "${EXP_DIR}/stderr.log" || PILOT_EXIT=$?
+    2> "${EXP_DIR}/run/stderr.log" || PILOT_EXIT=$?
 
 if [[ $PILOT_EXIT -ne 0 ]]; then
     exit "$PILOT_EXIT"

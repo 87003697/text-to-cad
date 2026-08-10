@@ -33,12 +33,12 @@ Parse request → Discover plan → Qualify terminal/postmortem
 模块。每个 exp 必须 verify 成功后才进入 cleanup。
 
 1. 解析 flags：
-   - `--include-byproducts`：上传 `.codex-upper` 等副产物后才清理失败实验；
+   - `--include-byproducts`：上传 `run/.codex-upper` 等副产物后才清理失败实验；
    - `--discard-postmortem`：显式丢弃未上传的 postmortem 后清理失败实验；
    - `--exp <group>/<exp>`：只处理一个 child handle；
    - `--group <group>`：处理一个 batch group；
    - 默认无 scope：扫描全部实验；
-   - 失败实验或存在 `.codex-upper` 的实验保留在 CVM，不上传、不清理。
+   - 失败实验或存在 `run/.codex-upper` 的实验保留在 CVM，不上传、不清理。
    两个 flags 互斥；`--discard-postmortem` 是不可恢复操作，只有用户明确授权丢弃
    本轮列出的失败实验状态时才能使用，不能由 agent 推断。
    `$cvm-monitor` 返回 handle `<group>/<exp>` 时原样传给 `--exp`；`--group` 用于
@@ -63,16 +63,16 @@ Parse request → Discover plan → Qualify terminal/postmortem
 - **上传后 verify 通过才清理 CVM 本地**：`find CVM local -type f | wc -l` ==
   `aws s3 ls --recursive | wc -l`。**verify fail 保留 CVM local + exit 5**，
   绝不盲删源。
-- **失败态默认不清理**：v4 Runner 为非零状态保留 `.codex-upper`。默认 pull 检测
-  `artifact_manifest.json.final_status != 0` 或 `.codex-upper` 后跳过该 exp；
+- **失败态默认不清理**：Runner 为非零状态保留 `run/.codex-upper`。默认 pull 检测
+  `artifact_manifest.json.final_status != 0` 或 `run/.codex-upper` 后跳过该 exp；
   只有显式 `--include-byproducts` 或 `--discard-postmortem` 才能越过。
 - **不得擅自 discard postmortem**：调用 `--discard-postmortem` 前必须向用户列出
   将受影响的失败 exp 并取得明确授权；普通“拉结果”只使用默认安全模式。
 - **terminal manifest 是独立硬门**：每个候选都必须有合法且含整数
   `final_status` 的 `artifact_manifest.json`；missing/invalid 时 exit 9，不上传、不
   清理，并回到 `$cvm-monitor`。monitor 返回不能代替 pull 重验。
-- **`rollout.jsonl` 默认上传**，它是 pilot 的 cost/事故真相源。
-- **`stderr.log` + `.codex/` + `__pycache__/` 默认排除**；`--include-byproducts` opt-in。
+- **`run/rollout.jsonl` 默认上传**，它是 pilot 的 cost/事故真相源。
+- **`run/stderr.log` + `.codex/` + `__pycache__/` 默认排除**；`--include-byproducts` opt-in。
 - **rclone mount 必须健康**：跑前直接探测 `127.0.0.1:5572` RC endpoint；
   不依赖 macOS process table，探测失败则 exit 4。
 - **不以 mount existence 判完成**：mount 只用于最终 visibility；S3 prefix
@@ -107,7 +107,7 @@ Parse request → Discover plan → Qualify terminal/postmortem
 - **CVM 上传工具**：用 `aws s3 cp --recursive`（`s5cmd` 虽然 DEVCLOUD.md 说该装
   但实际没装；aws cli 够用）。
 - **从 mount 只读 SQLite**：使用
-  `sqlite3 "file:/absolute/path/traces.sqlite3?immutable=1"`；普通打开可能因
+  `sqlite3 "file:/absolute/path/run/traces.sqlite3?immutable=1"`；普通打开可能因
   SQLite 尝试创建辅助文件而失败。
 - `immutable=1` 只用于 pull 后的 finalized trace；活跃 job 只能由 CVM 侧
   `$cvm-monitor` 以只读 WAL 方式观察。
@@ -120,7 +120,7 @@ Parse request → Discover plan → Qualify terminal/postmortem
 - 上传的新 exp dir 清单（本轮 uploaded + cleaned）
 - 因失败态/postmortem 默认保留在 CVM 的 exp 清单
 - 每 exp artifact 存在性 check（从 mount 侧读）：`workspace.json` /
-  `step_index.json` / `notes.md` / `final/manifest.json` / `rollout.jsonl`
+  `step_index.json` / `notes.md` / `final/manifest.json` / `run/rollout.jsonl`
   各标 ✓/✗；未发布 Final Delivery 时必须说明对应 Workspace 状态
 - 下一步提示：`/pilot-review outputs/<group>/`（推荐指向刚上传的整个 group，
   一次审多个 exp；`outputs/` 是 symlink 指向 mount）
@@ -144,7 +144,7 @@ Parse request → Discover plan → Qualify terminal/postmortem
 
 本 skill 是活的，遇到未覆盖的新情况必须回来改：
 - **新副产物出现** / **新 exp 内不该拉的文件** → `.cvmignore.pull` 加行
-- **empirical 假设失效**（rollout.jsonl 变大、开始有 base64 image、新副产物）
+- **empirical 假设失效**（`run/rollout.jsonl` 变大、开始有 base64 image、新副产物）
   → 本文件 § 边界条件 empirical 段更新；`.cvmignore.pull` 可能要调
 - **新的覆盖策略需求**（如某类文件要 backup） → `cvm-pull.sh` 加逻辑 + 本文件
   § Non-negotiable 加对应约束
@@ -153,5 +153,5 @@ Parse request → Discover plan → Qualify terminal/postmortem
 - **新的 mount cache 失效模式** → 同时更新 refresh 顺序、exit 语义和可见性测试
 - **发现用户用新说法但没触发到 skill** → description trigger phrases 加
 
-commit 消息说明触发事件（例："feat(cvm-pull): pull heatmap-only after rollout.jsonl grew to 100MB"）。
+commit 消息说明触发事件（例："feat(cvm-pull): pull heatmap-only after run/rollout.jsonl grew to 100MB"）。
 参见 `.agents/plans/cvm-sync-and-pilot-review.md § Skill 维护原则`。

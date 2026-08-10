@@ -1,5 +1,5 @@
 # aws s3 cp exclude list — CVM → S3 upload (cvm-pull.sh uses this)
-# rollout.jsonl is intentionally NOT excluded: it is the new-pilot cost and
+# run/rollout.jsonl is intentionally NOT excluded: it is the new-pilot cost and
 # incident source. usage.json remains an optional legacy compatibility file.
 #
 # NB (2026-07-29): aws --exclude matches the RELATIVE path from source
@@ -14,7 +14,7 @@ stderr.log
 __pycache__/*
 */__pycache__/*
 # bwrap overlay bookkeeping — v4 runner collects the unique rollout into
-# $EXP_DIR/rollout.jsonl. What's left is sqlite state, plugin locks,
+# $EXP_DIR/run/rollout.jsonl. What's left is sqlite state, plugin locks,
 # and socket/FIFO tmp files that aws warns on. Default cvm-pull now preserves
 # failed/postmortem CVM dirs instead of excluding this state and deleting it.
 .codex-upper/*

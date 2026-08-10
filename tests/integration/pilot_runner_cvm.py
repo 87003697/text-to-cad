@@ -160,8 +160,6 @@ done
 
 printf 'host-visible\n' > "$EXP/exp-write.txt" || fail exp_write
 printf 'ephemeral\n' > /tmp/pilot-ephemeral.txt || fail tmp_write
-mkdir -p "$EXP/reviews"
-printf 'synthetic png\n' > "$EXP/reviews/final.png"
 mkdir -p "$CODEX_HOME/sessions/2026/07/30"
 printf '%s\n' '{{"timestamp":"2026-07-30T00:00:00Z","type":"session_meta","payload":{{"id":"cvm-half-integration","cwd":"/workspace/repo"}}}}' > "$CODEX_HOME/sessions/2026/07/30/rollout-cvm-half.jsonl"
 printf 'started\n' > "$EXP/workload-started.txt"
@@ -221,17 +219,17 @@ def prepare_case(
 def validate_case(case: Case, result: subprocess.CompletedProcess[str]) -> int:
     """Validate expected empty-trace status and durable sandbox evidence."""
 
-    (case.exp_dir / "runner.stdout.log").write_text(result.stdout, encoding="utf-8")
-    (case.exp_dir / "runner.stderr.log").write_text(result.stderr, encoding="utf-8")
+    (case.exp_dir / "run/runner.stdout.log").write_text(result.stdout, encoding="utf-8")
+    (case.exp_dir / "run/runner.stderr.log").write_text(result.stderr, encoding="utf-8")
     require(result.returncode == 1, f"expected empty-trace status 1, got {result.returncode}")
     require(not (case.exp_dir / "failures.txt").read_text(encoding="utf-8").strip(), "sandbox assertions failed")
     require((case.exp_dir / "exp-write.txt").is_file(), "EXP write did not reach Host")
     require(not (case.exp_dir / "pilot-ephemeral.txt").exists(), "sandbox /tmp leaked into EXP")
-    require((case.exp_dir / "rollout.jsonl").is_file(), "synthetic rollout was not collected")
+    require((case.exp_dir / "run/rollout.jsonl").is_file(), "synthetic rollout was not collected")
     manifest = json.loads((case.exp_dir / "artifact_manifest.json").read_text(encoding="utf-8"))
     require(manifest["final_status"] == 1, "manifest did not record final status 1")
-    require((case.exp_dir / ".codex-upper").is_dir(), "failed run did not preserve isolated state")
-    log = (case.exp_dir / ".claude-tap.log").read_text(encoding="utf-8", errors="replace")
+    require((case.exp_dir / "run/.codex-upper").is_dir(), "failed run did not preserve isolated state")
+    log = (case.exp_dir / "run/.claude-tap.log").read_text(encoding="utf-8", errors="replace")
     match = READY_PATTERN.search(log)
     require(match is not None, "tap ready port missing from log")
     return int(match.group(1))
@@ -249,7 +247,7 @@ def clean_case(case: Case) -> None:
             text=True,
         )
         require(result.returncode == 0, f"clean failed: {result.stderr}")
-    require(not (case.exp_dir / ".codex-upper").exists(), "clean left isolated state")
+    require(not (case.exp_dir / "run/.codex-upper").exists(), "clean left isolated state")
     require((case.exp_dir / "artifact_manifest.json").is_file(), "clean removed durable artifacts")
 
 
@@ -276,7 +274,7 @@ def check_preflight_manifest(group_dir: Path, declared_input: Path) -> None:
     )
     require(result.returncode == 1, "preflight failure did not return 1")
     require((exp_dir / "artifact_manifest.json").is_file(), "preflight manifest missing")
-    require(not (exp_dir / ".claude-tap.log").exists(), "tap started before bwrap preflight")
+    require(not (exp_dir / "run/.claude-tap.log").exists(), "tap started before bwrap preflight")
 
 
 def check_clean_rejections(group_dir: Path) -> None:
@@ -393,11 +391,11 @@ def main() -> int:
         process.send_signal(signal.SIGINT)
         stdout, stderr = process.communicate(timeout=30)
         active_processes.remove(process)
-        (signal_case.exp_dir / "runner.stdout.log").write_text(stdout, encoding="utf-8")
-        (signal_case.exp_dir / "runner.stderr.log").write_text(stderr, encoding="utf-8")
+        (signal_case.exp_dir / "run/runner.stdout.log").write_text(stdout, encoding="utf-8")
+        (signal_case.exp_dir / "run/runner.stderr.log").write_text(stderr, encoding="utf-8")
         require(process.returncode == 130, f"SIGINT status was {process.returncode}, expected 130")
         require((signal_case.exp_dir / "signal-received.txt").is_file(), "workload group missed SIGINT")
-        require((signal_case.exp_dir / "rollout.jsonl").is_file(), "signal case rollout missing")
+        require((signal_case.exp_dir / "run/rollout.jsonl").is_file(), "signal case rollout missing")
 
         for case in cases:
             clean_case(case)

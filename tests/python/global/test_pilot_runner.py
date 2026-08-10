@@ -199,12 +199,13 @@ class RunnerTests(unittest.TestCase):
         self.assertIn("--tap-no-launch", argv)
         self.assertEqual(
             popen.call_args.kwargs["env"]["CLOUDTAP_DB"],
-            str(self.exp_dir / "traces.sqlite3"),
+            str(self.exp_dir / "run/traces.sqlite3"),
         )
         self.assertTrue(popen.call_args.kwargs["start_new_session"])
 
     def test_ready_port_comes_from_this_process_log(self) -> None:
-        log_path = self.exp_dir / ".claude-tap.log"
+        log_path = self.exp_dir / "run/.claude-tap.log"
+        log_path.parent.mkdir()
         log_path.write_text(
             "claude-tap listening on http://127.0.0.1:18888\n",
             encoding="utf-8",
@@ -218,7 +219,8 @@ class RunnerTests(unittest.TestCase):
         self.assertEqual(port, 18888)
 
     def test_ready_detects_cancel_and_early_exit(self) -> None:
-        log_path = self.exp_dir / ".claude-tap.log"
+        log_path = self.exp_dir / "run/.claude-tap.log"
+        log_path.parent.mkdir()
         log_path.write_text("", encoding="utf-8")
         self.assertIsNone(
             self.supervisor.wait_ready(
@@ -267,7 +269,8 @@ class RunnerTests(unittest.TestCase):
         signal_group.assert_called_once_with(workload, signal.SIGTERM)
 
     def test_finalized_trace_is_read_and_html_is_published_atomically(self) -> None:
-        db_path = self.exp_dir / "traces.sqlite3"
+        db_path = self.exp_dir / "run/traces.sqlite3"
+        db_path.parent.mkdir()
         with closing(sqlite3.connect(db_path)) as connection:
             connection.execute(
                 "CREATE TABLE sessions "
@@ -300,16 +303,17 @@ class RunnerTests(unittest.TestCase):
                 self.environ,
             )
         self.assertEqual(
-            (self.exp_dir / "trace.html").read_text(encoding="utf-8"),
+            (self.exp_dir / "run/trace.html").read_text(encoding="utf-8"),
             "<html>trace</html>",
         )
-        self.assertFalse((self.exp_dir / ".claude-tap.log.export").exists())
+        self.assertFalse((self.exp_dir / "run/.claude-tap.log.export").exists())
 
     def test_missing_and_active_trace_are_not_valid(self) -> None:
         with self.assertRaisesRegex(self.supervisor.TapError, "missing"):
             self.supervisor.read_trace(self.exp_dir)
 
-        db_path = self.exp_dir / "traces.sqlite3"
+        db_path = self.exp_dir / "run/traces.sqlite3"
+        db_path.parent.mkdir()
         with closing(sqlite3.connect(db_path)) as connection:
             connection.execute(
                 "CREATE TABLE sessions "
@@ -326,7 +330,8 @@ class RunnerTests(unittest.TestCase):
         )
 
     def test_failed_export_preserves_sqlite_and_does_not_publish_html(self) -> None:
-        db_path = self.exp_dir / "traces.sqlite3"
+        db_path = self.exp_dir / "run/traces.sqlite3"
+        db_path.parent.mkdir()
         db_path.write_bytes(b"sqlite")
         with mock.patch.object(
             self.supervisor.subprocess,
@@ -340,8 +345,8 @@ class RunnerTests(unittest.TestCase):
                 self.environ,
             )
         self.assertTrue(db_path.is_file())
-        self.assertFalse((self.exp_dir / "trace.html").exists())
-        self.assertTrue((self.exp_dir / ".claude-tap.log.export").is_file())
+        self.assertFalse((self.exp_dir / "run/trace.html").exists())
+        self.assertTrue((self.exp_dir / "run/.claude-tap.log.export").is_file())
 
     def test_success_injects_only_loopback_tap_url_and_requires_trace(self) -> None:
         tap = FakeProcess()
@@ -658,7 +663,7 @@ class ProductionPathContractTests(unittest.TestCase):
                 text=True,
             )
             ignored = (exp_dir / ".gitignore").read_text(encoding="utf-8")
-            reviews_exists = (exp_dir / "reviews").is_dir()
+            run_exists = (exp_dir / "run").is_dir()
             name = subprocess.run(
                 ["git", "config", "user.name"],
                 cwd=exp_dir,
@@ -667,10 +672,10 @@ class ProductionPathContractTests(unittest.TestCase):
                 text=True,
             )
         self.assertTrue(head.stdout.strip())
-        self.assertIn("traces.sqlite3", ignored)
+        self.assertIn("run/", ignored)
         self.assertIn("artifact_manifest.json", ignored)
         self.assertEqual(name.stdout.strip(), "pilot")
-        self.assertTrue(reviews_exists)
+        self.assertTrue(run_exists)
 
     def test_manifest_includes_hidden_cad_reviews_and_runtime_files(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
@@ -682,9 +687,9 @@ class ProductionPathContractTests(unittest.TestCase):
                 "{}\n",
                 encoding="utf-8",
             )
-            (exp_dir / ".codex-upper").mkdir()
-            (exp_dir / ".codex-upper" / "state.db").write_bytes(b"private")
-            (exp_dir / "stderr.log").write_text("diagnostic\n", encoding="utf-8")
+            (exp_dir / "run/.codex-upper").mkdir(parents=True)
+            (exp_dir / "run/.codex-upper/state.db").write_bytes(b"private")
+            (exp_dir / "run/stderr.log").write_text("diagnostic\n", encoding="utf-8")
             load_runner().write_artifact_manifest(exp_dir, 0, 0)
             manifest = json.loads(
                 (exp_dir / "artifact_manifest.json").read_text(encoding="utf-8")
@@ -696,15 +701,79 @@ class ProductionPathContractTests(unittest.TestCase):
             [
                 ".part.step/topology.json",
                 "reviews/iso_20260730T120000Z.png",
-                "stderr.log",
+                "run/stderr.log",
             ],
         )
-        self.assertNotIn(".codex-upper/state.db", paths)
+        self.assertNotIn("run/.codex-upper/state.db", paths)
+
+    def test_workspace_delivery_gate_uses_public_validator_graph(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            exp_dir = Path(temp) / "exp"
+            exp_dir.mkdir()
+            runner = load_runner()
+            completed = SimpleNamespace(
+                returncode=0,
+                stdout=json.dumps(
+                    {
+                        "ok": True,
+                        "valid": True,
+                        "graph": {
+                            "schema": "mesh-to-cad.step-index/1",
+                            "final_delivery": {
+                                "selected_step": 2,
+                                "accepted": False,
+                                "identity_sha256": "a" * 64,
+                            },
+                        },
+                    }
+                ),
+                stderr="",
+            )
+            with mock.patch.object(
+                runner.subprocess,
+                "run",
+                return_value=completed,
+            ) as validate:
+                delivery = runner.validate_workspace_delivery(exp_dir)
+        self.assertEqual(delivery["selected_step"], 2)
+        argv = validate.call_args.args[0]
+        self.assertIn("validate", argv)
+        self.assertEqual(argv[-1], str(exp_dir))
+
+    def test_workspace_delivery_gate_rejects_valid_graph_without_final(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            exp_dir = Path(temp) / "exp"
+            exp_dir.mkdir()
+            runner = load_runner()
+            completed = SimpleNamespace(
+                returncode=0,
+                stdout=json.dumps(
+                    {
+                        "ok": True,
+                        "valid": True,
+                        "graph": {
+                            "schema": "mesh-to-cad.step-index/1",
+                            "final_delivery": None,
+                        },
+                    }
+                ),
+                stderr="",
+            )
+            with mock.patch.object(
+                runner.subprocess,
+                "run",
+                return_value=completed,
+            ):
+                with self.assertRaisesRegex(
+                    runner.PilotError,
+                    "complete Final Delivery",
+                ):
+                    runner.validate_workspace_delivery(exp_dir)
 
     def test_finalize_keeps_rollout_anomaly_priority(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             exp_dir = Path(temp) / "exp"
-            (exp_dir / ".codex-upper").mkdir(parents=True)
+            (exp_dir / "run/.codex-upper").mkdir(parents=True)
             status = load_runner().finalize_pilot(exp_dir, 7, {})
             manifest = json.loads(
                 (exp_dir / "artifact_manifest.json").read_text(encoding="utf-8")
@@ -717,7 +786,7 @@ class ProductionPathContractTests(unittest.TestCase):
             exp_dir = Path(temp) / "exp"
             rollout = (
                 exp_dir
-                / ".codex-upper"
+                / "run/.codex-upper"
                 / "sessions"
                 / "a"
                 / "b"
@@ -727,8 +796,8 @@ class ProductionPathContractTests(unittest.TestCase):
             rollout.parent.mkdir(parents=True)
             rollout.write_text("{}\n", encoding="utf-8")
             status = load_runner().finalize_pilot(exp_dir, 9, {})
-            captured = (exp_dir / "rollout.jsonl").read_text(encoding="utf-8")
-            upper_exists = (exp_dir / ".codex-upper").exists()
+            captured = (exp_dir / "run/rollout.jsonl").read_text(encoding="utf-8")
+            upper_exists = (exp_dir / "run/.codex-upper").exists()
             manifest_exists = (exp_dir / "artifact_manifest.json").is_file()
         self.assertEqual(status, 9)
         self.assertEqual(captured, "{}\n")
@@ -740,7 +809,7 @@ class ProductionPathContractTests(unittest.TestCase):
             exp_dir = Path(temp) / "exp"
             rollout = (
                 exp_dir
-                / ".codex-upper"
+                / "run/.codex-upper"
                 / "sessions"
                 / "a"
                 / "b"
@@ -750,7 +819,7 @@ class ProductionPathContractTests(unittest.TestCase):
             rollout.parent.mkdir(parents=True)
             rollout.write_text("{}\n", encoding="utf-8")
             status = load_runner().finalize_pilot(exp_dir, 0, {})
-            upper_exists = (exp_dir / ".codex-upper").exists()
+            upper_exists = (exp_dir / "run/.codex-upper").exists()
             manifest = json.loads(
                 (exp_dir / "artifact_manifest.json").read_text(encoding="utf-8")
             )
@@ -763,7 +832,7 @@ class ProductionPathContractTests(unittest.TestCase):
             exp_dir = Path(temp) / "exp"
             rollout = (
                 exp_dir
-                / ".codex-upper"
+                / "run/.codex-upper"
                 / "sessions"
                 / "a"
                 / "b"
@@ -772,11 +841,15 @@ class ProductionPathContractTests(unittest.TestCase):
             )
             rollout.parent.mkdir(parents=True)
             rollout.write_text("{}\n", encoding="utf-8")
-            (exp_dir / "reviews").mkdir()
-            (exp_dir / "reviews" / "final.png").write_bytes(b"png")
-            status = load_runner().finalize_pilot(exp_dir, 0, {})
-            captured = (exp_dir / "rollout.jsonl").read_text(encoding="utf-8")
-            upper_exists = (exp_dir / ".codex-upper").exists()
+            runner = load_runner()
+            with mock.patch.object(
+                runner,
+                "validate_workspace_delivery",
+                return_value={"selected_step": 0, "accepted": True},
+            ):
+                status = runner.finalize_pilot(exp_dir, 0, {})
+            captured = (exp_dir / "run/rollout.jsonl").read_text(encoding="utf-8")
+            upper_exists = (exp_dir / "run/.codex-upper").exists()
             manifest_exists = (exp_dir / "artifact_manifest.json").is_file()
         self.assertEqual(status, 0)
         self.assertEqual(captured, "{}\n")
@@ -788,7 +861,7 @@ class ProductionPathContractTests(unittest.TestCase):
             exp_dir = Path(temp) / "exp"
             rollout = (
                 exp_dir
-                / ".codex-upper"
+                / "run/.codex-upper"
                 / "sessions"
                 / "a"
                 / "b"
@@ -797,14 +870,18 @@ class ProductionPathContractTests(unittest.TestCase):
             )
             rollout.parent.mkdir(parents=True)
             rollout.write_text("{}\n", encoding="utf-8")
-            (exp_dir / "reviews").mkdir()
-            (exp_dir / "reviews" / "final.gif").write_bytes(b"gif")
-            status = load_runner().finalize_pilot(
-                exp_dir,
-                0,
-                {"KEEP_STATE": "1"},
-            )
-            upper_exists = (exp_dir / ".codex-upper").exists()
+            runner = load_runner()
+            with mock.patch.object(
+                runner,
+                "validate_workspace_delivery",
+                return_value={"selected_step": 0, "accepted": True},
+            ):
+                status = runner.finalize_pilot(
+                    exp_dir,
+                    0,
+                    {"KEEP_STATE": "1"},
+                )
+            upper_exists = (exp_dir / "run/.codex-upper").exists()
         self.assertEqual(status, 0)
         self.assertTrue(upper_exists)
 
@@ -961,7 +1038,7 @@ class ProductionPathContractTests(unittest.TestCase):
             exp_dir = Path(temp) / "exp"
             rollout = (
                 exp_dir
-                / ".codex-upper"
+                / "run/.codex-upper"
                 / "sessions"
                 / "a"
                 / "b"
@@ -970,13 +1047,18 @@ class ProductionPathContractTests(unittest.TestCase):
             )
             rollout.parent.mkdir(parents=True)
             rollout.write_text("{}\n", encoding="utf-8")
-            (exp_dir / "reviews").mkdir()
-            (exp_dir / "reviews" / "final.png").write_bytes(b"png")
             runner = load_runner()
-            with mock.patch.object(
-                runner,
-                "cleanup_sandbox",
-                side_effect=runner.PilotError("cleanup failed"),
+            with (
+                mock.patch.object(
+                    runner,
+                    "validate_workspace_delivery",
+                    return_value={"selected_step": 0, "accepted": True},
+                ),
+                mock.patch.object(
+                    runner,
+                    "cleanup_sandbox",
+                    side_effect=runner.PilotError("cleanup failed"),
+                ),
             ):
                 status = runner.finalize_pilot(exp_dir, 0, {})
             manifest = json.loads(
@@ -989,7 +1071,7 @@ class ProductionPathContractTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp:
             repo_root = Path(temp) / "repo"
             exp_dir = repo_root / "outputs" / "group" / "exp"
-            (exp_dir / ".codex-upper").mkdir(parents=True)
+            (exp_dir / "run/.codex-upper").mkdir(parents=True)
             runner = load_runner()
             with mock.patch.object(runner, "REPO_ROOT", repo_root):
                 first = runner.main(["clean", str(exp_dir)])
@@ -1000,11 +1082,11 @@ class ProductionPathContractTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp:
             repo_root = Path(temp) / "repo"
             outside = repo_root / "do-not-delete"
-            (outside / ".codex-upper").mkdir(parents=True)
+            (outside / "run/.codex-upper").mkdir(parents=True)
             runner = load_runner()
             with mock.patch.object(runner, "REPO_ROOT", repo_root):
                 status = runner.main(["clean", str(outside)])
-            upper_exists = (outside / ".codex-upper").exists()
+            upper_exists = (outside / "run/.codex-upper").exists()
         self.assertEqual(status, 1)
         self.assertTrue(upper_exists)
 
