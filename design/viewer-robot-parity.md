@@ -118,103 +118,64 @@ interact with §2.1: if links become pickable, pose-picking and link-selection a
 things a click could mean, and the toolbar already has a mode concept (`tabToolMode`) to
 disambiguate them.
 
-## 2. Plan
+## 2. Plan — status
 
-Same discipline as the format-unification phases: each is independently shippable, each
-states its gate, and none of them adds a parallel stack. Ordered by user-visible value
-over effort.
+R2 (display modes) and R5 (export) were dropped by the owner: robots do not need
+display modes, and URDF/SRDF/SDF are end of the line — they IMPORT 3D formats rather than
+producing them, so there is nothing to export. Everything else is done.
 
-### R0 — the robot is in the standing gate (DONE, this branch)
+| Phase | Status |
+|---|---|
+| R0 robot in the standing sweep | **DONE** `4456420f` |
+| R1 links are parts | **DONE** `116495de` — except the Tree PANEL, see R1b |
+| R2 display modes / clip / exploded | **dropped** (not wanted) |
+| R3 progressive loading | **DONE** `b2052a75` |
+| R4 robots in the headless renderer | **DONE** `e849884f` |
+| R5 export | **dropped** (robots are end of the line) |
+| R6 framing | **ANSWERED by R3**, no bug — see below |
 
-A `robots/so101/so101.urdf` fixture in `viewer/scripts/e2e-format-sweep.mjs`, asserting
-the same things every other format is asserted on: not blank, no page errors, the whole
-viewport tool cluster present and usable, and the viewport menu open with camera actions.
-Every phase below gates on this staying green.
+### R1 — links are parts (done, one piece deferred)
 
-Note for anyone running it: robot fixtures need `git lfs checkout models/robots/so101`
-first, and the robot's window is 26 s until R3 lands.
+`buildRobotAssemblyRoot` turns urdfData plus the preview's parts into exactly the node
+shape `buildStepTreeRoot` returns, and `isAssemblyView` became "does this entry have a part
+tree?" rather than "is the entry kind assembly". A robot's links are now selectable,
+hideable, isolatable and zoom-to-fit-able in the viewport, and the part context menu works.
 
-### R1 — links are parts
+**R1b — the Tree PANEL is still missing**, deliberately. It is 556 lines inside
+`StepFileSheet` reading 20 props and 33 derived locals. Sharing it means extracting it,
+with the viewer's most-used surface as the blast radius; writing a second, simpler tree for
+robots is the parallel stack this whole effort exists to remove. The robot section list
+does NOT claim a `tree` id it cannot render. Sized here so the next person can judge it.
 
-Declare `parts: true` for the robot row and publish the URDF link tree through the same
-`stepTreeRoot` shape the STEP path uses, so the shared Tree section, selection, hide,
-isolate and zoom-to-fit-selection all mount unchanged.
+### R3 — progressive loading (done)
 
-1. Build a tree from `urdfData` links/joints (one node per link, nested by joint parent)
-   and feed it wherever `stepTreeRoot` is fed, gated on `parts` rather than on the STEP
-   format — the gate is already capability-shaped after U3.
-2. Tag each link's mesh with its link name as the part id so picking resolves.
-3. Leave `topology: false`: a robot has no BREP faces or edges, and the registry test
-   already asserts topology implies parts, not the reverse.
-4. Decide the click contract against `posePicker` (§1.8) — recommended: pose-picking stays
-   an explicit tool mode, so a plain click selects a link like it does everywhere else.
+    before   15.7 s to first pixel, 15.7 s to toolbar
+    after     1.8 s to first pixel,  1.8 s to toolbar, complete by ~8 s
 
-Gate: select, isolate, hide and zoom-to-fit a single link on `so101` and on a
-multi-branch robot (`openarm-bimanual`); STEP tree behaviour pixel-unchanged; ratchet not
-raised.
+The loader hands each mesh over as it lands and the robot republishes on every arrival.
+`urdfViewerLoading` had to become "is there nothing to draw yet?" rather than "is the fetch
+still running?" — the renderer clears the model outright while loading, so the status-based
+gate would have held the blank card up until the last link and thrown the benefit away.
 
-### R2 — display modes, clip and exploded for robots
+### R4 — robots in the headless renderer (done)
 
-With links as parts (R1), all three are capability flips plus whatever falls out:
-`displayModes: true, clip: true, exploded: true`, and `THEME_DISPLAY` added to the robot
-arm of `fileSheetSections.js`. Every implementation already operates on mesh data and part
-records, which a robot has.
+`packages/cadjs/src/lib/urdf/loadRobot.js` is the assembly step with no UI attached;
+`loadSource` grows a robot branch so a robot reaches the shared mesh backend as ordinary
+mesh data. The CLI takes `.urdf`/`.srdf`/`.sdf` and poses with `jointValues`. Verified:
+still, posed still (visibly different), 72-frame orbit GIF, and list mode reporting link
+visuals as part refs.
 
-Exploded view is the interesting one: the hierarchical radial explode is defined over an
-assembly tree, and a robot tree is a kinematic chain — an exploded robot should be
-inspected before it is shipped, since "radially bloom the links" may or may not read well
-on a serial arm.
+Found on the way: `sceneScale` was accepted, validated, then overwritten with `"cad"`
+unconditionally, so a robot was framed for a workpiece a thousand times its size. Now
+honoured, and defaulted for robot jobs.
 
-Gate: each of the three modes on `so101`; a screenshot per mode recorded in the sweep's
-output dir; STEP unchanged.
+### R6 — framing (answered, not fixed)
 
-### R3 — progressive robot loading
-
-Two independent changes, in value order:
-
-1. **Surface the stage the loader already computes.** `urdfLoadStage` produces
-   `loading meshes 7/13`; route it into the viewport loading label, not only the file-list
-   chip. Small, and turns a 15 s blank wait into a progress readout.
-2. **Render links as they arrive.** Publish `urdfState` incrementally — a link with its
-   mesh loaded draws; a link without one is skipped — so the robot appears in pieces and
-   completes, instead of appearing whole at the end. `ASSET_STATUS.READY` still waits for
-   the full set, so nothing downstream changes its contract.
-
-Gate: measured time-to-first-pixel and time-to-toolbar-usable on `so101`, reported against
-the 15.7 s baseline in §1.5; the sweep's robot window drops back toward the 9 s the other
-formats use.
-
-### R4 — robots in the headless renderer
-
-The largest piece, and the one that unblocks robot snapshots for skills and CI.
-
-1. Teach `resolveHeadlessJobKind` a `robot` kind (it currently knows `implicit` and
-   `mesh`), and the snapshot CLI to accept `.urdf`/`.srdf`/`.sdf` inputs.
-2. Assemble the robot headlessly — the viewer's `selectedUrdfPreview` already turns
-   `urdfData` + link meshes into ordinary mesh data with world transforms; that is the
-   piece to share, and it is UI-free, so it belongs in `packages/cadjs`.
-3. Feed the result to the existing headless mesh backend. Camera, appearance, projection,
-   orbit and size profiles come for free.
-4. Joint values are the robot's analogue of STEP `--params`: a `--joints` JSON, and the
-   animated sweep that already exists for parameter animation gives robot motion GIFs.
-
-Gate: `snapshot so101.urdf` produces a still and an orbit GIF; a posed render differs from
-the rest pose; the CLI's rejection message stops naming robot descriptions as unsupported.
-
-### R5 — export
-
-`exportFormats: ["stl", "glb", "3mf"]` for the robot row, and a `generate_robot_export`
-beside the implicit one in `viewer/server_py/backend.py`, exporting the assembled robot at
-its current joint values. Depends on R4's shared assembly step; without it this would be a
-second assembler.
-
-Gate: export each format from the viewer; re-import the GLB and confirm the pose matches.
-
-### R6 — framing
-
-Diagnose §1.6 with the DXF precedent in mind: check the robot's published bounds for
-outliers before touching the fit. A link with a degenerate or far-off-origin visual origin
-would produce exactly this symptom.
+The 0.10 sweep coverage was measured at 16 s — the instant an all-or-nothing robot
+appeared. With links streaming the same fixture sweeps in line with the mesh formats, and
+the settled framing is correct by screenshot. No bounds outlier; the DXF suspicion did not
+carry over. The sweep's robot coverage NUMBER varies run to run (0.15–0.57) because the
+sample lands at different points in the settle; the assertion is only "not blank".
 
 ## 3. Non-goals
 
