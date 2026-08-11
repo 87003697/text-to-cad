@@ -52,6 +52,17 @@ VIEWER_ARTIFACT_ROUTES = (
         "skills/cad-viewer/scripts/viewer/dist/index.html",
     ),
 )
+VIEWER_SOURCE_TRANSFER_FILTERS = (
+    "--include=/viewer/",
+    "--include=/viewer/scripts/",
+    "--include=/viewer/scripts/start-agent-viewer.mjs",
+    "--include=/viewer/src/",
+    "--include=/viewer/src/client/",
+    "--include=/viewer/src/client/main.jsx",
+    "--include=/viewer/src/server/",
+    "--include=/viewer/src/server/server.mjs",
+    "--exclude=/viewer/***",
+)
 PROVIDER_FREE_EXECUTION_FILES = (
     "scripts/pilot/cvm-submit.sh",
     "scripts/pilot/cvm_job/protocol.py",
@@ -1065,6 +1076,7 @@ class CvmPush:
             "-avz",
             "--progress",
             f"--include={IMPLICIT_NODE_MODULES_INCLUDE}",
+            *VIEWER_SOURCE_TRANSFER_FILTERS,
             "--include=/models/",
             "--include=/models/simple/",
             "--include=/models/simple/rectangular_clamp_block.py",

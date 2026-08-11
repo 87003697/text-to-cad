@@ -15,6 +15,7 @@ from pathlib import Path
 from unittest import mock
 
 from scripts.pilot import deployment_authority
+from scripts.pilot import provider_free_scenarios
 from tests.python.support.paths import REPO_ROOT
 
 
@@ -1208,6 +1209,34 @@ class TransferAndVerifyTests(unittest.TestCase):
             self.assertEqual(
                 remote_plugin_marker.read_text(encoding="utf-8"),
                 "keep remote\n",
+            )
+
+    def test_production_transfer_preserves_viewer_source_identity(self) -> None:
+        with tempfile.TemporaryDirectory() as root_text:
+            root = Path(root_text)
+            repo = create_repo(root)
+            stage = root / "stage"
+            target = root / "target"
+            create_runtime(stage)
+            runner = FakeRunner()
+            workflow = cvm_push.CvmPush(runner, repo_root=repo, environ={})
+
+            workflow.transfer_stage(stage)
+            argv = list(runner.streams[0][0])
+            argv[-1] = f"{target}/"
+            result = subprocess.run(
+                argv,
+                check=False,
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            receipt = provider_free_scenarios.deployed_viewer_receipt(target)
+            self.assertEqual(
+                [artifact["role"] for artifact in receipt["artifacts"]],
+                ["launcher", "server", "client"],
             )
 
     def test_remote_verification_uses_full_contract_and_exact_hashes(self) -> None:
