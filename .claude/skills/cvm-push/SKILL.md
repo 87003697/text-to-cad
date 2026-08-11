@@ -17,16 +17,36 @@ description: >-
 
 ## Workflow
 
-1. 调脚本：用 Bash tool 跑 `scripts/pilot/cvm-push.sh`，把 `run_in_background` 设为 `true`。
-   记下 stdout 里的 `Log: ${TMPDIR:-/tmp}/cvm-push-<ts>.log`。
-   脚本会把当前 checkout 复制到隔离 staging，在 staging 内物化全部 production
-   skill runtime，再把实体 bundle 上传到 CVM；不会修改 source checkout 的开发
-   symlink 或共享依赖缓存。稳定 shell 入口只负责调用 `cvm_push.py`；Python workflow
-   按 `Preflight → Resolve inputs → Stage → Validate/attest → Transfer → Verify`
-   编排，并用同一份 runtime contract 做本地和远端验收。
-2. arm Monitor tool tail log：
-   `tail -F <log> | grep -E --line-buffered '(Source:|Building physical|CVM runtime verified|xfer#|sent [0-9]+ bytes|total size|Remote Git base|error|failed|rsync:)'`
-3. 汇报（见 § Handoff）。
+1. 把代码写入 CVM 是独立外部操作；测试、实现或 review 请求不授权真实 push。取得
+   本次 push 的明确授权后再启动命令。
+2. 人工直接运行 `scripts/pilot/cvm-push.sh`，保留实时 rsync 进度。Agent 运行
+   `scripts/pilot/cvm-push.sh --agent`：详细输出只写本地 log，stdout 是阶段 NDJSON，
+   最后一行是 `cvm-push.receipt/1` receipt。
+3. 等待同一个 terminal session 或 background task 终止，按 § Long wait 执行。
+4. 从 receipt 汇报结果（见 § Handoff）。
+
+脚本会把当前 checkout 复制到隔离 staging，在 staging 内物化全部 production skill
+runtime，再把实体 bundle 上传到 CVM；不会修改 source checkout 的开发 symlink 或共享
+依赖缓存。稳定 shell 入口只负责调用 `cvm_push.py`；Python workflow 按
+`Preflight → Stage → Transfer → Verify` 编排，并用同一份 runtime contract 做本地和远端
+验收。
+
+## Long wait
+
+把等待保持为暂停的 orchestration state：每个 quiet interval 只做一次 runtime-max
+blocking wait；terminal completion 会提前 hand back。精确的更早 deadline 可以缩短
+等待，普通进度不能。
+
+- **Codex**：保留启动命令返回的 terminal session；用空输入 `write_stdin` 等待，内部
+  terminal wait 与外层 orchestration yield 都取各自 runtime 支持的最长 interval。
+- **Claude**：用 background Bash 启动并保留 task handle；用一个 blocking
+  `TaskOutput` 等待，timeout 取 runtime 支持的最大值。
+
+一次工具等待窗口无事件结束不是 push 失败。此时至多做一次只读状态检查；状态未变则
+重新进入同样的 long wait。terminal handback 后直接解析 receipt，不做例行状态读取。
+用户主动询问、精确 deadline 或真正的 runtime timeout 可以单独唤醒检查。正常路径不
+启动 `tail -F`，不循环短 wait，也不周期性读取 log、`ps` 或远端状态。`wait_agent`
+只用于 subagent；这里复用其 long-wait 规则，不用它等待 terminal。
 
 ## Non-negotiable
 
@@ -75,9 +95,9 @@ description: >-
 ## Handoff
 
 脚本退出后回给用户：
-- 传输总量 / speed（从 log 尾 `sent X bytes received Y bytes ... bytes/sec` 段读）
-- source branch / HEAD / clean-or-dirty state（从 `Source:` 行读取）
-- CVM Git base（从 `Remote Git base:` 行读取，并明确它不是 deployment identity）
+- 传输总量 / speed（receipt `transfer`；rsync 未提供可解析 summary 时为 `null`）
+- source branch / HEAD / clean-or-dirty state（receipt `source`）
+- CVM Git base（receipt `remote_git_base`，并明确它不是 deployment identity）
 - 关键运行文件如需严格部署证明，比较 source/CVM SHA-256；不能只引用 CVM HEAD
 - 下一步提示（推荐先做 group snapshot，再 submit + monitor）：
   ```
@@ -91,7 +111,11 @@ Do not replace submit or monitoring with raw SSH. For strict deployment proof,
 compare SHA-256 for `scripts/pilot/cvm_job/`, `toys4k-pilot.sh`, and
 `toys4k-batch.sh`; remote Git HEAD is not deployment identity.
 
-失败：
+失败先读 receipt 并保留它的非零 `exit_code`。只有 receipt 缺失或不足以解释失败时，
+才读取一次经过过滤且限长的 log 尾；不把 rsync 进度重新送入模型上下文。
+
+- receipt 缺失且 process 被 `SIGKILL`、机器掉电或解释器崩溃 → 把缺失 receipt 与
+  现有 log 作为中断证据；不推断远端完成
 - exit 1（cwd 错） → 提示切 repo 根
 - exit 2（CVM 目标缺） → 提示 `ssh cvm 'ls ~/'`
 - exit 3（磁盘 <3G） → 汇报剩余 GB + 提示 `ssh cvm 'du -sh ~/*'` 清理
@@ -103,7 +127,14 @@ compare SHA-256 for `scripts/pilot/cvm_job/`, `toys4k-pilot.sh`, and
   随后重新 push
 - rsync code 23 且包含 `could not make way for new regular file: .git` →
   检查 `.cvmignore` 同时包含 `.git/` 和 `.git`
-- 其他 → 贴 log 尾 20 行
+- 其他 → 汇报 receipt `phase` / `error`；信息不足时再贴过滤后的 log 尾 20 行
+
+## Validation boundary
+
+默认本地验证可以运行 FakeRunner、临时 receipt/log、wrapper fake module 和临时目录间
+的本地 rsync 测试。任何加载正式 `cvm_push.py` 并执行真实 `scripts/pilot/cvm-push.sh`
+的集成测试都可能 SSH/rsync 写 CVM，必须取得单独、逐次的明确授权；它不属于默认
+test suite，也不授权重试、pilot、S3 或清理。
 
 ## 如何更新
 

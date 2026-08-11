@@ -3,15 +3,18 @@
 
 from __future__ import annotations
 
+import argparse
 import hashlib
 import json
 import os
+import re
 import shlex
 import shutil
 import subprocess
 import sys
 import tempfile
 import time
+import traceback
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
@@ -23,6 +26,10 @@ REMOTE_ROOT = "~/text-to-cad"
 REMOTE_DESTINATION = f"cvm:{REMOTE_ROOT}/"
 IMPLICIT_NODE_MODULES_INCLUDE = (
     "/skills/implicit-cad/scripts/packages/implicitjs/node_modules/***"
+)
+RSYNC_SUMMARY_PATTERN = re.compile(
+    r"sent ([\d,]+) bytes\s+received ([\d,]+) bytes\s+"
+    r"([\d,]+(?:\.\d+)?) bytes/sec"
 )
 
 # Source -> staging is intentionally different from staging -> CVM. The
@@ -126,6 +133,15 @@ class RuntimeAttestation:
 
     hashes: Mapping[str, str]
     chromium_revision: str
+
+
+@dataclass(frozen=True)
+class TransferSummary:
+    """Compact rsync totals retained after detailed progress stays in the log."""
+
+    sent_bytes: int | None = None
+    received_bytes: int | None = None
+    bytes_per_second: float | None = None
 
 
 PRODUCTION_RUNTIME = RuntimeContract(
@@ -323,19 +339,51 @@ class CvmPush:
         *,
         repo_root: Path = REPO_ROOT,
         environ: Mapping[str, str] | None = None,
+        agent: bool = False,
     ) -> None:
         self.runner = runner
         self.repo_root = repo_root.resolve()
         self.environ = dict(os.environ if environ is None else environ)
-        self.log_path = Path(
-            self.environ.get("TMPDIR", "/tmp")
-        ) / f"cvm-push-{time.strftime('%Y%m%d-%H%M%S')}.log"
+        self.agent = agent
+        self.run_id = (
+            f"{time.strftime('%Y%m%d-%H%M%S')}-{os.getpid()}-{time.time_ns()}"
+        )
+        output_root = Path(self.environ.get("TMPDIR", "/tmp"))
+        self.log_path = output_root / f"cvm-push-{self.run_id}.log"
+        self.receipt_path = output_root / f"cvm-push-{self.run_id}.receipt.json"
+        self.phase = "not_started"
+        self.source: SourceProvenance | None = None
+        self.transfer_summary = TransferSummary()
+        self.remote_head: str | None = None
 
     def _log(self, message: str, *, stderr: bool = False) -> None:
-        print(message, file=sys.stderr if stderr else sys.stdout)
+        if not self.agent:
+            print(message, file=sys.stderr if stderr else sys.stdout)
         self.log_path.parent.mkdir(parents=True, exist_ok=True)
         with self.log_path.open("a", encoding="utf-8") as log:
             print(message, file=log)
+
+    def _log_best_effort(self, message: str, *, stderr: bool = False) -> str | None:
+        try:
+            self._log(message, stderr=stderr)
+        except OSError as exc:
+            return f"{type(exc).__name__}: {exc}"
+        return None
+
+    def _enter_phase(self, phase: str) -> None:
+        self.phase = phase
+        if self.agent:
+            print(
+                json.dumps(
+                    {
+                        "schema": "cvm-push.event/1",
+                        "type": "phase",
+                        "phase": phase,
+                    },
+                    separators=(",", ":"),
+                    sort_keys=True,
+                )
+            )
 
     def preflight_local(self) -> None:
         """Gate 1a: require a repository source and local workflow tools."""
@@ -371,9 +419,9 @@ class CvmPush:
                 3,
             )
         if free_gb < 10:
-            print(
+            self._log(
                 f"WARN: CVM disk low: {free_gb}G free (threshold 10G).",
-                file=sys.stderr,
+                stderr=True,
             )
         return RemotePreflight(free_gb=free_gb)
 
@@ -717,6 +765,10 @@ class CvmPush:
     def transfer_stage(self, stage: Path) -> None:
         """Perform the one and only remote rsync for a complete stage."""
 
+        try:
+            log_offset = self.log_path.stat().st_size
+        except OSError:
+            log_offset = 0
         argv = [
             "rsync",
             "-avz",
@@ -730,7 +782,7 @@ class CvmPush:
             argv,
             cwd=self.repo_root,
             log_path=self.log_path,
-            echo=True,
+            echo=not self.agent,
         )
         if status != 0:
             raise PushError(
@@ -738,6 +790,27 @@ class CvmPush:
                 status,
                 transferred=True,
             )
+        self.transfer_summary = self._read_transfer_summary(log_offset)
+
+    def _read_transfer_summary(self, log_offset: int) -> TransferSummary:
+        try:
+            with self.log_path.open("rb") as log_file:
+                log_file.seek(log_offset)
+                log = log_file.read().decode("utf-8", errors="replace")
+        except OSError:
+            return TransferSummary()
+        matches = tuple(RSYNC_SUMMARY_PATTERN.finditer(log))
+        if not matches:
+            return TransferSummary()
+        sent, received, rate = matches[-1].groups()
+        try:
+            return TransferSummary(
+                sent_bytes=int(sent.replace(",", "")),
+                received_bytes=int(received.replace(",", "")),
+                bytes_per_second=float(rate.replace(",", "")),
+            )
+        except ValueError:
+            return TransferSummary()
 
     @staticmethod
     def _remote_runtime_command() -> str:
@@ -832,18 +905,21 @@ class CvmPush:
     def run(self) -> None:
         """Run the complete production deployment workflow."""
 
+        self._enter_phase("preflight")
         self.preflight_local()
         self.preflight_remote()
-        print(f"Log: {self.log_path}")
+        self._log(f"Log: {self.log_path}")
 
-        source = self.inspect_source()
+        self.source = self.inspect_source()
         self._log(
             "Source: "
-            f"branch={source.branch} head={source.head} state={source.state}"
+            f"branch={self.source.branch} head={self.source.head} "
+            f"state={self.source.state}"
         )
         self._log("Building physical CAD runtimes in an isolated stage...")
 
         try:
+            self._enter_phase("stage")
             inputs = self.resolve_build_inputs()
             with self.deployment_stage() as stage:
                 self.copy_source_to_stage(stage)
@@ -852,11 +928,13 @@ class CvmPush:
                 self.bundle_stage(stage)
                 self.validate_stage(stage)
                 attestation = self.attest_stage(stage)
+                self._enter_phase("transfer")
                 self.transfer_stage(stage)
+                self._enter_phase("verify")
                 self.verify_remote(attestation)
         except PushError as exc:
             if exc.status == 4 and not exc.transferred:
-                self._log(
+                self._log_best_effort(
                     "CVM production staging failed; no files transferred.",
                     stderr=True,
                 )
@@ -866,21 +944,117 @@ class CvmPush:
             "CVM runtime verified: physical Viewer + implicit runtime, "
             "matching hashes, and Playwright browser revision"
         )
-        remote_head = self.remote_git_base()
+        self.remote_head = self.remote_git_base()
         self._log(
-            f"Remote Git base: {remote_head} "
+            f"Remote Git base: {self.remote_head} "
             "(rsync overlay; not deployment identity)"
         )
+        self.phase = "complete"
+
+    def receipt(self, *, status: str, exit_code: int, error: str | None) -> dict:
+        source = None
+        if self.source is not None:
+            source = {
+                "branch": self.source.branch,
+                "head": self.source.head,
+                "state": self.source.state,
+            }
+        return {
+            "schema": "cvm-push.receipt/1",
+            "type": "receipt",
+            "status": status,
+            "exit_code": exit_code,
+            "phase": self.phase,
+            "error": error,
+            "log_path": str(self.log_path),
+            "receipt_path": str(self.receipt_path),
+            "source": source,
+            "transfer": {
+                "sent_bytes": self.transfer_summary.sent_bytes,
+                "received_bytes": self.transfer_summary.received_bytes,
+                "bytes_per_second": self.transfer_summary.bytes_per_second,
+            },
+            "remote_git_base": self.remote_head,
+        }
+
+    def write_receipt(self, receipt: Mapping[str, object]) -> None:
+        self.receipt_path.parent.mkdir(parents=True, exist_ok=True)
+        temporary = self.receipt_path.with_name(f".{self.receipt_path.name}.tmp")
+        try:
+            temporary.write_text(
+                json.dumps(receipt, separators=(",", ":"), sort_keys=True) + "\n",
+                encoding="utf-8",
+            )
+            temporary.replace(self.receipt_path)
+        finally:
+            temporary.unlink(missing_ok=True)
 
 
-def main() -> int:
-    workflow = CvmPush(CommandRunner())
+def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        description="Build, transfer, and verify a production CVM deployment."
+    )
+    parser.add_argument(
+        "--agent",
+        action="store_true",
+        help="emit compact machine-readable events while detailed progress stays in the log",
+    )
+    return parser.parse_args(argv)
+
+
+def execute(workflow: CvmPush) -> int:
+    log_write_error = None
     try:
         workflow.run()
     except PushError as exc:
-        print(str(exc), file=sys.stderr)
-        return exc.status
-    return 0
+        exit_code = exc.status
+        error = str(exc)
+        log_write_error = workflow._log_best_effort(error, stderr=True)
+    except KeyboardInterrupt:
+        exit_code = 130
+        error = "interrupted"
+        log_write_error = workflow._log_best_effort(error, stderr=True)
+    except Exception as exc:
+        exit_code = 1
+        error = str(exc) or type(exc).__name__
+        log_write_error = workflow._log_best_effort(
+            traceback.format_exc().rstrip(), stderr=True
+        )
+    else:
+        exit_code = 0
+        error = None
+    receipt = workflow.receipt(
+        status="succeeded" if exit_code == 0 else "failed",
+        exit_code=exit_code,
+        error=error,
+    )
+    if log_write_error is not None:
+        receipt["log_write_error"] = log_write_error
+    receipt_written = False
+    try:
+        workflow.write_receipt(receipt)
+        receipt_written = True
+    except OSError as exc:
+        receipt["receipt_write_error"] = f"{type(exc).__name__}: {exc}"
+        if exit_code == 0:
+            exit_code = 1
+            receipt.update(
+                status="failed",
+                exit_code=exit_code,
+                error="receipt write failed",
+            )
+    if workflow.agent:
+        print(json.dumps(receipt, separators=(",", ":"), sort_keys=True))
+    elif receipt_written:
+        print(f"Receipt: {workflow.receipt_path}")
+    else:
+        print(receipt["receipt_write_error"], file=sys.stderr)
+    return exit_code
+
+
+def main(argv: Sequence[str] | None = None) -> int:
+    args = parse_args(argv)
+    return execute(CvmPush(CommandRunner(), agent=args.agent))
 
 
 if __name__ == "__main__":
