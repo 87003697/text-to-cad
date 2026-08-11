@@ -10,21 +10,32 @@ surface.  Nothing in the primary surface is filleted, because nothing there is
 joined.
 
 Assembly tree is grouped BY SYSTEM, which is also how the explode parameter
-moves things:
+moves things.
+
+OCCURRENCE ORDER IS BY WHAT ACTUALLY BUILDS, not by the SYSTEMS list below.
+A system that is missing or that raises is skipped rather than failing the
+aircraft, so it takes no occurrence number and everything after it shifts up.
+Three of the thirteen produce no group today -- ``glove``, ``engines`` and
+``markings`` have no module yet -- so the built aircraft is these ten, and
+``f14d.params.js`` refs are numbered against them:
 
     o1.1  airframe    the one-piece blended skin, cut and detailed
     o1.2  cockpit     tub, panels, seats, HUD, canopy, windscreen
-    o1.3  glove       pivot boxes, vane bays, seal fairings
-    o1.4  wings       panels, slats, flaps, spoilers, tip lights
-    o1.5  inlets      ramps, splitters, bleed slots, ducts
-    o1.6  engines     F110-GE-400 cores and compressor faces
-    o1.7  nozzles     C-D nozzles, petals, actuator rings
-    o1.8  empennage   fins, rudders, stabilators, ventral fins
-    o1.9  aft         speed brakes, beavertail, tailhook, dump mast
-    o1.10 nose_gear   leg, wheels, launch bar, doors, bay
-    o1.11 main_gear   legs, wheels, brakes, doors, bays
-    o1.12 details     antennas, probes, lights, wicks, vents, panels
-    o1.13 markings    insignia, BuNo, squadron heraldry, stencils
+    o1.3  wings       panels, slats, flaps, spoilers, tip lights
+    o1.4  inlets      ramps, splitters, bleed slots, ducts
+    o1.5  nozzles     C-D nozzles, petals, seals, actuator rings
+    o1.6  empennage   fins, rudders, stabilators, ventral fins
+    o1.7  aft         speed brakes, beavertail, tailhook, dump mast
+    o1.8  nose_gear   leg, wheels, launch bar, doors, bay
+    o1.9  main_gear   legs, wheels, brakes, doors, bays
+    o1.10 details     antennas, probes, lights, wicks, vents, panels
+
+    (no group: glove, engines, markings -- no module)
+
+Adding any missing module RENUMBERS every occurrence after it, so
+``f14d.params.js`` has to be renumbered in the same commit.  ``nozzles`` is the
+worked example: it silently dropped out of the aircraft for a while because its
+revolve raised ``TopoDS::Solid``, and restoring it moved five systems by one.
 """
 
 from __future__ import annotations
@@ -110,4 +121,10 @@ def gen_step():
             print(f"[f14d] skip {name}: build failed: {exc}", file=sys.stderr)
     if not groups:
         raise RuntimeError("no F-14 part modules built")
-    return Compound(children=groups, label="f14d_super_tomcat")
+    return {
+        "shape": Compound(children=groups, label="f14d_super_tomcat"),
+        # Exploded-view animation. Declared here because a generated model owns
+        # its sidecar -- --params-path is rejected for one, and without this the
+        # file is just an unreferenced .js next to the generator.
+        "params": "f14d.params.js",
+    }
