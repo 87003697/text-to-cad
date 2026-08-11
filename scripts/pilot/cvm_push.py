@@ -47,6 +47,19 @@ VIEWER_ARTIFACT_ROUTES = (
         "skills/cad-viewer/scripts/viewer/dist/index.html",
     ),
 )
+PROVIDER_FREE_EXECUTION_FILES = (
+    "scripts/pilot/cvm-submit.sh",
+    "scripts/pilot/cvm_job/protocol.py",
+    "scripts/pilot/cvm_job/runtime.py",
+    "scripts/pilot/deployment_authority.py",
+    "scripts/pilot/provider_free_runner.py",
+    "scripts/pilot/provider_free_scenarios.py",
+    "skills/mesh-to-cad/scripts/mesh-to-cad-workspace/__main__.py",
+    "skills/mesh-compare/scripts/mesh-compare/cli.py",
+    "skills/cad/scripts/canonical-build/__main__.py",
+    "models/simple/rectangular_clamp_block.py",
+    "models/simple/simple_model_library.py",
+)
 
 # Source -> staging is intentionally different from staging -> CVM. The
 # staging copy keeps build-only inputs such as viewer/, packages/, and plugins/
@@ -159,6 +172,7 @@ PRODUCTION_RUNTIME = RuntimeContract(
         NATIVE_MESHSCOPE_RUNTIME,
     ),
     required_files=(
+        *PROVIDER_FREE_EXECUTION_FILES,
         "skills/cad-viewer/scripts/viewer/package.json",
         "skills/cad-viewer/scripts/viewer/backend/server.mjs",
         "skills/cad-viewer/scripts/viewer/scripts/start-agent-viewer.mjs",
@@ -192,6 +206,7 @@ PRODUCTION_RUNTIME = RuntimeContract(
         ),
     ),
     hash_files=(
+        *PROVIDER_FREE_EXECUTION_FILES,
         "skills/cad-viewer/scripts/viewer/backend/server.mjs",
         "skills/cad-viewer/scripts/viewer/scripts/start-agent-viewer.mjs",
         "skills/cad-viewer/scripts/viewer/dist/index.html",
@@ -573,6 +588,16 @@ class CvmPush:
                 f"Cannot copy source into CVM stage: {result.stderr.strip()}",
                 4,
             )
+        for relative in (
+            "models/simple/rectangular_clamp_block.py",
+            "models/simple/simple_model_library.py",
+        ):
+            source = self.repo_root / relative
+            destination = stage / relative
+            if not source.is_file():
+                raise PushError(f"Missing provider-free fixture: {relative}", 4)
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(source, destination)
 
     def copy_build_inputs(
         self,
@@ -838,6 +863,10 @@ class CvmPush:
             "-avz",
             "--progress",
             f"--include={IMPLICIT_NODE_MODULES_INCLUDE}",
+            "--include=/models/",
+            "--include=/models/simple/",
+            "--include=/models/simple/rectangular_clamp_block.py",
+            "--include=/models/simple/simple_model_library.py",
             f"--exclude-from={self.repo_root / '.cvmignore'}",
             f"{stage}/",
             REMOTE_DESTINATION,
@@ -895,6 +924,39 @@ class CvmPush:
                 5,
                 transferred=True,
             )
+
+    def publish_remote_deployment_authority(self, source_head: str) -> dict[str, object]:
+        """Create and independently check the complete deployed execution tree."""
+
+        command = "\n".join(
+            (
+                "set -eu",
+                f"cd {REMOTE_ROOT}",
+                (
+                    "python3 scripts/pilot/deployment_authority.py write . "
+                    f"--source-head {shlex.quote(source_head)} >/dev/null"
+                ),
+                "python3 scripts/pilot/deployment_authority.py check .",
+            )
+        )
+        result = self.runner.remote(command, cwd=self.repo_root, check=False)
+        if result.returncode != 0:
+            raise PushError(
+                "CVM deployed source authority publication failed",
+                5,
+                transferred=True,
+            )
+        try:
+            receipt = json.loads(result.stdout)
+        except json.JSONDecodeError as exc:
+            raise PushError("CVM deployed source authority output is invalid", 5) from exc
+        if (
+            not isinstance(receipt, dict)
+            or receipt.get("schema") != "cvm.deployed-source-authority/1"
+            or receipt.get("source_head") != source_head
+        ):
+            raise PushError("CVM deployed source authority identity conflicts", 5)
+        return receipt
 
     @staticmethod
     def _remote_runtime_command() -> str:
@@ -1052,6 +1114,7 @@ class CvmPush:
                 attestation = self.attest_stage(stage)
                 self.transfer_stage(stage)
                 self.build_remote_native_runtime()
+                source_authority = self.publish_remote_deployment_authority(source.head)
                 deployment_receipt = self.verify_remote(attestation)
         except PushError as exc:
             if exc.status == 4 and not exc.transferred:
@@ -1068,6 +1131,10 @@ class CvmPush:
         self._log(
             "Viewer deployment receipt: "
             + json.dumps(deployment_receipt, sort_keys=True, separators=(",", ":"))
+        )
+        self._log(
+            "Deployed source authority: "
+            + json.dumps(source_authority, sort_keys=True, separators=(",", ":"))
         )
         remote_head = self.remote_git_base()
         self._log(

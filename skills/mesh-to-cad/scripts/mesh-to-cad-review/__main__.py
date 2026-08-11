@@ -6,7 +6,8 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
-from pathlib import Path
+from pathlib import Path, PurePosixPath
+import stat
 import subprocess
 import sys
 from typing import Any
@@ -26,6 +27,25 @@ DEFAULT_AUTHORITY_HELPER = (
     if _INSTALLED_AUTHORITY_HELPER.is_dir()
     else "workspace-authority"
 )
+_DEPLOYED_AUTHORITY_PATHS = (
+    "scripts/pilot",
+    "skills/mesh-to-cad/scripts/mesh-to-cad-workspace",
+    "skills/mesh-to-cad/scripts/mesh-to-cad-authority",
+    "skills/mesh-compare/scripts/mesh-compare",
+    "skills/mesh-compare/scripts/packages/meshscope",
+    "skills/mesh-compare/scripts/packages/meshshot",
+    "skills/cad/scripts/canonical-build",
+    "skills/cad/scripts/packages",
+    "skills/implicit-cad/scripts/packages/implicitjs",
+    "skills/cad-viewer/scripts/viewer",
+    "models/simple/rectangular_clamp_block.py",
+    "models/simple/simple_model_library.py",
+)
+_DEPLOYED_AUTHORITY_EXCLUSIONS = {
+    "directory_names": [".git", "__pycache__", "node_modules"],
+    "file_suffixes": [".dylib", ".pyc", ".pyd"],
+    "native_shared_objects_included": True,
+}
 
 
 class ReviewError(RuntimeError):
@@ -160,6 +180,7 @@ def _runner_verdict(workspace: Path) -> tuple[str, list[dict[str, str]]]:
 
 def _runtime_authority_verdict(
     workspace: Path,
+    payload: dict[str, Any] | None = None,
 ) -> tuple[str, dict[str, str], list[dict[str, str]], list[str]]:
     """Audit the optional closed provider-free runtime-authority receipt."""
 
@@ -178,7 +199,88 @@ def _runtime_authority_verdict(
     try:
         receipt = _read_json(receipt_path)
         proof = _read_json(workspace / "run/provider-free-execution.json")
+        deployed = _read_json(workspace / "run/deployed-source-authority.json")
+        sandbox = _read_json(workspace / "run/sandbox-enforcement.json")
         manifest = _read_json(workspace / "artifact_manifest.json")
+        if (
+            deployed.get("schema") != "cvm.deployed-source-authority/1"
+            or deployed.get("contract_paths") != list(_DEPLOYED_AUTHORITY_PATHS)
+            or deployed.get("exclusions") != _DEPLOYED_AUTHORITY_EXCLUSIONS
+        ):
+            raise ReviewError("complete deployed source authority is missing")
+        deployed_files = deployed.get("files")
+        if not isinstance(deployed_files, list) or not deployed_files:
+            raise ReviewError("deployed source authority inventory is empty")
+        retained_root = workspace / "run/deployed-source"
+        actual_files: list[dict[str, Any]] = []
+        for path in sorted(retained_root.rglob("*")):
+            relative = path.relative_to(retained_root).as_posix()
+            mode = path.lstat().st_mode
+            if stat.S_ISLNK(mode):
+                raise ReviewError(f"retained deployed source contains symlink: {relative}")
+            if stat.S_ISDIR(mode):
+                continue
+            if not stat.S_ISREG(mode):
+                raise ReviewError(f"retained deployed source contains special file: {relative}")
+            data = path.read_bytes()
+            actual_files.append(
+                {
+                    "path": relative,
+                    "size_bytes": len(data),
+                    "sha256": hashlib.sha256(data).hexdigest(),
+                }
+            )
+        actual_files.sort(key=lambda item: item["path"])
+        if actual_files != deployed_files:
+            raise ReviewError(
+                "retained deployed source does not match complete inventory: "
+                f"expected={len(deployed_files)} actual={len(actual_files)}"
+            )
+        if (
+            deployed.get("file_count") != len(actual_files)
+            or deployed.get("total_bytes")
+            != sum(item["size_bytes"] for item in actual_files)
+            or deployed.get("tree_sha256")
+            != hashlib.sha256(
+                json.dumps(
+                    actual_files, sort_keys=True, separators=(",", ":")
+                ).encode()
+            ).hexdigest()
+        ):
+            raise ReviewError("retained deployed source tree identity conflicts")
+        if not any(
+            item["path"].startswith(
+                "skills/mesh-compare/scripts/packages/meshscope/"
+            )
+            and Path(item["path"]).name.startswith("_native")
+            and Path(item["path"]).suffix == ".so"
+            for item in actual_files
+        ):
+            raise ReviewError("retained deployed source lacks native meshscope binary")
+        if (
+            set(sandbox)
+            != {
+                "schema",
+                "network",
+                "argv",
+                "environment_names",
+                "resource_limits",
+            }
+            or sandbox.get("schema")
+            != "cvm.provider-free-sandbox-enforcement/1"
+            or sandbox.get("network") != "isolated-loopback"
+            or not isinstance(sandbox.get("argv"), list)
+            or "--unshare-net" not in sandbox["argv"]
+            or "--cap-drop" not in sandbox["argv"]
+            or "ALL" not in sandbox["argv"]
+            or not set(sandbox.get("environment_names", [])).issubset(
+                {"HOME", "LANG", "PATH", "PYTHONDONTWRITEBYTECODE", "TZ"}
+            )
+            or not {"HOME", "PATH", "PYTHONDONTWRITEBYTECODE"}.issubset(
+                sandbox.get("environment_names", [])
+            )
+        ):
+            raise ReviewError("retained sandbox/egress enforcement is incomplete")
         required = {
             "schema",
             "scenario_identity",
@@ -205,6 +307,14 @@ def _runtime_authority_verdict(
             or not isinstance(workspace_receipt.get("final_delivery"), dict)
         ):
             raise ReviewError("runtime-authority Workspace receipt is incomplete")
+        graph = payload.get("graph") if isinstance(payload, dict) else None
+        canonical_delivery = graph.get("final_delivery") if isinstance(graph, dict) else None
+        claimed_delivery = workspace_receipt.get("final_delivery")
+        if not isinstance(canonical_delivery, dict) or any(
+            claimed_delivery.get(field) != canonical_delivery.get(field)
+            for field in ("selected_step", "accepted", "identity_sha256", "manifest")
+        ):
+            raise ReviewError("runtime receipt Final Delivery conflicts with canonical Workspace")
         deployment = receipt["viewer_deployment"]
         artifacts = deployment.get("artifacts") if isinstance(deployment, dict) else None
         if (
@@ -221,6 +331,22 @@ def _runtime_authority_verdict(
             )
         ):
             raise ReviewError("Viewer source/bundle/deployed receipt is incomplete")
+        retained_by_path = {item["path"]: item for item in actual_files}
+        for artifact in artifacts:
+            for layer in ("source", "bundle", "deployed"):
+                identity = artifact.get(layer)
+                relative = identity.get("path") if isinstance(identity, dict) else None
+                pure = PurePosixPath(relative) if isinstance(relative, str) else None
+                if (
+                    pure is None
+                    or pure.is_absolute()
+                    or any(part in {"", ".", ".."} for part in pure.parts)
+                    or retained_by_path.get(relative, {}).get("sha256")
+                    != identity.get("sha256")
+                ):
+                    raise ReviewError(
+                        f"Viewer {layer} digest lacks retained deployed file authority"
+                    )
         fallback = receipt["viewer_fallback"]
         if (
             not isinstance(fallback, dict)
@@ -254,6 +380,18 @@ def _runtime_authority_verdict(
         tree_bytes = json.dumps(files, sort_keys=True, separators=(",", ":")).encode()
         if shipped.get("tree_sha256") != hashlib.sha256(tree_bytes).hexdigest():
             raise ReviewError("shipped-runtime tree receipt digest conflicts")
+        shipped_root = shipped.get("root")
+        if shipped_root != "skills/cad-viewer/scripts/viewer":
+            raise ReviewError("shipped-runtime root conflicts")
+        actual_shipped = []
+        prefix = f"{shipped_root}/"
+        for item in actual_files:
+            if item["path"].startswith(prefix):
+                actual_shipped.append(
+                    {**item, "path": item["path"][len(prefix) :]}
+                )
+        if files != actual_shipped:
+            raise ReviewError("shipped-runtime receipt does not match retained tree")
         if (
             set(proof)
             != {
@@ -261,9 +399,11 @@ def _runtime_authority_verdict(
                 "job",
                 "scenario",
                 "execution_profile",
+                "request_authority",
                 "sandbox",
                 "provider_environment",
                 "requests",
+                "sandbox_enforcement",
             }
             or proof.get("schema") != "cvm.provider-free-execution/1"
             or proof.get("scenario")
@@ -284,8 +424,55 @@ def _runtime_authority_verdict(
             or proof.get("provider_environment", {}).get("credential_values_recorded")
             is not False
             or proof.get("requests") != {"model_gateway": 0, "provider": 0, "tap": 0}
+            or proof.get("sandbox_enforcement")
+            != "run/sandbox-enforcement.json"
+            or proof.get("request_authority", {}).get(
+                "deployment_tree_sha256"
+            )
+            != deployed.get("tree_sha256")
         ):
             raise ReviewError("provider-free execution proof is incomplete")
+        immutable_request = proof.get("request_authority", {}).get(
+            "immutable_request"
+        )
+        if not isinstance(immutable_request, dict):
+            raise ReviewError("provider-free immutable request is missing")
+        immutable_digest = hashlib.sha256(
+            b"cvm.provider-free-request-authority/1\0"
+            + json.dumps(
+                immutable_request, sort_keys=True, separators=(",", ":")
+            ).encode()
+        ).hexdigest()
+        if (
+            proof.get("request_authority", {}).get("sha256")
+            != immutable_digest
+            or immutable_request.get("job_kind") != "provider-free"
+            or immutable_request.get("object") != "issue15-runtime-authority"
+            or immutable_request.get("group") != workspace.parent.name
+            or immutable_request.get("exp") != workspace.name
+            or immutable_request.get("exp_dir")
+            != f"outputs/{workspace.parent.name}/{workspace.name}"
+            or immutable_request.get("scenario") != proof.get("scenario")
+            or immutable_request.get("execution_profile")
+            != proof.get("execution_profile")
+            or immutable_request.get("request_authority", {}).get(
+                "deployment_tree_sha256"
+            )
+            != deployed.get("tree_sha256")
+        ):
+            raise ReviewError("provider-free immutable request binding conflicts")
+        expected_job = f"{workspace.parent.name}/{workspace.name}"
+        provider_environment = proof.get("provider_environment", {})
+        stripped = provider_environment.get("stripped")
+        if (
+            proof.get("job") != expected_job
+            or provider_environment.get("allowlist")
+            != ["HOME", "LANG", "PATH", "PYTHONDONTWRITEBYTECODE", "TZ"]
+            or not isinstance(stripped, list)
+            or stripped != sorted(set(stripped))
+            or set(stripped).intersection(provider_environment.get("allowlist", []))
+        ):
+            raise ReviewError("provider-free job/environment binding conflicts")
         command_path = receipt["commands"]
         if command_path != "run/provider-free-commands.jsonl":
             raise ReviewError("public-command receipt path conflicts")
@@ -301,6 +488,8 @@ def _runtime_authority_verdict(
             evidence,
             "run/provider-free-execution.json",
             command_path,
+            "run/deployed-source-authority.json",
+            "run/sandbox-enforcement.json",
         ):
             path = workspace / relative
             data = path.read_bytes()
@@ -310,6 +499,10 @@ def _runtime_authority_verdict(
                 or entry.get("size_bytes") != len(data)
                 or entry.get("sha256") != hashlib.sha256(data).hexdigest()
             ):
+                raise ReviewError(f"terminal manifest does not bind {relative}")
+        for item in actual_files:
+            relative = f"run/deployed-source/{item['path']}"
+            if manifest_by_path.get(relative) != {**item, "path": relative}:
                 raise ReviewError(f"terminal manifest does not bind {relative}")
     except (OSError, TypeError, ReviewError) as exc:
         return (
@@ -676,7 +869,7 @@ def _canonical_review(
     delivery = graph.get("final_delivery")
     runner, issues = _runner_verdict(workspace)
     runtime, runtime_provenance, runtime_issues, runtime_gaps = (
-        _runtime_authority_verdict(workspace)
+        _runtime_authority_verdict(workspace, payload)
     )
     issues.extend(runtime_issues)
     accepted = bool(delivery.get("accepted")) if isinstance(delivery, dict) else False

@@ -75,6 +75,13 @@ def create_repo(root: Path) -> Path:
         (REPO_ROOT / "viewer/package-lock.json").read_text(encoding="utf-8"),
         encoding="utf-8",
     )
+    for relative in (
+        "models/simple/rectangular_clamp_block.py",
+        "models/simple/simple_model_library.py",
+    ):
+        path = repo / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(f"{relative}\n", encoding="utf-8")
     return repo
 
 
@@ -264,6 +271,20 @@ class BuildInputTests(unittest.TestCase):
 
 
 class StageTests(unittest.TestCase):
+    def test_runtime_attestation_hashes_all_provider_free_executed_code(self) -> None:
+        for relative in (
+            "scripts/pilot/cvm-submit.sh",
+            "scripts/pilot/cvm_job/protocol.py",
+            "scripts/pilot/cvm_job/runtime.py",
+            "scripts/pilot/deployment_authority.py",
+            "scripts/pilot/provider_free_runner.py",
+            "scripts/pilot/provider_free_scenarios.py",
+            "skills/mesh-to-cad/scripts/mesh-to-cad-workspace/__main__.py",
+            "skills/mesh-compare/scripts/mesh-compare/cli.py",
+            "skills/cad/scripts/canonical-build/__main__.py",
+        ):
+            self.assertIn(relative, cvm_push.PRODUCTION_RUNTIME.hash_files)
+
     def test_attestation_rejects_a_stale_generated_viewer_bundle(self) -> None:
         with tempfile.TemporaryDirectory() as root_text:
             stage = Path(root_text)
@@ -461,6 +482,29 @@ class StageTests(unittest.TestCase):
 
 
 class TransferAndVerifyTests(unittest.TestCase):
+    def test_remote_native_build_publishes_complete_deployed_source_authority(self) -> None:
+        with tempfile.TemporaryDirectory() as root_text:
+            root = Path(root_text)
+            runner = FakeRunner()
+            runner.respond(
+                "deployment_authority.py write",
+                json.dumps(
+                    {
+                        "schema": "cvm.deployed-source-authority/1",
+                        "source_head": "a" * 40,
+                    }
+                ),
+            )
+            workflow = cvm_push.CvmPush(runner, repo_root=root, environ={})
+
+            receipt = workflow.publish_remote_deployment_authority("a" * 40)
+
+            command = runner.remote_commands[0]
+            self.assertIn("deployment_authority.py write", command)
+            self.assertIn("deployment_authority.py check", command)
+            self.assertIn("--source-head", command)
+            self.assertEqual(receipt["source_head"], "a" * 40)
+
     def test_remote_native_build_compiles_the_physical_meshscope_bundle(self) -> None:
         with tempfile.TemporaryDirectory() as root_text:
             root = Path(root_text)
@@ -709,6 +753,12 @@ class WorkflowTests(unittest.TestCase):
             workflow.build_remote_native_runtime = lambda: events.append(
                 "build-native"
             )
+            workflow.publish_remote_deployment_authority = (
+                lambda source_head: (
+                    events.append(f"publish-authority:{source_head}"),
+                    {"schema": "cvm.deployed-source-authority/1"},
+                )[1]
+            )
             workflow.verify_remote = lambda expected: (
                 events.append("verify"),
                 {
@@ -736,6 +786,7 @@ class WorkflowTests(unittest.TestCase):
                     "attest",
                     "transfer",
                     "build-native",
+                    "publish-authority:deadbeef",
                     "verify",
                 ],
             )

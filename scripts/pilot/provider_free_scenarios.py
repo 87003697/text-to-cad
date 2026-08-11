@@ -8,10 +8,11 @@ import hashlib
 import http.server
 import json
 import os
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 import selectors
 import shutil
 import signal
+import stat
 import subprocess
 import sys
 import threading
@@ -71,6 +72,32 @@ def _identity(schema: str, payload: dict[str, Any]) -> str:
     return hashlib.sha256(schema.encode("utf-8") + b"\0" + _json_bytes(payload)).hexdigest()
 
 
+def _physical_contained_file(root: Path, relative_text: object, label: str) -> Path:
+    if not isinstance(relative_text, str):
+        raise ScenarioError(f"Viewer {label} path is invalid")
+    pure = PurePosixPath(relative_text)
+    if pure.is_absolute() or any(part in {"", ".", ".."} for part in pure.parts):
+        raise ScenarioError(f"Viewer {label} path escapes repository")
+    root_resolved = root.resolve(strict=True)
+    current = root_resolved
+    for part in pure.parts:
+        current = current / part
+        try:
+            mode = current.lstat().st_mode
+        except OSError as exc:
+            raise ScenarioError(f"Viewer {label} path is missing") from exc
+        if stat.S_ISLNK(mode):
+            raise ScenarioError(f"Viewer {label} path contains a symlink")
+    resolved = current.resolve(strict=True)
+    try:
+        resolved.relative_to(root_resolved)
+    except ValueError as exc:
+        raise ScenarioError(f"Viewer {label} path escapes repository") from exc
+    if not resolved.is_file():
+        raise ScenarioError(f"Viewer {label} artifact must be a physical file")
+    return resolved
+
+
 def _closed_identity_document(path: Path) -> dict[str, Any]:
     try:
         value = json.loads(path.read_text(encoding="utf-8"))
@@ -115,19 +142,13 @@ def deployed_viewer_receipt(repo_root: Path = REPO_ROOT) -> dict[str, Any]:
             or set(bundle) != {"path", "sha256"}
         ):
             raise ScenarioError("Viewer source/bundle identity is invalid")
-        source_path = repo_root / str(source["path"])
-        try:
-            source_path.relative_to(repo_root)
-        except ValueError as exc:
-            raise ScenarioError("Viewer source path escapes repository") from exc
-        if source_path.is_symlink() or not source_path.is_file():
-            raise ScenarioError("Viewer source artifact must be a physical file")
+        source_path = _physical_contained_file(repo_root, source["path"], "source")
         source_sha = _sha256(source_path)
         if source_sha != source["sha256"]:
             raise ScenarioError("Viewer source artifact digest conflicts with identity")
-        deployed = repo_root / str(bundle["path"])
+        deployed = _physical_contained_file(repo_root, bundle["path"], "bundle")
         try:
-            deployed.relative_to(runtime)
+            deployed.relative_to(runtime.resolve(strict=True))
         except ValueError as exc:
             raise ScenarioError("Viewer bundle path escapes deployed runtime") from exc
         if deployed.is_symlink() or not deployed.is_file():

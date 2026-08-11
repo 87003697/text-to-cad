@@ -102,6 +102,34 @@ class ProviderFreeScenarioEvidenceTests(unittest.TestCase):
         with self.assertRaisesRegex(provider_free_scenarios.ScenarioError, "source.*digest"):
             provider_free_scenarios.deployed_viewer_receipt(self.repo)
 
+    def test_deployed_viewer_receipt_rejects_traversal_and_parent_symlinks(self) -> None:
+        identity_path = self.runtime / "runtime-identity.json"
+        original_text = identity_path.read_text(encoding="utf-8")
+        for mutation in ("traversal", "parent-symlink"):
+            with self.subTest(mutation=mutation):
+                identity = json.loads(original_text)
+                if mutation == "traversal":
+                    outside = self.repo.parent / "outside-viewer-source"
+                    outside.write_text("outside\n", encoding="utf-8")
+                    identity["artifacts"][0]["source"] = {
+                        "path": "../outside-viewer-source",
+                        "sha256": hashlib.sha256(outside.read_bytes()).hexdigest(),
+                    }
+                else:
+                    source = self.repo / identity["artifacts"][0]["source"]["path"]
+                    moved = self.repo / "real-viewer-source"
+                    source.parent.rename(moved)
+                    source.parent.symlink_to(moved, target_is_directory=True)
+                identity_path.write_text(json.dumps(identity), encoding="utf-8")
+
+                with self.assertRaisesRegex(
+                    provider_free_scenarios.ScenarioError,
+                    "source.*(path|physical|escape|symlink)",
+                ):
+                    provider_free_scenarios.deployed_viewer_receipt(self.repo)
+                if mutation == "traversal":
+                    identity_path.write_text(original_text, encoding="utf-8")
+
     def test_native_depth_eight_evidence_requires_explicit_native_identity(self) -> None:
         summary = {
             "schema": "voxblame.summary/1",

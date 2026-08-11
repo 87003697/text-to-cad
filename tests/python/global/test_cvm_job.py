@@ -16,6 +16,7 @@ from unittest import mock
 
 from scripts.pilot.cvm_job import __main__ as cvm_job_cli
 from scripts.pilot.cvm_job import protocol, runtime
+from scripts.pilot import deployment_authority
 from tests.python.support.paths import REPO_ROOT
 from tests.python.support.tmp_root import temporary_directory
 
@@ -34,6 +35,20 @@ class CvmJobTests(unittest.TestCase):
         self.repo_root = self.workspace / "repo"
         self.repo_root.mkdir()
         (self.repo_root / "outputs").mkdir()
+        for declared in deployment_authority.EXECUTION_AUTHORITY_PATHS:
+            path = self.repo_root / declared
+            if path.suffix:
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text(f"{declared}\n", encoding="utf-8")
+            else:
+                path.mkdir(parents=True, exist_ok=True)
+                (path / "authority-marker.txt").write_text(
+                    f"{declared}\n", encoding="utf-8"
+                )
+        deployment_authority.write_receipt(
+            self.repo_root,
+            source_head="a" * 40,
+        )
         self.repo_patch = mock.patch.object(runtime, "REPO_ROOT", self.repo_root)
         self.repo_patch.start()
         self.group = "20260805-170000-audit"
@@ -74,6 +89,13 @@ class CvmJobTests(unittest.TestCase):
             "job": handle,
             "scenario": state["scenario"],
             "execution_profile": state["execution_profile"],
+            "request_authority": {
+                "sha256": state["request_authority_sha256"],
+                "deployment_tree_sha256": state["request_authority"][
+                    "deployment_tree_sha256"
+                ],
+                "immutable_request": protocol.request_authority_payload(state),
+            },
             "sandbox": {
                 "network": "isolated-loopback",
                 "resource_profile": state["execution_profile"]["id"],
@@ -89,6 +111,7 @@ class CvmJobTests(unittest.TestCase):
                 "credential_values_recorded": False,
             },
             "requests": {"model_gateway": 0, "provider": 0, "tap": 0},
+            "sandbox_enforcement": "run/sandbox-enforcement.json",
         }
         proof_path = exp_dir / "run" / "provider-free-execution.json"
         proof_path.parent.mkdir(parents=True, exist_ok=True)
@@ -105,6 +128,42 @@ class CvmJobTests(unittest.TestCase):
             }
         ]
         if complete:
+            deployed_receipt = json.loads(
+                (self.repo_root / ".cvm-deployment.json").read_text(
+                    encoding="utf-8"
+                )
+            )
+            deployment_authority.materialize_receipt(
+                self.repo_root,
+                deployed_receipt,
+                exp_dir / "run/deployed-source",
+            )
+            (exp_dir / "run/deployed-source-authority.json").write_text(
+                json.dumps(deployed_receipt, sort_keys=True, separators=(",", ":"))
+                + "\n",
+                encoding="utf-8",
+            )
+            (exp_dir / "run/sandbox-enforcement.json").write_text(
+                json.dumps(
+                    {
+                        "schema": "cvm.provider-free-sandbox-enforcement/1",
+                        "network": "isolated-loopback",
+                        "argv": ["bwrap", "--unshare-net", "--cap-drop", "ALL"],
+                        "environment_names": [
+                            "HOME",
+                            "LANG",
+                            "PATH",
+                            "PYTHONDONTWRITEBYTECODE",
+                            "TZ",
+                        ],
+                        "resource_limits": {"wall_seconds": 1800},
+                    },
+                    sort_keys=True,
+                    separators=(",", ":"),
+                )
+                + "\n",
+                encoding="utf-8",
+            )
             for name, data in (
                 ("run/runtime-authority-smoke.json", b"{}\n"),
                 ("workspace-authority.json", b"{}\n"),
@@ -122,6 +181,19 @@ class CvmJobTests(unittest.TestCase):
                         "sha256": hashlib.sha256(data).hexdigest(),
                     }
                 )
+            for path in sorted((exp_dir / "run").rglob("*")):
+                relative = path.relative_to(exp_dir).as_posix()
+                if path.is_file() and relative not in {
+                    item["path"] for item in files
+                }:
+                    data = path.read_bytes()
+                    files.append(
+                        {
+                            "path": relative,
+                            "size_bytes": len(data),
+                            "sha256": hashlib.sha256(data).hexdigest(),
+                        }
+                    )
         manifest = {
             "schema_version": 1,
             "workload_status": 0,
@@ -177,6 +249,16 @@ class CvmJobTests(unittest.TestCase):
                 "id": "issue15.provider-free-bounded/1",
                 "provider_access": "forbidden",
             },
+        )
+        self.assertEqual(
+            state["request_authority"]["deployment_tree_sha256"],
+            json.loads(
+                (self.repo_root / ".cvm-deployment.json").read_text(encoding="utf-8")
+            )["tree_sha256"],
+        )
+        self.assertEqual(
+            state["request_authority_sha256"],
+            protocol.request_authority_sha256(state),
         )
         self.assertIn("supervise-provider-free", detached["command"])
 

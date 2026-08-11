@@ -10,6 +10,8 @@ import sys
 import tempfile
 import unittest
 
+from scripts.pilot import deployment_authority
+
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 REVIEWER_PATH = (
@@ -332,7 +334,8 @@ class PilotReviewTests(unittest.TestCase):
         self.assertTrue((self.exp / "review.md").is_file())
 
     def test_reviewer_audits_provider_free_runtime_authority_receipt(self) -> None:
-        helper = self.helper(self.canonical_experiment())
+        workspace_payload = self.canonical_experiment()
+        helper = self.helper(workspace_payload)
         shipped_files = [
             {"path": "runtime-identity.json", "size_bytes": 2, "sha256": "1" * 64}
         ]
@@ -439,11 +442,170 @@ class PilotReviewTests(unittest.TestCase):
             },
         )
 
+        pre_verdict, _provenance, pre_issues, _gaps = (
+            self.reviewer._runtime_authority_verdict(self.exp)
+        )
+        self.assertEqual("not_auditable", pre_verdict)
+        self.assertEqual("observability-gap", pre_issues[0]["classification"])
+
+        deployed_root = self.root / "deployed-source"
+        for declared in deployment_authority.EXECUTION_AUTHORITY_PATHS:
+            path = deployed_root / declared
+            if path.suffix:
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text(f"{declared}\n", encoding="utf-8")
+            else:
+                path.mkdir(parents=True, exist_ok=True)
+                (path / "authority-marker.txt").write_text(
+                    f"{declared}\n", encoding="utf-8"
+                )
+        native = (
+            deployed_root
+            / "skills/mesh-compare/scripts/packages/meshscope/"
+            "src/meshscope/voxblame/_native.cpython.so"
+        )
+        native.parent.mkdir(parents=True, exist_ok=True)
+        native.write_bytes(b"native")
+        viewer_root = deployed_root / "skills/cad-viewer/scripts/viewer"
+        viewer_artifacts = []
+        for role, token in (
+            ("launcher", b"launcher"),
+            ("server", b"server"),
+            ("client", b"client"),
+        ):
+            source_path = f"skills/cad-viewer/scripts/viewer/source/{role}"
+            bundle_path = f"skills/cad-viewer/scripts/viewer/bundle/{role}"
+            (deployed_root / source_path).parent.mkdir(parents=True, exist_ok=True)
+            (deployed_root / source_path).write_bytes(b"source-" + token)
+            (deployed_root / bundle_path).parent.mkdir(parents=True, exist_ok=True)
+            (deployed_root / bundle_path).write_bytes(token)
+            viewer_artifacts.append(
+                {
+                    "role": role,
+                    "source": {
+                        "path": source_path,
+                        "sha256": hashlib.sha256(b"source-" + token).hexdigest(),
+                    },
+                    "bundle": {
+                        "path": bundle_path,
+                        "sha256": hashlib.sha256(token).hexdigest(),
+                    },
+                    "deployed": {
+                        "path": bundle_path,
+                        "sha256": hashlib.sha256(token).hexdigest(),
+                    },
+                }
+            )
+        receipt["viewer_deployment"]["artifacts"] = viewer_artifacts
+        shipped_files = []
+        for path in sorted(viewer_root.rglob("*")):
+            if path.is_file():
+                data = path.read_bytes()
+                shipped_files.append(
+                    {
+                        "path": path.relative_to(viewer_root).as_posix(),
+                        "size_bytes": len(data),
+                        "sha256": hashlib.sha256(data).hexdigest(),
+                    }
+                )
+        receipt["shipped_tree"] = {
+            "schema": "cvm.deployed-runtime-tree-receipt/1",
+            "root": "skills/cad-viewer/scripts/viewer",
+            "file_count": len(shipped_files),
+            "total_bytes": sum(item["size_bytes"] for item in shipped_files),
+            "tree_sha256": hashlib.sha256(
+                json.dumps(
+                    shipped_files, sort_keys=True, separators=(",", ":")
+                ).encode()
+            ).hexdigest(),
+            "files": shipped_files,
+        }
+        receipt["workspace"]["final_delivery"] = workspace_payload["graph"][
+            "final_delivery"
+        ]
+        proof["job"] = f"{self.exp.parent.name}/{self.exp.name}"
+        deployed_receipt = deployment_authority.build_receipt(
+            deployed_root,
+            source_head="a" * 40,
+        )
+        immutable_request = {
+            "job_kind": "provider-free",
+            "object": "issue15-runtime-authority",
+            "group": self.exp.parent.name,
+            "exp": self.exp.name,
+            "exp_dir": f"outputs/{self.exp.parent.name}/{self.exp.name}",
+            "scenario": proof["scenario"],
+            "execution_profile": proof["execution_profile"],
+            "request_authority": {
+                "schema": "cvm.provider-free-request-authority/1",
+                "deployment_tree_sha256": deployed_receipt["tree_sha256"],
+            },
+        }
+        proof["request_authority"] = {
+            "sha256": hashlib.sha256(
+                b"cvm.provider-free-request-authority/1\0"
+                + json.dumps(
+                    immutable_request, sort_keys=True, separators=(",", ":")
+                ).encode()
+            ).hexdigest(),
+            "deployment_tree_sha256": deployed_receipt["tree_sha256"],
+            "immutable_request": immutable_request,
+        }
+        proof["sandbox_enforcement"] = "run/sandbox-enforcement.json"
+        deployment_authority.materialize_receipt(
+            deployed_root,
+            deployed_receipt,
+            self.exp / "run/deployed-source",
+        )
+        write_json(self.exp / "run/deployed-source-authority.json", deployed_receipt)
+        write_json(
+            self.exp / "run/sandbox-enforcement.json",
+            {
+                "schema": "cvm.provider-free-sandbox-enforcement/1",
+                "network": "isolated-loopback",
+                "argv": ["bwrap", "--unshare-net", "--cap-drop", "ALL"],
+                "environment_names": [
+                    "HOME",
+                    "LANG",
+                    "PATH",
+                    "PYTHONDONTWRITEBYTECODE",
+                    "TZ",
+                ],
+                "resource_limits": {"wall_seconds": 1800},
+            },
+        )
+        write_json(self.exp / "run/runtime-authority-smoke.json", receipt)
+        write_json(self.exp / "run/provider-free-execution.json", proof)
+        manifest_files = []
+        for path in sorted((self.exp / "run").rglob("*")):
+            if path.is_file():
+                data = path.read_bytes()
+                manifest_files.append(
+                    {
+                        "path": path.relative_to(self.exp).as_posix(),
+                        "size_bytes": len(data),
+                        "sha256": hashlib.sha256(data).hexdigest(),
+                    }
+                )
+        write_json(
+            self.exp / "artifact_manifest.json",
+            {
+                "schema_version": 1,
+                "workload_status": 0,
+                "final_status": 0,
+                "files": manifest_files,
+            },
+        )
+
         status = self.reviewer.main([str(self.exp), "--workspace-helper", str(helper)])
 
         self.assertEqual(status, 0)
         review = json.loads((self.exp / "review.json").read_text(encoding="utf-8"))
-        self.assertEqual("pass", review["verdicts"]["production_runtime_integration"])
+        self.assertEqual(
+            "pass",
+            review["verdicts"]["production_runtime_integration"],
+            review["issues"],
+        )
         self.assertEqual(
             "run/runtime-authority-smoke.json",
             review["contract_provenance"]["runtime_authority"],
@@ -453,7 +615,7 @@ class PilotReviewTests(unittest.TestCase):
         proof["requests"]["provider"] = 1
         write_json(self.exp / "run/provider-free-execution.json", proof)
         verdict, provenance, issues, gaps = self.reviewer._runtime_authority_verdict(
-            self.exp
+            self.exp, workspace_payload
         )
         self.assertEqual("not_auditable", verdict)
         self.assertEqual({}, provenance)

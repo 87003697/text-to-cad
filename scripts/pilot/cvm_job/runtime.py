@@ -15,6 +15,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Iterator, Sequence
 
+from scripts.pilot import deployment_authority
+
 from . import tap_observer
 from .protocol import (
     ProtocolError,
@@ -26,6 +28,8 @@ from .protocol import (
     parse_handle,
     public_state,
     publish_state,
+    request_authority_payload,
+    request_authority_sha256,
     state_path,
     transition,
     utc_now,
@@ -257,6 +261,21 @@ def submit_provider_free(
     if scenario is None:
         raise ProtocolError(f"unknown provider-free scenario: {scenario_name!r}")
     group = _validate_pilot_group(group)
+    receipt_path = REPO_ROOT / deployment_authority.RECEIPT_PATH
+    try:
+        receipt_bytes = receipt_path.read_bytes()
+        deployment_receipt = json.loads(receipt_bytes)
+        deployment_authority.verify_receipt(REPO_ROOT, deployment_receipt)
+    except (
+        OSError,
+        json.JSONDecodeError,
+        deployment_authority.DeploymentAuthorityError,
+    ) as exc:
+        raise ProtocolError("deployed source authority is missing or invalid") from exc
+    if deployment_receipt.get("contract_paths") != list(
+        deployment_authority.EXECUTION_AUTHORITY_PATHS
+    ):
+        raise ProtocolError("deployed source authority contract is incomplete")
     with _allocation_lock(root, group):
         exp = _allocate_exp(scenario.name, group, root)
         record = _pilot_record(scenario.name, group, exp, root)
@@ -268,8 +287,18 @@ def submit_provider_free(
                     "identity": scenario.identity,
                 },
                 "execution_profile": dict(PROVIDER_FREE_EXECUTION_PROFILE),
+                "request_authority": {
+                    "schema": "cvm.provider-free-request-authority/1",
+                    "deployment_receipt": deployment_authority.RECEIPT_PATH,
+                    "deployment_receipt_sha256": hashlib.sha256(
+                        receipt_bytes
+                    ).hexdigest(),
+                    "deployment_source_head": deployment_receipt["source_head"],
+                    "deployment_tree_sha256": deployment_receipt["tree_sha256"],
+                },
             }
         )
+        record["request_authority_sha256"] = request_authority_sha256(record)
         publish_state(root, record)
     command = [
         sys.executable,
@@ -300,6 +329,10 @@ def _provider_free_environment(
     environ: dict[str, str],
     *,
     profile_id: str,
+    handle: str,
+    request_authority_sha: str,
+    deployment_tree_sha: str,
+    immutable_request: dict[str, Any],
 ) -> dict[str, str]:
     """Build an allowlisted workload environment without credential values."""
 
@@ -314,6 +347,12 @@ def _provider_free_environment(
         {
             "CVM_PROVIDER_FREE_PROFILE": profile_id,
             "CVM_PROVIDER_FREE_STRIPPED_NAMES": ",".join(removed),
+            "CVM_PROVIDER_FREE_JOB": handle,
+            "CVM_PROVIDER_FREE_REQUEST_AUTHORITY_SHA256": request_authority_sha,
+            "CVM_PROVIDER_FREE_DEPLOYMENT_TREE_SHA256": deployment_tree_sha,
+            "CVM_PROVIDER_FREE_REQUEST_JSON": json.dumps(
+                immutable_request, sort_keys=True, separators=(",", ":")
+            ),
         }
     )
     return child
@@ -343,6 +382,13 @@ def _provider_free_evidence_result(
         "job": handle,
         "scenario": record["scenario"],
         "execution_profile": record["execution_profile"],
+        "request_authority": {
+            "sha256": record["request_authority_sha256"],
+            "deployment_tree_sha256": record["request_authority"][
+                "deployment_tree_sha256"
+            ],
+            "immutable_request": request_authority_payload(record),
+        },
         "sandbox": {
             "network": "isolated-loopback",
             "resource_profile": record["execution_profile"]["id"],
@@ -353,6 +399,7 @@ def _provider_free_evidence_result(
             "credential_values_recorded": False,
         },
         "requests": {"model_gateway": 0, "provider": 0, "tap": 0},
+        "sandbox_enforcement": "run/sandbox-enforcement.json",
     }
     if proof != expected_proof:
         return None, "provider-free execution evidence does not match job authority"
@@ -362,11 +409,66 @@ def _provider_free_evidence_result(
     required_paths = (
         PROVIDER_FREE_PROOF,
         "run/runtime-authority-smoke.json",
+        "run/deployed-source-authority.json",
+        "run/sandbox-enforcement.json",
         "workspace-authority.json",
         "workspace-authority.bundle",
         "workspace.json",
         "final/manifest.json",
     )
+    try:
+        retained_receipt = json.loads(
+            (exp_dir / "run/deployed-source-authority.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        deployment_authority.verify_materialized(
+            exp_dir / "run/deployed-source",
+            retained_receipt,
+        )
+    except (
+        OSError,
+        json.JSONDecodeError,
+        deployment_authority.DeploymentAuthorityError,
+    ):
+        return None, (
+            "provider-free terminal evidence has invalid retained deployed "
+            "source authority"
+        )
+    if (
+        retained_receipt.get("source_head")
+        != record["request_authority"]["deployment_source_head"]
+        or retained_receipt.get("tree_sha256")
+        != record["request_authority"]["deployment_tree_sha256"]
+        or retained_receipt.get("contract_paths")
+        != list(deployment_authority.EXECUTION_AUTHORITY_PATHS)
+    ):
+        return None, "provider-free retained deployment authority conflicts with job"
+    try:
+        sandbox = json.loads(
+            (exp_dir / "run/sandbox-enforcement.json").read_text(encoding="utf-8")
+        )
+    except (OSError, json.JSONDecodeError):
+        return None, "provider-free sandbox enforcement evidence is invalid"
+    argv = sandbox.get("argv") if isinstance(sandbox, dict) else None
+    environment_names = (
+        sandbox.get("environment_names") if isinstance(sandbox, dict) else None
+    )
+    if (
+        not isinstance(sandbox, dict)
+        or sandbox.get("schema") != "cvm.provider-free-sandbox-enforcement/1"
+        or sandbox.get("network") != "isolated-loopback"
+        or not isinstance(argv, list)
+        or "--unshare-net" not in argv
+        or "--cap-drop" not in argv
+        or "ALL" not in argv
+        or not isinstance(environment_names, list)
+        or not set(("HOME", "PATH", "PYTHONDONTWRITEBYTECODE")).issubset(
+            environment_names
+        )
+        or not set(environment_names).issubset(PROVIDER_FREE_ENV_ALLOWLIST)
+    ):
+        return None, "provider-free sandbox enforcement evidence is incomplete"
     by_path: dict[str, dict[str, Any]] = {}
     for entry in entries:
         if not isinstance(entry, dict) or not isinstance(entry.get("path"), str):
@@ -387,6 +489,10 @@ def _provider_free_evidence_result(
             "sha256": hashlib.sha256(data).hexdigest(),
         }
         if by_path.get(relative) != expected_entry:
+            return None, f"provider-free terminal evidence is not bound: {relative}"
+    for item in retained_receipt["files"]:
+        relative = f"run/deployed-source/{item['path']}"
+        if by_path.get(relative) != {**item, "path": relative}:
             return None, f"provider-free terminal evidence is not bound: {relative}"
     return _relative(proof_path), None
 
@@ -415,11 +521,37 @@ def supervise_provider_free(
             raise ProtocolError("provider-free job scenario is not in the closed registry")
         if record.get("execution_profile") != PROVIDER_FREE_EXECUTION_PROFILE:
             raise ProtocolError("provider-free execution profile does not match registry")
+        receipt_path = REPO_ROOT / deployment_authority.RECEIPT_PATH
+        try:
+            receipt_bytes = receipt_path.read_bytes()
+            live_receipt = json.loads(receipt_bytes)
+            deployment_authority.verify_receipt(REPO_ROOT, live_receipt)
+        except (
+            OSError,
+            json.JSONDecodeError,
+            deployment_authority.DeploymentAuthorityError,
+        ) as exc:
+            raise ProtocolError("deployed source authority changed before execution") from exc
+        if (
+            hashlib.sha256(receipt_bytes).hexdigest()
+            != record["request_authority"]["deployment_receipt_sha256"]
+            or live_receipt.get("source_head")
+            != record["request_authority"]["deployment_source_head"]
+            or live_receipt.get("tree_sha256")
+            != record["request_authority"]["deployment_tree_sha256"]
+        ):
+            raise ProtocolError("deployed source identity changed before execution")
         transition(root, handle, "running", supervisor_pid=os.getpid())
         source_environment = dict(os.environ if environ is None else environ)
         child_environment = _provider_free_environment(
             source_environment,
             profile_id=PROVIDER_FREE_EXECUTION_PROFILE["id"],
+            handle=handle,
+            request_authority_sha=record["request_authority_sha256"],
+            deployment_tree_sha=record["request_authority"][
+                "deployment_tree_sha256"
+            ],
+            immutable_request=request_authority_payload(record),
         )
         stripped = child_environment["CVM_PROVIDER_FREE_STRIPPED_NAMES"].split(",")
         if stripped == [""]:

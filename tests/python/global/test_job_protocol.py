@@ -123,6 +123,61 @@ class JobProtocolTests(unittest.TestCase):
 
             self.assertEqual(protocol.load_state(root, handle)["state"], "running")
 
+    def test_provider_free_request_authority_is_immutable_across_every_write_seam(self) -> None:
+        with temporary_directory(prefix="cvm-protocol-") as root_text:
+            root = Path(root_text)
+            handle = "group/exp"
+            record = pilot_record(handle)
+            record.update(
+                {
+                    "job_kind": "provider-free",
+                    "object": "issue15-runtime-authority",
+                    "exp_dir": "outputs/group/exp",
+                    "scenario": {
+                        "name": "issue15-runtime-authority",
+                        "identity": "issue15.provider-free.runtime-authority/1",
+                    },
+                    "execution_profile": {"id": "issue15.provider-free-bounded/1"},
+                    "request_authority": {
+                        "schema": "cvm.provider-free-request-authority/1",
+                        "deployment_identity": "a" * 64,
+                    },
+                }
+            )
+            record["request_authority_sha256"] = protocol.request_authority_sha256(
+                record
+            )
+            protocol.publish_state(root, record)
+
+            for field, replacement in (
+                ("job_kind", "pilot"),
+                ("object", "other"),
+                ("exp_dir", "outputs/group/other"),
+                ("scenario", {"name": "other"}),
+                ("execution_profile", {"id": "other"}),
+                ("request_authority", {"deployment_identity": "b" * 64}),
+                ("request_authority_sha256", "0" * 64),
+            ):
+                with self.subTest(field=field), self.assertRaisesRegex(
+                    protocol.ProtocolError, "reserved update fields"
+                ):
+                    protocol.heartbeat(root, handle, **{field: replacement})
+
+                mutated = dict(protocol.load_state(root, handle))
+                mutated[field] = replacement
+                with self.assertRaisesRegex(
+                    protocol.ProtocolError, "request authority|immutable"
+                ):
+                    protocol.publish_state(root, mutated)
+
+            mutated = dict(protocol.load_state(root, handle))
+            mutated["scenario"] = {"name": "other", "identity": "other/1"}
+            mutated["request_authority_sha256"] = protocol.request_authority_sha256(
+                mutated
+            )
+            with self.assertRaisesRegex(protocol.ProtocolError, "immutable"):
+                protocol.publish_state(root, mutated)
+
     def test_stale_is_derived_and_does_not_persist_failure(self) -> None:
         state = pilot_record("group/exp")
         state["heartbeat_at"] = (

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import re
@@ -32,6 +33,26 @@ _RESERVED_UPDATE_FIELDS = frozenset(
         "updated_at",
         "heartbeat_at",
         "finished_at",
+        "job_kind",
+        "object",
+        "exp_dir",
+        "scenario",
+        "execution_profile",
+        "request_authority",
+        "request_authority_sha256",
+    }
+)
+_IMMUTABLE_REQUEST_FIELDS = frozenset(
+    {
+        "job_kind",
+        "object",
+        "group",
+        "exp",
+        "exp_dir",
+        "scenario",
+        "execution_profile",
+        "request_authority",
+        "request_authority_sha256",
     }
 )
 
@@ -100,6 +121,38 @@ def _validate_common(state: dict[str, Any]) -> None:
         raise ProtocolError("group does not match handle")
     if state.get("exp") != parsed["exp"]:
         raise ProtocolError("exp does not match handle")
+    if state.get("job_kind") == "provider-free":
+        expected = request_authority_sha256(state)
+        if state.get("request_authority_sha256") != expected:
+            raise ProtocolError("provider-free request authority digest conflicts")
+
+
+def request_authority_sha256(state: dict[str, Any]) -> str:
+    """Digest the complete immutable provider-free dispatch request."""
+
+    payload = request_authority_payload(state)
+    data = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
+    return hashlib.sha256(
+        b"cvm.provider-free-request-authority/1\0" + data
+    ).hexdigest()
+
+
+def request_authority_payload(state: dict[str, Any]) -> dict[str, Any]:
+    """Return the canonical immutable request retained by terminal evidence."""
+
+    return {
+        field: state.get(field)
+        for field in (
+            "job_kind",
+            "object",
+            "group",
+            "exp",
+            "exp_dir",
+            "scenario",
+            "execution_profile",
+            "request_authority",
+        )
+    }
 
 
 def validate_state(state: dict[str, Any]) -> dict[str, Any]:
@@ -161,6 +214,15 @@ def publish_state(root: Path, state: dict[str, Any]) -> None:
     path = state_path(root, state.get("job"))
     if path.exists():
         previous = load_state(root, state["job"])
+        changed = sorted(
+            field
+            for field in _IMMUTABLE_REQUEST_FIELDS
+            if state.get(field) != previous.get(field)
+        )
+        if changed:
+            raise ProtocolError(
+                "immutable request authority fields: " + ", ".join(changed)
+            )
         old = previous["state"]
         new = state["state"]
         if old in TERMINAL_STATES:

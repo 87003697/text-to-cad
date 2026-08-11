@@ -9,7 +9,9 @@ import tempfile
 import unittest
 from unittest import mock
 
+from scripts.pilot import deployment_authority
 from scripts.pilot import provider_free_runner
+from scripts.pilot.cvm_job import protocol
 
 
 class ProviderFreeRunnerTests(unittest.TestCase):
@@ -21,9 +23,42 @@ class ProviderFreeRunnerTests(unittest.TestCase):
         (self.repo / "outputs").mkdir()
         (self.repo / ".venv/bin").mkdir(parents=True)
         (self.repo / ".venv/bin/python").write_text("", encoding="utf-8")
+        for declared in deployment_authority.EXECUTION_AUTHORITY_PATHS:
+            path = self.repo / declared
+            if path.suffix:
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text(f"{declared}\n", encoding="utf-8")
+            else:
+                path.mkdir(parents=True, exist_ok=True)
+                (path / "authority-marker.txt").write_text(
+                    f"{declared}\n", encoding="utf-8"
+                )
+        deployed_receipt = deployment_authority.write_receipt(
+            self.repo, source_head="a" * 40
+        )
         self.group = "20260811-210000-issue15-provider-free"
         self.exp = "20260811-210001-issue15-runtime-authority"
         self.handle = f"{self.group}/{self.exp}"
+        immutable_request = {
+            "job_kind": "provider-free",
+            "object": "issue15-runtime-authority",
+            "group": self.group,
+            "exp": self.exp,
+            "exp_dir": f"outputs/{self.handle}",
+            "scenario": {
+                "name": "issue15-runtime-authority",
+                "identity": "issue15.provider-free.runtime-authority/1",
+            },
+            "execution_profile": {
+                "schema": "cvm.provider-free-execution-profile/1",
+                "id": "issue15.provider-free-bounded/1",
+                "provider_access": "forbidden",
+            },
+            "request_authority": {
+                "schema": "cvm.provider-free-request-authority/1",
+                "deployment_tree_sha256": deployed_receipt["tree_sha256"],
+            },
+        }
         self.environment = {
             "PATH": "/usr/bin:/bin",
             "HOME": "/home/test",
@@ -32,6 +67,16 @@ class ProviderFreeRunnerTests(unittest.TestCase):
             "CVM_PROVIDER_FREE_PROFILE": "issue15.provider-free-bounded/1",
             "CVM_PROVIDER_FREE_STRIPPED_NAMES": (
                 "ANTHROPIC_API_KEY,HTTPS_PROXY,OPENAI_API_KEY,VENUS_TOKEN"
+            ),
+            "CVM_PROVIDER_FREE_JOB": self.handle,
+            "CVM_PROVIDER_FREE_REQUEST_AUTHORITY_SHA256": (
+                protocol.request_authority_sha256(immutable_request)
+            ),
+            "CVM_PROVIDER_FREE_DEPLOYMENT_TREE_SHA256": deployed_receipt[
+                "tree_sha256"
+            ],
+            "CVM_PROVIDER_FREE_REQUEST_JSON": json.dumps(
+                immutable_request, sort_keys=True, separators=(",", ":")
             ),
         }
 
@@ -135,6 +180,20 @@ class ProviderFreeRunnerTests(unittest.TestCase):
             (exp_dir / "artifact_manifest.json").read_text(encoding="utf-8")
         )
         self.assertEqual(manifest["final_status"], 0)
+        retained_receipt = json.loads(
+            (exp_dir / "run/deployed-source-authority.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        deployment_authority.verify_materialized(
+            exp_dir / "run/deployed-source",
+            retained_receipt,
+        )
+        sandbox = json.loads(
+            (exp_dir / "run/sandbox-enforcement.json").read_text(encoding="utf-8")
+        )
+        self.assertEqual(sandbox["network"], "isolated-loopback")
+        self.assertIn("--unshare-net", sandbox["argv"])
         proof_bytes = proof_path.read_bytes()
         self.assertIn(
             {
@@ -186,6 +245,29 @@ class ProviderFreeRunnerTests(unittest.TestCase):
             manifest["final_status"],
             provider_free_runner.pilot_runner.ARTIFACT_CONTRACT_STATUS,
         )
+
+    def test_terminal_manifest_rejects_symlinks_and_special_files(self) -> None:
+        for mutation in ("symlink", "fifo"):
+            with self.subTest(mutation=mutation):
+                exp_dir = self.repo / "outputs" / self.handle
+                exp_dir.mkdir(parents=True, exist_ok=True)
+                unsafe = exp_dir / f"unsafe-{mutation}"
+                if mutation == "symlink":
+                    outside = self.repo / "outside-secret"
+                    outside.write_text("secret\n", encoding="utf-8")
+                    unsafe.symlink_to(outside)
+                else:
+                    os.mkfifo(unsafe)
+                with self.assertRaisesRegex(
+                    provider_free_runner.ProviderFreeError,
+                    "symlink|special",
+                ):
+                    provider_free_runner._publish_terminal_manifest(
+                        exp_dir,
+                        workload_status=0,
+                        final_status=0,
+                    )
+                unsafe.unlink()
 
 
 if __name__ == "__main__":

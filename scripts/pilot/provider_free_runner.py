@@ -10,17 +10,20 @@ import os
 from pathlib import Path
 import resource
 import shutil
+import stat
 import subprocess
 import sys
 from typing import Mapping
 
 from scripts.pilot import runner as pilot_runner
+from scripts.pilot import deployment_authority
 from scripts.pilot.cvm_job.runtime import (
     PROVIDER_FREE_ENV_ALLOWLIST,
     PROVIDER_FREE_EXECUTION_PROFILE,
     PROVIDER_FREE_PROOF,
     PROVIDER_FREE_SCENARIOS,
 )
+from scripts.pilot.cvm_job.protocol import request_authority_sha256
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -36,6 +39,10 @@ _CONTROL_ENVIRONMENT = frozenset(
         *PROVIDER_FREE_ENV_ALLOWLIST,
         "CVM_PROVIDER_FREE_PROFILE",
         "CVM_PROVIDER_FREE_STRIPPED_NAMES",
+        "CVM_PROVIDER_FREE_JOB",
+        "CVM_PROVIDER_FREE_REQUEST_AUTHORITY_SHA256",
+        "CVM_PROVIDER_FREE_DEPLOYMENT_TREE_SHA256",
+        "CVM_PROVIDER_FREE_REQUEST_JSON",
     }
 )
 
@@ -82,6 +89,27 @@ def _validate_environment(environ: Mapping[str, str]) -> list[str]:
     stripped = raw.split(",") if raw else []
     if stripped != sorted(set(stripped)) or any(not name for name in stripped):
         raise ProviderFreeError("provider-free stripped-name receipt is invalid")
+    for name in (
+        "CVM_PROVIDER_FREE_REQUEST_AUTHORITY_SHA256",
+        "CVM_PROVIDER_FREE_DEPLOYMENT_TREE_SHA256",
+    ):
+        value = environ.get(name, "")
+        if len(value) != 64 or any(
+            character not in "0123456789abcdef" for character in value
+        ):
+            raise ProviderFreeError(f"provider-free {name} is missing or invalid")
+    try:
+        immutable_request = json.loads(
+            environ.get("CVM_PROVIDER_FREE_REQUEST_JSON", "")
+        )
+    except json.JSONDecodeError as exc:
+        raise ProviderFreeError("provider-free immutable request is invalid") from exc
+    if not isinstance(immutable_request, dict):
+        raise ProviderFreeError("provider-free immutable request is invalid")
+    if request_authority_sha256(immutable_request) != environ[
+        "CVM_PROVIDER_FREE_REQUEST_AUTHORITY_SHA256"
+    ]:
+        raise ProviderFreeError("provider-free immutable request digest conflicts")
     return stripped
 
 
@@ -173,6 +201,7 @@ def _sandbox_environment(environ: Mapping[str, str]) -> dict[str, str]:
 
 
 def _canonical_write(path: Path, payload: object) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
     temporary = path.with_name(f".{path.name}.tmp")
     temporary.write_text(
         json.dumps(payload, sort_keys=True, separators=(",", ":")) + "\n",
@@ -187,6 +216,7 @@ def _publish_no_provider_proof(
     handle: str,
     scenario_name: str,
     stripped: list[str],
+    environ: Mapping[str, str],
 ) -> None:
     scenario = PROVIDER_FREE_SCENARIOS[scenario_name]
     _canonical_write(
@@ -196,6 +226,17 @@ def _publish_no_provider_proof(
             "job": handle,
             "scenario": {"name": scenario.name, "identity": scenario.identity},
             "execution_profile": dict(PROVIDER_FREE_EXECUTION_PROFILE),
+            "request_authority": {
+                "sha256": environ[
+                    "CVM_PROVIDER_FREE_REQUEST_AUTHORITY_SHA256"
+                ],
+                "deployment_tree_sha256": environ[
+                    "CVM_PROVIDER_FREE_DEPLOYMENT_TREE_SHA256"
+                ],
+                "immutable_request": json.loads(
+                    environ["CVM_PROVIDER_FREE_REQUEST_JSON"]
+                ),
+            },
             "sandbox": {
                 "network": "isolated-loopback",
                 "resource_profile": PROVIDER_FREE_EXECUTION_PROFILE["id"],
@@ -206,6 +247,7 @@ def _publish_no_provider_proof(
                 "credential_values_recorded": False,
             },
             "requests": {"model_gateway": 0, "provider": 0, "tap": 0},
+            "sandbox_enforcement": "run/sandbox-enforcement.json",
         },
     )
 
@@ -220,12 +262,28 @@ def _publish_terminal_manifest(
     for path in sorted(exp_dir.rglob("*")):
         relative = path.relative_to(exp_dir)
         relative_text = relative.as_posix()
-        if (
-            not path.is_file()
-            or relative.parts[0] == ".git"
-            or relative_text == "artifact_manifest.json"
-            or relative_text == ".artifact_manifest.json.tmp"
-        ):
+        if relative.parts[0] == ".git":
+            continue
+        try:
+            mode = path.lstat().st_mode
+        except OSError as exc:
+            raise ProviderFreeError(
+                f"terminal manifest cannot inspect: {relative_text}"
+            ) from exc
+        if stat.S_ISLNK(mode):
+            raise ProviderFreeError(
+                f"terminal manifest rejects symlink: {relative_text}"
+            )
+        if stat.S_ISDIR(mode):
+            continue
+        if not stat.S_ISREG(mode):
+            raise ProviderFreeError(
+                f"terminal manifest rejects special file: {relative_text}"
+            )
+        if relative_text in {
+            "artifact_manifest.json",
+            ".artifact_manifest.json.tmp",
+        }:
             continue
         data = path.read_bytes()
         files.append(
@@ -251,6 +309,61 @@ def _publish_terminal_manifest(
         encoding="utf-8",
     )
     temporary.replace(exp_dir / "artifact_manifest.json")
+
+
+def _retain_deployment_authority(exp_dir: Path) -> dict[str, object]:
+    """Retain actual deployed execution files so review can rehash them."""
+
+    receipt_path = REPO_ROOT / deployment_authority.RECEIPT_PATH
+    try:
+        receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
+        deployment_authority.verify_receipt(REPO_ROOT, receipt)
+        if receipt.get("contract_paths") != list(
+            deployment_authority.EXECUTION_AUTHORITY_PATHS
+        ):
+            raise deployment_authority.DeploymentAuthorityError(
+                "deployed source authority contract is incomplete"
+            )
+        deployment_authority.materialize_receipt(
+            REPO_ROOT,
+            receipt,
+            exp_dir / "run/deployed-source",
+        )
+    except (
+        OSError,
+        json.JSONDecodeError,
+        deployment_authority.DeploymentAuthorityError,
+    ) as exc:
+        raise ProviderFreeError("deployed source authority retention failed") from exc
+    _canonical_write(exp_dir / "run/deployed-source-authority.json", receipt)
+    return receipt
+
+
+def _publish_sandbox_enforcement(
+    exp_dir: Path,
+    *,
+    argv: list[str],
+    child_environment: Mapping[str, str],
+) -> None:
+    """Retain the exact namespace/resource launch boundary without values."""
+
+    _canonical_write(
+        exp_dir / "run/sandbox-enforcement.json",
+        {
+            "schema": "cvm.provider-free-sandbox-enforcement/1",
+            "network": "isolated-loopback",
+            "argv": argv,
+            "environment_names": sorted(child_environment),
+            "resource_limits": {
+                "wall_seconds": WALL_TIMEOUT_SECONDS,
+                "cpu_seconds": CPU_LIMIT_SECONDS,
+                "address_space_bytes": ADDRESS_SPACE_LIMIT_BYTES,
+                "file_size_bytes": FILE_SIZE_LIMIT_BYTES,
+                "open_files": OPEN_FILE_LIMIT,
+                "processes": PROCESS_LIMIT,
+            },
+        },
+    )
 
 
 def _validate_scenario_evidence(exp_dir: Path, scenario_name: str) -> None:
@@ -353,17 +466,20 @@ def run_scenario(
     stripped = _validate_environment(environ)
     exp_dir = REPO_ROOT / "outputs" / group / exp
     handle = f"{group}/{exp}"
+    if environ.get("CVM_PROVIDER_FREE_JOB") != handle:
+        raise ProviderFreeError("provider-free job identity conflicts with request")
     pilot_runner.prepare_exp(exp_dir)
     bwrap = shutil.which("bwrap", path=environ.get("PATH"))
     if not bwrap:
         raise ProviderFreeError("bwrap is required for provider-free execution")
     argv = _sandbox_argv(scenario_name, exp_dir, bwrap=bwrap)
+    child_environment = _sandbox_environment(environ)
     workload_status = 1
     try:
         completed = subprocess.run(
             argv,
             check=False,
-            env=_sandbox_environment(environ),
+            env=child_environment,
             stdin=subprocess.DEVNULL,
             timeout=WALL_TIMEOUT_SECONDS,
             preexec_fn=_apply_resource_limits,
@@ -371,11 +487,17 @@ def run_scenario(
         workload_status = completed.returncode
     except subprocess.TimeoutExpired:
         workload_status = 124
+    _publish_sandbox_enforcement(
+        exp_dir,
+        argv=argv,
+        child_environment=child_environment,
+    )
     final_status = workload_status
     if workload_status == 0:
         try:
             pilot_runner.validate_workspace_delivery(exp_dir)
             pilot_runner.publish_workspace_authority(exp_dir)
+            _retain_deployment_authority(exp_dir)
             _validate_scenario_evidence(exp_dir, scenario_name)
         except (pilot_runner.PilotError, ProviderFreeError) as exc:
             print(f"provider-free-runner: {exc}", file=sys.stderr)
@@ -385,6 +507,7 @@ def run_scenario(
         handle=handle,
         scenario_name=scenario_name,
         stripped=stripped,
+        environ=environ,
     )
     _publish_terminal_manifest(
         exp_dir,
