@@ -26,9 +26,16 @@ _PROVIDER_FREE_BOOTSTRAP_PHASES = frozenset(
 _PROVIDER_FREE_BOOTSTRAP_CLASSIFICATIONS = frozenset(
     {
         "python-import-failed",
+        "runner-bwrap-path-rejected",
         "runner-contract-rejected",
+        "runner-environment-allowlist-rejected",
         "runner-entrypoint-unavailable",
+        "runner-execution-profile-rejected",
         "runner-exited-before-artifact-manifest",
+        "runner-output-path-rejected",
+        "runner-request-digest-rejected",
+        "runner-runtime-identity-rejected",
+        "runner-stripped-name-receipt-rejected",
         "runner-terminated-before-artifact-manifest",
         "runner-completed-without-artifact-manifest",
     }

@@ -34,12 +34,23 @@ If a provider-free runner terminates before it publishes
 `bootstrap_diagnostic` with schema
 `cvm.provider-free-bootstrap-diagnostic/1`. Its `phase` is one of
 `before-experiment` or `before-artifact-manifest`; its `classification` is a
-closed repository-owned value, accompanied by `process_exit_code`. The
-supervisor examines at most the final 4 KiB of the retained detached log for
-classification and does not publish raw log text, environment values, or
-multiline output. This diagnostic is advisory failure evidence. It does not
-replace `artifact_manifest.json.final_status` or the retained no-provider proof
-as successful execution authority, and it does not authorize cleanup or retry.
+closed repository-owned value, accompanied by `process_exit_code`:
+
+- `runner-execution-profile-rejected`
+- `runner-environment-allowlist-rejected`
+- `runner-stripped-name-receipt-rejected`
+- `runner-request-digest-rejected`
+- `runner-bwrap-path-rejected`
+- `runner-runtime-identity-rejected`
+- `runner-output-path-rejected`
+- `runner-contract-rejected` for other runner-owned failures
+
+The supervisor examines at most the final 4 KiB of the retained detached log
+for classification and does not publish raw log text, paths, environment names
+or values, digests, arbitrary suffixes, or multiline output. This diagnostic is
+advisory failure evidence. It does not replace
+`artifact_manifest.json.final_status` or the retained no-provider proof as
+successful execution authority, and it does not authorize cleanup or retry.
 
 Exit codes: `0` means `--once` returned or wait saw success; `1` means terminal
 failure; `2` means invalid/missing job; `3` is an explicitly requested stale

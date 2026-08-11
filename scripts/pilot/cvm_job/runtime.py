@@ -46,6 +46,51 @@ DEFAULT_STALE_AFTER = 60.0
 DEFAULT_WAIT_TIMEOUT = 12 * 60 * 60.0
 PROCESS_TERMINATION_GRACE = 5.0
 PROVIDER_FREE_BOOTSTRAP_LOG_BYTES = 4 * 1024
+_PROVIDER_FREE_RUNNER_ERROR_CLASSIFICATIONS = (
+    (
+        b"provider-free execution profile is missing or stale",
+        "runner-execution-profile-rejected",
+    ),
+    (
+        b"provider-free environment contains non-allowlisted names:",
+        "runner-environment-allowlist-rejected",
+    ),
+    (
+        b"provider-free stripped-name receipt is invalid",
+        "runner-stripped-name-receipt-rejected",
+    ),
+    (
+        b"provider-free CVM_PROVIDER_FREE_REQUEST_AUTHORITY_SHA256 "
+        b"is missing or invalid",
+        "runner-request-digest-rejected",
+    ),
+    (
+        b"provider-free CVM_PROVIDER_FREE_DEPLOYMENT_TREE_SHA256 "
+        b"is missing or invalid",
+        "runner-request-digest-rejected",
+    ),
+    (
+        b"provider-free immutable request is invalid",
+        "runner-request-digest-rejected",
+    ),
+    (
+        b"provider-free immutable request digest conflicts",
+        "runner-request-digest-rejected",
+    ),
+    (
+        b"PATH bwrap does not match trusted system runtime",
+        "runner-bwrap-path-rejected",
+    ),
+    (
+        b"trusted runtime identity is invalid:",
+        "runner-runtime-identity-rejected",
+    ),
+    (
+        b"unsafe provider-free output path:",
+        "runner-output-path-rejected",
+    ),
+)
+_PROVIDER_FREE_RUNNER_ERROR_MARKER = b"provider-free-runner:"
 _SECRET_HEADLINE = re.compile(
     r"(?i)(token|secret|password|api[_-]?key)\s*[=:]\s*\S+|[A-Za-z0-9_=-]{32,}"
 )
@@ -894,15 +939,37 @@ def _provider_free_bootstrap_diagnostic(
         classification = "runner-terminated-before-artifact-manifest"
     else:
         classification = "runner-exited-before-artifact-manifest"
+        diagnostic_tail_truncated = False
         try:
             with log_path(root, handle).open("rb") as stream:
                 stream.seek(0, os.SEEK_END)
                 size = stream.tell()
-                stream.seek(max(0, size - PROVIDER_FREE_BOOTSTRAP_LOG_BYTES))
+                tail_start = max(0, size - PROVIDER_FREE_BOOTSTRAP_LOG_BYTES)
+                diagnostic_tail_truncated = tail_start > 0
+                stream.seek(tail_start)
                 diagnostic_tail = stream.read(PROVIDER_FREE_BOOTSTRAP_LOG_BYTES)
         except OSError:
             diagnostic_tail = b""
-        if any(
+        runner_marker = diagnostic_tail.find(_PROVIDER_FREE_RUNNER_ERROR_MARKER)
+        if runner_marker >= 0:
+            classification = "runner-contract-rejected"
+            runner_error = diagnostic_tail[
+                runner_marker + len(_PROVIDER_FREE_RUNNER_ERROR_MARKER) :
+            ]
+            if runner_error.startswith(b" "):
+                runner_error = runner_error[1:]
+            if not diagnostic_tail_truncated:
+                classification = next(
+                    (
+                        closed_classification
+                        for prefix, closed_classification in (
+                            _PROVIDER_FREE_RUNNER_ERROR_CLASSIFICATIONS
+                        )
+                        if runner_error.startswith(prefix)
+                    ),
+                    classification,
+                )
+        elif any(
             marker in diagnostic_tail
             for marker in (
                 b"ModuleNotFoundError",
@@ -911,8 +978,6 @@ def _provider_free_bootstrap_diagnostic(
             )
         ):
             classification = "python-import-failed"
-        elif b"provider-free-runner:" in diagnostic_tail:
-            classification = "runner-contract-rejected"
         elif b"can't open file" in diagnostic_tail:
             classification = "runner-entrypoint-unavailable"
     return {

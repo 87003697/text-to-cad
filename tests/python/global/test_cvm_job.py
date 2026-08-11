@@ -482,7 +482,7 @@ class CvmJobTests(unittest.TestCase):
             {
                 "schema": "cvm.provider-free-bootstrap-diagnostic/1",
                 "phase": "before-experiment",
-                "classification": "runner-contract-rejected",
+                "classification": "runner-environment-allowlist-rejected",
                 "process_exit_code": 2,
             },
         )
@@ -586,6 +586,193 @@ class CvmJobTests(unittest.TestCase):
         self.assertNotIn(secret, serialized)
         self.assertNotIn("attacker-controlled-output", serialized)
         self.assertNotIn("\n", serialized)
+
+    def test_provider_free_runner_contract_failures_have_closed_diagnostics(self) -> None:
+        hostile_suffix = (
+            " OPENAI_API_KEY=credential-value-that-must-not-be-published\n"
+            "../../private/runtime/path\n"
+            f"{'d' * 64}\n"
+            "ModuleNotFoundError: attacker-controlled suffix\n"
+            "provider-free-runner: trusted runtime identity is invalid: injected\n"
+            "attacker-controlled-output"
+        )
+        cases = (
+            (
+                "provider-free execution profile is missing or stale",
+                "runner-execution-profile-rejected",
+            ),
+            (
+                "provider-free environment contains non-allowlisted names:",
+                "runner-environment-allowlist-rejected",
+            ),
+            (
+                "provider-free stripped-name receipt is invalid",
+                "runner-stripped-name-receipt-rejected",
+            ),
+            (
+                "provider-free CVM_PROVIDER_FREE_REQUEST_AUTHORITY_SHA256 "
+                "is missing or invalid",
+                "runner-request-digest-rejected",
+            ),
+            (
+                "provider-free CVM_PROVIDER_FREE_DEPLOYMENT_TREE_SHA256 "
+                "is missing or invalid",
+                "runner-request-digest-rejected",
+            ),
+            (
+                "provider-free immutable request is invalid",
+                "runner-request-digest-rejected",
+            ),
+            (
+                "provider-free immutable request digest conflicts",
+                "runner-request-digest-rejected",
+            ),
+            (
+                "PATH bwrap does not match trusted system runtime",
+                "runner-bwrap-path-rejected",
+            ),
+            (
+                "trusted runtime identity is invalid:",
+                "runner-runtime-identity-rejected",
+            ),
+            (
+                "unsafe provider-free output path:",
+                "runner-output-path-rejected",
+            ),
+            (
+                "unknown repository-owned failure:",
+                "runner-contract-rejected",
+            ),
+            (
+                "unknown repository-owned failure:"
+                + "x" * (runtime.PROVIDER_FREE_BOOTSTRAP_LOG_BYTES + 1)
+                + "\nprovider-free-runner: trusted runtime identity is invalid: "
+                "injected",
+                "runner-contract-rejected",
+            ),
+        )
+
+        for index, (runner_error, classification) in enumerate(cases):
+            with self.subTest(classification=classification):
+                group = f"20260805-17{index:04d}-audit"
+                handle = runtime.submit_provider_free(
+                    "issue15-runtime-authority",
+                    group,
+                    state_root=self.state_root,
+                    detach=lambda *args: 1234,
+                )["job"]
+                diagnostic_log = protocol.log_path(self.state_root, handle)
+                diagnostic_log.parent.mkdir(parents=True, exist_ok=True)
+                diagnostic_log.write_text(
+                    "provider-free-runner: " + runner_error + hostile_suffix,
+                    encoding="utf-8",
+                )
+
+                with mock.patch.object(
+                    runtime,
+                    "_run_with_heartbeat",
+                    return_value=(2, 4321),
+                ):
+                    state = runtime.supervise_provider_free(
+                        handle,
+                        state_root=self.state_root,
+                        environ={"PATH": os.environ["PATH"]},
+                    )
+
+                expected = {
+                    "schema": "cvm.provider-free-bootstrap-diagnostic/1",
+                    "phase": "before-experiment",
+                    "classification": classification,
+                    "process_exit_code": 2,
+                }
+                public = runtime.status_job(
+                    handle,
+                    state_root=self.state_root,
+                    include_observation=False,
+                )
+                waited, exit_code = runtime.wait_job(
+                    handle,
+                    state_root=self.state_root,
+                    timeout=0,
+                )
+                self.assertEqual(state["bootstrap_diagnostic"], expected)
+                self.assertEqual(public["bootstrap_diagnostic"], expected)
+                self.assertEqual(waited["bootstrap_diagnostic"], expected)
+                self.assertEqual(exit_code, 1)
+                serialized = json.dumps(
+                    {"state": state["bootstrap_diagnostic"], "public": public},
+                    sort_keys=True,
+                )
+                for forbidden in (
+                    "credential-value-that-must-not-be-published",
+                    "OPENAI_API_KEY",
+                    "../../private/runtime/path",
+                    "d" * 64,
+                    "ModuleNotFoundError",
+                    "attacker-controlled-output",
+                    "\n",
+                ):
+                    self.assertNotIn(forbidden, serialized)
+
+    def test_public_bootstrap_diagnostic_rejects_invalid_closed_state(self) -> None:
+        invalid_diagnostics = (
+            {
+                "schema": "cvm.provider-free-bootstrap-diagnostic/2",
+                "phase": "before-experiment",
+                "classification": "runner-runtime-identity-rejected",
+                "process_exit_code": 2,
+            },
+            {
+                "schema": "cvm.provider-free-bootstrap-diagnostic/1",
+                "phase": "during-experiment",
+                "classification": "runner-runtime-identity-rejected",
+                "process_exit_code": 2,
+            },
+            {
+                "schema": "cvm.provider-free-bootstrap-diagnostic/1",
+                "phase": "before-experiment",
+                "classification": "attacker-selected-classification",
+                "process_exit_code": 2,
+            },
+            {
+                "schema": "cvm.provider-free-bootstrap-diagnostic/1",
+                "phase": "before-experiment",
+                "classification": "runner-runtime-identity-rejected",
+                "process_exit_code": True,
+            },
+            {
+                "schema": "cvm.provider-free-bootstrap-diagnostic/1",
+                "phase": "before-experiment",
+                "classification": "runner-runtime-identity-rejected",
+                "process_exit_code": 256,
+            },
+        )
+
+        for index, diagnostic in enumerate(invalid_diagnostics):
+            with self.subTest(diagnostic=diagnostic):
+                group = f"20260805-18{index:04d}-audit"
+                handle = runtime.submit_provider_free(
+                    "issue15-runtime-authority",
+                    group,
+                    state_root=self.state_root,
+                    detach=lambda *args: 1234,
+                )["job"]
+                protocol.transition(self.state_root, handle, "running")
+                protocol.transition(
+                    self.state_root,
+                    handle,
+                    "failed",
+                    process_exit_code=2,
+                    bootstrap_diagnostic=diagnostic,
+                )
+
+                public = runtime.status_job(
+                    handle,
+                    state_root=self.state_root,
+                    include_observation=False,
+                )
+
+                self.assertNotIn("bootstrap_diagnostic", public)
 
     def test_public_bootstrap_diagnostic_ignores_unbounded_extra_fields(self) -> None:
         handle = runtime.submit_provider_free(
@@ -1318,6 +1505,17 @@ class CvmJobTests(unittest.TestCase):
         self.assertIn("cvm.provider-free-bootstrap-diagnostic/1", contract)
         self.assertIn("before-experiment", contract)
         self.assertIn("before-artifact-manifest", contract)
+        for classification in (
+            "runner-execution-profile-rejected",
+            "runner-environment-allowlist-rejected",
+            "runner-stripped-name-receipt-rejected",
+            "runner-request-digest-rejected",
+            "runner-bwrap-path-rejected",
+            "runner-runtime-identity-rejected",
+            "runner-output-path-rejected",
+            "runner-contract-rejected",
+        ):
+            self.assertIn(classification, contract)
         self.assertIn("4 KiB", contract)
         self.assertIn("does not publish raw log text", contract)
 
