@@ -25,6 +25,7 @@ PILOT_ROOT = REPO_ROOT / "scripts" / "pilot"
 SUBMIT_SCRIPT = PILOT_ROOT / "cvm-submit.sh"
 MONITOR_SCRIPT = PILOT_ROOT / "cvm-monitor.sh"
 MONITOR_SKILL = REPO_ROOT / ".claude" / "skills" / "cvm-monitor" / "SKILL.md"
+SUBMIT_SKILL = REPO_ROOT / ".claude" / "skills" / "cvm-submit" / "SKILL.md"
 
 
 class CvmJobTests(unittest.TestCase):
@@ -962,6 +963,102 @@ class CvmJobTests(unittest.TestCase):
         self.assertEqual(state["state"], "failed")
         self.assertIn("launch failed", state["failure_reason"])
 
+    def test_submit_rejects_preexisting_log_without_launch_or_overwrite(self) -> None:
+        fixed = datetime(2026, 8, 5, 17, 0, 0, tzinfo=timezone.utc)
+        cases = (
+            ("pilot", "airplane", "20260805-170001-log-collision"),
+            (
+                "provider-free",
+                "issue15-runtime-authority",
+                "20260805-170002-log-collision",
+            ),
+        )
+        original = (
+            b"provider-free-runner: provider-free execution profile is missing "
+            b"or stale\nOPENAI_API_KEY=must-remain-retained\n"
+        )
+
+        for kind, object_name, group in cases:
+            with self.subTest(kind=kind):
+                handle = f"{group}/20260805-170000-{object_name}"
+                destination = protocol.log_path(self.state_root, handle)
+                destination.parent.mkdir(parents=True, exist_ok=True)
+                destination.write_bytes(original)
+                destination.chmod(0o640)
+
+                with mock.patch.object(runtime, "datetime") as clock:
+                    clock.now.return_value = fixed
+                    with mock.patch.object(runtime.subprocess, "Popen") as popen:
+                        if kind == "pilot":
+                            result = runtime.submit_pilot(
+                                object_name,
+                                group,
+                                state_root=self.state_root,
+                            )
+                        else:
+                            result = runtime.submit_provider_free(
+                                object_name,
+                                group,
+                                state_root=self.state_root,
+                            )
+
+                state = protocol.load_state(self.state_root, handle)
+                public = runtime.status_job(
+                    handle,
+                    state_root=self.state_root,
+                    include_observation=False,
+                )
+                self.assertEqual(result["state"], "failed")
+                self.assertEqual(state["state"], "failed")
+                self.assertEqual(
+                    state["failure_reason"],
+                    "supervisor launch failed: FileExistsError",
+                )
+                popen.assert_not_called()
+                self.assertEqual(destination.read_bytes(), original)
+                self.assertEqual(destination.stat().st_mode & 0o777, 0o640)
+                self.assertNotIn("bootstrap_diagnostic", public)
+
+    def test_submit_exclusively_creates_private_log_before_launch(self) -> None:
+        fixed = datetime(2026, 8, 5, 17, 0, 0, tzinfo=timezone.utc)
+        cases = (
+            ("pilot", "airplane", "20260805-170003-private-log"),
+            (
+                "provider-free",
+                "issue15-runtime-authority",
+                "20260805-170004-private-log",
+            ),
+        )
+
+        for kind, object_name, group in cases:
+            with self.subTest(kind=kind):
+                handle = f"{group}/20260805-170000-{object_name}"
+                destination = protocol.log_path(self.state_root, handle)
+
+                with mock.patch.object(runtime, "datetime") as clock:
+                    clock.now.return_value = fixed
+                    with mock.patch.object(runtime.subprocess, "Popen") as popen:
+                        popen.return_value.pid = 1234
+                        if kind == "pilot":
+                            result = runtime.submit_pilot(
+                                object_name,
+                                group,
+                                state_root=self.state_root,
+                            )
+                        else:
+                            result = runtime.submit_provider_free(
+                                object_name,
+                                group,
+                                state_root=self.state_root,
+                            )
+
+                state = protocol.load_state(self.state_root, handle)
+                self.assertEqual(result["state"], "submitted")
+                self.assertEqual(state["state"], "submitted")
+                popen.assert_called_once()
+                self.assertEqual(destination.read_bytes(), b"")
+                self.assertEqual(destination.stat().st_mode & 0o777, 0o600)
+
     def test_group_allocation_lock_serializes_handle_creation(self) -> None:
         fixed = datetime(2026, 8, 5, 17, 0, 0, tzinfo=timezone.utc)
         completed = threading.Event()
@@ -1571,6 +1668,15 @@ class CvmJobTests(unittest.TestCase):
             self.assertIn(classification, contract)
         self.assertIn("4 KiB", contract)
         self.assertIn("does not publish raw log text", contract)
+
+    def test_submit_contract_documents_exclusive_private_job_log(self) -> None:
+        contract = SUBMIT_SKILL.read_text(encoding="utf-8")
+
+        self.assertIn("atomically creates", contract)
+        self.assertIn("`0600`", contract)
+        self.assertIn("supervisor launch failed", contract)
+        self.assertIn("retained unchanged", contract)
+        self.assertIn("no supervisor starts", contract)
 
     def test_submit_and_monitor_forward_one_approved_remote_cli_call(self) -> None:
         fake_bin = self.workspace / "bin"

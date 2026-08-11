@@ -359,7 +359,18 @@ def _pilot_record(
 def _detach(handle: str, command: Sequence[str], root: Path) -> int:
     destination = log_path(root, handle)
     destination.parent.mkdir(parents=True, exist_ok=True)
-    with destination.open("ab", buffering=0) as stream:
+    descriptor = os.open(
+        destination,
+        os.O_WRONLY | os.O_CREAT | os.O_EXCL,
+        0o600,
+    )
+    try:
+        os.fchmod(descriptor, 0o600)
+        stream = os.fdopen(descriptor, "wb", buffering=0)
+    except BaseException:
+        os.close(descriptor)
+        raise
+    with stream:
         process = subprocess.Popen(
             list(command),
             cwd=REPO_ROOT,

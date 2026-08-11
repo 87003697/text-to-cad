@@ -35,6 +35,12 @@ The wrapper prints one compact JSON object. Preserve its `job` handle exactly
 and hand it to `$cvm-monitor`. Submit only creates the detached job; it does not
 wait, pull, upload, clean, cancel, or retry.
 
+Before launching, submit atomically creates the new job log with owner-only
+`0600` permissions. If that path already exists or private creation fails, the
+job becomes terminal `failed` with `supervisor launch failed`; the existing log
+is retained unchanged and no supervisor starts. A new job log is neither
+appended to nor overwritten.
+
 Do not replace this workflow with raw SSH, `nohup`, `ps`, `stat`, or `find`.
 Submitting again creates a different experiment; never resubmit merely because
 a monitor connection was interrupted or a heartbeat is stale.
