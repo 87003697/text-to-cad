@@ -47,6 +47,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from build123d import Compound
 
+from cadgen import track
+
 # Order here IS the occurrence order (o1.1, o1.2, ...).
 SYSTEMS = [
     "airframe",
@@ -111,10 +113,17 @@ for _name in COSMETIC_CUTTER_MODULES:
 
 
 def gen_step():
+    # Report the walk through the systems. This phase is ~85% of the build (10 minutes of a
+    # 12-minute run, measured), and without this it is the one stretch that says nothing at
+    # all -- the viewer and the CLI both sat on "Building geometry" for its whole duration.
+    #
+    # The systems are counted AFTER dropping the ones that failed to import, so the
+    # denominator is work that will actually run. Note the units are nowhere near equal:
+    # `airframe` alone is over half the phase (see the cutter note above), so 1/13 sits for
+    # minutes and the tail ticks past quickly. The count is true, not linear.
+    buildable = [(name, module) for name, module in _MODULES if module is not None]
     groups = []
-    for name, module in _MODULES:
-        if module is None:
-            continue
+    for name, module in track(buildable, label=lambda entry: entry[0]):
         try:
             groups.append(module.build())
         except Exception as exc:  # noqa: BLE001

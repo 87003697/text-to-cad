@@ -41,7 +41,11 @@ import StatusToast from "./workbench/StatusToast";
 import UrdfFileSheet from "./workbench/UrdfFileSheet";
 import ViewerAlertDialog from "./workbench/ViewerAlertDialog";
 import ViewerLoadingOverlay from "./workbench/ViewerLoadingOverlay";
-import { formatArtifactProgress } from "@/workbench/artifactProgress.js";
+import {
+  ARTIFACT_PROGRESS_POLL_MS,
+  formatArtifactProgress,
+  normalizeArtifactProgress
+} from "@/workbench/artifactProgress.js";
 import FloatingToolBar from "./workbench/FloatingToolBar";
 import CadWorkspaceTopBar from "./workbench/CadWorkspaceTopBar";
 import CadWorkspaceHome from "./workbench/CadWorkspaceHome";
@@ -257,7 +261,7 @@ import {
   URDF_JOINT_ANIMATION_FOLLOW_MS
 } from "cadjs/lib/urdf/jointAnimation";
 import { checkMoveIt2ServerLive, moveit2ServerEnabled, requestMoveIt2Server } from "cadjs/lib/urdf/moveit2ServerClient";
-import { readActiveCadDir } from "../workbench/cadManifestStore.js";
+import { readActiveCadDir, requestArtifactStatus } from "../workbench/cadManifestStore.js";
 import {
   FILE_STATUS_LEVELS,
   buildFileStatusItems,
@@ -1393,6 +1397,7 @@ export default function CadWorkspace({
     urdfError,
     setUrdfError,
     urdfLoadStage,
+    urdfLoadProgress,
     referenceState,
     setReferenceState,
     referenceStatus,
@@ -1486,6 +1491,13 @@ export default function CadWorkspace({
   // every loading state that is not an artifact build). Only meaningful while
   // generating — a stale frame must not outlive the build that produced it.
   const selectedArtifactProgress = selectedArtifactGenerating ? selectedArtifact.progress : null;
+  // What the loading overlay reports. A model being BUILT reports through the artifact
+  // pipeline; a robot has no build behind it at all — it is a URDF plus a pile of meshes —
+  // and its loader's own mesh count is then the only progress in existence. The two are
+  // mutually exclusive in practice, and normalizing both through one function is what keeps
+  // the overlay from having to know which subsystem it is looking at.
+  const selectedLoadProgress =
+    selectedArtifactProgress || normalizeArtifactProgress(urdfLoadProgress);
   const activeStepArtifactGenerationFiles = useMemo(
     () => (selectedArtifactGenerating && catalogSelectedEntry ? [fileKey(catalogSelectedEntry)] : []),
     [selectedArtifactGenerating, catalogSelectedEntry]
@@ -5255,11 +5267,17 @@ export default function CadWorkspace({
 
     if (selectedArtifactGenerating) {
       const frame = selectedArtifactProgress ? formatArtifactProgress(selectedArtifactProgress) : null;
+      // One number, and only a measured one: a phase's own count. An uncountable phase adds
+      // nothing here rather than a percentage of the whole build, which nothing can honestly
+      // compute. The phase name and sub-unit live in the tooltip, which is opened on purpose.
+      const chip = frame?.determinate ? frame.counts : "";
       return {
         loading: true,
-        label: frame ? `${ARTIFACT_GENERATING_LABEL} ${frame.percent}%` : ARTIFACT_GENERATING_LABEL,
+        label: chip ? `${ARTIFACT_GENERATING_LABEL} ${chip}` : ARTIFACT_GENERATING_LABEL,
         title: frame
-          ? `${frame.label}${frame.counts ? ` — ${frame.counts}` : ""}`
+          ? [frame.label, frame.ordinal && `phase ${frame.ordinal}`, frame.detail]
+              .filter(Boolean)
+              .join(" — ")
           : "Generator script is running"
       };
     }
@@ -7985,9 +8003,43 @@ export default function CadWorkspace({
     setCopyStatus("");
     setScreenshotStatus("");
     setFileAccessBusyKey(busyKey);
+    // An export re-runs the model's generator, which on a large assembly is minutes — the
+    // same work a build does, and now reported the same way. The export request itself is
+    // one long-lived call, so the position comes from polling the status route beside it:
+    // the generator holds its own lock, so the model stays readable and reports `busy`.
+    const exportLabel = exportFormatLabel(exportFormat);
+    let progressTimer = 0;
+    // Checked before every write. A poll can be mid-flight when the export resolves, and
+    // without this its late answer lands ON TOP of the "Exported ..." result.
+    let progressStopped = false;
+    const stopExportProgress = () => {
+      progressStopped = true;
+      if (progressTimer) {
+        window.clearTimeout(progressTimer);
+        progressTimer = 0;
+      }
+    };
+    const pollExportProgress = async () => {
+      try {
+        const status = await requestArtifactStatus(fileRef);
+        const frame = formatArtifactProgress(normalizeArtifactProgress(status?.progress));
+        if (frame && !progressStopped) {
+          const detail = frame.detail ? ` · ${frame.detail}` : "";
+          const counts = frame.counts ? ` ${frame.counts}` : "";
+          setCopyStatus(`Exporting ${exportLabel} — ${frame.label}${detail}${counts}`);
+        }
+      } catch {
+        // Decoration only: a failed poll must never disturb the export itself.
+      }
+      if (!progressStopped) {
+        progressTimer = window.setTimeout(pollExportProgress, ARTIFACT_PROGRESS_POLL_MS);
+      }
+    };
     try {
-      setCopyStatus(`Exporting ${exportFormatLabel(exportFormat)}...`);
+      setCopyStatus(`Exporting ${exportLabel}...`);
+      progressTimer = window.setTimeout(pollExportProgress, ARTIFACT_PROGRESS_POLL_MS);
       const payload = await requestModelExport({ file: fileRef, format: exportFormat });
+      stopExportProgress();
       if (payload?.cancelled) {
         // User dismissed the native save dialog — clear the in-progress status, no error.
         setCopyStatus("");
@@ -8006,6 +8058,7 @@ export default function CadWorkspace({
     } catch (error) {
       setCopyStatus(error instanceof Error ? error.message : "Export failed");
     } finally {
+      stopExportProgress();
       setFileAccessBusyKey((current) => (current === busyKey ? "" : current));
     }
   }, []);
@@ -8523,7 +8576,7 @@ export default function CadWorkspace({
               <ViewerLoadingOverlay
                 viewerLoading={effectiveViewerLoading}
                 previewMode={previewMode}
-                progress={selectedArtifactProgress}
+                progress={selectedLoadProgress}
               />
             </div>
 

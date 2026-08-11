@@ -50,7 +50,14 @@ from cadgen.coordination import (
     artifact_build,
     generator_busy,
     render_progress_bar,
+    reporting_as,
     resolve as resolve_progress,
+)
+from cadgen.cli_progress import (
+    InlineProgressLine,
+    _finished_phase_text,
+    _progress_status_text,
+    cli_progress_line,
 )
 from cadgen.coordination.lock import exclusive
 from cadgen.coordination.paths import write_lock_path
@@ -128,96 +135,14 @@ class _CliTargetSpec:
     output_path: Path | None = None
 
 
-class InlineProgressLine:
-    """A single self-erasing progress line for one model's build.
-
-    Repaints in place with ``\\r`` and erases itself when the build ends, so the only
-    durable output is still the logger's own lines -- the bar is transient status, not
-    a log record. Disabled (and completely silent) when the stream is not a tty: a
-    redirected log wants the logger's lines, not a bar smeared over hundreds of writes.
-
-    Goes to STDERR, with the rest of the narration. A sibling class used to paint a
-    persistent per-model board on STDOUT with cursor-movement escapes, for callers that ran
-    without a logger; there were none, and stdout is the CLIs' result channel."""
-
-    def __init__(self, *, stream: TextIO | None = None, enabled: bool = True) -> None:
-        self._stream = stream if stream is not None else sys.stderr
-        self._enabled = bool(enabled) and getattr(self._stream, "isatty", lambda: False)()
-        self._width = 0
-
-    def update(self, text: str) -> None:
-        if not self._enabled:
-            return
-        # Pad to the previous width so a shorter line cannot leave the tail of a longer
-        # one behind it.
-        padding = max(0, self._width - len(text))
-        self._width = len(text)
-        print(f"\r{text}{' ' * padding}", end="", file=self._stream, flush=True)
-
-    def clear(self) -> None:
-        if not self._enabled or not self._width:
-            return
-        print(f"\r{' ' * self._width}\r", end="", file=self._stream, flush=True)
-        self._width = 0
-
-
-@contextlib.contextmanager
-def cli_progress_line(
-    label: str,
-    *,
-    logger: CliLogger,
-    fallback: str,
-) -> Iterator[Callable[[ProgressEvent], None] | None]:
-    """The same one-line build progress `gen` paints, for any caller with a label.
-
-    `scripts/artifact` builds exactly what `scripts/gen` builds and reported nothing while
-    doing it -- the sidecar record went to the viewer, and a terminal caller watched a
-    silent process. Sharing this is what stops the two disagreeing about whether a build is
-    worth narrating."""
-    if logger.verbose:
-        yield None
-        return
-    line = InlineProgressLine(stream=logger.stream)
-
-    def paint(event: ProgressEvent) -> None:
-        if event.finished:
-            return
-        line.update(f"{label}  {_progress_status_text(event, fallback=fallback)}")
-
-    try:
-        yield paint
-    finally:
-        line.clear()
-
-
-@contextlib.contextmanager
 def _cli_progress_line(
     spec: EntrySpec,
     *,
     logger: CliLogger,
     fallback: str,
-) -> Iterator[Callable[[ProgressEvent], None] | None]:
-    """Yield a progress sink that paints ``spec``'s build onto one tty line.
-
-    Yields None -- reporting nothing -- under ``--verbose``, where the logger is already
-    narrating every stage and a bar repainting between its lines would fight with them.
-    The sidecar is written regardless, so an open CAD Viewer still tracks the build."""
-    if logger.verbose:
-        yield None
-        return
-    line = InlineProgressLine(stream=logger.stream)
-
-    def paint(event: ProgressEvent) -> None:
-        # The terminal event exists to record the run's stage times in the sidecar;
-        # painting it would flash a completed bar onto a line about to be erased.
-        if event.finished:
-            return
-        line.update(f"{spec.source_ref}  {_progress_status_text(event, fallback=fallback)}")
-
-    try:
-        yield paint
-    finally:
-        line.clear()
+) -> "contextlib.AbstractContextManager[Callable[[ProgressEvent], None] | None]":
+    """:func:`cli_progress_line` keyed to a spec's source ref."""
+    return cli_progress_line(spec.source_ref, logger=logger, fallback=fallback)
 
 
 def _display_name_for_path(path: Path) -> str:
@@ -963,19 +888,45 @@ def run_script_generator(
         raise RuntimeError(f"Unsupported generator: {generator_name}")
     if spec.script_path is None or spec.generator_metadata is None:
         raise ValueError(f"{spec.source_ref} is not a generated Python CAD source")
-    # Opaque by nature: the generator is arbitrary user code with no unit of work to
-    # count, so this reports a phase, not a fraction. Readers estimate it against the
-    # duration the model's previous build recorded.
-    resolve_progress(progress).phase(PHASE_GENERATE)
-    with _track_spec_generation(spec, generator_name, intent=lock_intent, logger=logger):
-        return _run_script_generator_inner(
-            spec,
-            generator_name,
-            logger=logger,
-            force=force,
-            reset_runtime_closure=reset_runtime_closure,
-            progress=progress,
-        )
+    # A WRITER arrives with the BuildRun that already owns this model's status record and
+    # its progress line. An EXPORT arrives with neither: it takes the generator lock instead
+    # of the write lock, and until that lock carried a reporter, `cad export` ran the same
+    # multi-minute gen_step() a build runs and said nothing on any surface. So the run the
+    # lock yields becomes the reporter when nobody above us is one.
+    owns_reporting = progress is None
+    with _generator_progress_line(spec, logger=logger, active=owns_reporting) as sink:
+        with _track_spec_generation(
+            spec, generator_name, intent=lock_intent, logger=logger, sink=sink
+        ) as generator_run:
+            active = generator_run if owns_reporting else progress
+            # The phase opens INSIDE the lock: before this it opened first, so a run queued
+            # behind a peer reported "building geometry" for the whole time it was waiting.
+            resolve_progress(active).phase(PHASE_GENERATE)
+            return _run_script_generator_inner(
+                spec,
+                generator_name,
+                logger=logger,
+                force=force,
+                reset_runtime_closure=reset_runtime_closure,
+                progress=active,
+            )
+
+
+@contextlib.contextmanager
+def _generator_progress_line(
+    spec: EntrySpec, *, logger: CliLogger | None, active: bool
+) -> Iterator[Callable[[ProgressEvent], None] | None]:
+    """The terminal line for a generator run that owns its own reporting.
+
+    Inactive when a build above us already paints one — two painters on one tty interleave
+    into nonsense — and when there is no logger to paint through."""
+    if not active:
+        yield None
+        return
+    with cli_progress_line(
+        spec.source_ref, logger=logger or CliLogger("cad"), fallback="Building..."
+    ) as sink:
+        yield sink
 
 
 def _run_script_generator_inner(
@@ -1001,7 +952,12 @@ def _run_script_generator_inner(
         generator = getattr(module, generator_name, None)
         if not callable(generator):
             raise RuntimeError(f"{_display_path(spec.script_path)} does not define callable {generator_name}()")
-        with logger.timed(f"run {generator_name} {spec.source_ref}"):
+        # Bind the lock holder as the ambient reporter for the generator's own code. This is
+        # the in-process twin of `run_node_builder`, which lets a Node child describe its
+        # work over a pipe: gen_step() takes no arguments and so cannot be handed the run,
+        # and without this the longest phase of most builds reports nothing at all. Silent
+        # generators are unaffected -- nothing reads the binding unless they ask for it.
+        with logger.timed(f"run {generator_name} {spec.source_ref}"), reporting_as(progress):
             raw_payload = generator()
 
     source_closure: PythonSourceClosure | None = None
@@ -1797,6 +1753,7 @@ def _track_spec_generation(
     *,
     intent: str = "write",
     logger: CliLogger | None = None,
+    sink: Callable[[ProgressEvent], None] | None = None,
 ) -> contextlib.AbstractContextManager[object]:
     """Coordinate a generator run against the model's render package.
 
@@ -1819,8 +1776,21 @@ def _track_spec_generation(
         return contextlib.nullcontext()
     on_wait = lock_wait_notice(logger, spec.source_ref)
     if intent == "generate":
-        return generator_busy(STEP_PACKAGE, output_dir, on_wait=on_wait)
-    return exclusive(write_lock_path(output_dir), on_wait=on_wait)
+        # The kind decides which phase set the run reports over, so a drawing generator
+        # counts its own phases rather than a STEP package's.
+        kind = DRAWING_PACKAGE if generator_name == "gen_dxf" else STEP_PACKAGE
+        return generator_busy(kind, output_dir, on_wait=on_wait, sink=sink)
+    # A writer already has its BuildRun from artifact_build; this only needs the lock, and
+    # yields None so the caller's `progress or this` choice stays a simple one.
+    return _write_lock_without_reporting(write_lock_path(output_dir), on_wait=on_wait)
+
+
+@contextlib.contextmanager
+def _write_lock_without_reporting(
+    path: Path, *, on_wait: Callable[[float], None] | None
+) -> Iterator[None]:
+    with exclusive(path, on_wait=on_wait):
+        yield None
 
 
 def _run_with_spec_generation_status(
@@ -1859,21 +1829,6 @@ def _run_with_spec_generation_status(
         if run.skipped:
             return _SkippedGeneration(spec)
         return action(spec, run)
-
-
-def _progress_status_text(event: ProgressEvent, *, fallback: str) -> str:
-    """One status-board row for a build in flight.
-
-    A determinate phase reports its real count (``31/50``); an opaque one reports only
-    which phase is running, with the bar sitting wherever the phase weighting puts it.
-    Nothing here invents a denominator the build does not have."""
-    if event.finished:
-        return fallback
-    label = (event.label or fallback).lower()
-    bar = f"{render_progress_bar(event.ratio)} {int(event.ratio * 100):>3d}%"
-    if event.determinate and event.total:
-        return f"{bar}  {label} {event.done}/{event.total}"
-    return f"{bar}  {label}"
 
 
 def _run_selected_specs(
