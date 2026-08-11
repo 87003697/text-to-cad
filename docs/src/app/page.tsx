@@ -246,7 +246,7 @@ export default function Home() {
             <SectionIntro
               id="installation-title"
               title="INSTALL"
-              description="Install CAD Skills with the Skills CLI. Provider-native plugin installs are available as a secondary path."
+              description="Install text-to-cad with the Skills CLI. Provider-native plugin installs are available as a secondary path."
             />
 
             <div className="max-w-3xl space-y-3">

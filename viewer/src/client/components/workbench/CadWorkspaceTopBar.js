@@ -1189,8 +1189,8 @@ export default function CadWorkspaceTopBar({
             asChild
             variant="ghost"
             size="icon-sm"
-            aria-label="Join the CAD Skills Discord"
-            title="Join the CAD Skills Discord"
+            aria-label="Join the text-to-cad Discord"
+            title="Join the text-to-cad Discord"
             className={topBarIconButtonClasses}
           >
             <a href={discordUrl} target="_blank" rel="noreferrer">
