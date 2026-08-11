@@ -25,7 +25,7 @@ description: >-
 
 ```text
 Parse request → Discover plan → Qualify terminal/postmortem
-→ Publish transaction (upload → verify → cleanup)
+→ Publish transaction (upload → S3 verify → mount stage/audit → cleanup)
 → Expose through mount → Report
 ```
 
@@ -37,6 +37,8 @@ Parse request → Discover plan → Qualify terminal/postmortem
    - `--discard-postmortem`：显式丢弃未上传的 postmortem 后清理失败实验；
    - `--exp <group>/<exp>`：只处理一个 child handle；
    - `--group <group>`：处理一个 batch group；
+   - `--authority-timeout-seconds` / `--authority-max-files` /
+     `--authority-max-bytes`：显式约束 mount staging 与 materialized validation；
    - 默认无 scope：扫描全部实验；
    - 失败实验或存在 `run/.codex-upper` 的实验保留在 CVM，不上传、不清理。
    两个 flags 互斥；`--discard-postmortem` 是不可恢复操作，只有用户明确授权丢弃
@@ -71,6 +73,12 @@ Parse request → Discover plan → Qualify terminal/postmortem
 - **terminal manifest 是独立硬门**：每个候选都必须有合法且含整数
   `final_status` 的 `artifact_manifest.json`；missing/invalid 时 exit 9，不上传、不
   清理，并回到 `$cvm-monitor`。monitor 返回不能代替 pull 重验。
+- **portable authority 是 cleanup 硬门**：每个将被 cleanup 的候选必须有
+  `workspace-authority.json` 与 `workspace-authority.bundle`，且 terminal manifest
+  必须以 size + SHA-256 绑定两者。上传并完成 S3 计数验证后，脚本先刷新 mount，
+  将 mounted exp 有界 staging 到本地临时目录，materialize bundle，并通过原始
+  Workspace `validate` 进程验证；只有这一步成功才允许删除 CVM source。receipt
+  只是 evidence routing，不是 Workspace authority。
 - **`run/rollout.jsonl` 默认上传**，它是 pilot 的 cost/事故真相源。
 - **`run/stderr.log` + `.codex/` + `__pycache__/` 默认排除**；`--include-byproducts` opt-in。
 - **rclone mount 必须健康**：跑前直接探测 `127.0.0.1:5572` RC endpoint；
@@ -121,7 +129,8 @@ Parse request → Discover plan → Qualify terminal/postmortem
 - 因失败态/postmortem 默认保留在 CVM 的 exp 清单
 - 每 exp artifact 存在性 check（从 mount 侧读）：`workspace.json` /
   `step_index.json` / `notes.md` / `final/manifest.json` / `run/rollout.jsonl`
-  各标 ✓/✗；未发布 Final Delivery 时必须说明对应 Workspace 状态
+  / `workspace-authority.json` / `workspace-authority.bundle` 各标 ✓/✗；未发布
+  Final Delivery 时必须说明对应 Workspace 状态
 - 下一步提示：`/pilot-review outputs/<group>/`（推荐指向刚上传的整个 group，
   一次审多个 exp；`outputs/` 是 symlink 指向 mount）
 
@@ -137,6 +146,9 @@ Parse request → Discover plan → Qualify terminal/postmortem
 - exit 7（unsafe exp path）→ 不上传、不清理，检查 CVM 目录命名
 - exit 9（missing/invalid terminal manifest）→ 不上传、不清理；使用同一 handle
   回到 `$cvm-monitor`，不得自动 resubmit
+- exit 10（portable authority missing 或 staging/validation timeout）→ 不上传或不
+  cleanup，按输出的 stable authority classification 修复；timeout 与 invalid
+  authority 必须分开汇报
 - 单 exp upload 中途失败 → 脚本 `set -euo pipefail` 中止；已成功的 exp 已 verify
   + 已清理（安全）；失败的 exp CVM local 保留
 

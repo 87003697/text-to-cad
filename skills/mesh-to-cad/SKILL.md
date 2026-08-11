@@ -36,7 +36,10 @@ immutable evidence. Mutable modeling files live only under `work/`.
 
 Read `references/workspace-contract.md` for helper commands and transaction
 semantics. Read `references/output-schemas.md` before authoring any setup,
-plan, assessment, selection, or notes document.
+plan, assessment, selection, or notes document. The runner publishes the
+portable transfer package defined by
+`references/portable-workspace-authority.md`; it is evidence routing, not a
+second Workspace authority.
 
 ## Required workflow
 
@@ -162,6 +165,8 @@ Return:
 - `final/preview.png`, `final/preview.json`, `final/selection.json`, and
   `final/manifest.json`;
 - the final `validate` result and protocol-scoped Git commit.
+- `workspace-authority.bundle` and `workspace-authority.json` when the runner
+  has terminally published the experiment for transfer.
 
 If Final Delivery was not published, report the exact classification and the
 last valid Measured Step/Attempt. Never claim acceptance, rebuild provenance,

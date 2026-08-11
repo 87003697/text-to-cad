@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import math
 import os
@@ -39,6 +40,7 @@ ARTIFACT_CONTRACT_STATUS = 4
 MANIFEST_EXCLUDED_ROOTS = {".git"}
 MANIFEST_EXCLUDED_PREFIXES = {"run/.codex-upper"}
 WORKSPACE_HELPER = REPO_ROOT / "skills/mesh-to-cad/scripts/mesh-to-cad-workspace"
+WORKSPACE_AUTHORITY_HELPER = REPO_ROOT / "scripts/pilot/workspace_authority.py"
 SYSTEM_RO_PATHS = (
     Path("/usr"),
     Path("/etc/alternatives"),
@@ -71,6 +73,10 @@ GITIGNORE = """\
 run/
 artifact_manifest.json
 .artifact_manifest.json.tmp
+workspace-authority.bundle
+workspace-authority.json
+.workspace-authority.bundle.tmp-*
+.workspace-authority.json.tmp-*
 __pycache__/
 *.pyc
 .codex/
@@ -901,6 +907,52 @@ def validate_workspace_delivery(exp_dir: Path) -> dict[str, object]:
     return delivery
 
 
+def publish_workspace_authority(exp_dir: Path) -> dict[str, object]:
+    """Publish the portable authority package through its public process seam."""
+
+    try:
+        completed = subprocess.run(
+            [
+                sys.executable,
+                str(WORKSPACE_AUTHORITY_HELPER),
+                "create",
+                "--workspace",
+                str(exp_dir),
+                "--workspace-helper",
+                str(WORKSPACE_HELPER),
+            ],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=120,
+        )
+    except (OSError, subprocess.SubprocessError) as exc:
+        raise PilotError(f"cannot publish Workspace authority: {exc}") from exc
+    try:
+        payload = json.loads(completed.stdout)
+    except json.JSONDecodeError as exc:
+        raise PilotError("Workspace authority helper returned invalid JSON") from exc
+    if not isinstance(payload, dict):
+        raise PilotError("Workspace authority helper returned a non-object")
+    if completed.returncode != 0 or payload.get("ok") is not True:
+        authority = payload.get("authority")
+        classification = (
+            authority.get("classification")
+            if isinstance(authority, dict)
+            else "authority_publication_failure"
+        )
+        detail = (
+            authority.get("detail")
+            if isinstance(authority, dict)
+            else "authority publication failed"
+        )
+        raise PilotError(f"Workspace authority failed ({classification}): {detail}")
+    authority = payload.get("authority")
+    if not isinstance(authority, dict):
+        raise PilotError("Workspace authority helper omitted authority evidence")
+    return authority
+
+
 def write_artifact_manifest(
     exp_dir: Path,
     workload_status: int,
@@ -929,6 +981,12 @@ def write_artifact_manifest(
                 {
                     "path": relative.as_posix(),
                     "size_bytes": path.stat().st_size,
+                    **(
+                        {"sha256": hashlib.sha256(path.read_bytes()).hexdigest()}
+                        if relative.as_posix()
+                        in {"workspace-authority.bundle", "workspace-authority.json"}
+                        else {}
+                    ),
                 }
             )
         payload = {
@@ -1020,6 +1078,7 @@ def finalize_pilot(
     if workload_status == 0:
         try:
             validate_workspace_delivery(exp_dir)
+            publish_workspace_authority(exp_dir)
         except PilotError as exc:
             print(f"pilot-runner: {exc}", file=sys.stderr)
             final_status = ARTIFACT_CONTRACT_STATUS

@@ -27,11 +27,13 @@ migrates, or reinterprets experiment state.
 Interpret the argument as an experiment directory, group directory, or glob
 under `outputs/<group>/<exp>/`. Skip `_snapshot/` when reviewing a group.
 
-A supported experiment contains `workspace.json` with schema
-`mesh-to-cad.workspace/1`. If that authority is absent or a pre-cutover layout
-is detected, report `unsupported_legacy_workspace` and stop Workspace analysis
-for that experiment. Do not reconstruct another protocol from filenames,
-commits, notes, or runner telemetry.
+A supported live experiment contains `.git` plus `workspace.json` with schema
+`mesh-to-cad.workspace/1`. A transferred experiment instead contains
+`workspace-authority.json` and `workspace-authority.bundle`; stage it locally,
+materialize its sole publication ref, and validate the resulting temporary Git
+root. If both live and portable authority are absent, report `not_auditable`
+and stop Workspace analysis. Do not reconstruct another protocol from
+filenames, commits, notes, or runner telemetry.
 
 ## Expected graph
 
@@ -78,7 +80,9 @@ separate finding; current source is not retroactive law.
 ### 2. Validate authority first
 
 - Run `./.venv/bin/python .claude/skills/pilot-review/scripts/review.py <exp>
-  --workspace-helper skills/mesh-to-cad/scripts/mesh-to-cad-workspace` first.
+  --workspace-helper skills/mesh-to-cad/scripts/mesh-to-cad-workspace
+  --authority-helper .claude/skills/pilot-review/scripts/workspace_authority.py`
+  first.
   It invokes the Workspace skill's public `validate` process interface
   read-only and publishes only `review.md` and `review.json`.
 - Confirm `workspace.json`, `experiment.json`, Canonical Reference identities,
@@ -88,6 +92,9 @@ separate finding; current source is not retroactive law.
   failures, explicit ancestry, marker-last recovery state, and LFS evidence.
 - Treat `run/`, `work/`, runner logs, rollout, trace, and transfer manifests as
   telemetry. They cannot redefine Workspace facts.
+- Record `authority_mode` as `live` or `materialized` and include exact receipt
+  and bundle evidence pointers. Receipt facts only route bundle verification;
+  they cannot override the materialized Git objects or validator.
 
 If validation fails, report the exact classification and continue only with
 checks whose authority remains independently readable.
@@ -174,6 +181,9 @@ problems, and an ordered fix playbook.
 - Support only `mesh-to-cad.workspace/1` experiment authority.
 - Keep process, result, runtime, and runner evidence separate.
 - Missing evidence is `not_auditable`, never a guessed pass.
+- Portable staging file/byte/time bounds are explicit CLI inputs. Timeout is
+  `authority_timeout`, distinct from invalid authority, and publishes no partial
+  graph.
 - Do not issue network requests, call a model, install dependencies, start a
   viewer, or alter experiment artifacts beyond the review outputs.
 - Run every applicable check for every experiment in group mode.

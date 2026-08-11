@@ -747,6 +747,8 @@ class ProductionPathContractTests(unittest.TestCase):
         self.assertTrue(head.stdout.strip())
         self.assertIn("run/", ignored)
         self.assertIn("artifact_manifest.json", ignored)
+        self.assertIn("workspace-authority.bundle", ignored)
+        self.assertIn("workspace-authority.json", ignored)
         self.assertEqual(name.stdout.strip(), "pilot")
         self.assertTrue(run_exists)
 
@@ -783,6 +785,35 @@ class ProductionPathContractTests(unittest.TestCase):
             ],
         )
         self.assertNotIn("run/.codex-upper/state.db", paths)
+
+    def test_terminal_manifest_binds_both_authority_files_with_sha256(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            exp_dir = Path(temp) / "exp"
+            exp_dir.mkdir()
+            (exp_dir / "workspace-authority.bundle").write_bytes(b"bundle-bytes")
+            (exp_dir / "workspace-authority.json").write_bytes(b"{}\n")
+            load_runner().write_artifact_manifest(exp_dir, 0, 0)
+            manifest = json.loads(
+                (exp_dir / "artifact_manifest.json").read_text(encoding="utf-8")
+            )
+        authority = {
+            item["path"]: item
+            for item in manifest["files"]
+            if item["path"].startswith("workspace-authority.")
+        }
+        self.assertEqual(
+            set(authority),
+            {"workspace-authority.bundle", "workspace-authority.json"},
+        )
+        self.assertEqual(authority["workspace-authority.bundle"]["size_bytes"], 12)
+        self.assertEqual(
+            authority["workspace-authority.bundle"]["sha256"],
+            "eb333942340dfa7da54597d78b894f35310289e75ec3a84137a197a37ab1d164",
+        )
+        self.assertEqual(
+            authority["workspace-authority.json"]["sha256"],
+            "ca3d163bab055381827226140568f3bef7eaac187cebd76878e0b63e9e442356",
+        )
 
     def test_workspace_delivery_gate_uses_public_validator_graph(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
@@ -924,6 +955,10 @@ class ProductionPathContractTests(unittest.TestCase):
                 runner,
                 "validate_workspace_delivery",
                 return_value={"selected_step": 0, "accepted": True},
+            ), mock.patch.object(
+                runner,
+                "publish_workspace_authority",
+                return_value={},
             ):
                 status = runner.finalize_pilot(exp_dir, 0, {})
             captured = (exp_dir / "run/rollout.jsonl").read_text(encoding="utf-8")
@@ -933,6 +968,69 @@ class ProductionPathContractTests(unittest.TestCase):
         self.assertEqual(captured, "{}\n")
         self.assertFalse(upper_exists)
         self.assertTrue(manifest_exists)
+
+    def test_finalize_success_publishes_authority_before_terminal_manifest(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            exp_dir = Path(temp) / "exp"
+            rollout = (
+                exp_dir
+                / "run/.codex-upper"
+                / "sessions"
+                / "a"
+                / "b"
+                / "c"
+                / "rollout-test.jsonl"
+            )
+            rollout.parent.mkdir(parents=True)
+            rollout.write_text("{}\n", encoding="utf-8")
+            (exp_dir / ".gitignore").write_text(
+                "run/\nartifact_manifest.json\nworkspace-authority.bundle\nworkspace-authority.json\n",
+                encoding="utf-8",
+            )
+            (exp_dir / "workspace.json").write_text(
+                '{"schema":"mesh-to-cad.workspace/1","workspace_id":"runner-test"}\n',
+                encoding="utf-8",
+            )
+            (exp_dir / "final").mkdir()
+            (exp_dir / "final/manifest.json").write_text(
+                '{"schema":"mesh-to-cad.final-delivery/1"}\n',
+                encoding="utf-8",
+            )
+            subprocess.run(["git", "init", "--quiet"], cwd=exp_dir, check=True)
+            subprocess.run(
+                ["git", "config", "user.name", "runner-test"], cwd=exp_dir, check=True
+            )
+            subprocess.run(
+                ["git", "config", "user.email", "runner-test@localhost"],
+                cwd=exp_dir,
+                check=True,
+            )
+            subprocess.run(
+                ["git", "add", ".gitignore", "workspace.json", "final/manifest.json"],
+                cwd=exp_dir,
+                check=True,
+            )
+            subprocess.run(
+                ["git", "commit", "--quiet", "-m", "workspace: final"],
+                cwd=exp_dir,
+                check=True,
+            )
+            helper = Path(temp) / "validator.py"
+            helper.write_text(
+                "import json\n"
+                "print(json.dumps({'ok':True,'valid':True,'graph':{'schema':'mesh-to-cad.step-index/1','final_delivery':{'identity_sha256':'" + "a" * 64 + "'}},'recovery':[]}))\n",
+                encoding="utf-8",
+            )
+            runner = load_runner()
+            with mock.patch.object(runner, "WORKSPACE_HELPER", helper):
+                status = runner.finalize_pilot(exp_dir, 0, {})
+            manifest = json.loads(
+                (exp_dir / "artifact_manifest.json").read_text(encoding="utf-8")
+            )
+        self.assertEqual(status, 0)
+        paths = {item["path"] for item in manifest["files"]}
+        self.assertIn("workspace-authority.bundle", paths)
+        self.assertIn("workspace-authority.json", paths)
 
     def test_finalize_keep_state_preserves_successful_sandbox(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
@@ -953,6 +1051,10 @@ class ProductionPathContractTests(unittest.TestCase):
                 runner,
                 "validate_workspace_delivery",
                 return_value={"selected_step": 0, "accepted": True},
+            ), mock.patch.object(
+                runner,
+                "publish_workspace_authority",
+                return_value={},
             ):
                 status = runner.finalize_pilot(
                     exp_dir,
@@ -1131,6 +1233,11 @@ class ProductionPathContractTests(unittest.TestCase):
                     runner,
                     "validate_workspace_delivery",
                     return_value={"selected_step": 0, "accepted": True},
+                ),
+                mock.patch.object(
+                    runner,
+                    "publish_workspace_authority",
+                    return_value={},
                 ),
                 mock.patch.object(
                     runner,

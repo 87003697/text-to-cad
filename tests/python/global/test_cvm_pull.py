@@ -80,6 +80,12 @@ class PullRequestTests(unittest.TestCase):
                 "--exp",
                 "20260805-170000-audit/20260805-170001-airplane",
                 "--include-byproducts",
+                "--authority-timeout-seconds",
+                "45",
+                "--authority-max-files",
+                "1234",
+                "--authority-max-bytes",
+                "5678",
             ]
         )
         self.assertEqual(
@@ -87,6 +93,9 @@ class PullRequestTests(unittest.TestCase):
             "20260805-170000-audit/20260805-170001-airplane",
         )
         self.assertTrue(request.include_byproducts)
+        self.assertEqual(request.authority_timeout_seconds, 45.0)
+        self.assertEqual(request.authority_max_files, 1234)
+        self.assertEqual(request.authority_max_bytes, 5678)
 
         with self.assertRaisesRegex(cvm_pull.PullError, "Unsafe --exp"):
             cvm_pull.parse_request(["--exp", "../escape"])
@@ -107,11 +116,15 @@ class PullPlanTests(unittest.TestCase):
                 "complete": True,
                 "final_status": 0,
                 "has_postmortem": False,
+                "authority_complete": True,
+                "authority_classification": "valid",
             },
             "group/incomplete": {
                 "complete": False,
                 "final_status": None,
                 "has_postmortem": False,
+                "authority_complete": False,
+                "authority_classification": "authority_missing",
             },
         }
 
@@ -138,6 +151,29 @@ class PullPlanTests(unittest.TestCase):
         self.assertIn("isinstance(manifest, dict)", source)
         self.assertIn("value = None", source)
 
+    def test_qualify_rejects_terminal_success_without_manifest_bound_authority(self) -> None:
+        runner = FakeRunner()
+        workflow = self.workflow(runner)
+        runner.respond(
+            "group/missing-authority",
+            stdout=json.dumps(
+                {
+                    "complete": True,
+                    "final_status": 0,
+                    "has_postmortem": False,
+                    "authority_complete": False,
+                    "authority_classification": "authority_missing",
+                }
+            ),
+        )
+        with self.assertRaises(cvm_pull.PullError) as error:
+            workflow.qualify(
+                ("group/missing-authority",),
+                ("group/missing-authority",),
+            )
+        self.assertEqual(error.exception.status, 10)
+        self.assertIn("authority_missing", str(error.exception))
+
     def test_qualify_preserves_every_nonzero_integer_and_postmortem(self) -> None:
         runner = FakeRunner()
         workflow = self.workflow(runner)
@@ -146,16 +182,22 @@ class PullPlanTests(unittest.TestCase):
                 "complete": True,
                 "final_status": 0,
                 "has_postmortem": False,
+                "authority_complete": True,
+                "authority_classification": "valid",
             },
             "group/negative": {
                 "complete": True,
                 "final_status": -9,
                 "has_postmortem": False,
+                "authority_complete": False,
+                "authority_classification": "authority_missing",
             },
             "group/upper": {
                 "complete": True,
                 "final_status": 0,
                 "has_postmortem": True,
+                "authority_complete": True,
+                "authority_classification": "valid",
             },
         }
 
@@ -218,12 +260,17 @@ class PullPlanTests(unittest.TestCase):
             ),
             mock.patch.object(
                 workflow,
+                "_verify_mount_authority",
+                side_effect=lambda _exp: events.append("mount-audit"),
+            ),
+            mock.patch.object(
+                workflow,
                 "_cleanup_exp",
                 side_effect=lambda _exp: events.append("cleanup"),
             ),
         ):
             result = workflow.publish(plan)
-        self.assertEqual(events, ["upload", "verify", "cleanup"])
+        self.assertEqual(events, ["upload", "verify", "mount-audit", "cleanup"])
         self.assertEqual(result.uploaded, ("group/exp",))
 
         events.clear()
@@ -238,6 +285,7 @@ class PullPlanTests(unittest.TestCase):
                 "_verify_exp",
                 side_effect=cvm_pull.PullError("bad verify", 5),
             ),
+            mock.patch.object(workflow, "_verify_mount_authority"),
             mock.patch.object(
                 workflow,
                 "_cleanup_exp",
@@ -247,6 +295,32 @@ class PullPlanTests(unittest.TestCase):
             with self.assertRaises(cvm_pull.PullError):
                 workflow.publish(plan)
         self.assertEqual(events, ["upload"])
+
+    def test_mount_authority_failure_blocks_cleanup_after_verified_upload(self) -> None:
+        runner = FakeRunner()
+        workflow = self.workflow(runner)
+        plan = cvm_pull.PullPlan(
+            cvm_exps=("group/exp",),
+            candidates=("group/exp",),
+            s3_exps=frozenset(),
+            publish=("group/exp",),
+            preserve=(),
+        )
+        events: list[str] = []
+        with (
+            mock.patch.object(workflow, "_upload_exp", side_effect=lambda _exp: events.append("upload")),
+            mock.patch.object(workflow, "_verify_exp", side_effect=lambda _exp: events.append("verify") or 3),
+            mock.patch.object(
+                workflow,
+                "_verify_mount_authority",
+                side_effect=cvm_pull.PullError("authority_timeout", 10),
+            ),
+            mock.patch.object(workflow, "_cleanup_exp", side_effect=lambda _exp: events.append("cleanup")),
+        ):
+            with self.assertRaises(cvm_pull.PullError) as error:
+                workflow.publish(plan)
+        self.assertEqual(error.exception.status, 10)
+        self.assertEqual(events, ["upload", "verify"])
 
     def test_publish_resumes_cleanup_for_verified_existing_s3_prefix(self) -> None:
         runner = FakeRunner()
@@ -272,12 +346,17 @@ class PullPlanTests(unittest.TestCase):
             ),
             mock.patch.object(
                 workflow,
+                "_verify_mount_authority",
+                side_effect=lambda _exp: events.append("mount-audit"),
+            ),
+            mock.patch.object(
+                workflow,
                 "_cleanup_exp",
                 side_effect=lambda _exp: events.append("cleanup"),
             ),
         ):
             workflow.publish(plan)
-        self.assertEqual(events, ["cleanup"])
+        self.assertEqual(events, ["mount-audit", "cleanup"])
 
     def test_publish_repairs_partial_s3_prefix_before_cleanup(self) -> None:
         runner = FakeRunner()
@@ -308,12 +387,17 @@ class PullPlanTests(unittest.TestCase):
             ),
             mock.patch.object(
                 workflow,
+                "_verify_mount_authority",
+                side_effect=lambda _exp: events.append("mount-audit"),
+            ),
+            mock.patch.object(
+                workflow,
                 "_cleanup_exp",
                 side_effect=lambda _exp: events.append("cleanup"),
             ),
         ):
             workflow.publish(plan)
-        self.assertEqual(events, ["upload", "verify", "cleanup"])
+        self.assertEqual(events, ["upload", "verify", "mount-audit", "cleanup"])
 
     def test_publish_preserves_source_when_s3_has_extra_objects(self) -> None:
         runner = FakeRunner()
