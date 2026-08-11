@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import importlib.util
+import io
 import json
 import os
 import shutil
@@ -9,6 +10,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 from unittest import mock
 
@@ -31,6 +33,7 @@ class FakeRunner:
         self.streams: list[tuple[tuple[str, ...], Path]] = []
         self.responses: list[tuple[str, int, str]] = []
         self.stream_status = 0
+        self.stream_output = ""
 
     def respond(self, marker: str, stdout: str = "", status: int = 0) -> None:
         self.responses.append((marker, status, stdout))
@@ -48,6 +51,11 @@ class FakeRunner:
 
     def stream(self, argv, *, cwd, log_path, env=None, echo):
         self.streams.append((tuple(argv), Path(cwd)))
+        Path(log_path).parent.mkdir(parents=True, exist_ok=True)
+        with Path(log_path).open("a", encoding="utf-8") as log:
+            log.write(self.stream_output)
+        if echo:
+            print(self.stream_output, end="")
         return self.stream_status
 
 
@@ -203,6 +211,312 @@ class PushWrapperTests(unittest.TestCase):
         self.assertEqual(result.stdout.strip(), "one|two")
 
 
+class AgentModeTests(unittest.TestCase):
+    def test_cli_accepts_agent_and_rejects_unknown_arguments(self) -> None:
+        self.assertTrue(cvm_push.parse_args(["--agent"]).agent)
+        with self.assertRaises(SystemExit) as error:
+            cvm_push.parse_args(["--unknown"])
+        self.assertEqual(error.exception.code, 2)
+
+    def test_agent_transfer_is_quiet_while_manual_transfer_keeps_progress(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as root_text:
+            root = Path(root_text)
+            repo = create_repo(root)
+            stage = root / "stage"
+            stage.mkdir()
+            runner = FakeRunner()
+            runner.stream_output = "rsync progress\n"
+
+            agent_stdout = io.StringIO()
+            with redirect_stdout(agent_stdout):
+                cvm_push.CvmPush(
+                    runner,
+                    repo_root=repo,
+                    environ={"TMPDIR": str(root)},
+                    agent=True,
+                ).transfer_stage(stage)
+
+            manual_stdout = io.StringIO()
+            with redirect_stdout(manual_stdout):
+                cvm_push.CvmPush(
+                    runner,
+                    repo_root=repo,
+                    environ={"TMPDIR": str(root)},
+                ).transfer_stage(stage)
+
+        self.assertEqual(agent_stdout.getvalue(), "")
+        self.assertEqual(manual_stdout.getvalue(), "rsync progress\n")
+
+    def test_agent_success_emits_phases_and_matching_receipt_file(self) -> None:
+        with tempfile.TemporaryDirectory() as root_text:
+            root = Path(root_text)
+            repo = create_repo(root)
+            workflow = cvm_push.CvmPush(
+                FakeRunner(),
+                repo_root=repo,
+                environ={"TMPDIR": str(root)},
+                agent=True,
+            )
+            source = cvm_push.SourceProvenance("develop", "deadbeef", "dirty")
+            attestation = cvm_push.RuntimeAttestation({}, "1234")
+            source_authority = {
+                "schema": "cvm.deployed-source-authority/1",
+                "source_head": "deadbeef",
+                "portable_workspace_authority": {
+                    "schema": "mesh-to-cad.workspace-authority/1"
+                },
+            }
+            deployment_receipt = {
+                "schema": "cvm.viewer-runtime-deployment/1",
+                "viewer_version": "0.3.9",
+                "artifacts": [],
+            }
+            workflow.preflight_local = mock.Mock()
+            workflow.preflight_remote = mock.Mock(
+                return_value=cvm_push.RemotePreflight(free_gb=20)
+            )
+            workflow.inspect_source = mock.Mock(return_value=source)
+            workflow.resolve_build_inputs = mock.Mock(
+                return_value=cvm_push.BuildInputs(root / "viewer", root / "cad")
+            )
+            workflow.copy_source_to_stage = mock.Mock()
+            workflow.copy_build_inputs = mock.Mock()
+            workflow.materialize_skill_symlinks = mock.Mock()
+            workflow.bundle_stage = mock.Mock()
+            workflow.validate_stage = mock.Mock()
+            workflow.attest_stage = mock.Mock(return_value=attestation)
+            workflow.transfer_stage = mock.Mock()
+            workflow.build_remote_native_runtime = mock.Mock()
+            workflow.publish_remote_deployment_authority = mock.Mock(
+                return_value=source_authority
+            )
+            workflow.verify_remote = mock.Mock(return_value=deployment_receipt)
+            workflow.remote_git_base = mock.Mock(return_value="remote-head")
+
+            stdout = io.StringIO()
+            with redirect_stdout(stdout):
+                status = cvm_push.execute(workflow)
+
+            records = [json.loads(line) for line in stdout.getvalue().splitlines()]
+            receipt = records[-1]
+            persisted = json.loads(
+                workflow.receipt_path.read_text(encoding="utf-8")
+            )
+
+        self.assertEqual(status, 0)
+        self.assertEqual(
+            [record["phase"] for record in records[:-1]],
+            ["preflight", "stage", "transfer", "verify"],
+        )
+        self.assertTrue(
+            all(record["schema"] == "cvm-push.event/1" for record in records[:-1])
+        )
+        self.assertEqual(receipt, persisted)
+        self.assertEqual(receipt["schema"], "cvm-push.receipt/1")
+        self.assertEqual(receipt["status"], "succeeded")
+        self.assertEqual(receipt["exit_code"], 0)
+        self.assertEqual(receipt["phase"], "complete")
+        self.assertEqual(
+            receipt["source"],
+            {"branch": "develop", "head": "deadbeef", "state": "dirty"},
+        )
+        self.assertEqual(
+            receipt["transfer"],
+            {"sent_bytes": None, "received_bytes": None, "bytes_per_second": None},
+        )
+        self.assertEqual(receipt["remote_git_base"], "remote-head")
+        self.assertEqual(receipt["deployed_source_authority"], source_authority)
+        self.assertEqual(receipt["viewer_deployment"], deployment_receipt)
+
+    def test_agent_failure_preserves_exit_code_and_writes_receipt(self) -> None:
+        with tempfile.TemporaryDirectory() as root_text:
+            root = Path(root_text)
+            workflow = cvm_push.CvmPush(
+                FakeRunner(),
+                repo_root=create_repo(root),
+                environ={"TMPDIR": str(root)},
+                agent=True,
+            )
+            workflow.preflight_local = mock.Mock(
+                side_effect=cvm_push.PushError("local preflight failed", 4)
+            )
+
+            stdout = io.StringIO()
+            stderr = io.StringIO()
+            with redirect_stdout(stdout), redirect_stderr(stderr):
+                status = cvm_push.execute(workflow)
+
+            records = [json.loads(line) for line in stdout.getvalue().splitlines()]
+            receipt = records[-1]
+            persisted = json.loads(
+                workflow.receipt_path.read_text(encoding="utf-8")
+            )
+            log = workflow.log_path.read_text(encoding="utf-8")
+
+        self.assertEqual(status, 4)
+        self.assertEqual(stderr.getvalue(), "")
+        self.assertEqual(records[0]["phase"], "preflight")
+        self.assertEqual(receipt, persisted)
+        self.assertEqual(receipt["status"], "failed")
+        self.assertEqual(receipt["exit_code"], 4)
+        self.assertEqual(receipt["phase"], "preflight")
+        self.assertEqual(receipt["error"], "local preflight failed")
+        self.assertIsNone(receipt["source"])
+        self.assertIn("local preflight failed", log)
+
+    def test_agent_unexpected_exception_produces_failure_receipt(self) -> None:
+        with tempfile.TemporaryDirectory() as root_text:
+            root = Path(root_text)
+            workflow = cvm_push.CvmPush(
+                FakeRunner(),
+                repo_root=create_repo(root),
+                environ={"TMPDIR": str(root)},
+                agent=True,
+            )
+            workflow.preflight_local = mock.Mock(side_effect=RuntimeError("boom"))
+
+            stdout = io.StringIO()
+            with redirect_stdout(stdout):
+                status = cvm_push.execute(workflow)
+
+            receipt = json.loads(stdout.getvalue().splitlines()[-1])
+            log = workflow.log_path.read_text(encoding="utf-8")
+
+        self.assertEqual(status, 1)
+        self.assertEqual(receipt["status"], "failed")
+        self.assertEqual(receipt["exit_code"], 1)
+        self.assertEqual(receipt["error"], "boom")
+        self.assertIn("RuntimeError: boom", log)
+
+    def test_agent_keyboard_interrupt_produces_exit_130_receipt(self) -> None:
+        with tempfile.TemporaryDirectory() as root_text:
+            root = Path(root_text)
+            workflow = cvm_push.CvmPush(
+                FakeRunner(),
+                repo_root=create_repo(root),
+                environ={"TMPDIR": str(root)},
+                agent=True,
+            )
+            workflow.preflight_local = mock.Mock(side_effect=KeyboardInterrupt())
+
+            stdout = io.StringIO()
+            with redirect_stdout(stdout):
+                status = cvm_push.execute(workflow)
+
+            receipt = json.loads(stdout.getvalue().splitlines()[-1])
+
+        self.assertEqual(status, 130)
+        self.assertEqual(receipt["status"], "failed")
+        self.assertEqual(receipt["exit_code"], 130)
+        self.assertEqual(receipt["error"], "interrupted")
+
+    def test_agent_receipt_write_failure_falls_back_to_stdout(self) -> None:
+        with tempfile.TemporaryDirectory() as root_text:
+            root = Path(root_text)
+            workflow = cvm_push.CvmPush(
+                FakeRunner(),
+                repo_root=create_repo(root),
+                environ={"TMPDIR": str(root)},
+                agent=True,
+            )
+
+            def succeed_without_remote_work() -> None:
+                workflow.phase = "complete"
+
+            workflow.run = mock.Mock(side_effect=succeed_without_remote_work)
+            workflow.write_receipt = mock.Mock(side_effect=OSError("disk full"))
+
+            stdout = io.StringIO()
+            stderr = io.StringIO()
+            with redirect_stdout(stdout), redirect_stderr(stderr):
+                status = cvm_push.execute(workflow)
+
+            receipt = json.loads(stdout.getvalue().splitlines()[-1])
+
+        self.assertEqual(status, 1)
+        self.assertEqual(stderr.getvalue(), "")
+        self.assertEqual(receipt["status"], "failed")
+        self.assertEqual(receipt["exit_code"], 1)
+        self.assertEqual(receipt["phase"], "complete")
+        self.assertIn("disk full", receipt["receipt_write_error"])
+
+    def test_agent_log_failure_still_emits_fallback_receipt(self) -> None:
+        with tempfile.TemporaryDirectory() as root_text:
+            root = Path(root_text)
+            blocked = root / "blocked"
+            blocked.write_text("not a directory\n", encoding="utf-8")
+            workflow = cvm_push.CvmPush(
+                FakeRunner(),
+                repo_root=create_repo(root),
+                environ={"TMPDIR": str(blocked)},
+                agent=True,
+            )
+            workflow.preflight_local = mock.Mock(
+                side_effect=cvm_push.PushError("local preflight failed", 4)
+            )
+
+            stdout = io.StringIO()
+            stderr = io.StringIO()
+            with redirect_stdout(stdout), redirect_stderr(stderr):
+                status = cvm_push.execute(workflow)
+
+            receipt = json.loads(stdout.getvalue().splitlines()[-1])
+
+        self.assertEqual(status, 4)
+        self.assertEqual(stderr.getvalue(), "")
+        self.assertEqual(receipt["status"], "failed")
+        self.assertEqual(receipt["exit_code"], 4)
+        self.assertEqual(receipt["error"], "local preflight failed")
+        self.assertIn("FileExistsError", receipt["log_write_error"])
+        self.assertIn("FileExistsError", receipt["receipt_write_error"])
+
+    def test_staging_diagnostic_log_failure_preserves_original_exit_code(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as root_text:
+            root = Path(root_text)
+            workflow = cvm_push.CvmPush(
+                FakeRunner(),
+                repo_root=create_repo(root),
+                environ={"TMPDIR": str(root)},
+                agent=True,
+            )
+            workflow.preflight_local = mock.Mock()
+            workflow.preflight_remote = mock.Mock(
+                return_value=cvm_push.RemotePreflight(free_gb=20)
+            )
+            workflow.inspect_source = mock.Mock(
+                return_value=cvm_push.SourceProvenance(
+                    "develop", "deadbeef", "dirty"
+                )
+            )
+            workflow.resolve_build_inputs = mock.Mock(
+                side_effect=cvm_push.PushError("missing inputs", 4)
+            )
+            original_log = workflow._log
+
+            def fail_only_for_staging_diagnostic(message, *, stderr=False):
+                if message == "CVM production staging failed; no files transferred.":
+                    raise OSError("diagnostic log unavailable")
+                return original_log(message, stderr=stderr)
+
+            workflow._log = mock.Mock(side_effect=fail_only_for_staging_diagnostic)
+
+            stdout = io.StringIO()
+            with redirect_stdout(stdout):
+                status = cvm_push.execute(workflow)
+
+            receipt = json.loads(stdout.getvalue().splitlines()[-1])
+
+        self.assertEqual(status, 4)
+        self.assertEqual(receipt["status"], "failed")
+        self.assertEqual(receipt["exit_code"], 4)
+        self.assertEqual(receipt["phase"], "stage")
+        self.assertEqual(receipt["error"], "missing inputs")
+
+
 class BuildInputTests(unittest.TestCase):
     def test_incomplete_worktree_inputs_fall_back_to_complete_primary(self) -> None:
         with tempfile.TemporaryDirectory() as root_text:
@@ -276,6 +590,11 @@ class StageTests(unittest.TestCase):
         contract = (REPO_ROOT / ".claude/skills/cvm-push/SKILL.md").read_text(
             encoding="utf-8"
         )
+        self.assertIn("scripts/pilot/cvm-push.sh --agent", contract)
+        self.assertIn("## Long wait", contract)
+        self.assertIn("cvm-push.receipt/1", contract)
+        self.assertIn("receipt `viewer_deployment`", contract)
+        self.assertIn("receipt `deployed_source_authority`", contract)
         self.assertIn("provider-free durable fixture allowlist", contract)
         self.assertIn("models/simple/rectangular_clamp_block.py", contract)
         self.assertIn("models/simple/simple_model_library.py", contract)
@@ -562,6 +881,79 @@ class TransferAndVerifyTests(unittest.TestCase):
             self.assertLess(argv.index(include), argv.index(exclude))
             self.assertEqual(argv[-2], f"{stage}/")
             self.assertEqual(argv[-1], cvm_push.REMOTE_DESTINATION)
+
+    def test_transfer_retains_only_final_rsync_summary(self) -> None:
+        with tempfile.TemporaryDirectory() as root_text:
+            root = Path(root_text)
+            repo = create_repo(root)
+            runner = FakeRunner()
+            runner.stream_output = (
+                "file progress 73%\n"
+                "sent 1,234 bytes  received 56 bytes  789.50 bytes/sec\n"
+            )
+            workflow = cvm_push.CvmPush(
+                runner,
+                repo_root=repo,
+                environ={"TMPDIR": str(root)},
+                agent=True,
+            )
+            stage = root / "stage"
+            stage.mkdir()
+
+            workflow.transfer_stage(stage)
+
+        self.assertEqual(
+            workflow.transfer_summary,
+            cvm_push.TransferSummary(
+                sent_bytes=1234,
+                received_bytes=56,
+                bytes_per_second=789.5,
+            ),
+        )
+
+    def test_transfer_does_not_reuse_summary_from_earlier_log_output(self) -> None:
+        with tempfile.TemporaryDirectory() as root_text:
+            root = Path(root_text)
+            repo = create_repo(root)
+            runner = FakeRunner()
+            runner.stream_output = "transfer completed without a summary\n"
+            workflow = cvm_push.CvmPush(
+                runner,
+                repo_root=repo,
+                environ={"TMPDIR": str(root)},
+                agent=True,
+            )
+            workflow.log_path.write_text(
+                "sent 9,999 bytes  received 88 bytes  77.0 bytes/sec\n",
+                encoding="utf-8",
+            )
+            stage = root / "stage"
+            stage.mkdir()
+
+            workflow.transfer_stage(stage)
+
+        self.assertEqual(workflow.transfer_summary, cvm_push.TransferSummary())
+
+    def test_malformed_transfer_summary_does_not_change_success(self) -> None:
+        with tempfile.TemporaryDirectory() as root_text:
+            root = Path(root_text)
+            repo = create_repo(root)
+            runner = FakeRunner()
+            runner.stream_output = (
+                "sent ,,, bytes  received 56 bytes  789.50 bytes/sec\n"
+            )
+            workflow = cvm_push.CvmPush(
+                runner,
+                repo_root=repo,
+                environ={"TMPDIR": str(root)},
+                agent=True,
+            )
+            stage = root / "stage"
+            stage.mkdir()
+
+            workflow.transfer_stage(stage)
+
+        self.assertEqual(workflow.transfer_summary, cvm_push.TransferSummary())
 
     def test_rsync_failure_is_marked_as_post_transfer_failure(self) -> None:
         with tempfile.TemporaryDirectory() as root_text:
