@@ -878,7 +878,7 @@ class CvmPush:
                 "CVM production stage has a cyclic skill symlink: "
                 f"{original.relative_to(stage_root)}",
                 4,
-        )
+            )
         if source.is_dir():
             destination.mkdir()
             active_source_ancestors = (*active_sources, source)
