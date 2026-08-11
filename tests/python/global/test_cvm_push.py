@@ -619,6 +619,19 @@ class StageTests(unittest.TestCase):
             (repo / "viewer/dist/index.html").write_text("generated\n", encoding="utf-8")
             (repo / "scripts/cache/__pycache__/x.pyc").parent.mkdir(parents=True)
             (repo / "scripts/cache/__pycache__/x.pyc").write_bytes(b"x")
+            (repo / "docs/package.json").parent.mkdir()
+            (repo / "docs/package.json").write_text(
+                '{"version":"0.3.9"}\n',
+                encoding="utf-8",
+            )
+            (repo / "docs/package-lock.json").write_text(
+                '{"version":"0.3.9","packages":{"":{"version":"0.3.9"}}}\n',
+                encoding="utf-8",
+            )
+            (repo / "docs/unrelated.md").write_text(
+                "not a bundle input\n",
+                encoding="utf-8",
+            )
 
             workflow = cvm_push.CvmPush(
                 cvm_push.CommandRunner(),
@@ -641,6 +654,43 @@ class StageTests(unittest.TestCase):
             self.assertFalse((stage / ".codex").exists())
             self.assertFalse((stage / "viewer/dist").exists())
             self.assertFalse((stage / "scripts/cache/__pycache__").exists())
+            self.assertEqual(
+                (stage / "docs/package.json").read_text(encoding="utf-8"),
+                '{"version":"0.3.9"}\n',
+            )
+            self.assertEqual(
+                (stage / "docs/package-lock.json").read_text(encoding="utf-8"),
+                '{"version":"0.3.9","packages":{"":{"version":"0.3.9"}}}\n',
+            )
+            self.assertFalse((stage / "docs/unrelated.md").exists())
+
+    def test_source_copy_requires_each_docs_version_metadata_file(self) -> None:
+        for missing in ("docs/package.json", "docs/package-lock.json"):
+            with self.subTest(missing=missing), tempfile.TemporaryDirectory() as root_text:
+                root = Path(root_text)
+                repo = create_repo(root)
+                (repo / "docs/package.json").parent.mkdir()
+                (repo / "docs/package.json").write_text("{}\n", encoding="utf-8")
+                (repo / "docs/package-lock.json").write_text(
+                    "{}\n",
+                    encoding="utf-8",
+                )
+                (repo / missing).unlink()
+                workflow = cvm_push.CvmPush(
+                    cvm_push.CommandRunner(),
+                    repo_root=repo,
+                    environ=os.environ,
+                )
+                stage = root / "stage"
+                stage.mkdir()
+
+                with self.assertRaisesRegex(
+                    cvm_push.PushError,
+                    f"Missing CVM stage build input: {missing}",
+                ) as error:
+                    workflow.copy_source_to_stage(stage)
+
+                self.assertEqual(error.exception.status, 4)
 
     def test_build_input_copy_does_not_follow_checkout_package_symlinks(self) -> None:
         with tempfile.TemporaryDirectory() as root_text:

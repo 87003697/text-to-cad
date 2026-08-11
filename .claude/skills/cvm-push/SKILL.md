@@ -79,6 +79,10 @@ blocking wait；terminal completion 会提前 hand back。精确的更早 deadli
   `models/simple/rectangular_clamp_block.py` 和
   `models/simple/simple_model_library.py`。它们必须作为普通文件进入同一 stage、哈希
   attestation 和 deployed-source authority；任何其他 `models/` 路径仍保持排除。
+- **docs version metadata 只服务于 stage build**：source copy 单独恢复
+  `docs/package.json` 和 `docs/package-lock.json`，供 production bundle 做 version
+  sync；staging → CVM 仍排除完整 `docs/`，因此它们不是 deployed-source 或 runtime
+  authority。
 - Push 只部署代码；不创建、查询、等待、重试或清理 job。
 
 ## 边界条件

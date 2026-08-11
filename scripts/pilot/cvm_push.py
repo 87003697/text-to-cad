@@ -92,6 +92,10 @@ STAGE_SOURCE_EXCLUDES = (
     "*.tmp",
     "/viewer/dist/",
 )
+STAGE_BUILD_ONLY_INPUTS = (
+    "docs/package.json",
+    "docs/package-lock.json",
+)
 
 VIEWER_REQUIRED_EXECUTABLES = (
     ".bin/esbuild",
@@ -670,6 +674,15 @@ class CvmPush:
                 f"Cannot copy source into CVM stage: {result.stderr.strip()}",
                 4,
             )
+        for relative in STAGE_BUILD_ONLY_INPUTS:
+            source = self.repo_root / relative
+            if not source.is_file():
+                raise PushError(f"Missing CVM stage build input: {relative}", 4)
+        for relative in STAGE_BUILD_ONLY_INPUTS:
+            source = self.repo_root / relative
+            destination = stage / relative
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(source, destination)
         for relative in (
             "models/simple/rectangular_clamp_block.py",
             "models/simple/simple_model_library.py",
