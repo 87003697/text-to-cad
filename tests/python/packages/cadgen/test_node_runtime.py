@@ -339,10 +339,10 @@ reportResult({ ok: true, packagePath: process.argv[2] });
         self.assertEqual(4, sampled[-1].total)
         self.assertEqual("slice 4/4", sampled[-1].detail)
 
-        # The bar advanced through the child's work rather than sitting at the phase floor.
-        self.assertGreater(sampled[-1].ratio, sampled[0].ratio)
-        # And the terminal record carries the phases the CHILD reported, so the next build of
-        # this artifact weights its bar from them.
+        # The count advanced through the child's work rather than sitting at zero.
+        self.assertGreater(sampled[-1].fraction, sampled[0].fraction)
+        # And the terminal record carries the phases the CHILD reported, so the run's own
+        # timings account for the work it did.
         self.assertIn("sample", events[-1].stage_ms or {})
 
 

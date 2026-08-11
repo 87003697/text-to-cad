@@ -142,6 +142,8 @@ Three rules close D6:
 
 Version handling: a reader that sees `schemaVersion != 2` returns *no progress* but still reports `generating` from the lock — the same safe degradation as an unreadable file today (`artifact.py:231-232`).
 
+> **Superseded in part (schema v3).** The locking, attribution and `starting`-record rules above all shipped and still hold. The *progress* half did not survive contact with a slow model: one overall `ratio` has to weight the phases against each other, the weights came from the previous build's `stageMs`, and a first build has none — so an F-14 whose `generate` phase is 84% of a 12-minute run displayed exactly 0% for ten minutes and then jumped to the `components` band floor at 46%. v3 drops `ratio`, `ratioFloor`, `ratioCeiling` and `phaseExpectedMs`, and reports each phase on its own: `index`/`count` for its place in the run, plus *either* `done`/`total` *or* a `detail` label naming the sub-unit in flight. `stageMs` is still written on `outcome=="done"`, but nothing reads it back — it is a record of what the run cost, not an input. See `coordination/phases.py`.
+
 ### 3.3 API surface
 
 **Producer — one context manager that owns lock + progress + post-lock re-check:**

@@ -225,6 +225,12 @@ def _dispatch(message: Mapping[str, Any], run: Any) -> bool:
         detail = message.get("detail")
         run.advance(int(count), detail=str(detail) if isinstance(detail, str) else None)
         return True
+    if kind == "detail":
+        detail = message.get("detail")
+        if not isinstance(detail, str):
+            return False
+        run.detail(detail)
+        return True
     return False
 
 
@@ -278,6 +284,7 @@ def run_node_builder(
     ``{"type":"phase","phase":"sample","total":96|null}``        ``run.phase(phase, total=total)``
     ``{"type":"total","total":973214}``                          ``run.set_total(total)``
     ``{"type":"advance","n":1,"detail":"slice 12/96"}``          ``run.advance(n, detail=detail)``
+    ``{"type":"detail","detail":"welding seams"}``               ``run.detail(detail)``
     ``{"type":"result","ok":true,...}``                          becomes the return value
     ==========================================================  ==================================
 

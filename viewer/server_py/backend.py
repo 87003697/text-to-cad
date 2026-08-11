@@ -357,6 +357,14 @@ class LocalAssetBackend:
             status = {"state": artifact_mod.ARTIFACT_STATE_READY, "ref": ref}
             if snap.busy:
                 status["busy"] = True
+                # An occupied generator (an export, an on-demand topology extraction) runs
+                # the same multi-minute gen_step a build does. It does NOT hide the model —
+                # nothing is being rewritten — so this rides alongside a ready artifact and
+                # the client shows it without blocking the render.
+                if snap.run_id:
+                    status["runId"] = snap.run_id
+                if snap.progress is not None:
+                    status["progress"] = snap.progress
             return status
         if code in artifact_mod.BUILDABLE_ARTIFACT_CODES:
             status = {"state": artifact_mod.ARTIFACT_STATE_NEEDS_BUILD, "reason": code, "ref": ref}
