@@ -38,7 +38,7 @@ def validate_urdf_targets(
 
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
-        prog="validate",
+        prog="scripts/validate",
         description="Validate explicit URDF targets.",
     )
     parser.add_argument(
@@ -65,7 +65,17 @@ def main(argv: Sequence[str] | None = None) -> int:
         metavar="NAME=PATH",
         help="Resolve package://NAME/... mesh URIs against PATH. Repeatable.",
     )
+    parser.add_argument(
+        "--verbose",
+        action="store_true",
+        help="Narrate each target and its timing on stderr.",
+    )
     args = parser.parse_args(list(argv) if argv is not None else None)
+    if args.verbose:
+        # Narration goes to stderr; the findings document on stdout stays exactly the same
+        # so `--verbose` never changes what a caller parses.
+        for target in args.targets:
+            print(f"[urdf] validating {target}", file=sys.stderr)
     package_map = _parse_package_map(args.package, parser)
     return validate_urdf_targets(
         args.targets,

@@ -1,5 +1,5 @@
 {
-  "_comment": "Reveal-stage presentation theme for the hypercar. Authored, not a built-in preset: the default technical/workbench theme is a diagnostic look and makes a beauty render read as a QA screenshot. Environment HDRIs are remote URLs and unavailable offline, so the whole look is driven by explicit lights. Edges are kept on but very dark and low-contrast so shutlines read as fine panel gaps instead of CAD linework.",
+  "_comment": "Reveal-stage presentation theme for the hypercar. Authored, not a built-in preset: the default technical/workbench theme is a diagnostic look and makes a beauty render read as a QA screenshot. Environment HDRIs are remote URLs and unavailable offline, so the whole look is driven by explicit lights. Edges are kept on but very dark and low-contrast so shutlines read as fine panel gaps instead of CAD linework. NOTE: edge styling is NOT a theme key -- the snapshot CLI rejects a theme JSON containing `edges` (\"edges belongs in display JSON\"). It now lives in presentation_display.json beside this file; pass it as the job's `display`.",
   "colorMode": "dark",
   "projection": "perspective",
   "materials": {
@@ -125,38 +125,5 @@
       "groundColor": "#0e1014",
       "intensity": 1.15
     }
-  },
-  "edges": {
-    "enabled": true,
-    "color": "#080a0c",
-    "thickness": 0.9,
-    "classes": {
-      "feature": {
-        "color": "#080a0c",
-        "opacity": 0.82,
-        "thickness": 1.0
-      },
-      "tangent": {
-        "color": "#080a0c",
-        "opacity": 0.0,
-        "thickness": 0.5
-      },
-      "seam": {
-        "color": "#080a0c",
-        "opacity": 0.0,
-        "thickness": 0.5
-      },
-      "degenerate": {
-        "color": "#080a0c",
-        "opacity": 0.0,
-        "thickness": 0
-      }
-    },
-    "highlightColor": "#b08d57",
-    "highlightOpacity": 1,
-    "highlightThickness": 2,
-    "silhouette": false,
-    "silhouetteScale": 0,
-    "depthTest": true
   }
 }

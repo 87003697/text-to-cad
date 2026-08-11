@@ -40,7 +40,7 @@ the sources and is gitignored — never commit it.
 
 - `step/`: STEP generator sources, split by shape:
   - [step/parts/](step/parts/README.md): single-body `<name>.step.py`
-    generators — benchmark fixtures, compact build123d examples, and other
+    generators — structured fixtures, compact build123d examples, and other
     standalone demo parts.
   - [step/assemblies/](step/assemblies/README.md): flat multi-part
     `<name>.step.py` generators — one-shot concepts and standalone demo

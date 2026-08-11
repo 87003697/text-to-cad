@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 from collections.abc import Sequence
 
 from cadgen.metadata import normalize_mesh_numeric
@@ -14,6 +15,12 @@ def export_cad_target(*args, **kwargs):
     from cadgen.step_export_target import export_cad_target as export
 
     return export(*args, **kwargs)
+
+
+def report_cli_error(*args, **kwargs):
+    from cadgen._internal.cli_errors import report_cli_error as report
+
+    return report(*args, **kwargs)
 
 
 def _normalize_cli_numeric(value: object, *, field_name: str, parser: argparse.ArgumentParser) -> float | None:
@@ -65,6 +72,14 @@ def _add_export_arguments(parser: argparse.ArgumentParser) -> None:
         "--verbose",
         action="store_true",
         help="Show detailed progress and timing information.",
+    )
+    parser.add_argument(
+        "--json",
+        action="store_true",
+        help=(
+            "Print the export result as one JSON line on stdout instead of the "
+            "'wrote STL: ...' lines. Human progress stays on stderr."
+        ),
     )
 
 
@@ -121,6 +136,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
     except ValueError as exc:
         parser.error(str(exc))
+    except Exception as exc:  # noqa: BLE001 — the CLI boundary: report, do not traceback
+        return report_cli_error(exc, tool="scripts/export", verbose=bool(args.verbose))
+    if args.json:
+        print(json.dumps({"ok": True, **payload}, separators=(",", ":")))
+        return 0
     for entry in payload["files"]:
         print(f"wrote {entry['format'].upper()}: {entry['path']}")
     return 0

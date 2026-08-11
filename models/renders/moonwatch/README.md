@@ -40,7 +40,7 @@ $PY ../../../skills/cad/scripts/snapshot --job <job.json>
 
 Do NOT use `CADGEN_WARM=1` while several builders run in parallel — the warm
 daemon serializes jobs per worktree. (Killing a client now aborts its
-in-daemon job; see `/BUGS.md` entry 2.)
+in-daemon job.)
 
 ## Modeling rules
 

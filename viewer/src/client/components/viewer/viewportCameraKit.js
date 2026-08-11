@@ -89,6 +89,37 @@ export function normalizeViewportFrameInsets(value = {}) {
   };
 }
 
+// How far back the camera has to sit (perspective) or how tall the orthographic
+// frustum has to be, per unit of model radius, for the model to be framed by the
+// given viewport. The absolute value is only meaningful against a radius; what
+// callers use is the RATIO between two viewports. Rescaling the camera by that
+// ratio keeps the model the same fraction of the framed area when the window
+// resizes or a side sheet opens or closes, which is what stops a wide model from
+// being cropped by a narrowing viewport.
+//
+// The formulas mirror getFitDistanceForBoundingSphere and
+// getOrthographicHalfHeightForBoundingSphere in CadViewer, so a viewport change
+// leaves the camera exactly where a fresh fit would have put it -- that is what
+// keeps "100%" honest across a resize.
+export function viewportFitScale({
+  orthographic = false,
+  fov = 48,
+  aspect = 1,
+  height = 1,
+  framedHeight = 1
+} = {}) {
+  const safeAspect = Math.max(finiteNumber(aspect, 1), 1e-3);
+  if (orthographic) {
+    const safeHeight = Math.max(finiteNumber(height, 1), 1);
+    const safeFramedHeight = Math.max(finiteNumber(framedHeight, safeHeight), 1);
+    return (1 / Math.min(safeAspect, 1)) * (safeHeight / safeFramedHeight);
+  }
+  const verticalHalfFov = (Math.max(finiteNumber(fov, 48), 1e-3) * Math.PI) / 360;
+  const horizontalHalfFov = Math.atan(Math.tan(verticalHalfFov) * safeAspect);
+  const limitingHalfFov = Math.max(Math.min(verticalHalfFov, horizontalHalfFov), 1e-3);
+  return 1 / Math.sin(limitingHalfFov);
+}
+
 export function getKeyboardOrbitCommand(event) {
   if (!event) {
     return null;

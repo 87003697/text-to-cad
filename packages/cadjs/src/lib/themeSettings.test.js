@@ -19,7 +19,11 @@ import {
   resolveThemeSettingsBackdropColor,
   resolveThemeSettingsForColorMode,
   resolveSystemThemePresetId,
-  themeSettingsSupportsSystemColorMode
+  themeSettingsSupportsSystemColorMode,
+  SNAPSHOT_THEME_ID,
+  normalizeThemePresetId,
+  getThemePresetById,
+  cloneThemeSettings
 } from "./themeSettings.js";
 
 const WORKBENCH_FILL_COLORS = Object.freeze([
@@ -482,4 +486,32 @@ test("built-in theme presets preserve source colors by default", () => {
       `${preset.id} source color override default`
     );
   }
+});
+
+test("the snapshot theme is Workbench Light without the scene furniture", () => {
+  // A snapshot is usually read by an agent rather than looked at. Workbench's ground grid
+  // and origin axis are orientation you can ignore in a live viewport, and geometry-shaped
+  // contrast in a still image: straight low-contrast lines crossing the model, at the same
+  // weight as a real silhouette edge.
+  const snapshot = cloneThemeSettings(SNAPSHOT_THEME_ID);
+  const light = cloneThemeSettings("workbench-light");
+
+  assert.equal(light.floor.grid.enabled, true, "workbench-light is the one WITH a grid");
+  assert.equal(light.floor.axis.enabled, true);
+  assert.equal(snapshot.floor.grid.enabled, false);
+  assert.equal(snapshot.floor.axis.enabled, false);
+
+  // Everything a part is made of is inherited unchanged, so it reads in a snapshot exactly
+  // as it does in the viewer.
+  assert.deepEqual(snapshot.materials, light.materials);
+  assert.deepEqual(snapshot.background, light.background);
+  assert.deepEqual(snapshot.lighting, light.lighting);
+  assert.equal(snapshot.projection, light.projection);
+});
+
+test("the snapshot theme resolves by id but is never offered in the picker", () => {
+  assert.equal(normalizeThemePresetId(SNAPSHOT_THEME_ID), SNAPSHOT_THEME_ID);
+  assert.equal(getThemePresetById(SNAPSHOT_THEME_ID).id, SNAPSHOT_THEME_ID);
+  // THEME_PRESETS is what the viewer's theme popover lists.
+  assert.equal(THEME_PRESETS.some((preset) => preset.id === SNAPSHOT_THEME_ID), false);
 });

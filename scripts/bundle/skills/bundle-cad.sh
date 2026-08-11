@@ -8,6 +8,8 @@ export BUNDLE_REPO_ROOT="$REPO_ROOT"
 source "$SCRIPT_DIR/../lib/vendor.sh"
 # shellcheck source=../lib/snapshot_runtime.sh
 source "$SCRIPT_DIR/../lib/snapshot_runtime.sh"
+# shellcheck source=../lib/node_builders.sh
+source "$SCRIPT_DIR/../lib/node_builders.sh"
 
 MODE="write"
 CLEAN=0
@@ -21,6 +23,14 @@ RUNTIME_DIR="$REPO_ROOT/skills/cad/scripts/snapshot/runtime"
 ENTRYPOINT="$REPO_ROOT/packages/cadjs/src/common/headlessRenderEntry.js"
 CADPY_PACKAGE_DIR="$REPO_ROOT/packages/cadgen"
 CADPY_RUNTIME_DIR="$REPO_ROOT/skills/cad/scripts/packages/cadgen"
+# cadgen resolves its Node builders beside whatever runtime ships it, so a runtime that ships
+# cadgen must ship the builders cadgen can reach for. `scripts/gen` accepts a bare gen_dxf()
+# document, which routes through the shared drawing-package path and shells out to this
+# builder -- so the CAD skill needs it even though drawings are the DXF skill's subject.
+# Missing here, the failure only appears in the bundled tree: in the development layout the
+# lookup walks up to the repo's own packages/cadjs and finds it.
+BUILDERS_RUNTIME_DIR="$REPO_ROOT/skills/cad/scripts/packages/cadjs/bin"
+BUILDER_ENTRIES=("$REPO_ROOT/packages/cadjs/bin/dxf-artifact.mjs")
 
 usage() {
   cat <<'EOF'
@@ -70,7 +80,8 @@ done
 if [ "$PRINT_OUTPUTS" -eq 1 ]; then
   printf '%s\n' \
     "${RUNTIME_DIR#"$REPO_ROOT"/}" \
-    "${CADPY_RUNTIME_DIR#"$REPO_ROOT"/}"
+    "${CADPY_RUNTIME_DIR#"$REPO_ROOT"/}" \
+    "${BUILDERS_RUNTIME_DIR#"$REPO_ROOT"/}"
   exit 0
 fi
 
@@ -100,6 +111,7 @@ check_cadgen_runtime() {
     "Run scripts/bundle/bundle-skill.sh cad and commit skills/cad/scripts/packages/cadgen."
 }
 
+ensure_node_builder_deps
 ensure_snapshot_runtime_deps "$BUILD_DEPS_DIR" "$INSTALL_DEPS"
 
 if [ "$MODE" = "check" ]; then
@@ -109,10 +121,19 @@ if [ "$MODE" = "check" ]; then
     "Run scripts/bundle/bundle-skill.sh cad and commit the updated runtime files." \
     || exit 1
   echo "CAD snapshot runtime is up to date."
+  check_node_builders \
+    "$BUILDERS_RUNTIME_DIR" "$CHECK_DIR/packages/cadjs/bin" \
+    "skills/cad/scripts/packages/cadjs/bin" \
+    "Run scripts/bundle/bundle-skill.sh cad and commit skills/cad/scripts/packages/cadjs/bin." \
+    "${BUILDER_ENTRIES[@]}" \
+    || exit 1
+  echo "skills/cad/scripts/packages/cadjs/bin is up to date."
   check_cadgen_runtime
 else
   build_snapshot_runtime "$RUNTIME_DIR" "$BUILD_DEPS_DIR"
   sync_cadgen_runtime "$CADPY_RUNTIME_DIR"
+  bundle_node_builders "$BUILDERS_RUNTIME_DIR" "${BUILDER_ENTRIES[@]}"
   echo "Bundled skills/cad/scripts/snapshot/runtime"
   echo "Bundled skills/cad/scripts/packages/cadgen"
+  echo "Bundled skills/cad/scripts/packages/cadjs/bin"
 fi

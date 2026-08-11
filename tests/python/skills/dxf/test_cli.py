@@ -66,7 +66,7 @@ class DxfGenCliTests(unittest.TestCase):
         )
         self.assertEqual("", result.stderr)
         self.assertEqual(0, result.returncode)
-        self.assertIn("usage: gen", result.stdout)
+        self.assertIn("usage: scripts/gen", result.stdout)
         self.assertIn("--output", result.stdout)
 
     def test_cli_import_does_not_import_heavy_cad_modules(self) -> None:

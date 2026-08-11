@@ -4,6 +4,12 @@ import argparse
 from collections.abc import Sequence
 
 
+def report_cli_error(*args, **kwargs):
+    from cadgen._internal.cli_errors import report_cli_error as report
+
+    return report(*args, **kwargs)
+
+
 def generate_dxf_targets(*args, **kwargs):
     from cadgen.generation import generate_dxf_targets as generate
 
@@ -40,7 +46,7 @@ def _targets_include_output_pairs(targets: Sequence[str]) -> bool:
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        prog="gen",
+        prog="scripts/gen",
         description=(
             "Build drawing-package render artifacts (and on-demand DXF exports) from "
             "Python gen_dxf() sources."
@@ -92,13 +98,16 @@ def main(argv: Sequence[str] | None = None) -> int:
             parser.error("--output cannot be combined with SOURCE=OUTPUT targets")
         if len(args.targets) != 1:
             parser.error("--output can only be used with exactly one target")
-    return generate_dxf_targets(
-        args.targets,
-        output=args.output,
-        write_dxf=bool(args.write),
-        force=bool(args.force),
-        verbose=bool(args.verbose),
-    )
+    try:
+        return generate_dxf_targets(
+            args.targets,
+            output=args.output,
+            write_dxf=bool(args.write),
+            force=bool(args.force),
+            verbose=bool(args.verbose),
+        )
+    except Exception as exc:  # noqa: BLE001 — the CLI boundary: report, do not traceback
+        return report_cli_error(exc, tool="scripts/gen", verbose=bool(args.verbose))
 
 
 if __name__ == "__main__":

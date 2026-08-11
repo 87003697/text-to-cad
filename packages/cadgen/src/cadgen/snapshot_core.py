@@ -1,7 +1,7 @@
 """Snapshot render core shared by the CAD and DXF skills.
 
 Everything here is format-agnostic: the headless browser driver, the job normalisation
-(camera, appearance, display, size profile), the mesh render path, and output writing. It
+(camera, theme, display, size profile), the mesh render path, and output writing. It
 knows nothing about STEP topology, drawings, or implicit models -- a caller resolves its
 own input to an asset URL and hands the result to :func:`render_resolved_job_packet`.
 
@@ -36,26 +36,51 @@ from urllib.parse import quote, unquote, urlparse
 SNAPSHOT_ORIGIN = "http://snapshot.local"
 SNAPSHOT_RENDER_URL = f"{SNAPSHOT_ORIGIN}/render.html"
 SNAPSHOT_ROUTE_GLOB = f"{SNAPSHOT_ORIGIN}/**"
-DEFAULT_RENDER_THEME_ID = "workbench"
+# A snapshot is usually READ by an agent rather than looked at by a person, so it does not
+# default to a viewer theme at all: `snapshot` is Workbench Light with the ground grid and
+# origin axis removed (themeSettings.js RENDER_ONLY_THEME_PRESETS). Those two are helpful
+# orientation in a live viewport and are geometry-shaped contrast in a still image --
+# straight low-contrast lines crossing the model, indistinguishable from a silhouette edge.
+# Materials, lighting and background are Workbench Light unchanged, so parts read exactly as
+# they do in the viewer.
+DEFAULT_RENDER_THEME_ID = "snapshot"
+# The viewer theme `snapshot` is derived from, and the id its default dimensions follow.
+VIEWER_DEFAULT_THEME_ID = "workbench-light"
 DEFAULT_TIMEOUT_SECONDS = 300
 RENDER_BROWSER_STARTUP_TIMEOUT_MS = 15_000
-SUPPORTED_RENDER_MODES = {"view", "orbit", "section", "list"}
+# `animate` is implicit-only: it sweeps a model's own declared animation. The STEP
+# analogue is an animated --params sweep, which stays in `view`.
+SUPPORTED_RENDER_MODES = {"view", "orbit", "section", "list", "animate"}
 MESH_INPUT_KINDS = {"glb", "stl", "3mf"}
 MESH_SUPPORTED_RENDER_MODES = {"view", "orbit", "list"}
 TOPOLOGY_DISPLAY_MODES = {"hidden_edges", "hidden_lines_removed"}
-WORKBENCH_RENDER_THEME_IDS = {DEFAULT_RENDER_THEME_ID}
+# Every id that IS the workbench theme, because this set decides a render's default
+# dimensions (see default_render_size). With only the legacy "workbench" in it, asking for
+# the viewer's real preset by name -- `--theme workbench-light` -- fell through to the
+# non-workbench branch and silently rendered at 1200x900 instead of 1600x1200, despite
+# resolving to the identical theme in the browser. Pinned against the viewer's preset table
+# by tests/python/global/test_snapshot_viewer_theme_parity.py.
+WORKBENCH_RENDER_THEME_IDS = {"snapshot", "workbench", "workbench-light", "workbench-dark"}
 SUPPORTED_JOB_KEYS = frozenset(
     {
         "input",
         "mode",
         "outputs",
-        "appearance",
+        "theme",
         "display",
         "render",
         "camera",
         "selection",
         "stepParameters",
         "stepParametersPath",
+        # Implicit CAD's own three surfaces. `graphics` is a THIRD viewer tab beside Theme
+        # and Display (detail, shadows, ambient occlusion, model colours), so it is a third
+        # option rather than being folded into --display. Parameters and animation are the
+        # implicit analogues of stepParameters: named separately because an implicit model
+        # is parameterized by its own descriptor, not by a STEP sidecar.
+        "graphics",
+        "implicitParameters",
+        "implicitAnimation",
         # A robot's pose. The STEP analogue is stepParameters; a robot is posed by joint
         # angle, so it gets its own key rather than overloading one that means a sidecar.
         "jointValues",
@@ -130,14 +155,14 @@ DISPLAY_MODE_ALIASES = {
     "unshaded": "unshaded",
     "flat": "unshaded",
     "rendered": "rendered",
-    "appearance": "rendered",
+    "theme": "rendered",
     "material": "rendered",
     "materials": "rendered",
     "wireframe": "wireframe",
     "wire_frame": "wireframe",
     "wire": "wireframe",
 }
-APPEARANCE_OPTION_KEYS = {
+THEME_OPTION_KEYS = {
     "materials",
     "background",
     "floor",
@@ -148,7 +173,7 @@ APPEARANCE_OPTION_KEYS = {
     # normalizeThemeSettings() emits modeColors unconditionally, so it is part
     # of the settings shape by construction. Rejecting it meant the repo's own
     # cloneThemePresetSettings() output could not be passed back to
-    # --appearance without hand-stripping a key first.
+    # --theme without hand-stripping a key first.
     "modeColors",
 }
 SETTINGS_KEY_HOMES = {
@@ -156,14 +181,14 @@ SETTINGS_KEY_HOMES = {
     "mode": "display",
     "exploded": "display",
     "clip": "display",
-    "materials": "appearance",
-    "background": "appearance",
-    "floor": "appearance",
-    "environment": "appearance",
-    "lighting": "appearance",
-    "colorMode": "appearance",
-    "projection": "appearance",
-    "modeColors": "appearance",
+    "materials": "theme",
+    "background": "theme",
+    "floor": "theme",
+    "environment": "theme",
+    "lighting": "theme",
+    "colorMode": "theme",
+    "projection": "theme",
+    "modeColors": "theme",
 }
 class SnapshotError(RuntimeError):
     pass
@@ -289,29 +314,29 @@ def load_display_option(raw_display: object, *, cwd: Path) -> dict[str, object]:
     )
     validate_display_settings_values(payload, source_label=str(display_path))
     return payload
-def load_appearance_option(raw_appearance: object, *, cwd: Path) -> object:
-    appearance = str(raw_appearance or DEFAULT_RENDER_THEME_ID).strip() or DEFAULT_RENDER_THEME_ID
-    if appearance.startswith("{"):
+def load_theme_option(raw_theme: object, *, cwd: Path) -> object:
+    theme = str(raw_theme or DEFAULT_RENDER_THEME_ID).strip() or DEFAULT_RENDER_THEME_ID
+    if theme.startswith("{"):
         return validate_direct_settings_payload(
-            load_json_text(appearance, "--appearance"),
-            option_name="--appearance",
-            source_label="--appearance",
-            allowed_keys=APPEARANCE_OPTION_KEYS,
-            setting_label="appearance settings",
+            load_json_text(theme, "--theme"),
+            option_name="--theme",
+            source_label="--theme",
+            allowed_keys=THEME_OPTION_KEYS,
+            setting_label="theme settings",
         )
 
-    appearance_path = Path(appearance) if Path(appearance).is_absolute() else cwd / appearance
-    looks_like_file = appearance.lower().endswith(".json") or "/" in appearance or "\\" in appearance
-    if not looks_like_file and not appearance_path.exists():
-        return appearance
-    if not appearance_path.exists():
-        raise SnapshotError(f"Appearance JSON file does not exist: {appearance}")
+    theme_path = Path(theme) if Path(theme).is_absolute() else cwd / theme
+    looks_like_file = theme.lower().endswith(".json") or "/" in theme or "\\" in theme
+    if not looks_like_file and not theme_path.exists():
+        return theme
+    if not theme_path.exists():
+        raise SnapshotError(f"Theme JSON file does not exist: {theme}")
     return validate_direct_settings_payload(
-        load_json_text(appearance_path.read_text(encoding="utf-8"), str(appearance_path)),
-        option_name="--appearance",
-        source_label=str(appearance_path),
-        allowed_keys=APPEARANCE_OPTION_KEYS,
-        setting_label="appearance settings",
+        load_json_text(theme_path.read_text(encoding="utf-8"), str(theme_path)),
+        option_name="--theme",
+        source_label=str(theme_path),
+        allowed_keys=THEME_OPTION_KEYS,
+        setting_label="theme settings",
     )
 def path_is_inside_or_equal(child: Path, parent: Path) -> bool:
     resolved_child = child.resolve()
@@ -347,10 +372,10 @@ def asset_url_for_path(file_path: Path, root_path: Path) -> str:
     )
     cache_key = sha256(cache_identity.encode("utf-8")).hexdigest()[:16]
     return f"{base_url}?v={cache_key}"
-def appearance_theme_id_for_job(job: Mapping[str, object]) -> str:
-    appearance = job.get("appearance")
-    if isinstance(appearance, str):
-        return appearance.strip().lower() or DEFAULT_RENDER_THEME_ID
+def theme_id_for_job(job: Mapping[str, object]) -> str:
+    theme = job.get("theme")
+    if isinstance(theme, str):
+        return theme.strip().lower() or DEFAULT_RENDER_THEME_ID
     return DEFAULT_RENDER_THEME_ID
 def normalize_size_profile(value: object) -> str:
     return str(value or "").strip().lower().replace("_", "-")
@@ -385,7 +410,7 @@ def default_render_size(job: Mapping[str, object], output: Mapping[str, object])
         or output.get("label")
     ):
         return DIAGNOSTIC_RENDER_WIDTH, DIAGNOSTIC_RENDER_HEIGHT
-    if profile == "diagnostic" or appearance_theme_id_for_job(job) in WORKBENCH_RENDER_THEME_IDS:
+    if profile == "diagnostic" or theme_id_for_job(job) in WORKBENCH_RENDER_THEME_IDS:
         return DIAGNOSTIC_RENDER_WIDTH, DIAGNOSTIC_RENDER_HEIGHT
     return SIMPLE_RENDER_WIDTH, SIMPLE_RENDER_HEIGHT
 def resolve_output_size(job: Mapping[str, object], output: Mapping[str, object]) -> tuple[int, int]:
@@ -437,20 +462,20 @@ def normalize_common_job(
                     "--params values for a parameter-sweep GIF"
                 )
 
-    # A job's own `appearance` string gets the SAME treatment as the
-    # `--appearance` flag: a saved-theme name stays a name, but a path or an
+    # A job's own `theme` string gets the SAME treatment as the
+    # `--theme` flag: a saved-theme name stays a name, but a path or an
     # inline JSON object is loaded into real settings here.
     #
-    # Without this a job saying `"appearance": "path/to/theme.json"` fell all
-    # the way through to `appearance_theme_id_for_job()`, which lowercases the
+    # Without this a job saying `"theme": "path/to/theme.json"` fell all
+    # the way through to `theme_id_for_job()`, which lowercases the
     # string and treats it as a saved-theme id. The lookup missed, the renderer
     # silently used the default workbench theme, and — because the resolved id
     # was then `workbench` — the size-profile logic further down also quietly
     # switched to diagnostic dimensions. Exit 0, no warning, a plausible but
     # wrong image. The CLI help has always promised that a file path works.
-    raw_appearance = job.get("appearance")
-    if isinstance(raw_appearance, str) and raw_appearance.strip():
-        job["appearance"] = load_appearance_option(raw_appearance, cwd=resolved_cwd)
+    raw_theme = job.get("theme")
+    if isinstance(raw_theme, str) and raw_theme.strip():
+        job["theme"] = load_theme_option(raw_theme, cwd=resolved_cwd)
 
     normalized_render = dict(job.get("render") if is_plain_object(job.get("render")) else {})
     normalized_render.pop("clip", None)
@@ -832,17 +857,64 @@ class BatchSnapshotRenderer:
             self.playwright = None
         self.page = None
         self.started = False
+# --- progress ----------------------------------------------------------------------
+# A snapshot was silent for its ENTIRE run. On a cold assembly that is an artifact build
+# plus a browser launch plus a render -- tens of seconds of nothing on either stream, which
+# is indistinguishable from a hang. Every other long operation in this repo reports (a
+# generation lock now says why it is waiting; `gen` paints a phase bar), and this did not.
+#
+# Same shape as those: a self-erasing line on a tty, and on a non-tty -- an agent's captured
+# log -- one durable line per PHASE CHANGE rather than a bar smeared over hundreds of
+# writes. Never on stdout: stdout is the result.
+class SnapshotProgress:
+    """Reports what a snapshot is doing, to stderr, without becoming part of the result."""
+
+    __slots__ = ("_stream", "_is_tty", "_width", "_last", "_enabled")
+
+    def __init__(self, stream: Any = None, *, enabled: bool = True) -> None:
+        self._stream = stream if stream is not None else sys.stderr
+        self._is_tty = bool(getattr(self._stream, "isatty", lambda: False)())
+        self._enabled = bool(enabled)
+        self._width = 0
+        self._last = ""
+
+    def phase(self, text: str) -> None:
+        if not self._enabled or text == self._last:
+            return
+        self._last = text
+        if self._is_tty:
+            padding = max(0, self._width - len(text))
+            self._width = len(text)
+            print(f"\r{text}{' ' * padding}", end="", file=self._stream, flush=True)
+        else:
+            print(text, file=self._stream, flush=True)
+
+    def clear(self) -> None:
+        if self._enabled and self._is_tty and self._width:
+            print(f"\r{' ' * self._width}\r", end="", file=self._stream, flush=True)
+        self._width = 0
+
+
+NULL_SNAPSHOT_PROGRESS = SnapshotProgress(enabled=False)
+
+
 async def render_resolved_job_packet(
     packet: Mapping[str, object],
     *,
     runtime_dir: Path,
     renderer: BatchSnapshotRenderer | None = None,
+    progress: SnapshotProgress | None = None,
 ) -> dict[str, object]:
     snapshot_renderer = renderer or BatchSnapshotRenderer(runtime_dir)
+    report = progress if progress is not None else NULL_SNAPSHOT_PROGRESS
     started = time.perf_counter()
     results: list[dict[str, object]] = []
+    total = len(packet["jobs"])
     try:
-        for job in packet["jobs"]:
+        for index, job in enumerate(packet["jobs"], start=1):
+            label = str(job.get("input") or "")
+            counter = f" {index}/{total}" if total > 1 else ""
+            report.phase(f"rendering{counter} {label}".rstrip())
             result = await snapshot_renderer.render(job)
             # The browser result knows nothing about artifact resolution; --debug
             # diagnostics are attached at resolve time, so merge them into the
@@ -853,6 +925,7 @@ async def render_resolved_job_packet(
                 result = {**result, "debug": debug_info}
             results.append(result if packet["single"] else {"input": job.get("input"), **result})
     finally:
+        report.clear()
         await snapshot_renderer.close()
     if packet["single"]:
         return results[0]
@@ -889,9 +962,47 @@ def write_render_outputs(result: Mapping[str, object]) -> None:
     for output in outputs:
         if is_plain_object(output):
             write_output_payload(output)
+# stdout is read by an agent far more often than by a person, and indentation is pure
+# volume: on a 600-part list payload it was 38% of 294 KB. A human who wants it laid out
+# pipes through `jq .`; an agent that has to pay for the whitespace cannot get it back.
+_JSON = {"separators": (",", ":")}
+
+# How the browser hands rendered bytes back for write_output_payload to decode. By the time
+# anything prints, that has already written the file -- the CLI writes before it prints -- so
+# these are a verbatim second copy of it, and the `path` beside them is what a caller needs.
+# Printing them put a base64 PNG on stdout (228 KB for one 1600x1200 view) or an entire orbit
+# GIF (1.7 MB, ~445k tokens), in the one output this release has spent its effort making
+# cheap: see the note above _JSON, which strips indentation for a fraction of that. Nothing
+# reads either key back from stdout.
+_OUTPUT_PAYLOAD_KEYS = ("dataUrl", "text")
+
+
+def _without_output_payloads(result: Mapping[str, object]) -> dict:
+    """``result`` minus the output payload blobs.
+
+    Returns a COPY, so a caller that still needs the payload -- write_output_payload reads the
+    same dict -- is unaffected by print order.
+    """
+    printable = dict(result)
+    jobs = printable.get("jobs")
+    if isinstance(jobs, list):
+        printable["jobs"] = [
+            _without_output_payloads(job) if is_plain_object(job) else job for job in jobs
+        ]
+    outputs = printable.get("outputs")
+    if isinstance(outputs, list):
+        printable["outputs"] = [
+            {key: value for key, value in output.items() if key not in _OUTPUT_PAYLOAD_KEYS}
+            if is_plain_object(output)
+            else output
+            for output in outputs
+        ]
+    return printable
+
+
 def print_render_result(result: Mapping[str, object], *, json_output: bool = False, stdout: Any = sys.stdout) -> None:
     if json_output:
-        stdout.write(f"{json.dumps(result, indent=2)}\n")
+        stdout.write(f"{json.dumps(_without_output_payloads(result), **_JSON)}\n")
         return
     if isinstance(result.get("jobs"), list):
         for job_result in result["jobs"]:
@@ -902,10 +1013,12 @@ def print_render_result(result: Mapping[str, object], *, json_output: bool = Fal
         return
     outputs = result.get("outputs")
     if not isinstance(outputs, list):
-        stdout.write(f"{json.dumps(result, indent=2)}\n")
+        # Nothing to summarise as "saved snapshot:" lines, so fall back to the raw result --
+        # stripped the same way, so an unexpected shape cannot reintroduce the payload.
+        stdout.write(f"{json.dumps(_without_output_payloads(result), **_JSON)}\n")
         return
     if result.get("mode") == "list":
-        stdout.write(f"{json.dumps(result.get('parts') or [], indent=2)}\n")
+        stdout.write(f"{json.dumps(result.get('parts') or [], **_JSON)}\n")
         return
     for output in outputs:
         if is_plain_object(output) and output.get("path"):

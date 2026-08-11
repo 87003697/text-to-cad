@@ -28,6 +28,33 @@ class GenCliTests(unittest.TestCase):
         self.assertFalse(generate.call_args.kwargs["force"])
         self.assertFalse(generate.call_args.kwargs["verbose"])
 
+    def test_json_is_off_by_default_and_forwarded_when_asked(self) -> None:
+        with mock.patch.object(cli, "generate_step_targets", return_value=0) as generate:
+            cli.main(["parts/sample.step.py"])
+        self.assertFalse(generate.call_args.kwargs["json_output"])
+
+        with mock.patch.object(cli, "generate_step_targets", return_value=0) as generate:
+            cli.main(["parts/sample.step.py", "--json"])
+        self.assertTrue(generate.call_args.kwargs["json_output"])
+
+    def test_a_generator_failure_is_reported_not_tracebacked(self) -> None:
+        # An uncaught generator exception used to reach the interpreter and print ~60
+        # lines of runtime frames. The CLI is the boundary that turns it into a report.
+        boom = ValueError("bad radius")
+        stderr = io.StringIO()
+        with mock.patch.object(cli, "generate_step_targets", side_effect=boom):
+            with contextlib.redirect_stderr(stderr):
+                self.assertEqual(1, cli.main(["parts/sample.step.py"]))
+        self.assertIn("FAILED: ValueError: bad radius", stderr.getvalue())
+        self.assertNotIn("Traceback", stderr.getvalue())
+
+    def test_verbose_still_gets_the_full_traceback(self) -> None:
+        stderr = io.StringIO()
+        with mock.patch.object(cli, "generate_step_targets", side_effect=ValueError("bad radius")):
+            with contextlib.redirect_stderr(stderr):
+                self.assertEqual(1, cli.main(["parts/sample.step.py", "--verbose"]))
+        self.assertIn("Traceback", stderr.getvalue())
+
     def test_passes_force_and_verbose_flags(self) -> None:
         with mock.patch.object(cli, "generate_step_targets", return_value=0) as generate:
             self.assertEqual(0, cli.main(["parts/sample.step.py", "--force", "--verbose"]))

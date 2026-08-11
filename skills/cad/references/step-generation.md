@@ -87,6 +87,22 @@ To debug or pre-run the on-demand render-package build itself, `scripts/artifact
 python scripts/artifact path/to/imported.step [--kind part|assembly] [--force]
 ```
 
+## Optional-module generators and the artifact cache
+
+A generator that imports several part modules and SKIPS the ones that do not
+exist yet is a useful pattern for parallel work — the assembly stays renderable
+while individual parts are still being written. It has one sharp edge.
+
+The artifact's source-closure hash is computed from the modules the generator
+ACTUALLY IMPORTED at build time. Modules that did not exist during the first
+build were never in the closure, so their later appearance cannot change the
+hash. The cache is self-consistent and permanently stale: tools that resolve
+artifacts on demand keep serving the old package, with no error and no warning,
+long after the new modules land.
+
+Run `scripts/gen` on the entry explicitly after adding a part module, rather than
+relying on implicit resolution by `inspect`, `snapshot`, or the Viewer.
+
 ## Viewer artifacts
 
 Every `scripts/gen` run writes hidden adjacent GLB/topology artifacts as the build output. They power CAD Viewer review, `$cad-viewer` workflows, and `scripts/inspect` refs, and are not optional in the STEP workflow. Imported STEP/STP files get the same artifacts on demand, per the previous section.

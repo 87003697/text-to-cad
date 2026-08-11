@@ -51,7 +51,7 @@ export const SHARED_RENDER_OPTION_KEYS = Object.freeze([
  * helpers after snapshot or viewer code has already chosen defaults.
  *
  * @typedef {Object} SharedRenderOptions
- * @property {Object|null} themeSettings Explicit, normalized appearance settings.
+ * @property {Object|null} themeSettings Explicit, normalized theme settings.
  * @property {Object|null} display Explicit display settings.
  * @property {Object|null} camera Explicit camera/view state.
  * @property {Object|null} framing Explicit framing settings.
@@ -110,17 +110,17 @@ export function inferRenderSceneScale({
     : RENDER_SCENE_SCALE.CAD;
 }
 
-export function resolveAppearanceJobConfig(job = {}, { defaultThemeId = "workbench" } = {}) {
-  if (typeof job.appearance === "string") {
+export function resolveThemeJobConfig(job = {}, { defaultThemeId = "workbench" } = {}) {
+  if (typeof job.theme === "string") {
     return {
-      themeId: job.appearance,
+      themeId: job.theme,
       settings: null
     };
   }
-  if (job.appearance && typeof job.appearance === "object" && !Array.isArray(job.appearance)) {
+  if (job.theme && typeof job.theme === "object" && !Array.isArray(job.theme)) {
     return {
       themeId: defaultThemeId,
-      settings: job.appearance
+      settings: job.theme
     };
   }
   return {
@@ -129,13 +129,13 @@ export function resolveAppearanceJobConfig(job = {}, { defaultThemeId = "workben
   };
 }
 
-export function resolveAppearanceSettings(job = {}, { defaultThemeId = "workbench" } = {}) {
-  const appearance = resolveAppearanceJobConfig(job, { defaultThemeId });
-  const themeSettings = cloneThemeSettings(appearance.themeId || defaultThemeId);
-  const normalized = normalizeThemeSettings(appearance.settings || themeSettings);
-  // Applied for object appearances too, not just saved-theme-id strings.
+export function resolveThemeSettings(job = {}, { defaultThemeId = "workbench" } = {}) {
+  const theme = resolveThemeJobConfig(job, { defaultThemeId });
+  const themeSettings = cloneThemeSettings(theme.themeId || defaultThemeId);
+  const normalized = normalizeThemeSettings(theme.settings || themeSettings);
+  // Applied for object themes too, not just saved-theme-id strings.
   // resolveThemeSettingsForColorMode is the ONLY consumer of colorMode, so
-  // skipping it here made colorMode an accepted-but-inert key in appearance
+  // skipping it here made colorMode an accepted-but-inert key in theme
   // JSON: "light" and "dark" produced byte-identical renders. For settings
   // without an explicit modeColors block this is the identity, because
   // normalizeThemeModeColors derives modeColors from the settings themselves.

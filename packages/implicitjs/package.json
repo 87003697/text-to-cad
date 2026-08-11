@@ -30,7 +30,6 @@
   },
   "scripts": {
     "export": "node scripts/export.mjs",
-    "snapshot": "node scripts/snapshot.mjs",
     "test": "node scripts/run-tests.mjs",
     "verify:exports": "node scripts/verify-implicit-cad-exports.mjs"
   },

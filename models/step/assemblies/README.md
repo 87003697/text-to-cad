@@ -42,15 +42,12 @@ description packages — lives in [`../../renders/`](../../renders/README.md).
   `photo_coffee_cup.step.py`, `planetary_gear_assembly.step.py` (+
   `.params.js`), `robotic_hand_end_effector.step.py`,
   `six_axis_industrial_robot_arm.step.py`, `six_blade_open_propeller.step.py`:
-  more expressive than the benchmark fixtures and not expected to form a
-  systematic test suite.
+  more expressive than the structured fixtures in `../parts/` and not expected
+  to form a systematic test suite.
 - `compact_humanoid.step.py`, `sculpted_humanoid.step.py`: two of the three
   GPT-5.6 humanoid concepts that build multi-part assemblies (the third,
   `research_humanoid`, is a single body and lives in `../parts/`).
-
-The benchmark suite is one deliberate exception to the part/assembly split:
-`benchmark_09_spiral_staircase.step.py` and
-`benchmark_10_planetary_gear_stage.step.py` are internally multi-part but stay
-in `../parts/` with the rest of the numbered suite, since they share
-`benchmark_common.py` and a filename-enumerating validator with benchmarks
-01–08 — see that README for why.
+- `spiral_staircase.step.py`, `planetary_gear_stage.step.py`: two structured
+  fixtures that build multi-part compounds; the rest of that set is in
+  `../parts/`. `planetary_gear_stage` imports `part_common.py` from there via a
+  `sys.path` insert, so it depends on `../parts/` staying a sibling.

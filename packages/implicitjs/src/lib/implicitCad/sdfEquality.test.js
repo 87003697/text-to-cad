@@ -5,14 +5,21 @@
 // points and reduced to a digest of the raw IEEE-754 bytes; the digest is compared against a
 // committed baseline and must match EXACTLY.
 //
-// Exactly, not approximately, on purpose. A tolerance is indistinguishable from a subtle
-// semantic regression in the transpiler -- the one class of bug this gate exists to catch --
-// and the changes it guards (removing exception-based control flow from the GLSL
-// interpreter) have no legitimate reason to move a single bit.
+// Two digests, because the two comparisons this file makes are not the same comparison.
 //
-// Digesting the underlying Float64 bytes rather than comparing numbers gives `Object.is`
-// semantics for free: -0 and 0 have different bit patterns, and NaN compares equal to itself.
-// A plain `===` sweep would silently accept both of those changes.
+// `compiled === interpreted` happens inside ONE process on ONE machine, so it is bit-exact over
+// raw Float64 bytes and stays that way: those two paths have no legitimate reason to move a
+// single bit, and a tolerance there would be indistinguishable from a subtle semantic
+// regression in the transpiler, the class of bug this gate exists to catch.
+//
+// The COMMITTED baseline crosses machines, where bit-exactness is not available to be had: the
+// same corpus on darwin/arm64 and linux/x64 (same V8) diverges on 31 of 45 models at ulp scale.
+// That comparison narrows to Float32 first -- see stableDigestOf for why that, and not
+// significant-figure rounding.
+//
+// Digesting bytes rather than comparing numbers gives `Object.is` semantics for free, in both
+// widths: -0 and 0 have different bit patterns, and NaN compares equal to itself. A plain `===`
+// sweep would silently accept both of those changes.
 //
 // To re-baseline after an INTENTIONAL change:
 //   IMPLICIT_SDF_BASELINE_WRITE=1 npm --prefix packages/implicitjs test -- src/lib/implicitCad/sdfEquality.test.js
@@ -102,8 +109,39 @@ function sampleNormals(count) {
   return normals;
 }
 
+// EXACT -- the raw Float64 bytes. Used only where both sides are produced in the SAME process
+// on the same machine, where exactness is both meaningful and free.
 function digestOf(values) {
   const floats = Float64Array.from(values);
+  return crypto.createHash("sha256").update(Buffer.from(floats.buffer)).digest("hex");
+}
+
+// STABLE -- the same values narrowed to Float32 first. Used for the COMMITTED baseline, the one
+// comparison that crosses machines.
+//
+// It has to, because the last bits of a double are not portable: evaluating this corpus on
+// linux/x64 and on darwin/arm64 (same V8, 12.4.254.21) diverges on 31 of 45 models. The
+// divergence is invisible in the first six values of every model, so it is ulp-scale noise in
+// libm-backed operations, not a semantic difference -- but a digest is all-or-nothing, so
+// ulp-scale noise reddens the whole entry.
+//
+// Float32 rather than rounding to N significant figures, which was the obvious fix and is a
+// trap: rounding is discontinuous, so it erases a 1-ulp difference EXCEPT when the value sits
+// near a rounding boundary, where it preserves it. Over ~300k sampled values that is tens of
+// expected straddles -- a gate that goes green and then flakes. Narrowing to Float32 has the
+// same discontinuity in principle, but the gap between float32 and float64 precision is ~1e-9
+// relative, so a 1-ulp double perturbation straddles a float32 boundary with probability ~1e-9
+// per value: ~3e-4 across the whole corpus, and it would be reproducible rather than flaky.
+//
+// What it costs: sensitivity to changes below ~1e-7 relative, which are exactly the changes we
+// are now forced to tolerate anyway. A real semantic regression -- a wrong branch, a dropped
+// clamp, an inverted operator -- moves values by vastly more. Float32 keeps the Object.is
+// properties the exact digest was chosen for: -0 and 0 stay distinct, NaN stays NaN.
+//
+// The bit-exact gate has not been weakened, only aimed at the comparison it fits: `compiled ===
+// interpreted` below is still raw Float64 bytes with zero tolerance.
+function stableDigestOf(values) {
+  const floats = Float32Array.from(values);
   return crypto.createHash("sha256").update(Buffer.from(floats.buffer)).digest("hex");
 }
 
@@ -139,7 +177,7 @@ function evaluateModel(model) {
     points.forEach((point, index) => {
       channels.push(...color(point, normals[index]));
     });
-    colorDigest = digestOf(channels);
+    colorDigest = stableDigestOf(channels);
     colorSample = channels.slice(0, 6);
   } catch {
     // A model without a color() function is legitimate; absence is recorded as null and is
@@ -151,7 +189,10 @@ function evaluateModel(model) {
     points: points.length,
     compiled,
     interpretedDigest,
-    sdfDigest: digestOf(distances),
+    // Same values, two digests: the exact one is compared against `interpretedDigest` in this
+    // process; the stable one is what the committed baseline holds.
+    exactDigest: digestOf(distances),
+    sdfDigest: stableDigestOf(distances),
     // A few raw values make a digest mismatch diagnosable instead of merely red.
     sdfSample: distances.slice(0, 6),
     colorDigest,
@@ -206,6 +247,10 @@ test("implicit SDF corpus evaluates identically to the committed baseline", { sk
     for (const entry of Object.values(results)) {
       delete entry.compiled;
       delete entry.interpretedDigest;
+      // Machine-local by construction: it is the exact-bytes half of the differential gate,
+      // recomputed every run. Committing it would put an unportable value in the baseline --
+      // the precise thing this file must not hold.
+      delete entry.exactDigest;
     }
     fs.mkdirSync(path.dirname(BASELINE_PATH), { recursive: true });
     fs.writeFileSync(BASELINE_PATH, `${JSON.stringify({ totalPoints: TOTAL_POINTS, models: results }, null, 2)}\n`);
@@ -241,7 +286,7 @@ test("implicit SDF corpus evaluates identically to the committed baseline", { sk
     if (actual.compiled !== true) {
       failures.push(`${name}: did not compile -- silent interpreter fallback`);
     }
-    if (actual.interpretedDigest !== actual.sdfDigest) {
+    if (actual.interpretedDigest !== actual.exactDigest) {
       failures.push(`${name}: compiled and interpreted sdf() disagree (differential gate)`);
     }
     if (actual.sdfDigest !== expected.sdfDigest) {

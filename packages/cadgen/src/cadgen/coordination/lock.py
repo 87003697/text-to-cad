@@ -36,7 +36,7 @@ import threading
 import time
 import uuid
 from pathlib import Path
-from typing import Iterator, NamedTuple
+from typing import Callable, Iterator, NamedTuple
 
 try:  # POSIX only; on a platform without fcntl every operation degrades to a no-op.
     import fcntl
@@ -47,6 +47,13 @@ except ImportError:  # pragma: no cover - not reachable on darwin/linux CI
 _HELD = threading.local()
 _RUN_ID_BYTES = 32
 _POLL_INTERVAL_S = 0.02
+
+# How long a wait has to last before it is worth announcing, and how often to repeat the
+# announcement afterwards. A wait is normally either instant or long: the grace keeps the
+# common instant acquire silent, and the repeat is what stops a long one from reading as a
+# hung process to whoever (or whatever) is watching the stream.
+_WAIT_NOTICE_GRACE_S = 0.25
+_WAIT_NOTICE_INTERVAL_S = 30.0
 
 
 class Contended(RuntimeError):
@@ -125,6 +132,7 @@ def exclusive(
     *,
     run_id: str | None = None,
     deadline_ms: float | None = None,
+    on_wait: Callable[[float], None] | None = None,
 ) -> Iterator[str | None]:
     """Hold ``lock_path`` exclusively for the body. Yields the run id actually recorded.
 
@@ -132,6 +140,11 @@ def exclusive(
     writing the same directory underneath its peer. With ``deadline_ms`` the wait is
     bounded and raises :class:`Contended` instead, which is what lets a request handler
     refuse to block.
+
+    ``on_wait(elapsed_seconds)`` is called once the wait passes a short grace period and
+    every :data:`_WAIT_NOTICE_INTERVAL_S` after that, so a caller can say WHY it is
+    stalled. Without it a contended acquire is indistinguishable from a hang: the process
+    sits in ``flock`` emitting nothing for as long as the peer holds the lock.
 
     ``None`` (a producer with no coordinated output dir) is a no-op, and so is every
     failure to lock: an unwritable ``__cadgen__``, a filesystem without advisory locks, or
@@ -164,10 +177,7 @@ def exclusive(
     held.add(key)
     try:
         try:
-            if deadline_ms is None:
-                fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
-            else:
-                _acquire_by_deadline(handle, path, deadline_ms)
+            _acquire(handle, path, deadline_ms=deadline_ms, on_wait=on_wait)
         except OSError:
             # ENOLCK/EOPNOTSUPP and friends. The old code left this call OUTSIDE its
             # try/except, so such a filesystem turned advisory coordination into a hard
@@ -189,25 +199,46 @@ def exclusive(
             handle.close()
 
 
-def _acquire_by_deadline(handle, path: Path, deadline_ms: float) -> None:
-    """Poll for the lock until ``deadline_ms`` elapses, then raise :class:`Contended`.
+def _acquire(
+    handle,
+    path: Path,
+    *,
+    deadline_ms: float | None,
+    on_wait: Callable[[float], None] | None,
+) -> None:
+    """Take ``LOCK_EX``, honouring an optional deadline and an optional wait notice.
 
-    ``flock`` has no timeout, and alarm-based interruption is not thread-safe, so a bounded
-    wait has to poll. The interval is short enough to be imperceptible and the wait is
-    expected to be either instant or abandoned.
+    With neither, this is a plain blocking ``flock`` -- the kernel queues us and the hot
+    path costs one syscall. With either, the wait has to POLL: ``flock`` has no timeout,
+    and alarm-based interruption is not thread-safe, so there is no way to bound the wait
+    or to get control back periodically while blocked inside it. The interval is short
+    enough to be imperceptible against a wait long enough to be worth reporting.
+
+    Raises :class:`Contended` when ``deadline_ms`` elapses with a peer still holding it.
     """
-    deadline = time.monotonic() + (max(0.0, deadline_ms) / 1000.0)
+    if deadline_ms is None and on_wait is None:
+        fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+        return
+
+    started = time.monotonic()
+    deadline = None if deadline_ms is None else started + (max(0.0, deadline_ms) / 1000.0)
+    next_notice_at = _WAIT_NOTICE_GRACE_S
     while True:
         try:
             fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
             return
         except OSError as exc:
-            import errno as _errno
-
-            if exc.errno not in (_errno.EWOULDBLOCK, _errno.EAGAIN):
+            if exc.errno not in (errno.EWOULDBLOCK, errno.EAGAIN):
                 raise
-        if time.monotonic() >= deadline:
+        now = time.monotonic()
+        if deadline is not None and now >= deadline:
             raise Contended(path)
+        elapsed = now - started
+        if on_wait is not None and elapsed >= next_notice_at:
+            next_notice_at = elapsed + _WAIT_NOTICE_INTERVAL_S
+            # A reporting callback must never be able to fail an acquire.
+            with contextlib.suppress(Exception):
+                on_wait(elapsed)
         time.sleep(_POLL_INTERVAL_S)
 
 

@@ -57,9 +57,9 @@ which renders as a hole in the world — reports `"ok": true` as well.
 Use `validate` for that question:
 
 ```bash
-inspect validate models/part/part.step.py
-inspect validate models/part/part.step.py --refs o1.2      # one subassembly
-inspect validate models/panel/panel.step.py --allow-open   # surfaces intended
+python scripts/inspect validate models/part/part.step.py
+python scripts/inspect validate models/part/part.step.py --refs o1.2      # one subassembly
+python scripts/inspect validate models/panel/panel.step.py --allow-open   # surfaces intended
 ```
 
 It reports, per occurrence, any of `invalidTopology`, `openShell`,

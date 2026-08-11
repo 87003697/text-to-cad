@@ -62,6 +62,7 @@ from cadgen.coordination.lock import (
 )
 from cadgen.coordination.paths import (
     generator_lock_path,
+    generator_status_path,
     status_path,
     write_lock_path,
 )
@@ -104,6 +105,7 @@ __all__ = [
     "artifact_build",
     "generator_busy",
     "generator_lock_path",
+    "generator_status_path",
     "phase_weights_from_stage_ms",
     "render_progress_bar",
     "require_write_lock",
@@ -186,12 +188,17 @@ class BuildRun:
     holding one -- which is how a stale record used to be rendered as live.
     """
 
-    __slots__ = ("_reporter", "run_id", "skipped")
+    __slots__ = ("_reporter", "contended", "run_id", "skipped")
 
     def __init__(self, reporter: Any, run_id: str | None) -> None:
         self._reporter = reporter
         self.run_id = run_id
+        # Two ways to have no work to do, and a producer must handle both. ``skipped``: we
+        # HELD the lock and found the artifact already current. ``contended``: we never got
+        # the lock, because a peer holds it and the caller set a deadline. Neither is an
+        # error; both mean "do not write the package".
         self.skipped = False
+        self.contended = False
 
     def phase(self, name: str, *, total: int | None = None, detail: str = "") -> None:
         self._reporter.phase(name, total=total, detail=detail)
@@ -214,13 +221,15 @@ def artifact_build(
     is_current: Callable[[], bool] | None = None,
     force: bool = False,
     deadline_ms: float | None = None,
+    on_wait: Callable[[float], None] | None = None,
     sink: Callable[[ProgressEvent], None] | None = None,
 ) -> Iterator[BuildRun]:
     """Own the write lock, the status record, and the post-lock freshness re-check.
 
     Order of operations, and every part of it matters:
 
-    1. Acquire the write lock (blocking, or bounded and raising :class:`Contended`).
+    1. Acquire the write lock (blocking, or bounded by ``deadline_ms`` -- in which case a
+       peer holding it yields a run with ``contended`` set and nothing else happens).
     2. Mint a run id, stamp it into the sentinel, and publish a ``starting`` record --
        synchronously, BEFORE any work and before yielding. This is what closes the window
        in which a reader could attribute a previous run's record to this one.
@@ -234,6 +243,8 @@ def artifact_build(
 
     ``force=True`` skips only the ``is_current()`` call, never the lock.
     ``output_dir`` of None (a producer with no coordinated output) yields an inert run.
+    ``on_wait`` reports a contended acquire while it is still waiting -- see
+    :func:`cadgen.coordination.lock.exclusive`.
     """
     if output_dir is None:
         # Uncoordinated (a producer with no output dir of its own). There is no lock and no
@@ -250,7 +261,23 @@ def artifact_build(
     started_at_ms = time.time() * 1000.0
     target = status_path(output_dir)
 
-    with exclusive(write_lock_path(output_dir), deadline_ms=deadline_ms) as run_id:
+    # The acquire is entered separately from the body so a deadline that expires can be
+    # reported as an OUTCOME (run.contended) rather than thrown through the caller. A peer
+    # holding the lock is an ordinary answer to "should I build this?", the same shape as
+    # run.skipped -- and a caller that ignores it and writes anyway is caught at the
+    # mutation boundary by require_write_lock().
+    stack = contextlib.ExitStack()
+    try:
+        run_id = stack.enter_context(
+            exclusive(write_lock_path(output_dir), deadline_ms=deadline_ms, on_wait=on_wait)
+        )
+    except Contended:
+        contended_run = BuildRun(NULL_PROGRESS, None)
+        contended_run.contended = True
+        yield contended_run
+        return
+
+    with stack:
         if run_id is None:
             # Degraded (no fcntl, unwritable dir, or a filesystem without advisory locks).
             # Still report progress -- a bar with no mutual exclusion is better than no bar,
@@ -365,22 +392,38 @@ def generator_busy(
     output_dir: Path | str | None,
     *,
     deadline_ms: float | None = None,
+    on_wait: Callable[[float], None] | None = None,
 ) -> Iterator[str | None]:
     """Occupy an artifact's GENERATOR without claiming to rewrite its package.
 
     An export runs the model's ``gen_step()`` for a minute and writes a file somewhere else
     entirely. Taking the write lock for that made a fully-current model report `generating`
-    with an empty bar; taking nothing would let a real build run the same generator
-    concurrently. This is the third option, and it is why there are two sentinels.
+    with an empty bar; taking nothing would let a reader think the generator is free. This
+    is the third option, and it is why there are two sentinels.
+
+    Note what this does NOT do: the generator sentinel is a different file from the writer
+    sentinel, so ``flock`` cannot make the two exclude each other. A build and an export of
+    one model DO run its ``gen_step()`` concurrently, each in its own process. That is
+    wasteful but not unsafe -- they share no in-process state and write different outputs.
+    What it buys is a state a reader can distinguish: a busy generator does not hide the
+    package on disk, and a writer does.
+
+    Its record goes to :func:`generator_status_path`, NOT to the writer's record. Sharing
+    one file let this run stomp a live build's progress and erase the stage times the next
+    build weights its bar from -- and the two runs cannot exclude each other, so there was
+    no lock that would have prevented it.
     """
     if output_dir is None:
         yield None
         return
     started_at_ms = time.time() * 1000.0
-    with exclusive(generator_lock_path(output_dir), deadline_ms=deadline_ms) as run_id:
+    target = generator_status_path(output_dir)
+    with exclusive(
+        generator_lock_path(output_dir), deadline_ms=deadline_ms, on_wait=on_wait
+    ) as run_id:
         if run_id is not None:
             _record.write_record(
-                status_path(output_dir),
+                target,
                 _record.build_record(
                     run_id=run_id,
                     kind=kind.name,
@@ -394,7 +437,7 @@ def generator_busy(
         finally:
             if run_id is not None:
                 _record.write_record(
-                    status_path(output_dir),
+                    target,
                     _record.build_record(
                         run_id=run_id,
                         kind=kind.name,

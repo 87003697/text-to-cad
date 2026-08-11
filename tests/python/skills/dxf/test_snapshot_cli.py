@@ -1,3 +1,4 @@
+import importlib.util
 import subprocess
 import sys
 import unittest
@@ -7,8 +8,23 @@ from unittest import mock
 from tests.python.support.paths import add_repo_path, repo_path
 
 add_repo_path("skills/dxf/scripts")
+add_repo_path("packages/cadgen/src")
 
-from snapshot import cli as snapshot
+# The CLI is shared (cadgen.snapshot_cli); this skill's entrypoint declares that it accepts
+# drawings and where its runtime lives. What is DXF-specific -- resolving a .dxf or a
+# gen_dxf() source to its built package -- is what these tests cover.
+import cadgen.snapshot_cli as snapshot
+
+# Loaded BY PATH, not by module name: every skill names its entry package `snapshot`, so
+# `import snapshot.__main__` resolves to whichever skill's scripts dir landed on sys.path
+# first. With the CAD snapshot tests in the same process that is CAD's, and this test then
+# silently asserts against the wrong skill's kinds.
+_dxf_entry_spec = importlib.util.spec_from_file_location(
+    "dxf_skill_snapshot_entry",
+    Path(repo_path("skills/dxf/scripts/snapshot/__main__.py")),
+)
+dxf_snapshot_entry = importlib.util.module_from_spec(_dxf_entry_spec)
+_dxf_entry_spec.loader.exec_module(dxf_snapshot_entry)
 
 
 class DxfSnapshotCliTests(unittest.TestCase):
@@ -23,7 +39,7 @@ class DxfSnapshotCliTests(unittest.TestCase):
         payload = {"previewPath": "models/drawings/dxf/__cadgen__/models/x.dxf/preview.glb"}
         with mock.patch.object(snapshot, "build_dxf_artifact", return_value=payload) as build:
             with mock.patch.object(Path, "is_file", return_value=True):
-                resolved = snapshot.preview_path_for_input(Path("/models/x.dxf"), force=False)
+                resolved = snapshot.drawing_preview_path(Path("/models/x.dxf"), force=False)
 
         self.assertTrue(str(resolved).endswith("preview.glb"))
         self.assertFalse(build.call_args.kwargs["force"])
@@ -32,7 +48,7 @@ class DxfSnapshotCliTests(unittest.TestCase):
         payload = {"previewPath": "p/preview.glb"}
         with mock.patch.object(snapshot, "build_dxf_artifact", return_value=payload) as build:
             with mock.patch.object(Path, "is_file", return_value=True):
-                snapshot.preview_path_for_input(Path("/models/x.dxf"), force=True)
+                snapshot.drawing_preview_path(Path("/models/x.dxf"), force=True)
 
         self.assertTrue(build.call_args.kwargs["force"])
 
@@ -42,21 +58,31 @@ class DxfSnapshotCliTests(unittest.TestCase):
         with mock.patch.object(snapshot, "build_dxf_artifact", return_value={"ok": True}):
             with mock.patch.object(Path, "is_file", return_value=True):
                 with self.assertRaises(snapshot.SnapshotError):
-                    snapshot.preview_path_for_input(Path("/models/x.dxf"), force=False)
+                    snapshot.drawing_preview_path(Path("/models/x.dxf"), force=False)
 
     def test_rejects_a_non_drawing_input(self) -> None:
         with self.assertRaises(snapshot.SnapshotError):
-            snapshot.preview_path_for_input(Path("/models/part.step"), force=False)
+            snapshot.drawing_preview_path(Path("/models/part.step"), force=False)
 
     def test_reports_a_missing_input(self) -> None:
         with self.assertRaises(snapshot.SnapshotError):
-            snapshot.preview_path_for_input(Path("/models/definitely-absent.dxf"), force=False)
+            snapshot.drawing_preview_path(Path("/models/definitely-absent.dxf"), force=False)
 
-    def test_modes_are_limited_to_view_and_orbit(self) -> None:
-        # Drawings have no CAD topology, so section and list have nothing to work with.
-        parser = snapshot.build_parser()
-        with self.assertRaises(SystemExit):
-            parser.parse_args(["--input", "a.dxf", "--output", "a.png", "--mode", "section"])
+    def test_section_mode_is_rejected_for_a_drawing(self) -> None:
+        # Drawings have no CAD topology, so section has nothing to work with. The shared
+        # CLI accepts the flag for every skill and refuses it per KIND at resolve time,
+        # which is what keeps the message specific instead of "invalid choice".
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp).resolve()
+            (root / "a.dxf").write_text("0\nSECTION\n", encoding="utf-8")
+            with self.assertRaisesRegex(snapshot.SnapshotError, "section mode requires STEP topology"):
+                snapshot.resolve_render_job_packet(
+                    {"input": "a.dxf", "mode": "section", "outputs": [{"path": "a.png"}]},
+                    cwd=root,
+                    kinds=snapshot.enabled_kinds(dxf_snapshot_entry.KINDS),
+                )
 
     def test_scripts_snapshot_directory_invokes_cli(self) -> None:
         skill_root = repo_path("skills/dxf")
@@ -70,7 +96,8 @@ class DxfSnapshotCliTests(unittest.TestCase):
         )
         self.assertEqual("", result.stderr)
         self.assertEqual(0, result.returncode)
-        self.assertIn("usage: scripts/snapshot", result.stdout)
+        self.assertIn("Usage:", result.stdout)
+        self.assertIn(".dxf", result.stdout)
 
     def test_runtime_is_bundled_beside_the_cli(self) -> None:
         # The skill must carry its own render runtime: it may not reach into the CAD

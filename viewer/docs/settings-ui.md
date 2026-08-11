@@ -24,7 +24,7 @@ Tab body                    px-0, vertical stack of sections
 - A tab body is a flat list of sections. Sections never nest.
 - **Every section carries a heading, and every row carries a label** — including
   a section that holds a single row, which shows both (`Material` / `Thickness`,
-  `Appearance` / `Preset`, `Model` / `Mode`). A heading never stands in for a row's label: a labelless
+  `Theme` / `Preset`, `Model` / `Mode`). A heading never stands in for a row's label: a labelless
   row reads as an orphaned control, and a row whose only name is the heading
   above it cannot be scanned in a list. Name the group and the control
   differently; if the only honest name for both is the same word, the group is

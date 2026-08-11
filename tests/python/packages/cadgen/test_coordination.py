@@ -105,6 +105,50 @@ class SnapshotTest(CoordinationTestCase):
         self.assertEqual("busy", snap.state)
 
 
+class GeneratorRecordIsolationTest(CoordinationTestCase):
+    """The two sentinels do NOT exclude each other, so a generator run and a writer run
+    overlap by design. They must not share a record file: while they did, an export landed
+    on top of a live build's progress and the viewer's bar vanished mid-build."""
+
+    def test_a_generator_run_does_not_touch_the_writers_record(self):
+        with exclusive(write_lock_path(self.out)) as write_run:
+            record_mod.write_record(
+                status_path(self.out),
+                record_mod.build_record(
+                    run_id=write_run,
+                    kind="step-package",
+                    intent="write",
+                    started_at_ms=0.0,
+                    outcome=None,
+                    progress={"phase": "components", "done": 7, "total": 9, "ratio": 0.5},
+                ),
+            )
+            with generator_busy(STEP_PACKAGE, self.out):
+                snap = snapshot(self.out)
+            self.assertEqual("writing", snap.state, "the writer still holds its sentinel")
+            self.assertIsNotNone(
+                snap.progress, "an overlapping export must not erase the build's bar"
+            )
+            self.assertEqual("components", snap.progress["phase"])
+
+    def test_a_generator_run_does_not_erase_the_learned_stage_times(self):
+        # An export leaves a terminal record with no stageMs. Sharing the writer's file made
+        # that record the one the NEXT build read, so the model forgot its phase weighting.
+        with artifact_build(STEP_PACKAGE, self.out, is_current=lambda: False) as run:
+            run.phase(PHASE_COMPONENTS, total=2)
+            run.advance()
+        learned = record_mod.read_stage_ms(status_path(self.out))
+        self.assertTrue(learned, "a successful build records what its phases cost")
+
+        with generator_busy(STEP_PACKAGE, self.out):
+            pass
+        self.assertEqual(
+            learned,
+            record_mod.read_stage_ms(status_path(self.out)),
+            "an export must not cost the next build its learned phase weighting",
+        )
+
+
 class RunAttributionTest(CoordinationTestCase):
     def test_a_dead_runs_record_is_not_shown_as_the_live_runs_progress(self):
         # Simulate a SIGKILLed build: a non-terminal record left behind forever.
@@ -287,17 +331,56 @@ class PostLockFreshnessTest(CoordinationTestCase):
 
 
 class BoundedWaitTest(CoordinationTestCase):
-    def test_deadline_raises_contended_instead_of_blocking(self):
+    def test_deadline_reports_contended_instead_of_blocking(self):
         self._spawn_holder(hold=10.0)
         started = time.monotonic()
-        with self.assertRaises(Contended):
-            with artifact_build(
-                STEP_PACKAGE, self.out, is_current=lambda: False, deadline_ms=300
-            ):
-                pass
+        with artifact_build(
+            STEP_PACKAGE, self.out, is_current=lambda: False, deadline_ms=300
+        ) as run:
+            self.assertTrue(run.contended, "a peer holds the lock; this run got nothing")
+            self.assertIsNone(run.run_id, "a contended run never became a run")
         self.assertLess(
             time.monotonic() - started, 5.0, "a bounded wait must not block for the full run"
         )
+
+    def test_an_acquired_run_is_not_contended(self):
+        with artifact_build(
+            STEP_PACKAGE, self.out, is_current=lambda: False, deadline_ms=5000
+        ) as run:
+            self.assertFalse(run.contended)
+            self.assertIsNotNone(run.run_id)
+
+    def test_exclusive_still_raises_contended_for_lower_level_callers(self):
+        # artifact_build turns a lost race into run.contended; the primitive underneath it
+        # keeps raising, so a caller with no BuildRun to inspect still cannot miss it.
+        self._spawn_holder(hold=10.0)
+        with self.assertRaises(Contended):
+            with exclusive(write_lock_path(self.out), deadline_ms=300):
+                pass
+
+    def test_a_contended_run_writes_no_record(self):
+        # The peer owns the record. A run that never took the lock must not touch it --
+        # overwriting it is exactly how a live build's bar used to disappear.
+        self._spawn_holder(hold=10.0)
+        before = status_path(self.out).read_bytes() if status_path(self.out).exists() else None
+        with artifact_build(
+            STEP_PACKAGE, self.out, is_current=lambda: False, deadline_ms=300
+        ) as run:
+            self.assertTrue(run.contended)
+        after = status_path(self.out).read_bytes() if status_path(self.out).exists() else None
+        self.assertEqual(before, after)
+
+    def test_a_blocked_acquire_reports_that_it_is_waiting(self):
+        # Without this a contended acquire emits nothing at all for as long as the peer
+        # holds the lock, which is indistinguishable from a hung process.
+        self._spawn_holder(hold=1.5)
+        waits = []
+        with artifact_build(
+            STEP_PACKAGE, self.out, is_current=lambda: False, on_wait=waits.append
+        ) as run:
+            self.assertFalse(run.contended, "no deadline: it must wait the peer out")
+        self.assertTrue(waits, "a wait long enough to notice must be reported")
+        self.assertGreater(waits[0], 0.0)
 
     def test_reentrant_acquire_in_one_thread_does_not_deadlock(self):
         with exclusive(write_lock_path(self.out)) as outer:

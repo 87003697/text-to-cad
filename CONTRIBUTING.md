@@ -221,8 +221,8 @@ gh workflow run release.yml --ref develop -f bump=patch
 
 One run bumps `VERSION` plus derived metadata on a
 `release/<version>` branch, opens a release PR, merges it into `develop`
-immediately, and then runs the publish, models-upload, web-app deploy, and
-tag/GitHub Release jobs in the same run. The release PR does not wait for its own CI checks; the
+immediately, and then runs the publish, docs deploy, and tag/GitHub Release
+jobs in the same run. The release PR does not wait for its own CI checks; the
 publish job repeats the full bundle and test validation against exactly what
 ships. The publish job ships to `main` only when the
 source version is newer than `main` and the latest semver tag, and refuses
@@ -317,8 +317,8 @@ Production users should continue cloning `main`; developers should treat
    what inputs it expects, what it produces, and how to validate the work.
 3. Prefer small files in `references/` and reusable scripts in `scripts/` over
    long inline instructions.
-4. Add or update focused fixtures, tests, or benchmark cases when skill behavior
-   changes so regressions are measurable.
+4. Add or update focused fixtures or tests when skill behavior changes so
+   regressions are measurable.
 5. Validate with the smallest relevant check before broad repo checks.
 
 Generated artifacts should not become skill logic unless they are intentional
@@ -374,6 +374,6 @@ as `.venv/`, `node_modules/`, `.vite/`, `dist/`, `tmp/`, or local credentials.
 Generated runtime changes should come from the production-output workflow, not
 manual edits inside generated runtime folders.
 
-CAD exchange files, generated render/topology assets, `assets/**`, and
-`benchmarks/**` may be LFS-tracked. Never disable LFS filters for `git add`,
-commits, or other object-writing operations.
+CAD exchange files, generated render/topology assets, and `assets/**` may be
+LFS-tracked. Never disable LFS filters for `git add`, commits, or other
+object-writing operations.

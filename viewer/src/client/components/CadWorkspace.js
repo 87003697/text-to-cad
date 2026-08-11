@@ -1254,7 +1254,7 @@ export default function CadWorkspace({
   const [drawingUnits, setDrawingUnits] = useState(DXF_DEFAULT_UNITS);
   // Post-fold model orientation, in quarter-turns about each world axis.
   const [drawingOrientation, setDrawingOrientation] = useState(DXF_DEFAULT_ORIENTATION);
-  // Sheet material preset: appearance tint + density for the weight fact.
+  // Sheet material preset: theme tint + density for the weight fact.
   const [drawingMaterial, setDrawingMaterial] = useState(DXF_DEFAULT_MATERIAL);
   // The package's parsed contours, fetched once per entry and kept by URL. Curved bends
   // re-mesh from these; the URL carries the package version, so a rebuild refetches.
@@ -1265,7 +1265,7 @@ export default function CadWorkspace({
     [themeSettings]
   );
   const resolvedDisplayEdgeSettings = useMemo(() => {
-    // Edge appearance — colour, opacity, thickness — is fixed, not a user
+    // Edge theme — colour, opacity, thickness — is fixed, not a user
     // setting. It comes from the cadjs defaults, or from a theme that styles its
     // own linework (e.g. Terminal's neon-green outline). Whether edges draw at
     // all is still decided by the display MODE, not here.

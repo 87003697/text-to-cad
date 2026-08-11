@@ -11,7 +11,7 @@ repository link is only for provenance and release review.
 
 Use this skill for MoveIt semantic robot descriptions on top of an existing valid URDF. SRDF defines planning semantics; it does not define physical robot structure. The `.srdf` file is the source of truth: author and edit the XML directly. There is no `gen_srdf()` contract.
 
-SRDF correctness is a **planning semantics** problem. The common failure is not invalid XML; it is a plausible SRDF that gives MoveIt the wrong planning group, wrong tool link, wrong default state, unsafe disabled-collision matrix, or wrong joint units. Because language models are weak at spatial and kinematic reasoning, derive planning groups, end effectors, group states, and disabled collisions from the URDF topology, MoveIt Setup Assistant output, sampled collision analysis, or explicit user data. Do not infer them from visual appearance alone — and do not type any link or joint name from memory: extract the URDF's link/joint table first and copy names from it.
+SRDF correctness is a **planning semantics** problem. The common failure is not invalid XML; it is a plausible SRDF that gives MoveIt the wrong planning group, wrong tool link, wrong default state, unsafe disabled-collision matrix, or wrong joint units. Because language models are weak at spatial and kinematic reasoning, derive planning groups, end effectors, group states, and disabled collisions from the URDF topology, MoveIt Setup Assistant output, sampled collision analysis, or explicit user data. Do not infer them from visual theme alone — and do not type any link or joint name from memory: extract the URDF's link/joint table first and copy names from it.
 
 ## Format boundary
 
@@ -65,6 +65,32 @@ The validator collects all findings in one pass (severity, code, XML path). It p
 - End-effector groups should not share links with their parent planning group.
 - `$cad-viewer` owns optional local `moveit2_server` guidance for interactive planning review.
 - Visual rendering review is useful but cannot prove planning correctness.
+
+## Snapshot Tool
+
+`scripts/snapshot` renders the robot to a PNG still or an orbit GIF, using the same shared
+CLI and headless browser runtime every rendering skill uses — so a snapshot matches what
+the CAD Viewer shows.
+
+```bash
+python scripts/snapshot --input path/to/robot.srdf --output review.png
+python scripts/snapshot --input path/to/robot.srdf --output turntable.gif --mode orbit
+```
+
+It accepts `.srdf` only. Pose the robot with the job field `"jointValues"` (joint name to
+degrees, defaulting to the rest pose) rather than `--params`, which is STEP-only; robots
+are authored in metres and are framed on the robot scene scale automatically.
+
+Theme settings live under one `--theme`, mirroring the viewer's Theme tab. The default
+theme is `snapshot` — Workbench Light with the ground grid, origin axis and shadows
+removed, because in a still image those read as geometry. There is no `--display`: display
+settings (mode, clip, exploded, edges) are CAD topology settings, and a robot carries none.
+
+Link meshes are resolved relative to the description, so they must be present: an
+unhydrated Git LFS pointer fails as "No link mesh loaded for robot". Run
+`git lfs checkout <mesh dir>` first.
+
+Use `python scripts/snapshot --help` for the complete current command interface.
 
 ## References
 

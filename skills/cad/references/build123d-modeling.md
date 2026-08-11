@@ -194,6 +194,51 @@ plane = Plane(origin=Vector(*origin), x_dir=x_dir, z_dir=normal)
 The same applies to rolling a section about a swept member's own axis: use a
 Rodrigues rotation about that axis rather than `Plane.rotated()`.
 
+## Multi-section lofts match sections BY INDEX
+
+A loft interpolates its sections point index by point index. If you sample each
+station at fractions of THAT station's own width, a feature — a crest, a
+silhouette edge — sits at a different index at every station, and the surface
+twists between them to reconcile them. The result is valid, watertight,
+bilaterally symmetric, passes `inspect validate`, and renders as **crumpled
+foil** over every square metre. Nothing reports it; only a render finds it.
+
+Sample on **rails**: compute the lateral position of each feature line per
+station and allocate a fixed number of points to each rail-to-rail band, so
+index *i* means the same feature everywhere. Cluster samples toward the rails —
+that is where curvature is worst, so even spacing inside a band leaves the
+sharpest part of the curve least resolved.
+
+Two more ways a control curve silently ruins a lofted surface:
+
+- **`smoothstep` between control points makes a staircase.**
+  `lerp(v0, v1, smoothstep(x0, x1, x))` has zero derivative at BOTH ends of every
+  interval, so the curve is flat at each control point and steep between them.
+  Lofting through such curves puts a crease at every knot. Use a monotone cubic
+  (PCHIP) instead.
+- **Measurement noise becomes surface ripple.** Station data traced off a scan
+  carries ~a pixel of noise; a monotone interpolant reproduces it exactly and the
+  loft turns it into visible waves. Smooth the control curve before lofting.
+
+## Blending volumes: a closed lobe that ends inside the body is a cliff
+
+When sections are built by smooth-max/min over component volumes, any closed
+convex profile meets its own silhouette on a **vertical tangent**. Where such a
+lobe closes *inside* the body — against a neighbouring shelf or lobe — you get a
+near-vertical wall no blend width and no sample density can round off. Extra
+sampling does not help: the corner is in the function, not the sampling.
+
+- Widen the lobe until it OVERLAPS its neighbour and cut the real feature back in
+  afterwards, rather than letting it close between them.
+- Give a feature that needs its own width its own lobe. One half-width cannot
+  serve both a wide fuselage and a narrow canopy.
+- Prefer a **compact-support polynomial** smooth-max to the softplus/log-sum-exp
+  form: softplus perturbs the surface everywhere and its curvature is unbounded
+  as the blend narrows. Use the **cubic** (`h**3`) form, not the quadratic
+  (`h*(1-h)`) one — the quadratic is only C1, so curvature JUMPS at the edge of
+  the blend band, and a curvature jump on a specular surface draws a visible
+  line.
+
 ## Validity is not positive volume
 
 `Shape.is_valid` (and `BRepCheck_Analyzer`) can return **True for a shell with a

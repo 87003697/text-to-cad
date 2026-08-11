@@ -10,8 +10,8 @@ import {
   implicitCadFragmentShader,
   normalizeImplicitCadGlslFloatLiterals,
   refreshImplicitCadFloorBounds,
-  resolveImplicitCadAppearanceSettings,
-  updateImplicitCadAppearanceUniforms,
+  resolveImplicitCadThemeSettings,
+  updateImplicitCadThemeUniforms,
   updateImplicitCadGraphicsUniforms
 } from "./render.js";
 import { normalizeImplicitCadModel } from "./model.js";
@@ -299,7 +299,7 @@ float sdf(vec3 p) {
   assert.deepEqual(state.frameBounds, { min: [-10, -10, -10], max: [10, 10, 10] });
 });
 
-test("workbench appearance and graphics update the shared shader uniforms", () => {
+test("workbench theme and graphics update the shared shader uniforms", () => {
   const model = normalizeImplicitCadModel({
     glsl: `
 float sdf(vec3 p) { return length(p) - 1.0; }
@@ -309,8 +309,8 @@ vec3 color(vec3 p, vec3 normal) { return vec3(0.1, 0.8, 1.0); }
   });
   const material = createImplicitCadMaterial(THREE, model);
 
-  const themeSettings = updateImplicitCadAppearanceUniforms(THREE, material, model, {
-    appearance: "workbench",
+  const themeSettings = updateImplicitCadThemeUniforms(THREE, material, model, {
+    theme: "workbench",
     graphicsSettings: { modelColors: false }
   });
   const graphicsSettings = updateImplicitCadGraphicsUniforms(material, model, {
@@ -329,7 +329,7 @@ vec3 color(vec3 p, vec3 normal) { return vec3(0.1, 0.8, 1.0); }
   assert.equal(material.uniforms.uStepBudget.value, 24);
   assert.equal(graphicsSettings.detail, 4);
   assert.ok(material.uniforms.uHitEpsilon.value < model.epsilon);
-  assert.equal(resolveImplicitCadAppearanceSettings({ appearance: "workbench" }).background.type, themeSettings.background.type);
+  assert.equal(resolveImplicitCadThemeSettings({ theme: "workbench" }).background.type, themeSettings.background.type);
 
   material.dispose();
 });

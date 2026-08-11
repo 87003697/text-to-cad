@@ -19,7 +19,7 @@ import {
   resolveDisplayMode
 } from "./displaySettings.js";
 
-test("display settings normalize mode and clip independently from appearance settings", () => {
+test("display settings normalize mode and clip independently from theme settings", () => {
   assert.deepEqual(normalizeDisplaySettings(), DEFAULT_DISPLAY_SETTINGS);
   assert.equal(resolveDisplayMode({ mode: "wireframe" }), CAD_DISPLAY_MODE.WIREFRAME);
   // Projection is a theme trait now, not a display setting: it is dropped on
@@ -53,7 +53,7 @@ test("display settings normalize mode and clip independently from appearance set
   });
 });
 
-test("display settings normalize edge styling independently from appearance settings", () => {
+test("display settings normalize edge styling independently from theme settings", () => {
   assert.deepEqual(normalizeDisplayEdgeSettings({
     enabled: false,
     color: "#ABC",
@@ -133,7 +133,7 @@ test("display modes normalize common CAD aliases", () => {
   assert.equal(resolveDisplayMode({ mode: "hidden edges visible" }), CAD_DISPLAY_MODE.HIDDEN_EDGES);
   assert.equal(resolveDisplayMode({ mode: "hidden-lines-removed" }), CAD_DISPLAY_MODE.HIDDEN_LINES_REMOVED);
   assert.equal(resolveDisplayMode({ mode: "flat" }), CAD_DISPLAY_MODE.UNSHADED);
-  assert.equal(resolveDisplayMode({ mode: "appearance" }), CAD_DISPLAY_MODE.RENDERED);
+  assert.equal(resolveDisplayMode({ mode: "theme" }), CAD_DISPLAY_MODE.RENDERED);
   assert.equal(resolveDisplayMode({ mode: "wire" }), CAD_DISPLAY_MODE.WIREFRAME);
 });
 

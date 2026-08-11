@@ -30,6 +30,12 @@ from cadgen._internal.implicit_package import (
 )
 from cadgen.catalog import render_package_dir
 from cadgen.cli_logging import CliLogger
+from cadgen._internal.cli_locking import (
+    add_lock_timeout_argument,
+    contended_payload,
+    deadline_ms,
+    lock_wait_notice,
+)
 from cadgen.coordination import IMPLICIT_PACKAGE, artifact_build
 from cadgen.render import relative_to_cwd
 
@@ -96,6 +102,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--force", action="store_true", help="Regenerate even if a current artifact exists.")
     parser.add_argument("--verbose", action="store_true", help="Show detailed timing on stderr.")
+    add_lock_timeout_argument(parser)
     return parser
 
 
@@ -109,6 +116,7 @@ def build_implicit_artifact(
     force: bool = False,
     logger: CliLogger | None = None,
     sink: object | None = None,
+    lock_timeout_s: float = 0.0,
 ) -> dict[str, object]:
     """Build the implicit package for one model and RETURN the result payload (the exact
     dict the CLI prints). Mirrors :func:`cadgen.dxf_artifact.build_dxf_artifact`.
@@ -143,7 +151,14 @@ def build_implicit_artifact(
         is_current=_is_current,
         force=force,
         sink=sink,
+        deadline_ms=deadline_ms(lock_timeout_s),
+        on_wait=lock_wait_notice(logger, relative_to_cwd(resolved_source)),
     ) as run:
+        if run.contended:
+            logger.info(f"another run is building {relative_to_cwd(resolved_source)}; not waiting")
+            return contended_payload(
+                source_ref=relative_to_cwd(resolved_source), package_dir=package_dir
+            )
         if run.skipped:
             payload = _result_payload(
                 resolved_source,
@@ -194,6 +209,7 @@ def run_cli_payload(
         write_glb=Path(args.write_glb) if args.write_glb else None,
         force=bool(args.force),
         logger=logger,
+        lock_timeout_s=float(args.lock_timeout or 0.0),
     )
     logger.total()
     return payload

@@ -39,6 +39,16 @@ GENERATOR_LOCK_SUFFIX = ".generator.lock"
 # cutover and the reader cutover -- where the viewer showed `generating` with no bar.
 STATUS_SUFFIX = ".generation.progress.json"
 
+# The GENERATOR run's status record, and the reason there are two. Generator runs and writer
+# runs take different sentinels ON PURPOSE, so they do not exclude each other -- which meant
+# that while they shared one record file, an export's record landed on top of a live build's
+# progress. `snapshot()` attributes progress only to the WRITE sentinel's holder, so the
+# export's run id did not match and the build's bar vanished mid-run; worse, the export's
+# terminal record carries no `stageMs`, so it also erased the phase weighting the next build
+# reads. Nothing consumes this file today -- it exists so a generator run has somewhere of
+# its own to report, and cannot reach the writer's record.
+GENERATOR_STATUS_SUFFIX = ".generator.progress.json"
+
 
 def _sibling(output_dir: Path | str, suffix: str) -> Path:
     package = Path(output_dir)
@@ -56,5 +66,11 @@ def generator_lock_path(output_dir: Path | str) -> Path:
 
 
 def status_path(output_dir: Path | str) -> Path:
-    """The status/progress record describing the most recent run for ``output_dir``."""
+    """The status/progress record describing the most recent WRITER run for ``output_dir``."""
     return _sibling(output_dir, STATUS_SUFFIX)
+
+
+def generator_status_path(output_dir: Path | str) -> Path:
+    """The status record for a run that occupies ``output_dir``'s generator but writes no
+    package. Separate from :func:`status_path` so it cannot overwrite a live build's."""
+    return _sibling(output_dir, GENERATOR_STATUS_SUFFIX)

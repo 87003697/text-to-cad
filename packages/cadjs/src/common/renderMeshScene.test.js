@@ -70,9 +70,12 @@ test("renderMeshJob list capture uses buildModel selection", async () => {
 
   assert.equal(result.ok, true);
   assert.equal(result.mode, "list");
-  assert.deepEqual(result.parts.map((part) => part.id), ["right"]);
-  // Each part carries a paste-ready selector ref (#<occurrenceId>) for --focus/--hide.
+  // `ref` is the ONLY identifier a part carries: it pastes straight into --focus/--hide
+  // and inspect. `id` and `occurrenceId` were the same string again and again (identical
+  // in 600/600 parts on a real assembly) and are gone.
   assert.deepEqual(result.parts.map((part) => part.ref), ["#right"]);
+  assert.deepEqual(Object.keys(result.parts[0]).sort(),
+    ["bounds", "name", "ref", "triangleCount", "vertexCount"]);
   assert.deepEqual(result.bounds, {
     min: [2, 0, 0],
     max: [3, 1, 0]

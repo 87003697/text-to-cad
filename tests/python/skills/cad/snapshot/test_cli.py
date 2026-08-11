@@ -56,11 +56,15 @@ def write_package(step_path, *, entry_kind="part", source_kind="step"):
     return pkg_dir
 
 add_repo_path("skills/cad/scripts")
+add_repo_path("packages/cadgen/src")
 
-import snapshot.__main__ as snapshot_main
-from snapshot.__main__ import (
-    RENDER_HTML_PATH,
-    RUNTIME_DIR,
+# The CLI itself is shared (cadgen.snapshot_cli); the CAD skill's entrypoint is the
+# declaration of which kinds it accepts and where its runtime lives. These tests exercise
+# the CAD skill's behaviour, so they drive the shared implementation through that skill's
+# runtime directory.
+import cadgen.snapshot_cli as snapshot_main
+import snapshot.__main__ as cad_snapshot_entry
+from cadgen.snapshot_cli import (
     SnapshotError,
     load_job_from_options,
     parse_snapshot_args,
@@ -68,6 +72,10 @@ from snapshot.__main__ import (
     resolve_snapshot_route_file,
     timestamp_output_path,
 )
+
+RUNTIME_DIR = cad_snapshot_entry.RUNTIME_DIR
+RENDER_HTML_PATH = RUNTIME_DIR / "render.html"
+CAD_KINDS = snapshot_main.enabled_kinds(cad_snapshot_entry.KINDS)
 
 
 class _TtyStringIO(io.StringIO):
@@ -155,7 +163,7 @@ class SnapshotCliTests(unittest.TestCase):
             ("hidden edges visible", {"mode": "hidden_edges"}),
             ("hidden-lines-removed", {"mode": "hidden_lines_removed"}),
             ("flat", {"mode": "unshaded"}),
-            ("appearance", {"mode": "rendered"}),
+            ("theme", {"mode": "rendered"}),
             ("wire", {"mode": "wireframe"}),
         ]:
             options = parse_snapshot_args(
@@ -251,31 +259,31 @@ class SnapshotCliTests(unittest.TestCase):
         job = load_job_from_options(options, stdin=_TtyStringIO(), cwd=Path.cwd())
         self.assertEqual(job["display"], {"edges": {"enabled": False, "color": "#123456"}})
 
-        appearance_options = parse_snapshot_args(
+        theme_options = parse_snapshot_args(
             [
                 "--input",
                 "models/step/parts/cylindrical_cap.step",
                 "--output",
                 "tmp/cap.png",
-                "--appearance",
+                "--theme",
                 '{"edges":{"enabled":false}}',
             ]
         )
         with self.assertRaisesRegex(SnapshotError, "unsupported keys: edges"):
-            load_job_from_options(appearance_options, stdin=_TtyStringIO(), cwd=Path.cwd())
+            load_job_from_options(theme_options, stdin=_TtyStringIO(), cwd=Path.cwd())
 
-    def test_appearance_accepts_a_full_theme_preset_clone(self) -> None:
+    def test_theme_accepts_a_full_theme_preset_clone(self) -> None:
         # cloneThemePresetSettings() emits colorMode, projection and modeColors
         # alongside the five settings blocks. Rejecting any of them meant the
         # repo's own theme-clone output could not be passed back to
-        # --appearance without hand-stripping keys first.
+        # --theme without hand-stripping keys first.
         options = parse_snapshot_args(
             [
                 "--input",
                 "models/step/parts/cylindrical_cap.step",
                 "--output",
                 "tmp/cap.png",
-                "--appearance",
+                "--theme",
                 json.dumps(
                     {
                         "colorMode": "light",
@@ -291,7 +299,7 @@ class SnapshotCliTests(unittest.TestCase):
             ]
         )
         job = load_job_from_options(options, stdin=_TtyStringIO(), cwd=Path.cwd())
-        self.assertIn("modeColors", job["appearance"])
+        self.assertIn("modeColors", job["theme"])
 
     def test_display_shortcut_rejects_unknown_modes(self) -> None:
         options = parse_snapshot_args(
@@ -621,6 +629,40 @@ class SnapshotCliTests(unittest.TestCase):
             packet = resolve_render_job_packet(job, cwd=root)
             self.assertEqual(packet["jobs"][0]["display"], {"projection": "orthographic"})
 
+    def test_json_output_omits_output_payload_blobs(self) -> None:
+        """--json must not echo the rendered bytes back. dataUrl/text are how the browser
+        returns them for write_output_payload to decode; by print time the file is on disk and
+        `path` names it. Echoing them cost 228 KB of stdout for one PNG and 1.7 MB -- ~445k
+        tokens -- for an orbit GIF. The one test that covered this path used an empty outputs
+        list, which is why it shipped."""
+        data_url = "data:image/png;base64," + "A" * 4096
+        svg_text = "<svg>" + "x" * 4096 + "</svg>"
+        result = {
+            "ok": True,
+            "jobs": [
+                {
+                    "ok": True,
+                    "mode": "view",
+                    "outputs": [
+                        {"path": "/tmp/a.png", "width": 800, "height": 600, "dataUrl": data_url},
+                        {"path": "/tmp/b.svg", "text": svg_text},
+                    ],
+                }
+            ],
+        }
+        stream = io.StringIO()
+        snapshot_main.print_render_result(result, json_output=True, stdout=stream)
+        printed = stream.getvalue()
+        self.assertNotIn("dataUrl", printed)
+        self.assertNotIn(data_url, printed)
+        self.assertNotIn(svg_text, printed)
+        # Everything a caller actually uses survives.
+        outputs = json.loads(printed)["jobs"][0]["outputs"]
+        self.assertEqual([output["path"] for output in outputs], ["/tmp/a.png", "/tmp/b.svg"])
+        self.assertEqual(outputs[0]["width"], 800)
+        # The caller's dict keeps its payload: write_output_payload reads the same object.
+        self.assertEqual(result["jobs"][0]["outputs"][0]["dataUrl"], data_url)
+
     def test_debug_reaches_rendered_json_output(self) -> None:
         """--debug diagnostics are attached at resolve time, but the printed result is the
         browser's return value — the render stage must merge them in or the help text's
@@ -641,7 +683,7 @@ class SnapshotCliTests(unittest.TestCase):
 
         result = asyncio.run(
             snapshot_main.render_resolved_job_packet(
-                {"single": True, "jobs": [job]}, runtime_dir=snapshot_main.RUNTIME_DIR, renderer=StubRenderer()
+                {"single": True, "jobs": [job]}, runtime_dir=RUNTIME_DIR, renderer=StubRenderer()
             )
         )
         self.assertEqual(result["debug"], debug_payload)
@@ -651,7 +693,7 @@ class SnapshotCliTests(unittest.TestCase):
 
         multi = asyncio.run(
             snapshot_main.render_resolved_job_packet(
-                {"single": False, "jobs": [job]}, runtime_dir=snapshot_main.RUNTIME_DIR, renderer=StubRenderer()
+                {"single": False, "jobs": [job]}, runtime_dir=RUNTIME_DIR, renderer=StubRenderer()
             )
         )
         self.assertEqual(multi["jobs"][0]["debug"], debug_payload)
@@ -692,8 +734,9 @@ class SnapshotCliTests(unittest.TestCase):
             root = Path(temporary_directory).resolve()
             models = root / "models"
             models.mkdir()
-            # A DXF: still genuinely unsupported as a direct snapshot input. This used to
-            # be a .urdf, which the robot resolver now accepts.
+            # A drawing. The shared CLI can resolve one, but the CAD skill does not enable
+            # it -- so the rejection must name the skill that does, and must happen before
+            # anything is built.
             (models / "panel.dxf").write_text("0\nSECTION\n", encoding="utf-8")
             calls = []
 
@@ -706,9 +749,7 @@ class SnapshotCliTests(unittest.TestCase):
                 snapshot_main.ensure_step_topology_artifact = fake_ensure
                 with self.assertRaisesRegex(
                     SnapshotError,
-                    "Snapshot supports STEP/STP inputs, same-stem Python generators, "
-                    "direct GLB/STL/3MF meshes, .implicit.js models, or "
-                    r"\.urdf/\.srdf/\.sdf robot descriptions",
+                    r"does not render \.dxf.*inputs",
                 ):
                     resolve_render_job_packet(
                         {
@@ -716,6 +757,7 @@ class SnapshotCliTests(unittest.TestCase):
                             "outputs": [{"path": "tmp/iso.png", "camera": "iso"}],
                         },
                         cwd=root,
+                        kinds=CAD_KINDS,
                     )
             finally:
                 snapshot_main.ensure_step_topology_artifact = original_ensure
@@ -1374,13 +1416,13 @@ class SnapshotCliTests(unittest.TestCase):
     def test_runtime_routes_are_self_contained(self) -> None:
         self.assertEqual(
             resolve_snapshot_route_file(
-                "http://snapshot.local/render.html", runtime_dir=snapshot_main.RUNTIME_DIR
+                "http://snapshot.local/render.html", runtime_dir=RUNTIME_DIR
             ),
             RENDER_HTML_PATH,
         )
         self.assertEqual(
             resolve_snapshot_route_file(
-                "http://snapshot.local/snapshot-render.js", runtime_dir=snapshot_main.RUNTIME_DIR
+                "http://snapshot.local/snapshot-render.js", runtime_dir=RUNTIME_DIR
             ),
             RUNTIME_DIR / "snapshot-render.js",
         )
@@ -1442,7 +1484,7 @@ class SnapshotCliTests(unittest.TestCase):
             sys.modules["playwright.async_api"] = async_api_module
 
             async def start_renderer() -> None:
-                renderer = snapshot_main.BatchSnapshotRenderer(snapshot_main.RUNTIME_DIR)
+                renderer = snapshot_main.BatchSnapshotRenderer(RUNTIME_DIR)
                 try:
                     await renderer.start()
                 finally:
@@ -1485,13 +1527,13 @@ if __name__ == "__main__":
     unittest.main()
 
 
-class JobAppearanceResolutionTests(unittest.TestCase):
-    """A job's own `appearance` string must get the same treatment as the
-    `--appearance` flag. It used to fall through to a saved-theme-id lookup,
+class JobThemeResolutionTests(unittest.TestCase):
+    """A job's own `theme` string must get the same treatment as the
+    `--theme` flag. It used to fall through to a saved-theme-id lookup,
     miss, and silently render on the default workbench theme with diagnostic
     dimensions — exit 0, no warning, a plausible but wrong image."""
 
-    def _packet_for(self, appearance_value, *, theme_body=None):
+    def _packet_for(self, theme_value, *, theme_body=None):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             models = root / "models"
@@ -1499,7 +1541,7 @@ class JobAppearanceResolutionTests(unittest.TestCase):
             (models / "part.step").write_text("ISO-10303-21;\nEND-ISO-10303-21;\n", encoding="utf-8")
             write_package(models / "part.step")
             if theme_body is not None:
-                (models / "stage.appearance.json").write_text(
+                (models / "stage.theme.json").write_text(
                     json.dumps(theme_body), encoding="utf-8"
                 )
             original_ensure = snapshot_main.ensure_step_topology_artifact
@@ -1508,7 +1550,7 @@ class JobAppearanceResolutionTests(unittest.TestCase):
                 return resolve_render_job_packet(
                     {
                         "input": "models/part.step",
-                        "appearance": appearance_value,
+                        "theme": theme_value,
                         "outputs": [{"path": "tmp/iso.png", "camera": "iso"}],
                     },
                     cwd=root,
@@ -1516,42 +1558,42 @@ class JobAppearanceResolutionTests(unittest.TestCase):
             finally:
                 snapshot_main.ensure_step_topology_artifact = original_ensure
 
-    def test_job_appearance_file_path_is_loaded_into_settings(self):
+    def test_job_theme_file_path_is_loaded_into_settings(self):
         theme = {
             "_comment": "why these numbers are what they are",
             "colorMode": "dark",
             "projection": "perspective",
             "materials": {"roughness": 0.56},
         }
-        packet = self._packet_for("models/stage.appearance.json", theme_body=theme)
-        appearance = packet["jobs"][0]["appearance"]
+        packet = self._packet_for("models/stage.theme.json", theme_body=theme)
+        theme = packet["jobs"][0]["theme"]
         self.assertIsInstance(
-            appearance, dict, "a theme FILE PATH must resolve to settings, not stay a string"
+            theme, dict, "a theme FILE PATH must resolve to settings, not stay a string"
         )
-        self.assertEqual(appearance["materials"]["roughness"], 0.56)
+        self.assertEqual(theme["materials"]["roughness"], 0.56)
         # keys the renderer genuinely consumes must survive validation
-        self.assertEqual(appearance["projection"], "perspective")
-        self.assertEqual(appearance["colorMode"], "dark")
+        self.assertEqual(theme["projection"], "perspective")
+        self.assertEqual(theme["colorMode"], "dark")
         # underscore-prefixed keys are comments, dropped rather than rejected
-        self.assertNotIn("_comment", appearance)
+        self.assertNotIn("_comment", theme)
 
-    def test_job_appearance_rejects_edges_and_names_its_real_home(self):
+    def test_job_theme_rejects_edges_and_names_its_real_home(self):
         """Edge settings belong in display JSON. Rejecting them is correct; the
         message must say where they go rather than just 'unsupported keys'."""
         with self.assertRaises(snapshot_main.SnapshotError) as ctx:
             self._packet_for(
-                "models/stage.appearance.json",
+                "models/stage.theme.json",
                 theme_body={"materials": {"roughness": 0.5}, "edges": {"enabled": False}},
             )
         message = str(ctx.exception)
         self.assertIn("unsupported keys: edges", message)
         self.assertIn("edges belongs in display JSON", message)
 
-    def test_job_appearance_saved_theme_name_stays_a_name(self):
+    def test_job_theme_saved_theme_name_stays_a_name(self):
         packet = self._packet_for("workbench")
-        self.assertEqual(packet["jobs"][0]["appearance"], "workbench")
+        self.assertEqual(packet["jobs"][0]["theme"], "workbench")
 
-    def test_job_appearance_missing_file_raises(self):
+    def test_job_theme_missing_file_raises(self):
         with self.assertRaises(snapshot_main.SnapshotError) as ctx:
             self._packet_for("models/no_such_theme.json")
         self.assertIn("does not exist", str(ctx.exception))

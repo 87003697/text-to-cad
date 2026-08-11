@@ -39,7 +39,7 @@ def validate_sdf_targets(
 
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
-        prog="validate",
+        prog="scripts/validate",
         description="Validate explicit SDFormat/SDF targets.",
     )
     parser.add_argument(
@@ -65,7 +65,17 @@ def main(argv: Sequence[str] | None = None) -> int:
         dest="output_format",
         help="Output format: human-readable text (default) or a JSON findings document.",
     )
+    parser.add_argument(
+        "--verbose",
+        action="store_true",
+        help="Narrate each target and its timing on stderr.",
+    )
     args = parser.parse_args(list(argv) if argv is not None else None)
+    if args.verbose:
+        # Narration goes to stderr; the findings document on stdout stays exactly the same
+        # so `--verbose` never changes what a caller parses.
+        for target in args.targets:
+            print(f"[sdf] validating {target}", file=sys.stderr)
     return validate_sdf_targets(
         args.targets,
         gz_check=args.gz_check,

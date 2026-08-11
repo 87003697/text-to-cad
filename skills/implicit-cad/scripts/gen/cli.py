@@ -145,6 +145,12 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+
+def report_cli_error(*args, **kwargs):
+    from cadgen._internal.cli_errors import report_cli_error as report
+
+    return report(*args, **kwargs)
+
 def main(argv: Sequence[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(list(argv) if argv is not None else None)

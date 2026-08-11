@@ -68,11 +68,15 @@ fi
 
 require_python_package "$CADGEN_PACKAGE_DIR" cadgen
 ensure_node_builder_deps
-ensure_snapshot_runtime_deps "$SNAPSHOT_BUILD_DEPS_DIR" 1
-
+# --clean BEFORE the install, not after. Reversed, this deleted the very directory it had
+# just installed esbuild into, and the build below then died with exit 127 looking for it --
+# which is what `scripts/bundle/bundle.sh --clean` does in CI. bundle-cad.sh has always had
+# this order; dxf did not.
 if [ "$CLEAN" -eq 1 ]; then
   rm -rf "$CHECK_DIR" "$SNAPSHOT_BUILD_DEPS_DIR"
 fi
+
+ensure_snapshot_runtime_deps "$SNAPSHOT_BUILD_DEPS_DIR" 1
 
 if [ "$MODE" = "check" ]; then
   rm -rf "$CHECK_DIR"

@@ -6,8 +6,15 @@ import json
 from pathlib import Path
 
 from cadgen.cli_logging import CliLogger
+from cadgen._internal.cli_locking import (
+    add_lock_timeout_argument,
+    contended_payload,
+    deadline_ms,
+    lock_wait_notice,
+)
 from cadgen._internal.generation import (
     EntrySpec,
+    cli_progress_line,
     _assembly_glb_package_current,
     _existing_topology_artifact_matches_spec_without_scene,
     _entry_spec_from_source,
@@ -259,6 +266,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--mesh-tolerance", type=float, help="Override automatic mesh linear deflection.")
     parser.add_argument("--mesh-angular-tolerance", type=float, help="Override automatic mesh angular deflection.")
     parser.add_argument("--verbose", action="store_true", help="Show detailed timing on stderr.")
+    add_lock_timeout_argument(parser)
     return parser
 
 
@@ -274,6 +282,7 @@ def build_step_artifact(
     reset_runtime_closure: bool = False,
     verbose: bool = False,
     logger: CliLogger | None = None,
+    lock_timeout_s: float = 0.0,
 ) -> dict[str, object]:
     """Build the GLB/topology artifact for one STEP/.step.py and RETURN the result
     payload (the exact dict the CLI prints). This is the single source of truth,
@@ -287,7 +296,13 @@ def build_step_artifact(
 
     ``reset_runtime_closure`` (default-off) is for warm worker processes: it makes
     the generator's recorded source closure deterministic across repeated in-process
-    builds — see :func:`cadgen.generation.run_script_generator`."""
+    builds — see :func:`cadgen.generation.run_script_generator`.
+
+    ``lock_timeout_s`` bounds the wait for a peer's generation lock. 0 waits (the CLI
+    default: an agent asking for a build wants the build). A caller that must not block —
+    the CAD Viewer's request path, which shares ONE serial warm worker across every model —
+    passes a short one and gets ``{"ok": True, "contended": True}`` back, so it can report
+    the peer's run instead of occupying the worker until the peer finishes."""
     repo_root = Path(repo_root).expanduser().resolve()
     step_path = Path(step).expanduser().resolve()
     from_generator = source_path is not None
@@ -371,12 +386,29 @@ def build_step_artifact(
     # finished. Measured before this: two processes 0.3s apart on a cold package both ran
     # gen_step(), the second for a further 2.5s after waiting 2.67s for the lock.
     package_dir = render_package_dir(existing_spec.entry_path) if existing_spec.entry_path else None
-    with artifact_build(
+    # This builds exactly what `scripts/gen` builds, and reported nothing while doing it:
+    # the sidecar went to the viewer and a terminal caller watched a silent process.
+    with cli_progress_line(
+        existing_spec.source_ref, logger=logger, fallback="Building..."
+    ) as progress_sink, artifact_build(
         STEP_PACKAGE,
         package_dir,
         is_current=lambda: _current_artifact_for_spec(existing_spec) is not None,
         force=force,
+        deadline_ms=deadline_ms(lock_timeout_s),
+        on_wait=lock_wait_notice(logger, existing_spec.source_ref),
+        sink=progress_sink,
     ) as progress:
+        if progress.contended:
+            # A peer holds this model's lock and the caller asked not to wait it out. Not
+            # an error: the model IS being built, just not by us.
+            logger.info(f"another run is building {existing_spec.source_ref}; not waiting")
+            return contended_payload(
+                source_ref=existing_spec.source_ref,
+                cad_ref=existing_spec.cad_ref,
+                package_dir=package_dir,
+                stepPath=relative_to_cwd(existing_spec.step_path),
+            )
         if progress.skipped:
             artifact = _current_artifact_for_spec(existing_spec)
             if artifact is not None:
@@ -442,6 +474,7 @@ def run_cli_payload(
         mesh_angular_tolerance=args.mesh_angular_tolerance,
         reset_runtime_closure=reset_runtime_closure,
         logger=logger,
+        lock_timeout_s=float(args.lock_timeout or 0.0),
     )
     logger.total()
     return payload

@@ -2255,7 +2255,12 @@ export function fitCameraToModel(THREE, camera, bounds, {
   const minSpan = settings.minModelRadius;
   const spanX = Math.max(Math.max(...xs) - Math.min(...xs), minSpan);
   const spanY = Math.max(Math.max(...ys) - Math.min(...ys), minSpan);
-  const safeContentScale = Math.max(1 - (clamp(Number(padding) || 0, 0.1, 0.4) * 2), 0.1);
+  // Padding bounds must match framePadding() in renderOptions.js (0 .. 0.15).
+  // They used to disagree -- this path forced a 0.1 MINIMUM while the render-job
+  // path honoured smaller values -- so the same `padding` framed differently in
+  // the viewport than in a snapshot, and a job asking for tighter framing than
+  // 0.1 was silently ignored here with no warning.
+  const safeContentScale = Math.max(1 - (clamp(Number(padding) || 0, 0, 0.15) * 2), 0.1);
   const halfHeight = lockedHalfHeight || Math.max(
     spanY / (2 * safeContentScale),
     spanX / (2 * aspect * safeContentScale),

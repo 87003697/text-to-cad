@@ -123,10 +123,19 @@ python scripts/snapshot --input path/to/source.dxf.py --output turntable.gif --m
 ```
 
 It builds/refreshes the drawing package first, then renders that package's `preview.glb`
-through the same headless browser runtime the CAD skill's STEP snapshot uses — so a
-snapshot matches what the CAD Viewer shows. Flags: `--mode view|orbit`, `--camera`,
-`--appearance`, `--size-profile`, `--width`/`--height`, `--force`, `--json`. There are no
-selector, parameter, section or exploded options: a drawing carries no CAD topology.
+through the shared snapshot CLI (`cadgen.snapshot_cli`) and the same headless browser
+runtime every rendering skill uses — so geometry and materials render identically to the CAD
+Viewer; the default `snapshot` theme differs from the viewport only by dropping the grid,
+origin axis and shadows. The
+package build is the same locked `artifact_build(DRAWING_PACKAGE)` that `scripts/artifact`
+and the viewer run, so a snapshot cannot race one of them.
+
+Flags: `--mode view|orbit|list`, `--camera`, `--theme`, `--size-profile`,
+`--width`/`--height`, `--job`, `--force`, `--json`. Theme settings live under one
+`--theme`, mirroring the viewer's Theme tab; the default theme is `snapshot`, Workbench
+Light without the ground grid, origin axis or shadows. There is no `--display`, and no
+selector, parameter, section or exploded options: a drawing carries no CAD topology, and
+display settings are CAD topology settings.
 
 No CLI inspects an existing `.dxf`. For entity/layer checks use `ezdxf` directly,
 and `--validate` for the drawing checks; review geometry visually with `$cad-viewer`.

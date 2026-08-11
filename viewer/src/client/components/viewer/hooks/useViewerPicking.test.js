@@ -214,6 +214,7 @@ test("measure tap payload keeps the resolved reference for face-to-face distance
   assert.equal(measurement.euclidean, 5);
 });
 
+
 test("partIdFromIntersection reads a per-occurrence mesh's partId", () => {
   const hit = { object: { userData: { partId: "o1.5" } } };
   assert.equal(partIdFromIntersection(hit), "o1.5");

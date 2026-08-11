@@ -58,7 +58,7 @@ async function dataUrlToImageData(dataUrl, width, height) {
 
 function shouldEncodeTransparentGif(job = {}) {
   const backgroundType = String(
-    job.appearance?.background?.type || ""
+    job.theme?.background?.type || ""
   ).toLowerCase();
   return Boolean(job.render?.transparent) || backgroundType === "transparent";
 }

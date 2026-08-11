@@ -21,6 +21,11 @@ from .urls import local_asset_url_for_path
 
 _STEP_EXPORT_FORMAT_SUFFIX = {"step": "step", "stl": "stl", "3mf": "3mf", "glb": "glb"}
 
+# How long an artifact build may wait for a peer's generation lock before reporting the
+# peer's run instead. Long enough that an UNCONTENDED acquire never trips it (it is a
+# couple of syscalls), short enough that a POST cannot park the shared warm worker.
+_ARTIFACT_LOCK_TIMEOUT_SECONDS = 0.5
+
 # The formats an `.implicit.js` model exports to. Rejected here only so a bad request fails
 # before a Node process is spawned; `cadgen.implicit_export` holds the authoritative list
 # beside the exporter it drives, and validates again.
@@ -356,8 +361,11 @@ class LocalAssetBackend:
         if code in artifact_mod.BUILDABLE_ARTIFACT_CODES:
             status = {"state": artifact_mod.ARTIFACT_STATE_NEEDS_BUILD, "reason": code, "ref": ref}
             if snap.busy:
-                # Stale AND the generator is occupied: a build would just block on the
-                # peer. Tell the client to wait rather than POST.
+                # Stale AND the generator is occupied (an export is running this model's
+                # gen_step). A build would NOT block on it -- the two take different
+                # sentinels precisely so they do not exclude each other -- it would run the
+                # same generator a second time, concurrently, for nothing. Telling the
+                # client to wait is an efficiency call, not a deadlock avoidance one.
                 status["blocked"] = True
             return status
         return {"state": artifact_mod.ARTIFACT_STATE_ERROR, "reason": code, "error": code, "ref": ref}
@@ -428,9 +436,22 @@ class LocalAssetBackend:
         full_args = ["--repo-root", root_path, *args]
         if force:
             full_args += ["--force"]
+        # NEVER wait out a peer inside a build. cadgen's acquire is blocking by default,
+        # which is right for a CLI (an agent asking for a build wants the build) and wrong
+        # here: this request runs in the ONE serial warm worker, so a build parked on
+        # another process's lock stops every OTHER model's build and export for as long as
+        # the peer runs -- measured at 32s for an unrelated, already-current model. The
+        # snap.writing pre-check in resolve_artifact narrows the window but cannot close it
+        # (a peer can take the lock right after the snapshot, and force= skips the check
+        # entirely). This is the part that actually cannot block.
+        full_args += ["--lock-timeout", str(_ARTIFACT_LOCK_TIMEOUT_SECONDS)]
         if os.environ.get("VIEWER_STEP_ARTIFACT_VERBOSE") == "1":
             full_args += ["--verbose"]
         result = cadgen_bridge.run_cadgen(module, full_args, root_path)
+        if result.get("contended"):
+            # A peer holds the lock. Nothing failed and nothing was built: the caller
+            # reports the peer's run so the client attaches to its progress.
+            return {"ok": True, "contended": True, "error": "", "result": result}
         error = "" if result.get("ok") else str(result.get("error") or error_label)
         return {"ok": bool(result.get("ok")), "error": error, "result": result}
 
@@ -453,6 +474,11 @@ class LocalAssetBackend:
         #
         # Reporting `generating` immediately lets the client attach to the peer's run and
         # watch its live progress instead, which is both faster and truthful.
+        #
+        # This check is the FAST PATH, not the guarantee: it is a snapshot, so a peer can
+        # take the lock immediately after it, and force= skips it entirely. The guarantee is
+        # the bounded --lock-timeout in _run_artifact_build, whose contended result lands on
+        # the same answer below.
         snap = artifact_mod.generation_snapshot(scanner.render_package_dir(artifact_source))
         if not force and snap.writing:
             result = {"ok": True, "state": artifact_mod.ARTIFACT_STATE_GENERATING, "ref": ref}
@@ -460,6 +486,14 @@ class LocalAssetBackend:
                 result["runId"] = snap.run_id
             return result
         built = fmt["build"](file_ref, force, resolved_root, catalog)
+        if built.get("contended"):
+            # The peer took the lock between the snapshot above and the build (or force=
+            # skipped that check). Same answer as the pre-check: attach to their run.
+            result = {"ok": True, "state": artifact_mod.ARTIFACT_STATE_GENERATING, "ref": ref}
+            live = artifact_mod.generation_snapshot(scanner.render_package_dir(artifact_source))
+            if live.run_id:
+                result["runId"] = live.run_id
+            return result
         if built["ok"]:
             return {"ok": True, "state": artifact_mod.ARTIFACT_STATE_READY, "ref": ref}
         return {"ok": False, "state": artifact_mod.ARTIFACT_STATE_ERROR, "error": built["error"]}

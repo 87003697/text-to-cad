@@ -400,6 +400,26 @@ jobs:
             exit 1
           fi
 
+          # Every gate above this line -- check-builds.sh, test.sh, test-docs.sh -- ran
+          # against the WORKING TREE, where bundle.sh had just written the generated outputs.
+          # `git add -A` honours .gitignore, so a generated path that is ignored (or unstaged
+          # for any other reason) passes all of them and still ships missing. This asserts
+          # against the INDEX, which is what actually becomes the commit. It is the check that
+          # would have caught skills/implicit-cad/scripts/snapshot/runtime shipping empty.
+          unstaged_generated=""
+          while IFS= read -r generated_path; do
+            [ -n "$generated_path" ] || continue
+            if [ -z "$(git ls-files -- "$generated_path" | head -n 1)" ]; then
+              unstaged_generated="$unstaged_generated$generated_path"$'\n'
+            fi
+          done <<< "$(scripts/bundle/bundle-skill.sh --all --print-outputs)"
+          if [ -n "$unstaged_generated" ]; then
+            echo "Generated outputs are missing from the publish commit:" >&2
+            printf '%s' "$unstaged_generated" | sed 's/^/- /' >&2
+            echo "They exist in the working tree but nothing staged them; check .gitignore." >&2
+            exit 1
+          fi
+
           version="$(tr -d '[:space:]' < VERSION)"
           if target_base_sha="$(git rev-parse --verify "origin/$TARGET_BRANCH^{commit}" 2>/dev/null)"; then
             echo "Using existing $TARGET_BRANCH as publish parent: $target_base_sha"

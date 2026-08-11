@@ -11,9 +11,9 @@ Flat single-file `<name>.step.py` generators live in
 
 ## Concept packages
 
-- [f1/](f1/BRIEF.md): open-wheel F1 car — modular `f1_parts/` build with a
+- [f1/](f1/): open-wheel F1 car — modular `f1_parts/` build with a
   parameter sidecar.
-- [hypercar/](hypercar/BUILDER_BRIEF.md): mid-engine hypercar — modular
+- [hypercar/](hypercar/): mid-engine hypercar — modular
   `hypercar_parts/` build, `render/` presentation theme, and a `.step.js`
   sidecar.
 - [moonwatch/](moonwatch/README.md): chronograph wristwatch — shared finishing

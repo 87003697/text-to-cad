@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import argparse
 import contextlib
-import io
 import importlib.util
+import json
 import math
 import os
 import shutil
@@ -29,6 +29,7 @@ from cadgen.catalog import (
     source_from_path,
 )
 from cadgen.cli_logging import CliLogger
+from cadgen._internal.cli_locking import lock_wait_notice
 from cadgen._internal.file_metadata import text_to_cad_identity_metadata, write_dxf_text_to_cad_metadata
 from cadgen._internal.package_freshness import (
     ASSEMBLY_PACKAGE_SCHEMA_VERSION,
@@ -127,50 +128,6 @@ class _CliTargetSpec:
     output_path: Path | None = None
 
 
-class InlineStatusBoard:
-    def __init__(self, labels: Sequence[str], *, initial_status: str, stream: object | None = None) -> None:
-        self._stream = stream or sys.stdout
-        self._is_tty = getattr(self._stream, "isatty", lambda: False)()
-        self._labels = list(labels)
-        self._statuses = {label: initial_status for label in self._labels}
-        self._rendered_rows = 0
-        if self._labels and self._is_tty:
-            self._render()
-        else:
-            for label in self._labels:
-                print(self._row(label), file=self._stream)
-
-    def set(self, label: str, status: str) -> None:
-        previous = self._statuses.get(label)
-        if previous == status:
-            return
-        if label not in self._statuses:
-            self._labels.append(label)
-        self._statuses[label] = status
-        if self._is_tty:
-            self._render()
-        else:
-            print(self._row(label), file=self._stream)
-
-    def _row(self, label: str) -> str:
-        width = max(len(item) for item in self._labels)
-        return f"{label:<{width}} : {self._statuses.get(label, '')}"
-
-    def _render(self) -> None:
-        if not self._labels:
-            return
-        rows = [self._row(label) for label in self._labels]
-        if self._rendered_rows:
-            print(f"\x1b[{self._rendered_rows}F", end="", file=self._stream)
-        for row in rows:
-            print(f"\x1b[2K{row}", file=self._stream)
-        if self._rendered_rows > len(rows):
-            for _ in range(self._rendered_rows - len(rows)):
-                print("\x1b[2K", file=self._stream)
-        self._rendered_rows = len(rows)
-        self._stream.flush()
-
-
 class InlineProgressLine:
     """A single self-erasing progress line for one model's build.
 
@@ -179,8 +136,9 @@ class InlineProgressLine:
     a log record. Disabled (and completely silent) when the stream is not a tty: a
     redirected log wants the logger's lines, not a bar smeared over hundreds of writes.
 
-    Separate from :class:`InlineStatusBoard`, which paints a persistent row per model
-    for callers that run without a logger."""
+    Goes to STDERR, with the rest of the narration. A sibling class used to paint a
+    persistent per-model board on STDOUT with cursor-movement escapes, for callers that ran
+    without a logger; there were none, and stdout is the CLIs' result channel."""
 
     def __init__(self, *, stream: TextIO | None = None, enabled: bool = True) -> None:
         self._stream = stream if stream is not None else sys.stderr
@@ -201,6 +159,35 @@ class InlineProgressLine:
             return
         print(f"\r{' ' * self._width}\r", end="", file=self._stream, flush=True)
         self._width = 0
+
+
+@contextlib.contextmanager
+def cli_progress_line(
+    label: str,
+    *,
+    logger: CliLogger,
+    fallback: str,
+) -> Iterator[Callable[[ProgressEvent], None] | None]:
+    """The same one-line build progress `gen` paints, for any caller with a label.
+
+    `scripts/artifact` builds exactly what `scripts/gen` builds and reported nothing while
+    doing it -- the sidecar record went to the viewer, and a terminal caller watched a
+    silent process. Sharing this is what stops the two disagreeing about whether a build is
+    worth narrating."""
+    if logger.verbose:
+        yield None
+        return
+    line = InlineProgressLine(stream=logger.stream)
+
+    def paint(event: ProgressEvent) -> None:
+        if event.finished:
+            return
+        line.update(f"{label}  {_progress_status_text(event, fallback=fallback)}")
+
+    try:
+        yield paint
+    finally:
+        line.clear()
 
 
 @contextlib.contextmanager
@@ -980,7 +967,7 @@ def run_script_generator(
     # count, so this reports a phase, not a fraction. Readers estimate it against the
     # duration the model's previous build recorded.
     resolve_progress(progress).phase(PHASE_GENERATE)
-    with _track_spec_generation(spec, generator_name, intent=lock_intent):
+    with _track_spec_generation(spec, generator_name, intent=lock_intent, logger=logger):
         return _run_script_generator_inner(
             spec,
             generator_name,
@@ -1809,6 +1796,7 @@ def _track_spec_generation(
     generator_name: str,
     *,
     intent: str = "write",
+    logger: CliLogger | None = None,
 ) -> contextlib.AbstractContextManager[object]:
     """Coordinate a generator run against the model's render package.
 
@@ -1818,15 +1806,21 @@ def _track_spec_generation(
     writes the package nothing -- an export, an on-demand topology extraction, an
     interference check -- takes the generator lock instead. Taking the writer lock for
     those made a fully-current model report `generating` with an empty bar for the whole
-    length of an export; taking nothing at all would let a real build run the same
-    generator concurrently.
+    length of an export.
+
+    The two sentinels are different files, so they do NOT exclude each other: a build and
+    an export of one model each run its ``gen_step()``, concurrently, in separate
+    processes. That is duplicated work rather than a hazard (no shared in-process state,
+    different outputs), and it is the price of letting a reader tell "being rewritten"
+    from "generator busy" -- see :func:`cadgen.coordination.generator_busy`.
     """
     output_dir = _spec_output_dir(spec, generator_name)
     if output_dir is None:
         return contextlib.nullcontext()
+    on_wait = lock_wait_notice(logger, spec.source_ref)
     if intent == "generate":
-        return generator_busy(STEP_PACKAGE, output_dir)
-    return exclusive(write_lock_path(output_dir))
+        return generator_busy(STEP_PACKAGE, output_dir, on_wait=on_wait)
+    return exclusive(write_lock_path(output_dir), on_wait=on_wait)
 
 
 def _run_with_spec_generation_status(
@@ -1836,6 +1830,7 @@ def _run_with_spec_generation_status(
     *,
     skip_if_current: Callable[[EntrySpec], bool] | None = None,
     progress_sink: object | None = None,
+    logger: CliLogger | None = None,
 ) -> object:
     """Run ``action`` while holding the model's build lock, reporting its progress.
 
@@ -1851,11 +1846,15 @@ def _run_with_spec_generation_status(
     ``action`` is called as ``action(spec, run)``; ``run`` is the progress reporter.
     """
     kind = DRAWING_PACKAGE if generator_name == "gen_dxf" else STEP_PACKAGE
+    # No output dir means no lock, so there is nothing to wait on and no ref to name in a
+    # notice -- and a spec that never reaches a lock is not required to have one.
+    output_dir = _spec_output_dir(spec, generator_name)
     with artifact_build(
         kind,
-        _spec_output_dir(spec, generator_name),
+        output_dir,
         is_current=(lambda: bool(skip_if_current(spec))) if skip_if_current is not None else None,
         sink=progress_sink,
+        on_wait=lock_wait_notice(logger, spec.source_ref) if output_dir is not None else None,
     ) as run:
         if run.skipped:
             return _SkippedGeneration(spec)
@@ -1880,63 +1879,33 @@ def _progress_status_text(event: ProgressEvent, *, fallback: str) -> str:
 def _run_selected_specs(
     selected_specs: Sequence[EntrySpec],
     *,
-    initial_status: str = "Queued",
     action_status: str = "Generating...",
     done_status: str = "Generated",
     action: Callable[..., object],
-    quiet: bool = False,
-    status_stream: object | None = None,
-    action_stdout: object | None = None,
-    logger: CliLogger | None = None,
+    logger: CliLogger,
     success_message: Callable[[EntrySpec], str] | None = _generated_output_summary,
 ) -> list[object]:
-    results: list[object] = []
-    # Only the status-board branch renders progress. A quiet run has nowhere to put it,
-    # and a verbose run is already narrating each stage through the logger — a bar
-    # repainting between log lines would fight with them. Both still write the sidecar,
-    # so an open CAD Viewer sees the build either way.
-    if quiet:
-        for spec in selected_specs:
-            with contextlib.redirect_stdout(io.StringIO()):
-                results.append(action(spec, None))
-        return results
-    if logger is not None:
-        for spec in selected_specs:
-            logger.debug(f"{action_status} {spec.source_ref}")
-            with _cli_progress_line(spec, logger=logger, fallback=action_status) as progress_sink:
-                with logger.timed(f"{done_status.lower()} {spec.source_ref}"):
-                    if action_stdout is None:
-                        result = action(spec, progress_sink)
-                    else:
-                        with contextlib.redirect_stdout(action_stdout):
-                            result = action(spec, progress_sink)
-            results.append(result)
-            if isinstance(result, _SkippedGeneration):
-                logger.info(f"{spec.cad_ref} was built by a concurrent run; skipped")
-            elif success_message is not None:
-                message_spec = result.spec if isinstance(result, GeneratedStepResult) else spec
-                logger.info(success_message(message_spec))
-        return results
-    status_board = InlineStatusBoard(
-        [spec.source_ref for spec in selected_specs],
-        initial_status=initial_status,
-        stream=status_stream,
-    )
-    for spec in selected_specs:
-        status_board.set(spec.source_ref, action_status)
-        # Repaint this spec's row from its build's own progress events. The board
-        # already redraws in place on a tty and degrades to one line per change
-        # otherwise, so a bar costs it nothing new.
-        def progress_sink(event: ProgressEvent, ref: str = spec.source_ref) -> None:
-            status_board.set(ref, _progress_status_text(event, fallback=action_status))
+    """Run ``action`` for each spec, narrating to ``logger`` and painting one progress line.
 
-        if action_stdout is None:
-            result = action(spec, progress_sink)
-        else:
-            with contextlib.redirect_stdout(action_stdout):
+    A generator's own prints go straight through to stdout: the CLIs reserve stdout for the
+    result (``--json``) and put every log line on stderr, so there is nothing to protect it
+    from. Progress is a transient tty line that erases itself — see
+    :func:`_cli_progress_line`, which stays silent under ``--verbose`` where the logger is
+    already narrating every stage. The sidecar is written either way, so an open CAD Viewer
+    tracks the build regardless of what this prints.
+    """
+    results: list[object] = []
+    for spec in selected_specs:
+        logger.debug(f"{action_status} {spec.source_ref}")
+        with _cli_progress_line(spec, logger=logger, fallback=action_status) as progress_sink:
+            with logger.timed(f"{done_status.lower()} {spec.source_ref}"):
                 result = action(spec, progress_sink)
         results.append(result)
-        status_board.set(spec.source_ref, done_status)
+        if isinstance(result, _SkippedGeneration):
+            logger.info(f"{spec.cad_ref} was built by a concurrent run; skipped")
+        elif success_message is not None:
+            message_spec = result.spec if isinstance(result, GeneratedStepResult) else spec
+            logger.info(success_message(message_spec))
     return results
 
 
@@ -2177,9 +2146,42 @@ def generate_step_targets(
     step_options: StepImportOptions | None = None,
     force: bool = False,
     verbose: bool = False,
+    json_output: bool = False,
 ) -> int:
+    """Build render packages for ``targets``. Returns the process exit code.
+
+    ``json_output`` additionally prints one JSON line per target to STDOUT. The exit code
+    alone cannot say WHICH targets were rebuilt and which were already current, and the
+    logger's prose goes to stderr by design -- so without this a caller reading the streams
+    apart had no machine-readable result at all.
+    """
     tool_name = "scripts/gen"
     logger = CliLogger("scripts/gen", verbose=verbose)
+    reported: list[dict[str, object]] = []
+
+    def _emit(spec: EntrySpec, outcome: str) -> None:
+        reported.append(
+            {
+                "ok": True,
+                "sourceRef": spec.source_ref,
+                "cadPath": spec.cad_ref,
+                "kind": spec.kind,
+                "outcome": outcome,
+                "packagePath": _display_path(render_package_dir(spec.entry_path)),
+            }
+        )
+
+    def _flush() -> None:
+        # STDOUT IS THE RESULT, on every CLI. `gen` used to print nothing there at all --
+        # its only output was the logger's prose on stderr -- so a caller reading the two
+        # streams apart got an exit code and nothing else, while export, snapshot, validate
+        # and inspect all answered on stdout. One line per target, `outcome path`, upgraded
+        # to JSON by --json.
+        for entry in reported:
+            if json_output:
+                print(json.dumps(entry, separators=(",", ":")))
+            else:
+                print(f"{entry['outcome']} {entry['packagePath']}")
     all_specs, selected_specs, target_output_paths = _selected_specs_for_targets(
         targets,
         step_options=step_options,
@@ -2216,10 +2218,12 @@ def generate_step_targets(
         if current_specs:
             for spec in current_specs:
                 logger.info(f"{spec.cad_ref} is current; skipped recompose")
+                _emit(spec, "current")
             current_refs = {spec.source_ref for spec in current_specs}
             selected_specs = [spec for spec in selected_specs if spec.source_ref not in current_refs]
             if not selected_specs:
                 logger.total()
+                _flush()
                 return 0
     entries_by_step_path = _entries_by_step_path([*all_specs, *selected_specs])
 
@@ -2250,15 +2254,19 @@ def generate_step_targets(
             build,
             skip_if_current=_built_by_a_peer,
             progress_sink=progress_sink,
+            logger=logger,
         )
 
-    _run_selected_specs(
+    results = _run_selected_specs(
         selected_specs,
         action=generate_step,
         logger=logger,
         success_message=_generated_python_glb_summary,
     )
+    for spec, result in zip(selected_specs, results):
+        _emit(spec, "skipped-peer" if isinstance(result, _SkippedGeneration) else "built")
     logger.total()
+    _flush()
     return 0
 
 
@@ -2338,15 +2346,20 @@ def generate_dxf_targets(
 
         _run_selected_specs(
             selected_specs,
-            # A drawing build is one opaque generator run with no countable stage, so it
-            # takes no progress sink; the board keeps its plain status text.
-            action=lambda spec, _progress_sink=None: _run_with_spec_generation_status(
+            # A drawing build DOES have countable stages -- DRAWING_PACKAGE declares
+            # parse/mesh/write, reported by the Node child while this process holds the
+            # lock -- so the sink is threaded through rather than dropped. It was dropped
+            # on the belief that a drawing is "one opaque generator run", which was true
+            # only of the Python half.
+            action=lambda spec, progress_sink=None: _run_with_spec_generation_status(
                 spec,
                 "gen_dxf",
                 lambda tracked_spec, reporter: run_script_generator(
                     tracked_spec, "gen_dxf", logger=logger, progress=reporter
                 ),
                 skip_if_current=_built_by_a_peer,
+                progress_sink=progress_sink,
+                logger=logger,
             ),
             logger=logger,
             success_message=_generated_dxf_summary,

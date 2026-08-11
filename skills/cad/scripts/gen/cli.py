@@ -17,6 +17,12 @@ def generate_step_targets(*args, **kwargs):
     return generate(*args, **kwargs)
 
 
+def report_cli_error(*args, **kwargs):
+    from cadgen._internal.cli_errors import report_cli_error as report
+
+    return report(*args, **kwargs)
+
+
 def _normalize_cli_numeric(value: object, *, field_name: str, parser: argparse.ArgumentParser) -> float | None:
     try:
         return normalize_mesh_numeric(value, field_name=field_name)
@@ -62,6 +68,15 @@ def _add_gen_arguments(parser: argparse.ArgumentParser) -> None:
         "--verbose",
         action="store_true",
         help="Show detailed progress and timing information.",
+    )
+    parser.add_argument(
+        "--json",
+        action="store_true",
+        help=(
+            "Print one JSON line per target on stdout reporting what happened to it "
+            "(built, current, or built by a concurrent run) and where its package is. "
+            "Human progress stays on stderr, so the two never interleave."
+        ),
     )
 
 
@@ -137,12 +152,16 @@ def main(argv: Sequence[str] | None = None) -> int:
             parser=parser,
         ),
     )
-    return generate_step_targets(
-        _targets_with_step_outputs(args.targets, args.write, parser=parser),
-        step_options=step_options,
-        force=bool(args.force),
-        verbose=bool(args.verbose),
-    )
+    try:
+        return generate_step_targets(
+            _targets_with_step_outputs(args.targets, args.write, parser=parser),
+            step_options=step_options,
+            force=bool(args.force),
+            verbose=bool(args.verbose),
+            json_output=bool(args.json),
+        )
+    except Exception as exc:  # noqa: BLE001 — the CLI boundary: report, do not traceback
+        return report_cli_error(exc, tool="scripts/gen", verbose=bool(args.verbose))
 
 
 if __name__ == "__main__":

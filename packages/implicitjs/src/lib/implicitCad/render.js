@@ -2,7 +2,7 @@ import {
   normalizeCameraSpec
 } from "../../common/camera.js";
 import {
-  resolveAppearanceSettings
+  resolveThemeSettings
 } from "../../common/renderOptions.js";
 import {
   normalizeThemeSettings,
@@ -31,7 +31,7 @@ const FRAME_BOUNDS_SAMPLE_COUNT = 25;
 const FRAME_BOUNDS_THRESHOLD_STEP_FACTOR = 0.45;
 const FRAME_BOUNDS_MARGIN_STEP_FACTOR = 0.75;
 const FRAME_BOUNDS_MARGIN_SIZE_FACTOR = 0.015;
-const DEFAULT_APPEARANCE_ID = "workbench";
+const DEFAULT_THEME_ID = "workbench";
 
 function clamp(value, min, max) {
   return Math.min(Math.max(value, min), max);
@@ -1735,15 +1735,15 @@ export function updateImplicitCadModelUniforms(THREE, material, model) {
   }
 }
 
-export function resolveImplicitCadAppearanceSettings({
-  appearance = DEFAULT_APPEARANCE_ID,
+export function resolveImplicitCadThemeSettings({
+  theme = DEFAULT_THEME_ID,
   themeSettings = null
 } = {}) {
   if (themeSettings && typeof themeSettings === "object" && !Array.isArray(themeSettings)) {
     return normalizeThemeSettings(themeSettings);
   }
-  return resolveAppearanceSettings({ appearance: appearance || DEFAULT_APPEARANCE_ID }, {
-    defaultThemeId: DEFAULT_APPEARANCE_ID
+  return resolveThemeSettings({ theme: theme || DEFAULT_THEME_ID }, {
+    defaultThemeId: DEFAULT_THEME_ID
   });
 }
 
@@ -1822,17 +1822,17 @@ function applyImplicitLightingUniforms(uniforms, normalizedTheme) {
   }
 }
 
-export function updateImplicitCadAppearanceUniforms(THREE, material, model, {
-  appearance = DEFAULT_APPEARANCE_ID,
+export function updateImplicitCadThemeUniforms(THREE, material, model, {
+  theme = DEFAULT_THEME_ID,
   themeSettings = null,
   graphicsSettings = null,
   forceTransparent = false
 } = {}) {
   const uniforms = material?.uniforms;
   if (!uniforms) {
-    return resolveImplicitCadAppearanceSettings({ appearance, themeSettings });
+    return resolveImplicitCadThemeSettings({ theme, themeSettings });
   }
-  const normalizedTheme = resolveImplicitCadAppearanceSettings({ appearance, themeSettings });
+  const normalizedTheme = resolveImplicitCadThemeSettings({ theme, themeSettings });
   const normalizedGraphics = normalizeImplicitGraphicsSettings(graphicsSettings);
   const materialSettings = normalizedTheme.materials || {};
   const sourceColor = readSourceColor(THREE, model?.material?.color);
@@ -1991,12 +1991,12 @@ export async function renderImplicitCadToDataUrl(THREE, modelValue, {
   width = 1200,
   height = 900,
   camera = "iso",
-  appearance = DEFAULT_APPEARANCE_ID,
+  theme = DEFAULT_THEME_ID,
   graphics = null,
   render = {},
 } = {}) {
   const model = normalizeImplicitCadModel(modelValue);
-  const themeSettings = resolveImplicitCadAppearanceSettings({ appearance });
+  const themeSettings = resolveImplicitCadThemeSettings({ theme });
   const renderer = new THREE.WebGLRenderer({
     antialias: true,
     alpha: true,
@@ -2018,7 +2018,7 @@ export async function renderImplicitCadToDataUrl(THREE, modelValue, {
     frameMargin: render.frameMargin,
   });
   const { scene, material, dispose } = createImplicitCadFullscreenScene(THREE, model);
-  updateImplicitCadAppearanceUniforms(THREE, material, model, {
+  updateImplicitCadThemeUniforms(THREE, material, model, {
     themeSettings,
     graphicsSettings: graphics,
     forceTransparent: transparent
@@ -2038,8 +2038,8 @@ export const implicitVertexShader = implicitCadVertexShader;
 export const implicitFragmentShader = implicitCadFragmentShader;
 export const createImplicitMaterial = createImplicitCadMaterial;
 export const updateImplicitModelUniforms = updateImplicitCadModelUniforms;
-export const resolveImplicitAppearanceSettings = resolveImplicitCadAppearanceSettings;
-export const updateImplicitAppearanceUniforms = updateImplicitCadAppearanceUniforms;
+export const resolveImplicitThemeSettings = resolveImplicitCadThemeSettings;
+export const updateImplicitThemeUniforms = updateImplicitCadThemeUniforms;
 export const updateImplicitGraphicsUniforms = updateImplicitCadGraphicsUniforms;
 export const updateImplicitMaterialUniforms = updateImplicitCadMaterialUniforms;
 export const createImplicitFullscreenScene = createImplicitCadFullscreenScene;

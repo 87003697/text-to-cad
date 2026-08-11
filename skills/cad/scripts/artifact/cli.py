@@ -78,6 +78,12 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+
+def report_cli_error(*args, **kwargs):
+    from cadgen._internal.cli_errors import report_cli_error as report
+
+    return report(*args, **kwargs)
+
 def main(argv: Sequence[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(list(argv) if argv is not None else None)
@@ -116,7 +122,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
     except ValueError as exc:
         parser.error(str(exc))
-    print(json.dumps(payload, indent=2, sort_keys=True))
+    except Exception as exc:  # noqa: BLE001 — the CLI boundary: report, do not traceback
+        return report_cli_error(exc, tool="scripts/artifact", verbose=bool(args.verbose))
+    print(json.dumps(payload, separators=(",", ":"), sort_keys=True))
     return 0
 
 

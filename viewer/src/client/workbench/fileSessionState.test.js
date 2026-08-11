@@ -176,7 +176,7 @@ test("file session tab state stores file sheet open section ids", () => {
     slices: {
       tab: {
         inspectedAssemblyNodeId: "module-a",
-        fileSheetOpenSectionIds: ["tree", "display", "appearance"]
+        fileSheetOpenSectionIds: ["tree", "display", "theme"]
       }
     }
   }), { storage });
@@ -186,7 +186,7 @@ test("file session tab state stores file sheet open section ids", () => {
   assert.deepEqual(restoredTab.fileSheetOpenSectionIds, [
     "tree",
     "display",
-    "appearance"
+    "theme"
   ]);
 });
 

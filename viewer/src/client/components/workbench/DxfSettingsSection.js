@@ -72,7 +72,7 @@ export const DXF_DEFAULT_UNITS = "mm";
 /**
  * Sheet material presets, filled from the SendCutSend catalog
  * (cdn.sendcutsend.com/specs/sendcutsend-catalog-v1.2.json, v1.2): every distinct material
- * name, grouped the way their catalog groups them. Each carries an appearance tint for the
+ * name, grouped the way their catalog groups them. Each carries an theme tint for the
  * preview; None (the default) keeps the theme's own surface color.
  */
 export const DXF_MATERIAL_PRESETS = Object.freeze([

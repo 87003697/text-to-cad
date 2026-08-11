@@ -1540,6 +1540,50 @@ const THEME_PRESET_ID_ALIASES = Object.freeze({
   dark: "workbench-dark"
 });
 
+// --- render-only themes -------------------------------------------------------------
+// Themes that exist for HEADLESS SNAPSHOTS and are deliberately absent from THEME_PRESETS,
+// which is what the viewer's theme picker lists. A snapshot is usually read by an agent
+// rather than looked at by a person, and the two want different things from a scene.
+//
+// Workbench gives a part "something to read position against": a faint ground grid and a
+// line up the origin. In the viewport that is orientation you can ignore. In a still image
+// it is geometry-shaped contrast that is not geometry -- straight lines crossing the model
+// and the background, at the same low contrast as a real silhouette edge, with nothing
+// (motion, interaction, the rest of the UI) to say otherwise. Everything else is inherited
+// from Workbench Light unchanged, so a part's colour, material and lighting read exactly as
+// they do in the viewer; only the furniture that is not the model is removed.
+export const SNAPSHOT_THEME_ID = "snapshot";
+
+const SNAPSHOT_THEME_SETTINGS = Object.freeze({
+  ...WORKBENCH_LIGHT_THEME_PRESET_SETTINGS,
+  floor: {
+    ...WORKBENCH_LIGHT_THEME_PRESET_SETTINGS.floor,
+    // Stated, not inherited. Workbench already disables the floor plane, so nothing
+    // catches a shadow and this is inert today -- but "a snapshot casts no shadow" is a
+    // property of THIS theme, and a theme that holds it only by accident of another
+    // setting loses it silently the moment that setting changes.
+    shadowOpacity: 0,
+    ...createFloorGridSettings(WORKBENCH_LIGHT_FLOOR_COLOR, { enabled: false, opacity: 0 }),
+    ...createFloorAxisSettings(WORKBENCH_LIGHT_FLOOR_COLOR, { enabled: false, opacity: 0 })
+  }
+});
+
+const SNAPSHOT_THEME_PRESET = Object.freeze({
+  id: SNAPSHOT_THEME_ID,
+  label: "Snapshot",
+  description: "Workbench Light with the grid and origin axis removed, for headless renders.",
+  preview: {
+    background: "#f0f4f9",
+    modelColor: "#b6c4ce",
+    accentColor: "#4ea7d8"
+  },
+  settings: SNAPSHOT_THEME_SETTINGS
+});
+
+// Resolvable by id, never offered in the picker. getThemePresetById consults this AFTER
+// THEME_PRESETS, so a render can name it and the viewer cannot land on it by accident.
+export const RENDER_ONLY_THEME_PRESETS = Object.freeze([SNAPSHOT_THEME_PRESET]);
+
 export const DEFAULT_THEME_PRESET_ID = "workbench-light";
 
 // The two ids that are not presets. "system" follows prefers-color-scheme;
@@ -1858,12 +1902,19 @@ function cloneNormalizedThemeSettings(value = DEFAULT_THEME_SETTINGS) {
 export function normalizeThemePresetId(presetId) {
   const normalized = String(presetId || "").trim();
   const canonical = THEME_PRESET_ID_ALIASES[normalized] || normalized;
-  return THEME_PRESETS.some((preset) => preset.id === canonical) ? canonical : "";
+  if (THEME_PRESETS.some((preset) => preset.id === canonical)) {
+    return canonical;
+  }
+  // Render-only ids normalize too, so a snapshot can name one. They are excluded from the
+  // picker by not being in THEME_PRESETS, not by failing to resolve.
+  return RENDER_ONLY_THEME_PRESETS.some((preset) => preset.id === canonical) ? canonical : "";
 }
 
 export function getThemePresetById(presetId) {
   const normalizedPresetId = normalizeThemePresetId(presetId);
-  return THEME_PRESETS.find((preset) => preset.id === normalizedPresetId) || DEFAULT_THEME_PRESET;
+  return THEME_PRESETS.find((preset) => preset.id === normalizedPresetId)
+    || RENDER_ONLY_THEME_PRESETS.find((preset) => preset.id === normalizedPresetId)
+    || DEFAULT_THEME_PRESET;
 }
 
 export function cloneThemePresetSettings(presetId) {

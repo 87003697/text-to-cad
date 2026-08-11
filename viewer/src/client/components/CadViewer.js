@@ -189,6 +189,7 @@ import {
   VIEW_PLANE_POLE_DIRECTION_NUDGE,
   VIEW_PLANE_TRANSITION_MS,
   viewPlaneOrientationEqual,
+  viewportFitScale,
   WORLD_UP
 } from "./viewer/viewportCameraKit";
 import { normalizeViewerRenderState } from "./viewer/renderState";
@@ -444,6 +445,9 @@ function runtimeZoomBaselineScale(runtime) {
 
 function resetRuntimeZoomBaseline(runtime) {
   const scale = runtimeZoomBaselineScale(runtime);
+  // The baseline is only ever reset right after the camera has been fitted, so
+  // this is also the moment the framing matches the live viewport.
+  captureRuntimeViewportFitScale(runtime);
   if (runtime?.camera?.isOrthographicCamera) {
     const halfHeight = readOrthographicHalfHeight(runtime);
     if (halfHeight) {
@@ -812,6 +816,122 @@ function frameRuntimeCameraForBoundingSphere(runtime, radius, sceneScaleMode, fr
   return fitDistance;
 }
 
+function runtimeViewportFitScale(runtime, frameMetrics) {
+  const camera = runtime?.camera;
+  const fitCamera = camera?.isPerspectiveCamera ? camera : runtime?.perspectiveCamera || camera;
+  return viewportFitScale({
+    orthographic: camera?.isOrthographicCamera === true,
+    fov: Number(fitCamera?.fov) || 48,
+    aspect: frameMetrics?.aspect,
+    height: frameMetrics?.height,
+    framedHeight: frameMetrics?.framedHeight
+  });
+}
+
+// Record the viewport the camera is currently framed for. Anything that fits the
+// camera afresh is by definition fitted to the viewport it ran in, so this is the
+// reference the next viewport change measures against.
+function captureRuntimeViewportFitScale(runtime, frameMetrics = null) {
+  if (!runtime?.camera) {
+    return;
+  }
+  const metrics = frameMetrics || getViewportFrameMetrics(runtime, runtime.frameInsetsRef?.current);
+  runtime.viewportFitScale = runtimeViewportFitScale(runtime, metrics);
+}
+
+// Only the active projection's baseline moves. An orthographic reframe changes
+// the half-height and leaves the camera position -- and with it the perspective
+// baseline -- untouched, and a perspective reframe is the mirror of that.
+function scaleRuntimeZoomBaseline(runtime, ratio) {
+  if (!runtime || !Number.isFinite(ratio) || ratio <= 0) {
+    return;
+  }
+  const baselineKey = runtime.camera?.isOrthographicCamera ? "zoomBaseHalfHeight" : "zoomBaseDistance";
+  const baseline = Number(runtime[baselineKey]);
+  if (Number.isFinite(baseline) && baseline > 1e-6) {
+    runtime[baselineKey] = baseline * ratio;
+  }
+}
+
+// A viewport change -- the window resizing, a side sheet opening, closing or
+// being dragged wider -- leaves the camera framed for the viewport it no longer
+// has. The vertical field of view is fixed and the orthographic half-height is
+// held constant across an aspect change, so a narrowing viewport crops a wide
+// model instead of shrinking it. Rescale the camera by the change in fit scale so
+// the model keeps its share of the framed area.
+//
+// The zoom baseline rides along by the same ratio. Without that, the percent
+// readout keeps describing the old viewport: it still says 100% while the framing
+// no longer fits, and the next reset re-fits for real and visibly moves the camera
+// with the readout unchanged at 100%.
+function syncRuntimeViewportFraming(runtime, frameMetrics = null) {
+  if (!runtime?.camera) {
+    return false;
+  }
+  const metrics = frameMetrics || getViewportFrameMetrics(runtime, runtime.frameInsetsRef?.current);
+  const previousFitScale = Number(runtime.viewportFitScale);
+  const nextFitScale = runtimeViewportFitScale(runtime, metrics);
+  // Claim the new viewport up front, including on the paths that bail below: the
+  // first call has no reference yet, and the rest only bail when the camera is in
+  // no state to be reframed. Carrying a stale reference forward would just save
+  // the move up for whichever later resize does find a usable camera.
+  runtime.viewportFitScale = nextFitScale;
+  if (
+    !Number.isFinite(previousFitScale) || previousFitScale <= 1e-6 ||
+    !Number.isFinite(nextFitScale) || nextFitScale <= 1e-6
+  ) {
+    return false;
+  }
+  const requestedRatio = nextFitScale / previousFitScale;
+  if (Math.abs(requestedRatio - 1) < 1e-6) {
+    return false;
+  }
+  const camera = runtime.camera;
+  let appliedRatio = requestedRatio;
+  if (camera.isOrthographicCamera) {
+    const halfHeight = readOrthographicHalfHeight(runtime);
+    if (!halfHeight) {
+      return false;
+    }
+    const nextHalfHeight = Math.max(halfHeight * requestedRatio, 1e-3);
+    appliedRatio = nextHalfHeight / halfHeight;
+    setOrthographicCameraHalfHeight(runtime, nextHalfHeight, metrics);
+  } else {
+    const target = runtime.controls?.target;
+    const distance = readCameraTargetDistance(runtime);
+    if (!target || !distance) {
+      return false;
+    }
+    const minDistance = Number.isFinite(Number(runtime.controls?.minDistance))
+      ? Number(runtime.controls.minDistance)
+      : 0.01;
+    const maxDistance = Number.isFinite(Number(runtime.controls?.maxDistance)) && Number(runtime.controls.maxDistance) > 0
+      ? Number(runtime.controls.maxDistance)
+      : Number.POSITIVE_INFINITY;
+    const nextDistance = clamp(distance * requestedRatio, minDistance, maxDistance);
+    appliedRatio = nextDistance / distance;
+    if (Math.abs(appliedRatio - 1) < 1e-6) {
+      return false;
+    }
+    // Scaling the target->camera offset moves the camera along the view ray, so
+    // the orientation and the pivot are untouched -- only the distance changes.
+    camera.position.copy(target.clone().add(camera.position.clone().sub(target).multiplyScalar(appliedRatio)));
+    camera.lookAt(target);
+  }
+  scaleRuntimeZoomBaseline(runtime, appliedRatio);
+  reapplyRuntimeCameraFrameInsets(runtime);
+  // Bare controls.update() ticks OrbitControls' auto-rotate branch, so a resize
+  // during a preview orbit would nudge the camera an extra step.
+  if (runtime.controls) {
+    const autoRotateBeforeResize = runtime.controls.autoRotate;
+    runtime.controls.autoRotate = false;
+    runtime.controls.update?.();
+    runtime.controls.autoRotate = autoRotateBeforeResize;
+  }
+  runtime.requestRender?.();
+  return true;
+}
+
 function syncRuntimeCameraProjection(runtime, projection, { scheduleIdle = true, requestRender = true } = {}) {
   if (!runtime?.camera || !runtime?.controls) {
     return false;
@@ -856,6 +976,10 @@ function syncRuntimeCameraProjection(runtime, projection, { scheduleIdle = true,
     runtime.syncCameraViewport?.(nextCamera, frameMetrics.width, frameMetrics.height);
   }
   applyCameraFrameInsets(runtime, runtime.frameInsetsRef?.current, { updateProjection: false });
+  // The switch preserves the framing rather than re-fitting, but perspective and
+  // orthographic measure the viewport differently, so the reference a later
+  // resize compares against has to be re-read in the new projection's terms.
+  captureRuntimeViewportFitScale(runtime, frameMetrics);
   // Recompute camera matrices without advancing auto-rotate. A bare controls.update()
   // ticks OrbitControls' frame-rate-dependent auto-rotation branch, so any projection
   // sync that fires during a preview orbit would nudge the camera forward an extra step.
@@ -2032,6 +2156,13 @@ const CadViewer = forwardRef(function CadViewer({
     if (!runtime) {
       return;
     }
+    // Sheets and the sidebar do not resize the canvas -- they inset the framed
+    // area over it -- so a sheet opening never reaches the resize path. It still
+    // shrinks the space the model has to live in, and needs the same reframing.
+    if (syncRuntimeViewportFraming(runtime)) {
+      syncCameraZoomPercent(runtime);
+      emitPerspectiveChange(runtime);
+    }
     applyCameraFrameInsets(runtime, normalizedViewportFrameInsets);
     runtime.requestRender?.();
   }, [
@@ -2176,6 +2307,14 @@ const CadViewer = forwardRef(function CadViewer({
     }
     return runWithoutPerspectiveEvents(() => applyPerspectiveSnapshot(runtime, nextPerspective, { scheduleIdle: false }));
   }, [perspectiveRef]);
+  const handleViewportResize = useCallback(() => {
+    const runtime = runtimeRef.current;
+    if (!syncRuntimeViewportFraming(runtime)) {
+      return;
+    }
+    syncCameraZoomPercent(runtime);
+    emitPerspectiveChange(runtime);
+  }, [syncCameraZoomPercent]);
   const applyZoomPercent = useCallback((nextZoomPercent) => {
     const runtime = runtimeRef.current;
     if (!setRuntimeZoomPercent(runtime, nextZoomPercent)) {
@@ -3452,6 +3591,7 @@ const CadViewer = forwardRef(function CadViewer({
     applySceneBackground: applyActiveSceneBackground,
     applyCameraFrameInsets,
     frameInsetsRef: viewportFrameInsetsRef,
+    onViewportResize: handleViewportResize,
     applyInitialPerspective,
     updateGridHelper: updateActiveGridHelper,
     clearSceneGroup,

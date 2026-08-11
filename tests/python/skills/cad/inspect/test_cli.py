@@ -20,7 +20,7 @@ class InspectCliWrapperTests(unittest.TestCase):
         )
         self.assertEqual("", result.stderr)
         self.assertEqual(0, result.returncode)
-        self.assertIn("usage: inspect", result.stdout)
+        self.assertIn("usage: scripts/inspect", result.stdout)
 
     def test_inspect_help_does_not_import_heavy_cad_modules(self) -> None:
         skill_root = repo_path("skills/cad")

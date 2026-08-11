@@ -5,7 +5,7 @@ import {
   implicitCadModelShaderKey,
   refreshImplicitCadFloorBounds,
   setImplicitCadBackgroundPainting,
-  updateImplicitCadAppearanceUniforms,
+  updateImplicitCadThemeUniforms,
   updateImplicitCadGraphicsUniforms,
   updateImplicitCadMaterialUniforms,
   updateImplicitCadModelUniforms
@@ -108,7 +108,7 @@ export function useImplicitRaymarch({
     const tierSettings = implicitGraphicsRenderSettings(graphicsSettingsRef.current, {
       interaction: tier
     });
-    updateImplicitCadAppearanceUniforms(runtime.THREE, material, activeModel, {
+    updateImplicitCadThemeUniforms(runtime.THREE, material, activeModel, {
       themeSettings: themeSettingsRef.current,
       graphicsSettings: tierSettings
     });

@@ -89,6 +89,32 @@ Risks:
 - Camera plugin filename was not verified in the target simulator environment.
 ```
 
+## Snapshot Tool
+
+`scripts/snapshot` renders the robot to a PNG still or an orbit GIF, using the same shared
+CLI and headless browser runtime every rendering skill uses — so a snapshot matches what
+the CAD Viewer shows.
+
+```bash
+python scripts/snapshot --input path/to/robot.sdf --output review.png
+python scripts/snapshot --input path/to/robot.sdf --output turntable.gif --mode orbit
+```
+
+It accepts `.sdf` only. Pose the robot with the job field `"jointValues"` (joint name to
+degrees, defaulting to the rest pose) rather than `--params`, which is STEP-only; robots
+are authored in metres and are framed on the robot scene scale automatically.
+
+Theme settings live under one `--theme`, mirroring the viewer's Theme tab. The default
+theme is `snapshot` — Workbench Light with the ground grid, origin axis and shadows
+removed, because in a still image those read as geometry. There is no `--display`: display
+settings (mode, clip, exploded, edges) are CAD topology settings, and a robot carries none.
+
+Link meshes are resolved relative to the description, so they must be present: an
+unhydrated Git LFS pointer fails as "No link mesh loaded for robot". Run
+`git lfs checkout <mesh dir>` first.
+
+Use `python scripts/snapshot --help` for the complete current command interface.
+
 ## References
 
 - SDF workflow: `references/sdf-workflow.md`

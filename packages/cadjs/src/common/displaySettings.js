@@ -208,7 +208,7 @@ export function normalizeDisplayMode(value) {
   if (normalized === "flat") {
     return CAD_DISPLAY_MODE.UNSHADED;
   }
-  if (normalized === "appearance" || normalized === "material" || normalized === "materials") {
+  if (normalized === "theme" || normalized === "material" || normalized === "materials") {
     return CAD_DISPLAY_MODE.RENDERED;
   }
   return CAD_DISPLAY_MODE_VALUES.includes(normalized)

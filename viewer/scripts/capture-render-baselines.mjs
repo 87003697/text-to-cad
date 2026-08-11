@@ -10,7 +10,7 @@
 //   node viewer/scripts/capture-render-baselines.mjs \
 //     --base-url http://127.0.0.1:4178 --label pre-phase-1a \
 //     [--models-dir <abs path>] [--fixture <relative-to-models path>]... \
-//     [--appearance light]... [--wait-ms 9000] [--out-dir tmp/render-baselines]
+//     [--theme light]... [--wait-ms 9000] [--out-dir tmp/render-baselines]
 //
 // Defaults capture one implicit and one mesh fixture in light + dark. The
 // mesh renderer has no preserveDrawingBuffer, so in-page canvas readback
@@ -28,7 +28,7 @@ const DEFAULT_FIXTURES = [
   "implicits/parametric-pulse.implicit.js",
   "fun/miniature_spiral_staircase_highres.glb",
 ];
-const DEFAULT_APPEARANCES = ["light", "dark"];
+const DEFAULT_THEMES = ["light", "dark"];
 // Implicit models need shader compile + auto-fit before the first real frame
 // (~9s is the documented safe wait); meshes settle much faster but share the
 // same wait for simplicity unless overridden.
@@ -40,7 +40,7 @@ function parseArgs(argv) {
     label: "baseline",
     modelsDir: path.join(repoRoot, "models"),
     fixtures: [],
-    appearances: [],
+    themes: [],
     waitMs: DEFAULT_WAIT_MS,
     outDir: path.join(repoRoot, "tmp", "render-baselines"),
   };
@@ -57,7 +57,7 @@ function parseArgs(argv) {
     else if (arg === "--label") options.label = next();
     else if (arg === "--models-dir") options.modelsDir = path.resolve(next());
     else if (arg === "--fixture") options.fixtures.push(next());
-    else if (arg === "--appearance") options.appearances.push(next());
+    else if (arg === "--theme") options.themes.push(next());
     else if (arg === "--wait-ms") options.waitMs = Number(next());
     else if (arg === "--out-dir") options.outDir = path.resolve(next());
     else throw new Error(`Unknown argument: ${arg}`);
@@ -68,7 +68,7 @@ function parseArgs(argv) {
     );
   }
   if (!options.fixtures.length) options.fixtures = [...DEFAULT_FIXTURES];
-  if (!options.appearances.length) options.appearances = [...DEFAULT_APPEARANCES];
+  if (!options.themes.length) options.themes = [...DEFAULT_THEMES];
   if (!Number.isFinite(options.waitMs) || options.waitMs < 0) {
     throw new Error("--wait-ms must be a non-negative number");
   }
@@ -96,11 +96,11 @@ function safeName(value) {
   return value.replace(/[^a-zA-Z0-9._-]+/gu, "_");
 }
 
-async function captureOne(browser, options, fixture, appearance) {
+async function captureOne(browser, options, fixture, theme) {
   const url = new URL(options.baseUrl);
   url.searchParams.set("dir", options.modelsDir);
   url.searchParams.set("file", fixture);
-  url.searchParams.set("appearance", appearance);
+  url.searchParams.set("theme", theme);
 
   const page = await browser.newPage({ viewport: { width: 1280, height: 860 } });
   const consoleErrors = [];
@@ -116,7 +116,7 @@ async function captureOne(browser, options, fixture, appearance) {
     const outputPath = path.join(
       options.outDir,
       safeName(options.label),
-      `${safeName(fixture)}__${safeName(appearance)}.png`
+      `${safeName(fixture)}__${safeName(theme)}.png`
     );
     fs.mkdirSync(path.dirname(outputPath), { recursive: true });
     await page.screenshot({ path: outputPath });
@@ -133,10 +133,10 @@ async function main() {
   const failures = [];
   try {
     for (const fixture of options.fixtures) {
-      for (const appearance of options.appearances) {
-        const target = `${fixture} [${appearance}]`;
+      for (const theme of options.themes) {
+        const target = `${fixture} [${theme}]`;
         try {
-          const { outputPath, consoleErrors } = await captureOne(browser, options, fixture, appearance);
+          const { outputPath, consoleErrors } = await captureOne(browser, options, fixture, theme);
           const errorNote = consoleErrors.length
             ? `  (${consoleErrors.length} console error(s): ${consoleErrors[0]})`
             : "";

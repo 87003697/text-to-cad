@@ -8,10 +8,11 @@ interactive viewer *and* the headless snapshot pipeline.
 The mesh viewer (`CadViewer`) is the **reference implementation**; the
 implicit viewer is being brought in line with it (not vice-versa).
 
-## The four render paths (why the seam lives in packages/)
+## The render paths (why the seam lives in packages/)
 
-There are four render shells today, not two. The strategy must name all of
-them or it consolidates the wrong half:
+There were four render shells, not two, and the strategy had to name all of
+them or it would have consolidated the wrong half. The headless pair is now one;
+the two viewer shells remain:
 
 1. **Viewer mesh** — `CadViewer` + `useViewerRuntime` (React shell).
 2. **Viewer implicit** — `ImplicitCadViewer` (bespoke renderer/RAF/framing).
@@ -20,13 +21,18 @@ them or it consolidates the wrong half:
    `scripts/bundle/skills/bundle-cad.sh` into the cad skill's
    `snapshot-render.js`. Driven by the Python CLI
    `skills/cad/scripts/snapshot/__main__.py`.
-4. **Headless implicit** — `packages/implicitjs/src/common/implicitHeadlessRenderEntry.js`
-   (`window.__implicitCadSnapshotRender`) + the standalone ~980-line Node CLI
-   `packages/implicitjs/scripts/snapshot.mjs`, vendored into the
-   `implicit-cad` skill.
+4. ~~**Headless implicit** — a standalone ~980-line Node CLI,
+   `packages/implicitjs/scripts/snapshot.mjs`, with its own Playwright driver,
+   its own render runtime and its own job schema.~~ **RESOLVED.** The CLI, its
+   runtime and its tests are deleted. `implicitHeadlessRenderEntry.js` survives
+   as a BACKEND: cadjs's `headlessRenderEntry` dispatches implicit jobs to it,
+   and every rendering skill drives that one bundle through the shared Python
+   CLI `cadgen.snapshot_cli`. Six skills now render (cad, dxf, implicit-cad,
+   urdf, srdf, sdf) and each is a declaration of which input kinds it accepts.
 
-Paths 3 and 4 are drifting near-copies (duplicated gifenc/orbit-frame/job
-scaffolding; default orbit elevation is 30° in mesh vs 28° in implicit).
+So there are **three** render shells, not four. Paths 3 and 4 were drifting
+near-copies (duplicated gifenc/orbit-frame/job scaffolding; default orbit
+elevation 30° in mesh vs 28° in implicit) — that drift is gone with the copy.
 Paths 1 and 3 duplicate mesh scene assembly with different light rigs and
 theme schemas (`useViewerRuntime`'s hardwired hemisphere/ambient/key/fill/rim
 rig reading flat viewerTheme keys, key light at 240,-150,340, vs
@@ -359,7 +365,7 @@ Not a copy-paste like `camera.js`. `cadjs/common/themeSettings.js` (~1690
 lines) extracted CAD edge constants into `cadjs/common/displaySettings.js`;
 `implicitjs/common/themeSettings.js` (~1717 lines) still inlines them.
 **Scope rule (consumption-based):** a primitive moves into implicitjs only if
-implicitjs's own runtime imports it. The theme-preset/appearance/environment
+implicitjs's own runtime imports it. The theme-preset/theme/environment
 core qualifies (implicitjs's renderer deep-imports
 themeSettings/renderOptions/stageTheme/surfaceMaterials). The mesh/STEP-only
 superstructure does **not**: display modes, exploded-view machinery, and the

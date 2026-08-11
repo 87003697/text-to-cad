@@ -14,7 +14,7 @@ This skill assumes agents are useful at structuring SDFormat documents and weak 
 ## What agents should not be trusted to infer silently
 
 - exact link poses, frame transforms, or joint origins;
-- positive joint-axis directions from visual appearance;
+- positive joint-axis directions from visual theme;
 - mesh units, mesh scale, or coordinate-system conventions;
 - center of mass or inertia tensors from rendered shape alone;
 - plugin filenames, parameters, topics, namespaces, or sensor schemas;

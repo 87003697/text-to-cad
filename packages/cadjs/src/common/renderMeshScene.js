@@ -62,7 +62,7 @@ import {
   RENDER_VIEW_PRESETS,
   rendererDataUrlWithOptionalLabel as sharedRendererDataUrlWithOptionalLabel,
   resolveRenderView,
-  resolveAppearanceSettings,
+  resolveThemeSettings,
   shouldBurnInViewLabels as sharedShouldBurnInViewLabels
 } from "./renderOptions.js";
 import {
@@ -118,8 +118,8 @@ function resolveRenderSceneScale(job = {}, meshData = {}) {
   });
 }
 
-function resolveAppearance(job = {}) {
-  return resolveAppearanceSettings(job, { defaultThemeId: DEFAULT_RENDER_THEME_ID });
+function resolveTheme(job = {}) {
+  return resolveThemeSettings(job, { defaultThemeId: DEFAULT_RENDER_THEME_ID });
 }
 
 function resolveView(camera = "iso") {
@@ -635,19 +635,48 @@ function renderSectionPng(segments, width, height, themeSettings, {
   return canvas.toDataURL("image/png");
 }
 
+// Coordinates are millimetres. The mesh pipeline emits full float64 precision
+// (-2449.9999046325684 for what is 2450 mm), which is 16 significant figures of noise per
+// number, six numbers per part. Three decimals is a nanometre -- far below any tolerance
+// this repo models to -- and costs about a fifth of the payload.
+const LIST_BOUNDS_DECIMALS = 3;
+
+function roundedBounds(bounds) {
+  if (!bounds || typeof bounds !== "object") {
+    return null;
+  }
+  const axis = (values) => (Array.isArray(values)
+    ? values.map((value) => {
+      const numeric = toFiniteNumber(value, 0);
+      return Number(numeric.toFixed(LIST_BOUNDS_DECIMALS));
+    })
+    : null);
+  const min = axis(bounds.min);
+  const max = axis(bounds.max);
+  return min && max ? { min, max } : null;
+}
+
+// The parts inventory: what is in this model and what can be selected.
+//
+// This is the ONLY output whose size grows with the model -- everything else in the CLI
+// surface is constant (a 600-part assembly logs the same ~100 bytes a single part does).
+// So it is the one payload where redundancy is measured in tens of thousands of tokens:
+// on a 600-part rover the previous shape was 294 KB, of which `id`, `occurrenceId` and
+// `ref` were the same string three times over (identical in 600/600 parts), `label`
+// duplicated `name` (600/600), and the coordinates carried 16 significant figures.
+//
+// `ref` survives rather than `id`/`occurrenceId` because it is the form that goes
+// straight back into `--focus` / `--hide` / `inspect`; the bare id is one string slice
+// away for anyone who needs it.
 export function listRenderableParts(meshData) {
   return toArray(meshData.parts).map((part, index) => {
     const occurrenceId = String(part?.occurrenceId || part?.id || "");
     return {
-      id: String(part?.id || part?.occurrenceId || `part:${index}`),
-      occurrenceId,
-      // Selector ref an agent can paste straight into snapshot --focus/--hide or inspect.
       ref: occurrenceId ? `#${occurrenceId}` : "",
       name: String(part?.name || part?.label || part?.id || `Part ${index + 1}`),
-      label: String(part?.label || part?.name || part?.id || `Part ${index + 1}`),
       triangleCount: Math.max(0, Math.floor(toFiniteNumber(part?.triangleCount, 0))),
       vertexCount: Math.max(0, Math.floor(toFiniteNumber(part?.vertexCount, 0))),
-      bounds: part?.bounds || null
+      bounds: roundedBounds(part?.bounds)
     };
   });
 }
@@ -671,19 +700,23 @@ export function resolveOutputCameraProjection(context, cameraSpec) {
 
 export function renderJobContext(meshData, job = {}) {
   const mode = String(job.mode || "view").trim().toLowerCase();
-  const theme = resolveAppearance(job);
+  const theme = resolveTheme(job);
   const sceneScale = resolveRenderSceneScale(job, meshData);
   const sourceKind = String(job.resolved?.kind || job.kind || meshData?.sourceFormat || "").trim().toLowerCase();
   const stepDisplayEnabled = sourceKind === "step" || sourceKind === "stp";
   const displaySettings = normalizeDisplaySettings(stepDisplayEnabled ? job.display : undefined);
-  // Projection is a theme trait (Light/Dark are orthographic, stage themes
-  // perspective); an explicit job display projection still overrides it, and
-  // non-STEP sources keep their historical perspective framing.
+  // Projection is a THEME trait, honoured by every format -- the same rule the viewer
+  // adopted in U1. An explicit job display projection still overrides it.
+  //
+  // Non-STEP sources used to be forced to PERSPECTIVE here regardless of the theme
+  // ("historical perspective framing"), which had a consequence nobody was reading it for:
+  // the tight frame that makes a render fill its canvas is orthographic-only, so every
+  // mesh, drawing, implicit and robot snapshot silently skipped it and sat in a sea of
+  // empty space while STEP filled its frame. Measured on tom.urdf: the gate reported
+  // usePerspectiveCamera=true and the tight frame never ran.
   const projection = normalizeCameraProjection(
     job.display?.projection,
-    stepDisplayEnabled
-      ? normalizeCameraProjection(theme?.projection, CAMERA_PROJECTION.ORTHOGRAPHIC)
-      : CAMERA_PROJECTION.PERSPECTIVE
+    normalizeCameraProjection(theme?.projection, CAMERA_PROJECTION.ORTHOGRAPHIC)
   );
   const displayMode = displaySettings.mode;
   const bounds = meshData.bounds || boundsFromVertices(meshData.vertices || []);
@@ -702,7 +735,7 @@ export function renderJobContext(meshData, job = {}) {
   });
   const displayEdgeSettings = resolveDisplayEdgeSettings(displaySettings);
   // A theme that opts into its own outline (e.g. Terminal's neon-green
-  // linework) drives the edge appearance; other themes leave it to display.
+  // linework) drives the edge theme; other themes leave it to display.
   const themeEdges = theme?.edges;
   const baseEdgeSettings = themeEdges && themeEdges.enabled === true
     ? normalizeDisplayEdgeSettings({ ...displayEdgeSettings, ...themeEdges })
@@ -958,7 +991,7 @@ export async function captureModel(viewport, captureOptions = {}) {
       ok: true,
       mode,
       parts: listRenderableParts(meshData),
-      bounds: modelBounds,
+      bounds: roundedBounds(modelBounds) || modelBounds,
       warnings
     };
   }

@@ -17,8 +17,8 @@ do not open PRs to `main` or push it directly.
 Do not bump the canonical release version in `VERSION` during
 normal development work. Ship releases only through the single `Release`
 GitHub Actions workflow, which handles the version bump, release PR, publish
-commit to `main`, models upload, web-app deploys, `cadgen` PyPI publish,
-semver tag, and GitHub Release in one run.
+commit to `main`, `cadgen` PyPI publish, docs deploy, semver tag, and GitHub
+Release in one run.
 
 When asked to publish, make, or ship a release, dispatch `Release` with its
 defaults: build from `develop` (`base_branch=develop`), publish to `main`
@@ -221,9 +221,52 @@ Packaged Viewer runtime and handoff details live in the `cad-viewer` skill.
 Treat packaged Viewer checks as generated-output checks via the master bundle
 wrapper unless you are debugging a lower-level script.
 
+### Starting the Viewer from a lightweight worktree
+
+The `cad-viewer` skill documents the PRODUCTION runtime and assumes a hydrated
+checkout. In a lightweight worktree its one-liner fails four times in a row, each
+with an error that does not name the real cause, because worktrees deliberately
+carry no `node_modules` and no built bundle:
+
+1. `npm --prefix skills/cad-viewer/scripts/viewer run start` dies with
+   `Cannot find package 'cadjs'`. `skills/cad-viewer/scripts/viewer` is a symlink
+   to `viewer/`, so the "packaged" runtime still needs the worktree's modules.
+2. With those linked, the server starts and the CAD API answers but `/` returns
+   404: `start` serves a prebuilt bundle and there is no `viewer/dist` yet. A live
+   backend with no front end looks like a broken link, not a missing build.
+3. `npm --prefix viewer run build` then fails one bare specifier at a time —
+   `implicitjs`, `three`, `meshoptimizer` — each from `packages/cadjs/src/...`.
+4. `meshoptimizer` is not under `packages/cadjs/node_modules` anywhere; the only
+   copy in the repo is `docs/node_modules/meshoptimizer`.
+
+From the worktree root, with `<main>` the primary checkout:
+
+```bash
+ln -s <main>/viewer/node_modules viewer/node_modules
+mkdir -p packages/cadjs/node_modules
+ln -s ../../implicitjs                                packages/cadjs/node_modules/implicitjs
+ln -s <main>/packages/cadjs/node_modules/three        packages/cadjs/node_modules/three
+ln -s <main>/docs/node_modules/meshoptimizer          packages/cadjs/node_modules/meshoptimizer
+npm --prefix viewer run build
+npm --prefix skills/cad-viewer/scripts/viewer run start -- --host 127.0.0.1 --port <n>
+```
+
+Use an explicit free `--port`: a Viewer already running from another checkout
+resolves paths against ITS root, so it will never find a model in this worktree.
+
+Two behaviours worth knowing before you conclude a model is broken:
+
+- **The catalog scan skips dot-directories.** A buildable entry under `.review/`
+  or any other dotted path resolves by a direct `?dir=` query but never appears
+  in a scan from the project root, and the Viewer reports that the file does not
+  exist. Keep buildable entries out of dotted directories.
+- **Verify a Viewer link by loading the page**, not by curling `/__cad/asset`.
+  That route serves raw files; a generated entry's render package is served by a
+  different route, so probing it returns 404 whether or not anything is wrong.
+
 ## Git And LFS
 
-CAD exchange files, generated render/topology assets, `assets/**`, and
-`benchmarks/**` may be LFS-tracked. Never disable LFS filters for `git add`,
-commits, or other object-writing operations. Local hooks live in `.githooks` and
+CAD exchange files, generated render/topology assets, and `assets/**` may be
+LFS-tracked. Never disable LFS filters for `git add`, commits, or other
+object-writing operations. Local hooks live in `.githooks` and
 delegate build checks through `scripts/git-hooks/pre-commit`.

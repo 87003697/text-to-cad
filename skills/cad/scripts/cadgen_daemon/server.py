@@ -379,7 +379,24 @@ def serve() -> int:
             os.unlink(sock_path)
 
 
-def main() -> int:
+USAGE = """\
+cadgen-daemon takes no arguments.
+
+It is the warm-process server, started for you by cadgen_daemon.client when
+CADGEN_WARM=1 -- not a command to run by hand. It sits in scripts/ beside the
+CLIs you probably meant: scripts/gen, scripts/export, scripts/inspect,
+scripts/artifact, scripts/snapshot. Each of those takes --help.\
+"""
+
+
+def main(argv: list[str] | None = None) -> int:
+    # Without this, ANY argument -- including --help, and including a typo on a real daemon
+    # start -- fell through to serve() and bound the socket, so the caller got a resident
+    # server for the full idle timeout instead of an answer.
+    args = list(sys.argv[1:] if argv is None else argv)
+    if args:
+        print(USAGE, file=sys.stderr)
+        return 2
     return serve()
 
 
