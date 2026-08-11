@@ -1204,7 +1204,13 @@ class WorkspaceCliTests(unittest.TestCase):
             terminate = send_signal
             kill = send_signal
 
-        def start_synthetic_tap(_tap_bin, exp_dir, _environ):
+        def start_synthetic_tap(
+            _tap_bin, exp_dir, _environ, retry_proxy_url
+        ):
+            self.assertRegex(
+                retry_proxy_url,
+                r"^http://127\.0\.0\.1:\d+/v1$",
+            )
             run_dir = exp_dir / "run"
             run_dir.mkdir(parents=True, exist_ok=True)
             (run_dir / ".claude-tap.log").write_text(
