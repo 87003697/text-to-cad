@@ -359,6 +359,7 @@ write_runtime_package_json() {
   "type": "module",
   "version": "$RELEASE_VERSION",
   "scripts": {
+    "viewer:open": "node scripts/start-agent-viewer.mjs",
     "agent:start": "node scripts/start-agent-viewer.mjs",
     "serve": "node backend/server.mjs",
     "start": "node backend/server.mjs",

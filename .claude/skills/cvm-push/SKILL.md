@@ -22,8 +22,9 @@ description: >-
    脚本会把当前 checkout 复制到隔离 staging，在 staging 内物化全部 production
    skill runtime，再把实体 bundle 上传到 CVM；不会修改 source checkout 的开发
    symlink 或共享依赖缓存。稳定 shell 入口只负责调用 `cvm_push.py`；Python workflow
-   按 `Preflight → Resolve inputs → Stage → Validate/attest → Transfer → Verify`
-   编排，并用同一份 runtime contract 做本地和远端验收。
+   按 `Preflight → Resolve inputs → Stage → Validate/attest → Transfer →
+   Target build → Verify` 编排；传输后在 CVM 目标 ABI 上编译实体 meshscope
+   bundle 的 native extension，再用同一份 runtime contract 做本地和远端验收。
 2. arm Monitor tool tail log：
    `tail -F <log> | grep -E --line-buffered '(Source:|Building physical|CVM runtime verified|xfer#|sent [0-9]+ bytes|total size|Remote Git base|error|failed|rsync:)'`
 3. 汇报（见 § Handoff）。
@@ -45,6 +46,10 @@ description: >-
 - **一个完整 stage 只做一次远端 rsync**：精确 include implicit runtime 的四个
   `node_modules` 依赖，再应用全局 exclude。不得把主代码和运行依赖拆成两个可能只
   成功一个的网络传输。
+- **meshscope native 必须按目标 ABI 构建**：rsync 后由 CVM 项目 Python 对实体
+  `skills/mesh-compare` bundle 执行 `build_ext --inplace`，远端验收再从该 bundle
+  import `_native`。Mac Darwin binary 和 host editable install 都不是 production
+  evidence。
 - **不得把主 checkout 的依赖目录直接 symlink 进 staging**：Viewer 与 CAD build
   dependencies 必须复制到 staging，避免构建读取错误 worktree 或修改共享缓存。
 - **source → staging 必须排除本地状态**：`.agents/`、`.claude/`、`.codex/`、
@@ -65,10 +70,11 @@ description: >-
 - 一次 skill 调用 = 一次完整同步（无 partial / resume 概念）；rsync 天然增量。
 - rsync 不更新 CVM `.git`。CVM HEAD 只是远端 checkout 基线，不是本次部署内容的
   identity；真正的 source provenance 是脚本输出的 branch/HEAD/dirty state。
-- push 结束前必须按同一 runtime contract 确认 Viewer/implicit runtime 是实体目录、
-  launcher/backend/dist/snapshot 与四个 implicit dependency 文件存在，并比较
-  Viewer backend、launcher、snapshot CLI 和 Playwright browser manifest 的
-  SHA-256；同时确认 host cache 中有对应 Chromium revision。任一失败均不得进入 pilot。
+- push 结束前必须按同一 runtime contract 确认 Viewer/implicit/meshscope runtime
+  是实体目录，launcher/backend/dist/snapshot、四个 implicit dependency 文件和
+  meshscope native source 存在；比较关键 source/runtime SHA-256，从实体 meshscope
+  bundle import target-ABI `_native`，并确认 host cache 中有对应 Chromium revision。
+  任一失败均不得进入 pilot。
 - 改名或删除仍不会自动清理 CVM stale path；必须先解析精确目标，再显式删除，
   不能通过 `--delete` 扩大同步权限。
 
@@ -97,8 +103,9 @@ compare SHA-256 for `scripts/pilot/cvm_job/`, `toys4k-pilot.sh`, and
 - exit 3（磁盘 <3G） → 汇报剩余 GB + 提示 `ssh cvm 'du -sh ~/*'` 清理
 - exit 4（production staging 失败）→ 检查 log 中缺失的 Viewer/CAD build dependency、
   bundle command 或残留 skill symlink；此时脚本保证尚未传输任何文件
-- exit 5（远端 runtime 缺失或 attested hash 不同）→ 不得 submit pilot；比较
-  staging 与 CVM 的精确 runtime 文件
+- exit 5（target-ABI meshscope build/import 失败、远端 runtime 缺失或 attested hash
+  不同）→ 不得 submit pilot；比较 staging 与 CVM 的精确 runtime 文件，并检查 CVM
+  C++ toolchain 与项目 Python ABI
 - exit 6（Playwright browser revision 缺失）→ 在 CVM host 安装脚本报告的 revision，
   随后重新 push
 - rsync code 23 且包含 `could not make way for new regular file: .git` →

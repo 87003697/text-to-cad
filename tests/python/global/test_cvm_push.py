@@ -349,6 +349,24 @@ class StageTests(unittest.TestCase):
 
 
 class TransferAndVerifyTests(unittest.TestCase):
+    def test_remote_native_build_compiles_the_physical_meshscope_bundle(self) -> None:
+        with tempfile.TemporaryDirectory() as root_text:
+            root = Path(root_text)
+            repo = create_repo(root)
+            runner = FakeRunner()
+            workflow = cvm_push.CvmPush(runner, repo_root=repo, environ={})
+
+            workflow.build_remote_native_runtime()
+
+            self.assertEqual(len(runner.remote_commands), 1)
+            command = runner.remote_commands[0]
+            self.assertIn("skills/mesh-compare/scripts/packages/meshscope", command)
+            self.assertIn(".venv/bin/python", command)
+            self.assertIn("setup.py build_ext", command)
+            self.assertIn("--inplace", command)
+            self.assertIn("/tmp/text-to-cad-meshscope-build.", command)
+            self.assertNotIn("pip install", command)
+
     def test_transfer_uses_one_rsync_with_include_before_exclude(self) -> None:
         with tempfile.TemporaryDirectory() as root_text:
             root = Path(root_text)
@@ -463,6 +481,7 @@ class TransferAndVerifyTests(unittest.TestCase):
                 self.assertIn(f"test ! -L {relative}", command)
             for relative in cvm_push.PRODUCTION_RUNTIME.required_files:
                 self.assertIn(f"test -f {relative}", command)
+            self.assertIn("meshscope.voxblame._native", command)
             self.assertIn("chromium_headless_shell-1234", runner.remote_commands[1])
 
             bad = dict(attestation.hashes)
@@ -546,6 +565,9 @@ class WorkflowTests(unittest.TestCase):
                 attestation,
             )[1]
             workflow.transfer_stage = lambda stage: events.append("transfer")
+            workflow.build_remote_native_runtime = lambda: events.append(
+                "build-native"
+            )
             workflow.verify_remote = lambda expected: events.append("verify")
             workflow.remote_git_base = lambda: "remote-head"
 
@@ -565,6 +587,7 @@ class WorkflowTests(unittest.TestCase):
                     "validate",
                     "attest",
                     "transfer",
+                    "build-native",
                     "verify",
                 ],
             )

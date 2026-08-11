@@ -99,6 +99,7 @@ class CadRuntimeBundleTests(unittest.TestCase):
 
     def test_viewer_bundle_contract_targets_node20_and_embeds_launcher(self) -> None:
         script = VIEWER_BUNDLE.read_text(encoding="utf-8")
+        self.assertIn('"viewer:open": "node scripts/start-agent-viewer.mjs"', script)
         self.assertIn('"agent:start": "node scripts/start-agent-viewer.mjs"', script)
         self.assertIn('"$target_dir/scripts/start-agent-viewer.mjs"', script)
         self.assertEqual(script.count("--target=node20"), 2)

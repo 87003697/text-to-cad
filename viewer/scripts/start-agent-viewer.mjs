@@ -581,7 +581,10 @@ export async function activateAgentViewerDirectory({
   if (!response?.ok) {
     const detail = response ? await responseSnippet(response) : "";
     const status = response ? `${response.status || "unknown"} ${response.statusText || ""}`.trim() : "unknown";
-    throw new Error(`Failed to activate CAD Viewer directory ${normalizedDirectory}: ${status}${detail ? ` - ${detail}` : ""}`);
+    const error = new Error(`Failed to activate CAD Viewer directory ${normalizedDirectory}: ${status}${detail ? ` - ${detail}` : ""}`);
+    error.code = "CAD_VIEWER_DIRECTORY_ACTIVATION_REJECTED";
+    error.status = Number(response?.status || 0);
+    throw error;
   }
   let payload = null;
   try {
@@ -727,18 +730,48 @@ export async function resolveAgentStartLaunch({
 }
 
 export async function runAgentStart(options = {}) {
-  const launch = await resolveAgentStartLaunch(options);
-  if (launch.action === "reuse") {
-    await activateAgentViewerDirectory({
-      baseUrl: launch.baseUrl,
-      directory: launch.directory,
-      fetchImpl: options.fetchImpl,
+  const rejectedReusePorts = new Set();
+  const baseProbePort = options.probePort || probeAgentViewerPort;
+  let launch = null;
+  while (launch === null) {
+    const candidate = await resolveAgentStartLaunch({
+      ...options,
+      probePort: async (target) => {
+        if (rejectedReusePorts.has(Number(target.port))) {
+          return {
+            status: "occupied",
+            port: Number(target.port),
+            baseUrl: normalizeBaseUrl(target.host, target.port),
+          };
+        }
+        return baseProbePort(target);
+      },
     });
-    console.log(`CAD Viewer already running at ${launch.viewerUrl}`);
-    console.log(`CAD Viewer URL: ${launch.viewerUrl}`);
-    console.log(`CAD Viewer git: ${launch.git || "none"}`);
-    if (launch.jsonResult) {
-      console.log(JSON.stringify({ url: launch.viewerUrl, port: launch.port, action: "reuse" }));
+    if (candidate.action !== "reuse") {
+      launch = candidate;
+      break;
+    }
+    try {
+      await activateAgentViewerDirectory({
+        baseUrl: candidate.baseUrl,
+        directory: candidate.directory,
+        fetchImpl: options.fetchImpl,
+      });
+    } catch (error) {
+      if (
+        error?.code !== "CAD_VIEWER_DIRECTORY_ACTIVATION_REJECTED"
+        || error?.status !== 400
+      ) {
+        throw error;
+      }
+      rejectedReusePorts.add(Number(candidate.port));
+      continue;
+    }
+    console.log(`CAD Viewer already running at ${candidate.viewerUrl}`);
+    console.log(`CAD Viewer URL: ${candidate.viewerUrl}`);
+    console.log(`CAD Viewer git: ${candidate.git || "none"}`);
+    if (candidate.jsonResult) {
+      console.log(JSON.stringify({ url: candidate.viewerUrl, port: candidate.port, action: "reuse" }));
     }
     return null;
   }
@@ -750,7 +783,8 @@ export async function runAgentStart(options = {}) {
   if (launch.jsonResult) {
     console.log(JSON.stringify({ url: launch.viewerUrl, port: launch.port, action: "start" }));
   }
-  const child = spawn(command.command, command.args, {
+  const spawnImpl = options.spawnImpl || spawn;
+  const child = spawnImpl(command.command, command.args, {
     cwd: command.cwd,
     env: command.env,
     stdio: "inherit",

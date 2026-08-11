@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
+import { EventEmitter } from "node:events";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -20,6 +21,7 @@ import {
   resolveAgentStartLaunch,
   resolveAgentStartCommand,
   resolveAgentViewerPort,
+  runAgentStart,
   selectAgentStartMode,
   stripDefaultRootDirArgs,
 } from "./start-agent-viewer.mjs";
@@ -589,4 +591,46 @@ test("resolveAgentStartLaunch starts the selected free port", async (t) => {
     "4179",
   ]);
   assert.equal(new URL(result.viewerUrl).searchParams.get("dir"), directory);
+});
+
+test("runAgentStart skips a reusable viewer that rejects the sandbox directory", async (t) => {
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "cad-viewer-agent-start-directory-"));
+  t.after(() => fs.rm(directory, { recursive: true, force: true }));
+  const spawned = [];
+  const child = new EventEmitter();
+
+  const result = await runAgentStart({
+    argv: ["--viewer-start-mode", "serve", "--host", "127.0.0.1", "--dir", directory, "--port", "4178"],
+    env: {},
+    packageRoot: path.resolve("viewer"),
+    nodePath: process.execPath,
+    registryServers: [],
+    probePort: async ({ host, port }) => ({
+      status: port === 4178 ? "viewer" : "closed",
+      port,
+      baseUrl: `http://${host}:${port}`,
+      serverInfo: port === 4178 ? {
+        app: "cad-viewer",
+        serverApiVersion: 2,
+        dynamicRoot: true,
+        serverFeatures: ["directory-activation"],
+        serverMode: "serve",
+        viewerVersion: "0.3.9",
+      } : undefined,
+    }),
+    fetchImpl: async () => ({
+      ok: false,
+      status: 400,
+      statusText: "Bad Request",
+      text: async () => JSON.stringify({ ok: false, error: `directory not found: ${directory}` }),
+    }),
+    spawnImpl: (...args) => {
+      spawned.push(args);
+      return child;
+    },
+  });
+
+  assert.equal(result, child);
+  assert.equal(spawned.length, 1);
+  assert.equal(spawned[0][1].at(-1), "4179");
 });

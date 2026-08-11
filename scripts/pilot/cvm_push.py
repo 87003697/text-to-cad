@@ -24,6 +24,9 @@ REMOTE_DESTINATION = f"cvm:{REMOTE_ROOT}/"
 IMPLICIT_NODE_MODULES_INCLUDE = (
     "/skills/implicit-cad/scripts/packages/implicitjs/node_modules/***"
 )
+NATIVE_MESHSCOPE_RUNTIME = (
+    "skills/mesh-compare/scripts/packages/meshscope"
+)
 
 # Source -> staging is intentionally different from staging -> CVM. The
 # staging copy keeps build-only inputs such as viewer/, packages/, and plugins/
@@ -132,6 +135,7 @@ PRODUCTION_RUNTIME = RuntimeContract(
     physical_directories=(
         "skills/cad-viewer/scripts/viewer",
         "skills/implicit-cad/scripts/packages/implicitjs",
+        NATIVE_MESHSCOPE_RUNTIME,
     ),
     required_files=(
         "skills/cad-viewer/scripts/viewer/package.json",
@@ -159,6 +163,11 @@ PRODUCTION_RUNTIME = RuntimeContract(
             "skills/implicit-cad/scripts/packages/implicitjs/"
             "node_modules/gifenc/package.json"
         ),
+        f"{NATIVE_MESHSCOPE_RUNTIME}/setup.py",
+        (
+            f"{NATIVE_MESHSCOPE_RUNTIME}/src/meshscope/voxblame/"
+            "_native.cpp"
+        ),
     ),
     hash_files=(
         "skills/cad-viewer/scripts/viewer/backend/server.mjs",
@@ -170,6 +179,11 @@ PRODUCTION_RUNTIME = RuntimeContract(
         (
             "skills/implicit-cad/scripts/packages/implicitjs/"
             "node_modules/playwright-core/browsers.json"
+        ),
+        f"{NATIVE_MESHSCOPE_RUNTIME}/setup.py",
+        (
+            f"{NATIVE_MESHSCOPE_RUNTIME}/src/meshscope/voxblame/"
+            "_native.cpp"
         ),
     ),
 )
@@ -739,6 +753,47 @@ class CvmPush:
                 transferred=True,
             )
 
+    def build_remote_native_runtime(self) -> None:
+        """Build the target-ABI VoxBlame extension in the physical bundle."""
+
+        command = "\n".join(
+            (
+                "set -eu",
+                f"cd {REMOTE_ROOT}",
+                'repo_root="$PWD"',
+                (
+                    "build_root=$(mktemp -d "
+                    "/tmp/text-to-cad-meshscope-build.XXXXXX)"
+                ),
+                (
+                    'case "$build_root" in '
+                    "/tmp/text-to-cad-meshscope-build.*) ;; *) exit 4 ;; esac"
+                ),
+                (
+                    "cleanup() { test ! -d \"$build_root\" || "
+                    "rm -rf -- \"${build_root:?}\"; }"
+                ),
+                "trap cleanup EXIT HUP INT TERM",
+                f"cd {shlex.quote(NATIVE_MESHSCOPE_RUNTIME)}",
+                (
+                    '"$repo_root/.venv/bin/python" setup.py build_ext '
+                    '--inplace --force --build-temp "$build_root/temp" '
+                    '--build-lib "$build_root/lib"'
+                ),
+            )
+        )
+        result = self.runner.remote(
+            command,
+            cwd=self.repo_root,
+            check=False,
+        )
+        if result.returncode != 0:
+            raise PushError(
+                "CVM native meshscope build failed",
+                5,
+                transferred=True,
+            )
+
     @staticmethod
     def _remote_runtime_command() -> str:
         lines = ["set -eu", f"cd {REMOTE_ROOT}"]
@@ -753,6 +808,17 @@ class CvmPush:
                 f"printf '%s\\t' {quoted}; "
                 f"sha256sum {quoted} | awk '{{print $1}}'"
             )
+        native_source = f"{NATIVE_MESHSCOPE_RUNTIME}/src"
+        probe = (
+            "import importlib.util, pathlib, sys; "
+            f"root = pathlib.Path({native_source!r}).resolve(); "
+            "sys.path.insert(0, str(root)); "
+            "spec = importlib.util.find_spec('meshscope.voxblame._native'); "
+            "assert spec is not None and spec.origin is not None; "
+            "assert pathlib.Path(spec.origin).resolve().is_relative_to(root); "
+            "from meshscope.voxblame import _native"
+        )
+        lines.append(f"./.venv/bin/python -I -c {shlex.quote(probe)}")
         return "\n".join(lines)
 
     @staticmethod
@@ -853,6 +919,7 @@ class CvmPush:
                 self.validate_stage(stage)
                 attestation = self.attest_stage(stage)
                 self.transfer_stage(stage)
+                self.build_remote_native_runtime()
                 self.verify_remote(attestation)
         except PushError as exc:
             if exc.status == 4 and not exc.transferred:
@@ -863,8 +930,8 @@ class CvmPush:
             raise
 
         self._log(
-            "CVM runtime verified: physical Viewer + implicit runtime, "
-            "matching hashes, and Playwright browser revision"
+            "CVM runtime verified: physical Viewer + implicit + native "
+            "meshscope runtime, matching hashes, and Playwright browser revision"
         )
         remote_head = self.remote_git_base()
         self._log(
