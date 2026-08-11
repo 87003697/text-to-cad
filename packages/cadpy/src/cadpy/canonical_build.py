@@ -6,6 +6,7 @@ import builtins
 from contextlib import contextmanager, redirect_stderr, redirect_stdout
 from contextvars import ContextVar
 from dataclasses import dataclass, replace
+import fcntl
 import hashlib
 import importlib.abc
 import importlib.machinery
@@ -257,6 +258,14 @@ _SOURCE_MUTATION_FUNCTIONS = tuple(
         }
     )
 )
+_SOURCE_DESCRIPTOR_MUTATION_FUNCTIONS = (
+    "close",
+    "closerange",
+    "dup",
+    "dup2",
+    "fdopen",
+)
+_SOURCE_FCNTL_MUTATION_FUNCTIONS = ("fcntl", "ioctl")
 
 
 @contextmanager
@@ -280,16 +289,47 @@ def _capture_source_file_descriptor_output():
             redirect(temporary_file.fileno(), file_descriptor)
         yield captured
     finally:
+        cleanup_errors: list[Exception] = []
         for stream in (sys.__stdout__, sys.__stderr__):
             if stream is not None:
-                stream.flush()
+                try:
+                    stream.flush()
+                except Exception as exc:
+                    cleanup_errors.append(exc)
+        restored_descriptors: set[int] = set()
         for file_descriptor, saved_descriptor in saved_descriptors.items():
-            redirect(saved_descriptor, file_descriptor)
-            close(saved_descriptor)
+            try:
+                redirect(saved_descriptor, file_descriptor)
+                restored_descriptors.add(file_descriptor)
+            except Exception as exc:
+                cleanup_errors.append(exc)
+        for saved_descriptor in saved_descriptors.values():
+            try:
+                close(saved_descriptor)
+            except Exception as exc:
+                cleanup_errors.append(exc)
         for file_descriptor, temporary_file in temporary_files.items():
-            temporary_file.seek(0)
-            captured[file_descriptor] = temporary_file.read()
-            temporary_file.close()
+            try:
+                temporary_file.seek(0)
+                captured[file_descriptor] = temporary_file.read()
+            except Exception as exc:
+                cleanup_errors.append(exc)
+            try:
+                temporary_file.close()
+            except Exception as exc:
+                cleanup_errors.append(exc)
+        if cleanup_errors:
+            failed_descriptors = set(captured) - restored_descriptors
+            if restored_descriptors:
+                fallback_descriptor = min(restored_descriptors)
+                for file_descriptor in failed_descriptors:
+                    try:
+                        redirect(fallback_descriptor, file_descriptor)
+                    except Exception:
+                        pass
+            raise RuntimeError(
+                "canonical build failed to restore process output descriptors"
+            ) from cleanup_errors[0]
 
 
 def _sha256(path: Path) -> str:
@@ -351,6 +391,10 @@ def _canonical_build_audit_hook(event: str, args: tuple[object, ...]) -> None:
         return
     if event.startswith("os."):
         raise PermissionError(f"canonical build forbids unsupported OS operation: {event}")
+    if event == "open" and args and isinstance(args[0], int):
+        raise PermissionError(
+            "canonical build forbids opening an existing file descriptor"
+        )
     if event != "open" or not args or not isinstance(args[0], (str, bytes, os.PathLike)):
         return
     raw_path = os.fsdecode(args[0])
@@ -531,6 +575,16 @@ def _source_execution_policy(
         for name in _SOURCE_MUTATION_FUNCTIONS
         if hasattr(os, name)
     }
+    original_descriptor_functions = {
+        name: getattr(os, name)
+        for name in _SOURCE_DESCRIPTOR_MUTATION_FUNCTIONS
+        if hasattr(os, name)
+    }
+    original_fcntl_functions = {
+        name: getattr(fcntl, name)
+        for name in _SOURCE_FCNTL_MUTATION_FUNCTIONS
+        if hasattr(fcntl, name)
+    }
 
     def source_called() -> bool:
         caller_path = os.path.realpath(sys._getframe(2).f_code.co_filename)
@@ -551,10 +605,31 @@ def _source_execution_policy(
 
         return guarded
 
+    def guard_descriptor_mutation(api_name: str):
+        def guarded(*_args: object, **_kwargs: object):
+            raise PermissionError(
+                "canonical build forbids file descriptor mutation during "
+                f"source execution: {api_name}"
+            )
+
+        return guarded
+
     os.environ.clear()
     builtins.hash = guarded_hash
     for mutation_name, mutation_function in original_mutation_functions.items():
         setattr(os, mutation_name, guard_mutation(mutation_name, mutation_function))
+    for descriptor_name in original_descriptor_functions:
+        setattr(
+            os,
+            descriptor_name,
+            guard_descriptor_mutation(f"os.{descriptor_name}"),
+        )
+    for descriptor_name in original_fcntl_functions:
+        setattr(
+            fcntl,
+            descriptor_name,
+            guard_descriptor_mutation(f"fcntl.{descriptor_name}"),
+        )
     policy = _SourceExecutionPolicy(
         root=root,
         declared_inputs=resolved_inputs,
@@ -574,6 +649,16 @@ def _source_execution_policy(
         builtins.hash = original_hash
         for mutation_name, mutation_function in original_mutation_functions.items():
             setattr(os, mutation_name, mutation_function)
+        for (
+            descriptor_name,
+            descriptor_function,
+        ) in original_descriptor_functions.items():
+            setattr(os, descriptor_name, descriptor_function)
+        for (
+            descriptor_name,
+            descriptor_function,
+        ) in original_fcntl_functions.items():
+            setattr(fcntl, descriptor_name, descriptor_function)
         os.environ.clear()
         os.environ.update(original_environment)
 
@@ -687,6 +772,11 @@ def _validate_unitless_source_parameters(source: _DeclaredPythonModule) -> None:
     )
     if forbidden_policy_import or forbidden_policy_attribute:
         raise ValueError("canonical CAD source cannot import canonical-build policy internals")
+    if imported_roots & {"_io", "posix"}:
+        raise RuntimeError(
+            "canonical build forbids direct file descriptor internals during "
+            "source execution"
+        )
     if "socket" in imported_roots:
         raise RuntimeError("canonical build forbids network access during source execution")
     if imported_roots & {"multiprocessing", "subprocess"}:

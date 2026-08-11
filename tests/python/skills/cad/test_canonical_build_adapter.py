@@ -866,6 +866,111 @@ class CanonicalBuildAdapterTests(unittest.TestCase):
                     )
                     self.assertFalse((root / "candidate/build.json").exists())
 
+    def test_source_cannot_mutate_process_file_descriptors(self) -> None:
+        tampering_operations = {
+            "close": "os.close(1)",
+            "closerange": "os.closerange(3, 256)",
+            "dup": "os.dup(1)",
+            "dup2": "os.dup2(1, 2)",
+            "fdopen": "os.fdopen(1, 'w', closefd=False)",
+            "integer-open": "open(1, 'w', closefd=False)",
+            "fcntl": "import fcntl\nfcntl.fcntl(1, fcntl.F_GETFD)",
+            "ioctl": "import fcntl\nfcntl.ioctl(1, 0)",
+            "posix": "import posix\nposix.close(1)",
+            "raw-io": "import _io\n_io.open(1, 'w', closefd=False)",
+        }
+        for operation, statement in tampering_operations.items():
+            with self.subTest(operation=operation):
+                with temporary_directory(
+                    prefix="cad-canonical-source-fd-mutation-"
+                ) as temp_dir:
+                    root = Path(temp_dir)
+                    source = _write_canonical_source(
+                        root,
+                        body=(
+                            "import os\n"
+                            f"{statement}\n"
+                            "from build123d import Box\n"
+                            "def gen_step():\n"
+                            "    return Box(0.4, 0.2, 0.1)\n"
+                        ),
+                    )
+
+                    result = _run_adapter(
+                        root,
+                        "build",
+                        "--source",
+                        source.relative_to(root).as_posix(),
+                        "--output-dir",
+                        "candidate",
+                    )
+
+                    self.assertNotEqual(0, result.returncode)
+                    self.assertEqual("", result.stdout)
+                    self.assertIn("file descriptor", result.stderr)
+                    self.assertFalse(
+                        (root / "candidate/canonical.step").exists()
+                    )
+                    self.assertFalse(
+                        (root / "candidate/measurement.glb").exists()
+                    )
+                    self.assertFalse((root / "candidate/build.json").exists())
+
+    def test_source_cannot_break_caller_file_descriptors(self) -> None:
+        with temporary_directory(
+            prefix="cad-canonical-source-fd-tamper-"
+        ) as temp_dir:
+            root = Path(temp_dir)
+            _write_canonical_source(
+                root,
+                body=(
+                    "import os\n"
+                    "os.closerange(3, 256)\n"
+                    "from build123d import Box\n"
+                    "def gen_step():\n"
+                    "    return Box(0.4, 0.2, 0.1)\n"
+                ),
+            )
+            environment = dict(os.environ)
+            environment["PYTHONPATH"] = os.pathsep.join(
+                (str(CADPY_SRC), environment["PYTHONPATH"])
+                if environment.get("PYTHONPATH")
+                else (str(CADPY_SRC),)
+            )
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    "-c",
+                    (
+                        "import os, sys\n"
+                        "from pathlib import Path\n"
+                        "from cadpy.canonical_build import build\n"
+                        "try:\n"
+                        "    build(root=Path.cwd(), source='source/model.py', "
+                        "output_dir='candidate')\n"
+                        "except Exception as exc:\n"
+                        "    os.write(1, b'caller stdout usable\\n')\n"
+                        "    os.write(2, "
+                        "f'caller stderr usable: {exc}\\n'.encode())\n"
+                        "    raise SystemExit(1)\n"
+                    ),
+                ],
+                cwd=root,
+                env=environment,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                check=False,
+            )
+
+            self.assertEqual(1, result.returncode)
+            self.assertEqual("caller stdout usable\n", result.stdout)
+            self.assertIn("caller stderr usable", result.stderr)
+            self.assertIn("file descriptor", result.stderr)
+            self.assertFalse((root / "candidate/canonical.step").exists())
+            self.assertFalse((root / "candidate/measurement.glb").exists())
+            self.assertFalse((root / "candidate/build.json").exists())
+
     def test_source_cannot_call_host_physical_reader(self) -> None:
         with temporary_directory(prefix="cad-canonical-host-reader-") as temp_dir:
             root = Path(temp_dir)
