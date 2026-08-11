@@ -878,16 +878,16 @@ class CvmPush:
                 "CVM production stage has a cyclic skill symlink: "
                 f"{original.relative_to(stage_root)}",
                 4,
-            )
+        )
         if source.is_dir():
             destination.mkdir()
-            descendants = (*active_sources, source)
+            active_source_ancestors = (*active_sources, source)
             for child in sorted(source.iterdir(), key=lambda path: path.name):
                 cls._copy_stage_entry(
                     child,
                     destination / child.name,
                     stage_root=stage_root,
-                    active_sources=descendants,
+                    active_sources=active_source_ancestors,
                 )
             shutil.copystat(source, destination, follow_symlinks=False)
         elif source.is_file():
