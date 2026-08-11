@@ -183,6 +183,48 @@ class TransferSummary:
     bytes_per_second: float | None = None
 
 
+@dataclass(frozen=True)
+class OutputReporter:
+    """Keep manual and agent output policy behind one internal seam."""
+
+    agent: bool
+
+    @property
+    def echo_stream(self) -> bool:
+        return not self.agent
+
+    def human(self, message: str, *, stderr: bool = False) -> None:
+        if not self.agent:
+            print(message, file=sys.stderr if stderr else sys.stdout)
+
+    def phase(self, phase: str) -> None:
+        if self.agent:
+            print(
+                json.dumps(
+                    {
+                        "schema": "cvm-push.event/1",
+                        "type": "phase",
+                        "phase": phase,
+                    },
+                    separators=(",", ":"),
+                    sort_keys=True,
+                )
+            )
+
+    def terminal_receipt(
+        self,
+        receipt: Mapping[str, object],
+        *,
+        written: bool,
+    ) -> None:
+        if self.agent:
+            print(json.dumps(receipt, separators=(",", ":"), sort_keys=True))
+        elif written:
+            print(f"Receipt: {receipt['receipt_path']}")
+        else:
+            print(receipt["receipt_write_error"], file=sys.stderr)
+
+
 PRODUCTION_RUNTIME = RuntimeContract(
     physical_directories=(
         "skills/cad-viewer/scripts/viewer",
@@ -399,7 +441,7 @@ class CvmPush:
         self.runner = runner
         self.repo_root = repo_root.resolve()
         self.environ = dict(os.environ if environ is None else environ)
-        self.agent = agent
+        self.output = OutputReporter(agent)
         self.run_id = (
             f"{time.strftime('%Y%m%d-%H%M%S')}-{os.getpid()}-{time.time_ns()}"
         )
@@ -414,8 +456,7 @@ class CvmPush:
         self.viewer_deployment: Mapping[str, object] | None = None
 
     def _log(self, message: str, *, stderr: bool = False) -> None:
-        if not self.agent:
-            print(message, file=sys.stderr if stderr else sys.stdout)
+        self.output.human(message, stderr=stderr)
         self.log_path.parent.mkdir(parents=True, exist_ok=True)
         with self.log_path.open("a", encoding="utf-8") as log:
             print(message, file=log)
@@ -429,18 +470,7 @@ class CvmPush:
 
     def _enter_phase(self, phase: str) -> None:
         self.phase = phase
-        if self.agent:
-            print(
-                json.dumps(
-                    {
-                        "schema": "cvm-push.event/1",
-                        "type": "phase",
-                        "phase": phase,
-                    },
-                    separators=(",", ":"),
-                    sort_keys=True,
-                )
-            )
+        self.output.phase(phase)
 
     def preflight_local(self) -> None:
         """Gate 1a: require a repository source and local workflow tools."""
@@ -931,7 +961,7 @@ class CvmPush:
             argv,
             cwd=self.repo_root,
             log_path=self.log_path,
-            echo=not self.agent,
+            echo=self.output.echo_stream,
         )
         if status != 0:
             raise PushError(
@@ -1345,12 +1375,7 @@ def execute(workflow: CvmPush) -> int:
                 exit_code=exit_code,
                 error="receipt write failed",
             )
-    if workflow.agent:
-        print(json.dumps(receipt, separators=(",", ":"), sort_keys=True))
-    elif receipt_written:
-        print(f"Receipt: {workflow.receipt_path}")
-    else:
-        print(receipt["receipt_write_error"], file=sys.stderr)
+    workflow.output.terminal_receipt(receipt, written=receipt_written)
     return exit_code
 
 

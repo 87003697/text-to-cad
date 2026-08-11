@@ -10,7 +10,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
-from contextlib import redirect_stderr, redirect_stdout
+from contextlib import contextmanager, redirect_stderr, redirect_stdout
 from pathlib import Path
 from unittest import mock
 
@@ -92,6 +92,29 @@ def create_repo(root: Path) -> Path:
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(f"{relative}\n", encoding="utf-8")
     return repo
+
+
+@contextmanager
+def agent_workflow():
+    with tempfile.TemporaryDirectory() as root_text:
+        root = Path(root_text)
+        runner = FakeRunner()
+        workflow = cvm_push.CvmPush(
+            runner,
+            repo_root=create_repo(root),
+            environ={"TMPDIR": str(root)},
+            agent=True,
+        )
+        yield root, runner, workflow
+
+
+def execute_agent(workflow) -> tuple[int, list[dict[str, object]], str]:
+    stdout = io.StringIO()
+    stderr = io.StringIO()
+    with redirect_stdout(stdout), redirect_stderr(stderr):
+        status = cvm_push.execute(workflow)
+    records = [json.loads(line) for line in stdout.getvalue().splitlines()]
+    return status, records, stderr.getvalue()
 
 
 def create_viewer_dependencies(root: Path) -> Path:
@@ -250,15 +273,7 @@ class AgentModeTests(unittest.TestCase):
         self.assertEqual(manual_stdout.getvalue(), "rsync progress\n")
 
     def test_agent_success_emits_phases_and_matching_receipt_file(self) -> None:
-        with tempfile.TemporaryDirectory() as root_text:
-            root = Path(root_text)
-            repo = create_repo(root)
-            workflow = cvm_push.CvmPush(
-                FakeRunner(),
-                repo_root=repo,
-                environ={"TMPDIR": str(root)},
-                agent=True,
-            )
+        with agent_workflow() as (root, _, workflow):
             source = cvm_push.SourceProvenance("develop", "deadbeef", "dirty")
             attestation = cvm_push.RuntimeAttestation({}, "1234")
             source_authority = {
@@ -295,17 +310,14 @@ class AgentModeTests(unittest.TestCase):
             workflow.verify_remote = mock.Mock(return_value=deployment_receipt)
             workflow.remote_git_base = mock.Mock(return_value="remote-head")
 
-            stdout = io.StringIO()
-            with redirect_stdout(stdout):
-                status = cvm_push.execute(workflow)
-
-            records = [json.loads(line) for line in stdout.getvalue().splitlines()]
+            status, records, stderr = execute_agent(workflow)
             receipt = records[-1]
             persisted = json.loads(
                 workflow.receipt_path.read_text(encoding="utf-8")
             )
 
         self.assertEqual(status, 0)
+        self.assertEqual(stderr, "")
         self.assertEqual(
             [record["phase"] for record in records[:-1]],
             ["preflight", "stage", "transfer", "verify"],
@@ -331,24 +343,12 @@ class AgentModeTests(unittest.TestCase):
         self.assertEqual(receipt["viewer_deployment"], deployment_receipt)
 
     def test_agent_failure_preserves_exit_code_and_writes_receipt(self) -> None:
-        with tempfile.TemporaryDirectory() as root_text:
-            root = Path(root_text)
-            workflow = cvm_push.CvmPush(
-                FakeRunner(),
-                repo_root=create_repo(root),
-                environ={"TMPDIR": str(root)},
-                agent=True,
-            )
+        with agent_workflow() as (_, _, workflow):
             workflow.preflight_local = mock.Mock(
                 side_effect=cvm_push.PushError("local preflight failed", 4)
             )
 
-            stdout = io.StringIO()
-            stderr = io.StringIO()
-            with redirect_stdout(stdout), redirect_stderr(stderr):
-                status = cvm_push.execute(workflow)
-
-            records = [json.loads(line) for line in stdout.getvalue().splitlines()]
+            status, records, stderr = execute_agent(workflow)
             receipt = records[-1]
             persisted = json.loads(
                 workflow.receipt_path.read_text(encoding="utf-8")
@@ -356,7 +356,7 @@ class AgentModeTests(unittest.TestCase):
             log = workflow.log_path.read_text(encoding="utf-8")
 
         self.assertEqual(status, 4)
-        self.assertEqual(stderr.getvalue(), "")
+        self.assertEqual(stderr, "")
         self.assertEqual(records[0]["phase"], "preflight")
         self.assertEqual(receipt, persisted)
         self.assertEqual(receipt["status"], "failed")
@@ -367,60 +367,35 @@ class AgentModeTests(unittest.TestCase):
         self.assertIn("local preflight failed", log)
 
     def test_agent_unexpected_exception_produces_failure_receipt(self) -> None:
-        with tempfile.TemporaryDirectory() as root_text:
-            root = Path(root_text)
-            workflow = cvm_push.CvmPush(
-                FakeRunner(),
-                repo_root=create_repo(root),
-                environ={"TMPDIR": str(root)},
-                agent=True,
-            )
+        with agent_workflow() as (_, _, workflow):
             workflow.preflight_local = mock.Mock(side_effect=RuntimeError("boom"))
 
-            stdout = io.StringIO()
-            with redirect_stdout(stdout):
-                status = cvm_push.execute(workflow)
-
-            receipt = json.loads(stdout.getvalue().splitlines()[-1])
+            status, records, stderr = execute_agent(workflow)
+            receipt = records[-1]
             log = workflow.log_path.read_text(encoding="utf-8")
 
         self.assertEqual(status, 1)
+        self.assertEqual(stderr, "")
         self.assertEqual(receipt["status"], "failed")
         self.assertEqual(receipt["exit_code"], 1)
         self.assertEqual(receipt["error"], "boom")
         self.assertIn("RuntimeError: boom", log)
 
     def test_agent_keyboard_interrupt_produces_exit_130_receipt(self) -> None:
-        with tempfile.TemporaryDirectory() as root_text:
-            root = Path(root_text)
-            workflow = cvm_push.CvmPush(
-                FakeRunner(),
-                repo_root=create_repo(root),
-                environ={"TMPDIR": str(root)},
-                agent=True,
-            )
+        with agent_workflow() as (_, _, workflow):
             workflow.preflight_local = mock.Mock(side_effect=KeyboardInterrupt())
 
-            stdout = io.StringIO()
-            with redirect_stdout(stdout):
-                status = cvm_push.execute(workflow)
-
-            receipt = json.loads(stdout.getvalue().splitlines()[-1])
+            status, records, stderr = execute_agent(workflow)
+            receipt = records[-1]
 
         self.assertEqual(status, 130)
+        self.assertEqual(stderr, "")
         self.assertEqual(receipt["status"], "failed")
         self.assertEqual(receipt["exit_code"], 130)
         self.assertEqual(receipt["error"], "interrupted")
 
     def test_agent_receipt_write_failure_falls_back_to_stdout(self) -> None:
-        with tempfile.TemporaryDirectory() as root_text:
-            root = Path(root_text)
-            workflow = cvm_push.CvmPush(
-                FakeRunner(),
-                repo_root=create_repo(root),
-                environ={"TMPDIR": str(root)},
-                agent=True,
-            )
+        with agent_workflow() as (_, _, workflow):
 
             def succeed_without_remote_work() -> None:
                 workflow.phase = "complete"
@@ -428,15 +403,11 @@ class AgentModeTests(unittest.TestCase):
             workflow.run = mock.Mock(side_effect=succeed_without_remote_work)
             workflow.write_receipt = mock.Mock(side_effect=OSError("disk full"))
 
-            stdout = io.StringIO()
-            stderr = io.StringIO()
-            with redirect_stdout(stdout), redirect_stderr(stderr):
-                status = cvm_push.execute(workflow)
-
-            receipt = json.loads(stdout.getvalue().splitlines()[-1])
+            status, records, stderr = execute_agent(workflow)
+            receipt = records[-1]
 
         self.assertEqual(status, 1)
-        self.assertEqual(stderr.getvalue(), "")
+        self.assertEqual(stderr, "")
         self.assertEqual(receipt["status"], "failed")
         self.assertEqual(receipt["exit_code"], 1)
         self.assertEqual(receipt["phase"], "complete")
@@ -457,15 +428,11 @@ class AgentModeTests(unittest.TestCase):
                 side_effect=cvm_push.PushError("local preflight failed", 4)
             )
 
-            stdout = io.StringIO()
-            stderr = io.StringIO()
-            with redirect_stdout(stdout), redirect_stderr(stderr):
-                status = cvm_push.execute(workflow)
-
-            receipt = json.loads(stdout.getvalue().splitlines()[-1])
+            status, records, stderr = execute_agent(workflow)
+            receipt = records[-1]
 
         self.assertEqual(status, 4)
-        self.assertEqual(stderr.getvalue(), "")
+        self.assertEqual(stderr, "")
         self.assertEqual(receipt["status"], "failed")
         self.assertEqual(receipt["exit_code"], 4)
         self.assertEqual(receipt["error"], "local preflight failed")
@@ -475,14 +442,7 @@ class AgentModeTests(unittest.TestCase):
     def test_staging_diagnostic_log_failure_preserves_original_exit_code(
         self,
     ) -> None:
-        with tempfile.TemporaryDirectory() as root_text:
-            root = Path(root_text)
-            workflow = cvm_push.CvmPush(
-                FakeRunner(),
-                repo_root=create_repo(root),
-                environ={"TMPDIR": str(root)},
-                agent=True,
-            )
+        with agent_workflow() as (root, _, workflow):
             workflow.preflight_local = mock.Mock()
             workflow.preflight_remote = mock.Mock(
                 return_value=cvm_push.RemotePreflight(free_gb=20)
@@ -504,13 +464,11 @@ class AgentModeTests(unittest.TestCase):
 
             workflow._log = mock.Mock(side_effect=fail_only_for_staging_diagnostic)
 
-            stdout = io.StringIO()
-            with redirect_stdout(stdout):
-                status = cvm_push.execute(workflow)
-
-            receipt = json.loads(stdout.getvalue().splitlines()[-1])
+            status, records, stderr = execute_agent(workflow)
+            receipt = records[-1]
 
         self.assertEqual(status, 4)
+        self.assertEqual(stderr, "")
         self.assertEqual(receipt["status"], "failed")
         self.assertEqual(receipt["exit_code"], 4)
         self.assertEqual(receipt["phase"], "stage")
@@ -883,19 +841,10 @@ class TransferAndVerifyTests(unittest.TestCase):
             self.assertEqual(argv[-1], cvm_push.REMOTE_DESTINATION)
 
     def test_transfer_retains_only_final_rsync_summary(self) -> None:
-        with tempfile.TemporaryDirectory() as root_text:
-            root = Path(root_text)
-            repo = create_repo(root)
-            runner = FakeRunner()
+        with agent_workflow() as (root, runner, workflow):
             runner.stream_output = (
                 "file progress 73%\n"
                 "sent 1,234 bytes  received 56 bytes  789.50 bytes/sec\n"
-            )
-            workflow = cvm_push.CvmPush(
-                runner,
-                repo_root=repo,
-                environ={"TMPDIR": str(root)},
-                agent=True,
             )
             stage = root / "stage"
             stage.mkdir()
@@ -912,17 +861,8 @@ class TransferAndVerifyTests(unittest.TestCase):
         )
 
     def test_transfer_does_not_reuse_summary_from_earlier_log_output(self) -> None:
-        with tempfile.TemporaryDirectory() as root_text:
-            root = Path(root_text)
-            repo = create_repo(root)
-            runner = FakeRunner()
+        with agent_workflow() as (root, runner, workflow):
             runner.stream_output = "transfer completed without a summary\n"
-            workflow = cvm_push.CvmPush(
-                runner,
-                repo_root=repo,
-                environ={"TMPDIR": str(root)},
-                agent=True,
-            )
             workflow.log_path.write_text(
                 "sent 9,999 bytes  received 88 bytes  77.0 bytes/sec\n",
                 encoding="utf-8",
@@ -935,18 +875,9 @@ class TransferAndVerifyTests(unittest.TestCase):
         self.assertEqual(workflow.transfer_summary, cvm_push.TransferSummary())
 
     def test_malformed_transfer_summary_does_not_change_success(self) -> None:
-        with tempfile.TemporaryDirectory() as root_text:
-            root = Path(root_text)
-            repo = create_repo(root)
-            runner = FakeRunner()
+        with agent_workflow() as (root, runner, workflow):
             runner.stream_output = (
                 "sent ,,, bytes  received 56 bytes  789.50 bytes/sec\n"
-            )
-            workflow = cvm_push.CvmPush(
-                runner,
-                repo_root=repo,
-                environ={"TMPDIR": str(root)},
-                agent=True,
             )
             stage = root / "stage"
             stage.mkdir()
