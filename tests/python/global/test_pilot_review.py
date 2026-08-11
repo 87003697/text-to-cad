@@ -3,6 +3,8 @@ from __future__ import annotations
 import importlib.util
 import json
 from pathlib import Path
+import shutil
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -39,6 +41,15 @@ class PilotReviewTests(unittest.TestCase):
 
     def helper(self, payload: dict, status: int = 0) -> Path:
         path = self.root / f"workspace-helper-{len(list(self.root.glob('workspace-helper-*')))}.py"
+        path.write_text(
+            "import json\n"
+            "raise SystemExit((print(json.dumps(" + repr(payload) + ")) or " + str(status) + "))\n",
+            encoding="utf-8",
+        )
+        return path
+
+    def authority_helper(self, payload: dict, status: int = 0) -> Path:
+        path = self.root / f"authority-helper-{len(list(self.root.glob('authority-helper-*')))}.py"
         path.write_text(
             "import json\n"
             "raise SystemExit((print(json.dumps(" + repr(payload) + ")) or " + str(status) + "))\n",
@@ -166,7 +177,7 @@ class PilotReviewTests(unittest.TestCase):
             self.exp / "artifact_manifest.json",
             {"schema_version": 1, "workload_status": 0, "final_status": 0},
         )
-        return {
+        payload = {
             "ok": True,
             "valid": True,
             "graph": {
@@ -225,6 +236,24 @@ class PilotReviewTests(unittest.TestCase):
             },
             "recovery": [],
         }
+        subprocess.run(["git", "init", "--quiet"], cwd=self.exp, check=True)
+        subprocess.run(
+            ["git", "config", "user.name", "pilot-review-test"],
+            cwd=self.exp,
+            check=True,
+        )
+        subprocess.run(
+            ["git", "config", "user.email", "pilot-review-test@localhost"],
+            cwd=self.exp,
+            check=True,
+        )
+        subprocess.run(["git", "add", "."], cwd=self.exp, check=True)
+        subprocess.run(
+            ["git", "commit", "--quiet", "-m", "workspace: synthetic"],
+            cwd=self.exp,
+            check=True,
+        )
+        return payload
 
     def test_reviewer_reconstructs_canonical_repair_and_delivery_chain(self) -> None:
         helper = self.helper(self.canonical_experiment())
@@ -301,8 +330,68 @@ class PilotReviewTests(unittest.TestCase):
         )
         self.assertTrue((self.exp / "review.md").is_file())
 
+    def test_reviewer_audits_portable_authority_and_records_materialized_evidence(self) -> None:
+        workspace_payload = self.canonical_experiment()
+        shutil.rmtree(self.exp / ".git")
+        before = {
+            path.relative_to(self.exp).as_posix(): path.read_bytes()
+            for path in self.exp.rglob("*")
+            if path.is_file()
+        }
+        output = self.root / "portable-review-output"
+        workspace_helper = self.helper(workspace_payload)
+        authority_helper = self.authority_helper(
+            {
+                "ok": True,
+                "authority": {
+                    "mode": "materialized",
+                    "evidence": [
+                        "workspace-authority.json",
+                        "workspace-authority.bundle",
+                    ],
+                    "head": "a" * 40,
+                    "publication_ref": "refs/workspace-authority/portable-v1",
+                    "receipt_sha256": "b" * 64,
+                },
+                "workspace_validation": workspace_payload,
+            }
+        )
+
+        status = self.reviewer.main(
+            [
+                str(self.exp),
+                "--workspace-helper",
+                str(workspace_helper),
+                "--authority-helper",
+                str(authority_helper),
+                "--output",
+                str(output),
+            ]
+        )
+
+        self.assertEqual(status, 0)
+        review = json.loads((output / "review.json").read_text(encoding="utf-8"))
+        self.assertEqual(review["workspace_validation"]["authority_mode"], "materialized")
+        self.assertEqual(
+            review["workspace_validation"]["authority_evidence"],
+            ["workspace-authority.json", "workspace-authority.bundle"],
+        )
+        self.assertEqual(
+            review["contract_provenance"]["portable_authority"],
+            "workspace-authority.json",
+        )
+        after = {
+            path.relative_to(self.exp).as_posix(): path.read_bytes()
+            for path in self.exp.rglob("*")
+            if path.is_file()
+        }
+        self.assertEqual(after, before)
+        self.assertFalse((self.exp / "review.json").exists())
+        self.assertFalse((self.exp / "review.md").exists())
+
     def test_reviewer_classifies_legacy_without_partial_graph(self) -> None:
         (self.exp / "previews").mkdir()
+        output = self.root / "legacy-review-output"
         helper = self.helper(
             {
                 "ok": False,
@@ -316,14 +405,29 @@ class PilotReviewTests(unittest.TestCase):
         )
 
         status = self.reviewer.main(
-            [str(self.exp), "--workspace-helper", str(helper)]
+            [
+                str(self.exp),
+                "--workspace-helper",
+                str(helper),
+                "--authority-helper",
+                str(
+                    REPO_ROOT
+                    / "skills/mesh-to-cad/scripts/mesh-to-cad-authority"
+                ),
+                "--output",
+                str(output),
+            ]
         )
 
         self.assertEqual(status, 2)
-        review = json.loads((self.exp / "review.json").read_text(encoding="utf-8"))
+        review = json.loads((output / "review.json").read_text(encoding="utf-8"))
         self.assertEqual(
             review["workspace_validation"]["classification"],
-            "unsupported_legacy_workspace",
+            "not_auditable",
+        )
+        self.assertEqual(
+            review["workspace_validation"]["authority_classification"],
+            "authority_missing",
         )
         self.assertEqual(review["graph"], {"nodes": [], "edges": []})
 

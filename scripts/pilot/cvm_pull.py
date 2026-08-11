@@ -23,7 +23,12 @@ RCLONE_RC_ADDR = "127.0.0.1:5572"
 MOUNT_PATH = (
     Path.home() / "threed-code/ericzyma/text-to-cad/outputs"
 )
+WORKSPACE_AUTHORITY_HELPER = (
+    REPO_ROOT / "skills/mesh-to-cad/scripts/mesh-to-cad-authority"
+)
+WORKSPACE_HELPER = REPO_ROOT / "skills/mesh-to-cad/scripts/mesh-to-cad-workspace"
 COMPONENT = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
+AUTHORITY_TIMEOUT_GRACE_SECONDS = 5.0
 
 
 class PullError(RuntimeError):
@@ -42,6 +47,26 @@ class PullRequest:
     group: str | None
     include_byproducts: bool
     discard_postmortem: bool
+    authority_timeout_seconds: float = 120.0
+    authority_max_files: int = 20_000
+    authority_max_bytes: int = 5 * 1024 * 1024 * 1024
+
+
+@dataclass(frozen=True)
+class AuthorityFile:
+    """One exact authority artifact identity from the CVM terminal manifest."""
+
+    path: str
+    size_bytes: int
+    sha256: str
+
+
+@dataclass(frozen=True)
+class AuthorityExpectation:
+    """Exact authority identities that a mounted transfer must preserve."""
+
+    exp: str
+    files: tuple[AuthorityFile, ...]
 
 
 @dataclass(frozen=True)
@@ -52,6 +77,9 @@ class ExpInspection:
     complete: bool
     final_status: int | None
     has_postmortem: bool
+    authority_complete: bool
+    authority_classification: str
+    authority_files: tuple[AuthorityFile, ...]
 
 
 @dataclass(frozen=True)
@@ -63,6 +91,7 @@ class PullPlan:
     s3_exps: frozenset[str]
     publish: tuple[str, ...]
     preserve: tuple[ExpInspection, ...]
+    authority: tuple[AuthorityExpectation, ...]
 
 
 @dataclass(frozen=True)
@@ -93,7 +122,9 @@ def parse_request(argv: Sequence[str]) -> PullRequest:
         prog="scripts/pilot/cvm-pull.sh",
         usage=(
             "%(prog)s [--exp <group>/<exp> | --group <group>] "
-            "[--include-byproducts | --discard-postmortem]"
+            "[--include-byproducts | --discard-postmortem] "
+            "[--authority-timeout-seconds N --authority-max-files N "
+            "--authority-max-bytes N]"
         ),
     )
     scope = parser.add_mutually_exclusive_group()
@@ -102,16 +133,32 @@ def parse_request(argv: Sequence[str]) -> PullRequest:
     policy = parser.add_mutually_exclusive_group()
     policy.add_argument("--include-byproducts", action="store_true")
     policy.add_argument("--discard-postmortem", action="store_true")
+    parser.add_argument("--authority-timeout-seconds", type=float, default=120.0)
+    parser.add_argument("--authority-max-files", type=int, default=20_000)
+    parser.add_argument(
+        "--authority-max-bytes",
+        type=int,
+        default=5 * 1024 * 1024 * 1024,
+    )
     args = parser.parse_args(argv)
     if args.exp is not None and not is_safe_exp(args.exp):
         raise PullError(f"Unsafe --exp handle: {args.exp}", 7)
     if args.group is not None and not is_safe_component(args.group):
         raise PullError(f"Unsafe --group: {args.group}", 7)
+    if (
+        args.authority_timeout_seconds <= 0
+        or args.authority_max_files <= 0
+        or args.authority_max_bytes <= 0
+    ):
+        raise PullError("Authority staging bounds must be positive", 7)
     return PullRequest(
         exp=args.exp,
         group=args.group,
         include_byproducts=args.include_byproducts,
         discard_postmortem=args.discard_postmortem,
+        authority_timeout_seconds=args.authority_timeout_seconds,
+        authority_max_files=args.authority_max_files,
+        authority_max_bytes=args.authority_max_bytes,
     )
 
 
@@ -124,6 +171,7 @@ class CommandRunner:
         *,
         check: bool = True,
         capture: bool = True,
+        timeout: float | None = None,
     ) -> subprocess.CompletedProcess[str]:
         """Run one command without invoking a local shell."""
 
@@ -134,6 +182,7 @@ class CommandRunner:
             text=True,
             stdout=subprocess.PIPE if capture else None,
             stderr=subprocess.PIPE if capture else None,
+            timeout=timeout,
         )
 
     def remote(
@@ -169,7 +218,15 @@ class CommandRunner:
 class CvmPull:
     """Orchestrate Plan -> Qualify -> Publish -> Verify -> Reclaim -> Expose."""
 
-    def __init__(self, request: PullRequest, runner: CommandRunner) -> None:
+    def __init__(
+        self,
+        request: PullRequest,
+        runner: CommandRunner,
+        *,
+        authority_timeout: float | None = None,
+        authority_max_files: int | None = None,
+        authority_max_bytes: int | None = None,
+    ) -> None:
         self.request = request
         self.runner = runner
         self.mount_path = MOUNT_PATH
@@ -178,6 +235,21 @@ class CvmPull:
         ) / f"cvm-pull-{time.strftime('%Y%m%d-%H%M%S')}.log"
         self.refresh_warning = False
         self.excludes = self._load_excludes()
+        self.authority_timeout = (
+            request.authority_timeout_seconds
+            if authority_timeout is None
+            else authority_timeout
+        )
+        self.authority_max_files = (
+            request.authority_max_files
+            if authority_max_files is None
+            else authority_max_files
+        )
+        self.authority_max_bytes = (
+            request.authority_max_bytes
+            if authority_max_bytes is None
+            else authority_max_bytes
+        )
 
     def _require_rclone(self) -> None:
         result = self.runner.run(
@@ -275,6 +347,7 @@ class CvmPull:
     def _inspect_exp(self, exp: str) -> ExpInspection:
         script = """
 import json
+import hashlib
 import pathlib
 import sys
 
@@ -283,12 +356,49 @@ try:
     manifest = json.loads((exp / "artifact_manifest.json").read_text())
     value = manifest.get("final_status") if isinstance(manifest, dict) else None
 except (OSError, json.JSONDecodeError):
+    manifest = None
     value = None
 complete = type(value) is int
+authority_classification = "valid"
+authority_complete = True
+authority_files = []
+entries = {
+    item.get("path"): item
+    for item in (manifest.get("files", []) if isinstance(manifest, dict) else [])
+    if isinstance(item, dict)
+}
+for name in ("workspace-authority.bundle", "workspace-authority.json"):
+    path = exp / name
+    item = entries.get(name)
+    if not path.is_file() or not isinstance(item, dict):
+        authority_complete = False
+        authority_classification = "authority_missing"
+        break
+    try:
+        data = path.read_bytes()
+    except OSError:
+        authority_complete = False
+        authority_classification = "authority_partial"
+        break
+    if (
+        item.get("size_bytes") != len(data)
+        or item.get("sha256") != hashlib.sha256(data).hexdigest()
+    ):
+        authority_complete = False
+        authority_classification = "authority_manifest_mismatch"
+        break
+    authority_files.append({
+        "path": name,
+        "size_bytes": item["size_bytes"],
+        "sha256": item["sha256"],
+    })
 print(json.dumps({
     "complete": complete,
     "final_status": value if complete else None,
     "has_postmortem": (exp / "run/.codex-upper").is_dir(),
+    "authority_complete": authority_complete,
+    "authority_classification": authority_classification,
+    "authority_files": authority_files,
 }, separators=(",", ":")))
 """.strip()
         command = " ".join(
@@ -315,6 +425,19 @@ print(json.dumps({
                 else None
             ),
             has_postmortem=payload.get("has_postmortem") is True,
+            authority_complete=payload.get("authority_complete") is True,
+            authority_classification=str(
+                payload.get("authority_classification") or "authority_missing"
+            ),
+            authority_files=tuple(
+                AuthorityFile(
+                    path=str(item.get("path")),
+                    size_bytes=int(item.get("size_bytes")),
+                    sha256=str(item.get("sha256")),
+                )
+                for item in payload.get("authority_files", [])
+                if isinstance(item, dict)
+            ),
         )
 
     def qualify(
@@ -332,6 +455,27 @@ print(json.dumps({
             raise PullError(
                 f"Incomplete CVM experiment(s); return to cvm-monitor:\n{joined}",
                 9,
+            )
+
+        invalid_authority = tuple(
+            item
+            for item in inspections
+            if not item.authority_complete
+            and (
+                self.request.include_byproducts
+                or self.request.discard_postmortem
+                or (item.final_status == 0 and not item.has_postmortem)
+            )
+        )
+        if invalid_authority:
+            joined = "\n".join(
+                f"  {item.exp}: {item.authority_classification}"
+                for item in invalid_authority
+            )
+            raise PullError(
+                "CVM experiment authority is not auditable; cleanup blocked:\n"
+                f"{joined}",
+                10,
             )
 
         publish: list[str] = []
@@ -352,6 +496,11 @@ print(json.dumps({
             s3_exps=s3_exps,
             publish=tuple(publish),
             preserve=tuple(preserve),
+            authority=tuple(
+                AuthorityExpectation(item.exp, item.authority_files)
+                for item in inspections
+                if item.exp in publish
+            ),
         )
 
     def _load_excludes(self) -> tuple[str, ...]:
@@ -456,10 +605,92 @@ print(count)
         if result.returncode != 0:
             raise PullError(f"CVM cleanup failed: {exp}", result.returncode)
 
+    def _verify_mount_authority(
+        self,
+        exp: str,
+        expected: AuthorityExpectation,
+    ) -> None:
+        """Stage and audit the mount-visible copy before destructive cleanup."""
+
+        group = exp.split("/", 1)[0]
+        for directory in (
+            "ericzyma/text-to-cad/outputs",
+            f"ericzyma/text-to-cad/outputs/{group}",
+            f"ericzyma/text-to-cad/outputs/{exp}",
+        ):
+            self._refresh_dir(directory)
+        mounted = self.mount_path / exp
+        expected_json = json.dumps(
+            [
+                {
+                    "path": item.path,
+                    "size_bytes": item.size_bytes,
+                    "sha256": item.sha256,
+                }
+                for item in expected.files
+            ],
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        argv = [
+            sys.executable,
+            str(WORKSPACE_AUTHORITY_HELPER),
+            "audit",
+            "--source",
+            str(mounted),
+            "--workspace-helper",
+            str(WORKSPACE_HELPER),
+            "--timeout-seconds",
+            str(self.authority_timeout),
+            "--max-files",
+            str(self.authority_max_files),
+            "--max-bytes",
+            str(self.authority_max_bytes),
+            "--expected-authority-json",
+            expected_json,
+        ]
+        try:
+            completed = self.runner.run(
+                argv,
+                check=False,
+                timeout=self.authority_timeout + AUTHORITY_TIMEOUT_GRACE_SECONDS,
+            )
+        except subprocess.TimeoutExpired as exc:
+            raise PullError(
+                f"authority_timeout: {exp}: authority audit exceeded outer timeout; "
+                "keeping CVM local",
+                10,
+            ) from exc
+        try:
+            payload = json.loads(completed.stdout)
+        except json.JSONDecodeError as exc:
+            raise PullError(f"Invalid authority audit result: {exp}", 5) from exc
+        if (
+            completed.returncode != 0
+            or not isinstance(payload, dict)
+            or payload.get("ok") is not True
+        ):
+            authority = payload.get("authority") if isinstance(payload, dict) else None
+            classification = (
+                authority.get("classification")
+                if isinstance(authority, dict)
+                else "authority_invalid"
+            )
+            detail = (
+                authority.get("detail")
+                if isinstance(authority, dict)
+                else "portable authority audit failed"
+            )
+            raise PullError(
+                f"{classification}: {exp}: {detail}; keeping CVM local",
+                10 if classification == "authority_timeout" else 5,
+            )
+
     def publish(self, plan: PullPlan) -> PublishResult:
         """Module 4: run upload -> verify -> precise cleanup per exp."""
 
         uploaded: list[str] = []
+        authority = {item.exp: item for item in plan.authority}
         for index, exp in enumerate(plan.publish, start=1):
             self._log(f"=== [{index}/{len(plan.publish)}] {exp} ===")
             count: int
@@ -488,6 +719,13 @@ print(count)
             else:
                 self._upload_exp(exp)
                 count = self._verify_exp(exp)
+            expected = authority.get(exp)
+            if expected is None or len(expected.files) != 2:
+                raise PullError(
+                    f"authority_plan_incomplete: {exp}; keeping CVM local",
+                    5,
+                )
+            self._verify_mount_authority(exp, expected)
             self._log(f"  verify OK ({count} files); cleaning CVM local...")
             self._cleanup_exp(exp)
             uploaded.append(exp)

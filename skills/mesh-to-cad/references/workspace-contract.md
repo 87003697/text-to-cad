@@ -119,3 +119,8 @@ The helper never uses broad staging or disables LFS filters. run/ and work/
 are ignored mutable areas. Runner logs or transfer manifests are never
 Workspace authority and cannot change validation, acceptance facts, ancestry,
 or budget.
+
+After successful final validation, the pilot runner may publish the portable
+transfer package described in `portable-workspace-authority.md`. The receipt
+routes a reviewer to the minimal Git bundle; it cannot override any Git object,
+canonical schema, validation result, acceptance fact, or ancestry relationship.

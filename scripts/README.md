@@ -20,6 +20,7 @@ Use these durable entrypoints for normal work:
 | Submit a detached CVM pilot | `scripts/pilot/cvm-submit.sh pilot <object> <group>` |
 | Monitor a CVM job | `scripts/pilot/cvm-monitor.sh --once|--wait <handle>` |
 | Pull terminal CVM outputs | `scripts/pilot/cvm-pull.sh --exp|--group ...` |
+| Create/audit portable Workspace authority | `python skills/mesh-to-cad/scripts/mesh-to-cad-authority create|audit ...` |
 | Snapshot a pilot group | `scripts/pilot/snapshot-batch.sh <group>` (publishes and verifies `snapshot-receipt.json` for the complete shipped tree) |
 
 Lower-level scripts stay grouped by ownership:

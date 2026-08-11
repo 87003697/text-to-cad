@@ -12,6 +12,19 @@ from typing import Any
 
 
 DEFAULT_WORKSPACE_HELPER = "mesh-to-cad-workspace"
+_VENDORED_AUTHORITY_HELPER = Path(__file__).resolve().with_name(
+    "workspace_authority.py"
+)
+_INSTALLED_AUTHORITY_HELPER = (
+    Path(__file__).resolve().parent.parent / "mesh-to-cad-authority"
+)
+DEFAULT_AUTHORITY_HELPER = (
+    str(_VENDORED_AUTHORITY_HELPER)
+    if _VENDORED_AUTHORITY_HELPER.is_file()
+    else str(_INSTALLED_AUTHORITY_HELPER)
+    if _INSTALLED_AUTHORITY_HELPER.is_dir()
+    else "workspace-authority"
+)
 
 
 class ReviewError(RuntimeError):
@@ -59,6 +72,65 @@ def _validate(
         raise ReviewError("Workspace validator returned invalid JSON") from exc
     if not isinstance(payload, dict):
         raise ReviewError("Workspace validator returned a non-object")
+    return completed.returncode, payload
+
+
+def _audit_portable_authority(
+    workspace: Path,
+    authority_helper: str | Path,
+    workspace_helper: str | Path,
+    *,
+    timeout_seconds: float,
+    max_files: int,
+    max_bytes: int,
+) -> tuple[int, dict[str, Any]]:
+    """Audit a retained copy through the portable-authority process seam."""
+
+    helper_text = str(authority_helper)
+    helper_path = Path(helper_text).expanduser()
+    if helper_path.exists() and (helper_path.is_dir() or helper_path.suffix == ".py"):
+        command = [sys.executable, str(helper_path)]
+    else:
+        command = [helper_text]
+    try:
+        completed = subprocess.run(
+            [
+                *command,
+                "audit",
+                "--source",
+                str(workspace),
+                "--workspace-helper",
+                str(workspace_helper),
+                "--timeout-seconds",
+                str(timeout_seconds),
+                "--max-files",
+                str(max_files),
+                "--max-bytes",
+                str(max_bytes),
+            ],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=timeout_seconds + 5,
+        )
+    except subprocess.TimeoutExpired:
+        return 2, {
+            "ok": False,
+            "classification": "not_auditable",
+            "authority": {
+                "classification": "authority_timeout",
+                "detail": "portable authority audit timed out",
+                "evidence": ["workspace-authority.json", "workspace-authority.bundle"],
+            },
+        }
+    except OSError as exc:
+        raise ReviewError(f"portable authority helper failed to run: {exc}") from exc
+    try:
+        payload = json.loads(completed.stdout)
+    except json.JSONDecodeError as exc:
+        raise ReviewError("portable authority helper returned invalid JSON") from exc
+    if not isinstance(payload, dict):
+        raise ReviewError("portable authority helper returned a non-object")
     return completed.returncode, payload
 
 
@@ -417,6 +489,7 @@ def _canonical_graph(
 def _canonical_review(
     workspace: Path,
     payload: dict[str, Any],
+    authority: dict[str, Any],
 ) -> dict[str, Any]:
     graph = payload.get("graph")
     if not isinstance(graph, dict):
@@ -424,6 +497,16 @@ def _canonical_review(
     delivery = graph.get("final_delivery")
     runner, issues = _runner_verdict(workspace)
     accepted = bool(delivery.get("accepted")) if isinstance(delivery, dict) else False
+    provenance = {
+        "workspace": "workspace.json",
+        "canonical_reference": "input/input.json",
+        "graph_index": "step_index.json",
+        "runner": "artifact_manifest.json",
+        "telemetry": "run/",
+    }
+    if authority.get("mode") == "materialized":
+        provenance["portable_authority"] = "workspace-authority.json"
+        provenance["portable_bundle"] = "workspace-authority.bundle"
     return {
         "verdicts": {
             "runner_completion": runner,
@@ -433,17 +516,18 @@ def _canonical_review(
             ),
             "production_runtime_integration": "not_auditable",
         },
-        "contract_provenance": {
-            "workspace": "workspace.json",
-            "canonical_reference": "input/input.json",
-            "graph_index": "step_index.json",
-            "runner": "artifact_manifest.json",
-            "telemetry": "run/",
-        },
+        "contract_provenance": provenance,
         "workspace_validation": {
             "valid": True,
             "classification": "valid",
             "recovery": payload.get("recovery", []),
+            "authority_mode": authority.get("mode"),
+            "authority_evidence": authority.get("evidence", []),
+            **(
+                {"authority_head": authority.get("head")}
+                if authority.get("head") is not None
+                else {}
+            ),
         },
         "graph": _canonical_graph(workspace, graph),
         "issues": issues,
@@ -455,16 +539,88 @@ def _canonical_review(
     }
 
 
-def review_workspace(workspace: Path, helper: str | Path) -> tuple[int, dict[str, Any]]:
+def _not_auditable_authority_review(
+    workspace: Path,
+    payload: dict[str, Any],
+) -> dict[str, Any]:
+    """Build the stable no-graph review for unavailable portable authority."""
+
+    authority = payload.get("authority")
+    if not isinstance(authority, dict):
+        authority = {}
+    classification = str(authority.get("classification") or "authority_invalid")
+    detail = str(authority.get("detail") or "portable authority is unavailable")
+    runner, issues = _runner_verdict(workspace)
+    issues.append(
+        {
+            "classification": "observability-gap",
+            "detail": detail,
+            "evidence": "workspace-authority.json",
+        }
+    )
+    return {
+        "verdicts": {
+            "runner_completion": runner,
+            "workspace_protocol": "not_auditable",
+            "reconstruction_quality": "not_auditable",
+            "production_runtime_integration": "not_auditable",
+        },
+        "contract_provenance": {
+            "runner": "artifact_manifest.json",
+            "portable_authority": "workspace-authority.json",
+            "portable_bundle": "workspace-authority.bundle",
+        },
+        "workspace_validation": {
+            "valid": False,
+            "classification": "not_auditable",
+            "authority_mode": "unavailable",
+            "authority_classification": classification,
+            "authority_evidence": authority.get("evidence", []),
+            "detail": detail,
+        },
+        "graph": {"nodes": [], "edges": []},
+        "issues": issues,
+        "unresolved": [],
+        "evidence_gaps": ["canonical Workspace authority unavailable"],
+    }
+
+
+def review_workspace(
+    workspace: Path,
+    helper: str | Path,
+    *,
+    authority_helper: str | Path = DEFAULT_AUTHORITY_HELPER,
+    authority_timeout_seconds: float = 120.0,
+    authority_max_files: int = 20_000,
+    authority_max_bytes: int = 5 * 1024 * 1024 * 1024,
+) -> tuple[int, dict[str, Any]]:
     """Validate and reconstruct one experiment without changing its authority."""
 
     workspace = workspace.resolve()
-    status, payload = _validate(workspace, helper)
+    authority: dict[str, Any]
+    if (workspace / ".git").exists():
+        status, payload = _validate(workspace, helper)
+        authority = {"mode": "live", "evidence": [".git", "workspace.json"]}
+    else:
+        status, audit_payload = _audit_portable_authority(
+            workspace,
+            authority_helper,
+            helper,
+            timeout_seconds=authority_timeout_seconds,
+            max_files=authority_max_files,
+            max_bytes=authority_max_bytes,
+        )
+        if status != 0 or audit_payload.get("ok") is not True:
+            return 2, _not_auditable_authority_review(workspace, audit_payload)
+        payload = audit_payload.get("workspace_validation")
+        authority = audit_payload.get("authority")
+        if not isinstance(payload, dict) or not isinstance(authority, dict):
+            raise ReviewError("portable authority audit omitted validated evidence")
     if status != 0 or payload.get("ok") is not True:
         review = _invalid_workspace_review(workspace, payload)
         classification = review["workspace_validation"]["classification"]
         return (2 if classification == "unsupported_legacy_workspace" else 1), review
-    return 0, _canonical_review(workspace, payload)
+    return 0, _canonical_review(workspace, payload, authority)
 
 
 def _markdown(review: dict[str, Any]) -> str:
@@ -499,33 +655,75 @@ def _markdown(review: dict[str, Any]) -> str:
     return "\n".join(lines) + "\n"
 
 
-def _publish(workspace: Path, review: dict[str, Any]) -> None:
-    json_tmp = workspace / ".review.json.tmp"
-    markdown_tmp = workspace / ".review.md.tmp"
+def _publish(output: Path, review: dict[str, Any]) -> None:
+    """Atomically publish review artifacts into the explicit output root."""
+
+    output.mkdir(parents=True, exist_ok=True)
+    json_tmp = output / ".review.json.tmp"
+    markdown_tmp = output / ".review.md.tmp"
     json_tmp.write_text(
         json.dumps(review, indent=2, sort_keys=True) + "\n",
         encoding="utf-8",
     )
     markdown_tmp.write_text(_markdown(review), encoding="utf-8")
-    json_tmp.replace(workspace / "review.json")
-    markdown_tmp.replace(workspace / "review.md")
+    json_tmp.replace(output / "review.json")
+    markdown_tmp.replace(output / "review.md")
 
 
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("workspace", type=Path)
+    parser.add_argument("--output", type=Path)
     parser.add_argument(
         "--workspace-helper",
         default=DEFAULT_WORKSPACE_HELPER,
+    )
+    parser.add_argument("--authority-helper", default=DEFAULT_AUTHORITY_HELPER)
+    parser.add_argument("--authority-timeout-seconds", type=float, default=120.0)
+    parser.add_argument("--authority-max-files", type=int, default=20_000)
+    parser.add_argument(
+        "--authority-max-bytes",
+        type=int,
+        default=5 * 1024 * 1024 * 1024,
     )
     return parser
 
 
 def main(argv: list[str] | None = None) -> int:
     args = _parser().parse_args(argv)
+    workspace = args.workspace.resolve()
+    live = (workspace / ".git").exists()
+    if not live and args.output is None:
+        print(
+            json.dumps(
+                {
+                    "ok": False,
+                    "error": "portable review requires an explicit separate --output",
+                }
+            )
+        )
+        return 1
+    output = args.output.resolve() if args.output is not None else workspace
+    if not live and (output == workspace or workspace in output.parents):
+        print(
+            json.dumps(
+                {
+                    "ok": False,
+                    "error": "portable review output must be outside the retained input",
+                }
+            )
+        )
+        return 1
     try:
-        status, review = review_workspace(args.workspace, args.workspace_helper)
-        _publish(args.workspace.resolve(), review)
+        status, review = review_workspace(
+            workspace,
+            args.workspace_helper,
+            authority_helper=args.authority_helper,
+            authority_timeout_seconds=args.authority_timeout_seconds,
+            authority_max_files=args.authority_max_files,
+            authority_max_bytes=args.authority_max_bytes,
+        )
+        _publish(output, review)
     except (OSError, ReviewError) as exc:
         print(json.dumps({"ok": False, "error": str(exc)}))
         return 1
@@ -535,8 +733,8 @@ def main(argv: list[str] | None = None) -> int:
                 "ok": status == 0,
                 "status": status,
                 "classification": review["workspace_validation"]["classification"],
-                "review_json": str(args.workspace / "review.json"),
-                "review_markdown": str(args.workspace / "review.md"),
+                "review_json": str(output / "review.json"),
+                "review_markdown": str(output / "review.md"),
             },
             separators=(",", ":"),
         )
