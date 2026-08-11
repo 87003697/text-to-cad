@@ -10,6 +10,7 @@ import hashlib
 import importlib.abc
 import importlib.machinery
 import importlib.metadata
+import importlib.util
 import json
 import os
 from pathlib import Path, PurePosixPath
@@ -67,32 +68,21 @@ class _DeclaredPythonModule:
         return self.root / self.relative_path
 
     def revalidate(self) -> None:
-        current = self.root
         try:
-            root_mode = current.lstat().st_mode
-            if not stat.S_ISDIR(root_mode) or stat.S_ISLNK(root_mode):
-                raise ImportError("declared Python helper changed after policy entry")
-            for index, part in enumerate(self.relative_path.parts):
-                current = current / part
-                info = current.lstat()
-                if stat.S_ISLNK(info.st_mode):
-                    raise ImportError("declared Python helper changed after policy entry")
-                if index < len(self.relative_path.parts) - 1:
-                    if not stat.S_ISDIR(info.st_mode):
-                        raise ImportError(
-                            "declared Python helper changed after policy entry"
-                        )
-                elif (
-                    not stat.S_ISREG(info.st_mode)
-                    or info.st_dev != self.device
-                    or info.st_ino != self.inode
-                    or current.read_bytes() != self.source_bytes
-                ):
-                    raise ImportError("declared Python helper changed after policy entry")
-        except OSError as exc:
+            source_bytes, info = _read_physical_file(
+                self.root,
+                self.relative_path,
+            )
+        except (OSError, ValueError) as exc:
             raise ImportError(
                 "declared Python helper changed after policy entry"
             ) from exc
+        if (
+            info.st_dev != self.device
+            or info.st_ino != self.inode
+            or source_bytes != self.source_bytes
+        ):
+            raise ImportError("declared Python helper changed after policy entry")
 
 
 class _DeclaredPythonModuleLoader(importlib.abc.Loader):
@@ -144,6 +134,10 @@ class _DeclaredPythonModuleFinder(importlib.abc.MetaPathFinder):
 _ACTIVE_SOURCE_POLICY: ContextVar[_SourceExecutionPolicy | None] = ContextVar(
     "cadpy_canonical_build_source_policy",
     default=None,
+)
+_INTERNAL_PHYSICAL_READ: ContextVar[bool] = ContextVar(
+    "cadpy_canonical_build_internal_physical_read",
+    default=False,
 )
 _AUDIT_HOOK_INSTALLED = False
 _SEMANTIC_UNIT_IDENTIFIER = re.compile(
@@ -276,7 +270,7 @@ def _is_within(path: Path, root: Path) -> bool:
 
 def _canonical_build_audit_hook(event: str, args: tuple[object, ...]) -> None:
     policy = _ACTIVE_SOURCE_POLICY.get()
-    if policy is None:
+    if policy is None or _INTERNAL_PHYSICAL_READ.get():
         return
     if event.startswith("socket."):
         raise RuntimeError("canonical build forbids network access during source execution")
@@ -334,11 +328,88 @@ def _install_audit_hook() -> None:
         _AUDIT_HOOK_INSTALLED = True
 
 
+def _read_physical_file(
+    root: Path,
+    relative_path: Path,
+) -> tuple[bytes, os.stat_result]:
+    if not relative_path.parts or any(
+        part in {"", ".", ".."} for part in relative_path.parts
+    ):
+        raise ValueError("declared Python source path is invalid")
+    if not hasattr(os, "O_NOFOLLOW") or not hasattr(os, "O_DIRECTORY"):
+        raise RuntimeError("canonical build requires no-follow file descriptors")
+    read_flags = os.O_RDONLY | os.O_NOFOLLOW
+    if hasattr(os, "O_CLOEXEC"):
+        read_flags |= os.O_CLOEXEC
+    directory_flags = read_flags | os.O_DIRECTORY
+    token = _INTERNAL_PHYSICAL_READ.set(True)
+    directory_fd = -1
+    file_fd = -1
+    try:
+        directory_fd = os.open(root, directory_flags)
+        for part in relative_path.parts[:-1]:
+            next_fd = os.open(part, directory_flags, dir_fd=directory_fd)
+            os.close(directory_fd)
+            directory_fd = next_fd
+        file_fd = os.open(
+            relative_path.parts[-1],
+            read_flags,
+            dir_fd=directory_fd,
+        )
+        before = os.fstat(file_fd)
+        if not stat.S_ISREG(before.st_mode):
+            raise ValueError("declared Python source must be a regular file")
+        chunks: list[bytes] = []
+        while chunk := os.read(file_fd, 1024 * 1024):
+            chunks.append(chunk)
+        after = os.fstat(file_fd)
+        stable_fields = (
+            "st_dev",
+            "st_ino",
+            "st_size",
+            "st_mtime_ns",
+            "st_ctime_ns",
+        )
+        if any(getattr(before, field) != getattr(after, field) for field in stable_fields):
+            raise ValueError("declared Python source changed while being frozen")
+        source_bytes = b"".join(chunks)
+        if len(source_bytes) != after.st_size:
+            raise ValueError("declared Python source changed while being frozen")
+        return source_bytes, after
+    finally:
+        if file_fd >= 0:
+            os.close(file_fd)
+        if directory_fd >= 0:
+            os.close(directory_fd)
+        _INTERNAL_PHYSICAL_READ.reset(token)
+
+
+def _freeze_declared_python_source(
+    *,
+    root: Path,
+    path: Path,
+) -> _DeclaredPythonModule:
+    try:
+        relative_path = path.relative_to(root)
+        source_bytes, info = _read_physical_file(root, relative_path)
+    except (OSError, ValueError) as exc:
+        raise ValueError("declared Python source is unavailable or unsafe") from exc
+    return _DeclaredPythonModule(
+        name=path.stem,
+        root=root,
+        relative_path=relative_path,
+        source_bytes=source_bytes,
+        device=info.st_dev,
+        inode=info.st_ino,
+    )
+
+
 def _declared_python_module_finder(
     *,
     root: Path,
     source_path: Path,
     declared_inputs: frozenset[Path],
+    frozen_sources: dict[Path, _DeclaredPythonModule],
 ) -> _DeclaredPythonModuleFinder:
     modules: dict[str, _DeclaredPythonModule] = {}
     for path in sorted(declared_inputs):
@@ -347,28 +418,35 @@ def _declared_python_module_finder(
         name = path.stem
         if not name.isidentifier() or name in modules:
             raise ValueError("declared Python helper module name is invalid or ambiguous")
-        try:
-            info_before = path.lstat()
-            source_bytes = path.read_bytes()
-            info_after = path.lstat()
-        except OSError as exc:
-            raise ValueError("declared Python helper is unavailable") from exc
-        if (
-            stat.S_ISLNK(info_before.st_mode)
-            or not stat.S_ISREG(info_before.st_mode)
-            or (info_before.st_dev, info_before.st_ino)
-            != (info_after.st_dev, info_after.st_ino)
-        ):
-            raise ValueError("declared Python helper must be one stable physical file")
-        modules[name] = _DeclaredPythonModule(
-            name=name,
-            root=root,
-            relative_path=path.relative_to(root),
-            source_bytes=source_bytes,
-            device=info_after.st_dev,
-            inode=info_after.st_ino,
-        )
+        modules[name] = frozen_sources[path]
     return _DeclaredPythonModuleFinder(modules)
+
+
+@contextmanager
+def _frozen_primary_source_loader(source: _DeclaredPythonModule):
+    original_spec_from_file_location = importlib.util.spec_from_file_location
+
+    def frozen_spec_from_file_location(
+        name: str,
+        location: str | bytes | os.PathLike[str] | os.PathLike[bytes],
+        *args: object,
+        **kwargs: object,
+    ) -> importlib.machinery.ModuleSpec | None:
+        location_path = Path(os.path.abspath(os.fsdecode(location)))
+        if location_path == source.path:
+            source.revalidate()
+            return importlib.machinery.ModuleSpec(
+                name,
+                _DeclaredPythonModuleLoader(source),
+                origin=os.fspath(source.path),
+            )
+        return original_spec_from_file_location(name, location, *args, **kwargs)
+
+    importlib.util.spec_from_file_location = frozen_spec_from_file_location
+    try:
+        yield
+    finally:
+        importlib.util.spec_from_file_location = original_spec_from_file_location
 
 
 @contextmanager
@@ -377,6 +455,7 @@ def _source_execution_policy(
     root: Path,
     source_path: Path,
     declared_inputs: set[Path],
+    frozen_sources: dict[Path, _DeclaredPythonModule],
     output_dir: Path,
 ):
     _install_audit_hook()
@@ -386,6 +465,7 @@ def _source_execution_policy(
         root=root,
         source_path=source_path.resolve(),
         declared_inputs=resolved_inputs,
+        frozen_sources=frozen_sources,
     )
     shadowed_modules = {
         name: sys.modules.pop(name)
@@ -490,10 +570,11 @@ def _profile() -> dict[str, Any]:
     return {**payload, "digest": _json_digest(payload)}
 
 
-def _validate_unitless_source_parameters(source_path: Path) -> None:
+def _validate_unitless_source_parameters(source: _DeclaredPythonModule) -> None:
     try:
-        tree = ast.parse(source_path.read_text(encoding="utf-8"), filename=source_path.name)
-    except SyntaxError as exc:
+        source_text = source.source_bytes.decode("utf-8")
+        tree = ast.parse(source_text, filename=source.relative_path.as_posix())
+    except (SyntaxError, UnicodeDecodeError) as exc:
         raise ValueError("--source must contain valid Python") from exc
     identifiers = {
         node.id
@@ -728,7 +809,6 @@ def build(*, root: Path, source: str, output_dir: str, inputs: list[str] | None 
     source_path, source_relative = _relative_path(source, root=root, label="--source", must_exist=True)
     if source_path.suffix.lower() != ".py":
         raise ValueError("--source must name a Python gen_step() source")
-    _validate_unitless_source_parameters(source_path)
     output_path, output_relative = _relative_path(output_dir, root=root, label="--output-dir")
     if output_path == root or source_path == output_path or output_path in source_path.parents:
         raise ValueError("--output-dir must be separate from the declared source")
@@ -744,12 +824,20 @@ def build(*, root: Path, source: str, output_dir: str, inputs: list[str] | None 
             raise ValueError("--input paths must be unique and must not repeat --source")
         if _is_within(input_path, output_path):
             raise ValueError("--input must not be inside --output-dir")
-        if input_path.suffix.lower() == ".py":
-            _validate_unitless_source_parameters(input_path)
         declared_inputs.append((input_path, input_relative))
         seen_inputs.add(input_path)
 
+    frozen_sources = {
+        path: _freeze_declared_python_source(root=root, path=path)
+        for path, _relative in declared_inputs
+        if path.suffix.lower() == ".py"
+    }
+    for frozen_source in frozen_sources.values():
+        _validate_unitless_source_parameters(frozen_source)
+
     source_info = source_from_path(source_path)
+    frozen_primary_source = frozen_sources[source_path]
+    frozen_primary_source.revalidate()
     if source_info is None:
         raise RuntimeError("--source must define a supported gen_step() entrypoint")
     step_path = output_path / OUTPUT_FILES["primary"]
@@ -771,8 +859,9 @@ def build(*, root: Path, source: str, output_dir: str, inputs: list[str] | None 
         root=root,
         source_path=source_path,
         declared_inputs={path for path, _relative in declared_inputs},
+        frozen_sources=frozen_sources,
         output_dir=output_path,
-    ):
+    ), _frozen_primary_source_loader(frozen_primary_source):
         generated_scene = run_script_generator(
             spec,
             "gen_step",
@@ -782,7 +871,9 @@ def build(*, root: Path, source: str, output_dir: str, inputs: list[str] | None 
         )
     if generated_scene is None or generated_scene.doc is None:
         raise RuntimeError("canonical CAD source did not produce an exportable XCAF scene")
-    source_digest = _sha256(source_path)
+    for frozen_source in frozen_sources.values():
+        frozen_source.revalidate()
+    source_digest = hashlib.sha256(frozen_primary_source.source_bytes).hexdigest()
     write_xcaf_doc_step_file(
         generated_scene.doc,
         step_path,
@@ -817,7 +908,11 @@ def build(*, root: Path, source: str, output_dir: str, inputs: list[str] | None 
             "id": "source" if index == 0 else f"input-{index}",
             "role": "canonical-cad-source" if index == 0 else "declared-source-input",
             "path": relative,
-            "sha256": _sha256(path),
+            "sha256": (
+                hashlib.sha256(frozen_sources[path].source_bytes).hexdigest()
+                if path in frozen_sources
+                else _sha256(path)
+            ),
         }
         for index, (path, relative) in enumerate(declared_inputs)
     ]
@@ -841,12 +936,17 @@ def build(*, root: Path, source: str, output_dir: str, inputs: list[str] | None 
 
     files = [
         *[
-            _file_record(
-                file_id=f"input:{declared_input['id']}",
-                role=declared_input["role"],
-                path=declared_input["path"],
-                resolved_path=path,
-            )
+            {
+                "id": f"input:{declared_input['id']}",
+                "role": declared_input["role"],
+                "path": declared_input["path"],
+                "sha256": declared_input["sha256"],
+                "bytes": (
+                    len(frozen_sources[path].source_bytes)
+                    if path in frozen_sources
+                    else path.stat().st_size
+                ),
+            }
             for declared_input, (path, _relative) in zip(recipe_inputs, declared_inputs, strict=True)
         ],
         _file_record(file_id="artifact:primary", role="primary-step", path=OUTPUT_FILES["primary"], resolved_path=step_path),

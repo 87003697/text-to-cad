@@ -129,6 +129,68 @@ def _run_adapter_with_post_policy_mutation(
     )
 
 
+def _run_adapter_with_pre_snapshot_replacement(
+    root: Path,
+) -> subprocess.CompletedProcess[str]:
+    source = _write_canonical_source(
+        root,
+        body=(
+            "from helper import make_shape\n"
+            "def gen_step():\n"
+            "    return make_shape()\n"
+        ),
+    )
+    helper = source.parent / "helper.py"
+    helper.write_text(
+        "from build123d import Box\n"
+        "def make_shape():\n"
+        "    return Box(0.4, 0.2, 0.1)\n",
+        encoding="utf-8",
+    )
+    hook = root / "hook"
+    hook.mkdir()
+    (hook / "sitecustomize.py").write_text(
+        "from pathlib import Path\n"
+        "from cadpy import canonical_build\n"
+        "_original = canonical_build._declared_python_module_finder\n"
+        "def _replace_before_snapshot(*args, **kwargs):\n"
+        "    helper = Path(kwargs['root']) / 'source/helper.py'\n"
+        "    replacement = helper.with_name('replacement.py')\n"
+        "    replacement.write_text(\n"
+        "        'from build123d import Box\\n'\n"
+        "        'def make_shape():\\n'\n"
+        "        '    length_mm = 0.8\\n'\n"
+        "        '    return Box(length_mm, 0.2, 0.1)\\n',\n"
+        "        encoding='utf-8',\n"
+        "    )\n"
+        "    replacement.replace(helper)\n"
+        "    return _original(*args, **kwargs)\n"
+        "canonical_build._declared_python_module_finder = _replace_before_snapshot\n",
+        encoding="utf-8",
+    )
+    environment = dict(os.environ)
+    environment["PYTHONPATH"] = os.pathsep.join((str(hook), str(CADPY_SRC)))
+    return subprocess.run(
+        [
+            sys.executable,
+            str(ADAPTER),
+            "build",
+            "--source",
+            "source/model.py",
+            "--input",
+            "source/helper.py",
+            "--output-dir",
+            "candidate",
+        ],
+        cwd=root,
+        env=environment,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        check=False,
+    )
+
+
 def _read_glb_json(path: Path) -> dict[str, object]:
     payload = path.read_bytes()
     magic, version, _length = struct.unpack_from("<III", payload, 0)
@@ -600,6 +662,15 @@ class CanonicalBuildAdapterTests(unittest.TestCase):
 
             self.assertNotEqual(0, result.returncode)
             self.assertIn("declared Python helper changed", result.stderr)
+            self.assertFalse((root / "candidate/measurement.glb").exists())
+            self.assertFalse((root / "candidate/build.json").exists())
+
+    def test_declared_helper_replacement_before_snapshot_fails_closed(self) -> None:
+        with temporary_directory(prefix="cad-canonical-import-presnapshot-") as temp_dir:
+            root = Path(temp_dir)
+            result = _run_adapter_with_pre_snapshot_replacement(root)
+
+            self.assertNotEqual(0, result.returncode)
             self.assertFalse((root / "candidate/measurement.glb").exists())
             self.assertFalse((root / "candidate/build.json").exists())
 
