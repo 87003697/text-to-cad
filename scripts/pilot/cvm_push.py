@@ -140,15 +140,20 @@ class PushError(RuntimeError):
 def _viewer_source_transfer_filters() -> tuple[str, ...]:
     """Include only Viewer sources named by the runtime identity contract."""
 
+    raw_sources = tuple(source for _, source, _ in VIEWER_ARTIFACT_ROUTES)
+    if not all(isinstance(source, str) for source in raw_sources):
+        raise PushError("Viewer artifact source routes are invalid", 4)
     sources = tuple(
-        PurePosixPath(source) for _, source, _ in VIEWER_ARTIFACT_ROUTES
+        PurePosixPath(source) for source in raw_sources
     )
     if len(set(sources)) != len(sources) or any(
-        source.is_absolute()
+        raw != source.as_posix()
+        or any(character in raw for character in "*?[\\")
+        or source.is_absolute()
         or not source.parts
         or source.parts[0] != "viewer"
         or any(part in {"", ".", ".."} for part in source.parts)
-        for source in sources
+        for raw, source in zip(raw_sources, sources, strict=True)
     ):
         raise PushError("Viewer artifact source routes are invalid", 4)
     directories = {

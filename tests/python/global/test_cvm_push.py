@@ -1300,6 +1300,58 @@ class TransferAndVerifyTests(unittest.TestCase):
                 sorted(source for _, source, _ in routes),
             )
 
+    def test_transfer_rejects_nonliteral_source_routes_before_stream(self) -> None:
+        with tempfile.TemporaryDirectory() as root_text:
+            root = Path(root_text)
+            repo = create_repo(root)
+            stage = root / "stage"
+            literal = stage / "viewer/src/client/*.jsx"
+            literal.parent.mkdir(parents=True)
+            literal.write_text("literal\n", encoding="utf-8")
+            (literal.parent / "unrelated.jsx").write_text(
+                "unrelated\n",
+                encoding="utf-8",
+            )
+            invalid_sources = (
+                "viewer/src/client/*.jsx",
+                "viewer/src/client/file?.jsx",
+                "viewer/src/client/[file].jsx",
+                "viewer/src/client\\main.jsx",
+                "viewer/src/client//main.jsx",
+                "viewer/src/../client/main.jsx",
+                "/viewer/src/client/main.jsx",
+                "packages/viewer/main.jsx",
+                cvm_push.VIEWER_ARTIFACT_ROUTES[1][1],
+            )
+            for invalid_source in invalid_sources:
+                with self.subTest(source=invalid_source):
+                    routes = (
+                        (
+                            "launcher",
+                            invalid_source,
+                            "skills/cad-viewer/scripts/viewer/"
+                            "scripts/start-agent-viewer.mjs",
+                        ),
+                        *cvm_push.VIEWER_ARTIFACT_ROUTES[1:],
+                    )
+                    runner = FakeRunner()
+                    workflow = cvm_push.CvmPush(
+                        runner,
+                        repo_root=repo,
+                        environ={},
+                    )
+
+                    with mock.patch.object(
+                        cvm_push,
+                        "VIEWER_ARTIFACT_ROUTES",
+                        routes,
+                    ):
+                        with self.assertRaises(cvm_push.PushError) as error:
+                            workflow.transfer_stage(stage)
+
+                    self.assertEqual(error.exception.status, 4)
+                    self.assertEqual(runner.streams, [])
+
     def test_remote_verification_uses_full_contract_and_exact_hashes(self) -> None:
         with tempfile.TemporaryDirectory() as root_text:
             stage = Path(root_text)
