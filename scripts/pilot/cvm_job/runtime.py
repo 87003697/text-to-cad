@@ -255,10 +255,8 @@ def provider_free_sandbox_argv(
             os.fspath(PROVIDER_FREE_SANDBOX_REPO_ROOT),
             "--",
             os.fspath(PROVIDER_FREE_SANDBOX_REPO_ROOT / ".venv/bin/python"),
-            os.fspath(
-                PROVIDER_FREE_SANDBOX_REPO_ROOT
-                / "scripts/pilot/provider_free_scenarios.py"
-            ),
+            "-m",
+            "scripts.pilot.provider_free_scenarios",
             "run",
             scenario_name,
             "--workspace",

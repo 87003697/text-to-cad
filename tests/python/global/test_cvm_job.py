@@ -14,9 +14,10 @@ from datetime import datetime, timezone
 from pathlib import Path
 from unittest import mock
 
+from scripts.pilot import deployment_authority
+from scripts.pilot import provider_free_runner
 from scripts.pilot.cvm_job import __main__ as cvm_job_cli
 from scripts.pilot.cvm_job import protocol, runtime
-from scripts.pilot import deployment_authority
 from tests.python.support.paths import REPO_ROOT
 from tests.python.support.tmp_root import temporary_directory
 
@@ -669,6 +670,115 @@ class CvmJobTests(unittest.TestCase):
             self.assertEqual(result["process_exit_code"], 1)
             self.assertEqual(result["runner_final_status"], 1)
         self.assertEqual(exit_code, 1)
+
+    def test_real_runner_startup_projects_manifest_bound_scenario_failure(
+        self,
+    ) -> None:
+        """Exercise the isolated module launch through the public supervisor seam."""
+
+        for relative in (
+            "scripts/pilot/provider_free_scenarios.py",
+            "scripts/pilot/cvm_job/__init__.py",
+            "scripts/pilot/cvm_job/protocol.py",
+        ):
+            destination = self.repo_root / relative
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(REPO_ROOT / relative, destination)
+        deployed = json.loads(
+            (self.repo_root / deployment_authority.RECEIPT_PATH).read_bytes()
+        )
+        deployment_authority.write_receipt(
+            self.repo_root,
+            source_head=deployed["source_head"],
+            runtime_identity=deployed["runtime_identity"],
+        )
+        handle = runtime.submit_provider_free(
+            "issue15-runtime-authority",
+            self.group,
+            state_root=self.state_root,
+            detach=lambda *args: 1234,
+        )["job"]
+        real_run = subprocess.run
+
+        def execute_sandbox(argv, **kwargs):
+            if "--" not in argv:
+                return real_run(argv, **kwargs)
+            command = list(argv)[list(argv).index("--") + 1 :]
+            command = [
+                value.replace("/workspace/repo", os.fspath(self.repo_root), 1)
+                if value.startswith("/workspace/repo")
+                else value
+                for value in command
+            ]
+            command[0] = sys.executable
+            return real_run(
+                command,
+                cwd=self.repo_root,
+                env=kwargs["env"],
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+            )
+
+        def run_real_runner(*_args, **kwargs):
+            state = protocol.load_state(self.state_root, handle)
+            with (
+                mock.patch.object(
+                    provider_free_runner,
+                    "REPO_ROOT",
+                    self.repo_root,
+                ),
+                mock.patch.object(
+                    provider_free_runner,
+                    "_trusted_runtime",
+                    return_value=state["request_authority"]["runtime_identity"],
+                ),
+                mock.patch.object(
+                    provider_free_runner.subprocess,
+                    "run",
+                    side_effect=execute_sandbox,
+                ),
+            ):
+                status = provider_free_runner.main(
+                    [
+                        "run",
+                        "issue15-runtime-authority",
+                        state["group"],
+                        state["exp"],
+                    ],
+                    environ=kwargs["env"],
+                )
+            return status, 4321
+
+        with mock.patch.object(
+            runtime,
+            "_run_with_heartbeat",
+            side_effect=run_real_runner,
+        ):
+            state = runtime.supervise_provider_free(
+                handle,
+                state_root=self.state_root,
+                environ={"PATH": os.environ["PATH"]},
+            )
+
+        expected = {
+            "schema": "cvm.provider-free-scenario-failure/1",
+            "scenario_identity": "issue15.provider-free.runtime-authority/1",
+            "stage": "viewer_deployment",
+        }
+        self.assertEqual(state["state"], "failed")
+        self.assertEqual(state["process_exit_code"], 1)
+        self.assertEqual(state["runner_final_status"], 1)
+        self.assertEqual(state["scenario_failure"], expected)
+        manifest = json.loads(
+            (
+                self.repo_root / "outputs" / handle / "artifact_manifest.json"
+            ).read_text(encoding="utf-8")
+        )
+        self.assertIn(
+            "run/scenario-failure.json",
+            {entry["path"] for entry in manifest["files"]},
+        )
 
     def test_provider_free_failure_rejects_unknown_terminal_manifest_schema(
         self,
