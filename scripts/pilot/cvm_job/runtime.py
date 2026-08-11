@@ -937,6 +937,8 @@ def _provider_free_bootstrap_diagnostic(
         classification = "runner-completed-without-artifact-manifest"
     elif process_status < 0:
         classification = "runner-terminated-before-artifact-manifest"
+    elif output_exists:
+        classification = "runner-exited-before-artifact-manifest"
     else:
         classification = "runner-exited-before-artifact-manifest"
         diagnostic_tail_truncated = False

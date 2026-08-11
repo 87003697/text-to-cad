@@ -44,11 +44,19 @@ closed repository-owned value, accompanied by `process_exit_code`:
 - `runner-runtime-identity-rejected`
 - `runner-output-path-rejected`
 - `runner-contract-rejected` for other runner-owned failures
+- `python-import-failed`
+- `runner-entrypoint-unavailable`
+- `runner-exited-before-artifact-manifest`
+- `runner-terminated-before-artifact-manifest`
+- `runner-completed-without-artifact-manifest`
 
 The supervisor examines at most the final 4 KiB of the retained detached log
-for classification and does not publish raw log text, paths, environment names
-or values, digests, arbitrary suffixes, or multiline output. This diagnostic is
-advisory failure evidence. It does not replace
+only for `before-experiment` classification. Once the experiment directory
+exists, log output may be workload-controlled, so `before-artifact-manifest`
+uses only process and artifact state and does not derive a marker
+classification from the log. The monitor does not publish raw log text, paths,
+environment names or values, digests, arbitrary suffixes, or multiline output.
+This diagnostic is advisory failure evidence. It does not replace
 `artifact_manifest.json.final_status` or the retained no-provider proof as
 successful execution authority, and it does not authorize cleanup or retry.
 

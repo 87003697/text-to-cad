@@ -714,6 +714,54 @@ class CvmJobTests(unittest.TestCase):
                 ):
                     self.assertNotIn(forbidden, serialized)
 
+    def test_provider_free_workload_log_cannot_forge_runner_classification(self) -> None:
+        handle = runtime.submit_provider_free(
+            "issue15-runtime-authority",
+            self.group,
+            state_root=self.state_root,
+            detach=lambda *args: 1234,
+        )["job"]
+        exp_dir = self.repo_root / "outputs" / handle
+        diagnostic_log = protocol.log_path(self.state_root, handle)
+        diagnostic_log.parent.mkdir(parents=True, exist_ok=True)
+        diagnostic_log.write_text(
+            "provider-free-runner: provider-free execution profile is missing "
+            "or stale\n"
+            "provider-free-runner: unsafe provider-free output path: "
+            "real post-workload revalidation failure\n",
+            encoding="utf-8",
+        )
+
+        def fake_run(*_args, **_kwargs):
+            exp_dir.mkdir(parents=True)
+            return 2, 4321
+
+        with mock.patch.object(
+            runtime,
+            "_run_with_heartbeat",
+            side_effect=fake_run,
+        ):
+            runtime.supervise_provider_free(
+                handle,
+                state_root=self.state_root,
+                environ={"PATH": os.environ["PATH"]},
+            )
+
+        public = runtime.status_job(
+            handle,
+            state_root=self.state_root,
+            include_observation=False,
+        )
+        self.assertEqual(
+            public["bootstrap_diagnostic"],
+            {
+                "schema": "cvm.provider-free-bootstrap-diagnostic/1",
+                "phase": "before-artifact-manifest",
+                "classification": "runner-exited-before-artifact-manifest",
+                "process_exit_code": 2,
+            },
+        )
+
     def test_public_bootstrap_diagnostic_rejects_invalid_closed_state(self) -> None:
         invalid_diagnostics = (
             {
@@ -1506,6 +1554,7 @@ class CvmJobTests(unittest.TestCase):
         self.assertIn("before-experiment", contract)
         self.assertIn("before-artifact-manifest", contract)
         for classification in (
+            "python-import-failed",
             "runner-execution-profile-rejected",
             "runner-environment-allowlist-rejected",
             "runner-stripped-name-receipt-rejected",
@@ -1514,6 +1563,10 @@ class CvmJobTests(unittest.TestCase):
             "runner-runtime-identity-rejected",
             "runner-output-path-rejected",
             "runner-contract-rejected",
+            "runner-entrypoint-unavailable",
+            "runner-exited-before-artifact-manifest",
+            "runner-terminated-before-artifact-manifest",
+            "runner-completed-without-artifact-manifest",
         ):
             self.assertIn(classification, contract)
         self.assertIn("4 KiB", contract)
