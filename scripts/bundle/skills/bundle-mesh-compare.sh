@@ -64,7 +64,8 @@ done
 if [ "$PRINT_OUTPUTS" -eq 1 ]; then
   printf '%s\n' \
     "${MESHSCOPE_RUNTIME_DIR#"$REPO_ROOT"/}" \
-    "${MESHSHOT_RUNTIME_DIR#"$REPO_ROOT"/}"
+    "${MESHSHOT_RUNTIME_DIR#"$REPO_ROOT"/}" \
+    "${MESHSHOT_BROWSER_RUNTIME_DIR#"$REPO_ROOT"/}"
   exit 0
 fi
 

@@ -37,6 +37,7 @@ class CadRuntimeBundleTests(unittest.TestCase):
         outputs = set(result.stdout.splitlines())
         self.assertIn("skills/cad-viewer/scripts/viewer", outputs)
         self.assertIn("skills/cad/scripts/snapshot/runtime", outputs)
+        self.assertIn("packages/meshshot/src/meshshot/runtime", outputs)
         self.assertIn("plugins/cad/skills", outputs)
 
     def test_implicit_runtime_dependency_copy_is_complete_and_replaces_stale_data(
