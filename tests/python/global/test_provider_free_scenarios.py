@@ -3,10 +3,12 @@ from __future__ import annotations
 import hashlib
 import io
 import json
-from pathlib import Path
+import shutil
 import sys
 import tempfile
 import unittest
+from pathlib import Path
+from typing import Callable
 from unittest import mock
 
 from scripts.pilot import provider_free_scenarios
@@ -234,8 +236,6 @@ class ProviderFreeScenarioEvidenceTests(unittest.TestCase):
         exception_type: type[Exception],
     ) -> None:
         if workspace.exists():
-            import shutil
-
             shutil.rmtree(workspace)
         workspace.mkdir(parents=True)
         defaults = {
@@ -328,6 +328,106 @@ class ProviderFreeScenarioEvidenceTests(unittest.TestCase):
                 self.assertFalse(
                     (workspace / "run/scenario-failure.json").exists()
                 )
+
+    def test_final_payload_assembly_failure_is_closed_finalization(self) -> None:
+        dangerous = "OPENAI_API_KEY=payload-secret\n../../payload/path"
+
+        class ExplodingFinal(dict):
+            def __getitem__(self, _key: object) -> object:
+                raise PermissionError(dangerous)
+
+        status, stderr, receipt = self._run_final_publication_failure(
+            self.repo / "outputs/group/final-payload",
+            finalized=ExplodingFinal(),
+        )
+
+        self.assertEqual(status, 1)
+        self.assertEqual(receipt["stage"], "finalization")
+        self.assertNotIn(dangerous, stderr)
+        self.assertNotIn("payload-secret", json.dumps(receipt))
+
+    def test_success_receipt_write_failure_is_closed_finalization(self) -> None:
+        workspace = self.repo / "outputs/group/final-publication"
+        dangerous = "OPENAI_API_KEY=write-secret\n../../write/path"
+        real_write = provider_free_scenarios._write_json
+
+        def fail_success_receipt(path: Path, payload: object) -> None:
+            if path.name == "runtime-authority-smoke.json":
+                raise PermissionError(dangerous)
+            real_write(path, payload)
+
+        status, stderr, receipt = self._run_final_publication_failure(
+            workspace,
+            finalized={"final": {}},
+            write_json_side_effect=fail_success_receipt,
+        )
+
+        self.assertEqual(status, 1)
+        self.assertEqual(receipt["stage"], "finalization")
+        self.assertFalse(
+            (workspace / "run/runtime-authority-smoke.json").exists()
+        )
+        self.assertNotIn(dangerous, stderr)
+        self.assertNotIn("write-secret", json.dumps(receipt))
+
+    def _run_final_publication_failure(
+        self,
+        workspace: Path,
+        *,
+        finalized: object,
+        write_json_side_effect: Callable[[Path, object], None] | None = None,
+    ) -> tuple[int, str, dict[str, object]]:
+        if workspace.exists():
+            shutil.rmtree(workspace)
+        workspace.mkdir(parents=True)
+        defaults = {
+            "deployed_viewer_receipt": {"viewer_version": "test"},
+            "deployed_runtime_tree_receipt": {"files": []},
+            "cadpy_runtime_evidence": {"schema": "cadpy"},
+            "viewer_fallback_evidence": {"action": "start"},
+            "_prepare_candidate": workspace / "candidate",
+            "_prepare_workspace": None,
+            "_publish_measured_step": {"depths": list(range(1, 9))},
+            "_finalize_workspace": finalized,
+        }
+        patchers = [
+            mock.patch.object(
+                provider_free_scenarios,
+                helper,
+                return_value=value,
+            )
+            for helper, value in defaults.items()
+        ]
+        if write_json_side_effect is not None:
+            patchers.append(
+                mock.patch.object(
+                    provider_free_scenarios,
+                    "_write_json",
+                    side_effect=write_json_side_effect,
+                )
+            )
+        for patcher in patchers:
+            patcher.start()
+        try:
+            with mock.patch("sys.stderr", new_callable=io.StringIO) as stderr:
+                status = provider_free_scenarios.main(
+                    [
+                        "run",
+                        "issue15-runtime-authority",
+                        "--workspace",
+                        str(workspace),
+                    ]
+                )
+                stderr_text = stderr.getvalue()
+        finally:
+            for patcher in reversed(patchers):
+                patcher.stop()
+        receipt = json.loads(
+            (workspace / "run/scenario-failure.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        return status, stderr_text, receipt
 
 
 if __name__ == "__main__":

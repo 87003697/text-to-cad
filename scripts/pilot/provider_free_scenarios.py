@@ -717,6 +717,38 @@ def _finalize_workspace(workspace: Path, command_log: Path) -> dict[str, Any]:
     )
 
 
+def _finalize_and_publish_runtime_authority(
+    workspace: Path,
+    command_log: Path,
+    *,
+    deployment: object,
+    tree: object,
+    cadpy_runtime: object,
+    fallback: object,
+    native: object,
+) -> dict[str, Any]:
+    """Finalize the Workspace and atomically publish the success receipt."""
+
+    finalized = _finalize_workspace(workspace, command_log)
+    receipt = {
+        "schema": "issue15.runtime-authority-smoke/1",
+        "scenario_identity": SCENARIO_IDENTITY,
+        "workspace": {
+            "path": ".",
+            "schema": "mesh-to-cad.workspace/1",
+            "final_delivery": finalized["final"],
+        },
+        "viewer_deployment": deployment,
+        "viewer_fallback": fallback,
+        "native_depth_eight": native,
+        "cadpy_runtime": cadpy_runtime,
+        "shipped_tree": tree,
+        "commands": "run/provider-free-commands.jsonl",
+    }
+    _write_json(workspace / "run" / "runtime-authority-smoke.json", receipt)
+    return receipt
+
+
 def run_issue15_runtime_authority(workspace: Path) -> dict[str, Any]:
     command_log = workspace / "run/provider-free-commands.jsonl"
     deployment = _run_stage(
@@ -744,26 +776,17 @@ def run_issue15_runtime_authority(workspace: Path) -> dict[str, Any]:
         candidate,
         command_log,
     )
-    finalized = _run_stage(
-        "finalization", _finalize_workspace, workspace, command_log
+    return _run_stage(
+        "finalization",
+        _finalize_and_publish_runtime_authority,
+        workspace,
+        command_log,
+        deployment=deployment,
+        tree=tree,
+        cadpy_runtime=cadpy_runtime,
+        fallback=fallback,
+        native=native,
     )
-    receipt = {
-        "schema": "issue15.runtime-authority-smoke/1",
-        "scenario_identity": SCENARIO_IDENTITY,
-        "workspace": {
-            "path": ".",
-            "schema": "mesh-to-cad.workspace/1",
-            "final_delivery": finalized["final"],
-        },
-        "viewer_deployment": deployment,
-        "viewer_fallback": fallback,
-        "native_depth_eight": native,
-        "cadpy_runtime": cadpy_runtime,
-        "shipped_tree": tree,
-        "commands": "run/provider-free-commands.jsonl",
-    }
-    _write_json(workspace / "run" / "runtime-authority-smoke.json", receipt)
-    return receipt
 
 
 def main(argv: list[str] | None = None) -> int:
