@@ -281,7 +281,7 @@ if [ "$CHECK" -eq 1 ]; then
     fi
     echo "Canonical release version is incremented from $CHECK_INCREMENTED_FROM: $base_version -> $current_version"
   else
-    echo "Canonical release version is valid: $current_version"
+    echo "Canonical release version is valid at $VERSION_PATH: $current_version"
   fi
   exit 0
 fi

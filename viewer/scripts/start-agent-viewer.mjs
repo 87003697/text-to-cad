@@ -22,6 +22,8 @@ const defaultAgentHost = "127.0.0.1";
 const defaultPortScanLimit = 64;
 const probeTimeoutMs = 350;
 const activationTimeoutMs = 30_000;
+const startupTimeoutMs = 30_000;
+const startupPollIntervalMs = 50;
 const directoryActivationFeature = "directory-activation";
 
 function requiredValue(argv, index, flag) {
@@ -230,6 +232,10 @@ export function replaceForwardedPort(argv = [], port = DEFAULT_VIEWER_PORT) {
     nextArgs.push("--port", String(normalizedPort));
   }
   return nextArgs;
+}
+
+export function disableForwardedPortFallback(argv = []) {
+  return [...argv, "--port-scan-limit", "0"];
 }
 
 export function isSymlinkPath(filePath) {
@@ -546,6 +552,34 @@ export async function probeAgentViewerPort({
   }
 }
 
+export async function waitForAgentViewerReady({
+  host = defaultAgentHost,
+  port = DEFAULT_VIEWER_PORT,
+  expectedPid,
+  fetchImpl = globalThis.fetch,
+  timeoutMs = startupTimeoutMs,
+  pollIntervalMs = startupPollIntervalMs,
+} = {}) {
+  const deadline = Date.now() + timeoutMs;
+  const requiredPid = Number(expectedPid);
+  while (true) {
+    const probe = await probeAgentViewerPort({ host, port, fetchImpl });
+    const readyPid = Number(probe.serverInfo?.pid);
+    if (probe.status === "viewer" && (
+      !Number.isInteger(requiredPid) || readyPid === requiredPid
+    )) {
+      return probe;
+    }
+    if (probe.status === "blocked") {
+      throw new Error(`CAD Viewer readiness probe was blocked for ${probe.baseUrl}; rerun agent:start with local network permission.`);
+    }
+    if (Date.now() >= deadline) {
+      throw new Error(`CAD Viewer did not become ready at ${normalizeBaseUrl(host, port)} within ${timeoutMs}ms.`);
+    }
+    await new Promise((resolve) => setTimeout(resolve, pollIntervalMs));
+  }
+}
+
 async function responseSnippet(response) {
   try {
     const text = await response.text();
@@ -721,7 +755,9 @@ export async function resolveAgentStartLaunch({
     command: buildAgentStartCommand({
       mode,
       packageRoot,
-      forwardedArgs: replaceForwardedPort(parsed.forwardedArgs, portResolution.port),
+      forwardedArgs: disableForwardedPortFallback(
+        replaceForwardedPort(parsed.forwardedArgs, portResolution.port)
+      ),
       env,
       nodePath,
       git,
@@ -729,12 +765,104 @@ export async function resolveAgentStartLaunch({
   };
 }
 
+function agentStartResult(launch) {
+  return {
+    url: launch.viewerUrl,
+    port: launch.port,
+    action: launch.action,
+  };
+}
+
+export async function executeAgentStartLaunch(launch, {
+  spawnImpl = spawn,
+  writeStdout = console.log,
+  writeStderr = console.error,
+  processImpl = process,
+  activateDirectory = activateAgentViewerDirectory,
+  fetchImpl = globalThis.fetch,
+  waitForReady = waitForAgentViewerReady,
+} = {}) {
+  if (launch.action === "reuse") {
+    await activateDirectory({
+      baseUrl: launch.baseUrl,
+      directory: launch.directory,
+      fetchImpl,
+    });
+    if (launch.jsonResult) {
+      writeStdout(JSON.stringify(agentStartResult(launch)));
+    } else {
+      writeStdout(`CAD Viewer already running at ${launch.viewerUrl}`);
+      writeStdout(`CAD Viewer URL: ${launch.viewerUrl}`);
+      writeStdout(`CAD Viewer git: ${launch.git || "none"}`);
+    }
+    return null;
+  }
+
+  const command = launch.command;
+  const child = spawnImpl(command.command, command.args, {
+    cwd: command.cwd,
+    env: command.env,
+    stdio: launch.jsonResult ? ["inherit", "ignore", "inherit"] : "inherit",
+  });
+  let childExited = false;
+  let startupFailed = false;
+
+  child.on("spawn", async () => {
+    if (launch.jsonResult) {
+      try {
+        await waitForReady({
+          host: launch.host,
+          port: launch.port,
+          fetchImpl,
+          expectedPid: child.pid,
+        });
+      } catch (error) {
+        if (childExited) {
+          return;
+        }
+        startupFailed = true;
+        writeStderr(`Failed to start CAD Viewer ${command.mode} server: ${error instanceof Error ? error.message : String(error)}`);
+        child.kill?.();
+        processImpl.exit(1);
+        return;
+      }
+      if (childExited || startupFailed) {
+        return;
+      }
+      writeStdout(JSON.stringify(agentStartResult(launch)));
+      return;
+    }
+    writeStdout(`Starting CAD Viewer ${command.mode} server at ${launch.viewerUrl}`);
+    writeStdout(`CAD Viewer URL: ${launch.viewerUrl}`);
+    writeStdout(`CAD Viewer git: ${launch.git || "none"}`);
+  });
+
+  child.on("exit", (code, signal) => {
+    childExited = true;
+    if (startupFailed) {
+      return;
+    }
+    if (signal) {
+      processImpl.kill(processImpl.pid, signal);
+      return;
+    }
+    processImpl.exit(code ?? 1);
+  });
+
+  child.on("error", (error) => {
+    childExited = true;
+    writeStderr(`Failed to start CAD Viewer ${command.mode} server: ${error.message}`);
+    processImpl.exit(1);
+  });
+
+  return child;
+}
+
 export async function runAgentStart(options = {}) {
   const rejectedReusePorts = new Set();
   const baseProbePort = options.probePort || probeAgentViewerPort;
-  let launch = null;
-  while (launch === null) {
-    const candidate = await resolveAgentStartLaunch({
+  while (true) {
+    const launch = await resolveAgentStartLaunch({
       ...options,
       probePort: async (target) => {
         if (rejectedReusePorts.has(Number(target.port))) {
@@ -747,63 +875,19 @@ export async function runAgentStart(options = {}) {
         return baseProbePort(target);
       },
     });
-    if (candidate.action !== "reuse") {
-      launch = candidate;
-      break;
-    }
     try {
-      await activateAgentViewerDirectory({
-        baseUrl: candidate.baseUrl,
-        directory: candidate.directory,
-        fetchImpl: options.fetchImpl,
-      });
+      return await executeAgentStartLaunch(launch, options);
     } catch (error) {
       if (
-        error?.code !== "CAD_VIEWER_DIRECTORY_ACTIVATION_REJECTED"
+        launch.action !== "reuse"
+        || error?.code !== "CAD_VIEWER_DIRECTORY_ACTIVATION_REJECTED"
         || error?.status !== 400
       ) {
         throw error;
       }
-      rejectedReusePorts.add(Number(candidate.port));
-      continue;
+      rejectedReusePorts.add(Number(launch.port));
     }
-    console.log(`CAD Viewer already running at ${candidate.viewerUrl}`);
-    console.log(`CAD Viewer URL: ${candidate.viewerUrl}`);
-    console.log(`CAD Viewer git: ${candidate.git || "none"}`);
-    if (candidate.jsonResult) {
-      console.log(JSON.stringify({ url: candidate.viewerUrl, port: candidate.port, action: "reuse" }));
-    }
-    return null;
   }
-
-  const command = launch.command;
-  console.log(`Starting CAD Viewer ${command.mode} server at ${launch.viewerUrl}`);
-  console.log(`CAD Viewer URL: ${launch.viewerUrl}`);
-  console.log(`CAD Viewer git: ${launch.git || "none"}`);
-  if (launch.jsonResult) {
-    console.log(JSON.stringify({ url: launch.viewerUrl, port: launch.port, action: "start" }));
-  }
-  const spawnImpl = options.spawnImpl || spawn;
-  const child = spawnImpl(command.command, command.args, {
-    cwd: command.cwd,
-    env: command.env,
-    stdio: "inherit",
-  });
-
-  child.on("exit", (code, signal) => {
-    if (signal) {
-      process.kill(process.pid, signal);
-      return;
-    }
-    process.exit(code ?? 1);
-  });
-
-  child.on("error", (error) => {
-    console.error(`Failed to start CAD Viewer ${command.mode} server: ${error.message}`);
-    process.exit(1);
-  });
-
-  return child;
 }
 
 const isMain = process.argv[1] && path.resolve(process.argv[1]) === scriptPath;

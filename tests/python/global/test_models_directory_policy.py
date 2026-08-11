@@ -1,0 +1,415 @@
+"""Policy checks for what may be committed under ``models/``.
+
+``models/README.md`` states the policy for humans; this module enforces the
+same list. The README coverage test keeps widening the policy deliberate.
+"""
+
+from __future__ import annotations
+
+import re
+import subprocess
+import unittest
+from pathlib import Path
+
+
+REPO_ROOT = Path(__file__).resolve().parents[3]
+MODELS_DIR = "models"
+MESH_FIXTURES_DIR = "models/mesh-fixtures"
+README_PATH = REPO_ROOT / MODELS_DIR / "README.md"
+GITIGNORE_PATH = REPO_ROOT / ".gitignore"
+SNAPSHOTIGNORE_PATH = REPO_ROOT / ".snapshotignore"
+
+# Sources and docs that stay readable in normal Git.
+TEXT_SUFFIXES = (
+    ".py",
+    ".md",
+    ".implicit.js",
+    ".implicit.mjs",
+    ".urdf",
+    ".srdf",
+    ".sdf",
+)
+
+# Generated CAD, mesh, and fabrication outputs kept in Git LFS. OBJ and PLY
+# are durable mesh-processing fixtures, but are restricted to MESH_FIXTURES_DIR.
+BINARY_SUFFIXES = (
+    ".step",
+    ".stp",
+    ".stl",
+    ".3mf",
+    ".glb",
+    ".dxf",
+    ".gcode",
+    ".obj",
+    ".ply",
+)
+MESH_FIXTURE_SUFFIXES = (".obj", ".ply")
+
+ALLOWED_SUFFIXES = TEXT_SUFFIXES + BINARY_SUFFIXES
+
+# Hidden files under models/ are CAD Viewer sidecars paired with a STEP file.
+HIDDEN_SIDECAR_SUFFIXES = (".step.glb", ".stp.glb", ".step.js")
+STEP_SUFFIXES = (".step", ".stp")
+LFS_POINTER_PATTERN = re.compile(
+    rb"\Aversion https://git-lfs.github.com/spec/v1\n"
+    rb"oid sha256:[0-9a-f]{64}\n"
+    rb"size [0-9]+\n?\Z"
+)
+
+DISALLOWED_KINDS = (
+    (
+        "review media",
+        (
+            ".png",
+            ".jpg",
+            ".jpeg",
+            ".gif",
+            ".webp",
+            ".avif",
+            ".bmp",
+            ".tif",
+            ".tiff",
+            ".svg",
+            ".mp4",
+            ".mov",
+            ".webm",
+            ".mkv",
+        ),
+        "render snapshots and orbit animations under /tmp and attach them to the "
+        "conversation or pull request",
+    ),
+    (
+        "data and metadata dumps",
+        (
+            ".json",
+            ".yaml",
+            ".yml",
+            ".csv",
+            ".tsv",
+            ".txt",
+            ".toml",
+            ".ini",
+            ".xml",
+        ),
+        "keep model parameters and metadata in generator source, or regenerate "
+        "the sidecar locally as a transient artifact",
+    ),
+    (
+        "archives and foreign CAD sources",
+        (
+            ".zip",
+            ".7z",
+            ".tar",
+            ".tgz",
+            ".gz",
+            ".rar",
+            ".f3d",
+            ".ipt",
+            ".iam",
+            ".sldprt",
+            ".sldasm",
+            ".prt",
+            ".blend",
+            ".scad",
+        ),
+        "commit the generator and its exported STEP instead of the upstream bundle",
+    ),
+    (
+        "runtime debris",
+        (".log", ".lock", ".tmp", ".pyc", ".swp"),
+        "keep local runtime output under ignored paths",
+    ),
+)
+
+DISALLOWED_NAMES = (".DS_Store", "Thumbs.db", "desktop.ini")
+DISALLOWED_DIR_NAMES = (
+    "__pycache__",
+    ".cache",
+    ".vite",
+    "node_modules",
+    "dist",
+    "tmp",
+)
+
+README_REFERENCE = (
+    "See the File Policy section of models/README.md for the full list and for "
+    "how to widen it."
+)
+
+
+def _run_git(*args: str) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        ["git", *args],
+        cwd=REPO_ROOT,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+
+
+def _tracked_model_paths() -> list[str]:
+    completed = _run_git("ls-files", "-z", "--", MODELS_DIR)
+    return sorted(entry for entry in completed.stdout.split("\0") if entry)
+
+
+def _index_blobs(paths: list[str]) -> dict[str, bytes]:
+    """Read tracked blobs from the index without applying LFS smudge filters."""
+    completed = subprocess.run(
+        ["git", "cat-file", "--batch"],
+        cwd=REPO_ROOT,
+        input=b"".join(f":{path}\n".encode() for path in paths),
+        capture_output=True,
+        check=True,
+    )
+
+    blobs: dict[str, bytes] = {}
+    output = completed.stdout
+    offset = 0
+    for path in paths:
+        header_end = output.find(b"\n", offset)
+        if header_end < 0:
+            raise AssertionError(f"missing git cat-file header for {path}")
+        header = output[offset:header_end].decode("ascii", errors="replace")
+        fields = header.split()
+        if len(fields) != 3 or fields[1] != "blob":
+            raise AssertionError(f"unexpected git cat-file header for {path}: {header}")
+        size = int(fields[2])
+        blob_start = header_end + 1
+        blob_end = blob_start + size
+        if blob_end >= len(output) or output[blob_end : blob_end + 1] != b"\n":
+            raise AssertionError(f"truncated git cat-file output for {path}")
+        blobs[path] = output[blob_start:blob_end]
+        offset = blob_end + 1
+    return blobs
+
+
+def _matched_suffix(name: str, suffixes: tuple[str, ...]) -> str | None:
+    """Return the longest matching suffix, if the filename has a stem."""
+    lowered = name.lower()
+    matches = [
+        suffix
+        for suffix in suffixes
+        if lowered.endswith(suffix) and len(lowered) > len(suffix)
+    ]
+    return max(matches, key=len) if matches else None
+
+
+def _uses_allowed_file_type(path: str) -> bool:
+    name = Path(path).name
+    if _matched_suffix(name, ALLOWED_SUFFIXES) is not None:
+        return True
+    return name.startswith(".") and _matched_suffix(
+        name, HIDDEN_SIDECAR_SUFFIXES
+    ) is not None
+
+
+def _format_paths(paths: list[str], limit: int = 20) -> str:
+    shown = "\n".join(f"  {path}" for path in paths[:limit])
+    if len(paths) > limit:
+        shown += f"\n  ... and {len(paths) - limit} more"
+    return shown
+
+
+class ModelsDirectoryPolicyTest(unittest.TestCase):
+    tracked_paths: list[str]
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        try:
+            cls.tracked_paths = _tracked_model_paths()
+        except (OSError, subprocess.CalledProcessError) as error:  # pragma: no cover
+            raise unittest.SkipTest(f"git is unavailable: {error}") from error
+        if not cls.tracked_paths:
+            raise unittest.SkipTest("no tracked files under models/")
+
+    def test_tracked_files_use_allowed_file_types(self) -> None:
+        offenders = [
+            path
+            for path in self.tracked_paths
+            if not _uses_allowed_file_type(path)
+        ]
+        self.assertEqual(
+            offenders,
+            [],
+            "models/ accepts CAD/robot sources, durable generated outputs, "
+            "mesh-processing fixtures, and docs only. These tracked files match "
+            "no allowed type:\n"
+            f"{_format_paths(offenders)}\n{README_REFERENCE}",
+        )
+
+    def test_step_js_is_not_a_generic_allowed_file_type(self) -> None:
+        self.assertFalse(_uses_allowed_file_type("models/unpaired.step.js"))
+        self.assertTrue(_uses_allowed_file_type("models/.paired.step.js"))
+
+    def test_obj_and_ply_are_restricted_to_mesh_fixtures(self) -> None:
+        prefix = f"{MESH_FIXTURES_DIR}/"
+        offenders = [
+            path
+            for path in self.tracked_paths
+            if _matched_suffix(Path(path).name, MESH_FIXTURE_SUFFIXES) is not None
+            and not path.startswith(prefix)
+        ]
+        self.assertEqual(
+            offenders,
+            [],
+            "OBJ and PLY are allowed only as dedicated mesh-processing fixtures "
+            f"under {MESH_FIXTURES_DIR}/:\n{_format_paths(offenders)}\n"
+            f"{README_REFERENCE}",
+        )
+
+    def test_tracked_files_exclude_media_and_other_denied_kinds(self) -> None:
+        failures: list[str] = []
+        for kind, suffixes, remedy in DISALLOWED_KINDS:
+            offenders = [
+                path
+                for path in self.tracked_paths
+                if _matched_suffix(Path(path).name, suffixes) is not None
+            ]
+            if offenders:
+                failures.append(
+                    f"{kind} must not be committed under models/ "
+                    f"({remedy}):\n{_format_paths(offenders)}"
+                )
+
+        named_offenders = [
+            path for path in self.tracked_paths if Path(path).name in DISALLOWED_NAMES
+        ]
+        if named_offenders:
+            failures.append(
+                "runtime debris must not be committed under models/:\n"
+                f"{_format_paths(named_offenders)}"
+            )
+
+        disallowed_dirs = set(DISALLOWED_DIR_NAMES)
+        dir_offenders = [
+            path
+            for path in self.tracked_paths
+            if set(Path(path).parts[:-1]) & disallowed_dirs
+        ]
+        if dir_offenders:
+            failures.append(
+                "generated or cache directories must not be committed under "
+                f"models/:\n{_format_paths(dir_offenders)}"
+            )
+
+        self.assertEqual(
+            failures,
+            [],
+            "\n\n".join([*failures, README_REFERENCE]),
+        )
+
+    def test_hidden_files_are_cad_viewer_step_sidecars(self) -> None:
+        offenders: list[str] = []
+        orphans: list[str] = []
+        tracked = set(self.tracked_paths)
+
+        for path in self.tracked_paths:
+            name = Path(path).name
+            if not name.startswith("."):
+                continue
+            suffix = _matched_suffix(name, HIDDEN_SIDECAR_SUFFIXES)
+            if suffix is None:
+                offenders.append(path)
+                continue
+            stem = name[1 : -len(suffix)]
+            parent = Path(path).parent
+            if not any(
+                str(parent / f"{stem}{step_suffix}") in tracked
+                for step_suffix in STEP_SUFFIXES
+            ):
+                orphans.append(path)
+
+        self.assertEqual(
+            offenders,
+            [],
+            "the only hidden files allowed under models/ are CAD Viewer "
+            "sidecars .<stem>.step.glb, .<stem>.stp.glb, and "
+            ".<stem>.step.js:\n"
+            f"{_format_paths(offenders)}\n{README_REFERENCE}",
+        )
+        self.assertEqual(
+            orphans,
+            [],
+            "these CAD Viewer sidecars have no STEP file beside them; remove "
+            "the sidecar or commit the .step/.stp it belongs to:\n"
+            f"{_format_paths(orphans)}",
+        )
+
+    def test_generated_outputs_are_lfs_tracked(self) -> None:
+        binaries = [
+            path
+            for path in self.tracked_paths
+            if _matched_suffix(Path(path).name, BINARY_SUFFIXES) is not None
+        ]
+        self.assertTrue(binaries, "expected generated model outputs under models/")
+
+        completed = subprocess.run(
+            ["git", "check-attr", "filter", "--stdin"],
+            cwd=REPO_ROOT,
+            input="\n".join(binaries),
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+
+        offenders = []
+        for line in completed.stdout.splitlines():
+            path, _, value = line.rpartition(": filter: ")
+            if path and value.strip() != "lfs":
+                offenders.append(f"{path} (filter={value.strip()})")
+
+        self.assertEqual(
+            offenders,
+            [],
+            "generated model outputs must be stored in Git LFS; add the missing "
+            f"filter rule to .gitattributes:\n{_format_paths(offenders)}",
+        )
+
+        blobs = _index_blobs(binaries)
+        non_pointers = [
+            path
+            for path, blob in blobs.items()
+            if LFS_POINTER_PATTERN.fullmatch(blob) is None
+        ]
+        self.assertEqual(
+            non_pointers,
+            [],
+            "generated model outputs must be committed as Git LFS pointer "
+            "blobs, not only match an LFS attribute. Re-add these files with "
+            "LFS filters enabled:\n"
+            f"{_format_paths(non_pointers)}",
+        )
+
+    def test_readme_documents_every_allowed_file_type(self) -> None:
+        readme = README_PATH.read_text(encoding="utf-8")
+        undocumented = [suffix for suffix in ALLOWED_SUFFIXES if suffix not in readme]
+        self.assertEqual(
+            undocumented,
+            [],
+            "models/README.md must document every file type this policy allows; "
+            f"missing: {undocumented}",
+        )
+
+        lowered = readme.lower()
+        undocumented_kinds = [
+            kind for kind, _, _ in DISALLOWED_KINDS if kind.lower() not in lowered
+        ]
+        self.assertEqual(
+            undocumented_kinds,
+            [],
+            "models/README.md must name every disallowed category this policy "
+            f"rejects; missing: {undocumented_kinds}",
+        )
+
+    def test_models_policy_preserves_existing_graphify_ignores(self) -> None:
+        gitignore_lines = GITIGNORE_PATH.read_text(encoding="utf-8").splitlines()
+        snapshotignore_lines = SNAPSHOTIGNORE_PATH.read_text(
+            encoding="utf-8"
+        ).splitlines()
+
+        self.assertIn("graphify-out/", gitignore_lines)
+        self.assertIn("graphify-out", snapshotignore_lines)
+
+
+if __name__ == "__main__":
+    unittest.main()

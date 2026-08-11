@@ -6,6 +6,7 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
 
 MODE="write"
 CLEAN=0
+PRINT_OUTPUTS=0
 
 MESHSCOPE_PACKAGE_DIR="$REPO_ROOT/packages/meshscope"
 MESHSHOT_PACKAGE_DIR="$REPO_ROOT/packages/meshshot"
@@ -29,6 +30,8 @@ the mesh-compare production skill runtime.
 Options:
   --check  Fail if a generated browser/runtime copy is stale.
   --clean  Remove the temporary check directory first.
+  --print-outputs
+           Print the repo-relative generated output path, then exit.
   -h, --help
            Show this help.
 EOF
@@ -42,6 +45,9 @@ while [ "$#" -gt 0 ]; do
     --clean)
       CLEAN=1
       ;;
+    --print-outputs)
+      PRINT_OUTPUTS=1
+      ;;
     -h|--help)
       usage
       exit 0
@@ -54,6 +60,13 @@ while [ "$#" -gt 0 ]; do
   esac
   shift
 done
+
+if [ "$PRINT_OUTPUTS" -eq 1 ]; then
+  printf '%s\n' \
+    "${MESHSCOPE_RUNTIME_DIR#"$REPO_ROOT"/}" \
+    "${MESHSHOT_RUNTIME_DIR#"$REPO_ROOT"/}"
+  exit 0
+fi
 
 if [ ! -f "$MESHSCOPE_PACKAGE_DIR/pyproject.toml" ] || [ ! -d "$MESHSCOPE_PACKAGE_DIR/src/meshscope" ]; then
   echo "Missing meshscope package source: $MESHSCOPE_PACKAGE_DIR" >&2

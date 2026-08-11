@@ -57,11 +57,13 @@ Use:
 ```bash
 scripts/bundle/bundle.sh --clean
 scripts/bundle/bundle.sh --check
+scripts/bundle/bundle.sh --print-outputs
 scripts/bundle/bundle-skill.sh <skill-id> --check
 ```
 
 `scripts/github-workflows/check-builds.sh` is the release-layout gate. It verifies
-there are no symlinks under production runtime paths, then runs
+there are no symlinks under the generated roots reported by the master bundle or
+the tracked `plugins/cad/skills` publish tree, then runs
 `scripts/bundle/bundle.sh --check` by default. Use `--skip-bundle-check` only in
 workflows that already ran `scripts/bundle/bundle.sh --clean` in the same
 checkout. Plugin skill-copy

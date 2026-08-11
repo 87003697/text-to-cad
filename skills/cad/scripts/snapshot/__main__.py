@@ -12,6 +12,7 @@ import time
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from hashlib import sha256
 from pathlib import Path
 from typing import Any
 from urllib.parse import quote, unquote, urlparse
@@ -150,7 +151,7 @@ def help_text() -> str:
   python scripts/snapshot --job -
   python scripts/snapshot --input models/part.step --output /tmp/part.png --appearance workbench
 
-Shortcut flags support common STEP/STP and direct GLB/GLTF snapshots. --job accepts one render job, an array of render jobs, or { "jobs": [...] }. Every job input must be a relative or absolute .step/.stp/.glb/.gltf path, or a same-stem Python generator; direct STL/OBJ/PLY/3MF/DXF/G-code/robot-description inputs are unsupported. The default appearance is the workbench saved theme. --appearance accepts a saved theme name, an inline JSON appearance settings object, or a JSON appearance settings file path. --display accepts solid, rendered, transparent, hidden_edges, hidden_lines_removed, unshaded, wireframe, an inline JSON display settings object, or a JSON display settings file path. Projection, exploded view, and edge styling belong in display JSON, for example {"projection":"orthographic","mode":"rendered","exploded":{"enabled":true,"axis":"z","spacing":1.6},"edges":{"color":"#132232"}}. Use {"axis":"radial"} for outward radial disassembly. --camera accepts a preset, azimuth:elevation pair, or JSON object with preset, position, target, up, and zoom fields. --focus and --hide accept one or more selector refs such as #o1.2 for parts or subassemblies; pass the flag repeatedly or list refs after the flag. Option JSON is direct settings JSON, not a wrapped job fragment. Full JSON jobs use top-level appearance and display. Use --view-labels to burn the camera/view label into shortcut outputs. Use --params with STEP parameter sidecar JSON values, and --size-profile for default dimensions such as simple, diagnostic, labeled, assembly, presentation, orbit, or contact-sheet. Output file names are saved with a shared UTC seconds timestamp before the extension.
+Shortcut flags support common STEP/STP and direct binary GLB snapshots. --job accepts one render job, an array of render jobs, or { "jobs": [...] }. Every job input must be a relative or absolute .step/.stp/.glb path, or a same-stem Python generator; direct JSON glTF, STL/OBJ/PLY/3MF/DXF/G-code/robot-description inputs are unsupported. The default appearance is the workbench saved theme. --appearance accepts a saved theme name, an inline JSON appearance settings object, or a JSON appearance settings file path. --display accepts solid, rendered, transparent, hidden_edges, hidden_lines_removed, unshaded, wireframe, an inline JSON display settings object, or a JSON display settings file path. Projection, exploded view, and edge styling belong in display JSON, for example {"projection":"orthographic","mode":"rendered","exploded":{"enabled":true,"axis":"z","spacing":1.6},"edges":{"color":"#132232"}}. Use {"axis":"radial"} for outward radial disassembly. --camera accepts a preset, azimuth:elevation pair, or JSON object with preset, position, target, up, and zoom fields. --focus and --hide accept one or more selector refs such as #o1.2 for parts or subassemblies; pass the flag repeatedly or list refs after the flag. Option JSON is direct settings JSON, not a wrapped job fragment. Full JSON jobs use top-level appearance and display. Use --view-labels to burn the camera/view label into shortcut outputs. Use --params with STEP parameter sidecar JSON values, and --size-profile for default dimensions such as simple, diagnostic, labeled, assembly, presentation, orbit, or contact-sheet. Output file names are saved with a shared UTC seconds timestamp before the extension.
 """
 
 
@@ -537,7 +538,7 @@ def input_kind(file_path: Path) -> str:
         return "stp"
     if suffix == ".py":
         return "python"
-    if suffix in {".glb", ".gltf", ".obj", ".stl", ".ply", ".3mf"}:
+    if suffix == ".glb":
         return "mesh"
     return ""
 
@@ -574,7 +575,27 @@ def encode_path_param(value: str) -> str:
 def asset_url_for_path(file_path: Path, root_path: Path) -> str:
     if not path_is_inside_or_equal(file_path, root_path):
         raise SnapshotError(f"Render asset must be inside the snapshot render root: {file_path}")
-    return f"/__render_asset/{encode_path_param(file_path.resolve().relative_to(root_path.resolve()).as_posix())}"
+    resolved_path = file_path.resolve()
+    relative_path = resolved_path.relative_to(root_path.resolve()).as_posix()
+    base_url = f"/__render_asset/{encode_path_param(relative_path)}"
+    try:
+        file_stat = resolved_path.stat()
+    except FileNotFoundError:
+        # Same-stem generator inputs resolve to a STEP path that is never written
+        # (the generator runs with skip_step_write=True), so there is nothing to
+        # version; keep the unversioned URL for those. Any other stat failure is
+        # left to propagate: silently falling back to an unversioned URL would
+        # re-enable the very collision this key exists to prevent.
+        return base_url
+    cache_identity = "\0".join(
+        (
+            str(resolved_path),
+            str(file_stat.st_size),
+            str(file_stat.st_mtime_ns),
+        )
+    )
+    cache_key = sha256(cache_identity.encode("utf-8")).hexdigest()[:16]
+    return f"{base_url}?v={cache_key}"
 
 
 def step_parameter_path_for_step_source(source_path: Path) -> Path:

@@ -608,7 +608,7 @@ class CvmPush:
             ),
         }
         status = self.runner.stream(
-            ["scripts/bundle/bundle-skill.sh", "--all"],
+            ["scripts/bundle/bundle.sh"],
             cwd=stage,
             log_path=self.log_path,
             env=env,
@@ -658,13 +658,17 @@ class CvmPush:
     @staticmethod
     def _skill_symlinks(stage: Path) -> tuple[Path, ...]:
         links: list[Path] = []
-        skills = stage / "skills"
-        for root, directories, files in os.walk(skills, followlinks=False):
-            root_path = Path(root)
-            for name in (*directories, *files):
-                path = root_path / name
-                if path.is_symlink():
-                    links.append(path)
+        skill_roots = (
+            stage / "skills",
+            stage / "plugins/cad/skills",
+        )
+        for skills in skill_roots:
+            for root, directories, files in os.walk(skills, followlinks=False):
+                root_path = Path(root)
+                for name in (*directories, *files):
+                    path = root_path / name
+                    if path.is_symlink():
+                        links.append(path)
         return tuple(links)
 
     def validate_stage(self, stage: Path) -> None:

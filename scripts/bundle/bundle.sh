@@ -5,19 +5,22 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 
 MODE="write"
+PRINT_OUTPUTS=0
 SKILL_ARGS=()
 PLUGIN_ARGS=()
 
 usage() {
   cat <<'EOF'
 Usage:
-  scripts/bundle/bundle.sh [--check] [--clean]
+  scripts/bundle/bundle.sh [--check] [--clean] [--print-outputs]
 
 Universal generated-runtime and plugin package bundle wrapper.
 
 Options:
   --check     Bundle into tmp/ and fail if checked-in outputs are stale.
   --clean     Remove temporary bundle/check directories first.
+  --print-outputs
+              Print all repo-relative generated output roots, then exit.
   -h, --help  Show this help.
 EOF
 }
@@ -33,6 +36,9 @@ while [ "$#" -gt 0 ]; do
       SKILL_ARGS+=("--clean")
       PLUGIN_ARGS+=("--clean")
       ;;
+    --print-outputs)
+      PRINT_OUTPUTS=1
+      ;;
     -h|--help)
       usage
       exit 0
@@ -47,6 +53,14 @@ while [ "$#" -gt 0 ]; do
 done
 
 cd "$REPO_ROOT"
+
+if [ "$PRINT_OUTPUTS" -eq 1 ]; then
+  {
+    "$SCRIPT_DIR/bundle-skill.sh" --all --print-outputs
+    "$SCRIPT_DIR/bundle-plugin.sh" --print-outputs
+  } | LC_ALL=C sort -u
+  exit 0
+fi
 
 if [ "$MODE" = "check" ]; then
   echo "Checking derived version metadata..."

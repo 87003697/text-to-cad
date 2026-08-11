@@ -41,12 +41,17 @@ while [ "$#" -gt 0 ]; do
   shift
 done
 
-check_no_symlinks() {
+generated_paths() {
+  "$REPO_ROOT/scripts/bundle/bundle.sh" --print-outputs
+}
+
+check_generated_path() {
   local root="$1"
   local first_link
 
   if [ ! -e "$root" ]; then
     echo "Missing production bundle path: $root" >&2
+    echo "Run scripts/bundle/bundle.sh --clean and commit the generated outputs." >&2
     exit 1
   fi
 
@@ -59,13 +64,30 @@ check_no_symlinks() {
   fi
 }
 
-check_no_symlinks "viewer/packages"
-check_no_symlinks "skills/cad/scripts/packages"
-check_no_symlinks "skills/cad-viewer/scripts/viewer"
-check_no_symlinks "skills/urdf/scripts/packages"
-check_no_symlinks "skills/srdf/scripts/packages"
-check_no_symlinks "skills/sdf/scripts/packages"
-check_no_symlinks "plugins/cad/skills"
+check_published_plugin_skill_symlinks() {
+  local first_link=""
+  local tracked_path
+
+  while IFS= read -r -d '' tracked_path; do
+    if [ -L "$tracked_path" ]; then
+      first_link="$tracked_path"
+      break
+    fi
+  done < <(git ls-files -z -- plugins/cad/skills)
+
+  if [ -n "$first_link" ]; then
+    echo "Published plugin skills must not contain symlinks." >&2
+    echo "First tracked symlink: $first_link" >&2
+    echo "Run scripts/bundle/bundle.sh --clean and commit physical production files." >&2
+    exit 1
+  fi
+}
+
+while IFS= read -r generated_path; do
+  check_generated_path "$generated_path"
+done < <(generated_paths)
+
+check_published_plugin_skill_symlinks
 
 if [ "$RUN_BUNDLE_CHECK" -eq 1 ]; then
   "$REPO_ROOT/scripts/bundle/bundle.sh" --check
