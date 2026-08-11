@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import fcntl
+import hashlib
 import json
 import os
 import re
@@ -9,6 +10,7 @@ import subprocess
 import sys
 import time
 from contextlib import contextmanager
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Iterator, Sequence
@@ -33,6 +35,7 @@ from .protocol import (
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 PILOT_SCRIPT = REPO_ROOT / "scripts" / "pilot" / "toys4k-pilot.sh"
+PROVIDER_FREE_RUNNER = REPO_ROOT / "scripts" / "pilot" / "provider_free_runner.py"
 DEFAULT_HEARTBEAT_INTERVAL = 5.0
 DEFAULT_STALE_AFTER = 60.0
 DEFAULT_WAIT_TIMEOUT = 12 * 60 * 60.0
@@ -42,6 +45,35 @@ _SECRET_HEADLINE = re.compile(
 )
 _ABSOLUTE_PATH = re.compile(r"(?<![A-Za-z0-9_.-])/(?:[^\s/]+/)+[^\s]*")
 _PILOT_GROUP = re.compile(r"^[0-9]{8}-[0-9]{6}-[a-z0-9-]+$")
+
+
+@dataclass(frozen=True)
+class ProviderFreeScenario:
+    """One repository-owned workload selectable without remote argv input."""
+
+    name: str
+    identity: str
+
+
+PROVIDER_FREE_EXECUTION_PROFILE = {
+    "schema": "cvm.provider-free-execution-profile/1",
+    "id": "issue15.provider-free-bounded/1",
+    "provider_access": "forbidden",
+}
+PROVIDER_FREE_SCENARIOS = {
+    "issue15-runtime-authority": ProviderFreeScenario(
+        name="issue15-runtime-authority",
+        identity="issue15.provider-free.runtime-authority/1",
+    ),
+}
+PROVIDER_FREE_ENV_ALLOWLIST = (
+    "HOME",
+    "LANG",
+    "PATH",
+    "PYTHONDONTWRITEBYTECODE",
+    "TZ",
+)
+PROVIDER_FREE_PROOF = "run/provider-free-execution.json"
 
 
 def _root(state_root: Path | None) -> Path:
@@ -209,6 +241,255 @@ def submit_pilot(
         )
     state = load_state(root, record["job"])
     return {"job": state["job"], "state": state["state"], "kind": "pilot"}
+
+
+def submit_provider_free(
+    scenario_name: str,
+    group: str,
+    *,
+    state_root: Path | None = None,
+    detach: Callable[[str, Sequence[str], Path], int] = _detach,
+) -> dict[str, Any]:
+    """Submit one closed-registry provider-free scenario."""
+
+    root = _root(state_root)
+    scenario = PROVIDER_FREE_SCENARIOS.get(scenario_name)
+    if scenario is None:
+        raise ProtocolError(f"unknown provider-free scenario: {scenario_name!r}")
+    group = _validate_pilot_group(group)
+    with _allocation_lock(root, group):
+        exp = _allocate_exp(scenario.name, group, root)
+        record = _pilot_record(scenario.name, group, exp, root)
+        record.update(
+            {
+                "job_kind": "provider-free",
+                "scenario": {
+                    "name": scenario.name,
+                    "identity": scenario.identity,
+                },
+                "execution_profile": dict(PROVIDER_FREE_EXECUTION_PROFILE),
+            }
+        )
+        publish_state(root, record)
+    command = [
+        sys.executable,
+        "-m",
+        "scripts.pilot.cvm_job",
+        "supervise-provider-free",
+        "--job",
+        record["job"],
+    ]
+    try:
+        detach(record["job"], command, root)
+    except Exception as error:
+        transition(
+            root,
+            record["job"],
+            "failed",
+            failure_reason=f"supervisor launch failed: {type(error).__name__}",
+        )
+    state = load_state(root, record["job"])
+    return {
+        "job": state["job"],
+        "state": state["state"],
+        "kind": "provider-free",
+    }
+
+
+def _provider_free_environment(
+    environ: dict[str, str],
+    *,
+    profile_id: str,
+) -> dict[str, str]:
+    """Build an allowlisted workload environment without credential values."""
+
+    child = {
+        name: environ[name]
+        for name in PROVIDER_FREE_ENV_ALLOWLIST
+        if environ.get(name)
+    }
+    child.setdefault("PYTHONDONTWRITEBYTECODE", "1")
+    removed = sorted(set(environ).difference(PROVIDER_FREE_ENV_ALLOWLIST))
+    child.update(
+        {
+            "CVM_PROVIDER_FREE_PROFILE": profile_id,
+            "CVM_PROVIDER_FREE_STRIPPED_NAMES": ",".join(removed),
+        }
+    )
+    return child
+
+
+def _provider_free_evidence_result(
+    exp_dir: Path,
+    *,
+    handle: str,
+    record: dict[str, Any],
+    expected_stripped: list[str],
+) -> tuple[str | None, str | None]:
+    """Validate terminal no-provider evidence and its manifest binding."""
+
+    proof_path = exp_dir / PROVIDER_FREE_PROOF
+    manifest_path = exp_dir / "artifact_manifest.json"
+    try:
+        proof_bytes = proof_path.read_bytes()
+        proof = json.loads(proof_bytes)
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return None, "provider-free execution evidence missing"
+    except (OSError, json.JSONDecodeError):
+        return None, "provider-free execution evidence invalid"
+    expected_proof = {
+        "schema": "cvm.provider-free-execution/1",
+        "job": handle,
+        "scenario": record["scenario"],
+        "execution_profile": record["execution_profile"],
+        "sandbox": {
+            "network": "isolated-loopback",
+            "resource_profile": record["execution_profile"]["id"],
+        },
+        "provider_environment": {
+            "allowlist": list(PROVIDER_FREE_ENV_ALLOWLIST),
+            "stripped": expected_stripped,
+            "credential_values_recorded": False,
+        },
+        "requests": {"model_gateway": 0, "provider": 0, "tap": 0},
+    }
+    if proof != expected_proof:
+        return None, "provider-free execution evidence does not match job authority"
+    entries = manifest.get("files")
+    if not isinstance(entries, list):
+        return None, "artifact manifest files are invalid"
+    required_paths = (
+        PROVIDER_FREE_PROOF,
+        "run/runtime-authority-smoke.json",
+        "workspace-authority.json",
+        "workspace-authority.bundle",
+        "workspace.json",
+        "final/manifest.json",
+    )
+    by_path: dict[str, dict[str, Any]] = {}
+    for entry in entries:
+        if not isinstance(entry, dict) or not isinstance(entry.get("path"), str):
+            return None, "provider-free terminal evidence manifest entry is invalid"
+        path = entry["path"]
+        if path in by_path:
+            return None, "provider-free terminal evidence manifest has duplicate paths"
+        by_path[path] = entry
+    for relative in required_paths:
+        path = exp_dir / relative
+        try:
+            data = path.read_bytes()
+        except OSError:
+            return None, f"provider-free terminal evidence missing: {relative}"
+        expected_entry = {
+            "path": relative,
+            "size_bytes": len(data),
+            "sha256": hashlib.sha256(data).hexdigest(),
+        }
+        if by_path.get(relative) != expected_entry:
+            return None, f"provider-free terminal evidence is not bound: {relative}"
+    return _relative(proof_path), None
+
+
+def supervise_provider_free(
+    handle: str,
+    *,
+    state_root: Path | None = None,
+    interval: float = DEFAULT_HEARTBEAT_INTERVAL,
+    environ: dict[str, str] | None = None,
+) -> dict[str, Any]:
+    """Run one immutable provider-free scenario through its fixed runner."""
+
+    root = _root(state_root)
+    parsed = parse_handle(handle)
+    with _supervisor_lock(root, handle):
+        record = load_state(root, handle)
+        if record.get("job_kind") != "provider-free":
+            raise ProtocolError("supervise-provider-free requires a provider-free job")
+        if record["state"] != "submitted":
+            raise ProtocolError(
+                f"provider-free job cannot start from {record['state']}"
+            )
+        scenario = PROVIDER_FREE_SCENARIOS.get(record.get("scenario", {}).get("name"))
+        if scenario is None or record["scenario"].get("identity") != scenario.identity:
+            raise ProtocolError("provider-free job scenario is not in the closed registry")
+        if record.get("execution_profile") != PROVIDER_FREE_EXECUTION_PROFILE:
+            raise ProtocolError("provider-free execution profile does not match registry")
+        transition(root, handle, "running", supervisor_pid=os.getpid())
+        source_environment = dict(os.environ if environ is None else environ)
+        child_environment = _provider_free_environment(
+            source_environment,
+            profile_id=PROVIDER_FREE_EXECUTION_PROFILE["id"],
+        )
+        stripped = child_environment["CVM_PROVIDER_FREE_STRIPPED_NAMES"].split(",")
+        if stripped == [""]:
+            stripped = []
+        command = [
+            sys.executable,
+            os.fspath(PROVIDER_FREE_RUNNER),
+            "run",
+            scenario.name,
+            record["group"],
+            parsed["exp"],
+        ]
+        process_status: int | None = None
+        try:
+            process_status, _pid = _run_with_heartbeat(
+                root,
+                handle,
+                command,
+                interval=interval,
+                env=child_environment,
+            )
+            manifest_path = REPO_ROOT / record["exp_dir"] / "artifact_manifest.json"
+            runner_status, manifest_error = _manifest_result(manifest_path)
+            proof_path, proof_error = _provider_free_evidence_result(
+                REPO_ROOT / record["exp_dir"],
+                handle=handle,
+                record=record,
+                expected_stripped=stripped,
+            )
+            updates = {
+                "runner_final_status": runner_status,
+                "artifact_manifest": (
+                    _relative(manifest_path) if manifest_path.is_file() else None
+                ),
+                "process_exit_code": process_status,
+                "no_provider_evidence": proof_path,
+            }
+            if (
+                process_status == 0
+                and runner_status == 0
+                and manifest_error is None
+                and proof_error is None
+            ):
+                return transition(root, handle, "succeeded", **updates)
+            reason = manifest_error or proof_error or (
+                f"provider-free runner exited {process_status}"
+                if process_status
+                else f"runner final_status={runner_status}"
+            )
+            return transition(
+                root,
+                handle,
+                "failed",
+                failure_reason=reason,
+                **updates,
+            )
+        except Exception as error:
+            current = load_state(root, handle)
+            if current["state"] == "running":
+                transition(
+                    root,
+                    handle,
+                    "failed",
+                    process_exit_code=process_status,
+                    failure_reason=(
+                        "provider-free supervisor error: "
+                        f"{type(error).__name__}"
+                    ),
+                )
+            return load_state(root, handle)
 
 
 def _run_with_heartbeat(

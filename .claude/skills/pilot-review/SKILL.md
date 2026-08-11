@@ -113,6 +113,17 @@ Use `artifact_manifest.json` for runner publication state and
 `scripts/utils/rollout-usage.py <exp>/run/rollout.jsonl` for cost. Trace artifacts
 are optional cross-checks, never authority substitutes.
 
+For the registered provider-free runtime-authority scenario, audit
+`run/provider-free-execution.json` and
+`run/runtime-authority-smoke.json` through their terminal-manifest hashes. A
+runtime integration pass additionally requires the closed scenario/profile,
+zero provider/model-gateway/tap requests, credential-value exclusion,
+isolated-loopback sandbox receipt, Viewer source/bundle/deployed parity plus
+HTTP-400 reuse fallback, explicit native-required depths 1 through 8, public
+command evidence, and the recomputable complete shipped-runtime tree receipt.
+An absent receipt preserves the established `not_auditable` result; an invalid
+receipt fails closed as an observability gap.
+
 ### 4. Audit each graph edge
 
 For every expected node record `observed`, `partial`, `missing`,

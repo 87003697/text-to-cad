@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib.util
+import hashlib
 import json
 from pathlib import Path
 import shutil
@@ -329,6 +330,135 @@ class PilotReviewTests(unittest.TestCase):
             review["verdicts"]["production_runtime_integration"],
         )
         self.assertTrue((self.exp / "review.md").is_file())
+
+    def test_reviewer_audits_provider_free_runtime_authority_receipt(self) -> None:
+        helper = self.helper(self.canonical_experiment())
+        shipped_files = [
+            {"path": "runtime-identity.json", "size_bytes": 2, "sha256": "1" * 64}
+        ]
+        receipt = {
+            "schema": "issue15.runtime-authority-smoke/1",
+            "scenario_identity": "issue15.provider-free.runtime-authority/1",
+            "workspace": {
+                "path": ".",
+                "schema": "mesh-to-cad.workspace/1",
+                "final_delivery": {"selected_step": 0},
+            },
+            "viewer_deployment": {
+                "schema": "cvm.viewer-runtime-deployment/1",
+                "viewer_version": "test",
+                "runtime_identity": {"path": "runtime-identity.json", "sha256": "2" * 64},
+                "artifacts": [
+                    {
+                        "role": role,
+                        "source": {"path": f"source/{role}", "sha256": digest * 64},
+                        "bundle": {"path": f"bundle/{role}", "sha256": digest * 64},
+                        "deployed": {"path": f"bundle/{role}", "sha256": digest * 64},
+                    }
+                    for role, digest in (("launcher", "3"), ("server", "4"), ("client", "5"))
+                ],
+            },
+            "viewer_fallback": {
+                "schema": "issue15.viewer-fallback-smoke/1",
+                "rejected_reuse": {"port": 4178, "http_status": 400},
+                "fallback": {"action": "start", "port": 4179},
+            },
+            "native_depth_eight": {
+                "schema": "issue15.native-depth-eight-evidence/1",
+                "native_required": True,
+                "backend": {"id": "meshscope.voxblame.native-sat/1"},
+                "depths": list(range(1, 9)),
+            },
+            "shipped_tree": {
+                "schema": "cvm.deployed-runtime-tree-receipt/1",
+                "root": "skills/cad-viewer/scripts/viewer",
+                "file_count": 1,
+                "total_bytes": 2,
+                "tree_sha256": hashlib.sha256(
+                    json.dumps(shipped_files, sort_keys=True, separators=(",", ":")).encode()
+                ).hexdigest(),
+                "files": shipped_files,
+            },
+            "commands": "run/provider-free-commands.jsonl",
+        }
+        proof = {
+            "schema": "cvm.provider-free-execution/1",
+            "job": "20260811-000000-test/exp-issue15-runtime-authority",
+            "scenario": {
+                "name": "issue15-runtime-authority",
+                "identity": "issue15.provider-free.runtime-authority/1",
+            },
+            "execution_profile": {
+                "schema": "cvm.provider-free-execution-profile/1",
+                "id": "issue15.provider-free-bounded/1",
+                "provider_access": "forbidden",
+            },
+            "sandbox": {
+                "network": "isolated-loopback",
+                "resource_profile": "issue15.provider-free-bounded/1",
+            },
+            "provider_environment": {
+                "allowlist": ["HOME", "LANG", "PATH", "PYTHONDONTWRITEBYTECODE", "TZ"],
+                "stripped": ["ANTHROPIC_API_KEY"],
+                "credential_values_recorded": False,
+            },
+            "requests": {"model_gateway": 0, "provider": 0, "tap": 0},
+        }
+        paths = {
+            "run/runtime-authority-smoke.json": receipt,
+            "run/provider-free-execution.json": proof,
+        }
+        manifest_files = []
+        for relative, value in paths.items():
+            write_json(self.exp / relative, value)
+            data = (self.exp / relative).read_bytes()
+            manifest_files.append(
+                {
+                    "path": relative,
+                    "size_bytes": len(data),
+                    "sha256": hashlib.sha256(data).hexdigest(),
+                }
+            )
+        command_path = self.exp / "run/provider-free-commands.jsonl"
+        command_path.write_text('{"schema":"cvm.provider-free-command/1"}\n', encoding="utf-8")
+        command_data = command_path.read_bytes()
+        manifest_files.append(
+            {
+                "path": "run/provider-free-commands.jsonl",
+                "size_bytes": len(command_data),
+                "sha256": hashlib.sha256(command_data).hexdigest(),
+            }
+        )
+        write_json(
+            self.exp / "artifact_manifest.json",
+            {
+                "schema_version": 1,
+                "workload_status": 0,
+                "final_status": 0,
+                "files": manifest_files,
+            },
+        )
+
+        status = self.reviewer.main([str(self.exp), "--workspace-helper", str(helper)])
+
+        self.assertEqual(status, 0)
+        review = json.loads((self.exp / "review.json").read_text(encoding="utf-8"))
+        self.assertEqual("pass", review["verdicts"]["production_runtime_integration"])
+        self.assertEqual(
+            "run/runtime-authority-smoke.json",
+            review["contract_provenance"]["runtime_authority"],
+        )
+        self.assertNotIn("production runtime integration", " ".join(review["evidence_gaps"]))
+
+        proof["requests"]["provider"] = 1
+        write_json(self.exp / "run/provider-free-execution.json", proof)
+        verdict, provenance, issues, gaps = self.reviewer._runtime_authority_verdict(
+            self.exp
+        )
+        self.assertEqual("not_auditable", verdict)
+        self.assertEqual({}, provenance)
+        self.assertEqual("observability-gap", issues[0]["classification"])
+        self.assertTrue(gaps)
 
     def test_reviewer_audits_portable_authority_and_records_materialized_evidence(self) -> None:
         workspace_payload = self.canonical_experiment()

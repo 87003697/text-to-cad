@@ -229,11 +229,13 @@ def public_state(state: dict[str, Any], stale_after: float) -> dict[str, Any]:
     health = "stale" if active and age is not None and age > stale_after else "ok"
     result = {
         "job": state["job"],
-        "kind": state["kind"],
+        "kind": state.get("job_kind", state["kind"]),
         "state": state["state"],
         "health": health,
         "heartbeat_age_seconds": age,
     }
+    if state.get("job_kind") == "provider-free":
+        result["scenario"] = state.get("scenario")
     if state["state"] in TERMINAL_STATES:
         result.update(
             {

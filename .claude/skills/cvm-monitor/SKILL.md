@@ -24,6 +24,10 @@ periodic `ps`, `stat`, `find`, Git, or tap polling around it.
 `health: stale` is diagnostic and is not a failed job or permission to retry.
 Tap observation is advisory; `artifact_manifest.json.final_status` remains the
 terminal authority. Monitoring does not pull, upload, clean, cancel, or kill.
+Provider-free jobs intentionally have no mandatory tap. Their public state
+includes `kind: provider-free` and the registered scenario identity; the
+terminal no-provider proof and runtime-authority receipt remain artifact
+evidence rather than monitor inference.
 
 Exit codes: `0` means `--once` returned or wait saw success; `1` means terminal
 failure; `2` means invalid/missing job; `3` is an explicitly requested stale

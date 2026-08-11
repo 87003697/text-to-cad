@@ -7,11 +7,25 @@ description: >-
 
 # CVM submit
 
-Run exactly one local wrapper command:
+Run exactly one local wrapper command. The established full pilot remains:
 
 ```bash
 scripts/pilot/cvm-submit.sh pilot <object> <group>
 ```
+
+The provider-free runtime-authority smoke is the separate closed scenario:
+
+```bash
+scripts/pilot/cvm-submit.sh provider-free issue15-runtime-authority <group>
+```
+
+`provider-free` accepts only repository-registered scenario names. It cannot
+dispatch an arbitrary command, executable, script path, or provider request.
+Its immutable job state records the scenario identity and versioned bounded
+execution profile; the terminal experiment records stripped credential names
+without credential values, zero provider/tap requests, the isolated-loopback
+sandbox, native backend identity, Viewer deployment/fallback evidence, and the
+complete deployed-runtime tree receipt.
 
 `group` must use the repository pilot layout:
 `YYYYMMDD-HHMMSS-<lowercase-kebab-slug>`, normally the same group passed to

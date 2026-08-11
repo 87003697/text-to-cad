@@ -18,6 +18,7 @@ Use these durable entrypoints for normal work:
 | Run a Toys4K pilot batch | `scripts/pilot/toys4k-batch.sh <slug> <object>...` |
 | Push the current source overlay to CVM | `scripts/pilot/cvm-push.sh` |
 | Submit a detached CVM pilot | `scripts/pilot/cvm-submit.sh pilot <object> <group>` |
+| Submit the closed provider-free runtime smoke | `scripts/pilot/cvm-submit.sh provider-free issue15-runtime-authority <group>` |
 | Monitor a CVM job | `scripts/pilot/cvm-monitor.sh --once|--wait <handle>` |
 | Pull terminal CVM outputs | `scripts/pilot/cvm-pull.sh --exp|--group ...` |
 | Create/audit portable Workspace authority | `python skills/mesh-to-cad/scripts/mesh-to-cad-authority create|audit ...` |
@@ -33,7 +34,8 @@ Lower-level scripts stay grouped by ownership:
 - `dev/`: symlink layout setup and verification for development checkouts.
 - `install/`: local skill install/uninstall scripts for agent skill folders.
 - `pilot/`: the snapshot, push, submit, monitor, pull operation lifecycle plus
-  Toys4K pilot entrypoints and their tap/sandbox lifecycle runtime.
+  Toys4K pilot entrypoints, their tap/sandbox lifecycle runtime, and the closed
+  provider-free runtime-authority scenario registry and bounded runner.
 - `utils/`: shared helpers used by durable repo commands, such as rollout cost
   analysis and skill discovery.
 - `release/`: version bumping, release commits, tags, and GitHub Releases.

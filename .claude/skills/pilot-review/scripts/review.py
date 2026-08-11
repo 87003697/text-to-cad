@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 from pathlib import Path
 import subprocess
@@ -155,6 +156,184 @@ def _runner_verdict(workspace: Path) -> tuple[str, list[dict[str, str]]]:
             }
         ]
     return ("pass" if manifest.get("final_status") == 0 else "fail"), []
+
+
+def _runtime_authority_verdict(
+    workspace: Path,
+) -> tuple[str, dict[str, str], list[dict[str, str]], list[str]]:
+    """Audit the optional closed provider-free runtime-authority receipt."""
+
+    receipt_path = workspace / "run/runtime-authority-smoke.json"
+    if not receipt_path.is_file():
+        return (
+            "not_auditable",
+            {},
+            [],
+            [
+                "production runtime integration requires shipped snapshot, invoked "
+                "installed-skill, bundle, parity, and isolation gate evidence"
+            ],
+        )
+    evidence = "run/runtime-authority-smoke.json"
+    try:
+        receipt = _read_json(receipt_path)
+        proof = _read_json(workspace / "run/provider-free-execution.json")
+        manifest = _read_json(workspace / "artifact_manifest.json")
+        required = {
+            "schema",
+            "scenario_identity",
+            "workspace",
+            "viewer_deployment",
+            "viewer_fallback",
+            "native_depth_eight",
+            "shipped_tree",
+            "commands",
+        }
+        if set(receipt) != required:
+            raise ReviewError("runtime-authority receipt is not a closed object")
+        if (
+            receipt["schema"] != "issue15.runtime-authority-smoke/1"
+            or receipt["scenario_identity"]
+            != "issue15.provider-free.runtime-authority/1"
+        ):
+            raise ReviewError("runtime-authority receipt identity conflicts")
+        workspace_receipt = receipt["workspace"]
+        if (
+            not isinstance(workspace_receipt, dict)
+            or workspace_receipt.get("path") != "."
+            or workspace_receipt.get("schema") != "mesh-to-cad.workspace/1"
+            or not isinstance(workspace_receipt.get("final_delivery"), dict)
+        ):
+            raise ReviewError("runtime-authority Workspace receipt is incomplete")
+        deployment = receipt["viewer_deployment"]
+        artifacts = deployment.get("artifacts") if isinstance(deployment, dict) else None
+        if (
+            not isinstance(deployment, dict)
+            or deployment.get("schema") != "cvm.viewer-runtime-deployment/1"
+            or not isinstance(artifacts, list)
+            or [item.get("role") for item in artifacts if isinstance(item, dict)]
+            != ["launcher", "server", "client"]
+            or any(
+                not isinstance(item, dict)
+                or item.get("bundle", {}).get("sha256")
+                != item.get("deployed", {}).get("sha256")
+                for item in artifacts
+            )
+        ):
+            raise ReviewError("Viewer source/bundle/deployed receipt is incomplete")
+        fallback = receipt["viewer_fallback"]
+        if (
+            not isinstance(fallback, dict)
+            or fallback.get("schema") != "issue15.viewer-fallback-smoke/1"
+            or fallback.get("rejected_reuse", {}).get("http_status") != 400
+            or fallback.get("fallback", {}).get("action") != "start"
+        ):
+            raise ReviewError("Viewer reuse-rejection fallback receipt is incomplete")
+        native = receipt["native_depth_eight"]
+        if (
+            not isinstance(native, dict)
+            or native.get("schema") != "issue15.native-depth-eight-evidence/1"
+            or native.get("native_required") is not True
+            or native.get("backend", {}).get("id")
+            != "meshscope.voxblame.native-sat/1"
+            or native.get("depths") != list(range(1, 9))
+        ):
+            raise ReviewError("native-required depth-8 receipt is incomplete")
+        shipped = receipt["shipped_tree"]
+        files = shipped.get("files") if isinstance(shipped, dict) else None
+        if (
+            not isinstance(shipped, dict)
+            or shipped.get("schema") != "cvm.deployed-runtime-tree-receipt/1"
+            or not isinstance(files, list)
+            or not files
+            or shipped.get("file_count") != len(files)
+            or shipped.get("total_bytes")
+            != sum(item.get("size_bytes", -1) for item in files if isinstance(item, dict))
+        ):
+            raise ReviewError("complete shipped-runtime tree receipt is missing")
+        tree_bytes = json.dumps(files, sort_keys=True, separators=(",", ":")).encode()
+        if shipped.get("tree_sha256") != hashlib.sha256(tree_bytes).hexdigest():
+            raise ReviewError("shipped-runtime tree receipt digest conflicts")
+        if (
+            set(proof)
+            != {
+                "schema",
+                "job",
+                "scenario",
+                "execution_profile",
+                "sandbox",
+                "provider_environment",
+                "requests",
+            }
+            or proof.get("schema") != "cvm.provider-free-execution/1"
+            or proof.get("scenario")
+            != {
+                "name": "issue15-runtime-authority",
+                "identity": "issue15.provider-free.runtime-authority/1",
+            }
+            or proof.get("execution_profile", {}).get("schema")
+            != "cvm.provider-free-execution-profile/1"
+            or proof.get("execution_profile", {}).get("id")
+            != "issue15.provider-free-bounded/1"
+            or proof.get("execution_profile", {}).get("provider_access") != "forbidden"
+            or proof.get("sandbox")
+            != {
+                "network": "isolated-loopback",
+                "resource_profile": "issue15.provider-free-bounded/1",
+            }
+            or proof.get("provider_environment", {}).get("credential_values_recorded")
+            is not False
+            or proof.get("requests") != {"model_gateway": 0, "provider": 0, "tap": 0}
+        ):
+            raise ReviewError("provider-free execution proof is incomplete")
+        command_path = receipt["commands"]
+        if command_path != "run/provider-free-commands.jsonl":
+            raise ReviewError("public-command receipt path conflicts")
+        manifest_files = manifest.get("files")
+        if manifest.get("final_status") != 0 or not isinstance(manifest_files, list):
+            raise ReviewError("terminal artifact manifest is incomplete")
+        manifest_by_path = {
+            item.get("path"): item
+            for item in manifest_files
+            if isinstance(item, dict) and isinstance(item.get("path"), str)
+        }
+        for relative in (
+            evidence,
+            "run/provider-free-execution.json",
+            command_path,
+        ):
+            path = workspace / relative
+            data = path.read_bytes()
+            entry = manifest_by_path.get(relative)
+            if (
+                not isinstance(entry, dict)
+                or entry.get("size_bytes") != len(data)
+                or entry.get("sha256") != hashlib.sha256(data).hexdigest()
+            ):
+                raise ReviewError(f"terminal manifest does not bind {relative}")
+    except (OSError, TypeError, ReviewError) as exc:
+        return (
+            "not_auditable",
+            {},
+            [
+                {
+                    "classification": "observability-gap",
+                    "detail": str(exc),
+                    "evidence": evidence,
+                }
+            ],
+            ["provider-free production runtime evidence failed closed audit"],
+        )
+    return (
+        "pass",
+        {
+            "runtime_authority": evidence,
+            "provider_free_execution": "run/provider-free-execution.json",
+            "terminal_manifest": "artifact_manifest.json",
+        },
+        [],
+        [],
+    )
 
 
 def _invalid_workspace_review(
@@ -496,6 +675,10 @@ def _canonical_review(
         raise ReviewError("valid Workspace response omitted its graph")
     delivery = graph.get("final_delivery")
     runner, issues = _runner_verdict(workspace)
+    runtime, runtime_provenance, runtime_issues, runtime_gaps = (
+        _runtime_authority_verdict(workspace)
+    )
+    issues.extend(runtime_issues)
     accepted = bool(delivery.get("accepted")) if isinstance(delivery, dict) else False
     provenance = {
         "workspace": "workspace.json",
@@ -503,6 +686,7 @@ def _canonical_review(
         "graph_index": "step_index.json",
         "runner": "artifact_manifest.json",
         "telemetry": "run/",
+        **runtime_provenance,
     }
     if authority.get("mode") == "materialized":
         provenance["portable_authority"] = "workspace-authority.json"
@@ -514,7 +698,7 @@ def _canonical_review(
             "reconstruction_quality": (
                 "accepted" if accepted else "delivered_with_residual"
             ),
-            "production_runtime_integration": "not_auditable",
+            "production_runtime_integration": runtime,
         },
         "contract_provenance": provenance,
         "workspace_validation": {
@@ -532,10 +716,7 @@ def _canonical_review(
         "graph": _canonical_graph(workspace, graph),
         "issues": issues,
         "unresolved": [],
-        "evidence_gaps": [
-            "production runtime integration requires shipped snapshot, invoked "
-            "installed-skill, bundle, parity, and isolation gate evidence"
-        ],
+        "evidence_gaps": runtime_gaps,
     }
 
 

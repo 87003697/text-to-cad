@@ -3,7 +3,7 @@
 set -euo pipefail
 
 usage() {
-    echo "Usage: $0 pilot <object> <group>" >&2
+    echo "Usage: $0 pilot <object> <group> | provider-free <scenario> <group>" >&2
     exit 2
 }
 
@@ -24,6 +24,14 @@ case "$mode" in
         group="$3"
         safe_component "$object_name" && safe_group "$group" || usage
         remote_command="python3 -m scripts.pilot.cvm_job submit-pilot '$object_name' '$group'"
+        ;;
+    provider-free)
+        [[ $# -eq 3 ]] || usage
+        scenario="$2"
+        group="$3"
+        [[ "$scenario" == "issue15-runtime-authority" ]] || usage
+        safe_group "$group" || usage
+        remote_command="python3 -m scripts.pilot.cvm_job submit-provider-free '$scenario' '$group'"
         ;;
     *) usage ;;
 esac

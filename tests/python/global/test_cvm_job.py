@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import os
 import signal
 import shutil
@@ -13,6 +14,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from unittest import mock
 
+from scripts.pilot.cvm_job import __main__ as cvm_job_cli
 from scripts.pilot.cvm_job import protocol, runtime
 from tests.python.support.paths import REPO_ROOT
 from tests.python.support.tmp_root import temporary_directory
@@ -58,6 +60,79 @@ class CvmJobTests(unittest.TestCase):
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(json.dumps({"final_status": final_status}), encoding="utf-8")
 
+    def write_provider_free_terminal_evidence(
+        self,
+        handle: str,
+        *,
+        complete: bool = True,
+    ) -> None:
+        state = protocol.load_state(self.state_root, handle)
+        exp_dir = self.repo_root / "outputs" / handle
+        exp_dir.mkdir(parents=True, exist_ok=True)
+        proof = {
+            "schema": "cvm.provider-free-execution/1",
+            "job": handle,
+            "scenario": state["scenario"],
+            "execution_profile": state["execution_profile"],
+            "sandbox": {
+                "network": "isolated-loopback",
+                "resource_profile": state["execution_profile"]["id"],
+            },
+            "provider_environment": {
+                "allowlist": ["HOME", "LANG", "PATH", "PYTHONDONTWRITEBYTECODE", "TZ"],
+                "stripped": [
+                    "ANTHROPIC_API_KEY",
+                    "HTTPS_PROXY",
+                    "OPENAI_API_KEY",
+                    "VENUS_TOKEN",
+                ],
+                "credential_values_recorded": False,
+            },
+            "requests": {"model_gateway": 0, "provider": 0, "tap": 0},
+        }
+        proof_path = exp_dir / "run" / "provider-free-execution.json"
+        proof_path.parent.mkdir(parents=True, exist_ok=True)
+        proof_path.write_text(
+            json.dumps(proof, sort_keys=True, separators=(",", ":")) + "\n",
+            encoding="utf-8",
+        )
+        proof_bytes = proof_path.read_bytes()
+        files = [
+            {
+                "path": "run/provider-free-execution.json",
+                "size_bytes": len(proof_bytes),
+                "sha256": hashlib.sha256(proof_bytes).hexdigest(),
+            }
+        ]
+        if complete:
+            for name, data in (
+                ("run/runtime-authority-smoke.json", b"{}\n"),
+                ("workspace-authority.json", b"{}\n"),
+                ("workspace-authority.bundle", b"bundle"),
+                ("workspace.json", b"{}\n"),
+                ("final/manifest.json", b"{}\n"),
+            ):
+                destination = exp_dir / name
+                destination.parent.mkdir(parents=True, exist_ok=True)
+                destination.write_bytes(data)
+                files.append(
+                    {
+                        "path": name,
+                        "size_bytes": len(data),
+                        "sha256": hashlib.sha256(data).hexdigest(),
+                    }
+                )
+        manifest = {
+            "schema_version": 1,
+            "workload_status": 0,
+            "final_status": 0,
+            "files": files,
+        }
+        (exp_dir / "artifact_manifest.json").write_text(
+            json.dumps(manifest, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
+
     def test_submit_returns_stable_handle_before_child_start(self) -> None:
         handle = self.submit()
         self.assertRegex(
@@ -69,6 +144,185 @@ class CvmJobTests(unittest.TestCase):
         self.assertIsNone(state["supervisor_pid"])
         self.assertEqual(self.detached[0], handle)
         self.assertIn("supervise-pilot", self.detached[1])
+
+    def test_provider_free_submit_binds_scenario_and_execution_profile(self) -> None:
+        detached: dict[str, object] = {}
+
+        def fake_detach(handle, command, root):
+            detached.update(handle=handle, command=list(command), root=root)
+            return 1234
+
+        result = runtime.submit_provider_free(
+            "issue15-runtime-authority",
+            self.group,
+            state_root=self.state_root,
+            detach=fake_detach,
+        )
+
+        handle = result["job"]
+        state = protocol.load_state(self.state_root, handle)
+        self.assertEqual(result["kind"], "provider-free")
+        self.assertEqual(state["job_kind"], "provider-free")
+        self.assertEqual(
+            state["scenario"],
+            {
+                "name": "issue15-runtime-authority",
+                "identity": "issue15.provider-free.runtime-authority/1",
+            },
+        )
+        self.assertEqual(
+            state["execution_profile"],
+            {
+                "schema": "cvm.provider-free-execution-profile/1",
+                "id": "issue15.provider-free-bounded/1",
+                "provider_access": "forbidden",
+            },
+        )
+        self.assertIn("supervise-provider-free", detached["command"])
+
+    def test_provider_free_submit_cli_returns_compact_stable_handle(self) -> None:
+        expected = {
+            "job": f"{self.group}/20260811-210000-issue15-runtime-authority",
+            "state": "submitted",
+            "kind": "provider-free",
+        }
+        with (
+            mock.patch.object(runtime, "submit_provider_free", return_value=expected),
+            mock.patch.object(cvm_job_cli, "submit_provider_free", return_value=expected),
+            mock.patch("sys.stdout", new_callable=__import__("io").StringIO) as stdout,
+        ):
+            status = cvm_job_cli.main(
+                [
+                    "--state-root",
+                    os.fspath(self.state_root),
+                    "submit-provider-free",
+                    "issue15-runtime-authority",
+                    self.group,
+                ]
+            )
+
+        self.assertEqual(status, 0)
+        self.assertEqual(json.loads(stdout.getvalue()), expected)
+
+    def test_provider_free_supervisor_cli_reports_terminal_state(self) -> None:
+        handle = f"{self.group}/20260811-210000-issue15-runtime-authority"
+        expected = {
+            "job": handle,
+            "state": "succeeded",
+            "kind": "pilot",
+            "job_kind": "provider-free",
+        }
+        with (
+            mock.patch.object(
+                cvm_job_cli,
+                "supervise_provider_free",
+                return_value=expected,
+                create=True,
+            ) as supervise,
+            mock.patch("sys.stdout", new_callable=__import__("io").StringIO) as stdout,
+        ):
+            status = cvm_job_cli.main(
+                [
+                    "--state-root",
+                    os.fspath(self.state_root),
+                    "supervise-provider-free",
+                    "--job",
+                    handle,
+                ]
+            )
+
+        self.assertEqual(status, 0)
+        supervise.assert_called_once_with(handle, state_root=self.state_root)
+        self.assertEqual(json.loads(stdout.getvalue()), expected)
+
+    def test_provider_free_supervisor_uses_closed_runner_and_stripped_environment(self) -> None:
+        handle = runtime.submit_provider_free(
+            "issue15-runtime-authority",
+            self.group,
+            state_root=self.state_root,
+            detach=lambda *args: 1234,
+        )["job"]
+        self.write_provider_free_terminal_evidence(handle)
+        captured: dict[str, object] = {}
+
+        def fake_run(root, job, command, **kwargs):
+            captured["command"] = list(command)
+            captured["env"] = dict(kwargs["env"])
+            return 0, 4321
+
+        hostile_environment = {
+            "PATH": os.environ["PATH"],
+            "HOME": os.fspath(self.workspace),
+            "LANG": "C.UTF-8",
+            "VENUS_TOKEN": "do-not-forward",
+            "OPENAI_API_KEY": "do-not-forward",
+            "ANTHROPIC_API_KEY": "do-not-forward",
+            "HTTPS_PROXY": "http://provider-proxy.invalid",
+        }
+        with mock.patch.object(runtime, "_run_with_heartbeat", side_effect=fake_run):
+            state = runtime.supervise_provider_free(
+                handle,
+                state_root=self.state_root,
+                environ=hostile_environment,
+            )
+
+        self.assertEqual(state["state"], "succeeded")
+        self.assertEqual(
+            captured["command"],
+            [
+                sys.executable,
+                os.fspath(runtime.PROVIDER_FREE_RUNNER),
+                "run",
+                "issue15-runtime-authority",
+                self.group,
+                protocol.parse_handle(handle)["exp"],
+            ],
+        )
+        child_environment = captured["env"]
+        self.assertEqual(child_environment["CVM_PROVIDER_FREE_PROFILE"], "issue15.provider-free-bounded/1")
+        self.assertEqual(
+            child_environment["CVM_PROVIDER_FREE_STRIPPED_NAMES"],
+            "ANTHROPIC_API_KEY,HTTPS_PROXY,OPENAI_API_KEY,VENUS_TOKEN",
+        )
+        for forbidden in ("VENUS_TOKEN", "OPENAI_API_KEY", "ANTHROPIC_API_KEY", "HTTPS_PROXY"):
+            self.assertNotIn(forbidden, child_environment)
+        self.assertEqual(
+            state["no_provider_evidence"],
+            f"outputs/{handle}/run/provider-free-execution.json",
+        )
+        with mock.patch.object(runtime, "_observe_pilot", return_value={}):
+            public = runtime.status_job(handle, state_root=self.state_root)
+        self.assertEqual(public["kind"], "provider-free")
+        self.assertEqual(public["scenario"], state["scenario"])
+
+    def test_provider_free_supervisor_rejects_incomplete_terminal_evidence(self) -> None:
+        handle = runtime.submit_provider_free(
+            "issue15-runtime-authority",
+            self.group,
+            state_root=self.state_root,
+            detach=lambda *args: 1234,
+        )["job"]
+        self.write_provider_free_terminal_evidence(handle, complete=False)
+        with mock.patch.object(
+            runtime,
+            "_run_with_heartbeat",
+            return_value=(0, 4321),
+        ):
+            state = runtime.supervise_provider_free(
+                handle,
+                state_root=self.state_root,
+                environ={
+                    "PATH": os.environ["PATH"],
+                    "HOME": os.fspath(self.workspace),
+                    "VENUS_TOKEN": "do-not-forward",
+                    "OPENAI_API_KEY": "do-not-forward",
+                    "ANTHROPIC_API_KEY": "do-not-forward",
+                    "HTTPS_PROXY": "http://provider-proxy.invalid",
+                },
+            )
+
+        self.assertEqual(state["state"], "failed")
+        self.assertIn("terminal evidence", state["failure_reason"])
 
     def test_submit_launch_failure_is_terminal(self) -> None:
         def fail_detach(handle, command, root):
@@ -590,6 +844,88 @@ printf '%s\\n' '{"job":"group/exp","state":"submitted"}'
         self.assertIn("20260805-170000-audit", commands[0])
         self.assertIn("ServerAliveInterval=30", commands[1])
         self.assertIn("scripts.pilot.cvm_job wait", commands[1])
+
+    def test_provider_free_submit_forwards_only_the_allowlisted_scenario(self) -> None:
+        fake_bin = self.workspace / "bin"
+        fake_bin.mkdir()
+        command_log = self.workspace / "provider-free-commands.log"
+        self.write_executable(
+            fake_bin / "ssh",
+            """#!/usr/bin/env bash
+set -euo pipefail
+printf '%s\\n' "$*" >> "$CVM_WRAPPER_LOG"
+printf '%s\\n' '{"job":"group/exp","state":"submitted"}'
+""",
+        )
+        env = {
+            **os.environ,
+            "PATH": f"{fake_bin}:{os.environ['PATH']}",
+            "CVM_WRAPPER_LOG": os.fspath(command_log),
+        }
+
+        submitted = subprocess.run(
+            [
+                os.fspath(SUBMIT_SCRIPT),
+                "provider-free",
+                "issue15-runtime-authority",
+                "20260811-210000-issue15-provider-free",
+            ],
+            env=env,
+            check=False,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+
+        self.assertEqual(submitted.returncode, 0, submitted.stderr)
+        commands = command_log.read_text(encoding="utf-8").splitlines()
+        self.assertEqual(len(commands), 1)
+        self.assertIn(
+            "scripts.pilot.cvm_job submit-provider-free "
+            "'issue15-runtime-authority' "
+            "'20260811-210000-issue15-provider-free'",
+            commands[0],
+        )
+
+    def test_provider_free_submit_rejects_commands_paths_and_unsafe_groups_before_ssh(self) -> None:
+        fake_bin = self.workspace / "bin"
+        fake_bin.mkdir()
+        marker = self.workspace / "provider-free-ssh-called"
+        self.write_executable(
+            fake_bin / "ssh",
+            """#!/usr/bin/env bash
+set -euo pipefail
+touch "$CVM_SSH_MARKER"
+exit 99
+""",
+        )
+        env = {
+            **os.environ,
+            "PATH": f"{fake_bin}:{os.environ['PATH']}",
+            "CVM_SSH_MARKER": os.fspath(marker),
+        }
+        invalid = (
+            ("provider-free", "../../bin/sh", "20260811-210000-safe"),
+            ("provider-free", "echo${IFS}owned", "20260811-210000-safe"),
+            ("provider-free", "issue15-runtime-authority", "../unsafe"),
+            (
+                "provider-free",
+                "issue15-runtime-authority",
+                "20260811-210000-safe",
+                "extra-command",
+            ),
+        )
+        for argv in invalid:
+            result = subprocess.run(
+                [os.fspath(SUBMIT_SCRIPT), *argv],
+                env=env,
+                check=False,
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+            )
+            self.assertEqual(result.returncode, 2, argv)
+        self.assertFalse(marker.exists())
 
     def test_submit_and_monitor_reject_batch_without_ssh(self) -> None:
         fake_bin = self.workspace / "bin"
