@@ -212,26 +212,20 @@ def create_runtime(stage: Path) -> cvm_push.RuntimeAttestation:
 
 
 class PushWrapperTests(unittest.TestCase):
-    def test_shell_wrapper_executes_python_module_from_its_own_directory(self) -> None:
-        with tempfile.TemporaryDirectory() as root_text:
-            root = Path(root_text)
-            wrapper = root / "cvm-push.sh"
-            module = root / "cvm_push.py"
-            shutil.copy2(REPO_ROOT / "scripts/pilot/cvm-push.sh", wrapper)
-            module.write_text(
-                "import sys\nprint('|'.join(sys.argv[1:]))\n",
-                encoding="utf-8",
-            )
-            result = subprocess.run(
-                [wrapper, "one", "two"],
-                cwd="/tmp",
-                check=False,
-                text=True,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-            )
-        self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(result.stdout.strip(), "one|two")
+    def test_shell_wrapper_reaches_argparse_from_any_working_directory(self) -> None:
+        wrapper = REPO_ROOT / "scripts/pilot/cvm-push.sh"
+        for cwd in (REPO_ROOT, Path("/tmp")):
+            with self.subTest(cwd=cwd):
+                result = subprocess.run(
+                    [wrapper, "--unknown"],
+                    cwd=cwd,
+                    check=False,
+                    text=True,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                )
+                self.assertEqual(result.returncode, 2, result.stderr)
+                self.assertIn("unrecognized arguments: --unknown", result.stderr)
 
 
 class AgentModeTests(unittest.TestCase):

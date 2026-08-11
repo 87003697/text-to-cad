@@ -49,7 +49,12 @@ class CvmSyncContractTests(unittest.TestCase):
         self.assertNotIn("rm -rf -- plugins", production_lines)
         self.assertNotIn("test ! -e plugins", production_lines)
         self.assertIn('["scripts/bundle/bundle.sh"]', module)
-        self.assertIn('exec python3 "$SCRIPT_DIR/cvm_push.py" "$@"', wrapper)
+        self.assertIn('REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"', wrapper)
+        self.assertIn('cd "$REPO_ROOT"', wrapper)
+        self.assertIn(
+            'exec python3 -m scripts.pilot.cvm_push "$@"',
+            wrapper,
+        )
         self.assertIn('"Source: "', module)
         self.assertIn('"Remote Git base: ', module)
         self.assertIn("PRODUCTION_RUNTIME = RuntimeContract", module)
