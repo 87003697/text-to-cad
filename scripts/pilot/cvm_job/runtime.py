@@ -45,6 +45,7 @@ DEFAULT_HEARTBEAT_INTERVAL = 5.0
 DEFAULT_STALE_AFTER = 60.0
 DEFAULT_WAIT_TIMEOUT = 12 * 60 * 60.0
 PROCESS_TERMINATION_GRACE = 5.0
+PROVIDER_FREE_BOOTSTRAP_LOG_BYTES = 4 * 1024
 _SECRET_HEADLINE = re.compile(
     r"(?i)(token|secret|password|api[_-]?key)\s*[=:]\s*\S+|[A-Za-z0-9_=-]{32,}"
 )
@@ -809,6 +810,24 @@ def supervise_provider_free(
                 create_exp=False,
             )
             manifest_path = exp_dir / "artifact_manifest.json"
+            if not manifest_path.is_file():
+                diagnostic = _provider_free_bootstrap_diagnostic(
+                    root,
+                    handle,
+                    process_status=process_status,
+                    output_exists=exp_dir.is_dir(),
+                )
+                return transition(
+                    root,
+                    handle,
+                    "failed",
+                    runner_final_status=None,
+                    artifact_manifest=None,
+                    process_exit_code=process_status,
+                    no_provider_evidence=None,
+                    bootstrap_diagnostic=diagnostic,
+                    failure_reason="provider-free runner produced no artifact manifest",
+                )
             runner_status, manifest_error = _manifest_result(manifest_path)
             proof_path, proof_error = _provider_free_evidence_result(
                 exp_dir,
@@ -857,6 +876,52 @@ def supervise_provider_free(
                     ),
                 )
             return load_state(root, handle)
+
+
+def _provider_free_bootstrap_diagnostic(
+    root: Path,
+    handle: str,
+    *,
+    process_status: int,
+    output_exists: bool,
+) -> dict[str, object]:
+    """Classify a bounded log tail without publishing attacker-controlled text."""
+
+    if process_status == 0:
+        classification = "runner-completed-without-artifact-manifest"
+    elif process_status < 0:
+        classification = "runner-terminated-before-artifact-manifest"
+    else:
+        classification = "runner-exited-before-artifact-manifest"
+        try:
+            with log_path(root, handle).open("rb") as stream:
+                stream.seek(0, os.SEEK_END)
+                size = stream.tell()
+                stream.seek(max(0, size - PROVIDER_FREE_BOOTSTRAP_LOG_BYTES))
+                diagnostic_tail = stream.read(PROVIDER_FREE_BOOTSTRAP_LOG_BYTES)
+        except OSError:
+            diagnostic_tail = b""
+        if any(
+            marker in diagnostic_tail
+            for marker in (
+                b"ModuleNotFoundError",
+                b"ImportError:",
+                b"cannot import name",
+            )
+        ):
+            classification = "python-import-failed"
+        elif b"provider-free-runner:" in diagnostic_tail:
+            classification = "runner-contract-rejected"
+        elif b"can't open file" in diagnostic_tail:
+            classification = "runner-entrypoint-unavailable"
+    return {
+        "schema": "cvm.provider-free-bootstrap-diagnostic/1",
+        "phase": (
+            "before-artifact-manifest" if output_exists else "before-experiment"
+        ),
+        "classification": classification,
+        "process_exit_code": process_status,
+    }
 
 
 def _run_with_heartbeat(

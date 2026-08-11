@@ -20,6 +20,19 @@ _TRANSITIONS = {
 }
 PILOT_STATES = frozenset(_TRANSITIONS)
 _COMPONENT = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
+_PROVIDER_FREE_BOOTSTRAP_PHASES = frozenset(
+    {"before-experiment", "before-artifact-manifest"}
+)
+_PROVIDER_FREE_BOOTSTRAP_CLASSIFICATIONS = frozenset(
+    {
+        "python-import-failed",
+        "runner-contract-rejected",
+        "runner-entrypoint-unavailable",
+        "runner-exited-before-artifact-manifest",
+        "runner-terminated-before-artifact-manifest",
+        "runner-completed-without-artifact-manifest",
+    }
+)
 _RESERVED_UPDATE_FIELDS = frozenset(
     {
         "schema_version",
@@ -308,4 +321,36 @@ def public_state(state: dict[str, Any], stale_after: float) -> dict[str, Any]:
         )
         if state.get("failure_reason"):
             result["failure_reason"] = str(state["failure_reason"])[:160]
+        diagnostic = _public_provider_free_bootstrap_diagnostic(
+            state.get("bootstrap_diagnostic")
+        )
+        if state.get("job_kind") == "provider-free" and diagnostic is not None:
+            result["bootstrap_diagnostic"] = diagnostic
     return result
+
+
+def _public_provider_free_bootstrap_diagnostic(
+    value: object,
+) -> dict[str, object] | None:
+    """Return only the closed, bounded provider-free bootstrap vocabulary."""
+
+    if not isinstance(value, dict):
+        return None
+    phase = value.get("phase")
+    classification = value.get("classification")
+    process_exit_code = value.get("process_exit_code")
+    if (
+        value.get("schema") != "cvm.provider-free-bootstrap-diagnostic/1"
+        or phase not in _PROVIDER_FREE_BOOTSTRAP_PHASES
+        or classification not in _PROVIDER_FREE_BOOTSTRAP_CLASSIFICATIONS
+        or isinstance(process_exit_code, bool)
+        or not isinstance(process_exit_code, int)
+        or not -255 <= process_exit_code <= 255
+    ):
+        return None
+    return {
+        "schema": "cvm.provider-free-bootstrap-diagnostic/1",
+        "phase": phase,
+        "classification": classification,
+        "process_exit_code": process_exit_code,
+    }

@@ -24,6 +24,7 @@ from tests.python.support.tmp_root import temporary_directory
 PILOT_ROOT = REPO_ROOT / "scripts" / "pilot"
 SUBMIT_SCRIPT = PILOT_ROOT / "cvm-submit.sh"
 MONITOR_SCRIPT = PILOT_ROOT / "cvm-monitor.sh"
+MONITOR_SKILL = REPO_ROOT / ".claude" / "skills" / "cvm-monitor" / "SKILL.md"
 
 
 class CvmJobTests(unittest.TestCase):
@@ -415,6 +416,7 @@ class CvmJobTests(unittest.TestCase):
             public = runtime.status_job(handle, state_root=self.state_root)
         self.assertEqual(public["kind"], "provider-free")
         self.assertEqual(public["scenario"], state["scenario"])
+        self.assertNotIn("bootstrap_diagnostic", public)
 
     def test_provider_free_supervisor_rejects_incomplete_terminal_evidence(self) -> None:
         handle = runtime.submit_provider_free(
@@ -447,6 +449,110 @@ class CvmJobTests(unittest.TestCase):
 
         self.assertEqual(state["state"], "failed")
         self.assertIn("terminal evidence", state["failure_reason"])
+        public = runtime.status_job(
+            handle,
+            state_root=self.state_root,
+            include_observation=False,
+        )
+        self.assertNotIn("bootstrap_diagnostic", public)
+
+    def test_provider_free_bootstrap_failure_has_bounded_public_diagnostic(self) -> None:
+        handle = runtime.submit_provider_free(
+            "issue15-runtime-authority",
+            self.group,
+            state_root=self.state_root,
+            detach=lambda *args: 1234,
+        )["job"]
+        secret = "credential-value-that-must-not-be-published"
+        diagnostic_log = protocol.log_path(self.state_root, handle)
+        diagnostic_log.parent.mkdir(parents=True, exist_ok=True)
+        diagnostic_log.write_text(
+            "attacker-controlled-output\n" * 500
+            + "Traceback (most recent call last):\n"
+            + "ModuleNotFoundError: missing bootstrap module\n"
+            + f"OPENAI_API_KEY={secret}\n",
+            encoding="utf-8",
+        )
+
+        with mock.patch.object(
+            runtime,
+            "_run_with_heartbeat",
+            return_value=(1, 4321),
+        ):
+            state = runtime.supervise_provider_free(
+                handle,
+                state_root=self.state_root,
+                environ={
+                    "PATH": os.environ["PATH"],
+                    "OPENAI_API_KEY": secret,
+                },
+            )
+
+        expected = {
+            "schema": "cvm.provider-free-bootstrap-diagnostic/1",
+            "phase": "before-experiment",
+            "classification": "python-import-failed",
+            "process_exit_code": 1,
+        }
+        self.assertEqual(state["state"], "failed")
+        public = runtime.status_job(
+            handle,
+            state_root=self.state_root,
+            include_observation=False,
+        )
+        waited, exit_code = runtime.wait_job(
+            handle,
+            state_root=self.state_root,
+            timeout=0,
+        )
+        self.assertEqual(public["bootstrap_diagnostic"], expected)
+        self.assertEqual(waited["bootstrap_diagnostic"], expected)
+        self.assertEqual(exit_code, 1)
+        serialized = json.dumps(public, sort_keys=True)
+        self.assertLess(len(serialized), 1_024)
+        self.assertNotIn(secret, serialized)
+        self.assertNotIn("attacker-controlled-output", serialized)
+        self.assertNotIn("\n", serialized)
+
+    def test_public_bootstrap_diagnostic_ignores_unbounded_extra_fields(self) -> None:
+        handle = runtime.submit_provider_free(
+            "issue15-runtime-authority",
+            self.group,
+            state_root=self.state_root,
+            detach=lambda *args: 1234,
+        )["job"]
+        protocol.transition(self.state_root, handle, "running")
+        protocol.transition(
+            self.state_root,
+            handle,
+            "failed",
+            process_exit_code=1,
+            bootstrap_diagnostic={
+                "schema": "cvm.provider-free-bootstrap-diagnostic/1",
+                "phase": "before-experiment",
+                "classification": "runner-exited-before-artifact-manifest",
+                "process_exit_code": 1,
+                "detail": "OPENAI_API_KEY=secret\n" * 500,
+                "environment": {"VENUS_TOKEN": "secret"},
+            },
+        )
+
+        public = runtime.status_job(
+            handle,
+            state_root=self.state_root,
+            include_observation=False,
+        )
+
+        self.assertEqual(
+            public["bootstrap_diagnostic"],
+            {
+                "schema": "cvm.provider-free-bootstrap-diagnostic/1",
+                "phase": "before-experiment",
+                "classification": "runner-exited-before-artifact-manifest",
+                "process_exit_code": 1,
+            },
+        )
+        self.assertNotIn("secret", json.dumps(public))
 
     def test_provider_free_supervisor_rejects_changed_sandbox_contract(self) -> None:
         for mutation in ("limit", "extra-bind", "browser-bind", "environment"):
@@ -1132,6 +1238,15 @@ class CvmJobTests(unittest.TestCase):
         self.assertIn("scripts.pilot.cvm_job wait", monitor)
         for forbidden in (" ps ", " stat ", " find ", "git log"):
             self.assertNotIn(forbidden, monitor)
+
+    def test_monitor_contract_documents_bounded_bootstrap_diagnostic(self) -> None:
+        contract = MONITOR_SKILL.read_text(encoding="utf-8")
+
+        self.assertIn("cvm.provider-free-bootstrap-diagnostic/1", contract)
+        self.assertIn("before-experiment", contract)
+        self.assertIn("before-artifact-manifest", contract)
+        self.assertIn("4 KiB", contract)
+        self.assertIn("does not publish raw log text", contract)
 
     def test_submit_and_monitor_forward_one_approved_remote_cli_call(self) -> None:
         fake_bin = self.workspace / "bin"
