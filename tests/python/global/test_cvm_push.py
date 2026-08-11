@@ -12,6 +12,7 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
+from scripts.pilot import deployment_authority
 from tests.python.support.paths import REPO_ROOT
 
 
@@ -271,6 +272,15 @@ class BuildInputTests(unittest.TestCase):
 
 
 class StageTests(unittest.TestCase):
+    def test_skill_documents_the_closed_durable_fixture_deployment_exception(self) -> None:
+        contract = (REPO_ROOT / ".claude/skills/cvm-push/SKILL.md").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("provider-free durable fixture allowlist", contract)
+        self.assertIn("models/simple/rectangular_clamp_block.py", contract)
+        self.assertIn("models/simple/simple_model_library.py", contract)
+        self.assertIn("deployed-source authority", contract)
+
     def test_runtime_attestation_hashes_all_provider_free_executed_code(self) -> None:
         for relative in (
             "scripts/pilot/cvm-submit.sh",
@@ -492,17 +502,25 @@ class TransferAndVerifyTests(unittest.TestCase):
                     {
                         "schema": "cvm.deployed-source-authority/1",
                         "source_head": "a" * 40,
+                        "runtime_identity": {
+                            "bwrap": {"path": "/usr/bin/bwrap"},
+                            "chromium": {"revision": "1234"},
+                            "cadpy": {
+                                "path": deployment_authority.CADPY_RUNTIME_PATH
+                            },
+                        },
                     }
                 ),
             )
             workflow = cvm_push.CvmPush(runner, repo_root=root, environ={})
 
-            receipt = workflow.publish_remote_deployment_authority("a" * 40)
+            receipt = workflow.publish_remote_deployment_authority("a" * 40, "1234")
 
             command = runner.remote_commands[0]
             self.assertIn("deployment_authority.py write", command)
             self.assertIn("deployment_authority.py check", command)
             self.assertIn("--source-head", command)
+            self.assertIn("--chromium-revision 1234", command)
             self.assertEqual(receipt["source_head"], "a" * 40)
 
     def test_remote_native_build_compiles_the_physical_meshscope_bundle(self) -> None:
@@ -754,8 +772,10 @@ class WorkflowTests(unittest.TestCase):
                 "build-native"
             )
             workflow.publish_remote_deployment_authority = (
-                lambda source_head: (
-                    events.append(f"publish-authority:{source_head}"),
+                lambda source_head, chromium_revision: (
+                    events.append(
+                        f"publish-authority:{source_head}:{chromium_revision}"
+                    ),
                     {"schema": "cvm.deployed-source-authority/1"},
                 )[1]
             )
@@ -786,7 +806,7 @@ class WorkflowTests(unittest.TestCase):
                     "attest",
                     "transfer",
                     "build-native",
-                    "publish-authority:deadbeef",
+                    "publish-authority:deadbeef:1234",
                     "verify",
                 ],
             )

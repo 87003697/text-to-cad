@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import os
+import hashlib
+import json
 from pathlib import Path
 import tempfile
 import unittest
@@ -63,6 +65,71 @@ class DeploymentAuthorityTests(unittest.TestCase):
                         source_head="b" * 40,
                         contract_paths=paths,
                     )
+
+    def test_receipt_rejects_a_symlink_ancestor_even_when_leaf_is_regular(self) -> None:
+        with tempfile.TemporaryDirectory() as root_text:
+            root = Path(root_text)
+            real = root / "real/pilot"
+            real.mkdir(parents=True)
+            (real / "runner.py").write_text("runner\n", encoding="utf-8")
+            (root / "scripts").symlink_to(root / "real", target_is_directory=True)
+
+            with self.assertRaisesRegex(
+                deployment_authority.DeploymentAuthorityError,
+                "symlink|escape",
+            ):
+                deployment_authority.build_receipt(
+                    root,
+                    source_head="c" * 40,
+                    contract_paths=("scripts/pilot",),
+                )
+
+    def test_runtime_identity_rejects_shadow_bwrap_and_wrong_chromium_cache(self) -> None:
+        with tempfile.TemporaryDirectory() as root_text:
+            root = Path(root_text)
+            cadpy = root / deployment_authority.CADPY_RUNTIME_PATH
+            cadpy.parent.mkdir(parents=True)
+            cadpy.write_bytes(b"cadpy")
+            identity = {
+                "schema": "cvm.provider-free-runtime-identity/1",
+                "bwrap": {
+                    "path": "/usr/bin/bwrap",
+                    "sha256": "a" * 64,
+                    "version": "bubblewrap 1.2.3",
+                },
+                "chromium": {
+                    "revision": "1234",
+                    "host_cache_path": "/home/test/.cache/ms-playwright",
+                    "sandbox_cache_path": deployment_authority.SANDBOX_BROWSER_CACHE,
+                    "executable_path": (
+                        "/home/test/.cache/ms-playwright/"
+                        "chromium_headless_shell-1234/"
+                        "chrome-headless-shell-linux64/chrome-headless-shell"
+                    ),
+                    "sha256": "b" * 64,
+                },
+                "cadpy": {
+                    "path": deployment_authority.CADPY_RUNTIME_PATH,
+                    "sha256": hashlib.sha256(cadpy.read_bytes()).hexdigest(),
+                },
+            }
+            for mutation in ("bwrap", "revision", "browser-path"):
+                with self.subTest(mutation=mutation):
+                    candidate = json.loads(json.dumps(identity))
+                    if mutation == "bwrap":
+                        candidate["bwrap"]["path"] = "/tmp/bwrap"
+                    elif mutation == "revision":
+                        candidate["chromium"]["revision"] = "9999"
+                    else:
+                        candidate["chromium"]["executable_path"] = "/tmp/chromium"
+                    with self.assertRaises(
+                        deployment_authority.DeploymentAuthorityError
+                    ):
+                        deployment_authority.validate_runtime_identity(
+                            root,
+                            candidate,
+                            verify_external=False,
+                        )
 
 
 if __name__ == "__main__":

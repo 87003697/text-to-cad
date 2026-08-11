@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import http.server
+import importlib
 import json
 import os
 from pathlib import Path, PurePosixPath
@@ -35,6 +36,7 @@ PREVIEW_PROFILE = (
 )
 DURABLE_MODEL_SOURCE = REPO_ROOT / "models/simple/rectangular_clamp_block.py"
 DURABLE_MODEL_LIBRARY = REPO_ROOT / "models/simple/simple_model_library.py"
+CADPY_SRC = REPO_ROOT / "skills/cad/scripts/packages/cadpy/src"
 VIEWER_RUNTIME = REPO_ROOT / "skills/cad-viewer/scripts/viewer"
 VIEWER_IDENTITY = VIEWER_RUNTIME / "runtime-identity.json"
 VIEWER_LAUNCHER = VIEWER_RUNTIME / "scripts/start-agent-viewer.mjs"
@@ -233,6 +235,26 @@ def native_depth_eight_evidence(payload: dict[str, Any]) -> dict[str, Any]:
         "backend": dict(payload["backend"]),
         "depths": depths,
         "objective_facts": summary.get("objective_facts"),
+    }
+
+
+def cadpy_runtime_evidence() -> dict[str, Any]:
+    """Resolve cadpy through the same audited bundled package used by CAD build."""
+
+    sys.path.insert(0, os.fspath(CADPY_SRC))
+    try:
+        module = importlib.import_module("cadpy")
+        path = Path(str(module.__file__)).resolve(strict=True)
+        path.relative_to(CADPY_SRC.resolve(strict=True))
+    except (ImportError, OSError, ValueError) as exc:
+        raise ScenarioError("cadpy did not resolve from audited CAD skill runtime") from exc
+    finally:
+        if sys.path[0] == os.fspath(CADPY_SRC):
+            sys.path.pop(0)
+    return {
+        "schema": "cvm.audited-cadpy-runtime/1",
+        "path": path.relative_to(REPO_ROOT.resolve(strict=True)).as_posix(),
+        "sha256": _sha256(path),
     }
 
 
@@ -675,6 +697,7 @@ def run_issue15_runtime_authority(workspace: Path) -> dict[str, Any]:
     command_log = workspace / "run/provider-free-commands.jsonl"
     deployment = deployed_viewer_receipt(REPO_ROOT)
     tree = deployed_runtime_tree_receipt(REPO_ROOT)
+    cadpy_runtime = cadpy_runtime_evidence()
     fallback = viewer_fallback_evidence(workspace, deployment)
     candidate = _prepare_candidate(workspace, command_log)
     _prepare_workspace(workspace, candidate, command_log)
@@ -691,6 +714,7 @@ def run_issue15_runtime_authority(workspace: Path) -> dict[str, Any]:
         "viewer_deployment": deployment,
         "viewer_fallback": fallback,
         "native_depth_eight": native,
+        "cadpy_runtime": cadpy_runtime,
         "shipped_tree": tree,
         "commands": "run/provider-free-commands.jsonl",
     }

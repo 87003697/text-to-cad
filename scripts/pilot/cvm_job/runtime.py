@@ -63,13 +63,147 @@ PROVIDER_FREE_EXECUTION_PROFILE = {
     "schema": "cvm.provider-free-execution-profile/1",
     "id": "issue15.provider-free-bounded/1",
     "provider_access": "forbidden",
+    "sandbox_profile": "cvm.provider-free-linux-sandbox/1",
 }
+PROVIDER_FREE_SANDBOX_PROFILE = {
+    "schema": "cvm.provider-free-linux-sandbox/1",
+    "namespaces": ["network", "pid", "ipc", "uts"],
+    "capabilities": "drop-all",
+    "die_with_parent": True,
+    "new_session": True,
+    "temporary_filesystem": "/tmp",
+    "repository_mount": "read-only",
+    "output_mount": "read-write-exact-experiment",
+    "browser_cache_mount": "read-only-attested-revision",
+    "resource_limits": {
+        "wall_seconds": 1800,
+        "cpu_seconds": 1800,
+        "address_space_bytes": 16 * 1024**3,
+        "file_size_bytes": 4 * 1024**3,
+        "open_files": 512,
+        "processes": 256,
+    },
+    "cleanup": {
+        "timeout_exit_code": 124,
+        "terminal_manifest_rejects_links_and_special_files": True,
+        "failed_output_retained": True,
+    },
+}
+PROVIDER_FREE_SANDBOX_REPO_ROOT = Path("/workspace/repo")
+PROVIDER_FREE_REQUIRED_ENVIRONMENT = {
+    "HOME": "/home/provider-free",
+    "PATH": "/workspace/repo/.venv/bin:/usr/local/bin:/usr/bin:/bin",
+    "PLAYWRIGHT_BROWSERS_PATH": deployment_authority.SANDBOX_BROWSER_CACHE,
+    "PYTHONDONTWRITEBYTECODE": "1",
+}
+PROVIDER_FREE_SYSTEM_RO_PATHS = tuple(
+    Path(value)
+    for value in (
+        "/usr",
+        "/etc/alternatives",
+        "/etc/ca-certificates",
+        "/etc/crypto-policies",
+        "/etc/fonts",
+        "/etc/group",
+        "/etc/hosts",
+        "/etc/ld.so.cache",
+        "/etc/ld.so.conf",
+        "/etc/ld.so.conf.d",
+        "/etc/localtime",
+        "/etc/nsswitch.conf",
+        "/etc/os-release",
+        "/etc/passwd",
+        "/etc/pki",
+        "/etc/resolv.conf",
+        "/etc/ssl",
+        "/sys",
+    )
+)
 PROVIDER_FREE_SCENARIOS = {
     "issue15-runtime-authority": ProviderFreeScenario(
         name="issue15-runtime-authority",
         identity="issue15.provider-free.runtime-authority/1",
     ),
 }
+
+
+def provider_free_sandbox_argv(
+    scenario_name: str,
+    exp_dir: Path,
+    runtime_identity: dict[str, Any],
+    *,
+    repo_root: Path | None = None,
+) -> list[str]:
+    """Build the one exact versioned provider-free bubblewrap launch contract."""
+
+    source_root = REPO_ROOT if repo_root is None else repo_root
+    relative_exp = exp_dir.relative_to(source_root)
+    sandbox_exp = PROVIDER_FREE_SANDBOX_REPO_ROOT / relative_exp
+    bwrap = runtime_identity["bwrap"]["path"]
+    chromium = runtime_identity["chromium"]
+    argv = [
+        bwrap,
+        "--unshare-net",
+        "--unshare-pid",
+        "--unshare-ipc",
+        "--unshare-uts",
+        "--cap-drop",
+        "ALL",
+        "--die-with-parent",
+        "--new-session",
+        "--dev",
+        "/dev",
+        "--proc",
+        "/proc",
+        "--tmpfs",
+        "/tmp",
+        "--dir",
+        "/workspace",
+        "--ro-bind",
+        os.fspath(source_root),
+        os.fspath(PROVIDER_FREE_SANDBOX_REPO_ROOT),
+        "--bind",
+        os.fspath(exp_dir),
+        os.fspath(sandbox_exp),
+        "--dir",
+        "/home",
+        "--dir",
+        "/home/provider-free",
+        "--dir",
+        "/home/provider-free/.cache",
+        "--ro-bind",
+        chromium["host_cache_path"],
+        chromium["sandbox_cache_path"],
+    ]
+    for source, target in (
+        ("usr/bin", "/bin"),
+        ("usr/sbin", "/sbin"),
+        ("usr/lib", "/lib"),
+        ("usr/lib64", "/lib64"),
+    ):
+        argv.extend(("--symlink", source, target))
+    for path in PROVIDER_FREE_SYSTEM_RO_PATHS:
+        if path.exists():
+            argv.extend(("--ro-bind", os.fspath(path), os.fspath(path)))
+    argv.extend(
+        (
+            "--chdir",
+            os.fspath(PROVIDER_FREE_SANDBOX_REPO_ROOT),
+            "--",
+            os.fspath(PROVIDER_FREE_SANDBOX_REPO_ROOT / ".venv/bin/python"),
+            os.fspath(
+                PROVIDER_FREE_SANDBOX_REPO_ROOT
+                / "scripts/pilot/provider_free_scenarios.py"
+            ),
+            "run",
+            scenario_name,
+            "--workspace",
+            os.fspath(sandbox_exp),
+        )
+    )
+    return argv
+
+
 PROVIDER_FREE_ENV_ALLOWLIST = (
     "HOME",
     "LANG",
@@ -266,6 +400,11 @@ def submit_provider_free(
         receipt_bytes = receipt_path.read_bytes()
         deployment_receipt = json.loads(receipt_bytes)
         deployment_authority.verify_receipt(REPO_ROOT, deployment_receipt)
+        deployment_authority.validate_runtime_identity(
+            REPO_ROOT,
+            deployment_receipt.get("runtime_identity"),
+            verify_external=False,
+        )
     except (
         OSError,
         json.JSONDecodeError,
@@ -293,8 +432,16 @@ def submit_provider_free(
                     "deployment_receipt_sha256": hashlib.sha256(
                         receipt_bytes
                     ).hexdigest(),
+                    "deployment_receipt_canonical_sha256": hashlib.sha256(
+                        json.dumps(
+                            deployment_receipt,
+                            sort_keys=True,
+                            separators=(",", ":"),
+                        ).encode()
+                    ).hexdigest(),
                     "deployment_source_head": deployment_receipt["source_head"],
                     "deployment_tree_sha256": deployment_receipt["tree_sha256"],
+                    "runtime_identity": deployment_receipt["runtime_identity"],
                 },
             }
         )
@@ -377,6 +524,10 @@ def _provider_free_evidence_result(
         return None, "provider-free execution evidence missing"
     except (OSError, json.JSONDecodeError):
         return None, "provider-free execution evidence invalid"
+    try:
+        sandbox_bytes = (exp_dir / "run/sandbox-enforcement.json").read_bytes()
+    except OSError:
+        return None, "provider-free terminal evidence missing: run/sandbox-enforcement.json"
     expected_proof = {
         "schema": "cvm.provider-free-execution/1",
         "job": handle,
@@ -399,7 +550,10 @@ def _provider_free_evidence_result(
             "credential_values_recorded": False,
         },
         "requests": {"model_gateway": 0, "provider": 0, "tap": 0},
-        "sandbox_enforcement": "run/sandbox-enforcement.json",
+        "sandbox_enforcement": {
+            "path": "run/sandbox-enforcement.json",
+            "sha256": hashlib.sha256(sandbox_bytes).hexdigest(),
+        },
     }
     if proof != expected_proof:
         return None, "provider-free execution evidence does not match job authority"
@@ -417,11 +571,10 @@ def _provider_free_evidence_result(
         "final/manifest.json",
     )
     try:
-        retained_receipt = json.loads(
-            (exp_dir / "run/deployed-source-authority.json").read_text(
-                encoding="utf-8"
-            )
-        )
+        retained_receipt_bytes = (
+            exp_dir / "run/deployed-source-authority.json"
+        ).read_bytes()
+        retained_receipt = json.loads(retained_receipt_bytes)
         deployment_authority.verify_materialized(
             exp_dir / "run/deployed-source",
             retained_receipt,
@@ -442,6 +595,16 @@ def _provider_free_evidence_result(
         != record["request_authority"]["deployment_tree_sha256"]
         or retained_receipt.get("contract_paths")
         != list(deployment_authority.EXECUTION_AUTHORITY_PATHS)
+        or hashlib.sha256(retained_receipt_bytes).hexdigest()
+        != record["request_authority"]["deployment_receipt_sha256"]
+        or hashlib.sha256(
+            json.dumps(
+                retained_receipt, sort_keys=True, separators=(",", ":")
+            ).encode()
+        ).hexdigest()
+        != record["request_authority"]["deployment_receipt_canonical_sha256"]
+        or retained_receipt.get("runtime_identity")
+        != record["request_authority"]["runtime_identity"]
     ):
         return None, "provider-free retained deployment authority conflicts with job"
     try:
@@ -454,19 +617,39 @@ def _provider_free_evidence_result(
     environment_names = (
         sandbox.get("environment_names") if isinstance(sandbox, dict) else None
     )
+    expected_argv = provider_free_sandbox_argv(
+        record["scenario"]["name"],
+        exp_dir,
+        record["request_authority"]["runtime_identity"],
+    )
     if (
         not isinstance(sandbox, dict)
         or sandbox.get("schema") != "cvm.provider-free-sandbox-enforcement/1"
+        or set(sandbox)
+        != {
+            "schema",
+            "network",
+            "argv",
+            "environment_names",
+            "required_environment",
+            "sandbox_profile",
+            "runtime_identity",
+        }
         or sandbox.get("network") != "isolated-loopback"
-        or not isinstance(argv, list)
-        or "--unshare-net" not in argv
-        or "--cap-drop" not in argv
-        or "ALL" not in argv
+        or sandbox.get("sandbox_profile") != PROVIDER_FREE_SANDBOX_PROFILE
+        or sandbox.get("runtime_identity")
+        != record["request_authority"]["runtime_identity"]
+        or argv != expected_argv
         or not isinstance(environment_names, list)
         or not set(("HOME", "PATH", "PYTHONDONTWRITEBYTECODE")).issubset(
             environment_names
         )
-        or not set(environment_names).issubset(PROVIDER_FREE_ENV_ALLOWLIST)
+        or not set(environment_names).issubset(
+            {*PROVIDER_FREE_ENV_ALLOWLIST, "PLAYWRIGHT_BROWSERS_PATH"}
+        )
+        or "PLAYWRIGHT_BROWSERS_PATH" not in environment_names
+        or sandbox.get("required_environment")
+        != PROVIDER_FREE_REQUIRED_ENVIRONMENT
     ):
         return None, "provider-free sandbox enforcement evidence is incomplete"
     by_path: dict[str, dict[str, Any]] = {}
@@ -526,6 +709,11 @@ def supervise_provider_free(
             receipt_bytes = receipt_path.read_bytes()
             live_receipt = json.loads(receipt_bytes)
             deployment_authority.verify_receipt(REPO_ROOT, live_receipt)
+            deployment_authority.validate_runtime_identity(
+                REPO_ROOT,
+                live_receipt.get("runtime_identity"),
+                verify_external=False,
+            )
         except (
             OSError,
             json.JSONDecodeError,
@@ -539,6 +727,8 @@ def supervise_provider_free(
             != record["request_authority"]["deployment_source_head"]
             or live_receipt.get("tree_sha256")
             != record["request_authority"]["deployment_tree_sha256"]
+            or live_receipt.get("runtime_identity")
+            != record["request_authority"]["runtime_identity"]
         ):
             raise ProtocolError("deployed source identity changed before execution")
         transition(root, handle, "running", supervisor_pid=os.getpid())

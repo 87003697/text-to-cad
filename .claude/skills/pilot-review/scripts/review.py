@@ -46,10 +46,171 @@ _DEPLOYED_AUTHORITY_EXCLUSIONS = {
     "file_suffixes": [".dylib", ".pyc", ".pyd"],
     "native_shared_objects_included": True,
 }
+_SANDBOX_PROFILE = {
+    "schema": "cvm.provider-free-linux-sandbox/1",
+    "namespaces": ["network", "pid", "ipc", "uts"],
+    "capabilities": "drop-all",
+    "die_with_parent": True,
+    "new_session": True,
+    "temporary_filesystem": "/tmp",
+    "repository_mount": "read-only",
+    "output_mount": "read-write-exact-experiment",
+    "browser_cache_mount": "read-only-attested-revision",
+    "resource_limits": {
+        "wall_seconds": 1800,
+        "cpu_seconds": 1800,
+        "address_space_bytes": 16 * 1024**3,
+        "file_size_bytes": 4 * 1024**3,
+        "open_files": 512,
+        "processes": 256,
+    },
+    "cleanup": {
+        "timeout_exit_code": 124,
+        "terminal_manifest_rejects_links_and_special_files": True,
+        "failed_output_retained": True,
+    },
+}
+_SANDBOX_REQUIRED_ENVIRONMENT = {
+    "HOME": "/home/provider-free",
+    "PATH": "/workspace/repo/.venv/bin:/usr/local/bin:/usr/bin:/bin",
+    "PLAYWRIGHT_BROWSERS_PATH": "/home/provider-free/.cache/ms-playwright",
+    "PYTHONDONTWRITEBYTECODE": "1",
+}
+_SYSTEM_RO_PATHS = (
+    "/usr",
+    "/etc/alternatives",
+    "/etc/ca-certificates",
+    "/etc/crypto-policies",
+    "/etc/fonts",
+    "/etc/group",
+    "/etc/hosts",
+    "/etc/ld.so.cache",
+    "/etc/ld.so.conf",
+    "/etc/ld.so.conf.d",
+    "/etc/localtime",
+    "/etc/nsswitch.conf",
+    "/etc/os-release",
+    "/etc/passwd",
+    "/etc/pki",
+    "/etc/resolv.conf",
+    "/etc/ssl",
+    "/sys",
+)
 
 
 class ReviewError(RuntimeError):
     """The review could not read its declared evidence."""
+
+
+def _normalized_absolute(value: object, label: str) -> str:
+    if not isinstance(value, str):
+        raise ReviewError(f"{label} is not an absolute path")
+    pure = PurePosixPath(value)
+    if (
+        not pure.is_absolute()
+        or any(part in {".", ".."} for part in pure.parts)
+        or pure.as_posix() != value
+    ):
+        raise ReviewError(f"{label} is not a normalized absolute path")
+    return value
+
+
+def _validate_provider_free_sandbox_argv(
+    argv: object,
+    runtime_identity: dict[str, Any],
+    immutable_request: dict[str, Any],
+) -> None:
+    """Reject any launch vector outside the closed provider-free bwrap contract."""
+
+    if not isinstance(argv, list) or not all(isinstance(item, str) for item in argv):
+        raise ReviewError("provider-free sandbox argv is invalid")
+    bwrap = runtime_identity["bwrap"]["path"]
+    chromium = runtime_identity["chromium"]
+    exp_dir = immutable_request.get("exp_dir")
+    if not isinstance(exp_dir, str):
+        raise ReviewError("provider-free experiment path is invalid")
+    fixed_prefix = [
+        bwrap,
+        "--unshare-net",
+        "--unshare-pid",
+        "--unshare-ipc",
+        "--unshare-uts",
+        "--cap-drop",
+        "ALL",
+        "--die-with-parent",
+        "--new-session",
+        "--dev",
+        "/dev",
+        "--proc",
+        "/proc",
+        "--tmpfs",
+        "/tmp",
+        "--dir",
+        "/workspace",
+        "--ro-bind",
+    ]
+    if argv[: len(fixed_prefix)] != fixed_prefix or len(argv) < 45:
+        raise ReviewError("provider-free sandbox argv prefix conflicts")
+    host_root = _normalized_absolute(argv[18], "deployed repository root")
+    if host_root == "/":
+        raise ReviewError("deployed repository root is too broad")
+    sandbox_exp = f"/workspace/repo/{exp_dir}"
+    host_exp = f"{host_root}/{exp_dir}"
+    fixed_mounts = [
+        host_root,
+        "/workspace/repo",
+        "--bind",
+        host_exp,
+        sandbox_exp,
+        "--dir",
+        "/home",
+        "--dir",
+        "/home/provider-free",
+        "--dir",
+        "/home/provider-free/.cache",
+        "--ro-bind",
+        chromium["host_cache_path"],
+        chromium["sandbox_cache_path"],
+        "--symlink",
+        "usr/bin",
+        "/bin",
+        "--symlink",
+        "usr/sbin",
+        "/sbin",
+        "--symlink",
+        "usr/lib",
+        "/lib",
+        "--symlink",
+        "usr/lib64",
+        "/lib64",
+    ]
+    if argv[18 : 18 + len(fixed_mounts)] != fixed_mounts:
+        raise ReviewError("provider-free sandbox mount contract conflicts")
+    index = 18 + len(fixed_mounts)
+    mounted_system_paths: list[str] = []
+    while argv[index : index + 1] == ["--ro-bind"]:
+        if index + 2 >= len(argv) or argv[index + 1] != argv[index + 2]:
+            raise ReviewError("provider-free system runtime mount is invalid")
+        mounted_system_paths.append(argv[index + 1])
+        index += 3
+    expected_system_paths = [
+        path for path in _SYSTEM_RO_PATHS if path in mounted_system_paths
+    ]
+    if "/usr" not in mounted_system_paths or mounted_system_paths != expected_system_paths:
+        raise ReviewError("provider-free system runtime mounts are outside allowlist")
+    suffix = [
+        "--chdir",
+        "/workspace/repo",
+        "--",
+        "/workspace/repo/.venv/bin/python",
+        "/workspace/repo/scripts/pilot/provider_free_scenarios.py",
+        "run",
+        immutable_request.get("scenario", {}).get("name"),
+        "--workspace",
+        sandbox_exp,
+    ]
+    if argv[index:] != suffix:
+        raise ReviewError("provider-free sandbox command contract conflicts")
 
 
 def _read_json(path: Path) -> dict[str, Any]:
@@ -199,7 +360,9 @@ def _runtime_authority_verdict(
     try:
         receipt = _read_json(receipt_path)
         proof = _read_json(workspace / "run/provider-free-execution.json")
-        deployed = _read_json(workspace / "run/deployed-source-authority.json")
+        deployed_path = workspace / "run/deployed-source-authority.json"
+        deployed_bytes = deployed_path.read_bytes()
+        deployed = json.loads(deployed_bytes)
         sandbox = _read_json(workspace / "run/sandbox-enforcement.json")
         manifest = _read_json(workspace / "artifact_manifest.json")
         if (
@@ -208,6 +371,61 @@ def _runtime_authority_verdict(
             or deployed.get("exclusions") != _DEPLOYED_AUTHORITY_EXCLUSIONS
         ):
             raise ReviewError("complete deployed source authority is missing")
+        runtime_identity = deployed.get("runtime_identity")
+        if (
+            not isinstance(runtime_identity, dict)
+            or set(runtime_identity) != {"schema", "bwrap", "chromium", "cadpy"}
+            or runtime_identity.get("schema")
+            != "cvm.provider-free-runtime-identity/1"
+        ):
+            raise ReviewError("trusted deployed runtime identity is missing")
+        bwrap_identity = runtime_identity.get("bwrap")
+        chromium_identity = runtime_identity.get("chromium")
+        cadpy_identity = runtime_identity.get("cadpy")
+
+        def valid_sha256(value: object) -> bool:
+            return isinstance(value, str) and len(value) == 64 and all(
+                character in "0123456789abcdef" for character in value
+            )
+
+        if (
+            not isinstance(bwrap_identity, dict)
+            or set(bwrap_identity) != {"path", "sha256", "version"}
+            or bwrap_identity.get("path") != "/usr/bin/bwrap"
+            or not str(bwrap_identity.get("version", "")).startswith("bubblewrap ")
+            or not isinstance(chromium_identity, dict)
+            or set(chromium_identity)
+            != {
+                "revision",
+                "host_cache_path",
+                "sandbox_cache_path",
+                "executable_path",
+                "sha256",
+            }
+            or not str(chromium_identity.get("revision", "")).isdigit()
+            or chromium_identity.get("sandbox_cache_path")
+            != "/home/provider-free/.cache/ms-playwright"
+            or _normalized_absolute(
+                chromium_identity.get("host_cache_path"), "Chromium cache"
+            )
+            != chromium_identity.get("host_cache_path")
+            or chromium_identity.get("executable_path")
+            != (
+                str(chromium_identity.get("host_cache_path"))
+                + "/chromium_headless_shell-"
+                + str(chromium_identity.get("revision"))
+                + "/chrome-headless-shell-linux64/chrome-headless-shell"
+            )
+            or not isinstance(cadpy_identity, dict)
+            or set(cadpy_identity) != {"path", "sha256"}
+            or cadpy_identity.get("path")
+            != "skills/cad/scripts/packages/cadpy/src/cadpy/__init__.py"
+            or any(
+                not valid_sha256(identity.get("sha256"))
+                for identity in (bwrap_identity, chromium_identity, cadpy_identity)
+            )
+        ):
+            raise ReviewError("trusted deployed runtime identity is invalid")
         deployed_files = deployed.get("files")
         if not isinstance(deployed_files, list) or not deployed_files:
             raise ReviewError("deployed source authority inventory is empty")
@@ -236,6 +454,11 @@ def _runtime_authority_verdict(
                 "retained deployed source does not match complete inventory: "
                 f"expected={len(deployed_files)} actual={len(actual_files)}"
             )
+        retained_by_path = {item["path"]: item for item in actual_files}
+        if retained_by_path.get(cadpy_identity["path"], {}).get("sha256") != (
+            cadpy_identity["sha256"]
+        ):
+            raise ReviewError("audited cadpy identity lacks retained source authority")
         if (
             deployed.get("file_count") != len(actual_files)
             or deployed.get("total_bytes")
@@ -264,19 +487,34 @@ def _runtime_authority_verdict(
                 "network",
                 "argv",
                 "environment_names",
-                "resource_limits",
+                "required_environment",
+                "sandbox_profile",
+                "runtime_identity",
             }
             or sandbox.get("schema")
             != "cvm.provider-free-sandbox-enforcement/1"
             or sandbox.get("network") != "isolated-loopback"
             or not isinstance(sandbox.get("argv"), list)
-            or "--unshare-net" not in sandbox["argv"]
-            or "--cap-drop" not in sandbox["argv"]
-            or "ALL" not in sandbox["argv"]
+            or sandbox.get("sandbox_profile") != _SANDBOX_PROFILE
+            or sandbox.get("runtime_identity") != runtime_identity
+            or sandbox.get("required_environment")
+            != _SANDBOX_REQUIRED_ENVIRONMENT
             or not set(sandbox.get("environment_names", [])).issubset(
-                {"HOME", "LANG", "PATH", "PYTHONDONTWRITEBYTECODE", "TZ"}
+                {
+                    "HOME",
+                    "LANG",
+                    "PATH",
+                    "PLAYWRIGHT_BROWSERS_PATH",
+                    "PYTHONDONTWRITEBYTECODE",
+                    "TZ",
+                }
             )
-            or not {"HOME", "PATH", "PYTHONDONTWRITEBYTECODE"}.issubset(
+            or not {
+                "HOME",
+                "PATH",
+                "PLAYWRIGHT_BROWSERS_PATH",
+                "PYTHONDONTWRITEBYTECODE",
+            }.issubset(
                 sandbox.get("environment_names", [])
             )
         ):
@@ -288,6 +526,7 @@ def _runtime_authority_verdict(
             "viewer_deployment",
             "viewer_fallback",
             "native_depth_eight",
+            "cadpy_runtime",
             "shipped_tree",
             "commands",
         }
@@ -331,7 +570,6 @@ def _runtime_authority_verdict(
             )
         ):
             raise ReviewError("Viewer source/bundle/deployed receipt is incomplete")
-        retained_by_path = {item["path"]: item for item in actual_files}
         for artifact in artifacts:
             for layer in ("source", "bundle", "deployed"):
                 identity = artifact.get(layer)
@@ -365,6 +603,17 @@ def _runtime_authority_verdict(
             or native.get("depths") != list(range(1, 9))
         ):
             raise ReviewError("native-required depth-8 receipt is incomplete")
+        cadpy_runtime = receipt["cadpy_runtime"]
+        if (
+            not isinstance(cadpy_runtime, dict)
+            or cadpy_runtime
+            != {
+                "schema": "cvm.audited-cadpy-runtime/1",
+                "path": cadpy_identity["path"],
+                "sha256": cadpy_identity["sha256"],
+            }
+        ):
+            raise ReviewError("executed cadpy identity conflicts with deployed authority")
         shipped = receipt["shipped_tree"]
         files = shipped.get("files") if isinstance(shipped, dict) else None
         if (
@@ -411,11 +660,13 @@ def _runtime_authority_verdict(
                 "name": "issue15-runtime-authority",
                 "identity": "issue15.provider-free.runtime-authority/1",
             }
-            or proof.get("execution_profile", {}).get("schema")
-            != "cvm.provider-free-execution-profile/1"
-            or proof.get("execution_profile", {}).get("id")
-            != "issue15.provider-free-bounded/1"
-            or proof.get("execution_profile", {}).get("provider_access") != "forbidden"
+            or proof.get("execution_profile")
+            != {
+                "schema": "cvm.provider-free-execution-profile/1",
+                "id": "issue15.provider-free-bounded/1",
+                "provider_access": "forbidden",
+                "sandbox_profile": "cvm.provider-free-linux-sandbox/1",
+            }
             or proof.get("sandbox")
             != {
                 "network": "isolated-loopback",
@@ -425,7 +676,12 @@ def _runtime_authority_verdict(
             is not False
             or proof.get("requests") != {"model_gateway": 0, "provider": 0, "tap": 0}
             or proof.get("sandbox_enforcement")
-            != "run/sandbox-enforcement.json"
+            != {
+                "path": "run/sandbox-enforcement.json",
+                "sha256": hashlib.sha256(
+                    (workspace / "run/sandbox-enforcement.json").read_bytes()
+                ).hexdigest(),
+            }
             or proof.get("request_authority", {}).get(
                 "deployment_tree_sha256"
             )
@@ -437,6 +693,36 @@ def _runtime_authority_verdict(
         )
         if not isinstance(immutable_request, dict):
             raise ReviewError("provider-free immutable request is missing")
+        request_authority = immutable_request.get("request_authority")
+        canonical_deployed_digest = hashlib.sha256(
+            json.dumps(deployed, sort_keys=True, separators=(",", ":")).encode()
+        ).hexdigest()
+        if (
+            not isinstance(request_authority, dict)
+            or set(request_authority)
+            != {
+                "schema",
+                "deployment_receipt",
+                "deployment_receipt_sha256",
+                "deployment_receipt_canonical_sha256",
+                "deployment_source_head",
+                "deployment_tree_sha256",
+                "runtime_identity",
+            }
+            or request_authority.get("schema")
+            != "cvm.provider-free-request-authority/1"
+            or request_authority.get("deployment_receipt") != ".cvm-deployment.json"
+            or request_authority.get("deployment_receipt_sha256")
+            != hashlib.sha256(deployed_bytes).hexdigest()
+            or request_authority.get("deployment_receipt_canonical_sha256")
+            != canonical_deployed_digest
+            or request_authority.get("deployment_source_head")
+            != deployed.get("source_head")
+            or request_authority.get("deployment_tree_sha256")
+            != deployed.get("tree_sha256")
+            or request_authority.get("runtime_identity") != runtime_identity
+        ):
+            raise ReviewError("immutable deployed source authority binding conflicts")
         immutable_digest = hashlib.sha256(
             b"cvm.provider-free-request-authority/1\0"
             + json.dumps(
@@ -455,12 +741,12 @@ def _runtime_authority_verdict(
             or immutable_request.get("scenario") != proof.get("scenario")
             or immutable_request.get("execution_profile")
             != proof.get("execution_profile")
-            or immutable_request.get("request_authority", {}).get(
-                "deployment_tree_sha256"
-            )
-            != deployed.get("tree_sha256")
+            or immutable_request.get("request_authority") != request_authority
         ):
             raise ReviewError("provider-free immutable request binding conflicts")
+        _validate_provider_free_sandbox_argv(
+            sandbox.get("argv"), runtime_identity, immutable_request
+        )
         expected_job = f"{workspace.parent.name}/{workspace.name}"
         provider_environment = proof.get("provider_environment", {})
         stripped = provider_environment.get("stripped")
@@ -504,7 +790,7 @@ def _runtime_authority_verdict(
             relative = f"run/deployed-source/{item['path']}"
             if manifest_by_path.get(relative) != {**item, "path": relative}:
                 raise ReviewError(f"terminal manifest does not bind {relative}")
-    except (OSError, TypeError, ReviewError) as exc:
+    except (IndexError, OSError, TypeError, ValueError, ReviewError) as exc:
         return (
             "not_auditable",
             {},

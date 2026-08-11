@@ -33,9 +33,62 @@ class ProviderFreeRunnerTests(unittest.TestCase):
                 (path / "authority-marker.txt").write_text(
                     f"{declared}\n", encoding="utf-8"
                 )
-        deployed_receipt = deployment_authority.write_receipt(
-            self.repo, source_head="a" * 40
+        cadpy = self.repo / deployment_authority.CADPY_RUNTIME_PATH
+        cadpy.parent.mkdir(parents=True, exist_ok=True)
+        cadpy.write_text("cadpy\n", encoding="utf-8")
+        self.bwrap = self.repo / "trusted/usr/bin/bwrap"
+        self.bwrap.parent.mkdir(parents=True)
+        self.bwrap.write_text(
+            "#!/bin/sh\nprintf 'bubblewrap 1.2.3\\n'\n",
+            encoding="utf-8",
         )
+        self.bwrap.chmod(0o755)
+        self.bwrap = self.bwrap.resolve(strict=True)
+        self.browser_cache = self.repo / "trusted/ms-playwright"
+        self.browser = (
+            self.browser_cache
+            / "chromium_headless_shell-1234/"
+            "chrome-headless-shell-linux64/chrome-headless-shell"
+        )
+        self.browser.parent.mkdir(parents=True)
+        self.browser.write_bytes(b"trusted-browser")
+        self.browser.chmod(0o755)
+        self.browser = self.browser.resolve(strict=True)
+        self.browser_cache = self.browser_cache.resolve(strict=True)
+        self.trusted_bwrap_patch = mock.patch.object(
+            deployment_authority,
+            "TRUSTED_BWRAP_PATH",
+            self.bwrap,
+        )
+        self.trusted_bwrap_patch.start()
+        self.addCleanup(self.trusted_bwrap_patch.stop)
+        self.runtime_identity = {
+            "schema": "cvm.provider-free-runtime-identity/1",
+            "bwrap": {
+                "path": os.fspath(self.bwrap),
+                "sha256": hashlib.sha256(self.bwrap.read_bytes()).hexdigest(),
+                "version": "bubblewrap 1.2.3",
+            },
+            "chromium": {
+                "revision": "1234",
+                "host_cache_path": os.fspath(self.browser_cache),
+                "sandbox_cache_path": deployment_authority.SANDBOX_BROWSER_CACHE,
+                "executable_path": os.fspath(self.browser),
+                "sha256": hashlib.sha256(self.browser.read_bytes()).hexdigest(),
+            },
+            "cadpy": {
+                "path": deployment_authority.CADPY_RUNTIME_PATH,
+                "sha256": hashlib.sha256(cadpy.read_bytes()).hexdigest(),
+            },
+        }
+        deployed_receipt = deployment_authority.write_receipt(
+            self.repo,
+            source_head="a" * 40,
+            runtime_identity=self.runtime_identity,
+        )
+        deployment_receipt_bytes = (
+            self.repo / deployment_authority.RECEIPT_PATH
+        ).read_bytes()
         self.group = "20260811-210000-issue15-provider-free"
         self.exp = "20260811-210001-issue15-runtime-authority"
         self.handle = f"{self.group}/{self.exp}"
@@ -56,7 +109,18 @@ class ProviderFreeRunnerTests(unittest.TestCase):
             },
             "request_authority": {
                 "schema": "cvm.provider-free-request-authority/1",
+                "deployment_receipt": deployment_authority.RECEIPT_PATH,
+                "deployment_receipt_sha256": hashlib.sha256(
+                    deployment_receipt_bytes
+                ).hexdigest(),
+                "deployment_receipt_canonical_sha256": hashlib.sha256(
+                    json.dumps(
+                        deployed_receipt, sort_keys=True, separators=(",", ":")
+                    ).encode()
+                ).hexdigest(),
+                "deployment_source_head": deployed_receipt["source_head"],
                 "deployment_tree_sha256": deployed_receipt["tree_sha256"],
+                "runtime_identity": self.runtime_identity,
             },
         }
         self.environment = {
@@ -121,6 +185,11 @@ class ProviderFreeRunnerTests(unittest.TestCase):
                 "backend": {"id": "meshscope.voxblame.native-sat/1"},
                 "depths": list(range(1, 9)),
             },
+            "cadpy_runtime": {
+                "schema": "cvm.audited-cadpy-runtime/1",
+                "path": deployment_authority.CADPY_RUNTIME_PATH,
+                "sha256": self.runtime_identity["cadpy"]["sha256"],
+            },
             "shipped_tree": {
                 "schema": "cvm.deployed-runtime-tree-receipt/1",
                 "file_count": 1,
@@ -143,6 +212,8 @@ class ProviderFreeRunnerTests(unittest.TestCase):
         captured: dict[str, object] = {}
 
         def fake_run(argv, **kwargs):
+            if list(argv) == [os.fspath(self.bwrap), "--version"]:
+                return subprocess.CompletedProcess(argv, 0, stdout="bubblewrap 1.2.3\n")
             captured["argv"] = list(argv)
             captured["kwargs"] = kwargs
             self.write_success_evidence()
@@ -150,7 +221,11 @@ class ProviderFreeRunnerTests(unittest.TestCase):
 
         with (
             mock.patch.object(provider_free_runner, "REPO_ROOT", self.repo),
-            mock.patch.object(provider_free_runner.shutil, "which", return_value="/usr/bin/bwrap"),
+            mock.patch.object(
+                provider_free_runner.shutil,
+                "which",
+                return_value=os.fspath(self.bwrap),
+            ),
             mock.patch.object(provider_free_runner.subprocess, "run", side_effect=fake_run),
             mock.patch.object(provider_free_runner.pilot_runner, "validate_workspace_delivery", return_value={"identity_sha256": "a" * 64}),
             mock.patch.object(provider_free_runner.pilot_runner, "publish_workspace_authority", side_effect=self.write_authority),
@@ -218,14 +293,62 @@ class ProviderFreeRunnerTests(unittest.TestCase):
         run.assert_not_called()
         self.assertFalse((self.repo / "outputs" / self.handle).exists())
 
-    def test_exit_zero_without_runtime_authority_receipt_fails_terminalization(self) -> None:
+    def test_path_shadow_bwrap_is_rejected_before_sandbox_start(self) -> None:
+        shadow = self.repo / "bin/bwrap"
+        shadow.parent.mkdir(parents=True)
+        shadow.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+        shadow.chmod(0o755)
+        with (
+            mock.patch.object(
+                provider_free_runner.shutil,
+                "which",
+                return_value=os.fspath(shadow),
+            ),
+            mock.patch.object(provider_free_runner.subprocess, "run") as run,
+        ):
+            status = provider_free_runner.main(
+                ["run", "issue15-runtime-authority", self.group, self.exp],
+                environ=self.environment,
+            )
+
+        self.assertEqual(status, 2)
+        run.assert_not_called()
+
+    def test_wrong_attested_chromium_revision_is_rejected_before_output(self) -> None:
+        self.browser.write_bytes(b"tampered-browser")
         with (
             mock.patch.object(provider_free_runner, "REPO_ROOT", self.repo),
-            mock.patch.object(provider_free_runner.shutil, "which", return_value="/usr/bin/bwrap"),
+            mock.patch.object(
+                provider_free_runner.shutil,
+                "which",
+                return_value=os.fspath(self.bwrap),
+            ),
+        ):
+            status = provider_free_runner.main(
+                ["run", "issue15-runtime-authority", self.group, self.exp],
+                environ=self.environment,
+            )
+
+        self.assertEqual(status, 2)
+        self.assertFalse((self.repo / "outputs" / self.handle).exists())
+
+    def test_exit_zero_without_runtime_authority_receipt_fails_terminalization(self) -> None:
+        def fake_run(argv, **_kwargs):
+            if list(argv) == [os.fspath(self.bwrap), "--version"]:
+                return subprocess.CompletedProcess(argv, 0, stdout="bubblewrap 1.2.3\n")
+            return subprocess.CompletedProcess(argv, 0)
+
+        with (
+            mock.patch.object(provider_free_runner, "REPO_ROOT", self.repo),
+            mock.patch.object(
+                provider_free_runner.shutil,
+                "which",
+                return_value=os.fspath(self.bwrap),
+            ),
             mock.patch.object(
                 provider_free_runner.subprocess,
                 "run",
-                return_value=subprocess.CompletedProcess([], 0),
+                side_effect=fake_run,
             ),
             mock.patch.object(provider_free_runner.pilot_runner, "validate_workspace_delivery", return_value={"identity_sha256": "a" * 64}),
             mock.patch.object(provider_free_runner.pilot_runner, "publish_workspace_authority", return_value={"mode": "live"}),

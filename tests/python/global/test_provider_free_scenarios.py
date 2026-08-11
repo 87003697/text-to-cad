@@ -3,8 +3,10 @@ from __future__ import annotations
 import hashlib
 import json
 from pathlib import Path
+import sys
 import tempfile
 import unittest
+from unittest import mock
 
 from scripts.pilot import provider_free_scenarios
 
@@ -162,6 +164,29 @@ class ProviderFreeScenarioEvidenceTests(unittest.TestCase):
         }
         with self.assertRaisesRegex(provider_free_scenarios.ScenarioError, "native"):
             provider_free_scenarios.native_depth_eight_evidence(payload)
+
+    def test_cadpy_runtime_evidence_resolves_the_audited_skill_package(self) -> None:
+        cadpy = self.repo / "skills/cad/scripts/packages/cadpy/src/cadpy/__init__.py"
+        cadpy.parent.mkdir(parents=True)
+        cadpy.write_text("AUDITED = True\n", encoding="utf-8")
+        previous = sys.modules.pop("cadpy", None)
+        self.addCleanup(
+            lambda: sys.modules.__setitem__("cadpy", previous)
+            if previous is not None
+            else sys.modules.pop("cadpy", None)
+        )
+        with (
+            mock.patch.object(provider_free_scenarios, "REPO_ROOT", self.repo),
+            mock.patch.object(
+                provider_free_scenarios,
+                "CADPY_SRC",
+                cadpy.parents[1],
+            ),
+        ):
+            evidence = provider_free_scenarios.cadpy_runtime_evidence()
+
+        self.assertEqual(evidence["path"], cadpy.relative_to(self.repo).as_posix())
+        self.assertEqual(evidence["sha256"], hashlib.sha256(cadpy.read_bytes()).hexdigest())
 
 
 if __name__ == "__main__":

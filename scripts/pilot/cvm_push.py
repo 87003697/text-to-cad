@@ -17,6 +17,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterator, Mapping, Sequence
 
+from scripts.pilot import deployment_authority
+
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 REMOTE_ROOT = "~/text-to-cad"
@@ -925,7 +927,11 @@ class CvmPush:
                 transferred=True,
             )
 
-    def publish_remote_deployment_authority(self, source_head: str) -> dict[str, object]:
+    def publish_remote_deployment_authority(
+        self,
+        source_head: str,
+        chromium_revision: str,
+    ) -> dict[str, object]:
         """Create and independently check the complete deployed execution tree."""
 
         command = "\n".join(
@@ -934,7 +940,8 @@ class CvmPush:
                 f"cd {REMOTE_ROOT}",
                 (
                     "python3 scripts/pilot/deployment_authority.py write . "
-                    f"--source-head {shlex.quote(source_head)} >/dev/null"
+                    f"--source-head {shlex.quote(source_head)} "
+                    f"--chromium-revision {shlex.quote(chromium_revision)} >/dev/null"
                 ),
                 "python3 scripts/pilot/deployment_authority.py check .",
             )
@@ -954,6 +961,14 @@ class CvmPush:
             not isinstance(receipt, dict)
             or receipt.get("schema") != "cvm.deployed-source-authority/1"
             or receipt.get("source_head") != source_head
+            or receipt.get("runtime_identity", {}).get("bwrap", {}).get("path")
+            != "/usr/bin/bwrap"
+            or receipt.get("runtime_identity", {}).get("chromium", {}).get(
+                "revision"
+            )
+            != chromium_revision
+            or receipt.get("runtime_identity", {}).get("cadpy", {}).get("path")
+            != deployment_authority.CADPY_RUNTIME_PATH
         ):
             raise PushError("CVM deployed source authority identity conflicts", 5)
         return receipt
@@ -1114,7 +1129,10 @@ class CvmPush:
                 attestation = self.attest_stage(stage)
                 self.transfer_stage(stage)
                 self.build_remote_native_runtime()
-                source_authority = self.publish_remote_deployment_authority(source.head)
+                source_authority = self.publish_remote_deployment_authority(
+                    source.head,
+                    attestation.chromium_revision,
+                )
                 deployment_receipt = self.verify_remote(attestation)
         except PushError as exc:
             if exc.status == 4 and not exc.transferred:

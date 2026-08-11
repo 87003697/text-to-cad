@@ -53,15 +53,20 @@ description: >-
 - **不得把主 checkout 的依赖目录直接 symlink 进 staging**：Viewer 与 CAD build
   dependencies 必须复制到 staging，避免构建读取错误 worktree 或修改共享缓存。
 - **source → staging 必须排除本地状态**：`.agents/`、`.claude/`、`.codex/`、
-  `.git`、`.venv`、outputs/models、缓存和构建产物不能成为 deployment material；
-  但当前 dirty worktree 的源码必须保留。
+  `.git`、`.venv`、outputs、缓存和构建产物不能成为 deployment material；
+  但当前 dirty worktree 的源码必须保留。唯一的 models 例外是
+  **provider-free durable fixture allowlist**：
+  `models/simple/rectangular_clamp_block.py` 和
+  `models/simple/simple_model_library.py`。它们必须作为普通文件进入同一 stage、哈希
+  attestation 和 deployed-source authority；任何其他 `models/` 路径仍保持排除。
 - Push 只部署代码；不创建、查询、等待、重试或清理 job。
 
 ## 边界条件
 
 - 假定 `ssh cvm` alias 已配（见 `.agents/DEVCLOUD.md`）；未配 → 用户先配。
 - 假定 CVM 上 `~/text-to-cad/` 已存在；不做 bootstrap。
-- 只做 code push；`models/` 靠 CVM 本地已 hydrate 的 LFS content，不通过 skill 推。
+- 除上述两个 provider-free durable fixtures 外，`models/` 靠 CVM 本地已 hydrate
+  的 LFS content，不通过 skill 推。
 - linked worktree 缺少 `viewer/node_modules` 或 `tmp/cad-snapshot-build` 时，脚本自动
   查找 primary checkout；仅存在半成品目录不算可用，会继续回退。也可用
   `CVM_PUSH_VIEWER_NODE_MODULES_SOURCE` 和 `CVM_PUSH_CAD_BUILD_DEPS_SOURCE`

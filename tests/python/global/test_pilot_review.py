@@ -372,6 +372,11 @@ class PilotReviewTests(unittest.TestCase):
                 "backend": {"id": "meshscope.voxblame.native-sat/1"},
                 "depths": list(range(1, 9)),
             },
+            "cadpy_runtime": {
+                "schema": "cvm.audited-cadpy-runtime/1",
+                "path": deployment_authority.CADPY_RUNTIME_PATH,
+                "sha256": "6" * 64,
+            },
             "shipped_tree": {
                 "schema": "cvm.deployed-runtime-tree-receipt/1",
                 "root": "skills/cad-viewer/scripts/viewer",
@@ -395,6 +400,7 @@ class PilotReviewTests(unittest.TestCase):
                 "schema": "cvm.provider-free-execution-profile/1",
                 "id": "issue15.provider-free-bounded/1",
                 "provider_access": "forbidden",
+                "sandbox_profile": "cvm.provider-free-linux-sandbox/1",
             },
             "sandbox": {
                 "network": "isolated-loopback",
@@ -466,6 +472,36 @@ class PilotReviewTests(unittest.TestCase):
         )
         native.parent.mkdir(parents=True, exist_ok=True)
         native.write_bytes(b"native")
+        cadpy = deployed_root / deployment_authority.CADPY_RUNTIME_PATH
+        cadpy.parent.mkdir(parents=True, exist_ok=True)
+        cadpy.write_bytes(b"cadpy-runtime")
+        runtime_identity = {
+            "schema": "cvm.provider-free-runtime-identity/1",
+            "bwrap": {
+                "path": "/usr/bin/bwrap",
+                "sha256": "b" * 64,
+                "version": "bubblewrap 1.2.3",
+            },
+            "chromium": {
+                "revision": "1234",
+                "host_cache_path": "/home/test/.cache/ms-playwright",
+                "sandbox_cache_path": deployment_authority.SANDBOX_BROWSER_CACHE,
+                "executable_path": (
+                    "/home/test/.cache/ms-playwright/"
+                    "chromium_headless_shell-1234/"
+                    "chrome-headless-shell-linux64/chrome-headless-shell"
+                ),
+                "sha256": "c" * 64,
+            },
+            "cadpy": {
+                "path": deployment_authority.CADPY_RUNTIME_PATH,
+                "sha256": hashlib.sha256(cadpy.read_bytes()).hexdigest(),
+            },
+        }
+        receipt["cadpy_runtime"] = {
+            "schema": "cvm.audited-cadpy-runtime/1",
+            **runtime_identity["cadpy"],
+        }
         viewer_root = deployed_root / "skills/cad-viewer/scripts/viewer"
         viewer_artifacts = []
         for role, token in (
@@ -527,7 +563,17 @@ class PilotReviewTests(unittest.TestCase):
         deployed_receipt = deployment_authority.build_receipt(
             deployed_root,
             source_head="a" * 40,
+            runtime_identity=runtime_identity,
         )
+        deployment_authority.materialize_receipt(
+            deployed_root,
+            deployed_receipt,
+            self.exp / "run/deployed-source",
+        )
+        write_json(self.exp / "run/deployed-source-authority.json", deployed_receipt)
+        deployed_bytes = (
+            self.exp / "run/deployed-source-authority.json"
+        ).read_bytes()
         immutable_request = {
             "job_kind": "provider-free",
             "object": "issue15-runtime-authority",
@@ -538,7 +584,18 @@ class PilotReviewTests(unittest.TestCase):
             "execution_profile": proof["execution_profile"],
             "request_authority": {
                 "schema": "cvm.provider-free-request-authority/1",
+                "deployment_receipt": deployment_authority.RECEIPT_PATH,
+                "deployment_receipt_sha256": hashlib.sha256(
+                    deployed_bytes
+                ).hexdigest(),
+                "deployment_receipt_canonical_sha256": hashlib.sha256(
+                    json.dumps(
+                        deployed_receipt, sort_keys=True, separators=(",", ":")
+                    ).encode()
+                ).hexdigest(),
+                "deployment_source_head": deployed_receipt["source_head"],
                 "deployment_tree_sha256": deployed_receipt["tree_sha256"],
+                "runtime_identity": runtime_identity,
             },
         }
         proof["request_authority"] = {
@@ -551,29 +608,89 @@ class PilotReviewTests(unittest.TestCase):
             "deployment_tree_sha256": deployed_receipt["tree_sha256"],
             "immutable_request": immutable_request,
         }
-        proof["sandbox_enforcement"] = "run/sandbox-enforcement.json"
-        deployment_authority.materialize_receipt(
-            deployed_root,
-            deployed_receipt,
-            self.exp / "run/deployed-source",
-        )
-        write_json(self.exp / "run/deployed-source-authority.json", deployed_receipt)
+        host_root = "/home/test/text-to-cad"
+        sandbox_exp = f"/workspace/repo/{immutable_request['exp_dir']}"
         write_json(
             self.exp / "run/sandbox-enforcement.json",
             {
                 "schema": "cvm.provider-free-sandbox-enforcement/1",
                 "network": "isolated-loopback",
-                "argv": ["bwrap", "--unshare-net", "--cap-drop", "ALL"],
+                "argv": [
+                    "/usr/bin/bwrap",
+                    "--unshare-net",
+                    "--unshare-pid",
+                    "--unshare-ipc",
+                    "--unshare-uts",
+                    "--cap-drop",
+                    "ALL",
+                    "--die-with-parent",
+                    "--new-session",
+                    "--dev",
+                    "/dev",
+                    "--proc",
+                    "/proc",
+                    "--tmpfs",
+                    "/tmp",
+                    "--dir",
+                    "/workspace",
+                    "--ro-bind",
+                    host_root,
+                    "/workspace/repo",
+                    "--bind",
+                    f"{host_root}/{immutable_request['exp_dir']}",
+                    sandbox_exp,
+                    "--dir",
+                    "/home",
+                    "--dir",
+                    "/home/provider-free",
+                    "--dir",
+                    "/home/provider-free/.cache",
+                    "--ro-bind",
+                    runtime_identity["chromium"]["host_cache_path"],
+                    runtime_identity["chromium"]["sandbox_cache_path"],
+                    "--symlink",
+                    "usr/bin",
+                    "/bin",
+                    "--symlink",
+                    "usr/sbin",
+                    "/sbin",
+                    "--symlink",
+                    "usr/lib",
+                    "/lib",
+                    "--symlink",
+                    "usr/lib64",
+                    "/lib64",
+                    "--ro-bind",
+                    "/usr",
+                    "/usr",
+                    "--chdir",
+                    "/workspace/repo",
+                    "--",
+                    "/workspace/repo/.venv/bin/python",
+                    "/workspace/repo/scripts/pilot/provider_free_scenarios.py",
+                    "run",
+                    "issue15-runtime-authority",
+                    "--workspace",
+                    sandbox_exp,
+                ],
                 "environment_names": [
                     "HOME",
                     "LANG",
                     "PATH",
+                    "PLAYWRIGHT_BROWSERS_PATH",
                     "PYTHONDONTWRITEBYTECODE",
                     "TZ",
                 ],
-                "resource_limits": {"wall_seconds": 1800},
+                "required_environment": self.reviewer._SANDBOX_REQUIRED_ENVIRONMENT,
+                "sandbox_profile": self.reviewer._SANDBOX_PROFILE,
+                "runtime_identity": runtime_identity,
             },
         )
+        sandbox_bytes = (self.exp / "run/sandbox-enforcement.json").read_bytes()
+        proof["sandbox_enforcement"] = {
+            "path": "run/sandbox-enforcement.json",
+            "sha256": hashlib.sha256(sandbox_bytes).hexdigest(),
+        }
         write_json(self.exp / "run/runtime-authority-smoke.json", receipt)
         write_json(self.exp / "run/provider-free-execution.json", proof)
         manifest_files = []
@@ -612,8 +729,135 @@ class PilotReviewTests(unittest.TestCase):
         )
         self.assertNotIn("production runtime integration", " ".join(review["evidence_gaps"]))
 
+        authoritative_proof = json.loads(json.dumps(proof))
+        authoritative_manifest = json.loads(
+            (self.exp / "artifact_manifest.json").read_text(encoding="utf-8")
+        )
+        for field in (
+            "schema",
+            "deployment_receipt",
+            "deployment_receipt_sha256",
+            "deployment_receipt_canonical_sha256",
+            "deployment_source_head",
+            "deployment_tree_sha256",
+            "runtime_identity",
+        ):
+            with self.subTest(immutable_request_field=field):
+                candidate = json.loads(json.dumps(authoritative_proof))
+                candidate["request_authority"]["immutable_request"][
+                    "request_authority"
+                ].pop(field)
+                immutable = candidate["request_authority"]["immutable_request"]
+                candidate["request_authority"]["sha256"] = hashlib.sha256(
+                    b"cvm.provider-free-request-authority/1\0"
+                    + json.dumps(
+                        immutable, sort_keys=True, separators=(",", ":")
+                    ).encode()
+                ).hexdigest()
+                write_json(self.exp / "run/provider-free-execution.json", candidate)
+                candidate_manifest = json.loads(json.dumps(authoritative_manifest))
+                proof_bytes = (
+                    self.exp / "run/provider-free-execution.json"
+                ).read_bytes()
+                proof_entry = next(
+                    item
+                    for item in candidate_manifest["files"]
+                    if item["path"] == "run/provider-free-execution.json"
+                )
+                proof_entry.update(
+                    size_bytes=len(proof_bytes),
+                    sha256=hashlib.sha256(proof_bytes).hexdigest(),
+                )
+                write_json(self.exp / "artifact_manifest.json", candidate_manifest)
+                verdict = self.reviewer._runtime_authority_verdict(
+                    self.exp, workspace_payload
+                )[0]
+                self.assertEqual("not_auditable", verdict)
+        write_json(
+            self.exp / "run/provider-free-execution.json",
+            authoritative_proof,
+        )
+        write_json(self.exp / "artifact_manifest.json", authoritative_manifest)
+
+        sandbox_path = self.exp / "run/sandbox-enforcement.json"
+        authoritative_sandbox = json.loads(sandbox_path.read_text(encoding="utf-8"))
+        for mutation in (
+            "namespace",
+            "limit",
+            "cleanup",
+            "chromium",
+            "extra-bind",
+            "browser-bind",
+            "environment",
+        ):
+            with self.subTest(sandbox_mutation=mutation):
+                candidate = json.loads(json.dumps(authoritative_sandbox))
+                if mutation == "namespace":
+                    candidate["sandbox_profile"]["namespaces"].remove("ipc")
+                elif mutation == "limit":
+                    candidate["sandbox_profile"]["resource_limits"]["cpu_seconds"] = 1
+                elif mutation == "cleanup":
+                    candidate["sandbox_profile"]["cleanup"]["failed_output_retained"] = False
+                elif mutation == "chromium":
+                    candidate["runtime_identity"]["chromium"]["revision"] = "9999"
+                elif mutation == "extra-bind":
+                    candidate["argv"][1:1] = ["--bind", "/", "/workspace/repo"]
+                elif mutation == "browser-bind":
+                    candidate["argv"].remove(
+                        candidate["runtime_identity"]["chromium"]["host_cache_path"]
+                    )
+                else:
+                    candidate["required_environment"][
+                        "PLAYWRIGHT_BROWSERS_PATH"
+                    ] = "/tmp"
+                write_json(sandbox_path, candidate)
+                candidate_proof = json.loads(json.dumps(authoritative_proof))
+                candidate_proof["sandbox_enforcement"]["sha256"] = hashlib.sha256(
+                    sandbox_path.read_bytes()
+                ).hexdigest()
+                write_json(
+                    self.exp / "run/provider-free-execution.json", candidate_proof
+                )
+                candidate_manifest = json.loads(json.dumps(authoritative_manifest))
+                for relative in (
+                    "run/sandbox-enforcement.json",
+                    "run/provider-free-execution.json",
+                ):
+                    data = (self.exp / relative).read_bytes()
+                    entry = next(
+                        item
+                        for item in candidate_manifest["files"]
+                        if item["path"] == relative
+                    )
+                    entry.update(
+                        size_bytes=len(data), sha256=hashlib.sha256(data).hexdigest()
+                    )
+                write_json(self.exp / "artifact_manifest.json", candidate_manifest)
+                verdict = self.reviewer._runtime_authority_verdict(
+                    self.exp, workspace_payload
+                )[0]
+                self.assertEqual("not_auditable", verdict)
+        write_json(sandbox_path, authoritative_sandbox)
+        write_json(
+            self.exp / "run/provider-free-execution.json",
+            authoritative_proof,
+        )
+        write_json(self.exp / "artifact_manifest.json", authoritative_manifest)
+
         proof["requests"]["provider"] = 1
         write_json(self.exp / "run/provider-free-execution.json", proof)
+        provider_manifest = json.loads(json.dumps(authoritative_manifest))
+        proof_bytes = (self.exp / "run/provider-free-execution.json").read_bytes()
+        proof_entry = next(
+            item
+            for item in provider_manifest["files"]
+            if item["path"] == "run/provider-free-execution.json"
+        )
+        proof_entry.update(
+            size_bytes=len(proof_bytes),
+            sha256=hashlib.sha256(proof_bytes).hexdigest(),
+        )
+        write_json(self.exp / "artifact_manifest.json", provider_manifest)
         verdict, provenance, issues, gaps = self.reviewer._runtime_authority_verdict(
             self.exp, workspace_payload
         )

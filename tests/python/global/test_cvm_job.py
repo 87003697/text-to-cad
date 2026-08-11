@@ -45,9 +45,36 @@ class CvmJobTests(unittest.TestCase):
                 (path / "authority-marker.txt").write_text(
                     f"{declared}\n", encoding="utf-8"
                 )
+        cadpy = self.repo_root / deployment_authority.CADPY_RUNTIME_PATH
+        cadpy.parent.mkdir(parents=True, exist_ok=True)
+        cadpy.write_text("cadpy\n", encoding="utf-8")
+        runtime_identity = {
+            "schema": "cvm.provider-free-runtime-identity/1",
+            "bwrap": {
+                "path": "/usr/bin/bwrap",
+                "sha256": "b" * 64,
+                "version": "bubblewrap 1.2.3",
+            },
+            "chromium": {
+                "revision": "1234",
+                "host_cache_path": "/home/test/.cache/ms-playwright",
+                "sandbox_cache_path": deployment_authority.SANDBOX_BROWSER_CACHE,
+                "executable_path": (
+                    "/home/test/.cache/ms-playwright/"
+                    "chromium_headless_shell-1234/"
+                    "chrome-headless-shell-linux64/chrome-headless-shell"
+                ),
+                "sha256": "c" * 64,
+            },
+            "cadpy": {
+                "path": deployment_authority.CADPY_RUNTIME_PATH,
+                "sha256": hashlib.sha256(cadpy.read_bytes()).hexdigest(),
+            },
+        }
         deployment_authority.write_receipt(
             self.repo_root,
             source_head="a" * 40,
+            runtime_identity=runtime_identity,
         )
         self.repo_patch = mock.patch.object(runtime, "REPO_ROOT", self.repo_root)
         self.repo_patch.start()
@@ -111,52 +138,47 @@ class CvmJobTests(unittest.TestCase):
                 "credential_values_recorded": False,
             },
             "requests": {"model_gateway": 0, "provider": 0, "tap": 0},
-            "sandbox_enforcement": "run/sandbox-enforcement.json",
+            "sandbox_enforcement": {
+                "path": "run/sandbox-enforcement.json",
+                "sha256": "",
+            },
         }
         proof_path = exp_dir / "run" / "provider-free-execution.json"
         proof_path.parent.mkdir(parents=True, exist_ok=True)
-        proof_path.write_text(
-            json.dumps(proof, sort_keys=True, separators=(",", ":")) + "\n",
-            encoding="utf-8",
-        )
-        proof_bytes = proof_path.read_bytes()
-        files = [
-            {
-                "path": "run/provider-free-execution.json",
-                "size_bytes": len(proof_bytes),
-                "sha256": hashlib.sha256(proof_bytes).hexdigest(),
-            }
-        ]
+        files = []
         if complete:
-            deployed_receipt = json.loads(
-                (self.repo_root / ".cvm-deployment.json").read_text(
-                    encoding="utf-8"
-                )
-            )
+            deployed_receipt_path = self.repo_root / ".cvm-deployment.json"
+            deployed_receipt = json.loads(deployed_receipt_path.read_bytes())
             deployment_authority.materialize_receipt(
                 self.repo_root,
                 deployed_receipt,
                 exp_dir / "run/deployed-source",
             )
-            (exp_dir / "run/deployed-source-authority.json").write_text(
-                json.dumps(deployed_receipt, sort_keys=True, separators=(",", ":"))
-                + "\n",
-                encoding="utf-8",
+            (exp_dir / "run/deployed-source-authority.json").write_bytes(
+                deployed_receipt_path.read_bytes()
             )
+            runtime_identity = deployed_receipt["runtime_identity"]
             (exp_dir / "run/sandbox-enforcement.json").write_text(
                 json.dumps(
                     {
                         "schema": "cvm.provider-free-sandbox-enforcement/1",
                         "network": "isolated-loopback",
-                        "argv": ["bwrap", "--unshare-net", "--cap-drop", "ALL"],
+                        "argv": runtime.provider_free_sandbox_argv(
+                            state["scenario"]["name"],
+                            exp_dir,
+                            runtime_identity,
+                        ),
                         "environment_names": [
                             "HOME",
                             "LANG",
                             "PATH",
+                            "PLAYWRIGHT_BROWSERS_PATH",
                             "PYTHONDONTWRITEBYTECODE",
                             "TZ",
                         ],
-                        "resource_limits": {"wall_seconds": 1800},
+                        "required_environment": runtime.PROVIDER_FREE_REQUIRED_ENVIRONMENT,
+                        "sandbox_profile": runtime.PROVIDER_FREE_SANDBOX_PROFILE,
+                        "runtime_identity": runtime_identity,
                     },
                     sort_keys=True,
                     separators=(",", ":"),
@@ -164,6 +186,10 @@ class CvmJobTests(unittest.TestCase):
                 + "\n",
                 encoding="utf-8",
             )
+            sandbox_bytes = (exp_dir / "run/sandbox-enforcement.json").read_bytes()
+            proof["sandbox_enforcement"]["sha256"] = hashlib.sha256(
+                sandbox_bytes
+            ).hexdigest()
             for name, data in (
                 ("run/runtime-authority-smoke.json", b"{}\n"),
                 ("workspace-authority.json", b"{}\n"),
@@ -194,6 +220,18 @@ class CvmJobTests(unittest.TestCase):
                             "sha256": hashlib.sha256(data).hexdigest(),
                         }
                     )
+        proof_path.write_text(
+            json.dumps(proof, sort_keys=True, separators=(",", ":")) + "\n",
+            encoding="utf-8",
+        )
+        proof_bytes = proof_path.read_bytes()
+        files.append(
+            {
+                "path": "run/provider-free-execution.json",
+                "size_bytes": len(proof_bytes),
+                "sha256": hashlib.sha256(proof_bytes).hexdigest(),
+            }
+        )
         manifest = {
             "schema_version": 1,
             "workload_status": 0,
@@ -248,6 +286,7 @@ class CvmJobTests(unittest.TestCase):
                 "schema": "cvm.provider-free-execution-profile/1",
                 "id": "issue15.provider-free-bounded/1",
                 "provider_access": "forbidden",
+                "sandbox_profile": "cvm.provider-free-linux-sandbox/1",
             },
         )
         self.assertEqual(
@@ -405,6 +444,80 @@ class CvmJobTests(unittest.TestCase):
 
         self.assertEqual(state["state"], "failed")
         self.assertIn("terminal evidence", state["failure_reason"])
+
+    def test_provider_free_supervisor_rejects_changed_sandbox_contract(self) -> None:
+        for mutation in ("limit", "extra-bind", "browser-bind", "environment"):
+            with self.subTest(mutation=mutation):
+                handle = runtime.submit_provider_free(
+                    "issue15-runtime-authority",
+                    self.group,
+                    state_root=self.state_root,
+                    detach=lambda *args: 1234,
+                )["job"]
+                self.write_provider_free_terminal_evidence(handle)
+                exp_dir = self.repo_root / "outputs" / handle
+                sandbox_path = exp_dir / "run/sandbox-enforcement.json"
+                sandbox = json.loads(sandbox_path.read_text(encoding="utf-8"))
+                if mutation == "limit":
+                    sandbox["sandbox_profile"]["resource_limits"]["cpu_seconds"] = 1
+                elif mutation == "extra-bind":
+                    sandbox["argv"][1:1] = ["--bind", "/", "/workspace/repo"]
+                elif mutation == "browser-bind":
+                    sandbox["argv"].remove(
+                        sandbox["runtime_identity"]["chromium"]["host_cache_path"]
+                    )
+                else:
+                    sandbox["required_environment"][
+                        "PLAYWRIGHT_BROWSERS_PATH"
+                    ] = "/tmp"
+                sandbox_path.write_text(
+                    json.dumps(sandbox, sort_keys=True, separators=(",", ":")) + "\n",
+                    encoding="utf-8",
+                )
+                proof_path = exp_dir / "run/provider-free-execution.json"
+                proof = json.loads(proof_path.read_text(encoding="utf-8"))
+                proof["sandbox_enforcement"]["sha256"] = hashlib.sha256(
+                    sandbox_path.read_bytes()
+                ).hexdigest()
+                proof_path.write_text(
+                    json.dumps(proof, sort_keys=True, separators=(",", ":")) + "\n",
+                    encoding="utf-8",
+                )
+                manifest_path = exp_dir / "artifact_manifest.json"
+                manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+                for relative in (
+                    "run/sandbox-enforcement.json",
+                    "run/provider-free-execution.json",
+                ):
+                    data = (exp_dir / relative).read_bytes()
+                    entry = next(
+                        item for item in manifest["files"] if item["path"] == relative
+                    )
+                    entry.update(
+                        size_bytes=len(data), sha256=hashlib.sha256(data).hexdigest()
+                    )
+                manifest_path.write_text(
+                    json.dumps(manifest, sort_keys=True) + "\n", encoding="utf-8"
+                )
+
+                with mock.patch.object(
+                    runtime, "_run_with_heartbeat", return_value=(0, 4321)
+                ):
+                    state = runtime.supervise_provider_free(
+                        handle,
+                        state_root=self.state_root,
+                        environ={
+                            "PATH": os.environ["PATH"],
+                            "HOME": os.fspath(self.workspace),
+                            "VENUS_TOKEN": "stripped",
+                            "OPENAI_API_KEY": "stripped",
+                            "ANTHROPIC_API_KEY": "stripped",
+                            "HTTPS_PROXY": "stripped",
+                        },
+                    )
+
+                self.assertEqual(state["state"], "failed")
+                self.assertIn("sandbox enforcement", state["failure_reason"])
 
     def test_submit_launch_failure_is_terminal(self) -> None:
         def fail_detach(handle, command, root):

@@ -21,19 +21,22 @@ from scripts.pilot.cvm_job.runtime import (
     PROVIDER_FREE_ENV_ALLOWLIST,
     PROVIDER_FREE_EXECUTION_PROFILE,
     PROVIDER_FREE_PROOF,
+    PROVIDER_FREE_REQUIRED_ENVIRONMENT,
+    PROVIDER_FREE_SANDBOX_PROFILE,
     PROVIDER_FREE_SCENARIOS,
+    provider_free_sandbox_argv,
 )
 from scripts.pilot.cvm_job.protocol import request_authority_sha256
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-SANDBOX_REPO_ROOT = Path("/workspace/repo")
-WALL_TIMEOUT_SECONDS = 1800
-CPU_LIMIT_SECONDS = 1800
-ADDRESS_SPACE_LIMIT_BYTES = 16 * 1024**3
-FILE_SIZE_LIMIT_BYTES = 4 * 1024**3
-OPEN_FILE_LIMIT = 512
-PROCESS_LIMIT = 256
+_RESOURCE_LIMITS = PROVIDER_FREE_SANDBOX_PROFILE["resource_limits"]
+WALL_TIMEOUT_SECONDS = _RESOURCE_LIMITS["wall_seconds"]
+CPU_LIMIT_SECONDS = _RESOURCE_LIMITS["cpu_seconds"]
+ADDRESS_SPACE_LIMIT_BYTES = _RESOURCE_LIMITS["address_space_bytes"]
+FILE_SIZE_LIMIT_BYTES = _RESOURCE_LIMITS["file_size_bytes"]
+OPEN_FILE_LIMIT = _RESOURCE_LIMITS["open_files"]
+PROCESS_LIMIT = _RESOURCE_LIMITS["processes"]
 _CONTROL_ENVIRONMENT = frozenset(
     {
         *PROVIDER_FREE_ENV_ALLOWLIST,
@@ -123,8 +126,30 @@ def _apply_resource_limits() -> None:
     )
     for resource_id, requested in limits:
         _soft, hard = resource.getrlimit(resource_id)
-        effective = requested if hard == resource.RLIM_INFINITY else min(requested, hard)
-        resource.setrlimit(resource_id, (effective, effective))
+        if hard != resource.RLIM_INFINITY and hard < requested:
+            raise ProviderFreeError("host resource ceiling is below sandbox profile")
+        resource.setrlimit(resource_id, (requested, requested))
+
+
+def _trusted_runtime(environ: Mapping[str, str]) -> dict[str, object]:
+    """Remeasure the immutable trusted runtime before sandbox launch."""
+
+    immutable = json.loads(environ["CVM_PROVIDER_FREE_REQUEST_JSON"])
+    request = immutable.get("request_authority")
+    identity = request.get("runtime_identity") if isinstance(request, dict) else None
+    bwrap = identity.get("bwrap") if isinstance(identity, dict) else None
+    resolved = shutil.which("bwrap", path=environ.get("PATH"))
+    if not isinstance(bwrap, dict) or resolved != bwrap.get("path"):
+        raise ProviderFreeError("PATH bwrap does not match trusted system runtime")
+    try:
+        deployment_authority.validate_runtime_identity(
+            REPO_ROOT,
+            identity,
+            verify_external=True,
+        )
+    except deployment_authority.DeploymentAuthorityError as exc:
+        raise ProviderFreeError(f"trusted runtime identity is invalid: {exc}") from exc
+    return identity
 
 
 def _sandbox_argv(
@@ -132,56 +157,17 @@ def _sandbox_argv(
     exp_dir: Path,
     *,
     bwrap: str,
+    runtime_identity: Mapping[str, object],
 ) -> list[str]:
-    relative_exp = exp_dir.relative_to(REPO_ROOT)
-    sandbox_exp = SANDBOX_REPO_ROOT / relative_exp
-    argv = [
-        bwrap,
-        "--unshare-net",
-        "--unshare-pid",
-        "--unshare-ipc",
-        "--unshare-uts",
-        "--cap-drop",
-        "ALL",
-        "--die-with-parent",
-        "--new-session",
-        "--dev",
-        "/dev",
-        "--proc",
-        "/proc",
-        "--tmpfs",
-        "/tmp",
-        "--dir",
-        "/workspace",
-        "--ro-bind",
-        os.fspath(REPO_ROOT),
-        os.fspath(SANDBOX_REPO_ROOT),
-        "--bind",
-        os.fspath(exp_dir),
-        os.fspath(sandbox_exp),
-        "--dir",
-        "/home",
-        "--dir",
-        "/home/provider-free",
-    ]
-    for source, target in (("usr/bin", "/bin"), ("usr/sbin", "/sbin"), ("usr/lib", "/lib"), ("usr/lib64", "/lib64")):
-        argv.extend(("--symlink", source, target))
-    for path in pilot_runner.existing_system_paths():
-        argv.extend(("--ro-bind", os.fspath(path), os.fspath(path)))
-    argv.extend(
-        (
-            "--chdir",
-            os.fspath(SANDBOX_REPO_ROOT),
-            "--",
-            os.fspath(SANDBOX_REPO_ROOT / ".venv/bin/python"),
-            os.fspath(SANDBOX_REPO_ROOT / "scripts/pilot/provider_free_scenarios.py"),
-            "run",
-            scenario_name,
-            "--workspace",
-            os.fspath(sandbox_exp),
-        )
+    identity = dict(runtime_identity)
+    if bwrap != identity.get("bwrap", {}).get("path"):
+        raise ProviderFreeError("sandbox bwrap conflicts with runtime identity")
+    return provider_free_sandbox_argv(
+        scenario_name,
+        exp_dir,
+        identity,
+        repo_root=REPO_ROOT,
     )
-    return argv
 
 
 def _sandbox_environment(environ: Mapping[str, str]) -> dict[str, str]:
@@ -190,13 +176,7 @@ def _sandbox_environment(environ: Mapping[str, str]) -> dict[str, str]:
         for name in PROVIDER_FREE_ENV_ALLOWLIST
         if environ.get(name)
     }
-    result.update(
-        {
-            "HOME": "/home/provider-free",
-            "PATH": f"{SANDBOX_REPO_ROOT}/.venv/bin:/usr/local/bin:/usr/bin:/bin",
-            "PYTHONDONTWRITEBYTECODE": "1",
-        }
-    )
+    result.update(PROVIDER_FREE_REQUIRED_ENVIRONMENT)
     return result
 
 
@@ -219,6 +199,8 @@ def _publish_no_provider_proof(
     environ: Mapping[str, str],
 ) -> None:
     scenario = PROVIDER_FREE_SCENARIOS[scenario_name]
+    sandbox_path = exp_dir / "run/sandbox-enforcement.json"
+    sandbox_bytes = sandbox_path.read_bytes()
     _canonical_write(
         exp_dir / PROVIDER_FREE_PROOF,
         {
@@ -247,7 +229,10 @@ def _publish_no_provider_proof(
                 "credential_values_recorded": False,
             },
             "requests": {"model_gateway": 0, "provider": 0, "tap": 0},
-            "sandbox_enforcement": "run/sandbox-enforcement.json",
+            "sandbox_enforcement": {
+                "path": "run/sandbox-enforcement.json",
+                "sha256": hashlib.sha256(sandbox_bytes).hexdigest(),
+            },
         },
     )
 
@@ -316,7 +301,8 @@ def _retain_deployment_authority(exp_dir: Path) -> dict[str, object]:
 
     receipt_path = REPO_ROOT / deployment_authority.RECEIPT_PATH
     try:
-        receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
+        receipt_bytes = receipt_path.read_bytes()
+        receipt = json.loads(receipt_bytes)
         deployment_authority.verify_receipt(REPO_ROOT, receipt)
         if receipt.get("contract_paths") != list(
             deployment_authority.EXECUTION_AUTHORITY_PATHS
@@ -335,7 +321,7 @@ def _retain_deployment_authority(exp_dir: Path) -> dict[str, object]:
         deployment_authority.DeploymentAuthorityError,
     ) as exc:
         raise ProviderFreeError("deployed source authority retention failed") from exc
-    _canonical_write(exp_dir / "run/deployed-source-authority.json", receipt)
+    (exp_dir / "run/deployed-source-authority.json").write_bytes(receipt_bytes)
     return receipt
 
 
@@ -344,6 +330,7 @@ def _publish_sandbox_enforcement(
     *,
     argv: list[str],
     child_environment: Mapping[str, str],
+    runtime_identity: Mapping[str, object],
 ) -> None:
     """Retain the exact namespace/resource launch boundary without values."""
 
@@ -354,14 +341,9 @@ def _publish_sandbox_enforcement(
             "network": "isolated-loopback",
             "argv": argv,
             "environment_names": sorted(child_environment),
-            "resource_limits": {
-                "wall_seconds": WALL_TIMEOUT_SECONDS,
-                "cpu_seconds": CPU_LIMIT_SECONDS,
-                "address_space_bytes": ADDRESS_SPACE_LIMIT_BYTES,
-                "file_size_bytes": FILE_SIZE_LIMIT_BYTES,
-                "open_files": OPEN_FILE_LIMIT,
-                "processes": PROCESS_LIMIT,
-            },
+            "required_environment": PROVIDER_FREE_REQUIRED_ENVIRONMENT,
+            "sandbox_profile": PROVIDER_FREE_SANDBOX_PROFILE,
+            "runtime_identity": runtime_identity,
         },
     )
 
@@ -381,6 +363,7 @@ def _validate_scenario_evidence(exp_dir: Path, scenario_name: str) -> None:
         "viewer_deployment",
         "viewer_fallback",
         "native_depth_eight",
+        "cadpy_runtime",
         "shipped_tree",
         "commands",
     }
@@ -468,11 +451,15 @@ def run_scenario(
     handle = f"{group}/{exp}"
     if environ.get("CVM_PROVIDER_FREE_JOB") != handle:
         raise ProviderFreeError("provider-free job identity conflicts with request")
+    runtime_identity = _trusted_runtime(environ)
     pilot_runner.prepare_exp(exp_dir)
-    bwrap = shutil.which("bwrap", path=environ.get("PATH"))
-    if not bwrap:
-        raise ProviderFreeError("bwrap is required for provider-free execution")
-    argv = _sandbox_argv(scenario_name, exp_dir, bwrap=bwrap)
+    bwrap = runtime_identity["bwrap"]["path"]
+    argv = _sandbox_argv(
+        scenario_name,
+        exp_dir,
+        bwrap=bwrap,
+        runtime_identity=runtime_identity,
+    )
     child_environment = _sandbox_environment(environ)
     workload_status = 1
     try:
@@ -491,6 +478,7 @@ def run_scenario(
         exp_dir,
         argv=argv,
         child_environment=child_environment,
+        runtime_identity=runtime_identity,
     )
     final_status = workload_status
     if workload_status == 0:
