@@ -17,7 +17,7 @@ import time
 import traceback
 from contextlib import contextmanager
 from dataclasses import dataclass
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Iterator, Mapping, Sequence
 
 from scripts.pilot import deployment_authority
@@ -52,17 +52,6 @@ VIEWER_ARTIFACT_ROUTES = (
         "skills/cad-viewer/scripts/viewer/dist/index.html",
     ),
 )
-VIEWER_SOURCE_TRANSFER_FILTERS = (
-    "--include=/viewer/",
-    "--include=/viewer/scripts/",
-    "--include=/viewer/scripts/start-agent-viewer.mjs",
-    "--include=/viewer/src/",
-    "--include=/viewer/src/client/",
-    "--include=/viewer/src/client/main.jsx",
-    "--include=/viewer/src/server/",
-    "--include=/viewer/src/server/server.mjs",
-    "--exclude=/viewer/***",
-)
 PROVIDER_FREE_EXECUTION_FILES = (
     "scripts/pilot/cvm-submit.sh",
     "scripts/pilot/cvm_job/protocol.py",
@@ -80,6 +69,7 @@ RSYNC_SUMMARY_PATTERN = re.compile(
     r"sent ([\d,]+) bytes\s+received ([\d,]+) bytes\s+"
     r"([\d,]+(?:\.\d+)?) bytes/sec"
 )
+
 
 # Source -> staging is intentionally different from staging -> CVM. The
 # staging copy keeps build-only inputs such as viewer/, packages/, and plugins/
@@ -145,6 +135,39 @@ class PushError(RuntimeError):
         super().__init__(message)
         self.status = status
         self.transferred = transferred
+
+
+def _viewer_source_transfer_filters() -> tuple[str, ...]:
+    """Include only Viewer sources named by the runtime identity contract."""
+
+    sources = tuple(
+        PurePosixPath(source) for _, source, _ in VIEWER_ARTIFACT_ROUTES
+    )
+    if len(set(sources)) != len(sources) or any(
+        source.is_absolute()
+        or not source.parts
+        or source.parts[0] != "viewer"
+        or any(part in {"", ".", ".."} for part in source.parts)
+        for source in sources
+    ):
+        raise PushError("Viewer artifact source routes are invalid", 4)
+    directories = {
+        parent
+        for source in sources
+        for parent in source.parents
+        if parent.parts
+    }
+    return (
+        *(
+            f"--include=/{directory.as_posix()}/"
+            for directory in sorted(
+                directories,
+                key=lambda path: (len(path.parts), path.as_posix()),
+            )
+        ),
+        *(f"--include=/{source.as_posix()}" for source in sources),
+        "--exclude=/viewer/***",
+    )
 
 
 @dataclass(frozen=True)
@@ -1076,7 +1099,7 @@ class CvmPush:
             "-avz",
             "--progress",
             f"--include={IMPLICIT_NODE_MODULES_INCLUDE}",
-            *VIEWER_SOURCE_TRANSFER_FILTERS,
+            *_viewer_source_transfer_filters(),
             "--include=/models/",
             "--include=/models/simple/",
             "--include=/models/simple/rectangular_clamp_block.py",

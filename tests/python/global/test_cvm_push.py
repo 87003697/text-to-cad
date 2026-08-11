@@ -1218,6 +1218,15 @@ class TransferAndVerifyTests(unittest.TestCase):
             stage = root / "stage"
             target = root / "target"
             create_runtime(stage)
+            for relative in (
+                "viewer/.env",
+                "viewer/node_modules/private/package.json",
+                "viewer/src/client/untracked.jsx",
+                "viewer/docs/internal.md",
+            ):
+                path = stage / relative
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text("private\n", encoding="utf-8")
             runner = FakeRunner()
             workflow = cvm_push.CvmPush(runner, repo_root=repo, environ={})
 
@@ -1233,10 +1242,62 @@ class TransferAndVerifyTests(unittest.TestCase):
             )
 
             self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(
+                sorted(
+                    path.relative_to(target).as_posix()
+                    for path in (target / "viewer").rglob("*")
+                    if path.is_file()
+                ),
+                sorted(source for _, source, _ in cvm_push.VIEWER_ARTIFACT_ROUTES),
+            )
             receipt = provider_free_scenarios.deployed_viewer_receipt(target)
             self.assertEqual(
                 [artifact["role"] for artifact in receipt["artifacts"]],
                 ["launcher", "server", "client"],
+            )
+
+    def test_production_transfer_source_set_follows_artifact_routes(self) -> None:
+        with tempfile.TemporaryDirectory() as root_text:
+            root = Path(root_text)
+            repo = create_repo(root)
+            stage = root / "stage"
+            target = root / "target"
+            create_runtime(stage)
+            added_source = "viewer/docs/audited-source.txt"
+            added_path = stage / added_source
+            added_path.parent.mkdir(parents=True)
+            added_path.write_text("audited\n", encoding="utf-8")
+            routes = (
+                *cvm_push.VIEWER_ARTIFACT_ROUTES,
+                (
+                    "audited-source",
+                    added_source,
+                    "skills/cad-viewer/scripts/viewer/audited-source.txt",
+                ),
+            )
+            runner = FakeRunner()
+            workflow = cvm_push.CvmPush(runner, repo_root=repo, environ={})
+
+            with mock.patch.object(cvm_push, "VIEWER_ARTIFACT_ROUTES", routes):
+                workflow.transfer_stage(stage)
+            argv = list(runner.streams[0][0])
+            argv[-1] = f"{target}/"
+            result = subprocess.run(
+                argv,
+                check=False,
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(
+                sorted(
+                    path.relative_to(target).as_posix()
+                    for path in (target / "viewer").rglob("*")
+                    if path.is_file()
+                ),
+                sorted(source for _, source, _ in routes),
             )
 
     def test_remote_verification_uses_full_contract_and_exact_hashes(self) -> None:
