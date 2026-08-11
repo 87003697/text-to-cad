@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+import base64
 from io import BytesIO
+import json
 import statistics
 import unittest
+from unittest import mock
 
 from PIL import Image
 
@@ -26,6 +29,55 @@ def _geometry(*triangles: tuple[tuple[float, float, float], ...]) -> MeshGeometr
 
 
 class ResidualRendererTests(unittest.TestCase):
+    def test_geometry_payload_crosses_same_origin_route_not_evaluate_arguments(self) -> None:
+        page = mock.MagicMock()
+        context = mock.MagicMock()
+        browser = mock.MagicMock()
+        playwright = mock.MagicMock()
+        context.new_page.return_value = page
+        browser.new_context.return_value = context
+        playwright.chromium.launch.return_value = browser
+
+        png = BytesIO()
+        Image.new("RGB", (504, 1008), (0, 0, 0)).save(png, format="PNG")
+        encoded = base64.b64encode(png.getvalue()).decode("ascii")
+        routed_payload: dict[str, object] = {}
+
+        def evaluate_without_payload(script: str, *args: object) -> dict[str, object]:
+            self.assertIn('fetch("/payload.json"', script)
+            self.assertEqual((), args)
+            route_handler = page.route.call_args.args[1]
+            route = mock.MagicMock()
+            route.request.method = "GET"
+            route.request.url = "http://meshshot.local/payload.json"
+            route_handler(route)
+            fulfilled = route.fulfill.call_args.kwargs
+            self.assertEqual("application/json", fulfilled["content_type"])
+            routed_payload.update(json.loads(fulfilled["body"]))
+            return {
+                "ok": True,
+                "pngDataUrl": f"data:image/png;base64,{encoded}",
+                "views": [{} for _ in range(8)],
+            }
+
+        page.evaluate.side_effect = evaluate_without_payload
+        sync_playwright = mock.MagicMock()
+        sync_playwright.return_value.__enter__.return_value = playwright
+        triangle = ((-0.2, -0.2, 0.0), (0.2, -0.2, 0.0), (0.0, 0.2, 0.0))
+
+        with mock.patch("playwright.sync_api.sync_playwright", sync_playwright):
+            rendered = render_residual_preview(
+                _geometry(triangle),
+                _geometry(triangle),
+                variant="step",
+            )
+
+        self.assertEqual((504, 1008), Image.open(BytesIO(rendered.png_bytes)).size)
+        self.assertEqual(
+            [[-0.2, -0.2, 0.0], [0.2, -0.2, 0.0], [0.0, 0.2, 0.0]],
+            routed_payload["reference"]["vertices"],
+        )
+
     def test_step_render_exposes_eight_view_residual_channels_in_fixed_layout(self) -> None:
         shared = ((-0.12, -0.22, 0.0), (0.12, -0.22, 0.0), (0.0, 0.18, 0.0))
         reference_only = ((-0.46, -0.2, 0.0), (-0.2, -0.2, 0.0), (-0.33, 0.2, 0.0))

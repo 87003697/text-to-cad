@@ -245,6 +245,7 @@ function composeTile(reference, candidate, view, profile, pixelSize, exteriorDir
 }
 
 async function renderResidual(payload) {
+  console.info("meshshot-stage:payload-ready");
   const { profile, variant, exteriorDirections = [] } = payload;
   const variantProfile = profile.variants[variant];
   if (!variantProfile) throw new Error(`unsupported render variant: ${variant}`);
@@ -270,8 +271,12 @@ async function renderResidual(payload) {
     stencilBuffer: false,
   });
   target.samples = 4;
+  console.info("meshshot-stage:reference-geometry:start");
   const referenceGeometry = geometryFromPayload(payload.reference);
+  console.info("meshshot-stage:reference-geometry:done");
+  console.info("meshshot-stage:candidate-geometry:start");
   const candidateGeometry = geometryFromPayload(payload.candidate);
+  console.info("meshshot-stage:candidate-geometry:done");
   const [imageWidth, imageHeight] = variantProfile.image_pixels;
   const output = document.createElement("canvas");
   output.width = imageWidth;
@@ -284,8 +289,12 @@ async function renderResidual(payload) {
   const views = [];
   try {
     for (const [index, view] of profile.views.entries()) {
+      console.info(`meshshot-stage:${view.name}:reference:start`);
       const reference = renderGeometry(renderer, target, referenceGeometry, view, profile, renderSize);
+      console.info(`meshshot-stage:${view.name}:reference:done`);
+      console.info(`meshshot-stage:${view.name}:candidate:start`);
       const candidate = renderGeometry(renderer, target, candidateGeometry, view, profile, renderSize);
+      console.info(`meshshot-stage:${view.name}:candidate:done`);
       const composed = composeTile(
         reference,
         candidate,
@@ -315,7 +324,10 @@ async function renderResidual(payload) {
           : { projection: "perspective", vertical_fov_degrees: profile.camera.perspective.vertical_fov_degrees },
       });
     }
-    return { ok: true, pngDataUrl: output.toDataURL("image/png"), views };
+    console.info("meshshot-stage:png-encode:start");
+    const pngDataUrl = output.toDataURL("image/png");
+    console.info("meshshot-stage:png-encode:done");
+    return { ok: true, pngDataUrl, views };
   } finally {
     referenceGeometry.dispose();
     candidateGeometry.dispose();

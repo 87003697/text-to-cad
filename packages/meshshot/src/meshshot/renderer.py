@@ -6,6 +6,7 @@ import base64
 from collections.abc import Sequence
 from dataclasses import dataclass
 from io import BytesIO
+import json
 import math
 from pathlib import Path
 from typing import Any
@@ -18,6 +19,7 @@ from meshshot.profile import load_profile
 _ORIGIN = "http://meshshot.local"
 _RENDER_URL = f"{_ORIGIN}/render.html"
 _ROUTE_GLOB = f"{_ORIGIN}/**"
+_PAYLOAD_PATH = "/payload.json"
 _RUNTIME_DIR = Path(__file__).resolve().parent / "runtime"
 _BROWSER_STARTUP_TIMEOUT_MS = 15_000
 _RENDER_TIMEOUT_MS = 120_000
@@ -97,6 +99,12 @@ def render_residual_preview(
         "candidate": candidate.to_json(),
         "exteriorDirections": list(directions),
     }
+    payload_bytes = json.dumps(
+        payload,
+        allow_nan=False,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    renderer_events: list[str] = []
     try:
         from playwright.sync_api import sync_playwright
     except ImportError as exc:
@@ -118,10 +126,29 @@ def render_residual_preview(
                 )
                 page = context.new_page()
 
+                def record_console(message: Any) -> None:
+                    text = str(message.text)
+                    if text.startswith("meshshot-stage:"):
+                        renderer_events.append(text)
+
+                page.on("console", record_console)
+                page.on(
+                    "crash",
+                    lambda _: renderer_events.append("meshshot-stage:page-crash"),
+                )
+
                 def handle_route(route: Any) -> None:
-                    path = runtime_files.get(route.request.url.removeprefix(_ORIGIN))
+                    request_path = route.request.url.removeprefix(_ORIGIN)
+                    path = runtime_files.get(request_path)
                     if route.request.method != "GET":
                         route.fulfill(status=405, body="method not allowed")
+                    elif request_path == _PAYLOAD_PATH:
+                        route.fulfill(
+                            status=200,
+                            content_type="application/json",
+                            headers={"cache-control": "no-store"},
+                            body=payload_bytes,
+                        )
                     elif path is None or not path.is_file():
                         route.fulfill(status=404, body="not found")
                     else:
@@ -143,17 +170,30 @@ def render_residual_preview(
                     "typeof window.__meshshotRender === 'function'",
                     timeout=_RENDER_TIMEOUT_MS,
                 )
-                result = page.evaluate(
-                    "(renderPayload) => window.__meshshotRender(renderPayload)",
-                    payload,
-                )
+                result = page.evaluate("""
+                    async () => {
+                      console.info("meshshot-stage:payload-fetch:start");
+                      const response = await fetch("/payload.json", { cache: "no-store" });
+                      if (!response.ok) {
+                        throw new Error(`meshshot payload fetch failed: ${response.status}`);
+                      }
+                      const renderPayload = await response.json();
+                      console.info("meshshot-stage:payload-fetch:done");
+                      return window.__meshshotRender(renderPayload);
+                    }
+                """)
                 context.close()
             finally:
                 browser.close()
     except MeshshotError:
         raise
     except Exception as exc:
-        raise MeshshotError(f"headless residual render failed: {exc}") from exc
+        stage = (
+            f"; last renderer event: {renderer_events[-1]}"
+            if renderer_events
+            else "; no renderer stage event received"
+        )
+        raise MeshshotError(f"headless residual render failed: {exc}{stage}") from exc
 
     if not isinstance(result, dict) or result.get("ok") is not True:
         detail = result.get("error") if isinstance(result, dict) else None
