@@ -110,8 +110,9 @@ Parse request → Discover plan → Qualify terminal/postmortem
 - **循环内 SSH 必须使用 `ssh -n cvm`**：exp loop 通过 stdin 读取待处理路径；
   普通 `ssh cvm` 会吞掉后续路径，表现为只处理第一个 exp 就提前结束。
 - **rclone VFS refresh**：新 group 不能直接 refresh。脚本按
-  `outputs parent → group → exp` 顺序做 non-recursive refresh，随后逐个检查 mount
-  可见性。S3/cleanup 已成功但 mount 仍不可见时 exit 6，不能打印完整成功。
+  `outputs parent → group → exp` 顺序做 non-recursive refresh，随后在有父级 outer
+  timeout 的本地子进程内 staging/audit mount。S3/cleanup 已成功但最终 mount 仍
+  不可见时 exit 6，不能打印完整成功。
 - **CVM 上传工具**：用 `aws s3 cp --recursive`（`s5cmd` 虽然 DEVCLOUD.md 说该装
   但实际没装；aws cli 够用）。
 - **从 mount 只读 SQLite**：使用
@@ -139,8 +140,9 @@ Parse request → Discover plan → Qualify terminal/postmortem
 - exit 4（RC endpoint 或 S3 remote listing 不可用）→ 分别执行
   `rclone rc --rc-addr=127.0.0.1:5572 core/version` 和带 bucket 的
   `rclone lsf threed-code:arcwm-code-us-west-2/...` 排查
-- exit 5（verify fail：本地文件数 ≠ S3 文件数） → 汇报 exp 名 + 两侧计数，指示
-  不清 CVM，让用户人工介入
+- exit 5（verify fail：本地文件数 ≠ S3 文件数，或 mounted authority exact
+  size/SHA-256 与 terminal manifest 不符） → 汇报 exp 名、计数或 stable authority
+  classification，指示不清 CVM，让用户人工介入
 - exit 6（S3 已验证且 CVM 已清，但 mount 尚不可见）→ 明确数据已安全上传，
   刷新 `ericzyma/text-to-cad/outputs` 后重查；不得重跑上传或声称数据丢失
 - exit 7（unsafe exp path）→ 不上传、不清理，检查 CVM 目录命名

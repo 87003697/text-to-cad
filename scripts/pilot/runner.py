@@ -40,7 +40,9 @@ ARTIFACT_CONTRACT_STATUS = 4
 MANIFEST_EXCLUDED_ROOTS = {".git"}
 MANIFEST_EXCLUDED_PREFIXES = {"run/.codex-upper"}
 WORKSPACE_HELPER = REPO_ROOT / "skills/mesh-to-cad/scripts/mesh-to-cad-workspace"
-WORKSPACE_AUTHORITY_HELPER = REPO_ROOT / "scripts/pilot/workspace_authority.py"
+WORKSPACE_AUTHORITY_HELPER = (
+    REPO_ROOT / "skills/mesh-to-cad/scripts/mesh-to-cad-authority"
+)
 SYSTEM_RO_PATHS = (
     Path("/usr"),
     Path("/etc/alternatives"),

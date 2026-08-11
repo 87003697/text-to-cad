@@ -9,12 +9,14 @@ authority fact.
 ## Publication
 
 After the unchanged public `mesh-to-cad-workspace validate` process succeeds
-and reports a Final Delivery, run:
+and reports a Final Delivery, resolve the installed `mesh-to-cad` skill root to
+an absolute path, then run its self-contained entrypoints:
 
 ```bash
-python scripts/pilot/workspace_authority.py create \
+MESH_TO_CAD_SKILL=/absolute/path/to/installed/mesh-to-cad
+python "$MESH_TO_CAD_SKILL/scripts/mesh-to-cad-authority" create \
   --workspace <EXP_DIR> \
-  --workspace-helper skills/mesh-to-cad/scripts/mesh-to-cad-workspace
+  --workspace-helper "$MESH_TO_CAD_SKILL/scripts/mesh-to-cad-workspace"
 ```
 
 The helper temporarily creates exactly
@@ -88,13 +90,16 @@ to fail closed before upload or cleanup, not to redefine Workspace authority.
 Audit a `.git`-less retained experiment with:
 
 ```bash
-python scripts/pilot/workspace_authority.py audit \
+MESH_TO_CAD_SKILL=/absolute/path/to/installed/mesh-to-cad
+python "$MESH_TO_CAD_SKILL/scripts/mesh-to-cad-authority" audit \
   --source <PULLED_EXP> \
-  --workspace-helper skills/mesh-to-cad/scripts/mesh-to-cad-workspace \
+  --workspace-helper "$MESH_TO_CAD_SKILL/scripts/mesh-to-cad-workspace" \
   --timeout-seconds 120 --max-files 20000 --max-bytes 5368709120
 ```
 
 The helper copies the mounted source into bounded local temporary storage,
+matches both authority files against any expected terminal-manifest
+`size_bytes`/`sha256` identities supplied by the transfer workflow,
 verifies canonical receipt encoding, bundle size/digest, the sole ref and HEAD,
 every required commit parent/tree, protocol commit membership, and every
 transferred tracked file. It materializes a temporary detached repository from
@@ -114,6 +119,7 @@ Stable portable failure classes are `authority_missing`,
 `authority_commit_mismatch`, `authority_partial`,
 `authority_dirty_artifact`, `authority_workspace_mismatch`,
 `authority_validation_mismatch`, `authority_stage_bounds`, and
-`authority_timeout`. All fail closed. `cvm-pull` must complete the mounted-copy
+`authority_timeout`. A transfer expectation mismatch is
+`authority_mount_identity_mismatch`. All fail closed. `cvm-pull` must complete the mounted-copy
 audit before deleting the CVM source; timeouts are reported separately and
 also preserve the source.

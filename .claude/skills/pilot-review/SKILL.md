@@ -81,10 +81,13 @@ separate finding; current source is not retroactive law.
 
 - Run `./.venv/bin/python .claude/skills/pilot-review/scripts/review.py <exp>
   --workspace-helper skills/mesh-to-cad/scripts/mesh-to-cad-workspace
-  --authority-helper .claude/skills/pilot-review/scripts/workspace_authority.py`
-  first.
+  --authority-helper .claude/skills/pilot-review/scripts/workspace_authority.py
+  --output <local-review-output>` for a transferred experiment. The output
+  must be separate from the mounted/retained input. A live Workspace may omit
+  `--output` to retain the established in-Workspace review workflow.
   It invokes the Workspace skill's public `validate` process interface
-  read-only and publishes only `review.md` and `review.json`.
+  read-only and publishes only `review.md` and `review.json`; portable review
+  never writes into the retained experiment.
 - Confirm `workspace.json`, `experiment.json`, Canonical Reference identities,
   setup identity, `step_index.json`, immutable steps/cycles/attempts, and their
   publishing commits agree.
@@ -152,10 +155,10 @@ missing evidence, and cheapest discriminating next experiment.
 
 ## Required report
 
-Write only:
+Write only (using the explicit local output for transferred experiments):
 
-- `<exp>/review.md`
-- `<exp>/review.json`
+- `<local-review-output>/review.md` (or `<exp>/review.md` for live authority)
+- `<local-review-output>/review.json` (or `<exp>/review.json` for live authority)
 - `outputs/<group>/review-summary.md` for group review
 
 `review.md` contains the four verdicts, provenance matrix, expected-vs-actual

@@ -1,17 +1,36 @@
 from __future__ import annotations
 
 import hashlib
+import importlib.util
 import json
+import os
 from pathlib import Path
 import shutil
 import subprocess
 import sys
 import tempfile
 import unittest
+from unittest import mock
 
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
-AUTHORITY = REPO_ROOT / "scripts/pilot/workspace_authority.py"
+AUTHORITY = REPO_ROOT / "skills/mesh-to-cad/scripts/mesh-to-cad-authority"
+INSTALLED_AUTHORITY = (
+    REPO_ROOT / "skills/mesh-to-cad/scripts/mesh-to-cad-authority/__main__.py"
+)
+GENERATED_AUTHORITY = (
+    REPO_ROOT / ".claude/skills/pilot-review/scripts/workspace_authority.py"
+)
+
+
+def load_authority_module():
+    spec = importlib.util.spec_from_file_location(
+        "workspace_authority", INSTALLED_AUTHORITY
+    )
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
 
 
 class WorkspaceAuthorityProcessTests(unittest.TestCase):
@@ -91,8 +110,14 @@ class WorkspaceAuthorityProcessTests(unittest.TestCase):
         shutil.copytree(self.workspace, pulled, ignore=shutil.ignore_patterns(".git"))
         return pulled
 
-    def audit(self, pulled: Path, *, timeout: str = "10") -> subprocess.CompletedProcess[str]:
-        return self.run_authority(
+    def audit(
+        self,
+        pulled: Path,
+        *,
+        timeout: str = "10",
+        expected_authority: list[dict[str, object]] | None = None,
+    ) -> subprocess.CompletedProcess[str]:
+        argv = [
             "audit",
             "--source",
             str(pulled),
@@ -100,7 +125,12 @@ class WorkspaceAuthorityProcessTests(unittest.TestCase):
             str(self.validator),
             "--timeout-seconds",
             timeout,
-        )
+        ]
+        if expected_authority is not None:
+            argv.extend(
+                ["--expected-authority-json", json.dumps(expected_authority)]
+            )
+        return self.run_authority(*argv)
 
     def test_create_and_audit_portable_authority_through_process_interface(self) -> None:
         create_payload = self.create_package()
@@ -147,6 +177,26 @@ class WorkspaceAuthorityProcessTests(unittest.TestCase):
         )
         self.assertEqual(audit_payload["workspace_validation"]["head"], receipt["workspace"]["head"])
 
+    def test_installed_authority_is_self_contained_and_generated_from_canonical_source(self) -> None:
+        self.assertTrue(INSTALLED_AUTHORITY.is_file())
+        completed = subprocess.run(
+            [sys.executable, str(INSTALLED_AUTHORITY), "--help"],
+            cwd=self.root,
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        self.assertEqual(INSTALLED_AUTHORITY.read_bytes(), GENERATED_AUTHORITY.read_bytes())
+        reference = (
+            REPO_ROOT
+            / "skills/mesh-to-cad/references/portable-workspace-authority.md"
+        ).read_text(encoding="utf-8")
+        self.assertNotIn("scripts/pilot/workspace_authority.py", reference)
+        self.assertIn(
+            "$MESH_TO_CAD_SKILL/scripts/mesh-to-cad-authority", reference
+        )
+
     def test_missing_legacy_authority_is_not_auditable(self) -> None:
         pulled = self.pulled_copy()
         audited = self.audit(pulled)
@@ -162,6 +212,32 @@ class WorkspaceAuthorityProcessTests(unittest.TestCase):
             stream.write(b"corrupt")
         payload = json.loads(self.audit(pulled).stdout)
         self.assertEqual(payload["authority"]["classification"], "authority_digest_mismatch")
+
+    def test_expected_transfer_identity_rejects_stale_same_count_authority(self) -> None:
+        self.create_package()
+        expected = []
+        for name in ("workspace-authority.bundle", "workspace-authority.json"):
+            data = (self.workspace / name).read_bytes()
+            expected.append(
+                {
+                    "path": name,
+                    "size_bytes": len(data),
+                    "sha256": hashlib.sha256(data).hexdigest(),
+                }
+            )
+        pulled = self.pulled_copy()
+        receipt = pulled / "workspace-authority.json"
+        original = receipt.read_bytes()
+        receipt.write_bytes(bytes([original[0] ^ 1]) + original[1:])
+
+        payload = json.loads(
+            self.audit(pulled, expected_authority=expected).stdout
+        )
+
+        self.assertEqual(
+            payload["authority"]["classification"],
+            "authority_mount_identity_mismatch",
+        )
 
     def test_unknown_nested_receipt_field_is_rejected(self) -> None:
         self.create_package()
@@ -250,6 +326,83 @@ class WorkspaceAuthorityProcessTests(unittest.TestCase):
         payload = json.loads(completed.stdout)
         self.assertEqual(completed.returncode, 2)
         self.assertEqual(payload["authority"]["classification"], "authority_timeout")
+
+    def test_staging_rejects_oversized_file_before_destination_growth(self) -> None:
+        authority = load_authority_module()
+        source = self.root / "oversized-source"
+        target = self.root / "oversized-target"
+        source.mkdir()
+        (source / "large.bin").write_bytes(b"12345")
+
+        with self.assertRaises(authority.AuthorityError) as raised:
+            authority.stage_tree_bounded(
+                source,
+                target,
+                deadline=float("inf"),
+                max_files=1,
+                max_bytes=4,
+            )
+
+        self.assertEqual(raised.exception.classification, "authority_stage_bounds")
+        self.assertFalse((target / "large.bin").exists())
+
+    def test_staging_classifies_source_open_race_as_partial(self) -> None:
+        authority = load_authority_module()
+        source = self.root / "vanishing-source"
+        target = self.root / "vanishing-target"
+        source.mkdir()
+        vanishing = source / "vanishing.bin"
+        vanishing.write_bytes(b"bytes")
+        original_open = Path.open
+
+        def open_with_race(path: Path, *args, **kwargs):
+            if path == vanishing and args and args[0] == "rb":
+                vanishing.unlink()
+                raise FileNotFoundError(vanishing)
+            return original_open(path, *args, **kwargs)
+
+        with mock.patch.object(Path, "open", open_with_race):
+            with self.assertRaises(authority.AuthorityError) as raised:
+                authority.stage_tree_bounded(
+                    source,
+                    target,
+                    deadline=float("inf"),
+                    max_files=1,
+                    max_bytes=5,
+                )
+
+        self.assertEqual(raised.exception.classification, "authority_partial")
+        self.assertFalse((target / "vanishing.bin").exists())
+
+    def test_staging_enforces_growth_bound_before_each_chunk_write(self) -> None:
+        authority = load_authority_module()
+        source = self.root / "growing-source"
+        target = self.root / "growing-target"
+        source.mkdir()
+        growing = source / "growing.bin"
+        growing.write_bytes(b"12345678")
+        original_lstat = Path.lstat
+
+        def stale_lstat(path: Path, *args, **kwargs):
+            result = original_lstat(path, *args, **kwargs)
+            if path == growing:
+                values = list(result)
+                values[6] = 4
+                return os.stat_result(values)
+            return result
+
+        with mock.patch.object(Path, "lstat", stale_lstat):
+            with self.assertRaises(authority.AuthorityError) as raised:
+                authority.stage_tree_bounded(
+                    source,
+                    target,
+                    deadline=float("inf"),
+                    max_files=1,
+                    max_bytes=6,
+                )
+
+        self.assertEqual(raised.exception.classification, "authority_stage_bounds")
+        self.assertLessEqual((target / "growing.bin").stat().st_size, 6)
 
     def test_audit_materializes_transferred_lfs_content_without_remote_store(self) -> None:
         lfs = subprocess.run(

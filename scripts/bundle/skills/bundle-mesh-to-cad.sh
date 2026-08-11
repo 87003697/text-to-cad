@@ -8,7 +8,7 @@ PRINT_OUTPUTS=0
 
 SOURCE="$REPO_ROOT/skills/mesh-to-cad/scripts/mesh-to-cad-review/__main__.py"
 TARGET="$REPO_ROOT/.claude/skills/pilot-review/scripts/review.py"
-AUTHORITY_SOURCE="$REPO_ROOT/scripts/pilot/workspace_authority.py"
+AUTHORITY_SOURCE="$REPO_ROOT/skills/mesh-to-cad/scripts/mesh-to-cad-authority/__main__.py"
 AUTHORITY_TARGET="$REPO_ROOT/.claude/skills/pilot-review/scripts/workspace_authority.py"
 
 while [ "$#" -gt 0 ]; do

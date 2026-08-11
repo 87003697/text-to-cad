@@ -10,6 +10,7 @@ import os
 from pathlib import Path
 import re
 import shutil
+import stat
 import subprocess
 import sys
 import tempfile
@@ -458,7 +459,7 @@ def _read_receipt(root: Path) -> dict[str, Any]:
     return receipt
 
 
-def _copy_tree_bounded(
+def stage_tree_bounded(
     source: Path,
     target: Path,
     *,
@@ -470,37 +471,61 @@ def _copy_tree_bounded(
 
     files = 0
     total = 0
-    target.mkdir(parents=True)
-    for path in source.rglob("*"):
-        if time.monotonic() > deadline:
-            raise AuthorityError("authority_timeout", "authority staging timed out")
-        relative = path.relative_to(source)
-        if not relative.parts or relative.parts[0] == ".git":
-            continue
-        destination = target / relative
-        if path.is_symlink():
-            files += 1
-            link = os.readlink(path)
-            total += len(link.encode())
-            destination.parent.mkdir(parents=True, exist_ok=True)
-            destination.symlink_to(link)
-        elif path.is_dir():
-            destination.mkdir(parents=True, exist_ok=True)
-            continue
-        elif path.is_file():
-            files += 1
-            size = path.stat().st_size
-            total += size
-            destination.parent.mkdir(parents=True, exist_ok=True)
-            with path.open("rb") as reader, destination.open("wb") as writer:
-                while chunk := reader.read(1024 * 1024):
-                    if time.monotonic() > deadline:
-                        raise AuthorityError("authority_timeout", "authority staging timed out")
-                    writer.write(chunk)
-        else:
-            raise AuthorityError("authority_unsafe_path", f"unsupported source entry: {relative}")
-        if files > max_files or total > max_bytes:
-            raise AuthorityError("authority_stage_bounds", "authority staging bounds exceeded")
+    try:
+        target.mkdir(parents=True)
+        for path in source.rglob("*"):
+            if time.monotonic() > deadline:
+                raise AuthorityError("authority_timeout", "authority staging timed out")
+            relative = path.relative_to(source)
+            if not relative.parts or relative.parts[0] == ".git":
+                continue
+            destination = target / relative
+            metadata = path.lstat()
+            if stat.S_ISLNK(metadata.st_mode):
+                link = os.readlink(path)
+                prospective_bytes = len(link.encode())
+                if files + 1 > max_files or total + prospective_bytes > max_bytes:
+                    raise AuthorityError(
+                        "authority_stage_bounds", "authority staging bounds exceeded"
+                    )
+                destination.parent.mkdir(parents=True, exist_ok=True)
+                destination.symlink_to(link)
+                files += 1
+                total += prospective_bytes
+            elif stat.S_ISDIR(metadata.st_mode):
+                destination.mkdir(parents=True, exist_ok=True)
+                continue
+            elif stat.S_ISREG(metadata.st_mode):
+                prospective_bytes = metadata.st_size
+                if files + 1 > max_files or total + prospective_bytes > max_bytes:
+                    raise AuthorityError(
+                        "authority_stage_bounds", "authority staging bounds exceeded"
+                    )
+                destination.parent.mkdir(parents=True, exist_ok=True)
+                with path.open("rb") as reader, destination.open("wb") as writer:
+                    while chunk := reader.read(1024 * 1024):
+                        if time.monotonic() > deadline:
+                            raise AuthorityError(
+                                "authority_timeout", "authority staging timed out"
+                            )
+                        if total + len(chunk) > max_bytes:
+                            raise AuthorityError(
+                                "authority_stage_bounds",
+                                "authority staging bounds exceeded",
+                            )
+                        writer.write(chunk)
+                        total += len(chunk)
+                files += 1
+            else:
+                raise AuthorityError(
+                    "authority_unsafe_path", f"unsupported source entry: {relative}"
+                )
+    except AuthorityError:
+        raise
+    except OSError as exc:
+        raise AuthorityError(
+            "authority_partial", f"authority staging source changed: {exc}"
+        ) from exc
 
 
 def _remaining(deadline: float) -> float:
@@ -510,6 +535,63 @@ def _remaining(deadline: float) -> float:
     if remaining <= 0:
         raise AuthorityError("authority_timeout", "authority audit timed out")
     return remaining
+
+
+def _verify_transfer_expectation(
+    staged: Path,
+    expected: object,
+    *,
+    deadline: float,
+) -> None:
+    """Match staged authority bytes to the terminal transfer manifest exactly."""
+
+    if not isinstance(expected, list) or len(expected) != 2:
+        raise AuthorityError(
+            "authority_invalid_expectation", "expected authority identity is invalid"
+        )
+    records: dict[str, dict[str, Any]] = {}
+    for record in expected:
+        if (
+            not isinstance(record, dict)
+            or set(record) != {"path", "sha256", "size_bytes"}
+            or record.get("path") not in {BUNDLE_NAME, RECEIPT_NAME}
+            or isinstance(record.get("size_bytes"), bool)
+            or not isinstance(record.get("size_bytes"), int)
+            or record["size_bytes"] < 0
+            or not isinstance(record.get("sha256"), str)
+            or SHA256.fullmatch(record["sha256"]) is None
+            or record["path"] in records
+        ):
+            raise AuthorityError(
+                "authority_invalid_expectation", "expected authority identity is invalid"
+            )
+        records[record["path"]] = record
+    if set(records) != {BUNDLE_NAME, RECEIPT_NAME}:
+        raise AuthorityError(
+            "authority_invalid_expectation", "expected authority identity is incomplete"
+        )
+    for name, record in records.items():
+        path = staged / name
+        try:
+            size = path.stat().st_size
+            digest = _sha256_file(path, deadline=deadline)
+        except AuthorityError as exc:
+            if exc.classification == "authority_timeout":
+                raise
+            raise AuthorityError(
+                "authority_mount_identity_mismatch",
+                f"mounted authority cannot match terminal identity: {name}: {exc}",
+            ) from exc
+        except OSError as exc:
+            raise AuthorityError(
+                "authority_mount_identity_mismatch",
+                f"mounted authority cannot match terminal identity: {name}: {exc}",
+            ) from exc
+        if size != record["size_bytes"] or digest != record["sha256"]:
+            raise AuthorityError(
+                "authority_mount_identity_mismatch",
+                f"mounted authority disagrees with terminal identity: {name}",
+            )
 
 
 def _verify_bundle(
@@ -680,6 +762,7 @@ def audit_authority(
     timeout: float,
     max_files: int,
     max_bytes: int,
+    expected_authority: object | None = None,
 ) -> dict[str, Any]:
     """Validate live authority or materialize a portable retained experiment."""
 
@@ -690,20 +773,26 @@ def audit_authority(
             "authority": {"mode": "live", "evidence": [".git", "workspace.json"]},
             "workspace_validation": validation,
         }
-    if not (source / RECEIPT_NAME).is_file():
+    if expected_authority is None and not (source / RECEIPT_NAME).is_file():
         raise AuthorityError("authority_missing", f"missing {RECEIPT_NAME}")
     deadline = time.monotonic() + timeout
     with tempfile.TemporaryDirectory(prefix="workspace-authority-audit-") as temp:
         root = Path(temp)
         staged = root / "staged"
         materialized = root / "materialized"
-        _copy_tree_bounded(
+        stage_tree_bounded(
             source,
             staged,
             deadline=deadline,
             max_files=max_files,
             max_bytes=max_bytes,
         )
+        if expected_authority is not None:
+            _verify_transfer_expectation(
+                staged,
+                expected_authority,
+                deadline=deadline,
+            )
         receipt = _read_receipt(staged)
         _verify_bundle(staged, materialized, receipt, deadline=deadline)
         document = _read_workspace_document(materialized)
@@ -750,6 +839,7 @@ def _parser() -> argparse.ArgumentParser:
     audit.add_argument("--timeout-seconds", type=float, default=60.0)
     audit.add_argument("--max-files", type=int, default=DEFAULT_MAX_FILES)
     audit.add_argument("--max-bytes", type=int, default=DEFAULT_MAX_BYTES)
+    audit.add_argument("--expected-authority-json")
     return parser
 
 
@@ -766,6 +856,15 @@ def main(argv: Sequence[str] | None = None) -> int:
             )
             payload = {"ok": True, "authority": authority}
         else:
+            expected_authority = None
+            if args.expected_authority_json is not None:
+                try:
+                    expected_authority = json.loads(args.expected_authority_json)
+                except json.JSONDecodeError as exc:
+                    raise AuthorityError(
+                        "authority_invalid_expectation",
+                        "expected authority identity is not JSON",
+                    ) from exc
             payload = {
                 "ok": True,
                 **audit_authority(
@@ -774,6 +873,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                     timeout=args.timeout_seconds,
                     max_files=args.max_files,
                     max_bytes=args.max_bytes,
+                    expected_authority=expected_authority,
                 ),
             }
     except AuthorityError as exc:

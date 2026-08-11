@@ -15,9 +15,14 @@ DEFAULT_WORKSPACE_HELPER = "mesh-to-cad-workspace"
 _VENDORED_AUTHORITY_HELPER = Path(__file__).resolve().with_name(
     "workspace_authority.py"
 )
+_INSTALLED_AUTHORITY_HELPER = (
+    Path(__file__).resolve().parent.parent / "mesh-to-cad-authority"
+)
 DEFAULT_AUTHORITY_HELPER = (
     str(_VENDORED_AUTHORITY_HELPER)
     if _VENDORED_AUTHORITY_HELPER.is_file()
+    else str(_INSTALLED_AUTHORITY_HELPER)
+    if _INSTALLED_AUTHORITY_HELPER.is_dir()
     else "workspace-authority"
 )
 
@@ -650,21 +655,25 @@ def _markdown(review: dict[str, Any]) -> str:
     return "\n".join(lines) + "\n"
 
 
-def _publish(workspace: Path, review: dict[str, Any]) -> None:
-    json_tmp = workspace / ".review.json.tmp"
-    markdown_tmp = workspace / ".review.md.tmp"
+def _publish(output: Path, review: dict[str, Any]) -> None:
+    """Atomically publish review artifacts into the explicit output root."""
+
+    output.mkdir(parents=True, exist_ok=True)
+    json_tmp = output / ".review.json.tmp"
+    markdown_tmp = output / ".review.md.tmp"
     json_tmp.write_text(
         json.dumps(review, indent=2, sort_keys=True) + "\n",
         encoding="utf-8",
     )
     markdown_tmp.write_text(_markdown(review), encoding="utf-8")
-    json_tmp.replace(workspace / "review.json")
-    markdown_tmp.replace(workspace / "review.md")
+    json_tmp.replace(output / "review.json")
+    markdown_tmp.replace(output / "review.md")
 
 
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("workspace", type=Path)
+    parser.add_argument("--output", type=Path)
     parser.add_argument(
         "--workspace-helper",
         default=DEFAULT_WORKSPACE_HELPER,
@@ -682,16 +691,39 @@ def _parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> int:
     args = _parser().parse_args(argv)
+    workspace = args.workspace.resolve()
+    live = (workspace / ".git").exists()
+    if not live and args.output is None:
+        print(
+            json.dumps(
+                {
+                    "ok": False,
+                    "error": "portable review requires an explicit separate --output",
+                }
+            )
+        )
+        return 1
+    output = args.output.resolve() if args.output is not None else workspace
+    if not live and (output == workspace or workspace in output.parents):
+        print(
+            json.dumps(
+                {
+                    "ok": False,
+                    "error": "portable review output must be outside the retained input",
+                }
+            )
+        )
+        return 1
     try:
         status, review = review_workspace(
-            args.workspace,
+            workspace,
             args.workspace_helper,
             authority_helper=args.authority_helper,
             authority_timeout_seconds=args.authority_timeout_seconds,
             authority_max_files=args.authority_max_files,
             authority_max_bytes=args.authority_max_bytes,
         )
-        _publish(args.workspace.resolve(), review)
+        _publish(output, review)
     except (OSError, ReviewError) as exc:
         print(json.dumps({"ok": False, "error": str(exc)}))
         return 1
@@ -701,8 +733,8 @@ def main(argv: list[str] | None = None) -> int:
                 "ok": status == 0,
                 "status": status,
                 "classification": review["workspace_validation"]["classification"],
-                "review_json": str(args.workspace / "review.json"),
-                "review_markdown": str(args.workspace / "review.md"),
+                "review_json": str(output / "review.json"),
+                "review_markdown": str(output / "review.md"),
             },
             separators=(",", ":"),
         )

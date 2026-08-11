@@ -333,6 +333,12 @@ class PilotReviewTests(unittest.TestCase):
     def test_reviewer_audits_portable_authority_and_records_materialized_evidence(self) -> None:
         workspace_payload = self.canonical_experiment()
         shutil.rmtree(self.exp / ".git")
+        before = {
+            path.relative_to(self.exp).as_posix(): path.read_bytes()
+            for path in self.exp.rglob("*")
+            if path.is_file()
+        }
+        output = self.root / "portable-review-output"
         workspace_helper = self.helper(workspace_payload)
         authority_helper = self.authority_helper(
             {
@@ -358,11 +364,13 @@ class PilotReviewTests(unittest.TestCase):
                 str(workspace_helper),
                 "--authority-helper",
                 str(authority_helper),
+                "--output",
+                str(output),
             ]
         )
 
         self.assertEqual(status, 0)
-        review = json.loads((self.exp / "review.json").read_text(encoding="utf-8"))
+        review = json.loads((output / "review.json").read_text(encoding="utf-8"))
         self.assertEqual(review["workspace_validation"]["authority_mode"], "materialized")
         self.assertEqual(
             review["workspace_validation"]["authority_evidence"],
@@ -372,9 +380,18 @@ class PilotReviewTests(unittest.TestCase):
             review["contract_provenance"]["portable_authority"],
             "workspace-authority.json",
         )
+        after = {
+            path.relative_to(self.exp).as_posix(): path.read_bytes()
+            for path in self.exp.rglob("*")
+            if path.is_file()
+        }
+        self.assertEqual(after, before)
+        self.assertFalse((self.exp / "review.json").exists())
+        self.assertFalse((self.exp / "review.md").exists())
 
     def test_reviewer_classifies_legacy_without_partial_graph(self) -> None:
         (self.exp / "previews").mkdir()
+        output = self.root / "legacy-review-output"
         helper = self.helper(
             {
                 "ok": False,
@@ -393,12 +410,17 @@ class PilotReviewTests(unittest.TestCase):
                 "--workspace-helper",
                 str(helper),
                 "--authority-helper",
-                str(REPO_ROOT / "scripts/pilot/workspace_authority.py"),
+                str(
+                    REPO_ROOT
+                    / "skills/mesh-to-cad/scripts/mesh-to-cad-authority"
+                ),
+                "--output",
+                str(output),
             ]
         )
 
         self.assertEqual(status, 2)
-        review = json.loads((self.exp / "review.json").read_text(encoding="utf-8"))
+        review = json.loads((output / "review.json").read_text(encoding="utf-8"))
         self.assertEqual(
             review["workspace_validation"]["classification"],
             "not_auditable",
