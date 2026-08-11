@@ -363,12 +363,12 @@ class CvmJobTests(unittest.TestCase):
             state_root=self.state_root,
             detach=lambda *args: 1234,
         )["job"]
-        self.write_provider_free_terminal_evidence(handle)
         captured: dict[str, object] = {}
 
         def fake_run(root, job, command, **kwargs):
             captured["command"] = list(command)
             captured["env"] = dict(kwargs["env"])
+            self.write_provider_free_terminal_evidence(handle)
             return 0, 4321
 
         hostile_environment = {
@@ -423,11 +423,14 @@ class CvmJobTests(unittest.TestCase):
             state_root=self.state_root,
             detach=lambda *args: 1234,
         )["job"]
-        self.write_provider_free_terminal_evidence(handle, complete=False)
+        def fake_run(*_args, **_kwargs):
+            self.write_provider_free_terminal_evidence(handle, complete=False)
+            return 0, 4321
+
         with mock.patch.object(
             runtime,
             "_run_with_heartbeat",
-            return_value=(0, 4321),
+            side_effect=fake_run,
         ):
             state = runtime.supervise_provider_free(
                 handle,
@@ -454,54 +457,66 @@ class CvmJobTests(unittest.TestCase):
                     state_root=self.state_root,
                     detach=lambda *args: 1234,
                 )["job"]
-                self.write_provider_free_terminal_evidence(handle)
-                exp_dir = self.repo_root / "outputs" / handle
-                sandbox_path = exp_dir / "run/sandbox-enforcement.json"
-                sandbox = json.loads(sandbox_path.read_text(encoding="utf-8"))
-                if mutation == "limit":
-                    sandbox["sandbox_profile"]["resource_limits"]["cpu_seconds"] = 1
-                elif mutation == "extra-bind":
-                    sandbox["argv"][1:1] = ["--bind", "/", "/workspace/repo"]
-                elif mutation == "browser-bind":
-                    sandbox["argv"].remove(
-                        sandbox["runtime_identity"]["chromium"]["host_cache_path"]
+                def fake_run(*_args, **_kwargs):
+                    self.write_provider_free_terminal_evidence(handle)
+                    exp_dir = self.repo_root / "outputs" / handle
+                    sandbox_path = exp_dir / "run/sandbox-enforcement.json"
+                    sandbox = json.loads(sandbox_path.read_text(encoding="utf-8"))
+                    if mutation == "limit":
+                        sandbox["sandbox_profile"]["resource_limits"][
+                            "cpu_seconds"
+                        ] = 1
+                    elif mutation == "extra-bind":
+                        sandbox["argv"][1:1] = ["--bind", "/", "/workspace/repo"]
+                    elif mutation == "browser-bind":
+                        sandbox["argv"].remove(
+                            sandbox["runtime_identity"]["chromium"][
+                                "host_cache_path"
+                            ]
+                        )
+                    else:
+                        sandbox["required_environment"][
+                            "PLAYWRIGHT_BROWSERS_PATH"
+                        ] = "/tmp"
+                    sandbox_path.write_text(
+                        json.dumps(sandbox, sort_keys=True, separators=(",", ":"))
+                        + "\n",
+                        encoding="utf-8",
                     )
-                else:
-                    sandbox["required_environment"][
-                        "PLAYWRIGHT_BROWSERS_PATH"
-                    ] = "/tmp"
-                sandbox_path.write_text(
-                    json.dumps(sandbox, sort_keys=True, separators=(",", ":")) + "\n",
-                    encoding="utf-8",
-                )
-                proof_path = exp_dir / "run/provider-free-execution.json"
-                proof = json.loads(proof_path.read_text(encoding="utf-8"))
-                proof["sandbox_enforcement"]["sha256"] = hashlib.sha256(
-                    sandbox_path.read_bytes()
-                ).hexdigest()
-                proof_path.write_text(
-                    json.dumps(proof, sort_keys=True, separators=(",", ":")) + "\n",
-                    encoding="utf-8",
-                )
-                manifest_path = exp_dir / "artifact_manifest.json"
-                manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-                for relative in (
-                    "run/sandbox-enforcement.json",
-                    "run/provider-free-execution.json",
-                ):
-                    data = (exp_dir / relative).read_bytes()
-                    entry = next(
-                        item for item in manifest["files"] if item["path"] == relative
+                    proof_path = exp_dir / "run/provider-free-execution.json"
+                    proof = json.loads(proof_path.read_text(encoding="utf-8"))
+                    proof["sandbox_enforcement"]["sha256"] = hashlib.sha256(
+                        sandbox_path.read_bytes()
+                    ).hexdigest()
+                    proof_path.write_text(
+                        json.dumps(proof, sort_keys=True, separators=(",", ":"))
+                        + "\n",
+                        encoding="utf-8",
                     )
-                    entry.update(
-                        size_bytes=len(data), sha256=hashlib.sha256(data).hexdigest()
+                    manifest_path = exp_dir / "artifact_manifest.json"
+                    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+                    for relative in (
+                        "run/sandbox-enforcement.json",
+                        "run/provider-free-execution.json",
+                    ):
+                        data = (exp_dir / relative).read_bytes()
+                        entry = next(
+                            item
+                            for item in manifest["files"]
+                            if item["path"] == relative
+                        )
+                        entry.update(
+                            size_bytes=len(data),
+                            sha256=hashlib.sha256(data).hexdigest(),
+                        )
+                    manifest_path.write_text(
+                        json.dumps(manifest, sort_keys=True) + "\n",
+                        encoding="utf-8",
                     )
-                manifest_path.write_text(
-                    json.dumps(manifest, sort_keys=True) + "\n", encoding="utf-8"
-                )
+                    return 0, 4321
 
                 with mock.patch.object(
-                    runtime, "_run_with_heartbeat", return_value=(0, 4321)
+                    runtime, "_run_with_heartbeat", side_effect=fake_run
                 ):
                     state = runtime.supervise_provider_free(
                         handle,
@@ -646,6 +661,68 @@ class CvmJobTests(unittest.TestCase):
             self.assertEqual([], list(outside.iterdir()))
         finally:
             group_path.unlink()
+
+    def test_provider_free_poisoned_exact_exp_is_terminal_without_subprocess(
+        self,
+    ) -> None:
+        for mutation in ("empty", ".git", "run", ".gitignore"):
+            with self.subTest(mutation=mutation):
+                group = f"20260805-170000-poison-{mutation.strip('.')}"
+                handle = runtime.submit_provider_free(
+                    "issue15-runtime-authority",
+                    group,
+                    state_root=self.state_root,
+                    detach=lambda *args: 1234,
+                )["job"]
+                state = protocol.load_state(self.state_root, handle)
+                exp_dir = self.repo_root / state["exp_dir"]
+                exp_dir.mkdir()
+                outside = self.workspace / f"outside-{mutation.strip('.')}"
+                if mutation == ".gitignore":
+                    outside.write_text("sentinel\n", encoding="utf-8")
+                    (exp_dir / mutation).symlink_to(outside)
+                elif mutation != "empty":
+                    outside.mkdir()
+                    (exp_dir / mutation).symlink_to(
+                        outside,
+                        target_is_directory=True,
+                    )
+                try:
+                    with mock.patch.object(
+                        runtime,
+                        "_run_with_heartbeat",
+                        return_value=(2, 4321),
+                    ) as run:
+                        terminal = runtime.supervise_provider_free(
+                            handle,
+                            state_root=self.state_root,
+                            environ={"PATH": os.environ["PATH"]},
+                        )
+                    run.assert_not_called()
+                    self.assertEqual("failed", terminal["state"])
+                    self.assertEqual(
+                        terminal,
+                        protocol.load_state(self.state_root, handle),
+                    )
+                    with self.assertRaisesRegex(
+                        protocol.ProtocolError,
+                        "cannot start from failed",
+                    ):
+                        runtime.supervise_provider_free(
+                            handle,
+                            state_root=self.state_root,
+                            environ={"PATH": os.environ["PATH"]},
+                        )
+                    if mutation == ".gitignore":
+                        self.assertEqual(
+                            "sentinel\n",
+                            outside.read_text(encoding="utf-8"),
+                        )
+                    elif mutation != "empty":
+                        self.assertEqual([], list(outside.iterdir()))
+                finally:
+                    shutil.rmtree(exp_dir)
+                    exp_dir.parent.rmdir()
 
     def test_exit_zero_without_manifest_fails(self) -> None:
         handle = self.submit()

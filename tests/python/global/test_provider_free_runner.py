@@ -429,6 +429,117 @@ class ProviderFreeRunnerTests(unittest.TestCase):
         exp_dir.unlink()
         exp_dir.parent.rmdir()
 
+    def test_precreated_exact_exp_and_poisoned_children_are_rejected(self) -> None:
+        real_run = subprocess.run
+        for mutation in ("empty", ".git", "run", ".gitignore"):
+            with self.subTest(mutation=mutation):
+                exp_dir = self.repo / "outputs" / self.handle
+                exp_dir.mkdir(parents=True)
+                outside = Path(self.temporary.name) / f"outside-{mutation.strip('.')}"
+                before: bytes | list[Path] | None = None
+                if mutation == ".git":
+                    outside.mkdir()
+                    real_run(
+                        ["git", "init", "--bare", os.fspath(outside)],
+                        check=True,
+                        stdout=subprocess.DEVNULL,
+                        stderr=subprocess.DEVNULL,
+                    )
+                    before = (outside / "config").read_bytes()
+                    (exp_dir / mutation).symlink_to(
+                        outside,
+                        target_is_directory=True,
+                    )
+                elif mutation == "run":
+                    outside.mkdir()
+                    before = list(outside.iterdir())
+                    (exp_dir / mutation).symlink_to(
+                        outside,
+                        target_is_directory=True,
+                    )
+                elif mutation == ".gitignore":
+                    outside.write_text("sentinel\n", encoding="utf-8")
+                    before = outside.read_bytes()
+                    (exp_dir / mutation).symlink_to(outside)
+
+                def fake_run(argv, **kwargs):
+                    if list(argv) == [os.fspath(self.bwrap), "--version"]:
+                        return subprocess.CompletedProcess(
+                            argv, 0, stdout="bubblewrap 1.2.3\n"
+                        )
+                    if list(argv) and list(argv)[0] == "git":
+                        return real_run(argv, **kwargs)
+                    return subprocess.CompletedProcess(argv, 0, stdout="")
+
+                try:
+                    with (
+                        mock.patch.object(provider_free_runner, "REPO_ROOT", self.repo),
+                        mock.patch.object(
+                            provider_free_runner.shutil,
+                            "which",
+                            return_value=os.fspath(self.bwrap),
+                        ),
+                        mock.patch.object(
+                            provider_free_runner.subprocess,
+                            "run",
+                            side_effect=fake_run,
+                        ) as run,
+                    ):
+                        status = provider_free_runner.main(
+                            ["run", "issue15-runtime-authority", self.group, self.exp],
+                            environ=self.environment,
+                        )
+
+                    if mutation == ".git":
+                        self.assertEqual(before, (outside / "config").read_bytes())
+                    elif mutation == "run":
+                        self.assertEqual(before, list(outside.iterdir()))
+                    elif mutation == ".gitignore":
+                        self.assertEqual(before, outside.read_bytes())
+                    run.assert_not_called()
+                    self.assertEqual(2, status)
+                finally:
+                    shutil.rmtree(exp_dir)
+                    exp_dir.parent.rmdir()
+
+    def test_exact_exp_creation_race_during_runtime_probe_is_rejected(self) -> None:
+        exp_dir = self.repo / "outputs" / self.handle
+        outside = Path(self.temporary.name) / "outside-probe-race"
+        outside.write_text("sentinel\n", encoding="utf-8")
+
+        def fake_run(argv, **_kwargs):
+            if list(argv) == [os.fspath(self.bwrap), "--version"]:
+                exp_dir.mkdir(parents=True)
+                (exp_dir / ".gitignore").symlink_to(outside)
+                return subprocess.CompletedProcess(
+                    argv, 0, stdout="bubblewrap 1.2.3\n"
+                )
+            raise AssertionError(f"unexpected subprocess after creation race: {argv}")
+
+        with (
+            mock.patch.object(provider_free_runner, "REPO_ROOT", self.repo),
+            mock.patch.object(
+                provider_free_runner.shutil,
+                "which",
+                return_value=os.fspath(self.bwrap),
+            ),
+            mock.patch.object(
+                provider_free_runner.subprocess,
+                "run",
+                side_effect=fake_run,
+            ) as run,
+        ):
+            status = provider_free_runner.main(
+                ["run", "issue15-runtime-authority", self.group, self.exp],
+                environ=self.environment,
+            )
+
+        self.assertEqual(2, status)
+        self.assertEqual(1, run.call_count)
+        self.assertEqual("sentinel\n", outside.read_text(encoding="utf-8"))
+        shutil.rmtree(exp_dir)
+        exp_dir.parent.rmdir()
+
     def test_exit_zero_without_runtime_authority_receipt_fails_terminalization(self) -> None:
         def fake_run(argv, **_kwargs):
             if list(argv) == [os.fspath(self.bwrap), "--version"]:

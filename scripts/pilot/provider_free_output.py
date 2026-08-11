@@ -33,7 +33,7 @@ def _directory(parent: Path, name: str, *, create: bool) -> tuple[Path, bool]:
         try:
             candidate.mkdir()
         except FileExistsError:
-            pass
+            existed = True
         except OSError as exc:
             raise OutputPathError(
                 f"cannot create provider-free output path: {candidate}"
@@ -100,6 +100,23 @@ def physical_exp_path(
                 f"provider-free experiment identity conflicts: {exp_dir}"
             )
     return exp_dir, existed
+
+
+def require_empty_exp_path(repo_root: str | Path, exp_dir: str | Path) -> Path:
+    """Require a newly created physical experiment to contain no child entry."""
+
+    physical = revalidate_exp_path(repo_root, exp_dir)
+    try:
+        children = sorted(child.name for child in physical.iterdir())
+    except OSError as exc:
+        raise OutputPathError(
+            f"cannot inspect new provider-free experiment: {physical}"
+        ) from exc
+    if children:
+        raise OutputPathError(
+            "new provider-free experiment is not empty: " + ", ".join(children)
+        )
+    return revalidate_exp_path(repo_root, physical)
 
 
 def revalidate_exp_path(repo_root: str | Path, exp_dir: str | Path) -> Path:

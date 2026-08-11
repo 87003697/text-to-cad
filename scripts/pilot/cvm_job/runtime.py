@@ -785,12 +785,16 @@ def supervise_provider_free(
         ]
         process_status: int | None = None
         try:
-            provider_free_output.physical_exp_path(
+            _exp_dir, output_exists = provider_free_output.physical_exp_path(
                 REPO_ROOT,
                 record["group"],
                 parsed["exp"],
                 create_exp=False,
             )
+            if output_exists:
+                raise provider_free_output.OutputPathError(
+                    f"provider-free experiment must be new: {_exp_dir}"
+                )
             process_status, _pid = _run_with_heartbeat(
                 root,
                 handle,

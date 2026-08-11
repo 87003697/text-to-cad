@@ -460,22 +460,31 @@ def run_scenario(
     if environ.get("CVM_PROVIDER_FREE_JOB") != handle:
         raise ProviderFreeError("provider-free job identity conflicts with request")
     try:
-        provider_free_output.physical_exp_path(
+        existing_exp, existed = provider_free_output.physical_exp_path(
             REPO_ROOT,
             group,
             exp,
             create_exp=False,
         )
+        if existed:
+            raise provider_free_output.OutputPathError(
+                f"provider-free experiment must be new: {existing_exp}"
+            )
     except provider_free_output.OutputPathError as exc:
         raise ProviderFreeError(f"unsafe provider-free output path: {exc}") from exc
     runtime_identity = _trusted_runtime(environ)
     try:
-        exp_dir, _ = provider_free_output.physical_exp_path(
+        exp_dir, existed = provider_free_output.physical_exp_path(
             REPO_ROOT,
             group,
             exp,
             create_exp=True,
         )
+        if existed:
+            raise provider_free_output.OutputPathError(
+                f"provider-free experiment creation lost race: {exp_dir}"
+            )
+        exp_dir = provider_free_output.require_empty_exp_path(REPO_ROOT, exp_dir)
     except provider_free_output.OutputPathError as exc:
         raise ProviderFreeError(f"unsafe provider-free output path: {exc}") from exc
     pilot_runner.prepare_exp(exp_dir)
