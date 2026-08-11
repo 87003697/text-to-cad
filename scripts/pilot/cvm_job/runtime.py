@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Any, Callable, Iterator, Sequence
 
 from scripts.pilot import deployment_authority
+from scripts.pilot import provider_free_output
 
 from . import tap_observer
 from .protocol import (
@@ -136,7 +137,12 @@ def provider_free_sandbox_argv(
 ) -> list[str]:
     """Build the one exact versioned provider-free bubblewrap launch contract."""
 
-    source_root = REPO_ROOT if repo_root is None else repo_root
+    requested_root = REPO_ROOT if repo_root is None else repo_root
+    source_root = Path(requested_root).resolve(strict=True)
+    try:
+        exp_dir = provider_free_output.revalidate_exp_path(source_root, exp_dir)
+    except provider_free_output.OutputPathError as exc:
+        raise ProtocolError(f"unsafe provider-free output path: {exc}") from exc
     relative_exp = exp_dir.relative_to(source_root)
     sandbox_exp = PROVIDER_FREE_SANDBOX_REPO_ROOT / relative_exp
     bwrap = runtime_identity["bwrap"]["path"]
@@ -247,6 +253,29 @@ def _allocate_exp(object_name: str, group: str, root: Path) -> str:
         suffix += 1
         exp = f"{base}-{suffix}"
     return exp
+
+
+def _allocate_provider_free_exp(object_name: str, group: str, root: Path) -> str:
+    validate_component(object_name, "object")
+    _validate_pilot_group(group)
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
+    base = f"{stamp}-{object_name}"
+    exp = base
+    suffix = 1
+    while True:
+        try:
+            _, output_exists = provider_free_output.physical_exp_path(
+                REPO_ROOT,
+                group,
+                exp,
+                create_exp=False,
+            )
+        except provider_free_output.OutputPathError as exc:
+            raise ProtocolError(f"unsafe provider-free output path: {exc}") from exc
+        if not state_path(root, f"{group}/{exp}").exists() and not output_exists:
+            return exp
+        suffix += 1
+        exp = f"{base}-{suffix}"
 
 
 def _pilot_record(
@@ -416,7 +445,7 @@ def submit_provider_free(
     ):
         raise ProtocolError("deployed source authority contract is incomplete")
     with _allocation_lock(root, group):
-        exp = _allocate_exp(scenario.name, group, root)
+        exp = _allocate_provider_free_exp(scenario.name, group, root)
         record = _pilot_record(scenario.name, group, exp, root)
         record.update(
             {
@@ -756,6 +785,12 @@ def supervise_provider_free(
         ]
         process_status: int | None = None
         try:
+            provider_free_output.physical_exp_path(
+                REPO_ROOT,
+                record["group"],
+                parsed["exp"],
+                create_exp=False,
+            )
             process_status, _pid = _run_with_heartbeat(
                 root,
                 handle,
@@ -763,10 +798,16 @@ def supervise_provider_free(
                 interval=interval,
                 env=child_environment,
             )
-            manifest_path = REPO_ROOT / record["exp_dir"] / "artifact_manifest.json"
+            exp_dir, _ = provider_free_output.physical_exp_path(
+                REPO_ROOT,
+                record["group"],
+                parsed["exp"],
+                create_exp=False,
+            )
+            manifest_path = exp_dir / "artifact_manifest.json"
             runner_status, manifest_error = _manifest_result(manifest_path)
             proof_path, proof_error = _provider_free_evidence_result(
-                REPO_ROOT / record["exp_dir"],
+                exp_dir,
                 handle=handle,
                 record=record,
                 expected_stripped=stripped,

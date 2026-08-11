@@ -583,6 +583,70 @@ class CvmJobTests(unittest.TestCase):
             )
         self.assertFalse((self.state_root / "pilots").exists())
 
+    def test_provider_free_allocation_rejects_symlinked_output_components(self) -> None:
+        fixed = datetime(2026, 8, 11, 22, 30, 0, tzinfo=timezone.utc)
+        outside = self.workspace / "outside"
+        outside.mkdir()
+        outputs = self.repo_root / "outputs"
+        for mutation in ("group", "exp"):
+            with self.subTest(mutation=mutation):
+                group = f"20260805-170000-audit-{mutation}"
+                group_path = outputs / group
+                try:
+                    if mutation == "group":
+                        group_path.symlink_to(outside, target_is_directory=True)
+                    else:
+                        group_path.mkdir()
+                        (
+                            group_path
+                            / "20260811-223000-issue15-runtime-authority"
+                        ).symlink_to(outside, target_is_directory=True)
+                    with (
+                        mock.patch.object(runtime, "datetime") as clock,
+                        self.assertRaisesRegex(protocol.ProtocolError, "output path"),
+                    ):
+                        clock.now.return_value = fixed
+                        runtime.submit_provider_free(
+                            "issue15-runtime-authority",
+                            group,
+                            state_root=self.state_root,
+                            detach=lambda *args: 1234,
+                        )
+                    self.assertEqual([], list(outside.iterdir()))
+                    self.assertFalse((self.state_root / "pilots" / group).exists())
+                finally:
+                    if group_path.is_symlink():
+                        group_path.unlink()
+                    elif group_path.exists():
+                        for child in group_path.iterdir():
+                            child.unlink()
+                        group_path.rmdir()
+
+    def test_provider_free_supervisor_revalidates_output_before_subprocess(self) -> None:
+        handle = runtime.submit_provider_free(
+            "issue15-runtime-authority",
+            self.group,
+            state_root=self.state_root,
+            detach=lambda *args: 1234,
+        )["job"]
+        group_path = self.repo_root / "outputs" / self.group
+        outside = self.workspace / "outside-supervisor"
+        outside.mkdir()
+        group_path.rmdir()
+        group_path.symlink_to(outside, target_is_directory=True)
+        try:
+            with mock.patch.object(runtime, "_run_with_heartbeat") as run:
+                state = runtime.supervise_provider_free(
+                    handle,
+                    state_root=self.state_root,
+                    environ={"PATH": os.environ["PATH"]},
+                )
+            run.assert_not_called()
+            self.assertEqual("failed", state["state"])
+            self.assertEqual([], list(outside.iterdir()))
+        finally:
+            group_path.unlink()
+
     def test_exit_zero_without_manifest_fails(self) -> None:
         handle = self.submit()
         state = runtime.supervise_pilot(

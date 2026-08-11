@@ -4,6 +4,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import shutil
 import subprocess
 import tempfile
 import unittest
@@ -332,6 +333,102 @@ class ProviderFreeRunnerTests(unittest.TestCase):
         self.assertEqual(status, 2)
         self.assertFalse((self.repo / "outputs" / self.handle).exists())
 
+    def test_output_symlink_escape_is_rejected_before_any_process_or_write(self) -> None:
+        outside = Path(self.temporary.name) / "outside"
+        outside.mkdir()
+        outputs = self.repo / "outputs"
+        for mutation in ("group", "exp"):
+            with self.subTest(mutation=mutation):
+                group_path = outputs / self.group
+                try:
+                    if mutation == "group":
+                        group_path.symlink_to(outside, target_is_directory=True)
+                    else:
+                        group_path.mkdir()
+                        (group_path / self.exp).symlink_to(
+                            outside,
+                            target_is_directory=True,
+                        )
+                    with (
+                        mock.patch.object(provider_free_runner, "REPO_ROOT", self.repo),
+                        mock.patch.object(
+                            provider_free_runner.shutil,
+                            "which",
+                            return_value=os.fspath(self.bwrap),
+                        ),
+                        mock.patch.object(
+                            provider_free_runner.subprocess,
+                            "run",
+                        ) as run,
+                    ):
+                        run.side_effect = (
+                            lambda argv, **kwargs: subprocess.CompletedProcess(
+                                argv,
+                                0,
+                                stdout=(
+                                    "bubblewrap 1.2.3\n"
+                                    if list(argv)
+                                    == [os.fspath(self.bwrap), "--version"]
+                                    else ""
+                                ),
+                            )
+                        )
+                        status = provider_free_runner.main(
+                            ["run", "issue15-runtime-authority", self.group, self.exp],
+                            environ=self.environment,
+                        )
+
+                    self.assertEqual(status, 2)
+                    run.assert_not_called()
+                    self.assertEqual([], list(outside.iterdir()))
+                finally:
+                    if group_path.is_symlink():
+                        group_path.unlink()
+                    elif group_path.exists():
+                        for child in group_path.iterdir():
+                            child.unlink()
+                        group_path.rmdir()
+
+    def test_output_path_is_revalidated_after_sandbox_returns(self) -> None:
+        outside = Path(self.temporary.name) / "outside-race"
+        outside.mkdir()
+        exp_dir = self.repo / "outputs" / self.handle
+
+        def fake_run(argv, **_kwargs):
+            if list(argv) == [os.fspath(self.bwrap), "--version"]:
+                return subprocess.CompletedProcess(
+                    argv, 0, stdout="bubblewrap 1.2.3\n"
+                )
+            if not list(argv) or list(argv)[0] != os.fspath(self.bwrap):
+                return subprocess.CompletedProcess(argv, 0)
+            shutil.rmtree(exp_dir)
+            exp_dir.symlink_to(outside, target_is_directory=True)
+            return subprocess.CompletedProcess(argv, 0)
+
+        with (
+            mock.patch.object(provider_free_runner, "REPO_ROOT", self.repo),
+            mock.patch.object(
+                provider_free_runner.shutil,
+                "which",
+                return_value=os.fspath(self.bwrap),
+            ),
+            mock.patch.object(
+                provider_free_runner.subprocess,
+                "run",
+                side_effect=fake_run,
+            ),
+        ):
+            status = provider_free_runner.main(
+                ["run", "issue15-runtime-authority", self.group, self.exp],
+                environ=self.environment,
+            )
+
+        self.assertEqual(status, 2)
+        self.assertEqual([], list(outside.iterdir()))
+        self.assertTrue(exp_dir.is_symlink())
+        exp_dir.unlink()
+        exp_dir.parent.rmdir()
+
     def test_exit_zero_without_runtime_authority_receipt_fails_terminalization(self) -> None:
         def fake_run(argv, **_kwargs):
             if list(argv) == [os.fspath(self.bwrap), "--version"]:
@@ -381,9 +478,12 @@ class ProviderFreeRunnerTests(unittest.TestCase):
                     unsafe.symlink_to(outside)
                 else:
                     os.mkfifo(unsafe)
-                with self.assertRaisesRegex(
-                    provider_free_runner.ProviderFreeError,
-                    "symlink|special",
+                with (
+                    mock.patch.object(provider_free_runner, "REPO_ROOT", self.repo),
+                    self.assertRaisesRegex(
+                        provider_free_runner.ProviderFreeError,
+                        "symlink|special",
+                    ),
                 ):
                     provider_free_runner._publish_terminal_manifest(
                         exp_dir,

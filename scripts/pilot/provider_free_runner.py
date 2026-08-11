@@ -17,6 +17,7 @@ from typing import Mapping
 
 from scripts.pilot import runner as pilot_runner
 from scripts.pilot import deployment_authority
+from scripts.pilot import provider_free_output
 from scripts.pilot.cvm_job.runtime import (
     PROVIDER_FREE_ENV_ALLOWLIST,
     PROVIDER_FREE_EXECUTION_PROFILE,
@@ -26,7 +27,7 @@ from scripts.pilot.cvm_job.runtime import (
     PROVIDER_FREE_SCENARIOS,
     provider_free_sandbox_argv,
 )
-from scripts.pilot.cvm_job.protocol import request_authority_sha256
+from scripts.pilot.cvm_job.protocol import ProtocolError, request_authority_sha256
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -162,12 +163,15 @@ def _sandbox_argv(
     identity = dict(runtime_identity)
     if bwrap != identity.get("bwrap", {}).get("path"):
         raise ProviderFreeError("sandbox bwrap conflicts with runtime identity")
-    return provider_free_sandbox_argv(
-        scenario_name,
-        exp_dir,
-        identity,
-        repo_root=REPO_ROOT,
-    )
+    try:
+        return provider_free_sandbox_argv(
+            scenario_name,
+            exp_dir,
+            identity,
+            repo_root=REPO_ROOT,
+        )
+    except ProtocolError as exc:
+        raise ProviderFreeError(f"unsafe provider-free sandbox output: {exc}") from exc
 
 
 def _sandbox_environment(environ: Mapping[str, str]) -> dict[str, str]:
@@ -243,6 +247,10 @@ def _publish_terminal_manifest(
     workload_status: int,
     final_status: int,
 ) -> None:
+    try:
+        exp_dir = provider_free_output.revalidate_exp_path(REPO_ROOT, exp_dir)
+    except provider_free_output.OutputPathError as exc:
+        raise ProviderFreeError(f"unsafe provider-free output path: {exc}") from exc
     files: list[dict[str, object]] = []
     for path in sorted(exp_dir.rglob("*")):
         relative = path.relative_to(exp_dir)
@@ -451,8 +459,30 @@ def run_scenario(
     handle = f"{group}/{exp}"
     if environ.get("CVM_PROVIDER_FREE_JOB") != handle:
         raise ProviderFreeError("provider-free job identity conflicts with request")
+    try:
+        provider_free_output.physical_exp_path(
+            REPO_ROOT,
+            group,
+            exp,
+            create_exp=False,
+        )
+    except provider_free_output.OutputPathError as exc:
+        raise ProviderFreeError(f"unsafe provider-free output path: {exc}") from exc
     runtime_identity = _trusted_runtime(environ)
+    try:
+        exp_dir, _ = provider_free_output.physical_exp_path(
+            REPO_ROOT,
+            group,
+            exp,
+            create_exp=True,
+        )
+    except provider_free_output.OutputPathError as exc:
+        raise ProviderFreeError(f"unsafe provider-free output path: {exc}") from exc
     pilot_runner.prepare_exp(exp_dir)
+    try:
+        exp_dir = provider_free_output.revalidate_exp_path(REPO_ROOT, exp_dir)
+    except provider_free_output.OutputPathError as exc:
+        raise ProviderFreeError(f"unsafe provider-free output path: {exc}") from exc
     bwrap = runtime_identity["bwrap"]["path"]
     argv = _sandbox_argv(
         scenario_name,
@@ -474,6 +504,10 @@ def run_scenario(
         workload_status = completed.returncode
     except subprocess.TimeoutExpired:
         workload_status = 124
+    try:
+        exp_dir = provider_free_output.revalidate_exp_path(REPO_ROOT, exp_dir)
+    except provider_free_output.OutputPathError as exc:
+        raise ProviderFreeError(f"unsafe provider-free output path: {exc}") from exc
     _publish_sandbox_enforcement(
         exp_dir,
         argv=argv,
