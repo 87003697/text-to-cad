@@ -32,6 +32,10 @@ Resolve inputs → Stage → Validate/attest → Transfer → Target build → V
 在 CVM 目标 ABI 上编译实体 meshscope bundle 的 native extension，再用同一份 runtime
 contract 做本地和远端验收。
 
+Stage 按确定顺序递归展开 `skills/` 与 `plugins/cad/skills/` 内的嵌套开发 symlink，
+达到无链接的 fixed point 后才执行 bundle。每个 target 都须解析在隔离 stage 内；
+broken、external、cyclic 或 collision 状态统一以 exit 4 结束 staging。
+
 ## Long wait
 
 把等待保持为暂停的 orchestration state：每个 quiet interval 只做一次 runtime-max

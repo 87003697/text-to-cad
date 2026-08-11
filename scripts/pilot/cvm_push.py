@@ -768,52 +768,155 @@ class CvmPush:
         """Replace stage-internal development skill links with physical copies."""
 
         stage_root = stage.resolve()
-        for link in self._skill_symlinks(stage):
-            try:
-                source = link.resolve(strict=True)
-                source.relative_to(stage_root)
-            except (FileNotFoundError, ValueError) as exc:
+        previous_passes: set[tuple[str, ...]] = set()
+        while links := self._skill_symlinks(stage):
+            signature = tuple(str(link.relative_to(stage_root)) for link in links)
+            if signature in previous_passes:
                 raise PushError(
-                    "CVM production stage has an unsafe skill symlink: "
-                    f"{link.relative_to(stage)}",
+                    "CVM production stage skill symlink materialization "
+                    "did not converge: "
+                    f"{signature[0]}",
+                    4,
+                )
+            previous_passes.add(signature)
+
+            for link in links:
+                if not link.is_symlink():
+                    continue
+                source = self._stage_link_target(link, stage_root)
+                if self._contains(source, link):
+                    raise PushError(
+                        "CVM production stage has a cyclic skill symlink: "
+                        f"{link.relative_to(stage_root)}",
+                        4,
+                    )
+
+                temporary = link.with_name(f".{link.name}.cvm-materialize")
+                if temporary.exists() or temporary.is_symlink():
+                    raise PushError(
+                        "CVM production stage has a materialization collision: "
+                        f"{temporary.relative_to(stage_root)}",
+                        4,
+                    )
+                try:
+                    self._copy_stage_entry(
+                        source,
+                        temporary,
+                        stage_root=stage_root,
+                        active_sources=(),
+                    )
+                except PushError:
+                    raise
+                except (OSError, RuntimeError) as exc:
+                    raise PushError(
+                        "CVM production stage could not materialize skill symlink: "
+                        f"{link.relative_to(stage_root)}",
+                        4,
+                    ) from exc
+                link.unlink()
+                temporary.rename(link)
+
+    @staticmethod
+    def _contains(parent: Path, child: Path) -> bool:
+        try:
+            child.relative_to(parent)
+        except ValueError:
+            return False
+        return True
+
+    @classmethod
+    def _stage_link_target(cls, link: Path, stage_root: Path) -> Path:
+        try:
+            source = link.resolve(strict=True)
+            source.relative_to(stage_root)
+        except (OSError, RuntimeError, ValueError) as exc:
+            raise PushError(
+                "CVM production stage has an unsafe skill symlink: "
+                f"{link.relative_to(stage_root)}",
+                4,
+            ) from exc
+        return source
+
+    @classmethod
+    def _copy_stage_entry(
+        cls,
+        source: Path,
+        destination: Path,
+        *,
+        stage_root: Path,
+        active_sources: tuple[Path, ...],
+    ) -> None:
+        original = source
+        if source.is_symlink():
+            collision = source.with_name(f".{source.name}.cvm-materialize")
+            if collision.exists() or collision.is_symlink():
+                raise PushError(
+                    "CVM production stage has a materialization collision: "
+                    f"{collision.relative_to(stage_root)}",
+                    4,
+                )
+            source = cls._stage_link_target(source, stage_root)
+            if cls._contains(source, original):
+                raise PushError(
+                    "CVM production stage has a cyclic skill symlink: "
+                    f"{original.relative_to(stage_root)}",
+                    4,
+                )
+        else:
+            try:
+                source = source.resolve(strict=True)
+                source.relative_to(stage_root)
+            except (OSError, RuntimeError, ValueError) as exc:
+                raise PushError(
+                    "CVM production stage has an unsafe skill source: "
+                    f"{original.relative_to(stage_root)}",
                     4,
                 ) from exc
 
-            temporary = link.with_name(f".{link.name}.cvm-materialize")
-            if temporary.exists() or temporary.is_symlink():
-                raise PushError(
-                    "CVM production stage has a materialization collision: "
-                    f"{temporary.relative_to(stage)}",
-                    4,
+        if source in active_sources or cls._contains(source, destination):
+            raise PushError(
+                "CVM production stage has a cyclic skill symlink: "
+                f"{original.relative_to(stage_root)}",
+                4,
+            )
+        if source.is_dir():
+            destination.mkdir()
+            descendants = (*active_sources, source)
+            for child in sorted(source.iterdir(), key=lambda path: path.name):
+                cls._copy_stage_entry(
+                    child,
+                    destination / child.name,
+                    stage_root=stage_root,
+                    active_sources=descendants,
                 )
-            if source.is_dir():
-                shutil.copytree(source, temporary, symlinks=True)
-            elif source.is_file():
-                shutil.copy2(source, temporary, follow_symlinks=False)
-            else:
-                raise PushError(
-                    "CVM production stage skill symlink has unsupported target: "
-                    f"{link.relative_to(stage)}",
-                    4,
-                )
-            link.unlink()
-            temporary.rename(link)
+            shutil.copystat(source, destination, follow_symlinks=False)
+        elif source.is_file():
+            shutil.copy2(source, destination, follow_symlinks=False)
+        else:
+            raise PushError(
+                "CVM production stage skill symlink has unsupported target: "
+                f"{original.relative_to(stage_root)}",
+                4,
+            )
 
     @staticmethod
     def _skill_symlinks(stage: Path) -> tuple[Path, ...]:
         links: list[Path] = []
+        stage_root = stage.resolve()
         skill_roots = (
-            stage / "skills",
-            stage / "plugins/cad/skills",
+            stage_root / "skills",
+            stage_root / "plugins/cad/skills",
         )
         for skills in skill_roots:
             for root, directories, files in os.walk(skills, followlinks=False):
-                root_path = Path(root)
+                directories.sort()
+                files.sort()
+                root_path = Path(root).resolve()
                 for name in (*directories, *files):
                     path = root_path / name
                     if path.is_symlink():
                         links.append(path)
-        return tuple(links)
+        return tuple(sorted(links, key=lambda link: link.relative_to(stage_root)))
 
     def validate_stage(self, stage: Path) -> None:
         """Gate 2: validate one production contract before transfer."""
@@ -822,7 +925,7 @@ class CvmPush:
         if links:
             raise PushError(
                 "CVM production stage still contains a skill symlink: "
-                f"{links[0].relative_to(stage)}",
+                f"{links[0].relative_to(stage.resolve())}",
                 4,
             )
         for relative in PRODUCTION_RUNTIME.physical_directories:

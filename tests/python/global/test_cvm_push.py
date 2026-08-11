@@ -603,6 +603,202 @@ class StageTests(unittest.TestCase):
                 "[project]\n",
             )
 
+    def test_materialize_skill_symlinks_recursively_copies_viewer_packages(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as root_text:
+            stage = Path(root_text)
+            package = stage / "packages/cadpy"
+            package.mkdir(parents=True)
+            (package / "pyproject.toml").write_text(
+                "[project]\nname = \"cadpy\"\n",
+                encoding="utf-8",
+            )
+            viewer_packages = stage / "viewer/packages"
+            viewer_packages.mkdir(parents=True)
+            os.symlink("../../packages/cadpy", viewer_packages / "cadpy")
+            skill_viewer = stage / "skills/cad-viewer/scripts/viewer"
+            skill_viewer.parent.mkdir(parents=True)
+            os.symlink("../../../viewer", skill_viewer)
+            plugin_skill = stage / "plugins/cad/skills/cad-viewer"
+            plugin_skill.parent.mkdir(parents=True)
+            os.symlink("../../../skills/cad-viewer", plugin_skill)
+            workflow = cvm_push.CvmPush(FakeRunner(), repo_root=stage, environ={})
+
+            workflow.materialize_skill_symlinks(stage)
+
+            for root in (stage / "skills", stage / "plugins/cad/skills"):
+                self.assertEqual(
+                    [
+                        path.relative_to(stage)
+                        for path in root.rglob("*")
+                        if path.is_symlink()
+                    ],
+                    [],
+                )
+            for runtime in (
+                skill_viewer / "packages/cadpy",
+                plugin_skill / "scripts/viewer/packages/cadpy",
+            ):
+                self.assertFalse(runtime.is_symlink())
+                self.assertEqual(
+                    (runtime / "pyproject.toml").read_text(encoding="utf-8"),
+                    "[project]\nname = \"cadpy\"\n",
+                )
+
+    def test_materialize_skill_symlinks_rejects_unsafe_targets(self) -> None:
+        for scenario in ("broken", "external", "direct-loop", "unsupported"):
+            with (
+                self.subTest(scenario=scenario),
+                tempfile.TemporaryDirectory() as root_text,
+            ):
+                root = Path(root_text)
+                stage = root / "stage"
+                runtime = stage / "skills/cad/scripts/runtime"
+                runtime.parent.mkdir(parents=True)
+                if scenario == "broken":
+                    os.symlink("../../../../missing", runtime)
+                elif scenario == "external":
+                    outside = root / "outside"
+                    outside.mkdir()
+                    os.symlink(outside, runtime)
+                elif scenario == "direct-loop":
+                    os.symlink("runtime", runtime)
+                else:
+                    unsupported = stage / "packages/unsupported"
+                    unsupported.parent.mkdir(parents=True)
+                    os.mkfifo(unsupported)
+                    os.symlink("../../../packages/unsupported", runtime)
+                workflow = cvm_push.CvmPush(
+                    FakeRunner(),
+                    repo_root=stage,
+                    environ={},
+                )
+
+                with self.assertRaises(cvm_push.PushError) as error:
+                    workflow.materialize_skill_symlinks(stage)
+
+                self.assertEqual(error.exception.status, 4)
+                self.assertTrue(runtime.is_symlink())
+
+    def test_materialize_skill_symlinks_rejects_nested_external_target(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as root_text:
+            root = Path(root_text)
+            stage = root / "stage"
+            outside = root / "outside"
+            outside.mkdir()
+            (outside / "host-only.txt").write_text("secret\n", encoding="utf-8")
+            viewer_packages = stage / "viewer/packages"
+            viewer_packages.mkdir(parents=True)
+            os.symlink(outside, viewer_packages / "cadpy")
+            runtime = stage / "skills/cad-viewer/scripts/viewer"
+            runtime.parent.mkdir(parents=True)
+            os.symlink("../../../viewer", runtime)
+            workflow = cvm_push.CvmPush(FakeRunner(), repo_root=stage, environ={})
+
+            with self.assertRaisesRegex(
+                cvm_push.PushError,
+                "unsafe skill symlink",
+            ) as error:
+                workflow.materialize_skill_symlinks(stage)
+
+            self.assertEqual(error.exception.status, 4)
+            self.assertTrue(runtime.is_symlink())
+
+    def test_materialize_skill_symlinks_rejects_self_expanding_cycles(self) -> None:
+        for scenario in ("direct", "nested", "relocated"):
+            with (
+                self.subTest(scenario=scenario),
+                tempfile.TemporaryDirectory() as root_text,
+            ):
+                stage = Path(root_text)
+                if scenario != "direct":
+                    viewer = stage / "viewer"
+                    viewer.mkdir()
+                    target = ".." if scenario == "nested" else "../skills"
+                    os.symlink(target, viewer / "loop")
+                    runtime = stage / "skills/cad-viewer/scripts/viewer"
+                    runtime.parent.mkdir(parents=True)
+                    os.symlink("../../../viewer", runtime)
+                else:
+                    runtime = stage / "skills/cad/scripts/runtime"
+                    runtime.parent.mkdir(parents=True)
+                    os.symlink("..", runtime)
+                workflow = cvm_push.CvmPush(
+                    FakeRunner(),
+                    repo_root=stage,
+                    environ={},
+                )
+
+                with self.assertRaisesRegex(
+                    cvm_push.PushError,
+                    "cyclic skill symlink",
+                ) as error:
+                    workflow.materialize_skill_symlinks(stage)
+
+                self.assertEqual(error.exception.status, 4)
+
+    def test_materialize_skill_symlinks_rejects_collision_before_copy(self) -> None:
+        for nested in (False, True):
+            with (
+                self.subTest(nested=nested),
+                tempfile.TemporaryDirectory() as root_text,
+            ):
+                stage = Path(root_text)
+                package = stage / "packages/cadpy"
+                package.mkdir(parents=True)
+                if nested:
+                    viewer_packages = stage / "viewer/packages"
+                    viewer_packages.mkdir(parents=True)
+                    runtime = viewer_packages / "cadpy"
+                    os.symlink("../../packages/cadpy", runtime)
+                    skill_viewer = stage / "skills/cad-viewer/scripts/viewer"
+                    skill_viewer.parent.mkdir(parents=True)
+                    os.symlink("../../../viewer", skill_viewer)
+                else:
+                    runtime = stage / "skills/cad/scripts/cadpy"
+                    runtime.parent.mkdir(parents=True)
+                    os.symlink("../../../packages/cadpy", runtime)
+                collision = runtime.with_name(".cadpy.cvm-materialize")
+                collision.write_text("occupied\n", encoding="utf-8")
+                workflow = cvm_push.CvmPush(
+                    FakeRunner(),
+                    repo_root=stage,
+                    environ={},
+                )
+
+                with self.assertRaisesRegex(
+                    cvm_push.PushError,
+                    "materialization collision",
+                ) as error:
+                    workflow.materialize_skill_symlinks(stage)
+
+                self.assertEqual(error.exception.status, 4)
+                self.assertTrue(runtime.is_symlink())
+                self.assertEqual(
+                    collision.read_text(encoding="utf-8"),
+                    "occupied\n",
+                )
+
+    def test_materialize_skill_symlinks_reports_first_path_deterministically(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as root_text:
+            stage = Path(root_text)
+            skills = stage / "skills/cad/scripts"
+            skills.mkdir(parents=True)
+            os.symlink("../../../missing-z", skills / "z-runtime")
+            os.symlink("../../../missing-a", skills / "a-runtime")
+            workflow = cvm_push.CvmPush(FakeRunner(), repo_root=stage, environ={})
+
+            with self.assertRaises(cvm_push.PushError) as error:
+                workflow.materialize_skill_symlinks(stage)
+
+            self.assertEqual(error.exception.status, 4)
+            self.assertIn("skills/cad/scripts/a-runtime", str(error.exception))
+
     def test_source_copy_excludes_private_state_and_keeps_dirty_source(self) -> None:
         with tempfile.TemporaryDirectory() as root_text:
             root = Path(root_text)
