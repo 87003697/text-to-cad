@@ -198,7 +198,8 @@ import {
 import {
   buildDefaultParameterAnimationState,
   findParameterAnimation,
-  hasParameterAnimations
+  hasParameterAnimations,
+  shouldPublishAnimationFrame
 } from "@/workbench/parameterAnimation";
 import {
   buildUrdfJointAnglesCopyText,
@@ -2279,6 +2280,14 @@ export default function CadWorkspace({
     const duration = Math.max(Number(animation.duration) || 1, 0.001);
     let frameId = 0;
     let previousTimeMs = animationNowMs();
+    // Frame pacing -- see shouldPublishAnimationFrame.  A published frame is
+    // measured by the gap to the next callback, which includes the downstream
+    // render, and the next publish waits that long again.  previousTimeMs only
+    // advances on a publish, so time skipped this way still lands in the next
+    // delta and playback stays wall-clock accurate.
+    let publishedAtMs = NaN;
+    let publishCostMs = 0;
+    let measuringPublish = false;
     setStepAnimationElapsed(clampNumber(stepModuleAnimationStateRef.current.elapsedSec, 0, duration));
 
     const tick = (timeMs) => {
@@ -2286,8 +2295,18 @@ export default function CadWorkspace({
       if (!currentState.playing || currentState.activeId !== animation.id) {
         return;
       }
+      if (measuringPublish) {
+        publishCostMs = timeMs - publishedAtMs;
+        measuringPublish = false;
+      }
+      if (!shouldPublishAnimationFrame({ timeMs, publishedAtMs, publishCostMs })) {
+        frameId = window.requestAnimationFrame(tick);
+        return;
+      }
       const deltaSec = Math.max((timeMs - previousTimeMs) / 1000, 0);
       previousTimeMs = timeMs;
+      publishedAtMs = timeMs;
+      measuringPublish = true;
       const speed = clampNumber(currentState.speed, 0.1, 5);
       let elapsedSec = getStepAnimationElapsed() + (deltaSec * speed);
       let playing = currentState.playing;
