@@ -826,6 +826,46 @@ class CanonicalBuildAdapterTests(unittest.TestCase):
             self.assertFalse((root / "candidate/measurement.glb").exists())
             self.assertFalse((root / "candidate/build.json").exists())
 
+    def test_source_file_descriptor_output_is_rejected_before_publication(
+        self,
+    ) -> None:
+        for file_descriptor in (1, 2):
+            with self.subTest(file_descriptor=file_descriptor):
+                with temporary_directory(
+                    prefix="cad-canonical-source-fd-output-"
+                ) as temp_dir:
+                    root = Path(temp_dir)
+                    source = _write_canonical_source(
+                        root,
+                        body=(
+                            "import os\n"
+                            f"os.write({file_descriptor}, b'candidate fd noise\\n')\n"
+                            "from build123d import Box\n"
+                            "def gen_step():\n"
+                            "    return Box(0.4, 0.2, 0.1)\n"
+                        ),
+                    )
+
+                    result = _run_adapter(
+                        root,
+                        "build",
+                        "--source",
+                        source.relative_to(root).as_posix(),
+                        "--output-dir",
+                        "candidate",
+                    )
+
+                    self.assertNotEqual(0, result.returncode)
+                    self.assertEqual("", result.stdout)
+                    self.assertNotIn("candidate fd noise", result.stderr)
+                    self.assertFalse(
+                        (root / "candidate/canonical.step").exists()
+                    )
+                    self.assertFalse(
+                        (root / "candidate/measurement.glb").exists()
+                    )
+                    self.assertFalse((root / "candidate/build.json").exists())
+
     def test_source_cannot_call_host_physical_reader(self) -> None:
         with temporary_directory(prefix="cad-canonical-host-reader-") as temp_dir:
             root = Path(temp_dir)

@@ -19,6 +19,7 @@ import platform
 import re
 import stat
 import sys
+import tempfile
 from typing import Any
 
 from OCP.BRepCheck import BRepCheck_Analyzer
@@ -204,6 +205,8 @@ _NONDETERMINISTIC_ATTRIBUTES = frozenset(
         "urandom",
     }
 )
+
+
 _NONDETERMINISTIC_BUILTINS = frozenset(
     {
         "__builtins__",
@@ -254,6 +257,39 @@ _SOURCE_MUTATION_FUNCTIONS = tuple(
         }
     )
 )
+
+
+@contextmanager
+def _capture_source_file_descriptor_output():
+    """Capture process stdout/stderr bytes while untrusted source executes."""
+    captured = {1: b"", 2: b""}
+    temporary_files: dict[int, Any] = {}
+    saved_descriptors: dict[int, int] = {}
+    duplicate = os.dup
+    redirect = os.dup2
+    close = os.close
+
+    for stream in (sys.__stdout__, sys.__stderr__):
+        if stream is not None:
+            stream.flush()
+    try:
+        for file_descriptor in captured:
+            temporary_file = tempfile.TemporaryFile(mode="w+b")
+            temporary_files[file_descriptor] = temporary_file
+            saved_descriptors[file_descriptor] = duplicate(file_descriptor)
+            redirect(temporary_file.fileno(), file_descriptor)
+        yield captured
+    finally:
+        for stream in (sys.__stdout__, sys.__stderr__):
+            if stream is not None:
+                stream.flush()
+        for file_descriptor, saved_descriptor in saved_descriptors.items():
+            redirect(saved_descriptor, file_descriptor)
+            close(saved_descriptor)
+        for file_descriptor, temporary_file in temporary_files.items():
+            temporary_file.seek(0)
+            captured[file_descriptor] = temporary_file.read()
+            temporary_file.close()
 
 
 def _sha256(path: Path) -> str:
@@ -921,6 +957,7 @@ def build(*, root: Path, source: str, output_dir: str, inputs: list[str] | None 
     with (
         redirect_stdout(candidate_stdout),
         redirect_stderr(candidate_stderr),
+        _capture_source_file_descriptor_output() as candidate_descriptor_output,
         _source_execution_policy(
             root=root,
             source_path=source_path,
@@ -938,7 +975,11 @@ def build(*, root: Path, source: str, output_dir: str, inputs: list[str] | None 
             load_current_scene=False,
             skip_step_write=True,
         )
-    if candidate_stdout.getvalue() or candidate_stderr.getvalue():
+    if (
+        candidate_stdout.getvalue()
+        or candidate_stderr.getvalue()
+        or any(candidate_descriptor_output.values())
+    ):
         raise RuntimeError("canonical CAD source must not write to stdout or stderr")
     if generated_scene is None or generated_scene.doc is None:
         raise RuntimeError("canonical CAD source did not produce an exportable XCAF scene")
