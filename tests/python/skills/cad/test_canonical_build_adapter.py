@@ -63,6 +63,43 @@ def _run_adapter(root: Path, *args: str) -> subprocess.CompletedProcess[str]:
     )
 
 
+def _run_build_in_process_with_caller_diagnostics(
+    root: Path,
+) -> subprocess.CompletedProcess[str]:
+    environment = dict(os.environ)
+    environment["PYTHONPATH"] = os.pathsep.join(
+        (str(CADPY_SRC), environment["PYTHONPATH"])
+        if environment.get("PYTHONPATH")
+        else (str(CADPY_SRC),)
+    )
+    return subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            (
+                "import os\n"
+                "from pathlib import Path\n"
+                "from cadpy.canonical_build import build\n"
+                "try:\n"
+                "    build(root=Path.cwd(), source='source/model.py', "
+                "output_dir='candidate')\n"
+                "except Exception as exc:\n"
+                "    os.write(1, b'caller stdout usable\\n')\n"
+                "    os.write(2, "
+                "f'caller stderr usable: {exc}\\n'.encode())\n"
+                "    raise SystemExit(1)\n"
+                "os.write(1, b'unexpected build success\\n')\n"
+            ),
+        ],
+        cwd=root,
+        env=environment,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        check=False,
+    )
+
+
 def _run_adapter_with_post_policy_mutation(
     root: Path,
     *,
@@ -931,42 +968,51 @@ class CanonicalBuildAdapterTests(unittest.TestCase):
                     "    return Box(0.4, 0.2, 0.1)\n"
                 ),
             )
-            environment = dict(os.environ)
-            environment["PYTHONPATH"] = os.pathsep.join(
-                (str(CADPY_SRC), environment["PYTHONPATH"])
-                if environment.get("PYTHONPATH")
-                else (str(CADPY_SRC),)
-            )
-            result = subprocess.run(
-                [
-                    sys.executable,
-                    "-c",
-                    (
-                        "import os, sys\n"
-                        "from pathlib import Path\n"
-                        "from cadpy.canonical_build import build\n"
-                        "try:\n"
-                        "    build(root=Path.cwd(), source='source/model.py', "
-                        "output_dir='candidate')\n"
-                        "except Exception as exc:\n"
-                        "    os.write(1, b'caller stdout usable\\n')\n"
-                        "    os.write(2, "
-                        "f'caller stderr usable: {exc}\\n'.encode())\n"
-                        "    raise SystemExit(1)\n"
-                    ),
-                ],
-                cwd=root,
-                env=environment,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True,
-                check=False,
-            )
+            result = _run_build_in_process_with_caller_diagnostics(root)
 
             self.assertEqual(1, result.returncode)
             self.assertEqual("caller stdout usable\n", result.stdout)
             self.assertIn("caller stderr usable", result.stderr)
             self.assertIn("file descriptor", result.stderr)
+            self.assertFalse((root / "candidate/canonical.step").exists())
+            self.assertFalse((root / "candidate/measurement.glb").exists())
+            self.assertFalse((root / "candidate/build.json").exists())
+
+    def test_source_cannot_write_to_saved_caller_descriptor(self) -> None:
+        with temporary_directory(
+            prefix="cad-canonical-source-saved-fd-write-"
+        ) as temp_dir:
+            root = Path(temp_dir)
+            _write_canonical_source(
+                root,
+                body=(
+                    "import os\n"
+                    "import stat\n"
+                    "for candidate_fd in range(3, 256):\n"
+                    "    try:\n"
+                    "        mode = os.fstat(candidate_fd).st_mode\n"
+                    "    except OSError:\n"
+                    "        continue\n"
+                    "    if stat.S_ISFIFO(mode):\n"
+                    "        os.write(candidate_fd, "
+                    "b'saved descriptor noise\\n')\n"
+                    "        break\n"
+                    "else:\n"
+                    "    raise RuntimeError('saved caller descriptor not found')\n"
+                    "from build123d import Box\n"
+                    "def gen_step():\n"
+                    "    return Box(0.4, 0.2, 0.1)\n"
+                ),
+            )
+
+            result = _run_build_in_process_with_caller_diagnostics(root)
+
+            self.assertEqual(1, result.returncode)
+            self.assertEqual("caller stdout usable\n", result.stdout)
+            self.assertIn("caller stderr usable", result.stderr)
+            self.assertIn("file descriptor", result.stderr)
+            self.assertNotIn("saved descriptor noise", result.stdout)
+            self.assertNotIn("saved descriptor noise", result.stderr)
             self.assertFalse((root / "candidate/canonical.step").exists())
             self.assertFalse((root / "candidate/measurement.glb").exists())
             self.assertFalse((root / "candidate/build.json").exists())

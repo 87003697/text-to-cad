@@ -266,6 +266,21 @@ _SOURCE_DESCRIPTOR_MUTATION_FUNCTIONS = (
     "fdopen",
 )
 _SOURCE_FCNTL_MUTATION_FUNCTIONS = ("fcntl", "ioctl")
+_SOURCE_DESCRIPTOR_OUTPUT_INDEXES = {
+    "write": 0,
+    "writev": 0,
+    "pwrite": 0,
+    "pwritev": 0,
+    "pwritev2": 0,
+    "sendfile": 0,
+    "splice": 1,
+    "copy_file_range": 1,
+}
+_SOURCE_DESCRIPTOR_OUTPUT_KEYWORDS = {
+    "sendfile": "out_fd",
+    "splice": "dst",
+    "copy_file_range": "dst",
+}
 
 
 @contextmanager
@@ -585,6 +600,11 @@ def _source_execution_policy(
         for name in _SOURCE_FCNTL_MUTATION_FUNCTIONS
         if hasattr(fcntl, name)
     }
+    original_descriptor_output_functions = {
+        name: getattr(os, name)
+        for name in _SOURCE_DESCRIPTOR_OUTPUT_INDEXES
+        if hasattr(os, name)
+    }
 
     def source_called() -> bool:
         caller_path = os.path.realpath(sys._getframe(2).f_code.co_filename)
@@ -614,6 +634,25 @@ def _source_execution_policy(
 
         return guarded
 
+    def guard_descriptor_output(name: str, function: object):
+        output_index = _SOURCE_DESCRIPTOR_OUTPUT_INDEXES[name]
+        output_keyword = _SOURCE_DESCRIPTOR_OUTPUT_KEYWORDS.get(name, "fd")
+
+        def guarded(*args: object, **kwargs: object):
+            output_descriptor = (
+                args[output_index]
+                if len(args) > output_index
+                else kwargs.get(output_keyword)
+            )
+            if output_descriptor not in {1, 2}:
+                raise PermissionError(
+                    "canonical build forbids writing to non-captured file "
+                    f"descriptor during source execution: os.{name}"
+                )
+            return function(*args, **kwargs)
+
+        return guarded
+
     os.environ.clear()
     builtins.hash = guarded_hash
     for mutation_name, mutation_function in original_mutation_functions.items():
@@ -629,6 +668,15 @@ def _source_execution_policy(
             fcntl,
             descriptor_name,
             guard_descriptor_mutation(f"fcntl.{descriptor_name}"),
+        )
+    for (
+        output_name,
+        output_function,
+    ) in original_descriptor_output_functions.items():
+        setattr(
+            os,
+            output_name,
+            guard_descriptor_output(output_name, output_function),
         )
     policy = _SourceExecutionPolicy(
         root=root,
@@ -659,6 +707,11 @@ def _source_execution_policy(
             descriptor_function,
         ) in original_fcntl_functions.items():
             setattr(fcntl, descriptor_name, descriptor_function)
+        for (
+            output_name,
+            output_function,
+        ) in original_descriptor_output_functions.items():
+            setattr(os, output_name, output_function)
         os.environ.clear()
         os.environ.update(original_environment)
 
