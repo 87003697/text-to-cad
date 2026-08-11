@@ -5,6 +5,7 @@ import hashlib
 import os
 import signal
 import shutil
+import socket
 import subprocess
 import sys
 import threading
@@ -16,6 +17,7 @@ from unittest import mock
 
 from scripts.pilot import deployment_authority
 from scripts.pilot import provider_free_runner
+from scripts.pilot import provider_free_scenarios
 from scripts.pilot.cvm_job import __main__ as cvm_job_cli
 from scripts.pilot.cvm_job import protocol, runtime
 from tests.python.support.paths import REPO_ROOT
@@ -779,6 +781,328 @@ class CvmJobTests(unittest.TestCase):
             "run/scenario-failure.json",
             {entry["path"] for entry in manifest["files"]},
         )
+
+    def test_real_runner_crosses_candidate_workspace_with_production_layout(
+        self,
+    ) -> None:
+        """Drive supervisor, runner, and scenario through the real candidate build."""
+
+        for relative in deployment_authority.EXECUTION_AUTHORITY_PATHS:
+            if relative == "skills/cad-viewer/scripts/viewer":
+                continue
+            source = REPO_ROOT / relative
+            destination = self.repo_root / relative
+            if source.is_dir():
+                if destination.exists():
+                    shutil.rmtree(destination)
+                shutil.copytree(source, destination, symlinks=False)
+            else:
+                destination.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(source, destination)
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as reservation:
+            reservation.bind(("127.0.0.1", 0))
+            fallback_reuse_port = reservation.getsockname()[1]
+        scenario_path = self.repo_root / "scripts/pilot/provider_free_scenarios.py"
+        scenario_path.write_text(
+            scenario_path.read_text(encoding="utf-8").replace(
+                "4178", str(fallback_reuse_port)
+            ),
+            encoding="utf-8",
+        )
+        preview_profile = provider_free_scenarios.PREVIEW_PROFILE.relative_to(
+            REPO_ROOT
+        )
+        preview_destination = self.repo_root / preview_profile
+        preview_destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(REPO_ROOT / preview_profile, preview_destination)
+        launcher = """\
+import http from "node:http";
+
+const args = process.argv.slice(2);
+const value = (name) => args[args.indexOf(name) + 1];
+const host = value("--host");
+const directory = value("--dir");
+const requestedPort = Number(value("--port"));
+await fetch(`http://${host}:${requestedPort}/__cad/directory/activate`, {
+  method: "POST",
+  headers: {"content-type": "application/json"},
+  body: JSON.stringify({directory}),
+});
+const server = http.createServer((request, response) => {
+  const url = new URL(request.url, `http://${host}`);
+  if (url.pathname !== "/__cad/server") {
+    response.writeHead(404).end();
+    return;
+  }
+  const payload = JSON.stringify({rootPath: directory, pid: process.pid});
+  response.writeHead(200, {
+    "content-type": "application/json",
+    "content-length": Buffer.byteLength(payload),
+  });
+  response.end(payload);
+});
+server.listen(0, host, () => {
+  const port = server.address().port;
+  const url = `http://${host}:${port}?dir=${encodeURIComponent(directory)}`;
+  process.stdout.write(`${JSON.stringify({action: "start", port, url})}\n`);
+});
+"""
+        viewer_files = {
+            "viewer/scripts/start-agent-viewer.mjs": launcher,
+            "viewer/src/server/server.mjs": "export const server = true;\n",
+            "viewer/src/client/main.jsx": "export const client = true;\n",
+            "skills/cad-viewer/scripts/viewer/scripts/start-agent-viewer.mjs": launcher,
+            "skills/cad-viewer/scripts/viewer/backend/server.mjs": (
+                "export const server = true;\n"
+            ),
+            "skills/cad-viewer/scripts/viewer/dist/index.html": (
+                "<!doctype html><title>viewer</title>\n"
+            ),
+        }
+        for relative, content in viewer_files.items():
+            destination = self.repo_root / relative
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            destination.write_text(content, encoding="utf-8")
+        artifacts = []
+        for role, source, bundle in (
+            (
+                "launcher",
+                "viewer/scripts/start-agent-viewer.mjs",
+                "skills/cad-viewer/scripts/viewer/scripts/start-agent-viewer.mjs",
+            ),
+            (
+                "server",
+                "viewer/src/server/server.mjs",
+                "skills/cad-viewer/scripts/viewer/backend/server.mjs",
+            ),
+            (
+                "client",
+                "viewer/src/client/main.jsx",
+                "skills/cad-viewer/scripts/viewer/dist/index.html",
+            ),
+        ):
+            artifacts.append(
+                {
+                    "role": role,
+                    "source": {
+                        "path": source,
+                        "sha256": hashlib.sha256(
+                            (self.repo_root / source).read_bytes()
+                        ).hexdigest(),
+                    },
+                    "bundle": {
+                        "path": bundle,
+                        "sha256": hashlib.sha256(
+                            (self.repo_root / bundle).read_bytes()
+                        ).hexdigest(),
+                    },
+                }
+            )
+        identity = self.repo_root / (
+            "skills/cad-viewer/scripts/viewer/runtime-identity.json"
+        )
+        identity.write_text(
+            json.dumps(
+                {
+                    "schema": "cad-viewer.runtime-identity/1",
+                    "viewer_version": "0.3.9",
+                    "artifacts": artifacts,
+                },
+                sort_keys=True,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        provider_free_scenarios.deployed_viewer_receipt(self.repo_root)
+        node = shutil.which("node")
+        if node is None:
+            self.skipTest("node is required for the production Viewer fallback seam")
+        git_lfs = shutil.which("git-lfs")
+        if git_lfs is None:
+            self.skipTest("git-lfs is required for the production Workspace seam")
+        fake_bin = self.repo_root / ".venv/bin"
+        fake_bin.mkdir(parents=True)
+        (fake_bin / "node").symlink_to(Path(node).resolve(strict=True))
+        (fake_bin / "git-lfs").symlink_to(Path(git_lfs).resolve(strict=True))
+        provider_home = self.workspace / "provider-free-home"
+        provider_home.mkdir()
+
+        deployed = json.loads(
+            (self.repo_root / deployment_authority.RECEIPT_PATH).read_bytes()
+        )
+        runtime_identity = deployed["runtime_identity"]
+        cadpy = self.repo_root / deployment_authority.CADPY_RUNTIME_PATH
+        runtime_identity["cadpy"]["sha256"] = hashlib.sha256(
+            cadpy.read_bytes()
+        ).hexdigest()
+        deployment_authority.write_receipt(
+            self.repo_root,
+            source_head=deployed["source_head"],
+            runtime_identity=runtime_identity,
+        )
+        handle = runtime.submit_provider_free(
+            "issue15-runtime-authority",
+            self.group,
+            state_root=self.state_root,
+            detach=lambda *args: 1234,
+        )["job"]
+        real_run = subprocess.run
+        captured: dict[str, object] = {}
+
+        def execute_sandbox(argv, **kwargs):
+            if "--" not in argv:
+                return real_run(argv, **kwargs)
+            command = list(argv)[list(argv).index("--") + 1 :]
+            command = [
+                value.replace("/workspace/repo", os.fspath(self.repo_root), 1)
+                if value.startswith("/workspace/repo")
+                else value
+                for value in command
+            ]
+            command[0] = sys.executable
+            sandbox_environment = dict(kwargs["env"])
+            captured["sandbox_argv"] = list(argv)
+            captured["sandbox_environment"] = dict(sandbox_environment)
+            emulated_environment = {
+                name: value.replace(
+                    "/workspace/repo", os.fspath(self.repo_root)
+                ).replace("/home/provider-free", os.fspath(provider_home))
+                for name, value in sandbox_environment.items()
+            }
+            captured["emulated_environment"] = emulated_environment
+            completed = real_run(
+                command,
+                cwd=self.repo_root,
+                env=emulated_environment,
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+            )
+            captured["scenario_stderr"] = completed.stderr
+            return completed
+
+        def run_real_runner(*_args, **kwargs):
+            state = protocol.load_state(self.state_root, handle)
+            with (
+                mock.patch.object(
+                    provider_free_runner,
+                    "REPO_ROOT",
+                    self.repo_root,
+                ),
+                mock.patch.object(
+                    provider_free_runner,
+                    "_trusted_runtime",
+                    return_value=state["request_authority"]["runtime_identity"],
+                ),
+                mock.patch.object(
+                    provider_free_runner.subprocess,
+                    "run",
+                    side_effect=execute_sandbox,
+                ),
+            ):
+                status = provider_free_runner.main(
+                    [
+                        "run",
+                        "issue15-runtime-authority",
+                        state["group"],
+                        state["exp"],
+                    ],
+                    environ=kwargs["env"],
+                )
+            return status, 4321
+
+        with mock.patch.object(
+            runtime,
+            "_run_with_heartbeat",
+            side_effect=run_real_runner,
+        ):
+            state = runtime.supervise_provider_free(
+                handle,
+                state_root=self.state_root,
+                environ={
+                    "PATH": os.environ["PATH"],
+                    "HOME": os.fspath(self.workspace),
+                    "OPENAI_API_KEY": "must-not-cross-runner",
+                    "PYTHONPATH": "/must/not/cross/runner",
+                },
+            )
+
+        exp_dir = self.repo_root / "outputs" / handle
+        candidate = exp_dir / "work/candidate"
+        viewer_stderr_path = exp_dir / "run/viewer-fallback.stderr.log"
+        self.assertTrue(
+            (candidate / "built/measurement.glb").is_file(),
+            json.dumps(
+                {
+                    "state": state,
+                    "scenario_stderr": captured.get("scenario_stderr"),
+                    "viewer_stderr": (
+                        viewer_stderr_path.read_text(encoding="utf-8")
+                        if viewer_stderr_path.is_file()
+                        else None
+                    ),
+                },
+                sort_keys=True,
+            ),
+        )
+        command_log_path = exp_dir / "run/provider-free-commands.jsonl"
+        self.assertTrue(
+            (exp_dir / "input/input.json").is_file(),
+            json.dumps(
+                {
+                    "state": state,
+                    "scenario_stderr": captured.get("scenario_stderr"),
+                    "commands": (
+                        command_log_path.read_text(encoding="utf-8")
+                        if command_log_path.is_file()
+                        else None
+                    ),
+                },
+                sort_keys=True,
+            ),
+        )
+        self.assertTrue((exp_dir / "workspace.json").is_file())
+        if state["state"] == "failed":
+            self.assertIn(
+                state["scenario_failure"]["stage"],
+                {"native_measurement", "finalization"},
+            )
+        else:
+            self.assertEqual(state["state"], "succeeded")
+
+        command_records = [
+            json.loads(line)
+            for line in command_log_path
+            .read_text(encoding="utf-8")
+            .splitlines()
+        ]
+        canonical_argv = [
+            sys.executable,
+            os.fspath(self.repo_root / "skills/cad/scripts/canonical-build"),
+            "build",
+            "--source",
+            "source/model.py",
+            "--input",
+            "source/simple_model_library.py",
+            "--output-dir",
+            "built",
+        ]
+        self.assertEqual(command_records[0]["argv"], canonical_argv)
+        self.assertEqual(command_records[0]["cwd"], os.fspath(candidate))
+        self.assertEqual(command_records[0]["exit_code"], 0)
+        self.assertIn("voxblame-prepare-reference", command_records[1]["argv"])
+        self.assertIn("init", command_records[2]["argv"])
+        self.assertEqual(
+            captured["sandbox_environment"],
+            {
+                **runtime.PROVIDER_FREE_REQUIRED_ENVIRONMENT,
+                "LANG": "C.UTF-8",
+            },
+        )
+        self.assertIn("--unshare-net", captured["sandbox_argv"])
+        self.assertNotIn("OPENAI_API_KEY", captured["sandbox_environment"])
+        self.assertNotIn("PYTHONPATH", captured["sandbox_environment"])
 
     def test_provider_free_failure_rejects_unknown_terminal_manifest_schema(
         self,

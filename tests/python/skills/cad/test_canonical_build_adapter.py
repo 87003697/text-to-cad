@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import fcntl
 import json
 import os
 from pathlib import Path
@@ -8,6 +9,8 @@ import struct
 import subprocess
 import sys
 import tempfile
+import time
+from typing import Callable
 import unittest
 
 from tests.python.support.paths import repo_path
@@ -55,6 +58,74 @@ def _run_adapter(root: Path, *args: str) -> subprocess.CompletedProcess[str]:
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
+    )
+
+
+def _run_adapter_with_post_policy_mutation(
+    root: Path,
+    *,
+    source_body: str,
+    mutate: Callable[[Path, Path], None],
+) -> subprocess.CompletedProcess[str]:
+    source = _write_canonical_source(root, body=source_body)
+    helper = source.parent / "helper.py"
+    helper.write_text(
+        "from build123d import Box\n"
+        "def make_shape():\n"
+        "    return Box(0.4, 0.2, 0.1)\n",
+        encoding="utf-8",
+    )
+    control = source.parent / "control.lock"
+    control.write_bytes(b"locked\n")
+    environment = dict(os.environ)
+    environment["PYTHONPATH"] = os.pathsep.join(
+        (str(CADPY_SRC), environment["PYTHONPATH"])
+        if environment.get("PYTHONPATH")
+        else (str(CADPY_SRC),)
+    )
+    with control.open("rb") as control_stream:
+        fcntl.flock(control_stream.fileno(), fcntl.LOCK_EX)
+        process = subprocess.Popen(
+            [
+                sys.executable,
+                str(ADAPTER),
+                "build",
+                "--source",
+                "source/model.py",
+                "--input",
+                "source/helper.py",
+                "--input",
+                "source/control.lock",
+                "--output-dir",
+                "candidate",
+            ],
+            cwd=root,
+            env=environment,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+        ready = root / "candidate/race-ready"
+        deadline = time.monotonic() + 15
+        while not ready.is_file():
+            if process.poll() is not None:
+                stdout, stderr = process.communicate()
+                raise AssertionError(
+                    f"adapter exited before post-policy mutation: {stdout}\n{stderr}"
+                )
+            if time.monotonic() >= deadline:
+                process.kill()
+                process.communicate()
+                raise AssertionError("adapter did not reach post-policy mutation gate")
+            time.sleep(0.01)
+        mutate(source.parent, helper)
+        fcntl.flock(control_stream.fileno(), fcntl.LOCK_UN)
+        stdout, stderr = process.communicate(timeout=30)
+    return subprocess.CompletedProcess(
+        process.args,
+        process.returncode,
+        stdout,
+        stderr,
     )
 
 
@@ -186,6 +257,7 @@ class CanonicalBuildAdapterTests(unittest.TestCase):
 
             self.assertEqual("", result.stderr)
             self.assertEqual(0, result.returncode)
+            self.assertIs(json.loads(result.stdout)["ok"], True)
             manifest = json.loads((root / "candidate/build.json").read_text(encoding="utf-8"))
             profile = json.loads((root / "candidate/profile.json").read_text(encoding="utf-8"))
             recipe = json.loads((root / "candidate/rebuild.json").read_text(encoding="utf-8"))
@@ -411,7 +483,7 @@ class CanonicalBuildAdapterTests(unittest.TestCase):
                 [item["path"] for item in recipe["inputs"]],
             )
 
-    def test_declared_helper_import_cannot_enumerate_undeclared_siblings(self) -> None:
+    def test_declared_helper_import_ignores_undeclared_siblings(self) -> None:
         with temporary_directory(prefix="cad-canonical-import-closure-") as temp_dir:
             root = Path(temp_dir)
             _write_canonical_source(
@@ -444,7 +516,90 @@ class CanonicalBuildAdapterTests(unittest.TestCase):
                 "candidate",
             )
 
+            self.assertEqual(0, result.returncode, result.stderr)
+            self.assertTrue((root / "candidate/measurement.glb").is_file())
+            self.assertTrue((root / "candidate/build.json").is_file())
+
+    def test_declared_module_directory_stays_unobservable_after_policy_entry(
+        self,
+    ) -> None:
+        source_body = (
+            "import fcntl\n"
+            "import os\n"
+            "from pathlib import Path\n"
+            "Path('candidate/race-ready').write_text('ready', encoding='utf-8')\n"
+            "with Path('source/control.lock').open('rb') as control:\n"
+            "    fcntl.flock(control.fileno(), fcntl.LOCK_SH)\n"
+            "Path('candidate/race-ready').unlink()\n"
+            "try:\n"
+            "    os.listdir('source')\n"
+            "except PermissionError:\n"
+            "    pass\n"
+            "else:\n"
+            "    raise RuntimeError('declared module directory became observable')\n"
+            "from helper import make_shape\n"
+            "def gen_step():\n"
+            "    return make_shape()\n"
+        )
+
+        def add_regular(source: Path, _helper: Path) -> None:
+            (source / "ambient.py").write_text(
+                "SECRET = 'undeclared'\n",
+                encoding="utf-8",
+            )
+
+        def add_symlink(source: Path, _helper: Path) -> None:
+            outside = source.parent / "outside.py"
+            outside.write_text("SECRET = 'outside'\n", encoding="utf-8")
+            (source / "ambient.py").symlink_to(outside)
+
+        for name, mutate in (("regular", add_regular), ("symlink", add_symlink)):
+            with self.subTest(name=name), temporary_directory(
+                prefix=f"cad-canonical-import-race-{name}-"
+            ) as temp_dir:
+                root = Path(temp_dir)
+                result = _run_adapter_with_post_policy_mutation(
+                    root,
+                    source_body=source_body,
+                    mutate=mutate,
+                )
+
+                self.assertEqual(0, result.returncode, result.stderr)
+                self.assertTrue((root / "candidate/measurement.glb").is_file())
+
+    def test_declared_helper_replacement_after_policy_entry_fails_closed(self) -> None:
+        source_body = (
+            "import fcntl\n"
+            "from pathlib import Path\n"
+            "Path('candidate/race-ready').write_text('ready', encoding='utf-8')\n"
+            "with Path('source/control.lock').open('rb') as control:\n"
+            "    fcntl.flock(control.fileno(), fcntl.LOCK_SH)\n"
+            "Path('candidate/race-ready').unlink()\n"
+            "from helper import make_shape\n"
+            "def gen_step():\n"
+            "    return make_shape()\n"
+        )
+
+        def replace_helper(source: Path, helper: Path) -> None:
+            replacement = source.parent / "replacement.py"
+            replacement.write_text(
+                "from build123d import Box\n"
+                "def make_shape():\n"
+                "    return Box(0.8, 0.2, 0.1)\n",
+                encoding="utf-8",
+            )
+            replacement.replace(helper)
+
+        with temporary_directory(prefix="cad-canonical-import-replace-") as temp_dir:
+            root = Path(temp_dir)
+            result = _run_adapter_with_post_policy_mutation(
+                root,
+                source_body=source_body,
+                mutate=replace_helper,
+            )
+
             self.assertNotEqual(0, result.returncode)
+            self.assertIn("declared Python helper changed", result.stderr)
             self.assertFalse((root / "candidate/measurement.glb").exists())
             self.assertFalse((root / "candidate/build.json").exists())
 

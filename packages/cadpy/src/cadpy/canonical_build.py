@@ -7,12 +7,15 @@ from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass, replace
 import hashlib
+import importlib.abc
+import importlib.machinery
 import importlib.metadata
 import json
 import os
 from pathlib import Path, PurePosixPath
 import platform
 import re
+import stat
 import sys
 from typing import Any
 
@@ -47,8 +50,95 @@ OUTPUT_FILES = {
 class _SourceExecutionPolicy:
     root: Path
     declared_inputs: frozenset[Path]
-    declared_import_directories: frozenset[Path]
     output_dir: Path
+
+
+@dataclass(frozen=True)
+class _DeclaredPythonModule:
+    name: str
+    root: Path
+    relative_path: Path
+    source_bytes: bytes
+    device: int
+    inode: int
+
+    @property
+    def path(self) -> Path:
+        return self.root / self.relative_path
+
+    def revalidate(self) -> None:
+        current = self.root
+        try:
+            root_mode = current.lstat().st_mode
+            if not stat.S_ISDIR(root_mode) or stat.S_ISLNK(root_mode):
+                raise ImportError("declared Python helper changed after policy entry")
+            for index, part in enumerate(self.relative_path.parts):
+                current = current / part
+                info = current.lstat()
+                if stat.S_ISLNK(info.st_mode):
+                    raise ImportError("declared Python helper changed after policy entry")
+                if index < len(self.relative_path.parts) - 1:
+                    if not stat.S_ISDIR(info.st_mode):
+                        raise ImportError(
+                            "declared Python helper changed after policy entry"
+                        )
+                elif (
+                    not stat.S_ISREG(info.st_mode)
+                    or info.st_dev != self.device
+                    or info.st_ino != self.inode
+                    or current.read_bytes() != self.source_bytes
+                ):
+                    raise ImportError("declared Python helper changed after policy entry")
+        except OSError as exc:
+            raise ImportError(
+                "declared Python helper changed after policy entry"
+            ) from exc
+
+
+class _DeclaredPythonModuleLoader(importlib.abc.Loader):
+    def __init__(self, declared: _DeclaredPythonModule) -> None:
+        self._declared = declared
+
+    def create_module(self, spec: object) -> None:
+        return None
+
+    def exec_module(self, module: object) -> None:
+        self._declared.revalidate()
+        namespace = vars(module)
+        namespace["__file__"] = os.fspath(self._declared.path)
+        code = compile(
+            self._declared.source_bytes,
+            os.fspath(self._declared.path),
+            "exec",
+            dont_inherit=True,
+        )
+        exec(code, namespace)
+
+
+class _DeclaredPythonModuleFinder(importlib.abc.MetaPathFinder):
+    def __init__(self, modules: dict[str, _DeclaredPythonModule]) -> None:
+        self._modules = dict(modules)
+
+    @property
+    def module_names(self) -> tuple[str, ...]:
+        return tuple(self._modules)
+
+    def find_spec(
+        self,
+        fullname: str,
+        path: object = None,
+        target: object = None,
+    ) -> importlib.machinery.ModuleSpec | None:
+        if path is not None or "." in fullname:
+            return None
+        declared = self._modules.get(fullname)
+        if declared is None:
+            return None
+        return importlib.machinery.ModuleSpec(
+            fullname,
+            _DeclaredPythonModuleLoader(declared),
+            origin=os.fspath(declared.path),
+        )
 
 
 _ACTIVE_SOURCE_POLICY: ContextVar[_SourceExecutionPolicy | None] = ContextVar(
@@ -210,10 +300,7 @@ def _canonical_build_audit_hook(event: str, args: tuple[object, ...]) -> None:
         raw_path = os.fsdecode(args[0] if args else ".")
         path = Path(raw_path)
         resolved = path.resolve() if path.is_absolute() else (policy.root / path).resolve()
-        if (
-            resolved not in policy.declared_import_directories
-            and not _is_within(resolved, policy.output_dir)
-        ):
+        if not _is_within(resolved, policy.output_dir):
             raise PermissionError(f"canonical build attempted to read undeclared directory: {raw_path}")
         return
     if event.startswith("os."):
@@ -247,27 +334,65 @@ def _install_audit_hook() -> None:
         _AUDIT_HOOK_INSTALLED = True
 
 
+def _declared_python_module_finder(
+    *,
+    root: Path,
+    source_path: Path,
+    declared_inputs: frozenset[Path],
+) -> _DeclaredPythonModuleFinder:
+    modules: dict[str, _DeclaredPythonModule] = {}
+    for path in sorted(declared_inputs):
+        if path == source_path or path.parent != source_path.parent or path.suffix != ".py":
+            continue
+        name = path.stem
+        if not name.isidentifier() or name in modules:
+            raise ValueError("declared Python helper module name is invalid or ambiguous")
+        try:
+            info_before = path.lstat()
+            source_bytes = path.read_bytes()
+            info_after = path.lstat()
+        except OSError as exc:
+            raise ValueError("declared Python helper is unavailable") from exc
+        if (
+            stat.S_ISLNK(info_before.st_mode)
+            or not stat.S_ISREG(info_before.st_mode)
+            or (info_before.st_dev, info_before.st_ino)
+            != (info_after.st_dev, info_after.st_ino)
+        ):
+            raise ValueError("declared Python helper must be one stable physical file")
+        modules[name] = _DeclaredPythonModule(
+            name=name,
+            root=root,
+            relative_path=path.relative_to(root),
+            source_bytes=source_bytes,
+            device=info_after.st_dev,
+            inode=info_after.st_ino,
+        )
+    return _DeclaredPythonModuleFinder(modules)
+
+
 @contextmanager
-def _source_execution_policy(*, root: Path, declared_inputs: set[Path], output_dir: Path):
+def _source_execution_policy(
+    *,
+    root: Path,
+    source_path: Path,
+    declared_inputs: set[Path],
+    output_dir: Path,
+):
     _install_audit_hook()
     resolved_inputs = frozenset(path.resolve() for path in declared_inputs)
     resolved_input_names = frozenset(str(path) for path in resolved_inputs)
-    # Importlib enumerates a module directory before opening a helper. Admit
-    # that metadata read only when every physical sibling is a declared input.
-    inputs_by_parent: dict[Path, set[Path]] = {}
-    for path in resolved_inputs:
-        inputs_by_parent.setdefault(path.parent, set()).add(path)
-    declared_import_directories: set[Path] = set()
-    for parent, sibling_inputs in inputs_by_parent.items():
-        try:
-            siblings = tuple(parent.iterdir())
-        except OSError:
-            continue
-        if (
-            all(not sibling.is_symlink() and sibling.is_file() for sibling in siblings)
-            and {sibling.resolve() for sibling in siblings} == sibling_inputs
-        ):
-            declared_import_directories.add(parent)
+    declared_finder = _declared_python_module_finder(
+        root=root,
+        source_path=source_path.resolve(),
+        declared_inputs=resolved_inputs,
+    )
+    shadowed_modules = {
+        name: sys.modules.pop(name)
+        for name in declared_finder.module_names
+        if name in sys.modules
+    }
+    sys.meta_path.insert(0, declared_finder)
     original_environment = dict(os.environ)
     original_hash = builtins.hash
     original_mutation_functions = {
@@ -303,7 +428,6 @@ def _source_execution_policy(*, root: Path, declared_inputs: set[Path], output_d
         _SourceExecutionPolicy(
             root=root,
             declared_inputs=resolved_inputs,
-            declared_import_directories=frozenset(declared_import_directories),
             output_dir=output_dir.resolve(),
         )
     )
@@ -314,6 +438,10 @@ def _source_execution_policy(*, root: Path, declared_inputs: set[Path], output_d
     finally:
         sys.dont_write_bytecode = previous_dont_write_bytecode
         _ACTIVE_SOURCE_POLICY.reset(token)
+        sys.meta_path[:] = [finder for finder in sys.meta_path if finder is not declared_finder]
+        for name in declared_finder.module_names:
+            sys.modules.pop(name, None)
+        sys.modules.update(shadowed_modules)
         builtins.hash = original_hash
         for mutation_name, mutation_function in original_mutation_functions.items():
             setattr(os, mutation_name, mutation_function)
@@ -641,6 +769,7 @@ def build(*, root: Path, source: str, output_dir: str, inputs: list[str] | None 
 
     with _source_execution_policy(
         root=root,
+        source_path=source_path,
         declared_inputs={path for path, _relative in declared_inputs},
         output_dir=output_path,
     ):
@@ -808,7 +937,7 @@ def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     if args.command == "build":
         manifest = build(root=Path.cwd(), source=args.source, output_dir=args.output_dir, inputs=args.input)
-        print(json.dumps(manifest, separators=(",", ":")))
+        print(json.dumps({"ok": True, **manifest}, separators=(",", ":")))
         return 0
     if args.command == "rebuild":
         root = Path.cwd()
@@ -816,7 +945,7 @@ def main(argv: list[str] | None = None) -> int:
         source = recipe["inputs"][0]["path"]
         declared_inputs = [item["path"] for item in recipe["inputs"][1:]]
         manifest = build(root=root, source=source, output_dir=args.output_dir, inputs=declared_inputs)
-        print(json.dumps(manifest, separators=(",", ":")))
+        print(json.dumps({"ok": True, **manifest}, separators=(",", ":")))
         return 0
     raise AssertionError(f"unsupported command: {args.command}")
 
